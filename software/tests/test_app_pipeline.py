@@ -28,6 +28,7 @@ from ohs.app.process import ProcessParams, process_recording, trajectory_errors 
 from ohs.io.recording import RecordingReader  # noqa: E402
 from ohs.sim.datasets import make_scan_recording  # noqa: E402
 from ohs.sim.nominal import nominal_calibration  # noqa: E402
+from ohs.track.markerless import FusionParams  # noqa: E402
 from ohs.types import ScannerCalibration, StereoFrame  # noqa: E402
 from ohs.vision.depth import DepthParams  # noqa: E402
 from ohs.vision.laser import LaserLines, LaserParams  # noqa: E402
@@ -183,6 +184,48 @@ def test_tracking_depth_filter():
     assert not ok[:, 194:206].any()  # no smoothing across the step: eroded around it
     assert not ok[:5].any() and not ok[:, :5].any()  # image border counts as invalid
     assert np.array_equal(tracking_depth(d, 0.0), d)
+
+
+def test_tracking_filter_at_the_tracking_resolution():
+    """work_size: smoothing and erosion at half resolution, edge test on the input pixels, result
+    upsampled back; same map as the full-resolution filter (what the pipeline feeds the tracker)."""
+    h, w = 400, 640
+    vv, uu = np.mgrid[0:h, 0:w]
+    plane = (300.0 + 0.2 * uu + 0.1 * vv).astype(np.float32)
+    rng = np.random.default_rng(1)
+    d = plane + rng.normal(0, 0.6, (h, w)).astype(np.float32)
+    d[:, 400:] -= 40.0  # an occlusion step
+    d[150:170, 100:130] = 0.0  # a hole
+    full = tracking_depth(d, 6.0)
+    half = tracking_depth(d, 6.0, work_size=(w // 2, h // 2))
+    assert half.shape == d.shape and half.dtype == np.float32
+    a, b = full > 0, half > 0
+    assert (a ^ b).mean() < 0.02 and b.mean() > 0.4  # same pixels, to the mask's discretisation
+    assert np.median(np.abs(half[a & b] - full[a & b])) < 0.01 and np.abs(half[a & b] - full[a & b]).max() < 0.1
+    assert not b[:, 388:412].any() and not b[:4].any()  # eroded at the step and at the image border
+    with FramePipeline(nominal_calibration(), PipelineParams(scale=1.0, use_lasers=False, use_imu=False)) as full_q:
+        assert full_q.track_size == (640, 400) and full_q.tracker.image_size == (1280, 800)
+        dd = np.full((800, 1280), 300.0, np.float32)
+        assert full_q.tracking_input(dd).shape == (800, 1280)
+
+
+def test_model_backends_per_model():
+    """Only the tracking model follows fusion.model_backend; the reconstruction model (and the
+    single model of track_filter_px=0) stays Open3D because it makes the mesh."""
+    from ohs import compute
+
+    calib = nominal_calibration()
+    expect = "gpu" if compute.get_device() is not None else "open3d"
+    with FramePipeline(calib, PipelineParams(scale=0.5, use_lasers=False)) as pipe:
+        assert pipe.dual_model and pipe.model_backend == expect and pipe.tracker.model_backend == expect
+        assert pipe.markerless.model_backend == "open3d" and pipe.fusion_params.model_backend == "open3d"
+        assert pipe.track_fusion_params.model_backend == "auto" and pipe.model_device and pipe.model_status
+    with FramePipeline(calib, PipelineParams(scale=0.5, use_lasers=False, fusion=FusionParams(model_backend="open3d"))) as pipe:
+        assert pipe.model_backend == "open3d"
+    with FramePipeline(calib, PipelineParams(scale=0.5, use_lasers=False, track_filter_px=0.0)) as pipe:
+        assert not pipe.dual_model and pipe.model_backend == "open3d" and pipe.tracker is pipe.markerless
+    with FramePipeline(calib, PipelineParams(mode="markers", integrate_depth=False)) as pipe:
+        assert pipe.model_backend is None
 
 
 # --------------------------------------------------------------------------- process_recording

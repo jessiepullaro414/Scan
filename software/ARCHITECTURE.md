@@ -179,7 +179,8 @@ IMU config: gyro +-1000 dps, accel +-8 g, both at the requested ODR. Timestamps 
 
 ### D. Per-frame vision (`ohs/vision/`)
 - `rectify.py`: `Rectifier(calib: StereoCalibration, scale=1.0)` with `.calib` (geometry at this scale), `.K`, `.baseline`, `.rectify(left, right)`, `.rectify_left(left)`.
-- `depth.py`: `DepthParams(min_depth_mm=150, max_depth_mm=450, block_size=5, ...)`, `DepthEstimator(K, baseline_mm, params).compute(left_r, right_r) -> depth_mm float32 (0 = invalid)` and `.disparity(...)`. Use OpenCV SGBM with a left-right check and speckle filtering. Derive the disparity search range from the depth range. It must work on the random-dot pattern with bright laser lines present.
+- `depth.py`: `DepthParams(min_depth_mm=150, max_depth_mm=450, block_size=5, ...)`, `DepthEstimator(K, baseline_mm, params).compute(left_r, right_r) -> depth_mm float32 (0 = invalid)` and `.disparity(...)`. Use OpenCV SGBM with a left-right check and speckle filtering. Derive the disparity search range from the depth range. It must work on the random-dot pattern with bright laser lines present. `DepthParams.backend` (`"auto"` / `"cpu"` / `"gpu"`) picks the matcher; `.backend` and `.device` say which one runs.
+- `depth_gpu.py`: `GpuStereoMatcher`, the GPU twin behind `DepthEstimator` (OpenCL via `ohs.compute`): ternary census, 4-path SGM, the same uniqueness / left-right / median / speckle / sub-pixel steps and output contract.
 - `laser.py`: `LaserParams`, `LaserLines(vertical (N,2), horizontal (M,2), vertical_strength, horizontal_strength)`, `extract_laser_lines(img_r, params) -> LaserLines` (sub-pixel ridge centres; robust to the dot pattern; distinguish the two lines by orientation; reject the crossing zone where they overlap; tolerate up to +-30 deg tilt and broken lines), `triangulate_plane(uv, K, plane) -> (N,3)` (NaN for invalid), `stereo_check(...)` (reject points whose predicted right-image position has no laser ridge), and `laser_points(left_r, right_r, K, baseline, planes, params) -> dict[str, (N,3)]`.
 
 ### E. Tracking + fusion (`ohs/track/`)
@@ -190,7 +191,8 @@ IMU config: gyro +-1000 dps, accel +-8 g, both at the requested ODR. Timestamps 
 - `export.py`: `save_mesh(path, V, F, N=None)` (binary PLY/STL, OBJ; numpy only), `save_points_ply(path, P, N=None, colors=None)`, `poisson_mesh(P, N=None, depth=9, density_quantile=0.02)` (Open3D), `clean_mesh(V, F, min_component_fraction=0.01)`.
 
 ### F. App (after A-E): `ohs` CLI
-`ohs devices | selftest | preview | record | calibrate stereo|lasers|imu|check | scan | process | printables | sim`
+`ohs devices | selftest | preview | record | calibrate stereo|lasers|imu|check | scan | process | printables | sim | bench`
+(`bench.py`: speed and accuracy on a standard simulated recording, CPU against GPU, JSON results.)
 `live.py` runs threads (capture, Pico reader, processing at reduced scale, recorder) with an OpenCV preview window.
 The trigger button starts/stops scanning. `process.py` produces the full-quality offline result from a recording.
 `config.py` loads TOML (`tomllib`) merged over defaults. `README.md` is the user guide.

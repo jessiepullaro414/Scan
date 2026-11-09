@@ -172,6 +172,12 @@ class Studio:
             th = threading.Thread(target=fn, name=name, daemon=True)
             th.start()
             self._threads.append(th)
+        # Pick the GPU (or the CPU) now, in the background: the first OpenCL setup takes about a second
+        from ohs import compute
+
+        compute.configure(getattr(getattr(self.cfg, "compute", None), "device", "auto"))
+        threading.Thread(target=lambda: safe_call("choosing the compute device", compute.get_device),
+                         name="ohs-compute", daemon=True).start()
         log.info("OpenHandScan Studio backend %s: projects in %s", __version__, self.projects_dir)
 
     def shutdown(self) -> None:
@@ -540,12 +546,16 @@ class Studio:
                 params = process_params(cfg, mode, quality, int(size[0]))
                 tmp = result_dir.with_name(f"result.tmp-{ctx.job.id}")
                 shutil.rmtree(tmp, ignore_errors=True)
+                from ohs import compute
+
+                dev = compute.get_device()
+                where = f" on the GPU ({dev.name})" if dev is not None else " on the CPU"
                 ctx.progress(0.01, "Loading the recording", force=True)
 
                 def progress(k: int, n: int, res: Any) -> None:
                     ctx.check()
                     lost = "" if res.track.ok else " (tracking lost)"
-                    ctx.progress(0.02 + 0.9 * (k + 1) / max(n, 1), f"Processing frame {k + 1} of {n}{lost}")
+                    ctx.progress(0.02 + 0.9 * (k + 1) / max(n, 1), f"Processing frame {k + 1} of {n}{where}{lost}")
 
                 try:
                     report = process_recording(rec, tmp, params=params, progress=progress)
@@ -588,8 +598,10 @@ class Studio:
             o3d_version = open3d.__version__
         except Exception:  # optional
             o3d_version = None
+        from ohs import compute
+
         return {"app": "openhandscan", "version": __version__, "api": PROTOCOL_VERSION,
-                "engine": {"opencv": cv2.__version__, "open3d": o3d_version}}
+                "engine": {"opencv": cv2.__version__, "open3d": o3d_version, "compute": compute.describe()}}
 
     def settings(self) -> dict:
         cfg = self.cfg
@@ -605,6 +617,11 @@ class Studio:
                             "ui_built": (self.static_dir / "index.html").is_file(), "data_dir": str(self.data_dir),
                             "config_path": str(self.config_path), "printables_dir": str(cfg.paths.printables_path),
                             "sim_calibration": str(self.sim_calib_path)}
+        from ohs import compute
+
+        # one readable line (the Settings page lists `effective` as text); the structured form is
+        # in /api/health under engine.compute
+        out["effective"]["compute"] = compute.status()
         return out
 
     # ------------------------------------------------------------------ settings (M2)

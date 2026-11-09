@@ -20,6 +20,7 @@ dependencies = [
 [project.optional-dependencies]
 fusion = ["open3d>=0.18"]
 app = ["fastapi", "uvicorn", "websockets", "pywebview"]
+gpu = ["pyopencl>=2024.1"]  # GPU processing on NVIDIA, AMD and Intel (ohs.compute); the CPU path needs nothing
 dev = ["pytest>=7"]
 
 [project.scripts]

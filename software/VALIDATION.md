@@ -94,6 +94,59 @@ Mesh extraction takes about 0.9 s per scan (0.8 M faces at 1 mm voxels); cleanin
 about 1 s. A 36-frame scan processes in about 15 s offline (`report.json` `wall_time_s` 14.8). The
 simulator renders about 1 s per full-resolution stereo frame.
 
+## GPU processing (M3, 2026-11-09)
+
+The heavy steps now run on any OpenCL GPU (`ohs.compute`), and the CPU path above is the fallback.
+- **Depth:** census semi-global matching on the GPU (`ohs/vision/depth_gpu.py`).
+- **Tracking model:** a 2 mm TSDF on the GPU, with trilinear ray casting (`ohs/track/volume_gpu.py`).
+
+"GPU mode" below means GPU depth and the GPU tracking model, the defaults when a GPU exists. "CPU mode" is `OHS_COMPUTE=cpu`.
+
+**Depth against the true depth**, 1280x800, 8 frames of the sphere and car-panel scenes:
+
+| | GPU | CPU (SGBM) |
+|---|---|---|
+| median abs. error | 0.316 mm | 0.369 mm |
+| 95th percentile | 1.41 mm | 2.14 mm |
+| off by > 2 mm | 1.8 % | 5.6 % |
+| disparity off by > 1 px | 0.9 % | 4.1 % |
+| bias | -0.002 mm | +0.117 mm |
+| valid | 89.8 % (98.2 % where dots land) | 93.6 % (97.6 %) |
+
+- **Where the GPU keeps no depth:** pixels with no dots near them, i.e. outside the projector's field. SGBM's depth there is mostly wrong (54 % of it is off by more than 2 mm).
+- **640x400:** the GPU is also ahead there: off by > 2 mm 5.3 % vs 8.8 %, disparity off by > 1 px 1.1 % vs 2.8 %.
+
+**Trajectory error, full runs** (median / max):
+
+| Scan | VALIDATION (CPU, above) | GPU mode |
+|---|---|---|
+| sphere, 1280x800, 36 frames | 0.19 mm, 0.035 deg / 0.29 mm, 0.077 deg | 0.108 mm, 0.023 deg / 0.168 mm, 0.039 deg |
+| car panel, 1280x800 | 0.63 mm, 0.039 deg / 0.97 mm, 0.065 deg | 0.110 mm, 0.025 deg / 0.261 mm, 0.034 deg |
+| sphere, 640x400 (fast test) | max 0.49 mm / 0.085 deg | max 0.211 mm / 0.035 deg |
+
+- **Mesh accuracy:** in GPU mode the mesh median is 0.065 mm (sphere) and 0.088 mm (car panel), against 0.20 mm and 0.29 mm above.
+
+**Robustness over 15 scans** (3 scenes with extra seeds, at 1280x800 and 640x400; max trajectory error per scan):
+- The GPU tracking model is better than Open3D's on 12 of 15 scans with SGBM depth, and on 11 of 15 with GPU depth.
+- **This set exposed a weakness of the CPU path that the single validation seed hid.** On 3 of the 15 recordings (the sphere scene with extra seeds) the Open3D tracking model slides 13-42 mm with either depth. The GPU model stays below 0.4 mm on the same recordings.
+  - The cause: Open3D's nearest-voxel ray cast drops most surface hits near the borders of the observed area. Those borders are exactly where stereo depth carries camera-fixed bias.
+  - The GPU ray cast keeps a hit only when it is 8 mm inside the observed surface and its voxel has been fused at least 8 times (`FusionParams.gpu_border_mm`, `gpu_weight_threshold`).
+- **GPU depth against SGBM:** on 26 of the 30 (scan, model) pairs, GPU depth tracks at or below SGBM's error. Three remaining pairs differ by a few thousandths of a degree or 0.05 mm, which is tracking noise. On the fourth, Open3D's model fails with either depth.
+- **Depth fix that this set forced:** on the car panel, the area below the projector's field has no dots. Early GPU depth carried smooth but wrong depth into it from the neighbouring dots, and tracking slid 1.8 mm. Depth is now kept only where at least 20 % of a 15 x 15 window holds census texture.
+
+**Speed (`ohs bench`, 90 frames, Radeon 680M integrated GPU in the Ryzen 7 7735U):** ms per frame, mean.
+
+| Stage | CPU | GPU |
+|---|---|---|
+| depth | 123.9 | 68.7 |
+| ray cast (tracking model) | 116 | 7.2 |
+| whole frame, full quality | 338 (2.96 fps) | 187 (5.34 fps), **1.81x** |
+| whole frame, preview quality | 83 (12.0 fps) | 58.5 (17.1 fps), 1.42x |
+
+- **Shared power:** on this integrated GPU, the CPU stages that remain (laser lines, ICP) run slightly slower while the GPU works, because both share power and memory bandwidth.
+- **In the app:** a 15 s simulated scan (449 frames) meshed at full quality in about 1 min 50 s on the GPU.
+- **Results files:** in `~/.ohs/bench/results/`; `ohs bench` reproduces them on any machine.
+
 ## What the metrics mean
 
 - **Stereo errors** compare the estimated raw intrinsics/extrinsics (`K1`, `K2`, `R`, `T`) with

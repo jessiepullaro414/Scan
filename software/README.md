@@ -16,6 +16,7 @@ ohs printables print/        calibration board, AprilTag stickers, LED projector
 ohs calibrate stereo         then: ohs calibrate lasers, ohs calibrate imu
 ohs scan --process           scan (the trigger starts and stops), then build the final mesh
 ohs process <recording>      (re)process a recording at full quality
+ohs bench                    how fast this PC processes (CPU against GPU)
 ```
 
 Every command has `--help`.
@@ -177,6 +178,7 @@ key. Use `"auto"` for an optional value (exposure, port, voxel sizes) or leave i
 | `[process]` | `voxel_mm` (auto = 1 mm at 1280x800), `frame_step`, `poisson`, `export` (`ply`, `stl`, `obj`) |
 | `[board]` | ChArUco board (11 x 8 squares, 20 mm squares, 15 mm markers, `DICT_5X5_100`) and `paper` (`letter`/`a4`) |
 | `[markers]` | `tag_mm` (20): side of the black square of the printed AprilTags |
+| `[compute]` | `device`: `auto` (the GPU if there is one), `cpu`, or part of a GPU's name such as `RTX`; the `OHS_COMPUTE` environment variable overrides it (section 8) |
 
 The global options `--config PATH`, `--calib PATH` (another calibration file) and `-v` / `-vv`
 (log output) work before or after the command name.
@@ -340,6 +342,30 @@ Options: `--mode` (default: the recording's mode), `--voxel MM` (smaller = finer
 `--step N` (every N-th frame, faster), `--poisson` (watertight Poisson mesh), `--start` / `--stop`
 (frame range). The calibration comes from the recording itself; `--calib PATH` overrides it.
 
+### The GPU and `ohs bench`
+
+Processing uses the GPU when the PC has one: NVIDIA, AMD or Intel, discrete or integrated, through
+OpenCL (`pip install -e .[gpu]` installs PyOpenCL; the graphics driver provides OpenCL). Stereo
+depth then runs on the GPU, about twice as fast as on the CPU at full resolution, and more
+accurately on simulated scans: fewer wrong pixels, no depth bias, and no depth where no projected
+dot falls. Without a GPU everything runs on the CPU, as before. `[compute] device = "cpu"` (or
+`OHS_COMPUTE=cpu`) turns the GPU off; part of a GPU's name (`"RTX"`) picks one of several.
+
+`ohs bench` measures how fast this PC processes, and how accurately:
+
+```
+ohs bench                          # CPU and GPU, full and preview quality: a few minutes
+ohs bench --device gpu --quality full --frames 30
+```
+
+It processes a standard simulated scan (a sphere on a table, 90 frames at 1280x800 with the
+realistic lens model), simulated the first time (about 2 minutes) and kept in `~/.ohs/bench`
+(`--dir` or `OHS_BENCH_DIR` to move it). The table shows the milliseconds per frame of every stage (mean and median), frames per
+second, the GPU speed-up, the trajectory error against the simulator's truth, and the depth error
+on every 10th frame. The full result, with the GPU, CPU, OS and software versions, is saved as JSON
+in `~/.ohs/bench/results/` (and `--json PATH`), so two machines can be compared. Without a GPU the
+CPU part runs and the bench says why there is no GPU.
+
 ## 9. Try it without hardware
 
 ```
@@ -439,6 +465,7 @@ The two line lasers are **Class 3R**, and so is the dot laser of the laser + DOE
 | `ohs scan` | live scan, always recording (`--mode`, `--process`, `--replay`, `--no-gui`, `--max-frames`) |
 | `ohs process REC` | full-quality mesh, laser points and trajectory |
 | `ohs sim DIR` | simulated scan recording |
+| `ohs bench` | processing speed and accuracy, CPU against GPU (`--frames`, `--quality`, `--device`, `--json`) |
 
 **Live keys**
 

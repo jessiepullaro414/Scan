@@ -6,8 +6,11 @@ together. Live scanning runs it at ``scale=0.5`` for feedback, and offline proce
 
 1. **Rectify** the raw pair (:class:`~ohs.vision.rectify.Rectifier` at ``scale``). From here on
    everything is in frame C at that scale (``K = rectifier.K``).
-2. **Depth** (:class:`~ohs.vision.depth.DepthEstimator`, SGBM on the dot pattern), computed when
-   the mode needs it: always in markerless mode, and in marker mode when ``integrate_depth``.
+2. **Depth** (:class:`~ohs.vision.depth.DepthEstimator`, stereo matching on the dot pattern),
+   computed when the mode needs it: always in markerless mode, and in marker mode when
+   ``integrate_depth``. ``DepthParams.backend`` picks the matcher: GPU census SGM
+   (:mod:`ohs.vision.depth_gpu`, OpenCL) or CPU SGBM; the default ``"auto"`` uses the GPU when
+   :func:`ohs.compute.get_device` finds one.
 3. **Laser lines**, extracted once per image (left and right) and triangulated on the calibrated
    planes with the right-image stereo check (:func:`~ohs.vision.laser.laser_points` with
    ``lines_left`` / ``lines_right``).
@@ -23,9 +26,9 @@ together. Live scanning runs it at ``scale=0.5`` for feedback, and offline proce
 5. **Laser cloud**: the validated laser points are added to the
    :class:`~ohs.track.fusion.LaserCloud` with the frame pose, only when tracking succeeded.
 
-**Tracking model** (markerless). The SGBM depth carries an error pattern that is fixed to the
+**Tracking model** (markerless). Stereo depth carries an error pattern that is fixed to the
 *camera*: the projected dots sit at nearly the same image positions in every frame, so the
-dot-scale disparity errors (std ~0.3 px in simulation, frame-to-frame correlation ~0.4) repeat.
+dot-scale disparity errors (SGBM: std ~0.3 px in simulation, frame-to-frame correlation ~0.4) repeat.
 A TSDF built from such depth keeps the pattern, and frame-to-model ICP then locks onto it: large
 flat areas (a table, a panel) pull the estimate toward the previous pose. In simulation this
 drifted 20 deg / 55 mm over 36 frames on the sphere scene (ground-truth depth: 0.08 deg /
@@ -37,6 +40,19 @@ good to ~0.01 deg per frame). The raw depth is fused at the tracked poses into t
 reconstruction TSDF (``fusion``, 1 mm at full resolution), which is what :meth:`mesh` returns.
 Simulated result: 0.07 deg / 0.3 mm on the same 36 frames (VALIDATION.md).
 ``track_filter_px=0`` restores single-model tracking on the raw depth.
+
+The filter runs at the *tracking resolution* ``track_size`` = ``fusion.raycast_scale`` of the
+processed image (640x400 at full quality, the resolution the model is ray cast at): only its
+edge test runs on the full-resolution pixels; smoothing and erosion run at ``track_size`` with
+sigma and radius scaled, and the smooth result is upsampled back for the tracker, which is
+unchanged (integration and ICP sampling at the processed resolution). See :func:`tracking_depth`.
+
+**Model backends.** Only the tracking model may live on the GPU
+(:class:`~ohs.track.volume_gpu.GpuTsdfVolume`, a rolling cube): it takes
+``fusion.model_backend`` (default ``"auto"``: the GPU when :func:`ohs.compute.get_device` finds
+one). The reconstruction model always uses Open3D (it keeps the whole scan and makes the mesh),
+and so does the single model of ``track_filter_px=0``. :attr:`FramePipeline.model_backend` says
+which backend tracks (``"gpu"`` / ``"open3d"``), :attr:`FramePipeline.model_device` where.
 
 Graceful degradation: without calibrated laser planes (or ``use_lasers=False``) the laser stage
 is skipped; without an IMU calibration (or ``use_imu=False``) there is no rotation prior; a
@@ -104,7 +120,8 @@ def effective_scale(image_width: int) -> float:
 
 
 def default_depth_params(scale: float) -> DepthParams:
-    """SGBM settings for images at (effective) ``scale`` (full-resolution recommendation at >= 0.75)."""
+    """Depth settings for images at (effective) ``scale`` (the SGBM full-resolution recommendation at
+    >= 0.75; the GPU matcher scales its own pixel quantities with the image width)."""
     if float(scale) >= 0.75:
         return DepthParams(block_size=7, speckle_window_size=200)
     return DepthParams()
@@ -130,39 +147,83 @@ def default_track_filter_px(scale: float) -> float:
 
 
 def tracking_depth(depth: np.ndarray, sigma_px: float, erode_mult: float = 2.0, max_change: float = 0.01,
-                   edge_slope: float | None = None) -> np.ndarray:
+                   edge_slope: float | None = None, work_size: tuple[int, int] | None = None) -> np.ndarray:
     """Depth map for ICP with the camera-fixed dot-scale error pattern suppressed (0 = invalid).
 
     1. Pixels on depth steps (``|grad z| > edge_slope * z`` per pixel; default 0.5 % at 1280 px
        width, scaled with the image width) are treated as invalid, so smoothing never mixes
-       surfaces across occlusion edges.
+       surfaces across occlusion edges. On full-resolution SGBM depth this also catches the small
+       steps of the dot-scale error pattern (2-3 % of the pixels, in clusters), whose
+       surroundings the erosion below then removes.
     2. Normalised Gaussian convolution with ``sigma_px`` over the valid pixels.
     3. The validity mask is eroded by ``erode_mult * sigma_px`` (the image border counts as
        invalid), and pixels the smoothing moved by more than ``max_change * z`` are dropped:
        near any boundary the normalised average is biased, and such biases are fixed to the
        camera too.
 
+    ``work_size = (w, h)``, smaller than the input (the pipeline passes its tracking resolution,
+    half the width at full quality), gives the same map at a fraction of the cost: step 1 still
+    runs on the input pixels (a block average hides the steps of the error pattern, and keeping
+    their surroundings measurably worsened tracking), then depth and validity are block-averaged
+    to ``work_size`` (a pixel valid only where its whole block is; pixel-centre convention), steps
+    2-3 run there with ``sigma_px`` and the erosion radius scaled by the same factor, and the
+    smooth result is upsampled bilinearly back to the input resolution (valid where all four
+    neighbours are). On the simulator this keeps the same pixels as the full-resolution filter
+    to ~1 % of the image, with values within
+    0.005 mm (std), and tracks as well (SGBM, Open3D model, the three validation scans: max
+    errors 0.29 / 0.90 / 0.45 mm and 0.063 / 0.061 / 0.069 deg against 0.29 / 0.97 / 0.50 mm and
+    0.077 / 0.063 / 0.085 deg) at 40 % of the cost (15 ms instead of 37 ms at 1280x800).
+
     ``sigma_px <= 0`` returns the input unchanged.
     """
     d = np.ascontiguousarray(depth, dtype=np.float32)
     if sigma_px <= 0:
         return d
-    h, w = d.shape
-    slope = (0.005 * NOMINAL_WIDTH / w) if edge_slope is None else float(edge_slope)
+    h0, w0 = d.shape
+    slope = (0.005 * NOMINAL_WIDTH / w0) if edge_slope is None else float(edge_slope)
     gx = cv2.Sobel(d, cv2.CV_32F, 1, 0, ksize=3, scale=0.125)
     gy = cv2.Sobel(d, cv2.CV_32F, 0, 1, ksize=3, scale=0.125)
+    s = float(sigma_px)
+    if work_size is not None and (int(work_size[0]), int(work_size[1])) != (w0, h0):
+        return _tracking_depth_small(d, gx, gy, slope, s, erode_mult, max_change, (int(work_size[0]), int(work_size[1])))
     valid = (d > 0) & (np.sqrt(gx * gx + gy * gy) <= slope * d)
     vf = valid.astype(np.float32)
-    s = float(sigma_px)
     num = cv2.GaussianBlur(d * vf, (0, 0), s, borderType=cv2.BORDER_CONSTANT)
     den = cv2.GaussianBlur(vf, (0, 0), s, borderType=cv2.BORDER_CONSTANT)
     out = num / np.maximum(den, 1e-6)
     # erosion by a disc of radius erode_mult * sigma, with the image border as invalid
+    h, w = h0, w0
     pad = np.zeros((h + 2, w + 2), np.uint8)
     pad[1:-1, 1:-1] = valid
     dist = cv2.distanceTransform(pad, cv2.DIST_L2, 5)[1:-1, 1:-1]
     keep = (dist > erode_mult * s) & (np.abs(out - d) <= max_change * d)
     return np.where(keep, out, np.float32(0.0)).astype(np.float32)
+
+
+def _tracking_depth_small(d: np.ndarray, gx: np.ndarray, gy: np.ndarray, slope: float, sigma_px: float,
+                          erode_mult: float, max_change: float, size: tuple[int, int]) -> np.ndarray:
+    """:func:`tracking_depth` with ``work_size``: steps 2-3 at ``size``, the result back at the input size."""
+    h0, w0 = d.shape
+    w, h = size
+    # step 1 on the input pixels (uint8 masks, 255 = valid)
+    v8 = cv2.bitwise_and(cv2.compare(cv2.magnitude(gx, gy), d * np.float32(slope), cv2.CMP_LE),
+                         cv2.compare(d, 0.0, cv2.CMP_GT))
+    # block average where the whole block is valid (other blocks are dropped, so d needs no masking)
+    valid = cv2.resize(v8, (w, h), interpolation=cv2.INTER_AREA) == 255
+    dd = np.where(valid, cv2.resize(d, (w, h), interpolation=cv2.INTER_AREA), np.float32(0.0)).astype(np.float32)
+    s = sigma_px * w / w0
+    num = cv2.GaussianBlur(dd, (0, 0), s, borderType=cv2.BORDER_CONSTANT)
+    den = cv2.GaussianBlur(valid.astype(np.float32), (0, 0), s, borderType=cv2.BORDER_CONSTANT)
+    out = num / np.maximum(den, 1e-6)
+    pad = np.zeros((h + 2, w + 2), np.uint8)
+    pad[1:-1, 1:-1] = valid
+    dist = cv2.distanceTransform(pad, cv2.DIST_L2, 5)[1:-1, 1:-1]
+    keep = (dist > erode_mult * s) & (np.abs(out - dd) <= max_change * dd)
+    res = np.where(keep, out, np.float32(0.0)).astype(np.float32)
+    # back to the input size: bilinear, valid where all four neighbours are kept (their weights sum to 1)
+    up = cv2.resize(res, (w0, h0), interpolation=cv2.INTER_LINEAR)
+    ok = cv2.resize(keep.view(np.uint8) * np.uint8(255), (w0, h0), interpolation=cv2.INTER_LINEAR) == 255
+    return cv2.bitwise_and(up, up, mask=ok.view(np.uint8))
 
 
 @dataclass
@@ -197,7 +258,7 @@ class FrameResult:
     t: float
     left_r: np.ndarray
     right_r: np.ndarray
-    depth: np.ndarray | None  # raw SGBM depth (mm, 0 = invalid), the one that is fused
+    depth: np.ndarray | None  # raw stereo depth (mm, 0 = invalid), the one that is fused
     lines: LaserLines | None  # left rectified image
     laser_points: dict[str, np.ndarray]  # frame C, mm, validated
     track: TrackResult
@@ -228,11 +289,18 @@ class FramePipeline:
         s_eff = effective_scale(self.image_size[0])
         self.depth_params = p.depth if p.depth is not None else default_depth_params(s_eff)
         self.laser_params = p.laser if p.laser is not None else default_laser_params(s_eff)
-        self.fusion_params = p.fusion if p.fusion is not None else default_fusion_params(s_eff)
+        fusion = p.fusion if p.fusion is not None else default_fusion_params(s_eff)
+        # the reconstruction model keeps the whole scan and makes the mesh: always Open3D
+        self.fusion_params = replace(fusion, model_backend="open3d")
         self.marker_params = p.markers if p.markers is not None else MarkerParams()
         self.track_filter_px = float(p.track_filter_px if p.track_filter_px is not None else default_track_filter_px(s_eff))
         tv = p.track_voxel_mm if p.track_voxel_mm is not None else max(2.0, self.fusion_params.voxel_mm)
-        self.track_fusion_params = replace(self.fusion_params, voxel_mm=float(tv))
+        # the tracking model keeps fusion.model_backend (default "auto": the GPU volume when there is a GPU)
+        self.track_fusion_params = replace(fusion, voxel_mm=float(tv))
+        # the tracking filter works at the model's ray-cast resolution (module docstring)
+        w, h = self.image_size
+        rs = float(fusion.raycast_scale)
+        self.track_size = (max(1, int(round(w * rs))), max(1, int(round(h * rs))))
 
         self._need_depth = p.mode == "markerless" or bool(p.integrate_depth)
         if p.mode == "markerless" and not p.integrate_depth:
@@ -278,7 +346,8 @@ class FramePipeline:
             p.mode, p.scale, *self.image_size, "on" if self._need_depth else "off",
             "+".join(sorted(self.planes)) or "off", "on" if self.gyro is not None else "off",
             self.fusion_params.voxel_mm,
-            (f"filtered depth (sigma {self.track_filter_px:.1f} px), {self.track_fusion_params.voxel_mm:.1f} mm model"
+            (f"filtered depth (sigma {self.track_filter_px:.1f} px, filtered at {self.track_size[0]}x{self.track_size[1]}), "
+             f"{self.track_fusion_params.voxel_mm:.1f} mm model, {self.model_status}"
              if self.dual_model else "raw depth" if p.mode == "markerless" else "markers"),
         )
 
@@ -299,6 +368,30 @@ class FramePipeline:
     def dual_model(self) -> bool:
         """True when markerless tracking uses its own (filtered-depth) TSDF."""
         return self.tracker is not None and self.tracker is not self.markerless
+
+    @property
+    def model_backend(self) -> str | None:
+        """Backend of the markerless tracking model: ``"gpu"`` or ``"open3d"`` (``None`` in marker mode)."""
+        return self.tracker.model_backend if self.tracker is not None else None
+
+    @property
+    def model_device(self) -> str | None:
+        """Where the tracking model lives (GPU name or Open3D device); ``None`` in marker mode."""
+        return self.tracker.model_device if self.tracker is not None else None
+
+    @property
+    def model_status(self) -> str:
+        """Plain-language tracking-model choice, e.g. ``"GPU model on gfx1035 (384^3 voxels, 768 mm cube)"``."""
+        if self.tracker is None:
+            return "no markerless tracking model (marker mode)"
+        if not self.dual_model:
+            return "Open3D model (single-model tracking makes the mesh)"
+        return self.tracker.model_status
+
+    def tracking_input(self, depth: np.ndarray) -> np.ndarray:
+        """The tracking model's input: :func:`tracking_depth` of ``depth`` (sigma
+        ``track_filter_px``), filtered at :attr:`track_size`, at the pipeline resolution."""
+        return tracking_depth(depth, self.track_filter_px, work_size=self.track_size)
 
     @property
     def n_frames(self) -> int:
@@ -367,7 +460,7 @@ class FramePipeline:
             T = np.asarray(pose, dtype=np.float64).reshape(4, 4)
             track = TrackResult(T.copy(), True, {"method": "external"})
             if self.dual_model and depth is not None:
-                self.tracker.integrate(tracking_depth(depth, self.track_filter_px), None, T)
+                self.tracker.integrate(self.tracking_input(depth), None, T)
             self._fuse(depth, T, t, tim)
         elif p.mode == "markerless":
             track = self._track_markerless(depth, t, tim, extra)
@@ -411,7 +504,7 @@ class FramePipeline:
             res = self.tracker.track(depth, None, t, R_prior)
         else:
             tf = time.perf_counter()
-            d_track = tracking_depth(depth, self.track_filter_px)
+            d_track = self.tracking_input(depth)
             tim["track_filter"] = _ms(tf)
             extra["track_valid_fraction"] = float(np.count_nonzero(d_track)) / d_track.size
             res = self.tracker.track(d_track, None, t, R_prior)
@@ -477,6 +570,9 @@ class FramePipeline:
     def close(self) -> None:
         """Release the voxel grids and trackers. The pipeline cannot be used afterwards."""
         self._closed = True
+        for tr in (self.tracker, self.markerless):
+            if tr is not None:
+                tr.close()
         self.markerless = None
         self.tracker = None
         self.markers = None

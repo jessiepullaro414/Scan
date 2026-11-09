@@ -28,7 +28,7 @@ __all__ = ["main", "build_parser", "CliError", "ProgressBar", "COMMANDS"]
 log = logging.getLogger("ohs.app.cli")
 
 COMMANDS = ("devices", "selftest", "config", "printables", "preview", "record", "calibrate", "scan", "process", "sim",
-            "app")
+            "app", "bench")
 MODES = ("markerless", "markers")
 SCENES = ("sphere_on_plane", "car_panel", "bracket")
 CALIB_KINDS = ("stereo", "lasers", "imu", "check")
@@ -50,6 +50,9 @@ no hardware yet?
 
 the desktop app:
   ohs app                        OpenHandScan Studio (connect the simulator to try it)
+
+how fast is this PC?
+  ohs bench                      processing speed and accuracy, CPU against GPU
 
 run `ohs <command> --help` for the options of a command."""
 
@@ -437,13 +440,37 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--no-window", action="store_true", help="no app window: serve until Ctrl-C (use a browser)")
     p.add_argument("--open-browser", action="store_true", help="open the app in the default web browser")
     p.set_defaults(func=cmd_app)
+
+    p = add("bench", "processing speed and accuracy on a standard simulated scan, CPU against GPU",
+            description="Processes a standard simulated recording (sphere on a table, 90 frames at 1280x800, realistic\n"
+                        "lens, dots and lasers) on the CPU and on the GPU, at full and preview quality, and reports the\n"
+                        "milliseconds per frame of every stage, the GPU speed-up, and the accuracy against the\n"
+                        "simulator's truth (trajectory, depth). The recording is simulated once (about 2 minutes) and\n"
+                        "kept in the bench folder.",
+            epilog="Results: a table here, and JSON in <bench folder>/results/ (plus --json PATH) to compare machines.\n"
+                   "The GPU is the one ohs uses (compute.device in the config, or the OHS_COMPUTE environment\n"
+                   "variable); without one the CPU part runs and the reason is printed. Bench folder: --dir, else\n"
+                   "$OHS_BENCH_DIR, else ~/.ohs/bench. A full run takes a few minutes (2 more the first time).")
+    p.add_argument("--frames", type=_pos_int, metavar="N", help="process only the first N frames (default: all 90)")
+    p.add_argument("--quality", choices=("full", "preview", "both"), default="both",
+                   help="full = 1280x800, 1 mm voxels; preview = 640x400, 2 mm voxels (default: both)")
+    p.add_argument("--device", choices=("both", "cpu", "gpu"), default="both", help="what to run on (default: both)")
+    p.add_argument("--json", metavar="PATH", help="also write the results to PATH")
+    p.add_argument("--dir", metavar="DIR", help="bench folder for the recording and the results")
+    p.set_defaults(func=cmd_bench)
     return parser
 
 
 # --------------------------------------------------------------------------- shared helpers
 def _config(args: argparse.Namespace):
     path = getattr(args, "config", None)
-    return load_config(path, must_exist=path is not None)
+    cfg = load_config(path, must_exist=path is not None)
+    # compute.device of the config (the OHS_COMPUTE environment variable still wins); cheap: the GPU
+    # itself is only opened when a step first asks for it
+    from ohs import compute
+
+    compute.configure(getattr(getattr(cfg, "compute", None), "device", "auto"))
+    return cfg
 
 
 def _calib_path(args: argparse.Namespace, cfg: Any) -> Path:
@@ -862,6 +889,44 @@ def cmd_app(args: argparse.Namespace) -> int:
         raise CliError(f"--port must be at most 65535 (got {args.port})")
     return run_app(cfg, host=args.host, port=args.port, window=not args.no_window, open_browser=args.open_browser,
                    echo=_say, log_level="info" if int(getattr(args, "verbose", 0) or 0) >= 2 else "warning")
+
+
+def cmd_bench(args: argparse.Namespace) -> int:
+    cfg = _config(args)
+    from ohs import compute
+    from ohs.app import bench
+
+    devices = bench.DEVICES if args.device == "both" else (args.device,)
+    qualities = bench.QUALITIES if args.quality == "both" else (args.quality,)
+    pref = str(getattr(getattr(cfg, "compute", None), "device", "auto") or "auto")
+    if args.device == "gpu":
+        compute.configure(pref if pref.strip().lower() != "cpu" else "auto")
+        compute.reset()
+        if compute.get_device() is None:
+            raise CliError(f"no GPU to benchmark: {compute.status()}")
+    root = Path(args.dir).expanduser() if args.dir else bench.default_bench_dir()
+    bars: dict[str, ProgressBar] = {}
+
+    def progress(label: str, done: int, total: int) -> None:
+        bar = bars.get(label)
+        if bar is None:
+            for old in bars.values():
+                old.close()
+            bar = bars[label] = ProgressBar(f"  {label}", zero_based=False)
+        bar.update(done, total)
+
+    try:
+        report = bench.run_bench(frames=args.frames, qualities=qualities, devices=devices, bench_dir=root,
+                                 compute_device=pref, echo=_say, progress=progress)
+    finally:
+        for bar in bars.values():
+            bar.close()
+    _say("")
+    _say(bench.format_report(report))
+    paths = bench.save_report(report, root, args.json)
+    _say("")
+    _say("Results saved to " + " and ".join(str(p) for p in paths))
+    return 0
 
 
 # --------------------------------------------------------------------------- main

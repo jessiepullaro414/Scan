@@ -150,6 +150,31 @@ function SettingsSections({ settings }: { settings: Settings }) {
   );
 }
 
+type ComputeInfo = {
+  backend?: string;
+  status?: string;
+  device?: { name?: string; kind?: string; memory_mb?: number } | null;
+};
+
+/** Where the heavy processing runs (health.engine.compute, M3): the GPU's name, or the CPU and why. */
+function ComputeLabel({ c }: { c: unknown }) {
+  const v = c && typeof c === "object" ? (c as ComputeInfo) : null;
+  if (!v) return <span className="text-subtle">–</span>;
+  if (v.backend === "gpu" && v.device?.name) {
+    const gb = v.device.memory_mb ? `, ${(v.device.memory_mb / 1024).toFixed(1)} GB` : "";
+    return (
+      <Badge tone="ok" dot>
+        {`GPU: ${v.device.name} (${v.device.kind ?? "gpu"}${gb})`}
+      </Badge>
+    );
+  }
+  return (
+    <span className="text-xs text-fg" title={v.status}>
+      CPU <span className="text-subtle">· {v.status ?? "no GPU in use"}</span>
+    </span>
+  );
+}
+
 export function SettingsPage() {
   const theme = useUi((s) => s.theme);
   const setTheme = useUi((s) => s.setTheme);
@@ -216,11 +241,13 @@ export function SettingsPage() {
             rows={[
               ["Studio UI", <span className="font-mono text-xs">0.2.0 (M2)</span>],
               ["Engine", health ? <span className="font-mono text-xs">{`${health.app} ${health.version}`}</span> : serverVersion ?? "–"],
+              ["Processing", health ? <ComputeLabel c={(health.engine as { compute?: unknown }).compute} /> : "–"],
               [
                 "Engine libraries",
                 health ? (
                   <span className="font-mono text-xs">
                     {Object.entries(health.engine ?? {})
+                      .filter(([k]) => k !== "compute")
                       .map(([k, v]) => `${k} ${String(v)}`)
                       .join(" · ") || "–"}
                   </span>

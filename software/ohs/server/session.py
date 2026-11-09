@@ -761,9 +761,14 @@ class ScanSession:
 
 
 def _scale_weights(tracker: Any, factor: float) -> None:
-    """Multiply the TSDF weights of a ``MarkerlessTracker`` in place (CPU device only)."""
+    """Multiply the TSDF weights of a ``MarkerlessTracker`` in place: the Open3D model or the GPU
+    volume (whose ray cast needs a minimum weight, so a subsampled rebuild must restore them)."""
     try:
-        attr = tracker.voxel_grid.attribute("weight")
+        scale = getattr(tracker, "scale_weights", None)
+        if scale is not None:
+            scale(float(factor))
+            return
+        attr = tracker.voxel_grid.attribute("weight")  # an older tracker without scale_weights()
         if "CPU" not in str(attr.device).upper():
             return
         arr = attr.numpy()

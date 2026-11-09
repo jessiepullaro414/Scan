@@ -1,4 +1,4 @@
-"""Markerless frame-to-model tracking with TSDF fusion (KinectFusion style, Open3D tensor TSDF).
+"""Markerless frame-to-model tracking with TSDF fusion (KinectFusion style, Open3D tensor TSDF or a GPU volume).
 
 Per frame (:meth:`MarkerlessTracker.track`):
 
@@ -38,6 +38,26 @@ good pose). The coarse correspondence distances and the jump gates are widened b
 ``1 + n_lost`` (at most ``max_widen``) and an extra coarse level is added; the finest level is
 never widened, so the acceptance gates keep their meaning.
 
+**Model backends** (``FusionParams.model_backend``, :attr:`MarkerlessTracker.model_backend`):
+
+* ``"open3d"``: the sparse Open3D ``VoxelBlockGrid`` above (CPU, or CUDA via ``device``). It
+  keeps the whole scan, so it is the one to mesh (``extract_mesh`` / ``extract_points``).
+* ``"gpu"``: :class:`ohs.track.volume_gpu.GpuTsdfVolume`, a dense *rolling* 2 mm-class cube that
+  follows the scanner, integrated and ray cast in OpenCL on any GPU (``ohs.compute``). Its ray
+  cast already lands on the trilinear zero crossing and box-averages the normals on the device,
+  so it returns the same model maps as the Open3D path (same frames and units); ICP is
+  unchanged. Its hits must lie ``gpu_border_mm`` inside the observed surface and their voxels
+  must have been fused ``gpu_weight_threshold`` times (capped by the frame count): the
+  borders of what was observed carry camera-fixed stereo errors, which Open3D's nearest-voxel
+  ray cast happens to skip and which otherwise pull ICP (see the volume's module docstring).
+  It is meant for the *tracking* model: surfaces that left the cube are
+  forgotten. ``extract_mesh`` / ``extract_points`` still work (they copy the observed bricks
+  into a CPU Open3D grid), but only for what is inside the cube. With this backend the ray cast
+  is queued before the source points are computed, so the two overlap, and integration is
+  asynchronous.
+* ``"auto"`` (default): ``"gpu"`` when :func:`ohs.compute.get_device` gives a GPU (and the volume
+  can be created there), else ``"open3d"``. ``"gpu"`` raises when no GPU is available.
+
 Open3D notes (0.20, verified empirically):
 
 * everything is in **mm**: ``depth_scale=1``, ``voxel_size`` and depth limits in mm; extrinsics
@@ -68,9 +88,11 @@ import numpy as np
 from ohs.geometry import invert_se3, make_se3, rotation_angle_deg, skew, so3_exp, so3_log
 from ohs.types import TrackResult
 
-__all__ = ["FusionParams", "MarkerlessTracker"]
+__all__ = ["FusionParams", "MarkerlessTracker", "MODEL_BACKENDS"]
 
 log = logging.getLogger(__name__)
+
+MODEL_BACKENDS = ("auto", "open3d", "gpu")
 
 # trilinear cell corners in the order of Open3D's ray-cast "index"/"interp_ratio" outputs
 _CORNERS = np.array([[j & 1, (j >> 1) & 1, (j >> 2) & 1] for j in range(8)], dtype=np.float64)
@@ -89,9 +111,14 @@ class FusionParams:
     trunc_mult: float = 4.0  # truncation distance = trunc_mult * voxel_mm
     depth_min_mm: float = 120.0
     depth_max_mm: float = 500.0
-    device: str = "auto"  # "auto" | "cpu" | "cuda" | "CUDA:1" ...
+    device: str = "auto"  # Open3D device: "auto" | "cpu" | "cuda" | "CUDA:1" ...
     block_resolution: int = 16
     block_count: int | None = None
+    # model backend (module docstring): "auto" = the GPU volume when ohs.compute finds a GPU
+    model_backend: str = "auto"  # "auto" | "open3d" | "gpu"
+    gpu_volume_voxels: int = 384  # edge of the GPU volume (voxels, multiple of 16): 768 mm at 2 mm
+    gpu_border_mm: float = 8.0  # GPU ray cast: hits at least this far inside the observed surface
+    gpu_weight_threshold: float = 8.0  # GPU ray cast: weight threshold (capped by the frame count)
     # model ray casting
     raycast_scale: float = 0.5  # model maps rendered at this fraction of the input resolution
     raycast_weight_threshold: float = 3.0  # capped by the number of integrated frames
@@ -131,6 +158,12 @@ class FusionParams:
             raise ValueError("icp_strides, icp_iterations and icp_max_dist_mm must have equal length")
         if self.voxel_mm <= 0 or self.trunc_mult <= 0:
             raise ValueError("voxel_mm and trunc_mult must be positive")
+        if str(self.model_backend).strip().lower() not in MODEL_BACKENDS:
+            raise ValueError(f"model_backend must be one of {MODEL_BACKENDS}, got {self.model_backend!r}")
+        if int(self.gpu_volume_voxels) < 64 or int(self.gpu_volume_voxels) % 16:
+            raise ValueError(f"gpu_volume_voxels must be a multiple of 16, >= 64, got {self.gpu_volume_voxels!r}")
+        if self.gpu_border_mm < 0 or self.gpu_weight_threshold < 0:
+            raise ValueError("gpu_border_mm and gpu_weight_threshold must be >= 0")
 
     @property
     def trunc_mm(self) -> float:
@@ -213,7 +246,8 @@ class MarkerlessTracker:
     image_size:
         ``(width, height)`` of the depth maps.
     params:
-        :class:`FusionParams` (defaults if ``None``).
+        :class:`FusionParams` (defaults if ``None``); ``model_backend`` picks the TSDF (module
+        docstring).
     """
 
     def __init__(self, K: np.ndarray, image_size: tuple[int, int], params: FusionParams | None = None) -> None:
@@ -230,6 +264,9 @@ class MarkerlessTracker:
         self.device = _resolve_device(self.params.device)
         w, h = self.image_size
         p = self.params
+        self._gpu: Any = None  # GpuTsdfVolume when the model is on the GPU
+        self._vbg: Any = None
+        self._gpu_status = self._make_gpu_volume(str(p.model_backend).strip().lower())
         # integration intrinsics: +0.5 px turns Open3D's truncating pixel lookup into rounding
         K_int = self.K.copy()
         K_int[0, 2] += 0.5
@@ -251,24 +288,79 @@ class MarkerlessTracker:
             y = (vv - self.K[1, 2]) / self.K[1, 1]
             x = (uu - self.K[0, 2] - self.K[0, 1] * y) / self.K[0, 0]
             self._src_levels.append((o, s, np.stack([x, y, np.ones_like(x)], axis=-1)))
-        log.info("MarkerlessTracker: %dx%d, voxel %.2f mm, trunc %.2f mm, device %s, ray cast %dx%d",
-                 w, h, p.voxel_mm, p.trunc_mm, self.device, *self._ray_size)
+        log.info("MarkerlessTracker: %dx%d, voxel %.2f mm, trunc %.2f mm, model %s (%s), ray cast %dx%d",
+                 w, h, p.voxel_mm, p.trunc_mm, self.model_backend, self.model_device, *self._ray_size)
         self.reset()
+
+    def _make_gpu_volume(self, backend: str) -> str:
+        """Create the GPU volume for ``backend`` "auto" / "gpu"; returns a plain-language status."""
+        if backend == "open3d":
+            return "Open3D model (model_backend = \"open3d\")"
+        from ohs import compute  # noqa: PLC0415
+        from ohs.track.volume_gpu import GpuTsdfVolume  # noqa: PLC0415
+
+        dev = compute.get_device()
+        if dev is None:
+            if backend == "gpu":
+                raise RuntimeError(f"model_backend = \"gpu\" but no GPU is available: {compute.status()}")
+            return f"Open3D model ({compute.status()})"
+        p = self.params
+        try:
+            self._gpu = GpuTsdfVolume(dev, p.voxel_mm, p.trunc_mm, p.depth_min_mm, p.depth_max_mm,
+                                      edge_voxels=int(p.gpu_volume_voxels), border_mm=float(p.gpu_border_mm))
+        except Exception as exc:  # build or allocation failure: the CPU path still works
+            if backend == "gpu":
+                raise
+            log.warning("GPU tracking volume unavailable on %s (%s); using Open3D", dev.name, exc)
+            self._gpu = None
+            return f"Open3D model (the GPU volume failed on {dev.name}: {exc})"
+        return f"GPU model on {dev.name} ({self._gpu.edge}^3 voxels, {self._gpu.size_mm:.0f} mm cube)"
+
+    @property
+    def model_backend(self) -> str:
+        """``"gpu"`` (dense rolling OpenCL volume) or ``"open3d"`` (sparse VoxelBlockGrid)."""
+        return "gpu" if self._gpu is not None else "open3d"
+
+    @property
+    def model_device(self) -> str:
+        """Where the model lives: the GPU's name, or the Open3D device (e.g. ``"CPU:0"``)."""
+        return self._gpu.dev.name if self._gpu is not None else str(self.device)
+
+    @property
+    def model_status(self) -> str:
+        """Plain-language description of the model backend choice (and why)."""
+        return self._gpu_status
+
+    @property
+    def gpu_volume(self) -> Any:
+        """The :class:`~ohs.track.volume_gpu.GpuTsdfVolume`, or ``None`` on the Open3D backend."""
+        return self._gpu
+
+    def close(self) -> None:
+        """Free the model's memory now (GPU buffers included); the tracker cannot be used afterwards."""
+        if self._gpu is not None:
+            self._gpu.release()
+        self._gpu = None
+        self._vbg = None
 
     # ------------------------------------------------------------------ state
     def reset(self) -> None:
         """Forget the model and the trajectory (the next frame defines a new world)."""
         o3d, o3c = self._o3d, self._o3c
         p = self.params
-        self._vbg = o3d.t.geometry.VoxelBlockGrid(
-            attr_names=("tsdf", "weight"),
-            attr_dtypes=(o3c.float32, o3c.float32),
-            attr_channels=((1), (1)),
-            voxel_size=float(p.voxel_mm),
-            block_resolution=int(p.block_resolution),
-            block_count=p.initial_block_count(),
-            device=self.device,
-        )
+        if self._gpu is not None:
+            self._gpu.reset()
+            self._vbg = None
+        else:
+            self._vbg = o3d.t.geometry.VoxelBlockGrid(
+                attr_names=("tsdf", "weight"),
+                attr_dtypes=(o3c.float32, o3c.float32),
+                attr_channels=((1), (1)),
+                voxel_size=float(p.voxel_mm),
+                block_resolution=int(p.block_resolution),
+                block_count=p.initial_block_count(),
+                device=self.device,
+            )
         self.trajectory: list[tuple[float, np.ndarray, bool]] = []
         self._n_integrated = 0
         self._warm_blocks = 0
@@ -288,6 +380,9 @@ class MarkerlessTracker:
 
     @property
     def n_blocks(self) -> int:
+        """Allocated Open3D blocks, or observed 16^3 bricks of the GPU volume."""
+        if self._gpu is not None:
+            return self._gpu.n_observed_bricks()
         return int(self._vbg.hashmap().size())
 
     @property
@@ -296,8 +391,23 @@ class MarkerlessTracker:
 
     @property
     def voxel_grid(self) -> Any:
-        """The underlying ``open3d.t.geometry.VoxelBlockGrid`` (mm units)."""
+        """The underlying ``open3d.t.geometry.VoxelBlockGrid`` (mm units); Open3D backend only."""
+        if self._gpu is not None:
+            raise RuntimeError("the model is the GPU volume (model_backend 'gpu'): there is no Open3D grid; "
+                               "use extract_mesh() / extract_points() or gpu_volume")
         return self._vbg
+
+    def scale_weights(self, factor: float) -> None:
+        """Multiply the TSDF weights in place (both backends), e.g. after a subsampled rebuild."""
+        if self._gpu is not None:
+            self._gpu.scale_weights(float(factor))
+            return
+        attr = self._vbg.attribute("weight")
+        if attr.device.get_type() == self._o3c.Device.DeviceType.CPU:
+            arr = attr.numpy()
+            arr *= np.float32(factor)
+        else:
+            attr *= float(factor)
 
     # ------------------------------------------------------------------ depth handling
     def _clean_depth(self, depth_mm: np.ndarray) -> np.ndarray:
@@ -344,6 +454,11 @@ class MarkerlessTracker:
         return hm.key_tensor()[hm.active_buf_indices().to(self._o3c.int64)]
 
     def _integrate_cleaned(self, depth: np.ndarray, T_wc: np.ndarray) -> None:
+        if self._gpu is not None:
+            # the GPU kernel rounds to the nearest pixel itself: no +0.5 px shift (that is Open3D's quirk)
+            self._gpu.integrate(depth, self.K, np.asarray(T_wc, dtype=np.float64))
+            self._n_integrated += 1
+            return
         o3d, o3c = self._o3d, self._o3c
         p = self.params
         img = o3d.t.geometry.Image(o3c.Tensor(np.ascontiguousarray(depth))).to(self.device)
@@ -352,8 +467,31 @@ class MarkerlessTracker:
         self._vbg.integrate(blocks, img, self._K_int_t, ext, 1.0, p.depth_max_mm, p.trunc_mult)
         self._n_integrated += 1
 
+    def _raycast_weight_threshold(self) -> float:
+        thr = self.params.gpu_weight_threshold if self._gpu is not None else self.params.raycast_weight_threshold
+        return float(min(thr, max(self._n_integrated, 1)))
+
+    def _raycast_gpu_start(self, T_wc: np.ndarray) -> Any:
+        """Queue the GPU ray cast at ``T_wc`` (refined hits and box-averaged normals come back)."""
+        return self._gpu.raycast_start(T_wc, self._K_ray, self._ray_size, self._raycast_weight_threshold(),
+                                       max(int(self.params.model_normal_window), 1))
+
+    def _raycast_gpu_finish(self, pending: Any, T_wc: np.ndarray) -> _ModelView | None:
+        """Model view from the GPU maps: depth along z (0 = no hit) and unit normals towards the camera."""
+        if pending is None:
+            return None
+        maps = pending.wait()
+        depth = maps[:, 0]
+        valid = depth > 0
+        V = self._rays_ray * depth[:, None].astype(np.float64)
+        N = maps[:, 1:4].astype(np.float64)
+        w, h = self._ray_size
+        return _ModelView(np.asarray(T_wc, dtype=np.float64).copy(), V, N, valid, self._K_ray, (w, h))
+
     def _raycast(self, T_wc: np.ndarray) -> _ModelView | None:
         """Ray cast the model at ``T_wc`` and refine depths with the trilinear TSDF."""
+        if self._gpu is not None:
+            return self._raycast_gpu_finish(self._raycast_gpu_start(T_wc), T_wc)
         o3d, o3c = self._o3d, self._o3c
         p = self.params
         n_blocks = self.n_blocks
@@ -362,7 +500,7 @@ class MarkerlessTracker:
         w, h = self._ray_size
         keys = self._active_keys()
         ext = o3c.Tensor(invert_se3(T_wc), o3c.float64)
-        wthr = float(min(p.raycast_weight_threshold, max(self._n_integrated, 1)))
+        wthr = self._raycast_weight_threshold()
         args = (1.0, p.depth_min_mm, p.depth_max_mm, wthr, p.trunc_mult, self._range_down)
         with o3d.utility.VerbosityContextManager(o3d.utility.VerbosityLevel.Error):
             if n_blocks > self._warm_blocks * (1.0 + p.warmup_growth):
@@ -601,11 +739,8 @@ class MarkerlessTracker:
             self._R_acc = self._R_acc @ R_prior
         if n_valid_px < p.min_points:
             return self._fail("no_depth", t, {"n_valid_px": n_valid_px}, t0, timings)
-        src = self._source_points(depth)
-        if len(src[-1][0]) < p.min_points:  # depth present but no locally smooth surface in it
-            return self._fail("bad_depth", t, {"n_valid_px": n_valid_px}, t0, timings)
 
-        # ---- prediction
+        # ---- prediction (before the source points: the GPU ray cast then runs while they are computed)
         lost = self._n_lost
         widen = float(min(1.0 + lost, p.max_widen))
         have_prior = R_prior is not None
@@ -633,9 +768,20 @@ class MarkerlessTracker:
         # the gyro prior's uncertainty grows with the number of frames integrated since the last good pose
         rot_sigma = np.radians(p.gyro_sigma_deg * np.sqrt(lost + 1) if have_prior else p.rot_sigma_deg)
 
+        pending = None
         tr = time.perf_counter()
-        view = self._raycast(T_pred)
-        timings["raycast"] = 1e3 * (time.perf_counter() - tr)
+        if self._gpu is not None:
+            pending = self._raycast_gpu_start(T_pred)
+        t_queue = time.perf_counter() - tr
+        src = self._source_points(depth)
+        if len(src[-1][0]) < p.min_points:  # depth present but no locally smooth surface in it
+            if pending is not None:
+                pending.wait()
+            return self._fail("bad_depth", t, {"n_valid_px": n_valid_px}, t0, timings)
+
+        tr = time.perf_counter()
+        view = self._raycast_gpu_finish(pending, T_pred) if self._gpu is not None else self._raycast(T_pred)
+        timings["raycast"] = 1e3 * (time.perf_counter() - tr + t_queue)  # GPU: queueing + waiting
         info: dict[str, Any] = {"candidate": name, "lost_frames": lost, "gyro_prior": have_prior,
                                 "n_valid_px": n_valid_px, "T_pred": T_pred}
         if view is None or view.n_valid < p.min_model_px:
@@ -728,11 +874,21 @@ class MarkerlessTracker:
         # of fused frames, otherwise a young model (< 4 frames) extracts nothing and Open3D raises
         return float(min(thr, max(self._n_integrated - 1, 0)))
 
+    def _grid_for_extraction(self) -> Any:
+        """The Open3D grid to mesh: the model itself, or a CPU copy of the GPU volume's observed bricks."""
+        if self._gpu is not None:
+            return self._gpu.to_open3d(self._o3d, self._o3c) if self._n_integrated else None
+        return self._vbg if self.n_blocks else None
+
     def extract_mesh(self, weight_threshold: float | None = None) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-        """Marching-cubes mesh of the TSDF: ``(V (N,3) mm, F (M,3) int64, N (N,3) outward normals)``."""
-        if self.n_blocks == 0:
+        """Marching-cubes mesh of the TSDF: ``(V (N,3) mm, F (M,3) int64, N (N,3) outward normals)``.
+
+        GPU backend: only what is inside the rolling cube (a CPU copy of it is meshed by Open3D).
+        """
+        vbg = self._grid_for_extraction()
+        if vbg is None:
             return np.zeros((0, 3)), np.zeros((0, 3), dtype=np.int64), np.zeros((0, 3))
-        mesh = self._vbg.extract_triangle_mesh(weight_threshold=self._weight(weight_threshold))
+        mesh = vbg.extract_triangle_mesh(weight_threshold=self._weight(weight_threshold))
         V = mesh.vertex.positions.cpu().numpy().astype(np.float64)
         if len(V) == 0:
             return np.zeros((0, 3)), np.zeros((0, 3), dtype=np.int64), np.zeros((0, 3))
@@ -741,10 +897,11 @@ class MarkerlessTracker:
         return V, F, N
 
     def extract_points(self, weight_threshold: float | None = None) -> tuple[np.ndarray, np.ndarray]:
-        """Zero-crossing points of the TSDF with normals: ``(P (N,3) mm, N (N,3))``."""
-        if self.n_blocks == 0:
+        """Zero-crossing points of the TSDF with normals: ``(P (N,3) mm, N (N,3))`` (GPU: inside the cube)."""
+        vbg = self._grid_for_extraction()
+        if vbg is None:
             return np.zeros((0, 3)), np.zeros((0, 3))
-        pcd = self._vbg.extract_point_cloud(weight_threshold=self._weight(weight_threshold))
+        pcd = vbg.extract_point_cloud(weight_threshold=self._weight(weight_threshold))
         if pcd.is_empty():
             return np.zeros((0, 3)), np.zeros((0, 3))
         P = pcd.point.positions.cpu().numpy().astype(np.float64)

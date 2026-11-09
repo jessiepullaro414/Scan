@@ -1,11 +1,29 @@
-"""Dense stereo depth on the projected random-dot pattern (OpenCV StereoSGBM).
+"""Dense stereo depth on the projected random-dot pattern (OpenCV StereoSGBM, or census SGM on the GPU).
 
 Input: a rectified stereo pair (grayscale ``uint8``, frame C, see :mod:`ohs.vision.rectify`).
 Output: a ``float32`` depth map in mm along the optical axis of the rectified left camera, with
 ``0`` marking invalid pixels.
 
-Pipeline
+Backends
 --------
+``DepthParams.backend`` chooses where the matching runs:
+
+* ``"auto"`` (default): the GPU when :func:`ohs.compute.get_device` finds one (config
+  ``compute.device``, environment ``OHS_COMPUTE``), else the CPU;
+* ``"cpu"``: OpenCV's SGBM, described below;
+* ``"gpu"``: the GPU, or the CPU with a logged warning when there is none.
+
+The GPU backend (:mod:`ohs.vision.depth_gpu`) is a census semi-global matcher in OpenCL with the
+same contract: same search range, validity rules, left strip, uniqueness, left-right check,
+3x3 median, speckle filter, sub-pixel refinement and depth conversion. Its matching cost differs
+(census instead of SGBM's block cost) and it aggregates 4 paths instead of 3; on simulated frames
+it is more accurate than the CPU path (fewer outliers, no depth bias) and drops depth where no
+dot falls. ``wls=True`` always runs on the CPU. :attr:`DepthEstimator.backend` and
+:attr:`DepthEstimator.device` say what was chosen; if the GPU fails at run time, the estimator
+logs a warning and continues on the CPU.
+
+CPU pipeline
+------------
 1. Optional local contrast normalisation (LCN, ``normalize=True``): ``(I - mean) / sqrt(var + eps^2)``
    over a box window, re-quantised to ``uint8``. It is off by default because SGBM's own
    x-Sobel prefilter, clipped at ``pre_filter_cap``, already copes with dot-brightness falloff and
@@ -51,7 +69,7 @@ results with ``block_size=7`` and ``speckle_window_size`` around 200.
 
 Assumptions: rectification with ``CALIB_ZERO_DISPARITY`` (equal principal points, as produced by
 ``StereoCalibration.build``), so disparity is ``u_left - u_right``. One estimator per thread,
-because OpenCV matchers keep internal buffers.
+because OpenCV matchers keep internal buffers (and the GPU matcher its command queue).
 """
 from __future__ import annotations
 
@@ -62,9 +80,12 @@ from dataclasses import dataclass
 import cv2
 import numpy as np
 
-__all__ = ["DepthParams", "DepthEstimator", "disparity_range"]
+__all__ = ["DepthParams", "DepthEstimator", "disparity_range", "BACKENDS"]
 
 log = logging.getLogger(__name__)
+
+BACKENDS = ("auto", "cpu", "gpu")
+_GPU_MIN_SIZE = 32  # px (ohs.vision.depth_gpu.MIN_SIZE): smaller images are matched on the CPU
 
 _MODES = {
     "sgbm3way": cv2.STEREO_SGBM_MODE_SGBM_3WAY,
@@ -105,6 +126,8 @@ class DepthParams:
     wls_lambda: float = 8000.0
     wls_sigma_color: float = 1.5
     wls_min_confidence: float = 64.0  # 0..255, pixels below are invalidated
+    # where the matching runs: "auto" (the GPU if there is one), "cpu" or "gpu" (module docstring)
+    backend: str = "auto"
 
     def __post_init__(self) -> None:
         if not (0 < self.min_depth_mm < self.max_depth_mm):
@@ -113,6 +136,8 @@ class DepthParams:
             raise ValueError("block_size must be a positive odd integer")
         if self.mode not in _MODES:
             raise ValueError(f"mode must be one of {sorted(_MODES)}")
+        if self.backend not in BACKENDS:
+            raise ValueError(f"backend must be one of {BACKENDS}, got {self.backend!r}")
 
 
 def disparity_range(f_px: float, baseline_mm: float, min_depth_mm: float, max_depth_mm: float, margin: int = 2) -> tuple[int, int]:
@@ -226,6 +251,15 @@ class DepthEstimator:
         Rectified baseline in mm (``Rectifier.baseline``).
     params:
         :class:`DepthParams`; defaults suit 640x400 live processing.
+
+    Attributes
+    ----------
+    backend:
+        ``"gpu"`` or ``"cpu"``: where the matching runs (``DepthParams.backend``, module docstring).
+    device:
+        The GPU's name, or ``None`` on the CPU.
+    backend_note:
+        Plain-language reason for the choice (e.g. why it is the CPU).
     """
 
     def __init__(self, K: np.ndarray, baseline_mm: float, params: DepthParams | None = None) -> None:
@@ -244,6 +278,66 @@ class DepthEstimator:
         p2 = int(p.p2) if p.p2 is not None else 32 * bs * bs
         if p2 <= p1:
             raise ValueError("SGBM requires P2 > P1")
+        self._sgbm_args = (p1, p2)
+        self._sgbm = None
+        self._right_matcher = None
+        self._wls = None
+        self._refiner: _LKRefiner | None = None
+        self._cols: np.ndarray | None = None
+        self.backend = "cpu"
+        self.device: str | None = None
+        self.backend_note = "DepthParams.backend = \"cpu\""
+        self._gpu = None
+        if p.backend != "cpu":
+            self._gpu, self.backend_note = self._start_gpu()
+            if self._gpu is not None:
+                self.backend, self.device = "gpu", self._gpu.device_name
+            elif p.backend == "gpu":
+                log.warning("depth: DepthParams.backend is \"gpu\" but %s; using the CPU", self.backend_note)
+            else:
+                log.debug("depth on the CPU: %s", self.backend_note)
+        if self._gpu is None:
+            self._init_cpu()
+        log.debug(
+            "DepthEstimator: f=%.2f px B=%.2f mm depth %.0f..%.0f mm -> minDisparity=%d numDisparities=%d (%s, mode %s, bs %d)",
+            self.f, self.baseline, p.min_depth_mm, p.max_depth_mm, self.min_disparity, self.num_disparities,
+            f"GPU {self.device}" if self._gpu is not None else "CPU", p.mode, bs,
+        )
+
+    def _start_gpu(self) -> tuple[object | None, str]:
+        """The GPU matcher and why, or ``(None, reason)``. Never raises."""
+        try:
+            from ohs import compute
+            from ohs.vision import depth_gpu
+        except ImportError as e:  # pragma: no cover - part of the package
+            return None, f"the GPU code could not be loaded ({e})"
+        reason = depth_gpu.gpu_unsupported(self.params)
+        if reason:
+            return None, reason
+        dev = compute.get_device()
+        if dev is None:
+            return None, compute.status()
+        try:
+            m = depth_gpu.GpuStereoMatcher(dev, self.K, self.baseline, self.params, self.min_disparity,
+                                           self.num_disparities)
+        except Exception as e:  # unsupported range or device limits: the CPU path still works
+            return None, f"the GPU matcher cannot run here ({e})"
+        return m, f"GPU: {m.device_name}"
+
+    def _gpu_failed(self, exc: BaseException, quiet: bool = False) -> None:
+        (log.debug if quiet else log.warning)("depth: the GPU matcher failed on %s (%s); continuing on the CPU",
+                                              self.device, exc)
+        self._gpu = None
+        self.backend, self.device = "cpu", None
+        self.backend_note = f"the GPU matcher failed ({exc})"
+        self._init_cpu()
+
+    def _init_cpu(self) -> None:
+        if self._sgbm is not None:
+            return
+        p = self.params
+        p1, p2 = self._sgbm_args
+        bs = int(p.block_size)
         self._sgbm = cv2.StereoSGBM_create(
             minDisparity=self.min_disparity,
             numDisparities=self.num_disparities,
@@ -268,11 +362,6 @@ class DepthEstimator:
             self._wls.setLambda(float(p.wls_lambda))
             self._wls.setSigmaColor(float(p.wls_sigma_color))
         self._refiner = _LKRefiner(p) if p.subpixel_refine else None
-        self._cols: np.ndarray | None = None
-        log.debug(
-            "DepthEstimator: f=%.2f px B=%.2f mm depth %.0f..%.0f mm -> minDisparity=%d numDisparities=%d (mode %s, bs %d)",
-            self.f, self.baseline, p.min_depth_mm, p.max_depth_mm, self.min_disparity, self.num_disparities, p.mode, bs,
-        )
 
     # ------------------------------------------------------------------ helpers
     @property
@@ -325,6 +414,13 @@ class DepthEstimator:
             ml, mr = self._lcn(left_r), self._lcn(right_r)
         else:
             ml, mr = left_r, right_r
+        if self._gpu is not None and min(left_r.shape) < _GPU_MIN_SIZE:
+            self._gpu_failed(ValueError(f"{left_r.shape[1]}x{left_r.shape[0]} images are too small for it"), quiet=True)
+        if self._gpu is not None:
+            try:
+                return self._gpu.disparity(ml, mr, left_r, right_r)
+            except Exception as e:  # out of device memory, lost device, driver error: keep going on the CPU
+                self._gpu_failed(e)
         raw = self._match(ml, mr)
         valid = (raw >= self.min_disparity * 16) & (raw <= self.max_disparity * 16)
         disp = raw.astype(np.float32) * np.float32(1.0 / 16.0)
@@ -353,4 +449,17 @@ class DepthEstimator:
 
     def compute(self, left_r: np.ndarray, right_r: np.ndarray) -> np.ndarray:
         """Depth map in mm (float32, same size as the inputs, 0 = invalid)."""
+        if self._gpu is not None and left_r.ndim == 2 and min(left_r.shape) < _GPU_MIN_SIZE:
+            self._gpu_failed(ValueError(f"{left_r.shape[1]}x{left_r.shape[0]} images are too small for it"), quiet=True)
+        if self._gpu is not None:
+            self._check_pair(left_r, right_r)
+            p = self.params
+            ml, mr = (self._lcn(left_r), self._lcn(right_r)) if p.normalize else (left_r, right_r)
+            try:
+                depth = self._gpu.depth(ml, mr, left_r, right_r)
+            except Exception as e:
+                self._gpu_failed(e)
+            else:
+                if depth is not None:  # None: this GPU cannot divide exactly, convert on the CPU
+                    return depth
         return self.depth_from_disparity(self.disparity(left_r, right_r))

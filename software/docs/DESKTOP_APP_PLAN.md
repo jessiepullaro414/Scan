@@ -341,6 +341,54 @@ Known gaps:
 - **Launch check after a scene swap:** after a simulator calibration, the launch check isn't re-run on the demo.
 - **Still not built:** automated UI tests.
 
+### M3 plan: processing studio, GPU first
+M3 has two phases: first speed, using the GPU, then the processing studio UI.
+
+**Where the time goes today** (full quality, 1280x800, CPU only, 433 ms per frame):
+
+| Stage | ms / frame | Share |
+|---|---|---|
+| Stereo depth (SGBM) | 156 | 36 % |
+| Ray casting the tracking model (Open3D, CPU) | 145 | 33 % |
+| Tracking depth filter (at full resolution, although tracking uses half) | 40 | 9 % |
+| Laser line extraction | 28 | 7 % |
+| ICP | 20 | 5 % |
+| Fusion | 19 | 4 % |
+
+**GPU layer (`ohs.compute`)**:
+- OpenCL through PyOpenCL, so one kernel source runs on NVIDIA, AMD and Intel.
+- It chooses a GPU automatically: a discrete one first, then an integrated one.
+- Config `[compute] device` (`auto` / `cpu` / part of a GPU's name), overridden by the `OHS_COMPUTE` environment variable.
+- Without a GPU, everything stays on the CPU, and the app says why in plain words.
+- OpenCV's own OpenCL path doesn't pay off for small image operations: on the Radeon 680M a blur took 11.8 ms on the GPU and 7.0 ms on the CPU. So the GPU is used only for the big kernels.
+
+**Phase 1, speed:**
+1. **GPU stereo depth.** Census SGM in OpenCL, with the same `DepthEstimator` contract (depth in mm, 0 = invalid).
+   - It must be at least as accurate as SGBM against the simulator's ground-truth depth.
+   - Targets: ≤ 15 ms on the RTX 3070 Ti laptop, ≤ 70 ms on the Radeon 680M.
+2. **GPU tracking model.** A dense 2 mm TSDF tracking volume on the GPU, integrated and ray cast with trilinear interpolation. The ray-cast maps feed the existing ICP.
+   - Open3D stays the CPU twin.
+   - Drift on the validation scans must stay within the Open3D numbers.
+3. **CPU win for everyone.** Filter the tracking depth at the tracking resolution, not the full one.
+4. **Overlap.** The GPU computes the next frame's depth while the CPU tracks the current one.
+5. **`ohs bench`.** A standard simulated recording, processed on the CPU and on the GPU:
+   - per-stage milliseconds, the speed-up, and accuracy against the ground truth;
+   - JSON output, so the laptop and this PC can be compared.
+6. The app shows which device processes ("GPU: NVIDIA GeForce RTX 3070 Ti").
+
+Phase 1 is done when full-quality processing is at least 3x faster on the RTX laptop and at least 1.5x faster on the Radeon 680M, with tracking and depth accuracy unchanged on the simulator. Every test must pass both with the GPU and with `OHS_COMPUTE=cpu`.
+
+**Phase 1 status (2026-11-09):** steps 1, 2, 3, 5 and 6 are done; step 4 (overlap) is still open.
+- **Speed on the Radeon 680M:** full quality runs 1.81x faster, at 5.34 instead of 2.96 frames per second. Preview runs 1.42x faster.
+- **Accuracy:** better than the CPU path on depth (1.8 % of pixels off by > 2 mm instead of 5.6 %) and on tracking. The car-panel worst error dropped from 0.97 mm to 0.26 mm.
+- **Robustness:** across 15 simulated scans, the GPU tracking model doesn't slide where Open3D's slid 13-42 mm on 3 of them. The numbers are in `software/VALIDATION.md`, "GPU processing".
+- **Next:** the RTX 3070 Ti numbers from the laptop. Step 4 waits until then; the RTX profile decides whether it is worth it.
+
+**Phase 2, processing studio:** as in the milestone table:
+- step-by-step processing with preview and undo, and recipes;
+- selection tools; clean / fill / smooth / decimate;
+- global pose-graph optimisation.
+
 ### Quality bar (every milestone)
 - **Performance:** the live view holds 30 fps or more in the UI and shows the scanner's state within 150 ms. A 2M-triangle mesh orbits at 60 fps on an integrated GPU.
 - **Reliability:** no data loss on a crash, and an emitters-off guarantee.

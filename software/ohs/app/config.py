@@ -196,6 +196,13 @@ class MarkersConfig:
 
 
 @dataclass
+class ComputeConfig:
+    """Where the heavy steps run (ohs.compute): "auto", "cpu", or part of a GPU's name."""
+
+    device: str = "auto"
+
+
+@dataclass
 class Config:
     """The whole configuration. ``source`` and ``warnings`` describe the last load (not saved)."""
 
@@ -208,6 +215,7 @@ class Config:
     board: BoardConfig = field(default_factory=BoardConfig)
     markers: MarkersConfig = field(default_factory=MarkersConfig)
     app: AppConfig = field(default_factory=AppConfig)
+    compute: ComputeConfig = field(default_factory=ComputeConfig)
     source: Path | None = field(default=None, compare=False, repr=False, metadata={"toml": False})
     warnings: list[str] = field(default_factory=list, compare=False, repr=False, metadata={"toml": False})
 
@@ -411,6 +419,7 @@ _SECTION_DOCS = {
     "board": "ChArUco calibration board. `ohs printables` prints it; it must match the printed board.",
     "markers": "AprilTag stickers (tag36h11) for marker mode.",
     "app": "OpenHandScan Studio (`ohs app`): the local web server behind the app window.",
+    "compute": "Where the heavy processing runs. A GPU (NVIDIA, AMD or Intel) is used when there is one.",
 }
 
 _KEY_DOCS = {
@@ -424,6 +433,10 @@ _KEY_DOCS = {
         "phones and tablets on your network (no password: only on a network you trust)."
     ),
     "app.port": "TCP port (`ohs app --port` overrides it).",
+    "compute.device": (
+        '"auto" = the best GPU (a discrete one first), else the CPU; "cpu" = never the GPU; or part of a\n'
+        'GPU\'s name, e.g. "RTX" or "Radeon". The environment variable OHS_COMPUTE overrides it.'
+    ),
     "camera.index": "OpenCV index of the stereo camera.",
     "camera.backend": (
         '"auto" (Windows: DirectShow then Media Foundation; Linux: V4L2), "dshow", "msmf", "v4l2" or "any".'

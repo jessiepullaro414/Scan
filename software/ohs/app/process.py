@@ -373,6 +373,12 @@ def process_recording(
             "frame_step": p.frame_step, "export": list(export), "poisson": p.poisson,
             "clean_min_component": p.clean_min_component,
         }
+        # where the work ran (M3): the GPU or the CPU, per stage
+        de = getattr(pipe, "depth_estimator", None)
+        report["params"]["compute"] = {
+            "depth": getattr(de, "backend", None), "depth_device": getattr(de, "device", None),
+            "tracking_model": getattr(pipe, "model_backend", None), "tracking_device": getattr(pipe, "model_device", None),
+        }
         report["per_frame"] = rows
         files["report"] = str(out / "report.json")
         report["files"] = files
