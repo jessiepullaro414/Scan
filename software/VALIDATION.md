@@ -144,6 +144,22 @@ The heavy steps now run on any OpenCL GPU (`ohs.compute`), and the CPU path abov
 | whole frame, preview quality | 83 (12.0 fps) | 58.5 (17.1 fps), 1.42x |
 
 - **Shared power:** on this integrated GPU, the CPU stages that remain (laser lines, ICP) run slightly slower while the GPU works, because both share power and memory bandwidth.
+
+**Speed on the owner's laptop** (i9-12900H, RTX 3070 Ti Laptop 8 GB, on AC power, same bench). All 50 GPU tests pass on NVIDIA's OpenCL compiler.
+
+| Stage (ms, mean) | CPU | GPU |
+|---|---|---|
+| depth | 116.4 | 36.6 |
+| ray cast (tracking model) | 111.9 | 5.9 |
+| whole frame, full quality | 308 (3.24 fps) | 119 (8.38 fps), **2.58x** |
+| whole frame, preview quality | 66.2 (15.1 fps) | 41.2 (24.2 fps), 1.60x |
+
+- **Accuracy matches the 680M runs:** trajectory max 0.25 mm / 0.053 deg (GPU) against 0.68 mm / 0.174 deg (CPU).
+- **Where the RTX still waits:**
+  - The census-SGM kernels give it too little parallel work: depth takes 37 ms at full resolution, and at 640x400 it is no faster than the CPU.
+  - ICP is slower in GPU mode, because the denser depth gives more source points.
+  - Laser extraction, the tracking filter and the 1 mm reconstruction integration still run on the CPU.
+  - These are the next tuning targets.
 - **In the app:** a 15 s simulated scan (449 frames) meshed at full quality in about 1 min 50 s on the GPU.
 - **Results files:** in `~/.ohs/bench/results/`; `ohs bench` reproduces them on any machine.
 

@@ -568,7 +568,8 @@ inline short lr_at(__global const short* restrict din, __global const uint* rest
     const int row = y * W;
     short dv = din[row + x];
     if (!sup[row + x]) return INVALID;
-    if (dv != INVALID && LRMAX >= 0) {
+#if LRMAX >= 0  /* a compile-time switch: a runtime test of the constant draws a warning from NVIDIA's compiler */
+    if (dv != INVALID) {
         const int dl = dv >> 4, du = (dv + 15) >> 4;
         const int xl = x - dl, xu = x - du;
         bool bad_l = false, bad_u = false;
@@ -576,6 +577,7 @@ inline short lr_at(__global const short* restrict din, __global const uint* rest
         if (xu >= 0 && xu < W) { const uint e = d2[row + xu]; if (e != 0xFFFFFFFFu) bad_u = abs((int)(e & 0xFFFFu) - du) > LRMAX; }
         if (bad_l && bad_u) dv = INVALID;
     }
+#endif
     return dv;
 }
 

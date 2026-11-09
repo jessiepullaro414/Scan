@@ -382,12 +382,59 @@ Phase 1 is done when full-quality processing is at least 3x faster on the RTX la
 - **Speed on the Radeon 680M:** full quality runs 1.81x faster, at 5.34 instead of 2.96 frames per second. Preview runs 1.42x faster.
 - **Accuracy:** better than the CPU path on depth (1.8 % of pixels off by > 2 mm instead of 5.6 %) and on tracking. The car-panel worst error dropped from 0.97 mm to 0.26 mm.
 - **Robustness:** across 15 simulated scans, the GPU tracking model doesn't slide where Open3D's slid 13-42 mm on 3 of them. The numbers are in `software/VALIDATION.md`, "GPU processing".
-- **Next:** the RTX 3070 Ti numbers from the laptop. Step 4 waits until then; the RTX profile decides whether it is worth it.
+- **RTX 3070 Ti laptop:** 2.58x faster at full quality (8.4 instead of 3.2 frames per second) and 1.60x at preview. All GPU tests pass on NVIDIA.
+- **GPU tuning still open**, which mainly helps discrete GPUs:
+  - more parallel work in the SGM kernels (depth takes 37 ms on the RTX; the aim is about 10 ms, and preview is no faster than the CPU yet);
+  - subsample ICP's source points (GPU depth gives 45 % more);
+  - move laser extraction and the tracking filter to the GPU;
+  - step 4 (overlap).
+  
+  The aim is about 15 frames per second at full quality on the RTX.
 
-**Phase 2, processing studio:** as in the milestone table:
-- step-by-step processing with preview and undo, and recipes;
-- selection tools; clean / fill / smooth / decimate;
-- global pose-graph optimisation.
+**Phase 2, processing studio:** step-by-step processing with preview and undo, recipes, selection tools, clean / fill / smooth / simplify, and global pose-graph optimisation ("straighten"). The API is in [`APP_API.md`](APP_API.md#m3-phase-2-processing-studio).
+
+- **Where:** a **Process** page per scan (`#/projects/:pid/scans/:sid/process`). The viewer and the project page link to it. "Make mesh" stays the one-click path: it runs the Default recipe.
+- **Stages** (each a job, with progress and cancel):
+  1. **Track:** today's processing (tracking + fusion), preview or full quality.
+  2. **Straighten:** loop closure.
+     - It picks keyframes along the trajectory and finds revisits: keyframes close in space but far apart in time.
+     - It checks each candidate with ICP between keyframe clouds, then optimises a pose graph (Open3D's Levenberg-Marquardt with a line process that rejects bad loops).
+     - Finally it fuses again at the corrected poses.
+     - The result says how many loops it closed and how far the scan moved ("closed 3 loops, moved the end by 1.8 mm"). With no loops it changes nothing.
+  3. **Fuse:** build the mesh again from the current poses at a chosen voxel size (0.5 / 1 / 2 mm).
+- **Edits on the mesh:** fast, each a job with progress. They apply in order to the fused mesh and show at once in the viewer.
+  - Remove floaters (by size);
+  - fill holes (up to a size in mm, with a smooth fill);
+  - smooth (Taubin, or feature-preserving bilateral normal filtering that keeps the edges of brackets);
+  - simplify (quadric, to a triangle count);
+  - delete or keep a selection made in the viewer.
+  
+  **Undo / redo** (Ctrl+Z / Ctrl+Shift+Z) over the whole list must be instant for the last 10 steps. Re-running a stage asks first, because it starts the edits over.
+- **Selection tools in the viewer:**
+  - box, lasso and brush;
+  - add or subtract with Shift and Ctrl;
+  - invert, clear, and "select connected".
+  
+  A highlight shows what is selected and how many faces.
+- **Inspection overlays:**
+  - **holes:** red outlines, each with its size;
+  - **trajectory:** before and after straightening, with the loop links;
+  - **before / after:** for the last edit.
+- **Stats panel:**
+  - triangles, vertices;
+  - pieces, holes (count and largest in mm), watertight or not;
+  - size, area, and volume when watertight.
+- **Recipes:** named step lists (stage settings + edits) that apply in one click, saved as JSON in `data_dir/recipes`.
+  - Built in: **Default**, **Body panel** (smoother, fills larger holes), **Bracket / mechanical** (keeps edges, light smoothing), **Quick preview** (preview quality, simplified).
+  - "Save as recipe" stores the current scan's steps.
+- **Validation:**
+  - Straightening must never make a scan worse:
+    - simulated scans with a loop and real drift (e.g. a 360° orbit), plus synthetic drift added to good trajectories;
+    - measured against the ground truth before and after;
+    - no false loops on short scans.
+  - Mesh edits are tested on known shapes: hole sizes, sharp-edge angles kept, triangle counts.
+
+**Done when:** the Process page runs every stage and edit with undo / redo, selection, overlays and recipes against the real backend on the simulator. Straightening measurably reduces drift on a looped simulated scan and never worsens a short one. Tests and the browser pass are green.
 
 ### Quality bar (every milestone)
 - **Performance:** the live view holds 30 fps or more in the UI and shows the scanner's state within 150 ms. A 2M-triangle mesh orbits at 60 fps on an integrated GPU.

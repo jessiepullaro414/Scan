@@ -487,3 +487,122 @@ Everything in the M2 section is implemented as written, with these clarification
 
 **WebSocket**
 - New clients also get `setup` in the seed.
+
+---
+
+## M3 phase 2: processing studio
+
+The Process page of a scan (see the M3 plan in [`DESKTOP_APP_PLAN.md`](DESKTOP_APP_PLAN.md)). It adds to M1 and M2 and changes nothing in them.
+- `POST .../process` ("Make mesh") keeps its contract. It now runs the **Default** recipe at the requested quality.
+- `health.api` and `hello.version` become `"0.3.0"`.
+
+**Model.**
+- A scan's processing is three **stages**: `track`, `straighten`, `fuse`. Each ends in a fused **base mesh**.
+- An ordered list of **edits** applies to the base mesh. `cursor` is how many of them are active; undo and redo move it.
+- The **current mesh** is the base plus the active edits. It is always written to the scan's `result/mesh.ply` (and `mesh.stl`, plus `mesh.obj` when configured), so the M1 viewer and downloads show the current version.
+- Re-running a stage replaces the base and **clears the edits**: face indices no longer match. The UI confirms first.
+- Files live in `scans/<sid>/process/`; their layout is the backend's choice. It records it under "API deviations (M3)".
+
+### Types
+
+```ts
+type StageState = "none" | "running" | "done" | "failed" | "skipped";
+type MeshOp = "remove_floaters" | "fill_holes" | "smooth" | "decimate" | "delete_faces" | "keep_faces";
+// params per op:
+//   remove_floaters { min_triangles?: number; min_size_mm?: number; keep_largest_only?: boolean }
+//   fill_holes      { max_hole_mm: number }                       // largest hole perimeter to fill
+//   smooth          { method: "taubin" | "bilateral"; strength: number /* 0..1 */; keep_edges?: boolean }
+//   decimate        { target_triangles?: number; ratio?: number }  // one of the two
+//   delete_faces / keep_faces { faces: string }                    // base64 of little-endian uint32 face indices
+//                                                                  // of the CURRENT mesh
+type MeshStats = {
+  triangles: number; vertices: number; components: number;
+  holes: number;                      // boundary loops except the outer border (the longest loop)
+  largest_hole_mm: number | null;     // perimeter of the largest hole
+  border_mm: number | null;           // perimeter of the outer border
+  boundary_edges: number; non_manifold_edges: number; watertight: boolean;
+  bbox_mm: [number, number, number]; area_cm2: number; volume_cm3: number | null;   // volume only when watertight
+};
+type EditEntry = { id: string; op: MeshOp; params: Record<string, unknown>;
+                   label: string;               // "Fill holes up to 12 mm"
+                   created: string; triangles_after: number; ms: number };
+type StageInfo = { state: StageState; summary: string | null; when: string | null; job_id: string | null };
+type ProcessState = {
+  project_id: string; scan_id: string;
+  stages: {
+    track: StageInfo & { quality: "preview" | "full" | null; tracked_pct: number | null };
+    straighten: StageInfo & { loops: number | null; correction_mm: number | null; correction_deg: number | null };
+    fuse: StageInfo & { voxel_mm: number | null };
+  };
+  base: { triangles: number; vertices: number; stage: "track" | "straighten" | "fuse" } | null;
+  edits: EditEntry[]; cursor: number;       // edits[0:cursor] are applied
+  can_undo: boolean; can_redo: boolean;
+  current: { version: number;             // increases on every change: use it to reload the mesh
+             mesh_url: string;            // result/mesh.ply of this scan
+             stats: MeshStats } | null;
+  busy: string | null;                    // e.g. "Filling holes…" while an edit or stage job runs
+  job: Job | null;                        // the running job of this scan, if any
+};
+type Recipe = {
+  id: string; name: string; description: string; builtin: boolean;
+  settings: { quality: "preview" | "full"; straighten: "auto" | "off"; voxel_mm: number | null };
+  ops: { op: Exclude<MeshOp, "delete_faces" | "keep_faces">; params: Record<string, unknown> }[];
+};
+type HoleOutline = { perimeter_mm: number; n_edges: number; points: number[] };   // flattened xyz, closed loop
+type TrajectoryView = { raw: number[][]; straightened: number[][] | null;          // camera positions (mm), subsampled
+                        loops: [number, number][] };                             // index pairs into raw
+```
+
+### REST
+Paths are relative to `/api/projects/{pid}/scans/{sid}`.
+
+| Method and path | Body | Returns |
+|---|---|---|
+| `GET .../process` | | `ProcessState` |
+| `POST .../process/track` | `{quality}` | `Job` (kind `process_track`) |
+| `POST .../process/straighten` | `{}` | `Job` (kind `process_straighten`): loop closure, then a fuse at the corrected poses |
+| `POST .../process/fuse` | `{voxel_mm}` | `Job` (kind `process_fuse`) |
+| `POST .../process/edits` | `{op, params}` | `Job` (kind `mesh_edit`). Any redo steps after the cursor are dropped first. |
+| `POST .../process/undo` | | `ProcessState` (instant for the last 10 steps) |
+| `POST .../process/redo` | | `ProcessState` |
+| `POST .../process/recipe` | `{recipe_id, scope: "edits" \| "all"}` | `Job`. `edits`: replace the edits with the recipe's ops. `all`: run the stages with the recipe's settings, then its ops. |
+| `GET .../process/holes.json` | | `HoleOutline[]` of the current mesh |
+| `GET .../process/trajectory.json` | | `TrajectoryView` |
+| `GET /api/recipes` | | `Recipe[]` (built-ins first) |
+| `POST /api/recipes` | `{name, description?, from_scan: {project_id, scan_id}}` or `{name, description?, settings, ops}` | `Recipe` |
+| `DELETE /api/recipes/{id}` | | `204` (user recipes only; 409 for a built-in) |
+
+Rules:
+- 409 while the scan is recording, or while another stage or edit job of this scan runs.
+- `straighten` and `fuse` need a finished `track`.
+- Edits need a base mesh.
+- A failed edit leaves the mesh as it was, with a plain reason.
+
+### WebSocket
+`{"type":"process", ...ProcessState}` whenever a scan's processing state changes (keyed per scan). Jobs keep their M1 `job` messages.
+
+### Engine interfaces (for the agents building this)
+```python
+# ohs/mesh/ (new): pure functions on (V float64 (N,3), F int64 (M,3)) -> (V, F); no I/O
+remove_floaters(V, F, min_triangles=None, min_size_mm=None, keep_largest_only=False)
+fill_holes(V, F, max_hole_mm)                     # fair (smooth) fill, not flat fans
+smooth(V, F, method="taubin"|"bilateral", strength=0.5, keep_edges=True)
+decimate(V, F, target_triangles=None, ratio=None)
+delete_faces(V, F, faces) / keep_faces(V, F, faces)
+mesh_stats(V, F) -> dict (MeshStats)              ;  hole_outlines(V, F) -> list[dict]
+
+# ohs/track/posegraph.py (new)
+straighten_trajectory(rec_path, calib, trajectory, *, params=None, depth_params=None, progress=None,
+                      cancelled=None) -> tuple[dict[int, np.ndarray], dict]
+#   trajectory: [(frame_index, t_host, ok, T_wc 4x4)] as process_recording writes trajectory.csv
+#   returns the corrected T_wc for every tracked frame and a report:
+#   {keyframes, loop_candidates, loops_accepted, correction_mm, correction_deg, loops: [(i, j)],
+#    verdict (plain words), ground_truth: {before, after} when the recording has true poses}
+
+# ohs/app/process.py: process_recording(..., poses: dict[int, np.ndarray] | None = None)
+#   fuses at the given poses (no tracking) when poses are passed
+```
+
+## API deviations (M3)
+
+The backend lists here what it had to decide.
