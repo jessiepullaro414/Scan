@@ -9,6 +9,7 @@ The hardware, parts list and assembly are in the [main README](../README.md). Th
 conventions are in [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ```
+ohs app                      the desktop app, OpenHandScan Studio (section 1, "Desktop app")
 ohs devices                  find the camera and the Pico
 ohs selftest                 check camera, IMU, clock, emitters and trigger
 ohs printables print/        calibration board, AprilTag stickers, LED projector mask
@@ -52,6 +53,36 @@ sudo usermod -aG dialout $USER     # access to the Pico's serial port; log out a
   such as `C:\venvs\ohs`, not inside a deeply nested project or OneDrive folder, or installation
   fails with confusing "file not found" errors. (Enabling Windows long-path support also works.)
 * Python 3.10 only: `pip install tomli` to read the settings file (3.11+ has `tomllib` built in).
+
+### Desktop app (OpenHandScan Studio)
+
+Studio is the point-and-click way to scan. It has projects, a live 3D view while you scan,
+rewind, one-click meshing, and a viewer with measuring. It runs entirely on this PC: a local
+server (`ohs.server`) plus a window that shows the UI. Install the app extras and build the UI
+once. Building needs [Node.js](https://nodejs.org) 20 or newer.
+
+```powershell
+pip install -e .[fusion,app]
+cd ui
+npm install
+npm run build        # writes the UI to ohs/server/static/
+cd ..
+ohs app
+```
+
+* `ohs app` opens the window. With no scanner yet, click **Try the simulator demo**: it builds a
+  simulated scan once (about a minute) and then behaves like a connected scanner.
+* `ohs app --no-window --open-browser` uses your web browser instead of the window.
+* `--port` and `--host` change where the server listens (default `127.0.0.1:8765`; settings
+  `[app]`). `--host 0.0.0.0` also serves phones and tablets on your network. There is no
+  password, so only do that on a network you trust.
+* Projects are saved in `~/OpenHandScan/projects` (setting `paths.projects_dir`): one plain folder
+  per project with its recordings and results. Deleting a project in the app moves it to
+  `.trash` in that folder.
+* UI development: `npm run dev` in `ui/` serves the UI with hot reload on
+  http://localhost:5173 and talks to a running `ohs app`. `npm run dev:mock` needs no backend.
+* The design and the API are in [docs/DESKTOP_APP_PLAN.md](docs/DESKTOP_APP_PLAN.md) and
+  [docs/APP_API.md](docs/APP_API.md).
 
 ## 2. Flash the Pico firmware
 

@@ -1,0 +1,348 @@
+@import "tailwindcss";
+
+/* ------------------------------------------------------------------ theme tokens
+   Semantic colours live in CSS variables so the dark (default) and light themes switch
+   with one attribute on <html>. Tailwind utilities map onto them (bg-surface, text-muted, …). */
+:root,
+[data-theme="dark"] {
+  color-scheme: dark;
+  --c-bg: #0b0d11;
+  --c-panel: #111419;
+  --c-surface: #161a20;
+  --c-surface-2: #1c2027;
+  --c-surface-3: #242931;
+  --c-line: rgb(255 255 255 / 0.075);
+  --c-line-strong: rgb(255 255 255 / 0.14);
+  --c-fg: #e7eaee;
+  --c-fg-muted: #a0a8b3;
+  --c-fg-subtle: #6b737e;
+  --c-accent: #4c8dff;
+  --c-accent-hover: #6aa1ff;
+  --c-accent-press: #3a79ee;
+  --c-accent-fg: #ffffff;
+  --c-accent-soft: rgb(76 141 255 / 0.14);
+  --c-accent-line: rgb(76 141 255 / 0.42);
+  --c-ok: #3fb950;
+  --c-ok-soft: rgb(63 185 80 / 0.14);
+  --c-warn: #e5a83a;
+  --c-warn-soft: rgb(229 168 58 / 0.15);
+  --c-danger: #f2564b;
+  --c-danger-soft: rgb(242 86 75 / 0.14);
+  --c-rec: #ff4136;
+  --c-overlay: rgb(5 7 10 / 0.62);
+  --c-glass: rgb(17 20 25 / 0.78);
+  --c-viewport-top: #1a1f27;
+  --c-viewport-bottom: #0a0c0f;
+  --shadow-color: 0 0% 0%;
+  --sh-sm: 0 1px 2px rgb(0 0 0 / 0.35);
+  --sh-md: 0 4px 14px rgb(0 0 0 / 0.35), 0 1px 3px rgb(0 0 0 / 0.3);
+  --sh-lg: 0 18px 50px rgb(0 0 0 / 0.5), 0 4px 12px rgb(0 0 0 / 0.35);
+}
+
+[data-theme="light"] {
+  color-scheme: light;
+  --c-bg: #f2f3f5;
+  --c-panel: #ffffff;
+  --c-surface: #ffffff;
+  --c-surface-2: #f4f5f7;
+  --c-surface-3: #e8eaee;
+  --c-line: rgb(16 22 32 / 0.09);
+  --c-line-strong: rgb(16 22 32 / 0.17);
+  --c-fg: #12161c;
+  --c-fg-muted: #505965;
+  --c-fg-subtle: #858d98;
+  --c-accent: #2f6fe8;
+  --c-accent-hover: #3f7ef2;
+  --c-accent-press: #2560d2;
+  --c-accent-fg: #ffffff;
+  --c-accent-soft: rgb(47 111 232 / 0.1);
+  --c-accent-line: rgb(47 111 232 / 0.4);
+  --c-ok: #1f8f3a;
+  --c-ok-soft: rgb(31 143 58 / 0.1);
+  --c-warn: #b7791f;
+  --c-warn-soft: rgb(183 121 31 / 0.12);
+  --c-danger: #d93a2f;
+  --c-danger-soft: rgb(217 58 47 / 0.1);
+  --c-rec: #e5302a;
+  --c-overlay: rgb(20 24 30 / 0.4);
+  --c-glass: rgb(255 255 255 / 0.82);
+  --c-viewport-top: #eef0f3;
+  --c-viewport-bottom: #d5d9df;
+  --sh-sm: 0 1px 2px rgb(16 22 32 / 0.08);
+  --sh-md: 0 4px 14px rgb(16 22 32 / 0.08), 0 1px 3px rgb(16 22 32 / 0.08);
+  --sh-lg: 0 18px 50px rgb(16 22 32 / 0.16), 0 4px 12px rgb(16 22 32 / 0.08);
+}
+
+@theme inline {
+  --color-bg: var(--c-bg);
+  --color-panel: var(--c-panel);
+  --color-surface: var(--c-surface);
+  --color-surface-2: var(--c-surface-2);
+  --color-surface-3: var(--c-surface-3);
+  --color-line: var(--c-line);
+  --color-line-strong: var(--c-line-strong);
+  --color-fg: var(--c-fg);
+  --color-muted: var(--c-fg-muted);
+  --color-subtle: var(--c-fg-subtle);
+  --color-accent: var(--c-accent);
+  --color-accent-hover: var(--c-accent-hover);
+  --color-accent-press: var(--c-accent-press);
+  --color-accent-fg: var(--c-accent-fg);
+  --color-accent-soft: var(--c-accent-soft);
+  --color-accent-line: var(--c-accent-line);
+  --color-ok: var(--c-ok);
+  --color-ok-soft: var(--c-ok-soft);
+  --color-warn: var(--c-warn);
+  --color-warn-soft: var(--c-warn-soft);
+  --color-danger: var(--c-danger);
+  --color-danger-soft: var(--c-danger-soft);
+  --color-rec: var(--c-rec);
+  --color-overlay: var(--c-overlay);
+  --color-glass: var(--c-glass);
+
+  --shadow-sm: var(--sh-sm);
+  --shadow-md: var(--sh-md);
+  --shadow-lg: var(--sh-lg);
+}
+
+@theme {
+  --font-sans: "Segoe UI Variable Text", "Segoe UI Variable", "Segoe UI", system-ui, -apple-system, BlinkMacSystemFont,
+    Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-display: "Segoe UI Variable Display", "Segoe UI Variable", "Segoe UI", system-ui, -apple-system,
+    BlinkMacSystemFont, Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: "Cascadia Mono", "Cascadia Code", Consolas, "SF Mono", Menlo, "Roboto Mono", "DejaVu Sans Mono", monospace;
+
+  --text-2xs: 0.6875rem;
+  --text-2xs--line-height: 1rem;
+  --text-xs: 0.75rem;
+  --text-xs--line-height: 1rem;
+  --text-sm: 0.8125rem;
+  --text-sm--line-height: 1.25rem;
+  --text-base: 0.875rem;
+  --text-base--line-height: 1.375rem;
+  --text-lg: 1rem;
+  --text-lg--line-height: 1.5rem;
+  --text-xl: 1.125rem;
+  --text-xl--line-height: 1.625rem;
+  --text-2xl: 1.375rem;
+  --text-2xl--line-height: 1.875rem;
+  --text-3xl: 1.75rem;
+  --text-3xl--line-height: 2.25rem;
+
+  --animate-rec: rec-pulse 1.6s ease-in-out infinite;
+  --animate-fade-in: fade-in 160ms ease-out both;
+  --animate-pop-in: pop-in 180ms cubic-bezier(0.2, 0.9, 0.3, 1.2) both;
+  --animate-slide-in: slide-in 220ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  --animate-shimmer: shimmer 1.4s linear infinite;
+  --animate-lost: lost-pulse 1.2s ease-in-out infinite;
+  --animate-indeterminate: indeterminate 1.3s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+
+@keyframes indeterminate {
+  0% { left: -35%; }
+  100% { left: 100%; }
+}
+@keyframes toast-life {
+  from { transform: scaleX(1); }
+  to { transform: scaleX(0); }
+}
+
+@keyframes rec-pulse {
+  0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgb(255 65 54 / 0.55); }
+  50% { opacity: 0.55; box-shadow: 0 0 0 5px rgb(255 65 54 / 0); }
+}
+@keyframes fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes pop-in {
+  from { opacity: 0; transform: translateY(4px) scale(0.98); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes slide-in {
+  from { opacity: 0; transform: translateX(16px); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes shimmer {
+  from { background-position: -200% 0; }
+  to { background-position: 200% 0; }
+}
+@keyframes lost-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgb(242 86 75 / 0.5); }
+  50% { box-shadow: 0 0 0 6px rgb(242 86 75 / 0); }
+}
+
+/* ------------------------------------------------------------------ base */
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+  html {
+    -webkit-text-size-adjust: 100%;
+    text-rendering: optimizeLegibility;
+  }
+  body {
+    margin: 0;
+    background: var(--c-bg);
+    color: var(--c-fg);
+    font-family: var(--font-sans);
+    font-size: var(--text-sm);
+    line-height: var(--text-sm--line-height);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    overflow: hidden;
+  }
+  ::selection {
+    background: var(--c-accent-soft);
+  }
+  button,
+  [role="button"] {
+    cursor: pointer;
+  }
+  button:disabled {
+    cursor: not-allowed;
+  }
+  :focus-visible {
+    outline: 2px solid var(--c-accent);
+    outline-offset: 2px;
+  }
+  input:focus-visible,
+  textarea:focus-visible,
+  select:focus-visible {
+    outline: none;
+  }
+  code,
+  kbd,
+  samp,
+  pre {
+    font-family: var(--font-mono);
+  }
+}
+
+/* Numbers that change live never shift their neighbours. */
+.tnum {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Thin, theme-aware scrollbars. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--c-line-strong) transparent;
+}
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--c-line-strong);
+  border: 3px solid transparent;
+  border-radius: 999px;
+  background-clip: content-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--c-fg-subtle);
+  background-clip: content-box;
+  border: 3px solid transparent;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* Skeleton shimmer (loading states keep the final layout: no jumps). */
+.skeleton {
+  background: linear-gradient(90deg, var(--c-surface-2) 25%, var(--c-surface-3) 37%, var(--c-surface-2) 63%);
+  background-size: 400% 100%;
+  animation: var(--animate-shimmer);
+  border-radius: 6px;
+}
+
+/* 3D viewport backdrop: the canvas is transparent and sits on this gradient. */
+.viewport-bg {
+  background:
+    radial-gradient(120% 90% at 50% 0%, var(--c-viewport-top) 0%, transparent 70%),
+    linear-gradient(180deg, var(--c-viewport-top) 0%, var(--c-viewport-bottom) 100%);
+}
+
+/* Glass overlays on top of the 3D view. */
+.glass {
+  background: var(--c-glass);
+  backdrop-filter: blur(10px) saturate(1.2);
+  -webkit-backdrop-filter: blur(10px) saturate(1.2);
+}
+
+/* ------------------------------------------------------------------ range slider */
+input[type="range"].slider {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 20px;
+  background: transparent;
+  cursor: pointer;
+  --fill: 0%;
+}
+input[type="range"].slider:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+input[type="range"].slider::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--c-accent) 0 var(--fill), var(--c-surface-3) var(--fill) 100%);
+}
+input[type="range"].slider::-moz-range-track {
+  height: 4px;
+  border-radius: 999px;
+  background: var(--c-surface-3);
+}
+input[type="range"].slider::-moz-range-progress {
+  height: 4px;
+  border-radius: 999px;
+  background: var(--c-accent);
+}
+input[type="range"].slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  margin-top: -6px;
+  border-radius: 999px;
+  background: #fff;
+  border: 2px solid var(--c-accent);
+  box-shadow: 0 1px 3px rgb(0 0 0 / 0.4);
+  transition: transform 120ms ease;
+}
+input[type="range"].slider::-moz-range-thumb {
+  width: 12px;
+  height: 12px;
+  border-radius: 999px;
+  background: #fff;
+  border: 2px solid var(--c-accent);
+}
+input[type="range"].slider:hover::-webkit-slider-thumb {
+  transform: scale(1.12);
+}
+input[type="range"].slider:focus-visible {
+  outline: none;
+}
+input[type="range"].slider:focus-visible::-webkit-slider-thumb {
+  box-shadow: 0 0 0 4px var(--c-accent-soft), 0 1px 3px rgb(0 0 0 / 0.4);
+}
+
+/* drei <Html> labels must not block orbiting unless they opt in. */
+.html-label {
+  pointer-events: none;
+  user-select: none;
+  white-space: nowrap;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 1ms !important;
+  }
+}

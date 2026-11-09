@@ -19,6 +19,7 @@ dependencies = [
 
 [project.optional-dependencies]
 fusion = ["open3d>=0.18"]
+app = ["fastapi", "uvicorn", "websockets", "pywebview"]
 dev = ["pytest>=7"]
 
 [project.scripts]
@@ -26,6 +27,10 @@ ohs = "ohs.app.cli:main"
 
 [tool.setuptools.packages.find]
 include = ["ohs*"]
+
+[tool.setuptools.package-data]
+# The built desktop-app UI (npm run build in ui/); wheels built after a UI build include it
+ohs = ["server/static/**/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

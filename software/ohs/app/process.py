@@ -15,7 +15,10 @@ resolution, 1 mm voxels) over the raw frames of a recording folder and writes in
 
 The calibration defaults to the recording's ``calibration.json``. IMU samples are fed to the
 pipeline incrementally (up to 0.25 s ahead of each frame), so recordings longer than the gyro
-buffer work. Marker mode calls ``MarkerTracker.refine_map()`` after the last frame and saves the
+buffer work. **Cuts:** frames whose ``t_host`` lies inside any ``events.csv`` row with
+``kind == "cut"`` and ``value == "t0,t1"`` (inclusive; written by the app's live rewind) are
+skipped; ``report["frames"]["cut"]`` counts them and ``report["cuts"]`` lists the intervals.
+Malformed cut values are ignored with a warning. Marker mode calls ``MarkerTracker.refine_map()`` after the last frame and saves the
 refined map; the fused model and laser cloud use the poses tracked online (refinement mostly
 improves the map itself; see VALIDATION.md).
 
@@ -43,7 +46,7 @@ from ohs.geometry import invert_se3, pose_error
 from ohs.io.recording import RecordingReader
 from ohs.types import ScannerCalibration
 
-__all__ = ["ProcessParams", "process_recording", "trajectory_errors", "EXPORT_FORMATS"]
+__all__ = ["ProcessParams", "process_recording", "trajectory_errors", "cut_intervals", "EXPORT_FORMATS"]
 
 log = logging.getLogger(__name__)
 
@@ -123,6 +126,24 @@ def trajectory_errors(gt: dict[int, np.ndarray], est: list[tuple[int, np.ndarray
         "rms_trans_mm": float(np.sqrt(np.mean(np.square(trans)))),
         "per_frame": rows,
     }
+
+
+def cut_intervals(reader: RecordingReader) -> list[tuple[float, float]]:
+    """``[(t0, t1), ...]`` of the recording's ``cut`` events (``value`` = "t0,t1", host seconds)."""
+    out: list[tuple[float, float]] = []
+    for e in reader.events():
+        if e.kind != "cut":
+            continue
+        try:
+            a, b = (float(x) for x in str(e.value).split(","))
+        except ValueError:
+            log.warning("ignoring a malformed cut event %r (expected \"t0,t1\")", e.value)
+            continue
+        if not (math.isfinite(a) and math.isfinite(b)):
+            log.warning("ignoring a malformed cut event %r", e.value)
+            continue
+        out.append((min(a, b), max(a, b)))
+    return out
 
 
 def _check_export(export: tuple[str, ...]) -> tuple[str, ...]:
@@ -209,6 +230,18 @@ def process_recording(
 
     stop = len(reader) if p.stop is None else min(int(p.stop), len(reader))
     positions = list(range(max(0, int(p.start)), stop, int(p.frame_step)))
+    cuts = cut_intervals(reader)
+    n_cut = 0
+    if cuts and positions:
+        t_pos = reader.times()[np.asarray(positions, dtype=np.int64)]
+        inside = np.zeros(len(positions), dtype=bool)
+        for a, b in cuts:
+            inside |= (t_pos >= a) & (t_pos <= b)
+        n_cut = int(inside.sum())
+        positions = [pos for pos, cut in zip(positions, inside) if not cut]
+        log.info("skipping %d frames inside %d cut interval(s)", n_cut, len(cuts))
+        if not positions:
+            raise ValueError(f"every selected frame of {rec_path} lies inside a cut (rewound) interval: nothing to process")
     n = len(positions)
     log.info("processing %s: %d of %d frames (%s mode, scale %.2f)", rec_path, n, len(reader), p.pipeline.mode, p.pipeline.scale)
     rows: list[dict] = []
@@ -249,8 +282,9 @@ def process_recording(
             "frames": {
                 "in_recording": len(reader), "processed": n, "tracked": pipe.n_tracked,
                 "tracked_fraction": pipe.n_tracked / n if n else 0.0,
-                "start": int(p.start), "stop": stop, "step": int(p.frame_step),
+                "start": int(p.start), "stop": stop, "step": int(p.frame_step), "cut": n_cut,
             },
+            "cuts": [[a, b] for a, b in cuts],
             "failures": dict(reasons),
             "imu": {"samples": int(len(imu_t)), "gyro_prior": pipe.gyro_enabled, "frames_with_prior": n_prior},
             "timings_ms": {key: _stats(v) for key, v in timings.items()},

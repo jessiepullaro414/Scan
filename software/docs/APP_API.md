@@ -93,3 +93,31 @@ type Job = { id: string; kind: string; state: "queued" | "running" | "done" | "f
 - Location: `<projects_dir>/<project_id>/` (default `~/OpenHandScan/projects`).
 - Contents: `project.json`, plus `scans/<scan_id>/recording/` (the raw recording format from ARCHITECTURE.md) and `scans/<scan_id>/result/` (the output of `process_recording`).
 - `project.json` holds `{id, name, created, modified, scans:[{id, name, created, mode, status}]}`.
+
+## API deviations (backend, M1)
+
+Everything above is implemented as written. Where the contract was silent or ambiguous, the backend does this. Fields marked *extra* are additions that a UI can ignore.
+
+**Clarifications**
+- Binary framing: the JSON header is padded with spaces so the payload starts on a 4-byte boundary *of the whole message* (`(4 + header length) % 4 == 0`), so `Float32Array`/`Uint32Array` views can be made directly on the received `ArrayBuffer`. Mesh sections follow back to back (their sizes are always multiples of 4).
+- `Job.progress` is a fraction from 0 to 1. A job's final `job` message comes after its side effects (scan status updated in the store, the simulator device connected).
+- `GET /api/projects` is sorted by `created`, newest first. `POST /api/projects` returns 200 with the `Project`.
+- `replay.loop` defaults to `false`. A non-looping replay disconnects at its end (a running scan is stopped and saved, and a `log` message says so). The sim source always loops; its demo is a seamless back-and-forth sweep, so tracking continues across passes.
+- `status.laser_points` is the running total of the live model (a rewind lowers it). `status.model` counts the live mesh before decimation.
+- Every scan start first sends an empty `mesh` (`seq` 0, 0 vertices) so the UI can clear the previous model. The ghost is the last good pose; the UI hides it when a `pose` arrives with `ok: true`.
+- Quality colours: the proxy is the number of tracked frames that saw each 8 mm cell of the world (not the TSDF weight, which a rewind rebuild would distort). Yellow at 4 views or fewer, green at 12 or more, blended in between.
+- Pause: frames are neither recorded nor integrated, and the emitters are off. IMU samples and events are still recorded so that offline tracking can bridge the pause with the gyro. `events.csv` gets `session,pause` / `session,resume` rows.
+- Rewind cuts the frame-clock interval `[t1 - seconds, t1]`, where `t1` is the newest recorded frame; paused time counts. Offline processing skips cut frames (`report.json` has `frames.cut` and `cuts`).
+- `POST /api/device/emitters`: during a scan the levels are kept for the rest of it. While paused they are only stored, and the emitters stay off until Resume. Without a Pico (replay, sim, or a camera with no Pico) the call is ignored and returns the `DeviceState`.
+- Status codes besides 409: 400 for an empty name or a replay without `recording`; 404 for a replay path that is not a recording; 422 for an invalid body; 503 when the camera or Pico cannot be opened or the Pico refuses a command; 403 from the local guard. The local guard refuses a `Host` other than localhost or an IP address, and refuses mutating requests or WebSockets whose `Origin` is neither this server nor the Vite dev server on port 5173.
+- Pico trigger: a short press pauses or resumes a running scan, or starts a scan in the last-used project when idle. A long press (1 s or more) stops the scan.
+
+**Extra fields**
+- `hello`: `app`, `app_version`. `log`: `t`. `health`: `api`.
+- `status`: `tracking.code` (machine-readable: `no_depth`, `few_inliers`, `low_overlap`, `degenerate`, `rewound`, ...), `laser_points_frame`, `latency_ms` (frame captured to result published), `process_ms` (pipeline time of the frame), `dropped_frames` (frames the live pipeline skipped; every frame is still recorded).
+- `DeviceState`: `error` (the last device failure), `warnings` (strings), `imu_stream` (bool), `camera.info.measured_fps` / `frames` / `frame_size`, `pico.imu` / `port` / `error`.
+- `SessionState`: `name` (the scan name) while a scan is active. The `POST /api/scan/rewind` reply also has `rewind: {t0, t1, seconds, dropped_frames, kept_frames, rebuilt_keyframes, rebuild_s}`.
+- `Scan`: `thumbnail_url` (or null), `error` (after a failed processing), `quality` (of the last processing). `ProjectSummary.thumbnail_url` is the newest scan's thumbnail.
+- `Job`: `project_id`, `scan_id` and `quality` for `process_scan`. `result` is `{project_id, scan_id, scan}` for `process_scan` and `{path, frames, image_size}` for `generate_demo`.
+- `mesh` header: `decimated` (bool).
+- `GET .../files/{name}` also serves `trajectory.csv`, `mesh.obj` (when exported) and `thumbnail.jpg` (the left camera view saved at stop).

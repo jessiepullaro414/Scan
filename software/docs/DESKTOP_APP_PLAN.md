@@ -214,12 +214,26 @@ Rejected alternatives:
 
 | # | Milestone | Done when |
 |---|---|---|
-| **M1** | **App skeleton plus live scanning** (now) | `ohs app` opens a window. Projects page; device panel (camera / replay / **simulator**); live Scan page with the growing 3D model, camera previews, distance gauge, tracking state, start / stop / **rewind**; scans saved to projects; one-click "Make mesh" job with progress; result viewer (orbit, lighting, wireframe, measure distance). Backend API tests and UI type-check and build pass, plus a browser smoke test. |
+| **M1** | **App skeleton plus live scanning** (done, see status below) | `ohs app` opens a window. Projects page; device panel (camera / replay / **simulator**); live Scan page with the growing 3D model, camera previews, distance gauge, tracking state, start / stop / **rewind**; scans saved to projects; one-click "Make mesh" job with progress; result viewer (orbit, lighting, wireframe, measure distance). Backend API tests and UI type-check and build pass, plus a browser smoke test. |
 | M2 | Setup and calibration wizard | first-run flow, live coverage heatmaps, auto-capture, plain-language results, launch-time check |
 | M3 | Processing studio | step-by-step pipeline with preview and undo, recipes, selection tools, clean / fill / smooth / decimate, global pose-graph optimisation |
 | M4 | Multi-scan alignment | N-way automatic, tags, manual pairs, residual maps, merge |
 | M5 | Measure and reverse engineering | primitives, hole finder, coordinate systems, gap & flush, sections, mirror, deviation and PDF report, STEP / FreeCAD export |
 | M6 | Ship it | installer, updater check (offline-friendly), crash-safe logs and diagnostics bundle, docs and tutorials, SpaceMouse, localisation scaffolding |
+
+### M1 status (2026-11-08)
+Built and checked end to end in a browser against the simulator:
+- create a project, connect the simulator, then scan with pause, resume and rewind;
+- stop, then Make mesh (full quality) and open the viewer;
+- shading modes, measuring, downloads, rename, move to trash, and both themes.
+
+Also done: 41 backend API tests and a clean UI type-check and build.
+
+Known gaps, carried into later milestones:
+- **Not yet verified:** 60 fps in the UI (the test browser was throttled), and the real pywebview window. That window is tested only with a stub, and downloads are now allowed in it.
+- **Processing speed:** full-quality processing of the 27 s demo scan (696 frames) took about 5.5 minutes on the CPU. Faster paths (frame subsampling for "preview", GPU depth) belong in M3.
+- **After a rewind:** the live model is coarser until new frames refine it.
+- **Not built yet:** marker-mode live tags, automated UI tests, and a "follow the scanner" camera.
 
 ### Quality bar (every milestone)
 - **Performance:** the live view holds 30 fps or more in the UI and shows the scanner's state within 150 ms. A 2M-triangle mesh orbits at 60 fps on an integrated GPU.

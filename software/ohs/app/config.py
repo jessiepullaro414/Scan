@@ -3,7 +3,8 @@
 * :class:`Config` holds :class:`~ohs.devices.camera.CameraParams` and
   :class:`~ohs.devices.pico.PicoParams` unchanged, plus the app's own sections: emitter levels per
   profile, live (preview-quality) processing, offline processing defaults, the ChArUco board, the
-  AprilTag size and the default paths.
+  AprilTag size, the default paths (including the Studio projects folder) and ``[app]`` (the
+  host and port of ``ohs app``).
 * :func:`load_config` reads ``~/.ohs/config.toml`` (or ``$OHS_CONFIG``, or an explicit path) with
   :mod:`tomllib` and merges it over the defaults. Every key is optional. Unknown keys produce a
   warning with a "did you mean" hint and are ignored. Values of the wrong type raise
@@ -49,6 +50,7 @@ __all__ = [
     "EMITTER_NAMES",
     "ConfigError",
     "PathsConfig",
+    "AppConfig",
     "EmitterConfig",
     "LiveConfig",
     "ProcessConfig",
@@ -97,6 +99,7 @@ class ConfigError(ValueError):
 class PathsConfig:
     calibration: str = "~/.ohs/calibration.json"
     scans_dir: str = "~/OpenHandScan/scans"
+    projects_dir: str = "~/OpenHandScan/projects"
 
     @property
     def calibration_path(self) -> Path:
@@ -105,6 +108,18 @@ class PathsConfig:
     @property
     def scans_path(self) -> Path:
         return Path(self.scans_dir).expanduser()
+
+    @property
+    def projects_path(self) -> Path:
+        return Path(self.projects_dir).expanduser()
+
+
+@dataclass
+class AppConfig:
+    """OpenHandScan Studio (``ohs app``): where its local web server listens."""
+
+    host: str = "127.0.0.1"
+    port: int = 8765
 
 
 @dataclass
@@ -177,6 +192,7 @@ class Config:
     process: ProcessConfig = field(default_factory=ProcessConfig)
     board: BoardConfig = field(default_factory=BoardConfig)
     markers: MarkersConfig = field(default_factory=MarkersConfig)
+    app: AppConfig = field(default_factory=AppConfig)
     source: Path | None = field(default=None, compare=False, repr=False, metadata={"toml": False})
     warnings: list[str] = field(default_factory=list, compare=False, repr=False, metadata={"toml": False})
 
@@ -217,6 +233,10 @@ class Config:
             errs.append(f"board: {e}")
         if self.markers.tag_mm <= 0:
             errs.append("markers.tag_mm must be positive")
+        if not str(self.app.host).strip():
+            errs.append('app.host must not be empty (e.g. "127.0.0.1")')
+        if not 1 <= int(self.app.port) <= 65535:
+            errs.append(f"app.port must be in 1..65535 (got {self.app.port})")
         if errs:
             where = f" in {self.source}" if self.source else ""
             raise ConfigError(f"invalid configuration{where}: " + "; ".join(errs))
@@ -375,11 +395,18 @@ _SECTION_DOCS = {
     "process": "Offline full-quality processing (`ohs process`, `ohs scan --process`).",
     "board": "ChArUco calibration board. `ohs printables` prints it; it must match the printed board.",
     "markers": "AprilTag stickers (tag36h11) for marker mode.",
+    "app": "OpenHandScan Studio (`ohs app`): the local web server behind the app window.",
 }
 
 _KEY_DOCS = {
     "paths.calibration": "Calibration file written by `ohs calibrate` and used by `ohs scan` / `ohs process`.",
     "paths.scans_dir": "Default folder for new scan and calibration recordings.",
+    "paths.projects_dir": "Projects of OpenHandScan Studio (`ohs app`): one folder per project.",
+    "app.host": (
+        'Address the server listens on. "127.0.0.1" = this PC only; "0.0.0.0" also serves the UI to\n'
+        "phones and tablets on your network (no password: only on a network you trust)."
+    ),
+    "app.port": "TCP port (`ohs app --port` overrides it).",
     "camera.index": "OpenCV index of the stereo camera.",
     "camera.backend": (
         '"auto" (Windows: DirectShow then Media Foundation; Linux: V4L2), "dshow", "msmf", "v4l2" or "any".'

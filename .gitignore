@@ -18,6 +18,9 @@ scans/
 sim_data/
 *.npy
 
+# Local Claude Code files (dev-server launch config, task locks)
+.claude/
+
 # OS / editor
 .DS_Store
 Thumbs.db

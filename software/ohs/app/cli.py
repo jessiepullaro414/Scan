@@ -27,7 +27,8 @@ __all__ = ["main", "build_parser", "CliError", "ProgressBar", "COMMANDS"]
 
 log = logging.getLogger("ohs.app.cli")
 
-COMMANDS = ("devices", "selftest", "config", "printables", "preview", "record", "calibrate", "scan", "process", "sim")
+COMMANDS = ("devices", "selftest", "config", "printables", "preview", "record", "calibrate", "scan", "process", "sim",
+            "app")
 MODES = ("markerless", "markers")
 SCENES = ("sphere_on_plane", "car_panel", "bracket")
 CALIB_KINDS = ("stereo", "lasers", "imu", "check")
@@ -46,6 +47,9 @@ no hardware yet?
   ohs sim demo                   simulated scan recording
   ohs process demo               final mesh from it
   ohs scan --replay demo         live view on the replayed recording
+
+the desktop app:
+  ohs app                        OpenHandScan Studio (connect the simulator to try it)
 
 run `ohs <command> --help` for the options of a command."""
 
@@ -423,6 +427,16 @@ def build_parser() -> argparse.ArgumentParser:
                    help="keep ground-truth depth maps for every N-th frame (default: 0 = none; 4 MB each)")
     p.add_argument("--overwrite", action="store_true", help="write into a non-empty folder")
     p.set_defaults(func=cmd_sim)
+
+    p = add("app", "OpenHandScan Studio: the desktop app (window + local web server)",
+            epilog="Opens the app window on http://<host>:<port>/ (settings [app] host/port, default 127.0.0.1:8765).\n"
+                   "Closing the window stops everything; a running scan is saved and the emitters switch off.\n"
+                   "Also: python -m ohs.server. Needs the app extras: pip install -e .[app]")
+    p.add_argument("--host", help="address to listen on (default: app.host, 127.0.0.1; 0.0.0.0 = whole network)")
+    p.add_argument("--port", type=_pos_int, help="TCP port (default: app.port, 8765)")
+    p.add_argument("--no-window", action="store_true", help="no app window: serve until Ctrl-C (use a browser)")
+    p.add_argument("--open-browser", action="store_true", help="open the app in the default web browser")
+    p.set_defaults(func=cmd_app)
     return parser
 
 
@@ -834,6 +848,20 @@ def cmd_sim(args: argparse.Namespace) -> int:
     _say(f'  ohs scan --replay "{path}"     live view on the replayed scan')
     _say(f'  ohs preview --replay "{path}"  raw / rectified view, laser overlay, depth')
     return 0
+
+
+def cmd_app(args: argparse.Namespace) -> int:
+    cfg = _config(args)
+    if getattr(args, "calib", None):
+        cfg.paths.calibration = str(Path(args.calib).expanduser())
+    try:
+        from ohs.server.launcher import run_app
+    except ImportError as e:
+        raise CliError(f"{e}: the app needs FastAPI and uvicorn (pip install -e .[app])") from None
+    if args.port is not None and args.port > 65535:
+        raise CliError(f"--port must be at most 65535 (got {args.port})")
+    return run_app(cfg, host=args.host, port=args.port, window=not args.no_window, open_browser=args.open_browser,
+                   echo=_say, log_level="info" if int(getattr(args, "verbose", 0) or 0) >= 2 else "warning")
 
 
 # --------------------------------------------------------------------------- main
