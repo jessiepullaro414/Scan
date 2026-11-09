@@ -479,6 +479,15 @@ Phase 1 is done when full-quality processing is at least 3x faster on the RTX la
    - flag filled faces, so measuring tools skip them;
    - smoothing that does less where the data is confident;
    - an optional watertight fill with a distance limit.
+5. **World-space spacetime stereo, as a trial build** (#2, research plan 7.2): refine the fused surface patch by patch against the raw images of every frame that saw it, instead of averaging per-frame depth.
+   - Each frame lights a patch with a different dot arrangement, so the camera-fixed errors of per-frame matching never arise.
+   - On the simulator, the prototype cut the median error 4–6 times where the scan concentrates.
+   - It comes after item 2, whose error estimates it uses, and after Straighten in the processing order.
+   - The trial build decides whether it ships as a GPU stage in M4.
+6. **Global verification for large drift** (the first half of #5, Straighten v2; research plan 4.4.1). Today Straighten finds loops from the drifted trajectory and starts ICP there, so it can't close drift beyond about 20 mm.
+   - Feature matching between keyframe clouds (FPFH and FGR, in Open3D) proposes loops that are too far off for ICP.
+   - The existing checks then verify them, keeping the "never worse" rule.
+   - The same code serves multi-scan alignment in M4.
 
 **Also queued:**
 - **Temperature logging** (part of #8, before the hardware arrives): the firmware reads the IMU chip's temperature, and every recording stores it, so drift with heat can be modelled later.
