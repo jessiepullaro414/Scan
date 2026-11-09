@@ -18,7 +18,11 @@ scanned area and is never filled). Its size is its perimeter in mm.
 3. **Fair** the new vertices: they solve the bi-Laplace equation ``L^2 x = 0`` (umbrella
    Laplacian) with the loop and the ring of mesh vertices around it fixed, so the patch meets the
    surface with matching slope and follows its curvature (a hole in a sphere is filled with a
-   piece of sphere, not a flat cap).
+   piece of sphere, not a flat cap). A solution must stay near the hole (within
+   :data:`FAIR_BOUND` loop radii of its centroid): a twisted loop, one climbing around an object
+   sitting in the hole, triangulates with folds, on which the system is nearly singular and once
+   threw a patch 5 m away. Then the hole gets a soap film instead (the membrane ``L x = 0``: each
+   new vertex the mean of its neighbours, so the patch stays inside the loop's convex hull).
 
 Small holes (a few mm at 1 mm voxels) get no new vertices in step 2 and keep the triangulation of
 step 1. The new faces are oriented like the mesh around them. Nothing else is moved.
@@ -49,6 +53,7 @@ log = logging.getLogger(__name__)
 
 MAX_DP_EDGES = 160  # the O(n^3) triangulation above this would take seconds per hole
 ALPHA = math.sqrt(2.0)  # Liepa's density factor
+FAIR_BOUND = 1.25  # a faired patch must stay within this many loop radii of the loop's centroid
 Progress = Callable[[float, str], None]
 
 
@@ -365,11 +370,22 @@ def _fair(loop_g: np.ndarray, new_pos: np.ndarray, tris_local: np.ndarray, V: np
     """New vertex positions solving ``L^2 x = 0`` with the loop and its mesh ring fixed.
 
     Cotangent weights, computed on the refined patch and once more on the first solution; the
-    umbrella operator if that system cannot be solved; the refined positions as a last resort.
+    umbrella operator if that system cannot be solved. A solution counts only if it stays near
+    the hole (every new vertex within :data:`FAIR_BOUND` loop radii of the loop's centroid): a
+    twisted loop (one climbing around an object in the hole) triangulates with folds, and on
+    folds the system is nearly singular and can throw the patch metres away. If neither stays,
+    the membrane ``L x = 0`` (umbrella, loop fixed): each new vertex is the mean of its
+    neighbours, so the patch stays inside the loop's convex hull, a soap film over the hole. The
+    refined positions are the last resort.
     """
     from scipy.sparse.linalg import spsolve
 
     n, q = len(loop_g), len(new_pos)
+    centre = V[loop_g].mean(axis=0)
+    reach = FAIR_BOUND * float(np.linalg.norm(V[loop_g] - centre, axis=1).max())
+
+    def near(x: np.ndarray) -> bool:
+        return bool(np.all(np.isfinite(x))) and float(np.linalg.norm(x - centre, axis=1).max()) <= reach
     ring_faces = np.unique(np.concatenate([vf_face[vf_ptr[v] : vf_ptr[v + 1]] for v in loop_g.tolist()]))
     RF = F[ring_faces]
     # local numbering: loop 0..n-1, new n..n+q-1, then the other ring vertices
@@ -396,13 +412,24 @@ def _fair(loop_g: np.ndarray, new_pos: np.ndarray, tris_local: np.ndarray, V: np
             except Exception:  # singular system
                 ok = False
                 break
-            if not np.all(np.isfinite(cand)):
+            if not near(cand):
                 ok = False
                 break
             sol = cand
         if ok:
             return sol
         sol = new_pos
+    log.info("fill_holes: the smooth patch of a %d-edge hole left the hole; using a membrane patch", n)
+    try:
+        Tp = tris_local.astype(np.int64)
+        Xp = np.vstack([V[loop_g], new_pos])
+        Lp = _laplacian(Tp, Xp, cotan=False)
+        Up = np.arange(n, n + q)
+        cand = np.asarray(spsolve(Lp[Up][:, Up].tocsc(), -(Lp[Up][:, np.arange(n)] @ Xp[:n]))).reshape(q, 3)
+        if near(cand):
+            return cand
+    except Exception:  # noqa: BLE001 (singular: keep the refined positions)
+        pass
     return new_pos
 
 

@@ -14,13 +14,14 @@
 from __future__ import annotations
 
 import math
+from pathlib import Path
 
 import numpy as np
 import pytest
 
 from mesh_shapes import box, grid, icosphere, punch
 from ohs.mesh import fill_holes, hole_outlines, mesh_stats
-from ohs.mesh.holes import MAX_DP_EDGES
+from ohs.mesh.holes import FAIR_BOUND, MAX_DP_EDGES
 from ohs.mesh.topology import boundary_loops, edge_table
 
 R = 40.0
@@ -129,6 +130,22 @@ def test_a_large_hole_is_ear_clipped_then_refined_and_faired():
     # the cap is 8.8 mm high: a flat fill would be that far off. A thin-plate fill is a little flatter
     # than a sphere over such a wide gap (0.54 mm at most, 0.18 mm on average when written).
     assert err.max() < 0.8 and err.mean() < 0.3
+
+
+def test_a_twisted_hole_is_filled_inside_its_outline():
+    # A band of a simulated scan around a hole whose edge climbs around a ball sitting in it (a
+    # user's Scan 4, 2026-11-09). Its loop triangulates with folds; on folds the smooth fill was
+    # nearly singular and threw the patch 5 m away. Now a patch must stay near its outline and
+    # falls back to a soap film when the smooth solution doesn't.
+    with np.load(Path(__file__).parent / "data" / "twisted_hole.npz") as z:
+        V, F = z["V"].astype(np.float64), z["F"].astype(np.int64)
+    out = hole_outlines(V, F)
+    assert len(out) == 1 and out[0]["n_edges"] > MAX_DP_EDGES
+    V2, F2 = fill_holes(V, F, 1000.0)
+    assert len(V2) - len(V) > 1000 and mesh_stats(V2, F2)["holes"] == 0
+    rim = np.asarray(out[0]["points"], dtype=np.float64).reshape(-1, 3)
+    c = rim.mean(axis=0)
+    assert np.linalg.norm(V2[len(V):] - c, axis=1).max() <= FAIR_BOUND * np.linalg.norm(rim - c, axis=1).max() + 0.5
 
 
 def test_a_strip_keeps_its_outer_border():
