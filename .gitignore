@@ -8,6 +8,10 @@ venv/
 build/
 dist/
 
+# Desktop app (UI): dependencies and the built bundle (rebuilt from software/ui)
+node_modules/
+software/ohs/server/static/
+
 # Scanner data (recordings, simulated datasets, results) - keep them out of git
 recordings/
 scans/
