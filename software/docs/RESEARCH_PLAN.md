@@ -1,6 +1,6 @@
 # OpenHandScan: algorithm research and integration plan
 
-Written 2026-11-09 for milestones M3 to M6 of [the desktop app plan](DESKTOP_APP_PLAN.md). This is a proposal: nothing below is built unless it says so. Read it with [ARCHITECTURE.md](../ARCHITECTURE.md) and [VALIDATION.md](../VALIDATION.md).
+Written 2026-11-09 for milestones M3 to M6 of [the desktop app plan](DESKTOP_APP_PLAN.md). This is a proposal: nothing below is built unless it says so. Revised the same day: section 7 adds an innovation track, with a first simulator test of its strongest idea, and the top 10 now includes two of its items. Read it with [ARCHITECTURE.md](../ARCHITECTURE.md) and [VALIDATION.md](../VALIDATION.md).
 
 **How the research was done.** Candidates came from background knowledge and web searches in November 2026. Then:
 - every arXiv ID was checked against the arXiv API, every DOI against Crossref, and the other paper links by opening them;
@@ -33,7 +33,8 @@ Speeds marked *estimate* were not measured. Accuracy numbers come from `VALIDATI
    - 4.10 Difficult surfaces
 5. What will not work, in one place
 6. Validation approach
-7. References
+7. Innovation track: ideas no scanner ships yet
+8. References
 
 ---
 
@@ -48,13 +49,16 @@ Speeds marked *estimate* were not measured. Accuracy numbers come from `VALIDATI
 
 Nothing has run on the real scanner yet.
 
-**What "better than commercial" can honestly mean.** This is a 60 mm-baseline, 1280x800, red-laser design. On raw accuracy it will not beat a metrology laser scanner with blue laser lines and positioning targets (Creaform's HandySCAN class). The consumer tier (Revopoint, Creality, Shining 3D's Einstar) is sold with figures of a few hundredths of a millimetre; the ones found for this plan were in retail listings that don't say how they were measured. OpenHandScan can beat that tier where users hurt, and it can be the scanner that says how sure it is about every number. Four themes:
-1. **Every number with an error bar.** Per-pixel depth confidence, fusion weighted by it, a per-vertex confidence map, and fits that report "Ø 8.02 ± 0.03 mm".
-2. **Accurate data steering dense data.** The laser cross, and later every projected dot, become anchors that correct the dense surface. Some consumer scanners now carry both a dense pattern and laser lines, but their listings present them as separate scan modes. Here the lasers correct the dense surface inside the same scan.
-3. **Consistency built from the raw data.** Loop closure, relocalisation and N-way merging all re-fuse the raw recordings, and show their residuals.
-4. **A calibration that checks itself.** Dense stereo, laser-plane and laser-stereo depth cross-check each other on every scan. A ball-bar test anyone can build gives an independent number.
+**What "better than commercial" can honestly mean.** This is a 60 mm-baseline, 1280x800, red-laser design. On raw accuracy per frame it will not beat a metrology laser scanner with blue laser lines and positioning targets (Creaform's HandySCAN class). The consumer tier (Revopoint, Creality, Shining 3D's Einstar) is sold with figures of a few hundredths of a millimetre; the ones found for this plan were in retail listings that don't say how they were measured. OpenHandScan can beat that tier where users hurt, and it can be the scanner that says how sure it is about every number. Five themes:
+1. **Accuracy from the whole scan, not from one frame.** The dots slide over the surface as the scanner moves, so every patch is measured under many different dot arrangements. Refining the surface against all of those images at once (world-space spacetime stereo, 7.2) removes the error that per-frame matching leaves.
+2. **Accurate data steering dense data.** The laser cross corrects the dense surface, and its crossing curves tie the whole scan together (laser anchoring, 4.2.4; laser-curve bundle adjustment, 7.3).
+3. **Every number with an error bar.** Per-pixel confidence, weighted fusion, a per-vertex confidence map, and fits that report "Ø 8.02 ± 0.03 mm", backed by a simulation of that very scan when it matters (7.4).
+4. **A calibration that checks itself.** Dense stereo, laser-plane and laser-stereo depth cross-check each other on every scan; a ball-bar test anyone can build gives an independent number.
+5. **Gauges for car work.** Live gap & flush, edges and holes at laser accuracy, dent maps, symmetry checks (7.6–7.8).
 
-**Not now:** learned stereo in the live loop; neural or Gaussian-splatting geometry; non-rigid map deformation; classical spacetime stereo; any code or weights under a non-commercial or GPL licence. Section 5 says why for each.
+**The strongest new idea has a first result.** World-space spacetime stereo (7.2) was prototyped on the simulator: three seeds, 24 frames each. Where the scan concentrates, its median error was 0.007–0.014 mm, against 0.044–0.060 mm for averaging per-frame depth (what fusion does today), and no point was off by more than 0.2 mm (8–19 % for averaging). At the edge of coverage the median improved 1.6–1.9 times. A 3° error in the assumed normal, or tracking-sized pose noise, barely changed it. A second prototype was negative: triangulating single dots was noisier than dense matching (4.1.3). Both are simulation only.
+
+**Not now:** learned stereo in the live loop; neural or Gaussian-splatting geometry; non-rigid map deformation; classical spacetime stereo (the world-space version in 7.2 is different: it aggregates over the surface, not over pixels); any code or weights under a non-commercial or GPL licence. Section 5 says why for each.
 
 **The biggest uncertainty.** Every gain here is predicted or measured on simulated data. The first real recordings may reorder this list. Section 6 lists the simulator upgrades and hardware tests that keep the plan honest.
 
@@ -62,30 +66,35 @@ Nothing has run on the real scanner yet.
 
 | # | What (details in) | Milestone | Why it matters | Effort / risk | New dependency |
 |---|---|---|---|---|---|
-| 1 | **Depth confidence and uncertainty-weighted fusion on the GPU** (4.1.1, 4.5.1) | M3 | Attacks the grazing-angle and edge errors behind today's mesh p95. Moves the 1 mm reconstruction TSDF to the GPU (it is still on the CPU). Gives the per-region confidence the app promises. | M / low | none |
-| 2 | **Laser anchoring: a "Refine with lasers" stage** (4.2.3, 4.2.4) | M3 | Rejects laser outliers against the dense surface, then pulls the mesh onto the laser points with a smooth correction. The Studio plan lists "laser refinement" as a processing step; this is its algorithm. | M / medium | none (scipy) |
-| 3 | **Degeneracy-aware tracking** (4.3.1–4.3.3) | M3 | Flat and gently curved panels are the main car job. Stable sampling and per-direction handling keep ICP from sliding, and tell the user when to add tags. | S–M / low | none |
-| 4 | **Metrology-safe mesh edits** (4.6.1–4.6.4) | M3 | Decimate to a tolerance in mm, flag filled faces, smooth less where the data is confident; an optional watertight Poisson with an envelope. | S–M / low | optional PoissonRecon tool (MIT) |
-| 5 | **Straighten v2** (4.4.1, 4.4.2, 4.3.5) | M3 → M4 | On top of `posegraph.py`: global verification for large drift, relocalisation after tracking loss, gravity priors, fragments for long scans. | M / medium | none (Open3D FGR); optional TEASER++ (MIT) |
+| 1 | **Depth confidence and uncertainty-weighted fusion on the GPU, with honest averaging** (4.1.1, 4.5.1, 7.10) | M3 | Attacks the grazing-angle and edge errors behind today's mesh p95. Moves the 1 mm reconstruction TSDF to the GPU (it is still on the CPU). Gives the per-region confidence the app promises, with σ that doesn't over-trust correlated frames. | M / low | none |
+| 2 | **World-space spacetime stereo** (7.2) | M3 spike, M4 ship | In a simulator prototype (7.2) it cut the median error 4–6 times where the scan concentrates (1.6–1.9 times at the edge of coverage), with no point off by more than 0.2 mm. It removes the camera-fixed error at its source instead of filtering around it. | M–L / medium | none |
+| 3 | **Laser anchoring: a "Refine with lasers" stage** (4.2.3, 4.2.4) | M3 | Rejects laser outliers against the dense surface, then pulls the mesh onto the laser points with a smooth correction. The Studio plan lists "laser refinement" as a step; this is its algorithm. | M / medium | none (scipy) |
+| 4 | **Degeneracy-aware tracking** (4.3.1–4.3.3) | M3 | Flat and gently curved panels are the main car job. Stable sampling and per-direction handling keep ICP from sliding, and tell the user when to add tags. | S–M / low | none |
+| 5 | **Straighten v2, with laser-curve bundle adjustment** (4.4.1, 4.4.2, 4.3.5, 7.3) | M3 → M4 | On top of `posegraph.py`: global verification for large drift, relocalisation after loss, fragments for long scans; then the laser curves' crossings pull every pose to laser accuracy and calibrate the laser planes and timing on each scan. | M–L / medium | none (Open3D FGR); optional TEASER++ (MIT) |
 | 6 | **N-way multi-scan alignment, merged from raw data** (4.7) | M4 | The merge users complain about. Global and fine registration, one pose graph over all scans, residual maps, then one TSDF from every frame of every scan. | M / low–medium | none; optional small_gicp (MIT) |
-| 7 | **Dot-centroid triangulation: every dot is a laser point** (4.1.3) | M4 spike, M6 ship | Goes at the root of the camera-fixed errors: thousands of sub-pixel points per frame, over the whole field. | M–L / high | none |
-| 8 | **Fits and deviation with uncertainty** (4.8) | M5 | Planes, cylinders, holes and spheres with ± values. Deviation maps that say "inconclusive" when the error bar straddles the tolerance. | M / low | optional OpenCascade (LGPL) through OCP for STEP |
-| 9 | **Calibration health and an accuracy check** (4.9) | M5–M6 | Stereo/laser agreement on every scan, row error from the dots, temperature logging, and a VDI/VDE 2634-style ball-bar test in the app. | M / medium | none (the firmware reads the IMU's temperature) |
+| 7 | **Fits and deviation with uncertainty, and a digital twin for the ± values** (4.8, 7.4) | M5–M6 | Planes, cylinders, holes and spheres with ± values; deviation maps that say "inconclusive" when the error bar straddles the tolerance; on request, the uncertainty of one measurement by replaying that scan in the simulator. | M–L / medium | optional OpenCascade (LGPL) through OCP for STEP |
+| 8 | **Calibration health and an accuracy check** (4.9) | M5–M6 | Stereo/laser agreement on every scan, row error from the dots, temperature logging, and a VDI/VDE 2634-style ball-bar test in the app. | M / medium | none (the firmware reads the IMU's temperature) |
+| 9 | **Laser gauges for body work** (7.6) | M5 | Live gap & flush along a seam, and edges and hole rims at laser accuracy instead of from the fusion-rounded mesh. | M / medium | none |
 | 10 | **Difficult-surface kit** (4.10) | M4–M6 | Black, glossy and metallic paint: emitter power and exposure control, rejection of glossy laser profiles, a cross-polariser option, and clear advice when spray is needed. | M / medium | polariser film (hardware) |
 
+**Quick wins to do alongside** (each S, low risk, M3): decimate to a tolerance in mm, flag filled faces, smooth less where the data is confident (4.6.1–4.6.3), and the dense-surface check on laser points (4.2.3).
+
+**Moved out of the top 10 in this revision:** the mesh edits above (they are quick wins, not big bets) and dot-centroid triangulation (4.1.3). Its first test was negative: per frame, single dots were noisier than dense matching (median 0.21 mm against 0.15 mm on the simulator's sphere scene). Spacetime stereo (item 2) uses the same dots better, across frames.
+
 **Order and dependencies**
-- Item 1 comes first. Items 2, 4 (confidence-aware smoothing), 7 and 8 use its uncertainties.
+- Item 1 comes first. Items 2, 3, 7 and the quick-win smoothing use its uncertainties.
+- Item 2 needs good poses and calibration: it comes after Straighten (item 5's first half) in the processing order, and its accuracy must be re-checked on real recordings against the laser cloud (6.4).
 - Items 5 and 6 share the global-registration code. Build it once, in M3, for item 5.
-- Items 7 and 10 can only be judged after the simulator upgrades in 6.2, and on real recordings.
-- Item 9 needs the real scanner. Start logging temperature with the very first hardware recording; it costs almost nothing.
+- Items 9 and 10 can only be judged after the simulator upgrades in 6.2, and on real recordings.
+- Item 8 needs the real scanner. Start logging temperature with the very first hardware recording; it costs almost nothing.
 
 **Mapped onto the milestones**
-- **M3, processing studio, GPU first:** items 1, 2, 3 and 4, and the first half of 5 (global verification). Item 1 also covers a GPU target that `VALIDATION.md` names: "the 1 mm reconstruction integration still run[s] on the CPU".
-- **M4, multi-scan alignment:** item 6, the rest of 5 (relocalisation, fragments), the spike for 7, and the software half of 10.
-- **M5, measure and reverse engineering:** item 8, and the calibration half of 9 (cross-check, artefact test).
-- **M6, ship it:** the temperature model and in-app accuracy check of 9; item 7 if the spike held on hardware; the hardware half of 10 (polariser option, presets); and documentation that tells users what accuracy to expect, measured rather than quoted.
+- **M3, processing studio, GPU first:** items 1, 3 and 4, the quick wins, the first half of 5 (global verification), and the spike for 2. Item 1 also covers a GPU target that `VALIDATION.md` names: "the 1 mm reconstruction integration still run[s] on the CPU".
+- **M4, multi-scan alignment:** item 6, the rest of 5 (relocalisation, fragments, laser-curve bundle adjustment), item 2 as a GPU stage, the software half of 10, and the dot spike (7.5).
+- **M5, measure and reverse engineering:** items 7 and 9, and the calibration half of 8 (cross-check, artefact test); dent maps, symmetry and re-measuring from raw frames (7.7–7.9).
+- **M6, ship it:** the digital twin's "certify this measurement" (7.4), the temperature model and in-app accuracy check of 8, the hardware half of 10 (polariser option, presets), and documentation that tells users what accuracy to expect, measured rather than quoted.
 
-**New modules this plan proposes** (names are suggestions): `ohs/vision/dots.py` (4.1.3); `ohs/mesh/anchor.py`, `remesh.py`, `snap.py` (4.2.4, 4.6.5, 4.6.6); `ohs/calib/online.py` (4.9); `ohs/align/` (4.7); `ohs/measure/` for fits, holes, deviation and the artefact check (4.8, 4.9.6).
+**New modules this plan proposes** (names are suggestions): `ohs/vision/dots.py` (4.1.3); a spacetime refinement stage, e.g. `ohs/track/refine_wss.py` with an OpenCL kernel (7.2); `ohs/track/curve_ba.py` (7.3); `ohs/mesh/anchor.py`, `remesh.py`, `snap.py` (4.2.4, 4.6.5, 4.6.6); `ohs/calib/online.py` and `ohs/calib/projector.py` (4.9, 7.5); `ohs/align/` (4.7); `ohs/measure/` for fits, holes, deviation, gauges, uncertainty and the artefact check (4.8, 4.9.6, 7.4, 7.6).
 
 ## 3. Facts used throughout
 
@@ -161,9 +170,9 @@ Small items get a short paragraph instead.
 - **Effort / risk:** M / low–medium (unstable in weak texture; keep the existing rejection rules).
 - **Sim check:** the depth error split by incidence angle, on the car panel and on a new tilted-plane scene (45–75°), before and after.
 
-#### 4.1.3 Dot-centroid triangulation: every dot is a laser point — P2, M4 spike, M6 ship (top 10 #7)
+#### 4.1.3 Dot-centroid triangulation: every dot is a laser point — P3 (first test negative; see also 7.5)
 - **What:** find each projected dot in both rectified images and fit its centre to a fraction of a pixel (a Gaussian fit or a weighted centroid). Use the SGM disparity to pair each left dot with its right dot on the same row, and triangulate the pair. The result is a sparse cloud, one point per visible dot (the DOE has about 10,000), next to the dense depth.
-- **Benefit:** block matching mixes several dots in one window. It is biased by their arrangement, by where they fall on the pixel grid, and by foreshortening. That is the camera-fixed error that broke tracking. A dot centre is a much simpler estimate. If real dots give 0.05 px, that is 0.07 mm at 250 mm: laser-line class, but over the whole field.
+- **The hope:** block matching mixes several dots in one window. It is biased by their arrangement, by where they fall on the pixel grid, and by foreshortening. That is the camera-fixed error that broke tracking. A dot centre is a much simpler estimate. If real dots gave 0.05 px, that would be 0.07 mm at 250 mm: laser-line class, but over the whole field.
 - **Evidence:** sub-pixel centroiding of round targets is standard photogrammetry. No published handheld scanner was found that triangulates its projected random dots this way as a complete system. Treat it as research.
 - **Risks:**
   - option A's dots carry laser speckle (section 3), which moves their centres;
@@ -171,11 +180,21 @@ Small items get a short paragraph instead.
   - dots merge at grazing angles;
   - on a slanted surface the two cameras see a dot from different angles, which pulls the two centres slightly apart (a bias that grows with dot size and slant);
   - the laser lines hide some dots.
+- **First test, negative** (simulator, 2026-11-09; a numpy prototype, lasers off, about 6,000–7,000 dot pairs per frame, compared with the dense GPU depth at the same sub-pixel positions):
+
+  | Scene | Dot triangulation: median / p95 (mm) | Dense depth: median / p95 (mm) |
+  |---|---|---|
+  | Sphere on plane | 0.21 / 1.5 | 0.15 / 0.80 |
+  | Car panel | 0.28 / 2.3 | 0.17 / 1.1 |
+  | Sphere on plane, speckle 0.5 instead of 0.15 | 0.54 / 2.5 | 0.39 / 1.7 |
+
+  A single dot is a few pixels, so its centre wanders with noise and speckle, independently in each camera; a matching window pools several dots. Saturated dots snap to whole pixels (a flat top defeats a 3-point fit), which probably drives the p95. A better version (a 2D fit that handles saturation, each dot averaged over frames) might close the gap. But world-space spacetime stereo (7.2) already gets the multi-frame benefit, without fitting single dots.
+- **Verdict:** keep dot fitting for jobs that pool many dots at once: the projector's rays and dot-free images (7.5), and the row-error monitor (4.9.2). Not as a per-point accuracy layer.
 - **Licence:** own code.
 - **Cost:** blob detection plus a small fit per dot, one GPU work-item each: a few ms (estimate).
-- **Plugs into:** a new `ohs/vision/dots.py` (with a GPU twin). `FramePipeline.process` adds the dot points; `ohs/track/fusion.py` gains a dot cloud like `LaserCloud`; 4.2.4 uses them as anchors. Later, perhaps, as ICP source points, since they may carry less camera-fixed bias than dense depth.
-- **Effort / risk:** M–L / high.
-- **Sim check:** the per-dot error against the true surface, by incidence and distance, for both projector options; then again with the physical speckle model of 6.2. Go/no-go, on real recordings too: at 250 mm the median dot error must be under half the dense-depth median.
+- **Plugs into:** a new `ohs/vision/dots.py` (with a GPU twin), used by 7.5 and 4.9.2.
+- **Effort / risk:** M / medium.
+- **Sim check:** if it is revisited: a 2D fit with saturation handling, per-dot averages over frames, and the physical speckle model of 6.2.
 
 #### 4.1.4 Learned stereo matchers — P3, after M6
 - **What:** RAFT-Stereo, CREStereo, IGEV-Stereo and IGEV++, Selective-Stereo and DEFOM-Stereo build a correlation or cost volume and refine the disparity in iterations. They lead the public benchmarks, and are strong in weak texture and on reflections.
@@ -209,7 +228,7 @@ Small items get a short paragraph instead.
 
 #### 4.1.7 Spatio-temporal aggregation of the fixed pattern
 - **Classical spacetime stereo: ✗.** Spacetime stereo (Davis et al., TPAMI 2005) assumes the pattern changes while the scene stays still relative to the cameras. Here the pattern is fixed to the cameras and the scene moves, so a pixel sees a different surface point in every frame. A time window per pixel mixes points.
-- **Aggregation in the world frame is the right form, and it exists.** The TSDF averages each surface point over many frames, each with a different dot arrangement on it. Item 4.5.1 makes that average weighted.
+- **Aggregation in the world frame is the right form.** The TSDF averages each surface point over many frames, each with a different dot arrangement on it, and 4.5.1 makes that average weighted. A much stronger form works on the images themselves instead of on per-frame depth: world-space spacetime stereo (7.2), which has a first result on the simulator.
 - **One cheap hardware test (P3):** vibrate the projector slightly (a phone-style vibration motor), so the pattern moves on the surface between frames. That would decorrelate the camera-fixed dot-scale errors and, for option A, the speckle. Risks: blur within the exposure, noise, power.
 
 #### 4.1.8 Pixel locking — already handled
@@ -247,7 +266,7 @@ The Lucas-Kanade step removes most of SGBM's pixel locking (the effect is descri
 - **Effort / risk:** S / low in code; medium in tuning, which needs real painted samples.
 - **Sim check:** needs the gloss upgrade of 6.2 (a specular lobe and a mirrored line). Then measure the false-point rate and the centre bias on a glossy panel.
 
-#### 4.2.3 Agreement with the dense surface — P1, M3 (top 10 #2)
+#### 4.2.3 Agreement with the dense surface — P1, M3 (quick win, part of top 10 #3)
 - **What:** keep a laser point only if it agrees with the dense depth at that pixel within k·σ, with σ from 4.1.1 plus the laser's own noise. Reflections and glints usually land off the real surface.
 - **Benefit:** it removes the most damaging laser outliers on glossy parts and in concave corners, where one stray point per frame becomes a spike after averaging.
 - **Evidence:** standard consistency checking between sensors. The existing right-image check is the camera-to-camera version.
@@ -257,7 +276,7 @@ The Lucas-Kanade step removes most of SGBM's pixel locking (the effect is descri
 - **Effort / risk:** S / low.
 - **Sim check:** today, check that it loses almost no true points on the clean scenes (under 0.5 %). With the gloss upgrade, check that it removes the mirrored line.
 
-#### 4.2.4 Laser anchoring of the dense surface — P1, M3 (top 10 #2)
+#### 4.2.4 Laser anchoring of the dense surface — P1, M3 (top 10 #3)
 - **What:** after fusion, measure the mesh's offset from the laser cloud along the normals: for each laser point, the nearest surface point and a signed residual. Then fit a smooth correction that explains those residuals. Minimise
 
   Σᵢ wᵢ·(residual after correction)² + λ·‖L·δ‖²
@@ -294,7 +313,7 @@ Commercial handheld laser scanners project many crossing lines, typically seven 
 
 **Today** (`ohs/track/markerless.py`), in the family of KinectFusion (Newcombe et al. 2011) and of the real-time structured-light acquisition of Rusinkiewicz, Hall-Holt and Levoy (2002), which already aligned each new range image by ICP: projective point-to-plane Gauss-Newton ICP, three levels with uniform sampling (every 16th, 8th and 4th pixel), Huber weights, a normal gate, the gyro rotation prior (0.02° per frame), a weak translation prior and constant velocity. The target is a 2 mm tracking TSDF of filtered depth (the rolling GPU volume, with its border and weight tests). Degeneracy is flagged by an eigenvalue ratio, but not acted on. The accelerometer is not used.
 
-#### 4.3.1 Geometrically stable sampling — P1, M3 (top 10 #3)
+#### 4.3.1 Geometrically stable sampling — P1, M3 (top 10 #4)
 - **What:** pick ICP source points so that all six motion directions are constrained (Gelfand, Ikemoto, Rusinkiewicz and Levoy, 3DIM 2003). Each candidate has a constraint vector [p × n, n]. Points are chosen to balance the eigen-directions of their covariance, instead of taking every k-th pixel.
 - **Benefit:** on a car panel most points sit on a nearly flat area and all say the same thing. The few on a crease, a hole edge or a curve carry the information about sliding, and uniform sampling drowns them. Stable sampling raises their share, so ICP holds position on nearly degenerate parts.
 - **Evidence:** well established, and widely reimplemented.
@@ -304,7 +323,7 @@ Commercial handheld laser scanners project many crossing lines, typically seven 
 - **Effort / risk:** S / low.
 - **Sim check:** the car panel with and without the IMU, 15 seeds, maximum trajectory error; a nearly degenerate scene (a plane with a small bump; the sphere scene) with the gyro off.
 
-#### 4.3.2 Weak-direction handling — P1, M3 (top 10 #3)
+#### 4.3.2 Weak-direction handling — P1, M3 (top 10 #4)
 - **What:** take the 6x6 ICP information matrix (rotations scaled to mm at the scene distance, as the degeneracy flag already does), and split the update into well-constrained and weak eigen-directions. Update only the well-constrained ones from ICP. Take the weak ones from the prediction: the gyro for rotation, the IMU or constant velocity for translation. This is the "solution remapping" of Zhang, Kaess and Singh (ICRA 2016) and the localizability analysis of X-ICP (Tuna et al. 2022). Report the weak directions to the UI, and pass them to the pose graph.
 - **Benefit:** today's soft priors keep weak directions near the prediction, but with one strength for everything. A per-direction decision is sharper. Its output also tells the user what to do: "sliding along the panel: add two tags, or include the panel's edge".
 - **Evidence:** mature in LiDAR odometry; X-ICP shows clear gains in degenerate environments. GenZ-ICP (2024, MIT) mixes point-to-plane and point-to-point terms for the same reason. KISS-ICP's adaptive correspondence threshold (from the observed motion) is a cheap idea for the gates too.
@@ -425,7 +444,7 @@ After the graph, refine all keyframe poses jointly against each other with dense
 - **Sim check:** a 1–2 mm panel seen from both sides; the recovered thickness.
 
 #### 4.5.3 Surfels — P3
-A point-based model with a radius, normal and confidence per point (ElasticFusion; SurfelMeshing, Schöps et al. 2018, BSD-3; BAD SLAM). It has no voxel limit and natural per-point confidence. But meshing gets harder, and everything in `ohs` and the app is built on TSDFs and meshes. Not worth a switch. Keep the TSDF for the surface, and the laser and dot clouds as separate, more accurate layers, as today.
+A point-based model with a radius, normal and confidence per point (ElasticFusion; SurfelMeshing, Schöps et al. 2018, BSD-3; BAD SLAM). It has no voxel limit and natural per-point confidence. But meshing gets harder, and everything in `ohs` and the app is built on TSDFs and meshes. Not worth a switch. Keep the TSDF for the surface, and the laser cloud as a separate, more accurate layer, as today.
 
 #### 4.5.4 Neural fields and Gaussian splatting for metrology — ✗ for geometry
 - **Accuracy:** the best surface-focused methods (Neuralangelo, 2DGS, PGSR, Gaussian Opacity Fields) report mean Chamfer distances of roughly 0.5–0.8 mm on the DTU benchmark, from many calibrated photos. This scanner measures 0.07–0.3 mm directly. A 2026 comparative study of NeRF and Gaussian-splatting geometry scores them at 2 mm and 5 mm thresholds. A 2025 metrological review of learning-based methods on difficult surfaces (*Metrology*, 2025) is the place to see where they stand.
@@ -448,7 +467,7 @@ VDBFusion (MIT, CPU, OpenVDB) and nvblox (CUDA-only) exist. Our own OpenCL kerne
 
 Meshes come from marching cubes on the TSDF, or from Open3D's screened Poisson. That covers most of the classical toolbox. The additions below are about not damaging measurements.
 
-#### 4.6.1 Decimate to a tolerance — P1, M3 (top 10 #4)
+#### 4.6.1 Decimate to a tolerance — P1, M3 (quick win)
 - **What:** stop collapsing edges once the quadric error (or a check against the input mesh) passes a tolerance in mm, say 0.01–0.05 mm. Report the largest deviation actually introduced.
 - **Benefit:** a measuring user wants "a smaller file, and the surface moved less than 0.02 mm", not "200k triangles".
 - **Evidence:** QEM's error is a squared distance to planes, so a bound in mm is natural.
@@ -457,7 +476,7 @@ Meshes come from marching cubes on the TSDF, or from Open3D's screened Poisson. 
 - **Effort / risk:** S / low.
 - **Sim check:** decimate the sphere and panel meshes; measure the distance to the original mesh and to the analytic surface.
 
-#### 4.6.2 Flag synthetic geometry — P1, M3 (top 10 #4)
+#### 4.6.2 Flag synthetic geometry — P1, M3 (quick win)
 - **What:** faces made by hole filling, Poisson or extrapolation carry a "filled" flag. The viewer shows them; fits and deviation maps leave them out by default; the stats count them.
 - **Benefit:** measurements never use invented surface without saying so.
 - **Licence / cost:** own code; negligible.
@@ -465,15 +484,15 @@ Meshes come from marching cubes on the TSDF, or from Open3D's screened Poisson. 
 - **Effort / risk:** S / low.
 - **Sim check:** fill the car panel's hole; every new face is flagged, and fits on the panel ignore them.
 
-#### 4.6.3 Confidence-aware smoothing — P1, M3 (top 10 #4)
-- **What:** scale the smoothing per vertex by its σ (4.5.1) and by laser or dot anchoring. Confident regions move little, noisy ones more.
+#### 4.6.3 Confidence-aware smoothing — P1, M3 (quick win)
+- **What:** scale the smoothing per vertex by its σ (4.5.1) and by laser anchoring. Confident regions move little, noisy ones more.
 - **Benefit:** smoothing stops eroding the most accurate data.
 - **Licence / cost:** own code; negligible.
 - **Plugs into:** `ohs/mesh/smoothing.py` (`smooth(..., weights=...)`).
 - **Effort / risk:** S / low.
 - **Sim check:** smooth with and without weights; the error against the analytic surface should drop more where σ was large, and not rise where it was small.
 
-#### 4.6.4 Screened Poisson with an envelope — P2, M3–M4 (top 10 #4)
+#### 4.6.4 Screened Poisson with an envelope — P2, M3–M4
 - **What:** screened Poisson (Kazhdan and Hoppe, TOG 2013) builds a watertight surface from oriented points. The envelope-constrained version (Kazhdan et al., SGP 2020) keeps it from ballooning across big openings. Both are in PoissonRecon (MIT). Open3D wraps an older version without the envelope.
 - **Benefit:** watertight models for 3D printing (brackets, knobs, clips), with controlled filling.
 - **Licence:** MIT. Build or ship PoissonRecon's command-line tool; or derive the envelope from the TSDF's observed free space and keep Open3D's version.
@@ -527,7 +546,7 @@ Point-to-plane ICP with a robust kernel, or Generalized ICP (Segal et al., RSS 2
 Every pair with enough overlap is an edge, with the point-to-plane information matrix that `posegraph.py` already computes. Optimise all scan poses with Open3D's global optimisation and line process (Choi et al. 2015), the same machinery as Straighten. Lu and Milios (1997) and Pulli (1999) are the classic formulations. The benefit: no "two at a time" merging, and errors spread evenly instead of piling up at the last scan.
 
 #### 4.7.4 Merge from the raw recordings — P1, M4
-- **What:** once the scan poses are known, every frame of every scan has a world pose. Fuse them all into one TSDF with the 4.5.1 weights, merge the laser (and dot) clouds, then mesh. No mesh-to-mesh stitching.
+- **What:** once the scan poses are known, every frame of every scan has a world pose. Fuse them all into one TSDF with the 4.5.1 weights, merge the laser clouds, then mesh. No mesh-to-mesh stitching.
 - **Benefit:** no seams; overlaps averaged by their weights; one consistent confidence map. This works only because every scan keeps its raw recording, a structural advantage over apps that keep only meshes.
 - **Cost:** about the cost of processing every scan again.
 
@@ -541,7 +560,7 @@ Every pair with enough overlap is an edge, with the point-to-plane information m
 
 **Not needed:** learned registration (GeoTransformer, PREDATOR) trained on indoor RGB-D data. The gap to painted car parts is large, and FPFH with TEASER++ is enough for scans of one object with decent overlap.
 
-### 4.8 Reverse engineering (M5, top 10 #8)
+### 4.8 Reverse engineering (M5, top 10 #7)
 
 **Today:** the mesh topology helpers (boundary loops, outer borders) exist. Nothing else for M5 yet.
 
@@ -584,7 +603,7 @@ Point2CAD (CVPR 2024, Apache-2.0 code) segments a point cloud into surfaces with
 
 **Will not work in M5:** fully automatic CAD of a whole freeform panel (an open research problem); PolyFit and similar polygonal reconstruction (GPL, and aimed at buildings).
 
-### 4.9 Calibration over time (top 10 #9)
+### 4.9 Calibration over time (top 10 #8)
 
 **Today:** the wizard (stereo; lasers from the white margin; IMU); a launch-time row-error check (ORB matches refined by Lucas-Kanade; it flags more than 0.6 px). Nothing runs online, and there is no temperature data.
 
@@ -689,7 +708,9 @@ Detect and name the case from the same statistics as 4.10.1: "surface too dark",
 | Learned stereo in the live loop | Seconds per frame on an integrated GPU; a second GPU stack | Census SGM plus confidence (4.1.1); learned stereo only offline, later (4.1.4) |
 | FoundationStereo, MonSter, Stereo Anywhere | Research-only licences, weights included | RAFT-Stereo, CREStereo or IGEV class, retrained on our simulator |
 | Monocular depth models (Depth Anything etc.) as depth | Relative, not metric | Stereo, lasers, dots |
-| Classical spacetime stereo | The pattern moves with the cameras, so a pixel sees different points over time | Weighted fusion in the world frame (4.5.1) |
+| Classical spacetime stereo | The pattern moves with the cameras, so a pixel sees different points over time | Weighted fusion (4.5.1) and world-space spacetime stereo (7.2) |
+| Speckle tracking with the main cameras | At 60 fps and hand speed the speckle decorrelates completely between frames, and its grain is smaller than a pixel | A dedicated speckle sensor, later (7.12) |
+| Photometric terms between frames (in bundle adjustment) | The light moves with the camera, so a surface point's brightness changes from frame to frame | Left-right terms within each frame (7.2) |
 | Visual odometry (DROID-SLAM, DPVO, features, photometric terms) | The camera-fixed dot pattern dominates the images | ICP with stable sampling, and the IMU (4.3) |
 | Geometry-only tracking of truly symmetric parts | Unobservable by definition | The gyro, tags, the part's small features |
 | Non-rigid deformation graphs (ElasticFusion) | They bend the part's shape; the code is non-commercial | A rigid pose graph and re-fusion (4.4) |
@@ -722,6 +743,8 @@ Detect and name the case from the same statistics as 4.10.1: "surface too dark",
 7. **Calibration drift inside a recording:** plane tilt, baseline change and relative rotation as functions of time or temperature. For 4.9.
 8. **IMU errors:** scale factor, axis misalignment, temperature-dependent bias. For 4.3.4.
 9. **Long scans with loops and tracking losses** (the orbit and sweep trajectories exist now). For 4.3.5 and 4.4.
+10. **A triangle-mesh object** (ray casting through Open3D's `RaycastingScene`), so a scanned shape can be re-scanned in simulation. For the digital twin (7.4).
+11. **Car-body scenes:** two panels with a seam of known gap and flush; a panel with dents of known depth; a mirrored part with a deliberate bend. For 7.6–7.8.
 
 ### 6.3 Metrics
 
@@ -743,9 +766,166 @@ Detect and name the case from the same statistics as 4.10.1: "surface too dark",
 - **First recordings:** the calibration board; a flat plate; a ball bar; painted panels (black, white primer, metallic), each sprayed and unsprayed; a bracket with holes measured by calipers.
 - Measure the same metrics as in simulation, wherever a reference exists. Write down where real and simulated results differ, and re-tune.
 - **Repeatability:** scan the same object 5–10 times, and report the spread of the fitted values.
+- **The laser as the reference for dense methods.** Real recordings have no ground truth, but the laser cloud is measured by a different principle (a plane, not dot matching). Wherever the lasers swept, compare each dense method (today's fusion, 4.2.4, 7.2) against the laser cloud. Thanks to tracking, a point the laser swept in one frame checks the dense depth of every other frame that saw it.
 - **References:** calipers on the artefacts at minimum; a commercial scan or a CMM measurement if one can be borrowed.
 
-## 7. References
+## 7. Innovation track: ideas no scanner ships yet
+
+Sections 2 and 4 make the classical pieces solid. This section is about ideas that use what only this scanner has:
+- a dot pattern fixed to the scanner, which slides across the surface as the scanner moves;
+- a laser cross whose two lines sweep the surface and cross their own earlier tracks;
+- an IMU, and a simulator of the exact hardware;
+- every raw frame, kept.
+
+Each idea is a research bet with a cheap first test. Prior art is cited, and where a closely related paper exists, the card says so. Cards use the same fields as section 4.
+
+### 7.1 Ranked
+
+| # | Idea | What it could give | First test | Milestone | Risk |
+|---|---|---|---|---|---|
+| I1 | **World-space spacetime stereo** (7.2) | 4–6 times lower median error where the scan concentrates, 1.6–1.9 times at the edges (simulation) | Done on the simulator: see 7.2 | M3 phase 2 spike, M4 ship | medium |
+| I2 | **Laser-curve bundle adjustment** (7.3) | Poses and laser planes at laser accuracy, self-calibrated on every scan | Simulated scan with injected drift and a tilted plane | M4 | medium |
+| I3 | **A digital twin that states each measurement's uncertainty** (7.4) | "Ø 8.02 ± 0.03 mm" that includes calibration and noise, by simulation | Coverage test on simulated parts | M5–M6 | medium |
+| I4 | **The projector calibrates itself; dot-free images** (7.5) | Per-dot rays (dot triangulation, one-camera depth, temperature) and images with the dots removed (clean tags, texture) | Fitted rays against the simulator's projector; tag error with and without | M4–M5 | medium–high |
+| I5 | **Laser gauges for body work** (7.6) | Live gap & flush along a seam; edges and hole rims at laser accuracy | Simulated panel seam and holes of known size | M5 | medium |
+| I6 | **Dent maps and highlight lines** (7.7) | Dents shown only where they exceed the error bar; virtual zebra stripes | Simulated dented panel | M5 | medium |
+| I7 | **Symmetry tools** (7.8) | Automatic mirror plane; "is this side bent?" | Mirrored simulated part with a bend | M5 | low |
+| I8 | **Re-measure from the raw frames** (7.9) | The best possible estimate for the one feature being measured | Hole diameter: whole-scan result against region re-run | M5 | low |
+| I9 | **Honest averaging** (7.10) | Uncertainties that don't shrink faster than the evidence | σ coverage on the simulator | M3 | low |
+| I10 | **Guidance by expected information gain** (7.11) | "Aim here, from the left" instead of a coverage colour | User test; simulated operator | M4–M6 | medium |
+
+### 7.2 I1: World-space spacetime stereo — P1 spike in M3, ship in M4 (top 10 #2)
+- **What:** after tracking, Straighten and fusion, refine the surface patch by patch against the raw images. A patch is a small piece of the fused surface (about 4 x 4 mm) with its own normal and curvature. For each candidate offset along the normal, project the patch into the left and right rectified images of every frame that saw it, compare the two samplings with zero-mean normalised cross-correlation (ZNCC, which ignores gain differences between the cameras), and add up the cost over all those frames. The best offset moves the vertex. Later, refine the poses the same way: a photometric bundle adjustment whose terms are only left-right *within* each frame, because the light moves with the camera.
+- **Why it works, and why only here:** the dots are fixed to the scanner, so as the scanner moves, every frame lights the patch with a different dot arrangement. Per-frame matching makes a slightly different, camera-fixed error in each frame; this estimate never makes those errors in the first place:
+  - no square window that assumes the surface faces the camera (the patch has the surface's own slant and curvature);
+  - no smoothness penalty between pixels;
+  - no pixel locking (the dots land at a different sub-pixel position in every frame).
+  
+  Classical spacetime stereo needed the pattern to change while the scene stood still. Here the motion that tracking already measures changes the pattern for free.
+- **First result.** A numpy prototype (not committed) ran on the simulator's sphere-on-plane scene with three seeds: 24 frames each over 1.2 s of hand-held motion, full resolution, dots and lasers on, and the project's GPU census SGM for the per-frame depth. Errors are along the true normal, in mm, at sample points seen by both cameras in at least 8 frames. "Averaged" is the mean of the per-frame depth at the point over all frames, which is what TSDF fusion does. Each cell gives the range over the three seeds.
+
+  | Points on | Measure | One frame | Averaged | Spacetime | Spacetime, normal 3° off | Spacetime, pose noise |
+  |---|---|---|---|---|---|---|
+  | Sphere (206–254 points) | median | 0.13–0.18 | 0.044–0.060 | **0.007–0.014** | 0.011–0.017 | 0.008–0.019 |
+  | | p95 | 0.52–0.68 | 0.30–1.16 | **0.027–0.072** | 0.038–0.062 | 0.041–0.070 |
+  | | off by > 0.2 mm | 34–45 % | 8–19 % | **0 %** | 0–0.4 % | 0 % |
+  | Table around it, 50–110 mm out (354–442 points) | median | 0.19–0.22 | 0.039–0.053 | **0.021–0.033** | 0.019–0.036 | 0.019–0.039 |
+  | | p95 | 0.59–0.68 | 0.15–0.18 | **0.11–0.17** | 0.10–0.18 | 0.10–0.18 |
+  | | off by > 0.2 mm | 47–54 % | 2.5–4.2 % | **0.9–2.5 %** | 0.6–3.6 % | 0.3–3.9 % |
+
+  "Spacetime" uses the true poses and normals; "normal 3° off" tilts every patch's assumed normal by 3°; "pose noise" adds a random 0.1 mm and 0.02° to every frame, about what tracking leaves. What it shows:
+  - where the scan concentrates (the sphere, seen in every frame from changing angles), the median error drops 4–6 times and the p95 5–20 times, and no point is off by more than 0.2 mm;
+  - at the edge of coverage (the table around the sphere) the median improves 1.6–1.9 times, and the tail is about as long as averaging's. The few failures sit where fewer frames carried dots on the patch (17–21 textured views against 23–24). So the refinement must check its own confidence (textured views, sharpness of the cost minimum) and keep the fused value where it is weak;
+  - a wrong normal or tracking-sized pose noise barely matters;
+  - two bugs found on the way, both relevant to the real version: a patch must be visible in *both* cameras (the right camera's occlusions matter), and a frame counts only if the patch holds at least one dot (noise alone looks like texture).
+  
+  Caveats: matte surfaces, simplified speckle, a perfect lens model, no MJPEG; patches with the true curvature; true poses as the baseline case.
+
+- **Evidence and prior art:** spacetime stereo (Zhang, Curless and Seitz 2003; Davis et al. 2005); photometric refinement of multi-view meshes (Vu et al. 2012); photometric bundle adjustment (Delaunoy and Pollefeys 2014); motion-compensated structured light (Weise, Leibe and Van Gool 2007). Closest to this idea: a multi-frame active-stereo bundle adjustment by inverse rendering for an endoscope (2022), and neural reconstructions that render a projected pattern (Shandilya et al. 2023; papers from 2024 and 2025). No open, practical version for a handheld dot-and-laser scanner was found.
+- **Licence:** own code.
+- **Cost:** the prototype is plain numpy and slow (about 50 s for some 600 patches and 24 frames on the CPU, per variant). On the GPU it is one kernel: per patch and frame, 169 samples in each image. With a few Gauss-Newton steps instead of a grid search, and 30–50 well-spread keyframes per patch, a million patches need about 10¹¹ samples: seconds on the RTX 3070 Ti and tens of seconds on the Radeon 680M (estimate). It can also run only where the confidence map (4.5.1) is weak, or only on a measured feature (7.9).
+- **Plugs into:** a "Refine (spacetime)" stage after Straighten and Fuse in `ohs/app/process.py`; a new `ohs/track/refine_wss.py` with an OpenCL kernel and a CPU twin. Visibility in both cameras comes from rendering the fused mesh into each view. Output: moved vertices, and a per-vertex σ from the curvature of the summed cost.
+- **Effort / risk:** M–L / medium. Risks:
+  - it is still stereo: rectification errors bias it like any matcher;
+  - option A's dots carry speckle that differs between the two cameras, which makes the cost noisier (ZNCC copes, but less well);
+  - MJPEG artefacts;
+  - glossy paint looks different to the two cameras; frames with a poor best match must be down-weighted;
+  - pose drift biases it like everything else, so it runs after Straighten.
+- **Next tests:** the car panel and the bracket (crease, edges); the realistic lens; physical speckle and MJPEG (6.2); tracked poses instead of true ones; then real recordings, judged against the laser cloud (6.4).
+
+### 7.3 I2: Laser-curve bundle adjustment, with self-calibration — P2, M4 (top 10 #5)
+- **What:** every frame gives two accurate 3D curves, one per laser line. As the scanner moves, curves from different frames cross each other on the surface, thousands of times per scan. At every crossing the two curves must meet. Optimise all frame poses so they do, together with weak dense terms (point-to-plane against the fused surface) and the IMU. Add the laser planes and the camera–IMU time offset as unknowns: a wrong plane or a wrong time offset makes the curves miss each other in a pattern that depends on the viewing geometry, so the scan calibrates them.
+- **Why only this scanner:** a laser cross plus dense depth plus an IMU. The cross gives accurate curves; the dense depth and the IMU hold the directions that crossings can't (sliding along a flat panel).
+- **Evidence and prior art:**
+  - Patrick Hébert's self-referenced hand-held crosshair sensor (3DIM 2001), and the curve-based modelling of Tubic, Hébert and Laurendeau (CVPR 2003; Image and Vision Computing 2004), registered laser curves from a hand-held crosshair sensor to each other. Université Laval's patent on it (US 7,487,063) is listed as expired.
+  - Sheehan, Harrison and Newman (IJRR 2012) calibrated a 3D laser by maximising the "crispness" of its point cloud.
+  - Combining crossing curves with dense stereo and an IMU in one handheld scanner was not found.
+- **Licence:** own code (scipy sparse least squares; GTSAM or Ceres, both BSD, if it grows).
+- **Cost:** crossings come from a k-d tree over curve points; a sparse Gauss-Newton over 6 numbers per keyframe plus about 10 calibration numbers. Seconds to a minute per scan on the CPU (estimate).
+- **Plugs into:** a new `ohs/track/curve_ba.py`, run after Straighten and before the final fusion. Calibration updates go through `ohs/calib/online.py` (4.9), never silently.
+- **Effort / risk:** M–L / medium (crossings near edges are outliers; a flat panel constrains only the normal direction).
+- **Sim check:** scans with injected drift, a laser plane tilted by 0.1° and a 2 ms time-offset error; the final pose, plane and offset errors against the truth.
+
+### 7.4 I3: A digital twin that states each measurement's uncertainty — P2, M5–M6 (top 10 #7)
+- **What:** for one measurement (a hole diameter, a gap, a flatness), replay the real scan path in the simulator against the scanned shape, many times. Each replay draws the calibration from its uncertainty and adds fresh noise; the same processing and the same fit run each time. The spread, and the offset from the simulated truth, is the uncertainty of *that* measurement on *that* scan. This is the "virtual CMM" principle of ISO/TS 15530-4, with the Monte Carlo method of JCGM 101 (GUM Supplement 1), applied to a handheld scanner.
+- **Why only this project:** it already has a detailed, validated simulator of its own hardware, and it keeps the real trajectory. No consumer scanner exposes anything like it.
+- **Needs:** a triangle-mesh object in the simulator (Open3D's `RaycastingScene`, MIT, casts rays against a mesh); calibration covariances from the solvers in `ohs/calib/`; rendering limited to the region being measured.
+- **Evidence:** the method is standardised for coordinate measuring machines (ISO/TS 15530-4) and for Monte Carlo uncertainty (JCGM 101). Its quality depends entirely on how honest the twin is, so it must be checked against the artefact test (4.9.6).
+- **Licence:** own code.
+- **Cost:** heavy and offline. About 20 replays of 50 frames is 1,000 renders: minutes to tens of minutes on the CPU (estimate). A "certify this measurement" button, not a default.
+- **Plugs into:** `ohs/sim/scene.py` (a mesh object), a new `ohs/measure/uncertainty.py`, the measurement report.
+- **Effort / risk:** M–L / medium.
+- **Sim check:** on simulated parts with known truth, the twin's 95 % interval must contain the actual error about 95 % of the time.
+
+### 7.5 I4: The projector calibrates itself; dot-free images — P2, M4–M5
+- **What:**
+  - *Dot rays.* Every projected dot travels along a fixed ray in the scanner's frame. Stereo-triangulated dot centres (4.1.3) from many frames, at many depths, line up along those rays. Fit one ray per dot during the calibration session or any scan. For option A, also fit one wavelength-scale number per scan, which tracks the laser's temperature. With the rays known, each dot gives depth from one camera alone (where the other camera is blocked), and a three-way check (left, right, projector).
+  - *Dot-free images.* With each dot's centre and brightness fitted, subtract the modelled dots (and the modelled laser lines) from the image, the way crowded-field star photometry fits and removes overlapping star images (DAOPHOT, 1987). What remains is the surface under ambient light.
+- **Benefit:** marker mode loses accuracy because dots and lines degrade the tag corners (VALIDATION.md, finding 5: 0.3–0.55 px reprojection error). Dot-free images should fix that, give the mesh a grey-level texture, and give natural-texture features in engine bays and interiors.
+- **Evidence:** fitting rays to many points is the same geometry as the existing laser-plane fit. Subtracting a fitted pattern is routine in astronomy; using it to clean active-stereo images was not found.
+- **Licence:** own code.
+- **Cost:** small per frame once the dots are fitted (4.1.3).
+- **Plugs into:** `ohs/vision/dots.py`, a new `ohs/calib/projector.py`, `ohs/track/markers.py` (tags on dot-free images).
+- **Effort / risk:** M / medium. Single dot centres are noisy per frame (4.1.3), but a ray fit and the pattern removal pool thousands of observations.
+- **Sim check:** fitted rays against the simulator's projector model; tag reprojection error and marker-mode drift with and without dot removal (the sphere scene has tags).
+
+### 7.6 I5: Laser gauges for body work — P2, M5 (top 10 #9)
+- **What:**
+  - *Gap and flush, live.* When a laser line crosses the gap between two panels, its profile shows two edges. Fit each side, then compute gap and flush per frame: the light-section method of industrial gauges such as Hexagon's handheld CALIPRI. Accumulate along the seam as the user sweeps, with live values and a plot along the seam.
+  - *Edges and hole rims.* Where a line breaks at an edge or a hole, its end points trace the edge at laser accuracy. Fit circles to rim points for hole diameters, instead of measuring the fusion-rounded mesh.
+- **Benefit:** fusion rounds edges; laser profiles don't. Gap & flush is an everyday body-shop measurement, and the app plan already lists it.
+- **Evidence:** the light-section method is the industrial standard. A 2022 robot-mounted system with a UV line laser reported expanded uncertainties of 0.22 mm for gap and 0.18 mm for flush (Kholkhujaev et al., IEEE Access). No consumer scanner app was found that offers it live.
+- **Licence:** own code.
+- **Cost:** small; per-profile fits on the CPU.
+- **Plugs into:** `ohs/vision/laser.py` (segments and their ends exist), a new `ohs/measure/gapflush.py`, a live overlay in the app.
+- **Effort / risk:** M / medium (line width and edge radius bias the edge points; shops define "gap" differently).
+- **Sim check:** a simulated seam between two panels and holes of known size; gap, flush and diameter errors, then the bias correction.
+
+### 7.7 I6: Dent maps and highlight lines — P2, M5
+- **What:** fit a smooth "fair" reference surface to a panel region (a stiff B-spline or thin-plate fit) and show the deviation as a dent map, only where it exceeds k·σ. Render virtual highlight lines (zebra stripes) on the scanned mesh, the way surface quality is judged in car design (Beier and Chen 1994). Later, specular glints on clearcoat could serve as exact normal samples, a deflectometry-like cue (Knauer, Kaminski and Häusler 2004).
+- **Benefit:** "where are the dents, and how deep?" is a real question for restorers and body shops.
+- **Needs:** low noise. Dents of 0.1–0.3 mm over 10–50 mm need the accuracy of I1 and laser anchoring.
+- **Licence / cost:** own code; seconds.
+- **Plugs into:** `ohs/measure/`, a viewer overlay.
+- **Effort / risk:** M / medium.
+- **Sim check:** a simulated panel with dents of known depth; detection rate and false alarms against depth and σ.
+
+### 7.8 I7: Symmetry tools — P2, M5
+- **What:** find a part's (or a car's) symmetry plane automatically (Mitra, Guibas and Pauly 2006), compare the two sides ("is this side bent?"), and mirror one side to fill hidden areas, flagged as synthetic (4.6.2).
+- **Benefit:** left and right parts are the norm on cars. The app plan has a manual mirror; this adds detection and comparison.
+- **Licence / cost:** own code; seconds.
+- **Effort / risk:** M / low.
+- **Sim check:** a mirrored simulated part with a deliberate bend; the plane error, and whether the bend is found.
+
+### 7.9 I8: Re-measure from the raw frames — P2, M5
+- **What:** when the user measures a feature, re-run the most accurate path (I1, the laser edges of I5, finer voxels) on only the frames that saw it.
+- **Benefit:** the best estimate for the feature that matters, at a cost proportional to its size. Apps that keep only meshes can't do this.
+- **Licence / cost:** own code; seconds to a minute per feature.
+- **Effort / risk:** M / low.
+- **Sim check:** a hole diameter from the whole-scan mesh against the region re-run.
+
+### 7.10 I9: Honest averaging — P1, M3 (with top 10 #1)
+- **What:** nearby frames see nearly the same dots at a surface point, so their errors are correlated (VALIDATION.md measured 0.4 between frames 0.1 s apart). Plain averaging over-trusts them. Count only independent looks per voxel (frames whose dots have moved on by about a dot spacing at that point), and give each voxel a robust inlier/outlier model (Vogiatzis and Hernández 2011).
+- **Benefit:** the per-vertex σ means what it says, and every "±" in the app depends on it.
+- **Licence / cost:** own code; a few extra numbers per voxel.
+- **Effort / risk:** S–M / low.
+- **Sim check:** σ coverage (about 95 % within 2σ) with and without the correction.
+
+### 7.11 I10: Guidance by expected information gain — P3, M4–M6
+- **What:** per region, combine the uncertainty, the spread of viewing angles and the laser coverage, and show where to aim next, and from which side, to reduce the uncertainty most: the information-gain view planning of Isler et al. (2016), made for a person instead of a robot.
+- **Benefit:** the live screen tells the user what to do, not just what is covered.
+- **Licence / cost:** own code; light per frame.
+- **Effort / risk:** M / medium (the UI must stay calm).
+- **Sim check:** a simulated operator that follows the hints against one that sweeps at random; σ reached per minute of scanning.
+
+### 7.12 Future hardware ideas
+- **A speckle motion sensor for flat panels.** A laser and a strongly defocused camera measure motion from speckle flow, even on featureless surfaces (SpeDo: Jo, Gupta and Nayar, ICCV 2015). It would see the sliding that geometry can't see on a flat panel. The main cameras can't do this: at 60 fps and hand speed the speckle decorrelates completely between frames, and its grain is smaller than a pixel.
+- **A strobe line from the camera to the Pico,** if the ELP board has one. Emitters could then switch per frame: dot-free frames for tags and texture, laser-only frames.
+- **Blue line lasers and more lines** (4.2.7).
+
+**Will not work, added by this section:** speckle tracking with the main cameras (above); photometric terms *between* frames in any bundle adjustment, because the light moves with the camera. Only left-right terms within a frame are valid, which is what I1 uses.
+
+## 8. References
 
 Links were checked on 2026-11-09 (arXiv API, Crossref, or by opening the page). Licences are as stated in each project's licence file on GitHub on the same day.
 
@@ -868,6 +1048,35 @@ Links were checked on 2026-11-09 (arXiv API, Crossref, or by opening the page). 
 - Zhang, Yau, "High dynamic range scanning technique", Optical Engineering 2009. https://doi.org/10.1117/1.3099720
 - Feng et al., "High dynamic range 3D measurements with fringe projection profilometry: a review", Measurement Science and Technology 2018. https://doi.org/10.1088/1361-6501/aae4fb
 - Salahieh, Chen, Liang, "Multi-polarization fringe projection imaging for high dynamic range objects", Optics Express 2014. https://doi.org/10.1364/OE.22.010064
+
+### Innovation track (section 7)
+- Zhang, Curless, Seitz, "Spacetime stereo: shape recovery for dynamic scenes", CVPR 2003. https://doi.org/10.1109/CVPR.2003.1211492
+- Vu, Labatut, Pons, Keriven, "High accuracy and visibility-consistent dense multiview stereo", TPAMI 2012. https://doi.org/10.1109/TPAMI.2011.172
+- Delaunoy, Pollefeys, "Photometric bundle adjustment for dense multi-view 3D modeling", CVPR 2014. https://doi.org/10.1109/CVPR.2014.193
+- Weise, Leibe, Van Gool, "Fast 3D scanning with automatic motion compensation", CVPR 2007. https://doi.org/10.1109/CVPR.2007.383291
+- Konolige, "Projected texture stereo", ICRA 2010. https://doi.org/10.1109/ROBOT.2010.5509796
+- "Multi-frame optimisation for active stereo with inverse rendering to obtain consistent shape and projector-camera poses for 3D endoscopic system", Computer Methods in Biomechanics and Biomedical Engineering: Imaging & Visualization, 2022. https://doi.org/10.1080/21681163.2022.2155578
+- Shandilya et al., "Neural fields for structured lighting", ICCV 2023. https://openaccess.thecvf.com/content/ICCV2023/html/Shandilya_Neural_Fields_for_Structured_Lighting_ICCV_2023_paper.html
+- "Depth reconstruction with neural signed distance fields in structured light systems", 2024. https://arxiv.org/abs/2405.12006
+- "Neural shape reconstruction from multiple views with static pattern projection", 2025. https://arxiv.org/abs/2506.01389
+- Chugunov et al., "The implicit values of a good hand shake: handheld multi-frame neural depth refinement", CVPR 2022. https://arxiv.org/abs/2111.13738
+- Hébert, "A self-referenced hand-held range sensor", 3DIM 2001. https://doi.org/10.1109/IM.2001.924380
+- Tubic, Hébert, Laurendeau, "3D surface modeling from range curves", CVPR 2003. https://doi.org/10.1109/CVPR.2003.1211440; "3D surface modeling from curves", Image and Vision Computing 2004. https://doi.org/10.1016/j.imavis.2004.03.006 (patent US 7,487,063, listed as expired: https://patents.google.com/patent/US7487063B2/en)
+- Sheehan, Harrison, Newman, "Self-calibration for a 3D laser", IJRR 2012. https://doi.org/10.1177/0278364911429475
+- ISO/TS 15530-4:2008, "Coordinate measuring machines (CMM): technique for determining the uncertainty of measurement, part 4: evaluating task-specific measurement uncertainty using simulation" (store page): https://www.csagroup.org/store/product/iso_038696
+- JCGM 100:2008, Guide to the expression of uncertainty in measurement (GUM). https://doi.org/10.59161/JCGM100-2008E
+- JCGM 101:2008, GUM Supplement 1: propagation of distributions using a Monte Carlo method. https://doi.org/10.59161/JCGM101-2008
+- Stetson, "DAOPHOT: a computer program for crowded-field stellar photometry", PASP 1987. https://doi.org/10.1086/131977
+- Kholkhujaev et al., "Non-contact articulated robot-integrated gap and flushness measurement system for automobile assembly", IEEE Access 2022. https://doi.org/10.1109/ACCESS.2022.3199066
+- Hexagon CALIPRI handheld light-section gap and flush gauge (product page): https://hexagon.com/products/calipri-c14
+- Beier, Chen, "Highlight-line algorithm for realtime surface-quality assessment", Computer-Aided Design 1994. https://doi.org/10.1016/0010-4485(94)90073-6
+- Knauer, Kaminski, Häusler, "Phase measuring deflectometry: a new approach to measure specular free-form surfaces", Proc. SPIE 5457, 2004. https://doi.org/10.1117/12.545704
+- Nehab, Rusinkiewicz, Davis, Ramamoorthi, "Efficiently combining positions and normals for precise 3D geometry", SIGGRAPH 2005. https://doi.org/10.1145/1186822.1073226
+- Ohtake, Belyaev, Seidel, "Ridge-valley lines on meshes via implicit surface fitting", SIGGRAPH 2004. https://doi.org/10.1145/1186562.1015768
+- Mitra, Guibas, Pauly, "Partial and approximate symmetry detection for 3D geometry", SIGGRAPH 2006. https://doi.org/10.1145/1179352.1141924
+- Vogiatzis, Hernández, "Video-based, real-time multi-view stereo", Image and Vision Computing 2011. https://doi.org/10.1016/j.imavis.2011.01.006
+- Isler, Sabzevari, Delmerico, Scaramuzza, "An information gain formulation for active volumetric 3D reconstruction", ICRA 2016. https://doi.org/10.1109/ICRA.2016.7487527
+- Jo, Gupta, Nayar, "SpeDo: 6 DOF ego-motion sensor using speckle defocus imaging", ICCV 2015. https://doi.org/10.1109/ICCV.2015.491
 
 ### Licences checked, at a glance
 
