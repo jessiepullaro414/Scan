@@ -31,12 +31,13 @@ planes ("is the calibration still good?").
 
 Where the stripe crosses black/white ink its sub-pixel centre is pulled toward the white side
 (by up to ~1 px; ink is ~20x darker than paper). On simulated board views (8 poses, 200-390 mm)
-board points lie 0.14-0.17 mm rms off the true sheet and give plane tilts of 0.01-0.1 deg and
-offsets up to 0.3 mm, while margin points lie 0.02 mm rms off it and give < 0.005 deg and
-< 0.01 mm. The calibration flow (``ohs.app.calib_flow.lasers_from_recording``) therefore uses
-``"margin"`` by default. The low-level default stays ``"board"`` for backward compatibility
-(observations built by hand know nothing about the page); an observation without a page layout
-only supports ``"board"``.
+board points lie 0.14-0.17 mm rms off the true sheet and give plane tilts of 0.01-0.08 deg and
+offsets up to 0.3 mm, while margin points lie 0.02 mm rms off it and give < 0.006 deg and
+< 0.02 mm (laser-point errors over 150-450 mm about 10x smaller; VALIDATION.md). The
+calibration flow (``ohs.app.calib_flow.lasers_from_recording``) therefore uses ``"margin"`` by
+default. The low-level default stays ``"board"`` for backward compatibility (observations built
+by hand know nothing about the page); an observation without a page layout only supports
+``"board"``.
 
 Reports are plain JSON-serialisable dicts.
 """

@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import csv
 import json
+import shutil
 from pathlib import Path
 
 import numpy as np
@@ -159,12 +160,15 @@ def test_marker_mode_full_resolution_short(tmp_path):
     assert m["mesh_median_mm"] < 0.5 and m["laser_median_mm"] < 0.3
     assert rep["markers"]["refine"]["rms_mm"] < 0.5
     assert (tmp_path / "out" / "marker_map.json").exists()
+    shutil.rmtree(rec, ignore_errors=True)
 
 
 # --------------------------------------------------------------------------- full runs (VALIDATION.md)
 @pytest.fixture(scope="module")
 def sphere_full(tmp_path_factory):
-    return scan_recording(tmp_path_factory.mktemp("sf") / "rec", "sphere_on_plane", 36, (1280, 800))
+    rec = scan_recording(tmp_path_factory.mktemp("sf") / "rec", "sphere_on_plane", 36, (1280, 800))
+    yield rec
+    shutil.rmtree(rec, ignore_errors=True)  # ~50 MB of full-resolution frames
 
 
 @pytest.mark.slow
@@ -200,3 +204,4 @@ def test_full_markerless_car_panel(tmp_path):
     # single-model tracking on the raw depth (track_filter_px=0) for comparison (the pre-fix design)
     rep0, m0 = _process(rec, tmp_path / "out_raw", track_filter_px=0.0)
     metrics("scan_car_panel_full_raw_depth_tracking", **m0)
+    shutil.rmtree(rec, ignore_errors=True)

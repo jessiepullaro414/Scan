@@ -12,9 +12,9 @@ one :func:`ohs.calib.board.render_charuco_page` prints, glued flat to glass.
   pixels confirmed by the right image (predicted on the board plane), then
   :func:`~ohs.calib.laser_planes.fit_laser_planes`. Default ``region="margin"``: only the blank
   printed margin around the pattern is used, because stripe centres are biased where they cross
-  ink (see :mod:`ohs.calib.laser_planes`; on simulated views the margin gives ~20x smaller plane
-  errors). A laser that cannot be fitted from the margin alone is refitted with ``"both"`` and
-  the report says so.
+  ink (see :mod:`ohs.calib.laser_planes`; on simulated views the margin gives about 10x smaller
+  laser-point errors). A laser that cannot be fitted from the margin alone is refitted with
+  ``"both"`` and the report says so.
 * :func:`imu_from_recording` - board pose on every rectified left frame (``K_rect``, no
   distortion; the board is the world, ``R_wc = R_cb^T``, frame time ``t_host``) and the raw gyro
   -> :func:`~ohs.calib.imu.calibrate_imu_camera`.

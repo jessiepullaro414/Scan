@@ -1,0 +1,224 @@
+# OpenHandScan: end-to-end validation on simulated data
+
+This document reports how accurately the whole processing chain works on data from the simulator
+(`ohs.sim`). It covers calibration from recordings, the per-frame pipeline, offline processing and
+export, compared against the simulator's ground truth. **Everything here is simulation.** The
+numbers are an upper bound on what the real scanner will do; see
+[Simulation limitations](#simulation-limitations).
+
+Environment: Windows 11, Python 3.13, numpy 2.5.4, opencv-contrib 5.0.0, open3d 0.20.0 (CPU),
+16 logical CPUs. Data: 1280x800 per camera, realistic lens model (distortion, 0.3 deg camera
+rotation; rectification is not trivial), dot projector and both laser lines on. Each scan is 36
+frames at 30 fps (1.2 s of hand-held motion: 63 mm and 28 deg of camera travel on the sphere scan)
+with IMU at 416 Hz.
+
+## How to reproduce
+
+```
+# fast checks (about 2 min for the three files)
+C:\Users\Garage\.venvs\ohs\Scripts\python.exe -m pytest software\tests\test_app_pipeline.py software\tests\test_e2e_calibration.py software\tests\test_e2e_scan.py -q
+# the full runs behind the table below (about 7 min); -s prints one "METRICS {...}" line per run
+C:\Users\Garage\.venvs\ohs\Scripts\python.exe -m pytest software\tests\test_e2e_calibration.py software\tests\test_e2e_scan.py -m slow -s -q
+```
+
+## Results (full runs)
+
+| Item | Metric | Result | Expectation |
+|---|---|---|---|
+| **(a) Stereo calibration**, 20 board views | fx error, left / right | -0.05 / -0.01 px | |
+| | cx / cy error (left) | -0.01 / -0.14 px | |
+| | baseline error | +0.005 mm | |
+| | relative rotation error | 0.011 deg | |
+| | row error after rectification, median / p95 | 0.006 / 0.025 px | < 0.3 px |
+| | depth scale error (triangulation at 200-450 mm) | 0.001 % | |
+| | reprojection rms | 0.075 px | < 0.5 px |
+| **(b) Laser planes**, 8 views, true stereo, **margin** (default) | normal angle, vertical / horizontal | 0.0056 / 0.0054 deg | |
+| | d error, vertical / horizontal | -0.016 / -0.018 mm | |
+| | laser-point error, median / max (vertical; horizontal) | 0.011 / 0.13 mm; 0.028 / 0.24 mm | |
+| (b) same views, **board** region | normal angle, V / H | 0.078 / 0.037 deg | |
+| | d error, V / H | +0.26 / -0.13 mm | |
+| | laser-point error, median / max (V; H) | 0.16 / 1.7 mm; 0.20 / 1.7 mm | |
+| (b) same views, board + margin (`both`) | laser-point error, median (V; H) | 0.058; 0.048 mm | |
+| (b) **estimated** stereo, margin | normal angle, V / H | 0.0077 / 0.013 deg | |
+| | d error, V / H | -0.028 / -0.007 mm | |
+| | laser-point error, median / max (V; H) | 0.019 / 0.17 mm; 0.14 / 0.75 mm | |
+| (b) estimated stereo, board | laser-point error, median (V; H) | 0.16; 0.23 mm | |
+| **(c) IMU calibration**, 7 s (1.2 s still, then rotation), 210 frames | R_ci error (estimated stereo / true stereo) | 0.025 / 0.031 deg | |
+| | time-offset error | 0.019 / 0.014 ms | |
+| | gyro-bias error | 0.087 mrad/s (0.005 deg/s) | |
+| | rotation residual rms | 0.035 deg | |
+| **(d) Markerless scan**, sphere on plane, true calibration | frames tracked | 36 / 36 (100 %) | > 90 % |
+| | trajectory error, median / max | 0.19 mm, 0.035 deg / 0.29 mm, 0.077 deg | < 3 mm / 1 deg |
+| | mesh distance, median / p95 | 0.20 / 0.67 mm (sphere 0.12, table 0.20) | median < 0.3 mm |
+| | laser points, median / p95 | 0.068 / 0.28 mm (sphere 0.084) | median < 0.2 mm |
+| **(e) Marker mode**, same recording | frames tracked | 36 / 36 | |
+| | trajectory error, median / max | 0.94 mm, 0.22 deg / 3.8 mm, 0.93 deg | |
+| | mesh, median / p95 | 0.71 / 2.0 mm (sphere 0.11, table 0.72) | |
+| | laser points, median / p95 | 0.18 / 0.60 mm | |
+| | tag map: tags, `refine_map` rms | 5 tags, 0.28 mm | |
+| **(f) Markerless scan, car panel** (nearly featureless) | frames tracked | 36 / 36 | |
+| | trajectory error, median / max | 0.63 mm, 0.039 deg / 0.97 mm, 0.065 deg | |
+| | mesh, median / p95 | 0.29 / 1.17 mm (panel 0.11, floor 0.35) | |
+| | laser points, median / p95 | 0.067 / 0.23 mm | |
+| (f) same, tracking on raw depth (`track_filter_px=0`, the original design) | trajectory error, max | 13.3 mm, 2.4 deg | |
+| **(g) Full chain**: (d) with the calibration estimated in (a)-(c) | frames tracked | 36 / 36 | > 90 % |
+| | trajectory error, median / max | 0.23 mm, 0.035 deg / 0.34 mm, 0.079 deg | < 3 mm / 1 deg |
+| | mesh, median / p95 | 0.27 / 0.77 mm | median < 0.3 mm |
+| | laser points, median / p95 | 0.078 / 0.29 mm | median < 0.2 mm |
+
+SGBM and Open3D are multi-threaded, so repeated runs can differ in the third significant digit.
+
+Half resolution (640x400, the live preview), sphere scene, 24 frames (fast test): trajectory
+error max 0.49 mm / 0.085 deg, mesh median 0.20 mm (2 mm voxels), laser median 0.15 mm.
+The same recording without the IMU drifts 30 mm / 12 deg: the scene is symmetric about the
+sphere axis, and the tracker flags it (`info["degenerate"]`).
+
+## Timings
+
+These are medians per frame on the CPU described above, from the full runs. Offline processing runs
+at full resolution (1280x800); the live preview runs at half resolution (640x400, measured in the
+fast tests).
+
+| Stage (ms) | Offline 1280x800, markerless | Offline 1280x800, markers | Live 640x400, markerless |
+|---|---|---|---|
+| rectify (both images) | 2 | 2 | 1 |
+| depth (SGBM + sub-pixel refinement) | 121-125 | 125 | 20-24 |
+| laser lines (extract L+R, triangulate) | 24-26 | 26 | 9-12 |
+| tracking-depth filter | 36-39 | - | 5 |
+| ICP: ray cast / Gauss-Newton | 100-116 / 15-25 | - | 29 / 7-8 |
+| TSDF integration: tracking model / reconstruction | 5 / 16-18 | - / 18 | 4 / 5 |
+| marker detection + pose | - | ~44 | - |
+| **total** | **348-361** | **217** | **86-100** |
+
+Mesh extraction takes about 0.9 s per scan (0.8 M faces at 1 mm voxels); cleaning and export add
+about 1 s. A 36-frame scan processes in about 15 s offline (`report.json` `wall_time_s` 14.8). The
+simulator renders about 1 s per full-resolution stereo frame.
+
+## What the metrics mean
+
+- **Stereo errors** compare the estimated raw intrinsics/extrinsics (`K1`, `K2`, `R`, `T`) with
+  the simulator's truth. The **row error** is how well the rectification matches the truth. Random
+  3D points (200-450 mm) are projected into the *true* raw images, mapped through the *estimated*
+  undistortion and rectification, and the vertical disparity `|v_left - v_right|` is measured.
+  Stereo matching assumes it is zero. The **depth scale error** triangulates those points with the
+  estimated rectified geometry.
+- **Laser planes**: the angle between the estimated and true plane normals, and the offset error
+  `d_est - d_true` (mm at the camera origin). The **laser-point error** is what matters in use.
+  Rays through a pixel grid of the camera are intersected with the true and the estimated plane,
+  over depths of 150-450 mm. The table gives the median and maximum distance between the two hits;
+  the maximum occurs at far, grazing rays. With the estimated stereo calibration, planes are
+  compared in the raw left-camera frame (`n_raw = R1^T n`), because the two calibrations define
+  slightly different rectified frames.
+- **IMU**: `R_ci` angle error (in the raw camera frame for the estimated-stereo case), the time
+  offset error and `|bias_est - bias_true|`.
+- **Trajectory error**: `pose_error(inv(T_gt[f]) @ T_gt[i], T_est[i])` after aligning the world at
+  the first tracked frame `f`. The world is the camera at that frame, where `T_est = I`. The table
+  gives the rotation (deg) and translation (mm) of the relative error, with the median and maximum
+  over all frames.
+- **Mesh / laser accuracy**: `mesh.ply` vertices and the voxel-averaged `laser_points.ply` (0.2 mm)
+  are mapped into the simulator world with that same first-frame alignment. Their distance to the
+  analytic surfaces is measured: sphere + table plane, or the car-panel height field + floor. Each
+  point counts against its nearest surface. Drift is therefore *included*, and nothing is fitted.
+  For (g) only the known rotation between the estimated and the true rectified frame
+  (`R1_true R1_est^T`, 0.008 deg here) is compensated, because it changes how the frame is defined,
+  not the shape. The mesh p95 comes mostly from TSDF artefacts at grazing angles, at occlusion
+  edges and at the 450 mm depth cut-off.
+
+## Findings and fixes
+
+1. **Camera-fixed depth errors break frame-to-model tracking. This was fixed in the pipeline.**
+   - **What went wrong:** with the trackers wired as specified, the sphere scan drifted 22 deg / 56 mm over 36
+     frames. The car panel drifted 6.5 deg / 24 mm.
+   - **Diagnosis:** the same tracker on ground-truth depth gave 0.08 deg / 0.2 mm, so the tracker
+     itself was fine. The SGBM disparity error has a dot-scale component (std about 0.3 px) that is
+     *fixed to the camera*. The projected dots stay at nearly the same image positions from frame to
+     frame, and the error correlates about 0.4 between frames 0.1 s apart. In experiments that added
+     parts of the measured SGBM error to the true depth, this high-pass part alone reproduced the
+     drift. The low-frequency part (0.18 deg) and uncorrelated noise of the same size (0.45 deg) did
+     not. The TSDF keeps the pattern, and ICP locks onto it: the plane, about 95 % of the pixels,
+     pulls the pose back toward the previous camera. With the rotation held by the gyro, ICP
+     translates the camera about 7 mm per step to re-align the patterns. The 0.1 deg default gyro
+     prior was also too weak; a calibrated gyro is good to about 0.01 deg per frame.
+   - **Fix (`ohs.app.pipeline`):**
+     - ICP runs against a *separate tracking TSDF* (2 mm voxels).
+     - That TSDF is fed with a filtered depth (`tracking_depth`): edge-aware normalised Gaussian
+       smoothing with sigma 6 px at full resolution (4 px at half). The valid area is eroded by
+       2 sigma, so that no camera-fixed boundary artefacts remain.
+     - The gyro prior is set to 0.02 deg per frame.
+     - The raw depth is fused at the tracked poses into the 1 mm reconstruction TSDF, so the mesh
+       keeps full detail.
+     - Cost: about 45 ms per frame at full resolution.
+     - `PipelineParams(track_filter_px=0)` restores the original single-model behaviour, shown in
+       row (f) for comparison.
+2. **The laser stripe is biased where it crosses ink, so laser calibration uses the white margin.**
+   - **The problem:** on the board, stripe centres are pulled toward white squares. Board-region
+     planes are tilted by 0.04-0.08 deg and offset by up to 0.26 mm, and laser points move by
+     0.16-0.20 mm median and up to 1.7 mm.
+   - **The fix:** the blank paper around the printed pattern is coplanar with the board, and using
+     it cuts this about tenfold (row b). `ohs.calib.laser_planes` gained a
+     `region="board"|"margin"|"both"` option on `make_observation`, `board_points_from_line`,
+     `fit_laser_planes` and `check_laser_planes`. The low-level default stays `"board"` for backward
+     compatibility; `calib_flow.lasers_from_recording` defaults to `"margin"`.
+   - **The margin band:** taken from the actual printed layout (`calib.board.charuco_page_layout`).
+     It keeps 5 mm from the pattern, the scale bar, the label text and the paper edge. The clearance
+     was varied from 2 to 8 mm with no change in residuals (0.02 mm rms).
+   - **Fallback:** a laser that cannot be fitted from the margin alone is refitted on board + margin,
+     and the report says so.
+3. **The simulator's calibration page did not match the printed page. The printed page is the
+   source of truth, so the simulator was fixed.**
+   - **The disagreement:** the simulator centred the board on a blank letter page (27.95 mm above
+     and below). `render_charuco_page` prints it 18.4 mm from the top, with the scale bar and two
+     lines of text below.
+   - **Detection was already fine:** the textures were pixel-identical (cv2.aruco defaults,
+     non-legacy pattern), and `detect_charuco` finds all 70 corners on simulated views with 0.05 px
+     median error.
+   - **The fix:** `sim.scene.charuco_board` now renders the printed page raster, with the board area
+     unchanged to within 1e-4 albedo.
+4. **Mesh extraction from a TSDF with fewer than 4 fused frames raised inside Open3D.** Open3D keeps
+   only voxels whose weight is strictly above the threshold, and the threshold was capped at the frame
+   count. This is fixed in `track.markerless` (one line), and the pipeline also guards against it.
+5. **Marker mode** is less accurate than markerless + IMU on this scene. In most frames only 2-3 of
+   the six 20 mm tags are seen in stereo, and their corners are degraded by the dots and laser lines
+   (reprojection rms 0.3-0.55 px). Typical error is 0.9 mm / 0.2 deg. The worst frame is a one-tag
+   PnP fallback at 3.8 mm / 0.9 deg. The table plane in the mesh blurs accordingly (median 0.7 mm).
+   - `refine_map()` runs at the end and its map is saved (`marker_map.json`), but the model keeps the
+     poses tracked online, because `refine_map` re-estimates poses by Kabsch alone and has no public
+     per-frame output.
+   - At 640x400 with the dots on, tags mostly fail. They fail cleanly (`ok=False`), as documented.
+
+## Simulation limitations
+
+- **Surfaces:** Lambertian only. There is no specular reflection, no interreflection and no
+  subsurface scattering. Subsurface scattering in plastics, skin and paint broadens and biases real
+  laser stripes, and shiny metal saturates.
+- **Imaging:** no motion blur and no rolling shutter. The OV9281 has a global shutter, but exposure
+  time still blurs at hand speed. The stereo pair is perfectly synchronised. Frames are lossless PNG,
+  whereas the real camera streams MJPEG, whose artefacts on dots and laser lines are not modelled.
+- **Optics:** the lens is exactly Brown-Conrady (k1, k2, p1, p2); defocus and blur are simple
+  Gaussians. Laser sheets are perfect planes with a Gaussian profile; real line generators have a
+  slight "smile" and are not perfectly planar. The dot pattern is an ideal pinhole projection.
+- **Calibration board:** perfectly flat, printed at exact scale, with no glare from the glass and
+  the margins intact.
+- **IMU:** white noise, a random-walk bias and a constant time offset. There are no scale-factor,
+  axis-misalignment, temperature or USB-latency variations, and the clock sync is near ideal.
+- **Scenes and motion:** analytic primitives with low-contrast paint noise and no clutter. Scans are
+  short (1.2 s, about 25 deg of sweep), and smooth with a small tremor. Long scans, loop closure,
+  360 deg passes and fast or jerky motion are untested.
+- **Tuning on the simulator:** the parameters were tuned on this same simulator: the tracking filter
+  (sigma 6 px, 2 sigma erosion), the 0.02 deg gyro prior and the 5 mm margin clearance. Real depth
+  errors may have a different structure, so re-check them on hardware recordings.
+  `track_filter_px` and `fusion.gyro_sigma_deg` are the parameters to revisit first.
+
+## Known limitations of the pipeline
+
+- Full-resolution processing takes about 0.35 s per frame on this CPU, so it is offline only. The
+  live half-resolution pipeline runs at about 90-100 ms per frame (about 10 fps), with two TSDFs
+  in memory.
+- Without an IMU, symmetric or featureless scenes drift: the yaw about a sphere's axis and sliding
+  on a plane are unobservable. The tracker flags this as `degenerate` but cannot fix it.
+- The laser margin needs the board printed by `render_charuco_page` on the paper given to
+  `lasers_from_recording(paper=...)`, with its margins intact. A trimmed page falls back to the
+  board region, which is less accurate.
+- Mesh p95 is 0.7-1.2 mm, from TSDF artefacts at grazing angles, depth edges and the depth-range
+  cut-off. The laser cloud, at 0.07 mm median, is the more accurate surface sample. It is exported
+  separately and is not yet used to refine the mesh.

@@ -15,8 +15,8 @@ describe.
 from __future__ import annotations
 
 import json
-import math
-from dataclasses import asdict, replace
+import shutil
+from dataclasses import asdict
 from pathlib import Path
 
 import numpy as np
@@ -304,8 +304,9 @@ def full_chain(tmp_path_factory):
     imu_rec, _ = make_imu_recording(root / "imu", image_size=(1280, 800), spec=spec, seconds=7.0, realistic=True)
     imu, imu_rep = imu_from_recording(imu_rec, est, spec)
     est = ScannerCalibration(stereo, planes, imu)
-    return {"root": root, "true": true, "est": est, "spec": spec, "rec": {"stereo": st_rec, "lasers": la_rec, "imu": imu_rec},
-            "reports": {"stereo": st_rep, "lasers": la_rep, "imu": imu_rep}}
+    yield {"root": root, "true": true, "est": est, "spec": spec, "rec": {"stereo": st_rec, "lasers": la_rec, "imu": imu_rec},
+           "reports": {"stereo": st_rep, "lasers": la_rep, "imu": imu_rep}}
+    shutil.rmtree(root, ignore_errors=True)  # ~0.5 GB of full-resolution frames
 
 
 @pytest.mark.slow
