@@ -1,7 +1,7 @@
 /**
- * The result viewer's 3D view: the processed mesh (clay matcap, studio PBR or normals),
- * an optional wireframe overlay and laser point cloud, and the two-click distance tool.
- * Renders on demand (no work while the view is still).
+ * The result viewer's 3D view: the processed mesh (clay matcap, studio PBR, normals or the
+ * confidence map with the sigma under the cursor), an optional wireframe overlay and laser point
+ * cloud, and the two-click distance tool. Renders on demand (no work while the view is still).
  */
 import { Bvh, Html, Line, OrbitControls } from "@react-three/drei";
 import { Canvas, useThree } from "@react-three/fiber";
@@ -15,18 +15,21 @@ import {
   NeutralToneMapping,
   Raycaster,
   Sphere,
+  Triangle,
   Vector2,
   Vector3,
   type BufferGeometry,
   type Material,
   type Mesh,
 } from "three";
+import { useUi } from "../../store/ui";
 import { CameraRig } from "../../three/CameraRig";
+import { applyConfidenceColors, confidenceMaterial, SIGMA_NONE_MM, sigmaOf } from "../../three/confidence";
 import { CV_TO_THREE_ROTATION, cvToThree } from "../../three/coords";
 import { clayMatcap } from "../../three/materials";
 import { AxisGizmo, SceneGrid, StudioEnvironment, StudioLights, useThemeColors } from "../../three/Studio";
 
-export type Shading = "clay" | "studio" | "normals";
+export type Shading = "clay" | "studio" | "normals" | "confidence";
 export type Vec3 = [number, number, number];
 export type Measurement = { id: number; a: Vec3; b: Vec3 };
 
@@ -41,15 +44,28 @@ export function useMaterial(shading: Shading): Material {
     const common = { side: DoubleSide, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1 };
     if (shading === "normals") return new MeshNormalMaterial(common);
     if (shading === "studio") return new MeshStandardMaterial({ ...common, color: "#a9afb8", roughness: 0.5, metalness: 0.08, envMapIntensity: 0.85 });
+    if (shading === "confidence") return confidenceMaterial();
     return new MeshMatcapMaterial({ ...common, matcap: clayMatcap() });
   }, [shading]);
   useEffect(() => () => mat.dispose(), [mat]);
   return mat;
 }
 
+/** "light" / "dark": the confidence map's steps follow the theme. */
+export function useTheme(): "light" | "dark" {
+  return useUi((s) => s.theme) === "light" ? "light" : "dark";
+}
+
 /** The mesh with the chosen shading and an optional wireframe overlay. */
 export function Model({ geometry, shading, wireframe, meshRef }: { geometry: BufferGeometry; shading: Shading; wireframe: boolean; meshRef?: RefObject<Mesh | null> }) {
-  const mat = useMaterial(shading);
+  const theme = useTheme();
+  // the confidence map needs the mesh's sigmas; a mesh without them shows clay
+  const map = useMemo(() => shading === "confidence" && applyConfidenceColors(geometry, theme), [geometry, shading, theme]);
+  const mat = useMaterial(shading === "confidence" && !map ? "clay" : shading);
+  const invalidate = useThree((s) => s.invalidate);
+  useEffect(() => {
+    if (map) invalidate(); // new colours (the theme changed) with the same material and geometry
+  }, [map, theme, invalidate]);
   // Dark lines over the light surface ("flat lines"), lighter over the normals view.
   const wireColor = shading === "normals" ? "#ffffff" : "#141a22";
   const wire = useMemo(
@@ -62,6 +78,88 @@ export function Model({ geometry, shading, wireframe, meshRef }: { geometry: Buf
       <mesh ref={meshRef} geometry={geometry} material={mat} />
       {wireframe ? <mesh geometry={geometry} material={wire} raycast={() => null} renderOrder={1} /> : null}
     </>
+  );
+}
+
+/** A sigma in words: "±0.042 mm" (more digits for the small ones). */
+export function fmtSigma(s: number): string {
+  return `±${s < 0.1 ? s.toFixed(3) : s < 1 ? s.toFixed(2) : s.toFixed(1)} mm`;
+}
+
+/**
+ * The confidence map's readout: the sigma under the cursor, interpolated between the corners of
+ * the triangle hit (the measured ones), or "Not measured" (a filled hole). Hidden while dragging.
+ */
+function SigmaProbe({ target, sigma }: { target: RefObject<Mesh | null>; sigma: Float32Array }) {
+  const gl = useThree((s) => s.gl);
+  const camera = useThree((s) => s.camera);
+  const invalidate = useThree((s) => s.invalidate);
+  const [hit, setHit] = useState<{ p: Vec3; s: number | null } | null>(null);
+
+  useEffect(() => {
+    const el = gl.domElement;
+    const ray = new Raycaster() as Raycaster & { firstHitOnly?: boolean };
+    ray.firstHitOnly = true;
+    const ndc = new Vector2();
+    const tri = new Triangle();
+    const bary = new Vector3();
+    let raf = 0;
+    let last: PointerEvent | null = null;
+    const show = (h: { p: Vec3; s: number | null } | null) => {
+      setHit(h);
+      invalidate();
+    };
+    const probe = () => {
+      raf = 0;
+      const mesh = target.current;
+      if (!last || !mesh) return;
+      if (last.buttons) return show(null); // orbiting or panning
+      const r = el.getBoundingClientRect();
+      ndc.set(((last.clientX - r.left) / r.width) * 2 - 1, -((last.clientY - r.top) / r.height) * 2 + 1);
+      ray.setFromCamera(ndc, camera);
+      const h = ray.intersectObject(mesh, false)[0];
+      if (!h?.face) return show(null);
+      const p = mesh.worldToLocal(h.point.clone()); // world frame (OpenCV, mm)
+      const pos = mesh.geometry.getAttribute("position");
+      const { a, b, c } = h.face;
+      tri.setFromAttributeAndIndices(pos, a, b, c).getBarycoord(p, bary);
+      const w = [bary.x, bary.y, bary.z];
+      const s = [sigma[a], sigma[b], sigma[c]];
+      const near = w.indexOf(Math.max(...w));
+      let sum = 0;
+      let ws = 0;
+      for (let k = 0; k < 3; k++)
+        if (s[k] < SIGMA_NONE_MM) {
+          sum += Math.max(w[k], 0) * s[k];
+          ws += Math.max(w[k], 0);
+        }
+      show({ p: [p.x, p.y, p.z], s: s[near] < SIGMA_NONE_MM && ws > 0 ? sum / ws : null });
+    };
+    const onMove = (e: PointerEvent) => {
+      last = e;
+      if (!raf) raf = requestAnimationFrame(probe);
+    };
+    const onLeave = () => {
+      last = null;
+      show(null);
+    };
+    el.addEventListener("pointermove", onMove);
+    el.addEventListener("pointerleave", onLeave);
+    return () => {
+      if (raf) cancelAnimationFrame(raf);
+      el.removeEventListener("pointermove", onMove);
+      el.removeEventListener("pointerleave", onLeave);
+      setHit(null);
+    };
+  }, [gl, camera, target, sigma, invalidate]);
+
+  if (!hit) return null;
+  return (
+    <Html position={hit.p} zIndexRange={[25, 0]} className="html-label" style={{ pointerEvents: "none" }}>
+      <div className="ml-3 -translate-y-1/2 whitespace-nowrap rounded-full border border-white/15 bg-[rgb(17_20_25/0.88)] px-2 py-0.5 font-mono text-[11.5px] text-white shadow-lg tnum">
+        {hit.s === null ? "Not measured" : fmtSigma(hit.s)}
+      </div>
+    </Html>
   );
 }
 
@@ -239,10 +337,11 @@ export function ViewerCanvas({
   frameKey: number;
 }) {
   const meshRef = useRef<Mesh | null>(null);
+  const sigma = shading === "confidence" ? sigmaOf(geometry) : null;
   const [bvh, setBvh] = useState(false);
   useEffect(() => {
-    if (measure) setBvh(true); // build the raycast acceleration on first use only
-  }, [measure]);
+    if (measure || sigma) setBvh(true); // build the raycast acceleration on first use only
+  }, [measure, sigma]);
 
   const bounds = useMemo(() => {
     if (!geometry.boundingSphere) geometry.computeBoundingSphere();
@@ -271,6 +370,7 @@ export function ViewerCanvas({
         <group rotation={CV_TO_THREE_ROTATION}>
           {bvh ? <Bvh firstHitOnly>{model}</Bvh> : model}
           {laser && showLaser ? <LaserCloud geometry={laser} size={1.6} /> : null}
+          {sigma ? <SigmaProbe target={meshRef} sigma={sigma} /> : null}
           <MeasureTool
             enabled={measure}
             target={meshRef}

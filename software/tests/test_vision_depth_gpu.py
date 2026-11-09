@@ -278,6 +278,27 @@ def test_gpu_against_cpu_against_ground_truth(gpu, sim_frames):
     assert abs(mean(g, "bias")) < 0.1 and mean(g, "median") < 0.6
 
 
+def test_depth_sigma_is_calibrated(sim_frames):
+    """compute_with_sigma: the depth of compute(), a sigma exactly where there is depth, and 2 sigma
+    covering about 95 % of the true error on both backends (the GPU part needs a GPU)."""
+    frames, K, baseline = sim_frames
+    params = default_depth_params(effective_scale(frames[0][0].shape[1]))
+    backends = ["cpu"] + (["gpu"] if compute.get_device() is not None else [])
+    for be in backends:
+        est = DepthEstimator(K, baseline, DepthParams(**{**params.__dict__, "backend": be}))
+        assert est.backend == be
+        inside = n = 0
+        for left, right, gt in frames:
+            d, s = est.compute_with_sigma(left, right)
+            assert np.array_equal(d, est.compute(left, right))
+            assert np.array_equal(s > 0, d > 0) and np.all(np.isfinite(s))
+            m = (d > 0) & (gt > 0)
+            inside += int(np.sum(np.abs(d[m] - gt[m]) < 2 * s[m]))
+            n += int(m.sum())
+        print(be, "2-sigma coverage", round(inside / n, 4))
+        assert 0.9 < inside / n < 0.995, be  # calibrated on other simulated frames: 96-97 % (VALIDATION.md)
+
+
 # --------------------------------------------------------------------------- the OpenCV twins
 def _matcher(gpu, w=320, h=200, params=None):
     from ohs.vision.depth_gpu import GpuStereoMatcher

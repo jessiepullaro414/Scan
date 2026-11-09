@@ -1,7 +1,8 @@
 /**
- * Scan result viewer: loads `mesh.ply` from the engine (PLYLoader), studio shading, wireframe,
- * normals and laser-point overlays, two-click distance measurement, bounding box in mm,
- * downloads and the processing report.
+ * Scan result viewer: loads `mesh.ply` from the engine (the fast PLY reader), studio shading,
+ * wireframe, normals, the confidence map (each point's sigma, when the mesh has them) and
+ * laser-point overlays, two-click distance measurement, bounding box in mm, downloads and the
+ * processing report.
  */
 import {
   ArrowLeft,
@@ -21,6 +22,7 @@ import {
   Brush,
   Orbit,
   SlidersHorizontal,
+  Target,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { BufferGeometry } from "three";
@@ -40,8 +42,11 @@ import { describeReason } from "../lib/tracking";
 import { cn, useHotkeys } from "../lib/util";
 import { isActive, useScanJob } from "../store/jobs";
 import { useProjects } from "../store/projects";
+import { sigmaOf } from "../three/confidence";
+import { plyGeometry, readPly } from "../three/ply";
 import { viewBus } from "../three/viewBus";
-import { ViewerCanvas, type Measurement, type Shading, type Vec3 } from "./viewer/ViewerCanvas";
+import { ConfidenceLegend } from "./viewer/ConfidenceLegend";
+import { fmtSigma, ViewerCanvas, type Measurement, type Shading, type Vec3 } from "./viewer/ViewerCanvas";
 
 type Load =
   | { phase: "idle" }
@@ -60,6 +65,7 @@ function urlsFor(project: Project, scan: Scan) {
   };
 }
 
+/** The laser point cloud (points, maybe coloured). */
 function parsePly(buf: ArrayBuffer): BufferGeometry {
   const g = new PLYLoader().parse(buf);
   if (g.index && !g.getAttribute("normal")) g.computeVertexNormals();
@@ -81,6 +87,7 @@ function ReportSummary({ report }: { report: Rec }) {
   const failures = obj(report.failures);
   const gtTrans = obj(gt?.trans_mm);
   const gtRot = obj(gt?.rot_deg);
+  const sigma = obj(mesh?.sigma_mm);
   const failureRows = failures ? Object.entries(failures).filter(([, v]) => num(v)) : [];
   return (
     <div className="space-y-4">
@@ -98,6 +105,15 @@ function ReportSummary({ report }: { report: Rec }) {
             : null,
           typeof report.mode === "string" ? ["Mode", report.mode === "markers" ? "Markers" : "Markerless"] : null,
           mesh && typeof mesh.method === "string" ? ["Meshing", `${mesh.method.toUpperCase()}${num(mesh.voxel_mm) !== null ? ` · ${fmtFixed(num(mesh.voxel_mm), 2)} mm voxels` : ""}`] : null,
+          sigma && num(sigma.median) !== null
+            ? [
+                "Uncertainty",
+                <span className="tnum" title="Each point's 1σ, as fused (before any edits)">
+                  median {fmtSigma(num(sigma.median)!)}
+                  {num(sigma.within_0_1) !== null ? <span className="text-muted"> · {fmtPct(num(sigma.within_0_1))} within 0.1 mm</span> : null}
+                </span>,
+              ]
+            : null,
           lasers && num(lasers.n_points_exported) !== null ? ["Laser points", <span className="tnum">{fmtInt(num(lasers.n_points_exported))}</span>] : null,
           num(report.wall_time_s) !== null ? ["Processing time", fmtDuration(num(report.wall_time_s))] : null,
           typeof report.source === "string" ? ["Source", report.source === "sim" ? "Simulator" : report.source] : null,
@@ -211,7 +227,7 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
             // Let the "Preparing" state paint before the synchronous parse.
             setTimeout(() => {
               try {
-                const g = parsePly(buf);
+                const g = plyGeometry(readPly(buf));
                 geomRef.current?.dispose();
                 geomRef.current = g;
                 setLoad({ phase: "ready", geometry: g, bytes: buf.byteLength });
@@ -306,6 +322,7 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
     "1": () => setShading("clay"),
     "2": () => setShading("studio"),
     "3": () => setShading("normals"),
+    "4": () => hasSigma && setShading("confidence"),
     escape: () => {
       if (pendingRef.current) setPendingPoint(null);
       else if (measure) setMeasure(false);
@@ -313,6 +330,9 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
   });
 
   const geometry = load.phase === "ready" ? load.geometry : null;
+  // the confidence map needs each point's sigma (meshes made with the confidence reconstruction)
+  const hasSigma = !!sigmaOf(geometry);
+  const shown: Shading = shading === "confidence" && !hasSigma ? "clay" : shading;
   const box = geometry?.boundingBox ?? null;
   const size = box ? { x: box.max.x - box.min.x, y: box.max.y - box.min.y, z: box.max.z - box.min.z } : null;
   const tris = geometry ? (geometry.index ? geometry.index.count / 3 : geometry.getAttribute("position").count / 3) : 0;
@@ -428,7 +448,7 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
             <ViewerCanvas
               geometry={geometry}
               laser={laser}
-              shading={shading}
+              shading={shown}
               wireframe={wireframe}
               showLaser={showLaser}
               measure={measure}
@@ -459,12 +479,21 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
               <Segmented<Shading>
                 label="Shading"
                 size="sm"
-                value={shading}
+                value={shown}
                 onChange={setShading}
                 options={[
                   { value: "clay", label: "Clay", icon: Brush, title: "Matcap clay (1)" },
                   { value: "studio", label: "Studio", icon: Sparkles, title: "Studio lighting (2)" },
                   { value: "normals", label: "Normals", icon: Orbit, title: "Normal shading (3)" },
+                  {
+                    value: "confidence",
+                    label: "Confidence",
+                    icon: Target,
+                    disabled: !hasSigma,
+                    title: hasSigma
+                      ? "How well each point was measured (4)"
+                      : "This mesh has no confidence data: it was made without a GPU or by an earlier version. Make it again to get it.",
+                  },
                 ]}
               />
               <span className="mx-1 h-5 w-px bg-line-strong" aria-hidden />
@@ -497,6 +526,12 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
             </div>
           ) : null}
         </div>
+
+        {shown === "confidence" && geometry ? (
+          <div className="glass absolute bottom-4 left-4 animate-pop-in rounded-xl border border-line-strong px-3 py-2.5 shadow-md">
+            <ConfidenceLegend geometry={geometry} />
+          </div>
+        ) : null}
 
         {measure && geometry ? (
           <div className="pointer-events-none absolute bottom-5 left-1/2 -translate-x-1/2">
@@ -695,7 +730,7 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
               <Kbd>L</Kbd> laser points
             </span>
             <span>
-              <Kbd>1</Kbd>–<Kbd>3</Kbd> shading
+              <Kbd>1</Kbd>–<Kbd>{hasSigma ? 4 : 3}</Kbd> shading
             </span>
           </div>
           {tris > 0 ? <div className="sr-only">{fmtCompact(tris)} triangles</div> : null}

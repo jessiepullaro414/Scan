@@ -6,10 +6,8 @@
  */
 import { useEffect, useRef, useState } from "react";
 import { BufferAttribute, BufferGeometry, DynamicDrawUsage } from "three";
-import { PLYLoader } from "three/examples/jsm/loaders/PLYLoader.js";
 import { ApiError, api } from "../../api/http";
-import { boundsOf } from "../../three/coords";
-import { parsePly, vertexNormals, type PlyMesh } from "../../three/ply";
+import { plyGeometry, readPly, type PlyMesh } from "../../three/ply";
 import { MeshSelection } from "./selection";
 
 export type LoadedMesh = {
@@ -27,43 +25,8 @@ export type MeshLoad =
   | { phase: "parse"; version: number }
   | { phase: "error"; error: ApiError | Error; version: number };
 
-/** PLY bytes into typed arrays; the fast reader first, three's PLYLoader for anything else. */
-export function readPly(buf: ArrayBuffer): PlyMesh {
-  const fast = parsePly(buf);
-  if (fast) return fast;
-  const g = new PLYLoader().parse(buf);
-  const pos = g.getAttribute("position");
-  if (!pos || !g.index) throw new Error("the file has no triangles");
-  const positions = pos.array instanceof Float32Array ? pos.array : Float32Array.from(pos.array as ArrayLike<number>);
-  const idx = g.index.array;
-  const indices = idx instanceof Uint32Array ? idx : Uint32Array.from(idx as ArrayLike<number>);
-  const n = g.getAttribute("normal");
-  const normals = n ? (n.array instanceof Float32Array ? n.array : Float32Array.from(n.array as ArrayLike<number>)) : null;
-  g.dispose();
-  return { positions, normals, indices, faceOfTri: null, faceCount: indices.length / 3 };
-}
-
-function hasNormals(n: Float32Array | null): n is Float32Array {
-  if (!n || !n.length) return false;
-  const step = Math.max(3, Math.floor(n.length / 3 / 64) * 3);
-  for (let i = 0; i < n.length; i += step) if (n[i] !== 0 || n[i + 1] !== 0 || n[i + 2] !== 0) return true;
-  return false;
-}
-
 export function makeLoadedMesh(ply: PlyMesh, version: number, bytes: number): LoadedMesh {
-  const g = new BufferGeometry();
-  g.setAttribute("position", new BufferAttribute(ply.positions, 3));
-  g.setAttribute("normal", new BufferAttribute(hasNormals(ply.normals) ? ply.normals : vertexNormals(ply.positions, ply.indices), 3));
-  g.setIndex(new BufferAttribute(ply.indices, 1));
-  const b = boundsOf(ply.positions, ply.positions.length / 3);
-  if (b) {
-    g.boundingBox = b.box;
-    g.boundingSphere = b.sphere;
-  } else {
-    g.computeBoundingBox();
-    g.computeBoundingSphere();
-  }
-  return { version, geometry: g, selection: new MeshSelection(version, ply.positions, ply.indices, ply.faceOfTri), bytes, highlight: null };
+  return { version, geometry: plyGeometry(ply), selection: new MeshSelection(version, ply.positions, ply.indices, ply.faceOfTri), bytes, highlight: null };
 }
 
 /** The highlight geometry of a mesh: its positions, and an index of the selected faces. */

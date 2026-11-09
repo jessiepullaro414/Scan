@@ -21,6 +21,10 @@ normals), ``mesh.stl`` and, when ``[process] export`` asks for it, ``mesh.obj``,
 atomically, and ``version`` goes up by one on every change. "Make mesh" (``process_scan``, M1)
 and ``process_recipe`` jobs run the stages and ops of a :class:`Recipe`.
 
+**Confidence.** When the stage's mesh carries each vertex's sigma (the PLY ``quality`` of the
+confidence reconstruction), every step keeps it (:func:`ohs.mesh.carry_sigma`: filled holes
+are "not measured", 50 mm), the stats get ``sigma_mm`` and ``result/mesh.ply`` its ``quality``.
+
 **Files** (``scans/<sid>/process/``)::
 
     state.json             stages, base, edits, cursor, version, the stats of every cached step
@@ -29,7 +33,7 @@ and ``process_recipe`` jobs run the stages and ops of a :class:`Recipe`.
     straighten/            the fuse at the corrected poses (same files) + straighten.json
     straighten.json        the loop-closure report of the last straighten (also when skipped)
     fuse/                  the fuse at the current poses and the chosen voxel size
-    cache/base.npz         the base mesh (V float32, F int32, vertex normals float16)
+    cache/base.npz         the base mesh (V float32, F int32, vertex normals float16, sigmas float32)
     cache/<edit id>.npz    the mesh after that edit, for the steps within 10 of the cursor
     selections/<id>.npy    the face indices of a delete / keep edit (to replay it)
 
@@ -367,27 +371,28 @@ def _write_json(path: Path, data: Any) -> None:
     _retry(lambda: os.replace(tmp, path), f"replacing {path}")
 
 
-def _save_npz(path: Path, V: np.ndarray, F: np.ndarray, N: np.ndarray | None = None) -> None:
-    """A cached step: V float32, F int32 and, when given, the vertex normals (float16)."""
+def _save_npz(path: Path, V: np.ndarray, F: np.ndarray, N: np.ndarray | None = None,
+              S: np.ndarray | None = None) -> None:
+    """A cached step: V float32, F int32 and, when given, the vertex normals (float16) and sigmas
+    (float32, mm)."""
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(f".{path.stem}.tmp-{uuid.uuid4().hex[:8]}.npz")
     arrays = {"V": np.asarray(V, dtype=np.float32), "F": np.asarray(F, dtype=np.int32)}
     if N is not None:
         arrays["N"] = np.asarray(N, dtype=np.float16)
+    if S is not None:
+        arrays["S"] = np.asarray(S, dtype=np.float32)
     with open(tmp, "wb") as fh:
         np.savez(fh, **arrays)
     _retry(lambda: os.replace(tmp, path), f"replacing {path}")
 
 
-def _load_npz(path: Path) -> tuple[np.ndarray, np.ndarray]:
+def _load_npz(path: Path, normals: bool = False) -> tuple[np.ndarray, np.ndarray, np.ndarray | None, np.ndarray | None]:
+    """``(V, F, N, S)`` of a cached step; ``N`` only when asked for, None when not stored (like ``S``)."""
     with np.load(path) as z:
-        return z["V"].astype(np.float64), z["F"].astype(np.int64)
-
-
-def _load_npz_normals(path: Path) -> tuple[np.ndarray, np.ndarray, np.ndarray | None]:
-    with np.load(path) as z:
-        N = z["N"].astype(np.float32) if "N" in z.files else None
-        return z["V"].astype(np.float64), z["F"].astype(np.int64), N
+        N = z["N"].astype(np.float32) if normals and "N" in z.files else None
+        S = z["S"].astype(np.float32) if "S" in z.files else None
+        return z["V"].astype(np.float64), z["F"].astype(np.int64), N, S
 
 
 _STL = np.dtype([("n", "<f4", (3,)), ("v", "<f4", (3, 3)), ("attr", "<u2")])
@@ -440,13 +445,27 @@ def read_trajectory(path: str | Path) -> list[tuple[int, float, bool, np.ndarray
     return out
 
 
-def _clean_mesh(V: np.ndarray, F: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+def _read_stage_mesh(path: Path) -> tuple[np.ndarray, np.ndarray, np.ndarray | None]:
+    """A stage's ``mesh.ply`` as ``(V, F, S)``: degenerate faces and unused vertices dropped; ``S``
+    (each vertex's sigma, the PLY ``quality``) is None when the file has none."""
     from ohs.mesh.topology import compact
+    from ohs.track.export import load_ply
 
-    F = np.asarray(F, dtype=np.int64).reshape(-1, 3)
+    d = load_ply(path)
+    V = np.asarray(d["vertices"], dtype=np.float64)
+    F = np.zeros((0, 3), dtype=np.int64) if d["faces"] is None else np.asarray(d["faces"], dtype=np.int64).reshape(-1, 3)
     F = F[(F[:, 0] != F[:, 1]) & (F[:, 1] != F[:, 2]) & (F[:, 0] != F[:, 2])]
-    V2, F2, _ = compact(np.asarray(V, dtype=np.float64), F)
-    return V2, F2
+    V2, F2, idx = compact(V, F)
+    S = d.get("quality")
+    S = np.asarray(S, dtype=np.float32)[idx] if S is not None and len(S) == len(V) else None
+    return V2, F2, S
+
+
+def _stats(V: np.ndarray, F: np.ndarray, S: np.ndarray | None) -> dict:
+    """``MeshStats`` with the confidence (``sigma_mm``, None without sigmas)."""
+    from ohs.mesh import mesh_stats, sigma_stats
+
+    return {**mesh_stats(V, F), "sigma_mm": sigma_stats(S, V, F)}
 
 
 # --------------------------------------------------------------------------- per scan
@@ -618,16 +637,14 @@ class ProcessManager:
         res = sp.result_dir
         if not (res / "mesh.ply").is_file():
             return
-        from ohs.mesh import mesh_stats, vertex_normals
-        from ohs.track.export import load_mesh
+        from ohs.mesh import vertex_normals
 
         track = sp.dir / "track"
         track.mkdir(parents=True, exist_ok=True)
         for name in ("mesh.ply", "trajectory.csv", "report.json", "laser_points.ply", "marker_map.json"):
             if (res / name).is_file():
                 shutil.copy2(res / name, track / name)
-        V, F, _ = load_mesh(res / "mesh.ply")
-        V, F = _clean_mesh(V, F)
+        V, F, S = _read_stage_mesh(res / "mesh.ply")
         report = {}
         try:
             report = json.loads((res / "report.json").read_text(encoding="utf-8"))
@@ -642,10 +659,10 @@ class ProcessManager:
                     quality=quality if quality in ("preview", "full") else None,
                     tracked_pct=round(100 * float(frac), 1) if isinstance(frac, (int, float)) else None,
                     summary=self._track_summary(report, quality))
-        stats = mesh_stats(V, F)
+        stats = _stats(V, F, S)
         st["base"] = {"triangles": int(len(F)), "vertices": int(len(V)), "stage": "track", "stats": stats}
         st["edits"], st["cursor"], st["version"] = [], 0, 1
-        _save_npz(sp.cache_path(0), V, F, vertex_normals(V, F))
+        _save_npz(sp.cache_path(0), V, F, vertex_normals(V, F), S)
         sp.save()
         log.info("scan %s/%s: the earlier result is now the track stage of the processing studio", sp.pid, sp.sid)
 
@@ -750,24 +767,35 @@ class ProcessManager:
     # ------------------------------------------------------------------ mesh access
     def load_step(self, sp: ScanProcess, k: int) -> tuple[np.ndarray, np.ndarray]:
         """The mesh after ``k`` edits: from the cache, else replayed from the nearest cached step."""
+        return self._load_step(sp, k)[:2]
+
+    def _load_step(self, sp: ScanProcess, k: int) -> tuple[np.ndarray, np.ndarray, np.ndarray | None]:
+        """:meth:`load_step` with each vertex's sigma (None when the base has none)."""
+        from ohs.mesh import carry_sigma
+
         with sp.lock:
             path = sp.cache_path(k)
             if path.is_file():
-                return _load_npz(path)
+                V, F, _, S = _load_npz(path)
+                return V, F, S
             j = k - 1
             while j > 0 and not sp.cache_path(j).is_file():
                 j -= 1
             if not sp.cache_path(j).is_file():
                 raise ApiError(500, "the base mesh of this scan is missing from the process folder",
                                "run the last stage again (Track, Straighten or Fuse)")
-            V, F = _load_npz(sp.cache_path(j))
+            V, F, _, S = _load_npz(sp.cache_path(j))
             edits = sp.state["edits"]
             log.info("scan %s/%s: rebuilding step %d from step %d (%d edits)", sp.pid, sp.sid, k, j, k - j)
             for i in range(j, k):
-                V, F = self._apply(sp, edits[i]["op"], edits[i]["params"], V, F, edit_id=edits[i]["id"])
+                e = edits[i]
+                faces = np.load(sp.selection_path(str(e["id"]))) if e["op"] in ("delete_faces", "keep_faces") else None
+                V2, F2 = self._apply(sp, e["op"], e["params"], V, F, edit_id=e["id"], faces=faces)
+                S = carry_sigma(e["op"], V, F, S, V2, faces)
+                V, F = V2, F2
                 if i + 1 >= k - CACHE_STEPS:
-                    _save_npz(sp.cache_path(i + 1), V, F)
-            return V, F
+                    _save_npz(sp.cache_path(i + 1), V, F, S=S)
+            return V, F, S
 
     def current_mesh(self, sp: ScanProcess) -> tuple[np.ndarray, np.ndarray]:
         self._need_base(sp)
@@ -779,19 +807,23 @@ class ProcessManager:
             fmts.append("obj")
         return tuple(fmts)
 
-    def _write_result(self, sp: ScanProcess, V: np.ndarray, F: np.ndarray, N: np.ndarray | None = None) -> None:
+    def _write_result(self, sp: ScanProcess, V: np.ndarray, F: np.ndarray, N: np.ndarray | None = None,
+                      S: np.ndarray | None = None) -> None:
+        """The result files of a step; the PLY carries each vertex's sigma (``quality``) when known."""
         from ohs.mesh import vertex_normals
         from ohs.track.export import save_mesh
 
         sp.result_dir.mkdir(parents=True, exist_ok=True)
         if N is None:
             N = vertex_normals(V, F)
+        if S is not None and len(S) != len(V):
+            S = None
         for ext in self._formats():
             tmp = sp.result_dir / f".mesh-{uuid.uuid4().hex[:8]}.{ext}"
             if ext == "stl":
                 _write_stl(tmp, V, F)
             else:
-                save_mesh(tmp, V, F, N)
+                save_mesh(tmp, V, F, N, quality=S if ext == "ply" else None)
             dst = sp.result_dir / f"mesh.{ext}"
             _retry(lambda t=tmp, d=dst: os.replace(t, d), f"replacing {dst}")
         stale = sp.result_dir / "mesh.obj"
@@ -799,18 +831,18 @@ class ProcessManager:
             safe_call("removing an old mesh.obj", stale.unlink)
 
     def _show_step(self, sp: ScanProcess, k: int, V: np.ndarray | None = None, F: np.ndarray | None = None,
-                   N: np.ndarray | None = None) -> None:
+                   N: np.ndarray | None = None, S: np.ndarray | None = None) -> None:
         """Make step ``k`` the current mesh: result files, version + 1, save (under the scan lock).
 
-        Undo / redo pass no mesh: the cached step (with its normals) is loaded."""
+        Undo / redo pass no mesh: the cached step (with its normals and sigmas) is loaded."""
         if V is None:
             path = sp.cache_path(k)
             if path.is_file():
-                V, F, N = _load_npz_normals(path)
+                V, F, N, S = _load_npz(path, normals=True)
             else:
-                V, F = self.load_step(sp, k)
+                V, F, S = self._load_step(sp, k)
         sp.state["cursor"] = k
-        self._write_result(sp, V, F, N)
+        self._write_result(sp, V, F, N, S)
         sp.state["version"] = int(sp.state["version"]) + 1
         sp.prune_cache()
         sp.save()
@@ -861,12 +893,12 @@ class ProcessManager:
 
     def _commit_edit(self, sp: ScanProcess, op: str, params: dict, label: str, V: np.ndarray, F: np.ndarray,
                      ms: float, summary: str, job_id: str | None, faces: np.ndarray | None = None,
-                     stats: dict | None = None) -> dict:
+                     stats: dict | None = None, S: np.ndarray | None = None) -> dict:
         """Append an edit after the cursor (the redo steps are dropped) and show it."""
-        from ohs.mesh import mesh_stats, vertex_normals
+        from ohs.mesh import vertex_normals
 
         if stats is None:
-            stats = mesh_stats(V, F)
+            stats = _stats(V, F, S)
         N = vertex_normals(V, F)
         with sp.lock:
             k = sp.state["cursor"]
@@ -879,19 +911,19 @@ class ProcessManager:
                 sp.selection_path(eid).parent.mkdir(parents=True, exist_ok=True)
                 np.save(sp.selection_path(eid), faces.astype(np.int64))
             sp.state["edits"].append(entry)
-            _save_npz(sp.cache_path(k + 1), V, F, N)
-            self._show_step(sp, k + 1, V, F, N)
+            _save_npz(sp.cache_path(k + 1), V, F, N, S)
+            self._show_step(sp, k + 1, V, F, N, S)
             return {key: v for key, v in entry.items() if key != "stats"}
 
     def _run_edit(self, ctx: Any, sp: ScanProcess, op: str, params: dict, label: str, prog: _Prog,
                   faces: np.ndarray | None = None) -> dict:
-        from ohs.mesh import mesh_stats
+        from ohs.mesh import carry_sigma
 
         with sp.lock:
             k = sp.state["cursor"]
             before = sp.stats_at(k)
         prog(0.02, f"{label}: loading the mesh", force=True)
-        V, F = self.load_step(sp, k)
+        V, F, S = self._load_step(sp, k)
         t0 = time.perf_counter()
         V2, F2 = self._apply(sp, op, params, V, F, faces=faces,
                              progress=lambda f, m=None: prog(0.05 + 0.8 * f, f"{label}: {m}" if m else label))
@@ -900,10 +932,11 @@ class ProcessManager:
             raise ApiError(409, "this would remove the whole mesh", "change the settings or the selection")
         ctx.check()
         prog(0.88, f"{label}: measuring the result", force=True)
-        stats = mesh_stats(V2, F2)
+        S2 = carry_sigma(op, V, F, S, V2, faces)
+        stats = _stats(V2, F2, S2)
         summary = self._summary(op, params, V, F, V2, F2, before, stats)
         prog(0.94, f"{label}: saving", force=True)
-        return self._commit_edit(sp, op, params, label, V2, F2, ms, summary, ctx.job.id, faces, stats)
+        return self._commit_edit(sp, op, params, label, V2, F2, ms, summary, ctx.job.id, faces, stats, S2)
 
     def submit_edit(self, pid: str, sid: str, op: str, params: dict | None, version: int | None = None) -> Any:
         if op not in MESH_OPS:
@@ -1027,12 +1060,10 @@ class ProcessManager:
 
     def _new_base(self, sp: ScanProcess, stage: str, stage_dir: Path, report: dict, quality: str | None) -> None:
         """The stage's mesh becomes the base; the edits are cleared and the result files updated."""
-        from ohs.mesh import mesh_stats, vertex_normals
-        from ohs.track.export import load_mesh
+        from ohs.mesh import vertex_normals
 
-        V, F, _ = load_mesh(stage_dir / "mesh.ply")
-        V, F = _clean_mesh(V, F)
-        stats = mesh_stats(V, F)
+        V, F, S = _read_stage_mesh(stage_dir / "mesh.ply")
+        stats = _stats(V, F, S)
         N = vertex_normals(V, F)
         with sp.lock:
             sp.drop_edits_after(0)
@@ -1040,7 +1071,7 @@ class ProcessManager:
                 safe_call(f"removing {f}", f.unlink)
             sp.state["base"] = {"triangles": int(len(F)), "vertices": int(len(V)), "stage": stage, "stats": stats}
             sp.state["edits"], sp.state["cursor"] = [], 0
-            _save_npz(sp.cache_path(0), V, F, N)
+            _save_npz(sp.cache_path(0), V, F, N, S)
             sp.result_dir.mkdir(parents=True, exist_ok=True)
             for name in ("report.json", "trajectory.csv", "laser_points.ply", "marker_map.json"):
                 src = stage_dir / name
@@ -1048,7 +1079,7 @@ class ProcessManager:
                     tmp = sp.result_dir / f".{name}.tmp-{uuid.uuid4().hex[:8]}"
                     shutil.copy2(src, tmp)
                     _retry(lambda t=tmp, d=sp.result_dir / name: os.replace(t, d), f"replacing {name}")
-            self._show_step(sp, 0, V, F, N)
+            self._show_step(sp, 0, V, F, N, S)
         summary = report_summary(report)
         if quality:
             summary["quality"] = quality

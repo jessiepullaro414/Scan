@@ -6,13 +6,20 @@
  * current mesh back to the engine. Faces with more than three corners are split into fans;
  * `faceOfTri` then maps each triangle back to its face in the file.
  *
- * Returns null for anything it doesn't handle (ASCII PLY, no faces…): use PLYLoader then.
+ * Returns null for anything it doesn't handle (ASCII PLY, no faces…): use PLYLoader then
+ * ({@link readPly} does both). {@link plyGeometry} makes the three.js geometry of a mesh, with
+ * its sigmas (the `quality`) in `userData.sigma` for the confidence map.
  */
+import { BufferAttribute, BufferGeometry } from "three";
+import { PLYLoader } from "three/examples/jsm/loaders/PLYLoader.js";
+import { boundsOf } from "./coords";
 
 export type PlyMesh = {
   positions: Float32Array;
   /** Per-vertex normals when the file has them. */
   normals: Float32Array | null;
+  /** Each vertex's `quality` when the file has it: OpenHandScan writes its sigma there (mm). */
+  quality: Float32Array | null;
   indices: Uint32Array;
   /** The file's face of each triangle, or null when every face is a triangle (1:1). */
   faceOfTri: Uint32Array | null;
@@ -101,6 +108,7 @@ export function parsePly(buf: ArrayBuffer): PlyMesh | null {
 
   let positions: Float32Array | null = null;
   let normals: Float32Array | null = null;
+  let quality: Float32Array | null = null;
   let indices: Uint32Array | null = null;
   let faceOfTri: Uint32Array | null = null;
   let faceCount = 0;
@@ -157,6 +165,11 @@ export function parsePly(buf: ArrayBuffer): PlyMesh | null {
             normals![w + 2] = nz!.read(r + nz!.at);
           }
         }
+      }
+      const q = off.quality;
+      if (q) {
+        quality = new Float32Array(V);
+        for (let i = 0, r = o + q.at; i < V; i++, r += stride) quality[i] = q.read(r);
       }
       o += V * stride;
     } else if (el.name === "face") {
@@ -245,7 +258,48 @@ export function parsePly(buf: ArrayBuffer): PlyMesh | null {
   if (!positions || !indices) return null;
   const V = positions.length / 3;
   for (let i = 0; i < indices.length; i++) if (indices[i] >= V) return null;
-  return { positions, normals, indices, faceOfTri, faceCount };
+  return { positions, normals, quality, indices, faceOfTri, faceCount };
+}
+
+/** PLY bytes into typed arrays; the fast reader first, three's PLYLoader for anything else. */
+export function readPly(buf: ArrayBuffer): PlyMesh {
+  const fast = parsePly(buf);
+  if (fast) return fast;
+  const g = new PLYLoader().parse(buf);
+  const pos = g.getAttribute("position");
+  if (!pos || !g.index) throw new Error("the file has no triangles");
+  const positions = pos.array instanceof Float32Array ? pos.array : Float32Array.from(pos.array as ArrayLike<number>);
+  const idx = g.index.array;
+  const indices = idx instanceof Uint32Array ? idx : Uint32Array.from(idx as ArrayLike<number>);
+  const n = g.getAttribute("normal");
+  const normals = n ? (n.array instanceof Float32Array ? n.array : Float32Array.from(n.array as ArrayLike<number>)) : null;
+  g.dispose();
+  return { positions, normals, quality: null, indices, faceOfTri: null, faceCount: indices.length / 3 };
+}
+
+function hasNormals(n: Float32Array | null): n is Float32Array {
+  if (!n || !n.length) return false;
+  const step = Math.max(3, Math.floor(n.length / 3 / 64) * 3);
+  for (let i = 0; i < n.length; i += step) if (n[i] !== 0 || n[i + 1] !== 0 || n[i + 2] !== 0) return true;
+  return false;
+}
+
+/** The geometry of a mesh: positions, normals (computed when the file has none), index, bounds; sigmas in `userData.sigma`. */
+export function plyGeometry(ply: PlyMesh): BufferGeometry {
+  const g = new BufferGeometry();
+  g.setAttribute("position", new BufferAttribute(ply.positions, 3));
+  g.setAttribute("normal", new BufferAttribute(hasNormals(ply.normals) ? ply.normals : vertexNormals(ply.positions, ply.indices), 3));
+  g.setIndex(new BufferAttribute(ply.indices, 1));
+  const b = boundsOf(ply.positions, ply.positions.length / 3);
+  if (b) {
+    g.boundingBox = b.box;
+    g.boundingSphere = b.sphere;
+  } else {
+    g.computeBoundingBox();
+    g.computeBoundingSphere();
+  }
+  if (ply.quality && ply.quality.length * 3 === ply.positions.length) g.userData.sigma = ply.quality;
+  return g;
 }
 
 /** Area-weighted vertex normals. */

@@ -31,7 +31,9 @@ def _depth(K: np.ndarray, w: int, h: int) -> np.ndarray:
 
 @pytest.fixture(scope="module")
 def pipe():
-    p = FramePipeline(nominal_calibration((1280, 800)), PipelineParams(scale=0.5, use_imu=False, use_lasers=False))
+    # like the live session: Open3D's TSDF (rewind rescales its weights), not the confidence TSDF
+    p = FramePipeline(nominal_calibration((1280, 800)),
+                      PipelineParams(scale=0.5, use_imu=False, use_lasers=False, recon="open3d"))
     yield p
     p.close()
 

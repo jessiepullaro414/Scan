@@ -210,16 +210,27 @@ def test_tracking_filter_at_the_tracking_resolution():
 
 
 def test_model_backends_per_model():
-    """Only the tracking model follows fusion.model_backend; the reconstruction model (and the
-    single model of track_filter_px=0) stays Open3D because it makes the mesh."""
+    """Only the tracking model follows fusion.model_backend. The reconstruction model is the
+    confidence TSDF on a GPU (recon "auto") and Open3D otherwise; the single model of
+    track_filter_px=0 is always Open3D, because it also tracks."""
     from ohs import compute
 
     calib = nominal_calibration()
-    expect = "gpu" if compute.get_device() is not None else "open3d"
+    gpu = compute.get_device() is not None
+    expect = "gpu" if gpu else "open3d"
     with FramePipeline(calib, PipelineParams(scale=0.5, use_lasers=False)) as pipe:
         assert pipe.dual_model and pipe.model_backend == expect and pipe.tracker.model_backend == expect
-        assert pipe.markerless.model_backend == "open3d" and pipe.fusion_params.model_backend == "open3d"
+        assert pipe.markerless.model_backend == ("confidence-gpu" if gpu else "open3d") and pipe.has_confidence == gpu
         assert pipe.track_fusion_params.model_backend == "auto" and pipe.model_device and pipe.model_status
+        assert ("confidence" in pipe.recon_status) == gpu
+    with FramePipeline(calib, PipelineParams(scale=0.5, use_lasers=False, recon="open3d")) as pipe:
+        assert pipe.markerless.model_backend == "open3d" and not pipe.has_confidence
+    with FramePipeline(calib, PipelineParams(scale=0.5, use_lasers=False, recon="confidence")) as pipe:
+        assert pipe.has_confidence  # the numpy twin when there is no GPU
+    with FramePipeline(calib, PipelineParams(scale=0.5, use_lasers=False, tracking=False)) as pipe:
+        assert pipe.tracker is None and pipe.has_confidence == gpu
+        with pytest.raises(ValueError, match="pose"):
+            pipe.process(StereoFrame(0, 0.0, np.zeros((800, 1280), np.uint8), np.zeros((800, 1280), np.uint8)))
     with FramePipeline(calib, PipelineParams(scale=0.5, use_lasers=False, fusion=FusionParams(model_backend="open3d"))) as pipe:
         assert pipe.model_backend == "open3d"
     with FramePipeline(calib, PipelineParams(scale=0.5, use_lasers=False, track_filter_px=0.0)) as pipe:

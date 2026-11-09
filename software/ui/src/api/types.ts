@@ -459,6 +459,16 @@ export type MeshStats = {
   bbox_mm: [number, number, number];
   area_cm2: number;
   volume_cm3: number | null; // only when watertight
+  /** The confidence, when the mesh has per-vertex sigmas (the PLY `quality`); shares of the surface. */
+  sigma_mm?: SigmaStats | null;
+};
+
+export type SigmaStats = {
+  median: number; // mm
+  p95: number; // mm
+  within_0_1: number; // share of the surface with sigma <= 0.1 mm
+  within_0_3: number;
+  not_measured: number; // filled holes (sigma 50 mm)
 };
 
 export type EditEntry = {

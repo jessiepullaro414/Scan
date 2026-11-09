@@ -474,6 +474,13 @@ Phase 1 is done when full-quality processing is at least 3x faster on the RTX la
    - fusion weighted by it, with error bars that don't over-trust consecutive frames, which see nearly the same thing ("honest averaging");
    - the 1 mm reconstruction TSDF moves to the GPU;
    - a per-vertex confidence map shown in the viewer.
+
+   **Status (2026-11-09): done, except the weighting. Fusion averages; the sigmas measure.**
+   - Every depth pixel has a calibrated sigma: 2σ covers the true depth error for 96.7 % of the pixels on the GPU and 95.9 % on the CPU (simulated).
+   - The 1 mm reconstruction TSDF runs on the GPU (about 20–28 ms a frame at full resolution) and averages like Open3D. Weighting by the sigma made the mesh worse, so it was dropped (`VALIDATION.md`, "Depth confidence").
+   - Each vertex has a sigma that counts only independent looks, so holding the scanner still doesn't claim more precision. 2σ covers the true error for 95–100 % of the vertices.
+   - The viewer and the Process page have a "Confidence" shading: a legend, the share of the surface within 0.1 / 0.3 mm, and the sigma under the cursor in the viewer. The sigma follows every mesh edit (filled holes are "not measured") and is in `mesh.ply` as `quality`.
+   - Without a GPU, Open3D makes the mesh as before, with no confidence map.
 3. **"Refine with lasers"** (#3): a Process stage.
    - It rejects laser outliers against the dense surface.
    - It pulls the mesh onto the laser points with a smooth correction.

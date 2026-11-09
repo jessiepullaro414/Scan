@@ -125,7 +125,7 @@ export function Switch({
   );
 }
 
-export type SegmentOption<T extends string> = { value: T; label: string; icon?: LucideIcon; title?: string };
+export type SegmentOption<T extends string> = { value: T; label: string; icon?: LucideIcon; title?: string; disabled?: boolean };
 
 /** A segmented control (radio group semantics). */
 export function Segmented<T extends string>({
@@ -152,13 +152,14 @@ export function Segmented<T extends string>({
       className={cn("inline-flex rounded-lg border border-line bg-surface-2 p-0.5", disabled && "opacity-50", className)}
       onKeyDown={(e) => {
         if (disabled) return;
+        const step = e.key === "ArrowRight" || e.key === "ArrowDown" ? 1 : e.key === "ArrowLeft" || e.key === "ArrowUp" ? -1 : 0;
+        if (!step) return;
+        e.preventDefault();
+        // the next option that isn't disabled
         const i = options.findIndex((o) => o.value === value);
-        if (e.key === "ArrowRight" || e.key === "ArrowDown") {
-          e.preventDefault();
-          onChange(options[(i + 1) % options.length].value);
-        } else if (e.key === "ArrowLeft" || e.key === "ArrowUp") {
-          e.preventDefault();
-          onChange(options[(i - 1 + options.length) % options.length].value);
+        for (let k = 1; k < options.length; k++) {
+          const o = options[(i + step * k + options.length * k) % options.length];
+          if (!o.disabled) return onChange(o.value);
         }
       }}
     >
@@ -173,12 +174,13 @@ export function Segmented<T extends string>({
             aria-checked={active}
             tabIndex={active ? 0 : -1}
             title={o.title}
-            disabled={disabled}
+            disabled={disabled || o.disabled}
             onClick={() => onChange(o.value)}
             className={cn(
               "inline-flex flex-1 items-center justify-center gap-1.5 whitespace-nowrap rounded-md font-medium transition-colors duration-150",
               size === "sm" ? "h-6 px-2 text-xs" : "h-7 px-3 text-sm",
               active ? "bg-surface-3 text-fg shadow-sm ring-1 ring-line-strong" : "text-muted hover:text-fg",
+              o.disabled && !disabled && "cursor-not-allowed opacity-45 hover:text-muted",
             )}
           >
             {Icon ? <Icon size={size === "sm" ? 13 : 14} aria-hidden /> : null}

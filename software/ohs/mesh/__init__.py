@@ -11,13 +11,16 @@ operation returns a new ``(V, F)`` and leaves its inputs alone; the slow ones ta
   filtering);
 * :func:`decimate` (:mod:`ohs.mesh.simplify`: quadric edge collapse, in batches);
 * :func:`mesh_stats` (:mod:`ohs.mesh.stats`) and the topology helpers in
-  :mod:`ohs.mesh.topology` (edges, boundary loops, outer borders, pieces).
+  :mod:`ohs.mesh.topology` (edges, boundary loops, outer borders, pieces);
+* each vertex's confidence (:mod:`ohs.mesh.confidence`): :func:`sigma_stats`, and
+  :func:`carry_sigma` through the operations above.
 
 What "hole" and "outer border" mean is defined once, in :mod:`ohs.mesh.topology`.
 """
 from __future__ import annotations
 
 from ohs.mesh.clean import delete_faces, keep_faces, remove_floaters
+from ohs.mesh.confidence import SIGMA_NONE_MM, carry_sigma, sigma_stats
 from ohs.mesh.holes import fill_holes, hole_outlines
 from ohs.mesh.simplify import decimate
 from ohs.mesh.smoothing import smooth
@@ -25,4 +28,4 @@ from ohs.mesh.stats import mesh_stats
 from ohs.mesh.topology import vertex_normals
 
 __all__ = ["remove_floaters", "fill_holes", "smooth", "decimate", "delete_faces", "keep_faces", "mesh_stats",
-           "hole_outlines", "vertex_normals"]
+           "hole_outlines", "vertex_normals", "sigma_stats", "carry_sigma", "SIGMA_NONE_MM"]

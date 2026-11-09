@@ -51,6 +51,7 @@ import numpy as np
 from ohs.app.pipeline import FrameResult, FramePipeline, PipelineParams
 from ohs.geometry import invert_se3, pose_error
 from ohs.io.recording import RecordingReader
+from ohs.mesh.confidence import SIGMA_NONE_MM, sigma_stats
 from ohs.types import ScannerCalibration
 
 __all__ = ["ProcessParams", "process_recording", "trajectory_errors", "cut_intervals", "EXPORT_FORMATS"]
@@ -217,8 +218,8 @@ def process_recording(
     p = params if params is not None else ProcessParams()
     if poses is not None:
         poses = {int(k): np.asarray(T, dtype=np.float64).reshape(4, 4) for k, T in poses.items()}
-        # nothing is tracked: a single (reconstruction) model and no gyro prior
-        p = replace(p, pipeline=replace(p.pipeline, track_filter_px=0.0, use_imu=False))
+        # nothing is tracked: no tracking model and no gyro prior, only the reconstruction
+        p = replace(p, pipeline=replace(p.pipeline, tracking=False, use_imu=False))
     export = _check_export(tuple(p.export))
     if int(p.frame_step) < 1:
         raise ValueError("frame_step must be >= 1")
@@ -341,7 +342,7 @@ def process_recording(
         # mesh
         t0 = time.perf_counter()
         method = "tsdf"
-        V, F, N = pipe.mesh()
+        V, F, N, S = pipe.mesh_with_sigma()  # S: each vertex's standard deviation (mm), confidence TSDF only
         if p.poisson:
             from ohs.track.export import poisson_mesh  # noqa: PLC0415 (open3d)
 
@@ -349,6 +350,7 @@ def process_recording(
             if len(P) >= 10:
                 V, F, N = poisson_mesh(P, Np, depth=int(p.poisson_depth))
                 method = "poisson"
+                S = None  # Poisson makes new vertices: no confidence for them
             else:
                 log.warning("too few TSDF points for Poisson meshing; keeping the marching-cubes mesh")
         n_faces_raw = int(len(F))
@@ -357,12 +359,16 @@ def process_recording(
 
             V, F, idx = clean_mesh(V, F, min_component_fraction=float(p.clean_min_component), return_index=True)
             N = N[idx] if N is not None and len(N) else N
+            S = S[idx] if S is not None and len(S) else S
+        if S is not None:  # sigmas above 50 mm mean "no confidence" and are written as 50 mm
+            S = np.minimum(S, np.float32(SIGMA_NONE_MM)).astype(np.float32)
         files: dict[str, str] = {}
         from ohs.track.export import save_mesh  # noqa: PLC0415
 
         for ext in export:
             path = out / f"mesh.{ext}"
-            save_mesh(path, V, F, N if ext != "stl" and N is not None and len(N) == len(V) else None)
+            save_mesh(path, V, F, N if ext != "stl" and N is not None and len(N) == len(V) else None,
+                      quality=S if ext == "ply" and S is not None and len(S) == len(V) else None)
             files[f"mesh_{ext}"] = str(path)
         mesh_ms = 1e3 * (time.perf_counter() - t0)
         report["mesh"] = {
@@ -370,6 +376,8 @@ def process_recording(
             "voxel_mm": float(pipe.fusion_params.voxel_mm),
             "bbox_mm": [V.min(0).tolist(), V.max(0).tolist()] if len(V) else None,
             "extract_ms": mesh_ms, "empty": len(F) == 0,
+            "reconstruction": pipe.recon_status,
+            "sigma_mm": sigma_stats(S, V, F),
         }
         if len(F) == 0:
             log.warning("the fused mesh is empty (no frame was tracked/fused?)")

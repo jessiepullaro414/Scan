@@ -47,12 +47,22 @@ edge test runs on the full-resolution pixels; smoothing and erosion run at ``tra
 sigma and radius scaled, and the smooth result is upsampled back for the tracker, which is
 unchanged (integration and ICP sampling at the processed resolution). See :func:`tracking_depth`.
 
-**Model backends.** Only the tracking model may live on the GPU
+**Model backends.** The tracking model may live on the GPU
 (:class:`~ohs.track.volume_gpu.GpuTsdfVolume`, a rolling cube): it takes
 ``fusion.model_backend`` (default ``"auto"``: the GPU when :func:`ohs.compute.get_device` finds
-one). The reconstruction model always uses Open3D (it keeps the whole scan and makes the mesh),
-and so does the single model of ``track_filter_px=0``. :attr:`FramePipeline.model_backend` says
-which backend tracks (``"gpu"`` / ``"open3d"``), :attr:`FramePipeline.model_device` where.
+one); the single model of ``track_filter_px=0`` uses Open3D. :attr:`FramePipeline.model_backend`
+says which backend tracks (``"gpu"`` / ``"open3d"``), :attr:`FramePipeline.model_device` where.
+
+**Reconstruction model** (``PipelineParams.recon``; it keeps the whole scan and makes the mesh).
+``"auto"`` (default) is :class:`~ohs.track.recon_tsdf.ConfidenceTsdf` on the GPU when there is
+one, else Open3D's TSDF; ``"confidence"`` forces the confidence TSDF (numpy without a GPU, about
+0.5 s a frame); ``"open3d"`` forces Open3D. The confidence TSDF averages like Open3D (its mesh is
+Open3D's, vertex for vertex) and also keeps each voxel's uncertainty: each frame's depth comes
+with its sigma (:meth:`~ohs.vision.depth.DepthEstimator.compute_with_sigma`), and
+:meth:`mesh_with_sigma` gives each vertex its standard deviation in mm, which the PLY carries as
+``quality``. :attr:`FramePipeline.recon_status` says which model makes the mesh, in plain words.
+Weighting frames by 1/sigma^2 instead of averaging made the mesh worse (VALIDATION.md "Depth
+confidence"), so the sigmas only measure.
 
 Graceful degradation: without calibrated laser planes (or ``use_lasers=False``) the laser stage
 is skipped; without an IMU calibration (or ``use_imu=False``) there is no rotation prior; a
@@ -89,6 +99,7 @@ from ohs.track.fusion import LaserCloud
 from ohs.track.imu_prior import GyroPredictor
 from ohs.track.markerless import FusionParams, MarkerlessTracker
 from ohs.track.markers import MarkerParams, MarkerTracker
+from ohs.track.recon_tsdf import ConfidenceTsdf
 from ohs.types import ImuSample, LaserPlane, ScannerCalibration, StereoFrame, TrackResult
 from ohs.vision.depth import DepthEstimator, DepthParams
 from ohs.vision.laser import LINE_NAMES, LaserLines, LaserParams, extract_laser_lines, laser_points
@@ -110,6 +121,7 @@ __all__ = [
 log = logging.getLogger(__name__)
 
 MODES = ("markerless", "markers")
+RECON_MODELS = ("auto", "confidence", "open3d")
 NOMINAL_WIDTH = 1280  # px per camera of the ELP module; pixel-based defaults are tuned for it
 GYRO_SIGMA_DEG = 0.02  # gyro rotation prior per frame used by the default fusion parameters
 
@@ -242,12 +254,19 @@ class PipelineParams:
     # markerless tracking model (see the module docstring); None -> defaults for this scale
     track_filter_px: float | None = None  # 0 -> track on the raw depth in the reconstruction TSDF
     track_voxel_mm: float | None = None
+    # reconstruction model (module docstring, "Reconstruction model"): "auto" = the confidence TSDF
+    # on a GPU, else Open3D; "confidence" also without a GPU (numpy, slow); "open3d" = no confidence
+    recon: str = "auto"
+    # False: every frame comes with its pose (process(frame, pose)), so no tracking model is built
+    tracking: bool = True
 
     def __post_init__(self) -> None:
         if self.mode not in MODES:
             raise ValueError(f"mode must be one of {MODES}, got {self.mode!r}")
         if not (np.isfinite(self.scale) and 0.0 < float(self.scale) <= 1.0):
             raise ValueError(f"scale must be in (0, 1], got {self.scale!r}")
+        if self.recon not in RECON_MODELS:
+            raise ValueError(f"recon must be one of {RECON_MODELS}, got {self.recon!r}")
 
 
 @dataclass
@@ -265,6 +284,7 @@ class FrameResult:
     timings_ms: dict[str, float]
     lines_right: LaserLines | None = None
     extra: dict = field(default_factory=dict)
+    sigma: np.ndarray | None = None  # the depth's standard deviation (mm, 0 = no depth), confidence TSDF only
 
 
 def _ms(t0: float) -> float:
@@ -314,12 +334,16 @@ class FramePipeline:
                 log.info("no calibrated laser planes: laser triangulation is skipped")
         self.planes = planes
 
-        # reconstruction TSDF (raw depth) and, in markerless mode, the tracking TSDF (filtered depth)
-        self.markerless: MarkerlessTracker | None = None
+        # reconstruction TSDF (raw depth) and, in markerless mode, the tracking TSDF (filtered depth).
+        # The confidence TSDF only reconstructs: with track_filter_px=0 the model also tracks, so Open3D.
+        self.markerless: MarkerlessTracker | ConfidenceTsdf | None = None
+        self.has_confidence = False
         if self._need_depth:
-            self.markerless = MarkerlessTracker(self.K, self.image_size, self.fusion_params)
+            single = p.mode == "markerless" and p.tracking and self.track_filter_px <= 0
+            self.markerless = self._make_recon(p.recon, single_model=single)
+            self.has_confidence = isinstance(self.markerless, ConfidenceTsdf)
         self.tracker: MarkerlessTracker | None = None
-        if p.mode == "markerless":
+        if p.mode == "markerless" and p.tracking:
             if self.track_filter_px > 0:
                 self.tracker = MarkerlessTracker(self.K, self.image_size, self.track_fusion_params)
             else:
@@ -383,7 +407,8 @@ class FramePipeline:
     def model_status(self) -> str:
         """Plain-language tracking-model choice, e.g. ``"GPU model on gfx1035 (384^3 voxels, 768 mm cube)"``."""
         if self.tracker is None:
-            return "no markerless tracking model (marker mode)"
+            return ("no tracking model (frames come with poses)" if self.params.mode == "markerless"
+                    else "no markerless tracking model (marker mode)")
         if not self.dual_model:
             return "Open3D model (single-model tracking makes the mesh)"
         return self.tracker.model_status
@@ -441,10 +466,13 @@ class FramePipeline:
         left_r, right_r = self.rectifier.rectify(frame.left, frame.right)
         tim["rectify"] = _ms(t0)
 
-        depth = None
+        depth = sigma = None
         if self.depth_estimator is not None:
             t0 = time.perf_counter()
-            depth = self.depth_estimator.compute(left_r, right_r)
+            if self.has_confidence:
+                depth, sigma = self.depth_estimator.compute_with_sigma(left_r, right_r)
+            else:
+                depth = self.depth_estimator.compute(left_r, right_r)
             tim["depth"] = _ms(t0)
 
         lines = lines_r = None
@@ -461,13 +489,15 @@ class FramePipeline:
             track = TrackResult(T.copy(), True, {"method": "external"})
             if self.dual_model and depth is not None:
                 self.tracker.integrate(self.tracking_input(depth), None, T)
-            self._fuse(depth, T, t, tim)
+            self._fuse(depth, T, t, tim, sigma)
         elif p.mode == "markerless":
-            track = self._track_markerless(depth, t, tim, extra)
+            if self.tracker is None:
+                raise ValueError("this pipeline does not track (PipelineParams.tracking=False): pass the frame's pose")
+            track = self._track_markerless(depth, t, tim, extra, sigma)
         else:
             track = self.markers.track(left_r, right_r, t)
             if track.ok:
-                self._fuse(depth, track.T_wc, t, tim)
+                self._fuse(depth, track.T_wc, t, tim, sigma)
         tim["track"] = _ms(t0)
         self._t_prev = t
 
@@ -486,17 +516,47 @@ class FramePipeline:
         self._n_frames += 1
         self._n_ok += int(track.ok)
         self._trajectory.append((t, np.asarray(track.T_wc, dtype=np.float64).copy(), bool(track.ok)))
-        return FrameResult(int(frame.index), t, left_r, right_r, depth, lines, pts, track, tim, lines_r, extra)
+        return FrameResult(int(frame.index), t, left_r, right_r, depth, lines, pts, track, tim, lines_r, extra, sigma)
 
-    def _fuse(self, depth: np.ndarray | None, T_wc: np.ndarray, t: float, tim: dict[str, float]) -> None:
-        """Integrate the raw depth into the reconstruction TSDF at ``T_wc``."""
+    def _make_recon(self, recon: str, single_model: bool) -> MarkerlessTracker | ConfidenceTsdf:
+        """The reconstruction model for ``PipelineParams.recon`` (module docstring, "Reconstruction model")."""
+        fp = self.fusion_params
+        want = recon
+        if single_model and recon != "open3d":
+            if recon == "confidence":
+                log.info("recon \"confidence\" needs the separate tracking model (track_filter_px > 0): using Open3D")
+            want = "open3d"
+        if want in ("auto", "confidence"):
+            try:
+                return ConfidenceTsdf(self.K, self.image_size, voxel_mm=fp.voxel_mm, trunc_mm=fp.trunc_mm,
+                                    depth_min_mm=fp.depth_min_mm, depth_max_mm=fp.depth_max_mm,
+                                    backend="gpu" if want == "auto" else "auto")
+            except RuntimeError as e:  # "auto" without a GPU
+                log.info("reconstruction with Open3D on the CPU: %s", e)
+        return MarkerlessTracker(self.K, self.image_size, self.fusion_params)
+
+    @property
+    def recon_status(self) -> str:
+        """What makes the mesh, in plain words."""
+        m = self.markerless
+        if m is None:
+            return "none"
+        if isinstance(m, ConfidenceTsdf):
+            where = f"on the GPU ({m.device})" if m.device else "on the CPU"
+            return f"TSDF with per-vertex confidence, {where}"
+        return "Open3D TSDF (every frame weighs the same)"
+
+    def _fuse(self, depth: np.ndarray | None, T_wc: np.ndarray, t: float, tim: dict[str, float],
+              sigma: np.ndarray | None = None) -> None:
+        """Integrate the raw depth (and its sigma, for the confidence TSDF) into the reconstruction TSDF at ``T_wc``."""
         if self.markerless is None or depth is None:
             return
         ti = time.perf_counter()
-        self.markerless.integrate(depth, None, T_wc, t=t)
+        self.markerless.integrate(depth, sigma if self.has_confidence else None, T_wc, t=t)
         tim["integrate"] = _ms(ti)
 
-    def _track_markerless(self, depth: np.ndarray, t: float, tim: dict[str, float], extra: dict) -> TrackResult:
+    def _track_markerless(self, depth: np.ndarray, t: float, tim: dict[str, float], extra: dict,
+                          sigma: np.ndarray | None = None) -> TrackResult:
         R_prior = None
         if self.gyro is not None and self._t_prev is not None and self.gyro.covers(self._t_prev, t):
             R_prior = self.gyro.relative_rotation(self._t_prev, t)
@@ -509,7 +569,7 @@ class FramePipeline:
             extra["track_valid_fraction"] = float(np.count_nonzero(d_track)) / d_track.size
             res = self.tracker.track(d_track, None, t, R_prior)
             if res.ok:
-                self._fuse(depth, res.T_wc, t, tim)
+                self._fuse(depth, res.T_wc, t, tim, sigma)
         for k, v in res.info.get("timings_ms", {}).items():
             if k == "total":
                 continue
@@ -526,6 +586,22 @@ class FramePipeline:
         try:
             return self.markerless.extract_mesh()
         except RuntimeError as exc:  # Open3D raises instead of returning an empty mesh
+            log.warning("mesh extraction failed (%s); returning an empty mesh", exc)
+            return empty
+
+    def mesh_with_sigma(self) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray | None]:
+        """:meth:`mesh` plus each vertex's standard deviation (mm, float32), or ``None`` when the
+        reconstruction is Open3D's (no confidence)."""
+        if not self.has_confidence:
+            V, F, N = self.mesh()
+            return V, F, N, None
+        self._check_open()
+        empty = (np.zeros((0, 3)), np.zeros((0, 3), dtype=np.int64), np.zeros((0, 3)), np.zeros(0, np.float32))
+        if self.markerless.n_integrated == 0:
+            return empty
+        try:
+            return self.markerless.extract_mesh(with_sigma=True)
+        except RuntimeError as exc:
             log.warning("mesh extraction failed (%s); returning an empty mesh", exc)
             return empty
 

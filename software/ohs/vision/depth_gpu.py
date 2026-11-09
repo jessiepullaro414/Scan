@@ -97,7 +97,7 @@ from typing import Any
 import cv2
 import numpy as np
 
-from ohs.vision.depth import DepthParams
+from ohs.vision.depth import SIGMA_MODELS, SIGMA_UNREFINED_PX, DepthParams, lk_window_n_eff
 
 __all__ = ["GpuTuning", "GpuStereoMatcher", "gpu_unsupported"]
 
@@ -767,16 +767,20 @@ inline float warp_at(__global const float* restrict rn, __global const short* re
 }
 
 __kernel void lk_grad(__global const float* restrict ln, __global const float* restrict rn,
-                      __global const short* restrict d, __global float* restrict ge, __global float* restrict g2)
+                      __global const short* restrict d, __global float* restrict ge, __global float* restrict g2,
+                      __global float* restrict e2)
 {
     const int x = get_global_id(0), y = get_global_id(1);
     if (x >= W || y >= H) return;
     const int p = y * W + x;
     const int xm = refl(x - 1, W), xp = refl(x + 1, W);
+    const bool okd = disp_ok(d[p], x);
     float g = 0.25f * ((ln[y * W + xp] - ln[y * W + xm]) + (warp_at(rn, d, xp, y) - warp_at(rn, d, xm, y)));
-    if (!disp_ok(d[p], x)) g = 0.0f;
-    ge[p] = g * (ln[p] - warp_at(rn, d, x, y));
+    if (!okd) g = 0.0f;
+    const float e = ln[p] - warp_at(rn, d, x, y);
+    ge[p] = g * e;
     g2[p] = g * g;
+    e2[p] = okd ? e * e : 0.0f;  /* the squared residual, for the step's sigma */
 }
 
 #define WT 16
@@ -818,12 +822,16 @@ void lk_window(__global const float* restrict ga, __global const float* restrict
     ob[y * W + x] = sb;
 }
 
-/* refined disparity (NaN = invalid) and depth (mm, 0 = invalid); the division is correctly rounded
-   when the program is built with -cl-fp32-correctly-rounded-divide-sqrt */
+/* refined disparity (NaN = invalid), depth (mm, 0 = invalid) and the step's sigma_LK (px, NaN =
+   invalid; sig_unrefined where the step left the disparity alone): sigma^2 = (sum w e^2 - delta^2
+   sum w g^2) / (n_eff sum w g^2), as ohs/vision/depth.py. The division is correctly rounded when the
+   program is built with -cl-fp32-correctly-rounded-divide-sqrt */
 __kernel void finish(__global const short* restrict d, __global const float* restrict num,
-                     __global const float* restrict den, __global float* restrict disp_out,
-                     __global float* restrict depth_out, const int refine, const float max_step,
-                     const float min_texture, const float fb, const float zmin, const float zmax)
+                     __global const float* restrict den, __global const float* restrict e2w,
+                     __global float* restrict disp_out, __global float* restrict depth_out,
+                     __global float* restrict sig_out, const int refine, const float max_step,
+                     const float min_texture, const float fb, const float zmin, const float zmax,
+                     const float n_eff, const float sig_unrefined)
 {
     const int x = get_global_id(0), y = get_global_id(1);
     if (x >= W || y >= H) return;
@@ -831,14 +839,79 @@ __kernel void finish(__global const short* restrict d, __global const float* res
     const short v = d[p];
     const bool ok = disp_ok(v, x);
     float dd = (float)v * 0.0625f;
+    float sig = sig_unrefined;
     if (refine && ok) {
         const float dn = den[p];
-        const float delta = num[p] / max(dn, 1e-6f);
-        if (fabs(delta) < max_step && dn > min_texture) dd = dd - delta;
+        const float dm = max(dn, 1e-6f);
+        const float delta = num[p] / dm;
+        if (fabs(delta) < max_step && dn > min_texture) {
+            dd = dd - delta;
+            sig = sqrt(max(e2w[p] - delta * delta * dn, 0.0f) / dm / n_eff);
+        }
     }
     disp_out[p] = ok ? dd : NAN;
+    sig_out[p] = ok ? sig : NAN;
     const float z = fb / dd;
     depth_out[p] = (ok && isfinite(z) && z >= zmin && z <= zmax) ? z : 0.0f;
+}
+
+/* ---- depth confidence (ohs/vision/depth.py, SigmaModel): sigma_z of every pixel with depth ---- */
+/* distance (px) along the row to the nearest pixel without depth, searched up to R (R + 1: none) */
+__kernel void hole_row(__global const float* restrict depth, __global float* restrict hx, const int R)
+{
+    const int x = get_global_id(0), y = get_global_id(1);
+    if (x >= W || y >= H) return;
+    const int row = y * W;
+    float best = (float)(R + 1);
+    for (int dx = 0; dx <= R; ++dx) {
+        if ((x - dx >= 0 && !(depth[row + x - dx] > 0.0f)) || (x + dx < W && !(depth[row + x + dx] > 0.0f))) {
+            best = (float)dx;
+            break;
+        }
+    }
+    hx[row + x] = best;
+}
+
+__kernel void sigma_z(__global const float* restrict depth, __global const float* restrict sig,
+                      __global const float* restrict hx, __global float* restrict out, const int R,
+                      const float fx, const float fy, const float cx, const float cy, const float fb,
+                      const float zmin, const float floor_px, const float lk_scale, const float hole_amp,
+                      const float hole_r, const float inc_amp, const float inc_cos, const float near_mm,
+                      const float sig_unrefined)
+{
+    const int x = get_global_id(0), y = get_global_id(1);
+    if (x >= W || y >= H) return;
+    const int p = y * W + x;
+    const float z = depth[p];
+    if (!(z > 0.0f)) { out[p] = 0.0f; return; }
+    /* Euclidean distance to the nearest hole, from the row distances within +-R rows */
+    float h2 = (float)((R + 1) * (R + 1));
+    for (int dy = -R; dy <= R; ++dy) {
+        const int yy = y + dy;
+        if (yy < 0 || yy >= H) continue;
+        const float d = hx[yy * W + x];
+        h2 = fmin(h2, d * d + (float)(dy * dy));
+    }
+    float lk = sig[p];
+    if (!(lk == lk)) lk = sig_unrefined;
+    float sd = sqrt(floor_px * floor_px + lk_scale * lk * lk_scale * lk);
+    sd *= 1.0f + hole_amp * exp(-h2 / (hole_r * hole_r));
+    /* incidence from the depth gradients: cos = z / (|(-fx z_u, -fy z_v, (u-cx) z_u + (v-cy) z_v + z)| |r|) */
+    float c = 1.0f;
+    if (x > 0 && x < W - 1 && y > 0 && y < H - 1) {
+        const float zl = depth[p - 1], zr = depth[p + 1], zt = depth[p - W], zb = depth[p + W];
+        if (zl > 0.0f && zr > 0.0f && zt > 0.0f && zb > 0.0f) {
+            const float zu = 0.5f * (zr - zl), zv = 0.5f * (zb - zt);
+            const float du = (float)x - cx, dv = (float)y - cy;
+            const float n3 = du * zu + dv * zv + z;
+            const float nn = sqrt(fx * zu * fx * zu + fy * zv * fy * zv + n3 * n3);
+            const float rr = sqrt(du * du / (fx * fx) + dv * dv / (fy * fy) + 1.0f);
+            c = fmin(z / fmax(nn * rr, 1e-6f), 1.0f);
+        }
+    }
+    sd *= 1.0f + inc_amp * exp(-(c / inc_cos) * (c / inc_cos));
+    sd *= 1.0f + clamp((near_mm - (z - zmin)) / near_mm, 0.0f, 1.0f);
+    out[p] = z * z * sd / fb;
 }
 """
 
@@ -901,6 +974,7 @@ class GpuStereoMatcher:
         self.params = params
         self.tuning = tuning if tuning is not None else GpuTuning()
         K = np.asarray(K, dtype=np.float64).reshape(3, 3)
+        self._K = K
         self.f = float(K[0, 0])
         self.baseline = float(baseline_mm)
         self.min_disparity = int(min_disparity)
@@ -981,8 +1055,9 @@ class GpuStereoMatcher:
         cl, t, p = self.cl, self.tuning, self.params
         prg = self.dev.program(_SOURCE, self._options(w, h))
         names = ("census", "support", "sgm_vertical", "sgm_horizontal", "lr_median", "median3", "spk_rows", "spk_merge",
-                 "spk_count", "spk_apply", "lk_prep", "lk_grad", "lk_window", "finish")
+                 "spk_count", "spk_apply", "lk_prep", "lk_grad", "lk_window", "finish", "hole_row", "sigma_z")
         self._k = {n: cl.Kernel(prg, n) for n in names}
+        self._k["lk_window_e2"] = cl.Kernel(prg, "lk_window")  # a second binding: the squared residual
         self._check_limits()
         ctx, mf = self.dev.ctx, cl.mem_flags
         n = w * h
@@ -997,7 +1072,8 @@ class GpuStereoMatcher:
             "raw": buf(2 * n), "disp16": buf(2 * n), "label": buf(4 * n), "parent": buf(4 * n),
             "runlen": buf(4 * n), "ssize": buf(4 * n), "tex": buf(n), "sup": buf(n),
             "ln": buf(4 * n), "rn": buf(4 * n), "ge": buf(4 * n), "g2": buf(4 * n), "num": buf(4 * n),
-            "den": buf(4 * n), "disp": buf(4 * n), "depth": buf(4 * n),
+            "den": buf(4 * n), "disp": buf(4 * n), "depth": buf(4 * n), "e2": buf(4 * n), "e2w": buf(4 * n),
+            "sig": buf(4 * n), "hx": buf(4 * n), "sigz": buf(4 * n),
             "g5": cl.Buffer(ctx, mf.READ_ONLY | mf.COPY_HOST_PTR, hostbuf=self._g5),
             "win": cl.Buffer(ctx, mf.READ_ONLY | mf.COPY_HOST_PTR, hostbuf=self._win),
         }
@@ -1038,13 +1114,28 @@ class GpuStereoMatcher:
         if refine:
             calls += [
                 ("lk_prep", k["lk_prep"], g3d, l3d, (lkl, lkr, b["ln"], b["rn"], b["g5"], np.float32(_LK_EPS2))),
-                ("lk_grad", k["lk_grad"], g2d, l2d, (b["ln"], b["rn"], b["disp16"], b["ge"], b["g2"])),
+                ("lk_grad", k["lk_grad"], g2d, l2d, (b["ln"], b["rn"], b["disp16"], b["ge"], b["g2"], b["e2"])),
                 ("lk_window", k["lk_window"], g2d, l2d, (b["ge"], b["g2"], b["num"], b["den"], b["win"])),
+                # sum(w e^2); its second output overwrites ge, which the queue has consumed by then
+                ("lk_window_e2", k["lk_window_e2"], g2d, l2d, (b["e2"], b["e2"], b["e2w"], b["ge"], b["win"])),
             ]
         calls.append(("finish", k["finish"], g2d, l2d,
-                      (b["disp16"], b["num"], b["den"], b["disp"], b["depth"], np.int32(1 if refine else 0),
-                       np.float32(p.refine_max_step), np.float32(_LK_MIN_TEXTURE),
-                       np.float32(self.f * self.baseline), np.float32(p.min_depth_mm), np.float32(p.max_depth_mm))))
+                      (b["disp16"], b["num"], b["den"], b["e2w"], b["disp"], b["depth"], b["sig"],
+                       np.int32(1 if refine else 0), np.float32(p.refine_max_step), np.float32(_LK_MIN_TEXTURE),
+                       np.float32(self.f * self.baseline), np.float32(p.min_depth_mm), np.float32(p.max_depth_mm),
+                       np.float32(lk_window_n_eff(self._win)), np.float32(SIGMA_UNREFINED_PX))))
+        # depth confidence (SigmaModel "gpu"): the hole distance is searched up to 3 hole radii
+        sm = SIGMA_MODELS["gpu"]
+        hr = np.int32(int(math.ceil(3.0 * sm.hole_r_px)))
+        K = self._K
+        calls += [
+            ("hole_row", k["hole_row"], g2d, l2d, (b["depth"], b["hx"], hr)),
+            ("sigma_z", k["sigma_z"], g2d, l2d,
+             (b["depth"], b["sig"], b["hx"], b["sigz"], hr, np.float32(K[0, 0]), np.float32(K[1, 1]),
+              np.float32(K[0, 2]), np.float32(K[1, 2]), np.float32(self.f * self.baseline), np.float32(p.min_depth_mm),
+              np.float32(sm.floor_px), np.float32(sm.lk_scale), np.float32(sm.hole_amp), np.float32(sm.hole_r_px),
+              np.float32(sm.inc_amp), np.float32(sm.inc_cos), np.float32(sm.near_mm), np.float32(SIGMA_UNREFINED_PX))),
+        ]
         for _, kern, _, _, args in calls:
             kern.set_args(*args)
         self._calls = [(name, kern, gs, ls) for name, kern, gs, ls, _ in calls]
@@ -1055,7 +1146,7 @@ class GpuStereoMatcher:
 
     # ------------------------------------------------------------------ run
     def _run(self, left: np.ndarray, right: np.ndarray, lk_left: np.ndarray | None, lk_right: np.ndarray | None,
-             what: str) -> np.ndarray:
+             *what: str) -> list[np.ndarray]:
         cl, q = self.cl, self.queue
         h, w = left.shape
         if self._shape != (h, w):
@@ -1069,12 +1160,13 @@ class GpuStereoMatcher:
             cl.enqueue_copy(q, b["lkl"], hold[2], is_blocking=False)
             cl.enqueue_copy(q, b["lkr"], hold[3], is_blocking=False)
         events = [(name, cl.enqueue_nd_range_kernel(q, kern, gs, ls)) for name, kern, gs, ls in self._calls]
-        out = np.empty((h, w), np.float32)
-        cl.enqueue_copy(q, out, b[what], is_blocking=True)
+        outs = [np.empty((h, w), np.float32) for _ in what]
+        for i, (name, out) in enumerate(zip(what, outs)):
+            cl.enqueue_copy(q, out, b[name], is_blocking=i == len(what) - 1)
         if self.profiling:
             self.last_timings_ms = {name: (e.profile.end - e.profile.start) * 1e-6 for name, e in events}
         del hold
-        return out
+        return outs
 
     def disparity(self, left: np.ndarray, right: np.ndarray, lk_left: np.ndarray | None = None,
                   lk_right: np.ndarray | None = None) -> np.ndarray:
@@ -1083,7 +1175,22 @@ class GpuStereoMatcher:
         ``left``/``right`` are what the census sees; ``lk_left``/``lk_right`` the images of the
         sub-pixel refinement (needed only with ``DepthParams.normalize``).
         """
-        return self._run(left, right, lk_left, lk_right, "disp")
+        return self._run(left, right, lk_left, lk_right, "disp")[0]
+
+    def disparity_sigma(self, left: np.ndarray, right: np.ndarray, lk_left: np.ndarray | None = None,
+                        lk_right: np.ndarray | None = None) -> tuple[np.ndarray, np.ndarray]:
+        """:meth:`disparity` and the sub-pixel step's ``sigma_LK`` (px, NaN = invalid), as the CPU's
+        ``DepthEstimator.disparity_with_sigma``."""
+        disp, sig = self._run(left, right, lk_left, lk_right, "disp", "sig")
+        return disp, sig
+
+    def depth_sigma(self, left: np.ndarray, right: np.ndarray, lk_left: np.ndarray | None = None,
+                    lk_right: np.ndarray | None = None) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """``(disparity, depth, sigma_z)``: depth as :meth:`depth` (only meaningful with
+        :attr:`exact_division`; otherwise convert the disparity on the CPU) and its standard
+        deviation in mm (0 = no depth), from the ``"gpu"`` :class:`~ohs.vision.depth.SigmaModel`."""
+        disp, depth, sigz = self._run(left, right, lk_left, lk_right, "disp", "depth", "sigz")
+        return disp, depth, sigz
 
     def depth(self, left: np.ndarray, right: np.ndarray, lk_left: np.ndarray | None = None,
               lk_right: np.ndarray | None = None) -> np.ndarray | None:
@@ -1091,7 +1198,7 @@ class GpuStereoMatcher:
         (the caller then converts :meth:`disparity` on the CPU)."""
         if not self.exact_division:
             return None
-        return self._run(left, right, lk_left, lk_right, "depth")
+        return self._run(left, right, lk_left, lk_right, "depth")[0]
 
     # ------------------------------------------------------------------ test hooks
     def filter_disparity(self, raw16: np.ndarray, median: bool = True) -> np.ndarray:

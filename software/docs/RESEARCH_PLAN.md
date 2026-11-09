@@ -158,6 +158,7 @@ Small items get a short paragraph instead.
 - **Cost:** a few extra reads in the existing winner-take-all and Lucas-Kanade kernels, and one more float image to download. Under 2 ms on either GPU (estimate). On the CPU, SGBM exposes no costs, so the CPU twin uses the left-right, texture and Lucas-Kanade terms only.
 - **Plugs into:** `ohs/vision/depth_gpu.py` (kernels); `ohs/vision/depth.py` (`DepthEstimator` returns depth and σ_z); `ohs/app/pipeline.py` (`FrameResult` carries σ_z).
 - **Effort / risk:** S–M / low.
+- **Result (2026-11-09, shipped):** the Lucas-Kanade residual, plus terms for holes, incidence and near range, was enough (`SigmaModel`, the same terms on both backends). Calibrated on 12 simulated recordings with true depth: 2σ covers 96.7 % of the depth errors on the GPU and 95.9 % on the CPU (90–99 % per recording). Details: `VALIDATION.md`, "Depth confidence".
 - **Sim check:** the simulator has the true depth per pixel. Check that the prediction is calibrated: about 95 % of pixels should fall within 2σ, per scene (sphere, car panel, bracket) and per resolution. Plot the actual error against the predicted σ.
 
 #### 4.1.2 Slanted-window sub-pixel refinement — P2, M3–M4
@@ -439,6 +440,7 @@ After the graph, refine all keyframe poses jointly against each other with dense
 - **Cost:** Open3D's `integrate` takes no per-pixel weights. This needs either custom integration through Open3D's tensor attributes (on the CPU, slow in Python) or our own OpenCL kernel. `VALIDATION.md` already names the CPU reconstruction integration as a GPU target. The rolling cube can't hold a whole scan at 1 mm, so the reconstruction volume needs a sparse layout (hashed bricks, as in voxel hashing, Nießner et al. 2013) or bricks streamed to the CPU. Per frame it should cost the same order as the tracking volume's integration does now (estimate: a 1 mm grid has 8 times the voxels per volume, but only the band near the surface needs updating).
 - **Plugs into:** `ohs/track/volume_gpu.py` (a sparse 1 mm variant with weights); `ohs/track/markerless.py` (`integrate` takes a weight map); `ohs/app/pipeline.py` (passes σ_z); mesh extraction with σ per vertex.
 - **Effort / risk:** M–L / low–medium.
+- **Result (2026-11-09):** the GPU volume and the per-vertex σ shipped (`ohs/track/recon_tsdf.py`: hashed 8³ bricks, one work-item per voxel, about 20–28 ms a frame at full resolution). The 1/σ² weights did not: on simulated scans they raised the median mesh error by 15–25 % and left more stray surface, and a gentler weight gained nothing. Fusion averages each frame equally, like Open3D, and σ only measures. Details: `VALIDATION.md`, "Depth confidence".
 - **Sim check:** mesh median, p95 and signed mean per scene against the analytic surfaces, before and after; per-vertex σ against the actual error (about 95 % within 2σ); a CPU–GPU agreement test.
 
 #### 4.5.2 Thin sheet metal — P2, M4
@@ -918,6 +920,7 @@ Each idea is a research bet with a cheap first test. Prior art is cited, and whe
 - **Licence / cost:** own code; a few extra numbers per voxel.
 - **Effort / risk:** S–M / low.
 - **Sim check:** σ coverage (about 95 % within 2σ) with and without the correction.
+- **Result (2026-11-09, shipped with 4.5.1):** a voxel counts a new look once its pixel has moved by the dot spacing since the last one. A scanner held still keeps one look, and 2σ covers the true error for 94.9–100 % of the vertices on simulated scans. The robust inlier/outlier model is not done.
 
 ### 7.11 I10: Guidance by expected information gain — P3, M4–M6
 - **What:** per region, combine the uncertainty, the spread of viewing angles and the laser coverage, and show where to aim next, and from which side, to reduce the uncertainty most: the information-gain view planning of Isler et al. (2016), made for a person instead of a robot.

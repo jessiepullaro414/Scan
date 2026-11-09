@@ -115,6 +115,14 @@ def mesh_faces(env: dict, url: str) -> int:
     return len(load_ply(p)["faces"])
 
 
+def mesh_quality(env: dict, url: str) -> np.ndarray | None:
+    """Each vertex's sigma in the served PLY (``quality``), None when it has none."""
+    r = get(env["url"] + url)
+    p = env["root"] / f"dl-{time.monotonic_ns()}.ply"
+    p.write_bytes(r.content)
+    return load_ply(p)["quality"]
+
+
 def faces_b64(idx) -> str:
     return base64.b64encode(np.asarray(idx, dtype="<u4").tobytes()).decode("ascii")
 
@@ -204,6 +212,12 @@ def test_track_edits_undo_redo_and_the_process_messages(env):
             "watertight", "bbox_mm", "area_cm2", "volume_cm3"} <= set(st0)
     assert st0["border_mm"] is not None  # an open scan has an outer border
     assert mesh_faces(env, cur["mesh_url"]) == s["base"]["triangles"]
+    # each vertex's sigma: with the confidence reconstruction (a GPU), not with Open3D's
+    qs = [mesh_quality(env, cur["mesh_url"])]
+    confident = qs[0] is not None
+    assert (st0["sigma_mm"] is not None) == confident
+    if confident:
+        assert len(qs[0]) == st0["vertices"] and np.all(qs[0] > 0) and 0 < st0["sigma_mm"]["median"] < 50.0
     scan = get(f"{env['url']}/api/projects/{env['pid']}").json()["scans"][0]
     assert scan["status"] == "processed" and scan["result"]["report"]["quality"] == "preview"
     res = env["root"] / "projects" / env["pid"] / "scans" / env["sid"] / "result"
@@ -223,18 +237,31 @@ def test_track_edits_undo_redo_and_the_process_messages(env):
         assert len(s["edits"]) == k + 1 and s["cursor"] == k + 1 and s["current"]["version"] == v0 + k + 1
         assert s["edits"][-1]["triangles_after"] == s["current"]["stats"]["triangles"]
         tris.append(s["edits"][-1]["triangles_after"])
+        qs.append(mesh_quality(env, s["current"]["mesh_url"]))
+        if confident:  # the sigmas follow every edit; filled holes are "not measured"
+            sm = s["current"]["stats"]["sigma_mm"]
+            assert len(qs[-1]) == s["current"]["stats"]["vertices"] and sm is not None
+            if op == "fill_holes":
+                assert (sm["not_measured"] > 0) == (tris[-1] > tris[-2]) and np.any(qs[-1] == 50.0) == (tris[-1] > tris[-2])
+        else:
+            assert qs[-1] is None
     assert s["edits"][0]["params"] == {"min_size_mm": 5.0}
     assert s["edits"][2]["params"] == {"method": "bilateral", "strength": 0.3, "keep_edges": True}
     assert tris[2] >= tris[1] and abs(tris[4] - tris[3] / 2) <= max(10, 0.01 * tris[3])
     assert s["can_undo"] and not s["can_redo"]
     assert mesh_faces(env, s["current"]["mesh_url"]) == tris[4]
-    # undo / redo: instant, and the result files follow
+    # undo / redo: instant, and the result files follow; a step missing from the cache is rebuilt
+    # by replaying its edit (sigmas too)
+    cache = env["root"] / "projects" / env["pid"] / "scans" / env["sid"] / "process" / "cache"
+    (cache / f"{s['edits'][2]['id']}.npz").unlink()
     ver = s["current"]["version"]
     t0 = time.perf_counter()
     u = post(b + "/process/undo").json()
     assert time.perf_counter() - t0 < 5.0
     assert u["cursor"] == 3 and u["can_redo"] and u["current"]["version"] == ver + 1
     assert u["current"]["stats"]["triangles"] == tris[3] and mesh_faces(env, u["current"]["mesh_url"]) == tris[3]
+    if confident:  # the step's own sigmas come back
+        assert np.array_equal(mesh_quality(env, u["current"]["mesh_url"]), qs[3])
     u = post(b + "/process/undo").json()
     assert u["cursor"] == 2 and mesh_faces(env, u["current"]["mesh_url"]) == tris[2]
     r = post(b + "/process/redo").json()
@@ -254,7 +281,6 @@ def test_track_edits_undo_redo_and_the_process_messages(env):
     s = get(b + "/process").json()
     assert len(s["edits"]) == 4 and s["cursor"] == 4 and not s["can_redo"]
     assert s["edits"][3]["params"] == {"target_triangles": tris[3] // 3}
-    cache = env["root"] / "projects" / env["pid"] / "scans" / env["sid"] / "process" / "cache"
     assert {p.stem for p in cache.glob("*.npz")} == {"base"} | {e["id"] for e in s["edits"]}
 
 

@@ -87,13 +87,17 @@ def face_normals(V: np.ndarray, F: np.ndarray) -> np.ndarray:
     return np.divide(n, norm, out=np.zeros_like(n), where=norm > 0)
 
 
-def _ply_header(n_vertices: int, has_normals: bool, has_colors: bool, n_faces: int | None) -> bytes:
+def _ply_header(n_vertices: int, has_normals: bool, has_colors: bool, n_faces: int | None,
+                has_quality: bool = False) -> bytes:
     lines = ["ply", "format binary_little_endian 1.0", "comment OpenHandScan export, units: mm",
              f"element vertex {n_vertices}", "property float x", "property float y", "property float z"]
     if has_normals:
         lines += ["property float nx", "property float ny", "property float nz"]
     if has_colors:
         lines += ["property uchar red", "property uchar green", "property uchar blue"]
+    if has_quality:
+        lines += ["comment quality: the vertex's standard deviation in mm (OpenHandScan depth confidence)",
+                  "property float quality"]
     if n_faces is not None:
         lines += [f"element face {n_faces}", "property list uchar int vertex_indices"]
     lines.append("end_header")
@@ -101,20 +105,25 @@ def _ply_header(n_vertices: int, has_normals: bool, has_colors: bool, n_faces: i
 
 
 def _write_ply(path: Path, V: np.ndarray, F: np.ndarray | None, N: np.ndarray | None,
-               colors: np.ndarray | None) -> None:
+               colors: np.ndarray | None, quality: np.ndarray | None = None) -> None:
     fields: list[tuple[str, Any]] = [("x", "<f4"), ("y", "<f4"), ("z", "<f4")]
     if N is not None:
         fields += [("nx", "<f4"), ("ny", "<f4"), ("nz", "<f4")]
     if colors is not None:
         fields += [("red", "u1"), ("green", "u1"), ("blue", "u1")]
+    if quality is not None:
+        fields += [("quality", "<f4")]
     vert = np.empty(len(V), dtype=np.dtype(fields))
     vert["x"], vert["y"], vert["z"] = V[:, 0], V[:, 1], V[:, 2]
     if N is not None:
         vert["nx"], vert["ny"], vert["nz"] = N[:, 0], N[:, 1], N[:, 2]
     if colors is not None:
         vert["red"], vert["green"], vert["blue"] = colors[:, 0], colors[:, 1], colors[:, 2]
+    if quality is not None:
+        vert["quality"] = quality
     with open(path, "wb") as fh:
-        fh.write(_ply_header(len(V), N is not None, colors is not None, None if F is None else len(F)))
+        fh.write(_ply_header(len(V), N is not None, colors is not None, None if F is None else len(F),
+                             has_quality=quality is not None))
         fh.write(vert.tobytes())
         if F is not None:
             face = np.empty(len(F), dtype=np.dtype([("n", "u1"), ("i", "<i4", (3,))]))
@@ -147,11 +156,14 @@ def _write_obj(path: Path, V: np.ndarray, F: np.ndarray, N: np.ndarray | None) -
 
 
 # --------------------------------------------------------------------------- writers
-def save_mesh(path: str | Path, V: np.ndarray, F: np.ndarray, N: np.ndarray | None = None) -> Path:
+def save_mesh(path: str | Path, V: np.ndarray, F: np.ndarray, N: np.ndarray | None = None,
+              quality: np.ndarray | None = None) -> Path:
     """Write a triangle mesh; format by extension: ``.ply`` (binary), ``.stl`` (binary), ``.obj``.
 
     ``V`` (N,3) vertices in mm, ``F`` (M,3) vertex indices, ``N`` optional (N,3) vertex normals
-    (ignored for STL, which stores per-face normals computed from the geometry).
+    (ignored for STL, which stores per-face normals computed from the geometry). ``quality``
+    optional (N,): each vertex's standard deviation in mm, written as the PLY vertex property
+    ``quality`` (MeshLab reads it); STL and OBJ have no place for it.
     """
     path = Path(path)
     V = _as_vertices(V)
@@ -160,9 +172,13 @@ def save_mesh(path: str | Path, V: np.ndarray, F: np.ndarray, N: np.ndarray | No
         N = _as_vertices(N, "N")
         if len(N) != len(V):
             raise ValueError("N must have one normal per vertex")
+    if quality is not None:
+        quality = np.asarray(quality, dtype=np.float32).reshape(-1)
+        if len(quality) != len(V):
+            raise ValueError("quality must have one value per vertex")
     ext = path.suffix.lower()
     if ext == ".ply":
-        _write_ply(path, V, F, N, None)
+        _write_ply(path, V, F, N, None, quality)
     elif ext == ".stl":
         _write_stl(path, V, F)
     elif ext == ".obj":
@@ -230,7 +246,8 @@ def load_ply(path: str | Path) -> dict[str, np.ndarray | None]:
     """Minimal PLY reader (ASCII / binary, any endianness).
 
     Returns ``{"vertices": (N,3) float64, "normals": (N,3) | None, "colors": (N,3) uint8 | None,
-    "faces": (M,3) int64 | None}``. Polygons are fan-triangulated; unknown elements are skipped.
+    "faces": (M,3) int64 | None, "quality": (N,) float64 | None}``. Polygons are fan-triangulated;
+    unknown elements are skipped.
     """
     path = Path(path)
     with open(path, "rb") as fh:
@@ -287,6 +304,7 @@ def load_ply(path: str | Path) -> dict[str, np.ndarray | None]:
     out: dict[str, np.ndarray | None] = {
         "vertices": np.stack([v["x"], v["y"], v["z"]], axis=1).astype(np.float64),
         "normals": None, "colors": None, "faces": faces,
+        "quality": np.asarray(v["quality"], dtype=np.float64) if "quality" in v else None,
     }
     if all(k in v for k in ("nx", "ny", "nz")):
         out["normals"] = np.stack([v["nx"], v["ny"], v["nz"]], axis=1).astype(np.float64)

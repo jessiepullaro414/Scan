@@ -306,6 +306,7 @@ def make_stub_pipeline() -> types.ModuleType:
         laser: object = None
         fusion: object = None
         markers: object = None
+        recon: str = "auto"
 
     @dataclass
     class FrameResult:

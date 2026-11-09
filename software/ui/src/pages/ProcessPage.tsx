@@ -27,6 +27,7 @@ import {
   Route,
   Sparkles,
   SquareDashed,
+  Target,
   Trash,
   Waypoints,
   X,
@@ -51,6 +52,7 @@ import { processKey, useProcess, useProcessJob } from "../store/process";
 import { useProjects } from "../store/projects";
 import { useRecipes } from "../store/recipes";
 import { toast } from "../store/toasts";
+import { sigmaOf } from "../three/confidence";
 import { cvToThree } from "../three/coords";
 import { viewBus } from "../three/viewBus";
 import { EditsPanel, type EditTab } from "./process/EditsPanel";
@@ -60,6 +62,7 @@ import { ProcessCanvas, type CompareMode, type SelectTool } from "./process/Proc
 import { RecipesPanel } from "./process/RecipesPanel";
 import { StagesPanel } from "./process/StagesPanel";
 import { DownloadPanel, StatsPanel } from "./process/StatsPanel";
+import { ConfidenceLegend } from "./viewer/ConfidenceLegend";
 import type { Shading } from "./viewer/ViewerCanvas";
 
 const TOOLS: { id: SelectTool; label: string; key: string; icon: LucideIcon; hint: string }[] = [
@@ -191,6 +194,9 @@ export default function ProcessPage({ pid, sid }: { pid: string; sid: string }) 
   const busy = !!job || !!state?.busy || !!entry?.action || isActive(makeJob);
   const comparing = compare === "before" && !!previous;
   const canSelect = !!mesh && !comparing;
+  // the confidence map needs each point's sigma (meshes made with the confidence reconstruction)
+  const hasSigma = !!sigmaOf(mesh?.geometry);
+  const shownShading: Shading = shading === "confidence" && !hasSigma ? "clay" : shading;
 
   // A new version (an edit, undo or redo) brings a new, empty selection. Say so when that drops
   // faces the user had selected, unless Delete or Keep used them.
@@ -306,6 +312,7 @@ export default function ProcessPage({ pid, sid }: { pid: string; sid: string }) 
     "1": () => setShading("clay"),
     "2": () => setShading("studio"),
     "3": () => setShading("normals"),
+    "4": () => hasSigma && setShading("confidence"),
     v: () => pickTool("navigate"),
     b: () => pickTool("box"),
     l: () => pickTool("lasso"),
@@ -582,7 +589,7 @@ export default function ProcessPage({ pid, sid }: { pid: string; sid: string }) 
               mesh={mesh}
               previous={previous}
               compare={previous ? compare : "now"}
-              shading={shading}
+              shading={shownShading}
               wireframe={wireframe}
               holes={holesWanted ? holes.data : null}
               fillUpTo={tab === "holes" ? fillMm : null}
@@ -642,12 +649,21 @@ export default function ProcessPage({ pid, sid }: { pid: string; sid: string }) 
                 <Segmented<Shading>
                   label="Shading"
                   size="sm"
-                  value={shading}
+                  value={shownShading}
                   onChange={setShading}
                   options={[
                     { value: "clay", label: "Clay", icon: Brush, title: "Matcap clay (1)" },
                     { value: "studio", label: "Studio", icon: Sparkles, title: "Studio lighting (2)" },
                     { value: "normals", label: "Normals", icon: Orbit, title: "Normal shading (3)" },
+                    {
+                      value: "confidence",
+                      label: "Confidence",
+                      icon: Target,
+                      disabled: !hasSigma,
+                      title: hasSigma
+                        ? "How well each point was measured (4)"
+                        : "This mesh has no confidence data: it was made without a GPU or by an earlier version. Run Track again to get it.",
+                    },
                   ]}
                 />
                 <span className="mx-1 h-5 w-px bg-line-strong" aria-hidden />
@@ -778,6 +794,15 @@ export default function ProcessPage({ pid, sid }: { pid: string; sid: string }) 
             </Overlay>
           ) : null}
         </div>
+
+        {/* bottom left: the confidence map's legend, above the selection bar when that shows */}
+        {shownShading === "confidence" && mesh ? (
+          <div className={cn("pointer-events-none absolute left-4 transition-[bottom] duration-200", showSelBar ? "bottom-28" : "bottom-4")}>
+            <Overlay className="px-3 py-2.5">
+              <ConfidenceLegend geometry={(comparing ? previous : mesh)?.geometry ?? null} />
+            </Overlay>
+          </div>
+        ) : null}
 
         {/* bottom centre: the selection */}
         {showSelBar ? (

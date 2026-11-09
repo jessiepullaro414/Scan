@@ -80,7 +80,8 @@ from dataclasses import dataclass
 import cv2
 import numpy as np
 
-__all__ = ["DepthParams", "DepthEstimator", "disparity_range", "BACKENDS"]
+__all__ = ["DepthParams", "DepthEstimator", "disparity_range", "BACKENDS", "SIGMA_UNREFINED_PX", "SIGMA_MODELS",
+           "SigmaModel", "lk_window_n_eff"]
 
 log = logging.getLogger(__name__)
 
@@ -160,6 +161,45 @@ def disparity_range(f_px: float, baseline_mm: float, min_depth_mm: float, max_de
     return min_d, num_d
 
 
+SIGMA_UNREFINED_PX = 0.1  # px: sigma_LK of disparities the sub-pixel step left alone (calibrated, SigmaModel)
+
+
+@dataclass(frozen=True)
+class SigmaModel:
+    """Disparity standard deviation from what the matcher can see (module docstring, "Confidence"):
+
+    ``sigma_d = sqrt(floor^2 + (lk_scale sigma_LK)^2) * (1 + hole_amp exp(-(h / hole_r)^2))
+    * (1 + inc_amp exp(-(cos / inc_cos)^2)) * (1 + clip((near_mm - (z - z_min)) / near_mm, 0, 1))``
+
+    ``h`` is the distance (px) to the nearest pixel without depth, ``cos`` the cosine of the
+    incidence angle from the depth map's own gradients, ``z`` the depth.
+    """
+
+    floor_px: float
+    lk_scale: float
+    hole_amp: float
+    hole_r_px: float
+    inc_amp: float = 60.0
+    inc_cos: float = 0.25
+    near_mm: float = 50.0
+
+
+# Calibrated on simulated frames with true depth (sphere, car panel, bracket; 1280x800 and 640x400):
+# 2 sigma covers 96-97 % of pixels, and at least 93 % in every bin of sigma_LK, hole distance,
+# incidence and depth (VALIDATION.md, "Depth confidence").
+SIGMA_MODELS = {
+    "gpu": SigmaModel(floor_px=0.14, lk_scale=2.8, hole_amp=120.0, hole_r_px=5.0),
+    "cpu": SigmaModel(floor_px=0.15, lk_scale=2.6, hole_amp=60.0, hole_r_px=8.0),
+}
+
+
+def lk_window_n_eff(win_1d: np.ndarray) -> float:
+    """Effective number of pixels ``1 / sum(w^2)`` of the 2-D window ``w1 w1^T`` (``w1`` normalised)."""
+    w = np.asarray(win_1d, dtype=np.float64).ravel()
+    w = w / w.sum()
+    return float(1.0 / float(np.sum(w * w)) ** 2)
+
+
 class _LKRefiner:
     """Dense gain-invariant 1-D Lucas-Kanade refinement of a disparity map (one Gauss-Newton step).
 
@@ -167,7 +207,7 @@ class _LKRefiner:
     fresh 4 MB arrays costs more than the arithmetic itself.
     """
 
-    _BUFFERS = ("x", "xb", "mu", "sq", "ln", "rn", "mx", "rw", "g", "g2", "e", "num", "den", "t")
+    _BUFFERS = ("x", "xb", "mu", "sq", "ln", "rn", "mx", "rw", "g", "g2", "e", "e2", "E2", "num", "den", "t")
     _EPS2 = 16.0  # (4 DN)^2 noise floor of the local normalisation
     _MIN_TEXTURE = 0.02  # minimum windowed mean of g^2 (normalised units)
 
@@ -180,6 +220,7 @@ class _LKRefiner:
         self._win_k = cv2.getGaussianKernel(int(2 * math.ceil(2.5 * s) + 1), s).astype(np.float32)
         self._pre_k = cv2.getGaussianKernel(5, 1.0).astype(np.float32)
         self._box = 2 * int(params.refine_norm_radius) + 1
+        self.n_eff = lk_window_n_eff(self._win_k)
 
     def _alloc(self, shape: tuple[int, int]) -> None:
         if self._shape == shape:
@@ -209,6 +250,17 @@ class _LKRefiner:
 
     def refine(self, left: np.ndarray, right: np.ndarray, disp: np.ndarray, valid: np.ndarray) -> np.ndarray:
         """Return refined disparities (new float32 array); invalid pixels are passed through."""
+        return self.refine_with_sigma(left, right, disp, valid, sigma=False)[0]
+
+    def refine_with_sigma(self, left: np.ndarray, right: np.ndarray, disp: np.ndarray, valid: np.ndarray,
+                          sigma: bool = True) -> tuple[np.ndarray, np.ndarray | None]:
+        """Refined disparities and, with ``sigma``, the step's standard deviation ``sigma_LK`` (px).
+
+        ``sigma_LK^2 = R / (n_eff * sum(w g^2))``: the windowed residual variance left after the
+        step (``R = sum(w e^2) - sum(w g e)^2 / sum(w g^2)``) over the information, with ``n_eff``
+        the window's effective number of pixels. Pixels the step leaves alone get
+        :data:`SIGMA_UNREFINED_PX`; invalid ones NaN.
+        """
         self._alloc(disp.shape)
         b = self._buf
         ln = self._normalize(left, b["ln"])
@@ -225,6 +277,10 @@ class _LKRefiner:
         np.add(b["g"], b["g2"], out=b["g"])
         np.multiply(b["g"], validf, out=b["g"])
         np.subtract(ln, b["rw"], out=b["e"])
+        if sigma:  # windowed squared residual, over the same pixels as the step
+            np.multiply(b["e"], b["e"], out=b["e2"])
+            np.multiply(b["e2"], validf, out=b["e2"])
+            cv2.sepFilter2D(b["e2"], -1, self._win_k, self._win_k, dst=b["E2"])
         np.multiply(b["g"], b["e"], out=b["e"])
         cv2.sepFilter2D(b["e"], -1, self._win_k, self._win_k, dst=b["num"])
         np.multiply(b["g"], b["g"], out=b["g"])
@@ -237,7 +293,18 @@ class _LKRefiner:
         ok &= valid
         out = disp.copy()
         np.subtract(disp, b["num"], out=out, where=ok)
-        return out
+        if not sigma:
+            return out, None
+        # R = E2 - delta^2 * den (b["num"] holds delta now, b["t"] max(den, eps))
+        np.multiply(b["num"], b["num"], out=b["e2"])
+        np.multiply(b["e2"], b["den"], out=b["e2"])
+        np.subtract(b["E2"], b["e2"], out=b["e2"])
+        np.maximum(b["e2"], 0.0, out=b["e2"])
+        np.divide(b["e2"], b["t"], out=b["e2"])
+        np.sqrt(b["e2"] / np.float32(self.n_eff), out=b["e2"])
+        sig = np.where(ok, b["e2"], np.float32(SIGMA_UNREFINED_PX)).astype(np.float32)
+        sig[~valid] = np.nan
+        return out, sig
 
 
 class DepthEstimator:
@@ -408,6 +475,11 @@ class DepthEstimator:
     # ------------------------------------------------------------------ public API
     def disparity(self, left_r: np.ndarray, right_r: np.ndarray) -> np.ndarray:
         """Disparity map ``u_left - u_right`` in pixels (float32, NaN = invalid)."""
+        return self.disparity_with_sigma(left_r, right_r, sigma=False)[0]
+
+    def disparity_with_sigma(self, left_r: np.ndarray, right_r: np.ndarray,
+                             sigma: bool = True) -> tuple[np.ndarray, np.ndarray | None]:
+        """Disparity (px, NaN = invalid) and, with ``sigma``, the sub-pixel step's ``sigma_LK`` (px, NaN = invalid)."""
         self._check_pair(left_r, right_r)
         p = self.params
         if p.normalize:
@@ -418,7 +490,9 @@ class DepthEstimator:
             self._gpu_failed(ValueError(f"{left_r.shape[1]}x{left_r.shape[0]} images are too small for it"), quiet=True)
         if self._gpu is not None:
             try:
-                return self._gpu.disparity(ml, mr, left_r, right_r)
+                if sigma:
+                    return self._gpu.disparity_sigma(ml, mr, left_r, right_r)
+                return self._gpu.disparity(ml, mr, left_r, right_r), None
             except Exception as e:  # out of device memory, lost device, driver error: keep going on the CPU
                 self._gpu_failed(e)
         raw = self._match(ml, mr)
@@ -428,10 +502,13 @@ class DepthEstimator:
         # otherwise propagate disparities into the left strip that has no correspondence.
         half = np.float32(self.params.block_size // 2)
         valid &= (self._columns(disp.shape[1]) - disp) >= half
+        sig = None
         if self._refiner is not None and valid.any():
-            disp = self._refiner.refine(left_r, right_r, disp, valid)
+            disp, sig = self._refiner.refine_with_sigma(left_r, right_r, disp, valid, sigma=sigma)
+        elif sigma:
+            sig = np.where(valid, np.float32(SIGMA_UNREFINED_PX), np.float32(np.nan)).astype(np.float32)
         disp[~valid] = np.nan
-        return disp
+        return disp, sig
 
     def _columns(self, width: int) -> np.ndarray:
         if self._cols is None or self._cols.shape[1] != width:
@@ -463,3 +540,76 @@ class DepthEstimator:
                 if depth is not None:  # None: this GPU cannot divide exactly, convert on the CPU
                     return depth
         return self.depth_from_disparity(self.disparity(left_r, right_r))
+
+    def compute_with_sigma(self, left_r: np.ndarray, right_r: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        """Depth (mm, float32, 0 = invalid; the same as :meth:`compute`) and its standard deviation
+        ``sigma_z`` (mm, 0 where the depth is invalid), :class:`SigmaModel` of this backend."""
+        if self._gpu is not None and left_r.ndim == 2 and min(left_r.shape) < _GPU_MIN_SIZE:
+            self._gpu_failed(ValueError(f"{left_r.shape[1]}x{left_r.shape[0]} images are too small for it"), quiet=True)
+        if self._gpu is not None:
+            self._check_pair(left_r, right_r)
+            p = self.params
+            ml, mr = (self._lcn(left_r), self._lcn(right_r)) if p.normalize else (left_r, right_r)
+            try:
+                disp, depth, sigz = self._gpu.depth_sigma(ml, mr, left_r, right_r)
+            except Exception as e:
+                self._gpu_failed(e)
+            else:
+                if not self._gpu.exact_division:  # as compute(): convert on the CPU, bit for bit
+                    depth = self.depth_from_disparity(disp)
+                    sigz = np.where(depth > 0, sigz, np.float32(0.0)).astype(np.float32)
+                return depth, sigz
+        disp, sig = self.disparity_with_sigma(left_r, right_r, sigma=True)
+        depth = self.depth_from_disparity(disp)
+        return depth, self.sigma_z(depth, sig)
+
+    def sigma_z(self, depth: np.ndarray, sigma_lk: np.ndarray | None) -> np.ndarray:
+        """Depth standard deviation (mm, float32, 0 where ``depth`` is 0): ``sigma_z = z^2 sigma_d / (f B)``
+        with ``sigma_d`` from :class:`SigmaModel` (:data:`SIGMA_MODELS` of this backend; the GPU
+        computes the same on the device, :meth:`compute_with_sigma`)."""
+        m = SIGMA_MODELS["gpu" if self.backend == "gpu" else "cpu"]
+        z = np.ascontiguousarray(depth, dtype=np.float32)
+        hgt, wid = z.shape
+        g = self._sigma_grids(wid, hgt)
+        valid8 = (z > 0).astype(np.uint8)
+        lk = (np.full(z.shape, SIGMA_UNREFINED_PX, np.float32) if sigma_lk is None
+              else np.nan_to_num(np.asarray(sigma_lk, dtype=np.float32), nan=SIGMA_UNREFINED_PX))
+        sd = cv2.magnitude(lk * np.float32(m.lk_scale), np.full(z.shape, m.floor_px, np.float32))
+        # holes: 1 + amp exp(-(h / r)^2)
+        h = cv2.distanceTransform(valid8, cv2.DIST_L2, 3)
+        t = cv2.multiply(h, h, scale=-1.0 / (m.hole_r_px * m.hole_r_px))
+        cv2.exp(t, t)
+        cv2.scaleAdd(t, float(m.hole_amp), g["one"], t)
+        cv2.multiply(sd, t, sd)
+        # incidence: cos = z / (|(-fx z_u, -fy z_v, (u-cx) z_u + (v-cy) z_v + z)| |r|), 1 next to a hole
+        K = self.K
+        zu = cv2.Sobel(z, cv2.CV_32F, 1, 0, ksize=1, scale=0.5, borderType=cv2.BORDER_REPLICATE)
+        zv = cv2.Sobel(z, cv2.CV_32F, 0, 1, ksize=1, scale=0.5, borderType=cv2.BORDER_REPLICATE)
+        n3 = cv2.add(cv2.add(cv2.multiply(g["du"], zu), cv2.multiply(g["dv"], zv)), z)
+        nn = cv2.magnitude(cv2.magnitude(zu * np.float32(K[0, 0]), zv * np.float32(K[1, 1])), n3)
+        cos = cv2.divide(z, cv2.max(cv2.multiply(nn, g["rr"]), 1e-6))
+        full = cv2.erode(valid8, g["cross"], borderType=cv2.BORDER_CONSTANT, borderValue=0)
+        cos[full == 0] = 1.0
+        cv2.min(cos, 1.0, cos)
+        t = cv2.multiply(cos, cos, scale=-1.0 / (m.inc_cos * m.inc_cos))
+        cv2.exp(t, t)
+        cv2.scaleAdd(t, float(m.inc_amp), g["one"], t)
+        cv2.multiply(sd, t, sd)
+        # the near end of the depth range: up to x2
+        near = np.clip((np.float32(m.near_mm + self.params.min_depth_mm) - z) * np.float32(1.0 / m.near_mm), 0, 1)
+        cv2.multiply(sd, cv2.add(near, g["one"]), sd)
+        out = cv2.multiply(cv2.multiply(z, z), sd, scale=1.0 / (self.f * self.baseline))
+        out[valid8 == 0] = 0.0
+        return out
+
+    def _sigma_grids(self, w: int, h: int) -> dict[str, np.ndarray]:
+        """Per-size constants of :meth:`sigma_z`: pixel offsets from the principal point, |ray|, ones."""
+        if getattr(self, "_sg_size", None) != (w, h):
+            K = self.K
+            du = np.tile(np.arange(w, dtype=np.float32) - np.float32(K[0, 2]), (h, 1))
+            dv = np.tile((np.arange(h, dtype=np.float32) - np.float32(K[1, 2]))[:, None], (1, w))
+            rr = np.sqrt(np.square(du / np.float32(K[0, 0])) + np.square(dv / np.float32(K[1, 1])) + 1.0).astype(np.float32)
+            self._sg = {"du": du, "dv": dv, "rr": rr, "one": np.ones((h, w), np.float32),
+                        "cross": cv2.getStructuringElement(cv2.MORPH_CROSS, (3, 3))}
+            self._sg_size = (w, h)
+        return self._sg

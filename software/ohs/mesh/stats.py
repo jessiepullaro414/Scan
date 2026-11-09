@@ -10,6 +10,8 @@
   (neither, and at least one face);
 * ``bbox_mm`` (size along x, y, z), ``area_cm2`` and ``volume_cm3`` (only when watertight:
   the absolute signed volume of the closed surface).
+
+The processing studio adds the confidence, ``sigma_mm`` (:func:`ohs.mesh.confidence.sigma_stats`).
 """
 from __future__ import annotations
 

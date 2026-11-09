@@ -527,6 +527,12 @@ type MeshStats = {
   border_mm: number | null;           // perimeter of the outer border
   boundary_edges: number; non_manifold_edges: number; watertight: boolean;
   bbox_mm: [number, number, number]; area_cm2: number; volume_cm3: number | null;   // volume only when watertight
+  sigma_mm: SigmaStats | null;        // the confidence, when the mesh has per-vertex sigmas
+};
+type SigmaStats = {                   // each vertex's sigma (1 standard deviation, mm), shares of the surface
+  median: number; p95: number;        // mm
+  within_0_1: number; within_0_3: number;   // share with sigma <= 0.1 / 0.3 mm
+  not_measured: number;               // share nothing measured (sigma 50 mm: filled holes)
 };
 type EditEntry = { id: string; op: MeshOp; params: Record<string, unknown>;
                    label: string;               // "Fill holes up to 12 mm"
@@ -595,6 +601,7 @@ smooth(V, F, method="taubin"|"bilateral", strength=0.5, keep_edges=True)
 decimate(V, F, target_triangles=None, ratio=None)
 delete_faces(V, F, faces) / keep_faces(V, F, faces)
 mesh_stats(V, F) -> dict (MeshStats)              ;  hole_outlines(V, F) -> list[dict]
+sigma_stats(S, V, F) -> dict (SigmaStats) | None  ;  carry_sigma(op, V, F, S, V2, faces=None) -> S2  # ohs/mesh/confidence.py
 
 # ohs/track/posegraph.py (new)
 straighten_trajectory(rec_path, calib, trajectory, *, params=None, depth_params=None, progress=None,
@@ -620,7 +627,7 @@ Everything in the M3 phase 2 section is implemented as written, with these clari
 - `cache/base.npz` and `cache/<edit id>.npz`: the base and the mesh after each edit within 10 steps of the cursor (V float32, F int32, vertex normals float16; about 21 MB per step at 1M triangles).
 - `selections/<edit id>.npy`: the face indices of a delete / keep edit, to replay it.
 - A new base also copies the stage's `report.json`, `trajectory.csv`, `laser_points.ply` and `marker_map.json` into `result/`, and updates the scan's `report` summary and `quality`.
-- The current mesh in `result/` is written to a temporary file and renamed, so a download never sees half a file. `mesh.ply` carries area-weighted vertex normals.
+- The current mesh in `result/` is written to a temporary file and renamed, so a download never sees half a file. `mesh.ply` carries area-weighted vertex normals and, when the mesh has them, each vertex's sigma (`quality`, see "Confidence" below).
 - **A scan processed before M3** (`result/mesh.ply` but no `state.json`) is taken over on first access: its result becomes the `track` stage (done) and the base, version 1.
 
 **ProcessState**
@@ -718,6 +725,12 @@ Everything in the M3 phase 2 section is implemented as written, with these clari
 - Where two loops touch at one vertex, they are separated by walking around that vertex.
 - A boundary chain that cannot be closed (inconsistently oriented faces) counts as a hole but is never filled.
 - Rounding: perimeters and `bbox_mm` to 0.01 mm, `area_cm2` to 0.01 cm², `volume_cm3` to 0.001 cm³ (the absolute volume).
+
+**Confidence (per-vertex sigma)**
+- A mesh made by the confidence reconstruction (the default with a GPU; report `mesh.reconstruction`) gives each vertex its standard deviation in mm. `mesh.ply` carries it as the vertex property `float quality`, which MeshLab reads too; STL and OBJ have no place for it. A sigma of 50 mm means "nothing measured it", and caps the rest.
+- Every step keeps it: smoothing moves the vertices, which keep their sigma; filled holes are 50 mm; deleting or keeping faces keeps the vertices left; removing floaters and simplifying take the nearest vertex's sigma from the step before. The cache stores it with each step.
+- `MeshStats.sigma_mm` sums it up, area-weighted (each vertex stands for a third of its triangles' area). It is `null` for meshes without sigmas: made without a GPU, by Poisson, or before this version (run Track again to get them).
+- The processing report has the same summary for the fused mesh, as `mesh.sigma_mm`.
 
 **Recipes**
 - Built-ins, in this order:

@@ -1136,6 +1136,7 @@ class PipelineProcessor:
             depth=depth,
             fusion=None if live.voxel_mm is None else FusionParams(voxel_mm=float(live.voxel_mm)),
             markers=MarkerParams(tag_mm=float(self.cfg.markers.tag_mm)),
+            recon="open3d",  # the live preview: rewind re-fuses keyframes; the confidence TSDF is for the final mesh
         )
 
     def start(self) -> None:
