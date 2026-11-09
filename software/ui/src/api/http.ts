@@ -13,22 +13,29 @@ import type {
   ConnectBody,
   DeviceState,
   DevicesProbe,
+  EditBody,
   Emitters,
   Health,
+  HoleOutline,
   Job,
+  NewRecipeBody,
   OpenFolderReply,
   Paper,
   Printables,
   PrintCheck,
   ProcessQuality,
+  ProcessState,
   Project,
   ProjectSummary,
+  Recipe,
+  RecipeScope,
   SaveReply,
   Scan,
   SessionState,
   Settings,
   SetupState,
   StartBody,
+  TrajectoryView,
 } from "./types";
 
 export type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
@@ -139,6 +146,7 @@ const del = async (path: string) => {
 const delJson = async <T>(path: string) => (await send<T>("DELETE", path)).data;
 
 const enc = encodeURIComponent;
+const scanPath = (pid: string, sid: string) => `/api/projects/${enc(pid)}/scans/${enc(sid)}`;
 
 /** Result of `POST /api/device/connect`: 200 with the device, or 202 with the job building the demo. */
 export type ConnectResult = { kind: "connected"; device: DeviceState } | { kind: "job"; job: Job };
@@ -215,8 +223,42 @@ export const api = {
   calibThumbUrl: (index: number) => `/api/calibration/views/${enc(String(index))}/thumb.jpg`,
   calibReportUrl: () => "/api/calibration/report.json",
 
-  /** URL of a result file (`mesh.ply`, `mesh.stl`, `laser_points.ply`, `report.json`). */
-  fileUrl: (pid: string, sid: string, name: string) => `/api/projects/${enc(pid)}/scans/${enc(sid)}/files/${enc(name)}`,
+  // ---------------------------------------------------------------- M3: processing studio
+  /** `ProcessState` of a scan: its stages, base mesh, edits and current mesh. */
+  processState: (pid: string, sid: string) => get<ProcessState>(`${scanPath(pid, sid)}/process`),
+  /** Job (kind `process_track`): tracking and fusion again, at this quality. */
+  processTrack: (pid: string, sid: string, quality: ProcessQuality) => post<Job>(`${scanPath(pid, sid)}/process/track`, { quality }),
+  /** Job (kind `process_straighten`): loop closure, then a fuse at the corrected poses. */
+  processStraighten: (pid: string, sid: string) => post<Job>(`${scanPath(pid, sid)}/process/straighten`, {}),
+  /** Job (kind `process_fuse`): the mesh again from the current poses at this voxel size. */
+  processFuse: (pid: string, sid: string, voxel_mm: number) => post<Job>(`${scanPath(pid, sid)}/process/fuse`, { voxel_mm }),
+  /** Job (kind `mesh_edit`). Redo steps after the cursor are dropped first. */
+  processEdit: (pid: string, sid: string, body: EditBody) => post<Job>(`${scanPath(pid, sid)}/process/edits`, body),
+  processUndo: (pid: string, sid: string) => post<ProcessState>(`${scanPath(pid, sid)}/process/undo`),
+  processRedo: (pid: string, sid: string) => post<ProcessState>(`${scanPath(pid, sid)}/process/redo`),
+  processRecipe: (pid: string, sid: string, recipe_id: string, scope: RecipeScope) =>
+    post<Job>(`${scanPath(pid, sid)}/process/recipe`, { recipe_id, scope }),
+  processHoles: (pid: string, sid: string) => get<HoleOutline[]>(`${scanPath(pid, sid)}/process/holes.json`),
+  processTrajectory: (pid: string, sid: string) => get<TrajectoryView>(`${scanPath(pid, sid)}/process/trajectory.json`),
+
+  /** Built-ins first. */
+  recipes: () => get<Recipe[]>("/api/recipes"),
+  createRecipe: (body: NewRecipeBody) => post<Recipe>("/api/recipes", body),
+  /** User recipes only (409 for a built-in). */
+  deleteRecipe: (id: string) => del(`/api/recipes/${enc(id)}`),
+
+  /** URL of a result file (`mesh.ply`, `mesh.stl`, `mesh.obj`, `laser_points.ply`, `report.json`). */
+  fileUrl: (pid: string, sid: string, name: string) => `${scanPath(pid, sid)}/files/${enc(name)}`,
+
+  /** Is a file there? (HEAD; mock mode answers it too). */
+  async exists(url: string): Promise<boolean> {
+    try {
+      const res = await fetchImpl(url, { method: "HEAD" });
+      return res.ok;
+    } catch {
+      return false;
+    }
+  },
 
   /** Download a file into memory, reporting progress when the size is known. */
   async fetchBinary(url: string, onProgress?: ProgressFn, signal?: AbortSignal): Promise<ArrayBuffer> {

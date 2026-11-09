@@ -26,6 +26,13 @@ Ground-truth trajectory errors are computed after aligning the estimated world f
 ground truth at the first tracked frame: ``A = T_gt[f] @ inv(T_est[f])`` and per frame
 ``pose_error(inv(A) @ T_gt[i], T_est[i])``. In markerless mode ``T_est[f] = I``, so this is
 ``inv(T_gt0) @ T_gt_i`` versus ``T_est_i``.
+
+**Known poses** (``poses={frame index: T_wc}``, the processing studio's straighten and fuse
+stages): no tracking at all. Only the frames that have a pose (and pass the frame selection and
+the cuts) are processed, each fused at its pose with :meth:`FramePipeline.process` ``(pose=T)``;
+the pipeline runs with a single model and no gyro (nothing is tracked), and the marker map is
+not refined. ``trajectory.csv`` then holds the given poses, the report says
+``"poses": "given"``, and the ground-truth errors (simulated data) measure those poses.
 """
 from __future__ import annotations
 
@@ -35,7 +42,7 @@ import logging
 import math
 import time
 from collections import Counter
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Any, Callable
 
@@ -184,18 +191,25 @@ def process_recording(
     calib: ScannerCalibration | None = None,
     params: ProcessParams | None = None,
     progress: Callable[[int, int, FrameResult], None] | None = None,
+    poses: dict[int, np.ndarray] | None = None,
 ) -> dict:
     """Process a recording at full quality and write the results to ``out_dir``.
 
     ``calib`` defaults to the recording's ``calibration.json``; ``ValueError`` if neither is
     available or the calibration's image size does not match the recording. ``progress(k, n,
-    result)`` is called after each of the ``n`` processed frames (``k`` counts from 0). Returns
-    the report dict (also written as ``report.json``).
+    result)`` is called after each of the ``n`` processed frames (``k`` counts from 0). With
+    ``poses`` (frame index -> 4x4 ``T_wc``) nothing is tracked: the frames with a pose are fused
+    at it (see the module docstring); ``ValueError`` if no selected frame has one. Returns the
+    report dict (also written as ``report.json``).
     """
     wall0 = time.perf_counter()
     rec_path = Path(rec_path)
     out = Path(out_dir)
     p = params if params is not None else ProcessParams()
+    if poses is not None:
+        poses = {int(k): np.asarray(T, dtype=np.float64).reshape(4, 4) for k, T in poses.items()}
+        # nothing is tracked: a single (reconstruction) model and no gyro prior
+        p = replace(p, pipeline=replace(p.pipeline, track_filter_px=0.0, use_imu=False))
     export = _check_export(tuple(p.export))
     if int(p.frame_step) < 1:
         raise ValueError("frame_step must be >= 1")
@@ -242,6 +256,15 @@ def process_recording(
         log.info("skipping %d frames inside %d cut interval(s)", n_cut, len(cuts))
         if not positions:
             raise ValueError(f"every selected frame of {rec_path} lies inside a cut (rewound) interval: nothing to process")
+    n_unposed = 0
+    if poses is not None:
+        index_of = reader.indices
+        kept = [pos for pos in positions if int(index_of[pos]) in poses]
+        n_unposed = len(positions) - len(kept)
+        positions = kept
+        if not positions:
+            raise ValueError(f"none of the given poses belongs to a selected frame of {rec_path}: nothing to fuse")
+        log.info("fusing %d frames at given poses (%d selected frames have none)", len(positions), n_unposed)
     n = len(positions)
     log.info("processing %s: %d of %d frames (%s mode, scale %.2f)", rec_path, n, len(reader), p.pipeline.mode, p.pipeline.scale)
     rows: list[dict] = []
@@ -257,7 +280,7 @@ def process_recording(
                 if j_new > j_imu:
                     pipe.add_imu_arrays(imu_t[j_imu:j_new], imu_g[j_imu:j_new])
                     j_imu = j_new
-            res = pipe.process(frame)
+            res = pipe.process(frame) if poses is None else pipe.process(frame, pose=poses[int(frame.index)])
             for key, v in res.timings_ms.items():
                 timings.setdefault(key, []).append(float(v))
             if not res.track.ok:
@@ -289,9 +312,12 @@ def process_recording(
             "imu": {"samples": int(len(imu_t)), "gyro_prior": pipe.gyro_enabled, "frames_with_prior": n_prior},
             "timings_ms": {key: _stats(v) for key, v in timings.items()},
         }
+        if poses is not None:
+            report["poses"] = "given"
+            report["frames"]["without_pose"] = n_unposed
 
-        # marker map refinement (offline only)
-        if pipe.markers is not None:
+        # marker map refinement (offline only; nothing was tracked when the poses were given)
+        if pipe.markers is not None and poses is None:
             mt = pipe.markers
             ref = mt.refine_map() if mt.initialized else {"rms_mm": None, "n_tags": 0}
             tag_map = {int(i): X.tolist() for i, X in sorted(mt.map.items())}
@@ -364,9 +390,10 @@ def process_recording(
                          "use_lasers": p.pipeline.use_lasers, "integrate_depth": p.pipeline.integrate_depth},
             "depth": asdict(pipe.depth_params), "laser": asdict(pipe.laser_params),
             "fusion": asdict(pipe.fusion_params),
-            "tracking": ({"model": "separate (filtered depth)", "filter_px": pipe.track_filter_px,
-                          "voxel_mm": pipe.track_fusion_params.voxel_mm,
-                          "gyro_sigma_deg": pipe.track_fusion_params.gyro_sigma_deg}
+            "tracking": ({"model": "none: fused at the given poses"} if poses is not None
+                         else {"model": "separate (filtered depth)", "filter_px": pipe.track_filter_px,
+                               "voxel_mm": pipe.track_fusion_params.voxel_mm,
+                               "gyro_sigma_deg": pipe.track_fusion_params.gyro_sigma_deg}
                          if pipe.dual_model else {"model": "reconstruction TSDF (raw depth)"}
                          if p.pipeline.mode == "markerless" else {"model": "markers"}),
             "markers": asdict(pipe.marker_params) if pipe.markers is not None else None,

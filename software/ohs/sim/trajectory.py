@@ -17,6 +17,16 @@ left. Distance stays inside ``distance`` (default 220-300 mm, always within 150-
 :class:`RotatingTrajectory` is the IMU-calibration exercise in front of a board: hold still, then
 rotate about all three camera axes (optionally about a pivot in front of the camera, and for a
 limited time with a smooth return to the start pose).
+
+**Scans that revisit the surface** (loop closure, :mod:`ohs.track.posegraph`):
+
+* an orbit: :class:`HandheldTrajectory` with ``sweep_deg_s = turn_deg / duration`` (e.g. 400 deg,
+  so the last 40 deg pass over the start again);
+* :class:`SweepTrajectory`: back-and-forth passes over a target (sweeping a body panel), each pass
+  beside the previous one, so later passes see the surface of earlier ones.
+
+:func:`add_drift` turns true poses into tracked-looking ones: a random walk of small errors in
+every frame-to-frame motion, i.e. the slow drift of odometry.
 """
 from __future__ import annotations
 
@@ -34,6 +44,8 @@ __all__ = [
     "StaticTrajectory",
     "HandheldTrajectory",
     "RotatingTrajectory",
+    "SweepTrajectory",
+    "add_drift",
     "sample_frames",
     "so3_exp_batch",
 ]
@@ -238,6 +250,119 @@ class RotatingTrajectory:
 
     def pose(self, t: float) -> np.ndarray:
         return self.poses(np.array([t]))[0]
+
+
+@dataclass
+class SweepTrajectory:
+    """Hand-held back-and-forth passes over ``target`` (world, mm), e.g. sweeping a body panel.
+
+    The aim point runs ``passes`` times along ``heading_deg`` (world XY) over ``length_mm``,
+    alternating direction with smooth cosine turnarounds (``-cos`` of the time: the scanner slows
+    down, stops and comes back), and steps sideways by ``spacing_mm`` during each turnaround (a
+    minimum-jerk ramp), so pass ``k`` covers the strip at the lateral offset ``(k - (passes - 1) /
+    2) * spacing_mm``. Later passes therefore revisit the surface of earlier ones. The scanner
+    centre looks at the aim point from ``distance`` (mm) and ``elevation_deg`` (both wander inside
+    their ranges) and from the azimuth ``view_azimuth_deg`` (default: standing beside the passes,
+    ``heading_deg - 90``), with roll wander, aim jitter and the tremor of :class:`HandheldTrajectory`.
+    ``t0`` is the start (camera time) and ``duration`` the time of all passes; the pose is defined
+    smoothly for all ``t``. Frame C (left camera) sits ``baseline / 2`` left of the scanner centre.
+    """
+
+    target: np.ndarray
+    t0: float = 0.0
+    duration: float = 8.0
+    passes: int = 2
+    length_mm: float = 160.0
+    spacing_mm: float = 40.0
+    heading_deg: float = 0.0
+    view_azimuth_deg: float | None = None
+    distance: tuple[float, float] = (240.0, 290.0)
+    elevation_deg: tuple[float, float] = (60.0, 75.0)
+    roll_deg: float = 8.0
+    aim_jitter_mm: float = 4.0
+    tremor_mm: float = 0.08
+    tremor_deg: float = 0.03
+    seed: int = 0
+    baseline: float = 60.0
+
+    def __post_init__(self) -> None:
+        self.target = np.asarray(self.target, dtype=np.float64).reshape(3)
+        if int(self.passes) < 1 or self.duration <= 0:
+            raise ValueError("need at least one pass and a positive duration")
+        if max(self.elevation_deg) >= 85.0:
+            raise ValueError("elevation must stay below 85 deg (look_at singularity)")
+        rng = np.random.default_rng(self.seed)
+        self._w_az = _Wander(rng, 1, 3, 0.05, 0.3)
+        self._w_el = _Wander(rng, 1, 3, 0.05, 0.3)
+        self._w_r = _Wander(rng, 1, 3, 0.08, 0.4)
+        self._w_roll = _Wander(rng, 1, 3, 0.05, 0.3)
+        self._w_aim = _Wander(rng, 3, 3, 0.1, 0.5)
+        self._w_tp = _Wander(rng, 3, 4, 6.0, 11.0)
+        self._w_tr = _Wander(rng, 3, 4, 6.0, 11.0)
+
+    def poses(self, t: np.ndarray) -> np.ndarray:
+        t = np.atleast_1d(np.asarray(t, dtype=np.float64))
+        s = t - self.t0
+        P = int(self.passes)
+        per = self.duration / P
+        h = math.radians(self.heading_deg)
+        e_h = np.array([math.cos(h), math.sin(h), 0.0])
+        e_side = np.array([-math.sin(h), math.cos(h), 0.0])
+        along = -0.5 * self.length_mm * np.cos(math.pi * s / per)
+        step = np.zeros_like(s)
+        width = 0.35 * per
+        for m in range(1, P):
+            step += _min_jerk((s - (m * per - 0.5 * width)) / width)
+        side = (step - 0.5 * (P - 1)) * self.spacing_mm
+        jitter = self.aim_jitter_mm * self._w_aim(s) * np.array([1.0, 1.0, 0.3])
+        aim = self.target[None] + along[:, None] * e_h[None] + side[:, None] * e_side[None] + jitter
+        az0 = self.heading_deg - 90.0 if self.view_azimuth_deg is None else self.view_azimuth_deg
+        az = np.radians(az0 + 6.0 * self._w_az(s)[:, 0])
+        el_lo, el_hi = (math.radians(v) for v in self.elevation_deg)
+        el = 0.5 * (el_lo + el_hi) + 0.5 * (el_hi - el_lo) * self._w_el(s)[:, 0]
+        r = 0.5 * (self.distance[0] + self.distance[1]) + 0.5 * (self.distance[1] - self.distance[0]) * self._w_r(s)[:, 0]
+        offs = np.stack([np.cos(el) * np.cos(az), np.cos(el) * np.sin(az), np.sin(el)], axis=1)
+        centre = aim + r[:, None] * offs + self.tremor_mm * self._w_tp(s)
+        roll = math.radians(self.roll_deg) * self._w_roll(s)[:, 0]
+        R = look_at_batch(centre, aim, roll) @ so3_exp_batch(math.radians(self.tremor_deg) * self._w_tr(s))
+        T = np.zeros((len(t), 4, 4))
+        T[:, :3, :3] = R
+        T[:, :3, 3] = centre - 0.5 * self.baseline * R[:, :, 0]
+        T[:, 3, 3] = 1.0
+        return T
+
+    def pose(self, t: float) -> np.ndarray:
+        return self.poses(np.array([float(t)]))[0]
+
+
+def add_drift(T_wc: np.ndarray, rot_deg: float = 0.05, trans_mm: float = 0.2, seed: int = 0) -> np.ndarray:
+    """Poses (N,4,4) with simulated tracking drift, from true (or good) poses ``T_wc`` (N,4,4).
+
+    Every frame-to-frame motion ``inv(T[k-1]) @ T[k]`` is followed by a random small motion in the
+    camera frame (rotation vector and translation, each axis normal with standard deviation
+    ``rot_deg / sqrt(3)`` and ``trans_mm / sqrt(3)``, so the RMS error per frame is ``rot_deg`` and
+    ``trans_mm``), and the perturbed motions are chained from the first pose, which is unchanged.
+    The error is a random walk that grows along the scan, like the drift of odometry; the camera's
+    rotation errors also move later positions (lever arm).
+    """
+    T = np.asarray(T_wc, dtype=np.float64)
+    rng = np.random.default_rng(seed)
+    sig = np.array([math.radians(rot_deg)] * 3 + [float(trans_mm)] * 3) / math.sqrt(3.0)
+    xi = rng.normal(0.0, 1.0, (max(len(T) - 1, 0), 6)) * sig
+    E = np.zeros((len(xi), 4, 4))
+    E[:, :3, :3] = so3_exp_batch(xi[:, :3])
+    E[:, :3, 3] = xi[:, 3:]
+    E[:, 3, 3] = 1.0
+    out = np.empty_like(T)
+    if len(T):
+        out[0] = T[0]
+    for k in range(1, len(T)):
+        R0, t0 = T[k - 1, :3, :3], T[k - 1, :3, 3]
+        rel = np.eye(4)
+        rel[:3, :3] = R0.T @ T[k, :3, :3]
+        rel[:3, 3] = R0.T @ (T[k, :3, 3] - t0)
+        out[k] = out[k - 1] @ rel @ E[k - 1]
+    return out
 
 
 def sample_frames(traj: Trajectory, n_frames: int, fps: float, t0: float = 0.0) -> tuple[np.ndarray, np.ndarray]:

@@ -23,6 +23,7 @@ import { useSetup } from "./store/setup";
 // The 3D pages carry three.js; they load on first use. So does the setup wizard.
 const ScanPage = lazy(() => import("./pages/ScanPage"));
 const ViewerPage = lazy(() => import("./pages/ViewerPage"));
+const ProcessPage = lazy(() => import("./pages/ProcessPage"));
 const SetupPage = lazy(() => import("./pages/setup/SetupPage"));
 
 function LoadingPage() {
@@ -55,6 +56,12 @@ function PageFor({ route }: { route: Route }) {
       return (
         <Suspense fallback={<Loading3D />}>
           <ViewerPage pid={route.pid} sid={route.sid} />
+        </Suspense>
+      );
+    case "process":
+      return (
+        <Suspense fallback={<Loading3D />}>
+          <ProcessPage key={`${route.pid}/${route.sid}`} pid={route.pid} sid={route.sid} />
         </Suspense>
       );
     case "scan":
@@ -126,7 +133,7 @@ export function App() {
 
   const unreachable = !health && !everOpen && !!healthError?.unreachable;
   // A crash on one wizard step clears when you go to another step.
-  const routeKey = route.name + ("pid" in route ? route.pid : "") + ("sid" in route ? route.sid : "") + (route.name === "setup" ? (route.step ?? "") : "");
+  const routeKey = route.name + ("pid" in route ? route.pid : "") + ("sid" in route ? `/${route.sid}` : "") + (route.name === "setup" ? (route.step ?? "") : "");
 
   return (
     <div className="flex h-full bg-bg text-fg">

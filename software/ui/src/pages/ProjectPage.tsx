@@ -15,7 +15,7 @@ import {
 import { useEffect, useState } from "react";
 import { api } from "../api/http";
 import type { Project, Scan } from "../api/types";
-import { JobProgress, MakeMeshButton, ScanStatusBadge } from "../components/ScanBits";
+import { JobProgress, MakeMeshButton, ProcessButton, ScanStatusBadge } from "../components/ScanBits";
 import { Button, IconButton } from "../components/ui/Button";
 import { ConfirmDialog, PromptDialog } from "../components/ui/Dialog";
 import { EmptyState, Skeleton } from "../components/ui/Feedback";
@@ -24,13 +24,16 @@ import { Menu } from "../components/ui/Popover";
 import { downloadFile } from "../lib/download";
 import { fileStem, fmtDateTime, fmtDuration, fmtInt, fmtRelative } from "../lib/format";
 import { href, navigate, paths } from "../lib/router";
-import { useTicker } from "../lib/util";
+import { cn, useTicker } from "../lib/util";
 import { useConnection } from "../store/connection";
 import { isActive, useScanJob } from "../store/jobs";
 import { useProjects } from "../store/projects";
 import { useSession } from "../store/session";
 import { toast } from "../store/toasts";
 import { useUi } from "../store/ui";
+
+/** The scan table's columns (the header and every row): scan, status, details, actions. */
+const ROW_GRID = "grid grid-cols-[minmax(0,1.5fr)_112px_minmax(0,1fr)_minmax(370px,400px)] gap-4";
 
 function resultUrls(project: Project, scan: Scan) {
   const r = scan.result;
@@ -50,7 +53,7 @@ function ScanRow({ project, scan }: { project: Project; scan: Scan }) {
   const stem = fileStem(project.name, scan.name);
 
   return (
-    <li className="grid min-h-[64px] grid-cols-[minmax(0,1.5fr)_112px_minmax(0,1fr)_minmax(300px,330px)] items-center gap-4 px-4 py-2.5 transition-colors hover:bg-surface-2/60">
+    <li className={cn(ROW_GRID, "min-h-[64px] items-center px-4 py-2.5 transition-colors hover:bg-surface-2/60")}>
       <div className="flex min-w-0 items-center gap-3">
         <div className="grid h-9 w-9 shrink-0 place-items-center rounded-lg border border-line bg-surface-2 text-muted">
           {hasResult ? <Box size={16} aria-hidden /> : <Waypoints size={16} aria-hidden />}
@@ -94,6 +97,7 @@ function ScanRow({ project, scan }: { project: Project; scan: Scan }) {
                 <Button size="sm" variant="primary" icon={Eye} onClick={() => navigate(paths.viewer(project.id, scan.id))}>
                   Open
                 </Button>
+                <ProcessButton projectId={project.id} scan={scan} label="Process" />
                 <Menu
                   label="Download"
                   width={230}
@@ -120,7 +124,10 @@ function ScanRow({ project, scan }: { project: Project; scan: Scan }) {
                 <MakeMeshButton projectId={project.id} scan={scan} label="Remake" variant="ghost" />
               </>
             ) : (
-              <MakeMeshButton projectId={project.id} scan={scan} variant={scan.status === "failed" ? "secondary" : "primary"} />
+              <>
+                <MakeMeshButton projectId={project.id} scan={scan} variant={scan.status === "failed" ? "secondary" : "primary"} />
+                <ProcessButton projectId={project.id} scan={scan} label="Process" variant="ghost" />
+              </>
             )}
           </>
         )}
@@ -231,7 +238,7 @@ export function ProjectPage({ pid }: { pid: string }) {
       />
 
       <section aria-label="Scans" className="overflow-hidden rounded-xl border border-line bg-surface shadow-sm">
-        <div className="grid grid-cols-[minmax(0,1.5fr)_112px_minmax(0,1fr)_minmax(300px,330px)] gap-4 border-b border-line bg-surface-2/50 px-4 py-2 text-[11px] font-semibold uppercase tracking-wide text-subtle">
+        <div className={cn(ROW_GRID, "border-b border-line bg-surface-2/50 px-4 py-2 text-[11px] font-semibold uppercase tracking-wide text-subtle")}>
           <div>Scan</div>
           <div>Status</div>
           <div>Details</div>

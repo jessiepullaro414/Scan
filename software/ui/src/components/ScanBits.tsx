@@ -1,7 +1,8 @@
-/** Shared scan pieces: status chip, "Make mesh" button with quality choice, job progress. */
-import { Box, ChevronDown, Gauge, Sparkles, Wand } from "lucide-react";
+/** Shared scan pieces: status chip, "Make mesh" button with quality choice, job progress, "Process…". */
+import { Box, ChevronDown, Gauge, SlidersHorizontal, Sparkles, Wand, type LucideIcon } from "lucide-react";
 import { useState } from "react";
 import type { Job, ProcessQuality, Scan } from "../api/types";
+import { navigate, paths } from "../lib/router";
 import { cn } from "../lib/util";
 import { isActive, useJobs } from "../store/jobs";
 import { Badge, type BadgeTone } from "./ui/Badge";
@@ -98,22 +99,36 @@ export function MakeMeshButton({
   );
 }
 
-/** Inline progress of a meshing job with a cancel button. */
-export function JobProgress({ job, compact, className }: { job: Job; compact?: boolean; className?: string }) {
+/** Inline progress of a meshing job (or, with `label` / `cancelTitle`, any job) with a cancel button. */
+export function JobProgress({
+  job,
+  compact,
+  className,
+  label = "Meshing progress",
+  cancelTitle = "Stop meshing. The raw recording is kept.",
+  icon: Icon = Box,
+}: {
+  job: Job;
+  compact?: boolean;
+  className?: string;
+  label?: string;
+  cancelTitle?: string;
+  icon?: LucideIcon;
+}) {
   const cancel = useJobs((s) => s.cancel);
   const [cancelling, setCancelling] = useState(false);
   const pct = Math.round(job.progress * 100);
   return (
     <div className={cn("min-w-0", className)}>
       <div className="mb-1.5 flex items-center gap-2 text-xs">
-        <Box size={13} className="shrink-0 text-accent" aria-hidden />
+        <Icon size={13} className="shrink-0 text-accent" aria-hidden />
         <span className="min-w-0 flex-1 truncate text-muted" title={job.message}>
           {job.state === "queued" ? "Waiting to start…" : job.message || "Working…"}
         </span>
         <span className="shrink-0 font-mono text-fg tnum">{job.state === "queued" ? "" : `${pct}%`}</span>
       </div>
       <div className="flex items-center gap-2">
-        <ProgressBar value={job.state === "queued" ? null : job.progress} label="Meshing progress" />
+        <ProgressBar value={job.state === "queued" ? null : job.progress} label={label} />
         {!compact ? (
           <Button
             size="xs"
@@ -124,12 +139,44 @@ export function JobProgress({ job, compact, className }: { job: Job; compact?: b
               await cancel(job.id);
               setCancelling(false);
             }}
-            title="Stop meshing. The raw recording is kept."
+            title={cancelTitle}
           >
             Cancel
           </Button>
         ) : null}
       </div>
     </div>
+  );
+}
+
+/** "Process…": the scan's processing studio (stages, edits with undo, selection, recipes). */
+export function ProcessButton({
+  projectId,
+  scan,
+  size = "sm",
+  variant = "secondary",
+  label = "Process…",
+  className,
+}: {
+  projectId: string;
+  scan: Pick<Scan, "id" | "status">;
+  size?: ButtonSize;
+  variant?: ButtonVariant;
+  label?: string;
+  className?: string;
+}) {
+  const recording = scan.status === "recording";
+  return (
+    <Button
+      size={size}
+      variant={variant}
+      icon={SlidersHorizontal}
+      disabled={recording}
+      className={className}
+      title={recording ? "Stop the scan first" : "Step-by-step processing: clean up, fill holes, smooth, simplify, with undo"}
+      onClick={() => navigate(paths.process(projectId, scan.id))}
+    >
+      {label}
+    </Button>
   );
 }

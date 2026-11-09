@@ -606,3 +606,168 @@ straighten_trajectory(rec_path, calib, trajectory, *, params=None, depth_params=
 ## API deviations (M3)
 
 The backend lists here what it had to decide.
+
+Everything in the M3 phase 2 section is implemented as written, with these clarifications. Fields marked *extra* are additions that a UI can ignore.
+
+**Files** (`scans/<sid>/process/`)
+- `state.json`: stages, base, edits, cursor, version, and the stats of every step.
+- `track/`, `straighten/`, `fuse/`: each stage's `process_recording` output (`mesh.ply`, `trajectory.csv`, `report.json`, `laser_points.ply`, `marker_map.json` in marker mode). `straighten/` also holds `straighten.json`; `process/straighten.json` is the last loop-closure report, also when the stage was skipped.
+- `cache/base.npz` and `cache/<edit id>.npz`: the base and the mesh after each edit within 10 steps of the cursor (V float32, F int32, vertex normals float16; about 21 MB per step at 1M triangles).
+- `selections/<edit id>.npy`: the face indices of a delete / keep edit, to replay it.
+- A new base also copies the stage's `report.json`, `trajectory.csv`, `laser_points.ply` and `marker_map.json` into `result/`, and updates the scan's `report` summary and `quality`.
+- The current mesh in `result/` is written to a temporary file and renamed, so a download never sees half a file. `mesh.ply` carries area-weighted vertex normals.
+- **A scan processed before M3** (`result/mesh.ply` but no `state.json`) is taken over on first access: its result becomes the `track` stage (done) and the base, version 1.
+
+**ProcessState**
+- `current.mesh_url` is `/api/projects/{pid}/scans/{sid}/files/mesh.ply`, the M1 file. The files route sends `Cache-Control: no-cache` and ignores a query, so `?v=<version>` can be appended.
+- `current.version` starts at 1 with the first base. It goes up by 1 on every change of the current mesh: a new base, an edit, an undo, a redo, and the clearing of the edits by a recipe.
+- `busy` reads "Tracking the scan…", "Straightening…", "Fusing…", "Making the mesh…", "Applying the recipe Body panel…", "Removing floaters…", "Filling holes…", "Smoothing…", "Simplifying…", "Deleting the selection…" or "Keeping the selection…".
+- `job` is the scan's running processing job, or null. A `process` message is also sent with every update of that job (at most 5 per second), so its `job.progress` is current.
+- Stages:
+  - `when` is when the stage last finished; `job_id` is the job that ran it (for a recipe or Make mesh, that job's id).
+  - `track.tracked_pct` is 0–100. *extra*: `track.voxel_mm`, the voxel size a recipe asked for (null = the quality's default).
+  - `straighten.loops` is the engine's `loops_accepted`; `correction_mm` / `correction_deg` are its largest change of a camera position / orientation.
+  - `fuse.voxel_mm` is the voxel size actually used.
+  - A new track resets straighten and fuse to `none`, and a new straighten resets fuse: they built on the old poses.
+- A cancelled stage returns to its previous state, and its files are untouched. A failed stage is `failed` with the reason as its `summary`; the base and the edits stay.
+
+**Stages**
+- **The base keeps every piece.** The M1 filter that dropped pieces under 1 % of the triangles is no longer part of tracking, so removing floaters is an edit you can see and undo. The Default recipe removes the same pieces (see Recipes).
+- `POST .../process/track`: `quality` defaults to `"full"`; anything else is 422.
+- `POST .../process/straighten`: the body is optional. It runs `ohs.track.posegraph.straighten_trajectory` on the track stage's trajectory, then fuses at the corrected poses (`process_recording(poses=...)`). The stage is `skipped`, and the base and edits stay, when:
+  - the engine's loop closure is missing ("Straightening is not available in this version of the engine, so the scan was left as it is") or fails ("Straightening failed (…), so the scan was left as it is");
+  - it accepts no loop;
+  - its loops show that the passes already line up (report `changed: false`).
+
+  The `summary` is then the engine's verdict, e.g. "No loops found: to let Studio straighten a scan, pass over an earlier part again.". When straightening worked, the stage is `done` and its summary is the verdict, e.g. "Closed 4 loops: the end moved 1.8 mm into place.".
+- `POST .../process/fuse`:
+  - `voxel_mm` must be 0.25–10 (else 422); null means the track's voxel size.
+  - It fuses at the track stage's resolution (its quality).
+  - The poses are the straightened ones when straighten is `done`, else the track's tracked frames.
+- **Scan status:** stage jobs and recipe `all` jobs set the scan to `processing`. Afterwards it is `processed` when it has a mesh, else `failed` (with `error`) or `recorded`. Edit jobs leave the status alone.
+- **Make mesh** (`POST .../process`) is the Default recipe with scope `all` at the requested quality. Its job kind (`process_scan`), result `{project_id, scan_id, scan, message: "Mesh ready"}` and statuses are M1's.
+  - Second Make mesh on the same scan: 409 "this scan is already being processed".
+  - Any other processing job running on the scan: 409 "this scan is busy (…)".
+
+**Jobs**
+- Kinds: `process_track`, `process_straighten`, `process_fuse`, `mesh_edit`, `process_recipe` (the contract leaves the recipe kind open) and `process_scan`.
+- *extra* job fields: `project_id`, `scan_id`, plus:
+  - `quality` (track, Make mesh);
+  - `op` (edits);
+  - `voxel_mm` (fuse);
+  - `recipe_id`, `recipe_name`, `scope` (recipes).
+- Results:
+  - stage jobs and recipe `all`: `{project_id, scan_id, scan, message}`, where `message` is the stage's summary;
+  - `mesh_edit`: `{project_id, scan_id, edit: EditEntry, message}`;
+  - recipe `edits`: `{project_id, scan_id, recipe_id, message}`.
+- Progress messages read like "Tracking: frame 12 of 696 on the GPU (…)", "Fill holes up to 12 mm: Filling hole 3 of 40" or "Simplify to 200,000 triangles: Simplifying: 412,000 triangles".
+
+**Edits**
+- `params` in an `EditEntry` are normalised (defaults filled in). For `delete_faces` / `keep_faces` they are `{"count": n}`: the indices themselves are kept in `selections/`.
+- *extra* `EditEntry` fields:
+  - `summary`: what the edit did, e.g. "Removed 12 loose pieces (3,410 triangles)", "Filled 3 holes (412 new triangles)", "Moved the surface by 0.012 mm on average and 0.08 mm at most", "1,204,311 -> 200,000 triangles";
+  - `job_id`.
+- Labels:
+  - "Remove loose pieces smaller than 5 mm or under 1 % of the mesh";
+  - "Keep the largest piece only";
+  - "Fill holes up to 12 mm";
+  - "Smooth (bilateral, 50 %, edges kept)";
+  - "Simplify to 200,000 triangles" or "Simplify to 50 % of the triangles";
+  - "Delete 1,234 triangles" or "Keep 1,234 triangles".
+- `remove_floaters`:
+  - A piece is a set of faces connected through shared vertices; the largest piece is the one with the most triangles.
+  - `min_size_mm` compares the diagonal of the piece's bounding box. *extra* `min_fraction` (0–1) compares the piece's share of all triangles.
+  - The given limits combine with "or".
+  - `{}` means `{min_size_mm: 5}`, and `keep_largest_only` ignores the other limits.
+  - The largest piece is never removed.
+- `fill_holes`:
+  - `max_hole_mm` is the hole's perimeter.
+  - Outer borders are never filled (see MeshStats).
+  - New vertices are added only where the hole is wider than the mesh around it, so pin holes get a few triangles and larger holes a smooth patch.
+- `smooth`:
+  - `keep_edges` defaults to true; `strength` must be 0–1.
+  - Strength sets the work: Taubin `1 + 49 s` iterations; bilateral `2 + 18 s` normal and `5 + 15 s` vertex iterations.
+- `decimate`: send exactly one of `target_triangles` (at least 4) or `ratio` (above 0, at most 1). A target at or above the current count changes nothing.
+- `delete_faces` / `keep_faces`:
+  - `faces` is base64 of little-endian uint32; duplicates are ignored.
+  - They are checked against the current mesh when posted. An index the mesh does not have, bad base64, a length that is not a multiple of 4, or an empty selection is 422.
+  - The edits body may carry a top-level `version`: the `current.version` the selection was made on. When it is given and is not the current version, any edit is refused with 409 "the mesh changed since you selected (version N, now M)", hint "select again on the current mesh".
+- **Failed and empty edits:**
+  - An edit that would leave no triangle fails ("this would remove the whole mesh"), and the mesh stays as it was.
+  - The redo steps are dropped only when the new edit succeeds.
+  - An edit that matches nothing is still recorded, with a summary saying so, and its version counts.
+- Parameter errors are 422 naming the parameter, e.g. "fill_holes: max_hole_mm is missing", "remove_floaters: unknown parameter 'size'".
+
+**Undo / redo**
+- The last 10 steps around the cursor are cached on disk, with their normals, so undo and redo only load the step and write `mesh.ply` + `mesh.stl`: about 0.3 s per step at 1.3M triangles.
+- A step outside the cache is rebuilt in the request by replaying the edits from the nearest cached step, which takes as long as those edits.
+- Repeated calls are safe: each moves one step and answers with the new state, and past either end it is 409 "nothing to undo" / "nothing to redo" with nothing changed. Also 409 while any processing job of the scan runs.
+
+**MeshStats**
+- `components` counts the pieces with faces (faces connected through shared vertices).
+- **Outer borders:**
+  - Every open piece's longest boundary loop is its outer border, not a hole.
+  - A *nearly closed* piece has no outer border: one whose longest loop could be capped with less than a fifth of the piece's area (perimeter² / 4π < 0.2 × area). All its loops are holes, so a part scanned all round can have its last hole filled.
+  - Small loose pieces therefore never count as holes.
+- `border_mm` is the longest outer border.
+- Where two loops touch at one vertex, they are separated by walking around that vertex.
+- A boundary chain that cannot be closed (inconsistently oriented faces) counts as a hole but is never filled.
+- Rounding: perimeters and `bbox_mm` to 0.01 mm, `area_cm2` to 0.01 cm², `volume_cm3` to 0.001 cm³ (the absolute volume).
+
+**Recipes**
+- Built-ins, in this order:
+  - `default`: full quality, straighten `auto`, then remove loose pieces under 5 mm or 1 % of the mesh and fill holes up to 5 mm. No smoothing and no simplification.
+  - `body-panel`: the same, then holes up to 15 mm and bilateral smoothing at 0.5 with `keep_edges`.
+  - `bracket`: the same as `default`, then bilateral smoothing at 0.25 with `keep_edges`.
+  - `quick-preview`: preview quality, straighten `off`, remove loose pieces, simplify to 200,000 triangles.
+- User recipes are `<data_dir>/recipes/<id>.json`, where the id is a slug of the name plus 4 hex digits (*extra* `created` in the file). They are listed after the built-ins, sorted by name.
+- `POST /api/recipes`:
+  - `name` is required (400 when empty, at most 80 characters); `description` is optional (at most 500 characters).
+  - With `from_scan`:
+    - `quality` is the track stage's;
+    - `straighten` is `auto` when the straighten stage ran (done or skipped), else `off`;
+    - `voxel_mm` is the fuse stage's when the base came from fuse, else the track's;
+    - `ops` are the active edits, without the selections.
+    - 409 if the scan has no mesh.
+  - Otherwise `settings` and `ops` are both required (422).
+  - Ops are validated like edits, at most 30. `delete_faces` / `keep_faces` are refused (422): a selection belongs to one scan.
+- A recipe's `voxel_mm` is used by its track (and straighten) stage; a recipe never runs a separate fuse stage.
+- `POST .../process/recipe`:
+  - `edits` first clears the edits, then applies each op as an edit of its own. Undo steps back through them; the edits from before the recipe are gone. If an op fails, the ones before it stay.
+  - `all` runs track at the recipe's quality, straighten when `auto`, then the ops.
+  - 404 for an unknown recipe.
+- `DELETE /api/recipes/{id}`: 204, 409 for a built-in, 404 when unknown.
+
+**Overlays**
+- `holes.json` (409 before there is a mesh):
+  - the holes of `MeshStats.holes`: outer borders are left out;
+  - the 500 largest holes, largest first;
+  - `points` has `n_edges + 1` points, the first repeated at the end, so it draws as a closed line with any line primitive;
+  - coordinates are rounded to 0.01 mm.
+- `trajectory.json` (404 before a track):
+  - `raw` is the track stage's tracked camera positions: every k-th, at most 2000, the last always included.
+  - `straightened` holds the same frames after straightening, or null unless straighten is `done`.
+  - `loops` are the engine's loop frame pairs, mapped to the nearest `raw` entries.
+  - *extra* `frames`: the frame index of each `raw` point.
+
+**WebSocket**
+- `process` messages are latest-only per scan.
+- New clients get the `process` state of every scan with a running processing job.
+- `hello.version` and `health.api` are `"0.3.0"`.
+
+**Errors besides 409:** 404 for an unknown project, scan or recipe; 422 for invalid bodies and parameters; 500 when the process folder lost its base mesh (run the stage again).
+
+**Speed** of the mesh operations on 1.3M triangles (Ryzen 7 7735U, CPU only):
+
+| Operation | Time |
+|---|---|
+| Stats | 1.3 s |
+| Remove floaters | 0.3 s |
+| Fill holes up to 5 mm / 80 mm | 1.5 s / 3.4 s |
+| Smooth: Taubin 0.5 (with `keep_edges`) | 1.8 s (3.7 s) |
+| Smooth: bilateral 0.5 / 1.0 | 5.0 s / 9.1 s |
+| Simplify to 200k | 9.2 s |
+| Delete / keep a selection | 0.05 s |
+| Undo / redo | 0.3 s |
+
+An edit job adds about 2 s at this size: stats, normals, the cached step and the result files.

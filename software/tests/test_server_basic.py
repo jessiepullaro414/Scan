@@ -205,7 +205,7 @@ def test_websocket_hello_device_session_and_status(env):
     with ws_connect(env["srv"].ws_url, max_size=None, open_timeout=5) as ws:
         msgs = recv_until(ws, lambda m, p, raw: m.get("type") == "status", timeout=10)
         types = [m["type"] for m, _, _ in msgs]
-        assert types[0] == "hello" and msgs[0][0]["version"] == "0.2.0"
+        assert types[0] == "hello" and msgs[0][0]["version"] == "0.3.0"
         assert types.index("device") < types.index("status") and "session" in types
         dev = next(m for m, _, _ in msgs if m["type"] == "device")
         assert dev["source"] == "none" and dev["connected"] is False

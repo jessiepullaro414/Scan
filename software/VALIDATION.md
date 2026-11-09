@@ -163,6 +163,42 @@ The heavy steps now run on any OpenCL GPU (`ohs.compute`), and the CPU path abov
 - **In the app:** a 15 s simulated scan (449 frames) meshed at full quality in about 1 min 50 s on the GPU.
 - **Results files:** in `~/.ohs/bench/results/`; `ohs bench` reproduces them on any machine.
 
+## Straighten: loop closure (M3 phase 2, 2026-11-09)
+
+`ohs/track/posegraph.py` closes loops where a scan passes over an earlier part again:
+- **Keyframes** every 30 mm, 10° or 2 s.
+- **Candidates:** revisits that look at the same spot from a similar direction after at least 150 mm of travel.
+- **Verification:** point-to-plane ICP, which moves only along the directions the surfaces actually measure, with limits on fitness, overlap and how much drift is plausible.
+- **The fix:** a pose graph solved with Open3D's Levenberg-Marquardt and line process.
+- **Safety:** it changes a scan only when the loops were off by more than 0.2 mm, their residual at least halves, and no odometry edge moves more than the drift model allows. Otherwise the scan comes back unchanged, with a plain verdict.
+
+**Synthetic drift** added to good poses (a random walk per frame). "Gap" is the distance between the two passes' surfaces along their normals, i.e. what shows as doubled surfaces. RMS, mm, before → after:
+
+| Scan | Drift per frame | Trajectory vs truth | Gap |
+|---|---|---|---|
+| bracket orbit, 60 frames (test) | 0.05° / 0.2 mm | 1.52 → 1.33 | 0.76 → 0.085 |
+| bracket orbit, 60 frames (test) | 0.1° / 0.3 mm | 1.95 → 1.56 | 1.42 → 0.11 |
+| sphere orbit, 180 frames | 0.05° / 0.2 mm | 2.15 → 1.53 | 1.90 → 0.10 |
+| car-panel sweep, 180 frames | 0.1° / 0.3 mm | 3.57 → 2.41 | 2.44 → 0.25 |
+| 1-minute scan, 1280x800, 720° | 0.05° / 0.2 mm | 2.73 → 2.33 | 1.34 → 0.10 |
+
+**Real tracking:**
+- The tracked poses of the car-panel sweep and of a 400° sphere orbit come back unchanged ("the passes already line up"): the gap is 0.04-0.08 mm.
+- Frame-to-model tracking re-registers to its own model when it returns. What drift it has lies along directions no loop can measure: sliding along the panel, turning about the sphere's axis.
+
+**No false loops:**
+- True poses come back bit-identical in every scenario, including 48 loops on the 1-minute scan.
+- Short scans give no candidates.
+- Deliberately wrong candidates are rejected: offsets of 12-150 mm and tilts of 6°.
+- A corrupted loop among good ones is pruned by the line process.
+
+**Speed:** 8.1 s for a 1-minute 1280x800 scan on the Radeon 680M PC (105 keyframes, 48 candidates), and about 1 s for short scans.
+
+**Limits:**
+- Loops correct what the surfaces fix: distance and tilt, which is what doubles surfaces. They don't correct sliding along a plane or turning about a sphere's axis.
+- The trajectory error against the truth improves much less than the gap. In single runs its maximum grew by up to 0.26 mm along unmeasured directions.
+- Drift beyond about 20 mm can't be closed, because there is no global registration yet.
+
 ## What the metrics mean
 
 - **Stereo errors** compare the estimated raw intrinsics/extrinsics (`K1`, `K2`, `R`, `T`) with
@@ -271,8 +307,9 @@ The heavy steps now run on any OpenCL GPU (`ohs.compute`), and the CPU path abov
 - **IMU:** white noise, a random-walk bias and a constant time offset. There are no scale-factor,
   axis-misalignment, temperature or USB-latency variations, and the clock sync is near ideal.
 - **Scenes and motion:** analytic primitives with low-contrast paint noise and no clutter. Scans are
-  short (1.2 s, about 25 deg of sweep), and smooth with a small tremor. Long scans, loop closure,
-  360 deg passes and fast or jerky motion are untested.
+  short (1.2 s, about 25 deg of sweep), and smooth with a small tremor.
+  - Loop closure now has tests on simulated orbits and sweeps of 180-720 frames (see "Straighten" above).
+  - Fast or jerky motion is still untested.
 - **Tuning on the simulator:** the parameters were tuned on this same simulator: the tracking filter
   (sigma 6 px, 2 sigma erosion), the 0.02 deg gyro prior and the 5 mm margin clearance. Real depth
   errors may have a different structure, so re-check them on hardware recordings.

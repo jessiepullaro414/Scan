@@ -22,7 +22,9 @@ The contract with the UI is ``software/docs/APP_API.md``. Modules:
   self-test and printables jobs), :mod:`ohs.server.selftest`, :mod:`ohs.server.printables`,
   :mod:`ohs.server.calibration` (calibration sessions, solve, save), :mod:`ohs.server.calib_guide`
   (live detection, capture rules, coverage, hints) and :mod:`ohs.server.calib_results`
-  (plain-language results, the simulator's truth comparison).
+  (plain-language results, the simulator's truth comparison);
+* M3 phase 2, the processing studio: :mod:`ohs.server.processing` (stages, mesh edits with undo /
+  redo, recipes, hole and trajectory overlays), on top of the mesh operations in :mod:`ohs.mesh`.
 
 FastAPI and uvicorn are optional dependencies (``pip install -e .[app]``); importing this package
 does not import them.

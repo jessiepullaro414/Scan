@@ -1,6 +1,6 @@
 /** The scan control bar (Start / Pause / Resume / Stop / Rewind) and the post-scan call to action. */
 import { CircleCheck, CircleExclamationPoint, Eye, FolderOpen, Pause, Play, Plus, Square, Undo2 } from "lucide-react";
-import { JobProgress, MakeMeshButton } from "../../components/ScanBits";
+import { JobProgress, MakeMeshButton, ProcessButton } from "../../components/ScanBits";
 import { Button } from "../../components/ui/Button";
 import { Spinner } from "../../components/ui/Feedback";
 import { fmtDuration, fmtInt } from "../../lib/format";
@@ -48,9 +48,12 @@ export function PostScanCard() {
       {active && job ? <JobProgress job={job} className="mt-3.5" /> : null}
       <div className="mt-3.5 flex flex-wrap items-center gap-2">
         {done ? (
-          <Button variant="primary" icon={Eye} onClick={() => navigate(paths.viewer(last.projectId, scan.id))}>
-            Open result
-          </Button>
+          <>
+            <Button variant="primary" icon={Eye} onClick={() => navigate(paths.viewer(last.projectId, scan.id))}>
+              Open result
+            </Button>
+            <ProcessButton projectId={last.projectId} scan={scan} size="md" label="Fine-tune in Process" />
+          </>
         ) : !active ? (
           <MakeMeshButton projectId={last.projectId} scan={scan} variant="primary" size="md" label={failed ? "Try again" : "Make mesh"} />
         ) : null}

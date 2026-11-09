@@ -12,6 +12,8 @@ export type Route =
   | { name: "home" }
   | { name: "project"; pid: string }
   | { name: "viewer"; pid: string; sid: string }
+  /** M3: the processing studio of one scan. */
+  | { name: "process"; pid: string; sid: string }
   | { name: "scan"; project: string | null; first: boolean }
   | { name: "device" }
   | { name: "setup"; step: SetupPage | null }
@@ -43,10 +45,11 @@ export function parseRoute(hash: string): Route {
   const { path, query } = splitHash(hash);
   const parts = path.split("/").filter(Boolean).map(dec);
   if (parts.length === 0) return { name: "home" };
-  const [a, b, c, d] = parts;
+  const [a, b, c, d, e] = parts;
   if (a === "projects" && parts.length === 1) return { name: "home" };
   if (a === "projects" && b && parts.length === 2) return { name: "project", pid: b };
   if (a === "projects" && b && c === "scans" && d && parts.length === 4) return { name: "viewer", pid: b, sid: d };
+  if (a === "projects" && b && c === "scans" && d && e === "process" && parts.length === 5) return { name: "process", pid: b, sid: d };
   if (a === "scan" && parts.length === 1) {
     const first = query.get("first");
     return { name: "scan", project: query.get("project"), first: first === "1" || first === "true" };
@@ -65,6 +68,7 @@ export const paths = {
   home: () => "/",
   project: (pid: string) => `/projects/${enc(pid)}`,
   viewer: (pid: string, sid: string) => `/projects/${enc(pid)}/scans/${enc(sid)}`,
+  process: (pid: string, sid: string) => `/projects/${enc(pid)}/scans/${enc(sid)}/process`,
   scan: (project?: string | null, opts: { first?: boolean } = {}) => {
     const q = new URLSearchParams();
     if (project) q.set("project", project);

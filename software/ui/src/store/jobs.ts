@@ -29,7 +29,24 @@ const LINKS_KEY = "ohs.jobLinks";
 
 export const isActive = (j: Job | undefined | null) => !!j && (j.state === "queued" || j.state === "running");
 
+/**
+ * A processing-studio job (M3): a stage (`process_track` / `_straighten` / `_fuse`), a mesh
+ * edit (`mesh_edit`) or a recipe. The contract leaves the recipe job's kind open; anything
+ * naming a recipe counts. These are followed by the process store, not as "Make mesh".
+ */
+export const isStudioJob = (kind: string): boolean => /^process_(track|straighten|fuse)|mesh_edit|recipe|^edit/i.test(kind);
+
+/** The scan a job works on, when the engine says (top-level extras, else the result). */
+export function jobScanRef(job: Job): { pid: string; sid: string } | null {
+  const top = job as Job & { project_id?: unknown; scan_id?: unknown };
+  if (typeof top.project_id === "string" && typeof top.scan_id === "string") return { pid: top.project_id, sid: top.scan_id };
+  const r = job.result;
+  if (r && typeof r.project_id === "string" && typeof r.scan_id === "string") return { pid: r.project_id, sid: r.scan_id };
+  return null;
+}
+
 function linkFromResult(job: Job): ScanJobLink | null {
+  if (isStudioJob(job.kind)) return null; // not a "Make mesh": no "Mesh ready" toast after every edit
   const r = job.result;
   if (r && typeof r.project_id === "string" && typeof r.scan_id === "string") {
     return { pid: r.project_id, sid: r.scan_id, quality: (r.quality as ProcessQuality) ?? "full" };
@@ -125,6 +142,13 @@ export function useScanJob(sid: string | null | undefined): Job | undefined {
 
 export const jobKindLabel = (kind: string): string => {
   const k = kind.toLowerCase();
+  if (isStudioJob(k)) {
+    if (k.includes("track")) return "Track";
+    if (k.includes("straighten")) return "Straighten";
+    if (k.includes("fuse")) return "Fuse";
+    if (k.includes("recipe")) return "Apply recipe";
+    return "Mesh edit";
+  }
   if (k.includes("process") || k.includes("mesh")) return "Make mesh";
   if (k.includes("sim") || k.includes("demo")) return "Simulator demo";
   if (k.includes("selftest") || k.includes("self_test")) return "Self-test";

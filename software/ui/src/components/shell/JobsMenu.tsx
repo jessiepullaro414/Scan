@@ -4,16 +4,20 @@ import type { Job } from "../../api/types";
 import { fmtRelative } from "../../lib/format";
 import { navigate, paths } from "../../lib/router";
 import { cn } from "../../lib/util";
-import { isActive, jobKindLabel, useJobs } from "../../store/jobs";
+import { isActive, isStudioJob, jobKindLabel, jobScanRef, useJobs } from "../../store/jobs";
+import { useProcess } from "../../store/process";
 import { Button } from "../ui/Button";
 import { EmptyState, ProgressBar, Spinner } from "../ui/Feedback";
 import { Popover } from "../ui/Popover";
 
 function JobRow({ job }: { job: Job }) {
   const link = useJobs((s) => s.links[job.id]);
+  const meta = useProcess((s) => s.jobMeta[job.id]);
   const cancel = useJobs((s) => s.cancel);
   const [cancelling, setCancelling] = useState(false);
   const active = isActive(job);
+  // A processing-studio job opens its scan's Process page.
+  const studio = !link && isStudioJob(job.kind) ? (meta ? { pid: meta.pid, sid: meta.sid } : jobScanRef(job)) : null;
   return (
     <li className="px-3 py-2.5">
       <div className="flex items-center gap-2">
@@ -28,7 +32,7 @@ function JobRow({ job }: { job: Job }) {
         )}
         <div className="min-w-0 flex-1">
           <div className="truncate text-sm font-medium text-fg">
-            {jobKindLabel(job.kind)}
+            {meta?.label ?? jobKindLabel(job.kind)}
             {link?.name ? <span className="font-normal text-muted"> · {link.name}</span> : null}
             {link ? <span className="font-normal text-subtle"> ({link.quality})</span> : null}
           </div>
@@ -61,6 +65,12 @@ function JobRow({ job }: { job: Job }) {
         <div className="mt-1.5 pl-[23px]">
           <Button size="xs" variant="secondary" onClick={() => navigate(paths.viewer(link.pid, link.sid))}>
             Open result
+          </Button>
+        </div>
+      ) : studio ? (
+        <div className="mt-1.5 pl-[23px]">
+          <Button size="xs" variant="secondary" onClick={() => navigate(paths.process(studio.pid, studio.sid))}>
+            Open in Process
           </Button>
         </div>
       ) : null}

@@ -17,13 +17,14 @@ const PAGE_TITLE: Partial<Record<Route["name"], string>> = {
   calibrate: "Setup",
   settings: "Settings",
   viewer: "Result viewer",
+  process: "Process",
   project: "Project",
 };
 
 /** The project in context: the one on screen, else the scan target ("current project"). */
 function useContextProjectId(route: Route): string | null {
   const current = useUi((s) => s.currentProjectId);
-  if (route.name === "project" || route.name === "viewer") return route.pid;
+  if (route.name === "project" || route.name === "viewer" || route.name === "process") return route.pid;
   if (route.name === "scan" && route.project) return route.project;
   return current;
 }

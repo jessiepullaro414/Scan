@@ -20,13 +20,14 @@ import {
   X,
   Brush,
   Orbit,
+  SlidersHorizontal,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { BufferGeometry } from "three";
 import { PLYLoader } from "three/examples/jsm/loaders/PLYLoader.js";
 import { ApiError, api } from "../api/http";
 import type { Project, Scan } from "../api/types";
-import { JobProgress, MakeMeshButton, ScanStatusBadge } from "../components/ScanBits";
+import { JobProgress, MakeMeshButton, ProcessButton, ScanStatusBadge } from "../components/ScanBits";
 import { ErrorBoundary } from "../components/shell/ErrorBoundary";
 import { Button, IconButton } from "../components/ui/Button";
 import { EmptyState, Kbd, ProgressBar, Skeleton, Spinner } from "../components/ui/Feedback";
@@ -370,7 +371,16 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
               : "Build it from the raw recording: full quality for measuring, preview for a quick look."}
         </p>
         <div className="mt-4">
-          {active && job ? <JobProgress job={job} /> : active ? <ProgressBar value={null} /> : <MakeMeshButton projectId={pid} scan={scan} variant="primary" size="md" />}
+          {active && job ? (
+            <JobProgress job={job} />
+          ) : active ? (
+            <ProgressBar value={null} />
+          ) : (
+            <div className="flex flex-wrap items-center gap-2">
+              <MakeMeshButton projectId={pid} scan={scan} variant="primary" size="md" />
+              {scan.status !== "recording" ? <ProcessButton projectId={pid} scan={scan} variant="ghost" size="md" label="Step by step…" /> : null}
+            </div>
+          )}
         </div>
       </div>
     );
@@ -480,6 +490,10 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
                 Measure
               </Button>
               <IconButton icon={Focus} size="sm" label="Frame the model (F)" onClick={() => viewBus.emit({ type: "frame", animate: true })} />
+              <span className="mx-1 h-5 w-px bg-line-strong" aria-hidden />
+              <Button size="sm" variant="ghost" icon={SlidersHorizontal} onClick={() => navigate(paths.process(pid, sid))} title="Clean up, fill holes, smooth or simplify, with undo">
+                Process…
+              </Button>
             </div>
           ) : null}
         </div>
@@ -615,6 +629,13 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
             </Button>
           ) : null}
         </Panel>
+
+        {hasResult && project && scan ? (
+          <Panel title="Fine-tune" icon={SlidersHorizontal}>
+            <p className="text-sm text-muted">Remove floating bits, fill holes, smooth or simplify, cut away what you don't need. Every step can be undone.</p>
+            <ProcessButton projectId={project.id} scan={scan} variant="primary" className="mt-3" label="Fine-tune in Process" />
+          </Panel>
+        ) : null}
 
         <Panel title="Download" icon={Download}>
           {hasResult && urls ? (

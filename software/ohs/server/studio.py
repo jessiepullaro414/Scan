@@ -13,6 +13,11 @@ M2 (setup and calibration) adds two parts it wires in:
 * :class:`~ohs.server.calibration.CalibrationManager` (``Studio.calibration``): the calibration
   sessions. A scan and a calibration never run together (409 either way).
 
+M3 phase 2 adds :class:`~ohs.server.processing.ProcessManager` (``Studio.processing``): the
+processing studio of each scan (stages, mesh edits with undo / redo, recipes in
+``<data_dir>/recipes``, overlays). "Make mesh" (:meth:`Studio.process_scan`) runs its Default
+recipe; every processing job also updates the scan's ``process`` message.
+
 ``data_dir`` (default ``paths.data_dir``) holds Studio's own data and the simulator's sandbox
 (``<data_dir>/sim/calibration.json`` and its capture recordings). Settings changes are written to
 the config file ``config_path`` (default: the file the config was loaded from, else
@@ -43,7 +48,6 @@ from __future__ import annotations
 import dataclasses
 import logging
 import queue
-import shutil
 import threading
 import time
 from pathlib import Path
@@ -56,7 +60,8 @@ from ohs.server.devices import DeviceManager
 from ohs.server.hub import Hub
 from ohs.server.jobs import JobRunner
 from ohs.server.printables import MASK_DPI
-from ohs.server.projects import ProjectStore, report_summary
+from ohs.server.processing import ProcessManager
+from ohs.server.projects import ProjectStore
 from ohs.server.protocol import PROTOCOL_VERSION, ApiError, jsonable, log_message
 from ohs.server.session import ScanSession
 from ohs.server.setup import SetupManager
@@ -89,31 +94,6 @@ def process_params(cfg: Any, mode: str, quality: str, image_width: int) -> Any:
     fusion = None if v is None else dataclasses.replace(default_fusion_params(effective_scale(image_width)), voxel_mm=float(v))
     pp = PipelineParams(mode=mode, scale=1.0, fusion=fusion, markers=markers)
     return ProcessParams(pipeline=pp, frame_step=int(cfg.process.frame_step), export=export, poisson=bool(cfg.process.poisson))
-
-
-def _replace_dir(src: Path, dst: Path) -> None:
-    """Move ``src`` to ``dst``, replacing ``dst`` (the old one is moved aside first, then removed)."""
-    old = None
-    if dst.exists():
-        old = dst.with_name(f"{dst.name}.old-{int(time.time() * 1000)}")
-        for attempt in range(50):
-            try:
-                dst.rename(old)
-                break
-            except OSError:  # Windows: a file of the old result is open (e.g. being downloaded)
-                if attempt == 49:
-                    raise
-                time.sleep(0.1)
-    for attempt in range(50):
-        try:
-            src.rename(dst)
-            break
-        except OSError:
-            if attempt == 49:
-                raise
-            time.sleep(0.1)
-    if old is not None:
-        shutil.rmtree(old, ignore_errors=True)
 
 
 class Studio:
@@ -150,6 +130,7 @@ class Studio:
                                      **device_kw)
         self.setup = SetupManager(self)
         self.calibration = CalibrationManager(self)
+        self.processing = ProcessManager(self)
         self.session: ScanSession | None = None
         self.last_session: ScanSession | None = None
         self.last_project: str | None = None
@@ -209,6 +190,9 @@ class Studio:
 
     def _job_update(self, job: dict) -> None:
         self.hub.publish_json({"type": "job", **job})
+        processing = getattr(self, "processing", None)
+        if processing is not None:
+            processing.on_job(job)
 
     def session_state(self) -> dict:
         s = self.session
@@ -251,6 +235,7 @@ class Studio:
             self.hub.offer(client, "setup", {"type": "setup", **setup})
         for job in self.jobs.active():
             self.hub.offer(client, f"job:{job.id}", {"type": "job", **job.to_dict()})
+        safe_call("seeding the process states", lambda: self.processing.seed(client))
         s = self.session
         if s is not None and s.active and s.latest_mesh is not None:
             self.hub.offer(client, "mesh", s.latest_mesh)
@@ -513,80 +498,14 @@ class Studio:
                 if job.meta.get("project_id") == pid:
                     raise ApiError(409, "a scan of this project is being processed", "wait for the job or cancel it")
             self.projects.delete(pid)
+            self.processing.forget(pid)
 
     def process_scan(self, pid: str, sid: str, quality: str = "full") -> Any:
+        """"Make mesh" (M1 ``POST .../process``): the processing studio's Default recipe at
+        ``quality`` (track, straighten ``auto``, then its edits). Job kind ``process_scan``."""
         if quality not in QUALITIES:
             raise ApiError(400, f"unknown quality {quality!r}", "use preview or full")
-        with self._lock:
-            entry = self.projects.scan_entry(pid, sid)
-            s = self.session
-            if s is not None and s.active and s.project_id == pid and s.scan_id == sid:
-                raise ApiError(409, "this scan is still recording", "stop the scan first")
-            for job in self.jobs.active("process_scan"):
-                if job.meta.get("project_id") == pid and job.meta.get("scan_id") == sid:
-                    raise ApiError(409, "this scan is already being processed",
-                                   f"wait for job {job.id} to finish, or cancel it")
-            rec = self.projects.recording_dir(pid, sid)
-            if not (rec / "frames.csv").is_file():
-                raise ApiError(409, "this scan has no recording", "record the scan again")
-            self.projects.update_scan(pid, sid, status="processing", error=None)
-            mode = entry.get("mode") if entry.get("mode") in MODES else "markerless"
-            result_dir = self.projects.result_dir(pid, sid)
-            cfg = self.cfg
-            store = self.projects
-
-            def run(ctx: Any) -> dict:
-                from ohs.app.process import process_recording
-                from ohs.io.recording import RecordingReader
-
-                reader = RecordingReader(rec)
-                if len(reader) == 0:
-                    raise ApiError(409, "the recording has no frames", "record the scan again")
-                size = reader.meta.get("image_size") or list(reader.frame(0).image_size)
-                params = process_params(cfg, mode, quality, int(size[0]))
-                tmp = result_dir.with_name(f"result.tmp-{ctx.job.id}")
-                shutil.rmtree(tmp, ignore_errors=True)
-                from ohs import compute
-
-                dev = compute.get_device()
-                where = f" on the GPU ({dev.name})" if dev is not None else " on the CPU"
-                ctx.progress(0.01, "Loading the recording", force=True)
-
-                def progress(k: int, n: int, res: Any) -> None:
-                    ctx.check()
-                    lost = "" if res.track.ok else " (tracking lost)"
-                    ctx.progress(0.02 + 0.9 * (k + 1) / max(n, 1), f"Processing frame {k + 1} of {n}{where}{lost}")
-
-                try:
-                    report = process_recording(rec, tmp, params=params, progress=progress)
-                    ctx.check()
-                    ctx.progress(0.95, "Saving the result", force=True)
-                    report["quality"] = quality
-                    _replace_dir(tmp, result_dir)
-                finally:
-                    shutil.rmtree(tmp, ignore_errors=True)
-                summary = report_summary(report)
-                summary["quality"] = quality
-                scan = store.update_scan(pid, sid, status="processed", report=summary, quality=quality, error=None)
-                return {"project_id": pid, "scan_id": sid, "scan": scan, "message": "Mesh ready"}
-
-            def done(job: Any) -> None:
-                if job.state == "done":
-                    self.notify("info", f"Processing done: {entry.get('name', sid)}")
-                    return
-                has_result = (result_dir / "mesh.ply").is_file()
-                if job.state == "failed":
-                    safe_call("updating the scan", lambda: store.update_scan(pid, sid, status="failed", error=job.error))
-                    self.notify("error", f"Processing failed: {job.error}. The raw recording is kept; try again "
-                                         "(or with quality 'preview').")
-                else:
-                    safe_call("updating the scan", lambda: store.update_scan(
-                        pid, sid, status="processed" if has_result else "recorded"))
-                    self.notify("info", "Processing cancelled; the raw recording is kept")
-
-            job = self.jobs.submit("process_scan", run, message="Queued for processing",
-                                   meta={"project_id": pid, "scan_id": sid, "quality": quality}, on_done=done)
-        return job
+        return self.processing.make_mesh(pid, sid, quality)
 
     # ------------------------------------------------------------------ info
     def health(self) -> dict:

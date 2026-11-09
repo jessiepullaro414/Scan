@@ -14,7 +14,10 @@
  *   report.json) generated on demand;
  * - M2: the setup wizard (setup.ts: self-test, devices, printables, print check, launch check)
  *   and the calibration session (calib.ts: a simulated person moving the board, live overlays,
- *   previews, auto-capture, IMU recording, solving, saving).
+ *   previews, auto-capture, IMU recording, solving, saving);
+ * - M3: the processing studio (process.ts): stages, edits with undo / redo, stats, holes, the
+ *   trajectory with loops, recipes; "Make mesh" runs the Default recipe. The meshes are real
+ *   (scanmesh.ts, meshops.ts): about 250k triangles at 1 mm and 1M at 0.5 mm.
  *
  * Options in the URL: `empty=1` (no projects), `fast=1` (short jobs), `drift=1` (the launch check
  * after a connect finds drift), `nopico=1` (the camera connects without the Pico).
@@ -39,7 +42,8 @@ import type {
   Tracking,
 } from "../types";
 import { MockCalib } from "./calib";
-import { HttpError, json, nowIso, uid, type MockHost, type MockSettings, type TimedJobSpec } from "./host";
+import { HttpError, json, nowIso, uid, type MockHost, type MockSettings, type TimedJobSpec, type WorkJobSpec, type WorkStep } from "./host";
+import { MockProcess } from "./process";
 import { cameraByIndex, MockSetup } from "./setup";
 import {
   apply,
@@ -51,11 +55,9 @@ import {
   laserPoints,
   normalize,
   occluded,
-  plyMesh,
   plyPoints,
   rng,
   sceneMesh,
-  stlMesh,
   sub,
   toRowMajor16,
   trajectory,
@@ -66,7 +68,7 @@ import {
 } from "./geom";
 import { DEPTH_H, DEPTH_W, LEFT_H, LEFT_W, PreviewRenderer } from "./render";
 
-const VERSION = "0.2.0";
+const VERSION = "0.3.0";
 
 /** A binary body delivered in chunks, so download progress shows like over the network. */
 function streamed(buf: ArrayBuffer, type: string, totalMs: number): Response {
@@ -164,8 +166,8 @@ const TRACK_CYCLE = 32;
 
 type JobMeta =
   | { kind: "sim" }
-  | { kind: "process"; pid: string; sid: string; quality: ProcessQuality; prev: Scan["status"]; dur: number; t: number; fail: boolean }
-  | { kind: "timed"; spec: TimedJobSpec; dur: number; t: number };
+  | { kind: "timed"; spec: TimedJobSpec; dur: number; t: number }
+  | { kind: "work"; spec: WorkJobSpec; dur: number; t: number; p: number; message: string; commit: (() => Record<string, unknown> | null) | null; finished: boolean };
 
 class MockBackend {
   private opts: MockOptions;
@@ -189,6 +191,7 @@ class MockBackend {
   private jobMeta = new Map<string, JobMeta>();
   private setup: MockSetup;
   private calib: MockCalib;
+  private studio: MockProcess;
   private previewSeqs: Record<string, number> = {};
   private session: SessionState = { state: "idle", project_id: null, scan_id: null, mode: "markerless", elapsed_s: 0, frames: 0 };
   private sim: ScanSim | null = null;
@@ -231,11 +234,18 @@ class MockBackend {
       },
       scanning: () => !!this.sim,
       startJob: (kind, spec) => this.startTimedJob(kind, spec),
+      startWorkJob: (kind, spec) => this.startWorkJob(kind, spec),
+      job: (jid) => this.jobs.get(jid),
       log: (level, message) => this.send({ type: "log", level, message }),
       settings: SETTINGS as unknown as MockSettings,
     };
     this.setup = new MockSetup(host, { noPico: opts.nopico });
     this.calib = new MockCalib(host, this.setup);
+    this.studio = new MockProcess(host, (pid, sid) => {
+      const project = this.projects.get(pid);
+      const scan = project?.scans.find((x) => x.id === sid);
+      return project && scan ? { project, scan } : null;
+    });
     setInterval(() => this.tick(), 66);
   }
 
@@ -243,6 +253,14 @@ class MockBackend {
     const job: Job = { id: uid("j-"), kind, state: "running", progress: 0, message: spec.message(0), result: null, error: null, created: nowIso() };
     this.jobs.set(job.id, job);
     this.jobMeta.set(job.id, { kind: "timed", spec, dur: spec.seconds * (this.opts.fast ? 0.35 : 1), t: 0 });
+    this.send({ type: "job", ...job });
+    return job;
+  }
+
+  private startWorkJob(kind: string, spec: WorkJobSpec): Job {
+    const job: Job = { id: uid("j-"), kind, state: "running", progress: 0, message: "Starting…", result: null, error: null, created: nowIso(), ...(spec.extra ?? {}) };
+    this.jobs.set(job.id, job);
+    this.jobMeta.set(job.id, { kind: "work", spec, dur: spec.minSeconds * (this.opts.fast ? 0.3 : 1), t: 0, p: 0, message: "Starting…", commit: null, finished: false });
     this.send({ type: "job", ...job });
     return job;
   }
@@ -365,10 +383,18 @@ class MockBackend {
       if (p && c === "scans" && d) {
         const s = p.scans.find((x) => x.id === d);
         if (!s) throw new HttpError(404, "Scan not found");
-        if (e === "process" && is("POST", 5)) return json(200, this.process(p, s, (body.quality as ProcessQuality) === "preview" ? "preview" : "full"));
-        if (e === "files" && f && is("GET", 6)) return this.file(p, s, f);
+        // M1 "Make mesh" (now the Default recipe), then the M3 processing studio
+        if (e === "process" && is("POST", 5)) return json(200, this.studio.makeMesh(p, s, (body.quality as ProcessQuality) === "preview" ? "preview" : "full"));
+        if (e === "process") {
+          const r = this.studio.route(method, p, s, seg.slice(5), body);
+          if (r) return r;
+        }
+        if (e === "files" && f && (is("GET", 6) || is("HEAD", 6))) return this.file(p, s, f, method === "HEAD");
       }
     }
+
+    const m3 = this.studio.routeRecipes(method, seg, body);
+    if (m3) return m3;
 
     if (a === "scan") {
       if (is("GET", 1)) return json(200, this.session);
@@ -400,7 +426,7 @@ class MockBackend {
     const m2 = this.setup.route(method, seg, body) ?? this.calib.route(method, seg, body);
     if (m2) return m2;
 
-    throw new HttpError(404, `No such endpoint: ${method} ${path}`, "The demo backend implements APP_API.md v2 (milestones 1 and 2).");
+    throw new HttpError(404, `No such endpoint: ${method} ${path}`, "The demo backend implements APP_API.md up to M3 phase 2 (the processing studio).");
   }
 
   private listProjects(): ProjectSummary[] {
@@ -622,32 +648,12 @@ class MockBackend {
   }
 
   // ---------------------------------------------------------------- jobs
-  private process(p: Project, s: Scan, quality: ProcessQuality): Job {
-    if (s.status === "recording") throw new HttpError(409, "This scan is still recording", "Stop the scan first.");
-    for (const [jid, m] of this.jobMeta) {
-      const j = this.jobs.get(jid);
-      if (m.kind === "process" && m.sid === s.id && j && (j.state === "running" || j.state === "queued"))
-        throw new HttpError(409, "This scan is already being meshed", "Wait for it to finish, or cancel it in Jobs.");
-    }
-    const job: Job = { id: uid("j-"), kind: "process", state: "running", progress: 0, message: "Loading the recording", result: null, error: null, created: nowIso() };
-    const dur = (quality === "preview" ? 4.5 : 9) * (this.opts.fast ? 0.25 : 1);
-    this.jobs.set(job.id, job);
-    this.jobMeta.set(job.id, { kind: "process", pid: p.id, sid: s.id, quality, prev: s.status === "processing" ? "recorded" : s.status, dur, t: 0, fail: /fail/i.test(s.name) || s.n_frames < 5 });
-    s.status = "processing";
-    p.modified = nowIso();
-    this.send({ type: "job", ...job });
-    return job;
-  }
-
   private cancel(j: Job): Job {
     if (j.state !== "running" && j.state !== "queued") return j;
     const m = this.jobMeta.get(j.id);
     j.state = "cancelled";
     j.message = "Cancelled";
-    if (m?.kind === "process") {
-      const s = this.projects.get(m.pid)?.scans.find((x) => x.id === m.sid);
-      if (s) s.status = m.prev === "processing" ? "recorded" : m.prev;
-    }
+    if (m?.kind === "work") m.spec.onCancel?.();
     if (m?.kind === "sim") {
       this.simJobId = null;
       this.device = { ...this.device, busy: null };
@@ -692,68 +698,73 @@ class MockBackend {
           this.connectNow("sim");
         }
       } else {
-        m.t += dt;
-        const pr = Math.min(1, m.t / m.dur);
-        const s = this.projects.get(m.pid)?.scans.find((x) => x.id === m.sid);
-        if (!s) {
-          j.state = "failed";
-          j.error = "The scan was removed";
-          continue;
-        }
-        j.progress = pr;
-        const n = Math.max(1, s.n_frames);
-        j.message =
-          pr < 0.05
-            ? "Loading the recording"
-            : pr < 0.7
-              ? `Tracking frame ${Math.min(n, Math.round(((pr - 0.05) / 0.65) * n))} / ${n}`
-              : pr < 0.84
-                ? "Fusing depth (TSDF)"
-                : pr < 0.92
-                  ? "Extracting the mesh"
-                  : pr < 0.97
-                    ? "Cleaning up small pieces"
-                    : "Writing PLY and STL";
-        if (m.fail && pr > 0.42) {
-          j.state = "failed";
-          j.error = "Tracking failed on 83 % of the frames (low_fitness). Rescan with more overlap, or try markers mode.";
-          j.message = "Failed";
-          s.status = "failed";
-        } else if (pr >= 1) {
-          const base = `/api/projects/${encodeURIComponent(m.pid)}/scans/${encodeURIComponent(m.sid)}/files`;
-          j.state = "done";
-          j.message = "Mesh ready";
-          j.result = { project_id: m.pid, scan_id: m.sid, quality: m.quality, mesh: `${base}/mesh.ply` };
-          s.status = "processed";
-          s.result = {
-            mesh_url: `${base}/mesh.ply`,
-            stl_url: `${base}/mesh.stl`,
-            laser_points_url: `${base}/laser_points.ply`,
-            report: this.reportSummary(s, m.quality),
-          };
-          for (const k of [...this.files.keys()]) if (k.startsWith(m.sid)) this.files.delete(k);
-          (s as Scan & { quality?: ProcessQuality }).quality = m.quality;
-          const p = this.projects.get(m.pid);
-          if (p) p.modified = nowIso();
-        }
+        this.stepWork(j, m, dt);
       }
       if (broadcast || j.state !== "running") this.send({ type: "job", ...j });
     }
   }
 
+  /**
+   * One tick of a work job: run its steps for up to ~22 ms, never far ahead of its clock
+   * (progress = the lesser of work done and time over its minimum duration). When both are
+   * done, its commit applies the side effects; then the final job message goes out.
+   */
+  private stepWork(j: Job, m: Extract<JobMeta, { kind: "work" }>, dt: number) {
+    m.t += dt;
+    const pTime = Math.min(1, m.t / m.dur);
+    const deadline = performance.now() + 22;
+    // A plain Error is a job's plain-words failure; anything else is a bug in the demo engine.
+    const fail = (e: unknown) => {
+      if (!(e instanceof Error) || e.name !== "Error") console.error("mock job crashed", e);
+      j.state = "failed";
+      j.error = e instanceof Error ? e.message : String(e);
+      j.message = "Failed";
+      m.spec.onFail?.(j.error);
+    };
+    try {
+      while (!m.finished && m.p <= pTime + 0.03 && performance.now() < deadline) {
+        const r = m.spec.work.next();
+        if (r.done) {
+          m.finished = true;
+          m.commit = r.value;
+        } else {
+          const step: WorkStep = r.value;
+          m.p = Math.max(m.p, Math.min(1, step.p));
+          m.message = step.message;
+        }
+      }
+    } catch (e) {
+      fail(e);
+      return;
+    }
+    j.progress = Math.max(j.progress, Math.min(pTime, m.finished ? 1 : m.p));
+    j.message = m.message;
+    if (m.finished && m.t >= m.dur) {
+      try {
+        j.result = m.commit ? m.commit() : null;
+        j.state = "done";
+        j.progress = 1;
+      } catch (e) {
+        fail(e);
+      }
+    }
+  }
+
   // ---------------------------------------------------------------- files
-  private file(p: Project, s: Scan, name: string): Response {
+  private file(p: Project, s: Scan, name: string, head = false): Response {
+    if (name === "mesh.ply" || name === "mesh.stl" || name === "mesh.obj") {
+      // the current version of the processing studio's mesh
+      const buf = this.studio.meshFile(p, s, name);
+      if (!buf) throw new HttpError(404, `${name} isn't there yet`, "Make the mesh first.");
+      if (head) return new Response(null, { status: 200, headers: { "content-length": String(buf.byteLength) } });
+      return streamed(buf, name.endsWith(".obj") ? "text/plain" : "application/octet-stream", this.opts.fast ? 30 : Math.min(900, 200 + buf.byteLength / 60000));
+    }
     if (s.status !== "processed" || !s.result) throw new HttpError(404, `${name} isn't there yet`, "Make the mesh first.");
     const quality: ProcessQuality = (s as Scan & { quality?: ProcessQuality }).quality ?? "full";
     const key = `${s.id}:${quality}:${name}`;
     let buf = this.files.get(key);
-    const mesh = () => {
-      const m = sceneMesh(quality === "full" ? 2.6 : 1.3, quality === "full" ? 0.03 : 0.06, s.id.length + s.name.length);
-      return transformMesh(m, this.T_ws);
-    };
-    if (name === "mesh.ply") buf ??= plyMesh(mesh());
-    else if (name === "mesh.stl") buf ??= stlMesh(mesh());
-    else if (name === "laser_points.ply") {
+    if (head) return new Response(null, { status: name === "laser_points.ply" || name === "report.json" ? 200 : 404 });
+    if (name === "laser_points.ply") {
       if (!buf) {
         const r = rng(11);
         const pts: number[] = [];
@@ -771,7 +782,7 @@ class MockBackend {
       buf ??= new TextEncoder().encode(JSON.stringify(this.report(p, s, quality), null, 1)).buffer as ArrayBuffer;
       this.files.set(key, buf);
       return new Response(buf, { status: 200, headers: { "content-type": "application/json" } });
-    } else throw new HttpError(404, `No file called ${name}`, "Files: mesh.ply, mesh.stl, laser_points.ply, report.json.");
+    } else throw new HttpError(404, `No file called ${name}`, "Files: mesh.ply, mesh.stl, mesh.obj, laser_points.ply, report.json.");
     this.files.set(key, buf);
     return streamed(buf, "application/octet-stream", this.opts.fast ? 30 : 450);
   }

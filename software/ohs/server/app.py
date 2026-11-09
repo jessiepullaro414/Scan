@@ -4,7 +4,8 @@
 
 * REST routes (blocking work runs in FastAPI's thread pool: the endpoints are plain functions),
   M1's plus M2's ``/api/setup/*``, ``/api/settings/camera`` and ``/api/calibration/*``
-  (:mod:`ohs.server.setup`, :mod:`ohs.server.calibration`);
+  (:mod:`ohs.server.setup`, :mod:`ohs.server.calibration`), and M3's processing studio
+  ``/api/projects/{pid}/scans/{sid}/process/*`` and ``/api/recipes`` (:mod:`ohs.server.processing`);
 * ``/api/ws/live``: ``hello``, then the current ``device`` / ``session`` / ``calib_session`` /
   ``setup`` / active ``job`` messages, then everything the :class:`~ohs.server.hub.Hub`
   publishes for this client; ``subscribe`` messages from the client set its options;
@@ -119,6 +120,49 @@ class AutoBody(BaseModel):
 
 class SaveBody(BaseModel):
     force: bool = False
+
+
+class TrackBody(BaseModel):
+    quality: Literal["preview", "full"] = "full"
+
+
+class FuseBody(BaseModel):
+    voxel_mm: Optional[float] = Field(None, ge=0.25, le=10.0)
+
+
+class EditBody(BaseModel):
+    op: Literal["remove_floaters", "fill_holes", "smooth", "decimate", "delete_faces", "keep_faces"]
+    params: dict[str, Any] = Field(default_factory=dict)
+    version: Optional[int] = None  # extra: the mesh version a selection was made on
+
+
+class RecipeApplyBody(BaseModel):
+    recipe_id: str
+    scope: Literal["edits", "all"]
+
+
+class ScanRef(BaseModel):
+    project_id: str
+    scan_id: str
+
+
+class RecipeOpBody(BaseModel):
+    op: Literal["remove_floaters", "fill_holes", "smooth", "decimate"]
+    params: dict[str, Any] = Field(default_factory=dict)
+
+
+class RecipeSettingsBody(BaseModel):
+    quality: Literal["preview", "full"] = "full"
+    straighten: Literal["auto", "off"] = "auto"
+    voxel_mm: Optional[float] = Field(None, ge=0.25, le=10.0)
+
+
+class RecipeCreateBody(BaseModel):
+    name: str
+    description: Optional[str] = None
+    from_scan: Optional[ScanRef] = None
+    settings: Optional[RecipeSettingsBody] = None
+    ops: Optional[list[RecipeOpBody]] = None
 
 
 # --------------------------------------------------------------------------- helpers
@@ -355,6 +399,65 @@ def create_app(config: Any = None, *, projects_dir: Any = None, static_dir: Any 
     def scan_file(pid: str, sid: str, name: str) -> FileResponse:
         path, media = st.projects.file_path(pid, sid, name)
         return FileResponse(path, media_type=media, headers={"Cache-Control": "no-cache"})
+
+    # ------------------------------------------------------------------ M3: processing studio
+    proc = st.processing
+
+    @app.get("/api/projects/{pid}/scans/{sid}/process")
+    def process_state(pid: str, sid: str) -> JSONResponse:
+        return _json(proc.state(pid, sid))
+
+    @app.post("/api/projects/{pid}/scans/{sid}/process/track")
+    def process_track(pid: str, sid: str, body: Optional[TrackBody] = None) -> JSONResponse:
+        return _json(proc.submit_track(pid, sid, body.quality if body is not None else "full").to_dict())
+
+    @app.post("/api/projects/{pid}/scans/{sid}/process/straighten")
+    def process_straighten(pid: str, sid: str) -> JSONResponse:
+        return _json(proc.submit_straighten(pid, sid).to_dict())
+
+    @app.post("/api/projects/{pid}/scans/{sid}/process/fuse")
+    def process_fuse(pid: str, sid: str, body: Optional[FuseBody] = None) -> JSONResponse:
+        return _json(proc.submit_fuse(pid, sid, body.voxel_mm if body is not None else None).to_dict())
+
+    @app.post("/api/projects/{pid}/scans/{sid}/process/edits")
+    def process_edit(pid: str, sid: str, body: EditBody) -> JSONResponse:
+        return _json(proc.submit_edit(pid, sid, body.op, body.params, body.version).to_dict())
+
+    @app.post("/api/projects/{pid}/scans/{sid}/process/undo")
+    def process_undo(pid: str, sid: str) -> JSONResponse:
+        return _json(proc.undo(pid, sid))
+
+    @app.post("/api/projects/{pid}/scans/{sid}/process/redo")
+    def process_redo(pid: str, sid: str) -> JSONResponse:
+        return _json(proc.redo(pid, sid))
+
+    @app.post("/api/projects/{pid}/scans/{sid}/process/recipe")
+    def process_recipe(pid: str, sid: str, body: RecipeApplyBody) -> JSONResponse:
+        return _json(proc.submit_recipe(pid, sid, body.recipe_id, body.scope).to_dict())
+
+    @app.get("/api/projects/{pid}/scans/{sid}/process/holes.json")
+    def process_holes(pid: str, sid: str) -> JSONResponse:
+        return _json(proc.holes(pid, sid))
+
+    @app.get("/api/projects/{pid}/scans/{sid}/process/trajectory.json")
+    def process_trajectory(pid: str, sid: str) -> JSONResponse:
+        return _json(proc.trajectory(pid, sid))
+
+    @app.get("/api/recipes")
+    def recipes_list() -> JSONResponse:
+        return _json(proc.recipes.list())
+
+    @app.post("/api/recipes")
+    def recipes_create(body: RecipeCreateBody) -> JSONResponse:
+        settings = body.settings.model_dump() if body.settings is not None else None
+        ops = [o.model_dump() for o in body.ops] if body.ops is not None else None
+        ref = body.from_scan.model_dump() if body.from_scan is not None else None
+        return _json(proc.save_recipe(body.name, body.description, ref, settings, ops))
+
+    @app.delete("/api/recipes/{rid}")
+    def recipes_delete(rid: str) -> Response:
+        proc.recipes.delete(rid)
+        return Response(status_code=204)
 
     @app.get("/api/jobs")
     def jobs_list() -> JSONResponse:

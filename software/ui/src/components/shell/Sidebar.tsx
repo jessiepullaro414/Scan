@@ -11,7 +11,7 @@ import { LogoMark } from "./Logo";
 type Item = { key: string; label: string; icon: LucideIcon; to: string; match: Route["name"][] };
 
 const ITEMS: Item[] = [
-  { key: "home", label: "Home", icon: House, to: paths.home(), match: ["home", "project", "viewer"] },
+  { key: "home", label: "Home", icon: House, to: paths.home(), match: ["home", "project", "viewer", "process"] },
   { key: "scan", label: "Scan", icon: ScanLine, to: paths.scan(), match: ["scan"] },
   { key: "setup", label: "Setup", icon: Crosshair, to: paths.setup(), match: ["setup", "calibrate"] },
   { key: "device", label: "Device", icon: Cpu, to: paths.device(), match: ["device"] },

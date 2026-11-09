@@ -1,8 +1,9 @@
 /**
  * Wires the live WebSocket to the stores. Text messages update device / session / status /
- * pose / ghost / jobs, and (M2) the calibration session, its 10 Hz live data and the setup
- * state; binary messages are decoded into previews (scan or calibration) and mesh snapshots.
- * After every reconnect the REST state is re-read, so nothing is missed while offline.
+ * pose / ghost / jobs, (M2) the calibration session, its 10 Hz live data and the setup state,
+ * and (M3) each scan's processing state; binary messages are decoded into previews (scan or
+ * calibration) and mesh snapshots. After every reconnect the REST state is re-read, so
+ * nothing is missed while offline.
  */
 import { decodeBinary } from "./binary";
 import { createLiveSocket, type LiveSocket } from "./socket";
@@ -12,6 +13,8 @@ import { useConnection } from "../store/connection";
 import { useDevice } from "../store/device";
 import { useJobs } from "../store/jobs";
 import { useLive } from "../store/live";
+import { useProcess } from "../store/process";
+import { useRecipes } from "../store/recipes";
 import { useSession } from "../store/session";
 import { useSetup } from "../store/setup";
 import { toast } from "../store/toasts";
@@ -64,6 +67,11 @@ function onText(msg: ServerTextMsg): void {
       useSetup.getState().apply(s);
       break;
     }
+    case "process": {
+      const { type: _t, ...s } = msg;
+      useProcess.getState().apply(s);
+      break;
+    }
     default:
       break;
   }
@@ -94,6 +102,8 @@ function resync(): void {
   void useJobs.getState().fetchAll();
   void useSetup.getState().fetch();
   void useCalib.getState().fetch();
+  useProcess.getState().refetchAll();
+  useRecipes.getState().refetch();
 }
 
 /**

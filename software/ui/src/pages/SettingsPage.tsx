@@ -239,7 +239,7 @@ export function SettingsPage() {
         <Section title="About" icon={Info}>
           <KeyValue
             rows={[
-              ["Studio UI", <span className="font-mono text-xs">0.2.0 (M2)</span>],
+              ["Studio UI", <span className="font-mono text-xs">0.3.0 (M3)</span>],
               ["Engine", health ? <span className="font-mono text-xs">{`${health.app} ${health.version}`}</span> : serverVersion ?? "–"],
               ["Processing", health ? <ComputeLabel c={(health.engine as { compute?: unknown }).compute} /> : "–"],
               [

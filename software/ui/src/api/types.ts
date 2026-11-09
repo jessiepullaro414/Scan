@@ -1,6 +1,7 @@
 /**
- * Types of the OpenHandScan Studio app API (software/docs/APP_API.md, v2: milestones 1 and 2).
- * JSON is snake_case; lengths are mm, times are seconds, timestamps are ISO 8601.
+ * Types of the OpenHandScan Studio app API (software/docs/APP_API.md: milestones 1 and 2, and
+ * M3 phase 2, the processing studio). JSON is snake_case; lengths are mm, times are seconds,
+ * timestamps are ISO 8601.
  */
 
 export type Emitters = { vertical: number; horizontal: number; dots: number }; // percent 0..100
@@ -146,6 +147,8 @@ export type LogMsg = { type: "log"; level: LogLevel; message: string };
 export type CalibLiveMsg = CalibLive; // type: "calib"
 export type CalibSessionMsg = { type: "calib_session" } & CalibSession;
 export type SetupMsg = { type: "setup" } & SetupState;
+/** M3: a scan's processing state changed (keyed by its project_id / scan_id). */
+export type ProcessMsg = { type: "process" } & ProcessState;
 
 export type ServerTextMsg =
   | HelloMsg
@@ -158,7 +161,8 @@ export type ServerTextMsg =
   | LogMsg
   | CalibLiveMsg
   | CalibSessionMsg
-  | SetupMsg;
+  | SetupMsg
+  | ProcessMsg;
 
 /** `calib_left` / `calib_right`: the calibration views (M2), about 640 px wide. */
 export type PreviewCamera = "left" | "depth" | "calib_left" | "calib_right";
@@ -414,3 +418,97 @@ export type CameraSettingsBody = { index?: number; swap_lr?: boolean };
 export type OpenFolderReply = { opened: boolean; dir: string };
 export type CaptureReply = { view: CalibView; session: CalibSession };
 export type SaveReply = { session: CalibSession; setup: SetupState };
+
+// ================================================================== M3 phase 2: processing studio
+// APP_API.md "M3 phase 2: processing studio". Adds to M1 and M2; changes nothing in them.
+
+/** The three stages of a scan's processing; each ends in a fused base mesh. */
+export type StageId = "track" | "straighten" | "fuse";
+export type StageState = "none" | "running" | "done" | "failed" | "skipped";
+
+export type MeshOp = "remove_floaters" | "fill_holes" | "smooth" | "decimate" | "delete_faces" | "keep_faces";
+/** The edits a recipe can hold (a selection only fits the scan it was made on). */
+export type RecipeMeshOp = Exclude<MeshOp, "delete_faces" | "keep_faces">;
+
+export type RemoveFloatersParams = { min_triangles?: number; min_size_mm?: number; keep_largest_only?: boolean };
+/** `max_hole_mm`: the largest hole perimeter to fill. */
+export type FillHolesParams = { max_hole_mm: number };
+export type SmoothMethod = "taubin" | "bilateral";
+/** `strength` 0..1. */
+export type SmoothParams = { method: SmoothMethod; strength: number; keep_edges?: boolean };
+/** One of the two. */
+export type DecimateParams = { target_triangles?: number; ratio?: number };
+/** base64 of little-endian uint32 face indices of the CURRENT mesh. */
+export type FacesParams = { faces: string };
+
+export type MeshStats = {
+  triangles: number;
+  vertices: number;
+  components: number;
+  holes: number; // boundary loops except the outer border (the longest loop)
+  largest_hole_mm: number | null; // perimeter of the largest hole
+  border_mm: number | null; // perimeter of the outer border
+  boundary_edges: number;
+  non_manifold_edges: number;
+  watertight: boolean;
+  bbox_mm: [number, number, number];
+  area_cm2: number;
+  volume_cm3: number | null; // only when watertight
+};
+
+export type EditEntry = {
+  id: string;
+  op: MeshOp;
+  params: Record<string, unknown>;
+  label: string; // "Fill holes up to 12 mm"
+  created: string;
+  triangles_after: number;
+  ms: number;
+};
+
+export type StageInfo = { state: StageState; summary: string | null; when: string | null; job_id: string | null };
+export type TrackStage = StageInfo & { quality: ProcessQuality | null; tracked_pct: number | null };
+export type StraightenStage = StageInfo & { loops: number | null; correction_mm: number | null; correction_deg: number | null };
+export type FuseStage = StageInfo & { voxel_mm: number | null };
+
+export type ProcessState = {
+  project_id: string;
+  scan_id: string;
+  stages: { track: TrackStage; straighten: StraightenStage; fuse: FuseStage };
+  base: { triangles: number; vertices: number; stage: StageId } | null;
+  edits: EditEntry[];
+  cursor: number; // edits[0:cursor] are applied
+  can_undo: boolean;
+  can_redo: boolean;
+  current: {
+    version: number; // increases on every change: reload the mesh when it does
+    mesh_url: string; // result/mesh.ply of this scan
+    stats: MeshStats;
+  } | null;
+  busy: string | null; // e.g. "Filling holes…" while an edit or stage job runs
+  job: Job | null; // the running job of this scan, if any
+};
+
+export type RecipeSettings = { quality: ProcessQuality; straighten: "auto" | "off"; voxel_mm: number | null };
+export type RecipeOp = { op: RecipeMeshOp; params: Record<string, unknown> };
+export type Recipe = {
+  id: string;
+  name: string;
+  description: string;
+  builtin: boolean;
+  settings: RecipeSettings;
+  ops: RecipeOp[];
+};
+/** `edits`: replace the edits with the recipe's ops. `all`: run the stages with its settings, then its ops. */
+export type RecipeScope = "edits" | "all";
+
+/** A hole of the current mesh: `points` is the closed loop, flattened xyz (mm, world frame). */
+export type HoleOutline = { perimeter_mm: number; n_edges: number; points: number[] };
+/** Camera positions (mm, world frame), subsampled; `loops` are index pairs into `raw`. */
+export type TrajectoryView = { raw: number[][]; straightened: number[][] | null; loops: [number, number][] };
+
+// ------------------------------------------------------------------ M3 request bodies
+export type EditBody = { op: MeshOp; params: Record<string, unknown> };
+export type NewRecipeBody =
+  | { name: string; description?: string; from_scan: { project_id: string; scan_id: string } }
+  | { name: string; description?: string; settings: RecipeSettings; ops: RecipeOp[] };

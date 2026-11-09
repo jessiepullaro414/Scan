@@ -30,11 +30,13 @@ export type Shading = "clay" | "studio" | "normals";
 export type Vec3 = [number, number, number];
 export type Measurement = { id: number; a: Vec3; b: Vec3 };
 
-const VIEW_DIR: [number, number, number] = [0.42, 0.5, 1];
+/** The default view direction of the result views (three.js coordinates). */
+export const VIEW_DIR: [number, number, number] = [0.42, 0.5, 1];
 
 const tuple = (v: Vector3): Vec3 => [v.x, v.y, v.z];
 
-function useMaterial(shading: Shading): Material {
+/** The surface material of the result views (also used by the Process page). */
+export function useMaterial(shading: Shading): Material {
   const mat = useMemo(() => {
     const common = { side: DoubleSide, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1 };
     if (shading === "normals") return new MeshNormalMaterial(common);
@@ -45,7 +47,8 @@ function useMaterial(shading: Shading): Material {
   return mat;
 }
 
-function Model({ geometry, shading, wireframe, meshRef }: { geometry: BufferGeometry; shading: Shading; wireframe: boolean; meshRef: RefObject<Mesh | null> }) {
+/** The mesh with the chosen shading and an optional wireframe overlay. */
+export function Model({ geometry, shading, wireframe, meshRef }: { geometry: BufferGeometry; shading: Shading; wireframe: boolean; meshRef?: RefObject<Mesh | null> }) {
   const mat = useMaterial(shading);
   // Dark lines over the light surface ("flat lines"), lighter over the normals view.
   const wireColor = shading === "normals" ? "#ffffff" : "#141a22";

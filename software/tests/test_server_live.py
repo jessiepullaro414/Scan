@@ -97,7 +97,7 @@ def test_sim_device_previews_and_status(env):
     assert dev["replay"]["loop"] is True and Path(dev["replay"]["path"]).name == "sim-demo"
     with ws_connect(env["srv"].ws_url, max_size=None, open_timeout=5) as ws:
         msgs = recv_until(ws, lambda m, p, raw: m.get("type") == "hello", timeout=5)
-        assert msgs[0][0]["version"] == "0.2.0"
+        assert msgs[0][0]["version"] == "0.3.0"
         seen: dict = {}
 
         def done(m, p, raw):

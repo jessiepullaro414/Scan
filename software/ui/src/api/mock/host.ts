@@ -26,6 +26,25 @@ export type TimedJobSpec = {
   done: () => Record<string, unknown> | null;
 };
 
+/** A step of real work: progress 0..1 and what it's doing. */
+export type WorkStep = { p: number; message: string };
+
+/**
+ * A job that does real work (M3: meshes) in small steps across the mock's ticks. Progress is the
+ * lesser of the work done and the time since the start over `minSeconds` (so short work still
+ * shows like the engine's). The generator returns a `commit` that applies the side effects when
+ * the job ends; it runs before the final `job` message, like the engine. A thrown Error fails
+ * the job with its message (the plain reason).
+ */
+export type WorkJobSpec = {
+  minSeconds: number;
+  work: Generator<WorkStep, () => Record<string, unknown> | null, void>;
+  onFail?: (error: string) => void;
+  onCancel?: () => void;
+  /** Extra top-level fields of the Job (e.g. project_id, scan_id). */
+  extra?: Record<string, unknown>;
+};
+
 export type MockSettings = {
   camera: { index: number; swap_lr: boolean } & Record<string, unknown>;
   board: { paper: string } & Record<string, unknown>;
@@ -46,6 +65,9 @@ export interface MockHost {
   patchDevice(p: Partial<DeviceState>): void;
   scanning(): boolean;
   startJob(kind: string, spec: TimedJobSpec): Job;
+  /** M3: a job doing real work in steps (see WorkJobSpec). */
+  startWorkJob(kind: string, spec: WorkJobSpec): Job;
+  job(jid: string): Job | undefined;
   log(level: "info" | "warn" | "error", message: string): void;
   settings: MockSettings;
 }

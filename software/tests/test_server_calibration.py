@@ -362,7 +362,7 @@ def test_websocket_calibration_messages(env):
     with ws_connect(env["srv"].ws_url, max_size=None, open_timeout=5) as ws:
         msgs = recv_until(ws, lambda m, p, raw: m.get("type") == "status", timeout=10)
         seeded = {m["type"]: m for m, _, _ in msgs}
-        assert seeded["hello"]["version"] == "0.2.0"
+        assert seeded["hello"]["version"] == "0.3.0"
         assert seeded["calib_session"]["state"] == "idle" and seeded["setup"]["target"] == "sim"
         ws.send(json.dumps({"type": "subscribe", "preview": True, "mesh": False, "max_preview_hz": 15}))
         _ok(_post(url, "/api/calibration/start", {"kind": "stereo"}))

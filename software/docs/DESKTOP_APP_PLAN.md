@@ -436,6 +436,58 @@ Phase 1 is done when full-quality processing is at least 3x faster on the RTX la
 
 **Done when:** the Process page runs every stage and edit with undo / redo, selection, overlays and recipes against the real backend on the simulator. Straightening measurably reduces drift on a looped simulated scan and never worsens a short one. Tests and the browser pass are green.
 
+**Phase 2 status (2026-11-09):** done. It was checked in the browser against the real backend, on a simulated scan of about 644,000 triangles, on the Radeon 680M PC:
+- **Default recipe** (what "Make mesh" runs):
+  - track, then straighten when it finds loops;
+  - remove floaters;
+  - fill holes up to 5 mm.
+  
+  Open holes went from 218 to 36. It doesn't smooth or simplify, so measurements stay true to the scan.
+- **Edits:** each shows in the viewer as soon as it finishes, and undo / redo steps through all of them.
+  - Feature-preserving smoothing took 3 s and moved the surface 0.023 mm on average.
+  - Simplify took 643,968 triangles to 322,057 in 4.4 s.
+  - A selection of 208,251 faces was deleted.
+- **Selection:** box, lasso, brush and "select connected", with add / subtract, invert and clear.
+- **Overlays:**
+  - hole outlines with their sizes;
+  - the trajectory before and after straightening, with its loop links;
+  - before / after for the last edit.
+- **Straighten:**
+  - On this scan it closed 21 loops, found the passes already lined up (within 0.02 mm), and kept the scan and its edits as they were.
+  - Under synthetic drift it cuts the doubled-surface gap by about 10x.
+  - It finds no false loops.
+  
+  The numbers are in `software/VALIDATION.md`, "Straighten".
+- **Tests:** 459 pass with the GPU.
+
+**Phase 3, accuracy** (agreed 2026-11-09). These are M3 items of [`RESEARCH_PLAN.md`](RESEARCH_PLAN.md), in this order. The numbers are from its revised top 10.
+1. **Degeneracy-aware tracking** (#4):
+   - stable (covariance-based) sampling for ICP;
+   - per-direction handling of what the surface can't constrain;
+   - telling the user when to add tags on flat or gently curved panels.
+2. **Depth confidence and uncertainty-weighted fusion on the GPU** (#1):
+   - a per-pixel confidence from the matcher;
+   - fusion weighted by it, with error bars that don't over-trust consecutive frames, which see nearly the same thing ("honest averaging");
+   - the 1 mm reconstruction TSDF moves to the GPU;
+   - a per-vertex confidence map shown in the viewer.
+3. **"Refine with lasers"** (#3): a Process stage.
+   - It rejects laser outliers against the dense surface.
+   - It pulls the mesh onto the laser points with a smooth correction.
+   - It reports how far it moved.
+4. **Measurement-safe mesh edits** (the plan's quick wins):
+   - simplify to a tolerance in mm;
+   - flag filled faces, so measuring tools skip them;
+   - smoothing that does less where the data is confident;
+   - an optional watertight fill with a distance limit.
+
+**Also queued:**
+- **Temperature logging** (part of #8, before the hardware arrives): the firmware reads the IMU chip's temperature, and every recording stores it, so drift with heat can be modelled later.
+- **GPU tuning for discrete GPUs:**
+  - more parallel work in the SGM kernels;
+  - ICP point subsampling;
+  - laser extraction and the tracking filter on the GPU;
+  - the CPU/GPU overlap.
+
 ### Quality bar (every milestone)
 - **Performance:** the live view holds 30 fps or more in the UI and shows the scanner's state within 150 ms. A 2M-triangle mesh orbits at 60 fps on an integrated GPU.
 - **Reliability:** no data loss on a crash, and an emitters-off guarantee.
