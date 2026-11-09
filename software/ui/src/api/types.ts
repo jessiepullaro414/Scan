@@ -124,6 +124,8 @@ export type Tracking = {
   reason: string | null;
   fitness: number | null;
   rmse_mm: number | null;
+  /** M3 extra: what the surface can't pin down in this frame ("slide", "turn"); see `code` "degenerate". */
+  weak?: string[];
 };
 
 export type StatusMsg = {

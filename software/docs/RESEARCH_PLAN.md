@@ -322,6 +322,10 @@ Commercial handheld laser scanners project many crossing lines, typically seven 
 - **Plugs into:** `MarkerlessTracker._source_points` and `_icp`; the same in the loop verification of `posegraph.py`.
 - **Effort / risk:** S / low.
 - **Sim check:** the car panel with and without the IMU, 15 seeds, maximum trajectory error; a nearly degenerate scene (a plane with a small bump; the sphere scene) with the gyro off.
+- **Result (2026-11-09, simulator):** worse, so not used.
+  - It was run on 18 scans, with the gyro on and off. With the gyro, the maximum error on 12 s car-panel sweeps went from 1.9–5.8 mm to 4.2–5.0 mm.
+  - The points that say the most about the weak directions sit at grazing angles, where stereo depth is least reliable.
+  - Revisit with the depth confidence of 4.1.1, weighting each point's information by it. Details: `VALIDATION.md`, "Degeneracy-aware tracking".
 
 #### 4.3.2 Weak-direction handling — P1, M3 (top 10 #4)
 - **What:** take the 6x6 ICP information matrix (rotations scaled to mm at the scene distance, as the degeneracy flag already does), and split the update into well-constrained and weak eigen-directions. Update only the well-constrained ones from ICP. Take the weak ones from the prediction: the gyro for rotation, the IMU or constant velocity for translation. This is the "solution remapping" of Zhang, Kaess and Singh (ICRA 2016) and the localizability analysis of X-ICP (Tuna et al. 2022). Report the weak directions to the UI, and pass them to the pose graph.
@@ -332,6 +336,10 @@ Commercial handheld laser scanners project many crossing lines, typically seven 
 - **Plugs into:** `MarkerlessTracker._icp`; `TrackResult.info` (the weak directions); the server's live status; the odometry edges in `posegraph.py` (an information matrix per edge, instead of one random-walk model).
 - **Effort / risk:** S–M / low–medium (the thresholds need real data).
 - **Sim check:** as 4.3.1, plus: the reported weak directions match the true symmetry (the sphere's axis, the panel's plane).
+- **Result (2026-11-09, simulator):** half of it shipped.
+  - **The report shipped.** `info["weak"]` classifies the weak subspace as "slide" and/or "turn", with its axis; the sphere's turn is found in 87–100 % of frames. The live app turns it into hints: sliding even with the gyro, turning only without.
+  - **Remapping did not ship.** With a threshold that catches a car panel's weakest directions, it made tracking much worse: 13–57 mm instead of 1.9–5.8 mm on 12 s sweeps with the gyro. It throws away the weak but correct information of a crease or a hole edge, and the soft priors already blend that with the prediction.
+  - **Still open:** the per-edge information matrices for the pose graph. Details: `VALIDATION.md`, "Degeneracy-aware tracking".
 
 #### 4.3.3 Symmetric ICP — P2, M3
 - **What:** Rusinkiewicz (SIGGRAPH 2019) minimises the distance along the sum of both normals, (p − q)·(n_p + n_q), and rotates both sides half-way. It converges in fewer iterations, and from farther away, than point-to-plane.

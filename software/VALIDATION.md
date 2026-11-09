@@ -199,6 +199,34 @@ The heavy steps now run on any OpenCL GPU (`ohs.compute`), and the CPU path abov
 - The trajectory error against the truth improves much less than the gap. In single runs its maximum grew by up to 0.26 mm along unmeasured directions.
 - Drift beyond about 20 mm can't be closed, because there is no global registration yet.
 
+## Degeneracy-aware tracking (M3 phase 3, 2026-11-09)
+
+The tracker now reports which motions the surface can't pin down, `info["weak"]`: "slide" (a flat area) and "turn" (a sphere's axis, a flat area's normal). The live app turns them into hints. Two ways from `docs/RESEARCH_PLAN.md` (4.3.1, 4.3.2) to also *act* on weak directions were tried and dropped, because they made tracking worse.
+
+**Setup:** GPU depth and GPU tracking model, realistic rendering. The scans:
+- 6 short car-panel scans (24–36 frames, 640x400 and 1280x800);
+- 9 short sphere-on-plane scans;
+- 3 car-panel sweeps (180 frames, 12 s, two passes back and forth, 640x400).
+
+Maximum trajectory error against the truth, mm:
+
+| Scans | Gyro | Tracker as shipped | Remap weak directions | Stable sampling |
+|---|---|---|---|---|
+| Car panel, 6 short | on | 0.26–1.62 | 0.24–3.91 | 0.39–2.55 |
+| | off | 0.59–3.44 | 17.3–82.5 | 0.84–12.4 |
+| Sphere on plane, 9 short | on | 0.17–0.35 | 0.28–22.5 | 0.19–0.34 |
+| | off | 24.4–132 | 19.9–81.7 | 50.5–302 |
+| Car-panel sweeps, 3 × 12 s | on | 1.9 / 3.0 / 5.8 | 57 / 13 / 48 | 4.2 / 4.6 / 5.0 |
+| | off | 3.3 / 3.0 / 7.0 | 131 / 50 / 432 | 4.3 / 5.2 / 7.4 |
+
+- **Remapping** (Zhang, Kaess and Singh 2016): ICP never moves along weak directions, so they stay at the prediction. It was tried with a threshold that catches the panel's weakest directions (an eigenvalue ratio of 1e-3; the panel's is 1e-4 to 6e-4). That throws away the little, correct information the crease and the hole edge give, and the errors of the gyro and of the constant-velocity model build up instead, worst on the sweeps' turnarounds. The shipped tracker's soft priors blend the two. At the shipped threshold (5e-5), remapping would only touch the sphere's unobservable turn, which the gyro prior already holds.
+- **Geometrically stable sampling** (Gelfand et al. 2003, a vectorised and balanced variant, from a grid twice as dense): the points that say the most about weak directions sit at grazing angles (a sphere's rim, the flanks of a crease), where stereo depth is least reliable. Leaving out points more than 60° from the view ray didn't fix it. It may pay off once points carry a depth confidence (phase 3, item 2).
+
+**The weak-direction hints** use the existing `degenerate_eig_ratio` (5e-5):
+- **Car-panel scans:** nothing is flagged (their weakest ratios are 1e-4 to 6e-4).
+- **Sphere scans:** "turn" is flagged in 87–100 % of frames, about the axis through the sphere. With the gyro that needs no hint (0.17–0.35 mm); without it the hint shows, and those scans drift 24–132 mm.
+- **A flat area with nothing else in view** gives "slide" and "turn" (`tests/test_track_markerless.py`). The slide hint shows even with the gyro, which holds rotations only.
+
 ## What the metrics mean
 
 - **Stereo errors** compare the estimated raw intrinsics/extrinsics (`K1`, `K2`, `R`, `T`) with

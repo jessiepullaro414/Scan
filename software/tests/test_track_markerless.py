@@ -14,7 +14,7 @@ pytest.importorskip("open3d")
 
 from ohs import geometry as G  # noqa: E402
 from ohs.track.imu_prior import GyroPredictor  # noqa: E402
-from ohs.track.markerless import FusionParams, MarkerlessTracker  # noqa: E402
+from ohs.track.markerless import FusionParams, MarkerlessTracker, _weak_directions  # noqa: E402
 from ohs.types import ImuCalibration, ImuSample  # noqa: E402
 
 W, H, FX = 640, 400, 360.0
@@ -218,6 +218,47 @@ def test_tracks_without_gyro_when_geometry_constrains_the_pose():
         assert res.ok and not res.info.get("gyro_prior", False), (k, res.info.get("reason"))
     rot, trans = G.pose_error(T0_inv @ poses[-1], res.T_wc)
     assert rot < 1.5 and trans < 3.0, (rot, trans)
+
+
+def _constraints(P: np.ndarray, N: np.ndarray) -> np.ndarray:
+    """Point-to-plane ICP rows [p x n, n]."""
+    return np.concatenate([np.cross(P, N), N], axis=1)
+
+
+def _grid(a: np.ndarray, b: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    A, B = np.meshgrid(a, b)
+    return A.ravel(), B.ravel()
+
+
+def test_weak_directions_say_what_the_surface_cannot_pin_down():
+    ratio = FusionParams().degenerate_eig_ratio
+    # a flat panel facing the camera: it can slide in its plane and turn about its normal
+    x, y = _grid(np.arange(-60.0, 61.0, 5.0), np.arange(-40.0, 41.0, 5.0))
+    P = np.stack([x, y, np.full_like(x, 300.0)], axis=1)
+    N = np.tile([0.0, 0.0, -1.0], (len(P), 1))
+    r, weak = _weak_directions(_constraints(P, N), P, ratio)
+    kinds = {w["kind"]: w["axis"] for w in weak}
+    assert r < 1e-9 and set(kinds) == {"slide", "turn"}
+    assert abs(kinds["turn"][2]) > 0.99 and abs(kinds["slide"][2]) < 0.01  # turns about z, slides within xy
+    # a sphere on a table, seen from the side (camera y points down): it turns about its vertical axis only
+    c, R = np.array([0.0, 0.0, 300.0]), 40.0
+    th, ph = _grid(np.radians(np.arange(95.0, 266.0, 5.0)), np.radians(np.arange(-80.0, 81.0, 5.0)))
+    d = np.stack([np.cos(ph) * np.sin(th), np.sin(ph), np.cos(ph) * np.cos(th)], axis=1)  # the camera-facing half
+    xt, zt = _grid(np.arange(-150.0, 151.0, 10.0), np.arange(200.0, 451.0, 10.0))
+    Pt = np.stack([xt, np.full_like(xt, R), zt], axis=1)
+    P = np.concatenate([c + R * d, Pt])
+    N = np.concatenate([d, np.tile([0.0, -1.0, 0.0], (len(Pt), 1))])
+    r, weak = _weak_directions(_constraints(P, N), P, ratio)
+    assert r < 1e-9 and [w["kind"] for w in weak] == ["turn"] and abs(weak[0]["axis"][1]) > 0.99
+    # a box corner (three faces): nothing is weak
+    u, v = _grid(np.arange(0.0, 41.0, 4.0), np.arange(0.0, 41.0, 4.0))
+    faces = [(np.stack([np.full_like(u, 30.0), u - 20, v + 280], axis=1), [-1.0, 0.0, 0.0]),
+             (np.stack([u - 20, np.full_like(u, 30.0), v + 280], axis=1), [0.0, -1.0, 0.0]),
+             (np.stack([u - 20, v - 20, np.full_like(u, 320.0)], axis=1), [0.0, 0.0, -1.0])]
+    P = np.concatenate([f for f, _ in faces])
+    N = np.concatenate([np.tile(n, (len(f), 1)) for f, n in faces])
+    r, weak = _weak_directions(_constraints(P, N), P, ratio)
+    assert r > ratio and weak == []
 
 
 def test_integrate_external_poses_and_reset():

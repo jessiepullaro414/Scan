@@ -465,6 +465,10 @@ Phase 1 is done when full-quality processing is at least 3x faster on the RTX la
    - stable (covariance-based) sampling for ICP;
    - per-direction handling of what the surface can't constrain;
    - telling the user when to add tags on flat or gently curved panels.
+
+   **Status (2026-11-09): done. The hints shipped; the two ICP changes didn't.**
+   - The tracker reports what the surface can't pin down ("slide", "turn"). The live view turns that into a hint that doesn't flicker: sliding even with the gyro, turning only without it. The processing report gives the share of frames with each.
+   - Stable sampling and remapping both made tracking worse on 18 simulated scans, so they were dropped (`VALIDATION.md`, "Degeneracy-aware tracking"). Stable sampling may come back once points carry a depth confidence (item 2).
 2. **Depth confidence and uncertainty-weighted fusion on the GPU** (#1):
    - a per-pixel confidence from the matcher;
    - fusion weighted by it, with error bars that don't over-trust consecutive frames, which see nearly the same thing ("honest averaging");

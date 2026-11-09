@@ -50,6 +50,7 @@ Pause stops recording frames and integrating; the emitters switch off and come b
 """
 from __future__ import annotations
 
+import collections
 import logging
 import queue
 import threading
@@ -81,6 +82,11 @@ MAX_CONSECUTIVE_ERRORS = 25
 VIEW_HZ = 10.0
 WEAK_FITNESS = 0.45
 WEAK_RMSE_MM = 1.5
+# what the surface can't pin down (MarkerlessTracker info["weak"]); "what happened: what to do"
+SLIDE_HINT = "Flat surface: the scanner may slide. Keep an edge, a crease or a hole in view, or add AprilTags"
+TURN_HINT = "Round or symmetric shape: the scanner may turn around it. Keep other shapes in view, or add AprilTags"
+WEAK_HINT_WINDOW = 6  # the weak-direction hint shows when WEAK_HINT_MIN of the last WEAK_HINT_WINDOW
+WEAK_HINT_MIN = 4  # frames have it, and goes when fewer do: it doesn't flicker as features come and go
 
 LOST_HINTS = {
     "no_depth": "No depth: hold the scanner 200-350 mm from the surface (dark or shiny parts need matte spray)",
@@ -104,12 +110,24 @@ def _num(x: Any) -> float | None:
     return v if np.isfinite(v) else None
 
 
+def weak_kinds(info: dict) -> list[str]:
+    """``"slide"`` / ``"turn"``: what the surface couldn't pin down in this frame (``info["weak"]``)."""
+    return sorted({str(w.get("kind")) for w in info.get("weak") or () if isinstance(w, dict)})
+
+
 def tracking_state(track: Any, mode: str) -> dict:
-    """``{"state": "ok"|"weak"|"lost", "reason", "code", "fitness", "rmse_mm"}`` of a ``TrackResult``."""
+    """``{"state": "ok"|"weak"|"lost", "reason", "code", "fitness", "rmse_mm", "weak"}`` of a ``TrackResult``.
+
+    ``weak`` lists what the surface couldn't pin down (``"slide"``, ``"turn"``). Sliding is a hint
+    even with the gyro, which holds rotations only; turning only without it. Both use the code
+    ``degenerate``.
+    """
     info = getattr(track, "info", None) or {}
     fitness = _num(info.get("fitness"))
     rmse = _num(info.get("rmse_mm", info.get("rms_mm")))
-    out: dict[str, Any] = {"state": "ok", "reason": None, "code": None, "fitness": fitness, "rmse_mm": rmse}
+    weak = weak_kinds(info)
+    out: dict[str, Any] = {"state": "ok", "reason": None, "code": None, "fitness": fitness, "rmse_mm": rmse,
+                           "weak": weak}
     if not getattr(track, "ok", False):
         code = str(info.get("reason", "lost"))
         out.update(state="lost", code=code,
@@ -124,10 +142,40 @@ def tracking_state(track: Any, mode: str) -> dict:
         out.update(state="weak", code="low_overlap", reason="Little overlap with the model: slow down, keep scanned areas in view")
     elif rmse is not None and rmse > WEAK_RMSE_MM:
         out.update(state="weak", code="high_rmse", reason="Surfaces match poorly: move slower")
-    elif info.get("degenerate") and not info.get("gyro_prior"):
+    elif "slide" in weak:
+        out.update(state="weak", code="degenerate", reason=SLIDE_HINT)
+    elif "turn" in weak and not info.get("gyro_prior"):
+        out.update(state="weak", code="degenerate", reason=TURN_HINT)
+    elif not weak and info.get("degenerate") and not info.get("gyro_prior"):  # an engine without info["weak"]
         out.update(state="weak", code="degenerate",
                    reason="Few shape features here: the scanner may slide (add AprilTags or include more shape)")
     return out
+
+
+class WeakHintFilter:
+    """Majority vote over the last frames for the weak-direction hint (code ``degenerate``).
+
+    It shows once ``need`` of the last ``window`` frames have it and goes when fewer do; lost
+    frames and the other warnings pass through unchanged.
+    """
+
+    def __init__(self, window: int = WEAK_HINT_WINDOW, need: int = WEAK_HINT_MIN) -> None:
+        self._recent: collections.deque[bool] = collections.deque(maxlen=window)
+        self._need = need
+        self._last: dict | None = None
+
+    def apply(self, trk: dict) -> dict:
+        hinted = trk.get("code") == "degenerate"
+        if hinted:
+            self._last = trk
+        self._recent.append(hinted)
+        on = sum(self._recent) >= self._need
+        if hinted and not on:
+            return {**trk, "state": "ok", "code": None, "reason": None}
+        if not hinted and on and trk.get("state") == "ok" and self._last is not None:
+            return {**trk, "state": "weak", "code": "degenerate", "reason": self._last["reason"],
+                    "weak": self._last.get("weak", [])}
+        return trk
 
 
 @dataclass
@@ -213,6 +261,7 @@ class ScanSession:
         self.latest_mesh: bytes | None = None
         self._rebuild_cost_s: float | None = None
         self._last_left: tuple[np.ndarray, Any] | None = None
+        self._weak_hint = WeakHintFilter()
         self._t_view = 0.0
         self._errors = 0
         self.disabled = False
@@ -580,7 +629,7 @@ class ScanSession:
             self.n_lost += 1
         latency = round(1e3 * (time.perf_counter() - t_recv), 1)
         self._stats = {
-            "tracking": tracking_state(track, self.mode),
+            "tracking": self._weak_hint.apply(tracking_state(track, self.mode)),
             "distance_mm": central_distance(res.depth),
             "laser_points": int(self._laser_total),
             "laser_points_frame": n_laser,

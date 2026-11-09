@@ -23,7 +23,8 @@ Per frame (:meth:`MarkerlessTracker.track`):
    translation prior. The priors make geometrically degenerate scenes (a sphere on a plane is
    symmetric about its vertical axis; a flat panel lets the scanner slide) well-posed:
    unobservable directions stay at the prediction, which carries the gyro.
-   ``info["degenerate"]`` flags such geometry (heuristic, see ``degenerate_eig_ratio``).
+   ``info["degenerate"]`` flags such geometry (heuristic, see ``degenerate_eig_ratio``), and
+   ``info["weak"]`` says which motions it allows (see "Weak directions" below).
 4. **Gates.** Enough valid depth and model pixels, fitness (inlier fraction at the finest
    level), point-to-plane inlier RMSE, and the jump from the prediction (``max_jump_mm`` /
    ``max_jump_deg``).
@@ -37,6 +38,24 @@ accumulated since then (``R_prior`` of every call is chained; without a gyro: th
 good pose). The coarse correspondence distances and the jump gates are widened by
 ``1 + n_lost`` (at most ``max_widen``) and an extra coarse level is added; the finest level is
 never widened, so the acceptance gates keep their meaning.
+
+**Weak directions** (``info["weak"]``). The eigen-directions of the final ICP information below
+``degenerate_eig_ratio`` of the strongest (rotations scaled to mm at the scene distance) are the
+motions the surface can't pin down. Their span is classified, since weak eigenvectors mix
+freely:
+- ``"slide"`` when it holds a translation (a flat area);
+- ``"turn"`` when it holds a rotation about any axis (a sphere's axis, a flat area's normal).
+
+``axis`` is that direction in the camera frame. The soft priors hold these directions at the
+prediction (gyro, constant velocity), blended with whatever weak information the data has. The
+live app turns them into hints: sliding even with the gyro, turning only without it.
+
+Two stronger treatments from the literature made tracking worse on the simulator
+(VALIDATION.md, "Degeneracy-aware tracking"), so neither is used:
+- remapping the update so that ICP never moves along weak directions (Zhang, Kaess and Singh
+  2016) throws away the little, correct information a crease or a hole edge gives;
+- geometrically stable sampling (Gelfand et al. 2003) favours grazing points, whose stereo depth
+  is the least reliable. It may pay off once points carry a depth confidence.
 
 **Model backends** (``FusionParams.model_backend``, :attr:`MarkerlessTracker.model_backend`):
 
@@ -80,7 +99,7 @@ from __future__ import annotations
 
 import logging
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 import numpy as np
@@ -93,6 +112,8 @@ __all__ = ["FusionParams", "MarkerlessTracker", "MODEL_BACKENDS"]
 log = logging.getLogger(__name__)
 
 MODEL_BACKENDS = ("auto", "open3d", "gpu")
+SLIDE_SV = 0.8  # the weak subspace holds a translation this close to a pure one: "slide"
+TURN_SV = 0.5  # ... a rotation (about any axis, e.g. through the scene) at least this strongly: "turn"
 
 # trilinear cell corners in the order of Open3D's ray-cast "index"/"interp_ratio" outputs
 _CORNERS = np.array([[j & 1, (j >> 1) & 1, (j >> 2) & 1] for j in range(8)], dtype=np.float64)
@@ -147,7 +168,8 @@ class FusionParams:
     max_jump_deg: float = 20.0
     # diagnostics: info["degenerate"] when the weakest ICP direction (rotations scaled to mm at the
     # scene distance) has less than this fraction of the strongest one's information (heuristic:
-    # sphere-on-plane ~1e-5, the same scene plus a small box ~2.5e-4)
+    # sphere-on-plane ~1e-5, the same scene plus a small box ~2.5e-4, the car panel 1e-4 to 6e-4).
+    # The directions below it are info["weak"] (module docstring, "Weak directions").
     degenerate_eig_ratio: float = 5e-5
     # relocalisation after failures
     max_widen: float = 4.0
@@ -202,6 +224,7 @@ class _IcpOutput:
     n_points: int = 0
     iterations: int = 0
     min_eig_ratio: float = 0.0
+    weak: list = field(default_factory=list)  # [{"kind": "slide" | "turn", "axis": [x, y, z]}]
     ok_numeric: bool = True
 
 
@@ -234,6 +257,38 @@ def _pixel_rays(K: np.ndarray, w: int, h: int) -> np.ndarray:
     y = (vs.ravel() - K[1, 2]) / K[1, 1]
     x = (us.ravel() - K[0, 2] - K[0, 1] * y) / K[0, 0]
     return np.stack([x, y, np.ones_like(x)], axis=1)
+
+
+def _scene_scale(Q: np.ndarray) -> np.ndarray:
+    """``[L, L, L, 1, 1, 1]`` with ``L`` the median point distance: a rotation then counts as the
+    millimetres it moves the scene, so all six ICP directions are comparable."""
+    L = float(np.median(np.linalg.norm(Q, axis=1))) if len(Q) else 1.0
+    return np.array([L, L, L, 1.0, 1.0, 1.0])
+
+
+def _weak_directions(J: np.ndarray, Q: np.ndarray, ratio: float) -> tuple[float, list[dict]]:
+    """Weak motions of a point-to-plane problem: ``(weakest / strongest eigenvalue, [{"kind", "axis"}])``.
+
+    ``J`` (n,6) has rows ``[q x n, n]`` and ``Q`` (n,3) the points (camera frame, mm). The eigen-
+    directions below ``ratio`` of the strongest span the weak subspace. It holds a ``"slide"`` when a
+    translation lies (almost) in it, and a ``"turn"`` when a rotation does, about any axis: a
+    sphere's, or a flat panel's normal. ``axis`` is that translation's direction or that rotation's
+    axis, in the camera frame. Weak eigenvectors mix freely (a panel's two slides and its turn), so
+    the subspace is classified, not each eigenvector.
+    """
+    S = _scene_scale(Q)
+    Js = J / S
+    ev, X = np.linalg.eigh(Js.T @ Js)
+    top = max(float(ev[-1]), 1e-30)
+    min_ratio = float(max(float(ev[0]), 0.0) / top)
+    Xw = X[:, ev < ratio * top]
+    weak: list[dict] = []
+    if Xw.shape[1]:
+        for kind, block, thr in (("slide", Xw[3:], SLIDE_SV), ("turn", Xw[:3], TURN_SV)):
+            U, sv, _ = np.linalg.svd(block, full_matrices=False)
+            if sv[0] >= thr:
+                weak.append({"kind": kind, "axis": [round(float(a), 3) for a in U[:, 0]]})
+    return min_ratio, weak
 
 
 class MarkerlessTracker:
@@ -701,10 +756,7 @@ class MarkerlessTracker:
         out.iterations = total_it
         if n_in >= 6:
             J = np.concatenate([np.cross(Q, Nt), Nt], axis=1)
-            L = float(np.median(np.linalg.norm(Q, axis=1)))
-            S = np.array([L, L, L, 1.0, 1.0, 1.0])  # rotations expressed as mm at the scene distance
-            ev = np.linalg.eigvalsh((J / S).T @ (J / S))
-            out.min_eig_ratio = float(max(ev[0], 0.0) / max(ev[-1], 1e-30))
+            out.min_eig_ratio, out.weak = _weak_directions(J, Q, p.degenerate_eig_ratio)
         return out
 
     # ------------------------------------------------------------------ public API
@@ -798,6 +850,7 @@ class MarkerlessTracker:
             "n_model_px": view.n_valid, "iterations": res.iterations,
             "jump_mm": float(np.linalg.norm(D[:3, 3])), "jump_deg": rotation_angle_deg(D[:3, :3]),
             "min_eig_ratio": res.min_eig_ratio, "degenerate": res.min_eig_ratio < p.degenerate_eig_ratio,
+            "weak": res.weak,
         })
         if reason is not None:
             return self._fail(reason, t, info, t0, timings)

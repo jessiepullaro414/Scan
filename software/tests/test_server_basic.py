@@ -35,7 +35,7 @@ from ohs.server.protocol import (  # noqa: E402
     split_mesh_payload,
     unpack_binary,
 )
-from ohs.server.session import tracking_state  # noqa: E402
+from ohs.server.session import WeakHintFilter, tracking_state  # noqa: E402
 from ohs.server.testing import ServerThread, recv_until  # noqa: E402
 from ohs.types import TrackResult  # noqa: E402
 
@@ -375,11 +375,35 @@ def test_tracking_states():
     assert weak["state"] == "weak" and "overlap" in weak["reason"].lower()
     deg = tracking_state(TrackResult(np.eye(4), True, {"fitness": 0.8, "rmse_mm": 0.3, "degenerate": True}), "markerless")
     assert deg["state"] == "weak" and "tags" in deg["reason"].lower()
+    # what the surface can't pin down: sliding is a hint even with the gyro, turning only without it
+    slide = {"kind": "slide", "axis": [1.0, 0.0, 0.0]}
+    turn = {"kind": "turn", "axis": [0.0, 1.0, 0.0]}
+    s = tracking_state(TrackResult(np.eye(4), True, {"fitness": 0.8, "rmse_mm": 0.3, "gyro_prior": True,
+                                                     "weak": [slide, turn]}), "markerless")
+    assert s["state"] == "weak" and s["code"] == "degenerate" and s["weak"] == ["slide", "turn"]
+    assert s["reason"].startswith("Flat surface:") and "edge" in s["reason"]
+    t = tracking_state(TrackResult(np.eye(4), True, {"fitness": 0.8, "rmse_mm": 0.3, "gyro_prior": True,
+                                                     "weak": [turn]}), "markerless")
+    assert t["state"] == "ok" and t["weak"] == ["turn"]
+    t = tracking_state(TrackResult(np.eye(4), True, {"fitness": 0.8, "rmse_mm": 0.3, "weak": [turn]}), "markerless")
+    assert t["state"] == "weak" and t["reason"].startswith("Round or symmetric shape:")
     lost = tracking_state(TrackResult(np.eye(4), False, {"reason": "no_depth"}), "markerless")
     assert lost["state"] == "lost" and lost["code"] == "no_depth" and "200-350 mm" in lost["reason"]
     tags = tracking_state(TrackResult(np.eye(4), True, {"n_tags": 2, "method": "stereo", "rms_mm": 0.2}), "markers")
     assert tags["state"] == "weak" and tags["rmse_mm"] == 0.2
     assert tracking_state(TrackResult(np.eye(4), False, {"reason": "weird"}), "markers")["reason"].startswith("Tracking lost")
+
+
+def test_weak_hint_needs_a_majority_of_recent_frames():
+    f = WeakHintFilter(window=6, need=4)
+    slide = {"state": "weak", "code": "degenerate", "reason": "Flat surface: keep an edge in view", "weak": ["slide"]}
+    ok = {"state": "ok", "code": None, "reason": None, "weak": []}
+    lost = {"state": "lost", "code": "jump", "reason": "Moved too fast", "weak": []}
+    shown = [f.apply(t)["state"] for t in [slide, ok, slide, slide, slide, ok, slide, ok, ok, ok, ok]]
+    # a lone frame doesn't flicker it on; once 4 of the last 6 agree it stays through a feature-rich frame,
+    # and goes once fewer than 4 of the last 6 have it
+    assert shown == ["ok", "ok", "ok", "ok", "weak", "weak", "weak", "weak", "ok", "ok", "ok"]
+    assert f.apply(lost) == lost  # other states pass through untouched
 
 
 # --------------------------------------------------------------------------- jobs / config

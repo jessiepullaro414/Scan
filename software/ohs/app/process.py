@@ -179,9 +179,18 @@ def _frame_row(res: FrameResult) -> dict:
               "reproj_px", "rms_mm"):
         if k in info:
             row[k] = info[k]
+    weak = sorted({str(w.get("kind")) for w in info.get("weak") or () if isinstance(w, dict)})
+    if weak:
+        row["weak"] = weak  # what the surface couldn't pin down in this frame: "slide", "turn"
     if res.laser_points:
         row["n_laser"] = {k: int(len(v)) for k, v in res.laser_points.items()}
     return row
+
+
+def _weak_summary(rows: list[dict]) -> dict:
+    """Fraction of the tracked frames whose surface let the scanner slide, or turn (``info["weak"]``)."""
+    ok = [r for r in rows if r.get("ok")]
+    return {k: round(sum(k in r.get("weak", ()) for r in ok) / max(len(ok), 1), 3) for k in ("slide", "turn")}
 
 
 # --------------------------------------------------------------------------- main entry
@@ -306,6 +315,7 @@ def process_recording(
                 "in_recording": len(reader), "processed": n, "tracked": pipe.n_tracked,
                 "tracked_fraction": pipe.n_tracked / n if n else 0.0,
                 "start": int(p.start), "stop": stop, "step": int(p.frame_step), "cut": n_cut,
+                "weak": _weak_summary(rows),
             },
             "cuts": [[a, b] for a, b in cuts],
             "failures": dict(reasons),

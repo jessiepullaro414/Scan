@@ -117,6 +117,10 @@ Everything above is implemented as written. Where the contract was silent or amb
 **Extra fields**
 - `hello`: `app`, `app_version`. `log`: `t`. `health`: `api`.
 - `status`: `tracking.code` (machine-readable: `no_depth`, `few_inliers`, `low_overlap`, `degenerate`, `rewound`, ...), `laser_points_frame`, `latency_ms` (frame captured to result published), `process_ms` (pipeline time of the frame), `dropped_frames` (frames the live pipeline skipped; every frame is still recorded).
+- `status.tracking.weak` (M3): what the surface can't pin down in this frame, `"slide"` and/or `"turn"` (a flat panel, a sphere's axis).
+  - `degenerate` shows with a matching hint when 4 of the last 6 frames have it.
+  - Sliding counts even with the gyro, which holds rotations only; turning counts only without the gyro.
+  - The processing report has the share of tracked frames with each, in `frames.weak`.
 - `DeviceState`: `error` (the last device failure), `warnings` (strings), `imu_stream` (bool), `camera.info.measured_fps` / `frames` / `frame_size`, `pico.imu` / `port` / `error`.
 - `DeviceState.imu_temp_c` (number or null): the IMU chip's temperature in °C, rounded to 0.1. It is live from firmware 1.1+ (about once a second while the IMU streams), or as recorded for a replay or the simulator, and null when there has been no reading for 10 s. A `device` message goes out when it has moved 0.5 °C. Recordings store every reading as a `temperature` event, and a scan starts with the latest one.
 - `SessionState`: `name` (the scan name) while a scan is active. The `POST /api/scan/rewind` reply also has `rewind: {t0, t1, seconds, dropped_frames, kept_frames, rebuilt_keyframes, rebuild_s}`.
