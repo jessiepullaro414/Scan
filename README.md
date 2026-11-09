@@ -132,4 +132,4 @@ IMU (LSM6DSOX): VIN ── 3V3 (pin 36)  GND ── GND  SDA ── GP4 (pin 6) 
 - `stl/`: print-ready parts
 - `renders/`: previews
 
-License: hardware CERN-OHL-S-2.0.
+License: MIT (see [LICENSE](LICENSE)). It covers the hardware design, firmware, software and docs.

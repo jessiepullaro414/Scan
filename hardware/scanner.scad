@@ -1,6 +1,6 @@
 // =====================================================================
 //  OpenHandScan - open-source handheld 3D scanner (markerless + markers)
-//  Parametric housing (OpenSCAD).  Units: mm.   License: CERN-OHL-S-2.0
+//  Parametric housing (OpenSCAD).  Units: mm.   License: MIT (see LICENSE)
 //
 //  Sensors in the head:
 //    * hardware-synced stereo pair (ELP dual-lens OV9281, one USB cable)
