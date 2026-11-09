@@ -19,6 +19,10 @@ the "ready" poll, so the timestamp error stays below half a loop iteration (typi
 always < 1 ms). The constant part of the latency (I2C transfer time) is absorbed by the
 IMU-camera ``time_offset`` calibration.
 
+Temperature: the chip's own sensor (OUT_TEMP, 256 LSB/degC, 0 LSB = 25 degC) updates at 52 Hz
+while the gyro or the accelerometer runs. main.py reads it about once a second, so recordings can
+relate drift to heat.
+
 The driver is hardware-agnostic: ``i2c`` only needs ``readfrom_mem``, ``readfrom_mem_into`` and
 ``writeto_mem`` (``machine.I2C`` or a test fake).
 """
@@ -37,6 +41,7 @@ CTRL2_G = 0x11
 CTRL3_C = 0x12
 CTRL9_XL = 0x18
 STATUS_REG = 0x1E
+OUT_TEMP_L = 0x20  # OUT_TEMP_L, OUT_TEMP_H: int16, 256 LSB/degC, 0 LSB = 25 degC
 OUTX_L_G = 0x22  # OUTX_L_G .. OUTZ_H_G (0x22-0x27), OUTX_L_A .. OUTZ_H_A (0x28-0x2D)
 
 ADDRESSES = (0x6A, 0x6B)
@@ -67,6 +72,7 @@ class LSM6DSOX:
     def __init__(self, i2c, address=None):
         self.i2c = i2c
         self._b1 = bytearray(1)
+        self._b2 = bytearray(2)
         self._buf = bytearray(12)
         self.rate_hz = 0
         self.address = self._probe(ADDRESSES if address is None else (address,))
@@ -126,3 +132,13 @@ class LSM6DSOX:
         """(gx, gy, gz, ax, ay, az) raw int16 counts, one 12-byte burst from OUTX_L_G."""
         self.i2c.readfrom_mem_into(self.address, OUTX_L_G, self._buf)
         return struct.unpack("<hhhhhh", self._buf)
+
+    def read_temp_c100(self):
+        """The chip temperature in hundredths of a degree Celsius (int, rounded).
+
+        Only fresh while the gyro or the accelerometer runs (52 Hz); in power-down it keeps the
+        last value. One 2-byte burst from OUT_TEMP_L (BDU keeps the two bytes together).
+        """
+        self.i2c.readfrom_mem_into(self.address, OUT_TEMP_L, self._b2)
+        raw = struct.unpack("<h", self._b2)[0]
+        return 2500 + (raw * 100 + 128) // 256

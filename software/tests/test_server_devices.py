@@ -89,6 +89,7 @@ def test_emitters_follow_the_scan_and_go_off(tmp_path, sim_rec):
         assert pico["connected"] and pico["firmware"].startswith("ohs-fw") and pico["imu"] == "LSM6DSOX"
         assert pico["emitters"] == {"vertical": 0.0, "horizontal": 0.0, "dots": 0.0}
         assert dev["calibration"]["loaded"] and dev["calibration"]["image_size"] == [640, 400] and dev["imu_stream"]
+        _wait(lambda: st.devices.state()["imu_temp_c"] == 30.1, what="the IMU temperature")  # firmware 1.1 C lines
         dev = st.set_emitters({"vertical": 40})
         assert dev["pico"]["emitters"]["vertical"] == 40.0 and _last_emit(sp) == "EMIT 40 0 0"
         pid = st.projects.create("Camera scan")["id"]
@@ -114,6 +115,10 @@ def test_emitters_follow_the_scan_and_go_off(tmp_path, sim_rec):
             events = [(r["kind"], r["value"]) for r in csv.DictReader(fh)]
         assert ("session", "pause") in events and ("session", "resume") in events
         assert len(RecordingReader(rec).imu_arrays()["t_host"]) > 100  # the Pico's IMU was recorded
+        # ... and its temperature: the latest reading handed over at the start, then about 1 Hz
+        temp = RecordingReader(rec).temperature()
+        assert len(temp["celsius"]) >= 1 and np.all(temp["celsius"] == 30.1)
+        assert RecordingReader(rec).meta["temperature_c"]["first"] == 30.1
         # the next scan starts from the profile again; shutting down while scanning saves it, emitters off
         st.start_scan(pid)
         assert _last_emit(sp) == "EMIT 100 100 100"
@@ -208,5 +213,7 @@ def test_replay_feed_tiles_loop_passes(sim_rec):
     assert all(s.t_host > t[-1] for s in more)
     once = ReplayFeed(reader, loop=False)
     s1, e1 = once.take(1e12)
-    assert len(s1) == len(reader.imu_arrays()["t_host"]) and [e.value for e in e1] == ["down", "up"]
+    assert len(s1) == len(reader.imu_arrays()["t_host"])
+    assert [e.value for e in e1 if e.kind == "button"] == ["down", "up"]
+    assert len([e for e in e1 if e.kind == "temperature"]) == len(reader.temperature()["t_host"]) > 0
     assert once.take(1e12) == ([], [])

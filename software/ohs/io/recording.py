@@ -6,12 +6,18 @@
 ```
 PNG encoding runs on a small thread pool (cv2.imwrite releases the GIL) so recording keeps up
 with the camera.
+
+``events.csv`` kinds: ``button`` (``down`` / ``up``), ``cut`` (``"t0,t1"``, a trimmed span) and
+``temperature`` (the IMU chip in degC, about once a second, firmware 1.1+). When a recording has
+temperatures, :meth:`RecordingWriter.close` also writes their summary to ``meta.json``
+(``temperature_c``: ``first``, ``last``, ``min``, ``max``, ``n``).
 """
 from __future__ import annotations
 
 import csv
 import json
 import logging
+import math
 import threading
 from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime, timezone
@@ -27,6 +33,15 @@ __all__ = ["RecordingWriter", "RecordingReader", "FORMAT_VERSION"]
 
 log = logging.getLogger(__name__)
 FORMAT_VERSION = 1
+
+
+def _celsius(value: object) -> float | None:
+    """A ``temperature`` event's value in degC, or None if it is not a finite number."""
+    try:
+        c = float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+    return c if math.isfinite(c) else None
 
 
 class RecordingWriter:
@@ -65,6 +80,7 @@ class RecordingWriter:
             **meta,
         }
         self._n = 0
+        self._temps: list[float] = []  # temperature events (degC), for the meta.json summary
         self._closed = False
         self._write_meta()
 
@@ -93,6 +109,10 @@ class RecordingWriter:
     def write_event(self, event: Event) -> None:
         with self._lock:
             self._ew.writerow([f"{event.t_host:.6f}", event.kind, event.value])
+            if event.kind == "temperature":
+                c = _celsius(event.value)
+                if c is not None:
+                    self._temps.append(c)
 
     def write_calibration(self, calib: ScannerCalibration) -> None:
         calib.save(self.path / "calibration.json")
@@ -131,6 +151,10 @@ class RecordingWriter:
         if self._gt_poses is not None:
             self._gt_file.close()
         self.meta["n_frames"] = self._n
+        if self._temps:
+            t = self._temps
+            self.meta["temperature_c"] = {"first": round(t[0], 2), "last": round(t[-1], 2), "min": round(min(t), 2),
+                                          "max": round(max(t), 2), "n": len(t)}
         self._write_meta()
 
     def __enter__(self) -> "RecordingWriter":
@@ -217,6 +241,14 @@ class RecordingReader:
             return []
         with open(f, newline="", encoding="utf-8") as fh:
             return [Event(float(r["t_host"]), r["kind"], r["value"]) for r in csv.DictReader(fh)]
+
+    def temperature(self) -> dict[str, np.ndarray]:
+        """The IMU chip's temperature: ``{"t_host": (N,), "celsius": (N,)}`` from the
+        ``temperature`` events, in time order (empty arrays when the recording has none)."""
+        rows = sorted((e.t_host, c) for e in self.events() if e.kind == "temperature"
+                      for c in [_celsius(e.value)] if c is not None)
+        a = np.asarray(rows, dtype=np.float64).reshape(-1, 2)
+        return {"t_host": a[:, 0].copy(), "celsius": a[:, 1].copy()}
 
     # ------------------------------------------------------------------ extras
     def calibration(self) -> ScannerCalibration | None:

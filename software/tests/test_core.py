@@ -133,5 +133,19 @@ def test_recording_roundtrip(tmp_path):
     assert np.allclose(r.ground_truth_poses()[0], np.eye(4))
     assert r.ground_truth_depth(0).shape == (80, 128)
     assert r.calibration().stereo.image_size == (128, 80)
+    assert "temperature_c" not in r.meta and r.temperature()["celsius"].shape == (0,)  # none recorded
     with pytest.raises(FileExistsError):
         RecordingWriter(rec)
+
+
+def test_recording_temperature_events_and_summary(tmp_path):
+    rec = tmp_path / "rec"
+    with RecordingWriter(rec, source="camera") as w:
+        for t, value in ((12.0, "31.25"), (10.0, "30.50"), (11.0, "nan"), (13.0, "hot"), (14.0, "29.75")):
+            w.write_event(Event(t, "temperature", value))  # arrival order; unreadable values are skipped
+        w.write_event(Event(10.5, "button", "down"))
+    r = RecordingReader(rec)
+    temp = r.temperature()
+    assert temp["t_host"].tolist() == [10.0, 12.0, 14.0] and temp["celsius"].tolist() == [30.5, 31.25, 29.75]
+    assert r.meta["temperature_c"] == {"first": 31.25, "last": 29.75, "min": 29.75, "max": 31.25, "n": 3}
+    assert [e.kind for e in r.events()].count("temperature") == 5  # the log itself keeps every line

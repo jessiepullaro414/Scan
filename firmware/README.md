@@ -54,10 +54,12 @@ python -m serial.tools.miniterm COM5 115200 --eol LF -e
 Then type:
 
 ```
-HELLO          -> OK HELLO ohs-fw 1.0.0 imu=LSM6DSOX
+HELLO          -> OK HELLO ohs-fw 1.1.0 imu=LSM6DSOX
 STATUS         -> S emit=0,0,0 imu=0 btn=0 up=42.137
 EMIT 0 0 20    -> OK EMIT 0 0 20      dot projector at 20 %; it switches off 1.5 s later (watchdog)
 IMU 104        -> OK IMU 104 6.1086524e-04 2.3928226e-03, then a stream of "I <t_us> gx gy gz ax ay az"
+                  and once a second "C <t_us> 2934" (the IMU chip at 29.34 degC)
+STATUS         -> S emit=0,0,0 imu=104 btn=0 up=58.410 temp=29.34
 IMU 0          -> OK IMU 0 ...        stream stops
 ```
 
@@ -91,10 +93,16 @@ Commands are case-insensitive.
 | `IMU <rate_hz>` (0 = stop; 104/208/416/833) | `OK IMU <rate> <gyro_rad_per_lsb> <accel_ms2_per_lsb>` |
 | `TIME` | `T <t_us>` |
 | `HB` | (no reply, keeps the emitters alive) |
-| `STATUS` | `S emit=<v>,<h>,<d> imu=<rate> btn=<0\|1> up=<s>` |
+| `STATUS` | `S emit=<v>,<h>,<d> imu=<rate> btn=<0\|1> up=<s>`, plus ` temp=<degC>` once a temperature was read |
 
 Asynchronous lines: `I <t_us> <gx> <gy> <gz> <ax> <ay> <az>` (raw int16 counts, IMU frame),
-`B <t_us> <0|1>`, `E <msg>`, `L <msg>`.
+`B <t_us> <0|1>`, `C <t_us> <centi_degC>`, `E <msg>`, `L <msg>`.
+
+* `C` (firmware 1.1.0+) is the IMU chip's temperature in hundredths of a degree Celsius. It comes
+  right after the first IMU sample of a stream, then about once a second, and only while the IMU
+  streams (the sensor is off otherwise). Every recording stores it, so drift with heat can be
+  modelled later. If a temperature read fails, the firmware sends `E temp-read ...` once and stops
+  reading it; the IMU and the emitters carry on.
 
 * `t_us` is a 64-bit microsecond counter that never wraps. The firmware unwraps the 30-bit
   `ticks_us()` itself, so it is always increasing until the next reset.

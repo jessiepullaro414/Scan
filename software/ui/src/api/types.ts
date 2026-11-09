@@ -47,6 +47,9 @@ export type DeviceState = {
   error?: string | null;
   warnings?: string[];
   imu_stream?: boolean;
+  /** The IMU chip's temperature in °C: live from firmware 1.1+ (about once a second while the IMU
+   * streams), or as recorded for a replay. Null when unknown. */
+  imu_temp_c?: number | null;
 };
 
 export type ScanMode = "markerless" | "markers";

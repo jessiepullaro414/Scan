@@ -468,7 +468,7 @@ class MockBackend {
   }
 
   private connectNow(source: "camera" | "replay" | "sim", body?: ConnectBody) {
-    const base = { busy: null, launch_check: null, sim_scene: null, error: null, warnings: [] as string[], imu_stream: false };
+    const base = { busy: null, launch_check: null, sim_scene: null, error: null, warnings: [] as string[], imu_stream: false, imu_temp_c: null };
     if (source === "camera") {
       this.emitters = { vertical: 0, horizontal: 0, dots: 0 };
       const idx = SETTINGS.camera.index;
@@ -500,12 +500,13 @@ class MockBackend {
           },
         },
         pico: pico
-          ? { connected: true, firmware: "ohs-fw 1.0.0", emitters: { ...this.emitters }, imu: "LSM6DSOX", port: "COM5" }
+          ? { connected: true, firmware: "ohs-fw 1.1.0", emitters: { ...this.emitters }, imu: "LSM6DSOX", port: "COM5" }
           : { connected: false, firmware: null, emitters: { ...this.emitters }, imu: null, port: null, error: "no Pico found on any serial port" },
         calibration: this.setup.deviceCalibration(),
         replay: null,
         warnings,
         imu_stream: pico,
+        imu_temp_c: pico ? 29.4 : null,
       };
     } else if (source === "replay") {
       const path = String(body?.recording ?? "").trim();
@@ -529,6 +530,7 @@ class MockBackend {
         replay: { path: "~/.ohs/studio/sim/demo", loop: true },
         sim_scene: "demo",
         imu_stream: true,
+        imu_temp_c: 27.3,
       };
     }
     this.send({ type: "device", ...this.device });

@@ -257,6 +257,17 @@ def test_lsm6dsox_raw_decoding():
     assert imu.read_raw() == (-1, 32767, -32768, 1, 0, -2)
 
 
+def test_lsm6dsox_temperature_decoding():
+    bus = FakeLsmBus(SimClock())
+    imu = lsm.LSM6DSOX(bus)
+    for raw in (0, 1, 127, 128, 256, -256, 1600, -7680, 32767, -32768):
+        bus.regs[0x20:0x22] = struct.pack("<h", raw)
+        expected = 2500 + math.floor(raw * 100 / 256 + 0.5)  # 256 LSB/degC, 0 LSB = 25 degC, rounded
+        assert imu.read_temp_c100() == expected, raw
+    assert fw._fmt_c100(3125) == "31.25" and fw._fmt_c100(-5) == "-0.05" and fw._fmt_c100(0) == "0.00"
+    assert fw._fmt_c100(-500) == "-5.00" and fw._fmt_c100(12800) == "128.00"
+
+
 # --------------------------------------------------------------------------- protocol
 def test_hello_status_unknown_and_line_handling():
     f, out, clock, _ = make_fw(imu=lsm.LSM6DSOX(FakeLsmBus(SimClock())))
@@ -364,6 +375,9 @@ def test_imu_stream_timestamps_and_line_format():
         clock.advance(40)  # loop overhead besides I2C
         f.process()
     lines = out.take()
+    temps = [l for l in lines if l.startswith("C ")]
+    lines = [l for l in lines if not l.startswith("C ")]
+    assert len(temps) == 1 and temps[0].split()[2] == "2500"  # one second: only the first reading (25.00 degC)
     assert lines and all(l.startswith("I ") for l in lines)
     rows = [list(map(int, l.split()[1:])) for l in lines]
     seq = [r[1] for r in rows]
@@ -380,6 +394,83 @@ def test_imu_stream_timestamps_and_line_format():
         clock.advance(100)
         f.process()
     assert out.take() == [] and bus.regs[0x11] >> 4 == 0
+
+
+def test_imu_temperature_lines_and_status():
+    clock = SimClock(5_000_000)
+    bus = FakeLsmBus(clock)
+    f, out, _, _ = make_fw(clock=clock, imu=lsm.LSM6DSOX(bus))
+    bus.regs[0x20:0x22] = struct.pack("<h", 1600)  # 25 + 1600 / 256 = 31.25 degC (after the driver's reset)
+
+    def run_for(us: int) -> list[str]:
+        t_end = clock.t + us
+        while clock.t < t_end:
+            clock.advance(40)
+            f.process()
+        return out.take()
+
+    f.feed("STATUS\n")
+    assert "temp=" not in out.take()[0]  # nothing read before the IMU runs
+    assert run_for(1_500_000) == []  # nor while it is off
+    f.feed("IMU 208\n")
+    out.take()
+    lines = run_for(3_500_000)
+    kinds = [l.split()[0] for l in lines]
+    assert kinds[:2] == ["I", "C"]  # the first reading comes right after the first sample
+    temps = [list(map(int, l.split()[1:])) for l in lines if l.startswith("C ")]
+    assert len(temps) == 4 and all(c == 3125 for _, c in temps)  # then about once a second
+    for (a, _), (b, _) in zip(temps, temps[1:]):
+        assert 1_000_000 <= b - a < 1_000_000 + 1e6 / 208 + 1000  # the first sample after 1 s
+    f.feed("STATUS\n")
+    assert out.take()[0].endswith(" temp=31.25")
+    bus.regs[0x20:0x22] = struct.pack("<h", -7680)  # -5 degC
+    f.feed("IMU 0\n")
+    out.take()
+    assert run_for(2_000_000) == []  # stream stopped: no temperatures either
+    f.feed("IMU 416\n")
+    out.take()
+    lines = run_for(10_000)
+    assert [l for l in lines if l.startswith("C ")][0].split()[2] == "-500"  # a restart reads at once
+    f.feed("STATUS\n")
+    assert out.take()[0].endswith(" temp=-5.00")
+
+
+def test_temperature_read_failure_is_not_fatal():
+    class Bus(FakeLsmBus):
+        def readfrom_mem_into(self, addr, reg, buf):
+            if reg == 0x20:
+                self.clock.advance(self.DATA_COST_US)
+                raise OSError(5, "EIO")
+            super().readfrom_mem_into(addr, reg, buf)
+
+    clock = SimClock()
+    f, out, _, pwms = make_fw(clock=clock, imu=lsm.LSM6DSOX(Bus(clock)))
+    f.feed("EMIT 20 20 20\nIMU 416\n")
+    out.take()
+    t_end = clock.t + 1_200_000  # within the 1.5 s emitter watchdog
+    while clock.t < t_end:
+        clock.advance(40)
+        f.process()
+    lines = out.take()
+    errors = [l for l in lines if l.startswith("E ")]
+    assert errors == ["E temp-read OSError: [Errno 5] EIO"]  # reported once, then no more reads
+    assert not any(l.startswith(("C ", "L ")) for l in lines)
+    assert sum(l.startswith("I ") for l in lines) > 400  # the IMU carries on ...
+    assert f.imu_rate == 416 and duties(pwms) == [20 * 65535 // 100] * 3  # ... and so do the emitters
+    # an IMU driver without read_temp_c100 (older firmware files): no temperatures, no errors
+    clock2 = SimClock()
+    real = lsm.LSM6DSOX(FakeLsmBus(clock2))
+    plain = types.SimpleNamespace(name=real.name, gyro_scale=real.gyro_scale, accel_scale=real.accel_scale,
+                                  set_rate=real.set_rate, data_ready=real.data_ready, read_raw=real.read_raw)
+    f2, out2, _, _ = make_fw(clock=clock2, imu=plain)
+    f2.feed("IMU 416\n")
+    out2.take()
+    t_end = clock2.t + 1_200_000
+    while clock2.t < t_end:
+        clock2.advance(40)
+        f2.process()
+    lines = out2.take()
+    assert lines and all(l.startswith("I ") for l in lines)
 
 
 def test_imu_rate_validation_and_registers():

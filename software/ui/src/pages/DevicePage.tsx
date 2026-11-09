@@ -80,6 +80,19 @@ function StatusLine({ ok, label, detail }: { ok: boolean | null; label: string; 
   );
 }
 
+/** The IMU chip's temperature (firmware 1.1+, or as recorded), when the engine has one. Every
+ * recording stores it, so drift with heat can be modelled later. */
+function ImuTemp({ c, label = "IMU temperature", inset = false }: { c: number | null | undefined; label?: string; inset?: boolean }) {
+  if (c == null) return null;
+  return (
+    <KeyValue
+      dense
+      className={inset ? "pl-7" : undefined}
+      rows={[[label, <span className="font-mono text-xs">{`${c.toFixed(1)} °C`}</span>]]}
+    />
+  );
+}
+
 export function DevicePage() {
   const device = useDevice((s) => s.device);
   const pending = useDevice((s) => s.pending);
@@ -350,15 +363,18 @@ export function DevicePage() {
                     : "Emitters, trigger and IMU are unavailable. Check the cable, or flash the firmware (Setup, Connect step)."
                 }
               />
+              <ImuTemp c={device.imu_temp_c} inset />
             </div>
           ) : device.source === "replay" ? (
             <div className="space-y-3">
               <StatusLine ok label="Replaying a recording" detail={device.replay?.loop ? "Loops at the end" : "Plays once"} />
               <KeyValue rows={[["Folder", <span className="break-all font-mono text-xs">{device.replay?.path ?? "–"}</span>]]} />
+              <ImuTemp c={device.imu_temp_c} label="IMU temperature (recorded)" />
             </div>
           ) : (
             <div className="space-y-3">
               <StatusLine ok label="Simulated scanner" detail="Rendered stereo frames, laser lines, dots and IMU, with true calibration." />
+              <ImuTemp c={device.imu_temp_c} label="IMU temperature (simulated)" />
               <Callout icon={FlaskConical} title="Demo data">
                 Scans made with the simulator are real recordings: process, view and measure them like any other.
               </Callout>

@@ -57,9 +57,15 @@ def test_scan_recording_roundtrip(tmp_path):
     assert np.allclose(cal.imu.R_ci, truth.imu.R_ci) and cal.imu.time_offset == pytest.approx(0.030)
     assert np.allclose(cal.lasers["vertical"].normal, truth.lasers["vertical"].normal)
     # trigger brackets the frames; IMU covers them (in IMU host time = camera time - offset)
-    ev = r.events()
+    ev = [e for e in r.events() if e.kind == "button"]
     assert [(e.kind, e.value) for e in ev] == [("button", "down"), ("button", "up")]
     assert ev[0].t_host < t[0] and ev[1].t_host > t[-1]
+    # the IMU chip's temperature once a second (a slow warm-up), summarised in meta.json
+    temp = r.temperature()
+    assert len(temp["celsius"]) == 2 and np.all(np.diff(temp["t_host"]) == 1.0)
+    assert 25.5 <= temp["celsius"].min() and temp["celsius"].max() <= 29.5
+    assert r.meta["temperature_c"] == {"first": temp["celsius"][0], "last": temp["celsius"][-1],
+                                       "min": temp["celsius"].min(), "max": temp["celsius"].max(), "n": 2}
     imu = r.imu_arrays()
     n_exp = (5 / 30 + 1.0) * 416
     assert abs(len(imu["t_host"]) - n_exp) <= 2 and (np.diff(imu["t_host"]) > 0).all()

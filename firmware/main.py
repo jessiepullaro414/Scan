@@ -8,10 +8,11 @@ Serial protocol (software/ARCHITECTURE.md section 5A), ASCII lines over USB CDC 
                          104/208/416/833 Hz)
     TIME              -> T <t_us>
     HB                -> (no reply; only keeps the emitter watchdog alive)
-    STATUS            -> S emit=<v>,<h>,<d> imu=<rate> btn=<0|1> up=<s>
+    STATUS            -> S emit=<v>,<h>,<d> imu=<rate> btn=<0|1> up=<s> [temp=<degC>]
     other             -> E unknown <cmd>
     async             -> I <t_us> <gx> <gy> <gz> <ax> <ay> <az>   raw int16 counts, IMU frame
                          B <t_us> <0|1>                            debounced trigger, 1 = pressed
+                         C <t_us> <centi_degC>                     IMU chip temperature (1.1.0+)
                          E <msg>  /  L <msg>                       error / log
 
 Choices where the contract leaves room (all documented for the host client):
@@ -24,6 +25,12 @@ Choices where the contract leaves room (all documented for the host client):
   (reason ``watchdog`` or ``exception``), so the host learns its emitter state is stale.
 * ``t_us`` is a 64-bit microsecond counter that never wraps (see UnwrappedClock). It is already
   unwrapped on the device, so the host never needs to unwrap it.
+* ``C`` lines carry the IMU chip's temperature in hundredths of a degree (``C 1234 3125`` =
+  31.25 degC), so recordings can relate drift to heat. They come only while the IMU streams (the
+  sensor is off otherwise): right after the first sample, then about once a second, each read
+  in the slack after a sample. ``STATUS`` adds ``temp=`` once a temperature has been read. A
+  failed temperature read sends ``E temp-read ...`` once and stops temperature reads; the IMU
+  and the emitters carry on.
 
 Safety: emitters (PWM ~10 kHz on GP2 V-laser, GP3 H-laser, GP6 dot projector) are off at boot,
 off on any exception, off when the main loop exits (including Ctrl-C), and off after 1.5 s
@@ -39,7 +46,7 @@ the main program (``main.py`` at boot, ``mpremote run``, Thonny "Run"), never on
 import sys
 
 FW_NAME = "ohs-fw"
-FW_VERSION = "1.0.0"
+FW_VERSION = "1.1.0"  # 1.1.0: IMU chip temperature (C lines, STATUS temp=)
 
 # Pin map (README.md wiring section)
 PIN_LASER_V = 2  # vertical-line laser, NPN low-side switch via 1 kOhm
@@ -55,6 +62,7 @@ PWM_FREQ_HZ = 10000
 WATCHDOG_US = 1500000  # emitters off after 1.5 s without a host line
 DEBOUNCE_US = 20000  # button state must be stable for 20 ms
 IMU_RATES = (104, 208, 416, 833)
+TEMP_PERIOD_US = 1000000  # IMU chip temperature at most once a second while the IMU streams
 MAX_LINE = 64  # longest accepted command line (characters)
 MAX_RX_PER_STEP = 32  # characters consumed per loop iteration (bounds command latency)
 GC_MIN_FREE = 16384  # run gc.collect() in the slack after an IMU sample below this many bytes
@@ -79,6 +87,15 @@ def _clamp_pct(value):
     if value > 100:
         return 100
     return value
+
+
+def _fmt_c100(c100):
+    """'31.25' from 3125, '-0.05' from -5 (hundredths of a degree, no float formatting)."""
+    sign = ""
+    if c100 < 0:
+        sign = "-"
+        c100 = -c100
+    return "%s%d.%02d" % (sign, c100 // 100, c100 % 100)
 
 
 class UnwrappedClock:
@@ -110,7 +127,7 @@ class Firmware:
     ``emitters``: three objects with ``duty_u16(int)`` (V-laser, H-laser, dots), e.g. machine.PWM.
     ``button``: object with ``value()`` returning 0 while pressed (pull-up), or None.
     ``imu``: LSM6DSOX-like (``name``, ``gyro_scale``, ``accel_scale``, ``set_rate(hz)``,
-    ``data_ready()``, ``read_raw()``) or None.
+    ``data_ready()``, ``read_raw()``, optionally ``read_temp_c100()``) or None.
     ``clock``: callable returning the unwrapped time in integer microseconds.
     ``write``: callable taking one string (a full line including the trailing newline).
     """
@@ -125,6 +142,9 @@ class Firmware:
         self.imu_rate = 0
         self._period_us = 0
         self._t_poll = None  # time of the previous IMU status poll
+        self._temp_read = getattr(imu, "read_temp_c100", None)  # None: no temperatures
+        self._t_temp = None  # time of the last temperature read (None: read after the next sample)
+        self.temp_c100 = None  # last IMU chip temperature, hundredths of a degree C
         self._rx = []
         self._rx_overflow = False
         t = clock()
@@ -237,9 +257,12 @@ class Firmware:
                 self.send("OK IMU %d %.7e %.7e" % (rate, self.imu.gyro_scale, self.imu.accel_scale))
         elif cmd == "STATUS":
             up_ms = (self.now() - self.t_boot) // 1000
-            self.send("S emit=%d,%d,%d imu=%d btn=%d up=%d.%03d" % (
+            line = "S emit=%d,%d,%d imu=%d btn=%d up=%d.%03d" % (
                 self.levels[0], self.levels[1], self.levels[2], self.imu_rate, self.btn,
-                up_ms // 1000, up_ms % 1000))
+                up_ms // 1000, up_ms % 1000)
+            if self.temp_c100 is not None:
+                line += " temp=" + _fmt_c100(self.temp_c100)
+            self.send(line)
         elif cmd == "HELLO":
             self.send("OK HELLO %s %s imu=%s" % (FW_NAME, FW_VERSION, self.imu_name()))
         else:
@@ -251,6 +274,7 @@ class Firmware:
         self.imu_rate = rate
         self._period_us = 1000000 // rate if rate else 0
         self._t_poll = None
+        self._t_temp = None  # a fresh temperature right after the first sample
 
     # ------------------------------------------------------------------ periodic work
     def process(self, chars=""):
@@ -271,13 +295,16 @@ class Firmware:
             return False
 
     def step(self):
-        """Watchdog, button and IMU polling. Returns True if an IMU sample was sent."""
+        """Watchdog, button, IMU and temperature polling. Returns True if an IMU sample was sent."""
         now = self.now()
         if self.emitters_on() and now - self.last_rx >= WATCHDOG_US:
             self.all_off()
             self.log("emitters-off watchdog")
         self._poll_button(now)
-        return self._poll_imu()
+        if self._poll_imu():
+            self._poll_temp()  # in the slack until the next sample
+            return True
+        return False
 
     def _read_button(self):
         if self.button is None:
@@ -321,6 +348,26 @@ class Firmware:
             lo = prev
         self.send("I %d %d %d %d %d %d %d" % ((lo + t) // 2, raw[0], raw[1], raw[2], raw[3], raw[4], raw[5]))
         return True
+
+    def _poll_temp(self):
+        """Send the IMU chip temperature (``C``) at most every TEMP_PERIOD_US. Called right after
+        an IMU sample; the first read of a stream comes with its first sample."""
+        read = self._temp_read
+        if read is None or not self.imu_rate:
+            return
+        t = self.now()
+        if self._t_temp is not None and t - self._t_temp < TEMP_PERIOD_US:
+            return
+        self._t_temp = t
+        try:
+            c100 = read()
+        except Exception as e:
+            # Not a safety problem: the IMU and the emitters carry on, only temperatures stop.
+            self._temp_read = None
+            self.send("E temp-read %s: %s" % (getattr(type(e), "__name__", "Exception"), e))
+            return
+        self.temp_c100 = c100
+        self.send("C %d %d" % (t, c100))
 
 
 def _readable(poller, ipoll, pollin):

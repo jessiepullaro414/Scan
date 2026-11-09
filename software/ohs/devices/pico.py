@@ -6,7 +6,8 @@ IMU. This module talks to it over USB CDC with ASCII lines.
 Threads
 -------
 * **reader** (``pico-reader``) parses every incoming line: replies are handed to the waiting
-  command, ``I`` lines go to the IMU queue, ``B`` lines to the event queue, ``E``/``L`` are logged.
+  command, ``I`` lines go to the IMU queue, ``B`` (trigger) and ``C`` (IMU chip temperature,
+  firmware 1.1+) lines to the event queue, ``E``/``L`` are logged.
   The ``OK IMU`` scale factors are taken by the reader itself, so samples that follow the reply
   immediately are already converted correctly.
 * **maintenance** (``pico-maint``) sends ``HB`` every ``heartbeat_s`` while any emitter is
@@ -42,7 +43,8 @@ An injected transport is never closed by ``Pico``: the caller owns it.
 Deviations from ARCHITECTURE.md: none in the contract API. Extras are ``PicoParams.resync_s``,
 ``sync_samples``, ``timeout_s`` and ``drift_prior_ppm``; ``Pico.status()``,
 ``device_to_host()``, and the ``hello``, ``connected``, ``emitters``, ``imu_scales``,
-``clock_model`` and ``stats`` properties; ``PicoError``. The firmware already sends unwrapped
+``clock_model``, ``temperature_c`` and ``stats`` properties; ``PicoError``; ``read_events()``
+also returns ``temperature`` events. The firmware already sends unwrapped
 64-bit ``t_us`` values (see firmware/main.py), so the host does not unwrap them.
 """
 from __future__ import annotations
@@ -68,7 +70,8 @@ RPI_USB_VID = 0x2E8A
 MICROPYTHON_USB_PID = 0x0005
 _IMU_QUEUE_MAX = 1 << 16  # ~80 s at 833 Hz; the oldest samples are dropped (and counted) beyond
 _EVENT_QUEUE_MAX = 1024
-_STAT_KEYS = ("lines", "imu", "imu_gaps", "imu_dropped", "imu_unscaled", "events", "errors", "unparsed", "syncs")
+_STAT_KEYS = ("lines", "imu", "imu_gaps", "imu_dropped", "imu_unscaled", "events", "temps", "errors", "unparsed",
+              "syncs")
 
 
 class PicoError(RuntimeError):
@@ -181,6 +184,7 @@ class Pico:
         self._scales: tuple[float, float] | None = None
         self._imu_rate = 0
         self._last_t_imu: int | None = None
+        self._temp_c: float | None = None
         self._levels: tuple[int, int, int] = (0, 0, 0)
         self._stop = threading.Event()
         self._reader: threading.Thread | None = None
@@ -217,6 +221,7 @@ class Pico:
         _drain(self._imu_q)
         _drain(self._evt_q)
         self._scales, self._imu_rate, self._levels, self._error = None, 0, (0, 0, 0), None
+        self._temp_c = None
         self._connected = self._opened = True
         self._reader = threading.Thread(target=self._read_loop, name="pico-reader", daemon=True)
         self._reader.start()
@@ -334,6 +339,12 @@ class Pico:
         return self._clock.params
 
     @property
+    def temperature_c(self) -> float | None:
+        """The IMU chip's latest temperature in degC, or None. Firmware 1.1+ sends it about once a
+        second while the IMU streams."""
+        return self._temp_c
+
+    @property
     def stats(self) -> dict:
         return dict(self._stats)
 
@@ -370,7 +381,8 @@ class Pico:
         self._request("IMU 0", "OK IMU")
 
     def status(self) -> dict:
-        """``STATUS`` parsed: ``{"emit": (v, h, d), "imu": rate, "btn": 0|1, "up": s, "raw": line}``."""
+        """``STATUS`` parsed: ``{"emit": (v, h, d), "imu": rate, "btn": 0|1, "up": s, "raw": line}``,
+        plus ``"temp"`` (degC) once firmware 1.1+ has read the IMU chip's temperature."""
         line, _, _ = self._request("STATUS", "S ")
         out: dict[str, Any] = {"raw": line}
         for tok in line.split()[1:]:
@@ -380,7 +392,7 @@ class Pico:
                     out[key] = tuple(int(x) for x in val.split(","))
                 elif key in ("imu", "btn"):
                     out[key] = int(val)
-                elif key == "up":
+                elif key in ("up", "temp"):
                     out[key] = float(val)
                 else:
                     out[key] = val
@@ -444,14 +456,16 @@ class Pico:
         return [ImuSample(float(th), float(td), g, ac) for th, td, g, ac in zip(t_host, t_dev, gyro, accel)]
 
     def read_events(self) -> list[Event]:
-        """Drain the event queue: ``Event(t_host, "button", "down" | "up")``."""
+        """Drain the event queue, oldest first: ``Event(t_host, "button", "down" | "up")`` and
+        ``Event(t_host, "temperature", "<degC>")`` (the IMU chip, e.g. ``"31.25"``; firmware 1.1+
+        sends it about once a second while the IMU streams)."""
         items = _drain(self._evt_q)
         if not items:
             return []
         t_dev = np.array([it[0] for it in items], dtype=np.float64) * 1e-6
         t_rx = np.array([it[1] for it in items], dtype=np.float64)
         t_host = self._to_host(t_dev, t_rx)
-        return [Event(float(t), "button", it[2]) for t, it in zip(t_host, items)]
+        return [Event(float(t), it[2], it[3]) for t, it in zip(t_host, items)]
 
     def _to_host(self, t_dev: np.ndarray, t_rx: np.ndarray) -> np.ndarray:
         if self._clock.valid:
@@ -552,10 +566,12 @@ class Pico:
         elif line.startswith("B "):
             parts = line.split()
             if len(parts) == 3 and parts[2] in ("0", "1") and parts[1].isdigit():
-                self._evt_q.append((int(parts[1]), t_rx, "down" if parts[2] == "1" else "up"))
+                self._evt_q.append((int(parts[1]), t_rx, "button", "down" if parts[2] == "1" else "up"))
                 self._stats["events"] += 1
             else:
                 self._unparsed(line)
+        elif line.startswith("C "):
+            self._on_temp(line, t_rx)
         elif line.startswith(("OK ", "T ", "S ")):
             if line.startswith("OK IMU "):
                 self._on_imu_reply(line)
@@ -579,6 +595,21 @@ class Pico:
     def _unparsed(self, line: str) -> None:
         self._stats["unparsed"] += 1
         log.debug("unparsed Pico line %r", line)
+
+    def _on_temp(self, line: str, t_rx: float) -> None:
+        """``C <t_us> <centi_degC>``: the IMU chip's temperature, queued as a ``temperature`` event."""
+        parts = line.split()
+        if len(parts) != 3 or not parts[1].isdigit():
+            self._unparsed(line)
+            return
+        try:
+            celsius = int(parts[2]) / 100.0
+        except ValueError:
+            self._unparsed(line)
+            return
+        self._temp_c = celsius
+        self._evt_q.append((int(parts[1]), t_rx, "temperature", f"{celsius:.2f}"))
+        self._stats["temps"] += 1
 
     def _on_imu_reply(self, line: str) -> None:
         parts = line.split()

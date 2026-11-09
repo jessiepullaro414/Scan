@@ -30,8 +30,10 @@ Threads per connection (daemon threads, joined on disconnect):
   :class:`~ohs.server.calibration.CalibrationSession`) while one is attached, else to the idle
   preview. Frame *taps* (:meth:`DeviceManager.add_tap`, the self-test on a stream) see every
   frame and IMU sample as well.
-* ``ohs-pico`` drains the Pico's IMU and button queues every 5 ms. Trigger: a press shorter
-  than 1 s is a "short" press, longer a "long" press (``on_trigger``).
+* ``ohs-pico`` drains the Pico's IMU and event queues every 5 ms. Trigger: a press shorter
+  than 1 s is a "short" press, longer a "long" press (``on_trigger``). ``temperature`` events
+  (the IMU chip, about 1 Hz while the IMU streams; replays carry their recorded ones) set
+  ``DeviceState.imu_temp_c``; the state is published again when it moves 0.5 degC.
 * ``ohs-preview`` (idle only): rectify + depth + laser lines at ~10 Hz for the previews and the
   distance gauge, only while a client is connected, with the connection's current calibration
   (:meth:`DeviceManager.reload_calibration` after a save). It also collects the **launch check**
@@ -80,6 +82,8 @@ IDLE_VIEW_HZ = 10.0
 IDLE_VIEW_BUSY_HZ = 2.0  # while a scan is being processed: leave the CPU to the processing job
 LAUNCH_FRAMES = 3  # idle frames for the launch check ...
 LAUNCH_SPACING_S = 0.3  # ... this far apart (frame clock)
+TEMP_PUBLISH_STEP_C = 0.5  # publish the device state again when the IMU temperature moves this much
+TEMP_STALE_S = 10.0  # no temperature for this long (IMU stopped): DeviceState.imu_temp_c is null
 _LEVEL_NAMES = ("vertical", "horizontal", "dots")
 
 
@@ -179,6 +183,10 @@ class _Connection:
     launch_check: dict | None = None
     launch_pending: bool = False
     launch_frames: list = field(default_factory=list)
+    temp_c: float | None = None  # the IMU chip's latest temperature (degC) ...
+    temp_t: float = 0.0  # ... at this time.monotonic()
+    temp_event: Any = None  # ... and its event (handed to a new scan, like the IMU history)
+    temp_shown: float | None = None  # the temperature last published
 
 
 def _calib_summary(calib: Any, path: str | None) -> dict:
@@ -366,14 +374,14 @@ class DeviceManager:
 
     def state(self) -> dict:
         """``DeviceState`` (APP_API.md, with M2's ``launch_check`` and ``sim_scene``) plus ``error``,
-        ``warnings``, ``imu_stream`` and ``sim_demo_ready``."""
+        ``warnings``, ``imu_stream``, ``sim_demo_ready`` and ``imu_temp_c``."""
         c = self._conn
         if c is None:
             calib, path = self._config_calibration()
             return {"source": "none", "connected": False, "busy": self.busy, "camera": None, "pico": None,
                     "calibration": _calib_summary(calib, path), "replay": None, "error": self.last_error,
                     "warnings": [], "imu_stream": False, "launch_check": None, "sim_scene": None,
-                    "sim_demo_ready": self.sim_demo_ready()}
+                    "sim_demo_ready": self.sim_demo_ready(), "imu_temp_c": None}
         info = dict(safe_call("reading the camera info", lambda: dict(getattr(c.camera, "info", {}) or {})) or {})
         info["measured_fps"] = round(c.cam_rate.value(), 2)
         info["frames"] = c.n_frames
@@ -409,6 +417,8 @@ class DeviceManager:
             "launch_check": None if c.launch_check is None else dict(c.launch_check),
             "sim_scene": c.sim_scene if c.source == "sim" else None,
             "sim_demo_ready": self.sim_demo_ready(),
+            "imu_temp_c": (round(c.temp_c, 1) if c.temp_c is not None and time.monotonic() - c.temp_t < TEMP_STALE_S
+                           else None),
         }
 
     def _config_calibration(self) -> tuple[Any, str | None]:
@@ -736,7 +746,8 @@ class DeviceManager:
 
     # ------------------------------------------------------------------ sessions
     def attach(self, session: Any) -> None:
-        """Route frames, IMU and events to ``session`` (hands over the last second of IMU first)."""
+        """Route frames, IMU and events to ``session``. It first gets the last second of IMU and
+        the latest IMU temperature, so even a short recording has one."""
         conn = self._conn
         if conn is None:
             raise ApiError(409, "no device is connected", "connect the camera, a replay or the simulator first")
@@ -749,6 +760,9 @@ class DeviceManager:
                 self._sink = session
                 conn.idle_stats = {}  # the idle distance gauge is stale while a session has the frames
             safe_call("seeding the IMU history", lambda: session.seed_imu(hist))
+            temp = conn.temp_event
+            if temp is not None and time.monotonic() - conn.temp_t < TEMP_STALE_S:
+                safe_call("seeding the IMU temperature", lambda: session.on_event(temp))
 
     def detach(self) -> None:
         """Stop routing to the session; the next scan starts from the configured emitter levels again."""
@@ -938,6 +952,8 @@ class DeviceManager:
         sink = self._sink
         if sink is not None:
             safe_call("recording an event", lambda: sink.on_event(event))
+        if event.kind == "temperature":
+            self._on_temperature(event)
         if control and event.kind == "button":
             if event.value == "down":
                 self._t_down = float(event.t_host)
@@ -945,6 +961,21 @@ class DeviceManager:
                 held = float(event.t_host) - self._t_down
                 self._t_down = None
                 safe_call("handling the trigger", lambda: self._on_trigger("long" if held >= LONG_PRESS_S else "short"))
+
+    def _on_temperature(self, event: Any) -> None:
+        """Keep the IMU chip's latest temperature for ``DeviceState.imu_temp_c``. The UI hears about
+        it when it has moved TEMP_PUBLISH_STEP_C since the last time, not at every 1 Hz reading."""
+        c = self._conn
+        try:
+            value = float(event.value)
+        except (TypeError, ValueError):
+            return
+        if c is None or not math.isfinite(value):
+            return
+        c.temp_c, c.temp_t, c.temp_event = value, time.monotonic(), event
+        if c.temp_shown is None or abs(value - c.temp_shown) >= TEMP_PUBLISH_STEP_C:
+            c.temp_shown = value
+            self._on_change()
 
     def _processing(self) -> bool:
         """True while a scan is being processed (a ``process_scan`` job is queued or running)."""

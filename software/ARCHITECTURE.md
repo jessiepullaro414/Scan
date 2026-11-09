@@ -137,7 +137,7 @@ class Pico:                        # context manager; reader thread; heartbeat t
     def start_imu(self, rate_hz: int | None = None) -> None: ...
     def stop_imu(self) -> None: ...
     def read_imu(self) -> list[ImuSample]: ...   # drains queue; t_host from clock sync
-    def read_events(self) -> list[Event]: ...    # kind "button", value "down"/"up"
+    def read_events(self) -> list[Event]: ...    # kind "button" ("down"/"up") or "temperature" ("31.25", degC)
     def sync_clock(self, n: int = 16) -> tuple[float, float]: ...   # (offset_s, best_rtt_s); auto-resync every ~5 s
 def find_pico_port() -> str | None: ...
 ```
@@ -151,11 +151,12 @@ def find_pico_port() -> str | None: ...
 | `IMU <rate_hz>` (0 = stop; supported 104/208/416/833) | `OK IMU <rate> <gyro_rad_per_lsb> <accel_ms2_per_lsb>` |
 | `TIME` | `T <t_us>` (microseconds; the firmware unwraps `ticks_us` into a 64-bit counter and sends that everywhere) |
 | `HB` | (no reply) |
-| `STATUS` | `S emit=<v>,<h>,<d> imu=<rate> btn=<0\|1> up=<s>` |
+| `STATUS` | `S emit=<v>,<h>,<d> imu=<rate> btn=<0\|1> up=<s>`, plus ` temp=<degC>` once a temperature was read (1.1.0+) |
 
 Asynchronous Pico -> host lines: `I <t_us> <gx> <gy> <gz> <ax> <ay> <az>` (raw int16 counts, IMU frame),
-`B <t_us> <0|1>` (debounced button, 1 = pressed), `E <msg>` (error), `L <msg>` (log).
-Unknown commands reply `E unknown <cmd>`.
+`B <t_us> <0|1>` (debounced button, 1 = pressed), `C <t_us> <centi_degC>` (the IMU chip's temperature
+in hundredths of a degree, about once a second while the IMU streams; firmware 1.1.0+), `E <msg>` (error),
+`L <msg>` (log). Unknown commands reply `E unknown <cmd>`.
 
 **Safety:** emitters are off at boot. Any emitter turns off if no host line arrives for 1.5 s. Values are clamped to 0..100.
 
@@ -200,11 +201,13 @@ The trigger button starts/stops scanning. `process.py` produces the full-quality
 ## 6. Recording folder format (implemented in `ohs/io/recording.py`)
 ```
 <rec>/
-  meta.json            format_version=1, created, source ("camera"|"sim"), image_size [w,h] per camera, ...
+  meta.json            format_version=1, created, source ("camera"|"sim"), image_size [w,h] per camera, ...,
+                       temperature_c {first,last,min,max,n} when the recording has temperatures
   frames.csv           index,t_host,file
   frames/000000.png    side-by-side grayscale left|right (raw, unrectified)
   imu.csv              t_host,t_device,gx,gy,gz,ax,ay,az    (rad/s, m/s^2, IMU frame)
-  events.csv           t_host,kind,value
+  events.csv           t_host,kind,value    kinds: button (down|up), session (pause|resume), cut ("t0,t1"),
+                       temperature (IMU chip, degC, ~1 Hz; RecordingReader.temperature())
   calibration.json     optional: ScannerCalibration (true calibration for sim recordings)
   ground_truth/        optional (sim): poses.csv (index,t_host,16 values of T_wc row-major), depth/000000.npy
 ```

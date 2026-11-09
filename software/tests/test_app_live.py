@@ -92,6 +92,9 @@ class FakeImu:
         self.consumed = self._latest()
         return self.RAW
 
+    def read_temp_c100(self) -> int:
+        return 3010  # 30.10 degC
+
 
 class HostPort:
     """pyserial-like host end of the in-memory link."""

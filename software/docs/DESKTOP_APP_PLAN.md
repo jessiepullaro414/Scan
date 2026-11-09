@@ -482,6 +482,10 @@ Phase 1 is done when full-quality processing is at least 3x faster on the RTX la
 
 **Also queued:**
 - **Temperature logging** (part of #8, before the hardware arrives): the firmware reads the IMU chip's temperature, and every recording stores it, so drift with heat can be modelled later.
+  - **Done 2026-11-09.** Firmware 1.1.0 sends it about once a second while the IMU streams (`C` lines; `STATUS` adds `temp=`).
+  - Recordings store each reading as a `temperature` event, with a summary in `meta.json`, and a scan starts with the latest reading.
+  - The Device page shows it, and simulated recordings get a slow warm-up.
+  - Still open, with #8: the temperature at calibration time, which needs a calibration-format change.
 - **GPU tuning for discrete GPUs:**
   - more parallel work in the SGM kernels;
   - ICP point subsampling;

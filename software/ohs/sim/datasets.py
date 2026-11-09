@@ -2,8 +2,9 @@
 
 * :func:`make_scan_recording` writes a full recording folder (ARCHITECTURE.md section 6):
   raw side-by-side frames, IMU at 416 Hz, trigger events (down before the first frame, up after
-  the last), ``calibration.json`` (the TRUE calibration) and ``ground_truth/`` (``T_wc`` per frame
-  in the Z-up sim world, rectified-left depth maps).
+  the last), the IMU chip's temperature once a second (a slow warm-up, like firmware 1.1),
+  ``calibration.json`` (the TRUE calibration) and ``ground_truth/`` (``T_wc`` per frame in the
+  Z-up sim world, rectified-left depth maps).
 * :func:`make_stereo_calib_set` renders a ChArUco board (ambient light only) at varied poses for
   stereo calibration; :func:`make_laser_calib_set` renders the board with the line lasers on
   (dots off) for laser-plane calibration and returns the true board poses ``T_cb``.
@@ -68,6 +69,17 @@ def board_corners(spec: dict | None = None) -> np.ndarray:
 
 
 # --------------------------------------------------------------------------- scan recording
+def _imu_temperature(t_start: float, t_end: float, seed: int) -> tuple[list[float], list[float]]:
+    """The IMU chip's temperature once a second, as firmware 1.1 reports it: a slow warm-up of
+    about 2 degC from 26-28 degC, read in 1/256 degC steps and sent in hundredths of a degree."""
+    rng = np.random.default_rng(seed + 7919)  # its own stream: the rest of the recording is unchanged
+    t = t_start + np.arange(int(math.floor(t_end - t_start)) + 1, dtype=np.float64)
+    start = 27.0 + rng.uniform(-1.0, 1.0)
+    c = start + 2.0 * (1.0 - np.exp(-(t - t_start) / 300.0)) + rng.normal(0.0, 0.03, len(t))
+    c = np.round(np.round(c * 256.0) / 256.0, 2)
+    return [float(x) for x in t], [float(x) for x in c]
+
+
 def make_scan_recording(
     out_dir: str | Path,
     scene: str | Scene = "sphere_on_plane",
@@ -133,6 +145,8 @@ def make_scan_recording(
         w.write_calibration(calib)
         w.write_event(Event(float(t_exp[0]) - 0.2, "button", "down"))
         w.write_imu(imu)
+        for t, c in zip(*_imu_temperature(float(t_exp[0]) - 0.5, float(t_exp[-1]) + 0.5, seed)):
+            w.write_event(Event(t, "temperature", f"{c:.2f}"))
         for i in range(len(t_cam)):
             left, right, depth = renderer.render(poses[i])
             w.write_frame(StereoFrame(i, float(t_host[i]), left, right))

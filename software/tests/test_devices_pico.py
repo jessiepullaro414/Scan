@@ -92,6 +92,7 @@ class FakeImu:
         self.rate = 0
         self.t_start = 0
         self.consumed = -1
+        self.temp_c100 = 2950  # chip temperature, hundredths of a degree C
 
     def set_rate(self, rate: int) -> None:
         self.rate, self.t_start, self.consumed = rate, self.clock(), -1
@@ -105,6 +106,9 @@ class FakeImu:
     def read_raw(self) -> tuple:
         self.consumed = self._latest()
         return self.RAW
+
+    def read_temp_c100(self) -> int:
+        return self.temp_c100
 
 
 class HostPort:
@@ -341,6 +345,25 @@ def test_button_events(sim):
     assert -0.5e-3 < events[1].t_host - t_release < 0.05
 
 
+def test_imu_temperature_events_and_status(sim):
+    sim.imu.temp_c100 = 3125
+    with Pico(PicoParams(imu_rate_hz=208), transport=sim.port) as pico:
+        assert pico.temperature_c is None and "temp" not in pico.status()  # nothing read before the IMU runs
+        t0 = time.perf_counter()
+        pico.start_imu()
+        wait_until(lambda: pico.stats["temps"] >= 1)
+        sim.imu.temp_c100 = -512  # the next reading, about a second later
+        wait_until(lambda: pico.stats["temps"] >= 2, timeout=3.0)
+        st = pico.status()
+        pico.stop_imu()
+        events = pico.read_events()
+    assert [(e.kind, e.value) for e in events][:2] == [("temperature", "31.25"), ("temperature", "-5.12")]
+    assert all(e.kind == "temperature" for e in events)
+    assert -0.5e-3 < events[0].t_host - t0 < 0.1  # mapped to host time, right after the first sample
+    assert 0.95 < events[1].t_host - events[0].t_host < 1.1
+    assert st["temp"] == -5.12 and pico.temperature_c == -5.12
+
+
 def test_clock_sync_offset_and_drift_within_half_ms():
     sim = SimPico(drift_ppm=400.0, delay_time_replies=True)
     try:
@@ -511,3 +534,6 @@ def test_real_pico_roundtrip():
             assert 350 < len(s) < 480
             g = np.linalg.norm(np.mean([x.accel for x in s], axis=0))
             assert 9.0 < g < 10.6  # gravity, if the scanner is resting
+            if tuple(int(v) for v in pico.hello["version"].split(".")[:2]) >= (1, 1):
+                temps = [float(e.value) for e in pico.read_events() if e.kind == "temperature"]
+                assert temps and all(5.0 < c < 70.0 for c in temps)  # a room-temperature chip, plus self-heating
