@@ -1,0 +1,490 @@
+"""Per-frame processing: raw stereo frame -> rectified pair, depth, laser points, pose, fusion.
+
+:class:`FramePipeline` is the one place where the vision, tracking and fusion modules are wired
+together. Live scanning runs it at ``scale=0.5`` for feedback, and offline processing
+(:mod:`ohs.app.process`) at ``scale=1.0``. Per frame (:meth:`FramePipeline.process`):
+
+1. **Rectify** the raw pair (:class:`~ohs.vision.rectify.Rectifier` at ``scale``). From here on
+   everything is in frame C at that scale (``K = rectifier.K``).
+2. **Depth** (:class:`~ohs.vision.depth.DepthEstimator`, SGBM on the dot pattern), computed when
+   the mode needs it: always in markerless mode, and in marker mode when ``integrate_depth``.
+3. **Laser lines**, extracted once per image (left and right) and triangulated on the calibrated
+   planes with the right-image stereo check (:func:`~ohs.vision.laser.laser_points` with
+   ``lines_left`` / ``lines_right``).
+4. **Pose**.
+
+   * ``"markerless"``: :class:`~ohs.track.markerless.MarkerlessTracker` frame-to-model ICP. The
+     gyro rotation since the previous processed frame
+     (:class:`~ohs.track.imu_prior.GyroPredictor`) is passed as ``R_prior`` only when the IMU
+     buffer covers that interval, and the frame time ``t`` is always passed. See *tracking
+     model* below.
+   * ``"markers"``: :class:`~ohs.track.markers.MarkerTracker` gives the pose; on success the
+     depth is fused with ``MarkerlessTracker.integrate(depth, None, T_wc, t=t)``.
+5. **Laser cloud**: the validated laser points are added to the
+   :class:`~ohs.track.fusion.LaserCloud` with the frame pose, only when tracking succeeded.
+
+**Tracking model** (markerless). The SGBM depth carries an error pattern that is fixed to the
+*camera*: the projected dots sit at nearly the same image positions in every frame, so the
+dot-scale disparity errors (std ~0.3 px in simulation, frame-to-frame correlation ~0.4) repeat.
+A TSDF built from such depth keeps the pattern, and frame-to-model ICP then locks onto it: large
+flat areas (a table, a panel) pull the estimate toward the previous pose. In simulation this
+drifted 20 deg / 55 mm over 36 frames on the sphere scene (ground-truth depth: 0.08 deg /
+0.2 mm). The pipeline therefore tracks against a *separate* tracking TSDF fed with a filtered
+depth map (:func:`tracking_depth`: edge-aware normalised Gaussian smoothing of ``sigma`` ~6 px at
+1280 px width, validity eroded by 2 sigma so that no camera-fixed border artefact remains),
+at ``track_voxel_mm`` (2 mm), with a gyro prior of 0.02 deg per frame (the calibrated gyro is
+good to ~0.01 deg per frame). The raw depth is fused at the tracked poses into the
+reconstruction TSDF (``fusion``, 1 mm at full resolution), which is what :meth:`mesh` returns.
+Simulated result: 0.07 deg / 0.3 mm on the same 36 frames (VALIDATION.md).
+``track_filter_px=0`` restores single-model tracking on the raw depth.
+
+Graceful degradation: without calibrated laser planes (or ``use_lasers=False``) the laser stage
+is skipped; without an IMU calibration (or ``use_imu=False``) there is no rotation prior; a
+frame that fails to track is not fused and adds no laser points (its result carries the last
+good pose and ``track.ok = False``). Stage timings (ms) are in ``FrameResult.timings_ms``.
+
+Defaults that depend on the resolution (used when the corresponding ``PipelineParams`` field is
+``None``) are keyed on the *effective scale* ``s = processed width / 1280`` (the nominal camera),
+which equals ``scale`` for the 1280x800 ELP module: depth ``DepthParams(block_size=7,
+speckle_window_size=200)`` at s >= 0.75 (the vision module's full-resolution recommendation),
+else ``DepthParams()`` (tuned for 640x400); lasers ``LaserParams().scaled(s)``; fusion
+``FusionParams(voxel_mm=1.0, gyro_sigma_deg=0.02)`` at s >= 1 and ``1 / s`` mm voxels below
+(2.0 mm at 0.5); tracking filter 6 px at s >= 0.75, else ``8 s`` px (4 px at 0.5); tracking
+voxel ``max(2, fusion voxel)`` mm. So a 640x400 recording processed at ``scale=1`` gets the
+half-resolution settings its pixels need.
+
+``markerless`` world frame: the camera frame of the first successfully tracked frame. ``markers``
+world frame: the frame that initialised the tag map. :meth:`FramePipeline.mesh` and the laser
+cloud are in that world frame (mm).
+
+A pipeline is meant for single-threaded use: it is not thread-safe (OpenCV matchers and the
+Open3D voxel grids keep internal state). Use one instance per processing thread.
+"""
+from __future__ import annotations
+
+import logging
+import time
+from dataclasses import dataclass, field, replace
+
+import cv2
+import numpy as np
+
+from ohs.track.fusion import LaserCloud
+from ohs.track.imu_prior import GyroPredictor
+from ohs.track.markerless import FusionParams, MarkerlessTracker
+from ohs.track.markers import MarkerParams, MarkerTracker
+from ohs.types import ImuSample, LaserPlane, ScannerCalibration, StereoFrame, TrackResult
+from ohs.vision.depth import DepthEstimator, DepthParams
+from ohs.vision.laser import LINE_NAMES, LaserLines, LaserParams, extract_laser_lines, laser_points
+from ohs.vision.rectify import Rectifier
+
+__all__ = [
+    "MODES",
+    "PipelineParams",
+    "FrameResult",
+    "FramePipeline",
+    "default_depth_params",
+    "default_fusion_params",
+    "default_laser_params",
+    "default_track_filter_px",
+    "effective_scale",
+    "tracking_depth",
+]
+
+log = logging.getLogger(__name__)
+
+MODES = ("markerless", "markers")
+NOMINAL_WIDTH = 1280  # px per camera of the ELP module; pixel-based defaults are tuned for it
+GYRO_SIGMA_DEG = 0.02  # gyro rotation prior per frame used by the default fusion parameters
+
+
+def effective_scale(image_width: int) -> float:
+    """Processed image width relative to the nominal 1280 px (pixel density the defaults assume)."""
+    return float(image_width) / NOMINAL_WIDTH
+
+
+def default_depth_params(scale: float) -> DepthParams:
+    """SGBM settings for images at (effective) ``scale`` (full-resolution recommendation at >= 0.75)."""
+    if float(scale) >= 0.75:
+        return DepthParams(block_size=7, speckle_window_size=200)
+    return DepthParams()
+
+
+def default_laser_params(scale: float) -> LaserParams:
+    """Laser extraction settings for images at ``scale`` (pixel quantities scaled)."""
+    return LaserParams() if float(scale) == 1.0 else LaserParams().scaled(float(scale))
+
+
+def default_fusion_params(scale: float) -> FusionParams:
+    """TSDF settings: 1 mm voxels at full resolution, ``1 / scale`` mm below (2 mm at 0.5), and a
+    0.02 deg gyro prior (the module default of 0.1 deg lets camera-fixed depth errors win)."""
+    s = float(scale)
+    voxel = 1.0 if s >= 1.0 else round(1.0 / s, 1)
+    return FusionParams(voxel_mm=voxel, gyro_sigma_deg=GYRO_SIGMA_DEG)
+
+
+def default_track_filter_px(scale: float) -> float:
+    """Gaussian sigma (px of the processed image) of :func:`tracking_depth`: 6 px at full resolution."""
+    s = float(scale)
+    return 6.0 if s >= 0.75 else max(1.0, 8.0 * s)
+
+
+def tracking_depth(depth: np.ndarray, sigma_px: float, erode_mult: float = 2.0, max_change: float = 0.01,
+                   edge_slope: float | None = None) -> np.ndarray:
+    """Depth map for ICP with the camera-fixed dot-scale error pattern suppressed (0 = invalid).
+
+    1. Pixels on depth steps (``|grad z| > edge_slope * z`` per pixel; default 0.5 % at 1280 px
+       width, scaled with the image width) are treated as invalid, so smoothing never mixes
+       surfaces across occlusion edges.
+    2. Normalised Gaussian convolution with ``sigma_px`` over the valid pixels.
+    3. The validity mask is eroded by ``erode_mult * sigma_px`` (the image border counts as
+       invalid), and pixels the smoothing moved by more than ``max_change * z`` are dropped:
+       near any boundary the normalised average is biased, and such biases are fixed to the
+       camera too.
+
+    ``sigma_px <= 0`` returns the input unchanged.
+    """
+    d = np.ascontiguousarray(depth, dtype=np.float32)
+    if sigma_px <= 0:
+        return d
+    h, w = d.shape
+    slope = (0.005 * NOMINAL_WIDTH / w) if edge_slope is None else float(edge_slope)
+    gx = cv2.Sobel(d, cv2.CV_32F, 1, 0, ksize=3, scale=0.125)
+    gy = cv2.Sobel(d, cv2.CV_32F, 0, 1, ksize=3, scale=0.125)
+    valid = (d > 0) & (np.sqrt(gx * gx + gy * gy) <= slope * d)
+    vf = valid.astype(np.float32)
+    s = float(sigma_px)
+    num = cv2.GaussianBlur(d * vf, (0, 0), s, borderType=cv2.BORDER_CONSTANT)
+    den = cv2.GaussianBlur(vf, (0, 0), s, borderType=cv2.BORDER_CONSTANT)
+    out = num / np.maximum(den, 1e-6)
+    # erosion by a disc of radius erode_mult * sigma, with the image border as invalid
+    pad = np.zeros((h + 2, w + 2), np.uint8)
+    pad[1:-1, 1:-1] = valid
+    dist = cv2.distanceTransform(pad, cv2.DIST_L2, 5)[1:-1, 1:-1]
+    keep = (dist > erode_mult * s) & (np.abs(out - d) <= max_change * d)
+    return np.where(keep, out, np.float32(0.0)).astype(np.float32)
+
+
+@dataclass
+class PipelineParams:
+    """What :class:`FramePipeline` runs. ``None`` sub-parameters mean defaults for ``scale``."""
+
+    mode: str = "markerless"  # "markerless" | "markers"
+    scale: float = 1.0  # 1.0 offline, 0.5 live
+    use_imu: bool = True
+    use_lasers: bool = True
+    integrate_depth: bool = True  # markers mode: fuse depth at the marker poses (markerless always fuses)
+    depth: DepthParams | None = None  # None -> sensible defaults for this scale
+    laser: LaserParams | None = None  # None -> LaserParams().scaled(scale)
+    fusion: FusionParams | None = None  # None -> voxel 1.0 mm at scale >= 1, 2.0 mm at 0.5
+    markers: MarkerParams | None = None
+    # markerless tracking model (see the module docstring); None -> defaults for this scale
+    track_filter_px: float | None = None  # 0 -> track on the raw depth in the reconstruction TSDF
+    track_voxel_mm: float | None = None
+
+    def __post_init__(self) -> None:
+        if self.mode not in MODES:
+            raise ValueError(f"mode must be one of {MODES}, got {self.mode!r}")
+        if not (np.isfinite(self.scale) and 0.0 < float(self.scale) <= 1.0):
+            raise ValueError(f"scale must be in (0, 1], got {self.scale!r}")
+
+
+@dataclass
+class FrameResult:
+    """Everything one processed frame produced (images and depth are at the pipeline scale)."""
+
+    index: int
+    t: float
+    left_r: np.ndarray
+    right_r: np.ndarray
+    depth: np.ndarray | None  # raw SGBM depth (mm, 0 = invalid), the one that is fused
+    lines: LaserLines | None  # left rectified image
+    laser_points: dict[str, np.ndarray]  # frame C, mm, validated
+    track: TrackResult
+    timings_ms: dict[str, float]
+    lines_right: LaserLines | None = None
+    extra: dict = field(default_factory=dict)
+
+
+def _ms(t0: float) -> float:
+    return 1e3 * (time.perf_counter() - t0)
+
+
+class FramePipeline:
+    """Rectify -> depth -> lasers -> pose -> fusion for a stream of raw stereo frames.
+
+    Single-threaded use; not thread-safe. See the module docstring for the stages and defaults.
+    """
+
+    def __init__(self, calib: ScannerCalibration, params: PipelineParams | None = None) -> None:
+        self.calib = calib
+        self.params = p = params if params is not None else PipelineParams()
+        if p.mode not in MODES:  # PipelineParams validates too, but fields may have been reassigned
+            raise ValueError(f"mode must be one of {MODES}, got {p.mode!r}")
+        self.rectifier = Rectifier(calib.stereo, p.scale)
+        self.K = self.rectifier.K
+        self.baseline = self.rectifier.baseline
+        self.image_size = self.rectifier.image_size
+        s_eff = effective_scale(self.image_size[0])
+        self.depth_params = p.depth if p.depth is not None else default_depth_params(s_eff)
+        self.laser_params = p.laser if p.laser is not None else default_laser_params(s_eff)
+        self.fusion_params = p.fusion if p.fusion is not None else default_fusion_params(s_eff)
+        self.marker_params = p.markers if p.markers is not None else MarkerParams()
+        self.track_filter_px = float(p.track_filter_px if p.track_filter_px is not None else default_track_filter_px(s_eff))
+        tv = p.track_voxel_mm if p.track_voxel_mm is not None else max(2.0, self.fusion_params.voxel_mm)
+        self.track_fusion_params = replace(self.fusion_params, voxel_mm=float(tv))
+
+        self._need_depth = p.mode == "markerless" or bool(p.integrate_depth)
+        if p.mode == "markerless" and not p.integrate_depth:
+            log.info("integrate_depth=False has no effect in markerless mode (the fused model is the tracking reference)")
+        self.depth_estimator = DepthEstimator(self.K, self.baseline, self.depth_params) if self._need_depth else None
+
+        planes: dict[str, LaserPlane] = {}
+        if p.use_lasers:
+            planes = {n: pl for n, pl in (calib.lasers or {}).items() if n in LINE_NAMES}
+            if not planes:
+                log.info("no calibrated laser planes: laser triangulation is skipped")
+        self.planes = planes
+
+        # reconstruction TSDF (raw depth) and, in markerless mode, the tracking TSDF (filtered depth)
+        self.markerless: MarkerlessTracker | None = None
+        if self._need_depth:
+            self.markerless = MarkerlessTracker(self.K, self.image_size, self.fusion_params)
+        self.tracker: MarkerlessTracker | None = None
+        if p.mode == "markerless":
+            if self.track_filter_px > 0:
+                self.tracker = MarkerlessTracker(self.K, self.image_size, self.track_fusion_params)
+            else:
+                self.tracker = self.markerless
+        self.markers: MarkerTracker | None = None
+        if p.mode == "markers":
+            self.markers = MarkerTracker(self.K, self.baseline, self.marker_params)
+
+        self.gyro: GyroPredictor | None = None
+        if p.mode == "markerless" and p.use_imu:
+            if calib.imu is None:
+                log.info("no IMU calibration: markerless tracking runs without a gyro prior")
+            else:
+                self.gyro = GyroPredictor(calib.imu)
+
+        self.cloud = LaserCloud()
+        self._trajectory: list[tuple[float, np.ndarray, bool]] = []
+        self._t_prev: float | None = None
+        self._n_frames = 0
+        self._n_ok = 0
+        self._closed = False
+        log.info(
+            "FramePipeline: %s, scale %.2f (%dx%d), depth %s, lasers %s, gyro prior %s, voxel %.1f mm, tracking %s",
+            p.mode, p.scale, *self.image_size, "on" if self._need_depth else "off",
+            "+".join(sorted(self.planes)) or "off", "on" if self.gyro is not None else "off",
+            self.fusion_params.voxel_mm,
+            (f"filtered depth (sigma {self.track_filter_px:.1f} px), {self.track_fusion_params.voxel_mm:.1f} mm model"
+             if self.dual_model else "raw depth" if p.mode == "markerless" else "markers"),
+        )
+
+    # ------------------------------------------------------------------ properties
+    @property
+    def mode(self) -> str:
+        return self.params.mode
+
+    @property
+    def lasers_enabled(self) -> bool:
+        return bool(self.planes)
+
+    @property
+    def gyro_enabled(self) -> bool:
+        return self.gyro is not None
+
+    @property
+    def dual_model(self) -> bool:
+        """True when markerless tracking uses its own (filtered-depth) TSDF."""
+        return self.tracker is not None and self.tracker is not self.markerless
+
+    @property
+    def n_frames(self) -> int:
+        """Frames processed since construction or the last :meth:`reset`."""
+        return self._n_frames
+
+    @property
+    def n_tracked(self) -> int:
+        """Frames whose pose was found (and which were fused)."""
+        return self._n_ok
+
+    # ------------------------------------------------------------------ input
+    def add_imu(self, samples: list[ImuSample]) -> None:
+        """Buffer IMU samples (``t_host`` in the IMU host clock, raw gyro in the IMU frame).
+
+        Ignored when the gyro prior is off (no IMU calibration, ``use_imu=False`` or marker mode).
+        Samples must arrive before the frames they cover (the buffer keeps the last 10 s).
+        """
+        if self.gyro is not None and samples:
+            self.gyro.add(samples)
+
+    def add_imu_arrays(self, t_host: np.ndarray, gyro: np.ndarray) -> None:
+        """Like :meth:`add_imu` with arrays (``RecordingReader.imu_arrays()`` style)."""
+        if self.gyro is not None and len(t_host):
+            self.gyro.add_arrays(t_host, gyro)
+
+    def _check_open(self) -> None:
+        if self._closed:
+            raise RuntimeError("FramePipeline is closed")
+
+    # ------------------------------------------------------------------ processing
+    def process(self, frame: StereoFrame, pose: np.ndarray | None = None) -> FrameResult:
+        """Process one raw stereo frame (``t_host`` = camera timestamp).
+
+        ``pose`` (optional, 4x4 ``T_wc``) skips tracking and fuses the frame at that pose, e.g. to
+        reprocess with poses known from elsewhere. Raises ``ValueError`` if the raw image size
+        does not match the calibration.
+        """
+        self._check_open()
+        p = self.params
+        t = float(frame.t_host)
+        tim: dict[str, float] = {}
+        extra: dict = {}
+        t_start = time.perf_counter()
+
+        t0 = time.perf_counter()
+        left_r, right_r = self.rectifier.rectify(frame.left, frame.right)
+        tim["rectify"] = _ms(t0)
+
+        depth = None
+        if self.depth_estimator is not None:
+            t0 = time.perf_counter()
+            depth = self.depth_estimator.compute(left_r, right_r)
+            tim["depth"] = _ms(t0)
+
+        lines = lines_r = None
+        if self.planes:
+            t0 = time.perf_counter()
+            lines = extract_laser_lines(left_r, self.laser_params)
+            if self.laser_params.stereo_check:
+                lines_r = extract_laser_lines(right_r, self.laser_params)
+            tim["laser_extract"] = _ms(t0)
+
+        t0 = time.perf_counter()
+        if pose is not None:
+            T = np.asarray(pose, dtype=np.float64).reshape(4, 4)
+            track = TrackResult(T.copy(), True, {"method": "external"})
+            if self.dual_model and depth is not None:
+                self.tracker.integrate(tracking_depth(depth, self.track_filter_px), None, T)
+            self._fuse(depth, T, t, tim)
+        elif p.mode == "markerless":
+            track = self._track_markerless(depth, t, tim, extra)
+        else:
+            track = self.markers.track(left_r, right_r, t)
+            if track.ok:
+                self._fuse(depth, track.T_wc, t, tim)
+        tim["track"] = _ms(t0)
+        self._t_prev = t
+
+        pts: dict[str, np.ndarray] = {}
+        if self.planes:
+            t0 = time.perf_counter()
+            pts = laser_points(left_r, right_r, self.K, self.baseline, self.planes, self.laser_params,
+                               lines_left=lines, lines_right=lines_r)
+            if track.ok:
+                for name, P in pts.items():
+                    self.cloud.add(P, track.T_wc, name)
+            tim["laser_triangulate"] = _ms(t0)
+            tim["laser"] = tim["laser_extract"] + tim["laser_triangulate"]
+        tim["total"] = _ms(t_start)
+
+        self._n_frames += 1
+        self._n_ok += int(track.ok)
+        self._trajectory.append((t, np.asarray(track.T_wc, dtype=np.float64).copy(), bool(track.ok)))
+        return FrameResult(int(frame.index), t, left_r, right_r, depth, lines, pts, track, tim, lines_r, extra)
+
+    def _fuse(self, depth: np.ndarray | None, T_wc: np.ndarray, t: float, tim: dict[str, float]) -> None:
+        """Integrate the raw depth into the reconstruction TSDF at ``T_wc``."""
+        if self.markerless is None or depth is None:
+            return
+        ti = time.perf_counter()
+        self.markerless.integrate(depth, None, T_wc, t=t)
+        tim["integrate"] = _ms(ti)
+
+    def _track_markerless(self, depth: np.ndarray, t: float, tim: dict[str, float], extra: dict) -> TrackResult:
+        R_prior = None
+        if self.gyro is not None and self._t_prev is not None and self.gyro.covers(self._t_prev, t):
+            R_prior = self.gyro.relative_rotation(self._t_prev, t)
+        if not self.dual_model:
+            res = self.tracker.track(depth, None, t, R_prior)
+        else:
+            tf = time.perf_counter()
+            d_track = tracking_depth(depth, self.track_filter_px)
+            tim["track_filter"] = _ms(tf)
+            extra["track_valid_fraction"] = float(np.count_nonzero(d_track)) / d_track.size
+            res = self.tracker.track(d_track, None, t, R_prior)
+            if res.ok:
+                self._fuse(depth, res.T_wc, t, tim)
+        for k, v in res.info.get("timings_ms", {}).items():
+            if k == "total":
+                continue
+            tim["track_integrate" if (k == "integrate" and self.dual_model) else k] = float(v)
+        return res
+
+    # ------------------------------------------------------------------ results
+    def mesh(self) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Marching-cubes mesh of the fused TSDF: ``(V (N,3), F (M,3), N (N,3))``, world frame, mm."""
+        self._check_open()
+        empty = (np.zeros((0, 3)), np.zeros((0, 3), dtype=np.int64), np.zeros((0, 3)))
+        if self.markerless is None or self.markerless.n_integrated == 0:
+            return empty
+        try:
+            return self.markerless.extract_mesh()
+        except RuntimeError as exc:  # Open3D raises instead of returning an empty mesh
+            log.warning("mesh extraction failed (%s); returning an empty mesh", exc)
+            return empty
+
+    def points(self) -> tuple[np.ndarray, np.ndarray]:
+        """TSDF zero-crossing points and normals ``(P, N)`` (world, mm), e.g. for Poisson meshing."""
+        self._check_open()
+        empty = (np.zeros((0, 3)), np.zeros((0, 3)))
+        if self.markerless is None or self.markerless.n_integrated == 0:
+            return empty
+        try:
+            return self.markerless.extract_points()
+        except RuntimeError as exc:
+            log.warning("point extraction failed (%s); returning no points", exc)
+            return empty
+
+    def laser_cloud(self) -> LaserCloud:
+        """The accumulated laser points (world frame, mm)."""
+        return self.cloud
+
+    def trajectory(self) -> list[tuple[float, np.ndarray, bool]]:
+        """``[(t, T_wc, ok), ...]`` for every processed frame (failed frames carry the last good pose)."""
+        return [(t, T.copy(), ok) for t, T, ok in self._trajectory]
+
+    def reset(self) -> None:
+        """Start a new scan: forget the models, the marker map, the laser cloud and the trajectory.
+
+        Calibration, parameters and buffered IMU samples are kept.
+        """
+        self._check_open()
+        if self.markerless is not None:
+            self.markerless.reset()
+        if self.dual_model:
+            self.tracker.reset()
+        if self.markers is not None:
+            self.markers.reset()
+        self.cloud.clear()
+        self._trajectory = []
+        self._t_prev = None
+        self._n_frames = 0
+        self._n_ok = 0
+
+    def close(self) -> None:
+        """Release the voxel grids and trackers. The pipeline cannot be used afterwards."""
+        self._closed = True
+        self.markerless = None
+        self.tracker = None
+        self.markers = None
+        self.depth_estimator = None
+        self.gyro = None
+
+    def __enter__(self) -> "FramePipeline":
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self.close()

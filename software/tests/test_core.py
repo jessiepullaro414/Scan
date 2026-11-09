@@ -1,0 +1,137 @@
+"""Tests for the shared core: types, geometry, recording."""
+import numpy as np
+import pytest
+
+from ohs import geometry as G
+from ohs.io.recording import RecordingReader, RecordingWriter
+from ohs.types import (
+    Event,
+    ImuCalibration,
+    ImuSample,
+    LaserPlane,
+    ScannerCalibration,
+    StereoCalibration,
+    StereoFrame,
+)
+
+
+def nominal_stereo(size=(1280, 800), f=720.0, baseline=60.0):
+    K = np.array([[f, 0, size[0] / 2 - 0.5], [0, f, size[1] / 2 - 0.5], [0, 0, 1.0]])
+    return StereoCalibration.build(size, K, np.zeros(5), K, np.zeros(5), np.eye(3), np.array([-baseline, 0, 0]))
+
+
+# --------------------------------------------------------------------------- geometry
+def test_so3_roundtrip():
+    rng = np.random.default_rng(1)
+    for _ in range(50):
+        w = rng.normal(size=3) * rng.uniform(0, 3.0)
+        R = G.so3_exp(w)
+        assert np.allclose(R @ R.T, np.eye(3), atol=1e-10)
+        assert np.allclose(G.so3_exp(G.so3_log(R)), R, atol=1e-8)
+    R = G.so3_exp(np.array([0, 0, np.pi - 1e-6]))
+    assert np.allclose(G.so3_exp(G.so3_log(R)), R, atol=1e-5)
+
+
+def test_kabsch_recovers_transform():
+    rng = np.random.default_rng(2)
+    A = rng.normal(size=(30, 3)) * 50
+    R = G.so3_exp(np.array([0.3, -0.2, 0.9]))
+    t = np.array([10.0, -4.0, 300.0])
+    B = A @ R.T + t
+    R2, t2 = G.kabsch(A, B)
+    assert np.allclose(R2, R, atol=1e-9) and np.allclose(t2, t, atol=1e-7)
+
+
+def test_plane_fit_and_ray_intersection():
+    rng = np.random.default_rng(3)
+    n = np.array([0.9473, 0.0, 0.3205]); n /= np.linalg.norm(n)
+    d = -109.8
+    # points on the plane: pick rays that hit it in front of the camera (u > ~396) and intersect
+    uv = rng.uniform([450, 0], [1280, 800], size=(200, 2))
+    K = nominal_stereo().K_rect
+    P = G.ray_plane_intersect(G.pixels_to_rays(uv, K), n, d)
+    assert np.all(np.isfinite(P))
+    assert np.allclose(P @ n + d, 0, atol=1e-9)
+    assert np.allclose(G.project_points(P, K), uv, atol=1e-6)
+    n2, d2, rms = G.fit_plane(P + rng.normal(scale=0.01, size=P.shape))
+    assert abs(abs(n2 @ n) - 1) < 1e-5 and abs(d2 - d) < 0.05 and rms < 0.02
+    outliers = rng.uniform(-200, 400, size=(60, 3))
+    n3, d3, mask, _ = G.fit_plane_ransac(np.vstack([P, outliers]), thresh=0.5)
+    assert mask[:200].all() and abs(d3 - d) < 1e-6
+
+
+def test_integrate_gyro_constant_rate():
+    t = np.linspace(0, 1, 417)
+    w = np.array([0.0, 0.0, 1.0])
+    R = G.integrate_gyro(t, np.tile(w, (len(t), 1)), 0.1, 0.6)
+    assert np.allclose(R, G.so3_exp(w * 0.5), atol=1e-9)
+    assert np.allclose(G.integrate_gyro(t, np.tile(w, (len(t), 1)), 0.6, 0.1), R.T, atol=1e-9)
+
+
+def test_depth_to_points():
+    K = nominal_stereo().K_rect
+    depth = np.full((800, 1280), 250.0, dtype=np.float32)
+    depth[:10] = 0
+    P = G.depth_to_points(depth, K, stride=4)
+    assert np.allclose(P[:, 2], 250.0) and len(P) == (800 // 4 - 3) * (1280 // 4)
+
+
+# --------------------------------------------------------------------------- types
+def test_stereo_calibration_build_and_scale():
+    sc = nominal_stereo()
+    assert sc.baseline == pytest.approx(60.0)
+    assert np.allclose(sc.K_rect[0, 0], 720.0)
+    half = sc.scaled(0.5)
+    assert half.image_size == (640, 400)
+    assert half.baseline == pytest.approx(60.0)
+    assert half.K_rect[0, 0] == pytest.approx(360.0)
+    # Q reprojects disparity to the same depth: z = f * B / disp
+    disp = 100.0
+    X = half.Q @ np.array([300.0, 200.0, disp, 1.0])
+    assert X[2] / X[3] == pytest.approx(360.0 * 60.0 / disp)
+
+
+def test_calibration_roundtrip(tmp_path):
+    cal = ScannerCalibration(
+        nominal_stereo(),
+        {"vertical": LaserPlane("vertical", np.array([0.9473, 0, 0.3205]), -109.8, rms=0.1, n_points=10)},
+        ImuCalibration(G.so3_exp(np.array([0.01, 0.02, 0.0])), 0.025, np.array([1e-3, 0, 0])),
+    )
+    cal.save(tmp_path / "c.json")
+    back = ScannerCalibration.load(tmp_path / "c.json")
+    assert np.allclose(back.stereo.P2, cal.stereo.P2)
+    assert back.lasers["vertical"].d == pytest.approx(cal.lasers["vertical"].d)
+    assert np.allclose(back.imu.R_ci, cal.imu.R_ci)
+    lp = LaserPlane("x", np.array([0, 0, -2.0]), 10.0)  # gets normalised and sign-flipped
+    assert lp.d <= 0 and np.isclose(np.linalg.norm(lp.normal), 1)
+
+
+# --------------------------------------------------------------------------- recording
+def test_recording_roundtrip(tmp_path):
+    rng = np.random.default_rng(0)
+    rec = tmp_path / "rec"
+    frames = [StereoFrame(i, 10.0 + i / 30, rng.integers(0, 255, (80, 128), dtype=np.uint8),
+                          rng.integers(0, 255, (80, 128), dtype=np.uint8)) for i in range(5)]
+    with RecordingWriter(rec, source="sim", note="test") as w:
+        for f in frames:
+            w.write_frame(f)
+        w.write_imu([ImuSample(10.0 + k / 416, 5.0 + k / 416, np.array([0.1, 0.2, 0.3]), np.array([0, 0, 9.81])) for k in range(20)])
+        w.write_event(Event(10.05, "button", "down"))
+        w.write_ground_truth_pose(0, 10.0, np.eye(4))
+        w.write_ground_truth_depth(0, np.ones((80, 128)))
+        w.write_calibration(ScannerCalibration(nominal_stereo((128, 80), 72.0)))
+    r = RecordingReader(rec)
+    assert len(r) == 5 and r.meta["source"] == "sim" and r.meta["n_frames"] == 5
+    assert r.meta["image_size"] == [128, 80]
+    f3 = r.frame(3)
+    assert np.array_equal(f3.left, frames[3].left) and np.array_equal(f3.right, frames[3].right)
+    assert f3.t_host == pytest.approx(frames[3].t_host, abs=1e-6)
+    a = r.imu_arrays()
+    assert a["gyro"].shape == (20, 3) and np.allclose(a["accel"][:, 2], 9.81)
+    assert len(r.imu_samples(10.0, 10.01)) == 5
+    assert r.events()[0].value == "down"
+    assert np.allclose(r.ground_truth_poses()[0], np.eye(4))
+    assert r.ground_truth_depth(0).shape == (80, 128)
+    assert r.calibration().stereo.image_size == (128, 80)
+    with pytest.raises(FileExistsError):
+        RecordingWriter(rec)

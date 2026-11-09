@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "openhandscan"
+version = "0.1.0"
+description = "Software for the OpenHandScan handheld stereo + laser 3D scanner"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "GPL-3.0-or-later"
+dependencies = [
+    "numpy>=1.24",
+    "scipy>=1.10",
+    "opencv-contrib-python>=4.8",
+    "pyserial>=3.5",
+    "Pillow>=10",
+]
+
+[project.optional-dependencies]
+fusion = ["open3d>=0.18"]
+dev = ["pytest>=7"]
+
+[project.scripts]
+ohs = "ohs.app.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["ohs*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "slow: long-running test (deselect with -m 'not slow')",
+    "hardware: needs the real scanner connected",
+]
+addopts = "-m \"not hardware\" -p no:dash"

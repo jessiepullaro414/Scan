@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.venv/
+venv/
+build/
+dist/
+
+# Scanner data (recordings, simulated datasets, results) - keep them out of git
+recordings/
+scans/
+sim_data/
+*.npy
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
