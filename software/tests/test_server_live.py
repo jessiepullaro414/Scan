@@ -43,7 +43,8 @@ def env(tmp_path_factory):
     generate_demo(demo_path(root / "demo"), DemoParams(n_frames=12, image_size=(640, 400)))
     cfg = Config()
     cfg.paths.calibration = str(root / "no-calibration.json")
-    app = create_app(cfg, projects_dir=root / "projects", demo_dir=root / "demo", static_dir=root / "static")
+    app = create_app(cfg, projects_dir=root / "projects", demo_dir=root / "demo", static_dir=root / "static",
+                     data_dir=root / "data", config_path=root / "config.toml")
     with ServerThread(app) as srv:
         yield {"srv": srv, "url": srv.url, "root": root, "studio": app.state.studio}
 
@@ -96,7 +97,7 @@ def test_sim_device_previews_and_status(env):
     assert dev["replay"]["loop"] is True and Path(dev["replay"]["path"]).name == "sim-demo"
     with ws_connect(env["srv"].ws_url, max_size=None, open_timeout=5) as ws:
         msgs = recv_until(ws, lambda m, p, raw: m.get("type") == "hello", timeout=5)
-        assert msgs[0][0]["version"] == "0.1.0"
+        assert msgs[0][0]["version"] == "0.2.0"
         seen: dict = {}
 
         def done(m, p, raw):
@@ -259,7 +260,8 @@ def test_a_client_that_never_reads_does_not_stall_the_scan(env):
 def test_first_sim_connect_generates_the_demo(tmp_path):
     cfg = Config()
     cfg.paths.calibration = str(tmp_path / "no-calibration.json")
-    app = create_app(cfg, projects_dir=tmp_path / "projects", demo_dir=tmp_path / "demo", static_dir=tmp_path / "static")
+    app = create_app(cfg, projects_dir=tmp_path / "projects", demo_dir=tmp_path / "demo", static_dir=tmp_path / "static",
+                     data_dir=tmp_path / "data", config_path=tmp_path / "config.toml")
     studio = app.state.studio
     studio.devices.demo_params = DemoParams(n_frames=6, image_size=(320, 200))
     with ServerThread(app) as srv, ws_connect(srv.ws_url, max_size=None, open_timeout=5) as ws:

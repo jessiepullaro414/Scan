@@ -72,6 +72,21 @@ ohs app
 
 * `ohs app` opens the window. With no scanner yet, click **Try the simulator demo**: it builds a
   simulated scan once (about a minute) and then behaves like a connected scanner.
+* **Setup** in the sidebar is the first-run wizard. Its steps:
+  1. Connect the scanner.
+  2. Run the self-test.
+  3. Print the calibration board, tags and LED mask, and check the print's scale with calipers.
+  4. Calibrate the stereo cameras: views are taken by themselves once the board is steady, a live
+     coverage map shows what's still missing, and the result comes in plain words.
+  5. Calibrate the laser planes.
+  6. Calibrate the IMU.
+  7. Run the 2-minute check.
+
+  On the simulator, a virtual board moves in front of a virtual scanner, so you can try every step
+  before the hardware arrives. Its results go to a sandbox, and your real calibration is never
+  touched.
+* After each connect the app quietly checks whether the calibration still fits the cameras. It
+  only speaks up when the cameras seem to have moved.
 * `ohs app --no-window --open-browser` uses your web browser instead of the window.
 * `--port` and `--host` change where the server listens (default `127.0.0.1:8765`; settings
   `[app]`). `--host 0.0.0.0` also serves phones and tablets on your network. There is no
@@ -79,6 +94,10 @@ ohs app
 * Projects are saved in `~/OpenHandScan/projects` (setting `paths.projects_dir`): one plain folder
   per project with its recordings and results. Deleting a project in the app moves it to
   `.trash` in that folder.
+* Other places:
+  * printables go to `~/OpenHandScan/printables` (`paths.printables_dir`);
+  * the wizard's state goes to `~/.ohs/studio` (`paths.data_dir`);
+  * calibration captures go to `<scans_dir>/calibration/`, like `ohs calibrate`.
 * UI development: `npm run dev` in `ui/` serves the UI with hot reload on
   http://localhost:5173 and talks to a running `ohs app`. `npm run dev:mock` needs no backend.
 * The design and the API are in [docs/DESKTOP_APP_PLAN.md](docs/DESKTOP_APP_PLAN.md) and

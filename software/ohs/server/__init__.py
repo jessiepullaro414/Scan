@@ -17,7 +17,12 @@ The contract with the UI is ``software/docs/APP_API.md``. Modules:
 * :mod:`ohs.server.meshing`: mesh decimation, coverage-based quality colours;
 * :mod:`ohs.server.imaging`: preview images (laser overlay, depth colour map, JPEG);
 * :mod:`ohs.server.demo`: the simulator demo recording;
-* :mod:`ohs.server.launcher`: ``ohs app`` (uvicorn thread + pywebview window).
+* :mod:`ohs.server.launcher`: ``ohs app`` (uvicorn thread + pywebview window);
+* M2, setup and calibration: :mod:`ohs.server.setup` (setup state, print check, devices probe,
+  self-test and printables jobs), :mod:`ohs.server.selftest`, :mod:`ohs.server.printables`,
+  :mod:`ohs.server.calibration` (calibration sessions, solve, save), :mod:`ohs.server.calib_guide`
+  (live detection, capture rules, coverage, hints) and :mod:`ohs.server.calib_results`
+  (plain-language results, the simulator's truth comparison).
 
 FastAPI and uvicorn are optional dependencies (``pip install -e .[app]``); importing this package
 does not import them.

@@ -12,6 +12,9 @@
 * :func:`render_template` produces a commented TOML file holding every default
   (``ohs config --init``). Values that default to ``None`` appear as commented-out examples.
   Loading the template gives exactly the defaults.
+* :func:`set_config_values` changes a few keys of the config file in place (OpenHandScan Studio's
+  settings): a line-based edit of ``key = value`` under ``[section]`` that keeps every comment
+  and every other line, checked by parsing the result before it replaces the file atomically.
 
 TOML has no null value. For an optional setting, write ``"auto"`` (or ``"none"``) or leave the key
 out. Emitter profiles are ``[vertical, horizontal, dots]`` levels in percent. Profiles from the file
@@ -26,6 +29,7 @@ import logging
 import math
 import os
 import re
+import time
 import types
 import typing
 from dataclasses import dataclass, field
@@ -62,6 +66,7 @@ __all__ = [
     "merge_into",
     "render_template",
     "write_template",
+    "set_config_values",
 ]
 
 log = logging.getLogger(__name__)
@@ -100,6 +105,8 @@ class PathsConfig:
     calibration: str = "~/.ohs/calibration.json"
     scans_dir: str = "~/OpenHandScan/scans"
     projects_dir: str = "~/OpenHandScan/projects"
+    data_dir: str = "~/.ohs/studio"
+    printables_dir: str = "~/OpenHandScan/printables"
 
     @property
     def calibration_path(self) -> Path:
@@ -112,6 +119,14 @@ class PathsConfig:
     @property
     def projects_path(self) -> Path:
         return Path(self.projects_dir).expanduser()
+
+    @property
+    def data_path(self) -> Path:
+        return Path(self.data_dir).expanduser()
+
+    @property
+    def printables_path(self) -> Path:
+        return Path(self.printables_dir).expanduser()
 
 
 @dataclass
@@ -402,6 +417,8 @@ _KEY_DOCS = {
     "paths.calibration": "Calibration file written by `ohs calibrate` and used by `ohs scan` / `ohs process`.",
     "paths.scans_dir": "Default folder for new scan and calibration recordings.",
     "paths.projects_dir": "Projects of OpenHandScan Studio (`ohs app`): one folder per project.",
+    "paths.data_dir": "OpenHandScan Studio's own data: the setup progress and the simulator's sandbox calibration.",
+    "paths.printables_dir": "Where OpenHandScan Studio writes the printables (board, AprilTags, LED projector mask).",
     "app.host": (
         'Address the server listens on. "127.0.0.1" = this PC only; "0.0.0.0" also serves the UI to\n'
         "phones and tablets on your network (no password: only on a network you trust)."
@@ -539,4 +556,152 @@ def write_template(path: str | Path | None = None, force: bool = False) -> Path:
         raise FileExistsError(f"{p} already exists (use --force to overwrite it)")
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(render_template(), encoding="utf-8")
+    return p
+
+
+# --------------------------------------------------------------------------- in-place writer
+_HEADER_LINE = re.compile(r"^\s*\[(?!\[)\s*([^\[\]#]+?)\s*\](?!\])\s*(#.*)?$")
+
+
+def _value_end(text: str) -> int:
+    """Index just past the TOML value at the start of ``text`` (single line), or -1 if it continues."""
+    i, n = 0, len(text)
+    if text.startswith(('"""', "'''")):
+        close = text.find(text[:3], 3)
+        return -1 if close < 0 else close + 3
+    depth = 0
+    while i < n:
+        ch = text[i]
+        if ch in "\"'":
+            j = i + 1
+            while j < n and text[j] != ch:
+                j += 2 if (ch == '"' and text[j] == "\\") else 1
+            if j >= n:
+                return -1
+            i = j + 1
+            continue
+        if ch in "[{":
+            depth += 1
+        elif ch in "]}":
+            depth -= 1
+        elif ch == "#" and depth <= 0:
+            return i
+        i += 1
+    return n if depth <= 0 else -1
+
+
+def _key_line(line: str, key: str) -> bool:
+    m = re.match(r'^\s*("([^"\\]|\\.)*"|\'[^\']*\'|[A-Za-z0-9_-]+)\s*=', line)
+    if not m:
+        return False
+    k = m.group(1)
+    if k[0] in "\"'":
+        try:
+            k = json.loads(k) if k[0] == '"' else k[1:-1]
+        except ValueError:
+            return False
+    return k == key
+
+
+def _set_key(lines: list[str], section: str, key: str, value: Any) -> list[str]:
+    """Lines with ``key = value`` set in ``[section]`` (replaced, inserted, or a new section appended)."""
+    new = f"{_toml_key(key)} = {_toml_value(value)}"
+    start = next((i for i, ln in enumerate(lines) if (m := _HEADER_LINE.match(ln)) and m.group(1).strip() == section), None)
+    if start is None:
+        while lines and not lines[-1].strip():
+            lines = lines[:-1]
+        return lines + ["", f"[{section}]", new]
+    end = next((i for i in range(start + 1, len(lines))
+                if _HEADER_LINE.match(lines[i]) or lines[i].lstrip().startswith("[[")), len(lines))
+    for j in range(start + 1, end):
+        if not _key_line(lines[j], key):
+            continue
+        indent = lines[j][: len(lines[j]) - len(lines[j].lstrip())]
+        rest = lines[j].split("=", 1)[1].lstrip()
+        stop = _value_end(rest)
+        k = j
+        if stop < 0:  # a value continued on the next lines (multi-line array or string): replace them all
+            joined = rest
+            while stop < 0 and k + 1 < end:
+                k += 1
+                joined += "\n" + lines[k]
+                stop = _value_end(joined)
+            rest = joined if stop >= 0 else ""
+            stop = max(stop, 0)
+        comment = rest[stop:].strip() if "\n" not in rest[stop:] else ""
+        repl = indent + new + (f"  {comment}" if comment.startswith("#") else "")
+        return lines[:j] + [repl] + lines[k + 1:]
+    last = start
+    for j in range(start + 1, end):
+        s = lines[j].strip()
+        if s and not s.startswith("#"):
+            last = j
+    return lines[: last + 1] + [new] + lines[last + 1:]
+
+
+def _nested(updates: dict[str, dict[str, Any]]) -> dict:
+    """``{"emitters.profiles": {...}}`` -> ``{"emitters": {"profiles": {...}}}`` (for :func:`merge_into`)."""
+    out: dict = {}
+    for section, values in updates.items():
+        node = out
+        for part in section.split("."):
+            node = node.setdefault(part, {})
+        node.update(values)
+    return out
+
+
+def set_config_values(updates: dict[str, dict[str, Any]], path: str | Path | None = None, *,
+                      cfg: Config | None = None) -> Path:
+    """Set ``[section] key = value`` entries in the config file ``path`` (default :func:`default_config_path`).
+
+    A line-based edit: an existing ``key = ...`` line of the section is replaced (its trailing
+    comment is kept), a missing key is inserted after the section's last setting, and a missing
+    section is appended. Comments and all other lines stay as they are. Without a file, the
+    commented template (:func:`render_template`) is written first. The result is parsed and
+    validated before it replaces the file atomically; :class:`ConfigError` (nothing written) if it
+    is invalid or names an unknown key. ``cfg`` (e.g. the running app's configuration) is updated
+    to the new values as well. Returns the path written.
+    """
+    p = Path(path).expanduser() if path is not None else default_config_path()
+    for section, values in updates.items():
+        if not section or not all(_BARE_KEY.match(part) for part in section.split(".")):
+            raise ConfigError(f"invalid config section name {section!r}")
+        if not isinstance(values, dict):
+            raise ConfigError(f"[{section}]: expected a table of values")
+    exists = p.exists()
+    raw = p.read_bytes().decode("utf-8") if exists else render_template()
+    newline = "\r\n" if "\r\n" in raw else ("\n" if exists else os.linesep)
+    lines = raw.replace("\r\n", "\n").split("\n")
+    trailing = bool(lines) and lines[-1] == ""
+    if trailing:
+        lines = lines[:-1]
+    for section, values in updates.items():
+        for key, value in values.items():
+            lines = _set_key(lines, section, str(key), value)
+    text = "\n".join(lines) + ("\n" if trailing or not exists else "")
+    data = _parse_toml(text, str(p))
+    check = Config()
+    unknown = [w for w in merge_into(check, data) if any(f"'{s}.{k}'" in w for s, vals in updates.items() for k in vals)]
+    if unknown:
+        raise ConfigError("; ".join(unknown))
+    check.source = p
+    check.validate()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    tmp = p.with_name(f"{p.name}.tmp-{os.getpid()}")
+    with open(tmp, "w", encoding="utf-8", newline="") as fh:
+        fh.write(text.replace("\n", newline))
+    for attempt in range(50):  # Windows: an editor or a virus scanner may hold the file for a moment
+        try:
+            os.replace(tmp, p)
+            break
+        except PermissionError:
+            if attempt == 49:
+                tmp.unlink(missing_ok=True)
+                raise
+            time.sleep(0.02)
+    if cfg is not None:
+        merge_into(cfg, _nested(updates))
+        if cfg.source is None:
+            cfg.source = p
+    log.info("config %s: set %s", p, ", ".join(f"{s}.{k}" for s, vals in updates.items() for k in vals))
     return p

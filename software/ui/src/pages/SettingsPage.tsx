@@ -28,6 +28,7 @@ import { Segmented } from "../components/ui/Form";
 import { Code, KeyValue, Page, PageHeader, Section } from "../components/ui/Layout";
 import { humanize } from "../lib/format";
 import { useConnection } from "../store/connection";
+import { configPathOf } from "../store/setup";
 import { useUi } from "../store/ui";
 
 const SECTION_ICON: Record<string, LucideIcon> = {
@@ -181,8 +182,8 @@ export function SettingsPage() {
         title="Settings"
         subtitle={
           <>
-            Read-only in this version. Edit <Code>~/.ohs/config.toml</Code> (<Code>ohs config --init</Code> writes a commented
-            template), then restart the engine.
+            Edit <Code>{(settings && configPathOf(settings)) ?? "~/.ohs/config.toml"}</Code> (<Code>ohs config --init</Code> writes a
+            commented template), then restart the engine. Setup saves the camera choice and the paper size there for you.
           </>
         }
         actions={
@@ -213,7 +214,7 @@ export function SettingsPage() {
         <Section title="About" icon={Info}>
           <KeyValue
             rows={[
-              ["Studio UI", <span className="font-mono text-xs">0.1.0 (M1)</span>],
+              ["Studio UI", <span className="font-mono text-xs">0.2.0 (M2)</span>],
               ["Engine", health ? <span className="font-mono text-xs">{`${health.app} ${health.version}`}</span> : serverVersion ?? "–"],
               [
                 "Engine libraries",

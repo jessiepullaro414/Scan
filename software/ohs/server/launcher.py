@@ -177,7 +177,8 @@ def _wait_for_ctrl_c(server: _Server, echo: Callable[[str], None]) -> None:
 
 def run_app(cfg: Any, *, host: str | None = None, port: int | None = None, window: bool = True,
             open_browser: bool = False, echo: Callable[[str], None] = print, projects_dir: Any = None,
-            static_dir: Any = None, demo_dir: Any = None, webview_module: Any = None, log_level: str = "warning") -> int:
+            static_dir: Any = None, demo_dir: Any = None, data_dir: Any = None, config_path: Any = None,
+            webview_module: Any = None, log_level: str = "warning") -> int:
     """Run the app until its window closes (or Ctrl-C with ``window=False``); returns the exit code."""
     from ohs.server.app import create_app
 
@@ -186,7 +187,8 @@ def run_app(cfg: Any, *, host: str | None = None, port: int | None = None, windo
     if not port_free(host, port):
         raise RuntimeError(f"port {port} on {host} is already in use: is OpenHandScan Studio already running? "
                            f"Open http://{_browser_host(host)}:{port}/ or start with --port <another port>")
-    app = create_app(cfg, projects_dir=projects_dir, static_dir=static_dir, demo_dir=demo_dir)
+    app = create_app(cfg, projects_dir=projects_dir, static_dir=static_dir, demo_dir=demo_dir, data_dir=data_dir,
+                     config_path=config_path)
     studio = app.state.studio
     server = _Server(app, host, port, log_level=log_level)
     atexit.register(studio.shutdown)

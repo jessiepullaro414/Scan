@@ -25,7 +25,7 @@ function detectMock(): boolean {
 
 export const MOCK = detectMock();
 
-export type MockOptions = { empty: boolean; fast: boolean };
+export type MockOptions = { empty: boolean; fast: boolean; drift: boolean; nopico: boolean };
 
 let ready: Promise<void> | null = null;
 
@@ -35,7 +35,12 @@ export function initBackend(): Promise<void> {
   ready = (async () => {
     if (!MOCK) return;
     const { createMockBackend } = await import("./mock/server");
-    const backend = createMockBackend({ empty: queryFlag("empty") === "1", fast: queryFlag("fast") === "1" });
+    const backend = createMockBackend({
+      empty: queryFlag("empty") === "1",
+      fast: queryFlag("fast") === "1",
+      drift: queryFlag("drift") === "1",
+      nopico: queryFlag("nopico") === "1",
+    });
     setFetch(backend.fetch);
     setSocketFactory(backend.socket);
   })();

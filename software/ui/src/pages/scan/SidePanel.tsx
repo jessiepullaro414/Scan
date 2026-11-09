@@ -214,8 +214,8 @@ export function ScanSetup({
           warn={connected && !calibrated}
           action={
             connected && !calibrated ? (
-              <Button size="xs" icon={Crosshair} onClick={() => navigate(paths.calibrate())}>
-                How to calibrate
+              <Button size="xs" variant="primary" icon={Crosshair} onClick={() => navigate(paths.setup("stereo"))}>
+                Calibrate in Setup
               </Button>
             ) : null
           }
@@ -226,8 +226,8 @@ export function ScanSetup({
             "Calibration loaded"
           ) : (
             <>
-              No calibration
-              <div className="text-xs text-muted">Run calibration: coming in Studio M2; use <code className="font-mono">ohs calibrate</code> for now.</div>
+              No calibration yet
+              <div className="text-xs text-muted">The setup wizard calibrates the scanner in about 10 minutes.</div>
             </>
           )}
         </Check1>

@@ -5,20 +5,38 @@ APP_API.md (one scan at a time; scanning needs a device and a calibration; a rec
 not be processed or its project deleted) and turns every refusal into an
 :class:`~ohs.server.protocol.ApiError` with a hint.
 
+M2 (setup and calibration) adds two parts it wires in:
+
+* :class:`~ohs.server.setup.SetupManager` (``Studio.setup``): the wizard's state in
+  ``<data_dir>/setup.json``, the self-test job, the devices probe, the printables job and the
+  print check;
+* :class:`~ohs.server.calibration.CalibrationManager` (``Studio.calibration``): the calibration
+  sessions. A scan and a calibration never run together (409 either way).
+
+``data_dir`` (default ``paths.data_dir``) holds Studio's own data and the simulator's sandbox
+(``<data_dir>/sim/calibration.json`` and its capture recordings). Settings changes are written to
+the config file ``config_path`` (default: the file the config was loaded from, else
+:func:`ohs.app.config.default_config_path`).
+
 Threads it runs (from :meth:`Studio.startup` to :meth:`Studio.shutdown`):
 
 * ``ohs-status`` publishes the ``status`` message at 10 Hz while a client is connected. It only
   reads snapshots (the session's and the device's latest numbers), so it keeps going while the
   processing thread is busy (a rewind, a slow frame).
 * ``ohs-events`` handles what the device threads report (camera lost, end of a replay, Pico
-  lost, trigger presses), so that stopping a scan never runs on, or joins, a device thread.
+  lost, trigger presses), so that stopping a scan or cancelling a calibration never runs on, or
+  joins, a device thread.
 
-Locking: ``Studio._lock`` serialises the scan lifecycle (start / pause / resume / rewind / stop)
-and device (dis)connection. The device, session, store, job and hub locks are only ever taken
-inside it or on their own, never the other way round.
+Locking: ``Studio._lock`` serialises the scan lifecycle (start / pause / resume / rewind / stop),
+the calibration lifecycle (start / solve / save / cancel) and device (dis)connection. The device,
+session, calibration, setup store, job and hub locks are only ever taken inside it or on their
+own, never the other way round; callbacks from device threads (``on_connected``,
+``on_launch_check``) only take the setup store's lock.
 
 Trigger (Pico button): a short press pauses or resumes a running scan, or starts a new scan in
-the project of the last scan when idle; a long press (>= 1 s) stops the scan.
+the project of the last scan when idle; a long press (>= 1 s) stops the scan. During a
+calibration a short press captures a view (IMU: starts / stops the recording) and a long press
+solves.
 """
 from __future__ import annotations
 
@@ -32,13 +50,16 @@ from pathlib import Path
 from typing import Any
 
 from ohs import __version__
+from ohs.server.calibration import CalibrationManager
 from ohs.server.demo import default_demo_dir
 from ohs.server.devices import DeviceManager
 from ohs.server.hub import Hub
 from ohs.server.jobs import JobRunner
+from ohs.server.printables import MASK_DPI
 from ohs.server.projects import ProjectStore, report_summary
 from ohs.server.protocol import PROTOCOL_VERSION, ApiError, jsonable, log_message
 from ohs.server.session import ScanSession
+from ohs.server.setup import SetupManager
 from ohs.server.util import join_thread, safe_call
 
 __all__ = ["Studio", "MODES", "QUALITIES", "process_params"]
@@ -99,7 +120,10 @@ class Studio:
     """See the module docstring."""
 
     def __init__(self, cfg: Any = None, *, projects_dir: str | Path | None = None, demo_dir: str | Path | None = None,
-                 static_dir: str | Path | None = None, **device_kw: Any) -> None:
+                 static_dir: str | Path | None = None, data_dir: str | Path | None = None,
+                 config_path: str | Path | None = None, **device_kw: Any) -> None:
+        from ohs.app.config import default_config_path
+
         if cfg is None:
             from ohs.app.config import load_config
 
@@ -108,12 +132,24 @@ class Studio:
         self.projects_dir = Path(projects_dir).expanduser() if projects_dir is not None else cfg.paths.projects_path
         self.demo_dir = Path(demo_dir).expanduser() if demo_dir is not None else default_demo_dir()
         self.static_dir = Path(static_dir) if static_dir is not None else Path(__file__).with_name("static")
+        self.data_dir = Path(data_dir).expanduser() if data_dir is not None else cfg.paths.data_path
+        if config_path is not None:
+            self.config_path = Path(config_path).expanduser()
+        else:
+            self.config_path = Path(cfg.source) if getattr(cfg, "source", None) else default_config_path()
+        self.sim_dir = self.data_dir / "sim"
+        self.sim_calib_path = self.sim_dir / "calibration.json"
+        self.printables_mask_dpi = MASK_DPI  # tests lower it: the 1200 dpi mask sheet takes ~20 s
         self.hub = Hub()
         self.projects = ProjectStore(self.projects_dir)
         self.jobs = JobRunner(on_update=self._job_update)
         self.devices = DeviceManager(cfg, hub=self.hub, jobs=self.jobs, demo_dir=self.demo_dir, notify=self.notify,
                                      on_change=self.publish_device, on_lost=self._device_lost,
-                                     on_trigger=self._trigger, **device_kw)
+                                     on_trigger=self._trigger, sim_calib_path=self.sim_calib_path,
+                                     on_connected=self._on_connected, on_launch_check=self._on_launch_check,
+                                     **device_kw)
+        self.setup = SetupManager(self)
+        self.calibration = CalibrationManager(self)
         self.session: ScanSession | None = None
         self.last_session: ScanSession | None = None
         self.last_project: str | None = None
@@ -147,6 +183,7 @@ class Studio:
         with self._lock:
             if self.session is not None and self.session.active:
                 safe_call("stopping the scan", lambda: self._stop_scan_locked("the app is closing"))
+            safe_call("cancelling the calibration", self.calibration.shutdown)
         safe_call("disconnecting the device", self.devices.shutdown)
         safe_call("stopping the jobs", lambda: self.jobs.shutdown(timeout=10.0))
         self._stop.set()
@@ -198,14 +235,27 @@ class Studio:
         return msg
 
     def seed_client(self, client: Any) -> None:
-        """Current device, session, active jobs and (while scanning) the latest mesh for a new client."""
+        """Current device, session, calibration session, setup, active jobs and (while scanning) the
+        latest mesh for a new client."""
         self.hub.offer(client, "device", {"type": "device", **self.devices.state()})
         self.hub.offer(client, "session", {"type": "session", **self.session_state()})
+        self.hub.offer(client, "calib_session", {"type": "calib_session", **self.calibration.state()})
+        setup = safe_call("reading the setup state", self.setup.state)
+        if setup is not None:
+            self.hub.offer(client, "setup", {"type": "setup", **setup})
         for job in self.jobs.active():
             self.hub.offer(client, f"job:{job.id}", {"type": "job", **job.to_dict()})
         s = self.session
         if s is not None and s.active and s.latest_mesh is not None:
             self.hub.offer(client, "mesh", s.latest_mesh)
+
+    def _on_connected(self, source: str) -> None:
+        """A device connected (from DeviceManager, under its connect lock): record it for the setup."""
+        self.setup.record_connect(source)
+
+    def _on_launch_check(self, source: str, result: dict) -> None:
+        """The launch check finished (its own thread): record it for the setup."""
+        self.setup.record_launch_check(source, result)
 
     def _status_loop(self) -> None:
         period = 1.0 / STATUS_HZ
@@ -242,6 +292,7 @@ class Studio:
             stopped = None
             if self.session is not None and self.session.active:
                 stopped = safe_call("stopping the scan", lambda: self._stop_scan_locked(message))
+            safe_call("cancelling the calibration", lambda: self.calibration.on_device_lost(kind, message))
             self.devices.handle_lost(kind, message)
         tail = " The scan was stopped and saved." if stopped else ""
         if kind == "eof":
@@ -251,6 +302,9 @@ class Studio:
             self.notify("error", f"Device problem: {message}.{tail}")
 
     def _handle_trigger(self, kind: str) -> None:
+        if self.calibration.active:
+            self.calibration.on_trigger(kind)
+            return
         s = self.session
         if kind == "long":
             if s is not None and s.active:
@@ -277,6 +331,8 @@ class Studio:
         with self._lock:
             if self.session is not None and self.session.active:
                 raise ApiError(409, "a scan is running", "stop the scan before changing the device")
+            if self.calibration.active:
+                raise ApiError(409, "a calibration is running", "finish or cancel the calibration before changing the device")
             job = self.devices.connect(source, recording, loop)
         if job is not None:
             return 202, {"job": job.to_dict()}
@@ -286,6 +342,13 @@ class Studio:
         with self._lock:
             if self.session is not None and self.session.active:
                 self._stop_scan_locked("the device was disconnected")
+            if self.calibration.active:
+                s = self.calibration.session
+                folder = s.recording if s is not None else None
+                self.calibration._end(s)
+                self.notify("info", "Calibration cancelled: the device was disconnected"
+                                    + (f"; the captured views are kept in {folder}" if folder else ""))
+                self.calibration.publish()
             self.devices.disconnect("requested")
         return self.devices.state()
 
@@ -313,6 +376,8 @@ class Studio:
         with self._lock:
             if self.session is not None and self.session.active:
                 raise ApiError(409, "a scan is already running", "stop it first (Stop, or POST /api/scan/stop)")
+            if self.calibration.active:
+                raise ApiError(409, "a calibration is running", "finish or cancel the calibration in Setup first")
             dev = self.devices
             if dev.busy:
                 raise ApiError(409, f"the device is not ready: {dev.busy}", "wait until it finishes")
@@ -537,5 +602,33 @@ class Studio:
         out["warnings"] = list(cfg.warnings)
         out["effective"] = {"projects_dir": str(self.projects_dir), "demo_dir": str(self.demo_dir),
                             "calibration": str(cfg.paths.calibration_path), "static_dir": str(self.static_dir),
-                            "ui_built": (self.static_dir / "index.html").is_file()}
+                            "ui_built": (self.static_dir / "index.html").is_file(), "data_dir": str(self.data_dir),
+                            "config_path": str(self.config_path), "printables_dir": str(cfg.paths.printables_path),
+                            "sim_calibration": str(self.sim_calib_path)}
         return out
+
+    # ------------------------------------------------------------------ settings (M2)
+    def set_camera_settings(self, index: int | None = None, swap_lr: bool | None = None) -> dict:
+        """Save ``camera.index`` / ``camera.swap_lr`` to the config file; used on the next connect."""
+        from ohs.app.config import ConfigError, set_config_values
+
+        updates: dict[str, Any] = {}
+        if index is not None:
+            updates["index"] = int(index)
+        if swap_lr is not None:
+            updates["swap_lr"] = bool(swap_lr)
+        with self._lock:
+            if self.session is not None and self.session.active:
+                raise ApiError(409, "a scan is running", "stop the scan before changing the camera settings")
+            if self.calibration.active:
+                raise ApiError(409, "a calibration is running", "finish or cancel it before changing the camera settings")
+            if updates:
+                try:
+                    set_config_values({"camera": updates}, self.config_path, cfg=self.cfg)
+                except (ConfigError, OSError) as e:
+                    raise ApiError(500, f"the camera settings could not be saved to {self.config_path}: {e}",
+                                   "check that the config file is valid TOML and writable") from e
+        if updates:
+            self.notify("info", "Camera settings saved"
+                        + ("; connect the camera again to use them" if self.devices.source == "camera" else ""))
+        return self.settings()

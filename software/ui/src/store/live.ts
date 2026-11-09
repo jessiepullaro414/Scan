@@ -7,10 +7,12 @@
  */
 import { create } from "zustand";
 import type { DecodedMesh } from "../api/binary";
-import type { PreviewCamera, PreviewHeader } from "../api/types";
+import type { PreviewHeader } from "../api/types";
 
 export type PreviewFrame = { url: string; w: number; h: number; seq: number; at: number };
 export type PoseSample = { T: number[]; ok: boolean; at: number };
+/** The scan previews (the calibration previews live in store/calib.ts). */
+type PreviewCamera = "left" | "depth";
 
 type LiveStore = {
   pose: PoseSample | null;
@@ -68,6 +70,7 @@ export const useLive = create<LiveStore>((set) => ({
   },
   setMesh: (mesh) => set((s) => ({ mesh, meshAt: performance.now(), meshCount: s.meshCount + 1 })),
   pushPreview: (h, jpeg) => {
+    if (h.camera === "calib_left" || h.camera === "calib_right") return; // see store/calib.ts
     const camera: PreviewCamera = h.camera === "depth" ? "depth" : "left";
     const url = URL.createObjectURL(new Blob([jpeg as BlobPart], { type: "image/jpeg" }));
     retire(camera, url);

@@ -12,11 +12,14 @@ type UiState = {
   scanMode: ScanMode;
   previewsOpen: boolean;
   hintsOpen: boolean;
+  /** The calibration capture click (WebAudio). */
+  captureSound: boolean;
   setTheme: (t: Theme) => void;
   setCurrentProject: (pid: string | null) => void;
   setScanMode: (m: ScanMode) => void;
   setPreviewsOpen: (open: boolean) => void;
   setHintsOpen: (open: boolean) => void;
+  setCaptureSound: (on: boolean) => void;
 };
 
 const K = {
@@ -25,6 +28,7 @@ const K = {
   mode: "ohs.scanMode",
   previews: "ohs.previewsOpen",
   hints: "ohs.hintsOpen",
+  sound: "ohs.captureSound",
 };
 
 function readTheme(): Theme {
@@ -46,6 +50,7 @@ export const useUi = create<UiState>((set) => ({
   scanMode: storage.get<ScanMode>(K.mode, "markerless"),
   previewsOpen: storage.get<boolean>(K.previews, true),
   hintsOpen: storage.get<boolean>(K.hints, true),
+  captureSound: storage.get<boolean>(K.sound, true),
   setTheme: (theme) => {
     try {
       localStorage.setItem(K.theme, theme);
@@ -70,6 +75,10 @@ export const useUi = create<UiState>((set) => ({
   setHintsOpen: (hintsOpen) => {
     storage.set(K.hints, hintsOpen);
     set({ hintsOpen });
+  },
+  setCaptureSound: (captureSound) => {
+    storage.set(K.sound, captureSound);
+    set({ captureSound });
   },
 }));
 

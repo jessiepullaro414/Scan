@@ -12,13 +12,15 @@ void initBackend().then(async () => {
   startLive();
   if (import.meta.env.DEV) {
     // Dev-only handle for debugging and smoke tests: window.__ohs.device.getState() etc.
-    const [{ useDevice }, { useJobs }, { useSession }, { useLive }, { useProjects }, { useToasts }] = await Promise.all([
+    const [{ useDevice }, { useJobs }, { useSession }, { useLive }, { useProjects }, { useToasts }, { useSetup }, { useCalib }] = await Promise.all([
       import("./store/device"),
       import("./store/jobs"),
       import("./store/session"),
       import("./store/live"),
       import("./store/projects"),
       import("./store/toasts"),
+      import("./store/setup"),
+      import("./store/calib"),
     ]);
     (window as unknown as { __ohs: unknown }).__ohs = {
       device: useDevice,
@@ -27,6 +29,8 @@ void initBackend().then(async () => {
       live: useLive,
       projects: useProjects,
       toasts: useToasts,
+      setup: useSetup,
+      calib: useCalib,
     };
   }
   root.render(

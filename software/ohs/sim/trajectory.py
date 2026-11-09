@@ -13,6 +13,10 @@ aim point drifts and pans, and a small 6-11 Hz physiological tremor is added to 
 orientation. The *scanner centre* (midpoint of the stereo pair, where the laser cross and the dot
 field are centred) looks at the target; the left camera (frame C) sits ``baseline / 2`` to its
 left. Distance stays inside ``distance`` (default 220-300 mm, always within 150-400 mm).
+
+:class:`RotatingTrajectory` is the IMU-calibration exercise in front of a board: hold still, then
+rotate about all three camera axes (optionally about a pivot in front of the camera, and for a
+limited time with a smooth return to the start pose).
 """
 from __future__ import annotations
 
@@ -29,6 +33,7 @@ __all__ = [
     "look_at_batch",
     "StaticTrajectory",
     "HandheldTrajectory",
+    "RotatingTrajectory",
     "sample_frames",
     "so3_exp_batch",
 ]
@@ -177,6 +182,62 @@ class HandheldTrajectory:
 
     def pose(self, t: float) -> np.ndarray:
         return self.poses(np.array([float(t)]))[0]
+
+
+def _min_jerk(x: np.ndarray) -> np.ndarray:
+    """Minimum-jerk ramp from 0 to 1 over ``x`` in [0, 1] (clipped outside)."""
+    x = np.clip(x, 0.0, 1.0)
+    return 10 * x**3 - 15 * x**4 + 6 * x**5
+
+
+class RotatingTrajectory:
+    """Hand-held IMU-calibration motion in front of the board: still for ``t_still`` s, then smooth
+    rotations about all three camera axes (sums of sinusoids, +-amp deg) with a few mm of sway.
+
+    ``T0`` is the still pose ``T_wc`` and ``t0`` the start (camera time). Per camera axis (x, y, z
+    of ``T0``) the rotation vector is a sum of three sinusoids (0.4-1.1 Hz) whose amplitudes add up
+    to ``amp_deg``; it fades in over 0.8 s (minimum jerk) after ``t_still``. Two optional extras
+    (their defaults give the plain motion above):
+
+    * ``pivot`` (mm, frame C of ``T0``): rotate about that point instead of the camera centre. A
+      point near the board makes the camera orbit it, so the board stays in view at larger angles.
+    * ``rotate_s``: stop rotating that many seconds after ``t_still``. The motion fades out over
+      ``ease_s`` (minimum jerk, so the rate and the acceleration stay continuous) and ends exactly at
+      ``T0``. ``None`` rotates forever.
+    """
+
+    def __init__(self, T0: np.ndarray, t0: float, t_still: float = 1.2, amp_deg=(7.0, 8.0, 15.0), seed: int = 0, *,
+                 pivot: Sequence[float] = (0.0, 0.0, 0.0), rotate_s: float | None = None, ease_s: float = 1.5):
+        rng = np.random.default_rng(seed)
+        self.T0, self.t0, self.t_still = np.asarray(T0, float), float(t0), float(t_still)
+        self.f = rng.uniform(0.4, 1.1, (3, 3))
+        self.ph = rng.uniform(0, 2 * np.pi, (3, 3))
+        a = rng.uniform(0.5, 1.0, (3, 3))
+        self.a = a / a.sum(axis=0, keepdims=True) * np.radians(amp_deg)[None]
+        self.sway = rng.uniform(-6.0, 6.0, (3, 3))
+        self.pivot = np.asarray(pivot, dtype=np.float64).reshape(3)
+        self.rotate_s = None if rotate_s is None else float(rotate_s)
+        self.ease_s = float(ease_s)
+
+    def poses(self, t: np.ndarray) -> np.ndarray:
+        t = np.atleast_1d(np.asarray(t, float))
+        s = np.clip(t - self.t0 - self.t_still, 0.0, None)
+        env = _min_jerk(s / 0.8)
+        if self.rotate_s is not None:
+            env = env * (1.0 - _min_jerk((s - self.rotate_s) / max(self.ease_s, 1e-9)))
+        env = env[:, None]
+        arg = 2 * np.pi * self.f[None] * s[:, None, None] + self.ph[None]
+        th = env * (self.a[None] * (np.sin(arg) - np.sin(self.ph)[None])).sum(axis=1)
+        tr = env * (self.sway[None] / 3.0 * (np.sin(arg) - np.sin(self.ph)[None])).sum(axis=1)
+        R = so3_exp_batch(th)
+        rel = np.zeros((len(t), 4, 4))
+        rel[:, :3, :3] = R
+        rel[:, :3, 3] = tr + self.pivot - R @ self.pivot  # rotation about the pivot
+        rel[:, 3, 3] = 1.0
+        return self.T0[None] @ rel
+
+    def pose(self, t: float) -> np.ndarray:
+        return self.poses(np.array([t]))[0]
 
 
 def sample_frames(traj: Trajectory, n_frames: int, fps: float, t0: float = 0.0) -> tuple[np.ndarray, np.ndarray]:

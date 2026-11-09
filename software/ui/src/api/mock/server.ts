@@ -11,7 +11,13 @@
  *   mesh that grows as surfaces are seen (green = well observed, yellow = thin); rewind restores
  *   the coverage of 2 s ago;
  * - meshing jobs with progress, cancel and failure, and result files (PLY / STL / laser points /
- *   report.json) generated on demand.
+ *   report.json) generated on demand;
+ * - M2: the setup wizard (setup.ts: self-test, devices, printables, print check, launch check)
+ *   and the calibration session (calib.ts: a simulated person moving the board, live overlays,
+ *   previews, auto-capture, IMU recording, solving, saving).
+ *
+ * Options in the URL: `empty=1` (no projects), `fast=1` (short jobs), `drift=1` (the launch check
+ * after a connect finds drift), `nopico=1` (the camera connects without the Pico).
  */
 import type { MockOptions } from "../backend";
 import { encodeBinary } from "../binary";
@@ -32,6 +38,9 @@ import type {
   StatusMsg,
   Tracking,
 } from "../types";
+import { MockCalib } from "./calib";
+import { HttpError, json, nowIso, uid, type MockHost, type MockSettings, type TimedJobSpec } from "./host";
+import { cameraByIndex, MockSetup } from "./setup";
 import {
   apply,
   applyInv,
@@ -57,26 +66,7 @@ import {
 } from "./geom";
 import { DEPTH_H, DEPTH_W, LEFT_H, LEFT_W, PreviewRenderer } from "./render";
 
-const VERSION = "0.1.0";
-const nowIso = (offsetS = 0) => new Date(Date.now() + offsetS * 1000).toISOString();
-const uid = (p: string) => `${p}${Date.now().toString(36).slice(-4)}${Math.random().toString(36).slice(2, 7)}`;
-
-class HttpError extends Error {
-  status: number;
-  detail: string;
-  hint: string | null;
-  constructor(status: number, detail: string, hint: string | null = null) {
-    super(detail);
-    this.status = status;
-    this.detail = detail;
-    this.hint = hint;
-  }
-}
-
-function json(status: number, body: unknown): Response {
-  if (status === 204) return new Response(null, { status });
-  return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
-}
+const VERSION = "0.2.0";
 
 /** A binary body delivered in chunks, so download progress shows like over the network. */
 function streamed(buf: ArrayBuffer, type: string, totalMs: number): Response {
@@ -111,6 +101,9 @@ class MockSocket implements SocketLike {
   onclose: ((ev: CloseEvent) => void) | null = null;
   onerror: ((ev: Event) => void) | null = null;
   onmessage: ((ev: MessageEvent) => void) | null = null;
+  /** What this client subscribed to (APP_API.md: both on by default). */
+  wantPreview = true;
+  wantMesh = true;
   private backend: MockBackend;
 
   constructor(backend: MockBackend) {
@@ -123,7 +116,7 @@ class MockSocket implements SocketLike {
     }, 40);
   }
   send(data: string): void {
-    this.backend.onClientMessage(data);
+    this.backend.onClientMessage(this, data);
   }
   close(): void {
     if (this.readyState >= 2) return;
@@ -169,6 +162,11 @@ const NO_CALIB: CalibrationInfo = { loaded: false, path: null, image_size: null,
 
 const TRACK_CYCLE = 32;
 
+type JobMeta =
+  | { kind: "sim" }
+  | { kind: "process"; pid: string; sid: string; quality: ProcessQuality; prev: Scan["status"]; dur: number; t: number; fail: boolean }
+  | { kind: "timed"; spec: TimedJobSpec; dur: number; t: number };
+
 class MockBackend {
   private opts: MockOptions;
   private clients = new Set<MockSocket>();
@@ -180,12 +178,18 @@ class MockBackend {
     pico: null,
     calibration: { ...NO_CALIB },
     replay: null,
+    launch_check: null,
+    sim_scene: null,
+    warnings: [],
   };
   private simReady = false;
   private simJobId: string | null = null;
   private projects = new Map<string, Project>();
   private jobs = new Map<string, Job>();
-  private jobMeta = new Map<string, { kind: "sim" } | { kind: "process"; pid: string; sid: string; quality: ProcessQuality; prev: Scan["status"]; dur: number; t: number; fail: boolean }>();
+  private jobMeta = new Map<string, JobMeta>();
+  private setup: MockSetup;
+  private calib: MockCalib;
+  private previewSeqs: Record<string, number> = {};
   private session: SessionState = { state: "idle", project_id: null, scan_id: null, mode: "markerless", elapsed_s: 0, frames: 0 };
   private sim: ScanSim | null = null;
   private hoverClock = 0;
@@ -211,7 +215,36 @@ class MockBackend {
     this.T_ws = invert(trajectory(0));
     this.liveWorld = transformMesh(this.liveScene, this.T_ws);
     if (!opts.empty) this.seed();
+    const host: MockHost = {
+      fast: opts.fast,
+      drift: opts.drift,
+      send: (m) => this.send(m),
+      sendPreview: (camera, jpeg, w, h) => {
+        const seq = (this.previewSeqs[camera] = (this.previewSeqs[camera] ?? 0) + 1);
+        this.sendBinary(encodeBinary({ type: "preview", camera, format: "jpeg", w, h, seq }, [jpeg]), "preview");
+      },
+      wantsPreviews: () => [...this.clients].some((c) => c.wantPreview),
+      device: () => this.device,
+      patchDevice: (p) => {
+        this.device = { ...this.device, ...p };
+        this.send({ type: "device", ...this.device });
+      },
+      scanning: () => !!this.sim,
+      startJob: (kind, spec) => this.startTimedJob(kind, spec),
+      log: (level, message) => this.send({ type: "log", level, message }),
+      settings: SETTINGS as unknown as MockSettings,
+    };
+    this.setup = new MockSetup(host, { noPico: opts.nopico });
+    this.calib = new MockCalib(host, this.setup);
     setInterval(() => this.tick(), 66);
+  }
+
+  private startTimedJob(kind: string, spec: TimedJobSpec): Job {
+    const job: Job = { id: uid("j-"), kind, state: "running", progress: 0, message: spec.message(0), result: null, error: null, created: nowIso() };
+    this.jobs.set(job.id, job);
+    this.jobMeta.set(job.id, { kind: "timed", spec, dur: spec.seconds * (this.opts.fast ? 0.35 : 1), t: 0 });
+    this.send({ type: "job", ...job });
+    return job;
   }
 
   // ---------------------------------------------------------------- transport
@@ -240,24 +273,36 @@ class MockBackend {
 
   attach(s: MockSocket) {
     this.clients.add(s);
-    s.deliver(JSON.stringify({ type: "hello", version: VERSION }));
+    s.deliver(JSON.stringify({ type: "hello", version: VERSION, app: "openhandscan", app_version: VERSION }));
     s.deliver(JSON.stringify({ type: "device", ...this.device }));
     s.deliver(JSON.stringify({ type: "session", ...this.session }));
+    s.deliver(JSON.stringify({ type: "setup", ...this.setup.state() }));
+    s.deliver(JSON.stringify({ type: "calib_session", ...this.calib.session }));
     for (const j of this.jobs.values()) if (j.state === "queued" || j.state === "running") s.deliver(JSON.stringify({ type: "job", ...j }));
     if (this.sim) this.sim.meshDirty = true;
   }
   detach(s: MockSocket) {
     this.clients.delete(s);
   }
-  onClientMessage(_data: string) {
-    /* subscribe: everything is always on in the mock */
+  onClientMessage(s: MockSocket, data: string) {
+    try {
+      const m = JSON.parse(data) as { type?: string; preview?: unknown; mesh?: unknown };
+      if (m.type !== "subscribe") return;
+      const meshBefore = s.wantMesh;
+      if (typeof m.preview === "boolean") s.wantPreview = m.preview;
+      if (typeof m.mesh === "boolean") s.wantMesh = m.mesh;
+      // Coming back to the Scan page: send the current live model again.
+      if (s.wantMesh && !meshBefore && this.sim) this.sim.meshDirty = true;
+    } catch {
+      /* not JSON: ignore, like the engine */
+    }
   }
   private send(msg: Record<string, unknown>) {
     const text = JSON.stringify(msg);
     for (const c of this.clients) c.deliver(text);
   }
-  private sendBinary(buf: ArrayBuffer) {
-    for (const c of this.clients) c.deliver(buf);
+  private sendBinary(buf: ArrayBuffer, kind: "preview" | "mesh") {
+    for (const c of this.clients) if (kind === "preview" ? c.wantPreview : c.wantMesh) c.deliver(buf);
   }
 
   // ---------------------------------------------------------------- REST
@@ -266,7 +311,8 @@ class MockBackend {
     const [a, b, c, d, e, f] = seg;
     const is = (m: string, n: number) => method === m && seg.length === n;
 
-    if (a === "health" && is("GET", 1)) return json(200, { app: "openhandscan", version: VERSION, engine: { opencv: "5.0.0", open3d: "0.20.0", mode: "demo" } });
+    if (a === "health" && is("GET", 1))
+      return json(200, { app: "openhandscan", version: VERSION, api: VERSION, engine: { opencv: "5.0.0", open3d: "0.20.0", mode: "demo" } });
     if (a === "settings" && is("GET", 1)) return json(200, SETTINGS);
 
     if (a === "device") {
@@ -351,7 +397,10 @@ class MockBackend {
       if (j && c === "cancel" && is("POST", 3)) return json(200, this.cancel(j));
     }
 
-    throw new HttpError(404, `No such endpoint: ${method} ${path}`, "The demo backend implements APP_API.md v1.");
+    const m2 = this.setup.route(method, seg, body) ?? this.calib.route(method, seg, body);
+    if (m2) return m2;
+
+    throw new HttpError(404, `No such endpoint: ${method} ${path}`, "The demo backend implements APP_API.md v2 (milestones 1 and 2).");
   }
 
   private listProjects(): ProjectSummary[] {
@@ -363,6 +412,7 @@ class MockBackend {
   // ---------------------------------------------------------------- device
   private connect(body: ConnectBody): Response {
     if (this.sim) throw new HttpError(409, "A scan is running", "Stop the scan before changing the device.");
+    if (this.calib.active()) this.calib.onDeviceLost(); // a (re)connect ends the calibration session, like a lost device
     const source = body.source;
     if (source !== "camera" && source !== "replay" && source !== "sim")
       throw new HttpError(422, `Unknown source “${String(source)}”`, "Use camera, replay or sim.");
@@ -377,7 +427,7 @@ class MockBackend {
     if (source === "sim" && !this.simReady) {
       let job = this.simJobId ? this.jobs.get(this.simJobId) : undefined;
       if (!job || (job.state !== "running" && job.state !== "queued")) {
-        job = { id: uid("j-"), kind: "sim_demo", state: "running", progress: 0, message: "Rendering frame 0 / 120", result: null, error: null, created: nowIso() };
+        job = { id: uid("j-"), kind: "generate_demo", state: "running", progress: 0, message: "Rendering frame 0 / 120", result: null, error: null, created: nowIso() };
         this.jobs.set(job.id, job);
         this.jobMeta.set(job.id, { kind: "sim" });
         this.simJobId = job.id;
@@ -392,23 +442,51 @@ class MockBackend {
   }
 
   private connectNow(source: "camera" | "replay" | "sim", body?: ConnectBody) {
+    const base = { busy: null, launch_check: null, sim_scene: null, error: null, warnings: [] as string[], imu_stream: false };
     if (source === "camera") {
       this.emitters = { vertical: 0, horizontal: 0, dots: 0 };
+      const idx = SETTINGS.camera.index;
+      const cam = cameraByIndex(idx) ?? cameraByIndex(1)!;
+      const pico = !this.opts.nopico;
+      const warnings: string[] = [];
+      if (!cam.stereo_like)
+        warnings.push(
+          `camera ${cam.index} delivers ${cam.width}x${cam.height} images, not side-by-side stereo (2560x800): choose the stereo camera in Setup, Connect step`,
+        );
+      if (!pico) warnings.push("no Pico found: the emitters, the trigger and the IMU are unavailable (flash the firmware? see Setup, Connect step)");
+      if (!this.setup.deviceCalibration().loaded) warnings.push(`no calibration at ~/.ohs/calibration.json: run the setup wizard (Setup)`);
+      this.setup.connectedIndex = cam.index;
       this.device = {
+        ...base,
         source,
         connected: true,
-        busy: null,
-        camera: { connected: true, info: { name: "ELP USB3 stereo (demo)", width: 2560, height: 800, fps: 60, backend: "dshow", fourcc: "MJPG" } },
-        pico: { connected: true, firmware: "ohs-fw 0.3.1", emitters: { ...this.emitters } },
-        calibration: { ...NO_CALIB },
+        camera: {
+          connected: true,
+          info: {
+            name: cam.name ?? `Camera ${cam.index}`,
+            index: cam.index,
+            width: cam.width,
+            height: cam.height,
+            fps: cam.fps,
+            backend: "dshow",
+            fourcc: cam.fourcc,
+            swap_lr: SETTINGS.camera.swap_lr,
+          },
+        },
+        pico: pico
+          ? { connected: true, firmware: "ohs-fw 1.0.0", emitters: { ...this.emitters }, imu: "LSM6DSOX", port: "COM5" }
+          : { connected: false, firmware: null, emitters: { ...this.emitters }, imu: null, port: null, error: "no Pico found on any serial port" },
+        calibration: this.setup.deviceCalibration(),
         replay: null,
+        warnings,
+        imu_stream: pico,
       };
     } else if (source === "replay") {
       const path = String(body?.recording ?? "").trim();
       this.device = {
+        ...base,
         source,
         connected: true,
-        busy: null,
         camera: { connected: true, info: { width: 1280, height: 800, fps: 30, frames: 1800 } },
         pico: null,
         calibration: { ...SIM_CALIB, path: `${path.replace(/[\\/]+$/, "")}/calibration.json` },
@@ -416,30 +494,53 @@ class MockBackend {
       };
     } else {
       this.device = {
+        ...base,
         source,
         connected: true,
-        busy: null,
         camera: { connected: true, info: { width: 1280, height: 800, fps: 30, scene: "sphere_on_plane" } },
         pico: null,
         calibration: { ...SIM_CALIB },
-        replay: null,
+        replay: { path: "~/.ohs/studio/sim/demo", loop: true },
+        sim_scene: "demo",
+        imu_stream: true,
       };
     }
     this.send({ type: "device", ...this.device });
+    this.setup.runLaunchCheck();
+    this.setup.broadcast();
+    this.calib.broadcastTarget(this.setup.target());
   }
 
   private disconnect() {
     this.emitters = { vertical: 0, horizontal: 0, dots: 0 };
-    this.device = { source: "none", connected: false, busy: this.device.busy, camera: null, pico: null, calibration: { ...NO_CALIB }, replay: null };
+    this.calib.onDeviceLost();
+    this.setup.launch = null;
+    this.setup.connectedIndex = null;
+    this.device = {
+      source: "none",
+      connected: false,
+      busy: this.device.busy,
+      camera: null,
+      pico: null,
+      calibration: this.setup.deviceCalibration(),
+      replay: null,
+      launch_check: null,
+      sim_scene: null,
+      warnings: [],
+    };
     this.send({ type: "device", ...this.device });
+    this.setup.broadcast();
+    this.calib.broadcastTarget(this.setup.target());
   }
 
   // ---------------------------------------------------------------- scan session
   private start(body: Record<string, unknown>): SessionState {
     if (!this.device.connected) throw new HttpError(409, "No device is connected", "Connect the camera, a replay or the simulator on the Device page.");
     if (!this.device.calibration.loaded)
-      throw new HttpError(409, "No calibration is loaded", "Run calibration (coming in Studio M2; use `ohs calibrate` for now), then reconnect.");
+      throw new HttpError(409, "No calibration is loaded", "Calibrate the scanner in Setup (the Stereo step), then start the scan again.");
     if (this.sim) throw new HttpError(409, "A scan is already running", "Stop it first.");
+    if (this.calib.active())
+      throw new HttpError(409, "A calibration session is running", "Finish or cancel it in Setup first: a scan and a calibration never run together.");
     const pid = String(body.project_id ?? "");
     const p = this.projects.get(pid);
     if (!p) throw new HttpError(404, "Project not found", "Choose another project, or create one.");
@@ -552,6 +653,10 @@ class MockBackend {
       this.device = { ...this.device, busy: null };
       this.send({ type: "device", ...this.device });
     }
+    if (m?.kind === "timed") {
+      this.setup.jobCancelled(j.id);
+      this.calib.jobCancelled(j.id);
+    }
     this.send({ type: "job", ...j });
     return j;
   }
@@ -560,7 +665,22 @@ class MockBackend {
     for (const [jid, m] of this.jobMeta) {
       const j = this.jobs.get(jid);
       if (!j || j.state !== "running") continue;
-      if (m.kind === "sim") {
+      if (m.kind === "timed") {
+        m.t += dt;
+        j.progress = Math.min(1, m.t / m.dur);
+        j.message = m.spec.message(j.progress);
+        if (j.progress >= 1) {
+          try {
+            j.result = m.spec.done();
+            j.state = "done";
+            j.message = "Finished";
+          } catch (e) {
+            j.state = "failed";
+            j.error = e instanceof Error ? e.message : String(e);
+            j.message = "Failed";
+          }
+        }
+      } else if (m.kind === "sim") {
         j.progress = Math.min(1, j.progress + dt / (this.opts.fast ? 1.2 : 5));
         j.message = j.progress < 0.92 ? `Rendering frame ${Math.round(j.progress * 120)} / 120` : "Writing the demo recording";
         if (j.progress >= 1) {
@@ -699,7 +819,8 @@ class MockBackend {
       this.statusAcc = 0;
       this.send(this.status());
     }
-    if (this.device.connected) {
+    // The scan previews; during a calibration session the camera shows the calibration views instead.
+    if (this.device.connected && !this.calib.active() && [...this.clients].some((c) => c.wantPreview)) {
       this.previewAcc += dt;
       if (this.previewAcc >= 0.1 && !this.rendering) {
         this.previewAcc = 0;
@@ -820,6 +941,7 @@ class MockBackend {
     s.meshSeq += 1;
     this.sendBinary(
       encodeBinary({ type: "mesh", seq: s.meshSeq, vertices: V, triangles: I.length / 3, units: "mm", frame: "world" }, [P, N, C, I]),
+      "mesh",
     );
   }
 
@@ -874,8 +996,8 @@ class MockBackend {
       this.lastDistance = s?.tracking.state === "lost" && s.lostAt !== null && s.T - s.lostAt > 0.8 && s.T - s.lostAt < 3.8 ? null : d;
       const { left, depth } = await this.renderer.encode();
       const seq = ++this.previewSeq;
-      this.sendBinary(encodeBinary({ type: "preview", camera: "left", format: "jpeg", w: LEFT_W, h: LEFT_H, seq }, [left]));
-      this.sendBinary(encodeBinary({ type: "preview", camera: "depth", format: "jpeg", w: DEPTH_W, h: DEPTH_H, seq }, [depth]));
+      this.sendBinary(encodeBinary({ type: "preview", camera: "left", format: "jpeg", w: LEFT_W, h: LEFT_H, seq }, [left]), "preview");
+      this.sendBinary(encodeBinary({ type: "preview", camera: "depth", format: "jpeg", w: DEPTH_W, h: DEPTH_H, seq }, [depth]), "preview");
     } catch (e) {
       console.warn("mock previews failed", e);
     } finally {
@@ -923,7 +1045,7 @@ const SETTINGS = {
   projects_dir: "~/OpenHandScan/projects",
   config_file: "~/.ohs/config.toml",
   paths: { calibration: "~/.ohs/calibration.json", scans_dir: "~/OpenHandScan/scans" },
-  camera: { index: 0, backend: "auto", width: 2560, height: 800, fps: 60.0, fourcc: "MJPG", exposure: null, gain: null, swap_lr: false, second_index: null },
+  camera: { index: 1, backend: "auto", width: 2560, height: 800, fps: 60.0, fourcc: "MJPG", exposure: null, gain: null, swap_lr: false, second_index: null },
   pico: { port: null, baud: 115200, imu_rate_hz: 416, heartbeat_s: 0.4 },
   emitters: {
     markers_dot_level: 25.0,

@@ -211,7 +211,7 @@ export function Tooltip({
 }: {
   content: ReactNode;
   children: ReactNode;
-  side?: "top" | "bottom";
+  side?: "top" | "bottom" | "right";
   className?: string;
 }) {
   const [show, setShow] = useState(false);
@@ -247,11 +247,15 @@ export function Tooltip({
             <div
               role="tooltip"
               className="pointer-events-none fixed z-[95] max-w-xs animate-fade-in rounded-lg border border-line-strong bg-panel px-3 py-2 text-xs text-fg shadow-lg"
-              style={{
-                left: Math.max(8, Math.min(rect.left + rect.width / 2 - 140, window.innerWidth - 288)),
-                width: 280,
-                ...(side === "bottom" ? { top: rect.bottom + 8 } : { bottom: window.innerHeight - rect.top + 8 }),
-              }}
+              style={
+                side === "right"
+                  ? { left: rect.right + 10, top: rect.top + rect.height / 2, width: 260, transform: "translateY(-50%)" }
+                  : {
+                      left: Math.max(8, Math.min(rect.left + rect.width / 2 - 140, window.innerWidth - 288)),
+                      width: 280,
+                      ...(side === "bottom" ? { top: rect.bottom + 8 } : { bottom: window.innerHeight - rect.top + 8 }),
+                    }
+              }
             >
               {content}
             </div>,

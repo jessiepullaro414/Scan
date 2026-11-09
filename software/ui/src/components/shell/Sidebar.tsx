@@ -2,6 +2,7 @@ import { Cpu, Crosshair, House, ScanLine, Settings, type LucideIcon } from "luci
 import { MOCK } from "../../api/backend";
 import { href, paths, type Route } from "../../lib/router";
 import { cn } from "../../lib/util";
+import { isSessionActive, useCalib } from "../../store/calib";
 import { useConnection } from "../../store/connection";
 import { useDevice } from "../../store/device";
 import { isLive, useSession } from "../../store/session";
@@ -12,7 +13,7 @@ type Item = { key: string; label: string; icon: LucideIcon; to: string; match: R
 const ITEMS: Item[] = [
   { key: "home", label: "Home", icon: House, to: paths.home(), match: ["home", "project", "viewer"] },
   { key: "scan", label: "Scan", icon: ScanLine, to: paths.scan(), match: ["scan"] },
-  { key: "calibrate", label: "Calibrate", icon: Crosshair, to: paths.calibrate(), match: ["calibrate"] },
+  { key: "setup", label: "Setup", icon: Crosshair, to: paths.setup(), match: ["setup", "calibrate"] },
   { key: "device", label: "Device", icon: Cpu, to: paths.device(), match: ["device"] },
   { key: "settings", label: "Settings", icon: Settings, to: paths.settings(), match: ["settings"] },
 ];
@@ -21,8 +22,18 @@ export function Sidebar({ route }: { route: Route }) {
   const scanning = useSession((s) => isLive(s.session));
   const paused = useSession((s) => s.session?.state === "paused");
   const calibMissing = useDevice((s) => !!s.device?.connected && !s.device.calibration?.loaded);
+  const drift = useDevice((s) => s.device?.launch_check?.state === "drift");
+  const calibrating = useCalib((s) => isSessionActive(s.session));
   const deviceBusy = useDevice((s) => !!s.device?.busy || !!s.simJobId);
   const version = useConnection((s) => s.health?.version ?? s.serverVersion);
+  const setupBadge = calibMissing || drift ? "warn" : calibrating ? "accent" : null;
+  const setupLabel = drift
+    ? "Setup: the launch check found calibration drift"
+    : calibMissing
+      ? "Setup: no calibration yet"
+      : calibrating
+        ? "Setup: a calibration is in progress"
+        : "Setup";
 
   return (
     <nav
@@ -37,12 +48,13 @@ export function Sidebar({ route }: { route: Route }) {
           const active = it.match.includes(route.name);
           const Icon = it.icon;
           const badge =
-            it.key === "scan" && scanning ? (paused ? "warn" : "rec") : it.key === "calibrate" && calibMissing ? "warn" : it.key === "device" && deviceBusy ? "accent" : null;
+            it.key === "scan" && scanning ? (paused ? "warn" : "rec") : it.key === "setup" ? setupBadge : it.key === "device" && deviceBusy ? "accent" : null;
           return (
             <li key={it.key} className="w-full">
               <a
                 href={href(it.to)}
-                aria-label={it.label}
+                aria-label={it.key === "setup" ? setupLabel : it.label}
+                title={it.key === "setup" && setupLabel !== "Setup" ? setupLabel : undefined}
                 aria-current={active ? "page" : undefined}
                 className={cn(
                   "group relative flex w-full flex-col items-center gap-1 rounded-lg px-1 py-2 text-[11px] font-medium transition-colors",

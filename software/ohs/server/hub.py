@@ -9,14 +9,15 @@ that is pending and writes it to its socket; when a client reads slowly, its ``s
 (uvicorn's transport flow control) and only *its* slots fill up, with newer messages replacing
 older ones. Memory per client is therefore bounded by one message per key.
 
-Keys: the message ``type`` (``status``, ``pose``, ``ghost``, ``device``, ``session``), ``job:<id>``
-for jobs (so updates of different jobs never replace each other), ``preview:left`` /
-``preview:depth`` and ``mesh`` for the binary messages. ``log`` messages are events, not state:
-they go through a short FIFO per client (the oldest are dropped beyond 50).
+Keys: the message ``type`` (``status``, ``pose``, ``ghost``, ``device``, ``session``, and for M2
+``calib``, ``calib_session``, ``setup``), ``job:<id>`` for jobs (so updates of different jobs never
+replace each other), ``preview:left`` / ``preview:depth`` / ``preview:calib_left`` /
+``preview:calib_right`` and ``mesh`` for the binary messages. ``log`` messages are events, not
+state: they go through a short FIFO per client (the oldest are dropped beyond 50).
 
-Per-client options (the ``subscribe`` message): ``preview`` and ``mesh`` (default on) and
-``max_preview_hz`` (default 15, at most 60): previews due earlier stay in their slot and the
-sender wakes up again when they are due.
+Per-client options (the ``subscribe`` message): ``preview`` (every ``preview:*`` key, the
+calibration views included) and ``mesh`` (default on) and ``max_preview_hz`` (default 15, at most
+60): previews due earlier stay in their slot and the sender wakes up again when they are due.
 
 Send order within one wake-up: logs, state (device, session, jobs), status / pose / ghost,
 previews, mesh last (it is the biggest).
@@ -34,11 +35,12 @@ from typing import Any, Awaitable, Callable
 
 from ohs.server.protocol import dumps
 
-__all__ = ["Hub", "Client", "BINARY_KEYS"]
+__all__ = ["Hub", "Client", "BINARY_KEYS", "PREVIEW_KEYS"]
 
 log = logging.getLogger(__name__)
 
-BINARY_KEYS = ("preview:left", "preview:depth", "mesh")
+PREVIEW_KEYS = ("preview:left", "preview:depth", "preview:calib_left", "preview:calib_right")
+BINARY_KEYS = (*PREVIEW_KEYS, "mesh")
 _TEXT_ORDER = ("device", "session", "status", "pose", "ghost")
 MAX_LOGS = 50
 DEFAULT_PREVIEW_HZ = 15.0
@@ -119,8 +121,8 @@ class Hub:
             if isinstance(hz, (int, float)) and not isinstance(hz, bool) and hz > 0:
                 client.max_preview_hz = float(min(hz, 60.0))
             if not client.preview:
-                client.slots.pop("preview:left", None)
-                client.slots.pop("preview:depth", None)
+                for key in PREVIEW_KEYS:
+                    client.slots.pop(key, None)
             if not client.mesh:
                 client.slots.pop("mesh", None)
         self._wake(client)
@@ -207,7 +209,7 @@ class Hub:
             for key in [k for k in slots if k not in BINARY_KEYS]:  # anything else that is text
                 out.append(slots.pop(key))
             period = 1.0 / max(client.max_preview_hz, 1e-3)
-            for key in BINARY_KEYS[:2]:
+            for key in PREVIEW_KEYS:
                 if key not in slots:
                     continue
                 due = client.last_preview.get(key, 0.0) + period

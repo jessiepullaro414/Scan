@@ -126,7 +126,12 @@ export function useScanJob(sid: string | null | undefined): Job | undefined {
 export const jobKindLabel = (kind: string): string => {
   const k = kind.toLowerCase();
   if (k.includes("process") || k.includes("mesh")) return "Make mesh";
-  if (k.includes("sim")) return "Simulator demo";
+  if (k.includes("sim") || k.includes("demo")) return "Simulator demo";
+  if (k.includes("selftest") || k.includes("self_test")) return "Self-test";
+  if (k.includes("printable")) return "Print targets";
   if (k.includes("calib")) return "Calibration";
   return kind.replace(/[_-]+/g, " ").replace(/^\w/, (c) => c.toUpperCase());
 };
+
+/** A finished simulator-demo job exists (the demo recording is built). */
+export const isDemoJob = (j: Job) => /demo/i.test(j.kind) || /^sim/i.test(j.kind);

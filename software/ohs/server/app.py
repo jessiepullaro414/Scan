@@ -2,10 +2,12 @@
 
 :func:`create_app` implements ``software/docs/APP_API.md``:
 
-* REST routes (blocking work runs in FastAPI's thread pool: the endpoints are plain functions);
-* ``/api/ws/live``: ``hello``, then the current ``device`` / ``session`` / active ``job``
-  messages, then everything the :class:`~ohs.server.hub.Hub` publishes for this client;
-  ``subscribe`` messages from the client set its options;
+* REST routes (blocking work runs in FastAPI's thread pool: the endpoints are plain functions),
+  M1's plus M2's ``/api/setup/*``, ``/api/settings/camera`` and ``/api/calibration/*``
+  (:mod:`ohs.server.setup`, :mod:`ohs.server.calibration`);
+* ``/api/ws/live``: ``hello``, then the current ``device`` / ``session`` / ``calib_session`` /
+  ``setup`` / active ``job`` messages, then everything the :class:`~ohs.server.hub.Hub`
+  publishes for this client; ``subscribe`` messages from the client set its options;
 * errors are JSON ``{"detail": ..., "hint": ...}`` for every status (validation errors, unknown
   routes and unexpected exceptions included);
 * the built UI is served from ``static_dir`` (default ``ohs/server/static/``, written by
@@ -87,6 +89,36 @@ class RewindBody(BaseModel):
 
 class ProcessBody(BaseModel):
     quality: Literal["preview", "full"] = "full"
+
+
+class DismissBody(BaseModel):
+    dismissed: bool
+
+
+class CameraSettingsBody(BaseModel):
+    index: Optional[int] = Field(None, ge=0, le=63)
+    swap_lr: Optional[bool] = None
+
+
+class PrintablesBody(BaseModel):
+    paper: Optional[Literal["letter", "a4"]] = None
+
+
+class PrintCheckBody(BaseModel):
+    measured_mm: float = Field(..., gt=0, lt=1000)
+    apply: bool = False
+
+
+class CalibStartBody(BaseModel):
+    kind: Literal["stereo", "lasers", "imu", "check"]
+
+
+class AutoBody(BaseModel):
+    enabled: bool
+
+
+class SaveBody(BaseModel):
+    force: bool = False
 
 
 # --------------------------------------------------------------------------- helpers
@@ -189,14 +221,18 @@ class LocalGuard:
 
 # --------------------------------------------------------------------------- the app
 def create_app(config: Any = None, *, projects_dir: Any = None, static_dir: Any = None, demo_dir: Any = None,
-               studio: Optional[Studio] = None) -> FastAPI:
+               data_dir: Any = None, config_path: Any = None, studio: Optional[Studio] = None, **studio_kw: Any) -> FastAPI:
     """Build the app. ``config`` defaults to :func:`ohs.app.config.load_config`; ``projects_dir``
-    to ``paths.projects_dir``; ``static_dir`` to ``ohs/server/static``; ``demo_dir`` to ``~/.ohs/demo``.
+    to ``paths.projects_dir``; ``static_dir`` to ``ohs/server/static``; ``demo_dir`` to ``~/.ohs/demo``;
+    ``data_dir`` to ``paths.data_dir``; ``config_path`` (where settings are saved) to the loaded
+    config file, else the default one. Other keywords go to :class:`~ohs.server.studio.Studio`
+    (e.g. device factories for tests).
 
     The :class:`~ohs.server.studio.Studio` is at ``app.state.studio``; nothing starts before the
     app's lifespan does (uvicorn runs it).
     """
-    st = studio or Studio(config, projects_dir=projects_dir, demo_dir=demo_dir, static_dir=static_dir)
+    st = studio or Studio(config, projects_dir=projects_dir, demo_dir=demo_dir, static_dir=static_dir,
+                          data_dir=data_dir, config_path=config_path, **studio_kw)
 
     @contextlib.asynccontextmanager
     async def lifespan(app: FastAPI):  # noqa: ANN202
@@ -331,6 +367,102 @@ def create_app(config: Any = None, *, projects_dir: Any = None, static_dir: Any 
     @app.post("/api/jobs/{jid}/cancel")
     def jobs_cancel(jid: str) -> JSONResponse:
         return _json(st.jobs.cancel(jid).to_dict())
+
+    # ------------------------------------------------------------------ M2: setup
+    @app.get("/api/setup")
+    def setup_state() -> JSONResponse:
+        return _json(st.setup.state())
+
+    @app.post("/api/setup/dismiss")
+    def setup_dismiss(body: DismissBody) -> JSONResponse:
+        return _json(st.setup.dismiss(body.dismissed))
+
+    @app.post("/api/setup/selftest")
+    def setup_selftest() -> JSONResponse:
+        return _json(st.setup.start_selftest().to_dict())
+
+    @app.get("/api/setup/devices")
+    def setup_devices() -> JSONResponse:
+        return _json(st.setup.devices_probe())
+
+    @app.post("/api/settings/camera")
+    def settings_camera(body: CameraSettingsBody) -> JSONResponse:
+        return _json(st.set_camera_settings(body.index, body.swap_lr))
+
+    @app.get("/api/setup/printables")
+    def printables_state() -> JSONResponse:
+        return _json(st.setup.printables_state())
+
+    @app.post("/api/setup/printables")
+    def printables_generate(body: Optional[PrintablesBody] = None) -> JSONResponse:
+        return _json(st.setup.start_printables(body.paper if body is not None else None).to_dict())
+
+    @app.get("/api/setup/printables/files/{name}")
+    def printables_file(name: str) -> FileResponse:
+        path, media = st.setup.printable_file(name)
+        return FileResponse(path, media_type=media, headers={"Cache-Control": "no-cache",
+                                                              "X-Content-Type-Options": "nosniff"})
+
+    @app.post("/api/setup/printables/open")
+    def printables_open() -> JSONResponse:
+        return _json(st.setup.open_printables())
+
+    @app.post("/api/setup/print-check")
+    def setup_print_check(body: PrintCheckBody) -> JSONResponse:
+        return _json(st.setup.print_check(body.measured_mm, body.apply))
+
+    # ------------------------------------------------------------------ M2: calibration
+    @app.get("/api/calibration")
+    def calib_state() -> JSONResponse:
+        return _json(st.calibration.state())
+
+    @app.post("/api/calibration/start")
+    def calib_start(body: CalibStartBody) -> JSONResponse:
+        return _json(st.calibration.start(body.kind))
+
+    @app.post("/api/calibration/capture")
+    def calib_capture() -> JSONResponse:
+        return _json(st.calibration.capture())
+
+    @app.delete("/api/calibration/views/{index}")
+    def calib_delete_view(index: int) -> JSONResponse:
+        return _json(st.calibration.delete_view(index))
+
+    @app.post("/api/calibration/auto")
+    def calib_auto(body: AutoBody) -> JSONResponse:
+        return _json(st.calibration.set_auto(body.enabled))
+
+    @app.post("/api/calibration/imu/start")
+    def calib_imu_start() -> JSONResponse:
+        return _json(st.calibration.imu_start())
+
+    @app.post("/api/calibration/imu/stop")
+    def calib_imu_stop() -> JSONResponse:
+        return _json(st.calibration.imu_stop())
+
+    @app.post("/api/calibration/solve")
+    def calib_solve() -> JSONResponse:
+        return _json(st.calibration.solve().to_dict())
+
+    @app.post("/api/calibration/continue")
+    def calib_continue() -> JSONResponse:
+        return _json(st.calibration.continue_())
+
+    @app.post("/api/calibration/save")
+    def calib_save(body: Optional[SaveBody] = None) -> JSONResponse:
+        return _json(st.calibration.save(body.force if body is not None else False))
+
+    @app.post("/api/calibration/cancel")
+    def calib_cancel() -> JSONResponse:
+        return _json(st.calibration.cancel())
+
+    @app.get("/api/calibration/views/{index}/thumb.jpg")
+    def calib_thumb(index: int) -> Response:
+        return Response(st.calibration.thumb(index), media_type="image/jpeg", headers={"Cache-Control": "no-cache"})
+
+    @app.get("/api/calibration/report.json")
+    def calib_report() -> JSONResponse:
+        return _json(st.calibration.report())
 
     # ------------------------------------------------------------------ WebSocket
     @app.websocket("/api/ws/live")

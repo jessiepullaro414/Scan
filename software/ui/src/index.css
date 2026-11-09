@@ -330,6 +330,54 @@ input[type="range"].slider:focus-visible::-webkit-slider-thumb {
   box-shadow: 0 0 0 4px var(--c-accent-soft), 0 1px 3px rgb(0 0 0 / 0.4);
 }
 
+/* ------------------------------------------------------------------ calibration capture */
+/* The flash when a view is captured (restarted by toggling the class). */
+@keyframes calib-flash {
+  0% { opacity: 0.55; }
+  100% { opacity: 0; }
+}
+.calib-flash {
+  animation: calib-flash 420ms ease-out both;
+}
+/* "Tilt the board" hint icon. */
+@keyframes calib-wobble {
+  0%, 100% { transform: rotate(-14deg); }
+  50% { transform: rotate(14deg); }
+}
+.calib-wobble {
+  animation: calib-wobble 1.6s ease-in-out infinite;
+}
+/* The IMU step's rotation hint: the scanner turns about one axis at a time. */
+@keyframes imu-roll {
+  0%, 100% { transform: rotate(-26deg); }
+  50% { transform: rotate(26deg); }
+}
+@keyframes imu-pitch {
+  0%, 100% { transform: perspective(300px) rotateX(-34deg); }
+  50% { transform: perspective(300px) rotateX(34deg); }
+}
+@keyframes imu-yaw {
+  0%, 100% { transform: perspective(300px) rotateY(-36deg); }
+  50% { transform: perspective(300px) rotateY(36deg); }
+}
+.imu-roll {
+  animation: imu-roll 2.4s ease-in-out infinite;
+}
+.imu-pitch {
+  animation: imu-pitch 2.4s ease-in-out infinite;
+}
+.imu-yaw {
+  animation: imu-yaw 2.4s ease-in-out infinite;
+}
+/* Coach mark: a soft attention pulse. */
+@keyframes coach-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 var(--c-accent-line); }
+  50% { box-shadow: 0 0 0 8px rgb(0 0 0 / 0); }
+}
+.coach-pulse {
+  animation: coach-pulse 2.2s ease-in-out infinite;
+}
+
 /* drei <Html> labels must not block orbiting unless they opt in. */
 .html-label {
   pointer-events: none;

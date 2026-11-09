@@ -187,7 +187,9 @@ def test_backend_fallback_and_open_errors(fake_cv):
     first, second = cam_mod._backend_candidates("auto")
     fake_cv.fail_apis = {first}
     with StereoCamera(CameraParams(**SMALL)) as cam:
-        assert cam.read().index == 0
+        # a frame arrives through the second backend; not necessarily frame 0: the fake grabs every
+        # 5 ms and read() returns the newest, so a busy machine can skip the first one
+        assert cam.read().index >= 0
     assert [c.api for c in fake_cv.instances] == [first, second]
     with pytest.raises(RuntimeError, match="could not open camera 5"):
         StereoCamera(CameraParams(index=5, **SMALL)).open()

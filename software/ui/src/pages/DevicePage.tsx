@@ -20,6 +20,7 @@ import {
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { ConnectSource } from "../api/types";
 import { EmitterSliders } from "../components/EmitterSliders";
+import { LaunchCheckCallout } from "../components/LaunchCheckCallout";
 import { Badge } from "../components/ui/Badge";
 import { Button } from "../components/ui/Button";
 import { ProgressBar, Skeleton, Spinner } from "../components/ui/Feedback";
@@ -28,7 +29,7 @@ import { Callout, Code, KeyValue, Page, PageHeader, Section } from "../component
 import { fmtFixed, humanize } from "../lib/format";
 import { navigate, paths } from "../lib/router";
 import { cn, storage } from "../lib/util";
-import { SOURCE_LABEL, useDevice } from "../store/device";
+import { SOURCE_LABEL, useDevice, useSimDemoReady } from "../store/device";
 import { useJobs } from "../store/jobs";
 import { isLive, useSession } from "../store/session";
 
@@ -89,6 +90,7 @@ export function DevicePage() {
   const simJobId = useDevice((s) => s.simJobId);
   const simJob = useJobs((s) => (simJobId ? s.jobs[simJobId] : undefined));
   const scanning = useSession((s) => isLive(s.session));
+  const demoReady = useSimDemoReady();
 
   const [choice, setChoice] = useState<ConnectSource>(() =>
     device && device.source !== "none" ? device.source : "sim",
@@ -154,6 +156,8 @@ export function DevicePage() {
           ) : null
         }
       />
+
+      <LaunchCheckCallout className="mb-5" />
 
       <Section title="Source" icon={Plug} className="mb-5">
         <div role="radiogroup" aria-label="Device source" className="grid gap-3 md:grid-cols-3">
@@ -278,7 +282,11 @@ export function DevicePage() {
                     : replayInvalid
                       ? "Enter the recording folder first."
                       : choice === "sim"
-                        ? "The first start builds the demo recording; it takes a moment."
+                        ? demoReady
+                          ? connected
+                            ? "The current device disconnects first."
+                            : ""
+                          : "The first start builds the demo recording: about a minute, once."
                         : choice === "camera"
                           ? "Emitters stay off until a scan starts or you turn them on below."
                           : connected
@@ -302,10 +310,20 @@ export function DevicePage() {
           ) : !connected ? (
             <div className="space-y-3">
               <StatusLine ok={null} label="No device connected" detail="Pick a source above and connect." />
-              <Callout icon={Lightbulb} title="Scanner not found?">
-                Plug the stereo camera into a USB 3 port and the Pico into any port, then connect. <Code>ohs devices</Code> lists
-                what the engine can see, and <Code>ohs selftest</Code> checks every part.
-              </Callout>
+              {choice === "camera" ? (
+                <Callout
+                  icon={Lightbulb}
+                  title="Scanner not found?"
+                  actions={
+                    <Button size="sm" icon={Usb} onClick={() => navigate(paths.setup("connect"))}>
+                      Find the camera and the Pico
+                    </Button>
+                  }
+                >
+                  Plug the stereo camera into a USB 3 port and the Pico into any port, then connect. The Connect step in Setup lists the
+                  cameras it can see, picks the stereo one, and shows how to flash the Pico.
+                </Callout>
+              ) : null}
             </div>
           ) : device.source === "camera" ? (
             <div className="space-y-4">
@@ -329,7 +347,7 @@ export function DevicePage() {
                     ? device.pico.firmware
                       ? `Firmware ${device.pico.firmware}`
                       : "Firmware version unknown"
-                    : "Emitters, trigger and IMU are unavailable. Check the cable; flash the firmware (firmware/README.md)."
+                    : "Emitters, trigger and IMU are unavailable. Check the cable, or flash the firmware (Setup, Connect step)."
                 }
               />
             </div>
@@ -386,15 +404,15 @@ export function DevicePage() {
               <Callout
                 tone="warn"
                 icon={TriangleExclamationPoint}
-                title="Run calibration"
+                title="Calibrate the scanner"
                 actions={
-                  <Button size="sm" icon={Crosshair} onClick={() => navigate(paths.calibrate())}>
-                    How to calibrate
+                  <Button size="sm" variant="primary" icon={Crosshair} onClick={() => navigate(paths.setup())}>
+                    Open Setup
                   </Button>
                 }
               >
-                The guided wizard is coming in Studio M2. For now run <Code>ohs calibrate stereo</Code>, then{" "}
-                <Code>lasers</Code> and <Code>imu</Code>, and reconnect.
+                The setup wizard walks you through it in about 10 minutes: stereo, then the lasers and the IMU. The new calibration loads
+                by itself when you save it.
               </Callout>
             </div>
           )}

@@ -283,6 +283,54 @@ export function ShortcutHints({ compact = false }: { compact?: boolean }) {
   );
 }
 
+/** The coach mark after the setup wizard's "Scan your first object" (`#/scan?…&first=1`). */
+export function FirstScanCoach({ onDismiss }: { onDismiss: () => void }) {
+  const steps = [
+    <>
+      Point the scanner at a <b className="font-medium text-fg">mug</b>, about <b className="font-medium text-fg">25 cm</b> away.
+    </>,
+    <>
+      Press the <b className="font-medium text-fg">trigger</b>, or <b className="font-medium text-fg">Start scan</b> below.
+    </>,
+    <>
+      Move <b className="font-medium text-fg">slowly</b> all the way around it, keeping the distance gauge green.
+    </>,
+  ];
+  return (
+    <section className="glass coach-pulse w-[min(540px,calc(100vw-2rem))] animate-pop-in rounded-2xl border border-accent-line p-4 shadow-lg" aria-label="Your first scan">
+      <div className="flex gap-4">
+        <svg viewBox="0 0 96 96" className="h-20 w-20 shrink-0" aria-hidden>
+          <ellipse cx="48" cy="82" rx="38" ry="8" fill="var(--c-surface-3)" />
+          <path d="M14 58 A36 16 0 0 0 82 58" stroke="var(--c-accent)" strokeWidth="2.5" strokeDasharray="5 4" fill="none" />
+          <path d="M80 52 L86 60 L76 62 Z" fill="var(--c-accent)" />
+          <rect x="30" y="30" width="34" height="46" rx="5" fill="#e9e4da" />
+          <ellipse cx="47" cy="30" rx="17" ry="4.5" fill="#d8d1c4" />
+          <ellipse cx="47" cy="30" rx="13" ry="3" fill="#6b4a2e" />
+          <path d="M64 40 C76 40 76 60 64 60" stroke="#e9e4da" strokeWidth="5.5" fill="none" strokeLinecap="round" />
+        </svg>
+        <div className="min-w-0 flex-1">
+          <div className="text-sm font-semibold text-fg">Your first scan</div>
+          <ol className="mt-1.5 space-y-1">
+            {steps.map((s, i) => (
+              <li key={i} className="flex gap-2 text-sm text-muted">
+                <span className="grid h-5 w-5 shrink-0 place-items-center rounded-full bg-accent-soft text-[11px] font-semibold text-accent">{i + 1}</span>
+                <span>{s}</span>
+              </li>
+            ))}
+          </ol>
+        </div>
+        <IconButton icon={X} label="Dismiss the first-scan guide" size="sm" onClick={onDismiss} className="-mr-1 -mt-1" />
+      </div>
+      <div className="mt-3 flex items-center justify-between gap-2">
+        <span className="text-xs text-subtle">Stop when it looks complete, then press Make mesh.</span>
+        <Button size="sm" variant="primary" onClick={onDismiss}>
+          Got it
+        </Button>
+      </div>
+    </section>
+  );
+}
+
 /** Centered guidance when nothing is connected: no dead end. */
 export function NoDeviceOverlay() {
   const device = useDevice((s) => s.device);

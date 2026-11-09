@@ -34,7 +34,8 @@ def _cfg(tmp_path):
 
 
 def _dirs(tmp_path):
-    return {"projects_dir": tmp_path / "projects", "demo_dir": tmp_path / "demo", "static_dir": tmp_path / "static"}
+    return {"projects_dir": tmp_path / "projects", "demo_dir": tmp_path / "demo", "static_dir": tmp_path / "static",
+            "data_dir": tmp_path / "data", "config_path": tmp_path / "config.toml"}
 
 
 class FakeWebview:

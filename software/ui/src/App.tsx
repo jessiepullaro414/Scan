@@ -6,22 +6,34 @@ import { Toaster } from "./components/shell/Toaster";
 import { TopBar } from "./components/shell/TopBar";
 import { Spinner } from "./components/ui/Feedback";
 import { reconnectLive } from "./api/live";
-import { useRoute, type Route } from "./lib/router";
-import { CalibratePage } from "./pages/CalibratePage";
+import { paths, Redirect, useRoute, type Route } from "./lib/router";
 import { DevicePage } from "./pages/DevicePage";
 import { HomePage } from "./pages/HomePage";
 import { NotFoundPage } from "./pages/NotFoundPage";
 import { ProjectPage } from "./pages/ProjectPage";
 import { SettingsPage } from "./pages/SettingsPage";
+import { useCalib } from "./store/calib";
 import { useConnection } from "./store/connection";
 import { useDevice } from "./store/device";
 import { isActive, useJobs } from "./store/jobs";
 import { useProjects } from "./store/projects";
 import { useSession } from "./store/session";
+import { useSetup } from "./store/setup";
 
-// The 3D pages carry three.js; they load on first use.
+// The 3D pages carry three.js; they load on first use. So does the setup wizard.
 const ScanPage = lazy(() => import("./pages/ScanPage"));
 const ViewerPage = lazy(() => import("./pages/ViewerPage"));
+const SetupPage = lazy(() => import("./pages/setup/SetupPage"));
+
+function LoadingPage() {
+  return (
+    <div className="grid h-full place-items-center">
+      <div className="flex items-center gap-2.5 text-sm text-muted">
+        <Spinner size={16} /> Loading…
+      </div>
+    </div>
+  );
+}
 
 function Loading3D() {
   return (
@@ -48,13 +60,19 @@ function PageFor({ route }: { route: Route }) {
     case "scan":
       return (
         <Suspense fallback={<Loading3D />}>
-          <ScanPage projectParam={route.project} />
+          <ScanPage projectParam={route.project} first={route.first} />
         </Suspense>
       );
     case "device":
       return <DevicePage />;
+    case "setup":
+      return (
+        <Suspense fallback={<LoadingPage />}>
+          <SetupPage step={route.step} />
+        </Suspense>
+      );
     case "calibrate":
-      return <CalibratePage />;
+      return <Redirect to={paths.setup()} />;
     case "settings":
       return <SettingsPage />;
     default:
@@ -67,6 +85,8 @@ function loadAll() {
   void useSession.getState().fetch();
   void useProjects.getState().fetchList();
   void useJobs.getState().fetchAll();
+  void useSetup.getState().fetch();
+  void useCalib.getState().fetch();
 }
 
 export function App() {
@@ -105,7 +125,8 @@ export function App() {
   }, [link]);
 
   const unreachable = !health && !everOpen && !!healthError?.unreachable;
-  const routeKey = route.name + ("pid" in route ? route.pid : "") + ("sid" in route ? route.sid : "");
+  // A crash on one wizard step clears when you go to another step.
+  const routeKey = route.name + ("pid" in route ? route.pid : "") + ("sid" in route ? route.sid : "") + (route.name === "setup" ? (route.step ?? "") : "");
 
   return (
     <div className="flex h-full bg-bg text-fg">

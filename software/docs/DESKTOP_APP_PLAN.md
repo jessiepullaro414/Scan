@@ -20,7 +20,7 @@ The research was done in November 2026 from vendor pages, forums and reviews. Re
 | Measurement | unverified | unverified | unverified | ✓ | ✓ (VXinspect) | partial | **✓ distances, angles, radii, gap & flush** |
 | Primitive fitting / reverse engineering | – | – | – | Ultimate edition | VXmodel (paid) | peel.CAD (paid) | **✓ built in** |
 | Deviation map vs CAD | – | – | – | ✓ (+ZEISS) | ✓ | partial | **✓ (M5)** |
-| GPU lock-in | NVIDIA RTX 30/40 for GPU mode (MetroX) | – | GTX 1060-class recommended | GPU recommended | – | – | **CPU works everywhere; GPU optional** |
+| GPU lock-in | NVIDIA RTX 30/40 for GPU mode (MetroX) | – | GTX 1060-class recommended | GPU recommended | – | – | **any GPU used automatically (NVIDIA, AMD, Intel); CPU works everywhere** |
 
 ### What users hate (and what we do about it)
 1. **Crashes mid-scan that lose the data.**
@@ -41,7 +41,10 @@ The research was done in November 2026 from vendor pages, forums and reviews. Re
    - **Our fix:** N-way automatic registration with a global pose graph; fall back to markers, then to 3-point manual alignment. You always see the residual error.
 5. **GPU and hardware lock-in.**
    - Revopoint's MetroX GPU mode requires NVIDIA RTX 30/40 ([release note](https://global.revopoint3d.com/blogs/news/revo-scan-5-metrox-v5-6-4-released-with-gpu-acceleration-for-windows)).
-   - **Our fix:** a CPU path everywhere (the engine already runs on CPU), with optional CUDA.
+   - **Our fix:**
+     - Use whatever GPU is in the machine, automatically: NVIDIA, AMD or Intel, discrete or integrated.
+     - The CPU path stays as the fallback, so the app works everywhere. The engine runs on the CPU today.
+     - A GPU is a speed-up, never a requirement.
 6. **Flat, shiny and black car surfaces.**
    - A Revo POP user couldn't scan tyres, black body parts or glass without markers ([forum](https://forum.revopoint3d.com/t/scanning-vehicles-with-revopoint-pop/317)).
    - **Our fix:**
@@ -74,7 +77,7 @@ The research was done in November 2026 from vendor pages, forums and reviews. Re
    - MIT licence, open formats (PLY/STL/OBJ/3MF and JSON project files)
    - a Python API
    - the same UI works in a browser, so a phone or tablet can be the scan display
-6. **Runs on ordinary laptops:** CPU-only works, no GPU required, and it ships as one installer.
+6. **Fast on any machine:** it uses the GPU when there is one, from any vendor (an RTX laptop, or the Radeon or Intel graphics built into most laptops). It still works on the CPU alone, and it ships as one installer.
 
 ---
 
@@ -171,6 +174,7 @@ Settings are saved as a **recipe** you can reuse or script.
 | UI | **React + TypeScript + Vite**, **three.js** via **@react-three/fiber / drei**, **zustand**, **Tailwind**, **lucide** icons | The best 3D-in-a-web-view stack; a fast, modern, consistent UI; widely known, so open-source contributors can help |
 | Desktop shell | **pywebview** (Windows WebView2, macOS WKWebView, Linux WebKitGTK) | A native window with one runtime (Python) and no Electron |
 | Remote use | the same UI in any browser on the LAN (opt-in) | Use a phone or tablet as the scan display; a scanner on a mini-PC later |
+| GPU compute | chosen by a spike at the start of M3; candidates are **wgpu** (WebGPU compute shaders on Vulkan / DX12 / Metal, so any vendor), **CUDA** through CuPy (NVIDIA), and **OpenCL** through OpenCV's T-API | One engine, auto-detected at start. Every GPU kernel has a CPU twin, and tests check that the results agree. The settings show which device is in use. |
 | Packaging | PyInstaller and an installer (M6) | One download, no Python needed |
 
 Rejected alternatives:
@@ -215,8 +219,8 @@ Rejected alternatives:
 | # | Milestone | Done when |
 |---|---|---|
 | **M1** | **App skeleton plus live scanning** (done, see status below) | `ohs app` opens a window. Projects page; device panel (camera / replay / **simulator**); live Scan page with the growing 3D model, camera previews, distance gauge, tracking state, start / stop / **rewind**; scans saved to projects; one-click "Make mesh" job with progress; result viewer (orbit, lighting, wireframe, measure distance). Backend API tests and UI type-check and build pass, plus a browser smoke test. |
-| M2 | Setup and calibration wizard | first-run flow, live coverage heatmaps, auto-capture, plain-language results, launch-time check |
-| M3 | Processing studio | step-by-step pipeline with preview and undo, recipes, selection tools, clean / fill / smooth / decimate, global pose-graph optimisation |
+| M2 | Setup and calibration wizard (done, see the M2 plan and status below) | first-run flow, live coverage heatmaps, auto-capture, plain-language results, launch-time check |
+| M3 | Processing studio, GPU first | It starts with **GPU acceleration**: profile the pipeline, then move the hot spots to the GPU (stereo matching, TSDF fusion, ICP tracking), auto-detected on any vendor, with the CPU fallback. Then the step-by-step pipeline with preview and undo, recipes, selection tools, clean / fill / smooth / decimate, and global pose-graph optimisation. An `ohs bench` command measures speed on any machine. Test beds: this PC's Radeon 680M (integrated) and the owner's GPU laptop. Target: a 2-minute scan meshed at full quality in under 2 minutes on a laptop GPU. |
 | M4 | Multi-scan alignment | N-way automatic, tags, manual pairs, residual maps, merge |
 | M5 | Measure and reverse engineering | primitives, hole finder, coordinate systems, gap & flush, sections, mirror, deviation and PDF report, STEP / FreeCAD export |
 | M6 | Ship it | installer, updater check (offline-friendly), crash-safe logs and diagnostics bundle, docs and tutorials, SpaceMouse, localisation scaffolding |
@@ -234,6 +238,108 @@ Known gaps, carried into later milestones:
 - **Processing speed:** full-quality processing of the 27 s demo scan (696 frames) took about 5.5 minutes on the CPU. Faster paths (frame subsampling for "preview", GPU depth) belong in M3.
 - **After a rewind:** the live model is coarser until new frames refine it.
 - **Not built yet:** marker-mode live tags, automated UI tests, and a "follow the scanner" camera.
+
+### M2 plan: setup and calibration wizard
+The API is in [`APP_API.md`](APP_API.md#m2-setup-and-calibration). What this milestone builds:
+
+**The wizard** (`#/setup`, the sidebar's "Setup" item) has seven steps. Each step shows done / to do / warning, and any step can be redone on its own:
+1. **Connect.** Lists the cameras found, marks the one that looks like the side-by-side stereo camera (2560x800), and shows the Pico's port and firmware. You can pick the camera; it's saved to the config. If the Pico doesn't answer, the flashing steps from `firmware/README.md` are shown. "No hardware yet?" connects the simulator.
+2. **Self-test.** Camera frame rate and image, Pico, IMU, clock sync, each emitter (camera-confirmed) and the trigger. Green / amber / red, each with a plain "how to fix". The trigger and emitter prompts appear live.
+3. **Print targets.** One click writes the board, the AprilTag sheet and the LED projector mask (Letter or A4). The app shows previews, download buttons and "Open folder", plus the printing rules (100 % / actual size, matte paper, glue the board flat to glass). **Scale check:** type in what your calipers read for the 100 mm bar.
+   - Within ±0.3 %: OK.
+   - Up to ±4 %: the app explains that the printer scaled the page, and offers "reprint at 100 %" or "use my measurement". The latter scales the board for calibration only, never for printing.
+   - Beyond ±4 %: re-measure and reprint.
+4. **Stereo**, 5. **Lasers**, 6. **IMU**, 7. **Check**: the capture screens below. When the setup is done, a "Scan your first object" card starts a project and opens the Scan page with a short coach mark.
+
+**Capture screens** (stereo, lasers, check):
+- **Live view:**
+  - Stereo shows both cameras side by side; the others show the rectified left image.
+  - Overlays: the detected corners, the board outline, and a live **coverage heatmap** (8 x 8 cells, views per cell, the same grid as the engine's coverage report).
+  - A dashed **target box with an arrow** shows where to put the board next, and a ring fills while you **hold still**.
+- **Auto-capture:** a view is taken by itself when all three hold:
+  - **Usable:** stereo needs at least 8 corners seen by both cameras; lasers / check need a board pose and both laser lines on the page with at least 15 points each.
+  - **Steady:** the corners moved less than 1 px between processed frames for 0.5 s.
+  - **New:** compared with every captured view, the board moved more than 12 % of the image width, or its distance changed more than 10 %, or its tilt changed more than 8°.
+  
+  After a capture there's a 1 s cooldown. You can always capture by hand (Space, or the trigger) when the view is usable. Each capture plays a short click, and the sound can be switched off.
+- **Guidance** comes from the backend. It names the next region to fill (3 x 3 image regions, the emptiest first), then the missing tilt directions (left / right / up / down, 20–45°), then the distances:
+  - stereo: 200–500 mm;
+  - lasers: near < 220 mm, mid 220–330 mm, far > 330 mm, over 150–450 mm.
+  
+  For lasers, it also says which laser line misses the white margin.
+- **Views strip:** thumbnails with corner counts and distances. Undo the last view (Backspace) or delete any. After a solve, the worst views are flagged with their error, and one click drops them and recalibrates.
+- **Finish & calibrate** (Enter) unlocks at the minimum view count: 4 for stereo (aim for 15–25), 3 for lasers (6–10), 1 for check (3–5).
+
+**IMU screen:** a big instruction card that walks you through it:
+- "Hold still" counts down 2 s.
+- "Rotate slowly about all three axes, ±20–40°" runs a 20–60 s timer, with a live gyro-rate gauge and how often the board was seen (keep it above 80 %).
+- It stops automatically at 60 s.
+
+**Results** are in plain language:
+- a grade (excellent / good / usable / poor / failed) and a one-line verdict;
+- metric rows, each with its target and a "what this means" note;
+- advice with buttons: add views, drop the bad views, start over, redo stereo, check the print;
+- "Save calibration", which backs up the previous file, and a downloadable full report;
+- on the simulator, a "versus the true calibration" table.
+
+A failed solve never dead-ends: you go back to capturing with the views kept, and the reason is shown. **Swapped cameras** are caught: a stereo baseline with the wrong sign means left and right are swapped, and the app says to turn on "swap left/right".
+
+**Launch-time check:**
+- After every connect, the app matches features between the rectified left and right images of a few idle frames and measures the row error.
+- It stays silent unless that is above 0.6 px; then it suggests the 2-minute Check step.
+- It needs no board, and it is also silent when there are too few features.
+
+**Simulator:**
+- A live virtual scanner looks at the printed ChArUco page (`ohs.sim.board_camera`, a fast homography renderer at about 20–35 ms per stereo frame).
+- It runs a scripted tour per step:
+  - stereo: board poses all over the image;
+  - lasers / check: poses with both laser lines painted on the page;
+  - IMU: hold still, then rotate, with synthesized gyro data.
+- It uses a distorted lens model, so the whole wizard runs end to end without hardware, and every result can be compared with the truth.
+- Its results go to a sandbox calibration.
+
+**Done when:**
+- The wizard runs end to end on the simulator: stereo, lasers, IMU and check all save, and every result is within the truth thresholds in the tests.
+- The self-test, printables and print check work.
+- The launch check flags a deliberately perturbed calibration.
+- Backend tests pass, the UI type-checks and builds, and a browser pass covers every step.
+
+### M2 status (2026-11-09)
+Built and walked through in a browser against the real backend, on the simulator:
+- connect, self-test, printables and the print check;
+- stereo, lasers and IMU, each auto-captured, solved and saved to the sandbox;
+- the check, the "Done" page and "Scan your first object";
+- both themes.
+
+Every result in that run, against the virtual scanner's truth:
+
+| Step | Result |
+|---|---|
+| Stereo, 16 views | 0.06 px; baseline +0.009 mm, focal length +0.13 px, row error 0.05 px (p95) |
+| Laser planes | within 0.006° and 0.011°; laser points 0.05 mm and 0.08 mm off (median) |
+| IMU | camera–IMU rotation 0.006°, clock offset +0.01 ms |
+| Check | passed: rows to 0.11 px, laser points within 0.01 mm |
+
+The launch check passes on the simulator (0.07 px). In the tests it flags a camera turned by 0.3° (3.8 px).
+
+Tests:
+- 59 server tests (41 from M1), 20 for the virtual board and the drift check, and 19 for the config;
+- the UI type-checks and builds.
+
+Fixed during the walk-through:
+- the laser lines were drawn black;
+- a hard-coded config path, in two places;
+- self-test and firmware copy that didn't fit the simulator;
+- hint labels cut short;
+- "Finish & calibrate" said on the check step;
+- the IMU timer limits: 22 s and 62 s count from the start of the recording;
+- the "first start builds the demo" note that stayed after the demo existed. The engine now reports `sim_demo_ready`.
+
+Known gaps:
+- **Real hardware:** the camera self-test, emitters, trigger and devices probe ran only against fakes. Everything else needs the real scanner too.
+- **IMU never re-checked:** the check doesn't re-check the IMU, because check recordings hold no IMU samples (the CLI is the same).
+- **Launch check after a scene swap:** after a simulator calibration, the launch check isn't re-run on the demo.
+- **Still not built:** automated UI tests.
 
 ### Quality bar (every milestone)
 - **Performance:** the live view holds 30 fps or more in the UI and shows the scanner's state within 150 ms. A 2M-triangle mesh orbits at 60 fps on an integrated GPU.

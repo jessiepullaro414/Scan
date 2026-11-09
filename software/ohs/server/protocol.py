@@ -42,7 +42,7 @@ __all__ = [
     "log_message",
 ]
 
-PROTOCOL_VERSION = "0.1.0"
+PROTOCOL_VERSION = "0.2.0"  # M2: setup and calibration (APP_API.md)
 
 
 class ApiError(Exception):

@@ -1,6 +1,8 @@
 import {
   ArrowRight,
+  Check,
   Cpu,
+  Crosshair,
   Ellipsis,
   FlaskConical,
   FolderPlus,
@@ -26,11 +28,85 @@ import { Code, Page, PageHeader } from "../components/ui/Layout";
 import { Menu } from "../components/ui/Popover";
 import { fmtDateTime, fmtRelative } from "../lib/format";
 import { href, navigate, paths } from "../lib/router";
+import { firstUnfinished, minutesLeft, setupProgress, STATE_LABEL, STEP_META, STEP_ORDER } from "../lib/setup";
 import { cn, useTicker } from "../lib/util";
 import { useDevice } from "../store/device";
 import { useProjects } from "../store/projects";
+import { useSetup } from "../store/setup";
 import { toast } from "../store/toasts";
 import { useUi } from "../store/ui";
+
+/** First run: the setup wizard's card, with its progress and the simulator as another way in. */
+function SetupCard() {
+  const setup = useSetup((s) => s.setup);
+  const dismiss = useSetup((s) => s.dismiss);
+  const connect = useDevice((s) => s.connect);
+  const simConnected = useDevice((s) => !!s.device?.connected && s.device.source === "sim");
+  if (!setup?.first_run) return null;
+  const prog = setupProgress(setup);
+  const next = firstUnfinished(setup);
+  const mins = minutesLeft(setup);
+  const sim = setup.target === "sim";
+  return (
+    <section className="mb-6 animate-fade-in overflow-hidden rounded-2xl border border-accent-line/60 bg-surface shadow-sm" aria-label="Set up your scanner">
+      <div className="flex flex-wrap items-center gap-6 p-6">
+        <span className="grid h-14 w-14 shrink-0 place-items-center rounded-2xl border border-accent-line bg-accent-soft text-accent">
+          <Crosshair size={26} aria-hidden />
+        </span>
+        <div className="min-w-[260px] flex-1">
+          <div className="text-xs font-medium text-accent">{sim ? "Simulator sandbox" : "First run"}</div>
+          <h2 className="font-display text-xl font-semibold text-fg">Set up your scanner</h2>
+          <p className="mt-0.5 text-sm text-muted">
+            {prog.done === 0
+              ? `Connect it, test it, print the board and calibrate: about ${mins} minutes, once. Every step says why it matters.`
+              : `${prog.done} of ${prog.total} steps done. Next: ${STEP_META[next].title}${mins ? `, about ${mins} minutes left` : ""}.`}
+          </p>
+          <ol className="mt-3 flex flex-wrap gap-1.5" aria-label="Setup steps">
+            {STEP_ORDER.map((id) => {
+              const st = setup.steps.find((s) => s.id === id);
+              const state = st?.state ?? "todo";
+              return (
+                <li key={id}>
+                  <a
+                    href={href(paths.setup(id))}
+                    title={`${STEP_META[id].title}: ${STATE_LABEL[state]}${st?.summary ? `. ${st.summary}` : ""}`}
+                    className={cn(
+                      "inline-flex h-6 items-center gap-1 rounded-full border px-2 text-[11px] font-medium transition-colors hover:border-line-strong",
+                      state === "done" ? "border-ok/30 bg-ok-soft text-ok" : state === "warn" ? "border-warn/30 bg-warn-soft text-warn" : "border-line text-muted",
+                    )}
+                  >
+                    {state === "done" ? <Check size={11} strokeWidth={3} aria-hidden /> : null}
+                    {STEP_META[id].title}
+                  </a>
+                </li>
+              );
+            })}
+          </ol>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button variant="primary" size="lg" iconRight={ArrowRight} onClick={() => navigate(paths.setup(prog.done === 0 ? null : next))}>
+            {prog.done === 0 ? "Start setup" : "Continue setup"}
+          </Button>
+          {!simConnected ? (
+            <Button
+              size="lg"
+              icon={FlaskConical}
+              onClick={async () => {
+                navigate(paths.device());
+                await connect({ source: "sim" });
+              }}
+            >
+              Try the simulator
+            </Button>
+          ) : null}
+          <Button variant="ghost" onClick={() => void dismiss(true)} title="You can turn the card back on in Setup">
+            Not now
+          </Button>
+        </div>
+      </div>
+    </section>
+  );
+}
 
 /** The engine's projects folder (settings paths.projects_dir), with the default until it loads. */
 function useProjectsDir(): string {
@@ -309,6 +385,8 @@ export function HomePage() {
           </>
         }
       />
+
+      <SetupCard />
 
       {error && !list ? (
         <div className="rounded-xl border border-line bg-surface">

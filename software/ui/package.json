@@ -1,7 +1,7 @@
 {
   "name": "openhandscan-studio-ui",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "OpenHandScan Studio: the desktop app UI (React + three.js), served by ohs.server",
   "license": "MIT",
   "type": "module",

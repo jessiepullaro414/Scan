@@ -31,7 +31,7 @@ from ohs.sim.imu import ImuSimParams, synthesize_imu
 from ohs.sim.nominal import nominal_calibration, nominal_emitters
 from ohs.sim.render import Renderer, RenderParams
 from ohs.sim.scene import charuco_board
-from ohs.sim.trajectory import look_at
+from ohs.sim.trajectory import RotatingTrajectory, look_at
 from ohs.types import Event, ScannerCalibration, StereoCalibration, StereoFrame
 
 SPEC = CharucoSpec()
@@ -107,39 +107,6 @@ def plane_errors(est: dict, true: dict, R1_est: np.ndarray | None = None, R1_tru
                      "d_err_mm": float(d_e - t.d),
                      "point_err_median_mm": float(np.median(dist)), "point_err_max_mm": float(dist.max())}
     return out
-
-
-class RotatingTrajectory:
-    """Hand-held IMU-calibration motion in front of the board: still for ``t_still`` s, then smooth
-    rotations about all three camera axes (sums of sinusoids, +-amp deg) with a few mm of sway."""
-
-    def __init__(self, T0: np.ndarray, t0: float, t_still: float = 1.2, amp_deg=(7.0, 8.0, 15.0), seed: int = 0):
-        rng = np.random.default_rng(seed)
-        self.T0, self.t0, self.t_still = np.asarray(T0, float), float(t0), float(t_still)
-        self.f = rng.uniform(0.4, 1.1, (3, 3))
-        self.ph = rng.uniform(0, 2 * np.pi, (3, 3))
-        a = rng.uniform(0.5, 1.0, (3, 3))
-        self.a = a / a.sum(axis=0, keepdims=True) * np.radians(amp_deg)[None]
-        self.sway = rng.uniform(-6.0, 6.0, (3, 3))
-
-    def poses(self, t: np.ndarray) -> np.ndarray:
-        from ohs.sim.trajectory import so3_exp_batch  # noqa: PLC0415
-
-        t = np.atleast_1d(np.asarray(t, float))
-        s = np.clip(t - self.t0 - self.t_still, 0.0, None)
-        x = np.clip(s / 0.8, 0.0, 1.0)
-        ramp = (10 * x**3 - 15 * x**4 + 6 * x**5)[:, None]
-        arg = 2 * np.pi * self.f[None] * s[:, None, None] + self.ph[None]
-        th = ramp * (self.a[None] * (np.sin(arg) - np.sin(self.ph)[None])).sum(axis=1)
-        tr = ramp * (self.sway[None] / 3.0 * (np.sin(arg) - np.sin(self.ph)[None])).sum(axis=1)
-        rel = np.zeros((len(t), 4, 4))
-        rel[:, :3, :3] = so3_exp_batch(th)
-        rel[:, :3, 3] = tr
-        rel[:, 3, 3] = 1.0
-        return self.T0[None] @ rel
-
-    def pose(self, t: float) -> np.ndarray:
-        return self.poses(np.array([t]))[0]
 
 
 def make_imu_recording(path: Path, image_size=(1280, 800), spec: CharucoSpec = SPEC, seconds: float = 7.0,

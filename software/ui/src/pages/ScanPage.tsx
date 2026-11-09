@@ -4,7 +4,9 @@
  * stats on the right, and the scan controls at the bottom (keyboard: Space, R, Esc, F, ?).
  */
 import { useEffect, useRef, useState } from "react";
+import { LaunchCheckCallout } from "../components/LaunchCheckCallout";
 import { ErrorBoundary } from "../components/shell/ErrorBoundary";
+import { navigate, paths } from "../lib/router";
 import { useHotkeys } from "../lib/util";
 import { useDevice } from "../store/device";
 import { useProjects } from "../store/projects";
@@ -15,6 +17,7 @@ import { ControlBar } from "./scan/Controls";
 import { LiveCanvas } from "./scan/LiveCanvas";
 import {
   DistanceGauge,
+  FirstScanCoach,
   LostBanner,
   NoDeviceOverlay,
   RecChip,
@@ -24,7 +27,7 @@ import {
 } from "./scan/Overlays";
 import { CameraPreviews, EmittersPanel, LiveStats, ScanSetup } from "./scan/SidePanel";
 
-export default function ScanPage({ projectParam }: { projectParam: string | null }) {
+export default function ScanPage({ projectParam, first = false }: { projectParam: string | null; first?: boolean }) {
   const list = useProjects((s) => s.list);
   const fetchList = useProjects((s) => s.fetchList);
   const fetchProject = useProjects((s) => s.fetchProject);
@@ -83,7 +86,7 @@ export default function ScanPage({ projectParam }: { projectParam: string | null
     : !connected
       ? "Connect a device to start"
       : !calibrated
-        ? "No calibration: run ohs calibrate, then reconnect"
+        ? "No calibration yet: calibrate the scanner in Setup"
         : !projectId
           ? "Choose a project to start"
           : null;
@@ -124,8 +127,18 @@ export default function ScanPage({ projectParam }: { projectParam: string | null
           <div className="absolute left-4 top-4">
             <TrackingBadge />
           </div>
-          <div className="absolute left-1/2 top-4 -translate-x-1/2">
+          <div className="absolute left-1/2 top-4 flex w-[min(560px,calc(100%-2rem))] -translate-x-1/2 flex-col items-center gap-3">
             <RecChip />
+            {!live ? (
+              <div className="pointer-events-auto w-full">
+                <LaunchCheckCallout glass />
+              </div>
+            ) : null}
+            {first && !live && connected ? (
+              <div className="pointer-events-auto">
+                <FirstScanCoach onDismiss={() => navigate(paths.scan(projectId), { replace: true })} />
+              </div>
+            ) : null}
           </div>
           <div className="pointer-events-auto absolute right-4 top-4">
             <ViewToolbar showGrid={showGrid} setShowGrid={setShowGrid} showTrail={showTrail} setShowTrail={setShowTrail} />

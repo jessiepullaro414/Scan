@@ -2,8 +2,11 @@
 import { create } from "zustand";
 import { ApiError, api } from "../api/http";
 import type { ConnectBody, ConnectSource, DeviceState, Emitters } from "../api/types";
-import { isActive, useJobs } from "./jobs";
+import { storage } from "../lib/util";
+import { isActive, isDemoJob, useJobs } from "./jobs";
 import { toast } from "./toasts";
+
+const DEMO_KEY = "ohs.simDemoSeen";
 
 type DeviceStore = {
   device: DeviceState | null;
@@ -13,6 +16,12 @@ type DeviceStore = {
   pendingSource: ConnectSource | null;
   /** Job building the simulator demo after a 202 from connect. */
   simJobId: string | null;
+  /**
+   * The simulator has connected before on this engine, so its demo recording exists and the
+   * next start is immediate. DeviceState has no flag for it (`sim_scene` is null unless the
+   * simulator is connected), so the UI remembers it.
+   */
+  simSeen: boolean;
   fetch: () => Promise<void>;
   apply: (d: DeviceState) => void;
   connect: (body: ConnectBody) => Promise<boolean>;
@@ -34,18 +43,26 @@ export const useDevice = create<DeviceStore>((set, get) => ({
   pending: null,
   pendingSource: null,
   simJobId: null,
+  simSeen: storage.get<boolean>(DEMO_KEY, false),
 
   fetch: async () => {
     set({ loading: true });
     try {
       const device = await api.device();
-      set({ device, loading: false, error: null });
+      get().apply(device);
+      set({ loading: false, error: null });
     } catch (e) {
       set({ loading: false, error: e instanceof ApiError ? e : null });
     }
   },
 
-  apply: (device) => set({ device }),
+  apply: (device) => {
+    if (device.source === "sim" && device.connected && !get().simSeen) {
+      storage.set(DEMO_KEY, true);
+      set({ simSeen: true });
+    }
+    set({ device });
+  },
 
   connect: async (body) => {
     set({ pending: "connect", pendingSource: body.source });
@@ -62,7 +79,8 @@ export const useDevice = create<DeviceStore>((set, get) => ({
         void get().fetch();
         return true;
       }
-      set({ device: r.device, pending: null, pendingSource: null });
+      get().apply(r.device);
+      set({ pending: null, pendingSource: null });
       return true;
     } catch (e) {
       set({ pending: null, pendingSource: null });
@@ -100,6 +118,15 @@ export const useDevice = create<DeviceStore>((set, get) => ({
     }
   },
 }));
+
+/** Is the simulator demo recording known to exist (so the first-start note can go)? */
+export function useSimDemoReady(): boolean {
+  // The engine says so (DeviceState.sim_demo_ready, M2); older engines: what this window has seen.
+  const known = useDevice((s) => s.device?.sim_demo_ready === true);
+  const seen = useDevice((s) => s.simSeen || (s.device?.source === "sim" && s.device.connected));
+  const jobDone = useJobs((s) => Object.values(s.jobs).some((j) => isDemoJob(j) && j.state === "done"));
+  return known || seen || jobDone;
+}
 
 // When the simulator demo job finishes, the device connects itself: refresh and report.
 useJobs.subscribe((s, prev) => {

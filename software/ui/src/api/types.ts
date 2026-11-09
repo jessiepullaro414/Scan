@@ -1,5 +1,5 @@
 /**
- * Types of the OpenHandScan Studio app API (software/docs/APP_API.md, v1 / milestone 1).
+ * Types of the OpenHandScan Studio app API (software/docs/APP_API.md, v2: milestones 1 and 2).
  * JSON is snake_case; lengths are mm, times are seconds, timestamps are ISO 8601.
  */
 
@@ -18,14 +18,34 @@ export type CalibrationInfo = {
   imu: boolean;
 };
 
+export type PicoState = {
+  connected: boolean;
+  firmware: string | null; // e.g. "ohs-fw 1.0.0"
+  emitters: Emitters;
+  // extras (APP_API.md, "API deviations"): optional
+  imu?: string | null; // the IMU the firmware reports, e.g. "LSM6DSOX" or "NONE"
+  port?: string | null;
+  error?: string | null;
+};
+
 export type DeviceState = {
   source: Source;
   connected: boolean;
   busy: string | null; // e.g. "Generating simulator demo…"
   camera: { connected: boolean; info: Record<string, unknown> } | null;
-  pico: { connected: boolean; firmware: string | null; emitters: Emitters } | null;
+  pico: PicoState | null;
   calibration: CalibrationInfo;
   replay: { path: string; loop: boolean } | null;
+  /** M2: the silent drift check run after each connect (absent from an M1 engine). */
+  launch_check?: LaunchCheck | null;
+  /** M2: what the simulator shows; null unless the source is "sim". */
+  sim_scene?: SimScene | null;
+  /** M2 extra: the simulator demo recording exists (connecting the simulator is instant). */
+  sim_demo_ready?: boolean;
+  // extras (APP_API.md, "API deviations"): optional
+  error?: string | null;
+  warnings?: string[];
+  imu_stream?: boolean;
 };
 
 export type ScanMode = "markerless" | "markers";
@@ -123,9 +143,25 @@ export type JobMsg = { type: "job" } & Job;
 export type LogLevel = "info" | "warn" | "error";
 export type LogMsg = { type: "log"; level: LogLevel; message: string };
 
-export type ServerTextMsg = HelloMsg | StatusMsg | PoseMsg | GhostMsg | DeviceMsg | SessionMsg | JobMsg | LogMsg;
+export type CalibLiveMsg = CalibLive; // type: "calib"
+export type CalibSessionMsg = { type: "calib_session" } & CalibSession;
+export type SetupMsg = { type: "setup" } & SetupState;
 
-export type PreviewCamera = "left" | "depth";
+export type ServerTextMsg =
+  | HelloMsg
+  | StatusMsg
+  | PoseMsg
+  | GhostMsg
+  | DeviceMsg
+  | SessionMsg
+  | JobMsg
+  | LogMsg
+  | CalibLiveMsg
+  | CalibSessionMsg
+  | SetupMsg;
+
+/** `calib_left` / `calib_right`: the calibration views (M2), about 640 px wide. */
+export type PreviewCamera = "left" | "depth" | "calib_left" | "calib_right";
 export type PreviewHeader = { type: "preview"; camera: PreviewCamera; format: "jpeg"; w: number; h: number; seq: number };
 export type MeshHeader = {
   type: "mesh";
@@ -135,3 +171,246 @@ export type MeshHeader = {
   units: "mm";
   frame: "world";
 };
+
+// ================================================================== M2: setup and calibration
+// APP_API.md "M2: setup and calibration". Everything here adds to M1; nothing in M1 changes.
+
+export type CalibKind = "stereo" | "lasers" | "imu" | "check";
+/** "sim" while the simulator is connected (a sandbox file), "device" otherwise. */
+export type CalibTarget = "device" | "sim";
+export type SimScene = "demo" | "calib_stereo" | "calib_lasers" | "calib_imu" | "calib_check";
+
+export type LaunchCheckState = "running" | "ok" | "drift" | "unknown";
+export type LaunchCheck = {
+  state: LaunchCheckState;
+  dv_px: number | null; // median rectified row error, full-resolution px
+  matches: number;
+  message: string | null;
+  when: string;
+};
+
+// ------------------------------------------------------------------ setup
+export type StepId = "connect" | "selftest" | "print" | "stereo" | "lasers" | "imu" | "check";
+export type StepState = "done" | "todo" | "warn" | "optional";
+export type SetupStep = { id: StepId; state: StepState; summary: string; when: string | null };
+/** Recorded by Studio when it saved that part of the calibration. */
+export type PartInfo = { when: string; summary: string; session: string | null };
+export type Paper = "letter" | "a4";
+
+export type SetupCalibration = {
+  path: string;
+  exists: boolean;
+  modified: string | null;
+  image_size: [number, number] | null;
+  baseline_mm: number | null;
+  stereo: boolean;
+  lasers: string[];
+  imu: boolean;
+  parts: { stereo: PartInfo | null; lasers: PartInfo | null; imu: PartInfo | null };
+  backup: string | null; // the previous version (calibration.json.bak), if any
+};
+
+export type BoardInfo = {
+  squares_x: number;
+  squares_y: number;
+  square_mm: number;
+  marker_mm: number; // as printed (config [board])
+  dictionary: string;
+  paper: Paper;
+  scale: number; // measured print scale used for calibration (1 = exact)
+  describe: string;
+};
+
+export type SetupState = {
+  target: CalibTarget;
+  first_run: boolean; // the target has no stereo calibration and the wizard was not dismissed
+  dismissed: boolean;
+  steps: SetupStep[]; // always all seven, in StepId order
+  calibration: SetupCalibration;
+  selftest: SelfTestResult | null; // the last self-test for this target
+  print_check: PrintCheck | null; // null for the sim target (its board is virtual and exact)
+  board: BoardInfo;
+  launch_check: LaunchCheck | null;
+  last_check: { when: string; ok: boolean; verdict: string } | null;
+};
+
+export type CheckStatus = "PASS" | "WARN" | "FAIL" | "SKIP" | "INFO";
+export type SelfTestCheck = { name: string; status: CheckStatus; detail: string; fix: string | null }; // fix: plain words
+export type SelfTestResult = {
+  overall: "PASS" | "WARN" | "FAIL";
+  when: string;
+  source: "camera" | "replay" | "sim";
+  checks: SelfTestCheck[];
+};
+
+export type CameraProbe = {
+  index: number;
+  width: number;
+  height: number;
+  fps: number;
+  fourcc: string;
+  name: string | null;
+  stereo_like: boolean;
+  configured: boolean;
+  in_use: boolean;
+};
+export type DevicesProbe = { cameras: CameraProbe[]; pico_port: string | null; configured_index: number; note: string | null };
+
+export type PrintFileKind = "board" | "tags" | "mask";
+export type PrintFile = {
+  name: string;
+  kind: PrintFileKind;
+  title: string;
+  description: string;
+  url: string;
+  preview_url: string | null;
+  bytes: number;
+};
+export type Printables = { dir: string; generated: string | null; paper: Paper; files: PrintFile[] };
+export type PrintCheck = {
+  measured_mm: number;
+  error_pct: number;
+  ok: boolean;
+  scale: number;
+  verdict: string;
+  can_apply: boolean;
+  when: string;
+};
+
+// ------------------------------------------------------------------ calibration session
+/** capturing: stereo / lasers / check take views. armed -> recording: the IMU step (hold still, then rotate). */
+export type CalibState = "idle" | "capturing" | "armed" | "recording" | "solving" | "result" | "saved";
+
+export type CalibView = {
+  index: number;
+  t: number;
+  auto: boolean;
+  corners_left: number;
+  corners_right: number | null;
+  distance_mm: number | null;
+  tilt_deg: number | null;
+  lines: { vertical: number; horizontal: number } | null; // laser points on the page margin
+  thumb_url: string;
+  error_px: number | null; // after a solve
+  bad: boolean; // after a solve
+  warnings: string[];
+};
+
+export type CalibMetric = { label: string; value: string; ok: boolean | null; help: string };
+export type CalibAdviceAction =
+  | "add_views"
+  | "remove_bad_views"
+  | "start_over"
+  | "recalibrate_stereo"
+  | "reprint"
+  | "check_board";
+export type CalibAdvice = { text: string; action: CalibAdviceAction | null };
+export type CalibGrade = "excellent" | "good" | "usable" | "poor" | "failed";
+
+export type CalibResult = {
+  kind: CalibKind;
+  ok: boolean;
+  grade: CalibGrade;
+  headline: string; // e.g. "Excellent stereo calibration"
+  verdict: string; // one or two plain sentences: what happened and what it means
+  metrics: CalibMetric[]; // plain-language rows
+  advice: CalibAdvice[];
+  per_view: { index: number; error_px: number; bad: boolean }[];
+  sim_truth: CalibMetric[] | null; // simulator only: the estimate against the true calibration
+  can_save: boolean; // false for "check" and for "failed"
+  report_url: string;
+};
+
+export type CalibSession = {
+  state: CalibState;
+  kind: CalibKind | null;
+  target: CalibTarget;
+  id: string | null;
+  started: string | null;
+  auto: boolean; // auto-capture on (default)
+  views: CalibView[];
+  target_views: [number, number];
+  min_views: number;
+  guidance: string; // the one-line how-to for this kind
+  emitters: string; // e.g. "Line lasers on: Class 3R, never look into the beams"
+  job_id: string | null; // the solve job
+  result: CalibResult | null;
+  recording: string | null; // folder of the captured views
+  saved: { path: string; backup: string | null; notes: string[] } | null;
+};
+
+export type CalibHintTilt = "left" | "right" | "up" | "down" | "more";
+export type CalibHint = {
+  text: string; // "Move the board to the top-left corner"
+  region: [number, number, number, number] | null; // x0, y0, x1, y1 as fractions of the image
+  tilt: CalibHintTilt | null;
+  distance: "closer" | "farther" | null;
+};
+
+export type CalibCoverage = {
+  cols: number;
+  rows: number;
+  left: number[]; // views per cell, row-major
+  right: number[] | null;
+  left_pct: number;
+  right_pct: number | null;
+};
+
+export type CalibDiversity = {
+  flat: number;
+  tilt_left: number;
+  tilt_right: number;
+  tilt_up: number;
+  tilt_down: number;
+  near: number;
+  mid: number;
+  far: number;
+}; // captured views per pose bin
+
+export type ImuPhase = "armed" | "still" | "rotate" | "done";
+export type CalibImuLive = {
+  phase: ImuPhase;
+  elapsed_s: number;
+  still_s: number;
+  min_s: number;
+  max_s: number;
+  gyro_dps: number;
+  board_pct: number;
+};
+
+export type CalibLines = { vertical: number; horizontal: number; vertical_uv: number[]; horizontal_uv: number[] };
+
+/** The `calib` WebSocket message, about 10 Hz while a session is active. */
+export type CalibLive = {
+  type: "calib";
+  t: number;
+  kind: CalibKind;
+  state: CalibState;
+  image_size: [number, number]; // full-resolution size of one camera image; every coordinate below is in it
+  fps: number; // processed frames per second
+  left: { corners: number[] } | null; // flattened [u0, v0, u1, v1, ...]
+  right: { corners: number[] } | null; // stereo only
+  common: number | null; // stereo: corners seen by both cameras
+  board_found: boolean;
+  distance_mm: number | null;
+  tilt_deg: number | null;
+  outline: number[] | null; // board outline, 4 points
+  page: number[] | null; // lasers / check: page outline, 4 points
+  lines: CalibLines | null;
+  ready: boolean; // a capture now would be accepted
+  reason: string | null; // why not
+  steady: number; // 0..1: progress of the auto-capture hold
+  auto: boolean;
+  hint: CalibHint | null;
+  coverage: CalibCoverage | null;
+  diversity: CalibDiversity | null;
+  views: number;
+  target_views: [number, number];
+  imu: CalibImuLive | null;
+};
+
+// ------------------------------------------------------------------ M2 request / reply bodies
+export type CameraSettingsBody = { index?: number; swap_lr?: boolean };
+export type OpenFolderReply = { opened: boolean; dir: string };
+export type CaptureReply = { view: CalibView; session: CalibSession };
+export type SaveReply = { session: CalibSession; setup: SetupState };

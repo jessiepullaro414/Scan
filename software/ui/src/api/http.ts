@@ -6,17 +6,28 @@
  * the same in both modes. Errors become `ApiError` carrying the API's `detail` and `hint`.
  */
 import type {
+  CalibKind,
+  CalibSession,
+  CameraSettingsBody,
+  CaptureReply,
   ConnectBody,
   DeviceState,
+  DevicesProbe,
   Emitters,
   Health,
   Job,
+  OpenFolderReply,
+  Paper,
+  Printables,
+  PrintCheck,
   ProcessQuality,
   Project,
   ProjectSummary,
+  SaveReply,
   Scan,
   SessionState,
   Settings,
+  SetupState,
   StartBody,
 } from "./types";
 
@@ -125,6 +136,7 @@ const patch = async <T>(path: string, body: unknown) => (await send<T>("PATCH", 
 const del = async (path: string) => {
   await send<void>("DELETE", path);
 };
+const delJson = async <T>(path: string) => (await send<T>("DELETE", path)).data;
 
 const enc = encodeURIComponent;
 
@@ -168,6 +180,40 @@ export const api = {
   cancelJob: (jid: string) => post<Job>(`/api/jobs/${enc(jid)}/cancel`),
 
   settings: () => get<Settings>("/api/settings"),
+
+  // ---------------------------------------------------------------- M2: setup
+  setup: () => get<SetupState>("/api/setup"),
+  dismissSetup: (dismissed: boolean) => post<SetupState>("/api/setup/dismiss", { dismissed }),
+  /** Job (kind `selftest`); while it runs, `job.message` is the instruction for the user. */
+  runSelftest: () => post<Job>("/api/setup/selftest"),
+  devices: () => get<DevicesProbe>("/api/setup/devices"),
+  /** Written to the config file; takes effect on the next connect. */
+  setCamera: (body: CameraSettingsBody) => post<Settings>("/api/settings/camera", body),
+  printables: () => get<Printables>("/api/setup/printables"),
+  /** Job (kind `printables`, result `Printables`). A paper change is saved to `board.paper`. */
+  generatePrintables: (paper?: Paper) => post<Job>("/api/setup/printables", paper ? { paper } : {}),
+  printableUrl: (name: string) => `/api/setup/printables/files/${enc(name)}`,
+  openPrintables: () => post<OpenFolderReply>("/api/setup/printables/open"),
+  printCheck: (measured_mm: number, apply?: boolean) =>
+    post<PrintCheck>("/api/setup/print-check", apply ? { measured_mm, apply: true } : { measured_mm }),
+
+  // ---------------------------------------------------------------- M2: calibration session
+  calibration: () => get<CalibSession>("/api/calibration"),
+  calibStart: (kind: CalibKind) => post<CalibSession>("/api/calibration/start", { kind }),
+  /** 409 with the plain reason when the current view can't be used. */
+  calibCapture: () => post<CaptureReply>("/api/calibration/capture"),
+  calibDeleteView: (index: number) => delJson<CalibSession>(`/api/calibration/views/${enc(String(index))}`),
+  calibAuto: (enabled: boolean) => post<CalibSession>("/api/calibration/auto", { enabled }),
+  calibImuStart: () => post<CalibSession>("/api/calibration/imu/start"),
+  calibImuStop: () => post<CalibSession>("/api/calibration/imu/stop"),
+  /** Job (kind `calibrate`): the session goes to `solving`, then `result`. */
+  calibSolve: () => post<Job>("/api/calibration/solve"),
+  calibContinue: () => post<CalibSession>("/api/calibration/continue"),
+  /** `force` is needed when `result.ok` is false; 409 for `check` and `failed` results. */
+  calibSave: (force?: boolean) => post<SaveReply>("/api/calibration/save", force ? { force: true } : {}),
+  calibCancel: () => post<CalibSession>("/api/calibration/cancel"),
+  calibThumbUrl: (index: number) => `/api/calibration/views/${enc(String(index))}/thumb.jpg`,
+  calibReportUrl: () => "/api/calibration/report.json",
 
   /** URL of a result file (`mesh.ply`, `mesh.stl`, `laser_points.ply`, `report.json`). */
   fileUrl: (pid: string, sid: string, name: string) => `/api/projects/${enc(pid)}/scans/${enc(sid)}/files/${enc(name)}`,
@@ -216,13 +262,19 @@ export const api = {
   rawFetch: (url: string) => fetchImpl(url),
 };
 
+/** "the device is busy" → "The device is busy" (the engine writes its messages in lower case). */
+export function sentence(s: string): string {
+  return s ? s.charAt(0).toUpperCase() + s.slice(1) : s;
+}
+
 /** Normalise anything thrown into an ApiError-like shape for toasts. */
 export function describeError(err: unknown): { detail: string; hint: string | null } {
-  if (err instanceof ApiError) return { detail: err.detail, hint: err.hint };
-  if (err instanceof Error) return { detail: err.message, hint: null };
+  const out = (detail: string, hint: string | null) => ({ detail: sentence(detail), hint: hint ? sentence(hint) : null });
+  if (err instanceof ApiError) return out(err.detail, err.hint);
+  if (err instanceof Error) return out(err.message, null);
   if (err && typeof err === "object" && typeof (err as { detail?: unknown }).detail === "string") {
     const h = (err as { hint?: unknown }).hint;
-    return { detail: (err as { detail: string }).detail, hint: typeof h === "string" ? h : null };
+    return out((err as { detail: string }).detail, typeof h === "string" ? h : null);
   }
-  return { detail: String(err), hint: null };
+  return out(String(err), null);
 }

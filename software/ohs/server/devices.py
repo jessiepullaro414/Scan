@@ -14,15 +14,33 @@
   calibration. The first time, a ``generate_demo`` job renders it (about a minute): ``connect``
   returns that job, ``busy`` says so, and the device connects by itself when the job is done.
 
+**Simulator scenes** (M2): :meth:`DeviceManager.set_sim_scene` swaps the sim connection between
+the scan demo (``"demo"``) and a live virtual scanner looking at the printed ChArUco page
+(``"calib_stereo"`` / ``"calib_lasers"`` / ``"calib_imu"`` / ``"calib_check"``:
+``sim_camera_factory(script, cfg)``, by default :class:`ohs.sim.board_camera.SimBoardCamera` with
+the configured board and paper). Its ``feed`` (IMU) replaces the replay feed. A calibration scene
+carries the simulator's *sandbox* calibration (``sim_calib_path``), never the demo's truth.
+A swap is not a new connection: no "Connected" message, no launch check.
+
 Threads per connection (daemon threads, joined on disconnect):
 
 * ``ohs-capture`` reads every frame (``read()`` never returns the same frame twice), feeds the
-  replay IMU/events up to the frame time, and routes the frame: to the attached
-  :class:`~ohs.server.session.ScanSession` while one is attached, else to the idle preview.
+  replay IMU/events up to the frame time, and routes the frame: to the attached sink
+  (:class:`~ohs.server.session.ScanSession` or
+  :class:`~ohs.server.calibration.CalibrationSession`) while one is attached, else to the idle
+  preview. Frame *taps* (:meth:`DeviceManager.add_tap`, the self-test on a stream) see every
+  frame and IMU sample as well.
 * ``ohs-pico`` drains the Pico's IMU and button queues every 5 ms. Trigger: a press shorter
   than 1 s is a "short" press, longer a "long" press (``on_trigger``).
 * ``ohs-preview`` (idle only): rectify + depth + laser lines at ~10 Hz for the previews and the
-  distance gauge, only while a client is connected.
+  distance gauge, only while a client is connected, with the connection's current calibration
+  (:meth:`DeviceManager.reload_calibration` after a save). It also collects the **launch check**
+  frames, whether or not a client wants previews.
+* ``ohs-launch-check`` (once per connection with a calibration): after each connect, 3 idle
+  frames about 0.3 s apart go through ``drift_check`` (:func:`ohs.calib.drift.drift_check`:
+  rectified row error of matched left/right features). ``DeviceState.launch_check`` shows the
+  result; only ``"drift"`` warns (a ``warn`` log and a ``warnings`` entry). ``on_launch_check``
+  tells the owner (setup state).
 
 Failures (camera gone, end of a non-looping replay, Pico lost) switch the emitters off at once in
 the device thread, then are reported through ``on_lost(kind, message)`` for the owner to stop a
@@ -46,19 +64,22 @@ import numpy as np
 
 from ohs.server.demo import DEFAULT_DEMO, DemoParams, demo_path, demo_ready, generate_demo
 from ohs.server.imaging import PreviewPublisher, ViewTools, central_distance
-from ohs.server.protocol import ApiError
+from ohs.server.protocol import ApiError, now_iso
 from ohs.server.util import RateMeter, join_thread, safe_call
 
-__all__ = ["DeviceManager", "ReplayFeed", "SOURCES"]
+__all__ = ["DeviceManager", "ReplayFeed", "SOURCES", "SIM_SCENES"]
 
 log = logging.getLogger(__name__)
 
 SOURCES = ("camera", "replay", "sim")
+SIM_SCENES = ("demo", "calib_stereo", "calib_lasers", "calib_imu", "calib_check")
 IMU_HISTORY_S = 1.0
 REPLAY_LOOKAHEAD_S = 0.05
 LONG_PRESS_S = 1.0
 IDLE_VIEW_HZ = 10.0
 IDLE_VIEW_BUSY_HZ = 2.0  # while a scan is being processed: leave the CPU to the processing job
+LAUNCH_FRAMES = 3  # idle frames for the launch check ...
+LAUNCH_SPACING_S = 0.3  # ... this far apart (frame clock)
 _LEVEL_NAMES = ("vertical", "horizontal", "dots")
 
 
@@ -154,6 +175,10 @@ class _Connection:
     scan_levels: tuple[float, float, float] | None = None
     preview_slot: Any = None
     warnings: list[str] = field(default_factory=list)
+    sim_scene: str | None = None
+    launch_check: dict | None = None
+    launch_pending: bool = False
+    launch_frames: list = field(default_factory=list)
 
 
 def _calib_summary(calib: Any, path: str | None) -> dict:
@@ -174,7 +199,12 @@ class DeviceManager:
                  on_trigger: Callable[[str], None] | None = None,
                  camera_factory: Callable[[Any], Any] | None = None,
                  pico_factory: Callable[[Any], Any] | None = None,
-                 demo_params: DemoParams = DEFAULT_DEMO) -> None:
+                 demo_params: DemoParams = DEFAULT_DEMO,
+                 sim_camera_factory: Callable[[str, Any], Any] | None = None,
+                 drift_check: Callable[..., dict] | None = None,
+                 sim_calib_path: str | Path | None = None,
+                 on_connected: Callable[[str], None] | None = None,
+                 on_launch_check: Callable[[str, dict], None] | None = None) -> None:
         self.cfg = cfg
         self.hub = hub
         self.jobs = jobs
@@ -184,14 +214,20 @@ class DeviceManager:
         self._on_change = on_change or (lambda: None)
         self._on_lost = on_lost or (lambda kind, msg: None)
         self._on_trigger = on_trigger or (lambda kind: None)
+        self._on_connected = on_connected or (lambda source: None)
+        self._on_launch_check = on_launch_check or (lambda source, result: None)
         self.camera_factory = camera_factory or self._default_camera
         self.pico_factory = pico_factory or self._default_pico
+        self.sim_camera_factory = sim_camera_factory or self._default_sim_camera
+        self.drift_check = drift_check
+        self.sim_calib_path = Path(sim_calib_path) if sim_calib_path is not None else None
         self._lock = threading.RLock()  # short critical sections (state, sink)
         self._op_lock = threading.Lock()  # serialises connect / disconnect (long)
         self._imu_lock = threading.Lock()
         self._recent_imu: collections.deque = collections.deque(maxlen=8192)
         self._conn: _Connection | None = None
         self._sink: Any = None
+        self._taps: tuple = ()  # copy-on-write (read without a lock by the device threads)
         self._ids = 0
         self.busy: str | None = None
         self.demo_job: Any = None
@@ -211,6 +247,12 @@ class DeviceManager:
         from ohs.devices.pico import Pico
 
         return Pico(cfg.pico)
+
+    @staticmethod
+    def _default_sim_camera(script: str, cfg: Any) -> Any:
+        from ohs.sim.board_camera import SimBoardCamera
+
+        return SimBoardCamera(script, spec=cfg.board.spec(), paper=cfg.board.paper)
 
     # ------------------------------------------------------------------ queries
     @property
@@ -252,8 +294,45 @@ class DeviceManager:
         if c is None:
             return False
         if c.feed is not None:
-            return c.feed.has_imu
+            return bool(c.feed.has_imu)
         return bool(c.imu_live)
+
+    @property
+    def sim_scene(self) -> str | None:
+        c = self._conn
+        return c.sim_scene if c is not None and c.source == "sim" else None
+
+    def sim_camera(self) -> Any:
+        """The virtual scanner of a simulator calibration scene (``true_calibration``, ``restart``), else None."""
+        c = self._conn
+        if c is None or c.source != "sim" or c.sim_scene in (None, "demo"):
+            return None
+        return c.camera
+
+    def camera_index(self) -> int | None:
+        """OpenCV index of the connected camera (None unless the source is the camera)."""
+        c = self._conn
+        if c is None or c.source != "camera":
+            return None
+        info = safe_call("reading the camera info", lambda: dict(getattr(c.camera, "info", {}) or {})) or {}
+        try:
+            return int(info.get("index", self.cfg.camera.index))
+        except (TypeError, ValueError):
+            return int(self.cfg.camera.index)
+
+    def camera_info(self) -> dict:
+        c = self._conn
+        if c is None:
+            return {}
+        return dict(safe_call("reading the camera info", lambda: dict(getattr(c.camera, "info", {}) or {})) or {})
+
+    def pico_hello(self) -> dict:
+        c = self._conn
+        return dict(c.pico_hello or {}) if c is not None and c.pico is not None else {}
+
+    def launch_check(self) -> dict | None:
+        c = self._conn
+        return None if c is None or c.launch_check is None else dict(c.launch_check)
 
     def source_name(self) -> str:
         """``source`` for the recording's meta.json ("camera", or the replayed recording's source)."""
@@ -281,14 +360,20 @@ class DeviceManager:
         c = self._conn
         return {} if c is None else dict(c.idle_stats)
 
+    def sim_demo_ready(self) -> bool:
+        """True when the simulator demo recording exists, so connecting the simulator is instant."""
+        return bool(safe_call("checking the simulator demo", lambda: demo_ready(demo_path(self.demo_dir))))
+
     def state(self) -> dict:
-        """``DeviceState`` (APP_API.md) plus ``error``, ``warnings`` and ``imu_stream``."""
+        """``DeviceState`` (APP_API.md, with M2's ``launch_check`` and ``sim_scene``) plus ``error``,
+        ``warnings``, ``imu_stream`` and ``sim_demo_ready``."""
         c = self._conn
         if c is None:
             calib, path = self._config_calibration()
             return {"source": "none", "connected": False, "busy": self.busy, "camera": None, "pico": None,
                     "calibration": _calib_summary(calib, path), "replay": None, "error": self.last_error,
-                    "warnings": [], "imu_stream": False}
+                    "warnings": [], "imu_stream": False, "launch_check": None, "sim_scene": None,
+                    "sim_demo_ready": self.sim_demo_ready()}
         info = dict(safe_call("reading the camera info", lambda: dict(getattr(c.camera, "info", {}) or {})) or {})
         info["measured_fps"] = round(c.cam_rate.value(), 2)
         info["frames"] = c.n_frames
@@ -312,12 +397,18 @@ class DeviceManager:
                 warnings.append(f"the camera delivers {c.frame_size[0]}x{c.frame_size[1]} images per camera but the "
                                 f"calibration is for {want[0]}x{want[1]}: set camera.width / camera.height to the "
                                 "calibrated mode, or calibrate this mode")
+        replay = None
+        if c.source == "replay" or (c.source == "sim" and c.replay_path is not None):
+            replay = {"path": str(c.replay_path), "loop": bool(c.loop)}
         return {
             "source": c.source, "connected": True, "busy": self.busy,
             "camera": {"connected": True, "info": info}, "pico": pico,
             "calibration": _calib_summary(c.calib, c.calib_path),
-            "replay": {"path": str(c.replay_path), "loop": bool(c.loop)} if c.source in ("replay", "sim") else None,
+            "replay": replay,
             "error": self.last_error, "warnings": warnings, "imu_stream": self.imu_available(),
+            "launch_check": None if c.launch_check is None else dict(c.launch_check),
+            "sim_scene": c.sim_scene if c.source == "sim" else None,
+            "sim_demo_ready": self.sim_demo_ready(),
         }
 
     def _config_calibration(self) -> tuple[Any, str | None]:
@@ -342,7 +433,8 @@ class DeviceManager:
         if self.busy:
             raise ApiError(409, f"the device is busy: {self.busy}", "wait until it finishes (or cancel its job)")
         if self._sink is not None:
-            raise ApiError(409, "a scan is running", "stop the scan before changing the device")
+            raise ApiError(409, "the device is in use by a scan or a calibration",
+                           "stop the scan, or finish or cancel the calibration, before changing the device")
         if source == "replay" and not recording:
             raise ApiError(400, "replay needs a recording folder", 'send {"source": "replay", "recording": "<folder>"}')
         if source == "sim":
@@ -360,10 +452,90 @@ class DeviceManager:
             elif source == "replay":
                 conn = self._open_replay(Path(str(recording)).expanduser(), bool(loop) if loop is not None else False, "replay")
             else:
-                conn = self._open_replay(demo_path(self.demo_dir), True, "sim")
+                conn = self._open_demo()
             self._start(conn)
         self._on_change()
         return None
+
+    def set_busy(self, text: str | None) -> None:
+        """Mark the device busy (e.g. "Running the self-test…"; connect is refused meanwhile), or clear it."""
+        with self._lock:
+            if text is not None and self.busy:
+                raise ApiError(409, f"the device is busy: {self.busy}", "wait until it finishes")
+            self.busy = text
+        self._on_change()
+
+    # ------------------------------------------------------------------ simulator scenes
+    def _open_demo(self) -> _Connection:
+        conn = self._open_replay(demo_path(self.demo_dir), True, "sim")
+        conn.sim_scene = "demo"
+        return conn
+
+    def _sim_sandbox(self) -> tuple[Any, str | None]:
+        p = self.sim_calib_path
+        if p is None:
+            return None, None
+        if not p.is_file():
+            return None, str(p)
+        try:
+            from ohs.types import ScannerCalibration
+
+            return ScannerCalibration.load(p), str(p)
+        except Exception as e:  # reported as "not loaded"
+            log.warning("cannot read the simulator's sandbox calibration %s: %s", p, e)
+            return None, str(p)
+
+    def _open_sim_board(self, scene: str) -> _Connection:
+        script = scene.split("_", 1)[1]
+        self.busy = "Preparing the virtual calibration board…"
+        self._on_change()
+        cam = None
+        try:
+            try:
+                cam = self.sim_camera_factory(script, self.cfg)
+                cam.open()
+            except ImportError as e:
+                raise ApiError(503, f"the simulator's calibration board is not available in this version ({e})",
+                               "update OpenHandScan, or calibrate the real scanner") from e
+            except Exception as e:
+                if cam is not None:
+                    safe_call("closing the virtual camera", cam.close)
+                raise ApiError(503, f"the simulator's calibration board could not start: {e}",
+                               "try again; if it keeps failing, run `ohs -v app` and look at the log") from e
+            calib, path = self._sim_sandbox()
+            conn = _Connection(self._next_id(), "sim", cam, calib=calib, calib_path=path, loop=True)
+            conn.feed = getattr(cam, "feed", None)
+            conn.sim_scene = scene
+            return conn
+        finally:
+            self.busy = None
+
+    def set_sim_scene(self, scene: str) -> None:
+        """Switch the simulator to ``scene`` (SIM_SCENES). The caller detaches any sink first."""
+        if scene not in SIM_SCENES:
+            raise ApiError(400, f"unknown simulator scene {scene!r}", "use " + ", ".join(SIM_SCENES))
+        with self._op_lock:
+            conn = self._conn
+            if conn is None or conn.source != "sim":
+                raise ApiError(409, "the simulator is not connected", "connect the simulator first")
+            if conn.sim_scene == scene:
+                return
+            if self._sink is not None:
+                raise ApiError(409, "the simulator is in use", "stop the scan or the calibration first")
+            self._disconnect_locked("switching the simulator scene", quiet=True)
+            try:
+                new = self._open_demo() if scene == "demo" else self._open_sim_board(scene)
+            except BaseException:
+                if scene != "demo":  # never leave the user without the simulator
+                    try:
+                        self._start(self._open_demo(), fresh=False)
+                    except Exception:
+                        log.exception("reconnecting the simulator demo failed")
+                self._on_change()
+                raise
+            self._start(new, fresh=False)
+        log.info("simulator scene: %s", scene)
+        self._on_change()
 
     def _next_id(self) -> int:
         with self._lock:
@@ -440,10 +612,15 @@ class DeviceManager:
             conn.warnings.append("the recording has no IMU data: tracking runs without the gyro prior")
         return conn
 
-    def _start(self, conn: _Connection) -> None:
+    def _start(self, conn: _Connection, fresh: bool = True) -> None:
+        """Run a connection. ``fresh``: a new connection (message, launch check, ``on_connected``);
+        False for a simulator scene swap."""
         from ohs.app.live import LatestSlot
 
         conn.preview_slot = LatestSlot()
+        if fresh and conn.calib is not None:
+            conn.launch_check = {"state": "running", "dv_px": None, "matches": 0, "message": None, "when": now_iso()}
+            conn.launch_pending = True
         with self._lock:
             self._conn = conn
             self.last_error = None
@@ -453,11 +630,14 @@ class DeviceManager:
         if conn.pico is not None:
             self._thread(conn, "ohs-pico", self._pico_loop)
         self._thread(conn, "ohs-preview", self._preview_loop)
-        what = {"camera": "camera", "replay": f"replay of {conn.replay_path}", "sim": "simulator demo"}[conn.source]
-        self._notify("info", f"Connected: {what}")
+        sim_what = "simulator demo" if conn.sim_scene in (None, "demo") else f"simulator ({conn.sim_scene})"
+        what = {"camera": "camera", "replay": f"replay of {conn.replay_path}", "sim": sim_what}[conn.source]
         for w in conn.warnings:
             log.warning("%s", w)
         log.info("device connected: %s", what)
+        if fresh:
+            self._notify("info", f"Connected: {what}")
+            safe_call("recording the connection", lambda: self._on_connected(conn.source))
 
     @staticmethod
     def _thread(conn: _Connection, name: str, fn: Callable[[_Connection], None]) -> None:
@@ -471,7 +651,7 @@ class DeviceManager:
             self._disconnect_locked(reason)
         self._on_change()
 
-    def _disconnect_locked(self, reason: str) -> None:
+    def _disconnect_locked(self, reason: str, quiet: bool = False) -> None:
         with self._lock:
             conn, self._conn = self._conn, None
             self._sink = None
@@ -479,13 +659,14 @@ class DeviceManager:
             return
         self._emitters_off(conn)
         conn.stop.set()
-        for name in ("ohs-capture", "ohs-pico", "ohs-preview"):
+        for name in ("ohs-capture", "ohs-pico", "ohs-preview", "ohs-launch-check"):
             join_thread(conn.threads.get(name), 5.0)
         if conn.pico is not None:
             safe_call("closing the Pico", conn.pico.close)
         safe_call("closing the camera", conn.camera.close)
         log.info("device disconnected (%s)", reason or "requested")
-        self._notify("info", "Disconnected" + (f": {reason}" if reason else ""))
+        if not quiet:
+            self._notify("info", "Disconnected" + (f": {reason}" if reason else ""))
 
     def handle_lost(self, kind: str, message: str) -> None:
         """Act on a reported failure (called by the owner, not from a device thread)."""
@@ -566,6 +747,7 @@ class DeviceManager:
                 hist = [s for s in hist if s.t_host >= t_ref - IMU_HISTORY_S]
             with self._lock:
                 self._sink = session
+                conn.idle_stats = {}  # the idle distance gauge is stale while a session has the frames
             safe_call("seeding the IMU history", lambda: session.seed_imu(hist))
 
     def detach(self) -> None:
@@ -574,6 +756,30 @@ class DeviceManager:
             self._sink = None
             if self._conn is not None:
                 self._conn.scan_levels = None
+
+    def add_tap(self, tap: Any) -> None:
+        """Also give every frame (``tap.on_frame(frame)``) and IMU batch (``tap.on_imu(samples)``) to ``tap``."""
+        with self._lock:
+            self._taps = (*self._taps, tap)
+
+    def remove_tap(self, tap: Any) -> None:
+        with self._lock:
+            self._taps = tuple(t for t in self._taps if t is not tap)
+
+    def reload_calibration(self) -> None:
+        """The camera connection re-reads the configured calibration file (after a calibration was saved)."""
+        c = self._conn
+        if c is None or c.source != "camera":
+            return
+        calib, path = self._config_calibration()
+        c.calib, c.calib_path = calib, path
+        c.warnings = [w for w in c.warnings if not w.startswith(("no calibration at ", "no IMU calibration"))]
+        if calib is None:
+            c.warnings.append(f"no calibration at {path}: run the calibration in Setup")
+        elif c.imu_live and calib.imu is None:
+            c.warnings.append("no IMU calibration: tracking runs without the gyro prior (calibrate the IMU in Setup)")
+        log.info("camera connection: calibration reloaded from %s", path)
+        self._on_change()
 
     # ------------------------------------------------------------------ emitters
     def _emitters_off(self, conn: _Connection | None = None) -> None:
@@ -589,6 +795,20 @@ class DeviceManager:
     def emitters_off(self) -> None:
         self._emitters_off()
         self._on_change()
+
+    def emitters_to(self, levels: tuple[float, float, float]) -> bool:
+        """Emitters to ``levels`` (a calibration profile). False (no error) without a Pico."""
+        c = self._conn
+        if c is None or c.pico is None or not getattr(c.pico, "connected", False):
+            return False
+        try:
+            c.pico.set_emitters(*(float(v) for v in levels))
+            return True
+        except Exception as e:
+            self._notify("warn", f"the emitters could not be switched on ({e}): check the Pico's USB cable")
+            return False
+        finally:
+            self._on_change()
 
     def scan_emitters_on(self, mode: str) -> None:
         """Emitters to the scan levels (``[emitters]`` scan profile, or the levels set during this scan)."""
@@ -677,9 +897,11 @@ class DeviceManager:
                 try:
                     sink.on_frame(f, t_recv)
                 except Exception:
-                    log.exception("the scan session rejected frame %d", f.index)
+                    log.exception("the session rejected frame %d", f.index)
             else:
                 conn.preview_slot.put(f)
+            for tap in self._taps:
+                safe_call("a frame tap", lambda: tap.on_frame(f))
 
     def _pico_loop(self, conn: _Connection) -> None:
         pico = conn.pico
@@ -708,7 +930,9 @@ class DeviceManager:
             try:
                 sink.on_imu(samples)
             except Exception:
-                log.exception("the scan session rejected IMU samples")
+                log.exception("the session rejected IMU samples")
+        for tap in self._taps:
+            safe_call("an IMU tap", lambda: tap.on_imu(samples))
 
     def _on_event(self, event: Any, control: bool) -> None:
         sink = self._sink
@@ -732,14 +956,20 @@ class DeviceManager:
     def _preview_loop(self, conn: _Connection) -> None:
         live = self.cfg.live
         rng = (float(live.depth_min_mm), float(live.depth_max_mm))
-        tools = ViewTools(conn.calib, float(live.scale), rng)
+        calib = conn.calib
+        tools = ViewTools(calib, float(live.scale), rng)
         previews = PreviewPublisher(self.hub, rng)
         t_view = 0.0
         while not conn.stop.is_set():
             f = conn.preview_slot.take(timeout=0.1)
+            if f is not None and conn.launch_pending:  # whether or not anyone wants previews
+                self._launch_collect(conn, f)
             # Idle previews (and the distance gauge) only for a UI that shows them (the Scan page)
             if f is None or self._sink is not None or not self.hub.wants("preview"):
                 continue
+            if conn.calib is not calib:  # reloaded after a calibration was saved
+                calib = conn.calib
+                tools = ViewTools(calib, float(live.scale), rng)
             now = time.monotonic()
             if now - t_view < 1.0 / (IDLE_VIEW_BUSY_HZ if self._processing() else IDLE_VIEW_HZ):
                 continue
@@ -752,3 +982,66 @@ class DeviceManager:
             except Exception:
                 log.exception("idle preview failed")
                 conn.stop.wait(1.0)
+
+    # ------------------------------------------------------------------ launch check
+    def _launch_collect(self, conn: _Connection, f: Any) -> None:
+        frames = conn.launch_frames
+        if frames and float(f.t_host) - float(frames[-1].t_host) < LAUNCH_SPACING_S:
+            return
+        frames.append(f)
+        if len(frames) < LAUNCH_FRAMES:
+            return
+        conn.launch_pending = False
+        conn.launch_frames = []
+        th = threading.Thread(target=self._run_launch_check, args=(conn, list(frames)), name="ohs-launch-check",
+                              daemon=True)
+        conn.threads["ohs-launch-check"] = th
+        th.start()
+
+    def _run_launch_check(self, conn: _Connection, frames: list) -> None:
+        """``drift_check`` on the idle frames (its own thread: it may take a second)."""
+        res: dict
+        stereo = conn.calib.stereo if conn.calib is not None else None
+        try:
+            if stereo is None:
+                raise ValueError("no calibration")
+            size = tuple(int(v) for v in frames[0].image_size)
+            if size != tuple(int(v) for v in stereo.image_size):
+                res = {"state": "unknown", "message": f"the camera delivers {size[0]}x{size[1]} images but the calibration "
+                                                      f"is for {stereo.image_size[0]}x{stereo.image_size[1]}"}
+            else:
+                fn = self.drift_check
+                if fn is None:
+                    from ohs.calib.drift import drift_check as fn
+                res = dict(fn(frames, stereo) or {})
+        except ImportError as e:
+            log.info("launch check skipped: %s", e)
+            res = {"state": "unknown", "message": "the launch check is not available in this version"}
+        except Exception as e:  # never break the connection over it
+            log.exception("the launch check failed")
+            res = {"state": "unknown", "message": f"the launch check could not run ({e})"}
+        state = str(res.get("state") or "unknown")
+        if state not in ("ok", "drift", "unknown"):
+            state = "unknown"
+        dv = res.get("dv_px")
+        try:
+            dv = None if dv is None or not math.isfinite(float(dv)) else round(float(dv), 3)
+        except (TypeError, ValueError):
+            dv = None
+        try:
+            matches = int(res.get("matches") or 0)
+        except (TypeError, ValueError):
+            matches = 0
+        lc = {"state": state, "dv_px": dv, "matches": matches, "message": res.get("message"), "when": now_iso()}
+        if conn.stop.is_set() or self._conn is not conn:
+            return
+        conn.launch_check = lc
+        log.info("launch check: %s (rows %s px, %d matches)", state, dv, matches)
+        if state == "drift":
+            rows = f" by {dv:.1f} px" if dv is not None else ""
+            msg = (f"The cameras may have moved since the calibration: matching points in the left and right images "
+                   f"disagree{rows} in height (want under 0.6 px). Run the 2-minute check (Setup, step 7).")
+            conn.warnings.append(msg)
+            self._notify("warn", msg)
+        safe_call("recording the launch check", lambda: self._on_launch_check(conn.source, dict(lc)))
+        self._on_change()

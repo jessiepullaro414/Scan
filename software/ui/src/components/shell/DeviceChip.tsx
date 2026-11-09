@@ -56,8 +56,11 @@ export function DeviceChip() {
             </div>
           ) : null}
           <div className={calibrated ? "text-ok" : "text-warn"}>
-            {calibrated ? "Calibration loaded" : "No calibration: scanning needs one"}
+            {calibrated ? "Calibration loaded" : "No calibration: calibrate in Setup"}
           </div>
+          {device?.launch_check?.state === "drift" ? (
+            <div className="text-warn">The calibration may have drifted: run the 2-minute check in Setup</div>
+          ) : null}
         </>
       ) : (
         <div className="text-muted">Choose the camera, a recording or the simulator demo on the Device page.</div>

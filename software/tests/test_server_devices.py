@@ -60,6 +60,7 @@ def _studio(tmp_path: Path, sim_rec: Path, pico: SimPico | None = None, die_afte
         return pico.pico()
 
     st = Studio(cfg, projects_dir=tmp_path / "projects", demo_dir=tmp_path / "demo", static_dir=tmp_path / "static",
+                data_dir=tmp_path / "data", config_path=tmp_path / "config.toml",
                 camera_factory=lambda _cfg: cam, pico_factory=pico_factory)
     st.startup()
     return st, cam

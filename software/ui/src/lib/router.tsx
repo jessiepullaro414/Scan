@@ -1,14 +1,21 @@
 /**
  * A small hash router: `#/path?query`. Routes are matched by patterns with `:params`.
  */
-import { useSyncExternalStore, type AnchorHTMLAttributes, type MouseEvent } from "react";
+import { useEffect, useSyncExternalStore, type AnchorHTMLAttributes, type MouseEvent } from "react";
+
+/** The setup wizard's pages after the overview (`#/setup`): the seven steps, then "done". */
+export const SETUP_PAGES = ["connect", "selftest", "print", "stereo", "lasers", "imu", "check", "done"] as const;
+export type SetupPage = (typeof SETUP_PAGES)[number];
+const isSetupPage = (s: string | undefined): s is SetupPage => !!s && (SETUP_PAGES as readonly string[]).includes(s);
 
 export type Route =
   | { name: "home" }
   | { name: "project"; pid: string }
   | { name: "viewer"; pid: string; sid: string }
-  | { name: "scan"; project: string | null }
+  | { name: "scan"; project: string | null; first: boolean }
   | { name: "device" }
+  | { name: "setup"; step: SetupPage | null }
+  /** The M1 address of the calibration page: redirects to the setup overview. */
   | { name: "calibrate" }
   | { name: "settings" }
   | { name: "notfound"; path: string };
@@ -40,8 +47,13 @@ export function parseRoute(hash: string): Route {
   if (a === "projects" && parts.length === 1) return { name: "home" };
   if (a === "projects" && b && parts.length === 2) return { name: "project", pid: b };
   if (a === "projects" && b && c === "scans" && d && parts.length === 4) return { name: "viewer", pid: b, sid: d };
-  if (a === "scan" && parts.length === 1) return { name: "scan", project: query.get("project") };
+  if (a === "scan" && parts.length === 1) {
+    const first = query.get("first");
+    return { name: "scan", project: query.get("project"), first: first === "1" || first === "true" };
+  }
   if (a === "device" && parts.length === 1) return { name: "device" };
+  if (a === "setup" && parts.length === 1) return { name: "setup", step: null };
+  if (a === "setup" && parts.length === 2 && isSetupPage(b)) return { name: "setup", step: b };
   if (a === "calibrate" && parts.length === 1) return { name: "calibrate" };
   if (a === "settings" && parts.length === 1) return { name: "settings" };
   return { name: "notfound", path };
@@ -53,11 +65,25 @@ export const paths = {
   home: () => "/",
   project: (pid: string) => `/projects/${enc(pid)}`,
   viewer: (pid: string, sid: string) => `/projects/${enc(pid)}/scans/${enc(sid)}`,
-  scan: (project?: string | null) => (project ? `/scan?project=${enc(project)}` : "/scan"),
+  scan: (project?: string | null, opts: { first?: boolean } = {}) => {
+    const q = new URLSearchParams();
+    if (project) q.set("project", project);
+    if (opts.first) q.set("first", "1");
+    const s = q.toString();
+    return s ? `/scan?${s}` : "/scan";
+  },
   device: () => "/device",
-  calibrate: () => "/calibrate",
+  setup: (step?: SetupPage | null) => (step ? `/setup/${step}` : "/setup"),
   settings: () => "/settings",
 };
+
+/** Replace the current address (no history entry), e.g. an old route that moved. */
+export function Redirect({ to }: { to: string }) {
+  useEffect(() => {
+    navigate(to, { replace: true });
+  }, [to]);
+  return null;
+}
 
 function subscribe(cb: () => void): () => void {
   window.addEventListener("hashchange", cb);
