@@ -56,6 +56,19 @@ def test_process_recording_skips_cut_frames(rec, tmp_path, caplog):
     assert fr["tracked"] >= 4 and (tmp_path / "out" / "mesh.ply").is_file()
 
 
+def test_frames_by_motion_restart_after_a_cut(rec, tmp_path):
+    """Picking frames by motion: the first frame after a cut is always processed and the gap restarts there."""
+    times = RecordingReader(rec).times()
+    t0, t1 = float(times[2]) - 1e-4, float(times[4]) + 1e-4
+    r = _with_events(rec, tmp_path / "rec_motion", [(t1, "cut", f"{t0:.6f},{t1:.6f}")])
+    params = ProcessParams(pipeline=PipelineParams(scale=0.5), export=("ply",), frame_motion_deg=90.0, frame_max_gap=2)
+    report = process_recording(r, tmp_path / "out", params=params)
+    # candidates 0, 1, 5, 6, 7: 0 first, 5 after the cut, 7 by the cap (a gap of 2 from 5, not from 1)
+    assert [row["index"] for row in report["per_frame"]] == [0, 5, 7] and report["frames"]["cut"] == 3
+    sel = report["frames"]["selection"]
+    assert (sel["picked_first"], sel["picked_by_cap"], sel["picked_by_rotation"], sel["gaps"]) == (2, 1, 0, {"2": 1})
+
+
 def test_no_cuts_means_nothing_skipped_and_all_cut_is_an_error(rec, tmp_path):
     rep = process_recording(rec, tmp_path / "plain", params=ProcessParams(pipeline=PipelineParams(scale=0.5),
                                                                           export=("ply",), stop=3))

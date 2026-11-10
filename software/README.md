@@ -175,7 +175,7 @@ key. Use `"auto"` for an optional value (exposure, port, voxel sizes) or leave i
 | `[pico]` | `port`, `imu_rate_hz` (104/208/416/833), plus advanced timing |
 | `[emitters]` | `markers_dot_level` (25 %), `[emitters.profiles]`: `[vertical, horizontal, dots]` in percent per profile (`scan`, `stereo`, `lasers`, `imu`, `check`, `lines`, `dots`, `off`, plus your own) |
 | `[live]` | `scale` (0.5 = 640x400), `depth_min_mm` / `depth_max_mm` (150-450), `voxel_mm` (auto = 2 mm) |
-| `[process]` | `voxel_mm` (auto = 1 mm at 1280x800), `frame_step`, `poisson`, `export` (`ply`, `stl`, `obj`) |
+| `[process]` | `voxel_mm` (auto = 1 mm at 1280x800), `frame_step`, `frame_motion_deg` (0 = off: pick frames by the gyro's rotation) and `frame_max_gap` (4), `poisson`, `export` (`ply`, `stl`, `obj`) |
 | `[board]` | ChArUco board (11 x 8 squares, 20 mm squares, 15 mm markers, `DICT_5X5_100`) and `paper` (`letter`/`a4`) |
 | `[markers]` | `tag_mm` (20): side of the black square of the printed AprilTags |
 | `[compute]` | `device`: `auto` (the GPU if there is one), `cpu`, or part of a GPU's name such as `RTX`; the `OHS_COMPUTE` environment variable overrides it (section 8) |
@@ -339,7 +339,9 @@ CloudCompare, Blender, Fusion). The coordinate frame is the camera at the first 
 (markerless) or at the frame that started the marker map (markers).
 
 Options: `--mode` (default: the recording's mode), `--voxel MM` (smaller = finer, slower, more RAM),
-`--step N` (every N-th frame, faster), `--poisson` (watertight Poisson mesh), `--start` / `--stop`
+`--step N` (every N-th frame, faster), `--motion DEG` with `--max-gap N` (pick frames by the gyro: the
+next frame once the scanner turned DEG degrees, or after N recorded frames; a scanner that slides without
+turning is caught by the gap alone), `--poisson` (watertight Poisson mesh), `--start` / `--stop`
 (frame range). The calibration comes from the recording itself; `--calib PATH` overrides it.
 
 ### The GPU and `ohs bench`

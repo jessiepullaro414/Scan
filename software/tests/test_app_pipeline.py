@@ -327,6 +327,46 @@ def test_process_recording_options(rec, tmp_path):
     assert not (tmp_path / "c").exists()  # rejected before any work
 
 
+def test_process_recording_frames_by_motion(rec, tmp_path, caplog):
+    """F2 step 2: frames picked by the gyro, the second pass at given poses, and the fallbacks."""
+    import dataclasses
+    import logging
+
+    half = PipelineParams(scale=0.5)
+    # a threshold no hand reaches: the cap alone picks (and start / stop bound the candidates)
+    p = ProcessParams(pipeline=half, export=("ply",), start=1, stop=8, frame_motion_deg=90.0, frame_max_gap=3)
+    rep = process_recording(rec, tmp_path / "cap", params=p)
+    assert [r["index"] for r in rep["per_frame"]] == [1, 4, 7] and rep["frames"]["processed"] == 3
+    sel = rep["frames"]["selection"]
+    assert sel == {"by": "motion", "threshold_deg": 90.0, "max_gap": 3, "picked_by_rotation": 0, "picked_by_cap": 2,
+                   "picked_first": 1, "picked_without_gyro": 0, "mean_gap": 3.0, "gaps": {"3": 2}}
+    assert rep["frames"]["step"] == 1 and rep["frames"]["tracked"] == 3
+    # the second pass (Straighten, Fuse) fuses exactly the frames of the first, with the same settings
+    with open(tmp_path / "cap" / "trajectory.csv", newline="", encoding="utf-8") as fh:
+        poses = {int(r["index"]): np.array([float(r[f"T{i}{j}"]) for i in range(4) for j in range(4)]).reshape(4, 4)
+                 for r in csv.DictReader(fh)}
+    again = process_recording(rec, tmp_path / "fuse", params=p, poses=poses)
+    assert [r["index"] for r in again["per_frame"]] == [1, 4, 7] and again["frames"]["without_pose"] == 4
+    assert again["frames"]["selection"]["by"] == "given poses"
+    # a threshold below every frame's rotation keeps every frame, all picked by rotation
+    rep = process_recording(rec, tmp_path / "all", params=dataclasses.replace(p, start=0, stop=3, frame_motion_deg=1e-6))
+    assert [r["index"] for r in rep["per_frame"]] == [0, 1, 2]
+    assert rep["frames"]["selection"]["picked_by_rotation"] == 2 and rep["frames"]["selection"]["gaps"] == {"1": 2}
+    # no IMU samples, or no IMU calibration: every frame, with a warning, and the report says why
+    no_imu = tmp_path / "no_imu"
+    shutil.copytree(rec, no_imu)
+    (no_imu / "imu.csv").unlink()
+    short = dataclasses.replace(p, start=0, stop=3)
+    with caplog.at_level(logging.WARNING, logger="ohs.app.process"):
+        rep = process_recording(no_imu, tmp_path / "o_no_imu", params=short)
+    assert "cannot pick frames by motion" in caplog.text and rep["frames"]["processed"] == 3
+    assert rep["frames"]["selection"] == {"by": "step", "threshold_deg": 90.0, "max_gap": 3,
+                                          "fallback": "the recording has no IMU samples"}
+    calib = dataclasses.replace(RecordingReader(rec).calibration(), imu=None)
+    rep = process_recording(rec, tmp_path / "o_no_cal", calib=calib, params=dataclasses.replace(short, stop=2))
+    assert rep["frames"]["processed"] == 2 and rep["frames"]["selection"]["fallback"] == "there is no IMU calibration"
+
+
 def test_process_recording_calibration_errors(rec, tmp_path):
     bare = tmp_path / "bare"
     shutil.copytree(rec, bare)

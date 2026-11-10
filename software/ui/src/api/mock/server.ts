@@ -1065,7 +1065,7 @@ const SETTINGS = {
     profiles: { off: [0, 0, 0], scan: [100, 100, 100], lines: [100, 100, 0], dots: [0, 0, 100], stereo: [0, 0, 0], lasers: [100, 100, 0], imu: [0, 0, 0], check: [100, 100, 0] },
   },
   live: { scale: 0.5, depth_min_mm: 150.0, depth_max_mm: 450.0, voxel_mm: null },
-  process: { voxel_mm: null, frame_step: 1, poisson: false, export: ["ply", "stl"] },
+  process: { voxel_mm: null, frame_step: 1, frame_motion_deg: 0.0, frame_max_gap: 4, poisson: false, export: ["ply", "stl"] },
   board: { squares_x: 11, squares_y: 8, square_mm: 20.0, marker_mm: 15.0, dictionary: "DICT_5X5_100", paper: "letter" },
   markers: { tag_mm: 20.0 },
 };

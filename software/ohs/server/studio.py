@@ -78,7 +78,8 @@ STATUS_HZ = 10.0
 
 def process_params(cfg: Any, mode: str, quality: str, image_width: int) -> Any:
     """``ProcessParams`` for a quality: "preview" = scale 0.5 and 2 mm voxels, "full" = scale 1.0
-    (``[process]`` voxel size, step, Poisson and export formats; PLY and STL are always written)."""
+    (``[process]`` voxel size, step, frames picked by motion, Poisson and export formats; PLY and STL are
+    always written). The preview processes every frame."""
     from ohs.app.pipeline import PipelineParams, default_fusion_params, effective_scale
     from ohs.app.process import ProcessParams
     from ohs.track.markers import MarkerParams
@@ -93,7 +94,8 @@ def process_params(cfg: Any, mode: str, quality: str, image_width: int) -> Any:
     v = cfg.process.voxel_mm
     fusion = None if v is None else dataclasses.replace(default_fusion_params(effective_scale(image_width)), voxel_mm=float(v))
     pp = PipelineParams(mode=mode, scale=1.0, fusion=fusion, markers=markers)
-    return ProcessParams(pipeline=pp, frame_step=int(cfg.process.frame_step), export=export, poisson=bool(cfg.process.poisson))
+    return ProcessParams(pipeline=pp, frame_step=int(cfg.process.frame_step), export=export, poisson=bool(cfg.process.poisson),
+                         frame_motion_deg=float(cfg.process.frame_motion_deg), frame_max_gap=int(cfg.process.frame_max_gap))
 
 
 class Studio:

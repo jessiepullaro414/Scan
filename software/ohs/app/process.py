@@ -18,7 +18,25 @@ pipeline incrementally (up to 0.25 s ahead of each frame), so recordings longer 
 buffer work. **Cuts:** frames whose ``t_host`` lies inside any ``events.csv`` row with
 ``kind == "cut"`` and ``value == "t0,t1"`` (inclusive; written by the app's live rewind) are
 skipped; ``report["frames"]["cut"]`` counts them and ``report["cuts"]`` lists the intervals.
-Malformed cut values are ignored with a warning. Marker mode calls ``MarkerTracker.refine_map()`` after the last frame and saves the
+Malformed cut values are ignored with a warning.
+
+**Frame selection.** The candidates are the frames ``range(start, stop, frame_step)`` outside the
+cuts. By default every candidate is processed. With ``frame_motion_deg > 0`` (maintenance plan
+F2 step 2) frames are picked by the gyro (:func:`pick_frames_by_motion`): the first candidate,
+the first one after each cut, and then the next candidate at which the gyro's rotation since the
+last processed frame reaches ``frame_motion_deg`` or the gap reaches ``frame_max_gap`` recorded
+frames, whichever comes first (``frame_step`` stays the smallest gap). Where the IMU samples do
+not cover a stretch the candidates there are all processed. Without IMU samples, without an IMU
+calibration or with ``use_imu=False`` it falls back to every candidate, with a warning, and
+``report["frames"]["selection"]`` says so. A gyro sees rotation only: a hand that slides without
+turning is caught by the cap alone. With ``poses`` no new pick is made: the frames that have a pose
+are fused (the second pass then fuses exactly the frames of a motion-picked first pass, as long
+as ``frame_step``, ``start`` and ``stop`` are the same).
+``report["frames"]["selection"]``: ``{"by": "step"}``, or with motion picking the threshold, the
+cap, how many frames were picked by rotation / by the cap / first (start and after cuts) /
+without gyro, the mean gap and a histogram of the gaps (recorded frames; not across cuts).
+
+Marker mode calls ``MarkerTracker.refine_map()`` after the last frame and saves the
 refined map; the fused model and laser cloud use the poses tracked online (refinement mostly
 improves the map itself; see VALIDATION.md).
 
@@ -49,12 +67,13 @@ from typing import Any, Callable
 import numpy as np
 
 from ohs.app.pipeline import FrameResult, FramePipeline, PipelineParams
-from ohs.geometry import invert_se3, pose_error
+from ohs.geometry import integrate_gyro, invert_se3, pose_error
 from ohs.io.recording import RecordingReader
 from ohs.mesh.confidence import SIGMA_NONE_MM, sigma_stats
 from ohs.types import ScannerCalibration
 
-__all__ = ["ProcessParams", "process_recording", "trajectory_errors", "cut_intervals", "EXPORT_FORMATS"]
+__all__ = ["ProcessParams", "process_recording", "trajectory_errors", "cut_intervals", "pick_frames_by_motion",
+           "EXPORT_FORMATS"]
 
 log = logging.getLogger(__name__)
 
@@ -75,6 +94,120 @@ class ProcessParams:
     clean_min_component: float = 0.01
     laser_voxel_mm: float = 0.2
     poisson_depth: int = 9
+    # pick frames by motion (module docstring, "Frame selection"): 0 = off, every frame_step-th frame
+    frame_motion_deg: float = 0.0
+    frame_max_gap: int = 4
+
+
+# --------------------------------------------------------------------------- frame selection
+MOTION_IMU_MAX_GAP_S = 0.05  # like GyroPredictor.max_gap_s: a longer hole in the IMU stream is no gyro
+MOTION_IMU_TOL_S = 0.003  # like GyroPredictor.covers: the interval may stick out of the samples by this much
+
+
+def _rotation_angle(R: np.ndarray) -> float:
+    """Angle (rad) of a rotation matrix, accurate for small angles too."""
+    v = np.array([R[2, 1] - R[1, 2], R[0, 2] - R[2, 0], R[1, 0] - R[0, 1]])
+    return float(np.arctan2(0.5 * np.linalg.norm(v), 0.5 * (np.trace(R) - 1.0)))
+
+
+def pick_frames_by_motion(
+    positions: Any,
+    frame_t: Any,
+    imu_t: Any,
+    gyro: Any,
+    *,
+    threshold_deg: float,
+    max_gap: int,
+    time_offset: float = 0.0,
+    gyro_bias: Any = None,
+    restart: Any = (),
+) -> tuple[list[int], list[str]]:
+    """Choose frames by the gyro's rotation: ``(chosen positions, reason per chosen position)``.
+
+    ``positions`` (ascending recorded-frame positions: the candidates) with their camera times
+    ``frame_t`` (s); ``imu_t`` (s, IMU host clock, camera time = ``imu_t + time_offset``) and
+    ``gyro`` (N,3) rad/s in the IMU frame as recorded (raw: ``gyro_bias``, IMU frame, is subtracted
+    when given). The rotation angle does not depend on the frame, so ``R_ci`` is not needed.
+
+    The first candidate is chosen ("first"). After that a candidate is chosen when, counting from
+    the last chosen one, the gyro's integrated rotation (net angle of the rotation, trapezoidal
+    integration as in :func:`ohs.geometry.integrate_gyro`) reaches ``threshold_deg``
+    ("rotation"), or the gap reaches ``max_gap`` recorded frames ("cap"). A candidate in
+    ``restart`` (the first one after a cut) is always chosen and the angle restarts there
+    ("restart"). Where the IMU samples do not cover the interval since the last chosen frame
+    (no samples, or a hole longer than ``MOTION_IMU_MAX_GAP_S``) the candidate is chosen
+    ("no_gyro"): without a gyro nothing is skipped.
+    """
+    pos = [int(x) for x in positions]
+    ft = np.asarray(frame_t, dtype=np.float64).reshape(-1)
+    if len(ft) != len(pos):
+        raise ValueError(f"{len(pos)} positions but {len(ft)} frame times")
+    if threshold_deg <= 0 or int(max_gap) < 1:
+        raise ValueError("threshold_deg must be > 0 and max_gap >= 1")
+    t = np.asarray(imu_t, dtype=np.float64).reshape(-1) + float(time_offset)
+    w = np.asarray(gyro, dtype=np.float64).reshape(-1, 3)
+    if len(t) != len(w):
+        raise ValueError(f"{len(t)} IMU times but {len(w)} gyro rows")
+    if gyro_bias is not None:
+        w = w - np.asarray(gyro_bias, dtype=np.float64).reshape(1, 3)
+    ok = np.isfinite(t) & np.all(np.isfinite(w), axis=1)
+    t, w = t[ok], w[ok]
+    order = np.argsort(t, kind="stable")
+    t, w = t[order], w[order]
+    keep = np.concatenate([[True], np.diff(t) > 0]) if len(t) else np.zeros(0, dtype=bool)
+    t, w = t[keep], w[keep]
+    thr = math.radians(float(threshold_deg))
+    restart = {int(x) for x in restart}
+
+    def covers(lo: float, hi: float) -> bool:
+        if len(t) < 2 or t[0] > lo + MOTION_IMU_TOL_S or t[-1] < hi - MOTION_IMU_TOL_S:
+            return False
+        i0 = max(int(np.searchsorted(t, lo, side="right")) - 1, 0)
+        i1 = min(int(np.searchsorted(t, hi, side="left")), len(t) - 1)
+        return not (i1 > i0 and float(np.max(np.diff(t[i0:i1 + 1]))) > MOTION_IMU_MAX_GAP_S)
+
+    def rotation(t0: float, t1: float) -> np.ndarray:
+        i0 = max(int(np.searchsorted(t, t0, side="right")) - 1, 0)
+        i1 = min(int(np.searchsorted(t, t1, side="left")) + 1, len(t))
+        return integrate_gyro(t[i0:i1], w[i0:i1], float(t0), float(t1))
+
+    chosen: list[int] = []
+    reasons: list[str] = []
+    last = R = t_prev = None
+    for p_k, t_k in zip(pos, ft):
+        why = None
+        if last is None:
+            why = "first"
+        elif p_k in restart:
+            why = "restart"
+        elif not covers(float(t_prev), float(t_k)):
+            why = "no_gyro"
+        else:
+            R = R @ rotation(float(t_prev), float(t_k))  # chained over the candidates since the last chosen frame
+            if _rotation_angle(R) >= thr:
+                why = "rotation"
+            elif p_k - last >= int(max_gap):
+                why = "cap"
+        t_prev = t_k
+        if why is None:
+            continue
+        chosen.append(p_k)
+        reasons.append(why)
+        last, R = p_k, np.eye(3)
+    return chosen, reasons
+
+
+def _selection_summary(chosen: list[int], reasons: list[str], threshold_deg: float, max_gap: int) -> dict:
+    """``report["frames"]["selection"]`` of a motion pick: counts per reason and the gaps (recorded frames)."""
+    gaps = [b - a for a, b, why in zip(chosen, chosen[1:], reasons[1:]) if why != "restart"]
+    c = Counter(reasons)
+    return {
+        "by": "motion", "threshold_deg": float(threshold_deg), "max_gap": int(max_gap),
+        "picked_by_rotation": c["rotation"], "picked_by_cap": c["cap"],
+        "picked_first": c["first"] + c["restart"], "picked_without_gyro": c["no_gyro"],
+        "mean_gap": float(np.mean(gaps)) if gaps else None,
+        "gaps": {str(g): n for g, n in sorted(Counter(gaps).items())},
+    }
 
 
 # --------------------------------------------------------------------------- helpers
@@ -225,6 +358,9 @@ def process_recording(
     export = _check_export(tuple(p.export))
     if int(p.frame_step) < 1:
         raise ValueError("frame_step must be >= 1")
+    motion_deg = float(p.frame_motion_deg)
+    if not (math.isfinite(motion_deg) and motion_deg >= 0) or int(p.frame_max_gap) < 1:
+        raise ValueError("frame_motion_deg must be >= 0 and frame_max_gap >= 1")
     reader = RecordingReader(rec_path)
     calib_source = "argument"
     if calib is None:
@@ -264,10 +400,40 @@ def process_recording(
         for a, b in cuts:
             inside |= (t_pos >= a) & (t_pos <= b)
         n_cut = int(inside.sum())
+        # the first frame after a cut starts a new stretch (motion selection restarts its angle there)
+        after_cut = {pos for k, pos in enumerate(positions) if not inside[k] and k > 0 and inside[k - 1]}
         positions = [pos for pos, cut in zip(positions, inside) if not cut]
         log.info("skipping %d frames inside %d cut interval(s)", n_cut, len(cuts))
         if not positions:
             raise ValueError(f"every selected frame of {rec_path} lies inside a cut (rewound) interval: nothing to process")
+    else:
+        after_cut = set()
+    selection: dict[str, Any] = {"by": "step"}
+    if motion_deg > 0 and poses is not None:
+        # the second pass fuses exactly the frames of the first (the ones with a pose): no new pick
+        selection = {"by": "given poses", "threshold_deg": motion_deg, "max_gap": int(p.frame_max_gap)}
+    elif motion_deg > 0:
+        why_not = (None if len(imu_t) >= 2 and calib.imu is not None and p.pipeline.use_imu else
+                   "the recording has no IMU samples" if len(imu_t) < 2 else
+                   "there is no IMU calibration" if calib.imu is None else "the IMU is switched off (use_imu=False)")
+        if why_not is not None:
+            log.warning("cannot pick frames by motion: %s; processing every %d. frame instead", why_not,
+                        int(p.frame_step))
+            selection = {"by": "step", "threshold_deg": motion_deg, "max_gap": int(p.frame_max_gap),
+                         "fallback": why_not}
+        else:
+            n_cand = len(positions)
+            t_cand = reader.times()[np.asarray(positions, dtype=np.int64)]
+            positions, why = pick_frames_by_motion(
+                positions, t_cand, imu_t, imu_g, threshold_deg=motion_deg, max_gap=int(p.frame_max_gap),
+                time_offset=offset, gyro_bias=calib.imu.gyro_bias, restart=after_cut)
+            selection = _selection_summary(positions, why, motion_deg, int(p.frame_max_gap))
+            log.info("picked %d of %d frames by motion (%.2f deg or a gap of %d): %d by rotation, %d by the cap",
+                     len(positions), n_cand, motion_deg, int(p.frame_max_gap), selection["picked_by_rotation"],
+                     selection["picked_by_cap"])
+            if selection["picked_without_gyro"]:
+                log.warning("%d frames were picked because the IMU samples do not cover them (no gyro there)",
+                            selection["picked_without_gyro"])
     n_unposed = 0
     if poses is not None:
         index_of = reader.indices
@@ -317,7 +483,7 @@ def process_recording(
             "frames": {
                 "in_recording": len(reader), "processed": n, "tracked": pipe.n_tracked,
                 "tracked_fraction": pipe.n_tracked / n if n else 0.0,
-                "start": int(p.start), "stop": stop, "step": int(p.frame_step), "cut": n_cut,
+                "start": int(p.start), "stop": stop, "step": int(p.frame_step), "cut": n_cut, "selection": selection,
                 "weak": _weak_summary(rows),
                 "with_raw_depth": round(sum(bool(r.get("raw_depth")) for r in rows if r.get("ok"))
                                         / max(sum(bool(r.get("ok")) for r in rows), 1), 3),

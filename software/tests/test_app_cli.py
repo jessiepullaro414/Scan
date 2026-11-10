@@ -227,6 +227,8 @@ def _process_stub(calls: list) -> types.ModuleType:
         export: tuple = ("ply", "stl")
         poisson: bool = False
         clean_min_component: float = 0.01
+        frame_motion_deg: float = 0.0
+        frame_max_gap: int = 4
 
     def process_recording(rec_path, out_dir, calib=None, params=None, progress=None):
         calls.append({"rec": Path(rec_path), "out": Path(out_dir), "calib": calib, "params": params})
@@ -262,6 +264,27 @@ def test_process_calls_process_recording(tmp_path, capsys):
     cap = capsys.readouterr()
     assert "mesh.stl" in cap.out and "frames: 4 processed, 3 tracked (75%)" in cap.out and "laser points: 99" in cap.out
     assert "4/4 100%" in cap.err and "lost: jump" in cap.err  # progress bar, zero-based k shown as k + 1
+
+
+def test_process_frames_by_motion_options(tmp_path, capsys):
+    a = cli.build_parser().parse_args(["process", "rec", "--motion", "0.5", "--max-gap", "6"])
+    assert (a.motion, a.max_gap) == (0.5, 6)
+    for bad in (["--motion", "-1"], ["--max-gap", "0"]):
+        with pytest.raises(SystemExit):
+            cli.build_parser().parse_args(["process", "rec", *bad])
+    capsys.readouterr()
+    calls: list = []
+    rec = _tiny_recording(tmp_path / "rec", nominal_calibration((160, 100)))
+    cfg = tmp_path / "c.toml"
+    cfg.write_text("[process]\nframe_motion_deg = 0.4\nframe_max_gap = 5\n", encoding="utf-8")
+    with stub_modules(pipeline=make_stub_pipeline(), process=_process_stub(calls)):
+        assert cli.main(["process", str(rec)]) == 0  # defaults: off
+        assert cli.main(["--config", str(cfg), "process", str(rec)]) == 0  # from the config
+        assert cli.main(["--config", str(cfg), "process", str(rec), "--motion", "0"]) == 0  # the flag turns it off
+        assert cli.main(["process", str(rec), "--motion", "0.8", "--max-gap", "3", "--step", "2"]) == 0
+    got = [(c["params"].frame_motion_deg, c["params"].frame_max_gap, c["params"].frame_step) for c in calls]
+    assert got == [(0.0, 4, 1), (0.4, 5, 1), (0.0, 5, 1), (0.8, 3, 2)]
+    assert "frames picked by motion: 0.8 deg or every 3. frame, at least every 2." in capsys.readouterr().out
 
 
 def test_process_needs_a_calibration(tmp_path, capsys):

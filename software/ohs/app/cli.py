@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import math
 import re
 import sys
 import time
@@ -275,6 +276,16 @@ def _nonneg_int(text: str) -> int:
     return v
 
 
+def _nonneg_float(text: str) -> float:
+    try:
+        v = float(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"expected a number, got {text!r}") from None
+    if not (math.isfinite(v) and v >= 0):
+        raise argparse.ArgumentTypeError("must not be negative")
+    return v
+
+
 def _pos_float(text: str) -> float:
     try:
         v = float(text)
@@ -412,6 +423,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--voxel", type=_pos_float, metavar="MM",
                    help="TSDF voxel size in mm (default: process.voxel_mm, else 1 mm at 1280x800)")
     p.add_argument("--step", type=_pos_int, metavar="N", help="use every N-th frame (default: process.frame_step)")
+    p.add_argument("--motion", type=_nonneg_float, metavar="DEG",
+                   help="pick frames by the gyro: the next frame once it turned DEG degrees, 0 = off "
+                        "(default: process.frame_motion_deg)")
+    p.add_argument("--max-gap", type=_pos_int, metavar="N",
+                   help="with --motion: at most N recorded frames between processed frames "
+                        "(default: process.frame_max_gap)")
     p.add_argument("--poisson", action="store_true", help="also build a watertight Poisson mesh")
     p.add_argument("--start", type=_nonneg_int, default=0, metavar="I", help="first frame (default: 0)")
     p.add_argument("--stop", type=_pos_int, metavar="I", help="stop before this frame")
@@ -540,7 +557,8 @@ def _find_paths(obj: Any, out: list[str]) -> list[str]:
 
 
 def _run_process(cfg: Any, rec: Path, out: Path, *, mode: str, calib: Any = None, voxel: float | None = None,
-                 step: int | None = None, poisson: bool = False, start: int = 0, stop: int | None = None) -> int:
+                 step: int | None = None, poisson: bool = False, start: int = 0, stop: int | None = None,
+                 motion: float | None = None, max_gap: int | None = None) -> int:
     from ohs.app.pipeline import PipelineParams
     from ohs.app.process import ProcessParams, process_recording
     from ohs.track.markerless import FusionParams
@@ -550,9 +568,15 @@ def _run_process(cfg: Any, rec: Path, out: Path, *, mode: str, calib: Any = None
     pp = PipelineParams(mode=mode, scale=1.0, fusion=None if v is None else FusionParams(voxel_mm=float(v)),
                         markers=MarkerParams(tag_mm=float(cfg.markers.tag_mm)))
     params = ProcessParams(pipeline=pp, frame_step=int(step or cfg.process.frame_step), start=int(start), stop=stop,
-                           export=tuple(cfg.process.export), poisson=bool(poisson or cfg.process.poisson))
+                           export=tuple(cfg.process.export), poisson=bool(poisson or cfg.process.poisson),
+                           frame_motion_deg=float(cfg.process.frame_motion_deg if motion is None else motion),
+                           frame_max_gap=int(max_gap or cfg.process.frame_max_gap))
     vox = "auto" if v is None else f"{float(v):g} mm"
-    _say(f"Processing {rec} ({mode}, voxel {vox}, every {params.frame_step}. frame) -> {out}")
+    frames = f"every {params.frame_step}. frame"
+    if params.frame_motion_deg > 0:
+        frames = (f"frames picked by motion: {params.frame_motion_deg:g} deg or every {params.frame_max_gap}. frame, "
+                  f"at least every {params.frame_step}.")
+    _say(f"Processing {rec} ({mode}, voxel {vox}, {frames}) -> {out}")
     bar = ProgressBar("processing")
     t0 = time.perf_counter()
     try:
@@ -581,6 +605,13 @@ def _summary_lines(report: dict) -> list[str]:
         frac = fr.get("tracked_fraction")
         out.append(f"frames: {fr.get('processed')} processed, {fr.get('tracked')} tracked"
                    + (f" ({100 * frac:.0f}%)" if isinstance(frac, (int, float)) else ""))
+        sel = fr.get("selection")
+        if isinstance(sel, dict) and sel.get("by") == "motion":
+            gap = sel.get("mean_gap")
+            out.append(f"picked by motion: {sel.get('picked_by_rotation')} by rotation, {sel.get('picked_by_cap')} by the "
+                       f"gap cap" + (f", mean gap {gap:.2f} frames" if isinstance(gap, (int, float)) else ""))
+        elif isinstance(sel, dict) and sel.get("fallback"):
+            out.append(f"warning: frames not picked by motion ({sel['fallback']})")
     fail = report.get("failures")
     if isinstance(fail, dict) and fail:
         out.append("tracking failures: " + ", ".join(f"{k} {v}" for k, v in fail.items()))
@@ -787,7 +818,7 @@ def cmd_process(args: argparse.Namespace) -> int:
         _say(f"The recording has no calibration.json: using {p}")
     out = Path(args.out).expanduser() if args.out else rec / "result"
     return _run_process(cfg, rec, out, mode=mode, calib=calib, voxel=args.voxel, step=args.step, poisson=args.poisson,
-                        start=args.start, stop=args.stop)
+                        start=args.start, stop=args.stop, motion=args.motion, max_gap=args.max_gap)
 
 
 def cmd_calibrate(args: argparse.Namespace) -> int:

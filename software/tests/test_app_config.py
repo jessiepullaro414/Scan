@@ -162,6 +162,32 @@ def test_template_round_trip(tmp_path):
         assert back == cfg
 
 
+def test_frames_by_motion_settings(tmp_path):
+    cfg = Config()
+    assert (cfg.process.frame_motion_deg, cfg.process.frame_max_gap) == (0.0, 4)  # off by default
+    cfg = load_config(_write(tmp_path / "c.toml", "[process]\nframe_motion_deg = 1\nframe_max_gap = 6\n"))
+    assert (cfg.process.frame_motion_deg, cfg.process.frame_max_gap) == (1.0, 6)
+    assert isinstance(cfg.process.frame_motion_deg, float)
+    for text, match in (("frame_motion_deg = -0.5", "process.frame_motion_deg"), ("frame_max_gap = 0", "process.frame_max_gap")):
+        with pytest.raises(ConfigError, match=match):
+            load_config(_write(tmp_path / "bad.toml", f"[process]\n{text}\n"))
+    text = render_template(Config())
+    assert "\nframe_motion_deg = 0.0\n" in text and "\nframe_max_gap = 4\n" in text and "gyro has turned" in text
+
+
+def test_frames_by_motion_reach_the_full_quality_only():
+    from ohs.server.studio import process_params
+
+    cfg = Config()
+    cfg.process.frame_motion_deg, cfg.process.frame_max_gap, cfg.process.frame_step = 0.5, 6, 2
+    full = process_params(cfg, "markerless", "full", 1280)
+    assert (full.frame_motion_deg, full.frame_max_gap, full.frame_step) == (0.5, 6, 2)
+    preview = process_params(cfg, "markerless", "preview", 1280)
+    assert (preview.frame_motion_deg, preview.frame_step) == (0.0, 1)  # the preview stays every frame
+    default = process_params(Config(), "markerless", "full", 1280)
+    assert (default.frame_motion_deg, default.frame_max_gap) == (0.0, 4)
+
+
 def test_cli_config_init_and_show(tmp_path, monkeypatch, capsys):
     p = tmp_path / "cfg" / "config.toml"
     assert cli.main(["--config", str(p), "config", "--init"]) == 0
