@@ -179,17 +179,18 @@ The first tuning round, from `ohs bench` per-stage tables on both machines. The 
 
 **Speed, GPU mode** (ms per frame, mean; same bench, same accuracy):
 
-| Machine | Quality | Before (a024ec4) | After (880aa6b) |
+| Machine | Quality | Before (a024ec4) | After (279d709) |
 |---|---|---|---|
-| RTX 3070 Ti laptop | full | 124.4 (8.0 fps) | **72.6 (13.8 fps)** |
-| | preview | 53.1 (18.8 fps) | **33.0 (30.3 fps)** |
-| Radeon 680M | full | 217.4 (4.6 fps) | **170.1 (5.9 fps)** |
-| | preview | 73.0 (13.7 fps) | **66.3 (15.1 fps)** |
+| RTX 3070 Ti laptop | full | 124.4 (8.0 fps) | **67.2 (14.9 fps)** |
+| | preview | 53.1 (18.8 fps) | **28.4 (35.2 fps)** |
+| Radeon 680M | full | 217.4 (4.6 fps) | **172.0 (5.8 fps)** |
+| | preview | 73.0 (13.7 fps) | **67.0 (14.9 fps)** |
 
-- On the laptop the GPU path is now 4.6 times faster than the CPU path at full quality (332 ms), and 2.3 times at preview.
-- Trajectory error on the bench: 0.13 mm / 0.017° median at full quality (it was 0.15 mm / 0.035°), and 0.21 mm / 0.025° at preview (unchanged).
-- **Per-stage times can mislead.** The tracking model's GPU integration is queued and returns at once, so the next frame's depth step waits for it: on the laptop the matcher alone takes 22.5 ms, while "depth" shows 28.8 ms. The whole-frame time is the number to trust.
-- **Left for the next round:** the tracking filter (12.6 ms on the laptop, OpenCV on the CPU, barely faster in GPU mode) and the confidence TSDF's brick search (CPU numpy) on the GPU.
+- The intermediate commit 880aa6b benched 72.6 / 33.0 ms on the laptop and 170.1 / 66.3 ms on the Radeon. The final version's minimum ICP spacing did not slow the preview down. The laptop's 5–14 % gain since then is probably mostly noise and temperature: its run was an hour later.
+- The CPU path got faster too. On the laptop at full quality it went from 332 ms (3.0 fps) to 264 ms (3.8 fps), and its trajectory error fell from 0.33 mm / 0.075° to 0.24 mm / 0.028°. The GPU path is now 3.9 times faster than the CPU path at full quality and 2.3 times at preview.
+- Trajectory error on the bench in GPU mode: 0.13 mm / 0.017° median at full quality (it was 0.15 mm / 0.035°), and 0.21 mm / 0.025° at preview (unchanged).
+- **Per-stage times can mislead.** The tracking model's GPU integration is queued and returns at once, so the next frame's depth step waits for it: on the laptop the matcher alone takes 22.5 ms, while "depth" shows 27.2 ms. The whole-frame time is the number to trust.
+- **Left for the next round:** the tracking filter and the confidence TSDF's brick search, which still runs on the CPU in numpy. The filter takes 11.5 ms on the laptop. It runs in OpenCV on the CPU and is barely faster in GPU mode.
 
 ## Straighten: loop closure (M3 phase 2, 2026-11-09)
 

@@ -553,7 +553,7 @@ Phase 1 is done when full-quality processing is at least 3x faster on the RTX la
   - The laser lines are extracted in two CPU threads while the depth runs, so they are now hidden behind it on the laptop.
   - ICP samples every 8th pixel at full resolution, 3–4 times faster and no less accurate; preview is unchanged.
   - The confidence TSDF weighs pixels on the GPU and samples bricks per voxel size.
-  - Laptop: full quality 124 → 73 ms a frame (8.0 → 13.8 fps), preview 53 → 33 ms (18.8 → 30.3 fps). Radeon: 217 → 170 ms full. Accuracy unchanged.
+  - Laptop: full quality 124 → 67 ms a frame (8.0 → 14.9 fps), preview 53 → 28 ms (18.8 → 35.2 fps). Radeon: 217 → 172 ms full. Accuracy unchanged.
   - The SGM work-group settings were already the fastest on both GPUs; their output doesn't depend on them.
   - Left: the tracking filter (12.6 ms on the laptop, CPU) and the brick search of the confidence TSDF on the GPU.
 
