@@ -173,6 +173,14 @@ by the snapshot tool.
      recording gives the rotation between frames at no cost, with a cap on the gap.
   3. Only then decide the default. If accuracy falls, leave the default at 1 and offer the faster
      setting in the app as a choice.
+- **Step 1 done 2026-11-10** (table in VALIDATION.md, "Processing fewer frames after a scan"; no
+  code change). The wait falls as 1 / step, and the trajectory and the large-part error hold up
+  to step 8. On smooth surfaces the mesh median rises 18–22 % at step 2 and 47–53 % at step 4,
+  far beyond the spread, so by the stop rule the default stays at 1 on this evidence. One finding
+  for step 3: the validation scans are 30 fps recordings, which equal step 2 on the 60 fps
+  device. Step 2 gives the accuracy validated so far at half the wait; step 1 is 15–18 % better
+  than that. Not measured: fast hand motion, Straighten with fewer laser crossings, marker mode,
+  the CPU path, a real IMU (the gyro prior is fixed per processed frame, `pipeline.py:148`).
 - **Gain:** in proportion: every second frame halves the wait.
 - **Stop rule:** more frames also average noise away. If the mesh error or noise rises beyond the
   run-to-run spread in VALIDATION.md, the default does not change.
