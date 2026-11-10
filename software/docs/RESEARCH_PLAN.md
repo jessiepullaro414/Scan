@@ -276,6 +276,7 @@ The Lucas-Kanade step removes most of SGBM's pixel locking (the effect is descri
 - **Plugs into:** `laser_points(...)` in `ohs/vision/laser.py` takes an optional depth map; `FramePipeline.process` passes it.
 - **Effort / risk:** S / low.
 - **Sim check:** today, check that it loses almost no true points on the clean scenes (under 0.5 %). With the gloss upgrade, check that it removes the mirrored line.
+- **Result (2026-11-10, shipped):** within 4σ (at least 1 mm) of the dense depth at the point's pixel *or 6 px to either side*: on the line's own pixel the dense depth can be wrong, because the horizontal line runs along the epipolar rows. It drops 0.00–0.12 % of the true points on 4 clean scans (0.3–3.3 % with the pixel alone). The mirrored-line check waits for the gloss upgrade. Details: `VALIDATION.md`, "Refine with lasers".
 
 #### 4.2.4 Laser anchoring of the dense surface — P1, M3 (top 10 #3)
 - **What:** after fusion, measure the mesh's offset from the laser cloud along the normals: for each laser point, the nearest surface point and a signed residual. Then fit a smooth correction that explains those residuals. Minimise
@@ -296,6 +297,11 @@ The Lucas-Kanade step removes most of SGBM's pixel locking (the effect is descri
   - without injected bias, it must never make the mesh worse (median, p95 and signed mean against the analytic surfaces);
   - the residuals it reports must match the truth.
 - **Expectation, honestly:** in GPU mode the simulator's mesh median (0.065–0.088 mm) is already close to the laser median, so the simulator will mostly show gains in p95 and bias. The case for anchoring has to be made on real recordings.
+- **Result (2026-11-10, shipped as the "Refine with lasers" stage):**
+  - Not the least-squares form: on 500,000 vertices the bi-Laplacian solve took 12 s and did not converge. The correction is a normalized convolution by heat diffusion on the mesh (a 5 mm Gaussian, about 0.8 s), with Tukey re-weighting and a fade where the laser coverage thins out.
+  - A camera-fixed depth bias (0.1 % scale and a 0.3 mm bowl) drops near the lines from 0.24–0.26 mm to 0.05–0.06 mm (median); the signed mean from −0.24/−0.26 to −0.02/−0.03 mm.
+  - Without a bias, nothing gets worse (median within 1 %, p95 and mean slightly better), but only because corrections under 0.1 mm are not applied. The laser lines carry correlated errors of 0.05–0.08 mm per frame, and following them made the sphere 19 % worse. The stage changes the mesh only when at least 1 % of it would move.
+  - As expected above, the simulator shows no gain without a bias: its fused surface is as accurate as the laser points. Details: `VALIDATION.md`, "Refine with lasers".
 
 #### 4.2.5 Laser points inside the TSDF — P2
 Integrate laser points into the reconstruction TSDF as a sparse, high-weight depth image. It is simpler than 4.2.4, but 1 mm voxels blur a 0.07 mm measurement, and only voxels next to the lines change. Use it for coverage where dense depth is missing (black paint where only the laser shows), not for accuracy.

@@ -1,9 +1,10 @@
 /**
- * The three stages of a scan's processing: Track (quality), Straighten (loop closure) and Fuse
- * (voxel size). Each shows its state, the engine's summary, its job's progress with Cancel,
- * and Run / Re-run. Re-running asks first when there are edits: a new base mesh starts them over.
+ * The four stages of a scan's processing: Track (quality), Straighten (loop closure), Fuse
+ * (voxel size) and Refine with lasers. Each shows its state, the engine's summary, its job's
+ * progress with Cancel, and Run / Re-run. Re-running asks first when there are edits: a new base
+ * mesh starts them over.
  */
-import { Layers, Play, RotateCcw, Spline, Waypoints, type LucideIcon } from "lucide-react";
+import { Crosshair, Layers, Play, RotateCcw, Spline, Waypoints, type LucideIcon } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import type { Job, ProcessQuality, ProcessState, StageId, StageInfo } from "../../api/types";
 import { JobProgress } from "../../components/ScanBits";
@@ -22,6 +23,11 @@ const STAGES: Record<StageId, { label: string; icon: LucideIcon; what: string }>
   track: { label: "Track", icon: Waypoints, what: "Follows the scanner through the recording and fuses the depth into a mesh." },
   straighten: { label: "Straighten", icon: Spline, what: "Finds where the scan came back to a place it had seen, and closes those loops so long scans line up." },
   fuse: { label: "Fuse", icon: Layers, what: "Builds the mesh again from the camera poses, at the detail you choose." },
+  refine: {
+    label: "Refine with lasers",
+    icon: Crosshair,
+    what: "Pulls the surface onto the laser lines where they disagree, with a smooth correction. The lines are measured on their own and are more accurate.",
+  },
 };
 
 /** The live job of a stage: its `job_id`, from the jobs store (or the running job the state reports). */
@@ -112,7 +118,7 @@ function StageCard({
 
 export function StagesPanel({ pid, sid, state, busy }: { pid: string; sid: string; state: ProcessState; busy: boolean }) {
   const runStage = useProcess((s) => s.runStage);
-  const { track, straighten, fuse } = state.stages;
+  const { track, straighten, fuse, refine } = state.stages;
   const [quality, setQuality] = useState<ProcessQuality>(track.quality ?? "full");
   const [voxel, setVoxel] = useState<number>(fuse.voxel_mm ?? 1);
   const [confirm, setConfirm] = useState<{ stage: StageId; run: () => Promise<unknown> } | null>(null);
@@ -222,6 +228,24 @@ export function StagesPanel({ pid, sid, state, busy }: { pid: string; sid: strin
           />
           <Help>Smaller voxels keep finer detail; each halving makes about 4× the triangles.</Help>
         </StageCard>
+
+        <StageCard
+          id="refine"
+          stage={refine}
+          state={state}
+          busy={busy}
+          blocked={tracked && state.base ? null : "Run Track first"}
+          runLabel={refine.state === "none" ? "Refine" : "Re-run"}
+          onRun={() => go("refine", () => runStage(pid, sid, "refine"))}
+          details={
+            (refine.state === "done" || refine.state === "skipped") && refine.outliers ? (
+              <p className="text-xs text-muted">
+                <b className="font-semibold text-fg tnum">{fmtInt(refine.outliers)}</b> laser point{refine.outliers === 1 ? "" : "s"} lay off the surface
+                (glints, reflections) and {refine.outliers === 1 ? "was" : "were"} left out.
+              </p>
+            ) : null
+          }
+        />
       </ol>
 
       {state.base ? (

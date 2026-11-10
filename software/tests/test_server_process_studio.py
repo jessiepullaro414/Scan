@@ -155,12 +155,16 @@ def test_a_fresh_scan_and_the_409_rules(env):
     b = base_url(env)
     s = get(b + "/process").json()
     assert s["project_id"] == env["pid"] and s["scan_id"] == env["sid"]
-    assert {k: v["state"] for k, v in s["stages"].items()} == {"track": "none", "straighten": "none", "fuse": "none"}
+    assert {k: v["state"] for k, v in s["stages"].items()} == {"track": "none", "straighten": "none", "fuse": "none",
+                                                               "refine": "none"}
     assert s["base"] is None and s["current"] is None and s["edits"] == [] and s["cursor"] == 0
     assert s["can_undo"] is False and s["can_redo"] is False and s["busy"] is None and s["job"] is None
     assert {"quality", "tracked_pct"} <= set(s["stages"]["track"]) and {"loops", "correction_mm", "correction_deg"} <= \
         set(s["stages"]["straighten"]) and "voxel_mm" in s["stages"]["fuse"]
+    assert {"source", "points", "outliers", "moved_pct", "moved_mm", "residual_before_mm", "residual_after_mm"} <= \
+        set(s["stages"]["refine"])
     err(post(b + "/process/straighten", {}), 409, "track")
+    err(post(b + "/process/refine", {}), 409, "track")
     err(post(b + "/process/fuse", {"voxel_mm": 2.0}), 409, "track")
     err(post(b + "/process/edits", {"op": "fill_holes", "params": {"max_hole_mm": 5}}), 409, "no mesh")
     err(post(b + "/process/undo"), 409, "no mesh")
@@ -345,7 +349,7 @@ def test_recipes_crud(env):
     assert [r["id"] for r in rs[:4]] == ["default", "body-panel", "bracket", "quick-preview"]
     assert all(r["builtin"] and r["name"] and r["description"] for r in rs[:4])
     default = rs[0]
-    assert default["settings"] == {"quality": "full", "straighten": "auto", "voxel_mm": None}
+    assert default["settings"] == {"quality": "full", "straighten": "auto", "refine": "auto", "voxel_mm": None}
     assert [o["op"] for o in default["ops"]] == ["remove_floaters", "fill_holes"]  # no smoothing, no simplification
     assert default["ops"][1]["params"]["max_hole_mm"] == 5.0
     assert rs[3]["settings"]["quality"] == "preview" and rs[3]["ops"][-1] == {"op": "decimate",
@@ -357,7 +361,7 @@ def test_recipes_crud(env):
     assert r.status_code == 200, r.text
     rec = r.json()
     assert rec["id"].startswith("coarse-look-") and rec["builtin"] is False and rec["name"] == "Coarse look"
-    assert rec["settings"] == {"quality": "preview", "straighten": "off", "voxel_mm": None}
+    assert rec["settings"] == {"quality": "preview", "straighten": "off", "refine": "auto", "voxel_mm": None}
     assert rec["ops"][0] == {"op": "remove_floaters", "params": {"keep_largest_only": True}}
     assert (env["root"] / "data" / "recipes" / f"{rec['id']}.json").is_file()
     assert [x["id"] for x in get(url).json()][4:] == [rec["id"]]
@@ -479,6 +483,53 @@ def test_make_mesh_runs_the_default_recipe(env):
     assert get(f"{b}/files/mesh.stl").status_code == 200 and get(f"{b}/files/trajectory.csv").status_code == 200
     scan_dir = env["root"] / "projects" / pid / "scans" / sid
     assert not list(scan_dir.glob("result.tmp-*")) and not list((scan_dir / "process").glob("*.tmp-*"))
+
+
+def test_refine_with_lasers(env):
+    from ohs.mesh import vertex_normals
+    from ohs.track.export import save_mesh
+
+    pid, sid = add_scan(env, "Refine", env["rec"])
+    b = base_url(env, pid, sid)
+    err(post(b + "/process/refine"), 409, "track")
+    run_job(env, post(b + "/process/track", {"quality": "preview"}), "process_track")
+    s = get(b + "/process").json()
+    assert s["stages"]["refine"]["state"] == "none" and s["base"]["stage"] == "track"
+    # a dense surface 0.5 mm off its laser lines (as a depth bias would leave it) is pulled back onto them
+    track = env["root"] / "projects" / pid / "scans" / sid / "process" / "track"
+    d = load_ply(track / "mesh.ply")
+    V, F = d["vertices"], d["faces"]
+    save_mesh(track / "mesh.ply", V + 0.5 * vertex_normals(V, F), F, quality=d["quality"])
+    j = run_job(env, post(b + "/process/refine"), "process_refine")
+    s = get(b + "/process").json()
+    rf = s["stages"]["refine"]
+    assert rf["state"] == "done" and rf["source"] == "track" and j["result"]["message"] == rf["summary"]
+    assert rf["summary"].startswith("Pulled") and rf["points"] > 1000 and rf["moved_pct"] > 1
+    assert rf["residual_before_mm"] > 0.35 and rf["residual_after_mm"] < 0.6 * rf["residual_before_mm"]
+    assert rf["moved_mm"] > 0.3
+    assert s["base"]["stage"] == "refine" and s["edits"] == [] and s["current"]["stats"]["triangles"] == len(F)
+    res = env["root"] / "projects" / pid / "scans" / sid / "result"
+    ref = json.loads((res / "report.json").read_text(encoding="utf-8"))["refine"]
+    # the injected offset is gone on average (the coarse preview surface also gets some real corrections)
+    assert abs(ref["residual_before"]["mean"] + 0.5) < 0.15 and abs(ref["residual_after"]["mean"]) < 0.1
+    assert (load_ply(res / "mesh.ply")["quality"] is None) == (d["quality"] is None)  # the sigmas stay
+    # again: from the same source mesh, not from its own result
+    run_job(env, post(b + "/process/refine"), "process_refine")
+    rf2 = get(b + "/process").json()["stages"]["refine"]
+    assert rf2["state"] == "done" and rf2["source"] == "track" and abs(rf2["residual_before_mm"] - rf["residual_before_mm"]) < 1e-6
+    # a new fuse makes a new base: refine starts over
+    run_job(env, post(b + "/process/fuse", {"voxel_mm": 2.0}), "process_fuse")
+    s = get(b + "/process").json()
+    assert s["stages"]["refine"]["state"] == "none" and s["base"]["stage"] == "fuse"
+    # a scan recorded without the lasers: nothing to refine with
+    rec = make_scan_recording(env["root"] / "rec-nolines", n_frames=6, image_size=(640, 400), seed=5, depth_every=0,
+                              lines=False)
+    pid2, sid2 = add_scan(env, "No lasers", rec)
+    b2 = base_url(env, pid2, sid2)
+    run_job(env, post(b2 + "/process/track", {"quality": "preview"}), "process_track")
+    run_job(env, post(b2 + "/process/refine"), "process_refine")
+    rf = get(b2 + "/process").json()["stages"]["refine"]
+    assert rf["state"] == "skipped" and "no laser points" in rf["summary"]
 
 
 def test_a_scan_processed_before_m3_is_taken_over(env):

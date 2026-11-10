@@ -393,6 +393,8 @@ def process_recording(
             "n_points_exported": int(len(cloud.points(float(p.laser_voxel_mm)))),
             "voxel_mm": float(p.laser_voxel_mm),
             "frames_with_points": cloud.n_frames,
+            # dropped because they disagreed with their frame's dense depth (reflections, glints)
+            "n_rejected_by_depth": {name: int(n) for name, n in pipe.laser_rejected.items()},
         }
 
         tp = out / "trajectory.csv"

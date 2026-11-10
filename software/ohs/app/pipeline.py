@@ -13,7 +13,9 @@ together. Live scanning runs it at ``scale=0.5`` for feedback, and offline proce
    :func:`ohs.compute.get_device` finds one.
 3. **Laser lines**, extracted once per image (left and right) and triangulated on the calibrated
    planes with the right-image stereo check (:func:`~ohs.vision.laser.laser_points` with
-   ``lines_left`` / ``lines_right``).
+   ``lines_left`` / ``lines_right``) and the check against the frame's dense depth and its sigma
+   (:func:`~ohs.vision.laser.depth_check`; :attr:`FramePipeline.laser_rejected` counts the
+   points it drops, per line).
 4. **Pose**.
 
    * ``"markerless"``: :class:`~ohs.track.markerless.MarkerlessTracker` frame-to-model ICP. The
@@ -360,6 +362,8 @@ class FramePipeline:
                 self.gyro = GyroPredictor(calib.imu)
 
         self.cloud = LaserCloud()
+        #: laser points dropped because they disagree with the frame's dense depth, per line
+        self.laser_rejected: dict[str, int] = {}
         self._trajectory: list[tuple[float, np.ndarray, bool]] = []
         self._t_prev: float | None = None
         self._n_frames = 0
@@ -505,7 +509,8 @@ class FramePipeline:
         if self.planes:
             t0 = time.perf_counter()
             pts = laser_points(left_r, right_r, self.K, self.baseline, self.planes, self.laser_params,
-                               lines_left=lines, lines_right=lines_r)
+                               lines_left=lines, lines_right=lines_r, depth=depth, depth_sigma=sigma,
+                               rejected=self.laser_rejected)
             if track.ok:
                 for name, P in pts.items():
                     self.cloud.add(P, track.T_wc, name)
@@ -638,6 +643,7 @@ class FramePipeline:
         if self.markers is not None:
             self.markers.reset()
         self.cloud.clear()
+        self.laser_rejected = {}
         self._trajectory = []
         self._t_prev = None
         self._n_frames = 0

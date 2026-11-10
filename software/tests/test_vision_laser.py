@@ -15,6 +15,7 @@ from ohs.types import LaserPlane
 from ohs.vision.laser import (
     LaserLines,
     LaserParams,
+    depth_check,
     draw_overlay,
     extract_laser_lines,
     laser_points,
@@ -391,3 +392,25 @@ def test_draw_overlay():
     assert draw_overlay(img, bare).shape == (H, W, 3)
     with pytest.raises(KeyError):
         lines.get("diagonal")
+
+
+def test_depth_check_drops_points_off_the_dense_surface():
+    # a wall 300 mm away; the dense depth is wrong along row 400 (a horizontal laser line runs along the
+    # epipolar rows) and missing in a patch around column 900
+    depth = np.full((H, W), 300.0, np.float32)
+    depth[398:403, :] = 310.0
+    depth[:, 880:921] = 0.0
+    sig = np.full((H, W), 0.6, np.float32)
+
+    def at(u, v, z):
+        return np.array([(u - K_FULL[0, 2]) * z / F, (v - K_FULL[1, 2]) * z / F, z])
+
+    pts = np.array([at(200, 200, 300.4),  # on the surface: kept
+                    at(300, 200, 307.0),  # a glint 7 mm off: dropped
+                    at(500, 400, 300.2),  # on the line, whose own depth is wrong: kept (the depth beside it agrees)
+                    at(900, 600, 330.0),  # no dense depth anywhere around it: kept
+                    at(600, 600, 302.0)])  # 2 mm off, within 4 sigma (2.4 mm): kept
+    assert depth_check(pts, depth, K_FULL, sig).tolist() == [True, False, True, True, True]
+    # without a sigma map: 0.25 % of the depth (0.75 mm) times 4 = 3 mm
+    assert depth_check(pts, depth, K_FULL).tolist() == [True, False, True, True, True]
+    assert depth_check(pts[[1]], depth, K_FULL, sig, k=20.0).tolist() == [True]

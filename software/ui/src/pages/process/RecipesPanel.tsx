@@ -49,6 +49,7 @@ function settingsChips(r: Recipe): string[] {
   return [
     s.quality === "preview" ? "Preview quality" : "Full quality",
     s.straighten === "off" ? "No straighten" : "Straighten",
+    s.refine === "off" ? "No laser refine" : "Laser refine",
     s.voxel_mm !== null ? `${fmtFixed(s.voxel_mm, s.voxel_mm < 1 ? 1 : 0)} mm voxels` : "Auto voxels",
   ];
 }
@@ -209,7 +210,8 @@ function SaveRecipeDialog({ open, onClose, pid, sid, state }: { open: boolean; o
           <ul className="list-disc space-y-0.5 pl-4">
             <li>
               Stages: {state.stages.track.quality === "preview" ? "preview" : "full"} quality,{" "}
-              {state.stages.straighten.state === "skipped" ? "no straightening" : "straighten"}
+              {state.stages.straighten.state === "skipped" ? "no straightening" : "straighten"},{" "}
+              {state.stages.refine.state === "done" || state.stages.refine.state === "skipped" ? "refine with lasers" : "no laser refine"}
               {state.stages.fuse.voxel_mm !== null ? `, ${fmtFixed(state.stages.fuse.voxel_mm, 1)} mm voxels` : ""}
             </li>
             <li>{kept.length ? `${kept.length} edit${kept.length === 1 ? "" : "s"}: ${kept.map((e) => e.label).join(", ")}` : "No edits"}</li>
@@ -280,7 +282,7 @@ export function RecipesPanel({ pid, sid, state, busy }: { pid: string; sid: stri
           ))}
         </ul>
       )}
-      <Help className="mt-2.5">“Just the edits” keeps the mesh and replaces the edits. “Everything” re-runs Track, Straighten and Fuse with the recipe's settings first.</Help>
+      <Help className="mt-2.5">“Just the edits” keeps the mesh and replaces the edits. “Everything” re-runs Track, Straighten and Refine with lasers with the recipe's settings first.</Help>
 
       <SaveRecipeDialog open={saving} onClose={() => setSaving(false)} pid={pid} sid={sid} state={state} />
       <ConfirmDialog

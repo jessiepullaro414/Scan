@@ -485,6 +485,12 @@ Phase 1 is done when full-quality processing is at least 3x faster on the RTX la
    - It rejects laser outliers against the dense surface.
    - It pulls the mesh onto the laser points with a smooth correction.
    - It reports how far it moved.
+
+   **Status (2026-11-10): done.**
+   - A fourth stage in the Process page, after Fuse, also run by Make mesh and the built-in recipes ("Quick preview" leaves it off). It refines the mesh of the stage that made the base, with that stage's laser cloud.
+   - It drops laser points off the dense surface twice: per frame against the dense depth, and against the fused mesh with a robust fit. It reports how much of the surface it moved, how far, and how far the laser lines were from the surface before and after.
+   - On the simulator, a smooth 0.25 mm depth bias near the lines drops to about 0.05 mm. Without a bias nothing changes: the stage says the mesh already agrees and keeps the edits. Corrections under 0.1 mm are the lasers' own error and are not applied (`VALIDATION.md`, "Refine with lasers").
+   - It corrects only where the lasers swept; the rest of the surface keeps any bias. The per-scan bias model of research plan 4.2.4 (and 4.9.1) would correct the whole scan.
 4. **Measurement-safe mesh edits** (the plan's quick wins):
    - simplify to a tolerance in mm;
    - flag filled faces, so measuring tools skip them;

@@ -427,8 +427,8 @@ export type SaveReply = { session: CalibSession; setup: SetupState };
 // ================================================================== M3 phase 2: processing studio
 // APP_API.md "M3 phase 2: processing studio". Adds to M1 and M2; changes nothing in them.
 
-/** The three stages of a scan's processing; each ends in a fused base mesh. */
-export type StageId = "track" | "straighten" | "fuse";
+/** The four stages of a scan's processing; each ends in a new base mesh. */
+export type StageId = "track" | "straighten" | "fuse" | "refine";
 export type StageState = "none" | "running" | "done" | "failed" | "skipped";
 
 export type MeshOp = "remove_floaters" | "fill_holes" | "smooth" | "decimate" | "delete_faces" | "keep_faces";
@@ -485,11 +485,21 @@ export type StageInfo = { state: StageState; summary: string | null; when: strin
 export type TrackStage = StageInfo & { quality: ProcessQuality | null; tracked_pct: number | null };
 export type StraightenStage = StageInfo & { loops: number | null; correction_mm: number | null; correction_deg: number | null };
 export type FuseStage = StageInfo & { voxel_mm: number | null };
+/** "Refine with lasers": the base stage's mesh pulled onto its laser points. */
+export type RefineStage = StageInfo & {
+  source: StageId | null; // the stage whose mesh was refined
+  points: number | null; // laser points used
+  outliers: number | null; // laser points that disagreed with the surface (glints, reflections)
+  moved_pct: number | null; // share of the surface moved, %
+  moved_mm: number | null; // how far it moved (95th percentile), mm
+  residual_before_mm: number | null; // median distance of the laser points from the surface, before / after
+  residual_after_mm: number | null;
+};
 
 export type ProcessState = {
   project_id: string;
   scan_id: string;
-  stages: { track: TrackStage; straighten: StraightenStage; fuse: FuseStage };
+  stages: { track: TrackStage; straighten: StraightenStage; fuse: FuseStage; refine: RefineStage };
   base: { triangles: number; vertices: number; stage: StageId } | null;
   edits: EditEntry[];
   cursor: number; // edits[0:cursor] are applied
@@ -504,7 +514,7 @@ export type ProcessState = {
   job: Job | null; // the running job of this scan, if any
 };
 
-export type RecipeSettings = { quality: ProcessQuality; straighten: "auto" | "off"; voxel_mm: number | null };
+export type RecipeSettings = { quality: ProcessQuality; straighten: "auto" | "off"; refine?: "auto" | "off"; voxel_mm: number | null };
 export type RecipeOp = { op: RecipeMeshOp; params: Record<string, unknown> };
 export type Recipe = {
   id: string;

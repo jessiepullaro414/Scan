@@ -77,6 +77,7 @@ __all__ = [
     "extract_laser_lines",
     "triangulate_plane",
     "stereo_check",
+    "depth_check",
     "laser_points",
     "draw_overlay",
 ]
@@ -114,6 +115,10 @@ class LaserParams:
     max_depth_mm: float = 600.0
     stereo_check: bool = True
     stereo_tol_px: float = 1.5
+    # agreement with the dense depth (laser_points with a depth map): |z - depth| <= max(min, k sigma)
+    depth_check: bool = True
+    depth_check_k: float = 4.0
+    depth_check_min_mm: float = 1.0
 
     def scaled(self, factor: float) -> "LaserParams":
         """Parameters for images resized by ``factor`` (e.g. 0.5 for 640x400)."""
@@ -548,6 +553,50 @@ def stereo_check(points_c: np.ndarray, right_uv: np.ndarray, K: np.ndarray, base
     return ok
 
 
+#: the dense depth's standard deviation when no sigma map is given, as a share of the depth
+#: (about the median of the calibrated sigma at full resolution: 0.55-0.7 mm at 250-300 mm)
+DEPTH_SIGMA_REL = 0.0025
+
+
+def depth_check(points_c: np.ndarray, depth: np.ndarray, K: np.ndarray, sigma: np.ndarray | None = None,
+                k: float = 4.0, min_mm: float = 1.0, offset_px: int | None = None) -> np.ndarray:
+    """Boolean mask of laser points (frame C, (N,3)) that agree with the dense depth around their pixel.
+
+    The dense depth is read at the point's pixel and ``offset_px`` to each side (default 6 px at
+    1280 px width): on the line itself it can be wrong, because a horizontal line runs along
+    the epipolar rows and gives the matcher nothing to hold on to there. A point passes when one
+    of these samples is within ``max(min_mm, k * sigma)`` (``sigma`` the dense depth's standard
+    deviation there, or :data:`DEPTH_SIGMA_REL` times the depth), and also where the dense depth
+    has no value (nothing to disagree with). Reflections and glints are triangulated on the
+    laser plane at the wrong depth, millimetres to centimetres off the dense surface all round.
+    ``depth`` (mm, 0 = none) must be the image the lines were found in, so that ``K`` fits it.
+    """
+    P = np.asarray(points_c, dtype=np.float64).reshape(-1, 3)
+    ok = np.ones(len(P), bool)
+    if len(P) == 0:
+        return ok
+    h, w = depth.shape[:2]
+    o = int(offset_px) if offset_px is not None else max(2, int(round(6.0 * w / 1280.0)))
+    z = P[:, 2]
+    good = np.isfinite(P).all(axis=1) & (z > 0)
+    zs = np.where(good, z, 1.0)
+    u = np.rint(K[0, 0] * P[:, 0] / zs + K[0, 1] * P[:, 1] / zs + K[0, 2]).astype(np.int64)
+    v = np.rint(K[1, 1] * P[:, 1] / zs + K[1, 2]).astype(np.int64)
+    seen = np.zeros(len(P), bool)  # some dense depth around the point
+    agree = np.zeros(len(P), bool)
+    for du, dv in ((0, 0), (0, -o), (0, o), (-o, 0), (o, 0)):
+        uu, vv = u + du, v + dv
+        idx = np.flatnonzero(good & (uu >= 0) & (uu < w) & (vv >= 0) & (vv < h))
+        d = depth[vv[idx], uu[idx]].astype(np.float64)
+        has = d > 0
+        s = sigma[vv[idx], uu[idx]].astype(np.float64) if sigma is not None else DEPTH_SIGMA_REL * d
+        tol = np.maximum(float(min_mm), float(k) * s)
+        seen[idx[has]] = True
+        agree[idx[has]] |= np.abs(z[idx[has]] - d[has]) <= tol[has]
+    ok[seen] = agree[seen]
+    return ok
+
+
 def laser_points(
     left_r: np.ndarray,
     right_r: np.ndarray | None,
@@ -558,13 +607,19 @@ def laser_points(
     *,
     lines_left: LaserLines | None = None,
     lines_right: LaserLines | None = None,
+    depth: np.ndarray | None = None,
+    depth_sigma: np.ndarray | None = None,
+    rejected: dict[str, int] | None = None,
 ) -> dict[str, np.ndarray]:
     """Validated laser points (mm, frame C) per calibrated plane: ``{name: (N,3)}``.
 
     Extracts the lines in the left image (unless ``lines_left`` is given), triangulates them on
     their planes, keeps depths within ``[min_depth_mm, max_depth_mm]`` and, if
     ``params.stereo_check`` is set and the right image (or ``lines_right``) is available,
-    applies :func:`stereo_check`. Plane names other than "vertical"/"horizontal" are ignored.
+    applies :func:`stereo_check`. With a dense ``depth`` map of the left image (and its
+    ``depth_sigma``) and ``params.depth_check``, also :func:`depth_check`; ``rejected`` (when
+    given) counts the points it drops per plane. Plane names other than "vertical"/"horizontal"
+    are ignored.
     """
     p = params if params is not None else LaserParams()
     if lines_left is None:
@@ -582,6 +637,12 @@ def laser_points(
         ok = np.isfinite(z) & (z >= p.min_depth_mm) & (z <= p.max_depth_mm)
         if do_check and ok.any():
             ok &= stereo_check(P, lines_right.get(name), K, baseline, p.stereo_tol_px)
+        if p.depth_check and depth is not None and ok.any() and depth.shape[:2] == left_r.shape[:2]:
+            agree = depth_check(P[ok], depth, K, depth_sigma, p.depth_check_k, p.depth_check_min_mm)
+            if rejected is not None:
+                rejected[name] = rejected.get(name, 0) + int((~agree).sum())
+            keep = np.flatnonzero(ok)
+            ok[keep[~agree]] = False
         out[name] = P[ok]
     return out
 

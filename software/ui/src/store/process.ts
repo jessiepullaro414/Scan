@@ -70,7 +70,7 @@ const blank = (pid: string, sid: string): ProcessEntry => ({
   failure: null,
 });
 
-const STAGE_LABEL: Record<StageId, string> = { track: "Track", straighten: "Straighten", fuse: "Fuse" };
+const STAGE_LABEL: Record<StageId, string> = { track: "Track", straighten: "Straighten", fuse: "Fuse", refine: "Refine with lasers" };
 
 /** "Filling holes…" → "Filling holes". */
 const fromBusy = (busy: string | null | undefined) => (busy ? busy.replace(/[.…\s]+$/, "") : null);
@@ -177,7 +177,9 @@ export const useProcess = create<ProcessStore>((set, get) => {
           ? () => api.processTrack(pid, sid, opts.quality ?? "full")
           : stage === "straighten"
             ? () => api.processStraighten(pid, sid)
-            : () => api.processFuse(pid, sid, opts.voxel_mm ?? 1);
+            : stage === "refine"
+              ? () => api.processRefine(pid, sid)
+              : () => api.processFuse(pid, sid, opts.voxel_mm ?? 1);
       return startJob(pid, sid, stage, label, `Couldn't start ${label}`, call);
     },
 

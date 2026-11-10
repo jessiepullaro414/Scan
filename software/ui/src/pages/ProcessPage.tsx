@@ -109,7 +109,8 @@ function useKeyedData<T>(key: string | null, load: () => Promise<T>) {
 function describeChange(a: ProcessState | undefined, b: ProcessState | undefined): string {
   if (!a || !b) return "the previous version";
   const baseChanged = a.base?.stage !== b.base?.stage || a.base?.triangles !== b.base?.triangles;
-  if (baseChanged && b.cursor === 0) return `before ${b.base ? { track: "Track", straighten: "Straighten", fuse: "Fuse" }[b.base.stage] : "the stage"} ran again`;
+  if (baseChanged && b.cursor === 0)
+    return `before ${b.base ? { track: "Track", straighten: "Straighten", fuse: "Fuse", refine: "Refine with lasers" }[b.base.stage] : "the stage"} ran again`;
   if (b.cursor === a.cursor + 1 && b.edits[b.cursor - 1] && (a.edits[a.cursor]?.id !== b.edits[b.cursor - 1].id || a.edits.length < b.edits.length))
     return `before “${b.edits[b.cursor - 1].label}”`;
   if (b.cursor < a.cursor) return "before the undo";

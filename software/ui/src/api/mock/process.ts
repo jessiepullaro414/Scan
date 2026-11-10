@@ -21,6 +21,7 @@ import type {
   RecipeOp,
   RecipeScope,
   RecipeSettings,
+  RefineStage,
   Scan,
   StageId,
   StraightenStage,
@@ -45,7 +46,7 @@ import {
 } from "./meshops";
 import { mockTrajectory, scanMesh } from "./scanmesh";
 
-type Stages = { track: TrackStage; straighten: StraightenStage; fuse: FuseStage };
+type Stages = { track: TrackStage; straighten: StraightenStage; fuse: FuseStage; refine: RefineStage };
 
 type Studio = {
   pid: string;
@@ -187,11 +188,16 @@ const freshStages = (): Stages => ({
   track: { state: "none", summary: null, when: null, job_id: null, quality: null, tracked_pct: null },
   straighten: { state: "none", summary: null, when: null, job_id: null, loops: null, correction_mm: null, correction_deg: null },
   fuse: { state: "none", summary: null, when: null, job_id: null, voxel_mm: null },
+  refine: {
+    state: "none", summary: null, when: null, job_id: null, source: null, points: null, outliers: null,
+    moved_pct: null, moved_mm: null, residual_before_mm: null, residual_after_mm: null,
+  },
 });
 
 function patchStage(st: Studio, id: StageId, p: { state?: TrackStage["state"]; summary?: string | null; when?: string | null; job_id?: string | null }) {
   if (id === "track") st.stages.track = { ...st.stages.track, ...p };
   else if (id === "straighten") st.stages.straighten = { ...st.stages.straighten, ...p };
+  else if (id === "refine") st.stages.refine = { ...st.stages.refine, ...p };
   else st.stages.fuse = { ...st.stages.fuse, ...p };
 }
 
@@ -220,6 +226,7 @@ export class MockProcess {
       return json(200, this.startTrack(p, s, q));
     }
     if (a === "straighten" && is("POST", 1)) return json(200, this.startStraighten(p, s));
+    if (a === "refine" && is("POST", 1)) return json(200, this.startRefine(p, s));
     if (a === "fuse" && is("POST", 1)) return json(200, this.startFuse(p, s, body.voxel_mm));
     if (a === "edits" && is("POST", 1)) return json(200, this.startEdit(p, s, body));
     if (a === "undo" && is("POST", 1)) return json(200, this.step(p, s, -1));
@@ -322,7 +329,7 @@ export class MockProcess {
     const q: ProcessQuality = (s as Scan & { quality?: ProcessQuality }).quality ?? "full";
     const commit = runSync(this.pipeline(st, s, { ...BUILTINS[0].settings, quality: q }, BUILTINS[0].ops, null));
     commit();
-    for (const id of ["track", "straighten", "fuse"] as const) if (st.stages[id].when) patchStage(st, id, { when: s.created });
+    for (const id of ["track", "straighten", "fuse", "refine"] as const) if (st.stages[id].when) patchStage(st, id, { when: s.created });
     for (const e of st.edits) e.created = s.created;
   }
 
@@ -331,7 +338,7 @@ export class MockProcess {
     return {
       project_id: st.pid,
       scan_id: st.sid,
-      stages: { track: { ...st.stages.track }, straighten: { ...st.stages.straighten }, fuse: { ...st.stages.fuse } },
+      stages: { track: { ...st.stages.track }, straighten: { ...st.stages.straighten }, fuse: { ...st.stages.fuse }, refine: { ...st.stages.refine } },
       base: st.base ? { triangles: st.base.mesh.indices.length / 3, vertices: st.base.mesh.positions.length / 3, stage: st.base.stage } : null,
       edits: st.edits.map((e) => ({ ...e })),
       cursor: st.cursor,
@@ -621,6 +628,7 @@ export class MockProcess {
         const fresh = freshStages();
         st.stages.straighten = fresh.straighten;
         st.stages.fuse = fresh.fuse;
+        st.stages.refine = fresh.refine;
         self.trackDone(st, s, quality, r.tracked, nowIso());
         self.newBase(st, r.mesh!, "track");
         self.markProcessed(p, s, quality);
@@ -648,6 +656,27 @@ export class MockProcess {
       };
     })();
     return this.start(st, s, "process_straighten", "Straightening…", 4, work, "straighten");
+  }
+
+  /** The mock's meshes have no laser cloud of their own: refining finds they already agree. */
+  private startRefine(p: Project, s: Scan): Job {
+    const st = this.ensure(p, s);
+    this.guard(st, s);
+    if (st.stages.track.state !== "done" || !st.base) throw new HttpError(409, "Refine with lasers needs a finished Track", "Run Track first.");
+    const work = (function* (): JobWork {
+      yield* tick(0, 0.3, 2, () => "Reading the laser points");
+      yield* tick(0.3, 1, 4, () => "Refining: fitting the correction field");
+      return () => {
+        const points = 18_000 + (seedOf(s.id) % 9000);
+        st.stages.refine = {
+          ...st.stages.refine, state: "skipped", when: nowIso(), job_id: null, source: st.base!.stage,
+          summary: `The mesh already agrees with the laser lines (0.06 mm median difference over ${points.toLocaleString("en-US")} points), so nothing was changed`,
+          points, outliers: 41, moved_pct: 0, moved_mm: null, residual_before_mm: 0.06, residual_after_mm: 0.06,
+        };
+        return { project_id: p.id, scan_id: s.id, version: st.version };
+      };
+    })();
+    return this.start(st, s, "process_refine", "Refining with the laser lines…", 2.5, work, "refine");
   }
 
   private startFuse(p: Project, s: Scan, voxelIn: unknown): Job {
@@ -818,7 +847,7 @@ export class MockProcess {
   // ---------------------------------------------------------------- jobs
   /** Start a job of this scan: busy, the stage running, and on failure / cancel everything as it was. */
   private start(st: Studio, s: Scan, kind: string, busy: string, minSeconds: number, work: JobWork, stageId: StageId | null, prevStatus: Scan["status"] | null = null): Job {
-    const before: Stages = { track: { ...st.stages.track }, straighten: { ...st.stages.straighten }, fuse: { ...st.stages.fuse } };
+    const before: Stages = { track: { ...st.stages.track }, straighten: { ...st.stages.straighten }, fuse: { ...st.stages.fuse }, refine: { ...st.stages.refine } };
     let restore = prevStatus;
     if (!st.current && s.status !== "processing") {
       restore = s.status;
