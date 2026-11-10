@@ -860,7 +860,8 @@ def refine_from_images(V: np.ndarray, F: np.ndarray, left: Sequence[np.ndarray],
 
 
 def project_onto_patches(V: np.ndarray, N: np.ndarray, patches: Patches, offset: np.ndarray, half_mm: float,
-                         sigma_mm: float, gate_mm: float = 1.0, k: int = 12) -> tuple[np.ndarray, np.ndarray]:
+                         sigma_mm: float, gate_mm: float = 1.0, k: int = 12,
+                         chunk: int = 25_000) -> tuple[np.ndarray, np.ndarray]:
     """Move each vertex onto the refined surface of the patches around it (module docstring,
     step 5): each patch within ``half_mm`` (on the same side of a thin wall) says how far the vertex
     lies off its quadric moved by ``offset``, along its normal; these are averaged with Gaussian
@@ -880,8 +881,8 @@ def project_onto_patches(V: np.ndarray, N: np.ndarray, patches: Patches, offset:
     tree = cKDTree(g[:, 0:3])
     full = float(np.exp(-0.5 * (0.5 * half_mm / sigma_mm) ** 2))  # one patch at half its reach
     kk = min(k, len(patches))
-    for c0 in range(0, n, 200_000):
-        Vc = V[c0:c0 + 200_000]
+    for c0 in range(0, n, chunk):
+        Vc = V[c0:c0 + chunk]
         dist, j = tree.query(Vc, k=kk, distance_upper_bound=half_mm, workers=-1)
         if dist.ndim == 1:
             dist, j = dist[:, None], j[:, None]
@@ -895,14 +896,14 @@ def project_onto_patches(V: np.ndarray, N: np.ndarray, patches: Patches, offset:
         q = G[..., 12:18]
         target = q[..., 0] + q[..., 1] * a + q[..., 2] * b + q[..., 3] * a * a + q[..., 4] * a * b + q[..., 5] * b * b
         r = target + np.asarray(offset)[j] - h
-        same = np.einsum("ik,ijk->ij", N[c0:c0 + 200_000], G[..., 9:12]) > 0.5
+        same = np.einsum("ik,ijk->ij", N[c0:c0 + chunk], G[..., 9:12]) > 0.5
         w = np.where(valid & same & (np.abs(r) <= gate_mm), np.exp(-0.5 * (np.where(valid, dist, 0.0) / sigma_mm) ** 2), 0.0)
         W = w.sum(axis=1)
         m = np.einsum("ij,ij,ijk->ik", w, r, G[..., 9:12]) / np.maximum(W, 1e-12)[:, None]
         x = np.clip(W / full, 0.0, 1.0)
         fade = x * x * (3.0 - 2.0 * x)
-        move[c0:c0 + 200_000] = m * fade[:, None]
-        cover[c0:c0 + 200_000] = fade
+        move[c0:c0 + chunk] = m * fade[:, None]
+        cover[c0:c0 + chunk] = fade
     return move, cover
 
 

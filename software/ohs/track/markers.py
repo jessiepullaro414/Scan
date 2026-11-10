@@ -538,8 +538,12 @@ class MarkerTracker:
         two disagreeing observations the first is kept until a third one decides.
         """
         A = np.stack(obs)
-        D = np.linalg.norm(A[:, None] - A[None, :], axis=3).max(axis=2)  # max corner distance (n,n)
-        close = D < thr
+        n = len(A)
+        close = np.empty((n, n), dtype=bool)
+        for r0 in range(0, n, 64):  # in blocks of rows: the (n,n,4,3) difference never exists whole
+            # max corner distance of a block of rows against all observations
+            D = np.linalg.norm(A[r0:r0 + 64, None] - A[None, :], axis=3).max(axis=2)
+            close[r0:r0 + 64] = D < thr
         best = int(np.argmax(close.sum(axis=1)))  # argmax returns the first (oldest) on ties
         members = close[best]
         return A[members].mean(axis=0), members

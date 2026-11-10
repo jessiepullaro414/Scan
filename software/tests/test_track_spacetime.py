@@ -128,3 +128,23 @@ def test_the_refined_mesh_is_closer_to_the_truth(scan):
     assert np.median(d1[moved]) < 0.75 * np.median(d0[moved])
     assert np.percentile(d1[moved], 95) < np.percentile(d0[moved], 95)
     assert rep["moved"]["p95"] < 0.3
+
+
+def test_projection_does_not_depend_on_the_chunk_size():
+    rng = np.random.default_rng(2)
+    V, F = grid(81, 81, 1.0, z=lambda x, y: 0.05 * np.sin(x / 7.0))
+    V[:, 2] += rng.normal(0.0, 0.05, len(V))
+    N = vertex_normals(V, F)
+    xs, ys = np.meshgrid(np.arange(4.0, 60.0, 2.0), np.arange(4.0, 77.0, 2.0))
+    P = np.stack([xs.ravel(), ys.ravel(), np.zeros(xs.size)], axis=1)
+    geo = np.zeros((len(P), 18))
+    geo[:, 0:3], geo[:, 3:6], geo[:, 6:9], geo[:, 9:12] = P, [1, 0, 0], [0, 1, 0], [0, 0, 1]
+    geo[:, 12:18] = rng.normal(0.0, 0.02, (len(P), 6))  # curved patches, so every term of the quadric counts
+    patches = Patches(np.zeros(len(P), dtype=np.int64), geo)
+    off = rng.normal(0.2, 0.05, len(P))
+    assert len(V) > 2000
+    ref_move, ref_cover = project_onto_patches(V, N, patches, off, half_mm=3.0, sigma_mm=2.0)
+    assert np.any(ref_move != 0.0) and np.any(ref_cover == 0.0)
+    for chunk in (1, 777, 2000, 25_000):
+        move, cover = project_onto_patches(V, N, patches, off, half_mm=3.0, sigma_mm=2.0, chunk=chunk)
+        assert np.array_equal(move, ref_move) and np.array_equal(cover, ref_cover)

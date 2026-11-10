@@ -492,7 +492,10 @@ bench medians before and after in the commit message.
 
 ## P. Offline processing
 
-### [ ] P1. Marker map refinement peaks at 0.5 GB (Sonnet, S) ✔
+### [x] P1. Marker map refinement peaks at 0.5 GB (Sonnet, S) ✔
+- **Done 2026-11-10:** `_consensus` builds the "close" table in blocks of 64 rows. Peak memory at
+  1,410 frames: 511 MB before, 28 MB after; time unchanged at about 0.3 s (measured by the
+  builder, not repeated in review).
 - **Where:** `ohs/track/markers.py:534-545` (`_consensus`), called from `refine_map`
   (`:571-595`); the frame list it works on is never capped (`:614`, `:638`).
 - **Problem:** `A[:,None]-A[None,:]` builds an n×n×4×3 float64 tensor per tag and per iteration.
@@ -516,7 +519,10 @@ bench medians before and after in the commit message.
   Meshes with two vertices at the same position may differ there; the exact index is the correct
   one, say so in the commit.
 
-### [ ] P3. Mesh refinement peaks at 350 MB per chunk (Sonnet, S) ✔
+### [x] P3. Mesh refinement peaks at 350 MB per chunk (Sonnet, S) ✔
+- **Done 2026-11-10:** `project_onto_patches` takes `chunk` (default 25,000 vertices, was a fixed
+  200,000). Peak memory with 200,000 vertices and 10,000 patches: 606 MB before, 145 MB after;
+  time unchanged at 2.6 s (measured by the builder, not repeated in review).
 - **Where:** `ohs/track/spacetime.py:883-905` (`project_onto_patches`).
 - **Problem:** chunks of 200,000 vertices with 12 neighbours of 18 float64 values each.
 - **Change:** chunks of about 25,000; rows are independent, so the output is bit-identical.

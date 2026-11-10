@@ -282,3 +282,32 @@ def test_pnp_fallback_and_failures():
     no_pnp.track(*render_pair(poses[0], tags, rng), 0.0)
     r3 = no_pnp.track(left, right, 4 / 30.0)
     assert not r3.ok and r3.info["reason"] == "few_tags"
+
+
+def _consensus_reference(obs, thr):
+    """The original ``MarkerTracker._consensus`` (one n x n x 4 x 3 tensor), kept as the guard."""
+    A = np.stack(obs)
+    D = np.linalg.norm(A[:, None] - A[None, :], axis=3).max(axis=2)
+    close = D < thr
+    best = int(np.argmax(close.sum(axis=1)))
+    members = close[best]
+    return A[members].mean(axis=0), members
+
+
+@pytest.mark.parametrize("n", [1, 2, 5, 64, 65, 200, 333])
+def test_consensus_blocks_equal_the_single_tensor_version(n):
+    rng = np.random.default_rng(n)
+    base = tag_corners_local(20.0)
+    # a few clusters of observations (with noise) plus exact duplicates, so ties occur
+    centres = rng.normal(0.0, 50.0, (3, 1, 3))
+    obs = [base + centres[rng.integers(3)] + rng.normal(0.0, 0.4, (4, 3)) for _ in range(n)]
+    for k in range(0, n - 1, 3):
+        obs[k + 1] = obs[k].copy()  # exact ties
+    if n > 6:
+        obs[n // 2:] = obs[: n - n // 2]  # whole repeated halves: equal counts for several members
+    for thr in (0.5, 2.0, 1e9):
+        want_c, want_m = _consensus_reference(obs, thr)
+        got_c, got_m = MarkerTracker._consensus(obs, thr)
+        assert got_c.dtype == want_c.dtype and got_m.dtype == want_m.dtype
+        assert got_c.shape == want_c.shape and got_m.shape == want_m.shape
+        assert np.array_equal(got_c, want_c) and np.array_equal(got_m, want_m)
