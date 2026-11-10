@@ -135,13 +135,13 @@ by the snapshot tool.
 ### [ ] F1. Measure the waits a user feels, and set targets (Sonnet, M)
 - **Partly done 2026-11-10:** `ohs bench` prints, per run, the wait per minute of scanning at the
   camera's frame rate (60 fps), from the mean frame time, and stores it as `wait_per_minute_min`.
-  Still open: the fixed tail after the last frame, the engine start time, the table in
-  VALIDATION.md and the targets.
+  Still open: the fixed tail after the last frame, the engine start time and the table in
+  VALIDATION.md.
 - **Change:** `ohs bench` also reports, per quality, the wait per minute of scanning at the
   camera's frame rate, and the fixed tail after the last frame (meshing, cleaning, export). Add a
   timing of engine start to first status message. Put the table above into VALIDATION.md with the
   measured values, and the targets next to them.
-- **Targets (proposed; the owner decides):** live at least 15 fps on integrated graphics and 30 fps
+- **Targets (agreed by the owner, 2026-11-10):** live at least 15 fps on integrated graphics and 30 fps
   on a gaming GPU (both met today). After a scan, the full-quality mesh within the time the scan
   took on a gaming GPU, and within three times that on integrated graphics (today about 3 times
   and 9 times).
