@@ -17,7 +17,9 @@
 
    * speed: per stage of ``FrameResult.timings_ms`` the mean and median ms per frame, the total
      and frames per second, and the GPU speed-up per stage and overall. ``laser`` is
-     ``laser_extract + laser_triangulate``; ``track`` includes ``track_filter``, ``raycast``,
+     ``laser_extract + laser_triangulate``, where ``laser_extract`` is how long the frame still waits
+     for the laser lines (they are extracted in two threads during the depth; ``laser_extract_cpu``
+     is their own time, both images together); ``track`` includes ``track_filter``, ``raycast``,
      ``icp`` and the integrations;
    * accuracy: the trajectory error against the true poses
      (:func:`~ohs.app.process.trajectory_errors`) and the depth error on the frames with true depth

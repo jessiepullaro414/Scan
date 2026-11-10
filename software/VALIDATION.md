@@ -163,6 +163,34 @@ The heavy steps now run on any OpenCL GPU (`ohs.compute`), and the CPU path abov
 - **In the app:** a 15 s simulated scan (449 frames) meshed at full quality in about 1 min 50 s on the GPU.
 - **Results files:** in `~/.ohs/bench/results/`; `ohs bench` reproduces them on any machine.
 
+## GPU tuning (M3, 2026-11-10)
+
+The first tuning round, from `ohs bench` per-stage tables on both machines. The tuning targets above turned out to be ordering and sampling more than kernels.
+
+**What changed:**
+- **The laser lines run in the background.** Two CPU threads extract them while the depth runs (on the GPU, or in SGBM's threads). On the laptop the frame now never waits for them. On the Radeon it still waits a little, because there the depth step's own CPU work competes with them. One thread was slower than two.
+- **ICP samples every 8th pixel at its finest level** at full resolution (no level closer than 8 px at 1280 px width, scaled with the width; a 640 px preview keeps its strides of 16, 8 and 4).
+  - First the strides themselves scaled with the width. At 320x200 that meant every 2nd pixel, and the CPU path's live-scan test then crashed in Open3D's ray cast in 2 of 3 runs. The minimum spacing leaves everything below full resolution as it was.
+  - On five simulated scans the trajectory RMS went 0.13 / 0.24 / 0.08 / 1.06 / 0.74 → 0.14 / 0.19 / 0.08 / 0.69 / 0.68 mm.
+  - It is 3–4 times faster.
+  - Neighbouring pixels share the camera-fixed dot error, so the denser sampling added bias, not information.
+- **The confidence TSDF weighs its pixels on the GPU.** Several full-image numpy passes on the CPU are gone, and one image fewer is uploaded. Its brick search now samples the same share of a brick at every voxel size: at preview every 4th pixel instead of every 2nd, and the mesh keeps its area within 0.06 %.
+- **Stereo-matching work-groups (not changed):** a sweep of `GpuTuning.lines_v`, `lines_h` and `dpt` found the defaults fastest on both GPUs (22.5 ms per frame on the RTX, 72.8 ms on the 680M), and every setting gives the same disparities. Larger work-groups don't fit: the vertical SGM kernel is limited to 256 work-items on both GPUs.
+
+**Speed, GPU mode** (ms per frame, mean; same bench, same accuracy):
+
+| Machine | Quality | Before (a024ec4) | After (880aa6b) |
+|---|---|---|---|
+| RTX 3070 Ti laptop | full | 124.4 (8.0 fps) | **72.6 (13.8 fps)** |
+| | preview | 53.1 (18.8 fps) | **33.0 (30.3 fps)** |
+| Radeon 680M | full | 217.4 (4.6 fps) | **170.1 (5.9 fps)** |
+| | preview | 73.0 (13.7 fps) | **66.3 (15.1 fps)** |
+
+- On the laptop the GPU path is now 4.6 times faster than the CPU path at full quality (332 ms), and 2.3 times at preview.
+- Trajectory error on the bench: 0.13 mm / 0.017° median at full quality (it was 0.15 mm / 0.035°), and 0.21 mm / 0.025° at preview (unchanged).
+- **Per-stage times can mislead.** The tracking model's GPU integration is queued and returns at once, so the next frame's depth step waits for it: on the laptop the matcher alone takes 22.5 ms, while "depth" shows 28.8 ms. The whole-frame time is the number to trust.
+- **Left for the next round:** the tracking filter (12.6 ms on the laptop, OpenCV on the CPU, barely faster in GPU mode) and the confidence TSDF's brick search (CPU numpy) on the GPU.
+
 ## Straighten: loop closure (M3 phase 2, 2026-11-09)
 
 `ohs/track/posegraph.py` closes loops where a scan passes over an earlier part again:

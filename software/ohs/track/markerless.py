@@ -147,11 +147,12 @@ class FusionParams:
     model_normal_window: int = 5  # box-average model normals over k x k ray-cast pixels (1 = off)
     extract_weight_threshold: float = 3.0
     # ICP
-    # source subsampling per level (coarse -> fine), in pixels of a 1280 px wide image (scaled with the width).
-    # The finest level samples every 8th pixel at 1280 px, not every 4th:
-    # neighbouring points share the camera-fixed dot error, so the denser sampling was 3-4 times slower and no
-    # more accurate (VALIDATION.md, "GPU tuning")
-    icp_strides: tuple[int, ...] = (16, 8, 8)
+    icp_strides: tuple[int, ...] = (16, 8, 4)  # source subsampling per level (coarse -> fine), px
+    # no level samples closer than this many pixels of a 1280 px wide image (scaled with the width): at full
+    # resolution the finest level takes every 8th pixel, not every 4th. Neighbouring points share the
+    # camera-fixed dot error, so the denser sampling was 3-4 times slower and no more accurate (VALIDATION.md,
+    # "GPU tuning"); at 640 px and below the strides stay as they are.
+    icp_min_spacing: float = 8.0
     icp_iterations: tuple[int, ...] = (8, 6, 4)
     icp_max_dist_mm: tuple[float, ...] = (15.0, 8.0, 4.0)
     huber_mm: float = 1.5  # Huber threshold at the finest level
@@ -338,9 +339,9 @@ class MarkerlessTracker:
         # Open3D's ray_cast hangs if the range-map factor does not divide the image size
         self._range_down = next(f for f in (8, 4, 2, 1)
                                 if self._ray_size[0] % f == 0 and self._ray_size[1] % f == 0)
-        # the strides are set for 1280 px wide images and scale with the width, so every resolution
-        # samples about as many points (a 640 px preview: every 4th pixel at the finest level)
-        self._strides = [max(1, int(round(s * w / 1280.0))) for s in p.icp_strides]
+        # strides, at least icp_min_spacing pixels of a 1280 px image apart (every 8th pixel at full resolution)
+        spacing = max(1, int(round(float(p.icp_min_spacing) * w / 1280.0)))
+        self._strides = [max(int(s), spacing) for s in p.icp_strides]
         # the same area of smooth depth whatever the finest stride: min_points is counted at stride 4
         self._min_src = max(30, int(round(p.min_points * 16.0 / float(self._strides[-1]) ** 2)))
         # source back-projection rays for every ICP level

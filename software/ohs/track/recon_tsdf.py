@@ -49,8 +49,9 @@ also the tests' reference. ``"auto"`` picks the GPU when there is one.
 its ``color`` carries ``(sigma, nlook, wsum)``, which marching cubes interpolates like a colour
 (Open3D scales colours by 1/255 on the way out; undone here).
 
-**Speed** (1280x800, Radeon 680M): about 20-28 ms per frame, most of it the CPU's brick bookkeeping
-(Open3D's CPU integration: 16-19 ms). The numpy twin needs about 0.5 s per frame, so without a GPU
+**Speed** (1280x800): about 15 ms per frame on the Radeon 680M and 8 ms on an RTX 3070 Ti laptop, most of
+it the CPU's brick search (Open3D's CPU integration: 15-18 ms); at 640x400 with 2 mm voxels about 2-5 ms.
+The kernel applies :func:pixel_weights' rules itself, on the raw depth and sigma. The numpy twin needs about 0.5 s per frame, so without a GPU
 the pipeline keeps Open3D (no confidence) unless asked for this model.
 
 The interface mirrors :class:`ohs.track.markerless.MarkerlessTracker`'s model side (``integrate``,
