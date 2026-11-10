@@ -82,13 +82,13 @@ __kernel void recon_integrate(
     __global float *tsdf, __global float *wsum, __global float *m2, __global float *s2, __global float *nobs,
     __global float *nlook, __global uint *luv,
     __global const int *slots, __global const int *keys, const int n_active,
-    __global const float *depth, __global const float *wmap, __global const float *vmap, const int w, const int h,
+    __global const float *depth, __global const float *sigma, const int has_sigma, const int w, const int h,
     const float fx, const float fy, const float cx, const float cy, const float sk,
     const float r00, const float r01, const float r02,
     const float r10, const float r11, const float r12,
     const float r20, const float r21, const float r22,
     const float t0, const float t1, const float t2,
-    const float voxel, const float trunc, const float depth_max, const float look2)
+    const float voxel, const float trunc, const float depth_min, const float depth_max, const float look2)
 {
     const int gid = get_global_id(0);
     const int b = gid >> 9;
@@ -107,19 +107,25 @@ __kernel void recon_integrate(
     if (!(u >= -0.5f && u < (float)w - 0.5f && v >= -0.5f && v < (float)h - 0.5f)) return;
     const int ui = min((int)floor(u + 0.5f), w - 1), vi = min((int)floor(v + 0.5f), h - 1);
     const int pix = vi * w + ui;
-    const float d = depth[pix];
-    if (!(d > 0.0f) || d > depth_max) return;
+    const float d = depth[pix];  // raw: NaN, or outside [depth_min, depth_max], is no depth
+    if (!(d >= depth_min && d <= depth_max)) return;
     const float sdf = d - pz;
     if (sdf < -trunc) return;
-    const float wt = wmap[pix];
-    if (!(wt > 0.0f)) return;
+    // the weight and variance of pixel_weights(): 1, and min(sigma, trunc)^2 (trunc^2 / 9 without sigmas)
+    const float wt = 1.0f;
+    float var = trunc * trunc / 9.0f;
+    if (has_sigma) {
+        const float sg = sigma[pix];
+        const float sc = (isnan(sg) || isinf(sg)) ? trunc : fmin(sg, trunc);
+        var = sc * sc;
+    }
     const float x = fmin(sdf, trunc);
     const int a = slots[b] * 512 + l;
     const float W0 = wsum[a], m0 = tsdf[a];
     const float W1 = W0 + wt;
     const float m1 = m0 + (wt / W1) * (x - m0);
     m2[a] += wt * (x - m0) * (x - m1);
-    s2[a] += wt * wt * vmap[pix];
+    s2[a] += wt * wt * var;
     tsdf[a] = m1;
     wsum[a] = W1;
     nobs[a] += 1.0f;
@@ -132,7 +138,7 @@ __kernel void recon_integrate(
 }
 """
 _I, _F = np.int32, np.float32
-_ARGS = [None] * 9 + [_I] + [None, None, None] + [_I, _I] + [_F] * 5 + [_F] * 12 + [_F] * 4
+_ARGS = [None] * 9 + [_I] + [None, None] + [_I, _I, _I] + [_F] * 5 + [_F] * 12 + [_F] * 5
 
 
 def _encode(k: np.ndarray) -> np.ndarray:
@@ -352,19 +358,25 @@ class ConfidenceTsdf:
             x = (us - K[0, 2] - K[0, 1] * y) / K[0, 0]
             self._rays = np.stack([x, y, np.ones_like(x)], axis=-1).astype(np.float32)
         z = depth[s // 2::s, s // 2::s]
-        ok = (z > 0) & (z <= self.depth_max_mm)
+        ok = (z >= self.depth_min_mm) & (z <= self.depth_max_mm)  # also on raw depth: NaN compares false
         if not ok.any():
             return np.zeros((0, 3), dtype=np.int64)
         inv = np.float32(1.0 / (BRICK * self.voxel_mm))
         R = (T_wc[:3, :3] * inv).astype(np.float32)
-        rr = self._rays[ok]
-        D = rr @ R.T  # the ray (z = 1) in world bricks
-        P0 = D * z[ok][:, None] + (T_wc[:3, 3] * inv).astype(np.float32)
+        D = self._rays @ R.T  # the rays (z = 1) in world bricks, on the sample grid
+        zz = np.where(ok, z, np.float32(0.0)).astype(np.float32)
+        P0 = D * zz[..., None] + (T_wc[:3, 3] * inv).astype(np.float32)
         tr = np.float32(self.trunc_mm)
-        enc = np.concatenate([_encode(np.floor(P0 + off * D).astype(np.int64)) for off in (-tr, np.float32(0.0), tr)])
-        # neighbouring samples mostly share a brick: drop runs before the (sorting) unique
-        enc = enc[np.concatenate(([True], enc[1:] != enc[:-1]))]
-        return _decode(np.unique(enc))
+        parts = []
+        for off in (-tr, np.float32(0.0), tr):
+            enc = _encode(np.floor(P0 + off * D).reshape(-1, 3).astype(np.int64)).reshape(z.shape)
+            # neighbouring samples mostly share a brick: drop those equal to the sample left of or
+            # above them (when that one is valid) before the (sorting) unique; the set is the same
+            dup = np.zeros(z.shape, dtype=bool)
+            dup[:, 1:] = (enc[:, 1:] == enc[:, :-1]) & ok[:, :-1]
+            dup[1:, :] |= (enc[1:, :] == enc[:-1, :]) & ok[:-1, :]
+            parts.append(enc[ok & ~dup])
+        return _decode(np.unique(np.concatenate(parts)))
 
     # ------------------------------------------------------------------ integration
     def integrate(self, depth_mm: np.ndarray, sigma_mm: np.ndarray | None, T_wc: np.ndarray,
@@ -376,17 +388,22 @@ class ConfidenceTsdf:
         w, h = self.image_size
         if depth.shape != (h, w):
             raise ValueError(f"depth has shape {depth.shape}, expected {(h, w)}")
-        depth = np.where(np.isfinite(depth) & (depth >= self.depth_min_mm) & (depth <= self.depth_max_mm),
-                         depth, np.float32(0.0)).astype(np.float32)
-        wmap, vmap = pixel_weights(depth, sigma_mm, self.trunc_mm)
         T = np.asarray(T_wc, dtype=np.float64).reshape(4, 4)
-        slots, keys = self._slots_for(self._frame_bricks(depth, T))
-        if len(slots):
-            R_cw = T[:3, :3].T
-            t_cw = -R_cw @ T[:3, 3]
-            if self.dev is not None:
-                self._integrate_gpu(slots, keys, depth, wmap, vmap, R_cw, t_cw)
-            else:
+        R_cw = T[:3, :3].T
+        t_cw = -R_cw @ T[:3, 3]
+        if self.dev is not None:
+            # the kernel checks the raw depth and weighs each pixel itself (the rules of pixel_weights),
+            # which saves several full-image passes on the CPU and one upload
+            slots, keys = self._slots_for(self._frame_bricks(depth, T))
+            if len(slots):
+                sig = None if sigma_mm is None else np.ascontiguousarray(sigma_mm, dtype=np.float32)
+                self._integrate_gpu(slots, keys, depth, sig, R_cw, t_cw)
+        else:
+            depth = np.where(np.isfinite(depth) & (depth >= self.depth_min_mm) & (depth <= self.depth_max_mm),
+                             depth, np.float32(0.0)).astype(np.float32)
+            wmap, vmap = pixel_weights(depth, sigma_mm, self.trunc_mm)
+            slots, keys = self._slots_for(self._frame_bricks(depth, T))
+            if len(slots):
                 self._integrate_cpu(slots, keys, depth, wmap, vmap, R_cw, t_cw)
         self.n_integrated += 1
 
@@ -430,8 +447,8 @@ class ConfidenceTsdf:
         b["nlook"][al] += 1.0
         b["luv"][al] = (ui[look].astype(np.uint32) | (vi[look].astype(np.uint32) << 16))
 
-    def _integrate_gpu(self, slots: np.ndarray, keys: np.ndarray, depth: np.ndarray, wmap: np.ndarray,
-                       vmap: np.ndarray, R_cw: np.ndarray, t_cw: np.ndarray) -> None:
+    def _integrate_gpu(self, slots: np.ndarray, keys: np.ndarray, depth: np.ndarray, sigma: np.ndarray | None,
+                       R_cw: np.ndarray, t_cw: np.ndarray) -> None:
         cl, q = self.cl, self.queue
         h, w = depth.shape
         mf = cl.mem_flags
@@ -439,8 +456,8 @@ class ConfidenceTsdf:
             if self._img_bufs is not None:
                 for bb in self._img_bufs[1:]:
                     bb.release()
-            self._img_bufs = ((h, w), *(cl.Buffer(self.dev.ctx, mf.READ_ONLY, size=h * w * 4) for _ in range(3)))
-        _, dbuf, wbuf, vbuf = self._img_bufs
+            self._img_bufs = ((h, w), *(cl.Buffer(self.dev.ctx, mf.READ_ONLY, size=h * w * 4) for _ in range(2)))
+        _, dbuf, sbuf = self._img_bufs
         m = len(slots)
         if m > self._list_cap:
             for bb in (self._slot_buf, self._key_buf):
@@ -449,20 +466,22 @@ class ConfidenceTsdf:
             self._list_cap = max(m, 2 * self._list_cap, 1024)
             self._slot_buf = cl.Buffer(self.dev.ctx, mf.READ_ONLY, size=self._list_cap * 4)
             self._key_buf = cl.Buffer(self.dev.ctx, mf.READ_ONLY, size=self._list_cap * 12)
-        hold = (depth, wmap, vmap, np.ascontiguousarray(slots, np.int32), np.ascontiguousarray(keys, np.int32))
+        hold = (depth, sigma, np.ascontiguousarray(slots, np.int32), np.ascontiguousarray(keys, np.int32))
         cl.enqueue_copy(q, dbuf, hold[0], is_blocking=False)
-        cl.enqueue_copy(q, wbuf, hold[1], is_blocking=False)
-        cl.enqueue_copy(q, vbuf, hold[2], is_blocking=False)
-        cl.enqueue_copy(q, self._slot_buf, hold[3], is_blocking=False)
-        cl.enqueue_copy(q, self._key_buf, hold[4], is_blocking=False)
+        if sigma is not None:
+            if sigma.shape != depth.shape:
+                raise ValueError(f"sigma has shape {sigma.shape}, expected {depth.shape}")
+            cl.enqueue_copy(q, sbuf, hold[1], is_blocking=False)
+        cl.enqueue_copy(q, self._slot_buf, hold[2], is_blocking=False)
+        cl.enqueue_copy(q, self._key_buf, hold[3], is_blocking=False)
         K = self.K
         b = self._bufs
         n = m * NVOX
         gs = (n + self._wg - 1) // self._wg * self._wg
         self._kern(q, (gs,), (self._wg,), b["tsdf"], b["wsum"], b["m2"], b["s2"], b["nobs"], b["nlook"], b["luv"],
-                   self._slot_buf, self._key_buf, m, dbuf, wbuf, vbuf, w, h,
+                   self._slot_buf, self._key_buf, m, dbuf, sbuf, int(sigma is not None), w, h,
                    K[0, 0], K[1, 1], K[0, 2], K[1, 2], K[0, 1], *R_cw.ravel(), *t_cw,
-                   self.voxel_mm, self.trunc_mm, self.depth_max_mm, self.look_px ** 2)
+                   self.voxel_mm, self.trunc_mm, self.depth_min_mm, self.depth_max_mm, self.look_px ** 2)
         q.finish()  # the host arrays above must outlive the copies
         del hold
 
