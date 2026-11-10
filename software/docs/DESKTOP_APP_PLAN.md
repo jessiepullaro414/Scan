@@ -528,6 +528,15 @@ Phase 1 is done when full-quality processing is at least 3x faster on the RTX la
    - On simulated bracket orbits with 5–20 times the usual drift, doubled surfaces close 3–18 times (for example 50 → 2.7 mm at 78 mm of drift, where nothing verified before). Sliding along the surfaces is not fixed (`VALIDATION.md`, "Straighten for large drift").
    - Not yet: proposing loops by shape alone (beyond the widened gate) and the fragments of research plan 4.4.2, which multi-scan alignment in M4 will share. Nothing has run on real recordings.
 
+7. **Laser-curve bundle adjustment, poses only** (#5's second half, research plan 7.3; added 2026-11-10). Straighten also lines the scan up where the laser lines of different frames cross.
+
+   **Status (2026-11-10): done, poses only.**
+   - It runs after the loops, inside Straighten (and on scans without loops), with no new settings. It fuses again only when it changes the poses.
+   - Never worse: fitted on half the crossings, the other half must meet clearly better, else the poses stay.
+   - On a full-resolution 400° sphere orbit with drift, after Straighten, the sphere's mesh error fell 0.17 → 0.12 mm and 0.97 → 0.48 mm (true poses: 0.09); without drift nothing changes. Short scans have too few crossings and are left alone (`VALIDATION.md`, "Laser-curve adjustment").
+   - About 8 s for 60 frames at full resolution, plus the second fuse when it changes the poses.
+   - Next: the laser planes and the time offset as unknowns (self-calibration), and the IMU.
+
 **Also queued:**
 - **Temperature logging** (part of #8, before the hardware arrives): the firmware reads the IMU chip's temperature, and every recording stores it, so drift with heat can be modelled later.
   - **Done 2026-11-09.** Firmware 1.1.0 sends it about once a second while the IMU streams (`C` lines; `STATUS` adds `temp=`).

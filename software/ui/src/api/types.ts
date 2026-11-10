@@ -485,7 +485,13 @@ export type EditEntry = {
 
 export type StageInfo = { state: StageState; summary: string | null; when: string | null; job_id: string | null };
 export type TrackStage = StageInfo & { quality: ProcessQuality | null; tracked_pct: number | null };
-export type StraightenStage = StageInfo & { loops: number | null; correction_mm: number | null; correction_deg: number | null };
+export type StraightenStage = StageInfo & {
+  loops: number | null;
+  correction_mm: number | null;
+  correction_deg: number | null;
+  /** Laser crossings the poses were lined up on (null: not adjusted). */
+  crossings?: number | null;
+};
 export type FuseStage = StageInfo & { voxel_mm: number | null };
 /** "Refine from the images" (a trial build): the base stage's mesh measured against the recording's frames. */
 export type SpacetimeStage = StageInfo & {

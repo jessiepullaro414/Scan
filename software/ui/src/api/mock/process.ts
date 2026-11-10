@@ -197,7 +197,7 @@ function* run<T>(g: Work<T>, a: number, b: number, message: string): Generator<W
 
 const freshStages = (): Stages => ({
   track: { state: "none", summary: null, when: null, job_id: null, quality: null, tracked_pct: null },
-  straighten: { state: "none", summary: null, when: null, job_id: null, loops: null, correction_mm: null, correction_deg: null },
+  straighten: { state: "none", summary: null, when: null, job_id: null, loops: null, correction_mm: null, correction_deg: null, crossings: null },
   fuse: { state: "none", summary: null, when: null, job_id: null, voxel_mm: null },
   spacetime: { state: "none", summary: null, when: null, job_id: null, source: null, frames: null, patches: null, kept: null, covered_pct: null, moved_mm: null, device: null },
   refine: {

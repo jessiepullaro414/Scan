@@ -21,7 +21,11 @@ export const VOXELS = [0.5, 1, 2] as const;
 
 const STAGES: Record<StageId, { label: string; icon: LucideIcon; what: string }> = {
   track: { label: "Track", icon: Waypoints, what: "Follows the scanner through the recording and fuses the depth into a mesh." },
-  straighten: { label: "Straighten", icon: Spline, what: "Finds where the scan came back to a place it had seen, and closes those loops so long scans line up." },
+  straighten: {
+    label: "Straighten",
+    icon: Spline,
+    what: "Finds where the scan came back to a place it had seen and closes those loops, then lines the scan up where the laser lines of different frames cross.",
+  },
   fuse: { label: "Fuse", icon: Layers, what: "Builds the mesh again from the camera poses, at the detail you choose." },
   spacetime: {
     label: "Refine from the images",

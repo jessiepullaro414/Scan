@@ -7,9 +7,11 @@ inspection overlays.
 * ``straighten`` (``process_straighten``): loop closure
   (:func:`ohs.track.posegraph.straighten_trajectory`, imported lazily: while it is missing or when
   it fails, the stage is ``skipped`` with a plain summary and the base stays), then a fuse at the
-  corrected poses. When it accepts no loop, or its loops show that the passes already line up
-  (the report's ``changed`` is false), it changes nothing either: ``skipped``, with the engine's
-  verdict as the summary (e.g. "No loops found: ..."), and the edits stay;
+  corrected poses; then the laser crossings (:func:`ohs.track.curve_ba.laser_curve_adjustment`,
+  against that mesh, or the track's without loops), and when they change the poses, a second fuse.
+  When neither changes anything (no loop, or loops showing the passes already line up, and
+  crossings that already meet), it is ``skipped``, with the engine's verdict as the summary (e.g.
+  "No loops found: ..."), and the edits stay;
 * ``fuse`` (``process_fuse``): ``process_recording(poses=...)`` at the current poses (the
   straightened ones once straighten is done) and a chosen voxel size;
 * ``spacetime`` (``process_spacetime``, "Refine from the images", a trial build): the base's stage
@@ -527,7 +529,8 @@ def _empty_state(pid: str, sid: str) -> dict:
     base = {"state": "none", "summary": None, "when": None, "job_id": None}
     return {"format": FORMAT, "project_id": pid, "scan_id": sid,
             "stages": {"track": {**base, "quality": None, "tracked_pct": None, "voxel_mm": None},
-                       "straighten": {**base, "loops": None, "correction_mm": None, "correction_deg": None},
+                       "straighten": {**base, "loops": None, "correction_mm": None, "correction_deg": None,
+                                      "crossings": None},
                        "fuse": {**base, "voxel_mm": None},
                        "spacetime": {**base, "source": None, "frames": None, "patches": None, "kept": None,
                                      "covered_pct": None, "moved_mm": None, "device": None},
@@ -1268,14 +1271,52 @@ class ProcessManager:
                 loops = len(rep.get("loops") or [])
             corr_mm, corr_deg = rep.get("correction_mm"), rep.get("correction_deg")
             verdict = rep.get("verdict") if isinstance(rep.get("verdict"), str) and rep.get("verdict") else None
-            if not loops or not poses or rep.get("changed") is False:
-                # no loop, or loops that show the passes already line up: the base (and its edits) stay
+            looped = bool(loops and poses and rep.get("changed") is not False)
+            quality, voxel = track.get("quality") or "full", track.get("voxel_mm")
+            report: dict = {}
+            if looped:  # the loops' fuse is also the reference surface for the laser crossings
+                report = self._fuse_into(ctx, sp, "straighten", prog.sub(0.3, 0.6), quality=quality, voxel_mm=voxel,
+                                         poses=poses)
+                ref_dir, cur = sp.dir / "straighten", dict(poses)
+            else:
+                ref_dir, cur = sp.dir / "track", {i: T for i, _, ok, T in traj if ok}
+            # the laser lines' crossings (research plan 7.3): never worse, see ohs.track.curve_ba
+            crep: dict = {}
+            new_poses = cur
+            try:
+                from ohs.track.curve_ba import laser_curve_adjustment
+
+                Vr, Fr, _ = _read_stage_mesh(ref_dir / "mesh.ply")
+                rows_cur = [(i, t, True, cur[i]) for i, t, ok, _ in traj if ok and i in cur]
+                new_poses, crep = laser_curve_adjustment(
+                    sp.recording_dir, calib, rows_cur, reference=(Vr, Fr), cancelled=lambda: ctx.cancelled,
+                    progress=lambda f, m: prog(0.6 + 0.15 * f, f"Laser crossings: {m}"))
+            except (JobCancelled, InterruptedError):
+                raise
+            except Exception as e:
+                if ctx.cancelled:
+                    raise JobCancelled() from e
+                log.exception("laser_curve_adjustment failed")
+                crep = {"changed": False, "reason": "failed", "verdict": f"Lining up the laser crossings failed ({e})"}
+            ctx.check()
+            rep["laser_curves"] = crep
+            _write_json(sp.dir / "straighten.json", rep)
+            adjusted = bool(crep.get("changed"))
+            crossings = int(crep["crossings"]) if adjusted else None
+            if not looped and not adjusted:
+                # no loop (or loops that show the passes already line up) and nothing for the lasers to fix:
+                # the base (and its edits) stay
                 msg = verdict or "No loops found: nothing to straighten"
                 self._stage_end(sp, "straighten", state="skipped", summary=msg, loops=int(loops or 0),
-                                correction_mm=0.0, correction_deg=0.0)
+                                correction_mm=0.0, correction_deg=0.0, crossings=None)
                 return msg
-            report = self._fuse_into(ctx, sp, "straighten", prog.sub(0.4, 0.95), quality=track.get("quality") or "full",
-                                     voxel_mm=track.get("voxel_mm"), poses=poses)
+            if adjusted:
+                report = self._fuse_into(ctx, sp, "straighten", prog.sub(0.75, 0.95), quality=quality, voxel_mm=voxel,
+                                         poses=new_poses)
+                track_poses = {i: T for i, _, ok, T in traj if ok}
+                corr_mm = max((float(np.linalg.norm(new_poses[i][:3, 3] - track_poses[i][:3, 3]))
+                               for i in new_poses if i in track_poses), default=0.0)
+                corr_deg = max(float(corr_deg or 0.0), float(crep.get("moved_deg") or 0.0))
             (sp.dir / "straighten" / "straighten.json").write_text(json.dumps(jsonable(rep), indent=1), encoding="utf-8")
             prog(0.96, "Saving the mesh", force=True)
             with sp.lock:  # fuse and the refinements built on the old poses
@@ -1283,11 +1324,16 @@ class ProcessManager:
                     sp.state["stages"][name] = _empty_state(sp.pid, sp.sid)["stages"][name]
                     _rmtree(sp.dir / name)
             self._new_base(sp, "straighten", sp.dir / "straighten", report, track.get("quality"))
-            if verdict is None:
+            if looped and verdict is None:
                 moved = f", moved the scan by up to {float(corr_mm):.1f} mm" if isinstance(corr_mm, (int, float)) else ""
                 verdict = f"Closed {loops} loop{'s' if loops != 1 else ''}{moved}"
-            self._stage_end(sp, "straighten", state="done", summary=verdict, loops=int(loops),
-                            correction_mm=corr_mm, correction_deg=corr_deg, job_id=ctx.job.id)
+            if adjusted:
+                lasers = (f"lined the scan up on {crossings:,} laser crossings (median miss {crep['miss_mm']['before']:.2f} "
+                          f"-> {crep['miss_mm']['after']:.2f} mm, the camera moved by up to {crep['moved_mm']:.1f} mm)")
+                verdict = (f"{verdict.rstrip('.')}; then {lasers}" if looped else
+                           f"No loops found, but the laser lines cross: {lasers}")
+            self._stage_end(sp, "straighten", state="done", summary=verdict, loops=int(loops or 0),
+                            correction_mm=corr_mm, correction_deg=corr_deg, crossings=crossings, job_id=ctx.job.id)
             return verdict
         except (JobCancelled, InterruptedError):
             self._stage_restore(sp, "straighten", before)
