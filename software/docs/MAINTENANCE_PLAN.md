@@ -215,7 +215,15 @@ processing), S1 (start-up).
 - **Guard:** the number of collected tests stays 512; the full run passes on both compute paths; a
   cached recording is byte-identical to a fresh one; `--durations` before and after in the commit.
 
-### [ ] A2. Before/after snapshot tool for the engine (Sonnet, M)
+### [x] A2. Before/after snapshot tool for the engine (Sonnet, M)
+- **Done 2026-11-10:** `python tools/snapshot.py snapshot <dir>` and `compare <a> <b> [--tol X]`
+  (from `software/`). Both qualities at 90 frames take about 35 s on the Radeon 680M. To compare
+  with an older commit, check it out in a second worktree and run the tool from a neutral folder
+  with `PYTHONPATH=<worktree>/software`. Found while building it: the mesh comes out in a
+  different vertex order on every run, so the snapshot stores it in a canonical order; and the
+  builder reports that the CPU path gives different poses from run to run (not yet confirmed),
+  so bit-identical checks are done on the GPU path and the tool's own real-snapshot test is
+  strict only there.
 - **Why:** most engine tasks below promise bit-identical output. Today that takes hand-written
   scripts.
 - **Change:** a small script (for example `software/tools/snapshot.py`) with two commands.
