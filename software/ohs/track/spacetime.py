@@ -618,6 +618,20 @@ class _GpuCost:
             b.release()
         return C.reshape(n, D).astype(np.float64), Wt.reshape(n, D).astype(np.float64)
 
+    def close(self) -> None:
+        """Release the frames and patches on the device now (not when Python gets round to it)."""
+        bufs = list(self._resident[1:]) if self._resident is not None else []
+        if self.geo_buf is not None:
+            bufs.append(self.geo_buf)
+        for b in bufs:
+            try:
+                b.release()
+            except Exception:  # pragma: no cover - already released
+                pass
+        self._resident, self.geo_buf = None, None
+        self.queue.finish()
+        self.queue = None
+
 
 class _Cost:
     """The cost and the texture test on the GPU when there is one, else the CPU twin."""
@@ -653,6 +667,10 @@ class _Cost:
             return self.gpu.cost(deltas, self.ns, self.step, self.p.cap)
         return _cost_cpu(self.geo[self.sel], deltas, self.fr, self.K, self.baseline, self.vis, self.ns, self.step,
                          self.p.cap)
+
+    def close(self) -> None:
+        if self.gpu is not None:
+            self.gpu.close()
 
 
 def patch_costs(patches: Patches, deltas: np.ndarray, left: Sequence[np.ndarray], right: Sequence[np.ndarray],
@@ -728,6 +746,7 @@ def search_offsets(patches: Patches, left: Sequence[np.ndarray], right: Sequence
     sel, vsel = cand[keep], tex[keep]
     m = len(sel)
     if m == 0:
+        eng.close()
         return out
     eng.use(sel, vsel)
     centre = np.zeros(m)
@@ -764,6 +783,7 @@ def search_offsets(patches: Patches, left: Sequence[np.ndarray], right: Sequence
     reason[textured < p.min_views] = "views"
     out["reason"] = reason
     out["kept"] = reason == ""
+    eng.close()
     say(1.0, "searched")
     return out
 
