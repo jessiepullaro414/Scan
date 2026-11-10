@@ -338,3 +338,148 @@ def test_integrate_external_poses_and_reset():
     assert res.ok and G.pose_error(T0_inv @ poses[-1], res.T_wc)[1] < 1.0
     tracker.reset()
     assert tracker.n_integrated == 0 and tracker.trajectory == [] and len(tracker.extract_mesh()[0]) == 0
+
+
+# ---------------------------------------------------------------- _clean_depth / _source_points guards
+def _old_clean_depth(depth_mm, params, size):
+    """Reference: the body of MarkerlessTracker._clean_depth before it stopped copying clean maps."""
+    d = np.asarray(depth_mm, dtype=np.float32)
+    w, h = size
+    if d.shape != (h, w):
+        raise ValueError(f"depth has shape {d.shape}, expected {(h, w)}")
+    bad = ~np.isfinite(d) | (d < params.depth_min_mm) | (d > params.depth_max_mm)
+    if bad.any():
+        d = d.copy()
+        d[bad] = 0.0
+    return d
+
+
+def _old_source_points(K_, strides, depth):
+    """Reference: MarkerlessTracker._source_points before equal (offset, stride) levels were shared."""
+    h, w = depth.shape
+    vs, us = np.mgrid[0:h, 0:w]
+    out = []
+    fx = K_[0, 0]
+    for s in strides:
+        o = s // 2
+        uu, vv = us[o::s, o::s], vs[o::s, o::s]
+        y = (vv - K_[1, 2]) / K_[1, 1]
+        x = (uu - K_[0, 2] - K_[0, 1] * y) / K_[0, 0]
+        rays = np.stack([x, y, np.ones_like(x)], axis=-1)
+        z = depth[o::s, o::s].astype(np.float64)
+        X = rays * z[..., None]
+        dx = X[:-1, 1:] - X[:-1, :-1]
+        dy = X[1:, :-1] - X[:-1, :-1]
+        z0, zr, zd = z[:-1, :-1], z[:-1, 1:], z[1:, :-1]
+        jump = 3.0 * s * z0 / fx + 2.0
+        ok = (z0 > 0) & (zr > 0) & (zd > 0) & (np.abs(zr - z0) < jump) & (np.abs(zd - z0) < jump)
+        n = np.cross(dx, dy)
+        nn = np.linalg.norm(n, axis=-1)
+        ok &= nn > 1e-9
+        P = X[:-1, :-1][ok]
+        N = n[ok] / nn[ok][:, None]
+        N *= -np.sign(np.einsum("ij,ij->i", N, P))[:, None]
+        out.append((P, N))
+    return out
+
+
+def _depth_cases():
+    rng = np.random.default_rng(7)
+    base = (250.0 + 0.05 * np.arange(W)[None, :] + 0.03 * np.arange(H)[:, None]
+            + rng.normal(scale=0.2, size=(H, W))).astype(np.float32)
+    cases = {"all_valid": base.copy(), "zeros_only": np.zeros((H, W), np.float32)}
+    z = base.copy()
+    z[rng.random(z.shape) < 0.1] = 0.0
+    cases["valid_with_zero_holes"] = z
+    n = base.copy()
+    n[rng.random(n.shape) < 0.05] = np.nan
+    n[rng.random(n.shape) < 0.02] = np.inf
+    n[rng.random(n.shape) < 0.02] = -np.inf
+    cases["nan_inf"] = n
+    r = base.copy()
+    r[rng.random(r.shape) < 0.05] = 50.0
+    r[rng.random(r.shape) < 0.05] = 900.0
+    r[rng.random(r.shape) < 0.01] = -5.0
+    r[rng.random(r.shape) < 0.01] = 119.999
+    r[rng.random(r.shape) < 0.01] = 500.001
+    cases["out_of_range"] = r
+    m = r.copy()
+    m[rng.random(m.shape) < 0.1] = 0.0
+    m[rng.random(m.shape) < 0.03] = np.nan
+    cases["mix"] = m
+    cases["float64_input"] = m.astype(np.float64)
+    cases["float64_clean"] = base.astype(np.float64)
+    return cases
+
+
+@pytest.mark.parametrize("name", list(_depth_cases()))
+def test_clean_depth_matches_the_old_one(name):
+    tracker = MarkerlessTracker(K, (W, H), FusionParams(voxel_mm=2.0, device="auto"))
+    d = _depth_cases()[name]
+    before = d.copy()
+    new = tracker._clean_depth(d)
+    old = _old_clean_depth(d, tracker.params, (W, H))
+    assert new.dtype == old.dtype == np.float32 and new.shape == old.shape
+    assert np.array_equal(new, old)  # no NaN can survive the cleaning, so plain equality is exact
+    assert not np.isnan(new).any()
+    assert np.array_equal(d, before, equal_nan=True)  # the caller's array is never modified
+
+
+@pytest.mark.parametrize("name", ["all_valid", "zeros_only", "valid_with_zero_holes"])
+def test_clean_depth_returns_the_input_when_nothing_is_bad(name):
+    """Zeros are already "no depth": a map with only those comes back as the caller's own array."""
+    tracker = MarkerlessTracker(K, (W, H), FusionParams(voxel_mm=2.0, device="auto"))
+    d = _depth_cases()[name]
+    assert tracker._clean_depth(d) is d
+    # one bad pixel is enough for a (cleaned) copy
+    d2 = d.copy()
+    d2[5, 5] = np.nan
+    out = tracker._clean_depth(d2)
+    assert out is not d2 and out[5, 5] == 0.0 and np.isnan(d2[5, 5])
+
+
+def test_clean_depth_rejects_a_wrong_shape():
+    tracker = MarkerlessTracker(K, (W, H), FusionParams(voxel_mm=2.0, device="auto"))
+    with pytest.raises(ValueError):
+        tracker._clean_depth(np.zeros((H + 1, W), np.float32))
+
+
+def _levels_equal(new, old):
+    assert len(new) == len(old)
+    for (P, N), (P0, N0) in zip(new, old):
+        assert P.shape == P0.shape and N.shape == N0.shape
+        assert np.array_equal(P, P0) and np.array_equal(N, N0)
+
+
+@pytest.mark.parametrize("scale, strides", [(1, [16, 8, 4]), (2, [16, 8, 8])])
+def test_source_points_match_the_old_ones(scale, strides):
+    """Preview (640 px: strides 16, 8, 4) and full quality (1280 px: 16, 8, 8, two equal levels)."""
+    w, h = W * scale, H * scale
+    K2 = K.copy()
+    K2[:2] *= scale
+    tracker = MarkerlessTracker(K2, (w, h), FusionParams(voxel_mm=2.0, device="auto"))
+    assert tracker._strides == strides
+    rng = np.random.default_rng(3)
+    d = (250.0 + 0.02 * np.arange(w)[None, :] + 0.01 * np.arange(h)[:, None]
+         + rng.normal(scale=0.3, size=(h, w))).astype(np.float32)
+    d[rng.random(d.shape) < 0.05] = 0.0
+    d[100:140, 200:260] += 80.0  # a depth step
+    depth = tracker._clean_depth(d)
+    new = tracker._source_points(depth)
+    snapshot = [(P.copy(), N.copy()) for P, N in new]
+    _levels_equal(new, _old_source_points(K2, strides, depth))
+    # and the arrays are not changed by being looked at again
+    _levels_equal(tracker._source_points(depth), snapshot)
+
+
+def test_equal_levels_share_their_arrays():
+    """Full quality (strides 16, 8, 8): the last two levels are one computation, the preview's are three."""
+    K2 = K.copy()
+    K2[:2] *= 2
+    depth = np.full((H * 2, W * 2), 250.0, np.float32)
+    full = MarkerlessTracker(K2, (W * 2, H * 2), FusionParams(voxel_mm=2.0, device="auto"))
+    lv = full._source_points(depth)
+    assert lv[1][0] is lv[2][0] and lv[1][1] is lv[2][1] and lv[0][0] is not lv[1][0]
+    prev = MarkerlessTracker(K, (W, H), FusionParams(voxel_mm=2.0, device="auto"))
+    lv = prev._source_points(depth[::2, ::2].copy())
+    assert len({id(P) for P, _ in lv}) == 3

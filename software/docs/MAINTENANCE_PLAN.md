@@ -421,6 +421,10 @@ bench medians before and after in the commit message.
   `test_gpu_api_contract`, `test_depth_sigma_is_calibrated`.
 
 ### [ ] E2. The tracker copies the depth map on every call (Sonnet, S) ✔
+- **Landed 2026-11-10, speed not measured yet:** `_clean_depth` returns its input when no pixel
+  is bad (zeros no longer count as bad). One difference: a pixel holding -0.0 is no longer
+  rewritten to +0.0. Output identical (snapshot before/after on the GPU path). The box is ticked
+  once the bench shows the gain.
 - **Where:** `ohs/track/markerless.py:517-527` (`_clean_depth`), called one to three times a
   frame.
 - **Problem:** `d < depth_min` is true for every 0 pixel, every depth map has zeros, so
@@ -432,6 +436,9 @@ bench medians before and after in the commit message.
   returned array (it may now be the caller's own).
 
 ### [ ] E3. The finest ICP level is computed twice at full quality (Sonnet, S) ✔
+- **Landed 2026-11-10, speed not measured yet:** `_source_points` computes each (offset, stride)
+  pair once per call and shares the result between levels. Output identical (snapshot
+  before/after on the GPU path). The box is ticked once the bench shows the gain.
 - **Where:** `ohs/track/markerless.py:378-390` and `:529-552`. Same session as E2.
 - **Problem:** strides (16, 8, 4) with spacing 8 become [16, 8, 8], so `_source_points`
   back-projects and computes normals for the same grid twice on every call.

@@ -520,7 +520,8 @@ class MarkerlessTracker:
         if d.shape != (h, w):
             raise ValueError(f"depth has shape {d.shape}, expected {(h, w)}")
         p = self.params
-        bad = ~np.isfinite(d) | (d < p.depth_min_mm) | (d > p.depth_max_mm)
+        # 0 is already "no depth": only the other bad pixels need the copy (none: the input itself)
+        bad = (d != 0) & (~np.isfinite(d) | (d < p.depth_min_mm) | (d > p.depth_max_mm))
         if bad.any():
             d = d.copy()
             d[bad] = 0.0
@@ -533,8 +534,12 @@ class MarkerlessTracker:
         valid, continuous neighbours are dropped (they would only add unreliable associations).
         """
         out = []
+        done: dict[tuple[int, int], tuple[np.ndarray, np.ndarray]] = {}  # equal (offset, stride) levels share
         fx = self.K[0, 0]
         for o, s, rays in self._src_levels:
+            if (o, s) in done:
+                out.append(done[o, s])
+                continue
             z = depth[o::s, o::s].astype(np.float64)
             X = rays * z[..., None]
             dx = X[:-1, 1:] - X[:-1, :-1]
@@ -548,6 +553,7 @@ class MarkerlessTracker:
             P = X[:-1, :-1][ok]
             N = n[ok] / nn[ok][:, None]
             N *= -np.sign(np.einsum("ij,ij->i", N, P))[:, None]  # face the camera
+            done[o, s] = (P, N)
             out.append((P, N))
         return out
 
