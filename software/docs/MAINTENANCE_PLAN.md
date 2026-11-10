@@ -181,6 +181,16 @@ by the snapshot tool.
   device. Step 2 gives the accuracy validated so far at half the wait; step 1 is 15–18 % better
   than that. Not measured: fast hand motion, Straighten with fewer laser crossings, marker mode,
   the CPU path, a real IMU (the gyro prior is fixed per processed frame, `pipeline.py:148`).
+- **Step 2 done 2026-11-10** (code b890475, off by default: `process.frame_motion_deg`,
+  `process.frame_max_gap`, `ohs process --motion DEG --max-gap N`; table in VALIDATION.md,
+  "Picking frames by motion against a fixed step"). At the same number of frames it is neither
+  better nor worse than a fixed step on a steady hand: it mostly picks the same frames. On a hand
+  that changes speed it puts 1.7–2 times as many frames into the fast part and the trajectory
+  error is a little lower, but nothing lost tracking with a fixed step either, so the advantage
+  is small and not proven. It does not bring back the noise that fewer frames cost. A sliding
+  hand is caught by the cap alone. An angle does not give a predictable wait. Step 3 (the
+  default, and what the app offers) is the owner's decision. Not measured: a real IMU, motion
+  blur, Straighten and the laser stages with picked frames, marker mode, the CPU path.
 - **Gain:** in proportion: every second frame halves the wait.
 - **Stop rule:** more frames also average noise away. If the mesh error or noise rises beyond the
   run-to-run spread in VALIDATION.md, the default does not change.
