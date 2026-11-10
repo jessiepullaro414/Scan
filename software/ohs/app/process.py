@@ -183,6 +183,8 @@ def _frame_row(res: FrameResult) -> dict:
     weak = sorted({str(w.get("kind")) for w in info.get("weak") or () if isinstance(w, dict)})
     if weak:
         row["weak"] = weak  # what the surface couldn't pin down in this frame: "slide", "turn"
+    if info.get("input") == "alt":
+        row["raw_depth"] = True  # tracked with the raw depth where the filter dropped it (a detailed part)
     if res.laser_points:
         row["n_laser"] = {k: int(len(v)) for k, v in res.laser_points.items()}
     return row
@@ -317,6 +319,8 @@ def process_recording(
                 "tracked_fraction": pipe.n_tracked / n if n else 0.0,
                 "start": int(p.start), "stop": stop, "step": int(p.frame_step), "cut": n_cut,
                 "weak": _weak_summary(rows),
+                "with_raw_depth": round(sum(bool(r.get("raw_depth")) for r in rows if r.get("ok"))
+                                        / max(sum(bool(r.get("ok")) for r in rows), 1), 3),
             },
             "cuts": [[a, b] for a, b in cuts],
             "failures": dict(reasons),
@@ -413,7 +417,9 @@ def process_recording(
             "tracking": ({"model": "none: fused at the given poses"} if poses is not None
                          else {"model": "separate (filtered depth)", "filter_px": pipe.track_filter_px,
                                "voxel_mm": pipe.track_fusion_params.voxel_mm,
-                               "gyro_sigma_deg": pipe.track_fusion_params.gyro_sigma_deg}
+                               "gyro_sigma_deg": pipe.track_fusion_params.gyro_sigma_deg,
+                               # a detailed part: from this frame on, raw depth where the filter drops it
+                               "detailed_part_from_frame": getattr(pipe.tracker, "detail_frame", None)}
                          if pipe.dual_model else {"model": "reconstruction TSDF (raw depth)"}
                          if p.pipeline.mode == "markerless" else {"model": "markers"}),
             "markers": asdict(pipe.marker_params) if pipe.markers is not None else None,

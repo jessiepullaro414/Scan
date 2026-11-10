@@ -50,6 +50,22 @@ freely:
 prediction (gyro, constant velocity), blended with whatever weak information the data has. The
 live app turns them into hints: sliding even with the gyro, turning only without it.
 
+**Detailed parts** (``track(alt_depth=...)``). The pipeline tracks on filtered depth (see
+:func:`ohs.app.pipeline.tracking_depth`), which suppresses the dots' camera-fixed error on smooth
+surfaces by eroding around every depth step. A detailed part (a carburetor, a machined bracket) is
+all steps, so the filter erases most of it: what is left, often the bench it stands on, can't hold
+the scanner's sideways motion, and the pose slides away. Each frame's final ICP therefore measures
+how well its input holds the weakest translation while the gyro holds the rotation
+(:func:`_translation_strength`, ``info["trans_strength"]``). On the simulator the filtered depth
+of smooth parts holds 1e-3 to 1e-2, and that of detailed parts 1e-5 to 4e-5. Such a scan is
+tracked on ``alt_depth``, the filtered depth plus the raw depth wherever the filter dropped a
+pixel, from its first frame (:attr:`MarkerlessTracker.detail_mode`): the pipeline finds out with a
+second tracker over the first frames (``ohs.app.pipeline``, "Detailed parts"). Retrying single
+weak frames with ``alt_depth`` did not work: the part enters the model at poses that already
+slid, the filter's leftover fragments of it then look well held but are biased, and on the door
+trim it only made the worst frames worse. A frame that fails a gate still tries ``alt_depth``
+before it is lost (``VALIDATION.md``, "Large and detailed parts").
+
 Two stronger treatments from the literature made tracking worse on the simulator
 (VALIDATION.md, "Degeneracy-aware tracking"), so neither is used:
 - remapping the update so that ICP never moves along weak directions (Zhang, Kaess and Singh
@@ -100,7 +116,7 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Callable
 
 import numpy as np
 
@@ -230,6 +246,7 @@ class _IcpOutput:
     iterations: int = 0
     min_eig_ratio: float = 0.0
     weak: list = field(default_factory=list)  # [{"kind": "slide" | "turn", "axis": [x, y, z]}]
+    trans_strength: float = 0.0  # _translation_strength of the final correspondences
     ok_numeric: bool = True
 
 
@@ -271,7 +288,27 @@ def _scene_scale(Q: np.ndarray) -> np.ndarray:
     return np.array([L, L, L, 1.0, 1.0, 1.0])
 
 
-def _weak_directions(J: np.ndarray, Q: np.ndarray, ratio: float) -> tuple[float, list[dict]]:
+def _scaled_information(J: np.ndarray, Q: np.ndarray) -> np.ndarray:
+    """``Js^T Js`` of the point-to-plane rows ``J`` with rotations scaled to mm at the scene distance."""
+    Js = J / _scene_scale(Q)
+    return Js.T @ Js
+
+
+def _translation_strength(J: np.ndarray, Q: np.ndarray, H: np.ndarray | None = None,
+                          top: float | None = None) -> float:
+    """How well a point-to-plane problem holds its weakest translation while the rotation is held
+    (the gyro holds it): the smallest eigenvalue of the translation block, over the largest of the
+    whole problem (rotations scaled to mm at the scene distance, as in :func:`_weak_directions`).
+    ``H`` and ``top`` (its largest eigenvalue) may be passed when already computed."""
+    if H is None:
+        H = _scaled_information(J, Q)
+    if top is None:
+        top = float(np.linalg.eigvalsh(H)[-1])
+    return float(max(float(np.linalg.eigvalsh(H[3:, 3:])[0]), 0.0) / max(top, 1e-30))
+
+
+def _weak_directions(J: np.ndarray, Q: np.ndarray, ratio: float,
+                     H: np.ndarray | None = None) -> tuple[float, list[dict]]:
     """Weak motions of a point-to-plane problem: ``(weakest / strongest eigenvalue, [{"kind", "axis"}])``.
 
     ``J`` (n,6) has rows ``[q x n, n]`` and ``Q`` (n,3) the points (camera frame, mm). The eigen-
@@ -281,9 +318,7 @@ def _weak_directions(J: np.ndarray, Q: np.ndarray, ratio: float) -> tuple[float,
     axis, in the camera frame. Weak eigenvectors mix freely (a panel's two slides and its turn), so
     the subspace is classified, not each eigenvector.
     """
-    S = _scene_scale(Q)
-    Js = J / S
-    ev, X = np.linalg.eigh(Js.T @ Js)
+    ev, X = np.linalg.eigh(_scaled_information(J, Q) if H is None else H)
     top = max(float(ev[-1]), 1e-30)
     min_ratio = float(max(float(ev[0]), 0.0) / top)
     Xw = X[:, ev < ratio * top]
@@ -437,6 +472,10 @@ class MarkerlessTracker:
         self._n_lost = 0
         self._frame = 0
         self.last_result: TrackResult | None = None
+        #: every frame uses ``alt_depth`` (set by the pipeline for a scan of a detailed part; module
+        #: docstring, "Detailed parts"); :attr:`detail_frame` is the frame that decided it
+        self.detail_mode = False
+        self.detail_frame: int | None = None
 
     @property
     def n_integrated(self) -> int:
@@ -766,24 +805,46 @@ class MarkerlessTracker:
         out.iterations = total_it
         if n_in >= 6:
             J = np.concatenate([np.cross(Q, Nt), Nt], axis=1)
-            out.min_eig_ratio, out.weak = _weak_directions(J, Q, p.degenerate_eig_ratio)
+            H = _scaled_information(J, Q)
+            out.min_eig_ratio, out.weak = _weak_directions(J, Q, p.degenerate_eig_ratio, H)
+            out.trans_strength = _translation_strength(J, Q, H)
         return out
 
     # ------------------------------------------------------------------ public API
     def track(self, depth_mm: np.ndarray, intensity: np.ndarray | None = None, t: float | None = None,
-              R_prior: np.ndarray | None = None) -> TrackResult:
+              R_prior: np.ndarray | None = None,
+              alt_depth: np.ndarray | Callable[[], np.ndarray] | None = None) -> TrackResult:
         """Track one depth frame against the model and fuse it on success.
 
         ``depth_mm`` (H,W) float mm, 0/NaN invalid; ``t`` camera timestamp (s, optional, used for
         the constant-velocity model); ``R_prior`` gyro rotation from the previous call's frame to
         this one (``v_prev = R_prior @ v_cur``), or ``None``.
+
+        ``alt_depth``: another depth map of the same frame (or a function that makes it). With
+        :attr:`detail_mode` every frame uses it (and falls back to ``depth_mm`` for the pose when it
+        fails); otherwise a frame tries it when ``depth_mm`` has too little depth or fails a gate.
+        Whichever registered the frame is what gets fused. ``info["input"]`` is ``"alt"`` for a
+        frame that used it, and ``info["trans_strength"]`` says how well the registered input held
+        its weakest translation (module docstring, "Detailed parts").
         """
         t0 = time.perf_counter()
         p = self.params
         self._frame += 1
-        depth = self._clean_depth(depth_mm)
+        alt_cache: list[np.ndarray] = []
+
+        def alt() -> np.ndarray:
+            if not alt_cache:
+                a = alt_depth() if callable(alt_depth) else alt_depth
+                alt_cache.append(self._clean_depth(a))
+            return alt_cache[0]
+
+        used_alt = alt_depth is not None and self.detail_mode
+        depth = alt() if used_alt else self._clean_depth(depth_mm)
         n_valid_px = int(np.count_nonzero(depth))
         timings: dict[str, float] = {}
+        if alt_depth is not None and not used_alt and n_valid_px < p.min_points:
+            depth, used_alt = alt(), True
+            n_valid_px = int(np.count_nonzero(depth))
 
         if not self._initialized:
             if n_valid_px < p.min_points:
@@ -836,6 +897,9 @@ class MarkerlessTracker:
             pending = self._raycast_gpu_start(T_pred)
         t_queue = time.perf_counter() - tr
         src = self._source_points(depth)
+        if len(src[-1][0]) < self._min_src and alt_depth is not None and not used_alt:
+            depth, used_alt = alt(), True
+            src = self._source_points(depth)
         if len(src[-1][0]) < self._min_src:  # depth present but no locally smooth surface in it
             if pending is not None:
                 pending.wait()
@@ -851,16 +915,38 @@ class MarkerlessTracker:
             return self._fail("model_not_visible", t, info, t0, timings)
         tc = time.perf_counter()
         res = self._icp(src, view, widen, rot_sigma, extra_coarse=lost > 0)
-        timings["icp"] = 1e3 * (time.perf_counter() - tc)
         T_est = view.T_wc @ res.T_delta
         reason = self._gate(res, T_pred, T_est, widen)
+        if alt_depth is not None and not used_alt and reason is not None:
+            # the frame fails with its input: try the other depth map before losing it
+            a = alt()
+            src2 = self._source_points(a)
+            if len(src2[-1][0]) >= self._min_src:
+                res2 = self._icp(src2, view, widen, rot_sigma, extra_coarse=lost > 0)
+                T2 = view.T_wc @ res2.T_delta
+                if self._gate(res2, T_pred, T2, widen) is None:
+                    res, T_est, reason, depth, used_alt = res2, T2, None, a, True
+            info["alt_tried"] = True
+        elif alt_depth is not None and used_alt and self.detail_mode and reason is not None:
+            # detail mode: if the frame fails with the part (a model that hasn't seen this part of
+            # it yet), register it with the main input and fuse the part all the same
+            m = self._clean_depth(depth_mm)
+            src_m = self._source_points(m)
+            if len(src_m[-1][0]) >= self._min_src:
+                res_m = self._icp(src_m, view, widen, rot_sigma, extra_coarse=lost > 0)
+                T_m = view.T_wc @ res_m.T_delta
+                if self._gate(res_m, T_pred, T_m, widen) is None:
+                    res, T_est, reason = res_m, T_m, None
+            info["main_tried"] = True
+        timings["icp"] = 1e3 * (time.perf_counter() - tc)
+        info["input"] = "alt" if used_alt else "main"
         D = invert_se3(T_pred) @ T_est
         info.update({
             "fitness": res.fitness, "rmse_mm": res.rmse, "n_inliers": res.n_inliers, "n_points": res.n_points,
             "n_model_px": view.n_valid, "iterations": res.iterations,
             "jump_mm": float(np.linalg.norm(D[:3, 3])), "jump_deg": rotation_angle_deg(D[:3, :3]),
             "min_eig_ratio": res.min_eig_ratio, "degenerate": res.min_eig_ratio < p.degenerate_eig_ratio,
-            "weak": res.weak,
+            "weak": res.weak, "trans_strength": res.trans_strength,
         })
         if reason is not None:
             return self._fail(reason, t, info, t0, timings)

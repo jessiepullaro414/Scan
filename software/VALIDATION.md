@@ -231,7 +231,7 @@ Two real parts' 3D scans, rendered by the simulator's new `TriangleMesh` object 
 |---|---|
 | Frames tracked | 1,410 of 1,410 |
 | Trajectory error vs truth | median 0.34 mm, max 0.82 mm, 0.04° |
-| Mesh vertices vs the true panel | median 0.07 mm, 92 % within 0.5 mm, p95 0.85 mm |
+| Mesh vertices vs the true panel | median 0.07 mm, 92 % within 0.5 mm, p95 0.79 mm |
 | Seen surface reconstructed | 99.5 % within 1 mm |
 | Straighten | 25 loops, already within 0.12 mm: unchanged |
 | Laser crossings | 1,661, within the lasers' scatter: unchanged |
@@ -245,23 +245,54 @@ The larger errors are where structured light always struggles:
 
 A metre of panel, scanned in five passes, did not drift.
 
-**The carburetor exposed a tracking weakness: the tracking filter erases detailed parts.**
+**The carburetor exposed a tracking weakness: the tracking filter erases detailed parts.** It is now fixed (below).
 - Only 596 of 1,080 frames tracked, and the trajectory slid away by up to 1.7 m, while the gyro kept the rotation right (0.09°).
 - The tracking filter keeps only 3–9 % of the carburetor's depth pixels, against 52–78 % in the raw depth. It erodes 12 px around every depth step, and on a part like this every pixel is near one.
 - What is left is the floor, a plane, which cannot hold the scanner's sideways motion.
 
-The machined bracket preset suffers too, only less visibly (90 frames, median / max mm):
+The machined bracket preset suffered too, only less visibly. The trial below used 90 frames, median / max trajectory error in mm:
 
 | Tracking input | Carburetor (300 frames) | Bracket | Car panel | Sphere | Door (400 frames) |
 |---|---|---|---|---|---|
-| Filtered (now) | lost: 1,190 mm by frame 336 | 1.01 / 6.90 | **0.10 / 0.31** | **0.13 / 0.22** | **0.18 / 0.34** |
+| Filtered (before) | lost: 1,190 mm by frame 336 | 1.01 / 6.90 | **0.10 / 0.31** | **0.13 / 0.22** | **0.18 / 0.34** |
 | Raw depth, single model | 1.75 / 2.32 | | | | |
-| Filtered, raw where the filter dropped it | **1.48 / 1.86** | **0.36 / 0.95** | 0.16 / 0.52 | 0.24 / 0.44 | 0.16 / 0.51 |
+| Filtered, raw where the filter dropped it, whole scan | **1.48 / 1.86** | **0.36 / 0.95** | 0.16 / 0.52 | 0.24 / 0.44 | 0.16 / 0.51 |
 | Raw only in frames that keep < 50 % | 2.01 / 3.75 | 0.27 / 2.31 | | 0.13 / 0.22 | 0.18 / 0.34 |
+| **Shipped: decided at the start of the scan** | **1.48 / 1.86** | **0.36 / 0.95** | **0.10 / 0.31** | **0.13 / 0.22** | **0.18 / 0.34** |
 
-- The filter is right for smooth surfaces and wrong for detailed ones, so the tracking input has to adapt.
-- The share of depth the filter keeps does not separate them well: smooth scenes keep 52–84 %, the carburetor 20–64 % and the bracket 26–55 %, and the floor raises everyone's share.
-- A better test is probably whether the filtered depth still constrains all six directions of the pose, which the weak-direction analysis already measures. That is the next research item.
+**The fix: decide at the start of the scan whether the filtered depth can hold the pose.**
+- **What decides it.** Each ICP now measures how well its input holds the weakest translation while the gyro holds the rotation: the translation block's smallest eigenvalue over the problem's largest (`info["trans_strength"]`).
+  - With a filtered-only model, smooth parts hold 1e-3 to 1e-2: sphere p10 1.2e-3, car panel 2.6e-3, door 4.8e-3.
+  - The bracket holds 1.1e-5 to 1.9e-5 and the carburetor 2.5e-5 to 3.8e-5.
+- **The probe.** For the first 10 frames of a scan a second tracker runs on the filtered depth plus the raw depth wherever the filter dropped a pixel.
+  - If the filtered tracker holds less than 5e-4 in any of those frames, the second tracker takes over for the whole scan, consistent from frame 0 (`detail_mode`). The report gives `detailed_part_from_frame`.
+  - The threshold is above the 2e-4 a grown model needs, because a one-frame model flatters the filtered depth: the carburetor read 3.0e-4, 2.1e-4, then 1.3e-4 and falling, while smooth parts never dropped below 1.1e-3.
+  - The carburetor and the bracket switch at frame 1. The sphere, car panel and door never switch, so their results are bit-identical to before.
+- **What did not work**, in the order tried:
+  - **Switching frame by frame** whenever the tracker's own "slide" flag or the strength said so: the carburetor still slid 0.7 m, and the bracket's median doubled. Once the raw frames put the part into the model, the filter's leftover fragments of it look well held, but they are biased.
+  - **Switching for good after 2 weak frames in 5:** this deadlocked (5 of 300 frames tracked). The model didn't contain the part yet, so frames with the part failed the fitness gate and were never fused. Fusing them at the filtered pose freed it, but the slid frames left the model smeared (carburetor 49 mm).
+  - **Raw depth only far (> 16–24 px) from the filter's surviving pixels:** a total failure, with 1 of 300 carburetor frames tracked.
+  - **The filter's kept share, or the strength computed from the input's own normals:** neither separates the scenes. The floor inflates the share, and the dots' noise inflates self-normal constraints.
+- **What is left of the per-frame idea:** a frame that fails a gate tries the raw-filled depth before it is lost. Weak frames are not retried: on the door that fired on 4.6 % of the frames (views mostly of floor) and made the worst frame worse (0.82 → 1.21 mm).
+- **Not covered:**
+  - A scan that starts on a smooth part and only later reaches a detailed one stays on the filtered depth. Start such scans on the detailed part.
+  - On the CPU path, with no GPU (SGBM depth, Open3D tracking model), the probe misses the carburetor. Open3D's young model has noisy normals, which flatter the filtered depth (2e-3 to 9e-3 over the first 11 frames). The bracket is still caught at frame 3, and smooth parts stay above 2e-3. Detailed parts need a GPU for now.
+
+**The full carburetor scan with the fix** (1,080 frames, processed as above):
+
+| | Carburetor |
+|---|---|
+| Frames tracked | 1,080 of 1,080 (was 596) |
+| Trajectory error vs truth | median 1.72 mm, max 3.22 mm; rotation median 0.33°, max 0.61° |
+| Mesh vertices vs the true part | median 0.80 mm, p95 2.7 mm, p99 4.4 mm |
+| Seen surface reconstructed | 72 % within 1 mm, 97 % within 2 mm |
+| Straighten | 40 loops, already within 0.17 mm: unchanged |
+| Laser crossings | 604, within the lasers' scatter: unchanged |
+
+![Carburetor error map](docs/images/sim_carb_error_map.png)
+
+- The carburetor is still the hardest case. Its trajectory error is 5× the door's, its rotation error 18×, and its edges carry stereo skirts (yellow). The raw depth's camera-fixed dot error is what the filter was there to remove, and here it can't be.
+- **Speed:** the probe costs a second tracker for 10 frames, +5–6 ms on the 90-frame bench's mean on the Radeon. Medians are unchanged within noise (probe on / off in the same run: full 155.6 / 153.5 ms, preview 66.4 / 63.9 ms). Over a real scan it amortises to under 1 %.
 
 ## Straighten: loop closure (M3 phase 2, 2026-11-09)
 

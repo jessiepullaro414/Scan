@@ -261,6 +261,67 @@ def test_weak_directions_say_what_the_surface_cannot_pin_down():
     assert r > ratio and weak == []
 
 
+def test_translation_strength_says_whether_the_input_holds_the_slide():
+    from ohs.app.pipeline import DETAIL_PROBE_STRENGTH as thr
+    from ohs.track.markerless import _translation_strength
+
+    x, y = _grid(np.arange(-60.0, 61.0, 5.0), np.arange(-40.0, 41.0, 5.0))
+    P = np.stack([x, y, np.full_like(x, 300.0)], axis=1)  # a flat panel: free to slide
+    assert _translation_strength(_constraints(P, np.tile([0.0, 0.0, -1.0], (len(P), 1))), P) < 1e-9
+    u, v = _grid(np.arange(0.0, 41.0, 4.0), np.arange(0.0, 41.0, 4.0))  # a box corner holds every translation
+    faces = [(np.stack([np.full_like(u, 30.0), u - 20, v + 280], axis=1), [-1.0, 0.0, 0.0]),
+             (np.stack([u - 20, np.full_like(u, 30.0), v + 280], axis=1), [0.0, -1.0, 0.0]),
+             (np.stack([u - 20, v - 20, np.full_like(u, 320.0)], axis=1), [0.0, 0.0, -1.0])]
+    P = np.concatenate([f for f, _ in faces])
+    N = np.concatenate([np.tile(n, (len(f), 1)) for f, n in faces])
+    assert _translation_strength(_constraints(P, N), P) > 10 * thr
+
+
+def _floor_only(depth: np.ndarray, T_sc: np.ndarray) -> np.ndarray:
+    """``depth`` with everything above the plane removed: what the tracking filter leaves of a
+    detailed part standing on a bench."""
+    vs, us = np.mgrid[0:H, 0:W].astype(np.float64)
+    Pc = np.stack([(us - K[0, 2]) / FX * depth, (vs - K[1, 2]) / FX * depth, depth], axis=-1)
+    z = Pc @ T_sc[:3, 2] + T_sc[2, 3]  # scene height of each pixel
+    return np.where((depth > 0) & (z < 1.0), depth, 0.0).astype(np.float32)
+
+
+def test_alt_depth_holds_the_pose_the_main_input_cannot():
+    """The main input keeps only the bench (as the tracking filter does to a detailed part): the
+    pose slides along it, and every ICP says so (trans_strength). In detail mode the tracker uses
+    the full depth (alt_depth) from the first frame and tracks. A main input that holds and passes
+    its gates never touches alt_depth."""
+    from ohs.app.pipeline import DETAIL_PROBE_STRENGTH as thr
+
+    rng = np.random.default_rng(6)
+    poses = arc_trajectory(24)
+    frames = [render_depth(T, rng, box=True) for T in poses]
+    T0_inv = G.invert_se3(poses[0])
+    out = {}
+    for name in ("floor only", "detail mode"):
+        tracker = MarkerlessTracker(K, (W, H), FusionParams(voxel_mm=2.0, device="auto"))
+        tracker.detail_mode = name == "detail mode"
+        used, strength = [], []
+        for k, (T, d) in enumerate(zip(poses, frames)):
+            R_prior = gyro_prior(poses, k, rng) if k else None
+            res = tracker.track(_floor_only(d, T), None, k / FPS, R_prior,
+                                alt_depth=None if name == "floor only" else (lambda d=d: d))
+            used.append(res.info.get("input"))
+            strength.append(res.info.get("trans_strength"))
+        out[name] = (G.pose_error(T0_inv @ poses[-1], res.T_wc)[1], used, strength)
+    floor_err, _, floor_strength = out["floor only"]
+    # the first frames say it, which is what the pipeline's probe needs (any one of them). Open3D's
+    # young model has noisy normals that flatter frame 1 (1.4e-3), the GPU model doesn't
+    assert floor_err > 20.0 and min(floor_strength[1:6]) < thr
+    err, used, _ = out["detail mode"]
+    assert err < 3.0 and used[1:] == ["alt"] * (len(poses) - 1)
+    # the sphere and box on the plane hold the pose themselves: the main input is used throughout
+    tracker = MarkerlessTracker(K, (W, H), FusionParams(voxel_mm=2.0, device="auto"))
+    for k, (T, d) in enumerate(zip(poses[:10], frames)):
+        res = tracker.track(d, None, k / FPS, gyro_prior(poses, k, rng) if k else None, alt_depth=lambda: 1 / 0)
+        assert k == 0 or (res.ok and res.info["input"] == "main" and res.info["trans_strength"] > thr)
+
+
 def test_integrate_external_poses_and_reset():
     rng = np.random.default_rng(2)
     poses = arc_trajectory(8)

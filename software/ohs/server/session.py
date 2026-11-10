@@ -769,15 +769,18 @@ class ScanSession:
         """Reset the TSDFs and re-integrate (a budgeted subset of) the kept keyframes."""
         import cv2
 
-        from ohs.app.pipeline import tracking_depth
+        from ohs.app.pipeline import tracking_depth, with_raw_depth
 
         rec_t = getattr(pipe, "markerless", None)
         trk = pipe.tracker if getattr(pipe, "dual_model", False) else None
         if rec_t is None:
             return 0
         rec_t.reset()
+        detail = bool(getattr(trk, "detail_mode", False))
         if trk is not None:
             trk.reset()
+            if detail:  # the scan has a detailed part: keep tracking it with the raw depth too
+                trk.detail_mode, trk.detail_frame = True, None
         kfs = [e for e in keep if e.depth is not None]
         if not kfs:
             return 0
@@ -798,6 +801,8 @@ class ScanSession:
             rec_t.integrate(cv2.resize(d, (w, h), interpolation=cv2.INTER_NEAREST), None, e.T)
             if trk is not None:
                 td = tracking_depth(d, sigma) if sigma > 0 else d
+                if detail:
+                    td = with_raw_depth(td, d)
                 trk.integrate(cv2.resize(td, (w, h), interpolation=cv2.INTER_NEAREST), None, e.T)
         per = (time.perf_counter() - t0) / len(sel)
         self._rebuild_cost_s = per if self._rebuild_cost_s is None else 0.5 * (self._rebuild_cost_s + per)

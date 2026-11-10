@@ -50,6 +50,22 @@ sigma and radius scaled, and the smooth result is upsampled back for the tracker
 unchanged (integration and ICP sampling at the processed resolution). See :func:`tracking_depth`.
 With a GPU the filter runs there (:class:`ohs.track.filter_gpu.TrackingFilterGpu`, the same map).
 
+**Detailed parts.** The filter erodes around every depth step, so a detailed part (a carburetor,
+a machined bracket) loses most of its depth, and what is left (often the bench) can't hold the
+scanner's sideways motion. Each ICP measures how well its input holds the weakest translation
+(``info["trans_strength"]``; :mod:`ohs.track.markerless`, "Detailed parts"). During the first
+``DETAIL_PROBE_FRAMES`` frames of a scan a second tracker runs on :func:`with_raw_depth`, the
+filtered depth plus the raw depth wherever the filter dropped a pixel. If the filtered depth can't
+hold the pose (``DETAIL_PROBE_STRENGTH``), that tracker, consistent from the first frame on, takes
+over for the whole scan (``tracker.detail_mode``); otherwise it is dropped. A frame that fails a
+gate tries :func:`with_raw_depth` before it is lost.
+
+Switching later, or frame by frame, was much worse on the simulator: the part goes into the model
+at poses that had already slid, and the filter's leftover fragments of it look well held once it
+is there but are biased (``VALIDATION.md``, "Large and detailed parts"). Smooth parts (the sphere,
+the car panel, the door trim) never switch. A scan that starts on a smooth part and only later
+reaches a detailed one stays on the filtered depth.
+
 **Model backends.** The tracking model may live on the GPU
 (:class:`~ohs.track.volume_gpu.GpuTsdfVolume`, a rolling cube): it takes
 ``fusion.model_backend`` (default ``"auto"``: the GPU when :func:`ohs.compute.get_device` finds
@@ -130,6 +146,12 @@ MODES = ("markerless", "markers")
 RECON_MODELS = ("auto", "confidence", "open3d")
 NOMINAL_WIDTH = 1280  # px per camera of the ELP module; pixel-based defaults are tuned for it
 GYRO_SIGMA_DEG = 0.02  # gyro rotation prior per frame used by the default fusion parameters
+DETAIL_PROBE_FRAMES = 10  # frames at the start of a scan that also track on with_raw_depth ("Detailed parts")
+# during them, a frame whose filtered depth holds its weakest translation less than this is a
+# detailed part. On the simulator smooth parts hold >= 1.1e-3 there; detailed ones 1e-5 to 4e-5
+# once the model has grown, but a young model flatters them (the carburetor's first frames: 3e-4,
+# 2e-4, then 1e-4 and falling), so the threshold sits between
+DETAIL_PROBE_STRENGTH = 5e-4
 
 
 def effective_scale(image_width: int) -> float:
@@ -217,6 +239,19 @@ def tracking_depth(depth: np.ndarray, sigma_px: float, erode_mult: float = 2.0, 
     dist = cv2.distanceTransform(pad, cv2.DIST_L2, 5)[1:-1, 1:-1]
     keep = (dist > erode_mult * s) & (np.abs(out - d) <= max_change * d)
     return np.where(keep, out, np.float32(0.0)).astype(np.float32)
+
+
+def with_raw_depth(filtered: np.ndarray, raw: np.ndarray) -> np.ndarray:
+    """``filtered`` (a :func:`tracking_depth` map) with the ``raw`` depth wherever the filter
+    dropped a pixel that has depth: the tracker's input for detailed parts (module docstring)."""
+    f = np.asarray(filtered, dtype=np.float32)
+    r = np.asarray(raw, dtype=np.float32)
+    m = (f <= 0) & np.isfinite(r) & (r > 0)
+    if not m.any():
+        return f
+    out = f.copy()
+    out[m] = r[m]
+    return out
 
 
 def _tracking_depth_small(d: np.ndarray, gx: np.ndarray, gy: np.ndarray, slope: float, sigma_px: float,
@@ -376,6 +411,9 @@ class FramePipeline:
         self.cloud = LaserCloud()
         self._laser_pool: ThreadPoolExecutor | None = None  # made at the first frame with lasers
         self._track_filter_gpu: TrackingFilterGpu | None | bool = None  # None: not tried yet; False: CPU
+        # the start of a scan tracks a second time on with_raw_depth (module docstring, "Detailed parts")
+        self._probe: MarkerlessTracker | None = None
+        self._probe_left = DETAIL_PROBE_FRAMES
         #: laser points dropped because they disagree with the frame's dense depth, per line
         self.laser_rejected: dict[str, int] = {}
         self._trajectory: list[tuple[float, np.ndarray, bool]] = []
@@ -624,7 +662,12 @@ class FramePipeline:
             d_track = self.tracking_input(depth)
             tim["track_filter"] = _ms(tf)
             extra["track_valid_fraction"] = float(np.count_nonzero(d_track)) / d_track.size
-            res = self.tracker.track(d_track, None, t, R_prior)
+            # where the filtered depth can't hold the pose (a detailed part: the filter erodes it
+            # away), the tracker uses it with the raw depth wherever the filter dropped a pixel
+            if self._probe_left > 0:
+                res = self._probe_track(d_track, depth, t, R_prior)
+            else:
+                res = self.tracker.track(d_track, None, t, R_prior, alt_depth=lambda: with_raw_depth(d_track, depth))
             if res.ok:
                 self._fuse(depth, res.T_wc, t, tim, sigma)
         for k, v in res.info.get("timings_ms", {}).items():
@@ -632,6 +675,37 @@ class FramePipeline:
                 continue
             tim["track_integrate" if (k == "integrate" and self.dual_model) else k] = float(v)
         return res
+
+    def _probe_track(self, d_track: np.ndarray, depth: np.ndarray, t: float, R_prior: np.ndarray | None) -> TrackResult:
+        """A frame at the start of a scan (module docstring, "Detailed parts"): tracked on the
+        filtered depth alone, and by a second tracker on :func:`with_raw_depth`. If the filtered
+        depth can't hold the pose (a detailed part), the second tracker, consistent from the first
+        frame on, takes over for the whole scan; after ``DETAIL_PROBE_FRAMES`` it is dropped."""
+        if self._probe is None:
+            self._probe = MarkerlessTracker(self.K, self.image_size, self.track_fusion_params)
+        res = self.tracker.track(d_track, None, t, R_prior)
+        res_p = self._probe.track(with_raw_depth(d_track, depth), None, t, R_prior)
+        self._probe_left -= 1
+        weak = not res.info.get("first_frame") and (
+            (not res.ok and res_p.ok)
+            or (res.ok and res.info.get("trans_strength", 1.0) < DETAIL_PROBE_STRENGTH))
+        if weak:
+            log.info("the filtered depth can't hold the pose at frame %d (a detailed part): this scan tracks "
+                     "with the raw depth where the filter drops it", self._n_frames)
+            self.tracker.close()
+            self.tracker, self._probe, self._probe_left = self._probe, None, 0
+            self.tracker.detail_mode, self.tracker.detail_frame = True, self._n_frames
+            res_p.info["input"] = "alt"
+            return res_p
+        if self._probe_left <= 0:
+            self._end_probe()
+        return res
+
+    def _end_probe(self) -> None:
+        if self._probe is not None:
+            self._probe.close()
+            self._probe = None
+        self._probe_left = 0
 
     # ------------------------------------------------------------------ results
     def mesh(self) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -692,6 +766,8 @@ class FramePipeline:
             self.markerless.reset()
         if self.dual_model:
             self.tracker.reset()
+        self._end_probe()
+        self._probe_left = DETAIL_PROBE_FRAMES
         if self.markers is not None:
             self.markers.reset()
         self.cloud.clear()
@@ -710,6 +786,7 @@ class FramePipeline:
         if isinstance(self._track_filter_gpu, TrackingFilterGpu):
             self._track_filter_gpu.close()
         self._track_filter_gpu = False
+        self._end_probe()
         for tr in (self.tracker, self.markerless):
             if tr is not None:
                 tr.close()

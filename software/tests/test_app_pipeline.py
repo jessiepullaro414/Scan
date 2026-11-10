@@ -209,6 +209,59 @@ def test_tracking_filter_at_the_tracking_resolution():
         assert full_q.tracking_input(dd).shape == (800, 1280)
 
 
+def test_with_raw_depth_fills_only_what_the_filter_dropped():
+    from ohs.app.pipeline import with_raw_depth
+
+    raw = np.array([[300.0, np.nan, 0.0, 310.0]], np.float32)
+    filt = np.array([[301.0, 0.0, 0.0, 0.0]], np.float32)
+    out = with_raw_depth(filt, raw)
+    assert out.tolist() == [[301.0, 0.0, 0.0, 310.0]] and filt[0, 3] == 0.0  # the input is left alone
+
+
+class _FakeTracker:
+    """Stands in for MarkerlessTracker: returns ok results with the given trans_strength values."""
+
+    model_status = "fake"
+
+    def __init__(self, strengths):
+        self.strengths = list(strengths)
+        self.closed = False
+        self.detail_mode, self.detail_frame = False, None
+
+    def track(self, depth, intensity, t, R_prior, alt_depth=None):
+        from ohs.types import TrackResult
+
+        s = self.strengths.pop(0)
+        return TrackResult(np.eye(4), True, {"first_frame": True} if s is None else {"trans_strength": s})
+
+    def close(self):
+        self.closed = True
+
+
+def test_detail_probe_hands_a_detailed_scan_to_the_raw_depth_tracker(monkeypatch):
+    """The first frames of a scan also run a tracker on with_raw_depth. A frame whose filtered depth
+    can't hold the pose hands the scan to it (detail mode); a scan that holds drops it."""
+    from ohs.app import pipeline as P
+
+    d = np.full((400, 640), 300.0, np.float32)
+    for strengths, switch_at in (([None, 3e-3, 2e-3, 3e-4, 2e-3], 3), ([None] + [3e-3] * P.DETAIL_PROBE_FRAMES, None)):
+        with FramePipeline(nominal_calibration(), PipelineParams(scale=0.5, use_lasers=False, use_imu=False)) as pipe:
+            pipe.tracker.close()
+            main, probe = _FakeTracker(strengths), _FakeTracker([None] + [1e-2] * P.DETAIL_PROBE_FRAMES)
+            pipe.tracker = main
+            monkeypatch.setattr(P, "MarkerlessTracker", lambda *a, **k: probe)
+            for k in range(len(strengths) - 1 if switch_at else P.DETAIL_PROBE_FRAMES):
+                pipe._n_frames = k
+                res = pipe._probe_track(d, d, k / 30.0, None)
+                if switch_at is not None and k == switch_at:
+                    assert res.info["input"] == "alt" and pipe.tracker is probe and main.closed
+                    assert probe.detail_mode and probe.detail_frame == switch_at and pipe._probe_left == 0
+                    break
+            if switch_at is None:
+                assert pipe.tracker is main and probe.closed and pipe._probe is None and pipe._probe_left == 0
+                assert not main.closed
+
+
 def test_model_backends_per_model():
     """Only the tracking model follows fusion.model_backend. The reconstruction model is the
     confidence TSDF on a GPU (recon "auto") and Open3D otherwise; the single model of
