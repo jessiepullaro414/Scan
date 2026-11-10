@@ -99,6 +99,7 @@ from typing import Any, Callable
 import cv2
 import numpy as np
 
+from ohs.track.filter_gpu import TrackingFilterGpu
 from ohs.track.fusion import LaserCloud
 from ohs.track.imu_prior import GyroPredictor
 from ohs.track.markerless import FusionParams, MarkerlessTracker
@@ -204,7 +205,8 @@ def tracking_depth(depth: np.ndarray, sigma_px: float, erode_mult: float = 2.0, 
         return _tracking_depth_small(d, gx, gy, slope, s, erode_mult, max_change, (int(work_size[0]), int(work_size[1])))
     valid = (d > 0) & (np.sqrt(gx * gx + gy * gy) <= slope * d)
     vf = valid.astype(np.float32)
-    num = cv2.GaussianBlur(d * vf, (0, 0), s, borderType=cv2.BORDER_CONSTANT)
+    # np.where, not d * vf: a NaN pixel (no depth) would make the whole blur radius around it NaN
+    num = cv2.GaussianBlur(np.where(valid, d, np.float32(0.0)), (0, 0), s, borderType=cv2.BORDER_CONSTANT)
     den = cv2.GaussianBlur(vf, (0, 0), s, borderType=cv2.BORDER_CONSTANT)
     out = num / np.maximum(den, 1e-6)
     # erosion by a disc of radius erode_mult * sigma, with the image border as invalid
@@ -372,6 +374,7 @@ class FramePipeline:
 
         self.cloud = LaserCloud()
         self._laser_pool: ThreadPoolExecutor | None = None  # made at the first frame with lasers
+        self._track_filter_gpu: TrackingFilterGpu | None | bool = None  # None: not tried yet; False: CPU
         #: laser points dropped because they disagree with the frame's dense depth, per line
         self.laser_rejected: dict[str, int] = {}
         self._trajectory: list[tuple[float, np.ndarray, bool]] = []
@@ -429,8 +432,35 @@ class FramePipeline:
 
     def tracking_input(self, depth: np.ndarray) -> np.ndarray:
         """The tracking model's input: :func:`tracking_depth` of ``depth`` (sigma
-        ``track_filter_px``), filtered at :attr:`track_size`, at the pipeline resolution."""
+        ``track_filter_px``), filtered at :attr:`track_size`, at the pipeline resolution. With a GPU
+        (:func:`ohs.compute.get_device`) the filter runs there (:class:`ohs.track.filter_gpu.TrackingFilterGpu`,
+        the same map to float rounding)."""
+        f = self._track_filter_gpu
+        if f is None:
+            f = self._track_filter_gpu = self._make_track_filter_gpu(depth.shape)
+        if f:
+            try:
+                return f(depth)
+            except Exception as exc:  # noqa: BLE001 - a GPU failure must not stop the scan
+                log.warning("tracking filter on the GPU failed (%s); filtering on the CPU", exc)
+                self._track_filter_gpu = False
         return tracking_depth(depth, self.track_filter_px, work_size=self.track_size)
+
+    def _make_track_filter_gpu(self, shape: tuple[int, ...]) -> TrackingFilterGpu | bool:
+        """The GPU tracking filter for depth maps of ``shape``, or ``False`` (no GPU, or sizes it can't do)."""
+        from ohs import compute  # noqa: PLC0415
+
+        in_size = (int(shape[1]), int(shape[0]))
+        if self.track_filter_px <= 0 or not TrackingFilterGpu.supports(in_size, self.track_size):
+            return False
+        dev = compute.get_device()
+        if dev is None:
+            return False
+        try:
+            return TrackingFilterGpu(dev, in_size, self.track_size, self.track_filter_px)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("no tracking filter on the GPU (%s); filtering on the CPU", exc)
+            return False
 
     @property
     def n_frames(self) -> int:
@@ -676,6 +706,9 @@ class FramePipeline:
         if self._laser_pool is not None:
             self._laser_pool.shutdown(wait=True)
             self._laser_pool = None
+        if isinstance(self._track_filter_gpu, TrackingFilterGpu):
+            self._track_filter_gpu.close()
+        self._track_filter_gpu = False
         for tr in (self.tracker, self.markerless):
             if tr is not None:
                 tr.close()

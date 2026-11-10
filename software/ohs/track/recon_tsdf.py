@@ -137,9 +137,60 @@ __kernel void recon_integrate(
         luv[a] = (uint)ui | ((uint)vi << 16);
     }
 }
+
+// The brick search of _frame_bricks: every step-th pixel's ray at d - trunc, d and d + trunc, in bricks
+// relative to an origin brick (r and t are T_wc in bricks, t minus the origin). A key packs 10 bits per
+// axis (+-512 bricks); keys outside that are counted in count[1] and the host searches on the CPU instead.
+// A hash set (open addressing, 0xFFFFFFFF = empty) lets out[] get every brick once.
+__kernel void recon_bricks(
+    __global const float *depth, const int w, const int step, const int gw, const int gh,
+    const float fx, const float fy, const float cx, const float cy, const float sk,
+    const float r00, const float r01, const float r02,
+    const float r10, const float r11, const float r12,
+    const float r20, const float r21, const float r22,
+    const float t0, const float t1, const float t2,
+    const float trunc, const float depth_min, const float depth_max,
+    __global uint *table, const int shift, __global uint *out, __global int *count)
+{
+    const int i = get_global_id(0), j = get_global_id(1);
+    if (i >= gw || j >= gh) return;
+    const int u = step / 2 + i * step, v = step / 2 + j * step;
+    const float z = depth[v * w + u];
+    if (!(z >= depth_min && z <= depth_max)) return;  // NaN compares false
+    const float y = ((float)v - cy) / fy;
+    const float x = ((float)u - cx - sk * y) / fx;
+    const float dx = r00 * x + r01 * y + r02, dy = r10 * x + r11 * y + r12, dz = r20 * x + r21 * y + r22;
+    const float px = dx * z + t0, py = dy * z + t1, pz = dz * z + t2;
+    const uint mask = (1u << (32 - shift)) - 1u;
+    for (int k = -1; k <= 1; ++k) {
+        const float off = (float)k * trunc;
+        const int bx = (int)floor(px + off * dx) + 512, by = (int)floor(py + off * dy) + 512;
+        const int bz = (int)floor(pz + off * dz) + 512;
+        if ((uint)bx > 1023u || (uint)by > 1023u || (uint)bz > 1023u) {
+            atomic_inc(count + 1);
+            continue;
+        }
+        const uint key = ((uint)bx << 20) | ((uint)by << 10) | (uint)bz;
+        uint hh = (key * 2654435761u) >> shift;
+        for (;;) {
+            uint cur = table[hh];
+            if (cur == 0xFFFFFFFFu) {
+                cur = atomic_cmpxchg(table + hh, 0xFFFFFFFFu, key);
+                if (cur == 0xFFFFFFFFu) {
+                    out[atomic_inc(count)] = key;
+                    break;
+                }
+            }
+            if (cur == key) break;
+            hh = (hh + 1u) & mask;
+        }
+    }
+}
 """
 _I, _F = np.int32, np.float32
 _ARGS = [None] * 9 + [_I] + [None, None] + [_I, _I, _I] + [_F] * 5 + [_F] * 12 + [_F] * 5
+_BRICK_ARGS = [None, _I, _I, _I, _I] + [_F] * 5 + [_F] * 12 + [_F] * 3 + [None, _I, None, None]
+_KEY_BITS, _KEY_HALF = 10, 512  # compact brick keys of the GPU search: 10 bits per axis around the origin
 
 
 def _encode(k: np.ndarray) -> np.ndarray:
@@ -249,9 +300,13 @@ class ConfidenceTsdf:
         self._kern.set_scalar_arg_dtypes(_ARGS)
         lim = int(self._kern.get_work_group_info(cl.kernel_work_group_info.WORK_GROUP_SIZE, dev.device))
         self._wg = max(1, min(128, lim, int(dev.device.max_work_group_size)))
+        self._bkern = cl.Kernel(prg, "recon_bricks")
+        self._bkern.set_scalar_arg_dtypes(_BRICK_ARGS)
         self._img_bufs: Any = None
         self._list_cap = 0
         self._slot_buf = self._key_buf = None
+        self._bsearch: Any = None  # (n_max, table, out, count, shift) of the GPU brick search
+        self._warned_range = False
         self.backend = "gpu"
 
     @property
@@ -272,6 +327,7 @@ class ConfidenceTsdf:
         """Forget everything (the pool shrinks back to its initial size)."""
         self._enc_sorted = np.zeros(0, dtype=np.int64)
         self._slot_sorted = np.zeros(0, dtype=np.int64)
+        self._origin: np.ndarray | None = None  # brick the GPU search's compact keys are relative to
         self.n_bricks = 0
         self.n_integrated = 0
         self.capacity = 0
@@ -381,6 +437,56 @@ class ConfidenceTsdf:
             parts.append(enc[ok & ~dup])
         return _decode(np.unique(np.concatenate(parts)))
 
+    def _frame_bricks_gpu(self, dbuf: Any, T_wc: np.ndarray, shape: tuple[int, int]) -> np.ndarray | None:
+        """:meth:`_frame_bricks` on the GPU, from the depth already in ``dbuf``: the same bricks, in the
+        same (sorted) order. ``None`` when a brick lies more than 512 bricks from the origin brick (the
+        first frame's camera; 4 m at 1 mm voxels): the caller then searches on the CPU."""
+        cl, q = self.cl, self.queue
+        h, w = shape
+        s = self._step
+        gw, gh = len(range(s // 2, w, s)), len(range(s // 2, h, s))
+        n_max = 3 * gw * gh
+        if n_max == 0:
+            return np.zeros((0, 3), dtype=np.int64)
+        inv = 1.0 / (BRICK * self.voxel_mm)
+        if self._origin is None:
+            self._origin = np.floor(T_wc[:3, 3] * inv).astype(np.int64)
+        if self._bsearch is None or self._bsearch[0] != n_max:
+            self._release_bsearch()
+            shift = 32 - max(12, int(np.ceil(np.log2(2 * n_max))))  # table at most half full
+            mf, ctx = cl.mem_flags, self.dev.ctx
+            self._bsearch = (n_max, cl.Buffer(ctx, mf.READ_WRITE, size=(1 << (32 - shift)) * 4),
+                             cl.Buffer(ctx, mf.READ_WRITE, size=n_max * 4), cl.Buffer(ctx, mf.READ_WRITE, size=8), shift)
+        _, table, out, count, shift = self._bsearch
+        cl.enqueue_fill_buffer(q, table, np.uint32(0xFFFFFFFF), 0, (1 << (32 - shift)) * 4)
+        cl.enqueue_fill_buffer(q, count, np.int32(0), 0, 8)
+        K = self.K
+        R = T_wc[:3, :3] * inv
+        t = T_wc[:3, 3] * inv - self._origin
+        self._bkern(q, (gw, gh), None, dbuf, w, s, gw, gh, K[0, 0], K[1, 1], K[0, 2], K[1, 2], K[0, 1],
+                    *R.ravel(), *t, self.trunc_mm, self.depth_min_mm, self.depth_max_mm, table, shift, out, count)
+        cnt = np.zeros(2, dtype=np.int32)
+        cl.enqueue_copy(q, cnt, count, is_blocking=True)
+        if cnt[1] > 0:
+            if not self._warned_range:
+                log.info("confidence TSDF: the scan reaches beyond the GPU brick search's range; searching on the CPU")
+                self._warned_range = True
+            return None
+        n = int(cnt[0])
+        if n == 0:
+            return np.zeros((0, 3), dtype=np.int64)
+        k = np.empty(n, dtype=np.uint32)
+        cl.enqueue_copy(q, k, out, is_blocking=True)  # the first n keys (the host array's size)
+        k = np.sort(k).astype(np.int64)
+        m = (1 << _KEY_BITS) - 1
+        return np.stack([(k >> 2 * _KEY_BITS) & m, (k >> _KEY_BITS) & m, k & m], axis=1) - _KEY_HALF + self._origin
+
+    def _release_bsearch(self) -> None:
+        if getattr(self, "_bsearch", None) is not None:
+            for bb in self._bsearch[1:4]:
+                bb.release()
+        self._bsearch = None
+
     # ------------------------------------------------------------------ integration
     def integrate(self, depth_mm: np.ndarray, sigma_mm: np.ndarray | None, T_wc: np.ndarray,
                   t: float | None = None) -> None:
@@ -395,12 +501,21 @@ class ConfidenceTsdf:
         R_cw = T[:3, :3].T
         t_cw = -R_cw @ T[:3, 3]
         if self.dev is not None:
-            # the kernel checks the raw depth and weighs each pixel itself (the rules of pixel_weights),
-            # which saves several full-image passes on the CPU and one upload
-            slots, keys = self._slots_for(self._frame_bricks(depth, T))
+            # the kernels check the raw depth and weigh each pixel themselves (the rules of pixel_weights),
+            # which saves several full-image passes on the CPU and one upload; the bricks are searched on
+            # the GPU too, and only the frame's brick list comes back
+            sig = None if sigma_mm is None else np.ascontiguousarray(sigma_mm, dtype=np.float32)
+            if sig is not None and sig.shape != depth.shape:
+                raise ValueError(f"sigma has shape {sig.shape}, expected {depth.shape}")
+            hold = self._upload_images(depth, sig)
+            bricks = self._frame_bricks_gpu(self._img_bufs[1], T, depth.shape)
+            if bricks is None:
+                bricks = self._frame_bricks(depth, T)
+            slots, keys = self._slots_for(bricks)
             if len(slots):
-                sig = None if sigma_mm is None else np.ascontiguousarray(sigma_mm, dtype=np.float32)
-                self._integrate_gpu(slots, keys, depth, sig, R_cw, t_cw)
+                self._integrate_gpu(slots, keys, depth.shape, sig is not None, R_cw, t_cw)
+            self.queue.finish()  # the host arrays must outlive the copies
+            del hold
         else:
             depth = np.where(np.isfinite(depth) & (depth >= self.depth_min_mm) & (depth <= self.depth_max_mm),
                              depth, np.float32(0.0)).astype(np.float32)
@@ -450,16 +565,27 @@ class ConfidenceTsdf:
         b["nlook"][al] += 1.0
         b["luv"][al] = (ui[look].astype(np.uint32) | (vi[look].astype(np.uint32) << 16))
 
-    def _integrate_gpu(self, slots: np.ndarray, keys: np.ndarray, depth: np.ndarray, sigma: np.ndarray | None,
-                       R_cw: np.ndarray, t_cw: np.ndarray) -> None:
+    def _upload_images(self, depth: np.ndarray, sigma: np.ndarray | None) -> tuple:
+        """Queue the depth (and sigma) uploads; returns the host arrays, which must outlive them."""
         cl, q = self.cl, self.queue
         h, w = depth.shape
-        mf = cl.mem_flags
         if self._img_bufs is None or self._img_bufs[0] != (h, w):
             if self._img_bufs is not None:
                 for bb in self._img_bufs[1:]:
                     bb.release()
-            self._img_bufs = ((h, w), *(cl.Buffer(self.dev.ctx, mf.READ_ONLY, size=h * w * 4) for _ in range(2)))
+            self._img_bufs = ((h, w), *(cl.Buffer(self.dev.ctx, cl.mem_flags.READ_ONLY, size=h * w * 4)
+                                        for _ in range(2)))
+        cl.enqueue_copy(q, self._img_bufs[1], depth, is_blocking=False)
+        if sigma is not None:
+            cl.enqueue_copy(q, self._img_bufs[2], sigma, is_blocking=False)
+        return depth, sigma
+
+    def _integrate_gpu(self, slots: np.ndarray, keys: np.ndarray, shape: tuple[int, int], has_sigma: bool,
+                       R_cw: np.ndarray, t_cw: np.ndarray) -> None:
+        """Queue the integration of the uploaded images into bricks ``keys`` at pool ``slots``."""
+        cl, q = self.cl, self.queue
+        h, w = shape
+        mf = cl.mem_flags
         _, dbuf, sbuf = self._img_bufs
         m = len(slots)
         if m > self._list_cap:
@@ -469,20 +595,15 @@ class ConfidenceTsdf:
             self._list_cap = max(m, 2 * self._list_cap, 1024)
             self._slot_buf = cl.Buffer(self.dev.ctx, mf.READ_ONLY, size=self._list_cap * 4)
             self._key_buf = cl.Buffer(self.dev.ctx, mf.READ_ONLY, size=self._list_cap * 12)
-        hold = (depth, sigma, np.ascontiguousarray(slots, np.int32), np.ascontiguousarray(keys, np.int32))
-        cl.enqueue_copy(q, dbuf, hold[0], is_blocking=False)
-        if sigma is not None:
-            if sigma.shape != depth.shape:
-                raise ValueError(f"sigma has shape {sigma.shape}, expected {depth.shape}")
-            cl.enqueue_copy(q, sbuf, hold[1], is_blocking=False)
-        cl.enqueue_copy(q, self._slot_buf, hold[2], is_blocking=False)
-        cl.enqueue_copy(q, self._key_buf, hold[3], is_blocking=False)
+        hold = (np.ascontiguousarray(slots, np.int32), np.ascontiguousarray(keys, np.int32))
+        cl.enqueue_copy(q, self._slot_buf, hold[0], is_blocking=False)
+        cl.enqueue_copy(q, self._key_buf, hold[1], is_blocking=False)
         K = self.K
         b = self._bufs
         n = m * NVOX
         gs = (n + self._wg - 1) // self._wg * self._wg
         self._kern(q, (gs,), (self._wg,), b["tsdf"], b["wsum"], b["m2"], b["s2"], b["nobs"], b["nlook"], b["luv"],
-                   self._slot_buf, self._key_buf, m, dbuf, sbuf, int(sigma is not None), w, h,
+                   self._slot_buf, self._key_buf, m, dbuf, sbuf, int(has_sigma), w, h,
                    K[0, 0], K[1, 1], K[0, 2], K[1, 2], K[0, 1], *R_cw.ravel(), *t_cw,
                    self.voxel_mm, self.trunc_mm, self.depth_min_mm, self.depth_max_mm, self.look_px ** 2)
         q.finish()  # the host arrays above must outlive the copies
@@ -571,3 +692,4 @@ class ConfidenceTsdf:
             if bb is not None:
                 bb.release()
         self._slot_buf = self._key_buf = None
+        self._release_bsearch()

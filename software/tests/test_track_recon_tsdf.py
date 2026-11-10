@@ -82,6 +82,35 @@ def test_gpu_and_numpy_agree():
     assert abs(len(Vc) - len(Vg)) <= 0.002 * len(Vc) and abs(np.median(Sc) - np.median(Sg)) < 1e-3
 
 
+def test_gpu_brick_search_finds_the_cpu_bricks():
+    """The GPU's brick search gives the numpy search's bricks, in the same order; beyond its key
+    range (512 bricks from the first camera) the volume searches on the CPU and still fuses."""
+    if compute.get_device() is None:
+        pytest.skip(f"no GPU: {compute.status()}")
+    from scipy.spatial.transform import Rotation
+
+    v = volume("gpu")
+    rng = np.random.default_rng(2)
+    for k, ang in enumerate((0.0, 12.0, -20.0, 35.0)):
+        T = make_se3(Rotation.from_euler("xy", [ang, 0.5 * ang], degrees=True).as_matrix(), np.array([3.0 * k, -2.0 * k, 0.0]))
+        d = plane_depth(T, 0.3, rng)
+        d[40:60, 100:140] = np.nan  # holes and out-of-range depth are skipped like on the CPU
+        d[150:, :30] = 900.0
+        hold = v._upload_images(np.ascontiguousarray(d), None)
+        gpu = v._frame_bricks_gpu(v._img_bufs[1], T, d.shape)
+        v.queue.finish()
+        del hold
+        assert gpu is not None and len(gpu) > 50
+        assert np.array_equal(gpu, v._frame_bricks(d, T)), ang
+        v.integrate(d, None, T)
+    far = make_se3(np.eye(3), np.array([0.0, 0.0, -2.0 * 512 * 8 * v.voxel_mm]))  # 2 x the key range behind
+    d = plane_depth(far)
+    d[:] = 300.0
+    n0 = v.n_bricks
+    v.integrate(d, None, far)
+    assert v.n_bricks > n0  # fused, through the CPU search
+
+
 def test_sigma_counts_independent_looks_only():
     rng = np.random.default_rng(2)
     noise = 0.5
