@@ -121,7 +121,7 @@ integrated GPU and a gaming laptop):
 | Processing after the scan, full quality | 6.4 fps | 20.4 fps | measured (`ohs bench`, full) |
 | → wait per minute of scanning, full quality | about 9 min | about 3 min | computed, see below |
 | → the same at preview quality | about 4 min | about 1.5 min | computed |
-| Engine start | 0.8 s | not measured | measured once |
+| Engine start | 0.8 s (1.9–2.0 s as F1 measures it, from a new process) | not measured | measured once |
 
 The wait per minute of scanning is computed, not measured: the camera records 60 frames a second
 (`CameraParams.fps`), the recording keeps every frame, and processing uses every one
@@ -134,8 +134,8 @@ rather than by percent: processing fewer frames (F2) and making the stereo match
 (F3). Neither is bit-identical, so both are guarded by the accuracy tables in VALIDATION.md, not
 by the snapshot tool.
 
-### [ ] F1. Measure the waits a user feels, and set targets (Sonnet, M)
-- **Partly done 2026-11-10:** `ohs bench` prints, per run, the wait per minute of scanning at the
+### [x] F1. Measure the waits a user feels, and set targets (Sonnet, M)
+- **Done 2026-11-10:** `ohs bench` prints, per run, the wait per minute of scanning at the
   camera's frame rate (60 fps), from the mean frame time, and stores it as `wait_per_minute_min`.
   It also times the fixed tail after the last frame (mesh extraction, cleaning, each export file,
   the laser points file; `tail_ms`) and, once per bench, the engine start: a new `ohs app` process
@@ -143,7 +143,11 @@ by the snapshot tool.
   start figure includes Python's own start and the imports, which the 0.8 s in the table above
   probably did not. Not in the tail: the app's own step after processing (reading the mesh back
   into the project and showing it, `server/processing.py` `_new_base`).
-  Still open: the table in VALIDATION.md with values measured on an idle machine.
+  The table is in VALIDATION.md, "The waits a user feels", with the targets. Measured on the
+  Radeon: wait per minute 9.5–9.7 min at full quality by the bench and about 11 min with frame
+  reading included; tail 1.8–1.9 s after a 3 s scan; engine start 1.9–2.0 s, of which about 0.8 s
+  passes between the app's "hello" and its first status message (not looked into). Still to
+  measure on the RTX laptop: the tail and the engine start.
 - **Change:** `ohs bench` also reports, per quality, the wait per minute of scanning at the
   camera's frame rate, and the fixed tail after the last frame (meshing, cleaning, export). Add a
   timing of engine start to first status message. Put the table above into VALIDATION.md with the
