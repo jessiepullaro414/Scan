@@ -70,7 +70,7 @@ frame (medians); on the RTX 3070 Ti laptop: full 49 ms. UI first paint loads abo
 | B2 | A failed frame write is lost without an error | bug | S | Sonnet | ✔ |
 | B3 | A crash mid-scan can leave an unreadable recording | bug | M | Opus | ✔ |
 | B4 | The recording backlog has no limit and is not shown | robustness | M | Sonnet | ✔ |
-| B5 | Rewind does not restore the reconstruction's weights | bug | M | Opus | ✔ |
+| B5 | Rewind may not restore the reconstruction's weights (confirm first) | bug? | S-M | Opus | ○ |
 | B6 | Undo/redo writes files while holding the app's main lock | robustness | M | Opus | ○ |
 | B7 | A GPU failure mid-scan falls back to the CPU silently | robustness | M | Sonnet | ○ |
 | B8 | The Viewer can leak a mesh when you leave during loading | bug | S | Sonnet | ✔ |
@@ -312,7 +312,7 @@ processing), S1 (start-up).
   slow fake writer, then check the cap and the backlog field.
 - The real throughput against the real camera needs the hardware; the cap and the display do not.
 
-### [ ] B5. Rewind does not restore the reconstruction's weights (Opus, M) ✔
+### [ ] B5. Rewind may not restore the reconstruction's weights (Opus, S-M) ○
 - **Where:** `ohs/server/session.py:809-831` (`_scale_weights`), `ohs/track/recon_tsdf.py`
   (`ConfidenceTsdf` has no `scale_weights`).
 - **Problem:** after a rewind that rebuilds from a subsample of the keyframes, the weights are
@@ -320,6 +320,10 @@ processing), S1 (start-up).
   model is a `ConfidenceTsdf`, which has no `scale_weights`; the helper falls through to
   `tracker.voxel_grid`, fails, and only logs at debug level. The rebuilt part of the model is then
   lighter than it should be, so later frames outweigh it.
+- **Confirm first, this may not be a bug:** the live preview builds its pipeline with
+  `recon="open3d"` (`ohs/app/live.py:1139`), and its comment says rewind is the reason. If every
+  live session goes through that line, the reconstruction model is never a `ConfidenceTsdf` during
+  a rewind, and the task shrinks to the warning below plus a test that pins the choice.
 - **Change:** first measure whether it matters (rewind a simulated scan with and without scaled
   weights, compare the mesh error). If it does, give `ConfidenceTsdf` a `scale_weights` and decide
   what scaling means for confidence weights. Either way, log the failure as a warning.
