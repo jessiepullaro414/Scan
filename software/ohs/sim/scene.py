@@ -11,7 +11,9 @@ Primitives (all take world-frame rays ``o`` (3,) or (N,3) and unit directions ``
 * :class:`Box` - posed box (axis-aligned when ``T_wo`` has no rotation);
 * :class:`Cylinder` - posed, capped cylinder (axis = local z);
 * :class:`HeightField` - smooth surface ``z = h(x, y)`` over a rectangle, with circular holes
-  (solved by safeguarded Newton iteration; used for the curved car panel).
+  (solved by safeguarded Newton iteration; used for the curved car panel);
+* :class:`TriangleMesh` - any triangle mesh, e.g. a downloaded scan of a real part (Open3D's
+  Embree ray caster; :func:`mesh_on_floor` builds a scene around a mesh file).
 
 ``Primitive.intersect(o, d) -> t`` gives the hit distance (``inf`` = miss), ``Primitive.shade(p,
 footprint)`` the geometric normal and albedo at hit points. :meth:`Scene.cast` returns a
@@ -33,6 +35,7 @@ from __future__ import annotations
 import logging
 import math
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Callable, Protocol, Sequence
 
 import cv2
@@ -57,6 +60,9 @@ __all__ = [
     "Box",
     "Cylinder",
     "HeightField",
+    "TriangleMesh",
+    "load_mesh",
+    "mesh_on_floor",
     "Scene",
     "charuco_texture",
     "apriltag_texture",
@@ -342,6 +348,11 @@ class Primitive:
     def _local_normal(self, pl: np.ndarray) -> np.ndarray:
         raise NotImplementedError
 
+    def _hit_normal_local(self, pl: np.ndarray, idx: np.ndarray, n_rays: int) -> np.ndarray:
+        """Local normals at the hit points ``pl`` of rays ``idx`` of the last :meth:`intersect`
+        (of ``n_rays`` rays); primitives that remember their hits (meshes) override it."""
+        return self._local_normal(pl)
+
     def shade(self, p: np.ndarray, footprint: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         """World normals (M,3) (geometric, not yet facing the ray) and albedo (M,) at points ``p``."""
         pl = (p - self.t) @ self.R
@@ -612,6 +623,135 @@ class HeightField(_Culled):
         return n / np.linalg.norm(n, axis=1, keepdims=True)
 
 
+_MESH_TNEAR = 0.01  # mm: mesh hits closer than this to the ray origin are ignored (float32 self-hits)
+
+
+class TriangleMesh(Primitive):
+    """A triangle mesh (local frame, mm), e.g. a downloaded 3D scan of a car part.
+
+    Rays are cast with Open3D's ``RaycastingScene`` (Embree, float32: about 1e-4 mm at 1 m). Hits
+    closer than 0.01 mm to the ray origin are ignored, so shadow rays leaving the surface don't hit
+    their own triangle. The normal is interpolated from the vertex normals (smooth shading of a
+    fine scan; the depth is the triangles'). Winding doesn't matter: :meth:`Scene.cast` turns
+    normals towards the ray. ``vertices`` (N,3) and ``triangles`` (M,3) are in the local frame.
+    """
+
+    def __init__(self, T_wo: np.ndarray | None, vertices: np.ndarray, triangles: np.ndarray,
+                 albedo: Albedo | float | None = 0.7, name: str = "mesh") -> None:
+        import open3d as o3d  # noqa: PLC0415 - optional dependency ([fusion] extra)
+
+        super().__init__(T_wo, albedo, name)
+        V = np.ascontiguousarray(vertices, dtype=np.float32).reshape(-1, 3)
+        F = np.ascontiguousarray(triangles, dtype=np.uint32).reshape(-1, 3)
+        if len(F) == 0 or int(F.max()) >= len(V):
+            raise ValueError("TriangleMesh needs triangles that index its vertices")
+        self.vertices, self.triangles = V, F
+        self._o3c = o3d.core
+        self._rs = o3d.t.geometry.RaycastingScene()
+        self._rs.add_triangles(o3d.core.Tensor(V), o3d.core.Tensor(F))
+        Vd = V.astype(np.float64)
+        fn = np.cross(Vd[F[:, 1]] - Vd[F[:, 0]], Vd[F[:, 2]] - Vd[F[:, 0]])  # area-weighted face normals
+        vn = np.zeros_like(Vd)
+        for k in range(3):
+            np.add.at(vn, F[:, k], fn)
+        ln = np.linalg.norm(fn, axis=1, keepdims=True)
+        self._fn = np.where(ln > 0, fn / np.maximum(ln, 1e-300), np.array([0.0, 0.0, 1.0]))
+        lv = np.linalg.norm(vn, axis=1, keepdims=True)
+        self._vn = np.where(lv > 0, vn / np.maximum(lv, 1e-300), 0.0)
+        lo, hi = Vd.min(axis=0), Vd.max(axis=0)
+        self.bounds_local = (lo, hi)
+        self._last: tuple[int, np.ndarray, np.ndarray] | None = None  # (rays, triangle ids, barycentric uv)
+
+    def intersect(self, o: np.ndarray, d: np.ndarray) -> np.ndarray:
+        ol, dl = self.to_local(o, d)
+        ol = np.broadcast_to(ol, dl.shape)
+        rays = np.empty((len(dl), 6), dtype=np.float32)
+        rays[:, :3] = ol + _MESH_TNEAR * dl  # tnear: start the ray a little along itself
+        rays[:, 3:] = dl
+        ans = self._rs.cast_rays(self._o3c.Tensor(rays))
+        t = ans["t_hit"].numpy().astype(np.float64)
+        hit = np.isfinite(t)
+        t = np.where(hit, t + _MESH_TNEAR, np.inf)
+        ids = np.where(hit, ans["primitive_ids"].numpy().astype(np.int64), -1)
+        self._last = (len(dl), ids, ans["primitive_uvs"].numpy())
+        return t
+
+    def _normals(self, ids: np.ndarray, uv: np.ndarray) -> np.ndarray:
+        F = self.triangles[ids]
+        u, v = uv[:, 0:1].astype(np.float64), uv[:, 1:2].astype(np.float64)
+        n = (1.0 - u - v) * self._vn[F[:, 0]] + u * self._vn[F[:, 1]] + v * self._vn[F[:, 2]]
+        ln = np.linalg.norm(n, axis=1, keepdims=True)
+        return np.where(ln > 1e-9, n / np.maximum(ln, 1e-300), self._fn[ids])
+
+    def _hit_normal_local(self, pl: np.ndarray, idx: np.ndarray, n_rays: int) -> np.ndarray:
+        last = self._last
+        if last is not None and last[0] == n_rays:
+            ids, uv = last[1][idx], last[2][idx]
+            if np.all(ids >= 0):
+                return self._normals(ids, uv)
+        return self._local_normal(pl)
+
+    def _local_normal(self, pl: np.ndarray) -> np.ndarray:
+        if len(pl) == 0:
+            return np.zeros((0, 3))
+        ans = self._rs.compute_closest_points(self._o3c.Tensor(np.ascontiguousarray(pl, dtype=np.float32)))
+        return self._normals(ans["primitive_ids"].numpy().astype(np.int64), ans["primitive_uvs"].numpy())
+
+
+def load_mesh(path: str, size_mm: float | None = None, scale: float = 1.0, orient: str = "flat",
+              flip: bool = False) -> tuple[np.ndarray, np.ndarray]:
+    """Vertices (N,3, mm) and triangles (M,3) of a mesh file (OBJ, PLY, STL, glTF/GLB...), ready
+    for :class:`TriangleMesh`: scaled by ``scale``, or so that its longest side is ``size_mm``.
+    ``orient``: ``"flat"`` turns its principal axes into x (longest), y and z (thinnest), so a door
+    or a panel lies on the floor; ``"y-up"`` turns a Y-up file (glTF, most scans) Z-up; ``"z-up"``
+    keeps it. ``flip`` turns it upside down (about x). Its bounding box is centred on x and y and
+    its lowest point is at z = 0."""
+    if orient not in ("flat", "y-up", "z-up"):
+        raise ValueError(f"orient must be 'flat', 'y-up' or 'z-up', got {orient!r}")
+    import open3d as o3d  # noqa: PLC0415
+
+    m = o3d.io.read_triangle_mesh(str(path))
+    V = np.asarray(m.vertices, dtype=np.float64)
+    F = np.asarray(m.triangles, dtype=np.int64)
+    if len(V) == 0 or len(F) == 0:
+        raise ValueError(f"{path}: no triangles")
+    V = V - V.mean(axis=0)
+    if orient == "flat":
+        _, _, Vt = np.linalg.svd(V[:: max(1, len(V) // 200000)], full_matrices=False)
+        R = Vt.copy()
+        if np.linalg.det(R) < 0:
+            R[2] *= -1.0
+        V = V @ R.T
+    elif orient == "y-up":
+        V = np.stack([V[:, 0], -V[:, 2], V[:, 1]], axis=1)  # +90 deg about x: y -> z
+    if flip:
+        V = V * np.array([1.0, -1.0, -1.0])
+    ext = V.max(axis=0) - V.min(axis=0)
+    s = float(size_mm) / float(ext.max()) if size_mm is not None else float(scale)
+    V = V * s
+    lo, hi = V.min(axis=0), V.max(axis=0)
+    V = V - np.array([0.5 * (lo[0] + hi[0]), 0.5 * (lo[1] + hi[1]), lo[2]])
+    return V, F
+
+
+def mesh_on_floor(path: str, size_mm: float | None = None, scale: float = 1.0, orient: str = "flat",
+                  flip: bool = False, lift_mm: float = 0.0, seed: int = 0, albedo: Albedo | float | None = None,
+                  name: str | None = None) -> Scene:
+    """A mesh file (:func:`load_mesh`) lying on a dark floor, ``lift_mm`` above it (on supports
+    that aren't modelled), painted with low-contrast paint noise. ``meta["object_mm"]`` is its
+    size, ``meta["mesh"]`` the world vertices and triangles (the ground truth)."""
+    V, F = load_mesh(path, size_mm=size_mm, scale=scale, orient=orient, flip=flip)
+    V = V + np.array([0.0, 0.0, float(lift_mm)])
+    alb = albedo if albedo is not None else NoiseAlbedo(mean=0.72, contrast=0.015, scale_mm=4.0, seed=seed)
+    obj = TriangleMesh(None, V, F, alb, name="object")
+    size = V.max(axis=0) - V.min(axis=0)
+    floor = _table(0.0, float(max(800.0, 0.75 * size[:2].max() + 300.0)),
+                   NoiseAlbedo(mean=0.3, contrast=0.08, scale_mm=5.0, seed=seed + 1), name="floor")
+    return Scene([floor, obj], name=name or f"mesh:{Path(path).stem}",
+                 target=(0.0, 0.0, float(V[:, 2].max()) * 0.5), radius=float(np.linalg.norm(size) / 2),
+                 meta={"object_mm": size.tolist(), "mesh": (V, F), "source": str(path)})
+
+
 # --------------------------------------------------------------------------- scene
 @dataclass
 class Hit:
@@ -685,7 +825,7 @@ class Scene:
             di = d[idx]
             p = (o[idx] if o.ndim > 1 else o) + t_best[idx, None] * di
             # footprint uses the geometric normal, computed by shade(); estimate from a first pass
-            nl = prim._local_normal((p - prim.t) @ prim.R)
+            nl = prim._hit_normal_local((p - prim.t) @ prim.R, idx, n)
             nw = nl @ prim.R.T
             cosv = np.abs(np.einsum("ij,ij->i", nw, di))
             fp = np.zeros(idx.size) if pa is None else t_best[idx] * pa[idx] / np.sqrt(np.maximum(cosv, 0.05))

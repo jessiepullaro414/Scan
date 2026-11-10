@@ -182,6 +182,49 @@ def test_presets_build_and_are_hit_from_above():
         make_scene("nope")
 
 
+def test_triangle_mesh_matches_the_analytic_sphere(tmp_path):
+    """A finely tessellated sphere hits and shades like the analytic one; shadow rays leaving its
+    surface don't hit it; load_mesh lays a long thin mesh flat and scales it; mesh_on_floor puts it
+    on the floor."""
+    o3d = pytest.importorskip("open3d")
+    from ohs.sim.scene import Scene, TriangleMesh, load_mesh, mesh_on_floor
+
+    m = o3d.geometry.TriangleMesh.create_sphere(radius=40.0, resolution=200)
+    c = np.array([5.0, -3.0, 60.0])
+    mesh = TriangleMesh(make_se3(t=c), np.asarray(m.vertices), np.asarray(m.triangles), 0.6)
+    ref = Sphere(c, 40.0, 0.6)
+    rng = np.random.default_rng(0)
+    o = np.array([0.0, 0.0, 400.0])
+    d = _unit(np.stack([rng.uniform(-0.12, 0.12, 4000), rng.uniform(-0.12, 0.12, 4000), -np.ones(4000)], axis=1))
+    ta, tm = ref.intersect(o, d), mesh.intersect(o, d)
+    hit = np.isfinite(ta)
+    assert hit.mean() > 0.2 and np.array_equal(hit, np.isfinite(tm)) | (np.mean(hit != np.isfinite(tm)) < 0.002)
+    both = hit & np.isfinite(tm)
+    pm = o + tm[both, None] * d[both]
+    assert np.max(np.abs(np.linalg.norm(pm - c, axis=1) - 40.0)) < 0.01  # on the facets: sagitta 0.005 mm
+    assert np.median(np.abs(ta[both] - tm[both])) < 0.005
+    ha, hm = Scene([ref]).cast(o, d), Scene([mesh]).cast(o, d)
+    cosang = np.einsum("ij,ij->i", ha.normal[both], hm.normal[both])
+    assert np.min(cosang) > 0.9999  # interpolated normals
+    p = o + tm[both, None] * d[both]
+    n = hm.normal[both]
+    start = p + 1e-3 * n
+    assert not Scene([mesh]).occluded(start, n, np.full(len(p), 1e3)).any()  # no self-shadowing
+    assert Scene([mesh]).occluded(start, -n, np.full(len(p), 1e3)).all()  # but the far side is there
+    # a long, thin box written to a file, tilted: lies flat, scaled to 1200 mm, centred, on the floor
+    box = o3d.geometry.TriangleMesh.create_box(1.0, 0.6, 0.1)
+    box.rotate(so3_exp(np.radians([20.0, 10.0, 35.0])), center=(0.0, 0.0, 0.0))
+    f = tmp_path / "plate.ply"
+    o3d.io.write_triangle_mesh(str(f), box)
+    V, _ = load_mesh(f, size_mm=1200.0)
+    ext = V.max(axis=0) - V.min(axis=0)
+    assert ext == pytest.approx([1200.0, 720.0, 120.0], abs=0.5)
+    assert V[:, 2].min() == pytest.approx(0.0, abs=1e-9) and abs(V[:, 0].max() + V[:, 0].min()) < 1e-6
+    sc = mesh_on_floor(f, size_mm=1200.0, lift_mm=20.0)
+    hit = sc.cast(np.array([0.0, 0.0, 500.0]), np.array([[0.0, 0.0, -1.0]]))
+    assert sc.primitives[hit.obj[0]].name == "object" and hit.t[0] == pytest.approx(500.0 - 140.0, abs=1e-3)
+
+
 def test_charuco_board_scene_frame():
     T_wb = make_se3(so3_exp(np.array([0.2, 0.1, 0.4])), [10.0, -20.0, 5.0])
     sc = charuco_board(T_wb, squares_x=5, squares_y=4, square_mm=30.0, marker_mm=22.0)

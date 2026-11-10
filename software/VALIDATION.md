@@ -216,6 +216,53 @@ The first tuning round, from `ohs bench` per-stage tables on both machines. The 
   - At preview, ICP (5.3 ms, on the CPU) is the biggest tracking stage.
   - Every frame still crosses PCIe several times: the depth and sigma are downloaded, then uploaded again for the filter and the reconstruction, and the filtered depth goes up for the tracking model. Keeping them on the GPU would be the next step.
 
+## Large and detailed parts (simulator, 2026-11-10)
+
+Two real parts' 3D scans, rendered by the simulator's new `TriangleMesh` object (Open3D's Embree ray caster) with the usual dots, lasers and noise. Both were painted with low-contrast paint noise and set on a dark floor. They were processed as the Studio does (Make mesh, then Straighten with its laser crossings) and compared with the true mesh.
+- **Door trim panel**, 946 × 868 × 135 mm, 0.49 M triangles: the Thunk3D ArcherS car door scan on Sketchfab (CC BY).
+  - 1,410 frames (47 s): five overlapping passes along the panel, 150 mm apart.
+- **Carburetor**, 186 × 186 × 196 mm, 0.5 M triangles: "Carburetor – Artec 3D Scanner" by Artec Group (CC BY 3.0).
+  - 1,080 frames: two orbits looking down 30–65°.
+- The models stay out of the repository; `ohs.sim.scene.mesh_on_floor` loads any OBJ, PLY, STL or glTF file.
+
+**The door works.**
+
+| | Door trim panel |
+|---|---|
+| Frames tracked | 1,410 of 1,410 |
+| Trajectory error vs truth | median 0.34 mm, max 0.82 mm, 0.04° |
+| Mesh vertices vs the true panel | median 0.07 mm, 92 % within 0.5 mm, p95 0.85 mm |
+| Seen surface reconstructed | 99.5 % within 1 mm |
+| Straighten | 25 loops, already within 0.12 mm: unchanged |
+| Laser crossings | 1,661, within the lasers' scatter: unchanged |
+| Time on the Radeon PC | track and fuse 280 s, Straighten 12 s, crossings 26 s |
+
+![Door error map](docs/images/sim_door_error_map.png)
+
+The larger errors are where structured light always struggles:
+- the speaker grille's slots, which the matcher bridges;
+- thin skirts where the panel's edge meets the floor.
+
+A metre of panel, scanned in five passes, did not drift.
+
+**The carburetor exposed a tracking weakness: the tracking filter erases detailed parts.**
+- Only 596 of 1,080 frames tracked, and the trajectory slid away by up to 1.7 m, while the gyro kept the rotation right (0.09°).
+- The tracking filter keeps only 3–9 % of the carburetor's depth pixels, against 52–78 % in the raw depth. It erodes 12 px around every depth step, and on a part like this every pixel is near one.
+- What is left is the floor, a plane, which cannot hold the scanner's sideways motion.
+
+The machined bracket preset suffers too, only less visibly (90 frames, median / max mm):
+
+| Tracking input | Carburetor (300 frames) | Bracket | Car panel | Sphere | Door (400 frames) |
+|---|---|---|---|---|---|
+| Filtered (now) | lost: 1,190 mm by frame 336 | 1.01 / 6.90 | **0.10 / 0.31** | **0.13 / 0.22** | **0.18 / 0.34** |
+| Raw depth, single model | 1.75 / 2.32 | | | | |
+| Filtered, raw where the filter dropped it | **1.48 / 1.86** | **0.36 / 0.95** | 0.16 / 0.52 | 0.24 / 0.44 | 0.16 / 0.51 |
+| Raw only in frames that keep < 50 % | 2.01 / 3.75 | 0.27 / 2.31 | | 0.13 / 0.22 | 0.18 / 0.34 |
+
+- The filter is right for smooth surfaces and wrong for detailed ones, so the tracking input has to adapt.
+- The share of depth the filter keeps does not separate them well: smooth scenes keep 52–84 %, the carburetor 20–64 % and the bracket 26–55 %, and the floor raises everyone's share.
+- A better test is probably whether the filtered depth still constrains all six directions of the pose, which the weak-direction analysis already measures. That is the next research item.
+
 ## Straighten: loop closure (M3 phase 2, 2026-11-09)
 
 `ohs/track/posegraph.py` closes loops where a scan passes over an earlier part again:
