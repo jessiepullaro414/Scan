@@ -32,6 +32,13 @@ def _restore_compute():
     compute.reset()
 
 
+@pytest.fixture(autouse=True)
+def _no_engine_start(monkeypatch):
+    """run_bench starts the app in a new process once; only test_engine_start does that for real."""
+    monkeypatch.setattr(bench, "measure_engine_start",
+                        lambda *a, **k: {"ok": True, "listening_s": 0.5, "first_status_s": 0.6, "port": 1})
+
+
 def _check_run(run: dict, quality: str, device: str) -> None:
     assert run["quality"] == quality and run["device"] == device
     assert run["frames"] == 6 and run["tracked"] >= 5
@@ -68,6 +75,63 @@ def test_wait_per_minute_in_report():
               "runs": [run], "speedup": {}}
     text = bench.format_report(report)
     assert "CPU: wait per minute of scanning at 60 fps: 9.3 min (mean frame time, every frame processed)" in text
+
+
+def test_tail_and_engine_start_in_report():
+    tail = {"mesh": 500.0, "clean": 100.0, "export_ply": 200.0, "export_stl": 50.0, "laser_points": 150.0,
+            "total": 1000.0, "faces": 1234}
+    run = {"device": "gpu", "quality": "full", "image_size": [640, 400], "voxel_mm": 1.0, "depth_backend": "gpu",
+           "tracking_backend": None, "frames": 6, "tracked": 6, "fps": 10.0,
+           "timings_ms": {"total": {"mean": 100.0, "median": 100.0, "max": 100.0, "n": 6}},
+           "trajectory": {}, "depth_error": {}, "tail_ms": tail}
+    report = {"bench_version": 1, "recording": {"spec": {"image_size": [640, 400]}, "frames_used": 6},
+              "machine": {"cpu": "x", "logical_cpus": 1, "os": "y", "python": "3", "packages": {}},
+              "runs": [run], "speedup": {},
+              "engine_start": {"ok": True, "listening_s": 0.8, "first_status_s": 0.9, "port": 1}}
+    text = bench.format_report(report)
+    assert "GPU: fixed tail after the last frame: 1.00 s (mesh extraction to files, after 6 frames, 1234 faces" in text
+    for line in ("mesh extraction: 0.50 s", "cleaning: 0.10 s", "export ply: 0.20 s", "export stl: 0.05 s",
+                 "laser points file: 0.15 s"):
+        assert "      " + line in text
+    assert "0.80 s until the app accepts a connection, 0.90 s until its first status message" in text
+    report["engine_start"] = {"ok": False, "error": "boom"}
+    assert "Engine start: not measured. boom" in bench.format_report(report)
+
+
+def test_tail_of_a_run(bench_dir):
+    report = bench.run_bench(frames=4, qualities=("preview", "full"), devices=("cpu",), bench_dir=bench_dir, spec=TINY,
+                             engine_start=False)
+    assert "engine_start" not in report
+    for r in report["runs"]:
+        t = r["tail_ms"]
+        assert "error" not in t, t
+        steps = [k for k in t if k not in ("total", "faces")]
+        assert steps == ["mesh", "clean", "export_ply", "export_stl", "laser_points"]  # Poisson is off in both qualities
+        assert all(t[k] >= 0 for k in steps) and t["total"] == pytest.approx(sum(t[k] for k in steps))
+        assert t["faces"] > 0
+    text = bench.format_report(report)
+    assert text.count("fixed tail after the last frame:") == 2
+
+
+def test_tail_keeps_going_when_a_step_fails():
+    class Pipe:
+        def mesh_with_sigma(self):
+            raise RuntimeError("no mesh")
+
+    from types import SimpleNamespace
+
+    t = bench._tail(Pipe(), SimpleNamespace(poisson=False))
+    assert t["error"] == "RuntimeError: no mesh" and "mesh" in t and t["total"] == pytest.approx(t["mesh"])
+
+
+def test_engine_start(monkeypatch, tmp_path):
+    monkeypatch.undo()  # the real one: ohs app in a new process, built-in settings, a free port
+    r = bench.measure_engine_start(timeout=120)
+    assert r["ok"], r
+    assert 0 < r["listening_s"] <= r["first_status_s"] and r["port"] > 0
+    # failures are reported, not raised
+    bad = bench.measure_engine_start(timeout=5, python=str(tmp_path / "no-such-python"))
+    assert bad["ok"] is False and bad["error"]
 
 
 def test_recording_is_cached_and_versioned(bench_dir):

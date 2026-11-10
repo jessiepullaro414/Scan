@@ -137,8 +137,13 @@ by the snapshot tool.
 ### [ ] F1. Measure the waits a user feels, and set targets (Sonnet, M)
 - **Partly done 2026-11-10:** `ohs bench` prints, per run, the wait per minute of scanning at the
   camera's frame rate (60 fps), from the mean frame time, and stores it as `wait_per_minute_min`.
-  Still open: the fixed tail after the last frame, the engine start time and the table in
-  VALIDATION.md.
+  It also times the fixed tail after the last frame (mesh extraction, cleaning, each export file,
+  the laser points file; `tail_ms`) and, once per bench, the engine start: a new `ohs app` process
+  until its port accepts a connection and until its first status message (`engine_start`). This
+  start figure includes Python's own start and the imports, which the 0.8 s in the table above
+  probably did not. Not in the tail: the app's own step after processing (reading the mesh back
+  into the project and showing it, `server/processing.py` `_new_base`).
+  Still open: the table in VALIDATION.md with values measured on an idle machine.
 - **Change:** `ohs bench` also reports, per quality, the wait per minute of scanning at the
   camera's frame rate, and the fixed tail after the last frame (meshing, cleaning, export). Add a
   timing of engine start to first status message. Put the table above into VALIDATION.md with the

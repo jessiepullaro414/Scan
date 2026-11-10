@@ -23,6 +23,10 @@
      ``icp`` and the integrations;
    * the wait per minute of scanning: minutes to process 60 s of recording at the camera's frame
      rate (``CameraParams.fps``), from the mean total frame time, assuming every frame is processed;
+   * the fixed tail after the last frame (``tail_ms`` of a run): mesh extraction, cleaning, each export
+     format and the laser points file, timed one by one as :func:`_tail`; it grows with the scan;
+   * the engine start (``engine_start`` of the report, once): :func:`measure_engine_start`, a new
+     ``ohs app`` process until its first status message;
    * accuracy: the trajectory error against the true poses
      (:func:`~ohs.app.process.trajectory_errors`) and the depth error on the frames with true depth
      (median, p95, share of pixels off by more than 2 mm, bias, valid share overall and where dots
@@ -55,7 +59,8 @@ import numpy as np
 from ohs.devices.camera import CameraParams
 
 __all__ = ["BENCH_VERSION", "BenchSpec", "STANDARD", "QUALITIES", "DEVICES", "CAMERA_FPS", "default_bench_dir",
-           "ensure_recording", "wait_per_minute_min", "run_bench", "format_report", "machine_info", "save_report"]
+           "ensure_recording", "wait_per_minute_min", "measure_engine_start", "run_bench", "format_report",
+           "machine_info", "save_report"]
 
 log = logging.getLogger(__name__)
 
@@ -67,6 +72,8 @@ WARMUP_FRAMES = 3
 OUTLIER_MM = 2.0
 CAMERA_FPS = float(CameraParams().fps)  # the camera's frame rate (60); the scan-wait figure assumes every frame is processed
 # stage order of the table (others follow in the order the pipeline reports them)
+_TAIL_LABELS = {"mesh": "mesh extraction", "poisson": "Poisson meshing", "clean": "cleaning",
+                "laser_points": "laser points file"}
 STAGE_ORDER = ("rectify", "depth", "laser_extract", "laser_triangulate", "laser", "track_filter", "raycast", "icp",
                "track_integrate", "integrate", "track", "total")
 
@@ -304,7 +311,8 @@ def _run(rec: Path, quality: str, device: str, n_frames: int, progress: Callable
     reader = RecordingReader(rec)
     calib = reader.calibration()
     width = int(calib.stereo.image_size[0])
-    pp = process_params(Config(), "markerless", quality, width).pipeline
+    params = process_params(Config(), "markerless", quality, width)
+    pp = params.pipeline
     imu = reader.imu_arrays()
     order = np.argsort(imu["t_host"], kind="stable")
     imu_t, imu_g = imu["t_host"][order], imu["gyro"][order]
@@ -353,6 +361,7 @@ def _run(rec: Path, quality: str, device: str, n_frames: int, progress: Callable
             if progress is not None:
                 progress(k + 1, n_frames)
         wall = time.perf_counter() - t0
+        tail = _tail(pipe, params)
     finally:
         pipe.close()
     tstats = {key: _stats(v) for key, v in timings.items()}
@@ -361,15 +370,146 @@ def _run(rec: Path, quality: str, device: str, n_frames: int, progress: Callable
     te.pop("per_frame", None)
     info.update(frames=n_frames, tracked=int(sum(ok for _, _, ok in traj)), timings_ms=tstats,
                 fps=(1000.0 / total) if total else None, wall_s=wall, trajectory=te, depth_error=derr.summary(),
-                scan_fps=CAMERA_FPS, wait_per_minute_min=wait_per_minute_min(total) if total else None)
+                scan_fps=CAMERA_FPS, wait_per_minute_min=wait_per_minute_min(total) if total else None,
+                tail_ms=tail)
     return info
+
+
+def _tail(pipe: Any, params: Any) -> dict:
+    """The fixed tail after the last frame: the steps :func:`ohs.app.process.process_recording` runs
+    between the last frame and the returned mesh files (process.py "# mesh" and "# laser cloud"),
+    timed one by one in ms, in the same order and with the same arguments, files written to a
+    temporary folder: ``mesh`` (``pipe.mesh_with_sigma``), ``poisson`` (only if the quality asks for it),
+    ``clean``, ``export_<ext>`` per format and ``laser_points`` (the laser cloud PLY), plus their
+    sum ``total``. Not covered: the report statistics and ``report.json``, ``trajectory.csv`` and the
+    app's own step after that (reading the mesh back into the project, ``server/processing.py``
+    ``_new_base``). A step that fails is reported as ``error`` instead of stopping the bench."""
+    import tempfile
+
+    steps: dict[str, float] = {}
+    faces: int | None = None
+
+    def timed(name: str, fn: Callable[[], Any]) -> Any:
+        t = time.perf_counter()
+        try:
+            return fn()
+        finally:
+            steps[name] = 1e3 * (time.perf_counter() - t)
+
+    try:
+        from ohs.mesh.confidence import SIGMA_NONE_MM
+        from ohs.track.export import clean_mesh, poisson_mesh, save_mesh
+
+        V, F, N, S = timed("mesh", pipe.mesh_with_sigma)
+        if params.poisson:
+            def poisson() -> tuple:
+                P, Np = pipe.points()
+                if len(P) >= 10:
+                    return poisson_mesh(P, Np, depth=int(params.poisson_depth)) + (None,)
+                return V, F, N, S
+
+            V, F, N, S = timed("poisson", poisson)
+
+        def clean() -> tuple:
+            v, f, n, s = V, F, N, S
+            if params.clean_min_component > 0 and len(f):
+                v, f, idx = clean_mesh(v, f, min_component_fraction=float(params.clean_min_component), return_index=True)
+                n = n[idx] if n is not None and len(n) else n
+                s = s[idx] if s is not None and len(s) else s
+            if s is not None:
+                s = np.minimum(s, np.float32(SIGMA_NONE_MM)).astype(np.float32)
+            return v, f, n, s
+
+        V, F, N, S = timed("clean", clean)
+        faces = int(len(F))
+        with tempfile.TemporaryDirectory(prefix="ohs-bench-tail-") as tmp:
+            for ext in params.export:
+                timed(f"export_{ext}", lambda ext=ext: save_mesh(
+                    Path(tmp) / f"mesh.{ext}", V, F, N if ext != "stl" and N is not None and len(N) == len(V) else None,
+                    quality=S if ext == "ply" and S is not None and len(S) == len(V) else None))
+            timed("laser_points", lambda: pipe.laser_cloud().save_ply(
+                Path(tmp) / "laser_points.ply", voxel_mm=float(params.laser_voxel_mm)))
+        out: dict[str, Any] = dict(steps)
+    except Exception as e:  # report what was timed, not a failed bench
+        log.warning("bench tail: a step failed: %s", e)
+        out = {**steps, "error": f"{type(e).__name__}: {e}"}
+    out["total"] = float(sum(steps.values()))
+    out["faces"] = faces
+    return out
+
+
+# --------------------------------------------------------------------------- engine start
+def measure_engine_start(timeout: float = 90.0, python: str | None = None) -> dict:
+    """Seconds from launching ``ohs app --no-window`` (a fresh process, like the user's) to its first
+    status message on the live WebSocket (``/api/ws/live``, ``{"type": "status"}``, sent 10 times a second
+    to connected clients, ``server/studio.py`` ``_status_loop``).
+
+    The process runs with built-in settings (``OHS_CONFIG`` points to no file) and an empty home folder
+    for projects, on a free local port, and is stopped afterwards; the port is asked about every 60 ms,
+    which is the resolution of ``listening_s``. Returns ``{"ok": True, "listening_s",
+    "first_status_s", "port"}``: ``listening_s`` is when the WebSocket first accepted a connection (the
+    server is up and its startup ran); or ``{"ok": False, "error": ...}``. Never raises."""
+    import socket
+    import subprocess
+    import tempfile
+
+    try:
+        from websockets.sync.client import connect
+    except ImportError as e:
+        return {"ok": False, "error": f"the websockets package is missing ({e})"}
+    code = "import sys; from ohs.app.cli import main; sys.exit(main(sys.argv[1:]))"
+
+    def first_status(proc: Any, port: int, t0: float) -> dict:
+        while True:  # until the port accepts a connection
+            if proc.poll() is not None:
+                return {"ok": False, "error": f"ohs app exited with code {proc.returncode} before it was up"}
+            if time.perf_counter() - t0 > timeout:
+                return {"ok": False, "error": f"no connection to the app within {timeout:.0f} s"}
+            try:  # Windows answers an attempt on a closed local port only after 2 s: give up after 50 ms and ask again
+                socket.create_connection(("127.0.0.1", port), timeout=0.05).close()
+                break
+            except OSError:
+                time.sleep(0.01)
+        listening = time.perf_counter() - t0
+        with connect(f"ws://127.0.0.1:{port}/api/ws/live", open_timeout=max(1.0, timeout - listening),
+                     close_timeout=1) as ws:
+            while True:
+                left = timeout - (time.perf_counter() - t0)
+                if left <= 0:
+                    return {"ok": False, "error": f"no status message within {timeout:.0f} s"}
+                msg = ws.recv(timeout=left)
+                if isinstance(msg, str) and '"status"' in msg and json.loads(msg).get("type") == "status":
+                    return {"ok": True, "listening_s": listening, "first_status_s": time.perf_counter() - t0,
+                            "port": port}
+
+    try:
+        with socket.socket() as s:
+            s.bind(("127.0.0.1", 0))
+            port = s.getsockname()[1]
+        with tempfile.TemporaryDirectory(prefix="ohs-bench-start-", ignore_cleanup_errors=True) as home:
+            env = {**os.environ, "OHS_CONFIG": str(Path(home) / "no-config.toml"), "USERPROFILE": home, "HOME": home}
+            t0 = time.perf_counter()
+            proc = subprocess.Popen([python or sys.executable, "-c", code, "app", "--no-window", "--port", str(port)],
+                                    env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                    stderr=subprocess.DEVNULL)
+            try:
+                return first_status(proc, port, t0)
+            finally:  # stop the app before its home folder is removed
+                if proc.poll() is None:
+                    proc.terminate()
+                    try:
+                        proc.wait(10)
+                    except Exception:
+                        proc.kill()
+    except Exception as e:
+        return {"ok": False, "error": f"{type(e).__name__}: {e}"}
 
 
 # --------------------------------------------------------------------------- all runs
 def run_bench(frames: int | None = None, qualities: tuple[str, ...] = QUALITIES, devices: tuple[str, ...] = DEVICES,
               bench_dir: str | Path | None = None, spec: BenchSpec | None = None, compute_device: str = "auto",
               echo: Callable[[str], None] | None = None,
-              progress: Callable[[str, int, int], None] | None = None) -> dict:
+              progress: Callable[[str, int, int], None] | None = None, engine_start: bool = True) -> dict:
     """Run the bench and return the report (see the module docstring); nothing is saved.
 
     ``compute_device`` is the GPU preference of the GPU runs (``compute.device``; ``"cpu"`` there
@@ -397,6 +537,9 @@ def run_bench(frames: int | None = None, qualities: tuple[str, ...] = QUALITIES,
         "machine": machine_info(),
         "runs": [],
     }
+    if engine_start:  # once, before the runs, while nothing else of the bench is running
+        say("Engine start: launching the app once")
+        report["engine_start"] = measure_engine_start()
     env_before = os.environ.get(compute.ENV_VAR)
     try:
         for device in DEVICES:
@@ -480,6 +623,13 @@ def format_report(report: dict) -> str:
         lines.append(f"GPU: {d['name']} ({d['vendor']}, {d['kind']}, {d['memory_mb']} MB, {d['opencl']})")
     elif "no_gpu_reason" in report:
         lines.append(f"GPU: none. {report['no_gpu_reason']}")
+    es = report.get("engine_start")
+    if es:
+        if es.get("ok"):
+            lines.append(f"Engine start (ohs app in a new process): {es['listening_s']:.2f} s until the app accepts a "
+                         f"connection, {es['first_status_s']:.2f} s until its first status message")
+        else:
+            lines.append(f"Engine start: not measured. {es.get('error', '')}")
     for q in QUALITIES:
         runs = [r for r in report["runs"] if r["quality"] == q]
         if not runs:
@@ -506,6 +656,17 @@ def format_report(report: dict) -> str:
             if r.get("wait_per_minute_min") is not None:
                 lines.append(f"  {r['device'].upper()}: wait per minute of scanning at {r.get('scan_fps', CAMERA_FPS):g} fps: "
                              f"{r['wait_per_minute_min']:.1f} min (mean frame time, every frame processed)")
+        for r in runs:
+            tl = r.get("tail_ms")
+            if tl:
+                lines.append(f"  {r['device'].upper()}: fixed tail after the last frame: {tl['total'] / 1000:.2f} s "
+                             f"(mesh extraction to files, after {r['frames']} frames, {tl.get('faces')} faces; "
+                             f"grows with the scan)")
+                for k, v in tl.items():
+                    if k not in ("total", "faces", "error"):
+                        lines.append(f"      {_TAIL_LABELS.get(k) or k.replace('_', ' ')}: {v / 1000:.2f} s")
+                if tl.get("error"):
+                    lines.append(f"      tail incomplete: {tl['error']}")
         for r in runs:
             te, de = r["trajectory"], r["depth_error"]
             who = f"{r['device'].upper()} (depth on {r['depth_backend'].upper()}"
