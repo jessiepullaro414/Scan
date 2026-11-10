@@ -15,7 +15,7 @@ plain averaging cancels across frames come back (``VALIDATION.md``, "Depth confi
 **Layout.** Bricks of 8^3 voxels (8 mm at 1 mm voxels) in a pool that grows by doubling, indexed on
 the CPU (sorted brick keys -> pool slot). A frame allocates the bricks its depth band ``[d - trunc,
 d + trunc]`` reaches, sampled about every 2.5 mm across the image (every 4th pixel at 1280 px width)
-and at three depths. Voxel ``(x, y, z)`` of brick ``b`` sits at world position ``(8 b + (x, y, z)) *
+and at three depths (the spacing grows with the voxel size, so the samples per brick stay the same). Voxel ``(x, y, z)`` of brick ``b`` sits at world position ``(8 b + (x, y, z)) *
 voxel_mm``, Open3D's convention for block resolution 8. Per voxel, 28 bytes:
 
 - ``tsdf``: the mean of the truncated projective SDF ``min(d - z, trunc)`` (mm, camera z);
@@ -208,7 +208,9 @@ class ConfidenceTsdf:
             raise ValueError(f"backend must be one of {RECON_BACKENDS}, got {backend!r}")
         w = self.image_size[0]
         self.look_px = float(look_px) if look_px is not None else LOOK_PX_1280 * w / 1280.0
-        self._step = max(1, int(round(4.0 * w / 1280.0)))  # brick sampling: every 4th pixel at 1280 px
+        # brick sampling: every 4th pixel at 1280 px and 1 mm voxels; the same share of a brick at other sizes
+        # (2 mm voxels at 640 px: every 4th pixel too, a quarter of the samples of every 2nd)
+        self._step = max(1, int(round(4.0 * w / 1280.0 * float(self.voxel_mm))))
         self._initial = max(64, int(initial_bricks))
         self.dev: Any = None
         self.backend = "cpu"

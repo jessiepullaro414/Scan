@@ -147,7 +147,8 @@ class FusionParams:
     model_normal_window: int = 5  # box-average model normals over k x k ray-cast pixels (1 = off)
     extract_weight_threshold: float = 3.0
     # ICP
-    # source subsampling per level (coarse -> fine). The finest level samples every 8th pixel, not every 4th:
+    # source subsampling per level (coarse -> fine), in pixels of a 1280 px wide image (scaled with the width).
+    # The finest level samples every 8th pixel at 1280 px, not every 4th:
     # neighbouring points share the camera-fixed dot error, so the denser sampling was 3-4 times slower and no
     # more accurate (VALIDATION.md, "GPU tuning")
     icp_strides: tuple[int, ...] = (16, 8, 8)
@@ -337,12 +338,15 @@ class MarkerlessTracker:
         # Open3D's ray_cast hangs if the range-map factor does not divide the image size
         self._range_down = next(f for f in (8, 4, 2, 1)
                                 if self._ray_size[0] % f == 0 and self._ray_size[1] % f == 0)
+        # the strides are set for 1280 px wide images and scale with the width, so every resolution
+        # samples about as many points (a 640 px preview: every 4th pixel at the finest level)
+        self._strides = [max(1, int(round(s * w / 1280.0))) for s in p.icp_strides]
         # the same area of smooth depth whatever the finest stride: min_points is counted at stride 4
-        self._min_src = max(30, int(round(p.min_points * 16.0 / float(p.icp_strides[-1]) ** 2)))
+        self._min_src = max(30, int(round(p.min_points * 16.0 / float(self._strides[-1]) ** 2)))
         # source back-projection rays for every ICP level
         vs, us = np.mgrid[0:h, 0:w]
         self._src_levels = []
-        for s in p.icp_strides:
+        for s in self._strides:
             o = s // 2  # sample the centre of each s x s block
             uu, vv = us[o::s, o::s], vs[o::s, o::s]
             y = (vv - self.K[1, 2]) / self.K[1, 1]

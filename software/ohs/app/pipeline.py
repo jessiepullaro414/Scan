@@ -92,7 +92,9 @@ from __future__ import annotations
 
 import logging
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field, replace
+from typing import Any, Callable
 
 import cv2
 import numpy as np
@@ -289,6 +291,13 @@ class FrameResult:
     sigma: np.ndarray | None = None  # the depth's standard deviation (mm, 0 = no depth), confidence TSDF only
 
 
+def _timed(fn: Callable[..., Any], *args: Any) -> tuple[Any, float]:
+    """``(fn(*args), ms)`` (for work run in a thread)."""
+    t0 = time.perf_counter()
+    out = fn(*args)
+    return out, _ms(t0)
+
+
 def _ms(t0: float) -> float:
     return 1e3 * (time.perf_counter() - t0)
 
@@ -362,6 +371,7 @@ class FramePipeline:
                 self.gyro = GyroPredictor(calib.imu)
 
         self.cloud = LaserCloud()
+        self._laser_pool: ThreadPoolExecutor | None = None  # made at the first frame with lasers
         #: laser points dropped because they disagree with the frame's dense depth, per line
         self.laser_rejected: dict[str, int] = {}
         self._trajectory: list[tuple[float, np.ndarray, bool]] = []
@@ -470,6 +480,17 @@ class FramePipeline:
         left_r, right_r = self.rectifier.rectify(frame.left, frame.right)
         tim["rectify"] = _ms(t0)
 
+        # the laser lines are extracted in two CPU threads while the depth runs (on the GPU, or in
+        # SGBM's own threads): laser_extract is how long the frame then still waits for them,
+        # laser_extract_cpu the extraction's own time
+        futs = None
+        if self.planes:
+            if self._laser_pool is None:
+                self._laser_pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="ohs-laser")
+            futs = (self._laser_pool.submit(_timed, extract_laser_lines, left_r, self.laser_params),
+                    self._laser_pool.submit(_timed, extract_laser_lines, right_r, self.laser_params)
+                    if self.laser_params.stereo_check else None)
+
         depth = sigma = None
         if self.depth_estimator is not None:
             t0 = time.perf_counter()
@@ -480,12 +501,12 @@ class FramePipeline:
             tim["depth"] = _ms(t0)
 
         lines = lines_r = None
-        if self.planes:
+        if futs is not None:
             t0 = time.perf_counter()
-            lines = extract_laser_lines(left_r, self.laser_params)
-            if self.laser_params.stereo_check:
-                lines_r = extract_laser_lines(right_r, self.laser_params)
+            lines, ms_l = futs[0].result()
+            lines_r, ms_r = futs[1].result() if futs[1] is not None else (None, 0.0)
             tim["laser_extract"] = _ms(t0)
+            tim["laser_extract_cpu"] = ms_l + ms_r
 
         t0 = time.perf_counter()
         if pose is not None:
@@ -652,6 +673,9 @@ class FramePipeline:
     def close(self) -> None:
         """Release the voxel grids and trackers. The pipeline cannot be used afterwards."""
         self._closed = True
+        if self._laser_pool is not None:
+            self._laser_pool.shutdown(wait=True)
+            self._laser_pool = None
         for tr in (self.tracker, self.markerless):
             if tr is not None:
                 tr.close()
