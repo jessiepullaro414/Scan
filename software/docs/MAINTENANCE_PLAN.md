@@ -66,6 +66,7 @@ frame (medians); on the RTX 3070 Ti laptop: full 49 ms. UI first paint loads abo
 | A3 | UI tests for the PLY reader, binary frames and downloads | safety net | M | Sonnet | ○ |
 | A4 | Lint for unused code (ruff, pyflakes rules only) | safety net | S | Sonnet | ✔ |
 | A5 | CI on GitHub (CPU path, fast tests, UI checks) | safety net | M | Sonnet | ✔ |
+| A6 | The CPU path gives slightly different results on every run | repeatability | M | Opus | ✔ |
 | B1 | A job cancelled while queued never settles | bug | S | Sonnet | ✔ |
 | B2 | A failed frame write is lost without an error | bug | S | Sonnet | ✔ |
 | B3 | A crash mid-scan can leave an unreadable recording | bug | M | Opus | ✔ |
@@ -77,6 +78,7 @@ frame (medians); on the RTX 3070 Ti laptop: full 49 ms. UI first paint loads abo
 | B9 | A degenerate face in a PLY shifts the face indices | bug | S-M | Sonnet | ✔ |
 | B10 | A failed Pico open leaves the serial port open | bug | S | Sonnet | ✔ |
 | B11 | The two self-tests have drifted apart | duplication | S | Sonnet | ○ |
+| B12 | A hole with a perimeter of zero reaches the hole list (confirm first) | bug? | S | Sonnet | ○ |
 | E1 | Skip the disparity download nobody reads | speed | S | Sonnet | ✔ |
 | E2 | The tracker copies the depth map on every call | speed | S | Sonnet | ✔ |
 | E3 | The finest ICP level is computed twice at full quality | speed | S | Sonnet | ✔ |
@@ -225,7 +227,7 @@ processing), S1 (start-up).
   with an older commit, check it out in a second worktree and run the tool from a neutral folder
   with `PYTHONPATH=<worktree>/software`. Found while building it: the mesh comes out in a
   different vertex order on every run, so the snapshot stores it in a canonical order; and the
-  builder reports that the CPU path gives different poses from run to run (not yet confirmed),
+  CPU path gives slightly different poses and meshes from run to run (confirmed, see A6),
   so bit-identical checks are done on the GPU path and the tool's own real-snapshot test is
   strict only there.
 - **Why:** most engine tasks below promise bit-identical output. Today that takes hand-written
@@ -266,6 +268,22 @@ processing), S1 (start-up).
   (`OHS_COMPUTE=cpu`, `-m "not slow"`), and in `software/ui`: `npm ci`, type check, tests, build.
 - **Guard:** the workflow is green on `main` before anything else is merged through it.
 - Do it after A1 (the fast tier). Ask the owner first: it turns on GitHub Actions for the repo.
+
+### [ ] A6. The CPU path gives slightly different results on every run (Opus, M) ✔
+- **Found 2026-11-10** with the snapshot tool (A2): three snapshots of the same code with
+  `OHS_COMPUTE=cpu`, 20 frames. Laser points are identical. Poses differ by up to 0.008 (preview)
+  and 0.002 (full) in the largest matrix entry, and the mesh by a few vertices (356,205 against
+  356,186 and 356,198 at full quality). The GPU path is bit-identical from run to run.
+- **Why it matters:** the mesh-dependent tests can pass or fail by chance on the CPU path (see
+  B12), and a before/after check on the CPU path needs a tolerance.
+- **Where:** not found yet. The differences start in the poses, so look at the CPU tracker first
+  (Open3D's ray cast and ICP run on several threads); `OMP_NUM_THREADS=1` makes them smaller but
+  does not remove them.
+- **Change:** find the stage (compare depth, then pose, then fused volume between two runs of the
+  same frames). If it can be made repeatable at no cost in speed, do that; if not, write down the
+  size of the differences in VALIDATION.md and give `tools/snapshot.py compare` a default
+  tolerance for CPU snapshots.
+- **Guard:** no change to the GPU path (snapshot identical); the CPU bench not slower.
 
 ---
 
@@ -400,6 +418,18 @@ processing), S1 (start-up).
 - **Guard:** the self-test tests in `test_server_setup.py` and `test_app_cli.py`; messages stay
   identical.
 
+### [ ] B12. A hole with a perimeter of zero reaches the hole list (Sonnet, S) ○
+- **Found 2026-11-10:** `test_server_process_studio.py::test_overlays` failed once in the full
+  CPU-path run (`perimeter_mm` 0.0 for one hole) and passed in two runs of the module alone, on
+  the same code. The old code passed twice too, so nothing says the first wave caused it; the
+  mesh differs a little from run to run on the CPU path (A6).
+- **Where:** `ohs/mesh/holes.py:74-94` (`hole_outlines`) lists every loop that is not the outer
+  border, also one whose vertices sit on the same spot.
+- **Change:** confirm first with a built mesh (a boundary loop whose vertices coincide). Then
+  decide where it belongs: leave such loops out of the list, or merge the coincident vertices
+  when the mesh is cleaned. Say which in the commit.
+- **Guard:** `test_mesh_holes.py`; a new test with the built mesh; `test_overlays` unchanged.
+
 ---
 
 ## E. Per-frame engine (bit-identical unless stated)
@@ -407,10 +437,13 @@ processing), S1 (start-up).
 Every task here: tests on both compute paths, the A2 snapshot identical before and after, and the
 bench medians before and after in the commit message.
 
-### [ ] E1. Skip the disparity download nobody reads (Sonnet, S) ✔
-- **Landed 2026-11-10, speed not measured yet:** with exact division the GPU matcher downloads
-  only depth and sigma. Output identical (snapshot before/after on the GPU path, both
-  qualities). The box is ticked once the bench shows the gain.
+### [x] E1. Skip the disparity download nobody reads (Sonnet, S) ✔
+- **Done 2026-11-10:** with exact division the GPU matcher downloads only depth and sigma. Output
+  identical (snapshot before/after on the GPU path, both qualities). Bench on the Radeon 680M,
+  90 frames, three runs before and three after, alternating: the depth stage went from 74.8 to
+  73.2 ms at full quality and from 20.0 to 18.4 ms at preview (medians; the runs do not
+  overlap). The whole frame, E1 to E3 together: 161.7 to 160.1 ms at full and 66.4 to 65.2 ms at
+  preview (means), which is about the spread between runs (2 to 3 ms).
 - **Where:** `ohs/vision/depth.py:554-561`, `ohs/vision/depth_gpu.py:1187-1193`.
 - **Problem:** `depth_sigma` downloads disparity, depth and sigma every frame; the disparity is
   only read when the GPU cannot divide exactly.
@@ -420,11 +453,11 @@ bench medians before and after in the commit message.
 - **Guard:** `test_depth_without_exact_division_is_converted_on_the_cpu`,
   `test_gpu_api_contract`, `test_depth_sigma_is_calibrated`.
 
-### [ ] E2. The tracker copies the depth map on every call (Sonnet, S) ✔
-- **Landed 2026-11-10, speed not measured yet:** `_clean_depth` returns its input when no pixel
+### [x] E2. The tracker copies the depth map on every call (Sonnet, S) ✔
+- **Done 2026-11-10:** `_clean_depth` returns its input when no pixel
   is bad (zeros no longer count as bad). One difference: a pixel holding -0.0 is no longer
-  rewritten to +0.0. Output identical (snapshot before/after on the GPU path). The box is ticked
-  once the bench shows the gain.
+  rewritten to +0.0. Output identical (snapshot before/after on the GPU path). The work is done,
+  but the bench shows no gain it can separate from the noise: see E3.
 - **Where:** `ohs/track/markerless.py:517-527` (`_clean_depth`), called one to three times a
   frame.
 - **Problem:** `d < depth_min` is true for every 0 pixel, every depth map has zeros, so
@@ -435,10 +468,15 @@ bench medians before and after in the commit message.
   `test_alt_depth_holds_the_pose_the_main_input_cannot`. Check that no caller writes into the
   returned array (it may now be the caller's own).
 
-### [ ] E3. The finest ICP level is computed twice at full quality (Sonnet, S) ✔
-- **Landed 2026-11-10, speed not measured yet:** `_source_points` computes each (offset, stride)
+### [x] E3. The finest ICP level is computed twice at full quality (Sonnet, S) ✔
+- **Done 2026-11-10:** `_source_points` computes each (offset, stride)
   pair once per call and shares the result between levels. Output identical (snapshot
-  before/after on the GPU path). The box is ticked once the bench shows the gain.
+  before/after on the GPU path).
+- **Measured, E2 and E3 together (Radeon 680M, same runs as E1):** the tracking stage at full
+  quality went from 53.3 to 52.0 ms (medians), with the runs overlapping; at preview there is no
+  change. So about 1 ms a frame at best. In the same runs the `raycast` line reads about 1.3 ms
+  higher after than before (14.9 to 16.2 ms); two runs of the commit with E1 alone gave 14.3 and
+  15.5, so this is not explained. The whole frame did not get slower.
 - **Where:** `ohs/track/markerless.py:378-390` and `:529-552`. Same session as E2.
 - **Problem:** strides (16, 8, 4) with spacing 8 become [16, 8, 8], so `_source_points`
   back-projects and computes normals for the same grid twice on every call.
