@@ -190,7 +190,31 @@ The first tuning round, from `ohs bench` per-stage tables on both machines. The 
 - The CPU path got faster too. On the laptop at full quality it went from 332 ms (3.0 fps) to 264 ms (3.8 fps), and its trajectory error fell from 0.33 mm / 0.075° to 0.24 mm / 0.028°. The GPU path is now 3.9 times faster than the CPU path at full quality and 2.3 times at preview.
 - Trajectory error on the bench in GPU mode: 0.13 mm / 0.017° median at full quality (it was 0.15 mm / 0.035°), and 0.21 mm / 0.025° at preview (unchanged).
 - **Per-stage times can mislead.** The tracking model's GPU integration is queued and returns at once, so the next frame's depth step waits for it: on the laptop the matcher alone takes 22.5 ms, while "depth" shows 27.2 ms. The whole-frame time is the number to trust.
-- **Left for the next round:** the tracking filter and the confidence TSDF's brick search, which still runs on the CPU in numpy. The filter takes 11.5 ms on the laptop. It runs in OpenCV on the CPU and is barely faster in GPU mode.
+**Round 2: the last two CPU steps on the GPU** (2b1eae0):
+- **The tracking filter** (`ohs/track/filter_gpu.py`) gives `tracking_depth`'s map in four kernels:
+  - edge test and block average;
+  - a row and a column Gaussian pass;
+  - an erosion with the offsets that `cv2.distanceTransform` itself rates within the radius;
+  - the bilinear upsampling.
+
+  On the bench recording 12 of 15.4 M pixels differ in validity, and the values agree within 0.014 mm.
+- **The confidence TSDF's brick search** puts the frame's rays into a GPU hash set, and only the frame's brick list comes back. It gives the same bricks in the same order, and the same volume bit for bit. Beyond 512 bricks from the first camera (4 m at 1 mm voxels) it falls back to the CPU search.
+- **A CPU filter bug found on the way:** the full-resolution path blurred `depth * valid`, and NaN × 0 is NaN, so a pixel without depth emptied the blur radius around it. It now blurs only the valid depth, as the half-resolution path always did. The pipeline uses the half-resolution path, so its scans were not affected.
+
+| Machine | Quality | Round 1 (279d709) | Round 2 (2b1eae0) |
+|---|---|---|---|
+| RTX 3070 Ti laptop | full | 67.2 (14.9 fps) | **49.1 (20.4 fps)** |
+| | preview | 28.4 (35.2 fps) | **25.5 (39.2 fps)** |
+| Radeon 680M | full | 172.0 (5.8 fps) | **156.3 (6.4 fps)** |
+| | preview | 67.0 (14.9 fps) | **63.0 (15.9 fps)** |
+
+- On the laptop the filter went from 11.5 to 1.6 ms and the integration from 7.4 to 2.4 ms. "depth" went from 27.2 to 23.8 ms because it waits less on the queued GPU work: the matcher alone takes 22.5 ms. On the Radeon the filter went from 17 to 6.7 ms, mostly upload and download through the iGPU's driver, and the integration from about 15 to 9.7 ms.
+- Since this morning (a024ec4) the GPU path is 2.5 times faster at full quality on the laptop (8.0 → 20.4 fps) and 2.1 times at preview. Trajectory errors are unchanged from round 1.
+- **What limits it now:**
+  - On the laptop the stereo matcher is 23.8 of 49 ms.
+  - The two laser threads take about 16 ms each, so once the depth step gets below about 16 ms they become what the frame waits for.
+  - At preview, ICP (5.3 ms, on the CPU) is the biggest tracking stage.
+  - Every frame still crosses PCIe several times: the depth and sigma are downloaded, then uploaded again for the filter and the reconstruction, and the filtered depth goes up for the tracking model. Keeping them on the GPU would be the next step.
 
 ## Straighten: loop closure (M3 phase 2, 2026-11-09)
 

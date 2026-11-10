@@ -555,7 +555,10 @@ Phase 1 is done when full-quality processing is at least 3x faster on the RTX la
   - The confidence TSDF weighs pixels on the GPU and samples bricks per voxel size.
   - Laptop: full quality 124 → 67 ms a frame (8.0 → 14.9 fps), preview 53 → 28 ms (18.8 → 35.2 fps). Radeon: 217 → 172 ms full. Accuracy unchanged.
   - The SGM work-group settings were already the fastest on both GPUs; their output doesn't depend on them.
-  - Left: the tracking filter (12.6 ms on the laptop, CPU) and the brick search of the confidence TSDF on the GPU.
+
+  **Second round done (2026-11-10):** the tracking filter and the confidence TSDF's brick search run on the GPU, with the same results as on the CPU.
+  - Laptop: full quality 67 → 49 ms a frame (20.4 fps), preview 28 → 25.5 ms (39.2 fps). Radeon: 172 → 156 ms full.
+  - Left, if speed matters again: keep the depth on the GPU between the matcher, the filter and both models (it crosses PCIe several times a frame), and the laser threads once the depth step gets below about 16 ms.
 
 ### Quality bar (every milestone)
 - **Performance:** the live view holds 30 fps or more in the UI and shows the scanner's state within 150 ms. A 2M-triangle mesh orbits at 60 fps on an integrated GPU.

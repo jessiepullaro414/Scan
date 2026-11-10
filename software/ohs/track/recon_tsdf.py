@@ -15,7 +15,10 @@ plain averaging cancels across frames come back (``VALIDATION.md``, "Depth confi
 **Layout.** Bricks of 8^3 voxels (8 mm at 1 mm voxels) in a pool that grows by doubling, indexed on
 the CPU (sorted brick keys -> pool slot). A frame allocates the bricks its depth band ``[d - trunc,
 d + trunc]`` reaches, sampled about every 2.5 mm across the image (every 4th pixel at 1280 px width)
-and at three depths (the spacing grows with the voxel size, so the samples per brick stay the same). Voxel ``(x, y, z)`` of brick ``b`` sits at world position ``(8 b + (x, y, z)) *
+and at three depths (the spacing grows with the voxel size, so the samples per brick stay the same).
+With a GPU this search runs there: a hash set of the frame's bricks, of which only the list comes
+back (keys of 10 bits per axis, within 512 bricks of the first camera; beyond that, the CPU search).
+Voxel ``(x, y, z)`` of brick ``b`` sits at world position ``(8 b + (x, y, z)) *
 voxel_mm``, Open3D's convention for block resolution 8. Per voxel, 28 bytes:
 
 - ``tsdf``: the mean of the truncated projective SDF ``min(d - z, trunc)`` (mm, camera z);
@@ -49,10 +52,10 @@ also the tests' reference. ``"auto"`` picks the GPU when there is one.
 its ``color`` carries ``(sigma, nlook, wsum)``, which marching cubes interpolates like a colour
 (Open3D scales colours by 1/255 on the way out; undone here).
 
-**Speed** (1280x800): about 15 ms per frame on the Radeon 680M and 8 ms on an RTX 3070 Ti laptop, most of
-it the CPU's brick search (Open3D's CPU integration: 15-18 ms); at 640x400 with 2 mm voxels about 2-5 ms.
-The kernel applies :func:pixel_weights' rules itself, on the raw depth and sigma. The numpy twin needs about 0.5 s per frame, so without a GPU
-the pipeline keeps Open3D (no confidence) unless asked for this model.
+**Speed** (1280x800): about 10 ms per frame on the Radeon 680M (the brick search 1 ms of it, 8 ms
+on the CPU; Open3D's CPU integration: 15-18 ms), at 640x400 with 2 mm voxels about 4 ms. The kernels
+apply :func:`pixel_weights`' rules themselves, on the raw depth and sigma. The numpy twin needs about
+0.5 s per frame, so without a GPU the pipeline keeps Open3D (no confidence) unless asked for this model.
 
 The interface mirrors :class:`ohs.track.markerless.MarkerlessTracker`'s model side (``integrate``,
 ``extract_mesh``, ``extract_points``, ``n_integrated``, ``reset``, ``close``), so the pipeline can use

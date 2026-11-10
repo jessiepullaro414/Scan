@@ -48,6 +48,7 @@ processed image (640x400 at full quality, the resolution the model is ray cast a
 edge test runs on the full-resolution pixels; smoothing and erosion run at ``track_size`` with
 sigma and radius scaled, and the smooth result is upsampled back for the tracker, which is
 unchanged (integration and ICP sampling at the processed resolution). See :func:`tracking_depth`.
+With a GPU the filter runs there (:class:`ohs.track.filter_gpu.TrackingFilterGpu`, the same map).
 
 **Model backends.** The tracking model may live on the GPU
 (:class:`~ohs.track.volume_gpu.GpuTsdfVolume`, a rolling cube): it takes
