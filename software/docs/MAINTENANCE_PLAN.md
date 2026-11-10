@@ -271,7 +271,10 @@ processing), S1 (start-up).
 
 ## B. Bugs and robustness
 
-### [ ] B1. A job cancelled while queued never settles (Sonnet, S) ✔
+### [x] B1. A job cancelled while queued never settles (Sonnet, S) ✔
+- **Done 2026-11-10:** `cancel()` runs `on_done` itself for a job that was still queued (once,
+  outside the lock) and then sets `finished`, so the scan leaves "processing" at once.
+  `shutdown()` settles queued jobs the same way. Two new tests.
 - **Where:** `ohs/server/jobs.py:128-141` (`cancel`) and `:181-185` (`_run`).
 - **Problem:** `cancel()` marks a queued job cancelled. When the pool reaches it, `_run` returns at
   `if job.state != "queued": return`, before the `finally` that calls `on_done`. The pool has two

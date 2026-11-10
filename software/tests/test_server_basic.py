@@ -454,6 +454,40 @@ def test_job_runner_progress_failure_and_cooperative_cancel():
         jr.shutdown(timeout=5)
 
 
+def test_job_cancelled_while_queued_runs_on_done_exactly_once():
+    jr = JobRunner(max_workers=2)
+    release = threading.Event()
+    running = [threading.Event(), threading.Event()]
+    done_calls: list[tuple[str, str]] = []
+
+    def block(i):
+        def fn(ctx):
+            running[i].set()
+            release.wait(10)
+            return {}
+        return fn
+
+    try:
+        jr.submit("b0", block(0))
+        jr.submit("b1", block(1))
+        assert running[0].wait(5) and running[1].wait(5)  # both workers are busy
+        ran = threading.Event()
+        j3 = jr.submit("queued", lambda ctx: ran.set() or {},
+                       on_done=lambda j: done_calls.append((j.id, j.state)))
+        assert j3.state == "queued"
+        assert jr.cancel(j3.id).state == "cancelled"
+        assert jr.wait(j3.id, 5).finished.is_set()
+        assert done_calls == [(j3.id, "cancelled")]  # settled at once, not when a worker frees up
+        release.set()  # the workers now reach the cancelled job: it must neither run nor call on_done again
+        jr.submit("after", lambda ctx: {}).future.result(5)
+        assert j3.future.result(5) is None
+        assert done_calls == [(j3.id, "cancelled")] and not ran.is_set()
+        assert jr.cancel(j3.id).state == "cancelled" and len(done_calls) == 1  # a second cancel is a no-op
+    finally:
+        release.set()
+        jr.shutdown(timeout=5)
+
+
 def test_config_has_projects_dir_and_app_section(tmp_path, monkeypatch):
     monkeypatch.setenv("USERPROFILE", str(tmp_path))
     monkeypatch.setenv("HOME", str(tmp_path))

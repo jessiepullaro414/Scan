@@ -460,6 +460,30 @@ def test_cancel_a_track_and_409_while_recording(env):
         studio.session = None
 
 
+def test_a_stage_job_cancelled_while_queued_settles_the_scan(env):
+    import threading
+
+    pid, sid = add_scan(env, "Cancelled in the queue", env["rec"])
+    jobs = env["studio"].jobs
+    release = threading.Event()
+    started = [threading.Event(), threading.Event()]
+    blockers = [jobs.submit("test_block", lambda ctx, e=e: e.set() or release.wait(30) and {}) for e in started]
+    try:
+        assert all(e.wait(10) for e in started)  # both workers are busy
+        job = post(base_url(env, pid, sid) + "/process/track", {"quality": "preview"}).json()
+        assert job["state"] == "queued"
+        assert get(f"{env['url']}/api/projects/{pid}").json()["scans"][0]["status"] == "processing"
+        requests.post(f"{env['url']}/api/jobs/{job['id']}/cancel", timeout=T)
+        assert wait_job(env, job["id"], 10)["state"] == "cancelled"
+        # settled by the cancel itself, while both workers are still busy
+        assert get(f"{env['url']}/api/projects/{pid}").json()["scans"][0]["status"] == "recorded"
+    finally:
+        release.set()
+        for b in blockers:
+            jobs.wait(b.id, 10)
+    assert get(f"{env['url']}/api/projects/{pid}").json()["scans"][0]["status"] == "recorded"
+
+
 def test_make_mesh_runs_the_default_recipe(env):
     pid, sid = add_scan(env, "Make mesh", env["rec"])
     b = base_url(env, pid, sid)

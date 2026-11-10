@@ -8,7 +8,8 @@ It reports progress with ``ctx.progress(fraction, message)`` and calls ``ctx.che
 :class:`~ohs.server.protocol.ApiError` contributes its hint).
 
 States: ``queued -> running -> done | failed | cancelled`` (a queued job that is cancelled never
-runs). ``progress`` is a fraction from 0 to 1. Every change is passed to ``on_update(job_dict)``
+runs). ``on_done(job)`` runs exactly once per job, whatever state it ends in: in the worker, or, for a
+job cancelled while queued, in the thread that cancelled it. ``progress`` is a fraction from 0 to 1. Every change is passed to ``on_update(job_dict)``
 (the WebSocket ``job`` message); progress-only updates are throttled to 5 per second per job.
 Finished jobs are kept in memory (the newest 200).
 """
@@ -52,6 +53,7 @@ class Job:
     future: Future | None = field(default=None, repr=False)
     finished: threading.Event = field(default_factory=threading.Event, repr=False)
     t_last_update: float = 0.0
+    on_done: Callable[["Job"], None] | None = field(default=None, repr=False)  # set by submit
 
     @property
     def active(self) -> bool:
@@ -116,7 +118,8 @@ class JobRunner:
         """Queue ``fn(ctx)``. ``on_done(job)`` runs in the worker after the job finished (any state)."""
         if self._closed:
             raise ApiError(503, "the app is shutting down", "start OpenHandScan Studio again")
-        job = Job(id=f"j-{uuid.uuid4().hex[:10]}", kind=kind, message=message, meta=dict(meta or {}))
+        job = Job(id=f"j-{uuid.uuid4().hex[:10]}", kind=kind, message=message, meta=dict(meta or {}),
+                  on_done=on_done)
         with self._lock:
             self._jobs[job.id] = job
             self._trim()
@@ -130,12 +133,16 @@ class JobRunner:
         if not job.active:
             return job
         job.cancel_event.set()
+        was_queued = False
         with self._lock:
             if job.state == "queued":
                 job.state, job.message = "cancelled", "Cancelled before it started"
-                job.finished.set()
+                was_queued = True
             else:
                 job.message = "Cancelling..."
+        if was_queued:  # _run will skip it, so settle it here (once), outside the lock
+            self._call_done(job, job.on_done)
+            job.finished.set()
         self._emit(job)
         log.info("job %s: cancel requested", job.id)
         return job
@@ -206,10 +213,14 @@ class JobRunner:
             job.error = f"{text} (try again; if it keeps failing, run `ohs -v app` and look at the log)"
             log.exception("job %s (%s) failed", job.id, job.kind)
         finally:
-            if on_done is not None:
-                try:
-                    on_done(job)
-                except Exception:
-                    log.exception("job %s: completion handler failed", job.id)
+            self._call_done(job, on_done)
             job.finished.set()
             self._emit(job)
+
+    @staticmethod
+    def _call_done(job: Job, on_done: Callable[[Job], None] | None) -> None:
+        if on_done is not None:
+            try:
+                on_done(job)
+            except Exception:
+                log.exception("job %s: completion handler failed", job.id)
