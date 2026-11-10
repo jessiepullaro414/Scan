@@ -456,8 +456,8 @@ bench medians before and after in the commit message.
 ### [x] E2. The tracker copies the depth map on every call (Sonnet, S) ✔
 - **Done 2026-11-10:** `_clean_depth` returns its input when no pixel
   is bad (zeros no longer count as bad). One difference: a pixel holding -0.0 is no longer
-  rewritten to +0.0. Output identical (snapshot before/after on the GPU path). The work is done,
-  but the bench shows no gain it can separate from the noise: see E3.
+  rewritten to +0.0. Output identical (snapshot before/after on the GPU path). Measured together
+  with E3: see there.
 - **Where:** `ohs/track/markerless.py:517-527` (`_clean_depth`), called one to three times a
   frame.
 - **Problem:** `d < depth_min` is true for every 0 pixel, every depth map has zeros, so
@@ -474,9 +474,14 @@ bench medians before and after in the commit message.
   before/after on the GPU path).
 - **Measured, E2 and E3 together (Radeon 680M, same runs as E1):** the tracking stage at full
   quality went from 53.3 to 52.0 ms (medians), with the runs overlapping; at preview there is no
-  change. So about 1 ms a frame at best. In the same runs the `raycast` line reads about 1.3 ms
-  higher after than before (14.9 to 16.2 ms); two runs of the commit with E1 alone gave 14.3 and
-  15.5, so this is not explained. The whole frame did not get slower.
+  change. In the same runs the `raycast` line reads about 1.3 ms higher after than before (14.9
+  to 16.2 ms); two runs of the commit with E1 alone gave 14.3 and 15.5.
+- **Timed directly** (old and new function side by side, 1280x800 depth with 12 % empty pixels,
+  200 calls, three rounds): `_clean_depth` 3.6 to 1.5 ms a call, `_source_points` at full quality
+  4.9 to 2.9 ms a call. So the two save about 4 ms of CPU time a frame, and only about 1.3 ms of
+  it shows in the frame time on the Radeon. Likely reason, not proven: the ray cast waits for
+  GPU work that used to finish during that CPU time. To check on the RTX laptop, where the GPU
+  waits are shorter.
 - **Where:** `ohs/track/markerless.py:378-390` and `:529-552`. Same session as E2.
 - **Problem:** strides (16, 8, 4) with spacing 8 become [16, 8, 8], so `_source_points`
   back-projects and computes normals for the same grid twice on every call.
