@@ -491,6 +491,7 @@ Meshes come from marching cubes on the TSDF, or from Open3D's screened Poisson. 
 - **Plugs into:** `ohs/mesh/simplify.py` (`decimate(..., max_error_mm=...)`).
 - **Effort / risk:** S / low.
 - **Sim check:** decimate the sphere and panel meshes; measure the distance to the original mesh and to the analytic surface.
+- **Result (2026-11-10, shipped):** the quadric's mean squared distance (cost / weight) may reach half the tolerance, and neither end of a collapse may move off its surface by more than it. The outer edge and folds are held: straightening a scan's ragged edge or flattening a fin moved old vertices by up to 1 mm. On simulated scans 99.9 % of the old vertices stay within the tolerance and all within about twice it; the edit reports both, measured against the original. At 0.02 mm a 450-frame scan keeps 55 % of its triangles; at 0.05 mm, 29 %.
 
 #### 4.6.2 Flag synthetic geometry — P1, M3 (quick win)
 - **What:** faces made by hole filling, Poisson or extrapolation carry a "filled" flag. The viewer shows them; fits and deviation maps leave them out by default; the stats count them.
@@ -499,6 +500,7 @@ Meshes come from marching cubes on the TSDF, or from Open3D's screened Poisson. 
 - **Plugs into:** `ohs/mesh/holes.py` (return the new faces); the project files (a face attribute); the M5 tools.
 - **Effort / risk:** S / low.
 - **Sim check:** fill the car panel's hole; every new face is flagged, and fits on the panel ignore them.
+- **Result (2026-11-10, shipped for hole filling):** the flag is the PLY face property `filled`; it follows every edit (`ohs.mesh.carry_filled`), the stats give the filled area, both views draw it striped, and the viewer's distance tool won't pick a point on it. Fits (M5) will use it. Poisson meshes are not flagged yet: the app makes TSDF meshes.
 
 #### 4.6.3 Confidence-aware smoothing — P1, M3 (quick win)
 - **What:** scale the smoothing per vertex by its σ (4.5.1) and by laser anchoring. Confident regions move little, noisy ones more.
@@ -507,6 +509,7 @@ Meshes come from marching cubes on the TSDF, or from Open3D's screened Poisson. 
 - **Plugs into:** `ohs/mesh/smoothing.py` (`smooth(..., weights=...)`).
 - **Effort / risk:** S / low.
 - **Sim check:** smooth with and without weights; the error against the analytic surface should drop more where σ was large, and not rise where it was small.
+- **Result (2026-11-10, shipped as a limit):** no vertex moves more than 2σ (`smooth(..., limit=2 * sigma)`), a bound that keeps smoothing inside each point's error bar. On the simulator it never binds: smoothing moves points by hundredths of a millimetre while σ is about 0.5 mm, and it improved the error of the low-σ half too (car panel, bilateral 50 %: median 0.054 → 0.042 mm). It matters where σ is small: long, laser-refined scans.
 
 #### 4.6.4 Screened Poisson with an envelope — P2, M3–M4
 - **What:** screened Poisson (Kazhdan and Hoppe, TOG 2013) builds a watertight surface from oriented points. The envelope-constrained version (Kazhdan et al., SGP 2020) keeps it from ballooning across big openings. Both are in PoissonRecon (MIT). Open3D wraps an older version without the envelope.

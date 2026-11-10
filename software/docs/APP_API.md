@@ -515,9 +515,11 @@ type StageState = "none" | "running" | "done" | "failed" | "skipped";
 type MeshOp = "remove_floaters" | "fill_holes" | "smooth" | "decimate" | "delete_faces" | "keep_faces";
 // params per op:
 //   remove_floaters { min_triangles?: number; min_size_mm?: number; keep_largest_only?: boolean }
-//   fill_holes      { max_hole_mm: number }                       // largest hole perimeter to fill
-//   smooth          { method: "taubin" | "bilateral"; strength: number /* 0..1 */; keep_edges?: boolean }
-//   decimate        { target_triangles?: number; ratio?: number }  // one of the two
+//   fill_holes      { max_hole_mm: number; watertight?: boolean }  // largest hole perimeter to fill; the outer edge too
+//   smooth          { method: "taubin" | "bilateral"; strength: number /* 0..1 */; keep_edges?: boolean;
+//                     within_sigma?: boolean }                     // no vertex moves more than 2 sigma
+//   decimate        { target_triangles?: number; ratio?: number;   // at most one of the two, and / or
+//                     max_error_mm?: number }                      // a tolerance (0.001-10 mm)
 //   delete_faces / keep_faces { faces: string }                    // base64 of little-endian uint32 face indices
 //                                                                  // of the CURRENT mesh
 type MeshStats = {
@@ -528,6 +530,7 @@ type MeshStats = {
   boundary_edges: number; non_manifold_edges: number; watertight: boolean;
   bbox_mm: [number, number, number]; area_cm2: number; volume_cm3: number | null;   // volume only when watertight
   sigma_mm: SigmaStats | null;        // the confidence, when the mesh has per-vertex sigmas
+  filled_cm2: number;                 // area made by hole filling (not measured)
 };
 type SigmaStats = {                   // each vertex's sigma (1 standard deviation, mm), shares of the surface
   median: number; p95: number;        // mm
@@ -696,7 +699,7 @@ Everything in the M3 phase 2 section is implemented as written, with these clari
   - "Keep the largest piece only";
   - "Fill holes up to 12 mm";
   - "Smooth (bilateral, 50 %, edges kept)";
-  - "Simplify to 200,000 triangles" or "Simplify to 50 % of the triangles";
+  - "Simplify to 200,000 triangles", "Simplify to 50 % of the triangles" or "Simplify to within 0.02 mm";
   - "Delete 1,234 triangles" or "Keep 1,234 triangles".
 - `remove_floaters`:
   - A piece is a set of faces connected through shared vertices; the largest piece is the one with the most triangles.
@@ -706,12 +709,17 @@ Everything in the M3 phase 2 section is implemented as written, with these clari
   - The largest piece is never removed.
 - `fill_holes`:
   - `max_hole_mm` is the hole's perimeter.
-  - Outer borders are never filled (see MeshStats).
-  - New vertices are added only where the hole is wider than the mesh around it, so pin holes get a few triangles and larger holes a smooth patch.
+  - Outer borders are left open (see MeshStats), unless `watertight` (M3 phase 3): then every opening up to `max_hole_mm` is closed, the outer edge too ("Make watertight: close every opening up to 60 mm"). The summary says whether the mesh is now watertight, or how many openings are still larger than the limit.
+  - New vertices are added only where the hole is wider than the mesh around it, so pin holes get a few triangles and larger holes a smooth patch. A smooth patch that would leave the hole (more than 1.25 hole radii from its centre) becomes a flat "soap film" instead.
+  - **Filled faces are flagged** (M3 phase 3): `mesh.ply` gets the face property `uchar filled` (1 = made by hole filling, not measured), the flags follow every later edit, and `MeshStats.filled_cm2` adds up their area. The viewer and the Process page draw them striped grey, and the viewer's distance tool won't put a point on them.
 - `smooth`:
   - `keep_edges` defaults to true; `strength` must be 0–1.
   - Strength sets the work: Taubin `1 + 49 s` iterations; bilateral `2 + 18 s` normal and `5 + 15 s` vertex iterations.
-- `decimate`: send exactly one of `target_triangles` (at least 4) or `ratio` (above 0, at most 1). A target at or above the current count changes nothing.
+  - `within_sigma` (M3 phase 3; the Process page sends it by default when the mesh has sigmas, and the Body panel and Bracket recipes use it): no vertex moves more than twice its own sigma; a longer move is shortened. Without sigmas it does nothing.
+- `decimate`:
+  - Send at most one of `target_triangles` (at least 4) or `ratio` (above 0, at most 1), and / or `max_error_mm` (0.001–10). A target at or above the current count changes nothing.
+  - `max_error_mm` (M3 phase 3) simplifies only while the surface stays within that tolerance, with the outer edge and folds held; with a target too, whichever stops first.
+  - The summary measures how far every old vertex now lies from the new surface: "855,246 -> 473,148 triangles; the surface moved at most 0.062 mm (0.016 mm for 99.9 % of it)".
 - `delete_faces` / `keep_faces`:
   - `faces` is base64 of little-endian uint32; duplicates are ignored.
   - They are checked against the current mesh when posted. An index the mesh does not have, bad base64, a length that is not a multiple of 4, or an empty selection is 422.

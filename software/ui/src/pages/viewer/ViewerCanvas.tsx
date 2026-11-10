@@ -24,7 +24,15 @@ import {
 } from "three";
 import { useUi } from "../../store/ui";
 import { CameraRig } from "../../three/CameraRig";
-import { applyConfidenceColors, confidenceMaterial, SIGMA_NONE_MM, sigmaOf } from "../../three/confidence";
+import {
+  applyConfidenceColors,
+  confidenceMaterial,
+  filledGeometry,
+  filledMaterial,
+  isFilledFace,
+  SIGMA_NONE_MM,
+  sigmaOf,
+} from "../../three/confidence";
 import { CV_TO_THREE_ROTATION, cvToThree } from "../../three/coords";
 import { clayMatcap } from "../../three/materials";
 import { AxisGizmo, SceneGrid, StudioEnvironment, StudioLights, useThemeColors } from "../../three/Studio";
@@ -66,6 +74,10 @@ export function Model({ geometry, shading, wireframe, meshRef }: { geometry: Buf
   useEffect(() => {
     if (map) invalidate(); // new colours (the theme changed) with the same material and geometry
   }, [map, theme, invalidate]);
+  // faces made by hole filling: striped grey on top, whatever the shading (they were not measured)
+  const filledG = useMemo(() => filledGeometry(geometry), [geometry]);
+  const filledMat = useMemo(() => filledMaterial(theme), [theme]);
+  useEffect(() => () => filledMat.dispose(), [filledMat]);
   // Dark lines over the light surface ("flat lines"), lighter over the normals view.
   const wireColor = shading === "normals" ? "#ffffff" : "#141a22";
   const wire = useMemo(
@@ -76,6 +88,7 @@ export function Model({ geometry, shading, wireframe, meshRef }: { geometry: Buf
   return (
     <>
       <mesh ref={meshRef} geometry={geometry} material={mat} />
+      {filledG ? <mesh geometry={filledG} material={filledMat} raycast={() => null} renderOrder={1} /> : null}
       {wireframe ? <mesh geometry={geometry} material={wire} raycast={() => null} renderOrder={1} /> : null}
     </>
   );
@@ -193,6 +206,8 @@ function MeasureTool({
   const invalidate = useThree((s) => s.invalidate);
   const accent = useThemeColors().accent;
   const [hover, setHover] = useState<Vec3 | null>(null);
+  /** The cursor is over filled surface (not measured): no point can be picked there. */
+  const [overFilled, setOverFilled] = useState(false);
   const pickRef = useRef(onPick);
   pickRef.current = onPick;
 
@@ -201,13 +216,14 @@ function MeasureTool({
     if (!enabled) {
       el.style.cursor = "";
       setHover(null);
+      setOverFilled(false);
       return;
     }
     el.style.cursor = "crosshair";
     const ray = new Raycaster() as Raycaster & { firstHitOnly?: boolean };
     ray.firstHitOnly = true;
     const ndc = new Vector2();
-    const hit = (ev: PointerEvent): Vec3 | null => {
+    const hit = (ev: PointerEvent): { p: Vec3; filled: boolean } | null => {
       const mesh = target.current;
       if (!mesh) return null;
       const r = el.getBoundingClientRect();
@@ -216,7 +232,7 @@ function MeasureTool({
       const h = ray.intersectObject(mesh, false)[0];
       if (!h) return null;
       const p = mesh.worldToLocal(h.point.clone()); // world frame (OpenCV, mm)
-      return [p.x, p.y, p.z];
+      return { p: [p.x, p.y, p.z], filled: !!h.face && isFilledFace(mesh.geometry, h.face.a, h.face.b, h.face.c) };
     };
     let down: { x: number; y: number; t: number } | null = null;
     let raf = 0;
@@ -230,8 +246,8 @@ function MeasureTool({
       const dt = performance.now() - down.t;
       down = null;
       if (moved > 5 || dt > 700) return;
-      const p = hit(e);
-      if (p) pickRef.current(p);
+      const h = hit(e);
+      if (h && !h.filled) pickRef.current(h.p); // filled surface was not measured: no point there
     };
     const onMove = (e: PointerEvent) => {
       if (down && (e.buttons & 1) === 1) return; // orbiting
@@ -240,12 +256,15 @@ function MeasureTool({
       raf = requestAnimationFrame(() => {
         raf = 0;
         if (!lastMove) return;
-        setHover(hit(lastMove));
+        const h = hit(lastMove);
+        setHover(h ? h.p : null);
+        setOverFilled(!!h?.filled);
         invalidate();
       });
     };
     const onLeave = () => {
       setHover(null);
+      setOverFilled(false);
       invalidate();
     };
     el.addEventListener("pointerdown", onDown);
@@ -306,8 +325,15 @@ function MeasureTool({
       {enabled && hover ? (
         <mesh position={hover} renderOrder={12}>
           <sphereGeometry args={[r * 0.8, 14, 10]} />
-          <meshBasicMaterial color={accent} depthTest={false} transparent opacity={0.85} />
+          <meshBasicMaterial color={overFilled ? "#8a8781" : accent} depthTest={false} transparent opacity={0.85} />
         </mesh>
+      ) : null}
+      {enabled && hover && overFilled ? (
+        <Html position={hover} zIndexRange={[25, 0]} className="html-label" style={{ pointerEvents: "none" }}>
+          <div className="ml-3 -translate-y-1/2 whitespace-nowrap rounded-full border border-white/15 bg-[rgb(17_20_25/0.88)] px-2 py-0.5 text-[11.5px] text-white shadow-lg">
+            Filled, not measured: pick a scanned spot
+          </div>
+        </Html>
       ) : null}
     </>
   );

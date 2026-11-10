@@ -7,7 +7,7 @@
 import { useEffect, useRef, useState } from "react";
 import { BufferAttribute, BufferGeometry, DynamicDrawUsage } from "three";
 import { ApiError, api } from "../../api/http";
-import { plyGeometry, readPly, type PlyMesh } from "../../three/ply";
+import { disposeMeshGeometry, plyGeometry, readPly, type PlyMesh } from "../../three/ply";
 import { MeshSelection } from "./selection";
 
 export type LoadedMesh = {
@@ -45,7 +45,7 @@ export function highlightOf(m: LoadedMesh): BufferGeometry {
 export function disposeLoadedMesh(m: LoadedMesh | null | undefined): void {
   if (!m) return;
   m.highlight?.dispose();
-  m.geometry.dispose();
+  disposeMeshGeometry(m.geometry);
 }
 
 /** The address of one version: the same file, a new query, so no cache serves an old copy. */

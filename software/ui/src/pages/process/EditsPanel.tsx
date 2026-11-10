@@ -1,7 +1,9 @@
 /**
  * Edits on the mesh: remove floaters, fill holes (the holes it would close are highlighted in
- * the view), smooth and simplify, each with sensible defaults and a one-line explanation, then
- * Apply. Deleting or keeping a selection happens in the view.
+ * the view; optionally the outer edge too, for a watertight mesh), smooth (by default no point
+ * moves more than 2 sigma, when the mesh has its confidence) and simplify (by default to an
+ * accuracy in mm), each with sensible defaults and a one-line explanation, then Apply. Deleting
+ * or keeping a selection happens in the view.
  */
 import { Eraser, PaintBucket, Shrink, Sparkles, WandSparkles, WavesHorizontal, type LucideIcon } from "lucide-react";
 import { useEffect, useId, useMemo, useState } from "react";
@@ -23,7 +25,8 @@ const TABS: { id: EditTab; label: string; icon: LucideIcon }[] = [
 ];
 
 type FloaterMode = "size" | "triangles" | "largest";
-type SimplifyMode = "percent" | "count";
+type SimplifyMode = "accuracy" | "percent" | "count";
+const TOLERANCES = [0.01, 0.02, 0.05, 0.1];
 
 /** 5 → "5", 2.5 → "2.5". */
 const mmText = (v: number) => (Number.isInteger(v) ? String(v) : v.toFixed(1));
@@ -66,13 +69,18 @@ export function EditsPanel({
   const [floaterMode, setFloaterMode] = useState<FloaterMode>("size");
   const [minSize, setMinSize] = useState(5);
   const [minTris, setMinTris] = useState(500);
+  // ---- holes
+  const [watertight, setWatertight] = useState(false);
   // ---- smooth
   const [method, setMethod] = useState<SmoothMethod>("taubin");
   const [strength, setStrength] = useState(0.5);
   const [keepEdges, setKeepEdges] = useState(true);
+  const [withinSigma, setWithinSigma] = useState(true);
+  const hasSigma = !!stats?.sigma_mm;
   // ---- simplify
-  const [simplifyMode, setSimplifyMode] = useState<SimplifyMode>("percent");
+  const [simplifyMode, setSimplifyMode] = useState<SimplifyMode>("accuracy");
   const [pct, setPct] = useState(50);
+  const [tol, setTol] = useState(0.02);
   const tris = stats?.triangles ?? 0;
   const [target, setTarget] = useState(() => Math.max(100, Math.round(tris / 2)));
   useEffect(() => {
@@ -97,20 +105,42 @@ export function EditsPanel({
           };
         return { body: { op: "remove_floaters", params: { min_size_mm: minSize } }, label: `Remove floaters smaller than ${mmText(minSize)} mm`, button: "Remove floaters", invalid: null };
       case "holes":
+        if (watertight) {
+          const borderFits = stats?.border_mm != null && stats.border_mm <= fillMm;
+          return {
+            body: { op: "fill_holes", params: { max_hole_mm: fillMm, watertight: true } },
+            label: `Make watertight: close every opening up to ${mmText(fillMm)} mm`,
+            button: "Make watertight",
+            invalid: stats?.watertight ? "The mesh is already watertight" : stats && !borderFits && fillCount === 0 ? "No opening is that small" : null,
+          };
+        }
         return {
           body: { op: "fill_holes", params: { max_hole_mm: fillMm } },
           label: `Fill holes up to ${mmText(fillMm)} mm`,
           button: "Fill holes",
           invalid: stats && stats.holes === 0 ? "No holes to fill" : fillCount === 0 ? "No hole is that small" : null,
         };
-      case "smooth":
+      case "smooth": {
+        const within = withinSigma && hasSigma;
+        const pctText = `${Math.round(strength * 100)} %${within ? ", within 2σ" : ""}`;
         return {
-          body: { op: "smooth", params: { method, strength, keep_edges: method === "bilateral" ? true : keepEdges } },
-          label: method === "bilateral" ? `Smooth, keep edges (${Math.round(strength * 100)} %)` : `Smooth (Taubin, ${Math.round(strength * 100)} %)`,
+          body: {
+            op: "smooth",
+            params: { method, strength, keep_edges: method === "bilateral" ? true : keepEdges, ...(within ? { within_sigma: true } : {}) },
+          },
+          label: method === "bilateral" ? `Smooth, keep edges (${pctText})` : `Smooth (Taubin, ${pctText})`,
           button: "Smooth",
           invalid: strength <= 0 ? "Choose a strength above 0" : null,
         };
+      }
       case "simplify":
+        if (simplifyMode === "accuracy")
+          return {
+            body: { op: "decimate", params: { max_error_mm: tol } },
+            label: `Simplify to within ${tol} mm`,
+            button: "Simplify",
+            invalid: !(tol > 0) ? "Choose an accuracy above 0" : null,
+          };
         if (simplifyMode === "count")
           return {
             body: { op: "decimate", params: { target_triangles: target } },
@@ -205,7 +235,20 @@ export function EditsPanel({
           </>
         ) : tab === "holes" ? (
           <>
-            <Help>Closes gaps in the surface with a smooth patch, up to a size. The outer edge of the scan is never closed.</Help>
+            <Help>
+              Closes gaps in the surface with a smooth patch, up to a size. Filled surface is marked as not measured: measuring skips it.
+              {watertight ? " The outer edge is closed too, when it fits the size." : " The outer edge of the scan stays open."}
+            </Help>
+            <Switch
+              label="Make it watertight"
+              description={
+                stats?.border_mm != null
+                  ? `Closes the outer edge too (${fmtFixed(stats.border_mm, 0)} mm around), for a part scanned all round: ready to 3D print.`
+                  : "Closes the outer edge too, for a part scanned all round: ready to 3D print."
+              }
+              checked={watertight}
+              onChange={setWatertight}
+            />
             <div className="flex items-center gap-2">
               <span className="shrink-0 text-xs text-muted">Up to</span>
               <div className="min-w-0 flex-1">
@@ -276,6 +319,17 @@ export function EditsPanel({
             {method === "taubin" ? (
               <Switch label="Protect sharp edges" description="Leaves corners and creases alone." checked={keepEdges} onChange={setKeepEdges} />
             ) : null}
+            <Switch
+              label="Stay within each point's uncertainty"
+              description={
+                hasSigma
+                  ? "No point moves more than 2σ from where it was measured: confident areas stay put, noisy ones smooth out."
+                  : "Needs a mesh with confidence data (made with a GPU): this one has none."
+              }
+              checked={withinSigma && hasSigma}
+              onChange={setWithinSigma}
+              disabled={!hasSigma}
+            />
           </>
         ) : (
           <>
@@ -287,11 +341,25 @@ export function EditsPanel({
               value={simplifyMode}
               onChange={setSimplifyMode}
               options={[
+                { value: "accuracy", label: "Accuracy", title: "As few triangles as the surface allows within a tolerance in mm" },
                 { value: "percent", label: "Percent" },
                 { value: "count", label: "Triangle count" },
               ]}
             />
-            {simplifyMode === "percent" ? (
+            {simplifyMode === "accuracy" ? (
+              <>
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <span className="mr-1 text-xs text-muted">Within</span>
+                  {TOLERANCES.map((v) => (
+                    <Button key={v} size="xs" variant={tol === v ? "primary" : "secondary"} onClick={() => setTol(v)}>
+                      {v} mm
+                    </Button>
+                  ))}
+                  <NumberField label="Tolerance, mm" value={tol} onChange={setTol} min={0.001} max={10} step={0.005} unit="mm" className="w-24" />
+                </div>
+                <Help>The surface stays within about this distance of the scan; the result says how far it actually moved. Measurements stay true; the outer edge keeps every point.</Help>
+              </>
+            ) : simplifyMode === "percent" ? (
               <div>
                 <div className="mb-1 flex items-center justify-between text-xs">
                   <span className="text-muted">Keep</span>
@@ -305,7 +373,7 @@ export function EditsPanel({
                 <NumberField label="Target triangle count" value={target} onChange={setTarget} min={100} max={Math.max(101, tris)} unit="tri" className="w-36" />
               </div>
             )}
-            {tris ? (
+            {tris && simplifyMode !== "accuracy" ? (
               <p className="text-xs text-muted">
                 About <b className="font-semibold text-fg tnum">{fmtInt(simplifyMode === "percent" ? Math.round((tris * pct) / 100) : Math.min(target, tris))}</b> triangles
                 after, from {fmtInt(tris)}.

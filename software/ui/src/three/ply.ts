@@ -20,6 +20,8 @@ export type PlyMesh = {
   normals: Float32Array | null;
   /** Each vertex's `quality` when the file has it: OpenHandScan writes its sigma there (mm). */
   quality: Float32Array | null;
+  /** Per triangle: 1 where the face is `filled` (made by hole filling, not measured), when the file says. */
+  filled: Uint8Array | null;
   indices: Uint32Array;
   /** The file's face of each triangle, or null when every face is a triangle (1:1). */
   faceOfTri: Uint32Array | null;
@@ -109,6 +111,7 @@ export function parsePly(buf: ArrayBuffer): PlyMesh | null {
   let positions: Float32Array | null = null;
   let normals: Float32Array | null = null;
   let quality: Float32Array | null = null;
+  let filled: Uint8Array | null = null;
   let indices: Uint32Array | null = null;
   let faceOfTri: Uint32Array | null = null;
   let faceCount = 0;
@@ -175,8 +178,10 @@ export function parsePly(buf: ArrayBuffer): PlyMesh | null {
     } else if (el.name === "face") {
       const li = el.props.findIndex((p) => p.list && (p.name === "vertex_indices" || p.name === "vertex_index"));
       if (li < 0) return null;
+      const fi = el.props.findIndex((p) => !p.list && p.name === "filled");
       const F = el.count;
       faceCount = F;
+      const faceFilled = fi >= 0 ? new Uint8Array(F) : null;
       let idx: Uint32Array = new Uint32Array(F * 3);
       let map: Uint32Array | null = null;
       let n = 0; // triangles written
@@ -191,6 +196,10 @@ export function parsePly(buf: ArrayBuffer): PlyMesh | null {
         for (let k = 0; k < readers.length; k++) {
           const r = readers[k];
           if (!r.count) {
+            if (k === fi) {
+              if (o + r.size > end) return null;
+              faceFilled![f] = r.item(o) ? 1 : 0;
+            }
             o += r.size;
             continue;
           }
@@ -240,6 +249,12 @@ export function parsePly(buf: ArrayBuffer): PlyMesh | null {
       }
       indices = n * 3 === idx.length ? idx : idx.slice(0, n * 3);
       faceOfTri = map ? map.slice(0, n) : null;
+      if (faceFilled && faceFilled.some((v) => v)) {
+        if (faceOfTri) {
+          filled = new Uint8Array(n);
+          for (let t = 0; t < n; t++) filled[t] = faceFilled[faceOfTri[t]];
+        } else filled = faceFilled;
+      }
     } else {
       // Anything else (edges, materials…): skip its records.
       const stride = fixedStride(el);
@@ -258,7 +273,7 @@ export function parsePly(buf: ArrayBuffer): PlyMesh | null {
   if (!positions || !indices) return null;
   const V = positions.length / 3;
   for (let i = 0; i < indices.length; i++) if (indices[i] >= V) return null;
-  return { positions, normals, quality, indices, faceOfTri, faceCount };
+  return { positions, normals, quality, filled, indices, faceOfTri, faceCount };
 }
 
 /** PLY bytes into typed arrays; the fast reader first, three's PLYLoader for anything else. */
@@ -274,7 +289,7 @@ export function readPly(buf: ArrayBuffer): PlyMesh {
   const n = g.getAttribute("normal");
   const normals = n ? (n.array instanceof Float32Array ? n.array : Float32Array.from(n.array as ArrayLike<number>)) : null;
   g.dispose();
-  return { positions, normals, quality: null, indices, faceOfTri: null, faceCount: indices.length / 3 };
+  return { positions, normals, quality: null, filled: null, indices, faceOfTri: null, faceCount: indices.length / 3 };
 }
 
 function hasNormals(n: Float32Array | null): n is Float32Array {
@@ -299,7 +314,41 @@ export function plyGeometry(ply: PlyMesh): BufferGeometry {
     g.computeBoundingSphere();
   }
   if (ply.quality && ply.quality.length * 3 === ply.positions.length) g.userData.sigma = ply.quality;
+  if (ply.filled && ply.filled.length * 3 === ply.indices.length) {
+    // Taken now, in the file's triangle order: a raycast BVH may reorder the index later, so the
+    // filled faces are kept as their own index and as keys of their (sorted) corners.
+    const f = ply.filled;
+    let n = 0;
+    for (let t = 0; t < f.length; t++) n += f[t];
+    const idx = new Uint32Array(n * 3);
+    const keys = new Set<string>();
+    for (let t = 0, w = 0; t < f.length; t++)
+      if (f[t]) {
+        const a = ply.indices[t * 3],
+          b = ply.indices[t * 3 + 1],
+          c = ply.indices[t * 3 + 2];
+        idx[w++] = a;
+        idx[w++] = b;
+        idx[w++] = c;
+        keys.add(faceKey(a, b, c));
+      }
+    g.userData.filledIndex = idx;
+    g.userData.filledKeys = keys;
+  }
   return g;
+}
+
+/** A triangle's key from its corners, in any order. */
+export function faceKey(a: number, b: number, c: number): string {
+  const [x, y, z] = [a, b, c].sort((p, q) => p - q);
+  return `${x},${y},${z}`;
+}
+
+/** Dispose a mesh geometry and the overlays made from it (they share its positions). */
+export function disposeMeshGeometry(g: BufferGeometry | null | undefined): void {
+  if (!g) return;
+  (g.userData.filledGeometry as BufferGeometry | undefined)?.dispose();
+  g.dispose();
 }
 
 /** Area-weighted vertex normals. */

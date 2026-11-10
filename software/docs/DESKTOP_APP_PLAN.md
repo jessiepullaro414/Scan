@@ -496,6 +496,12 @@ Phase 1 is done when full-quality processing is at least 3x faster on the RTX la
    - flag filled faces, so measuring tools skip them;
    - smoothing that does less where the data is confident;
    - an optional watertight fill with a distance limit.
+
+   **Status (2026-11-10): done.**
+   - **Simplify by accuracy** (the default): within 0.01–0.1 mm. The result says how far the surface actually moved: on simulated scans 99.9 % of it within the tolerance, all within about twice it.
+   - **Filled faces are flagged:** stored in the PLY, counted in the stats, drawn striped grey, and the viewer's distance tool won't put a point on them.
+   - **Smoothing within 2σ** (the default when the mesh has confidence): no point moves more than twice its own uncertainty.
+   - **Make watertight:** the hole fill can close the outer edge too, within its size limit, for parts scanned all round. It is a size limit, not Poisson with an envelope (research plan 4.6.4).
 5. **World-space spacetime stereo, as a trial build** (#2, research plan 7.2): refine the fused surface patch by patch against the raw images of every frame that saw it, instead of averaging per-frame depth.
    - Each frame lights a patch with a different dot arrangement, so the camera-fixed errors of per-frame matching never arise.
    - On the simulator, the prototype cut the median error 4–6 times where the scan concentrates.

@@ -436,13 +436,13 @@ export type MeshOp = "remove_floaters" | "fill_holes" | "smooth" | "decimate" | 
 export type RecipeMeshOp = Exclude<MeshOp, "delete_faces" | "keep_faces">;
 
 export type RemoveFloatersParams = { min_triangles?: number; min_size_mm?: number; keep_largest_only?: boolean };
-/** `max_hole_mm`: the largest hole perimeter to fill. */
-export type FillHolesParams = { max_hole_mm: number };
+/** `max_hole_mm`: the largest hole perimeter to fill; `watertight`: the outer edge too. */
+export type FillHolesParams = { max_hole_mm: number; watertight?: boolean };
 export type SmoothMethod = "taubin" | "bilateral";
-/** `strength` 0..1. */
-export type SmoothParams = { method: SmoothMethod; strength: number; keep_edges?: boolean };
-/** One of the two. */
-export type DecimateParams = { target_triangles?: number; ratio?: number };
+/** `strength` 0..1; `within_sigma`: no vertex moves more than twice its sigma. */
+export type SmoothParams = { method: SmoothMethod; strength: number; keep_edges?: boolean; within_sigma?: boolean };
+/** A target (one of the two) and / or a tolerance in mm. */
+export type DecimateParams = { target_triangles?: number; ratio?: number; max_error_mm?: number };
 /** base64 of little-endian uint32 face indices of the CURRENT mesh. */
 export type FacesParams = { faces: string };
 
@@ -461,6 +461,8 @@ export type MeshStats = {
   volume_cm3: number | null; // only when watertight
   /** The confidence, when the mesh has per-vertex sigmas (the PLY `quality`); shares of the surface. */
   sigma_mm?: SigmaStats | null;
+  /** Area made by hole filling, not measured (faces with the PLY face property `filled`). */
+  filled_cm2?: number;
 };
 
 export type SigmaStats = {

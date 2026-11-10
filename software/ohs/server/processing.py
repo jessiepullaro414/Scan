@@ -132,14 +132,16 @@ BUILTIN_RECIPES: list[dict] = [
      "settings": {"quality": "full", "straighten": "auto", "refine": "auto", "voxel_mm": None},
      "ops": [{"op": "remove_floaters", "params": {"min_size_mm": 5.0, "min_fraction": 0.01}},
              {"op": "fill_holes", "params": {"max_hole_mm": 15.0}},
-             {"op": "smooth", "params": {"method": "bilateral", "strength": 0.5, "keep_edges": True}}]},
+             {"op": "smooth", "params": {"method": "bilateral", "strength": 0.5, "keep_edges": True,
+                                         "within_sigma": True}}]},
     {"id": "bracket", "name": "Bracket / mechanical", "builtin": True,
      "description": "For brackets and machined parts: keeps sharp edges, light smoothing, closes pin holes up to "
                     "5 mm.",
      "settings": {"quality": "full", "straighten": "auto", "refine": "auto", "voxel_mm": None},
      "ops": [{"op": "remove_floaters", "params": {"min_size_mm": 5.0, "min_fraction": 0.01}},
              {"op": "fill_holes", "params": {"max_hole_mm": 5.0}},
-             {"op": "smooth", "params": {"method": "bilateral", "strength": 0.25, "keep_edges": True}}]},
+             {"op": "smooth", "params": {"method": "bilateral", "strength": 0.25, "keep_edges": True,
+                                         "within_sigma": True}}]},
     {"id": "quick-preview", "name": "Quick preview", "builtin": True,
      "description": "Fast look at a scan: preview quality, no straightening, simplified to about 200,000 "
                     "triangles. Not for measuring.",
@@ -178,8 +180,9 @@ def normalize_op(op: str, params: dict | None) -> tuple[dict, str]:
     ``delete_faces`` / ``keep_faces`` are validated by the caller (the faces are decoded there)."""
     params = dict(params or {})
     allowed = {"remove_floaters": {"min_triangles", "min_size_mm", "keep_largest_only", "min_fraction"},
-               "fill_holes": {"max_hole_mm"}, "smooth": {"method", "strength", "keep_edges"},
-               "decimate": {"target_triangles", "ratio"}, "delete_faces": {"faces"}, "keep_faces": {"faces"}}
+               "fill_holes": {"max_hole_mm", "watertight"}, "smooth": {"method", "strength", "keep_edges", "within_sigma"},
+               "decimate": {"target_triangles", "ratio", "max_error_mm"}, "delete_faces": {"faces"},
+               "keep_faces": {"faces"}}
     if op not in allowed:
         raise ApiError(422, f"unknown edit {op!r}", f"use one of {', '.join(MESH_OPS)}")
     extra = sorted(set(params) - allowed[op])
@@ -215,6 +218,11 @@ def normalize_op(op: str, params: dict | None) -> tuple[dict, str]:
         m = _num(params, "max_hole_mm", op, 0, 1e5, lo_open=True)
         if m is None:
             raise ApiError(422, "fill_holes: max_hole_mm is missing", "send the largest hole perimeter to fill, in mm")
+        wt = params.get("watertight", False)
+        if not isinstance(wt, bool):
+            raise ApiError(422, "fill_holes: watertight must be true or false", "send true or false")
+        if wt:
+            return {"max_hole_mm": m, "watertight": True}, f"Make watertight: close every opening up to {_fmt(m)} mm"
         return {"max_hole_mm": m}, f"Fill holes up to {_fmt(m)} mm"
     if op == "smooth":
         method = params.get("method")
@@ -226,16 +234,34 @@ def normalize_op(op: str, params: dict | None) -> tuple[dict, str]:
         keep = params.get("keep_edges", True)
         if not isinstance(keep, bool):
             raise ApiError(422, "smooth: keep_edges must be true or false", "send true or false")
-        label = f"Smooth ({method}, {round(100 * s)} %{', edges kept' if keep else ''})"
-        return {"method": method, "strength": s, "keep_edges": keep}, label
+        within = params.get("within_sigma", False)
+        if not isinstance(within, bool):
+            raise ApiError(422, "smooth: within_sigma must be true or false", "send true or false")
+        label = f"Smooth ({method}, {round(100 * s)} %{', edges kept' if keep else ''}{', within 2σ' if within else ''})"
+        out_s: dict[str, Any] = {"method": method, "strength": s, "keep_edges": keep}
+        if within:
+            out_s["within_sigma"] = True
+        return out_s, label
     if op == "decimate":
         t = _num(params, "target_triangles", op, 4, 1e9, integer=True)
         r = _num(params, "ratio", op, 0, 1, lo_open=True)
-        if (t is None) == (r is None):
-            raise ApiError(422, "decimate: send either target_triangles or ratio", "for example {\"target_triangles\": 200000}")
+        e = _num(params, "max_error_mm", op, 0.001, 10)
+        if t is not None and r is not None or (t is None and r is None and e is None):
+            raise ApiError(422, "decimate: send target_triangles or ratio, and / or max_error_mm",
+                           "for example {\"target_triangles\": 200000} or {\"max_error_mm\": 0.02}")
+        out_d: dict[str, Any] = {}
         if t is not None:
-            return {"target_triangles": t}, f"Simplify to {t:,} triangles"
-        return {"ratio": r}, f"Simplify to {_fmt(100 * r)} % of the triangles"
+            out_d["target_triangles"] = t
+            label = f"Simplify to {t:,} triangles"
+        elif r is not None:
+            out_d["ratio"] = r
+            label = f"Simplify to {_fmt(100 * r)} % of the triangles"
+        else:
+            label = ""
+        if e is not None:
+            out_d["max_error_mm"] = e
+            label = f"{label} (within {_fmt(e)} mm)" if label else f"Simplify to within {_fmt(e)} mm"
+        return out_d, label
     return params, op
 
 
@@ -387,9 +413,9 @@ def _write_json(path: Path, data: Any) -> None:
 
 
 def _save_npz(path: Path, V: np.ndarray, F: np.ndarray, N: np.ndarray | None = None,
-              S: np.ndarray | None = None) -> None:
-    """A cached step: V float32, F int32 and, when given, the vertex normals (float16) and sigmas
-    (float32, mm)."""
+              S: np.ndarray | None = None, filled: np.ndarray | None = None) -> None:
+    """A cached step: V float32, F int32 and, when given, the vertex normals (float16), sigmas
+    (float32, mm) and the faces' filled flags (bool)."""
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(f".{path.stem}.tmp-{uuid.uuid4().hex[:8]}.npz")
     arrays = {"V": np.asarray(V, dtype=np.float32), "F": np.asarray(F, dtype=np.int32)}
@@ -397,17 +423,21 @@ def _save_npz(path: Path, V: np.ndarray, F: np.ndarray, N: np.ndarray | None = N
         arrays["N"] = np.asarray(N, dtype=np.float16)
     if S is not None:
         arrays["S"] = np.asarray(S, dtype=np.float32)
+    if filled is not None:
+        arrays["filled"] = np.asarray(filled, dtype=bool)
     with open(tmp, "wb") as fh:
         np.savez(fh, **arrays)
     _retry(lambda: os.replace(tmp, path), f"replacing {path}")
 
 
-def _load_npz(path: Path, normals: bool = False) -> tuple[np.ndarray, np.ndarray, np.ndarray | None, np.ndarray | None]:
-    """``(V, F, N, S)`` of a cached step; ``N`` only when asked for, None when not stored (like ``S``)."""
+def _load_npz(path: Path, normals: bool = False) -> tuple[np.ndarray, np.ndarray, np.ndarray | None, np.ndarray | None,
+                                                          np.ndarray | None]:
+    """``(V, F, N, S, filled)`` of a cached step; ``N`` only when asked for; None when not stored."""
     with np.load(path) as z:
         N = z["N"].astype(np.float32) if normals and "N" in z.files else None
         S = z["S"].astype(np.float32) if "S" in z.files else None
-        return z["V"].astype(np.float64), z["F"].astype(np.int64), N, S
+        Fl = z["filled"].astype(bool) if "filled" in z.files else None
+        return z["V"].astype(np.float64), z["F"].astype(np.int64), N, S, Fl
 
 
 _STL = np.dtype([("n", "<f4", (3,)), ("v", "<f4", (3, 3)), ("attr", "<u2")])
@@ -476,11 +506,13 @@ def _read_stage_mesh(path: Path) -> tuple[np.ndarray, np.ndarray, np.ndarray | N
     return V2, F2, S
 
 
-def _stats(V: np.ndarray, F: np.ndarray, S: np.ndarray | None) -> dict:
-    """``MeshStats`` with the confidence (``sigma_mm``, None without sigmas)."""
-    from ohs.mesh import mesh_stats, sigma_stats
+def _stats(V: np.ndarray, F: np.ndarray, S: np.ndarray | None, filled: np.ndarray | None = None) -> dict:
+    """``MeshStats`` with the confidence (``sigma_mm``, None without sigmas) and the area made by
+    hole filling (``filled_cm2``)."""
+    from ohs.mesh import filled_area, mesh_stats, sigma_stats
 
-    return {**mesh_stats(V, F), "sigma_mm": sigma_stats(S, V, F)}
+    return {**mesh_stats(V, F), "sigma_mm": sigma_stats(S, V, F),
+            "filled_cm2": round(filled_area(V, F, filled) / 100.0, 2)}
 
 
 # --------------------------------------------------------------------------- per scan
@@ -786,33 +818,35 @@ class ProcessManager:
         """The mesh after ``k`` edits: from the cache, else replayed from the nearest cached step."""
         return self._load_step(sp, k)[:2]
 
-    def _load_step(self, sp: ScanProcess, k: int) -> tuple[np.ndarray, np.ndarray, np.ndarray | None]:
-        """:meth:`load_step` with each vertex's sigma (None when the base has none)."""
-        from ohs.mesh import carry_sigma
+    def _load_step(self, sp: ScanProcess, k: int) -> tuple[np.ndarray, np.ndarray, np.ndarray | None,
+                                                            np.ndarray | None]:
+        """:meth:`load_step` with each vertex's sigma and each face's filled flag (None without)."""
+        from ohs.mesh import carry_filled, carry_sigma
 
         with sp.lock:
             path = sp.cache_path(k)
             if path.is_file():
-                V, F, _, S = _load_npz(path)
-                return V, F, S
+                V, F, _, S, Fl = _load_npz(path)
+                return V, F, S, Fl
             j = k - 1
             while j > 0 and not sp.cache_path(j).is_file():
                 j -= 1
             if not sp.cache_path(j).is_file():
                 raise ApiError(500, "the base mesh of this scan is missing from the process folder",
                                "run the last stage again (Track, Straighten or Fuse)")
-            V, F, _, S = _load_npz(sp.cache_path(j))
+            V, F, _, S, Fl = _load_npz(sp.cache_path(j))
             edits = sp.state["edits"]
             log.info("scan %s/%s: rebuilding step %d from step %d (%d edits)", sp.pid, sp.sid, k, j, k - j)
             for i in range(j, k):
                 e = edits[i]
                 faces = np.load(sp.selection_path(str(e["id"]))) if e["op"] in ("delete_faces", "keep_faces") else None
-                V2, F2 = self._apply(sp, e["op"], e["params"], V, F, edit_id=e["id"], faces=faces)
+                V2, F2 = self._apply(sp, e["op"], e["params"], V, F, edit_id=e["id"], faces=faces, S=S)
                 S = carry_sigma(e["op"], V, F, S, V2, faces)
+                Fl = carry_filled(e["op"], V, F, Fl, V2, F2, faces)
                 V, F = V2, F2
                 if i + 1 >= k - CACHE_STEPS:
-                    _save_npz(sp.cache_path(i + 1), V, F, S=S)
-            return V, F, S
+                    _save_npz(sp.cache_path(i + 1), V, F, S=S, filled=Fl)
+            return V, F, S, Fl
 
     def current_mesh(self, sp: ScanProcess) -> tuple[np.ndarray, np.ndarray]:
         self._need_base(sp)
@@ -825,8 +859,9 @@ class ProcessManager:
         return tuple(fmts)
 
     def _write_result(self, sp: ScanProcess, V: np.ndarray, F: np.ndarray, N: np.ndarray | None = None,
-                      S: np.ndarray | None = None) -> None:
-        """The result files of a step; the PLY carries each vertex's sigma (``quality``) when known."""
+                      S: np.ndarray | None = None, filled: np.ndarray | None = None) -> None:
+        """The result files of a step; the PLY carries each vertex's sigma (``quality``) and each
+        face's filled flag (``filled``) when known."""
         from ohs.mesh import vertex_normals
         from ohs.track.export import save_mesh
 
@@ -835,12 +870,14 @@ class ProcessManager:
             N = vertex_normals(V, F)
         if S is not None and len(S) != len(V):
             S = None
+        if filled is not None and len(filled) != len(F):
+            filled = None
         for ext in self._formats():
             tmp = sp.result_dir / f".mesh-{uuid.uuid4().hex[:8]}.{ext}"
             if ext == "stl":
                 _write_stl(tmp, V, F)
             else:
-                save_mesh(tmp, V, F, N, quality=S if ext == "ply" else None)
+                save_mesh(tmp, V, F, N, quality=S if ext == "ply" else None, filled=filled if ext == "ply" else None)
             dst = sp.result_dir / f"mesh.{ext}"
             _retry(lambda t=tmp, d=dst: os.replace(t, d), f"replacing {dst}")
         stale = sp.result_dir / "mesh.obj"
@@ -848,27 +885,27 @@ class ProcessManager:
             safe_call("removing an old mesh.obj", stale.unlink)
 
     def _show_step(self, sp: ScanProcess, k: int, V: np.ndarray | None = None, F: np.ndarray | None = None,
-                   N: np.ndarray | None = None, S: np.ndarray | None = None) -> None:
+                   N: np.ndarray | None = None, S: np.ndarray | None = None, filled: np.ndarray | None = None) -> None:
         """Make step ``k`` the current mesh: result files, version + 1, save (under the scan lock).
 
-        Undo / redo pass no mesh: the cached step (with its normals and sigmas) is loaded."""
+        Undo / redo pass no mesh: the cached step (with its normals, sigmas and flags) is loaded."""
         if V is None:
             path = sp.cache_path(k)
             if path.is_file():
-                V, F, N, S = _load_npz(path, normals=True)
+                V, F, N, S, filled = _load_npz(path, normals=True)
             else:
-                V, F, S = self._load_step(sp, k)
+                V, F, S, filled = self._load_step(sp, k)
         sp.state["cursor"] = k
-        self._write_result(sp, V, F, N, S)
+        self._write_result(sp, V, F, N, S, filled)
         sp.state["version"] = int(sp.state["version"]) + 1
         sp.prune_cache()
         sp.save()
 
     # ------------------------------------------------------------------ edits
     def _apply(self, sp: ScanProcess, op: str, params: dict, V: np.ndarray, F: np.ndarray, *,
-               edit_id: str | None = None, faces: np.ndarray | None = None,
+               edit_id: str | None = None, faces: np.ndarray | None = None, S: np.ndarray | None = None,
                progress: Callable[[float, str], None] | None = None) -> tuple[np.ndarray, np.ndarray]:
-        """Run one mesh operation on ``(V, F)``."""
+        """Run one mesh operation on ``(V, F)`` (``S``: the vertices' sigmas, for ``within_sigma``)."""
         from ohs import mesh as M
 
         if op in ("delete_faces", "keep_faces"):
@@ -881,11 +918,16 @@ class ProcessManager:
         if op == "remove_floaters":
             return M.remove_floaters(V, F, **params)
         if op == "fill_holes":
-            return M.fill_holes(V, F, params["max_hole_mm"], progress=progress)
+            return M.fill_holes(V, F, params["max_hole_mm"], include_borders=bool(params.get("watertight")),
+                                progress=progress)
         if op == "smooth":
-            return M.smooth(V, F, params["method"], params["strength"], params.get("keep_edges", True), progress=progress)
+            # within 2 sigma: each vertex moves at most twice its own standard deviation (no sigmas: no limit)
+            limit = 2.0 * S if params.get("within_sigma") and S is not None and len(S) == len(V) else None
+            return M.smooth(V, F, params["method"], params["strength"], params.get("keep_edges", True), limit=limit,
+                            progress=progress)
         if op == "decimate":
-            return M.decimate(V, F, params.get("target_triangles"), params.get("ratio"), progress=progress)
+            return M.decimate(V, F, params.get("target_triangles"), params.get("ratio"),
+                              max_error_mm=params.get("max_error_mm"), progress=progress)
         raise ApiError(422, f"unknown edit {op!r}", f"use one of {', '.join(MESH_OPS)}")
 
     @staticmethod
@@ -899,23 +941,39 @@ class ProcessManager:
             n = int(b.get("components", 0)) - int(after["components"])
             return f"Removed {n:,} loose piece{'s' if n != 1 else ''} ({len(F) - len(F2):,} triangles)"
         if op == "fill_holes":
+            left = int(after["holes"]) + (after.get("border_mm") is not None)
+            if params.get("watertight"):
+                if len(F2) == len(F):
+                    return (f"No opening up to {_fmt(params['max_hole_mm'])} mm: nothing was closed"
+                            if left else "Already watertight: nothing to close")
+                return (f"Closed every opening ({len(F2) - len(F):,} new triangles): the mesh is watertight"
+                        if after.get("watertight") else
+                        f"Closed openings with {len(F2) - len(F):,} new triangles; not watertight yet: {left:,} "
+                        f"opening{'s are' if left != 1 else ' is'} larger than {_fmt(params['max_hole_mm'])} mm")
             if len(F2) == len(F):
                 return f"No holes up to {_fmt(params['max_hole_mm'])} mm: nothing was filled"
             n = int(b.get("holes", 0)) - int(after["holes"])
             return f"Filled {n:,} hole{'s' if n != 1 else ''} ({len(F2) - len(F):,} new triangles)"
         if op == "smooth" and len(V2) == len(V) and len(V):
             d = np.linalg.norm(V2 - V, axis=1)
-            return f"Moved the surface by {float(np.mean(d)):.3f} mm on average and {float(np.max(d)):.2f} mm at most"
+            within = ", each point within 2σ of where it was measured" if params.get("within_sigma") else ""
+            return f"Moved the surface by {float(np.mean(d)):.3f} mm on average and {float(np.max(d)):.2f} mm at most{within}"
+        if op == "decimate" and len(F2) < len(F):
+            from ohs.mesh import deviation
+
+            dev = deviation(V, V2, F2)
+            return (f"{len(F):,} -> {len(F2):,} triangles; the surface moved at most {float(dev.max()):.3f} mm "
+                    f"({float(np.percentile(dev, 99.9)):.3f} mm for 99.9 % of it)")
         return f"{len(F):,} -> {len(F2):,} triangles"
 
     def _commit_edit(self, sp: ScanProcess, op: str, params: dict, label: str, V: np.ndarray, F: np.ndarray,
                      ms: float, summary: str, job_id: str | None, faces: np.ndarray | None = None,
-                     stats: dict | None = None, S: np.ndarray | None = None) -> dict:
+                     stats: dict | None = None, S: np.ndarray | None = None, filled: np.ndarray | None = None) -> dict:
         """Append an edit after the cursor (the redo steps are dropped) and show it."""
         from ohs.mesh import vertex_normals
 
         if stats is None:
-            stats = _stats(V, F, S)
+            stats = _stats(V, F, S, filled)
         N = vertex_normals(V, F)
         with sp.lock:
             k = sp.state["cursor"]
@@ -928,21 +986,21 @@ class ProcessManager:
                 sp.selection_path(eid).parent.mkdir(parents=True, exist_ok=True)
                 np.save(sp.selection_path(eid), faces.astype(np.int64))
             sp.state["edits"].append(entry)
-            _save_npz(sp.cache_path(k + 1), V, F, N, S)
-            self._show_step(sp, k + 1, V, F, N, S)
+            _save_npz(sp.cache_path(k + 1), V, F, N, S, filled)
+            self._show_step(sp, k + 1, V, F, N, S, filled)
             return {key: v for key, v in entry.items() if key != "stats"}
 
     def _run_edit(self, ctx: Any, sp: ScanProcess, op: str, params: dict, label: str, prog: _Prog,
                   faces: np.ndarray | None = None) -> dict:
-        from ohs.mesh import carry_sigma
+        from ohs.mesh import carry_filled, carry_sigma
 
         with sp.lock:
             k = sp.state["cursor"]
             before = sp.stats_at(k)
         prog(0.02, f"{label}: loading the mesh", force=True)
-        V, F, S = self._load_step(sp, k)
+        V, F, S, Fl = self._load_step(sp, k)
         t0 = time.perf_counter()
-        V2, F2 = self._apply(sp, op, params, V, F, faces=faces,
+        V2, F2 = self._apply(sp, op, params, V, F, faces=faces, S=S,
                              progress=lambda f, m=None: prog(0.05 + 0.8 * f, f"{label}: {m}" if m else label))
         ms = 1e3 * (time.perf_counter() - t0)
         if len(F2) == 0:
@@ -950,10 +1008,11 @@ class ProcessManager:
         ctx.check()
         prog(0.88, f"{label}: measuring the result", force=True)
         S2 = carry_sigma(op, V, F, S, V2, faces)
-        stats = _stats(V2, F2, S2)
+        Fl2 = carry_filled(op, V, F, Fl, V2, F2, faces)
+        stats = _stats(V2, F2, S2, Fl2)
         summary = self._summary(op, params, V, F, V2, F2, before, stats)
         prog(0.94, f"{label}: saving", force=True)
-        return self._commit_edit(sp, op, params, label, V2, F2, ms, summary, ctx.job.id, faces, stats, S2)
+        return self._commit_edit(sp, op, params, label, V2, F2, ms, summary, ctx.job.id, faces, stats, S2, Fl2)
 
     def submit_edit(self, pid: str, sid: str, op: str, params: dict | None, version: int | None = None) -> Any:
         if op not in MESH_OPS:

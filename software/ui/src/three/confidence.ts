@@ -8,8 +8,9 @@
  * neutral grey with stripes, so it doesn't rest on colour alone. The clay shading is softened so
  * the colour stays close to the legend's while the shape still reads.
  */
-import { BufferAttribute, DoubleSide, MeshMatcapMaterial, type BufferGeometry } from "three";
+import { BufferAttribute, BufferGeometry, DoubleSide, MeshBasicMaterial, MeshMatcapMaterial } from "three";
 import { clayMatcap, SRGB_TO_LINEAR } from "./materials";
+import { faceKey } from "./ply";
 
 export type Theme = "light" | "dark";
 
@@ -175,5 +176,56 @@ export function confidenceMaterial(): MeshMatcapMaterial {
       );
   };
   m.customProgramCacheKey = () => "ohs-confidence";
+  return m;
+}
+
+/**
+ * Whether the triangle with corners `a`, `b`, `c` was made by hole filling (not measured). By
+ * its corners, not its position in the index: a raycast BVH reorders the index (`plyGeometry`
+ * keeps the filled faces' keys from the file's order).
+ */
+export function isFilledFace(g: BufferGeometry | null | undefined, a: number, b: number, c: number): boolean {
+  const keys = g?.userData.filledKeys as Set<string> | undefined;
+  return !!keys && keys.has(faceKey(a, b, c));
+}
+
+/**
+ * The filled faces of `g` as their own geometry (sharing its positions; made once and kept in
+ * `userData.filledGeometry`, disposed with it by `disposeMeshGeometry`), or null without any.
+ */
+export function filledGeometry(g: BufferGeometry): BufferGeometry | null {
+  const idx = g.userData.filledIndex as Uint32Array | undefined;
+  if (!idx || !idx.length) return null;
+  const cached = g.userData.filledGeometry as BufferGeometry | undefined;
+  if (cached) return cached;
+  const fg = new BufferGeometry();
+  fg.setAttribute("position", g.getAttribute("position"));
+  fg.setIndex(new BufferAttribute(idx, 1));
+  fg.boundingBox = g.boundingBox;
+  fg.boundingSphere = g.boundingSphere;
+  g.userData.filledGeometry = fg;
+  return fg;
+}
+
+/** The look of filled faces over any shading: the "not measured" grey, striped, drawn on top. */
+export function filledMaterial(theme: Theme): MeshBasicMaterial {
+  const m = new MeshBasicMaterial({
+    color: NOT_MEASURED[theme],
+    side: DoubleSide,
+    transparent: true,
+    opacity: 0.9,
+    depthWrite: false,
+    polygonOffset: true,
+    polygonOffsetFactor: -1,
+    polygonOffsetUnits: -1,
+    toneMapped: false,
+  });
+  m.onBeforeCompile = (shader) => {
+    shader.fragmentShader = shader.fragmentShader.replace(
+      "#include <color_fragment>",
+      ["#include <color_fragment>", "  diffuseColor.rgb *= mix(1.0, 0.8, step(0.5, fract((gl_FragCoord.x + gl_FragCoord.y) / 10.0)));"].join("\n"),
+    );
+  };
+  m.customProgramCacheKey = () => "ohs-filled";
   return m;
 }

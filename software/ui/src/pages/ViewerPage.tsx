@@ -43,7 +43,7 @@ import { cn, useHotkeys } from "../lib/util";
 import { isActive, useScanJob } from "../store/jobs";
 import { useProjects } from "../store/projects";
 import { sigmaOf } from "../three/confidence";
-import { plyGeometry, readPly } from "../three/ply";
+import { disposeMeshGeometry, plyGeometry, readPly } from "../three/ply";
 import { viewBus } from "../three/viewBus";
 import { ConfidenceLegend } from "./viewer/ConfidenceLegend";
 import { fmtSigma, ViewerCanvas, type Measurement, type Shading, type Vec3 } from "./viewer/ViewerCanvas";
@@ -228,7 +228,7 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
             setTimeout(() => {
               try {
                 const g = plyGeometry(readPly(buf));
-                geomRef.current?.dispose();
+                disposeMeshGeometry(geomRef.current);
                 geomRef.current = g;
                 setLoad({ phase: "ready", geometry: g, bytes: buf.byteLength });
                 setFrameKey((k) => k + 1);
@@ -248,7 +248,7 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
 
   useEffect(
     () => () => {
-      geomRef.current?.dispose();
+      disposeMeshGeometry(geomRef.current);
     },
     [],
   );

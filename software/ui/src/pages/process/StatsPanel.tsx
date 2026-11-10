@@ -82,6 +82,22 @@ export function StatsPanel({ stats, loading }: { stats: MeshStats | null; loadin
                   ]
                 : null,
               ["Area", <span>{num(stats.area_cm2, 1)} cm²</span>],
+              stats.filled_cm2
+                ? [
+                    "Filled",
+                    <span title="Made by hole filling: not measured, so measuring skips it (striped grey in the view)">
+                      {num(stats.filled_cm2, stats.filled_cm2 < 1 ? 2 : 1)} cm² <span className="text-muted">not measured</span>
+                    </span>,
+                  ]
+                : null,
+              stats.sigma_mm
+                ? [
+                    "Confidence",
+                    <span title="Share of the surface whose 1σ uncertainty is at most 0.1 mm">
+                      {Math.round(stats.sigma_mm.within_0_1 * 100)} % within 0.1 mm <span className="text-muted">(median ±{num(stats.sigma_mm.median, 2)} mm)</span>
+                    </span>,
+                  ]
+                : null,
               [
                 "Volume",
                 stats.volume_cm3 !== null ? <span>{num(stats.volume_cm3, 1)} cm³</span> : <span className="text-muted">Only for a watertight mesh</span>,

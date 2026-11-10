@@ -388,7 +388,7 @@ def test_recipes_apply_edits_and_all(env):
     assert j["result"]["message"].startswith("Bracket / mechanical applied")
     s = get(b + "/process").json()
     assert [e["op"] for e in s["edits"]] == ["remove_floaters", "fill_holes", "smooth"] and s["cursor"] == 3
-    assert s["edits"][2]["params"] == {"method": "bilateral", "strength": 0.25, "keep_edges": True}
+    assert s["edits"][2]["params"] == {"method": "bilateral", "strength": 0.25, "keep_edges": True, "within_sigma": True}
     assert s["base"] == before["base"] and s["stages"]["track"] == before["stages"]["track"]
     # all: the stages with the recipe's settings, then its ops
     rid = env["user_recipe"]
@@ -530,6 +530,49 @@ def test_refine_with_lasers(env):
     run_job(env, post(b2 + "/process/refine"), "process_refine")
     rf = get(b2 + "/process").json()["stages"]["refine"]
     assert rf["state"] == "skipped" and "no laser points" in rf["summary"]
+
+
+def test_measurement_safe_edits(env):
+    pid, sid = add_scan(env, "Safe edits", env["rec"])
+    b = base_url(env, pid, sid)
+    run_job(env, post(b + "/process/track", {"quality": "preview"}), "process_track")
+    err(post(b + "/process/edits", {"op": "decimate", "params": {}}), 422, "max_error_mm")
+    err(post(b + "/process/edits", {"op": "smooth", "params": {"method": "taubin", "strength": 0.3,
+                                                                "within_sigma": "yes"}}), 422, "within_sigma")
+    err(post(b + "/process/edits", {"op": "fill_holes", "params": {"max_hole_mm": 5, "watertight": 1}}), 422,
+        "watertight")
+    s0 = get(b + "/process").json()["current"]["stats"]
+    assert s0["filled_cm2"] == 0.0
+    # filled faces are flagged in the PLY and counted
+    j = run_job(env, post(b + "/process/edits", {"op": "fill_holes", "params": {"max_hole_mm": 60}}), "mesh_edit")
+    s = get(b + "/process").json()
+    p = env["root"] / f"dl-{time.monotonic_ns()}.ply"
+    p.write_bytes(get(env["url"] + s["current"]["mesh_url"]).content)
+    d = load_ply(p)
+    new = s["current"]["stats"]["triangles"] - s0["triangles"]
+    assert new > 0 and d["filled"] is not None and int(d["filled"].sum()) == new
+    assert s["current"]["stats"]["filled_cm2"] > 0
+    # the flags follow the next edits; undo brings back the step's own
+    run_job(env, post(b + "/process/edits", {"op": "smooth", "params": {"method": "bilateral", "strength": 0.3,
+                                                                          "within_sigma": True}}), "mesh_edit")
+    s = get(b + "/process").json()
+    assert s["edits"][-1]["label"].endswith("within 2σ)") and s["current"]["stats"]["filled_cm2"] > 0
+    j = run_job(env, post(b + "/process/edits", {"op": "decimate", "params": {"max_error_mm": 0.05}}), "mesh_edit")
+    s = get(b + "/process").json()
+    e = s["edits"][-1]
+    assert e["label"] == "Simplify to within 0.05 mm" and "moved at most" in e["summary"]
+    assert e["triangles_after"] < s["edits"][-2]["triangles_after"] and s["current"]["stats"]["filled_cm2"] > 0
+    u = post(b + "/process/undo").json()
+    u = post(b + "/process/undo").json()
+    u = post(b + "/process/undo").json()
+    assert u["cursor"] == 0 and u["current"]["stats"]["filled_cm2"] == 0.0
+    p.write_bytes(get(env["url"] + u["current"]["mesh_url"]).content)
+    assert load_ply(p)["filled"] is None
+    # watertight: an open scan's outer edge is far over any reasonable limit, and the summary says so
+    j = run_job(env, post(b + "/process/edits", {"op": "fill_holes", "params": {"max_hole_mm": 60, "watertight": True}}),
+                "mesh_edit")
+    e = get(b + "/process").json()["edits"][-1]
+    assert e["label"] == "Make watertight: close every opening up to 60 mm" and "not watertight yet" in e["summary"]
 
 
 def test_a_scan_processed_before_m3_is_taken_over(env):

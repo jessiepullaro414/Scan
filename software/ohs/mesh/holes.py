@@ -2,7 +2,9 @@
 
 What is a hole: a closed boundary loop that is not an outer border
 (:func:`ohs.mesh.topology.classify_loops`: the longest loop of an open piece is the edge of the
-scanned area and is never filled). Its size is its perimeter in mm.
+scanned area, left open unless ``include_borders`` asks for a watertight mesh). Its size is its
+perimeter in mm. The new faces come after the old ones, so the caller can mark them as filled
+(not measured: :func:`ohs.mesh.carry_filled`).
 
 :func:`fill_holes` closes every hole up to ``max_hole_mm`` in three steps per hole:
 
@@ -453,18 +455,19 @@ def _simple_loops(verts: list[int]) -> list[list[int]]:
     return out
 
 
-def fill_holes(V: np.ndarray, F: np.ndarray, max_hole_mm: float, *,
+def fill_holes(V: np.ndarray, F: np.ndarray, max_hole_mm: float, *, include_borders: bool = False,
                progress: Progress | None = None) -> tuple[np.ndarray, np.ndarray]:
     """Fill every hole whose perimeter is at most ``max_hole_mm`` (see the module docstring).
 
-    Outer borders are never filled. Returns ``(V, F)``: the input vertices and faces first, then
-    the new ones.
+    Outer borders are left open unless ``include_borders`` ("watertight": the edge of a part
+    scanned all round, e.g. where it sat on the table, is closed too, within the same size
+    limit). Returns ``(V, F)``: the input vertices and faces first, then the new ones.
     """
     V, F = as_mesh(V, F)
     if len(F) == 0 or not max_hole_mm or max_hole_mm <= 0:
         return V.copy(), F.copy()
     loops, is_border, info = find_holes(V, F)
-    cand = [k for k in range(len(loops)) if loops.closed[k] and not is_border[k]
+    cand = [k for k in range(len(loops)) if loops.closed[k] and (include_borders or not is_border[k])
             and loops.perimeter[k] <= float(max_hole_mm) and len(loops.verts(k)) >= 3]
     if not cand:
         return V.copy(), F.copy()

@@ -5,6 +5,8 @@ carries it (``S``, float32 (N,), one per vertex of ``V``).
 * :data:`SIGMA_NONE_MM` (50 mm) marks a vertex nothing measured (a filled hole) and caps the rest.
 * :func:`sigma_stats` sums a mesh's confidence up for the stats panel and the report.
 * :func:`carry_sigma` follows the vertices through a mesh edit (:mod:`ohs.mesh`).
+* :func:`carry_filled` follows each face's *filled* flag (made by hole filling, not measured:
+  measuring tools skip such faces) through the same edits; :func:`filled_area` sums it up.
 """
 from __future__ import annotations
 
@@ -12,7 +14,7 @@ import numpy as np
 
 from ohs.mesh.topology import as_mesh, rows
 
-__all__ = ["SIGMA_NONE_MM", "sigma_stats", "carry_sigma"]
+__all__ = ["SIGMA_NONE_MM", "sigma_stats", "carry_sigma", "carry_filled", "filled_area"]
 
 #: the sigma (mm) of a vertex nothing measured, and the cap of the others ("no confidence")
 SIGMA_NONE_MM = 50.0
@@ -86,3 +88,57 @@ def carry_sigma(op: str, V: np.ndarray, F: np.ndarray, S: np.ndarray | None, V2:
 
     _, idx = cKDTree(np.asarray(V, dtype=np.float64)).query(np.asarray(V2, dtype=np.float64), workers=-1)
     return S[idx]
+
+
+def carry_filled(op: str, V: np.ndarray, F: np.ndarray, filled: np.ndarray | None, V2: np.ndarray,
+                 F2: np.ndarray, faces: np.ndarray | None = None) -> np.ndarray | None:
+    """Each face's *filled* flag after the :mod:`ohs.mesh` operation ``op`` turned ``(V, F)`` into
+    ``(V2, F2)``; None when no face is filled.
+
+    * ``fill_holes`` adds its faces after the old ones: those are filled;
+    * ``smooth`` keeps the faces;
+    * ``delete_faces`` / ``keep_faces`` (given their ``faces``) keep the faces left, in order;
+    * the rest (``remove_floaters``, ``decimate``) take the flag of the old face nearest to each
+      new face's centre."""
+    n2 = len(F2)
+    old = None if filled is None else np.asarray(filled, dtype=bool).reshape(-1)
+    if old is not None and len(old) != len(F):
+        old = None
+    if op == "fill_holes" and n2 >= len(F):
+        out = np.concatenate([old if old is not None else np.zeros(len(F), bool), np.ones(n2 - len(F), bool)])
+        return out if out.any() else None
+    if old is None or not old.any():
+        return None
+    if op == "smooth" and n2 == len(F):
+        return old.copy()
+    if op in ("delete_faces", "keep_faces") and faces is not None:
+        keep = np.full(len(F), op == "delete_faces")
+        keep[np.asarray(faces, dtype=np.int64).reshape(-1)] = op == "keep_faces"
+        if int(keep.sum()) == n2:
+            out = old[keep]
+            return out if out.any() else None
+    if n2 == 0:
+        return None
+    from scipy.spatial import cKDTree  # noqa: PLC0415
+
+    V, F = as_mesh(V, F)
+    V2 = np.asarray(V2, dtype=np.float64)
+    F2 = np.asarray(F2, dtype=np.int64).reshape(-1, 3)
+    c_old = (rows(V, F[:, 0]) + rows(V, F[:, 1]) + rows(V, F[:, 2])) / 3.0
+    c_new = (rows(V2, F2[:, 0]) + rows(V2, F2[:, 1]) + rows(V2, F2[:, 2])) / 3.0
+    _, idx = cKDTree(c_old).query(c_new, workers=-1)
+    out = old[idx]
+    return out if out.any() else None
+
+
+def filled_area(V: np.ndarray, F: np.ndarray, filled: np.ndarray | None) -> float:
+    """Area of the filled faces, mm^2 (0 without)."""
+    if filled is None or not len(F):
+        return 0.0
+    m = np.asarray(filled, dtype=bool).reshape(-1)
+    if len(m) != len(F) or not m.any():
+        return 0.0
+    V, F = as_mesh(V, F)
+    Fm = F[m]
+    v0 = rows(V, Fm[:, 0])
+    return float(0.5 * np.linalg.norm(np.cross(rows(V, Fm[:, 1]) - v0, rows(V, Fm[:, 2]) - v0), axis=1).sum())

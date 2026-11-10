@@ -156,13 +156,23 @@ function label(op: MeshOp, p: Record<string, unknown>, faces?: number): string {
       if (num(p.min_size_mm) !== undefined) return `Remove floaters smaller than ${mm(num(p.min_size_mm)!)} mm`;
       return `Remove floaters under ${int(num(p.min_triangles) ?? 0)} triangles`;
     case "fill_holes":
-      return `Fill holes up to ${mm(num(p.max_hole_mm) ?? 0)} mm`;
+      return p.watertight === true
+        ? `Make watertight: close every opening up to ${mm(num(p.max_hole_mm) ?? 0)} mm`
+        : `Fill holes up to ${mm(num(p.max_hole_mm) ?? 0)} mm`;
     case "smooth": {
-      const pct = Math.round((num(p.strength) ?? 0.5) * 100);
-      return p.method === "bilateral" ? `Smooth, keep edges (${pct} %)` : `Smooth (Taubin, ${pct} %)`;
+      const pct = `${Math.round((num(p.strength) ?? 0.5) * 100)} %${p.within_sigma === true ? ", within 2σ" : ""}`;
+      return p.method === "bilateral" ? `Smooth, keep edges (${pct})` : `Smooth (Taubin, ${pct})`;
     }
-    case "decimate":
-      return num(p.ratio) !== undefined ? `Simplify to ${Math.round(num(p.ratio)! * 100)} %` : `Simplify to ${int(num(p.target_triangles) ?? 0)} triangles`;
+    case "decimate": {
+      const e = num(p.max_error_mm);
+      const base =
+        num(p.ratio) !== undefined
+          ? `Simplify to ${Math.round(num(p.ratio)! * 100)} %`
+          : num(p.target_triangles) !== undefined
+            ? `Simplify to ${int(num(p.target_triangles)!)} triangles`
+            : "";
+      return e === undefined ? base : base ? `${base} (within ${e} mm)` : `Simplify to within ${e} mm`;
+    }
     case "delete_faces":
       return `Delete ${int(faces ?? 0)} faces`;
     case "keep_faces":
@@ -416,8 +426,11 @@ export class MockProcess {
         return smooth(m, p.method === "bilateral" ? "bilateral" : "taubin", Math.max(0, Math.min(1, num(p.strength) ?? 0.5)), p.keep_edges !== false);
       case "decimate": {
         const F = m.indices.length / 3;
-        const target = num(p.ratio) !== undefined ? Math.round(F * num(p.ratio)!) : (num(p.target_triangles) ?? F);
-        return decimate(m, Math.max(4, target));
+        // the mock has no tolerance: a looser one keeps fewer triangles (0.02 mm about half)
+        const e = num(p.max_error_mm);
+        const byTol = e !== undefined ? Math.round(F * Math.max(0.1, Math.min(0.9, 0.6 - 3 * e))) : F;
+        const target = num(p.ratio) !== undefined ? Math.round(F * num(p.ratio)!) : (num(p.target_triangles) ?? byTol);
+        return decimate(m, Math.max(4, Math.min(target, byTol)));
       }
       case "delete_faces":
       case "keep_faces": {
@@ -456,8 +469,10 @@ export class MockProcess {
       }
       case "decimate": {
         const r = num(p.ratio),
-          t = num(p.target_triangles);
-        if (r === undefined && t === undefined) this.bad("Give a target: ratio or target_triangles");
+          t = num(p.target_triangles),
+          e = num(p.max_error_mm);
+        if (r === undefined && t === undefined && e === undefined) this.bad("Give a target (ratio or target_triangles) or a tolerance (max_error_mm)");
+        if (e !== undefined && !(e > 0)) this.bad("The tolerance must be above 0 mm");
         if (r !== undefined && (r <= 0 || r >= 1)) this.bad("The ratio must be between 0 and 1", "0.5 keeps half the triangles.");
         if (t !== undefined && (t < 4 || t >= F)) this.bad(t >= F ? `The mesh already has ${int(F)} triangles` : "Keep at least a few triangles", "Choose a smaller target.");
         return undefined;

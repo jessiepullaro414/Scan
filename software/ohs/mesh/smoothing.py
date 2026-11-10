@@ -201,20 +201,35 @@ def _vertex_update(V: np.ndarray, F: np.ndarray, n: np.ndarray, iterations: int,
 
 # --------------------------------------------------------------------------- entry
 def smooth(V: np.ndarray, F: np.ndarray, method: str = "taubin", strength: float = 0.5, keep_edges: bool = True, *,
-           progress: Progress | None = None) -> tuple[np.ndarray, np.ndarray]:
-    """Smooth the mesh (see the module docstring). Faces are unchanged; returns ``(V, F)``."""
+           limit: np.ndarray | None = None, progress: Progress | None = None) -> tuple[np.ndarray, np.ndarray]:
+    """Smooth the mesh (see the module docstring). Faces are unchanged; returns ``(V, F)``.
+
+    ``limit`` (N,) is the most each vertex may move, mm: e.g. twice its sigma, so that smoothing
+    removes noise where the scan is uncertain and leaves the confident surface where it was
+    (a longer move is shortened along its direction)."""
     if method not in METHODS:
         raise ValueError(f"unknown smoothing method {method!r}; use {' or '.join(METHODS)}")
     s = float(strength)
     if not math.isfinite(s) or not 0.0 <= s <= 1.0:
         raise ValueError("strength must be between 0 and 1")
     V, F = as_mesh(V, F)
+    if limit is not None:
+        limit = np.asarray(limit, dtype=np.float64).reshape(-1)
+        if len(limit) != len(V):
+            raise ValueError("limit must have one value per vertex")
     if s == 0.0 or len(F) == 0:
         return V.copy(), F.copy()
     et = edge_table(F, len(V))
     if method == "taubin":
         sharp = sharp_edges(V, F, et=et) if keep_edges else None
-        return _taubin(V, _taubin_iterations(s), sharp, et, progress), F.copy()
-    kn, kv, sigma_r = _bilateral_params(s, bool(keep_edges))
-    n = bilateral_normals(V, F, kn, sigma_r, et=et, progress=progress, p0=0.0, p1=0.5)
-    return _vertex_update(V, F, n, kv, progress, 0.5, 1.0), F.copy()
+        X = _taubin(V, _taubin_iterations(s), sharp, et, progress)
+    else:
+        kn, kv, sigma_r = _bilateral_params(s, bool(keep_edges))
+        n = bilateral_normals(V, F, kn, sigma_r, et=et, progress=progress, p0=0.0, p1=0.5)
+        X = _vertex_update(V, F, n, kv, progress, 0.5, 1.0)
+    if limit is not None:
+        d = X - V
+        dl = np.sqrt(np.einsum("ij,ij->i", d, d))
+        scale = np.minimum(1.0, np.divide(np.maximum(limit, 0.0), dl, out=np.ones_like(dl), where=dl > 0))
+        X = V + d * scale[:, None]
+    return X, F.copy()

@@ -23,13 +23,13 @@ from __future__ import annotations
 
 from ohs.mesh.anchor import AnchorParams, anchor_to_points
 from ohs.mesh.clean import delete_faces, keep_faces, remove_floaters
-from ohs.mesh.confidence import SIGMA_NONE_MM, carry_sigma, sigma_stats
+from ohs.mesh.confidence import SIGMA_NONE_MM, carry_filled, carry_sigma, filled_area, sigma_stats
 from ohs.mesh.holes import fill_holes, hole_outlines
-from ohs.mesh.simplify import decimate
+from ohs.mesh.simplify import decimate, deviation
 from ohs.mesh.smoothing import smooth
 from ohs.mesh.stats import mesh_stats
 from ohs.mesh.topology import vertex_normals
 
 __all__ = ["remove_floaters", "fill_holes", "smooth", "decimate", "delete_faces", "keep_faces", "mesh_stats",
            "hole_outlines", "vertex_normals", "sigma_stats", "carry_sigma", "SIGMA_NONE_MM", "AnchorParams",
-           "anchor_to_points"]
+           "anchor_to_points", "carry_filled", "filled_area", "deviation"]

@@ -1,9 +1,12 @@
-"""ohs.mesh.confidence: the confidence in numbers, and each vertex's sigma through the mesh edits.
+"""ohs.mesh.confidence: the confidence in numbers, and each vertex's sigma and each face's filled
+flag through the mesh edits.
 
 * ``sigma_stats`` gives shares of the surface (area-weighted), not of the vertices;
 * ``carry_sigma``: smoothing keeps each vertex's sigma, filled holes are "not measured", deleting
   or keeping faces keeps the sigmas of the vertices left, floaters and decimation take the
-  nearest vertex's.
+  nearest vertex's;
+* ``carry_filled``: the faces fill_holes adds are filled, and the flags follow them; they reach
+  a PLY file (face property ``filled``) and back.
 """
 from __future__ import annotations
 
@@ -72,3 +75,47 @@ def test_carry_sigma_follows_the_vertices_through_each_edit():
     V2, _ = decimate(V, F, ratio=0.25)
     S2 = carry_sigma("decimate", V, F, S, V2)
     assert np.abs(S2 - sig(V2[:, 0])).max() <= 0.01 + 1e-6  # within a vertex spacing (1 mm)
+
+
+def test_carry_filled_marks_new_faces_and_follows_them():
+    from ohs.mesh import carry_filled, filled_area
+
+    V, F = grid(61, 61, 1.0)
+    V, F = punch(V, F, [(30.0, 30.0, 0.0)], [6.0])
+    assert carry_filled("smooth", V, F, None, V, F) is None  # nothing filled yet
+    V2, F2 = fill_holes(V, F, 100.0)
+    fl = carry_filled("fill_holes", V, F, None, V2, F2)
+    assert fl is not None and not fl[: len(F)].any() and fl[len(F):].all()
+    hole = np.pi * 6.0 ** 2
+    assert 0.7 * hole < filled_area(V2, F2, fl) < 1.3 * hole
+    # smoothing keeps them; deleting faces keeps the flags of the faces left
+    assert np.array_equal(carry_filled("smooth", V2, F2, fl, V2, F2), fl)
+    sel = np.arange(100)
+    V3, F3 = delete_faces(V2, F2, sel)
+    fl3 = carry_filled("delete_faces", V2, F2, fl, V3, F3, sel)
+    assert np.array_equal(fl3, fl[100:])
+    # decimation: each new face takes the flag of the old face nearest its centre
+    V4, F4 = decimate(V2, F2, ratio=0.3)
+    fl4 = carry_filled("decimate", V2, F2, fl, V4, F4)
+    c = V4[F4].mean(axis=1)
+    inside = np.hypot(c[:, 0] - 30, c[:, 1] - 30)
+    assert fl4[inside < 4.0].all() and not fl4[inside > 9.0].any()
+
+
+def test_filled_flags_round_trip_through_ply(tmp_path):
+    from ohs.track.export import load_ply, save_mesh
+
+    V = np.array([[0.0, 0, 0], [1, 0, 0], [0, 1, 0], [1, 1, 0]])
+    F = np.array([[0, 1, 2], [1, 3, 2]])
+    save_mesh(tmp_path / "m.ply", V, F, quality=np.ones(4), filled=[False, True])
+    d = load_ply(tmp_path / "m.ply")
+    assert d["filled"].tolist() == [False, True] and d["faces"].tolist() == F.tolist()
+    assert np.allclose(d["quality"], 1.0)
+    save_mesh(tmp_path / "plain.ply", V, F)
+    assert load_ply(tmp_path / "plain.ply")["filled"] is None
+    # ASCII, as other programs write it
+    (tmp_path / "a.ply").write_text("ply\nformat ascii 1.0\nelement vertex 4\nproperty float x\nproperty float y\n"
+                                    "property float z\nelement face 2\nproperty list uchar int vertex_indices\n"
+                                    "property uchar filled\nend_header\n0 0 0\n1 0 0\n0 1 0\n1 1 0\n3 0 1 2 1\n3 1 3 2 0\n")
+    d = load_ply(tmp_path / "a.ply")
+    assert d["filled"].tolist() == [True, False] and d["faces"].tolist() == F.tolist()

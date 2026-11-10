@@ -37,7 +37,7 @@ import numpy as np
 
 from ohs.mesh.topology import as_mesh, compact, edge_table, rows
 
-__all__ = ["decimate", "decimate_target"]
+__all__ = ["decimate", "decimate_target", "deviation"]
 
 log = logging.getLogger(__name__)
 
@@ -47,6 +47,8 @@ MAX_ROUNDS = 200
 PASSES = 3  # matching passes per round (one edge table)
 FLIP_COS = 0.17  # a face may turn by at most ~80 degrees
 TOLERANCE = 0.001  # stop within 0.1 % above the target
+ERROR_SHARE = 0.5  # max_error_mm: the RMS distance a collapse may reach, as a share of it
+FOLD_RATIO = 0.5  # max_error_mm: a vertex whose faces' area-weighted normals sum to less than this share is held
 Progress = Callable[[float, str], None]
 
 
@@ -234,12 +236,13 @@ def _without_flips(V: np.ndarray, F: np.ndarray, sel: np.ndarray, cu: np.ndarray
 
 
 def _round(V: np.ndarray, F: np.ndarray, Q: np.ndarray, target: int, rng: np.random.Generator,
-           et) -> tuple[np.ndarray, int, object]:
+           et, max_ms: float | None = None) -> tuple[np.ndarray, int, object]:
     """One batch of collapses (``V`` and ``Q`` are updated in place).
 
     ``et`` is the edge table of ``F``; returns ``(F, collapses, edge table of the new F)``.
     Equal costs (a flat area costs nothing) are ordered at random: in index order the cheapest-
-    edge-of-both-vertices rule would pick almost nothing there."""
+    edge-of-both-vertices rule would pick almost nothing there. With ``max_ms``, only collapses
+    whose mean squared distance to their merged planes stays within it (mm^2) are candidates."""
     N, M = len(V), len(F)
     u, v, counts = et.v0, et.v1, et.counts
     vb = np.zeros(N, dtype=bool)
@@ -250,12 +253,39 @@ def _round(V: np.ndarray, F: np.ndarray, Q: np.ndarray, target: int, rng: np.ran
     nm = counts > 2
     vnm[u[nm]] = True
     vnm[v[nm]] = True
-    ce = np.flatnonzero((counts <= 2) & ~vnm[u] & ~vnm[v] & ~((counts == 2) & vb[u] & vb[v]))
+    collapsible = (counts <= 2) & ~vnm[u] & ~vnm[v] & ~((counts == 2) & vb[u] & vb[v])
+    vn = None
+    if max_ms is not None:
+        # within a tolerance the ragged edge of a scan stays as it is (straightening its zig-zag moves
+        # the old corners by up to a voxel), and so do folds and fins: where a vertex's faces point
+        # every way (their area-weighted normals sum to under half their area) it has no surface
+        # position to keep, and flattening the fold moves it by its height
+        cr = np.cross(rows(V, F[:, 1]) - rows(V, F[:, 0]), rows(V, F[:, 2]) - rows(V, F[:, 0]))
+        flat = F.reshape(-1)
+        acc = np.stack([np.bincount(flat, np.repeat(cr[:, k], 3), N) for k in range(3)], axis=1)
+        tot = np.bincount(flat, np.repeat(np.sqrt(np.einsum("ij,ij->i", cr, cr)), 3), N)
+        alen = np.sqrt(np.einsum("ij,ij->i", acc, acc))
+        fold = alen < FOLD_RATIO * tot
+        vn = np.divide(acc, alen[:, None], out=np.zeros_like(acc), where=alen[:, None] > 0)
+        collapsible &= ~vb[u] & ~vb[v] & ~fold[u] & ~fold[v]
+    ce = np.flatnonzero(collapsible)
     if len(ce) == 0:
         return F, 0, et
     cu, cv = u[ce], v[ce]
     pu, pv = rows(V, cu), rows(V, cv)
-    x, cost = _optimal(np.ascontiguousarray((rows(Q, cu) + rows(Q, cv)).T), pu, pv)
+    qs = np.ascontiguousarray((rows(Q, cu) + rows(Q, cv)).T)
+    x, cost = _optimal(qs, pu, pv)
+    if max_ms is not None:
+        # the quadric's weight is its trace (unit normals): cost / weight = the mean d^2 to its planes
+        ok = cost <= max_ms * np.maximum(qs[0] + qs[4] + qs[7], 1e-300)
+        # and neither end may move off the surface by more than the tolerance (a mean lets a spike's
+        # few steep faces be outvoted; sliding along the surface costs nothing)
+        lim = np.sqrt(max_ms) / ERROR_SHARE
+        ok &= np.abs(np.einsum("ij,ij->i", pu - x, rows(vn, cu))) <= lim
+        ok &= np.abs(np.einsum("ij,ij->i", pv - x, rows(vn, cv))) <= lim
+        if not ok.any():
+            return F, 0, et
+        ce, cu, cv, x, cost = ce[ok], cu[ok], cv[ok], x[ok], cost[ok]
     C = len(ce)
     need = max(1, (M - target + 1) // 2)
     pool = int(min(C, max(2 * need, C // 10, 64)))
@@ -332,10 +362,25 @@ def _round(V: np.ndarray, F: np.ndarray, Q: np.ndarray, target: int, rng: np.ran
 
 
 def decimate(V: np.ndarray, F: np.ndarray, target_triangles: int | None = None, ratio: float | None = None, *,
-             progress: Progress | None = None) -> tuple[np.ndarray, np.ndarray]:
-    """Quadric decimation to ``target_triangles`` or ``ratio`` (see the module docstring)."""
+             max_error_mm: float | None = None, progress: Progress | None = None) -> tuple[np.ndarray, np.ndarray]:
+    """Quadric decimation to ``target_triangles`` or ``ratio`` (see the module docstring).
+
+    ``max_error_mm`` (alone, or with a target: whichever stops first) keeps the surface within
+    a tolerance: an edge collapses only while the RMS distance of its new point to the original
+    planes it stands for is at most :data:`ERROR_SHARE` of it and neither end moves off the
+    surface by more than the tolerance; the outer edge and folds (:data:`FOLD_RATIO`) are held.
+    On simulated scans 99.9 % of the original vertices then stay within the tolerance and all
+    within about twice it (:func:`deviation` measures it)."""
     V, F = as_mesh(V, F)
-    target = decimate_target(len(F), target_triangles, ratio)
+    if max_error_mm is not None and target_triangles is None and ratio is None:
+        target = MIN_TRIANGLES
+    else:
+        target = decimate_target(len(F), target_triangles, ratio)
+    max_ms = None
+    if max_error_mm is not None:
+        if not max_error_mm > 0:
+            raise ValueError("max_error_mm must be positive")
+        max_ms = (ERROR_SHARE * float(max_error_mm)) ** 2
     M0 = len(F)
     if target >= M0:
         return V.copy(), F.copy()
@@ -348,12 +393,92 @@ def decimate(V: np.ndarray, F: np.ndarray, target_triangles: int | None = None, 
     for it in range(MAX_ROUNDS):
         if len(F) <= close:
             break
-        F, done, et = _round(X, F, Q, target, rng, et)
+        F, done, et = _round(X, F, Q, target, rng, et, max_ms)
         if progress is not None:
-            progress(min(0.99, (M0 - len(F)) / max(M0 - target, 1)), f"Simplifying: {len(F):,} triangles")
+            frac = (M0 - len(F)) / max(M0 - target, 1) if max_ms is None else 1.0 - 0.7 ** (it + 1)
+            progress(min(0.99, frac), f"Simplifying: {len(F):,} triangles")
         if done == 0:
-            log.info("decimate: stopped at %d triangles (target %d): nothing more can be collapsed", len(F), target)
+            log.info("decimate: stopped at %d triangles (target %d%s): nothing more can be collapsed", len(F), target,
+                     f", within {max_error_mm} mm" if max_ms is not None else "")
             break
     X2, F2, _ = compact(X, F)
     log.debug("decimate: %d -> %d triangles (target %d)", M0, len(F2), target)
     return X2 + center, F2
+
+
+def _closest_on_triangles(P: np.ndarray, A: np.ndarray, B: np.ndarray, C: np.ndarray) -> np.ndarray:
+    """Distance from each point ``P[i]`` to triangle ``(A[i], B[i], C[i])`` (Ericson, *Real-Time
+    Collision Detection* 5.1.5), vectorised."""
+    ab, ac, ap = B - A, C - A, P - A
+    d1, d2 = np.einsum("ij,ij->i", ab, ap), np.einsum("ij,ij->i", ac, ap)
+    bp = P - B
+    d3, d4 = np.einsum("ij,ij->i", ab, bp), np.einsum("ij,ij->i", ac, bp)
+    cp = P - C
+    d5, d6 = np.einsum("ij,ij->i", ab, cp), np.einsum("ij,ij->i", ac, cp)
+    va, vb, vc = d3 * d6 - d5 * d4, d5 * d2 - d1 * d6, d1 * d4 - d3 * d2
+    den = np.where(np.abs(va + vb + vc) > 1e-300, va + vb + vc, 1e-300)
+    v, w = vb / den, vc / den
+    Q = A + ab * v[:, None] + ac * w[:, None]  # inside the face
+    # the regions outside, in Ericson's order (later ones win where they apply)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        e_bc = (va <= 0) & (d4 - d3 >= 0) & (d5 - d6 >= 0)
+        t = (d4 - d3) / ((d4 - d3) + (d5 - d6))
+        Q = np.where(e_bc[:, None], B + (C - B) * t[:, None], Q)
+        e_ac = (vb <= 0) & (d2 >= 0) & (d6 <= 0)
+        t = d2 / (d2 - d6)
+        Q = np.where(e_ac[:, None], A + ac * t[:, None], Q)
+        e_ab = (vc <= 0) & (d1 >= 0) & (d3 <= 0)
+        t = d1 / (d1 - d3)
+        Q = np.where(e_ab[:, None], A + ab * t[:, None], Q)
+    Q = np.where(((d6 >= 0) & (d5 <= d6))[:, None], C, Q)
+    Q = np.where(((d3 >= 0) & (d4 <= d3))[:, None], B, Q)
+    Q = np.where(((d1 <= 0) & (d2 <= 0))[:, None], A, Q)
+    d = np.linalg.norm(P - Q, axis=1)
+    bad = ~np.isfinite(d)  # a degenerate (zero-area) face: its nearest corner is close enough
+    if bad.any():
+        d[bad] = np.min([np.linalg.norm(P[bad] - X[bad], axis=1) for X in (A, B, C)], axis=0)
+    return d
+
+
+def deviation(V: np.ndarray, V2: np.ndarray, F2: np.ndarray, k: int = 4, chunk: int = 200_000) -> np.ndarray:
+    """How far each vertex of ``V`` (the mesh before) lies from the surface ``(V2, F2)`` (after), mm.
+
+    Searches the faces around the ``k`` nearest vertices of ``V2``, then once more around the 32
+    nearest for the 1 % of points that came out farthest: the nearest vertices of a coarse mesh
+    are not always corners of the face that is closest."""
+    from scipy.spatial import cKDTree  # noqa: PLC0415
+
+    V = np.asarray(V, dtype=np.float64)
+    V2, F2 = as_mesh(V2, F2)
+    if len(F2) == 0 or len(V) == 0:
+        return np.full(len(V), np.inf)
+    flat = F2.reshape(-1)
+    order = np.argsort(flat, kind="stable")
+    ptr = np.concatenate([[0], np.cumsum(np.bincount(flat, minlength=len(V2)))])
+    vf = order // 3
+    deg = np.diff(ptr)
+    width = int(deg.max())
+    ring = np.full((len(V2), width), -1, dtype=np.int64)
+    for c in range(width):  # the faces around each vertex
+        has = deg > c
+        ring[has, c] = vf[ptr[:-1][has] + c]
+    tree = cKDTree(V2)
+
+    def search(P: np.ndarray, kk: int) -> np.ndarray:
+        _, nn = tree.query(P, k=min(kk, len(V2)), workers=-1)
+        cand = ring[nn.reshape(len(P), -1)].reshape(len(P), -1)  # (n, kk * width)
+        best = np.full(len(P), np.inf)
+        for col in range(cand.shape[1]):
+            f = cand[:, col]
+            ok = f >= 0
+            if not ok.any():
+                continue
+            tri = F2[f[ok]]
+            best[ok] = np.minimum(best[ok], _closest_on_triangles(P[ok], V2[tri[:, 0]], V2[tri[:, 1]], V2[tri[:, 2]]))
+        return best
+
+    out = np.concatenate([search(V[s:s + chunk], k) for s in range(0, len(V), chunk)])
+    far = np.flatnonzero(out >= np.percentile(out, 99))
+    if len(far):
+        out[far] = np.minimum(out[far], search(V[far], 32))
+    return out

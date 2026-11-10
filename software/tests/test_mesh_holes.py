@@ -175,3 +175,18 @@ def test_loops_are_simple_at_a_bowtie_vertex():
     assert len(loops) == 2 and all(loops.closed) and sorted(loops.n_edges().tolist()) == [3, 3]
     st = mesh_stats(V, F)
     assert st["components"] == 1 and st["boundary_edges"] == 6
+
+
+def test_watertight_closes_the_outer_border_within_the_limit():
+    # a sphere with a wide cap cut off (a part that sat on the table): the cut is too big for a hole
+    # of this piece, so it is the outer border, left open unless watertight
+    V, F = icosphere(R, 5)
+    Vh, Fh = punch(V, F, [[0.0, 0.0, -R]], [1.2 * R])
+    st0 = mesh_stats(Vh, Fh)
+    assert st0["holes"] == 0 and st0["border_mm"] > 200
+    V2, F2 = fill_holes(Vh, Fh, 1000.0)
+    assert len(F2) == len(Fh)
+    V3, F3 = fill_holes(Vh, Fh, 1000.0, include_borders=True)
+    st = mesh_stats(V3, F3)
+    assert st["watertight"] and st["holes"] == 0 and st["border_mm"] is None
+    assert len(fill_holes(Vh, Fh, 0.9 * st0["border_mm"], include_borders=True)[1]) == len(Fh)  # the size limit holds

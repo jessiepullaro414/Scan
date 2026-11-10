@@ -179,3 +179,40 @@ def test_bilateral_keeps_a_bracket_step():
     assert rms(Xk, near) < rms(Vn, near)  # the step stays sharp and gets cleaner
     assert rms(Xr, near) > 2.5 * rms(Xk, near)  # without keep_edges it becomes a ramp
     assert step_distance(Xk[near]).max() < 0.12
+
+
+def test_decimate_to_a_tolerance():
+    from ohs.mesh import deviation
+
+    V, F = icosphere(40.0, 5)  # 20,480 triangles, ~2.5 mm edges
+    rng = np.random.default_rng(3)
+    V = V + rng.normal(0.0, 0.003, V.shape)  # a little noise: nothing is exactly flat
+    out = {}
+    for tol in (0.02, 0.1):
+        V2, F2 = decimate(V, F, max_error_mm=tol)
+        dev = deviation(V, V2, F2)
+        assert len(F2) < len(F) and np.percentile(dev, 99.9) <= tol and dev.max() <= 3 * tol, tol
+        out[tol] = len(F2)
+    assert out[0.1] < out[0.02]  # a looser tolerance simplifies more
+    # with a target too: whichever comes first
+    V3, F3 = decimate(V, F, target_triangles=15000, max_error_mm=0.1)
+    assert abs(len(F3) - 15000) <= 0.01 * 15000
+    # the ragged edge of an open scan stays as it is
+    Vg, Fg = grid(41, 41, 1.0, z=lambda x, y: 0.002 * (x - 20) ** 2)
+    Vg2, Fg2 = decimate(Vg, Fg, max_error_mm=0.05)
+    border = (Vg[:, 0] == 0) | (Vg[:, 0] == 40) | (Vg[:, 1] == 0) | (Vg[:, 1] == 40)
+    from scipy.spatial import cKDTree
+
+    assert len(Fg2) < 0.5 * len(Fg) and np.allclose(cKDTree(Vg2).query(Vg[border])[0], 0.0)
+
+
+def test_smoothing_stays_within_a_limit():
+    V, F = icosphere(40.0, 4)
+    rng = np.random.default_rng(4)
+    Vn = V + rng.normal(0.0, 0.3, V.shape)
+    limit = np.where(V[:, 2] > 0, 0.02, 10.0)  # a confident top half, an uncertain bottom half
+    V2, _ = smooth(Vn, F, "taubin", 0.5, False, limit=limit)
+    moved = np.linalg.norm(V2 - Vn, axis=1)
+    assert moved[V[:, 2] > 0].max() <= 0.02 + 1e-9 and moved[V[:, 2] < 0].mean() > 0.1
+    V3, _ = smooth(Vn, F, "bilateral", 0.5, True, limit=np.zeros(len(V)))
+    assert np.allclose(V3, Vn)

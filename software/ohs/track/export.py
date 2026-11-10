@@ -88,7 +88,7 @@ def face_normals(V: np.ndarray, F: np.ndarray) -> np.ndarray:
 
 
 def _ply_header(n_vertices: int, has_normals: bool, has_colors: bool, n_faces: int | None,
-                has_quality: bool = False) -> bytes:
+                has_quality: bool = False, has_filled: bool = False) -> bytes:
     lines = ["ply", "format binary_little_endian 1.0", "comment OpenHandScan export, units: mm",
              f"element vertex {n_vertices}", "property float x", "property float y", "property float z"]
     if has_normals:
@@ -100,12 +100,15 @@ def _ply_header(n_vertices: int, has_normals: bool, has_colors: bool, n_faces: i
                   "property float quality"]
     if n_faces is not None:
         lines += [f"element face {n_faces}", "property list uchar int vertex_indices"]
+        if has_filled:
+            lines += ["comment filled: 1 = made by hole filling, not measured (OpenHandScan)", "property uchar filled"]
     lines.append("end_header")
     return ("\n".join(lines) + "\n").encode("ascii")
 
 
 def _write_ply(path: Path, V: np.ndarray, F: np.ndarray | None, N: np.ndarray | None,
-               colors: np.ndarray | None, quality: np.ndarray | None = None) -> None:
+               colors: np.ndarray | None, quality: np.ndarray | None = None,
+               filled: np.ndarray | None = None) -> None:
     fields: list[tuple[str, Any]] = [("x", "<f4"), ("y", "<f4"), ("z", "<f4")]
     if N is not None:
         fields += [("nx", "<f4"), ("ny", "<f4"), ("nz", "<f4")]
@@ -123,12 +126,17 @@ def _write_ply(path: Path, V: np.ndarray, F: np.ndarray | None, N: np.ndarray | 
         vert["quality"] = quality
     with open(path, "wb") as fh:
         fh.write(_ply_header(len(V), N is not None, colors is not None, None if F is None else len(F),
-                             has_quality=quality is not None))
+                             has_quality=quality is not None, has_filled=filled is not None))
         fh.write(vert.tobytes())
         if F is not None:
-            face = np.empty(len(F), dtype=np.dtype([("n", "u1"), ("i", "<i4", (3,))]))
+            ffields: list[tuple[str, Any]] = [("n", "u1"), ("i", "<i4", (3,))]
+            if filled is not None:
+                ffields.append(("filled", "u1"))
+            face = np.empty(len(F), dtype=np.dtype(ffields))
             face["n"] = 3
             face["i"] = F
+            if filled is not None:
+                face["filled"] = filled
             fh.write(face.tobytes())
 
 
@@ -157,13 +165,14 @@ def _write_obj(path: Path, V: np.ndarray, F: np.ndarray, N: np.ndarray | None) -
 
 # --------------------------------------------------------------------------- writers
 def save_mesh(path: str | Path, V: np.ndarray, F: np.ndarray, N: np.ndarray | None = None,
-              quality: np.ndarray | None = None) -> Path:
+              quality: np.ndarray | None = None, filled: np.ndarray | None = None) -> Path:
     """Write a triangle mesh; format by extension: ``.ply`` (binary), ``.stl`` (binary), ``.obj``.
 
     ``V`` (N,3) vertices in mm, ``F`` (M,3) vertex indices, ``N`` optional (N,3) vertex normals
     (ignored for STL, which stores per-face normals computed from the geometry). ``quality``
     optional (N,): each vertex's standard deviation in mm, written as the PLY vertex property
-    ``quality`` (MeshLab reads it); STL and OBJ have no place for it.
+    ``quality`` (MeshLab reads it). ``filled`` optional (M,) bool: faces made by hole filling (not
+    measured), the PLY face property ``uchar filled``. STL and OBJ have no place for either.
     """
     path = Path(path)
     V = _as_vertices(V)
@@ -176,9 +185,13 @@ def save_mesh(path: str | Path, V: np.ndarray, F: np.ndarray, N: np.ndarray | No
         quality = np.asarray(quality, dtype=np.float32).reshape(-1)
         if len(quality) != len(V):
             raise ValueError("quality must have one value per vertex")
+    if filled is not None:
+        filled = np.asarray(filled, dtype=np.uint8).reshape(-1)
+        if len(filled) != len(F):
+            raise ValueError("filled must have one value per face")
     ext = path.suffix.lower()
     if ext == ".ply":
-        _write_ply(path, V, F, N, None, quality)
+        _write_ply(path, V, F, N, None, quality, filled)
     elif ext == ".stl":
         _write_stl(path, V, F)
     elif ext == ".obj":
@@ -246,8 +259,9 @@ def load_ply(path: str | Path) -> dict[str, np.ndarray | None]:
     """Minimal PLY reader (ASCII / binary, any endianness).
 
     Returns ``{"vertices": (N,3) float64, "normals": (N,3) | None, "colors": (N,3) uint8 | None,
-    "faces": (M,3) int64 | None, "quality": (N,) float64 | None}``. Polygons are fan-triangulated;
-    unknown elements are skipped.
+    "faces": (M,3) int64 | None, "quality": (N,) float64 | None, "filled": (M,) bool | None}``.
+    Polygons are fan-triangulated (``filled`` then follows the triangles); unknown elements are
+    skipped.
     """
     path = Path(path)
     with open(path, "rb") as fh:
@@ -256,6 +270,7 @@ def load_ply(path: str | Path) -> dict[str, np.ndarray | None]:
     end = "<" if fmt == "binary_little_endian" else ">"
     data: dict[str, dict[str, np.ndarray]] = {}
     faces: np.ndarray | None = None
+    filled: np.ndarray | None = None
     if fmt == "ascii":
         lines = body.decode("ascii").splitlines()
         pos = 0
@@ -264,8 +279,14 @@ def load_ply(path: str | Path) -> dict[str, np.ndarray | None]:
             pos += el["count"]
             has_list = any(p[1] == "list" for p in el["props"])
             if el["name"] == "face" and has_list:
-                polys = [np.asarray(r.split()[1:], dtype=np.int64) for r in rows]
+                toks = [r.split() for r in rows]
+                polys = [np.asarray(t[1 : 1 + int(t[0])], dtype=np.int64) for t in toks]
                 faces = _fan_triangulate(polys)
+                names = [p[0] for p in el["props"]]
+                if "filled" in names and names[0] in ("vertex_indices", "vertex_index"):
+                    k = names.index("filled") - 1  # the scalars after the list
+                    per = np.asarray([int(float(t[1 + int(t[0]) + k])) for t in toks], dtype=bool)
+                    filled = np.repeat(per, [max(len(p) - 2, 0) for p in polys])
             elif not has_list:
                 arr = np.asarray([r.split() for r in rows], dtype=np.float64).reshape(len(rows), len(el["props"]))
                 data[el["name"]] = {p[0]: arr[:, k] for k, p in enumerate(el["props"])}
@@ -279,25 +300,35 @@ def load_ply(path: str | Path) -> dict[str, np.ndarray | None]:
                 off += dt.itemsize * el["count"]
                 data[el["name"]] = {p[0]: arr[p[0]] for p in props}
                 continue
-            if el["name"] != "face" or len(props) != 1:
+            extra = props[1:]  # scalars after the vertex list (e.g. "filled")
+            if el["name"] != "face" or props[0][1] != "list" or any(p[1] == "list" for p in extra):
                 raise ValueError(f"unsupported list element {el['name']!r} in {path}")
             _, _, ctype, itype = props[0]
             cdt, idt = np.dtype(end + ctype), np.dtype(end + itype)
+            edt = [(p[0], np.dtype(end + p[2])) for p in extra]
             n = el["count"]
-            tri_dt = np.dtype([("n", cdt), ("i", idt, (3,))])
+            tri_dt = np.dtype([("n", cdt), ("i", idt, (3,)), *edt])
             if n and off + tri_dt.itemsize * n <= len(body):
                 tri = np.frombuffer(body, dtype=tri_dt, count=n, offset=off)
                 if np.all(tri["n"] == 3):
                     faces = tri["i"].astype(np.int64)
+                    if "filled" in tri.dtype.names:
+                        filled = tri["filled"] != 0
                     off += tri_dt.itemsize * n
                     continue
-            polys = []
+            polys, per = [], []
             for _ in range(n):  # general polygons: slow path
                 k = int(np.frombuffer(body, dtype=cdt, count=1, offset=off)[0])
                 off += cdt.itemsize
                 polys.append(np.frombuffer(body, dtype=idt, count=k, offset=off).astype(np.int64))
                 off += idt.itemsize * k
+                for name, dt in edt:
+                    if name == "filled":
+                        per.append(bool(np.frombuffer(body, dtype=dt, count=1, offset=off)[0]))
+                    off += dt.itemsize
             faces = _fan_triangulate(polys)
+            if per:
+                filled = np.repeat(np.asarray(per, dtype=bool), [max(len(p) - 2, 0) for p in polys])
     if "vertex" not in data:
         raise ValueError(f"no vertex element in {path}")
     v = data["vertex"]
@@ -305,6 +336,7 @@ def load_ply(path: str | Path) -> dict[str, np.ndarray | None]:
         "vertices": np.stack([v["x"], v["y"], v["z"]], axis=1).astype(np.float64),
         "normals": None, "colors": None, "faces": faces,
         "quality": np.asarray(v["quality"], dtype=np.float64) if "quality" in v else None,
+        "filled": filled,
     }
     if all(k in v for k in ("nx", "ny", "nz")):
         out["normals"] = np.stack([v["nx"], v["ny"], v["nz"]], axis=1).astype(np.float64)
