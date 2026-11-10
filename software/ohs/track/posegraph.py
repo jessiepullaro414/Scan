@@ -75,6 +75,22 @@ Method
    (chi-square per edge at most ``max_odometry_chi2``). If (b) or (c) fails with several loops, the
    worst loop is dropped and the graph solved again (``max_retries``). Otherwise the input poses are
    returned unchanged, and the verdict says why.
+   **Large drift** (research plan 4.4.1; ``global_registration``, ``adaptive_drift``). Three
+   additions let it close drift far beyond ICP's reach from the tracked pose:
+
+   - the candidate gate widens with the camera travel between the two keyframes
+     (``global_drift_frac`` of it plus the slack, at most ``global_max_drift_mm``);
+   - a candidate that fails verification is checked again against those wider bounds
+     (``global_max_drift_mm`` / ``global_max_drift_deg``): first by ICP from the tracked pose with
+     a wider reach, then from a global first guess (:func:`global_match`: FPFH features of the
+     coarse clouds matched by Fast Global Registration, else by RANSAC; a guess farther from the
+     tracked pose than the bounds allow is skipped). From a global guess the unmeasurable
+     directions still keep the tracked pose. Such a loop counts only when at least
+     ``global_min_loops`` loops pass in all, so one wrong large match can't bend a scan alone;
+   - the drift model is scaled to what the loops show: by the median, over the loops, of how far
+     ICP moved them against the random walk's spread over their frames (between 1 and
+     ``max_drift_scale``; ``drift_scale`` in the report). Without that, the graph's line process
+     takes loops that need more bending than the default model as disagreeing, and prunes them.
 7. **Corrections** (:func:`interpolate_poses`): each keyframe's correction ``C = T_opt @
    inv(T_in)`` (a rigid change of the world around it) is applied to every tracked frame from the
    two keyframes around it, and the two results are blended by time (rotation slerp, translation
@@ -97,8 +113,10 @@ Report
 and orientation), ``verdict`` (plain words), ``changed`` (poses differ from the input),
 ``reason`` (``straightened``, ``too_short``, ``no_candidates``, ``not_verified``, ``disagree``,
 ``already_straight``, ``not_better``, ``bends_too_much``), ``candidates`` (per candidate: frames,
-accepted, why not, fitness, overlap, RMS, how far ICP moved, measurable directions ``dof``, kept
-by the graph), ``residual_mm`` (loops before / after, largest odometry chi-square), ``timings_s``,
+accepted, why not, ``large`` (checked against the large-drift bounds), ``via`` (``tracked`` or
+``global``: where ICP started), fitness, overlap, RMS, how far ICP moved, measurable directions
+``dof``, kept by the graph), ``drift_scale`` (step 4, large drift), ``residual_mm`` (loops
+before / after, largest odometry chi-square), ``timings_s``,
 ``compute`` (where the depth ran) and, when the recording has true poses, ``ground_truth``:
 ``before`` / ``after`` (:func:`ohs.app.process.trajectory_errors` summaries, aligned at the first
 frame) and ``revisits`` (at the candidates' frame pairs: ``gap_mm``, the distance between the two
@@ -123,8 +141,11 @@ Known limits
   loop keyframe cannot be observed: the gap at the revisits drops about tenfold, the error against
   the truth (from the first frame) much less, and in single runs its maximum can grow by a few
   tenths of a mm along unmeasured directions.
-* Drift larger than the ICP capture range (about ``max_drift_mm``) cannot be closed: the loop
-  fails verification and the scan is left unchanged (no global registration is attempted).
+* **Large drift** closes the doubled surfaces, not the sliding: on simulated orbits with 5 to 20
+  times the usual drift, the gap between the passes along their normals fell 3-18 times, but they
+  still slid past each other by about as much as before (with steady drift up to 17 % more), and
+  the trajectory's error against the truth fell much less (VALIDATION.md, "Straighten for large
+  drift"). Drift beyond ``global_max_drift_mm`` or the candidate gate is not found at all.
 * One wrong loop that passes verification and stays within the plausible drift cannot be told
   from a right one; the line process and the never-worse rule only catch loops that disagree with
   other loops or need more bending than drift explains.
@@ -140,7 +161,7 @@ import csv
 import logging
 import math
 import time
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Any, Callable, Sequence
 
@@ -159,6 +180,7 @@ __all__ = [
     "select_keyframes",
     "find_loop_candidates",
     "verify_loop",
+    "global_match",
     "OdometryEdge",
     "odometry_edges",
     "optimize_pose_graph",
@@ -219,6 +241,18 @@ class StraightenParams:
     min_improvement: float = 0.5  # the loops' summed squared residual must at least halve
     max_odometry_chi2: float = 36.0
     max_retries: int = 2
+    # large drift (research plan 4.4.1): a wider candidate gate, a global first guess (FPFH + FGR on
+    # the coarse clouds) where ICP from the tracked pose fails, and a drift model scaled to what the
+    # loops measure
+    global_registration: bool = True
+    global_drift_frac: float = 0.15  # plausible drift for a global loop: this share of the travel, plus slack
+    global_max_drift_mm: float = 120.0
+    global_max_drift_deg: float = 20.0
+    global_min_loops: int = 2  # a loop beyond the ordinary drift bound counts only with this many loops in all
+    fpfh_radius_mm: float = 20.0
+    fgr_max_corr_mm: float = 6.0
+    adaptive_drift: bool = True
+    max_drift_scale: float = 30.0
 
     def __post_init__(self) -> None:
         if self.information not in INFORMATION_KINDS:
@@ -357,7 +391,13 @@ def find_loop_candidates(T_kf: np.ndarray, travel_kf: np.ndarray,
     dist = np.linalg.norm(look[ia] - look[ib], axis=1)
     ang = np.degrees(np.arccos(np.clip(np.einsum("ij,ij->i", z[ia], z[ib]), -1.0, 1.0)))
     travel = np.asarray(travel_kf, dtype=np.float64)
-    ok = (dist <= p.loop_max_dist_mm) & (ang <= p.loop_max_angle_deg) & (travel[ib] - travel[ia] >= p.loop_min_travel_mm)
+    max_dist = np.full(len(ia), float(p.loop_max_dist_mm))
+    max_ang = np.full(len(ia), float(p.loop_max_angle_deg))
+    if p.global_registration:  # the drift the scan may have gathered between the two widens the gate
+        extra = np.minimum(p.drift_slack_mm + p.global_drift_frac * (travel[ib] - travel[ia]), p.global_max_drift_mm)
+        max_dist += extra
+        max_ang += float(p.global_max_drift_deg) * extra / max(float(p.global_max_drift_mm), 1e-9)
+    ok = (dist <= max_dist) & (ang <= max_ang) & (travel[ib] - travel[ia] >= p.loop_min_travel_mm)
     ia, ib, dist, ang = ia[ok], ib[ok], dist[ok], ang[ok]
     order = np.argsort(dist / p.loop_max_dist_mm + ang / p.loop_max_angle_deg, kind="stable")
     r = int(p.candidate_spacing)
@@ -386,6 +426,7 @@ class _Cloud:
     coarse: _Level
     o3d: Any  # the fine cloud as an Open3D PointCloud, kept only for information="open3d"
     n: int
+    feat: Any = None  # (coarse Open3D cloud, its FPFH features), made on first use by a global match
 
 
 class KeyframeClouds:
@@ -548,9 +589,12 @@ class LoopCheck:
     info: np.ndarray = field(default_factory=lambda: np.zeros((6, 6)))
     J2: np.ndarray = field(default_factory=lambda: np.zeros((6, 6)))
     J2_full: np.ndarray = field(default_factory=lambda: np.zeros((6, 6)))  # all directions (evaluation)
+    large: bool = False  # checked against the large-drift bounds
+    via: str = "tracked"  # where ICP started: "tracked" (the tracked relative pose) or "global" (global_match)
 
     def summary(self) -> dict:
-        return {"accepted": bool(self.accepted), "reason": self.reason, "fitness": round(float(self.fitness), 4),
+        return {"accepted": bool(self.accepted), "reason": self.reason, "large": bool(self.large), "via": self.via,
+                "fitness": round(float(self.fitness), 4),
                 "overlap": round(float(self.overlap), 4),
                 "rmse_mm": round(float(self.rmse_mm), 4) if math.isfinite(self.rmse_mm) else None,
                 "inliers": int(self.n_inliers), "moved_mm": round(float(self.moved_mm), 3),
@@ -616,7 +660,7 @@ def _normal_system(P: np.ndarray, N: np.ndarray, dst: _Level, T: np.ndarray, dis
 
 
 def _icp(src: _Cloud, dst: _Cloud, T0: np.ndarray, levels: Sequence[tuple[bool, float, int]],
-         weak_rel: float, robust_min_mm: float, polish: int = 6) -> np.ndarray:
+         weak_rel: float, robust_min_mm: float, polish: int = 6, ref: np.ndarray | None = None) -> np.ndarray:
     """Coarse-to-fine point-to-plane Gauss-Newton ICP from ``T0`` that moves only along the
     directions the matched surfaces constrain. Returns ``T`` (source points into the target frame).
 
@@ -627,10 +671,12 @@ def _icp(src: _Cloud, dst: _Cloud, T0: np.ndarray, levels: Sequence[tuple[bool, 
     motion from ``T0`` is therefore projected onto the strong directions of the fine level and
     polished there (``polish`` steps with that subspace fixed). On a plane, a sphere or a body of
     revolution the unconstrained motions keep the guess, instead of sliding wherever the noise and
-    the edges of the overlap push them.
+    the edges of the overlap push them. ``ref`` (default ``T0``) is the pose those motions keep:
+    from a global match's start, the tracked pose, since features say no more about them.
     """
     T0 = np.asarray(T0, dtype=np.float64)
     T = T0.copy()
+    R0 = T0 if ref is None else np.asarray(ref, dtype=np.float64)
 
     def subset(level: _Level) -> tuple[np.ndarray, np.ndarray]:
         step = max(1, -(-len(level.pts) // _ICP_POINTS))  # an even spread of at most _ICP_POINTS points
@@ -658,8 +704,8 @@ def _icp(src: _Cloud, dst: _Cloud, T0: np.ndarray, levels: Sequence[tuple[bool, 
         return T
     H, _, _, L = sysm
     D, _, U = _scaled_subspace(H, L, weak_rel)
-    d = _vec6(invert_se3(T0) @ T) / D  # the motion from the guess, scaled
-    T = T0 @ _exp6(D * (U @ (U.T @ d)))
+    d = _vec6(invert_se3(R0) @ T) / D  # the motion from the guess (or ref), scaled
+    T = R0 @ _exp6(D * (U @ (U.T @ d)))
     P, N = subset(src.fine)
     for _ in range(int(polish)):
         sysm = _normal_system(P, N, dst.fine, T, d_fine, robust_min_mm)
@@ -678,23 +724,83 @@ def _icp(src: _Cloud, dst: _Cloud, T0: np.ndarray, levels: Sequence[tuple[bool, 
     return T
 
 
+def _features(cloud: _Cloud, p: StraightenParams) -> tuple[Any, Any]:
+    """The coarse level as an Open3D cloud and its FPFH features (cached on the cloud)."""
+    if cloud.feat is None:
+        o3d = _open3d()
+        pc = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(cloud.coarse.pts))
+        pc.normals = o3d.utility.Vector3dVector(cloud.coarse.nrm)
+        search = o3d.geometry.KDTreeSearchParamHybrid(radius=float(p.fpfh_radius_mm), max_nn=100)
+        cloud.feat = (pc, o3d.pipelines.registration.compute_fpfh_feature(pc, search))
+    return cloud.feat
+
+
+GLOBAL_METHODS = ("fgr", "ransac")
+
+
+def global_match(src: _Cloud, dst: _Cloud, params: StraightenParams | None = None, method: str = "fgr",
+                 seed: int = 0) -> np.ndarray | None:
+    """A first guess of ``src`` into ``dst`` with no pose to start from, from FPFH features of the
+    coarse clouds: ``"fgr"`` (Fast Global Registration, Zhou et al. 2016) or ``"ransac"`` (RANSAC
+    on feature matches with edge-length and distance checks, ``seed``ed), both in Open3D. ``None``
+    when it fails. Either can return a wrong match (a mirror view, a repeated shape): it is only a
+    start for the verification."""
+    p = params if params is not None else StraightenParams()
+    o3d = _open3d()
+    reg = o3d.pipelines.registration
+    (ps, fs), (pd, fd) = _features(src, p), _features(dst, p)
+    dist = float(p.fgr_max_corr_mm)
+    try:
+        if method == "fgr":
+            res = reg.registration_fgr_based_on_feature_matching(
+                ps, pd, fs, fd, reg.FastGlobalRegistrationOption(maximum_correspondence_distance=dist))
+        elif method == "ransac":
+            if hasattr(o3d.utility, "random"):
+                o3d.utility.random.seed(int(seed))
+            res = reg.registration_ransac_based_on_feature_matching(
+                ps, pd, fs, fd, True, dist, reg.TransformationEstimationPointToPoint(False), 3,
+                [reg.CorrespondenceCheckerBasedOnEdgeLength(0.9), reg.CorrespondenceCheckerBasedOnDistance(dist)],
+                reg.RANSACConvergenceCriteria(100_000, 0.999))
+        else:
+            raise ValueError(f"method must be one of {GLOBAL_METHODS}, got {method!r}")
+    except RuntimeError:  # pragma: no cover - Open3D refuses degenerate input
+        return None
+    T = np.asarray(res.transformation, dtype=np.float64)
+    return T if np.all(np.isfinite(T)) and res.fitness > 0 else None
+
+
+def _plausible(src: _Cloud, T_guess: np.ndarray, T: np.ndarray, bound_mm: float, max_deg: float) -> bool:
+    """Is ``T`` within the drift bounds (with a margin) of the tracked guess? (Cheap: no matching.)"""
+    Dm = invert_se3(np.asarray(T_guess)) @ np.asarray(T)
+    P = src.coarse.pts
+    moved = float(np.sqrt(np.mean(np.sum((P @ Dm[:3, :3].T + Dm[:3, 3] - P) ** 2, axis=1))))
+    return moved <= 1.5 * bound_mm and rotation_angle_deg(Dm[:3, :3]) <= 1.5 * max_deg
+
+
 def verify_loop(src: _Cloud, dst: _Cloud, T_guess: np.ndarray, params: StraightenParams | None = None,
-                bound_mm: float | None = None, a: int = 0, b: int = 0) -> LoopCheck:
+                bound_mm: float | None = None, a: int = 0, b: int = 0, *, start: np.ndarray | None = None,
+                large: bool = False) -> LoopCheck:
     """Point-to-plane ICP of ``src`` onto ``dst`` from ``T_guess`` and the acceptance tests (step 4).
 
     ``bound_mm`` is the plausible drift between the two keyframes (RMS point movement that ICP may
-    apply to the guess); ``None`` uses ``max_drift_mm``.
+    apply to the guess); ``None`` uses ``max_drift_mm``. ``large``: a large-drift check, bounded by
+    ``global_max_drift_mm`` / ``global_max_drift_deg`` instead, which may ``start`` ICP elsewhere
+    (a :func:`global_match`); the unmeasurable directions still keep ``T_guess``.
     """
     p = params if params is not None else StraightenParams()
-    bound = float(p.max_drift_mm if bound_mm is None else min(bound_mm, p.max_drift_mm))
-    out = LoopCheck(a=a, b=b, bound_mm=bound)
+    cap = p.global_max_drift_mm if large else p.max_drift_mm
+    bound = float(cap if bound_mm is None else min(bound_mm, cap))
+    max_deg = float(p.global_max_drift_deg if large else p.max_drift_deg)
+    out = LoopCheck(a=a, b=b, bound_mm=bound, large=large)
     T_guess = np.asarray(T_guess, dtype=np.float64)
+    T0 = T_guess if start is None else np.asarray(start, dtype=np.float64)
     d_fine = float(p.icp_fine_mm)
-    d_coarse = float(np.clip(1.5 * bound, 2.5 * p.coarse_voxel_mm, 30.0))
+    reach = 2.0 * p.fgr_max_corr_mm if start is not None else 1.5 * bound
+    d_coarse = float(np.clip(reach, 2.5 * p.coarse_voxel_mm, 30.0))
     d_mid = max(2.0 * d_fine, 2.5 * p.voxel_mm)
     it = p.icp_iterations
-    T = _icp(src, dst, T_guess, ((True, d_coarse, it[0]), (False, d_mid, it[1]), (False, d_fine, it[2])),
-             p.weak_rel, p.robust_min_mm)
+    T = _icp(src, dst, T0, ((True, d_coarse, it[0]), (False, d_mid, it[1]), (False, d_fine, it[2])),
+             p.weak_rel, p.robust_min_mm, ref=T_guess if start is not None else None)
     if not np.all(np.isfinite(T)):
         out.reason = "ICP diverged"
         return out
@@ -739,9 +845,9 @@ def verify_loop(src: _Cloud, dst: _Cloud, T_guess: np.ndarray, params: Straighte
         out.reason = f"too little overlap ({100 * out.overlap:.0f} % < {100 * p.min_overlap:.0f} %)"
     elif out.rmse_mm > p.max_rmse_mm:
         out.reason = f"the surfaces do not match closely ({out.rmse_mm:.2f} mm RMS > {p.max_rmse_mm:.2f} mm)"
-    elif out.moved_mm > bound or out.moved_deg > p.max_drift_deg:
+    elif out.moved_mm > bound or out.moved_deg > max_deg:
         out.reason = (f"the match is farther from the tracked pose than drift explains ({out.moved_mm:.1f} mm, "
-                      f"{out.moved_deg:.1f} deg; at most {bound:.1f} mm, {p.max_drift_deg:.1f} deg)")
+                      f"{out.moved_deg:.1f} deg; at most {bound:.1f} mm, {max_deg:.1f} deg)")
     else:
         out.accepted = True
     return out
@@ -1070,15 +1176,38 @@ def straighten_trajectory(
                             else "too little depth in one of the two frames")
         else:
             bound = float(p.drift_slack_mm + p.drift_frac * (travel[b] - travel[a]))
-            chk = verify_loop(ca, cb, _rel(T_kf, a, b), p, bound, a, b)
+            guess = _rel(T_kf, a, b)
+            chk = verify_loop(ca, cb, guess, p, bound, a, b)
+            if not chk.accepted and p.global_registration:
+                # large drift: a wider bound from the tracked pose, else a global first guess
+                big = float(p.drift_slack_mm + p.global_drift_frac * (travel[b] - travel[a]))
+                alt = verify_loop(ca, cb, guess, p, big, a, b, large=True)
+                for method in GLOBAL_METHODS if not alt.accepted else ():
+                    start = global_match(ca, cb, p, method)
+                    if start is None or not _plausible(ca, guess, start, min(big, p.global_max_drift_mm),
+                                                       p.global_max_drift_deg):
+                        continue
+                    alt2 = verify_loop(ca, cb, guess, p, big, a, b, start=start, large=True)
+                    alt2.via = "global"
+                    if alt2.accepted:
+                        alt = alt2
+                        break
+                if alt.accepted:
+                    chk = alt
         checks.append(chk)
-        report["candidates"].append({"frames": [int(kf_frames[a]), int(kf_frames[b])], **chk.summary()})
-        if chk.accepted:
-            gaps[(int(kf_frames[a]), int(kf_frames[b]))] = chk.J2_full
         steps.step()
     timings["icp"] = time.perf_counter() - t0
     timings.update({f"clouds_{k}": v / 1e3 for k, v in clouds.timings_ms.items()})
     del kf_cloud, clouds  # the clouds and the depth matcher's (GPU) buffers are not needed any more
+    if sum(c.accepted for c in checks) < p.global_min_loops:  # a lone large correction can't bend the scan alone
+        for c in checks:
+            if c.accepted and c.large:
+                c.accepted = False
+                c.reason = "a correction this large needs a second loop to agree"
+    for c in checks:
+        report["candidates"].append({"frames": [int(kf_frames[c.a]), int(kf_frames[c.b])], **c.summary()})
+        if c.accepted:
+            gaps[(int(kf_frames[c.a]), int(kf_frames[c.b]))] = c.J2_full
     loops = [c for c in checks if c.accepted]
     if not loops:
         return finish(dict(poses_in), "not_verified",
@@ -1089,7 +1218,17 @@ def straighten_trajectory(
     t0 = time.perf_counter()
     frames = np.diff(np.asarray(kf_pos))
     lost = np.array([sum(1 for r in rows[kf_pos[k]:kf_pos[k + 1]] if not r[2]) for k in range(len(kf_pos) - 1)])
-    odometry = odometry_edges(T_kf, frames, lost, p)
+    # the drift model, scaled up when the loops show more drift than it expects (median over loops of
+    # how far ICP moved them against the random walk's spread over their frames)
+    scale = 1.0
+    if p.adaptive_drift:
+        spread = math.hypot(p.drift_mm_per_frame, p.view_distance_mm * math.radians(p.drift_deg_per_frame))
+        ratios = [c.moved_mm / max(spread * math.sqrt(max(kf_pos[c.b] - kf_pos[c.a], 1)), 1e-9) for c in loops]
+        scale = float(np.clip(np.median(ratios), 1.0, p.max_drift_scale))
+    report["drift_scale"] = round(scale, 2)
+    pg_params = p if scale <= 1.0 else replace(p, drift_mm_per_frame=p.drift_mm_per_frame * scale,
+                                                drift_deg_per_frame=p.drift_deg_per_frame * scale)
+    odometry = odometry_edges(T_kf, frames, lost, pg_params)
     use = list(range(len(loops)))
     T_opt, kept = T_kf, []
     reason, why = "", ""

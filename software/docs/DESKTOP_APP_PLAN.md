@@ -521,6 +521,12 @@ Phase 1 is done when full-quality processing is at least 3x faster on the RTX la
    - The existing checks then verify them, keeping the "never worse" rule.
    - The same code serves multi-scan alignment in M4.
 
+   **Status (2026-11-10): done.** Straighten has no new settings or buttons; it closes much larger drift.
+   - A candidate that ICP can't verify from the tracked pose is checked again with wider drift bounds, and if needed from a global FPFH + FGR guess. A large correction counts only when a second loop agrees.
+   - The drift model now scales to what the loops measure. That was the first wall: at 10 times the usual drift, the loops verified but the solver threw them all out.
+   - On simulated bracket orbits with 5–20 times the usual drift, doubled surfaces close 3–18 times (for example 50 → 2.7 mm at 78 mm of drift, where nothing verified before). Sliding along the surfaces is not fixed (`VALIDATION.md`, "Straighten for large drift").
+   - Not yet: proposing loops by shape alone (beyond the widened gate) and the fragments of research plan 4.4.2, which multi-scan alignment in M4 will share. Nothing has run on real recordings.
+
 **Also queued:**
 - **Temperature logging** (part of #8, before the hardware arrives): the firmware reads the IMU chip's temperature, and every recording stores it, so drift with heat can be modelled later.
   - **Done 2026-11-09.** Firmware 1.1.0 sends it about once a second while the IMU streams (`C` lines; `STATUS` adds `temp=`).

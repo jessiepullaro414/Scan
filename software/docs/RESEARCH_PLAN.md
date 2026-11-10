@@ -409,6 +409,11 @@ The simulator gained orbit and sweep trajectories, and synthetic drift, for it. 
 - **Plugs into:** `find_loop_candidates` and `verify_loop` in `posegraph.py`.
 - **Effort / risk:** M / medium (false loops on repetitive or symmetric parts; keep the line process and the never-worse rule).
 - **Sim check:** orbit and sweep scans with 5–10 times today's synthetic drift. Count true and false loops; measure the final error against the truth.
+- **Done (2026-11-10, M3 phase 3 item 6).** FPFH + FGR between keyframe clouds, as a second try after ICP from the tracked pose, with a candidate gate that widens with the travel between the views. Two findings shaped it:
+  - **The drift model was the first wall, not ICP.** At 10 times today's random walk ICP still verified the loops, but the graph's fixed drift model (about 2 mm over a 60-frame orbit) made the line process prune them all. The model is now scaled to what the loops show (the median of how far they moved against its spread).
+  - **FGR was needed only past about 35 mm.** Below that, ICP from the tracked pose with wider bounds verified the loops. FGR verified 2–3 of them at 78 mm.
+
+  On two bracket orbits with 5–20 times the usual drift, the doubled surfaces close 3–18 times, where the old version left 8–50 mm. Sliding along the surfaces is not fixed (up to 17 % worse with steady drift). A large loop counts only when a second loop also passes. Not done: descriptor similarity to propose candidates the widened gate misses, fragments (4.4.2), TEASER++. Untested: symmetric parts, jumps after tracking loss, real recordings (`VALIDATION.md`, "Straighten for large drift").
 
 #### 4.4.2 Fragments — P2, M4
 - **What:** split long scans into fragments (by frame count or by travel), and fuse each one locally. Register the fragments to each other (4.4.1), optimise a graph of fragments, then re-fuse everything. This is the pipeline of Choi et al. (2015), which Open3D's reconstruction system follows. Voxgraph (Reijgwart et al. 2020, BSD) does the same with SDF submaps.

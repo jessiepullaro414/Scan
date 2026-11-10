@@ -46,6 +46,7 @@ __all__ = [
     "RotatingTrajectory",
     "SweepTrajectory",
     "add_drift",
+    "add_steady_drift",
     "sample_frames",
     "so3_exp_batch",
 ]
@@ -362,6 +363,32 @@ def add_drift(T_wc: np.ndarray, rot_deg: float = 0.05, trans_mm: float = 0.2, se
         rel[:3, :3] = R0.T @ T[k, :3, :3]
         rel[:3, 3] = R0.T @ (T[k, :3, 3] - t0)
         out[k] = out[k - 1] @ rel @ E[k - 1]
+    return out
+
+
+def add_steady_drift(T_wc: np.ndarray, rot_deg: float = 0.2, trans_mm: float = 1.0, seed: int = 0) -> np.ndarray:
+    """Poses (N,4,4) with a steady drift: the same small motion (a rotation of ``rot_deg`` about a
+    random axis and a translation of ``trans_mm`` in a random direction, in the camera frame) after
+    every frame-to-frame motion, chained from the first pose, which is unchanged. Like a gyro or
+    scale bias, it grows linearly along the scan, unlike the random walk of :func:`add_drift`."""
+    T = np.asarray(T_wc, dtype=np.float64)
+    rng = np.random.default_rng(seed)
+    axis = rng.normal(size=3)
+    axis /= np.linalg.norm(axis)
+    tdir = rng.normal(size=3)
+    tdir /= np.linalg.norm(tdir)
+    E = np.eye(4)
+    E[:3, :3] = so3_exp_batch((math.radians(rot_deg) * axis)[None])[0]
+    E[:3, 3] = float(trans_mm) * tdir
+    out = np.empty_like(T)
+    if len(T):
+        out[0] = T[0]
+    for k in range(1, len(T)):
+        R0, t0 = T[k - 1, :3, :3], T[k - 1, :3, 3]
+        rel = np.eye(4)
+        rel[:3, :3] = R0.T @ T[k, :3, :3]
+        rel[:3, 3] = R0.T @ (T[k, :3, 3] - t0)
+        out[k] = out[k - 1] @ rel @ E
     return out
 
 

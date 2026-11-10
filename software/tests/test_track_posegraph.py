@@ -16,7 +16,10 @@
 * **No false loops**: true poses come back unchanged; a scan without a revisit comes back
   unchanged; deliberately wrong loop candidates fail verification; a wrong loop among right ones
   is pruned by the line process; and a correction that needs more bending than the drift model
-  allows is refused.
+  allows is refused (with the model not scaled to the loops).
+* **Large drift** (research plan 4.4.1): 78 mm of steady drift, beyond ICP from the tracked pose,
+  closes with a global first guess (FPFH + FGR) and a drift model scaled to the loops; a lone large
+  loop is not used; the global guess finds a revisit 40 mm and 8 deg off.
 * **Real drift** (``@pytest.mark.slow``): a back-and-forth sweep over the car panel processed by
   ``process_recording`` on the GPU and with ``OHS_COMPUTE=cpu``, then straightened.
 
@@ -40,7 +43,7 @@ from ohs.io.recording import RecordingReader  # noqa: E402
 from ohs.sim.datasets import make_scan_recording  # noqa: E402
 from ohs.sim.nominal import NOMINAL_TIME_OFFSET, nominal_calibration  # noqa: E402
 from ohs.sim.scene import make_scene  # noqa: E402
-from ohs.sim.trajectory import HandheldTrajectory, SweepTrajectory, add_drift, sample_frames  # noqa: E402
+from ohs.sim.trajectory import HandheldTrajectory, SweepTrajectory, add_drift, add_steady_drift, sample_frames  # noqa: E402
 from ohs.track import posegraph as pg  # noqa: E402
 
 ORBIT_FRAMES = 60
@@ -363,17 +366,76 @@ def test_line_process_prunes_a_loop_that_disagrees(orbit, truth):
 
 
 def test_a_correction_the_drift_model_cannot_explain_is_refused(orbit, truth):
-    """With a drift model 100x tighter than the real drift, closing the loops would bend the odometry
-    edges far beyond it: the scan must come back unchanged, with a verdict that says why."""
+    """With a drift model 100x tighter than the real drift (and not scaled to what the loops show),
+    closing the loops would bend the odometry edges far beyond it: the scan must come back
+    unchanged, with a verdict that says why."""
     idx, T, times = truth
     rows = rows_from(add_drift(T, 0.05, 0.2, 1), idx, times)
-    p = pg.StraightenParams(drift_mm_per_frame=0.002, drift_deg_per_frame=0.0005)
+    p = pg.StraightenParams(drift_mm_per_frame=0.002, drift_deg_per_frame=0.0005, adaptive_drift=False)
     poses, rep = pg.straighten_trajectory(orbit, None, rows, params=p)
     metrics("straighten_refused", reason=rep["reason"], verdict=rep["verdict"], residual=rep["residual_mm"])
     assert rep["reason"] in ("bends_too_much", "disagree", "not_better"), rep["verdict"]
     assert rep["changed"] is False and rep["loops_accepted"] == 0 and rep["loops"] == []
     assert "unchanged" in rep["verdict"]
     assert all(np.array_equal(poses[i], rows[k][3]) for k, i in enumerate(idx))
+
+
+# --------------------------------------------------------------------------- large drift (4.4.1)
+def test_large_steady_drift_is_straightened(orbit, truth):
+    """78 mm of steady drift by the end of the orbit (0.8 deg and 4 mm after every frame): the end comes
+    back over the start about 50 mm off, beyond ICP from the tracked pose (20 mm) and the drift model.
+    Without the large-drift steps nothing verifies; with them the doubled surfaces close."""
+    idx, T, times = truth
+    rows = rows_from(add_steady_drift(T, 0.8, 4.0, 0), idx, times)
+    old = pg.StraightenParams(global_registration=False, adaptive_drift=False)
+    poses0, rep0 = pg.straighten_trajectory(orbit, None, rows, params=old)
+    assert rep0["changed"] is False and rep0["reason"] in ("not_verified", "disagree"), rep0["verdict"]
+    poses, rep = pg.straighten_trajectory(orbit, None, rows)
+    m = summary(rep)
+    metrics("straighten_orbit_large_drift", **m, drift_scale=rep["drift_scale"],
+            via_global=sum(c["via"] == "global" and c["accepted"] for c in rep["candidates"]))
+    assert rep["reason"] == "straightened" and rep["changed"] is True, rep["verdict"]
+    assert rep["drift_scale"] > 5 and rep["loops_accepted"] >= 4
+    assert any(c["large"] and c["accepted"] for c in rep["candidates"])
+    gap_b, gap_a = m["revisit_before"]["gap_rms_mm"], m["revisit_after"]["gap_rms_mm"]
+    assert gap_b > 20 and gap_a < 0.15 * gap_b
+    assert m["traj_after"]["rms_mm"] < m["traj_before"]["rms_mm"]
+    assert np.array_equal(poses[idx[0]], rows[0][3])
+
+
+def test_a_lone_large_loop_is_not_used(orbit, truth):
+    """With one candidate only, a large correction has nothing to agree with: the scan stays as it is."""
+    idx, T, times = truth
+    rows = rows_from(add_steady_drift(T, 0.8, 4.0, 0), idx, times)
+    poses, rep = pg.straighten_trajectory(orbit, None, rows, params=pg.StraightenParams(max_candidates=1))
+    assert rep["loop_candidates"] == 1 and rep["changed"] is False and rep["reason"] == "not_verified"
+    assert "second loop" in rep["candidates"][0]["reason"] or not rep["candidates"][0]["large"]
+
+
+def test_the_global_guess_finds_a_far_off_revisit(orbit, truth):
+    """The end over the start, claimed 40 mm and 8 deg away from where it is: ICP from that claim fails;
+    FPFH + FGR find the match, and ICP from there lines the views up along what they measure. The
+    directions they don't measure keep the claim."""
+    idx, T, times = truth
+    rows = rows_from(T, idx, times)
+    kf, T_kf, _, loops, clouds, pos = _orbit_loops(orbit, rows)
+    L = max(loops, key=lambda c: c.b - c.a)
+    src, dst = clouds.get(pos[rows[kf[L.a]][0]]), clouds.get(pos[rows[kf[L.b]][0]])
+    T_true = invert_se3(T_kf[L.b]) @ T_kf[L.a]
+    claim = T_true @ make_se3(so3_exp([math.radians(8.0), 0.0, 0.0]), [40.0, 0.0, 0.0])
+    assert not pg.verify_loop(src, dst, claim, None, 60.0).accepted
+    chk, tried = None, []
+    for method in pg.GLOBAL_METHODS:  # as Straighten does: FGR, then RANSAC, each only as a start
+        start = pg.global_match(src, dst, None, method)
+        tried.append((method, start is not None and pg._plausible(src, claim, start, 60.0, 20.0)))
+        if start is None or not tried[-1][1]:
+            continue
+        chk = pg.verify_loop(src, dst, claim, None, 60.0, start=start, large=True)
+        if chk.accepted:
+            break
+    assert chk is not None and chk.accepted and chk.large, (tried, chk.summary() if chk else None)
+    e = pg._vec6(invert_se3(T_true) @ chk.T_ba)
+    assert math.sqrt(max(float(e @ L.J2 @ e), 0.0)) < 0.3  # on the truth along the measured directions
 
 
 def test_cancel_stops_between_steps(orbit, truth):

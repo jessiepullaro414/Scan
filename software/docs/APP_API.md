@@ -626,7 +626,10 @@ straighten_trajectory(rec_path, calib, trajectory, *, params=None, depth_params=
 #   trajectory: [(frame_index, t_host, ok, T_wc 4x4)] as process_recording writes trajectory.csv
 #   returns the corrected T_wc for every tracked frame and a report:
 #   {keyframes, loop_candidates, loops_accepted, correction_mm, correction_deg, loops: [(i, j)],
-#    verdict (plain words), ground_truth: {before, after} when the recording has true poses}
+#    verdict (plain words), ground_truth: {before, after} when the recording has true poses,
+#    drift_scale (M3 phase 3: the drift model scaled to the loops), candidates[]: {..., large, via}}
+#   large drift (M3 phase 3 item 6): a candidate ICP can't verify from the tracked pose is checked
+#   again with wider bounds, from the tracked pose or a global FPFH + FGR guess (global_match)
 
 # ohs/app/process.py: process_recording(..., poses: dict[int, np.ndarray] | None = None)
 #   fuses at the given poses (no tracking) when poses are passed
