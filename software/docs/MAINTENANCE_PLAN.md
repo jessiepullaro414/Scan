@@ -133,6 +133,10 @@ rather than by percent: processing fewer frames (F2) and making the stereo match
 by the snapshot tool.
 
 ### [ ] F1. Measure the waits a user feels, and set targets (Sonnet, M)
+- **Partly done 2026-11-10:** `ohs bench` prints, per run, the wait per minute of scanning at the
+  camera's frame rate (60 fps), from the mean frame time, and stores it as `wait_per_minute_min`.
+  Still open: the fixed tail after the last frame, the engine start time, the table in
+  VALIDATION.md and the targets.
 - **Change:** `ohs bench` also reports, per quality, the wait per minute of scanning at the
   camera's frame rate, and the fixed tail after the last frame (meshing, cleaning, export). Add a
   timing of engine start to first status message. Put the table above into VALIDATION.md with the

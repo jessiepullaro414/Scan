@@ -21,6 +21,8 @@
      for the laser lines (they are extracted in two threads during the depth; ``laser_extract_cpu``
      is their own time, both images together); ``track`` includes ``track_filter``, ``raycast``,
      ``icp`` and the integrations;
+   * the wait per minute of scanning: minutes to process 60 s of recording at the camera's frame
+     rate (``CameraParams.fps``), from the mean total frame time, assuming every frame is processed;
    * accuracy: the trajectory error against the true poses
      (:func:`~ohs.app.process.trajectory_errors`) and the depth error on the frames with true depth
      (median, p95, share of pixels off by more than 2 mm, bias, valid share overall and where dots
@@ -50,8 +52,10 @@ from typing import Any, Callable
 import cv2
 import numpy as np
 
-__all__ = ["BENCH_VERSION", "BenchSpec", "STANDARD", "QUALITIES", "DEVICES", "default_bench_dir", "ensure_recording",
-           "run_bench", "format_report", "machine_info", "save_report"]
+from ohs.devices.camera import CameraParams
+
+__all__ = ["BENCH_VERSION", "BenchSpec", "STANDARD", "QUALITIES", "DEVICES", "CAMERA_FPS", "default_bench_dir",
+           "ensure_recording", "wait_per_minute_min", "run_bench", "format_report", "machine_info", "save_report"]
 
 log = logging.getLogger(__name__)
 
@@ -61,6 +65,7 @@ DEVICES = ("cpu", "gpu")
 ENV_DIR = "OHS_BENCH_DIR"
 WARMUP_FRAMES = 3
 OUTLIER_MM = 2.0
+CAMERA_FPS = float(CameraParams().fps)  # the camera's frame rate (60); the scan-wait figure assumes every frame is processed
 # stage order of the table (others follow in the order the pipeline reports them)
 STAGE_ORDER = ("rectify", "depth", "laser_extract", "laser_triangulate", "laser", "track_filter", "raycast", "icp",
                "track_integrate", "integrate", "track", "total")
@@ -278,6 +283,11 @@ class _DepthErrors:
         return out
 
 
+def wait_per_minute_min(frame_ms: float, scan_fps: float = CAMERA_FPS) -> float:
+    """Minutes of processing for one minute of recording: ``60 * scan_fps`` frames at ``frame_ms`` each."""
+    return 60.0 * float(scan_fps) * float(frame_ms) / 1000.0 / 60.0
+
+
 def _stats(values: list[float]) -> dict:
     a = np.asarray(values, dtype=np.float64)
     return {"mean": float(a.mean()), "median": float(np.median(a)), "max": float(a.max()), "n": int(a.size)}
@@ -350,7 +360,8 @@ def _run(rec: Path, quality: str, device: str, n_frames: int, progress: Callable
     te = trajectory_errors(reader.ground_truth_poses() or {}, traj)
     te.pop("per_frame", None)
     info.update(frames=n_frames, tracked=int(sum(ok for _, _, ok in traj)), timings_ms=tstats,
-                fps=(1000.0 / total) if total else None, wall_s=wall, trajectory=te, depth_error=derr.summary())
+                fps=(1000.0 / total) if total else None, wall_s=wall, trajectory=te, depth_error=derr.summary(),
+                scan_fps=CAMERA_FPS, wait_per_minute_min=wait_per_minute_min(total) if total else None)
     return info
 
 
@@ -491,6 +502,10 @@ def format_report(report: dict) -> str:
                 row += f"{sp[stage]:>14.2f}x" if stage in sp else f"{'':>15}"
             lines.append(row)
         lines.append(f"  {'frames per second':<18}" + "".join(f"{r['fps']:>18.2f}" if r.get("fps") else f"{'-':>18}" for r in runs))
+        for r in runs:
+            if r.get("wait_per_minute_min") is not None:
+                lines.append(f"  {r['device'].upper()}: wait per minute of scanning at {r.get('scan_fps', CAMERA_FPS):g} fps: "
+                             f"{r['wait_per_minute_min']:.1f} min (mean frame time, every frame processed)")
         for r in runs:
             te, de = r["trajectory"], r["depth_error"]
             who = f"{r['device'].upper()} (depth on {r['depth_backend'].upper()}"

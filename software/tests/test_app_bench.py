@@ -40,10 +40,34 @@ def _check_run(run: dict, quality: str, device: str) -> None:
     assert all(t[k]["n"] == 6 for k in ("rectify", "depth", "track", "total"))
     assert all(s["n"] >= 5 and s["mean"] >= 0 and s["median"] >= 0 for s in t.values())  # no ICP on frame 0
     assert run["fps"] == pytest.approx(1000.0 / t["total"]["mean"])
+    assert run["scan_fps"] == bench.CAMERA_FPS
+    assert run["wait_per_minute_min"] == pytest.approx(t["total"]["mean"] * bench.CAMERA_FPS / 1000.0)
     assert run["trajectory"]["n"] >= 5 and run["trajectory"]["trans_mm"]["max"] < 5.0
     de = run["depth_error"]
     assert de["frames"] == 2 and 0 < de["median_mm"] < 2.0 and 0.5 < de["valid_fraction"] <= 1.0
     assert run["image_size"] == ([640, 400] if quality == "full" else [320, 200])
+
+
+def test_wait_per_minute_of_scanning_arithmetic():
+    from ohs.devices.camera import CameraParams
+
+    assert bench.CAMERA_FPS == CameraParams().fps == 60.0
+    # 60 s of recording = 3600 frames; at 155 ms per frame that is 558 s = 9.3 min
+    assert bench.wait_per_minute_min(155.0, 60.0) == pytest.approx(9.3)
+    assert bench.wait_per_minute_min(1000.0 / 60.0, 60.0) == pytest.approx(1.0)  # real time: one minute per minute
+    assert bench.wait_per_minute_min(0.0, 60.0) == 0.0
+
+
+def test_wait_per_minute_in_report():
+    run = {"device": "cpu", "quality": "full", "image_size": [640, 400], "voxel_mm": 1.0, "depth_backend": "cpu",
+           "tracking_backend": None, "frames": 6, "tracked": 6, "fps": 1000.0 / 155.0,
+           "timings_ms": {"total": {"mean": 155.0, "median": 120.0, "max": 200.0, "n": 6}},
+           "trajectory": {}, "depth_error": {}, "scan_fps": 60.0, "wait_per_minute_min": 9.3}
+    report = {"bench_version": 1, "recording": {"spec": {"image_size": [640, 400]}, "frames_used": 6},
+              "machine": {"cpu": "x", "logical_cpus": 1, "os": "y", "python": "3", "packages": {}},
+              "runs": [run], "speedup": {}}
+    text = bench.format_report(report)
+    assert "CPU: wait per minute of scanning at 60 fps: 9.3 min (mean frame time, every frame processed)" in text
 
 
 def test_recording_is_cached_and_versioned(bench_dir):
@@ -73,6 +97,7 @@ def test_bench_cpu_and_gpu(bench_dir, capsys):
     assert m["cpu"] and m["logical_cpus"] and m["python"] and m["packages"]["ohs"]
     text = bench.format_report(report)
     assert "Full quality (640x400" in text and "Preview quality (320x200" in text and "frames per second" in text
+    assert text.count("wait per minute of scanning at 60 fps:") == len(runs)
     if has_gpu:
         assert all(r["depth_backend"] == "gpu" for r in runs if r["device"] == "gpu")
         assert set(report["speedup"]) == {"full", "preview"} and report["speedup"]["full"]["total"] > 0
