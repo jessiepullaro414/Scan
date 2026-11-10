@@ -427,8 +427,8 @@ export type SaveReply = { session: CalibSession; setup: SetupState };
 // ================================================================== M3 phase 2: processing studio
 // APP_API.md "M3 phase 2: processing studio". Adds to M1 and M2; changes nothing in them.
 
-/** The four stages of a scan's processing; each ends in a new base mesh. */
-export type StageId = "track" | "straighten" | "fuse" | "refine";
+/** The stages of a scan's processing; each ends in a new base mesh. */
+export type StageId = "track" | "straighten" | "fuse" | "spacetime" | "refine";
 export type StageState = "none" | "running" | "done" | "failed" | "skipped";
 
 export type MeshOp = "remove_floaters" | "fill_holes" | "smooth" | "decimate" | "delete_faces" | "keep_faces";
@@ -487,6 +487,16 @@ export type StageInfo = { state: StageState; summary: string | null; when: strin
 export type TrackStage = StageInfo & { quality: ProcessQuality | null; tracked_pct: number | null };
 export type StraightenStage = StageInfo & { loops: number | null; correction_mm: number | null; correction_deg: number | null };
 export type FuseStage = StageInfo & { voxel_mm: number | null };
+/** "Refine from the images" (a trial build): the base stage's mesh measured against the recording's frames. */
+export type SpacetimeStage = StageInfo & {
+  source: StageId | null; // the stage whose mesh was refined
+  frames: number | null; // frames read
+  patches: number | null; // patches on the surface
+  kept: number | null; // patches with dots in enough frames, and a clear match
+  covered_pct: number | null; // share of the surface refined, %
+  moved_mm: number | null; // how far it moved (95th percentile), mm
+  device: "gpu" | "cpu" | null;
+};
 /** "Refine with lasers": the base stage's mesh pulled onto its laser points. */
 export type RefineStage = StageInfo & {
   source: StageId | null; // the stage whose mesh was refined
@@ -501,7 +511,7 @@ export type RefineStage = StageInfo & {
 export type ProcessState = {
   project_id: string;
   scan_id: string;
-  stages: { track: TrackStage; straighten: StraightenStage; fuse: FuseStage; refine: RefineStage };
+  stages: { track: TrackStage; straighten: StraightenStage; fuse: FuseStage; spacetime: SpacetimeStage; refine: RefineStage };
   base: { triangles: number; vertices: number; stage: StageId } | null;
   edits: EditEntry[];
   cursor: number; // edits[0:cursor] are applied

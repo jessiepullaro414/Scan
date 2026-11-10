@@ -12,7 +12,7 @@ import { cn } from "../../lib/util";
 import { processKey, useProcess } from "../../store/process";
 import { Help, Panel } from "./bits";
 
-const STAGE_LABEL = { track: "Track", straighten: "Straighten", fuse: "Fuse", refine: "Refine with lasers" } as const;
+const STAGE_LABEL = { track: "Track", straighten: "Straighten", fuse: "Fuse", spacetime: "Refine from the images", refine: "Refine with lasers" } as const;
 
 function fmtMs(ms: number): string {
   if (!Number.isFinite(ms)) return "";

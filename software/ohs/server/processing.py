@@ -1,7 +1,7 @@
 """The processing studio (APP_API.md "M3 phase 2"): stages, mesh edits with undo / redo, recipes,
 inspection overlays.
 
-**Model.** A scan's processing is four stages, each a job that ends in a new *base mesh*:
+**Model.** A scan's processing is five stages, each a job that ends in a new *base mesh*:
 
 * ``track`` (``process_track``): :func:`ohs.app.process.process_recording` at a quality;
 * ``straighten`` (``process_straighten``): loop closure
@@ -12,6 +12,10 @@ inspection overlays.
   verdict as the summary (e.g. "No loops found: ..."), and the edits stay;
 * ``fuse`` (``process_fuse``): ``process_recording(poses=...)`` at the current poses (the
   straightened ones once straighten is done) and a chosen voxel size;
+* ``spacetime`` (``process_spacetime``, "Refine from the images", a trial build): the base's stage
+  mesh measured against up to 120 frames of the recording (:func:`ohs.track.spacetime.refine_from_images`:
+  small patches searched along their normals for where the two images of every frame agree).
+  ``skipped`` (base and edits unchanged) when too few patches hold dots in enough frames;
 * ``refine`` (``process_refine``, "Refine with lasers"): the base's stage mesh pulled onto that
   stage's laser cloud (:func:`ohs.mesh.anchor_to_points`, a smooth correction along the normals
   where the lasers disagree with the dense surface by more than their own error). ``skipped``
@@ -19,8 +23,8 @@ inspection overlays.
 
 An ordered list of *edits* (``mesh_edit`` jobs: :mod:`ohs.mesh` operations) applies to the base;
 ``cursor`` edits are active, and undo / redo move it. A new base clears the edits (face indices
-no longer match), a new track also resets straighten, fuse and refine (they build on its
-trajectory), a new straighten or fuse resets refine.
+no longer match), a new track also resets straighten, fuse and the refinements (they build on its
+trajectory), a new straighten or fuse resets the refinements, and a new spacetime resets refine.
 The *current mesh* (base + active edits) is always written to ``result/mesh.ply`` (vertex
 normals), ``mesh.stl`` and, when ``[process] export`` asks for it, ``mesh.obj``, each replaced
 atomically, and ``version`` goes up by one on every change. "Make mesh" (``process_scan``, M1)
@@ -38,6 +42,7 @@ are "not measured", 50 mm), the stats get ``sigma_mm`` and ``result/mesh.ply`` i
     straighten/            the fuse at the corrected poses (same files) + straighten.json
     straighten.json        the loop-closure report of the last straighten (also when skipped)
     fuse/                  the fuse at the current poses and the chosen voxel size
+    spacetime/             the refined mesh, the source stage's other files, report.json + "spacetime"
     refine/                the refined mesh, the source stage's other files, report.json + "refine"
     cache/base.npz         the base mesh (V float32, F int32, vertex normals float16, sigmas float32)
     cache/<edit id>.npz    the mesh after that edit, for the steps within 10 of the cursor
@@ -94,15 +99,16 @@ __all__ = ["ProcessManager", "RecipeStore", "ScanProcess", "BUILTIN_RECIPES", "P
 
 log = logging.getLogger(__name__)
 
-STAGES = ("track", "straighten", "fuse", "refine")
+STAGES = ("track", "straighten", "fuse", "spacetime", "refine")
 MESH_OPS = ("remove_floaters", "fill_holes", "smooth", "decimate", "delete_faces", "keep_faces")
 RECIPE_OPS = MESH_OPS[:4]
-PROCESS_KINDS = ("process_scan", "process_track", "process_straighten", "process_fuse", "process_refine", "mesh_edit",
-                 "process_recipe")
+PROCESS_KINDS = ("process_scan", "process_track", "process_straighten", "process_fuse", "process_spacetime",
+                 "process_refine", "mesh_edit", "process_recipe")
 MIN_LASER_POINTS = 200  # fewer laser points than this can't anchor anything
 #: refine changes the mesh only when it would move at least this share of the vertices; below, the
 #: corrections are the lasers' own scatter (0.4-0.7 % on unbiased simulated scans, 3-14 % with a bias)
 REFINE_MIN_SHARE = 0.01
+SPACETIME_MIN_PATCHES = 50  # fewer kept patches than this: "Refine from the images" changes nothing
 CACHE_STEPS = 10
 MAX_TRAJ_POINTS = 2000
 MAX_HOLE_OUTLINES = 500
@@ -113,7 +119,8 @@ DEFAULT_FLOATERS = {"min_size_mm": 5.0}
 #: what the busy line says while a job of each kind runs
 _BUSY = {"process_scan": "Making the mesh…", "process_track": "Tracking the scan…",
          "process_straighten": "Straightening…", "process_fuse": "Fusing…",
-         "process_refine": "Refining with the laser lines…", "process_recipe": "Applying the recipe…"}
+         "process_spacetime": "Refining from the images…", "process_refine": "Refining with the laser lines…",
+         "process_recipe": "Applying the recipe…"}
 _BUSY_OPS = {"remove_floaters": "Removing floaters…", "fill_holes": "Filling holes…", "smooth": "Smoothing…",
              "decimate": "Simplifying…", "delete_faces": "Deleting the selection…",
              "keep_faces": "Keeping the selection…"}
@@ -522,6 +529,8 @@ def _empty_state(pid: str, sid: str) -> dict:
             "stages": {"track": {**base, "quality": None, "tracked_pct": None, "voxel_mm": None},
                        "straighten": {**base, "loops": None, "correction_mm": None, "correction_deg": None},
                        "fuse": {**base, "voxel_mm": None},
+                       "spacetime": {**base, "source": None, "frames": None, "patches": None, "kept": None,
+                                     "covered_pct": None, "moved_mm": None, "device": None},
                        "refine": {**base, "source": None, "points": None, "outliers": None, "moved_pct": None,
                                   "moved_mm": None, "residual_before_mm": None, "residual_after_mm": None}},
             "base": None, "edits": [], "cursor": 0, "version": 0}
@@ -1201,7 +1210,7 @@ class ProcessManager:
             prog(0.96, "Saving the mesh", force=True)
             fr = report.get("frames") or {}
             with sp.lock:  # a new trajectory: straighten, fuse and refine start over
-                for name in ("straighten", "fuse", "refine"):
+                for name in ("straighten", "fuse", "spacetime", "refine"):
                     sp.state["stages"][name] = _empty_state(sp.pid, sp.sid)["stages"][name]
                     _rmtree(sp.dir / name)
                 p = sp.dir / "straighten.json"
@@ -1269,8 +1278,8 @@ class ProcessManager:
                                      voxel_mm=track.get("voxel_mm"), poses=poses)
             (sp.dir / "straighten" / "straighten.json").write_text(json.dumps(jsonable(rep), indent=1), encoding="utf-8")
             prog(0.96, "Saving the mesh", force=True)
-            with sp.lock:  # fuse and refine built on the old poses
-                for name in ("fuse", "refine"):
+            with sp.lock:  # fuse and the refinements built on the old poses
+                for name in ("fuse", "spacetime", "refine"):
                     sp.state["stages"][name] = _empty_state(sp.pid, sp.sid)["stages"][name]
                     _rmtree(sp.dir / name)
             self._new_base(sp, "straighten", sp.dir / "straighten", report, track.get("quality"))
@@ -1304,9 +1313,10 @@ class ProcessManager:
             report = self._fuse_into(ctx, sp, "fuse", prog.sub(0.0, 0.95), quality=track.get("quality") or "full",
                                      voxel_mm=voxel_mm if voxel_mm is not None else track.get("voxel_mm"), poses=poses)
             prog(0.96, "Saving the mesh", force=True)
-            with sp.lock:  # refine built on the previous base
-                sp.state["stages"]["refine"] = _empty_state(sp.pid, sp.sid)["stages"]["refine"]
-                _rmtree(sp.dir / "refine")
+            with sp.lock:  # the refinements built on the previous base
+                for name in ("spacetime", "refine"):
+                    sp.state["stages"][name] = _empty_state(sp.pid, sp.sid)["stages"][name]
+                    _rmtree(sp.dir / name)
             self._new_base(sp, "fuse", sp.dir / "fuse", report, track.get("quality"))
             used = (report.get("mesh") or {}).get("voxel_mm")
             n = (report.get("frames") or {}).get("processed")
@@ -1387,6 +1397,84 @@ class ProcessManager:
             self._stage_end(sp, "refine", state="failed", summary=f"Refining failed: {e}")
             raise
 
+    def _do_spacetime(self, ctx: Any, sp: ScanProcess, prog: _Prog) -> str:
+        """"Refine from the images" (a trial build): measure the base stage's mesh against the
+        recording's frames (:func:`ohs.track.spacetime.refine_from_images`). Returns the summary;
+        ``skipped`` (base and edits unchanged) when too few patches hold dot texture in enough
+        frames."""
+        from ohs.io.recording import RecordingReader
+        from ohs.mesh import vertex_normals
+        from ohs.track.export import save_mesh
+        from ohs.track.spacetime import SpacetimeParams, frames_from_recording, refine_from_images
+
+        before = self._stage_start(sp, "spacetime", ctx.job.id)
+        try:
+            self._need_base(sp)
+            with sp.lock:
+                src = (sp.state["base"] or {}).get("stage")
+                if src == "refine":  # the lasers refine last: start from the mesh they refined
+                    src = sp.state["stages"]["refine"].get("source") or "track"
+                if src == "spacetime":  # again: from the mesh it refined
+                    src = before.get("source") or "track"
+                quality = sp.state["stages"]["track"].get("quality")
+            src_dir = sp.dir / str(src)
+            poses = self._current_poses(sp)
+            calib = RecordingReader(sp.recording_dir).calibration()
+            if calib is None or not poses:
+                raise ApiError(409, "this scan has no calibration or no tracked frames", "run Track again")
+            params = SpacetimeParams()
+            left, right, T, K, B = frames_from_recording(
+                str(sp.recording_dir), calib, poses, params.max_frames, cancelled=lambda: ctx.cancelled,
+                progress=lambda f, m: prog(0.12 * f, f"Reading the frames: {m}"))
+            ctx.check()
+            V, F, S = _read_stage_mesh(src_dir / "mesh.ply")
+            V2, _, rep = refine_from_images(V, F, left, right, T, K, B, params, cancelled=lambda: ctx.cancelled,
+                                            progress=lambda f, m: prog(0.12 + 0.8 * f, f"Refining: {m}"))
+            del left, right
+            ctx.check()
+            rep.pop("patch_results", None)
+            covered = round(100.0 * float(rep["covered_share"]), 1)
+            fields = {"source": src, "frames": rep["frames"], "patches": rep["patches"], "kept": rep["kept"],
+                      "covered_pct": covered, "moved_mm": rep["moved"]["p95"], "device": rep["device"]}
+            if rep["kept"] < SPACETIME_MIN_PATCHES or rep["covered_share"] < REFINE_MIN_SHARE:
+                msg = (f"Too few parts of the surface hold dots in enough frames ({rep['kept']:,} of "
+                       f"{rep['patches']:,} patches), so the mesh was left as it is")
+                self._stage_end(sp, "spacetime", state="skipped", summary=msg, **fields)
+                return msg
+            prog(0.93, "Saving the mesh", force=True)
+            tmp = sp.dir / f"spacetime.tmp-{ctx.job.id}"
+            _rmtree(tmp)
+            tmp.mkdir(parents=True)
+            try:
+                save_mesh(tmp / "mesh.ply", V2, F, vertex_normals(V2, F), quality=S)  # each vertex keeps its sigma
+                for name in ("trajectory.csv", "laser_points.ply", "marker_map.json"):
+                    if (src_dir / name).is_file():
+                        shutil.copy2(src_dir / name, tmp / name)
+                report: dict = {}
+                if (src_dir / "report.json").is_file():
+                    report = json.loads((src_dir / "report.json").read_text(encoding="utf-8"))
+                report["spacetime"] = {**rep, "source": src}
+                (tmp / "report.json").write_text(json.dumps(jsonable(report), indent=1), encoding="utf-8")
+                ctx.check()
+                _move_dir(tmp, sp.dir / "spacetime")
+            finally:
+                _rmtree(tmp)
+            with sp.lock:  # the lasers refine the new surface
+                sp.state["stages"]["refine"] = _empty_state(sp.pid, sp.sid)["stages"]["refine"]
+                _rmtree(sp.dir / "refine")
+            self._new_base(sp, "spacetime", sp.dir / "spacetime", report, quality)
+            where = "on the GPU" if rep["device"] == "gpu" else "on the CPU"
+            summary = (f"Measured {covered:g} % of the surface against {rep['frames']:,} frames ({rep['kept']:,} patches, "
+                       f"{where}); it moved by up to {rep['moved']['p95']:.2f} mm (95 %)")
+            self._stage_end(sp, "spacetime", state="done", summary=summary, job_id=ctx.job.id, **fields)
+            return summary
+        except (JobCancelled, InterruptedError):
+            self._stage_restore(sp, "spacetime", before)
+            raise
+        except Exception as e:
+            self._stage_end(sp, "spacetime", state="failed", summary=f"Refining from the images failed: {e}")
+            raise
+
     def _stage_job(self, pid: str, sid: str, kind: str, body: Callable[[Any, ScanProcess, _Prog], str],
                    *, need_track: bool, message: str, meta: dict | None = None) -> Any:
         with self.st._lock:
@@ -1441,6 +1529,10 @@ class ProcessManager:
     def submit_refine(self, pid: str, sid: str) -> Any:
         return self._stage_job(pid, sid, "process_refine", lambda ctx, sp, prog: self._do_refine(ctx, sp, prog),
                                need_track=True, message="Refining with the laser lines")
+
+    def submit_spacetime(self, pid: str, sid: str) -> Any:
+        return self._stage_job(pid, sid, "process_spacetime", lambda ctx, sp, prog: self._do_spacetime(ctx, sp, prog),
+                               need_track=True, message="Refining from the images")
 
     def submit_fuse(self, pid: str, sid: str, voxel_mm: float | None) -> Any:
         if voxel_mm is not None:
@@ -1570,8 +1662,9 @@ class ProcessManager:
                     raise ApiError(409, "this scan has no processing steps to save", "run Track and some edits first")
                 track = st["stages"]["track"]
                 made_by = st["base"]["stage"]
-                if made_by == "refine":
-                    made_by = st["stages"]["refine"].get("source") or "track"
+                for name in ("refine", "spacetime"):  # a refinement: the stage it refined
+                    if made_by == name:
+                        made_by = st["stages"][name].get("source") or "track"
                 voxel = st["stages"]["fuse"].get("voxel_mm") if made_by == "fuse" else track.get("voxel_mm")
                 settings = {"quality": track.get("quality") or "full",
                             "straighten": "auto" if st["stages"]["straighten"]["state"] in ("done", "skipped") else "off",

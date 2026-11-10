@@ -502,7 +502,7 @@ The Process page of a scan (see the M3 plan in [`DESKTOP_APP_PLAN.md`](DESKTOP_A
 - `health.api` and `hello.version` become `"0.3.0"`.
 
 **Model.**
-- A scan's processing is four **stages**: `track`, `straighten`, `fuse`, `refine` (M3 phase 3: "Refine with lasers"). Each ends in a new **base mesh**.
+- A scan's processing is five **stages**: `track`, `straighten`, `fuse`, `spacetime` (M3 phase 3, a trial build: "Refine from the images") and `refine` (M3 phase 3: "Refine with lasers"). Each ends in a new **base mesh**.
 - An ordered list of **edits** applies to the base mesh. `cursor` is how many of them are active; undo and redo move it.
 - The **current mesh** is the base plus the active edits. It is always written to the scan's `result/mesh.ply` (and `mesh.stl`, plus `mesh.obj` when configured), so the M1 viewer and downloads show the current version.
 - Re-running a stage replaces the base and **clears the edits**: face indices no longer match. The UI confirms first.
@@ -547,12 +547,17 @@ type ProcessState = {
     track: StageInfo & { quality: "preview" | "full" | null; tracked_pct: number | null };
     straighten: StageInfo & { loops: number | null; correction_mm: number | null; correction_deg: number | null };
     fuse: StageInfo & { voxel_mm: number | null };
-    refine: StageInfo & { source: "track" | "straighten" | "fuse" | null;   // the stage whose mesh was refined
+    spacetime: StageInfo & { source: "track" | "straighten" | "fuse" | null;   // the stage whose mesh was refined
+                             frames: number | null; patches: number | null;   // frames read; patches on the surface
+                             kept: number | null;                             // patches with dots in enough frames
+                             covered_pct: number | null; moved_mm: number | null;  // % refined; p95 move (mm)
+                             device: "gpu" | "cpu" | null };
+    refine: StageInfo & { source: "track" | "straighten" | "fuse" | "spacetime" | null;   // the stage whose mesh was refined
                           points: number | null; outliers: number | null;  // laser points used / left out
                           moved_pct: number | null; moved_mm: number | null;  // % of the surface moved; p95 offset (mm)
                           residual_before_mm: number | null; residual_after_mm: number | null };  // median, mm
   };
-  base: { triangles: number; vertices: number; stage: "track" | "straighten" | "fuse" | "refine" } | null;
+  base: { triangles: number; vertices: number; stage: "track" | "straighten" | "fuse" | "spacetime" | "refine" } | null;
   edits: EditEntry[]; cursor: number;       // edits[0:cursor] are applied
   can_undo: boolean; can_redo: boolean;
   current: { version: number;             // increases on every change: use it to reload the mesh
@@ -580,6 +585,7 @@ Paths are relative to `/api/projects/{pid}/scans/{sid}`.
 | `POST .../process/track` | `{quality}` | `Job` (kind `process_track`) |
 | `POST .../process/straighten` | `{}` | `Job` (kind `process_straighten`): loop closure, then a fuse at the corrected poses |
 | `POST .../process/fuse` | `{voxel_mm}` | `Job` (kind `process_fuse`) |
+| `POST .../process/spacetime` | `{}` | `Job` (kind `process_spacetime`): "Refine from the images", see below |
 | `POST .../process/refine` | `{}` | `Job` (kind `process_refine`): "Refine with lasers", see below |
 | `POST .../process/edits` | `{op, params}` | `Job` (kind `mesh_edit`). Any redo steps after the cursor are dropped first. |
 | `POST .../process/undo` | | `ProcessState` (instant for the last 10 steps) |
@@ -611,6 +617,8 @@ delete_faces(V, F, faces) / keep_faces(V, F, faces)
 mesh_stats(V, F) -> dict (MeshStats)              ;  hole_outlines(V, F) -> list[dict]
 sigma_stats(S, V, F) -> dict (SigmaStats) | None  ;  carry_sigma(op, V, F, S, V2, faces=None) -> S2  # ohs/mesh/confidence.py
 anchor_to_points(V, F, P, params=AnchorParams()) -> (V2, delta, report)   # ohs/mesh/anchor.py: Refine with lasers
+refine_from_images(V, F, left, right, T_wc, K, baseline, params=SpacetimeParams()) -> (V2, delta, report)
+frames_from_recording(rec, calib, poses, max_frames=120) -> (left, right, T_wc, K, baseline)   # ohs/track/spacetime.py
 
 # ohs/track/posegraph.py (new)
 straighten_trajectory(rec_path, calib, trajectory, *, params=None, depth_params=None, progress=None,
@@ -642,14 +650,14 @@ Everything in the M3 phase 2 section is implemented as written, with these clari
 **ProcessState**
 - `current.mesh_url` is `/api/projects/{pid}/scans/{sid}/files/mesh.ply`, the M1 file. The files route sends `Cache-Control: no-cache` and ignores a query, so `?v=<version>` can be appended.
 - `current.version` starts at 1 with the first base. It goes up by 1 on every change of the current mesh: a new base, an edit, an undo, a redo, and the clearing of the edits by a recipe.
-- `busy` reads "Tracking the scan…", "Straightening…", "Fusing…", "Making the mesh…", "Applying the recipe Body panel…", "Removing floaters…", "Filling holes…", "Smoothing…", "Simplifying…", "Deleting the selection…" or "Keeping the selection…".
+- `busy` reads "Tracking the scan…", "Straightening…", "Fusing…", "Refining from the images…", "Refining with the laser lines…", "Making the mesh…", "Applying the recipe Body panel…", "Removing floaters…", "Filling holes…", "Smoothing…", "Simplifying…", "Deleting the selection…" or "Keeping the selection…".
 - `job` is the scan's running processing job, or null. A `process` message is also sent with every update of that job (at most 5 per second), so its `job.progress` is current.
 - Stages:
   - `when` is when the stage last finished; `job_id` is the job that ran it (for a recipe or Make mesh, that job's id).
   - `track.tracked_pct` is 0–100. *extra*: `track.voxel_mm`, the voxel size a recipe asked for (null = the quality's default).
   - `straighten.loops` is the engine's `loops_accepted`; `correction_mm` / `correction_deg` are its largest change of a camera position / orientation.
   - `fuse.voxel_mm` is the voxel size actually used.
-  - A new track resets straighten and fuse to `none`, and a new straighten resets fuse: they built on the old poses.
+  - A new track resets straighten, fuse and both refinements to `none`, a new straighten resets fuse and the refinements (they built on the old poses), a new fuse resets the refinements, and a new `spacetime` resets `refine`.
 - A cancelled stage returns to its previous state, and its files are untouched. A failed stage is `failed` with the reason as its `summary`; the base and the edits stay.
 
 **Stages**
@@ -670,6 +678,12 @@ Everything in the M3 phase 2 section is implemented as written, with these clari
   - It is `skipped`, and the base and edits stay, when the scan has fewer than 200 laser points ("This scan has no laser points (the lasers were off or not calibrated), so the mesh was left as it is") or when less than 1 % of the surface would move ("The mesh already agrees with the laser lines (0.08 mm median difference over 65,643 points), so nothing was changed").
   - When it moves the mesh, it is `done`, the refined mesh becomes the base (each vertex keeps its sigma), and the summary says by how much, e.g. "Pulled 9.7 % of the surface onto 65,589 laser points, by up to 0.50 mm (95 %); the median difference fell from 0.41 to 0.07 mm". `report.json` gets a `refine` section with the full numbers.
   - A new track, straighten (when it changes the poses) or fuse resets it. Recipes run it after Straighten when `settings.refine` is `"auto"` (the default; "Quick preview" has `"off"`), so Make mesh refines too; when it fails there, the recipe goes on with the fused mesh.
+- `POST .../process/spacetime` ("Refine from the images", M3 phase 3 item 5, a **trial build**): the body is optional; 409 without a finished Track.
+  - It takes the mesh of the stage that made the base (`source`: when the base is refined by either refinement, the mesh before it) and up to 120 frames of the recording with a pose (the straightened poses when Straighten is `done`), rectified at full resolution, and measures the surface against them (`ohs.track.spacetime.refine_from_images`, research plan 7.2): small patches of the surface are searched along their normals for where the left and right images of every frame agree best. Where a patch holds dots in at least 16 frames and its match is clear, the vertices around it move onto the measured surface; elsewhere the mesh stays as fused.
+  - It runs on the GPU when there is one (about 10 s for 36 frames on a Radeon 680M); without one the same search runs on the CPU, much more slowly.
+  - It is `skipped`, and the base and edits stay, when fewer than 50 patches (or 1 % of the surface) qualify ("Too few parts of the surface hold dots in enough frames (0 of 9,875 patches), so the mesh was left as it is").
+  - When it moves the mesh, it is `done`, the refined mesh becomes the base (each vertex keeps its sigma), and the summary says how much, e.g. "Measured 45 % of the surface against 36 frames (20,338 patches, on the GPU); it moved by up to 0.12 mm (95 %)". `report.json` gets a `spacetime` section with the full numbers.
+  - It resets `refine`: run it before Refine with lasers. Recipes and Make mesh don't run it (a trial build).
 - **Laser points** are also checked per frame against that frame's dense depth (`ohs.vision.laser.depth_check`: within 4 sigma, at least 1 mm, at the point's pixel or 6 px to a side). The report counts the dropped ones as `lasers.n_rejected_by_depth`.
 - **Scan status:** stage jobs and recipe `all` jobs set the scan to `processing`. Afterwards it is `processed` when it has a mesh, else `failed` (with `error`) or `recorded`. Edit jobs leave the status alone.
 - **Make mesh** (`POST .../process`) is the Default recipe with scope `all` at the requested quality. Its job kind (`process_scan`), result `{project_id, scan_id, scan, message: "Mesh ready"}` and statuses are M1's.
@@ -677,7 +691,7 @@ Everything in the M3 phase 2 section is implemented as written, with these clari
   - Any other processing job running on the scan: 409 "this scan is busy (…)".
 
 **Jobs**
-- Kinds: `process_track`, `process_straighten`, `process_fuse`, `process_refine`, `mesh_edit`, `process_recipe` (the contract leaves the recipe kind open) and `process_scan`.
+- Kinds: `process_track`, `process_straighten`, `process_fuse`, `process_spacetime`, `process_refine`, `mesh_edit`, `process_recipe` (the contract leaves the recipe kind open) and `process_scan`.
 - *extra* job fields: `project_id`, `scan_id`, plus:
   - `quality` (track, Make mesh);
   - `op` (edits);

@@ -230,6 +230,8 @@ export const api = {
   processTrack: (pid: string, sid: string, quality: ProcessQuality) => post<Job>(`${scanPath(pid, sid)}/process/track`, { quality }),
   /** Job (kind `process_straighten`): loop closure, then a fuse at the corrected poses. */
   processStraighten: (pid: string, sid: string) => post<Job>(`${scanPath(pid, sid)}/process/straighten`, {}),
+  /** Job (kind `process_spacetime`): measure the base mesh against the recording's frames (a trial build). */
+  processSpacetime: (pid: string, sid: string) => post<Job>(`${scanPath(pid, sid)}/process/spacetime`, {}),
   /** Job (kind `process_refine`): pull the base mesh onto the scan's laser points. */
   processRefine: (pid: string, sid: string) => post<Job>(`${scanPath(pid, sid)}/process/refine`, {}),
   /** Job (kind `process_fuse`): the mesh again from the current poses at this voxel size. */

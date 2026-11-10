@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import base64
 import csv
+import dataclasses
 import json
 import shutil
 import time
@@ -144,7 +145,8 @@ def test_process_recording_fuses_at_given_poses(env, tmp_path):
     A = poses[i0] @ np.linalg.inv(gt[i0])
     half = {i: A @ gt[i] for i in sorted(poses)[::2]}
     at_truth = process_recording(env["rec"], tmp_path / "truth", params=params, poses=half)
-    assert at_truth["frames"]["processed"] == len(half) and at_truth["frames"]["without_pose"] == len(poses) - len(half)
+    n_rec = len(RecordingReader(env["rec"]))  # a frame the tracker lost (it can, on a busy CPU) has no pose either
+    assert at_truth["frames"]["processed"] == len(half) and at_truth["frames"]["without_pose"] == n_rec - len(half)
     assert at_truth["ground_truth"]["rms_trans_mm"] < 1e-3
     with pytest.raises(ValueError, match="none of the given poses"):
         process_recording(env["rec"], tmp_path / "none", params=params, poses={999: np.eye(4)})
@@ -156,7 +158,7 @@ def test_a_fresh_scan_and_the_409_rules(env):
     s = get(b + "/process").json()
     assert s["project_id"] == env["pid"] and s["scan_id"] == env["sid"]
     assert {k: v["state"] for k, v in s["stages"].items()} == {"track": "none", "straighten": "none", "fuse": "none",
-                                                               "refine": "none"}
+                                                               "spacetime": "none", "refine": "none"}
     assert s["base"] is None and s["current"] is None and s["edits"] == [] and s["cursor"] == 0
     assert s["can_undo"] is False and s["can_redo"] is False and s["busy"] is None and s["job"] is None
     assert {"quality", "tracked_pct"} <= set(s["stages"]["track"]) and {"loops", "correction_mm", "correction_deg"} <= \
@@ -530,6 +532,48 @@ def test_refine_with_lasers(env):
     run_job(env, post(b2 + "/process/refine"), "process_refine")
     rf = get(b2 + "/process").json()["stages"]["refine"]
     assert rf["state"] == "skipped" and "no laser points" in rf["summary"]
+
+
+def test_refine_from_the_images(env, monkeypatch):
+    import ohs.track.spacetime as stm
+
+    pid, sid = add_scan(env, "Spacetime", env["rec"])
+    b = base_url(env, pid, sid)
+    err(post(b + "/process/spacetime"), 409, "track")
+    run_job(env, post(b + "/process/track", {"quality": "full"}), "process_track")
+    # the 10 frames are fewer than a patch needs by default: nothing changes
+    j = run_job(env, post(b + "/process/spacetime"), "process_spacetime")
+    s = get(b + "/process").json()
+    stt = s["stages"]["spacetime"]
+    assert stt["state"] == "skipped" and stt["source"] == "track" and stt["frames"] == 10 and stt["kept"] == 0
+    assert "left as it is" in stt["summary"] and j["result"]["message"] == stt["summary"]
+    assert s["base"]["stage"] == "track"
+    # with fewer views required, the surface is measured against the frames
+    defaults = stm.SpacetimeParams
+    light = {"half_px": 4.0, "levels": ((0.4, 0.1), (0.1, 0.025))}  # this checks the stage, not the search: quick on a CPU
+    monkeypatch.setattr(stm, "SpacetimeParams", lambda: dataclasses.replace(defaults(), min_views=6, **light))
+    run_job(env, post(b + "/process/edits", {"op": "remove_floaters", "params": {"min_size_mm": 5}}), "mesh_edit")
+    j = run_job(env, post(b + "/process/spacetime"), "process_spacetime")
+    s = get(b + "/process").json()
+    stt = s["stages"]["spacetime"]
+    assert stt["state"] == "done" and stt["source"] == "track" and stt["kept"] >= 50, stt
+    assert stt["summary"].startswith("Measured") and stt["covered_pct"] > 1 and stt["device"] in ("gpu", "cpu")
+    assert s["base"]["stage"] == "spacetime" and s["edits"] == []  # a new base: the edits start over
+    res = env["root"] / "projects" / pid / "scans" / sid / "result"
+    rep = json.loads((res / "report.json").read_text(encoding="utf-8"))["spacetime"]
+    assert rep["source"] == "track" and rep["kept"] == stt["kept"] and "patch_results" not in rep
+    track_q = load_ply(env["root"] / "projects" / pid / "scans" / sid / "process" / "track" / "mesh.ply")["quality"]
+    assert (load_ply(res / "mesh.ply")["quality"] is None) == (track_q is None)  # each vertex keeps its sigma
+    # the lasers refine the new surface; spacetime again starts from the mesh it refined
+    run_job(env, post(b + "/process/refine"), "process_refine")
+    assert get(b + "/process").json()["stages"]["refine"]["source"] == "spacetime"
+    run_job(env, post(b + "/process/spacetime"), "process_spacetime")
+    s = get(b + "/process").json()
+    assert s["stages"]["spacetime"]["source"] == "track" and s["stages"]["refine"]["state"] == "none"
+    # a new fuse makes a new base: both refinements start over
+    run_job(env, post(b + "/process/fuse", {"voxel_mm": 2.0}), "process_fuse")
+    s = get(b + "/process").json()
+    assert s["stages"]["spacetime"]["state"] == "none" and s["base"]["stage"] == "fuse"
 
 
 def test_measurement_safe_edits(env):

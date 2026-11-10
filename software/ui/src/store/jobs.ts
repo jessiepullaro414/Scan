@@ -34,7 +34,7 @@ export const isActive = (j: Job | undefined | null) => !!j && (j.state === "queu
  * edit (`mesh_edit`) or a recipe. The contract leaves the recipe job's kind open; anything
  * naming a recipe counts. These are followed by the process store, not as "Make mesh".
  */
-export const isStudioJob = (kind: string): boolean => /^process_(track|straighten|fuse|refine)|mesh_edit|recipe|^edit/i.test(kind);
+export const isStudioJob = (kind: string): boolean => /^process_(track|straighten|fuse|spacetime|refine)|mesh_edit|recipe|^edit/i.test(kind);
 
 /** The scan a job works on, when the engine says (top-level extras, else the result). */
 export function jobScanRef(job: Job): { pid: string; sid: string } | null {
@@ -146,6 +146,7 @@ export const jobKindLabel = (kind: string): string => {
     if (k.includes("track")) return "Track";
     if (k.includes("straighten")) return "Straighten";
     if (k.includes("fuse")) return "Fuse";
+    if (k.includes("spacetime")) return "Refine from the images";
     if (k.includes("refine")) return "Refine with lasers";
     if (k.includes("recipe")) return "Apply recipe";
     return "Mesh edit";

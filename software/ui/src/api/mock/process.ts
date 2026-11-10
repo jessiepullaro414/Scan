@@ -22,6 +22,7 @@ import type {
   RecipeScope,
   RecipeSettings,
   RefineStage,
+  SpacetimeStage,
   Scan,
   StageId,
   StraightenStage,
@@ -46,7 +47,7 @@ import {
 } from "./meshops";
 import { mockTrajectory, scanMesh } from "./scanmesh";
 
-type Stages = { track: TrackStage; straighten: StraightenStage; fuse: FuseStage; refine: RefineStage };
+type Stages = { track: TrackStage; straighten: StraightenStage; fuse: FuseStage; spacetime: SpacetimeStage; refine: RefineStage };
 
 type Studio = {
   pid: string;
@@ -198,6 +199,7 @@ const freshStages = (): Stages => ({
   track: { state: "none", summary: null, when: null, job_id: null, quality: null, tracked_pct: null },
   straighten: { state: "none", summary: null, when: null, job_id: null, loops: null, correction_mm: null, correction_deg: null },
   fuse: { state: "none", summary: null, when: null, job_id: null, voxel_mm: null },
+  spacetime: { state: "none", summary: null, when: null, job_id: null, source: null, frames: null, patches: null, kept: null, covered_pct: null, moved_mm: null, device: null },
   refine: {
     state: "none", summary: null, when: null, job_id: null, source: null, points: null, outliers: null,
     moved_pct: null, moved_mm: null, residual_before_mm: null, residual_after_mm: null,
@@ -208,6 +210,7 @@ function patchStage(st: Studio, id: StageId, p: { state?: TrackStage["state"]; s
   if (id === "track") st.stages.track = { ...st.stages.track, ...p };
   else if (id === "straighten") st.stages.straighten = { ...st.stages.straighten, ...p };
   else if (id === "refine") st.stages.refine = { ...st.stages.refine, ...p };
+  else if (id === "spacetime") st.stages.spacetime = { ...st.stages.spacetime, ...p };
   else st.stages.fuse = { ...st.stages.fuse, ...p };
 }
 
@@ -237,6 +240,7 @@ export class MockProcess {
     }
     if (a === "straighten" && is("POST", 1)) return json(200, this.startStraighten(p, s));
     if (a === "refine" && is("POST", 1)) return json(200, this.startRefine(p, s));
+    if (a === "spacetime" && is("POST", 1)) return json(200, this.startSpacetime(p, s));
     if (a === "fuse" && is("POST", 1)) return json(200, this.startFuse(p, s, body.voxel_mm));
     if (a === "edits" && is("POST", 1)) return json(200, this.startEdit(p, s, body));
     if (a === "undo" && is("POST", 1)) return json(200, this.step(p, s, -1));
@@ -339,7 +343,7 @@ export class MockProcess {
     const q: ProcessQuality = (s as Scan & { quality?: ProcessQuality }).quality ?? "full";
     const commit = runSync(this.pipeline(st, s, { ...BUILTINS[0].settings, quality: q }, BUILTINS[0].ops, null));
     commit();
-    for (const id of ["track", "straighten", "fuse", "refine"] as const) if (st.stages[id].when) patchStage(st, id, { when: s.created });
+    for (const id of ["track", "straighten", "fuse", "spacetime", "refine"] as const) if (st.stages[id].when) patchStage(st, id, { when: s.created });
     for (const e of st.edits) e.created = s.created;
   }
 
@@ -348,7 +352,7 @@ export class MockProcess {
     return {
       project_id: st.pid,
       scan_id: st.sid,
-      stages: { track: { ...st.stages.track }, straighten: { ...st.stages.straighten }, fuse: { ...st.stages.fuse }, refine: { ...st.stages.refine } },
+      stages: { track: { ...st.stages.track }, straighten: { ...st.stages.straighten }, fuse: { ...st.stages.fuse }, spacetime: { ...st.stages.spacetime }, refine: { ...st.stages.refine } },
       base: st.base ? { triangles: st.base.mesh.indices.length / 3, vertices: st.base.mesh.positions.length / 3, stage: st.base.stage } : null,
       edits: st.edits.map((e) => ({ ...e })),
       cursor: st.cursor,
@@ -643,6 +647,7 @@ export class MockProcess {
         const fresh = freshStages();
         st.stages.straighten = fresh.straighten;
         st.stages.fuse = fresh.fuse;
+        st.stages.spacetime = fresh.spacetime;
         st.stages.refine = fresh.refine;
         self.trackDone(st, s, quality, r.tracked, nowIso());
         self.newBase(st, r.mesh!, "track");
@@ -692,6 +697,33 @@ export class MockProcess {
       };
     })();
     return this.start(st, s, "process_refine", "Refining with the laser lines…", 2.5, work, "refine");
+  }
+
+  /** The mock has no frames to measure against: the stage reports plausible numbers and keeps the mesh. */
+  private startSpacetime(p: Project, s: Scan): Job {
+    const st = this.ensure(p, s);
+    this.guard(st, s);
+    if (st.stages.track.state !== "done" || !st.base) throw new HttpError(409, "Refine from the images needs a finished Track", "Run Track first.");
+    const self = this;
+    const work = (function* (): JobWork {
+      yield* tick(0, 0.15, 2, () => "Reading the frames");
+      yield* tick(0.15, 0.95, 5, (f) => `Refining: searching along the normals (${Math.min(3, 1 + Math.floor(f * 3))} of 3)`);
+      yield* tick(0.95, 1, 1, () => "Saving the mesh");
+      return () => {
+        const source = st.base!.stage === "spacetime" ? (st.stages.spacetime.source ?? "track") : st.base!.stage === "refine" ? (st.stages.refine.source ?? "track") : st.base!.stage;
+        const frames = 120;
+        const covered = 38 + (seedOf(s.id) % 20);
+        st.stages.spacetime = {
+          ...st.stages.spacetime, state: "done", when: nowIso(), job_id: null, source, frames, patches: 41_000, kept: 16_500,
+          covered_pct: covered, moved_mm: 0.11, device: "gpu",
+          summary: `Measured ${covered} % of the surface against ${frames} frames (16,500 patches, on the GPU); it moved by up to 0.11 mm (95 %)`,
+        };
+        st.stages.refine = freshStages().refine;
+        self.newBase(st, st.base!.mesh, "spacetime");
+        return { project_id: p.id, scan_id: s.id, version: st.version };
+      };
+    })();
+    return this.start(st, s, "process_spacetime", "Refining from the images…", 3, work, "spacetime");
   }
 
   private startFuse(p: Project, s: Scan, voxelIn: unknown): Job {
@@ -813,6 +845,7 @@ export class MockProcess {
       else st.stages.straighten = { state: "skipped", summary: "Skipped by the recipe: the poses from Track are used as they are.", when, job_id: null, loops: null, correction_mm: null, correction_deg: null };
       if (willFuse) this.fuseDone(st, voxel, base, when);
       else st.stages.fuse = freshStages().fuse;
+      st.stages.spacetime = freshStages().spacetime;
       st.base = { mesh: base, stage: baseStage };
       this.commitOps(st, r);
     };
@@ -862,7 +895,7 @@ export class MockProcess {
   // ---------------------------------------------------------------- jobs
   /** Start a job of this scan: busy, the stage running, and on failure / cancel everything as it was. */
   private start(st: Studio, s: Scan, kind: string, busy: string, minSeconds: number, work: JobWork, stageId: StageId | null, prevStatus: Scan["status"] | null = null): Job {
-    const before: Stages = { track: { ...st.stages.track }, straighten: { ...st.stages.straighten }, fuse: { ...st.stages.fuse }, refine: { ...st.stages.refine } };
+    const before: Stages = { track: { ...st.stages.track }, straighten: { ...st.stages.straighten }, fuse: { ...st.stages.fuse }, spacetime: { ...st.stages.spacetime }, refine: { ...st.stages.refine } };
     let restore = prevStatus;
     if (!st.current && s.status !== "processing") {
       restore = s.status;

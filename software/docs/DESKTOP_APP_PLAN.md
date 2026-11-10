@@ -507,6 +507,15 @@ Phase 1 is done when full-quality processing is at least 3x faster on the RTX la
    - On the simulator, the prototype cut the median error 4–6 times where the scan concentrates.
    - It comes after item 2, whose error estimates it uses, and after Straighten in the processing order.
    - The trial build decides whether it ships as a GPU stage in M4.
+
+   **Status (2026-11-10): trial build done; worth shipping in M4, after a test on real recordings.**
+   - "Refine from the images" is a stage in the Process page, between Fuse and Refine with lasers (`ohs/track/spacetime.py`). It is not in Make mesh or the recipes yet.
+   - It reads up to 120 frames, places a patch about 7 px across every 2.6 mm of the surface, and searches each along its normal on the GPU. It keeps a patch with dots in at least 16 frames and a clear match, and moves the vertices around it onto the measured surface; the rest stays as fused.
+   - On four simulated scans with tracked poses, the median error where it measured fell 1.8–2.8 times on the sphere (0.062–0.081 → 0.021–0.044 mm) and about 2 times on the car panel (0.043–0.046 → 0.022–0.023 mm). On the panel most of that gain comes from fitting a smooth patch to the mesh, not from the images (`VALIDATION.md`, "Refine from the images").
+   - It measured 19–60 % of the surface: the rest has too few frames with dots on it.
+   - About 10–20 s for 36 frames and 25 s for a 449-frame scan (120 frames read) on the Radeon 680M. The CPU twin takes about 20 minutes for a short scan.
+   - At the true poses the sphere improves 4.7 times, as the prototype did: the tracking error is now the limit, so refining the poses against the images (the second half of research plan 7.2) is the next gain.
+   - Not yet: it doesn't use or update the sigmas of item 2 (each vertex keeps its own), and nothing on real images has run.
 6. **Global verification for large drift** (the first half of #5, Straighten v2; research plan 4.4.1). Today Straighten finds loops from the drifted trajectory and starts ICP there, so it can't close drift beyond about 20 mm.
    - Feature matching between keyframe clouds (FPFH and FGR, in Open3D) proposes loops that are too far off for ICP.
    - The existing checks then verify them, keeping the "never worse" rule.

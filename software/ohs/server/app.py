@@ -415,6 +415,10 @@ def create_app(config: Any = None, *, projects_dir: Any = None, static_dir: Any 
     def process_straighten(pid: str, sid: str) -> JSONResponse:
         return _json(proc.submit_straighten(pid, sid).to_dict())
 
+    @app.post("/api/projects/{pid}/scans/{sid}/process/spacetime")
+    def process_spacetime(pid: str, sid: str) -> JSONResponse:
+        return _json(proc.submit_spacetime(pid, sid).to_dict())
+
     @app.post("/api/projects/{pid}/scans/{sid}/process/refine")
     def process_refine(pid: str, sid: str) -> JSONResponse:
         return _json(proc.submit_refine(pid, sid).to_dict())
