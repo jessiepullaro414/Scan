@@ -385,10 +385,10 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
         <div className="text-base font-semibold text-fg">{active ? "Making the mesh…" : scan.status === "failed" ? "Meshing failed" : "This scan has no mesh yet"}</div>
         <p className="mt-1 text-sm text-muted">
           {active
-            ? "The engine is building the full-quality mesh from the raw recording. It opens here when it's done."
+            ? "The engine is building the mesh from the raw recording. It opens here when it's done."
             : scan.status === "failed"
               ? (job?.error ?? "Try again, or use preview quality. The raw recording is kept.")
-              : "Build it from the raw recording: full quality for measuring, preview for a quick look."}
+              : "Build it from the raw recording: Standard or Best quality for measuring, preview for a quick look."}
         </p>
         <div className="mt-4">
           {active && job ? (

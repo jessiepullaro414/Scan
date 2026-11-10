@@ -43,7 +43,8 @@ import type {
 } from "../types";
 import { MockCalib } from "./calib";
 import { HttpError, json, nowIso, uid, type MockHost, type MockSettings, type TimedJobSpec, type WorkJobSpec, type WorkStep } from "./host";
-import { MockProcess } from "./process";
+import { normalizeQuality } from "../../lib/quality";
+import { MockProcess, mockStep } from "./process";
 import { cameraByIndex, MockSetup } from "./setup";
 import {
   apply,
@@ -384,7 +385,7 @@ class MockBackend {
         const s = p.scans.find((x) => x.id === d);
         if (!s) throw new HttpError(404, "Scan not found");
         // M1 "Make mesh" (now the Default recipe), then the M3 processing studio
-        if (e === "process" && is("POST", 5)) return json(200, this.studio.makeMesh(p, s, (body.quality as ProcessQuality) === "preview" ? "preview" : "full"));
+        if (e === "process" && is("POST", 5)) return json(200, this.studio.makeMesh(p, s, normalizeQuality(body.quality) ?? "standard"));
         if (e === "process") {
           const r = this.studio.route(method, p, s, seg.slice(5), body);
           if (r) return r;
@@ -762,7 +763,7 @@ class MockBackend {
       return streamed(buf, name.endsWith(".obj") ? "text/plain" : "application/octet-stream", this.opts.fast ? 30 : Math.min(900, 200 + buf.byteLength / 60000));
     }
     if (s.status !== "processed" || !s.result) throw new HttpError(404, `${name} isn't there yet`, "Make the mesh first.");
-    const quality: ProcessQuality = (s as Scan & { quality?: ProcessQuality }).quality ?? "full";
+    const quality: ProcessQuality = normalizeQuality((s as Scan & { quality?: ProcessQuality }).quality) ?? "standard";
     const key = `${s.id}:${quality}:${name}`;
     let buf = this.files.get(key);
     if (head) return new Response(null, { status: name === "laser_points.ply" || name === "report.json" ? 200 : 404 });
@@ -790,26 +791,33 @@ class MockBackend {
   }
 
   private reportSummary(s: Scan, quality: ProcessQuality): Record<string, unknown> {
-    return { mode: s.mode, quality, frames: { processed: s.n_frames, tracked: Math.round(s.n_frames * 0.93) } };
+    const n = Math.ceil(s.n_frames / mockStep(s, quality));
+    return { mode: s.mode, quality, frames: { processed: n, tracked: Math.round(n * 0.93) } };
   }
 
   private report(p: Project, s: Scan, quality: ProcessQuality): Record<string, unknown> {
-    const n = Math.max(1, s.n_frames);
+    const step = mockStep(s, quality);
+    const fps = s.duration_s > 0 ? s.n_frames / s.duration_s : 30;
+    const n = Math.max(1, Math.ceil(s.n_frames / step));
     const tracked = Math.round(n * 0.93);
+    const full = quality !== "preview";
     return {
       recording: `~/OpenHandScan/projects/${p.id}/scans/${s.id}/recording`,
       source: this.device.source === "camera" ? "camera" : "sim",
       scene: "sphere_on_plane",
       calibration: "recording",
       mode: s.mode,
-      scale: quality === "full" ? 1.0 : 0.5,
-      frames: { in_recording: n, processed: n, tracked, tracked_fraction: tracked / n, start: 0, stop: n, step: 1 },
+      scale: full ? 1.0 : 0.5,
+      frames: {
+        in_recording: s.n_frames, processed: n, tracked, tracked_fraction: tracked / n, start: 0, stop: s.n_frames, step,
+        recorded_fps: Math.round(fps * 10) / 10, max_frame_rate: quality === "standard" ? 30 : 0,
+      },
       failures: s.mode === "markers" ? { few_tags: Math.round((n - tracked) * 0.6), no_tags: n - tracked - Math.round((n - tracked) * 0.6) } : { low_fitness: Math.round((n - tracked) * 0.55), model_not_visible: n - tracked - Math.round((n - tracked) * 0.55) },
       imu: { samples: Math.round(s.duration_s * 416), gyro_prior: true, frames_with_prior: tracked },
-      mesh: { method: "tsdf", voxel_mm: quality === "full" ? 1.0 : 2.0, empty: false },
+      mesh: { method: "tsdf", voxel_mm: full ? 1.0 : 2.0, empty: false },
       lasers: { planes: ["horizontal", "vertical"], n_points_exported: 41250, voxel_mm: 0.2, frames_with_points: tracked },
       ground_truth: { n: tracked, rms_trans_mm: 0.41, final_trans_mm: 0.62, trans_mm: { mean: 0.36, median: 0.33, p95: 0.78, max: 1.12 }, rot_deg: { mean: 0.08, median: 0.07, p95: 0.17, max: 0.24 } },
-      wall_time_s: quality === "full" ? 74.2 : 21.8,
+      wall_time_s: quality === "best" ? 148.4 : quality === "standard" ? 74.2 : 21.8,
     };
   }
 
@@ -1036,7 +1044,7 @@ class MockBackend {
         };
         if (s.status === "processed") {
           const base = `/api/projects/${encodeURIComponent(p.id)}/scans/${encodeURIComponent(s.id)}/files`;
-          s.quality = x.quality ?? "full";
+          s.quality = x.quality ?? "standard";
           s.result = { mesh_url: `${base}/mesh.ply`, stl_url: `${base}/mesh.stl`, laser_points_url: `${base}/laser_points.ply`, report: this.reportSummary(s, s.quality) };
         }
         p.scans.push(s);

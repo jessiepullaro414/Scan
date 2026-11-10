@@ -229,6 +229,7 @@ def _process_stub(calls: list) -> types.ModuleType:
         clean_min_component: float = 0.01
         frame_motion_deg: float = 0.0
         frame_max_gap: int = 4
+        max_frame_rate: float = 0.0
 
     def process_recording(rec_path, out_dir, calib=None, params=None, progress=None):
         calls.append({"rec": Path(rec_path), "out": Path(out_dir), "calib": calib, "params": params})
@@ -285,6 +286,33 @@ def test_process_frames_by_motion_options(tmp_path, capsys):
     got = [(c["params"].frame_motion_deg, c["params"].frame_max_gap, c["params"].frame_step) for c in calls]
     assert got == [(0.0, 4, 1), (0.4, 5, 1), (0.0, 5, 1), (0.8, 3, 2)]
     assert "frames picked by motion: 0.8 deg or every 3. frame, at least every 2." in capsys.readouterr().out
+
+
+def test_process_quality_option(tmp_path, capsys):
+    p = cli.build_parser()
+    assert p.parse_args(["process", "rec"]).quality == "standard"  # the default follows the app
+    assert p.parse_args(["process", "rec", "--quality", "best"]).quality == "best"
+    with pytest.raises(SystemExit):
+        p.parse_args(["process", "rec", "--quality", "full"])
+    capsys.readouterr()
+    rec = tmp_path / "rec60"
+    img = np.zeros((100, 160), np.uint8)
+    with RecordingWriter(rec, source="camera") as w:
+        w.write_calibration(nominal_calibration((160, 100)))
+        for i in range(6):
+            w.write_frame(StereoFrame(i, 1.0 + i / 60, img, img))
+    calls: list = []
+    with stub_modules(pipeline=make_stub_pipeline(), process=_process_stub(calls)):
+        assert cli.main(["process", str(rec)]) == 0
+        out_std = capsys.readouterr().out
+        assert cli.main(["process", str(rec), "--quality", "best", "--out", str(tmp_path / "o2")]) == 0
+        out_best = capsys.readouterr().out
+        assert cli.main(["process", str(rec), "--step", "3", "--out", str(tmp_path / "o3")]) == 0
+        out_step = capsys.readouterr().out
+    assert [(c["params"].max_frame_rate, c["params"].frame_step) for c in calls] == [(30.0, 1), (0.0, 1), (30.0, 3)]
+    assert "standard quality" in out_std and "every 2nd frame (60 fps recording, 30 a second)" in out_std
+    assert "best quality" in out_best and "every frame (60 fps recording)" in out_best
+    assert "every 3rd frame (60 fps recording, 20 a second)" in out_step  # --step still sets the smallest step
 
 
 def test_process_needs_a_calibration(tmp_path, capsys):

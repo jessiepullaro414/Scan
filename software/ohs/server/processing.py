@@ -3,7 +3,11 @@ inspection overlays.
 
 **Model.** A scan's processing is five stages, each a job that ends in a new *base mesh*:
 
-* ``track`` (``process_track``): :func:`ohs.app.process.process_recording` at a quality;
+* ``track`` (``process_track``): :func:`ohs.app.process.process_recording` at a quality
+  (``standard``, the default: 30 processed frames per second of scanning; ``best``: every frame;
+  ``preview``). The old name ``full`` is accepted and read as ``standard``, in requests, stored
+  state and saved recipes. The later stages fuse at the track's quality and given poses, so they
+  fuse exactly the frames the track processed;
 * ``straighten`` (``process_straighten``): loop closure
   (:func:`ohs.track.posegraph.straighten_trajectory`, imported lazily: while it is missing or when
   it fails, the stage is ``skipped`` with a plain summary and the base stays), then a fuse at the
@@ -93,7 +97,7 @@ import numpy as np
 
 from ohs.server.jobs import JobCancelled
 from ohs.server.projects import report_summary
-from ohs.server.protocol import ApiError, jsonable, now_iso
+from ohs.server.protocol import QUALITY_NAMES, ApiError, jsonable, normalize_quality, now_iso, quality_or_none
 from ohs.server.util import safe_call
 
 __all__ = ["ProcessManager", "RecipeStore", "ScanProcess", "BUILTIN_RECIPES", "PROCESS_KINDS", "MESH_OPS",
@@ -132,13 +136,13 @@ BUILTIN_RECIPES: list[dict] = [
     {"id": "default", "name": "Default", "builtin": True,
      "description": "What Make mesh does: refines the surface with the laser lines, removes loose bits and closes "
                     "pin holes up to 5 mm. No smoothing and no simplification, so measurements stay true to the scan.",
-     "settings": {"quality": "full", "straighten": "auto", "refine": "auto", "voxel_mm": None},
+     "settings": {"quality": "standard", "straighten": "auto", "refine": "auto", "voxel_mm": None},
      "ops": [{"op": "remove_floaters", "params": {"min_size_mm": 5.0, "min_fraction": 0.01}},
              {"op": "fill_holes", "params": {"max_hole_mm": 5.0}}]},
     {"id": "body-panel", "name": "Body panel", "builtin": True,
      "description": "For smooth sheet metal: closes holes up to 15 mm and smooths the surface while keeping "
                     "creases and edges.",
-     "settings": {"quality": "full", "straighten": "auto", "refine": "auto", "voxel_mm": None},
+     "settings": {"quality": "standard", "straighten": "auto", "refine": "auto", "voxel_mm": None},
      "ops": [{"op": "remove_floaters", "params": {"min_size_mm": 5.0, "min_fraction": 0.01}},
              {"op": "fill_holes", "params": {"max_hole_mm": 15.0}},
              {"op": "smooth", "params": {"method": "bilateral", "strength": 0.5, "keep_edges": True,
@@ -146,7 +150,7 @@ BUILTIN_RECIPES: list[dict] = [
     {"id": "bracket", "name": "Bracket / mechanical", "builtin": True,
      "description": "For brackets and machined parts: keeps sharp edges, light smoothing, closes pin holes up to "
                     "5 mm.",
-     "settings": {"quality": "full", "straighten": "auto", "refine": "auto", "voxel_mm": None},
+     "settings": {"quality": "standard", "straighten": "auto", "refine": "auto", "voxel_mm": None},
      "ops": [{"op": "remove_floaters", "params": {"min_size_mm": 5.0, "min_fraction": 0.01}},
              {"op": "fill_holes", "params": {"max_hole_mm": 5.0}},
              {"op": "smooth", "params": {"method": "bilateral", "strength": 0.25, "keep_edges": True,
@@ -329,8 +333,11 @@ class RecipeStore:
 
     @staticmethod
     def _view(r: dict) -> dict:
+        settings = dict(r.get("settings") or {})
+        if "quality" in settings:  # a recipe saved with the old name "full" reads as "standard"
+            settings["quality"] = quality_or_none(settings["quality"]) or settings["quality"]
         return {"id": r["id"], "name": r.get("name", r["id"]), "description": r.get("description", ""),
-                "builtin": False, "settings": r.get("settings", {}), "ops": r.get("ops", [])}
+                "builtin": False, "settings": settings, "ops": r.get("ops", [])}
 
     def get(self, rid: str) -> dict:
         b = self._builtin(rid)
@@ -347,9 +354,11 @@ class RecipeStore:
     @staticmethod
     def validate(settings: dict, ops: list) -> tuple[dict, list[dict]]:
         s = dict(settings or {})
-        quality = s.get("quality", "full")
-        if quality not in ("preview", "full"):
-            raise ApiError(422, "settings.quality must be preview or full", "use \"preview\" or \"full\"")
+        try:  # "full" is the old name of "standard"
+            quality = normalize_quality(s.get("quality", "standard"))
+        except ValueError:
+            raise ApiError(422, "settings.quality must be standard, best or preview",
+                           "use \"standard\", \"best\" or \"preview\"") from None
         straighten = s.get("straighten", "auto")
         if straighten not in ("auto", "off"):
             raise ApiError(422, "settings.straighten must be auto or off", "use \"auto\" or \"off\"")
@@ -572,6 +581,10 @@ class ScanProcess:
             info = {**_empty_state(self.pid, self.sid)["stages"][name], **(data.get("stages", {}).get(name) or {})}
             if info["state"] == "running":
                 info.update(state="failed", summary="Interrupted: the app stopped while this ran. Run it again.")
+            if "quality" in info:  # state written with the old name "full" reads as "standard"
+                info["quality"] = quality_or_none(info["quality"])
+            if isinstance(info.get("summary"), str) and info["summary"].endswith(" at full quality"):  # the old name in the text
+                info["summary"] = info["summary"][: -len("full quality")] + "standard quality"
             st["stages"][name] = info
         st["cursor"] = max(0, min(int(st.get("cursor", 0)), len(st.get("edits", []))))
         self.state = st
@@ -712,12 +725,12 @@ class ProcessManager:
         except (OSError, ValueError):
             pass
         entry = self.st.projects.scan_entry(sp.pid, sp.sid)
-        quality = entry.get("quality") or report.get("quality")
+        quality = quality_or_none(entry.get("quality") or report.get("quality"))
         st = sp.state
         info = st["stages"]["track"]
         frac = (report.get("frames") or {}).get("tracked_fraction")
         info.update(state="done", when=entry.get("created") or now_iso(),
-                    quality=quality if quality in ("preview", "full") else None,
+                    quality=quality,
                     tracked_pct=round(100 * float(frac), 1) if isinstance(frac, (int, float)) else None,
                     summary=self._track_summary(report, quality))
         stats = _stats(V, F, S)
@@ -1119,7 +1132,7 @@ class ProcessManager:
     def _track_summary(report: dict, quality: str | None) -> str:
         fr = report.get("frames") or {}
         n, t = fr.get("processed"), fr.get("tracked")
-        q = {"preview": "preview quality", "full": "full quality"}.get(str(quality), "")
+        q = QUALITY_NAMES.get(quality_or_none(quality) or "", "")
         if isinstance(n, int) and isinstance(t, int) and n:
             s = f"Tracked {t:,} of {n:,} frames ({100 * t / n:.0f} %)"
             return s + (f" at {q}" if q else "")
@@ -1272,7 +1285,7 @@ class ProcessManager:
             corr_mm, corr_deg = rep.get("correction_mm"), rep.get("correction_deg")
             verdict = rep.get("verdict") if isinstance(rep.get("verdict"), str) and rep.get("verdict") else None
             looped = bool(loops and poses and rep.get("changed") is not False)
-            quality, voxel = track.get("quality") or "full", track.get("voxel_mm")
+            quality, voxel = quality_or_none(track.get("quality")) or "standard", track.get("voxel_mm")
             report: dict = {}
             if looped:  # the loops' fuse is also the reference surface for the laser crossings
                 report = self._fuse_into(ctx, sp, "straighten", prog.sub(0.3, 0.6), quality=quality, voxel_mm=voxel,
@@ -1356,7 +1369,7 @@ class ProcessManager:
             poses = self._current_poses(sp)
             if not poses:
                 raise ApiError(409, "the track stage has no tracked frames to fuse", "run Track again")
-            report = self._fuse_into(ctx, sp, "fuse", prog.sub(0.0, 0.95), quality=track.get("quality") or "full",
+            report = self._fuse_into(ctx, sp, "fuse", prog.sub(0.0, 0.95), quality=quality_or_none(track.get("quality")) or "standard",
                                      voxel_mm=voxel_mm if voxel_mm is not None else track.get("voxel_mm"), poses=poses)
             prog(0.96, "Saving the mesh", force=True)
             with sp.lock:  # the refinements built on the previous base
@@ -1557,9 +1570,16 @@ class ProcessManager:
             fields = {"status": "processed" if has else "recorded"}
         safe_call("updating the scan", lambda: self.st.projects.update_scan(sp.pid, sp.sid, **fields))
 
+    @staticmethod
+    def _quality_arg(quality: Any) -> str:
+        """A requested quality, normalised ("full" = "standard"); 400 if unknown."""
+        try:
+            return normalize_quality(quality)
+        except ValueError:
+            raise ApiError(400, f"unknown quality {quality!r}", "use standard, best or preview") from None
+
     def submit_track(self, pid: str, sid: str, quality: str) -> Any:
-        if quality not in ("preview", "full"):
-            raise ApiError(400, f"unknown quality {quality!r}", "use preview or full")
+        quality = self._quality_arg(quality)
 
         def body(ctx: Any, sp: ScanProcess, prog: _Prog) -> str:
             self._do_track(ctx, sp, prog, quality)
@@ -1613,7 +1633,7 @@ class ProcessManager:
         ops = recipe.get("ops") or []
         p_ops = 0.0
         if scope == "all":
-            q = quality or s.get("quality") or "full"
+            q = quality_or_none(quality or s.get("quality")) or "standard"
             straighten = s.get("straighten", "auto") == "auto"
             refine = s.get("refine", "auto") == "auto"
             p_ops = 0.9 if refine else 0.88
@@ -1665,8 +1685,7 @@ class ProcessManager:
 
     def make_mesh(self, pid: str, sid: str, quality: str) -> Any:
         """``POST .../process`` (M1 "Make mesh"): the Default recipe, all stages, at ``quality``."""
-        if quality not in ("preview", "full"):
-            raise ApiError(400, f"unknown quality {quality!r}", "use preview or full")
+        quality = self._quality_arg(quality)
         recipe = self.recipes.get("default")
         with self.st._lock:
             entry = self._check_free(pid, sid, make_mesh=True)
@@ -1712,7 +1731,7 @@ class ProcessManager:
                     if made_by == name:
                         made_by = st["stages"][name].get("source") or "track"
                 voxel = st["stages"]["fuse"].get("voxel_mm") if made_by == "fuse" else track.get("voxel_mm")
-                settings = {"quality": track.get("quality") or "full",
+                settings = {"quality": quality_or_none(track.get("quality")) or "standard",
                             "straighten": "auto" if st["stages"]["straighten"]["state"] in ("done", "skipped") else "off",
                             "refine": "auto" if st["stages"]["refine"]["state"] in ("done", "skipped") else "off",
                             "voxel_mm": voxel}

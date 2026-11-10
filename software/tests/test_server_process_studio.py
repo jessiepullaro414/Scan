@@ -351,7 +351,7 @@ def test_recipes_crud(env):
     assert [r["id"] for r in rs[:4]] == ["default", "body-panel", "bracket", "quick-preview"]
     assert all(r["builtin"] and r["name"] and r["description"] for r in rs[:4])
     default = rs[0]
-    assert default["settings"] == {"quality": "full", "straighten": "auto", "refine": "auto", "voxel_mm": None}
+    assert default["settings"] == {"quality": "standard", "straighten": "auto", "refine": "auto", "voxel_mm": None}
     assert [o["op"] for o in default["ops"]] == ["remove_floaters", "fill_holes"]  # no smoothing, no simplification
     assert default["ops"][1]["params"]["max_hole_mm"] == 5.0
     assert rs[3]["settings"]["quality"] == "preview" and rs[3]["ops"][-1] == {"op": "decimate",
@@ -641,6 +641,55 @@ def test_measurement_safe_edits(env):
                 "mesh_edit")
     e = get(b + "/process").json()["edits"][-1]
     assert e["label"] == "Make watertight: close every opening up to 60 mm" and "not watertight yet" in e["summary"]
+
+
+def test_quality_levels_and_the_old_name(env):
+    """standard / best / preview, and "full" (the old name) read as standard: requests, stored state, recipes."""
+    pid, sid = add_scan(env, "Levels", env["rec"])
+    b = base_url(env, pid, sid)
+    err(post(b + "/process/track", {"quality": "ultra"}), 422)
+    j = run_job(env, post(b + "/process/track", {"quality": "best"}), "process_track")
+    tr = get(b + "/process").json()["stages"]["track"]
+    assert tr["quality"] == "best" and tr["summary"].endswith("at best quality") and j["quality"] == "best"
+    j = run_job(env, post(b + "/process/track", {"quality": "full"}), "process_track")
+    tr = get(b + "/process").json()["stages"]["track"]
+    assert tr["quality"] == "standard" and tr["summary"].endswith("at standard quality") and j["quality"] == "standard"
+    j = run_job(env, post(b + "/process/track"), "process_track")  # the default
+    assert j["quality"] == "standard"
+    scan_dir = env["root"] / "projects" / pid / "scans" / sid
+    rep = json.loads((scan_dir / "process" / "track" / "report.json").read_text(encoding="utf-8"))
+    assert rep["quality"] == "standard" and rep["frames"]["step"] == 1 and rep["frames"]["max_frame_rate"] == 30.0
+    assert rep["frames"]["recorded_fps"] == pytest.approx(30.0, abs=0.5)  # a 30 fps recording: every frame
+    # state written by an older engine says "full": it reads as "standard"
+    state_path = scan_dir / "process" / "state.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state["stages"]["track"]["quality"] = "full"
+    state["stages"]["track"]["summary"] = state["stages"]["track"]["summary"].replace("standard quality", "full quality")
+    assert state["stages"]["track"]["summary"].endswith(" at full quality")
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    env["studio"].projects.update_scan(pid, sid, quality="full")
+    env["studio"].processing.forget(pid)
+    tr = get(b + "/process").json()["stages"]["track"]
+    assert tr["quality"] == "standard" and tr["summary"].endswith(" at standard quality")
+    scan = get(f"{env['url']}/api/projects/{pid}").json()["scans"][0]
+    assert scan["quality"] == "standard"
+    # Fuse after it runs at standard quality on the track's frames
+    run_job(env, post(b + "/process/fuse", {"voxel_mm": 2.0}), "process_fuse")
+    fused = json.loads((scan_dir / "process" / "fuse" / "report.json").read_text(encoding="utf-8"))
+    assert fused["quality"] == "standard" and fused["frames"]["processed"] == rep["frames"]["tracked"]
+    # a recipe saved with "full" lists as "standard"; new recipes can say best or full
+    rdir = env["root"] / "data" / "recipes"
+    rdir.mkdir(parents=True, exist_ok=True)
+    (rdir / "old-full.json").write_text(json.dumps({"id": "old-full", "name": "Old full", "description": "",
+                                                    "settings": {"quality": "full", "straighten": "auto",
+                                                                 "voxel_mm": None}, "ops": []}), encoding="utf-8")
+    old = [r for r in get(env["url"] + "/api/recipes").json() if r["id"] == "old-full"]
+    assert old and old[0]["settings"]["quality"] == "standard"
+    for q, want in (("best", "best"), ("full", "standard")):
+        r = post(env["url"] + "/api/recipes", {"name": f"Level {q}", "settings": {"quality": q}, "ops": []})
+        assert r.status_code == 200, r.text
+        assert r.json()["settings"]["quality"] == want
+    err(post(env["url"] + "/api/recipes", {"name": "Bad level", "settings": {"quality": "ultra"}, "ops": []}), 422)
 
 
 def test_a_scan_processed_before_m3_is_taken_over(env):

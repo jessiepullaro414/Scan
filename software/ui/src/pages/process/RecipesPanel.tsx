@@ -14,6 +14,7 @@ import { TextInput } from "../../components/ui/Form";
 import { Callout } from "../../components/ui/Layout";
 import { Menu } from "../../components/ui/Popover";
 import { fmtFixed, fmtInt } from "../../lib/format";
+import { QUALITY_TEXT, normalizeQuality, qualityName } from "../../lib/quality";
 import { cn } from "../../lib/util";
 import { useProcess } from "../../store/process";
 import { useRecipes } from "../../store/recipes";
@@ -47,7 +48,7 @@ export function opChip(o: RecipeOp): string {
 function settingsChips(r: Recipe): string[] {
   const s = r.settings;
   return [
-    s.quality === "preview" ? "Preview quality" : "Full quality",
+    QUALITY_TEXT[normalizeQuality(s.quality) ?? "standard"].label,
     s.straighten === "off" ? "No straighten" : "Straighten",
     s.refine === "off" ? "No laser refine" : "Laser refine",
     s.voxel_mm !== null ? `${fmtFixed(s.voxel_mm, s.voxel_mm < 1 ? 1 : 0)} mm voxels` : "Auto voxels",
@@ -209,7 +210,7 @@ function SaveRecipeDialog({ open, onClose, pid, sid, state }: { open: boolean; o
           <div className="mb-1 font-medium text-fg">What it keeps</div>
           <ul className="list-disc space-y-0.5 pl-4">
             <li>
-              Stages: {state.stages.track.quality === "preview" ? "preview" : "full"} quality,{" "}
+              Stages: {qualityName(state.stages.track.quality) ?? "standard quality"},{" "}
               {state.stages.straighten.state === "skipped" ? "no straightening" : "straighten"},{" "}
               {state.stages.refine.state === "done" || state.stages.refine.state === "skipped" ? "refine with lasers" : "no laser refine"}
               {state.stages.fuse.voxel_mm !== null ? `, ${fmtFixed(state.stages.fuse.voxel_mm, 1)} mm voxels` : ""}

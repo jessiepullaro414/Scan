@@ -226,7 +226,7 @@ function GetStarted({ onCreate }: { onCreate: () => void }) {
     {
       icon: Ruler,
       title: "Make the mesh and measure",
-      text: "One click builds the full-quality mesh. Measure in mm, then export STL or PLY for CAD.",
+      text: "One click builds the mesh at full resolution. Measure in mm, then export STL or PLY for CAD.",
     },
   ];
   return (

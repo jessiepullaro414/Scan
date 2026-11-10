@@ -31,6 +31,7 @@ log = logging.getLogger("ohs.app.cli")
 COMMANDS = ("devices", "selftest", "config", "printables", "preview", "record", "calibrate", "scan", "process", "sim",
             "app", "bench")
 MODES = ("markerless", "markers")
+PROCESS_QUALITIES = ("standard", "best")  # the app's levels of the final mesh (its preview is not offered here)
 SCENES = ("sphere_on_plane", "car_panel", "bracket")
 CALIB_KINDS = ("stereo", "lasers", "imu", "check")
 
@@ -42,7 +43,7 @@ typical workflow:
   ohs printables print/          calibration board, AprilTag stickers, LED projector mask
   ohs calibrate stereo           then: ohs calibrate lasers, ohs calibrate imu
   ohs scan --process             scan (trigger starts/stops), then build the final mesh
-  ohs process <recording>        (re)process a recording at full quality
+  ohs process <recording>        (re)make the final mesh (--quality standard or best)
 
 no hardware yet?
   ohs sim demo                   simulated scan recording
@@ -410,14 +411,17 @@ def build_parser() -> argparse.ArgumentParser:
                    "model comes from `ohs process` (or --process).")
     p.add_argument("--mode", choices=MODES, default="markerless", help="tracking mode (default: markerless)")
     p.add_argument("--out", metavar="DIR", help="recording folder (default: <scans_dir>/scan-<time>)")
-    p.add_argument("--process", action="store_true", help="run the full-quality processing afterwards")
+    p.add_argument("--process", action="store_true", help="make the final mesh afterwards (Standard quality)")
     p.add_argument("--seconds", type=_pos_float, metavar="S", help="stop after S seconds of scanning")
     p.add_argument("--start-now", action="store_true", help="start immediately instead of waiting for the trigger")
     _live_options(p)
     p.set_defaults(func=cmd_scan)
 
-    p = add("process", "full-quality processing of a recording: mesh (PLY/STL, mm), laser points, trajectory")
+    p = add("process", "make the final mesh of a recording: mesh (PLY/STL, mm), laser points, trajectory")
     p.add_argument("recording", help="recording folder")
+    p.add_argument("--quality", choices=PROCESS_QUALITIES, default="standard",
+                   help="standard = full resolution, 30 frames a second of scanning (every 2nd frame at 60 fps); "
+                        "best = every frame: less noise on smooth surfaces, about twice the wait (default: standard)")
     p.add_argument("--mode", choices=MODES, help="tracking mode (default: the recording's mode, else markerless)")
     p.add_argument("--out", metavar="DIR", help="output folder (default: <recording>/result)")
     p.add_argument("--voxel", type=_pos_float, metavar="MM",
@@ -556,13 +560,30 @@ def _find_paths(obj: Any, out: list[str]) -> list[str]:
     return out
 
 
+def _ordinal(n: int) -> str:
+    return f"{n}{'th' if 10 <= n % 100 <= 20 else {1: 'st', 2: 'nd', 3: 'rd'}.get(n % 10, 'th')}"
+
+
+def _frames_text(step: int, rate: float | None, max_rate: float) -> str:
+    """Which frames are processed, e.g. "every 2nd frame (60 fps recording, 30 a second)"."""
+    s = "every frame" if step == 1 else f"every {_ordinal(step)} frame"
+    if rate is None:
+        return s
+    return s + f" ({rate:.0f} fps recording" + (f", {rate / step:.0f} a second)" if step > 1 else ")")
+
+
 def _run_process(cfg: Any, rec: Path, out: Path, *, mode: str, calib: Any = None, voxel: float | None = None,
                  step: int | None = None, poisson: bool = False, start: int = 0, stop: int | None = None,
-                 motion: float | None = None, max_gap: int | None = None) -> int:
+                 motion: float | None = None, max_gap: int | None = None, quality: str = "standard") -> int:
     from ohs.app.pipeline import PipelineParams
     from ohs.app.process import ProcessParams, process_recording
+    from ohs.io.recording import RecordingReader, effective_frame_step
     from ohs.track.markerless import FusionParams
     from ohs.track.markers import MarkerParams
+
+    if quality not in PROCESS_QUALITIES:
+        raise CliError(f"unknown quality {quality!r}: use {' or '.join(PROCESS_QUALITIES)}")
+    max_rate = float(cfg.process.standard_frame_rate) if quality == "standard" else 0.0
 
     v = voxel if voxel is not None else cfg.process.voxel_mm  # None: the pipeline's default for the resolution
     pp = PipelineParams(mode=mode, scale=1.0, fusion=None if v is None else FusionParams(voxel_mm=float(v)),
@@ -570,13 +591,14 @@ def _run_process(cfg: Any, rec: Path, out: Path, *, mode: str, calib: Any = None
     params = ProcessParams(pipeline=pp, frame_step=int(step or cfg.process.frame_step), start=int(start), stop=stop,
                            export=tuple(cfg.process.export), poisson=bool(poisson or cfg.process.poisson),
                            frame_motion_deg=float(cfg.process.frame_motion_deg if motion is None else motion),
-                           frame_max_gap=int(max_gap or cfg.process.frame_max_gap))
+                           frame_max_gap=int(max_gap or cfg.process.frame_max_gap), max_frame_rate=max_rate)
     vox = "auto" if v is None else f"{float(v):g} mm"
-    frames = f"every {params.frame_step}. frame"
+    eff, rate = effective_frame_step(RecordingReader(rec).times(), params.frame_step, max_rate)
+    frames = _frames_text(eff, rate, max_rate)
     if params.frame_motion_deg > 0:
         frames = (f"frames picked by motion: {params.frame_motion_deg:g} deg or every {params.frame_max_gap}. frame, "
-                  f"at least every {params.frame_step}.")
-    _say(f"Processing {rec} ({mode}, voxel {vox}, {frames}) -> {out}")
+                  f"at least every {eff}.")
+    _say(f"Processing {rec} ({mode}, {quality} quality, voxel {vox}, {frames}) -> {out}")
     bar = ProgressBar("processing")
     t0 = time.perf_counter()
     try:
@@ -818,7 +840,7 @@ def cmd_process(args: argparse.Namespace) -> int:
         _say(f"The recording has no calibration.json: using {p}")
     out = Path(args.out).expanduser() if args.out else rec / "result"
     return _run_process(cfg, rec, out, mode=mode, calib=calib, voxel=args.voxel, step=args.step, poisson=args.poisson,
-                        start=args.start, stop=args.stop, motion=args.motion, max_gap=args.max_gap)
+                        start=args.start, stop=args.stop, motion=args.motion, max_gap=args.max_gap, quality=args.quality)
 
 
 def cmd_calibrate(args: argparse.Namespace) -> int:

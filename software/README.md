@@ -15,7 +15,7 @@ ohs selftest                 check camera, IMU, clock, emitters and trigger
 ohs printables print/        calibration board, AprilTag stickers, LED projector mask
 ohs calibrate stereo         then: ohs calibrate lasers, ohs calibrate imu
 ohs scan --process           scan (the trigger starts and stops), then build the final mesh
-ohs process <recording>      (re)process a recording at full quality
+ohs process <recording>      (re)make the final mesh (--quality standard or best)
 ohs bench                    how fast this PC processes (CPU against GPU)
 ```
 
@@ -175,7 +175,7 @@ key. Use `"auto"` for an optional value (exposure, port, voxel sizes) or leave i
 | `[pico]` | `port`, `imu_rate_hz` (104/208/416/833), plus advanced timing |
 | `[emitters]` | `markers_dot_level` (25 %), `[emitters.profiles]`: `[vertical, horizontal, dots]` in percent per profile (`scan`, `stereo`, `lasers`, `imu`, `check`, `lines`, `dots`, `off`, plus your own) |
 | `[live]` | `scale` (0.5 = 640x400), `depth_min_mm` / `depth_max_mm` (150-450), `voxel_mm` (auto = 2 mm) |
-| `[process]` | `voxel_mm` (auto = 1 mm at 1280x800), `frame_step`, `frame_motion_deg` (0 = off: pick frames by the gyro's rotation) and `frame_max_gap` (4), `poisson`, `export` (`ply`, `stl`, `obj`) |
+| `[process]` | `voxel_mm` (auto = 1 mm at 1280x800), `frame_step`, `standard_frame_rate` (30: frames per second of scanning that Standard quality processes; Best processes every frame), `frame_motion_deg` (0 = off: pick frames by the gyro's rotation) and `frame_max_gap` (4), `poisson`, `export` (`ply`, `stl`, `obj`) |
 | `[board]` | ChArUco board (11 x 8 squares, 20 mm squares, 15 mm markers, `DICT_5X5_100`) and `paper` (`letter`/`a4`) |
 | `[markers]` | `tag_mm` (20): side of the black square of the printed AprilTags |
 | `[compute]` | `device`: `auto` (the GPU if there is one), `cpu`, or part of a GPU's name such as `RTX`; the `OHS_COMPUTE` environment variable overrides it (section 8) |
@@ -338,8 +338,13 @@ writes to `<recording>/result/` (`--out DIR` to choose):
 CloudCompare, Blender, Fusion). The coordinate frame is the camera at the first tracked frame
 (markerless) or at the frame that started the marker map (markers).
 
+**Quality.** `--quality standard` (the default, as in the app) processes 30 frames per second of
+scanning: every 2nd frame of the 60 fps camera, every frame of a 30 fps recording.
+`--quality best` processes every frame: less noise on smooth surfaces (VALIDATION.md, "Processing
+fewer frames after a scan"), about twice the wait. `[process] standard_frame_rate` sets the 30.
+
 Options: `--mode` (default: the recording's mode), `--voxel MM` (smaller = finer, slower, more RAM),
-`--step N` (every N-th frame, faster), `--motion DEG` with `--max-gap N` (pick frames by the gyro: the
+`--step N` (at least every N-th frame, at both qualities), `--motion DEG` with `--max-gap N` (pick frames by the gyro: the
 next frame once the scanner turned DEG degrees, or after N recorded frames; a scanner that slides without
 turning is caught by the gap alone), `--poisson` (watertight Poisson mesh), `--start` / `--stop`
 (frame range). The calibration comes from the recording itself; `--calib PATH` overrides it.
@@ -465,7 +470,7 @@ The two line lasers are **Class 3R**, and so is the dot laser of the laser + DOE
 | `ohs record DIR` | raw recording; the trigger or SPACE starts and stops it |
 | `ohs calibrate stereo/lasers/imu/check` | interactive calibration (`--from REC` to reuse a recording) |
 | `ohs scan` | live scan, always recording (`--mode`, `--process`, `--replay`, `--no-gui`, `--max-frames`) |
-| `ohs process REC` | full-quality mesh, laser points and trajectory |
+| `ohs process REC` | the final mesh (`--quality standard` or `best`), laser points and trajectory |
 | `ohs sim DIR` | simulated scan recording |
 | `ohs bench` | processing speed and accuracy, CPU against GPU (`--frames`, `--quality`, `--device`, `--json`) |
 

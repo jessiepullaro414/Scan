@@ -40,9 +40,37 @@ __all__ = [
     "pose_message",
     "ghost_message",
     "log_message",
+    "QUALITIES",
+    "QUALITY_NAMES",
+    "normalize_quality",
+    "quality_or_none",
 ]
 
 PROTOCOL_VERSION = "0.3.0"  # M3 phase 2: the processing studio (APP_API.md)
+
+#: the levels of the final mesh: Standard (the default, 30 processed frames per second of scanning),
+#: Best (every frame) and the quick preview
+QUALITIES = ("standard", "best", "preview")
+QUALITY_NAMES = {"standard": "standard quality", "best": "best quality", "preview": "preview quality"}
+_OLD_QUALITIES = {"full": "standard"}  # stored state, saved recipes and old clients
+
+
+def normalize_quality(quality: Any) -> str:
+    """``"preview"``, ``"standard"`` or ``"best"``; the old name ``"full"`` is ``"standard"``.
+    ``ValueError`` for anything else."""
+    q = str(quality).strip().lower() if quality is not None else ""
+    q = _OLD_QUALITIES.get(q, q)
+    if q not in QUALITIES:
+        raise ValueError(f"unknown quality {quality!r}: use standard, best or preview")
+    return q
+
+
+def quality_or_none(quality: Any) -> str | None:
+    """:func:`normalize_quality`, or ``None`` for a missing or unknown value (reading stored state)."""
+    try:
+        return normalize_quality(quality) if quality else None
+    except ValueError:
+        return None
 
 
 class ApiError(Exception):

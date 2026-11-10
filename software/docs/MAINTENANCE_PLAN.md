@@ -159,7 +159,7 @@ by the snapshot tool.
 - **Guard:** the existing bench output and `test_app_cli.py` unchanged; no engine behaviour
   changes.
 
-### [ ] F2. Process fewer frames after a scan (Opus, L)
+### [x] F2. Process fewer frames after a scan (Opus, L)
 - **Where:** `ohs/app/process.py:70`, `:258` (`frame_step`); `ohs/app/config.py:172`.
 - **Why:** at 60 frames a second, neighbouring frames show almost the same view. The live view
   already tracks the same scan on about a quarter of the frames (it drops what it cannot keep up
@@ -191,6 +191,16 @@ by the snapshot tool.
   hand is caught by the cap alone. An angle does not give a predictable wait. Step 3 (the
   default, and what the app offers) is the owner's decision. Not measured: a real IMU, motion
   blur, Straighten and the laser stages with picked frames, marker mode, the CPU path.
+- **Step 3 done 2026-11-10** (the owner's decision: two quality levels; VALIDATION.md, "Standard
+  and Best quality"). **Standard**, the default of Make mesh, the Process page, the recipes and
+  `ohs process`, processes at most `process.standard_frame_rate` (30) frames per second of
+  scanning: every 2nd frame of the 60 fps camera, every frame of a 30 fps recording, so the tests
+  and the validation figures do not move (A2 snapshot identical). **Best** processes every frame.
+  The preview is unchanged and picking by motion stays a setting, off. The quality values are
+  `standard | best | preview`; the old `full` is accepted everywhere and read as `standard`. The
+  later stages fuse the frames the track processed. Computed wait at Standard: about 4.8 times
+  the scan's duration on the Radeon, 1.5 times on the RTX laptop; the F1 targets are not met
+  yet (F3 is next). Not checked: a recording from the real camera.
 - **Gain:** in proportion: every second frame halves the wait.
 - **Stop rule:** more frames also average noise away. If the mesh error or noise rises beyond the
   run-to-run spread in VALIDATION.md, the default does not change.

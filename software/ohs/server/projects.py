@@ -38,7 +38,7 @@ from pathlib import Path
 from typing import Any
 
 from ohs import __version__
-from ohs.server.protocol import ApiError, jsonable, now_iso
+from ohs.server.protocol import ApiError, jsonable, now_iso, quality_or_none
 
 __all__ = ["ProjectStore", "RESULT_FILES", "SCAN_STATUSES", "report_summary"]
 
@@ -180,6 +180,8 @@ class ProjectStore:
                     report = report_summary(json.loads((res_dir / "report.json").read_text(encoding="utf-8")))
                 except (OSError, ValueError):
                     pass
+            if report.get("quality"):  # stored with the old name "full": reads as "standard"
+                report = {**report, "quality": quality_or_none(report["quality"]) or report["quality"]}
             result = {
                 "mesh_url": f"{base}/mesh.ply",
                 "stl_url": f"{base}/mesh.stl",
@@ -195,7 +197,7 @@ class ProjectStore:
         if entry.get("error"):
             out["error"] = entry["error"]
         if entry.get("quality"):
-            out["quality"] = entry["quality"]
+            out["quality"] = quality_or_none(entry["quality"]) or entry["quality"]
         thumb = self.root / pid / "scans" / sid / "thumbnail.jpg"
         out["thumbnail_url"] = f"{base}/thumbnail.jpg" if thumb.is_file() else None
         return out

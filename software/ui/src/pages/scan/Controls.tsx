@@ -41,7 +41,7 @@ export function PostScanCard() {
           <div className="mt-0.5 text-xs text-muted">
             {failed
               ? job?.error || "The raw recording is kept: try again, or with preview quality."
-              : `${fmtInt(scan.n_frames)} frames · ${fmtDuration(scan.duration_s)} · raw recording saved. The live model is a preview; the mesh is rebuilt at full quality.`}
+              : `${fmtInt(scan.n_frames)} frames · ${fmtDuration(scan.duration_s)} · raw recording saved. The live model is a preview; the mesh is rebuilt from the recording at full resolution.`}
           </div>
         </div>
       </div>

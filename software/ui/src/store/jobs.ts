@@ -8,6 +8,7 @@
 import { create } from "zustand";
 import { api } from "../api/http";
 import type { Job, ProcessQuality } from "../api/types";
+import { QUALITY_TEXT, normalizeQuality } from "../lib/quality";
 import { paths, navigate } from "../lib/router";
 import { storage } from "../lib/util";
 import { useProjects } from "./projects";
@@ -49,7 +50,8 @@ function linkFromResult(job: Job): ScanJobLink | null {
   if (isStudioJob(job.kind)) return null; // not a "Make mesh": no "Mesh ready" toast after every edit
   const r = job.result;
   if (r && typeof r.project_id === "string" && typeof r.scan_id === "string") {
-    return { pid: r.project_id, sid: r.scan_id, quality: (r.quality as ProcessQuality) ?? "full" };
+    const scan = r.scan as { quality?: unknown } | null | undefined; // "Make mesh" has the quality in its scan
+    return { pid: r.project_id, sid: r.scan_id, quality: normalizeQuality(r.quality ?? scan?.quality) ?? "standard" };
   }
   return null;
 }
@@ -68,7 +70,7 @@ export const useJobs = create<JobsStore>((set, get) => ({
     void useProjects.getState().fetchProject(link.pid);
     const label = link.name ? `"${link.name}"` : "the scan";
     if (job.state === "done") {
-      toast.success(`Mesh ready for ${label}`, link.quality === "preview" ? "Preview quality" : "Full quality", {
+      toast.success(`Mesh ready for ${label}`, QUALITY_TEXT[normalizeQuality(link.quality) ?? "standard"].label, {
         label: "Open result",
         run: () => navigate(paths.viewer(link.pid, link.sid)),
       });

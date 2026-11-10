@@ -50,7 +50,7 @@ const SECTION_HELP: Record<string, string> = {
   pico: "Emitter / IMU controller on USB",
   emitters: "Emitter levels per profile: vertical, horizontal, dots (%)",
   live: "Preview-quality processing while scanning",
-  process: "Full-quality meshing defaults",
+  process: "Meshing defaults (Standard and Best quality)",
   board: "ChArUco calibration board",
   markers: "AprilTag stickers",
 };

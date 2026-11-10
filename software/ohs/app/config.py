@@ -170,6 +170,7 @@ class LiveConfig:
 class ProcessConfig:
     voxel_mm: float | None = None  # None = pipeline default for the resolution (1 mm at 1280x800)
     frame_step: int = 1
+    standard_frame_rate: float = 30.0  # frames per second of scanning that Standard quality processes (0 = every frame)
     frame_motion_deg: float = 0.0  # 0 = off: pick frames by the gyro's rotation (ohs.app.process)
     frame_max_gap: int = 4
     poisson: bool = False
@@ -249,6 +250,8 @@ class Config:
             errs.append("process.frame_step must be >= 1")
         if not (math.isfinite(self.process.frame_motion_deg) and self.process.frame_motion_deg >= 0):
             errs.append("process.frame_motion_deg must be >= 0 (0 = off)")
+        if not (math.isfinite(self.process.standard_frame_rate) and self.process.standard_frame_rate >= 0):
+            errs.append("process.standard_frame_rate must be >= 0 (0 = every frame)")
         if self.process.frame_max_gap < 1:
             errs.append("process.frame_max_gap must be >= 1")
         bad = [e for e in self.process.export if e.lower() not in EXPORT_FORMATS]
@@ -420,8 +423,8 @@ _SECTION_DOCS = {
         "scan: ohs scan and ohs record (pick another one with `ohs record --profile NAME`);\n"
         "stereo / lasers / imu / check: the matching `ohs calibrate` step. Add your own profiles here."
     ),
-    "live": "Live (preview-quality) processing during `ohs scan`. The recording is always full quality.",
-    "process": "Offline full-quality processing (`ohs process`, `ohs scan --process`).",
+    "live": "Live (preview-quality) processing during `ohs scan`. The recording is always at full resolution.",
+    "process": "Offline processing of the final mesh (`ohs process`, `ohs scan --process`, the app's Make mesh).",
     "board": "ChArUco calibration board. `ohs printables` prints it; it must match the printed board.",
     "markers": "AprilTag stickers (tag36h11) for marker mode.",
     "app": "OpenHandScan Studio (`ohs app`): the local web server behind the app window.",
@@ -478,13 +481,18 @@ _KEY_DOCS = {
         "Voxel size of the final model (mm); `ohs process --voxel` overrides it. Leave it out (\"auto\")\n"
         "for 1 mm at 1280x800 (coarser for smaller images). Smaller is finer, slower and needs more RAM."
     ),
-    "process.frame_step": "Use every n-th frame.",
+    "process.frame_step": "Use every n-th frame (the smallest step, at both Standard and Best quality).",
+    "process.standard_frame_rate": (
+        "Frames per second of scanning that Standard quality processes: 30 = every 2nd frame of the\n"
+        "60 fps camera, every frame of a 30 fps recording. Best quality processes every frame (about\n"
+        "twice the wait; less noise on smooth surfaces). 0 = Standard processes every frame too."
+    ),
     "process.frame_motion_deg": (
         "Pick frames by motion (0 = off, every frame_step-th frame): process the next frame once the\n"
         "gyro has turned this many degrees since the last processed one, or once frame_max_gap\n"
         "recorded frames have passed. A gyro sees rotation only: sliding without turning is caught by\n"
         "the gap alone. Faster, but fewer frames average less noise away (VALIDATION.md). Only for\n"
-        "full-quality processing; `ohs process --motion` overrides it."
+        "Standard and Best quality, not the preview; `ohs process --motion` overrides it."
     ),
     "process.frame_max_gap": "Most recorded frames between two processed frames when frames are picked by motion.",
     "process.poisson": "Also build a watertight Poisson mesh.",

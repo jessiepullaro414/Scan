@@ -1,4 +1,4 @@
-"""Offline processing of a recording at full quality (``ohs process <recording>``).
+"""Offline processing of a recording into the final mesh (``ohs process <recording>``).
 
 :func:`process_recording` runs :class:`ohs.app.pipeline.FramePipeline` (default: markerless, full
 resolution, 1 mm voxels) over the raw frames of a recording folder and writes into ``out_dir``:
@@ -20,8 +20,13 @@ buffer work. **Cuts:** frames whose ``t_host`` lies inside any ``events.csv`` ro
 skipped; ``report["frames"]["cut"]`` counts them and ``report["cuts"]`` lists the intervals.
 Malformed cut values are ignored with a warning.
 
-**Frame selection.** The candidates are the frames ``range(start, stop, frame_step)`` outside the
-cuts. By default every candidate is processed. With ``frame_motion_deg > 0`` (maintenance plan
+**Frame selection.** The candidates are the frames ``range(start, stop, step)`` outside the cuts.
+``step`` is ``frame_step``, or with ``max_frame_rate > 0`` (the app's Standard quality: 30) at least
+``round(recorded rate / max_frame_rate)`` (:func:`effective_frame_step`; the recorded rate is 1 / the
+median time between the frames): every 2nd frame of a 60 fps recording, every frame of a 30 fps
+one. ``report["frames"]`` has the effective ``step``, ``recorded_fps`` and ``max_frame_rate``. With
+``poses`` the limit is not applied (the frames that have a pose are fused). By default every
+candidate is processed. With ``frame_motion_deg > 0`` (maintenance plan
 F2 step 2) frames are picked by the gyro (:func:`pick_frames_by_motion`): the first candidate,
 the first one after each cut, and then the next candidate at which the gyro's rotation since the
 last processed frame reaches ``frame_motion_deg`` or the gap reaches ``frame_max_gap`` recorded
@@ -30,8 +35,8 @@ not cover a stretch the candidates there are all processed. Without IMU samples,
 calibration or with ``use_imu=False`` it falls back to every candidate, with a warning, and
 ``report["frames"]["selection"]`` says so. A gyro sees rotation only: a hand that slides without
 turning is caught by the cap alone. With ``poses`` no new pick is made: the frames that have a pose
-are fused (the second pass then fuses exactly the frames of a motion-picked first pass, as long
-as ``frame_step``, ``start`` and ``stop`` are the same).
+are fused (the second pass then fuses exactly the frames of a motion-picked or rate-limited first
+pass, as long as ``frame_step``, ``start`` and ``stop`` are the same).
 ``report["frames"]["selection"]``: ``{"by": "step"}``, or with motion picking the threshold, the
 cap, how many frames were picked by rotation / by the cap / first (start and after cuts) /
 without gyro, the mean gap and a histogram of the gaps (recorded frames; not across cuts).
@@ -68,12 +73,12 @@ import numpy as np
 
 from ohs.app.pipeline import FrameResult, FramePipeline, PipelineParams
 from ohs.geometry import integrate_gyro, invert_se3, pose_error
-from ohs.io.recording import RecordingReader
+from ohs.io.recording import RecordingReader, effective_frame_step, recorded_frame_rate
 from ohs.mesh.confidence import SIGMA_NONE_MM, sigma_stats
 from ohs.types import ScannerCalibration
 
 __all__ = ["ProcessParams", "process_recording", "trajectory_errors", "cut_intervals", "pick_frames_by_motion",
-           "EXPORT_FORMATS"]
+           "effective_frame_step", "recorded_frame_rate", "EXPORT_FORMATS"]
 
 log = logging.getLogger(__name__)
 
@@ -97,9 +102,12 @@ class ProcessParams:
     # pick frames by motion (module docstring, "Frame selection"): 0 = off, every frame_step-th frame
     frame_motion_deg: float = 0.0
     frame_max_gap: int = 4
+    # process at most this many frames per second of scanning (module docstring, "Frame selection"): 0 = off
+    max_frame_rate: float = 0.0
 
 
 # --------------------------------------------------------------------------- frame selection
+
 MOTION_IMU_MAX_GAP_S = 0.05  # like GyroPredictor.max_gap_s: a longer hole in the IMU stream is no gyro
 MOTION_IMU_TOL_S = 0.003  # like GyroPredictor.covers: the interval may stick out of the samples by this much
 
@@ -338,7 +346,7 @@ def process_recording(
     progress: Callable[[int, int, FrameResult], None] | None = None,
     poses: dict[int, np.ndarray] | None = None,
 ) -> dict:
-    """Process a recording at full quality and write the results to ``out_dir``.
+    """Process a recording and write the results to ``out_dir``.
 
     ``calib`` defaults to the recording's ``calibration.json``; ``ValueError`` if neither is
     available or the calibration's image size does not match the recording. ``progress(k, n,
@@ -361,6 +369,9 @@ def process_recording(
     motion_deg = float(p.frame_motion_deg)
     if not (math.isfinite(motion_deg) and motion_deg >= 0) or int(p.frame_max_gap) < 1:
         raise ValueError("frame_motion_deg must be >= 0 and frame_max_gap >= 1")
+    max_rate = float(p.max_frame_rate)
+    if not (math.isfinite(max_rate) and max_rate >= 0):
+        raise ValueError("max_frame_rate must be >= 0 (0 = every frame)")
     reader = RecordingReader(rec_path)
     calib_source = "argument"
     if calib is None:
@@ -391,7 +402,12 @@ def process_recording(
     j_imu = 0
 
     stop = len(reader) if p.stop is None else min(int(p.stop), len(reader))
-    positions = list(range(max(0, int(p.start)), stop, int(p.frame_step)))
+    # with given poses the frames that have one are fused (they are the first pass's frames): no rate limit
+    step, rec_fps = effective_frame_step(reader.times(), int(p.frame_step), max_rate if poses is None else 0.0)
+    if step != int(p.frame_step):
+        log.info("the recording has %.1f frames a second: processing every %d. frame (at most %g a second)",
+                 rec_fps, step, max_rate)
+    positions = list(range(max(0, int(p.start)), stop, step))
     cuts = cut_intervals(reader)
     n_cut = 0
     if cuts and positions:
@@ -417,8 +433,7 @@ def process_recording(
                    "the recording has no IMU samples" if len(imu_t) < 2 else
                    "there is no IMU calibration" if calib.imu is None else "the IMU is switched off (use_imu=False)")
         if why_not is not None:
-            log.warning("cannot pick frames by motion: %s; processing every %d. frame instead", why_not,
-                        int(p.frame_step))
+            log.warning("cannot pick frames by motion: %s; processing every %d. frame instead", why_not, step)
             selection = {"by": "step", "threshold_deg": motion_deg, "max_gap": int(p.frame_max_gap),
                          "fallback": why_not}
         else:
@@ -483,7 +498,8 @@ def process_recording(
             "frames": {
                 "in_recording": len(reader), "processed": n, "tracked": pipe.n_tracked,
                 "tracked_fraction": pipe.n_tracked / n if n else 0.0,
-                "start": int(p.start), "stop": stop, "step": int(p.frame_step), "cut": n_cut, "selection": selection,
+                "start": int(p.start), "stop": stop, "step": step, "cut": n_cut, "selection": selection,
+                "recorded_fps": rec_fps, "max_frame_rate": max_rate,
                 "weak": _weak_summary(rows),
                 "with_raw_depth": round(sum(bool(r.get("raw_depth")) for r in rows if r.get("ok"))
                                         / max(sum(bool(r.get("ok")) for r in rows), 1), 3),

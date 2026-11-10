@@ -2,6 +2,7 @@
 import { Box, ChevronDown, Gauge, SlidersHorizontal, Sparkles, Wand, type LucideIcon } from "lucide-react";
 import { useState } from "react";
 import type { Job, ProcessQuality, Scan } from "../api/types";
+import { QUALITIES, QUALITY_TEXT } from "../lib/quality";
 import { navigate, paths } from "../lib/router";
 import { cn } from "../lib/util";
 import { isActive, useJobs } from "../store/jobs";
@@ -29,12 +30,9 @@ export function ScanStatusBadge({ scan, job }: { scan: Scan; job?: Job }) {
   );
 }
 
-export const QUALITY_TEXT: Record<ProcessQuality, { label: string; help: string }> = {
-  preview: { label: "Preview quality", help: "Fast check, coarser mesh" },
-  full: { label: "Full quality", help: "Full resolution, best accuracy" },
-};
+const QUALITY_ICON: Record<ProcessQuality, LucideIcon> = { standard: Wand, best: Sparkles, preview: Gauge };
 
-/** "Make mesh" with a quality menu. Full quality is the default action. */
+/** "Make mesh" with a quality menu. Standard quality is the default action, then Best, then Preview. */
 export function MakeMeshButton({
   projectId,
   scan,
@@ -67,18 +65,22 @@ export function MakeMeshButton({
         variant={variant}
         icon={Wand}
         loading={busy}
-        onClick={() => void run("full")}
+        onClick={() => void run("standard")}
+        title={`${QUALITY_TEXT.standard.label}: ${QUALITY_TEXT.standard.help}`}
         className="rounded-r-none"
       >
         {label ?? "Make mesh"}
       </Button>
       <Menu
         label="Mesh quality"
-        width={250}
-        items={[
-          { label: "Full quality", icon: Sparkles, hint: "best", onSelect: () => void run("full") },
-          { label: "Preview quality", icon: Gauge, hint: "fast", onSelect: () => void run("preview") },
-        ]}
+        width={300}
+        items={QUALITIES.map((q) => ({
+          label: QUALITY_TEXT[q].label,
+          icon: QUALITY_ICON[q],
+          hint: q === "standard" ? "default" : undefined,
+          description: QUALITY_TEXT[q].help,
+          onSelect: () => void run(q),
+        }))}
         renderTrigger={(t) => (
           <Button
             ref={t.ref}

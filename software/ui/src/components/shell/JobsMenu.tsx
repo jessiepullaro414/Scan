@@ -2,6 +2,7 @@ import { CircleCheck, CircleX, Layers, Ban } from "lucide-react";
 import { useMemo, useRef, useState } from "react";
 import type { Job } from "../../api/types";
 import { fmtRelative } from "../../lib/format";
+import { normalizeQuality } from "../../lib/quality";
 import { navigate, paths } from "../../lib/router";
 import { cn } from "../../lib/util";
 import { isActive, isStudioJob, jobKindLabel, jobScanRef, useJobs } from "../../store/jobs";
@@ -34,7 +35,7 @@ function JobRow({ job }: { job: Job }) {
           <div className="truncate text-sm font-medium text-fg">
             {meta?.label ?? jobKindLabel(job.kind)}
             {link?.name ? <span className="font-normal text-muted"> · {link.name}</span> : null}
-            {link ? <span className="font-normal text-subtle"> ({link.quality})</span> : null}
+            {link ? <span className="font-normal text-subtle"> ({normalizeQuality(link.quality) ?? link.quality})</span> : null}
           </div>
         </div>
         <span className="shrink-0 text-[11px] text-subtle">{fmtRelative(job.created)}</span>

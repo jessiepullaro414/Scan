@@ -12,6 +12,7 @@ import { Button } from "../../components/ui/Button";
 import { ConfirmDialog } from "../../components/ui/Dialog";
 import { Segmented } from "../../components/ui/Form";
 import { fmtDateTime, fmtFixed, fmtInt, fmtRelative } from "../../lib/format";
+import { QUALITIES, QUALITY_TEXT, normalizeQuality, qualityName } from "../../lib/quality";
 import { cn } from "../../lib/util";
 import { isActive, useJobs } from "../../store/jobs";
 import { useProcess } from "../../store/process";
@@ -128,7 +129,7 @@ function StageCard({
 export function StagesPanel({ pid, sid, state, busy }: { pid: string; sid: string; state: ProcessState; busy: boolean }) {
   const runStage = useProcess((s) => s.runStage);
   const { track, straighten, fuse, spacetime, refine } = state.stages;
-  const [quality, setQuality] = useState<ProcessQuality>(track.quality ?? "full");
+  const [quality, setQuality] = useState<ProcessQuality>(normalizeQuality(track.quality) ?? "standard");
   const [voxel, setVoxel] = useState<number>(fuse.voxel_mm ?? 1);
   const [confirm, setConfirm] = useState<{ stage: StageId; run: () => Promise<unknown> } | null>(null);
   const edits = state.edits.length;
@@ -182,7 +183,7 @@ export function StagesPanel({ pid, sid, state, busy }: { pid: string; sid: strin
                     <b className="font-semibold tnum">{fmtFixed(track.tracked_pct, 0)} %</b> of the frames tracked
                   </>
                 ) : null}
-                {track.quality ? <span className="text-muted">{track.tracked_pct !== null ? " · " : ""}{track.quality === "full" ? "full quality" : "preview quality"}</span> : null}
+                {qualityName(track.quality) ? <span className="text-muted">{track.tracked_pct !== null ? " · " : ""}{qualityName(track.quality)}</span> : null}
               </p>
             ) : null
           }
@@ -193,10 +194,7 @@ export function StagesPanel({ pid, sid, state, busy }: { pid: string; sid: strin
             value={quality}
             onChange={setQuality}
             disabled={busy}
-            options={[
-              { value: "preview", label: "Preview", title: "Every other frame at half resolution: quick to check" },
-              { value: "full", label: "Full", title: "Every frame at full resolution: best accuracy" },
-            ]}
+            options={QUALITIES.map((q) => ({ value: q, label: QUALITY_TEXT[q].short, title: `${QUALITY_TEXT[q].label}: ${QUALITY_TEXT[q].help}` }))}
           />
         </StageCard>
 

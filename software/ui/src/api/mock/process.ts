@@ -28,6 +28,7 @@ import type {
   StraightenStage,
   TrackStage,
 } from "../types";
+import { normalizeQuality } from "../../lib/quality";
 import { stlMesh } from "./geom";
 import { HttpError, json, nowIso, uid, type MockHost, type WorkStep } from "./host";
 import {
@@ -81,9 +82,9 @@ const BUILTINS: Recipe[] = [
   {
     id: "default",
     name: "Default",
-    description: "What “Make mesh” runs: full quality, straightened, loose bits removed and small holes filled.",
+    description: "What “Make mesh” runs: standard quality, straightened, loose bits removed and small holes filled.",
     builtin: true,
-    settings: { quality: "full", straighten: "auto", voxel_mm: null },
+    settings: { quality: "standard", straighten: "auto", voxel_mm: null },
     ops: [
       { op: "remove_floaters", params: { min_size_mm: 10 } },
       { op: "fill_holes", params: { max_hole_mm: 10 } },
@@ -94,7 +95,7 @@ const BUILTINS: Recipe[] = [
     name: "Body panel",
     description: "For large curved panels: smoother, keeps only the main piece and fills larger holes.",
     builtin: true,
-    settings: { quality: "full", straighten: "auto", voxel_mm: 1 },
+    settings: { quality: "standard", straighten: "auto", voxel_mm: 1 },
     ops: [
       { op: "remove_floaters", params: { keep_largest_only: true } },
       { op: "fill_holes", params: { max_hole_mm: 40 } },
@@ -106,7 +107,7 @@ const BUILTINS: Recipe[] = [
     name: "Bracket / mechanical",
     description: "Keeps sharp edges and flat faces: light, edge-aware smoothing, only small holes filled.",
     builtin: true,
-    settings: { quality: "full", straighten: "auto", voxel_mm: 1 },
+    settings: { quality: "standard", straighten: "auto", voxel_mm: 1 },
     ops: [
       { op: "remove_floaters", params: { min_size_mm: 5 } },
       { op: "fill_holes", params: { max_hole_mm: 8 } },
@@ -148,7 +149,15 @@ function seedOf(sid: string): number {
 }
 
 const noiseFor = (q: ProcessQuality, straightened: boolean) => (q === "preview" ? (straightened ? 0.14 : 0.2) : straightened ? 0.09 : 0.14);
-const voxelFor = (q: ProcessQuality) => (q === "full" ? 1 : 2);
+const voxelFor = (q: ProcessQuality) => (q === "preview" ? 2 : 1);
+/** Mock job length (s): Best processes every frame, about twice the wait of Standard. */
+const secondsFor = (q: ProcessQuality) => (q === "preview" ? 4.5 : q === "best" ? 18 : 9);
+
+/** The step the engine would use: Standard processes 30 frames a second of scanning, the others every frame. */
+export function mockStep(s: Pick<Scan, "n_frames" | "duration_s">, q: ProcessQuality): number {
+  const fps = s.duration_s > 0 ? s.n_frames / s.duration_s : 30;
+  return q === "standard" ? Math.max(1, Math.round(fps / 30)) : 1;
+}
 
 function label(op: MeshOp, p: Record<string, unknown>, faces?: number): string {
   switch (op) {
@@ -234,8 +243,8 @@ export class MockProcess {
     const is = (m: string, n: number) => method === m && rest.length === n;
     if (is("GET", 0)) return json(200, this.state(this.ensure(p, s)));
     if (a === "track" && is("POST", 1)) {
-      const q = body.quality ?? "full";
-      if (q !== "preview" && q !== "full") this.bad(`Unknown quality “${String(q)}”`, "Use preview or full.");
+      const q = normalizeQuality(body.quality ?? "standard");
+      if (!q) this.bad(`Unknown quality “${String(body.quality)}”`, "Use standard, best or preview.");
       return json(200, this.startTrack(p, s, q));
     }
     if (a === "straighten" && is("POST", 1)) return json(200, this.startStraighten(p, s));
@@ -284,7 +293,7 @@ export class MockProcess {
     const prev = s.status;
     s.status = "processing";
     p.modified = nowIso();
-    return this.allJob(st, p, s, "process", { ...recipe.settings, quality }, recipe.ops, "Making the mesh…", prev, quality === "preview" ? 4.5 : 9, () => ({
+    return this.allJob(st, p, s, "process", { ...recipe.settings, quality }, recipe.ops, "Making the mesh…", prev, secondsFor(quality), () => ({
       project_id: p.id,
       scan_id: s.id,
       quality,
@@ -319,7 +328,7 @@ export class MockProcess {
       stages: freshStages(),
       base: null,
       voxel: 1,
-      quality: "full",
+      quality: "standard",
       straightened: false,
       edits: [],
       cursor: 0,
@@ -340,7 +349,7 @@ export class MockProcess {
 
   /** A scan meshed before this session: as if "Make mesh" (the Default recipe) had run then. */
   private seedProcessed(st: Studio, s: Scan) {
-    const q: ProcessQuality = (s as Scan & { quality?: ProcessQuality }).quality ?? "full";
+    const q: ProcessQuality = normalizeQuality((s as Scan & { quality?: ProcessQuality }).quality) ?? "standard";
     const commit = runSync(this.pipeline(st, s, { ...BUILTINS[0].settings, quality: q }, BUILTINS[0].ops, null));
     commit();
     for (const id of ["track", "straighten", "fuse", "spacetime", "refine"] as const) if (st.stages[id].when) patchStage(st, id, { when: s.created });
@@ -563,7 +572,7 @@ export class MockProcess {
       if (fail && k > 15) throw new Error("Tracking failed on 83 % of the frames (low_fitness). Rescan with more overlap, or try markers mode.");
       yield { p: a + span * (0.05 + ((end - 0.05) * k) / 40), message: `Tracking frame ${Math.round((n * k) / 40)} / ${n}` };
     }
-    const tracked = quality === "full" ? (s.mode === "markers" ? 95 : 93) : 91;
+    const tracked = quality !== "preview" ? (s.mode === "markers" ? 95 : 93) : 91;
     if (!withMesh) return { mesh: null, tracked };
     const mesh = yield* run(scanMesh({ voxel: voxelFor(quality), noise: noiseFor(quality, false), seed: seedOf(s.id) }), a + span * 0.55, b, "Fusing depth (TSDF) and extracting the mesh");
     return { mesh, tracked };
@@ -655,7 +664,7 @@ export class MockProcess {
         return { project_id: p.id, scan_id: s.id, version: st.version };
       };
     })();
-    return this.start(st, s, "process_track", "Tracking…", quality === "preview" ? 4.5 : 9, work, "track");
+    return this.start(st, s, "process_track", "Tracking…", secondsFor(quality), work, "track");
   }
 
   private startStraighten(p: Project, s: Scan): Job {
@@ -756,7 +765,7 @@ export class MockProcess {
     if (scope !== "edits" && scope !== "all") this.bad(`Unknown scope “${String(body.scope)}”`, "Use edits or all.");
     this.guard(st, s);
     const busy = `Applying “${recipe.name}”…`;
-    if (scope === "all") return this.allJob(st, p, s, "process_recipe", recipe.settings, recipe.ops, busy, null, recipe.settings.quality === "preview" ? 6 : 10, null);
+    if (scope === "all") return this.allJob(st, p, s, "process_recipe", recipe.settings, recipe.ops, busy, null, secondsFor(normalizeQuality(recipe.settings.quality) ?? "standard") + 1, null);
     if (!st.base) throw new HttpError(409, "There's no mesh to edit yet", "Apply “Everything”, or run Track first.");
     const base = st.base.mesh;
     const self = this;
@@ -957,7 +966,7 @@ export class MockProcess {
       if (!hit) throw new HttpError(404, "That scan doesn't exist", "Save the recipe from a scan in a project.");
       const st = this.ensure(hit.project, hit.scan);
       settings = {
-        quality: st.stages.track.quality ?? "full",
+        quality: normalizeQuality(st.stages.track.quality) ?? "standard",
         straighten: st.stages.straighten.state === "skipped" ? "off" : "auto",
         voxel_mm: st.stages.fuse.state === "done" ? st.stages.fuse.voxel_mm : null,
       };
@@ -967,8 +976,8 @@ export class MockProcess {
         .map((e) => ({ op: e.op as RecipeOp["op"], params: { ...e.params } }));
     } else {
       const set = body.settings as Partial<RecipeSettings> | undefined;
-      const quality = set?.quality;
-      if (quality !== "preview" && quality !== "full") return this.bad("Give the recipe's settings (quality preview or full)");
+      const quality = normalizeQuality(set?.quality);
+      if (!quality) return this.bad("Give the recipe's settings (quality standard, best or preview)");
       settings = { quality, straighten: set?.straighten === "off" ? "off" : "auto", voxel_mm: typeof set?.voxel_mm === "number" ? set.voxel_mm : null };
       if (!Array.isArray(body.ops)) return this.bad("Give the recipe's ops (a list)");
       ops = (body.ops as RecipeOp[]).map((o) => {

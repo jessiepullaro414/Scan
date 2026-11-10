@@ -111,7 +111,17 @@ export function Popover({
 }
 
 export type MenuItem =
-  | { label: string; icon?: LucideIcon; onSelect: () => void; danger?: boolean; disabled?: boolean; hint?: string }
+  | {
+      label: string;
+      icon?: LucideIcon;
+      onSelect: () => void;
+      danger?: boolean;
+      disabled?: boolean;
+      /** A short word at the right (e.g. "fast"). */
+      hint?: string;
+      /** A line of help under the label. */
+      description?: string;
+    }
   | "separator";
 
 /** A dropdown menu with keyboard navigation. */
@@ -191,7 +201,14 @@ export function Menu({
                 )}
               >
                 {it.icon ? <it.icon size={15} className={it.danger ? "" : "text-muted"} aria-hidden /> : null}
-                <span className="flex-1">{it.label}</span>
+                {it.description ? (
+                  <span className="flex flex-1 flex-col">
+                    <span>{it.label}</span>
+                    <span className="text-xs text-subtle">{it.description}</span>
+                  </span>
+                ) : (
+                  <span className="flex-1">{it.label}</span>
+                )}
                 {it.hint ? <span className="text-xs text-subtle">{it.hint}</span> : null}
               </button>
             ),

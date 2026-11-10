@@ -174,7 +174,7 @@ export const useProcess = create<ProcessStore>((set, get) => {
       const label = STAGE_LABEL[stage];
       const call =
         stage === "track"
-          ? () => api.processTrack(pid, sid, opts.quality ?? "full")
+          ? () => api.processTrack(pid, sid, opts.quality ?? "standard")
           : stage === "straighten"
             ? () => api.processStraighten(pid, sid)
             : stage === "refine"

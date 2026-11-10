@@ -128,7 +128,7 @@ A project is a folder: `project.json`, `scans/<id>/recording/` (raw), `scans/<id
   - mode and preset
   - emitter levels
 - **Always recording:** a red dot and the elapsed time. A crash costs nothing.
-- **Afterwards:** "Make mesh" runs one-click full-quality processing with a progress bar. A cancel button keeps the raw data.
+- **Afterwards:** "Make mesh" runs one-click processing with a progress bar, at Standard quality (30 frames a second of scanning) unless Best (every frame) or Preview is picked. A cancel button keeps the raw data.
 
 ### 5.3 Processing
 One-click by default. The advanced panel shows each step with live preview and undo:
@@ -395,7 +395,7 @@ Phase 1 is done when full-quality processing is at least 3x faster on the RTX la
 
 - **Where:** a **Process** page per scan (`#/projects/:pid/scans/:sid/process`). The viewer and the project page link to it. "Make mesh" stays the one-click path: it runs the Default recipe.
 - **Stages** (each a job, with progress and cancel):
-  1. **Track:** today's processing (tracking + fusion), preview or full quality.
+  1. **Track:** today's processing (tracking + fusion), at standard, best or preview quality.
   2. **Straighten:** loop closure.
      - It picks keyframes along the trajectory and finds revisits: keyframes close in space but far apart in time.
      - It checks each candidate with ICP between keyframe clouds, then optimises a pose graph (Open3D's Levenberg-Marquardt with a line process that rejects bad loops).

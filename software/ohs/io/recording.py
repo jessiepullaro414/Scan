@@ -29,10 +29,38 @@ import numpy as np
 
 from ohs.types import Event, ImuSample, ScannerCalibration, StereoFrame
 
-__all__ = ["RecordingWriter", "RecordingReader", "FORMAT_VERSION"]
+__all__ = ["RecordingWriter", "RecordingReader", "FORMAT_VERSION", "recorded_frame_rate", "effective_frame_step"]
 
 log = logging.getLogger(__name__)
 FORMAT_VERSION = 1
+
+
+def recorded_frame_rate(frame_times: Iterable[float] | np.ndarray) -> float | None:
+    """Frames per second of a recording: 1 / the median time between its frames (``RecordingReader.times()``,
+    not the metadata). ``None`` for fewer than 2 frames."""
+    t = np.asarray(list(frame_times) if not isinstance(frame_times, np.ndarray) else frame_times, dtype=np.float64)
+    t = t.reshape(-1)
+    t = t[np.isfinite(t)]
+    if len(t) < 2:
+        return None
+    dt = float(np.median(np.diff(np.sort(t))))
+    return 1.0 / dt if dt > 0 else None
+
+
+def effective_frame_step(frame_times: Iterable[float] | np.ndarray, frame_step: int,
+                         max_frame_rate: float) -> tuple[int, float | None]:
+    """``(smallest gap between processed frames, recorded frame rate)``.
+
+    With ``max_frame_rate > 0`` the gap is ``max(frame_step, round(recorded rate / max_frame_rate))``
+    (at least 1, halves round up): every 2nd frame of a 60 fps recording at 30, every frame of a
+    30 fps one. With ``max_frame_rate = 0``, or when the rate can not be measured, it is
+    ``frame_step``.
+    """
+    step = max(1, int(frame_step))
+    rate = recorded_frame_rate(frame_times)
+    if max_frame_rate > 0 and rate is not None:
+        step = max(step, int(math.floor(rate / float(max_frame_rate) + 0.5 + 1e-6)))  # 1e-6: a measured 1.5 is 1.4999...
+    return step, rate
 
 
 def _celsius(value: object) -> float | None:

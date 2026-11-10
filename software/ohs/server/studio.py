@@ -62,7 +62,7 @@ from ohs.server.jobs import JobRunner
 from ohs.server.printables import MASK_DPI
 from ohs.server.processing import ProcessManager
 from ohs.server.projects import ProjectStore
-from ohs.server.protocol import PROTOCOL_VERSION, ApiError, jsonable, log_message
+from ohs.server.protocol import PROTOCOL_VERSION, QUALITIES, ApiError, jsonable, log_message, normalize_quality
 from ohs.server.session import ScanSession
 from ohs.server.setup import SetupManager
 from ohs.server.util import join_thread, safe_call
@@ -72,18 +72,22 @@ __all__ = ["Studio", "MODES", "QUALITIES", "process_params"]
 log = logging.getLogger(__name__)
 
 MODES = ("markerless", "markers")
-QUALITIES = ("preview", "full")
 STATUS_HZ = 10.0
 
 
 def process_params(cfg: Any, mode: str, quality: str, image_width: int) -> Any:
-    """``ProcessParams`` for a quality: "preview" = scale 0.5 and 2 mm voxels, "full" = scale 1.0
-    (``[process]`` voxel size, step, frames picked by motion, Poisson and export formats; PLY and STL are
-    always written). The preview processes every frame."""
+    """``ProcessParams`` for a quality (:func:`ohs.server.protocol.normalize_quality`; ``ValueError`` if unknown).
+
+    "preview" = scale 0.5 and 2 mm voxels, every frame. "standard" and "best" = scale 1.0 with the
+    ``[process]`` voxel size, step, frames picked by motion, Poisson and export formats (PLY and STL are
+    always written); "standard" processes at most ``process.standard_frame_rate`` frames per second of
+    scanning (every 2nd frame of a 60 fps recording at 30), "best" every frame. "full" is the old name
+    of "standard"."""
     from ohs.app.pipeline import PipelineParams, default_fusion_params, effective_scale
     from ohs.app.process import ProcessParams
     from ohs.track.markers import MarkerParams
 
+    quality = normalize_quality(quality)
     markers = MarkerParams(tag_mm=float(cfg.markers.tag_mm))
     export = tuple(dict.fromkeys(["ply", "stl", *[e.lower() for e in cfg.process.export]]))
     if quality == "preview":
@@ -95,7 +99,8 @@ def process_params(cfg: Any, mode: str, quality: str, image_width: int) -> Any:
     fusion = None if v is None else dataclasses.replace(default_fusion_params(effective_scale(image_width)), voxel_mm=float(v))
     pp = PipelineParams(mode=mode, scale=1.0, fusion=fusion, markers=markers)
     return ProcessParams(pipeline=pp, frame_step=int(cfg.process.frame_step), export=export, poisson=bool(cfg.process.poisson),
-                         frame_motion_deg=float(cfg.process.frame_motion_deg), frame_max_gap=int(cfg.process.frame_max_gap))
+                         frame_motion_deg=float(cfg.process.frame_motion_deg), frame_max_gap=int(cfg.process.frame_max_gap),
+                         max_frame_rate=float(cfg.process.standard_frame_rate) if quality == "standard" else 0.0)
 
 
 class Studio:
@@ -502,11 +507,14 @@ class Studio:
             self.projects.delete(pid)
             self.processing.forget(pid)
 
-    def process_scan(self, pid: str, sid: str, quality: str = "full") -> Any:
+    def process_scan(self, pid: str, sid: str, quality: str = "standard") -> Any:
         """"Make mesh" (M1 ``POST .../process``): the processing studio's Default recipe at
-        ``quality`` (track, straighten ``auto``, then its edits). Job kind ``process_scan``."""
-        if quality not in QUALITIES:
-            raise ApiError(400, f"unknown quality {quality!r}", "use preview or full")
+        ``quality`` (standard, best or preview; "full" = standard): track, straighten ``auto``, then its
+        edits. Job kind ``process_scan``."""
+        try:
+            quality = normalize_quality(quality)
+        except ValueError:
+            raise ApiError(400, f"unknown quality {quality!r}", "use standard, best or preview") from None
         return self.processing.make_mesh(pid, sid, quality)
 
     # ------------------------------------------------------------------ info

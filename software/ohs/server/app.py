@@ -89,7 +89,7 @@ class RewindBody(BaseModel):
 
 
 class ProcessBody(BaseModel):
-    quality: Literal["preview", "full"] = "full"
+    quality: Literal["standard", "best", "preview", "full"] = "standard"  # "full": the old name of "standard"
 
 
 class DismissBody(BaseModel):
@@ -123,7 +123,7 @@ class SaveBody(BaseModel):
 
 
 class TrackBody(BaseModel):
-    quality: Literal["preview", "full"] = "full"
+    quality: Literal["standard", "best", "preview", "full"] = "standard"  # "full": the old name of "standard"
 
 
 class FuseBody(BaseModel):
@@ -152,7 +152,7 @@ class RecipeOpBody(BaseModel):
 
 
 class RecipeSettingsBody(BaseModel):
-    quality: Literal["preview", "full"] = "full"
+    quality: Literal["standard", "best", "preview", "full"] = "standard"  # "full": the old name of "standard"
     straighten: Literal["auto", "off"] = "auto"
     voxel_mm: Optional[float] = Field(None, ge=0.25, le=10.0)
 
@@ -392,7 +392,7 @@ def create_app(config: Any = None, *, projects_dir: Any = None, static_dir: Any 
 
     @app.post("/api/projects/{pid}/scans/{sid}/process")
     def scan_process(pid: str, sid: str, body: Optional[ProcessBody] = None) -> JSONResponse:
-        job = st.process_scan(pid, sid, body.quality if body is not None else "full")
+        job = st.process_scan(pid, sid, body.quality if body is not None else "standard")
         return _json(job.to_dict())
 
     @app.get("/api/projects/{pid}/scans/{sid}/files/{name}")
@@ -409,7 +409,7 @@ def create_app(config: Any = None, *, projects_dir: Any = None, static_dir: Any 
 
     @app.post("/api/projects/{pid}/scans/{sid}/process/track")
     def process_track(pid: str, sid: str, body: Optional[TrackBody] = None) -> JSONResponse:
-        return _json(proc.submit_track(pid, sid, body.quality if body is not None else "full").to_dict())
+        return _json(proc.submit_track(pid, sid, body.quality if body is not None else "standard").to_dict())
 
     @app.post("/api/projects/{pid}/scans/{sid}/process/straighten")
     def process_straighten(pid: str, sid: str) -> JSONResponse:

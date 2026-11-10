@@ -113,7 +113,9 @@ export type Settings = Record<string, unknown>;
 // ------------------------------------------------------------------ request bodies
 export type ConnectBody = { source: ConnectSource; recording?: string; loop?: boolean };
 export type StartBody = { project_id: string; mode?: ScanMode; name?: string };
-export type ProcessQuality = "preview" | "full";
+/** The level of the final mesh: "standard" (default, 30 frames a second of scanning), "best" (every frame), "preview".
+ * Older engines send "full", the old name of "standard": read it with `normalizeQuality` (lib/quality.ts). */
+export type ProcessQuality = "standard" | "best" | "preview";
 
 // ------------------------------------------------------------------ WebSocket /api/ws/live
 export type SubscribeMsg = { type: "subscribe"; preview?: boolean; mesh?: boolean; max_preview_hz?: number };

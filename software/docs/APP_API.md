@@ -59,7 +59,7 @@ type Job = { id: string; kind: string; state: "queued" | "running" | "done" | "f
 | `POST /api/scan/pause` / `resume` | | `SessionState` |
 | `POST /api/scan/rewind` | `{seconds: 2.0}` | `SessionState`. Drops the last N s from the live model and records a `cut` event, which offline processing skips. |
 | `POST /api/scan/stop` | | `{scan: Scan}` (the recording is finalised) |
-| `POST /api/projects/{pid}/scans/{sid}/process` | `{quality:"preview"\|"full"}` | `Job` |
+| `POST /api/projects/{pid}/scans/{sid}/process` | `{quality:"standard"\|"best"\|"preview"}` (default `"standard"`; `"full"` = `"standard"`) | `Job` |
 | `GET /api/jobs` / `GET /api/jobs/{jid}` | | `Job[]` / `Job` |
 | `POST /api/jobs/{jid}/cancel` | | `Job` |
 | `GET /api/projects/{pid}/scans/{sid}/files/{name}` | | result files: `mesh.ply`, `mesh.stl`, `laser_points.ply`, `report.json` |
@@ -499,6 +499,7 @@ Everything in the M2 section is implemented as written, with these clarification
 
 The Process page of a scan (see the M3 plan in [`DESKTOP_APP_PLAN.md`](DESKTOP_APP_PLAN.md)). It adds to M1 and M2 and changes nothing in them.
 - `POST .../process` ("Make mesh") keeps its contract. It now runs the **Default** recipe at the requested quality.
+- **Quality levels** (maintenance plan F2 step 3): `"standard"` (the default) processes at full resolution at most `[process] standard_frame_rate` frames per second of scanning (30: every 2nd frame of the 60 fps camera, every frame of a 30 fps recording); `"best"` processes every frame (less noise on smooth surfaces, about twice the wait); `"preview"` as before. `"full"`, the old name, is accepted everywhere and read as `"standard"`, also in stored state and saved recipes; responses and new state say `"standard"` / `"best"`. Stage summaries name the level ("Tracked 540 of 540 frames (100 %) at standard quality"). The report's `frames` has the effective `step`, `recorded_fps` and `max_frame_rate`.
 - `health.api` and `hello.version` become `"0.3.0"`.
 
 **Model.**
@@ -544,7 +545,7 @@ type StageInfo = { state: StageState; summary: string | null; when: string | nul
 type ProcessState = {
   project_id: string; scan_id: string;
   stages: {
-    track: StageInfo & { quality: "preview" | "full" | null; tracked_pct: number | null };
+    track: StageInfo & { quality: "standard" | "best" | "preview" | null; tracked_pct: number | null };
     straighten: StageInfo & { loops: number | null; correction_mm: number | null; correction_deg: number | null;
                               crossings?: number | null };   // laser crossings used (M3 phase 3)
     fuse: StageInfo & { voxel_mm: number | null };
@@ -569,7 +570,7 @@ type ProcessState = {
 };
 type Recipe = {
   id: string; name: string; description: string; builtin: boolean;
-  settings: { quality: "preview" | "full"; straighten: "auto" | "off"; refine: "auto" | "off"; voxel_mm: number | null };
+  settings: { quality: "standard" | "best" | "preview"; straighten: "auto" | "off"; refine: "auto" | "off"; voxel_mm: number | null };
   ops: { op: Exclude<MeshOp, "delete_faces" | "keep_faces">; params: Record<string, unknown> }[];
 };
 type HoleOutline = { perimeter_mm: number; n_edges: number; points: number[] };   // flattened xyz, closed loop
@@ -672,7 +673,7 @@ Everything in the M3 phase 2 section is implemented as written, with these clari
 
 **Stages**
 - **The base keeps every piece.** The M1 filter that dropped pieces under 1 % of the triangles is no longer part of tracking, so removing floaters is an edit you can see and undo. The Default recipe removes the same pieces (see Recipes).
-- `POST .../process/track`: `quality` defaults to `"full"`; anything else is 422.
+- `POST .../process/track`: `quality` defaults to `"standard"`; anything but `"standard"`, `"best"`, `"preview"` and `"full"` is 422.
 - `POST .../process/straighten`: the body is optional. It runs `ohs.track.posegraph.straighten_trajectory` on the track stage's trajectory, then fuses at the corrected poses (`process_recording(poses=...)`). The stage is `skipped`, and the base and edits stay, when:
   - the engine's loop closure is missing ("Straightening is not available in this version of the engine, so the scan was left as it is") or fails ("Straightening failed (…), so the scan was left as it is");
   - it accepts no loop;
@@ -682,7 +683,7 @@ Everything in the M3 phase 2 section is implemented as written, with these clari
   - **Laser crossings** (M3 phase 3, research plan 7.3): after the loops, Straighten lines the poses up where the laser lines of different frames cross (`ohs.track.curve_ba.laser_curve_adjustment`, with the loops' fuse, or the track's mesh without loops, as the reference surface). It changes the poses only when, fitted on half the crossings, the other half meet clearly better; then it fuses again. So the stage can be `done` without loops: "No loops found, but the laser lines cross: lined the scan up on 597 laser crossings (median miss 0.10 -> 0.04 mm, the camera moved by up to 1.1 mm)". With loops, that part follows the loops' verdict after "; then". *extra*: `straighten.crossings`, the crossings used (null when they changed nothing). `straighten.json` gets a `laser_curves` section with the full numbers.
 - `POST .../process/fuse`:
   - `voxel_mm` must be 0.25–10 (else 422); null means the track's voxel size.
-  - It fuses at the track stage's resolution (its quality).
+  - It fuses at the track stage's resolution (its quality), at the given poses, so exactly the frames the track processed.
   - The poses are the straightened ones when straighten is `done`, else the track's tracked frames.
 - `POST .../process/refine` ("Refine with lasers", M3 phase 3): the body is optional; 409 without a finished Track.
   - It takes the mesh of the stage that made the base (`source`; when the base is already refined, the mesh it refined) and that stage's `laser_points.ply`, and moves the vertices along their normals by a smooth correction where the laser lines disagree with the surface (`ohs.mesh.anchor_to_points`). Laser points off the surface (more than 2 mm, or rejected by the robust fit) are `outliers`.
@@ -779,7 +780,7 @@ Everything in the M3 phase 2 section is implemented as written, with these clari
 
 **Recipes**
 - Built-ins, in this order:
-  - `default`: full quality, straighten `auto`, then remove loose pieces under 5 mm or 1 % of the mesh and fill holes up to 5 mm. No smoothing and no simplification.
+  - `default`: standard quality, straighten `auto`, then remove loose pieces under 5 mm or 1 % of the mesh and fill holes up to 5 mm. No smoothing and no simplification.
   - `body-panel`: the same, then holes up to 15 mm and bilateral smoothing at 0.5 with `keep_edges`.
   - `bracket`: the same as `default`, then bilateral smoothing at 0.25 with `keep_edges`.
   - `quick-preview`: preview quality, straighten `off`, remove loose pieces, simplify to 200,000 triangles.
