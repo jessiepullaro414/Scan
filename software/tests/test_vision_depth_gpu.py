@@ -116,6 +116,31 @@ def test_depth_without_exact_division_is_converted_on_the_cpu(gpu):
     assert np.array_equal(est.compute(left, right), exact)
 
 
+def test_compute_with_sigma_equals_the_three_array_download(gpu):
+    """Skipping the disparity download changes no depth and no sigma, with and without exact division."""
+    left, right, z_true, d_true, K = plane(0.5, 300.0, 6)
+    est = DepthEstimator(K, B)
+    m = est._gpu
+    disp, depth, sigz = m._run(left, right, None, None, "disp", "depth", "sigz")  # the lower level: all three
+    if m.exact_division:
+        d, s = est.compute_with_sigma(left, right)
+        assert np.array_equal(d, depth) and np.array_equal(s, sigz)
+    m.exact_division = False  # converted on the CPU from the disparity, as today
+    want_d = est.depth_from_disparity(disp)
+    want_s = np.where(want_d > 0, sigz, np.float32(0.0)).astype(np.float32)
+    d, s = est.compute_with_sigma(left, right)
+    assert np.array_equal(d, want_d) and np.array_equal(s, want_s)
+
+
+def test_depth_gpu_constants_are_the_cpu_modules():
+    """One copy of the constants the two modules share (importing depth_gpu needs no GPU)."""
+    from ohs.vision import depth, depth_gpu
+    assert depth_gpu.LK_EPS2 is depth.LK_EPS2 and depth_gpu.LK_MIN_TEXTURE is depth.LK_MIN_TEXTURE
+    assert depth_gpu.GPU_MIN_SIZE is depth.GPU_MIN_SIZE
+    assert (depth.LK_EPS2, depth.LK_MIN_TEXTURE, depth.GPU_MIN_SIZE) == (16.0, 0.02, 32)
+    assert depth._LKRefiner._EPS2 == depth.LK_EPS2 and depth._LKRefiner._MIN_TEXTURE == depth.LK_MIN_TEXTURE
+
+
 # --------------------------------------------------------------------------- contract and accuracy
 def test_gpu_api_contract(gpu):
     left, right, z_true, d_true, K = plane(0.5, 300.0, 51)

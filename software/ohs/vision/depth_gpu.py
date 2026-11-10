@@ -97,16 +97,14 @@ from typing import Any
 import cv2
 import numpy as np
 
-from ohs.vision.depth import SIGMA_MODELS, SIGMA_UNREFINED_PX, DepthParams, lk_window_n_eff
+from ohs.vision.depth import (GPU_MIN_SIZE, LK_EPS2, LK_MIN_TEXTURE, SIGMA_MODELS, SIGMA_UNREFINED_PX, DepthParams,
+                              lk_window_n_eff)
 
 __all__ = ["GpuTuning", "GpuStereoMatcher", "gpu_unsupported"]
 
 log = logging.getLogger(__name__)
-
-# keep in step with ohs.vision.depth._LKRefiner
-_LK_EPS2 = 16.0
-_LK_MIN_TEXTURE = 0.02
-MIN_SIZE = 32  # px; smaller images go to the CPU path
+# LK_EPS2, LK_MIN_TEXTURE (the sub-pixel step shared with ohs.vision.depth._LKRefiner) and GPU_MIN_SIZE
+# (smaller images go to the CPU path) are defined in ohs.vision.depth, the one place.
 
 _SOURCE = r"""
 /* OpenHandScan GPU stereo (ohs/vision/depth_gpu.py): census semi-global matching. OpenCL C 1.2.
@@ -1050,8 +1048,9 @@ class GpuStereoMatcher:
                 raise RuntimeError(f"kernel {name} allows {lim} work-items per group on this GPU, it needs {want}")
 
     def _setup(self, h: int, w: int) -> None:
-        if w < MIN_SIZE or h < MIN_SIZE:  # the filter halos assume images larger than themselves
-            raise ValueError(f"images of {w}x{h} are too small for the GPU matcher (at least {MIN_SIZE}x{MIN_SIZE})")
+        if w < GPU_MIN_SIZE or h < GPU_MIN_SIZE:  # the filter halos assume images larger than themselves
+            raise ValueError(f"images of {w}x{h} are too small for the GPU matcher "
+                             f"(at least {GPU_MIN_SIZE}x{GPU_MIN_SIZE})")
         cl, t, p = self.cl, self.tuning, self.params
         prg = self.dev.program(_SOURCE, self._options(w, h))
         names = ("census", "support", "sgm_vertical", "sgm_horizontal", "lr_median", "median3", "spk_rows", "spk_merge",
@@ -1113,7 +1112,7 @@ class GpuStereoMatcher:
             ]
         if refine:
             calls += [
-                ("lk_prep", k["lk_prep"], g3d, l3d, (lkl, lkr, b["ln"], b["rn"], b["g5"], np.float32(_LK_EPS2))),
+                ("lk_prep", k["lk_prep"], g3d, l3d, (lkl, lkr, b["ln"], b["rn"], b["g5"], np.float32(LK_EPS2))),
                 ("lk_grad", k["lk_grad"], g2d, l2d, (b["ln"], b["rn"], b["disp16"], b["ge"], b["g2"], b["e2"])),
                 ("lk_window", k["lk_window"], g2d, l2d, (b["ge"], b["g2"], b["num"], b["den"], b["win"])),
                 # sum(w e^2); its second output overwrites ge, which the queue has consumed by then
@@ -1121,7 +1120,7 @@ class GpuStereoMatcher:
             ]
         calls.append(("finish", k["finish"], g2d, l2d,
                       (b["disp16"], b["num"], b["den"], b["e2w"], b["disp"], b["depth"], b["sig"],
-                       np.int32(1 if refine else 0), np.float32(p.refine_max_step), np.float32(_LK_MIN_TEXTURE),
+                       np.int32(1 if refine else 0), np.float32(p.refine_max_step), np.float32(LK_MIN_TEXTURE),
                        np.float32(self.f * self.baseline), np.float32(p.min_depth_mm), np.float32(p.max_depth_mm),
                        np.float32(lk_window_n_eff(self._win)), np.float32(SIGMA_UNREFINED_PX))))
         # depth confidence (SigmaModel "gpu"): the hole distance is searched up to 3 hole radii
@@ -1185,10 +1184,15 @@ class GpuStereoMatcher:
         return disp, sig
 
     def depth_sigma(self, left: np.ndarray, right: np.ndarray, lk_left: np.ndarray | None = None,
-                    lk_right: np.ndarray | None = None) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+                    lk_right: np.ndarray | None = None) -> tuple[np.ndarray | None, np.ndarray, np.ndarray]:
         """``(disparity, depth, sigma_z)``: depth as :meth:`depth` (only meaningful with
         :attr:`exact_division`; otherwise convert the disparity on the CPU) and its standard
-        deviation in mm (0 = no depth), from the ``"gpu"`` :class:`~ohs.vision.depth.SigmaModel`."""
+        deviation in mm (0 = no depth), from the ``"gpu"`` :class:`~ohs.vision.depth.SigmaModel`.
+        The disparity is downloaded only without :attr:`exact_division`, where the caller needs it;
+        with it, ``None``."""
+        if self.exact_division:
+            depth, sigz = self._run(left, right, lk_left, lk_right, "depth", "sigz")
+            return None, depth, sigz
         disp, depth, sigz = self._run(left, right, lk_left, lk_right, "disp", "depth", "sigz")
         return disp, depth, sigz
 

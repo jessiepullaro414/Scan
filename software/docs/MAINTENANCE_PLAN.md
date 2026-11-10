@@ -408,6 +408,9 @@ Every task here: tests on both compute paths, the A2 snapshot identical before a
 bench medians before and after in the commit message.
 
 ### [ ] E1. Skip the disparity download nobody reads (Sonnet, S) ✔
+- **Landed 2026-11-10, speed not measured yet:** with exact division the GPU matcher downloads
+  only depth and sigma. Output identical (snapshot before/after on the GPU path, both
+  qualities). The box is ticked once the bench shows the gain.
 - **Where:** `ohs/vision/depth.py:554-561`, `ohs/vision/depth_gpu.py:1187-1193`.
 - **Problem:** `depth_sigma` downloads disparity, depth and sigma every frame; the disparity is
   only read when the GPU cannot divide exactly.
@@ -460,7 +463,11 @@ bench medians before and after in the commit message.
 - **Guard:** `test_gpu_matches_cpu_filter`, `test_gpu_and_numpy_agree`,
   `test_integration_values_and_weights`, the A2 snapshot.
 
-### [ ] E6. One copy of the constants shared by CPU and GPU depth (Sonnet, S) ○
+### [x] E6. One copy of the constants shared by CPU and GPU depth (Sonnet, S) ○
+- **Done 2026-11-10:** `GPU_MIN_SIZE`, `LK_EPS2` and `LK_MIN_TEXTURE` are defined once in
+  `depth.py` and imported by `depth_gpu.py` (`depth_gpu.MIN_SIZE` is now `depth.GPU_MIN_SIZE`);
+  one helper `_drop_gpu_if_too_small` replaces the three copies of the size check. A test holds
+  the two modules to the same objects.
 - **Where:** `ohs/vision/depth_gpu.py:106-109` against `ohs/vision/depth.py:89`, `:211-212`; the
   "too small for the GPU" block is repeated at `depth.py:489`, `:529`, `:547`. Same session as E1.
 - **Change:** import the constants from one place; one helper for the size check.

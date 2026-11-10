@@ -86,7 +86,10 @@ __all__ = ["DepthParams", "DepthEstimator", "disparity_range", "BACKENDS", "SIGM
 log = logging.getLogger(__name__)
 
 BACKENDS = ("auto", "cpu", "gpu")
-_GPU_MIN_SIZE = 32  # px (ohs.vision.depth_gpu.MIN_SIZE): smaller images are matched on the CPU
+# Shared with ohs.vision.depth_gpu, which imports them from here (the one place they are defined).
+GPU_MIN_SIZE = 32  # px: smaller images are matched on the CPU
+LK_EPS2 = 16.0  # (4 DN)^2 noise floor of the sub-pixel step's local normalisation
+LK_MIN_TEXTURE = 0.02  # minimum windowed mean of g^2 (normalised units)
 
 _MODES = {
     "sgbm3way": cv2.STEREO_SGBM_MODE_SGBM_3WAY,
@@ -208,8 +211,8 @@ class _LKRefiner:
     """
 
     _BUFFERS = ("x", "xb", "mu", "sq", "ln", "rn", "mx", "rw", "g", "g2", "e", "e2", "E2", "num", "den", "t")
-    _EPS2 = 16.0  # (4 DN)^2 noise floor of the local normalisation
-    _MIN_TEXTURE = 0.02  # minimum windowed mean of g^2 (normalised units)
+    _EPS2 = LK_EPS2
+    _MIN_TEXTURE = LK_MIN_TEXTURE
 
     def __init__(self, params: DepthParams) -> None:
         self.p = params
@@ -399,6 +402,11 @@ class DepthEstimator:
         self.backend_note = f"the GPU matcher failed ({exc})"
         self._init_cpu()
 
+    def _drop_gpu_if_too_small(self, left_r: np.ndarray) -> None:
+        """Images smaller than :data:`GPU_MIN_SIZE` are matched on the CPU: leave the GPU (quietly)."""
+        if self._gpu is not None and left_r.ndim == 2 and min(left_r.shape) < GPU_MIN_SIZE:
+            self._gpu_failed(ValueError(f"{left_r.shape[1]}x{left_r.shape[0]} images are too small for it"), quiet=True)
+
     def _init_cpu(self) -> None:
         if self._sgbm is not None:
             return
@@ -486,8 +494,7 @@ class DepthEstimator:
             ml, mr = self._lcn(left_r), self._lcn(right_r)
         else:
             ml, mr = left_r, right_r
-        if self._gpu is not None and min(left_r.shape) < _GPU_MIN_SIZE:
-            self._gpu_failed(ValueError(f"{left_r.shape[1]}x{left_r.shape[0]} images are too small for it"), quiet=True)
+        self._drop_gpu_if_too_small(left_r)
         if self._gpu is not None:
             try:
                 if sigma:
@@ -526,8 +533,7 @@ class DepthEstimator:
 
     def compute(self, left_r: np.ndarray, right_r: np.ndarray) -> np.ndarray:
         """Depth map in mm (float32, same size as the inputs, 0 = invalid)."""
-        if self._gpu is not None and left_r.ndim == 2 and min(left_r.shape) < _GPU_MIN_SIZE:
-            self._gpu_failed(ValueError(f"{left_r.shape[1]}x{left_r.shape[0]} images are too small for it"), quiet=True)
+        self._drop_gpu_if_too_small(left_r)
         if self._gpu is not None:
             self._check_pair(left_r, right_r)
             p = self.params
@@ -544,8 +550,7 @@ class DepthEstimator:
     def compute_with_sigma(self, left_r: np.ndarray, right_r: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         """Depth (mm, float32, 0 = invalid; the same as :meth:`compute`) and its standard deviation
         ``sigma_z`` (mm, 0 where the depth is invalid), :class:`SigmaModel` of this backend."""
-        if self._gpu is not None and left_r.ndim == 2 and min(left_r.shape) < _GPU_MIN_SIZE:
-            self._gpu_failed(ValueError(f"{left_r.shape[1]}x{left_r.shape[0]} images are too small for it"), quiet=True)
+        self._drop_gpu_if_too_small(left_r)
         if self._gpu is not None:
             self._check_pair(left_r, right_r)
             p = self.params
@@ -555,7 +560,7 @@ class DepthEstimator:
             except Exception as e:
                 self._gpu_failed(e)
             else:
-                if not self._gpu.exact_division:  # as compute(): convert on the CPU, bit for bit
+                if disp is not None:  # no exact division (the matcher sent the disparity): as compute(), convert on the CPU
                     depth = self.depth_from_disparity(disp)
                     sigz = np.where(depth > 0, sigz, np.float32(0.0)).astype(np.float32)
                 return depth, sigz
