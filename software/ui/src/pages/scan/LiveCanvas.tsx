@@ -245,6 +245,8 @@ function LiveMesh({ onBounds }: { onBounds: (boxCv: Box3 | null) => void }) {
 }
 
 // ------------------------------------------------------------------ scanner, aim line, ghost, trail
+/** The aim line's two ends, one array for good: drei's Line builds a new geometry for a new array. */
+const AIM_LINE: [number, number, number][] = [[0, 0, 0], [0, 0, 1]];
 const ZONE_COLOR = { none: "#8a929e", "too-close": "#f2564b", close: "#e5a83a", good: "#3fb950", far: "#e5a83a", "too-far": "#f2564b" } as const;
 
 function LiveScanner() {
@@ -298,7 +300,7 @@ function LiveScanner() {
     <group ref={group} visible={false}>
       <ScannerGlyph color={color} opacity={0.95} />
       <group ref={aim}>
-        <Line points={[[0, 0, 0], [0, 0, 1]]} color={ZONE_COLOR[zone]} lineWidth={1.4} transparent opacity={0.75} dashed dashSize={0.02} gapSize={0.015} />
+        <Line points={AIM_LINE} color={ZONE_COLOR[zone]} lineWidth={1.4} transparent opacity={0.75} dashed dashSize={0.02} gapSize={0.015} />
       </group>
       <mesh ref={dot}>
         <sphereGeometry args={[3.2, 16, 12]} />

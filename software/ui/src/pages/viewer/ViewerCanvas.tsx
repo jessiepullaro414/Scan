@@ -5,7 +5,7 @@
  */
 import { Bvh, Html, Line, OrbitControls } from "@react-three/drei";
 import { Canvas, useThree } from "@react-three/fiber";
-import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
+import { memo, useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import {
   DoubleSide,
   MeshBasicMaterial,
@@ -185,6 +185,35 @@ function LaserCloud({ geometry, size }: { geometry: BufferGeometry; size: number
   );
 }
 
+/**
+ * One finished measurement: the line, its two end points and the distance label. Memoised, and the
+ * line's points are kept between renders: the tool above renders again on every move of the cursor,
+ * and drei's Line builds a new geometry whenever it is handed a new points array.
+ */
+const MeasurementMark = memo(function MeasurementMark({ m, color, r }: { m: Measurement; color: string; r: number }) {
+  const { points, mid, d } = useMemo(() => {
+    const a = new Vector3(...m.a);
+    const b = new Vector3(...m.b);
+    return { points: [m.a, m.b], mid: tuple(a.clone().add(b).multiplyScalar(0.5)), d: a.distanceTo(b) };
+  }, [m.a, m.b]);
+  return (
+    <group>
+      <Line points={points} color={color} lineWidth={2.2} depthTest={false} renderOrder={10} transparent />
+      {points.map((p, i) => (
+        <mesh key={i} position={p} renderOrder={11}>
+          <sphereGeometry args={[r, 18, 14]} />
+          <meshBasicMaterial color="#ffffff" depthTest={false} transparent />
+        </mesh>
+      ))}
+      <Html position={mid} center zIndexRange={[30, 0]} className="html-label">
+        <div className="rounded-full border border-white/15 bg-[rgb(17_20_25/0.9)] px-2.5 py-1 font-mono text-[12.5px] font-semibold text-white shadow-lg tnum">
+          {d.toFixed(2)} mm
+        </div>
+      </Html>
+    </group>
+  );
+});
+
 /** Picking (click without dragging) and hover feedback for the distance tool. */
 function MeasureTool({
   enabled,
@@ -284,28 +313,9 @@ function MeasureTool({
   const r = markerRadius;
   return (
     <>
-      {measurements.map((m) => {
-        const a = new Vector3(...m.a);
-        const b = new Vector3(...m.b);
-        const d = a.distanceTo(b);
-        const mid = a.clone().add(b).multiplyScalar(0.5);
-        return (
-          <group key={m.id}>
-            <Line points={[m.a, m.b]} color={accent} lineWidth={2.2} depthTest={false} renderOrder={10} transparent />
-            {[m.a, m.b].map((p, i) => (
-              <mesh key={i} position={p} renderOrder={11}>
-                <sphereGeometry args={[r, 18, 14]} />
-                <meshBasicMaterial color="#ffffff" depthTest={false} transparent />
-              </mesh>
-            ))}
-            <Html position={tuple(mid)} center zIndexRange={[30, 0]} className="html-label">
-              <div className="rounded-full border border-white/15 bg-[rgb(17_20_25/0.9)] px-2.5 py-1 font-mono text-[12.5px] font-semibold text-white shadow-lg tnum">
-                {d.toFixed(2)} mm
-              </div>
-            </Html>
-          </group>
-        );
-      })}
+      {measurements.map((m) => (
+        <MeasurementMark key={m.id} m={m} color={accent} r={r} />
+      ))}
       {pending ? (
         <group>
           <mesh position={pending} renderOrder={11}>

@@ -848,11 +848,17 @@ Every task here: the type check, `npm test`, and for bundle tasks the chunk size
 - **Guard:** a node test of `sameSession`; a React Profiler count before and after in
   `npm run dev:mock`.
 
-### [ ] U2. Measurement lines rebuild their geometry on every render (Sonnet, S) ○
+### [x] U2. Measurement lines rebuild their geometry on every render (Sonnet, S) ✔
 - **Where:** `LiveCanvas.tsx:293`; `pages/viewer/ViewerCanvas.tsx:294`, `:315`. Same session as U1.
 - **Problem:** drei's `<Line>` rebuilds when `points` is a new array, and these are written
   inline.
 - **Change:** a module constant for the fixed line; a memoised component per measurement.
+- **Done 2026-11-11.** Counted in `npm run dev:mock` (development mode renders twice): with two
+  measurements on the model, 100 moves of the cursor rebuilt the finished lines 400 times, now 0.
+  Adding a third measurement renders only the new one. The distances shown are the same. The
+  dashed line from the first point to the cursor (`:315`) still follows the cursor, as it must.
+  The aim line in the live view rendered rarely already (only when the distance zone changes), so
+  its constant is for tidiness.
 
 ### [ ] U3. Every mesh download is held twice in memory (Sonnet, S) ✔
 - **Where:** `ui/src/api/http.ts`, `fetchBinary`.
