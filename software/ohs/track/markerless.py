@@ -222,18 +222,47 @@ class FusionParams:
 
 @dataclass
 class _ModelView:
-    """Refined ray cast of the model at pose ``T_wc`` (maps in that camera's frame)."""
+    """Refined ray cast of the model at pose ``T_wc`` (maps in that camera's frame).
+
+    Either the whole maps are given (``dense``, the Open3D ray cast), or the GPU's ``maps`` with
+    the pixel ``rays``. ICP looks up a few percent of the pixels, so the GPU view makes vertices
+    and normals only where :meth:`at` asks for them, with the same arithmetic per pixel as the
+    whole maps (:attr:`V`, :attr:`N`). ``maps`` is the volume's staging buffer: a GPU view is
+    good until the next ray cast of its volume.
+    """
 
     T_wc: np.ndarray
-    V: np.ndarray  # (h*w, 3) float64 vertices
-    N: np.ndarray  # (h*w, 3) float64 unit normals, towards the camera
     valid: np.ndarray  # (h*w,) bool
     K: np.ndarray  # intrinsics of the maps
     size: tuple[int, int]  # (w, h)
+    dense: tuple[np.ndarray, np.ndarray] | None = None  # (h*w, 3) float64 vertices and unit normals
+    rays: np.ndarray | None = None  # (h*w, 3) float64 pixel rays per unit depth
+    maps: np.ndarray | None = None  # (h*w, 4) float32: depth along z (0 = no hit), unit normal
 
     @property
     def n_valid(self) -> int:
         return int(self.valid.sum())
+
+    @property
+    def V(self) -> np.ndarray:
+        """(h*w, 3) float64 vertices (zero where there is no hit)."""
+        if self.dense is not None:
+            return self.dense[0]
+        return self.rays * self.maps[:, :1].astype(np.float64)
+
+    @property
+    def N(self) -> np.ndarray:
+        """(h*w, 3) float64 unit normals, towards the camera."""
+        if self.dense is not None:
+            return self.dense[1]
+        return self.maps[:, 1:4].astype(np.float64)
+
+    def at(self, pix: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        """Vertices and normals at the flat pixel indices ``pix``: ``(V[pix], N[pix])``."""
+        if self.dense is not None:
+            return self.dense[0][pix], self.dense[1][pix]
+        m = self.maps[pix]
+        return self.rays[pix] * m[:, :1].astype(np.float64), m[:, 1:4].astype(np.float64)
 
 
 @dataclass
@@ -591,12 +620,10 @@ class MarkerlessTracker:
         if pending is None:
             return None
         maps = pending.wait()
-        depth = maps[:, 0]
-        valid = depth > 0
-        V = self._rays_ray * depth[:, None].astype(np.float64)
-        N = maps[:, 1:4].astype(np.float64)
+        valid = maps[:, 0] > 0
         w, h = self._ray_size
-        return _ModelView(np.asarray(T_wc, dtype=np.float64).copy(), V, N, valid, self._K_ray, (w, h))
+        return _ModelView(np.asarray(T_wc, dtype=np.float64).copy(), valid, self._K_ray, (w, h),
+                          rays=self._rays_ray, maps=maps)
 
     def _raycast(self, T_wc: np.ndarray) -> _ModelView | None:
         """Ray cast the model at ``T_wc`` and refine depths with the trilinear TSDF."""
@@ -639,7 +666,7 @@ class MarkerlessTracker:
         N[sel] = -normal / nn[:, None]
         if p.model_normal_window > 1:
             N, valid = self._smooth_normals(N, valid, w, h, p.model_normal_window)
-        return _ModelView(T_wc.copy(), V, N, valid, self._K_ray, (w, h))
+        return _ModelView(T_wc.copy(), valid, self._K_ray, (w, h), dense=(V, N))
 
     def _newton_step(self, vals: np.ndarray, wts: np.ndarray, mask: np.ndarray, ratio: np.ndarray,
                      rays_w: np.ndarray) -> np.ndarray:
@@ -718,7 +745,7 @@ class MarkerlessTracker:
         p = self.params
         K = view.K
         w, h = view.size
-        tV, tN, tvalid = view.V, view.N, view.valid
+        tvalid = view.valid
         sig2 = p.icp_sigma_mm ** 2
         lam_r = sig2 / rot_sigma_rad ** 2
         lam_t = sig2 / p.trans_sigma_mm ** 2
@@ -743,7 +770,8 @@ class MarkerlessTracker:
             pix = v[sel] * w + u[sel]
             ok = tvalid[pix]
             sel, pix = sel[ok], pix[ok]
-            Q, Vt, Nt = Q[sel], tV[pix], tN[pix]
+            Q = Q[sel]
+            Vt, Nt = view.at(pix)
             diff = Q - Vt
             ok = np.einsum("ij,ij->i", diff, diff) < dmax * dmax
             ok &= np.einsum("ij,ij->i", N[sel] @ R.T, Nt) > p.normal_cos
@@ -846,11 +874,12 @@ class MarkerlessTracker:
 
         used_alt = alt_depth is not None and self.detail_mode
         depth = alt() if used_alt else self._clean_depth(depth_mm)
-        n_valid_px = int(np.count_nonzero(depth))
+        # counted on the comparison: numpy counts a bool array several times faster than floats
+        n_valid_px = int(np.count_nonzero(depth != 0))
         timings: dict[str, float] = {}
         if alt_depth is not None and not used_alt and n_valid_px < p.min_points:
             depth, used_alt = alt(), True
-            n_valid_px = int(np.count_nonzero(depth))
+            n_valid_px = int(np.count_nonzero(depth != 0))
 
         if not self._initialized:
             if n_valid_px < p.min_points:

@@ -63,7 +63,7 @@ frame (medians); on the RTX 3070 Ti laptop: full 49 ms. UI first paint loads abo
 | F4 | Something useful on screen from Stop until the mesh is ready | felt speed | M | Opus | - |
 | F5 | The stereo matcher holds Python's lock while the GPU works | speed | S | Opus | ✔ |
 | F6 | Read the recording one frame ahead | speed | S-M | Sonnet | ✔ |
-| F7 | The tracker's time on the CPU side | speed | M-L | Opus | ○ |
+| F7 | The tracker's time on the CPU side | speed | M-L | Opus | ✔ |
 | A1 | Faster tests: a fast run of about 4 minutes, a full run of about 12 | test time | M | Sonnet | ✔ |
 | A2 | Before/after snapshot tool for the engine | safety net | M | Sonnet | - |
 | A3 | UI tests for the PLY reader, binary frames and downloads | safety net | M | Sonnet | ○ |
@@ -308,7 +308,27 @@ by the snapshot tool.
 - **Guard:** the A2 snapshot identical; a test that the iterator yields the same frames in the
   same order, and that a read error is raised in the pass, not lost in the thread.
 
-### [ ] F7. The tracker's time on the CPU side (Opus, M-L) ○
+### [x] F7. The tracker's time on the CPU side (Opus, M-L) ✔
+- **Done 2026-11-11:** profiled line by line on a 355-frame recording (Radeon 680M, GPU path,
+  default settings; figures in VALIDATION.md), then the two host costs that can go without
+  changing a bit were removed. (1) The GPU model view no longer builds vertices and normals for
+  all 1280x800 pixels (8.2 ms per frame): ICP reads them at the few percent of pixels it matches,
+  so `_ModelView.at(pix)` in `ohs/track/markerless.py` now makes them there, with the same
+  arithmetic per pixel; `.V` and `.N` still give the whole maps. (2) Three counts of the valid
+  depth pixels use `np.count_nonzero(x != 0)` in place of `np.count_nonzero(x)` (3.6 → 0.26 ms
+  each on a float32 depth map, the same integer). Old and new runs alternated three times, 150
+  frames: time per frame 149.4 / 150.3 / 151.3 ms → 140.9 / 141.2 / 143.7 ms (−8 to −9 ms,
+  about 6 %), the pass with its mesh 25.5–25.9 → 24.2–24.7 s, the same mesh in all six runs.
+  The A2 snapshot is identical. New test `test_model_view_lookup_equals_the_whole_maps` (the
+  lookup against the whole maps, bit for bit, on both backends).
+- **Left, and why:** of the tracker's 53 ms per frame about 17 are waits for the device, not
+  host work (the ray cast 5.5, the fusion's `finish` 5.4, the tracking filter's copy back 4.6,
+  the depth upload 1.7); they can only be overlapped with other work, which belongs with E5.
+  The ICP's own arithmetic (8.5 ms over 7 iterations) and the source points (2.7 ms) have no
+  single costly line. The range check in `_clean_depth` (1.5 ms) was left: its cheaper form
+  saves 0.5 ms and differs when the depth limit is infinite. So the "30 ms in reach" below was
+  too high; about 9 were. Not measured: the RTX laptop, the CPU path (its model view is
+  unchanged, only the counts apply).
 - **Why:** tracking and fusion take 56 to 58 ms per frame, of which the GPU works about 8. The
   rest is Python and NumPy on the host: finishing the ray cast 17.6 ms (7.0 of it waiting for
   the device), ICP 9.6, the tracking filter 6.8, fusion 10.7, source points 2.8.
@@ -643,6 +663,13 @@ bench medians before and after in the commit message.
   OpenCL context. VALIDATION.md already names this as the next step.
 - **Change:** hand device buffers and events between the stages; keep the downloads the CPU needs.
 - **Gain (estimate):** 1-1.5 ms on the laptop, 3-6 ms on the Radeon. After E4.
+- **From the F7 profile (2026-11-11, Radeon, per frame):** the pass also stands still while the
+  device works: the fusion's `finish` 5.4 ms, the tracking filter's blocking copy back 4.6 ms,
+  the reconstruction's uploads 1.75 ms, the tracking volume's depth upload 1.7 ms. Two ways to
+  use that time with the same results: leave the fusion unfinished until its result is needed,
+  so it runs beside the laser points (3.9 ms on the host) and the next frame's rectification;
+  and start the tracking filter without waiting and do the laser points meanwhile. To be
+  measured before building.
 - **Guard:** `test_gpu_matches_cpu_filter`, `test_gpu_and_numpy_agree`,
   `test_integration_values_and_weights`, the A2 snapshot.
 

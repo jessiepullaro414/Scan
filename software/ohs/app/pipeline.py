@@ -661,7 +661,8 @@ class FramePipeline:
             tf = time.perf_counter()
             d_track = self.tracking_input(depth)
             tim["track_filter"] = _ms(tf)
-            extra["track_valid_fraction"] = float(np.count_nonzero(d_track)) / d_track.size
+            # counted on the comparison: numpy counts a bool array several times faster than floats
+            extra["track_valid_fraction"] = float(np.count_nonzero(d_track != 0)) / d_track.size
             # where the filtered depth can't hold the pose (a detailed part: the filter erodes it
             # away), the tracker uses it with the raw depth wherever the filter dropped a pixel
             if self._probe_left > 0:

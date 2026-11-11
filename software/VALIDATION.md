@@ -521,7 +521,28 @@ The mean frame is 5 to 6 % shorter. The accuracy figures are the same in all fiv
 
 That is 17 to 21 ms less per frame, about 11 %. All 150 frames are tracked and the mesh has 426,639 vertices and 845,817 faces in all six runs; the snapshot (`tools/snapshot.py`, 90 frames, preview and full) is identical to the one from before. Not measured: the RTX laptop, a recording on a slow disk, the CPU path. The later passes (`ohs/track/posegraph.py`, `spacetime.py`, `curve_ba.py`) still read their frames one at a time.
 
-The next step that follows from the profile is task F7 in `docs/MAINTENANCE_PLAN.md`.
+**Built on 2026-11-11 (plan F7): the tracker's time on the host.** A line-by-line timing of the frame pass on the same recording (335 frames timed, 149.9 ms per frame: depth 88.4, tracking with fusion 53.2, laser 4.2, rectify 2.5) shows where the tracker's 53 ms go:
+
+| Part of tracking, per frame | Time | Of it, waiting for the device |
+|---|---|---|
+| Model view (ray cast) | 14.8 ms | 5.5 ms |
+| Fusion into the reconstruction | 9.4 ms | 5.4 ms |
+| ICP | 8.5 ms | none |
+| Tracking filter | 5.8 ms | 4.6 ms |
+| Counting the valid pixels (pipeline and tracker) | 3.7 ms | none |
+| Source points | 2.7 ms | none |
+| Fusion into the tracking volume | 2.4 ms | 1.7 ms |
+| Depth range check, gyro prior, the rest | about 6 ms | none |
+
+So about 17 ms are waits, and the host work that could go without changing a result was in two places. The model view built vertices and normals for all 1,024,000 pixels (8.2 ms) though ICP reads them only where a source point lands: it now builds them at those pixels, with the same arithmetic. And `np.count_nonzero` on a float32 depth map is slow: timed alone on a 1280x800 map, 3.6 ms where counting `depth != 0` takes 0.26 ms and gives the same number. Same measurement as for F6, old and new runs alternated (old, new, old, new, old, new):
+
+| | Old | New |
+|---|---|---|
+| Time per frame, mean | 150.3 / 149.4 / 151.3 ms | 141.2 / 140.9 / 143.7 ms |
+| Time per frame, median | 147.1 / 146.8 / 148.7 ms | 138.5 / 138.4 / 140.2 ms |
+| Whole pass with its mesh | 25.7 / 25.5 / 25.9 s | 24.7 / 24.2 / 24.6 s |
+
+That is 8 to 9 ms less per frame, about 6 %. All 150 frames are tracked and the mesh has 426,639 vertices and 845,817 faces in all six runs; the snapshot (`tools/snapshot.py`, 90 frames, preview and full) is identical to the one from before. Not measured: the RTX laptop, the CPU path (its model view comes from Open3D and is unchanged). What is left of the tracker is mostly waiting and the ICP's own arithmetic; the waits can be used for other work (noted under task E5 in `docs/MAINTENANCE_PLAN.md`).
 
 ## Straighten: loop closure (M3 phase 2, 2026-11-09)
 

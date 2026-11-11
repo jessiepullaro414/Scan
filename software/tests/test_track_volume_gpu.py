@@ -135,6 +135,24 @@ def test_raycast_matches_open3d_and_truth(scene, noise):
 
 
 @gpu
+def test_model_view_lookup_equals_the_whole_maps():
+    """ICP reads the model view at single pixels (``at``): on both backends that must give the
+    rows of the whole maps bit for bit, also at pixels with no hit and at repeated pixels."""
+    tg, to, Ts = fused_pair("sphere", 6, noise=True, **O3D_RULE)
+    rng = np.random.default_rng(3)
+    for tr in (tg, to):
+        v = tr._raycast(Ts[5])
+        V, N = v.V, v.N
+        assert V.shape == N.shape == (v.valid.size, 3) and V.dtype == N.dtype == np.float64
+        assert v.n_valid > 5000 and v.n_valid < v.valid.size
+        pix = np.concatenate([rng.choice(np.flatnonzero(v.valid), 5000), rng.integers(0, v.valid.size, 2000),
+                              [0, 0, v.valid.size - 1]])
+        Vt, Nt = v.at(pix)
+        assert Vt.dtype == Nt.dtype == np.float64
+        assert Vt.tobytes() == V[pix].tobytes() and Nt.tobytes() == N[pix].tobytes()
+
+
+@gpu
 def test_normals_follow_the_analytic_surface():
     """Model normals on the sphere, away from its silhouette (the 5x5 box average mixes in the
     plane behind it there, on both backends), against the analytic normals; and vs Open3D's."""
