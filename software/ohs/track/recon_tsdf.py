@@ -308,6 +308,7 @@ class ConfidenceTsdf:
         self._img_bufs: Any = None
         self._list_cap = 0
         self._slot_buf = self._key_buf = None
+        self._lists: Any = None  # (copy events, host arrays) of the last frame's brick lists, see _integrate_gpu
         self._bsearch: Any = None  # (n_max, table, out, count, shift) of the GPU brick search
         self._warned_range = False
         self.backend = "gpu"
@@ -326,8 +327,17 @@ class ConfidenceTsdf:
         return self.capacity * NVOX * 4 * (len(_FLOAT_CHANNELS) + 1) / 2 ** 20
 
     # ------------------------------------------------------------------ storage
+    def _wait(self) -> None:
+        """Wait for the device. ``integrate`` returns with the frame's fusion still running (the queue
+        is in order, so whatever is queued next comes after it); this is for what must not overtake it,
+        such as releasing a buffer."""
+        if self.dev is not None:
+            self.queue.finish()
+            self._lists = None
+
     def reset(self) -> None:
         """Forget everything (the pool shrinks back to its initial size)."""
+        self._wait()
         self._enc_sorted = np.zeros(0, dtype=np.int64)
         self._slot_sorted = np.zeros(0, dtype=np.int64)
         self._origin: np.ndarray | None = None  # brick the GPU search's compact keys are relative to
@@ -510,15 +520,14 @@ class ConfidenceTsdf:
             sig = None if sigma_mm is None else np.ascontiguousarray(sigma_mm, dtype=np.float32)
             if sig is not None and sig.shape != depth.shape:
                 raise ValueError(f"sigma has shape {sig.shape}, expected {depth.shape}")
-            hold = self._upload_images(depth, sig)
+            self._upload_images(depth, sig)
             bricks = self._frame_bricks_gpu(self._img_bufs[1], T, depth.shape)
             if bricks is None:
                 bricks = self._frame_bricks(depth, T)
             slots, keys = self._slots_for(bricks)
             if len(slots):
+                # the fusion is left running: the images are uploaded, and what reads the volume waits for it
                 self._integrate_gpu(slots, keys, depth.shape, sig is not None, R_cw, t_cw)
-            self.queue.finish()  # the host arrays must outlive the copies
-            del hold
         else:
             depth = np.where(np.isfinite(depth) & (depth >= self.depth_min_mm) & (depth <= self.depth_max_mm),
                              depth, np.float32(0.0)).astype(np.float32)
@@ -569,29 +578,39 @@ class ConfidenceTsdf:
         b["luv"][al] = (ui[look].astype(np.uint32) | (vi[look].astype(np.uint32) << 16))
 
     def _upload_images(self, depth: np.ndarray, sigma: np.ndarray | None) -> tuple:
-        """Queue the depth (and sigma) uploads; returns the host arrays, which must outlive them."""
+        """Upload the depth (and sigma) and wait for the copies (not holding the GIL), so the host arrays
+        are the caller's again; returns them."""
         cl, q = self.cl, self.queue
         h, w = depth.shape
         if self._img_bufs is None or self._img_bufs[0] != (h, w):
             if self._img_bufs is not None:
+                self._wait()
                 for bb in self._img_bufs[1:]:
                     bb.release()
             self._img_bufs = ((h, w), *(cl.Buffer(self.dev.ctx, cl.mem_flags.READ_ONLY, size=h * w * 4)
                                         for _ in range(2)))
-        cl.enqueue_copy(q, self._img_bufs[1], depth, is_blocking=False)
+        evs = [cl.enqueue_copy(q, self._img_bufs[1], depth, is_blocking=False)]
         if sigma is not None:
-            cl.enqueue_copy(q, self._img_bufs[2], sigma, is_blocking=False)
+            evs.append(cl.enqueue_copy(q, self._img_bufs[2], sigma, is_blocking=False))
+        cl.wait_for_events(evs)
         return depth, sigma
 
     def _integrate_gpu(self, slots: np.ndarray, keys: np.ndarray, shape: tuple[int, int], has_sigma: bool,
                        R_cw: np.ndarray, t_cw: np.ndarray) -> None:
-        """Queue the integration of the uploaded images into bricks ``keys`` at pool ``slots``."""
+        """Queue the integration of the uploaded images into bricks ``keys`` at pool ``slots``, and
+        return without waiting: the device may be busy with other work (the tracker's volume shares
+        it), and the caller has its own to do meanwhile. The two lists are host arrays that must
+        outlive their copies, so they are kept in ``_lists`` until the next frame (or ``_wait``)."""
         cl, q = self.cl, self.queue
         h, w = shape
         mf = cl.mem_flags
         _, dbuf, sbuf = self._img_bufs
         m = len(slots)
+        if self._lists is not None:
+            cl.wait_for_events(self._lists[0])  # done long ago, as a rule (and the GIL is not held)
+            self._lists = None
         if m > self._list_cap:
+            self._wait()
             for bb in (self._slot_buf, self._key_buf):
                 if bb is not None:
                     bb.release()
@@ -599,8 +618,8 @@ class ConfidenceTsdf:
             self._slot_buf = cl.Buffer(self.dev.ctx, mf.READ_ONLY, size=self._list_cap * 4)
             self._key_buf = cl.Buffer(self.dev.ctx, mf.READ_ONLY, size=self._list_cap * 12)
         hold = (np.ascontiguousarray(slots, np.int32), np.ascontiguousarray(keys, np.int32))
-        cl.enqueue_copy(q, self._slot_buf, hold[0], is_blocking=False)
-        cl.enqueue_copy(q, self._key_buf, hold[1], is_blocking=False)
+        evs = [cl.enqueue_copy(q, self._slot_buf, hold[0], is_blocking=False),
+               cl.enqueue_copy(q, self._key_buf, hold[1], is_blocking=False)]
         K = self.K
         b = self._bufs
         n = m * NVOX
@@ -609,13 +628,14 @@ class ConfidenceTsdf:
                    self._slot_buf, self._key_buf, m, dbuf, sbuf, int(has_sigma), w, h,
                    K[0, 0], K[1, 1], K[0, 2], K[1, 2], K[0, 1], *R_cw.ravel(), *t_cw,
                    self.voxel_mm, self.trunc_mm, self.depth_min_mm, self.depth_max_mm, self.look_px ** 2)
-        q.finish()  # the host arrays above must outlive the copies
-        del hold
+        q.flush()  # the device starts as soon as it is free
+        self._lists = (evs, hold)
 
     # ------------------------------------------------------------------ results
     def download(self) -> tuple[np.ndarray, dict[str, np.ndarray]]:
         """``(keys (M,3) int32, {channel: (M, 8, 8, 8)})`` of the allocated bricks, indexed ``[z, y, x]``."""
         n = self.n_bricks
+        self._wait()  # the last frame's fusion
         out: dict[str, np.ndarray] = {}
         for c in (*_FLOAT_CHANNELS, "luv"):
             if self.dev is None:
@@ -686,6 +706,7 @@ class ConfidenceTsdf:
 
     def close(self) -> None:
         """Release the GPU buffers (the volume is unusable afterwards)."""
+        self._wait()
         self._release_storage()
         if self.dev is not None and self._img_bufs is not None:
             for bb in self._img_bufs[1:]:

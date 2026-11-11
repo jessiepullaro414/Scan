@@ -644,7 +644,17 @@ bench medians before and after in the commit message.
   `test_weak_directions_say_what_the_surface_cannot_pin_down`,
   `test_translation_strength_says_whether_the_input_holds_the_slide`.
 
-### [ ] E4. Let the TSDF integration run without blocking (Opus, M) ✔
+### [x] E4. Let the TSDF integration run without blocking (Opus, M) ✔
+- **Done 2026-11-11:** `integrate` no longer waits for the device after queueing the fusion. On
+  the Radeon the pass takes 136.5 to 138.7 ms per frame where it took 140.9 to 142.8 (old and
+  new alternated three times, 150 frames, default settings): about 4 ms, 3 %. Same mesh, and the
+  A2 snapshot is identical. The two brick lists are kept in `_lists` until the next frame;
+  `download`, `reset`, `close` and every buffer release wait first (`_wait`).
+- **What the wait was:** not this kernel. Waiting only for the two small list uploads still took
+  5.4 ms and gained nothing (140.0 to 141.5 ms per frame): the device was busy with the tracking
+  volume's fusion, queued just before on the same GPU and not waited for. The depth and sigma
+  uploads are still waited for (1.5 ms, now without holding the GIL), so the caller's arrays are
+  its own again when `integrate` returns. Not measured: the RTX laptop.
 - **Where:** `ohs/track/recon_tsdf.py:513-521` and `:586-613`.
 - **Problem:** `integrate` waits for the GPU kernel (`finish()` twice) only to keep two host
   arrays alive. VALIDATION.md measures that wait at 2.4 ms (laptop) and 9.7 ms (Radeon).
@@ -669,7 +679,7 @@ bench medians before and after in the commit message.
   use that time with the same results: leave the fusion unfinished until its result is needed,
   so it runs beside the laser points (3.9 ms on the host) and the next frame's rectification;
   and start the tracking filter without waiting and do the laser points meanwhile. To be
-  measured before building.
+  measured before building. The first of the two is done (E4, about 4 ms).
 - **Guard:** `test_gpu_matches_cpu_filter`, `test_gpu_and_numpy_agree`,
   `test_integration_values_and_weights`, the A2 snapshot.
 

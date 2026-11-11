@@ -111,6 +111,54 @@ def test_gpu_brick_search_finds_the_cpu_bricks():
     assert v.n_bricks > n0  # fused, through the CPU search
 
 
+def test_gpu_integration_needs_no_wait_after_a_frame():
+    """Nothing has to be waited for after ``integrate``: the volume equals, bit for bit, the one that
+    waits for the device after every frame; the caller's arrays are its own again once the call
+    returns; and the pool can grow, and ``reset`` and ``close`` work, straight after a frame."""
+    if compute.get_device() is None:
+        pytest.skip(f"no GPU: {compute.status()}")
+    rng = np.random.default_rng(3)
+    # four frames side by side, then three over fresh ground (so the small pool has to grow there)
+    Ts = poses(4, 5.0) + [make_se3(np.eye(3), np.array([600.0 + 5.0 * k, 0.0, 0.0])) for k in range(3)]
+    frames = [(plane_depth(T, 0.3, rng), np.full((H, W), 0.4, np.float32), T) for T in Ts]
+
+    def small() -> ConfidenceTsdf:
+        return ConfidenceTsdf(K, (W, H), voxel_mm=2.0, trunc_mm=8.0, depth_min_mm=150.0, depth_max_mm=450.0,
+                              backend="gpu", initial_bricks=64)
+
+    waited, free = small(), small()
+    caps = []
+    for d, s, T in frames:
+        waited.integrate(d, s, T)
+        waited.queue.finish()
+        d2, s2 = d.copy(), s.copy()
+        free.integrate(d2, s2, T)
+        d2[:] = 0.0
+        s2[:] = 50.0
+        caps.append(free.capacity)
+    assert caps[-1] > caps[3]  # the pool grew straight after a frame
+    (kw, cw), (kf, cf) = waited.download(), free.download()
+    assert len(kw) > 500 and np.array_equal(kw, kf)
+    for ch in cw:
+        assert cw[ch].tobytes() == cf[ch].tobytes(), ch
+    d, s, T = frames[0]
+    free.integrate(d, s, T)
+    free.reset()
+    assert free.n_bricks == 0 and free.n_integrated == 0
+    one = small()
+    for v in (free, one):
+        v.integrate(d, s, T)
+    one.queue.finish()
+    (kf, cf), (k1, c1) = free.download(), one.download()
+    assert np.array_equal(kf, k1)
+    for ch in c1:
+        assert cf[ch].tobytes() == c1[ch].tobytes(), ch
+    free.integrate(d, s, T)
+    free.close()
+    waited.close()
+    one.close()
+
+
 def test_sigma_counts_independent_looks_only():
     rng = np.random.default_rng(2)
     noise = 0.5
