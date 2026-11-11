@@ -882,11 +882,36 @@ Every task here: the type check, `npm test`, and for bundle tasks the chunk size
 - **Change:** search for each name again, then delete. **Guard:** the bundle is the same size or
   smaller.
 
-### [ ] U7. Mesh parsing freezes the UI on large meshes (Sonnet M, then Opus L) ○
+### [-] U7. Mesh parsing freezes the UI on large meshes (Sonnet M, then Opus L) -
 - **Where:** `pages/process/mesh.ts:93-109`, `ViewerPage.tsx:228`, `three/ply.ts:188-249`.
 - **Change:** (a) Sonnet: a fast path for the usual face layout (one count byte, 32-bit indices).
   (b) Opus: parse in a Web Worker and transfer the arrays.
 - **Guard:** the PLY tests from A3 give the same arrays; the timing log in `mesh.ts:98`.
+- **Not needed (measured 2026-11-11, rule 2).** The parse is not where the time goes. In Chrome on
+  this PC, medians of 5 runs of `readPly` and `plyGeometry` on real engine meshes:
+
+  | Mesh | Read | Geometry |
+  |---|---|---|
+  | a usual scan, 24 MB, 852,847 triangles | 65 ms | 12 ms |
+  | the door at Best, 99 MB, 3,627,310 triangles | 84 ms | 8 ms |
+
+  The slowest single run was 266 ms (the first one). In Node the 99 MB mesh reads in 159 ms, and a
+  144 MB Open3D file with 64-bit coordinates and 5.76 million triangles in 179 ms plus 157 ms for
+  its normals. A fast path could halve a tenth of a second, and a worker is not worth its code for
+  that. The freeze on large meshes is somewhere else: see U8.
+- For A3: `parsePly` imports nothing, so moving it and its types to a file of its own makes it
+  testable with plain `node`, like the other UI tests.
+
+### [ ] U8. The first use of Measure or Confidence freezes the viewer for seconds (Sonnet, S) ✔
+- **Where:** `pages/viewer/ViewerCanvas.tsx`, `<Bvh firstHitOnly>`. Found while measuring U7.
+- **Problem:** the tree for picking points on the mesh is built on the first use of Measure or of
+  the confidence view, on the main thread, with drei's default split (SAH). Measured in Chrome on
+  this PC with the options drei uses: 1.7 s for a usual scan (852,847 triangles), 7.2 s for
+  3,627,310 triangles. Nothing in the app moves meanwhile.
+- **Change:** (a) the CENTER split: 316 ms and 1.6 s on the same meshes. (b) Later, if the rest
+  matters: build the tree in a worker (three-mesh-bvh has one), so nothing freezes at all.
+- **Guard:** the same hits: 3000 rays through each mesh give the same distances with both splits,
+  to the last digit, and the time per ray stays the same (about 4 µs).
 
 ---
 
