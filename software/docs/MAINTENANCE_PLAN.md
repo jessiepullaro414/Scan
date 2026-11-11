@@ -256,7 +256,14 @@ by the snapshot tool.
 - **Guard:** `test_server_process_studio.py`, the UI type check, and a walk through the flow in
   `npm run dev:mock`.
 
-### [ ] F5. The stereo matcher holds Python's lock while the GPU works (Opus, S) ✔
+### [x] F5. The stereo matcher holds Python's lock while the GPU works (Opus, S) ✔
+- **Done 2026-11-11.** `_run` keeps the events of its non-blocking copies until the blocking copy
+  has returned. Radeon 680M, GPU path, Standard, 90 frames, old and new runs alternated: the mean
+  frame 160.8 / 161.4 ms → 151.4 / 151.9 / 152.7 ms (−5 to −6 %), the wait for the laser threads
+  16.3 → 0.9–1.4 ms, the depth stage 81 → 86–87 ms. The A2 snapshot is identical. The two other
+  places were looked at and left alone: their dropped events are uploads at the head of an idle
+  queue (`_upload_images` is 1.9 ms per frame in all), and no thread of the pipeline waits
+  beside them. Not measured: the RTX laptop, preview quality, live scanning.
 - **Found by the profile of 2026-11-10** (VALIDATION.md, "Where a frame's time goes").
 - **Where:** `ohs/vision/depth_gpu.py`, `GpuStereoMatcher._run`.
 - **Why:** the matcher's first output copy is non-blocking and its event is dropped at once.

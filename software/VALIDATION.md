@@ -499,7 +499,19 @@ Experiment: the events of the matcher's non-blocking copies kept alive until its
 - **The same pattern elsewhere:** `ohs/track/filter_gpu.py` and `ohs/track/recon_tsdf.py` also drop the events of non-blocking uploads. Whether those waits matter is not measured.
 - **Not measured:** the snapshot guard on the patched run; the CPU path (it has no matcher on the GPU); the RTX laptop; live scanning, where the app's server threads are held up by the same lock for about 78 ms in every frame.
 
-Next steps that follow from this are tasks F5 to F7 in `docs/MAINTENANCE_PLAN.md`.
+**Built on 2026-11-11 (plan F5):** the matcher now keeps those events itself. Old and new code, runs alternated (new, old, new, old, new):
+
+| | Old | New |
+|---|---|---|
+| Whole frame, mean | 160.8 / 161.4 ms | 152.7 / 151.4 / 151.9 ms |
+| Whole frame, median | 152.7 / 154.7 ms | 146.3 / 145.7 / 145.6 ms |
+| Wait for the laser threads | 16.3 / 16.4 ms | 1.4 / 1.2 / 0.9 ms |
+| Depth | 80.9 / 81.6 ms | 86.4 / 85.7 / 87.0 ms |
+| Wait per minute of scanning (every frame) | 9.65 / 9.68 min | 9.16 / 9.08 / 9.11 min |
+
+The mean frame is 5 to 6 % shorter. The accuracy figures are the same in all five runs, and the snapshot (`tools/snapshot.py`, 90 frames, preview and full) is identical to the one from before.
+
+Next steps that follow from this are tasks F6 and F7 in `docs/MAINTENANCE_PLAN.md`.
 
 ## Straighten: loop closure (M3 phase 2, 2026-11-09)
 

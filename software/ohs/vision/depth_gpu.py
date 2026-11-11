@@ -1152,19 +1152,24 @@ class GpuStereoMatcher:
             self._setup(h, w)
         b = self._b
         hold = [np.ascontiguousarray(left), np.ascontiguousarray(right)]  # alive until the queue is done
-        cl.enqueue_copy(q, b["il"], hold[0], is_blocking=False)
-        cl.enqueue_copy(q, b["ir"], hold[1], is_blocking=False)
+        # The events of the non-blocking copies are kept until the blocking copy at the end has
+        # returned. pyopencl waits for such an event when it is dropped, and it does that without
+        # releasing Python's lock: dropped at once, the first output copy made this thread hold the
+        # lock for the whole run, and the laser threads beside it stood still (VALIDATION.md,
+        # "Where a frame's time goes"). The blocking copy releases the lock while it waits.
+        copies = [cl.enqueue_copy(q, b["il"], hold[0], is_blocking=False),
+                  cl.enqueue_copy(q, b["ir"], hold[1], is_blocking=False)]
         if self._lk_images:
             hold += [np.ascontiguousarray(lk_left), np.ascontiguousarray(lk_right)]
-            cl.enqueue_copy(q, b["lkl"], hold[2], is_blocking=False)
-            cl.enqueue_copy(q, b["lkr"], hold[3], is_blocking=False)
+            copies += [cl.enqueue_copy(q, b["lkl"], hold[2], is_blocking=False),
+                       cl.enqueue_copy(q, b["lkr"], hold[3], is_blocking=False)]
         events = [(name, cl.enqueue_nd_range_kernel(q, kern, gs, ls)) for name, kern, gs, ls in self._calls]
         outs = [np.empty((h, w), np.float32) for _ in what]
         for i, (name, out) in enumerate(zip(what, outs)):
-            cl.enqueue_copy(q, out, b[name], is_blocking=i == len(what) - 1)
+            copies.append(cl.enqueue_copy(q, out, b[name], is_blocking=i == len(what) - 1))
         if self.profiling:
             self.last_timings_ms = {name: (e.profile.end - e.profile.start) * 1e-6 for name, e in events}
-        del hold
+        del copies, hold  # all done by now (the last copy was blocking): nothing left to wait for
         return outs
 
     def disparity(self, left: np.ndarray, right: np.ndarray, lk_left: np.ndarray | None = None,
