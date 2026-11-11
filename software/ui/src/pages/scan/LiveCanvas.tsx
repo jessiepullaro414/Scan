@@ -9,7 +9,7 @@
 import { Html, Line, OrbitControls } from "@react-three/drei";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { RotateCcw } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import {
   Box3,
   BufferAttribute,
@@ -539,7 +539,8 @@ function Scene({ showGrid, showTrail }: { showGrid: boolean; showTrail: boolean 
   );
 }
 
-export function LiveCanvas({ showGrid, showTrail }: { showGrid: boolean; showTrail: boolean }) {
+/** Memoised: the page around it renders for reasons that do not concern the 3D view. */
+export const LiveCanvas = memo(function LiveCanvas({ showGrid, showTrail }: { showGrid: boolean; showTrail: boolean }) {
   return (
     <div className="absolute inset-0" role="img" aria-label="Live 3D model of the scan">
       <Canvas
@@ -555,4 +556,4 @@ export function LiveCanvas({ showGrid, showTrail }: { showGrid: boolean; showTra
       </Canvas>
     </div>
   );
-}
+});

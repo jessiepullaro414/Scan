@@ -829,7 +829,14 @@ bench medians before and after in the commit message.
 
 Every task here: the type check, `npm test`, and for bundle tasks the chunk sizes before and after.
 
-### [ ] U1. The status message re-renders the 3D scene 10 times a second (Sonnet, S-M) ✔
+### [x] U1. The status message re-renders the 3D scene 10 times a second (Sonnet, S-M) ✔
+- **Done 2026-11-11.** The store keeps the old `session` object when the new one is equal
+  (`store/sameSession.ts`, with a node test in `npm test`); the Scan page reads only the phase
+  and the Project page only "scanning here"; `LiveCanvas` is memoised. Renders counted in
+  `npm run dev:mock` over 10 s (development mode, which renders twice): Scan page, `LiveCanvas`
+  and its scene 152 -> 0, idle and while scanning; Project page 150 -> 0 idle, and 8 while a scan
+  runs in that project (its own refresh of the scan list). The Viewer and Process canvases are
+  left as they are: their pages do not read the session, so they were never part of this.
 - **Where:** `ui/src/store/session.ts:54-67`; `ScanPage.tsx:40`; `ProjectPage.tsx:148`, `:168`;
   `pages/scan/LiveCanvas.tsx`. The server sends `status` at 10 Hz whenever a window is connected,
   scanning or not (`ohs/server/studio.py:76`, `:251-255`).

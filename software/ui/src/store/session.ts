@@ -4,6 +4,7 @@ import { api } from "../api/http";
 import type { Scan, ScanMode, SessionState, StatusMsg } from "../api/types";
 import { useLive } from "./live";
 import { useProjects } from "./projects";
+import { sameSession } from "./sameSession";
 import { toast } from "./toasts";
 
 export type SessionAction = "start" | "pause" | "resume" | "stop" | "rewind";
@@ -58,7 +59,8 @@ export const useSession = create<SessionStore>((set, get) => {
         useLive.getState().resetScan();
         set({ lastStopped: null });
       }
-      set({ session: s });
+      // Every status message brings the session again: keep the old object when nothing changed.
+      if (!sameSession(prev, s)) set({ session: s });
     },
 
     applyStatus: (m) => {

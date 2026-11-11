@@ -37,7 +37,8 @@ export default function ScanPage({ projectParam, first = false }: { projectParam
   const setMode = useUi((s) => s.setScanMode);
   const hintsOpen = useUi((s) => s.hintsOpen);
   const setHintsOpen = useUi((s) => s.setHintsOpen);
-  const session = useSession((s) => s.session);
+  // Only the phase: the whole session changes ten times a second while scanning.
+  const phase = useSession((s) => s.session?.state ?? "idle");
   const lastStopped = useSession((s) => s.lastStopped);
   const device = useDevice((s) => s.device);
 
@@ -77,8 +78,7 @@ export default function ScanPage({ projectParam, first = false }: { projectParam
     return () => ro.disconnect();
   }, []);
 
-  const live = isLive(session);
-  const phase = session?.state ?? "idle";
+  const live = phase === "scanning" || phase === "paused";
   const connected = !!device?.connected;
   const calibrated = !!device?.calibration?.loaded;
   const reason = !device

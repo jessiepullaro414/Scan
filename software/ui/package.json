@@ -10,7 +10,7 @@
     "dev:mock": "vite --mode mock",
     "build": "tsc -b && vite build",
     "typecheck": "tsc -b",
-    "test": "node src/pages/process/selection.test.ts && node src/lib/estimate.test.ts",
+    "test": "node src/pages/process/selection.test.ts && node src/lib/estimate.test.ts && node src/store/sameSession.test.ts",
     "preview": "vite preview"
   },
   "dependencies": {

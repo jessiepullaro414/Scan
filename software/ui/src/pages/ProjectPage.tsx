@@ -28,7 +28,7 @@ import { cn, useTicker } from "../lib/util";
 import { useConnection } from "../store/connection";
 import { isActive, useScanJob } from "../store/jobs";
 import { useProjects } from "../store/projects";
-import { useSession } from "../store/session";
+import { isLive, useSession } from "../store/session";
 import { toast } from "../store/toasts";
 import { useUi } from "../store/ui";
 
@@ -145,7 +145,7 @@ export function ProjectPage({ pid }: { pid: string }) {
   const rename = useProjects((s) => s.rename);
   const remove = useProjects((s) => s.remove);
   const setCurrent = useUi((s) => s.setCurrentProject);
-  const live = useSession((s) => s.session);
+  const scanningHere = useSession((s) => isLive(s.session) && s.session?.project_id === pid);
   const link = useConnection((s) => s.link);
   const [renaming, setRenaming] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -165,7 +165,6 @@ export function ProjectPage({ pid }: { pid: string }) {
 
   const name = project?.name ?? summary?.name ?? "";
   const scans = project ? [...project.scans].sort((a, b) => (a.created < b.created ? 1 : -1)) : null;
-  const scanningHere = (live?.state === "scanning" || live?.state === "paused") && live.project_id === pid;
 
   if (error && !project) {
     const notFound = error.status === 404;
