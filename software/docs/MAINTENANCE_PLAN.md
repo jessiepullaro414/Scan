@@ -902,7 +902,7 @@ Every task here: the type check, `npm test`, and for bundle tasks the chunk size
 - For A3: `parsePly` imports nothing, so moving it and its types to a file of its own makes it
   testable with plain `node`, like the other UI tests.
 
-### [ ] U8. The first use of Measure or Confidence freezes the viewer for seconds (Sonnet, S) ✔
+### [x] U8. The first use of Measure or Confidence freezes the viewer for seconds (Sonnet, S) ✔
 - **Where:** `pages/viewer/ViewerCanvas.tsx`, `<Bvh firstHitOnly>`. Found while measuring U7.
 - **Problem:** the tree for picking points on the mesh is built on the first use of Measure or of
   the confidence view, on the main thread, with drei's default split (SAH). Measured in Chrome on
@@ -912,6 +912,10 @@ Every task here: the type check, `npm test`, and for bundle tasks the chunk size
   matters: build the tree in a worker (three-mesh-bvh has one), so nothing freezes at all.
 - **Guard:** the same hits: 3000 rays through each mesh give the same distances with both splits,
   to the last digit, and the time per ray stays the same (about 4 µs).
+- **Done 2026-11-11 (a).** 1724 → 316 ms and 7173 → 1587 ms on the two meshes. In the app
+  (`npm run dev:mock`, 235,674 triangles, development mode) the long task after a click on Measure
+  went from 765 ms to 119 ms. The confidence view could not be tried in the mock (no confidence
+  values there). Left for later: (b), the worker, for the 0.3 to 1.6 s that remain.
 
 ---
 

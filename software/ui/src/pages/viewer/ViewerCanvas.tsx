@@ -46,6 +46,13 @@ export const VIEW_DIR: [number, number, number] = [0.42, 0.5, 1];
 
 const tuple = (v: Vector3): Vec3 => [v.x, v.y, v.z];
 
+/**
+ * How the raycast tree splits its boxes: three-mesh-bvh's CENTER (the value of its constant, the
+ * library is not a direct dependency). drei's default, SAH, takes about five times as long to
+ * build and froze the page for seconds on a large mesh; the hits and the time per ray are the same.
+ */
+const BVH_SPLIT_CENTER = 0;
+
 /** The surface material of the result views (also used by the Process page). */
 export function useMaterial(shading: Shading): Material {
   const mat = useMemo(() => {
@@ -404,7 +411,7 @@ export function ViewerCanvas({
         <OrbitControls makeDefault enableDamping dampingFactor={0.12} zoomToCursor screenSpacePanning minDistance={5} maxDistance={20000} />
         <CameraRig getBounds={() => bounds.sphere} defaultDirection={VIEW_DIR} autoFrameKey={frameKey} />
         <group rotation={CV_TO_THREE_ROTATION}>
-          {bvh ? <Bvh firstHitOnly>{model}</Bvh> : model}
+          {bvh ? <Bvh firstHitOnly strategy={BVH_SPLIT_CENTER}>{model}</Bvh> : model}
           {laser && showLaser ? <LaserCloud geometry={laser} size={1.6} /> : null}
           {sigma ? <SigmaProbe target={meshRef} sigma={sigma} /> : null}
           <MeasureTool
