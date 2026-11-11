@@ -443,6 +443,64 @@ Bench on the Radeon 680M (GPU path, 90 frames, Standard, 1280×800), five pairs 
 - **GPU:** the disparity count and minimum are fixed when the OpenCL program is built (1.3 to 1.5 s per build on the 680M). The experiment makes the minimum a kernel argument and keeps one cached program per count.
 - **Not measured:** the RTX laptop; the CPU path's timing; long scans and real parts against a far background, where the range could be narrower; a range per pixel.
 
+## Where a frame's time goes (profile, 2026-11-10)
+
+A profile of the frame after F2 to F4, to pick the next speed step. Radeon 680M, GPU path, Standard, the 90-frame bench (`ohs bench`), 1280×800. Measured with throwaway scripts that wrap functions with wall-clock timers (not kept in the repo); the engine's code was not changed. Python's cProfile gave wrong figures with the laser threads running and is not used here.
+
+Stages, mean per frame over six runs (the bench's own timers):
+
+| Stage | ms | What runs |
+|---|---|---|
+| Rectify | 2.3–2.4 | CPU |
+| Depth (stereo matcher) | 79–82 | GPU; the main thread waits |
+| Wait for the two laser threads | 16–17 | the threads start before the depth and should be done when it is |
+| Tracking and fusion | 56–58 | ray cast 16, ICP 7.5–8, tracking filter 6–7, fusion 10, model update 1.8 |
+| Laser points | 4–5 | CPU |
+| **Whole frame** | **159–161** | median 152–155 |
+
+Device time of the GPU work, from OpenCL's profiling events:
+
+| Kernel | ms per run |
+|---|---|
+| `sgm_horizontal` | 32.0 |
+| `sgm_vertical` | 23.7 |
+| `census` | 6.3 |
+| `lk_prep` | 1.4 |
+| `sigma_z` | 1.0 |
+| the 11 other matcher kernels together | 5.2 |
+| **Matcher, sum** | **69.7** |
+| Volume: ray cast / integrate / upload | 3.6 / 3.7 / 0.5 |
+
+- **The matcher is GPU-bound:** 70 of its 79–82 ms are device time, and 56 of those are the two SGM kernels.
+- **Tracking is mostly host time:** the volume's kernels take about 8 ms of device time per frame, the stage takes 56–58 ms. `MarkerlessTracker.track` is 37.7 ms per frame: finishing the ray cast 17.6 (7.0 of it waiting for the device), ICP 9.6, source points 2.8, cleaning the depth 1.9. The pipeline's tracking filter is 6.8 and the fusion 10.7.
+- **The first frames cost more:** `_probe_track` took 78 ms per call, in the first 13 frames only. Over 90 frames that is 11 ms per frame; over a real scan of thousands of frames it is nothing. The bench overstates tracking by about that much.
+- **Reading the recording is not in the bench's frame:** `cv2.imread` takes 16–17 ms per frame, one frame at a time with nothing read ahead. In Make mesh that is about a tenth of the wait per frame (the job on the 355-frame simulator scan ran at 4.8–5.4 frames a second, 185–208 ms per frame, against the bench's 160).
+- **The mesh at the end:** 570 ms for 1.09 million triangles (436 ms of it the conversion to Open3D), clean-up 758 ms, STL export 442 ms. Once per job.
+
+### The laser threads wait for Python's lock while the matcher runs
+
+Laser extraction alone takes 13.9 ms for one image and 20.6 ms for two at once. In a frame each of the two threads needed 92 ms, of which about 21 ms was its own CPU time. `cv2.sepFilter2D` looked like 35 ms per call from Python; alone it takes 1.7–1.9 ms. The rest is waiting for Python's lock (the GIL) after the call returns.
+
+The cause is in `GpuStereoMatcher._run` (`ohs/vision/depth_gpu.py`). Its OpenCL calls take 0.08 ms (kernel enqueues) + 0.5 ms (non-blocking copies) + 3.5 ms (the blocking copy at the end) of its 82 ms. The other 78 ms are spent in the first output copy: it is non-blocking, pyopencl returns an event for it that keeps the host array alive, the code drops that event at once, and pyopencl's clean-up of a dropped copy event waits for the copy to finish **without releasing the lock**. So the main thread holds the lock for nearly the whole matcher run, and the laser threads only get going when it is over.
+
+Experiment: the events of the matcher's non-blocking copies kept alive until its blocking copy has returned (patched in from outside, the engine's code unchanged). Two pairs of bench runs:
+
+| | Off | On | Change |
+|---|---|---|---|
+| Whole frame, mean | 159.5 / 160.4 ms | 153.3 / 152.9 ms | −3.9 % / −4.7 % |
+| Whole frame, median | 151.6 / 151.7 ms | 144.9 / 145.4 ms | −4.4 % / −4.1 % |
+| Wait for the laser threads | 16.2 / 16.0 ms | 0.7 / 1.3 ms | |
+| Laser threads, wall time summed | 183.8 / 186.3 ms | 62.7 / 68.3 ms | |
+| Depth | 79.4 / 80.2 ms | 88.0 / 87.2 ms | +8 to +9 ms |
+| Wait per minute of scanning (every frame) | 9.57 / 9.62 min | 9.20 / 9.17 min | |
+
+- **Same results in both modes:** trajectory median 0.126297 mm, depth error median 0.314194 mm, 1,088,827 triangles, 90 of 90 frames tracked, to the last digit printed.
+- **The depth stage gets slower by 8 to 9 ms** once the laser threads really run beside it. Why is not looked into (the integrated GPU shares its power budget and memory with the CPU; the main thread also has to get the lock back). The frame still gains 6 to 7 ms.
+- **The same pattern elsewhere:** `ohs/track/filter_gpu.py` and `ohs/track/recon_tsdf.py` also drop the events of non-blocking uploads. Whether those waits matter is not measured.
+- **Not measured:** the snapshot guard on the patched run; the CPU path (it has no matcher on the GPU); the RTX laptop; live scanning, where the app's server threads are held up by the same lock for about 78 ms in every frame.
+
+Next steps that follow from this are tasks F5 to F7 in `docs/MAINTENANCE_PLAN.md`.
+
 ## Straighten: loop closure (M3 phase 2, 2026-11-09)
 
 `ohs/track/posegraph.py` closes loops where a scan passes over an earlier part again:

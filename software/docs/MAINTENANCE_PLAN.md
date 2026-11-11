@@ -61,6 +61,9 @@ frame (medians); on the RTX 3070 Ti laptop: full 49 ms. UI first paint loads abo
 | F2 | Process fewer frames after a scan | speed, large | L | Opus | - |
 | F3 | Narrow the stereo search with the depth already known | speed, large | L | Opus | - |
 | F4 | Something useful on screen from Stop until the mesh is ready | felt speed | M | Opus | - |
+| F5 | The stereo matcher holds Python's lock while the GPU works | speed | S | Opus | ✔ |
+| F6 | Read the recording one frame ahead | speed | S-M | Sonnet | ○ |
+| F7 | The tracker's time on the CPU side | speed | M-L | Opus | ○ |
 | A1 | Faster tests: a fast run of about 4 minutes, a full run of about 12 | test time | M | Sonnet | ✔ |
 | A2 | Before/after snapshot tool for the engine | safety net | M | Sonnet | - |
 | A3 | UI tests for the PLY reader, binary frames and downloads | safety net | M | Sonnet | ○ |
@@ -252,6 +255,56 @@ by the snapshot tool.
   second; swap the mesh in when it is ready. This does not shorten the wait, it makes it usable.
 - **Guard:** `test_server_process_studio.py`, the UI type check, and a walk through the flow in
   `npm run dev:mock`.
+
+### [ ] F5. The stereo matcher holds Python's lock while the GPU works (Opus, S) ✔
+- **Found by the profile of 2026-11-10** (VALIDATION.md, "Where a frame's time goes").
+- **Where:** `ohs/vision/depth_gpu.py`, `GpuStereoMatcher._run`.
+- **Why:** the matcher's first output copy is non-blocking and its event is dropped at once.
+  pyopencl waits for a dropped copy event without releasing Python's lock, so the main thread
+  holds the lock for about 78 of the matcher's 82 ms. The two laser threads, started to run
+  beside the depth, wait for it: each takes 92 ms where its own work is 21 ms, and the frame then
+  waits 16 ms for them. In the app the server's threads are held up the same way.
+- **Change:** keep the events of the non-blocking copies in a list until the blocking copy has
+  returned, then let them go. Look at `ohs/track/filter_gpu.py` and `ohs/track/recon_tsdf.py`,
+  which drop upload events the same way, and measure before changing them.
+- **Gain (measured with the change patched in from outside, Radeon 680M, two pairs of runs):**
+  the mean frame 159.5 → 153.3 ms and 160.4 → 152.9 ms (−4 to −5 %); the wait for the laser
+  threads 16 → 1 ms; the depth stage itself rises by 8 to 9 ms. Not measured: the RTX laptop,
+  live scanning.
+- **Guard:** the A2 snapshot identical before and after (the bench's accuracy figures already
+  were, to the last digit); the full suite on both compute paths.
+
+### [ ] F6. Read the recording one frame ahead (Sonnet, S-M) ○
+- **Where:** `ohs/io/recording.py` (the frame iterator), used by the frame passes in
+  `ohs/server/processing.py`.
+- **Why:** each frame's two images are read with `cv2.imread` when the pipeline asks for them:
+  16 to 17 ms per frame in which nothing else runs. The bench does not count it; in Make mesh it
+  is about a tenth of the wait per frame on the Radeon 680M.
+- **Confirm first:** time a frame pass over a recording on disk with and without the reads (the
+  profile timed `imread` inside the bench, not inside a job).
+- **Change:** a reader thread that keeps one or two frames decoded ahead of the pipeline, in
+  order, with a fixed small queue so memory stays flat; errors in the thread surface in the
+  pass as they do today. Do F5 first: until then a thread like this is held up by the same lock.
+- **Gain:** up to the 16 ms per frame, to be measured on a real job.
+- **Guard:** the A2 snapshot identical; a test that the iterator yields the same frames in the
+  same order, and that a read error is raised in the pass, not lost in the thread.
+
+### [ ] F7. The tracker's time on the CPU side (Opus, M-L) ○
+- **Why:** tracking and fusion take 56 to 58 ms per frame, of which the GPU works about 8. The
+  rest is Python and NumPy on the host: finishing the ray cast 17.6 ms (7.0 of it waiting for
+  the device), ICP 9.6, the tracking filter 6.8, fusion 10.7, source points 2.8.
+- **Confirm first:** a profile inside `_raycast_gpu_finish`, `_icp` and `_fuse`, on a scan longer
+  than the bench (the bench's first 13 frames run a start-up probe that a long scan does not
+  feel). E5 (keep the depth on the GPU between stages) overlaps: decide which of the two carries
+  what before starting.
+- **Change:** unknown until the profile is read. No change that is not bit-identical without
+  the owner's word.
+- **Gain:** unknown; the host time in reach is about 30 ms of the 160.
+- **Guard:** the A2 snapshot identical; the full suite on both compute paths.
+
+After these, what is left of the frame is the matcher's own device time: 70 ms, 56 of them in
+the two SGM kernels. That is the next large item, and a different kind of work (the kernels'
+algorithm, or a coarser first pass), with accuracy to guard.
 
 Also for felt speed, from the sections below: E4 and E5 (largest on integrated graphics, an
 estimated 4-10 ms of 156), U1 and U7 (the app stays smooth), P1 and P3 (no memory spikes while
