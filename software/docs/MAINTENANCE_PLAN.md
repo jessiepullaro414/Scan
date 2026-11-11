@@ -385,6 +385,11 @@ processing), S1 (start-up).
   356,186 and 356,198 at full quality). The GPU path is bit-identical from run to run.
 - **Why it matters:** the mesh-dependent tests can pass or fail by chance on the CPU path (see
   B12), and a before/after check on the CPU path needs a tolerance.
+- **Seen again 2026-11-10:** `test_server_process_studio.py::test_refine_with_lasers` failed once
+  in the full CPU-path run after F4 (the mean laser residual before refining was −0.25 mm where
+  the test expects −0.5 ± 0.15) and passed in two runs of the module alone on the same code. F4
+  changed the progress reporting only, and the GPU-path run passed (573 tests). A difference
+  this large is more than "a few vertices": the preview track behind it is worth a look here.
 - **Where:** not found yet. The differences start in the poses, so look at the CPU tracker first
   (Open3D's ray cast and ICP run on several threads); `OMP_NUM_THREADS=1` makes them smaller but
   does not remove them.
