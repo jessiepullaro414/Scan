@@ -19,7 +19,10 @@
      and frames per second, and the GPU speed-up per stage and overall. ``laser`` is
      ``laser_extract + laser_triangulate``, where ``laser_extract`` is how long the frame still waits
      for the laser lines (they are extracted in two threads during the depth; ``laser_extract_cpu``
-     is their own time, both images together); ``track`` includes ``track_filter``, ``raycast``,
+     is their own time, both images together) and ``laser_triangulate`` how long it still waits for
+     the laser points and adds them to the cloud (they are triangulated in a thread while the frame
+     is tracked and fused; ``laser_triangulate_cpu`` is their own time); ``track`` includes
+     ``track_filter``, ``raycast``,
      ``icp`` and the integrations;
    * the wait per minute of scanning: minutes to process 60 s of recording at the camera's frame
      rate (``CameraParams.fps``), from the mean total frame time, assuming every frame is processed;

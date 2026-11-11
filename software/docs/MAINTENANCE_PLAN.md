@@ -680,6 +680,14 @@ bench medians before and after in the commit message.
   so it runs beside the laser points (3.9 ms on the host) and the next frame's rectification;
   and start the tracking filter without waiting and do the laser points meanwhile. To be
   measured before building. The first of the two is done (E4, about 4 ms).
+- **Part done 2026-11-11 (laser points beside the tracking):** `FramePipeline.process` hands
+  `laser_points` to a laser thread as soon as the depth and the lines are there and takes the
+  result after tracking and fusion; the rejected counts and the cloud are still updated on the
+  main thread, in the same order. 137.0 to 137.4 ms per frame -> 133.4 to 134.3 ms (about
+  3.3 ms, 2.4 %), same mesh, snapshot identical. `timings_ms["laser_triangulate"]` is now the
+  wait that is left, `laser_triangulate_cpu` the work's own time. Guard, passing on the old code
+  too: `test_laser_points_equal_the_inline_computation`. Still open: the buffers shared between
+  the stages (the title of this task), and the filter's blocking copy back.
 - **Guard:** `test_gpu_matches_cpu_filter`, `test_gpu_and_numpy_agree`,
   `test_integration_values_and_weights`, the A2 snapshot.
 

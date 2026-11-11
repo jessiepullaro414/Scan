@@ -111,6 +111,7 @@ import logging
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field, replace
+from functools import partial
 from typing import Any, Callable
 
 import cv2
@@ -577,6 +578,16 @@ class FramePipeline:
             tim["laser_extract"] = _ms(t0)
             tim["laser_extract_cpu"] = ms_l + ms_r
 
+        # the laser points need the depth but not the pose: they are triangulated in a laser thread
+        # while the frame is tracked and fused. laser_triangulate is how long the frame then still
+        # waits for them (and adds them to the cloud), laser_triangulate_cpu their own time
+        fut_pts = None
+        rejected: dict[str, int] = {}
+        if self.planes:
+            fut_pts = self._laser_pool.submit(_timed, partial(
+                laser_points, left_r, right_r, self.K, self.baseline, self.planes, self.laser_params,
+                lines_left=lines, lines_right=lines_r, depth=depth, depth_sigma=sigma, rejected=rejected))
+
         t0 = time.perf_counter()
         if pose is not None:
             T = np.asarray(pose, dtype=np.float64).reshape(4, 4)
@@ -596,11 +607,11 @@ class FramePipeline:
         self._t_prev = t
 
         pts: dict[str, np.ndarray] = {}
-        if self.planes:
+        if fut_pts is not None:
             t0 = time.perf_counter()
-            pts = laser_points(left_r, right_r, self.K, self.baseline, self.planes, self.laser_params,
-                               lines_left=lines, lines_right=lines_r, depth=depth, depth_sigma=sigma,
-                               rejected=self.laser_rejected)
+            pts, tim["laser_triangulate_cpu"] = fut_pts.result()
+            for name, n in rejected.items():
+                self.laser_rejected[name] = self.laser_rejected.get(name, 0) + n
             if track.ok:
                 for name, P in pts.items():
                     self.cloud.add(P, track.T_wc, name)

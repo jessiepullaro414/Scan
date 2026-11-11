@@ -31,7 +31,7 @@ from ohs.sim.nominal import nominal_calibration  # noqa: E402
 from ohs.track.markerless import FusionParams  # noqa: E402
 from ohs.types import ScannerCalibration, StereoFrame  # noqa: E402
 from ohs.vision.depth import DepthParams  # noqa: E402
-from ohs.vision.laser import LaserLines, LaserParams  # noqa: E402
+from ohs.vision.laser import LaserLines, LaserParams, laser_points  # noqa: E402
 
 N = 8
 
@@ -83,6 +83,29 @@ def test_frame_results_and_outputs(reader):
         assert len(P) > 1000 and P.shape == Np.shape
         cloud = pipe.laser_cloud()
         assert set(cloud.names) == {"vertical", "horizontal"} and len(cloud) == sum(len(p) for r in res for p in r.laser_points.values())
+
+
+def test_laser_points_equal_the_inline_computation(reader):
+    """The frame's laser points, the cloud and the rejected counts are what ``laser_points`` gives on
+    the frame's own lines, depth and sigma, whatever thread the pipeline computes them in."""
+    with FramePipeline(reader.calibration()) as pipe:
+        res = feed(pipe, reader)
+        rejected: dict[str, int] = {}
+        world = {}
+        for r in res:
+            want = laser_points(r.left_r, r.right_r, pipe.K, pipe.baseline, pipe.planes, pipe.laser_params,
+                                lines_left=r.lines, lines_right=r.lines_right, depth=r.depth, depth_sigma=r.sigma,
+                                rejected=rejected)
+            assert list(r.laser_points) == list(want)
+            for name, P in want.items():
+                assert r.laser_points[name].dtype == P.dtype and r.laser_points[name].tobytes() == P.tobytes()
+                world.setdefault(name, []).append(G.transform_points(r.track.T_wc, P[np.all(np.isfinite(P), axis=1)]))
+            assert r.timings_ms["laser"] == r.timings_ms["laser_extract"] + r.timings_ms["laser_triangulate"]
+        assert set(rejected) == {"vertical", "horizontal"} and pipe.laser_rejected == rejected
+        assert list(pipe.laser_rejected) == list(rejected)
+        cloud = pipe.laser_cloud()
+        for name, chunks in world.items():
+            assert cloud.raw_points([name]).tobytes() == np.concatenate(chunks).tobytes()
 
 
 def test_defaults_follow_resolution():
