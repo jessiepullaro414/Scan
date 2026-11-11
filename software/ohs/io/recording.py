@@ -18,6 +18,7 @@ import csv
 import json
 import logging
 import math
+import queue
 import threading
 from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime, timezone
@@ -233,6 +234,51 @@ class RecordingReader:
 
     def __iter__(self) -> Iterator[StereoFrame]:
         return self.iter_frames()
+
+    def iter_ahead(self, positions: Iterable[int], ahead: int = 2) -> Iterator[StereoFrame]:
+        """The frames at ``positions``, in that order, read up to ``ahead`` frames before they are
+        asked for.
+
+        A thread reads and decodes the files (``cv2.imread`` releases Python's lock) while the
+        caller works on the frame before, so the caller does not wait for the disk. At most
+        ``ahead + 2`` frames are in memory at a time. An error while reading is raised here, at
+        the frame it belongs to, after the frames before it. Close the iterator (or use it up)
+        to end the thread; ``ahead <= 0`` reads in the caller's thread, like :meth:`frame`.
+        """
+        positions = [int(i) for i in positions]
+        if ahead <= 0 or len(positions) < 2:
+            for i in positions:
+                yield self.frame(i)
+            return
+        box: queue.Queue = queue.Queue(maxsize=int(ahead))
+        stop = threading.Event()
+
+        def read() -> None:
+            for i in positions:
+                try:
+                    item: tuple = (self.frame(i), None)
+                except Exception as e:  # noqa: BLE001  (handed to the caller, raised there)
+                    item = (None, e)
+                while not stop.is_set():
+                    try:
+                        box.put(item, timeout=0.05)
+                        break
+                    except queue.Full:
+                        pass
+                if stop.is_set() or item[1] is not None:
+                    return
+
+        thread = threading.Thread(target=read, name="ohs-frame-reader", daemon=True)
+        thread.start()
+        try:
+            for _ in positions:
+                frame, error = box.get()
+                if error is not None:
+                    raise error
+                yield frame
+        finally:
+            stop.set()
+            thread.join()
 
     # ------------------------------------------------------------------ imu / events
     def imu_arrays(self) -> dict[str, np.ndarray]:

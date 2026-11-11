@@ -62,7 +62,7 @@ frame (medians); on the RTX 3070 Ti laptop: full 49 ms. UI first paint loads abo
 | F3 | Narrow the stereo search with the depth already known | speed, large | L | Opus | - |
 | F4 | Something useful on screen from Stop until the mesh is ready | felt speed | M | Opus | - |
 | F5 | The stereo matcher holds Python's lock while the GPU works | speed | S | Opus | ✔ |
-| F6 | Read the recording one frame ahead | speed | S-M | Sonnet | ○ |
+| F6 | Read the recording one frame ahead | speed | S-M | Sonnet | ✔ |
 | F7 | The tracker's time on the CPU side | speed | M-L | Opus | ○ |
 | A1 | Faster tests: a fast run of about 4 minutes, a full run of about 12 | test time | M | Sonnet | ✔ |
 | A2 | Before/after snapshot tool for the engine | safety net | M | Sonnet | - |
@@ -281,7 +281,19 @@ by the snapshot tool.
 - **Guard:** the A2 snapshot identical before and after (the bench's accuracy figures already
   were, to the last digit); the full suite on both compute paths.
 
-### [ ] F6. Read the recording one frame ahead (Sonnet, S-M) ○
+### [x] F6. Read the recording one frame ahead (Sonnet, S-M) ✔
+- **Done 2026-11-11.** `RecordingReader.iter_ahead(positions, ahead)` reads the frames in a thread,
+  at most `ahead` of them before they are asked for; the frame pass of `process_recording`
+  (`ohs/app/process.py`, the pass behind Make mesh) uses it with two frames ahead and closes it
+  when the pass ends, fails or is cancelled. Radeon 680M, GPU path, default settings, the first
+  150 frames of a 355-frame recording on disk, old and new runs alternated three times: time per
+  frame 167.5 / 169.0 / 172.9 ms → 149.7 / 151.2 / 152.1 ms (−17 to −21 ms, about 11 %), the
+  pass with its mesh 28.3–29.0 → 25.7–26.0 s; the mesh has the same vertex and face counts in
+  all six runs. The A2 snapshot is identical. Three tests in `tests/test_core.py`: same frames
+  in the same order (also out of order, repeated, one, none, no read-ahead), a missing image
+  fails the pass at its frame, closing early ends the thread. Not changed: the later passes
+  (`ohs/track/posegraph.py`, `spacetime.py`, `curve_ba.py`) and the bench, which read single
+  frames. Not measured: the RTX laptop, a recording on a slow disk, the CPU path.
 - **Where:** `ohs/io/recording.py` (the frame iterator), used by the frame passes in
   `ohs/server/processing.py`.
 - **Why:** each frame's two images are read with `cv2.imread` when the pipeline asks for them:

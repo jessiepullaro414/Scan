@@ -84,6 +84,7 @@ log = logging.getLogger(__name__)
 
 EXPORT_FORMATS = ("ply", "stl", "obj")
 IMU_LOOKAHEAD_S = 0.25
+READ_AHEAD_FRAMES = 2  # images a thread reads from the disk before the pass asks for them
 
 
 @dataclass
@@ -465,9 +466,9 @@ def process_recording(
     timings: dict[str, list[float]] = {}
     reasons: Counter = Counter()
     n_prior = 0
+    frames = reader.iter_ahead(positions, READ_AHEAD_FRAMES)  # a thread reads the next frames meanwhile
     try:
-        for k, pos in enumerate(positions):
-            frame = reader.frame(pos)
+        for k, frame in enumerate(frames):
             if pipe.gyro_enabled and j_imu < len(imu_t):
                 j_new = int(np.searchsorted(imu_t, frame.t_host - offset + IMU_LOOKAHEAD_S, side="right"))
                 if j_new > j_imu:
@@ -621,6 +622,7 @@ def process_recording(
         report = _jsonable(report)
         (out / "report.json").write_text(json.dumps(report, indent=1), encoding="utf-8")
     finally:
+        frames.close()  # ends the reader thread, also after an error or a cancelled job
         pipe.close()
     fr = report["frames"]
     log.info("processed %d frames (%d tracked, %.0f %%) in %.1f s -> %s", fr["processed"], fr["tracked"],

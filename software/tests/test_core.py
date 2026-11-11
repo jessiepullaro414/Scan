@@ -138,6 +138,61 @@ def test_recording_roundtrip(tmp_path):
         RecordingWriter(rec)
 
 
+def _small_recording(path, n=9):
+    rng = np.random.default_rng(3)
+    with RecordingWriter(path, source="sim") as w:
+        for i in range(n):
+            w.write_frame(StereoFrame(i, 10.0 + i / 30, rng.integers(0, 255, (40, 64), dtype=np.uint8),
+                                      rng.integers(0, 255, (40, 64), dtype=np.uint8)))
+    return RecordingReader(path)
+
+
+def _reader_threads():
+    import threading
+
+    return [t for t in threading.enumerate() if t.name == "ohs-frame-reader"]
+
+
+@pytest.mark.parametrize("ahead", [0, 1, 2, 5, 50])
+@pytest.mark.parametrize("positions", [list(range(9)), [0, 2, 4, 6, 8], [7, 1, 1, 5], [4], []])
+def test_iter_ahead_gives_the_same_frames_in_the_same_order(tmp_path, ahead, positions):
+    """Reading ahead in a thread changes when a frame is read, never which frame comes next."""
+    r = _small_recording(tmp_path / "rec")
+    got = list(r.iter_ahead(positions, ahead))
+    assert [f.index for f in got] == [r.frame(i).index for i in positions]
+    for f, i in zip(got, positions):
+        ref = r.frame(i)
+        assert f.t_host == ref.t_host and np.array_equal(f.left, ref.left) and np.array_equal(f.right, ref.right)
+    assert not _reader_threads()
+
+
+def test_iter_ahead_raises_a_read_error_at_its_frame(tmp_path):
+    """A frame that cannot be read fails the pass at that frame, after the frames before it."""
+    r = _small_recording(tmp_path / "rec")
+    (tmp_path / "rec" / "frames" / r._files[4]).unlink()
+    with pytest.raises(IOError):
+        r.frame(4)  # the plain read fails the same way
+    got = []
+    with pytest.raises(IOError):
+        for f in r.iter_ahead(range(9), 2):
+            got.append(f.index)
+    assert got == [0, 1, 2, 3]
+    assert not _reader_threads()
+
+
+def test_iter_ahead_stops_reading_when_closed_early(tmp_path, monkeypatch):
+    """A cancelled or failed pass closes the iterator: the thread ends and reads no further."""
+    r = _small_recording(tmp_path / "rec")
+    read = []
+    plain = r.frame
+    monkeypatch.setattr(r, "frame", lambda i: (read.append(i), plain(i))[1])
+    frames = r.iter_ahead(range(9), 2)
+    assert next(frames).index == 0
+    frames.close()
+    assert not _reader_threads()
+    assert len(read) <= 4 and read == list(range(len(read)))  # frame 0, two in the queue, one in hand
+
+
 def test_recording_temperature_events_and_summary(tmp_path):
     rec = tmp_path / "rec"
     with RecordingWriter(rec, source="camera") as w:
