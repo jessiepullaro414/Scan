@@ -345,6 +345,25 @@ After these, what is left of the frame is the matcher's own device time: 70 ms, 
 the two SGM kernels. That is the next large item, and a different kind of work (the kernels'
 algorithm, or a coarser first pass), with accuracy to guard.
 
+**First look at the two SGM kernels (2026-11-11, Radeon 680M, 1280x800, 208 disparities):** per
+frame `sgm_vertical` takes 28.2 ms and `sgm_horizontal` 28.0 ms of about 75 ms for all the
+matcher's kernels (census 9.7, support 2.2, the rest under 1.2 each). Three changes that keep
+the depth map identical were tried; each gave the same hash over the matcher's outputs, and
+none is in the code:
+
+| Tried | `sgm_vertical` | Verdict |
+|---|---|---|
+| Store the matching cost in the top-down pass and load it in the bottom-up pass (213 MB more device memory) | 28.2 -> 33.7 ms | slower |
+| Top-down path costs stored column by column | 28.2 -> 28.9 ms | no gain |
+| The vertical pass writes its sums in place, one volume less to touch | 28.2 -> 27.4 ms, the horizontal pass 0.3 ms slower (3 runs each, alternated) | inside the noise |
+
+So the kernels gain nothing from less arithmetic paid for with more memory traffic, and the
+memory layout is not what holds them back. What is left changes the depth map: a coarser first
+pass that narrows the search per pixel, or fewer disparities. At 640x400 the kernels take about
+11.5 ms against about 62 ms, with the median error 0.41 mm against 0.32 mm; F3 showed that a
+narrowed range can give false depth on surfaces outside it. Any such change is the owner's
+decision first, with accuracy measured before it is adopted.
+
 Also for felt speed, from the sections below: E4 and E5 (largest on integrated graphics, an
 estimated 4-10 ms of 156), U1 and U7 (the app stays smooth), P1 and P3 (no memory spikes while
 processing), S1 (start-up).
@@ -699,6 +718,16 @@ bench medians before and after in the commit message.
   Still open: the reconstruction and the tracking volume still upload their maps (about
   1.5 and 1.1 ms). Since E4 the reconstruction's fusion is still running when the next frame's
   matcher writes its depth buffer, so sharing that buffer needs events between the queues.
+- **Left for later (owner, 2026-11-11: move on, and note what could still be better):** three
+  things, none started, together at most about 3 to 4 ms of the 132 ms per frame on the Radeon.
+  (1) The reconstruction reads the depth and its sigma from the matcher's buffers in place of
+  two uploads (about 1.5 ms). (2) The tracking volume does the same for its depth (about
+  1.1 ms). Both need the matcher's next run to wait for the event of the fusion that still
+  reads the buffer, or a second pair of buffers that the matcher swaps each frame. (3) The
+  tracking filter is queued behind the matcher's last kernel, so it runs while the depth and
+  the sigma are downloaded; worth it only if a measurement shows wait left in
+  `timings_ms["track_filter"]`. Same rules as above: results identical, measured old against
+  new, and not built if the gain is inside the noise.
 - **Guard:** `test_gpu_matches_cpu_filter`, `test_gpu_and_numpy_agree`,
   `test_integration_values_and_weights`, the A2 snapshot.
 
