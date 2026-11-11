@@ -168,7 +168,18 @@ const TRACK_CYCLE = 32;
 type JobMeta =
   | { kind: "sim" }
   | { kind: "timed"; spec: TimedJobSpec; dur: number; t: number }
-  | { kind: "work"; spec: WorkJobSpec; dur: number; t: number; p: number; message: string; commit: (() => Record<string, unknown> | null) | null; finished: boolean };
+  | {
+      kind: "work";
+      spec: WorkJobSpec;
+      dur: number;
+      t: number;
+      p: number;
+      message: string;
+      commit: (() => Record<string, unknown> | null) | null;
+      finished: boolean;
+      /** The frame pass of the last step (null between passes) and the job clock at its first frame. */
+      frames?: { stage: string; done: number; total: number; t0: number } | null;
+    };
 
 class MockBackend {
   private opts: MockOptions;
@@ -656,6 +667,7 @@ class MockBackend {
     const m = this.jobMeta.get(j.id);
     j.state = "cancelled";
     j.message = "Cancelled";
+    delete j.frames;
     if (m?.kind === "work") m.spec.onCancel?.();
     if (m?.kind === "sim") {
       this.simJobId = null;
@@ -722,6 +734,7 @@ class MockBackend {
       j.state = "failed";
       j.error = e instanceof Error ? e.message : String(e);
       j.message = "Failed";
+      delete j.frames;
       m.spec.onFail?.(j.error);
     };
     try {
@@ -734,6 +747,10 @@ class MockBackend {
           const step: WorkStep = r.value;
           m.p = Math.max(m.p, Math.min(1, step.p));
           m.message = step.message;
+          const f = step.frames;
+          if (!f) m.frames = null;
+          else if (!m.frames || m.frames.stage !== f.stage || f.done < m.frames.done) m.frames = { ...f, t0: m.t };
+          else m.frames = { ...m.frames, done: f.done, total: f.total };
         }
       }
     } catch (e) {
@@ -742,6 +759,12 @@ class MockBackend {
     }
     j.progress = Math.max(j.progress, Math.min(pTime, m.finished ? 1 : m.p));
     j.message = m.message;
+    // the job's `frames` (APP_API.md, as the engine reports it): the rate since the first frame
+    if (m.frames && !m.finished) {
+      const elapsed = m.t - m.frames.t0;
+      const fps = m.frames.done > 1 && elapsed > 0 ? (m.frames.done - 1) / elapsed : null;
+      j.frames = { stage: m.frames.stage, done: m.frames.done, total: m.frames.total, fps: fps === null ? null : Math.round(fps * 100) / 100, elapsed_s: Math.round(elapsed * 100) / 100 };
+    } else delete j.frames;
     if (m.finished && m.t >= m.dur) {
       try {
         j.result = m.commit ? m.commit() : null;

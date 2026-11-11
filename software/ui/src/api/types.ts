@@ -104,7 +104,12 @@ export type Job = {
   result: Record<string, unknown> | null;
   error: string | null;
   created: string;
+  /** Extra (F4): the pass over the recording's frames running now; absent between passes. */
+  frames?: JobFrames | null;
 };
+
+/** A job's frame pass: which stage, frames done of total, and its rate since the first frame (null until known). */
+export type JobFrames = { stage: string; done: number; total: number; fps: number | null; elapsed_s: number };
 
 export type Health = { app: string; version: string; engine: { opencv?: string; open3d?: string } & Record<string, unknown> };
 

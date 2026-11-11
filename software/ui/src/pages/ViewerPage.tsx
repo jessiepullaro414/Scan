@@ -42,6 +42,7 @@ import { describeReason } from "../lib/tracking";
 import { cn, useHotkeys } from "../lib/util";
 import { isActive, useScanJob } from "../store/jobs";
 import { useProjects } from "../store/projects";
+import { toast } from "../store/toasts";
 import { sigmaOf } from "../three/confidence";
 import { disposeMeshGeometry, plyGeometry, readPly } from "../three/ply";
 import { viewBus } from "../three/viewBus";
@@ -201,18 +202,34 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
 
   const meshUrl = hasResult ? urls!.mesh : null;
 
+  // A job that finishes while a mesh is shown (Make mesh shows the tracked mesh before its later
+  // stages): the finished mesh replaces it in place, the old one stays until it's read, the camera
+  // stays where it is.
+  const quiet = useRef(false);
+  const wasActive = useRef(isActive(job));
+  useEffect(() => {
+    const active = isActive(job);
+    if (wasActive.current && !active && job?.state === "done" && geomRef.current) {
+      quiet.current = true;
+      setReloadKey((k) => k + 1);
+    }
+    wasActive.current = active;
+  }, [job]);
+
   // Download + parse the mesh.
   useEffect(() => {
     if (!meshUrl) return;
     const ctrl = new AbortController();
     let last = 0;
-    setLoad({ phase: "download", loaded: 0, total: null });
+    const inPlace = quiet.current && !!geomRef.current;
+    quiet.current = false;
+    if (!inPlace) setLoad({ phase: "download", loaded: 0, total: null });
     api
       .fetchBinary(
         meshUrl,
         (loaded, total) => {
           const now = performance.now();
-          if (now - last > 80 || loaded === total) {
+          if (!inPlace && (now - last > 80 || loaded === total)) {
             last = now;
             setLoad({ phase: "download", loaded, total });
           }
@@ -223,7 +240,7 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
         (buf) =>
           new Promise<void>((resolve) => {
             if (ctrl.signal.aborted) return resolve();
-            setLoad({ phase: "parse" });
+            if (!inPlace) setLoad({ phase: "parse" });
             // Let the "Preparing" state paint before the synchronous parse.
             setTimeout(() => {
               try {
@@ -231,9 +248,10 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
                 disposeMeshGeometry(geomRef.current);
                 geomRef.current = g;
                 setLoad({ phase: "ready", geometry: g, bytes: buf.byteLength });
-                setFrameKey((k) => k + 1);
+                if (!inPlace) setFrameKey((k) => k + 1);
               } catch (e) {
-                setLoad({ phase: "error", error: e instanceof Error ? e : new Error(String(e)) });
+                if (inPlace) toast.error("Couldn't show the finished mesh", e);
+                else setLoad({ phase: "error", error: e instanceof Error ? e : new Error(String(e)) });
               }
               resolve();
             }, 30);
@@ -241,7 +259,8 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
       )
       .catch((e: unknown) => {
         if ((e as { name?: string }).name === "AbortError") return;
-        setLoad({ phase: "error", error: e instanceof Error ? e : new Error(String(e)) });
+        if (inPlace) toast.error("Couldn't show the finished mesh", e); // the mesh on screen stays
+        else setLoad({ phase: "error", error: e instanceof Error ? e : new Error(String(e)) });
       });
     return () => ctrl.abort();
   }, [meshUrl, reloadKey]);

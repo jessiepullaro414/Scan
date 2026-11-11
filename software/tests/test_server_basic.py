@@ -454,6 +454,32 @@ def test_job_runner_progress_failure_and_cooperative_cancel():
         jr.shutdown(timeout=5)
 
 
+def test_job_frames_field_only_while_set():
+    updates: list[dict] = []
+    jr = JobRunner(on_update=updates.append, max_workers=1)
+
+    def passes(ctx):
+        ctx.set_frames({"stage": "track", "done": 3, "total": 10, "fps": 4.5, "elapsed_s": 0.4})
+        ctx.progress(0.3, "Tracking: frame 3 of 10", force=True)
+        ctx.set_frames(None)
+        ctx.progress(0.9, "Saving the mesh", force=True)
+        ctx.set_frames({"stage": "straighten", "done": 1, "total": 10, "fps": None, "elapsed_s": 0.0})
+        return {}
+
+    try:
+        j = jr.submit("frames", passes)
+        assert jr.wait(j.id, 5).state == "done"
+        mine = [u for u in updates if u["id"] == j.id]
+        by_msg = {u["message"]: u for u in mine}
+        assert by_msg["Tracking: frame 3 of 10"]["frames"] == {"stage": "track", "done": 3, "total": 10, "fps": 4.5,
+                                                               "elapsed_s": 0.4}
+        assert "frames" not in by_msg["Saving the mesh"]
+        assert "frames" not in mine[-1] and mine[-1]["state"] == "done"  # cleared when the job ends
+        assert "frames" not in j.to_dict()
+    finally:
+        jr.shutdown(timeout=5)
+
+
 def test_job_cancelled_while_queued_runs_on_done_exactly_once():
     jr = JobRunner(max_workers=2)
     release = threading.Event()

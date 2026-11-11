@@ -1,7 +1,8 @@
 """Background jobs (processing a scan, generating the simulator demo): a small thread pool.
 
 A job function receives a :class:`JobContext` and returns its result (a JSON-able dict).
-It reports progress with ``ctx.progress(fraction, message)`` and calls ``ctx.check()`` (or reads
+It reports progress with ``ctx.progress(fraction, message)`` (and, during a pass over the
+recording's frames, ``ctx.set_frames(...)``: the job's optional ``frames`` field) and calls ``ctx.check()`` (or reads
 ``ctx.cancelled``) at convenient points: cancellation is **cooperative**. ``ctx.check()`` raises
 :class:`JobCancelled` once :meth:`JobRunner.cancel` was called, and the job then ends in state
 ``"cancelled"``. Any other exception ends it in ``"failed"`` with ``error`` = the message (an
@@ -49,6 +50,7 @@ class Job:
     error: str | None = None
     created: str = field(default_factory=now_iso)
     meta: dict = field(default_factory=dict)  # extra fields shown to the UI (e.g. project_id, scan_id)
+    frames: dict | None = None  # the frame pass running now (JobContext.set_frames); shown only while set
     cancel_event: threading.Event = field(default_factory=threading.Event, repr=False)
     future: Future | None = field(default=None, repr=False)
     finished: threading.Event = field(default_factory=threading.Event, repr=False)
@@ -63,6 +65,8 @@ class Job:
         d = {"id": self.id, "kind": self.kind, "state": self.state, "progress": round(float(self.progress), 4),
              "message": self.message, "result": jsonable(self.result), "error": self.error, "created": self.created}
         d.update(jsonable(self.meta))
+        if self.frames is not None:
+            d["frames"] = jsonable(self.frames)
         return d
 
 
@@ -83,6 +87,11 @@ class JobContext:
 
     def progress(self, fraction: float | None = None, message: str | None = None, force: bool = False) -> None:
         self._runner._progress(self.job, fraction, message, force)
+
+    def set_frames(self, frames: dict | None) -> None:
+        """The frame pass running now, as the job's ``frames`` field (``{stage, done, total, fps,
+        elapsed_s}``, APP_API.md), or None once it is over. Goes out with the next update."""
+        self.job.frames = None if frames is None else dict(frames)
 
 
 class JobRunner:
@@ -213,6 +222,7 @@ class JobRunner:
             job.error = f"{text} (try again; if it keeps failing, run `ohs -v app` and look at the log)"
             log.exception("job %s (%s) failed", job.id, job.kind)
         finally:
+            job.frames = None  # no frame pass runs any more
             self._call_done(job, on_done)
             job.finished.set()
             self._emit(job)

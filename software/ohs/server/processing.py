@@ -1202,8 +1202,22 @@ class ProcessManager:
         dev = compute.get_device()
         where = f" on the GPU ({dev.name})" if dev is not None else " on the CPU"
         verb = "Tracking" if poses is None else "Fusing"
+        # the job's `frames` field (APP_API.md): this pass's count and its rate since the first frame
+        # was done (the loading and the first frame's warm-up are not in the rate)
+        t_first: list[float] = []
 
         def progress(k: int, n: int, res: Any) -> None:
+            now = time.monotonic()
+            if not t_first:
+                t_first.append(now)
+            elapsed = now - t_first[0]
+            fps = k / elapsed if k > 0 and elapsed > 0 else None
+            last = k + 1 >= n
+            ctx.set_frames({"stage": name, "done": k + 1, "total": n, "fps": None if fps is None else round(fps, 2),
+                            "elapsed_s": round(elapsed, 2)})
+            if last:  # the tail: the mesh is made from the frames (no frame counter any more)
+                prog(1.0, f"{verb}: all {n} frames done, making the mesh", force=True)
+                return
             lost = "" if res.track.ok else " (tracking lost)"
             prog((k + 1) / max(n, 1), f"{verb}: frame {k + 1} of {n}{where}{lost}")
 
@@ -1215,6 +1229,7 @@ class ProcessManager:
             _move_dir(tmp, sp.dir / name)
         finally:
             _rmtree(tmp)
+            ctx.set_frames(None)  # the pass is over
         return report
 
     def _do_track(self, ctx: Any, sp: ScanProcess, prog: _Prog, quality: str, voxel_mm: float | None = None) -> None:

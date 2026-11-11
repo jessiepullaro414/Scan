@@ -791,3 +791,39 @@ def test_straighten_closes_loops_and_fuses_again(env, orbit):
     assert all(np.allclose(fz[i], fused[i], atol=1e-6) for i in idx)
     with open(proc / "fuse" / "trajectory.csv", newline="", encoding="utf-8") as fh:
         assert sum(1 for _ in csv.DictReader(fh)) == len(idx)
+
+
+# --------------------------------------------------------------------------- the job's frame counter (plan F4)
+def test_make_mesh_reports_its_frames_and_rate(env):
+    """While a frame pass runs, the job has ``frames`` (stage, done, total, fps, elapsed_s); after the
+    last frame its message says what happens instead of a frame count; the finished job has none."""
+    pid, sid = add_scan(env, "Frames", env["rec"])
+    with ws_connect(env["srv"].ws_url, max_size=None, open_timeout=5) as ws:
+        ws.send(json.dumps({"type": "subscribe", "preview": False, "mesh": False}))
+        r = post(base_url(env, pid, sid) + "/process", {"quality": "preview"})
+        assert r.status_code == 200, r.text
+        jid = r.json()["id"]
+        out = recv_until(ws, lambda m, p, raw: m.get("type") == "job" and m.get("id") == jid
+                         and m["state"] not in ("queued", "running"), timeout=180)
+    msgs = [m for m, _, _ in out if m.get("type") == "job" and m.get("id") == jid]
+    final = msgs[-1]
+    assert final["state"] == "done" and "frames" not in final, final
+    with_frames = [m for m in msgs if m.get("frames")]
+    assert with_frames, [m["message"] for m in msgs]
+    n = json.loads((env["root"] / "projects" / pid / "scans" / sid / "result" / "report.json")
+                   .read_text(encoding="utf-8"))["frames"]["processed"]
+    for m in with_frames:
+        f = m["frames"]
+        assert set(f) == {"stage", "done", "total", "fps", "elapsed_s"}, f
+        assert f["stage"] in ("track", "straighten") and 1 <= f["done"] <= f["total"] and f["elapsed_s"] >= 0
+        assert f["fps"] is None or f["fps"] > 0
+        if f["stage"] == "track":
+            assert f["total"] == n
+    track = [m for m in with_frames if m["frames"]["stage"] == "track"]
+    dones = [m["frames"]["done"] for m in track]
+    assert dones == sorted(dones) and dones[-1] == n  # the last frame always goes out (forced)
+    last = track[-1]
+    assert last["frames"]["fps"] > 0 and last["message"] == f"Tracking: all {n} frames done, making the mesh"
+    # the pass is over: the next update has no frame counter
+    after = msgs[msgs.index(last) + 1:]
+    assert after and "frames" not in after[0] and get(f"{env['url']}/api/jobs/{jid}").json().get("frames") is None

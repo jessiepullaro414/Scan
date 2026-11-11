@@ -2,7 +2,9 @@
  * The live 3D view. The mesh snapshot is copied into one growing BufferGeometry (capacity
  * doubles only when needed; otherwise the attributes are updated in place with update
  * ranges), so the scene graph is never rebuilt. Pose updates are read in the render loop
- * and smoothed; nothing here re-renders React per frame.
+ * and smoothed; nothing here re-renders React per frame. After a stop the last live model stays
+ * and can be turned; once "Make mesh" of that scan is done, its mesh takes the live model's place
+ * with the camera left where it is (useFinishedMesh).
  */
 import { Html, Line, OrbitControls } from "@react-three/drei";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
@@ -12,11 +14,13 @@ import {
   Box3,
   BufferAttribute,
   BufferGeometry,
+  DoubleSide,
   DynamicDrawUsage,
   Line as ThreeLine,
   LineBasicMaterial,
   Matrix4,
   Mesh,
+  MeshMatcapMaterial,
   NeutralToneMapping,
   Quaternion,
   Sphere,
@@ -25,12 +29,16 @@ import {
   type Material,
 } from "three";
 import type { DecodedMesh } from "../../api/binary";
+import { api } from "../../api/http";
 import { distanceZone } from "../../lib/tracking";
+import { useScanJob } from "../../store/jobs";
 import { useLive } from "../../store/live";
+import { useProjects } from "../../store/projects";
 import { useSession } from "../../store/session";
+import { toast } from "../../store/toasts";
 import { CameraRig } from "../../three/CameraRig";
 import { boundsOf, CV_TO_THREE_ROTATION, cvToThree, matrixFromRowMajor } from "../../three/coords";
-import { liveMeshMaterial, SRGB_TO_LINEAR } from "../../three/materials";
+import { clayMatcap, liveMeshMaterial, SRGB_TO_LINEAR } from "../../three/materials";
 import { ScannerGlyph } from "../../three/ScannerGlyph";
 import { AxisGizmo, SceneGrid, StudioEnvironment, StudioLights, useThemeColors } from "../../three/Studio";
 import { viewBus, type FrameSphere } from "../../three/viewBus";
@@ -420,10 +428,79 @@ function Trail({ visible }: { visible: boolean }) {
   return <primitive object={line} visible={visible} />;
 }
 
+// ------------------------------------------------------------------ the finished mesh (plan F4)
+/**
+ * After a stop, once "Make mesh" of that scan is done, its mesh (result/mesh.ply) is fetched and
+ * shown in place of the live model, without moving the camera. A failed or cancelled job leaves
+ * the live model. A new scan (or "New scan") drops it.
+ */
+function useFinishedMesh(): BufferGeometry | null {
+  const last = useSession((s) => s.lastStopped);
+  const job = useScanJob(last?.scan.id);
+  const meshUrl = useProjects((s) => (last ? s.details[last.projectId]?.scans.find((x) => x.id === last.scan.id)?.result?.mesh_url : undefined));
+  const [shown, setShown] = useState<{ sid: string; jobId: string; geometry: BufferGeometry } | null>(null);
+  const shownRef = useRef(shown);
+  const show = (next: typeof shown) => {
+    if (shownRef.current && shownRef.current.geometry !== next?.geometry) shownRef.current.geometry.dispose();
+    shownRef.current = next;
+    setShown(next);
+  };
+  const doneId = job?.state === "done" ? job.id : null;
+  const pid = last?.projectId ?? null;
+  const sid = last?.scan.id ?? null;
+
+  useEffect(() => {
+    if (!pid || !sid || !doneId) return;
+    const cur = shownRef.current;
+    if (cur && cur.sid === sid && cur.jobId === doneId) return;
+    const ctrl = new AbortController();
+    api
+      .fetchBinary(meshUrl || api.fileUrl(pid, sid, "mesh.ply"), undefined, ctrl.signal)
+      .then(async (buf) => {
+        const { plyGeometry, readPly } = await import("../../three/ply"); // the PLY reader only when needed
+        if (!ctrl.signal.aborted) show({ sid, jobId: doneId, geometry: plyGeometry(readPly(buf)) });
+      })
+      .catch((e: unknown) => {
+        if ((e as { name?: string }).name === "AbortError") return;
+        // the live model stays; the post-scan card's "Open result" still opens the mesh
+        toast.error("Couldn't show the finished mesh here", e);
+      });
+    return () => ctrl.abort();
+  }, [pid, sid, doneId, meshUrl]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // dropped with its scan (a new scan, "New scan") and when the view closes
+  useEffect(() => {
+    if (shownRef.current && shownRef.current.sid !== sid) show(null);
+  }, [sid]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(
+    () => () => {
+      shownRef.current?.geometry.dispose();
+      shownRef.current = null;
+    },
+    [],
+  );
+
+  return shown && shown.sid === sid ? shown.geometry : null;
+}
+
+function FinishedMesh({ geometry, onBounds }: { geometry: BufferGeometry; onBounds: (boxCv: Box3 | null) => void }) {
+  const mat = useMemo(() => new MeshMatcapMaterial({ matcap: clayMatcap(), side: DoubleSide }), []);
+  useEffect(() => () => mat.dispose(), [mat]);
+  useEffect(() => {
+    // "F" frames this mesh now; the grid moves under it; the camera stays where it is
+    const s = geometry.boundingSphere;
+    if (s) liveModel.sphere = new Sphere(cvToThree(s.center), s.radius);
+    liveModel.boxCv = geometry.boundingBox?.clone() ?? null;
+    onBounds(liveModel.boxCv);
+  }, [geometry]); // eslint-disable-line react-hooks/exhaustive-deps
+  return <mesh geometry={geometry} material={mat} />;
+}
+
 // ------------------------------------------------------------------ canvas
 function Scene({ showGrid, showTrail }: { showGrid: boolean; showTrail: boolean }) {
   const [gridY, setGridY] = useState(-110);
   const lastGrid = useRef(-110);
+  const finished = useFinishedMesh();
   const onBounds = (boxCv: Box3 | null) => {
     // Grid just under the model: three.js min y = −(OpenCV max y).
     const y = boxCv ? -boxCv.max.y - 1 : -110;
@@ -448,7 +525,10 @@ function Scene({ showGrid, showTrail }: { showGrid: boolean; showTrail: boolean 
       />
       <CameraRig getBounds={() => liveModel.sphere ?? HOME_SPHERE} defaultDirection={HOME_DIR} />
       <group rotation={CV_TO_THREE_ROTATION}>
-        <LiveMesh onBounds={onBounds} />
+        <group visible={!finished}>
+          <LiveMesh onBounds={onBounds} />
+        </group>
+        {finished ? <FinishedMesh geometry={finished} onBounds={onBounds} /> : null}
         <LiveScanner />
         <GhostScanner />
         <Trail visible={showTrail} />

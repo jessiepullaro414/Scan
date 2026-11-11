@@ -233,7 +233,18 @@ by the snapshot tool.
 - **Guard:** `test_gpu_matches_cpu_on_planes` and the depth tests at full range unchanged; add
   first: a test that a surface entering from outside the range is picked up within N frames.
 
-### [ ] F4. Something useful on screen from Stop until the mesh is ready (Opus, M)
+### [x] F4. Something useful on screen from Stop until the mesh is ready (Opus, M)
+- **Done 2026-11-10.** Already there: after Stop the live model stays on screen and can be
+  orbited. Added: a job reports the frame pass it is in (`Job.frames`: stage, done, total, measured
+  frames per second), and the app turns that into a time left under the progress bar and in the
+  Jobs menu ("About 1 min left for tracking"); on the Scan page the finished mesh takes the live
+  model's place when Make mesh is done, with the camera where it was; the Viewer swaps a remade
+  mesh in without a loading screen. Checked on the real server with a simulator scan (355 frames):
+  the estimate through the track pass, the swap on the Scan page, cancel, and a remake in the
+  Viewer. Limits: the estimate covers the pass that runs (a fuse pass can follow in Straighten,
+  and the stages after the passes have no estimate); a job started from another window is not
+  linked to its scan in this window (as before). Open for the owner: start Make mesh right after
+  Stop without a click; show the tracked mesh on the Scan page as soon as the track pass ends.
 - **Confirm first:** what the app shows between Stop and the processed mesh, and whether the live
   mesh stays on screen and can be orbited.
 - **Change (as far as it is missing):** keep the live mesh visible and usable while the

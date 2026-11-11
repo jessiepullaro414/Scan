@@ -18,8 +18,10 @@ export function PostScanCard() {
   if (!last) return null;
   const scan = fresh ?? last.scan;
   const active = isActive(job);
-  const done = !active && (scan.status === "processed" || job?.state === "done");
-  const failed = !active && !done && (job?.state === "failed" || scan.status === "failed");
+  // a cancelled job may leave the tracked mesh behind (status "processed"): still "cancelled" here
+  const cancelled = !active && job?.state === "cancelled";
+  const done = !active && !cancelled && (scan.status === "processed" || job?.state === "done");
+  const failed = !active && !done && !cancelled && (job?.state === "failed" || scan.status === "failed");
   const newScan = () => {
     clear();
     useLive.getState().resetScan();
@@ -29,19 +31,25 @@ export function PostScanCard() {
     <div className="glass w-[560px] max-w-[calc(100%-2rem)] animate-pop-in rounded-2xl border border-line-strong p-4 shadow-lg">
       <div className="flex items-start gap-3">
         <div
-          className={`grid h-9 w-9 shrink-0 place-items-center rounded-full ${failed ? "bg-danger-soft text-danger" : "bg-ok-soft text-ok"}`}
+          className={`grid h-9 w-9 shrink-0 place-items-center rounded-full ${failed ? "bg-danger-soft text-danger" : cancelled ? "bg-surface-2 text-muted" : "bg-ok-soft text-ok"}`}
         >
-          {failed ? <CircleExclamationPoint size={18} aria-hidden /> : <CircleCheck size={18} aria-hidden />}
+          {failed || cancelled ? <CircleExclamationPoint size={18} aria-hidden /> : <CircleCheck size={18} aria-hidden />}
         </div>
         <div className="min-w-0 flex-1">
           <div className="text-sm font-semibold text-fg">
-            {done ? "Mesh ready" : failed ? "Meshing failed" : active ? "Making the mesh…" : "Scan saved"}
+            {done ? "Mesh ready" : failed ? "Meshing failed" : cancelled ? "Meshing cancelled" : active ? "Making the mesh…" : "Scan saved"}
             <span className="font-normal text-muted"> · {scan.name}</span>
           </div>
           <div className="mt-0.5 text-xs text-muted">
             {failed
-              ? job?.error || "The raw recording is kept: try again, or with preview quality."
-              : `${fmtInt(scan.n_frames)} frames · ${fmtDuration(scan.duration_s)} · raw recording saved. The live model is a preview; the mesh is rebuilt from the recording at full resolution.`}
+              ? `${job?.error || "Something went wrong."} The live model stays on screen and the raw recording is kept: try again, or with preview quality.`
+              : cancelled
+                ? "The live model stays on screen and the raw recording is kept: make the mesh again any time."
+                : active
+                  ? `${fmtInt(scan.n_frames)} frames · ${fmtDuration(scan.duration_s)}. Turn the live model while you wait: the finished mesh takes its place here.`
+                  : done
+                    ? `${fmtInt(scan.n_frames)} frames · ${fmtDuration(scan.duration_s)}. The finished mesh is on screen.`
+                    : `${fmtInt(scan.n_frames)} frames · ${fmtDuration(scan.duration_s)} · raw recording saved. The live model is a preview; the mesh is rebuilt from the recording at full resolution.`}
           </div>
         </div>
       </div>

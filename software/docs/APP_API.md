@@ -126,6 +126,10 @@ Everything above is implemented as written. Where the contract was silent or amb
 - `SessionState`: `name` (the scan name) while a scan is active. The `POST /api/scan/rewind` reply also has `rewind: {t0, t1, seconds, dropped_frames, kept_frames, rebuilt_keyframes, rebuild_s}`.
 - `Scan`: `thumbnail_url` (or null), `error` (after a failed processing), `quality` (of the last processing). `ProjectSummary.thumbnail_url` is the newest scan's thumbnail.
 - `Job`: `project_id`, `scan_id` and `quality` for `process_scan`. `result` is `{project_id, scan_id, scan}` for `process_scan` and `{path, frames, image_size}` for `generate_demo`.
+- `Job.frames` (optional): `{stage, done, total, fps, elapsed_s} | absent`, present only while a job goes through the recording's frames (the track pass, and the fuse passes of straighten and fuse, in the processing jobs).
+  - `stage` is `"track"`, `"straighten"` or `"fuse"`; `done` counts frames from 1 to `total` (the frames this pass processes, after Standard's frame limit); `fps` is the rate since the first frame was done (null until the second), and `elapsed_s` the time since then. The rate leaves out loading the recording and the first frame's warm-up.
+  - The last frame always goes out. From then until the pass ends (`done == total`) the mesh is made from the frames, cleaned and saved; the message then reads like "Tracking: all 412 frames done, making the mesh".
+  - The field disappears when the pass ends and is never in a finished job. A job can have several passes; each starts its own count. The UI turns it into "About 3 min left for tracking" (`ui/src/lib/estimate.ts`). An engine without it simply sends no `frames`.
 - `mesh` header: `decimated` (bool).
 - `GET .../files/{name}` also serves `trajectory.csv`, `mesh.obj` (when exported) and `thumbnail.jpg` (the left camera view saved at stop).
 

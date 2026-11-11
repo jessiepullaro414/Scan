@@ -563,14 +563,20 @@ export class MockProcess {
   // ---------------------------------------------------------------- stages
   /** Tracking (fake frames), then a fused mesh unless a later stage replaces it. */
   private *trackWork(s: Scan, quality: ProcessQuality, withMesh: boolean, a: number, b: number): Generator<WorkStep, { mesh: TriMesh | null; tracked: number }, void> {
-    const n = Math.max(1, s.n_frames);
+    // the frames the engine would process (Standard: 30 a second of scanning), with the job's frame counter
+    const n = Math.max(1, Math.ceil(s.n_frames / mockStep(s, quality)));
     const span = b - a;
     const end = withMesh ? 0.55 : 1;
     yield* tick(a, a + span * 0.05, 3, () => "Loading the recording");
     const fail = /fail/i.test(s.name) || s.n_frames < 5;
     for (let k = 0; k <= 40; k++) {
       if (fail && k > 15) throw new Error("Tracking failed on 83 % of the frames (low_fitness). Rescan with more overlap, or try markers mode.");
-      yield { p: a + span * (0.05 + ((end - 0.05) * k) / 40), message: `Tracking frame ${Math.round((n * k) / 40)} / ${n}` };
+      const done = Math.max(1, Math.round((n * k) / 40));
+      yield {
+        p: a + span * (0.05 + ((end - 0.05) * k) / 40),
+        message: done < n ? `Tracking: frame ${done} of ${n}` : `Tracking: all ${n} frames done, making the mesh`,
+        frames: { stage: "track", done, total: n },
+      };
     }
     const tracked = quality !== "preview" ? (s.mode === "markers" ? 95 : 93) : 91;
     if (!withMesh) return { mesh: null, tracked };

@@ -1,6 +1,7 @@
 import { CircleCheck, CircleX, Layers, Ban } from "lucide-react";
 import { useMemo, useRef, useState } from "react";
 import type { Job } from "../../api/types";
+import { jobEstimate } from "../../lib/estimate";
 import { fmtRelative } from "../../lib/format";
 import { normalizeQuality } from "../../lib/quality";
 import { navigate, paths } from "../../lib/router";
@@ -17,6 +18,7 @@ function JobRow({ job }: { job: Job }) {
   const cancel = useJobs((s) => s.cancel);
   const [cancelling, setCancelling] = useState(false);
   const active = isActive(job);
+  const est = jobEstimate(job);
   // A processing-studio job opens its scan's Process page.
   const studio = !link && isStudioJob(job.kind) ? (meta ? { pid: meta.pid, sid: meta.sid } : jobScanRef(job)) : null;
   return (
@@ -43,6 +45,7 @@ function JobRow({ job }: { job: Job }) {
       <div className="mt-1 truncate pl-[23px] text-xs text-muted" title={job.error || job.message}>
         {job.state === "failed" ? job.error || job.message || "Failed" : job.message || job.state}
       </div>
+      {est.kind === "left" ? <div className="mt-0.5 truncate pl-[23px] text-xs text-subtle">{est.text}</div> : null}
       {active ? (
         <div className="mt-2 flex items-center gap-2 pl-[23px]">
           <ProgressBar value={job.state === "queued" ? null : job.progress} size="sm" label={`${jobKindLabel(job.kind)} progress`} />

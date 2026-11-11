@@ -2,6 +2,8 @@
 import { Box, ChevronDown, Gauge, SlidersHorizontal, Sparkles, Wand, type LucideIcon } from "lucide-react";
 import { useState } from "react";
 import type { Job, ProcessQuality, Scan } from "../api/types";
+import { jobEstimate } from "../lib/estimate";
+import { fmtFixed, fmtInt } from "../lib/format";
 import { QUALITIES, QUALITY_TEXT } from "../lib/quality";
 import { navigate, paths } from "../lib/router";
 import { cn } from "../lib/util";
@@ -101,7 +103,10 @@ export function MakeMeshButton({
   );
 }
 
-/** Inline progress of a meshing job (or, with `label` / `cancelTitle`, any job) with a cancel button. */
+/**
+ * Inline progress of a meshing job (or, with `label` / `cancelTitle`, any job) with a cancel button,
+ * and, while it goes through the frames, the time left from its measured rate (lib/estimate.ts).
+ */
 export function JobProgress({
   job,
   compact,
@@ -120,6 +125,8 @@ export function JobProgress({
   const cancel = useJobs((s) => s.cancel);
   const [cancelling, setCancelling] = useState(false);
   const pct = Math.round(job.progress * 100);
+  const est = jobEstimate(job);
+  const f = job.frames;
   return (
     <div className={cn("min-w-0", className)}>
       <div className="mb-1.5 flex items-center gap-2 text-xs">
@@ -147,6 +154,15 @@ export function JobProgress({
           </Button>
         ) : null}
       </div>
+      {est.kind === "left" || est.kind === "measuring" ? (
+        <div
+          className="mt-1 text-xs text-subtle"
+          aria-live="polite"
+          title={f?.fps ? `${fmtFixed(f.fps, 1)} frames a second so far (${fmtInt(f.done)} of ${fmtInt(f.total)})` : undefined}
+        >
+          {est.text}
+        </div>
+      ) : null}
     </div>
   );
 }

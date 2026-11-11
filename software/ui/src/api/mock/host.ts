@@ -26,8 +26,11 @@ export type TimedJobSpec = {
   done: () => Record<string, unknown> | null;
 };
 
-/** A step of real work: progress 0..1 and what it's doing. */
-export type WorkStep = { p: number; message: string };
+/**
+ * A step of real work: progress 0..1 and what it's doing; during a pass over the frames, which
+ * frame (the job's `frames` field; the rate is measured on the job's clock, as the engine does).
+ */
+export type WorkStep = { p: number; message: string; frames?: { stage: string; done: number; total: number } };
 
 /**
  * A job that does real work (M3: meshes) in small steps across the mock's ticks. Progress is the
