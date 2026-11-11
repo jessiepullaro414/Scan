@@ -207,7 +207,15 @@ by the snapshot tool.
 - **Guard:** with `frame_step = 1` the A2 snapshot is identical; the accuracy tests in
   `test_e2e_scan.py` keep their thresholds.
 
-### [ ] F3. Narrow the stereo search with the depth already known (Opus, L)
+### [x] F3. Narrow the stereo search with the depth already known (Opus, L): tried, not adopted
+- **Result 2026-11-10: the stop rule hit.** The simple form (one range per frame) was built and
+  measured: the mean frame time on the bench fell by 2 to 7 % in five pairs of runs (Radeon
+  680M), under the 10 % below. The depth in view spans nearly the whole range in every frame (the
+  floor behind the part), so one range drops only 17 % of the disparities. The code is not in
+  the engine; it is kept on the branch `experiment/f3-narrow-depth-search`. Table and findings in
+  VALIDATION.md, "A narrower stereo search per frame". A range per pixel stays untried: it would
+  need a matcher that does not put false depth on surfaces outside the range (found here: 11 to
+  33 % of their pixels).
 - **Where:** `ohs/vision/depth_gpu.py` (the matcher), `ohs/vision/depth.py` (the CPU reference).
 - **Why:** the matcher is nearly half of the frame on both machines (22.5 of 49 ms on the RTX,
   72.8 of 156 ms on the Radeon), and a sweep of its work-group sizes found nothing more. Its work
