@@ -22,7 +22,8 @@
      is their own time, both images together) and ``laser_triangulate`` how long it still waits for
      the laser points and adds them to the cloud (they are triangulated in a thread while the frame
      is tracked and fused; ``laser_triangulate_cpu`` is their own time); ``track`` includes
-     ``track_filter``, ``raycast``,
+     ``track_filter`` (on the GPU: the wait that is left for the filter, which starts when the depth
+     is there), ``raycast``,
      ``icp`` and the integrations;
    * the wait per minute of scanning: minutes to process 60 s of recording at the camera's frame
      rate (``CameraParams.fps``), from the mean total frame time, assuming every frame is processed;

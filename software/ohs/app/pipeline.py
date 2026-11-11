@@ -412,6 +412,7 @@ class FramePipeline:
         self.cloud = LaserCloud()
         self._laser_pool: ThreadPoolExecutor | None = None  # made at the first frame with lasers
         self._track_filter_gpu: TrackingFilterGpu | None | bool = None  # None: not tried yet; False: CPU
+        self._filter_pending: tuple | None = None  # (depth, the filter started for it), see _start_tracking_input
         # the start of a scan tracks a second time on with_raw_depth (module docstring, "Detailed parts")
         self._probe: MarkerlessTracker | None = None
         self._probe_left = DETAIL_PROBE_FRAMES
@@ -475,16 +476,39 @@ class FramePipeline:
         ``track_filter_px``), filtered at :attr:`track_size`, at the pipeline resolution. With a GPU
         (:func:`ohs.compute.get_device`) the filter runs there (:class:`ohs.track.filter_gpu.TrackingFilterGpu`,
         the same map to float rounding)."""
+        pending, self._filter_pending = self._filter_pending, None
         f = self._track_filter_gpu
         if f is None:
             f = self._track_filter_gpu = self._make_track_filter_gpu(depth.shape)
         if f:
             try:
+                if pending is not None and pending[0] is depth:
+                    return f.finish(pending[1])
+                del pending  # for another map: waited for and dropped
                 return f(depth)
             except Exception as exc:  # noqa: BLE001 - a GPU failure must not stop the scan
                 log.warning("tracking filter on the GPU failed (%s); filtering on the CPU", exc)
                 self._track_filter_gpu = False
         return tracking_depth(depth, self.track_filter_px, work_size=self.track_size)
+
+    def _start_tracking_input(self, depth: np.ndarray) -> None:
+        """Start the GPU tracking filter of ``depth``, the map the depth estimator just returned,
+        without waiting for it: :meth:`tracking_input` of the same array then only collects it, and
+        the device filters while the frame goes on on the host. Where the matcher left the map on
+        the same device, the filter reads it there and nothing is uploaded. Does nothing without
+        the GPU filter; a failure here is left to :meth:`tracking_input`, which filters again."""
+        self._filter_pending = None
+        f = self._track_filter_gpu
+        if f is None:
+            f = self._track_filter_gpu = self._make_track_filter_gpu(depth.shape)
+        if not f:
+            return
+        try:
+            on_dev = self.depth_estimator.device_depth() if self.depth_estimator is not None else None
+            src = on_dev[1] if on_dev is not None and on_dev[0] is f.dev else depth
+            self._filter_pending = (depth, f.start(src))
+        except Exception as exc:  # noqa: BLE001
+            log.debug("the tracking filter could not be started ahead (%s)", exc)
 
     def _make_track_filter_gpu(self, shape: tuple[int, ...]) -> TrackingFilterGpu | bool:
         """The GPU tracking filter for depth maps of ``shape``, or ``False`` (no GPU, or sizes it can't do)."""
@@ -569,6 +593,10 @@ class FramePipeline:
             else:
                 depth = self.depth_estimator.compute(left_r, right_r)
             tim["depth"] = _ms(t0)
+            # the tracking filter starts now and is collected when the frame is tracked
+            # (tracking_input): track_filter is how long the frame then still waits for it
+            if self.dual_model and (pose is not None or p.mode == "markerless"):
+                self._start_tracking_input(depth)
 
         lines = lines_r = None
         if futs is not None:
@@ -795,6 +823,7 @@ class FramePipeline:
         if self._laser_pool is not None:
             self._laser_pool.shutdown(wait=True)
             self._laser_pool = None
+        self._filter_pending = None  # a filter that was started and not collected is waited for here
         if isinstance(self._track_filter_gpu, TrackingFilterGpu):
             self._track_filter_gpu.close()
         self._track_filter_gpu = False

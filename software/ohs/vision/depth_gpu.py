@@ -989,6 +989,7 @@ class GpuStereoMatcher:
         if self.min_disparity < 0 or (self.min_disparity + self.num_disparities) * 16 >= 32768:
             raise ValueError("disparity range outside the 16-bit fixed-point range")
         self.queue = dev.new_queue(profiling=profiling)
+        self._depth_fresh = False  # the "depth" buffer holds the map the last call returned
         self.profiling = bool(profiling)
         self.exact_division = bool(dev.device.single_fp_config & self.cl.device_fp_config.CORRECTLY_ROUNDED_DIVIDE_SQRT)
         s = float(params.refine_window_sigma)
@@ -1147,6 +1148,7 @@ class GpuStereoMatcher:
     def _run(self, left: np.ndarray, right: np.ndarray, lk_left: np.ndarray | None, lk_right: np.ndarray | None,
              *what: str) -> list[np.ndarray]:
         cl, q = self.cl, self.queue
+        self._depth_fresh = False
         h, w = left.shape
         if self._shape != (h, w):
             self._setup(h, w)
@@ -1170,7 +1172,15 @@ class GpuStereoMatcher:
         if self.profiling:
             self.last_timings_ms = {name: (e.profile.end - e.profile.start) * 1e-6 for name, e in events}
         del copies, hold  # all done by now (the last copy was blocking): nothing left to wait for
+        self._depth_fresh = "depth" in what and self.exact_division
         return outs
+
+    def device_depth(self) -> Any | None:
+        """The device buffer with the depth map the last call returned (``float32`` mm, 0 = invalid;
+        the same values as the array, and unchanged until the next call), for a stage that reads it
+        on the device instead of uploading the array again. ``None`` if the last call returned no
+        depth from the device."""
+        return self._b["depth"] if self._depth_fresh else None
 
     def disparity(self, left: np.ndarray, right: np.ndarray, lk_left: np.ndarray | None = None,
                   lk_right: np.ndarray | None = None) -> np.ndarray:

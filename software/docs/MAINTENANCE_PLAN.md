@@ -686,8 +686,19 @@ bench medians before and after in the commit message.
   main thread, in the same order. 137.0 to 137.4 ms per frame -> 133.4 to 134.3 ms (about
   3.3 ms, 2.4 %), same mesh, snapshot identical. `timings_ms["laser_triangulate"]` is now the
   wait that is left, `laser_triangulate_cpu` the work's own time. Guard, passing on the old code
-  too: `test_laser_points_equal_the_inline_computation`. Still open: the buffers shared between
-  the stages (the title of this task), and the filter's blocking copy back.
+  too: `test_laser_points_equal_the_inline_computation`.
+- **Part done 2026-11-11 (the tracking filter reads the matcher's depth on the device and
+  starts early):** `GpuStereoMatcher.device_depth` / `DepthEstimator.device_depth` give the
+  buffer that holds the depth map just returned; `TrackingFilterGpu` has `start` (a map or
+  such a buffer, no wait) and `finish`; `FramePipeline.process` starts the filter as soon as
+  the depth is there and `tracking_input` collects it. No upload for the filter (4 MB), and
+  the device filters during the gyro prior. 134.1 to 135.6 ms per frame -> 131.2 to 132.3 ms
+  (about 3.2 ms, 2.4 %), same mesh, snapshot identical. Guards:
+  `test_start_and_finish_give_the_same_map`, and
+  `test_the_pipeline_tracks_on_the_filter_of_its_depth` (passes on the old code too).
+  Still open: the reconstruction and the tracking volume still upload their maps (about
+  1.5 and 1.1 ms). Since E4 the reconstruction's fusion is still running when the next frame's
+  matcher writes its depth buffer, so sharing that buffer needs events between the queues.
 - **Guard:** `test_gpu_matches_cpu_filter`, `test_gpu_and_numpy_agree`,
   `test_integration_values_and_weights`, the A2 snapshot.
 

@@ -568,6 +568,15 @@ class DepthEstimator:
         depth = self.depth_from_disparity(disp)
         return depth, self.sigma_z(depth, sig)
 
+    def device_depth(self) -> tuple | None:
+        """``(device, buffer)``: where on the GPU the depth map lies that :meth:`compute` or
+        :meth:`compute_with_sigma` last returned (``float32``, the same values, unchanged until the
+        next call), so that a later GPU stage need not upload it again. ``None`` when that map
+        was not made there as it is."""
+        g = self._gpu
+        buf = g.device_depth() if g is not None else None
+        return None if buf is None else (g.dev, buf)
+
     def sigma_z(self, depth: np.ndarray, sigma_lk: np.ndarray | None) -> np.ndarray:
         """Depth standard deviation (mm, float32, 0 where ``depth`` is 0): ``sigma_z = z^2 sigma_d / (f B)``
         with ``sigma_d`` from :class:`SigmaModel` (:data:`SIGMA_MODELS` of this backend; the GPU

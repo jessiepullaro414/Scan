@@ -215,20 +215,43 @@ class TrackingFilterGpu:
         return w > 1 and h > 1 and w0 % w == 0 and h0 % h == 0 and w0 // w == h0 // h
 
     def __call__(self, depth: np.ndarray) -> np.ndarray:
-        d = np.ascontiguousarray(depth, dtype=np.float32)
-        if d.shape != (self.h0, self.w0):
-            raise ValueError(f"depth has shape {d.shape}, expected {(self.h0, self.w0)}")
+        return self.finish(self.start(depth))
+
+    def start(self, depth: Any) -> tuple:
+        """Queue the filter of ``depth`` and return at once; :meth:`finish` of the returned value
+        waits for the map. One filter at a time.
+
+        ``depth`` is the map, or a device buffer of this filter's device that holds it (``float32``,
+        the input size): then nothing is uploaded. The buffer must already be written (its queue
+        done) and must stay as it is until :meth:`finish`.
+        """
         cl, q = self.cl, self.queue
+        if isinstance(depth, cl.Buffer):
+            if depth.size != self.w0 * self.h0 * 4:
+                raise ValueError(f"the depth buffer has {depth.size} bytes, expected {self.w0 * self.h0 * 4}")
+            src, hold = depth, None
+        else:
+            d = np.ascontiguousarray(depth, dtype=np.float32)
+            if d.shape != (self.h0, self.w0):
+                raise ValueError(f"depth has shape {d.shape}, expected {(self.h0, self.w0)}")
+            # the copy's event is kept until finish: pyopencl waits for one that is dropped
+            src, hold = self._in, (d, cl.enqueue_copy(q, self._in, d, is_blocking=False))
         dd, vf, nh, dh, res = self._work
-        cl.enqueue_copy(q, self._in, d, is_blocking=False)
         ws, w0s = (self.w, self.h), (self.w0, self.h0)
-        self._down(q, ws, None, self._in, self.w0, self.h0, self.f, self.w, self.h, self.slope, dd, vf)
+        self._down(q, ws, None, src, self.w0, self.h0, self.f, self.w, self.h, self.slope, dd, vf)
         self._bh(q, ws, None, dd, vf, self.w, self.h, self._g, self.r, nh, dh)
         self._bv(q, ws, None, nh, dh, dd, vf, self.w, self.h, self._g, self.r, self._el, self.n_elem,
                  self.max_change, res, self._keep)
         self._up(q, w0s, None, res, self._keep, self.w, self.h, self.w0, self.h0, 1.0 / self.f, self._out)
-        out = np.empty_like(d)
-        cl.enqueue_copy(q, out, self._out, is_blocking=True)  # also waits for the upload of d
+        out = np.empty((self.h0, self.w0), np.float32)
+        ev = cl.enqueue_copy(q, out, self._out, is_blocking=False)
+        q.flush()  # the device starts now
+        return out, ev, hold
+
+    def finish(self, pending: tuple) -> np.ndarray:
+        """The filtered map of :meth:`start` (waits for the device, without holding Python's lock)."""
+        out, ev, _hold = pending
+        self.cl.wait_for_events([ev])  # the queue is in order: the upload and the kernels are done too
         return out
 
     def close(self) -> None:

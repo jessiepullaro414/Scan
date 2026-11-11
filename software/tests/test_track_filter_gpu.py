@@ -6,6 +6,8 @@ import pytest
 
 from ohs import compute
 from ohs.app.pipeline import FramePipeline, PipelineParams, tracking_depth
+from ohs.io.recording import RecordingReader
+from ohs.sim.datasets import make_scan_recording
 from ohs.sim.nominal import nominal_calibration
 from ohs.track.filter_gpu import TrackingFilterGpu
 
@@ -51,6 +53,56 @@ def test_supported_sizes():
     assert TrackingFilterGpu.supports((640, 400), (640, 400))
     assert not TrackingFilterGpu.supports((1280, 800), (500, 400))  # not a whole multiple
     assert not TrackingFilterGpu.supports((1280, 800), (640, 200))  # not the same factor both ways
+
+
+def test_start_and_finish_give_the_same_map(dev):
+    """Started ahead and collected later, from the array or from a device buffer that holds it:
+    the map of a plain call, bit for bit."""
+    cl = dev.cl
+    d = scene(640, 400, 5)
+    f = TrackingFilterGpu(dev, (640, 400), (320, 200), 6.0)
+    try:
+        want = f(d)
+        got = f.finish(f.start(d))
+        assert got.tobytes() == want.tobytes() and got is not want
+        buf = cl.Buffer(dev.ctx, cl.mem_flags.READ_WRITE | cl.mem_flags.COPY_HOST_PTR, hostbuf=d)
+        pending = f.start(buf)
+        d2 = d.copy()
+        d2[:] = 7.0  # the array is not read again
+        assert f.finish(pending).tobytes() == want.tobytes()
+        assert f(scene(640, 400, 6)).tobytes() != want.tobytes() and f(d).tobytes() == want.tobytes()
+        with pytest.raises(ValueError):
+            f.start(cl.Buffer(dev.ctx, cl.mem_flags.READ_WRITE, size=16))
+        buf.release()
+    finally:
+        f.close()
+
+
+def test_the_pipeline_tracks_on_the_filter_of_its_depth(dev, tmp_path):
+    """What the tracker gets for a frame is the GPU filter of that frame's depth map, bit for bit,
+    however the pipeline hands the map to the filter."""
+    rec = make_scan_recording(tmp_path / "rec", n_frames=4, image_size=(640, 400), realistic=True, seed=4,
+                              depth_every=0)
+    reader = RecordingReader(rec)
+    with FramePipeline(reader.calibration()) as p:
+        seen = []
+        track = p.tracker.track
+
+        def spy(depth, *args, **kwargs):
+            seen.append(depth.copy())
+            return track(depth, *args, **kwargs)
+
+        p.tracker.track = spy
+        p.add_imu(reader.imu_samples())
+        res = [p.process(reader.frame(i)) for i in range(4)]
+        assert p.depth_estimator.backend == "gpu" and isinstance(p._track_filter_gpu, TrackingFilterGpu)
+        assert len(seen) == 4 and all(r.track.ok and "track_filter" in r.timings_ms for r in res)
+        f = TrackingFilterGpu(dev, p.image_size, p.track_size, p.track_filter_px)
+        try:
+            for r, got in zip(res, seen):
+                assert got.tobytes() == f(r.depth).tobytes()
+        finally:
+            f.close()
 
 
 def test_the_pipeline_filters_on_the_gpu(dev):
