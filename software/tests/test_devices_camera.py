@@ -130,6 +130,27 @@ def test_open_sets_fourcc_before_size_and_fps_then_exposure_and_gain(fake_cv):
     assert cap.released and p.exposure == -7  # the caller's params are not modified
 
 
+def test_open_asks_for_the_format_again_when_setting_the_size_drops_it(fake_cv, monkeypatch):
+    # The ELP OV9281 stereo board on DirectShow falls back to YUY2 (5 fps) when the size is set after
+    # the format, and only keeps MJPG when it is asked for again afterwards.
+    yuy2 = float(cv2.VideoWriter_fourcc(*"YUY2"))
+
+    def set_dropping_format(self, prop, value):
+        self.calls.append((prop, value))
+        self.props[prop] = float(value)
+        if prop == W:
+            self.props[cv2.CAP_PROP_FOURCC] = yuy2
+        return True
+
+    monkeypatch.setattr(FakeCapture, "set", set_dropping_format)
+    with StereoCamera(CameraParams(backend="dshow", **SMALL)) as cam:
+        cap = fake_cv.instances[0]
+        props = [c[0] for c in cap.calls]
+        assert props[:5] == [cv2.CAP_PROP_FOURCC, W, H, cv2.CAP_PROP_FPS, cv2.CAP_PROP_FOURCC]
+        assert cap.calls[4][1] == cv2.VideoWriter_fourcc(*"MJPG")
+        assert cam.info["fourcc"] == "MJPG"
+
+
 def test_frames_are_gray_and_split_and_swapped(fake_cv):
     gl, gr = gray_of(LEFT_BGR), gray_of(RIGHT_BGR)
     with StereoCamera(CameraParams(**SMALL)) as cam:

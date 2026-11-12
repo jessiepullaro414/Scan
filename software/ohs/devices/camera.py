@@ -257,11 +257,16 @@ class StereoCamera:
             cap.release()
             return None
         p = self.params
-        if p.fourcc:  # format first: the large MJPG modes are only offered once it is selected
-            cap.set(cv2.CAP_PROP_FOURCC, float(cv2.VideoWriter_fourcc(*p.fourcc)))
+        fourcc = float(cv2.VideoWriter_fourcc(*p.fourcc)) if p.fourcc else None
+        if fourcc is not None:  # format first: some cameras only offer the large MJPG modes once it is selected
+            cap.set(cv2.CAP_PROP_FOURCC, fourcc)
         cap.set(cv2.CAP_PROP_FRAME_WIDTH, float(width))
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, float(p.height))
         cap.set(cv2.CAP_PROP_FPS, float(p.fps))
+        if fourcc is not None and _decode_fourcc(cap.get(cv2.CAP_PROP_FOURCC)) != p.fourcc:
+            # Others (the ELP OV9281 stereo board on DirectShow) drop it when the size is set and fall
+            # back to raw YUY2 at 5 fps; asking again after the size gives MJPG at 60 fps.
+            cap.set(cv2.CAP_PROP_FOURCC, fourcc)
         return cap
 
     def close(self) -> None:
