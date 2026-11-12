@@ -190,3 +190,17 @@ def test_watertight_closes_the_outer_border_within_the_limit():
     st = mesh_stats(V3, F3)
     assert st["watertight"] and st["holes"] == 0 and st["border_mm"] is None
     assert len(fill_holes(Vh, Fh, 0.9 * st0["border_mm"], include_borders=True)[1]) == len(Fh)  # the size limit holds
+
+
+def test_a_hole_whose_vertices_coincide_is_not_listed():
+    # a sphere with one triangle left out, its three corners then moved to one spot: the boundary
+    # loop has three edges of length 0 (perimeter 0). It is no hole to show or to measure. A hole
+    # with a real perimeter next to it is listed as before.
+    V, F = icosphere(R, 3)
+    V = V.copy()
+    V[F[100]] = V[F[100]].mean(axis=0)
+    F = np.delete(F, 100, axis=0)
+    assert hole_outlines(V, F) == []
+    Vh, Fh = punch(V, F, [[0.0, 0.0, -R]], [6.0])
+    out = hole_outlines(Vh, Fh)
+    assert len(out) == 1 and out[0]["perimeter_mm"] > 10.0

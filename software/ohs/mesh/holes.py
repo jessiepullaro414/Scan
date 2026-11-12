@@ -81,7 +81,7 @@ def hole_outlines(V: np.ndarray, F: np.ndarray, max_holes: int | None = None, de
     if len(F) == 0:
         return []
     loops, is_border, _ = find_holes(V, F)
-    holes = [k for k in range(len(loops)) if not is_border[k]]
+    holes = [k for k in range(len(loops)) if not is_border[k] and loops.perimeter[k] > 0.0]  # not a collapsed loop
     holes.sort(key=lambda k: -float(loops.perimeter[k]))
     if max_holes is not None:
         holes = holes[: int(max_holes)]

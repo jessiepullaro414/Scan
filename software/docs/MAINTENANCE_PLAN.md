@@ -601,7 +601,7 @@ processing), S1 (start-up).
 - **Guard:** the self-test tests in `test_server_setup.py` and `test_app_cli.py`; messages stay
   identical.
 
-### [ ] B12. A hole with a perimeter of zero reaches the hole list (Sonnet, S) ○
+### [x] B12. A hole with a perimeter of zero reaches the hole list (Sonnet, S) ✔
 - **Found 2026-11-10:** `test_server_process_studio.py::test_overlays` failed once in the full
   CPU-path run (`perimeter_mm` 0.0 for one hole) and passed in two runs of the module alone, on
   the same code. The old code passed twice too, so nothing says the first wave caused it; the
@@ -612,6 +612,20 @@ processing), S1 (start-up).
   decide where it belongs: leave such loops out of the list, or merge the coincident vertices
   when the mesh is cleaned. Say which in the commit.
 - **Guard:** `test_mesh_holes.py`; a new test with the built mesh; `test_overlays` unchanged.
+- **Done 2026-11-12.** Confirmed with a sphere missing one triangle whose three corners were moved
+  to one spot: `hole_outlines` listed a hole with `perimeter_mm` 0.0. Fixed by leaving such loops
+  out of the list (one condition in `hole_outlines`; merging vertices in the clean-up would change
+  every mesh). New test `test_a_hole_whose_vertices_coincide_is_not_listed` failed on the old code
+  for that reason and passes now; holes with a real perimeter are listed as before.
+  `test_mesh_holes.py` 10 passed, `test_server_process_studio.py` 18 passed. Whether this was the
+  cause of the one `test_overlays` failure is not known (never reproduced).
+
+### [ ] B13. Fill holes also takes a loop with a perimeter of zero as a hole (Sonnet, S) ○
+- **Found 2026-11-12** while doing B12: `fill_holes` (`ohs/mesh/holes.py`, the `cand` list) keeps
+  every loop whose perimeter is at most `max_hole_mm`, so also a collapsed one (perimeter 0). Its
+  patch would be faces of zero area.
+- **Change:** confirm first with the B12 test mesh; if so, leave such loops out of `cand` too.
+- **Guard:** `test_mesh_holes.py`; the fill tests in `test_server_process_studio.py`.
 
 ---
 
