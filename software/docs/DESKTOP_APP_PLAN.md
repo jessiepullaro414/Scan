@@ -562,6 +562,51 @@ Phase 1 is done when full-quality processing is at least 3x faster on the RTX la
   - Laptop: full quality 67 → 49 ms a frame (20.4 fps), preview 28 → 25.5 ms (39.2 fps). Radeon: 172 → 156 ms full.
   - Left, if speed matters again: keep the depth on the GPU between the matcher, the filter and both models (it crosses PCIe several times a frame), and the laser threads once the depth step gets below about 16 ms.
 
+### M5 plan, first slice: fitted shapes in the viewer (agreed 2026-11-12)
+The first item of [`ROADMAP.md`](ROADMAP.md), section 3, and [`RESEARCH_PLAN.md`](RESEARCH_PLAN.md) 4.8.1–4.8.4.
+It turns "a nice mesh" into numbers a part can be made from.
+
+**What the user does:**
+- In the viewer, the **Fit** tool (next to Measure) has three kinds: **Plane**, **Cylinder**, **Hole**.
+- One click on the surface: the engine grows a region from that point that matches the kind,
+  fits it, and the region lights up. A label shows the result with its uncertainty:
+  "Plane · flat within 0.04 mm", "Cylinder Ø 14.02 ± 0.03 mm", "Hole Ø 25.01 ± 0.05 mm".
+- Each fit is listed in the side panel with its numbers: points used, residual RMS, the region's
+  mean sigma, and a warning when the region is small or touches a filled (unmeasured) area.
+- Pick two fits to get their relation: the distance between parallel planes, the angle between
+  planes or axes, the distance between two axes, a hole's centre to a plane.
+
+**How it works:**
+- `ohs/measure/fit.py`: plane (weighted total least squares), cylinder (start from the normals,
+  then Gauss-Newton on the true distances), circle in a plane (holes). Weights 1/σ² from each
+  vertex's sigma; filled vertices are left out. The covariance gives the ± values (1σ shown; the
+  label says so). These are statistical errors only: calibration and scale come on top.
+- `ohs/measure/region.py`: grow over the mesh from the clicked face, keeping faces within a
+  tolerance of the current fit and with agreeing normals, refitting as the region grows. Holes
+  use the boundary loop nearest the click (`hole_outlines`) and the plane of the faces around it;
+  a scanned hole wall is fitted as a cylinder instead when there is one.
+- API: `POST /api/projects/{pid}/scans/{sid}/fit` with the kind and the clicked point and face;
+  the answer has the shape, its ± values, the residual, the counts, the region's faces (for the
+  highlight) and warnings. Documented in `APP_API.md`.
+
+**Steps** (one commit each, tests first):
+1. Fits with uncertainty, tested on synthetic points with known truth: the error is small and
+   ±2σ covers the truth about 95 % of the time.
+2. Region growing and the hole finder, tested on simulated meshes (the bracket's bosses and
+   shaft, the car panel's hole).
+3. The API, its tests, and `APP_API.md`.
+4. The viewer's Fit tool, the list, relations, and the mock engine.
+5. Simulator validation in `VALIDATION.md`: diameter, axis and position errors against the
+   truth on the bracket (bosses r = 7 mm, shaft r = 8 mm) and the car panel (hole Ø 25 mm),
+   whether ±2σ covers the truth, and the bias of small holes (fusion rounds them).
+
+**Done when:** on simulated scans in the app, one click gives each shape with its ± value, the
+errors against the truth are measured and written down (whatever they are), and the tests, type
+check, build and a browser check pass.
+
+**Not in this slice:** saving fits with the scan, coordinate systems, deviation against CAD,
+sections, gap and flush, STEP export.
+
 ### Quality bar (every milestone)
 - **Performance:** the live view holds 30 fps or more in the UI and shows the scanner's state within 150 ms. A 2M-triangle mesh orbits at 60 fps on an integrated GPU.
 - **Reliability:** no data loss on a crash, and an emitters-off guarantee.
