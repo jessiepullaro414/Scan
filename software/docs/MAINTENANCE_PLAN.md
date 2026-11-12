@@ -916,7 +916,7 @@ bench medians before and after in the commit message.
 - **Guard:** `test_vertices_move_onto_the_patches_and_nowhere_else`,
   `test_the_refined_mesh_is_closer_to_the_truth`. Add first: two chunk sizes give equal output.
 
-### [ ] P4. The laser cloud is averaged twice per processing run (Sonnet, S) ✔
+### [x] P4. The laser cloud is averaged twice per processing run (Sonnet, S) ✔
 - **Where:** `ohs/app/process.py:390-398`, `ohs/track/fusion.py:85-107`.
 - **Problem:** `save_ply` computes the voxel-averaged points, the report computes them again, and
   the raw count concatenates every chunk just to take its length.
@@ -924,6 +924,12 @@ bench medians before and after in the commit message.
 - **Guard:** `test_laser_cloud_accumulates_in_world_frame`,
   `test_process_recording_fuses_at_given_poses`; `report["lasers"]` and the bytes of
   `laser_points.ply` unchanged.
+- **Done 2026-11-12.** `process_recording` averages once, writes and counts that; raw counts come
+  from the chunk lengths (`LaserCloud.raw_counts`). On a cloud as large as the largest real scan
+  (602,000 raw points, the door at Best has 605,000): 220 -> 110 ms, three runs each, same file
+  bytes. A 16-frame simulated recording processed with the old and the new code: the same
+  `report["lasers"]` and a byte-identical `laser_points.ply`. `test_track_export.py`,
+  `test_app_pipeline.py`, `test_server_process_studio.py`: 45 passed (GPU), 44 + 1 skipped (CPU).
 
 ### [ ] P5. Curve adjustment builds clouds it barely uses (Sonnet, M) ○
 - **Where:** `ohs/track/curve_ba.py:414-431`, `ohs/track/posegraph.py:514-543`.

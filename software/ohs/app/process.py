@@ -570,14 +570,19 @@ def process_recording(
             log.warning("the fused mesh is empty (no frame was tracked/fused?)")
 
         # laser cloud
+        from ohs.track.export import save_points_ply  # noqa: PLC0415
+
         cloud = pipe.laser_cloud()
         lp = out / "laser_points.ply"
-        cloud.save_ply(lp, voxel_mm=float(p.laser_voxel_mm))
+        laser_pts = cloud.points(float(p.laser_voxel_mm))  # averaged once: written and counted
+        log.info("laser cloud: %d raw points -> %d after %s mm voxel averaging", len(cloud), len(laser_pts),
+                 p.laser_voxel_mm)
+        save_points_ply(lp, laser_pts)
         files["laser_points"] = str(lp)
         report["lasers"] = {
             "planes": sorted(pipe.planes),
-            "n_points_raw": {name: int(len(cloud.raw_points([name]))) for name in cloud.names},
-            "n_points_exported": int(len(cloud.points(float(p.laser_voxel_mm)))),
+            "n_points_raw": cloud.raw_counts(),
+            "n_points_exported": int(len(laser_pts)),
             "voxel_mm": float(p.laser_voxel_mm),
             "frames_with_points": cloud.n_frames,
             # dropped because they disagreed with their frame's dense depth (reflections, glints)

@@ -82,6 +82,10 @@ class LaserCloud:
         self._n_frames += 1
         return int(len(P))
 
+    def raw_counts(self) -> dict[str, int]:
+        """Number of raw points per laser name (without joining the chunks)."""
+        return {n: int(sum(c.shape[0] for c in chunks)) for n, chunks in self._chunks.items()}
+
     def raw_points(self, names: Iterable[str] | None = None) -> np.ndarray:
         """All accumulated world points (N,3), optionally only for the given laser names."""
         sel = self.names if names is None else [n for n in names if n in self._chunks]

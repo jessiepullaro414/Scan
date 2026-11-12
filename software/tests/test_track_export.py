@@ -146,6 +146,7 @@ def test_laser_cloud_accumulates_in_world_frame(tmp_path):
         assert lc.add(pts_c, T_wc, name) == 300 - 6
     assert len(lc) == 6 * 294 and sorted(lc.names) == ["horizontal", "vertical"] and lc.n_frames == 6
     assert len(lc.raw_points(["vertical"])) == 3 * 294
+    assert list(lc.raw_counts().items()) == [(n, len(lc.raw_points([n]))) for n in lc.names]  # same order too
     # voxel averaging merges the 6 noisy observations of each point (points are > 1 mm apart)
     merged = lc.points(voxel_mm=0.5)
     raw = lc.raw_points()
