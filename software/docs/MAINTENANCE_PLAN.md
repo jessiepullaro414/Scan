@@ -482,7 +482,7 @@ processing), S1 (start-up).
 
 ### Recording (`ohs/io/recording.py`): B2, B3, B4 in one session, in this order
 
-### [ ] B2. A failed frame write is lost without an error (Sonnet, S) ✔
+### [x] B2. A failed frame write is lost without an error (Sonnet, S) ✔
 - **Where:** `recording.py:93-99` and `:145-148`.
 - **Problem:** the pool runs `cv2.imwrite`, which returns False on failure (disk full) instead of
   raising; nothing reads the return value. Pruning keeps only `not f.done()`, so even a future
@@ -492,6 +492,13 @@ processing), S1 (start-up).
   pruning; report it from `close()` and pass it on through `Recorder.error`.
 - **Guard:** `test_recording_roundtrip`, `test_latest_slot_and_recorder`. Add first: `cv2.imwrite`
   monkeypatched to fail once, the error must be reported.
+- **Done 2026-11-12.** Frames go through `_imwrite`, which raises `OSError` when `cv2.imwrite`
+  returns False; `RecordingWriter.error` keeps the first failure (also across pruning);
+  `close()` finishes the folder (CSV files, `meta.json`) and then raises it; `Recorder.close()`
+  catches it into `Recorder.error` and the summary. New tests `test_recording_failed_frame_write_is_reported`
+  (returns False / raises) and `test_recorder_reports_failed_frame_write` failed on the old code
+  (nothing raised, `error` None) and pass now. A clean recording makes the same `cv2.imwrite`
+  call with the same arguments. `test_core.py` and `test_app_live.py`: 58 passed.
 
 ### [ ] B3. A crash mid-scan can leave an unreadable recording (Opus, M) ✔
 - **Where:** `recording.py:67-70`, `:96`, `:138-158`; `server/projects.py:375` (`recover_stale`).

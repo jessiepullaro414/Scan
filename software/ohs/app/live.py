@@ -399,7 +399,12 @@ class Recorder:
         self._thread.join()
         s = self.summary()
         self.writer.update_meta(n_imu=s["n_imu"], n_events=s["n_events"], duration_s=round(s["duration_s"], 4), **meta)
-        self.writer.close()
+        try:
+            self.writer.close()
+        except Exception as e:  # a failed frame write, reported in the summary
+            if self.error is None:
+                self.error = e
+            s = self.summary()
         log.info("recording %s: %d frames, %d IMU samples, %.1f s", self.path, s["n_frames"], s["n_imu"], s["duration_s"])
         return s
 

@@ -138,6 +138,34 @@ def test_recording_roundtrip(tmp_path):
         RecordingWriter(rec)
 
 
+@pytest.mark.parametrize("mode", ["returns_false", "raises"])
+def test_recording_failed_frame_write_is_reported(tmp_path, monkeypatch, mode):
+    """A frame write that fails (cv2.imwrite returns False, or raises) is reported by close(), even
+    after its future was pruned from the pending list (more than 64 frames written)."""
+    import cv2
+
+    real_imwrite = cv2.imwrite
+    calls = {"n": 0}
+
+    def flaky_imwrite(*args, **kw):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            if mode == "raises":
+                raise OSError("disk full")
+            return False
+        return real_imwrite(*args, **kw)
+
+    monkeypatch.setattr(cv2, "imwrite", flaky_imwrite)
+    img = np.zeros((8, 8), np.uint8)
+    rec = tmp_path / "rec"
+    with pytest.raises(OSError):
+        with RecordingWriter(rec, source="sim") as w:
+            for i in range(70):
+                w.write_frame(StereoFrame(i, 10.0 + i / 30, img, img))
+    assert calls["n"] == 70
+    assert RecordingReader(rec).meta["n_frames"] == 70  # the folder is still closed properly
+
+
 def _small_recording(path, n=9):
     rng = np.random.default_rng(3)
     with RecordingWriter(path, source="sim") as w:

@@ -743,6 +743,24 @@ def test_latest_slot_and_recorder(tmp_path):
     assert rec.close()["n_frames"] == 3  # idempotent
 
 
+def test_recorder_reports_failed_frame_write(tmp_path, monkeypatch):
+    real_imwrite = cv2.imwrite
+    calls = {"n": 0}
+
+    def flaky_imwrite(*args, **kw):
+        calls["n"] += 1
+        return False if calls["n"] == 1 else real_imwrite(*args, **kw)
+
+    monkeypatch.setattr(cv2, "imwrite", flaky_imwrite)
+    rec = live.Recorder(tmp_path / "r")
+    img = np.zeros((8, 8), np.uint8)
+    for i in range(3):
+        rec.put_frame(StereoFrame(i, 10.0 + i, img, img))
+    s = rec.close()
+    assert s["error"] is not None and rec.error is not None
+    assert s["n_frames"] == 3 and RecordingReader(tmp_path / "r").meta["n_frames"] == 3
+
+
 def test_drawing_helpers():
     d = np.zeros((40, 60), np.float32)
     d[10:30, 10:50] = np.linspace(150, 450, 40)[None, :]

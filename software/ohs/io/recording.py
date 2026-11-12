@@ -73,6 +73,12 @@ def _celsius(value: object) -> float | None:
     return c if math.isfinite(c) else None
 
 
+def _imwrite(path: str, img: np.ndarray, params: list[int]) -> None:
+    """``cv2.imwrite`` that raises when it fails (it returns False, for example on a full disk)."""
+    if not cv2.imwrite(path, img, params):
+        raise OSError(f"could not write frame file {path}")
+
+
 class RecordingWriter:
     """Write a recording folder. Use as a context manager or call :meth:`close`."""
 
@@ -92,6 +98,7 @@ class RecordingWriter:
         self._png = [cv2.IMWRITE_PNG_COMPRESSION, int(png_compression)]
         self._pool = ThreadPoolExecutor(max_workers=max(1, workers), thread_name_prefix="rec-png")
         self._pending: list[Future] = []
+        self.error: BaseException | None = None  # the first failed frame write
         self._lock = threading.Lock()
         self._frames = open(self.path / "frames.csv", "w", newline="", encoding="utf-8")
         self._imu = open(self.path / "imu.csv", "w", newline="", encoding="utf-8")
@@ -119,12 +126,15 @@ class RecordingWriter:
         sbs = frame.to_sbs()
         if "image_size" not in self.meta:
             self.meta["image_size"] = list(frame.image_size)
-        fut = self._pool.submit(cv2.imwrite, str(self.path / "frames" / name), sbs, self._png)
+        fut = self._pool.submit(_imwrite, str(self.path / "frames" / name), sbs, self._png)
         with self._lock:
             self._pending.append(fut)
             self._fw.writerow([frame.index, f"{frame.t_host:.6f}", name])
             self._n += 1
             if len(self._pending) > 64:
+                for f in self._pending:
+                    if self.error is None and f.done() and f.exception() is not None:
+                        self.error = f.exception()
                 self._pending = [f for f in self._pending if not f.done()]
 
     def write_imu(self, samples: Iterable[ImuSample]) -> None:
@@ -173,8 +183,10 @@ class RecordingWriter:
         self._closed = True
         self._pool.shutdown(wait=True)
         for f in self._pending:
-            if f.done() and f.exception() is not None:
-                log.error("frame write failed: %s", f.exception())
+            if self.error is None and f.done() and f.exception() is not None:
+                self.error = f.exception()
+        if self.error is not None:
+            log.error("frame write failed: %s", self.error)
         for fh in (self._frames, self._imu, self._events):
             fh.close()
         if self._gt_poses is not None:
@@ -185,6 +197,8 @@ class RecordingWriter:
             self.meta["temperature_c"] = {"first": round(t[0], 2), "last": round(t[-1], 2), "min": round(min(t), 2),
                                           "max": round(max(t), 2), "n": len(t)}
         self._write_meta()
+        if self.error is not None:  # raised after the folder is closed, so it stays readable
+            raise self.error
 
     def __enter__(self) -> "RecordingWriter":
         return self
