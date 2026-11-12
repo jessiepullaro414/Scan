@@ -629,6 +629,24 @@ def test_run_loop_with_stub_modules(fw_on_path):
     assert f.levels == [0, 0, 0] and all(p.duty == 0 for p in pwms)  # loop exit turns emitters off
 
 
+def test_run_on_an_esp32_uses_its_pin_map(fw_on_path):
+    # Waveshare ESP32-S3-Pico: the same physical pins as on the Pico (4, 5, 9, 20, 6, 7), other GPIO numbers
+    clock = SimClock(0)
+    stdin = StubStdin("HELLO\nEMIT 10 20 30\n")
+    machine, time_mod, select_mod, pins, pwms, i2cs = make_stubs(clock, stdin)
+    out = Out()
+    f = fw.run(machine, time_mod, select_mod, stdin, types.SimpleNamespace(write=out), max_iterations=300,
+               platform="esp32")
+    assert [p.pin for p in pwms] == [13, 14, 17]  # V laser, H laser, dots
+    assert pins[40]["mode"] == machine.Pin.IN and pins[40]["pull"] == machine.Pin.PULL_UP
+    assert i2cs == [dict(id=0, sda=15, scl=16, freq=400_000)]
+    assert out.lines[0] == "L boot ohs-fw %s imu=LSM6DSOX" % fw.FW_VERSION  # the same first line as on a Pico
+    assert out.lines[1] == "L board esp32"
+    assert "OK HELLO ohs-fw %s imu=LSM6DSOX" % fw.FW_VERSION in out.lines and "OK EMIT 10 20 30" in out.lines
+    assert f.levels == [0, 0, 0] and all(p.duty == 0 for p in pwms)
+    assert fw.pin_map("rp2") == fw.pin_map("win32")  # anything that is not an ESP32 gets the Pico's pins
+
+
 def test_run_ctrl_c_turns_emitters_off_and_imu_optional(fw_on_path):
     clock = SimClock(0)
     stdin = StubStdin("EMIT 100 100 100\n", interrupt_after=5)

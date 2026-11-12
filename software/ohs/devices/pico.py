@@ -67,6 +67,7 @@ __all__ = ["PicoParams", "Pico", "PicoError", "find_pico_port"]
 log = logging.getLogger(__name__)
 
 RPI_USB_VID = 0x2E8A
+ESPRESSIF_USB_VID = 0x303A  # the ESP32 variant (same firmware, native USB)
 MICROPYTHON_USB_PID = 0x0005
 _IMU_QUEUE_MAX = 1 << 16  # ~80 s at 833 Hz; the oldest samples are dropped (and counted) beyond
 _EVENT_QUEUE_MAX = 1024
@@ -208,7 +209,7 @@ class Pico:
         if self._transport is None:
             port = self.params.port or find_pico_port()
             if port is None:
-                raise ConnectionError("no Pico found (USB VID 0x2E8A); set PicoParams.port")
+                raise ConnectionError("no Pico found (USB VID 0x2E8A, or an ESP32's 0x303A); set PicoParams.port")
             import serial  # pyserial
 
             self._transport = serial.Serial(port, self.params.baud, timeout=0.05, write_timeout=1.0)
@@ -685,16 +686,18 @@ def _drain_queue(q: queue.Queue) -> None:
 
 
 def find_pico_port() -> str | None:
-    """Serial port of the first Raspberry Pi USB device (VID 0x2E8A), MicroPython PID preferred."""
+    """Serial port of the scanner's controller: the first Raspberry Pi USB device (VID 0x2E8A,
+    MicroPython PID preferred), else an ESP32's native USB port (Espressif's VID 0x303A). A
+    USB-serial bridge chip (CH34x, CP210x) is never picked: set ``PicoParams.port`` for those."""
     try:
         from serial.tools import list_ports
     except ImportError:  # pragma: no cover - pyserial is a hard dependency
         log.warning("pyserial is not installed; cannot look for the Pico")
         return None
-    ports = [p for p in list_ports.comports() if p.vid == RPI_USB_VID]
+    ports = [p for p in list_ports.comports() if p.vid in (RPI_USB_VID, ESPRESSIF_USB_VID)]
     if not ports:
         return None
-    ports.sort(key=lambda p: (p.pid != MICROPYTHON_USB_PID, p.device))
+    ports.sort(key=lambda p: (p.vid != RPI_USB_VID, p.pid != MICROPYTHON_USB_PID, p.device))
     if len(ports) > 1:
-        log.info("several Raspberry Pi USB serial ports (%s); using %s", ", ".join(p.device for p in ports), ports[0].device)
+        log.info("several controller USB serial ports (%s); using %s", ", ".join(p.device for p in ports), ports[0].device)
     return ports[0].device

@@ -81,6 +81,33 @@ The lasers are Class 3R. Never look into them, and point the scanner at a wall o
 | IMU VIN | 3V3(OUT) | 36 | |
 | Laser supply | VBUS | 40 | through the kill toggle on the back cover |
 
+## ESP32 instead of a Pico
+
+The same two files run on an ESP32 with MicroPython. The pin map is written for the **Waveshare
+ESP32-S3-Pico**, a board in the Pico's shape. It uses the **same physical pins** as the table
+above, so the wiring is identical; only the GPIO numbers behind those pins differ, and the
+firmware picks them by itself (`PINS` in `main.py`, chosen by `sys.platform`):
+
+| Function | Pin (same as the Pico) | GPIO on the ESP32-S3-Pico |
+|---|---|---|
+| V-line laser | 4 | GP13 |
+| H-line laser | 5 | GP14 |
+| Dot projector | 9 | GP17 |
+| Trigger button | 20 (to GND, pin 18) | GP40 |
+| IMU SDA / SCL | 6 / 7 | GP15 / GP16 |
+| IMU VIN / laser supply | 36 (3V3) / 40 (VBUS) | |
+
+- **Flash MicroPython:** take the ESP32-S3 build from micropython.org (generic ESP32-S3) and flash
+  it with `esptool` as that page describes. Hold the board's BOOT button while plugging it in.
+  Then copy the two files with mpremote as in section 2.
+- **Port:** the app finds the board's native USB port by itself (Espressif's USB ID). This board
+  also shows a second port from its USB-serial chip (CH343); if only that one answers, set the
+  port by hand in the settings.
+- **Another ESP32 board:** edit the `"esp32"` line of `PINS`. Avoid GPIO 0, 3, 45, 46 (boot
+  pins), 19 and 20 (USB), and 26 to 37 (flash and RAM on many boards).
+- **Status:** tested with the simulated board only (`software/tests/test_firmware.py`). Not yet
+  tried on a real ESP32: the port behaviour and the clock-sync accuracy still need checking.
+
 ## Protocol
 
 ASCII lines, `\n` terminated (`\r\n` accepted), 115200 baud nominal (USB CDC ignores the baud rate).

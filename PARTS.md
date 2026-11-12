@@ -15,6 +15,7 @@ Each link has a **Status**:
 | 2 | **Line laser module** 650 nm 5 mW, Ø12 mm, 3–5 V, adjustable focus (glass lens if offered) | 2 (+spare) | [Amazon search](https://www.amazon.com/s?k=650nm+5mW+line+laser+module+12mm+adjustable+focus) | [Phipps (ships from Australia)](https://www.phippselectronics.com/product/650nm-5mw-red-line-laser-module-with-adjustable-focus-5v-industrial-grade/) | ~$8–15 per pack | Amazon search |
 | 3–4 | **Pattern projector**: pick **option A** or **option B** from the tables below | — | — | — | — | — |
 | 5 | Raspberry Pi Pico (no headers) | 1 | [Adafruit 4864](https://www.adafruit.com/product/4864) | — | $4.00 | ✔ loaded |
+| 5b | **Instead of 5:** Waveshare ESP32-S3-Pico (no headers, SKU 23803); needs a USB-C data cable. Same wiring; not yet tried on a real board | 1 | [Amazon search](https://www.amazon.com/s?k=Waveshare+ESP32-S3-Pico) | [Waveshare](https://www.waveshare.com/esp32-s3-pico.htm?sku=23803) | ~$9 | Amazon search |
 | 6 | IMU: Adafruit LSM6DSOX 6-DoF | 1 | [Adafruit 4438](https://www.adafruit.com/product/4438) | — | $11.95 | ✔ loaded |
 | 7 | Trigger: 16 mm panel-mount momentary pushbutton | 1 | [Adafruit 1504 (green)](https://www.adafruit.com/products/1504) | [1503 (burgundy)](https://www.adafruit.com/products/1503) | ~$1 | search |
 | 8 | Laser kill switch: MTS-102 mini toggle (SPDT, 2-position ON-ON) | 1 | [Amazon search](https://www.amazon.com/s?k=MTS-102+mini+toggle+switch) | — | ~$7 per pack | Amazon search |

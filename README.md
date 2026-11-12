@@ -99,6 +99,7 @@ Trigger button: GP15 (pin 20) ── button ── GND (pin 18)    (internal pul
 IMU (LSM6DSOX): VIN ── 3V3 (pin 36)  GND ── GND  SDA ── GP4 (pin 6)  SCL ── GP5 (pin 7)
 ```
 
+- **No Pico at hand?** A Waveshare ESP32-S3-Pico takes the same firmware and the same wiring, on the same pin numbers (see [firmware/README.md](firmware/README.md), "ESP32 instead of a Pico"). Not yet tried on a real board.
 - PN2222A pinout is **E-B-C** with the flat face toward you and the legs down. Check the datasheet for the part you actually receive; some "2N2222" parts are C-B-E.
 - **Projector option B (LED):** the LED replaces the dot laser and its transistor.
   - VBUS → toggle → LED **+**; LED **−** → 8.2 Ω 3 W resistor → IRLB8721 drain; source → GND.

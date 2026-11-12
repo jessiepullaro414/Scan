@@ -495,6 +495,14 @@ def test_find_pico_port(monkeypatch):
     assert find_pico_port() == "COM7"  # MicroPython PID preferred
     monkeypatch.setattr(list_ports, "comports", lambda: [port("COM3", 0x1234, 1)])
     assert find_pico_port() is None
+    # the ESP32 variant: its native USB port (Espressif's VID) is found; a Pico still comes first;
+    # a USB-serial bridge chip (here WCH's CH343) is not picked automatically, it could be anything
+    monkeypatch.setattr(list_ports, "comports", lambda: [port("COM4", 0x1A86, 0x55D3), port("COM6", 0x303A, 0x4001)])
+    assert find_pico_port() == "COM6"
+    monkeypatch.setattr(list_ports, "comports", lambda: [port("COM6", 0x303A, 0x4001), port("COM7", 0x2E8A, 0x0005)])
+    assert find_pico_port() == "COM7"
+    monkeypatch.setattr(list_ports, "comports", lambda: [port("COM4", 0x1A86, 0x55D3)])
+    assert find_pico_port() is None
 
 
 def test_open_fails_cleanly_without_firmware():

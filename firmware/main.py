@@ -1,5 +1,8 @@
 """OpenHandScan Pico firmware (MicroPython 1.2x on Raspberry Pi Pico RP2040 / Pico 2 RP2350).
 
+Also runs unchanged on an ESP32 with MicroPython (written for the Waveshare ESP32-S3-Pico): the
+pin map is picked by ``sys.platform`` (see PINS). Not yet tried on a real ESP32.
+
 Serial protocol (software/ARCHITECTURE.md section 5A), ASCII lines over USB CDC (stdin/stdout):
 
     HELLO             -> OK HELLO ohs-fw <ver> imu=<LSM6DSOX|NONE>
@@ -48,7 +51,7 @@ import sys
 FW_NAME = "ohs-fw"
 FW_VERSION = "1.1.0"  # 1.1.0: IMU chip temperature (C lines, STATUS temp=)
 
-# Pin map (README.md wiring section)
+# Pin map (README.md wiring section): GPIO numbers on the Raspberry Pi Pico
 PIN_LASER_V = 2  # vertical-line laser, NPN low-side switch via 1 kOhm
 PIN_LASER_H = 3  # horizontal-line laser
 PIN_DOTS = 6  # random-dot projector
@@ -56,6 +59,14 @@ PIN_TRIGGER = 15  # trigger button to GND, internal pull-up
 PIN_SDA = 4  # I2C0 SDA (LSM6DSOX)
 PIN_SCL = 5  # I2C0 SCL
 I2C_ID = 0
+# Per board: (V laser, H laser, dots, trigger, SDA, SCL), chosen by sys.platform.
+# "esp32" is the Waveshare ESP32-S3-Pico, a board in the Pico's shape. Its map uses the SAME
+# physical pins as the Pico (4, 5, 9, 20, 6, 7), so the wiring diagram is the same for both;
+# only the GPIO numbers behind those pins differ. For another ESP32 board, edit this line.
+PINS = {
+    "rp2": (PIN_LASER_V, PIN_LASER_H, PIN_DOTS, PIN_TRIGGER, PIN_SDA, PIN_SCL),
+    "esp32": (13, 14, 17, 40, 15, 16),
+}
 I2C_FREQ = 400000
 PWM_FREQ_HZ = 10000
 
@@ -378,13 +389,21 @@ def _readable(poller, ipoll, pollin):
     return False
 
 
-def run(machine=None, time=None, select=None, stdin=None, stdout=None, max_iterations=None):
+def pin_map(platform):
+    """(V laser, H laser, dots, trigger, SDA, SCL) for ``sys.platform``: the Pico's unless an ESP32."""
+    return PINS.get(platform, PINS["rp2"])
+
+
+def run(machine=None, time=None, select=None, stdin=None, stdout=None, max_iterations=None, platform=None):
     """Device entry point: set up the hardware, then run the main loop.
 
     The module arguments default to the real MicroPython modules (imported lazily). Tests pass
-    stubs and ``max_iterations``; on the device the loop runs until Ctrl-C. Returns the
-    Firmware instance when the loop ends.
+    stubs and ``max_iterations``; on the device the loop runs until Ctrl-C. ``platform``
+    (default ``sys.platform``) picks the pin map. Returns the Firmware instance when the loop ends.
     """
+    if platform is None:
+        platform = sys.platform
+    pin_v, pin_h, pin_dots, pin_trigger, pin_sda, pin_scl = pin_map(platform)
     if machine is None:
         import machine
     if time is None:
@@ -399,14 +418,14 @@ def run(machine=None, time=None, select=None, stdin=None, stdout=None, max_itera
 
     # 1. Emitters off before anything else can fail.
     pwms = []
-    for pin in (PIN_LASER_V, PIN_LASER_H, PIN_DOTS):
+    for pin in (pin_v, pin_h, pin_dots):
         machine.Pin(pin, machine.Pin.OUT, value=0)
         pwm = machine.PWM(machine.Pin(pin))
         pwm.duty_u16(0)
         pwm.freq(PWM_FREQ_HZ)
         pwm.duty_u16(0)
         pwms.append(pwm)
-    button = machine.Pin(PIN_TRIGGER, machine.Pin.IN, machine.Pin.PULL_UP)
+    button = machine.Pin(pin_trigger, machine.Pin.IN, machine.Pin.PULL_UP)
     clock = UnwrappedClock(time.ticks_us, time.ticks_diff)
 
     # 2. The IMU is optional: without it the firmware still drives emitters and the trigger.
@@ -415,13 +434,15 @@ def run(machine=None, time=None, select=None, stdin=None, stdout=None, max_itera
     try:
         import lsm6dsox
 
-        i2c = machine.I2C(I2C_ID, sda=machine.Pin(PIN_SDA), scl=machine.Pin(PIN_SCL), freq=I2C_FREQ)
+        i2c = machine.I2C(I2C_ID, sda=machine.Pin(pin_sda), scl=machine.Pin(pin_scl), freq=I2C_FREQ)
         imu = lsm6dsox.LSM6DSOX(i2c)
     except Exception as e:
         imu_err = e
 
     fw = Firmware(pwms, button, imu, clock, stdout.write)
     fw.log("boot %s %s imu=%s" % (FW_NAME, FW_VERSION, fw.imu_name()))
+    if platform == "esp32":
+        fw.log("board esp32")
     if imu_err is not None:
         fw.log("imu init failed: %s" % (imu_err,))
 
