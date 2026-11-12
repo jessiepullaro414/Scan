@@ -28,7 +28,7 @@
 
 part = "assembly"; // [assembly, head, faceplate, back_cover, grip_left, grip_right, led_cartridge]
 show_fans = true;
-projector = "laser"; // [laser, led]  laser = dot laser + DOE disc;  led = LED + printed mask + M12 lens
+projector = "led"; // [led, laser]  led = LED + printed mask + M12 lens (the current build);  laser = dot laser + DOE disc
 $fn = 72;
 eps = 0.01;
 
@@ -120,13 +120,40 @@ grip_x      = 30;
 grip_y      = 34;
 grip_r      = 5;    // leaves a 20 mm flat front face for the 16 mm button bezel
 grip_wall   = 2.5;
-ledge_t     = 7;
+ledge_t     = 14;   // solid top of the grip: takes the screws from above and from the yoke
 grip_screws = [[7.5, -10], [-7.5, -10], [7.5, -26], [-7.5, -26]];
 button_d    = 16.2; // Adafruit 16 mm panel-mount momentary pushbutton (#1502-#1505)
-button_z    = -24;
+button_z    = -30;  // the button's body tilts up inside: keep it below the ledge
 pico_cz     = -64;
 pico_standoff_h = 4;
 boss_d      = 9;
+grip_r_back = 8;    // rear (palm) corners
+grip_r_end  = 6;    // rounded bottom end (seen from the side)
+grip_ring_n = 8;    // shallow rings around the lower grip
+grip_ring_pitch = 8;
+grip_ring_w = 2;
+grip_ring_d = 0.7;
+
+/* [Yoke: the head's two cheeks that clamp the top of the grip] */
+yoke_h      = 16;   // how far the cheeks reach down the grip
+yoke_t      = 7;    // cheek thickness at its lower end
+yoke_reach  = 44;   // where the gusset meets the head's underside (X from the centre)
+yoke_fit    = 0.2;  // gap to the grip per side
+yoke_screw_z = 10.5;        // cross screws: below the head's underside ...
+yoke_screw_y = [-9, -31];   // ... at these world Y (clear of the cable slot and the top inserts)
+yoke_cb_floor = 4.3;        // plastic left under the screw head (M3 x 10 reaches the insert)
+
+/* [Alignment pins and edges] */
+pin_d     = 3;      // printed pins: faceplate and back cover into the head
+pin_h     = 3;
+pin_fit   = 0.3;    // hole = pin + this
+pin_pos   = [[-56, 9], [56, -9]];  // world x, z. The second hole is a short slot
+gpin_d    = 4;      // pins between the grip halves
+gpin_h    = 3;
+gpin_pos  = [[-7, -7], [-31, -7]]; // world y, z below the head's underside
+corner_r  = 3;      // outline radius of the head, faceplate and cover
+edge_c    = 1.2;    // chamfer on the visible outer edges
+logo      = "OpenHandScan";
 
 // ------------------------------- derived -------------------------------
 bw = blk[0];  bh = blk[1];
@@ -163,15 +190,47 @@ module proj_frame()    translate([0, -head_d/2, proj_z])  children();
 module led_frame()     translate([0, 0, led_proj_z]) rotate([-led_tilt, 0, 0]) children();
 module grip_frame()    translate([0, grip_cy, head_bot])  rotate([-grip_angle,0,0]) children();
 
+// ---- shared small features ----
+// a pin with a lead-in cone, standing on z = 0
+module pin(d, h) { cylinder(d=d, h=h - d/4 + eps); translate([0, 0, h - d/4]) cylinder(d1=d, d2=d/2, h=d/4); }
+// its hole (along +z from z = 0); slot > 0 makes it a short slot along x
+module pin_hole(d, h, slot=0)
+    hull() for (sx=[-1,1]) translate([sx*slot/2, 0, -eps]) cylinder(d=d + pin_fit, h=h + 0.6 + eps);
+// a flat plate with rounded corners and a chamfer around its z = 0 face
+module plate(x, y, t) {
+    n = 4;
+    for (i=[0:n-1]) translate([0, 0, i*edge_c/n])
+        linear_extrude(edge_c/n + eps) offset(delta=-(n - i)*edge_c/n) offset(r=corner_r) square([x - 2*corner_r, y - 2*corner_r], center=true);
+    translate([0, 0, edge_c]) linear_extrude(t - edge_c) offset(r=corner_r) square([x - 2*corner_r, y - 2*corner_r], center=true);
+}
+
 // =============================== HEAD ==================================
+// The head's outline, seen from the front (2D x = world x, 2D y = world z).
+module head_outline_raw() {
+    translate([-bw/2, -bh/2]) square([bw, bh]);                                   // camera block
+    translate([bw/2 - 1, -arm_w/2]) square([base_v - bw/2, arm_w]);               // V arm
+    translate([base_v - lblk_l/2, -lblk_w/2]) square([lblk_l, lblk_w]);           // V laser block
+    translate([-harm_w/2, bh/2 - 1]) square([harm_w, base_h - bh/2]);             // H arm (+projector)
+    translate([-lblk_w/2, base_h - lblk_l/2]) square([lblk_w, lblk_l]);           // H laser block
+    if (projector == "led")                                                        // LED projector block
+        translate([-led_block_w/2, led_z0]) square([led_block_w, led_z1 - led_z0]);
+    xi = grip_x/2 + yoke_fit;                                                      // yoke: cheeks + gussets
+    for (sx=[-1,1]) scale([sx, 1])
+        polygon([[xi, head_bot + 1], [xi, head_bot - yoke_h], [xi + yoke_t, head_bot - yoke_h],
+                 [yoke_reach, head_bot], [yoke_reach, head_bot + 1]]);
+}
+// inside corners filled (stiffer arms), outside corners rounded; the grip's slot stays square
+module head_outline() difference() {
+    offset(r=corner_r) offset(r=-corner_r - 6) offset(r=6) head_outline_raw();
+    translate([-grip_x/2 - yoke_fit, head_bot - yoke_h - 10]) square([grip_x + 2*yoke_fit, yoke_h + 10]);
+}
 module head_body() {
-    translate([-bw/2, -head_d, -bh/2]) cube([bw, head_d, bh]);                            // camera block
-    translate([bw/2 - 1, -head_d, -arm_w/2]) cube([base_v - bw/2, head_d, arm_w]);       // V arm
-    translate([base_v - lblk_l/2, -head_d, -lblk_w/2]) cube([lblk_l, head_d, lblk_w]);   // V laser block
-    translate([-harm_w/2, -head_d, bh/2 - 1]) cube([harm_w, head_d, base_h - bh/2]);     // H arm (+projector)
-    translate([-lblk_w/2, -head_d, base_h - lblk_l/2]) cube([lblk_w, head_d, lblk_l]);   // H laser block
-    if (projector == "led")                                                               // LED projector block
-        translate([-led_block_w/2, -head_d, led_z0]) cube([led_block_w, head_d, led_z1 - led_z0]);
+    n = 4;                                                                         // chamfered back edge
+    rotate([90, 0, 0]) {
+        linear_extrude(head_d - edge_c) head_outline();
+        for (i=[0:n-1]) translate([0, 0, head_d - edge_c + i*edge_c/n - eps])
+            linear_extrude(edge_c/n + eps) offset(delta=-(i + 1)*edge_c/n) head_outline();
+    }
     hull() {                                                                              // brace
         // ends sit 1 mm inside the laser blocks (a tangent contact makes a non-manifold vertex)
         translate([base_v - lblk_l/2 - brace_d/2 + 1, -brace_depth, lblk_w/2 - brace_d/2 + 1]) ycyl(brace_d, brace_depth);
@@ -215,6 +274,16 @@ module head() {
             translate([p[0], -ins_depth, p[1]]) ycyl(ins_d, ins_depth + eps);
             translate([p[0], -head_d - eps, p[1]]) ycyl(ins_d, ins_depth + eps);
         }
+        // alignment pin holes: faceplate pins (front), back cover pins (back, mirrored in z)
+        for (i = [0:1]) {
+            translate([pin_pos[i][0], 0, pin_pos[i][1]]) rotate([90, 0, 0]) pin_hole(pin_d, pin_h, i*0.8);
+            translate([pin_pos[i][0], -head_d, pin_pos[i][1]]) rotate([-90, 0, 0]) pin_hole(pin_d, pin_h, i*0.8);
+        }
+        // yoke cross screws: M3 x 10 from each side into the grip's ledge
+        for (sx=[-1,1], y = yoke_screw_y) translate([0, y, head_bot - yoke_screw_z]) scale([sx, 1, 1]) {
+            xcyl(m3_clear, yoke_reach + 1);
+            translate([grip_x/2 + yoke_fit + yoke_cb_floor, 0, 0]) xcyl(m3_head_d, yoke_reach);
+        }
     }
 }
 
@@ -257,9 +326,10 @@ module led_cartridge() {
 module faceplate() {
     difference() {
         union() {
-            rrect(bw, bh, 4, fp_t);
+            plate(bw, bh, fp_t);
             for (h = st_holes) translate([h[0], h[1], fp_t - eps])
                 cylinder(d=st_standoff_d, h=st_standoff_h + eps);
+            for (p = pin_pos) translate([p[0], p[1], fp_t - eps]) pin(pin_d, pin_h);   // into the head's front
         }
         for (sx=[-1,1]) translate([sx*st_base/2, 0, -eps])               // lens openings, 45 deg flare
             cylinder(d1=st_lens_hole + 2*fp_t, d2=st_lens_hole, h=fp_t + 2*eps);
@@ -278,11 +348,15 @@ module faceplate() {
 module back_cover() {
     difference() {
         union() {
-            rrect(bw, bh, 4, cover_t);
+            plate(bw, bh, cover_t);
             for (sx=[-1,1], sy=[-1,1])
                 translate([imu_pos[0] + sx*imu_holes[0]/2, -imu_pos[1] + sy*imu_holes[1]/2, cover_t - eps])
                     cylinder(d=5, h=imu_standoff_h + eps);
+            for (p = pin_pos) translate([p[0], -p[1], cover_t - eps]) pin(pin_d, pin_h);   // into the head's back
         }
+        // name, sunk into the outside (flipped here, like the part itself, so it reads from behind the scanner)
+        translate([0, -14, -eps]) mirror([0, 1, 0]) linear_extrude(0.6)
+            text(logo, size=5.5, font="Liberation Sans:style=Bold", halign="center", valign="center", spacing=1.05);
         for (p = frame_screws) translate([p[0], -p[1], -eps]) cylinder(d=m3_clear, h=cover_t + 2*eps);
         translate([toggle_pos[0], -toggle_pos[1], -eps]) cylinder(d=toggle_d, h=cover_t + 2*eps);
         for (sx=[-1,1], sy=[-1,1])
@@ -292,9 +366,26 @@ module back_cover() {
 }
 
 // =============================== GRIP ==================================
-module grip_outer_l() translate([0,0,-grip_len]) rrect(grip_x, grip_y, grip_r, grip_len + 25);
-module grip_inner_l() translate([0,0,-grip_len + grip_wall])
-    rrect(grip_x - 2*grip_wall, grip_y - 2*grip_wall, grip_r - grip_wall, grip_len + 30);
+// Grip section (local frame, z along the grip): flat front for the button, rounder at the palm.
+module grip_sec(inset=0) hull() for (sx=[-1,1]) {
+    translate([sx*(grip_x/2 - grip_r), grip_y/2 - grip_r]) circle(r=grip_r - inset);
+    translate([sx*(grip_x/2 - grip_r_back), -grip_y/2 + grip_r_back]) circle(r=grip_r_back - inset);
+}
+// side view with a rounded bottom end
+module grip_side(inset=0) hull() {
+    for (sy=[-1,1]) translate([0, sy*(grip_y/2 - grip_r_end), -grip_len + grip_r_end])
+        xcyl(2*(grip_r_end - inset), grip_x + 2, center=true);
+    translate([-grip_x/2 - 1, -grip_y/2 + inset, 20]) cube([grip_x + 2, grip_y - 2*inset, 10]);
+}
+module grip_outer_l() difference() {
+    intersection() { translate([0,0,-grip_len]) linear_extrude(grip_len + 25) grip_sec(); grip_side(); }
+    for (i=[0:grip_ring_n-1]) translate([0, 0, -grip_len + 14 + i*grip_ring_pitch])   // grip rings
+        linear_extrude(grip_ring_w) difference() { offset(delta=1) grip_sec(); grip_sec(grip_ring_d); }
+}
+module grip_inner_l() intersection() {
+    translate([0,0,-grip_len + grip_wall]) linear_extrude(grip_len + 30) grip_sec(grip_wall);
+    grip_side(grip_wall);
+}
 module below_head() translate([-100, -150, head_bot - 300]) cube([200, 300, 300]);
 module boss_pos() for (sy=[-1,1])
     translate([0, sy*(grip_y/2 - grip_wall - 3), -grip_len + grip_wall + boss_d/2 - 0.5]) children(); // sunk 0.5 mm into the floor (avoids a tangent, non-manifold contact)
@@ -312,7 +403,10 @@ module grip_full() {
                 }
             }
             grip_frame() {
-                boss_pos() xcyl(boss_d, grip_x - grip_wall, center=true);
+                intersection() {                               // bosses stay inside the rounded shell
+                    boss_pos() xcyl(boss_d, grip_x - grip_wall, center=true);
+                    grip_outer_l();
+                }
                 pico_pos() translate([grip_x/2 - grip_wall - pico_standoff_h, 0, 0])
                     xcyl(5, pico_standoff_h + 0.5);
             }
@@ -321,6 +415,8 @@ module grip_full() {
             cube([cable_slot[0], cable_slot[1], ledge_t + 2]);
         for (s = grip_screws)
             translate([s[0], s[1], head_bot - ins_depth]) cylinder(d=ins_d, h=ins_depth + eps);
+        for (sx=[-1,1], y = yoke_screw_y)                      // inserts for the yoke's cross screws
+            translate([sx*(grip_x/2 - ins_depth + 0.3), y, head_bot - yoke_screw_z]) scale([sx, 1, 1]) xcyl(ins_d, ins_depth);
         grip_frame() {
             translate([-cable_slot[0]/2, -cable_slot[1]/2, -grip_len - 1])
                 cube([cable_slot[0], cable_slot[1], grip_wall + 2]);
@@ -335,6 +431,8 @@ module grip_left() {
     difference() {
         intersection() { grip_full(); translate([-100, -150, -400]) cube([100, 300, 500]); }
         grip_frame() boss_pos() translate([-ins_depth, 0, 0]) xcyl(ins_d, ins_depth + eps);
+        for (p = gpin_pos) translate([0, p[0], head_bot + p[1]])                 // holes for the right half's pins
+            rotate([0, -90, 0]) hull() for (s=[-1,1]) translate([0, 0, -eps]) cylinder(d=gpin_d + pin_fit, h=gpin_h + 0.6);
     }
 }
 
@@ -346,6 +444,7 @@ module grip_right() {
             translate([grip_x/2 - m3_head_h, 0, 0]) xcyl(m3_head_d, m3_head_h + 1);
         }
     }
+    for (p = gpin_pos) translate([eps, p[0], head_bot + p[1]]) rotate([0, -90, 0]) pin(gpin_d, gpin_h);  // into the left half
 }
 
 // ============================= DUMMIES =================================
@@ -382,11 +481,11 @@ module dummy_pico() {
 }
 
 module assembly() {
-    color("#4a6fa5") head();
-    color("#2b2b2b") translate([0, fp_t, 0]) rotate([90,0,0]) faceplate();
-    color("#4a6fa5", 0.6) translate([0, -head_d - cover_t, 0]) rotate([-90,0,0]) back_cover();
-    color("#e67e22") grip_left();
-    color("#f0a050") grip_right();
+    color("#3b4048") head();
+    color("#17181b") translate([0, fp_t, 0]) rotate([90,0,0]) faceplate();
+    color("#17181b") translate([0, -head_d - cover_t, 0]) rotate([-90,0,0]) back_cover();
+    color("#e8762c") grip_left();
+    color("#e8762c") grip_right();
     dummy_stereo();
     laser_v_frame() { dummy_laser(); if (show_fans) fan(true); }
     laser_h_frame() { dummy_laser(); if (show_fans) fan(false); }

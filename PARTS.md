@@ -23,7 +23,7 @@ Each link has a **Status**:
 | 11 | 26 AWG silicone wire (get 3 colours) | 3 spools | [Adafruit 2514 (blue)](https://www.adafruit.com/product/2514) | other colours: Adafruit 2517 black / 2516 green / 2518 white (IDs not checked) | $4.95 each | ✔ loaded (2514) |
 | 12 | Heat-shrink assortment | 1 | [Adafruit 4559](https://www.adafruit.com/product/4559) | — | $9.95 | ✔ loaded |
 | 13 | Micro-USB **data** cable, ~2 m (for the Pico) | 1 | [Amazon search](https://www.amazon.com/s?k=micro+usb+data+cable+6ft) | — | ~$8 | Amazon search |
-| 14 | M3 heat-set inserts, M3 × 5.7, OD 4.6 (100) | 18 used | [Prusa 100 pcs](https://www.prusa3d.com/en/product/threaded-inserts-m3-standard-100-pcs/) | [VXB (US)](https://vxb.com/products/100-pcs-m3-brass-heat-set-threaded-inserts-for-3d) | $10.99 / $19.99 | search |
+| 14 | M3 heat-set inserts, M3 × 5.7, OD 4.6 (100) | 22 used | [Prusa 100 pcs](https://www.prusa3d.com/en/product/threaded-inserts-m3-standard-100-pcs/) | [VXB (US)](https://vxb.com/products/100-pcs-m3-brass-heat-set-threaded-inserts-for-3d) | $10.99 / $19.99 | search |
 | 15 | M3 socket-head screw kit (must include 8, 10, 12, 16 mm) | 1 | [Amazon search](https://www.amazon.com/s?k=M3+socket+head+cap+screw+assortment+kit+8mm+10mm+12mm+16mm) | — | ~$12 | Amazon search |
 | 16 | M2 + M2.5 screw kit (M2×5–6, M2.5×5) | 1 | [Amazon search](https://www.amazon.com/s?k=M2+M2.5+socket+head+screw+assortment+kit) | — | ~$12 | Amazon search |
 | 17 | ASA filament 1.75 mm, 1 kg, black | 1 | [MatterHackers: Polymaker PolyLite ASA](https://www.matterhackers.com/store/l/polymaker-polylite-asa-black-175mm-1kg/sk/M4QCXUKG) | [B&H](https://www.bhphotovideo.com/c/product/1721180-REG/polymaker_pf01001_polylite_asa_1_75mm_1000g.html) | ~$30 | ✔ loaded (MH) |
