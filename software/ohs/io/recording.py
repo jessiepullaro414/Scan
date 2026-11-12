@@ -20,6 +20,8 @@ import logging
 import math
 import queue
 import threading
+import time
+from collections import deque
 from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
@@ -97,7 +99,8 @@ class RecordingWriter:
         (self.path / "frames").mkdir(parents=True, exist_ok=True)
         self._png = [cv2.IMWRITE_PNG_COMPRESSION, int(png_compression)]
         self._pool = ThreadPoolExecutor(max_workers=max(1, workers), thread_name_prefix="rec-png")
-        self._pending: list[Future] = []
+        self._pending: deque[tuple[Future, list]] = deque()  # PNG writes in frame order, with their frames.csv row
+        self._t_flush = time.monotonic()
         self.error: BaseException | None = None  # the first failed frame write
         self._lock = threading.Lock()
         self._frames = open(self.path / "frames.csv", "w", newline="", encoding="utf-8")
@@ -128,14 +131,35 @@ class RecordingWriter:
             self.meta["image_size"] = list(frame.image_size)
         fut = self._pool.submit(_imwrite, str(self.path / "frames" / name), sbs, self._png)
         with self._lock:
-            self._pending.append(fut)
-            self._fw.writerow([frame.index, f"{frame.t_host:.6f}", name])
+            self._pending.append((fut, [frame.index, f"{frame.t_host:.6f}", name]))
             self._n += 1
-            if len(self._pending) > 64:
-                for f in self._pending:
-                    if self.error is None and f.done() and f.exception() is not None:
-                        self.error = f.exception()
-                self._pending = [f for f in self._pending if not f.done()]
+            self._write_done_rows()
+            self._flush_now_and_then()
+
+    def _write_done_rows(self) -> None:
+        """Write the ``frames.csv`` rows of the PNG writes that have finished, in frame order (so a
+        row never points at a PNG that is not yet complete). Hold ``self._lock``."""
+        while self._pending and self._pending[0][0].done():
+            fut, row = self._pending.popleft()
+            if self.error is None and fut.exception() is not None:
+                self.error = fut.exception()
+            self._fw.writerow(row)
+
+    def _flush_now_and_then(self) -> None:
+        """Flush the CSV files about once a second (no fsync), so a crash loses little. Hold ``self._lock``."""
+        if time.monotonic() - self._t_flush >= 1.0:
+            self._flush()
+
+    def _flush(self) -> None:
+        self._write_done_rows()
+        for fh in (self._frames, self._imu, self._events):
+            fh.flush()
+        self._t_flush = time.monotonic()
+
+    def flush(self) -> None:
+        """Write the rows of the finished frames and flush the CSV files (no fsync)."""
+        with self._lock:
+            self._flush()
 
     def write_imu(self, samples: Iterable[ImuSample]) -> None:
         with self._lock:
@@ -144,6 +168,7 @@ class RecordingWriter:
                 self._iw.writerow(
                     [f"{s.t_host:.6f}", f"{s.t_device:.6f}", *(f"{x:.6f}" for x in g), *(f"{x:.5f}" for x in a)]
                 )
+            self._flush_now_and_then()
 
     def write_event(self, event: Event) -> None:
         with self._lock:
@@ -152,6 +177,7 @@ class RecordingWriter:
                 c = _celsius(event.value)
                 if c is not None:
                     self._temps.append(c)
+            self._flush_now_and_then()
 
     def write_calibration(self, calib: ScannerCalibration) -> None:
         calib.save(self.path / "calibration.json")
@@ -182,9 +208,8 @@ class RecordingWriter:
             return
         self._closed = True
         self._pool.shutdown(wait=True)
-        for f in self._pending:
-            if self.error is None and f.done() and f.exception() is not None:
-                self.error = f.exception()
+        with self._lock:
+            self._write_done_rows()  # all are done now
         if self.error is not None:
             log.error("frame write failed: %s", self.error)
         for fh in (self._frames, self._imu, self._events):

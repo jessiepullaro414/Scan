@@ -166,6 +166,51 @@ def test_recording_failed_frame_write_is_reported(tmp_path, monkeypatch, mode):
     assert RecordingReader(rec).meta["n_frames"] == 70  # the folder is still closed properly
 
 
+def test_recording_lists_only_written_frames_before_close(tmp_path, monkeypatch):
+    """As after a crash mid-scan: before close(), after a flush, every frame listed in frames.csv
+    has a complete, readable PNG, even while later PNGs are still half written."""
+    import threading
+    import time
+
+    import cv2
+
+    real_imwrite = cv2.imwrite
+    release = threading.Event()
+    done = []
+
+    def slow_imwrite(path, img, params):
+        if int(path[-10:-4]) >= 5:  # frames 5..7: half a file on disk, then wait
+            ok, buf = cv2.imencode(".png", img, params)
+            with open(path, "wb") as fh:
+                fh.write(buf.tobytes()[:20])
+            release.wait(10)
+        ok = real_imwrite(path, img, params)
+        done.append(path)
+        return ok
+
+    monkeypatch.setattr(cv2, "imwrite", slow_imwrite)
+    rng = np.random.default_rng(4)
+    rec = tmp_path / "rec"
+    w = RecordingWriter(rec, source="sim")
+    try:
+        for i in range(8):
+            w.write_frame(StereoFrame(i, 10.0 + i / 30, rng.integers(0, 255, (40, 64), dtype=np.uint8),
+                                      rng.integers(0, 255, (40, 64), dtype=np.uint8)))
+        t_end = time.monotonic() + 10
+        while len(done) < 5 and time.monotonic() < t_end:
+            time.sleep(0.01)
+        w.flush()
+        r = RecordingReader(rec)  # what a reader sees after a crash at this point
+        assert len(r) == 5
+        for i in range(len(r)):
+            assert r.frame(i).index == i
+    finally:
+        release.set()
+        w.close()
+    r = RecordingReader(rec)
+    assert len(r) == 8 and list(r.indices) == list(range(8))
+
+
 def _small_recording(path, n=9):
     rng = np.random.default_rng(3)
     with RecordingWriter(path, source="sim") as w:

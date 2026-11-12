@@ -500,7 +500,7 @@ processing), S1 (start-up).
   (nothing raised, `error` None) and pass now. A clean recording makes the same `cv2.imwrite`
   call with the same arguments. `test_core.py` and `test_app_live.py`: 58 passed.
 
-### [ ] B3. A crash mid-scan can leave an unreadable recording (Opus, M) ✔
+### [x] B3. A crash mid-scan can leave an unreadable recording (Opus, M) ✔
 - **Where:** `recording.py:67-70`, `:96`, `:138-158`; `server/projects.py:375` (`recover_stale`).
 - **Problem:** the `frames.csv` row is written when the PNG is queued, before the file exists, and
   the three CSV files are only flushed at `close()`. After a crash the index can be missing rows
@@ -511,6 +511,17 @@ processing), S1 (start-up).
 - **Guard:** `test_recording_roundtrip`, `test_scan_recording_roundtrip`,
   `test_process_recording_writes_everything`: a clean recording stays byte-identical. Add first:
   write N frames, do not call `close()`, flush, then every listed PNG must be readable.
+- **Done 2026-11-12.** Pending writes are a deque of (future, row) in frame order; a row is written
+  once its PNG write has returned (`_write_done_rows`), and the CSV files are flushed about once a
+  second from `write_frame`/`write_imu`/`write_event` (new public `flush()`, no fsync). No `.tmp`
+  + rename: a listed PNG is now always complete, and neither the reader nor `recover_stale`
+  opens an unlisted one. New test `test_recording_lists_only_written_frames_before_close`
+  (frames 5-7 left half written): on the old code all 8 rows were listed (`8 == 5` failed). A
+  clean recording is byte-identical: 150 frames with IMU, events, poses and depth written with
+  the old and the new module, 159 files each, no difference except `meta.json`'s `created` time.
+  `test_core.py`, `test_sim_datasets.py`, `test_app_pipeline.py`, `test_app_live.py`: 82 passed.
+  Known and left: a frame whose write failed still gets its row (so `n_frames` counts it; `close()`
+  raises, B2); and the last CSV line can be torn by a crash, see B14.
 
 ### [ ] B4. The recording backlog has no limit and is not shown (Sonnet, M) ✔
 - **Where:** `app/live.py:336` (unbounded queue), `recording.py:64/93` (unbounded pool queue),
@@ -652,6 +663,15 @@ processing), S1 (start-up).
   False, 1 hole, to watertight True, 0 holes. Leaving the loop out would leave the mesh open,
   which is worse for an STL. The stats count such a loop as a hole while the outline list (B12)
   does not show it; Fill holes then closes it, so the two agree after a fill.
+
+### [ ] B14. A crash can leave a torn last line in a recording's CSV files (Sonnet, S) ○
+- **Found 2026-11-12** while doing B3: Python flushes a file's buffer when it fills (8 KB), which
+  can be in the middle of a line, so after a crash the last line of `frames.csv` (or `imu.csv`)
+  can be cut short. `RecordingReader.__init__` does not skip such a row (it can raise, or keep a
+  row without a file name), and `_count_rows` in `server/projects.py` (`recover_stale`) counts it.
+- **Change:** confirm first with a cut `frames.csv`; then let the reader and `_count_rows` skip an
+  incomplete last row (only the last one).
+- **Guard:** `test_core.py` recording tests; `recover_stale` tests; a new test with a cut file.
 
 ---
 
