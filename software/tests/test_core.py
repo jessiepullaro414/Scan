@@ -211,6 +211,43 @@ def test_recording_lists_only_written_frames_before_close(tmp_path, monkeypatch)
     assert len(r) == 8 and list(r.indices) == list(range(8))
 
 
+def test_recording_caps_frames_in_flight(tmp_path, monkeypatch):
+    """With slow PNG writes, write_frame waits once twice the workers' frames are in flight, and
+    ``backlog`` counts them."""
+    import threading
+    import time
+
+    import cv2
+
+    real_imwrite = cv2.imwrite
+    release = threading.Event()
+
+    def slow_imwrite(*args, **kw):
+        release.wait(10)
+        return real_imwrite(*args, **kw)
+
+    monkeypatch.setattr(cv2, "imwrite", slow_imwrite)
+    img = np.zeros((8, 8), np.uint8)
+    w = RecordingWriter(tmp_path / "rec", source="sim", workers=2)
+
+    def feed():
+        for i in range(10):
+            w.write_frame(StereoFrame(i, 10.0 + i / 30, img, img))
+
+    th = threading.Thread(target=feed, daemon=True)
+    th.start()
+    try:
+        time.sleep(0.3)
+        assert th.is_alive()  # waiting for a slot
+        assert w.backlog == 4  # 2 x 2 workers
+    finally:
+        release.set()
+        th.join(10)
+        w.close()
+    assert not th.is_alive() and w.backlog == 0
+    assert len(RecordingReader(tmp_path / "rec")) == 10
+
+
 def _small_recording(path, n=9):
     rng = np.random.default_rng(3)
     with RecordingWriter(path, source="sim") as w:

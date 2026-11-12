@@ -523,7 +523,7 @@ processing), S1 (start-up).
   Known and left: a frame whose write failed still gets its row (so `n_frames` counts it; `close()`
   raises, B2); and the last CSV line can be torn by a crash, see B14.
 
-### [ ] B4. The recording backlog has no limit and is not shown (Sonnet, M) ✔
+### [x] B4. The recording backlog has no limit and is not shown (Sonnet, M) ✔
 - **Where:** `app/live.py:336` (unbounded queue), `recording.py:64/93` (unbounded pool queue),
   `live.py:361` (`backlog` has no caller).
 - **Problem:** if PNG encoding falls behind the camera, each waiting frame holds about 4 MB and
@@ -534,6 +534,18 @@ processing), S1 (start-up).
 - **Guard:** `test_latest_slot_and_recorder`, `test_sim_device_previews_and_status`. Add first: a
   slow fake writer, then check the cap and the backlog field.
 - The real throughput against the real camera needs the hardware; the cap and the display do not.
+- **Done 2026-11-12.** `RecordingWriter` defaults to `min(8, os.cpu_count())` workers and waits on
+  the oldest PNG write while twice the workers' frames are unwritten (only the `ohs-recorder`
+  thread waits; the camera thread only puts into the Recorder's queue). `Recorder.backlog` =
+  frames in its queue + the writer's unwritten PNGs; a warning once past 120 frames (~0.5 GB, ~2 s
+  at 60 fps). The status message has a new field `record_backlog` (0 when idle); the app does not
+  show it yet. New tests: `test_recording_caps_frames_in_flight` (old code: the writing thread
+  never waited), `test_recorder_backlog_counts_waiting_frames_and_warns_once` (old: backlog 0
+  instead of 30), and `record_backlog` checks in two `test_server_live.py` tests (old: KeyError).
+  A clean recording is byte-identical (same 150-frame comparison as B3). `test_core.py`,
+  `test_app_live.py`, `test_server_live.py`, `test_server_devices.py`: 71 passed. The Recorder's
+  own queue is still unbounded (dropping camera frames is a product decision); `studio.py` reads
+  the session's private `_recorder` (a public accessor would be cleaner).
 
 ### [x] B5. Rewind may not restore the reconstruction's weights (Opus, S-M) ✔
 - **Where:** `ohs/server/session.py:809-831` (`_scale_weights`), `ohs/track/recon_tsdf.py`

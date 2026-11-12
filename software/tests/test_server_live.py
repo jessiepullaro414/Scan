@@ -116,6 +116,7 @@ def test_sim_device_previews_and_status(env):
             assert bytes(payload[:2]) == b"\xff\xd8"  # JPEG
         st = seen["status"][0]
         assert 150 < st["distance_mm"] < 400 and st["fps"]["camera"] > 5 and st["tracking"]["state"] == "idle"
+        assert st["record_backlog"] == 0  # frames waiting to be written: none while not recording
 
 
 def test_scan_rewind_stop_and_process(env):
@@ -150,6 +151,7 @@ def test_scan_rewind_stop_and_process(env):
         assert last["session"]["frames"] > 0 and last["session"]["elapsed_s"] > 0
         assert last["tracking"]["state"] in ("ok", "weak") and last["fps"]["pipeline"] > 0
         assert last["laser_points"] > 0 and last["model"]["triangles"] > 0 and last["distance_mm"] > 100
+        assert all(isinstance(m["record_backlog"], int) and m["record_backlog"] >= 0 for m in sts)
         assert any(m["type"] == "session" and m["state"] == "scanning" for m in got["session"])
         rw = _post(url, "/api/scan/rewind", {"seconds": 0.5})
         assert rw.status_code == 200, rw.text

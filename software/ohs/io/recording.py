@@ -18,11 +18,13 @@ import csv
 import json
 import logging
 import math
+import os
 import queue
 import threading
 import time
 from collections import deque
 from concurrent.futures import Future, ThreadPoolExecutor
+from concurrent.futures import wait as futures_wait
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable, Iterator
@@ -89,7 +91,7 @@ class RecordingWriter:
         path: str | Path,
         overwrite: bool = False,
         png_compression: int = 1,
-        workers: int = 4,
+        workers: int | None = None,
         source: str = "camera",
         **meta: object,
     ) -> None:
@@ -98,7 +100,9 @@ class RecordingWriter:
             raise FileExistsError(f"recording folder {self.path} is not empty")
         (self.path / "frames").mkdir(parents=True, exist_ok=True)
         self._png = [cv2.IMWRITE_PNG_COMPRESSION, int(png_compression)]
-        self._pool = ThreadPoolExecutor(max_workers=max(1, workers), thread_name_prefix="rec-png")
+        workers = max(1, min(8, os.cpu_count() or 4) if workers is None else int(workers))
+        self._pool = ThreadPoolExecutor(max_workers=workers, thread_name_prefix="rec-png")
+        self._max_in_flight = 2 * workers  # write_frame waits beyond this many unwritten frames
         self._pending: deque[tuple[Future, list]] = deque()  # PNG writes in frame order, with their frames.csv row
         self._t_flush = time.monotonic()
         self.error: BaseException | None = None  # the first failed frame write
@@ -124,8 +128,22 @@ class RecordingWriter:
         self._write_meta()
 
     # ------------------------------------------------------------------ writing
+    @property
+    def backlog(self) -> int:
+        """Frames handed to :meth:`write_frame` whose rows are not written yet (PNG queued or being written)."""
+        return len(self._pending)
+
     def write_frame(self, frame: StereoFrame) -> None:
+        """Queue one frame's PNG. Waits for the oldest PNG write while twice the workers' frames are
+        unwritten, so slow encoding can not pile up frames in memory here."""
         name = f"{frame.index:06d}.png"
+        while True:
+            with self._lock:
+                self._write_done_rows()
+                if len(self._pending) < self._max_in_flight:
+                    break
+                oldest = self._pending[0][0]
+            futures_wait([oldest])
         sbs = frame.to_sbs()
         if "image_size" not in self.meta:
             self.meta["image_size"] = list(frame.image_size)

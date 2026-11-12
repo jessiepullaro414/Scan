@@ -761,6 +761,32 @@ def test_recorder_reports_failed_frame_write(tmp_path, monkeypatch):
     assert s["n_frames"] == 3 and RecordingReader(tmp_path / "r").meta["n_frames"] == 3
 
 
+def test_recorder_backlog_counts_waiting_frames_and_warns_once(tmp_path, monkeypatch, caplog):
+    release = threading.Event()
+    real_imwrite = cv2.imwrite
+
+    def slow_imwrite(*args, **kw):
+        release.wait(10)
+        return real_imwrite(*args, **kw)
+
+    monkeypatch.setattr(cv2, "imwrite", slow_imwrite)
+    monkeypatch.setattr(live.Recorder, "BACKLOG_WARN", 10, raising=False)
+    rec = live.Recorder(tmp_path / "r")
+    img = np.zeros((8, 8), np.uint8)
+    try:
+        with caplog.at_level("WARNING", logger=live.log.name):
+            for i in range(30):
+                rec.put_frame(StereoFrame(i, 10.0 + i / 30, img, img))
+            time.sleep(0.3)
+            assert rec.backlog == 30  # none written yet: in the queue, waiting for a slot, or in flight
+            warnings = [r for r in caplog.records if "backlog" in r.getMessage()]
+            assert len(warnings) == 1
+    finally:
+        release.set()
+        s = rec.close()
+    assert s["n_frames"] == 30 and rec.backlog == 0
+
+
 def test_drawing_helpers():
     d = np.zeros((40, 60), np.float32)
     d[10:30, 10:50] = np.linspace(150, 450, 40)[None, :]

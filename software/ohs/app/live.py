@@ -327,6 +327,8 @@ class Window:
 class Recorder:
     """Writes one recording folder from a queue in thread ``ohs-recorder``."""
 
+    BACKLOG_WARN = 120  # frames waiting to be written before a warning (once): ~0.5 GB, ~2 s at 60 fps
+
     def __init__(self, path: str | Path, *, calib: ScannerCalibration | None = None, source: str = "camera",
                  meta: dict | None = None) -> None:
         self.path = Path(path)
@@ -340,6 +342,9 @@ class Recorder:
         self.t_first: float | None = None
         self.t_last: float | None = None
         self.error: BaseException | None = None
+        self._n_put = 0  # frames put (camera side) / handed to the writer (recorder thread), for backlog
+        self._n_taken = 0
+        self._backlog_warned = False
         self._closed = False
         self._lock = threading.Lock()
         self._thread = threading.Thread(target=self._run, name="ohs-recorder", daemon=True)
@@ -347,7 +352,12 @@ class Recorder:
 
     def put_frame(self, frame: StereoFrame) -> None:
         if not self._closed:
+            self._n_put += 1
             self._q.put(("f", frame))
+            if not self._backlog_warned and self.backlog > self.BACKLOG_WARN:
+                self._backlog_warned = True
+                log.warning("recording %s: %d frames are waiting to be written (PNG encoding is behind the camera)",
+                            self.path, self.backlog)
 
     def put_imu(self, samples: list[ImuSample]) -> None:
         if samples and not self._closed:
@@ -359,7 +369,8 @@ class Recorder:
 
     @property
     def backlog(self) -> int:
-        return self._q.qsize()
+        """Frames put here and not written yet: in the queue, plus the writer's unwritten PNGs."""
+        return max(0, self._n_put - self._n_taken) + self.writer.backlog
 
     def _run(self) -> None:
         while True:
@@ -369,7 +380,10 @@ class Recorder:
             kind, x = item
             try:
                 if kind == "f":
-                    self.writer.write_frame(x)
+                    try:
+                        self.writer.write_frame(x)  # waits while the writer has too many frames in flight
+                    finally:
+                        self._n_taken += 1
                     self.n_frames += 1
                     self.t_first = x.t_host if self.t_first is None else self.t_first
                     self.t_last = x.t_host
