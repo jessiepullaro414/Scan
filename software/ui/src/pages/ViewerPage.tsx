@@ -243,6 +243,7 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
             if (!inPlace) setLoad({ phase: "parse" });
             // Let the "Preparing" state paint before the synchronous parse.
             setTimeout(() => {
+              if (ctrl.signal.aborted) return resolve(); // left the page or changed scan meanwhile
               try {
                 const g = plyGeometry(readPly(buf));
                 disposeMeshGeometry(geomRef.current);

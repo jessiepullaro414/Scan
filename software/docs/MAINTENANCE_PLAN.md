@@ -557,7 +557,7 @@ processing), S1 (start-up).
 - **Guard:** `test_runtime_failure_falls_back_to_the_cpu`. Add first: a pipeline test that makes
   the matcher or the filter raise and checks the flag.
 
-### [ ] B8. The Viewer can leak a mesh when you leave during loading (Sonnet, S) ✔
+### [x] B8. The Viewer can leak a mesh when you leave during loading (Sonnet, S) ✔
 - **Where:** `ui/src/pages/ViewerPage.tsx:228-239`; compare `ui/src/pages/process/mesh.ts:93-95`.
 - **Problem:** the 30 ms parse timer does not check `ctrl.signal.aborted` again. Leave the page in
   that window and the geometry is created after the clean-up ran and is never disposed.
@@ -565,6 +565,12 @@ processing), S1 (start-up).
   Viewer and the Process page, which are near copies.
 - **Guard:** the type check; on the Viewer, `renderer.info.memory.geometries` returns to its
   earlier value after leaving.
+- **Done 2026-11-12.** Check added. On a closer look the late geometry never reaches the GPU and
+  is freed by the garbage collector, so the renderer count does not show it; the real costs were a
+  whole parse after leaving and, on a scan change in that window, the old mesh replacing the new
+  download's progress. Checked in the mock app with the 30 ms timer stretched to 1.5 s: leaving
+  during it, the callback takes 0 ms (no parse); staying, 44.8 ms and the mesh shows. Type check,
+  `npm test` and the build pass. The shared hook (second step) is not done.
 
 ### [ ] B9. A degenerate face in a PLY shifts the face indices (Sonnet, S-M) ✔
 - **Where:** `ui/src/three/ply.ts:214-251`.
