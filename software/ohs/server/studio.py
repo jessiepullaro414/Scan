@@ -506,6 +506,7 @@ class Studio:
             for job in self.jobs.active():
                 if job.meta.get("project_id") == pid:
                     raise ApiError(409, "a scan of this project is being processed", "wait for the job or cancel it")
+            self.processing.wait_moves(pid)  # an undo / redo of one of its scans finishes writing first
             self.projects.delete(pid)
             self.processing.forget(pid)
 

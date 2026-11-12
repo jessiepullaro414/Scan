@@ -572,7 +572,7 @@ processing), S1 (start-up).
 - **Guard:** `test_server_rewind.py`. Add first: a rewind with more keyframes than the budget,
   then assert the reconstruction's weights were scaled.
 
-### [ ] B6. Undo/redo writes files while holding the app's main lock (Opus, M) ○
+### [x] B6. Undo/redo writes files while holding the app's main lock (Opus, M) ✔
 - **Where:** `ohs/server/processing.py:1079-1092` (`_move`) → `_show_step` (`:899-914`) →
   `_write_result` (`:873-897`).
 - **Problem:** `_move` keeps `Studio._lock` while it loads the step and writes the PLY, the STL
@@ -583,6 +583,17 @@ processing), S1 (start-up).
 - **Guard:** `test_track_edits_undo_redo_and_the_process_messages`,
   `test_a_fresh_scan_and_the_409_rules`. Add first: a slow `_write_result`, then assert the main
   lock is free during an undo.
+- **Done 2026-11-12.** `_move` checks the 409 rules under `Studio._lock`, takes the scan lock before
+  letting it go, and loads/writes the step under the scan lock only; the lock order is unchanged
+  and the scan-lock holder never takes `Studio._lock`. A project delete now waits for such a write
+  (`ProcessManager.wait_moves`, one line in `delete_project`); without it the delete raced the
+  undo, which wrote the folder again. New test `test_undo_writes_the_files_without_the_main_lock`
+  (own project; a held `_write_result`): on the old code the main lock was held during the write;
+  it also checks a second undo, an edit and a delete sent meanwhile. Messages and 409 rules
+  unchanged. `test_server_process_studio.py` 19 passed and five other server test files 53
+  passed, on both compute paths. Still waiting under `Studio._lock`: a second request on the same
+  scan during its write (as already for edit jobs); `holes()` and a first `scan()` can still
+  write into a scan folder without `Studio._lock` (unchanged).
 
 ### [x] B7. A GPU failure mid-scan falls back to the CPU silently (Sonnet, M) ✔
 - **Where:** `ohs/vision/depth.py:394-400`, `:491-497`, `:535-538`; `ohs/app/pipeline.py:480-486`.

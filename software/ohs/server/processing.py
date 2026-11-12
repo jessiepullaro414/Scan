@@ -66,6 +66,8 @@ one by replaying the edits (selections from ``selections/``), in the request.
 **Locking.** ``Studio._lock`` is held while a request checks the 409 rules and submits its job
 (the same lock as ``start_scan``), so two jobs never run on one scan. Each :class:`ScanProcess`
 has its own lock around its state; a job does the heavy work without it and takes it to commit.
+Undo / redo check the rules under ``Studio._lock``, take the scan lock before letting it go and
+write the result files under the scan lock only (a project delete waits for them).
 The lock order is ``Studio._lock`` -> scan lock -> store / hub locks; jobs never take
 ``Studio._lock``.
 
@@ -746,6 +748,15 @@ class ProcessManager:
             for key in [k for k in self._scans if k[0] == pid]:
                 del self._scans[key]
 
+    def wait_moves(self, pid: str) -> None:
+        """Wait for an undo / redo still writing the files of one of the project's scans (it holds
+        the scan lock, not ``Studio._lock``). Call under ``Studio._lock``, so no new one starts."""
+        with self._lock:
+            sps = [sp for key, sp in self._scans.items() if key[0] == pid]
+        for sp in sps:
+            with sp.lock:
+                pass
+
     def active_job(self, pid: str, sid: str) -> Any:
         for job in self.st.jobs.active():
             if job.kind in PROCESS_KINDS and job.meta.get("project_id") == pid and job.meta.get("scan_id") == sid:
@@ -1094,13 +1105,16 @@ class ProcessManager:
             self._check_free(pid, sid)
             sp = self.scan(pid, sid)
             self._need_base(sp)
-            with sp.lock:
-                k = sp.state["cursor"] + step
-                if k < 0:
-                    raise ApiError(409, "nothing to undo", "the mesh is the stage's result already")
-                if k > len(sp.state["edits"]):
-                    raise ApiError(409, "nothing to redo", "redo only works after an undo")
-                self._show_step(sp, k)
+            sp.lock.acquire()  # before Studio._lock is let go: no job on this scan starts in between
+        try:  # the files are written under the scan lock only (a scan start or connect never waits)
+            k = sp.state["cursor"] + step
+            if k < 0:
+                raise ApiError(409, "nothing to undo", "the mesh is the stage's result already")
+            if k > len(sp.state["edits"]):
+                raise ApiError(409, "nothing to redo", "redo only works after an undo")
+            self._show_step(sp, k)
+        finally:
+            sp.lock.release()
         self.publish(sp)
         return self.view(sp)
 

@@ -290,6 +290,86 @@ def test_track_edits_undo_redo_and_the_process_messages(env):
     assert {p.stem for p in cache.glob("*.npz")} == {"base"} | {e["id"] for e in s["edits"]}
 
 
+def test_undo_writes_the_files_without_the_main_lock(env, monkeypatch):
+    """Undo / redo hold ``Studio._lock`` only for the 409 rules and write the result files under the
+    scan's own lock: starting or stopping a scan, the trigger and connect never wait for them. What
+    comes meanwhile still sees the undo whole: a second undo, an edit, a project delete."""
+    import threading
+
+    from ohs.server.processing import ProcessManager
+
+    pid, sid = add_scan(env, "Undo lock", env["rec"])
+    b = base_url(env, pid, sid)
+    run_job(env, post(b + "/process/track", {"quality": "preview"}), "process_track")
+    n0 = get(b + "/process").json()["current"]["stats"]["triangles"]
+    run_job(env, post(b + "/process/edits", {"op": "delete_faces", "params": {"faces": faces_b64(range(10))}}),
+            "mesh_edit")
+    run_job(env, post(b + "/process/edits", {"op": "keep_faces", "params": {"faces": faces_b64(range(100))}}),
+            "mesh_edit")
+    v = get(b + "/process").json()["current"]["version"]
+    real = ProcessManager._write_result
+    gate = {"held": threading.Event(), "go": threading.Event()}
+    gate["go"].set()
+
+    def slow(self, *a, **kw):  # the result files of a large mesh: written when the test lets go
+        g = gate.copy()
+        if not g["go"].is_set():
+            g["held"].set()
+            g["go"].wait(30)
+        return real(self, *a, **kw)
+
+    def in_thread(fn):
+        out: dict = {}
+        t = threading.Thread(target=lambda: out.update(r=fn()), daemon=True)
+        t.start()
+        return t, out
+
+    def undo_held(then):
+        """An undo that is writing its files when ``then()`` sends another request (in a thread);
+        returns both answers."""
+        gate.update(held=threading.Event(), go=threading.Event())
+        t1, u = in_thread(lambda: post(b + "/process/undo"))
+        try:
+            assert gate["held"].wait(30)
+            t2, o = then()
+            time.sleep(0.3)  # the other request arrives while the undo writes
+        finally:
+            gate["go"].set()
+            t1.join(30)
+        t2.join(30)
+        return u["r"], o["r"]
+
+    monkeypatch.setattr(ProcessManager, "_write_result", slow)
+    lock = env["studio"]._lock
+
+    def lock_free_then_undo():
+        free = lock.acquire(timeout=2.0)
+        if free:
+            lock.release()
+        assert free, "the undo holds Studio._lock while it writes the result files"
+        return in_thread(lambda: post(b + "/process/undo"))
+
+    # 1. the main lock is free while an undo writes; a second undo at once waits for the first
+    u1, u2 = undo_held(lock_free_then_undo)
+    assert u1.status_code == 200 and u2.status_code == 200, (u1.text, u2.text)
+    s = get(b + "/process").json()
+    assert s["cursor"] == 0 and s["current"]["version"] == v + 2 and s["current"]["stats"]["triangles"] == n0
+    assert mesh_faces(env, s["current"]["mesh_url"]) == n0
+    # 2. an edit sent while an undo writes is made from the undone step (n0 - 10 triangles, not 100)
+    for _ in range(2):
+        assert post(b + "/process/redo").status_code == 200
+    u, e = undo_held(lambda: in_thread(lambda: post(b + "/process/edits", {"op": "decimate", "params": {"ratio": 0.5}})))
+    assert u.status_code == 200, u.text
+    run_job(env, e, "mesh_edit")
+    s = get(b + "/process").json()
+    assert [x["op"] for x in s["edits"]] == ["delete_faces", "decimate"] and s["cursor"] == 2
+    assert abs(s["edits"][1]["triangles_after"] - (n0 - 10) / 2) <= max(10, 0.01 * n0)
+    # 3. a project deleted while an undo writes moves to the trash after it (no folder written again)
+    u, d = undo_held(lambda: in_thread(lambda: requests.delete(f"{env['url']}/api/projects/{pid}", timeout=T)))
+    assert u.status_code == 200 and d.status_code == 204, (u.text, d.text)
+    assert not (env["root"] / "projects" / pid).exists()
+
+
 def test_selections_and_their_checks(env):
     b = base_url(env)
     s = get(b + "/process").json()
