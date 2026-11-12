@@ -410,7 +410,7 @@ processing), S1 (start-up).
 - Snapshots are per machine and per compute path (a Radeon and an RTX differ in the last bits);
   never commit them.
 
-### [ ] A3. UI tests for the PLY reader, binary frames and downloads (Sonnet, M) ○
+### [x] A3. UI tests for the PLY reader, binary frames and downloads (Sonnet, M) ✔
 - **Where:** `ui/package.json` (`"test"` runs one file), `ui/src/three/ply.ts`,
   `ui/src/api/binary.ts`, `ui/src/api/http.ts` (`fetchBinary`).
 - **Change:** make `npm test` run every `*.test.ts`. Move `parsePly` into a module without
@@ -420,6 +420,14 @@ processing), S1 (start-up).
   fake `Response` (known and unknown length).
 - **Guard:** the type check; the 21 existing selection checks still pass. These tests are the
   guard for B9, U3 and U7.
+- **Done 2026-11-12.** `npm test` = `node --test` over `src/**/*.test.ts` (each file still prints
+  its count). `parsePly` and its types moved unchanged (checked line by line) to
+  `src/three/plyParse.ts`, which has no imports; `ply.ts` imports and re-exports them. New:
+  `ply.test.ts` 36 checks (triangles, quad/pentagon fans, `filled`, big-endian, ASCII and bad
+  files give null, empty faces, degenerate faces; two checks marked "B9 (current, wrong)"),
+  `binary.test.ts` 49, `http.test.ts` 11 (`fetchBinary` with a fake `Response`). Type check,
+  `npm test` (6 files: 49 + 11 + 35 + 21 + 16 + 36 checks) and the build pass. Noticed: a PLY
+  whose face element has 0 faces gives an empty mesh, not null (so no fallback to `PLYLoader`).
 
 ### [ ] A4. Lint for unused code (Sonnet, S) ✔
 - **Where:** `software/pyproject.toml` has no linter section, although the code already carries
