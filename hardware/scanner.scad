@@ -105,6 +105,8 @@ m3_clear  = 3.4;
 m3_head_d = 6.5;
 m3_head_h = 3.5;
 cover_t   = 3;
+flush_screws = true;  // faceplate and back cover: countersunk (flat-head) M3 screws, flush with the surface
+csk_d     = 6.4;      // countersink diameter at the surface (90 degree cone)
 
 /* [Back cover parts] */
 toggle_d   = 6.6;        // MTS-102 mini toggle = laser kill switch (fits M6 or 1/4-40 thread)
@@ -128,7 +130,6 @@ pico_cz     = -64;
 pico_standoff_h = 4;
 boss_d      = 9;
 grip_r_back = 8;    // rear (palm) corners
-grip_r_end  = 6;    // rounded bottom end (seen from the side)
 grip_ring_n = 8;    // shallow rings around the lower grip
 grip_ring_pitch = 8;
 grip_ring_w = 2;
@@ -196,6 +197,13 @@ module pin(d, h) { cylinder(d=d, h=h - d/4 + eps); translate([0, 0, h - d/4]) cy
 // its hole (along +z from z = 0); slot > 0 makes it a short slot along x
 module pin_hole(d, h, slot=0)
     hull() for (sx=[-1,1]) translate([sx*slot/2, 0, -eps]) cylinder(d=d + pin_fit, h=h + 0.6 + eps);
+// an M3 hole through a plate of thickness t, from its z = 0 (outside) face: countersunk for a
+// flat-head screw, or (flush_screws = false) as before: a shallow counterbore, or plain
+module screw_seat(t, plain=false) {
+    cylinder(d=m3_clear, h=t + 2*eps);
+    if (flush_screws) cylinder(d1=csk_d + 2*eps, d2=m3_clear, h=(csk_d - m3_clear)/2 + eps);
+    else if (!plain) cylinder(d=m3_head_d, h=1.8);
+}
 // a flat plate with rounded corners and a chamfer around its z = 0 face
 module plate(x, y, t) {
     n = 4;
@@ -335,10 +343,7 @@ module faceplate() {
             cylinder(d1=st_lens_hole + 2*fp_t, d2=st_lens_hole, h=fp_t + 2*eps);
         for (h = st_holes) translate([h[0], h[1], fp_t + 1])
             cylinder(d=st_pilot_d, h=st_standoff_h);
-        for (p = frame_screws) translate([p[0], p[1], -eps]) {
-            cylinder(d=m3_clear, h=fp_t + 2*eps);
-            cylinder(d=m3_head_d, h=1.8);                                  // shallow counterbore
-        }
+        for (p = frame_screws) translate([p[0], p[1], -eps]) screw_seat(fp_t);
     }
 }
 
@@ -357,7 +362,7 @@ module back_cover() {
         // name, sunk into the outside (flipped here, like the part itself, so it reads from behind the scanner)
         translate([0, -14, -eps]) mirror([0, 1, 0]) linear_extrude(0.6)
             text(logo, size=5.5, font="Liberation Sans:style=Bold", halign="center", valign="center", spacing=1.05);
-        for (p = frame_screws) translate([p[0], -p[1], -eps]) cylinder(d=m3_clear, h=cover_t + 2*eps);
+        for (p = frame_screws) translate([p[0], -p[1], -eps]) screw_seat(cover_t, plain=true);
         translate([toggle_pos[0], -toggle_pos[1], -eps]) cylinder(d=toggle_d, h=cover_t + 2*eps);
         for (sx=[-1,1], sy=[-1,1])
             translate([imu_pos[0] + sx*imu_holes[0]/2, -imu_pos[1] + sy*imu_holes[1]/2, cover_t + 1])
@@ -366,25 +371,32 @@ module back_cover() {
 }
 
 // =============================== GRIP ==================================
-// Grip section (local frame, z along the grip): flat front for the button, rounder at the palm.
-module grip_sec(inset=0) hull() for (sx=[-1,1]) {
-    translate([sx*(grip_x/2 - grip_r), grip_y/2 - grip_r]) circle(r=grip_r - inset);
-    translate([sx*(grip_x/2 - grip_r_back), -grip_y/2 + grip_r_back]) circle(r=grip_r_back - inset);
+// The grip is lofted through sections along its length (local frame, z along the grip). Its width
+// (X) stays constant, so each half still prints flat on its outer face; the shape is in the side
+// view: straight at the top (yoke, button), a relief for the fingers under the button, a swell
+// for the palm, and a hook at the bottom that keeps the hand from sliding off.
+grip_st = [  // [z, front y, rear y]
+    [  25,   grip_y/2, -grip_y/2], [ -16,   grip_y/2, -grip_y/2], [ -40,   grip_y/2, -18.5],
+    [ -52,   16,       -20],       [ -68,   16.3,     -21],       [ -88,   16.5,     -20],
+    [-104,   17.5,     -18],       [-113,   20,       -17.5],     [-117.5, 19.5,     -17],
+    [-grip_len, 17,    -14.5]];
+// one thin section: flat front for the button, rounder at the palm
+module grip_slice(s, inset) translate([0, 0, s[0]]) linear_extrude(0.01) hull() for (sx=[-1,1]) {
+    translate([sx*(grip_x/2 - grip_r), s[1] - grip_r]) circle(r=grip_r - inset);
+    translate([sx*(grip_x/2 - grip_r_back), s[2] + grip_r_back]) circle(r=grip_r_back - inset);
 }
-// side view with a rounded bottom end
-module grip_side(inset=0) hull() {
-    for (sy=[-1,1]) translate([0, sy*(grip_y/2 - grip_r_end), -grip_len + grip_r_end])
-        xcyl(2*(grip_r_end - inset), grip_x + 2, center=true);
-    translate([-grip_x/2 - 1, -grip_y/2 + inset, 20]) cube([grip_x + 2, grip_y - 2*inset, 10]);
-}
+module grip_loft(inset=0) for (i=[0:len(grip_st)-2])
+    hull() { grip_slice(grip_st[i], inset); grip_slice(grip_st[i+1], inset); }
 module grip_outer_l() difference() {
-    intersection() { translate([0,0,-grip_len]) linear_extrude(grip_len + 25) grip_sec(); grip_side(); }
-    for (i=[0:grip_ring_n-1]) translate([0, 0, -grip_len + 14 + i*grip_ring_pitch])   // grip rings
-        linear_extrude(grip_ring_w) difference() { offset(delta=1) grip_sec(); grip_sec(grip_ring_d); }
+    grip_loft();
+    difference() {                                                                  // grip rings
+        for (i=[0:grip_ring_n-1]) translate([-50, -50, -grip_len + 14 + i*grip_ring_pitch]) cube([100, 100, grip_ring_w]);
+        grip_loft(grip_ring_d);
+    }
 }
 module grip_inner_l() intersection() {
-    translate([0,0,-grip_len + grip_wall]) linear_extrude(grip_len + 30) grip_sec(grip_wall);
-    grip_side(grip_wall);
+    grip_loft(grip_wall);
+    translate([-50, -50, -grip_len + grip_wall]) cube([100, 100, grip_len + 40]);
 }
 module below_head() translate([-100, -150, head_bot - 300]) cube([200, 300, 300]);
 module boss_pos() for (sy=[-1,1])

@@ -31,7 +31,7 @@ Laser-sheet geometry: both sheets cross on the centre axis 250 mm in front of th
 
 Summary:
 - **Optics/electronics:** ELP synced OV9281 stereo camera, 2 line lasers and 1 dot laser (650 nm 5 mW, Ø12 mm), Lasermate DOE-RD10K650, Raspberry Pi Pico, Adafruit LSM6DSOX IMU, 16 mm momentary button, MTS-102 toggle, 3× PN2222 + 3× 1 kΩ, silicone wire, heat-shrink, micro-USB data cable.
-- **Hardware:** 22× M3×5.7 heat-set inserts. Socket-head screws: **M3×8** ×12 (faceplate, back cover), **M3×10** ×8 (grip→head: 4 from above, 4 through the yoke), **M3×12** ×3 (laser pinch), **M3×16** ×2 (grip halves). Also M2×6 ×4 (camera), M2×5 ×4 (Pico) and M2.5×5 ×4 (IMU).
+- **Hardware:** 22× M3×5.7 heat-set inserts. **M3×8 flat-head (countersunk)** ×12 for the faceplate and back cover, so they sit flush. Socket-head screws: **M3×10** ×8 (grip→head: 4 from above, 4 through the yoke), **M3×12** ×3 (laser pinch), **M3×16** ×2 (grip halves). Also M2×6 ×4 (camera), M2×5 ×4 (Pico) and M2.5×5 ×4 (IMU).
 - **Consumables:**
   - **ASA** filament (~350 g). A closed car reaches 70–80 °C; PLA warps and PETG is marginal.
   - **AESUB Blue** vanishing spray, for glossy paint, chrome and black trim.
@@ -78,6 +78,8 @@ For a holder of a different height, set `holder_h` in `scanner.scad` and re-expo
 | `back_cover.stl` | outside face down | IMU standoffs and two alignment pins point up; the name is sunk into the first layers |
 | `grip_left.stl`, `grip_right.stl` | outer face down | The right half has two pins that locate the left half |
 
+The faceplate and back cover are countersunk for flat-head screws. To keep socket-head screws there, set `flush_screws = false` in `scanner.scad` and re-export those two parts.
+
 **Alignment pins:** the faceplate, the back cover and the right grip half carry printed pins (3 mm and 4 mm) that drop into holes in the mating part, so each part finds its place before the screws go in. One hole of each pair on the head is a short slot, so a slightly shrunk print still fits. If a pin is tight, ream the hole with a 3 mm or 4 mm drill bit by hand.
 
 ASA settings: 0.2 mm layers, enclosure on, no part-cooling fan (or ≤20 %), brim on the head.
@@ -121,8 +123,8 @@ IMU (LSM6DSOX): VIN ── 3V3 (pin 36)  GND ── GND  SDA ── GP4 (pin 6) 
    3. Slide the cartridge into the projector bay from the back, lens first, and fix it with 4× M2×8 into the ledge.
    4. Drop the LED star into the cartridge's back pocket, with its leads through the notch. Press the heatsink onto it with its thermal tape.
    5. Turn the lens until the dots are sharp on a wall 25 cm away.
-6. **Camera:** screw the stereo board to the faceplate standoffs, focus both lenses at about 25 cm, lock them with a dab of nail polish, seat the faceplate on its two pins and screw it on (M3×8).
-7. **Back cover:** mount the IMU and the kill toggle, wire everything per the diagram, seat the cover on its two pins and close with M3×8.
+6. **Camera:** screw the stereo board to the faceplate standoffs, focus both lenses at about 25 cm, lock them with a dab of nail polish, seat the faceplate on its two pins and screw it on (M3×8 flat-head).
+7. **Back cover:** mount the IMU and the kill toggle, wire everything per the diagram, seat the cover on its two pins and close with M3×8 flat-head.
 
 ## In-car notes
 
