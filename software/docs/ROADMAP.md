@@ -1,0 +1,139 @@
+# OpenHandScan: roadmap
+
+The long-term direction, written on 2026-11-12 from the owner's vision notes. It says what is
+built, what comes next and what waits. It is not a schedule, and each item still needs a go-ahead.
+
+The details live elsewhere:
+- [`DESKTOP_APP_PLAN.md`](DESKTOP_APP_PLAN.md): the app's milestones (M4 multi-scan, M5 measure and
+  reverse engineering, M6 ship it).
+- [`RESEARCH_PLAN.md`](RESEARCH_PLAN.md): the algorithms, ranked, and what will not work.
+- [`MAINTENANCE_PLAN.md`](MAINTENANCE_PLAN.md): fixes and speed-ups to the code as it is.
+- [`../VALIDATION.md`](../VALIDATION.md): what has been measured, and how.
+
+---
+
+## 1. Vision
+
+An affordable, open-source scanner whose geometry you can trust in millimetres. The first use is
+reverse engineering car parts. The same tool should serve engineering, fabrication, robotics and
+other fields.
+
+**Principles:**
+1. **Accuracy over appearance.** A smooth mesh is not necessarily a correct one.
+2. **One engine, sensible presets.** Presets and defaults for common jobs, with every setting still
+   open to change.
+3. **Keep the original evidence.** Never overwrite the raw recording or the measured geometry.
+   Processing makes new results next to them. Raw data is kept so a result can be checked and
+   remade, not because raw data is always the most accurate.
+4. **The user stays in control.** The app guides, warns and recommends; it does not block without
+   need. The operator decides when a scan is finished. Warnings that are not resolved stay in the
+   project and its report.
+5. **Open.** MIT licence, open formats, and room for other people's methods.
+
+**Guiding rule:** keep the evidence, automate sensible defaults, show the uncertainty, and let the
+operator decide when to finish.
+
+**On accuracy claims:** no accuracy figure is published until it has been measured against
+independently measured reference parts, for that setup and those conditions. A preset does not
+change what the hardware can physically measure.
+
+---
+
+## 2. Where we are (2026-11-12)
+
+| Area | Status | What exists | What is missing |
+|---|---|---|---|
+| Raw evidence and reprocessing | **Built** | Every scan keeps its recording (frames, IMU, events, calibration). Make mesh can be rerun at another quality. Edits are stored as selections and replayed, with undo / redo. Recordings survive a crash mid-scan (B3, B14). | Retention modes (below). |
+| Live preview, slower offline result | **Built** | A light live model while scanning; Make mesh offline at Standard or Best. | |
+| Measurement methods | **Built** | Passive and active stereo (dot projector), two calibrated laser lines. An LED projector is another option. | Phase shift / Gray code, photogrammetry: only with fitting hardware. |
+| Agreement between methods | **Partly** | Laser points that disagree with the frame's stereo depth are dropped. "Refine with lasers" pulls the surface onto the laser points (on the simulator, a 0.3 mm bias went from 0.24 to 0.05 mm median error). | Show the user where the methods disagreed, instead of only dropping points. |
+| Confidence | **Partly** | Every depth pixel and every mesh vertex has a sigma. On simulated scans, 2 sigma covers the true error for about 96 % of pixels and 95-100 % of vertices. The viewer's Confidence shading and the sigma under the cursor. Filled holes are "not measured". | Checked on real scans; trusted / provisional / rejected geometry; telling the user what to rescan. |
+| Tracking and drift | **Partly** | Tracking state, hints when a surface cannot fix the position ("slide", "turn"), rewind, marker mode, "Straighten" (pose graph) after the scan. | Recovering after a real loss; a rescan queue; next-best-view guidance. |
+| Calibration and checks | **Partly** | Guided calibration wizard, self-test, scale check of the printed board. | Valid / Check / Recalibrate status from signs of drift. |
+| Validation | **Simulator only** | Accuracy, speed and confidence measured on simulated scans with known truth ([`VALIDATION.md`](../VALIDATION.md)). | Reference parts on the real hardware (waits for the hardware). |
+| Presets | **Partly** | Preview / Standard / Best quality; markerless or marker tracking. | Presets by object type and size. |
+| Editing and smoothing | **Partly** | Clean, fill, smooth, simplify, select, with undo / redo. | A deviation map of processed against raw; a limit on how far processing may move the surface. |
+| Measuring | **Started** | Point-to-point distance in the viewer. | Fitted planes, cylinders and holes, angles, sections, gap and flush, comparison with CAD, report (M5). |
+| Several sessions | **Not yet** | | Align and merge scans, also from another day (M4). |
+| Scan to CAD | **Not yet** | | Fitted shapes exported as STEP or a FreeCAD package (M5). |
+| Data retention | **Not yet** | | Standard / Engineering / Full modes, large projects read from disk. |
+| Plugins | **Not now** | Swappable parts inside the engine (GPU or CPU, two reconstruction methods). | A public plugin API (see section 5). |
+
+---
+
+## 3. Next
+
+In this order. Each one uses what is already built.
+
+1. **Fit simple shapes in the viewer.** Pick a region; fit a plane, a cylinder or a circle. Show hole
+   diameters, plane-to-plane distances and angles, with the fit's residual and the region's
+   confidence next to each number. This is the start of M5, and where "accuracy over appearance"
+   becomes visible.
+2. **A deviation map.** Show how far a processed mesh moved from the measured one (after fill or
+   smooth), with a limit the user can set. Later, the same map against a reference STL.
+3. **Confidence the user can act on.** After Make mesh, list the regions that miss a tolerance the
+   user sets ("these 3 areas need another pass"). This gives most of a rescan queue without
+   next-best-view research.
+4. **Show disagreement.** Mark on the model where the laser points and the stereo depth disagreed.
+5. **Small ones:**
+   - start Make mesh by itself after Stop (proposed; the operator still decides when the scan ends);
+   - show the recording backlog (`record_backlog`, B4) and a GPU fallback (`gpu_fallback`, B7) in
+     the app.
+6. **With the real hardware:** measure against reference parts (gauge blocks, a machined part, a
+   ball bar): bias, repeatability and coverage, per working distance and object size. Publish
+   accuracy only from these numbers.
+
+---
+
+## 4. Later
+
+- **Presets by object type** (car panel, precision part, fine detail, large object), kept separate
+  from object size. Start with two or three, chosen where measurements show the settings matter.
+  "Auto" may suggest one and say why; the user can always change it.
+- **Calibration health:** Valid / Check recommended / Recalibration required, from tracking
+  residuals, laser-stereo agreement and drift, with a guided recalibration. Calibration stays
+  separate from accuracy checks.
+- **Trusted, provisional and rejected geometry**, once confidence has been checked against real
+  errors. Accepting a provisional area does not remove its uncertainty.
+- **Several sessions** (M4): align and merge scans, continue on another day.
+- **Inspection** (M5): angles, sections, gap and flush, comparison with CAD, PDF report.
+- **Scan to CAD** (M5): fitted shapes to STEP or a FreeCAD package; suggested nominal dimensions
+  that an engineer approves. Not "any mesh becomes CAD".
+- **Data retention modes** (Standard / Engineering / Full), sized from real recordings; projects
+  larger than memory read from disk; raw data removed only when the user chooses, never silently.
+- **Next-best-view guidance:** where and from which angle to scan again.
+- **Scanning spray** as an optional workflow, with a note that the coating adds thickness.
+- **More measurement methods** (phase shift, Gray code, photogrammetry) if fitting hardware exists.
+  Methods are combined only where they share a calibration and their uncertainties agree.
+
+---
+
+## 5. Not now, on purpose
+
+- **A public plugin API.** A public API is a promise to keep it stable, and the engine still
+  changes. The engine already swaps parts inside. Revisit when someone outside wants to plug
+  something in; then add version checks, test datasets and benchmarks.
+- **Many presets times many sizes.** Each combination needs its own validation.
+- **Turning a mesh into STEP.** Fitted shapes are the realistic route.
+- **Any accuracy claim before section 3, item 6.**
+
+---
+
+## 6. Open questions
+
+From the vision notes, with what is known today.
+
+| # | Question | Known today |
+|---|---|---|
+| 1 | How do we measure absolute accuracy, not only repeatability? | Reference parts on the real hardware (Next 6). |
+| 2 | How do we check confidence against real errors? | On the simulator it holds (2 sigma covers about 95-97 %). Real scans: not yet. |
+| 3 | Which thresholds separate accepted, provisional and rejected? | Open; depends on 2. |
+| 4 | How do we resolve disagreeing measurements without smoothing away real features? | Lasers anchor the surface where they disagree. Other cases open. |
+| 5 | How do we notice tracking loss and recover without spoiling the model? | Hints and rewind exist; recovery after a real loss is open. |
+| 6 | How do we tell real detail from noise? | Open. |
+| 7 | How should quality limits change with size, preset and task? | Open; see presets in section 4. |
+| 8 | When is a measurement not good enough for the tolerance asked? | Per-vertex sigma is the basis (Next 3). |
+| 9 | Which capture and compression rules keep the evidence and limit the size? | Open; needs real recordings. |
+| 10 | Is offline processing reproducible across versions? | `tools/snapshot.py` compares results (A2); the CPU path varies a little between runs (A6). |
+| 11 | How much does smoothing change the dimensions? | The deviation map (Next 2) will show it. |
+| 12 | How does a user verify a model before making a part? | Open: a validation report plus measuring a known feature with calipers. |
