@@ -641,12 +641,17 @@ processing), S1 (start-up).
   `test_mesh_holes.py` 10 passed, `test_server_process_studio.py` 18 passed. Whether this was the
   cause of the one `test_overlays` failure is not known (never reproduced).
 
-### [ ] B13. Fill holes also takes a loop with a perimeter of zero as a hole (Sonnet, S) ○
+### [-] B13. Fill holes also takes a loop with a perimeter of zero as a hole (Sonnet, S) ✔
 - **Found 2026-11-12** while doing B12: `fill_holes` (`ohs/mesh/holes.py`, the `cand` list) keeps
   every loop whose perimeter is at most `max_hole_mm`, so also a collapsed one (perimeter 0). Its
   patch would be faces of zero area.
 - **Change:** confirm first with the B12 test mesh; if so, leave such loops out of `cand` too.
 - **Guard:** `test_mesh_holes.py`; the fill tests in `test_server_process_studio.py`.
+- **Not needed (checked 2026-11-12, rule 2).** On the B12 test mesh `fill_holes(V, F, 10)` adds
+  one face of area 0, and that face is what closes the mesh: `mesh_stats` goes from watertight
+  False, 1 hole, to watertight True, 0 holes. Leaving the loop out would leave the mesh open,
+  which is worse for an STL. The stats count such a loop as a hole while the outline list (B12)
+  does not show it; Fill holes then closes it, so the two agree after a fill.
 
 ---
 
