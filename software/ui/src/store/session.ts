@@ -2,10 +2,12 @@
 import { create } from "zustand";
 import { api } from "../api/http";
 import type { Scan, ScanMode, SessionState, StatusMsg } from "../api/types";
+import { useJobs } from "./jobs";
 import { useLive } from "./live";
 import { useProjects } from "./projects";
 import { sameSession } from "./sameSession";
 import { toast } from "./toasts";
+import { useUi } from "./ui";
 
 export type SessionAction = "start" | "pause" | "resume" | "stop" | "rewind";
 
@@ -117,7 +119,10 @@ export const useSession = create<SessionStore>((set, get) => {
         session: { ...(get().session ?? IDLE), state: "idle" },
       });
       useLive.getState().setGhost(null);
-      if (pid) void useProjects.getState().fetchProject(pid);
+      // The wait after a scan starts at once: Make mesh (standard), as the button would. Settings can turn it off.
+      if (pid && useUi.getState().autoMesh && r.scan.n_frames > 0)
+        void useJobs.getState().process(pid, r.scan.id, "standard", r.scan.name);
+      else if (pid) void useProjects.getState().fetchProject(pid);
       void get().fetch();
     },
 

@@ -285,6 +285,7 @@ export function ShortcutHints({ compact = false }: { compact?: boolean }) {
 
 /** The coach mark after the setup wizard's "Scan your first object" (`#/scan?…&first=1`). */
 export function FirstScanCoach({ onDismiss }: { onDismiss: () => void }) {
+  const autoMesh = useUi((s) => s.autoMesh);
   const steps = [
     <>
       Point the scanner at a <b className="font-medium text-fg">mug</b>, about <b className="font-medium text-fg">25 cm</b> away.
@@ -322,7 +323,7 @@ export function FirstScanCoach({ onDismiss }: { onDismiss: () => void }) {
         <IconButton icon={X} label="Dismiss the first-scan guide" size="sm" onClick={onDismiss} className="-mr-1 -mt-1" />
       </div>
       <div className="mt-3 flex items-center justify-between gap-2">
-        <span className="text-xs text-subtle">Stop when it looks complete, then press Make mesh.</span>
+        <span className="text-xs text-subtle">{autoMesh ? "Stop when it looks complete: the mesh is made right away." : "Stop when it looks complete, then press Make mesh."}</span>
         <Button size="sm" variant="primary" onClick={onDismiss}>
           Got it
         </Button>

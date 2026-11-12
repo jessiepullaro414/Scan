@@ -24,7 +24,7 @@ import type { Settings } from "../api/types";
 import { Badge } from "../components/ui/Badge";
 import { Button } from "../components/ui/Button";
 import { EmptyState, Skeleton } from "../components/ui/Feedback";
-import { Segmented } from "../components/ui/Form";
+import { Segmented, Switch } from "../components/ui/Form";
 import { Code, KeyValue, Page, PageHeader, Section } from "../components/ui/Layout";
 import { humanize } from "../lib/format";
 import { useConnection } from "../store/connection";
@@ -178,6 +178,8 @@ function ComputeLabel({ c }: { c: unknown }) {
 export function SettingsPage() {
   const theme = useUi((s) => s.theme);
   const setTheme = useUi((s) => s.setTheme);
+  const autoMesh = useUi((s) => s.autoMesh);
+  const setAutoMesh = useUi((s) => s.setAutoMesh);
   const health = useConnection((s) => s.health);
   const link = useConnection((s) => s.link);
   const serverVersion = useConnection((s) => s.serverVersion);
@@ -235,6 +237,14 @@ export function SettingsPage() {
               ]}
             />
           </div>
+        </Section>
+        <Section title="After a scan" icon={Wand}>
+          <Switch
+            label="Make the mesh as soon as a scan stops"
+            description="Standard quality, as the Make mesh button. Turn it off to choose the quality yourself each time; the job can always be cancelled."
+            checked={autoMesh}
+            onChange={setAutoMesh}
+          />
         </Section>
         <Section title="About" icon={Info}>
           <KeyValue

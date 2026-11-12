@@ -14,12 +14,15 @@ type UiState = {
   hintsOpen: boolean;
   /** The calibration capture click (WebAudio). */
   captureSound: boolean;
+  /** Start "Make mesh" (standard quality) as soon as a scan is stopped. */
+  autoMesh: boolean;
   setTheme: (t: Theme) => void;
   setCurrentProject: (pid: string | null) => void;
   setScanMode: (m: ScanMode) => void;
   setPreviewsOpen: (open: boolean) => void;
   setHintsOpen: (open: boolean) => void;
   setCaptureSound: (on: boolean) => void;
+  setAutoMesh: (on: boolean) => void;
 };
 
 const K = {
@@ -29,6 +32,7 @@ const K = {
   previews: "ohs.previewsOpen",
   hints: "ohs.hintsOpen",
   sound: "ohs.captureSound",
+  autoMesh: "ohs.autoMesh",
 };
 
 function readTheme(): Theme {
@@ -51,6 +55,7 @@ export const useUi = create<UiState>((set) => ({
   previewsOpen: storage.get<boolean>(K.previews, true),
   hintsOpen: storage.get<boolean>(K.hints, true),
   captureSound: storage.get<boolean>(K.sound, true),
+  autoMesh: storage.get<boolean>(K.autoMesh, true),
   setTheme: (theme) => {
     try {
       localStorage.setItem(K.theme, theme);
@@ -79,6 +84,10 @@ export const useUi = create<UiState>((set) => ({
   setCaptureSound: (captureSound) => {
     storage.set(K.sound, captureSound);
     set({ captureSound });
+  },
+  setAutoMesh: (autoMesh) => {
+    storage.set(K.autoMesh, autoMesh);
+    set({ autoMesh });
   },
 }));
 

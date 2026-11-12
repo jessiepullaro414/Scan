@@ -76,7 +76,10 @@ In this order. Each one uses what is already built.
    next-best-view research.
 4. **Show disagreement.** Mark on the model where the laser points and the stereo depth disagreed.
 5. **Small ones:**
-   - start Make mesh by itself after Stop (proposed; the operator still decides when the scan ends);
+   - start Make mesh by itself after Stop (the operator still decides when the scan ends).
+     **Done 2026-11-12:** Standard quality starts right after Stop when the scan has frames; a
+     switch under Settings, "After a scan", turns it off (a preference kept in the browser, on by
+     default); the job can be cancelled as before;
    - show the recording backlog (`record_backlog`, B4) and a GPU fallback (`gpu_fallback`, B7) in
      the app.
 6. **With the real hardware:** measure against reference parts (gauge blocks, a machined part, a
