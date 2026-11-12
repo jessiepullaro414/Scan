@@ -517,6 +517,28 @@ def test_open_fails_cleanly_without_firmware():
     assert not pico.connected and not pico._reader.is_alive()
 
 
+def test_open_closes_its_port_when_clearing_the_input_fails(monkeypatch):
+    opened = []
+
+    class BadPort:  # a port that opens, then fails on the first call (e.g. pulled out right away)
+        def __init__(self, *args, **kwargs) -> None:
+            self.closed = False
+            opened.append(self)
+
+        def reset_input_buffer(self) -> None:
+            raise serial.SerialException("ClearCommError failed")
+
+        def close(self) -> None:
+            self.closed = True
+
+    monkeypatch.setattr(serial, "Serial", BadPort)
+    pico = Pico(PicoParams(port="COM9"))
+    with pytest.raises(serial.SerialException, match="ClearCommError"):
+        pico.open()
+    assert len(opened) == 1 and opened[0].closed
+    assert not pico.connected
+
+
 @pytest.mark.hardware
 def test_real_pico_roundtrip():
     port = find_pico_port()

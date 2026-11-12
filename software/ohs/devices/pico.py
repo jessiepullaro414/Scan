@@ -216,7 +216,11 @@ class Pico:
             self._port_name = port
         reset = getattr(self._transport, "reset_input_buffer", None)
         if callable(reset):
-            reset()
+            try:
+                reset()
+            except BaseException:
+                self._shutdown()  # release a port we opened
+                raise
         self._stop.clear()
         _drain(self._imu_q)
         _drain(self._evt_q)

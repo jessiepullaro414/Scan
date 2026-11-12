@@ -574,11 +574,16 @@ processing), S1 (start-up).
 - **Change:** build the map when such a face is met. **Guard:** the PLY tests from A3 (do A3
   first).
 
-### [ ] B10. A failed Pico open leaves the serial port open (Sonnet, S) ✔
+### [x] B10. A failed Pico open leaves the serial port open (Sonnet, S) ✔
 - **Where:** `ohs/devices/pico.py:214-219`: `reset_input_buffer()` runs outside the `try` that
   shuts the transport down.
 - **Change:** move it inside. **Guard:** `test_devices_pico.py`; add a fake transport whose
   `reset_input_buffer` raises and assert the port was closed.
+- **Done 2026-11-12.** The clearing got its own `try` that shuts down the same way (kept before
+  the reader starts, so stale bytes are still dropped first). New test
+  `test_open_closes_its_port_when_clearing_the_input_fails` failed on the old code (port not
+  closed) and passes now; `test_devices_pico.py`, `test_server_devices.py` and
+  `test_server_setup.py` pass.
 
 ### [ ] B11. The two self-tests have drifted apart (Sonnet, S) ○
 - **Where:** `ohs/app/selftest.py:189-199`, `:214` and `ohs/server/selftest.py:306-316`, `:330`;
