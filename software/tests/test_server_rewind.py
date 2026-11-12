@@ -7,6 +7,7 @@ that the TSDF weight rescaling after a subsampled rebuild really writes into Ope
 """
 from __future__ import annotations
 
+import logging
 import time
 
 import numpy as np
@@ -69,3 +70,17 @@ def test_weight_rescaling_writes_into_the_grid(pipe):
     _scale_weights(tr, 2.5)
     after = float(tr.voxel_grid.attribute("weight").numpy().max())
     assert before == pytest.approx(3.0) and after == pytest.approx(7.5)
+
+
+def test_the_live_session_uses_a_model_rewind_can_rescale(tmp_path):
+    # rewind multiplies the weights back up after a subsampled rebuild: Open3D's TSDF can do that,
+    # the confidence TSDF (the GPU default for the final mesh) cannot
+    sess = ScanSession(calib=nominal_calibration((1280, 800)), mode="markerless", rec_dir=tmp_path / "rec",
+                       project_id="p", scan_id="s", cfg=Config(), hub=Hub(), use_imu=False, use_lasers=False)
+    assert sess.params.recon == "open3d"
+
+
+def test_a_failed_weight_rescaling_is_a_warning(caplog):
+    with caplog.at_level(logging.WARNING, logger="ohs.server.session"):
+        _scale_weights(object(), 2.0)  # a model without scale_weights
+    assert any("could not scale the TSDF weights" in r.getMessage() for r in caplog.records)

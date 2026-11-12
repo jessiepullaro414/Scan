@@ -524,7 +524,7 @@ processing), S1 (start-up).
   slow fake writer, then check the cap and the backlog field.
 - The real throughput against the real camera needs the hardware; the cap and the display do not.
 
-### [ ] B5. Rewind may not restore the reconstruction's weights (Opus, S-M) ○
+### [x] B5. Rewind may not restore the reconstruction's weights (Opus, S-M) ✔
 - **Where:** `ohs/server/session.py:809-831` (`_scale_weights`), `ohs/track/recon_tsdf.py`
   (`ConfidenceTsdf` has no `scale_weights`).
 - **Problem:** after a rewind that rebuilds from a subsample of the keyframes, the weights are
@@ -539,6 +539,13 @@ processing), S1 (start-up).
 - **Change:** first measure whether it matters (rewind a simulated scan with and without scaled
   weights, compare the mesh error). If it does, give `ConfidenceTsdf` a `scale_weights` and decide
   what scaling means for confidence weights. Either way, log the failure as a warning.
+- **Done 2026-11-12, the small version.** Confirmed not a bug in practice: the live session takes
+  its parameters from `PipelineProcessor.params()` (`session.py:223` -> `live.py:1144`, `recon="open3d"`),
+  and both models a rewind rescales have `scale_weights` (`markerless.py:533`, `volume_gpu.py:829`),
+  so no `ConfidenceTsdf` is met and nothing to measure. Added the pin
+  `test_the_live_session_uses_a_model_rewind_can_rescale` (passes) and made the failure a warning
+  (`test_a_failed_weight_rescaling_is_a_warning` failed on the old code, debug only, and passes
+  now). `test_server_rewind.py` 4 passed on both compute paths.
 - **Guard:** `test_server_rewind.py`. Add first: a rewind with more keyframes than the budget,
   then assert the reconstruction's weights were scaled.
 

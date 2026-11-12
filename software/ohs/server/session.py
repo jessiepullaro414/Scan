@@ -827,5 +827,5 @@ def _scale_weights(tracker: Any, factor: float) -> None:
             return
         arr = attr.numpy()
         arr *= np.float32(factor)
-    except Exception as e:  # an optimisation only
-        log.debug("could not scale the TSDF weights: %s", e)
+    except Exception as e:  # the rebuilt part of the model stays lighter than before the rewind
+        log.warning("could not scale the TSDF weights: %s", e)
