@@ -84,7 +84,8 @@ Print the mask with `ohs printables` at 100 % on a 1200 dpi laser printer. You g
 
 - **Camera:**
   - ELP's own page for the same board family (model ELP-USB3DGS800P-V90, 73° lens) lists the PCB as **80 × 16.5 mm**, with MJPEG 2560×800 at 120 fps. [ELP page](http://www.elpcctv.com/elp-800p-global-shutter-monochrome-synchronous-dual-lens-usb-camera-module-m9-lens-73-degree-p-489.html) (quote only).
-  - The lens spacing (baseline) and mounting holes are **not published**. Measure them when the camera arrives so the faceplate can be finalised.
+  - The lens spacing (baseline) and mounting holes are **not published**. Measured on the real board: lenses 60 mm apart, four M2 corner holes (see "Stereo board measurements" in README.md).
+  - On Windows it delivers 2560×800 MJPG at about 46–55 fps through DirectShow (its MJPG decoder is the limit), not 60 or 120.
   - Lens options run from 63° to 86°. Choose the ~83–86° "no distortion" version if offered.
 - **Camera IR filter vs 650 nm lasers:**
   - Reviews say the ELP stereo camera has an IR-cut filter. Common ones cut off around 650 nm, which is right where the lasers are. Expect the laser lines (and the option-A dots) to come through dimmer, and to vary a little as the lasers warm up.

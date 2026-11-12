@@ -45,16 +45,16 @@ Summary:
 
 ---
 
-## ⚠ Measure the stereo board when it arrives
+## Stereo board measurements
 
-ELP lists the board as about 80 × 16.5 mm but doesn't publish the lens spacing or mounting holes. The **faceplate** is a separate part for that reason, and it's the only part that depends on them. Measure these with calipers and send them over (or edit the top of `hardware/scanner.scad`):
+ELP doesn't publish the lens spacing or mounting holes, so the **faceplate** is a separate part, and it's the only part that depends on them. Measured on the real board (2026-11-12) and set at the top of `hardware/scanner.scad`:
 
-- PCB width × height (`st_board`)
-- Lens centre-to-centre distance (`st_base`)
-- Mounting-hole positions relative to the PCB centre (`st_holes`)
-- Height of the lens holder above the PCB (`st_standoff_h` must be larger)
+- PCB 80 × 16.5 mm (`st_board`)
+- Lenses 60 mm centre to centre (`st_base`), 14 mm across, 16 mm above the PCB
+- Four M2 holes, one per corner, their edges 0.8 mm in from the board edges (`st_holes`)
+- Posts 10 mm tall (`st_standoff_h`), so the lenses stand about 2 mm proud of the faceplate and can be turned to focus
 
-The head, grip and back cover can be printed **now**. They accept a board up to about 104 × 38 mm.
+If your board differs, edit those values and re-export `faceplate.stl`. The head, grip and back cover accept a board up to about 104 × 38 mm.
 
 ---
 
@@ -74,7 +74,7 @@ Option B parts come in two versions:
 - `head_led_cla020.stl` + `led_cartridge_cla020.stl` fit the **Commonlands CLA020** holder.
 
 For a holder of a different height, set `holder_h` in `scanner.scad` and re-export.
-| `faceplate.stl` | front face down | Reprint once you've measured the board. Two alignment pins point up |
+| `faceplate.stl` | front face down | Made for the measured ELP board (see above). Four camera posts and two alignment pins point up |
 | `back_cover.stl` | outside face down | IMU standoffs and two alignment pins point up; the name is sunk into the first layers |
 | `grip_left.stl`, `grip_right.stl` | outer face down | The right half has two pins that locate the left half |
 

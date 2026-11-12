@@ -38,15 +38,19 @@ base_v    = 92;   // camera centre -> vertical-line laser block centre (X)
 base_h    = 80;   // camera centre -> horizontal-line laser block centre (Z)
 proj_z    = 42;   // dot projector height above camera centre
 
-/* [Stereo camera board -- PLACEHOLDERS: measure yours and edit] */
-st_board      = [80, 26];  // PCB width (X), height (Z)
+/* [Stereo camera board -- ELP OV9281 dual board, measured 2026-11-12] */
+st_board      = [80, 16.5];  // PCB width (X), height (Z)
 st_board_t    = 1.6;
 st_base       = 60;        // lens centre-to-centre distance
-st_holes      = [[-37, -10.5], [37, -10.5], [-37, 10.5], [37, 10.5]]; // PCB holes, rel. PCB centre
+// 4 M2 holes, one per corner, hole edge 0.8 mm in from the board edges -> centres 0.8 + 1.1 = 1.9 mm in
+st_hole_in    = 1.9;
+st_holes      = [for (sx=[-1,1], sz=[-1,1]) [sx*(st_board[0]/2 - st_hole_in), sz*(st_board[1]/2 - st_hole_in)]];
 st_pilot_d    = 1.8;       // M2 self-tapping
-st_standoff_d = 5;
-st_standoff_h = 12;        // faceplate back -> PCB front; must exceed lens-holder height
-st_lens_hole  = 18;        // M12 lenses pass through (focus from the front)
+st_standoff_d = 4.4;       // clears the lens openings (posts sit ~10.3 mm from the lens axes)
+st_lens_d     = 14;        // lens + holder, round
+st_lens_len   = 16;        // lens front above the PCB front
+st_standoff_h = 10;        // faceplate back -> PCB front; lenses stand 16 - 10 - fp_t = 2 mm proud, to grip for focus
+st_lens_hole  = 16;        // M12 lenses pass through (focus from the front)
 
 /* [Head] */
 head_d      = 36;
@@ -464,10 +468,8 @@ module dummy_stereo() {
     yb = -st_standoff_h;
     color("darkgreen") translate([-st_board[0]/2, yb - st_board_t, -st_board[1]/2])
         cube([st_board[0], st_board_t, st_board[1]]);
-    for (sx=[-1,1]) translate([sx*st_base/2, 0, 0]) {
-        color("dimgray") translate([-8, yb, -8]) cube([16, 10, 16]);
-        color("black") translate([0, yb + 10, 0]) ycyl(14, 8 + fp_t);
-    }
+    for (sx=[-1,1]) translate([sx*st_base/2, 0, 0])
+        color("black") translate([0, yb, 0]) ycyl(st_lens_d, st_lens_len);
 }
 module dummy_laser(c="silver") {
     color(c) translate([0, -laser_len/2, 0]) ycyl(laser_d, laser_len);
