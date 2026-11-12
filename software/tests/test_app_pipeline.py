@@ -190,6 +190,42 @@ def test_marker_mode_fails_cleanly_at_half_resolution(reader):
         assert len(pipe.laser_cloud()) == sum(len(p) for r in res if r.track.ok for p in r.laser_points.values())
 
 
+def test_a_gpu_filter_failure_is_reported_on_the_frame_that_switches(reader):
+    class BrokenFilter:  # the GPU tracking filter, failing as on a lost device
+        dev = None
+
+        def start(self, depth):
+            raise RuntimeError("simulated device loss")
+
+        finish = __call__ = start
+
+    with FramePipeline(reader.calibration()) as pipe:
+        pipe._track_filter_gpu = BrokenFilter()
+        res = feed(pipe, reader, range(3))
+        assert pipe.gpu_fallbacks == {"track_filter": "simulated device loss"}
+    assert res[0].extra["gpu_fallback"] == {"track_filter": "simulated device loss"}
+    assert all("gpu_fallback" not in r.extra for r in res[1:])
+    assert all(r.track.ok for r in res)
+
+
+def test_a_gpu_matcher_failure_is_reported_on_the_frame_that_switches(reader):
+    with FramePipeline(reader.calibration()) as pipe:
+        est = pipe.depth_estimator
+        if est.backend != "gpu":
+            pytest.skip(f"the depth runs on the CPU here: {est.backend_note}")
+
+        def broken(*a, **k):
+            raise RuntimeError("simulated device loss")
+
+        for name in ("depth", "depth_sigma", "disparity", "disparity_sigma"):
+            setattr(est._gpu, name, broken)
+        res = feed(pipe, reader, range(3))
+        assert est.backend == "cpu" and pipe.gpu_fallbacks == {"depth": "simulated device loss"}
+    assert res[0].extra["gpu_fallback"] == {"depth": "simulated device loss"}
+    assert all("gpu_fallback" not in r.extra for r in res[1:])
+    assert all(r.track.ok for r in res)
+
+
 def test_tracking_depth_filter():
     h, w = 200, 320
     vv, uu = np.mgrid[0:h, 0:w]

@@ -412,6 +412,7 @@ class FramePipeline:
         self.cloud = LaserCloud()
         self._laser_pool: ThreadPoolExecutor | None = None  # made at the first frame with lasers
         self._track_filter_gpu: TrackingFilterGpu | None | bool = None  # None: not tried yet; False: CPU
+        self.gpu_fallbacks: dict[str, str] = {}  # GPU stages that failed during the run (now on the CPU): stage -> reason
         self._filter_pending: tuple | None = None  # (depth, the filter started for it), see _start_tracking_input
         # the start of a scan tracks a second time on with_raw_depth (module docstring, "Detailed parts")
         self._probe: MarkerlessTracker | None = None
@@ -489,6 +490,7 @@ class FramePipeline:
             except Exception as exc:  # noqa: BLE001 - a GPU failure must not stop the scan
                 log.warning("tracking filter on the GPU failed (%s); filtering on the CPU", exc)
                 self._track_filter_gpu = False
+                self.gpu_fallbacks.setdefault("track_filter", str(exc))
         return tracking_depth(depth, self.track_filter_px, work_size=self.track_size)
 
     def _start_tracking_input(self, depth: np.ndarray) -> None:
@@ -568,6 +570,7 @@ class FramePipeline:
         t = float(frame.t_host)
         tim: dict[str, float] = {}
         extra: dict = {}
+        n_fallbacks = len(self.gpu_fallbacks)
         t_start = time.perf_counter()
 
         t0 = time.perf_counter()
@@ -593,6 +596,8 @@ class FramePipeline:
             else:
                 depth = self.depth_estimator.compute(left_r, right_r)
             tim["depth"] = _ms(t0)
+            if self.depth_estimator.gpu_failure is not None:
+                self.gpu_fallbacks.setdefault("depth", self.depth_estimator.gpu_failure)
             # the tracking filter starts now and is collected when the frame is tracked
             # (tracking_input): track_filter is how long the frame then still waits for it
             if self.dual_model and (pose is not None or p.mode == "markerless"):
@@ -646,6 +651,8 @@ class FramePipeline:
             tim["laser_triangulate"] = _ms(t0)
             tim["laser"] = tim["laser_extract"] + tim["laser_triangulate"]
         tim["total"] = _ms(t_start)
+        if len(self.gpu_fallbacks) > n_fallbacks:  # a GPU stage failed on this frame: the rest runs on the CPU
+            extra["gpu_fallback"] = dict(list(self.gpu_fallbacks.items())[n_fallbacks:])
 
         self._n_frames += 1
         self._n_ok += int(track.ok)

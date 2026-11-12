@@ -357,6 +357,7 @@ class DepthEstimator:
         self.backend = "cpu"
         self.device: str | None = None
         self.backend_note = "DepthParams.backend = \"cpu\""
+        self.gpu_failure: str | None = None  # why the GPU matcher failed mid-run (not for small images)
         self._gpu = None
         if p.backend != "cpu":
             self._gpu, self.backend_note = self._start_gpu()
@@ -400,6 +401,8 @@ class DepthEstimator:
         self._gpu = None
         self.backend, self.device = "cpu", None
         self.backend_note = f"the GPU matcher failed ({exc})"
+        if not quiet:
+            self.gpu_failure = str(exc)
         self._init_cpu()
 
     def _drop_gpu_if_too_small(self, left_r: np.ndarray) -> None:

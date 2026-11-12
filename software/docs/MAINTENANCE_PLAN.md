@@ -547,7 +547,7 @@ processing), S1 (start-up).
   `test_a_fresh_scan_and_the_409_rules`. Add first: a slow `_write_result`, then assert the main
   lock is free during an undo.
 
-### [ ] B7. A GPU failure mid-scan falls back to the CPU silently (Sonnet, M) ○
+### [x] B7. A GPU failure mid-scan falls back to the CPU silently (Sonnet, M) ✔
 - **Where:** `ohs/vision/depth.py:394-400`, `:491-497`, `:535-538`; `ohs/app/pipeline.py:480-486`.
 - **Problem:** a runtime failure of the GPU matcher or of the tracking filter logs a warning and
   switches to the CPU for the rest of the scan. The frame rate drops about four times and the
@@ -556,6 +556,13 @@ processing), S1 (start-up).
   `extra` on the frame that switches. Showing it in the app is a second, separate task.
 - **Guard:** `test_runtime_failure_falls_back_to_the_cpu`. Add first: a pipeline test that makes
   the matcher or the filter raise and checks the flag.
+- **Done 2026-11-12.** `FramePipeline.gpu_fallbacks` (stage -> reason, `"depth"` and
+  `"track_filter"`), filled from the new `DepthEstimator.gpu_failure` (not set for the quiet switch
+  on small images) and from the filter's fallback; the frame that switches carries
+  `extra["gpu_fallback"]`. Two new tests in `test_app_pipeline.py` failed on the old code (nothing
+  recorded) and pass now; the matcher one is skipped on the CPU path. `test_app_pipeline.py` and
+  `test_vision_depth_gpu.py` pass (GPU path 40 passed; CPU path 16 passed, 1 skipped). Showing it
+  in the app is not done (separate task).
 
 ### [x] B8. The Viewer can leak a mesh when you leave during loading (Sonnet, S) ✔
 - **Where:** `ui/src/pages/ViewerPage.tsx:228-239`; compare `ui/src/pages/process/mesh.ts:93-95`.
