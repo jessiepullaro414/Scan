@@ -211,6 +211,29 @@ def test_recording_lists_only_written_frames_before_close(tmp_path, monkeypatch)
     assert len(r) == 8 and list(r.indices) == list(range(8))
 
 
+def test_recording_skips_a_torn_last_line(tmp_path):
+    """As after a crash: each CSV file cut inside its last row (no line end). That row is left
+    out, by the reader and by the scan list's frame count; the other rows are read as before."""
+    from ohs.server.projects import _count_rows
+
+    rng = np.random.default_rng(5)
+    rec = tmp_path / "rec"
+    with RecordingWriter(rec, source="sim") as w:
+        for i in range(4):
+            t = 10.0 + i / 30
+            w.write_frame(StereoFrame(i, t, rng.integers(0, 255, (40, 64), dtype=np.uint8),
+                                      rng.integers(0, 255, (40, 64), dtype=np.uint8)))
+            w.write_imu([ImuSample(t, 5.0 + t, np.array([0.1, 0.2, 0.3]), np.array([0.0, 0.0, 9.81]))])
+            w.write_event(Event(t, "temperature", "23.5"))
+    for name in ("frames.csv", "imu.csv", "events.csv"):
+        f = rec / name
+        f.write_bytes(f.read_bytes()[:-8])  # the last row loses its end: "000003.png" -> "0000" etc.
+    r = RecordingReader(rec)
+    assert len(r) == 3 and [r.frame(i).index for i in range(3)] == [0, 1, 2]
+    assert len(r.imu_samples()) == 3 and len(r.events()) == 3
+    assert _count_rows(rec / "frames.csv") == 3
+
+
 def test_recording_caps_frames_in_flight(tmp_path, monkeypatch):
     """With slow PNG writes, write_frame waits once twice the workers' frames are in flight, and
     ``backlog`` counts them."""

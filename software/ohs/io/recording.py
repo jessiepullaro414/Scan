@@ -77,6 +77,16 @@ def _celsius(value: object) -> float | None:
     return c if math.isfinite(c) else None
 
 
+def _complete_lines(path: Path) -> list[str]:
+    """The lines of a CSV file without a last line that has no line end: every writer ends its
+    rows, so such a line was cut by a crash mid-scan."""
+    with open(path, newline="", encoding="utf-8") as fh:
+        lines = fh.readlines()
+    if lines and not lines[-1].endswith(("\n", "\r")):
+        lines.pop()
+    return lines
+
+
 def _imwrite(path: str, img: np.ndarray, params: list[int]) -> None:
     """``cv2.imwrite`` that raises when it fails (it returns False, for example on a full disk)."""
     if not cv2.imwrite(path, img, params):
@@ -260,8 +270,7 @@ class RecordingReader:
         meta_file = self.path / "meta.json"
         self.meta: dict = json.loads(meta_file.read_text(encoding="utf-8")) if meta_file.exists() else {}
         self.swap_lr = swap_lr
-        with open(self.path / "frames.csv", newline="", encoding="utf-8") as fh:
-            rows = list(csv.DictReader(fh))
+        rows = list(csv.DictReader(_complete_lines(self.path / "frames.csv")))
         self._index = np.array([int(r["index"]) for r in rows], dtype=np.int64)
         self._times = np.array([float(r["t_host"]) for r in rows], dtype=np.float64)
         self._files = [r["file"] for r in rows]
@@ -344,9 +353,7 @@ class RecordingReader:
             f = self.path / "imu.csv"
             data = np.zeros((0, 8))
             if f.exists() and f.stat().st_size > 0:
-                with open(f, newline="", encoding="utf-8") as fh:
-                    next(fh, None)
-                    rows = [list(map(float, r)) for r in csv.reader(fh) if r]
+                rows = [list(map(float, r)) for r in csv.reader(_complete_lines(f)[1:]) if r]
                 if rows:
                     data = np.asarray(rows, dtype=np.float64)
             self._imu_cache = {
@@ -370,8 +377,7 @@ class RecordingReader:
         f = self.path / "events.csv"
         if not f.exists():
             return []
-        with open(f, newline="", encoding="utf-8") as fh:
-            return [Event(float(r["t_host"]), r["kind"], r["value"]) for r in csv.DictReader(fh)]
+        return [Event(float(r["t_host"]), r["kind"], r["value"]) for r in csv.DictReader(_complete_lines(f))]
 
     def temperature(self) -> dict[str, np.ndarray]:
         """The IMU chip's temperature: ``{"t_host": (N,), "celsius": (N,)}`` from the

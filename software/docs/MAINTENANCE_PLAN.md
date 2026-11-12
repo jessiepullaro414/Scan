@@ -687,7 +687,7 @@ processing), S1 (start-up).
   which is worse for an STL. The stats count such a loop as a hole while the outline list (B12)
   does not show it; Fill holes then closes it, so the two agree after a fill.
 
-### [ ] B14. A crash can leave a torn last line in a recording's CSV files (Sonnet, S) ○
+### [x] B14. A crash can leave a torn last line in a recording's CSV files (Sonnet, S) ✔
 - **Found 2026-11-12** while doing B3: Python flushes a file's buffer when it fills (8 KB), which
   can be in the middle of a line, so after a crash the last line of `frames.csv` (or `imu.csv`)
   can be cut short. `RecordingReader.__init__` does not skip such a row (it can raise, or keep a
@@ -695,6 +695,14 @@ processing), S1 (start-up).
 - **Change:** confirm first with a cut `frames.csv`; then let the reader and `_count_rows` skip an
   incomplete last row (only the last one).
 - **Guard:** `test_core.py` recording tests; `recover_stale` tests; a new test with a cut file.
+- **Done 2026-11-12.** Every writer ends its rows with a line end (checked: `RecordingWriter`,
+  `server/calibration.py`, the one test that appends rows), so a last line without one is the
+  torn one. `_complete_lines` in `recording.py` drops it for `frames.csv`, `imu.csv` and
+  `events.csv`; `_count_rows` counts only lines with a line end. New test
+  `test_recording_skips_a_torn_last_line` (each file cut 8 bytes into its last row) failed on the
+  old code (4 frames listed instead of 3) and passes now. `test_core.py`, `test_sim_datasets.py`,
+  `test_server_process_cuts.py`, `test_server_basic.py`: 76 passed. The ground-truth poses file
+  (simulator only) is read as before.
 
 ---
 

@@ -385,8 +385,9 @@ class ProjectStore:
 
 
 def _count_rows(csv_path: Path) -> int:
+    """Data rows of a CSV file; a last line without a line end (cut by a crash) does not count."""
     try:
-        with open(csv_path, encoding="utf-8") as fh:
-            return max(0, sum(1 for line in fh if line.strip()) - 1)
+        with open(csv_path, newline="", encoding="utf-8") as fh:
+            return max(0, sum(1 for line in fh if line.strip() and line.endswith(("\n", "\r"))) - 1)
     except OSError:
         return 0
