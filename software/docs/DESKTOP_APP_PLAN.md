@@ -597,7 +597,12 @@ It turns "a nice mesh" into numbers a part can be made from.
    Open for later steps: the full covariance (for relations between fits), and mesh vertices'
    correlated errors, which may make these ± values too small on real meshes (step 5 measures it).
 2. Region growing and the hole finder, tested on simulated meshes (the bracket's bosses and
-   shaft, the car panel's hole).
+   shaft, the car panel's hole). **Done 2026-11-12:** `ohs/measure/region.py` (`fit_at`), tested
+   on synthetic meshes with known truth (box, plate with a boss r 7 and a bore r 6, a Ø 25 hole,
+   bends of R 30 and R 300 mm): regions stay on their face, the errors are within a few µm and
+   ±2σ covers 98 % over 40 seeds. Filled and unmeasured faces are left out. A click takes
+   0.1–0.2 s on a 1M-triangle mesh; a region that is a whole 1M-triangle tube takes about 1.2 s.
+   The simulated scans of the bracket and the panel are step 5.
 3. The API, its tests, and `APP_API.md`.
 4. The viewer's Fit tool, the list, relations, and the mock engine.
 5. Simulator validation in `VALIDATION.md`: diameter, axis and position errors against the
