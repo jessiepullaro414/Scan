@@ -491,6 +491,22 @@ def test_selftest_with_fake_camera_and_pico(tmp_path, monkeypatch, capsys):
     assert sim.emits()[-1] == "EMIT 0 0 0"
 
 
+def test_selftest_image_and_gravity_checks_keep_their_messages():
+    # shared by the hardware test (with its hints) and the app's stream test (without)
+    from ohs.app.selftest import _IMAGE_HINTS, gravity_ok, image_check
+
+    cases = [((1.0, 0.0, 5.0), "the image is black (mean 1.0 DN)", ": lens cap, or exposure too short?"),
+             ((120.0, 0.35, 5.0), "35% of the pixels are saturated", ": shorten the exposure"),
+             ((120.0, 0.01, 0.2), "left and right images are identical", ": is this the stereo camera?")]
+    for s, text, hint in cases:
+        assert image_check([s, s]) == ("WARN", text)
+        assert image_check([s, s], _IMAGE_HINTS) == ("WARN", text + hint)
+    assert image_check([(120.0, 0.01, 5.0)], _IMAGE_HINTS) == ("PASS", "mean 120 DN, 1.0% saturated")
+    assert image_check([]) == ("WARN", "the image is black (mean 0.0 DN)")
+    assert gravity_ok(9.3) and gravity_ok(10.3) and gravity_ok(9.81)
+    assert not gravity_ok(9.29) and not gravity_ok(10.31)
+
+
 def test_selftest_reports_missing_devices(monkeypatch, capsys):
     class DeadCamera:
         def open(self):

@@ -31,11 +31,38 @@ import numpy as np
 from ohs.devices.camera import StereoCamera
 from ohs.devices.pico import Pico
 
-__all__ = ["Check", "run_selftest", "overall", "format_summary"]
+__all__ = ["Check", "run_selftest", "overall", "format_summary", "image_check", "gravity_ok"]
 
 log = logging.getLogger(__name__)
 
 STATUSES = ("PASS", "WARN", "FAIL", "SKIP", "INFO")
+G_REST = (9.3, 10.3)  # |accel| that passes as gravity at rest (m/s^2)
+_IMAGE_HINTS = {"black": ": lens cap, or exposure too short?", "saturated": ": shorten the exposure",
+                "identical": ": is this the stereo camera?"}
+
+
+def image_check(stats: list, hints: dict[str, str] | None = None) -> tuple[str, str]:
+    """The "camera image" check of the hardware test and of the app's stream test: per-frame
+    ``(mean DN, saturated fraction, mean |left - right| DN)`` -> black, saturated, left == right,
+    else PASS. ``hints`` adds the caller's advice to a warning (keys "black", "saturated", "identical")."""
+    h = hints or {}
+    mean = float(np.mean([s[0] for s in stats])) if stats else 0.0
+    sat = float(np.mean([s[1] for s in stats])) if stats else 0.0
+    diff = float(np.mean([s[2] for s in stats])) if stats else 0.0
+    if mean < 3.0:
+        return "WARN", f"the image is black (mean {mean:.1f} DN)" + h.get("black", "")
+    if sat > 0.2:
+        return "WARN", f"{sat:.0%} of the pixels are saturated" + h.get("saturated", "")
+    if diff < 0.5:
+        return "WARN", "left and right images are identical" + h.get("identical", "")
+    return "PASS", f"mean {mean:.0f} DN, {sat:.1%} saturated"
+
+
+def gravity_ok(g: float) -> bool:
+    """Whether ``|accel|`` ``g`` (m/s^2) is gravity. Each test computes ``g`` its own way: the hardware
+    test as the norm of the mean (the scanner is held still, so a turn shows as a smaller value), the
+    stream test as the mean of the norms (a replayed scan moves)."""
+    return G_REST[0] <= g <= G_REST[1]
 EMITTERS = (("vertical line laser", 0), ("horizontal line laser", 1), ("dot projector", 2))
 CHANGED_DN = 25  # an emitter "shows" in the camera if this many DN brighter ...
 CHANGED_FRACTION = 2e-4  # ... in at least this fraction of pixels (a thin line is ~0.3 %)
@@ -186,17 +213,7 @@ class _SelfTest:
             self.add("camera fps", "PASS", detail)
         else:
             self.add("camera fps", "WARN", detail + ". USB 2 port, exposure too long, or no MJPG?")
-        mean = float(np.mean([s[0] for s in stats]))
-        sat = float(np.mean([s[1] for s in stats]))
-        diff = float(np.mean([s[2] for s in stats]))
-        if mean < 3.0:
-            self.add("camera image", "WARN", f"the image is black (mean {mean:.1f} DN): lens cap, or exposure too short?")
-        elif sat > 0.2:
-            self.add("camera image", "WARN", f"{sat:.0%} of the pixels are saturated: shorten the exposure")
-        elif diff < 0.5:
-            self.add("camera image", "WARN", "left and right images are identical: is this the stereo camera?")
-        else:
-            self.add("camera image", "PASS", f"mean {mean:.0f} DN, {sat:.1%} saturated")
+        self.add("camera image", *image_check(stats, _IMAGE_HINTS))
 
     def _imu_checks(self, samples: list) -> None:
         rate = int(self.cfg.pico.imu_rate_hz)
@@ -211,11 +228,11 @@ class _SelfTest:
         self.add("imu rate", "PASS" if abs(measured - rate) <= 0.05 * rate else "WARN", detail)
         acc = np.array([s.accel for s in samples])
         gyr = np.array([s.gyro for s in samples])
-        g = float(np.linalg.norm(acc.mean(axis=0)))
+        g = float(np.linalg.norm(acc.mean(axis=0)))  # norm of the mean: see gravity_ok
         noise = float(np.degrees(gyr.std(axis=0).max()))
         bias = float(np.degrees(np.abs(gyr.mean(axis=0)).max()))
         detail = f"|accel| {g:.2f} m/s^2, gyro noise {noise:.2f} deg/s, offset {bias:.2f} deg/s"
-        if 9.3 <= g <= 10.3:
+        if gravity_ok(g):
             self.add("imu values", "PASS", detail)
         else:
             self.add("imu values", "WARN", detail + " (expected ~9.81 m/s^2 at rest: was the scanner moving?)")

@@ -646,7 +646,7 @@ processing), S1 (start-up).
   closed) and passes now; `test_devices_pico.py`, `test_server_devices.py` and
   `test_server_setup.py` pass.
 
-### [ ] B11. The two self-tests have drifted apart (Sonnet, S) ○
+### [x] B11. The two self-tests have drifted apart (Sonnet, S) ✔
 - **Where:** `ohs/app/selftest.py:189-199`, `:214` and `ohs/server/selftest.py:306-316`, `:330`;
   also `app/live.py:192` (`_Rate`) against `server/util.py:16` (`RateMeter`).
 - **Problem:** the image checks are copies with the same thresholds; the accelerometer check
@@ -655,6 +655,16 @@ processing), S1 (start-up).
   for the accelerometer check and say which in the commit.
 - **Guard:** the self-test tests in `test_server_setup.py` and `test_app_cli.py`; messages stay
   identical.
+- **Done 2026-11-12, both definitions kept.** The two tests are not "app against command line":
+  with the real scanner the app runs `ohs.app.selftest.run_selftest` too (norm of the mean); only
+  the simulator / replay stream check uses the mean of the norms. Each fits its source (the
+  scanner is held still for the hardware test, so a turn should warn; a replayed scan moves), so
+  no result changes. Shared now: `image_check` (thresholds and messages, each caller's hints) and
+  `gravity_ok` (the 9.3-10.3 m/s^2 range) in `ohs/app/selftest.py`, the server imports them in
+  the function as before. New test `test_selftest_image_and_gravity_checks_keep_their_messages`
+  pins every message to its old wording (it needs the new functions, so it cannot run on the old
+  code). Self-test tests in `test_app_cli.py` 4 passed, `test_server_setup.py` 10 passed. The two
+  rate meters (`_Rate`, `RateMeter`) are left as they are.
 
 ### [x] B12. A hole with a perimeter of zero reaches the hole list (Sonnet, S) ✔
 - **Found 2026-11-10:** `test_server_process_studio.py::test_overlays` failed once in the full

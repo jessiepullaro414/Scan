@@ -270,6 +270,8 @@ class _StreamTap:
 def run_stream_selftest(devices: Any, source: str, message: Callable[[str], None], progress: Callable[[float], None],
                         cancelled: Callable[[], bool], seconds: float = STREAM_SECONDS) -> list[dict]:
     """Checks on the live frames and IMU of the simulator or a replay."""
+    from ohs.app.selftest import gravity_ok, image_check  # the checks shared with the hardware test
+
     what = "the simulator" if source == "sim" else "the replayed recording"
     tap = _StreamTap()
     message(f"Measuring {what} for {seconds:g} s…")
@@ -303,17 +305,7 @@ def run_stream_selftest(devices: Any, source: str, message: Callable[[str], None
             checks.append(_check("camera fps", "WARN", detail + ": the PC is busy"))
         else:
             checks.append(_check("camera fps", "PASS", detail))
-        mean = float(np.mean([s[0] for s in stats])) if stats else 0.0
-        sat = float(np.mean([s[1] for s in stats])) if stats else 0.0
-        diff = float(np.mean([s[2] for s in stats])) if stats else 0.0
-        if mean < 3.0:
-            checks.append(_check("camera image", "WARN", f"the image is black (mean {mean:.1f} DN)"))
-        elif sat > 0.2:
-            checks.append(_check("camera image", "WARN", f"{sat:.0%} of the pixels are saturated"))
-        elif diff < 0.5:
-            checks.append(_check("camera image", "WARN", "left and right images are identical"))
-        else:
-            checks.append(_check("camera image", "PASS", f"mean {mean:.0f} DN, {sat:.1%} saturated"))
+        checks.append(_check("camera image", *image_check(stats)))
     if not devices.imu_available():
         checks.append(_check("imu", "SKIP", f"{what} has no IMU data"))
     elif len(t_dev) < 10:
@@ -327,10 +319,10 @@ def run_stream_selftest(devices: Any, source: str, message: Callable[[str], None
         gaps = int((dt > 1.5 / nominal).sum()) if nominal > 0 else 0
         detail = f"{rate:.0f} Hz, {len(t)} samples, {gaps} gap{'s' if gaps != 1 else ''}"
         checks.append(_check("imu rate", "PASS" if rate >= 0.95 * nominal else "WARN", detail))
-        g = float(np.linalg.norm(accel, axis=1).mean())
+        g = float(np.linalg.norm(accel, axis=1).mean())  # mean of the norms: see gravity_ok
         detail = f"|accel| {g:.2f} m/s^2"
-        checks.append(_check("imu values", "PASS" if 9.3 <= g <= 10.3 else "WARN",
-                             detail if 9.3 <= g <= 10.3 else detail + " (expected about 9.81 m/s^2)"))
+        checks.append(_check("imu values", "PASS" if gravity_ok(g) else "WARN",
+                             detail if gravity_ok(g) else detail + " (expected about 9.81 m/s^2)"))
     no_pico = "the simulator has no Pico" if source == "sim" else "a replayed recording has no Pico"
     checks.append(_check("pico", "SKIP", no_pico))
     checks.append(_check("clock sync", "SKIP", f"{no_pico}: there is no clock to synchronise"))
