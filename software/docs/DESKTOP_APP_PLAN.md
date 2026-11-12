@@ -591,7 +591,11 @@ It turns "a nice mesh" into numbers a part can be made from.
 
 **Steps** (one commit each, tests first):
 1. Fits with uncertainty, tested on synthetic points with known truth: the error is small and
-   ±2σ covers the truth about 95 % of the time.
+   ±2σ covers the truth about 95 % of the time. **Done 2026-11-12:** `ohs/measure/fit.py`
+   (`fit_plane`, `fit_cylinder`, `fit_circle`), 50 tests; over 200 seeded trials per case ±2σ
+   covers the truth 93–100 % (larger runs 94–99 %), also on 90° arcs and 4 mm short cylinders.
+   Open for later steps: the full covariance (for relations between fits), and mesh vertices'
+   correlated errors, which may make these ± values too small on real meshes (step 5 measures it).
 2. Region growing and the hole finder, tested on simulated meshes (the bracket's bosses and
    shaft, the car panel's hole).
 3. The API, its tests, and `APP_API.md`.
