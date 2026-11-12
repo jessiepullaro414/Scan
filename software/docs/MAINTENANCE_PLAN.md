@@ -635,13 +635,19 @@ processing), S1 (start-up).
   during it, the callback takes 0 ms (no parse); staying, 44.8 ms and the mesh shows. Type check,
   `npm test` and the build pass. The shared hook (second step) is not done.
 
-### [ ] B9. A degenerate face in a PLY shifts the face indices (Sonnet, S-M) ✔
+### [x] B9. A degenerate face in a PLY shifts the face indices (Sonnet, S-M) ✔
 - **Where:** `ui/src/three/ply.ts:214-251`.
 - **Problem:** a face with fewer than three corners writes nothing, but while the face map is
   still null the triangle counter falls behind, so a selection can send the wrong face indices to
   delete/keep. Real files with such faces are rare.
 - **Change:** build the map when such a face is met. **Guard:** the PLY tests from A3 (do A3
   first).
+- **Done 2026-11-12.** `parsePly` (now in `plyParse.ts`) starts the face map at the first face
+  with fewer than 3 corners (identity up to there). A3's two "B9 (current, wrong)" checks became
+  the right ones (triangle, degenerate, triangle: `faceOfTri` [0, 2] and `filled` [0, 0]; old:
+  null and the per-face [0, 1, 0]) and a case with a quad after the degenerate face was added
+  (`faceOfTri` [0, 2, 3, 3]; old: [0, 1, 3, 3]); they failed on the old code and pass now. Type
+  check, `npm test` (6 files, ply.test 39 checks) and the build pass.
 
 ### [x] B10. A failed Pico open leaves the serial port open (Sonnet, S) ✔
 - **Where:** `ohs/devices/pico.py:214-219`: `reset_input_buffer()` runs outside the `try` that

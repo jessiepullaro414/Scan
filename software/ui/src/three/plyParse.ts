@@ -228,6 +228,11 @@ export function parsePly(buf: ArrayBuffer): PlyMesh | null {
               n++;
             }
             map = m;
+          } else if (!map) {
+            // A face with fewer than 3 corners writes no triangle: from here on triangle t is no
+            // longer face t, so the face map starts now (it is the identity up to here).
+            map = new Uint32Array(Math.max(16, idx.length / 3));
+            for (let t = 0; t < n; t++) map[t] = t;
           }
           o += c * r.size;
         }

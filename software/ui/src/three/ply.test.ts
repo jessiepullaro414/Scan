@@ -128,17 +128,22 @@ const V6 = [[0, 0, 0], [1, 0, 0], [1, 1, 0], [0, 1, 0], [2, 0, 0], [2, 1, 0]];
   check(m!.faceCount === 3, "degenerate after a quad: faceCount still counts it");
 }
 {
-  // Triangle, degenerate face, triangle: no polygon, so the face map is still null.
+  // Triangle, degenerate face, triangle, no polygon (B9): triangle 1 comes from face 2, and the
+  // filled flags are per triangle.
   const m = parsePly(makePly(V6, [{ corners: [0, 1, 2], filled: 0 }, { corners: [0, 1], filled: 1 }, { corners: [1, 4, 5], filled: 0 }], { filled: true }));
   check(m !== null, "degenerate between triangles: parsed");
   check(same(m!.indices, [0, 1, 2, 1, 4, 5]), "degenerate between triangles: two triangles");
   check(m!.faceCount === 3, "degenerate between triangles: faceCount 3");
-  // B9 (known broken, not fixed yet): the right answer is faceOfTri = [0, 2] (triangle 1 comes
-  // from face 2) and filled = [0, 0] (one flag per triangle). Today faceOfTri is null, which
-  // says "triangle t is face t", and filled is the per-face array [0, 1, 0] (3 flags for 2
-  // triangles). When B9 is fixed, replace these two checks with the right ones.
-  check(m!.faceOfTri === null, "B9 (current, wrong): faceOfTri is null, should be [0, 2]");
-  check(same(m!.filled, [0, 1, 0]), "B9 (current, wrong): filled has 3 flags for 2 triangles, should be [0, 0]");
+  check(same(m!.faceOfTri, [0, 2]), "degenerate between triangles: triangle 1 belongs to face 2");
+  check(same(m!.filled, [0, 0]), "degenerate between triangles: one filled flag per triangle");
+}
+{
+  // Triangle, degenerate face, triangle, quad (B9): the map started at the quad must not assume
+  // that triangle t is face t.
+  const m = parsePly(makePly(V6, [{ corners: [0, 1, 2] }, { corners: [0, 1] }, { corners: [1, 4, 5] }, { corners: [0, 1, 2, 3] }]));
+  check(m !== null, "degenerate before a quad: parsed");
+  check(same(m!.indices, [0, 1, 2, 1, 4, 5, 0, 1, 2, 0, 2, 3]), "degenerate before a quad: four triangles");
+  check(same(m!.faceOfTri, [0, 2, 3, 3]), "degenerate before a quad: faces 0, 2, 3, 3");
 }
 
 console.log(`ply.test: ${checks} checks passed`);
