@@ -658,7 +658,9 @@ largest and 95th-percentile move. The value under the cursor.
    pushed-in dent, a filled hole). **Done 2026-11-12:** `ohs/mesh/offset.py` (`surface_offset`,
    `offset_stats`; the module is named "offset" because `ohs.mesh.deviation` already exists, an
    unsigned distance used by Simplify). 1.5 s for 1M vertices against 2M triangles on this PC.
-2. The API and its tests.
+2. The API and its tests. **Done 2026-11-12:** `deviation.json` and `deviation.bin`
+   (`ProcessManager.deviation`), made once per mesh version; tested through three edits of the
+   simulated scan on both compute paths.
 3. The shading, legend and cursor value in the Process page and the viewer, and the mock.
 4. A simulator check in `VALIDATION.md`: after the default recipe's smoothing, compare the
    deviation map with the change of the true error (does a move towards the truth show as a move,

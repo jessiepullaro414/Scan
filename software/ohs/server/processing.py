@@ -563,6 +563,9 @@ class ScanProcess:
         self._holes: tuple[int, list] | None = None
         # (version, V, F, sigma, filled) of the current step, for fits (POST .../fit)
         self._fit_mesh: tuple[int, np.ndarray, np.ndarray, np.ndarray | None, np.ndarray | None] | None = None
+        # (version, offsets, answer) of the deviation map of the current step, and the lock that makes it once
+        self._offset: tuple[int, np.ndarray, dict] | None = None
+        self._offset_lock = threading.Lock()
 
     # ------------------------------------------------------------------ persistence
     @property
@@ -1814,6 +1817,39 @@ class ProcessManager:
                 "tolerance_mm": None if r.tolerance_mm is None else float(r.tolerance_mm),  # None for a hole
                 "mean_sigma_mm": None if r.mean_sigma_mm is None else float(r.mean_sigma_mm),
                 "warnings": [str(w) for w in r.warnings], "version": v}
+
+    def deviation(self, pid: str, sid: str) -> tuple[dict, np.ndarray]:
+        """The deviation map of the current mesh: how far each vertex lies from the scan's base mesh
+        (the last stage's result, before any edit), signed, in mm (:func:`ohs.mesh.surface_offset`;
+        NaN for vertices that only filled faces use). Returns the answer of ``deviation.json`` and
+        the float32 array of ``deviation.bin`` (one value per vertex of ``result/mesh.ply``, in its
+        order). Made once per mesh version."""
+        from ohs.mesh import offset_stats, surface_offset
+
+        sp = self.scan(pid, sid)
+        self._need_base(sp)
+        with sp._offset_lock:  # a second request waits for the first one's result
+            with sp.lock:
+                v, k = int(sp.state["version"]), int(sp.state["cursor"])
+                base = dict(sp.state["base"])
+                cached = sp._offset
+            if cached is not None and cached[0] == v:
+                return cached[2], cached[1]
+            V, F, _, Fl = self._load_step(sp, k)
+            if k == 0:  # no edits: the mesh is its own reference
+                off = np.zeros(len(V), dtype=np.float32)
+            else:
+                Vr, Fr, _, _ = self._load_step(sp, 0)
+                filled = Fl if Fl is not None and len(Fl) == len(F) else np.zeros(len(F), dtype=bool)
+                off = surface_offset(V, Vr, Fr, F=F, filled=filled)
+            info = {"version": v, "vertices": int(len(V)), "edits": k,
+                    "reference": {"stage": base["stage"], "triangles": int(base["triangles"]),
+                                  "vertices": int(base["vertices"])},
+                    "stats": offset_stats(off)}
+            with sp.lock:
+                if int(sp.state["version"]) == v:  # not changed meanwhile
+                    sp._offset = (v, off, info)
+            return info, off
 
     def trajectory(self, pid: str, sid: str) -> dict:
         sp = self.scan(pid, sid)

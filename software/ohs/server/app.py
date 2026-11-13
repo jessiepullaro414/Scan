@@ -455,6 +455,16 @@ def create_app(config: Any = None, *, projects_dir: Any = None, static_dir: Any 
     def process_holes(pid: str, sid: str) -> JSONResponse:
         return _json(proc.holes(pid, sid))
 
+    @app.get("/api/projects/{pid}/scans/{sid}/process/deviation.json")
+    def process_deviation(pid: str, sid: str) -> JSONResponse:
+        return _json(proc.deviation(pid, sid)[0])
+
+    @app.get("/api/projects/{pid}/scans/{sid}/process/deviation.bin")
+    def process_deviation_bin(pid: str, sid: str) -> Response:
+        info, off = proc.deviation(pid, sid)
+        return Response(off.astype("<f4", copy=False).tobytes(), media_type="application/octet-stream",
+                        headers={"Cache-Control": "no-cache", "X-OHS-Mesh-Version": str(info["version"])})
+
     @app.post("/api/projects/{pid}/scans/{sid}/fit")
     def scan_fit(pid: str, sid: str, body: FitBody) -> JSONResponse:
         return _json(proc.fit(pid, sid, body.kind, body.face, body.point, body.tolerance_mm, body.version))

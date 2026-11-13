@@ -891,3 +891,32 @@ Rules:
 - Face indices are those of `result/mesh.ply` (polygon faces as in the file, like `delete_faces`).
 - Read-only and quick (well under a second on a 1M-triangle mesh); it does not wait for a running
   edit job of the scan: it uses the current version and says which in `version`.
+
+## M5 second slice: the deviation map
+The plan is in [`DESKTOP_APP_PLAN.md`](DESKTOP_APP_PLAN.md), "M5 plan, second slice". It compares the scan's
+current mesh with its base mesh: the last stage's result, before any edit.
+
+```ts
+type DeviationInfo = {
+  version: number;                      // the mesh version it was made for
+  vertices: number;                     // values in deviation.bin = vertices of result/mesh.ply
+  edits: number;                        // the cursor: 0 = no edits, every value is 0
+  reference: { stage: string; triangles: number; vertices: number };   // the base mesh
+  stats: { n: number; new: number;      // compared vertices; vertices of filled faces only (no value)
+           rms_mm: number | null; mean_mm: number | null;               // mean: signed
+           p50_mm: number | null; p95_mm: number | null; p99_mm: number | null; max_mm: number | null;  // of |move|
+           moved: number | null };      // share moved by more than 0.01 mm; the numbers are null when n = 0
+};
+```
+
+Paths are relative to `/api/projects/{pid}/scans/{sid}`.
+
+| Method and path | Returns |
+|---|---|
+| `GET .../process/deviation.json` | `DeviationInfo` |
+| `GET .../process/deviation.bin` | one little-endian float32 per vertex of `result/mesh.ply`, in its order: the signed distance to the base mesh in mm (+ outward along the base's normal, - inward), NaN for a vertex that only filled faces use. The header `X-OHS-Mesh-Version` has the version. |
+
+Rules:
+- 409 before the scan has a mesh.
+- Made once per mesh version (about 1.5 s for 1M vertices against 2M triangles), then kept; a second
+  request during the first waits for it.

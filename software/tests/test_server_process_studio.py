@@ -174,6 +174,8 @@ def test_a_fresh_scan_and_the_409_rules(env):
     err(post(b + "/process/recipe", {"recipe_id": "default", "scope": "edits"}), 409, "no mesh")
     err(get(b + "/process/holes.json"), 409, "no mesh")
     err(post(b + "/fit", {"kind": "plane", "face": 0, "point": [0, 0, 250]}), 409, "no mesh")
+    err(get(b + "/process/deviation.json"), 409, "no mesh")
+    err(get(b + "/process/deviation.bin"), 409, "no mesh")
     err(get(b + "/process/trajectory.json"), 404, "trajectory")
     err(post(b + "/process/track", {"quality": "draft"}), 422)
     err(post(b + "/process/fuse", {"voxel_mm": 0.01}), 422)
@@ -459,6 +461,46 @@ def test_fit_a_plane_on_the_table(env, tmp_path):
     err(post(b + "/fit", {**click, "kind": "plane", "version": cur["version"] - 1}), 409, "changed")
     err(post(b + "/fit", {"kind": "cylinder", **click}), 422)
     assert post(b + "/fit", {"kind": "plane", **{**click, "point": [0, 0]}}).status_code == 422
+
+
+def test_the_deviation_map_follows_the_edits(env, tmp_path):
+    b = base_url(env)
+    s = get(b + "/process").json()
+    assert s["cursor"] == 0 and s["can_redo"]  # as test_overlays left it
+
+    def both():
+        info = get(b + "/process/deviation.json").json()
+        r = get(b + "/process/deviation.bin")
+        assert r.status_code == 200 and r.headers["x-ohs-mesh-version"] == str(info["version"])
+        return info, np.frombuffer(r.content, dtype="<f4")
+
+    info, off = both()  # no edits: the mesh is its own reference
+    assert info["edits"] == 0 and info["version"] == s["current"]["version"] and info["reference"]["stage"] == "track"
+    assert len(off) == info["vertices"] == s["current"]["stats"]["vertices"] and not off.any()
+    assert info["stats"]["max_mm"] == 0.0 and info["stats"]["new"] == 0 and info["stats"]["moved"] == 0.0
+    for _ in range(3):  # remove floaters, fill holes, smooth
+        s = post(b + "/process/redo").json()
+    info, off = both()
+    assert info["edits"] == 3 and info["version"] == s["current"]["version"]
+    assert info["reference"]["triangles"] == s["base"]["triangles"]
+    ply = tmp_path / "mesh.ply"
+    ply.write_bytes(get(env["url"] + s["current"]["mesh_url"]).content)
+    m = load_ply(ply)
+    assert len(off) == len(m["vertices"]) == info["vertices"]  # one value per vertex of mesh.ply
+    st = info["stats"]
+    assert st["new"] == int(np.isnan(off).sum()) and st["n"] == len(off) - st["new"]
+    filled = m.get("filled")
+    if filled is not None and np.any(filled):  # the new vertices are those no measured face uses
+        measured = np.zeros(len(off), dtype=bool)
+        measured[m["faces"][~filled.astype(bool)]] = True
+        assert np.array_equal(np.isnan(off), ~measured)
+    # smoothing moved the surface a little, both ways, and nowhere far
+    assert 0 < st["p50_mm"] <= st["p95_mm"] <= st["max_mm"] < 10.0 and st["moved"] > 0.1
+    assert np.nanmin(off) < 0 < np.nanmax(off) and st["max_mm"] == pytest.approx(float(np.nanmax(np.abs(off))), abs=1e-3)
+    assert get(b + "/process/deviation.json").json() == info  # kept for this version
+    for _ in range(3):
+        s = post(b + "/process/undo").json()
+    assert s["cursor"] == 0 and not both()[1].any()
 
 
 def test_recipes_crud(env):
