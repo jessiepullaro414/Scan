@@ -137,8 +137,6 @@ def test_laser_calib_set_lines_lie_on_board():
     off, _, _, _ = make_laser_calib_set(n_views=3, image_size=(640, 400), seed=0, lines=False)
     assert (pairs[0][0] >= 250).sum() > 50 and (off[0][0] >= 250).sum() == 0
     K = cal.stereo.K_rect
-    W = spec["squares_x"] * spec["square_mm"]
-    H = spec["squares_y"] * spec["square_mm"]
     depths = []
     for name, vertical in (("vertical", True), ("horizontal", False)):
         # one sheet at a time, so "brightest pixel per row/column" is unambiguous

@@ -9,14 +9,13 @@ import io
 import threading
 import time
 import types
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
 import pytest
 
 from ohs.app import capture, cli, selftest
-from ohs.devices.pico import Pico
 from ohs.io.recording import RecordingReader, RecordingWriter
 from ohs.sim.nominal import nominal_calibration
 from ohs.types import ImuCalibration, LaserPlane, ScannerCalibration, StereoFrame, TrackResult

@@ -429,13 +429,21 @@ processing), S1 (start-up).
   `npm test` (6 files: 49 + 11 + 35 + 21 + 16 + 36 checks) and the build pass. Noticed: a PLY
   whose face element has 0 faces gives an empty mesh, not null (so no fallback to `PLYLoader`).
 
-### [ ] A4. Lint for unused code (Sonnet, S) ✔
+### [x] A4. Lint for unused code (Sonnet, S) ✔
 - **Where:** `software/pyproject.toml` has no linter section, although the code already carries
   `# noqa: PLC0415` comments.
 - **Change:** add `[tool.ruff]` with only the pyflakes rules (`F`) plus the rule those comments
   refer to; fix what it reports (unused imports and variables) and nothing else. No reformatting.
 - **Guard:** all tests; `git diff --stat` shows deletions only.
 - Needs `ruff` installed in the venv: ask the owner before installing.
+- **Done 2026-11-13** (the owner said yes to the install; ruff 0.17.5 in the venv, and in the
+  `dev` extra): `[tool.ruff.lint]` selects the pyflakes rules only; run `python -m ruff check ohs
+  tests`. It reported 9 unused names, all in tests: 3 imports (`field`, `Pico`,
+  `BUILTIN_RECIPES`) and 6 variables (`st`, `W`, `H`, and `j` three times, where the call
+  stays and only the name goes). The engine (`ohs/`) and the firmware had none.
+- **Not added:** the rule the `# noqa: PLC0415` comments name (imports inside functions). It
+  reports 337 places, none of which is fixed by deleting something; the comments stay as
+  notes on why an import is where it is.
 
 ### [ ] A5. CI on GitHub (Sonnet, M) ✔
 - **Where:** the repo has no `.github/workflows`.

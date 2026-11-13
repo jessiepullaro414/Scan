@@ -36,7 +36,7 @@ from ohs.app.pipeline import PipelineParams  # noqa: E402
 from ohs.app.process import ProcessParams, process_recording  # noqa: E402
 from ohs.io.recording import RecordingReader  # noqa: E402
 from ohs.server.app import create_app  # noqa: E402
-from ohs.server.processing import BUILTIN_RECIPES, read_trajectory  # noqa: E402
+from ohs.server.processing import read_trajectory  # noqa: E402
 from ohs.server.testing import ServerThread, recv_until  # noqa: E402
 from ohs.sim.datasets import make_scan_recording  # noqa: E402
 from ohs.track.export import load_ply  # noqa: E402
@@ -821,7 +821,7 @@ def test_measurement_safe_edits(env):
     s0 = get(b + "/process").json()["current"]["stats"]
     assert s0["filled_cm2"] == 0.0
     # filled faces are flagged in the PLY and counted
-    j = run_job(env, post(b + "/process/edits", {"op": "fill_holes", "params": {"max_hole_mm": 60}}), "mesh_edit")
+    run_job(env, post(b + "/process/edits", {"op": "fill_holes", "params": {"max_hole_mm": 60}}), "mesh_edit")
     s = get(b + "/process").json()
     p = env["root"] / f"dl-{time.monotonic_ns()}.ply"
     p.write_bytes(get(env["url"] + s["current"]["mesh_url"]).content)
@@ -834,7 +834,7 @@ def test_measurement_safe_edits(env):
                                                                           "within_sigma": True}}), "mesh_edit")
     s = get(b + "/process").json()
     assert s["edits"][-1]["label"].endswith("within 2σ)") and s["current"]["stats"]["filled_cm2"] > 0
-    j = run_job(env, post(b + "/process/edits", {"op": "decimate", "params": {"max_error_mm": 0.05}}), "mesh_edit")
+    run_job(env, post(b + "/process/edits", {"op": "decimate", "params": {"max_error_mm": 0.05}}), "mesh_edit")
     s = get(b + "/process").json()
     e = s["edits"][-1]
     assert e["label"] == "Simplify to within 0.05 mm" and "moved at most" in e["summary"]
@@ -846,8 +846,8 @@ def test_measurement_safe_edits(env):
     p.write_bytes(get(env["url"] + u["current"]["mesh_url"]).content)
     assert load_ply(p)["filled"] is None
     # watertight: an open scan's outer edge is far over any reasonable limit, and the summary says so
-    j = run_job(env, post(b + "/process/edits", {"op": "fill_holes", "params": {"max_hole_mm": 60, "watertight": True}}),
-                "mesh_edit")
+    run_job(env, post(b + "/process/edits", {"op": "fill_holes", "params": {"max_hole_mm": 60, "watertight": True}}),
+            "mesh_edit")
     e = get(b + "/process").json()["edits"][-1]
     assert e["label"] == "Make watertight: close every opening up to 60 mm" and "not watertight yet" in e["summary"]
 

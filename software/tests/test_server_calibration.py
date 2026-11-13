@@ -149,7 +149,7 @@ def _connect_sim(url) -> dict:
 # --------------------------------------------------------------------------- end to end
 @pytest.mark.slow
 def test_wizard_end_to_end_on_the_simulator(env):
-    url, root, st = env["url"], env["root"], env["studio"]
+    url, root = env["url"], env["root"]
     device_calib = root / "device" / "calibration.json"
     sandbox = root / "data" / "sim" / "calibration.json"
     _connect_sim(url)

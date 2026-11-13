@@ -21,7 +21,7 @@ dependencies = [
 fusion = ["open3d>=0.18"]
 app = ["fastapi", "uvicorn", "websockets", "pywebview"]
 gpu = ["pyopencl>=2024.1"]  # GPU processing on NVIDIA, AMD and Intel (ohs.compute); the CPU path needs nothing
-dev = ["pytest>=7"]
+dev = ["pytest>=7", "ruff>=0.6"]
 
 [project.scripts]
 ohs = "ohs.app.cli:main"
@@ -32,6 +32,11 @@ include = ["ohs*"]
 [tool.setuptools.package-data]
 # The built desktop-app UI (npm run build in ui/); wheels built after a UI build include it
 ohs = ["server/static/**/*"]
+
+[tool.ruff.lint]
+# Unused imports and variables, undefined names (pyflakes), and nothing else: no style rules, no
+# reformatting. Run: python -m ruff check ohs tests
+select = ["F"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
