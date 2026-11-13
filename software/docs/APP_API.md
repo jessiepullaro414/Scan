@@ -839,3 +839,55 @@ Everything in the M3 phase 2 section is implemented as written, with these clari
 | Undo / redo | 0.3 s |
 
 An edit job adds about 2 s at this size: stats, normals, the cached step and the result files.
+
+## M5 first slice: fitted shapes
+The plan is in [`DESKTOP_APP_PLAN.md`](DESKTOP_APP_PLAN.md), "M5 plan, first slice". The fits work on the
+scan's current mesh, the one the viewer shows (`result/mesh.ply`, `ProcessState.current.version`).
+
+### Types
+```ts
+type FitKind = "plane" | "cylinder" | "hole";
+type FitRequest = {
+  kind: FitKind;
+  face: number;                        // the clicked face of result/mesh.ply
+  point: [number, number, number];     // the clicked point on it (mm, the mesh's frame)
+  tolerance_mm?: number | null;        // null = chosen from the seed's measured scatter (and sigma, when it agrees)
+  version?: number;                    // the mesh version the click was made on: 409 when it is no longer current
+};
+// All ± values are 1σ, statistical only (calibration and scale errors come on top).
+type PlaneShape = { kind: "plane"; point: number[]; normal: number[]; rms_mm: number; flatness_mm: number; n: number;
+                    normal_sigma_deg: number; offset_sigma_mm: number };
+type CylinderShape = { kind: "cylinder"; point: number[]; axis: number[]; radius_mm: number; diameter_mm: number;
+                       rms_mm: number; n: number; radius_sigma_mm: number; diameter_sigma_mm: number;
+                       axis_sigma_deg: number; point_sigma_mm: number };
+type CircleShape = { kind: "circle"; center: number[]; normal: number[]; radius_mm: number; diameter_mm: number;
+                     rms_mm: number; n: number; radius_sigma_mm: number; diameter_sigma_mm: number; center_sigma_mm: number };
+type FitResult = {
+  kind: FitKind;                        // as asked; a hole's shape is a circle
+  shape: PlaneShape | CylinderShape | CircleShape;
+  faces: string;                        // the region: base64 of little-endian uint32 face indices, sorted
+  n_faces: number;
+  tolerance_mm: number | null;          // the tolerance used (null for a hole)
+  mean_sigma_mm: number | null;         // mean sigma of the fitted points (null when the mesh has none)
+  warnings: string[];                   // plain language, e.g. "small region: 23 points"
+  version: number;                      // the mesh version it was fitted on
+};
+```
+
+### REST
+Paths are relative to `/api/projects/{pid}/scans/{sid}`.
+
+| Method and path | Body | Returns |
+|---|---|---|
+| `POST .../fit` | `FitRequest` | `FitResult` |
+
+Rules:
+- 409 before the scan has a mesh (as `holes.json`).
+- 422 for an unknown kind, a face outside the mesh, or when no such shape is found there; the
+  detail says why and the hint what to try (e.g. "click on the wall of the bore and choose
+  Cylinder").
+- 409 when `version` is given and the mesh has changed since (reload it and click again).
+- A hole is always a circle; a click on a scanned bore wall answers 422 with the hint to use Cylinder.
+- Face indices are those of `result/mesh.ply` (polygon faces as in the file, like `delete_faces`).
+- Read-only and quick (well under a second on a 1M-triangle mesh); it does not wait for a running
+  edit job of the scan: it uses the current version and says which in `version`.

@@ -173,6 +173,7 @@ def test_a_fresh_scan_and_the_409_rules(env):
     err(post(b + "/process/redo"), 409, "no mesh")
     err(post(b + "/process/recipe", {"recipe_id": "default", "scope": "edits"}), 409, "no mesh")
     err(get(b + "/process/holes.json"), 409, "no mesh")
+    err(post(b + "/fit", {"kind": "plane", "face": 0, "point": [0, 0, 250]}), 409, "no mesh")
     err(get(b + "/process/trajectory.json"), 404, "trajectory")
     err(post(b + "/process/track", {"quality": "draft"}), 422)
     err(post(b + "/process/fuse", {"voxel_mm": 0.01}), 422)
@@ -423,6 +424,41 @@ def test_overlays(env):
     tracked = get(b + "/process").json()["stages"]["track"]["tracked_pct"]
     assert len(tj["raw"]) == round(10 * tracked / 100) and all(len(p) == 3 for p in tj["raw"])
     assert tj["straightened"] is None and tj["loops"] == []
+
+
+def test_fit_a_plane_on_the_table(env, tmp_path):
+    b = base_url(env)
+    cur = get(b + "/process").json()["current"]
+    ply = tmp_path / "mesh.ply"
+    ply.write_bytes(get(env["url"] + cur["mesh_url"]).content)
+    m = load_ply(ply)
+    V, F = m["vertices"], m["faces"]
+    C = V[F].mean(axis=1)
+    far = np.flatnonzero(C[:, 2] >= np.percentile(C[:, 2], 90))  # the table, behind the sphere
+    face = int(far[np.argmin(np.linalg.norm(C[far] - C[far].mean(axis=0), axis=1))])
+    click = {"face": face, "point": [float(x) for x in C[face]], "version": cur["version"]}
+    r = post(b + "/fit", {"kind": "plane", **click})
+    assert r.status_code == 200, r.text
+    fit = r.json()
+    shape = fit["shape"]
+    assert fit["kind"] == "plane" and shape["kind"] == "plane" and fit["version"] == cur["version"]
+    faces = np.frombuffer(base64.b64decode(fit["faces"]), dtype="<u4")
+    assert len(faces) == fit["n_faces"] > 100 and face in faces and np.all(np.diff(faces.astype(np.int64)) > 0)
+    # this short, coarse scan is noisy (face normals about 10° off the table, 0.4 mm scatter): the
+    # check is that the fit agrees with its own region, not precision (that is step 5's)
+    Nf = np.cross(V[F[faces, 1]] - V[F[faces, 0]], V[F[faces, 2]] - V[F[faces, 0]])
+    mean_n = Nf.sum(axis=0) / np.linalg.norm(Nf.sum(axis=0))
+    assert abs(float(np.dot(mean_n, shape["normal"]))) > np.cos(np.radians(10))
+    assert shape["rms_mm"] < 1.0 and shape["flatness_mm"] >= shape["rms_mm"] and shape["normal_sigma_deg"] > 0
+    # the tolerance follows the scatter (its sigma, when there is one, claims ~3 mm)
+    assert 0 < fit["tolerance_mm"] < 3.0 and isinstance(fit["warnings"], list)
+    assert fit["mean_sigma_mm"] is None or fit["mean_sigma_mm"] > 0
+    # clear answers for what does not fit
+    err(post(b + "/fit", {"kind": "cone", **click}), 422, "unknown kind")
+    err(post(b + "/fit", {**click, "kind": "plane", "face": len(F) + 5}), 422, "not on the mesh")
+    err(post(b + "/fit", {**click, "kind": "plane", "version": cur["version"] - 1}), 409, "changed")
+    err(post(b + "/fit", {"kind": "cylinder", **click}), 422)
+    assert post(b + "/fit", {"kind": "plane", **{**click, "point": [0, 0]}}).status_code == 422
 
 
 def test_recipes_crud(env):

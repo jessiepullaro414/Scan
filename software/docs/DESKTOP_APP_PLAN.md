@@ -603,7 +603,14 @@ It turns "a nice mesh" into numbers a part can be made from.
    ±2σ covers 98 % over 40 seeds. Filled and unmeasured faces are left out. A click takes
    0.1–0.2 s on a 1M-triangle mesh; a region that is a whole 1M-triangle tube takes about 1.2 s.
    The simulated scans of the bracket and the panel are step 5.
-3. The API, its tests, and `APP_API.md`.
+3. The API, its tests, and `APP_API.md`. **Done 2026-11-12:** `POST .../fit` (`ProcessManager.fit`),
+   on the current step's mesh with each vertex's sigma and the filled flags, kept per mesh
+   version for the next click; an optional `version` in the request answers 409 when the mesh
+   changed. Tested on the simulated sphere scan: a plane on the table, and the 409 / 422 answers.
+   **For step 5:** on that coarse 10-frame scan the plane's "flatness" (largest minus smallest
+   distance) is 6.6 mm while 99 % of the points are within 1.7 mm and the RMS is 0.39 mm: a
+   robust flatness may suit a label better. On its CPU-path mesh the plane stopped at 1,131
+   faces: on very noisy meshes the seed's scatter comes out low and a region can stop early.
 4. The viewer's Fit tool, the list, relations, and the mock engine.
 5. Simulator validation in `VALIDATION.md`: diameter, axis and position errors against the
    truth on the bracket (bosses r = 7 mm, shaft r = 8 mm) and the car panel (hole Ø 25 mm),

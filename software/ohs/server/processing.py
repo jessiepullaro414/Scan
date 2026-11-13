@@ -561,6 +561,8 @@ class ScanProcess:
         self.lock = threading.RLock()
         self.state = _empty_state(pid, sid)
         self._holes: tuple[int, list] | None = None
+        # (version, V, F, sigma, filled) of the current step, for fits (POST .../fit)
+        self._fit_mesh: tuple[int, np.ndarray, np.ndarray, np.ndarray | None, np.ndarray | None] | None = None
 
     # ------------------------------------------------------------------ persistence
     @property
@@ -1776,6 +1778,42 @@ class ProcessManager:
         sp = self.scan(pid, sid)
         self._need_base(sp)
         return sp.holes(lambda: self.current_mesh(sp))
+
+    def fit(self, pid: str, sid: str, kind: str, face: int, point: Any, tolerance_mm: float | None = None,
+            version: int | None = None) -> dict:
+        """``POST .../fit``: one click on the current mesh grows a plane, cylinder or hole region and
+        fits it (:func:`ohs.measure.fit_at`). Read-only; the mesh is kept per version for the next
+        click. ``version``: the mesh version the click was made on (409 when it changed)."""
+        from ohs.measure import KINDS, fit_at
+
+        if kind not in KINDS:
+            raise ApiError(422, f"unknown kind {kind!r}", f"use one of: {', '.join(KINDS)}")
+        sp = self.scan(pid, sid)
+        self._need_base(sp)
+        with sp.lock:  # the step's arrays, loaded once per version
+            v = int(sp.state["version"])
+            if version is not None and int(version) != v:
+                raise ApiError(409, "the mesh changed since this click", "reload the mesh and click again")
+            cached = sp._fit_mesh
+            if cached is None or cached[0] != v:
+                V, F, S, Fl = self._load_step(sp, int(sp.state["cursor"]))
+                cached = sp._fit_mesh = (v, V, F, S, Fl)
+        _, V, F, S, Fl = cached
+        if not 0 <= int(face) < len(F):
+            raise ApiError(422, f"face {face} is not on the mesh ({len(F)} faces)", "reload the mesh and click again")
+        try:
+            r = fit_at(V, F, int(face), point, kind, sigma=S, filled=Fl, tolerance_mm=tolerance_mm)
+        except ValueError as e:
+            hint = {"plane": "click in the middle of a flat area",
+                    "cylinder": "click on the curved wall of a boss, shaft or bore",
+                    "hole": "click near the edge of a hole that was scanned all round"}[kind]
+            raise ApiError(422, str(e), hint) from None
+        faces = np.asarray(r.faces, dtype="<u4")
+        return {"kind": kind, "shape": r.fit.to_dict(), "faces": base64.b64encode(faces.tobytes()).decode("ascii"),
+                "n_faces": int(len(faces)),
+                "tolerance_mm": None if r.tolerance_mm is None else float(r.tolerance_mm),  # None for a hole
+                "mean_sigma_mm": None if r.mean_sigma_mm is None else float(r.mean_sigma_mm),
+                "warnings": [str(w) for w in r.warnings], "version": v}
 
     def trajectory(self, pid: str, sid: str) -> dict:
         sp = self.scan(pid, sid)

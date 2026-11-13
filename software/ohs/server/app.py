@@ -141,6 +141,14 @@ class RecipeApplyBody(BaseModel):
     scope: Literal["edits", "all"]
 
 
+class FitBody(BaseModel):
+    kind: str  # "plane" | "cylinder" | "hole" (checked by the engine, with a plain message)
+    face: int = Field(ge=0)
+    point: list[float] = Field(min_length=3, max_length=3)
+    tolerance_mm: Optional[float] = Field(None, gt=0.0, le=10.0)
+    version: Optional[int] = None  # the mesh version the click was made on
+
+
 class ScanRef(BaseModel):
     project_id: str
     scan_id: str
@@ -446,6 +454,10 @@ def create_app(config: Any = None, *, projects_dir: Any = None, static_dir: Any 
     @app.get("/api/projects/{pid}/scans/{sid}/process/holes.json")
     def process_holes(pid: str, sid: str) -> JSONResponse:
         return _json(proc.holes(pid, sid))
+
+    @app.post("/api/projects/{pid}/scans/{sid}/fit")
+    def scan_fit(pid: str, sid: str, body: FitBody) -> JSONResponse:
+        return _json(proc.fit(pid, sid, body.kind, body.face, body.point, body.tolerance_mm, body.version))
 
     @app.get("/api/projects/{pid}/scans/{sid}/process/trajectory.json")
     def process_trajectory(pid: str, sid: str) -> JSONResponse:
