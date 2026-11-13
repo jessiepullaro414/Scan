@@ -7,6 +7,8 @@
 * The sigma model's parts: the scatter along the normal, observations next to pixels without depth
   (the distance to them, the same on the GPU and in numpy), scatter beyond the prediction, and the
   mesh's curvature and open border.
+* The gap guard: depth next to a patch without depth is not fused (the matcher carries a surface a
+  few pixels into a hole), the same on the GPU and in numpy; single missing pixels do not count.
 * The mesh's sigma reaches a PLY file and back.
 """
 import numpy as np
@@ -19,7 +21,8 @@ from ohs.geometry import make_se3  # noqa: E402
 from ohs.track.export import load_ply, save_mesh  # noqa: E402
 from ohs.track.markerless import FusionParams, MarkerlessTracker  # noqa: E402
 from ohs.track.recon_tsdf import (A_BORDER, A_CURV, A_GAP, A_SCATTER, BORDER_MM, C_NOISE,  # noqa: E402
-                                  ConfidenceTsdf, bias_scale, mesh_sigma_terms, voxel_sigma)
+                                  GUARD_PX_1280, ConfidenceTsdf, bias_scale, gap_guard_mask, mesh_sigma_terms,
+                                  voxel_sigma)
 
 W, H, FX = 320, 200, 180.0
 K = np.array([[FX, 0.0, (W - 1) / 2], [0.0, FX, (H - 1) / 2], [0.0, 0.0, 1.0]])
@@ -40,8 +43,9 @@ def poses(n: int, step_mm: float) -> list[np.ndarray]:
     return [make_se3(np.eye(3), np.array([k * step_mm, 0.0, 0.0])) for k in range(n)]
 
 
-def volume(backend: str) -> ConfidenceTsdf:
-    return ConfidenceTsdf(K, (W, H), voxel_mm=2.0, trunc_mm=8.0, depth_min_mm=150.0, depth_max_mm=450.0, backend=backend)
+def volume(backend: str, **kw) -> ConfidenceTsdf:
+    return ConfidenceTsdf(K, (W, H), voxel_mm=2.0, trunc_mm=8.0, depth_min_mm=150.0, depth_max_mm=450.0, backend=backend,
+                          **kw)
 
 
 def test_without_sigmas_it_meshes_like_open3d():
@@ -143,7 +147,7 @@ def test_gap_distance_is_euclidean_and_the_same_on_the_gpu():
     assert np.all(v._gap2(full) == cap)
     if compute.get_device() is None:
         return
-    vg = volume("gpu")
+    vg = volume("gpu", gap_guard_px=0.0)  # the distance alone, without the gap guard's marks
     for img, ref in ((d, g2), (full, v._gap2(full))):
         hold = vg._upload_images(np.ascontiguousarray(img), None)
         vg._queue_gaps(img.shape)
@@ -152,6 +156,88 @@ def test_gap_distance_is_euclidean_and_the_same_on_the_gpu():
         del hold
         assert np.array_equal(got, ref)
     vg.close()
+
+
+def test_gap_guard_mask_and_its_gpu_twin():
+    """The guard's rule, against an independent computation: a pixel without depth is part of a patch
+    when at least 13 of the 5x5 around it (the border repeated) have none; a pixel with depth within
+    the radius (Euclidean) of a patch is dropped. The GPU marks the same pixels."""
+    from scipy.ndimage import convolve, distance_transform_edt
+
+    rng = np.random.default_rng(8)
+    d = np.full((H, W), 300.0, np.float32)
+    d[rng.random(d.shape) < 0.03] = 0.0  # single gaps between dots: no patch
+    d[40:70, 60:95] = 0.0  # a hole
+    d[100:103, 200:203] = 0.0  # 3x3: too small to hold a patch pixel
+    d[150:156, 250:256] = 0.0  # 6x6: its middle is a patch
+    d[:9, 300:] = 0.0  # a patch in the image corner
+    gap = ~(d > 0)
+    seed = gap & (convolve(gap.astype(np.int32), np.ones((5, 5), np.int32), mode="nearest") >= 13)
+    assert seed[55, 75] and seed[152:154, 252:254].all() and not seed[100:103, 200:203].any() and seed[2, 310]
+    dist = distance_transform_edt(~seed)
+    for r in (2.0, 2.5, 4.0, 8.0):
+        m = gap_guard_mask(d, r)
+        assert m.dtype == bool and np.array_equal(m, ~gap & (dist <= r)), r
+    assert m[55, 52] and not m[55, 51] and not m[101, 198]  # 8 px from the hole; 9 px; next to the 3x3
+    assert not gap_guard_mask(d, 0.0).any()
+    lone = np.full((H, W), 300.0, np.float32)
+    lone[rng.random(lone.shape) < 0.03] = 0.0
+    assert not gap_guard_mask(lone, 8.0).any()  # no patch anywhere
+    # off unless asked for; None asks for the measured radius, 8 px at 1280 px width
+    assert GUARD_PX_1280 == 8.0 and volume("cpu").gap_guard_px == 0.0
+    assert volume("cpu", gap_guard_px=None).gap_guard_px == pytest.approx(8.0 * W / 1280.0)
+    if compute.get_device() is None:
+        return
+    for r in (2.0, 2.5, 8.0, 0.0):
+        vg = volume("gpu", gap_guard_px=r)
+        for img in (d, lone):
+            hold = vg._upload_images(np.ascontiguousarray(img), None)
+            vg._queue_gaps(img.shape)
+            raw, got = np.empty((H, W), np.float32), np.empty((H, W), np.float32)
+            vg.cl.enqueue_copy(vg.queue, raw, vg._img_bufs[4], is_blocking=True)
+            del hold
+            assert np.array_equal(raw, vg._gap2(img)), r  # the distance on the depth as it came
+            if r > 0:  # and with what the guard drops counted as missing: 0 at the dropped pixels
+                vg.cl.enqueue_copy(vg.queue, got, vg._img_bufs[7], is_blocking=True)
+                mask = gap_guard_mask(img, r)
+                assert np.array_equal(got, vg._gap2(np.where(mask, np.float32(0.0), img))), r
+                assert np.array_equal((got == 0) & (img > 0), mask), r
+        vg.close()
+
+
+def holed_frames(rng, fill_mm: float, n: int = 10) -> list:
+    """Frames of the plane with a hole of radius 25 mm around world (40, 0), of which every frame
+    "sees" the first ``fill_mm`` as plane: what the matcher's windows do at an edge with nothing
+    behind it."""
+    vs, us = np.mgrid[0:H, 0:W].astype(np.float64)
+    out = []
+    for T in poses(n, 6.0):
+        d = plane_depth(T, 0.1, rng)
+        ray = np.stack([(us - K[0, 2]) / FX, (vs - K[1, 2]) / FX, np.ones_like(us)], axis=-1) @ T[:3, :3].T
+        X = T[:3, 3] + ray * d[..., None]
+        d[np.hypot(X[..., 0] - 40.0, X[..., 1]) < 25.0 - fill_mm] = 0.0
+        out.append((d, np.full((H, W), 0.2, np.float32), T))
+    return out
+
+
+@pytest.mark.parametrize("backend", ["cpu", "gpu"])
+def test_gap_guard_keeps_the_fill_out_of_the_mesh(backend):
+    """A hole whose first 2 mm every frame fills in: without the guard the mesh reaches into the
+    hole; with it (2 px = 3.3 mm here) the mesh stops outside the hole's true edge."""
+    if backend == "gpu" and compute.get_device() is None:
+        pytest.skip(f"no GPU: {compute.status()}")
+    frames = holed_frames(np.random.default_rng(9), fill_mm=2.0)
+    reach = {}
+    for px in (None, 0.0):
+        v = volume(backend, gap_guard_px=px)
+        for d, sg, T in frames:
+            v.integrate(d, sg, T)
+        V, _, _ = v.extract_mesh()
+        reach[px] = np.hypot(V[:, 0] - 40.0, V[:, 1]).min()
+        assert len(V) > 5000
+        v.close()
+    assert reach[0.0] < 24.0  # the fill is in the mesh
+    assert 25.0 < reach[None] < 29.0  # the hole's true edge is at 25 mm: no fill, and not much of the plane lost
 
 
 def test_scatter_is_measured_along_the_normal_and_gaps_are_counted():
@@ -163,7 +249,7 @@ def test_scatter_is_measured_along_the_normal_and_gaps_are_counted():
 
     rng = np.random.default_rng(6)
     R = Rotation.from_euler("y", 35.0, degrees=True).as_matrix()
-    v = volume("cpu")
+    v = volume("cpu", gap_guard_px=0.0)  # without the gap guard, which would not fuse what is counted here
     Ts = [make_se3(R, np.array([-180.0 + 6.0 * k, 0.0, 30.0])) for k in range(10)]
     vs, us = np.mgrid[0:H, 0:W].astype(np.float64)
     for T in Ts:

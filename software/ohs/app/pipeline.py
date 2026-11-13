@@ -122,7 +122,7 @@ from ohs.track.fusion import LaserCloud
 from ohs.track.imu_prior import GyroPredictor
 from ohs.track.markerless import FusionParams, MarkerlessTracker
 from ohs.track.markers import MarkerParams, MarkerTracker
-from ohs.track.recon_tsdf import ConfidenceTsdf
+from ohs.track.recon_tsdf import GUARD_PX_1280, ConfidenceTsdf, gap_guard_mask
 from ohs.types import ImuSample, LaserPlane, ScannerCalibration, StereoFrame, TrackResult
 from ohs.vision.depth import SIGMA_MODELS, DepthEstimator, DepthParams
 from ohs.vision.laser import LINE_NAMES, LaserLines, LaserParams, extract_laser_lines, laser_points
@@ -300,6 +300,10 @@ class PipelineParams:
     # reconstruction model (module docstring, "Reconstruction model"): "auto" = the confidence TSDF
     # on a GPU, else Open3D; "confidence" also without a GPU (numpy, slow); "open3d" = no confidence
     recon: str = "auto"
+    # the gap guard of the reconstruction (ohs.track.recon_tsdf, "The gap guard"): depth within this
+    # many px of a patch without depth is not fused, which keeps holes open; 0 -> off (the default:
+    # VALIDATION.md, "The gap guard in the engine"); None -> 8 px at 1280 px width
+    gap_guard_px: float | None = 0.0
     # False: every frame comes with its pose (process(frame, pose)), so no tracking model is built
     tracking: bool = True
 
@@ -310,6 +314,8 @@ class PipelineParams:
             raise ValueError(f"scale must be in (0, 1], got {self.scale!r}")
         if self.recon not in RECON_MODELS:
             raise ValueError(f"recon must be one of {RECON_MODELS}, got {self.recon!r}")
+        if self.gap_guard_px is not None and not float(self.gap_guard_px) >= 0:
+            raise ValueError(f"gap_guard_px must be >= 0, got {self.gap_guard_px!r}")
 
 
 @dataclass
@@ -388,9 +394,17 @@ class FramePipeline:
         # The confidence TSDF only reconstructs: with track_filter_px=0 the model also tracks, so Open3D.
         self.markerless: MarkerlessTracker | ConfidenceTsdf | None = None
         self.has_confidence = False
+        # the gap guard of the reconstruction, in px of the processed image
+        self.gap_guard_px = (GUARD_PX_1280 * self.image_size[0] / 1280.0 if p.gap_guard_px is None
+                             else float(p.gap_guard_px))
+        self._guard_in_fuse = False  # True: the Open3D reconstruction, which gets its depth guarded here
         if self._need_depth:
             single = p.mode == "markerless" and p.tracking and self.track_filter_px <= 0
             self.markerless = self._make_recon(p.recon, single_model=single)
+            # the confidence TSDF guards inside; a model that also tracks keeps every pixel (dropping
+            # them for the tracker moved the trajectory)
+            self._guard_in_fuse = (self.gap_guard_px > 0 and not single
+                                   and not isinstance(self.markerless, ConfidenceTsdf))
             self.has_confidence = isinstance(self.markerless, ConfidenceTsdf)
         self.tracker: MarkerlessTracker | None = None
         if p.mode == "markerless" and p.tracking:
@@ -675,7 +689,7 @@ class FramePipeline:
                 return ConfidenceTsdf(self.K, self.image_size, voxel_mm=fp.voxel_mm, trunc_mm=fp.trunc_mm,
                                     depth_min_mm=fp.depth_min_mm, depth_max_mm=fp.depth_max_mm,
                                     backend="gpu" if want == "auto" else "auto",
-                                    hole_factor=(sm.hole_amp, sm.hole_r_px))
+                                    hole_factor=(sm.hole_amp, sm.hole_r_px), gap_guard_px=self.gap_guard_px)
             except RuntimeError as e:  # "auto" without a GPU
                 log.info("reconstruction with Open3D on the CPU: %s", e)
         return MarkerlessTracker(self.K, self.image_size, self.fusion_params)
@@ -697,6 +711,12 @@ class FramePipeline:
         if self.markerless is None or depth is None:
             return
         ti = time.perf_counter()
+        if self._guard_in_fuse:
+            fp = self.fusion_params
+            ok = (depth >= fp.depth_min_mm) & (depth <= fp.depth_max_mm)  # the fused range; NaN compares false
+            drop = gap_guard_mask(np.where(ok, depth, np.float32(0.0)), self.gap_guard_px)
+            if drop.any():
+                depth = np.where(drop, np.float32(0.0), depth)
         self.markerless.integrate(depth, sigma if self.has_confidence else None, T_wc, t=t)
         tim["integrate"] = _ms(ti)
 

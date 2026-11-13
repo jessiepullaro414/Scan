@@ -74,8 +74,13 @@ about the scan itself, not the Fit tool, and they decide whether a measurement c
   filled in"): the fill is the stereo matcher's windows spreading into a region with nothing to
   match, on every side of the hole, so a left-right check does not help. A guard that drops fused
   depth within 8 px of a patch without depth opens the Ø 25 mm hole to Ø 24.4–25.2, at the price
-  of thinner side-wall coverage and convex features 0.2–0.5 mm smaller in diameter. **Waiting for a
-  decision** (it changes every scan). Small holes (Ø 6–10 mm) over a far, dark background stay
+  of thinner side-wall coverage and convex features 0.2–0.5 mm smaller in diameter. **Built into
+  the engine 2026-11-13, off by default** (`PipelineParams.gap_guard_px`; `VALIDATION.md`, "The gap
+  guard in the engine"): on 16 recordings fused with and without it at the same poses, the Ø 25
+  hole can be measured every time (Ø 22.0–24.3 with tracking), and flat surface and the floor get
+  better; but on the bracket with tracking 1–7 points of coverage are lost and the worst errors
+  grow by 0.1–0.2 mm. **Waiting for a decision:** turn it on as it is, or first try the per-voxel
+  variant that should keep the bracket's coverage. Small holes (Ø 6–10 mm) over a far, dark background stay
   closed with every fix tried: they need another cue, such as the laser lines' end points at a
   rim. To do after the decision: the Hole tool fitting the edge of the flat region instead of the
   mesh's boundary loop, for holes with a wall and a near background.

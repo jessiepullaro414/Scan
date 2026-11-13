@@ -67,6 +67,22 @@ edges, where the error is a bias.
 in the fused range, searched up to 3 radii of the matcher's factor (15 px), as the GPU matcher
 measures it: two kernels (along the rows, then across them), or OpenCV's exact transform in numpy.
 
+**The gap guard** (off by default). Where nothing can be matched behind an edge (a hole whose background is dark,
+unlit or seen by one camera only), the matcher's windows carry the near surface a few pixels into
+the gap, on every side, and fused from all round these fills close the hole: a 25 mm hole fused to
+an opening of 12-14 mm (``VALIDATION.md``, "Holes filled in"). With the guard on, depth within
+``gap_guard_px`` (8 px at 1280 px width) of a *patch* without depth is not fused
+(:func:`gap_guard_mask`). A pixel without
+depth belongs to a patch when at least 13 of the 5x5 around it have none either, so the single gaps
+between dots do not count. The guard works on the fused depth only: the tracker keeps every pixel
+(dropping them there moved the trajectory), and the bricks are searched on the whole depth. Its
+price is a thinner rim next to gaps: less of a steep side wall, and convex features 0.2-0.5 mm
+smaller in diameter; with tracking, a small part with many edges lost 1-7 points of its coverage
+and its worst errors grew by 0.1-0.2 mm, which is why it is not on by default (``VALIDATION.md``,
+"The gap guard in the engine"). For the sigma's count of observations "next to a pixel without depth"
+(``hnear``), what the guard drops counts as without depth: the count is about the depth that is
+fused. (The matcher's factor is taken out with the distance on the depth as the matcher made it.)
+
 **Backends.** ``"gpu"``: OpenCL on :func:`ohs.compute.get_device` (one work-item per voxel of the
 frame's bricks, so no voxel is written twice). ``"cpu"``: the same arithmetic in numpy, which is
 also the tests' reference. ``"auto"`` picks the GPU when there is one.
@@ -94,6 +110,7 @@ from typing import Any
 import numpy as np
 
 __all__ = ["ConfidenceTsdf", "BRICK", "RECON_BACKENDS", "voxel_sigma", "mesh_sigma_terms", "bias_scale", "pixel_weights",
+           "gap_guard_mask", "GUARD_PX_1280", "GUARD_SEED",
            "C_NOISE", "A_GAP", "A_SCATTER", "A_CURV", "A_BORDER", "GAP_NEAR_PX_1280", "BORDER_MM"]
 
 log = logging.getLogger(__name__)
@@ -112,6 +129,9 @@ A_CURV = 1.0579  # mm times sqrt(1 - n . mean normal of the 2-ring), its largest
 A_BORDER = 0.5325  # mm on the mesh's open border, falling off as exp(-distance / BORDER_MM)
 GAP_NEAR_PX_1280 = 6.0  # "next to a pixel without depth": within this many px, at 1280 px width
 BORDER_MM = 1.5
+# The gap guard (module docstring)
+GUARD_PX_1280 = 8.0  # depth within this many px of a patch without depth is not fused, at 1280 px width
+GUARD_SEED = 13  # a pixel without depth is part of a patch when this many of the 5x5 around it have none
 
 _SRC = r"""
 // OpenCL C 1.2. Sparse confidence TSDF of ohs/track/recon_tsdf.py (see its docstring).
@@ -122,7 +142,7 @@ __kernel void recon_integrate(
     __global float *xc, __global float *mxc, __global float *hnear, __global float *snh2,
     __global const int *slots, __global const int *keys, const int n_active,
     __global const float *depth, __global const float *sigma, const int has_sigma, const int w, const int h,
-    __global const float *gap2,
+    __global const float *gap2, __global const float *gapg,
     const float fx, const float fy, const float cx, const float cy, const float sk,
     const float r00, const float r01, const float r02,
     const float r10, const float r11, const float r12,
@@ -156,6 +176,8 @@ __kernel void recon_integrate(
     // without the matcher's factor for pixels next to missing depth (1 + hole_amp exp(-g2 / hole_r2))
     const float wt = 1.0f;
     const float g2 = gap2[pix];  // squared distance (px) to the nearest pixel without depth
+    const float gg = gapg[pix];  // the same, with what the gap guard drops counted as without depth
+    if (gg == 0.0f) return;  // the gap guard dropped this pixel
     float var = trunc * trunc / 9.0f;
     if (has_sigma) {
         const float sg = sigma[pix];
@@ -188,7 +210,7 @@ __kernel void recon_integrate(
     const float q1 = q0 + (wt / W1) * (xn - q0);
     mxc[a] += wt * (xn - q0) * (xn - q1);
     xc[a] = q1;
-    hnear[a] += (g2 < near2) ? 1.0f : 0.0f;
+    hnear[a] += (gg < near2) ? 1.0f : 0.0f;
     tsdf[a] = m1;
     wsum[a] = W1;
     nobs[a] += 1.0f;
@@ -201,8 +223,10 @@ __kernel void recon_integrate(
 }
 
 // The distance to missing depth (module docstring), step 1: along the row, up to R px (R + 1: none).
+// With use_mark, the pixels the gap guard drops (mark) count as without depth too.
 __kernel void recon_gap_row(__global const float *depth, __global float *hx, const int w, const int h, const int R,
-                            const float depth_min, const float depth_max)
+                            const float depth_min, const float depth_max,
+                            __global const uchar *mark, const int use_mark)
 {
     const int x = get_global_id(0), y = get_global_id(1);
     if (x >= w || y >= h) return;
@@ -212,11 +236,11 @@ __kernel void recon_gap_row(__global const float *depth, __global float *hx, con
         int gap = 0;
         if (x - dx >= 0) {
             const float d = depth[row + x - dx];
-            gap = !(d >= depth_min && d <= depth_max);
+            gap = !(d >= depth_min && d <= depth_max) || (use_mark && mark[row + x - dx]);
         }
         if (!gap && x + dx < w) {
             const float d = depth[row + x + dx];
-            gap = !(d >= depth_min && d <= depth_max);
+            gap = !(d >= depth_min && d <= depth_max) || (use_mark && mark[row + x + dx]);
         }
         if (gap) {
             best = (float)dx;
@@ -239,6 +263,62 @@ __kernel void recon_gap_dist(__global const float *hx, __global float *gap2, con
         g2 = fmin(g2, d * d + (float)(dy * dy));
     }
     gap2[y * w + x] = g2;
+}
+
+// The gap guard's mark: the pixels within sqrt(guard2) px of a patch without depth, from the row
+// distances to the patches (hs, searched up to R px). It marks pixels without depth too.
+__kernel void recon_guard_mark(__global const float *hs, __global uchar *mark, const int w, const int h, const int R,
+                               const float guard2)
+{
+    const int x = get_global_id(0), y = get_global_id(1);
+    if (x >= w || y >= h) return;
+    float s2 = (float)((R + 1) * (R + 1));
+    for (int dy = -R; dy <= R; ++dy) {
+        const int yy = y + dy;
+        if (yy < 0 || yy >= h) continue;
+        const float d = hs[yy * w + x];
+        s2 = fmin(s2, d * d + (float)(dy * dy));
+    }
+    mark[y * w + x] = (uchar)(s2 <= guard2);
+}
+
+// The gap guard's patches: a pixel without depth of which at least nseed of the 5x5 around it (the
+// border repeated) have none either.
+__kernel void recon_guard_seed(__global const float *depth, __global uchar *seed, const int w, const int h,
+                               const float depth_min, const float depth_max, const int nseed)
+{
+    const int x = get_global_id(0), y = get_global_id(1);
+    if (x >= w || y >= h) return;
+    const float d0 = depth[y * w + x];
+    uchar s = 0;
+    if (!(d0 >= depth_min && d0 <= depth_max)) {
+        int n = 0;
+        for (int dy = -2; dy <= 2; ++dy) {
+            const int row = clamp(y + dy, 0, h - 1) * w;
+            for (int dx = -2; dx <= 2; ++dx) {
+                const float d = depth[row + clamp(x + dx, 0, w - 1)];
+                n += !(d >= depth_min && d <= depth_max);
+            }
+        }
+        s = (uchar)(n >= nseed);
+    }
+    seed[y * w + x] = s;
+}
+
+// The distance along the row to the nearest patch pixel, up to R px (R + 1: none).
+__kernel void recon_guard_row(__global const uchar *seed, __global float *hs, const int w, const int h, const int R)
+{
+    const int x = get_global_id(0), y = get_global_id(1);
+    if (x >= w || y >= h) return;
+    const int row = y * w;
+    float best = (float)(R + 1);
+    for (int dx = 0; dx <= R; ++dx) {
+        if ((x - dx >= 0 && seed[row + x - dx]) || (x + dx < w && seed[row + x + dx])) {
+            best = (float)dx;
+            break;
+        }
+    }
+    hs[row + x] = best;
 }
 
 // The brick search of _frame_bricks: every step-th pixel's ray at d - trunc, d and d + trunc, in bricks
@@ -291,9 +371,12 @@ __kernel void recon_bricks(
 }
 """
 _I, _F = np.int32, np.float32
-_ARGS = [None] * 12 + [_I] + [None, None] + [_I, _I, _I] + [None] + [_F] * 5 + [_F] * 12 + [_F] * 8
-_GAP_ROW_ARGS = [None, None, _I, _I, _I, _F, _F]
+_ARGS = [None] * 12 + [_I] + [None, None] + [_I, _I, _I] + [None, None] + [_F] * 5 + [_F] * 12 + [_F] * 8
+_GAP_ROW_ARGS = [None, None, _I, _I, _I, _F, _F, None, _I]
 _GAP_DIST_ARGS = [None, None, _I, _I, _I]
+_GUARD_MARK_ARGS = [None, None, _I, _I, _I, _F]
+_GUARD_SEED_ARGS = [None, None, _I, _I, _F, _F, _I]
+_GUARD_ROW_ARGS = [None, None, _I, _I, _I]
 _BRICK_ARGS = [None, _I, _I, _I, _I] + [_F] * 5 + [_F] * 12 + [_F] * 3 + [None, _I, None, None]
 _KEY_BITS, _KEY_HALF = 10, 512  # compact brick keys of the GPU search: 10 bits per axis around the origin
 
@@ -381,6 +464,24 @@ def mesh_sigma_terms(V: np.ndarray, F: np.ndarray, N: np.ndarray, voxel_mm: floa
     return out
 
 
+def gap_guard_mask(depth: np.ndarray, radius_px: float) -> np.ndarray:
+    """The gap guard (module docstring): True for the pixels with depth (``depth`` > 0) that lie within
+    ``radius_px`` (Euclidean) of a patch without depth. A pixel without depth is part of a patch when
+    at least :data:`GUARD_SEED` of the 5x5 around it (the border repeated) have none. What the guard
+    kernels compute, in numpy."""
+    import cv2
+
+    gap = ~(np.asarray(depth, dtype=np.float32) > 0)
+    if radius_px <= 0:
+        return np.zeros(gap.shape, dtype=bool)
+    n = cv2.boxFilter(gap.astype(np.float32), -1, (5, 5), normalize=False, borderType=cv2.BORDER_REPLICATE)
+    seed = gap & (n >= GUARD_SEED - 0.5)
+    if not seed.any():
+        return np.zeros(gap.shape, dtype=bool)
+    d = cv2.distanceTransform((~seed).astype(np.uint8), cv2.DIST_L2, cv2.DIST_MASK_PRECISE)
+    return ~gap & (np.rint(d * d) <= float(radius_px) ** 2)
+
+
 def pixel_weights(depth: np.ndarray, sigma: np.ndarray | None, trunc_mm: float) -> tuple[np.ndarray, np.ndarray]:
     """Per pixel: the averaging weight (1 with depth, as Open3D's) and the variance it brings (mm^2),
     both 0 without depth. The variance is ``min(sigma, trunc)^2``, since truncation caps how far one
@@ -412,6 +513,9 @@ class ConfidenceTsdf:
         ``(amp, radius px)`` of the factor ``1 + amp exp(-(distance / radius)^2)`` that the matcher
         puts on the sigma of pixels next to missing depth, which is taken out again for the
         prediction of the scatter (default: the GPU matcher's, ``ohs.vision.depth.SIGMA_MODELS``).
+    gap_guard_px:
+        The gap guard's radius (module docstring); 0 (the default): off; ``None``: 8 px at 1280 px
+        width, scaled with the width.
     initial_bricks, max_bricks:
         Pool size at the start, and its limit (bricks beyond it are dropped, with a warning).
     """
@@ -419,7 +523,7 @@ class ConfidenceTsdf:
     def __init__(self, K: np.ndarray, image_size: tuple[int, int], voxel_mm: float = 1.0, trunc_mm: float = 4.0,
                  depth_min_mm: float = 120.0, depth_max_mm: float = 500.0, backend: str = "auto",
                  look_px: float | None = None, initial_bricks: int = 4096, max_bricks: int | None = None,
-                 hole_factor: tuple[float, float] | None = None) -> None:
+                 hole_factor: tuple[float, float] | None = None, gap_guard_px: float | None = 0.0) -> None:
         self.K = np.asarray(K, dtype=np.float64).reshape(3, 3).copy()
         self.image_size = (int(image_size[0]), int(image_size[1]))
         self.voxel_mm, self.trunc_mm = float(voxel_mm), float(trunc_mm)
@@ -440,6 +544,9 @@ class ConfidenceTsdf:
         self.gap_near_px = GAP_NEAR_PX_1280 * w / 1280.0
         # the distance to missing depth is searched up to 3 radii of the factor (as the GPU matcher does)
         self._gap_r = int(max(np.ceil(3.0 * self.hole_r_px), np.ceil(self.gap_near_px)))
+        self.gap_guard_px = GUARD_PX_1280 * w / 1280.0 if gap_guard_px is None else float(gap_guard_px)
+        if not self.gap_guard_px >= 0:
+            raise ValueError(f"gap_guard_px must be >= 0, got {gap_guard_px!r}")
         # brick sampling: every 4th pixel at 1280 px and 1 mm voxels; the same share of a brick at other sizes
         # (2 mm voxels at 640 px: every 4th pixel too, a quarter of the samples of every 2nd)
         self._step = max(1, int(round(4.0 * w / 1280.0 * float(self.voxel_mm))))
@@ -485,6 +592,11 @@ class ConfidenceTsdf:
         self._gkern = (cl.Kernel(prg, "recon_gap_row"), cl.Kernel(prg, "recon_gap_dist"))
         self._gkern[0].set_scalar_arg_dtypes(_GAP_ROW_ARGS)
         self._gkern[1].set_scalar_arg_dtypes(_GAP_DIST_ARGS)
+        self._guard_kern = (cl.Kernel(prg, "recon_guard_seed"), cl.Kernel(prg, "recon_guard_row"),
+                            cl.Kernel(prg, "recon_guard_mark"))
+        self._guard_kern[0].set_scalar_arg_dtypes(_GUARD_SEED_ARGS)
+        self._guard_kern[1].set_scalar_arg_dtypes(_GUARD_ROW_ARGS)
+        self._guard_kern[2].set_scalar_arg_dtypes(_GUARD_MARK_ARGS)
         self._img_bufs: Any = None
         self._list_cap = 0
         self._slot_buf = self._key_buf = None
@@ -751,6 +863,10 @@ class ConfidenceTsdf:
                        sigma_mm: np.ndarray | None, R_cw: np.ndarray, t_cw: np.ndarray) -> None:
         h, w = depth.shape
         g2 = self._gap2(depth).ravel()
+        guard = gap_guard_mask(depth, self.gap_guard_px)
+        # for the count of observations next to missing depth, what the guard drops is missing too
+        gg = self._gap2(np.where(guard, np.float32(0.0), depth)).ravel() if guard.any() else g2
+        guard = guard.ravel()
         cmap = self._cos_map(depth).ravel()
         if sigma_mm is None:
             _, vmap = pixel_weights(depth, None, self.trunc_mm)
@@ -776,7 +892,7 @@ class ConfidenceTsdf:
         d = depth.ravel()[pix]
         sdf = d - z[sel]
         wt = wmap.ravel()[pix]
-        good = (d > 0) & (d <= self.depth_max_mm) & (sdf >= -self.trunc_mm) & (wt > 0)
+        good = (d > 0) & (d <= self.depth_max_mm) & (sdf >= -self.trunc_mm) & (wt > 0) & ~guard[pix]
         sel, sdf, wt, ui, vi, pix = sel[good], sdf[good], wt[good], ui[good], vi[good], pix[good]
         a = (slots.astype(np.int64)[:, None] * NVOX + np.arange(NVOX)[None]).reshape(-1)[sel]
         b = self._bufs
@@ -791,7 +907,7 @@ class ConfidenceTsdf:
         q1 = q0 + (wt / W1) * (xn - q0)
         b["mxc"][a] += wt * (xn - q0) * (xn - q1)
         b["xc"][a] = q1
-        b["hnear"][a] += (g2[pix] < np.float32(self.gap_near_px ** 2)).astype(np.float32)
+        b["hnear"][a] += (gg[pix] < np.float32(self.gap_near_px ** 2)).astype(np.float32)
         b["tsdf"][a] = m1
         b["wsum"][a] = W1
         b["nobs"][a] += 1.0
@@ -813,9 +929,14 @@ class ConfidenceTsdf:
                 self._wait()
                 for bb in self._img_bufs[1:]:
                     bb.release()
-            mf = cl.mem_flags  # depth, sigma; and the row and the squared distance to missing depth
-            self._img_bufs = ((h, w), *(cl.Buffer(self.dev.ctx, flag, size=h * w * 4)
-                                        for flag in (mf.READ_ONLY, mf.READ_ONLY, mf.READ_WRITE, mf.READ_WRITE)))
+            # 1 depth, 2 sigma; 3 a row distance (scratch), 4 the squared distance to missing depth; the
+            # gap guard: 5 its patches, then its mark (one byte a pixel), 6 the row distance to the
+            # patches (scratch), 7 the squared distance to missing or dropped depth
+            mf, ctx = cl.mem_flags, self.dev.ctx
+            self._img_bufs = ((h, w), cl.Buffer(ctx, mf.READ_ONLY, size=h * w * 4),
+                              cl.Buffer(ctx, mf.READ_ONLY, size=h * w * 4), cl.Buffer(ctx, mf.READ_WRITE, size=h * w * 4),
+                              cl.Buffer(ctx, mf.READ_WRITE, size=h * w * 4), cl.Buffer(ctx, mf.READ_WRITE, size=h * w),
+                              cl.Buffer(ctx, mf.READ_WRITE, size=h * w * 4), cl.Buffer(ctx, mf.READ_WRITE, size=h * w * 4))
         evs = [cl.enqueue_copy(q, self._img_bufs[1], depth, is_blocking=False)]
         if sigma is not None:
             evs.append(cl.enqueue_copy(q, self._img_bufs[2], sigma, is_blocking=False))
@@ -823,12 +944,23 @@ class ConfidenceTsdf:
         return depth, sigma
 
     def _queue_gaps(self, shape: tuple[int, int]) -> None:
-        """Queue the two kernels that measure, from the uploaded depth, every pixel's squared distance
-        to the nearest one without depth (into ``_img_bufs[4]``); see :meth:`_gap2`."""
+        """Queue the kernels that measure, from the uploaded depth, every pixel's squared distance to
+        the nearest one without depth (into ``_img_bufs[4]``; see :meth:`_gap2`) and, with the gap
+        guard, to the nearest one without depth or dropped by the guard (into ``_img_bufs[7]``: 0
+        at a pixel with depth says the guard dropped it, :func:`gap_guard_mask`)."""
         h, w = shape
-        _, dbuf, _, hx, g2 = self._img_bufs
-        self._gkern[0](self.queue, (w, h), None, dbuf, hx, w, h, self._gap_r, self.depth_min_mm, self.depth_max_mm)
-        self._gkern[1](self.queue, (w, h), None, hx, g2, w, h, self._gap_r)
+        q = self.queue
+        _, dbuf, _, hx, g2, mark, hs, gg = self._img_bufs
+        dmin, dmax, r = self.depth_min_mm, self.depth_max_mm, self._gap_r
+        self._gkern[0](q, (w, h), None, dbuf, hx, w, h, r, dmin, dmax, mark, 0)
+        self._gkern[1](q, (w, h), None, hx, g2, w, h, r)
+        if self.gap_guard_px > 0:
+            rg = int(np.ceil(self.gap_guard_px))
+            self._guard_kern[0](q, (w, h), None, dbuf, mark, w, h, dmin, dmax, GUARD_SEED)  # the patches
+            self._guard_kern[1](q, (w, h), None, mark, hs, w, h, rg)
+            self._guard_kern[2](q, (w, h), None, hs, mark, w, h, rg, self.gap_guard_px ** 2)  # now the mark
+            self._gkern[0](q, (w, h), None, dbuf, hs, w, h, r, dmin, dmax, mark, 1)
+            self._gkern[1](q, (w, h), None, hs, gg, w, h, r)
 
     def _integrate_gpu(self, slots: np.ndarray, keys: np.ndarray, shape: tuple[int, int], has_sigma: bool,
                        R_cw: np.ndarray, t_cw: np.ndarray) -> None:
@@ -839,7 +971,9 @@ class ConfidenceTsdf:
         cl, q = self.cl, self.queue
         h, w = shape
         mf = cl.mem_flags
-        _, dbuf, sbuf, _, gbuf = self._img_bufs
+        _, dbuf, sbuf, _, gbuf, _, _, ggbuf = self._img_bufs
+        if not self.gap_guard_px > 0:
+            ggbuf = gbuf  # no guard: the one distance serves both
         m = len(slots)
         if self._lists is not None:
             cl.wait_for_events(self._lists[0])  # done long ago, as a rule (and the GIL is not held)
@@ -861,7 +995,7 @@ class ConfidenceTsdf:
         gs = (n + self._wg - 1) // self._wg * self._wg
         self._kern(q, (gs,), (self._wg,), b["tsdf"], b["wsum"], b["m2"], b["nobs"], b["nlook"], b["luv"],
                    b["xc"], b["mxc"], b["hnear"], b["snh2"],
-                   self._slot_buf, self._key_buf, m, dbuf, sbuf, int(has_sigma), w, h, gbuf,
+                   self._slot_buf, self._key_buf, m, dbuf, sbuf, int(has_sigma), w, h, gbuf, ggbuf,
                    K[0, 0], K[1, 1], K[0, 2], K[1, 2], K[0, 1], *R_cw.ravel(), *t_cw,
                    self.voxel_mm, self.trunc_mm, self.depth_min_mm, self.depth_max_mm, self.look_px ** 2,
                    self.gap_near_px ** 2, self.hole_amp, self.hole_r_px ** 2)
