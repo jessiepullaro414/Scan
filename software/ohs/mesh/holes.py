@@ -3,7 +3,8 @@
 What is a hole: a closed boundary loop that is not an outer border
 (:func:`ohs.mesh.topology.classify_loops`: the longest loop of an open piece is the edge of the
 scanned area, left open unless ``include_borders`` asks for a watertight mesh). Its size is its
-perimeter in mm. The new faces come after the old ones, so the caller can mark them as filled
+perimeter in mm. The outline of a single face (a lone triangle that touches the mesh at one vertex,
+as fused scans have a few) is not a hole and is left alone. The new faces come after the old ones, so the caller can mark them as filled
 (not measured: :func:`ohs.mesh.carry_filled`).
 
 :func:`fill_holes` closes every hole up to ``max_hole_mm`` in three steps per hole:
@@ -437,12 +438,14 @@ def _fair(loop_g: np.ndarray, new_pos: np.ndarray, tris_local: np.ndarray, V: np
 
 # --------------------------------------------------------------------------- main entry
 def _simple_loops(verts: list[int]) -> list[list[int]]:
-    """Split a cyclic vertex list at repeated vertices into simple loops."""
-    out, stack = [], [verts]
+    """Split a cyclic vertex list at repeated vertices into simple loops: each as the positions of
+    its vertices in ``verts`` (the loop's edge from a position is the edge that starts there)."""
+    out, stack = [], [list(range(len(verts)))]
     while stack:
         lp = stack.pop()
         seen: dict[int, int] = {}
-        for i, v in enumerate(lp):
+        for i, pos in enumerate(lp):
+            v = verts[pos]
             if v in seen:
                 j = seen[v]
                 stack.append(lp[j:i])
@@ -497,9 +500,15 @@ def fill_holes(V: np.ndarray, F: np.ndarray, max_hole_mm: float, *, include_bord
         if progress is not None and done % 20 == 0:
             progress(done / len(cand), f"Filling hole {done + 1} of {len(cand)}")
         verts = loops.verts(k).tolist()
-        he_face = {int(v): int(f) for v, f in zip(verts, face_of_he[loops.ptr[k] : loops.ptr[k + 1]].tolist())}
+        loop_faces = face_of_he[loops.ptr[k] : loops.ptr[k + 1]].tolist()  # the face of the edge that starts at each position
+        he_face = {int(v): int(f) for v, f in zip(verts, loop_faces)}
         gpairs = pairs_by_loop.get(k, set())
-        for lp in _simple_loops(verts):
+        for at in _simple_loops(verts):
+            if len(at) == 3 and loop_faces[at[0]] == loop_faces[at[1]] == loop_faces[at[2]]:
+                # the three open edges of one face: a lone triangle that touches the mesh at a vertex
+                # at most. Its outline is not a hole; filling it would add the same triangle reversed.
+                continue
+            lp = [verts[i] for i in at]
             g = np.asarray(lp, dtype=np.int64)
             n = len(g)
             P = V[g]

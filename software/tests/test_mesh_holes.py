@@ -10,6 +10,8 @@
 * A flat strip with two holes: its outer border is never filled, the holes are, and the fill is
   flat.
 * Box and sphere statistics (volume, area, size), bowtie loops, an empty mesh.
+* A lone triangle that hangs on the mesh by one vertex is not a hole: its outline gets no fill
+  (which would be the same triangle again, back to back).
 """
 from __future__ import annotations
 
@@ -204,3 +206,39 @@ def test_a_hole_whose_vertices_coincide_is_not_listed():
     Vh, Fh = punch(V, F, [[0.0, 0.0, -R]], [6.0])
     out = hole_outlines(Vh, Fh)
     assert len(out) == 1 and out[0]["perimeter_mm"] > 10.0
+
+
+def _doubled(F: np.ndarray) -> int:
+    """Faces that use the same three vertices as another face."""
+    _, inv, cnt = np.unique(np.sort(F, axis=1), axis=0, return_inverse=True, return_counts=True)
+    return int((cnt[inv.ravel()] > 1).sum())
+
+
+def test_a_lone_triangle_hanging_by_a_vertex_gets_no_twin():
+    """A fused scan leaves single triangles that touch the surface at one vertex only. Their three
+    edges are open, so their outline looks like a three-edge hole; filling it added the same
+    triangle reversed, back to back. The outline of one face is not a hole. A real three-edge hole
+    (three faces around it) is still filled, and so is a hole whose rim carries such a triangle."""
+    V, F = grid(21, 21, 1.0)
+    idx = lambda x, y: y * 21 + x  # noqa: E731
+    # 1: a lone triangle standing on an inner vertex of the sheet
+    V1 = np.vstack([V, [[10.3, 10.0, 0.8], [10.0, 10.3, 0.8]]])
+    F1 = np.vstack([F, [[idx(10, 10), len(V), len(V) + 1]]])
+    V2, F2 = fill_holes(V1, F1, 5.0)
+    assert len(F2) == len(F1) and np.array_equal(F2, F1) and len(V2) == len(V1) and _doubled(F2) == 0
+    # 2: a real hole of three edges (one face taken out) is filled with one face
+    gone = int(np.flatnonzero((F == idx(5, 5)).any(axis=1))[0])
+    F3 = np.delete(F, gone, axis=0)
+    V4, F4 = fill_holes(V, F3, 5.0)
+    assert len(F4) == len(F) and sorted(F4[-1].tolist()) == sorted(F[gone].tolist()) and _doubled(F4) == 0
+    # 3: a hole (a 2 x 2 block of cells taken out) with a lone triangle on a vertex of its rim: the
+    # hole is filled, the triangle is left as it is
+    cx = V[F].mean(axis=1)
+    hole = (np.abs(cx[:, 0] - 14.0) < 1.0) & (np.abs(cx[:, 1] - 6.0) < 1.0)
+    V5 = np.vstack([V, [[13.3, 5.0, 0.8], [13.0, 5.3, 0.8]]])
+    F5 = np.vstack([F[~hole], [[idx(13, 5), len(V), len(V) + 1]]])
+    assert hole.sum() == 8
+    V6, F6 = fill_holes(V5, F5, 20.0)
+    assert _doubled(F6) == 0 and len(F6) > len(F5) and np.array_equal(F6[: len(F5)], F5)
+    lp = boundary_loops(V6, F6, edge_table(F6, len(V6)))
+    assert sorted(lp.n_edges().tolist()) == [3, 80]  # the lone triangle's outline and the sheet's border: no hole left

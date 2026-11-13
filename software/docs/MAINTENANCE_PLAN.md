@@ -919,9 +919,9 @@ bench medians before and after in the commit message.
   the edit itself 220 ms. Vertices, faces and sigma are identical, except 2 vertices that share
   a place with another (6e-8 mm apart in sigma) and 5 faces whose filled flag the search took
   from a twin face; the index is the correct one.
-- **Found on the way (not fixed):** Fill holes can add a triangle back to back with a measured
+- **Found on the way:** Fill holes can add a triangle back to back with a measured
   one (the same three vertices, reversed): 4 such pairs on one real scan, 1 on another. The old
-  search then marked the measured twin as filled too.
+  search then marked the measured twin as filled too. **Fixed 2026-11-13 as F2.**
 
 ### [x] P3. Mesh refinement peaks at 350 MB per chunk (Sonnet, S) ✔
 - **Done 2026-11-10:** `project_onto_patches` takes `chunk` (default 25,000 vertices, was a fixed
@@ -1154,6 +1154,23 @@ Every task here: the type check, `npm test`, and for bundle tasks the chunk size
   server test asks for the cylinder again, and for a hole.
 - **Not covered:** a rim that curls with one radius is a cylinder to the Fit tool, as a rolled
   edge is. Nothing in its shape tells the two apart.
+
+### [x] F2. Fill holes doubles a lone triangle
+- **Found 2026-11-13** with P2 (above). A fused scan has a few single triangles that touch the
+  surface at one vertex only. Their three edges are open, so their outline looked like a hole of
+  three edges, and Fill holes filled it with the same triangle reversed.
+- **Done 2026-11-13** (the owner said yes; it changes that edit's result): `fill_holes` leaves a
+  three-edge loop alone when its three edges belong to one face. On 12 real meshes (8 simulated
+  scans at Standard quality, 4 of the server test's scan), after Remove floaters and Fill holes up
+  to 5 mm: 130 doubled triangles before (11–19 on each Standard scan), none after; the vertices
+  are identical and the new faces are the old ones without the doubled ones, in the same order.
+  Test first, on a sheet with such a triangle (alone, next to a real three-edge hole, and on the
+  rim of a larger hole).
+- **Found on the way (not fixed):** in `fill_holes`, `he_face` maps a loop vertex to the face of
+  the edge that starts there. On a loop that passes a vertex twice (a pinch), the second edge's
+  face overwrites the first, so the triangulation of one of the two simple loops is given the
+  wrong neighbour normal at that vertex. And the lone triangles themselves stay in the mesh:
+  Remove floaters does not take them, because they share a vertex with the surface.
 
 ## Reviewed and fine: leave alone
 
