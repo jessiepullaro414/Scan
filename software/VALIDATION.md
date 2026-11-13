@@ -889,6 +889,42 @@ Factor by which the ± would have to grow for ±2σ to cover 95 %:
 
 Scripts and raw results: scratchpad `m5v\` of the session of 2026-11-12 (`summary_all_clicks.md`).
 
+**Measured again on 2026-11-13**, with the engine as it is now: the new vertex sigma, the gap guard on, and the Fit tool's refusal of a drifted cylinder. The same ten recordings, clicks and method; 15 fits per shape and pose source (the two bosses together: 30). Error is the median of its size.
+
+| Shape | Quantity | True poses, before → now | Tracking, before → now |
+|---|---|---|---|
+| Bosses, Ø 14 | radius | 0.05 → 0.16 mm (all small) | 0.18 → 0.39 mm (all large) |
+| | axis direction | 5.6° → 7.5° | 8.0° → 12.5° |
+| | axis position | 0.18 → 0.07 mm | 0.32 → 0.61 mm |
+| | clicks answered | 30 → 26 of 30 | 30 → 27 of 30 |
+| Shaft, Ø 16 | radius | 0.10 → 0.08 mm (worst 0.27 → 0.16) | 0.53 → 0.60 mm (worst 0.84 → 1.30) |
+| | axis position | 0.17 → 0.03 mm | 0.72 → 0.74 mm |
+| Base top | normal / offset | 0.026° → 0.010° / 0.013 → 0.004 mm | 0.045° → 0.015° / 0.027 → 0.012 mm |
+| Upright face | normal / offset | 0.079° → 0.035° / 0.065 → 0.023 mm | 0.16° → 0.09° / 0.48 → 0.72 mm |
+| Car-panel hole, Ø 25.2 | clicks answered | 0 → 15 of 15 | 3 (a wrong loop, Ø 13.7) → 15 of 15 |
+| | diameter | Ø 24.0 (1.2 mm small, worst 1.6) | Ø 24.1 (1.1 mm small, worst 1.4) |
+| | centre | 0.18 mm | 0.32 mm |
+
+- **The hole can be measured now**, about 1.2 mm small in diameter. Its ± (0.11 mm in radius) does not cover that; the centre's ± (0.2 mm) does.
+- **Planes and the shaft at true poses are better.** A plane's region also takes more of its face: the table 30 % → 91 %.
+- **The bosses are worse**, and with tracking by a factor of two in radius. Three things changed for them, told apart on the same meshes:
+  - *The new sigma as the fit's weight.* On meshes that are the same as before to the vertex (true poses, guard off), a boss fitted with the old sigma reads 0.05 mm small with its axis 5.6° off; with the new sigma 0.13 mm and 8.6°; with no weights at all 0.04 mm and 4.6°. The new sigma holds bias terms (curvature, border, gaps) that are large and very uneven on an 8 mm stub, so `1 / sigma²` leaves the fit to a narrow band of the wall. The shaft does not change (0.10 mm either way).
+  - *The gap guard.* It takes the rim off the walls: at true poses the bosses read another 0.03–0.1 mm smaller (0.15 mm with the old sigma as weight).
+  - *Refused clicks.* With the guard, 3 or 4 of 30 clicks on a boss answer "its curvature is not clear": the seed has fewer points to see the round with. Another click on the same boss is answered.
+- **The ± is still too small almost everywhere**, as expected: the new sigma is smaller on flat surface and the errors are biases. Share of the fits whose ± 2σ covers the truth, before → now: radius 49 → 23 % (true poses) and 4 → 0 % (tracking); axis direction 24 → 39 % and 20 → 33 %; axis position 2 → 93 % and 4 → 2 %; plane normal 69 → 58 % and 20 → 31 %; plane offset 16 → 22 % and 13 → 9 %.
+- **Other weights, tried on the same meshes** (as shipped, guard on), bosses, radius / axis direction / axis position:
+
+| Weight of each point in the fit | True poses | Tracking |
+|---|---|---|
+| `1 / sigma²` (as it is) | 0.16 mm / 7.5° / 0.07 mm | 0.39 mm / 12.5° / 0.61 mm |
+| The same for every point of the region | 0.12 mm / 3.8° / 0.25 mm | 0.22 mm / 5.4° / 0.63 mm |
+| No point more than the region's median | 0.20 mm / 4.9° / 0.12 mm | 0.32 mm / 10.8° / 0.58 mm |
+| Sigma kept within 2 times the region's median | 0.14 mm / 7.5° / 0.09 mm | 0.35 mm / 10.6° / 0.63 mm |
+
+  Equal weights give the bosses back most of what they lost with tracking (and a better axis than before), and the shaft a little (0.60 → 0.49 mm). They cost the bosses' axis position at true poses (0.07 → 0.25 mm), and the planes: base top offset 0.004 → 0.007 mm (true poses) and 0.012 → 0.017 mm (tracking), the table's offset 0.002 → 0.008 mm. So a candidate is equal weights for cylinders only. **Not changed**: it is a choice, and it rests on two bosses of one simulated part.
+
+Scripts and rows: scratchpad `m5v2\` (`run.sh`, `compare.py`, `weights.py`, `run_var.sh`, `compare_var.py`).
+
 ## The Check answer against the truth (M5 third slice, 2026-11-12)
 
 `ohs.mesh.weak_areas` passes a face when 2 × its mean vertex sigma is within the tolerance. Measured on the 20 meshes of the study above (bracket and car panel, 5 seeds, true poses and tracking), per face and weighted by area. "Part" leaves out the table and the floor, which are 87–97 % of the surface.

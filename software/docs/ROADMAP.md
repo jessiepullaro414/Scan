@@ -87,6 +87,13 @@ about the scan itself, not the Fit tool, and they decide whether a measurement c
 - **Convex features are fattened** (a Ø 16 mm shaft +0.2 mm at true poses, +1.1 mm with tracking)
   and tracking errors of 0.7–1 mm distort faces by up to 1.2 mm. To do: find the share of the
   stereo depth, of the fusion and of the tracking.
+- **Small cylinders fit worse since the new sigma** (measured again 2026-11-13,
+  [`VALIDATION.md`](../VALIDATION.md), "Fitted shapes against the truth"): a Ø 14 mm boss reads
+  0.39 mm off in radius with tracking (before 0.18 mm) and its axis 12.5° off (before 8.0°),
+  because the fit weighs each point by `1 / sigma²` and the new sigma is very uneven on a small
+  feature. Planes, the shaft at true poses and the hole are better. A candidate, not adopted:
+  equal weights for cylinders (0.22 mm and 5.4° with tracking, at the price of the axis position
+  at true poses). **Waiting for a decision.**
 - **The vertex sigma is 2–6 times too large**, and a fit's ± is several times too small. To do:
   an honest sigma, an error model for fits that knows the biases, and until then no ± shown as
   an accuracy. Measured since: on flat surface sigma is about 2.5 times too large, at edges and
