@@ -53,10 +53,3 @@ export function mockUrl(): string {
   u.searchParams.set("mock", "1");
   return u.toString();
 }
-
-/** URL of the same page with the mock switched off. */
-export function realUrl(): string {
-  const u = new URL(location.href);
-  u.searchParams.delete("mock");
-  return u.toString();
-}

@@ -14,10 +14,6 @@ export function cvToThree(v: Vector3, out = new Vector3()): Vector3 {
   return out.set(v.x, -v.y, -v.z);
 }
 
-export function threeToCv(v: Vector3, out = new Vector3()): Vector3 {
-  return out.set(v.x, -v.y, -v.z);
-}
-
 /** `T_wc` (16 numbers, row-major) into a Matrix4. */
 export function matrixFromRowMajor(T: ArrayLike<number>, out = new Matrix4()): Matrix4 {
   return out.set(T[0], T[1], T[2], T[3], T[4], T[5], T[6], T[7], T[8], T[9], T[10], T[11], T[12], T[13], T[14], T[15]);
@@ -57,11 +53,6 @@ export function boundsOf(pos: ArrayLike<number>, count: number): { box: Box3; sp
     if (d > r2) r2 = d;
   }
   return { box, sphere: new Sphere(center, Math.sqrt(r2)) };
-}
-
-/** A world-frame sphere in three.js coordinates. */
-export function sphereToThree(s: Sphere): Sphere {
-  return new Sphere(cvToThree(s.center), s.radius);
 }
 
 /** Nominal scanner optics (ARCHITECTURE.md §7): fx ≈ 720 at 1280×800 → tan of the half angles. */

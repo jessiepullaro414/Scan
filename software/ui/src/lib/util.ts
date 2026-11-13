@@ -38,15 +38,6 @@ export function useTicker(ms: number): number {
   return t;
 }
 
-/** The value from the previous render. */
-export function usePrevious<T>(value: T): T | undefined {
-  const ref = useRef<T | undefined>(undefined);
-  useEffect(() => {
-    ref.current = value;
-  });
-  return ref.current;
-}
-
 /** True while an element matching the selector exists (e.g. an open modal). */
 export function isModalOpen(): boolean {
   return !!document.querySelector('[aria-modal="true"]');

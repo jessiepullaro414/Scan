@@ -1020,13 +1020,18 @@ Every task here: the type check, `npm test`, and for bundle tasks the chunk size
 - **Where:** `ui/vite.config.ts:45` puts `three-mesh-bvh` in the shared `r3f` chunk.
 - **Gain (estimate):** about 40 KB off the Scan and Process pages. **Guard:** chunk sizes.
 
-### [ ] U6. Unused exports and a duplicated normals helper (Sonnet, S) ○
+### [x] U6. Unused exports and a duplicated normals helper (Sonnet, S) ○
 - **Where:** never referenced: `realUrl` (`api/backend.ts`), `getSocketFactory` (`api/socket.ts`),
   `QUALITY_TEXT` (`components/ScanBits.tsx`), `fmtMm`, `fmtDate` (`lib/format.ts`), `usePrevious`
   (`lib/util.ts`), `threeToCv`, `sphereToThree` (`three/coords.ts`). `LiveCanvas.tsx:106-141`
   duplicates the normals code of `three/ply.ts`.
 - **Change:** search for each name again, then delete. **Guard:** the bundle is the same size or
   smaller.
+- **Done 2026-11-12:** seven of the eight names deleted (`QUALITY_TEXT` is used now, from
+  `lib/quality.ts`). The normals code is one function in `three/normals.ts`, its own module so
+  the Scan page still does not load the PLY reader; on random data it gives the live mesh the
+  same values as the old copy (0 of 24 000 differ). All JS together is 256 bytes smaller; the
+  Scan page loads 263 bytes more (the 446-byte `normals` chunk).
 
 ### [-] U7. Mesh parsing freezes the UI on large meshes (Sonnet M, then Opus L) -
 - **Where:** `pages/process/mesh.ts:93-109`, `ViewerPage.tsx:228`, `three/ply.ts:188-249`.

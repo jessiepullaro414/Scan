@@ -13,6 +13,7 @@
 import { BufferAttribute, BufferGeometry } from "three";
 import { PLYLoader } from "three/examples/jsm/loaders/PLYLoader.js";
 import { boundsOf } from "./coords";
+import { vertexNormals } from "./normals";
 import { parsePly, type PlyMesh } from "./plyParse";
 
 export { parsePly };
@@ -98,39 +99,4 @@ export function disposeMeshGeometry(g: BufferGeometry | null | undefined): void 
   if (!g) return;
   (g.userData.filledGeometry as BufferGeometry | undefined)?.dispose();
   g.dispose();
-}
-
-/** Area-weighted vertex normals. */
-export function vertexNormals(p: Float32Array, f: Uint32Array, out = new Float32Array(p.length)): Float32Array {
-  out.fill(0);
-  for (let t = 0, T = f.length; t < T; t += 3) {
-    const a = f[t] * 3,
-      b = f[t + 1] * 3,
-      c = f[t + 2] * 3;
-    const ux = p[b] - p[a],
-      uy = p[b + 1] - p[a + 1],
-      uz = p[b + 2] - p[a + 2];
-    const vx = p[c] - p[a],
-      vy = p[c + 1] - p[a + 1],
-      vz = p[c + 2] - p[a + 2];
-    const nx = uy * vz - uz * vy,
-      ny = uz * vx - ux * vz,
-      nz = ux * vy - uy * vx;
-    out[a] += nx;
-    out[a + 1] += ny;
-    out[a + 2] += nz;
-    out[b] += nx;
-    out[b + 1] += ny;
-    out[b + 2] += nz;
-    out[c] += nx;
-    out[c + 1] += ny;
-    out[c + 2] += nz;
-  }
-  for (let i = 0; i < out.length; i += 3) {
-    const l = Math.hypot(out[i], out[i + 1], out[i + 2]) || 1;
-    out[i] /= l;
-    out[i + 1] /= l;
-    out[i + 2] /= l;
-  }
-  return out;
 }

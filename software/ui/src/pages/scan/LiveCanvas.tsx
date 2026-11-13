@@ -39,6 +39,7 @@ import { toast } from "../../store/toasts";
 import { CameraRig } from "../../three/CameraRig";
 import { boundsOf, CV_TO_THREE_ROTATION, cvToThree, matrixFromRowMajor } from "../../three/coords";
 import { clayMatcap, liveMeshMaterial, SRGB_TO_LINEAR } from "../../three/materials";
+import { vertexNormals } from "../../three/normals";
 import { ScannerGlyph } from "../../three/ScannerGlyph";
 import { AxisGizmo, SceneGrid, StudioEnvironment, StudioLights, useThemeColors } from "../../three/Studio";
 import { viewBus, type FrameSphere } from "../../three/viewBus";
@@ -82,7 +83,7 @@ class LiveGeometry {
     (pos.array as Float32Array).set(m.positions);
     const nArr = nrm.array as Float32Array;
     if (hasNormals(m.normals, V)) nArr.set(m.normals);
-    else computeNormals(m.positions, m.indices, V, T, nArr);
+    else vertexNormals(m.positions.subarray(0, V * 3), m.indices.subarray(0, T * 3), nArr.subarray(0, V * 3));
     const cArr = col.array as Uint8Array;
     const src = m.colors;
     for (let i = 0, n = V * 4; i < n; i += 4) {
@@ -117,35 +118,6 @@ function hasNormals(n: Float32Array, V: number): boolean {
     if (n[i * 3] !== 0 || n[i * 3 + 1] !== 0 || n[i * 3 + 2] !== 0) return true;
   }
   return false;
-}
-
-function computeNormals(p: Float32Array, f: Uint32Array, V: number, T: number, out: Float32Array) {
-  out.fill(0, 0, V * 3);
-  for (let t = 0; t < T; t++) {
-    const a = f[t * 3] * 3,
-      b = f[t * 3 + 1] * 3,
-      c = f[t * 3 + 2] * 3;
-    const ux = p[b] - p[a],
-      uy = p[b + 1] - p[a + 1],
-      uz = p[b + 2] - p[a + 2];
-    const vx = p[c] - p[a],
-      vy = p[c + 1] - p[a + 1],
-      vz = p[c + 2] - p[a + 2];
-    const nx = uy * vz - uz * vy,
-      ny = uz * vx - ux * vz,
-      nz = ux * vy - uy * vx;
-    for (const k of [a, b, c]) {
-      out[k] += nx;
-      out[k + 1] += ny;
-      out[k + 2] += nz;
-    }
-  }
-  for (let i = 0; i < V * 3; i += 3) {
-    const l = Math.hypot(out[i], out[i + 1], out[i + 2]) || 1;
-    out[i] /= l;
-    out[i + 1] /= l;
-    out[i + 2] /= l;
-  }
 }
 
 // ------------------------------------------------------------------ live mesh + auto framing

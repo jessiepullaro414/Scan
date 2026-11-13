@@ -9,7 +9,7 @@
  * job runner can spread them over several ticks and keep the page responsive.
  */
 import type { HoleOutline, MeshStats } from "../types";
-import { vertexNormals } from "../../three/ply";
+import { vertexNormals } from "../../three/normals";
 
 export type TriMesh = { positions: Float32Array; normals: Float32Array; indices: Uint32Array };
 export type Work<T> = Generator<number, T, void>;

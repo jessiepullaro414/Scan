@@ -160,7 +160,3 @@ export class LiveSocket {
 export function createLiveSocket(handlers: LiveHandlers, subscribe: SubscribeMsg): LiveSocket {
   return new LiveSocket(liveUrl(), handlers, subscribe);
 }
-
-export function getSocketFactory(): SocketFactory {
-  return socketFactory;
-}

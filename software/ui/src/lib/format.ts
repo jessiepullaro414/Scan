@@ -18,11 +18,6 @@ export function fmtFixed(n: number | null | undefined, digits = 1): string {
   return n.toFixed(digits);
 }
 
-export function fmtMm(n: number | null | undefined, digits = 1): string {
-  if (n === null || n === undefined || !Number.isFinite(n)) return "–";
-  return `${n.toFixed(digits)} mm`;
-}
-
 export function fmtPct(x: number | null | undefined, digits = 0): string {
   if (x === null || x === undefined || !Number.isFinite(x)) return "–";
   return `${(x * 100).toFixed(digits)} %`;
@@ -74,11 +69,6 @@ function toDate(iso: string | null | undefined): Date | null {
   if (!iso) return null;
   const d = new Date(iso);
   return Number.isNaN(d.getTime()) ? null : d;
-}
-
-export function fmtDate(iso: string | null | undefined): string {
-  const d = toDate(iso);
-  return d ? dateFmt.format(d) : "–";
 }
 
 export function fmtDateTime(iso: string | null | undefined): string {
