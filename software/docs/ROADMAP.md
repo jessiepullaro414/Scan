@@ -70,8 +70,15 @@ simulator's truth; [`VALIDATION.md`](../VALIDATION.md), "Fitted shapes against t
 about the scan itself, not the Fit tool, and they decide whether a measurement can be trusted:
 - **Holes are filled in.** Where the background behind a hole is far, the stereo depth carries
   the surface 1–3 mm into it; a Ø 25 mm hole fuses to an opening of Ø 12–14 mm. Holes are what
-  car parts are mounted by. To do: keep depth out of half-occluded pixels (a left-right check at
-  depth steps), and a simulated part with a measurable hole edge (a sheet with thickness, a bore).
+  car parts are mounted by. **Investigated 2026-11-12** ([`VALIDATION.md`](../VALIDATION.md), "Holes
+  filled in"): the fill is the stereo matcher's windows spreading into a region with nothing to
+  match, on every side of the hole, so a left-right check does not help. A guard that drops fused
+  depth within 8 px of a patch without depth opens the Ø 25 mm hole to Ø 24.4–25.2, at the price
+  of thinner side-wall coverage and convex features 0.2–0.5 mm smaller in diameter. **Waiting for a
+  decision** (it changes every scan). Small holes (Ø 6–10 mm) over a far, dark background stay
+  closed with every fix tried: they need another cue, such as the laser lines' end points at a
+  rim. To do after the decision: the Hole tool fitting the edge of the flat region instead of the
+  mesh's boundary loop, for holes with a wall and a near background.
 - **Convex features are fattened** (a Ø 16 mm shaft +0.2 mm at true poses, +1.1 mm with tracking)
   and tracking errors of 0.7–1 mm distort faces by up to 1.2 mm. To do: find the share of the
   stereo depth, of the fusion and of the tracking.
