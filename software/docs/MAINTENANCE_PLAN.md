@@ -1072,12 +1072,17 @@ Every task here: the type check, `npm test`, and for bundle tasks the chunk size
 
 ## S. Start-up and server
 
-### [ ] S1. `ohs --help` loads OpenCV (Sonnet, S) ✔
+### [x] S1. `ohs --help` loads OpenCV (Sonnet, S) ✔
 - **Where:** `ohs/app/config.py:39` imports `CameraParams` from `ohs/devices/camera.py`, which
   imports `cv2`. Measured: `import ohs.app.cli` takes 540-600 ms, 300-480 ms of it OpenCV.
 - **Change:** move `CameraParams` to a module without `cv2` and re-export it from `camera.py`.
 - **Guard:** `test_app_cli.py`, `test_app_config.py`, `test_devices_camera.py`. Add first: a
   subprocess test that `cv2` is not in `sys.modules` after `import ohs.app.cli`.
+- **Done 2026-11-12:** `CameraParams` and `PicoParams` live in `ohs/devices/params.py` and are
+  re-exported. `PicoParams` moved too: `pico.py` imports numpy, which is most of the time (numpy
+  about 300 ms, OpenCV itself about 45 ms). `import ohs.app.cli` took 578 ms before and
+  69-214 ms after (`-X importtime`, on a machine busy with a study). The new test checks that
+  neither `cv2` nor `numpy` is loaded.
 
 ### [ ] S2. New app connections read files on the event loop (Sonnet, S) ✔
 - **Where:** `ohs/server/app.py:588`, `:610` call `seed_client` (`studio.py:230-238`), which reads

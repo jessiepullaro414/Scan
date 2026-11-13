@@ -48,13 +48,13 @@ import logging
 import sys
 import threading
 import time
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterator
 
 import cv2
 import numpy as np
 
+from ohs.devices.params import CameraParams
 from ohs.io.recording import RecordingReader
 from ohs.types import StereoFrame
 
@@ -65,20 +65,6 @@ log = logging.getLogger(__name__)
 _BACKENDS = {"dshow": cv2.CAP_DSHOW, "msmf": cv2.CAP_MSMF, "v4l2": cv2.CAP_V4L2, "any": cv2.CAP_ANY}
 _AUTO_EXPOSURE_MANUAL = 0.25
 _AUTO_EXPOSURE_MANUAL_V4L2_MENU = 1.0
-
-
-@dataclass
-class CameraParams:
-    index: int = 0
-    backend: str = "auto"  # "auto" | "dshow" | "msmf" | "v4l2" | "any"
-    width: int = 2560  # full side-by-side frame
-    height: int = 800
-    fps: float = 60.0
-    fourcc: str = "MJPG"
-    exposure: float | None = None  # backend-native units; None = leave camera default
-    gain: float | None = None
-    swap_lr: bool = False
-    second_index: int | None = None  # fallback: two separate (unsynced) UVC cameras
 
 
 # --------------------------------------------------------------------------- helpers

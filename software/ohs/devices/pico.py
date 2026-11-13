@@ -55,11 +55,11 @@ import math
 import queue
 import threading
 import time
-from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
 
+from ohs.devices.params import PicoParams
 from ohs.types import Event, ImuSample
 
 __all__ = ["PicoParams", "Pico", "PicoError", "find_pico_port"]
@@ -77,20 +77,6 @@ _STAT_KEYS = ("lines", "imu", "imu_gaps", "imu_dropped", "imu_unscaled", "events
 
 class PicoError(RuntimeError):
     """The firmware answered a command with an ``E ...`` error line."""
-
-
-@dataclass
-class PicoParams:
-    """Pico connection settings. The first four fields are the ARCHITECTURE.md contract."""
-
-    port: str | None = None  # None = auto-detect USB VID 0x2E8A
-    baud: int = 115200
-    imu_rate_hz: int = 416
-    heartbeat_s: float = 0.4
-    resync_s: float = 5.0  # background clock re-sync period
-    sync_samples: int = 16  # TIME round trips per sync (the min-RTT one is used)
-    timeout_s: float = 0.5  # reply timeout per command
-    drift_prior_ppm: float = 100.0  # prior std-dev of the host/device clock-rate difference
 
 
 # --------------------------------------------------------------------------- clock model

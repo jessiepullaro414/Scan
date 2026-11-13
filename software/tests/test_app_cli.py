@@ -62,6 +62,19 @@ def test_top_level_help_version_and_no_command(capsys):
     assert cli.main([]) == 2
 
 
+def test_importing_the_cli_loads_no_heavy_library():
+    """``ohs --help`` and ``ohs config`` must not pay for OpenCV or numpy (S1): in a fresh interpreter,
+    importing the command line and building its parser leaves both unloaded."""
+    import subprocess
+    import sys
+
+    code = ("import sys, ohs.app.cli as c; c.build_parser(); "
+            "print(','.join(m for m in ('cv2', 'numpy', 'scipy', 'open3d', 'pyopencl') if m in sys.modules))")
+    r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=120)
+    assert r.returncode == 0, r.stderr
+    assert r.stdout.strip() == ""
+
+
 def test_help_texts_carry_the_guidance(capsys):
     for cmd, needles in {
         "calibrate": ["15-25 views, 200-500 mm, tilts 20-45 deg", "6-10 poses, 150-450 mm", "hold still 2 s", "--keep"],

@@ -36,8 +36,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from ohs.devices.camera import CameraParams
-from ohs.devices.pico import PicoParams
+from ohs.devices.params import CameraParams, PicoParams
 
 try:  # Python >= 3.11
     import tomllib as _toml
