@@ -795,6 +795,100 @@ The limit never binds here: smoothing moves points by hundredths of a millimetre
 
 **Watertight:** `fill_holes(..., include_borders=True)` closes the outer edge within the size limit, for example a sphere cut flat where it sat on the table.
 
+## Fitted shapes against the truth (M5 first slice, 2026-11-12)
+
+One click in the viewer fits a plane, a cylinder or a hole (`ohs.measure.fit_at`) and shows a ± value. This checks those numbers on simulated scans of parts with known shapes.
+
+**In short:**
+- **The ± values are too small, mostly because of systematic errors.** They describe the scatter of the points around the fit. The scan's shapes are also biased (stereo, fusion, tracking), the same way on every seed, and the ± does not know that.
+- **No single factor repairs it.** For ±2σ to cover the truth 95 % of the time, the ± would have to grow by 1 to 5 times at true poses and by 5 to 60 times with tracking, depending on the quantity.
+- **With tracking, a Ø 14 mm boss reads 0.4 mm large and a Ø 16 mm shaft 1.1 mm large**, shown as ± 0.06 to 0.08 mm.
+- **The Ø 25 mm hole in the car panel cannot be fitted at all:** the stereo depth fills the hole in, and the fused opening is Ø 12 to 14 mm.
+
+**Setup:**
+- Scenes: `bracket` (240 frames, a 400° orbit at 200–280 mm) and `car_panel` (200 frames, a 400° orbit centred on its hole), 1280x800, realistic lenses and noise, dots and lasers on, seeds 0–4.
+- Processed as the app's Make mesh at Standard quality on the GPU path, then the Default recipe's edits (remove floaters, fill holes up to 5 mm). Meshes of 1.3–1.7 M faces; the median vertex sigma is 0.41–0.45 mm.
+- Two pose sources: the true poses (fusion and fitting only), and real tracking (what a user gets; all frames tracked, trajectory error 0.1–1.25 mm median). Straighten changed none of the ten scans.
+- Per shape, 3 clicks on the true surface, so 15 fits per shape and pose source. The tracked meshes are aligned to the truth by a best fit first, so position errors are after that alignment.
+
+**At true poses** (error median / worst; ± is the median 1σ shown):
+
+| Shape | Quantity | Error | ± shown | ±2σ covers |
+|---|---|---|---|---|
+| Boss, Ø 14 (two of them) | diameter | −0.08 to −0.12 / −0.22 mm | 0.06 mm | 47–67 % |
+| | axis direction | 5.6° / 10.3° | 1.2° | 0 % |
+| | axis position | 0.2 / 0.25 mm | 0.05 mm | 0 % |
+| Shaft, Ø 16 | diameter | +0.21 / +0.55 mm | 0.07 mm | 33 % |
+| | axis direction | 0.15° / 0.54° | 0.19° | 73 % |
+| | axis position | 0.17 / 0.35 mm | 0.05 mm | 7 % |
+| Table | normal | 0.0003° / 0.0009° | 0.0002° | 73 % |
+| | offset | 1.7 / 2.3 µm | 0.3 µm | 0 % |
+| Base top | normal | 0.026° / 0.051° | 0.021° | 100 % |
+| | offset | 0.013 / 0.016 mm | 0.005 mm | 27 % |
+| Upright face | normal | 0.08° / 0.23° | 0.05° | 60 % |
+| | offset | 0.065 / 0.100 mm | 0.010 mm | 0 % |
+
+**With tracking:**
+
+| Shape | Quantity | Error | ± shown | ±2σ covers |
+|---|---|---|---|---|
+| Boss, Ø 14 | diameter | +0.36 to +0.39 / +0.61 mm | 0.06 mm | 0 % |
+| | axis direction | 7.7–8.5° / 13.8° | 1.1° | 7 % |
+| | axis position | 0.29–0.37 / 0.79 mm | 0.05 mm | 0–7 % |
+| Shaft, Ø 16 | diameter | +1.07 / +1.68 mm | 0.08 mm | 13 % |
+| | axis direction | 0.45° / 1.37° | 0.23° | 47 % |
+| | axis position | 0.72 / 1.09 mm | 0.05 mm | 7 % |
+| Base top | offset | 0.027 / 0.037 mm | 0.005 mm | 0 % |
+| Upright face | offset | 0.48 / 1.27 mm | 0.011 mm | 0 % |
+| | normal | 0.16° / 1.13° | 0.06° | 33 % |
+
+- Convex features come out 0.2–0.5 mm fatter in radius with tracking, much the same on every seed.
+- On two seeds the tracked upright face sits about 1.2 mm off: frames fused with 0.7–1 mm of relative pose error distort the mesh.
+
+**Why the ± is too small:**
+- **Bias.** At true poses the spread from seed to seed is about the size of the ± (0.4–1.6 times). The rest of the error is the same on every seed: the upright face 0.06 mm off, the shaft's radius 0.15 mm large (the stereo depth fattens foreground objects), and the 8 mm boss walls wavy by ±0.3 mm (the TSDF at the corners with the plate and the cap), which tilts their axis by 5–6°.
+- **Neighbouring vertices share their errors.** On the planes the true errors of vertices 1 mm apart correlate 0.5–0.6. A fit that treats them as independent is too sure by about 7–10 times.
+- **The vertex sigma is 2–6 times too large**, which hides most of the second point today: 2σ covers 99–100 % of the vertices where 95 % would be right. If sigma is made honest, the fits' ± shrink and their coverage falls further.
+
+Factor by which the ± would have to grow for ±2σ to cover 95 %:
+
+| Quantity | True poses | Tracking |
+|---|---|---|
+| Radius | 2.0 | 10.9 |
+| Axis direction | 3.9 | 5.0 |
+| Axis position | 2.3 | 10.5 |
+| Plane normal | 2.1 | 5.6 |
+| Plane offset | 3.8 | 61 |
+
+**The regions a click takes** (share of the true face taken, median and smallest, at true poses):
+
+| Shape | Share taken | Tolerance used | True noise of the face (RMS) |
+|---|---|---|---|
+| Bosses | 98 % (96 %) | 1.2–1.4 mm | 0.37 mm |
+| Shaft | 62 % (38 %) | 0.14 mm | 0.36 mm |
+| Base top | 79 % (21 %) | 0.10 mm | 0.15 mm |
+| Upright face | 64 % (28 %) | 0.16 mm | 0.26 mm |
+| Table near the part | 77 % (54 %) | 0.05 mm | 0.095 mm |
+
+- **Regions stop early on the shaft and the planes.** The tolerance comes from the seed patch, which sits on the best-measured spot, so it is below the face's own noise.
+- **On the bosses the seed is larger than the 8 mm wall**, takes in the edges, and the tolerance becomes 1.2–1.8 mm.
+- A click takes 0.4 s; a table plane of 330–400k points 1.1 s (worst 2.3 s).
+
+**"Flat within":** on truly flat faces the label (largest minus smallest distance) read 0.14 mm (table), 0.32 mm (base top) and 0.48 mm (upright face), all of it error. Robust versions (the central 99 %, or 6 × RMS) are only 10–25 % smaller. The label is about 3 times the region's tolerance: the region only takes points within the tolerance, so the label mostly restates it, and on a part that really is out of flat it would cut the deviation off.
+
+**The hole:**
+- 30 clicks (5 seeds, 3 clicks, 2 pose sources): 26 answered "the faces around this hole's edge are not flat", 3 fitted a wrong loop (Ø 13.7 mm against the true 25.2), and 2 hit a bug (a filled pin hole nearer the click than the hole's edge; fixed the same day with a test).
+- The fused panel follows the truth only down to a radius of 11–12 mm. Then a lip sags into the hole; the opening is Ø 11.9–13.9 mm, 0.9–2.9 mm below the panel.
+- The cause is in each depth map: one camera does not see the background through the hole near its edge (it is 120 mm below, a step of about 75 px in disparity), and the stereo matcher carries the panel 1–3 mm into the hole. Fusing views from all round adds these up.
+- With a block 10 mm under the hole the panel ends near the true edge, but a skirt joins it to the block, and the hole still cannot be fitted.
+- So there is no hole-diameter bias to quote. The simulator needs a hole with an edge that can be measured (a sheet with thickness, or a bore with a wall).
+
+**What follows:**
+- The app must not show the ± as an accuracy. Until the biases are dealt with, it is the fit's own scatter.
+- Open work, in the plans: holes filled in by the stereo depth; convex features fattened; the pessimistic vertex sigma; the region's tolerance; the flatness label.
+
+Scripts and raw results: scratchpad `m5v\` of the session of 2026-11-12 (`summary_all_clicks.md`).
+
 ## What the metrics mean
 
 - **Stereo errors** compare the estimated raw intrinsics/extrinsics (`K1`, `K2`, `R`, `T`) with
@@ -924,3 +1018,9 @@ The limit never binds here: smoothing moves points by hundredths of a millimetre
 - Mesh p95 is 0.7-1.2 mm, from TSDF artefacts at grazing angles, depth edges and the depth-range
   cut-off. The laser cloud, at 0.07 mm median, is the more accurate surface sample. It is exported
   separately and is not yet used to refine the mesh.
+- **Holes are filled in** (found 2026-11-12, "Fitted shapes against the truth"): where the
+  background behind a hole is far away, the stereo depth carries the surface 1-3 mm into the
+  hole, and the fused opening of a Ø 25 mm hole is Ø 12-14 mm. Holes cannot be measured from the
+  mesh yet.
+- **Convex features are fattened:** a Ø 16 mm shaft reads 0.2 mm large at true poses and 1.1 mm
+  large with tracking; a short boss's wall is wavy by ±0.3 mm.

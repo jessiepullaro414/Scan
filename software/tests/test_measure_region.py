@@ -436,3 +436,29 @@ def test_a_click_answers_fast_on_a_1m_triangle_mesh():
     # on its 500k points), with room for a busy PC
     assert times["hole"] < 1.0 and times["plane, one side of a box"] < 1.0, times
     assert times["plane"] < 3.0 and times["cylinder"] < 3.0, times
+
+
+def test_a_filled_pin_hole_does_not_hide_the_hole_next_to_it():
+    """A plate with a Ø 25 hole and one missing triangle 2 mm outside its edge, closed by hole
+    filling (as the Default recipe does). Filled faces are left out when holes are looked for, so
+    the pin hole is a loop again, and nearer the click than the hole's edge: the hole is still found."""
+    from ohs.mesh import carry_filled, fill_holes
+
+    xs = np.arange(-40, 40 + 1e-9, 0.5)
+    X, Y = np.meshgrid(xs, xs)
+    V = np.column_stack([X.ravel(), Y.ravel(), np.zeros(X.size)])
+    idx = np.arange(len(xs) ** 2).reshape(len(xs), len(xs))
+    a, b, c, d = idx[:-1, :-1].ravel(), idx[:-1, 1:].ravel(), idx[1:, :-1].ravel(), idx[1:, 1:].ravel()
+    F = np.concatenate([np.column_stack([a, b, d]), np.column_stack([a, d, c])])
+    C = V[F].mean(axis=1)
+    keep = np.hypot(C[:, 0], C[:, 1]) > 12.5
+    keep[np.argmin(np.linalg.norm(C - [14.5, 0.0, 0.0], axis=1))] = False  # the pin hole
+    F = F[keep]
+    V2, F2 = fill_holes(V, F, 5.0)  # closes the pin hole, not the Ø 25 hole
+    filled = carry_filled("fill_holes", V, F, None, V2, F2)
+    assert filled.sum() >= 1
+    C2 = V2[F2].mean(axis=1)
+    click = np.array([14.0, 0.6, 0.0])
+    face = int(np.argmin(np.where(filled, np.inf, np.linalg.norm(C2 - click, axis=1))))
+    r = fit_at(V2, F2, face, C2[face], "hole", filled=filled)
+    assert abs(r.fit.diameter_mm - 25.0) < 0.2 and np.linalg.norm(r.fit.center[:2]) < 0.1

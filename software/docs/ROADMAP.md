@@ -65,12 +65,28 @@ change what the hardware can physically measure.
 
 In this order. Each one uses what is already built.
 
+**Accuracy findings to act on first** (2026-11-12, from checking the fitted shapes against the
+simulator's truth; [`VALIDATION.md`](../VALIDATION.md), "Fitted shapes against the truth"). These are
+about the scan itself, not the Fit tool, and they decide whether a measurement can be trusted:
+- **Holes are filled in.** Where the background behind a hole is far, the stereo depth carries
+  the surface 1–3 mm into it; a Ø 25 mm hole fuses to an opening of Ø 12–14 mm. Holes are what
+  car parts are mounted by. To do: keep depth out of half-occluded pixels (a left-right check at
+  depth steps), and a simulated part with a measurable hole edge (a sheet with thickness, a bore).
+- **Convex features are fattened** (a Ø 16 mm shaft +0.2 mm at true poses, +1.1 mm with tracking)
+  and tracking errors of 0.7–1 mm distort faces by up to 1.2 mm. To do: find the share of the
+  stereo depth, of the fusion and of the tracking.
+- **The vertex sigma is 2–6 times too large**, and a fit's ± is several times too small. To do:
+  an honest sigma, an error model for fits that knows the biases, and until then no ± shown as
+  an accuracy.
+
 1. **Fit simple shapes in the viewer.** Pick a region; fit a plane, a cylinder or a circle. Show hole
    diameters, plane-to-plane distances and angles, with the fit's residual and the region's
    confidence next to each number. This is the start of M5, and where "accuracy over appearance"
-   becomes visible.
+   becomes visible. **Built 2026-11-12** (the Fit tool, key G). Its check against the truth gave
+   the findings above; open: how the ± is shown, the region's tolerance, the flatness label.
 2. **A deviation map.** Show how far a processed mesh moved from the measured one (after fill or
    smooth), with a limit the user can set. Later, the same map against a reference STL.
+   **Built 2026-11-12** (the Deviation shading, key 5); its simulator check is still to do.
 3. **Confidence the user can act on.** After Make mesh, list the regions that miss a tolerance the
    user sets ("these 3 areas need another pass"). This gives most of a rescan queue without
    next-best-view research.

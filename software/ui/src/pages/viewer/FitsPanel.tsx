@@ -18,7 +18,10 @@ import { fmtSigma } from "./ViewerCanvas";
 
 export const FIT_ICON: Record<FitKind, typeof Square> = { plane: Square, cylinder: Cylinder, hole: CircleDashed };
 
-const SIGMA_NOTE = "± is one standard deviation (1σ), statistical only: calibration and scale errors come on top.";
+// Measured on simulated scans (VALIDATION.md, "Fitted shapes against the truth"): the true errors were
+// several times the ±, because the scan's shapes are biased and the ± only knows the points' scatter.
+const SIGMA_NOTE =
+  "± is how well the points agree with the fitted shape (1σ). It is not the accuracy: in tests on simulated scans the real errors were several times larger.";
 const degSigma = (x: number) => `±${fmtSmall(x)}°`;
 const mmSigma = (x: number) => `±${fmtSmall(x)} mm`;
 

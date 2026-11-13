@@ -625,6 +625,16 @@ It turns "a nice mesh" into numbers a part can be made from.
    truth on the bracket (bosses r = 7 mm, shaft r = 8 mm) and the car panel (hole Ø 25 mm),
    whether ±2σ covers the truth, and the bias of small holes (fusion rounds them).
 
+   **Done 2026-11-12** ([`VALIDATION.md`](../VALIDATION.md), "Fitted shapes against the truth"):
+   the ± values are too small, mostly from systematic errors of the scan itself (no single factor
+   repairs them: 1–5 times at true poses, 5–60 times with tracking); with tracking a Ø 14 boss
+   reads 0.4 mm large and a Ø 16 shaft 1.1 mm large; the panel's Ø 25 hole cannot be fitted
+   because the stereo depth fills it in (opening Ø 12–14). The viewer's note now says the ± is
+   not the accuracy. One bug fixed (a filled pin hole hid the hole next to it).
+   **Open, to decide with the owner:** how the app shows the ± (see the roadmap); the region's
+   tolerance (stops early on noisy faces, too loose on short bosses); the flatness label
+   (it mostly restates the tolerance).
+
 **Done when:** on simulated scans in the app, one click gives each shape with its ± value, the
 errors against the truth are measured and written down (whatever they are), and the tests, type
 check, build and a browser check pass.

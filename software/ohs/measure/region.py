@@ -102,6 +102,7 @@ SMALL_REGION_POINTS = 50  # fewer points than this: a warning
 SCATTER_WARNING = 1.3  # points scattering this many times their sigma (weighted RMS): a warning
 #   (a flat region with the right sigma scatters 1 ± 0.1 times at 50 points, less with more)
 HOLE_REACH_MM = 10.0  # the hole's edge must come this close to the click
+PIN_HOLE_POINTS = 6  # a loop with fewer edge points is a pin hole: passed over when a larger hole is in reach
 HOLE_WINDOW_MM = 40.0  # the first window around the click searched for holes
 RING_MM = 3.0  # width of the ring of faces around a hole that gives its plane
 RING_FLAT_DEG = 30.0  # ring faces turned more than this from the ring's plane ...
@@ -439,6 +440,11 @@ def _hole_loop(V: np.ndarray, F: np.ndarray, measured: np.ndarray, point: np.nda
                            for k in reach])
         holes = reach[inside & ~is_border[reach]]
         if len(holes):
+            # a pin hole (a missing triangle or two, often one that hole filling closed: filled faces
+            # are left out here) must not hide the hole meant: it is passed over when a real one is in reach
+            real = np.array([len(loops.verts(k)) >= PIN_HOLE_POINTS for k in holes])
+            if real.any():
+                holes = holes[real]
             k = int(holes[np.argmin(d_loop[holes])])
             return win, (Vw, Fw, kept), loops.verts(k)
         if inside.all() or D > whole:
