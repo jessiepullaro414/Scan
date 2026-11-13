@@ -480,7 +480,7 @@ Phase 1 is done when full-quality processing is at least 3x faster on the RTX la
    **Status (2026-11-09): done, except the weighting. Fusion averages; the sigmas measure.**
    - Every depth pixel has a calibrated sigma: 2σ covers the true depth error for 96.7 % of the pixels on the GPU and 95.9 % on the CPU (simulated).
    - The 1 mm reconstruction TSDF runs on the GPU (about 20–28 ms a frame at full resolution) and averages like Open3D. Weighting by the sigma made the mesh worse, so it was dropped (`VALIDATION.md`, "Depth confidence").
-   - Each vertex has a sigma that counts only independent looks, so holding the scanner still doesn't claim more precision. 2σ covers the true error for 95–100 % of the vertices.
+   - Each vertex has a sigma that counts only independent looks, so holding the scanner still doesn't claim more precision. 2σ covers the true error for 95–100 % of the vertices. **Replaced 2026-11-13** by a model with bias terms (`VALIDATION.md`, "The vertex sigma"): a quarter of the earlier sigma on flat surface, larger at edges; 2σ covers 96–99 % on flat surface and about 90 % at edges.
    - The viewer and the Process page have a "Confidence" shading: a legend, the share of the surface within 0.1 / 0.3 mm, and the sigma under the cursor in the viewer. The sigma follows every mesh edit (filled holes are "not measured") and is in `mesh.ply` as `quality`.
    - Without a GPU, Open3D makes the mesh as before, with no confidence map.
 3. **"Refine with lasers"** (#3): a Process stage.
@@ -724,6 +724,9 @@ the answer is safe (what it passes is good) but useless as it is: at ± 0.3 mm i
 single factor repairs it. **Step 3 (the panel) is on hold** until the sigma is right on flat
 surface and knows the bias at edges, small features, hole rims and borders, and from tracking
 (the roadmap's accuracy findings); the harness in the scratchpad checks any new version.
+**2026-11-13:** the sigma model was replaced (`VALIDATION.md`, "The vertex sigma"; at ± 0.3 mm
+the check now passes 58–60 % of a scan and 99.8 % of that is truly within), so step 3 is no
+longer on hold.
 
 **Steps** (one commit each, tests first): 1. the areas, on meshes with a known sigma pattern;
 2. the API; 3. the panel, the highlight and the camera move, and the mock; 4. a simulator check in

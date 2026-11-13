@@ -47,7 +47,7 @@ change what the hardware can physically measure.
 | Live preview, slower offline result | **Built** | A light live model while scanning; Make mesh offline at Standard or Best. | |
 | Measurement methods | **Built** | Passive and active stereo with a dot projector: the LED projector (option B) is the build route for now, the laser + DOE projector (option A) stays available. Two calibrated laser lines. | Phase shift / Gray code, photogrammetry: only with fitting hardware. |
 | Agreement between methods | **Partly** | Laser points that disagree with the frame's stereo depth are dropped. "Refine with lasers" pulls the surface onto the laser points (on the simulator, a 0.3 mm bias went from 0.24 to 0.05 mm median error). | Show the user where the methods disagreed, instead of only dropping points. |
-| Confidence | **Partly** | Every depth pixel and every mesh vertex has a sigma. On simulated scans, 2 sigma covers the true error for about 96 % of pixels and 95-100 % of vertices. The viewer's Confidence shading and the sigma under the cursor. Filled holes are "not measured". | Checked on real scans; trusted / provisional / rejected geometry; telling the user what to rescan. |
+| Confidence | **Partly** | Every depth pixel and every mesh vertex has a sigma. On simulated scans, 2 sigma covers the true error for about 96 % of pixels, and for 96-99 % of the vertices on flat surface and about 90 % at edges. The viewer's Confidence shading and the sigma under the cursor. Filled holes are "not measured". | Checked on real scans; trusted / provisional / rejected geometry; telling the user what to rescan. |
 | Tracking and drift | **Partly** | Tracking state, hints when a surface cannot fix the position ("slide", "turn"), rewind, marker mode, "Straighten" (pose graph) after the scan. | Recovering after a real loss; a rescan queue; next-best-view guidance. |
 | Calibration and checks | **Partly** | Guided calibration wizard, self-test, scale check of the printed board. | Valid / Check / Recalibrate status from signs of drift. |
 | Validation | **Simulator only** | Accuracy, speed and confidence measured on simulated scans with known truth ([`VALIDATION.md`](../VALIDATION.md)). | Reference parts on the real hardware (waits for the hardware). |
@@ -91,9 +91,12 @@ about the scan itself, not the Fit tool, and they decide whether a measurement c
   sigma is about right; a voxel's mean of the variances is dominated by a few hugely inflated
   observations next to gaps. A candidate model is 3.4 times tighter on flat surface and larger
   at edges; with it the Check answer passes 56–58 % of a scan at ± 0.3 mm instead of 10.6 %, and
-  99.8 % of that is truly within. It costs 256 MB more per scan and about 6 ms per frame as
-  prototyped. **Waiting for a decision** (it changes the sigma stored with every scan). It cannot
-  see a tracking error that shifts a whole region: that needs a per-scan pose-quality term.
+  99.8 % of that is truly within. **Adopted 2026-11-13**: built into the engine, with the same
+  numbers as the prototype (58–60 % passed at ± 0.3 mm on the held-out scans, 99.8 % of it truly
+  within). It costs 192 MB more per scan, 2 ms per frame and 1–2 s when the mesh is made. Item 3
+  below is no longer blocked. Still to do: it cannot see a tracking error that shifts a whole
+  region (that needs a per-scan pose-quality term); smoothing's "within 2σ" limit can bind now and
+  a fit's ± follows the smaller sigma, and neither has been measured again; real scans.
 
 1. **Fit simple shapes in the viewer.** Pick a region; fit a plane, a cylinder or a circle. Show hole
    diameters, plane-to-plane distances and angles, with the fit's residual and the region's

@@ -124,7 +124,7 @@ from ohs.track.markerless import FusionParams, MarkerlessTracker
 from ohs.track.markers import MarkerParams, MarkerTracker
 from ohs.track.recon_tsdf import ConfidenceTsdf
 from ohs.types import ImuSample, LaserPlane, ScannerCalibration, StereoFrame, TrackResult
-from ohs.vision.depth import DepthEstimator, DepthParams
+from ohs.vision.depth import SIGMA_MODELS, DepthEstimator, DepthParams
 from ohs.vision.laser import LINE_NAMES, LaserLines, LaserParams, extract_laser_lines, laser_points
 from ohs.vision.rectify import Rectifier
 
@@ -669,9 +669,13 @@ class FramePipeline:
             want = "open3d"
         if want in ("auto", "confidence"):
             try:
+                # the matcher's sigma factor next to missing depth, which the model takes out again
+                de = self.depth_estimator
+                sm = SIGMA_MODELS["gpu" if de is not None and de.backend == "gpu" else "cpu"]
                 return ConfidenceTsdf(self.K, self.image_size, voxel_mm=fp.voxel_mm, trunc_mm=fp.trunc_mm,
                                     depth_min_mm=fp.depth_min_mm, depth_max_mm=fp.depth_max_mm,
-                                    backend="gpu" if want == "auto" else "auto")
+                                    backend="gpu" if want == "auto" else "auto",
+                                    hole_factor=(sm.hole_amp, sm.hole_r_px))
             except RuntimeError as e:  # "auto" without a GPU
                 log.info("reconstruction with Open3D on the CPU: %s", e)
         return MarkerlessTracker(self.K, self.image_size, self.fusion_params)

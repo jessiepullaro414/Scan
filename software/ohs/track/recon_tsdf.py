@@ -19,13 +19,16 @@ and at three depths (the spacing grows with the voxel size, so the samples per b
 With a GPU this search runs there: a hash set of the frame's bricks, of which only the list comes
 back (keys of 10 bits per axis, within 512 bricks of the first camera; beyond that, the CPU search).
 Voxel ``(x, y, z)`` of brick ``b`` sits at world position ``(8 b + (x, y, z)) *
-voxel_mm``, Open3D's convention for block resolution 8. Per voxel, 28 bytes:
+voxel_mm``, Open3D's convention for block resolution 8. Per voxel, 40 bytes:
 
 - ``tsdf``: the mean of the truncated projective SDF ``min(d - z, trunc)`` (mm, camera z);
 - ``wsum``: the sum of the averaging weights (1 per observation), and ``m2``: the sum of squared
-  deviations from the mean (Welford): the scatter actually observed;
-- ``s2``: the sum of the observations' variances ``min(sigma, trunc)^2`` (truncation caps how far
-  one observation can move the mean);
+  deviations from the mean (Welford): the scatter actually observed, along the camera z;
+- ``xc`` and ``mxc``: the same mean and scatter of the distance along the surface *normal* (the SDF
+  times the cosine of the ray with the depth map's own normal);
+- ``snh2``: the sum of the observations' variances ``min(sigma, trunc)^2``, with the matcher's
+  factor for pixels next to missing depth taken out of the sigma again (below);
+- ``hnear``: the number of observations next to a pixel without depth;
 - ``nobs``: the number of observations, and ``nlook``: the number of *independent looks*;
 - ``luv``: the pixel of the last counted look.
 
@@ -35,13 +38,34 @@ make nearly the same error (``VALIDATION.md``: a correlation of 0.4 between fram
 look counts when the voxel's pixel is at least ``look_px`` from the last counted one: the dot
 spacing, 10 px at 1280 px width.
 
-**A voxel's standard deviation** (mm, along the camera z of its observations, so an upper bound
-along the normal): ``sigma^2 = max(s2 / wsum^2 * nobs, m2 / wsum) / nlook``. The first term is
-what the pixels' own sigmas predict for the mean (their mean variance), the second the scatter
-actually observed; the larger one is divided by the independent looks, never by the correlated
-frames. Marching cubes interpolates it to every vertex (:meth:`ConfidenceTsdf.extract_mesh`). On
-the simulator 2 sigma covers 95-100 % of the vertices' true error, and the vertices it rates within
-1 mm are measurably the better part of the mesh.
+**A voxel's standard deviation** (mm, along the surface normal; :func:`voxel_sigma`) has a noise
+part and bias parts::
+
+    sigma^2 = C_NOISE^2 (mxc / wsum) / nlook
+            + (A_GAP hnear / nobs)^2
+            + A_SCATTER^2 max(m2 / wsum - snh2 nobs / wsum^2, 0)
+
+The noise part is the scatter observed along the normal, divided by the independent looks, never by
+the correlated frames. The bias parts do not average out: the share of observations within 6 px (at
+1280 px width) of a pixel without depth, where the matcher's windows carry a surface into a gap or
+over an edge; and the scatter beyond what the pixels' own sigmas predict, the mark of two surfaces
+fused into one voxel. For that prediction the matcher's sigma is used without its factor for pixels
+next to missing depth (``hole_factor``; up to 121 times, made to cover a tail, not a variance).
+Marching cubes interpolates the voxels' sigma to every vertex, and :meth:`ConfidenceTsdf.extract_mesh`
+adds what only the mesh shows (:func:`mesh_sigma_terms`): curvature and nearness to the open border.
+
+The five constants were fitted on simulated scans against the true error (``VALIDATION.md``, "The
+vertex sigma"; 1280 px, 1 mm voxels, the GPU matcher). There 2 sigma covers 96-99 % of the vertices
+on flat surface and about 90 % at edges, with a sigma a quarter of the earlier rule's on flat
+surface. The bias constants that are lengths grow with the voxel size (:func:`bias_scale`): at 640 px
+with 2 mm voxels the errors next to gaps, edges and borders are about twice as large, and without
+that factor 2 sigma covered 91 % there instead of 98 %. That rule, ``max(mean of the pixels' capped variances, m2 / wsum) / nlook``, was 4 to 5.5
+times too large there (the mean is ruled by the few observations next to gaps) and too small at
+edges, where the error is a bias.
+
+**The distance to missing depth** is the Euclidean distance (px) to the nearest pixel without depth
+in the fused range, searched up to 3 radii of the matcher's factor (15 px), as the GPU matcher
+measures it: two kernels (along the rows, then across them), or OpenCV's exact transform in numpy.
 
 **Backends.** ``"gpu"``: OpenCL on :func:`ohs.compute.get_device` (one work-item per voxel of the
 frame's bricks, so no voxel is written twice). ``"cpu"``: the same arithmetic in numpy, which is
@@ -56,6 +80,7 @@ its ``color`` carries ``(sigma, nlook, wsum)``, which marching cubes interpolate
 on the CPU; Open3D's CPU integration: 15-18 ms), at 640x400 with 2 mm voxels about 4 ms. The kernels
 apply :func:`pixel_weights`' rules themselves, on the raw depth and sigma. The numpy twin needs about
 0.5 s per frame, so without a GPU the pipeline keeps Open3D (no confidence) unless asked for this model.
+The mesh's own sigma terms take about a second per million triangles, once, when the mesh is made.
 
 The interface mirrors :class:`ohs.track.markerless.MarkerlessTracker`'s model side (``integrate``,
 ``extract_mesh``, ``extract_points``, ``n_integrated``, ``reset``, ``close``), so the pipeline can use
@@ -68,7 +93,8 @@ from typing import Any
 
 import numpy as np
 
-__all__ = ["ConfidenceTsdf", "BRICK", "RECON_BACKENDS", "voxel_sigma", "pixel_weights"]
+__all__ = ["ConfidenceTsdf", "BRICK", "RECON_BACKENDS", "voxel_sigma", "mesh_sigma_terms", "bias_scale", "pixel_weights",
+           "C_NOISE", "A_GAP", "A_SCATTER", "A_CURV", "A_BORDER", "GAP_NEAR_PX_1280", "BORDER_MM"]
 
 log = logging.getLogger(__name__)
 
@@ -77,22 +103,33 @@ NVOX = BRICK ** 3
 RECON_BACKENDS = ("auto", "gpu", "cpu")
 LOOK_PX_1280 = 10.0  # dot spacing (px) at 1280 px width: one independent look per move of this much
 _OFF = 1 << 20  # brick key offset: +-1M bricks per axis
-_FLOAT_CHANNELS = ("tsdf", "wsum", "m2", "s2", "nobs", "nlook")
+_FLOAT_CHANNELS = ("tsdf", "wsum", "m2", "nobs", "nlook", "xc", "mxc", "hnear", "snh2")
+# The sigma model's constants (module docstring; fitted on simulated scans, VALIDATION.md "The vertex sigma")
+C_NOISE = 0.5583  # share of (normal scatter / looks) that is the noise of the mean
+A_GAP = 0.9177  # mm at a voxel all of whose observations were next to a pixel without depth
+A_SCATTER = 2.970  # times the scatter (mm) beyond what the pixels' sigmas predict
+A_CURV = 1.0579  # mm times sqrt(1 - n . mean normal of the 2-ring), its largest value in the 2-ring
+A_BORDER = 0.5325  # mm on the mesh's open border, falling off as exp(-distance / BORDER_MM)
+GAP_NEAR_PX_1280 = 6.0  # "next to a pixel without depth": within this many px, at 1280 px width
+BORDER_MM = 1.5
 
 _SRC = r"""
 // OpenCL C 1.2. Sparse confidence TSDF of ohs/track/recon_tsdf.py (see its docstring).
 // Brick slot s holds voxels s * 512 + (lz * 64 + ly * 8 + lx), one array per channel.
 __kernel void recon_integrate(
-    __global float *tsdf, __global float *wsum, __global float *m2, __global float *s2, __global float *nobs,
+    __global float *tsdf, __global float *wsum, __global float *m2, __global float *nobs,
     __global float *nlook, __global uint *luv,
+    __global float *xc, __global float *mxc, __global float *hnear, __global float *snh2,
     __global const int *slots, __global const int *keys, const int n_active,
     __global const float *depth, __global const float *sigma, const int has_sigma, const int w, const int h,
+    __global const float *gap2,
     const float fx, const float fy, const float cx, const float cy, const float sk,
     const float r00, const float r01, const float r02,
     const float r10, const float r11, const float r12,
     const float r20, const float r21, const float r22,
     const float t0, const float t1, const float t2,
-    const float voxel, const float trunc, const float depth_min, const float depth_max, const float look2)
+    const float voxel, const float trunc, const float depth_min, const float depth_max, const float look2,
+    const float near2, const float hole_amp, const float hole_r2)
 {
     const int gid = get_global_id(0);
     const int b = gid >> 9;
@@ -115,13 +152,30 @@ __kernel void recon_integrate(
     if (!(d >= depth_min && d <= depth_max)) return;
     const float sdf = d - pz;
     if (sdf < -trunc) return;
-    // the weight and variance of pixel_weights(): 1, and min(sigma, trunc)^2 (trunc^2 / 9 without sigmas)
+    // the weight and variance of pixel_weights(): 1, and min(sigma, trunc)^2 (trunc^2 / 9 without sigmas),
+    // without the matcher's factor for pixels next to missing depth (1 + hole_amp exp(-g2 / hole_r2))
     const float wt = 1.0f;
+    const float g2 = gap2[pix];  // squared distance (px) to the nearest pixel without depth
     float var = trunc * trunc / 9.0f;
     if (has_sigma) {
         const float sg = sigma[pix];
-        const float sc = (isnan(sg) || isinf(sg)) ? trunc : fmin(sg, trunc);
+        const float sc = (isnan(sg) || isinf(sg)) ? trunc : fmin(sg / (1.0f + hole_amp * exp(-g2 / hole_r2)), trunc);
         var = sc * sc;
+    }
+    // cosine of the ray with the depth map's own normal (as the matcher's sigma_z); 1 next to no depth
+    float cs = 1.0f;
+    if (ui > 0 && ui < w - 1 && vi > 0 && vi < h - 1) {
+        const float dl = depth[pix - 1], dr = depth[pix + 1], dt = depth[pix - w], db = depth[pix + w];
+        if (dl >= depth_min && dl <= depth_max && dr >= depth_min && dr <= depth_max &&
+            dt >= depth_min && dt <= depth_max && db >= depth_min && db <= depth_max) {
+            const float zu = 0.5f * (dr - dl), zv = 0.5f * (db - dt);
+            const float pu = (float)ui - cx, pv = (float)vi - cy;
+            const float n3 = pu * zu + pv * zv + d;
+            const float gu = zu * fx, gv = zv * fy, ru = pu / fx, rv = pv / fy;
+            const float nn = sqrt(gu * gu + gv * gv + n3 * n3);
+            const float rr = sqrt(ru * ru + rv * rv + 1.0f);
+            cs = clamp(d / fmax(nn * rr, 1e-6f), 0.05f, 1.0f);
+        }
     }
     const float x = fmin(sdf, trunc);
     const int a = slots[b] * 512 + l;
@@ -129,7 +183,12 @@ __kernel void recon_integrate(
     const float W1 = W0 + wt;
     const float m1 = m0 + (wt / W1) * (x - m0);
     m2[a] += wt * (x - m0) * (x - m1);
-    s2[a] += wt * wt * var;
+    snh2[a] += wt * wt * var;
+    const float xn = x * cs, q0 = xc[a];
+    const float q1 = q0 + (wt / W1) * (xn - q0);
+    mxc[a] += wt * (xn - q0) * (xn - q1);
+    xc[a] = q1;
+    hnear[a] += (g2 < near2) ? 1.0f : 0.0f;
     tsdf[a] = m1;
     wsum[a] = W1;
     nobs[a] += 1.0f;
@@ -139,6 +198,47 @@ __kernel void recon_integrate(
         nlook[a] += 1.0f;
         luv[a] = (uint)ui | ((uint)vi << 16);
     }
+}
+
+// The distance to missing depth (module docstring), step 1: along the row, up to R px (R + 1: none).
+__kernel void recon_gap_row(__global const float *depth, __global float *hx, const int w, const int h, const int R,
+                            const float depth_min, const float depth_max)
+{
+    const int x = get_global_id(0), y = get_global_id(1);
+    if (x >= w || y >= h) return;
+    const int row = y * w;
+    float best = (float)(R + 1);
+    for (int dx = 0; dx <= R; ++dx) {
+        int gap = 0;
+        if (x - dx >= 0) {
+            const float d = depth[row + x - dx];
+            gap = !(d >= depth_min && d <= depth_max);
+        }
+        if (!gap && x + dx < w) {
+            const float d = depth[row + x + dx];
+            gap = !(d >= depth_min && d <= depth_max);
+        }
+        if (gap) {
+            best = (float)dx;
+            break;
+        }
+    }
+    hx[row + x] = best;
+}
+
+// Step 2: the squared Euclidean distance, from the row distances within +-R rows; at most (R + 1)^2.
+__kernel void recon_gap_dist(__global const float *hx, __global float *gap2, const int w, const int h, const int R)
+{
+    const int x = get_global_id(0), y = get_global_id(1);
+    if (x >= w || y >= h) return;
+    float g2 = (float)((R + 1) * (R + 1));
+    for (int dy = -R; dy <= R; ++dy) {
+        const int yy = y + dy;
+        if (yy < 0 || yy >= h) continue;
+        const float d = hx[yy * w + x];
+        g2 = fmin(g2, d * d + (float)(dy * dy));
+    }
+    gap2[y * w + x] = g2;
 }
 
 // The brick search of _frame_bricks: every step-th pixel's ray at d - trunc, d and d + trunc, in bricks
@@ -191,7 +291,9 @@ __kernel void recon_bricks(
 }
 """
 _I, _F = np.int32, np.float32
-_ARGS = [None] * 9 + [_I] + [None, None] + [_I, _I, _I] + [_F] * 5 + [_F] * 12 + [_F] * 5
+_ARGS = [None] * 12 + [_I] + [None, None] + [_I, _I, _I] + [None] + [_F] * 5 + [_F] * 12 + [_F] * 8
+_GAP_ROW_ARGS = [None, None, _I, _I, _I, _F, _F]
+_GAP_DIST_ARGS = [None, None, _I, _I, _I]
 _BRICK_ARGS = [None, _I, _I, _I, _I] + [_F] * 5 + [_F] * 12 + [_F] * 3 + [None, _I, None, None]
 _KEY_BITS, _KEY_HALF = 10, 512  # compact brick keys of the GPU search: 10 bits per axis around the origin
 
@@ -206,16 +308,76 @@ def _decode(e: np.ndarray) -> np.ndarray:
     return np.stack([(e >> 42) & 0x1FFFFF, (e >> 21) & 0x1FFFFF, e & 0x1FFFFF], axis=1) - _OFF
 
 
-def voxel_sigma(wsum: np.ndarray, m2: np.ndarray, s2: np.ndarray, nobs: np.ndarray, nlook: np.ndarray) -> np.ndarray:
-    """Standard deviation (mm) of each voxel's weighted mean; 0 where unobserved (module docstring):
-    ``sqrt(max(s2 / wsum^2 * nobs, m2 / wsum) / max(nlook, 1))``."""
+def bias_scale(voxel_mm: float) -> float:
+    """Factor on the model's bias constants that are lengths (``A_GAP``, ``A_CURV``, ``A_BORDER``,
+    ``BORDER_MM``): the voxel size in mm, and never below the 1 mm they were fitted at."""
+    return max(1.0, float(voxel_mm))
+
+
+def voxel_sigma(wsum: np.ndarray, m2: np.ndarray, nobs: np.ndarray, nlook: np.ndarray, mxc: np.ndarray,
+                hnear: np.ndarray, snh2: np.ndarray, voxel_mm: float = 1.0) -> np.ndarray:
+    """Standard deviation (mm, along the normal) of each voxel's mean; 0 where unobserved (module
+    docstring): ``sqrt(C_NOISE^2 mxc / wsum / max(nlook, 1) + (A_GAP k hnear / nobs)^2 +
+    A_SCATTER^2 max(m2 / wsum - snh2 nobs / wsum^2, 0))`` with ``k`` = :func:`bias_scale` of the
+    voxel size. The mesh's own terms are :func:`mesh_sigma_terms`."""
     W = np.asarray(wsum, dtype=np.float64)
     out = np.zeros(W.shape, dtype=np.float32)
     ok = W > 0
     Wk = W[ok]
-    pred = np.asarray(s2, np.float64)[ok] / (Wk * Wk) * np.asarray(nobs, np.float64)[ok]
-    emp = np.maximum(np.asarray(m2, np.float64)[ok], 0.0) / Wk
-    out[ok] = np.sqrt(np.maximum(pred, emp) / np.maximum(np.asarray(nlook, np.float64)[ok], 1.0))
+    nb = np.maximum(np.asarray(nobs, np.float64)[ok], 1.0)
+    noise = np.maximum(np.asarray(mxc, np.float64)[ok], 0.0) / Wk / np.maximum(np.asarray(nlook, np.float64)[ok], 1.0)
+    gap = np.asarray(hnear, np.float64)[ok] / nb
+    pred = np.asarray(snh2, np.float64)[ok] / (Wk * Wk) * nb
+    excess = np.maximum(np.maximum(np.asarray(m2, np.float64)[ok], 0.0) / Wk - pred, 0.0)
+    out[ok] = np.sqrt(C_NOISE ** 2 * noise + (A_GAP * bias_scale(voxel_mm) * gap) ** 2 + A_SCATTER ** 2 * excess)
+    return out
+
+
+def mesh_sigma_terms(V: np.ndarray, F: np.ndarray, N: np.ndarray, voxel_mm: float = 1.0) -> np.ndarray:
+    """Per vertex, the variance (mm^2) of the two bias terms that only the mesh shows, with ``k`` =
+    :func:`bias_scale` of the voxel size the mesh was made at:
+
+    - curvature, ``(A_CURV k)^2 c``: ``1 - n . m`` with ``m`` the mean normal over the vertex, its
+      neighbours and theirs (the 2-ring), and ``c`` its largest value over the same vertices;
+    - the open border, ``(A_BORDER k exp(-d / (BORDER_MM k)))^2`` with ``d`` the distance (mm) to
+      the nearest vertex of an edge that only one face uses.
+
+    0 for a vertex no face uses. About a second per million triangles."""
+    import scipy.sparse as sp
+    from scipy.spatial import cKDTree
+
+    n = len(V)
+    F = np.asarray(F, dtype=np.int64).reshape(-1, 3)
+    if n == 0 or len(F) == 0:
+        return np.zeros(n)
+    k = bias_scale(voxel_mm)
+    a = np.concatenate([F[:, 0], F[:, 1], F[:, 2]])
+    b = np.concatenate([F[:, 1], F[:, 2], F[:, 0]])
+    # every edge once, with the number of faces at it
+    E = sp.csr_matrix((np.ones(len(a), np.int32), (np.minimum(a, b), np.maximum(a, b))), shape=(n, n))
+    E.sum_duplicates()
+    A = (E + E.T).astype(np.float32)
+    A.data[:] = 1.0
+    A2 = A @ A  # its pattern: paths of two edges = the vertex itself, its neighbours and theirs
+    A2.data[:] = 1.0
+    Nn = np.asarray(N, dtype=np.float64)
+    Nm = A2 @ Nn
+    Nm /= np.maximum(np.linalg.norm(Nm, axis=1, keepdims=True), 1e-12)
+    curv = 1.0 - np.clip((Nn * Nm).sum(1), -1.0, 1.0)
+    ptr = A2.indptr
+    has = ptr[1:] > ptr[:-1]
+    curv2 = np.zeros(n)
+    curv2[has] = np.maximum.reduceat(curv[A2.indices], ptr[:-1][has])
+    out = (A_CURV * k) ** 2 * np.clip(curv2, 0.0, None)
+    open_edge = E.data == 1
+    if open_edge.any():
+        rows = np.repeat(np.arange(n), np.diff(E.indptr))[open_edge]
+        bv = np.unique(np.concatenate([rows, E.indices[open_edge]]))
+        Vf = np.asarray(V, dtype=np.float64)
+        d, _ = cKDTree(Vf[bv]).query(Vf, workers=-1)
+        border = A_BORDER * k * np.exp(-d / (BORDER_MM * k))
+        border[~has] = 0.0
+        out += border * border
     return out
 
 
@@ -246,13 +408,18 @@ class ConfidenceTsdf:
         ``"auto"`` | ``"gpu"`` | ``"cpu"``; ``"gpu"`` without a GPU raises ``RuntimeError``.
     look_px:
         Pixel move that makes a new independent look (default: the dot spacing at this width).
+    hole_factor:
+        ``(amp, radius px)`` of the factor ``1 + amp exp(-(distance / radius)^2)`` that the matcher
+        puts on the sigma of pixels next to missing depth, which is taken out again for the
+        prediction of the scatter (default: the GPU matcher's, ``ohs.vision.depth.SIGMA_MODELS``).
     initial_bricks, max_bricks:
         Pool size at the start, and its limit (bricks beyond it are dropped, with a warning).
     """
 
     def __init__(self, K: np.ndarray, image_size: tuple[int, int], voxel_mm: float = 1.0, trunc_mm: float = 4.0,
                  depth_min_mm: float = 120.0, depth_max_mm: float = 500.0, backend: str = "auto",
-                 look_px: float | None = None, initial_bricks: int = 4096, max_bricks: int | None = None) -> None:
+                 look_px: float | None = None, initial_bricks: int = 4096, max_bricks: int | None = None,
+                 hole_factor: tuple[float, float] | None = None) -> None:
         self.K = np.asarray(K, dtype=np.float64).reshape(3, 3).copy()
         self.image_size = (int(image_size[0]), int(image_size[1]))
         self.voxel_mm, self.trunc_mm = float(voxel_mm), float(trunc_mm)
@@ -263,6 +430,16 @@ class ConfidenceTsdf:
             raise ValueError(f"backend must be one of {RECON_BACKENDS}, got {backend!r}")
         w = self.image_size[0]
         self.look_px = float(look_px) if look_px is not None else LOOK_PX_1280 * w / 1280.0
+        if hole_factor is None:
+            from ohs.vision.depth import SIGMA_MODELS
+
+            hole_factor = (SIGMA_MODELS["gpu"].hole_amp, SIGMA_MODELS["gpu"].hole_r_px)
+        self.hole_amp, self.hole_r_px = float(hole_factor[0]), float(hole_factor[1])
+        if not (self.hole_amp >= 0 and self.hole_r_px > 0):
+            raise ValueError("hole_factor must be (amp >= 0, radius px > 0)")
+        self.gap_near_px = GAP_NEAR_PX_1280 * w / 1280.0
+        # the distance to missing depth is searched up to 3 radii of the factor (as the GPU matcher does)
+        self._gap_r = int(max(np.ceil(3.0 * self.hole_r_px), np.ceil(self.gap_near_px)))
         # brick sampling: every 4th pixel at 1280 px and 1 mm voxels; the same share of a brick at other sizes
         # (2 mm voxels at 640 px: every 4th pixel too, a quarter of the samples of every 2nd)
         self._step = max(1, int(round(4.0 * w / 1280.0 * float(self.voxel_mm))))
@@ -305,6 +482,9 @@ class ConfidenceTsdf:
         self._wg = max(1, min(128, lim, int(dev.device.max_work_group_size)))
         self._bkern = cl.Kernel(prg, "recon_bricks")
         self._bkern.set_scalar_arg_dtypes(_BRICK_ARGS)
+        self._gkern = (cl.Kernel(prg, "recon_gap_row"), cl.Kernel(prg, "recon_gap_dist"))
+        self._gkern[0].set_scalar_arg_dtypes(_GAP_ROW_ARGS)
+        self._gkern[1].set_scalar_arg_dtypes(_GAP_DIST_ARGS)
         self._img_bufs: Any = None
         self._list_cap = 0
         self._slot_buf = self._key_buf = None
@@ -522,6 +702,7 @@ class ConfidenceTsdf:
                 raise ValueError(f"sigma has shape {sig.shape}, expected {depth.shape}")
             self._upload_images(depth, sig)
             bricks = self._frame_bricks_gpu(self._img_bufs[1], T, depth.shape)
+            self._queue_gaps(depth.shape)  # after the search, whose result is waited for: these run meanwhile
             if bricks is None:
                 bricks = self._frame_bricks(depth, T)
             slots, keys = self._slots_for(bricks)
@@ -534,12 +715,51 @@ class ConfidenceTsdf:
             wmap, vmap = pixel_weights(depth, sigma_mm, self.trunc_mm)
             slots, keys = self._slots_for(self._frame_bricks(depth, T))
             if len(slots):
-                self._integrate_cpu(slots, keys, depth, wmap, vmap, R_cw, t_cw)
+                self._integrate_cpu(slots, keys, depth, wmap, sigma_mm, R_cw, t_cw)
         self.n_integrated += 1
 
+    def _gap2(self, depth: np.ndarray) -> np.ndarray:
+        """Squared distance (px) of every pixel to the nearest one without depth (``depth`` 0), at
+        most ``(R + 1)^2``: what the two gap kernels compute, in numpy."""
+        import cv2
+
+        cap = np.float32(self._gap_r + 1)
+        d = np.minimum(cv2.distanceTransform((depth > 0).astype(np.uint8), cv2.DIST_L2, cv2.DIST_MASK_PRECISE), cap)
+        return np.rint(d * d).astype(np.float32)
+
+    def _cos_map(self, depth: np.ndarray) -> np.ndarray:
+        """Cosine of each pixel's ray with the depth map's normal (the kernel's rule: 1 where a
+        neighbour has no depth, and on the image border); ``depth`` 0 = none."""
+        z = np.asarray(depth, np.float32)
+        h, w = z.shape
+        K = self.K
+        cos = np.ones((h, w), np.float32)
+        c = z[1:-1, 1:-1]
+        dl, dr, dt, db = z[1:-1, :-2], z[1:-1, 2:], z[:-2, 1:-1], z[2:, 1:-1]
+        ok = (c > 0) & (dl > 0) & (dr > 0) & (dt > 0) & (db > 0)
+        zu, zv = np.float32(0.5) * (dr - dl), np.float32(0.5) * (db - dt)
+        pu = np.arange(1, w - 1, dtype=np.float32)[None, :] - np.float32(K[0, 2])
+        pv = np.arange(1, h - 1, dtype=np.float32)[:, None] - np.float32(K[1, 2])
+        fx, fy = np.float32(K[0, 0]), np.float32(K[1, 1])
+        n3 = pu * zu + pv * zv + c
+        nn = np.sqrt((zu * fx) ** 2 + (zv * fy) ** 2 + n3 ** 2)
+        rr = np.sqrt((pu / fx) ** 2 + (pv / fy) ** 2 + np.float32(1.0))
+        cos[1:-1, 1:-1] = np.where(ok, np.clip(c / np.maximum(nn * rr, np.float32(1e-6)), 0.05, 1.0), 1.0)
+        return cos
+
     def _integrate_cpu(self, slots: np.ndarray, keys: np.ndarray, depth: np.ndarray, wmap: np.ndarray,
-                       vmap: np.ndarray, R_cw: np.ndarray, t_cw: np.ndarray) -> None:
+                       sigma_mm: np.ndarray | None, R_cw: np.ndarray, t_cw: np.ndarray) -> None:
         h, w = depth.shape
+        g2 = self._gap2(depth).ravel()
+        cmap = self._cos_map(depth).ravel()
+        if sigma_mm is None:
+            _, vmap = pixel_weights(depth, None, self.trunc_mm)
+        else:  # the sigma without the matcher's factor next to missing depth; not finite: the truncation
+            sg = np.asarray(sigma_mm, dtype=np.float32)
+            f = np.float32(1.0) + np.float32(self.hole_amp) * np.exp(-g2 / np.float32(self.hole_r_px ** 2))
+            with np.errstate(invalid="ignore"):
+                snh = np.where(np.isfinite(sg).ravel(), sg.ravel() / f, np.float32(np.inf)).reshape(h, w)
+            _, vmap = pixel_weights(depth, snh, self.trunc_mm)
         K = self.K
         P = ((keys.astype(np.int64)[:, None, :] * BRICK + self._local[None]) * self.voxel_mm).reshape(-1, 3)
         Pc = (P @ R_cw.T + t_cw).astype(np.float32)
@@ -565,7 +785,13 @@ class ConfidenceTsdf:
         W1 = W0 + wt
         m1 = m0 + (wt / W1) * (x - m0)
         b["m2"][a] += wt * (x - m0) * (x - m1)
-        b["s2"][a] += wt * wt * vmap.ravel()[pix]
+        b["snh2"][a] += wt * wt * vmap.ravel()[pix]
+        xn = x * cmap[pix]
+        q0 = b["xc"][a]
+        q1 = q0 + (wt / W1) * (xn - q0)
+        b["mxc"][a] += wt * (xn - q0) * (xn - q1)
+        b["xc"][a] = q1
+        b["hnear"][a] += (g2[pix] < np.float32(self.gap_near_px ** 2)).astype(np.float32)
         b["tsdf"][a] = m1
         b["wsum"][a] = W1
         b["nobs"][a] += 1.0
@@ -587,13 +813,22 @@ class ConfidenceTsdf:
                 self._wait()
                 for bb in self._img_bufs[1:]:
                     bb.release()
-            self._img_bufs = ((h, w), *(cl.Buffer(self.dev.ctx, cl.mem_flags.READ_ONLY, size=h * w * 4)
-                                        for _ in range(2)))
+            mf = cl.mem_flags  # depth, sigma; and the row and the squared distance to missing depth
+            self._img_bufs = ((h, w), *(cl.Buffer(self.dev.ctx, flag, size=h * w * 4)
+                                        for flag in (mf.READ_ONLY, mf.READ_ONLY, mf.READ_WRITE, mf.READ_WRITE)))
         evs = [cl.enqueue_copy(q, self._img_bufs[1], depth, is_blocking=False)]
         if sigma is not None:
             evs.append(cl.enqueue_copy(q, self._img_bufs[2], sigma, is_blocking=False))
         cl.wait_for_events(evs)
         return depth, sigma
+
+    def _queue_gaps(self, shape: tuple[int, int]) -> None:
+        """Queue the two kernels that measure, from the uploaded depth, every pixel's squared distance
+        to the nearest one without depth (into ``_img_bufs[4]``); see :meth:`_gap2`."""
+        h, w = shape
+        _, dbuf, _, hx, g2 = self._img_bufs
+        self._gkern[0](self.queue, (w, h), None, dbuf, hx, w, h, self._gap_r, self.depth_min_mm, self.depth_max_mm)
+        self._gkern[1](self.queue, (w, h), None, hx, g2, w, h, self._gap_r)
 
     def _integrate_gpu(self, slots: np.ndarray, keys: np.ndarray, shape: tuple[int, int], has_sigma: bool,
                        R_cw: np.ndarray, t_cw: np.ndarray) -> None:
@@ -604,7 +839,7 @@ class ConfidenceTsdf:
         cl, q = self.cl, self.queue
         h, w = shape
         mf = cl.mem_flags
-        _, dbuf, sbuf = self._img_bufs
+        _, dbuf, sbuf, _, gbuf = self._img_bufs
         m = len(slots)
         if self._lists is not None:
             cl.wait_for_events(self._lists[0])  # done long ago, as a rule (and the GIL is not held)
@@ -624,10 +859,12 @@ class ConfidenceTsdf:
         b = self._bufs
         n = m * NVOX
         gs = (n + self._wg - 1) // self._wg * self._wg
-        self._kern(q, (gs,), (self._wg,), b["tsdf"], b["wsum"], b["m2"], b["s2"], b["nobs"], b["nlook"], b["luv"],
-                   self._slot_buf, self._key_buf, m, dbuf, sbuf, int(has_sigma), w, h,
+        self._kern(q, (gs,), (self._wg,), b["tsdf"], b["wsum"], b["m2"], b["nobs"], b["nlook"], b["luv"],
+                   b["xc"], b["mxc"], b["hnear"], b["snh2"],
+                   self._slot_buf, self._key_buf, m, dbuf, sbuf, int(has_sigma), w, h, gbuf,
                    K[0, 0], K[1, 1], K[0, 2], K[1, 2], K[0, 1], *R_cw.ravel(), *t_cw,
-                   self.voxel_mm, self.trunc_mm, self.depth_min_mm, self.depth_max_mm, self.look_px ** 2)
+                   self.voxel_mm, self.trunc_mm, self.depth_min_mm, self.depth_max_mm, self.look_px ** 2,
+                   self.gap_near_px ** 2, self.hole_amp, self.hole_r_px ** 2)
         q.flush()  # the device starts as soon as it is free
         self._lists = (evs, hold)
 
@@ -653,7 +890,8 @@ class ConfidenceTsdf:
         keys, ch = self.download()
         if len(keys) == 0:
             return None
-        sig = voxel_sigma(ch["wsum"], ch["m2"], ch["s2"], ch["nobs"], ch["nlook"])
+        sig = voxel_sigma(ch["wsum"], ch["m2"], ch["nobs"], ch["nlook"], ch["mxc"], ch["hnear"], ch["snh2"],
+                          voxel_mm=self.voxel_mm)
         vbg = o3d.t.geometry.VoxelBlockGrid(
             attr_names=("tsdf", "weight", "color"), attr_dtypes=(o3c.float32, o3c.float32, o3c.float32),
             attr_channels=((1), (1), (3)), voxel_size=self.voxel_mm, block_resolution=BRICK,
@@ -672,7 +910,7 @@ class ConfidenceTsdf:
 
     def extract_mesh(self, weight_threshold: float | None = None, with_sigma: bool = False) -> tuple:
         """Marching-cubes mesh ``(V (N,3) mm, F (M,3) int64, N (N,3))``, plus ``sigma`` (N,) mm per
-        vertex with ``with_sigma``."""
+        vertex with ``with_sigma``: the voxels' sigma and the mesh's own terms (:func:`mesh_sigma_terms`)."""
         import open3d as o3d
         import open3d.core as o3c
 
@@ -686,10 +924,12 @@ class ConfidenceTsdf:
         N = mesh.vertex.normals.cpu().numpy().astype(np.float64)
         if not with_sigma:
             return V, F, N
-        return V, F, N, (mesh.vertex.colors.cpu().numpy()[:, 0] * np.float32(255.0)).astype(np.float32)
+        s = (mesh.vertex.colors.cpu().numpy()[:, 0] * np.float32(255.0)).astype(np.float64)
+        return V, F, N, np.sqrt(s * s + mesh_sigma_terms(V, F, N, voxel_mm=self.voxel_mm)).astype(np.float32)
 
     def extract_points(self, weight_threshold: float | None = None, with_sigma: bool = False) -> tuple:
-        """Zero-crossing points ``(P (N,3) mm, N (N,3))``, plus ``sigma`` (N,) mm with ``with_sigma``."""
+        """Zero-crossing points ``(P (N,3) mm, N (N,3))``, plus ``sigma`` (N,) mm with ``with_sigma``
+        (the voxels' sigma only: points have no mesh to take curvature and border from)."""
         import open3d as o3d
         import open3d.core as o3c
 
