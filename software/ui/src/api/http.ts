@@ -15,6 +15,8 @@ import type {
   DevicesProbe,
   EditBody,
   Emitters,
+  FitRequest,
+  FitResult,
   Health,
   HoleOutline,
   Job,
@@ -244,6 +246,13 @@ export const api = {
     post<Job>(`${scanPath(pid, sid)}/process/recipe`, { recipe_id, scope }),
   processHoles: (pid: string, sid: string) => get<HoleOutline[]>(`${scanPath(pid, sid)}/process/holes.json`),
   processTrajectory: (pid: string, sid: string) => get<TrajectoryView>(`${scanPath(pid, sid)}/process/trajectory.json`),
+
+  // ---------------------------------------------------------------- M5: fitted shapes
+  /** A plane, cylinder or hole where the user clicked the current mesh (read-only, quick). 409 before
+   * there is a mesh, and when `version` is given and the mesh changed since (reload it, click again); 422
+   * for a face outside the mesh or when no such shape is there (the detail says why, the hint what to
+   * try). `faces` stays base64: decode it once with `decodeFaces` (lib/fits.ts). */
+  fit: (pid: string, sid: string, body: FitRequest) => post<FitResult>(`${scanPath(pid, sid)}/fit`, body),
 
   /** Built-ins first. */
   recipes: () => get<Recipe[]>("/api/recipes"),

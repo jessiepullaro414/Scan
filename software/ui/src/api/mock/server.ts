@@ -18,6 +18,7 @@
  * - M3: the processing studio (process.ts): stages, edits with undo / redo, stats, holes, the
  *   trajectory with loops, recipes; "Make mesh" runs the Default recipe. The meshes are real
  *   (scanmesh.ts, meshops.ts): about 250k triangles at 1 mm and 1M at 0.5 mm.
+ * - M5: fitted shapes (fit.ts): a plane, cylinder or hole where the viewer was clicked.
  *
  * Options in the URL: `empty=1` (no projects), `fast=1` (short jobs), `drift=1` (the launch check
  * after a connect finds drift), `nopico=1` (the camera connects without the Pico).
@@ -401,6 +402,7 @@ class MockBackend {
           const r = this.studio.route(method, p, s, seg.slice(5), body);
           if (r) return r;
         }
+        if (e === "fit" && is("POST", 5)) return json(200, this.studio.fit(p, s, body)); // M5 fitted shapes
         if (e === "files" && f && (is("GET", 6) || is("HEAD", 6))) return this.file(p, s, f, method === "HEAD");
       }
     }

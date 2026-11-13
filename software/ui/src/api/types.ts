@@ -1,7 +1,7 @@
 /**
- * Types of the OpenHandScan Studio app API (software/docs/APP_API.md: milestones 1 and 2, and
- * M3 phase 2, the processing studio). JSON is snake_case; lengths are mm, times are seconds,
- * timestamps are ISO 8601.
+ * Types of the OpenHandScan Studio app API (software/docs/APP_API.md: milestones 1 and 2, M3
+ * phase 2, the processing studio, and the M5 fitted shapes). JSON is snake_case; lengths are mm,
+ * times are seconds, timestamps are ISO 8601.
  */
 
 export type Emitters = { vertical: number; horizontal: number; dots: number }; // percent 0..100
@@ -562,3 +562,64 @@ export type EditBody = { op: MeshOp; params: Record<string, unknown> };
 export type NewRecipeBody =
   | { name: string; description?: string; from_scan: { project_id: string; scan_id: string } }
   | { name: string; description?: string; settings: RecipeSettings; ops: RecipeOp[] };
+
+// ================================================================== M5 first slice: fitted shapes
+// APP_API.md "M5 first slice: fitted shapes". Adds to M1-M3; changes nothing in them.
+
+export type FitKind = "plane" | "cylinder" | "hole";
+export type FitRequest = {
+  kind: FitKind;
+  face: number; // the clicked face of result/mesh.ply
+  point: [number, number, number]; // the clicked point on it (mm, the mesh's frame)
+  tolerance_mm?: number | null; // null = chosen from the seed's measured scatter (and sigma, when it agrees)
+  version?: number; // the mesh version the click was made on: 409 when it is no longer current
+};
+// All ± values are 1σ, statistical only (calibration and scale errors come on top). A direction
+// (normal, axis) or a position across one (an axis point, a circle's centre) has two components:
+// its ± is the RMS of the total error.
+export type PlaneShape = {
+  kind: "plane";
+  point: number[];
+  normal: number[];
+  rms_mm: number;
+  flatness_mm: number;
+  n: number;
+  normal_sigma_deg: number;
+  offset_sigma_mm: number;
+};
+export type CylinderShape = {
+  kind: "cylinder";
+  point: number[];
+  axis: number[];
+  radius_mm: number;
+  diameter_mm: number;
+  rms_mm: number;
+  n: number;
+  radius_sigma_mm: number;
+  diameter_sigma_mm: number;
+  axis_sigma_deg: number;
+  point_sigma_mm: number;
+};
+export type CircleShape = {
+  kind: "circle";
+  center: number[];
+  normal: number[];
+  radius_mm: number;
+  diameter_mm: number;
+  rms_mm: number;
+  n: number;
+  radius_sigma_mm: number;
+  diameter_sigma_mm: number;
+  center_sigma_mm: number;
+};
+export type FitShape = PlaneShape | CylinderShape | CircleShape;
+export type FitResult = {
+  kind: FitKind; // as asked; a hole's shape is a circle
+  shape: FitShape;
+  faces: string; // the region: base64 of little-endian uint32 face indices, sorted
+  n_faces: number;
+  tolerance_mm: number | null; // the tolerance used (null for a hole)
+  mean_sigma_mm: number | null; // mean sigma of the fitted points (null when the mesh has none)
+  warnings: string[]; // plain language, e.g. "small region: 23 points"
+  version: number; // the mesh version it was fitted on
+};

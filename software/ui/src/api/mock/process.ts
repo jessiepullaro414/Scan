@@ -4,13 +4,14 @@
  * redo: the last steps are kept in memory, older ones are replayed), the current mesh served
  * as the scan's mesh.ply / .stl / .obj, its stats and hole outlines, and the camera trajectory
  * with its loops. Plus the recipes (built-ins and saved ones), and "Make mesh", which now runs
- * the Default recipe.
+ * the Default recipe. And the M5 fitted shapes (fit.ts) on the current mesh.
  *
  * Jobs do the real (mock) work in small steps (WorkJobSpec), so progress is honest and the page
  * stays responsive even at a million triangles.
  */
 import type {
   EditEntry,
+  FitResult,
   FuseStage,
   Job,
   MeshOp,
@@ -28,7 +29,9 @@ import type {
   StraightenStage,
   TrackStage,
 } from "../types";
+import { encodeFaces } from "../../lib/fits";
 import { normalizeQuality } from "../../lib/quality";
+import { mockFit } from "./fit";
 import { stlMesh } from "./geom";
 import { HttpError, json, nowIso, uid, type MockHost, type WorkStep } from "./host";
 import {
@@ -299,6 +302,33 @@ export class MockProcess {
       quality,
       mesh: this.meshUrl(st),
     }));
+  }
+
+  /** M5 `POST .../fit`: a plane, cylinder or hole at the clicked face of the current mesh (read-only, it
+   * does not wait for a running edit: it uses the current version and says which; 409 when the click's
+   * `version` is no longer current). */
+  fit(p: Project, s: Scan, body: Record<string, unknown>): FitResult {
+    const st = this.ensure(p, s);
+    const m = st.current;
+    if (!m) throw new HttpError(409, "This scan has no mesh yet, so nothing to fit", "Make the mesh first.");
+    const v = body.version;
+    if (v !== undefined && v !== null && !(typeof v === "number" && Number.isInteger(v))) this.bad("version: must be a whole number", "Send the current.version the click was made on, or leave it out.");
+    if (typeof v === "number" && v !== st.version) throw new HttpError(409, "The mesh changed since this click", "Reload the mesh and click again.");
+    const r = mockFit(m, body, () => {
+      const a = analyse(m);
+      return a.loops.filter((l, i) => i !== a.border && l.closed).map((l) => l.verts);
+    });
+    if (!r.ok) throw new HttpError(422, r.detail, r.hint);
+    return {
+      kind: r.kind,
+      shape: r.shape,
+      faces: encodeFaces(r.faces),
+      n_faces: r.faces.length,
+      tolerance_mm: r.tolerance,
+      mean_sigma_mm: null, // the demo meshes have no per-vertex sigma
+      warnings: r.warnings,
+      version: st.version,
+    };
   }
 
   /** The current mesh as a file (mesh.ply / mesh.stl / mesh.obj), or null when there is none. */

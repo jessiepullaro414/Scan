@@ -1,7 +1,8 @@
 /**
  * The result viewer's 3D view: the processed mesh (clay matcap, studio PBR, normals or the
  * confidence map with the sigma under the cursor), an optional wireframe overlay and laser point
- * cloud, and the two-click distance tool. Renders on demand (no work while the view is still).
+ * cloud, the two-click distance tool and the fitted shapes (FitTool.tsx). Renders on demand (no work
+ * while the view is still).
  */
 import { Bvh, Html, Line, OrbitControls } from "@react-three/drei";
 import { Canvas, useThree } from "@react-three/fiber";
@@ -24,18 +25,13 @@ import {
 } from "three";
 import { useUi } from "../../store/ui";
 import { CameraRig } from "../../three/CameraRig";
-import {
-  applyConfidenceColors,
-  confidenceMaterial,
-  filledGeometry,
-  filledMaterial,
-  isFilledFace,
-  SIGMA_NONE_MM,
-  sigmaOf,
-} from "../../three/confidence";
+import type { FitKind } from "../../api/types";
+import { applyConfidenceColors, confidenceMaterial, filledGeometry, filledMaterial, SIGMA_NONE_MM, sigmaOf } from "../../three/confidence";
 import { CV_TO_THREE_ROTATION, cvToThree } from "../../three/coords";
 import { clayMatcap } from "../../three/materials";
 import { AxisGizmo, SceneGrid, StudioEnvironment, StudioLights, useThemeColors } from "../../three/Studio";
+import { FitTool, type FitItem } from "./FitTool";
+import { useSurfacePick } from "./picking";
 
 export type Shading = "clay" | "studio" | "normals" | "confidence";
 export type Vec3 = [number, number, number];
@@ -50,6 +46,10 @@ const tuple = (v: Vector3): Vec3 => [v.x, v.y, v.z];
  * How the raycast tree splits its boxes: three-mesh-bvh's CENTER (the value of its constant, the
  * library is not a direct dependency). drei's default, SAH, takes about five times as long to
  * build and froze the page for seconds on a large mesh; the hits and the time per ray are the same.
+ * The tree is built `indirect` (a list of the triangles of its own): the mesh's index keeps the
+ * file's order, so a hit's `faceIndex` is the file's triangle, which the Fit tool sends to the
+ * engine, and the fits' regions index the same triangles. Measured on 845k triangles: the same build
+ * time (about 420 ms in Node), 4 bytes per triangle, about 1 µs more per ray.
  */
 const BVH_SPLIT_CENTER = 0;
 
@@ -237,85 +237,8 @@ function MeasureTool({
   measurements: Measurement[];
   markerRadius: number;
 }) {
-  const gl = useThree((s) => s.gl);
-  const camera = useThree((s) => s.camera);
-  const invalidate = useThree((s) => s.invalidate);
   const accent = useThemeColors().accent;
-  const [hover, setHover] = useState<Vec3 | null>(null);
-  /** The cursor is over filled surface (not measured): no point can be picked there. */
-  const [overFilled, setOverFilled] = useState(false);
-  const pickRef = useRef(onPick);
-  pickRef.current = onPick;
-
-  useEffect(() => {
-    const el = gl.domElement;
-    if (!enabled) {
-      el.style.cursor = "";
-      setHover(null);
-      setOverFilled(false);
-      return;
-    }
-    el.style.cursor = "crosshair";
-    const ray = new Raycaster() as Raycaster & { firstHitOnly?: boolean };
-    ray.firstHitOnly = true;
-    const ndc = new Vector2();
-    const hit = (ev: PointerEvent): { p: Vec3; filled: boolean } | null => {
-      const mesh = target.current;
-      if (!mesh) return null;
-      const r = el.getBoundingClientRect();
-      ndc.set(((ev.clientX - r.left) / r.width) * 2 - 1, -((ev.clientY - r.top) / r.height) * 2 + 1);
-      ray.setFromCamera(ndc, camera);
-      const h = ray.intersectObject(mesh, false)[0];
-      if (!h) return null;
-      const p = mesh.worldToLocal(h.point.clone()); // world frame (OpenCV, mm)
-      return { p: [p.x, p.y, p.z], filled: !!h.face && isFilledFace(mesh.geometry, h.face.a, h.face.b, h.face.c) };
-    };
-    let down: { x: number; y: number; t: number } | null = null;
-    let raf = 0;
-    let lastMove: PointerEvent | null = null;
-    const onDown = (e: PointerEvent) => {
-      if (e.button === 0) down = { x: e.clientX, y: e.clientY, t: performance.now() };
-    };
-    const onUp = (e: PointerEvent) => {
-      if (!down || e.button !== 0) return;
-      const moved = Math.hypot(e.clientX - down.x, e.clientY - down.y);
-      const dt = performance.now() - down.t;
-      down = null;
-      if (moved > 5 || dt > 700) return;
-      const h = hit(e);
-      if (h && !h.filled) pickRef.current(h.p); // filled surface was not measured: no point there
-    };
-    const onMove = (e: PointerEvent) => {
-      if (down && (e.buttons & 1) === 1) return; // orbiting
-      lastMove = e;
-      if (raf) return;
-      raf = requestAnimationFrame(() => {
-        raf = 0;
-        if (!lastMove) return;
-        const h = hit(lastMove);
-        setHover(h ? h.p : null);
-        setOverFilled(!!h?.filled);
-        invalidate();
-      });
-    };
-    const onLeave = () => {
-      setHover(null);
-      setOverFilled(false);
-      invalidate();
-    };
-    el.addEventListener("pointerdown", onDown);
-    el.addEventListener("pointerup", onUp);
-    el.addEventListener("pointermove", onMove);
-    el.addEventListener("pointerleave", onLeave);
-    return () => {
-      el.style.cursor = "";
-      if (raf) cancelAnimationFrame(raf);
-      el.removeEventListener("pointerdown", onDown);
-      el.removeEventListener("pointerup", onUp);
-      el.removeEventListener("pointermove", onMove);
-      el.removeEventListener("pointerleave", onLeave);
-    };
-  }, [enabled, gl, camera, target, invalidate]);
+  const { hover, overFilled } = useSurfacePick(enabled, target, (h) => onPick(h.p));
 
   const r = markerRadius;
   return (
@@ -366,6 +289,11 @@ export function ViewerCanvas({
   measurements,
   pending,
   onPick,
+  fit,
+  fits,
+  fitBusy,
+  pickedFits,
+  onFitPick,
   frameKey,
 }: {
   geometry: BufferGeometry;
@@ -377,14 +305,21 @@ export function ViewerCanvas({
   measurements: Measurement[];
   pending: Vec3 | null;
   onPick: (p: Vec3) => void;
+  /** The Fit tool is on. */
+  fit: boolean;
+  /** Fits made on this mesh. */
+  fits: FitItem[];
+  fitBusy: { p: Vec3; kind: FitKind } | null;
+  pickedFits: number[];
+  onFitPick: (p: Vec3, face: number) => void;
   frameKey: number;
 }) {
   const meshRef = useRef<Mesh | null>(null);
   const sigma = shading === "confidence" ? sigmaOf(geometry) : null;
   const [bvh, setBvh] = useState(false);
   useEffect(() => {
-    if (measure || sigma) setBvh(true); // build the raycast acceleration on first use only
-  }, [measure, sigma]);
+    if (measure || fit || sigma) setBvh(true); // build the raycast acceleration on first use only
+  }, [measure, fit, sigma]);
 
   const bounds = useMemo(() => {
     if (!geometry.boundingSphere) geometry.computeBoundingSphere();
@@ -393,6 +328,7 @@ export function ViewerCanvas({
     return { sphere: new Sphere(cvToThree(s.center), s.radius), gridY: -geometry.boundingBox!.max.y - 0.5, radius: s.radius };
   }, [geometry]);
 
+  const markerRadius = Math.max(0.6, bounds.radius * 0.007);
   const model = <Model geometry={geometry} shading={shading} wireframe={wireframe} meshRef={meshRef} />;
   return (
     <div className="absolute inset-0" role="img" aria-label="3D view of the scan result">
@@ -411,17 +347,17 @@ export function ViewerCanvas({
         <OrbitControls makeDefault enableDamping dampingFactor={0.12} zoomToCursor screenSpacePanning minDistance={5} maxDistance={20000} />
         <CameraRig getBounds={() => bounds.sphere} defaultDirection={VIEW_DIR} autoFrameKey={frameKey} />
         <group rotation={CV_TO_THREE_ROTATION}>
-          {bvh ? <Bvh firstHitOnly strategy={BVH_SPLIT_CENTER}>{model}</Bvh> : model}
+          {bvh ? (
+            <Bvh firstHitOnly strategy={BVH_SPLIT_CENTER} indirect>
+              {model}
+            </Bvh>
+          ) : (
+            model
+          )}
           {laser && showLaser ? <LaserCloud geometry={laser} size={1.6} /> : null}
           {sigma ? <SigmaProbe target={meshRef} sigma={sigma} /> : null}
-          <MeasureTool
-            enabled={measure}
-            target={meshRef}
-            onPick={onPick}
-            pending={pending}
-            measurements={measurements}
-            markerRadius={Math.max(0.6, bounds.radius * 0.007)}
-          />
+          <MeasureTool enabled={measure} target={meshRef} onPick={onPick} pending={pending} measurements={measurements} markerRadius={markerRadius} />
+          <FitTool enabled={fit} busy={fitBusy} target={meshRef} geometry={geometry} fits={fits} picked={pickedFits} markerRadius={markerRadius} onPick={onFitPick} />
         </group>
         <SceneGrid y={bounds.gridY} />
         <AxisGizmo margin={[62, 62]} />

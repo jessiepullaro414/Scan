@@ -41,7 +41,11 @@ function hasNormals(n: Float32Array | null): n is Float32Array {
   return false;
 }
 
-/** The geometry of a mesh: positions, normals (computed when the file has none), index, bounds; sigmas in `userData.sigma`. */
+/**
+ * The geometry of a mesh: positions, normals (computed when the file has none), index, bounds; sigmas in
+ * `userData.sigma`, the file's face of each triangle in `userData.faceOfTri` (null: one triangle per face)
+ * and the file's face count in `userData.faceCount`.
+ */
 export function plyGeometry(ply: PlyMesh): BufferGeometry {
   const g = new BufferGeometry();
   g.setAttribute("position", new BufferAttribute(ply.positions, 3));
@@ -56,6 +60,9 @@ export function plyGeometry(ply: PlyMesh): BufferGeometry {
     g.computeBoundingSphere();
   }
   if (ply.quality && ply.quality.length * 3 === ply.positions.length) g.userData.sigma = ply.quality;
+  // the file's faces, for face indices sent to the engine and back (the fitted shapes' regions)
+  g.userData.faceOfTri = ply.faceOfTri;
+  g.userData.faceCount = ply.faceCount;
   if (ply.filled && ply.filled.length * 3 === ply.indices.length) {
     // Taken now, in the file's triangle order: a raycast BVH may reorder the index later, so the
     // filled faces are kept as their own index and as keys of their (sorted) corners.

@@ -611,7 +611,16 @@ It turns "a nice mesh" into numbers a part can be made from.
    distance) is 6.6 mm while 99 % of the points are within 1.7 mm and the RMS is 0.39 mm: a
    robust flatness may suit a label better. On its CPU-path mesh the plane stopped at 1,131
    faces: on very noisy meshes the seed's scatter comes out low and a region can stop early.
-4. The viewer's Fit tool, the list, relations, and the mock engine.
+4. The viewer's Fit tool, the list, relations, and the mock engine. **Done 2026-11-12:** Fit next to
+   Measure (G; P / C / H for the kind), the region lit on the mesh, labels with ±, a list with
+   each fit's numbers and warnings, relations between two fits (angles; distances between
+   parallel planes, axes, a hole's centre and a plane; a ± only for parallel planes), fits marked
+   when the mesh changes. Checked on the real engine with a simulated 849k-triangle scan: a table
+   plane "flat within 0.55 mm" (RMS 0.050 mm, mean sigma 0.18 mm), a hole cut on the Process
+   page "Ø 24.00 ± 0.07 mm", and the "mesh changed" path. **For step 5:** the simulator's scenes
+   have no hole the engine can fit as scanned (their holes run along other parts or a ragged
+   border); the plane's region and label vary a little from click to click (the seed sets the
+   tolerance).
 5. Simulator validation in `VALIDATION.md`: diameter, axis and position errors against the
    truth on the bracket (bosses r = 7 mm, shaft r = 8 mm) and the car panel (hole Ø 25 mm),
    whether ±2σ covers the truth, and the bias of small holes (fusion rounds them).
