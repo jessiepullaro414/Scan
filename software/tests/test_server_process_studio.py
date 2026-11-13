@@ -460,9 +460,9 @@ def test_fit_a_plane_on_the_table(env, tmp_path):
     err(post(b + "/fit", {"kind": "cone", **click}), 422, "unknown kind")
     err(post(b + "/fit", {**click, "kind": "plane", "face": len(F) + 5}), 422, "not on the mesh")
     err(post(b + "/fit", {**click, "kind": "plane", "version": cur["version"] - 1}), 409, "changed")
-    # a shape the scene does not have: there is no hole in a table with a sphere on it. (A cylinder
-    # was asked for here before; on this short, noisy scan the engine's answer to that depends on the
-    # noise: MAINTENANCE_PLAN.md, F1.)
+    # shapes the scene does not have: a cylinder or a hole in a table with a sphere on it. (On this
+    # short, noisy scan the cylinder was at times accepted, with a radius of metres: MAINTENANCE_PLAN.md, F1.)
+    err(post(b + "/fit", {"kind": "cylinder", **click}), 422)
     err(post(b + "/fit", {"kind": "hole", **click}), 422)
     assert post(b + "/fit", {"kind": "plane", **{**click, "point": [0, 0]}}).status_code == 422
 

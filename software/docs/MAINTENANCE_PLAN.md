@@ -1113,7 +1113,7 @@ Every task here: the type check, `npm test`, and for bundle tasks the chunk size
 
 ## F. Found on the way
 
-### [ ] F1. The Fit tool accepts a cylinder on a flat, noisy patch of a very short scan
+### [x] F1. The Fit tool accepts a cylinder on a flat, noisy patch of a very short scan
 - **Found 2026-11-13**, when the gap guard was turned on: `test_fit_a_plane_on_the_table`
   (`tests/test_server_process_studio.py`) asked for a cylinder at a click on the table of its
   10-frame, 640 px scan and expected a refusal. On the CPU path that answer depends on the noise.
@@ -1127,7 +1127,20 @@ Every task here: the type check, `npm test`, and for bundle tasks the chunk size
 - **To do:** a cylinder whose radius is many times the size of its region is a plane and should be
   refused; and look at whether a curled rim should pass. Tests on controlled meshes first
   (`tests/test_measure_region.py`).
-- **Until then** the server test asks for a hole on the table, which the scene does not have.
+- **Done 2026-11-13:** in both cases the region had drifted away from its seed. The seed saw a
+  radius of 247 mm in a bump of the noisy table and the region then ran over the whole table
+  (22.8 m, 1° of arc); on the rim the seed saw 26 mm and the region 52–54 mm, because the curl
+  tightens towards the edge. `fit_at` now refuses a cylinder whose final radius is more than
+  `SEED_DRIFT` (1.5) times its seed's, or less than the seed's divided by it, and the message gives
+  both radii. Measured before choosing 1.5: on 90 real cylinders of the simulated scans (the
+  bracket's bosses and shaft, 5 seeds, true and tracked poses) the final radius is 0.85 to 1.08
+  times the seed's; the wrong fits were 2 and 92 times. After the change the 8 saved meshes of
+  the test scan (CPU path three runs and GPU path one, guard off and on) are all refused, and the
+  90 real cylinders all still fit. Tests first, on two controlled meshes that the old code
+  accepted (a bumped, bowed, noisy plate: 4.9 m; a rim that curls ever tighter: 25 → 50 mm). The
+  server test asks for the cylinder again, and for a hole.
+- **Not covered:** a rim that curls with one radius is a cylinder to the Fit tool, as a rolled
+  edge is. Nothing in its shape tells the two apart.
 
 ## Reviewed and fine: leave alone
 

@@ -279,6 +279,52 @@ def test_cylinder_on_a_flat_plate_raises(bracket_mesh):
         fit_at(V, F, face, point, "cylinder", sigma=S)
 
 
+def sheet(xs: np.ndarray, ys: np.ndarray, height, noise: float, seed: int) -> tuple[np.ndarray, np.ndarray]:
+    """A height field ``z = height(x, y)`` over the grid ``xs`` x ``ys`` with Gaussian noise on z, two
+    triangles a cell."""
+    X, Y = np.meshgrid(xs, ys, indexing="ij")
+    Z = height(X, Y) + np.random.default_rng(seed).normal(0.0, noise, X.shape)
+    V = np.stack([X, Y, Z], axis=-1).reshape(-1, 3)
+    idx = np.arange(X.size).reshape(X.shape)
+    a, b, c, d = idx[:-1, :-1].ravel(), idx[1:, :-1].ravel(), idx[1:, 1:].ravel(), idx[:-1, 1:].ravel()
+    return V, np.concatenate([np.stack([a, b, c], axis=1), np.stack([a, c, d], axis=1)])
+
+
+def test_cylinder_on_a_noisy_plate_with_a_shallow_bump_raises():
+    """A flat, noisy plate (1 mm, slightly bowed, as a short scan's table is) with a shallow bump at
+    the click: the seed sees a cylinder of radius 250 mm in the bump, and the region then runs over
+    the plate, where the radius goes to metres. That is not a cylinder, and the answer says so
+    (it was a cylinder of radius 4.9 m; on a real 10-frame scan, 22.6 m)."""
+    r, half = 250.0, 40.0
+
+    def height(X, Y):
+        bump = np.sqrt(r * r - np.minimum(X * X, half * half)) - math.sqrt(r * r - half * half)
+        return np.where(np.abs(X) < half, bump, 0.0) - 2.5 * (X / 200.0) ** 2
+
+    V, F = sheet(np.arange(-200.0, 201.0, 2.0), np.arange(-150.0, 151.0, 2.0), height, noise=1.0, seed=2)
+    face, point = nearest_face(V, F, (0.0, 0.0, 0.0))
+    with pytest.raises(ValueError, match=r"not one cylinder: its radius is \d+ mm at the click and \d+ mm over the region"):
+        fit_at(V, F, face, point, "cylinder")
+    assert fit_at(V, F, face, point, "plane").fit.n > 500  # a plane is what it is
+
+
+def test_cylinder_on_a_rim_that_curls_ever_tighter_raises():
+    """The curled rim of a scan: flat, then bending ever tighter towards the edge (curvature 1/12 mm
+    at the edge). The seed at the edge sees a radius of about 25 mm, the region that grows from it
+    one of about 50 mm: the radius is not one radius (on a real scan's rim: 26 mm and 52 mm)."""
+    w, r0 = 40.0, 12.0
+
+    def height(X, Y):
+        u = np.clip(w - X, 0.0, w)  # curvature (1 / r0) (u / w)^3: none at x = w and beyond
+        return -(u ** 5) / (20.0 * r0 * w ** 3)
+
+    V, F = sheet(np.arange(0.0, 100.0, 1.0), np.arange(0.0, 300.0, 1.0), height, noise=0.3, seed=1)
+    for x in (2.0, 5.0):
+        face, point = nearest_face(V, F, (x, 150.0, float(height(np.float64(x), 0.0))))
+        with pytest.raises(ValueError, match="not one cylinder"):
+            fit_at(V, F, face, point, "cylinder")
+
+
 # --------------------------------------------------------------------------- holes
 def test_hole_diameter_on_an_exact_edge():
     V, F, (ring,) = plate(80.0, 80.0, H, [(5.0, -3.0, 12.5)])

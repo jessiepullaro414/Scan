@@ -32,6 +32,13 @@ the region's vertices is the answer.
 The tolerance and the angle are fixed at the seed: a region must not loosen its own test as it
 takes in worse points.
 
+**A cylinder must stay the seed's cylinder.** The refits follow the region, so a region can drift
+into another shape: from a shallow bump out over a flat, noisy plate, where the radius goes to
+metres, or along a rim that curls ever tighter, where there is no one radius. When the answer's
+radius is more than :data:`SEED_DRIFT` times the seed's, or less than the seed's divided by it,
+the answer is an error that gives both radii: no guess. (On real cylinders of simulated scans the
+two stay within 15 %.)
+
 **The default tolerance** is ``max(3 x the seed's median sigma, 3 x the seed fit's RMS, 0.02 mm)``,
 and with sigma each vertex may also stray 3 times its own sigma when that is more; but sigma counts
 only while it agrees with the seed's measured scatter (median sigma at most :data:`SIGMA_TRUST`
@@ -94,6 +101,7 @@ SEED_POINTS = {"plane": 60, "cylinder": 150}  # points in the first seed
 SEED_ANGLE_DEG = {"plane": 30.0, "cylinder": 60.0}  # seed faces' normals within this of the click's
 SEED_TRIES = 4  # a cylinder seed that does not fix a cylinder doubles this many times
 SEED_ROUNDNESS = 10.0  # a cylinder seed's radius must be this many sigma: its curvature clear, not noise
+SEED_DRIFT = 1.5  # a cylinder's final radius must stay within this factor of its seed's (module docstring)
 REFIT_GROWTH = 4.0  # refit each time the region has grown this many times
 GROW_FIT_POINTS = 20000  # refits while growing use at most this many of the region's points (picked by id)
 MAX_ROUNDS = 20  # rounds of growing, each with a new fit ...
@@ -306,6 +314,7 @@ def _seed(m: _Surface, face: int, kind: str):
 def _grow(m: _Surface, face: int, kind: str, tolerance_mm, angle_tol_deg) -> RegionFit:
     """The plane or cylinder region grown from ``face`` (see the module docstring)."""
     seed, fit = _seed(m, face, kind)
+    seed_radius = fit.radius_mm if kind == "cylinder" else None
     side = _side(m, seed, kind, fit)
     # sigma sets the tolerance only while it agrees with the seed's measured scatter: a scan's sigma
     # can be far too pessimistic (a 10-frame simulated scan claims ~3 mm where its table scatters
@@ -395,6 +404,10 @@ def _grow(m: _Surface, face: int, kind: str, tolerance_mm, angle_tol_deg) -> Reg
     faces = np.flatnonzero(in_region)
     verts = np.flatnonzero(in_vertex)
     fit = _fit_vertices(m, kind, verts, prev=fit)  # the answer: all the region's points
+    if seed_radius is not None and not seed_radius / SEED_DRIFT <= fit.radius_mm <= seed_radius * SEED_DRIFT:
+        raise ValueError(f"the surface around the click is not one cylinder: its radius is {seed_radius:.0f} mm at the "
+                         f"click and {fit.radius_mm:.0f} mm over the region that grew from it (a flat surface, or one "
+                         "whose curve changes?)")
     warnings = []
     if fit.n < SMALL_REGION_POINTS:
         warnings.append(f"small region: {fit.n} points")
