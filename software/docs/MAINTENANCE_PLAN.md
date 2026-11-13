@@ -1003,11 +1003,14 @@ Every task here: the type check, `npm test`, and for bundle tasks the chunk size
   The aim line in the live view rendered rarely already (only when the distance zone changes), so
   its constant is for tidiness.
 
-### [ ] U3. Every mesh download is held twice in memory (Sonnet, S) ✔
+### [x] U3. Every mesh download is held twice in memory (Sonnet, S) ✔
 - **Where:** `ui/src/api/http.ts`, `fetchBinary`.
 - **Problem:** the chunks are collected and then copied into one array.
 - **Change:** allocate once when `content-length` is known; fall back to chunks otherwise.
 - **Guard:** the `fetchBinary` test from A3.
+- **Done 2026-11-12:** with the size known the chunks go straight into one buffer. A 256 MB
+  download peaked at 512 MB of buffers before and 333 MB after (Node, 64 KB chunks; the rest is
+  chunks not yet collected). A size that is wrong either way still gives every byte (3 new checks).
 
 ### [ ] U4. Switching the shading rebuilds the lighting environment (Sonnet, S) ○
 - **Where:** `ui/src/three/Studio.tsx:15-31`.

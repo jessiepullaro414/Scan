@@ -321,18 +321,27 @@ export const api = {
       return buf;
     }
     const reader = res.body.getReader();
-    const chunks: Uint8Array[] = [];
+    // With the size known, each chunk goes straight into one buffer of that size, so the file is in
+    // memory once. `rest` takes what does not fit: every chunk when the size is unknown, and the
+    // surplus when the header gave a smaller size than the body (a compressed transfer).
+    let out = total ? new Uint8Array(total) : null;
+    const rest: Uint8Array[] = [];
     let loaded = 0;
     for (;;) {
       const { done, value } = await reader.read();
       if (done) break;
-      chunks.push(value);
+      if (out && rest.length === 0 && loaded + value.byteLength <= out.byteLength) out.set(value, loaded);
+      else rest.push(value);
       loaded += value.byteLength;
       onProgress(loaded, total);
     }
-    const out = new Uint8Array(loaded);
-    let off = 0;
-    for (const c of chunks) {
+    if (out && rest.length === 0) return loaded === out.byteLength ? out.buffer : out.buffer.slice(0, loaded);
+    let off = loaded;
+    for (const c of rest) off -= c.byteLength;
+    const head = out ? out.subarray(0, off) : null;
+    out = new Uint8Array(loaded);
+    if (head) out.set(head);
+    for (const c of rest) {
       out.set(c, off);
       off += c.byteLength;
     }

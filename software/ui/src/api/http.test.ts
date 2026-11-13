@@ -60,6 +60,25 @@ async function failure(): Promise<unknown> {
   await api.fetchBinary("/f", (_l, t) => (total = t));
   check(total === null, "content-length 0: total is null");
 }
+// a content-length that is too small (a compressed transfer): still all bytes
+{
+  setFetch(respond({ "content-length": "4" }));
+  const calls: [number, number | null][] = [];
+  const buf = await api.fetchBinary("/f", (l, t) => calls.push([l, t]));
+  check(same(buf, all), "content-length too small: all bytes, in order");
+  check(JSON.stringify(calls) === "[[3,4],[5,4],[9,4]]", `content-length too small: progress ${JSON.stringify(calls)}`);
+}
+// a content-length that is too large: only the bytes that came
+{
+  setFetch(respond({ "content-length": "20" }));
+  const buf = await api.fetchBinary("/f", () => {});
+  check(same(buf, all), "content-length too large: 9 bytes, in order");
+}
+// a chunk that ends exactly at the content-length, then more
+{
+  setFetch(respond({ "content-length": "5" }));
+  check(same(await api.fetchBinary("/f", () => {}), all), "content-length at a chunk border: all bytes");
+}
 // no progress callback: the body is read in one go
 {
   setFetch(respond({ "content-length": "9" }));
