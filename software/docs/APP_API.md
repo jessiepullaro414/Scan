@@ -921,6 +921,46 @@ Rules:
 - Made once per mesh version (about 1.5 s for 1M vertices against 2M triangles), then kept; a second
   request during the first waits for it.
 
+## M5 fourth slice: where the lasers and the mesh disagree
+[`ROADMAP.md`](ROADMAP.md), section 3, item 4. The laser lines are triangulated on their calibrated planes,
+independently of the stereo depth that makes the mesh. This map shows how far the two are apart on the scan's
+current mesh (`ohs.mesh.laser_agreement`). It moves nothing: "Refine with lasers" does that.
+
+```ts
+type LaserInfo = {
+  version: number;                      // the mesh version it was made for
+  vertices: number;                     // values in lasers.bin = vertices of result/mesh.ply
+  available: boolean;                   // false: this scan has no laser points (the lasers were off or not calibrated)
+  gate_mm: number;                      // laser points farther than this from the surface are left out as stray (3)
+  points: { total: number;              // laser points of the scan (result/laser_points.ply)
+            on_surface: number;         // those that fall on the mesh (not past an edge or over a hole)
+            used: number;               // those within gate_mm: they make the map
+            stray: number };            // on the surface but farther than gate_mm (glints, reflections)
+  stats: { n: number;                   // vertices with a value
+           covered: number | null;      // share of the surface (by area) that has a value, 0..1
+           mean_mm: number | null;      // signed mean
+           rms_mm: number | null; p50_mm: number | null; p95_mm: number | null; max_mm: number | null;  // of |distance|
+           within_0_1: number | null;   // share of the vertices with a value that are within 0.1 mm
+           within_0_3: number | null }; // ... within 0.3 mm; the numbers are null when n = 0
+};
+```
+
+Paths are relative to `/api/projects/{pid}/scans/{sid}`.
+
+| Method and path | Returns |
+|---|---|
+| `GET .../process/lasers.json` | `LaserInfo` |
+| `GET .../process/lasers.bin` | one little-endian float32 per vertex of `result/mesh.ply`, in its order: the mean signed distance in mm from the mesh to the laser points nearest that vertex, along the vertex normal (+ = the lasers see the surface further out than the mesh, - = further in); NaN where no laser point came near. The header `X-OHS-Mesh-Version` has the version. |
+
+Rules:
+- 409 before the scan has a mesh. With `available: false` every value is NaN.
+- A laser point belongs to its nearest vertex. One that projects more than 1.5 median edges from that vertex is
+  off the mesh and ignored.
+- Made once per mesh version (1.2–2.1 s for 0.6–0.8 million vertices and 150,000 laser points), then kept; a
+  second request during the first waits for it.
+- On simulated scans at Standard quality the lines cover 8–9 % of the surface, and there the mesh and the lasers
+  agree within 0.1 mm for 62–69 % of the vertices and within 0.3 mm for 91–97 % (median 0.06–0.07 mm).
+
 ## M5 third slice: areas that need another pass
 The plan is in [`DESKTOP_APP_PLAN.md`](DESKTOP_APP_PLAN.md), "M5 plan, third slice". It works on the scan's
 current mesh.

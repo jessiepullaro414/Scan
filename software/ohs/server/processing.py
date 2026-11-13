@@ -566,6 +566,9 @@ class ScanProcess:
         # (version, offsets, answer) of the deviation map of the current step, and the lock that makes it once
         self._offset: tuple[int, np.ndarray, dict] | None = None
         self._offset_lock = threading.Lock()
+        # the same for the laser agreement map (lasers.json / lasers.bin)
+        self._lasers: tuple[int, np.ndarray, dict] | None = None
+        self._lasers_lock = threading.Lock()
 
     # ------------------------------------------------------------------ persistence
     @property
@@ -1854,6 +1857,34 @@ class ProcessManager:
                 if int(sp.state["version"]) == v:  # not changed meanwhile
                     sp._offset = (v, off, info)
             return info, off
+
+    def lasers(self, pid: str, sid: str) -> tuple[dict, np.ndarray]:
+        """The laser agreement map of the current mesh (:func:`ohs.mesh.laser_agreement`): for each
+        vertex, how far the laser points near it lie from the mesh, signed, in mm; NaN where no laser
+        point came near. The laser points are the base's (``result/laser_points.ply``, in the mesh's
+        frame). Returns the answer of ``lasers.json`` and the float32 array of ``lasers.bin`` (one
+        value per vertex of ``result/mesh.ply``, in its order). ``available`` is False, and every
+        value NaN, when the scan has no laser points. Made once per mesh version."""
+        from ohs.mesh import laser_agreement
+        from ohs.track.export import load_ply
+
+        sp = self.scan(pid, sid)
+        self._need_base(sp)
+        with sp._lasers_lock:  # a second request waits for the first one's result
+            with sp.lock:
+                v, k = int(sp.state["version"]), int(sp.state["cursor"])
+                cached = sp._lasers
+            if cached is not None and cached[0] == v:
+                return cached[2], cached[1]
+            V, F, _, _ = self._load_step(sp, k)
+            lp = sp.result_dir / "laser_points.ply"
+            P = load_ply(lp)["vertices"] if lp.is_file() else np.zeros((0, 3))
+            val, rep = laser_agreement(V, F, P)
+            info = {"version": v, "vertices": int(len(V)), "available": bool(len(P) >= MIN_LASER_POINTS), **rep}
+            with sp.lock:
+                if int(sp.state["version"]) == v:  # not changed meanwhile
+                    sp._lasers = (v, val, info)
+            return info, val
 
     def check(self, pid: str, sid: str, tolerance_mm: float) -> dict:
         """``POST .../check``: the areas of the current mesh that miss ``tolerance_mm``

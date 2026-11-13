@@ -467,6 +467,26 @@ def test_fit_a_plane_on_the_table(env, tmp_path):
     assert post(b + "/fit", {"kind": "plane", **{**click, "point": [0, 0]}}).status_code == 422
 
 
+def test_the_laser_agreement_map(env):
+    """``lasers.json`` / ``lasers.bin``: one value per vertex of the current mesh where a laser point
+    came near, NaN elsewhere, with the numbers the legend shows."""
+    b = base_url(env)
+    s = get(b + "/process").json()
+    info = get(b + "/process/lasers.json").json()
+    r = get(b + "/process/lasers.bin")
+    assert r.status_code == 200 and r.headers["x-ohs-mesh-version"] == str(info["version"]) == str(s["current"]["version"])
+    val = np.frombuffer(r.content, dtype="<f4")
+    assert len(val) == info["vertices"] == s["current"]["stats"]["vertices"]
+    pts, st = info["points"], info["stats"]
+    assert info["available"] is True and info["gate_mm"] == 3.0
+    assert pts["total"] >= pts["on_surface"] >= pts["used"] > 100 and pts["stray"] == pts["on_surface"] - pts["used"]
+    has = np.isfinite(val)
+    assert st["n"] == int(has.sum()) > 100 and 0.0 < st["covered"] < 1.0
+    assert np.abs(val[has]).max() <= 3.0 + 1e-6 and st["max_mm"] == pytest.approx(float(np.abs(val[has]).max()), abs=1e-3)
+    assert 0.0 <= st["within_0_1"] <= st["within_0_3"] <= 1.0 and st["p50_mm"] <= st["p95_mm"] <= st["max_mm"]
+    assert get(b + "/process/lasers.json").json() == info  # kept per mesh version
+
+
 def test_the_deviation_map_follows_the_edits(env, tmp_path):
     b = base_url(env)
     s = get(b + "/process").json()

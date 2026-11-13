@@ -469,6 +469,16 @@ def create_app(config: Any = None, *, projects_dir: Any = None, static_dir: Any 
         return Response(off.astype("<f4", copy=False).tobytes(), media_type="application/octet-stream",
                         headers={"Cache-Control": "no-cache", "X-OHS-Mesh-Version": str(info["version"])})
 
+    @app.get("/api/projects/{pid}/scans/{sid}/process/lasers.json")
+    def process_lasers(pid: str, sid: str) -> JSONResponse:
+        return _json(proc.lasers(pid, sid)[0])
+
+    @app.get("/api/projects/{pid}/scans/{sid}/process/lasers.bin")
+    def process_lasers_bin(pid: str, sid: str) -> Response:
+        info, val = proc.lasers(pid, sid)
+        return Response(val.astype("<f4", copy=False).tobytes(), media_type="application/octet-stream",
+                        headers={"Cache-Control": "no-cache", "X-OHS-Mesh-Version": str(info["version"])})
+
     @app.post("/api/projects/{pid}/scans/{sid}/check")
     def scan_check(pid: str, sid: str, body: CheckBody) -> JSONResponse:
         return _json(proc.check(pid, sid, body.tolerance_mm))

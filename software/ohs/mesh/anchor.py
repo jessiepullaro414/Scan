@@ -35,7 +35,9 @@ import numpy as np
 
 from ohs.mesh.topology import as_mesh, edge_table, rows, vertex_normals
 
-__all__ = ["AnchorParams", "anchor_to_points"]
+__all__ = ["AnchorParams", "anchor_to_points", "laser_agreement", "AGREEMENT_GATE_MM"]
+
+AGREEMENT_GATE_MM = 3.0  # laser_agreement: laser points farther than this from the surface are stray
 
 Progress = Callable[[float, str], None]
 
@@ -165,3 +167,64 @@ def anchor_to_points(V: np.ndarray, F: np.ndarray, P: np.ndarray, params: Anchor
         "smooth_mm": p.smooth_mm, "min_mm": p.min_mm, "ms": round(1e3 * (time.perf_counter() - t0), 1),
     })
     return V2, delta, report
+
+
+def laser_agreement(V: np.ndarray, F: np.ndarray, P: np.ndarray, *, N: np.ndarray | None = None,
+                    gate_mm: float = AGREEMENT_GATE_MM, lateral: float = 1.5) -> tuple[np.ndarray, dict]:
+    """Where the laser points and the mesh disagree: for each vertex of ``(V, F)``, the mean signed
+    distance (mm, along the vertex normal) of the laser points ``P`` (M,3) nearest to it. + = the
+    lasers see the surface further out than the mesh, - = further in; NaN where no laser point came
+    near (most of a mesh: the lasers draw lines). Nothing is moved: :func:`anchor_to_points` does that.
+
+    The laser points are paired with the mesh as there (step 1 of the module docstring): a point
+    belongs to its nearest vertex; one that projects more than ``lateral`` median edges from it is
+    off the mesh (past an edge, over a hole) and ignored; one farther than ``gate_mm`` from the
+    surface is *stray* (a glint, a reflection) and left out of the map, but counted.
+
+    Returns ``(values (N,) float32, report)``: ``gate_mm``; ``points`` (``total``, ``on_surface``,
+    ``used``, ``stray``); ``stats``: ``n`` vertices with a value, ``covered`` (their share of the
+    surface, by area), the signed ``mean_mm``, ``rms_mm``, ``p50_mm`` / ``p95_mm`` / ``max_mm`` of the
+    absolute values, and ``within_0_1`` / ``within_0_3`` (the share of those vertices within 0.1 and
+    0.3 mm). The numbers are None when no vertex has a value.
+    """
+    from scipy.spatial import cKDTree  # noqa: PLC0415
+
+    V, F = as_mesh(V, F)
+    P = np.asarray(P, dtype=np.float64).reshape(-1, 3)
+    P = P[np.all(np.isfinite(P), axis=1)]
+    n = len(V)
+    values = np.full(n, np.nan, dtype=np.float32)
+    stats: dict = {"n": 0, "covered": None, "mean_mm": None, "rms_mm": None, "p50_mm": None, "p95_mm": None,
+                   "max_mm": None, "within_0_1": None, "within_0_3": None}
+    report: dict = {"gate_mm": float(gate_mm), "points": {"total": int(len(P)), "on_surface": 0, "used": 0, "stray": 0},
+                    "stats": stats}
+    if n == 0 or len(F) == 0 or len(P) == 0:
+        return values, report
+    if N is None:
+        N = vertex_normals(V, F)
+    et = edge_table(F, n)
+    h = float(np.median(np.linalg.norm(rows(V, et.v0) - rows(V, et.v1), axis=1)))
+    _, j = cKDTree(V).query(P, workers=-1)
+    Nj = rows(N, j)
+    rv = P - rows(V, j)
+    r = np.einsum("ij,ij->i", rv, Nj)
+    on = np.linalg.norm(rv - r[:, None] * Nj, axis=1) <= lateral * h
+    ok = on & (np.abs(r) <= gate_mm)
+    report["points"].update(on_surface=int(on.sum()), used=int(ok.sum()), stray=int(on.sum() - ok.sum()))
+    area = 0.5 * np.linalg.norm(np.cross(rows(V, F[:, 1]) - rows(V, F[:, 0]), rows(V, F[:, 2]) - rows(V, F[:, 0])), axis=1)
+    vertex_area = np.bincount(F.reshape(-1), weights=np.repeat(area / 3.0, 3), minlength=n)
+    total_area = float(vertex_area.sum())
+    if not ok.any():
+        stats["covered"] = 0.0 if total_area > 0 else None
+        return values, report
+    count = np.bincount(j[ok], minlength=n)
+    has = count > 0
+    d = np.bincount(j[ok], weights=r[ok], minlength=n)[has] / count[has]
+    values[has] = d
+    a = np.abs(d)
+    p50, p95 = np.percentile(a, [50, 95])
+    stats.update({"n": int(has.sum()), "covered": round(float(vertex_area[has].sum() / total_area), 4) if total_area > 0 else None,
+                  "mean_mm": round(float(d.mean()), 4), "rms_mm": round(float(np.sqrt(np.mean(d * d))), 4),
+                  "p50_mm": round(float(p50), 4), "p95_mm": round(float(p95), 4), "max_mm": round(float(a.max()), 4),
+                  "within_0_1": round(float(np.mean(a <= 0.1)), 4), "within_0_3": round(float(np.mean(a <= 0.3)), 4)})
+    return values, report

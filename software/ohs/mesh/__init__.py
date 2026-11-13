@@ -26,7 +26,7 @@ What "hole" and "outer border" mean is defined once, in :mod:`ohs.mesh.topology`
 """
 from __future__ import annotations
 
-from ohs.mesh.anchor import AnchorParams, anchor_to_points
+from ohs.mesh.anchor import AnchorParams, anchor_to_points, laser_agreement
 from ohs.mesh.check import weak_areas
 from ohs.mesh.clean import delete_faces, keep_faces, remove_floaters
 from ohs.mesh.confidence import SIGMA_NONE_MM, carry_filled, carry_sigma, filled_area, sigma_stats
@@ -39,4 +39,4 @@ from ohs.mesh.topology import vertex_normals
 
 __all__ = ["remove_floaters", "fill_holes", "smooth", "decimate", "delete_faces", "keep_faces", "mesh_stats",
            "hole_outlines", "vertex_normals", "sigma_stats", "carry_sigma", "SIGMA_NONE_MM", "AnchorParams",
-           "anchor_to_points", "carry_filled", "filled_area", "deviation", "surface_offset", "offset_stats", "weak_areas"]
+           "anchor_to_points", "laser_agreement", "carry_filled", "filled_area", "deviation", "surface_offset", "offset_stats", "weak_areas"]
