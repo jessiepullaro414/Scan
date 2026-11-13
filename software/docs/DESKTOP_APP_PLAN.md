@@ -675,6 +675,38 @@ largest and 95th-percentile move. The value under the cursor.
 **Later:** the same map against a reference STL or another scan (needs alignment first, M4/M5), and
 a limit that edits must keep (smoothing has "within sigma" already).
 
+### M5 plan, third slice: areas that need another pass (2026-11-12)
+The third item of [`ROADMAP.md`](ROADMAP.md), section 3: turn the confidence into something to act on.
+
+**What the user sees:** a **Check** panel in the viewer and on the Process page. The user types the
+tolerance the part needs ("good to ± 0.1 mm"). The app answers "92 % of the surface meets ± 0.1 mm;
+3 areas need another pass" and lists the areas, largest first:
+- **uncertain:** the scan's own 2σ there is larger than the tolerance;
+- **not measured:** surface that hole filling made up;
+- **open holes** (the existing hole list), as "not scanned".
+
+Each has its size (area, extent), its median and worst sigma, and a click flies the camera to it
+and lights it up. Specks under a minimum size are left out of the list (but count in the share).
+A note says what the answer rests on: sigma is statistical (no calibration or scale error), and it
+has been checked on simulated scans only.
+
+**How it works:**
+- `ohs/mesh/check.py`: `weak_areas(V, F, sigma, filled, tolerance_mm, k=2, min_area_mm2)`: a face
+  fails when `k` times the mean sigma of its vertices exceeds the tolerance, or it is filled;
+  failing faces that share an edge form an area; per area its kind, area, centre, extent, sigma
+  median and worst, and faces; plus the share of the surface (by area) that passes.
+- API: `POST .../check {tolerance_mm}` on the current mesh, kept per mesh version and tolerance;
+  at most 50 areas with their faces (base64, as for fits).
+- The viewer reuses the Fit tool's region overlay for the highlight.
+
+**Steps** (one commit each, tests first): 1. the areas, on meshes with a known sigma pattern;
+2. the API; 3. the panel, the highlight and the camera move, and the mock; 4. a simulator check in
+`VALIDATION.md`: of the surface the check passes, how much really is within the tolerance of the
+truth, and how much of the truly bad surface it flags.
+
+**Later:** guidance while scanning (where to point the scanner next), and continuing a scan to
+fix the listed areas (needs multi-session alignment, M4).
+
 ### Quality bar (every milestone)
 - **Performance:** the live view holds 30 fps or more in the UI and shows the scanner's state within 150 ms. A 2M-triangle mesh orbits at 60 fps on an integrated GPU.
 - **Reliability:** no data loss on a crash, and an emitters-off guarantee.
