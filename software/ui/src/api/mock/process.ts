@@ -4,11 +4,13 @@
  * redo: the last steps are kept in memory, older ones are replayed), the current mesh served
  * as the scan's mesh.ply / .stl / .obj, its stats and hole outlines, and the camera trajectory
  * with its loops. Plus the recipes (built-ins and saved ones), and "Make mesh", which now runs
- * the Default recipe. And the M5 fitted shapes (fit.ts) and Check (check.ts) on the current mesh.
+ * the Default recipe. And the M5 fitted shapes (fit.ts) and Check (check.ts) on the current mesh, its
+ * deviation from the base mesh, and its comparison with the laser points (lasers.ts).
  *
  * The demo engine measures nothing, so each mesh gets a made-up sigma per vertex (scanmesh.ts
  * `mockSigma`), written into mesh.ply as the engine does and used by Check. Meshes of preview quality
  * get none: they stand for a mesh made without a graphics card, so the demo also shows that case.
+ * The same meshes have no laser comparison either (`available` false), to show a scan without lasers.
  *
  * Jobs do the real (mock) work in small steps (WorkJobSpec), so progress is honest and the page
  * stays responsive even at a million triangles.
@@ -20,6 +22,7 @@ import type {
   FitResult,
   FuseStage,
   Job,
+  LaserInfo,
   MeshOp,
   ProcessQuality,
   ProcessState,
@@ -39,8 +42,9 @@ import { encodeFaces } from "../../lib/fits";
 import { normalizeQuality } from "../../lib/quality";
 import { weakAreas } from "./check";
 import { mockFit } from "./fit";
-import { stlMesh } from "./geom";
+import { apply, stlMesh } from "./geom";
 import { HttpError, json, nowIso, uid, type MockHost, type WorkStep } from "./host";
+import { mockLasers, type LaserPatch } from "./lasers";
 import {
   analyse,
   decimate,
@@ -56,7 +60,7 @@ import {
   type TriMesh,
   type Work,
 } from "./meshops";
-import { mockSigma, mockTrajectory, scanMesh } from "./scanmesh";
+import { mockSigma, mockTrajectory, scanMesh, T_WS } from "./scanmesh";
 
 type Stages = { track: TrackStage; straighten: StraightenStage; fuse: FuseStage; spacetime: SpacetimeStage; refine: RefineStage };
 
@@ -233,6 +237,15 @@ function patchStage(st: Studio, id: StageId, p: { state?: TrackStage["state"]; s
   else st.stages.fuse = { ...st.stages.fuse, ...p };
 }
 
+/**
+ * Where the demo's lasers and mesh differ (scene frame, mm): the lasers read about 0.4 mm further out on
+ * the gauge block's top, and about 0.2 mm further in on a stretch of the table in front of the sphere.
+ */
+const LASER_PATCHES: LaserPatch[] = [
+  { c: [48, -25, 8], r: 14, mm: 0.4 },
+  { c: [-70, 0, 78], r: 30, mm: -0.2 },
+];
+
 export type ScanLookup = (pid: string, sid: string) => { project: Project; scan: Scan } | null;
 
 export class MockProcess {
@@ -242,6 +255,8 @@ export class MockProcess {
   private recipes: Recipe[] = BUILTINS.map((r) => ({ ...r }));
   /** The made-up deviation of each scan's current mesh version. */
   private devs = new Map<string, { info: DeviationInfo; bin: ArrayBuffer }>();
+  /** The made-up laser comparison of each scan's current mesh version. */
+  private laserMaps = new Map<string, { info: LaserInfo; bin: ArrayBuffer }>();
   /** The made-up sigma of each mesh that has one (made on first use). */
   private sigmas = new WeakMap<TriMesh, Float32Array>();
 
@@ -272,6 +287,11 @@ export class MockProcess {
     if ((a === "deviation.json" || a === "deviation.bin") && is("GET", 1)) {
       const d = this.deviation(p, s);
       if (a === "deviation.json") return json(200, d.info);
+      return new Response(d.bin, { status: 200, headers: { "content-type": "application/octet-stream", "X-OHS-Mesh-Version": String(d.info.version) } });
+    }
+    if ((a === "lasers.json" || a === "lasers.bin") && is("GET", 1)) {
+      const d = this.lasers(p, s);
+      if (a === "lasers.json") return json(200, d.info);
       return new Response(d.bin, { status: 200, headers: { "content-type": "application/octet-stream", "X-OHS-Mesh-Version": String(d.info.version) } });
     }
     if (a === "holes.json" && is("GET", 1)) {
@@ -432,6 +452,26 @@ export class MockProcess {
     };
     const d = { info, bin: out.buffer as ArrayBuffer };
     this.devs.set(st.pid + "/" + st.sid, d);
+    return d;
+  }
+
+  /**
+   * `lasers.json` / `lasers.bin`, made up (lasers.ts): laser lines across the current mesh with small
+   * differences, and two patches where the lasers and the mesh differ more (`LASER_PATCHES`).
+   * A mesh of preview quality stands for a scan without laser points (`available` false, no value
+   * anywhere). Kept per mesh version; 409 before there is a mesh.
+   */
+  private lasers(p: Project, s: Scan): { info: LaserInfo; bin: ArrayBuffer } {
+    const st = this.ensure(p, s);
+    const m = st.current;
+    if (!m) throw new HttpError(409, "This scan has no mesh yet, so nothing to compare with the lasers", "Make the mesh first.");
+    const key = st.pid + "/" + st.sid;
+    const kept = this.laserMaps.get(key);
+    if (kept && kept.info.version === st.version) return kept;
+    const patches = LASER_PATCHES.map((q) => ({ ...q, c: apply(T_WS, q.c) }));
+    const r = mockLasers(st.version, m.positions, m.indices, st.quality !== "preview", patches);
+    const d = { info: r.info, bin: r.values.buffer as ArrayBuffer };
+    this.laserMaps.set(key, d);
     return d;
   }
 

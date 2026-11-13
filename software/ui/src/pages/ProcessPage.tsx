@@ -27,6 +27,7 @@ import {
   Orbit,
   RefreshCw,
   Route,
+  ScanLine,
   Sparkles,
   SquareDashed,
   Target,
@@ -46,6 +47,7 @@ import { EmptyState, Kbd, ProgressBar, Skeleton, Spinner } from "../components/u
 import { Segmented, Slider } from "../components/ui/Form";
 import { Callout } from "../components/ui/Layout";
 import { fileStem, fmtBytes, fmtDateTime, fmtDuration, fmtInt } from "../lib/format";
+import { hasLaserValues } from "../lib/lasers";
 import { href, navigate, paths } from "../lib/router";
 import { cn, isModalOpen, isTypingTarget, useHotkeys } from "../lib/util";
 import { useConnection } from "../store/connection";
@@ -68,8 +70,10 @@ import { DownloadPanel, StatsPanel } from "./process/StatsPanel";
 import { CHECK_ICON, CheckPanel } from "./viewer/CheckPanel";
 import { ConfidenceLegend } from "./viewer/ConfidenceLegend";
 import { DeviationLegend } from "./viewer/DeviationLegend";
+import { LasersLegend } from "./viewer/LasersLegend";
 import { useCheck } from "./viewer/useCheck";
 import { useDeviation } from "./viewer/useDeviation";
+import { useLasers } from "./viewer/useLasers";
 import type { Shading } from "./viewer/ViewerCanvas";
 
 const TOOLS: { id: SelectTool; label: string; key: string; icon: LucideIcon; hint: string }[] = [
@@ -208,10 +212,23 @@ export default function ProcessPage({ pid, sid }: { pid: string; sid: string }) 
   const devEnabled = (state?.cursor ?? 0) > 0;
   const devOn = shading === "deviation" && devEnabled;
   const dev = useDeviation(pid, sid, comparing ? null : (mesh?.geometry ?? null), mesh?.version ?? null, devOn && !comparing);
-  const shownShading: Shading =
-    shading === "deviation" ? (devOn && !comparing && dev.phase === "ready" ? "deviation" : "clay") : shading === "confidence" && !hasSigma ? "clay" : shading;
   // Check works on the current mesh; when the engine has a newer one, its state is read again and the mesh follows
   const refreshState = useCallback(() => void useProcess.getState().fetch(pid, sid), [pid, sid]);
+  // the Lasers shading compares the current mesh with the scan's laser points; whether it has any, the answer tells
+  const las = useLasers(pid, sid, comparing ? null : (mesh?.geometry ?? null), mesh?.version ?? null, shading === "lasers" && !comparing);
+  const lasShown = !comparing && las.state.phase === "ready" && hasLaserValues(las.state.data.info);
+  const shownShading: Shading =
+    shading === "deviation"
+      ? devOn && !comparing && dev.phase === "ready"
+        ? "deviation"
+        : "clay"
+      : shading === "lasers"
+        ? lasShown
+          ? "lasers"
+          : "clay"
+        : shading === "confidence" && !hasSigma
+          ? "clay"
+          : shading;
   const check = useCheck(pid, sid, mesh?.geometry ?? null, mesh?.version ?? null, refreshState);
 
   // A new version (an edit, undo or redo) brings a new, empty selection. Say so when that drops
@@ -330,6 +347,7 @@ export default function ProcessPage({ pid, sid }: { pid: string; sid: string }) 
     "3": () => setShading("normals"),
     "4": () => hasSigma && setShading("confidence"),
     "5": () => devEnabled && setShading("deviation"),
+    "6": () => setShading("lasers"),
     v: () => pickTool("navigate"),
     b: () => pickTool("box"),
     l: () => pickTool("lasso"),
@@ -692,7 +710,7 @@ export default function ProcessPage({ pid, sid }: { pid: string; sid: string }) 
                 <Segmented<Shading>
                   label="Shading"
                   size="sm"
-                  value={devOn ? "deviation" : shownShading}
+                  value={devOn ? "deviation" : shading === "lasers" ? "lasers" : shownShading}
                   onChange={setShading}
                   options={[
                     { value: "clay", label: "Clay", icon: Brush, title: "Matcap clay (1)" },
@@ -714,6 +732,7 @@ export default function ProcessPage({ pid, sid }: { pid: string; sid: string }) 
                       disabled: !devEnabled,
                       title: devEnabled ? "How far the edits moved the surface from the mesh as measured (5)" : "No edits yet: the mesh is as measured",
                     },
+                    { value: "lasers", label: "Lasers", icon: ScanLine, title: "Where the laser lines and the mesh agree, and where they differ (6)" },
                   ]}
                 />
                 <span className="mx-1 h-5 w-px bg-line-strong" aria-hidden />
@@ -861,6 +880,20 @@ export default function ProcessPage({ pid, sid }: { pid: string; sid: string }) 
               <DeviationLegend
                 state={devEnabled ? dev : { phase: "unavailable", message: "No edits yet: the mesh is as measured" }}
                 note={devEnabled && comparing ? "This is the mesh before the last change. Choose “Now” (K) to see how far the edits moved the current one." : undefined}
+              />
+            </Overlay>
+          </div>
+        ) : null}
+
+        {/* bottom left: the Lasers shading's legend; it is taller, so it stands beside the selection tools, not over them */}
+        {shading === "lasers" && mesh ? (
+          <div className={cn("pointer-events-none absolute left-16 transition-[bottom] duration-200", showSelBar ? "bottom-28" : "bottom-4")}>
+            <Overlay className="px-3 py-2.5">
+              <LasersLegend
+                state={las.state}
+                onRetry={las.retry}
+                onReload={refreshState}
+                note={comparing ? "This is the mesh before the last change. Choose “Now” (K) to compare the current one with the lasers." : undefined}
               />
             </Overlay>
           </div>

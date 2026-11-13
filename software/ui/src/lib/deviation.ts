@@ -67,7 +67,8 @@ export function deviationLut(theme: DeviationTheme): Uint8Array {
  * RGBA vertex colours of `values` at `limit`, written into `out` (4 bytes per vertex; made when not
  * given). `toLinear` converts an sRGB byte to the byte the geometry stores (the renderer reads vertex
  * colours as linear); `none` is the sRGB colour of a vertex with no value, whose alpha is 0 (the
- * surface material draws those striped, like the confidence map's "not measured").
+ * surface material draws those striped, like the confidence map's "not measured"). `noneAlpha` 255
+ * draws them plain instead (the Lasers shading, lib/lasers.ts: most of its surface has no value).
  */
 export function deviationColors(
   values: Float32Array,
@@ -76,6 +77,7 @@ export function deviationColors(
   toLinear: ArrayLike<number>,
   none: string,
   out: Uint8Array = new Uint8Array(values.length * 4),
+  noneAlpha = 0,
 ): Uint8Array {
   const lut = deviationLut(theme);
   const lin = new Uint8Array(lut.length);
@@ -88,7 +90,7 @@ export function deviationColors(
       out[o] = nc[0];
       out[o + 1] = nc[1];
       out[o + 2] = nc[2];
-      out[o + 3] = 0;
+      out[o + 3] = noneAlpha;
       continue;
     }
     const k = Math.min(LUT_SIZE - 1, Math.max(0, Math.round((v + limit) * scale))) * 3;

@@ -652,6 +652,41 @@ export type DeviationInfo = {
 /** The deviation of the current mesh: one signed move in mm per vertex (NaN = new surface), in the PLY's order. */
 export type Deviation = { info: DeviationInfo; values: Float32Array };
 
+// ------------------------------------------------------------------ M5 fourth slice: where the lasers and the mesh disagree
+// APP_API.md "M5 fourth slice: where the lasers and the mesh disagree". Compares the current mesh (made from
+// the stereo depth) with the scan's laser points; the Lasers shading shows it.
+
+export type LaserInfo = {
+  version: number; // the mesh version it was made for
+  vertices: number; // values in lasers.bin = vertices of result/mesh.ply
+  available: boolean; // false: this scan has no laser points (the lasers were off or not calibrated)
+  gate_mm: number; // laser points farther than this from the surface were left out as stray points
+  points: {
+    total: number; // laser points of the scan
+    on_surface: number; // those that fall on the mesh (not past an edge or over a hole)
+    used: number; // those within gate_mm: they make the map
+    stray: number; // on the surface but farther than gate_mm (glints, reflections)
+  };
+  stats: {
+    n: number; // vertices with a value
+    covered: number | null; // share of the surface (by area) that has a value, 0..1
+    mean_mm: number | null; // signed
+    rms_mm: number | null; // this and the next three: of |distance|
+    p50_mm: number | null;
+    p95_mm: number | null;
+    max_mm: number | null;
+    within_0_1: number | null; // share of the vertices with a value that are within 0.1 mm
+    within_0_3: number | null; // ... within 0.3 mm; the numbers are null when n = 0
+  };
+};
+
+/**
+ * The laser comparison of the current mesh: per vertex, the signed distance in mm from the mesh to the
+ * laser points near it, along the vertex normal (+ = the lasers see the surface further out than the
+ * mesh, - = further in); NaN where no laser point came near. In the PLY's order.
+ */
+export type LaserMap = { info: LaserInfo; values: Float32Array };
+
 // ------------------------------------------------------------------ M5 third slice: areas that need another pass
 // APP_API.md "M5 third slice: areas that need another pass". Works on the scan's current mesh.
 

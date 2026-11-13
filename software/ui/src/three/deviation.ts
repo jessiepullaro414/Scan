@@ -47,5 +47,6 @@ export function applyDeviationColors(g: BufferGeometry, theme: DeviationTheme, l
   }
   g.userData.deviationPaint = { values, theme, limit };
   g.userData.confidenceTheme = null; // the shared colours are no longer the confidence map's
+  g.userData.laserPaint = null; // nor the Lasers shading's (three/lasers.ts)
   return true;
 }

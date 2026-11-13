@@ -1,6 +1,7 @@
 /**
  * The result viewer's 3D view: the processed mesh (clay matcap, studio PBR, normals or the
- * confidence map with the sigma under the cursor, the deviation map with the move under it), an optional wireframe overlay and laser point
+ * confidence map with the sigma under the cursor, the deviation map with the move under it, the Lasers
+ * shading with the distance to the laser points under it), an optional wireframe overlay and laser point
  * cloud, the two-click distance tool, the fitted shapes (FitTool.tsx) and the Check panel's picked area
  * (CheckMark.tsx). Renders on demand (no work while the view is still).
  */
@@ -27,9 +28,11 @@ import { useUi } from "../../store/ui";
 import { CameraRig } from "../../three/CameraRig";
 import type { FitKind } from "../../api/types";
 import { deviationReadout, interpolateMove } from "../../lib/deviation";
+import { laserReadout } from "../../lib/lasers";
 import { applyConfidenceColors, confidenceMaterial, filledGeometry, filledMaterial, SIGMA_NONE_MM, sigmaOf } from "../../three/confidence";
 import { CV_TO_THREE_ROTATION, cvToThree } from "../../three/coords";
 import { applyDeviationColors, deviationOf } from "../../three/deviation";
+import { applyLaserColors, laserValuesOf } from "../../three/lasers";
 import { clayMatcap } from "../../three/materials";
 import { AxisGizmo, SceneGrid, StudioEnvironment, StudioLights, useThemeColors } from "../../three/Studio";
 import { CheckMark } from "./CheckMark";
@@ -37,7 +40,10 @@ import { FitTool, type FitItem } from "./FitTool";
 import { useSurfacePick } from "./picking";
 import type { CheckLit } from "./useCheck";
 
-export type Shading = "clay" | "studio" | "normals" | "confidence" | "deviation";
+export type Shading = "clay" | "studio" | "normals" | "confidence" | "deviation" | "lasers";
+
+/** The shadings that paint a per-vertex map into the geometry's colours (the rest need none). */
+const isMap = (s: Shading) => s === "confidence" || s === "deviation" || s === "lasers";
 export type Vec3 = [number, number, number];
 export type Measurement = { id: number; a: Vec3; b: Vec3 };
 
@@ -63,7 +69,7 @@ export function useMaterial(shading: Shading): Material {
     const common = { side: DoubleSide, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1 };
     if (shading === "normals") return new MeshNormalMaterial(common);
     if (shading === "studio") return new MeshStandardMaterial({ ...common, color: "#a9afb8", roughness: 0.5, metalness: 0.08, envMapIntensity: 0.85 });
-    if (shading === "confidence" || shading === "deviation") return confidenceMaterial(); // vertex colours, no-value parts striped
+    if (isMap(shading)) return confidenceMaterial(); // vertex colours, no-value parts (alpha 0) striped
     return new MeshMatcapMaterial({ ...common, matcap: clayMatcap() });
   }, [shading]);
   useEffect(() => () => mat.dispose(), [mat]);
@@ -78,13 +84,23 @@ export function useTheme(): "light" | "dark" {
 /** The mesh with the chosen shading and an optional wireframe overlay. */
 export function Model({ geometry, shading, wireframe, meshRef }: { geometry: BufferGeometry; shading: Shading; wireframe: boolean; meshRef?: RefObject<Mesh | null> }) {
   const theme = useTheme();
-  const limit = useUi((s) => s.deviationLimit);
-  // the confidence map needs the mesh's sigmas, the deviation map its moves; a mesh without them shows clay
+  const deviationLimit = useUi((s) => s.deviationLimit);
+  const laserLimit = useUi((s) => s.laserLimit);
+  const limit = shading === "lasers" ? laserLimit : deviationLimit;
+  // the confidence map needs the mesh's sigmas, the deviation map its moves, the Lasers shading its
+  // distances to the laser points; a mesh without them shows clay
   const map = useMemo(
-    () => (shading === "confidence" ? applyConfidenceColors(geometry, theme) : shading === "deviation" ? applyDeviationColors(geometry, theme, limit) : false),
+    () =>
+      shading === "confidence"
+        ? applyConfidenceColors(geometry, theme)
+        : shading === "deviation"
+          ? applyDeviationColors(geometry, theme, limit)
+          : shading === "lasers"
+            ? applyLaserColors(geometry, theme, limit)
+            : false,
     [geometry, shading, theme, limit],
   );
-  const mat = useMaterial((shading === "confidence" || shading === "deviation") && !map ? "clay" : shading);
+  const mat = useMaterial(isMap(shading) && !map ? "clay" : shading);
   const invalidate = useThree((s) => s.invalidate);
   useEffect(() => {
     if (map) invalidate(); // new colours (the theme or the limit changed) with the same material and geometry
@@ -117,7 +133,7 @@ export function fmtSigma(s: number): string {
 /**
  * The readout of a per-vertex map under the cursor: `value` is the value there (null: nothing to say,
  * "Not measured" / "new surface"), found by the caller from the triangle's corners and the weights.
- * Hidden while dragging.
+ * Hidden while dragging, and where `text` has nothing to say (null).
  */
 export function MapProbe({
   target,
@@ -128,7 +144,7 @@ export function MapProbe({
   target: RefObject<Mesh | null>;
   /** The map's value at barycentric weights `w` of the triangle with corners a, b, c (null: none there). */
   valueAt: (a: number, b: number, c: number, w: number[]) => number | null;
-  text: (v: number | null) => string;
+  text: (v: number | null) => string | null;
   /** Reset the readout when this changes (the map's data). */
   deps: unknown;
 }) {
@@ -186,11 +202,12 @@ export function MapProbe({
     };
   }, [gl, camera, target, deps, invalidate]);
 
-  if (!hit) return null;
+  const label = hit ? text(hit.s) : null;
+  if (!hit || label === null) return null;
   return (
     <Html position={hit.p} zIndexRange={[25, 0]} className="html-label" style={{ pointerEvents: "none" }}>
       <div className="ml-3 -translate-y-1/2 whitespace-nowrap rounded-full border border-white/15 bg-[rgb(17_20_25/0.88)] px-2 py-0.5 font-mono text-[11.5px] text-white shadow-lg tnum">
-        {text(hit.s)}
+        {label}
       </div>
     </Html>
   );
@@ -220,6 +237,15 @@ function SigmaProbe({ target, sigma }: { target: RefObject<Mesh | null>; sigma: 
 export function DeviationProbe({ target, values }: { target: RefObject<Mesh | null>; values: Float32Array }) {
   const valueAt = useCallback((a: number, b: number, c: number, w: number[]) => interpolateMove(values, a, b, c, w), [values]);
   return <MapProbe target={target} valueAt={valueAt} text={deviationReadout} deps={values} />;
+}
+
+/**
+ * The Lasers shading's readout: "+0.034 mm (lasers further out)", "−0.12 mm (lasers further in)"; nothing
+ * where no laser point came near (most of the surface).
+ */
+export function LaserProbe({ target, values }: { target: RefObject<Mesh | null>; values: Float32Array }) {
+  const valueAt = useCallback((a: number, b: number, c: number, w: number[]) => interpolateMove(values, a, b, c, w), [values]);
+  return <MapProbe target={target} valueAt={valueAt} text={laserReadout} deps={values} />;
 }
 
 function LaserCloud({ geometry, size }: { geometry: BufferGeometry; size: number }) {
@@ -359,10 +385,11 @@ export function ViewerCanvas({
   const meshRef = useRef<Mesh | null>(null);
   const sigma = shading === "confidence" ? sigmaOf(geometry) : null;
   const moves = shading === "deviation" ? deviationOf(geometry) : null;
+  const gaps = shading === "lasers" ? laserValuesOf(geometry) : null;
   const [bvh, setBvh] = useState(false);
   useEffect(() => {
-    if (measure || fit || sigma || moves) setBvh(true); // build the raycast acceleration on first use only
-  }, [measure, fit, sigma, moves]);
+    if (measure || fit || sigma || moves || gaps) setBvh(true); // build the raycast acceleration on first use only
+  }, [measure, fit, sigma, moves, gaps]);
 
   const bounds = useMemo(() => {
     if (!geometry.boundingSphere) geometry.computeBoundingSphere();
@@ -400,6 +427,7 @@ export function ViewerCanvas({
           {laser && showLaser ? <LaserCloud geometry={laser} size={1.6} /> : null}
           {sigma ? <SigmaProbe target={meshRef} sigma={sigma} /> : null}
           {moves ? <DeviationProbe target={meshRef} values={moves} /> : null}
+          {gaps ? <LaserProbe target={meshRef} values={gaps} /> : null}
           <MeasureTool enabled={measure} target={meshRef} onPick={onPick} pending={pending} measurements={measurements} markerRadius={markerRadius} />
           <FitTool enabled={fit} busy={fitBusy} target={meshRef} geometry={geometry} fits={fits} picked={pickedFits} markerRadius={markerRadius} onPick={onFitPick} />
           {checkLit ? <CheckMark lit={checkLit} geometry={geometry} /> : null}

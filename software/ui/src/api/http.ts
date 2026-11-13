@@ -23,6 +23,8 @@ import type {
   Health,
   HoleOutline,
   Job,
+  LaserInfo,
+  LaserMap,
   NewRecipeBody,
   OpenFolderReply,
   Paper,
@@ -150,6 +152,32 @@ const del = async (path: string) => {
 };
 const delJson = async <T>(path: string) => (await send<T>("DELETE", path)).data;
 
+/**
+ * A per-vertex map of the current mesh, served as two files: `{base}.json` (its statistics, with the
+ * mesh `version` and the number of `vertices`) and `{base}.bin` (one float32 per vertex). They are read
+ * one after the other: when the array does not fit the statistics (another length, or the
+ * `X-OHS-Mesh-Version` header differs from their version) the mesh changed in between, and both are
+ * read once more; a second mismatch is a 409. `what` names the map in that error ("deviation").
+ */
+async function vertexMap<I extends { version: number; vertices: number }>(base: string, what: string, signal?: AbortSignal): Promise<{ info: I; values: Float32Array }> {
+  for (let attempt = 0; ; attempt++) {
+    const info = await get<I>(`${base}.json`);
+    if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
+    let res: Response;
+    try {
+      res = await fetchImpl(`${base}.bin`, { signal });
+    } catch (e) {
+      if ((e as { name?: string }).name === "AbortError") throw e;
+      throw new ApiError(0, "Can't reach the OpenHandScan engine", UNREACHABLE_HINT, `${base}.bin`);
+    }
+    if (!res.ok) throw await toApiError(res, `${base}.bin`);
+    const buf = await res.arrayBuffer();
+    const version = Number(res.headers.get("X-OHS-Mesh-Version") ?? NaN);
+    if (buf.byteLength === info.vertices * 4 && version === info.version) return { info, values: new Float32Array(buf) };
+    if (attempt >= 1) throw new ApiError(409, `The mesh changed while its ${what} was being read`, "Try again in a moment.", `${base}.bin`);
+  }
+}
+
 const enc = encodeURIComponent;
 const scanPath = (pid: string, sid: string) => `/api/projects/${enc(pid)}/scans/${enc(sid)}`;
 
@@ -259,25 +287,19 @@ export const api = {
    * and both are read once more; a second mismatch is a 409. Made once per mesh version, so the first
    * request can take a few seconds on a big mesh.
    */
-  async deviation(pid: string, sid: string, signal?: AbortSignal): Promise<Deviation> {
-    const base = `${scanPath(pid, sid)}/process/deviation`;
-    for (let attempt = 0; ; attempt++) {
-      const info = await get<DeviationInfo>(`${base}.json`);
-      if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
-      let res: Response;
-      try {
-        res = await fetchImpl(`${base}.bin`, { signal });
-      } catch (e) {
-        if ((e as { name?: string }).name === "AbortError") throw e;
-        throw new ApiError(0, "Can't reach the OpenHandScan engine", UNREACHABLE_HINT, `${base}.bin`);
-      }
-      if (!res.ok) throw await toApiError(res, `${base}.bin`);
-      const buf = await res.arrayBuffer();
-      const version = Number(res.headers.get("X-OHS-Mesh-Version") ?? NaN);
-      if (buf.byteLength === info.vertices * 4 && version === info.version) return { info, values: new Float32Array(buf) };
-      if (attempt >= 1) throw new ApiError(409, "The mesh changed while its deviation was being read", "Try again in a moment.", `${base}.bin`);
-    }
-  },
+  deviation: (pid: string, sid: string, signal?: AbortSignal): Promise<Deviation> =>
+    vertexMap<DeviationInfo>(`${scanPath(pid, sid)}/process/deviation`, "deviation", signal),
+
+  // ---------------------------------------------------------------- M5: where the lasers and the mesh disagree
+  /**
+   * How far the scan's laser points lie from the current mesh: the statistics (lasers.json) and one
+   * float32 per vertex of mesh.ply (lasers.bin: + = the lasers see the surface further out than the mesh,
+   * NaN = no laser point came near). 409 before there is a mesh. `available` false: the scan has no laser
+   * points, and every value is NaN. Read like the deviation (the same check that both files are of one
+   * mesh version). Made once per mesh version, in about a second.
+   */
+  lasers: (pid: string, sid: string, signal?: AbortSignal): Promise<LaserMap> =>
+    vertexMap<LaserInfo>(`${scanPath(pid, sid)}/process/lasers`, "laser comparison", signal),
 
   // ---------------------------------------------------------------- M5: fitted shapes
   /** A plane, cylinder or hole where the user clicked the current mesh (read-only, quick). 409 before

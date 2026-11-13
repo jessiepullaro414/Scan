@@ -71,6 +71,11 @@ for (const theme of ["light", "dark"] as const) {
   // the linear table is applied
   const seven = Array.from({ length: 256 }, () => 7);
   check(deviationColors(new Float32Array([0]), 0.1, "dark", seven, "#8a8781")[0] === 7, "toLinear is applied");
+  // the alpha of a vertex with no value can be chosen (the Lasers shading draws those plain: 255)
+  const plain = deviationColors(values, 0.1, "light", identity, "#8b8882", undefined, 255);
+  check(plain[5 * 4 + 3] === 255 && plain[3] === 255, "noneAlpha 255: every vertex has alpha 255");
+  check(`#${[0, 1, 2].map((c) => plain[5 * 4 + c].toString(16).padStart(2, "0")).join("")}` === "#8b8882", "noneAlpha 255: NaN still gets the no-value colour");
+  check(plain.slice(0, 20).join() === out.slice(0, 20).join(), "noneAlpha changes nothing for the vertices with a value");
 }
 
 // the share within the limit, over compared vertices only

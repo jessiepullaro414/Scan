@@ -23,6 +23,7 @@ import {
   Brush,
   Diff,
   Orbit,
+  ScanLine,
   Shapes,
   SlidersHorizontal,
   Target,
@@ -41,6 +42,7 @@ import { KeyValue } from "../components/ui/Layout";
 import { downloadFile } from "../lib/download";
 import { decodeFaces, fitLabel, fitName, regionTriangles, summarizeRegion } from "../lib/fits";
 import { fileStem, fmtBytes, fmtCompact, fmtDateTime, fmtDuration, fmtFixed, fmtInt, fmtPct } from "../lib/format";
+import { hasLaserValues } from "../lib/lasers";
 import { href, navigate, paths } from "../lib/router";
 import { describeReason } from "../lib/tracking";
 import { cn, useHotkeys } from "../lib/util";
@@ -54,8 +56,10 @@ import { viewBus } from "../three/viewBus";
 import { CHECK_ICON, CheckPanel } from "./viewer/CheckPanel";
 import { ConfidenceLegend } from "./viewer/ConfidenceLegend";
 import { DeviationLegend } from "./viewer/DeviationLegend";
+import { LasersLegend } from "./viewer/LasersLegend";
 import { useCheck } from "./viewer/useCheck";
 import { useDeviation } from "./viewer/useDeviation";
+import { useLasers } from "./viewer/useLasers";
 import { FIT_ICON, FitList } from "./viewer/FitsPanel";
 import type { FitItem } from "./viewer/FitTool";
 import { fmtSigma, ViewerCanvas, type Measurement, type Shading, type Vec3 } from "./viewer/ViewerCanvas";
@@ -470,6 +474,7 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
     "3": () => setShading("normals"),
     "4": () => hasSigma && setShading("confidence"),
     "5": () => devEnabled && setShading("deviation"),
+    "6": () => setShading("lasers"),
     escape: () => {
       if (pendingRef.current) setPendingPoint(null);
       else if (measure) setMeasure(false);
@@ -487,11 +492,24 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
   const devOn = shading === "deviation" && devEnabled;
   const meshVersion = typeof geometry?.userData.meshVersion === "number" ? (geometry.userData.meshVersion as number) : null;
   const dev = useDeviation(pid, sid, geometry, meshVersion, devOn);
+  // the Lasers shading compares the mesh with the scan's laser points; whether it has any, the answer tells
+  const las = useLasers(pid, sid, geometry, meshVersion, shading === "lasers");
+  const lasShown = las.state.phase === "ready" && hasLaserValues(las.state.data.info);
   const check = useCheck(pid, sid, geometry, meshVersion, reloadInPlace);
   // open holes: the count in the mesh's numbers, which this page reads with the mesh version
   const openHoles = useProcess((s) => s.entries[processKey(pid, sid)]?.state?.current?.stats.holes ?? null);
   const shown: Shading =
-    shading === "deviation" ? (devOn && dev.phase === "ready" ? "deviation" : "clay") : shading === "confidence" && !hasSigma ? "clay" : shading;
+    shading === "deviation"
+      ? devOn && dev.phase === "ready"
+        ? "deviation"
+        : "clay"
+      : shading === "lasers"
+        ? lasShown
+          ? "lasers"
+          : "clay"
+        : shading === "confidence" && !hasSigma
+          ? "clay"
+          : shading;
   const box = geometry?.boundingBox ?? null;
   const size = box ? { x: box.max.x - box.min.x, y: box.max.y - box.min.y, z: box.max.z - box.min.z } : null;
   const tris = geometry ? (geometry.index ? geometry.index.count / 3 : geometry.getAttribute("position").count / 3) : 0;
@@ -646,7 +664,7 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
               <Segmented<Shading>
                 label="Shading"
                 size="sm"
-                value={devOn ? "deviation" : shown}
+                value={devOn ? "deviation" : shading === "lasers" ? "lasers" : shown}
                 onChange={setShading}
                 options={[
                   { value: "clay", label: "Clay", icon: Brush, title: "Matcap clay (1)" },
@@ -668,6 +686,7 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
                     disabled: !devEnabled,
                     title: devEnabled ? "How far the edits moved the surface from the mesh as measured (5)" : "No edits yet: the mesh is as measured",
                   },
+                  { value: "lasers", label: "Lasers", icon: ScanLine, title: "Where the laser lines and the mesh agree, and where they differ (6)" },
                 ]}
               />
               <span className="mx-1 h-5 w-px bg-line-strong" aria-hidden />
@@ -733,6 +752,12 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
         {shading === "deviation" && geometry ? (
           <div className="glass absolute bottom-4 left-4 animate-pop-in rounded-xl border border-line-strong px-3 py-2.5 shadow-md">
             <DeviationLegend state={devEnabled ? dev : { phase: "unavailable", message: "No edits yet: the mesh is as measured" }} />
+          </div>
+        ) : null}
+
+        {shading === "lasers" && geometry ? (
+          <div className="glass absolute bottom-4 left-4 animate-pop-in rounded-xl border border-line-strong px-3 py-2.5 shadow-md">
+            <LasersLegend state={las.state} onRetry={las.retry} onReload={reloadInPlace} />
           </div>
         ) : null}
 
@@ -1004,13 +1029,17 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
               <Kbd>L</Kbd> laser points
             </span>
             <span>
-              {devEnabled && !hasSigma ? (
+              {devEnabled && hasSigma ? (
                 <>
-                  <Kbd>1</Kbd>–<Kbd>3</Kbd>, <Kbd>5</Kbd>
+                  <Kbd>1</Kbd>–<Kbd>6</Kbd>
+                </>
+              ) : devEnabled ? (
+                <>
+                  <Kbd>1</Kbd>–<Kbd>3</Kbd>, <Kbd>5</Kbd>, <Kbd>6</Kbd>
                 </>
               ) : (
                 <>
-                  <Kbd>1</Kbd>–<Kbd>{devEnabled ? 5 : hasSigma ? 4 : 3}</Kbd>
+                  <Kbd>1</Kbd>–<Kbd>{hasSigma ? 4 : 3}</Kbd>, <Kbd>6</Kbd>
                 </>
               )}{" "}
               shading

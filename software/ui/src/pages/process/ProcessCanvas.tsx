@@ -32,10 +32,11 @@ import type { HoleOutline, TrajectoryView } from "../../api/types";
 import { CameraRig } from "../../three/CameraRig";
 import { CV_TO_THREE_ROTATION, cvToThree } from "../../three/coords";
 import { deviationOf } from "../../three/deviation";
+import { laserValuesOf } from "../../three/lasers";
 import { AxisGizmo, SceneGrid, StudioEnvironment, StudioLights, useThemeColors } from "../../three/Studio";
 import { CheckMark } from "../viewer/CheckMark";
 import type { CheckLit } from "../viewer/useCheck";
-import { BVH_SPLIT_CENTER, DeviationProbe, Model, VIEW_DIR, type Shading } from "../viewer/ViewerCanvas";
+import { BVH_SPLIT_CENTER, DeviationProbe, LaserProbe, Model, VIEW_DIR, type Shading } from "../viewer/ViewerCanvas";
 import { highlightOf, type LoadedMesh } from "./mesh";
 import { buildGrid, buildScreenMap, polygonMask, type DepthImage, type ScreenMap, type SelectMode } from "./selection";
 
@@ -744,13 +745,14 @@ export function ProcessCanvas({
   }, [mesh]);
   const gridY = useMemo(() => -(shown.geometry.boundingBox?.max.y ?? 0) - 0.5, [shown]);
 
-  // The deviation map's readout under the cursor needs raycasting: the tree is built on first use only
-  // (indirect, so the mesh's triangle order, which the selection relies on, stays).
+  // The deviation map's and the Lasers shading's readout under the cursor need raycasting: the tree is
+  // built on first use only (indirect, so the mesh's triangle order, which the selection relies on, stays).
   const moves = shading === "deviation" ? deviationOf(shown.geometry) : null;
+  const gaps = shading === "lasers" ? laserValuesOf(shown.geometry) : null;
   const [bvh, setBvh] = useState(false);
   useEffect(() => {
-    if (moves) setBvh(true);
-  }, [moves]);
+    if (moves || gaps) setBvh(true);
+  }, [moves, gaps]);
   const meshRef = useRef<Mesh | null>(null);
   const model = <Model geometry={shown.geometry} shading={shading} wireframe={wireframe} meshRef={meshRef} />;
 
@@ -789,6 +791,7 @@ export function ProcessCanvas({
             model
           )}
           {moves ? <DeviationProbe target={meshRef} values={moves} /> : null}
+          {gaps ? <LaserProbe target={meshRef} values={gaps} /> : null}
           {compare === "overlay" && previous ? <Ghost geometry={previous.geometry} /> : null}
           {!before ? <Highlight mesh={mesh} color={colors.accent} /> : null}
           {holes && !before ? <HoleLines holes={holes} fillUpTo={fillUpTo} hovered={hoverHole} /> : null}

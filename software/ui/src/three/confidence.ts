@@ -145,6 +145,7 @@ export function applyConfidenceColors(g: BufferGeometry, theme: Theme): boolean 
   } else g.setAttribute("color", new BufferAttribute(colors, 4, true));
   g.userData.confidenceTheme = theme;
   g.userData.deviationPaint = null; // the shared colours are no longer the deviation map's
+  g.userData.laserPaint = null; // nor the Lasers shading's (three/lasers.ts)
   return true;
 }
 

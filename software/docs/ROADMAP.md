@@ -131,6 +131,12 @@ about the scan itself, not the Fit tool, and they decide whether a measurement c
    area to see it lit on the mesh. Open holes are counted, not listed. Scans made before
    2026-11-13 keep their earlier, larger sigma until their mesh is made again.
 4. **Show disagreement.** Mark on the model where the laser points and the stereo depth disagreed.
+   **Built 2026-11-13:** the Lasers shading (key 6) in the viewer and on the Process page colours
+   the vertices a laser line passed over by how far the laser points lie from the mesh, and says
+   how much of the surface the lines cover and how well the two agree (`ohs.mesh.laser_agreement`;
+   [`APP_API.md`](APP_API.md), "M5 fourth slice"). On simulated scans the lines cover 8–9 % of the
+   surface and agree with the mesh within 0.3 mm for 91–97 % of it. Laser points that disagreed
+   with their own frame's depth are dropped while scanning and are not in this map.
 5. **Small ones:**
    - start Make mesh by itself after Stop (the operator still decides when the scan ends).
      **Done 2026-11-12:** Standard quality starts right after Stop when the scan has frames; a

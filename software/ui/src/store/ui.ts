@@ -2,6 +2,7 @@
 import { create } from "zustand";
 import type { ScanMode } from "../api/types";
 import { validLimit } from "../lib/deviation";
+import { validLaserLimit } from "../lib/lasers";
 import { storage } from "../lib/util";
 
 export type Theme = "dark" | "light";
@@ -19,6 +20,8 @@ type UiState = {
   autoMesh: boolean;
   /** The deviation map's scale: the move (mm) that shows as the strongest colour. */
   deviationLimit: number;
+  /** The Lasers shading's scale: the distance between the lasers and the mesh (mm) that shows as the strongest colour. */
+  laserLimit: number;
   setTheme: (t: Theme) => void;
   setCurrentProject: (pid: string | null) => void;
   setScanMode: (m: ScanMode) => void;
@@ -27,6 +30,7 @@ type UiState = {
   setCaptureSound: (on: boolean) => void;
   setAutoMesh: (on: boolean) => void;
   setDeviationLimit: (mm: number) => void;
+  setLaserLimit: (mm: number) => void;
 };
 
 const K = {
@@ -38,6 +42,7 @@ const K = {
   sound: "ohs.captureSound",
   autoMesh: "ohs.autoMesh",
   deviationLimit: "ohs.deviationLimit",
+  laserLimit: "ohs.laserLimit",
 };
 
 function readTheme(): Theme {
@@ -62,6 +67,7 @@ export const useUi = create<UiState>((set) => ({
   captureSound: storage.get<boolean>(K.sound, true),
   autoMesh: storage.get<boolean>(K.autoMesh, true),
   deviationLimit: validLimit(storage.get<unknown>(K.deviationLimit, null)),
+  laserLimit: validLaserLimit(storage.get<unknown>(K.laserLimit, null)),
   setTheme: (theme) => {
     try {
       localStorage.setItem(K.theme, theme);
@@ -99,6 +105,11 @@ export const useUi = create<UiState>((set) => ({
     const deviationLimit = validLimit(mm);
     storage.set(K.deviationLimit, deviationLimit);
     set({ deviationLimit });
+  },
+  setLaserLimit: (mm) => {
+    const laserLimit = validLaserLimit(mm);
+    storage.set(K.laserLimit, laserLimit);
+    set({ laserLimit });
   },
 }));
 
