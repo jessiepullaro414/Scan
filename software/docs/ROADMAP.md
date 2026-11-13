@@ -91,9 +91,11 @@ about the scan itself, not the Fit tool, and they decide whether a measurement c
   [`VALIDATION.md`](../VALIDATION.md), "Fitted shapes against the truth"): a Ø 14 mm boss reads
   0.39 mm off in radius with tracking (before 0.18 mm) and its axis 12.5° off (before 8.0°),
   because the fit weighs each point by `1 / sigma²` and the new sigma is very uneven on a small
-  feature. Planes, the shaft at true poses and the hole are better. A candidate, not adopted:
-  equal weights for cylinders (0.22 mm and 5.4° with tracking, at the price of the axis position
-  at true poses). **Waiting for a decision.**
+  feature. Planes, the shaft at true poses and the hole are better. **Changed the same day** (the
+  user's decision): a cylinder's fit weighs every point of its region the same. The boss with
+  tracking is back at 0.22 mm and 5.4°, at the price of its axis position at true poses
+  (0.07 → 0.25 mm). Still open: the bosses' axis position with tracking (0.63 mm, before 0.32 mm),
+  3 or 4 of 30 clicks on a boss refused, and the fits' ± too small.
 - **The vertex sigma is 2–6 times too large**, and a fit's ± is several times too small. To do:
   an honest sigma, an error model for fits that knows the biases, and until then no ± shown as
   an accuracy. Measured since: on flat surface sigma is about 2.5 times too large, at edges and

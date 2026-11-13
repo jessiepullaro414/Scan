@@ -921,7 +921,20 @@ Scripts and raw results: scratchpad `m5v\` of the session of 2026-11-12 (`summar
 | No point more than the region's median | 0.20 mm / 4.9° / 0.12 mm | 0.32 mm / 10.8° / 0.58 mm |
 | Sigma kept within 2 times the region's median | 0.14 mm / 7.5° / 0.09 mm | 0.35 mm / 10.6° / 0.63 mm |
 
-  Equal weights give the bosses back most of what they lost with tracking (and a better axis than before), and the shaft a little (0.60 → 0.49 mm). They cost the bosses' axis position at true poses (0.07 → 0.25 mm), and the planes: base top offset 0.004 → 0.007 mm (true poses) and 0.012 → 0.017 mm (tracking), the table's offset 0.002 → 0.008 mm. So a candidate is equal weights for cylinders only. **Not changed**: it is a choice, and it rests on two bosses of one simulated part.
+  Equal weights give the bosses back most of what they lost with tracking (and a better axis than before), and the shaft a little (0.60 → 0.49 mm). They cost the bosses' axis position at true poses (0.07 → 0.25 mm), and the planes: base top offset 0.004 → 0.007 mm (true poses) and 0.012 → 0.017 mm (tracking), the table's offset 0.002 → 0.008 mm. So a candidate is equal weights for cylinders only.
+
+**Adopted on 2026-11-13 (the user's decision): a cylinder's fit weighs every point of its region the same**, with the region's median sigma for the ± values; planes keep `1 / sigma²`. With the engine changed, the bracket's cylinders read (before → after the change; the planes' numbers are identical):
+
+| Shape | Quantity | True poses | Tracking |
+|---|---|---|---|
+| Bosses, Ø 14 | radius | 0.16 → 0.12 mm | 0.39 → 0.22 mm |
+| | axis direction | 7.5° → 3.8° | 12.5° → 5.4° |
+| | axis position | 0.07 → 0.25 mm | 0.61 → 0.63 mm |
+| Shaft, Ø 16 | radius | 0.08 → 0.09 mm | 0.60 → 0.49 mm |
+| | axis direction | 0.12° → 0.16° | 0.40° → 0.53° |
+| | axis position | 0.03 → 0.04 mm | 0.74 → 0.68 mm |
+
+Against the study of 2026-11-12 the bosses with tracking are now 0.18 → 0.22 mm in radius and 8.0° → 5.4° in axis direction; their axis position stays worse (0.32 → 0.63 mm). The shaft's ± at true poses shrinks (0.053 → 0.031 mm) and covers its radius for 20 % of the fits instead of 87 %. It rests on two bosses and one shaft of one simulated part.
 
 Scripts and rows: scratchpad `m5v2\` (`run.sh`, `compare.py`, `weights.py`, `run_var.sh`, `compare_var.py`).
 

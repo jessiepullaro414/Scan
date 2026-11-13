@@ -32,6 +32,13 @@ the region's vertices is the answer.
 The tolerance and the angle are fixed at the seed: a region must not loosen its own test as it
 takes in worse points.
 
+**Weights.** A plane's fit weighs each vertex by ``1 / sigma^2``. A cylinder's weighs all the
+vertices of its region the same, and uses their median sigma for the ± values: a scan's sigma
+holds bias terms (curvature, the mesh border, gaps) that are large and very uneven on a small
+round feature, and weighted by them the fit was left to a narrow band of the wall. On the
+simulated bracket's 14 mm bosses that doubled the radius error with tracking and tilted the
+axis by half as much again (``VALIDATION.md``, "Fitted shapes against the truth").
+
 **A cylinder must stay the seed's cylinder.** The refits follow the region, so a region can drift
 into another shape: from a shallow bump out over a flat, noisy plate, where the radius goes to
 metres, or along a rim that curls ever tighter, where there is no one radius. When the answer's
@@ -247,10 +254,14 @@ def _agrees(m: _Surface, faces: np.ndarray, kind: str, fit, side: float, tol: fl
 
 
 def _fit_vertices(m: _Surface, kind: str, verts: np.ndarray, prev=None, normals: np.ndarray | None = None):
-    """The plane or cylinder through vertices ``verts``, weighted by their sigma; a cylinder starts
-    from ``normals`` or the previous fit's axis. A refit (``prev`` given) that fails says so plainly."""
+    """The plane or cylinder through vertices ``verts``; a cylinder starts from ``normals`` or the
+    previous fit's axis. A plane weighs each vertex by its sigma; a cylinder weighs them all the
+    same, with their median sigma (module docstring, "Weights"). A refit (``prev`` given) that
+    fails says so plainly."""
     P = rows(m.V, verts)
     s = None if m.S is None else m.S[verts]
+    if s is not None and kind == "cylinder":
+        s = np.full(len(s), float(np.median(s)))
     try:
         if kind == "plane":
             return fit_plane(P, s)

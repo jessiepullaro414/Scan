@@ -325,6 +325,37 @@ def test_cylinder_on_a_rim_that_curls_ever_tighter_raises():
             fit_at(V, F, face, point, "cylinder")
 
 
+def test_a_cylinder_fit_does_not_lean_on_the_few_points_with_a_small_sigma():
+    """A short boss wall (Ø 14, 8 mm tall) whose sigma is small on one patch and large everywhere
+    else, as a scan's sigma is on a small feature (its bias terms are large near edges and
+    borders). Weighted by 1 / sigma^2 the fit would be that patch's: a tenth of the round and a
+    third of the height, which fixes neither the axis nor the radius. Every point of a cylinder's
+    region weighs the same, so the whole wall decides (the sigma still sets the ± values)."""
+    r, h, n_t, n_z = 7.0, 8.0, 88, 17
+    rng = np.random.default_rng(11)
+    t, z = np.meshgrid(np.arange(n_t) * (2 * math.pi / n_t), np.linspace(0.0, h, n_z), indexing="ij")
+    rr = r + rng.normal(0.0, 0.05, t.shape)
+    V = np.stack([rr * np.cos(t), rr * np.sin(t), z], axis=-1).reshape(-1, 3)
+    idx = np.arange(n_t * n_z).reshape(n_t, n_z)
+    nxt = np.roll(idx, -1, axis=0)  # the wall closes on itself
+    a, b, c, d = idx[:, :-1].ravel(), nxt[:, :-1].ravel(), nxt[:, 1:].ravel(), idx[:, 1:].ravel()
+    F = np.concatenate([np.stack([a, b, c], axis=1), np.stack([a, c, d], axis=1)])
+    patch = (np.abs(((t + math.pi) % (2 * math.pi)) - math.pi) < math.radians(18)) & (np.abs(z - h / 2) < 1.4)
+    S = np.where(patch, 0.03, 0.9).reshape(-1)
+    assert 30 < patch.sum() < 60
+    face, point = nearest_face(V, F, (r, 0.0, h / 2))
+    fit = fit_at(V, F, face, point, "cylinder", sigma=S).fit
+    assert fit.n > 0.9 * len(V)
+    assert angle_deg(fit.axis, Z) < 0.5 and abs(fit.radius_mm - r) < 0.02 and math.hypot(fit.point[0], fit.point[1]) < 0.03
+    # a plane keeps its weights: the half with the small sigma decides, not the half that bends away
+    Vp, Fp = sheet(np.arange(0.0, 60.0, 1.0), np.arange(0.0, 60.0, 1.0), lambda X, Y: 0.02 * np.maximum(X - 30.0, 0.0),
+                   noise=0.0, seed=0)
+    good = Vp[:, 0] <= 30.0
+    face, point = nearest_face(Vp, Fp, (15.0, 30.0, 0.0))
+    plane = fit_at(Vp, Fp, face, point, "plane", sigma=np.where(good, 0.02, 1.0), tolerance_mm=1.0).fit
+    assert plane.n == len(Vp) and angle_deg(plane.normal, Z) < 0.05  # with equal weights: 0.5 degrees
+
+
 # --------------------------------------------------------------------------- holes
 def test_hole_diameter_on_an_exact_edge():
     V, F, (ring,) = plate(80.0, 80.0, H, [(5.0, -3.0, 12.5)])
