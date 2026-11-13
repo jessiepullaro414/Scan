@@ -947,13 +947,24 @@ bench medians before and after in the commit message.
 - **Guard:** `test_trajectory_csv_round_trip_matches_process_recording`, `test_stl_roundtrip`,
   plus a byte comparison of an STL written before and after.
 
-### [ ] P7. Straighten can fuse the whole scan twice (Opus, L) ○
+### [-] P7. Straighten can fuse the whole scan twice (Opus, L) ✔
 - **Where:** `ohs/server/processing.py:1277-1315`.
 - **Problem:** with loops it fuses once as the reference for the laser crossings, and again if
   those change the poses; the first mesh is thrown away.
 - **Change:** investigate a half-resolution reference fuse. This changes a quality trade-off:
   measure the mesh error against the simulator's truth before and after, and stop if it is worse.
 - **Guard:** `test_straighten_closes_loops_and_fuses_again`; add the error benchmark first.
+- **Measured 2026-11-12, not adopted.** The second fuse runs only when the loops changed the poses
+  and then the laser crossings change them too. It never happened with real tracking: 0 of 11
+  runs (6 simulated orbits, 5 studio recordings; 4 fused once). It happened only with synthetic
+  drift (13 of 22 runs). When it does, the thrown-away fuse is 18-27 % of Straighten and 12-14 %
+  of Make mesh (GPU, 3 runs each, the GPU path repeats exactly). A coarse reference fuse (preview
+  quality, or twice the voxel) saved up to 4.9 s at 1280x800 but made the mesh measurably worse in
+  several cases (bracket +7 % object and +16 % floor error, sphere 640 +10 %), and it adds a fuse
+  to the one looped case real tracking produced (Straighten 26-41 % slower). Untested idea if this
+  wait ever shows on real scans: keep each frame's depth from the first fuse and integrate it again
+  at the new poses (no repeated stereo, same result). Scripts and results:
+  scratchpad `p7\` of the session of 2026-11-12.
 
 ---
 
