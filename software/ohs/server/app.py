@@ -625,7 +625,9 @@ def create_app(config: Any = None, *, projects_dir: Any = None, static_dir: Any 
         try:
             await ws.send_text(dumps({"type": "hello", "version": PROTOCOL_VERSION, "app": "openhandscan",
                                       "app_version": __version__}))
-            st.seed_client(client)
+            # the seed reads the calibration and setup files: in a thread, so the other clients' senders
+            # are not held up; awaited before this client's sender starts, so its messages keep their order
+            await asyncio.to_thread(st.seed_client, client)
             sender = asyncio.create_task(hub.serve(client, ws.send_text, ws.send_bytes))
             while True:
                 recv = asyncio.create_task(ws.receive())
@@ -647,7 +649,7 @@ def create_app(config: Any = None, *, projects_dir: Any = None, static_dir: Any 
                     if isinstance(data, dict) and data.get("type") == "subscribe":
                         hub.subscribe(client, data)
                         if data.get("mesh") is True:
-                            st.seed_client(client)
+                            await asyncio.to_thread(st.seed_client, client)
         except Exception as e:  # a vanished client ends here (send/receive errors)
             log.debug("live client %d: %s", client.id, e)
         finally:

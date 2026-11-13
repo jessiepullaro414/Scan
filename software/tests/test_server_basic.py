@@ -223,6 +223,35 @@ def test_websocket_hello_device_session_and_status(env):
         assert n >= 5  # ~10 Hz
 
 
+def test_a_new_connection_is_seeded_off_the_event_loop(env, monkeypatch):
+    """Seeding a new client reads the calibration and setup files. That must not run on the event
+    loop, where every client's sender would wait for it; and the messages still come in order."""
+    import asyncio
+
+    st = env["app"].state.studio
+    seen: list[bool] = []
+    seed = st.seed_client
+
+    def spy(client):
+        try:
+            asyncio.get_running_loop()
+            seen.append(True)  # on the event loop
+        except RuntimeError:
+            seen.append(False)  # in a worker thread
+        return seed(client)
+
+    monkeypatch.setattr(st, "seed_client", spy)
+    with ws_connect(env["srv"].ws_url, max_size=None, open_timeout=5) as ws:
+        msgs = recv_until(ws, lambda m, p, raw: m.get("type") == "status", timeout=10)
+        types = [m["type"] for m, _, _ in msgs]
+        assert types[0] == "hello" and types.index("device") < types.index("status") and "session" in types
+        ws.send(json.dumps({"type": "subscribe", "mesh": True}))  # asks for the seed once more
+        t0 = time.monotonic()
+        while len(seen) < 2 and time.monotonic() - t0 < 5:
+            recv_until(ws, lambda m, p, raw: m.get("type") == "status", timeout=5)
+    assert len(seen) == 2 and not any(seen)
+
+
 # --------------------------------------------------------------------------- protocol / hub / meshing units
 @pytest.mark.parametrize("extra", ["", "x", "xx", "xxx", "xxxx"])
 def test_binary_framing_is_4_byte_aligned(extra):

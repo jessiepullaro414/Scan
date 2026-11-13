@@ -1110,12 +1110,17 @@ Every task here: the type check, `npm test`, and for bundle tasks the chunk size
   69-214 ms after (`-X importtime`, on a machine busy with a study). The new test checks that
   neither `cv2` nor `numpy` is loaded.
 
-### [ ] S2. New app connections read files on the event loop (Sonnet, S) ✔
+### [x] S2. New app connections read files on the event loop (Sonnet, S) ✔
 - **Where:** `ohs/server/app.py:588`, `:610` call `seed_client` (`studio.py:230-238`), which reads
   the calibration and setup files, on the event loop; every client's sender pauses meanwhile.
 - **Change:** `await asyncio.to_thread(...)`, keeping the order of messages.
 - **Guard:** `test_websocket_hello_device_session_and_status`,
   `test_websocket_calibration_messages`, `test_sim_device_previews_and_status`.
+- **Done 2026-11-13:** both calls are `await asyncio.to_thread(st.seed_client, client)`; the first
+  is awaited before the client's sender starts, so the order of its messages is unchanged
+  (`Hub.offer` takes the hub's lock, so it is safe from a thread). A new test,
+  `test_a_new_connection_is_seeded_off_the_event_loop`, failed on the old code (both seeds ran on
+  the loop) and passes now; not measured: how long a seed takes.
 
 ---
 
