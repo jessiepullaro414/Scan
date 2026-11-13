@@ -111,8 +111,11 @@ about the scan itself, not the Fit tool, and they decide whether a measurement c
    user sets ("these 3 areas need another pass"). This gives most of a rescan queue without
    next-best-view research. **Engine and API built 2026-11-12; the panel is on hold:** checked
    against the truth, the answer is safe but passes about 10 % of a scan at ± 0.3 mm where over
-   90 % is truly within. It needs the honest sigma above; a candidate exists and waits for a
-   decision.
+   90 % is truly within. It needed the honest sigma above. **The panel was built 2026-11-13**, once
+   the new sigma model was in the engine: in the viewer and on the Process page, type the
+   tolerance, read "58 % of the surface meets ± 0.3 mm; 12 areas need another pass", click an
+   area to see it lit on the mesh. Open holes are counted, not listed. Scans made before
+   2026-11-13 keep their earlier, larger sigma until their mesh is made again.
 4. **Show disagreement.** Mark on the model where the laser points and the stereo depth disagreed.
 5. **Small ones:**
    - start Make mesh by itself after Stop (the operator still decides when the scan ends).

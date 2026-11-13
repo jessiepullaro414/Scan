@@ -1,7 +1,7 @@
 /**
  * The Process page's 3D view: the current mesh (or the one before the last change, or both),
- * the face selection and its highlight, hole outlines with their size on hover, and the
- * camera trajectory. It renders on demand. The selection tools listen to DOM pointer events
+ * the face selection and its highlight, hole outlines with their size on hover, the camera
+ * trajectory, and the Check panel's picked area. It renders on demand. The selection tools listen to DOM pointer events
  * and work on typed arrays (see selection.ts): a mouse move never re-renders React.
  */
 import { Bvh, Line, OrbitControls } from "@react-three/drei";
@@ -33,6 +33,8 @@ import { CameraRig } from "../../three/CameraRig";
 import { CV_TO_THREE_ROTATION, cvToThree } from "../../three/coords";
 import { deviationOf } from "../../three/deviation";
 import { AxisGizmo, SceneGrid, StudioEnvironment, StudioLights, useThemeColors } from "../../three/Studio";
+import { CheckMark } from "../viewer/CheckMark";
+import type { CheckLit } from "../viewer/useCheck";
 import { BVH_SPLIT_CENTER, DeviationProbe, Model, VIEW_DIR, type Shading } from "../viewer/ViewerCanvas";
 import { highlightOf, type LoadedMesh } from "./mesh";
 import { buildGrid, buildScreenMap, polygonMask, type DepthImage, type ScreenMap, type SelectMode } from "./selection";
@@ -696,6 +698,7 @@ export function ProcessCanvas({
   holes,
   fillUpTo,
   trajectory,
+  checkLit,
   tool,
   through,
   brushRadius,
@@ -716,6 +719,8 @@ export function ProcessCanvas({
   /** Fill preview: holes up to this perimeter show green. */
   fillUpTo: number | null;
   trajectory: TrajectoryView | null;
+  /** The area of the Check panel lit on the current mesh, if any. */
+  checkLit: CheckLit | null;
   tool: SelectTool;
   through: boolean;
   brushRadius: number;
@@ -788,6 +793,7 @@ export function ProcessCanvas({
           {!before ? <Highlight mesh={mesh} color={colors.accent} /> : null}
           {holes && !before ? <HoleLines holes={holes} fillUpTo={fillUpTo} hovered={hoverHole} /> : null}
           {trajectory ? <Trajectory view={trajectory} accent={colors.accent} /> : null}
+          {checkLit && !before ? <CheckMark lit={checkLit} geometry={mesh.geometry} /> : null}
         </group>
         {holes && holes.length && !before ? <HoleHover holes={holes} label={holeLabel} onHover={setHoverHole} /> : null}
         <SelectionController

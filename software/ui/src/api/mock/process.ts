@@ -4,12 +4,17 @@
  * redo: the last steps are kept in memory, older ones are replayed), the current mesh served
  * as the scan's mesh.ply / .stl / .obj, its stats and hole outlines, and the camera trajectory
  * with its loops. Plus the recipes (built-ins and saved ones), and "Make mesh", which now runs
- * the Default recipe. And the M5 fitted shapes (fit.ts) on the current mesh.
+ * the Default recipe. And the M5 fitted shapes (fit.ts) and Check (check.ts) on the current mesh.
+ *
+ * The demo engine measures nothing, so each mesh gets a made-up sigma per vertex (scanmesh.ts
+ * `mockSigma`), written into mesh.ply as the engine does and used by Check. Meshes of preview quality
+ * get none: they stand for a mesh made without a graphics card, so the demo also shows that case.
  *
  * Jobs do the real (mock) work in small steps (WorkJobSpec), so progress is honest and the page
  * stays responsive even at a million triangles.
  */
 import type {
+  CheckResult,
   DeviationInfo,
   EditEntry,
   FitResult,
@@ -32,6 +37,7 @@ import type {
 } from "../types";
 import { encodeFaces } from "../../lib/fits";
 import { normalizeQuality } from "../../lib/quality";
+import { weakAreas } from "./check";
 import { mockFit } from "./fit";
 import { stlMesh } from "./geom";
 import { HttpError, json, nowIso, uid, type MockHost, type WorkStep } from "./host";
@@ -50,7 +56,7 @@ import {
   type TriMesh,
   type Work,
 } from "./meshops";
-import { mockTrajectory, scanMesh } from "./scanmesh";
+import { mockSigma, mockTrajectory, scanMesh } from "./scanmesh";
 
 type Stages = { track: TrackStage; straighten: StraightenStage; fuse: FuseStage; spacetime: SpacetimeStage; refine: RefineStage };
 
@@ -236,6 +242,8 @@ export class MockProcess {
   private recipes: Recipe[] = BUILTINS.map((r) => ({ ...r }));
   /** The made-up deviation of each scan's current mesh version. */
   private devs = new Map<string, { info: DeviationInfo; bin: ArrayBuffer }>();
+  /** The made-up sigma of each mesh that has one (made on first use). */
+  private sigmas = new WeakMap<TriMesh, Float32Array>();
 
   constructor(host: MockHost, find: ScanLookup) {
     this.host = host;
@@ -333,10 +341,36 @@ export class MockProcess {
       faces: encodeFaces(r.faces),
       n_faces: r.faces.length,
       tolerance_mm: r.tolerance,
-      mean_sigma_mm: null, // the demo meshes have no per-vertex sigma
+      mean_sigma_mm: null, // the demo engine's fits leave it out (its sigma is made up, see `sigma`)
       warnings: r.warnings,
       version: st.version,
     };
+  }
+
+  /**
+   * Each vertex's made-up sigma (mm) of the scan's current mesh, or null: a mesh of preview quality has
+   * none, as one the engine made without a graphics card.
+   */
+  private sigma(st: Studio): Float32Array | null {
+    const m = st.current;
+    if (!m || st.quality === "preview") return null;
+    let sg = this.sigmas.get(m);
+    if (!sg) this.sigmas.set(m, (sg = mockSigma(m)));
+    return sg;
+  }
+
+  /** M5 `POST .../check`: the areas of the current mesh that miss a tolerance (check.ts, the engine's rule),
+   * largest first, with the share of the surface that meets it. Read-only; 409 before there is a mesh,
+   * 422 for a tolerance that is not above 0 and at most 100 mm. */
+  check(p: Project, s: Scan, body: Record<string, unknown>): CheckResult {
+    const st = this.ensure(p, s);
+    const m = st.current;
+    if (!m) throw new HttpError(409, "This scan has no mesh yet", "Run Track (or Make mesh) first.");
+    const tol = body.tolerance_mm;
+    if (typeof tol !== "number" || !Number.isFinite(tol) || tol <= 0 || tol > 100)
+      this.bad("tolerance_mm: must be above 0 and at most 100", "Give the tolerance in mm, for example 0.1.");
+    const r = weakAreas(m.positions, m.indices, this.sigma(st), null, tol);
+    return { ...r, areas: r.areas.map((a) => ({ ...a, faces: encodeFaces(a.faces) })), version: st.version };
   }
 
   /**
@@ -407,7 +441,7 @@ export class MockProcess {
     const m = st.current;
     if (!m) return null;
     if (st.files.version !== st.version) st.files = { version: st.version };
-    if (name === "mesh.ply") return (st.files.ply ??= encodePly(m));
+    if (name === "mesh.ply") return (st.files.ply ??= encodePly(m, this.sigma(st)));
     if (name === "mesh.stl") return (st.files.stl ??= stlMesh(m));
     if (name === "mesh.obj") return (st.files.obj ??= encodeObj(m));
     return null;

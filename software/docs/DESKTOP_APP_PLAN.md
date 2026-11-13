@@ -712,7 +712,8 @@ has been checked on simulated scans only.
   fails when `k` times the mean sigma of its vertices exceeds the tolerance, or it is filled;
   failing faces that share an edge form an area; per area its kind, area, centre, extent, sigma
   median and worst, and faces; plus the share of the surface (by area) that passes.
-- API: `POST .../check {tolerance_mm}` on the current mesh, kept per mesh version and tolerance;
+- API: `POST .../check {tolerance_mm}` on the current mesh, computed on each call (about a second
+  on 0.85 million triangles);
   at most 50 areas with their faces (base64, as for fits).
 - The viewer reuses the Fit tool's region overlay for the highlight.
 
@@ -726,7 +727,17 @@ surface and knows the bias at edges, small features, hole rims and borders, and 
 (the roadmap's accuracy findings); the harness in the scratchpad checks any new version.
 **2026-11-13:** the sigma model was replaced (`VALIDATION.md`, "The vertex sigma"; at ± 0.3 mm
 the check now passes 58–60 % of a scan and 99.8 % of that is truly within), so step 3 is no
-longer on hold.
+longer on hold. **Step 3 done 2026-11-13:** the Check panel in the viewer and on the Process
+page (`ui/src/pages/viewer/CheckPanel.tsx`, `useCheck.ts`, `CheckMark.tsx`, `lib/check.ts`).
+The tolerance is typed (default ± 0.3 mm, kept while the app is open); the answer is one
+sentence, a bar of the three shares, and the areas largest first (6 shown, then all, at most
+the 50 the engine sends). A click decodes that area's faces once, lights them with the Fit
+tool's region overlay and flies the camera to it along the area's normal (from the scanned side
+when the area faces away). A mesh without confidence says why and offers Make mesh. Open holes
+are a count with a link to the Process page, not rows: the viewer does not load the hole list.
+The demo mode has the same endpoint (`api/mock/check.ts`, the engine's rule and its tests
+ported) and a made-up sigma on its Standard and Best meshes, so Confidence shading works there
+too. Not seen in a browser: the "mesh changed since it was opened" state, and the light theme.
 
 **Steps** (one commit each, tests first): 1. the areas, on meshes with a known sigma pattern;
 2. the API; 3. the panel, the highlight and the camera move, and the mock; 4. a simulator check in

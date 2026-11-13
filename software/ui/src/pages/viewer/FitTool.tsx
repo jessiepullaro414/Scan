@@ -5,7 +5,8 @@
  *
  * A region is its own small geometry: an index of the region's triangles over the mesh's position
  * attribute (shared, so its GPU buffer is too). Nothing of the mesh is copied or rebuilt, and each
- * fit's marks are memoised, so the cursor moving or another fit coming does not touch them.
+ * fit's marks are memoised, so the cursor moving or another fit coming does not touch them. The
+ * Check panel lights its areas the same way (`RegionOverlay`, CheckMark.tsx).
  */
 import { Html, Line } from "@react-three/drei";
 import { memo, useEffect, useMemo, type RefObject } from "react";
@@ -42,7 +43,8 @@ export type FitItem = {
 /** The second colour of the view: fits picked for a relation. */
 export const PICKED_COLOR = "#f5a524";
 
-function overlayMaterial(color: string, opacity: number): MeshBasicMaterial {
+/** The look of a region lit on the mesh: a flat colour drawn over the surface. */
+export function overlayMaterial(color: string, opacity: number): MeshBasicMaterial {
   return new MeshBasicMaterial({
     color,
     side: DoubleSide,
@@ -91,6 +93,33 @@ function outlineOf(fit: FitItem, size: number): Vec3[] {
   return pts;
 }
 
+/**
+ * A region lit on the mesh (a fit's, or an area of the Check panel): `tris` are its triangles, corner
+ * triples into the vertices of `base`. Its geometry is that index over the mesh's own position
+ * attribute, so nothing of the mesh is copied.
+ */
+export function RegionOverlay({ tris, base, material }: { tris: Uint32Array; base: BufferGeometry; material: MeshBasicMaterial }) {
+  const position = base.getAttribute("position");
+  const overlay = useMemo(() => {
+    const g = new BufferGeometry();
+    g.setAttribute("position", position);
+    g.setIndex(new BufferAttribute(tris, 1));
+    g.boundingSphere = base.boundingSphere; // no pass over the mesh's vertices for culling
+    g.boundingBox = base.boundingBox;
+    return g;
+  }, [tris, position, base]);
+  useEffect(() => {
+    overlay.setAttribute("position", position);
+    return () => {
+      // only the region's index leaves the GPU: disposing with the shared positions attached would
+      // drop the mesh's own position buffer and upload it again
+      overlay.deleteAttribute("position");
+      overlay.dispose();
+    };
+  }, [overlay, position]);
+  return <mesh geometry={overlay} material={material} raycast={() => null} renderOrder={2} />;
+}
+
 /** One fit on the mesh: its region, the outline and the label. Memoised: it renders only when it changes. */
 const FitMark = memo(function FitMark({
   fit,
@@ -105,28 +134,10 @@ const FitMark = memo(function FitMark({
   color: string;
   size: number;
 }) {
-  const position = base.getAttribute("position");
-  const overlay = useMemo(() => {
-    const g = new BufferGeometry();
-    g.setAttribute("position", position);
-    g.setIndex(new BufferAttribute(fit.tris, 1));
-    g.boundingSphere = base.boundingSphere; // no pass over the mesh's vertices for culling
-    g.boundingBox = base.boundingBox;
-    return g;
-  }, [fit.tris, position, base]);
-  useEffect(() => {
-    overlay.setAttribute("position", position);
-    return () => {
-      // only the region's index leaves the GPU: disposing with the shared positions attached would
-      // drop the mesh's own position buffer and upload it again
-      overlay.deleteAttribute("position");
-      overlay.dispose();
-    };
-  }, [overlay, position]);
   const outline = useMemo(() => outlineOf(fit, size), [fit, size]);
   return (
     <group>
-      <mesh geometry={overlay} material={material} raycast={() => null} renderOrder={2} />
+      <RegionOverlay tris={fit.tris} base={base} material={material} />
       <Line points={outline} color={color} lineWidth={fit.shape.kind === "cylinder" ? 2.2 : 1.8} dashed={fit.shape.kind === "cylinder"} dashSize={size * 3} gapSize={size * 1.6} depthTest={false} renderOrder={10} transparent />
       <Html position={fit.region.anchor} center zIndexRange={[30, 0]} className="html-label">
         <div

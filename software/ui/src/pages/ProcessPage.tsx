@@ -2,7 +2,8 @@
  * The processing studio of one scan (`#/projects/:pid/scans/:sid/process`, APP_API.md "M3
  * phase 2"). Left: the stages (Track, Straighten, Fuse), the edits and their history with undo /
  * redo. Middle: the 3D view with selection tools (box, lasso, brush, connected) and overlays
- * (holes, trajectory, before / after). Right: the mesh in numbers, downloads and recipes.
+ * (holes, trajectory, before / after). Right: the mesh in numbers, the Check panel (which areas miss
+ * the tolerance the part needs), downloads and recipes.
  *
  * The mesh is downloaded again whenever `current.version` changes; the camera stays where it is.
  */
@@ -56,6 +57,7 @@ import { toast } from "../store/toasts";
 import { sigmaOf } from "../three/confidence";
 import { cvToThree } from "../three/coords";
 import { viewBus } from "../three/viewBus";
+import { Panel } from "./process/bits";
 import { EditsPanel, type EditTab } from "./process/EditsPanel";
 import { HistoryPanel } from "./process/HistoryPanel";
 import { useVersionedMesh, type LoadedMesh } from "./process/mesh";
@@ -63,8 +65,10 @@ import { ProcessCanvas, type CompareMode, type SelectTool } from "./process/Proc
 import { RecipesPanel } from "./process/RecipesPanel";
 import { StagesPanel } from "./process/StagesPanel";
 import { DownloadPanel, StatsPanel } from "./process/StatsPanel";
+import { CHECK_ICON, CheckPanel } from "./viewer/CheckPanel";
 import { ConfidenceLegend } from "./viewer/ConfidenceLegend";
 import { DeviationLegend } from "./viewer/DeviationLegend";
+import { useCheck } from "./viewer/useCheck";
 import { useDeviation } from "./viewer/useDeviation";
 import type { Shading } from "./viewer/ViewerCanvas";
 
@@ -206,6 +210,9 @@ export default function ProcessPage({ pid, sid }: { pid: string; sid: string }) 
   const dev = useDeviation(pid, sid, comparing ? null : (mesh?.geometry ?? null), mesh?.version ?? null, devOn && !comparing);
   const shownShading: Shading =
     shading === "deviation" ? (devOn && !comparing && dev.phase === "ready" ? "deviation" : "clay") : shading === "confidence" && !hasSigma ? "clay" : shading;
+  // Check works on the current mesh; when the engine has a newer one, its state is read again and the mesh follows
+  const refreshState = useCallback(() => void useProcess.getState().fetch(pid, sid), [pid, sid]);
+  const check = useCheck(pid, sid, mesh?.geometry ?? null, mesh?.version ?? null, refreshState);
 
   // A new version (an edit, undo or redo) brings a new, empty selection. Say so when that drops
   // faces the user had selected, unless Delete or Keep used them.
@@ -479,6 +486,31 @@ export default function ProcessPage({ pid, sid }: { pid: string; sid: string }) 
   const details = (
     <>
       <StatsPanel stats={stats} loading={(!state && !entry?.error && !projectError) || (!!state?.current && !stats)} />
+      {state?.current ? (
+        <Panel title="Check" icon={CHECK_ICON}>
+          <CheckPanel
+            check={check}
+            ready={!!mesh}
+            hasSigma={hasSigma}
+            remake={scan ? <MakeMeshButton projectId={pid} scan={scan} label="Make the mesh again" /> : undefined}
+            holes={
+              stats?.holes
+                ? {
+                    count: stats.holes,
+                    action:
+                      showHoles || tab === "holes" ? (
+                        "Their edges are drawn on the mesh."
+                      ) : (
+                        <Button size="xs" icon={CircleDashed} onClick={() => setShowHoles(true)}>
+                          Show them on the mesh
+                        </Button>
+                      ),
+                  }
+                : null
+            }
+          />
+        </Panel>
+      ) : null}
       <DownloadPanel pid={pid} sid={sid} stem={stem} ready={!!state?.current} />
       {state ? <RecipesPanel pid={pid} sid={sid} state={state} busy={busy} /> : null}
       <div className="space-y-1.5 px-4 py-3 text-[11px] leading-5 text-subtle">
@@ -604,6 +636,7 @@ export default function ProcessPage({ pid, sid }: { pid: string; sid: string }) 
               holes={holesWanted ? holes.data : null}
               fillUpTo={tab === "holes" ? fillMm : null}
               trajectory={showTraj ? traj.data : null}
+              checkLit={check.lit}
               tool={tool}
               through={through}
               brushRadius={brush}

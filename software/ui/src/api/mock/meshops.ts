@@ -787,29 +787,37 @@ export function deleteFaces(m: TriMesh, faces: Uint32Array, keepThem: boolean): 
 }
 
 // ------------------------------------------------------------------ files
-/** Binary PLY (float x y z nx ny nz; uchar int face lists), its header padded so the vertices start 4-byte aligned. */
-export function encodePly(m: TriMesh): ArrayBuffer {
+/**
+ * Binary PLY (float x y z nx ny nz; uchar int face lists), its header padded so the vertices start 4-byte
+ * aligned. With `sigma` (one value per vertex, mm) each vertex also gets a float `quality`, where the
+ * engine writes its sigma.
+ */
+export function encodePly(m: TriMesh, sigma: Float32Array | null = null): ArrayBuffer {
   const V = m.positions.length / 3;
   const F = m.indices.length / 3;
+  const q = sigma && sigma.length === V ? sigma : null;
+  const n = q ? 7 : 6; // floats per vertex
   const head = (pad: string) =>
     `ply\nformat binary_little_endian 1.0\ncomment OpenHandScan demo engine (mm)${pad}\n` +
     `element vertex ${V}\nproperty float x\nproperty float y\nproperty float z\nproperty float nx\nproperty float ny\nproperty float nz\n` +
+    (q ? "property float quality\n" : "") +
     `element face ${F}\nproperty list uchar int vertex_indices\nend_header\n`;
   const enc = new TextEncoder();
   const hb = enc.encode(head(" ".repeat((4 - (enc.encode(head("")).length % 4)) % 4)));
-  const buf = new ArrayBuffer(hb.length + V * 24 + F * 13);
+  const buf = new ArrayBuffer(hb.length + V * n * 4 + F * 13);
   new Uint8Array(buf).set(hb);
-  const vf = new Float32Array(buf, hb.length, V * 6);
+  const vf = new Float32Array(buf, hb.length, V * n);
   for (let v = 0; v < V; v++) {
-    vf[v * 6] = m.positions[v * 3];
-    vf[v * 6 + 1] = m.positions[v * 3 + 1];
-    vf[v * 6 + 2] = m.positions[v * 3 + 2];
-    vf[v * 6 + 3] = m.normals[v * 3];
-    vf[v * 6 + 4] = m.normals[v * 3 + 1];
-    vf[v * 6 + 5] = m.normals[v * 3 + 2];
+    vf[v * n] = m.positions[v * 3];
+    vf[v * n + 1] = m.positions[v * 3 + 1];
+    vf[v * n + 2] = m.positions[v * 3 + 2];
+    vf[v * n + 3] = m.normals[v * 3];
+    vf[v * n + 4] = m.normals[v * 3 + 1];
+    vf[v * n + 5] = m.normals[v * 3 + 2];
+    if (q) vf[v * n + 6] = q[v];
   }
   const dv = new DataView(buf);
-  let o = hb.length + V * 24;
+  let o = hb.length + V * n * 4;
   const I = m.indices;
   for (let f = 0; f < F; f++) {
     dv.setUint8(o, 3);

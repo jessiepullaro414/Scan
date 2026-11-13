@@ -651,3 +651,33 @@ export type DeviationInfo = {
 
 /** The deviation of the current mesh: one signed move in mm per vertex (NaN = new surface), in the PLY's order. */
 export type Deviation = { info: DeviationInfo; values: Float32Array };
+
+// ------------------------------------------------------------------ M5 third slice: areas that need another pass
+// APP_API.md "M5 third slice: areas that need another pass". Works on the scan's current mesh.
+
+export type CheckKind = "uncertain" | "not_measured"; // 2 sigma above the tolerance | made up by hole filling (or no sigma there)
+export type CheckArea = {
+  kind: CheckKind;
+  area_mm2: number;
+  share: number; // of the whole surface, 0..1
+  center: [number, number, number]; // area-weighted, mm
+  extent_mm: number; // largest side of its bounding box
+  radius_mm: number; // farthest vertex from the centre
+  n_faces: number;
+  sigma_median_mm: number | null; // over its measured vertices (null when it has none)
+  sigma_worst_mm: number | null;
+  faces: string; // base64 of little-endian uint32 face indices of result/mesh.ply, sorted
+};
+export type CheckResult = {
+  version: number; // the mesh version it was made on
+  tolerance_mm: number;
+  k: number; // 2: a face fails when k x the mean sigma of its vertices is above the tolerance
+  has_sigma: boolean; // false: this mesh has no confidence values (made without a GPU)
+  area_mm2: number; // the whole surface
+  min_area_mm2: number; // smaller areas are not listed (they still count in the shares)
+  share_ok: number | null; // null when has_sigma is false (and for an empty mesh)
+  share_uncertain: number | null;
+  share_not_measured: number | null; // null for an empty mesh only
+  n_areas: number; // all areas above the minimum
+  areas: CheckArea[]; // largest first, at most 50
+};

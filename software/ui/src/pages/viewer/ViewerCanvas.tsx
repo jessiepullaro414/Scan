@@ -1,8 +1,8 @@
 /**
  * The result viewer's 3D view: the processed mesh (clay matcap, studio PBR, normals or the
  * confidence map with the sigma under the cursor, the deviation map with the move under it), an optional wireframe overlay and laser point
- * cloud, the two-click distance tool and the fitted shapes (FitTool.tsx). Renders on demand (no work
- * while the view is still).
+ * cloud, the two-click distance tool, the fitted shapes (FitTool.tsx) and the Check panel's picked area
+ * (CheckMark.tsx). Renders on demand (no work while the view is still).
  */
 import { Bvh, Html, Line, OrbitControls } from "@react-three/drei";
 import { Canvas, useThree } from "@react-three/fiber";
@@ -32,8 +32,10 @@ import { CV_TO_THREE_ROTATION, cvToThree } from "../../three/coords";
 import { applyDeviationColors, deviationOf } from "../../three/deviation";
 import { clayMatcap } from "../../three/materials";
 import { AxisGizmo, SceneGrid, StudioEnvironment, StudioLights, useThemeColors } from "../../three/Studio";
+import { CheckMark } from "./CheckMark";
 import { FitTool, type FitItem } from "./FitTool";
 import { useSurfacePick } from "./picking";
+import type { CheckLit } from "./useCheck";
 
 export type Shading = "clay" | "studio" | "normals" | "confidence" | "deviation";
 export type Vec3 = [number, number, number];
@@ -331,6 +333,7 @@ export function ViewerCanvas({
   fitBusy,
   pickedFits,
   onFitPick,
+  checkLit,
   frameKey,
 }: {
   geometry: BufferGeometry;
@@ -349,6 +352,8 @@ export function ViewerCanvas({
   fitBusy: { p: Vec3; kind: FitKind } | null;
   pickedFits: number[];
   onFitPick: (p: Vec3, face: number) => void;
+  /** The area of the Check panel lit on this mesh, if any. */
+  checkLit: CheckLit | null;
   frameKey: number;
 }) {
   const meshRef = useRef<Mesh | null>(null);
@@ -397,6 +402,7 @@ export function ViewerCanvas({
           {moves ? <DeviationProbe target={meshRef} values={moves} /> : null}
           <MeasureTool enabled={measure} target={meshRef} onPick={onPick} pending={pending} measurements={measurements} markerRadius={markerRadius} />
           <FitTool enabled={fit} busy={fitBusy} target={meshRef} geometry={geometry} fits={fits} picked={pickedFits} markerRadius={markerRadius} onPick={onFitPick} />
+          {checkLit ? <CheckMark lit={checkLit} geometry={geometry} /> : null}
         </group>
         <SceneGrid y={bounds.gridY} />
         <AxisGizmo margin={[62, 62]} />

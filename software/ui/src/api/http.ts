@@ -10,6 +10,7 @@ import type {
   CalibSession,
   CameraSettingsBody,
   CaptureReply,
+  CheckResult,
   ConnectBody,
   DeviceState,
   Deviation,
@@ -284,6 +285,14 @@ export const api = {
    * for a face outside the mesh or when no such shape is there (the detail says why, the hint what to
    * try). `faces` stays base64: decode it once with `decodeFaces` (lib/fits.ts). */
   fit: (pid: string, sid: string, body: FitRequest) => post<FitResult>(`${scanPath(pid, sid)}/fit`, body),
+
+  // ---------------------------------------------------------------- M5: areas that need another pass
+  /** Which parts of the current mesh miss a tolerance (above 0, at most 100 mm): the share of the surface
+   * that meets it and the areas that don't, largest first (read-only, about half a second on 2M triangles).
+   * 409 before there is a mesh, 422 for a bad tolerance. `has_sigma` false: the mesh has no confidence
+   * values, so there is nothing to check against. Each area's `faces` stays base64: decode the ones that
+   * are shown with `decodeFaces` (lib/fits.ts). */
+  check: (pid: string, sid: string, tolerance_mm: number) => post<CheckResult>(`${scanPath(pid, sid)}/check`, { tolerance_mm }),
 
   /** Built-ins first. */
   recipes: () => get<Recipe[]>("/api/recipes"),

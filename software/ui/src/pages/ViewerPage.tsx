@@ -2,8 +2,8 @@
  * Scan result viewer: loads `mesh.ply` from the engine (the fast PLY reader), studio shading,
  * wireframe, normals, the confidence map (each point's sigma, when the mesh has them) and
  * laser-point overlays, two-click distance measurement, fitted shapes (plane, cylinder, hole: one
- * click, the engine fits it, with its ± and the relation of two fits), bounding box in mm, downloads
- * and the processing report.
+ * click, the engine fits it, with its ± and the relation of two fits), the Check panel (which areas
+ * miss the tolerance the part needs), bounding box in mm, downloads and the processing report.
  */
 import {
   ArrowLeft,
@@ -51,8 +51,10 @@ import { toast } from "../store/toasts";
 import { sigmaOf } from "../three/confidence";
 import { disposeMeshGeometry, plyGeometry, readPly } from "../three/ply";
 import { viewBus } from "../three/viewBus";
+import { CHECK_ICON, CheckPanel } from "./viewer/CheckPanel";
 import { ConfidenceLegend } from "./viewer/ConfidenceLegend";
 import { DeviationLegend } from "./viewer/DeviationLegend";
+import { useCheck } from "./viewer/useCheck";
 import { useDeviation } from "./viewer/useDeviation";
 import { FIT_ICON, FitList } from "./viewer/FitsPanel";
 import type { FitItem } from "./viewer/FitTool";
@@ -485,6 +487,9 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
   const devOn = shading === "deviation" && devEnabled;
   const meshVersion = typeof geometry?.userData.meshVersion === "number" ? (geometry.userData.meshVersion as number) : null;
   const dev = useDeviation(pid, sid, geometry, meshVersion, devOn);
+  const check = useCheck(pid, sid, geometry, meshVersion, reloadInPlace);
+  // open holes: the count in the mesh's numbers, which this page reads with the mesh version
+  const openHoles = useProcess((s) => s.entries[processKey(pid, sid)]?.state?.current?.stats.holes ?? null);
   const shown: Shading =
     shading === "deviation" ? (devOn && dev.phase === "ready" ? "deviation" : "clay") : shading === "confidence" && !hasSigma ? "clay" : shading;
   const box = geometry?.boundingBox ?? null;
@@ -616,6 +621,7 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
               fitBusy={fitBusy}
               pickedFits={pickedFits}
               onFitPick={onFitPick}
+              checkLit={check.lit}
               frameKey={frameKey}
             />
           </ErrorBoundary>
@@ -906,6 +912,29 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
             ready={!!geometry}
           />
         </Panel>
+
+        {hasResult ? (
+          <Panel title="Check" icon={CHECK_ICON}>
+            <CheckPanel
+              check={check}
+              ready={!!geometry}
+              hasSigma={hasSigma}
+              remake={project && scan ? <MakeMeshButton projectId={project.id} scan={scan} label="Make the mesh again" /> : undefined}
+              holes={
+                openHoles
+                  ? {
+                      count: openHoles,
+                      action: (
+                        <Button size="xs" icon={SlidersHorizontal} onClick={() => navigate(paths.process(pid, sid))}>
+                          See them in Process
+                        </Button>
+                      ),
+                    }
+                  : null
+              }
+            />
+          </Panel>
+        ) : null}
 
         {hasResult && project && scan ? (
           <Panel title="Fine-tune" icon={SlidersHorizontal}>

@@ -12,6 +12,7 @@
  * It also makes the camera trajectory, with drift, its straightened twin and the loop closures.
  * Everything is in the scan's world frame (the first camera frame), like the engine's files.
  */
+import { madeUpSigma, type SigmaScene } from "./check";
 import type { TriMesh, Work } from "./meshops";
 import { compact, withNormals } from "./meshops";
 import { apply, invert, rng, SCENE, trajectory, type Pose, type V3 } from "./geom";
@@ -78,6 +79,41 @@ function inHole(x: number, y: number, z: number): boolean {
     if (dx * dx + dy * dy + dz * dz < 1) return true;
   }
   return false;
+}
+
+/**
+ * Where the demo scan is less sure of itself (scene frame): around every place the scanner never saw
+ * (inside one nothing was measured, so a vertex there was made by hole filling), and two places it
+ * saw badly: the sphere's flank down at the table, and a stretch of table seen at a flat angle.
+ */
+const SIGMA_SCENE: SigmaScene = {
+  spots: [
+    ...HOLES.map((h) => ({ c: h.c, r: h.r, gain: 0.3, none: true })),
+    { c: [-38, -12, -37], r: [16, 9, 6], gain: 0.2 },
+    { c: [38, 0, -66], r: [20, 3, 11], gain: 0.14 },
+  ],
+  centre: [2, 0],
+  half: [178, 134],
+};
+
+/**
+ * A made-up sigma (mm) for each vertex of a demo mesh (world frame), from where it lies in the scene
+ * (check.ts `madeUpSigma`): the demo engine measures nothing, but the confidence map and Check need one.
+ */
+export function mockSigma(m: TriMesh): Float32Array {
+  const P = m.positions;
+  const { R, t } = T_WS;
+  const scene = new Float32Array(P.length);
+  for (let i = 0; i < P.length; i += 3) {
+    // the scene frame from the world frame: R^T (p - t)
+    const x = P[i] - t[0],
+      y = P[i + 1] - t[1],
+      z = P[i + 2] - t[2];
+    scene[i] = R[0] * x + R[3] * y + R[6] * z;
+    scene[i + 1] = R[1] * x + R[4] * y + R[7] * z;
+    scene[i + 2] = R[2] * x + R[5] * y + R[8] * z;
+  }
+  return madeUpSigma(scene, SIGMA_SCENE);
 }
 
 // ------------------------------------------------------------------ surface nets
