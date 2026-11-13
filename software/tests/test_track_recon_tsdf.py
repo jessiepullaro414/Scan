@@ -183,9 +183,9 @@ def test_gap_guard_mask_and_its_gpu_twin():
     lone = np.full((H, W), 300.0, np.float32)
     lone[rng.random(lone.shape) < 0.03] = 0.0
     assert not gap_guard_mask(lone, 8.0).any()  # no patch anywhere
-    # off unless asked for; None asks for the measured radius, 8 px at 1280 px width
-    assert GUARD_PX_1280 == 8.0 and volume("cpu").gap_guard_px == 0.0
-    assert volume("cpu", gap_guard_px=None).gap_guard_px == pytest.approx(8.0 * W / 1280.0)
+    # on by default, with the measured radius: 8 px at 1280 px width; 0 turns it off
+    assert GUARD_PX_1280 == 8.0 and volume("cpu").gap_guard_px == pytest.approx(8.0 * W / 1280.0)
+    assert volume("cpu", gap_guard_px=0.0).gap_guard_px == 0.0
     if compute.get_device() is None:
         return
     for r in (2.0, 2.5, 8.0, 0.0):

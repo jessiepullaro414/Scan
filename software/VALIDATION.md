@@ -951,7 +951,7 @@ Scripts and tables: scratchpad `m5v\check\` (`partA_tables.md`, `partB_tables.md
 
 ## Holes filled in: the cause, and fixes tried (2026-11-12)
 
-A study with prototypes outside the repository. Since 2026-11-13 the guard it recommends is in the engine, **off by default** ("The gap guard in the engine" at the end of this section).
+A study with prototypes outside the repository. Since 2026-11-13 the guard it recommends is in the engine and **on by default** ("The gap guard in the engine" at the end of this section).
 
 **In short:**
 - **The fill is the stereo matcher's, all of it.** Its windows spread the panel's depth into a hole whose background it cannot see. The fusion adds nothing: fused from true depth, the same hole fits Ø 26.17 (truth 25.20).
@@ -1029,7 +1029,7 @@ A study with prototypes outside the repository. Since 2026-11-13 the guard it re
 
 Scripts, diffs and tables: scratchpad `holes\` (`RESULTS.md`, `proto_*.diff`, `res\`).
 
-**The gap guard in the engine (2026-11-13).** The guard on the fused depth is now built into the reconstruction (`ohs/track/recon_tsdf.py`, "The gap guard"; `PipelineParams.gap_guard_px`), on the GPU, in the numpy twin and for the Open3D reconstruction. **It is off by default**: on more tracked scans it opens the holes every time, but on a small part with many edges it costs more with tracking than was known, and that is a choice to make, not a detail.
+**The gap guard in the engine (2026-11-13).** The guard on the fused depth is now built into the reconstruction (`ohs/track/recon_tsdf.py`, "The gap guard"; `PipelineParams.gap_guard_px`), on the GPU, in the numpy twin and for the Open3D reconstruction. On more tracked scans it opens the holes every time, but on a small part with many edges it costs more with tracking than was known. It was first committed switched off; **it is on by default since the user's decision of 2026-11-13** (holes are what car parts are mounted by), and `gap_guard_px=0` turns it off.
 
 How it was checked: 16 simulated recordings (car panel and bracket, seeds 0–4; the plate 120 mm and 10 mm above the floor, seeds 0–2), Standard quality. Each was tracked once and then fused four times: at that same tracked trajectory and at the true poses, with the guard off and on. So off and on differ in nothing but the guard.
 
@@ -1056,7 +1056,8 @@ How it was checked: 16 simulated recordings (car panel and bracket, seeds 0–4;
 - **The floor and the flat surface get better** everywhere (floor error 95 %: 0.29 → 0.23 mm at true poses, 0.36 → 0.28 mm tracked).
 - **The cost is on the bracket with tracking:** less of the part is covered, its worst errors grow, and the bosses read 0.01–0.27 mm larger than without the guard. The likely reason: a voxel next to a gap keeps only the frames in which it was away from the gap, so fewer frames average out the tracking error there.
 - **The sigma with the guard:** counted on the depth as the matcher made it, the "observations next to missing depth" all but vanish with the guard on, and 2σ then covered only 90–94 % (first run, car panel). The count now treats what the guard drops as missing. With that, 2σ covers 96.5–96.8 % (tracked) and 97.7–97.9 % (true poses) of the car-panel scans, as without the guard, and 95.8–96.8 % and 98.0–98.3 % of the bracket's. On the bracket's small faces with tracking it covers less than without the guard (upright 70–100 % against 79–100 %, base 89–96 % against 91–99 %), and the panel's outer edge and rim 77–81 % against 84–89 %.
-- **Speed:** a frame takes 1.2 to 1.6 ms longer with the guard on (median over the 16 recordings: 91.6 → 92.8 ms tracked poses, 90.4 → 92.0 ms true poses). Off, nothing changes: the same vertices and the same sigma as before.
+- **Speed:** a frame takes 1.2 to 1.6 ms longer with the guard on (median over the 16 recordings: 91.6 → 92.8 ms tracked poses, 90.4 → 92.0 ms true poses). Switched off, a scan comes out as before the guard: the same vertices and the same sigma.
+- **The CPU path** (the Open3D reconstruction, which gets its depth guarded; one car-panel and one bracket scan at true poses): the car panel's error falls from 0.129 / 2.53 to 0.111 / 1.91 mm (median / 95 %), but its hole still fails to fit (the CPU matcher fills further in than 8 px); the bracket's object error falls from 0.149 / 2.0 to 0.128 / 0.57 mm and its shaft reads +0.09 mm instead of +0.39 mm, with 3.7 points less coverage (95.5 → 91.8 %). A frame takes 13 ms longer there (157 → 170 ms).
 - **An idea not tried:** decide per voxel instead of per pixel. A filled-in voxel is next to a gap in every frame that sees it; real surface next to a moving shadow is also seen away from one. Keeping every observation of a voxel that was seen away from a gap a few times should keep the bracket's coverage and still open the holes. It needs two more values per voxel and its own check.
 
 Scripts and rows: scratchpad `holes\` (`guard_ab.py`, `guard_ab_summary.py`, `res\guard_ab.jsonl`).
@@ -1273,10 +1274,13 @@ Scripts, the diff and tables: scratchpad `sigma\` (`RESULTS.md`, `proto_sigma_v2
 - Mesh p95 is 0.7-1.2 mm, from TSDF artefacts at grazing angles, depth edges and the depth-range
   cut-off. The laser cloud, at 0.07 mm median, is the more accurate surface sample. It is exported
   separately and is not yet used to refine the mesh.
-- **Holes are filled in** (found 2026-11-12, "Fitted shapes against the truth"): where the
+- **Small holes are filled in** (found 2026-11-12, "Fitted shapes against the truth"): where the
   background behind a hole is far away, the stereo depth carries the surface 1-3 mm into the
-  hole, and the fused opening of a Ø 25 mm hole is Ø 12-14 mm. Holes cannot be measured from the
-  mesh yet. The cause and a candidate fix are in "Holes filled in: the cause, and fixes tried";
-  holes of Ø 6-10 mm over a far, dark background stay closed with every fix tried.
+  hole. Since 2026-11-13 the gap guard keeps that depth out of the mesh ("The gap guard in the
+  engine"): a Ø 25 mm hole, which fused to an opening of Ø 12-14 mm, now fits 1 to 1.6 mm small
+  at true poses and 0.9 to 3 mm small with tracking. Holes of Ø 6-10 mm over a far, dark
+  background stay closed, and a hole 10 mm above its background still fails to fit. The guard's
+  price: on a small part with many edges, with tracking, 1-7 points less coverage and worst
+  errors 0.1-0.2 mm larger.
 - **Convex features are fattened:** a Ø 16 mm shaft reads 0.2 mm large at true poses and 1.1 mm
   large with tracking; a short boss's wall is wavy by ±0.3 mm.

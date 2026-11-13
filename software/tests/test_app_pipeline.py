@@ -353,8 +353,8 @@ def test_model_backends_per_model():
 
 # --------------------------------------------------------------------------- process_recording
 def test_gap_guard_reaches_the_reconstruction_only():
-    """The gap guard (depth next to a patch without depth is not fused) is off unless asked for, and it
-    is the reconstruction's: the confidence TSDF applies it itself, the Open3D reconstruction gets the
+    """The gap guard (depth next to a patch without depth is not fused) is on by default, and it is
+    the reconstruction's: the confidence TSDF applies it itself, the Open3D reconstruction gets the
     depth already guarded, and a model that also tracks keeps every pixel."""
     from ohs import compute
     from ohs.track.recon_tsdf import ConfidenceTsdf, gap_guard_mask
@@ -372,18 +372,18 @@ def test_gap_guard_reaches_the_reconstruction_only():
             pipe._fuse(d.copy(), np.eye(4), 0.0, {})
             return d, got["depth"], pipe.gap_guard_px, isinstance(pipe.markerless, ConfidenceTsdf), w
 
-    d, got, px, conf, w = fused_depth(PipelineParams(scale=0.5, use_lasers=False, recon="open3d", gap_guard_px=None))
+    d, got, px, conf, w = fused_depth(PipelineParams(scale=0.5, use_lasers=False, recon="open3d"))
     mask = gap_guard_mask(np.where((d >= 120.0) & (d <= 500.0), d, 0.0), px)
     assert not conf and px == pytest.approx(8.0 * w / 1280.0) and mask.sum() > 300
     assert np.all(got[mask] == 0.0) and np.array_equal(got[~mask], d[~mask])
-    d, got, px, conf, _ = fused_depth(PipelineParams(scale=0.5, use_lasers=False, recon="open3d"))
-    assert px == 0.0 and np.array_equal(got, d)  # the default: off
-    d, got, _, conf, _ = fused_depth(PipelineParams(scale=0.5, use_lasers=False, track_filter_px=0.0, gap_guard_px=None))
+    d, got, px, conf, _ = fused_depth(PipelineParams(scale=0.5, use_lasers=False, recon="open3d", gap_guard_px=0.0))
+    assert px == 0.0 and np.array_equal(got, d)  # turned off
+    d, got, _, conf, _ = fused_depth(PipelineParams(scale=0.5, use_lasers=False, track_filter_px=0.0))
     assert not conf and np.array_equal(got, d)  # the single model also tracks: untouched
     if compute.get_device() is not None:
-        with FramePipeline(calib, PipelineParams(scale=0.5, use_lasers=False, gap_guard_px=None)) as pipe:
+        with FramePipeline(calib, PipelineParams(scale=0.5, use_lasers=False)) as pipe:
             assert isinstance(pipe.markerless, ConfidenceTsdf) and pipe.markerless.gap_guard_px == pipe.gap_guard_px > 0
-        d, got, px, conf, _ = fused_depth(PipelineParams(scale=0.5, use_lasers=False, gap_guard_px=None))
+        d, got, px, conf, _ = fused_depth(PipelineParams(scale=0.5, use_lasers=False))
         assert conf and np.array_equal(got, d)  # the confidence TSDF guards inside
     with pytest.raises(ValueError):
         PipelineParams(gap_guard_px=-1.0)

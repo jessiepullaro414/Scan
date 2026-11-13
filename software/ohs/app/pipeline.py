@@ -301,9 +301,9 @@ class PipelineParams:
     # on a GPU, else Open3D; "confidence" also without a GPU (numpy, slow); "open3d" = no confidence
     recon: str = "auto"
     # the gap guard of the reconstruction (ohs.track.recon_tsdf, "The gap guard"): depth within this
-    # many px of a patch without depth is not fused, which keeps holes open; 0 -> off (the default:
-    # VALIDATION.md, "The gap guard in the engine"); None -> 8 px at 1280 px width
-    gap_guard_px: float | None = 0.0
+    # many px of a patch without depth is not fused, which keeps holes open (VALIDATION.md, "The gap
+    # guard in the engine"); None -> 8 px at 1280 px width (the default); 0 -> off
+    gap_guard_px: float | None = None
     # False: every frame comes with its pose (process(frame, pose)), so no tracking model is built
     tracking: bool = True
 

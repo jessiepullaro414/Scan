@@ -67,19 +67,18 @@ edges, where the error is a bias.
 in the fused range, searched up to 3 radii of the matcher's factor (15 px), as the GPU matcher
 measures it: two kernels (along the rows, then across them), or OpenCV's exact transform in numpy.
 
-**The gap guard** (off by default). Where nothing can be matched behind an edge (a hole whose background is dark,
+**The gap guard** (on by default). Where nothing can be matched behind an edge (a hole whose background is dark,
 unlit or seen by one camera only), the matcher's windows carry the near surface a few pixels into
 the gap, on every side, and fused from all round these fills close the hole: a 25 mm hole fused to
-an opening of 12-14 mm (``VALIDATION.md``, "Holes filled in"). With the guard on, depth within
-``gap_guard_px`` (8 px at 1280 px width) of a *patch* without depth is not fused
-(:func:`gap_guard_mask`). A pixel without
+an opening of 12-14 mm (``VALIDATION.md``, "Holes filled in"). So depth within ``gap_guard_px`` (8 px
+at 1280 px width) of a *patch* without depth is not fused (:func:`gap_guard_mask`). A pixel without
 depth belongs to a patch when at least 13 of the 5x5 around it have none either, so the single gaps
 between dots do not count. The guard works on the fused depth only: the tracker keeps every pixel
 (dropping them there moved the trajectory), and the bricks are searched on the whole depth. Its
 price is a thinner rim next to gaps: less of a steep side wall, and convex features 0.2-0.5 mm
 smaller in diameter; with tracking, a small part with many edges lost 1-7 points of its coverage
-and its worst errors grew by 0.1-0.2 mm, which is why it is not on by default (``VALIDATION.md``,
-"The gap guard in the engine"). For the sigma's count of observations "next to a pixel without depth"
+and its worst errors grew by 0.1-0.2 mm (``VALIDATION.md``, "The gap guard in the engine": the
+holes were judged worth it; ``gap_guard_px=0`` turns it off). For the sigma's count of observations "next to a pixel without depth"
 (``hnear``), what the guard drops counts as without depth: the count is about the depth that is
 fused. (The matcher's factor is taken out with the distance on the depth as the matcher made it.)
 
@@ -514,8 +513,8 @@ class ConfidenceTsdf:
         puts on the sigma of pixels next to missing depth, which is taken out again for the
         prediction of the scatter (default: the GPU matcher's, ``ohs.vision.depth.SIGMA_MODELS``).
     gap_guard_px:
-        The gap guard's radius (module docstring); 0 (the default): off; ``None``: 8 px at 1280 px
-        width, scaled with the width.
+        The gap guard's radius (module docstring); ``None`` (the default): 8 px at 1280 px width,
+        scaled with the width; 0: off.
     initial_bricks, max_bricks:
         Pool size at the start, and its limit (bricks beyond it are dropped, with a warning).
     """
@@ -523,7 +522,7 @@ class ConfidenceTsdf:
     def __init__(self, K: np.ndarray, image_size: tuple[int, int], voxel_mm: float = 1.0, trunc_mm: float = 4.0,
                  depth_min_mm: float = 120.0, depth_max_mm: float = 500.0, backend: str = "auto",
                  look_px: float | None = None, initial_bricks: int = 4096, max_bricks: int | None = None,
-                 hole_factor: tuple[float, float] | None = None, gap_guard_px: float | None = 0.0) -> None:
+                 hole_factor: tuple[float, float] | None = None, gap_guard_px: float | None = None) -> None:
         self.K = np.asarray(K, dtype=np.float64).reshape(3, 3).copy()
         self.image_size = (int(image_size[0]), int(image_size[1]))
         self.voxel_mm, self.trunc_mm = float(voxel_mm), float(trunc_mm)
