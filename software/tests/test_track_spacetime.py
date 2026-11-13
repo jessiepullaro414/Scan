@@ -19,7 +19,7 @@ from ohs.app.process import ProcessParams, process_recording
 from ohs.compute import get_device
 from ohs.io.recording import RecordingReader
 from ohs.mesh.topology import vertex_normals
-from ohs.sim.datasets import make_scan_recording
+from recordings import scan_recording
 from ohs.track.export import load_ply
 from ohs.track.spacetime import (Patches, SpacetimeParams, frames_from_recording, make_patches, patch_costs, patch_views,
                                  project_onto_patches, refine_from_images, resolve_params)
@@ -62,7 +62,7 @@ def test_vertices_move_onto_the_patches_and_nowhere_else():
 def scan(tmp_path_factory):
     """A 16-frame full-resolution simulated scan of the sphere on the table, fused at the true poses."""
     root = tmp_path_factory.mktemp("spacetime")
-    rec = make_scan_recording(root / "rec", scene="sphere_on_plane", n_frames=16, image_size=(1280, 800), seed=4,
+    rec = scan_recording(root / "rec", scene="sphere_on_plane", n_frames=16, image_size=(1280, 800), seed=4,
                               depth_every=0)
     reader = RecordingReader(rec)
     gt = reader.ground_truth_poses()

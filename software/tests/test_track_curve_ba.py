@@ -14,7 +14,7 @@ import pytest
 
 from ohs.geometry import invert_se3
 from ohs.io.recording import RecordingReader
-from ohs.sim.datasets import make_scan_recording
+from recordings import scan_recording
 from ohs.sim.nominal import NOMINAL_TIME_OFFSET, nominal_calibration
 from ohs.sim.scene import make_scene
 from ohs.sim.trajectory import HandheldTrajectory, add_drift
@@ -28,7 +28,7 @@ def orbit(tmp_path_factory):
     t0 = 100.0 + NOMINAL_TIME_OFFSET
     traj = HandheldTrajectory(target=sc.target, t0=t0, duration=12.0, seed=7, baseline=calib.stereo.baseline,
                               distance=(220.0, 300.0), elevation_deg=(35.0, 65.0), sweep_deg_s=400.0 / 12.0)
-    return make_scan_recording(tmp_path_factory.mktemp("cba") / "rec", scene="sphere_on_plane", n_frames=60, fps=5.0,
+    return scan_recording(tmp_path_factory.mktemp("cba") / "rec", scene="sphere_on_plane", n_frames=60, fps=5.0,
                                image_size=(640, 400), realistic=True, trajectory=traj, depth_every=0, seed=7)
 
 

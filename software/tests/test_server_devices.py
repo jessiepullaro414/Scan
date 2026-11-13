@@ -26,12 +26,12 @@ from ohs.io.recording import RecordingReader  # noqa: E402
 from ohs.server.devices import ReplayFeed  # noqa: E402
 from ohs.server.protocol import ApiError  # noqa: E402
 from ohs.server.studio import Studio  # noqa: E402
-from ohs.sim.datasets import make_scan_recording  # noqa: E402
+from recordings import scan_recording  # noqa: E402
 
 
 @pytest.fixture(scope="module")
 def sim_rec(tmp_path_factory) -> Path:
-    return make_scan_recording(tmp_path_factory.mktemp("devrec") / "rec", n_frames=3, image_size=(640, 400), seed=5,
+    return scan_recording(tmp_path_factory.mktemp("devrec") / "rec", n_frames=3, image_size=(640, 400), seed=5,
                                depth_every=0)
 
 

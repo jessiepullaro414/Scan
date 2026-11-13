@@ -26,7 +26,7 @@ from ohs.app.pipeline import (  # noqa: E402
 )
 from ohs.app.process import ProcessParams, process_recording, trajectory_errors  # noqa: E402
 from ohs.io.recording import RecordingReader  # noqa: E402
-from ohs.sim.datasets import make_scan_recording  # noqa: E402
+from recordings import scan_recording  # noqa: E402
 from ohs.sim.nominal import nominal_calibration  # noqa: E402
 from ohs.track.markerless import FusionParams  # noqa: E402
 from ohs.types import ScannerCalibration, StereoFrame  # noqa: E402
@@ -38,7 +38,7 @@ N = 8
 
 @pytest.fixture(scope="module")
 def rec(tmp_path_factory) -> Path:
-    return make_scan_recording(tmp_path_factory.mktemp("pipe") / "rec", n_frames=N, image_size=(640, 400),
+    return scan_recording(tmp_path_factory.mktemp("pipe") / "rec", n_frames=N, image_size=(640, 400),
                                realistic=True, seed=4, depth_every=0)
 
 

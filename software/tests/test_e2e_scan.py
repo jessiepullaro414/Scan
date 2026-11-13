@@ -30,7 +30,7 @@ from ohs import geometry as G  # noqa: E402
 from ohs.app.pipeline import PipelineParams  # noqa: E402
 from ohs.app.process import ProcessParams, process_recording  # noqa: E402
 from ohs.io.recording import RecordingReader  # noqa: E402
-from ohs.sim.datasets import make_scan_recording  # noqa: E402
+from recordings import scan_recording as cached_scan_recording  # noqa: E402
 from ohs.sim.scene import make_scene  # noqa: E402
 from ohs.track.export import load_mesh, load_ply  # noqa: E402
 
@@ -42,7 +42,8 @@ def metrics(name: str, **values: object) -> None:
 
 def scan_recording(path: Path, scene: str, n_frames: int, size: tuple[int, int], seed: int = 0, realistic: bool = True) -> Path:
     if not (Path(path) / "frames.csv").exists():
-        make_scan_recording(path, scene=scene, n_frames=n_frames, image_size=size, realistic=realistic, depth_every=0, seed=seed)
+        cached_scan_recording(path, scene=scene, n_frames=n_frames, image_size=size, realistic=realistic, depth_every=0,
+                              seed=seed)
     return Path(path)
 
 

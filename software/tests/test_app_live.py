@@ -416,9 +416,9 @@ def _isolated_home(tmp_path, monkeypatch):
 
 @pytest.fixture(scope="module")
 def sim_rec(tmp_path_factory) -> Path:
-    from ohs.sim.datasets import make_scan_recording
+    from recordings import scan_recording
 
-    return make_scan_recording(tmp_path_factory.mktemp("sim") / "rec", n_frames=10, image_size=(160, 100), depth_every=0)
+    return scan_recording(tmp_path_factory.mktemp("sim") / "rec", n_frames=10, image_size=(160, 100), depth_every=0)
 
 
 @pytest.fixture
@@ -813,10 +813,10 @@ def _f2_available() -> bool:
 
 @pytest.mark.skipif(not _f2_available(), reason="F2's pipeline / process / calib_flow modules are not available")
 def test_f2_smoke_scan_replay_then_process(tmp_path, capsys):
-    from ohs.sim.datasets import make_scan_recording
+    from recordings import scan_recording
 
     pytest.importorskip("open3d")
-    src = make_scan_recording(tmp_path / "src", n_frames=8, image_size=(320, 200), depth_every=0)
+    src = scan_recording(tmp_path / "src", n_frames=8, image_size=(320, 200), depth_every=0)
     out = tmp_path / "scan"
     rc = cli.main(["scan", "--replay", str(src), "--no-pico", "--no-gui", "--max-frames", "6", "--out", str(out), "--process"])
     assert rc == 0
@@ -836,7 +836,9 @@ def test_f2_smoke_calibrate_stereo_from_a_board_recording(tmp_path, capsys):
     from ohs.io.recording import RecordingWriter
     from ohs.sim.datasets import make_stereo_calib_set
 
-    pairs, true, spec = make_stereo_calib_set(n_views=6, image_size=(1280, 800), realistic=True)
+    from recordings import cached_result
+
+    pairs, true, spec = cached_result(make_stereo_calib_set, n_views=6, image_size=(1280, 800), realistic=True)
     rec = tmp_path / "board"
     with RecordingWriter(rec, source="sim", purpose="calib_stereo") as w:
         for i, (left, right) in enumerate(pairs):

@@ -7,7 +7,7 @@ import pytest
 from ohs import compute
 from ohs.app.pipeline import FramePipeline, PipelineParams, tracking_depth
 from ohs.io.recording import RecordingReader
-from ohs.sim.datasets import make_scan_recording
+from recordings import scan_recording
 from ohs.sim.nominal import nominal_calibration
 from ohs.track.filter_gpu import TrackingFilterGpu
 
@@ -81,7 +81,7 @@ def test_start_and_finish_give_the_same_map(dev):
 def test_the_pipeline_tracks_on_the_filter_of_its_depth(dev, tmp_path):
     """What the tracker gets for a frame is the GPU filter of that frame's depth map, bit for bit,
     however the pipeline hands the map to the filter."""
-    rec = make_scan_recording(tmp_path / "rec", n_frames=4, image_size=(640, 400), realistic=True, seed=4,
+    rec = scan_recording(tmp_path / "rec", n_frames=4, image_size=(640, 400), realistic=True, seed=4,
                               depth_every=0)
     reader = RecordingReader(rec)
     with FramePipeline(reader.calibration()) as p:

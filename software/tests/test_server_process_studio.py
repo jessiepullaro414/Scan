@@ -38,7 +38,7 @@ from ohs.io.recording import RecordingReader  # noqa: E402
 from ohs.server.app import create_app  # noqa: E402
 from ohs.server.processing import read_trajectory  # noqa: E402
 from ohs.server.testing import ServerThread, recv_until  # noqa: E402
-from ohs.sim.datasets import make_scan_recording  # noqa: E402
+from recordings import scan_recording  # noqa: E402
 from ohs.track.export import load_ply  # noqa: E402
 
 T = 30  # HTTP timeout
@@ -47,7 +47,7 @@ T = 30  # HTTP timeout
 @pytest.fixture(scope="module")
 def env(tmp_path_factory):
     root = tmp_path_factory.mktemp("studio")
-    rec = make_scan_recording(root / "rec", n_frames=10, image_size=(640, 400), seed=3, depth_every=0)
+    rec = scan_recording(root / "rec", n_frames=10, image_size=(640, 400), seed=3, depth_every=0)
     cfg = Config()
     cfg.paths.calibration = str(root / "no-calibration.json")
     app = create_app(cfg, projects_dir=root / "projects", demo_dir=root / "demo", static_dir=root / "static",
@@ -757,7 +757,7 @@ def test_refine_with_lasers(env):
     s = get(b + "/process").json()
     assert s["stages"]["refine"]["state"] == "none" and s["base"]["stage"] == "fuse"
     # a scan recorded without the lasers: nothing to refine with
-    rec = make_scan_recording(env["root"] / "rec-nolines", n_frames=6, image_size=(640, 400), seed=5, depth_every=0,
+    rec = scan_recording(env["root"] / "rec-nolines", n_frames=6, image_size=(640, 400), seed=5, depth_every=0,
                               lines=False)
     pid2, sid2 = add_scan(env, "No lasers", rec)
     b2 = base_url(env, pid2, sid2)
@@ -932,7 +932,7 @@ def orbit(tmp_path_factory) -> Path:
     traj = HandheldTrajectory(target=sc.target, t0=100.0 + NOMINAL_TIME_OFFSET, duration=dur, seed=3,
                               baseline=calib.stereo.baseline, distance=(200.0, 280.0), elevation_deg=(35.0, 65.0),
                               sweep_deg_s=ORBIT_DEG / dur)
-    return make_scan_recording(tmp_path_factory.mktemp("orbit") / "rec", scene="bracket", n_frames=ORBIT_FRAMES,
+    return scan_recording(tmp_path_factory.mktemp("orbit") / "rec", scene="bracket", n_frames=ORBIT_FRAMES,
                                fps=ORBIT_FPS, image_size=(640, 400), realistic=True, trajectory=traj, depth_every=0,
                                seed=3)
 

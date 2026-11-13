@@ -19,14 +19,14 @@ pytest.importorskip("open3d")
 from ohs.app.pipeline import PipelineParams  # noqa: E402
 from ohs.app.process import ProcessParams, cut_intervals, process_recording  # noqa: E402
 from ohs.io.recording import RecordingReader  # noqa: E402
-from ohs.sim.datasets import make_scan_recording  # noqa: E402
+from recordings import scan_recording  # noqa: E402
 
 PARAMS = ProcessParams(pipeline=PipelineParams(scale=0.5), export=("ply",))
 
 
 @pytest.fixture(scope="module")
 def rec(tmp_path_factory) -> Path:
-    return make_scan_recording(tmp_path_factory.mktemp("cuts") / "rec", n_frames=8, image_size=(640, 400), seed=3,
+    return scan_recording(tmp_path_factory.mktemp("cuts") / "rec", n_frames=8, image_size=(640, 400), seed=3,
                                depth_every=0)
 
 

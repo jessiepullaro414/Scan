@@ -92,9 +92,9 @@ def test_standard_frame_rate_setting(tmp_path):
 @pytest.fixture(scope="module")
 def rec60(tmp_path_factory) -> Path:
     pytest.importorskip("open3d")
-    from ohs.sim.datasets import make_scan_recording
+    from recordings import scan_recording
 
-    return make_scan_recording(tmp_path_factory.mktemp("q60") / "rec", n_frames=8, fps=60.0, image_size=(640, 400),
+    return scan_recording(tmp_path_factory.mktemp("q60") / "rec", n_frames=8, fps=60.0, image_size=(640, 400),
                                seed=2, depth_every=0)
 
 

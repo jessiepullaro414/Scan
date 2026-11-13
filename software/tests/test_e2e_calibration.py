@@ -27,6 +27,7 @@ from ohs.app.calib_flow import check_from_recording, imu_from_recording, lasers_
 from ohs.calib.board import CharucoSpec
 from ohs.io.recording import RecordingWriter
 from ohs.sim.datasets import make_laser_calib_set, make_stereo_calib_set
+from recordings import cached_recording, cached_result
 from ohs.sim.imu import ImuSimParams, synthesize_imu
 from ohs.sim.nominal import nominal_calibration, nominal_emitters
 from ohs.sim.render import Renderer, RenderParams
@@ -109,9 +110,8 @@ def plane_errors(est: dict, true: dict, R1_est: np.ndarray | None = None, R1_tru
     return out
 
 
-def make_imu_recording(path: Path, image_size=(1280, 800), spec: CharucoSpec = SPEC, seconds: float = 7.0,
-                       fps: float = 30.0, distance: float = 330.0, seed: int = 0, realistic: bool = True) -> tuple[Path, ScannerCalibration]:
-    """Board on a table, scanner held still and then rotated; frames + 416 Hz IMU as a recording."""
+def _render_imu_recording(path: Path, image_size=(1280, 800), spec: CharucoSpec = SPEC, seconds: float = 7.0,
+                          fps: float = 30.0, distance: float = 330.0, seed: int = 0, realistic: bool = True) -> None:
     calib = nominal_calibration(image_size, realistic=realistic)
     scene = charuco_board(None, **asdict(spec))
     to = float(calib.imu.time_offset)
@@ -131,7 +131,15 @@ def make_imu_recording(path: Path, image_size=(1280, 800), spec: CharucoSpec = S
         for i, T in enumerate(poses):
             left, right, _ = r.render(T)
             w.write_frame(StereoFrame(i, float(t_cam[i] + jitter[i]), left, right))
-    return path, calib
+
+
+def make_imu_recording(path: Path, image_size=(1280, 800), spec: CharucoSpec = SPEC, seconds: float = 7.0,
+                       fps: float = 30.0, distance: float = 330.0, seed: int = 0, realistic: bool = True) -> tuple[Path, ScannerCalibration]:
+    """Board on a table, scanner held still and then rotated; frames + 416 Hz IMU as a recording.
+    Rendered once, then from the tests' cache (``tests/recordings.py``)."""
+    cached_recording(path, _render_imu_recording, image_size=image_size, spec=spec, seconds=seconds, fps=fps, distance=distance,
+                     seed=seed, realistic=realistic)
+    return path, nominal_calibration(image_size, realistic=realistic)
 
 
 def imu_errors(est, true, R1_est=None, R1_true=None) -> dict:
@@ -146,14 +154,14 @@ def imu_errors(est, true, R1_est=None, R1_true=None) -> dict:
 # --------------------------------------------------------------------------- fixtures
 @pytest.fixture(scope="module")
 def stereo_small(tmp_path_factory):
-    pairs, calib, spec = make_stereo_calib_set(n_views=10, realistic=True, seed=3)
+    pairs, calib, spec = cached_result(make_stereo_calib_set, n_views=10, realistic=True, seed=3)
     rec = write_pairs(tmp_path_factory.mktemp("st") / "rec", pairs, purpose="stereo_calibration")
     return rec, calib, CharucoSpec(**spec)
 
 
 @pytest.fixture(scope="module")
 def laser_small(tmp_path_factory):
-    pairs, calib, poses, spec = make_laser_calib_set(n_views=6, realistic=False, seed=1)
+    pairs, calib, poses, spec = cached_result(make_laser_calib_set, n_views=6, realistic=False, seed=1)
     rec = write_pairs(tmp_path_factory.mktemp("la") / "rec", pairs, purpose="laser_calibration")
     return rec, calib, CharucoSpec(**spec)
 
@@ -257,13 +265,13 @@ def test_flows_reject_mismatched_recordings(laser_small, tmp_path):
 def full_chain(tmp_path_factory):
     """(a) stereo -> (b) lasers -> (c) IMU, each from its own simulated recording of one device."""
     root = tmp_path_factory.mktemp("chain")
-    pairs, true, spec = make_stereo_calib_set(n_views=20, realistic=True, seed=0)
+    pairs, true, spec = cached_result(make_stereo_calib_set, n_views=20, realistic=True, seed=0)
     spec = CharucoSpec(**spec)
     st_rec = write_pairs(root / "stereo", pairs, purpose="stereo_calibration")
     del pairs
     stereo, st_rep = stereo_from_recording(st_rec, spec)
     est = ScannerCalibration(stereo, {}, None)
-    lpairs, _, _, _ = make_laser_calib_set(n_views=8, realistic=True, seed=0)
+    lpairs, _, _, _ = cached_result(make_laser_calib_set, n_views=8, realistic=True, seed=0)
     la_rec = write_pairs(root / "lasers", lpairs, purpose="laser_calibration")
     del lpairs
     planes, la_rep = lasers_from_recording(la_rec, est, spec)

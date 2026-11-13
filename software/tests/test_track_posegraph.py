@@ -40,7 +40,7 @@ from ohs import compute  # noqa: E402
 from ohs.app.process import ProcessParams, _write_trajectory, process_recording  # noqa: E402
 from ohs.geometry import invert_se3, make_se3, pose_error, so3_exp  # noqa: E402
 from ohs.io.recording import RecordingReader  # noqa: E402
-from ohs.sim.datasets import make_scan_recording  # noqa: E402
+from recordings import scan_recording  # noqa: E402
 from ohs.sim.nominal import NOMINAL_TIME_OFFSET, nominal_calibration  # noqa: E402
 from ohs.sim.scene import make_scene  # noqa: E402
 from ohs.sim.trajectory import HandheldTrajectory, SweepTrajectory, add_drift, add_steady_drift, sample_frames  # noqa: E402
@@ -89,7 +89,7 @@ def orbit(tmp_path_factory) -> Path:
     dur = ORBIT_FRAMES / ORBIT_FPS
     traj = HandheldTrajectory(target=sc.target, t0=T_START, duration=dur, seed=3, baseline=calib.stereo.baseline,
                               distance=(200.0, 280.0), elevation_deg=(35.0, 65.0), sweep_deg_s=ORBIT_DEG / dur)
-    return make_scan_recording(tmp_path_factory.mktemp("orbit") / "rec", scene="bracket", n_frames=ORBIT_FRAMES,
+    return scan_recording(tmp_path_factory.mktemp("orbit") / "rec", scene="bracket", n_frames=ORBIT_FRAMES,
                                fps=ORBIT_FPS, image_size=(640, 400), realistic=True, trajectory=traj, depth_every=0,
                                seed=3)
 
@@ -463,7 +463,7 @@ def _sweep_recording(path: Path) -> Path:
     sc = make_scene("car_panel", 0)
     traj = SweepTrajectory(target=sc.target, t0=T_START, duration=12.0, passes=2, length_mm=200.0, spacing_mm=50.0,
                            heading_deg=15.0, elevation_deg=(60.0, 78.0), seed=0, baseline=calib.stereo.baseline)
-    return make_scan_recording(path, scene="car_panel", n_frames=180, fps=15.0, image_size=(640, 400), realistic=True,
+    return scan_recording(path, scene="car_panel", n_frames=180, fps=15.0, image_size=(640, 400), realistic=True,
                                trajectory=traj, depth_every=0, seed=0)
 
 

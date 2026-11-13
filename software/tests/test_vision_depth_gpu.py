@@ -254,11 +254,11 @@ def test_no_depth_without_texture_or_correspondence(gpu):
 def sim_frames(tmp_path_factory):
     """Three realistic 640x400 frames of the sphere scene, rectified, with the true depth."""
     from ohs.io.recording import RecordingReader
-    from ohs.sim.datasets import make_scan_recording
+    from recordings import scan_recording
     from ohs.vision.rectify import Rectifier
 
-    rec = make_scan_recording(tmp_path_factory.mktemp("gpu_depth") / "rec", "sphere_on_plane", n_frames=3,
-                              image_size=(640, 400), realistic=True, depth_every=1, seed=5)
+    rec = scan_recording(tmp_path_factory.mktemp("gpu_depth") / "rec", "sphere_on_plane", n_frames=3,
+                         image_size=(640, 400), realistic=True, depth_every=1, seed=5)
     rd = RecordingReader(rec)
     rect = Rectifier(rd.calibration().stereo, 1.0)
     out = []

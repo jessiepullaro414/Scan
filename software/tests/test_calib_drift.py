@@ -15,13 +15,13 @@ import pytest
 from ohs.calib.drift import drift_check, row_error
 from ohs.geometry import so3_exp
 from ohs.io.recording import RecordingReader
-from ohs.sim.datasets import make_scan_recording
+from recordings import scan_recording
 from ohs.types import StereoCalibration, StereoFrame
 
 
 @pytest.fixture(scope="module")
 def scan(tmp_path_factory):
-    rec = make_scan_recording(tmp_path_factory.mktemp("drift") / "rec", n_frames=3, realistic=True, lines=False,
+    rec = scan_recording(tmp_path_factory.mktemp("drift") / "rec", n_frames=3, realistic=True, lines=False,
                               depth_every=0, seed=1)
     reader = RecordingReader(rec)
     return [reader.frame(i) for i in range(len(reader))], reader.calibration().stereo
