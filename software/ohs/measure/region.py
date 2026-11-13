@@ -33,7 +33,10 @@ The tolerance and the angle are fixed at the seed: a region must not loosen its 
 takes in worse points.
 
 **The default tolerance** is ``max(3 x the seed's median sigma, 3 x the seed fit's RMS, 0.02 mm)``,
-and with sigma each vertex may also stray 3 times its own sigma when that is more. A good point
+and with sigma each vertex may also stray 3 times its own sigma when that is more; but sigma counts
+only while it agrees with the seed's measured scatter (median sigma at most :data:`SIGMA_TRUST`
+times the RMS): a pessimistic sigma would let a plane run over half the part, so then the scatter
+alone sets the tolerance and sigma is only the weight. A good point
 strays from the true surface by about its sigma, and 3σ keeps 99.7 % of them, so noise does not
 punch holes in the region (nor drop the poorly measured points first); the seed's own scatter
 stands in when sigma is missing or optimistic; the floor keeps rounding on an exact (simulated)
@@ -83,6 +86,7 @@ __all__ = ["RegionFit", "fit_at", "KINDS"]
 KINDS = ("plane", "cylinder", "hole")
 TOL_SIGMAS = 3.0  # the default tolerance: this many times the seed's sigma or scatter ...
 TOL_FLOOR_MM = 0.02  # ... and at least this
+SIGMA_TRUST = 2.0  # sigma sets the tolerance only while the seed's median sigma is at most this times its RMS
 ANGLE_SCATTERS = 3.0  # the default angle: this many times the seed's normal scatter ...
 ANGLE_MIN_DEG = 10.0  # ... between these
 ANGLE_MAX_DEG = 45.0  # (a fine, noisy mesh's face normals can scatter 15° and more; 45° still stops at an edge)
@@ -302,9 +306,14 @@ def _grow(m: _Surface, face: int, kind: str, tolerance_mm, angle_tol_deg) -> Reg
     """The plane or cylinder region grown from ``face`` (see the module docstring)."""
     seed, fit = _seed(m, face, kind)
     side = _side(m, seed, kind, fit)
+    # sigma sets the tolerance only while it agrees with the seed's measured scatter: a scan's sigma
+    # can be far too pessimistic (a 10-frame simulated scan claims ~3 mm where its table scatters
+    # 0.4 mm), and a tolerance taken from it lets a plane run over half the part. Then the scatter
+    # alone sets it, and sigma stays only the weight.
+    s_med = 0.0 if m.S is None else float(np.median(m.S[sorted_unique(m.F[seed])]))
+    sigma_agrees = m.S is not None and s_med <= SIGMA_TRUST * max(fit.rms_mm, TOL_FLOOR_MM)
     if tolerance_mm is None:
-        s_med = 0.0 if m.S is None else float(np.median(m.S[sorted_unique(m.F[seed])]))
-        tol = max(TOL_SIGMAS * s_med, TOL_SIGMAS * fit.rms_mm, TOL_FLOOR_MM)
+        tol = max(TOL_SIGMAS * (s_med if sigma_agrees else 0.0), TOL_SIGMAS * fit.rms_mm, TOL_FLOOR_MM)
     else:
         tol = float(tolerance_mm)
     if angle_tol_deg is None:
@@ -315,7 +324,7 @@ def _grow(m: _Surface, face: int, kind: str, tolerance_mm, angle_tol_deg) -> Reg
     else:
         angle = float(angle_tol_deg)
     cos_tol = math.cos(math.radians(angle))
-    own = tolerance_mm is None and m.S is not None  # by default each vertex may also stray 3 times its own sigma
+    own = tolerance_mm is None and sigma_agrees  # by default each vertex may also stray 3 times its own sigma
     keep = _agrees(m, seed, kind, fit, side, tol, cos_tol, own)  # the seed keeps the faces that agree with it
     if not keep[np.searchsorted(seed, face)]:
         keep[np.searchsorted(seed, face)] = True  # the clicked face stays: the region must contain it

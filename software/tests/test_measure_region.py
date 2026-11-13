@@ -225,6 +225,22 @@ def test_plane_does_not_run_away_where_a_flat_face_bends_away():
     assert angle_deg(loose.fit.normal, Z) < angle_deg(free.fit.normal, Z)
 
 
+def test_a_too_pessimistic_sigma_does_not_loosen_the_region():
+    """A scan's sigma can claim far more noise than the surface shows (a short simulated scan:
+    about 3 mm claimed, 0.4 mm seen). The tolerance then comes from the measured scatter, so the
+    plane stops in the bend as with the true sigma, instead of creeping up it."""
+    R = 30.0
+    V, F = bend(R)
+    Vn, S = noisy(V, 3, 0.005, 0.005)
+    face, point = nearest_face(Vn, F, (-15.0, 0.0, 0.0))
+    reach = lambda r: float(V[np.unique(F[r.faces]), 0].max())  # noqa: E731 (how far into the bend)
+    true = fit_at(Vn, F, face, point, "plane", sigma=S)
+    claimed = fit_at(Vn, F, face, point, "plane", sigma=S * 20.0)  # sigma 20 times too large
+    assert claimed.tolerance_mm <= 2.0 * true.tolerance_mm
+    assert reach(claimed) <= math.sqrt(2 * R * claimed.tolerance_mm) + 2 * H
+    assert reach(claimed) <= reach(true) + 1.0
+
+
 def test_plane_on_a_gently_curved_panel_stays_bounded_and_warns():
     R = 300.0
     V, F = grid(121, 61, H, z=lambda x, y: (x - 30.0) ** 2 / (2 * R))
