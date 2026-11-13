@@ -3,8 +3,9 @@
  * doubles only when needed; otherwise the attributes are updated in place with update
  * ranges), so the scene graph is never rebuilt. Pose updates are read in the render loop
  * and smoothed; nothing here re-renders React per frame. After a stop the last live model stays
- * and can be turned; once "Make mesh" of that scan is done, its mesh takes the live model's place
- * with the camera left where it is (useFinishedMesh).
+ * and can be turned; "Make mesh" of that scan then puts the tracked mesh in the live model's place
+ * as soon as tracking is done, and the finished mesh when the job is, with the camera left where
+ * it is (useFinishedMesh).
  */
 import { Html, Line, OrbitControls } from "@react-three/drei";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
@@ -30,9 +31,11 @@ import {
 } from "three";
 import type { DecodedMesh } from "../../api/binary";
 import { api } from "../../api/http";
+import { scanMeshStage, versionedUrl } from "../../lib/scanMesh";
 import { distanceZone } from "../../lib/tracking";
 import { useScanJob } from "../../store/jobs";
 import { useLive } from "../../store/live";
+import { processKey, useProcess } from "../../store/process";
 import { useProjects } from "../../store/projects";
 import { useSession } from "../../store/session";
 import { toast } from "../../store/toasts";
@@ -404,43 +407,54 @@ function Trail({ visible }: { visible: boolean }) {
 
 // ------------------------------------------------------------------ the finished mesh (plan F4)
 /**
- * After a stop, once "Make mesh" of that scan is done, its mesh (result/mesh.ply) is fetched and
- * shown in place of the live model, without moving the camera. A failed or cancelled job leaves
- * the live model. A new scan (or "New scan") drops it.
+ * After a stop, "Make mesh" of that scan puts its mesh (result/mesh.ply) in place of the live
+ * model, without moving the camera, twice: the tracked mesh as soon as the job's Track stage is
+ * done (lib/scanMesh.ts; the later stages improve it), and the finished mesh when the job is done.
+ * A job that fails or is cancelled before that leaves the live model; after it, the tracked mesh.
+ * A new scan (or "New scan") drops it.
  */
 function useFinishedMesh(): BufferGeometry | null {
   const last = useSession((s) => s.lastStopped);
   const job = useScanJob(last?.scan.id);
   const meshUrl = useProjects((s) => (last ? s.details[last.projectId]?.scans.find((x) => x.id === last.scan.id)?.result?.mesh_url : undefined));
-  const [shown, setShown] = useState<{ sid: string; jobId: string; geometry: BufferGeometry } | null>(null);
+  const proc = useProcess((s) => (last ? s.entries[processKey(last.projectId, last.scan.id)]?.state : undefined));
+  const [shown, setShown] = useState<{ sid: string; jobId: string; finished: boolean; geometry: BufferGeometry } | null>(null);
   const shownRef = useRef(shown);
   const show = (next: typeof shown) => {
     if (shownRef.current && shownRef.current.geometry !== next?.geometry) shownRef.current.geometry.dispose();
     shownRef.current = next;
     setShown(next);
   };
-  const doneId = job?.state === "done" ? job.id : null;
+  const stage = scanMeshStage(job, proc);
+  // what to put on screen: nothing new while the live model stays; the tracked mesh once; the finished one once
+  const want = job && stage !== "live" ? `${job.id}:${stage}` : null;
+  const procRef = useRef(proc);
+  procRef.current = proc;
   const pid = last?.projectId ?? null;
   const sid = last?.scan.id ?? null;
 
   useEffect(() => {
-    if (!pid || !sid || !doneId) return;
+    if (!pid || !sid || !want || !job) return;
+    const finished = stage === "finished";
     const cur = shownRef.current;
-    if (cur && cur.sid === sid && cur.jobId === doneId) return;
+    if (cur && cur.sid === sid && cur.jobId === job.id && (cur.finished || !finished)) return;
     const ctrl = new AbortController();
+    const jobId = job.id;
+    const current = procRef.current?.current;
+    const url = versionedUrl(current?.mesh_url || meshUrl || api.fileUrl(pid, sid, "mesh.ply"), current?.version);
     api
-      .fetchBinary(meshUrl || api.fileUrl(pid, sid, "mesh.ply"), undefined, ctrl.signal)
+      .fetchBinary(url, undefined, ctrl.signal)
       .then(async (buf) => {
         const { plyGeometry, readPly } = await import("../../three/ply"); // the PLY reader only when needed
-        if (!ctrl.signal.aborted) show({ sid, jobId: doneId, geometry: plyGeometry(readPly(buf)) });
+        if (!ctrl.signal.aborted) show({ sid, jobId, finished, geometry: plyGeometry(readPly(buf)) });
       })
       .catch((e: unknown) => {
         if ((e as { name?: string }).name === "AbortError") return;
-        // the live model stays; the post-scan card's "Open result" still opens the mesh
-        toast.error("Couldn't show the finished mesh here", e);
+        // what is on screen stays; the post-scan card's "Open result" still opens the mesh
+        toast.error(finished ? "Couldn't show the finished mesh here" : "Couldn't show the tracked mesh here", e);
       });
     return () => ctrl.abort();
-  }, [pid, sid, doneId, meshUrl]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [pid, sid, want, meshUrl]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // dropped with its scan (a new scan, "New scan") and when the view closes
   useEffect(() => {

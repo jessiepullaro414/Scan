@@ -131,6 +131,7 @@ A project is a folder: `project.json`, `scans/<id>/recording/` (raw), `scans/<id
 - **Afterwards:** "Make mesh" runs one-click processing with a progress bar, at Standard quality (30 frames a second of scanning) unless Best (every frame) or Preview is picked. A cancel button keeps the raw data.
   - While it runs, the last live model stays on the Scan page and can be turned. Under the progress bar the app shows the time left in the current pass over the frames ("About 3 min left for tracking"), from this job's own rate, once the rate is steady. After the last frame the job's message says what is being done.
   - When the job is done, the finished mesh replaces the live model on the Scan page (and the tracked mesh in the viewer), with the camera left where it is. A failed or cancelled job leaves the live model on screen, with the reason.
+  - **Since 2026-11-13** the tracked mesh takes the live model's place as soon as the job's Track stage is done (about three quarters of the way through a Standard job), and the finished mesh replaces it at the end. A job that fails or is cancelled after tracking leaves the tracked mesh on screen: it is the scan's saved mesh.
 
 ### 5.3 Processing
 One-click by default. The advanced panel shows each step with live preview and undo:

@@ -5,8 +5,10 @@ import { Button } from "../../components/ui/Button";
 import { Spinner } from "../../components/ui/Feedback";
 import { fmtDuration, fmtInt } from "../../lib/format";
 import { navigate, paths } from "../../lib/router";
+import { scanMeshStage } from "../../lib/scanMesh";
 import { isActive, useScanJob } from "../../store/jobs";
 import { useLive } from "../../store/live";
+import { processKey, useProcess } from "../../store/process";
 import { useProjects } from "../../store/projects";
 import { useSession } from "../../store/session";
 
@@ -15,7 +17,11 @@ export function PostScanCard() {
   const clear = useSession((s) => s.clearLastStopped);
   const job = useScanJob(last?.scan.id);
   const fresh = useProjects((s) => (last ? s.details[last.projectId]?.scans.find((x) => x.id === last.scan.id) : undefined));
+  const proc = useProcess((s) => (last ? s.entries[processKey(last.projectId, last.scan.id)]?.state : undefined));
   if (!last) return null;
+  // the tracked mesh takes the live model's place as soon as this job has tracked the scan (LiveCanvas.tsx)
+  const tracked = scanMeshStage(job, proc) === "tracked";
+  const onScreen = tracked ? "The tracked mesh stays on screen" : "The live model stays on screen";
   const scan = fresh ?? last.scan;
   const active = isActive(job);
   // a cancelled job may leave the tracked mesh behind (status "processed"): still "cancelled" here
@@ -42,11 +48,13 @@ export function PostScanCard() {
           </div>
           <div className="mt-0.5 text-xs text-muted">
             {failed
-              ? `${job?.error || "Something went wrong."} The live model stays on screen and the raw recording is kept: try again, or with preview quality.`
+              ? `${job?.error || "Something went wrong."} ${onScreen} and the raw recording is kept: try again, or with preview quality.`
               : cancelled
-                ? "The live model stays on screen and the raw recording is kept: make the mesh again any time."
+                ? `${onScreen} and the raw recording is kept: make the mesh again any time.`
                 : active
-                  ? `${fmtInt(scan.n_frames)} frames · ${fmtDuration(scan.duration_s)}. Turn the live model while you wait: the finished mesh takes its place here.`
+                  ? tracked
+                    ? `${fmtInt(scan.n_frames)} frames · ${fmtDuration(scan.duration_s)}. Tracking is done and the tracked mesh is on screen. The last steps clean it up: the finished mesh takes its place here.`
+                    : `${fmtInt(scan.n_frames)} frames · ${fmtDuration(scan.duration_s)}. Turn the live model while you wait: the tracked mesh takes its place as soon as tracking is done, then the finished mesh.`
                   : done
                     ? `${fmtInt(scan.n_frames)} frames · ${fmtDuration(scan.duration_s)}. The finished mesh is on screen.`
                     : `${fmtInt(scan.n_frames)} frames · ${fmtDuration(scan.duration_s)} · raw recording saved. The live model is a preview; the mesh is rebuilt from the recording at full resolution.`}
