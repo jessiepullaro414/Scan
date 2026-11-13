@@ -1016,9 +1016,15 @@ Every task here: the type check, `npm test`, and for bundle tasks the chunk size
 - **Where:** `ui/src/three/Studio.tsx:15-31`.
 - **Change:** build the environment once per renderer; set the intensity in a second effect.
 
-### [ ] U5. The Scan page downloads a library only the Viewer uses (Sonnet, S) ○
+### [-] U5. The Scan page downloads a library only the Viewer uses (Sonnet, S) ○
 - **Where:** `ui/vite.config.ts:45` puts `three-mesh-bvh` in the shared `r3f` chunk.
 - **Gain (estimate):** about 40 KB off the Scan and Process pages. **Guard:** chunk sizes.
+- **Tried 2026-11-12, not adopted:** taking `three-mesh-bvh` out of the `r3f` group changes
+  nothing (the chunk is byte for byte the same: drei's `Bvh` module stays in the group and brings
+  the library with it). A group of its own for the library and drei's `Bvh` module grew to
+  216 kB (it takes their dependencies along) and the Scan page still loaded it. The Process page
+  uses `Bvh` too now, so only the Scan page could gain, about 40 KB of a 1.3 MB first 3D load
+  from localhost. Not worth a bundler work-around.
 
 ### [x] U6. Unused exports and a duplicated normals helper (Sonnet, S) ○
 - **Where:** never referenced: `realUrl` (`api/backend.ts`), `getSocketFactory` (`api/socket.ts`),
