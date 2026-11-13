@@ -632,6 +632,41 @@ check, build and a browser check pass.
 **Not in this slice:** saving fits with the scan, coordinate systems, deviation against CAD,
 sections, gap and flush, STEP export.
 
+### M5 plan, second slice: the deviation map (2026-11-12)
+The second item of [`ROADMAP.md`](ROADMAP.md), section 3: show how far the processed mesh has moved
+from the measured one, so smoothing and filling can be judged in millimetres.
+
+**What the user sees:** a **Deviation** shading (next to Confidence) on the Process page and in the
+viewer, once the mesh has edits. Blue = moved inward, red = moved outward, grey = unchanged; surface
+that was added by filling a hole is shown as "new, nothing to compare". A legend with a limit the
+user sets (default 0.1 mm): the scale's ends, the share of the surface within the limit, and the
+largest and 95th-percentile move. The value under the cursor.
+
+**How it works:**
+- The reference is the scan's base mesh: the result of the last stage, before any edit (step 0).
+  The current mesh is the step the cursor is on.
+- `ohs/mesh/deviation.py`: for each vertex of the current mesh, the signed distance to the
+  reference surface (nearest point on it, Open3D's `RaycastingScene`; the sign from the reference
+  face's normal, so it also works on open meshes). Vertices that belong only to filled faces get
+  no value (NaN).
+- API (in [`APP_API.md`](APP_API.md)): `GET .../process/deviation.json` (the statistics) and
+  `GET .../process/deviation.bin` (one float32 per vertex of `result/mesh.ply`, in its order),
+  both computed once per mesh version.
+
+**Steps** (one commit each, tests first):
+1. The distances, tested on shapes with a known offset (a sphere grown by 0.2 mm, a plate with a
+   pushed-in dent, a filled hole). **Done 2026-11-12:** `ohs/mesh/offset.py` (`surface_offset`,
+   `offset_stats`; the module is named "offset" because `ohs.mesh.deviation` already exists, an
+   unsigned distance used by Simplify). 1.5 s for 1M vertices against 2M triangles on this PC.
+2. The API and its tests.
+3. The shading, legend and cursor value in the Process page and the viewer, and the mock.
+4. A simulator check in `VALIDATION.md`: after the default recipe's smoothing, compare the
+   deviation map with the change of the true error (does a move towards the truth show as a move,
+   and how much do the edits move the surface at all).
+
+**Later:** the same map against a reference STL or another scan (needs alignment first, M4/M5), and
+a limit that edits must keep (smoothing has "within sigma" already).
+
 ### Quality bar (every milestone)
 - **Performance:** the live view holds 30 fps or more in the UI and shows the scanner's state within 150 ms. A 2M-triangle mesh orbits at 60 fps on an integrated GPU.
 - **Reliability:** no data loss on a crash, and an emitters-off guarantee.
