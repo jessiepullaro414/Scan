@@ -892,7 +892,7 @@ bench medians before and after in the commit message.
 - **Guard:** `test_map_accuracy_and_refinement`. Add first: old against new `_consensus` on random
   observations, with ties.
 
-### [ ] P2. Remove floaters searches for an index it already has (Sonnet, S) ✔
+### [x] P2. Remove floaters searches for an index it already has (Sonnet, S) ✔
 - **Where:** `ohs/mesh/confidence.py:85-90` (and `carry_filled`, `:120-131`), `ohs/mesh/clean.py:64`,
   `ohs/server/processing.py:1022`.
 - **Problem:** after `remove_floaters`, each vertex's sigma is carried over by building a KD-tree
@@ -905,6 +905,15 @@ bench medians before and after in the commit message.
   `test_make_mesh_runs_the_default_recipe`. Add first: the indexed result equals the KD result.
   Meshes with two vertices at the same position may differ there; the exact index is the correct
   one, say so in the commit.
+- **Done 2026-11-13:** `remove_floaters(..., return_kept=True)` also returns the faces it kept;
+  `carry_sigma` and `carry_filled` follow the mesh by them, as they do for deleted faces. On two
+  real scans (857 k faces, 3,700 removed) the carry-over took 730 ms before and 25 ms after;
+  the edit itself 220 ms. Vertices, faces and sigma are identical, except 2 vertices that share
+  a place with another (6e-8 mm apart in sigma) and 5 faces whose filled flag the search took
+  from a twin face; the index is the correct one.
+- **Found on the way (not fixed):** Fill holes can add a triangle back to back with a measured
+  one (the same three vertices, reversed): 4 such pairs on one real scan, 1 on another. The old
+  search then marked the measured twin as filled too.
 
 ### [x] P3. Mesh refinement peaks at 350 MB per chunk (Sonnet, S) ✔
 - **Done 2026-11-10:** `project_onto_patches` takes `chunk` (default 25,000 vertices, was a fixed

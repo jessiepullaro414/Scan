@@ -41,11 +41,14 @@ def piece_sizes(V: np.ndarray, F: np.ndarray) -> tuple[np.ndarray, np.ndarray, n
 
 
 def remove_floaters(V: np.ndarray, F: np.ndarray, min_triangles: int | None = None, min_size_mm: float | None = None,
-                    keep_largest_only: bool = False, min_fraction: float | None = None) -> tuple[np.ndarray, np.ndarray]:
-    """Drop small disconnected pieces (see the module docstring). Returns ``(V, F)``."""
+                    keep_largest_only: bool = False, min_fraction: float | None = None,
+                    return_kept: bool = False) -> tuple:
+    """Drop small disconnected pieces (see the module docstring). Returns ``(V, F)``; with
+    ``return_kept`` also the indices of the faces kept, in order (what
+    :func:`ohs.mesh.carry_sigma` needs to follow the vertices without a search)."""
     V, F = as_mesh(V, F)
     if len(F) == 0:
-        return V.copy(), F.copy()
+        return (V.copy(), F.copy(), np.zeros(0, dtype=np.int64)) if return_kept else (V.copy(), F.copy())
     flab, tri, diag = piece_sizes(V, F)
     largest = int(np.argmax(tri))
     if keep_largest_only:
@@ -60,10 +63,12 @@ def remove_floaters(V: np.ndarray, F: np.ndarray, min_triangles: int | None = No
             keep &= diag >= float(min_size_mm)
     keep[largest] = True
     if keep.all():
-        return V.copy(), F.copy()
-    V2, F2, _ = compact(V, F[keep[flab]])
+        return (V.copy(), F.copy(), np.arange(len(F), dtype=np.int64)) if return_kept else (V.copy(), F.copy())
+    fkeep = keep[flab]
+    V2, F2, _ = compact(V, F[fkeep])
     log.debug("remove_floaters: kept %d of %d pieces (%d of %d triangles)", int(keep.sum()), len(keep), len(F2), len(F))
-    return V2.copy() if V2 is V else V2, F2
+    V2 = V2.copy() if V2 is V else V2
+    return (V2, F2, np.flatnonzero(fkeep)) if return_kept else (V2, F2)
 
 
 def _face_index(faces: np.ndarray | list[int], n_faces: int) -> np.ndarray:

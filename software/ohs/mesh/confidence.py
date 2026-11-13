@@ -16,6 +16,8 @@ from ohs.mesh.topology import as_mesh, rows
 
 __all__ = ["SIGMA_NONE_MM", "sigma_stats", "carry_sigma", "carry_filled", "filled_area"]
 
+_FACE_OPS = ("delete_faces", "keep_faces", "remove_floaters")  # edits that leave a subset of the faces, in order
+
 #: the sigma (mm) of a vertex nothing measured, and the cap of the others ("no confidence")
 SIGMA_NONE_MM = 50.0
 
@@ -59,8 +61,9 @@ def carry_sigma(op: str, V: np.ndarray, F: np.ndarray, S: np.ndarray | None, V2:
     * ``smooth`` moves the vertices: each keeps its sigma;
     * ``fill_holes`` adds vertices after the old ones: nothing measured them (:data:`SIGMA_NONE_MM`);
     * ``delete_faces`` / ``keep_faces`` (given their ``faces``) keep the vertices of the faces
-      left, in order;
-    * the rest (``remove_floaters``, ``decimate``) take the sigma of the nearest vertex before.
+      left, in order; so does ``remove_floaters`` given the faces it kept (its ``return_kept``);
+    * the rest (``decimate``, and ``remove_floaters`` without its faces) take the sigma of the
+      nearest vertex before.
 
     None without sigmas (or when ``S`` doesn't fit ``V``)."""
     if S is None:
@@ -73,10 +76,12 @@ def carry_sigma(op: str, V: np.ndarray, F: np.ndarray, S: np.ndarray | None, V2:
         return S.copy()
     if op == "fill_holes" and n2 >= len(V):
         return np.concatenate([S, np.full(n2 - len(V), SIGMA_NONE_MM, np.float32)])
-    if op in ("delete_faces", "keep_faces") and faces is not None:
+    if op in _FACE_OPS and faces is not None:
         F = np.asarray(F, dtype=np.int64).reshape(-1, 3)
+        if op == "remove_floaters" and len(faces) == len(F) and n2 == len(V):
+            return S.copy()  # nothing was removed: the vertices are as they were
         keep = np.full(len(F), op == "delete_faces")
-        keep[np.asarray(faces, dtype=np.int64).reshape(-1)] = op == "keep_faces"
+        keep[np.asarray(faces, dtype=np.int64).reshape(-1)] = op != "delete_faces"
         used = np.zeros(len(V), dtype=bool)
         used[F[keep].reshape(-1)] = True
         idx = np.flatnonzero(used)
@@ -97,9 +102,10 @@ def carry_filled(op: str, V: np.ndarray, F: np.ndarray, filled: np.ndarray | Non
 
     * ``fill_holes`` adds its faces after the old ones: those are filled;
     * ``smooth`` keeps the faces;
-    * ``delete_faces`` / ``keep_faces`` (given their ``faces``) keep the faces left, in order;
-    * the rest (``remove_floaters``, ``decimate``) take the flag of the old face nearest to each
-      new face's centre."""
+    * ``delete_faces`` / ``keep_faces`` (given their ``faces``) keep the faces left, in order; so
+      does ``remove_floaters`` given the faces it kept;
+    * the rest (``decimate``, and ``remove_floaters`` without its faces) take the flag of the old
+      face nearest to each new face's centre."""
     n2 = len(F2)
     old = None if filled is None else np.asarray(filled, dtype=bool).reshape(-1)
     if old is not None and len(old) != len(F):
@@ -111,9 +117,9 @@ def carry_filled(op: str, V: np.ndarray, F: np.ndarray, filled: np.ndarray | Non
         return None
     if op == "smooth" and n2 == len(F):
         return old.copy()
-    if op in ("delete_faces", "keep_faces") and faces is not None:
+    if op in _FACE_OPS and faces is not None:
         keep = np.full(len(F), op == "delete_faces")
-        keep[np.asarray(faces, dtype=np.int64).reshape(-1)] = op == "keep_faces"
+        keep[np.asarray(faces, dtype=np.int64).reshape(-1)] = op != "delete_faces"
         if int(keep.sum()) == n2:
             out = old[keep]
             return out if out.any() else None

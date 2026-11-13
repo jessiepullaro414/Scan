@@ -881,9 +881,9 @@ class ProcessManager:
             for i in range(j, k):
                 e = edits[i]
                 faces = np.load(sp.selection_path(str(e["id"]))) if e["op"] in ("delete_faces", "keep_faces") else None
-                V2, F2 = self._apply(sp, e["op"], e["params"], V, F, edit_id=e["id"], faces=faces, S=S)
-                S = carry_sigma(e["op"], V, F, S, V2, faces)
-                Fl = carry_filled(e["op"], V, F, Fl, V2, F2, faces)
+                V2, F2, by = self._apply(sp, e["op"], e["params"], V, F, edit_id=e["id"], faces=faces, S=S)
+                S = carry_sigma(e["op"], V, F, S, V2, by)
+                Fl = carry_filled(e["op"], V, F, Fl, V2, F2, by)
                 V, F = V2, F2
                 if i + 1 >= k - CACHE_STEPS:
                     _save_npz(sp.cache_path(i + 1), V, F, S=S, filled=Fl)
@@ -945,8 +945,12 @@ class ProcessManager:
     # ------------------------------------------------------------------ edits
     def _apply(self, sp: ScanProcess, op: str, params: dict, V: np.ndarray, F: np.ndarray, *,
                edit_id: str | None = None, faces: np.ndarray | None = None, S: np.ndarray | None = None,
-               progress: Callable[[float, str], None] | None = None) -> tuple[np.ndarray, np.ndarray]:
-        """Run one mesh operation on ``(V, F)`` (``S``: the vertices' sigmas, for ``within_sigma``)."""
+               progress: Callable[[float, str], None] | None = None) -> tuple[np.ndarray, np.ndarray,
+                                                                                    np.ndarray | None]:
+        """Run one mesh operation on ``(V, F)`` (``S``: the vertices' sigmas, for ``within_sigma``).
+        Returns ``(V2, F2, faces)``: ``faces`` are the faces the edit went by (the selection of
+        ``delete_faces`` / ``keep_faces``, the faces ``remove_floaters`` kept, else None), which is what
+        :func:`ohs.mesh.carry_sigma` and :func:`ohs.mesh.carry_filled` follow the mesh by."""
         from ohs import mesh as M
 
         if op in ("delete_faces", "keep_faces"):
@@ -955,20 +959,20 @@ class ProcessManager:
             if len(faces) and int(faces.max()) >= len(F):
                 raise ApiError(409, "the selection refers to triangles the current mesh does not have",
                                "reload the mesh and select again")
-            return (M.delete_faces if op == "delete_faces" else M.keep_faces)(V, F, faces)
+            return (*(M.delete_faces if op == "delete_faces" else M.keep_faces)(V, F, faces), faces)
         if op == "remove_floaters":
-            return M.remove_floaters(V, F, **params)
+            return M.remove_floaters(V, F, **params, return_kept=True)
         if op == "fill_holes":
-            return M.fill_holes(V, F, params["max_hole_mm"], include_borders=bool(params.get("watertight")),
-                                progress=progress)
+            return (*M.fill_holes(V, F, params["max_hole_mm"], include_borders=bool(params.get("watertight")),
+                                  progress=progress), None)
         if op == "smooth":
             # within 2 sigma: each vertex moves at most twice its own standard deviation (no sigmas: no limit)
             limit = 2.0 * S if params.get("within_sigma") and S is not None and len(S) == len(V) else None
-            return M.smooth(V, F, params["method"], params["strength"], params.get("keep_edges", True), limit=limit,
-                            progress=progress)
+            return (*M.smooth(V, F, params["method"], params["strength"], params.get("keep_edges", True), limit=limit,
+                              progress=progress), None)
         if op == "decimate":
-            return M.decimate(V, F, params.get("target_triangles"), params.get("ratio"),
-                              max_error_mm=params.get("max_error_mm"), progress=progress)
+            return (*M.decimate(V, F, params.get("target_triangles"), params.get("ratio"),
+                                max_error_mm=params.get("max_error_mm"), progress=progress), None)
         raise ApiError(422, f"unknown edit {op!r}", f"use one of {', '.join(MESH_OPS)}")
 
     @staticmethod
@@ -1041,15 +1045,15 @@ class ProcessManager:
         prog(0.02, f"{label}: loading the mesh", force=True)
         V, F, S, Fl = self._load_step(sp, k)
         t0 = time.perf_counter()
-        V2, F2 = self._apply(sp, op, params, V, F, faces=faces, S=S,
-                             progress=lambda f, m=None: prog(0.05 + 0.8 * f, f"{label}: {m}" if m else label))
+        V2, F2, by = self._apply(sp, op, params, V, F, faces=faces, S=S,
+                                 progress=lambda f, m=None: prog(0.05 + 0.8 * f, f"{label}: {m}" if m else label))
         ms = 1e3 * (time.perf_counter() - t0)
         if len(F2) == 0:
             raise ApiError(409, "this would remove the whole mesh", "change the settings or the selection")
         ctx.check()
         prog(0.88, f"{label}: measuring the result", force=True)
-        S2 = carry_sigma(op, V, F, S, V2, faces)
-        Fl2 = carry_filled(op, V, F, Fl, V2, F2, faces)
+        S2 = carry_sigma(op, V, F, S, V2, by)
+        Fl2 = carry_filled(op, V, F, Fl, V2, F2, by)
         stats = _stats(V2, F2, S2, Fl2)
         summary = self._summary(op, params, V, F, V2, F2, before, stats)
         prog(0.94, f"{label}: saving", force=True)

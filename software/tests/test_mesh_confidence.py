@@ -77,6 +77,52 @@ def test_carry_sigma_follows_the_vertices_through_each_edit():
     assert np.abs(S2 - sig(V2[:, 0])).max() <= 0.01 + 1e-6  # within a vertex spacing (1 mm)
 
 
+def test_remove_floaters_carries_sigma_and_flags_by_index_as_by_nearest():
+    """With the faces ``remove_floaters`` kept (``return_kept``), sigma and the filled flags are carried by
+    index; on a mesh without two vertices in one place that equals the nearest-vertex search (P2)."""
+    from ohs.mesh import carry_filled
+
+    V, F, S = sheet()
+    V, F = punch(V, F, [(20.0, 20.0, 0.0)], [3.0])
+    rng = np.random.default_rng(3)
+    S = (S + rng.uniform(0.0, 0.5, len(S))).astype(np.float32)  # no two vertices share a sigma by construction of x
+    # three floaters, in the middle of the vertex and face order, so the kept ones are renumbered
+    parts_v, parts_f, parts_s, n = [V[:200]], [], [S[:200]], 200
+    for k in range(3):
+        parts_v.append(V[:3] + [5.0 * k, 0.0, 30.0 + k])
+        parts_f.append(np.array([[n, n + 1, n + 2]]))
+        parts_s.append(np.full(3, 9.0 + k, np.float32))
+        n += 3
+    remap = np.r_[np.arange(200), np.arange(200, len(V)) + 9]
+    Vf = np.vstack(parts_v + [V[200:]])
+    Sf = np.concatenate(parts_s + [S[200:]])
+    Ff = np.vstack([remap[F[: len(F) // 2]]] + parts_f + [remap[F[len(F) // 2:]]])
+    fl = np.zeros(len(Ff), bool)
+    fl[rng.choice(len(Ff), 300, replace=False)] = True
+    V2, F2, kept = remove_floaters(Vf, Ff, min_size_mm=5.0, return_kept=True)
+    # the three floaters go, and with them the vertices no face uses (their 9, and those the punch left loose)
+    assert len(F2) == len(Ff) - 3 and len(kept) == len(F2) and len(V2) == len(np.unique(Ff[kept])) <= len(Vf) - 9
+    ref = remove_floaters(Vf, Ff, min_size_mm=5.0)  # the plain call is unchanged
+    assert np.array_equal(ref[0], V2) and np.array_equal(ref[1], F2)
+    by_index = carry_sigma("remove_floaters", Vf, Ff, Sf, V2, kept)
+    by_nearest = carry_sigma("remove_floaters", Vf, Ff, Sf, V2)
+    assert by_index.dtype == np.float32 and np.array_equal(by_index, by_nearest)
+    f_index = carry_filled("remove_floaters", Vf, Ff, fl, V2, F2, kept)
+    f_nearest = carry_filled("remove_floaters", Vf, Ff, fl, V2, F2)
+    assert f_index.sum() > 0 and np.array_equal(f_index, f_nearest)
+    # nothing removed: every face is kept and nothing is renumbered
+    V3, F3, kept3 = remove_floaters(V, F, min_size_mm=5.0, return_kept=True)
+    assert np.array_equal(kept3, np.arange(len(F))) and np.array_equal(V3, V)
+    assert np.array_equal(carry_sigma("remove_floaters", V, F, S, V3, kept3), S)
+    # two vertices in one place: the index follows the vertex, the search may take its twin
+    Vd = np.vstack([Vf, Vf[:1]])
+    Fd = np.vstack([Ff, [[len(Vf), 1, 2]]])
+    Sd = np.r_[Sf, np.float32(7.0)]
+    V4, _, kept4 = remove_floaters(Vd, Fd, min_size_mm=5.0, return_kept=True)
+    S4 = carry_sigma("remove_floaters", Vd, Fd, Sd, V4, kept4)
+    assert S4[-1] == 7.0 and S4[0] == Sf[0]
+
+
 def test_carry_filled_marks_new_faces_and_follows_them():
     from ohs.mesh import carry_filled, filled_area
 
