@@ -142,11 +142,11 @@ const circle = (center: number[], normal: number[], d = 25.01, sd = 0.05): Circl
   center_sigma_mm: 0.04,
 });
 {
-  check(fitLabel("plane", plane([0, 0, 0], [0, 0, 1])) === "Plane · flat within 0.04 mm", "label: plane");
+  check(fitLabel("plane", plane([0, 0, 0], [0, 0, 1])) === "Plane · RMS 0.01 mm", "label: plane (its RMS, not the flatness)");
   check(fitLabel("cylinder", cylinder([0, 0, 0], [0, 0, 1])) === "Cylinder Ø 14.02 ± 0.03 mm", "label: cylinder");
   check(fitLabel("hole", circle([0, 0, 0], [0, 0, 1])) === "Hole Ø 25.01 ± 0.05 mm", "label: hole");
   check(fitLabel("hole", circle([0, 0, 0], [0, 0, 1], 8.0213, 0.0042)) === "Hole Ø 8.021 ± 0.004 mm", "label: a small ± gets three decimals");
-  check(fitLabel("plane", plane([0, 0, 0], [0, 0, 1], 0.01, 0.0042)) === "Plane · flat within 0.004 mm", "label: a very flat plane");
+  check(fitLabel("plane", { ...plane([0, 0, 0], [0, 0, 1]), rms_mm: 0.0042 }) === "Plane · RMS 0.004 mm", "label: a very flat plane");
   check(fitLabel("cylinder", cylinder([0, 0, 0], [0, 0, 1], 20.00012, 0.0003)) === "Cylinder Ø 20.0001 ± 0.0003 mm", "label: a tiny ± is never 0.000");
   check(fmtSmall(0.035) === "0.035" && fmtSmall(0.0042) === "0.0042" && fmtSmall(0.00013) === "0.00013" && fmtSmall(0.5) === "0.50", "small 1σ: two significant digits");
 }

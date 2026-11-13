@@ -77,7 +77,9 @@ about the scan itself, not the Fit tool, and they decide whether a measurement c
   stereo depth, of the fusion and of the tracking.
 - **The vertex sigma is 2–6 times too large**, and a fit's ± is several times too small. To do:
   an honest sigma, an error model for fits that knows the biases, and until then no ± shown as
-  an accuracy.
+  an accuracy. Measured since: on flat surface sigma is about 2.5 times too large, at edges and
+  small features it is too small (bias), and no single factor repairs it. This blocks item 3
+  below, and makes smoothing's "within 2σ" limit do nothing.
 
 1. **Fit simple shapes in the viewer.** Pick a region; fit a plane, a cylinder or a circle. Show hole
    diameters, plane-to-plane distances and angles, with the fit's residual and the region's
@@ -86,10 +88,13 @@ about the scan itself, not the Fit tool, and they decide whether a measurement c
    the findings above; open: how the ± is shown, the region's tolerance, the flatness label.
 2. **A deviation map.** Show how far a processed mesh moved from the measured one (after fill or
    smooth), with a limit the user can set. Later, the same map against a reference STL.
-   **Built 2026-11-12** (the Deviation shading, key 5); its simulator check is still to do.
+   **Built and checked 2026-11-12** (the Deviation shading, key 5): the map agrees with the real
+   change; smoothing rounds edges by up to 0.47 mm, shown undersized.
 3. **Confidence the user can act on.** After Make mesh, list the regions that miss a tolerance the
    user sets ("these 3 areas need another pass"). This gives most of a rescan queue without
-   next-best-view research.
+   next-best-view research. **Engine and API built 2026-11-12; the panel is on hold:** checked
+   against the truth, the answer is safe but passes about 10 % of a scan at ± 0.3 mm where over
+   90 % is truly within. It needs the honest sigma above.
 4. **Show disagreement.** Mark on the model where the laser points and the stereo depth disagreed.
 5. **Small ones:**
    - start Make mesh by itself after Stop (the operator still decides when the scan ends).

@@ -682,6 +682,13 @@ largest and 95th-percentile move. The value under the cursor.
    deviation map with the change of the true error (does a move towards the truth show as a move,
    and how much do the edits move the surface at all).
 
+**Step 4 done 2026-11-12** ([`VALIDATION.md`](../VALIDATION.md), "The deviation map against the
+truth"): the map agrees with the real change of the error (correlation 0.91–0.92 on the bracket);
+the default smoothing lowers the error a little on flat surface (RMS 2–6 %) and rounds edges by
+up to 0.47 mm, which the map shows undersized (0.27 mm) and mostly hides at a 0.1 mm scale, so the
+legend's default limit is now 0.05 mm. The map cannot tell harm from help. Smoothing's "within
+2σ" limit never binds while sigma is about 0.4 mm.
+
 **Later:** the same map against a reference STL or another scan (needs alignment first, M4/M5), and
 a limit that edits must keep (smoothing has "within sigma" already).
 
@@ -710,8 +717,13 @@ has been checked on simulated scans only.
 - The viewer reuses the Fit tool's region overlay for the highlight.
 
 **Status 2026-11-12:** steps 1 and 2 are done (`ohs.mesh.weak_areas`, 0.45 s on 2M triangles;
-`POST .../check`). Step 4 runs before step 3: the fitted-shapes check found the vertex sigma 2–6
-times too large, so first measure whether the panel's answer can be trusted as it is.
+`POST .../check`). Step 4 ran before step 3, because the fitted-shapes check found the vertex
+sigma 2–6 times too large ([`VALIDATION.md`](../VALIDATION.md), "The Check answer against the truth"):
+the answer is safe (what it passes is good) but useless as it is: at ± 0.3 mm it passes about
+10 % of a scan where 90–94 % is truly within, and lists 90 % of the surface for another pass. No
+single factor repairs it. **Step 3 (the panel) is on hold** until the sigma is right on flat
+surface and knows the bias at edges, small features, hole rims and borders, and from tracking
+(the roadmap's accuracy findings); the harness in the scratchpad checks any new version.
 
 **Steps** (one commit each, tests first): 1. the areas, on meshes with a known sigma pattern;
 2. the API; 3. the panel, the highlight and the camera move, and the mock; 4. a simulator check in

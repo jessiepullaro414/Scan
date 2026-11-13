@@ -16,7 +16,8 @@ export type DeviationTheme = "light" | "dark";
 
 /** What a person can choose as the scale's end (mm). */
 export const DEVIATION_LIMITS = [0.05, 0.1, 0.2, 0.5, 1] as const;
-export const DEFAULT_DEVIATION_LIMIT = 0.1;
+/** 0.05 mm: at 0.1 the map hides most of the edge rounding smoothing does (VALIDATION.md, "The deviation map against the truth"). */
+export const DEFAULT_DEVIATION_LIMIT = 0.05;
 
 /** Inward end to outward end (sRGB hex): five steps with the neutral grey in the middle. */
 export const DEVIATION_RAMPS: Record<DeviationTheme, string[]> = {

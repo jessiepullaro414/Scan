@@ -192,16 +192,21 @@ export function fitName(kind: FitKind): string {
   return kind === "plane" ? "Plane" : kind === "cylinder" ? "Cylinder" : "Hole";
 }
 
-/** The fit's main number: "flat within 0.04 mm", "Ø 14.02 ± 0.03 mm". */
+/**
+ * The fit's main number: "RMS 0.04 mm", "Ø 14.02 ± 0.03 mm". A plane shows how far its points lie
+ * from it (RMS), not "flat within": the region only takes points within its tolerance, so the
+ * largest-minus-smallest distance mostly restates that tolerance (VALIDATION.md, "Fitted shapes
+ * against the truth").
+ */
 export function fitValue(shape: FitShape): string {
   if (shape.kind === "plane") {
-    const f = shape.flatness_mm;
-    return `flat within ${f.toFixed(f < 0.01 ? 3 : f < 10 ? 2 : 1)} mm`;
+    const f = shape.rms_mm;
+    return `RMS ${f.toFixed(f < 0.01 ? 3 : f < 10 ? 2 : 1)} mm`;
   }
   return `Ø ${fmtPm(shape.diameter_mm, shape.diameter_sigma_mm)}`;
 }
 
-/** The label on the mesh: "Plane · flat within 0.04 mm", "Cylinder Ø 14.02 ± 0.03 mm", "Hole Ø 25.01 ± 0.05 mm". */
+/** The label on the mesh: "Plane · RMS 0.04 mm", "Cylinder Ø 14.02 ± 0.03 mm", "Hole Ø 25.01 ± 0.05 mm". */
 export function fitLabel(kind: FitKind, shape: FitShape): string {
   return shape.kind === "plane" ? `${fitName(kind)} · ${fitValue(shape)}` : `${fitName(kind)} ${fitValue(shape)}`;
 }

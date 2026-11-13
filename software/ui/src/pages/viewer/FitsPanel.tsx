@@ -32,7 +32,7 @@ function rowsOf(f: FitItem): Row[] {
   const rows: Row[] = [];
   if (s.kind === "plane") {
     rows.push(
-      ["Flatness", fmtLength(s.flatness_mm), "The largest minus the smallest distance of the points from the plane."],
+      ["Flatness", fmtLength(s.flatness_mm), "The largest minus the smallest distance of the region's points from the plane. The region only takes points within its tolerance, so a face that is really out of flat reads flatter here than it is."],
       ["Residual RMS", fmtLength(s.rms_mm), "How far the points lie from the plane, RMS."],
       ["Normal", degSigma(s.normal_sigma_deg), `1σ of the normal's direction (RMS angle). ${SIGMA_NOTE}`],
       ["Offset", mmSigma(s.offset_sigma_mm), `1σ of the plane's position along its normal, at the region's centre. ${SIGMA_NOTE}`],

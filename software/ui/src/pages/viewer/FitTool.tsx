@@ -35,7 +35,7 @@ export type FitItem = {
   /** The region's triangles (corner triples into that mesh's vertices). */
   tris: Uint32Array;
   region: RegionSummary;
-  /** "Plane · flat within 0.04 mm". */
+  /** "Plane · RMS 0.04 mm". */
   label: string;
 };
 
