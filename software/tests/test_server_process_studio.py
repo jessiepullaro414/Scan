@@ -174,6 +174,7 @@ def test_a_fresh_scan_and_the_409_rules(env):
     err(post(b + "/process/recipe", {"recipe_id": "default", "scope": "edits"}), 409, "no mesh")
     err(get(b + "/process/holes.json"), 409, "no mesh")
     err(post(b + "/fit", {"kind": "plane", "face": 0, "point": [0, 0, 250]}), 409, "no mesh")
+    err(post(b + "/check", {"tolerance_mm": 0.1}), 409, "no mesh")
     err(get(b + "/process/deviation.json"), 409, "no mesh")
     err(get(b + "/process/deviation.bin"), 409, "no mesh")
     err(get(b + "/process/trajectory.json"), 404, "trajectory")
@@ -501,6 +502,33 @@ def test_the_deviation_map_follows_the_edits(env, tmp_path):
     for _ in range(3):
         s = post(b + "/process/undo").json()
     assert s["cursor"] == 0 and not both()[1].any()
+
+
+def test_check_lists_the_areas_that_miss_a_tolerance(env):
+    b = base_url(env)
+    s = get(b + "/process").json()
+    n_faces = s["current"]["stats"]["triangles"]
+    loose, tight = (post(b + "/check", {"tolerance_mm": t}) for t in (20.0, 0.05))
+    assert loose.status_code == 200 and tight.status_code == 200, loose.text + tight.text
+    loose, tight = loose.json(), tight.json()
+    for r, tol in ((loose, 20.0), (tight, 0.05)):
+        assert r["version"] == s["current"]["version"] and r["tolerance_mm"] == tol and r["k"] == 2.0
+        assert r["area_mm2"] > 0 and r["min_area_mm2"] >= 4.0 and r["n_areas"] >= len(r["areas"]) <= 50
+        sizes = [a["area_mm2"] for a in r["areas"]]
+        assert sizes == sorted(sizes, reverse=True)
+        for a in r["areas"]:
+            faces = np.frombuffer(base64.b64decode(a["faces"]), dtype="<u4")
+            assert len(faces) == a["n_faces"] > 0 and int(faces.max()) < n_faces and np.all(np.diff(faces.astype(np.int64)) > 0)
+            assert a["kind"] in ("uncertain", "not_measured") and len(a["center"]) == 3
+            assert a["area_mm2"] >= r["min_area_mm2"] and a["radius_mm"] > 0 and 0 < a["share"] <= 1
+    if tight["has_sigma"]:  # the confidence reconstruction (a GPU): a tighter tolerance passes less
+        assert tight["share_ok"] < loose["share_ok"] and tight["areas"] and tight["areas"][0]["kind"] == "uncertain"
+        for r in (loose, tight):
+            assert r["share_ok"] + r["share_uncertain"] + r["share_not_measured"] == pytest.approx(1.0, abs=1e-6)
+    else:  # Open3D's mesh has no sigma: nothing to check a tolerance against
+        assert tight["share_ok"] is None and tight["share_uncertain"] is None and tight["areas"] == loose["areas"]
+    err(post(b + "/check", {"tolerance_mm": 0}), 422)
+    err(post(b + "/check", {}), 422)
 
 
 def test_recipes_crud(env):

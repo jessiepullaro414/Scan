@@ -149,6 +149,10 @@ class FitBody(BaseModel):
     version: Optional[int] = None  # the mesh version the click was made on
 
 
+class CheckBody(BaseModel):
+    tolerance_mm: float = Field(gt=0.0, le=100.0)
+
+
 class ScanRef(BaseModel):
     project_id: str
     scan_id: str
@@ -464,6 +468,10 @@ def create_app(config: Any = None, *, projects_dir: Any = None, static_dir: Any 
         info, off = proc.deviation(pid, sid)
         return Response(off.astype("<f4", copy=False).tobytes(), media_type="application/octet-stream",
                         headers={"Cache-Control": "no-cache", "X-OHS-Mesh-Version": str(info["version"])})
+
+    @app.post("/api/projects/{pid}/scans/{sid}/check")
+    def scan_check(pid: str, sid: str, body: CheckBody) -> JSONResponse:
+        return _json(proc.check(pid, sid, body.tolerance_mm))
 
     @app.post("/api/projects/{pid}/scans/{sid}/fit")
     def scan_fit(pid: str, sid: str, body: FitBody) -> JSONResponse:

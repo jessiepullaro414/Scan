@@ -920,3 +920,36 @@ Rules:
 - 409 before the scan has a mesh.
 - Made once per mesh version (about 1.5 s for 1M vertices against 2M triangles), then kept; a second
   request during the first waits for it.
+
+## M5 third slice: areas that need another pass
+The plan is in [`DESKTOP_APP_PLAN.md`](DESKTOP_APP_PLAN.md), "M5 plan, third slice". It works on the scan's
+current mesh.
+
+```ts
+type CheckArea = {
+  kind: "uncertain" | "not_measured";  // 2 sigma above the tolerance | made up by hole filling (or no sigma there)
+  area_mm2: number; share: number;      // share of the whole surface, 0..1
+  center: [number, number, number];     // area-weighted, mm
+  extent_mm: number; radius_mm: number; // largest side of its bounding box; farthest vertex from the centre
+  n_faces: number;
+  sigma_median_mm: number | null; sigma_worst_mm: number | null;   // over its measured vertices
+  faces: string;                        // base64 of little-endian uint32 face indices of result/mesh.ply, sorted
+};
+type CheckResult = {
+  version: number; tolerance_mm: number; k: number;                 // k = 2: a face fails when k x its mean sigma > tolerance
+  has_sigma: boolean;                   // false: this mesh has no confidence values (made without a GPU)
+  area_mm2: number; min_area_mm2: number;                           // the whole surface; smaller areas are not listed
+  share_ok: number | null; share_uncertain: number | null;          // null when has_sigma is false
+  share_not_measured: number | null;
+  n_areas: number;                      // all areas above the minimum
+  areas: CheckArea[];                   // largest first, at most 50
+};
+```
+
+| Method and path | Body | Returns |
+|---|---|---|
+| `POST /api/projects/{pid}/scans/{sid}/check` | `{tolerance_mm}` (above 0, at most 100) | `CheckResult` |
+
+Rules: 409 before the scan has a mesh; 422 for a bad tolerance. Read-only and quick (about 0.5 s on a
+2M-triangle mesh). The answer rests on each vertex's sigma: statistical, and so far checked on
+simulated scans only (`VALIDATION.md`).

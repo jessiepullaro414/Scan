@@ -1851,6 +1851,33 @@ class ProcessManager:
                     sp._offset = (v, off, info)
             return info, off
 
+    def check(self, pid: str, sid: str, tolerance_mm: float) -> dict:
+        """``POST .../check``: the areas of the current mesh that miss ``tolerance_mm``
+        (:func:`ohs.mesh.weak_areas`: 2 sigma above the tolerance, or surface that hole filling made
+        up), largest first, with the share of the surface that meets it. Read-only; uses the arrays
+        the fits keep per mesh version."""
+        from ohs.mesh import weak_areas
+
+        sp = self.scan(pid, sid)
+        self._need_base(sp)
+        with sp.lock:
+            v = int(sp.state["version"])
+            cached = sp._fit_mesh
+            if cached is None or cached[0] != v:
+                V, F, S, Fl = self._load_step(sp, int(sp.state["cursor"]))
+                cached = sp._fit_mesh = (v, V, F, S, Fl)
+        _, V, F, S, Fl = cached
+        try:
+            r = weak_areas(V, F, S, Fl if Fl is not None and len(Fl) == len(F) else None, tolerance_mm=float(tolerance_mm))
+        except ValueError as e:
+            raise ApiError(422, str(e), "give the tolerance in mm, for example 0.1") from None
+        for a in r["areas"]:
+            faces = np.asarray(a["faces"], dtype="<u4")
+            a["faces"] = base64.b64encode(faces.tobytes()).decode("ascii")
+            a["center"] = [float(x) for x in a["center"]]
+        r["version"] = v
+        return r
+
     def trajectory(self, pid: str, sid: str) -> dict:
         sp = self.scan(pid, sid)
         path = sp.dir / "track" / "trajectory.csv"

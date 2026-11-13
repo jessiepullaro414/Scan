@@ -709,6 +709,10 @@ has been checked on simulated scans only.
   at most 50 areas with their faces (base64, as for fits).
 - The viewer reuses the Fit tool's region overlay for the highlight.
 
+**Status 2026-11-12:** steps 1 and 2 are done (`ohs.mesh.weak_areas`, 0.45 s on 2M triangles;
+`POST .../check`). Step 4 runs before step 3: the fitted-shapes check found the vertex sigma 2–6
+times too large, so first measure whether the panel's answer can be trusted as it is.
+
 **Steps** (one commit each, tests first): 1. the areas, on meshes with a known sigma pattern;
 2. the API; 3. the panel, the highlight and the camera move, and the mock; 4. a simulator check in
 `VALIDATION.md`: of the surface the check passes, how much really is within the tolerance of the
