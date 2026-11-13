@@ -9,6 +9,7 @@ import { PMREMGenerator, type Scene } from "three";
 import { RoomEnvironment } from "three/examples/jsm/environments/RoomEnvironment.js";
 import { useUi } from "../store/ui";
 
+/** The room environment, built once per renderer and scene; `intensity` only sets how strong it is. */
 export function StudioEnvironment({ intensity = 0.55 }: { intensity?: number }) {
   const gl = useThree((s) => s.gl);
   const scene = useThree((s) => s.scene) as Scene & { environmentIntensity?: number };
@@ -17,7 +18,6 @@ export function StudioEnvironment({ intensity = 0.55 }: { intensity?: number }) 
     const room = new RoomEnvironment();
     const env = pmrem.fromScene(room, 0.04).texture;
     scene.environment = env;
-    scene.environmentIntensity = intensity;
     return () => {
       if (scene.environment === env) scene.environment = null;
       env.dispose();
@@ -28,7 +28,11 @@ export function StudioEnvironment({ intensity = 0.55 }: { intensity?: number }) 
         m.material?.dispose();
       });
     };
-  }, [gl, scene, intensity]);
+  }, [gl, scene]);
+  // its own effect: a change of the intensity (a switch of the shading) must not rebuild the environment
+  useEffect(() => {
+    scene.environmentIntensity = intensity;
+  }, [scene, intensity]);
   return null;
 }
 

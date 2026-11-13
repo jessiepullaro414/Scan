@@ -1012,9 +1012,12 @@ Every task here: the type check, `npm test`, and for bundle tasks the chunk size
   download peaked at 512 MB of buffers before and 333 MB after (Node, 64 KB chunks; the rest is
   chunks not yet collected). A size that is wrong either way still gives every byte (3 new checks).
 
-### [ ] U4. Switching the shading rebuilds the lighting environment (Sonnet, S) ○
+### [x] U4. Switching the shading rebuilds the lighting environment (Sonnet, S) ○
 - **Where:** `ui/src/three/Studio.tsx:15-31`.
 - **Change:** build the environment once per renderer; set the intensity in a second effect.
+- **Done 2026-11-12:** two effects. Counted in the viewer on a 650 k-triangle scan: a switch
+  between Clay and Studio created 16 textures and 87 framebuffers before (2 and 42 on the way
+  back) and none after; opening the viewer still builds the environment once (14 and 45).
 
 ### [-] U5. The Scan page downloads a library only the Viewer uses (Sonnet, S) ○
 - **Where:** `ui/vite.config.ts:45` puts `three-mesh-bvh` in the shared `r3f` chunk.
