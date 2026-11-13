@@ -87,6 +87,13 @@ about the scan itself, not the Fit tool, and they decide whether a measurement c
   an accuracy. Measured since: on flat surface sigma is about 2.5 times too large, at edges and
   small features it is too small (bias), and no single factor repairs it. This blocks item 3
   below, and makes smoothing's "within 2σ" limit do nothing.
+  **Investigated 2026-11-13** ([`VALIDATION.md`](../VALIDATION.md), "The vertex sigma"): the pixel
+  sigma is about right; a voxel's mean of the variances is dominated by a few hugely inflated
+  observations next to gaps. A candidate model is 3.4 times tighter on flat surface and larger
+  at edges; with it the Check answer passes 56–58 % of a scan at ± 0.3 mm instead of 10.6 %, and
+  99.8 % of that is truly within. It costs 256 MB more per scan and about 6 ms per frame as
+  prototyped. **Waiting for a decision** (it changes the sigma stored with every scan). It cannot
+  see a tracking error that shifts a whole region: that needs a per-scan pose-quality term.
 
 1. **Fit simple shapes in the viewer.** Pick a region; fit a plane, a cylinder or a circle. Show hole
    diameters, plane-to-plane distances and angles, with the fit's residual and the region's
@@ -101,7 +108,8 @@ about the scan itself, not the Fit tool, and they decide whether a measurement c
    user sets ("these 3 areas need another pass"). This gives most of a rescan queue without
    next-best-view research. **Engine and API built 2026-11-12; the panel is on hold:** checked
    against the truth, the answer is safe but passes about 10 % of a scan at ± 0.3 mm where over
-   90 % is truly within. It needs the honest sigma above.
+   90 % is truly within. It needs the honest sigma above; a candidate exists and waits for a
+   decision.
 4. **Show disagreement.** Mark on the model where the laser points and the stereo depth disagreed.
 5. **Small ones:**
    - start Make mesh by itself after Stop (the operator still decides when the scan ends).
