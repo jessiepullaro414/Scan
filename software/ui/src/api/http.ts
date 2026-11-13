@@ -12,6 +12,8 @@ import type {
   CaptureReply,
   ConnectBody,
   DeviceState,
+  Deviation,
+  DeviationInfo,
   DevicesProbe,
   EditBody,
   Emitters,
@@ -246,6 +248,35 @@ export const api = {
     post<Job>(`${scanPath(pid, sid)}/process/recipe`, { recipe_id, scope }),
   processHoles: (pid: string, sid: string) => get<HoleOutline[]>(`${scanPath(pid, sid)}/process/holes.json`),
   processTrajectory: (pid: string, sid: string) => get<TrajectoryView>(`${scanPath(pid, sid)}/process/trajectory.json`),
+
+  // ---------------------------------------------------------------- M5: the deviation map
+  /**
+   * How far each vertex of the current mesh has moved from the base mesh: the statistics (deviation.json)
+   * and one float32 per vertex of mesh.ply (deviation.bin, NaN = new surface). 409 before there is a mesh.
+   * The two files are read one after the other: when the array does not fit the statistics (another
+   * length, or the `X-OHS-Mesh-Version` header differs from their version) the mesh changed in between,
+   * and both are read once more; a second mismatch is a 409. Made once per mesh version, so the first
+   * request can take a few seconds on a big mesh.
+   */
+  async deviation(pid: string, sid: string, signal?: AbortSignal): Promise<Deviation> {
+    const base = `${scanPath(pid, sid)}/process/deviation`;
+    for (let attempt = 0; ; attempt++) {
+      const info = await get<DeviationInfo>(`${base}.json`);
+      if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
+      let res: Response;
+      try {
+        res = await fetchImpl(`${base}.bin`, { signal });
+      } catch (e) {
+        if ((e as { name?: string }).name === "AbortError") throw e;
+        throw new ApiError(0, "Can't reach the OpenHandScan engine", UNREACHABLE_HINT, `${base}.bin`);
+      }
+      if (!res.ok) throw await toApiError(res, `${base}.bin`);
+      const buf = await res.arrayBuffer();
+      const version = Number(res.headers.get("X-OHS-Mesh-Version") ?? NaN);
+      if (buf.byteLength === info.vertices * 4 && version === info.version) return { info, values: new Float32Array(buf) };
+      if (attempt >= 1) throw new ApiError(409, "The mesh changed while its deviation was being read", "Try again in a moment.", `${base}.bin`);
+    }
+  },
 
   // ---------------------------------------------------------------- M5: fitted shapes
   /** A plane, cylinder or hole where the user clicked the current mesh (read-only, quick). 409 before

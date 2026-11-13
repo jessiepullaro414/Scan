@@ -4,7 +4,7 @@
  * camera trajectory. It renders on demand. The selection tools listen to DOM pointer events
  * and work on typed arrays (see selection.ts): a mouse move never re-renders React.
  */
-import { Line, OrbitControls } from "@react-three/drei";
+import { Bvh, Line, OrbitControls } from "@react-three/drei";
 import { Canvas, useThree } from "@react-three/fiber";
 import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import {
@@ -31,8 +31,9 @@ import { LineSegmentsGeometry } from "three/examples/jsm/lines/LineSegmentsGeome
 import type { HoleOutline, TrajectoryView } from "../../api/types";
 import { CameraRig } from "../../three/CameraRig";
 import { CV_TO_THREE_ROTATION, cvToThree } from "../../three/coords";
+import { deviationOf } from "../../three/deviation";
 import { AxisGizmo, SceneGrid, StudioEnvironment, StudioLights, useThemeColors } from "../../three/Studio";
-import { Model, VIEW_DIR, type Shading } from "../viewer/ViewerCanvas";
+import { BVH_SPLIT_CENTER, DeviationProbe, Model, VIEW_DIR, type Shading } from "../viewer/ViewerCanvas";
 import { highlightOf, type LoadedMesh } from "./mesh";
 import { buildGrid, buildScreenMap, polygonMask, type DepthImage, type ScreenMap, type SelectMode } from "./selection";
 
@@ -738,6 +739,16 @@ export function ProcessCanvas({
   }, [mesh]);
   const gridY = useMemo(() => -(shown.geometry.boundingBox?.max.y ?? 0) - 0.5, [shown]);
 
+  // The deviation map's readout under the cursor needs raycasting: the tree is built on first use only
+  // (indirect, so the mesh's triangle order, which the selection relies on, stays).
+  const moves = shading === "deviation" ? deviationOf(shown.geometry) : null;
+  const [bvh, setBvh] = useState(false);
+  useEffect(() => {
+    if (moves) setBvh(true);
+  }, [moves]);
+  const meshRef = useRef<Mesh | null>(null);
+  const model = <Model geometry={shown.geometry} shading={shading} wireframe={wireframe} meshRef={meshRef} />;
+
   return (
     <div className="absolute inset-0" role="img" aria-label="3D view of the mesh being processed">
       <Canvas
@@ -765,7 +776,14 @@ export function ProcessCanvas({
         />
         <CameraRig getBounds={() => bounds.sphere} defaultDirection={VIEW_DIR} autoFrameKey={frameKey} />
         <group rotation={CV_TO_THREE_ROTATION}>
-          <Model geometry={shown.geometry} shading={shading} wireframe={wireframe} />
+          {bvh ? (
+            <Bvh firstHitOnly strategy={BVH_SPLIT_CENTER} indirect>
+              {model}
+            </Bvh>
+          ) : (
+            model
+          )}
+          {moves ? <DeviationProbe target={meshRef} values={moves} /> : null}
           {compare === "overlay" && previous ? <Ghost geometry={previous.geometry} /> : null}
           {!before ? <Highlight mesh={mesh} color={colors.accent} /> : null}
           {holes && !before ? <HoleLines holes={holes} fillUpTo={fillUpTo} hovered={hoverHole} /> : null}

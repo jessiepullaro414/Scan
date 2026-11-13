@@ -1,12 +1,12 @@
 /**
  * The result viewer's 3D view: the processed mesh (clay matcap, studio PBR, normals or the
- * confidence map with the sigma under the cursor), an optional wireframe overlay and laser point
+ * confidence map with the sigma under the cursor, the deviation map with the move under it), an optional wireframe overlay and laser point
  * cloud, the two-click distance tool and the fitted shapes (FitTool.tsx). Renders on demand (no work
  * while the view is still).
  */
 import { Bvh, Html, Line, OrbitControls } from "@react-three/drei";
 import { Canvas, useThree } from "@react-three/fiber";
-import { memo, useEffect, useMemo, useRef, useState, type RefObject } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import {
   DoubleSide,
   MeshBasicMaterial,
@@ -26,14 +26,16 @@ import {
 import { useUi } from "../../store/ui";
 import { CameraRig } from "../../three/CameraRig";
 import type { FitKind } from "../../api/types";
+import { deviationReadout, interpolateMove } from "../../lib/deviation";
 import { applyConfidenceColors, confidenceMaterial, filledGeometry, filledMaterial, SIGMA_NONE_MM, sigmaOf } from "../../three/confidence";
 import { CV_TO_THREE_ROTATION, cvToThree } from "../../three/coords";
+import { applyDeviationColors, deviationOf } from "../../three/deviation";
 import { clayMatcap } from "../../three/materials";
 import { AxisGizmo, SceneGrid, StudioEnvironment, StudioLights, useThemeColors } from "../../three/Studio";
 import { FitTool, type FitItem } from "./FitTool";
 import { useSurfacePick } from "./picking";
 
-export type Shading = "clay" | "studio" | "normals" | "confidence";
+export type Shading = "clay" | "studio" | "normals" | "confidence" | "deviation";
 export type Vec3 = [number, number, number];
 export type Measurement = { id: number; a: Vec3; b: Vec3 };
 
@@ -51,7 +53,7 @@ const tuple = (v: Vector3): Vec3 => [v.x, v.y, v.z];
  * engine, and the fits' regions index the same triangles. Measured on 845k triangles: the same build
  * time (about 420 ms in Node), 4 bytes per triangle, about 1 µs more per ray.
  */
-const BVH_SPLIT_CENTER = 0;
+export const BVH_SPLIT_CENTER = 0;
 
 /** The surface material of the result views (also used by the Process page). */
 export function useMaterial(shading: Shading): Material {
@@ -59,14 +61,14 @@ export function useMaterial(shading: Shading): Material {
     const common = { side: DoubleSide, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1 };
     if (shading === "normals") return new MeshNormalMaterial(common);
     if (shading === "studio") return new MeshStandardMaterial({ ...common, color: "#a9afb8", roughness: 0.5, metalness: 0.08, envMapIntensity: 0.85 });
-    if (shading === "confidence") return confidenceMaterial();
+    if (shading === "confidence" || shading === "deviation") return confidenceMaterial(); // vertex colours, no-value parts striped
     return new MeshMatcapMaterial({ ...common, matcap: clayMatcap() });
   }, [shading]);
   useEffect(() => () => mat.dispose(), [mat]);
   return mat;
 }
 
-/** "light" / "dark": the confidence map's steps follow the theme. */
+/** "light" / "dark": the confidence and deviation maps' steps follow the theme. */
 export function useTheme(): "light" | "dark" {
   return useUi((s) => s.theme) === "light" ? "light" : "dark";
 }
@@ -74,13 +76,17 @@ export function useTheme(): "light" | "dark" {
 /** The mesh with the chosen shading and an optional wireframe overlay. */
 export function Model({ geometry, shading, wireframe, meshRef }: { geometry: BufferGeometry; shading: Shading; wireframe: boolean; meshRef?: RefObject<Mesh | null> }) {
   const theme = useTheme();
-  // the confidence map needs the mesh's sigmas; a mesh without them shows clay
-  const map = useMemo(() => shading === "confidence" && applyConfidenceColors(geometry, theme), [geometry, shading, theme]);
-  const mat = useMaterial(shading === "confidence" && !map ? "clay" : shading);
+  const limit = useUi((s) => s.deviationLimit);
+  // the confidence map needs the mesh's sigmas, the deviation map its moves; a mesh without them shows clay
+  const map = useMemo(
+    () => (shading === "confidence" ? applyConfidenceColors(geometry, theme) : shading === "deviation" ? applyDeviationColors(geometry, theme, limit) : false),
+    [geometry, shading, theme, limit],
+  );
+  const mat = useMaterial((shading === "confidence" || shading === "deviation") && !map ? "clay" : shading);
   const invalidate = useThree((s) => s.invalidate);
   useEffect(() => {
-    if (map) invalidate(); // new colours (the theme changed) with the same material and geometry
-  }, [map, theme, invalidate]);
+    if (map) invalidate(); // new colours (the theme or the limit changed) with the same material and geometry
+  }, [map, theme, limit, invalidate]);
   // faces made by hole filling: striped grey on top, whatever the shading (they were not measured)
   const filledG = useMemo(() => filledGeometry(geometry), [geometry]);
   const filledMat = useMemo(() => filledMaterial(theme), [theme]);
@@ -107,14 +113,29 @@ export function fmtSigma(s: number): string {
 }
 
 /**
- * The confidence map's readout: the sigma under the cursor, interpolated between the corners of
- * the triangle hit (the measured ones), or "Not measured" (a filled hole). Hidden while dragging.
+ * The readout of a per-vertex map under the cursor: `value` is the value there (null: nothing to say,
+ * "Not measured" / "new surface"), found by the caller from the triangle's corners and the weights.
+ * Hidden while dragging.
  */
-function SigmaProbe({ target, sigma }: { target: RefObject<Mesh | null>; sigma: Float32Array }) {
+export function MapProbe({
+  target,
+  valueAt,
+  text,
+  deps,
+}: {
+  target: RefObject<Mesh | null>;
+  /** The map's value at barycentric weights `w` of the triangle with corners a, b, c (null: none there). */
+  valueAt: (a: number, b: number, c: number, w: number[]) => number | null;
+  text: (v: number | null) => string;
+  /** Reset the readout when this changes (the map's data). */
+  deps: unknown;
+}) {
   const gl = useThree((s) => s.gl);
   const camera = useThree((s) => s.camera);
   const invalidate = useThree((s) => s.invalidate);
   const [hit, setHit] = useState<{ p: Vec3; s: number | null } | null>(null);
+  const valueRef = useRef(valueAt);
+  valueRef.current = valueAt;
 
   useEffect(() => {
     const el = gl.domElement;
@@ -143,17 +164,7 @@ function SigmaProbe({ target, sigma }: { target: RefObject<Mesh | null>; sigma: 
       const pos = mesh.geometry.getAttribute("position");
       const { a, b, c } = h.face;
       tri.setFromAttributeAndIndices(pos, a, b, c).getBarycoord(p, bary);
-      const w = [bary.x, bary.y, bary.z];
-      const s = [sigma[a], sigma[b], sigma[c]];
-      const near = w.indexOf(Math.max(...w));
-      let sum = 0;
-      let ws = 0;
-      for (let k = 0; k < 3; k++)
-        if (s[k] < SIGMA_NONE_MM) {
-          sum += Math.max(w[k], 0) * s[k];
-          ws += Math.max(w[k], 0);
-        }
-      show({ p: [p.x, p.y, p.z], s: s[near] < SIGMA_NONE_MM && ws > 0 ? sum / ws : null });
+      show({ p: [p.x, p.y, p.z], s: valueRef.current(a, b, c, [bary.x, bary.y, bary.z]) });
     };
     const onMove = (e: PointerEvent) => {
       last = e;
@@ -171,16 +182,42 @@ function SigmaProbe({ target, sigma }: { target: RefObject<Mesh | null>; sigma: 
       el.removeEventListener("pointerleave", onLeave);
       setHit(null);
     };
-  }, [gl, camera, target, sigma, invalidate]);
+  }, [gl, camera, target, deps, invalidate]);
 
   if (!hit) return null;
   return (
     <Html position={hit.p} zIndexRange={[25, 0]} className="html-label" style={{ pointerEvents: "none" }}>
       <div className="ml-3 -translate-y-1/2 whitespace-nowrap rounded-full border border-white/15 bg-[rgb(17_20_25/0.88)] px-2 py-0.5 font-mono text-[11.5px] text-white shadow-lg tnum">
-        {hit.s === null ? "Not measured" : fmtSigma(hit.s)}
+        {text(hit.s)}
       </div>
     </Html>
   );
+}
+
+/** The confidence map's readout: the sigma under the cursor, interpolated between the measured corners, or "Not measured" (a filled hole). */
+function SigmaProbe({ target, sigma }: { target: RefObject<Mesh | null>; sigma: Float32Array }) {
+  const valueAt = useCallback(
+    (a: number, b: number, c: number, w: number[]) => {
+      const s = [sigma[a], sigma[b], sigma[c]];
+      const near = w.indexOf(Math.max(...w));
+      let sum = 0;
+      let ws = 0;
+      for (let k = 0; k < 3; k++)
+        if (s[k] < SIGMA_NONE_MM) {
+          sum += Math.max(w[k], 0) * s[k];
+          ws += Math.max(w[k], 0);
+        }
+      return s[near] < SIGMA_NONE_MM && ws > 0 ? sum / ws : null;
+    },
+    [sigma],
+  );
+  return <MapProbe target={target} valueAt={valueAt} text={(s) => (s === null ? "Not measured" : fmtSigma(s))} deps={sigma} />;
+}
+
+/** The deviation map's readout: "+0.034 mm (outward)", "−0.12 mm (inward)" or "new surface". */
+export function DeviationProbe({ target, values }: { target: RefObject<Mesh | null>; values: Float32Array }) {
+  const valueAt = useCallback((a: number, b: number, c: number, w: number[]) => interpolateMove(values, a, b, c, w), [values]);
+  return <MapProbe target={target} valueAt={valueAt} text={deviationReadout} deps={values} />;
 }
 
 function LaserCloud({ geometry, size }: { geometry: BufferGeometry; size: number }) {
@@ -316,10 +353,11 @@ export function ViewerCanvas({
 }) {
   const meshRef = useRef<Mesh | null>(null);
   const sigma = shading === "confidence" ? sigmaOf(geometry) : null;
+  const moves = shading === "deviation" ? deviationOf(geometry) : null;
   const [bvh, setBvh] = useState(false);
   useEffect(() => {
-    if (measure || fit || sigma) setBvh(true); // build the raycast acceleration on first use only
-  }, [measure, fit, sigma]);
+    if (measure || fit || sigma || moves) setBvh(true); // build the raycast acceleration on first use only
+  }, [measure, fit, sigma, moves]);
 
   const bounds = useMemo(() => {
     if (!geometry.boundingSphere) geometry.computeBoundingSphere();
@@ -356,6 +394,7 @@ export function ViewerCanvas({
           )}
           {laser && showLaser ? <LaserCloud geometry={laser} size={1.6} /> : null}
           {sigma ? <SigmaProbe target={meshRef} sigma={sigma} /> : null}
+          {moves ? <DeviationProbe target={meshRef} values={moves} /> : null}
           <MeasureTool enabled={measure} target={meshRef} onPick={onPick} pending={pending} measurements={measurements} markerRadius={markerRadius} />
           <FitTool enabled={fit} busy={fitBusy} target={meshRef} geometry={geometry} fits={fits} picked={pickedFits} markerRadius={markerRadius} onPick={onFitPick} />
         </group>

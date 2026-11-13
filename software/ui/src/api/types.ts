@@ -623,3 +623,27 @@ export type FitResult = {
   warnings: string[]; // plain language, e.g. "small region: 23 points"
   version: number; // the mesh version it was fitted on
 };
+
+// ------------------------------------------------------------------ M5 second slice: the deviation map
+// APP_API.md "M5 second slice: the deviation map". Compares the current mesh with the base mesh.
+
+export type DeviationInfo = {
+  version: number; // the mesh version it was made for
+  vertices: number; // values in deviation.bin = vertices of result/mesh.ply
+  edits: number; // the cursor: 0 = no edits, every value is 0
+  reference: { stage: string; triangles: number; vertices: number }; // the base mesh
+  stats: {
+    n: number; // compared vertices
+    new: number; // vertices of filled faces only (no value)
+    rms_mm: number | null;
+    mean_mm: number | null; // signed
+    p50_mm: number | null; // of |move|
+    p95_mm: number | null;
+    p99_mm: number | null;
+    max_mm: number | null;
+    moved: number | null; // share moved by more than 0.01 mm; the numbers are null when n = 0
+  };
+};
+
+/** The deviation of the current mesh: one signed move in mm per vertex (NaN = new surface), in the PLY's order. */
+export type Deviation = { info: DeviationInfo; values: Float32Array };

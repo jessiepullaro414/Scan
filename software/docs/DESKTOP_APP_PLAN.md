@@ -662,6 +662,12 @@ largest and 95th-percentile move. The value under the cursor.
    (`ProcessManager.deviation`), made once per mesh version; tested through three edits of the
    simulated scan on both compute paths.
 3. The shading, legend and cursor value in the Process page and the viewer, and the mock.
+   **Done 2026-11-12:** "Deviation" (key 5) next to Confidence on both pages, off while the scan
+   has no edits; blue = inward, grey = unchanged, orange-red = outward, striped = new surface; a
+   legend with the limit (0.05 to 1 mm, kept as a preference), the share within it, the largest
+   and 95 % move; the value under the cursor. Checked on the real engine: after Smooth (Taubin
+   50 %, edges kept, within 2σ) on an 854k-triangle simulated scan, 99 % of the surface is within
+   ±0.1 mm, 95 % within 0.051 mm, the largest move 0.46 mm (at the noisy rim).
 4. A simulator check in `VALIDATION.md`: after the default recipe's smoothing, compare the
    deviation map with the change of the true error (does a move towards the truth show as a move,
    and how much do the edits move the surface at all).

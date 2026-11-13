@@ -21,6 +21,7 @@ import {
   Trash,
   X,
   Brush,
+  Diff,
   Orbit,
   Shapes,
   SlidersHorizontal,
@@ -44,13 +45,15 @@ import { href, navigate, paths } from "../lib/router";
 import { describeReason } from "../lib/tracking";
 import { cn, useHotkeys } from "../lib/util";
 import { isActive, useScanJob } from "../store/jobs";
-import { useProcess } from "../store/process";
+import { processKey, useProcess } from "../store/process";
 import { useProjects } from "../store/projects";
 import { toast } from "../store/toasts";
 import { sigmaOf } from "../three/confidence";
 import { disposeMeshGeometry, plyGeometry, readPly } from "../three/ply";
 import { viewBus } from "../three/viewBus";
 import { ConfidenceLegend } from "./viewer/ConfidenceLegend";
+import { DeviationLegend } from "./viewer/DeviationLegend";
+import { useDeviation } from "./viewer/useDeviation";
 import { FIT_ICON, FitList } from "./viewer/FitsPanel";
 import type { FitItem } from "./viewer/FitTool";
 import { fmtSigma, ViewerCanvas, type Measurement, type Shading, type Vec3 } from "./viewer/ViewerCanvas";
@@ -464,6 +467,7 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
     "2": () => setShading("studio"),
     "3": () => setShading("normals"),
     "4": () => hasSigma && setShading("confidence"),
+    "5": () => devEnabled && setShading("deviation"),
     escape: () => {
       if (pendingRef.current) setPendingPoint(null);
       else if (measure) setMeasure(false);
@@ -474,7 +478,15 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
   const geometry = load.phase === "ready" ? load.geometry : null;
   // the confidence map needs each point's sigma (meshes made with the confidence reconstruction)
   const hasSigma = !!sigmaOf(geometry);
-  const shown: Shading = shading === "confidence" && !hasSigma ? "clay" : shading;
+  // the deviation map needs edits (the cursor of the scan's process state, which this page reads for the
+  // mesh version); when that is not known, try and let the answer tell
+  const cursor = useProcess((s) => s.entries[processKey(pid, sid)]?.state?.cursor ?? null);
+  const devEnabled = cursor === null || cursor > 0;
+  const devOn = shading === "deviation" && devEnabled;
+  const meshVersion = typeof geometry?.userData.meshVersion === "number" ? (geometry.userData.meshVersion as number) : null;
+  const dev = useDeviation(pid, sid, geometry, meshVersion, devOn);
+  const shown: Shading =
+    shading === "deviation" ? (devOn && dev.phase === "ready" ? "deviation" : "clay") : shading === "confidence" && !hasSigma ? "clay" : shading;
   const box = geometry?.boundingBox ?? null;
   const size = box ? { x: box.max.x - box.min.x, y: box.max.y - box.min.y, z: box.max.z - box.min.z } : null;
   const tris = geometry ? (geometry.index ? geometry.index.count / 3 : geometry.getAttribute("position").count / 3) : 0;
@@ -628,7 +640,7 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
               <Segmented<Shading>
                 label="Shading"
                 size="sm"
-                value={shown}
+                value={devOn ? "deviation" : shown}
                 onChange={setShading}
                 options={[
                   { value: "clay", label: "Clay", icon: Brush, title: "Matcap clay (1)" },
@@ -642,6 +654,13 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
                     title: hasSigma
                       ? "How well each point was measured (4)"
                       : "This mesh has no confidence data: it was made without a GPU or by an earlier version. Make it again to get it.",
+                  },
+                  {
+                    value: "deviation",
+                    label: "Deviation",
+                    icon: Diff,
+                    disabled: !devEnabled,
+                    title: devEnabled ? "How far the edits moved the surface from the mesh as measured (5)" : "No edits yet: the mesh is as measured",
                   },
                 ]}
               />
@@ -702,6 +721,12 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
         {shown === "confidence" && geometry ? (
           <div className="glass absolute bottom-4 left-4 animate-pop-in rounded-xl border border-line-strong px-3 py-2.5 shadow-md">
             <ConfidenceLegend geometry={geometry} />
+          </div>
+        ) : null}
+
+        {shading === "deviation" && geometry ? (
+          <div className="glass absolute bottom-4 left-4 animate-pop-in rounded-xl border border-line-strong px-3 py-2.5 shadow-md">
+            <DeviationLegend state={devEnabled ? dev : { phase: "unavailable", message: "No edits yet: the mesh is as measured" }} />
           </div>
         ) : null}
 
@@ -950,7 +975,16 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
               <Kbd>L</Kbd> laser points
             </span>
             <span>
-              <Kbd>1</Kbd>–<Kbd>{hasSigma ? 4 : 3}</Kbd> shading
+              {devEnabled && !hasSigma ? (
+                <>
+                  <Kbd>1</Kbd>–<Kbd>3</Kbd>, <Kbd>5</Kbd>
+                </>
+              ) : (
+                <>
+                  <Kbd>1</Kbd>–<Kbd>{devEnabled ? 5 : hasSigma ? 4 : 3}</Kbd>
+                </>
+              )}{" "}
+              shading
             </span>
           </div>
           {tris > 0 ? <div className="sr-only">{fmtCompact(tris)} triangles</div> : null}

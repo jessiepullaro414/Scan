@@ -10,6 +10,7 @@
  * stays responsive even at a million triangles.
  */
 import type {
+  DeviationInfo,
   EditEntry,
   FitResult,
   FuseStage,
@@ -233,6 +234,8 @@ export class MockProcess {
   private find: ScanLookup;
   private studios = new Map<string, Studio>();
   private recipes: Recipe[] = BUILTINS.map((r) => ({ ...r }));
+  /** The made-up deviation of each scan's current mesh version. */
+  private devs = new Map<string, { info: DeviationInfo; bin: ArrayBuffer }>();
 
   constructor(host: MockHost, find: ScanLookup) {
     this.host = host;
@@ -258,6 +261,11 @@ export class MockProcess {
     if (a === "undo" && is("POST", 1)) return json(200, this.step(p, s, -1));
     if (a === "redo" && is("POST", 1)) return json(200, this.step(p, s, 1));
     if (a === "recipe" && is("POST", 1)) return json(200, this.startRecipe(p, s, body));
+    if ((a === "deviation.json" || a === "deviation.bin") && is("GET", 1)) {
+      const d = this.deviation(p, s);
+      if (a === "deviation.json") return json(200, d.info);
+      return new Response(d.bin, { status: 200, headers: { "content-type": "application/octet-stream", "X-OHS-Mesh-Version": String(d.info.version) } });
+    }
     if (a === "holes.json" && is("GET", 1)) {
       const st = this.ensure(p, s);
       if (!st.current) throw new HttpError(404, "No mesh yet, so no holes", "Run Track first.");
@@ -329,6 +337,68 @@ export class MockProcess {
       warnings: r.warnings,
       version: st.version,
     };
+  }
+
+  /**
+   * M5 `deviation.json` / `deviation.bin`, made up: zeros while the scan has no edits; after edits a smooth
+   * field of a few hundredths of a mm (a little more for each edit) and no value (NaN) for the vertices
+   * past the base mesh's, which is where hole filling puts its new ones. Kept per mesh version; 409
+   * before there is a mesh.
+   */
+  private deviation(p: Project, s: Scan): { info: DeviationInfo; bin: ArrayBuffer } {
+    const st = this.ensure(p, s);
+    const m = st.current;
+    if (!m || !st.base) throw new HttpError(409, "This scan has no mesh yet, so no deviation", "Make the mesh first.");
+    const kept = this.devs.get(st.pid + "/" + st.sid);
+    if (kept && kept.info.version === st.version) return kept;
+    const V = m.positions.length / 3;
+    const baseV = st.base.mesh.positions.length / 3;
+    const out = new Float32Array(V);
+    if (st.cursor > 0) {
+      const amp = Math.min(0.06, 0.02 + 0.01 * st.cursor);
+      const P = m.positions;
+      for (let i = 0; i < V; i++) {
+        const x = P[i * 3],
+          y = P[i * 3 + 1],
+          z = P[i * 3 + 2];
+        out[i] = i >= baseV ? NaN : amp * (Math.sin(x * 0.09 + 0.5) * Math.cos(y * 0.07) + 0.4 * Math.sin(z * 0.11 + x * 0.03));
+      }
+    }
+    const abs: number[] = [];
+    let sum = 0;
+    let sq = 0;
+    let moved = 0;
+    for (let i = 0; i < V; i++) {
+      const x = out[i];
+      if (Number.isNaN(x)) continue;
+      abs.push(Math.abs(x));
+      sum += x;
+      sq += x * x;
+      if (Math.abs(x) > 0.01) moved++;
+    }
+    abs.sort((a, b) => a - b);
+    const n = abs.length;
+    const q = (f: number) => (n ? abs[Math.min(n - 1, Math.floor(f * n))] : null);
+    const info: DeviationInfo = {
+      version: st.version,
+      vertices: V,
+      edits: st.cursor,
+      reference: { stage: st.base.stage, triangles: st.base.mesh.indices.length / 3, vertices: baseV },
+      stats: {
+        n,
+        new: V - n,
+        rms_mm: n ? Math.sqrt(sq / n) : null,
+        mean_mm: n ? sum / n : null,
+        p50_mm: q(0.5),
+        p95_mm: q(0.95),
+        p99_mm: q(0.99),
+        max_mm: n ? abs[n - 1] : null,
+        moved: n ? moved / n : null,
+      },
+    };
+    const d = { info, bin: out.buffer as ArrayBuffer };
+    this.devs.set(st.pid + "/" + st.sid, d);
+    return d;
   }
 
   /** The current mesh as a file (mesh.ply / mesh.stl / mesh.obj), or null when there is none. */

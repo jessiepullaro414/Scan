@@ -144,6 +144,7 @@ export function applyConfidenceColors(g: BufferGeometry, theme: Theme): boolean 
     attr.needsUpdate = true;
   } else g.setAttribute("color", new BufferAttribute(colors, 4, true));
   g.userData.confidenceTheme = theme;
+  g.userData.deviationPaint = null; // the shared colours are no longer the deviation map's
   return true;
 }
 

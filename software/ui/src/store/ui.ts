@@ -1,6 +1,7 @@
 /** UI preferences, persisted in localStorage. */
 import { create } from "zustand";
 import type { ScanMode } from "../api/types";
+import { validLimit } from "../lib/deviation";
 import { storage } from "../lib/util";
 
 export type Theme = "dark" | "light";
@@ -16,6 +17,8 @@ type UiState = {
   captureSound: boolean;
   /** Start "Make mesh" (standard quality) as soon as a scan is stopped. */
   autoMesh: boolean;
+  /** The deviation map's scale: the move (mm) that shows as the strongest colour. */
+  deviationLimit: number;
   setTheme: (t: Theme) => void;
   setCurrentProject: (pid: string | null) => void;
   setScanMode: (m: ScanMode) => void;
@@ -23,6 +26,7 @@ type UiState = {
   setHintsOpen: (open: boolean) => void;
   setCaptureSound: (on: boolean) => void;
   setAutoMesh: (on: boolean) => void;
+  setDeviationLimit: (mm: number) => void;
 };
 
 const K = {
@@ -33,6 +37,7 @@ const K = {
   hints: "ohs.hintsOpen",
   sound: "ohs.captureSound",
   autoMesh: "ohs.autoMesh",
+  deviationLimit: "ohs.deviationLimit",
 };
 
 function readTheme(): Theme {
@@ -56,6 +61,7 @@ export const useUi = create<UiState>((set) => ({
   hintsOpen: storage.get<boolean>(K.hints, true),
   captureSound: storage.get<boolean>(K.sound, true),
   autoMesh: storage.get<boolean>(K.autoMesh, true),
+  deviationLimit: validLimit(storage.get<unknown>(K.deviationLimit, null)),
   setTheme: (theme) => {
     try {
       localStorage.setItem(K.theme, theme);
@@ -88,6 +94,11 @@ export const useUi = create<UiState>((set) => ({
   setAutoMesh: (autoMesh) => {
     storage.set(K.autoMesh, autoMesh);
     set({ autoMesh });
+  },
+  setDeviationLimit: (mm) => {
+    const deviationLimit = validLimit(mm);
+    storage.set(K.deviationLimit, deviationLimit);
+    set({ deviationLimit });
   },
 }));
 

@@ -11,6 +11,7 @@ import {
   Blend,
   Box,
   Brush,
+  Diff,
   CircleDashed,
   CircleExclamationPoint,
   Contrast,
@@ -63,6 +64,8 @@ import { RecipesPanel } from "./process/RecipesPanel";
 import { StagesPanel } from "./process/StagesPanel";
 import { DownloadPanel, StatsPanel } from "./process/StatsPanel";
 import { ConfidenceLegend } from "./viewer/ConfidenceLegend";
+import { DeviationLegend } from "./viewer/DeviationLegend";
+import { useDeviation } from "./viewer/useDeviation";
 import type { Shading } from "./viewer/ViewerCanvas";
 
 const TOOLS: { id: SelectTool; label: string; key: string; icon: LucideIcon; hint: string }[] = [
@@ -197,7 +200,12 @@ export default function ProcessPage({ pid, sid }: { pid: string; sid: string }) 
   const canSelect = !!mesh && !comparing;
   // the confidence map needs each point's sigma (meshes made with the confidence reconstruction)
   const hasSigma = !!sigmaOf(mesh?.geometry);
-  const shownShading: Shading = shading === "confidence" && !hasSigma ? "clay" : shading;
+  // the deviation map compares the current mesh with the base mesh, so it needs edits
+  const devEnabled = (state?.cursor ?? 0) > 0;
+  const devOn = shading === "deviation" && devEnabled;
+  const dev = useDeviation(pid, sid, comparing ? null : (mesh?.geometry ?? null), mesh?.version ?? null, devOn && !comparing);
+  const shownShading: Shading =
+    shading === "deviation" ? (devOn && !comparing && dev.phase === "ready" ? "deviation" : "clay") : shading === "confidence" && !hasSigma ? "clay" : shading;
 
   // A new version (an edit, undo or redo) brings a new, empty selection. Say so when that drops
   // faces the user had selected, unless Delete or Keep used them.
@@ -314,6 +322,7 @@ export default function ProcessPage({ pid, sid }: { pid: string; sid: string }) 
     "2": () => setShading("studio"),
     "3": () => setShading("normals"),
     "4": () => hasSigma && setShading("confidence"),
+    "5": () => devEnabled && setShading("deviation"),
     v: () => pickTool("navigate"),
     b: () => pickTool("box"),
     l: () => pickTool("lasso"),
@@ -650,7 +659,7 @@ export default function ProcessPage({ pid, sid }: { pid: string; sid: string }) 
                 <Segmented<Shading>
                   label="Shading"
                   size="sm"
-                  value={shownShading}
+                  value={devOn ? "deviation" : shownShading}
                   onChange={setShading}
                   options={[
                     { value: "clay", label: "Clay", icon: Brush, title: "Matcap clay (1)" },
@@ -664,6 +673,13 @@ export default function ProcessPage({ pid, sid }: { pid: string; sid: string }) 
                       title: hasSigma
                         ? "How well each point was measured (4)"
                         : "This mesh has no confidence data: it was made without a GPU or by an earlier version. Run Track again to get it.",
+                    },
+                    {
+                      value: "deviation",
+                      label: "Deviation",
+                      icon: Diff,
+                      disabled: !devEnabled,
+                      title: devEnabled ? "How far the edits moved the surface from the mesh as measured (5)" : "No edits yet: the mesh is as measured",
                     },
                   ]}
                 />
@@ -801,6 +817,18 @@ export default function ProcessPage({ pid, sid }: { pid: string; sid: string }) 
           <div className={cn("pointer-events-none absolute left-4 transition-[bottom] duration-200", showSelBar ? "bottom-28" : "bottom-4")}>
             <Overlay className="px-3 py-2.5">
               <ConfidenceLegend geometry={(comparing ? previous : mesh)?.geometry ?? null} />
+            </Overlay>
+          </div>
+        ) : null}
+
+        {/* bottom left: the deviation map's legend (same place as the confidence map's) */}
+        {shading === "deviation" && mesh ? (
+          <div className={cn("pointer-events-none absolute left-4 transition-[bottom] duration-200", showSelBar ? "bottom-28" : "bottom-4")}>
+            <Overlay className="px-3 py-2.5">
+              <DeviationLegend
+                state={devEnabled ? dev : { phase: "unavailable", message: "No edits yet: the mesh is as measured" }}
+                note={devEnabled && comparing ? "This is the mesh before the last change. Choose “Now” (K) to see how far the edits moved the current one." : undefined}
+              />
             </Overlay>
           </div>
         ) : null}
