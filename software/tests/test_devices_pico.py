@@ -406,6 +406,8 @@ def test_watchdog_turns_emitters_off_when_host_goes_silent(sim, caplog):
         dt = wait_until(lambda: sim.duties() == [0, 0, 0], timeout=3.0)
         assert 0.5 < dt < 2.5  # 1.5 s after the last line that arrived (<= 1 heartbeat ago)
         wait_until(lambda: pico.emitters == (0, 0, 0), timeout=1.0)  # learned from "L emitters-off"
+        # the reader thread sets the levels and then writes the warning: wait for the line, don't race it
+        wait_until(lambda: "emitters off by itself" in caplog.text, timeout=1.0)
         assert "emitters off by itself (emitters-off watchdog)" in caplog.text
         sim.drop_host_tx = False
         pico.set_emitters(10, 0, 0)
