@@ -24,6 +24,7 @@ import {
   ShortcutHints,
   TrackingBadge,
   ViewToolbar,
+  WarnChips,
 } from "./scan/Overlays";
 import { CameraPreviews, EmittersPanel, LiveStats, ScanSetup } from "./scan/SidePanel";
 
@@ -128,7 +129,10 @@ export default function ScanPage({ projectParam, first = false }: { projectParam
             <TrackingBadge />
           </div>
           <div className="absolute left-1/2 top-4 flex w-[min(560px,calc(100%-2rem))] -translate-x-1/2 flex-col items-center gap-3">
-            <RecChip />
+            <div className="flex flex-wrap items-center justify-center gap-2">
+              <RecChip />
+              <WarnChips />
+            </div>
             {!live ? (
               <div className="pointer-events-auto w-full">
                 <LaunchCheckCallout glass />

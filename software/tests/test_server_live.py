@@ -117,6 +117,7 @@ def test_sim_device_previews_and_status(env):
         st = seen["status"][0]
         assert 150 < st["distance_mm"] < 400 and st["fps"]["camera"] > 5 and st["tracking"]["state"] == "idle"
         assert st["record_backlog"] == 0  # frames waiting to be written: none while not recording
+        assert st["gpu_fallback"] is None  # no GPU stage failed (and nothing is scanning)
 
 
 def test_scan_rewind_stop_and_process(env):
@@ -152,6 +153,7 @@ def test_scan_rewind_stop_and_process(env):
         assert last["tracking"]["state"] in ("ok", "weak") and last["fps"]["pipeline"] > 0
         assert last["laser_points"] > 0 and last["model"]["triangles"] > 0 and last["distance_mm"] > 100
         assert all(isinstance(m["record_backlog"], int) and m["record_backlog"] >= 0 for m in sts)
+        assert all(m["gpu_fallback"] is None for m in sts)
         assert any(m["type"] == "session" and m["state"] == "scanning" for m in got["session"])
         rw = _post(url, "/api/scan/rewind", {"seconds": 0.5})
         assert rw.status_code == 200, rw.text
@@ -213,6 +215,46 @@ def test_scan_rewind_stop_and_process(env):
     assert not list((root / "projects" / pid / "scans" / scan["id"]).glob("result.tmp-*"))
     delete = requests.delete(url + f"/api/projects/{pid}", timeout=T)
     assert delete.status_code == 204
+
+
+def test_gpu_fallback_in_the_status_and_one_notification(env, monkeypatch):
+    from ohs.app.pipeline import FramePipeline
+
+    url = env["url"]
+    if not requests.get(url + "/api/device", timeout=T).json()["connected"]:
+        _connect_sim(url)
+    pid = _post(url, "/api/projects", {"name": "GPU fallback"}).json()["id"]
+    real = FramePipeline.process
+    calls = []
+
+    def failing(self, frame):  # a GPU stage fails on the third frame, as the pipeline records it
+        res = real(self, frame)
+        calls.append(1)
+        if len(calls) >= 3:
+            self.gpu_fallbacks.setdefault("depth", "out of memory")
+        return res
+
+    monkeypatch.setattr(FramePipeline, "process", failing)
+    with ws_connect(env["srv"].ws_url, max_size=None, open_timeout=5) as ws:
+        assert _post(url, "/api/scan/start", {"project_id": pid, "mode": "markerless"}).status_code == 200
+        logs: list = []
+        last: dict = {}
+
+        def seen(m, p, raw):
+            if m["type"] == "log" and "graphics card" in m["message"]:
+                logs.append(m)
+            if m["type"] == "status":
+                last.update(m)
+            return time.monotonic() > t_end and last.get("gpu_fallback") is not None
+
+        t_end = time.monotonic() + 2.0
+        recv_until(ws, seen, timeout=40)
+        assert last["gpu_fallback"] == {"depth": "out of memory"}  # kept while the scan runs
+        assert len(logs) == 1 and logs[0]["level"] == "warn"  # one notification, however many frames follow
+        assert "(depth)" in logs[0]["message"] and "processor" in logs[0]["message"]
+        assert _post(url, "/api/scan/stop").status_code == 200
+        recv_until(ws, lambda m, p, raw: m["type"] == "status" and m["session"]["state"] == "idle"
+                   and m["gpu_fallback"] is None, timeout=10)  # null again when idle
 
 
 def _raw_ws_never_reading(host: str, port: int) -> socket.socket:

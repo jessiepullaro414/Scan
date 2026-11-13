@@ -97,7 +97,9 @@ about the scan itself, not the Fit tool, and they decide whether a measurement c
      switch under Settings, "After a scan", turns it off (a preference kept in the browser, on by
      default); the job can be cancelled as before;
    - show the recording backlog (`record_backlog`, B4) and a GPU fallback (`gpu_fallback`, B7) in
-     the app.
+     the app. **Done 2026-11-12:** two warning chips next to the recording chip on the Scan page
+     ("Saving is behind: N frames waiting", shown above 60 frames and hidden below 20;
+     "Graphics card stopped: running slower"), and one notification when a GPU stage fails.
 6. **With the real hardware:** measure against reference parts (gauge blocks, a machined part, a
    ball bar): bias, repeatability and coverage, per working distance and object size. Publish
    accuracy only from these numbers.

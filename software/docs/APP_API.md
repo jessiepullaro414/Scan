@@ -116,7 +116,7 @@ Everything above is implemented as written. Where the contract was silent or amb
 
 **Extra fields**
 - `hello`: `app`, `app_version`. `log`: `t`. `health`: `api`.
-- `status`: `tracking.code` (machine-readable: `no_depth`, `few_inliers`, `low_overlap`, `degenerate`, `rewound`, ...), `laser_points_frame`, `latency_ms` (frame captured to result published), `process_ms` (pipeline time of the frame), `dropped_frames` (frames the live pipeline skipped; every frame is still recorded).
+- `status`: `tracking.code` (machine-readable: `no_depth`, `few_inliers`, `low_overlap`, `degenerate`, `rewound`, ...), `laser_points_frame`, `latency_ms` (frame captured to result published), `process_ms` (pipeline time of the frame), `dropped_frames` (frames the live pipeline skipped; every frame is still recorded), `record_backlog` (frames waiting to be written to disk: the recorder's queue plus unwritten PNGs; 0 when idle; the recorder logs one warning past 120), `gpu_fallback` (`null`, or `{stage: reason}` once a GPU stage failed in the running scan and went on on the CPU, e.g. `{"depth": "out of memory"}`, stages `depth` and `track_filter`; kept until the scan stops; the server also sends one `log` message with level `warn` when it first happens).
 - `status.tracking.weak` (M3): what the surface can't pin down in this frame, `"slide"` and/or `"turn"` (a flat panel, a sphere's axis).
   - `degenerate` shows with a matching hint when 4 of the last 6 frames have it.
   - Sliding counts even with the gyro, which holds rotations only; turning counts only without the gyro.

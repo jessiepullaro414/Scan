@@ -218,7 +218,8 @@ class Studio:
                    "laser_points": st.get("laser_points", 0), "model": st.get("model"),
                    "extra": {"laser_points_frame": st.get("laser_points_frame", 0), "latency_ms": st.get("latency_ms"),
                              "process_ms": st.get("process_ms"), "dropped_frames": st.get("dropped_frames", 0),
-                             "record_backlog": int(rec.backlog) if rec is not None else 0}}
+                             "record_backlog": int(rec.backlog) if rec is not None else 0,
+                             "gpu_fallback": st.get("gpu_fallback")}}
         else:
             reason = "Not scanning" if dev.connected else ("Connecting..." if dev.busy else "No device connected")
             tracking = {"state": "idle", "reason": reason, "code": None, "fitness": None, "rmse_mm": None}
@@ -226,7 +227,7 @@ class Studio:
             last = self.last_session
             model = last.live_stats().get("model") if last is not None else None
             out = {"distance_mm": idle.get("distance_mm"), "pipeline": 0.0, "laser_points": 0,
-                   "model": model or {"vertices": 0, "triangles": 0}, "extra": {"record_backlog": 0}}
+                   "model": model or {"vertices": 0, "triangles": 0}, "extra": {"record_backlog": 0, "gpu_fallback": None}}
         msg = {"type": "status", "t": round(time.time(), 3), "session": self.session_state(), "tracking": tracking,
                "distance_mm": out["distance_mm"], "fps": {"camera": dev.camera_fps(), "pipeline": out["pipeline"]},
                "laser_points": out["laser_points"], "model": out["model"], "emitters": dev.emitter_levels()}

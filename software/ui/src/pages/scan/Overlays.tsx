@@ -15,7 +15,7 @@ import {
   CircleOff,
   X,
 } from "lucide-react";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { IconButton, Button } from "../../components/ui/Button";
 import { Kbd } from "../../components/ui/Feedback";
 import { fmtClock, fmtInt } from "../../lib/format";
@@ -31,6 +31,7 @@ import {
   type DistanceZone,
 } from "../../lib/tracking";
 import { cn, clamp } from "../../lib/util";
+import { backlogVisible, describeGpuFallback } from "../../lib/warnings";
 import { useDevice } from "../../store/device";
 import { useSession } from "../../store/session";
 import { useUi } from "../../store/ui";
@@ -108,6 +109,41 @@ export function RecChip() {
       <span className="h-3.5 w-px bg-line-strong" aria-hidden />
       <span className="font-mono text-xs text-muted tnum">{fmtInt(frames)} frames</span>
     </div>
+  );
+}
+
+/** Warning chips beside the recording chip: the saving backlog and a GPU that stopped. They read only their own status fields. */
+export function WarnChips() {
+  const backlog = useSession((s) => s.status?.record_backlog ?? 0);
+  const fallback = useSession((s) => s.status?.gpu_fallback ?? null);
+  const phase = useSession((s) => s.session?.state ?? "idle");
+  const shown = useRef(false);
+  shown.current = backlogVisible(backlog, shown.current);
+  if (phase !== "scanning" && phase !== "paused") return null;
+  const chip = "glass flex h-8 items-center gap-2 rounded-full border border-warn/45 px-3 text-xs font-medium text-warn shadow-md";
+  return (
+    <>
+      {shown.current ? (
+        <div
+          role="status"
+          className={chip}
+          title="The disk or the processor is not keeping up. Frames wait in memory; nothing is lost so far. Pausing lets it catch up."
+        >
+          <TriangleExclamationPoint size={14} aria-hidden />
+          <span>Saving is behind: {fmtInt(backlog)} frames waiting</span>
+        </div>
+      ) : null}
+      {fallback ? (
+        <div
+          role="status"
+          className={chip}
+          title={`The graphics card stopped working for ${describeGpuFallback(fallback)}. It continues on the processor, which is slower.`}
+        >
+          <TriangleExclamationPoint size={14} aria-hidden />
+          <span>Graphics card stopped: running slower</span>
+        </div>
+      ) : null}
+    </>
   );
 }
 

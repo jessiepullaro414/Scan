@@ -224,6 +224,9 @@ class MockBackend {
   private emitters: Emitters = { vertical: 0, horizontal: 0, dots: 0 };
   /** Scan clock speed (dev handle: 0 freezes a moment, e.g. "tracking lost", for inspection). */
   timeScale = 1;
+  /** Dev handles for the Scan page's warning chips: `__ohsMock.recordBacklog = 90`, `__ohsMock.gpuFallback = { depth: "out of memory" }`. */
+  recordBacklog = 0;
+  gpuFallback: Record<string, string> | null = null;
 
   constructor(opts: MockOptions) {
     this.opts = opts;
@@ -1024,6 +1027,8 @@ class MockBackend {
       laser_points: s ? s.laser : 0,
       model: { vertices, triangles },
       emitters: this.device.source === "camera" ? { ...this.emitters } : null,
+      record_backlog: scanning ? this.recordBacklog : 0,
+      gpu_fallback: scanning ? this.gpuFallback : null,
     };
   }
 

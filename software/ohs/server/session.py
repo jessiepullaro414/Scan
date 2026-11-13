@@ -264,6 +264,7 @@ class ScanSession:
         self._weak_hint = WeakHintFilter()
         self._t_view = 0.0
         self._errors = 0
+        self._gpu_fallback: dict[str, str] | None = None  # stage -> reason, once a GPU stage failed in this scan
         self.disabled = False
         self.n_processed = 0
         self.n_tracked = 0
@@ -301,6 +302,7 @@ class ScanSession:
         s = dict(self._stats)
         s["fps_pipeline"] = round(self.proc_rate.value(), 2)
         s["dropped_frames"] = int(self._slot.dropped)
+        s["gpu_fallback"] = self._gpu_fallback
         return s
 
     # ------------------------------------------------------------------ lifecycle (Studio, under its lock)
@@ -641,6 +643,12 @@ class ScanSession:
         if not ok and self._last_good is not None:
             self.hub.publish_json(ghost_message(self._last_good))
         self._last_left = (res.left_r, res.lines)
+        if pipe.gpu_fallbacks and self._gpu_fallback is None:  # read here: the pipeline belongs to this thread
+            self._gpu_fallback = dict(pipe.gpu_fallbacks)
+            self._notify("warn", "The graphics card stopped working for this scan (%s): it continues on the "
+                                 "processor, slower." % ", ".join(self._gpu_fallback))
+        elif self._gpu_fallback is not None and len(pipe.gpu_fallbacks) > len(self._gpu_fallback):
+            self._gpu_fallback = dict(pipe.gpu_fallbacks)  # a second stage failed later: shown, not announced again
         if self._previews.due() and self._preview_worker is not None:
             self._preview_worker.submit((res.left_r, res.lines, res.depth))
 

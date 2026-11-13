@@ -145,6 +145,10 @@ export type StatusMsg = {
   laser_points: number;
   model: { vertices: number; triangles: number };
   emitters: Emitters | null;
+  /** Frames waiting to be written to disk (0 when idle). */
+  record_backlog: number;
+  /** Once a GPU stage failed in the running scan: stage ("depth", "track_filter") -> reason; it now runs on the CPU. */
+  gpu_fallback: Record<string, string> | null;
 };
 
 export type HelloMsg = { type: "hello"; version: string };
