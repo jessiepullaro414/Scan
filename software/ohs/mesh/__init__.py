@@ -19,11 +19,15 @@ operation returns a new ``(V, F)`` and leaves its inputs alone; the slow ones ta
 * :func:`surface_offset`, :func:`offset_stats` (:mod:`ohs.mesh.offset`): how far an edited mesh
   lies from the measured one, signed, per vertex (the deviation map).
 
+* :func:`weak_areas` (:mod:`ohs.mesh.check`): the areas whose confidence misses a tolerance, or
+  that hole filling made up (the "Check" answer: what needs another pass).
+
 What "hole" and "outer border" mean is defined once, in :mod:`ohs.mesh.topology`.
 """
 from __future__ import annotations
 
 from ohs.mesh.anchor import AnchorParams, anchor_to_points
+from ohs.mesh.check import weak_areas
 from ohs.mesh.clean import delete_faces, keep_faces, remove_floaters
 from ohs.mesh.confidence import SIGMA_NONE_MM, carry_filled, carry_sigma, filled_area, sigma_stats
 from ohs.mesh.holes import fill_holes, hole_outlines
@@ -35,4 +39,4 @@ from ohs.mesh.topology import vertex_normals
 
 __all__ = ["remove_floaters", "fill_holes", "smooth", "decimate", "delete_faces", "keep_faces", "mesh_stats",
            "hole_outlines", "vertex_normals", "sigma_stats", "carry_sigma", "SIGMA_NONE_MM", "AnchorParams",
-           "anchor_to_points", "carry_filled", "filled_area", "deviation", "surface_offset", "offset_stats"]
+           "anchor_to_points", "carry_filled", "filled_area", "deviation", "surface_offset", "offset_stats", "weak_areas"]
