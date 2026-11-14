@@ -113,11 +113,12 @@ with the scanner, so photometric alignment on these images would bias the motion
 """
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
 import time
 from dataclasses import dataclass, field
-from typing import Any, Callable
+from typing import Any, Callable, Iterator
 
 import numpy as np
 
@@ -132,6 +133,25 @@ MODEL_BACKENDS = ("auto", "open3d", "gpu")
 O3D_THREADS_ENV = "OHS_O3D_THREADS"  # see _limit_open3d_threads
 
 
+@contextlib.contextmanager
+def open3d_threads(n: int) -> Iterator[None]:
+    """Hold Open3D to ``n`` threads inside the block (the limit is process-wide while it lasts) and
+    put back what was there before. For one repeatable run on the Open3D model, see
+    :func:`_limit_open3d_threads`."""
+    import open3d as o3d  # noqa: PLC0415 (optional heavy dependency)
+
+    if not hasattr(o3d.utility, "set_max_threads"):  # pragma: no cover - older Open3D
+        log.warning("this Open3D (%s) cannot limit its threads", o3d.__version__)
+        yield
+        return
+    before = int(o3d.utility.get_max_threads())
+    o3d.utility.set_max_threads(int(n))
+    try:
+        yield
+    finally:
+        o3d.utility.set_max_threads(before)
+
+
 def _limit_open3d_threads(o3d: Any) -> None:
     """Apply ``OHS_O3D_THREADS`` (a whole number; unset or empty: leave Open3D alone; 0: Open3D's
     own choice) as Open3D's process-wide thread limit.
@@ -142,9 +162,10 @@ def _limit_open3d_threads(o3d: Any) -> None:
     So two runs of the same recording on the Open3D model differ a little: poses by up to 0.008
     in a matrix entry, the mesh by a few vertices. With ``OHS_O3D_THREADS=1`` they are the same
     bit for bit, at about half the speed (ray cast 43 -> 106 ms, integration 9 -> 55 ms a frame
-    at 640 x 400). It is a switch for before/after comparisons (``tools/snapshot.py`` sets it on
-    the CPU path), not the default. The GPU model does not use these calls and is repeatable as
-    it is."""
+    at 640 x 400). It is a switch for before/after comparisons, not the default
+    (``tools/snapshot.py`` does the same on the CPU path with :func:`open3d_threads`, for the
+    time it processes only). The limit stays for the life of the process. The GPU model does not
+    use these calls and is repeatable as it is."""
     v = os.environ.get(O3D_THREADS_ENV, "").strip()
     if not v:
         return

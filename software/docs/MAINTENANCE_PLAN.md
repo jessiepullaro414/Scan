@@ -514,6 +514,19 @@ processing), S1 (start-up).
   - New test `test_one_open3d_thread_makes_the_open3d_model_repeatable` (failed first: the
     limit was not applied). `test_track_markerless.py` and `test_tools_snapshot.py`: 34 passed
     on each path. Written down in `VALIDATION.md`, "Known limitations".
+- **Corrected the same day (my mistake in the first version):** the snapshot tool set
+  `OHS_O3D_THREADS` in the environment and left it there. In a full CPU-path test run the
+  snapshot tool's test therefore put every later test on one thread: slower, and with other
+  results. Two tests failed in that run: the new repeatability test (it found the limit already
+  set) and `test_the_refined_mesh_is_closer_to_the_truth`. The tool now holds Open3D to one
+  thread only while it processes a snapshot (`open3d_threads` in `ohs/track/markerless.py`) and
+  puts the limit back. `test_real_snapshot_twice_is_identical` now asks for identical snapshots
+  on the CPU path too, and that no limit is left behind.
+- **Seen on the way:** `test_the_refined_mesh_is_closer_to_the_truth` sits on its limit on the
+  CPU path. With several threads it passes (3 of 3 alone); with one thread, where the result is
+  always the same, the 95 % move is 0.3026 mm against a limit of 0.3 mm, so it fails every time.
+  The test is right as it is for the default; it would need a look if the one-thread run ever
+  became the way the CPU tests are run.
 - **Found on the way (not changed):** with one thread one cast in 38 still differs from its own
   repeats, the same one in every run: the first cast after the grid has grown by less than
   `warmup_growth` (3 %) misses 291 of 41,150 pixels, because Open3D's fragment buffer is a size

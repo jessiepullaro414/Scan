@@ -19,9 +19,9 @@ folder, simulated once if missing) with the same parameters the app uses for eac
 
 The compute path follows ``OHS_COMPUTE`` exactly as the engine does. Snapshots are only comparable
 on the same machine and compute path (``compare`` warns when the device differs); never commit them.
-On the CPU path a snapshot holds Open3D to one thread (``OHS_O3D_THREADS=1`` unless it is set
-already): only then do two runs of the same code give the same snapshot there. It takes about
-twice as long.
+On the CPU path a snapshot holds Open3D to one thread while it processes (unless
+``OHS_O3D_THREADS`` is set, which then decides): only then do two runs of the same code give the
+same snapshot there. It takes about twice as long. The limit is put back afterwards.
 
 ``compare`` takes two ``.npz`` files or two folders with the same ``<quality>.npz`` files. It prints
 the largest absolute difference per array, reports shape mismatches and missing arrays, and exits
@@ -30,6 +30,7 @@ the largest absolute difference per array, reports shape mismatches and missing 
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import os
 import sys
@@ -102,12 +103,17 @@ def take_snapshot(rec: str | Path, quality: str, frames: int | None = None) -> t
             lasers.setdefault(str(name), []).append(np.array(pts))
 
     device = device_description()
-    if device == "cpu":
-        # the CPU path's Open3D model repeats itself only on one thread (ohs.track.markerless,
-        # OHS_O3D_THREADS): a snapshot is for comparing, so exact beats fast here
-        os.environ.setdefault("OHS_O3D_THREADS", "1")
+    # the CPU path's Open3D model repeats itself only on one thread (ohs.track.markerless): a
+    # snapshot is for comparing, so exact beats fast here. Only while this snapshot is processed:
+    # the limit is process-wide. A limit the caller set with OHS_O3D_THREADS is left as it is.
+    one_thread = device == "cpu" and not os.environ.get("OHS_O3D_THREADS", "").strip()
     t0 = time.perf_counter()
-    with tempfile.TemporaryDirectory(prefix="ohs-snapshot-") as tmp:
+    with contextlib.ExitStack() as stack:
+        if one_thread:
+            from ohs.track.markerless import open3d_threads
+
+            stack.enter_context(open3d_threads(1))
+        tmp = stack.enter_context(tempfile.TemporaryDirectory(prefix="ohs-snapshot-"))
         report = process_recording(rec, tmp, params=pp, progress=on_frame)
         mesh = load_ply(Path(tmp) / "mesh.ply")
     seconds = time.perf_counter() - t0
@@ -130,6 +136,7 @@ def take_snapshot(rec: str | Path, quality: str, frames: int | None = None) -> t
         "frames": int(report["frames"]["processed"]),
         "frames_requested": frames,
         "device": device,
+        "open3d_threads": 1 if one_thread else (os.environ.get("OHS_O3D_THREADS", "").strip() or None),
         "compute": report.get("params", {}).get("compute"),
         "git_commit": _git_commit(Path(__file__).resolve().parent),
         "recording": str(rec),

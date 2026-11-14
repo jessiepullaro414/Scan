@@ -116,15 +116,15 @@ def test_real_snapshot_twice_is_identical(tmp_path, capsys):
     assert arrays["poses"].shape == (4, 4, 4) and meta["quality"] == "preview" and meta["device"]
     from ohs import compute
 
-    if compute.describe()["backend"] == "gpu":
-        assert snap.main(["compare", str(out_a), str(out_b)]) == 0
-        assert "IDENTICAL" in capsys.readouterr().out
-    else:
-        # KNOWN (A2 report): on the CPU path the tracker is not deterministic run to run (poses differ by
-        # ~0.1-0.3 mm, so the mesh differs too), so identical snapshots cannot be demanded there yet.
-        a, _ = snap.load_npz(out_a / "preview.npz")
-        b, _ = snap.load_npz(out_b / "preview.npz")
-        assert a.keys() == b.keys()
-        assert np.array_equal(a["pose_index"], b["pose_index"]) and np.array_equal(a["pose_ok"], b["pose_ok"])
-        assert snap.max_abs_diff(a["poses"], b["poses"]) < 1.0
-        assert all(np.array_equal(a[k], b[k]) for k in a if k.startswith("laser_"))
+    # identical on both paths: on the CPU path the snapshot holds Open3D to one thread while it
+    # processes (A6; before that the poses differed by 0.1-0.3 mm from run to run there)
+    assert snap.main(["compare", str(out_a), str(out_b)]) == 0
+    assert "IDENTICAL" in capsys.readouterr().out
+    assert compute.describe()["backend"] == "gpu" or meta["open3d_threads"] == 1
+    # ... and only while it processes: the limit is process-wide, and nothing of it may be left for
+    # whatever runs next in this process (it once slowed and changed every later CPU-path test)
+    import os
+
+    import open3d as o3d
+
+    assert "OHS_O3D_THREADS" not in os.environ and o3d.utility.get_max_threads() != 1
