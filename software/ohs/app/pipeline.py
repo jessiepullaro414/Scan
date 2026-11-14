@@ -71,6 +71,13 @@ reaches a detailed one stays on the filtered depth.
 ``fusion.model_backend`` (default ``"auto"``: the GPU when :func:`ohs.compute.get_device` finds
 one); the single model of ``track_filter_px=0`` uses Open3D. :attr:`FramePipeline.model_backend`
 says which backend tracks (``"gpu"`` / ``"open3d"``), :attr:`FramePipeline.model_device` where.
+On the GPU the tracking model truncates at ``TRACK_GPU_TRUNC_MULT`` = 2 voxels (4 mm), on Open3D
+at ``fusion.trunc_mult`` = 4 voxels (8 mm). A TSDF writes "inside" as far as its truncation behind
+every surface it sees, so with 8 mm a wall thinner than that swells once its far side is seen (a
+4 mm wall by 0.8 mm a side); frames registered to the swollen model put the cameras 0.3-0.5 % too
+far out, and the mesh came out about 0.3 mm too fat. The Open3D model keeps 8 mm because it
+tracks worse on stereo depth with less (``VALIDATION.md``, "Where a tracked scan's shape errors
+come from").
 
 **Reconstruction model** (``PipelineParams.recon``; it keeps the whole scan and makes the mesh).
 ``"auto"`` (default) is :class:`~ohs.track.recon_tsdf.ConfidenceTsdf` on the GPU when there is
@@ -147,6 +154,8 @@ MODES = ("markerless", "markers")
 RECON_MODELS = ("auto", "confidence", "open3d")
 NOMINAL_WIDTH = 1280  # px per camera of the ELP module; pixel-based defaults are tuned for it
 GYRO_SIGMA_DEG = 0.02  # gyro rotation prior per frame used by the default fusion parameters
+# truncation of the tracking model on the GPU, in voxels (4 mm at its 2 mm voxels; module docstring, "Model backends")
+TRACK_GPU_TRUNC_MULT = 2.0
 DETAIL_PROBE_FRAMES = 10  # frames at the start of a scan that also track on with_raw_depth ("Detailed parts")
 # during them, a frame whose filtered depth holds its weakest translation less than this is a
 # detailed part. On the simulator smooth parts hold >= 1.1e-3 there; detailed ones 1e-5 to 4e-5
@@ -372,7 +381,10 @@ class FramePipeline:
         self.track_filter_px = float(p.track_filter_px if p.track_filter_px is not None else default_track_filter_px(s_eff))
         tv = p.track_voxel_mm if p.track_voxel_mm is not None else max(2.0, self.fusion_params.voxel_mm)
         # the tracking model keeps fusion.model_backend (default "auto": the GPU volume when there is a GPU)
-        self.track_fusion_params = replace(fusion, voxel_mm=float(tv))
+        # and, there, the short truncation (an explicit fusion.gpu_trunc_mult wins)
+        self.track_fusion_params = replace(
+            fusion, voxel_mm=float(tv),
+            gpu_trunc_mult=TRACK_GPU_TRUNC_MULT if fusion.gpu_trunc_mult is None else fusion.gpu_trunc_mult)
         # the tracking filter works at the model's ray-cast resolution (module docstring)
         w, h = self.image_size
         rs = float(fusion.raycast_scale)

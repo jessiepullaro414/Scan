@@ -1205,12 +1205,12 @@ Scripts, the diff and tables: scratchpad `sigma\` (`RESULTS.md`, `proto_sigma_v2
 
 ## Where a tracked scan's shape errors come from (2026-11-14)
 
-A study outside the repository. **Nothing in the engine is changed by it**; two changes it points to wait for the owner's decision ("The two candidate changes" below).
+A study outside the repository. It points to two changes ("The two changes" below): **the first, 4 mm in the GPU tracking model, is in the engine since the same day**; the second, in the mesh, is not made. "As it was" in the tables is the engine before that change.
 
 **In short:**
 - **Tracking is the largest share, and the tracker makes it itself.** With the true depth and the true poses the bracket's mesh is 0.010 mm from the part (median). The measured depth brings that to 0.065 mm and tracking to 0.11–0.22 mm (0.156 mm in the median), with the whole part about 0.3 mm too fat. Tracking does the same when it is fed the true depth.
 - **The cause is the tracking model's truncation.** The model (2 mm voxels) marks everything up to 8 mm behind a surface as inside the part. Near a convex edge and on a thin feature that reaches into the open air on the other side, so the model swells as the scan goes round. Frames are registered to the swollen model, the cameras land 0.3–0.5 % too far out, and the mesh is fused too fat.
-- **With 4 mm instead of 8 mm in the tracking model** the share of the part more than 0.3 mm off falls from 42 % to 20 % (13 % at true poses), and the upright face's offset from 0.72 to 0.17 mm. This holds for the GPU model only: the Open3D model of the CPU path gets worse with it.
+- **With 4 mm instead of 8 mm in the tracking model** the share of the part more than 0.3 mm off falls from 42 % to 20 % (13 % at true poses), and the upright face's offset from 0.72 to 0.17 mm. This holds for the GPU model only: the Open3D model of the CPU path gets worse with it. The GPU model has 4 mm since 2026-11-14.
 - **A rest remains:** each frame is pulled about 0.1 mm ahead along the direction of motion, which leaves the camera path 0.05–0.2 % too large. Not solved.
 - **The mesh itself has the same fault at a smaller size** (1 mm voxels, 4 mm truncation): a sheet thinner than 4 mm that is seen from both sides comes out too thick. A 2 mm flange reads 3.2 mm at true poses and 4.5 mm with tracking.
 
@@ -1228,8 +1228,9 @@ A study outside the repository. **Nothing in the engine is changed by it**; two 
 | True | True | 0.010 mm | 0.40 mm | 6.5 % | +0.04 mm |
 | True plus noise | True | 0.028 mm | 0.41 mm | 6.7 % | +0.04 mm |
 | Matcher | True | 0.065 mm | 0.50 mm | 13 % | +0.02 mm |
-| Matcher | Tracked (as the app) | 0.156 mm | 1.18 mm | 42 % | +0.29 mm |
-| True | Tracked | 0.260 mm | 0.70 mm | 44 % | +0.30 mm |
+| Matcher | Tracked (the app as it was, 8 mm in the tracking model) | 0.156 mm | 1.18 mm | 42 % | +0.29 mm |
+| True | Tracked (8 mm) | 0.260 mm | 0.70 mm | 44 % | +0.30 mm |
+| Matcher | Tracked (the app now, 4 mm on the GPU path) | 0.148 mm | 0.60 mm | 20 % | +0.15 mm |
 
 - **Fusion alone:** the median is small, but 6.5 % of the part is more than 0.3 mm off. That is the mesh's own truncation at edges (below).
 - **The matcher's depth:** random noise explains 0.03 mm of its 0.065 mm; the rest is its patterns.
@@ -1246,9 +1247,9 @@ A study outside the repository. **Nothing in the engine is changed by it**; two 
 
 | Truncation | More than 0.3 mm off | 95 % level | Mean (+ = too fat) | Upright face offset | Shaft radius | Boss radius |
 |---|---|---|---|---|---|---|
-| 8 mm (as it is) | 42 % | 1.18 mm | +0.29 mm | 0.72 mm | +0.47 mm | +0.23 mm |
+| 8 mm (as it was) | 42 % | 1.18 mm | +0.29 mm | 0.72 mm | +0.47 mm | +0.23 mm |
 | 6 mm | 31 % | 0.70 mm | +0.22 mm | 0.24 mm | +0.30 mm | +0.15 mm |
-| 4 mm | 20 % | 0.60 mm | +0.15 mm | 0.17 mm | +0.17 mm | +0.03 mm |
+| 4 mm (now) | 20 % | 0.60 mm | +0.15 mm | 0.17 mm | +0.17 mm | +0.03 mm |
 | 3 mm | 17 % | 0.59 mm | +0.09 mm | 0.09 mm | +0.12 mm | −0.05 mm |
 | True poses | 13 % | 0.50 mm | +0.02 mm | 0.01 mm | 0.00 mm | −0.13 mm |
 
@@ -1277,19 +1278,23 @@ A study outside the repository. **Nothing in the engine is changed by it**; two 
 
 | | 2 mm flange | 1 mm rib | 3 mm rib |
 |---|---|---|---|
-| As it is, tracked | 4.46 mm | 3.32 mm | 5.19 mm |
-| Tracking model 4 mm | 3.37 mm | 2.89 mm | 3.85 mm |
+| As it was (tracking model 8 mm), tracked | 4.46 mm | 3.32 mm | 5.19 mm |
+| Tracking model 4 mm (now) | 3.37 mm | 2.89 mm | 3.85 mm |
 | Tracking model 4 mm, mesh 3 mm | 2.89 mm | 2.33 mm | 3.82 mm |
 | Tracking model 4 mm, mesh 2 mm | 2.73 mm | 1.95 mm | 3.78 mm |
-| True poses, as it is | 3.17 mm | 2.73 mm | 3.19 mm |
+| True poses, mesh 4 mm (as it is) | 3.17 mm | 2.73 mm | 3.19 mm |
 | True poses, mesh 3 mm | 2.61 mm | 1.86 mm | 2.96 mm |
 | True poses, mesh 2 mm | 2.07 mm | 1.23 mm | 2.89 mm |
 
 With tracking 0.7–1 mm stays even with both changes: the tracking model's 2 mm voxels cannot hold a 1–2 mm sheet.
 
-**The two candidate changes** (both change scan results; neither is in the engine):
-- **A. The GPU tracking model's truncation 8 → 4 mm.** Measured above. The CPU path would keep 8 mm, so the two paths would differ in one more setting.
-- **B. The mesh's truncation 4 → 2 mm (or 3 mm).** Measured above at true poses and on the sheet part, and then on other scenes (next paragraph): it is not a clear gain as it stands.
+**The two changes** (both change scan results):
+- **A. The GPU tracking model's truncation 8 → 4 mm: in the engine since 2026-11-14** (the owner's decision). `FusionParams.gpu_trunc_mult` gives the GPU model its own truncation in voxels; the pipeline sets 2 for its tracking model (`TRACK_GPU_TRUNC_MULT`), and `report.json` records the result as `params.tracking.trunc_mm`. The Open3D model of the CPU path keeps 8 mm, so the two paths differ in one more setting and a scan processed without a GPU is as fat as before. A tracker made without the pipeline is unchanged.
+  - **Guard:** `test_the_gpu_tracking_model_keeps_a_thin_wall_in_place` fuses the 4 mm wall above into the pipeline's own tracking model and wants its face within 0.15 mm. Before the change it failed with −0.87 mm. `test_the_open3d_tracking_model_keeps_its_wide_truncation` holds the CPU path at 8 mm.
+  - **Suite after the change:** GPU path 752 passed, 2 skipped; CPU path 706 passed, 48 skipped. The benchmark test whose CPU half failed in the study passes: the study's switch had changed both paths.
+  - **The five bracket scans again, with the engine as it is now:** the same as the study's 4 mm runs within the run-to-run scatter (19.9 % more than 0.3 mm off, 95 % level 0.60 mm, median 0.148 mm, mean +0.15 mm, upright face 0.17 mm, shaft radius +0.18 mm, boss radius +0.03 mm).
+  - **Every tracked number elsewhere in this document that was measured on the GPU path before 2026-11-14 was made with 8 mm.** The end-to-end tests' sphere and car-panel scans keep theirs (above); parts with edges, such as the bracket of the fitted-shapes study, read up to 0.3 mm less fat now and were not measured again there.
+- **B. The mesh's truncation 4 → 2 mm (or 3 mm): not made.** Measured above at true poses and on the sheet part, and then on other scenes (next paragraph): it is not a clear gain as it stands.
 
 **B on other scenes** (2 mm, together with A, GPU path, 1 mm voxels):
 - **Smooth scenes get a little worse.** The end-to-end tests' full sphere scan: mesh distance 0.061 → 0.065 mm in the median and 0.257 → 0.301 mm at the 95 % level. Their car panel: 0.083 → 0.086 and 0.389 → 0.401 mm. The five 200-frame car-panel scans: the floor's offset 0.002 → 0.007 mm, the hole's centre 0.33 → 0.42 mm, its diameter 0.90 → 0.87 mm small.
@@ -1453,5 +1458,8 @@ Scripts and rows: scratchpad `shape\` of the session of 2026-11-14 (`run.sh`, `r
   large with tracking; a short boss's wall is wavy by ±0.3 mm. The cause, found on 2026-11-14
   ("Where a tracked scan's shape errors come from"): the tracking model and the mesh both mark
   the space behind a surface as inside the part, up to 8 mm and 4 mm deep, so edges and thin
-  features swell. With tracking a scan of a part with edges is about 0.3 mm too fat all over, and
-  a sheet thinner than 4 mm that is seen from both sides reads 1 to 2.5 mm too thick.
+  features swell. With tracking a scan of a part with edges was about 0.3 mm too fat all over, and
+  a sheet thinner than 4 mm that is seen from both sides read 1 to 2.5 mm too thick. Since the
+  same day the GPU tracking model marks 4 mm instead of 8 mm: the part is 0.15 mm too fat (the
+  shaft's radius +0.17 mm instead of +0.47 mm) and such a sheet reads 0.9 to 1.9 mm too thick.
+  Without a GPU the tracking model is unchanged, and so is the mesh's own 4 mm on both paths.

@@ -89,7 +89,10 @@ Two stronger treatments from the literature made tracking worse on the simulator
   forgotten. ``extract_mesh`` / ``extract_points`` still work (they copy the observed bricks
   into a CPU Open3D grid), but only for what is inside the cube. With this backend the ray cast
   is queued before the source points are computed, so the two overlap, and integration is
-  asynchronous.
+  asynchronous. It may truncate closer than the Open3D model (``FusionParams.gpu_trunc_mult``;
+  the pipeline's tracking model: 2 voxels, 4 mm): a wide band swells edges and thin walls, and
+  on stereo depth this model tracks as well with the short one, which the Open3D model does not
+  (``VALIDATION.md``, "Where a tracked scan's shape errors come from").
 * ``"auto"`` (default): ``"gpu"`` when :func:`ohs.compute.get_device` gives a GPU (and the volume
   can be created there), else ``"open3d"``. ``"gpu"`` raises when no GPU is available.
 
@@ -207,6 +210,11 @@ class FusionParams:
     gpu_volume_voxels: int = 384  # edge of the GPU volume (voxels, multiple of 16): 768 mm at 2 mm
     gpu_border_mm: float = 8.0  # GPU ray cast: hits at least this far inside the observed surface
     gpu_weight_threshold: float = 8.0  # GPU ray cast: weight threshold (capped by the frame count)
+    # the GPU model's truncation in voxels; None: trunc_mult. A TSDF writes "inside" as far as the truncation behind
+    # every surface it sees, so edges and walls thinner than that swell once they are seen from the other side.
+    # The pipeline's tracking model asks for 2 (ohs.app.pipeline.TRACK_GPU_TRUNC_MULT); the Open3D model keeps
+    # trunc_mult: on stereo depth it tracks worse with a shorter band (MarkerlessTracker.trunc_mm says which holds).
+    gpu_trunc_mult: float | None = None
     # model ray casting
     raycast_scale: float = 0.5  # model maps rendered at this fraction of the input resolution
     raycast_weight_threshold: float = 3.0  # capped by the number of integrated frames
@@ -252,6 +260,8 @@ class FusionParams:
             raise ValueError("icp_strides, icp_iterations and icp_max_dist_mm must have equal length")
         if self.voxel_mm <= 0 or self.trunc_mult <= 0:
             raise ValueError("voxel_mm and trunc_mult must be positive")
+        if self.gpu_trunc_mult is not None and not self.gpu_trunc_mult >= 1:
+            raise ValueError(f"gpu_trunc_mult must be at least 1 (voxel), got {self.gpu_trunc_mult!r}")
         if str(self.model_backend).strip().lower() not in MODEL_BACKENDS:
             raise ValueError(f"model_backend must be one of {MODEL_BACKENDS}, got {self.model_backend!r}")
         if int(self.gpu_volume_voxels) < 64 or int(self.gpu_volume_voxels) % 16:
@@ -443,6 +453,7 @@ class MarkerlessTracker:
         self._gpu: Any = None  # GpuTsdfVolume when the model is on the GPU
         self._vbg: Any = None
         self._gpu_status = self._make_gpu_volume(str(p.model_backend).strip().lower())
+        self._trunc_mm = float(self._gpu.trunc_mm if self._gpu is not None else p.trunc_mm)  # kept after close()
         # integration intrinsics: +0.5 px turns Open3D's truncating pixel lookup into rounding
         K_int = self.K.copy()
         K_int[0, 2] += 0.5
@@ -470,7 +481,7 @@ class MarkerlessTracker:
             x = (uu - self.K[0, 2] - self.K[0, 1] * y) / self.K[0, 0]
             self._src_levels.append((o, s, np.stack([x, y, np.ones_like(x)], axis=-1)))
         log.info("MarkerlessTracker: %dx%d, voxel %.2f mm, trunc %.2f mm, model %s (%s), ray cast %dx%d",
-                 w, h, p.voxel_mm, p.trunc_mm, self.model_backend, self.model_device, *self._ray_size)
+                 w, h, p.voxel_mm, self.trunc_mm, self.model_backend, self.model_device, *self._ray_size)
         self.reset()
 
     def _make_gpu_volume(self, backend: str) -> str:
@@ -486,8 +497,9 @@ class MarkerlessTracker:
                 raise RuntimeError(f"model_backend = \"gpu\" but no GPU is available: {compute.status()}")
             return f"Open3D model ({compute.status()})"
         p = self.params
+        trunc = p.trunc_mm if p.gpu_trunc_mult is None else p.voxel_mm * float(p.gpu_trunc_mult)
         try:
-            self._gpu = GpuTsdfVolume(dev, p.voxel_mm, p.trunc_mm, p.depth_min_mm, p.depth_max_mm,
+            self._gpu = GpuTsdfVolume(dev, p.voxel_mm, trunc, p.depth_min_mm, p.depth_max_mm,
                                       edge_voxels=int(p.gpu_volume_voxels), border_mm=float(p.gpu_border_mm))
         except Exception as exc:  # build or allocation failure: the CPU path still works
             if backend == "gpu":
@@ -501,6 +513,12 @@ class MarkerlessTracker:
     def model_backend(self) -> str:
         """``"gpu"`` (dense rolling OpenCL volume) or ``"open3d"`` (sparse VoxelBlockGrid)."""
         return "gpu" if self._gpu is not None else "open3d"
+
+    @property
+    def trunc_mm(self) -> float:
+        """The model's truncation distance (mm): the GPU volume's own (``FusionParams.gpu_trunc_mult``), else
+        ``FusionParams.trunc_mm``."""
+        return self._trunc_mm
 
     @property
     def model_device(self) -> str:

@@ -95,13 +95,15 @@ about the scan itself, not the Fit tool, and they decide whether a measurement c
   4 mm (GPU model only; the CPU path's model gets worse with it) the share of the bracket more
   than 0.3 mm off falls from 42 % to 20 % (13 % at true poses). The mesh has the same fault at
   half the size: a 2 mm flange seen from both sides reads 3.2 mm at true poses and 4.5 mm with
-  tracking. **Waiting for the owner's decision:** A, the GPU tracking model's truncation 8 → 4 mm;
-  B, the mesh's truncation 4 → 2 or 3 mm (it unhides 0.2 mm of shrinkage on small bosses).
-  **B checked further the same day:** smooth scenes get a little worse with it (the sphere's
-  95 % level 0.26 → 0.30 mm) and marker mode clearly worse (1.5 → 2.5 mm), so a shorter band
-  alone is not the answer for the mesh; to try: a band that is short only behind the surface.
-  Still open after both: a pull of about 0.1 mm along the direction of motion; the CPU path's
-  model; a tracking model that can hold a 1–2 mm sheet.
+  tracking. **Done 2026-11-14 (the owner's decision): the GPU tracking model truncates at 4 mm**
+  (2 voxels; `FusionParams.gpu_trunc_mult`, set by the pipeline). The CPU path's Open3D model
+  stays at 8 mm, so a scan processed without a GPU is still about 0.3 mm too fat. **Not made:**
+  the mesh's truncation 4 → 2 or 3 mm. It repairs thin walls and edges (and unhides 0.2 mm of
+  shrinkage on small bosses), but smooth scenes get a little worse with it (the sphere's 95 %
+  level 0.26 → 0.30 mm) and marker mode clearly worse (1.5 → 2.5 mm), so a shorter band alone is
+  not the answer for the mesh; to try: a band that is short only behind the surface. Still
+  open: a pull of about 0.1 mm along the direction of motion; a model for the CPU path that
+  takes a short band; a tracking model that can hold a 1–2 mm sheet.
 - **Small cylinders fit worse since the new sigma** (measured again 2026-11-13,
   [`VALIDATION.md`](../VALIDATION.md), "Fitted shapes against the truth"): a Ø 14 mm boss reads
   0.39 mm off in radius with tracking (before 0.18 mm) and its axis 12.5° off (before 8.0°),

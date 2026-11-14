@@ -351,6 +351,104 @@ def test_model_backends_per_model():
         assert pipe.model_backend is None
 
 
+WALL_MM = 4.0  # across y; 80 mm long, 50 mm high, standing on the table z = 0
+
+
+def _wall_pose(angle_deg: float) -> np.ndarray:
+    """T_wc of a camera 250 mm from the wall's middle, 45 deg above the table, at ``angle_deg`` round it (0: faces +y)."""
+    a, e = np.radians(angle_deg), np.radians(45.0)
+    target = np.array([0.0, 0.0, 20.0])
+    c = target + 250.0 * np.array([np.sin(a) * np.cos(e), np.cos(a) * np.cos(e), np.sin(e)])
+    z = (target - c) / np.linalg.norm(target - c)
+    x = np.cross(z, [0.0, 0.0, 1.0])
+    x /= np.linalg.norm(x)
+    return G.make_se3(np.column_stack([x, np.cross(z, x), z]), c)
+
+
+def _wall_depth(K: np.ndarray, size: tuple[int, int], T_wc: np.ndarray) -> np.ndarray:
+    """Exact depth (mm) of the table and the wall at the pixel centres of ``K``."""
+    w, h = size
+    vs, us = np.mgrid[0:h, 0:w].astype(np.float64)
+    rays = np.stack([(us - K[0, 2]) / K[0, 0], (vs - K[1, 2]) / K[1, 1], np.ones((h, w))], -1).reshape(-1, 3)
+    D, o = rays @ T_wc[:3, :3].T, T_wc[:3, 3]
+    lo, hi = np.array([-40.0, -WALL_MM / 2, 0.0]), np.array([40.0, WALL_MM / 2, 50.0])
+    with np.errstate(divide="ignore", invalid="ignore"):
+        table = -o[2] / D[:, 2]
+        table[~(table > 0)] = np.inf
+        t1, t2 = (lo - o) / D, (hi - o) / D
+        t_in, t_out = np.minimum(t1, t2).max(axis=1), np.maximum(t1, t2).min(axis=1)
+    t = np.minimum(table, np.where((t_in < t_out) & (t_in > 0), t_in, np.inf))
+    return np.where(np.isfinite(t), t, 0.0).reshape(h, w).astype(np.float32)  # the rays have z = 1: t is the depth
+
+
+def _wall_face_offset(tr, T_wc: np.ndarray) -> tuple[float, int]:
+    """Model depth - true depth (mm) on the wall's +y face in the model's view from ``T_wc`` (negative: the face
+    moved out towards the camera), and the number of pixels it is the mean of."""
+    view = tr._raycast(T_wc)
+    D, o = _view_rays(view) @ T_wc[:3, :3].T, T_wc[:3, 3]
+    with np.errstate(divide="ignore", invalid="ignore"):
+        t = (WALL_MM / 2 - o[1]) / D[:, 1]  # the face's plane y = +half the thickness
+    P = o + D * t[:, None]
+    m = np.where(view.valid, view.V[:, 2], 0.0)
+    ok = (np.abs(P[:, 0]) < 34) & (P[:, 2] > 6) & (P[:, 2] < 44) & (t > 0) & (m > 0) & (np.abs(m - t) < 5)  # 6 mm inside its outline
+    return float((m - t)[ok].mean()), int(ok.sum())
+
+
+def _view_rays(view) -> np.ndarray:
+    """(h*w, 3) pixel rays per unit depth of a model view."""
+    w, h = view.size
+    vs, us = np.mgrid[0:h, 0:w].astype(np.float64)
+    return np.stack([(us - view.K[0, 2]) / view.K[0, 0], (vs - view.K[1, 2]) / view.K[1, 1], np.ones((h, w))], -1).reshape(-1, 3)
+
+
+def test_the_gpu_tracking_model_keeps_a_thin_wall_in_place():
+    """A 4 mm wall on a table, fused from exact depth at the true poses, first from its +y side, then from all
+    round: its +y face must stay where it is in the tracking model the pipeline builds. A TSDF writes "inside"
+    as far as its truncation behind every surface it sees. At 8 mm (four voxels) the views of the far side wrote
+    through the wall and moved this face out by 0.8 mm; registered to such a model, cameras stood 0.3-0.5 % too
+    far out and the mesh came out about 0.3 mm too fat (VALIDATION.md, "Where a tracked scan's shape errors come
+    from"). The GPU model truncates at two voxels, 4 mm."""
+    from ohs import compute
+
+    if compute.get_device() is None:
+        pytest.skip(f"no GPU: {compute.status()}")
+    with FramePipeline(nominal_calibration(), PipelineParams(use_lasers=False, use_imu=False)) as pipe:
+        tr = pipe.tracker
+        assert pipe.dual_model and tr.model_backend == "gpu" and tr.params.voxel_mm == 2.0
+        front = _wall_pose(0.0)
+        angles = np.arange(0.0, 360.0, 10.0)
+        near = [a for a in angles if _wall_pose(a)[1, 3] > 60]  # the views from the +y side
+        for a in near:
+            tr.integrate(_wall_depth(pipe.K, pipe.image_size, _wall_pose(a)), None, _wall_pose(a))
+        own, n_own = _wall_face_offset(tr, front)
+        for a in angles:
+            if a not in near:
+                tr.integrate(_wall_depth(pipe.K, pipe.image_size, _wall_pose(a)), None, _wall_pose(a))
+        both, n_both = _wall_face_offset(tr, front)
+        assert n_own > 2000 and n_both > 2000
+        assert abs(own) < 0.15, f"seen from its own side the face is {own:+.2f} mm off"
+        assert abs(both) < 0.15, f"once the far side was seen too the face is {both:+.2f} mm off"
+        assert tr.trunc_mm == 4.0
+    assert tr.trunc_mm == 4.0  # still known once the pipeline is closed (the report is written then)
+
+
+def test_the_open3d_tracking_model_keeps_its_wide_truncation():
+    """The Open3D tracking model (no GPU) stays at four voxels, 8 mm: with a shorter band it tracks worse on
+    stereo depth (the half-resolution sphere scan's worst pose error 0.43 mm at 8 mm, 1.6 mm at 6 mm, 5.3 mm at
+    4 mm; VALIDATION.md, "The CPU path does not take it"). So does a tracker made without the pipeline."""
+    from ohs.track.markerless import MarkerlessTracker
+
+    calib = nominal_calibration()
+    with FramePipeline(calib, PipelineParams(scale=0.5, use_lasers=False, fusion=FusionParams(voxel_mm=2.0, model_backend="open3d"))) as pipe:
+        assert pipe.model_backend == "open3d" and pipe.tracker.trunc_mm == 8.0
+        assert pipe.fusion_params.trunc_mm == 8.0  # the mesh's model: untouched
+    tr = MarkerlessTracker(pipe.K, pipe.image_size, FusionParams(voxel_mm=2.0))
+    try:
+        assert tr.trunc_mm == 8.0  # on a GPU too: only the pipeline's tracking model asks for the short band
+    finally:
+        tr.close()
+
+
 # --------------------------------------------------------------------------- process_recording
 def test_gap_guard_reaches_the_reconstruction_only():
     """The gap guard (depth next to a patch without depth is not fused) is on by default, and it is
@@ -405,6 +503,8 @@ def test_process_recording_writes_everything(rec, tmp_path):
     assert rep["ground_truth"]["n"] == N and rep["ground_truth"]["trans_mm"]["max"] < 1.5
     assert {"depth", "track", "laser", "total"} <= set(rep["timings_ms"]) and rep["timings_ms"]["total"]["n"] == N
     assert len(rep["per_frame"]) == N and rep["params"]["fusion"]["voxel_mm"] == 2.0
+    # the tracking model: two voxels on the GPU, four on Open3D
+    assert rep["params"]["tracking"]["trunc_mm"] == (4.0 if rep["params"]["compute"]["tracking_model"] == "gpu" else 8.0)
     with open(out / "trajectory.csv", newline="", encoding="utf-8") as fh:
         rows = list(csv.DictReader(fh))
     assert len(rows) == N and rows[0]["ok"] == "1" and float(rows[0]["T00"]) == pytest.approx(1.0)
