@@ -77,6 +77,25 @@ def test_process_params_per_level():
         process_params(cfg, "markerless", "ultra", 1280)
 
 
+def test_thin_walls_setting(tmp_path):
+    """``[process] thin_walls``: "auto" (the default), "on" or "off"; it reaches every quality's pipeline."""
+    from ohs.app.config import render_template
+    from ohs.server.studio import process_params
+
+    assert Config().process.thin_walls == "auto"
+    assert process_params(Config(), "markers", "standard", 1280).pipeline.thin_walls == "auto"
+    p = tmp_path / "c.toml"
+    p.write_text('[process]\nthin_walls = "off"\n', encoding="utf-8")
+    cfg = load_config(p)
+    assert cfg.process.thin_walls == "off"
+    for q in ("standard", "best", "preview"):
+        assert process_params(cfg, "markerless", q, 1280).pipeline.thin_walls == "off"
+    p.write_text('[process]\nthin_walls = "sometimes"\n', encoding="utf-8")
+    with pytest.raises(ConfigError, match="process.thin_walls"):
+        load_config(p)
+    assert '\nthin_walls = "auto"\n' in render_template(Config())
+
+
 def test_standard_frame_rate_setting(tmp_path):
     assert Config().process.standard_frame_rate == 30.0
     p = tmp_path / "c.toml"

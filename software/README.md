@@ -175,7 +175,7 @@ key. Use `"auto"` for an optional value (exposure, port, voxel sizes) or leave i
 | `[pico]` | `port`, `imu_rate_hz` (104/208/416/833), plus advanced timing |
 | `[emitters]` | `markers_dot_level` (25 %), `[emitters.profiles]`: `[vertical, horizontal, dots]` in percent per profile (`scan`, `stereo`, `lasers`, `imu`, `check`, `lines`, `dots`, `off`, plus your own) |
 | `[live]` | `scale` (0.5 = 640x400), `depth_min_mm` / `depth_max_mm` (150-450), `voxel_mm` (auto = 2 mm) |
-| `[process]` | `voxel_mm` (auto = 1 mm at 1280x800), `frame_step`, `standard_frame_rate` (30: frames per second of scanning that Standard quality processes; Best processes every frame), `frame_motion_deg` (0 = off: pick frames by the gyro's rotation) and `frame_max_gap` (4), `poisson`, `export` (`ply`, `stl`, `obj`) |
+| `[process]` | `voxel_mm` (auto = 1 mm at 1280x800), `frame_step`, `standard_frame_rate` (30: frames per second of scanning that Standard quality processes; Best processes every frame), `frame_motion_deg` (0 = off: pick frames by the gyro's rotation) and `frame_max_gap` (4), `thin_walls` (`auto`: keep thin walls and edges from swelling in scans without markers; `on` / `off` force it; also on the app's Settings page), `poisson`, `export` (`ply`, `stl`, `obj`) |
 | `[board]` | ChArUco board (11 x 8 squares, 20 mm squares, 15 mm markers, `DICT_5X5_100`) and `paper` (`letter`/`a4`) |
 | `[markers]` | `tag_mm` (20): side of the black square of the printed AprilTags |
 | `[compute]` | `device`: `auto` (the GPU if there is one), `cpu`, or part of a GPU's name such as `RTX`; the `OHS_COMPUTE` environment variable overrides it (section 8) |

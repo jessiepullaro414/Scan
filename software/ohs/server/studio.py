@@ -82,22 +82,23 @@ def process_params(cfg: Any, mode: str, quality: str, image_width: int) -> Any:
     ``[process]`` voxel size, step, frames picked by motion, Poisson and export formats (PLY and STL are
     always written); "standard" processes at most ``process.standard_frame_rate`` frames per second of
     scanning (every 2nd frame of a 60 fps recording at 30), "best" every frame. "full" is the old name
-    of "standard"."""
+    of "standard". Every quality takes ``process.thin_walls`` (``PipelineParams.thin_walls``)."""
     from ohs.app.pipeline import PipelineParams, default_fusion_params, effective_scale
     from ohs.app.process import ProcessParams
     from ohs.track.markers import MarkerParams
 
     quality = normalize_quality(quality)
     markers = MarkerParams(tag_mm=float(cfg.markers.tag_mm))
+    thin = str(cfg.process.thin_walls)
     export = tuple(dict.fromkeys(["ply", "stl", *[e.lower() for e in cfg.process.export]]))
     if quality == "preview":
         scale = 0.5
         fusion = dataclasses.replace(default_fusion_params(effective_scale(int(round(image_width * scale)))), voxel_mm=2.0)
-        pp = PipelineParams(mode=mode, scale=scale, fusion=fusion, markers=markers)
+        pp = PipelineParams(mode=mode, scale=scale, fusion=fusion, markers=markers, thin_walls=thin)
         return ProcessParams(pipeline=pp, frame_step=1, export=("ply", "stl"), poisson=False)
     v = cfg.process.voxel_mm
     fusion = None if v is None else dataclasses.replace(default_fusion_params(effective_scale(image_width)), voxel_mm=float(v))
-    pp = PipelineParams(mode=mode, scale=1.0, fusion=fusion, markers=markers)
+    pp = PipelineParams(mode=mode, scale=1.0, fusion=fusion, markers=markers, thin_walls=thin)
     return ProcessParams(pipeline=pp, frame_step=int(cfg.process.frame_step), export=export, poisson=bool(cfg.process.poisson),
                          frame_motion_deg=float(cfg.process.frame_motion_deg), frame_max_gap=int(cfg.process.frame_max_gap),
                          max_frame_rate=float(cfg.process.standard_frame_rate) if quality == "standard" else 0.0)

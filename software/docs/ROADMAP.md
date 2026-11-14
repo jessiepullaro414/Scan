@@ -101,17 +101,20 @@ about the scan itself, not the Fit tool, and they decide whether a measurement c
   the mesh's truncation 4 → 2 or 3 mm. It repairs thin walls and edges (and unhides 0.2 mm of
   shrinkage on small bosses), but smooth scenes get a little worse with it (the sphere's 95 %
   level 0.26 → 0.30 mm) and marker mode clearly worse (1.5 → 2.5 mm), so a shorter band alone is
-  not the answer for the mesh. **Tried as a prototype 2026-11-14 (not in the engine): a band
+  not the answer for the mesh. **Tried as a prototype 2026-11-14: a band
   that is short only behind the surface**, measured at right angles to it, with a very low
   weight beyond the cut. With the cut at 2 mm the tracked bracket goes from 20 % to 16.5 % more
   than 0.3 mm off, a 2 mm flange from 3.4 to 3.0 mm and the bosses' tilt from 3.5° to 1.7°,
   while the sphere and the car panel keep their numbers (marker mode 1.48 → 1.56 mm, 11–29 % more
   pinholes in the raw mesh). At 1.5 mm: 14.8 % and 2.9 mm, at a higher cost (marker mode
   1.77 mm, 28–86 % more pinholes). A plain 3 mm on both sides gets as far as the 1.5 mm rule but
-  makes 2.5 times today's pinholes. Before any of it goes in: the owner's decision, a guard
-  test, the vertex sigma checked again, and the CPU path (its mesh model cannot take the
-  rule). Still open: a pull of about 0.1 mm along the direction of motion; a model for the CPU path that
-  takes a short band; a tracking model that can hold a 1–2 mm sheet.
+  makes 2.5 times today's pinholes. **Done 2026-11-14 (the owner's decision): the cut at
+  2 voxels is in the engine, automatic by mode** (`thin_walls`: on for scans without markers,
+  off in marker mode; "on" and "off" in the config file or on the app's Settings page force
+  it). With the engine itself the tracked bracket reads 16.2 %, and 2 sigma covers as before.
+  GPU path only: the CPU path's mesh model (Open3D's) cannot take the rule. Still open: a
+  pull of about 0.1 mm along the direction of motion; models for the CPU path that take a
+  short band (tracking and mesh); a tracking model that can hold a 1–2 mm sheet.
 - **Small cylinders fit worse since the new sigma** (measured again 2026-11-13,
   [`VALIDATION.md`](../VALIDATION.md), "Fitted shapes against the truth"): a Ø 14 mm boss reads
   0.39 mm off in radius with tracking (before 0.18 mm) and its axis 12.5° off (before 8.0°),

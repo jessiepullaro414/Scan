@@ -365,13 +365,13 @@ def _wall_pose(angle_deg: float) -> np.ndarray:
     return G.make_se3(np.column_stack([x, np.cross(z, x), z]), c)
 
 
-def _wall_depth(K: np.ndarray, size: tuple[int, int], T_wc: np.ndarray) -> np.ndarray:
-    """Exact depth (mm) of the table and the wall at the pixel centres of ``K``."""
+def _wall_depth(K: np.ndarray, size: tuple[int, int], T_wc: np.ndarray, wall_mm: float = WALL_MM) -> np.ndarray:
+    """Exact depth (mm) of the table and the wall (``wall_mm`` thick) at the pixel centres of ``K``."""
     w, h = size
     vs, us = np.mgrid[0:h, 0:w].astype(np.float64)
     rays = np.stack([(us - K[0, 2]) / K[0, 0], (vs - K[1, 2]) / K[1, 1], np.ones((h, w))], -1).reshape(-1, 3)
     D, o = rays @ T_wc[:3, :3].T, T_wc[:3, 3]
-    lo, hi = np.array([-40.0, -WALL_MM / 2, 0.0]), np.array([40.0, WALL_MM / 2, 50.0])
+    lo, hi = np.array([-40.0, -wall_mm / 2, 0.0]), np.array([40.0, wall_mm / 2, 50.0])
     with np.errstate(divide="ignore", invalid="ignore"):
         table = -o[2] / D[:, 2]
         table[~(table > 0)] = np.inf
@@ -449,6 +449,70 @@ def test_the_open3d_tracking_model_keeps_its_wide_truncation():
         tr.close()
 
 
+def _wall_thickness(vol, wall_mm: float) -> float:
+    """The wall's thickness (mm) in the mesh of ``vol``: its two faces' mean positions across y, 6 mm inside the
+    wall's outline."""
+    V, _, N = (np.asarray(a, np.float64) for a in vol.extract_mesh()[:3])
+    inside = (np.abs(V[:, 0]) < 34) & (V[:, 2] > 6) & (V[:, 2] < 44) & (np.abs(V[:, 1]) < wall_mm / 2 + 3)
+    out = 0.0
+    for sgn in (1.0, -1.0):
+        m = inside & (sgn * N[:, 1] > 0.7)
+        assert m.sum() > 1000
+        out += float((sgn * V[m, 1]).mean())
+    return out
+
+
+def test_the_mesh_model_keeps_a_thin_wall_thin():
+    """A 2 mm wall on a table, fused from exact depth at the true poses from all round, in the mesh model the
+    pipeline builds (1 mm voxels, 4 mm truncation). A TSDF writes "inside" behind every surface it sees, so each
+    side's views write through the wall into the air on the other side and both faces move out: the wall read
+    2.6 mm (3.4 mm in a tracked scan of a sheet-metal part). In a markerless scan the pipeline's mesh model
+    therefore takes an observation in full only down to two voxels behind its surface (``thin_walls``;
+    VALIDATION.md, "A band that is short only behind the surface"). What is left is the voxel inside the wall
+    averaging the two sides' distances."""
+    from ohs import compute
+    from ohs.track.recon_tsdf import ConfidenceTsdf
+
+    if compute.get_device() is None:
+        pytest.skip(f"no GPU: {compute.status()}")
+    read = {}
+    for setting in ("auto", "off"):
+        with FramePipeline(nominal_calibration(), PipelineParams(use_lasers=False, use_imu=False, thin_walls=setting)) as pipe:
+            vol = pipe.markerless
+            assert isinstance(vol, ConfidenceTsdf) and vol.voxel_mm == 1.0 and vol.trunc_mm == 4.0
+            for a in np.arange(0.0, 360.0, 10.0):
+                vol.integrate(_wall_depth(pipe.K, pipe.image_size, _wall_pose(a), wall_mm=2.0), None, _wall_pose(a))
+            read[setting] = _wall_thickness(vol, 2.0)
+    assert read["off"] > 2.58, f"with the whole band behind the surface the 2 mm wall reads {read['off']:.2f} mm"
+    assert read["auto"] < 2.48, f"the 2 mm wall reads {read['auto']:.2f} mm"
+
+
+def test_thin_walls_follows_the_mode_unless_it_is_forced():
+    """``PipelineParams.thin_walls``: "auto" gives the mesh model its short band behind the surface in a
+    markerless scan and leaves marker mode as it was (frames that disagree by 0.9 mm need the whole band to
+    average out); "on" and "off" force it. The cut is two voxels. Only the confidence TSDF has the rule: the
+    Open3D reconstruction of the CPU path does not."""
+    from ohs import compute
+
+    calib = nominal_calibration()
+    gpu = compute.get_device() is not None
+
+    def band(**kw) -> tuple:
+        with FramePipeline(calib, PipelineParams(use_lasers=False, use_imu=False, **kw)) as pipe:
+            return pipe.thin_walls_mm, getattr(pipe.markerless, "back_mm", None)
+
+    two = (2.0, 2.0) if gpu else (None, None)
+    assert band() == two  # markerless, 1 mm voxels
+    assert band(scale=0.5) == ((4.0, 4.0) if gpu else (None, None))  # 2 mm voxels
+    assert band(mode="markers") == (None, None)
+    assert band(mode="markers", thin_walls="on") == two
+    assert band(thin_walls="off") == (None, None)
+    assert band(tracking=False) == two  # fused at given poses (after Straighten): still a markerless scan
+    assert band(recon="open3d", thin_walls="on") == (None, None)  # Open3D's model has no such rule
+    with pytest.raises(ValueError, match="thin_walls"):
+        PipelineParams(thin_walls="maybe")
+
+
 # --------------------------------------------------------------------------- process_recording
 def test_gap_guard_reaches_the_reconstruction_only():
     """The gap guard (depth next to a patch without depth is not fused) is on by default, and it is
@@ -505,6 +569,10 @@ def test_process_recording_writes_everything(rec, tmp_path):
     assert len(rep["per_frame"]) == N and rep["params"]["fusion"]["voxel_mm"] == 2.0
     # the tracking model: two voxels on the GPU, four on Open3D
     assert rep["params"]["tracking"]["trunc_mm"] == (4.0 if rep["params"]["compute"]["tracking_model"] == "gpu" else 8.0)
+    # the mesh model's short band behind the surface: two voxels in the confidence TSDF, none in Open3D's model
+    assert rep["params"]["reconstruction"] == {
+        "model": rep["mesh"]["reconstruction"], "thin_walls": "auto",
+        "back_mm": 4.0 if "confidence" in rep["mesh"]["reconstruction"] else None}
     with open(out / "trajectory.csv", newline="", encoding="utf-8") as fh:
         rows = list(csv.DictReader(fh))
     assert len(rows) == N and rows[0]["ok"] == "1" and float(rows[0]["T00"]) == pytest.approx(1.0)

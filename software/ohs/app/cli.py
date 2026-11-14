@@ -587,7 +587,7 @@ def _run_process(cfg: Any, rec: Path, out: Path, *, mode: str, calib: Any = None
 
     v = voxel if voxel is not None else cfg.process.voxel_mm  # None: the pipeline's default for the resolution
     pp = PipelineParams(mode=mode, scale=1.0, fusion=None if v is None else FusionParams(voxel_mm=float(v)),
-                        markers=MarkerParams(tag_mm=float(cfg.markers.tag_mm)))
+                        markers=MarkerParams(tag_mm=float(cfg.markers.tag_mm)), thin_walls=str(cfg.process.thin_walls))
     params = ProcessParams(pipeline=pp, frame_step=int(step or cfg.process.frame_step), start=int(start), stop=stop,
                            export=tuple(cfg.process.export), poisson=bool(poisson or cfg.process.poisson),
                            frame_motion_deg=float(cfg.process.frame_motion_deg if motion is None else motion),

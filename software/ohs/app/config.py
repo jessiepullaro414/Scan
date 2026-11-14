@@ -77,6 +77,7 @@ CAMERA_BACKENDS = ("auto", "dshow", "msmf", "v4l2", "any")
 IMU_RATES = (104, 208, 416, 833)
 EXPORT_FORMATS = ("ply", "stl", "obj")
 PAPERS = ("letter", "a4")
+THIN_WALLS = ("auto", "on", "off")  # as ohs.app.pipeline.THIN_WALLS
 
 #: Built-in emitter profiles: (vertical line laser, horizontal line laser, dot projector), percent.
 DEFAULT_PROFILES: dict[str, tuple[float, float, float]] = {
@@ -172,6 +173,7 @@ class ProcessConfig:
     standard_frame_rate: float = 30.0  # frames per second of scanning that Standard quality processes (0 = every frame)
     frame_motion_deg: float = 0.0  # 0 = off: pick frames by the gyro's rotation (ohs.app.process)
     frame_max_gap: int = 4
+    thin_walls: str = "auto"  # the mesh model's short band behind the surface: "auto" | "on" | "off"
     poisson: bool = False
     export: list[str] = field(default_factory=lambda: ["ply", "stl"])
 
@@ -253,6 +255,8 @@ class Config:
             errs.append("process.standard_frame_rate must be >= 0 (0 = every frame)")
         if self.process.frame_max_gap < 1:
             errs.append("process.frame_max_gap must be >= 1")
+        if self.process.thin_walls not in THIN_WALLS:
+            errs.append("process.thin_walls must be \"auto\", \"on\" or \"off\"")
         bad = [e for e in self.process.export if e.lower() not in EXPORT_FORMATS]
         if bad:
             errs.append(f"process.export: unknown format(s) {bad}; use {', '.join(EXPORT_FORMATS)}")
@@ -494,6 +498,12 @@ _KEY_DOCS = {
         "Standard and Best quality, not the preview; `ohs process --motion` overrides it."
     ),
     "process.frame_max_gap": "Most recorded frames between two processed frames when frames are picked by motion.",
+    "process.thin_walls": (
+        "Keep thin walls and edges from swelling in the mesh: \"auto\" (on for scans without markers,\n"
+        "off in marker mode), \"on\" or \"off\". A surface then counts as solid only 2 voxels deep\n"
+        "behind where it was seen, so the two sides of a thin wall do not write through it\n"
+        "(VALIDATION.md). Needs a GPU. If a mesh shows dents or many more pinholes, set \"off\"."
+    ),
     "process.poisson": "Also build a watertight Poisson mesh.",
     "process.export": 'Mesh formats to write: "ply", "stl", "obj" (all in mm).',
     "board.squares_x": "Chessboard squares, square and marker size (mm) and ArUco dictionary of the board.",

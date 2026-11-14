@@ -1205,7 +1205,7 @@ Scripts, the diff and tables: scratchpad `sigma\` (`RESULTS.md`, `proto_sigma_v2
 
 ## Where a tracked scan's shape errors come from (2026-11-14)
 
-A study outside the repository. It points to two changes ("The two changes" below): **the first, 4 mm in the GPU tracking model, is in the engine since the same day**; the second, in the mesh, is not made. "As it was" in the tables is the engine before that change.
+A study outside the repository. It points to two changes ("The two changes" below): **the first, 4 mm in the GPU tracking model, is in the engine since the same day**; the second, a shorter band in the mesh on both sides, is not made. A third, a band in the mesh that is short only behind the surface, came out of a prototype and **is in the engine since the same day for scans without markers** ("In the engine since 2026-11-14", after the prototype). "As it was" in the tables is the engine before that change.
 
 **In short:**
 - **Tracking is the largest share, and the tracker makes it itself.** With the true depth and the true poses the bracket's mesh is 0.010 mm from the part (median). The measured depth brings that to 0.065 mm and tracking to 0.11–0.22 mm (0.156 mm in the median), with the whole part about 0.3 mm too fat. Tracking does the same when it is fed the true depth.
@@ -1294,7 +1294,7 @@ With tracking 0.7–1 mm stays even with both changes: the tracking model's 2 mm
   - **Suite after the change:** GPU path 752 passed, 2 skipped; CPU path 706 passed, 48 skipped. The benchmark test whose CPU half failed in the study passes: the study's switch had changed both paths.
   - **The five bracket scans again, with the engine as it is now:** the same as the study's 4 mm runs within the run-to-run scatter (19.9 % more than 0.3 mm off, 95 % level 0.60 mm, median 0.148 mm, mean +0.15 mm, upright face 0.17 mm, shaft radius +0.18 mm, boss radius +0.03 mm).
   - **Every tracked number elsewhere in this document that was measured on the GPU path before 2026-11-14 was made with 8 mm.** The end-to-end tests' sphere and car-panel scans keep theirs (above); parts with edges, such as the bracket of the fitted-shapes study, read up to 0.3 mm less fat now and were not measured again there.
-- **B. The mesh's truncation 4 → 2 mm (or 3 mm): not made.** Measured above at true poses and on the sheet part, and then on other scenes (next paragraph): it is not a clear gain as it stands. A rule that is short only behind the surface was then tried as a prototype (the paragraph after that); it is not in the engine either.
+- **B. The mesh's truncation 4 → 2 mm (or 3 mm): not made.** Measured above at true poses and on the sheet part, and then on other scenes (next paragraph): it is not a clear gain as it stands. A rule that is short only behind the surface was then tried as a prototype (the paragraph after that), and its form with the cut at 2 voxels is in the engine since 2026-11-14.
 
 **B on other scenes** (2 mm, together with A, GPU path, 1 mm voxels):
 - **Smooth scenes get a little worse.** The end-to-end tests' full sphere scan: mesh distance 0.061 → 0.065 mm in the median and 0.257 → 0.301 mm at the 95 % level. Their car panel: 0.083 → 0.086 and 0.389 → 0.401 mm. The five 200-frame car-panel scans: the floor's offset 0.002 → 0.007 mm, the hole's centre 0.33 → 0.42 mm, its diameter 0.90 → 0.87 mm small.
@@ -1303,7 +1303,7 @@ With tracking 0.7–1 mm stays even with both changes: the tracking model's 2 mm
 - **Not measured properly:** half resolution and the processing studio's preview (2 mm voxels). The switch of the study set 2 mm there too, which is one voxel and too little. The five failures it gave in the processing studio's tests (two on the GPU path, three on the CPU path; those tests scan at half resolution) were not looked into further and say nothing about two voxels.
 - So a shorter band alone trades the thin walls and the edges against smooth surfaces and poor poses. A rule that is short only behind the surface, or that weighs what lies behind a surface less, is the thing to try next.
 
-**A band that is short only behind the surface: prototype (2026-11-14, not in the engine).** Tried in a scratch copy of the engine; the repository's mesh rule is unchanged. The rule changes the mesh model's integration only (the GPU kernel and its numpy twin in `ohs/track/recon_tsdf.py`). In front of a surface the band stays 4 voxels. Behind a surface an observation counts in full down to a cut. Beyond the cut it either does not count ("plain stop") or counts with a weight of 0.001 down to the 4 voxels of today ("low weight"). "Behind" is measured along the view, as the signed distance is, or at right angles to the surface (the distance times the cosine between the ray and the depth map's normal).
+**A band that is short only behind the surface: prototype (2026-11-14).** Tried in a scratch copy of the engine, and the numbers of this paragraph are the prototype's. Its form with the cut at 2 voxels went into the engine the same day ("In the engine since 2026-11-14" below). The rule changes the mesh model's integration only (the GPU kernel and its numpy twin in `ohs/track/recon_tsdf.py`). In front of a surface the band stays 4 voxels. Behind a surface an observation counts in full down to a cut. Beyond the cut it either does not count ("plain stop") or counts with a weight of 0.001 down to the 4 voxels of today ("low weight"). "Behind" is measured along the view, as the signed distance is, or at right angles to the surface (the distance times the cosine between the ray and the depth map's normal).
 
 *Exact depth* (the engine's mesh model at 1280x800 and 1 mm voxels, a wall on a table, 36 views; wall thickness read in mm. In the last two columns every view is fused at a pose that is off by a random error; median of three seeds):
 
@@ -1382,7 +1382,24 @@ On the processing studio test's short recording (10 frames, 640x400, two seeds):
 - **A plain 3 mm on both sides gets as far as the 1.5 mm rule** on the bracket and the sheet part and leaves the smooth scenes alone, with one number changed. It makes two and a half times today's pinholes, and marker mode reads 1.72 mm.
 - **Every shorter rule shows the small bosses' shrinkage** that the swelling hides today: their radius with tracking goes from +0.03 mm to −0.07 … −0.18 mm.
 - **Thin walls stay 0.9–1 mm too thick with tracking under every rule.** That part is the tracking model's 2 mm voxels.
-- **Not done, and needed before any of it goes into the engine:** a guard test (a thin wall in the mesh model); the vertex sigma, whose model was fitted on today's fusion (the low weight changes what a vertex's weight sum means); the CPU path, whose mesh model is Open3D's and cannot take a rule of its own, so the two paths would differ in one more thing; a decision whether marker mode keeps today's rule.
+
+**In the engine since 2026-11-14 (the owner's decision): the stop at 2 voxels at right angles with the low weight, automatic by mode.**
+- **The setting:** `PipelineParams.thin_walls`, `[process] thin_walls` in the config file, and "Thin walls and edges" on the app's Settings page. `"auto"` (the default) turns the rule on for a scan without markers and leaves marker mode as it was, because of marker mode's cost above. `"on"` and `"off"` force it. `report.json` records the setting and the cut as `params.reconstruction`. The rule itself is `ConfidenceTsdf(back_mm=...)`; the cut is `BACK_VOXELS` (2 voxels) and the weight beyond it `BACK_WEIGHT` (0.001).
+- **The CPU path is unchanged.** Its mesh model is Open3D's, which cannot take the rule, so the two paths differ in one more thing: a scan processed without a GPU keeps the thicker walls. `"on"` there logs a warning.
+- **Guards:**
+  - `test_the_mesh_model_keeps_a_thin_wall_thin`: the pipeline's own mesh model on a 2 mm wall reads 2.65 mm with `"off"` and 2.43 mm with `"auto"`; the test wants less than 2.48 mm.
+  - `test_a_short_band_behind_the_surface_keeps_a_thin_plate_thin`: a 5 mm plate seen square on from both sides (2 mm voxels) reads 11.4 mm with the whole band and 5.4 mm with the short one, on the GPU and in numpy.
+  - `test_thin_walls_follows_the_mode_unless_it_is_forced`.
+- **Off is as before:** with the rule off, every channel of a fused volume is bit-identical to the engine before the change, on the GPU and in numpy (13 frames).
+- **Speed:** one integration at 1280x800 with 1 mm voxels (Radeon 680M, a wall on a table, median of 108, three rounds) takes 22.0–22.2 ms before, 21.6–22.0 ms with the rule off and 21.9–22.5 ms with it on.
+- **The scans again, with the engine itself:** the prototype's numbers.
+  - Bracket, five scans: 10.5 % more than 0.3 mm off at true poses; tracked 16.2 % (the prototype's run read 16.5 %; the raw meshes have the same 1330 open loops), 95 % level 0.51 mm, median 0.138 mm, shaft radius +0.10 mm, boss radius −0.10 mm, boss tilt 1.7°.
+  - Sheet part: 2.72 / 2.04 / 3.06 mm at true poses, 3.02 / 2.46 / 3.82 mm tracked.
+  - End-to-end tests: full sphere 0.061 / 0.257 mm, car panel 0.083 / 0.393 mm. Marker mode is as before, 0.489 / 1.478 mm: the rule is off there.
+  - Five car-panel scans: floor offset 0.002 mm, hole 0.91 mm small in diameter.
+- **The vertex sigma keeps its coverage** (on the prototype's meshes, whose fused channels are the engine's): 2 sigma covers 99.2 % of the tracked bracket's vertices (99.2 % before) and 99.6 % at true poses (99.5 %), and 96.3 % on the car panel (96.2 %). The bracket's median sigma falls from 0.47 to 0.43 mm.
+- **Every Standard, Best or Preview mesh of a scan without markers that was made on the GPU path before 2026-11-14 had the whole band.** Smooth scenes keep their numbers. Parts with edges and thin walls read a little thinner now, and small bosses about 0.1 mm smaller in radius; the fitted-shapes study was not measured again.
+- **Still open:** with tracking, thin walls stay about 1 mm too thick (the tracking model's 2 mm voxels); a mesh model for the CPU path that can take the rule.
 
 **Limits of this study:** one part with five seeds and one sheet part with one seed, all simulated; one scan pattern (an orbit); Standard quality only.
 
@@ -1543,4 +1560,8 @@ Scripts and rows: scratchpad `shape\` of the session of 2026-11-14 (`run.sh`, `r
   a sheet thinner than 4 mm that is seen from both sides read 1 to 2.5 mm too thick. Since the
   same day the GPU tracking model marks 4 mm instead of 8 mm: the part is 0.15 mm too fat (the
   shaft's radius +0.17 mm instead of +0.47 mm) and such a sheet reads 0.9 to 1.9 mm too thick.
-  Without a GPU the tracking model is unchanged, and so is the mesh's own 4 mm on both paths.
+  Without a GPU the tracking model is unchanged. The mesh's own band of 4 mm is, since the same
+  day, short behind the surface (2 mm) for scans without markers on the GPU path
+  (`thin_walls`): the part is 16 % instead of 20 % more than 0.3 mm off and such a sheet reads
+  0.3–0.4 mm less thick again (a 2 mm flange 3.0 mm). Small bosses read 0.1 mm small in radius
+  with it. Marker mode and the CPU path keep the whole band.

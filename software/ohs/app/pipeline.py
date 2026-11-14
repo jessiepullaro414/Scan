@@ -90,6 +90,19 @@ with its sigma (:meth:`~ohs.vision.depth.DepthEstimator.compute_with_sigma`), an
 Weighting frames by 1/sigma^2 instead of averaging made the mesh worse (VALIDATION.md "Depth
 confidence"), so the sigmas only measure.
 
+**Thin walls** (``PipelineParams.thin_walls``). A TSDF marks the space behind every surface it sees
+as inside, 4 voxels deep in the mesh model, so the two sides of a wall thinner than that write
+through it and the wall swells, and so do faces next to a convex edge. With the short band behind
+the surface (:mod:`ohs.track.recon_tsdf`, "The band behind the surface") the mesh model takes an
+observation in full only 2 voxels deep. ``"auto"`` (the default) turns it on in a markerless scan
+and leaves marker mode as it was: there the frames disagree by about 0.9 mm, and the whole band is
+what averages them. ``"on"`` and ``"off"`` force it. Only the confidence TSDF has the rule, so a
+mesh made by Open3D's model (no GPU, or ``recon="open3d"``) is as before whatever is set;
+:attr:`FramePipeline.thin_walls_mm` says what the mesh model uses. On the simulated bracket the
+share of a tracked scan more than 0.3 mm off fell from 20 % to 16.5 % and a 2 mm flange read 3.0
+instead of 3.4 mm, with 11-29 % more pinholes in the raw mesh (``VALIDATION.md``, "A band that is
+short only behind the surface").
+
 Graceful degradation: without calibrated laser planes (or ``use_lasers=False``) the laser stage
 is skipped; without an IMU calibration (or ``use_imu=False``) there is no rotation prior; a
 frame that fails to track is not fused and adds no laser points (its result carries the last
@@ -129,7 +142,7 @@ from ohs.track.fusion import LaserCloud
 from ohs.track.imu_prior import GyroPredictor
 from ohs.track.markerless import FusionParams, MarkerlessTracker
 from ohs.track.markers import MarkerParams, MarkerTracker
-from ohs.track.recon_tsdf import GUARD_PX_1280, ConfidenceTsdf, gap_guard_mask
+from ohs.track.recon_tsdf import BACK_VOXELS, GUARD_PX_1280, ConfidenceTsdf, gap_guard_mask
 from ohs.types import ImuSample, LaserPlane, ScannerCalibration, StereoFrame, TrackResult
 from ohs.vision.depth import SIGMA_MODELS, DepthEstimator, DepthParams
 from ohs.vision.laser import LINE_NAMES, LaserLines, LaserParams, extract_laser_lines, laser_points
@@ -137,6 +150,7 @@ from ohs.vision.rectify import Rectifier
 
 __all__ = [
     "MODES",
+    "THIN_WALLS",
     "PipelineParams",
     "FrameResult",
     "FramePipeline",
@@ -152,6 +166,7 @@ log = logging.getLogger(__name__)
 
 MODES = ("markerless", "markers")
 RECON_MODELS = ("auto", "confidence", "open3d")
+THIN_WALLS = ("auto", "on", "off")  # PipelineParams.thin_walls
 NOMINAL_WIDTH = 1280  # px per camera of the ELP module; pixel-based defaults are tuned for it
 GYRO_SIGMA_DEG = 0.02  # gyro rotation prior per frame used by the default fusion parameters
 # truncation of the tracking model on the GPU, in voxels (4 mm at its 2 mm voxels; module docstring, "Model backends")
@@ -313,6 +328,9 @@ class PipelineParams:
     # many px of a patch without depth is not fused, which keeps holes open (VALIDATION.md, "The gap
     # guard in the engine"); None -> 8 px at 1280 px width (the default); 0 -> off
     gap_guard_px: float | None = None
+    # the mesh model's short band behind the surface (module docstring, "Thin walls"): "auto" = on
+    # in a markerless scan and off in marker mode; "on" and "off" force it
+    thin_walls: str = "auto"
     # False: every frame comes with its pose (process(frame, pose)), so no tracking model is built
     tracking: bool = True
 
@@ -325,6 +343,8 @@ class PipelineParams:
             raise ValueError(f"recon must be one of {RECON_MODELS}, got {self.recon!r}")
         if self.gap_guard_px is not None and not float(self.gap_guard_px) >= 0:
             raise ValueError(f"gap_guard_px must be >= 0, got {self.gap_guard_px!r}")
+        if self.thin_walls not in THIN_WALLS:
+            raise ValueError(f"thin_walls must be one of {THIN_WALLS}, got {self.thin_walls!r}")
 
 
 @dataclass
@@ -410,6 +430,8 @@ class FramePipeline:
         self.gap_guard_px = (GUARD_PX_1280 * self.image_size[0] / 1280.0 if p.gap_guard_px is None
                              else float(p.gap_guard_px))
         self._guard_in_fuse = False  # True: the Open3D reconstruction, which gets its depth guarded here
+        # how deep behind a surface the mesh model takes an observation in full (mm); None: the whole truncation
+        self.thin_walls_mm: float | None = None
         if self._need_depth:
             single = p.mode == "markerless" and p.tracking and self.track_filter_px <= 0
             self.markerless = self._make_recon(p.recon, single_model=single)
@@ -418,6 +440,10 @@ class FramePipeline:
             self._guard_in_fuse = (self.gap_guard_px > 0 and not single
                                    and not isinstance(self.markerless, ConfidenceTsdf))
             self.has_confidence = isinstance(self.markerless, ConfidenceTsdf)
+            self.thin_walls_mm = self.markerless.back_mm if self.has_confidence else None
+            if p.thin_walls == "on" and self.thin_walls_mm is None:
+                log.warning("thin_walls is \"on\", but this mesh is made by Open3D's model (no GPU, or recon "
+                            "\"open3d\"), which has no short band: the mesh is as with \"off\"")
         self.tracker: MarkerlessTracker | None = None
         if p.mode == "markerless" and p.tracking:
             if self.track_filter_px > 0:
@@ -698,10 +724,13 @@ class FramePipeline:
                 # the matcher's sigma factor next to missing depth, which the model takes out again
                 de = self.depth_estimator
                 sm = SIGMA_MODELS["gpu" if de is not None and de.backend == "gpu" else "cpu"]
+                tw = self.params.thin_walls
+                short = tw == "on" or (tw == "auto" and self.params.mode == "markerless")
                 return ConfidenceTsdf(self.K, self.image_size, voxel_mm=fp.voxel_mm, trunc_mm=fp.trunc_mm,
                                     depth_min_mm=fp.depth_min_mm, depth_max_mm=fp.depth_max_mm,
                                     backend="gpu" if want == "auto" else "auto",
-                                    hole_factor=(sm.hole_amp, sm.hole_r_px), gap_guard_px=self.gap_guard_px)
+                                    hole_factor=(sm.hole_amp, sm.hole_r_px), gap_guard_px=self.gap_guard_px,
+                                    back_mm=BACK_VOXELS * fp.voxel_mm if short else None)
             except RuntimeError as e:  # "auto" without a GPU
                 log.info("reconstruction with Open3D on the CPU: %s", e)
         return MarkerlessTracker(self.K, self.image_size, self.fusion_params)
