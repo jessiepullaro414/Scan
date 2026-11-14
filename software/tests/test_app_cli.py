@@ -272,6 +272,7 @@ def test_process_calls_process_recording(tmp_path, capsys):
     p = first["params"]
     assert p.pipeline.mode == "markers" and p.pipeline.scale == 1.0 and p.pipeline.fusion is None  # mode from the meta
     assert p.frame_step == 1 and p.export == ("ply", "stl") and p.poisson is False and p.pipeline.markers.tag_mm == 20.0
+    assert p.pipeline.thin_walls == "auto"  # [process] thin_walls reaches `ohs process` too
     p = second["params"]
     assert (p.pipeline.mode, p.pipeline.fusion.voxel_mm, p.frame_step, p.poisson, p.start, p.stop) == ("markerless", 0.5, 2, True, 1, 3)
     cap = capsys.readouterr()

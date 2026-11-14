@@ -1398,6 +1398,7 @@ On the processing studio test's short recording (10 frames, 640x400, two seeds):
   - End-to-end tests: full sphere 0.061 / 0.257 mm, car panel 0.083 / 0.393 mm. Marker mode is as before, 0.489 / 1.478 mm: the rule is off there.
   - Five car-panel scans: floor offset 0.002 mm, hole 0.91 mm small in diameter.
 - **The vertex sigma keeps its coverage** (on the prototype's meshes, whose fused channels are the engine's): 2 sigma covers 99.2 % of the tracked bracket's vertices (99.2 % before) and 99.6 % at true poses (99.5 %), and 96.3 % on the car panel (96.2 %). The bracket's median sigma falls from 0.47 to 0.43 mm.
+- **Suite after the change** (763 tests): GPU path 757 passed, 2 skipped; CPU path 708 passed, 51 skipped; and 4 failed on both, all in `test_app_cli.py`: the tests' stand-in for `PipelineParams` did not have the new field. With the field added, that file and `test_app_live.py` pass on both paths (66 tests each); the whole suite was not run again after that.
 - **Every Standard, Best or Preview mesh of a scan without markers that was made on the GPU path before 2026-11-14 had the whole band.** Smooth scenes keep their numbers. Parts with edges and thin walls read a little thinner now, and small bosses about 0.1 mm smaller in radius; the fitted-shapes study was not measured again.
 - **Still open:** with tracking, thin walls stay about 1 mm too thick (the tracking model's 2 mm voxels); a mesh model for the CPU path that can take the rule.
 

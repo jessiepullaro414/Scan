@@ -307,6 +307,7 @@ def make_stub_pipeline() -> types.ModuleType:
         fusion: object = None
         markers: object = None
         recon: str = "auto"
+        thin_walls: str = "auto"
 
     @dataclass
     class FrameResult:
