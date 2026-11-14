@@ -1002,6 +1002,21 @@ bench medians before and after in the commit message.
 - **Change:** one reader, one writer each; files stay byte-identical.
 - **Guard:** `test_trajectory_csv_round_trip_matches_process_recording`, `test_stl_roundtrip`,
   plus a byte comparison of an STL written before and after.
+- **Trajectory half done 2026-11-13.** `read_trajectory` and `write_trajectory` in
+  `ohs/track/posegraph.py` are the only reader and writer of `trajectory.csv`;
+  `process_recording` and the app use them. The `ok` column reads `1` / `0` as written and
+  `True` / `False` in any case (the app's reader took those, the pose graph's raised on them);
+  anything else is an error that names the file and the frame (the app's reader took it as
+  "lost"). A file of 500 rows written before and after is the same byte for byte. The round-trip
+  test now pins the format and the `ok` rules; it failed first.
+- **STL half: not done, and it cannot keep both files byte for byte** (measured 2026-11-13). The
+  two writers give the same vertices and different normals: the export
+  (`ohs/track/export.py`) computes them in float64, the app's writer (`server/processing.py`)
+  in float32. On a real mesh of 1.7 million faces 1.2 million normals differ, by at most 0.00024
+  (0.014°); the export takes 0.98 s, the app's 0.39 s. One writer means one of the two files
+  changes in its normals. The better one: the app's fast gathers with the export's float64
+  normals, so the exported file stays as it is and the app's `mesh.stl` gets the more exact
+  normals. It changes a file the app writes, so it waits for the owner's yes.
 
 ### [-] P7. Straighten can fuse the whole scan twice (Opus, L) ✔
 - **Where:** `ohs/server/processing.py:1277-1315`.

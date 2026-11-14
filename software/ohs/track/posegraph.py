@@ -266,19 +266,29 @@ class StraightenParams:
 
 
 # --------------------------------------------------------------------------- trajectory.csv
+_OK = {"1": True, "true": True, "0": False, "false": False}
+
+
 def read_trajectory(path: str | Path) -> list[TrajectoryRow]:
-    """Rows ``(index, t_host, ok, T_wc)`` of a ``trajectory.csv`` written by ``process_recording``
-    (columns ``index, t, ok, T00..T33``, ``T_wc`` row-major)."""
+    """Rows ``(index, t_host, ok, T_wc)`` of a ``trajectory.csv`` (columns ``index, t, ok,
+    T00..T33``, ``T_wc`` row-major): the one reader of that file, for ``process_recording``'s
+    output, the pose graph and the app. ``ok`` is ``1`` / ``0`` as :func:`write_trajectory`
+    writes it; ``True`` / ``False`` (any case) are read too; anything else is a ValueError that
+    names the file and the frame."""
     rows: list[TrajectoryRow] = []
     with open(path, newline="", encoding="utf-8") as fh:
         for r in csv.DictReader(fh):
             T = np.array([float(r[f"T{a}{b}"]) for a in range(4) for b in range(4)], dtype=np.float64).reshape(4, 4)
-            rows.append((int(r["index"]), float(r["t"]), bool(int(r["ok"])), T))
+            ok = _OK.get(r["ok"].strip().lower())
+            if ok is None:
+                raise ValueError(f"{path}: frame {r['index']} has ok = {r['ok']!r} (expected 1 or 0)")
+            rows.append((int(r["index"]), float(r["t"]), ok, T))
     return rows
 
 
 def write_trajectory(path: str | Path, rows: Sequence[TrajectoryRow]) -> None:
-    """Write rows in the ``trajectory.csv`` format of ``process_recording`` (readable by :func:`read_trajectory`)."""
+    """Write rows as ``trajectory.csv`` (readable by :func:`read_trajectory`): the one writer of
+    that file."""
     with open(path, "w", newline="", encoding="utf-8") as fh:
         w = csv.writer(fh)
         w.writerow(["index", "t", "ok"] + [f"T{r}{c}" for r in range(4) for c in range(4)])

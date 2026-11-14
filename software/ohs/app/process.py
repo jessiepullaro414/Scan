@@ -59,7 +59,6 @@ not refined. ``trajectory.csv`` then holds the given poses, the report says
 """
 from __future__ import annotations
 
-import csv
 import json
 import logging
 import math
@@ -75,6 +74,7 @@ from ohs.app.pipeline import FrameResult, FramePipeline, PipelineParams
 from ohs.geometry import integrate_gyro, invert_se3, pose_error
 from ohs.io.recording import RecordingReader, effective_frame_step, recorded_frame_rate
 from ohs.mesh.confidence import SIGMA_NONE_MM, sigma_stats
+from ohs.track.posegraph import write_trajectory
 from ohs.types import ScannerCalibration
 
 __all__ = ["ProcessParams", "process_recording", "trajectory_errors", "cut_intervals", "pick_frames_by_motion",
@@ -302,14 +302,6 @@ def _check_export(export: tuple[str, ...]) -> tuple[str, ...]:
     if bad:
         raise ValueError(f"unsupported export format(s) {bad}; choose from {EXPORT_FORMATS}")
     return fmts
-
-
-def _write_trajectory(path: Path, rows: list[tuple[int, float, bool, np.ndarray]]) -> None:
-    with open(path, "w", newline="", encoding="utf-8") as fh:
-        w = csv.writer(fh)
-        w.writerow(["index", "t", "ok"] + [f"T{r}{c}" for r in range(4) for c in range(4)])
-        for i, t, ok, T in rows:
-            w.writerow([int(i), f"{t:.6f}", int(bool(ok))] + [f"{x:.9g}" for x in np.asarray(T).reshape(16)])
 
 
 def _frame_row(res: FrameResult) -> dict:
@@ -590,7 +582,7 @@ def process_recording(
         }
 
         tp = out / "trajectory.csv"
-        _write_trajectory(tp, traj_rows)
+        write_trajectory(tp, traj_rows)
         files["trajectory"] = str(tp)
 
         gt = reader.ground_truth_poses()

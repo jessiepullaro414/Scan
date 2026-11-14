@@ -944,7 +944,7 @@ def orbit(tmp_path_factory) -> Path:
 @pytest.mark.slow
 def test_straighten_closes_loops_and_fuses_again(env, orbit):
     pytest.importorskip("ohs.track.posegraph")
-    from ohs.app.process import _write_trajectory
+    from ohs.track.posegraph import write_trajectory
     from ohs.geometry import invert_se3
     from ohs.sim.trajectory import add_drift
 
@@ -961,7 +961,7 @@ def test_straighten_closes_loops_and_fuses_again(env, orbit):
     run_job(env, post(b + "/process/edits", {"op": "fill_holes", "params": {"max_hole_mm": 10}}), "mesh_edit")
     # 1. the true poses: loops close, but the passes already line up, so nothing changes (no new fuse,
     # the edits stay) and the summary is the engine's verdict
-    _write_trajectory(track_csv, [(i, float(times[k]), True, Tt[k]) for k, i in enumerate(idx)])
+    write_trajectory(track_csv, [(i, float(times[k]), True, Tt[k]) for k, i in enumerate(idx)])
     before = get(b + "/process").json()
     j = run_job(env, post(b + "/process/straighten", {}), "process_straighten")
     s = get(b + "/process").json()
@@ -975,7 +975,7 @@ def test_straighten_closes_loops_and_fuses_again(env, orbit):
     assert get(b + "/process/trajectory.json").json()["straightened"] is None
     # 2. the truth plus a drift that loop closure can see: straightened and fused again
     drifted = add_drift(Tt, 0.1, 0.3, 2)
-    _write_trajectory(track_csv, [(i, float(times[k]), True, drifted[k]) for k, i in enumerate(idx)])
+    write_trajectory(track_csv, [(i, float(times[k]), True, drifted[k]) for k, i in enumerate(idx)])
     v0 = get(b + "/process").json()["current"]["version"]
     j = run_job(env, post(b + "/process/straighten", {}), "process_straighten")
     s = get(b + "/process").json()

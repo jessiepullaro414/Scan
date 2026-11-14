@@ -79,7 +79,6 @@ from __future__ import annotations
 import base64
 import binascii
 import copy
-import csv
 import dataclasses
 import json
 import logging
@@ -101,6 +100,7 @@ from ohs.server.jobs import JobCancelled
 from ohs.server.projects import report_summary
 from ohs.server.protocol import QUALITY_NAMES, ApiError, jsonable, normalize_quality, now_iso, quality_or_none
 from ohs.server.util import safe_call
+from ohs.track.posegraph import read_trajectory  # the one reader of trajectory.csv (also in __all__ here)
 
 __all__ = ["ProcessManager", "RecipeStore", "ScanProcess", "BUILTIN_RECIPES", "PROCESS_KINDS", "MESH_OPS",
            "RECIPE_OPS", "normalize_op", "read_trajectory"]
@@ -498,16 +498,6 @@ def _move_dir(src: Path, dst: Path) -> None:
     _retry(lambda: src.rename(dst), f"renaming {src}")
     if old is not None:
         _rmtree(old)
-
-
-def read_trajectory(path: str | Path) -> list[tuple[int, float, bool, np.ndarray]]:
-    """``[(frame index, t_host, ok, T_wc 4x4)]`` from a ``trajectory.csv`` of process_recording."""
-    out = []
-    with open(path, newline="", encoding="utf-8") as fh:
-        for r in csv.DictReader(fh):
-            T = np.array([float(r[f"T{i}{j}"]) for i in range(4) for j in range(4)], dtype=np.float64).reshape(4, 4)
-            out.append((int(r["index"]), float(r["t"]), r["ok"] in ("1", "True", "true"), T))
-    return out
 
 
 def _read_stage_mesh(path: Path) -> tuple[np.ndarray, np.ndarray, np.ndarray | None]:

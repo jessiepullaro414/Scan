@@ -37,7 +37,7 @@ import pytest
 pytest.importorskip("open3d")
 
 from ohs import compute  # noqa: E402
-from ohs.app.process import ProcessParams, _write_trajectory, process_recording  # noqa: E402
+from ohs.app.process import ProcessParams, process_recording  # noqa: E402
 from ohs.geometry import invert_se3, make_se3, pose_error, so3_exp  # noqa: E402
 from ohs.io.recording import RecordingReader  # noqa: E402
 from recordings import scan_recording  # noqa: E402
@@ -106,14 +106,32 @@ def truth(orbit) -> tuple[list[int], np.ndarray, np.ndarray]:
 
 # --------------------------------------------------------------------------- pure parts
 def test_trajectory_csv_round_trip_matches_process_recording(tmp_path):
+    import ohs.app.process as process
+    import ohs.server.processing as processing
+
     rng = np.random.default_rng(0)
     rows = [(i, 100.0 + i / 30, i != 3, make_se3(so3_exp(rng.normal(0, 0.3, 3)), rng.normal(0, 50, 3))) for i in range(6)]
-    _write_trajectory(tmp_path / "process.csv", rows)  # the writer behind process_recording's trajectory.csv
+    # one writer and one reader for everybody: process_recording, the pose graph and the app (P6)
+    assert process.write_trajectory is pg.write_trajectory and processing.read_trajectory is pg.read_trajectory
+    assert not hasattr(process, "_write_trajectory")
     pg.write_trajectory(tmp_path / "ours.csv", rows)
-    assert (tmp_path / "process.csv").read_text() == (tmp_path / "ours.csv").read_text()
-    back = pg.read_trajectory(tmp_path / "process.csv")
+    lines = (tmp_path / "ours.csv").read_text().splitlines()
+    assert lines[0] == "index,t,ok," + ",".join(f"T{r}{c}" for r in range(4) for c in range(4))
+    assert lines[1].startswith("0,100.000000,1,") and lines[4].startswith("3,100.100000,0,") and len(lines) == 7
+    assert lines[1].split(",")[3:] == [f"{x:.9g}" for x in rows[0][3].reshape(16)]
+    back = pg.read_trajectory(tmp_path / "ours.csv")
     assert [r[:3] for r in back] == [(i, pytest.approx(t, abs=1e-6), ok) for i, t, ok, _ in rows]
     assert all(np.allclose(a[3], b[3], atol=1e-6) for a, b in zip(back, rows))
+    # the ok column: 1 / 0 as written, True / False as an older or hand-made file may have it;
+    # anything else is a broken file, said plainly
+    text = (tmp_path / "ours.csv").read_text()
+    for yes, no in (("True", "False"), ("true", "false"), (" 1", "0 ")):
+        body = [",".join(ln.split(",")[:2] + [yes if ln.split(",")[2] == "1" else no] + ln.split(",")[3:]) for ln in lines[1:]]
+        (tmp_path / "other.csv").write_text("\n".join([lines[0]] + body) + "\n")
+        assert [r[2] for r in pg.read_trajectory(tmp_path / "other.csv")] == [r[2] for r in rows]
+    (tmp_path / "bad.csv").write_text(text.replace(",100.100000,0,", ",100.100000,maybe,"))
+    with pytest.raises(ValueError, match=r"bad.csv.*frame 3.*'maybe'"):
+        pg.read_trajectory(tmp_path / "bad.csv")
 
 
 def test_keyframes_follow_travel_rotation_and_failures():
