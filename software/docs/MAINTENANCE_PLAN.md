@@ -527,6 +527,13 @@ processing), S1 (start-up).
   always the same, the 95 % move is 0.3026 mm against a limit of 0.3 mm, so it fails every time.
   The test is right as it is for the default; it would need a look if the one-thread run ever
   became the way the CPU tests are run.
+  - **Seen again 2026-11-14: it can fail by chance with several threads too.** In a full
+    CPU-path run of a scratch copy of the engine (for the mesh-rule prototype, which the CPU path
+    does not use) it failed with 0.3026 mm, the one-thread value. Alone it then passed four times
+    of four with 0.2998, 0.2968, 0.2909 and 0.2902 mm, so the default sits 0.0002–0.01 mm under
+    the limit. Whether a limit of one thread had been left behind by an earlier test in that run
+    was not checked. Not changed: the limit of 0.3 mm stays; a failure of this test on the CPU
+    path is run again alone before it is read as a fault.
 - **Found on the way (not changed):** with one thread one cast in 38 still differs from its own
   repeats, the same one in every run: the first cast after the grid has grown by less than
   `warmup_growth` (3 %) misses 291 of 41,150 pixels, because Open3D's fragment buffer is a size
