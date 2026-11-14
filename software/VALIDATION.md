@@ -1294,7 +1294,7 @@ With tracking 0.7–1 mm stays even with both changes: the tracking model's 2 mm
   - **Suite after the change:** GPU path 752 passed, 2 skipped; CPU path 706 passed, 48 skipped. The benchmark test whose CPU half failed in the study passes: the study's switch had changed both paths.
   - **The five bracket scans again, with the engine as it is now:** the same as the study's 4 mm runs within the run-to-run scatter (19.9 % more than 0.3 mm off, 95 % level 0.60 mm, median 0.148 mm, mean +0.15 mm, upright face 0.17 mm, shaft radius +0.18 mm, boss radius +0.03 mm).
   - **Every tracked number elsewhere in this document that was measured on the GPU path before 2026-11-14 was made with 8 mm.** The end-to-end tests' sphere and car-panel scans keep theirs (above); parts with edges, such as the bracket of the fitted-shapes study, read up to 0.3 mm less fat now and were not measured again there.
-- **B. The mesh's truncation 4 → 2 mm (or 3 mm): not made.** Measured above at true poses and on the sheet part, and then on other scenes (next paragraph): it is not a clear gain as it stands.
+- **B. The mesh's truncation 4 → 2 mm (or 3 mm): not made.** Measured above at true poses and on the sheet part, and then on other scenes (next paragraph): it is not a clear gain as it stands. A rule that is short only behind the surface was then tried as a prototype (the paragraph after that); it is not in the engine either.
 
 **B on other scenes** (2 mm, together with A, GPU path, 1 mm voxels):
 - **Smooth scenes get a little worse.** The end-to-end tests' full sphere scan: mesh distance 0.061 → 0.065 mm in the median and 0.257 → 0.301 mm at the 95 % level. Their car panel: 0.083 → 0.086 and 0.389 → 0.401 mm. The five 200-frame car-panel scans: the floor's offset 0.002 → 0.007 mm, the hole's centre 0.33 → 0.42 mm, its diameter 0.90 → 0.87 mm small.
@@ -1303,9 +1303,90 @@ With tracking 0.7–1 mm stays even with both changes: the tracking model's 2 mm
 - **Not measured properly:** half resolution and the processing studio's preview (2 mm voxels). The switch of the study set 2 mm there too, which is one voxel and too little. The five failures it gave in the processing studio's tests (two on the GPU path, three on the CPU path; those tests scan at half resolution) were not looked into further and say nothing about two voxels.
 - So a shorter band alone trades the thin walls and the edges against smooth surfaces and poor poses. A rule that is short only behind the surface, or that weighs what lies behind a surface less, is the thing to try next.
 
+**A band that is short only behind the surface: prototype (2026-11-14, not in the engine).** Tried in a scratch copy of the engine; the repository's mesh rule is unchanged. The rule changes the mesh model's integration only (the GPU kernel and its numpy twin in `ohs/track/recon_tsdf.py`). In front of a surface the band stays 4 voxels. Behind a surface an observation counts in full down to a cut. Beyond the cut it either does not count ("plain stop") or counts with a weight of 0.001 down to the 4 voxels of today ("low weight"). "Behind" is measured along the view, as the signed distance is, or at right angles to the surface (the distance times the cosine between the ray and the depth map's normal).
+
+*Exact depth* (the engine's mesh model at 1280x800 and 1 mm voxels, a wall on a table, 36 views; wall thickness read in mm. In the last two columns every view is fused at a pose that is off by a random error; median of three seeds):
+
+| Rule behind the surface | 1 mm wall | 2 mm wall | 3 mm wall | 2 mm wall, poses 0.3 mm off | Thick block, poses 0.9 mm off: median distance / table offset |
+|---|---|---|---|---|---|
+| Today (4 mm along the view) | 2.26 | 2.64 | 3.13 | 2.69 | 0.21 / −0.05 mm |
+| Stop at 3 mm along the view | 1.90 | 2.36 | 2.87 | 2.28 | 0.23 / −0.06 mm |
+| Stop at 2 mm along the view | 0.86 | 1.98 | 2.80 | 1.85 | 0.50 / −0.18 mm |
+| Fading from 1 to 3 mm along the view | 1.06 | 2.01 | 2.81 | 1.94 | 0.51 / −0.23 mm |
+| Stop at 2 mm at right angles | 2.12 | 2.43 | 2.91 | 2.39 | 0.23 / −0.07 mm |
+| Stop at 1.5 mm at right angles | 1.62 | 1.99 | 2.91 | 2.02 | 0.28 / −0.19 mm |
+
+- **The band behind the surface has to stay two to three times as deep as the frames disagree.** Shorter, and the surface sinks inward: the observations a little behind it are dropped while those in front of it all count. At 0.3 mm of disagreement (tracking) a cut at 1.5–2 mm costs nothing; at 0.9 mm (marker mode) it does.
+- **Fading weights are worse than a stop** that gives the walls the same thickness (five other fades were tried; all worse where the poses disagree).
+- **Along the view a stop shrinks faces that lie between voxel planes** by 0.05–0.1 mm a side (the 3 mm wall reads 2.80 mm), and on real scans it sinks the table. At right angles a thick wall is as today: a 7 mm wall reads 6.898 mm with both. Today's rule, seen at right angles, is a cut at 4 mm times the cosine (2.8 mm at 45°).
+- **A plain stop below 1.73 voxels (√3) makes pinholes:** grid cells at the surface are left without all eight values, and marching cubes leaves them open. With the low weight those cells have their values again, and the walls read as with the plain stop.
+
+*The five bracket scans* (matcher's depth, GPU path, with change A; medians):
+
+| Mesh rule | True poses: more than 0.3 mm off / 95 % level / boss radius / boss tilt | Tracked: more than 0.3 mm off / 95 % level / median | Tracked: shaft radius / boss radius / boss tilt | Tracked: table offset |
+|---|---|---|---|---|
+| Today | 13.0 % / 0.50 mm / −0.13 mm / 4.4° | 19.9 % / 0.60 mm / 0.148 mm | +0.18 mm / +0.03 mm / 3.5° | 0.001 mm |
+| 3 mm on both sides | 9.9 % / 0.41 mm / −0.25 mm / 3.9° | 15.3 % / 0.49 mm / 0.139 mm | +0.18 mm / −0.07 mm / 2.3° | 0.013 mm |
+| 2 mm on both sides (B) | 7.8 % / 0.37 mm / −0.36 mm / 1.6° | 11.4 % / 0.43 mm / 0.124 mm | +0.14 mm / −0.18 mm / 1.4° | 0.058 mm |
+| Stop at 2 mm at right angles, low weight | 10.5 % / 0.43 mm / −0.27 mm / 3.2° | 16.5 % / 0.51 mm / 0.138 mm | +0.10 mm / −0.10 mm / 1.7° | 0.006 mm |
+| Stop at 1.5 mm at right angles, low weight | 10.5 % / 0.43 mm / −0.32 mm / 1.9° | 14.8 % / 0.50 mm / 0.131 mm | +0.07 mm / −0.16 mm / 1.6° | 0.014 mm |
+
+- The plain stops read within 0.6 points of their low-weight forms (15.9 % and 14.4 % tracked).
+- With the true depth at true poses the 1.5 mm rule leaves 1.4 % of the part more than 0.3 mm off (today 6.5 %, 2 mm on both sides 1.1 %), and the bosses' radius is right (−0.01 mm).
+- Cuts at 1.25 and 1 mm at right angles read 13.3 % and 13.0 % tracked, with the table 0.022 and 0.038 mm off and the smooth scenes below worse.
+
+*The sheet part* (thickness read: 2 mm flange / 1 mm rib / 3 mm rib):
+
+| Mesh rule | True poses | Tracked |
+|---|---|---|
+| Today | 3.17 / 2.73 / 3.19 mm | 3.37 / 2.89 / 3.85 mm |
+| 3 mm on both sides | 2.61 / 1.86 / 2.96 mm | 2.89 / 2.33 / 3.82 mm |
+| 2 mm on both sides (B) | 2.07 / 1.23 / 2.89 mm | 2.73 / 1.95 / 3.78 mm |
+| Stop at 2 mm at right angles, low weight | 2.72 / 2.04 / 3.06 mm | 3.02 / 2.46 / 3.82 mm |
+| Stop at 1.5 mm at right angles, low weight | 2.48 / 1.72 / 2.95 mm | 2.90 / 2.24 / 3.79 mm |
+
+*Smooth scenes and poor poses* (the end-to-end tests' mesh distance, median / 95 % level; the five 200-frame car-panel scans):
+
+| Mesh rule | Full sphere | Car panel | Marker mode | Five car-panel scans: hole diameter / hole centre |
+|---|---|---|---|---|
+| Today | 0.061 / 0.256 mm | 0.083 / 0.389 mm | 0.489 / 1.478 mm | −0.90 / 0.33 mm |
+| 3 mm on both sides | 0.061 / 0.259 mm | 0.083 / 0.383 mm | 0.516 / 1.722 mm | not run |
+| 2 mm on both sides (B) | 0.065 / 0.301 mm | 0.086 / 0.401 mm | 0.607 / 2.469 mm | −0.87 / 0.42 mm |
+| Stop at 2 mm at right angles, low weight | 0.061 / 0.257 mm | 0.083 / 0.393 mm | 0.508 / 1.562 mm | −0.91 / 0.33 mm |
+| Stop at 1.5 mm at right angles, low weight | 0.062 / 0.263 mm | 0.086 / 0.413 mm | 0.552 / 1.772 mm | −1.01 / 0.40 mm |
+
+The half-resolution sphere scan keeps its numbers with the last three rows (0.118 / 0.52 mm). 3 mm on both sides was run as three voxels there, the two right-angle rules as 2 and 1.5 voxels.
+
+*Pinholes* (open boundary loops in the raw mesh of the tracked scans: the bracket's median of five / the car panel's median of five / the sheet part):
+
+| Mesh rule | Open loops |
+|---|---|
+| Today | 1201 / 600 / 1232 |
+| 3 mm on both sides | 2957 / not run / 3146 |
+| 2 mm on both sides (B) | 8989 / 2553 / 9373 |
+| Stop at 2 mm at right angles, plain | 1538 / 836 / 1528 |
+| Stop at 2 mm at right angles, low weight | 1330 / 774 / 1343 |
+| Stop at 1.5 mm at right angles, plain | 2299 / 1425 / 2332 |
+| Stop at 1.5 mm at right angles, low weight | 1537 / 1116 / 1524 |
+
+On the processing studio test's short recording (10 frames, 640x400, two seeds): today 57 and 66 loops, the plain stop at 1.5 mm 261 and 219, with the low weight 67 and 74.
+
+*The test suite in the scratch copy:*
+- **Plain stop at 1.5 mm:** GPU path 751 passed, 1 failed; CPU path 706 passed. The failure is `test_overlays` of the processing studio: one of the extra pinholes has a perimeter below 0.0005 mm, which the hole list rounds to 0.0.
+- **Low weight at 1.5 mm:** GPU path all passed (752). CPU path 705 passed, 1 failed: `test_the_refined_mesh_is_closer_to_the_truth`, which sits on its limit there (maintenance plan, A6). The CPU path does not use the rule (its mesh model is Open3D's), and alone the test passed four times of four (twice with today's rule, once with each stop at 1.5 mm), its 95 % move 0.290–0.300 mm against the limit of 0.3 mm.
+- **Low weight at 2 mm:** GPU path all passed. The CPU path was not run again.
+
+*What it comes to:*
+- **Stop at 2 mm at right angles, with the low weight: gains at almost no cost where measured.** The tracked bracket goes from 19.9 % to 16.5 % more than 0.3 mm off, the bosses' tilt from 3.5° to 1.7°, the 2 mm flange from 3.37 to 3.02 mm. The sphere and both car-panel sets keep their numbers. Marker mode's 95 % level goes from 1.48 to 1.56 mm, and the raw mesh has more pinholes (11 % on the bracket, 29 % on the car panel).
+- **At 1.5 mm it gains a little more** (14.8 %, flange 2.90 mm) **and costs more:** marker mode 1.77 mm, the car panel's hole 0.11 mm smaller, the car panel's 95 % level 0.39 → 0.41 mm, more pinholes again (28 % on the bracket, 86 % on the car panel).
+- **A plain 3 mm on both sides gets as far as the 1.5 mm rule** on the bracket and the sheet part and leaves the smooth scenes alone, with one number changed. It makes two and a half times today's pinholes, and marker mode reads 1.72 mm.
+- **Every shorter rule shows the small bosses' shrinkage** that the swelling hides today: their radius with tracking goes from +0.03 mm to −0.07 … −0.18 mm.
+- **Thin walls stay 0.9–1 mm too thick with tracking under every rule.** That part is the tracking model's 2 mm voxels.
+- **Not done, and needed before any of it goes into the engine:** a guard test (a thin wall in the mesh model); the vertex sigma, whose model was fitted on today's fusion (the low weight changes what a vertex's weight sum means); the CPU path, whose mesh model is Open3D's and cannot take a rule of its own, so the two paths would differ in one more thing; a decision whether marker mode keeps today's rule.
+
 **Limits of this study:** one part with five seeds and one sheet part with one seed, all simulated; one scan pattern (an orbit); Standard quality only.
 
-Scripts and rows: scratchpad `shape\` of the session of 2026-11-14 (`run.sh`, `run_variant.py`, `measure.py`, `table.py`, `traj.py`, `icp_bias.py`, `wall_proto.py`, `sheet.py`; `results\measure.jsonl`, `results\sheet.jsonl`).
+Scripts and rows: scratchpad `shape\` of the session of 2026-11-14 (`run.sh`, `run_variant.py`, `measure.py`, `table.py`, `traj.py`, `icp_bias.py`, `wall_proto.py`, `sheet.py`; `results\measure.jsonl`, `results\sheet.jsonl`). The prototype: `edit_back.py`, `edit_back2.py`, `edit_back3.py` (the rule, applied to a copy of `recon_tsdf.py`), `wall_recon.py`, `run_c.sh`, `loops_count.py`, `panel_table.py`, `summ3.py`; `results\wall_recon.jsonl`, `results\wall_recon2.jsonl`.
 
 ## What the metrics mean
 
