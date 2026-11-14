@@ -1289,7 +1289,14 @@ With tracking 0.7–1 mm stays even with both changes: the tracking model's 2 mm
 
 **The two candidate changes** (both change scan results; neither is in the engine):
 - **A. The GPU tracking model's truncation 8 → 4 mm.** Measured above. The CPU path would keep 8 mm, so the two paths would differ in one more setting.
-- **B. The mesh's truncation 4 → 2 mm (or 3 mm).** Measured above at true poses and on the sheet part; not yet run on the car panel, the large parts, the live half-resolution preview or the test suite.
+- **B. The mesh's truncation 4 → 2 mm (or 3 mm).** Measured above at true poses and on the sheet part, and then on other scenes (next paragraph): it is not a clear gain as it stands.
+
+**B on other scenes** (2 mm, together with A, GPU path, 1 mm voxels):
+- **Smooth scenes get a little worse.** The end-to-end tests' full sphere scan: mesh distance 0.061 → 0.065 mm in the median and 0.257 → 0.301 mm at the 95 % level. Their car panel: 0.083 → 0.086 and 0.389 → 0.401 mm. The five 200-frame car-panel scans: the floor's offset 0.002 → 0.007 mm, the hole's centre 0.33 → 0.42 mm, its diameter 0.90 → 0.87 mm small.
+- **Poor poses get clearly worse.** Marker mode, whose poses are 0.9 mm off in the median: mesh distance 0.49 → 0.61 mm in the median and 1.48 → 2.47 mm at the 95 % level. A narrow band cannot average frames that do not agree.
+- **A model that also tracks does not take it** (the car panel with `track_filter_px=0`, an Open3D model): pose error 1.4 → 3.0 mm in the median, as with A on the CPU path.
+- **Not measured properly:** half resolution and the processing studio's preview (2 mm voxels). The switch of the study set 2 mm there too, which is one voxel and too little; the six test failures seen with it (three on each path) are of that kind and say nothing about two voxels.
+- So a shorter band alone trades the thin walls and the edges against smooth surfaces and poor poses. A rule that is short only behind the surface, or that weighs what lies behind a surface less, is the thing to try next.
 
 **Limits of this study:** one part with five seeds and one sheet part with one seed, all simulated; one scan pattern (an orbit); Standard quality only.
 
