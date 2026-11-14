@@ -941,13 +941,21 @@ bench medians before and after in the commit message.
 - **Change:** import the constants from one place; one helper for the size check.
 - **Guard:** `test_gpu_matches_cpu_on_planes`, `test_tiny_images_go_to_the_cpu`.
 
-### [ ] E7. The laser cloud grows without limit in float64 (Opus, M) ○ (not bit-identical)
+### [-] E7. The laser cloud grows without limit in float64 (Opus, M) ○ (not bit-identical)
 - **Where:** `ohs/track/fusion.py:71-89`, `ohs/app/pipeline.py:604-606`.
 - **Problem:** every tracked frame appends a float64 chunk and `raw_points()` concatenates them
   all. Estimated 250-450 MB after 10,000 frames.
 - **Change:** measure first. Then choose between float32 storage and periodic consolidation.
 - **Guard:** add first: `points()` within 1e-4 mm of today's output, and a memory check over a
   5,000-frame synthetic feed.
+- **Measured 2026-11-13, and left as it is.** A frame adds 250–390 points per laser line on the
+  simulated scan (640 x 400 and 1280 x 800), so 12–18 KB a frame, not the 25–45 KB of the
+  estimate: a three-minute scan (5,400 frames) holds 62–96 MB, 10,000 frames 116–178 MB.
+  Joining the chunks doubles that for 0.13 s (measured on 506 MB of chunks). float32 would halve
+  it, at most 90 MB at 10,000 frames, and would not keep the result: a raw point moves by up
+  to 0.000015 mm, which puts a few points into the neighbouring 0.2 mm voxel and changes those
+  voxels' averages, so the guard of 1e-4 mm does not hold point for point. Too little gain for
+  a changed laser cloud. Worth another look only if scans of ten minutes and more become usual.
 
 ---
 
