@@ -356,6 +356,44 @@ def test_a_cylinder_fit_does_not_lean_on_the_few_points_with_a_small_sigma():
     assert plane.n == len(Vp) and angle_deg(plane.normal, Z) < 0.05  # with equal weights: 0.5 degrees
 
 
+def arc_wall(r: float, arc_deg: float, h: float, step: float, noise: float, seed: int) -> tuple[np.ndarray, np.ndarray]:
+    """Part of a cylinder wall round the z axis (radius ``r``, ``arc_deg`` of the round centred on
+    +x, ``h`` tall), a vertex every ``step`` mm, with Gaussian noise on the radius."""
+    half = math.radians(arc_deg) / 2.0
+    n_t, n_z = max(2, round(2 * half * r / step) + 1), max(2, round(h / step) + 1)
+    t, z = np.meshgrid(np.linspace(-half, half, n_t), np.linspace(0.0, h, n_z), indexing="ij")
+    rr = r + np.random.default_rng(seed).normal(0.0, noise, t.shape)
+    V = np.stack([rr * np.cos(t), rr * np.sin(t), z], axis=-1).reshape(-1, 3)
+    idx = np.arange(n_t * n_z).reshape(n_t, n_z)
+    a, b, c, d = idx[:-1, :-1].ravel(), idx[1:, :-1].ravel(), idx[1:, 1:].ravel(), idx[:-1, 1:].ravel()
+    return V, np.concatenate([np.stack([a, b, c], axis=1), np.stack([a, c, d], axis=1)])
+
+
+def test_a_seed_that_bends_through_a_wide_arc_is_round_whatever_its_sigma_says():
+    """A boss seen from one side (Ø 14, 80 degrees of its round, 8 mm tall) whose points scatter
+    0.1 mm while their sigma says 1.5 mm, as a scan's sigma does on a small feature. By the sigma
+    the seed's radius is 7 ± 1 mm, "not clear", and the click was refused. The wall bends through
+    80 degrees: that is not noise. With the sigma that pessimistic, the scatter counts, for a seed
+    that covers a wide arc only: a flat sheet and a cylinder seen over a narrow arc, with the same
+    sigma, are refused as before."""
+    V, F = arc_wall(7.0, 80.0, 8.0, 0.5, noise=0.1, seed=5)
+    S = np.full(len(V), 1.5)
+    face, point = nearest_face(V, F, (7.0, 0.0, 4.0))
+    fit = fit_at(V, F, face, point, "cylinder", sigma=S).fit
+    assert fit.n > 0.9 * len(V) and abs(fit.radius_mm - 7.0) < 0.3 and angle_deg(fit.axis, Z) < 3.0
+    # flat, the same noise and sigma: no cylinder
+    Vp, Fp = sheet(np.arange(0.0, 40.0, 0.5), np.arange(0.0, 40.0, 0.5), lambda X, Y: 0.0 * X, noise=0.1, seed=5)
+    face, point = nearest_face(Vp, Fp, (20.0, 20.0, 0.0))
+    with pytest.raises(ValueError, match="does not fix a cylinder"):
+        fit_at(Vp, Fp, face, point, "cylinder", sigma=np.full(len(Vp), 1.5))
+    # a real cylinder seen over a narrow arc (radius 30 mm, 40 degrees of the round): under the
+    # limit, so the sigma decides as before
+    Vs, Fs = arc_wall(30.0, 40.0, 40.0, 0.5, noise=0.1, seed=5)
+    face, point = nearest_face(Vs, Fs, (30.0, 0.0, 20.0))
+    with pytest.raises(ValueError, match="its curvature is not clear"):
+        fit_at(Vs, Fs, face, point, "cylinder", sigma=np.full(len(Vs), 1.5))
+
+
 # --------------------------------------------------------------------------- holes
 def test_hole_diameter_on_an_exact_edge():
     V, F, (ring,) = plate(80.0, 80.0, H, [(5.0, -3.0, 12.5)])

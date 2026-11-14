@@ -94,8 +94,11 @@ about the scan itself, not the Fit tool, and they decide whether a measurement c
   feature. Planes, the shaft at true poses and the hole are better. **Changed the same day** (the
   user's decision): a cylinder's fit weighs every point of its region the same. The boss with
   tracking is back at 0.22 mm and 5.4°, at the price of its axis position at true poses
-  (0.07 → 0.25 mm). Still open: the bosses' axis position with tracking (0.63 mm, before 0.32 mm),
-  3 or 4 of 30 clicks on a boss refused, and the fits' ± too small.
+  (0.07 → 0.25 mm). **Looked into the same day:** the bosses' axis position with tracking
+  (0.6 mm) is where the wall is in the tracked mesh, so it is a matter of tracking and of the gap
+  guard's cost, not of the fit; and the refused clicks (8 of 60, all with the right radius) are
+  answered now, 59 of 60, because a seed that bends through 45° or more is judged by its scatter
+  where the sigma is pessimistic. Still open: the fits' ± too small.
 - **The vertex sigma is 2–6 times too large**, and a fit's ± is several times too small. To do:
   an honest sigma, an error model for fits that knows the biases, and until then no ± shown as
   an accuracy. Measured since: on flat surface sigma is about 2.5 times too large, at edges and

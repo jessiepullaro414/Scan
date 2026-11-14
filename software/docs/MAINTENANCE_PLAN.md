@@ -1242,6 +1242,22 @@ Every task here: the type check, `npm test`, and for bundle tasks the chunk size
   `test_mesh_ops.py`, `test_server_process_studio.py` on both paths; the 12 meshes before and
   after.
 
+### [x] F5. A click on a boss is refused although its seed is clearly round
+- **Found 2026-11-13** in the fits re-measured after the gap guard: 8 of 60 clicks on the
+  simulated bracket's bosses answered "its curvature is not clear (radius 7 ± 1 mm)". The radius
+  was right; the ± came from the vertex sigma, which is 2–3 times the wall's scatter there.
+- **Done 2026-11-13.** Where the seed's points scatter less than their sigma says, a seed that
+  bends through 45° of the round or more (`SEED_ARC_DEG`) is judged by its scatter
+  (`_clearly_round` in `ohs/measure/region.py`). Real cylinders' seeds cover 60° and more, flat
+  faces' at most 36° (214 seeds). 59 of 60 boss clicks answered; all 110 clicks on flat faces and
+  the F1 meshes refused as before, for the same reasons. Test first: a boss seen from one side
+  with a pessimistic sigma was refused; a flat sheet and a cylinder seen over 40° stay refused.
+  Numbers in `VALIDATION.md`, "The bosses' two remaining losses".
+- **Not a Fit tool matter (measured, no change):** the bosses' axis position with tracking
+  (0.6 mm). The wall is that far off in the tracked mesh; the Fit tool reports it where it is.
+  It belongs to tracking and to the gap guard's cost (the per-voxel guard, parked until real
+  scans).
+
 ## Reviewed and fine: leave alone
 
 So nobody spends a session on these again.

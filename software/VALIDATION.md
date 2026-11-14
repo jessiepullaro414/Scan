@@ -936,7 +936,14 @@ Scripts and raw results: scratchpad `m5v\` of the session of 2026-11-12 (`summar
 
 Against the study of 2026-11-12 the bosses with tracking are now 0.18 → 0.22 mm in radius and 8.0° → 5.4° in axis direction; their axis position stays worse (0.32 → 0.63 mm). The shaft's ± at true poses shrinks (0.053 → 0.031 mm) and covers its radius for 20 % of the fits instead of 87 %. It rests on two bosses and one shaft of one simulated part.
 
-Scripts and rows: scratchpad `m5v2\` (`run.sh`, `compare.py`, `weights.py`, `run_var.sh`, `compare_var.py`).
+**The bosses' two remaining losses, looked into on 2026-11-13** (the same meshes, gap guard on):
+
+- **The axis position with tracking is the mesh's, not the fit's.** A circle through the vertices of the true wall, seen along the true axis (no Fit tool in it), is 0.55 mm off centre in the median of the ten walls; the Fit tool answers 0.58 mm, and within 0.1 mm of the wall's own position on each. On the meshes of 2026-11-12 (four scans) the walls were 0.48 mm off and that Fit tool said 0.52. So the tracked scan has a boss 0.4–0.6 mm from its place after the best fit of the whole scan, and the Fit tool reports it there. Two tracking runs of one recording put the same boss up to 0.3 mm apart. The gap guard adds to it: without the guard the ten walls are 0.41 mm off, with it 0.55 mm, and none of the ten is nearer.
+- **At true poses the wall is 0.25 mm off centre and leans 4.4°**, the same way on every seed: a bias of the depth and the fusion on an 8 mm wall. The Fit tool reports 0.23 mm and 4.3°. The 0.07 mm of the `1 / sigma²` weights was the fit landing nearer the truth than the wall it was fitted to.
+- **The refused clicks were all the same one**: the side of the boss that faces the upright, refused at the seed with "its curvature is not clear (radius 7 ± 1 mm)". The radius was right. The ± came from the vertex sigma, 0.6–0.8 mm on a wall whose points scatter 0.2–0.3 mm.
+- **Changed: a seed that bends through 45° of the round or more is judged by its scatter where the sigma is pessimistic.** On these meshes a real cylinder's seed covers 60° to 274° of its round (100 seeds), and the seed of a flat face clicked as a cylinder at most 36° of the cylinder fitted to it (114 seeds on the table, the base, the upright and the floor). Result: 59 of 60 boss clicks are answered (52 before); the new answers read like the others (bosses' radius with tracking 0.22 → 0.23 mm in the median, the worst 0.45 mm as before; at true poses unchanged). All 110 clicks on flat faces are refused as before, each for the same reason, and so are the eight meshes of the Fit tool's short-scan case. A side effect: some shaft clicks pass with their first, smaller seed, and the shaft's radius with tracking reads 0.49 → 0.52 mm in the median (the worst 1.03 mm as before). A cylinder seen over less than 45° with a pessimistic sigma is refused as before.
+
+Scripts and rows: scratchpad `m5v2\` (`run.sh`, `compare.py`, `weights.py`, `run_var.sh`, `compare_var.py`, `boss_diag.py`, `seed_study.py`).
 
 ## The Check answer against the truth (M5 third slice, 2026-11-12)
 

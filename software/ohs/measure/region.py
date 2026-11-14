@@ -15,7 +15,11 @@ whose normals stay within :data:`SEED_ANGLE_DEG` of the normal at the click (so 
 edge), until it has :data:`SEED_POINTS` points. A cylinder seed starts from the vertex normals
 (``fit_cylinder(..., normals=...)``); while it does not fix a cylinder clearly (its radius must be
 :data:`SEED_ROUNDNESS` sigma: with the axis free, a 3σ curvature turns up in the noise of a flat
-patch) it doubles, up to :data:`SEED_TRIES` times. The seed keeps only its faces that agree with
+patch) it doubles, up to :data:`SEED_TRIES` times. Where the sigma is pessimistic (the seed's
+points scatter less than their sigma says, as on a scan's small round features), a seed that bends
+through :data:`SEED_ARC_DEG` of the round or more is judged by its scatter instead: such an arc is
+not noise (on simulated scans, flat faces' seeds cover up to 36 degrees of the cylinder fitted to
+them, real cylinders' 60 and more). The seed keeps only its faces that agree with
 its own fit (and the clicked face). Then the region grows over faces sharing a vertex: a face
 joins when
 
@@ -108,6 +112,7 @@ SEED_POINTS = {"plane": 60, "cylinder": 150}  # points in the first seed
 SEED_ANGLE_DEG = {"plane": 30.0, "cylinder": 60.0}  # seed faces' normals within this of the click's
 SEED_TRIES = 4  # a cylinder seed that does not fix a cylinder doubles this many times
 SEED_ROUNDNESS = 10.0  # a cylinder seed's radius must be this many sigma: its curvature clear, not noise
+SEED_ARC_DEG = 45.0  # a seed that covers this much of the round may count its scatter where sigma is pessimistic
 SEED_DRIFT = 1.5  # a cylinder's final radius must stay within this factor of its seed's (module docstring)
 REFIT_GROWTH = 4.0  # refit each time the region has grown this many times
 GROW_FIT_POINTS = 20000  # refits while growing use at most this many of the region's points (picked by id)
@@ -283,6 +288,28 @@ def _vertex_normals(m: _Surface, faces: np.ndarray, verts: np.ndarray) -> np.nda
 
 
 # --------------------------------------------------------------------------- plane and cylinder
+def _clearly_round(m: _Surface, verts: np.ndarray, fit) -> bool:
+    """Is a cylinder seed's curvature clear: its radius :data:`SEED_ROUNDNESS` sigma, or as many
+    times its scatter when the sigma is pessimistic and the seed covers a wide arc (module
+    docstring)."""
+    if fit.radius_mm >= SEED_ROUNDNESS * fit.radius_sigma_mm:
+        return True
+    if m.S is None:
+        return False  # without sigma the fit's ± comes from the scatter already
+    s_med = float(np.median(m.S[verts]))
+    if not 0.0 < fit.rms_mm < s_med or fit.radius_mm < SEED_ROUNDNESS * fit.radius_sigma_mm * fit.rms_mm / s_med:
+        return False
+    q = rows(m.V, verts) - fit.point
+    radial = q - np.outer(q @ fit.axis, fit.axis)
+    mid = radial.mean(axis=0)
+    if not np.linalg.norm(mid) > 0:
+        return True  # all the way round
+    mid = mid / np.linalg.norm(mid)
+    angle = np.degrees(np.arctan2(radial @ np.cross(fit.axis, mid), radial @ mid))
+    lo, hi = np.percentile(angle, [2.5, 97.5])
+    return bool(hi - lo >= SEED_ARC_DEG)
+
+
 def _seed(m: _Surface, face: int, kind: str):
     """``(seed faces, their fit)``: see the module docstring."""
     ring = m.neighbours(np.array([face]))
@@ -310,7 +337,7 @@ def _seed(m: _Surface, face: int, kind: str):
         try:
             normals = _vertex_normals(m, faces, verts) if kind == "cylinder" else None
             fit = _fit_vertices(m, kind, verts, normals=normals)
-            if kind == "plane" or fit.radius_mm >= SEED_ROUNDNESS * fit.radius_sigma_mm:
+            if kind == "plane" or _clearly_round(m, verts, fit):
                 return faces, fit
             # a free axis can find a 3σ curvature in noise on a flat patch: ask for a clear one
             error = f"its curvature is not clear (radius {fit.radius_mm:.0f} ± {fit.radius_sigma_mm:.0f} mm)"
