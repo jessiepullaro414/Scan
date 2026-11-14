@@ -357,6 +357,37 @@ def test_calibration_rules_on_the_simulator(env, monkeypatch):
     assert not (root / "device").exists()
 
 
+def test_a_view_is_on_disk_before_the_session_shows_it(env, monkeypatch):
+    """A client that sees a view in the session finds it in the recording: ``frames.csv`` and
+    ``meta.json`` are rewritten before the view joins the session's list (B15)."""
+    from ohs.server.calibration import SnapshotRecording
+
+    url = env["url"]
+    _connect_sim(url)
+    _ok(_post(url, "/api/calibration/start", {"kind": "stereo"}))
+    _ok(_post(url, "/api/calibration/auto", {"enabled": False}))
+    shown: list[tuple[int, int]] = []  # (frames in the index being written, views the session shows meanwhile)
+    write_index = SnapshotRecording.write_index
+
+    def slow_write_index(self, rows):
+        if rows:
+            time.sleep(0.2)  # what a slow disk does
+            shown.append((len(rows), len(env["studio"].calibration.session.views)))
+        write_index(self, rows)
+
+    monkeypatch.setattr(SnapshotRecording, "write_index", slow_write_index)
+    _wait(lambda: _post(url, "/api/calibration/capture").status_code == 200, 30, "a first manual capture", every=0.3)
+    _wait(lambda: _post(url, "/api/calibration/capture").status_code == 200, 30, "a second manual capture", every=0.3)
+    assert shown == [(1, 0), (2, 1)]
+    s = _get(url, "/api/calibration").json()
+    assert [v["index"] for v in s["views"]] == [0, 1]
+    meta = json.loads((Path(s["recording"]) / "meta.json").read_text(encoding="utf-8"))
+    assert meta["n_frames"] == 2
+    # a removed view leaves the list first: the session never shows a view the recording has lost
+    _ok(requests.delete(url + "/api/calibration/views/0", timeout=T))
+    assert shown[-1] == (1, 1)
+
+
 def test_websocket_calibration_messages(env):
     url = env["url"]
     _connect_sim(url)

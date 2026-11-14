@@ -581,11 +581,12 @@ class CalibrationSession:
                          None if d.face is None else np.array(d.face),
                          None if d.center_uv is None else np.array(d.center_uv), lines, self._view_warnings(d))
             with self._lock:
+                rows = [(v.index, v.t_host, v.file) for v in (*self.views, view)]
+            snap.write_index(rows)  # on disk first: whoever sees the view in the session finds it in the recording
+            with self._lock:
                 self.views.append(view)
                 self._last_capture_frame = int(frame.index)
                 self._t_last_capture = float(d.t)
-                rows = [(v.index, v.t_host, v.file) for v in self.views]
-            snap.write_index(rows)
         log.info("calibration view %d captured (%s, %s)", idx, self.kind, "auto" if auto else "manual")
         return view
 

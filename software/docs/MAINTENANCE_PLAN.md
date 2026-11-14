@@ -756,7 +756,7 @@ processing), S1 (start-up).
   `test_server_process_cuts.py`, `test_server_basic.py`: 76 passed. The ground-truth poses file
   (simulator only) is read as before.
 
-### [ ] B15. A calibration view is reported before its recording is complete on disk (Sonnet, S) ✔
+### [x] B15. A calibration view is reported before its recording is complete on disk (Sonnet, S) ✔
 - **Found 2026-11-13** in A1's full run on the CPU path:
   `test_device_target_stereo_is_saved_and_the_camera_reloads_it` failed once (`meta.json` said 14
   frames, the session 15 views) and passed 4 times of 4 on its own. `CalibrationSession._store`
@@ -767,6 +767,13 @@ processing), S1 (start-up).
   are already one at a time, under `_cap_lock`).
 - **Guard:** a new test with a slowed index write: the session must not show the view before the
   index is on disk (it fails on the old code); `test_server_calibration.py` on both paths.
+- **Done 2026-11-13.** `_store` writes `frames.csv` and `meta.json` with the new view, then adds
+  the view to the list (and only then counts the frame as captured, so a failed write leaves the
+  session as it was). Removing a view already went the right way round: out of the list first.
+  New test `test_a_view_is_on_disk_before_the_session_shows_it` (the index write slowed by
+  0.2 s): on the old code the session showed 1 and 2 views while the index for them was being
+  written, now 0 and 1. `test_server_calibration.py` with its slow tests: 9 passed on the CPU
+  path, and with `test_server_setup.py` 19 passed on the GPU path.
 
 ---
 
