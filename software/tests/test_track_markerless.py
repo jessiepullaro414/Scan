@@ -340,6 +340,35 @@ def test_integrate_external_poses_and_reset():
     assert tracker.n_integrated == 0 and tracker.trajectory == [] and len(tracker.extract_mesh()[0]) == 0
 
 
+def test_one_open3d_thread_makes_the_open3d_model_repeatable(monkeypatch):
+    """Open3D's ray cast of its voxel grid gives slightly different answers from call to call
+    when it runs on several threads, so two runs of the same frames end in different poses (A6).
+    ``OHS_O3D_THREADS=1`` holds Open3D to one thread: the same frames, the same poses, bit for
+    bit. (About half the speed, so it is a switch for comparisons, not the default.)"""
+    import open3d as o3d
+
+    assert o3d.utility.get_max_threads() != 1  # the default: as many as there are
+    monkeypatch.setenv("OHS_O3D_THREADS", "1")
+    try:
+        runs = []
+        for _ in range(2):
+            rng = np.random.default_rng(4)
+            poses = arc_trajectory(12)
+            tracker = MarkerlessTracker(K, (W, H), FusionParams(voxel_mm=2.0, model_backend="open3d", device="cpu"))
+            assert o3d.utility.get_max_threads() == 1
+            res = [tracker.track(render_depth(T, rng), None, k / FPS, gyro_prior(poses, k, rng) if k else None)
+                   for k, T in enumerate(poses)]
+            assert all(r.ok for r in res)
+            runs.append(np.stack([r.T_wc for r in res]))
+        assert np.array_equal(runs[0], runs[1])
+        monkeypatch.setenv("OHS_O3D_THREADS", "many")
+        with pytest.raises(ValueError, match="OHS_O3D_THREADS"):
+            MarkerlessTracker(K, (W, H), FusionParams(voxel_mm=2.0, model_backend="open3d", device="cpu"))
+    finally:
+        o3d.utility.set_max_threads(0)  # the limit is process-wide: give the other tests their threads back
+    assert o3d.utility.get_max_threads() != 1
+
+
 # ---------------------------------------------------------------- _clean_depth / _source_points guards
 def _old_clean_depth(depth_mm, params, size):
     """Reference: the body of MarkerlessTracker._clean_depth before it stopped copying clean maps."""

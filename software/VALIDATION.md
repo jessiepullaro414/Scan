@@ -1319,6 +1319,16 @@ Scripts, the diff and tables: scratchpad `sigma\` (`RESULTS.md`, `proto_sigma_v2
 
 ## Known limitations of the pipeline
 
+- **On the CPU path two runs of the same recording differ a little** (found 2026-11-10, cause
+  found 2026-11-13). Open3D's ray cast of its voxel grid (0.20, CPU) gives slightly different
+  answers for the same grid and pose when it runs on several threads: of 38 casts repeated in one
+  process, 14 differed, by 4 to 199 of some 25,000 surface pixels, with points up to 1.9 mm
+  apart. Depth, the laser points and the tracker's own maths are the same every time. The poses
+  then differ by up to 0.008 in a matrix entry and the mesh by a few vertices; the accuracy is
+  the same. Held to one thread (`OHS_O3D_THREADS=1`) two runs are the same bit for bit, at about
+  half the speed (128 → 290 ms a frame at 640 x 400: ray cast 43 → 106 ms, integration 9 → 55 ms),
+  so it is a switch for comparisons and `tools/snapshot.py` uses it on the CPU path; the default
+  is unchanged. The GPU path does not use these calls and repeats itself exactly.
 - Full-resolution processing takes about 0.35 s per frame on this CPU, so it is offline only. The
   live half-resolution pipeline runs at about 90-100 ms per frame (about 10 fps), with two TSDFs
   in memory.

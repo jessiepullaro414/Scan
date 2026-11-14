@@ -19,6 +19,9 @@ folder, simulated once if missing) with the same parameters the app uses for eac
 
 The compute path follows ``OHS_COMPUTE`` exactly as the engine does. Snapshots are only comparable
 on the same machine and compute path (``compare`` warns when the device differs); never commit them.
+On the CPU path a snapshot holds Open3D to one thread (``OHS_O3D_THREADS=1`` unless it is set
+already): only then do two runs of the same code give the same snapshot there. It takes about
+twice as long.
 
 ``compare`` takes two ``.npz`` files or two folders with the same ``<quality>.npz`` files. It prints
 the largest absolute difference per array, reports shape mismatches and missing arrays, and exits
@@ -28,6 +31,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import tempfile
 import time
@@ -98,6 +102,10 @@ def take_snapshot(rec: str | Path, quality: str, frames: int | None = None) -> t
             lasers.setdefault(str(name), []).append(np.array(pts))
 
     device = device_description()
+    if device == "cpu":
+        # the CPU path's Open3D model repeats itself only on one thread (ohs.track.markerless,
+        # OHS_O3D_THREADS): a snapshot is for comparing, so exact beats fast here
+        os.environ.setdefault("OHS_O3D_THREADS", "1")
     t0 = time.perf_counter()
     with tempfile.TemporaryDirectory(prefix="ohs-snapshot-") as tmp:
         report = process_recording(rec, tmp, params=pp, progress=on_frame)

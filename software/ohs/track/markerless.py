@@ -114,6 +114,7 @@ with the scanner, so photometric alignment on these images would bias the motion
 from __future__ import annotations
 
 import logging
+import os
 import time
 from dataclasses import dataclass, field
 from typing import Any, Callable
@@ -128,6 +129,35 @@ __all__ = ["FusionParams", "MarkerlessTracker", "MODEL_BACKENDS"]
 log = logging.getLogger(__name__)
 
 MODEL_BACKENDS = ("auto", "open3d", "gpu")
+O3D_THREADS_ENV = "OHS_O3D_THREADS"  # see _limit_open3d_threads
+
+
+def _limit_open3d_threads(o3d: Any) -> None:
+    """Apply ``OHS_O3D_THREADS`` (a whole number; unset or empty: leave Open3D alone; 0: Open3D's
+    own choice) as Open3D's process-wide thread limit.
+
+    Why: on several threads Open3D's ``VoxelBlockGrid.ray_cast`` (0.20, CPU) gives slightly
+    different answers for the same grid and pose (a few of some 25,000 surface pixels come and
+    go, points move by up to 2 mm), and its hash map hands the blocks out in a different order.
+    So two runs of the same recording on the Open3D model differ a little: poses by up to 0.008
+    in a matrix entry, the mesh by a few vertices. With ``OHS_O3D_THREADS=1`` they are the same
+    bit for bit, at about half the speed (ray cast 43 -> 106 ms, integration 9 -> 55 ms a frame
+    at 640 x 400). It is a switch for before/after comparisons (``tools/snapshot.py`` sets it on
+    the CPU path), not the default. The GPU model does not use these calls and is repeatable as
+    it is."""
+    v = os.environ.get(O3D_THREADS_ENV, "").strip()
+    if not v:
+        return
+    try:
+        n = int(v)
+    except ValueError:
+        n = -1
+    if n < 0:
+        raise ValueError(f"{O3D_THREADS_ENV} must be a whole number of threads (0 = Open3D's own choice), got {v!r}")
+    if not hasattr(o3d.utility, "set_max_threads"):  # pragma: no cover - older Open3D
+        log.warning("%s is set, but this Open3D (%s) cannot limit its threads", O3D_THREADS_ENV, o3d.__version__)
+        return
+    o3d.utility.set_max_threads(n)
 SLIDE_SV = 0.8  # the weak subspace holds a translation this close to a pure one: "slide"
 TURN_SV = 0.5  # ... a rotation (about any axis, e.g. through the scene) at least this strongly: "turn"
 
@@ -381,6 +411,7 @@ class MarkerlessTracker:
         except ImportError as exc:  # pragma: no cover - depends on the environment
             raise ImportError("MarkerlessTracker needs open3d (pip install open3d)") from exc
 
+        _limit_open3d_threads(o3d)
         self._o3d, self._o3c = o3d, o3c
         self.params = params if params is not None else FusionParams()
         self.K = np.asarray(K, dtype=np.float64).reshape(3, 3).copy()

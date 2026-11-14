@@ -472,7 +472,7 @@ processing), S1 (start-up).
 - **Guard:** the workflow is green on `main` before anything else is merged through it.
 - Do it after A1 (the fast tier). Ask the owner first: it turns on GitHub Actions for the repo.
 
-### [ ] A6. The CPU path gives slightly different results on every run (Opus, M) ✔
+### [x] A6. The CPU path gives slightly different results on every run (Opus, M) ✔
 - **Found 2026-11-10** with the snapshot tool (A2): three snapshots of the same code with
   `OHS_COMPUTE=cpu`, 20 frames. Laser points are identical. Poses differ by up to 0.008 (preview)
   and 0.002 (full) in the largest matrix entry, and the mesh by a few vertices (356,205 against
@@ -492,6 +492,33 @@ processing), S1 (start-up).
   size of the differences in VALIDATION.md and give `tools/snapshot.py compare` a default
   tolerance for CPU snapshots.
 - **Guard:** no change to the GPU path (snapshot identical); the CPU bench not slower.
+- **Done 2026-11-13: the stage is found, and a switch makes it repeatable; not the default,
+  because it costs speed.**
+  - *The stage.* A hash after every stage of every frame, two runs compared: the depth going in
+    is always the same; the first difference is the output of Open3D's
+    `VoxelBlockGrid.ray_cast` for the same grid (the same blocks in the same order) and the same
+    pose. Repeated in one process, 14 of 38 casts differ from themselves, by 4 to 199 of about
+    25,000 surface pixels, points up to 1.9 mm apart. Once, the hash map also handed the blocks
+    out in another order after the same integration. A warm-up cast before every cast does not
+    help, and `OMP_NUM_THREADS` does not reach it: Open3D's threads are TBB's.
+  - *The switch.* `OHS_O3D_THREADS=1` (`_limit_open3d_threads` in `ohs/track/markerless.py`)
+    holds Open3D to one thread: two runs are then the same in every stage of every frame, and
+    two CPU snapshots (20 frames, preview and full) are identical, where before the poses
+    differed by 0.0057 and the mesh by two vertices.
+  - *The cost.* 128–137 → 288–304 ms a frame (640 x 400, twice each): ray cast 43 → 106 ms,
+    integration 9 → 55 ms. So the default stays as it is (the guard: the CPU bench not slower;
+    unset, the switch does nothing, on either path). `tools/snapshot.py` sets it on the CPU path,
+    which makes a tolerance for CPU snapshots unnecessary. The tests do not set it: the CPU-path
+    run would take longer, and a mesh-dependent test that fails there by chance can be run again
+    with the switch to tell chance from a fault.
+  - New test `test_one_open3d_thread_makes_the_open3d_model_repeatable` (failed first: the
+    limit was not applied). `test_track_markerless.py` and `test_tools_snapshot.py`: 34 passed
+    on each path. Written down in `VALIDATION.md`, "Known limitations".
+- **Found on the way (not changed):** with one thread one cast in 38 still differs from its own
+  repeats, the same one in every run: the first cast after the grid has grown by less than
+  `warmup_growth` (3 %) misses 291 of 41,150 pixels, because Open3D's fragment buffer is a size
+  behind. It is the known warm-up effect below its threshold. A lower threshold would cost a
+  depth-only cast on more frames and change the CPU path's results.
 
 ---
 
