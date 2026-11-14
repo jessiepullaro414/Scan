@@ -86,7 +86,19 @@ about the scan itself, not the Fit tool, and they decide whether a measurement c
   mesh's boundary loop, for holes with a wall and a near background.
 - **Convex features are fattened** (a Ø 16 mm shaft +0.2 mm at true poses, +1.1 mm with tracking)
   and tracking errors of 0.7–1 mm distort faces by up to 1.2 mm. To do: find the share of the
-  stereo depth, of the fusion and of the tracking.
+  stereo depth, of the fusion and of the tracking. **Found 2026-11-14**
+  ([`VALIDATION.md`](../VALIDATION.md), "Where a tracked scan's shape errors come from"): tracking
+  is the largest share (0.010 mm with true depth and poses, 0.065 mm with the stereo depth,
+  0.11–0.22 mm with tracking), and the tracker makes it itself. Its model marks everything up to
+  8 mm behind a surface as inside the part, so edges and thin features swell as the scan goes
+  round, the cameras land 0.3–0.5 % too far out and the mesh is fused about 0.3 mm too fat. With
+  4 mm (GPU model only; the CPU path's model gets worse with it) the share of the bracket more
+  than 0.3 mm off falls from 42 % to 20 % (13 % at true poses). The mesh has the same fault at
+  half the size: a 2 mm flange seen from both sides reads 3.2 mm at true poses and 4.5 mm with
+  tracking. **Waiting for the owner's decision:** A, the GPU tracking model's truncation 8 → 4 mm;
+  B, the mesh's truncation 4 → 2 or 3 mm (it unhides 0.2 mm of shrinkage on small bosses). Still
+  open after both: a pull of about 0.1 mm along the direction of motion; the CPU path's model;
+  a tracking model that can hold a 1–2 mm sheet.
 - **Small cylinders fit worse since the new sigma** (measured again 2026-11-13,
   [`VALIDATION.md`](../VALIDATION.md), "Fitted shapes against the truth"): a Ø 14 mm boss reads
   0.39 mm off in radius with tracking (before 0.18 mm) and its axis 12.5° off (before 8.0°),

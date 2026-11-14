@@ -941,7 +941,7 @@ Against the study of 2026-11-12 the bosses with tracking are now 0.18 → 0.22 m
 **The bosses' two remaining losses, looked into on 2026-11-13** (the same meshes, gap guard on):
 
 - **The axis position with tracking is the mesh's, not the fit's.** A circle through the vertices of the true wall, seen along the true axis (no Fit tool in it), is 0.55 mm off centre in the median of the ten walls; the Fit tool answers 0.58 mm, and within 0.1 mm of the wall's own position on each. On the meshes of 2026-11-12 (four scans) the walls were 0.48 mm off and that Fit tool said 0.52. So the tracked scan has a boss 0.4–0.6 mm from its place after the best fit of the whole scan, and the Fit tool reports it there. Two tracking runs of one recording put the same boss up to 0.3 mm apart. The gap guard adds to it: without the guard the ten walls are 0.41 mm off, with it 0.55 mm, and none of the ten is nearer.
-- **At true poses the wall is 0.25 mm off centre and leans 4.4°**, the same way on every seed: a bias of the depth and the fusion on an 8 mm wall. The Fit tool reports 0.23 mm and 4.3°. The 0.07 mm of the `1 / sigma²` weights was the fit landing nearer the truth than the wall it was fitted to.
+- **At true poses the wall is 0.25 mm off centre and leans 4.4°**, the same way on every seed: a bias of the depth and the fusion on an 8 mm wall (since found: mostly the mesh's truncation; "Where a tracked scan's shape errors come from"). The Fit tool reports 0.23 mm and 4.3°. The 0.07 mm of the `1 / sigma²` weights was the fit landing nearer the truth than the wall it was fitted to.
 - **The refused clicks were all the same one**: the side of the boss that faces the upright, refused at the seed with "its curvature is not clear (radius 7 ± 1 mm)". The radius was right. The ± came from the vertex sigma, 0.6–0.8 mm on a wall whose points scatter 0.2–0.3 mm.
 - **Changed: a seed that bends through 45° of the round or more is judged by its scatter where the sigma is pessimistic.** On these meshes a real cylinder's seed covers 60° to 274° of its round (100 seeds), and the seed of a flat face clicked as a cylinder at most 36° of the cylinder fitted to it (114 seeds on the table, the base, the upright and the floor). Result: 59 of 60 boss clicks are answered (52 before); the new answers read like the others (bosses' radius with tracking 0.22 → 0.23 mm in the median, the worst 0.45 mm as before; at true poses unchanged). All 110 clicks on flat faces are refused as before, each for the same reason, and so are the eight meshes of the Fit tool's short-scan case. A side effect: some shaft clicks pass with their first, smaller seed, and the shaft's radius with tracking reads 0.49 → 0.52 mm in the median (the worst 1.03 mm as before). A cylinder seen over less than 45° with a pessimistic sigma is refused as before.
 
@@ -1203,6 +1203,98 @@ A study with prototypes outside the repository, and then the model built into th
 
 Scripts, the diff and tables: scratchpad `sigma\` (`RESULTS.md`, `proto_sigma_v2_recon_tsdf.diff`, `validate_prod.py`, `check_prod.py`, `preview_check.py`, `res\`).
 
+## Where a tracked scan's shape errors come from (2026-11-14)
+
+A study outside the repository. **Nothing in the engine is changed by it**; two changes it points to wait for the owner's decision ("The two candidate changes" below).
+
+**In short:**
+- **Tracking is the largest share, and the tracker makes it itself.** With the true depth and the true poses the bracket's mesh is 0.010 mm from the part (median). The measured depth brings that to 0.065 mm and tracking to 0.11–0.22 mm (0.156 mm in the median), with the whole part about 0.3 mm too fat. Tracking does the same when it is fed the true depth.
+- **The cause is the tracking model's truncation.** The model (2 mm voxels) marks everything up to 8 mm behind a surface as inside the part. Near a convex edge and on a thin feature that reaches into the open air on the other side, so the model swells as the scan goes round. Frames are registered to the swollen model, the cameras land 0.3–0.5 % too far out, and the mesh is fused too fat.
+- **With 4 mm instead of 8 mm in the tracking model** the share of the part more than 0.3 mm off falls from 42 % to 20 % (13 % at true poses), and the upright face's offset from 0.72 to 0.17 mm. This holds for the GPU model only: the Open3D model of the CPU path gets worse with it.
+- **A rest remains:** each frame is pulled about 0.1 mm ahead along the direction of motion, which leaves the camera path 0.05–0.2 % too large. Not solved.
+- **The mesh itself has the same fault at a smaller size** (1 mm voxels, 4 mm truncation): a sheet thinner than 4 mm that is seen from both sides comes out too thick. A 2 mm flange reads 3.2 mm at true poses and 4.5 mm with tracking.
+
+**Setup:**
+- The five bracket recordings of the fitted-shapes study (240 frames, a 400° orbit, 1280x800), processed as the app's Make mesh at Standard quality on the GPU path, then the Default recipe's edits.
+- The renderer's true depth of every frame, on the rectified left camera's pixel grid (it agrees with the matcher's depth to 0.004 mm in the median; the matcher's own scatter is 0.5 mm).
+- Depth sources: the matcher's depth; the true depth at the matcher's pixels with the matcher's sigma (only the values change); the same plus random noise of the matcher's size, correlated over 7 px.
+- Pose sources: the true poses; tracking on that depth.
+- The mesh against the part's exact shape: every measured vertex's signed distance (+ = outside the material), on the part without the table. A tracked mesh is first aligned by a best fit, as in the fitted-shapes study.
+
+**The shares** (medians of the five scans):
+
+| Depth | Poses | Median distance | 95 % level | More than 0.3 mm off | Mean (+ = too fat) |
+|---|---|---|---|---|---|
+| True | True | 0.010 mm | 0.40 mm | 6.5 % | +0.04 mm |
+| True plus noise | True | 0.028 mm | 0.41 mm | 6.7 % | +0.04 mm |
+| Matcher | True | 0.065 mm | 0.50 mm | 13 % | +0.02 mm |
+| Matcher | Tracked (as the app) | 0.156 mm | 1.18 mm | 42 % | +0.29 mm |
+| True | Tracked | 0.260 mm | 0.70 mm | 44 % | +0.30 mm |
+
+- **Fusion alone:** the median is small, but 6.5 % of the part is more than 0.3 mm off. That is the mesh's own truncation at edges (below).
+- **The matcher's depth:** random noise explains 0.03 mm of its 0.065 mm; the rest is its patterns.
+- **Tracking:** the shaft's radius reads +0.47 mm, the bosses' +0.23 mm, the upright face sits 0.72 mm off (0.09–0.88 mm over the five scans).
+
+**The camera path is too large.** After a best fit of the tracked camera centres onto the true ones, a similarity fit still wants to shrink the path by 0.3–0.5 % on every scan (0.8–1.4 mm at the median distance of 257 mm). In the camera's own frame the error is much the same for the whole scan: the tracked camera stands about 0.6 mm farther out from the part than the real one did. A surface seen from a camera that stands too far back is fused too near that camera, so every convex shape grows.
+
+**One step from the truth.** The tracking model was built at the true poses from the true depth; every fourth frame was then registered to it from its true pose with the tracker's own ICP. A perfect chain answers "stay".
+- With 8 mm truncation the answer drifts away from the part as the scan goes on: 0.0 mm in the first sixth of the scan, 0.55 mm in the last. In the model the part's surfaces move towards the camera at the same time: the base by 0.28 mm, the bosses by 0.2–0.4 mm. The table does not move.
+- With 4 mm the answer stays within 0.13 mm for the whole scan and the surfaces stay where they are.
+- A flat face far from an edge is not affected: the face of an 8 mm wall seen from both sides stays within 0.03 mm at either setting. A 4 mm wall swells by 0.83 mm a side at 8 mm, and is within 0.1 mm at 4 mm (exact depth, a wall on a table, 36 views).
+
+**The truncation of the tracking model, on the five scans** (matcher's depth, tracked; GPU path):
+
+| Truncation | More than 0.3 mm off | 95 % level | Mean (+ = too fat) | Upright face offset | Shaft radius | Boss radius |
+|---|---|---|---|---|---|---|
+| 8 mm (as it is) | 42 % | 1.18 mm | +0.29 mm | 0.72 mm | +0.47 mm | +0.23 mm |
+| 6 mm | 31 % | 0.70 mm | +0.22 mm | 0.24 mm | +0.30 mm | +0.15 mm |
+| 4 mm | 20 % | 0.60 mm | +0.15 mm | 0.17 mm | +0.17 mm | +0.03 mm |
+| 3 mm | 17 % | 0.59 mm | +0.09 mm | 0.09 mm | +0.12 mm | −0.05 mm |
+| True poses | 13 % | 0.50 mm | +0.02 mm | 0.01 mm | 0.00 mm | −0.13 mm |
+
+- **The median distance does not follow:** 0.156 mm at 8 mm and 0.148 mm at 4 mm. Two scans get better (0.22 → 0.07 and 0.21 → 0.15 mm), one stays, two get worse (0.15 → 0.30 and 0.16 → 0.22 mm) while their 95 % levels fall from 1.4 to 0.6 mm.
+- **3 mm is one and a half voxels:** the model covers less of each view (76 → 70 % in the one-step check), the bosses' axis tilt grows from 3.4° to 5.1° and the table's offset from 0.001 to 0.010 mm.
+- The camera path with 4 mm is 0.05–0.2 % too large (with the true depth 0.04–0.13 %).
+
+**Other scenes with 4 mm** (GPU path): the end-to-end tests' sphere and car-panel scans keep their numbers (the full sphere scan's worst pose error 0.149 → 0.153 mm, the car panel's 0.297 → 0.293 mm), and so do the five 200-frame car-panel scans of the fitted-shapes study (pose error 0.20 → 0.19 mm in the median, the hole 0.94 → 0.90 mm small in diameter). The sphere scan without the gyro, which the tracker flags as it is, drifts 59 mm instead of 38 mm. The whole test suite on the GPU path: 749 passed, 1 failed, and that one is the benchmark test's CPU half.
+
+**The CPU path does not take it.** The Open3D tracking model gets worse as the truncation shrinks: the half-resolution sphere scan's worst pose error is 0.43 mm at 8 mm, 1.6 mm at 6 mm and 5.3 mm at 4 mm, and 14 tests of the suite fail (how many of them by the change and how many by the machine being busy at the time was not separated). With the true depth it behaves like the GPU model at 4 mm, so it is the noisy depth it cannot take. A likely reason, not tested: that model never clears the space in front of a surface, so it needs the wide band to average bad depth away.
+
+**What remains after 4 mm.** In the one-step check a frame is pulled along the camera's own x axis: +0.19 mm on the scans that sweep towards +x, −0.09 mm on a scan that sweeps the other way, so about 0.13 mm of it follows the motion and 0.05 mm is fixed to the camera. The pull along the viewing direction is zero. The gyro holds each frame's rotation, so steps that are a little too long make the orbit a little too wide. The lead is there with the unfiltered matcher's depth as well; with the true depth, unfiltered, it is 0.06–0.08 mm and does not flip. Where it comes from is open.
+
+**The mesh's own truncation** (1 mm voxels, 4 mm): the same rule, half the size. A wall thinner than 4 mm that is seen from both sides swells: with exact depth a 1 mm wall reads 2.3 mm, a 2 mm wall 2.8 mm and a 3 mm wall 3.1 mm; at 2 mm truncation each is right within 0.1 mm a side. Faces within 4 mm of a convex edge swell too, which is the 6.5 % above. On the five bracket scans at true poses:
+
+| Truncation of the mesh | True depth: 95 % level / more than 0.3 mm off / boss axis tilt | Matcher's depth: the same | Boss radius (matcher) | Table offset (matcher) |
+|---|---|---|---|---|
+| 4 mm (as it is) | 0.40 mm / 6.5 % / 3.6° | 0.50 mm / 13 % / 4.4° | −0.13 mm | 0.008 mm |
+| 3 mm | 0.21 mm / 3.4 % / 3.2° | 0.41 mm / 9.9 % / 3.9° | −0.25 mm | 0.001 mm |
+| 2 mm | 0.11 mm / 1.1 % / 0.5° | 0.37 mm / 7.8 % / 1.6° | −0.36 mm | 0.031 mm |
+
+- **What 2 mm repairs:** the edges, and the bosses' lean of 4–5° and their axis 0.25 mm off centre (0.09 mm at 2 mm), which the fitted-shapes study listed as a bias of the depth and the fusion. Flat faces scatter less: the base top's vertices 0.13 → 0.06 mm.
+- **What it costs with the matcher's depth:** the bosses read 0.36 mm small in radius instead of 0.13 mm. With the true depth they are right (−0.02 mm), so the shrinkage is the depth's and the gap guard's, and the swelling had been hiding 0.15 mm of it. Flat faces sink by 0.03 mm. A boss wall has 20 % fewer vertices, the part 3 % fewer.
+
+**A sheet-metal part** (one simulated scan as the bracket's: a 2 mm foot on the table, a 2 mm flange and ribs of 1 and 3 mm, all seen from both sides; the thickness is the distance between the planes fitted to a wall's two faces):
+
+| | 2 mm flange | 1 mm rib | 3 mm rib |
+|---|---|---|---|
+| As it is, tracked | 4.46 mm | 3.32 mm | 5.19 mm |
+| Tracking model 4 mm | 3.37 mm | 2.89 mm | 3.85 mm |
+| Tracking model 4 mm, mesh 3 mm | 2.89 mm | 2.33 mm | 3.82 mm |
+| Tracking model 4 mm, mesh 2 mm | 2.73 mm | 1.95 mm | 3.78 mm |
+| True poses, as it is | 3.17 mm | 2.73 mm | 3.19 mm |
+| True poses, mesh 3 mm | 2.61 mm | 1.86 mm | 2.96 mm |
+| True poses, mesh 2 mm | 2.07 mm | 1.23 mm | 2.89 mm |
+
+With tracking 0.7–1 mm stays even with both changes: the tracking model's 2 mm voxels cannot hold a 1–2 mm sheet.
+
+**The two candidate changes** (both change scan results; neither is in the engine):
+- **A. The GPU tracking model's truncation 8 → 4 mm.** Measured above. The CPU path would keep 8 mm, so the two paths would differ in one more setting.
+- **B. The mesh's truncation 4 → 2 mm (or 3 mm).** Measured above at true poses and on the sheet part; not yet run on the car panel, the large parts, the live half-resolution preview or the test suite.
+
+**Limits of this study:** one part with five seeds and one sheet part with one seed, all simulated; one scan pattern (an orbit); Standard quality only.
+
+Scripts and rows: scratchpad `shape\` of the session of 2026-11-14 (`run.sh`, `run_variant.py`, `measure.py`, `table.py`, `traj.py`, `icp_bias.py`, `wall_proto.py`, `sheet.py`; `results\measure.jsonl`, `results\sheet.jsonl`).
+
 ## What the metrics mean
 
 - **Stereo errors** compare the estimated raw intrinsics/extrinsics (`K1`, `K2`, `R`, `T`) with
@@ -1351,4 +1443,8 @@ Scripts, the diff and tables: scratchpad `sigma\` (`RESULTS.md`, `proto_sigma_v2
   price: on a small part with many edges, with tracking, 1-7 points less coverage and worst
   errors 0.1-0.2 mm larger.
 - **Convex features are fattened:** a Ø 16 mm shaft reads 0.2 mm large at true poses and 1.1 mm
-  large with tracking; a short boss's wall is wavy by ±0.3 mm.
+  large with tracking; a short boss's wall is wavy by ±0.3 mm. The cause, found on 2026-11-14
+  ("Where a tracked scan's shape errors come from"): the tracking model and the mesh both mark
+  the space behind a surface as inside the part, up to 8 mm and 4 mm deep, so edges and thin
+  features swell. With tracking a scan of a part with edges is about 0.3 mm too fat all over, and
+  a sheet thinner than 4 mm that is seen from both sides reads 1 to 2.5 mm too thick.
