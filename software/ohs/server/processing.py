@@ -460,25 +460,6 @@ def _load_npz(path: Path, normals: bool = False) -> tuple[np.ndarray, np.ndarray
         return z["V"].astype(np.float64), z["F"].astype(np.int64), N, S, Fl
 
 
-_STL = np.dtype([("n", "<f4", (3,)), ("v", "<f4", (3, 3)), ("attr", "<u2")])
-
-
-def _write_stl(path: Path, V: np.ndarray, F: np.ndarray) -> None:
-    """Binary STL in mm, like :func:`ohs.track.export.save_mesh` but with ``np.take`` gathers
-    (about three times faster on 1M triangles, which undo / redo feel)."""
-    P = np.take(np.ascontiguousarray(V, dtype=np.float32), np.asarray(F, dtype=np.int64), axis=0)
-    n = np.cross(P[:, 1] - P[:, 0], P[:, 2] - P[:, 0])
-    ln = np.sqrt(np.einsum("ij,ij->i", n, n))[:, None]
-    tri = np.empty(len(F), dtype=_STL)
-    tri["n"] = np.divide(n, ln, out=np.zeros_like(n), where=ln > 0)
-    tri["v"] = P
-    tri["attr"] = 0
-    with open(path, "wb") as fh:
-        fh.write(b"OpenHandScan binary STL, units: mm".ljust(80, b" "))
-        fh.write(np.uint32(len(F)).tobytes())
-        fh.write(tri.tobytes())
-
-
 def _rmtree(path: Path) -> None:
     for attempt in range(30):
         if not path.exists():
@@ -897,7 +878,7 @@ class ProcessManager:
         """The result files of a step; the PLY carries each vertex's sigma (``quality``) and each
         face's filled flag (``filled``) when known."""
         from ohs.mesh import vertex_normals
-        from ohs.track.export import save_mesh
+        from ohs.track.export import save_mesh, write_stl
 
         sp.result_dir.mkdir(parents=True, exist_ok=True)
         if N is None:
@@ -909,7 +890,7 @@ class ProcessManager:
         for ext in self._formats():
             tmp = sp.result_dir / f".mesh-{uuid.uuid4().hex[:8]}.{ext}"
             if ext == "stl":
-                _write_stl(tmp, V, F)
+                write_stl(tmp, V, F)
             else:
                 save_mesh(tmp, V, F, N, quality=S if ext == "ply" else None, filled=filled if ext == "ply" else None)
             dst = sp.result_dir / f"mesh.{ext}"

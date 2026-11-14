@@ -1051,7 +1051,7 @@ bench medians before and after in the commit message.
   `test_the_points_only_path_gives_the_fine_clouds_points` (failed first). Curve, pose-graph
   and processing tests: 48 passed on the GPU path, 28 on the CPU path.
 
-### [ ] P6. Two trajectory readers and two STL writers (Sonnet, S) ○
+### [x] P6. Two trajectory readers and two STL writers (Sonnet, S) ○
 - **Where:** `ohs/server/processing.py:492-499` against `ohs/track/posegraph.py:269-286` and
   `ohs/app/process.py:165-170`; `processing.py:455-468` against `ohs/track/export.py:143-151`.
 - **Problem:** the two readers parse the `ok` column differently; the two STL writers differ in
@@ -1074,6 +1074,16 @@ bench medians before and after in the commit message.
   changes in its normals. The better one: the app's fast gathers with the export's float64
   normals, so the exported file stays as it is and the app's `mesh.stl` gets the more exact
   normals. It changes a file the app writes, so it waits for the owner's yes.
+- **STL half done 2026-11-14** (the owner said yes to that choice). `write_stl` in
+  `ohs/track/export.py` is the only STL writer: one `np.take` gather, the normals in float64 as
+  `face_normals` computes them, stored as float32. `save_mesh` and the app's `mesh.stl` use it;
+  the app's own writer is gone. The exported file is the same byte for byte as before (hash, on
+  a random mesh with faces without area and on a real mesh of 1.7 million faces), and the app's
+  file is now that same file: its vertices as before, its normals up to 0.00024 different.
+  Time on the real mesh: the export 0.79 → 0.40 s, the app's file 0.46 → 0.39 s (0.29 → 0.42 s
+  if the vertices come as float32, which the app does not do). New test
+  `test_one_stl_writer_for_the_export_and_the_app` (failed first). Export and processing tests:
+  43 passed on the GPU path, 37 on the CPU path.
 
 ### [-] P7. Straighten can fuse the whole scan twice (Opus, L) ✔
 - **Where:** `ohs/server/processing.py:1277-1315`.

@@ -23,6 +23,7 @@ import numpy as np
 
 __all__ = [
     "save_mesh",
+    "write_stl",
     "save_points_ply",
     "load_ply",
     "load_mesh",
@@ -140,14 +141,26 @@ def _write_ply(path: Path, V: np.ndarray, F: np.ndarray | None, N: np.ndarray | 
             fh.write(face.tobytes())
 
 
-def _write_stl(path: Path, V: np.ndarray, F: np.ndarray) -> None:
-    tri = np.zeros(len(F), dtype=np.dtype([("n", "<f4", (3,)), ("v", "<f4", (3, 3)), ("attr", "<u2")]))
-    tri["n"] = face_normals(V, F)
-    tri["v"] = V[F]
-    header = b"OpenHandScan binary STL, units: mm".ljust(80, b" ")
+_STL = np.dtype([("n", "<f4", (3,)), ("v", "<f4", (3, 3)), ("attr", "<u2")])
+
+
+def write_stl(path: str | Path, V: np.ndarray, F: np.ndarray) -> None:
+    """Binary STL in mm: the one STL writer, for :func:`save_mesh` and the app's ``mesh.stl``.
+
+    Each triangle's vertices as float32 and its right-hand-rule normal, computed in float64 (as
+    :func:`face_normals` does) and stored as float32; zero for a face without area. The vertices
+    are gathered once with ``np.take`` (fancy indexing of (N,3) rows is about three times slower
+    on a million triangles, which undo and redo feel)."""
+    P = np.take(np.ascontiguousarray(V, dtype=np.float64), np.asarray(F, dtype=np.int64).reshape(-1, 3), axis=0)
+    n = np.cross(P[:, 1] - P[:, 0], P[:, 2] - P[:, 0])
+    norm = np.linalg.norm(n, axis=1, keepdims=True)
+    tri = np.empty(len(P), dtype=_STL)
+    tri["n"] = np.divide(n, norm, out=np.zeros_like(n), where=norm > 0)
+    tri["v"] = P
+    tri["attr"] = 0
     with open(path, "wb") as fh:
-        fh.write(header)
-        fh.write(np.uint32(len(F)).tobytes())
+        fh.write(b"OpenHandScan binary STL, units: mm".ljust(80, b" "))
+        fh.write(np.uint32(len(P)).tobytes())
         fh.write(tri.tobytes())
 
 
@@ -193,7 +206,7 @@ def save_mesh(path: str | Path, V: np.ndarray, F: np.ndarray, N: np.ndarray | No
     if ext == ".ply":
         _write_ply(path, V, F, N, None, quality, filled)
     elif ext == ".stl":
-        _write_stl(path, V, F)
+        write_stl(path, V, F)
     elif ext == ".obj":
         _write_obj(path, V, F, N)
     else:

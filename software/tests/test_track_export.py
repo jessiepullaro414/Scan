@@ -70,6 +70,35 @@ def test_stl_roundtrip(tmp_path):
     assert np.allclose(stored["n"], face_normals(V, F), atol=1e-6)
 
 
+def test_one_stl_writer_for_the_export_and_the_app(tmp_path):
+    """The export and the app's ``mesh.stl`` come from one writer (P6): the vertices as float32,
+    the facet normals computed in float64 from the vertices as given and then stored as float32,
+    zero for a face without area."""
+    import ohs.server.processing as processing
+    import ohs.track.export as export
+
+    assert not hasattr(processing, "_write_stl") and not hasattr(processing, "_STL")  # the app has no writer of its own
+    rng = np.random.default_rng(1)
+    V = rng.normal(0.0, 50.0, (3000, 3))
+    F = rng.integers(0, len(V), (7000, 3))
+    F[:20, 1] = F[:20, 0]  # faces without area
+    export.write_stl(tmp_path / "a.stl", V, F)
+    save_mesh(tmp_path / "b.stl", V, F)
+    raw = (tmp_path / "a.stl").read_bytes()
+    assert raw == (tmp_path / "b.stl").read_bytes()
+    assert raw[:34] == b"OpenHandScan binary STL, units: mm" and int(np.frombuffer(raw, "<u4", 1, 80)[0]) == len(F)
+    stored = np.frombuffer(raw, dtype=np.dtype([("n", "<f4", (3,)), ("v", "<f4", (3, 3)), ("a", "<u2")]), offset=84)
+    n = np.cross(V[F[:, 1]] - V[F[:, 0]], V[F[:, 2]] - V[F[:, 0]])
+    ln = np.linalg.norm(n, axis=1, keepdims=True)
+    n = np.divide(n, ln, out=np.zeros_like(n), where=ln > 0)
+    assert np.array_equal(stored["n"], n.astype("<f4")) and not stored["n"][:20].any()
+    assert np.array_equal(stored["v"], V[F].astype("<f4")) and not stored["a"].any()
+    # float32 vertices (as a mesh read back from a PLY has them) give the same file as their float64 copy
+    export.write_stl(tmp_path / "c.stl", V.astype(np.float32), F)
+    export.write_stl(tmp_path / "d.stl", V.astype(np.float32).astype(np.float64), F)
+    assert (tmp_path / "c.stl").read_bytes() == (tmp_path / "d.stl").read_bytes()
+
+
 def test_obj_roundtrip(tmp_path):
     V, F, N = _sample_mesh()
     save_mesh(tmp_path / "m.obj", V, F, N)
