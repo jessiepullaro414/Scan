@@ -987,12 +987,21 @@ bench medians before and after in the commit message.
   `report["lasers"]` and a byte-identical `laser_points.ply`. `test_track_export.py`,
   `test_app_pipeline.py`, `test_server_process_studio.py`: 45 passed (GPU), 44 + 1 skipped (CPU).
 
-### [ ] P5. Curve adjustment builds clouds it barely uses (Sonnet, M) ○
+### [x] P5. Curve adjustment builds clouds it barely uses (Sonnet, M) ○
 - **Where:** `ohs/track/curve_ba.py:414-431`, `ohs/track/posegraph.py:514-543`.
 - **Problem:** for up to 200 frames it builds fine and coarse clouds with two KD-trees each, then
   uses about 400 points of the fine cloud.
 - **Change:** a points-only path in `KeyframeClouds`. Measure before and after.
 - **Guard:** `test_drift_is_reduced`, `test_true_poses_are_left_alone`; the point arrays identical.
+- **Done 2026-11-13.** `KeyframeClouds.fine_points(pos)` gives the fine level's points and
+  nothing else (no normals' cloud, no coarse level, no search trees, nothing cached); the curve
+  adjustment's depth term uses it. Measured on a 60-frame recording (640 x 400, Radeon 680M),
+  twice each: building the clouds 1.6–1.7 s → 1.1 s, the whole reading 5.5 → 5.0 s (the depth
+  itself is the rest), memory held afterwards 140 MB → 30 MB, so about 1.8 MB less per frame
+  (near 370 MB at the limit of 200 frames). At 1280 x 800: 1.7 → 1.2 s and 141 → 33 MB. The
+  points are the same byte for byte at both sizes (hash of all 60 frames' points). New test
+  `test_the_points_only_path_gives_the_fine_clouds_points` (failed first). Curve, pose-graph
+  and processing tests: 48 passed on the GPU path, 28 on the CPU path.
 
 ### [ ] P6. Two trajectory readers and two STL writers (Sonnet, S) ○
 - **Where:** `ohs/server/processing.py:492-499` against `ohs/track/posegraph.py:269-286` and

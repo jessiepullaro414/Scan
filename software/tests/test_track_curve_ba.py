@@ -86,3 +86,22 @@ def test_few_crossings_change_nothing(orbit, truth):
     poses, rep = laser_curve_adjustment(orbit, None, rows(idx, D, times), params=CurveParams(max_frames=4))
     assert rep["reason"] == "few_crossings" and rep["changed"] is False and rep["frames"] == 4
     assert all(np.array_equal(poses[i], D[k]) for k, i in enumerate(idx))
+
+
+def test_the_points_only_path_gives_the_fine_clouds_points(orbit):
+    """The depth term reads each frame's points and nothing else: ``fine_points`` gives exactly
+    the points of the full cloud's fine level, without the coarse level, the search trees and
+    the cache (P5)."""
+    from ohs.track.posegraph import KeyframeClouds, StraightenParams
+
+    reader = RecordingReader(orbit)
+    full = KeyframeClouds(reader, reader.calibration(), StraightenParams())
+    lean = KeyframeClouds(reader, reader.calibration(), StraightenParams())
+    for pos in (0, 17, 59):
+        P = lean.fine_points(pos)
+        assert P.dtype == np.float64 and len(P) > 5000 and np.array_equal(P, full.get(pos).fine.pts)
+    assert lean._cache == {} and set(full._cache) == {0, 17, 59}
+    assert np.array_equal(full.fine_points(17), full.get(17).fine.pts)  # a cloud made already is used
+    # too little depth: None, as get() says
+    few = KeyframeClouds(reader, reader.calibration(), StraightenParams(min_cloud_points=10 ** 7))
+    assert few.fine_points(0) is None and few.get(0) is None

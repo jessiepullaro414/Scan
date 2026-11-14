@@ -521,6 +521,26 @@ class KeyframeClouds:
         N[flip] *= -1.0
         return P, N
 
+    def fine_points(self, pos: int) -> np.ndarray | None:
+        """Only the points of the fine level of the frame at ``pos``: exactly ``get(pos).fine.pts``,
+        without the normals, the coarse level, the two search trees and the cache (``None``: too
+        little depth). For a caller that samples a few points of many frames."""
+        if pos in self._cache:
+            cloud = self._cache[pos]
+            return None if cloud is None else cloud.fine.pts
+        p = self.params
+        d = self.depth(pos)
+        t0 = time.perf_counter()
+        P, _ = self._points_normals(d)
+        pts = None
+        if len(P) >= p.min_cloud_points:
+            o3d = self._o3d
+            fine = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(P)).voxel_down_sample(float(p.voxel_mm))
+            if len(fine.points) >= p.min_cloud_points:
+                pts = np.asarray(fine.points, dtype=np.float64).copy()
+        self.timings_ms["cloud"] += 1e3 * (time.perf_counter() - t0)
+        return pts
+
     def get(self, pos: int) -> _Cloud | None:
         """The cloud of the frame at recording position ``pos`` (``None``: too little depth)."""
         if pos in self._cache:

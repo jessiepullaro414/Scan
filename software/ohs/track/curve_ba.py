@@ -423,9 +423,8 @@ def laser_curve_adjustment(rec_path: str | Path, calib: Any, trajectory: Sequenc
         for f in frames:
             if cancelled is not None and cancelled():
                 raise InterruptedError("cancelled")
-            c = kc.get(pos_of[f]) if f in pos_of else None
-            if c is not None:
-                P = c.fine.pts
+            P = kc.fine_points(pos_of[f]) if f in pos_of else None  # the points only: no trees, nothing kept
+            if P is not None:
                 pts[f] = P[:: max(1, len(P) // max(int(p.dense_points), 1))]
         dense = (pts, cKDTree(Vr), Vr, Nr)
         del kc
