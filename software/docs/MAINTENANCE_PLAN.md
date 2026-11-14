@@ -1211,6 +1211,37 @@ Every task here: the type check, `npm test`, and for bundle tasks the chunk size
   wrong neighbour normal at that vertex. And the lone triangles themselves stay in the mesh:
   Remove floaters does not take them, because they share a vertex with the surface.
 
+### [x] F3. Two holes that touch at a vertex share one neighbour normal
+- **Found 2026-11-13** with F2 (above). Two holes that share a rim vertex are one loop that
+  passes the vertex twice; `fill_holes` fills it as two simple loops. The neighbour normals were
+  looked up by vertex, so at the shared vertex both loops got the face of whichever edge came
+  last.
+- **Done 2026-11-13.** The normals are looked up by the position in the loop. Test first, on a
+  folded sheet with two square holes that meet at a vertex: the old code gave one of them the
+  normal of the other side of the fold. On the 12 real meshes of F2: 20 of the 4,690 loops Fill
+  holes takes are pinched; the fill is identical on 11 meshes, and on one (car_panel_s3,
+  tracked) 3 new faces are triangulated differently, no vertex moves.
+
+### [ ] F4. Pieces that hang on the surface by one vertex stay after Remove floaters
+- **Found 2026-11-13** with F2. Remove floaters counts faces as one piece when they share a
+  vertex, so a lone triangle or a small flap that touches the surface at a single point belongs
+  to the surface and stays.
+- **Measured 2026-11-13** on the same 12 meshes (Default recipe: pieces under 5 mm or under 1 %
+  of the triangles go). Lone triangles: 1,710, of which 131 stay after Remove floaters (11–19 on
+  each Standard scan). With pieces counted by shared *edges* instead, 4,714 more faces go
+  (340–870 on each Standard scan of 1.4–1.7 million, 0.03 %), in 58–101 pieces per scan; the
+  largest has 173 triangles and is 17 mm long. No face that goes today would stay.
+  Against the true surface (the four scans fused with the true poses): the kept surface is
+  0.03–0.04 mm off in the median and 0.20–0.27 mm at 90 %; the pieces that would go are
+  0.18–0.33 mm off in the median and 0.8–1.0 mm at 90 %. So they are mostly the noisy fringe, not
+  surface.
+- **Change (waits for the owner's yes: it changes that edit's result):** count pieces by shared
+  edges in `remove_floaters` (`piece_sizes` in `ohs/mesh/clean.py`); the hole finder keeps its
+  own count. The narrower choice, lone triangles only, takes the 131 and leaves the flaps.
+- **Guard:** a test first, with a lone triangle and a flap of a few triangles on a sheet;
+  `test_mesh_ops.py`, `test_server_process_studio.py` on both paths; the 12 meshes before and
+  after.
+
 ## Reviewed and fine: leave alone
 
 So nobody spends a session on these again.

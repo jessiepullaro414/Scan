@@ -243,3 +243,44 @@ def test_a_lone_triangle_hanging_by_a_vertex_gets_no_twin():
     assert _doubled(F6) == 0 and len(F6) > len(F5) and np.array_equal(F6[: len(F5)], F5)
     lp = boundary_loops(V6, F6, edge_table(F6, len(V6)))
     assert sorted(lp.n_edges().tolist()) == [3, 80]  # the lone triangle's outline and the sheet's border: no hole left
+
+
+def test_two_holes_that_touch_at_a_vertex_each_get_their_own_neighbour_normals(monkeypatch):
+    """Two holes that share one rim vertex are one loop that passes the vertex twice. It is filled
+    as two simple loops, and each must be given the normal of its own face at the shared vertex
+    (they took the same one: the face of whichever edge came last)."""
+    import ohs.mesh.holes as holes
+
+    n = 21
+    V, F = grid(n, n, 1.0, z=lambda x, y: 0.5 * np.abs(x - 10.0))  # a fold along x = 10: the two sides face apart
+    cx = V[F].mean(axis=1)
+    cell = lambda x, y: (np.abs(cx[:, 0] - (x + 0.5)) < 0.5) & (np.abs(cx[:, 1] - (y + 0.5)) < 0.5)  # noqa: E731
+    F1 = F[~(cell(9, 9) | cell(10, 10))]  # two square holes that meet at the vertex (10, 10)
+    shared = 10 * n + 10
+    lp = boundary_loops(V, F1, edge_table(F1, len(V)))
+    pinched = [k for k in range(len(lp)) if (lp.verts(k) == shared).sum() == 2]
+    assert len(lp) == 2 and len(pinched) == 1 and lp.n_edges()[pinched[0]] == 8
+    seen = []
+    triangulate = holes._triangulate_dp
+
+    def spy(P, nb, forbid):
+        seen.append((P.copy(), nb.copy()))
+        return triangulate(P, nb, forbid)
+
+    monkeypatch.setattr(holes, "_triangulate_dp", spy)
+    V2, F2 = fill_holes(V, F1, 10.0)
+    assert len(seen) == 2 and all(len(P) == 4 for P, _ in seen)
+    # the face that owns each loop edge a -> b (it has the two vertices in this order)
+    key = {(int(f[j]), int(f[(j + 1) % 3])): i for i, f in enumerate(F1) for j in range(3)}
+    at = {tuple(np.round(v, 6)): i for i, v in enumerate(V)}
+    fn = np.cross(V[F1[:, 1]] - V[F1[:, 0]], V[F1[:, 2]] - V[F1[:, 0]])
+    fn /= np.linalg.norm(fn, axis=1)[:, None]
+    for P, nb in seen:
+        ids = [at[tuple(np.round(q, 6))] for q in P]
+        assert shared in ids
+        for i in range(4):
+            owner = key[(ids[i], ids[(i + 1) % 4])]
+            assert np.allclose(nb[i], fn[owner]), f"edge {i} of the loop {ids}"
+    # both holes are closed and nothing else changed
+    assert len(F2) == len(F) and np.array_equal(F2[: len(F1)], F1) and _doubled(F2) == 0
+    assert len(boundary_loops(V2, F2, edge_table(F2, len(V2)))) == 1

@@ -501,7 +501,6 @@ def fill_holes(V: np.ndarray, F: np.ndarray, max_hole_mm: float, *, include_bord
             progress(done / len(cand), f"Filling hole {done + 1} of {len(cand)}")
         verts = loops.verts(k).tolist()
         loop_faces = face_of_he[loops.ptr[k] : loops.ptr[k + 1]].tolist()  # the face of the edge that starts at each position
-        he_face = {int(v): int(f) for v, f in zip(verts, loop_faces)}
         gpairs = pairs_by_loop.get(k, set())
         for at in _simple_loops(verts):
             if len(at) == 3 and loop_faces[at[0]] == loop_faces[at[1]] == loop_faces[at[2]]:
@@ -512,7 +511,7 @@ def fill_holes(V: np.ndarray, F: np.ndarray, max_hole_mm: float, *, include_bord
             g = np.asarray(lp, dtype=np.int64)
             n = len(g)
             P = V[g]
-            nb = fn[[he_face[v] for v in lp]]
+            nb = fn[[loop_faces[i] for i in at]]  # by position: a loop can pass a vertex twice, with another face each time
             l_of = {v: i for i, v in enumerate(lp)}
             local_pairs = set()
             for a, b in gpairs:
