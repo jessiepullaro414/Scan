@@ -1,9 +1,13 @@
 """Removing parts of a mesh: floaters (small disconnected pieces) and face selections.
 
-* :func:`remove_floaters` drops connected pieces (faces sharing a vertex) that are small: fewer
+* :func:`remove_floaters` drops connected pieces that are small: fewer
   than ``min_triangles`` triangles, fewer than ``min_fraction`` of all triangles, or a bounding-box
   diagonal under ``min_size_mm``; or, with ``keep_largest_only``, every piece but the one with
   the most triangles. The largest piece is always kept, so the scan itself never disappears.
+  A piece is faces joined through shared *edges*: a lone triangle or a flap that touches the
+  surface at one vertex is a piece of its own and is judged by its own size (on simulated scans
+  such pieces lie 5 to 7 times further from the true surface than the surface they hang on;
+  ``VALIDATION.md``, "Pieces that hang on by a vertex").
 * :func:`delete_faces` / :func:`keep_faces` drop or keep faces by index (a selection made in the
   viewer, in the indices of the mesh it was made on).
 
@@ -16,7 +20,7 @@ import logging
 
 import numpy as np
 
-from ohs.mesh.topology import as_mesh, compact, components
+from ohs.mesh.topology import as_mesh, compact, edge_components
 
 __all__ = ["remove_floaters", "delete_faces", "keep_faces", "piece_sizes"]
 
@@ -24,19 +28,29 @@ log = logging.getLogger(__name__)
 
 
 def piece_sizes(V: np.ndarray, F: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """``(face labels (M,), triangles per piece, bounding-box diagonal per piece in mm)``."""
-    n_comp, vlab, flab = components(F, len(V))
+    """``(face labels (M,), triangles per piece, bounding-box diagonal per piece in mm)``; a piece
+    is faces joined through shared edges (module docstring)."""
+    n_comp, flab = edge_components(F, len(V))
     tri = np.bincount(flab, minlength=n_comp)
-    used = np.flatnonzero(vlab >= 0)
-    lab = vlab[used]
-    order = np.argsort(lab, kind="stable")
-    lab_s = lab[order]
-    starts = np.flatnonzero(np.r_[True, lab_s[1:] != lab_s[:-1]])
-    P = V[used[order]]
-    lo = np.minimum.reduceat(P, starts, axis=0)
-    hi = np.maximum.reduceat(P, starts, axis=0)
     diag = np.zeros(n_comp)
-    diag[lab_s[starts]] = np.linalg.norm(hi - lo, axis=1)
+    if n_comp == 0:
+        return flab, tri, diag
+    # a vertex can be in two pieces, so the boxes are taken over the faces. The largest piece is
+    # nearly all of a scan: its box needs no sorting, and only the other pieces' faces are sorted.
+    largest = int(np.argmax(tri))
+    is_largest = flab == largest
+    P = np.take(V, F[is_largest].reshape(-1), axis=0)
+    diag[largest] = np.linalg.norm(P.max(axis=0) - P.min(axis=0))
+    rest = np.flatnonzero(~is_largest)
+    if len(rest):
+        lab = flab[rest]
+        order = np.argsort(lab, kind="stable")
+        rest, lab = rest[order], lab[order]
+        starts = np.flatnonzero(np.r_[True, lab[1:] != lab[:-1]])
+        P = np.take(V, F[rest].reshape(-1), axis=0).reshape(-1, 3, 3)
+        lo = np.minimum.reduceat(P.min(axis=1), starts, axis=0)
+        hi = np.maximum.reduceat(P.max(axis=1), starts, axis=0)
+        diag[lab[starts]] = np.linalg.norm(hi - lo, axis=1)
     return flab, tri, diag
 
 

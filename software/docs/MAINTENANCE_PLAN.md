@@ -1281,7 +1281,7 @@ Every task here: the type check, `npm test`, and for bundle tasks the chunk size
   holes takes are pinched; the fill is identical on 11 meshes, and on one (car_panel_s3,
   tracked) 3 new faces are triangulated differently, no vertex moves.
 
-### [ ] F4. Pieces that hang on the surface by one vertex stay after Remove floaters
+### [x] F4. Pieces that hang on the surface by one vertex stay after Remove floaters
 - **Found 2026-11-13** with F2. Remove floaters counts faces as one piece when they share a
   vertex, so a lone triangle or a small flap that touches the surface at a single point belongs
   to the surface and stays.
@@ -1300,6 +1300,17 @@ Every task here: the type check, `npm test`, and for bundle tasks the chunk size
 - **Guard:** a test first, with a lone triangle and a flap of a few triangles on a sheet;
   `test_mesh_ops.py`, `test_server_process_studio.py` on both paths; the 12 meshes before and
   after.
+- **Done 2026-11-13** (the owner: "Yes, all of them"). `edge_components` in
+  `ohs/mesh/topology.py` labels faces joined through shared edges; `piece_sizes` in
+  `ohs/mesh/clean.py` uses it and takes each piece's box over its faces (a vertex can be in two
+  pieces). The hole finder and the mesh statistics keep the count by shared vertices. On the 12
+  meshes, before and after: 4,714 more faces go, exactly the measured ones; no face stays that
+  went before; the kept faces keep their order; no lone triangle is left on a scan. Slower:
+  0.45 s → about 1.1 s on 1.7 million triangles (the edge table 0.5 s, the labels 0.3 s).
+  Test first: `test_a_piece_that_hangs_on_the_surface_by_one_vertex_is_a_piece_of_its_own` (a
+  lone triangle, a fan of four and a second sheet on one corner; the old code kept all 1,005
+  faces). Mesh and processing tests: 83 passed on the GPU path, 42 on the CPU path. Written up
+  in `VALIDATION.md`, "Pieces that hang on by a vertex", and `docs/APP_API.md`.
 
 ### [x] F5. A click on a boss is refused although its seed is clearly round
 - **Found 2026-11-13** in the fits re-measured after the gap guard: 8 of 60 clicks on the

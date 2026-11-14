@@ -791,6 +791,8 @@ Median / p95 error, and the share off by more than 0.2 mm:
 
 The limit never binds here: smoothing moves points by hundredths of a millimetre, while these short scans' σ is about 0.5 mm. Smoothing doesn't hurt the confident half on the simulator either. The limit is a guarantee for scans where σ is small, not a gain on these.
 
+**Pieces that hang on by a vertex** (2026-11-13). A fused scan has lone triangles and small flaps that touch the surface at a single vertex: 1,710 lone triangles on 12 meshes, and on each Standard scan (1.4–1.7 million triangles) 58–101 such pieces, the largest 173 triangles and 17 mm long. With pieces counted by shared vertices they were part of the surface, and Remove floaters left 11–19 lone triangles and 340–870 faces of flaps on each scan. Against the true surface (four scans fused with the true poses) the surface is 0.03–0.04 mm off in the median and 0.20–0.27 mm at 90 %; these pieces are 0.18–0.33 mm off in the median and 0.8–1.0 mm at 90 %: the noisy fringe. Remove floaters now counts a piece as faces joined through shared edges, so each flap is judged by its own size. With the Default recipe's limits (5 mm, 1 % of the triangles) 4,714 more faces go on the 12 meshes (0.03 % of a scan), no face stays that went before, and no lone triangle is left. The edit takes about 1.1 s on 1.7 million triangles (0.45 s before).
+
 **Filled faces** are flagged by `fill_holes`. The flags follow every edit (carried exactly by delete, keep and smooth; by nearest face for floaters and simplify) and reach `mesh.ply`; tests cover it.
 
 **Watertight:** `fill_holes(..., include_borders=True)` closes the outer edge within the size limit, for example a sphere cut flat where it sat on the table.

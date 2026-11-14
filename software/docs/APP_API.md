@@ -732,7 +732,7 @@ Everything in the M3 phase 2 section is implemented as written, with these clari
   - "Simplify to 200,000 triangles", "Simplify to 50 % of the triangles" or "Simplify to within 0.02 mm";
   - "Delete 1,234 triangles" or "Keep 1,234 triangles".
 - `remove_floaters`:
-  - A piece is a set of faces connected through shared vertices; the largest piece is the one with the most triangles.
+  - A piece is a set of faces connected through shared edges; the largest piece is the one with the most triangles. A lone triangle or a flap that touches the surface at one vertex only is a piece of its own (since 2026-11-13; before, pieces were connected through shared vertices and such a flap counted as surface).
   - `min_size_mm` compares the diagonal of the piece's bounding box. *extra* `min_fraction` (0–1) compares the piece's share of all triangles.
   - The given limits combine with "or".
   - `{}` means `{min_size_mm: 5}`, and `keep_largest_only` ignores the other limits.
@@ -830,7 +830,7 @@ Everything in the M3 phase 2 section is implemented as written, with these clari
 | Operation | Time |
 |---|---|
 | Stats | 1.3 s |
-| Remove floaters | 0.3 s |
+| Remove floaters | 0.3 s (about 1.1 s on 1.7 million triangles since pieces are counted by shared edges, 2026-11-13; 0.45 s before) |
 | Fill holes up to 5 mm / 80 mm | 1.5 s / 3.4 s |
 | Smooth: Taubin 0.5 (with `keep_edges`) | 1.8 s (3.7 s) |
 | Smooth: bilateral 0.5 / 1.0 | 5.0 s / 9.1 s |

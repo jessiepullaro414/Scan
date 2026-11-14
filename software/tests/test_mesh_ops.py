@@ -12,6 +12,8 @@
 """
 from __future__ import annotations
 
+import math
+
 import numpy as np
 import pytest
 
@@ -55,6 +57,42 @@ def test_remove_floaters_by_size_count_fraction_and_largest(with_floaters):
     assert len(F5) == 5120
     V6, F6 = remove_floaters(V, F)  # no criterion: nothing to do
     assert len(F6) == len(F) and np.array_equal(V6, V)
+
+
+def test_a_piece_that_hangs_on_the_surface_by_one_vertex_is_a_piece_of_its_own():
+    """A fused scan leaves lone triangles and small flaps that touch the surface at a single
+    vertex. They are no part of the surface: pieces are faces joined through shared *edges*, so
+    such a flap is judged by its own size. A large part that hangs on by one vertex is large
+    enough to stay; what is kept keeps its order, and the shared vertex stays with the surface."""
+    V, F = grid(21, 21, 1.0)  # 800 triangles
+    at = lambda x, y: y * 21 + x  # noqa: E731
+    n = len(V)
+    # a lone triangle standing on an inner vertex, and a flap of four triangles (a fan) on another
+    lone_V = np.array([[10.3, 10.0, 0.8], [10.0, 10.3, 0.8]])
+    lone_F = np.array([[at(10, 10), n, n + 1]])
+    fan_V = np.array([[5.0 + 0.5 * math.cos(t), 5.0 + 0.5 * math.sin(t), 0.6] for t in np.linspace(0.0, 2.0, 5)])
+    fan_F = np.array([[at(5, 5), n + 2 + k, n + 3 + k] for k in range(4)])
+    # a second sheet (200 triangles) that shares only its corner vertex with the first sheet's corner
+    V2, F2 = grid(11, 11, 1.0)
+    V2 = V2 + [20.0, 20.0, 0.0]
+    remap = np.arange(len(V2)) + n + 7 - 1  # its vertex 0 is the first sheet's corner (20, 20)
+    remap[0] = at(20, 20)
+    Vall = np.vstack([V, lone_V, fan_V, V2[1:]])
+    Fall = np.vstack([F, lone_F, fan_F, remap[F2]])
+    assert mesh_stats(Vall, Fall)["components"] == 1  # all one piece by shared vertices
+    Vk, Fk, kept = remove_floaters(Vall, Fall, min_triangles=10, return_kept=True)
+    assert len(Fk) == 800 + 200 and np.array_equal(kept, np.r_[np.arange(800), np.arange(805, 1005)])
+    assert len(Vk) == len(Vall) - 2 - 5 and np.array_equal(Vk[:n], V)  # the flaps' own vertices are gone, no other
+    assert np.array_equal(Vk[Fk], Vall[Fall[kept]])  # the kept faces, in order, at the same places
+    # by size: the lone triangle (0.4 mm) and the fan (1 mm) are under 2 mm, the sheets are not
+    _, F3 = remove_floaters(Vall, Fall, min_size_mm=2.0)
+    assert len(F3) == 1000
+    # only the largest piece: the second sheet is a piece of its own too
+    V4, F4 = remove_floaters(Vall, Fall, keep_largest_only=True)
+    assert len(F4) == 800 and np.array_equal(V4, V)
+    # nothing small enough: nothing changes
+    V5, F5 = remove_floaters(Vall, Fall, min_triangles=1)
+    assert np.array_equal(F5, Fall) and np.array_equal(V5, Vall)
 
 
 # --------------------------------------------------------------------------- selections

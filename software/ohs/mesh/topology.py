@@ -43,6 +43,7 @@ __all__ = [
     "boundary_loops",
     "classify_loops",
     "components",
+    "edge_components",
     "face_areas",
     "face_normals",
     "vertex_normals",
@@ -233,6 +234,30 @@ def components(F: np.ndarray, n_vertices: int) -> tuple[int, np.ndarray, np.ndar
     used[face_raw] = True
     remap = np.where(used, np.cumsum(used) - 1, -1)
     return int(used.sum()), remap[labels], remap[face_raw]
+
+
+def edge_components(F: np.ndarray, n_vertices: int, et: EdgeTable | None = None) -> tuple[int, np.ndarray]:
+    """Pieces of faces joined through shared *edges*: ``(count, face labels (M,))``, labels
+    ``0 .. count-1``. Two parts that touch at a vertex only are two pieces here (one piece for
+    :func:`components`): a lone triangle or a flap standing on the surface is its own piece."""
+    from scipy.sparse import coo_matrix
+    from scipy.sparse.csgraph import connected_components
+
+    m = len(F)
+    if m == 0:
+        return 0, np.zeros(0, dtype=np.int64)
+    if et is None:
+        et = edge_table(F, n_vertices)
+    a, b = [], []
+    for k in range(1, int(et.counts.max())):  # each edge's k-th face with its first (k > 1: non-manifold edges)
+        e = np.flatnonzero(et.counts > k)
+        a.append(et.he_order[et.edge_start[e]] // 3)
+        b.append(et.he_order[et.edge_start[e] + k] // 3)
+    if a:
+        a, b = np.concatenate(a), np.concatenate(b)
+    A = coo_matrix((np.ones(len(a), dtype=np.int8), (a, b)), shape=(m, m)).tocsr()
+    count, labels = connected_components(A, directed=False)
+    return int(count), labels.astype(np.int64)
 
 
 # --------------------------------------------------------------------------- boundary loops
