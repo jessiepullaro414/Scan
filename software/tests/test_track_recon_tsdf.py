@@ -9,6 +9,8 @@
   mesh's curvature and open border.
 * The gap guard: depth next to a patch without depth is not fused (the matcher carries a surface a
   few pixels into a hole), the same on the GPU and in numpy; single missing pixels do not count.
+* The short band behind the surface (``back_mm``): a thin plate seen from both sides keeps its
+  thickness, a surface seen from one side is untouched, the same on the GPU and in numpy.
 * The mesh's sigma reaches a PLY file and back.
 """
 import numpy as np
@@ -29,11 +31,11 @@ K = np.array([[FX, 0.0, (W - 1) / 2], [0.0, FX, (H - 1) / 2], [0.0, 0.0, 1.0]])
 Z0 = 300.0  # the world plane z = Z0, seen from cameras looking along +z
 
 
-def plane_depth(T_wc: np.ndarray, noise: float = 0.0, rng=None) -> np.ndarray:
+def plane_depth(T_wc: np.ndarray, noise: float = 0.0, rng=None, z: float = Z0) -> np.ndarray:
     vs, us = np.mgrid[0:H, 0:W].astype(np.float64)
     r = np.stack([(us - K[0, 2]) / FX, (vs - K[1, 2]) / FX, np.ones_like(us)], axis=-1)
     d = r @ T_wc[:3, :3].T
-    lam = (Z0 - T_wc[2, 3]) / d[..., 2]  # camera z of the hit (rays have z = 1)
+    lam = (z - T_wc[2, 3]) / d[..., 2]  # camera z of the hit (rays have z = 1)
     if noise:
         lam = lam + rng.normal(0.0, noise, lam.shape)
     return lam.astype(np.float32)
@@ -238,6 +240,102 @@ def test_gap_guard_keeps_the_fill_out_of_the_mesh(backend):
         v.close()
     assert reach[0.0] < 24.0  # the fill is in the mesh
     assert 25.0 < reach[None] < 29.0  # the hole's true edge is at 25 mm: no fill, and not much of the plane lost
+
+
+PLATE_MM = 5.0  # a plate between z = Z0 and Z0 + 5 mm, seen square on from both sides
+
+
+def plate_frames(n: int = 4) -> list:
+    """Exact depth of the plate's two faces: ``n`` cameras in front of it (looking along +z, as
+    everywhere in this file) and ``n`` behind it, looking back along -z."""
+    flip = np.diag([1.0, -1.0, -1.0])
+    out = []
+    for k in range(n):
+        Tf = make_se3(np.eye(3), np.array([4.0 * k, 0.0, 0.0]))
+        Tb = make_se3(flip, np.array([4.0 * k, 0.0, 2.0 * Z0 + PLATE_MM]))
+        out += [(plane_depth(Tf), Tf), (plane_depth(Tb, z=Z0 + PLATE_MM), Tb)]
+    return out
+
+
+def plate_thickness(vol: ConfidenceTsdf) -> float:
+    V = np.asarray(vol.extract_mesh()[0])
+    middle = (np.abs(V[:, 0] - 6.0) < 60.0) & (np.abs(V[:, 1]) < 60.0)  # away from the views' borders
+    front = V[middle & (V[:, 2] < Z0 + PLATE_MM / 2), 2]
+    back = V[middle & (V[:, 2] > Z0 + PLATE_MM / 2), 2]
+    assert len(front) > 500 and len(back) > 500
+    return float(back.mean() - front.mean())
+
+
+@pytest.mark.parametrize("backend", ["cpu", "gpu"])
+def test_a_short_band_behind_the_surface_keeps_a_thin_plate_thin(backend):
+    """A TSDF writes "inside" behind every surface it sees, as far as its truncation (8 mm here).
+    Through a 5 mm plate that reaches 3 mm into the air on the far side, where the views from that
+    side say "outside": the two average to "inside", and each face moves out by about 3 mm. With
+    ``back_mm=4`` a view counts in full only down to 4 mm behind its surface (with 0.001 beyond), so
+    the far side's own views decide there and the plate keeps its thickness. (What is left, 0.4 mm,
+    is the voxel next to the back face averaging the two sides' distances.)"""
+    if backend == "gpu" and compute.get_device() is None:
+        pytest.skip(f"no GPU: {compute.status()}")
+    read = {}
+    for back in (None, 4.0):
+        v = volume(backend, back_mm=back)
+        for d, T in plate_frames():
+            v.integrate(d, None, T)
+        read[back] = plate_thickness(v)
+        v.close()
+    assert read[None] > 9.0, f"the whole truncation behind the surface: the plate reads {read[None]:.2f} mm"
+    assert 4.5 < read[4.0] < 6.0, f"with the short band the 5 mm plate reads {read[4.0]:.2f} mm"
+
+
+def test_the_short_band_leaves_a_surface_seen_from_one_side_alone():
+    """Nothing else looks at the space behind a surface that is seen from one side, so the low
+    weight of what lies deep behind it moves no vertex: the band in front is as it was, and the
+    voxels next to the surface keep their full weight. (The normals are the TSDF's slope, which
+    reaches a voxel further back, to where noisy frames fall on either side of the cut: the sigma's
+    curvature term moves by a few thousandths of a mm.)"""
+    rng = np.random.default_rng(2)
+    frames = [(plane_depth(T, 0.3, rng), np.full((H, W), 0.4, np.float32), T) for T in poses(6, 4.0)]
+    got = []
+    for back in (None, 4.0):
+        v = volume("cpu", back_mm=back)
+        for d, s, T in frames:
+            v.integrate(d, s, T)
+        got.append(v.extract_mesh(with_sigma=True))
+        v.close()
+    (V0, F0, _, S0), (V1, F1, _, S1) = got
+    assert len(V0) > 5000 and len(V0) == len(V1) and len(F0) == len(F1)
+    # Open3D hands the vertices out in another order every time: compare them sorted
+    o0, o1 = np.lexsort(np.round(V0, 3).T), np.lexsort(np.round(V1, 3).T)
+    assert np.abs(V0[o0] - V1[o1]).max() < 1e-4 and np.abs(S0[o0] - S1[o1]).max() < 0.01
+
+
+def test_gpu_and_numpy_agree_with_the_short_band():
+    """The rule measures "behind" at right angles to the surface (the distance along the view times
+    the cosine of the ray with the depth map's normal): the plate square on, and a plane at 35 degrees."""
+    if compute.get_device() is None:
+        pytest.skip(f"no GPU: {compute.status()}")
+    for frames in ([(d, None, T) for d, T in plate_frames()], gappy_frames(np.random.default_rng(4))):
+        vols = [volume("cpu", back_mm=4.0), volume("gpu", back_mm=4.0)]
+        for d, s, T in frames:
+            for v in vols:
+                v.integrate(d, s, T)
+        (kc, c), (kg, g) = vols[0].download(), vols[1].download()
+        assert np.array_equal(kc, kg)
+        both = (c["nobs"] == g["nobs"]) & (c["nobs"] > 0)
+        assert both.sum() > 20000
+        low = both & (c["wsum"] < 0.75 * c["nobs"])  # voxels that lie deep behind what most of their views saw
+        assert low.sum() > 2000
+        for ch in ("tsdf", "wsum", "m2", "snh2", "nlook", "xc", "mxc", "hnear"):
+            close = np.abs(c[ch] - g[ch])[both] <= 1e-3 * np.maximum(1.0, np.abs(c[ch][both]))
+            assert close.mean() > 0.99, ch
+        for v in vols:
+            v.close()
+
+
+def test_the_short_band_must_be_positive():
+    with pytest.raises(ValueError, match="back_mm"):
+        volume("cpu", back_mm=0.0)
+    assert volume("cpu").back_mm is None and volume("cpu", back_mm=4.0).back_mm == 4.0
 
 
 def test_scatter_is_measured_along_the_normal_and_gaps_are_counted():

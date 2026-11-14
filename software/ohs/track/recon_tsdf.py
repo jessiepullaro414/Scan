@@ -22,7 +22,8 @@ Voxel ``(x, y, z)`` of brick ``b`` sits at world position ``(8 b + (x, y, z)) *
 voxel_mm``, Open3D's convention for block resolution 8. Per voxel, 40 bytes:
 
 - ``tsdf``: the mean of the truncated projective SDF ``min(d - z, trunc)`` (mm, camera z);
-- ``wsum``: the sum of the averaging weights (1 per observation), and ``m2``: the sum of squared
+- ``wsum``: the sum of the averaging weights (1 per observation; 0.001 for one that lies deep
+  behind its surface, "The band behind the surface" below), and ``m2``: the sum of squared
   deviations from the mean (Welford): the scatter actually observed, along the camera z;
 - ``xc`` and ``mxc``: the same mean and scatter of the distance along the surface *normal* (the SDF
   times the cosine of the ray with the depth map's own normal);
@@ -82,6 +83,23 @@ holes were judged worth it; ``gap_guard_px=0`` turns it off). For the sigma's co
 (``hnear``), what the guard drops counts as without depth: the count is about the depth that is
 fused. (The matcher's factor is taken out with the distance on the depth as the matcher made it.)
 
+**The band behind the surface** (``back_mm``; off by default here, the pipeline turns it on:
+:mod:`ohs.app.pipeline`, "Thin walls"). A TSDF marks the space behind every surface it sees as
+inside, as far as the truncation. Through a wall thinner than that, and past a convex edge, the
+mark reaches the open air on the far side, where the views from that side say "outside". The two
+average, and the wall swells: a 2 mm wall read 2.6 mm on exact depth and 3.4 mm in a tracked scan.
+With ``back_mm`` an observation counts in full only down to that far behind its surface, measured
+at right angles to it (the distance along the view times the cosine of the ray with the depth
+map's normal), and with ``BACK_WEIGHT`` beyond, down to the truncation as before. Where a voxel is
+also seen near a surface, those views decide; a voxel that only ever lies deep behind surfaces
+keeps its "inside" (dropping such observations left marching-cubes cells without all their
+corners: pinholes). The band in front of a surface is unchanged, and so is a surface seen from one
+side. What was tried and dropped: a cut along the view (it shrinks faces that lie between voxel
+planes and sinks flat surfaces), fading weights (worse than a stop), and cuts under 2 voxels (the
+surface sinks where the frames disagree, as in marker mode). ``nobs`` (the meshing weight) and the
+sigma's counts take every observation as before; 2 sigma covered the true error as before with it
+(``VALIDATION.md``, "A band that is short only behind the surface").
+
 **Backends.** ``"gpu"``: OpenCL on :func:`ohs.compute.get_device` (one work-item per voxel of the
 frame's bricks, so no voxel is written twice). ``"cpu"``: the same arithmetic in numpy, which is
 also the tests' reference. ``"auto"`` picks the GPU when there is one.
@@ -109,7 +127,7 @@ from typing import Any
 import numpy as np
 
 __all__ = ["ConfidenceTsdf", "BRICK", "RECON_BACKENDS", "voxel_sigma", "mesh_sigma_terms", "bias_scale", "pixel_weights",
-           "gap_guard_mask", "GUARD_PX_1280", "GUARD_SEED",
+           "gap_guard_mask", "GUARD_PX_1280", "GUARD_SEED", "BACK_VOXELS", "BACK_WEIGHT",
            "C_NOISE", "A_GAP", "A_SCATTER", "A_CURV", "A_BORDER", "GAP_NEAR_PX_1280", "BORDER_MM"]
 
 log = logging.getLogger(__name__)
@@ -131,6 +149,10 @@ BORDER_MM = 1.5
 # The gap guard (module docstring)
 GUARD_PX_1280 = 8.0  # depth within this many px of a patch without depth is not fused, at 1280 px width
 GUARD_SEED = 13  # a pixel without depth is part of a patch when this many of the 5x5 around it have none
+# The band behind the surface (module docstring)
+BACK_VOXELS = 2.0  # the cut the pipeline asks for, in voxels: full weight down to this far behind a surface
+BACK_WEIGHT = 1e-3  # the weight of an observation that lies deeper behind its surface than the cut
+_BACK_OFF = 3.0e38  # the kernel's cut when the rule is off: nothing lies that deep
 
 _SRC = r"""
 // OpenCL C 1.2. Sparse confidence TSDF of ohs/track/recon_tsdf.py (see its docstring).
@@ -148,7 +170,7 @@ __kernel void recon_integrate(
     const float r20, const float r21, const float r22,
     const float t0, const float t1, const float t2,
     const float voxel, const float trunc, const float depth_min, const float depth_max, const float look2,
-    const float near2, const float hole_amp, const float hole_r2)
+    const float near2, const float hole_amp, const float hole_r2, const float back_cut, const float back_w)
 {
     const int gid = get_global_id(0);
     const int b = gid >> 9;
@@ -171,9 +193,8 @@ __kernel void recon_integrate(
     if (!(d >= depth_min && d <= depth_max)) return;
     const float sdf = d - pz;
     if (sdf < -trunc) return;
-    // the weight and variance of pixel_weights(): 1, and min(sigma, trunc)^2 (trunc^2 / 9 without sigmas),
+    // the variance of pixel_weights(): min(sigma, trunc)^2 (trunc^2 / 9 without sigmas),
     // without the matcher's factor for pixels next to missing depth (1 + hole_amp exp(-g2 / hole_r2))
-    const float wt = 1.0f;
     const float g2 = gap2[pix];  // squared distance (px) to the nearest pixel without depth
     const float gg = gapg[pix];  // the same, with what the gap guard drops counted as without depth
     if (gg == 0.0f) return;  // the gap guard dropped this pixel
@@ -198,6 +219,9 @@ __kernel void recon_integrate(
             cs = clamp(d / fmax(nn * rr, 1e-6f), 0.05f, 1.0f);
         }
     }
+    // the weight of pixel_weights(), 1; deeper behind the surface than back_cut, at right angles to it: back_w
+    // (module docstring, "The band behind the surface"; the cut is huge when the rule is off)
+    const float wt = (sdf * cs < -back_cut) ? back_w : 1.0f;
     const float x = fmin(sdf, trunc);
     const int a = slots[b] * 512 + l;
     const float W0 = wsum[a], m0 = tsdf[a];
@@ -370,7 +394,7 @@ __kernel void recon_bricks(
 }
 """
 _I, _F = np.int32, np.float32
-_ARGS = [None] * 12 + [_I] + [None, None] + [_I, _I, _I] + [None, None] + [_F] * 5 + [_F] * 12 + [_F] * 8
+_ARGS = [None] * 12 + [_I] + [None, None] + [_I, _I, _I] + [None, None] + [_F] * 5 + [_F] * 12 + [_F] * 10
 _GAP_ROW_ARGS = [None, None, _I, _I, _I, _F, _F, None, _I]
 _GAP_DIST_ARGS = [None, None, _I, _I, _I]
 _GUARD_MARK_ARGS = [None, None, _I, _I, _I, _F]
@@ -515,6 +539,10 @@ class ConfidenceTsdf:
     gap_guard_px:
         The gap guard's radius (module docstring); ``None`` (the default): 8 px at 1280 px width,
         scaled with the width; 0: off.
+    back_mm:
+        The band behind the surface (module docstring): an observation counts in full down to
+        this far (mm) behind its surface, at right angles to it, and with ``BACK_WEIGHT`` beyond.
+        ``None`` (the default): in full down to the truncation, along the view.
     initial_bricks, max_bricks:
         Pool size at the start, and its limit (bricks beyond it are dropped, with a warning).
     """
@@ -522,7 +550,8 @@ class ConfidenceTsdf:
     def __init__(self, K: np.ndarray, image_size: tuple[int, int], voxel_mm: float = 1.0, trunc_mm: float = 4.0,
                  depth_min_mm: float = 120.0, depth_max_mm: float = 500.0, backend: str = "auto",
                  look_px: float | None = None, initial_bricks: int = 4096, max_bricks: int | None = None,
-                 hole_factor: tuple[float, float] | None = None, gap_guard_px: float | None = None) -> None:
+                 hole_factor: tuple[float, float] | None = None, gap_guard_px: float | None = None,
+                 back_mm: float | None = None) -> None:
         self.K = np.asarray(K, dtype=np.float64).reshape(3, 3).copy()
         self.image_size = (int(image_size[0]), int(image_size[1]))
         self.voxel_mm, self.trunc_mm = float(voxel_mm), float(trunc_mm)
@@ -546,6 +575,9 @@ class ConfidenceTsdf:
         self.gap_guard_px = GUARD_PX_1280 * w / 1280.0 if gap_guard_px is None else float(gap_guard_px)
         if not self.gap_guard_px >= 0:
             raise ValueError(f"gap_guard_px must be >= 0, got {gap_guard_px!r}")
+        self.back_mm = None if back_mm is None else float(back_mm)
+        if self.back_mm is not None and not self.back_mm > 0:
+            raise ValueError(f"back_mm must be > 0 (or None for the whole truncation), got {back_mm!r}")
         # brick sampling: every 4th pixel at 1280 px and 1 mm voxels; the same share of a brick at other sizes
         # (2 mm voxels at 640 px: every 4th pixel too, a quarter of the samples of every 2nd)
         self._step = max(1, int(round(4.0 * w / 1280.0 * float(self.voxel_mm))))
@@ -891,6 +923,9 @@ class ConfidenceTsdf:
         d = depth.ravel()[pix]
         sdf = d - z[sel]
         wt = wmap.ravel()[pix]
+        if self.back_mm is not None:  # deep behind the surface, at right angles to it: a low weight
+            deep = sdf * cmap[pix] < -np.float32(self.back_mm)
+            wt = np.where(deep, np.float32(BACK_WEIGHT) * wt, wt).astype(np.float32)
         good = (d > 0) & (d <= self.depth_max_mm) & (sdf >= -self.trunc_mm) & (wt > 0) & ~guard[pix]
         sel, sdf, wt, ui, vi, pix = sel[good], sdf[good], wt[good], ui[good], vi[good], pix[good]
         a = (slots.astype(np.int64)[:, None] * NVOX + np.arange(NVOX)[None]).reshape(-1)[sel]
@@ -997,7 +1032,8 @@ class ConfidenceTsdf:
                    self._slot_buf, self._key_buf, m, dbuf, sbuf, int(has_sigma), w, h, gbuf, ggbuf,
                    K[0, 0], K[1, 1], K[0, 2], K[1, 2], K[0, 1], *R_cw.ravel(), *t_cw,
                    self.voxel_mm, self.trunc_mm, self.depth_min_mm, self.depth_max_mm, self.look_px ** 2,
-                   self.gap_near_px ** 2, self.hole_amp, self.hole_r_px ** 2)
+                   self.gap_near_px ** 2, self.hole_amp, self.hole_r_px ** 2,
+                   _BACK_OFF if self.back_mm is None else self.back_mm, BACK_WEIGHT)
         q.flush()  # the device starts as soon as it is free
         self._lists = (evs, hold)
 
