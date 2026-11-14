@@ -134,6 +134,7 @@ def test_a_large_hole_is_ear_clipped_then_refined_and_faired():
     assert err.max() < 0.8 and err.mean() < 0.3
 
 
+@pytest.mark.slow
 def test_a_twisted_hole_is_filled_inside_its_outline():
     # A band of a simulated scan around a hole whose edge climbs around a ball sitting in it (a
     # user's Scan 4, 2026-11-09). Its loop triangulates with folds; on folds the smooth fill was

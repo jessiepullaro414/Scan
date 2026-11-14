@@ -277,6 +277,7 @@ def test_wizard_end_to_end_on_the_simulator(env):
 
 
 # --------------------------------------------------------------------------- rules
+@pytest.mark.slow
 def test_calibration_rules_on_the_simulator(env, monkeypatch):
     url, root = env["url"], env["root"]
     _refused(_post(url, "/api/calibration/start", {"kind": "stereo"}), 409, "no scanner is connected")
@@ -398,6 +399,7 @@ def test_websocket_calibration_messages(env):
         assert not any(m["type"] == "preview" for m, _, _ in late)  # previews follow the subscription
 
 
+@pytest.mark.slow
 def test_calibration_with_the_camera(tmp_path, demo_dir):
     """No board in view: captures are refused in plain words; the lasers follow the session."""
     from test_app_live import FakeCamera, SimPico
@@ -488,6 +490,7 @@ def test_device_lost_cancels_the_calibration(tmp_path, demo_dir):
         assert dev["connected"] is False and "camera" in (dev["error"] or "")
 
 
+@pytest.mark.slow
 def test_device_target_stereo_is_saved_and_the_camera_reloads_it(tmp_path, demo_dir):
     """The device target: a virtual scanner plays the camera; the measured print scale is used;
     the save backs up the old file, drops its lasers and IMU, and the connection reloads it."""

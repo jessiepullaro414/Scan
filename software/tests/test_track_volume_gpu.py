@@ -261,6 +261,7 @@ def test_rolling_shift_keeps_the_surface_and_drops_what_left():
     assert (w_b[new] > 0).sum() > 1000
 
 
+@pytest.mark.slow
 @gpu
 def test_tracker_follows_a_long_sweep():
     """A 240 mm sideways sweep along a row of spheres with a 256 mm cube: the window rolls (and

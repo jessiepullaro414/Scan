@@ -119,6 +119,7 @@ def test_clean_mesh_drops_small_components():
     assert len(Fk) == len(F1) + len(F2) and len(Vk) == len(V1) + len(V2)
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("with_normals", [True, False])
 def test_poisson_sphere(with_normals):
     rng = np.random.default_rng(1)

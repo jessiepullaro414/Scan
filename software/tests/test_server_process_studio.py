@@ -294,6 +294,7 @@ def test_track_edits_undo_redo_and_the_process_messages(env):
     assert {p.stem for p in cache.glob("*.npz")} == {"base"} | {e["id"] for e in s["edits"]}
 
 
+@pytest.mark.slow
 def test_undo_writes_the_files_without_the_main_lock(env, monkeypatch):
     """Undo / redo hold ``Studio._lock`` only for the 409 rules and write the result files under the
     scan's own lock: starting or stopping a scan, the trigger and connect never wait for them. What
@@ -767,6 +768,7 @@ def test_refine_with_lasers(env):
     assert rf["state"] == "skipped" and "no laser points" in rf["summary"]
 
 
+@pytest.mark.slow
 def test_refine_from_the_images(env, monkeypatch):
     import ohs.track.spacetime as stm
 
@@ -809,6 +811,7 @@ def test_refine_from_the_images(env, monkeypatch):
     assert s["stages"]["spacetime"]["state"] == "none" and s["base"]["stage"] == "fuse"
 
 
+@pytest.mark.slow
 def test_measurement_safe_edits(env):
     pid, sid = add_scan(env, "Safe edits", env["rec"])
     b = base_url(env, pid, sid)
@@ -852,6 +855,7 @@ def test_measurement_safe_edits(env):
     assert e["label"] == "Make watertight: close every opening up to 60 mm" and "not watertight yet" in e["summary"]
 
 
+@pytest.mark.slow
 def test_quality_levels_and_the_old_name(env):
     """standard / best / preview, and "full" (the old name) read as standard: requests, stored state, recipes."""
     pid, sid = add_scan(env, "Levels", env["rec"])
@@ -937,6 +941,7 @@ def orbit(tmp_path_factory) -> Path:
                                seed=3)
 
 
+@pytest.mark.slow
 def test_straighten_closes_loops_and_fuses_again(env, orbit):
     pytest.importorskip("ohs.track.posegraph")
     from ohs.app.process import _write_trajectory

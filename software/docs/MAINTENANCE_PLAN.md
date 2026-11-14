@@ -372,7 +372,7 @@ processing), S1 (start-up).
 
 ## A. Safety net (do these first)
 
-### [ ] A1. Faster tests: a fast run of about 4 minutes, a full run of about 12 (Sonnet, M) ✔
+### [x] A1. Faster tests: a fast run of about 4 minutes, a full run of about 12 (Sonnet, M) ✔
 - **Why:** every task in this plan ends with a test run. Today the full run is 18 minutes and the
   "fast" run (`-m "not slow"`) is still about 9. The numbers are in **Test timings** at the end.
 - **Change, each its own commit:**
@@ -387,6 +387,26 @@ processing), S1 (start-up).
      separately, so one run renders each once.
 - **Guard:** the number of collected tests stays 512; the full run passes on both compute paths; a
   cached recording is byte-identical to a fresh one; `--durations` before and after in the commit.
+- **Done 2026-11-13**, in two commits (the cache first, since a warm cache decides what is still
+  slow). The numbers are in **Test timings**, "Measured again".
+  - *The cache* (`tests/recordings.py`, steps 2 and 3): the simulator's recordings, board views
+    and IMU recordings are rendered once and kept in `<temp dir>/ohs-test-recordings`
+    (`OHS_TEST_RECORDINGS` moves it, `OHS_TEST_RECORDINGS=off` turns it off). The key is the
+    call's arguments and a hash of the simulator's own source, so there is no version number to
+    remember to raise. A cached recording is a fresh one byte for byte, except the time of the
+    render in `meta.json`. No `conftest.py` was needed: one disk cache already renders a
+    recording once for every module that asks for it.
+  - *Slow marks* (step 1): 25 more tests over about 4.8 s are marked `slow`. Kept fast although
+    slower: `test_track_edits_undo_redo_and_the_process_messages` (7.7 s; the tests after it in
+    its file build on it) and `test_imu_from_recording_fast` (5 s; the fast IMU check). Every
+    file that lost a test to `slow` keeps fast ones, and the fast run passes on its own, so no
+    fast test depends on a slow one.
+  - **Result:** the full run 22.9 → 13.9 minutes with the cache warm (22 minutes with it empty);
+    the fast run about 11.8 minutes (from the sums, not run) → 5.3 minutes on the GPU path and 5.1 on the CPU path. The full run
+    met the target of about 12 only nearly, and the fast run is at 5 minutes, not 4: the
+    remaining fast tests are 700 small ones (the slowest 4.7 s).
+  - The fast command also collects the two hardware tests, which then skip themselves ("no camera
+    connected"): `-m "not slow"` on the command line replaces the default `-m "not hardware"`.
 
 ### [x] A2. Before/after snapshot tool for the engine (Sonnet, M)
 - **Done 2026-11-10:** `python tools/snapshot.py snapshot <dir>` and `compare <a> <b> [--tol X]`
@@ -735,6 +755,18 @@ processing), S1 (start-up).
   old code (4 frames listed instead of 3) and passes now. `test_core.py`, `test_sim_datasets.py`,
   `test_server_process_cuts.py`, `test_server_basic.py`: 76 passed. The ground-truth poses file
   (simulator only) is read as before.
+
+### [ ] B15. A calibration view is reported before its recording is complete on disk (Sonnet, S) ✔
+- **Found 2026-11-13** in A1's full run on the CPU path:
+  `test_device_target_stereo_is_saved_and_the_camera_reloads_it` failed once (`meta.json` said 14
+  frames, the session 15 views) and passed 4 times of 4 on its own. `CalibrationSession._store`
+  (`ohs/server/calibration.py`) adds the view to `self.views` and only then rewrites `frames.csv`
+  and `meta.json`, so for a few milliseconds `GET /api/calibration` shows a view the recording
+  does not have yet.
+- **Change:** write the index with the new view first, then add the view to the list (captures
+  are already one at a time, under `_cap_lock`).
+- **Guard:** a new test with a slowed index write: the session must not show the view before the
+  index is on disk (it fails on the old code); `test_server_calibration.py` on both paths.
 
 ---
 
@@ -1208,6 +1240,25 @@ VALIDATION.md (no detection on the CPU-only path, no switch mid-scan, rotation e
 work that waits for the real hardware (hardware v2, the DOE demo).
 
 ## Test timings
+
+**Measured again on 2026-11-13** (GPU path, Radeon 680M, `pytest --durations`), for A1:
+
+| | Tests | Time | Of it fixture setup |
+|---|---|---|---|
+| Full run before | 737 | 1,372 s (22.9 min) | 457 s |
+| Full run, cache empty | 739 | 1,324 s | |
+| Full run, cache warm | 743 | 834 s (13.9 min) | 43 s |
+| Fast run (`-m "not slow"`), cache warm | 701 | 320 s (5.3 min) | |
+| Fast run on the CPU path | 659 (+44 skipped) | 308 s (5.1 min) | |
+
+After the change the full suite passes with the cache warm: GPU path 743 passed in 14.0 min; CPU path
+697 passed, 45 skipped and 1 failed in 14.6 min (the failure is a race the test can lose, not this change: B15; that test passes alone 4 times of 4). 42 tests are marked `slow` now (17 before). The slowest fast tests:
+`test_track_edits_undo_redo_and_the_process_messages` 7.7 s, `test_imu_from_recording_fast` 5.0 s,
+`test_alt_depth_holds_the_pose_the_main_input_cannot` 4.7 s, `test_camera_loss_stops_and_saves_the_scan`
+4.6 s. The cache holds 593 MB.
+
+The first measurement, kept for the record:
+
 
 Measured on 2026-11-10 on the GPU path (Radeon 680M): 510 tests in 1,091 s, with
 `pytest --durations=90`.

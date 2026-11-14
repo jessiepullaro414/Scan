@@ -120,6 +120,7 @@ def test_sim_device_previews_and_status(env):
         assert st["gpu_fallback"] is None  # no GPU stage failed (and nothing is scanning)
 
 
+@pytest.mark.slow
 def test_scan_rewind_stop_and_process(env):
     url, root = env["url"], env["root"]
     if not requests.get(url + "/api/device", timeout=T).json()["connected"]:

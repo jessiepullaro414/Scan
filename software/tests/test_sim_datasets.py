@@ -100,6 +100,7 @@ def test_other_scenes_record(tmp_path, scene, realistic):
     assert r.calibration().stereo.D1[0] != 0 if realistic else r.calibration().stereo.D1[0] == 0
 
 
+@pytest.mark.slow
 def test_stereo_calib_set_corners_match_truth():
     pairs, cal, spec = make_stereo_calib_set(n_views=3, image_size=(1280, 800), realistic=True, seed=0)
     assert set(spec) == {"squares_x", "squares_y", "square_mm", "marker_mm", "dictionary"}

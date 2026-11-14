@@ -230,6 +230,7 @@ def test_true_poses_come_back_unchanged(orbit, truth):
     assert json.loads(json.dumps(rep, allow_nan=False))["reason"] == "already_straight"  # the server stores it as JSON
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("rot_deg,trans_mm,seed", [(0.05, 0.2, 1), (0.1, 0.3, 2)])
 def test_synthetic_drift_is_straightened(orbit, truth, rot_deg, trans_mm, seed):
     idx, T, times = truth
@@ -261,6 +262,7 @@ def test_synthetic_drift_is_straightened(orbit, truth, rot_deg, trans_mm, seed):
     json.dumps(rep, allow_nan=False)  # plain JSON, as the server stores it
 
 
+@pytest.mark.slow
 def test_straighten_reads_trajectory_csv_and_uses_given_calibration(orbit, truth, tmp_path):
     idx, T, times = truth
     rows = rows_from(add_drift(T, 0.05, 0.2, 1), idx, times)
@@ -381,6 +383,7 @@ def test_a_correction_the_drift_model_cannot_explain_is_refused(orbit, truth):
 
 
 # --------------------------------------------------------------------------- large drift (4.4.1)
+@pytest.mark.slow
 def test_large_steady_drift_is_straightened(orbit, truth):
     """78 mm of steady drift by the end of the orbit (0.8 deg and 4 mm after every frame): the end comes
     back over the start about 50 mm off, beyond ICP from the tracked pose (20 mm) and the drift model.

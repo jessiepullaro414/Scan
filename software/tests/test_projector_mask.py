@@ -50,6 +50,7 @@ def test_optics_helpers():
     assert h == pytest.approx(50.0, abs=0.2) and v == pytest.approx(38.6, abs=0.2)
 
 
+@pytest.mark.slow
 def test_gerber_and_files(tmp_path):
     spec = MaskSpec()
     g = write_gerber(tmp_path / "m.gbr", spec).read_text()

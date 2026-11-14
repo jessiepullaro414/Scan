@@ -145,6 +145,7 @@ def test_recording_is_cached_and_versioned(bench_dir):
     assert spec["bench_version"] == bench.BENCH_VERSION and spec["spec"]["n_frames"] == 6
 
 
+@pytest.mark.slow
 def test_bench_cpu_and_gpu(bench_dir, capsys):
     env_before = os.environ.get(compute.ENV_VAR)
     report = bench.run_bench(bench_dir=bench_dir, spec=TINY, echo=print)

@@ -77,6 +77,7 @@ def test_depth_matches_analytic_sphere_and_plane(realistic):
     assert (np.abs(depth[valid] - za[valid]) < 1e-3).mean() > 0.999
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("realistic", [False, True])
 def test_laser_pixels_triangulate_onto_true_surface(realistic):
     """Brightest pixel per row/column, triangulated with the TRUE plane, lies on the TRUE surface."""

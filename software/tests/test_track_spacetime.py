@@ -86,6 +86,7 @@ def test_frames_from_recording_spreads_and_rectifies(scan):
     assert K[0, 0] > 500 and 55.0 < B < 65.0
 
 
+@pytest.mark.slow
 @pytest.mark.skipif(get_device() is None, reason="no OpenCL GPU")
 def test_the_gpu_and_the_cpu_agree(scan):
     V, F, L, R, T, K, B = (scan[k] for k in ("V", "F", "L", "R", "T", "K", "B"))
@@ -107,6 +108,7 @@ def test_the_gpu_and_the_cpu_agree(scan):
     assert np.abs(m_cpu - m_gpu).max() < 2e-3
 
 
+@pytest.mark.slow
 def test_the_refined_mesh_is_closer_to_the_truth(scan):
     V, F, L, R, T, K, B = (scan[k] for k in ("V", "F", "L", "R", "T", "K", "B"))
     p = replace(SpacetimeParams(), min_views=8)

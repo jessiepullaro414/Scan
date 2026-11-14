@@ -360,6 +360,7 @@ def test_gpu_integration_needs_no_wait_after_a_frame():
     one.close()
 
 
+@pytest.mark.slow
 def test_sigma_counts_independent_looks_only():
     rng = np.random.default_rng(2)
     noise = 0.5

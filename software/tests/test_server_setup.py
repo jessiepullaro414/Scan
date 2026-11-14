@@ -153,6 +153,7 @@ def test_print_check_every_branch(env):
 
 
 # --------------------------------------------------------------------------- printables
+@pytest.mark.slow
 def test_printables_listed_served_and_whitelisted(env, monkeypatch):
     url, root, studio = env["url"], env["root"], env["studio"]
     studio.printables_mask_dpi = 300  # the 1200 dpi sheet alone takes ~20 s
@@ -318,6 +319,7 @@ def test_selftest_on_the_simulator_stream(env):
     assert _ok(_get(url, "/api/device"))["connected"]  # the stream test never disconnects
 
 
+@pytest.mark.slow
 def test_selftest_with_the_camera_reconnects_it(tmp_path, demo_dir):
     from test_app_live import FakeCamera, SimPico
 

@@ -166,6 +166,7 @@ def test_check_script_passes_the_health_check(tmp_path):
     assert chk["lasers"]["lasers"]["horizontal"]["median_abs_mm"] < 0.1
 
 
+@pytest.mark.slow
 def test_imu_calibration_from_one_pass(tmp_path):
     """One pass of the imu script recorded like the app does (read, then the feed up to the frame)."""
     cam = SimBoardCamera("imu", realtime=False, loop=False)
