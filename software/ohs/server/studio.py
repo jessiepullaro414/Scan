@@ -583,3 +583,21 @@ class Studio:
             self.notify("info", "Camera settings saved"
                         + ("; connect the camera again to use them" if self.devices.source == "camera" else ""))
         return self.settings()
+
+    def set_process_settings(self, thin_walls: str | None = None) -> dict:
+        """Save ``process.thin_walls`` ("auto", "on" or "off") to the config file. The next mesh uses it:
+        a job reads its settings when it starts (:func:`process_params`)."""
+        from ohs.app.config import ConfigError, set_config_values
+
+        updates: dict[str, Any] = {}
+        if thin_walls is not None:
+            updates["thin_walls"] = str(thin_walls)
+        if updates:
+            with self._lock:
+                try:
+                    set_config_values({"process": updates}, self.config_path, cfg=self.cfg)
+                except (ConfigError, OSError) as e:
+                    raise ApiError(500, f"the meshing settings could not be saved to {self.config_path}: {e}",
+                                   "check that the config file is valid TOML and writable") from e
+            self.notify("info", "Meshing settings saved; the next mesh uses them")
+        return self.settings()

@@ -10,6 +10,7 @@ import type {
   CalibSession,
   CameraSettingsBody,
   CaptureReply,
+  ProcessSettingsBody,
   CheckResult,
   ConnectBody,
   DeviceState,
@@ -230,6 +231,8 @@ export const api = {
   devices: () => get<DevicesProbe>("/api/setup/devices"),
   /** Written to the config file; takes effect on the next connect. */
   setCamera: (body: CameraSettingsBody) => post<Settings>("/api/settings/camera", body),
+  /** Written to the config file; the next Make mesh uses it. */
+  setProcess: (body: ProcessSettingsBody) => post<Settings>("/api/settings/process", body),
   printables: () => get<Printables>("/api/setup/printables"),
   /** Job (kind `printables`, result `Printables`). A paper change is saved to `board.paper`. */
   generatePrintables: (paper?: Paper) => post<Job>("/api/setup/printables", paper ? { paper } : {}),

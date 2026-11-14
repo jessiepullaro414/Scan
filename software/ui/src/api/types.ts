@@ -431,6 +431,10 @@ export type CalibLive = {
 
 // ------------------------------------------------------------------ M2 request / reply bodies
 export type CameraSettingsBody = { index?: number; swap_lr?: boolean };
+/** `[process] thin_walls`: keep thin walls and edges from swelling in the mesh. "auto" turns it on for scans
+ * without markers and leaves marker mode as it was; "on" and "off" force it. */
+export type ThinWalls = "auto" | "on" | "off";
+export type ProcessSettingsBody = { thin_walls?: ThinWalls };
 export type OpenFolderReply = { opened: boolean; dir: string };
 export type CaptureReply = { view: CalibView; session: CalibSession };
 export type SaveReply = { session: CalibSession; setup: SetupState };

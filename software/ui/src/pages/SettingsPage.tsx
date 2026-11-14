@@ -6,6 +6,7 @@ import {
   FolderOpen,
   Grid3x3,
   Info,
+  Layers,
   Moon,
   Palette,
   RefreshCw,
@@ -20,7 +21,7 @@ import {
 import { useEffect, useState, type ReactNode } from "react";
 import { MOCK } from "../api/backend";
 import { ApiError, api } from "../api/http";
-import type { Settings } from "../api/types";
+import type { Settings, ThinWalls } from "../api/types";
 import { Badge } from "../components/ui/Badge";
 import { Button } from "../components/ui/Button";
 import { EmptyState, Skeleton } from "../components/ui/Feedback";
@@ -80,6 +81,7 @@ const SPECIAL: Record<string, string> = {
   marker_mm: "Marker size",
   tag_mm: "Tag size",
   voxel_mm: "Voxel size",
+  thin_walls: "Thin walls and edges",
   markers_dot_level: "Dots in markers mode",
   squares_x: "Squares across",
   squares_y: "Squares down",
@@ -175,6 +177,65 @@ function ComputeLabel({ c }: { c: unknown }) {
   );
 }
 
+const THIN_WALLS: ThinWalls[] = ["auto", "on", "off"];
+
+/** `process.thin_walls` of the engine's settings; `null` when this engine has no such setting. */
+function thinWallsOf(settings: Settings | null): ThinWalls | null {
+  const p = settings?.process;
+  const v = p && typeof p === "object" ? (p as Record<string, unknown>).thin_walls : undefined;
+  return THIN_WALLS.includes(v as ThinWalls) ? (v as ThinWalls) : null;
+}
+
+/** The one meshing setting that can be changed here: saved to the config file, used by the next mesh. */
+function MeshingSection({ settings, onSaved }: { settings: Settings; onSaved: (s: Settings) => void }) {
+  const value = thinWallsOf(settings);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<ApiError | null>(null);
+  if (!value) return null;
+  const save = async (v: ThinWalls) => {
+    if (v === value || saving) return;
+    setSaving(true);
+    try {
+      onSaved(await api.setProcess({ thin_walls: v }));
+      setError(null);
+    } catch (e) {
+      setError(e instanceof ApiError ? e : new ApiError(0, String(e), null, "/api/settings/process"));
+    } finally {
+      setSaving(false);
+    }
+  };
+  return (
+    <Section title="Meshing" icon={Layers}>
+      <div className="flex flex-wrap items-center justify-between gap-4">
+        <div className="min-w-0 flex-1 basis-64">
+          <div className="text-sm text-fg">Thin walls and edges</div>
+          <div className="text-xs text-subtle">
+            Keeps sheet metal, ribs and edges from coming out too thick. Automatic uses it for scans without markers. If a
+            mesh shows dents or many more pinholes, set it to Off and make the mesh again. Needs a GPU.
+          </div>
+        </div>
+        <Segmented
+          label="Thin walls and edges"
+          value={value}
+          disabled={saving}
+          onChange={(v) => void save(v)}
+          options={[
+            { value: "auto", label: "Automatic" },
+            { value: "on", label: "On" },
+            { value: "off", label: "Off" },
+          ]}
+        />
+      </div>
+      {error ? (
+        <div className="mt-2 text-xs text-danger" role="alert">
+          Couldn't save the setting: {error.detail}
+          {error.hint ? <span className="text-subtle"> {error.hint}</span> : null}
+        </div>
+      ) : null}
+    </Section>
+  );
+}
+
 export function SettingsPage() {
   const theme = useUi((s) => s.theme);
   const setTheme = useUi((s) => s.setTheme);
@@ -246,6 +307,7 @@ export function SettingsPage() {
             onChange={setAutoMesh}
           />
         </Section>
+        {settings ? <MeshingSection settings={settings} onSaved={setSettings} /> : null}
         <Section title="About" icon={Info}>
           <KeyValue
             rows={[

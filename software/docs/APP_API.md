@@ -267,6 +267,7 @@ type CalibLive = {
 | `POST /api/setup/selftest` | | `Job` (kind `selftest`, result `SelfTestResult`). While it runs, `job.message` is the instruction for the user (e.g. "Press and release the trigger now"). |
 | `GET /api/setup/devices` | | `DevicesProbe` (cameras found, the Pico's serial port) |
 | `POST /api/settings/camera` | `{index?: int, swap_lr?: bool}` | `Settings`. Written to the config file; takes effect on the next connect. |
+| `POST /api/settings/process` | `{thin_walls?: "auto" \| "on" \| "off"}` | `Settings`. Written to the config file (`[process] thin_walls`); the next mesh uses it. |
 | `GET /api/setup/printables` | | `Printables` (what was generated last; `files` empty before) |
 | `POST /api/setup/printables` | `{paper?: "letter" \| "a4"}` | `Job` (kind `printables`, result `Printables`). A paper change is saved to `board.paper`. |
 | `GET /api/setup/printables/files/{name}` | | a generated file (PDF, PNG, Gerber); 404 for anything else |
@@ -355,6 +356,8 @@ Everything in the M2 section is implemented as written, with these clarification
 - The connected camera is never opened again. Its entry (`in_use: true`) comes from the running camera, with the side-by-side size.
 - `pico_port` falls back to the connected Pico's port.
 - `POST /api/settings/camera` returns the same object as `GET /api/settings`.
+- `POST /api/settings/process` (added 2026-11-14) returns it too. `thin_walls` is the mesh model's short band behind the surface (`VALIDATION.md`, "A band that is short only behind the surface"): `"auto"` turns it on for scans without markers and leaves marker mode as it was, `"on"` and `"off"` force it. A job reads the setting when it starts, so a mesh that is being made is not affected. An engine without this route answers 404 or 405, and its `settings.process` has no `thin_walls`: the UI then hides the control.
+  - Errors: 422 for any other value; 500 when the config file cannot be written.
   - Errors: 422 for an index outside 0–63; 409 during a scan or a calibration.
   - It updates the running config too and takes effect on the next connect.
   - The file written is `Settings.effective.config_path` (*extra*, along with `data_dir`, `printables_dir` and `sim_calibration`). When there is no file, the commented template is written first. Comments and other lines are kept.

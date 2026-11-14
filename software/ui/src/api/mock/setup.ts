@@ -226,11 +226,12 @@ export class MockSetup {
   }
 
   // ---------------------------------------------------------------- routes
-  /** Handles /api/setup/* and /api/settings/camera; `undefined` when the path isn't one of them. */
+  /** Handles /api/setup/*, /api/settings/camera and /api/settings/process; `undefined` when the path isn't one of them. */
   route(method: string, seg: string[], body: Record<string, unknown>): Response | Promise<Response> | undefined {
     const [a, b, c, d] = seg;
     const is = (m: string, n: number) => method === m && seg.length === n;
     if (a === "settings" && b === "camera" && is("POST", 2)) return json(200, this.setCamera(body));
+    if (a === "settings" && b === "process" && is("POST", 2)) return json(200, this.setProcess(body));
     if (a !== "setup") return undefined;
     if (is("GET", 1)) return json(200, this.state());
     if (b === "dismiss" && is("POST", 2)) {
@@ -273,6 +274,16 @@ export class MockSetup {
     }
     if (body.swap_lr !== undefined) cam.swap_lr = !!body.swap_lr;
     this.host.log("info", "Camera settings saved to ~/.ohs/config.toml: they take effect on the next connect");
+    return this.host.settings;
+  }
+
+  private setProcess(body: Record<string, unknown>) {
+    if (body.thin_walls !== undefined) {
+      const v = String(body.thin_walls);
+      if (v !== "auto" && v !== "on" && v !== "off") throw new HttpError(422, `thin_walls cannot be “${v}”`, "Use auto, on or off.");
+      (this.host.settings.process as Record<string, unknown>).thin_walls = v;
+      this.host.log("info", "Meshing settings saved to ~/.ohs/config.toml: the next mesh uses them");
+    }
     return this.host.settings;
   }
 

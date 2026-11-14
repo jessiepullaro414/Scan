@@ -223,6 +223,23 @@ def test_camera_settings_are_saved_to_the_config_file(env):
     assert _ok(_post(url, "/api/settings/camera", {}))["camera"]["index"] == 2  # nothing to change
 
 
+def test_meshing_settings_are_saved_to_the_config_file(env):
+    """POST /api/settings/process saves ``process.thin_walls``; the next mesh's parameters carry it."""
+    from ohs.server.studio import process_params
+
+    url, root, studio = env["url"], env["root"], env["studio"]
+    assert _ok(_get(url, "/api/settings"))["process"]["thin_walls"] == "auto"
+    s = _ok(_post(url, "/api/settings/process", {"thin_walls": "off"}))
+    assert s["process"]["thin_walls"] == "off" and studio.cfg.process.thin_walls == "off"
+    assert 'thin_walls = "off"' in (root / "config.toml").read_text(encoding="utf-8")
+    assert load_config(root / "config.toml").process.thin_walls == "off"
+    for quality in ("standard", "best", "preview"):
+        assert process_params(studio.cfg, "markerless", quality, 1280).pipeline.thin_walls == "off"
+    assert _ok(_post(url, "/api/settings/process", {"thin_walls": "on"}))["process"]["thin_walls"] == "on"
+    _refused(_post(url, "/api/settings/process", {"thin_walls": "sometimes"}), 422)
+    assert _ok(_post(url, "/api/settings/process", {}))["process"]["thin_walls"] == "on"  # nothing to change
+
+
 def test_config_writer_keeps_comments_and_inserts(tmp_path):
     p = tmp_path / "c.toml"
     p.write_text("# my scanner\n[camera]\nindex = 1   # the ELP\nbackend = \"dshow\"\n\n# my board\n[board]\n"

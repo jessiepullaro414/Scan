@@ -3,7 +3,7 @@
 :func:`create_app` implements ``software/docs/APP_API.md``:
 
 * REST routes (blocking work runs in FastAPI's thread pool: the endpoints are plain functions),
-  M1's plus M2's ``/api/setup/*``, ``/api/settings/camera`` and ``/api/calibration/*``
+  M1's plus M2's ``/api/setup/*``, ``/api/settings/camera``, ``/api/settings/process`` and ``/api/calibration/*``
   (:mod:`ohs.server.setup`, :mod:`ohs.server.calibration`), and M3's processing studio
   ``/api/projects/{pid}/scans/{sid}/process/*`` and ``/api/recipes`` (:mod:`ohs.server.processing`);
 * ``/api/ws/live``: ``hello``, then the current ``device`` / ``session`` / ``calib_session`` /
@@ -99,6 +99,10 @@ class DismissBody(BaseModel):
 class CameraSettingsBody(BaseModel):
     index: Optional[int] = Field(None, ge=0, le=63)
     swap_lr: Optional[bool] = None
+
+
+class ProcessSettingsBody(BaseModel):
+    thin_walls: Optional[Literal["auto", "on", "off"]] = None
 
 
 class PrintablesBody(BaseModel):
@@ -539,6 +543,10 @@ def create_app(config: Any = None, *, projects_dir: Any = None, static_dir: Any 
     @app.post("/api/settings/camera")
     def settings_camera(body: CameraSettingsBody) -> JSONResponse:
         return _json(st.set_camera_settings(body.index, body.swap_lr))
+
+    @app.post("/api/settings/process")
+    def settings_process(body: ProcessSettingsBody) -> JSONResponse:
+        return _json(st.set_process_settings(body.thin_walls))
 
     @app.get("/api/setup/printables")
     def printables_state() -> JSONResponse:
