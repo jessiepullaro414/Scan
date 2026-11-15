@@ -1452,8 +1452,9 @@ Every task here: the type check, `npm test`, and for bundle tasks the chunk size
 - **What follows for now:** on this PC a millisecond of processor work saved in the extraction
   is worth about 1.7 ms of the frame, and work moved beside the GPU is not free. Speed figures
   from this PC say little about a PC with a separate graphics card.
-- **To do:** repeat these timings (an extraction in a thread and in a second process, alone and
-  beside the matcher) on the RTX laptop; on this PC try the
+- **To do:** repeat these timings on the RTX laptop (`python tools/frame_timing.py`, added for
+  this: an extraction in a thread and in a second process, alone and beside the matcher, and
+  the frame with two and four lasers); on this PC try the
   Windows power mode "Best performance" and note the GPU driver version with each run. Only
   then decide whether the frame should stop waiting for the lines before tracking starts (the
   lines are needed only for the laser points, which are already computed beside the tracker).
