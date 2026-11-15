@@ -178,6 +178,7 @@ key. Use `"auto"` for an optional value (exposure, port, voxel sizes) or leave i
 | `[process]` | `voxel_mm` (auto = 1 mm at 1280x800), `frame_step`, `standard_frame_rate` (30: frames per second of scanning that Standard quality processes; Best processes every frame), `frame_motion_deg` (0 = off: pick frames by the gyro's rotation) and `frame_max_gap` (4), `thin_walls` (`auto`: keep thin walls and edges from swelling in scans without markers; `on` / `off` force it; also on the app's Settings page), `poisson`, `export` (`ply`, `stl`, `obj`) |
 | `[board]` | ChArUco board (11 x 8 squares, 20 mm squares, 15 mm markers, `DICT_5X5_100`) and `paper` (`letter`/`a4`) |
 | `[markers]` | `tag_mm` (20): side of the black square of the printed AprilTags |
+| `[lasers]` | `lines`: the build's line lasers, default `["vertical", "horizontal"]`; the 4-laser build is `["vertical", "horizontal", "vertical_2", "horizontal_2"]` (vertical ones from right to left, horizontal ones from top to bottom). Also "Line lasers" on the app's Settings page. Calibrate the lasers again after a change |
 | `[compute]` | `device`: `auto` (the GPU if there is one), `cpu`, or part of a GPU's name such as `RTX`; the `OHS_COMPUTE` environment variable overrides it (section 8) |
 
 The global options `--config PATH`, `--calib PATH` (another calibration file) and `-v` / `-vv`
@@ -257,7 +258,11 @@ expressed in the old rectified camera frame. They are dropped, with a warning, u
 Each pose needs the board pose (corners found) and **both laser lines crossing the white page
 margin** around the printed pattern. Lines on the black-and-white squares are biased; the HUD counts the
 line points on the page and warns when a line misses it. Use different distances (150-450 mm) and
-tilts (up to +-30 deg) so the planes are well determined.
+tilts (up to +-30 deg) so the planes are well determined. With four line lasers (`[lasers] lines`,
+above) every pose needs all four lines on the margin. The two lines that run the same way cross
+each other at one distance and cannot be told apart there, so hold the board both nearer and
+farther than that; the calibration then works out which line belongs to which laser from the
+planes it finds.
 
 **IMU.** Needs the stereo calibration and the Pico. Put the board where the camera sees it, press
 SPACE or the trigger, **hold still for 2 s** (the HUD counts down), then **rotate the scanner
