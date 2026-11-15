@@ -1547,7 +1547,21 @@ The sphere-on-plane scan through `process_recording` (realistic camera model, ma
 - **Twice the laser points, as accurate as with two lasers,** and the lines pass over nearly twice as much of the surface.
 - **The mesh does not change.** It is built from the dot-stereo depth; the laser points come into it only through "Refine with lasers", which was not run here.
 - **Tracking is slightly less exact in position** (the largest error 0.05–0.06 mm larger; one scan each, so this may be noise): four lines cover more of the dot pattern that the depth is matched on.
-- **Cost:** a frame takes 59 → 89 ms at 640x400 and 142 → 195 ms at 1280x800 (median per frame, Radeon 680M, nothing else running). The extraction of the lines is 10 → 28 ms and 16 → 62 ms of that; at 640x400 the tracker's share also rose by 7 ms in this run. Not optimised yet.
+- **Cost:** a frame takes 59 → 89 ms at 640x400 and 142 → 195 ms at 1280x800 (median per frame, Radeon 680M, nothing else running). The extraction of the lines is 10 → 28 ms and 16 → 62 ms of that; at 640x400 the tracker's share also rose by 7 ms in this run. Not optimised at that point; the next line is.
+- **Cost after a first speed-up (2026-11-15, plan E8):** two helpers of the extraction do less work for the same output (bit for bit, `tests/test_vision_laser_speed.py`). Old and new code alternated on the recordings of the table above, Radeon 680M, GPU path, nothing else running:
+
+  | | 640x400 | 1280x800 |
+  |---|---|---|
+  | Extraction of one image, alone, four lasers: old | 13.0 / 13.2 ms | 35.7 / 37.3 ms |
+  | The same, new | 9.6 / 9.6 ms | 26.7 / 25.5 ms |
+  | The same with two lasers (not changed) | 3.7 ms | 11.6 ms |
+  | Whole frame, median, four lasers: old | 88.1 / 87.4 / 85.1 ms | 185.2 / 184.6 / 186.5 ms |
+  | The same, new | 83.1 / 93.4 / 84.0 ms | 166.3 / 169.9 / 167.1 ms |
+  | Of it, waiting for the lines: old | 33.1 / 29.2 / 32.1 ms | 61.9 / 49.6 / 59.8 ms |
+  | The same, new | 26.8 / 29.1 / 27.9 ms | 40.9 / 41.1 / 44.0 ms |
+  | Whole frame with two lasers, same session | 63.4 ms | 133.6 ms |
+
+  At 1280x800 the frame is 17 to 19 ms shorter (about 10 %). At 640x400 the gain is about 3 ms and within the spread of these 24-frame runs (one new run read 93.4 ms). Four lasers still cost about 33 ms a frame over two at 1280x800 and about 20 ms at 640x400. What is left in the extraction: linking the candidates of each row into lines is a loop in Python (8.5 of the 25 ms per image at 1280x800, 3.4 of 9.6 ms at 640x400); two ways to do part of it in bulk were measured and would save 3 to 4 % of the frame, which was not worth their code. Assigning each point to its plane (`laser_points`) takes 6.4 ms a frame alone against 1.1 ms with two lasers; the frame does not wait for it (0.3 ms).
 
 ### Calibration of four planes
 

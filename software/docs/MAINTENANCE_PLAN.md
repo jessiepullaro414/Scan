@@ -977,6 +977,33 @@ bench medians before and after in the commit message.
   voxels' averages, so the guard of 1e-4 mm does not hold point for point. Too little gain for
   a changed laser cloud. Worth another look only if scans of ten minutes and more become usual.
 
+### [x] E8. The line extraction does more work than it needs with four lasers (M) ✔
+- **Done 2026-11-15.** Asked for by the user after the 4-laser variant (a frame cost 30 to 53 ms
+  more than with two lasers). Only the code for several lines per direction is touched
+  (`ohs/vision/laser.py`); with two lasers nothing changes.
+- **`_row_candidates`** (the ridge candidates of each row): it dilated the whole response image
+  and searched all of it. Now it takes the samples above the threshold (about 3 % of the image),
+  compares each with its neighbours in that list, and picks the strongest of each row without
+  sorting all of them. 6.2 to 2.0 ms a call at 1280x800.
+- **`_near_other_lines`** (points near a crossing with the other direction's lines): each line was
+  checked against every point. Now only the points inside the line's bounding box, widened by
+  the check's reach, are passed on. 2.7 to 1.0 ms a call at 1280x800.
+- **Guard, added first:** `tests/test_vision_laser_speed.py` keeps the two old functions
+  (`tests/laser_reference.py`) and compares old and new bit for bit on made-up inputs (3,000 and
+  600 cases), on the synthetic two-lines-per-direction images and on rendered simulator frames
+  (the build's aim and the all-crossing aim, both cameras, both sizes). Each of three deliberate
+  mistakes in the new code made it fail. Outside the repository: the 120 images of two recorded
+  four-laser simulator scans give identical lines with old and new code.
+- **Measured** (Radeon 680M, GPU path, old and new alternated): one image alone 35.7 / 37.3 to
+  26.7 / 25.5 ms at 1280x800 and 13.0 / 13.2 to 9.6 / 9.6 ms at 640x400; the whole frame 185-187
+  to 166-170 ms at 1280x800 and 85-88 to 83-84 ms (one run 93) at 640x400. Table in
+  `VALIDATION.md`, "Four line lasers", "A tracked scan with two and with four lasers".
+- **Tried and not kept:** a leaner version of the linking loop (`_link_tracks`): no measurable
+  gain. Linking whole stretches of rows at once: about half the rows qualify on the test scans
+  (53 %), worth 3 to 4 % of the frame for some 60 lines of delicate code. The loop is what is
+  left (a third of the extraction); compiled code would remove it and needs a new dependency.
+- **Not measured:** the CPU path's frame time; the RTX laptop; real images.
+
 ---
 
 ## P. Offline processing

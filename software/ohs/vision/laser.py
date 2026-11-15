@@ -328,22 +328,41 @@ def _nms_radius(p: "LaserParams") -> int:
 def _row_candidates(resp: np.ndarray, thr: float, n: int, radius: int) -> tuple[np.ndarray, np.ndarray]:
     """Up to ``n`` ridge candidates per row: local maxima of ``resp`` over ``+-radius`` columns,
     at least ``thr``, strongest first. Returns ``(row, column)`` sorted by row, then column."""
-    mx = cv2.dilate(resp, np.ones((1, 2 * radius + 1), np.uint8), borderType=cv2.BORDER_REPLICATE)
-    rr, cc = np.nonzero((resp >= mx) & (resp >= thr))
-    if len(rr) == 0:
-        return rr.astype(np.int64), cc.astype(np.int64)
+    hot = np.flatnonzero(resp >= thr)  # few samples reach the threshold: only they are looked at
+    if len(hot) == 0:
+        return np.zeros(0, np.int64), np.zeros(0, np.int64)
+    rr, cc = np.divmod(hot, resp.shape[1])
+    val = resp[rr, cc]
+    # a local maximum has no larger sample within the radius in its row. A sample under the
+    # threshold is smaller anyway, and the ones above it within the radius are among the next
+    # ``radius`` entries of the row-by-row list
+    top = np.ones(len(hot), bool)
+    for j in range(1, min(radius, len(hot) - 1) + 1):
+        near = (rr[j:] == rr[:-j]) & (cc[j:] - cc[:-j] <= radius)
+        a, b = val[:-j], val[j:]
+        top[:-j] &= ~(near & (b > a))
+        top[j:] &= ~(near & (a > b))
+    rr, cc, val = rr[top], cc[top], val[top]
     # a flat top gives equal neighbours: keep the first of a row's candidates within the radius
     dup = np.r_[False, (rr[1:] == rr[:-1]) & (cc[1:] - cc[:-1] <= radius)]
-    rr, cc = rr[~dup], cc[~dup]
-    val = resp[rr, cc]
-    order = np.lexsort((-val, rr))
-    rr, cc = rr[order], cc[order]
-    first = np.r_[0, np.flatnonzero(rr[1:] != rr[:-1]) + 1]
-    rank = np.arange(len(rr)) - np.repeat(first, np.diff(np.r_[first, len(rr)]))
-    keep = rank < n
-    rr, cc = rr[keep], cc[keep]
-    order = np.lexsort((cc, rr))
-    return rr[order].astype(np.int64), cc[order].astype(np.int64)
+    rr, cc, val = rr[~dup], cc[~dup], val[~dup]
+    # the n strongest of each row (of equal ones the first): n times the strongest of what is left
+    left = np.arange(len(rr))
+    r, v = rr, val
+    picked = []
+    for _ in range(n):
+        if len(r) == 0:
+            break
+        new_row = np.r_[True, r[1:] != r[:-1]]
+        run = np.cumsum(new_row) - 1
+        best = np.flatnonzero(v == np.maximum.reduceat(v, np.flatnonzero(new_row))[run])
+        best = best[np.r_[True, run[best][1:] != run[best][:-1]]]
+        picked.append(left[best])
+        rest = np.ones(len(r), bool)
+        rest[best] = False
+        left, r, v = left[rest], r[rest], v[rest]
+    keep = np.sort(np.concatenate(picked))
+    return rr[keep].astype(np.int64), cc[keep].astype(np.int64)
 
 
 def _link_tracks(t: np.ndarray, c: np.ndarray, p: "LaserParams") -> np.ndarray:
@@ -771,8 +790,25 @@ def _near_other_lines(pts: np.ndarray, dirs: np.ndarray, other: np.ndarray, othe
         return near
     ot = other[:, 1] if other_vertical else other[:, 0]
     oc = other[:, 0] if other_vertical else other[:, 1]
+    qt = pts[:, 1] if other_vertical else pts[:, 0]
+    qc = pts[:, 0] if other_vertical else pts[:, 1]
     for idx in _chains(ot, oc, other_slope, other_seg, 4.0 * radius):
-        near |= _near_other_line(pts, dirs, other[idx], other_dirs[idx], other_vertical, radius)
+        # Most points are far from this line: only those in its bounding box, widened by how far
+        # :func:`_near_other_line` reaches, are passed on (the others it would not mark). It
+        # reaches ``radius`` around the line's points, and ``radius`` across a chord between two
+        # of them, which along ``c`` is up to ``radius * sqrt(1 + slope^2)`` of the steepest chord.
+        t, c = ot[idx], oc[idx]
+        reach = float(radius)
+        if len(idx) > 1:
+            order = np.argsort(t, kind="stable")
+            dt, dc = np.diff(t[order]), np.diff(c[order])
+            chord = (dt > 0) & (dt <= 4.0 * radius)
+            if chord.any():
+                reach *= math.sqrt(1.0 + float(np.max(np.abs(dc[chord] / dt[chord]))) ** 2)
+        reach = 1.001 * reach + 1e-6
+        i = np.flatnonzero((qt >= t.min() - reach) & (qt <= t.max() + reach) & (qc >= c.min() - reach) & (qc <= c.max() + reach))
+        if len(i):
+            near[i] |= _near_other_line(pts[i], dirs[i], other[idx], other_dirs[idx], other_vertical, radius)
     return near
 
 
