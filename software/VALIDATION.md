@@ -1579,6 +1579,16 @@ The sphere-on-plane scan through `process_recording` (realistic camera model, ma
   | One extraction in a second process: alone / while the matcher runs | 7.7 / 7.9 ms | 19.4 / 20.1 ms |
 
   There the frame is 19 to 20 ms shorter at 1280x800 (about a quarter) and 1 to 2 ms at 640x400. Four lasers still cost about 20 ms a frame over two at 1280x800 and about 10 ms at 640x400. Work on the processor is not slowed by the matcher there (on the Radeon PC it is, 4 to 7 times: `docs/MAINTENANCE_PLAN.md`, F8). What makes the frame wait on the laptop is that the two extractions hold each other up: each takes 32 ms when both run, against 19 ms alone, and the depth is done after 23 ms. The likely reason is the linking loop, which is Python code and so runs in one thread at a time; that is not measured apart. The script's "matcher alone" read 26.9 ms (640x400, four lasers) and 29.6 ms (1280x800, two lasers) where the matcher beside an extraction took 10.5 and 21.5 ms: most likely the graphics card clocking up after a pause. The script now runs the matcher a few times before each case; that is not rerun on the laptop.
+- **Tracking no longer waits for the lines (2026-11-15, plan E9): the same results, and no shorter frame.** The frame used to collect the laser lines before it was tracked; now a laser thread collects them and triangulates while the frame is tracked. Old and new code alternated with `tools/frame_timing.py`, median ms a frame with four lasers:
+
+  | | 640x400 | 1280x800 |
+  |---|---|---|
+  | RTX laptop, old | 32.0 / 30.8 / 32.0 / 32.3 | 51.0 / 61.7 / 53.9 / 56.4 |
+  | RTX laptop, new | 31.0 / 32.5 / 33.8 / 31.4 | 52.5 / 62.0 / 53.5 / 55.8 |
+  | Radeon PC, old | 126.1 / 120.3 / 121.7 / 131.1 | 226.3 / 219.2 / 214.2 / 227.5 |
+  | Radeon PC, new | 128.8 / 109.1 / 117.5 / 113.8 | 213.0 / 226.3 / 208.9 / 212.9 |
+
+  On both machines the wait for the lines goes to zero and the tracking takes about that much longer (laptop, 1280x800: wait 7–13 ms to 0, tracking 15–20 to 25–34 ms; Radeon: wait 72–80 to 0–5 ms, tracking 54–59 to 100–107 ms). The laser threads and the tracker do not really work at the same time: on the Radeon PC the processor is slowed by the GPU, and on the laptop the likely reason is that both are mostly short Python and numpy steps, which run in one thread at a time. The Radeon PC also ran slower in this session than in the morning's table above with the same code (two lasers 154 against 135 ms at 1280x800); the reason is not known, so compare within this table only. The snapshot of 90 frames (preview and full, GPU path) is identical before and after.
 
 ### Calibration of four planes
 

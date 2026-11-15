@@ -1030,8 +1030,24 @@ bench medians before and after in the commit message.
   goes from 72-80 to 0-5 ms and tracking from 54-59 to 100-107 ms): F8. The PC also ran slower
   in these runs than in the morning's with the same code (two lasers 154 against 135 ms); why
   is not known.
-- **Not measured yet:** the RTX laptop, where work beside the GPU is not slowed and the frame
-  waited 11.5-12.8 ms for the lines (four lasers, 1280x800); the CPU path's frame time.
+- **Measured on the RTX laptop the same day: no gain there either** (old and new alternated, two
+  runs of two rounds each, median ms a frame). Four lasers at 1280x800: old 51.0 / 61.7 / 53.9 /
+  56.4, new 52.5 / 62.0 / 53.5 / 55.8; at 640x400: old 32.0 / 30.8 / 32.0 / 32.3, new 31.0 /
+  32.5 / 33.8 / 31.4. Two lasers are unchanged (their wait was 0 already). The wait for the
+  lines is gone (7-13 ms to 0 at 1280x800), and tracking takes that much longer (15-20 to
+  25-34 ms); the extraction's own time rises too (66-74 to 73-80 ms for both images). Two
+  rounds of the same run differ by 5 to 10 ms at 1280x800.
+- **What that says:** the laser threads and the tracker cannot work at the same time, on a PC
+  whose processor is not slowed by the GPU either. The extraction is mostly short numpy calls
+  and the linking loop, and Python runs those in one thread at a time; the tracker's work on
+  the processor side is the same kind. Moving the wait does not shorten the frame; only less
+  such work in the extraction does (E8 did: 19-20 ms on the laptop), or doing it outside
+  Python's lock (compiled code, or worker processes). Not proven by a measurement of the lock
+  itself.
+- **Kept as it is:** no loss on either machine, the results are the same, and the frame no
+  longer depends on the lines being ready before tracking. To be decided by the user if they
+  would rather have the old order back.
+- **Not measured:** the CPU path's frame time.
 
 ---
 
@@ -1494,7 +1510,10 @@ Every task here: the type check, `npm test`, and for bundle tasks the chunk size
 - **To do:** on this PC try the Windows power mode "Best performance" and note the GPU driver
   version with each run. For the wait with four lasers there were two ways that keep the
   results as they are: the frame no longer waits for the lines before tracking starts (done,
-  E9), and compiling the linking loop (a new dependency: ask first; not done).
+  E9: no gain on either machine, the tracker slows down by what the wait gave back), and
+  compiling the linking loop (a new dependency: ask first; not done). E9's result points to
+  Python's lock, so what is left is less Python work in the extraction or work outside the
+  lock.
 
 ### [ ] F9. Preview on the RTX laptop's bench reads slower than in tuning round 2
 - **Seen 2026-11-15**, one run of `ohs bench --device gpu` at d4af63a with the laptop's usual
