@@ -10,24 +10,36 @@
 //    * horizontal-line laser (top)   /   laser-plane triangulation
 //    * IMU on the back cover (motion prior for tracking)
 //
+//  Two variants (parameter "lasers"):
+//    lasers = 2  the build above (default).
+//    lasers = 4  adds a second vertical-line laser on the LEFT (mirror of the
+//                right one) and a second horizontal-line laser BELOW the cameras,
+//                on the right, beside the yoke (see the note at "4-laser variant").
+//
 //  World frame: X = right, Y = forward (toward the object), Z = up.
 //  Head front face is y = 0; the faceplate sits proud of it (y 0..fp_t).
 //
-//          [H laser]
-//              |   \
-//          [dot proj]\  brace
-//       [ L-cam   R-cam ]--[V laser]
-//              |
-//            (grip)
+//  lasers = 2:                         lasers = 4 adds the ones marked (+):
+//
+//          [H laser]                           [H laser]
+//              |   \                               |   \
+//          [dot proj]\  brace                  [dot proj]\  brace
+//       [ L-cam   R-cam ]--[V laser]   (+)[V laser]--[ L-cam   R-cam ]--[V laser]
+//              |                                   |        |
+//            (grip)                              (grip)--(+)[H laser, low]
 //
 //  The faceplate is a separate part so that ONLY it needs reprinting if
 //  your stereo board's dimensions differ from the placeholders below.
 //
-//  Export:  openscad -D part=\"head\" -o head.stl scanner.scad
+//  Export:  openscad -D part=\"head\" -o head.stl scanner.scad            (2 lasers)
+//           openscad -D lasers=4 -D part=\"head\" -o head.stl scanner.scad  (4 lasers)
+//  The faceplate, back cover, grip halves and LED cartridge are the same in both
+//  variants; only the head changes.
 // =====================================================================
 
 part = "assembly"; // [assembly, head, faceplate, back_cover, grip_left, grip_right, led_cartridge]
 show_fans = true;
+lasers = 2; // [2, 4]  2 = one vertical + one horizontal line laser (the default build);  4 = adds a left vertical and a low horizontal one
 projector = "led"; // [led, laser]  led = LED + printed mask + M12 lens (the current build);  laser = dot laser + DOE disc
 $fn = 72;
 eps = 0.01;
@@ -37,6 +49,17 @@ work_dist = 250;  // laser sheets cross here, in front of the faceplate
 base_v    = 92;   // camera centre -> vertical-line laser block centre (X)
 base_h    = 80;   // camera centre -> horizontal-line laser block centre (Z)
 proj_z    = 42;   // dot projector height above camera centre
+
+/* [4-laser variant (lasers = 4)] */
+// The second vertical laser is the mirror image of the first (same base_v, mirrored aim).
+// The second horizontal laser cannot sit straight below the cameras at x = 0: the grip and its
+// yoke are there, and a module in front of the grip would leave the hand no room. It sits beside
+// the yoke instead: its block starts where the yoke's gusset ends (x = yoke_reach), so the hand
+// keeps its room, and it is carried by a column hanging from the camera block.
+// A plane does not care where along x its laser sits, so the sheet is aimed like the top one:
+// it crosses the centre line at work_dist, from below.
+base_h2 = 56;   // camera centre -> low horizontal-line laser centre (Z, below). Keep >= 56: the
+                // yoke's screw tunnel (z = -38.5) must stay clear of the bore wall
 
 /* [Stereo camera board -- ELP OV9281 dual board, measured 2026-11-12] */
 st_board      = [80, 16.5];  // PCB width (X), height (Z)
@@ -167,6 +190,8 @@ head_bot = -bh/2;
 grip_cy  = -head_d/2;
 a_v = atan(base_v / (work_dist + fp_t + head_d/2));
 a_h = atan(base_h / (work_dist + fp_t + head_d/2));
+a_h2 = atan(base_h2 / (work_dist + fp_t + head_d/2));  // low horizontal laser, tilted up
+lowh_x = yoke_reach + lblk_l/2;                        // its X: block starts at the end of the yoke gusset
 led_tilt   = atan(led_proj_z / (work_dist + fp_t));   // aim the pattern centre at the stereo axis
 cart_t     = cart_plate_t + cart_gap + star_t;
 led_ledge  = led_front_t + holder_h + 1;               // depth of the cartridge seat (local frame)
@@ -190,7 +215,9 @@ module rrect(x, y, r, h)
 
 module laser_v_frame() translate([base_v, -head_d/2, 0])  rotate([0,0,a_v])  children();
 module laser_h_frame() translate([0, -head_d/2, base_h])  rotate([-a_h,0,0]) children();
-module proj_frame()    translate([0, -head_d/2, proj_z])  children();
+module laser_v2_frame() translate([-base_v, -head_d/2, 0]) rotate([0,0,-a_v]) children();  // lasers = 4: left, mirrored
+module laser_h2_frame() translate([lowh_x, -head_d/2, -base_h2]) rotate([a_h2,0,0]) children(); // lasers = 4: low, aims up
+module proj_frame()   translate([0, -head_d/2, proj_z])  children();
 // LED projector: local +Y = optical axis (tilted down), origin on the front face at the lens axis
 module led_frame()     translate([0, 0, led_proj_z]) rotate([-led_tilt, 0, 0]) children();
 module grip_frame()    translate([0, grip_cy, head_bot])  rotate([-grip_angle,0,0]) children();
@@ -226,6 +253,13 @@ module head_outline_raw() {
     translate([-lblk_w/2, base_h - lblk_l/2]) square([lblk_w, lblk_l]);           // H laser block
     if (projector == "led")                                                        // LED projector block
         translate([-led_block_w/2, led_z0]) square([led_block_w, led_z1 - led_z0]);
+    if (lasers == 4) {
+        translate([-(base_v - 1), -arm_w/2]) square([base_v - bw/2, arm_w]);        // left V arm
+        translate([-base_v - lblk_l/2, -lblk_w/2]) square([lblk_l, lblk_w]);        // left V laser block
+        // low H laser block + the column that carries it up to the camera block
+        translate([lowh_x - lblk_l/2, -base_h2 - lblk_w/2])
+            square([lblk_l, base_h2 + lblk_w/2 - bh/2 + 1]);
+    }
     xi = grip_x/2 + yoke_fit;                                                      // yoke: cheeks + gussets
     for (sx=[-1,1]) scale([sx, 1])
         polygon([[xi, head_bot + 1], [xi, head_bot - yoke_h], [xi + yoke_t, head_bot - yoke_h],
@@ -243,11 +277,13 @@ module head_body() {
         for (i=[0:n-1]) translate([0, 0, head_d - edge_c + i*edge_c/n - eps])
             linear_extrude(edge_c/n + eps) offset(delta=-(i + 1)*edge_c/n) head_outline();
     }
-    hull() {                                                                              // brace
-        // ends sit 1 mm inside the laser blocks (a tangent contact makes a non-manifold vertex)
-        translate([base_v - lblk_l/2 - brace_d/2 + 1, -brace_depth, lblk_w/2 - brace_d/2 + 1]) ycyl(brace_d, brace_depth);
-        translate([lblk_w/2 - brace_d/2 + 1, -brace_depth, base_h - lblk_l/2 - brace_d/2 + 1]) ycyl(brace_d, brace_depth);
-    }
+    brace();
+    if (lasers == 4) mirror([1, 0, 0]) brace();                                           // left V block to the H block
+}
+module brace() hull() {
+    // ends sit 1 mm inside the laser blocks (a tangent contact makes a non-manifold vertex)
+    translate([base_v - lblk_l/2 - brace_d/2 + 1, -brace_depth, lblk_w/2 - brace_d/2 + 1]) ycyl(brace_d, brace_depth);
+    translate([lblk_w/2 - brace_d/2 + 1, -brace_depth, base_h - lblk_l/2 - brace_d/2 + 1]) ycyl(brace_d, brace_depth);
 }
 
 module head() {
@@ -260,6 +296,12 @@ module head() {
         laser_h_frame() ycyl(laser_d + laser_clear, 120, center=true);
         translate([base_v, -head_d/2, 0]) cylinder(d=setscrew_pilot, h=lblk_w/2 + 1);
         translate([0, -head_d/2, base_h]) xcyl(setscrew_pilot, lblk_w/2 + 1);
+        if (lasers == 4) {
+            laser_v2_frame() ycyl(laser_d + laser_clear, 120, center=true);
+            laser_h2_frame() ycyl(laser_d + laser_clear, 120, center=true);
+            translate([-base_v, -head_d/2, 0]) cylinder(d=setscrew_pilot, h=lblk_w/2 + 1);          // pinch screw from the top, like the right one
+            translate([lowh_x, -head_d/2, -base_h2]) xcyl(setscrew_pilot, lblk_w/2 + 1);            // pinch screw from the outside (+x)
+        }
         // LED projector: lens opening, holder cavity, cartridge + heatsink bay (tilted)
         if (projector == "led") led_cuts();
         // laser dot projector: bore from the back, DOE pocket + lip + flared aperture at the front
@@ -273,6 +315,18 @@ module head() {
         // wire channels on the back face
         translate([pw/2 - 1, -head_d - eps, -groove_w/2]) cube([base_v - pw/2 + 7, groove_d + eps, groove_w]);
         translate([-groove_w/2, -head_d - eps, ph/2 - 1]) cube([groove_w, groove_d + eps, base_h - ph/2 + 7]);
+        if (lasers == 4) {
+            // left V laser: wire channel, mirror of the right one
+            translate([-(pw/2 - 1) - (base_v - pw/2 + 7), -head_d - eps, -groove_w/2])
+                cube([base_v - pw/2 + 7, groove_d + eps, groove_w]);
+            // low H laser: across to x = lowh_gx, then up into the stereo opening's lower edge
+            lowh_gx = 50;
+            lowh_gz = -base_h2 - (head_d/2)*sin(a_h2);   // bore centre where it leaves the back face
+            translate([lowh_gx - groove_w/2, -head_d - eps, lowh_gz - groove_w/2])
+                cube([lowh_x + 7 - lowh_gx + groove_w/2, groove_d + eps, groove_w]);
+            translate([lowh_gx - groove_w/2, -head_d - eps, lowh_gz - groove_w/2])
+                cube([groove_w, groove_d + eps, -ph/2 + 1 - lowh_gz + groove_w/2]);
+        }
         // cable slot down into the grip
         translate([-cable_slot[0]/2, grip_cy - cable_slot[1]/2, head_bot - eps])
             cube([cable_slot[0], cable_slot[1], bh/2 - ph/2 + 2*eps]);
@@ -294,7 +348,8 @@ module head() {
         // yoke cross screws: M3 x 10 from each side into the grip's ledge
         for (sx=[-1,1], y = yoke_screw_y) translate([0, y, head_bot - yoke_screw_z]) scale([sx, 1, 1]) {
             xcyl(m3_clear, yoke_reach + 1);
-            translate([grip_x/2 + yoke_fit + yoke_cb_floor, 0, 0]) xcyl(m3_head_d, yoke_reach);
+            // lasers = 4: on the right the low laser's block stands in the way, so the screwdriver tunnel runs on through it
+            translate([grip_x/2 + yoke_fit + yoke_cb_floor, 0, 0]) xcyl(m3_head_d, (lasers == 4 && sx == 1) ? yoke_reach + lblk_l : yoke_reach);
         }
     }
 }
@@ -474,8 +529,8 @@ module dummy_stereo() {
 module dummy_laser(c="silver") {
     color(c) translate([0, -laser_len/2, 0]) ycyl(laser_d, laser_len);
 }
-module fan(vertical) {
-    L = (work_dist + head_d/2) / cos(vertical ? a_v : a_h) + 40;
+module fan(vertical, a=undef) {
+    L = (work_dist + head_d/2) / cos(is_undef(a) ? (vertical ? a_v : a_h) : a) + 40;
     w = 2 * L * tan(30);
     color([1, 0, 0, 0.18]) hull() {
         translate([0, laser_len/2, 0]) cube(0.4, center=true);
@@ -503,6 +558,10 @@ module assembly() {
     dummy_stereo();
     laser_v_frame() { dummy_laser(); if (show_fans) fan(true); }
     laser_h_frame() { dummy_laser(); if (show_fans) fan(false); }
+    if (lasers == 4) {
+        laser_v2_frame() { dummy_laser(); if (show_fans) fan(true); }
+        laser_h2_frame() { dummy_laser(); if (show_fans) fan(false, a_h2); }
+    }
     if (projector == "laser")
         proj_frame() { translate([0, -0.5 - doe_lip - doe_recess, 0]) dummy_laser("gold"); if (show_fans) dot_cone(); }
     if (projector == "led") led_frame() {
