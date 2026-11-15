@@ -1545,7 +1545,7 @@ The sphere-on-plane scan through `process_recording` (realistic camera model, ma
 | Frames tracked | all | all | all | all |
 
 - **Twice the laser points, as accurate as with two lasers,** and the lines pass over nearly twice as much of the surface.
-- **The mesh does not change.** It is built from the dot-stereo depth; the laser points come into it only through "Refine with lasers", which was not run here.
+- **The mesh does not change.** It is built from the dot-stereo depth; the laser points come into it only through "Refine with lasers", which is measured further down ("Refine with lasers with two and with four lasers").
 - **Tracking is slightly less exact in position** (the largest error 0.05–0.06 mm larger; one scan each, so this may be noise): four lines cover more of the dot pattern that the depth is matched on.
 - **Cost:** a frame takes 59 → 89 ms at 640x400 and 142 → 195 ms at 1280x800 (median per frame, Radeon 680M, nothing else running). The extraction of the lines is 10 → 28 ms and 16 → 62 ms of that; at 640x400 the tracker's share also rose by 7 ms in this run. Not optimised at that point; the next line is.
 - **Cost after a first speed-up (2026-11-15, plan E8):** two helpers of the extraction do less work for the same output (bit for bit, `tests/test_vision_laser_speed.py`). Old and new code alternated on the recordings of the table above, Radeon 680M, GPU path, nothing else running:
@@ -1602,6 +1602,31 @@ The sphere-on-plane scan through `process_recording` (realistic camera model, ma
 
   That is about 36 ms a frame less at 1280x800 (17 %) and about 16 ms at 640x400 (14 %). The lines are the same bit for bit (`tests/test_vision_laser_link.py`; the 120 four-laser images of the two recorded scans). Starting numba costs about a second when the pipeline is built, and 6.4 s the first time ever, when the loop is compiled. On the laptop (the last three rows; one "on" and one "off" run of two rounds each, twice) the frame is about 13 ms shorter at 1280x800 in each pair of runs, about a fifth; the laptop itself ran 6 to 8 ms slower during the first pair, two lasers included, so compare the first two figures of a row with each other and the last two with each other. At 640x400 nothing stands out of the spread there. One image alone takes 13.5–14.1 ms with numba against 19.2–19.4 ms at 1280x800, and 5.3–5.4 against 7.7–7.9 ms at 640x400.
 
+### Refine with lasers with two and with four lasers (2026-11-15)
+
+What four lasers do for the mesh. The method is that of "Refine with lasers" above: the sphere on a plane and the car panel at 1280x800, fused at the true poses so that only depth errors count, once as simulated and once with a smooth bias put into the dense depth (0.1 % in scale and a 0.3 mm bowl, fixed to the camera); then `ohs.mesh.anchor_to_points` with its defaults. Errors are signed distances to the analytic surfaces. "Near the lines" are the vertices within 3 mm of a laser point. A throwaway script; the two-laser columns of the 36-frame scans repeat the figures of the earlier study (0.26 → 0.06 mm on the sphere, 0.23 → 0.04 mm on the panel).
+
+With the biased depth, 150-frame scans:
+
+| | Sphere, 2 lasers | Sphere, 4 lasers | Car panel, 2 lasers | Car panel, 4 lasers |
+|---|---|---|---|---|
+| Laser points in the cloud | 117,555 | 222,495 | 109,957 | 187,812 |
+| Share of the surface near the lines | 16.0 % | 21.3 % | 12.0 % | 17.3 % |
+| Median error near the lines, before → after | 0.275 → 0.048 mm | 0.283 → 0.042 mm | 0.248 → 0.043 mm | 0.255 → 0.039 mm |
+| Mean offset near the lines, before → after | −0.272 → −0.027 mm | −0.284 → −0.029 mm | −0.265 → −0.065 mm | −0.283 → −0.042 mm |
+| Share of the mesh moved | 16.4 % | 20.4 % | 11.3 % | 16.7 % |
+| Mean offset of the whole mesh, before → after | −0.308 → −0.266 mm | −0.308 → −0.252 mm | −0.425 → −0.399 mm | −0.425 → −0.381 mm |
+
+The same on 36-frame scans: the share near the lines is 7.4 % and 13.6 % on the sphere and 13.7 % and 18.2 % on the panel; the median error near the lines goes 0.260 → 0.061 mm and 0.275 → 0.056 mm on the sphere, 0.232 → 0.044 mm and 0.233 → 0.047 mm on the panel; the whole mesh's mean offset −0.280 → −0.259 mm and −0.280 → −0.240 mm on the sphere, −0.385 → −0.353 mm and −0.386 → −0.343 mm on the panel.
+
+- **Where the lines pass, four lasers correct as well as two**, within a few hundredths of a millimetre either way.
+- **They pass over more of the part:** 1.3 to 1.4 times the surface on the 150-frame scans and 1.3 to 1.8 times on the 36-frame ones, with 1.7 to 2 times the laser points. The two extra lines partly sweep where the first two already did.
+- **Most of the mesh is still out of reach.** With four lasers the lines come within 3 mm of 14 to 21 % of the surface, so the whole mesh keeps most of its bias: its mean offset falls by 0.04 to 0.06 mm with four lasers, by 0.02 to 0.04 mm with two. A longer scan does not raise the share much on these scenes (with two lasers 7 → 16 % on the sphere and 14 → 12 % on the panel). Likely reason, not checked: the simulated hand keeps the scanner aimed at the middle of the part, so the lines stay near the middle of the picture, and a longer scan also sees more surface. Sweeping the lines over the part on purpose is what would raise the share; that is not simulated here.
+- **Without a bias the stage changes nothing with either build:** 0.2 to 0.8 % of the mesh would move, under the 1 % at which the app applies it, and the error near the lines stays where it was (0.025–0.026 mm on the 150-frame sphere, 0.026–0.029 mm on the panel).
+- **A 0.3 mm wave of 40 mm wavelength** on the mesh goes 0.113–0.116 → 0.091–0.097 mm near the lines with both builds, as before.
+- **The laser points themselves** are as far from the truth with four lasers as with two (median 0.059 and 0.060 mm on the sphere, 0.052 and 0.053 mm on the panel), and about 1 % of them are set aside as outliers with either build (up to 2 % on the panel with four lasers).
+- **Not covered:** tracked poses (the stage then also meets tracking errors), the bracket, and real scans, where the dense depth's real biases are what the stage is for.
+
 ### Calibration of four planes
 
 The laser calibration fits the planes of a direction one after the other from the board points of all views (the plane with the most points first, then the next from what is left) and names them by where each sheet starts: a plane's intercept with the camera's x axis (vertical) or y axis (horizontal) is about where its laser sits. It needs nothing of the build's design, so other positions and aims calibrate the same way.
@@ -1624,7 +1649,7 @@ The ranges are over the four planes. The two-laser calibration's limits in the t
 - Simulator only. The real lasers' line width and speckle, and how well two lines of one direction can be told apart on a dark or shiny part, are not known.
 - The two lasers of a direction share one switch channel and are on together.
 - Around 254 mm the two vertical lines cross in the image. Those stretches are dropped (3–12 % of the vertical points at 250–330 mm). With the first build's aim, kept points near a meeting distance were up to 1.4 mm off; with the chosen aim none was seen in 240 frames, which does not prove there are none.
-- The laser points do not yet improve the mesh by themselves; "Refine with lasers" uses them, and was not measured with four lasers.
+- The laser points do not improve the mesh by themselves; "Refine with lasers" uses them. With four lasers it reaches about a third to four fifths more of the surface, which on these scans is still about a fifth of it (above).
 - Not measured: more than two lasers per direction; lines that are far from vertical or horizontal in the image; the CPU path's speed.
 
 **Tests:** `tests/test_vision_laser.py` (two lines per direction: tilted, curved, gapped, crossing; the plane of every kept point against the truth), `tests/test_calib_laser_sets.py`, `tests/test_sim_board_camera.py`, `tests/test_sim_datasets.py`, `tests/test_sim_nominal.py`, `tests/test_e2e_scan.py` and `tests/test_track_curve_ba.py` (tracked scans with four lasers), `tests/test_server_calibration.py` and `tests/test_server_setup.py` (the laser set through the app).
