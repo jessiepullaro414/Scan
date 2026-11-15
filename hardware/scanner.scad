@@ -15,10 +15,13 @@
 //    lasers = 4  adds a second vertical-line laser on the LEFT (mirror of the
 //                right one) and a second horizontal-line laser BELOW the cameras,
 //                on the right, beside the yoke (see the note at "4-laser variant").
-//                The first pair of sheets (right vertical, top horizontal) crosses the
-//                centre line at work_dist = 250 mm, the second pair (left vertical,
-//                low horizontal) at work_dist2 = 350 mm, so the two lines of a kind
-//                do not fall on top of each other.
+//                Aim of the four sheets: the right and the left vertical sheet both cross
+//                the centre line at 250 mm (the left one is the exact mirror of the right
+//                one). The top horizontal sheet crosses it at 250 mm too. The low
+//                horizontal sheet does NOT: it points 5 degrees down from straight ahead,
+//                away from the centre line, so the two horizontal lines do not meet
+//                inside the working range (they would meet about 640 mm out) and never
+//                lie on top of each other.
 //
 //  World frame: X = right, Y = forward (toward the object), Z = up.
 //  Head front face is y = 0; the faceplate sits proud of it (y 0..fp_t).
@@ -52,22 +55,24 @@ eps = 0.01;
 
 /* [Optics] */
 work_dist = 250;  // laser sheets cross here, in front of the faceplate
-work_dist2 = 350; // lasers = 4: the second pair of sheets (left vertical, low horizontal) crosses the centre line here.
-                  // It differs from work_dist on purpose: if both lines of a kind crossed at the same distance they
-                  // would lie on top of each other on any surface near it, and those points would be lost.
 base_v    = 92;   // camera centre -> vertical-line laser block centre (X)
 base_h    = 80;   // camera centre -> horizontal-line laser block centre (Z)
 proj_z    = 42;   // dot projector height above camera centre
 
 /* [4-laser variant (lasers = 4)] */
-// The second vertical laser is the mirror image of the first in position (same base_v), but it is
-// aimed to cross the centre line at work_dist2 (350 mm) instead of work_dist, so its angle is smaller.
+// The second vertical laser (left) is the mirror image of the first: same base_v, mirrored aim.
 // The second horizontal laser cannot sit straight below the cameras at x = 0: the grip and its
 // yoke are there, and a module in front of the grip would leave the hand no room. It sits beside
 // the yoke instead: its block starts where the yoke's gusset ends (x = yoke_reach), so the hand
 // keeps its room, and it is carried by a column hanging from the camera block.
-// A plane does not care where along x its laser sits, so the sheet is aimed like the top one:
-// it crosses the centre line at work_dist2, from below.
+// Its sheet is not aimed at the centre line. It points slightly down, away from it: if it crossed
+// the centre line like the top horizontal sheet, the two horizontal lines would meet inside the
+// working range and lie on top of each other on any surface near that distance. Pointing down
+// keeps the low line below the top one everywhere (they meet only about 640 mm out).
+work_dist_v2 = 250; // left vertical laser: where its sheet crosses the centre line. 250 = the exact
+                    // mirror of the right one; other values are possible, e.g. 450
+lowh_pitch = -5;    // low horizontal laser: pitch in degrees from straight ahead; positive = up toward
+                    // the centre line, negative = down (the default build)
 base_h2 = 56;   // camera centre -> low horizontal-line laser centre (Z, below). Keep >= 56: the
                 // yoke's screw tunnel (z = -38.5) must stay clear of the bore wall
 
@@ -200,8 +205,8 @@ head_bot = -bh/2;
 grip_cy  = -head_d/2;
 a_v = atan(base_v / (work_dist + fp_t + head_d/2));
 a_h = atan(base_h / (work_dist + fp_t + head_d/2));
-a_v2 = atan(base_v / (work_dist2 + fp_t + head_d/2));  // left vertical laser (second pair, crosses at work_dist2)
-a_h2 = atan(base_h2 / (work_dist2 + fp_t + head_d/2)); // low horizontal laser, tilted up (second pair)
+a_v2 = atan(base_v / (work_dist_v2 + fp_t + head_d/2)); // left vertical laser (= a_v with the default 250)
+a_h2 = lowh_pitch;                                      // low horizontal laser, positive = up
 lowh_x = yoke_reach + lblk_l/2;                        // its X: block starts at the end of the yoke gusset
 led_tilt   = atan(led_proj_z / (work_dist + fp_t));   // aim the pattern centre at the stereo axis
 cart_t     = cart_plate_t + cart_gap + star_t;
@@ -227,7 +232,7 @@ module rrect(x, y, r, h)
 module laser_v_frame() translate([base_v, -head_d/2, 0])  rotate([0,0,a_v])  children();
 module laser_h_frame() translate([0, -head_d/2, base_h])  rotate([-a_h,0,0]) children();
 module laser_v2_frame() translate([-base_v, -head_d/2, 0]) rotate([0,0,-a_v2]) children();  // lasers = 4: left, mirrored
-module laser_h2_frame() translate([lowh_x, -head_d/2, -base_h2]) rotate([a_h2,0,0]) children(); // lasers = 4: low, aims up
+module laser_h2_frame() translate([lowh_x, -head_d/2, -base_h2]) rotate([a_h2,0,0]) children(); // lasers = 4: low, pitch lowh_pitch (down by default)
 module proj_frame()   translate([0, -head_d/2, proj_z])  children();
 // LED projector: local +Y = optical axis (tilted down), origin on the front face at the lens axis
 module led_frame()     translate([0, 0, led_proj_z]) rotate([-led_tilt, 0, 0]) children();
@@ -570,8 +575,8 @@ module assembly() {
     laser_v_frame() { dummy_laser(); if (show_fans) fan(true); }
     laser_h_frame() { dummy_laser(); if (show_fans) fan(false); }
     if (lasers == 4) {
-        laser_v2_frame() { dummy_laser(); if (show_fans) fan(true, a_v2, work_dist2); }
-        laser_h2_frame() { dummy_laser(); if (show_fans) fan(false, a_h2, work_dist2); }
+        laser_v2_frame() { dummy_laser(); if (show_fans) fan(true, a_v2, work_dist_v2); }
+        laser_h2_frame() { dummy_laser(); if (show_fans) fan(false, a_h2, work_dist); }
     }
     if (projector == "laser")
         proj_frame() { translate([0, -0.5 - doe_lip - doe_recess, 0]) dummy_laser("gold"); if (show_fans) dot_cone(); }
