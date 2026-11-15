@@ -29,7 +29,7 @@ def stereo_only(calib: ScannerCalibration) -> ScannerCalibration:
     return ScannerCalibration(calib.stereo, {}, None)
 
 
-@pytest.fixture(scope="module", params=["4", "4-cross350"])
+@pytest.fixture(scope="module", params=["4", "4-cross250", "4-cross350"])
 def four_set(request, tmp_path_factory):
     layout = request.param
     pairs, calib, poses, spec = cached_result(make_laser_calib_set, n_views=8, realistic=False, seed=1, layout=layout)
@@ -94,12 +94,12 @@ def test_two_lasers_configured_on_a_four_laser_build_is_reported(four_set):
 
 
 def test_board_near_where_the_lines_of_a_family_meet(tmp_path):
-    """Layout "4": all four sheets cross the cameras' centre line about 254 mm ahead of the left
-    camera, so on a board held there square to the camera the two lines of each family lie on top
+    """Layout "4-cross250": all four sheets cross the cameras' centre line about 254 mm ahead of the
+    left camera, so on a board held there square to the camera the two lines of each family lie on top
     of each other; where the extraction cannot drop the merged stripe, the fit leaves it out (points
     within ``FAMILY_CLEAR_MM`` of the other sheet). Those views simply give fewer points, and the
     planes stay as good as without them. The other views are the 8 of the ``four_set`` fixture."""
-    layout = "4"
+    layout = "4-cross250"
     calib = nominal_calibration(layout=layout)
     spec = CharucoSpec()
     W, H = spec.size_mm

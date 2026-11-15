@@ -126,8 +126,8 @@ def guidance(kind: str, names: Any = None) -> str:
             "laser lines crossing the white margin around the pattern.")
     if pairs:
         what = " and the two ".join(pairs)
-        text += (f" The two {what} lines cross each other at some distance: hold the board on both sides of that "
-                 "point, some views nearer and some farther.")
+        text += (f" If the two {what} lines cross each other somewhere in that range, hold the board on both sides "
+                 "of that point, some views nearer and some farther.")
     return text
 
 
@@ -135,7 +135,8 @@ def live_lines(d: guide.Detection) -> dict | None:
     """The ``lines`` of the live ``calib`` message: the two families' margin points and image
     points (the fields of the two-laser app), plus per configured laser ``points`` (None: not
     named yet), per family ``found``, ``line_uv`` (named lasers of a family with several) and
-    ``meet_mm`` (where a family's two sheets meet, when known)."""
+    ``meet_mm`` (where a family's two sheets meet, when known and inside the range of the laser
+    views: :func:`ohs.server.calib_guide.meets_in_range`)."""
     if d.lines is None:
         return None
     m = d.margin or {}
@@ -146,7 +147,7 @@ def live_lines(d: guide.Detection) -> dict | None:
     out["points"] = {n: (None if v is None else int(v)) for n, v in pts.items()}
     out["found"] = {f: [int(x) for x in v] for f, v in (d.lines_found or {}).items()}
     out["line_uv"] = {n: _flat(uv, 1, MAX_LINE_POINTS) or [] for n, uv in (d.line_uv or {}).items()}
-    out["meet_mm"] = {f: float(v) for f, v in (d.meet_mm or {}).items()}
+    out["meet_mm"] = guide.meets_in_range(d.meet_mm)
     return out
 
 
@@ -528,7 +529,7 @@ class CalibrationSession:
             for fam, members in guide.families(self.lines).items():
                 if len(members) == 2 and fam not in lines["meet_mm"]:
                     z0 = guide.meet_distance(views, fam)
-                    if z0 is not None:
+                    if z0 is not None and guide.meets_in_range({fam: z0}):
                         lines["meet_mm"][fam] = z0
         imu = None
         if self.kind == "imu":

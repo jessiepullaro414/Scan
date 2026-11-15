@@ -335,13 +335,15 @@ export const LASERS = {
 };
 /**
  * The 4-laser build's second pair (calibration demo only): the mirror of the vertical laser on the
- * left of the cameras, and a horizontal laser low on the right. Like the first pair, each sheet
- * crosses the cameras' centre line about 254 mm ahead, so each family's two lines meet there.
+ * left of the cameras, and a horizontal laser low on the right. The left laser's sheet crosses the
+ * cameras' centre line about 254 mm ahead like the first pair, so the two vertical lines meet there;
+ * the low laser points 5 degrees down, so the two horizontal lines stay apart (they would meet about
+ * 640 mm out, beyond the working range).
  */
 export const LASERS_4 = {
   ...LASERS,
   vertical_2: { n: [-0.9473, 0, 0.3205] as V3, d: -52.98, origin: [-56.4, 0, -1.4] as V3, contains: [0, 1, 0] as V3 },
-  horizontal_2: { n: [0, 0.9768, 0.2143] as V3, d: -54.43, origin: [88, 56, -1.2] as V3, contains: [1, 0, 0] as V3 },
+  horizontal_2: { n: [0, 0.9962, -0.0872] as V3, d: -57.36, origin: [88, 57.5, -0.6] as V3, contains: [1, 0, 0] as V3 },
 };
 
 /** Laser points along both stripes for a camera pose (scene frame), with ~0.03 mm noise. */

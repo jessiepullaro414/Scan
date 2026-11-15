@@ -40,10 +40,12 @@ margin points are split into lines by straight-line grouping in the image; when 
 in use already has the family's planes, each point is named after the nearest plane
 (:func:`ohs.calib.laser_planes.family_labels`, within 5 mm), else the lines are only counted
 (``lines_found``; which line is which is only known after the fit). The two sheets of such a
-family meet at some distance, and the fit needs board poses on both sides of it: the distance
-comes from the calibrated planes, or is estimated from the captured views (the gap between the two
-lines on the board shrinks to zero there, :func:`meet_distance`), and :func:`next_hint` asks for
-views nearer and farther than it.
+family can meet at some distance. Where that distance lies inside the range of the laser views
+(:func:`meets_in_range`; the 4-laser build's vertical pair, at about 254 mm), the fit needs board
+poses on both sides of it: the distance comes from the calibrated planes, or is estimated from the
+captured views (the gap between the two lines on the board shrinks to zero there,
+:func:`meet_distance`), and :func:`next_hint` asks for views nearer and farther than it. Sheets
+that meet outside that range (the build's horizontal pair, at about 640 mm) need nothing.
 """
 from __future__ import annotations
 
@@ -56,7 +58,7 @@ import numpy as np
 
 __all__ = ["Detection", "BoardDetector", "SteadyTracker", "novelty", "usable_reason", "coverage", "diversity",
            "next_hint", "region_of", "finish_label", "line_label", "families", "line_problems", "meet_distance",
-           "planes_meet_mm", "MIN_COMMON", "LINE_MIN_POINTS", "STEADY_PX", "STEADY_S", "COOLDOWN_S", "DISTANCE_RANGE",
+           "planes_meet_mm", "meets_in_range", "MIN_COMMON", "LINE_MIN_POINTS", "STEADY_PX", "STEADY_S", "COOLDOWN_S", "DISTANCE_RANGE",
            "DISTANCE_BINS", "TILT_NAMES", "GRID", "STANDARD_LINES"]
 
 log = logging.getLogger(__name__)
@@ -450,6 +452,13 @@ def planes_meet_mm(planes: Any, names: Sequence[str]) -> dict[str, float]:
     return out
 
 
+def meets_in_range(meet_mm: Any) -> dict[str, float]:
+    """The entries of ``{family: mm}`` that lie inside the range of the laser views
+    (:data:`DISTANCE_RANGE`): only there can the board be held on both sides of the point."""
+    lo, hi = DISTANCE_RANGE["lasers"]
+    return {f: float(z) for f, z in (meet_mm or {}).items() if lo < float(z) < hi}
+
+
 def meet_distance(views: Sequence[Any], fam: str) -> float | None:
     """Where the two lines of family ``fam`` meet (mm from the scanner), estimated from captured
     views: the gap between the lines on the board (``line_sep``) grows in proportion to the
@@ -720,7 +729,7 @@ def _meet_hint(d: Detection, views: Sequence[Any]) -> dict | None:
         z0 = (d.meet_mm or {}).get(fam)
         if z0 is None:
             z0 = meet_distance(views, fam)
-        if z0 is None or not lo < z0 < hi:
+        if z0 is None or fam not in meets_in_range({fam: z0}):
             continue
         dist = [float(v.distance_mm) for v in views if getattr(v, "distance_mm", None) is not None]
         nearer = sum(z < z0 - MEET_SIDE_MM for z in dist)

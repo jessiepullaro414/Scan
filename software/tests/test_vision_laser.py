@@ -620,7 +620,7 @@ def test_dense_depth_decides_a_plane_only_where_it_can():
     depth that does tell them apart (both far beyond the tolerance from one) still decides."""
     from ohs.sim.nominal import nominal_calibration
 
-    cal = nominal_calibration(lasers=4)
+    cal = nominal_calibration(layout="4-cross250")  # the two horizontal sheets meet at 254 mm
     h1, h2 = cal.lasers["horizontal"], cal.lasers["horizontal_2"]
     # a pixel row a little below the centre, where the two sheets' points on a ray differ by ~2.7 mm
     v = np.full(40, 400.5)

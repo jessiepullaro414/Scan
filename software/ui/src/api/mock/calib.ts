@@ -67,8 +67,12 @@ import type { MockSetup } from "./setup";
 import { TWO_LASERS, laserFamilies, laserWords, type LaserFamily } from "../../lib/laserSet";
 
 const FAMS = ["vertical", "horizontal"] as const;
-/** Where a family's two sheets meet in the demo's 4-laser build (geom.ts LASERS_4), mm from the scanner. */
+/**
+ * Where the two vertical sheets meet in the demo's 4-laser build (geom.ts LASERS_4), mm from the
+ * scanner. The two horizontal sheets do not meet inside the working range.
+ */
 const MEET_MM = 254;
+const MEETS: readonly LaserFamily[] = ["vertical"];
 
 /** The configured lasers (settings `lasers.lines`), default the two standard ones. */
 export function mockLaserNames(settings: Record<string, unknown>): string[] {
@@ -422,7 +426,7 @@ export class MockCalib {
     if ((kind !== "lasers" && kind !== "check") || isStandard(names)) return GUIDANCE[kind];
     const n = names.length;
     if (kind === "check") return `3–5 views at different distances, all ${n} laser lines on the white margin`;
-    const pairs = FAMS.filter((f) => laserFamilies(names)[f].length > 1);
+    const pairs = MEETS.filter((f) => laserFamilies(names)[f].length > 1);
     return (
       `6–10 poses, 150–450 mm away, tilt up to ±30°, all ${n} laser lines crossing the white page margin` +
       (pairs.length ? `. The two ${pairs.join(" and the two ")} lines cross each other at some distance: hold the board both nearer and farther than that` : "")
@@ -635,7 +639,7 @@ export class MockCalib {
       return plan("That's plenty: press Enter to calibrate");
     }
     // lasers / check
-    const pair = kind === "lasers" ? FAMS.find((f) => laserFamilies(this.lasers())[f].length === 2) : undefined;
+    const pair = kind === "lasers" ? MEETS.find((f) => laserFamilies(this.lasers())[f].length === 2) : undefined;
     if (pair) {
       // two lasers in a family: their lines meet at MEET_MM, and the fit needs views on both sides
       const meet = `The two ${pair} laser lines meet about ${MEET_MM} mm from the scanner, and the calibration needs views on both sides of that point`;
@@ -982,7 +986,7 @@ export class MockCalib {
   private liveLines(lines: Record<string, LineInfo>): CalibLines {
     const c = this.counts(lines);
     const meet: Record<string, number> = {};
-    for (const f of FAMS) if (laserFamilies(this.lasers())[f].length === 2 && this.named(f)) meet[f] = MEET_MM;
+    for (const f of MEETS) if (laserFamilies(this.lasers())[f].length === 2 && this.named(f)) meet[f] = MEET_MM;
     return {
       vertical: c.fam.vertical,
       horizontal: c.fam.horizontal,
@@ -1254,7 +1258,7 @@ export class MockCalib {
     const spread = hi - lo;
     const nearer = dists.filter((d) => d < MEET_MM - 25).length,
       farther = dists.filter((d) => d > MEET_MM + 25).length;
-    const pairs = FAMS.filter((f) => laserFamilies(names)[f].length > 1);
+    const pairs = MEETS.filter((f) => laserFamilies(names)[f].length > 1);
     const r = this.rand;
     const report = "/api/calibration/report.json";
     const word = (m: string) => laserWords(m).charAt(0).toUpperCase() + laserWords(m).slice(1);

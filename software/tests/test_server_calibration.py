@@ -741,10 +741,20 @@ def test_guide_for_four_lasers():
     assert "meet" not in h["text"]  # both sides covered: the usual hints
     from ohs.sim.nominal import nominal_calibration
 
-    planes = nominal_calibration((1280, 800), lasers=4).lasers
+    planes = nominal_calibration((1280, 800), layout="4-cross250").lasers  # both pairs cross at 250 mm
     m = g.planes_meet_mm(planes, FOUR)
     assert set(m) == {"vertical", "horizontal"} and all(150.0 < v < 400.0 for v in m.values()), m
     assert g.planes_meet_mm(planes, ("vertical", "horizontal")) == {}
+    # the build (lasers=4): the vertical sheets meet at the working distance, the horizontal ones
+    # beyond the range of the laser views, where nothing is asked for
+    planes = nominal_calibration((1280, 800), lasers=4).lasers
+    m = g.planes_meet_mm(planes, FOUR)
+    assert m["vertical"] == pytest.approx(254.0, abs=0.5) and 600.0 < m["horizontal"] < 700.0, m
+    assert g.meets_in_range(m) == {"vertical": m["vertical"]}
+    assert g.meets_in_range({"vertical": 150.0, "horizontal": 450.0}) == {} and g.meets_in_range(None) == {}
+    ok.meet_mm, ok.distance_mm = {"horizontal": m["horizontal"]}, 300.0
+    h = g.next_hint("lasers", ok, [V(300.0), V(330.0)], (1280, 800), (6, 10))
+    assert "meet" not in h["text"]
     # two lasers: no meeting distance, the old rules
     std = g.Detection("lasers", 2, 0.0, (1280, 800), img, T_cb=np.eye(4), margin={"vertical": 40, "horizontal": 3})
     assert g.usable_reason(std) == "the horizontal laser line misses the white page margin (3 points, need 15)"
@@ -766,6 +776,9 @@ def test_live_lines_keep_the_two_laser_fields():
     assert out["vertical_uv"] == [round(x, 1) for x in v.reshape(-1)] and len(out["horizontal_uv"]) == 60
     assert out["points"] == {"vertical": 40, "horizontal": 22} and out["found"] == {"vertical": [40], "horizontal": [22]}
     assert out["line_uv"] == {} and out["meet_mm"] == {}
+    # a meeting distance is sent only when it lies inside the range of the laser views
+    d.meet_mm = {"vertical": 254.0, "horizontal": 641.0}
+    assert live_lines(d)["meet_mm"] == {"vertical": 254.0}
 
 
 def test_results_for_four_lasers():
@@ -876,5 +889,5 @@ def test_four_laser_calibration_on_the_simulator(tmp_path, demo_dir):
 
         live = recv_until(ws, named, timeout=30)[-1][0]
         assert set(live["lines"]["line_uv"]) <= set(FOUR) and live["lines"]["line_uv"]
-        assert set(live["lines"]["meet_mm"]) == {"vertical", "horizontal"}
+        assert set(live["lines"]["meet_mm"]) == {"vertical"}  # the horizontal sheets meet beyond the range
         _ok(_post(url, "/api/calibration/cancel"))

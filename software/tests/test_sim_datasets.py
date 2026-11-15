@@ -172,7 +172,7 @@ def test_laser_calib_set_lines_lie_on_board():
     assert max(depths) - min(depths) > 60  # views at different depths constrain the planes
 
 
-@pytest.mark.parametrize("layout", ["4", "4-cross350"])
+@pytest.mark.parametrize("layout", ["4", "4-cross250", "4-cross350"])
 def test_laser_calib_set_for_four_lasers(layout):
     """Any laser layout: every line laser of the layout is drawn, and every one crosses every view."""
     from ohs.sim.datasets import _laser_hits_board

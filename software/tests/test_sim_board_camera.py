@@ -155,7 +155,7 @@ def test_lasers_fit_from_the_margin(lasers_cam, tmp_path):
         assert e["angle_deg"] < 0.1 and e["point_err_median_mm"] < 0.1 and e["point_err_max_mm"] < 0.5, (name, e)
 
 
-@pytest.mark.parametrize("layout", ["4", "4-cross350"])
+@pytest.mark.parametrize("layout", ["4", "4-cross250", "4-cross350"])
 def test_four_lasers_fit_from_the_margin(layout, tmp_path):
     """The 4-laser variant: all four lines painted, and the laser calibration names all four planes."""
     four = ("vertical", "horizontal", "vertical_2", "horizontal_2")

@@ -44,8 +44,10 @@ def test_emitters_consistent_with_planes():
 
 
 def test_four_laser_layout_adds_the_mirrored_pair():
-    """lasers=4: the 2-laser planes unchanged, plus vertical_2 (left, mirror of vertical) and
-    horizontal_2 (below the cameras, beside the yoke); all four sheets cross the centre line at 254 mm."""
+    """lasers=4: the 2-laser planes unchanged, plus vertical_2 (left, mirror of vertical, crossing
+    the centre line at 254 mm like it) and horizontal_2 (below the cameras, beside the yoke), turned
+    5 degrees away from the centre line so that the two horizontal sheets meet only beyond the
+    working range (about 640 mm out)."""
     two, four = nominal_calibration(), nominal_calibration(lasers=4)
     assert list(two.lasers) == ["vertical", "horizontal"]
     assert list(four.lasers) == ["vertical", "horizontal", "vertical_2", "horizontal_2"]
@@ -57,16 +59,31 @@ def test_four_laser_layout_adds_the_mirrored_pair():
     for pl in (v, v2):
         z = (-pl.d - pl.normal[0] * 30.0) / pl.normal[2]
         assert z == pytest.approx(254.0, abs=0.05)
-    for pl in (h, h2):
-        assert -pl.d / pl.normal[2] == pytest.approx(254.0, abs=0.05) and abs(pl.normal[0]) < 1e-12
+    assert -h.d / h.normal[2] == pytest.approx(254.0, abs=0.05) and abs(h.normal[0]) < 1e-12
+    assert abs(h2.normal[0]) < 1e-12
+    # horizontal_2 points 5 deg below level, horizontal 16.4 deg below level from above: the low
+    # line stays below the top one over the working range, and the sheets meet about 640 mm out
+    y = [[-(pl.d + pl.normal[2] * z) / pl.normal[1] for z in (150.0, 250.0, 450.0)] for pl in (h, h2)]
+    assert np.all(np.subtract(y[1], y[0]) > 30.0)
+    z_meet = (h2.d * h.normal[1] - h.d * h2.normal[1]) / (h.normal[2] * h2.normal[1] - h2.normal[2] * h.normal[1])
+    assert 600.0 < z_meet < 700.0
     em = nominal_emitters(lasers=4)
     assert set(em) == {"dots", "vertical", "horizontal", "vertical_2", "horizontal_2"}
     # module centres of hardware/scanner.scad (lasers = 4): left vertical at x = -92, low horizontal at
     # x = 58, 56 mm below the cameras; emission points 17.5 mm ahead of the module centres
     assert np.allclose(em["vertical_2"]["origin"], [60.0 - 116.4, 0.0, -1.4], atol=0.1)
+    a = np.radians(5.0)
+    assert np.allclose(em["horizontal_2"]["origin"], [30.0 + 58.0, 56.0 + 17.5 * np.sin(a), -18.0 + 17.5 * np.cos(a)], atol=1e-9)
+    assert np.allclose(em["horizontal_2"]["direction"], [0.0, np.sin(a), np.cos(a)], atol=1e-12)  # 5 deg down
+    assert em["vertical_2"]["direction"][0] > 0  # aims right
+    # "4-cross250": the aims of the first build, all four sheets crossing the centre line at 254 mm
+    old = nominal_calibration(layout="4-cross250").lasers
+    assert np.array_equal(old["vertical_2"].normal, v2.normal) and old["vertical_2"].d == v2.d
+    assert -old["horizontal_2"].d / old["horizontal_2"].normal[2] == pytest.approx(254.0, abs=0.05)
+    old_em = nominal_emitters(layout="4-cross250")
     a = np.arctan(56.0 / 272.0)
-    assert np.allclose(em["horizontal_2"]["origin"], [30.0 + 58.0, 56.0 - 17.5 * np.sin(a), -18.0 + 17.5 * np.cos(a)], atol=1e-9)
-    assert em["vertical_2"]["direction"][0] > 0 and em["horizontal_2"]["direction"][1] < 0  # aim right / up
+    assert np.allclose(old_em["horizontal_2"]["origin"], [30.0 + 58.0, 56.0 - 17.5 * np.sin(a), -18.0 + 17.5 * np.cos(a)], atol=1e-9)
+    assert old_em["horizontal_2"]["direction"][1] < 0  # aims up
     assert np.allclose(em["vertical_2"]["fan_axis"], [0, 1, 0]) and np.allclose(em["horizontal_2"]["fan_axis"], [1, 0, 0])
     for name, plane in four.lasers.items():
         e = em[name]
@@ -89,10 +106,12 @@ def test_layouts_of_the_second_pair():
     from ohs.sim.render import _nominal_layout
 
     four = nominal_calibration(lasers=4)
-    assert {"2", "4", "4-straight", "4-cross350", "4-cross450", "4-cross600", "4-apart"} <= set(LASER_LAYOUTS)
-    # hybrids: the two new lasers aimed differently
+    assert {"2", "4", "4-straight", "4-cross250", "4-cross350", "4-cross450", "4-cross600", "4-apart"} <= set(LASER_LAYOUTS)
+    # hybrids: the two new lasers aimed differently ("4-v250-hapart" of the aim study is "4")
     hybrids = {f"4-v{v}-h{h}" for v in ("250", "350", "450") for h in ("apart", "straight")} | {"4-vapart-h350"}
-    assert hybrids <= set(LASER_LAYOUTS)
+    assert hybrids - {"4-v250-hapart"} <= set(LASER_LAYOUTS) and "4-v250-hapart" not in LASER_LAYOUTS
+    assert LASER_LAYOUTS["4"]["vertical_2"] == LASER_LAYOUTS["4-cross250"]["vertical_2"]
+    assert LASER_LAYOUTS["4"]["horizontal_2"] == LASER_LAYOUTS["4-apart"]["horizontal_2"]
     em = nominal_emitters(layout="4-v350-hstraight")
     assert np.allclose(em["horizontal_2"]["direction"], [0, 0, 1])
     assert np.array_equal(em["vertical_2"]["normal"], nominal_emitters(layout="4-cross350")["vertical_2"]["normal"])

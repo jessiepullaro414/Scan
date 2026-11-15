@@ -16,10 +16,12 @@ to the left of it, so emitter x coordinates shift with ``baseline`` (section 7 a
 
 The 4-laser variant (``lasers=4``; ``lasers = 4`` in the CAD) adds ``"vertical_2"``, the mirror of
 the vertical-line laser on the left of the cameras, and ``"horizontal_2"``, a horizontal-line laser
-58 mm right of and 56 mm below the camera centre (beside the grip's yoke), tilted up. All four
-sheets cross the cameras' centre line 254 mm ahead of the left camera. The module positions are in
-one table, :data:`LASER_MODULES`, their aims in another, :data:`LASER_LAYOUTS`: the layouts as
-built (``"2"``, ``"4"``) and the aims compared for the second pair (``layout=`` of
+58 mm right of and 56 mm below the camera centre (beside the grip's yoke). ``"vertical_2"``
+crosses the cameras' centre line 254 mm ahead of the left camera, like the first two;
+``"horizontal_2"`` points 5 degrees below level, away from the centre line, so that the two
+horizontal sheets meet only beyond the working range (about 640 mm out). The module positions are
+in one table, :data:`LASER_MODULES`, their aims in another, :data:`LASER_LAYOUTS`: the layouts as
+built (``"2"``, ``"4"``) and the other aims compared for the second pair (``layout=`` of
 :func:`nominal_calibration`; ``lasers=4`` is the layout as built).
 
 Choices made where the contract is open (documented for the integrator):
@@ -104,12 +106,16 @@ LASER_SETS: dict[int, tuple[str, ...]] = {
 #: :data:`LASER_MODULES`. An aim is a number ``D``: the sheet crosses the cameras' centre line
 #: ``D`` mm ahead of the faceplate (``math.inf``: straight ahead, parallel to the optical axis), or
 #: ``("deg", a)``: turned ``a`` degrees toward the centre line (negative: away from it).
-#: ``"2"`` and ``"4"`` are the housing as built (``lasers = 2`` / ``4``: every sheet crosses at the
-#: working distance, 250 mm); the others are the aims compared for the second pair (``lasers=4``
-#: stays the layout as built until one is chosen).
+#: ``"2"`` and ``"4"`` are the housing as built (``lasers = 2`` / ``4``). In ``"4"`` the second
+#: vertical laser crosses at the working distance, 250 mm, like the first two, and the second
+#: horizontal laser is turned 5 degrees away from the centre line: the aim chosen from the comparison
+#: (VALIDATION.md, "Four line lasers"; its name there was "4-v250-hapart"). The others are the aims
+#: it was compared with; ``"4-cross250"`` is the first build, every sheet crossing at 250 mm.
 LASER_LAYOUTS: dict[str, dict[str, float | tuple[str, float]]] = {
     "2": {"vertical": _WORK_DIST, "horizontal": _WORK_DIST},
-    "4": {"vertical": _WORK_DIST, "horizontal": _WORK_DIST, "vertical_2": _WORK_DIST, "horizontal_2": _WORK_DIST},
+    "4": {"vertical": _WORK_DIST, "horizontal": _WORK_DIST, "vertical_2": _WORK_DIST, "horizontal_2": ("deg", -5.0)},
+    # every sheet crossing the centre line at the working distance: each family's sheets meet there
+    "4-cross250": {"vertical": _WORK_DIST, "horizontal": _WORK_DIST, "vertical_2": _WORK_DIST, "horizontal_2": _WORK_DIST},
     # the second pair straight ahead
     "4-straight": {"vertical": _WORK_DIST, "horizontal": _WORK_DIST, "vertical_2": math.inf, "horizontal_2": math.inf},
     # the second pair crossing the centre line far out
@@ -127,10 +133,12 @@ LASER_LAYOUTS: dict[str, dict[str, float | tuple[str, float]]] = {
     "4-apart": {"vertical": _WORK_DIST, "horizontal": _WORK_DIST, "vertical_2": ("deg", -2.0), "horizontal_2": ("deg", -5.0)},
 }
 # hybrids: the two new lasers aimed differently, "4-v<vertical_2>-h<horizontal_2>" with a crossing
-# distance (mm ahead of the faceplate), "apart" (as in "4-apart") or "straight"
+# distance (mm ahead of the faceplate), "apart" (as in "4-apart") or "straight"; v250 with hapart is "4"
 _AIMS_V2 = {"250": _WORK_DIST, "350": 350.0, "450": 450.0, "apart": ("deg", -2.0)}
 _AIMS_H2 = {"350": 350.0, "apart": ("deg", -5.0), "straight": math.inf}
 for _v, _h in [(v, h) for v in ("250", "350", "450") for h in ("apart", "straight")] + [("apart", "350")]:
+    if (_v, _h) == ("250", "apart"):
+        continue
     LASER_LAYOUTS[f"4-v{_v}-h{_h}"] = {"vertical": _WORK_DIST, "horizontal": _WORK_DIST,
                                        "vertical_2": _AIMS_V2[_v], "horizontal_2": _AIMS_H2[_h]}
 
