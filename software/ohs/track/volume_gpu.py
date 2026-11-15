@@ -43,6 +43,17 @@ band made no measurable difference to tracking. Only the bounding box of the cam
 the farthest valid depth + truncation is visited. The depth is uploaded once per frame; the
 kernel runs asynchronously (the next ray cast is queued behind it).
 
+**The band behind the surface** (``back_mm`` / ``back_after``; off by default). A TSDF marks the
+space behind every surface it sees as inside, as far as the truncation, so the views of one side
+of a thin wall write through it into the air on the other side, and so do views past a convex
+edge. With ``back_mm``, a voxel that has already been integrated ``back_after`` times takes
+nothing more from an observation that lies deeper than ``back_mm`` behind its surface, measured
+at right angles to it (the distance along the view times the cosine of the ray with the depth
+map's normal; 1 next to missing depth). A young voxel keeps the whole band: a model of one or two
+frames needs it (with a short band from the first frame on, a scan's second frame was registered
+3-11 mm off). A cut along the view was tried too: it shrinks thick bodies (``VALIDATION.md``,
+"Thin walls with tracking").
+
 **Ray casting** (:meth:`GpuTsdfVolume.raycast_start`) at the tracker's ray-cast resolution, from
 ``depth_min`` to ``depth_max`` (camera z), clipped to the window. Every march sample is a
 *trilinear* TSDF lookup over the observed corners (a sample counts as observed when they carry at
@@ -134,7 +145,7 @@ __kernel void ohs_tsdf_integrate(
     const float a10, const float a11, const float a12,
     const float a20, const float a21, const float a22,
     const float b0, const float b1, const float b2,
-    const float trunc, const float depth_max, const int max_weight)
+    const float trunc, const float depth_max, const int max_weight, const float back_cut, const int back_after)
 {
     const int i = get_global_id(0), j = get_global_id(1);
     if (i >= nx || j >= ny) return;
@@ -160,10 +171,32 @@ __kernel void ohs_tsdf_integrate(
         if (!(d > 0.0f) || d > depth_max) continue;
         const float sdf = d - zc;
         if (sdf < -trunc) continue;
+        // deeper than back_cut behind the surface, at right angles to it (module docstring, "The band behind
+        // the surface")? The cosine of the ray with the depth map's normal; 1 next to missing depth.
+        // back_cut is huge when the rule is off, so nothing is deep.
+        int deep = 0;
+        if (sdf < -back_cut) {
+            float cs = 1.0f;
+            if (ui > 0 && ui < w - 1 && vi > 0 && vi < h - 1) {
+                const int pix = vi * w + ui;
+                const float dl = depth[pix - 1], dr = depth[pix + 1], dt = depth[pix - w], db = depth[pix + w];
+                if (dl > 0.0f && dl <= depth_max && dr > 0.0f && dr <= depth_max
+                    && dt > 0.0f && dt <= depth_max && db > 0.0f && db <= depth_max) {
+                    const float zu = 0.5f * (dr - dl), zv = 0.5f * (db - dt);
+                    const float pu = (float)ui - cx, pv = (float)vi - cy;
+                    const float n3 = pu * zu + pv * zv + d;
+                    const float gu = zu * fx, gv = zv * fy, ru = pu / fx, rv = pv / fy;
+                    cs = clamp(d / fmax(sqrt(gu * gu + gv * gv + n3 * n3) * sqrt(ru * ru + rv * rv + 1.0f), 1e-6f),
+                               0.05f, 1.0f);
+                }
+            }
+            deep = (sdf * cs < -back_cut);
+        }
         const float ts = fmin(sdf, trunc) * inv_trunc;
         const int a = vaddr(x, y, z, NB, bmx, bmy, bmz);
         const uint old = vol[a];
         const int wo = (int)(old >> 16);
+        if (deep && wo >= back_after) continue;  // an established voxel takes nothing from deep behind a surface
         const int we = min(wo, max_weight - 1);
         const float tn = (vt(old) * (float)we + ts) / (float)(we + 1);
         const int wn = min(wo + 1, max_weight);
@@ -457,9 +490,10 @@ __kernel void ohs_tsdf_scale_weights(__global uint *vol, const float factor, con
 """
 
 _I, _F = np.int32, np.float32
+_BACK_OFF = 3.0e38  # the kernel's back_cut when the rule is off: nothing lies that deep
 _ARGS = {
     "ohs_tsdf_integrate": [None, _I, _I, _I, _I, _I, _I, _I, _I, _I, _I, None, _I, _I,
-                           _F, _F, _F, _F, _F] + [_F] * 12 + [_F, _F, _I],
+                           _F, _F, _F, _F, _F] + [_F] * 12 + [_F, _F, _I, _F, _I],
     "ohs_tsdf_raycast": [None, _I, _I, _I, _I, _I, _I, _I, _F, _F, _F, _F, _F] + [_F] * 12
                         + [_F, _F, _F, _F, _F, _F, _F, _F, _F, None],
     "ohs_normal_box": [None, None, _I, _I, _I],
@@ -532,13 +566,18 @@ class GpuTsdfVolume:
         module docstring); 0 turns the test off.
     max_weight:
         Integration weights saturate here (at most 65535).
+    back_mm, back_after:
+        The band behind the surface (module docstring): a voxel integrated ``back_after`` times
+        takes nothing more from deeper than ``back_mm`` behind a surface, at right angles to it.
+        ``back_mm=None`` (the default): off.
     profile:
         Record the device time of every command (:meth:`gpu_times_ms`); for benchmarks.
     """
 
     def __init__(self, dev: Any, voxel_mm: float, trunc_mm: float, depth_min_mm: float, depth_max_mm: float,
                  edge_voxels: int = 384, center_depth_mm: float | None = None, border_mm: float = 8.0,
-                 max_weight: int = 65535, profile: bool = False) -> None:
+                 max_weight: int = 65535, profile: bool = False, back_mm: float | None = None,
+                 back_after: int = 0) -> None:
         cl = dev.cl
         self.dev, self.cl = dev, cl
         self.voxel_mm = float(voxel_mm)
@@ -548,6 +587,10 @@ class GpuTsdfVolume:
         if not (self.voxel_mm > 0 and self.trunc_mm > 0 and 0 <= self.depth_min_mm < self.depth_max_mm):
             raise ValueError("voxel_mm and trunc_mm must be positive and depth_min_mm < depth_max_mm")
         self.border_mm = max(float(border_mm), 0.0)
+        self.back_mm = None if back_mm is None else float(back_mm)
+        self.back_after = int(back_after)
+        if (self.back_mm is not None and not self.back_mm > 0) or self.back_after < 0:
+            raise ValueError(f"back_mm must be > 0 (or None) and back_after >= 0, got {back_mm!r}, {back_after!r}")
         self.max_weight = int(np.clip(int(max_weight), 1, 65535))
         self.center_depth_mm = (0.5 * (self.depth_min_mm + self.depth_max_mm) if center_depth_mm is None
                                 else float(center_depth_mm))
@@ -751,7 +794,8 @@ class GpuTsdfVolume:
             self.queue, gsz, lw, self._vol, self.nb, int(bm[0]), int(bm[1]), int(bm[2]),
             int(x0), int(y0), int(z0), int(nx), int(ny), int(nz), self._depth_buf, int(w), int(h),
             Kd[0, 0], Kd[1, 1], Kd[0, 2], Kd[1, 2], Kd[0, 1], *A.ravel(), *b,
-            self.trunc_mm, self.depth_max_mm, self.max_weight)
+            self.trunc_mm, self.depth_max_mm, self.max_weight,
+            _BACK_OFF if self.back_mm is None else self.back_mm, self.back_after)
         self._note("integrate", ev)
 
     def _frustum_box(self, K: np.ndarray, w: int, h: int, T_wc: np.ndarray,

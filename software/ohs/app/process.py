@@ -601,6 +601,8 @@ def process_recording(
                          else {"model": "separate (filtered depth)", "filter_px": pipe.track_filter_px,
                                "voxel_mm": pipe.track_fusion_params.voxel_mm,
                                "trunc_mm": getattr(pipe.tracker, "trunc_mm", None),
+                               # the GPU model: established voxels take nothing from deeper than this behind a surface
+                               "back_mm": getattr(pipe.tracker, "back_mm", None),
                                "gyro_sigma_deg": pipe.track_fusion_params.gyro_sigma_deg,
                                # a detailed part: from this frame on, raw depth where the filter drops it
                                "detailed_part_from_frame": getattr(pipe.tracker, "detail_frame", None)}

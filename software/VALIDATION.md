@@ -1437,7 +1437,7 @@ On the processing studio test's short recording (10 frames, 640x400, two seeds):
 - **Every Standard, Best or Preview mesh of a scan without markers that was made on the GPU path before 2026-11-14 had the whole band.** Smooth scenes keep their numbers. Parts with edges and thin walls read a little thinner now, and small bosses about 0.1 mm smaller in radius; the fitted-shapes study was not measured again.
 - **Still open:** with tracking, thin walls stay about 1 mm too thick (the tracking model's 2 mm voxels); a mesh model for the CPU path that can take the rule.
 
-**Thin walls with tracking: the tracking model (study of 2026-11-14, scratch copies of the engine; nothing of it is in the engine).** With tracking a thin wall reads 0.3–1.2 mm thicker than at the true poses. The tracked mesh takes its walls from the tracking model: a frame is registered to the model's faces, so where the model's wall is too thick the cameras on its two sides stand too far apart.
+**Thin walls with tracking: the tracking model (study of 2026-11-14 in scratch copies of the engine; its last variant is in the engine since the same day, "In the engine" below).** With tracking a thin wall reads 0.3–1.2 mm thicker than at the true poses. The tracked mesh takes its walls from the tracking model: a frame is registered to the model's faces, so where the model's wall is too thick the cameras on its two sides stand too far apart.
 
 *The tracking model on exact depth* (a wall on a table, 36 views, 1280x800; where the wall's face sits after both sides were seen, + = deeper than it is):
 
@@ -1473,8 +1473,15 @@ Only a 1 mm grid with a 2 mm band holds every wall. A finer grid alone does not:
 - **At right angles, only for voxels that were integrated 4 times, nothing slips** (largest step between two frames 1.5 mm; the engine's 2.0 mm), the bracket's fatness is gone and the thin walls are a third to a half of the way to the true poses' values.
   - The end-to-end tests' sphere and car panel keep their numbers (0.061 / 0.257 mm and 0.084 / 0.393 mm), and so do the five car-panel scans (hole 0.90 mm small in diameter, floor 0.001 mm).
   - The sphere scan without the gyro, which the tracker flags, drifts 109 mm instead of 59 mm.
-  - Not measured: its time per frame (the runs shared the machine with other work), and the test suite.
 - **What stays open:** walls under about 2 mm with tracking. They need the 1 mm grid, and a start and a hold in weak directions that take it.
+
+**In the engine since 2026-11-14 (the owner's decision): the stop at right angles for voxels integrated 4 times.**
+- **What it is:** `GpuTsdfVolume(back_mm=..., back_after=...)`, set through `FusionParams.gpu_back_voxels` (in voxels) and `gpu_back_after`. The pipeline's GPU tracking model asks for 1 voxel, 2 mm (`TRACK_GPU_BACK_VOXELS`), after 4 integrations; `report.json` records it as `params.tracking.back_mm`. The Open3D model of the CPU path has no such rule, and a tracker made without the pipeline is unchanged.
+- **Guard:** `test_the_gpu_tracking_model_keeps_a_1_mm_wall_in_place` fuses a 1 mm wall into the pipeline's own tracking model from all round: its face sat 0.53 mm off before the change and sits 0.07 mm off now (the test allows 0.2 mm). Walls of 2 mm and more are as before on exact depth (the rule cuts at 2 mm); what it changes for them on scans comes from the noisy depth and the slanted views.
+- **Off is as before:** with the rule off, the volume after 36 views is bit-identical to the engine before the change.
+- **Time:** the bracket scan processed twice each way, in turn: tracking 66.8 and 66.2 ms a frame with the rule, 68.1 and 67.5 ms without; the whole frame 179 and 178 ms against 183 and 179 ms. No cost that can be measured.
+- **The scans again with the engine itself:** the study's numbers. Bracket 13 / 13 / 33 / 13 / 13 %, median 13.4 %, mean offset +0.01 mm, largest step 1.5 mm; sheet part 2.72–2.98 / 2.41–2.56 / 3.19–3.71 mm; end-to-end sphere 0.061 / 0.257 mm and car panel 0.084 / 0.393 mm; five car-panel scans: hole 0.90 mm small, floor 0.001 mm; the sphere without the gyro 109 mm.
+- **Every tracked number in this document that was measured on the GPU path before this change was made without it.** Smooth scenes keep theirs. A part with edges reads about 0.1 mm less fat (the bracket's mean offset +0.12 → +0.01 mm), and its small bosses 0.08 mm smaller in radius (−0.10 → −0.18 mm; at the true poses −0.27 mm).
 
 Scripts: scratchpad `shape\` of the session of 2026-11-14 (`edit_track1.py`, `edit_track2.py`: the switches; `wall_proto.py`, `start_probe.py`, `tab_sheet.py`, `chain11.sh` to `chain18.sh`).
 
@@ -1641,4 +1648,7 @@ Scripts and rows: scratchpad `shape\` of the session of 2026-11-14 (`run.sh`, `r
   day, short behind the surface (2 mm) for scans without markers on the GPU path
   (`thin_walls`): the part is 16 % instead of 20 % more than 0.3 mm off and such a sheet reads
   0.3–0.4 mm less thick again (a 2 mm flange 3.0 mm). Small bosses read 0.1 mm small in radius
-  with it. Marker mode and the CPU path keep the whole band.
+  with it. Marker mode and the CPU path keep the whole band. The GPU tracking model also stops
+  writing through walls and past edges once it knows a place (the same day): the part is 13 %
+  more than 0.3 mm off, its mean offset +0.01 mm instead of +0.12 mm, and a 2 mm flange reads
+  2.7–3.0 mm. Walls under about 2 mm stay 0.4–0.7 mm too thick with tracking.

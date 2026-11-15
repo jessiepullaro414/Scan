@@ -124,7 +124,10 @@ about the scan itself, not the Fit tool, and they decide whether a measurement c
   taking nothing from more than 2 mm behind a surface (at right angles) once a voxel has been
   integrated 4 times brings the tracked bracket from 16 % to 13 % with no slip and its mean
   offset from +0.12 to +0.01 mm, and thin walls a third to a half of the way; smooth scenes keep
-  their numbers. It waits for the owner's decision.
+  their numbers. **Done 2026-11-14 (the owner's decision):** it is in the GPU tracking model
+  (`FusionParams.gpu_back_voxels`, set by the pipeline), with no cost in time. Still open: walls
+  under about 2 mm with tracking, which need a finer tracking grid that starts and holds as
+  well as this one.
 - **Small cylinders fit worse since the new sigma** (measured again 2026-11-13,
   [`VALIDATION.md`](../VALIDATION.md), "Fitted shapes against the truth"): a Ø 14 mm boss reads
   0.39 mm off in radius with tracking (before 0.18 mm) and its axis 12.5° off (before 8.0°),

@@ -215,6 +215,12 @@ class FusionParams:
     # The pipeline's tracking model asks for 2 (ohs.app.pipeline.TRACK_GPU_TRUNC_MULT); the Open3D model keeps
     # trunc_mult: on stereo depth it tracks worse with a shorter band (MarkerlessTracker.trunc_mm says which holds).
     gpu_trunc_mult: float | None = None
+    # the GPU model's band behind the surface (ohs.track.volume_gpu, "The band behind the surface"): a voxel that
+    # was integrated gpu_back_after times takes nothing more from deeper than gpu_back_voxels voxels behind a surface,
+    # at right angles to it. None: off. The pipeline's tracking model asks for 1 voxel
+    # (ohs.app.pipeline.TRACK_GPU_BACK_VOXELS); the Open3D model has no such rule (MarkerlessTracker.back_mm).
+    gpu_back_voxels: float | None = None
+    gpu_back_after: int = 4
     # model ray casting
     raycast_scale: float = 0.5  # model maps rendered at this fraction of the input resolution
     raycast_weight_threshold: float = 3.0  # capped by the number of integrated frames
@@ -262,6 +268,9 @@ class FusionParams:
             raise ValueError("voxel_mm and trunc_mult must be positive")
         if self.gpu_trunc_mult is not None and not self.gpu_trunc_mult >= 1:
             raise ValueError(f"gpu_trunc_mult must be at least 1 (voxel), got {self.gpu_trunc_mult!r}")
+        if (self.gpu_back_voxels is not None and not self.gpu_back_voxels > 0) or int(self.gpu_back_after) < 0:
+            raise ValueError("gpu_back_voxels must be > 0 (or None) and gpu_back_after >= 0, got "
+                             f"{self.gpu_back_voxels!r}, {self.gpu_back_after!r}")
         if str(self.model_backend).strip().lower() not in MODEL_BACKENDS:
             raise ValueError(f"model_backend must be one of {MODEL_BACKENDS}, got {self.model_backend!r}")
         if int(self.gpu_volume_voxels) < 64 or int(self.gpu_volume_voxels) % 16:
@@ -454,6 +463,7 @@ class MarkerlessTracker:
         self._vbg: Any = None
         self._gpu_status = self._make_gpu_volume(str(p.model_backend).strip().lower())
         self._trunc_mm = float(self._gpu.trunc_mm if self._gpu is not None else p.trunc_mm)  # kept after close()
+        self._back_mm = self._gpu.back_mm if self._gpu is not None else None
         # integration intrinsics: +0.5 px turns Open3D's truncating pixel lookup into rounding
         K_int = self.K.copy()
         K_int[0, 2] += 0.5
@@ -500,7 +510,9 @@ class MarkerlessTracker:
         trunc = p.trunc_mm if p.gpu_trunc_mult is None else p.voxel_mm * float(p.gpu_trunc_mult)
         try:
             self._gpu = GpuTsdfVolume(dev, p.voxel_mm, trunc, p.depth_min_mm, p.depth_max_mm,
-                                      edge_voxels=int(p.gpu_volume_voxels), border_mm=float(p.gpu_border_mm))
+                                      edge_voxels=int(p.gpu_volume_voxels), border_mm=float(p.gpu_border_mm),
+                                      back_mm=None if p.gpu_back_voxels is None else p.voxel_mm * float(p.gpu_back_voxels),
+                                      back_after=int(p.gpu_back_after))
         except Exception as exc:  # build or allocation failure: the CPU path still works
             if backend == "gpu":
                 raise
@@ -519,6 +531,12 @@ class MarkerlessTracker:
         """The model's truncation distance (mm): the GPU volume's own (``FusionParams.gpu_trunc_mult``), else
         ``FusionParams.trunc_mm``."""
         return self._trunc_mm
+
+    @property
+    def back_mm(self) -> float | None:
+        """How deep behind a surface (mm, at right angles) an established voxel of the GPU model still takes an
+        observation (``FusionParams.gpu_back_voxels``); ``None``: the whole truncation (always, for the Open3D model)."""
+        return self._back_mm
 
     @property
     def model_device(self) -> str:

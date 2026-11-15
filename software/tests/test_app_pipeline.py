@@ -381,13 +381,13 @@ def _wall_depth(K: np.ndarray, size: tuple[int, int], T_wc: np.ndarray, wall_mm:
     return np.where(np.isfinite(t), t, 0.0).reshape(h, w).astype(np.float32)  # the rays have z = 1: t is the depth
 
 
-def _wall_face_offset(tr, T_wc: np.ndarray) -> tuple[float, int]:
+def _wall_face_offset(tr, T_wc: np.ndarray, wall_mm: float = WALL_MM) -> tuple[float, int]:
     """Model depth - true depth (mm) on the wall's +y face in the model's view from ``T_wc`` (negative: the face
     moved out towards the camera), and the number of pixels it is the mean of."""
     view = tr._raycast(T_wc)
     D, o = _view_rays(view) @ T_wc[:3, :3].T, T_wc[:3, 3]
     with np.errstate(divide="ignore", invalid="ignore"):
-        t = (WALL_MM / 2 - o[1]) / D[:, 1]  # the face's plane y = +half the thickness
+        t = (wall_mm / 2 - o[1]) / D[:, 1]  # the face's plane y = +half the thickness
     P = o + D * t[:, None]
     m = np.where(view.valid, view.V[:, 2], 0.0)
     ok = (np.abs(P[:, 0]) < 34) & (P[:, 2] > 6) & (P[:, 2] < 44) & (t > 0) & (m > 0) & (np.abs(m - t) < 5)  # 6 mm inside its outline
@@ -432,6 +432,37 @@ def test_the_gpu_tracking_model_keeps_a_thin_wall_in_place():
     assert tr.trunc_mm == 4.0  # still known once the pipeline is closed (the report is written then)
 
 
+def test_the_gpu_tracking_model_keeps_a_1_mm_wall_in_place():
+    """A 1 mm wall in the pipeline's tracking model (2 mm voxels, 4 mm band). The band reaches 3 mm through such a
+    wall, so the views of its far side moved this face out by 0.5 mm. Once a voxel has been integrated 4 times, the
+    model now takes nothing more for it from views that see it more than one voxel (2 mm) behind another surface,
+    measured at right angles to that surface: the far side's views stop writing through. A young model keeps the
+    whole band, which a scan's first frames need. On scans this took the tracked bracket from 16 % to 13 % more than
+    0.3 mm off and its mean offset from +0.12 to +0.01 mm (VALIDATION.md, "Thin walls with tracking")."""
+    from ohs import compute
+
+    if compute.get_device() is None:
+        pytest.skip(f"no GPU: {compute.status()}")
+    with FramePipeline(nominal_calibration(), PipelineParams(use_lasers=False, use_imu=False)) as pipe:
+        tr = pipe.tracker
+        assert tr.model_backend == "gpu" and tr.params.voxel_mm == 2.0 and tr.trunc_mm == 4.0
+        assert tr.back_mm == 2.0 and tr.params.gpu_back_after == 4
+        front = _wall_pose(0.0)
+        angles = np.arange(0.0, 360.0, 10.0)
+        near = [a for a in angles if _wall_pose(a)[1, 3] > 60]  # the views from the +y side
+        for a in near:
+            tr.integrate(_wall_depth(pipe.K, pipe.image_size, _wall_pose(a), wall_mm=1.0), None, _wall_pose(a))
+        own, n_own = _wall_face_offset(tr, front, wall_mm=1.0)
+        for a in angles:
+            if a not in near:
+                tr.integrate(_wall_depth(pipe.K, pipe.image_size, _wall_pose(a), wall_mm=1.0), None, _wall_pose(a))
+        both, n_both = _wall_face_offset(tr, front, wall_mm=1.0)
+        assert n_own > 2000 and n_both > 2000
+        assert abs(own) < 0.2, f"seen from its own side the face is {own:+.2f} mm off"
+        assert abs(both) < 0.2, f"once the far side was seen too the face is {both:+.2f} mm off"
+    assert tr.back_mm == 2.0  # still known once the pipeline is closed (the report is written then)
+
+
 def test_the_open3d_tracking_model_keeps_its_wide_truncation():
     """The Open3D tracking model (no GPU) stays at four voxels, 8 mm: with a shorter band it tracks worse on
     stereo depth (the half-resolution sphere scan's worst pose error 0.43 mm at 8 mm, 1.6 mm at 6 mm, 5.3 mm at
@@ -441,10 +472,12 @@ def test_the_open3d_tracking_model_keeps_its_wide_truncation():
     calib = nominal_calibration()
     with FramePipeline(calib, PipelineParams(scale=0.5, use_lasers=False, fusion=FusionParams(voxel_mm=2.0, model_backend="open3d"))) as pipe:
         assert pipe.model_backend == "open3d" and pipe.tracker.trunc_mm == 8.0
+        assert pipe.tracker.back_mm is None  # and no short band behind the surface: that is the GPU model's
         assert pipe.fusion_params.trunc_mm == 8.0  # the mesh's model: untouched
     tr = MarkerlessTracker(pipe.K, pipe.image_size, FusionParams(voxel_mm=2.0))
     try:
         assert tr.trunc_mm == 8.0  # on a GPU too: only the pipeline's tracking model asks for the short band
+        assert tr.back_mm is None
     finally:
         tr.close()
 
@@ -569,6 +602,7 @@ def test_process_recording_writes_everything(rec, tmp_path):
     assert len(rep["per_frame"]) == N and rep["params"]["fusion"]["voxel_mm"] == 2.0
     # the tracking model: two voxels on the GPU, four on Open3D
     assert rep["params"]["tracking"]["trunc_mm"] == (4.0 if rep["params"]["compute"]["tracking_model"] == "gpu" else 8.0)
+    assert rep["params"]["tracking"]["back_mm"] == (2.0 if rep["params"]["compute"]["tracking_model"] == "gpu" else None)
     # the mesh model's short band behind the surface: two voxels in the confidence TSDF, none in Open3D's model
     assert rep["params"]["reconstruction"] == {
         "model": rep["mesh"]["reconstruction"], "thin_walls": "auto",
