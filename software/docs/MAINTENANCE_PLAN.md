@@ -1571,6 +1571,20 @@ Every task here: the type check, `npm test`, and for bundle tasks the chunk size
   step back.
 - **To do:** run the bench three times at each of the two commits on the laptop, idle, and
   compare the stage lines of preview (depth 15.0 / 14.7 ms and track 13.1 / 11.3 ms in this run).
+- **Repeated 2026-11-15 on the laptop: it is real, and it is the depth stage.** Three runs each at
+  cedeeee and at 2b1eae0, taking turns (numbers sent over by the laptop's session). Preview, mean
+  ms a frame: new 29.6 / 27.8 / 28.1, old 25.2 / 26.2 / 25.9; of it depth: new 15.2 / 13.7 / 13.9,
+  old 12.1 / 11.8 / 11.8, so about 2 ms more, the whole difference (tracking is even: the ray
+  cast is 1.2 ms cheaper, ICP 0.3-0.6 ms dearer). Full quality, mean: new 41.2 / 40.6 / 39.3, old
+  51.5 / 47.8 / 47.8: 7 to 10 ms faster, from the tracker (ray cast 5.6 to 0.4 ms); depth is even.
+  The accuracy figures are the same in both.
+- **Not found yet:** what costs the preview's depth about 2 ms on that GPU and not full quality's.
+  Something between the two commits in `ohs/vision/depth_gpu.py`, `depth.py` or the rectifier at
+  640x400 (a buffer made again every frame, a wait, the sigma output). To do: time the matcher's
+  kernels at 640x400 on the laptop at both commits (OpenCL profiling events, as in F5).
+- **When repeating old against new:** `python -m ohs.app.cli` puts the current folder first on
+  the module path, so from `software/` an "old" run loads the checkout's engine whatever
+  `PYTHONPATH` says. Run such comparisons from another folder and print `ohs.__file__` first.
 
 ### [ ] F10. The wizard test's stereo step came up two views short once, in a slow full run
 - **Seen 2026-11-15**, once: `tests/test_server_calibration.py::test_wizard_end_to_end_on_the_simulator`

@@ -1658,6 +1658,63 @@ The ranges are over the four planes. The two-laser calibration's limits in the t
 
 Scripts: scratchpad `lasers4\` of the session of 2026-11-14/15 (`study2.py`, `summarise2.py`, `compare_scans.py`; results in `s2\`, `s3\`, `cmp2\`) and `shape\one_side.py`.
 
+## Aligning and merging two scans (simulator, 2026-11-15)
+
+A first slice of M4 in the engine (`ohs/align/`, research plan 4.7): two scans of one part are aligned to each other from their meshes, and merged into one model from their raw frames. Engine only; nothing in the app yet.
+
+**How it aligns** (`ohs.align.align_pair`):
+
+- **The table is set aside.** On a table scan one plane is most of the mesh: 93–97 % on the bracket and sphere scans, 65–68 % on the car panel. Left in, it decided everything: with the table, every first guess on the bracket came out about 100° wrong, with a *better* score than the truth (the tables lie on each other in any position). The largest plane, when it holds 30 % or more of the surface, is taken for the support; it and whatever lies behind it are removed (a mesh grows a fringe at a table's rim and underside: 1–7 % of what was left on the GPU path and 26–33 % on the CPU path, where it made the result unsteady), and the rest is matched as the part.
+- **First guesses from the shape:** FPFH features matched by Fast Global Registration and by RANSAC with eight seeds. On the bracket the RANSAC guesses start 4–40 mm and 2–17° off, and FGR's is usually wrong altogether.
+- **An ICP that is free in all six directions** from every guess. The ICP of Straighten keeps the starting pose along directions the surfaces pin weakly; with it the guesses ended 2–14 mm from the truth, each somewhere else. Free, eight of nine end at the same pose.
+- **The pick and the checks:** the pose with the largest share of matching surface wins. It is accepted only if a second guess ended at the same pose, if no guess that ended elsewhere scores nearly as well (a symmetric part, a surface that slides on itself), and if the residuals within 3 mm stay tight. Otherwise it says in words what to do (a rough starting pose, more overlap).
+- **Same setup:** when the part was not moved on the table between the scans, the two table planes are made to coincide (height and tilt) and the part is fitted once more along the three motions that are left. A first version ran an ICP on part and table points together and gave a different answer on every run (0.08° to 0.58° on the same pair).
+
+**Alignment against the truth.** Two 60-frame scans of one scene from two sides, each fused at its true poses, so that each scan's world is exact and the true motion between them known. "Off" is how far the source scan's part points land from where the true motion puts them (median / largest).
+
+| Scans | Sides apart | Part within 1 mm of the other scan | Part only: off, rotation | Same setup: off, rotation | Guesses agreeing |
+|---|---|---|---|---|---|
+| Bracket, 1280x800 | 101° | 76 % | 0.52 / 0.53 mm, 0.07° | 0.51 / 0.53 mm, 0.02° | 8 of 9 |
+| Bracket, 1280x800 | 56° | 94 % | 0.19 / 0.31 mm, 0.15° | 0.20 / 0.31 mm, 0.14° | 9 of 9 |
+| Car panel, 1280x800 | 102° | 97 % | 0.28 / 0.31 mm, 0.03° | 0.05 / 0.14 mm, 0.02° | 9 of 9 |
+| Bracket, 640x400 | 101° | 48–49 % | 1.13 / 3.18 mm, 0.36° | 1.08 / 2.48 mm, 0.23° | 8 of 9 |
+| Bracket, 1280x800 | 169° (opposite sides) | — | refused | refused | 1–4 of 9 |
+
+- **It works from the shape alone** where a good share of the part is in both scans, in 1 to 5 s a pair, and it is as good as the meshes: about 0.2–0.5 mm on the bracket at full resolution, 0.05 mm on the car panel with the table's help, about 1 mm at 640x400 (2 mm voxels).
+- **It refuses what it cannot decide.** Opposite sides of the bracket share too little: the best guess was 0.77 mm off, but only 1 to 4 of 9 guesses reached it and others scored as well, so the pair is refused with "the part fits in more than one position". Two scans of the sphere on its plane are refused the same way (the sphere is symmetric), and a table with nothing on it for having no part.
+- **With tracked scans** the same pairs come out 1.86 mm (101°) and 1.46 mm (56°) from the motion between the first cameras, with the same share matching and the same tight residuals (0.16–0.18 mm). That figure holds each scan's own tracking error, which moves a scan's mesh in its own world; it is not the alignment's error alone.
+- **Not the same on every run in the last digit:** Open3D's RANSAC shares one random generator between its threads. On the pairs above the accepted pose was the same in every run; the count of agreeing guesses on the refused pair varied (1 to 4).
+
+**The merged model against the true surface** (`ohs.align.merge_scans`: every frame of both recordings fused into one model; bracket, 1280x800, true poses). The part is what lies above the table; the error is measured along each vertex's normal to the simulator's true surface; "good surface" counts vertices within 0.5 mm.
+
+| | Part vertices | Median error | More than 0.3 mm off | Good surface |
+|---|---|---|---|---|
+| Sides 101° apart: scan A alone | 12,969 | 0.221 mm | 46.5 % | 10,433 |
+| Scan B alone | 22,370 | 0.106 mm | 32.2 % | 19,121 |
+| Merged at the true motion | 25,551 | 0.146 mm | 39.0 % | 21,383 (1.12 times B) |
+| Merged at the aligned pose, same setup (0.53 mm, 0.02° off) | 25,358 | 0.219 mm | 41.9 % | 20,772 (1.09 times) |
+| Merged at the aligned pose, part only (0.48 mm, 0.07° off) | 22,365 | 0.168 mm | 33.4 % | 18,989 (0.99 times) |
+| Sides 56° apart: scan B alone | 22,302 | 0.136 mm | 33.7 % | 18,954 |
+| Merged at the true motion | 23,596 | 0.161 mm | 39.7 % | 19,644 (1.04 times) |
+| Merged at the aligned pose, same setup (0.45 mm, 0.14° off) | 23,961 | 0.201 mm | 41.8 % | 19,880 (1.05 times) |
+| Merged at the aligned pose, part only (0.22 mm, 0.15° off) | 29,645 | 0.366 mm | 52.6 % | 22,571 (1.19 times) |
+| Opposite sides (169°): scan B alone | 12,864 | 0.249 mm | 48.3 % | 10,036 |
+| Merged at the true motion | 21,516 | 0.369 mm | 52.3 % | 16,841 (1.61 times A) |
+
+- **The merge itself is right:** at the true motion the merged model holds the union of the two scans, once, and its error lies between the errors of its two inputs.
+- **It does not yet give a better model than the better single scan.** On these pairs scan B had already seen most of what scan A saw, so the union adds 4–12 % of good surface, and the merged surface takes on some of the worse scan's error. At the aligned poses (0.2–0.5 mm and 0.02–0.15° off) the result is less steady: with the table's help the share more than 0.3 mm off rises by 2–3 points; without it one merge lost 3,200 vertices of the part (101°) and one doubled part of the surface (56°: 29,645 vertices where 23,600 belong, half of them more than 0.3 mm off).
+- **Where merging pays is opposite sides:** 1.6 times the good surface of one scan. That pair the alignment refuses, so it needs a rough pose from the user or a third scan in between; and its merged surface is worse than either scan alone (median 0.37 against 0.22–0.25 mm), because the bracket's thin walls are now seen from both sides (`ROADMAP.md`, "walls under about 2 mm").
+- **With tracked scans** (101° apart) there is no gain: 16,867 good vertices merged at the motion between the first cameras, 17,123 at the aligned pose (same setup), against 17,286 for scan B alone; the share more than 0.3 mm off is 45–54 % against 34 %.
+- **What this says is needed next:** a refinement of all frames of all scans together once they are roughly aligned (the alignment of two finished meshes cannot be better than each mesh's own error), then several scans in one pose graph, then the app's Align step with a rough pose from tags or picked points.
+
+**Reading the error figures:** the single scans here are short (60 frames, about a 40° sweep) and the error is taken along the normal at every vertex of the part, edges included, so the shares more than 0.3 mm off are larger than the bracket figures elsewhere in this file. Compare within this section.
+
+**Limits:** two scans at a time; the same calibration and image size for both; no joint refinement; a part's own flat face that is 30 % or more of a scan made without a table is taken for the support; no Poisson meshing in a merge; simulator only.
+
+**Tests** (`tests/test_align.py`, 8 tests, both compute paths): a known motion of 100° found again to under 0.1 mm on a made-up part, with and without the table; a part turned over (each scan its own table); a rough pose given; a symmetric part, a bare table, two unrelated shapes and a single unconfirmed guess refused in words; a detail scan inside a larger one; the two simulated bracket scans aligned and merged, the merged part larger than either scan and in the place of both; scans of different calibrations and Poisson refused. An independent review of the first version found eleven defects; the ones that could accept a wrong pose are fixed (the fit check could not fail, one guess alone was accepted, a pose 2–10 mm away never counted as a rival).
+
+Scripts: scratchpad `merge\` of the session of 2026-11-15 (`eval1.py`, `merge_eval.py`; results `w\final_matrix2.log`).
+
 ## What the metrics mean
 
 - **Stereo errors** compare the estimated raw intrinsics/extrinsics (`K1`, `K2`, `R`, `T`) with
