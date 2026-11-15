@@ -1374,6 +1374,21 @@ Every task here: the type check, `npm test`, and for bundle tasks the chunk size
   `OHS_O3D_THREADS=1` (A6), under which Open3D runs on one thread. Nothing is changed for now: a
   crash that ends a run is plain to see, and it has happened once.
 
+### [ ] F7. The calibration guide asks for views on both sides of where two laser lines meet
+- **Found 2026-11-15** while writing up the 4-laser variant. For a direction with two lasers whose
+  sheets meet inside 150-450 mm, the guide (`ohs/server/calib_guide.py`, `_meet_hint`), the capture
+  panel and the session guidance say the calibration needs views nearer and farther than that
+  distance to tell the two lines apart.
+- **Measured:** it does not. With the layout "4-cross250" and 8 views all nearer than 230 mm, or all
+  farther than 280 mm, the fit found and named all four planes (`VALIDATION.md`, "Four line
+  lasers", "Calibration of four planes"). The accuracy follows the spread of distances, which the
+  guide asks for anyway.
+- **To do:** drop the hint, or keep only the part that helps the live count (views at the meeting
+  distance have fewer usable points), and correct the words in the guide, the capture panel
+  (`ui/src/pages/setup/capture/CapturePanel.tsx`), the demo (`ui/src/api/mock/calib.ts`) and
+  `docs/APP_API.md`. Left as it is for now: the hint asks for more views than needed, and does
+  no harm.
+
 ## Reviewed and fine: leave alone
 
 So nobody spends a session on these again.

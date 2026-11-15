@@ -1490,6 +1490,94 @@ Scripts: scratchpad `shape\` of the session of 2026-11-14 (`edit_track1.py`, `ed
 
 Scripts and rows: scratchpad `shape\` of the session of 2026-11-14 (`run.sh`, `run_variant.py`, `measure.py`, `table.py`, `traj.py`, `icp_bias.py`, `wall_proto.py`, `sheet.py`; `results\measure.jsonl`, `results\sheet.jsonl`). The prototype: `edit_back.py`, `edit_back2.py`, `edit_back3.py` (the rule, applied to a copy of `recon_tsdf.py`), `wall_recon.py`, `run_c.sh`, `loops_count.py`, `panel_table.py`, `summ3.py`; `results\wall_recon.jsonl`, `results\wall_recon2.jsonl`.
 
+## Four line lasers (simulator, 2026-11-15)
+
+The 4-laser variant adds a second vertical-line laser on the left of the cameras (`vertical_2`) and a second horizontal-line laser low on the right (`horizontal_2`). The software takes any set of line lasers: a name says the direction of the line (`vertical…`, `horizontal…`), the setting `[lasers] lines` says which lasers the build has, and the calibration fits one plane per laser. With the two standard lasers every result is bit for bit what it was (`tools/snapshot.py`: the code before this work against the code now, identical).
+
+Everything below is from the simulator. Nothing here has been measured on hardware.
+
+**How a point gets its plane.** The two lines of a direction are extracted together. Where they come closer than the extraction can separate, that stretch is dropped. Each remaining point is triangulated with both planes of its direction. For a vertical line, a plane is ruled out when its 3D point does not land on a vertical line in the other camera's image. A horizontal line runs along the camera rows, so that check cannot rule out a plane there. In both directions a plane is ruled out when the dot-stereo depth around the point (the median of five samples) is closer to the other plane's point by more than the depth's own tolerance. A point that still fits both planes is kept only where the two 3D points agree, which is where the sheets cross; otherwise it is dropped. A laser on the left of the cameras is measured from the right camera, because the camera farther from the sheet sees it at the better angle: this brought the error of `vertical_2` down to that of `vertical` (0.035 against 0.036 mm median on the bracket).
+
+### Where the two new lasers point
+
+Two sheets of the same direction that both cross the centre line meet at some distance, and around that distance their lines lie on top of each other in the image. The first build aimed all four sheets at the centre 250 mm out, which puts both meetings inside the working range. Eleven aims of the second pair were compared (`ohs/sim/nominal.py`, `LASER_LAYOUTS`) on 15-frame scans at 220, 250, 290 and 330 mm, two seeds each, 1280x800, true poses, so 120 frames per row:
+
+| Aim of the second pair | Points per frame | Horizontal points dropped as merged, at the worst distance | Points on the wrong plane | Part covered | Walls covered |
+|---|---|---|---|---|---|
+| **Bracket** | | | | | |
+| two lasers | 692 | – | – | 0.110 | 0.038 |
+| both cross at 250 mm (`4-cross250`, the first build) | 977 | 24 % at 220 mm | 161, up to 1.4 mm off | 0.145 | 0.090 |
+| both cross at 350 mm (`4-cross350`) | 1,095 | 15 % at 250 mm | 18, about 100 mm off | 0.145 | 0.076 |
+| both cross at 450 mm (`4-cross450`) | 1,117 | 37 % at 290 mm | 27, up to 1.1 mm off | 0.144 | 0.085 |
+| both cross at 600 mm (`4-cross600`) | 1,152 | 40 % at 330 mm | 33, up to 7 mm off | 0.139 | 0.085 |
+| both straight ahead (`4-straight`) | 1,438 | none | none | 0.115 | 0.039 |
+| both turned away, 2° and 5° (`4-apart`) | 1,493 | none | none | 0.115 | 0.038 |
+| **`vertical_2` crosses at 250 mm, `horizontal_2` 5° away (`4`, chosen)** | **1,367** | **none** | **none** | **0.139** | **0.061** |
+| `vertical_2` crosses at 450 mm, `horizontal_2` 5° away (`4-v450-hapart`) | 1,419 | none | none | 0.127 | 0.064 |
+| **Sphere on a plane** | | | | | |
+| two lasers | 833 | – | – | 0.176 | 0.125 |
+| both cross at 250 mm | 1,263 | 19 % at 220 mm | 194, up to 1.9 mm off | 0.212 | 0.155 |
+| both cross at 450 mm | 1,319 | 30 % at 290 mm | 173, up to 3.3 mm off | 0.213 | 0.172 |
+| both turned away | 1,675 | none | none | 0.182 | 0.127 |
+| **`vertical_2` crosses at 250 mm, `horizontal_2` 5° away (`4`, chosen)** | **1,562** | **none** | **none** | **0.222** | **0.153** |
+
+"Covered" is the share of the true surface (sampled every 1 mm) with a laser point within 1 mm after the 15 frames. "Walls" are the part's faces more than 60° from the table plane. "None" for dropped points means under 0.5 %.
+
+- **A crossing sheet lights the walls; a sheet that does not cross adds points on what the first pair already sees.** With the second pair crossing, the bracket's walls are covered up to 2.4 times as well as with two lasers. With the second pair straight ahead or turned away the walls gain nothing.
+- **A crossing pair loses its points around the meeting distance,** in a band about 20 mm deep, and the points on the wrong plane are there too. For the horizontal pair the band costs 15–48 % of the horizontal points at one of the four distances, wherever the crossing is put.
+- **The chosen aim crosses only the vertical pair.** The left laser is the mirror of the right one, so the two vertical sheets meet 254 mm from the left camera. The vertical pair loses 3–12 % of its points at 250–330 mm and under 1 % at 220 mm. The low laser points 5° down, away from the centre line, so the two horizontal sheets are 39 mm or more apart up to 450 mm from the camera (they meet about 640 mm out). In the 240 frames no point of either direction went to the wrong plane.
+- **What it gives up:** on the bracket the walls are covered 0.061 against 0.085–0.090 with a crossing horizontal pair. On the sphere there is no difference (0.153 against 0.155). The aim is two numbers in `hardware/scanner.scad`. A build that scans mostly deep parts can cross both pairs at 450 mm and accept the band at 290 mm.
+- **On a car panel** (3 seeds at 250, 290 and 330 mm, chosen aim): 1,406, 1,268 and 1,342 points per frame against 804 with two lasers (all distances), no horizontal point dropped, none on the wrong plane, median error 0.065–0.095 mm.
+
+### A tracked scan with two and with four lasers
+
+The sphere-on-plane scan through `process_recording` (realistic camera model, markerless tracking, default settings at full resolution, GPU path), once rendered with two lasers and once with four at the chosen aim:
+
+| | 640x400, 24 frames | | 1280x800, 36 frames | |
+|---|---|---|---|---|
+| | 2 lasers | 4 lasers | 2 lasers | 4 lasers |
+| Laser points | 11,883 | 23,680 | 26,357 | 53,484 |
+| Laser points: median / 95 % error | 0.140 / 0.60 mm | 0.135 / 0.55 mm | 0.061 / 0.28 mm | 0.061 / 0.26 mm |
+| Mesh vertices with a laser point within 1 mm | 4.9 % | 8.8 % | 5.1 % | 9.5 % |
+| Mesh: median / 95 % error | 0.118 / 0.52 mm | 0.119 / 0.51 mm | 0.061 / 0.26 mm | 0.061 / 0.26 mm |
+| Trajectory: median / largest position error | 0.16 / 0.22 mm | 0.16 / 0.28 mm | 0.11 / 0.15 mm | 0.13 / 0.20 mm |
+| Trajectory: largest rotation error | 0.039° | 0.039° | 0.025° | 0.025° |
+| Frames tracked | all | all | all | all |
+
+- **Twice the laser points, as accurate as with two lasers,** and the lines pass over nearly twice as much of the surface.
+- **The mesh does not change.** It is built from the dot-stereo depth; the laser points come into it only through "Refine with lasers", which was not run here.
+- **Tracking is slightly less exact in position** (the largest error 0.05–0.06 mm larger; one scan each, so this may be noise): four lines cover more of the dot pattern that the depth is matched on.
+- **Cost:** the extraction of two lines per direction adds about 20 ms per frame at 640x400 and 35–50 ms at 1280x800 on the Radeon 680M (two runs, one of them while other work was running on the PC; total per frame 152 → 188 ms at 1280x800 in that one). Not optimised yet.
+
+### Calibration of four planes
+
+The laser calibration fits the planes of a direction one after the other from the board points of all views (the plane with the most points first, then the next from what is left) and names them by where each sheet starts: a plane's intercept with the camera's x axis (vertical) or y axis (horizontal) is about where its laser sits. It needs nothing of the build's design, so other positions and aims calibrate the same way.
+
+| Views (simulated board, 8 views, 200–390 mm) | Aim | Plane angle error | Plane offset error | Laser-point error from it, median / largest |
+|---|---|---|---|---|
+| rendered calibration set | `4` (chosen) | 0.002–0.008° | 0.009–0.037 mm | 0.010–0.037 / 0.07–0.19 mm |
+| | `4-cross250` | 0.002–0.004° | 0.000–0.024 mm | 0.010–0.035 / 0.05–0.25 mm |
+| | `4-cross350` | 0.004–0.009° | 0.023–0.043 mm | 0.018–0.048 / 0.07–0.22 mm |
+| the app's virtual board camera | `4` (chosen) | 0.005–0.011° | 0.026–0.040 mm | 0.023–0.033 / 0.14–0.21 mm |
+
+The ranges are over the four planes. The two-laser calibration's limits in the tests are 0.03° and 0.1 mm; all four planes are inside them, each under its right name.
+
+- **Views at the meeting distance do no harm.** With three extra views at 254 mm, square to the camera, where both pairs of `4-cross250` lie on top of each other, the fit leaves out the points within 2 mm of the other sheet (51 vertical, 264 horizontal) and the planes are as good as without those views.
+- **Views on one side of the meeting distance are enough to tell the planes apart.** With `4-cross250` and 8 views all nearer than 230 mm, or all farther than 280 mm, all four planes were found and named right. What the accuracy follows is the spread of distances: 0.009–0.015° and up to 0.9 mm largest point error from the 8 near views (191–218 mm), 0.003–0.007° and up to 0.33 mm from the 8 far views (295–392 mm). The app's guide still asks for views nearer and farther than a meeting distance inside 150–450 mm; that asks for more than the fit needs, and is listed in `docs/MAINTENANCE_PLAN.md`.
+- **A meeting distance outside 150–450 mm asks for nothing.** With the chosen aim the guide speaks of the vertical pair only.
+
+### Limits
+
+- Simulator only. The real lasers' line width and speckle, and how well two lines of one direction can be told apart on a dark or shiny part, are not known.
+- The two lasers of a direction share one switch channel and are on together.
+- Around 254 mm the two vertical lines cross in the image. Those stretches are dropped (3–12 % of the vertical points at 250–330 mm). With the first build's aim, kept points near a meeting distance were up to 1.4 mm off; with the chosen aim none was seen in 240 frames, which does not prove there are none.
+- The laser points do not yet improve the mesh by themselves; "Refine with lasers" uses them, and was not measured with four lasers.
+- Not measured: more than two lasers per direction; lines that are far from vertical or horizontal in the image; the CPU path's speed.
+
+**Tests:** `tests/test_vision_laser.py` (two lines per direction: tilted, curved, gapped, crossing; the plane of every kept point against the truth), `tests/test_calib_laser_sets.py`, `tests/test_sim_board_camera.py`, `tests/test_sim_datasets.py`, `tests/test_sim_nominal.py`, `tests/test_e2e_scan.py` and `tests/test_track_curve_ba.py` (tracked scans with four lasers), `tests/test_server_calibration.py` and `tests/test_server_setup.py` (the laser set through the app).
+
+Scripts: scratchpad `lasers4\` of the session of 2026-11-14/15 (`study2.py`, `summarise2.py`, `compare_scans.py`; results in `s2\`, `s3\`, `cmp2\`) and `shape\one_side.py`.
+
 ## What the metrics mean
 
 - **Stereo errors** compare the estimated raw intrinsics/extrinsics (`K1`, `K2`, `R`, `T`) with

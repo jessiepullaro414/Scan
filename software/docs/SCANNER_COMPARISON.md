@@ -333,7 +333,10 @@ report, no installer. The first is the one that blocks real work: a part has an 
 
 **8. Hardware.**
 - 2 laser lines against 22 to 81, and red against blue. Blue has less speckle and scatters less
-  inside paint and plastic (`RESEARCH_PLAN.md`, section 3 and 4.2.7).
+  inside paint and plastic (`RESEARCH_PLAN.md`, section 3 and 4.2.7). Since 2026-11-15 there is a
+  4-laser variant (two vertical and two horizontal red lines; 1.7 to 2 times the laser points per
+  frame in the simulator, [`VALIDATION.md`](../VALIDATION.md), "Four line lasers"). It does not
+  change this comparison: four lines are still few, and still red.
 - 1280 × 800 sensors; the Raptor Pro's camera is 1920 × 1200 [S1], Matter and Form's 13 megapixels [S18].
 - Class 3R lasers. The commercial handhelds read here are Class 1, 2 or 2M [S1][S21][S26].
 - No colour camera. This matters little for reverse engineering.
