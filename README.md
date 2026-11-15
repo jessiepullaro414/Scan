@@ -132,7 +132,7 @@ IMU (LSM6DSOX): VIN ── 3V3 (pin 36)  GND ── GND  SDA ── GP4 (pin 6) 
 
 ## 4-laser variant (optional)
 
-The standard build has two line lasers. This variant has four: it adds a second vertical-line laser on the **left** of the cameras (the mirror of the right one) and a second horizontal-line laser **low on the right**, beside the grip's yoke, 56 mm below the camera centre and aimed up. All four sheets still cross at the working distance of 250 mm. Build it if you have four laser modules and want about twice the laser points per frame. A line from the left also lights walls that a line from the right leaves in shadow. Other builders can keep two lasers; nothing else changes.
+The standard build has two line lasers. This variant has four: it adds a second vertical-line laser on the **left** of the cameras (the mirror of the right one) and a second horizontal-line laser **low on the right**, beside the grip's yoke, 56 mm below the camera centre and aimed up. The first pair of sheets (right vertical, top horizontal) crosses the centre line 250 mm in front of the faceplate, the second pair (left vertical, low horizontal) 350 mm in front of it. If both lines of a kind crossed at the same distance, they would lie on top of each other on any surface near that distance, and those points would be lost. Build it if you have four laser modules and want about twice the laser points per frame. A line from the left also lights walls that a line from the right leaves in shadow. Other builders can keep two lasers; nothing else changes.
 
 **Software for four lasers is being added now and is not finished; until it is, the app works with the two standard lasers.**
 
