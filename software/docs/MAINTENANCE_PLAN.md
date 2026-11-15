@@ -1428,6 +1428,36 @@ Every task here: the type check, `npm test`, and for bundle tasks the chunk size
   `docs/APP_API.md`. Left as it is for now: the hint asks for more views than needed, and does
   no harm.
 
+### [ ] F8. On the Radeon PC, work on the processor runs 4 to 7 times slower while the matcher runs
+- **Found 2026-11-15** while speeding up the four-laser extraction (E8). The laser lines are
+  extracted in two threads while the GPU computes the depth, so that the frame does not wait
+  for them. On this PC (Ryzen 7 7735U with its integrated Radeon 680M, Windows power plan
+  "Balanced") they get little done in that time: one extraction beside the matcher takes
+  63-71 ms against 11-16 ms alone (two lasers, 1280x800), and the frame then waits for the rest
+  (13-16 ms with two lasers in `process_recording`, 7.7 ms in `ohs bench`; 41-44 ms with four).
+- **It is not Python's lock** (F5): a thread that only sleeps wakes every millisecond during
+  the matcher's run; the matcher's thread spends 66 of its 67 ms in the one blocking read, and
+  the process uses 11 ms of processor time in a 68 ms run. Turning OpenCV's own OpenCL off or
+  its threads down to one changes nothing.
+- **It is the machine:** the same work in a separate process slows down as much while this
+  process runs the matcher: an extraction 11.6 to 72.5 ms, a plain Python loop 1.8 to 13 ms,
+  an OpenCV filter 0.9-1.5 to 6-9 ms, filling arrays 0.3 to 1.3 ms. The matcher itself keeps
+  its 70 ms. Likely the processor and the integrated GPU share one power or clock budget; not
+  proven.
+- **Not the same as on 2026-11-11:** F5 measured 63-68 ms for the two laser threads together
+  beside the matcher and a wait of about 1 ms. The code of that commit (a97511b), run today,
+  gives 125-154 ms and a wait of 0-3 ms (its matcher took 81 ms, long enough to cover the
+  extraction; today's takes 77 ms and the wait is 7.7 ms). What changed on the PC in between is
+  not known (driver, power mode, temperature).
+- **What follows for now:** on this PC a millisecond of processor work saved in the extraction
+  is worth about 1.7 ms of the frame, and work moved beside the GPU is not free. Speed figures
+  from this PC say little about a PC with a separate graphics card.
+- **To do:** repeat these timings (an extraction in a thread and in a second process, alone and
+  beside the matcher) on the RTX laptop; on this PC try the
+  Windows power mode "Best performance" and note the GPU driver version with each run. Only
+  then decide whether the frame should stop waiting for the lines before tracking starts (the
+  lines are needed only for the laser points, which are already computed beside the tracker).
+
 ## Reviewed and fine: leave alone
 
 So nobody spends a session on these again.
