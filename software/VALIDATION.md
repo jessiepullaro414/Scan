@@ -1120,6 +1120,41 @@ How it was checked: 16 simulated recordings (car panel and bracket, seeds 0–4;
 
 Scripts and rows: scratchpad `holes\` (`guard_ab.py`, `guard_ab_summary.py`, `res\guard_ab.jsonl`).
 
+## The Hole tool on holes with a wall (2026-11-14)
+
+The Hole tool fitted a circle to an open edge of the mesh. Where the mesh runs on from the flat face down a hole's wall (a bore, a hole in a thick plate, a hole with a floor close under it) there is no open edge at the rim, and the tool answered "no hole edge within 10 mm" or "the faces around this hole's edge are not flat". It now reads such a hole from the flat face around the click (`ohs/measure/region.py`, "A hole with a wall"). A hole that has an open edge is measured as before.
+
+**How:**
+- The flat face grows from the click as for the Plane tool, and its edges are searched for a hole. This only finds the hole.
+- The hole's edge is the line inside it where the surface is 0.5 mm below the face (`RIM_DROP_MM`; three of the face's tolerances when that is more): the points where the mesh's edges cross that level, with a circle fitted to them.
+- Inside that line the surface must go on down to 1.5 mm or more. A shallower dip is a dent, or a hole that the scan has closed, and the answer says so.
+- Where the surface rises from the face by 1.5 mm or more, the edge is the foot of a boss or a step, and the answer says that. A lower bump counts as the face.
+
+**Why a level, and not where the flat face ends:** the face's region stops where its own tolerance says, and that depends on the click. Read at the region's edge, the Ø 25 mm hole of the plates below came out between 27.2 and 39.7 mm over 17 clicks (one was refused). Read at a fixed level it is the same from every click within 0.02 mm.
+
+**On scans** (the plates of "Holes filled in": a 3 mm plate with holes of Ø 25, 10 and 6 mm, 10 mm or 120 mm above the floor; three recordings each, Standard quality, GPU path, the engine of 2026-11-14; three clicks per hole, 3 mm outside the true rim, so nine answers per row):
+
+| Plate | Hole | Poses | Before | Now |
+|---|---|---|---|---|
+| 10 mm above the floor | Ø 25 | true | refused 9 of 9 ("not flat") | Ø 25.57–25.70, centre within 0.22 mm |
+| | | tracked | refused 9 of 9 | Ø 25.35–25.51 on 8 clicks; 1 refused ("the surface rises") |
+| | Ø 10 | true | refused 9 of 9 | Ø 10.28–10.60, centre within 0.13 mm |
+| | | tracked | refused 9 of 9 | Ø 9.66–10.10 |
+| | Ø 6 | both | refused ("no hole edge") | refused: "the surface dips only 0.7–1.0 mm … a dent, or a hole that the scan has closed" |
+| 120 mm above the floor | Ø 25 | true | Ø 23.43–23.60 | the same (it has an open edge) |
+| | | tracked | Ø 21.90–22.09 | the same |
+| | Ø 10 and Ø 6 | both | refused ("no hole edge") | refused: "the surface dips only 0.6–1.0 mm …" (2 clicks of 36 still "no hole edge") |
+
+- **A hole over a near floor can be measured now**, about 0.6 mm large in diameter at the true poses (Ø 25: +0.57 to +0.70 mm; Ø 10: +0.28 to +0.60 mm), and −0.3 to +0.5 mm with tracking. A tracked mesh's centre is given in its first camera's frame here, so its 0.75–1.16 mm include the tracking error.
+- **The reading depends on the level, because a fused rim is a rounded shoulder and not a corner.** The Ø 25 mm hole reads 26.7 mm at 0.15 mm below the face, 26.1 mm at 0.3 mm, 25.6 mm at 0.5 mm, 24.9 mm at 1 mm and 24.3 mm at 2 mm; the Ø 10 mm hole 11.7, 11.2, 10.6, 9.7 and 9.1 mm. On these plates the true diameter is crossed at about 0.8–0.9 mm. The level was not tuned to that: one plate thickness, one floor distance and one scanning distance do not fix a rule. 0.5 mm is the first level clearly below the face's own scatter.
+- **Holes the scan has closed are refused in words.** The Ø 6 mm holes, and the Ø 10 mm hole over the far floor, are dents 0.6–1.0 mm deep in the mesh. With the depth test left out the tool gave Ø 5.3–7.9 mm for the Ø 10 mm hole and Ø 2.8–4.1 mm for the Ø 6 mm holes, two of those answers without a warning about the edge.
+- **The fit's ± does not cover this.** It comes from the scatter of the points about the circle, not from the shoulder's bias: ± 0.08–0.10 mm in diameter for the Ø 25 mm hole (1σ), against +0.6 mm, and ± 0.17–0.20 mm for the Ø 10 mm hole.
+- **Not measured:** real scans; a countersunk or chamfered hole (the level then lies on the chamfer, and the diameter read is the chamfer's at that depth); holes in a wall that is not flat.
+
+**Tests** (`tests/test_measure_region.py`; they failed first with "no hole edge within 10 mm"): a bore in a plate from two sides, a blind hole with a floor 3 mm down, the same answer from four clicks, the foot of a boss refused, a 0.9 mm dent refused. The 22 tests that were there pass unchanged.
+
+Scripts: scratchpad `shape\` of the session of 2026-11-14 (`hole_eval.py`, `hole_summ.py`; `results\hole_eval6.jsonl`).
+
 ## The vertex sigma: why it was too large, and the model that replaced it (2026-11-13)
 
 A study with prototypes outside the repository, and then the model built into the engine: **adopted on 2026-11-13** ("In the engine" at the end of this section). The geometry is not touched by any of it; the sigma stored with every new scan is.

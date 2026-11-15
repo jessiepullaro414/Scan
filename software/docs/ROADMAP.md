@@ -82,8 +82,12 @@ about the scan itself, not the Fit tool, and they decide whether a measurement c
   grow by 0.1–0.2 mm. The user chose to turn it on as it is. To do: the per-voxel variant that
   should keep the bracket's coverage. Small holes (Ø 6–10 mm) over a far, dark background stay
   closed with every fix tried: they need another cue, such as the laser lines' end points at a
-  rim. To do after the decision: the Hole tool fitting the edge of the flat region instead of the
-  mesh's boundary loop, for holes with a wall and a near background.
+  rim. **Done 2026-11-14:** the Hole tool reads a hole with a wall (a bore, a thick plate, a
+  near floor) from the flat face around it, at a fixed level below the face; a Ø 25 mm hole
+  10 mm above a floor, which was refused before, reads Ø 25.6 mm at true poses, and holes the
+  scan has closed are refused in words ([`VALIDATION.md`](../VALIDATION.md), "The Hole tool on
+  holes with a wall"). Open: a fused rim is a rounded shoulder, so the reading depends on the
+  level (26.1 mm at 0.3 mm, 24.9 mm at 1 mm).
 - **Convex features are fattened** (a Ø 16 mm shaft +0.2 mm at true poses, +1.1 mm with tracking)
   and tracking errors of 0.7–1 mm distort faces by up to 1.2 mm. To do: find the share of the
   stereo depth, of the fusion and of the tracking. **Found 2026-11-14**

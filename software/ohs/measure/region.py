@@ -75,11 +75,41 @@ filled is found again by its edge), with :func:`ohs.mesh.holes.find_holes`: oute
 holes. The loop nearest the click counts if it comes within :data:`HOLE_REACH_MM`; a loop that
 leaves the window widens it (doubling, up to the whole mesh). The plane comes from the faces in a
 ring :data:`RING_MM` wide around the loop (``fit_plane`` with sigma), then ``fit_circle`` on the
-loop's vertices with that normal. When the ring is not flat (the edge is the open end of a scanned
-bore's wall), the answer is an error that says to use Cylinder on the wall: no guess. Warnings: an
+loop's vertices with that normal. Warnings: an
 edge with a gap round its centre (incomplete), an edge that is not round, a hole that borders
 filled or unmeasured faces, few points on the edge. The edge's points are the mesh's own: on a
 fused mesh, small holes come out rounded and shrunk, a bias step 5 measures in the simulator.
+
+**A hole with a wall.** Where the mesh runs on from the flat face down the hole's wall (a bore, a
+hole in a thick plate, a hole with a floor close under it), the mesh has no edge at the rim: the
+click finds no loop within reach, or the open far end of the wall, whose ring is not flat. The hole
+is then read from the flat face around the click:
+
+* the plane region grows from the clicked face as for a plane. Patches it turned down that stay
+  within the *drop* of its plane (bumps, dents, noise) count as the face;
+* the region's edges are searched for a hole exactly as the mesh's own are (its outer border is no
+  hole). This only finds the hole: the region stops where its own tolerance says, which differs
+  from click to click;
+* what lies beyond that edge must go *down* from the face (against the faces' normal). Where it
+  rises by :data:`RIM_DEPTH_DROPS` drops or more, the edge is the foot of a boss or a step up, and
+  the answer is an error; a lower bump counts as the face and the search goes on;
+* the hole's edge is the line inside that edge where the surface is the drop below the face: the
+  points where the mesh's edges cross that level, with a circle fitted to them (one round without
+  the strays) and its centre put back on the face. The drop is :data:`RIM_DROP_MM`, or
+  :data:`RIM_DROP_TOLS` tolerances of the face when that is more. A fixed level makes the answer
+  the same from every click (within 0.02 mm on scans); a wall straight down gives the same circle at
+  any level.
+
+The answer carries a warning that says so. Inside that line the surface must go on down, to at
+least :data:`RIM_DEPTH_DROPS` drops below the face: a shallower dip is a dent, or a hole that the
+scan has closed (small holes over a far, dark background fuse shut, with a dent left where they
+are), and the answer is an error that says so. When the clicked face is not flat, its region has no
+hole edge within reach, or the surface never reaches the level, the error is the
+first search's: a loop too far away, the scan's outer border, or (the open end of a bore's wall)
+"use Cylinder on its wall". On a fused scan the rim is a rounded shoulder, not a corner, so the
+reading depends on the level: on simulated plates with a floor 10 mm under them a Ø 25 mm hole read
+26.1 mm at 0.3 mm, 25.6 mm at 0.5 mm and 24.9 mm at 1 mm (``VALIDATION.md``, "The Hole tool on
+holes with a wall").
 
 **Speed** (dev PC, CPU, numpy/scipy; the slow test in ``tests/test_measure_region.py``). On
 1M-triangle meshes: a hole 0.1-0.2 s (it looks only in a window); a plane on one side of a box
@@ -97,7 +127,7 @@ import numpy as np
 from ohs.measure.fit import CircleFit, CylinderFit, PlaneFit, fit_circle, fit_cylinder, fit_plane
 from ohs.mesh.confidence import SIGMA_NONE_MM
 from ohs.mesh.holes import find_holes
-from ohs.mesh.topology import as_mesh, compact, rows, sorted_unique
+from ohs.mesh.topology import as_mesh, compact, components, rows, sorted_unique
 
 __all__ = ["RegionFit", "fit_at", "KINDS"]
 
@@ -129,6 +159,9 @@ RING_FLAT_DEG = 30.0  # ring faces turned more than this from the ring's plane .
 RING_NOT_FLAT = 0.25  # ... over more than this share of its area: not a flat face (a bore's wall?)
 EDGE_GAP_DEG = 45.0  # a hole edge with a gap wider than this round its centre is incomplete
 ROUND_RMS = 0.05  # a hole edge straying more than this times its radius is not round
+RIM_DROP_MM = 0.5  # a hole with a wall: its edge is where the surface is this far below the flat face ...
+RIM_DROP_TOLS = 3.0  # ... and at least this many of the face's tolerances (a coarse or noisy mesh)
+RIM_DEPTH_DROPS = 3.0  # ... and the surface inside must go this many drops below the face: less is a dent
 
 
 @dataclass
@@ -504,8 +537,191 @@ def _hole_loop(V: np.ndarray, F: np.ndarray, measured: np.ndarray, point: np.nda
         D *= 2.0
 
 
-def _fit_hole(V: np.ndarray, F: np.ndarray, S: np.ndarray | None, measured: np.ndarray, point: np.ndarray) -> RegionFit:
-    win, (Vw, Fw, kept), loop = _hole_loop(V, F, measured, point)
+def _fit_hole(V: np.ndarray, F: np.ndarray, S: np.ndarray | None, measured: np.ndarray, face: int,
+              point: np.ndarray) -> RegionFit:
+    """The hole at the click: the mesh's own edge, or else the edge of the flat face (module docstring)."""
+    try:
+        win, window, loop = _hole_loop(V, F, measured, point)
+        return _fit_edge(V, F, S, measured, win, window, loop)
+    except ValueError:
+        rim = _fit_rim(V, F, S, measured, face, point)
+        if rim is None:
+            raise
+        return rim
+
+
+def _fit_rim(V: np.ndarray, F: np.ndarray, S: np.ndarray | None, measured: np.ndarray, face: int,
+             point: np.ndarray) -> RegionFit | None:
+    """A hole with a wall: read from the flat face around the click (module docstring). ``None``
+    when the clicked face is not flat or its region has no hole edge within reach."""
+    try:
+        flat = _grow(_Surface(V, F, S, measured), face, "plane", None, None)
+    except ValueError:
+        return None
+    drop = _rim_drop(flat)
+    n, a = _unit_normals(rows(V, F[flat.faces[:GROW_FIT_POINTS]].reshape(-1)).reshape(-1, 3, 3))
+    up = flat.fit.normal if float(a @ (n @ flat.fit.normal)) >= 0 else -flat.fit.normal
+    on_flat = np.zeros(len(F), dtype=bool)
+    on_flat[flat.faces] = True
+    # the pieces of the mesh that are not the flat face, and how far each gets from its plane
+    piece = np.full(len(F), -1, dtype=np.int64)
+    far = np.zeros(0)
+    rest = np.flatnonzero(measured & ~on_flat)
+    if len(rest):
+        Vr, Fr, _ = compact(V, F[rest])
+        n_pieces, piece_of_vertex, piece[rest] = components(Fr, len(Vr))
+        far = np.zeros(n_pieces)
+        np.maximum.at(far, piece_of_vertex, np.abs((Vr - flat.fit.point) @ flat.fit.normal))
+        # pockets: patches the region's test turned down that stay within the drop of the plane are the face's too
+        on_flat[rest[far[piece[rest]] <= drop]] = True
+    for _ in range(4):
+        try:
+            _, window, loop = _hole_loop(V, F, on_flat, point)
+        except ValueError:
+            return None
+        # what lies beyond the edge: the measured faces at its vertices that are not the flat face's
+        at_edge = np.zeros(len(V), dtype=bool)
+        at_edge[window[2][loop]] = True
+        beyond = np.flatnonzero(measured & ~on_flat & (at_edge[F[:, 0]] | at_edge[F[:, 1]] | at_edge[F[:, 2]]))
+        P = rows(V, F[beyond].reshape(-1)).reshape(-1, 3, 3)
+        if not len(beyond) or float(_unit_normals(P)[1] @ ((P.mean(axis=1) - flat.fit.point) @ up)) <= 0:
+            return _fit_contour(V, F, S, measured, flat, up, window[2][loop])
+        # the surface rises here. A low bump (a blob, a doubled surface) is passed over: it counts as the face
+        # and the search goes on; a boss or a step is an answer
+        bumps = np.unique(piece[beyond])
+        if float(far[bumps].max()) >= RIM_DEPTH_DROPS * drop:
+            raise ValueError("the surface rises from the flat face at this edge (the foot of a boss, or a step up), "
+                             "so it is not a hole; to measure a boss, use Cylinder on its wall") from None
+        on_flat[np.isin(piece, bumps)] = True
+    return None
+
+
+def _rim_drop(flat: RegionFit) -> float:
+    """How far below a flat face its hole's edge is read (mm); see the module docstring."""
+    return max(RIM_DROP_MM, RIM_DROP_TOLS * float(flat.tolerance_mm))
+
+
+def _inside(xy: np.ndarray, poly: np.ndarray) -> np.ndarray:
+    """Which 2D points ``xy`` (k,2) lie inside the closed polygon ``poly`` (m,2) (even-odd rule)."""
+    x, y = xy[:, 0][:, None], xy[:, 1][:, None]
+    x0, y0 = poly[:, 0][None], poly[:, 1][None]
+    x1, y1 = np.roll(poly[:, 0], -1)[None], np.roll(poly[:, 1], -1)[None]
+    with np.errstate(divide="ignore", invalid="ignore"):
+        cross = ((y0 > y) != (y1 > y)) & (x < x0 + (y - y0) * (x1 - x0) / (y1 - y0))
+    return (np.count_nonzero(cross, axis=1) % 2) == 1
+
+
+def _fit_contour(V: np.ndarray, F: np.ndarray, S: np.ndarray | None, measured: np.ndarray, flat: RegionFit,
+                 up: np.ndarray, loop: np.ndarray) -> RegionFit | None:
+    """The hole inside ``loop`` (vertex ids round the flat region's edge) from the line where the
+    surface is :func:`_rim_drop` below the flat face (module docstring); ``None`` when there is no
+    such line (a shallow dent)."""
+    plane = flat.fit
+    drop = _rim_drop(flat)
+    u = np.cross(up, [1.0, 0.0, 0.0] if abs(up[0]) < 0.9 else [0.0, 1.0, 0.0])
+    u /= np.linalg.norm(u)
+    v = np.cross(up, u)
+    L = V[loop] - plane.point
+    poly = np.c_[L @ u, L @ v]
+    centre, reach = poly.mean(axis=0), float(np.linalg.norm(poly - poly.mean(axis=0), axis=1).max())
+    # the measured mesh edges near the hole that cross the level: one end on the face's side, one below
+    Q = V - plane.point
+    near = np.hypot(Q @ u - centre[0], Q @ v - centre[1]) <= reach + 1e-9
+    faces = np.flatnonzero(measured & (near[F[:, 0]] | near[F[:, 1]] | near[F[:, 2]]))
+    if not len(faces):
+        return None
+    E = np.unique(np.sort(np.concatenate([F[faces][:, [0, 1]], F[faces][:, [1, 2]], F[faces][:, [2, 0]]]), axis=1), axis=0)
+    h = Q[E] @ up
+    crossing = (h.max(axis=1) >= -drop) & (h.min(axis=1) < -drop)
+    E, h = E[crossing], h[crossing]
+    high = np.where(h[:, 0] >= h[:, 1], E[:, 0], E[:, 1])  # the end on the face's side
+    low = np.where(h[:, 0] >= h[:, 1], E[:, 1], E[:, 0])
+    hh, hl = (Q[high] @ up), (Q[low] @ up)
+    t = (hh + drop) / (hh - hl)
+    P = V[high] + t[:, None] * (V[low] - V[high])
+    # inside the flat region's edge. A wall straight down projects onto that edge, within the noise: the
+    # edge is taken a tolerance wider (scaled about its middle)
+    xy = np.c_[(P - plane.point) @ u, (P - plane.point) @ v]
+    size = float(np.median(np.linalg.norm(poly - centre, axis=1)))
+    keep = _inside(xy, centre + (poly - centre) * (1.0 + float(flat.tolerance_mm) / max(size, 1e-9)))
+    P, high, low = P[keep], high[keep], low[keep]
+    if len(P) < 2 * PIN_HOLE_POINTS:
+        return None
+    # how deep the surface goes inside that line: the pieces of the mesh below the level that the line borders
+    # (their deep end, not their one deepest vertex: that is noise)
+    deep = Q[low] @ up
+    under = faces[((Q[F[faces]] @ up) < -drop).all(axis=1)]
+    if len(under):
+        Vu, Fu, kept_u = compact(V, F[under])
+        _, piece_of_vertex, _ = components(Fu, len(Vu))
+        at_line = np.zeros(len(V), dtype=bool)
+        at_line[low] = True
+        mine = np.isin(piece_of_vertex, np.unique(piece_of_vertex[at_line[kept_u]]))
+        deep = np.concatenate([deep, (Vu[mine] - plane.point) @ up])
+    depth = float(-np.percentile(deep, 10.0))
+    if depth < RIM_DEPTH_DROPS * drop:
+        raise ValueError(f"the surface dips only {depth:.1f} mm below the flat face here: a dent, or a hole that the "
+                         "scan has closed; it cannot be measured as a hole") from None
+    sig = None if S is None else S[high]
+    try:
+        circle = fit_circle(P, sig, normal=up)
+        # one round without the strays (another edge inside the region's edge, a floater)
+        q = P - circle.center
+        r = np.linalg.norm(q - np.outer(q @ up, up), axis=1) - circle.radius_mm
+        ok = np.abs(r) <= max(3.0 * 1.4826 * float(np.median(np.abs(r - np.median(r)))), float(flat.tolerance_mm))
+        if 2 * PIN_HOLE_POINTS <= int(ok.sum()) < len(P):
+            P, high, sig = P[ok], high[ok], None if sig is None else sig[ok]
+            circle = fit_circle(P, sig, normal=up)
+    except ValueError:
+        return None
+    circle.center = circle.center + drop * up  # the level line lies ``drop`` below the face: back onto it
+    # the edge as vertices (for the outline): the crossing edges' ends on the face's side, in order round the centre
+    q = V[high] - circle.center
+    e1 = np.cross(up, q[0])
+    e1 = e1 / (np.linalg.norm(e1) or 1.0)
+    order = np.argsort(np.arctan2(q @ np.cross(up, e1), q @ e1), kind="stable")
+    edge = high[order][np.sort(np.unique(high[order], return_index=True)[1])]
+    # the ring: the flat face's own faces within RING_MM of the edge
+    c = V[F[flat.faces]].mean(axis=1) - circle.center
+    rho = np.linalg.norm(c - np.outer(c @ up, up), axis=1)
+    ring = flat.faces[(rho <= circle.radius_mm + RING_MM) & (rho >= circle.radius_mm - RING_MM)]
+    warnings = ["this hole has a wall: its edge is taken where the surface leaves the flat face around it "
+                f"({drop:.2f} mm below it)"]
+    warnings += _edge_warnings(circle, P, V, F, measured, edge)
+    return RegionFit(kind="hole", fit=circle, faces=np.sort(ring), edge=edge, warnings=warnings,
+                     tolerance_mm=None, angle_tol_deg=None,
+                     mean_sigma_mm=None if sig is None else float(np.mean(sig)))
+
+
+def _edge_warnings(circle: CircleFit, P: np.ndarray, V: np.ndarray, F: np.ndarray, measured: np.ndarray,
+                   edge: np.ndarray) -> list[str]:
+    """Warnings about a hole's edge: ``P`` the fitted points, ``edge`` the edge's vertex ids."""
+    warnings = []
+    # the edge's coverage round its centre
+    q = P - circle.center
+    q = q - np.outer(q @ circle.normal, circle.normal)
+    u = q[0] / (np.linalg.norm(q[0]) or 1.0)
+    ang = np.sort(np.arctan2(q @ np.cross(circle.normal, u), q @ u))
+    gap = math.degrees(float(np.max(np.diff(np.append(ang, ang[0] + 2 * math.pi)))))
+    if gap > EDGE_GAP_DEG:
+        warnings.append(f"the hole's edge is incomplete: {gap:.0f}° of its round has no points")
+    if circle.rms_mm > ROUND_RMS * circle.radius_mm:
+        warnings.append(f"the hole's edge is not round (RMS {circle.rms_mm:.2f} mm): a slot or a damaged edge?")
+    if not measured.all():
+        touched = np.zeros(len(V), dtype=bool)
+        touched[F[~measured]] = True
+        if touched[edge].any():
+            warnings.append("the hole borders filled or not measured faces (left out): its edge is where "
+                            "the measured surface ends")
+    if len(P) < SMALL_REGION_POINTS / 2:
+        warnings.append(f"small hole: {len(P)} points on its edge")
+    return warnings
+
+
+def _fit_edge(V: np.ndarray, F: np.ndarray, S: np.ndarray | None, measured: np.ndarray, win: np.ndarray,
+              window: tuple, loop: np.ndarray) -> RegionFit:
+    """Fit the hole whose edge is ``loop`` in the window's mesh (the three results of :func:`_hole_loop`)."""
+    Vw, Fw, kept = window
     w = _Surface(Vw, Fw, None, np.ones(len(Fw), dtype=bool))
     # the ring: faces within RING_MM of the edge, in layers of faces from it
     edge_len = float(np.mean(np.linalg.norm(Vw[np.roll(loop, -1)] - Vw[loop], axis=1)))
@@ -522,25 +738,7 @@ def _fit_hole(V: np.ndarray, F: np.ndarray, S: np.ndarray | None, measured: np.n
                          "to measure the bore, use Cylinder on its wall")
     normal = plane.normal if float(a @ (n @ plane.normal)) >= 0 else -plane.normal
     circle = fit_circle(Vw[loop], None if sig is None else sig[loop], normal=normal)
-    warnings = []
-    # the edge's coverage round its centre
-    q = Vw[loop] - circle.center
-    q = q - np.outer(q @ circle.normal, circle.normal)
-    u = q[0] / (np.linalg.norm(q[0]) or 1.0)
-    ang = np.sort(np.arctan2(q @ np.cross(circle.normal, u), q @ u))
-    gap = math.degrees(float(np.max(np.diff(np.append(ang, ang[0] + 2 * math.pi)))))
-    if gap > EDGE_GAP_DEG:
-        warnings.append(f"the hole's edge is incomplete: {gap:.0f}° of its round has no points")
-    if circle.rms_mm > ROUND_RMS * circle.radius_mm:
-        warnings.append(f"the hole's edge is not round (RMS {circle.rms_mm:.2f} mm): a slot or a damaged edge?")
-    if not measured.all():
-        touched = np.zeros(len(V), dtype=bool)
-        touched[F[~measured]] = True
-        if touched[kept[loop]].any():
-            warnings.append("the hole borders filled or not measured faces (left out): its edge is where "
-                            "the measured surface ends")
-    if len(loop) < SMALL_REGION_POINTS / 2:
-        warnings.append(f"small hole: {len(loop)} points on its edge")
+    warnings = _edge_warnings(circle, Vw[loop], V, F, measured, kept[loop])
     return RegionFit(kind="hole", fit=circle, faces=np.sort(win[ring]), edge=kept[loop], warnings=warnings,
                      tolerance_mm=None, angle_tol_deg=None,
                      mean_sigma_mm=None if sig is None else float(np.mean(sig[loop])))
@@ -579,5 +777,5 @@ def fit_at(V, F, face: int, point, kind: str, sigma=None, filled=None, tolerance
     if not measured[face]:
         raise ValueError("the clicked face is filled or not measured: click on the scanned surface")
     if kind == "hole":
-        return _fit_hole(V, F, S, measured, point)
+        return _fit_hole(V, F, S, measured, face, point)
     return _grow(_Surface(V, F, S, measured), face, kind, tolerance_mm, angle_tol_deg)

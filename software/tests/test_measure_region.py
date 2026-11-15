@@ -438,6 +438,72 @@ def test_hole_click_near_no_hole_on_a_border_or_on_a_bore_wall_raises(bracket_me
         fit_at(V, F, face, point, "hole", sigma=S)
 
 
+def test_a_hole_with_a_wall_is_measured_where_the_flat_face_ends(bracket_mesh):
+    """The bore's mesh runs on from the plate down its wall, so the mesh has no edge at the rim (its
+    only open edge is the bore's far end, 10 mm down). The hole is then the edge of the flat face
+    around it: the plate's region, grown from the click, ends at the wall."""
+    V, F, S, labels = bracket_mesh
+    qx, qy, qr, _ = BORE
+    for dx, dy in ((qr + 3.0, 0.0), (0.0, -(qr + 6.0))):  # 3 and 6 mm from the rim, on two sides
+        face, point = nearest_face(V, F, (qx + dx, qy + dy, 0.0))
+        r = fit_at(V, F, face, point, "hole", sigma=S)
+        c = r.fit
+        assert abs(c.diameter_mm - 2 * qr) < 0.1 and math.hypot(c.center[0] - qx, c.center[1] - qy) < 0.05
+        assert angle_deg(c.normal, Z) < 0.5 and c.normal[2] > 0 and abs(c.center[2]) < 0.05
+        assert set(labels[r.faces]) == {"plate"} and len(r.edge) >= 60  # the ring is on the plate, the edge all round
+        assert np.all(np.abs(np.hypot(V[r.edge, 0] - qx, V[r.edge, 1] - qy) - qr) < 0.6)
+        assert [w for w in r.warnings if "wall" in w] and r.to_dict()["kind"] == "hole"
+
+
+def test_a_hole_with_a_floor_under_it_is_measured_too():
+    """A blind hole: the wall ends on a floor, so the mesh has no open edge near the hole at all."""
+    V, F, (ring,) = plate(60.0, 60.0, H, [(4.0, 2.0, 5.0)])
+    V, Fw, bottom = wall(V, ring, (4.0, 2.0), 5.0, -3.0, H)
+    V, Ff = disc_top(V, bottom, (4.0, 2.0), 5.0, H)
+    F = np.vstack([F, Fw, Ff])
+    Vn, S = noisy(V, 8)
+    face, point = nearest_face(Vn, F, (4.0 + 8.0, 2.0, 0.0))
+    r = fit_at(Vn, F, face, point, "hole", sigma=S)
+    assert abs(r.fit.diameter_mm - 10.0) < 0.1 and math.hypot(r.fit.center[0] - 4.0, r.fit.center[1] - 2.0) < 0.05
+    assert abs(r.fit.center[2]) < 0.05  # the rim, not the floor 3 mm down
+
+
+def test_a_hole_with_a_wall_reads_the_same_from_every_click(bracket_mesh):
+    """The flat face's region ends where its own tolerance says, which depends on the click; the
+    hole's edge is read at a fixed level below the face, so the answer does not."""
+    V, F, S, _ = bracket_mesh
+    qx, qy, qr, _ = BORE
+    got = []
+    for a in (0.2, 1.9, 3.3, 5.0):
+        face, point = nearest_face(V, F, (qx + (qr + 4.0) * math.cos(a), qy + (qr + 4.0) * math.sin(a), 0.0))
+        got.append(fit_at(V, F, face, point, "hole", sigma=S).fit)
+    d = np.array([c.diameter_mm for c in got])
+    assert d.max() - d.min() < 0.02 and np.ptp(np.array([c.center for c in got]), axis=0).max() < 0.02
+
+
+def test_a_shallow_dent_is_not_measured_as_a_hole():
+    """A scan can close a small hole and leave a dent where it was. The surface there dips less than
+    three times the level the edge is read at (1.5 mm): no diameter is given, and the answer says why."""
+    V, F, (ring,) = plate(60.0, 60.0, H, [(0.0, 0.0, 5.0)])
+    V, Fw, bottom = wall(V, ring, (0.0, 0.0), 5.0, -0.9, H)
+    V, Ff = disc_top(V, bottom, (0.0, 0.0), 5.0, H)
+    F = np.vstack([F, Fw, Ff])
+    Vn, S = noisy(V, 9)
+    face, point = nearest_face(Vn, F, (8.0, 0.0, 0.0))
+    with pytest.raises(ValueError, match=r"dips only (0\.9|1\.0) mm"):
+        fit_at(Vn, F, face, point, "hole", sigma=S)
+
+
+def test_the_foot_of_a_boss_is_not_a_hole(bracket_mesh):
+    """The plate's flat face also ends where a boss stands on it. That edge is not a hole: the
+    surface goes up from it, not down."""
+    V, F, S, _ = bracket_mesh
+    bx, by, br, _ = BOSS
+    face, point = nearest_face(V, F, (bx + br + 3.0, by, 0.0))
+    with pytest.raises(ValueError, match="rises from the flat face"):
+        fit_at(V, F, face, point, "hole", sigma=S)
+
+
 # --------------------------------------------------------------------------- filled faces, small regions
 def test_filled_faces_are_left_out_and_warned():
     V, F, (ring,) = plate(60.0, 60.0, H, [(0.0, 0.0, 12.5)])
