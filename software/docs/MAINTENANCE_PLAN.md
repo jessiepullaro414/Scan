@@ -1073,6 +1073,14 @@ bench medians before and after in the commit message.
   each, median ms a frame, four lasers): at 1280x800 208-214 to 175-182; at 640x400 113-120 to
   96-104. Two lasers stay at 146-152 and 70-83. So four lasers now cost about 27 ms a frame over
   two at 1280x800 and about 25 ms at 640x400 on this PC (the PC was in its slow state: F8, E9).
+- **As an exe** (the app is to ship as one, PyInstaller, `DESKTOP_APP_PLAN.md` M6; asked by the
+  user 2026-11-15; read from numba 0.68's code, not tried): numba compiles on the user's PC, so
+  an exe carries numba and llvmlite, about 150 MB unpacked (Open3D is 225 MB, OpenCV 139 MB). In
+  a frozen program numba keeps its compiled code in the user's cache folder and ties it to the
+  exe file, so the 6 s compile comes once after each install or update, then about 1 s a start.
+  If numba is left out of the exe, or fails there, the Python loop runs and only four-laser
+  frames are slower. To check when the exe is built: that PyInstaller picks up numba and
+  llvmlite, the size of the installer with and without them, and the first start.
 - **Two copies of one loop:** a change to `_link_rows` must be made in `link_rows` too; the
   test fails when they drift apart, but only where numba is installed.
 - **Not measured yet:** the RTX laptop; the CPU path's frame time.
