@@ -259,10 +259,10 @@ Each pose needs the board pose (corners found) and **both laser lines crossing t
 margin** around the printed pattern. Lines on the black-and-white squares are biased; the HUD counts the
 line points on the page and warns when a line misses it. Use different distances (150-450 mm) and
 tilts (up to +-30 deg) so the planes are well determined. With four line lasers (`[lasers] lines`,
-above) every pose needs all four lines on the margin. The two lines that run the same way cross
-each other at one distance and cannot be told apart there, so hold the board both nearer and
-farther than that; the calibration then works out which line belongs to which laser from the
-planes it finds.
+above) every pose needs all four lines on the margin. In the 4-laser build the two vertical lines
+cross each other about 250 mm from the scanner and cannot be told apart at that distance, so spread
+the poses over nearer and farther distances; the two horizontal lines stay apart. The calibration
+works out which line belongs to which laser from the planes it finds.
 
 **IMU.** Needs the stereo calibration and the Pico. Put the board where the camera sees it, press
 SPACE or the trigger, **hold still for 2 s** (the HUD counts down), then **rotate the scanner

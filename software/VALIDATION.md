@@ -1547,7 +1547,7 @@ The sphere-on-plane scan through `process_recording` (realistic camera model, ma
 - **Twice the laser points, as accurate as with two lasers,** and the lines pass over nearly twice as much of the surface.
 - **The mesh does not change.** It is built from the dot-stereo depth; the laser points come into it only through "Refine with lasers", which was not run here.
 - **Tracking is slightly less exact in position** (the largest error 0.05–0.06 mm larger; one scan each, so this may be noise): four lines cover more of the dot pattern that the depth is matched on.
-- **Cost:** the extraction of two lines per direction adds about 20 ms per frame at 640x400 and 35–50 ms at 1280x800 on the Radeon 680M (two runs, one of them while other work was running on the PC; total per frame 152 → 188 ms at 1280x800 in that one). Not optimised yet.
+- **Cost:** a frame takes 59 → 89 ms at 640x400 and 142 → 195 ms at 1280x800 (median per frame, Radeon 680M, nothing else running). The extraction of the lines is 10 → 28 ms and 16 → 62 ms of that; at 640x400 the tracker's share also rose by 7 ms in this run. Not optimised yet.
 
 ### Calibration of four planes
 
@@ -1575,6 +1575,8 @@ The ranges are over the four planes. The two-laser calibration's limits in the t
 - Not measured: more than two lasers per direction; lines that are far from vertical or horizontal in the image; the CPU path's speed.
 
 **Tests:** `tests/test_vision_laser.py` (two lines per direction: tilted, curved, gapped, crossing; the plane of every kept point against the truth), `tests/test_calib_laser_sets.py`, `tests/test_sim_board_camera.py`, `tests/test_sim_datasets.py`, `tests/test_sim_nominal.py`, `tests/test_e2e_scan.py` and `tests/test_track_curve_ba.py` (tracked scans with four lasers), `tests/test_server_calibration.py` and `tests/test_server_setup.py` (the laser set through the app).
+
+**Suite with the variant in** (819 tests, the code of 2026-11-15 with the chosen aim): GPU path 813 passed, 6 skipped; CPU path 763 passed, 56 skipped.
 
 Scripts: scratchpad `lasers4\` of the session of 2026-11-14/15 (`study2.py`, `summarise2.py`, `compare_scans.py`; results in `s2\`, `s3\`, `cmp2\`) and `shape\one_side.py`.
 
