@@ -1401,7 +1401,19 @@ Every task here: the type check, `npm test`, and for bundle tasks the chunk size
   `OHS_O3D_THREADS=1` (A6), under which Open3D runs on one thread. Nothing is changed for now: a
   crash that ends a run is plain to see, and it has happened once.
 
-### [ ] F7. The calibration guide asks for views on both sides of where two laser lines meet
+### [x] F7. The calibration guide asks for views on both sides of where two laser lines meet ✔
+- **Done 2026-11-15:** the guide no longer asks for it. Gone: the hint (`_meet_hint` in
+  `ohs/server/calib_guide.py`), the sentence in the session's guidance (`ohs/server/calibration.py`),
+  the advice after a failed fit (`ohs/server/calib_results.py`), and in the demo the hint, the
+  advice, the "Both sides of where the lines meet" row and its part in the grade
+  (`ui/src/api/mock/calib.ts`). Kept: `meet_mm` in the live message. The capture panel now says
+  what is true at that distance: "The two vertical lines run into each other about 254 mm away.
+  If one goes missing there, hold the board a little nearer or farther." The guidance and the
+  advice say the same in their own words. `docs/APP_API.md` follows.
+- **Guard:** `tests/test_server_calibration.py::test_guide_for_four_lasers` (views all nearer,
+  all farther or on both sides get the hints a two-laser build gets) and
+  `test_four_laser_calibration_on_the_simulator` (the guidance); both failed on the old code
+  for that reason.
 - **Found 2026-11-15** while writing up the 4-laser variant. For a direction with two lasers whose
   sheets meet inside 150-450 mm, the guide (`ohs/server/calib_guide.py`, `_meet_hint`), the capture
   panel and the session guidance say the calibration needs views nearer and farther than that

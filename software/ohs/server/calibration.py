@@ -126,8 +126,7 @@ def guidance(kind: str, names: Any = None) -> str:
             "laser lines crossing the white margin around the pattern.")
     if pairs:
         what = " and the two ".join(pairs)
-        text += (f" If the two {what} lines cross each other somewhere in that range, hold the board on both sides "
-                 "of that point, some views nearer and some farther.")
+        text += f" If the two {what} lines run into each other on the board, hold it a little nearer or farther away."
     return text
 
 

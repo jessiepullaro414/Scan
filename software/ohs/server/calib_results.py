@@ -349,9 +349,8 @@ def _lasers(planes: dict, report: dict, view_ids: Sequence[int], truth: tuple | 
                           "add_views"))
     pairs = sorted({_family_of(n) for n in missing if sum(_family_of(m) == _family_of(n) for m in names) > 1} - {None})
     for fam in pairs:
-        adv.append(advice(f"If the two {fam} lines cross each other between 150 and 450 mm, hold the board both "
-                          "nearer and farther than that point: the calibration tells them apart from views on "
-                          "both sides.", "add_views"))
+        adv.append(advice(f"The two {fam} lines must show as two separate lines: where they run into each other "
+                          "on the board, hold it a little nearer or farther away.", "add_views"))
     for n in fallback:
         adv.append(advice(f"Hold the board so the {_label(n)} line crosses the white margin, not just the pattern.",
                           "add_views"))

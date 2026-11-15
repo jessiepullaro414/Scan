@@ -429,7 +429,7 @@ export class MockCalib {
     const pairs = MEETS.filter((f) => laserFamilies(names)[f].length > 1);
     return (
       `6–10 poses, 150–450 mm away, tilt up to ±30°, all ${n} laser lines crossing the white page margin` +
-      (pairs.length ? `. The two ${pairs.join(" and the two ")} lines cross each other at some distance: hold the board both nearer and farther than that` : "")
+      (pairs.length ? `. If the two ${pairs.join(" and the two ")} lines run into each other on the board, hold it a little nearer or farther away` : "")
     );
   }
 
@@ -639,13 +639,6 @@ export class MockCalib {
       return plan("That's plenty: press Enter to calibrate");
     }
     // lasers / check
-    const pair = kind === "lasers" ? MEETS.find((f) => laserFamilies(this.lasers())[f].length === 2) : undefined;
-    if (pair) {
-      // two lasers in a family: their lines meet at MEET_MM, and the fit needs views on both sides
-      const meet = `The two ${pair} laser lines meet about ${MEET_MM} mm from the scanner, and the calibration needs views on both sides of that point`;
-      if (div.near === 0) return plan(`${meet}: move the board closer, to under 220 mm`, { distance: "closer", bin: "near" });
-      if (div.far === 0) return plan(`${meet}: move the board farther away, to over 330 mm`, { distance: "farther", bin: "far" });
-    }
     if (div.near === 0) return plan("Bring the board closer: under 220 mm", { distance: "closer", bin: "near" });
     if (div.far === 0) return plan("Move the board farther away: over 330 mm", { distance: "farther", bin: "far" });
     if (div.mid === 0) return plan("Hold the board at a middle distance: about 280 mm", { bin: "mid" });
@@ -1256,9 +1249,6 @@ export class MockCalib {
     const lo = Math.round(Math.min(...dists)),
       hi = Math.round(Math.max(...dists));
     const spread = hi - lo;
-    const nearer = dists.filter((d) => d < MEET_MM - 25).length,
-      farther = dists.filter((d) => d > MEET_MM + 25).length;
-    const pairs = MEETS.filter((f) => laserFamilies(names)[f].length > 1);
     const r = this.rand;
     const report = "/api/calibration/report.json";
     const word = (m: string) => laserWords(m).charAt(0).toUpperCase() + laserWords(m).slice(1);
@@ -1277,14 +1267,9 @@ export class MockCalib {
         planes: this.planeRows(names, null),
       };
     }
-    const sides = !pairs.length || (nearer >= 2 && farther >= 2);
-    const grade: CalibGrade = spread >= 150 && n >= 6 && sides ? "excellent" : spread >= 90 && sides ? "good" : spread >= 50 ? "usable" : "poor";
+    // the grade follows the spread of distances; views on both sides of where two lines meet are not needed
+    const grade: CalibGrade = spread >= 150 && n >= 6 ? "excellent" : spread >= 90 ? "good" : spread >= 50 ? "usable" : "poor";
     const advice: CalibAdvice[] = [];
-    if (pairs.length && !sides)
-      advice.push({
-        text: `Add poses ${nearer < 2 ? "nearer" : "farther"} than ${MEET_MM} mm: the two ${pairs.join(" and the two ")} lines meet there, and the calibration tells them apart from views on both sides.`,
-        action: "add_views",
-      });
     if (grade === "poor") advice.push({ text: "All poses are at a similar distance: start over and spread them from 150 to 450 mm.", action: "start_over" });
     const fits = names.map(() => 0.028 + 0.09 / n + r() * 0.012);
     return {
@@ -1304,9 +1289,6 @@ export class MockCalib {
         })),
         { label: "Poses", value: `${n} (aim for 6–10)`, ok: n >= 6 ? true : null, help: "Each pose adds line segments on the margin." },
         { label: "Distance spread", value: `${lo}–${hi} mm (want 150 mm or more)`, ok: spread >= 150 ? true : spread >= 90 ? null : false, help: "Poses near and far pin down the angle of each plane." },
-        ...(pairs.length
-          ? [{ label: "Both sides of where the lines meet", value: `${nearer} nearer, ${farther} farther than ${MEET_MM} mm`, ok: sides, help: "Two lasers of the same direction are told apart by their lines on both sides of where they meet." }]
-          : []),
         { label: "Every line on the margin", value: `${all} of ${n} poses`, ok: all === n ? true : null, help: "Poses where a line missed the margin only help the other planes." },
       ],
       advice,

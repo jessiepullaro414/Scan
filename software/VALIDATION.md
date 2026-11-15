@@ -1577,8 +1577,8 @@ The laser calibration fits the planes of a direction one after the other from th
 The ranges are over the four planes. The two-laser calibration's limits in the tests are 0.03° and 0.1 mm; all four planes are inside them, each under its right name.
 
 - **Views at the meeting distance do no harm.** With three extra views at 254 mm, square to the camera, where both pairs of `4-cross250` lie on top of each other, the fit leaves out the points within 2 mm of the other sheet (51 vertical, 264 horizontal) and the planes are as good as without those views.
-- **Views on one side of the meeting distance are enough to tell the planes apart.** With `4-cross250` and 8 views all nearer than 230 mm, or all farther than 280 mm, all four planes were found and named right. What the accuracy follows is the spread of distances: 0.009–0.015° and up to 0.9 mm largest point error from the 8 near views (191–218 mm), 0.003–0.007° and up to 0.33 mm from the 8 far views (295–392 mm). The app's guide still asks for views nearer and farther than a meeting distance inside 150–450 mm; that asks for more than the fit needs, and is listed in `docs/MAINTENANCE_PLAN.md`.
-- **A meeting distance outside 150–450 mm asks for nothing.** With the chosen aim the guide speaks of the vertical pair only.
+- **Views on one side of the meeting distance are enough to tell the planes apart.** With `4-cross250` and 8 views all nearer than 230 mm, or all farther than 280 mm, all four planes were found and named right. What the accuracy follows is the spread of distances: 0.009–0.015° and up to 0.9 mm largest point error from the 8 near views (191–218 mm), 0.003–0.007° and up to 0.33 mm from the 8 far views (295–392 mm). The app's guide asked for views nearer and farther than a meeting distance inside 150–450 mm until 2026-11-15, which was more than the fit needs; it no longer does (`docs/MAINTENANCE_PLAN.md`, F7).
+- **A meeting distance outside 150–450 mm is not reported.** With the chosen aim the capture panel's note (the two lines run into each other about 254 mm away) speaks of the vertical pair only.
 
 ### Limits
 

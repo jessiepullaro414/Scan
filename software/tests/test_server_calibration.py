@@ -727,18 +727,18 @@ def test_guide_for_four_lasers():
     assert g.meet_distance(both, "vertical") == pytest.approx(290.0, abs=1.0)
     assert g.meet_distance(near[:1], "vertical") is None  # one view tells nothing
     assert g.meet_distance(near[:2], "vertical") is None  # two: the point could also lie between them
-    h = g.next_hint("lasers", ok, near, (1280, 800), (6, 10))
-    assert h["text"] == ("The two vertical laser lines meet about 290 mm from the scanner, and the calibration needs "
-                         "views on both sides of that point: move the board farther away, to about 370 mm")
-    assert h["distance"] == "farther"
-    # with the planes known, the distance comes from them
-    ok.meet_mm, ok.distance_mm = {"vertical": 250.0}, 300.0
-    h = g.next_hint("lasers", ok, [V(300.0), V(330.0)], (1280, 800), (6, 10))
-    assert h["text"].startswith("The two vertical laser lines meet about 250 mm") and h["distance"] == "closer"
-    assert "about 200 mm" in h["text"]
-    sides = [V(190.0), V(205.0), V(300.0), V(330.0)]
-    h = g.next_hint("lasers", ok, sides, (1280, 800), (6, 10))
-    assert "meet" not in h["text"]  # both sides covered: the usual hints
+    # The guide does not ask for views on both sides of that distance: the fit does not need them
+    # (plan F7; VALIDATION.md, "Calibration of four planes"). Views all nearer, all farther or on
+    # both sides get the hints a build with two lasers gets for the same views.
+    import dataclasses
+
+    two = dataclasses.replace(ok, names=g.STANDARD_LINES, line_points={"vertical": 40, "horizontal": 40}, lines_found={})
+    for known, dist, views in ((None, ok.distance_mm, near), ({"vertical": 250.0}, 300.0, [V(300.0), V(330.0)]),
+                               ({"vertical": 250.0}, 300.0, [V(190.0), V(205.0), V(300.0), V(330.0)])):
+        ok.meet_mm, ok.distance_mm, two.distance_mm = known, dist, dist
+        h = g.next_hint("lasers", ok, views, (1280, 800), (6, 10))
+        assert "meet" not in h["text"] and "both sides" not in h["text"]
+        assert h == g.next_hint("lasers", two, views, (1280, 800), (6, 10))
     from ohs.sim.nominal import nominal_calibration
 
     planes = nominal_calibration((1280, 800), layout="4-cross250").lasers  # both pairs cross at 250 mm
@@ -855,7 +855,7 @@ def test_four_laser_calibration_on_the_simulator(tmp_path, demo_dir):
         setup = _ok(_get(url, "/api/setup"))
         assert setup["calibration"]["lasers_missing"] == list(FOUR)
         s = _ok(_post(url, "/api/calibration/start", {"kind": "lasers"}))
-        assert s["lasers"] == list(FOUR) and "four laser lines" in s["guidance"] and "both sides" in s["guidance"]
+        assert s["lasers"] == list(FOUR) and "four laser lines" in s["guidance"] and "both sides" not in s["guidance"]
         live = recv_until(ws, lambda m, p, raw: m.get("type") == "calib" and m.get("lines") and m.get("board_found"),
                           timeout=30)[-1][0]
         lines = live["lines"]

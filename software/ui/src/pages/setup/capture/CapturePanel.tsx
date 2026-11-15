@@ -242,8 +242,8 @@ export function LaserStat() {
       ) : null}
       {meet.map(([fam, mm]) => (
         <p key={fam} className="mt-1 text-[11px] text-muted">
-          The two {fam} lines meet about <span className="font-mono tnum">{Math.round(mm)}</span> mm away. Capture views both nearer and
-          farther than that.
+          The two {fam} lines run into each other about <span className="font-mono tnum">{Math.round(mm)}</span> mm away. If one goes
+          missing there, hold the board a little nearer or farther.
         </p>
       ))}
     </Block>

@@ -41,11 +41,13 @@ in use already has the family's planes, each point is named after the nearest pl
 (:func:`ohs.calib.laser_planes.family_labels`, within 5 mm), else the lines are only counted
 (``lines_found``; which line is which is only known after the fit). The two sheets of such a
 family can meet at some distance. Where that distance lies inside the range of the laser views
-(:func:`meets_in_range`; the 4-laser build's vertical pair, at about 254 mm), the fit needs board
-poses on both sides of it: the distance comes from the calibrated planes, or is estimated from the
-captured views (the gap between the two lines on the board shrinks to zero there,
-:func:`meet_distance`), and :func:`next_hint` asks for views nearer and farther than it. Sheets
-that meet outside that range (the build's horizontal pair, at about 640 mm) need nothing.
+(:func:`meets_in_range`; the 4-laser build's vertical pair, at about 254 mm), the two lines run
+into each other on a board held there and are not measured where they do. The session reports
+the distance (``meet_mm``) so the app can say so: it comes from the calibrated planes, or is
+estimated from the captured views (the gap between the two lines on the board shrinks to zero
+there, :func:`meet_distance`). The fit does not need views on both sides of that distance
+(measured: VALIDATION.md, "Calibration of four planes"), so :func:`next_hint` does not ask for
+them; its accuracy follows the spread of distances, which the hints ask for anyway.
 """
 from __future__ import annotations
 
@@ -85,8 +87,6 @@ REGION_NAMES = {(1, 1): "the middle", (0, 0): "the top-left corner", (2, 0): "th
 STANDARD_LINES = ("vertical", "horizontal")  # the config's default [lasers] lines
 LINE_GROUP_PX = 3.0  # several lines per family: segments within this of one image line are one line (1280 px wide)
 LINE_PLANE_TOL_MM = 5.0  # several lines per family: a margin point is named after a calibrated plane this close
-MEET_SIDE_MM = 25.0  # a view counts as nearer / farther than where a family's lines meet beyond this
-MEET_SIDE_VIEWS = 2  # views wanted on each side of that distance
 MEET_MIN_GAP_MM = 3.0  # lines closer than this on the board are not measured (they may be one merged line)
 _ORDINALS = {2: "second", 3: "third", 4: "fourth", 5: "fifth", 6: "sixth"}
 _MARGIN_WHERE = {"vertical": "above or below the pattern", "horizontal": "left or right of the pattern"}
@@ -454,7 +454,7 @@ def planes_meet_mm(planes: Any, names: Sequence[str]) -> dict[str, float]:
 
 def meets_in_range(meet_mm: Any) -> dict[str, float]:
     """The entries of ``{family: mm}`` that lie inside the range of the laser views
-    (:data:`DISTANCE_RANGE`): only there can the board be held on both sides of the point."""
+    (:data:`DISTANCE_RANGE`): only there can the board be held where the lines meet."""
     lo, hi = DISTANCE_RANGE["lasers"]
     return {f: float(z) for f, z in (meet_mm or {}).items() if lo < float(z) < hi}
 
@@ -720,32 +720,6 @@ def _line_hint(d: Detection) -> dict | None:
     return None
 
 
-def _meet_hint(d: Detection, views: Sequence[Any]) -> dict | None:
-    """A family with two lasers: views nearer and farther than where its two lines meet."""
-    lo, hi = DISTANCE_RANGE["lasers"]
-    for fam, members in families(tuple(d.names or STANDARD_LINES)).items():
-        if len(members) != 2:
-            continue
-        z0 = (d.meet_mm or {}).get(fam)
-        if z0 is None:
-            z0 = meet_distance(views, fam)
-        if z0 is None or fam not in meets_in_range({fam: z0}):
-            continue
-        dist = [float(v.distance_mm) for v in views if getattr(v, "distance_mm", None) is not None]
-        nearer = sum(z < z0 - MEET_SIDE_MM for z in dist)
-        farther = sum(z > z0 + MEET_SIDE_MM for z in dist)
-        if nearer >= MEET_SIDE_VIEWS and farther >= MEET_SIDE_VIEWS:
-            continue
-        want = (lo + z0) / 2 if nearer < farther or (nearer == farther and nearer < MEET_SIDE_VIEWS and
-                                                       d.distance_mm is not None and d.distance_mm < z0) else (z0 + hi) / 2
-        cur = d.distance_mm
-        way = None if cur is None else ("closer" if cur > want else "farther")
-        verb = {"closer": "move the board closer", "farther": "move the board farther away", None: "hold the board"}[way]
-        return _hint(f"The two {fam} laser lines meet about {z0:.0f} mm from the scanner, and the calibration needs "
-                     f"views on both sides of that point: {verb}, to about {want:.0f} mm", distance=way)
-    return None
-
-
 def next_hint(kind: str, d: Detection | None, views: Sequence[Any], image_size: tuple[int, int],
               target_views: tuple[int, int]) -> dict | None:
     """What to do next (CalibHint), or None for the IMU."""
@@ -754,10 +728,6 @@ def next_hint(kind: str, d: Detection | None, views: Sequence[Any], image_size: 
     div = diversity(kind, views)
     if kind in ("lasers", "check") and d is not None and d.T_cb is not None:
         h = _line_hint(d)
-        if h is not None:
-            return h
-    if kind == "lasers" and d is not None:
-        h = _meet_hint(d, views)
         if h is not None:
             return h
     if kind == "stereo":
