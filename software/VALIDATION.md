@@ -1562,6 +1562,23 @@ The sphere-on-plane scan through `process_recording` (realistic camera model, ma
   | Whole frame with two lasers, same session | 63.4 ms | 133.6 ms |
 
   At 1280x800 the frame is 17 to 19 ms shorter (about 10 %). At 640x400 the gain is about 3 ms and within the spread of these 24-frame runs (one new run read 93.4 ms). Four lasers still cost about 33 ms a frame over two at 1280x800 and about 20 ms at 640x400. What is left in the extraction: linking the candidates of each row into lines is a loop in Python (8.5 of the 25 ms per image at 1280x800, 3.4 of 9.6 ms at 640x400); two ways to do part of it in bulk were measured and would save 3 to 4 % of the frame, which was not worth their code. Assigning each point to its plane (`laser_points`) takes 6.4 ms a frame alone against 1.1 ms with two lasers; the frame does not wait for it (0.3 ms).
+- **The same on a PC with a separate graphics card (2026-11-15):** the laptop with the RTX 3070 Ti Laptop GPU, `tools/frame_timing.py` at d4af63a, one run, on the charger in Windows' "Best performance" mode, with the laptop's usual background programs running. The script simulates its own short scans, so the figures are not those of the table above:
+
+  | | 640x400 | 1280x800 |
+  |---|---|---|
+  | Extraction of one image, alone: two lasers | 3.1 ms | 9.5 ms |
+  | Four lasers, old | 10.1 ms | 28.6 ms |
+  | Four lasers, new | 7.6 ms | 18.7 ms |
+  | Whole frame, median: two lasers | 23.3 / 22.8 ms | 43.5 / 41.8 ms |
+  | Four lasers, old | 34.6 / 34.8 ms | 80.0 / 84.8 ms |
+  | Four lasers, new | 33.4 / 32.2 ms | 61.2 / 65.0 ms |
+  | Of it, waiting for the lines: old | 4.9 / 9.8 ms | 26.9 / 27.8 ms |
+  | The same, new | 4.5 / 4.5 ms | 11.5 / 12.8 ms |
+  | One extraction (four lasers) in a thread: alone / beside the matcher | 7.6 / 7.6 ms | 19.2 / 18.8 ms |
+  | Two extractions beside the matcher, each | 14.8 ms | 31.9 ms |
+  | One extraction in a second process: alone / while the matcher runs | 7.7 / 7.9 ms | 19.4 / 20.1 ms |
+
+  There the frame is 19 to 20 ms shorter at 1280x800 (about a quarter) and 1 to 2 ms at 640x400. Four lasers still cost about 20 ms a frame over two at 1280x800 and about 10 ms at 640x400. Work on the processor is not slowed by the matcher there (on the Radeon PC it is, 4 to 7 times: `docs/MAINTENANCE_PLAN.md`, F8). What makes the frame wait on the laptop is that the two extractions hold each other up: each takes 32 ms when both run, against 19 ms alone, and the depth is done after 23 ms. The likely reason is the linking loop, which is Python code and so runs in one thread at a time; that is not measured apart. The script's "matcher alone" read 26.9 ms (640x400, four lasers) and 29.6 ms (1280x800, two lasers) where the matcher beside an extraction took 10.5 and 21.5 ms: most likely the graphics card clocking up after a pause. The script now runs the matcher a few times before each case; that is not rerun on the laptop.
 
 ### Calibration of four planes
 

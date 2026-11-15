@@ -160,6 +160,9 @@ def beside_matcher(rec: Path) -> dict[str, dict[str, float]]:
             for mode in ("extraction alone", "matcher alone", "one extraction beside the matcher",
                          "two extractions beside the matcher"):
                 ex, dp = [], []
+                if mode != "extraction alone":  # a GPU that has paused clocks up over its first runs
+                    for left, right in pairs[:3]:
+                        depth(left, right)
                 for left, right in pairs:
                     futs = []
                     if mode != "matcher alone":

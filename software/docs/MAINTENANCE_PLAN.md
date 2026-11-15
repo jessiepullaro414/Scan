@@ -1002,7 +1002,11 @@ bench medians before and after in the commit message.
   gain. Linking whole stretches of rows at once: about half the rows qualify on the test scans
   (53 %), worth 3 to 4 % of the frame for some 60 lines of delicate code. The loop is what is
   left (a third of the extraction); compiled code would remove it and needs a new dependency.
-- **Not measured:** the CPU path's frame time; the RTX laptop; real images.
+- **On the RTX laptop** (2026-11-15, `tools/frame_timing.py`, one run): one image alone 28.6 to
+  18.7 ms at 1280x800 and 10.1 to 7.6 ms at 640x400; the whole frame 80-85 to 61-65 ms at
+  1280x800 and 34.6-34.8 to 32.2-33.4 ms at 640x400 (two lasers: 42-44 and 23 ms). Table in
+  `VALIDATION.md` next to the Radeon's.
+- **Not measured:** the CPU path's frame time; real images.
 
 ---
 
@@ -1452,12 +1456,32 @@ Every task here: the type check, `npm test`, and for bundle tasks the chunk size
 - **What follows for now:** on this PC a millisecond of processor work saved in the extraction
   is worth about 1.7 ms of the frame, and work moved beside the GPU is not free. Speed figures
   from this PC say little about a PC with a separate graphics card.
-- **To do:** repeat these timings on the RTX laptop (`python tools/frame_timing.py`, added for
-  this: an extraction in a thread and in a second process, alone and beside the matcher, and
-  the frame with two and four lasers); on this PC try the
-  Windows power mode "Best performance" and note the GPU driver version with each run. Only
-  then decide whether the frame should stop waiting for the lines before tracking starts (the
-  lines are needed only for the laser points, which are already computed beside the tracker).
+- **On the RTX laptop it does not happen** (2026-11-15, `python tools/frame_timing.py`, added for
+  this; one run, on the charger, "Best performance"): one extraction takes the same alone and
+  beside the matcher (9.8 / 9.8 ms with two lasers and 19.2 / 18.8 ms with four at 1280x800), and
+  the same in a second process (9.3 / 10.0 and 19.4 / 20.1 ms). So the slow-down belongs to this
+  PC, where processor and GPU are one chip.
+- **What makes the frame wait on the laptop** is something else: the two extraction threads
+  hold each other up. With four lasers at 1280x800 each takes 31.9 ms when both run, against
+  19.2 ms alone; the depth is done after 23 ms, and the frame waits 11.5-12.8 ms (4.5 ms at
+  640x400; nothing with two lasers). Likely the linking loop (`_link_tracks`), which is Python
+  code and holds Python's lock; not measured apart.
+- **To do:** on this PC try the Windows power mode "Best performance" and note the GPU driver
+  version with each run. For the wait with four lasers, two ways that keep the results as
+  they are: let the frame stop waiting for the lines before tracking starts (they are needed
+  only for the laser points, which are already computed beside the tracker), or compile the
+  linking loop (a new dependency: ask first). Measure either on both machines.
+
+### [ ] F9. Preview on the RTX laptop's bench reads slower than in tuning round 2
+- **Seen 2026-11-15**, one run of `ohs bench --device gpu` at d4af63a with the laptop's usual
+  background programs running: preview 29.5 ms mean / 27.2 median a frame (33.9 frames a second)
+  against 25.5 ms mean (39.2 a second) in round 2 on 2b1eae0. Full quality is faster: 43.0 ms
+  mean / 36.9 median against 49.1 ms. The accuracy figures are the same.
+- **Not looked into.** Between the two lie 105 commits (the tracking model's 4 mm band, the
+  tracker's work on the processor side, the reading ahead). One run is not enough to call it a
+  step back.
+- **To do:** run the bench three times at each of the two commits on the laptop, idle, and
+  compare the stage lines of preview (depth 15.0 / 14.7 ms and track 13.1 / 11.3 ms in this run).
 
 ## Reviewed and fine: leave alone
 
