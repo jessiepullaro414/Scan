@@ -14,7 +14,9 @@ outliers). Grades:
   swapped: grade failed, with the advice to turn on "swap left/right".
 * **lasers**: excellent = both planes from the white margin, median residual < 0.05 mm, >= 6
   views each; good = both, < 0.15 mm, margin only; usable = both, < 0.3 mm (or a plane that needed
-  the printed pattern too); poor = one plane only, or worse residuals; failed = none.
+  the printed pattern too); poor = one plane only, or worse residuals; failed = none. "Both" means
+  every configured laser (``[lasers] lines``, the report's ``names``): with four lasers, a missing
+  plane makes the result poor. ``planes`` lists every configured laser with its fit.
 * **imu**: excellent = the engine's verdict good, residual < 0.1 deg and the board seen in >= 90 %
   of the frames; good = verdict good; usable = residual < 0.5 deg and < 20 % outliers; else poor.
 * **check**: good (excellent with wide margins) when the engine says the calibration holds,
@@ -46,6 +48,7 @@ REPORT_URL = "/api/calibration/report.json"
 KIND_NAMES = {"stereo": "Stereo calibration", "lasers": "Laser calibration", "imu": "IMU calibration",
               "check": "Calibration check"}
 _SAVEABLE = ("excellent", "good", "usable", "poor")
+STANDARD_LINES = ("vertical", "horizontal")  # the config's default [lasers] lines
 
 
 def _num(x: Any) -> float | None:
@@ -240,19 +243,62 @@ def _stereo(value: Any, report: dict, view_ids: Sequence[int], truth: tuple | No
 
 
 # --------------------------------------------------------------------------- lasers
-def _lasers(planes: dict, report: dict, view_ids: Sequence[int], truth: tuple | None) -> dict:
+def _label(name: str) -> str:
+    """A laser's name in plain words ("vertical", "second vertical"); any other name as it is."""
+    from ohs.server.calib_guide import line_label
+
+    try:
+        return line_label(name)
+    except KeyError:
+        return str(name)
+
+
+def _laser_names(report: dict, lines: Sequence[str] | None) -> tuple[str, ...]:
+    return tuple(report.get("names") or lines or STANDARD_LINES)
+
+
+def _margin_where(name: str) -> str:
+    """Where a laser's line crosses the margin: a vertical line above or below the pattern."""
+    from ohs.vision.laser import is_line_name, line_family
+
+    return "above or below" if is_line_name(name) and line_family(name) == "vertical" else "left or right of"
+
+
+def _planes_list(names: Sequence[str], planes: dict, report: dict) -> list[dict]:
+    """``CalibResult.planes``: one row per configured laser."""
     lasers = report.get("lasers") or {}
     res = report.get("residuals") or {}
     region = report.get("region_used") or {}
-    names = ("vertical", "horizontal")
+    out = []
+    for n in names:
+        e = lasers.get(n) or {}
+        ok = n in (planes or {})
+        med = _num((res.get(n) or {}).get("median_abs_mm")) if ok else None
+        p95 = _num((res.get(n) or {}).get("p95_abs_mm")) if ok else None
+        out.append({"name": n, "label": _label(n).capitalize(), "calibrated": ok,
+                    "median_mm": None if med is None else round(med, 4), "p95_mm": None if p95 is None else round(p95, 4),
+                    "views": int(e.get("n_observations", 0)) if ok else None,
+                    "points": int(e.get("n_inliers", e.get("n_points", 0))) if ok else None,
+                    "where": region.get(n) if ok else None,
+                    "reason": None if ok else plain_error(e.get("reason") or f"the {_label(n)} line was not found often enough")})
+    return out
+
+
+def _lasers(planes: dict, report: dict, view_ids: Sequence[int], truth: tuple | None,
+            lines: Sequence[str] | None = None) -> dict:
+    lasers = report.get("lasers") or {}
+    res = report.get("residuals") or {}
+    region = report.get("region_used") or {}
+    names = _laser_names(report, lines)
+    two = len(names) == 2
     fitted = [n for n in names if n in (planes or {})]
     metrics = []
     for n in names:
         e = lasers.get(n) or {}
-        title = n.capitalize()
+        title = _label(n).capitalize()
         if n not in fitted:
             metrics.append(metric(f"{title} laser", "not calibrated", False,
-                                  plain_error(e.get("reason") or f"the {n} line was not found often enough")))
+                                  plain_error(e.get("reason") or f"the {_label(n)} line was not found often enough")))
             continue
         med = _num((res.get(n) or {}).get("median_abs_mm"))
         p95 = _num((res.get(n) or {}).get("p95_abs_mm"))
@@ -279,14 +325,16 @@ def _lasers(planes: dict, report: dict, view_ids: Sequence[int], truth: tuple | 
     adv: list[dict] = []
     if not fitted:
         reasons = "; ".join(plain_error((lasers.get(n) or {}).get("reason") or n) for n in names)
-        r = failed_result("lasers", f"Neither laser line could be calibrated: {reasons}")
+        what = "Neither laser line" if two else "No laser line"
+        r = failed_result("lasers", f"{what} could be calibrated: {reasons}")
         r["metrics"], r["per_view"] = metrics, per_view
+        r["planes"] = _planes_list(names, planes, report)
         return r
     meds = [_num((res.get(n) or {}).get("median_abs_mm")) for n in fitted]
     worst = max((m for m in meds if m is not None), default=float("inf"))
     fallback = [n for n in fitted if region.get(n) != "margin"]
     n_obs = min(int((lasers.get(n) or {}).get("n_observations", 0)) for n in fitted)
-    both = len(fitted) == 2
+    both = len(fitted) == len(names)  # every configured laser
     if both and not fallback and worst < 0.05 and n_obs >= 6:
         grade = "excellent"
     elif both and not fallback and worst < 0.15:
@@ -295,12 +343,17 @@ def _lasers(planes: dict, report: dict, view_ids: Sequence[int], truth: tuple | 
         grade = "usable"
     else:
         grade = "poor"
-    for n in names:
-        if n not in fitted:
-            adv.append(advice(f"Add views where the {n} line crosses the white margin "
-                              f"{'above or below' if n == 'vertical' else 'left or right of'} the pattern.", "add_views"))
+    missing = [n for n in names if n not in fitted]
+    for n in missing:
+        adv.append(advice(f"Add views where the {_label(n)} line crosses the white margin {_margin_where(n)} the pattern.",
+                          "add_views"))
+    pairs = sorted({_family_of(n) for n in missing if sum(_family_of(m) == _family_of(n) for m in names) > 1} - {None})
+    for fam in pairs:
+        adv.append(advice(f"Hold the board both nearer and farther than where the two {fam} lines meet: the "
+                          "calibration tells them apart from views on both sides.", "add_views"))
     for n in fallback:
-        adv.append(advice(f"Hold the board so the {n} line crosses the white margin, not just the pattern.", "add_views"))
+        adv.append(advice(f"Hold the board so the {_label(n)} line crosses the white margin, not just the pattern.",
+                          "add_views"))
     if n_obs < 6:
         adv.append(advice("Add views at more distances (150–450 mm) and tilts.", "add_views"))
     bad = sum(v["bad"] for v in per_view)
@@ -309,23 +362,37 @@ def _lasers(planes: dict, report: dict, view_ids: Sequence[int], truth: tuple | 
                           "remove_bad_views"))
     if worst >= 0.3 and worst != float("inf"):
         adv.append(advice("If the fit stays poor, redo the stereo calibration first.", "recalibrate_stereo"))
-    fit = ", ".join(f"{n} {m:.2f} mm" for n, m in zip(fitted, meds) if m is not None)
+    fit = ", ".join(f"{_label(n)} {m:.2f} mm" for n, m in zip(fitted, meds) if m is not None)
+    every = "Both" if two else f"All {len(names)}"
     if grade in ("excellent", "good"):
         headline = f"{grade.capitalize()} laser calibration"
-        verdict = f"Both laser planes are calibrated: the laser points fit them within {fit} (median)."
+        verdict = f"{every} laser planes are calibrated: the laser points fit them within {fit} (median)."
     elif grade == "usable":
         headline = "Usable laser calibration"
-        verdict = (f"Both planes are calibrated ({fit} median), "
-                   + (f"but the {' and '.join(fallback)} line needed the printed pattern too, which is less accurate."
-                      if fallback else "but the fit is looser than it should be."))
+        verdict = (f"{'Both' if two else every} planes are calibrated ({fit} median), "
+                   + (f"but the {' and '.join(_label(n) for n in fallback)} line needed the printed pattern too, "
+                      "which is less accurate." if fallback else "but the fit is looser than it should be."))
     else:
         headline = "Poor laser calibration"
         if not both:
-            missing = next(n for n in names if n not in fitted)
-            verdict = f"Only the {fitted[0]} laser could be calibrated; the {missing} line was not found often enough."
+            if two:
+                verdict = (f"Only the {_label(fitted[0])} laser could be calibrated; the {_label(missing[0])} line was "
+                           "not found often enough.")
+            else:
+                lost = " and the ".join(_label(n) for n in missing)
+                verdict = (f"Only {len(fitted)} of the {len(names)} laser lines could be calibrated; the {lost} "
+                           f"line{'s were' if len(missing) > 1 else ' was'} not found often enough.")
         else:
             verdict = f"The laser points scatter around the planes ({fit} median): the laser points would be inaccurate."
-    return _result("lasers", grade, headline, verdict, metrics, adv, per_view, truth)
+    r = _result("lasers", grade, headline, verdict, metrics, adv, per_view, truth)
+    r["planes"] = _planes_list(names, planes, report)
+    return r
+
+
+def _family_of(name: str) -> str | None:
+    from ohs.vision.laser import is_line_name, line_family
+
+    return line_family(name) if is_line_name(name) else None
 
 
 # --------------------------------------------------------------------------- imu
@@ -418,11 +485,11 @@ def _check(report: dict, truth: tuple | None, sim: bool = False) -> dict:
             med = _num(e.get("median_abs_mm"))
             if med is not None:
                 meds.append(med)
-            metrics.append(metric(f"{n.capitalize()} laser", "not seen" if med is None else
+            metrics.append(metric(f"{_label(n).capitalize()} laser", "not seen" if med is None else
                                   f"{med:.2f} mm from its plane (want < 0.5 mm)", None if med is None else bool(e.get("ok")),
                                   "How far the laser points on the board lie from the calibrated plane."))
             if e.get("ok") is False:
-                adv.append(advice(f"Recalibrate the lasers (step 5): the {n} plane no longer matches.", None))
+                adv.append(advice(f"Recalibrate the lasers (step 5): the {_label(n)} plane no longer matches.", None))
     else:
         metrics.append(metric("Lasers", "not checked", None, plain_error(la.get("verdict") or "no laser planes")))
     if imu.get("ok") is None:
@@ -547,12 +614,13 @@ def sim_truth(kind: str, value: Any, target: Any, truth: Any) -> tuple[list, dic
             e = _plane_errors(planes, truth.lasers, target.stereo.R1, truth.stereo.R1, truth.stereo.K_rect, size)
             nums["lasers"] = e
             for n, x in e.items():
+                title = _label(n).capitalize()
                 rows += [
-                    metric(f"{n.capitalize()} plane angle vs truth", f"{x['angle_deg']:.3f}°", x["angle_deg"] < 0.2,
+                    metric(f"{title} plane angle vs truth", f"{x['angle_deg']:.3f}°", x["angle_deg"] < 0.2,
                            "Angle between the estimated and the true laser plane (raw camera frame)."),
-                    metric(f"{n.capitalize()} plane offset vs truth", f"{x['d_err_mm']:+.3f} mm", abs(x["d_err_mm"]) < 0.3,
+                    metric(f"{title} plane offset vs truth", f"{x['d_err_mm']:+.3f} mm", abs(x["d_err_mm"]) < 0.3,
                            "Estimated minus true distance of the plane from the camera."),
-                    metric(f"{n.capitalize()} laser points vs truth",
+                    metric(f"{title} laser points vs truth",
                            f"{x['point_err_median_mm']:.3f} mm median, {x['point_err_max_mm']:.2f} mm max",
                            x["point_err_median_mm"] < 0.25, "Laser points over 150–450 mm with the estimated plane."),
                 ]
@@ -576,17 +644,18 @@ def sim_truth(kind: str, value: Any, target: Any, truth: Any) -> tuple[list, dic
 
 # --------------------------------------------------------------------------- entry points
 def build_result(kind: str, value: Any, report: dict, *, view_ids: Sequence[int] = (), target: Any = None,
-                 truth: Any = None, sim: bool | None = None) -> dict:
+                 truth: Any = None, sim: bool | None = None, lines: Sequence[str] | None = None) -> dict:
     """``CalibResult`` of a successful flow (``value``, ``report`` from ``capture.run_flow``).
 
     ``sim`` (default: a ``truth`` was given) marks a simulator session: its check ignores the
-    engine's IMU part, which assumes a still board.
+    engine's IMU part, which assumes a still board. ``lines``: the configured lasers, for a laser
+    report without ``names`` (default the two standard lasers).
     """
     tr = sim_truth(kind, value, target, truth)
     if kind == "stereo":
         return _stereo(value, report, view_ids, tr)
     if kind == "lasers":
-        return _lasers(value or {}, report, view_ids, tr)
+        return _lasers(value or {}, report, view_ids, tr, lines)
     if kind == "imu":
         return _imu(value, report, tr)
     if kind == "check":
@@ -600,9 +669,15 @@ def part_summary(kind: str, report: dict, value: Any) -> str:
         return f"{float(report.get('rms', float('nan'))):.2f} px from {int(report.get('views_used', 0))} views"
     if kind == "lasers":
         res = report.get("residuals") or {}
-        parts = [f"{n} {float(res[n]['median_abs_mm']):.2f} mm" for n in ("vertical", "horizontal")
+        names = _laser_names(report, None)
+        parts = [f"{_label(n)} {float(res[n]['median_abs_mm']):.2f} mm" for n in names
                  if n in (value or {}) and n in res and res[n].get("median_abs_mm") is not None]
-        return ("Both laser lines" if len(parts) == 2 else "One laser line") + (f" ({', '.join(parts)})" if parts else "")
+        if len(names) == 2:
+            head = "Both laser lines" if len(parts) == 2 else "One laser line"
+        else:
+            done = sum(n in (value or {}) for n in names)
+            head = f"All {len(names)} laser lines" if done == len(names) else f"{done} of {len(names)} laser lines"
+        return head + (f" ({', '.join(parts)})" if parts else "")
     if kind == "imu":
         rms, off = _num(report.get("residual_rms_deg")), _num(report.get("time_offset_s"))
         return (f"{rms:.2f}° fit" if rms is not None else "IMU calibrated") + (

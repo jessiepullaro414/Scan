@@ -31,6 +31,19 @@ side, ``up`` = tipped back, its top edge farther away), and near / mid / far per
 :func:`next_hint` says what to do next: stereo fills the 3 x 3 image regions (emptiest first),
 then the missing tilt directions, then the distances; lasers first fixes a line that misses the
 margin, then distances, then tilts; check only asks for distances (and the lines).
+
+**Any set of line lasers** (config ``[lasers] lines``, ``names`` of :class:`BoardDetector`): the
+extraction looks for as many lines per family as the set has. A family with one laser is counted
+as above (with the two standard lasers everything is exactly as described). A family with several
+lasers (the 4-laser build: ``vertical`` + ``vertical_2``, ``horizontal`` + ``horizontal_2``): its
+margin points are split into lines by straight-line grouping in the image; when the calibration
+in use already has the family's planes, each point is named after the nearest plane
+(:func:`ohs.calib.laser_planes.family_labels`, within 5 mm), else the lines are only counted
+(``lines_found``; which line is which is only known after the fit). The two sheets of such a
+family meet at some distance, and the fit needs board poses on both sides of it: the distance
+comes from the calibrated planes, or is estimated from the captured views (the gap between the two
+lines on the board shrinks to zero there, :func:`meet_distance`), and :func:`next_hint` asks for
+views nearer and farther than it.
 """
 from __future__ import annotations
 
@@ -42,8 +55,9 @@ from typing import Any, Sequence
 import numpy as np
 
 __all__ = ["Detection", "BoardDetector", "SteadyTracker", "novelty", "usable_reason", "coverage", "diversity",
-           "next_hint", "region_of", "finish_label", "MIN_COMMON", "LINE_MIN_POINTS", "STEADY_PX", "STEADY_S",
-           "COOLDOWN_S", "DISTANCE_RANGE", "DISTANCE_BINS", "TILT_NAMES", "GRID"]
+           "next_hint", "region_of", "finish_label", "line_label", "families", "line_problems", "meet_distance",
+           "planes_meet_mm", "MIN_COMMON", "LINE_MIN_POINTS", "STEADY_PX", "STEADY_S", "COOLDOWN_S", "DISTANCE_RANGE",
+           "DISTANCE_BINS", "TILT_NAMES", "GRID", "STANDARD_LINES"]
 
 log = logging.getLogger(__name__)
 
@@ -66,11 +80,44 @@ REGION_ORDER = ((1, 1), (0, 0), (2, 0), (0, 2), (2, 2), (1, 0), (1, 2), (0, 1), 
 REGION_NAMES = {(1, 1): "the middle", (0, 0): "the top-left corner", (2, 0): "the top-right corner",
                 (0, 2): "the bottom-left corner", (2, 2): "the bottom-right corner", (1, 0): "the top edge",
                 (1, 2): "the bottom edge", (0, 1): "the left edge", (2, 1): "the right edge"}
+STANDARD_LINES = ("vertical", "horizontal")  # the config's default [lasers] lines
+LINE_GROUP_PX = 3.0  # several lines per family: segments within this of one image line are one line (1280 px wide)
+LINE_PLANE_TOL_MM = 5.0  # several lines per family: a margin point is named after a calibrated plane this close
+MEET_SIDE_MM = 25.0  # a view counts as nearer / farther than where a family's lines meet beyond this
+MEET_SIDE_VIEWS = 2  # views wanted on each side of that distance
+MEET_MIN_GAP_MM = 3.0  # lines closer than this on the board are not measured (they may be one merged line)
+_ORDINALS = {2: "second", 3: "third", 4: "fourth", 5: "fifth", 6: "sixth"}
+_MARGIN_WHERE = {"vertical": "above or below the pattern", "horizontal": "left or right of the pattern"}
 
 
 def finish_label(kind: str) -> str:
     """The UI's label of the button that ends the capture: "Finish & check" for the check, else "Finish & calibrate"."""
     return "Finish & check" if kind == "check" else "Finish & calibrate"
+
+
+def _family(name: str) -> str:
+    from ohs.vision.laser import line_family
+
+    return line_family(name)
+
+
+def families(names: Sequence[str]) -> dict[str, list[str]]:
+    """Laser names grouped by family (``"vertical"`` / ``"horizontal"``), in the given order."""
+    out: dict[str, list[str]] = {}
+    for n in names:
+        out.setdefault(_family(n), []).append(n)
+    return out
+
+
+def line_label(name: str) -> str:
+    """A laser's name in plain words: ``"vertical"``, ``"second vertical"`` (``vertical_2``), ``"vertical (left)"``."""
+    fam = _family(name)
+    if name == fam:
+        return fam
+    suffix = name[len(fam) + 1:]
+    if suffix.isdigit() and int(suffix) in _ORDINALS:
+        return f"{_ORDINALS[int(suffix)]} {fam}"
+    return f"{fam} ({suffix.replace('_', ' ')})"
 
 
 # --------------------------------------------------------------------------- detection
@@ -95,8 +142,14 @@ class Detection:
     center_uv: np.ndarray | None = None  # board centre in the left image
     outline: np.ndarray | None = None  # (4, 2) board rectangle in the left image
     page: np.ndarray | None = None  # (4, 2) paper outline (lasers / check)
-    lines: dict | None = None  # {"vertical": (N, 2), "horizontal": (M, 2)} in the left image
-    margin: dict | None = None  # {"vertical": n, "horizontal": n} points on the blank margin
+    lines: dict | None = None  # {"vertical": (N, 2), "horizontal": (M, 2)} in the left image (every line of a family)
+    margin: dict | None = None  # {"vertical": n, "horizontal": n} points on the blank margin, per family
+    names: tuple = STANDARD_LINES  # the configured lasers
+    line_points: dict | None = None  # {laser: n or None} margin points per laser; None: not named yet
+    lines_found: dict | None = None  # {family: [n, ...]} margin points per line found, largest first
+    line_uv: dict | None = None  # {laser: (N, 2)} image points per named laser of a family with several
+    line_sep: dict | None = None  # {family: mm} gap between a family's two lines on the board (its middle)
+    meet_mm: dict | None = None  # {family: mm} where a family's sheets meet, from the calibrated planes
 
     @property
     def common(self) -> int:
@@ -133,28 +186,43 @@ def _project(P: np.ndarray, K: np.ndarray, D: np.ndarray | None) -> np.ndarray:
 class BoardDetector:
     """Per-kind board detection for the calibration session (one processing thread only)."""
 
-    def __init__(self, kind: str, spec: Any, calib: Any = None, paper: str = "letter") -> None:
+    def __init__(self, kind: str, spec: Any, calib: Any = None, paper: str = "letter",
+                 names: Sequence[str] | None = None) -> None:
         if kind != "stereo" and calib is None:
             raise ValueError(f"the {kind} calibration needs the stereo calibration")
         self.kind, self.spec, self.calib, self.paper = kind, spec, calib, paper
+        self.names = tuple(names) if names else STANDARD_LINES
+        self._fams = families(self.names)
         self._rect = None
         self._lp = None
         self._layout = None
+        self._sheets: dict[str, list] = {}  # family -> the calibrated planes of its lasers (several per family)
+        self._meet: dict[str, float] = {}
         self._raw: tuple[tuple[int, int], np.ndarray, np.ndarray | None] | None = None
         if kind != "stereo":
             from ohs.vision.rectify import Rectifier
 
             self._rect = Rectifier(calib.stereo, 1.0)
         if kind in ("lasers", "check"):
+            from dataclasses import replace
+
             from ohs.calib.board import charuco_page_layout
-            from ohs.vision.laser import LaserParams
+            from ohs.vision.laser import LaserParams, lines_per_family
 
             w = int(calib.stereo.image_size[0])
             self._lp = LaserParams() if w == 1280 else LaserParams().scaled(w / 1280.0)
+            n = lines_per_family(self.names)
+            if n > 1:
+                self._lp = replace(self._lp, lines_per_family=n)
             try:
                 self._layout = charuco_page_layout(spec, paper)
             except ValueError as e:  # the board does not fit the paper: count on the board margin instead
                 log.warning("no page layout for %s on %s: %s", spec.describe(), paper, e)
+            planes = getattr(calib, "lasers", None) or {}
+            for fam, members in self._fams.items():
+                if len(members) > 1 and all(m in planes for m in members):
+                    self._sheets[fam] = [(np.asarray(planes[m].normal, np.float64), float(planes[m].d)) for m in members]
+            self._meet = planes_meet_mm(planes, self.names)
 
     def _raw_model(self, w: int, h: int) -> tuple[np.ndarray, np.ndarray | None]:
         if self._raw is None or self._raw[0] != (w, h):
@@ -203,10 +271,86 @@ class BoardDetector:
             d.lines = {"vertical": np.asarray(lines.get("vertical"), np.float64).reshape(-1, 2),
                        "horizontal": np.asarray(lines.get("horizontal"), np.float64).reshape(-1, 2)}
             d.margin = {"vertical": 0, "horizontal": 0}
+            d.names = self.names
+            d.line_points = dict.fromkeys(self.names, 0)
+            d.lines_found = {fam: [] for fam in self._fams}
+            d.line_uv, d.line_sep, d.meet_mm = {}, {}, dict(self._meet)
             if d.T_cb is not None:
                 d.page = self._page_outline(d.T_cb, K)
-                d.margin = {n: self._margin_count(d.lines[n], d.T_cb, K) for n in ("vertical", "horizontal")}
+                for fam in ("vertical", "horizontal"):
+                    members = self._fams.get(fam, [])
+                    if len(members) > 1:
+                        self._count_family(d, fam, members, np.asarray(lines.segments(fam)).reshape(-1), K)
+                        continue
+                    n = self._margin_count(d.lines[fam], d.T_cb, K)
+                    d.margin[fam] = n
+                    for m in members:
+                        d.line_points[m] = n
+                        d.lines_found[fam] = [n]
+            else:
+                for members in self._fams.values():
+                    if len(members) > 1 and not self._sheets.get(_family(members[0])):
+                        for m in members:
+                            d.line_points[m] = None
         return d
+
+    def _count_family(self, d: Detection, fam: str, members: list[str], seg: np.ndarray, K: np.ndarray) -> None:
+        """A family with several lasers: its margin points split into lines (module docstring)."""
+        uv = d.lines[fam]
+        mask, X, xy = self._margin_mask(uv, d.T_cb, K)
+        d.margin[fam] = int(mask.sum())
+        seg = seg if len(seg) == len(uv) else np.zeros(len(uv), np.int64)
+        tol = LINE_GROUP_PX * float(d.image_size[0]) / 1280.0
+        # whole segments are grouped (a long baseline), then only their margin points are counted
+        groups = sorted(((g & mask) for g in _group_lines(uv, seg, fam == "vertical", tol)), key=lambda g: -int(g.sum()))
+        sizes = [int(g.sum()) for g in groups]
+        d.lines_found[fam] = [s for s in sizes[: len(members)] if s > 0]
+        if len(groups) >= 2 and min(sizes[:2]) >= LINE_MIN_POINTS:
+            gap = _board_gap(xy[groups[0]], xy[groups[1]], self.spec)
+            if gap is not None:
+                d.line_sep[fam] = gap
+        sheets = self._sheets.get(fam)
+        if not sheets:
+            for m in members:
+                d.line_points[m] = None
+            return
+        from ohs.calib.laser_planes import family_labels
+
+        ok = np.isfinite(X).all(axis=1)
+        lab = np.full(len(uv), -1, np.int64)
+        if ok.any():  # every point of the family on the board plane: the overlay shows whole lines
+            P = X[ok]
+            near = np.abs(np.stack([P @ n + dd for n, dd in sheets], axis=1)).min(axis=1) <= LINE_PLANE_TOL_MM
+            lab[ok] = np.where(near, family_labels(P, sheets), -1)
+        for j, m in enumerate(members):
+            d.line_points[m] = int(((lab == j) & mask).sum())
+            if (lab == j).any():
+                d.line_uv[m] = uv[lab == j]
+
+    def _margin_mask(self, uv: np.ndarray, T: np.ndarray, K: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """``(on the margin (N,), board-plane points in frame C (N, 3), board coordinates (N, 2))``."""
+        from ohs.geometry import pixels_to_rays, ray_plane_intersect
+
+        uv = np.asarray(uv, np.float64).reshape(-1, 2)
+        if len(uv) == 0:
+            return np.zeros(0, bool), np.zeros((0, 3)), np.zeros((0, 2))
+        R, t = T[:3, :3], T[:3, 3]
+        n = R[:, 2]
+        X = ray_plane_intersect(pixels_to_rays(uv, K), n, -float(n @ t))
+        ok = np.isfinite(X).all(axis=1)
+        xy = np.full((len(uv), 2), np.nan)
+        xy[ok] = ((X[ok] - t) @ R)[:, :2]
+        mask = np.zeros(len(uv), bool)
+        if self._layout is None:  # no layout: the 12 mm band around the board pattern
+            bw, bh = self.spec.size_mm
+            m = 12.0
+            p = xy[ok]
+            inside = (p[:, 0] > -m) & (p[:, 0] < bw + m) & (p[:, 1] > -m) & (p[:, 1] < bh + m)
+            board = (p[:, 0] > 0) & (p[:, 0] < bw) & (p[:, 1] > 0) & (p[:, 1] < bh)
+            mask[ok] = inside & ~board
+        elif ok.any():
+            mask[ok] = np.asarray(self._layout.margin_mask(xy[ok], clearance_mm=MARGIN_CLEARANCE_MM), bool)
+        return mask, X, xy
 
     def _page_outline(self, T: np.ndarray, K: np.ndarray) -> np.ndarray | None:
         from ohs.calib.board import board_outline_uv
@@ -236,7 +380,128 @@ class BoardDetector:
         return int(self._layout.margin_mask(xy, clearance_mm=MARGIN_CLEARANCE_MM).sum())
 
 
+def _group_lines(uv: np.ndarray, seg: np.ndarray, vertical: bool, tol_px: float) -> list[np.ndarray]:
+    """Point masks of the image lines of one family: segments (each on one line) whose points lie
+    within ``tol_px`` of a bigger segment's straight line join it (a laser line on the flat page is
+    straight in the rectified image). Largest first."""
+    if len(uv) == 0:
+        return []
+    t, c = (uv[:, 1], uv[:, 0]) if vertical else (uv[:, 0], uv[:, 1])
+    ids, sizes = np.unique(seg, return_counts=True)
+    groups: list[tuple[np.ndarray, np.ndarray]] = []  # (point mask, line coefficients)
+
+    def fit(m: np.ndarray, old: np.ndarray | None = None) -> np.ndarray:
+        if m.sum() >= 2 and np.ptp(t[m]) > 0:
+            return np.polyfit(t[m], c[m], 1)
+        return old if old is not None else np.array([0.0, float(c[m].mean())])
+
+    for s in ids[np.argsort(-sizes, kind="stable")]:
+        m = seg == s
+        for k, (gm, coef) in enumerate(groups):
+            if np.median(np.abs(c[m] - np.polyval(coef, t[m]))) < tol_px:
+                gm = gm | m
+                groups[k] = (gm, fit(gm, coef))
+                break
+        else:
+            groups.append((m, fit(m)))
+    return sorted((gm for gm, _ in groups), key=lambda g: -int(g.sum()))
+
+
+def _board_gap(a: np.ndarray, b: np.ndarray, spec: Any) -> float | None:
+    """Distance (mm) between two lines on the board, each given by its points in board coordinates,
+    measured through the middle of the board."""
+    a, b = a[np.isfinite(a).all(axis=1)], b[np.isfinite(b).all(axis=1)]
+    if len(a) < 2 or len(b) < 2:
+        return None
+    centre = 0.5 * np.asarray(spec.size_mm, np.float64)
+
+    def offset(p: np.ndarray, ref: np.ndarray | None) -> tuple[float, np.ndarray]:
+        m = p.mean(axis=0)
+        u = np.linalg.svd(p - m, full_matrices=False)[2][0]
+        n = np.array([-u[1], u[0]])
+        if ref is not None and n @ ref < 0:
+            n = -n
+        return float(n @ (centre - m)), n
+
+    sa, na = offset(a, None)
+    sb, _ = offset(b, na)
+    gap = abs(sa - sb)
+    return round(gap, 2) if gap >= MEET_MIN_GAP_MM else None
+
+
+def planes_meet_mm(planes: Any, names: Sequence[str]) -> dict[str, float]:
+    """``{family: mm}``: for each family with two lasers among ``names`` whose planes are in
+    ``planes``, how far ahead of the camera their sheets meet (vertical sheets in the camera's
+    horizontal mid-plane, horizontal ones in its vertical mid-plane). Only distances in front of
+    the camera, within 2 m."""
+    out: dict[str, float] = {}
+    planes = planes or {}
+    for fam, members in families(names).items():
+        if len(members) != 2 or not all(m in planes for m in members):
+            continue
+        (n1, d1), (n2, d2) = ((np.asarray(planes[m].normal, np.float64), float(planes[m].d)) for m in members)
+        k = 0 if fam == "vertical" else 1  # the other in-plane coordinate is 0
+        A = np.array([[n1[k], n1[2]], [n2[k], n2[2]]])
+        if abs(np.linalg.det(A)) < 1e-9:
+            continue
+        z = float(np.linalg.solve(A, -np.array([d1, d2]))[1])
+        if 0.0 < z < 2000.0:
+            out[fam] = round(z, 1)
+    return out
+
+
+def meet_distance(views: Sequence[Any], fam: str) -> float | None:
+    """Where the two lines of family ``fam`` meet (mm from the scanner), estimated from captured
+    views: the gap between the lines on the board (``line_sep``) grows in proportion to the
+    distance from that point, on either side. Only the gap's size is known, not its side, so two
+    views are not enough (the point could lie beyond them or between them): None with fewer than
+    three views that measured the gap, over less than 20 mm of distance, or when the estimate is
+    not between 50 mm and 1 m."""
+    pts = [(float(v.distance_mm), float(v.line_sep[fam])) for v in views
+           if getattr(v, "distance_mm", None) is not None and fam in (getattr(v, "line_sep", None) or {})]
+    if len(pts) < 3:
+        return None
+    z = np.array([p[0] for p in pts])
+    s = np.array([p[1] for p in pts])
+    if np.ptp(z) < 20.0:
+        return None
+    z0 = np.arange(50.0, 1000.0, 0.5)  # gap = a |z - z0|: the best a for each z0, then the best z0
+    w = np.abs(z[None, :] - z0[:, None])
+    ww = np.maximum((w * w).sum(axis=1), 1e-12)
+    a = (w @ s) / ww
+    err = ((s[None, :] - a[:, None] * w) ** 2).sum(axis=1)
+    err[a <= 0] = np.inf
+    k = int(np.argmin(err))
+    if not np.isfinite(err[k]) or k == 0 or k == len(z0) - 1:
+        return None
+    return round(float(z0[k]), 1)
+
+
 # --------------------------------------------------------------------------- rules
+def line_problems(d: Detection) -> list[str]:
+    """What is missing on the margin of one laser view (plain words), empty when every line crosses it.
+
+    A laser that can be named needs :data:`LINE_MIN_POINTS` margin points; a family whose lasers
+    cannot be named yet needs as many lines found as it has lasers, each with that many points.
+    """
+    names = tuple(d.names or STANDARD_LINES)
+    pts = d.line_points or {}
+    out: list[str] = []
+    for fam, members in families(names).items():
+        if len(members) == 1 or all(pts.get(m) is not None for m in members):
+            for m in members:
+                n = int(pts[m]) if pts.get(m) is not None else int((d.margin or {}).get(fam, 0))
+                if n < LINE_MIN_POINTS:
+                    out.append(f"the {line_label(m)} laser line misses the white page margin "
+                               f"({n} point{'s' if n != 1 else ''}, need {LINE_MIN_POINTS})")
+        else:
+            found = sum(c >= LINE_MIN_POINTS for c in (d.lines_found or {}).get(fam, []))
+            if found < len(members):
+                out.append(f"only {found} of the {len(members)} {fam} laser lines "
+                           f"cross{'es' if found == 1 else ''} the white page margin (need {LINE_MIN_POINTS} points on each)")
+    return out
+
+
 def usable_reason(d: Detection | None) -> str | None:
     """None when a view would be accepted, else why not (plain words, for "Not captured: ...")."""
     if d is None:
@@ -249,12 +514,9 @@ def usable_reason(d: Detection | None) -> str | None:
     if d.T_cb is None:
         return "the board was not found (show the whole board, avoid glare)"
     if d.kind in ("lasers", "check"):
-        m = d.margin or {}
-        for name in ("vertical", "horizontal"):
-            n = int(m.get(name, 0))
-            if n < LINE_MIN_POINTS:
-                return (f"the {name} laser line misses the white page margin ({n} point{'s' if n != 1 else ''}, "
-                        f"need {LINE_MIN_POINTS})")
+        problems = line_problems(d)
+        if problems:
+            return problems[0]
     return None
 
 
@@ -430,6 +692,51 @@ def _tilt_hint(div: dict, deg: str = "20–45°") -> dict | None:
     return None
 
 
+def _line_hint(d: Detection) -> dict | None:
+    """The first laser line that misses the margin: what to do about it."""
+    names = tuple(d.names or STANDARD_LINES)
+    pts = d.line_points or {}
+    for fam, members in families(names).items():
+        where = _MARGIN_WHERE[fam]
+        if len(members) == 1 or all(pts.get(m) is not None for m in members):
+            for m in members:
+                n = int(pts[m]) if pts.get(m) is not None else int((d.margin or {}).get(fam, 0))
+                if n < LINE_MIN_POINTS:
+                    return _hint(f"Move or turn the board so the {line_label(m)} laser line crosses the white margin {where}")
+        else:
+            found = sum(c >= LINE_MIN_POINTS for c in (d.lines_found or {}).get(fam, []))
+            if found < len(members):
+                return _hint(f"Only {found} of the {len(members)} {fam} laser lines cross{'es' if found == 1 else ''} "
+                             f"the white margin: move or turn the board so each one crosses it {where}")
+    return None
+
+
+def _meet_hint(d: Detection, views: Sequence[Any]) -> dict | None:
+    """A family with two lasers: views nearer and farther than where its two lines meet."""
+    lo, hi = DISTANCE_RANGE["lasers"]
+    for fam, members in families(tuple(d.names or STANDARD_LINES)).items():
+        if len(members) != 2:
+            continue
+        z0 = (d.meet_mm or {}).get(fam)
+        if z0 is None:
+            z0 = meet_distance(views, fam)
+        if z0 is None or not lo < z0 < hi:
+            continue
+        dist = [float(v.distance_mm) for v in views if getattr(v, "distance_mm", None) is not None]
+        nearer = sum(z < z0 - MEET_SIDE_MM for z in dist)
+        farther = sum(z > z0 + MEET_SIDE_MM for z in dist)
+        if nearer >= MEET_SIDE_VIEWS and farther >= MEET_SIDE_VIEWS:
+            continue
+        want = (lo + z0) / 2 if nearer < farther or (nearer == farther and nearer < MEET_SIDE_VIEWS and
+                                                       d.distance_mm is not None and d.distance_mm < z0) else (z0 + hi) / 2
+        cur = d.distance_mm
+        way = None if cur is None else ("closer" if cur > want else "farther")
+        verb = {"closer": "move the board closer", "farther": "move the board farther away", None: "hold the board"}[way]
+        return _hint(f"The two {fam} laser lines meet about {z0:.0f} mm from the scanner, and the calibration needs "
+                     f"views on both sides of that point: {verb}, to about {want:.0f} mm", distance=way)
+    return None
+
+
 def next_hint(kind: str, d: Detection | None, views: Sequence[Any], image_size: tuple[int, int],
               target_views: tuple[int, int]) -> dict | None:
     """What to do next (CalibHint), or None for the IMU."""
@@ -437,11 +744,13 @@ def next_hint(kind: str, d: Detection | None, views: Sequence[Any], image_size: 
         return None
     div = diversity(kind, views)
     if kind in ("lasers", "check") and d is not None and d.T_cb is not None:
-        m = d.margin or {}
-        for name in ("vertical", "horizontal"):
-            if int(m.get(name, 0)) < LINE_MIN_POINTS:
-                where = "above or below the pattern" if name == "vertical" else "left or right of the pattern"
-                return _hint(f"Move or turn the board so the {name} laser line crosses the white margin {where}")
+        h = _line_hint(d)
+        if h is not None:
+            return h
+    if kind == "lasers" and d is not None:
+        h = _meet_hint(d, views)
+        if h is not None:
+            return h
     if kind == "stereo":
         counts: dict[tuple[int, int], int] = {r: 0 for r in REGION_ORDER}
         for v in views:

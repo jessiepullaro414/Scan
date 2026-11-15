@@ -19,10 +19,11 @@ import {
   ThumbsUp,
   TriangleExclamationPoint,
   Trophy,
+  Zap,
   type LucideIcon,
 } from "lucide-react";
 import { useState } from "react";
-import type { CalibAdvice, CalibAdviceAction, CalibGrade, CalibKind, CalibMetric } from "../../api/types";
+import type { CalibAdvice, CalibAdviceAction, CalibGrade, CalibKind, CalibMetric, CalibPlaneRow } from "../../api/types";
 import { Badge } from "../../components/ui/Badge";
 import { Button } from "../../components/ui/Button";
 import { ConfirmDialog } from "../../components/ui/Dialog";
@@ -30,6 +31,7 @@ import { Callout, Code, Section } from "../../components/ui/Layout";
 import { Tooltip } from "../../components/ui/Popover";
 import { sentence } from "../../api/http";
 import { downloadFile } from "../../lib/download";
+import { laserColor } from "../../lib/laserSet";
 import { navigate, paths } from "../../lib/router";
 import { GRADE_LABEL, GRADE_TONE, KIND_META, nextPage, STEP_META } from "../../lib/setup";
 import { cn } from "../../lib/util";
@@ -99,6 +101,32 @@ function MetricRow({ m }: { m: CalibMetric }) {
       </div>
       <div className={cn("text-right font-mono text-[13px] tnum", m.ok === false ? "text-warn" : "text-fg")}>{m.value}</div>
     </li>
+  );
+}
+
+/** Laser calibration with more than two lasers: one row per laser, in its overlay colour. */
+function PlanesList({ planes }: { planes: CalibPlaneRow[] }) {
+  const names = planes.map((p) => p.name);
+  return (
+    <Section title="Laser planes" icon={Zap} description="One plane per line laser">
+      <ul className="space-y-2">
+        {planes.map((p) => (
+          <li key={p.name} className="flex items-center gap-2.5">
+            <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ background: laserColor(p.name, names) }} aria-hidden />
+            <span className="flex-1 text-sm text-fg" title={p.reason ?? undefined}>
+              {p.label}
+            </span>
+            {p.calibrated ? (
+              <span className="font-mono text-xs text-muted tnum">
+                {p.median_mm !== null ? `${p.median_mm.toFixed(3)} mm` : "–"}
+                {p.views !== null ? ` · ${p.views} views` : ""}
+              </span>
+            ) : null}
+            <OkMark ok={p.calibrated && p.where !== "both" ? true : p.calibrated ? null : false} />
+          </li>
+        ))}
+      </ul>
+    </Section>
   );
 }
 
@@ -229,6 +257,7 @@ export function ResultView({ kind }: { kind: CalibKind }) {
             )}
           </Section>
           <div className="space-y-5">
+            {r.planes && r.planes.length > 2 ? <PlanesList planes={r.planes} /> : null}
             {r.advice.length ? (
               <Section title={r.ok ? "To make it even better" : "What to do"} icon={Lightbulb}>
                 <AdviceList advice={r.advice} kind={kind} />

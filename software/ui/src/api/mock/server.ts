@@ -256,8 +256,10 @@ class MockBackend {
       log: (level, message) => this.send({ type: "log", level, message }),
       settings: SETTINGS as unknown as MockSettings,
     };
+    if (opts.lasers === 4) host.settings.lasers = { lines: ["vertical", "horizontal", "vertical_2", "horizontal_2"] };
     this.setup = new MockSetup(host, { noPico: opts.nopico });
     this.calib = new MockCalib(host, this.setup);
+    this.setup.calibrating = () => this.calib.active();
     this.studio = new MockProcess(host, (pid, sid) => {
       const project = this.projects.get(pid);
       const scan = project?.scans.find((x) => x.id === sid);
@@ -1108,6 +1110,7 @@ const SETTINGS = {
   process: { voxel_mm: null, frame_step: 1, frame_motion_deg: 0.0, frame_max_gap: 4, thin_walls: "auto", poisson: false, export: ["ply", "stl"] },
   board: { squares_x: 11, squares_y: 8, square_mm: 20.0, marker_mm: 15.0, dictionary: "DICT_5X5_100", paper: "letter" },
   markers: { tag_mm: 20.0 },
+  lasers: { lines: ["vertical", "horizontal"] },
 };
 
 export function createMockBackend(opts: MockOptions): { fetch: FetchLike; socket: SocketFactory } {

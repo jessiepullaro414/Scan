@@ -682,3 +682,199 @@ def test_results_in_plain_words():
     assert cr.build_result("check", None, sim_chk)["ok"] is False  # on the scanner it counts
     f = cr.failed_result("stereo", cr.plain_error(ValueError("only 3 stereo views with >= 8 common corners, need at least 4")))
     assert f["verdict"] == "Only 3 stereo views with at least 8 common corners, need at least 4." and f["grade"] == "failed"
+
+
+# --------------------------------------------------------------------------- four lasers
+FOUR = ("vertical", "horizontal", "vertical_2", "horizontal_2")
+
+
+def test_guide_for_four_lasers():
+    from ohs.server import calib_guide as g
+
+    img = np.zeros((800, 1280), np.uint8)
+    assert [g.line_label(n) for n in FOUR] == ["vertical", "horizontal", "second vertical", "second horizontal"]
+    assert g.line_label("vertical_left") == "vertical (left)"
+    assert g.families(FOUR) == {"vertical": ["vertical", "vertical_2"], "horizontal": ["horizontal", "horizontal_2"]}
+
+    def det(points, found, **kw):
+        return g.Detection("lasers", 2, 0.0, (1280, 800), img, T_cb=np.eye(4), names=FOUR, line_points=points,
+                           lines_found=found, margin={"vertical": 80, "horizontal": 80}, **kw)
+
+    # the lines can be named (the calibration in use has their planes)
+    d = det({"vertical": 40, "horizontal": 40, "vertical_2": 40, "horizontal_2": 3}, {"vertical": [40, 40], "horizontal": [40, 3]})
+    assert g.usable_reason(d) == "the second horizontal laser line misses the white page margin (3 points, need 15)"
+    h = g.next_hint("lasers", d, [], (1280, 800), (6, 10))
+    assert h["text"] == "Move or turn the board so the second horizontal laser line crosses the white margin left or right of the pattern"
+    # a first laser calibration: the lines of a family are counted, not named
+    d = det(dict.fromkeys(FOUR), {"vertical": [40, 30], "horizontal": [40]})
+    assert g.usable_reason(d) == "only 1 of the 2 horizontal laser lines crosses the white page margin (need 15 points on each)"
+    h = g.next_hint("lasers", d, [], (1280, 800), (6, 10))
+    assert h["text"] == ("Only 1 of the 2 horizontal laser lines crosses the white margin: move or turn the board so "
+                         "each one crosses it left or right of the pattern")
+    ok = det(dict.fromkeys(FOUR), {"vertical": [40, 30], "horizontal": [40, 20]}, distance_mm=200.0)
+    assert g.usable_reason(ok) is None
+
+    class V:
+        def __init__(self, dist, sep=None):
+            self.center_uv, self.distance_mm, self.face, self.tilt_deg, self.index = np.array([640.0, 400.0]), dist, None, 20.0, 0
+            self.line_sep = sep or {}
+
+    # where the two lines of a family meet: from the gap between them on the board (it shrinks to zero there)
+    near = [V(z, {"vertical": 0.2 * (290 - z), "horizontal": 0.1 * (290 - z)}) for z in (200.0, 215.0, 230.0)]
+    assert g.meet_distance(near, "vertical") == pytest.approx(290.0, abs=1.0)
+    assert g.meet_distance(near, "horizontal") == pytest.approx(290.0, abs=1.0)
+    both = near + [V(330.0, {"vertical": 0.2 * 40}), V(360.0, {"vertical": 0.2 * 70})]
+    assert g.meet_distance(both, "vertical") == pytest.approx(290.0, abs=1.0)
+    assert g.meet_distance(near[:1], "vertical") is None  # one view tells nothing
+    assert g.meet_distance(near[:2], "vertical") is None  # two: the point could also lie between them
+    h = g.next_hint("lasers", ok, near, (1280, 800), (6, 10))
+    assert h["text"] == ("The two vertical laser lines meet about 290 mm from the scanner, and the calibration needs "
+                         "views on both sides of that point: move the board farther away, to about 370 mm")
+    assert h["distance"] == "farther"
+    # with the planes known, the distance comes from them
+    ok.meet_mm, ok.distance_mm = {"vertical": 250.0}, 300.0
+    h = g.next_hint("lasers", ok, [V(300.0), V(330.0)], (1280, 800), (6, 10))
+    assert h["text"].startswith("The two vertical laser lines meet about 250 mm") and h["distance"] == "closer"
+    assert "about 200 mm" in h["text"]
+    sides = [V(190.0), V(205.0), V(300.0), V(330.0)]
+    h = g.next_hint("lasers", ok, sides, (1280, 800), (6, 10))
+    assert "meet" not in h["text"]  # both sides covered: the usual hints
+    from ohs.sim.nominal import nominal_calibration
+
+    planes = nominal_calibration((1280, 800), lasers=4).lasers
+    m = g.planes_meet_mm(planes, FOUR)
+    assert set(m) == {"vertical", "horizontal"} and all(150.0 < v < 400.0 for v in m.values()), m
+    assert g.planes_meet_mm(planes, ("vertical", "horizontal")) == {}
+    # two lasers: no meeting distance, the old rules
+    std = g.Detection("lasers", 2, 0.0, (1280, 800), img, T_cb=np.eye(4), margin={"vertical": 40, "horizontal": 3})
+    assert g.usable_reason(std) == "the horizontal laser line misses the white page margin (3 points, need 15)"
+    assert g.line_problems(std) == [g.usable_reason(std)]
+
+
+def test_live_lines_keep_the_two_laser_fields():
+    from ohs.server import calib_guide as g
+    from ohs.server.calibration import live_lines
+
+    img = np.zeros((800, 1280), np.uint8)
+    v = np.column_stack([np.full(50, 700.0), np.arange(50.0)])
+    hz = np.column_stack([np.arange(30.0), np.full(30, 400.0)])
+    d = g.Detection("lasers", 2, 0.0, (1280, 800), img, T_cb=np.eye(4), lines={"vertical": v, "horizontal": hz},
+                    margin={"vertical": 40, "horizontal": 22}, line_points={"vertical": 40, "horizontal": 22},
+                    lines_found={"vertical": [40], "horizontal": [22]})
+    out = live_lines(d)
+    assert out["vertical"] == 40 and out["horizontal"] == 22
+    assert out["vertical_uv"] == [round(x, 1) for x in v.reshape(-1)] and len(out["horizontal_uv"]) == 60
+    assert out["points"] == {"vertical": 40, "horizontal": 22} and out["found"] == {"vertical": [40], "horizontal": [22]}
+    assert out["line_uv"] == {} and out["meet_mm"] == {}
+
+
+def test_results_for_four_lasers():
+    from ohs.server import calib_results as cr
+
+    def entry(n_obs=7):
+        return {"ok": True, "n_observations": n_obs, "n_inliers": 800, "normal_std_deg": 0.01, "d_std_mm": 0.02}
+
+    rep = {"names": list(FOUR), "lasers": {n: entry() for n in FOUR},
+           "residuals": {n: {"median_abs_mm": m, "p95_abs_mm": 0.1} for n, m in zip(FOUR, (0.03, 0.04, 0.02, 0.045))},
+           "region_used": dict.fromkeys(FOUR, "margin"), "frames": 7, "frames_with_board": 7,
+           "per_frame": [{"index": k, "board": True, "reproj_rms_px": 0.2} for k in range(7)]}
+    planes = dict.fromkeys(FOUR, object())
+    r = cr.build_result("lasers", planes, rep, view_ids=range(7))
+    assert r["grade"] == "excellent" and r["ok"] and r["headline"] == "Excellent laser calibration"
+    assert r["verdict"].startswith("All 4 laser planes are calibrated")
+    assert [p["name"] for p in r["planes"]] == list(FOUR) and all(p["calibrated"] for p in r["planes"])
+    assert [p["label"] for p in r["planes"]] == ["Vertical", "Horizontal", "Second vertical", "Second horizontal"]
+    assert r["planes"][3]["median_mm"] == pytest.approx(0.045) and r["planes"][3]["where"] == "margin"
+    labels = [m["label"] for m in r["metrics"]]
+    assert "Second horizontal laser: fit" in labels and "Vertical laser: fit" in labels
+    assert cr.part_summary("lasers", rep, planes).startswith("All 4 laser lines (vertical 0.03 mm, horizontal 0.04 mm, ")
+    # one plane missing: poor, and the advice names it
+    three = dict(rep, lasers={**rep["lasers"], "horizontal_2": {"ok": False, "reason": "found in only 1 observation(s)"}},
+                 residuals={n: rep["residuals"][n] for n in FOUR[:3]}, region_used=dict.fromkeys(FOUR[:3], "margin"))
+    r = cr.build_result("lasers", dict.fromkeys(FOUR[:3], object()), three, view_ids=range(7))
+    assert r["grade"] == "poor" and r["can_save"]
+    assert r["verdict"] == ("Only 3 of the 4 laser lines could be calibrated; the second horizontal line was not "
+                            "found often enough.")
+    assert any(a["text"] == "Add views where the second horizontal line crosses the white margin left or right of "
+                            "the pattern." for a in r["advice"]), r["advice"]
+    assert [p["calibrated"] for p in r["planes"]] == [True, True, True, False] and r["planes"][3]["median_mm"] is None
+    assert any(m["label"] == "Second horizontal laser" and m["value"] == "not calibrated" for m in r["metrics"])
+    assert cr.part_summary("lasers", three, dict.fromkeys(FOUR[:3], object())).startswith("3 of 4 laser lines (")
+    none = dict(rep, lasers={n: {"ok": False, "reason": "x"} for n in FOUR}, residuals={}, region_used={})
+    r = cr.build_result("lasers", {}, none, view_ids=range(7))
+    assert r["grade"] == "failed" and "No laser line could be calibrated" in r["verdict"]
+    # two lasers: the old words, plus the per-plane list
+    two = dict(rep, names=["vertical", "horizontal"], lasers={n: entry() for n in FOUR[:2]},
+               residuals={n: rep["residuals"][n] for n in FOUR[:2]}, region_used=dict.fromkeys(FOUR[:2], "margin"))
+    r = cr.build_result("lasers", dict.fromkeys(FOUR[:2], object()), two, view_ids=range(7))
+    assert r["verdict"] == ("Both laser planes are calibrated: the laser points fit them within vertical 0.03 mm, "
+                            "horizontal 0.04 mm (median).")
+    assert [p["name"] for p in r["planes"]] == ["vertical", "horizontal"]
+    assert cr.part_summary("lasers", two, dict.fromkeys(FOUR[:2], object())) == \
+        "Both laser lines (vertical 0.03 mm, horizontal 0.04 mm)"
+
+
+def sim_factory_configured(script, cfg):
+    """The server's own simulator camera (it follows ``[lasers] lines``), at the tests' speed."""
+    from ohs.server.devices import sim_board_camera
+
+    return sim_board_camera(script, cfg, fps=5.0, **SIM_KW)
+
+
+@pytest.mark.slow
+def test_four_laser_calibration_on_the_simulator(tmp_path, demo_dir):
+    """Four lasers configured: the simulator renders four lines, the capture counts them, the solve
+    finds four planes, each named right (compared with the simulator's truth by name), and the
+    setup reports them; a second session names the lines with the saved planes."""
+    from ohs.sim.board_camera import SimBoardCamera
+    from ohs.types import ScannerCalibration
+
+    app = _app(tmp_path, demo_dir, sim_camera_factory=sim_factory_configured)
+    studio = app.state.studio
+    true = SimBoardCamera("lasers", lasers=4, **SIM_KW).true_calibration
+    sandbox = studio.sim_calib_path
+    sandbox.parent.mkdir(parents=True, exist_ok=True)
+    ScannerCalibration(true.stereo, {}, None).save(sandbox)  # the stereo step done
+    with ServerThread(app) as srv, ws_connect(srv.ws_url, max_size=None, open_timeout=5) as ws:
+        url = srv.url
+        _ok(_post(url, "/api/settings/lasers", {"lines": list(FOUR)}))
+        _connect_sim(url)
+        setup = _ok(_get(url, "/api/setup"))
+        assert setup["calibration"]["lasers_missing"] == list(FOUR)
+        s = _ok(_post(url, "/api/calibration/start", {"kind": "lasers"}))
+        assert s["lasers"] == list(FOUR) and "four laser lines" in s["guidance"] and "both sides" in s["guidance"]
+        live = recv_until(ws, lambda m, p, raw: m.get("type") == "calib" and m.get("lines") and m.get("board_found"),
+                          timeout=30)[-1][0]
+        lines = live["lines"]
+        assert set(lines["points"]) == set(FOUR) and all(v is None for v in lines["points"].values())  # not named yet
+        assert set(lines["found"]) == {"vertical", "horizontal"} and all(len(v) <= 2 for v in lines["found"].values())
+        assert lines["vertical"] >= 0 and isinstance(lines["vertical_uv"], list)
+        s = _views(url, 8, stall_s=10.0)
+        assert len(s["views"]) >= 5, s["views"]
+        for v in s["views"]:
+            assert set(v["line_points"]) == set(FOUR) and len(v["lines_found"]["vertical"]) == 2, v
+        job, s = _solve(url)
+        r = s["result"]
+        assert job["state"] == "done" and r["grade"] in ("excellent", "good", "usable"), r
+        assert [p["name"] for p in r["planes"]] == list(FOUR) and all(p["calibrated"] for p in r["planes"]), r["planes"]
+        e = _truth(r, "lasers")
+        assert set(e) == set(FOUR)
+        for name in FOUR:  # compared by name: a swapped pair would be far off
+            assert e[name]["angle_deg"] < 0.2 and abs(e[name]["d_err_mm"]) < 0.5, (name, e)
+        saved = _ok(_post(url, "/api/calibration/save", {"force": not r["ok"]}))
+        cal = ScannerCalibration.load(sandbox)
+        assert sorted(cal.lasers) == sorted(FOUR)
+        assert saved["setup"]["calibration"]["lasers_missing"] == []
+        step = {x["id"]: x for x in saved["setup"]["steps"]}["lasers"]
+        assert step["state"] == "done" and step["summary"].startswith("All 4 laser lines"), step
+        # a second session: the saved planes name the lines
+        _ok(_post(url, "/api/calibration/start", {"kind": "lasers"}))
+
+        def named(m, p, raw):
+            pts = (m.get("lines") or {}).get("points") or {} if m.get("type") == "calib" else {}
+            return len(pts) == 4 and all(isinstance(x, int) for x in pts.values()) and sum(pts.values()) > 0
+
+        live = recv_until(ws, named, timeout=30)[-1][0]
+        assert set(live["lines"]["line_uv"]) <= set(FOUR) and live["lines"]["line_uv"]
+        assert set(live["lines"]["meet_mm"]) == {"vertical", "horizontal"}
+        _ok(_post(url, "/api/calibration/cancel"))

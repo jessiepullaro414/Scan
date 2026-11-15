@@ -9,14 +9,15 @@
  * The colours are fixed and bright: they sit on a camera image, whatever the app theme.
  */
 import type { CalibLive } from "../../../api/types";
+import { LASER_COLOR, laserColor, laserFamily } from "../../../lib/laserSet";
 
 export const OVERLAY = {
   ok: "#46d369",
   warn: "#ffb84d",
   accent: "#6aa6ff",
   white: "#ffffff",
-  vertical: "#ff5a4f",
-  horizontal: "#3ad3ff",
+  vertical: LASER_COLOR.vertical,
+  horizontal: LASER_COLOR.horizontal,
   shadow: "rgba(0,0,0,0.55)",
 };
 
@@ -214,10 +215,16 @@ export function drawOverlay(ctx: CanvasRenderingContext2D, W: number, H: number,
   // 4. the detected corners
   dots(ctx, corners, s, Math.max(1.6, Math.min(2.6, W / 300)), tone);
 
-  // 5. laser line points, one colour per line
+  // 5. laser line points, one colour per line. A family with several lasers whose lines can be
+  // named (line_uv) shows each line in its own colour; otherwise the family's points in its colour.
   if (left && live.lines) {
-    dots(ctx, live.lines.vertical_uv ?? [], s, 2, OVERLAY.vertical);
-    dots(ctx, live.lines.horizontal_uv ?? [], s, 2, OVERLAY.horizontal);
+    const named = Object.entries(live.lines.line_uv ?? {});
+    const names = Object.keys(live.lines.points ?? {});
+    for (const fam of ["vertical", "horizontal"] as const) {
+      const own = named.filter(([n]) => laserFamily(n) === fam);
+      if (own.length) for (const [n, uv] of own) dots(ctx, uv, s, 2, laserColor(n, names));
+      else dots(ctx, (fam === "vertical" ? live.lines.vertical_uv : live.lines.horizontal_uv) ?? [], s, 2, OVERLAY[fam]);
+    }
   }
 
   if (!o.primary) return;

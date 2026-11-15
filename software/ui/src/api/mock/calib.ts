@@ -19,8 +19,10 @@ import type {
   CalibHintTilt,
   CalibImuLive,
   CalibKind,
+  CalibLines,
   CalibLive,
   CalibMetric,
+  CalibPlaneRow,
   CalibResult,
   CalibSession,
   CalibTarget,
@@ -62,6 +64,19 @@ import {
 import { rng } from "./geom";
 import { HttpError, json, nowIso, uid, type MockHost } from "./host";
 import type { MockSetup } from "./setup";
+import { TWO_LASERS, laserFamilies, laserWords, type LaserFamily } from "../../lib/laserSet";
+
+const FAMS = ["vertical", "horizontal"] as const;
+/** Where a family's two sheets meet in the demo's 4-laser build (geom.ts LASERS_4), mm from the scanner. */
+const MEET_MM = 254;
+
+/** The configured lasers (settings `lasers.lines`), default the two standard ones. */
+export function mockLaserNames(settings: Record<string, unknown>): string[] {
+  const l = (settings.lasers as { lines?: unknown } | undefined)?.lines;
+  return Array.isArray(l) && l.length ? l.map(String) : [...TWO_LASERS];
+}
+
+const isStandard = (names: readonly string[]) => names.length === 2 && names[0] === "vertical" && names[1] === "horizontal";
 
 const TARGET: Record<CalibKind, [number, number]> = { stereo: [15, 25], lasers: [6, 10], imu: [1, 1], check: [3, 5] };
 const MIN_VIEWS: Record<CalibKind, number> = { stereo: 4, lasers: 3, imu: 1, check: 1 };
@@ -107,6 +122,8 @@ type ViewRec = {
   blurred: boolean;
   /** The demo's one view with glare: flagged by the solve until it is deleted. */
   glare: boolean;
+  /** lasers / check: every configured line crossed the margin. */
+  linesOk: boolean;
 };
 
 type Frame = {
@@ -120,12 +137,23 @@ type Frame = {
   distance: number | null;
   tilt: number | null;
   centre: [number, number] | null;
-  lines: { vertical: LineInfo; horizontal: LineInfo } | null;
+  lines: Record<string, LineInfo> | null; // per configured laser
+};
+
+/** A frame's laser lines as the engine reports them (APP_API.md CalibLines). */
+type LineCounts = {
+  fam: Record<LaserFamily, number>;
+  uv: Record<LaserFamily, number[]>;
+  points: Record<string, number | null>;
+  found: Record<string, number[]>;
+  lineUv: Record<string, number[]>;
+  /** What misses the margin, in plain words; empty when every line crosses it. */
+  missing: { text: string; fam: LaserFamily; name: string | null }[];
 };
 
 type Plan = { text: string; region: number | null; tilt: CalibHintTilt | null; distance: "closer" | "farther" | null; bin: DistBin | null };
 
-const idleSession = (target: CalibTarget): CalibSession => ({
+const idleSession = (target: CalibTarget, lasers: readonly string[] = TWO_LASERS): CalibSession => ({
   state: "idle",
   kind: null,
   target,
@@ -141,6 +169,7 @@ const idleSession = (target: CalibTarget): CalibSession => ({
   result: null,
   recording: null,
   saved: null,
+  lasers: [...lasers],
 });
 
 const smooth = (x: number) => x * x * (3 - 2 * x);
@@ -218,6 +247,50 @@ export class MockCalib {
   }
   private kind(): CalibKind {
     return this.session.kind ?? "stereo";
+  }
+  /** The configured lasers (settings `lasers.lines`). */
+  names(): string[] {
+    return mockLaserNames(this.host.settings);
+  }
+  /** The lasers of the session (as they were when it started). */
+  private lasers(): string[] {
+    return this.session.lasers?.length ? this.session.lasers : this.names();
+  }
+  /** Can the lines of a family be told apart? With one laser always; with several, once the target's calibration has their planes. */
+  private named(fam: LaserFamily): boolean {
+    const members = laserFamilies(this.lasers())[fam];
+    if (members.length <= 1) return true;
+    const planes = this.setup.planes();
+    return members.every((m) => planes.includes(m));
+  }
+  /** A frame's lines per family and per laser, and what misses the margin (like the engine's capture rules). */
+  private counts(lines: Record<string, LineInfo>): LineCounts {
+    const names = this.lasers();
+    const groups = laserFamilies(names);
+    const out: LineCounts = { fam: { vertical: 0, horizontal: 0 }, uv: { vertical: [], horizontal: [] }, points: {}, found: {}, lineUv: {}, missing: [] };
+    for (const f of FAMS) {
+      const members = groups[f];
+      if (!members.length) continue;
+      const named = this.named(f);
+      const counts = members.map((m) => lines[m]?.count ?? 0);
+      out.fam[f] = counts.reduce((a, b) => a + b, 0);
+      out.uv[f] = members.flatMap((m) => lines[m]?.uv ?? []);
+      out.found[f] = counts.filter((c) => c > 0).sort((a, b) => b - a);
+      members.forEach((m, k) => {
+        out.points[m] = named ? counts[k] : null;
+        if (named && members.length > 1) out.lineUv[m] = lines[m]?.uv ?? [];
+      });
+      if (named) {
+        members.forEach((m, k) => {
+          if (counts[k] < LINE_MIN) out.missing.push({ text: `The ${laserWords(m)} laser line misses the white margin`, fam: f, name: m });
+        });
+      } else {
+        const ok = counts.filter((c) => c >= LINE_MIN).length;
+        if (ok < members.length)
+          out.missing.push({ text: `Only ${ok} of the ${members.length} ${f} laser lines cross${ok === 1 ? "es" : ""} the white margin`, fam: f, name: null });
+      }
+    }
+    return out;
   }
   private paper(): [number, number] {
     return this.host.settings.board.paper === "a4" ? PAPER_MM.a4 : PAPER_MM.letter;
@@ -332,15 +405,28 @@ export class MockCalib {
       views: [],
       target_views: TARGET[kind],
       min_views: MIN_VIEWS[kind],
-      guidance: GUIDANCE[kind],
+      guidance: this.guidance(kind),
       emitters,
       job_id: null,
       result: null,
       recording: `~/OpenHandScan/scans/calibration/${kind}-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, "")}`,
       saved: null,
+      lasers: this.names(),
     };
     this.broadcast();
     return this.session;
+  }
+
+  private guidance(kind: CalibKind): string {
+    const names = this.names();
+    if ((kind !== "lasers" && kind !== "check") || isStandard(names)) return GUIDANCE[kind];
+    const n = names.length;
+    if (kind === "check") return `3–5 views at different distances, all ${n} laser lines on the white margin`;
+    const pairs = FAMS.filter((f) => laserFamilies(names)[f].length > 1);
+    return (
+      `6–10 poses, 150–450 mm away, tilt up to ±30°, all ${n} laser lines crossing the white page margin` +
+      (pairs.length ? `. The two ${pairs.join(" and the two ")} lines cross each other at some distance: hold the board both nearer and farther than that` : "")
+    );
   }
 
   private endSession() {
@@ -353,7 +439,7 @@ export class MockCalib {
   private cancel(): CalibSession {
     const had = this.active();
     this.endSession();
-    this.session = idleSession(this.setup.target());
+    this.session = idleSession(this.setup.target(), this.names());
     this.recs = [];
     this.broadcast();
     if (had) this.host.log("info", "Calibration cancelled: the captured views are kept on disk");
@@ -363,7 +449,7 @@ export class MockCalib {
   /** An idle session names the current target (the simulator connected or left). */
   broadcastTarget(t: CalibTarget) {
     if (this.session.state === "idle" && this.session.target !== t) {
-      this.session = idleSession(t);
+      this.session = idleSession(t, this.names());
       this.broadcast();
     }
   }
@@ -371,10 +457,10 @@ export class MockCalib {
   /** The device went away: the session is cancelled, the views stay on disk. */
   onDeviceLost() {
     if (!this.active()) {
-      if (this.session.state === "saved") this.session = idleSession("device");
+      if (this.session.state === "saved") this.session = idleSession("device", this.names());
       return;
     }
-    this.session = idleSession("device");
+    this.session = idleSession("device", this.names());
     this.recs = [];
     this.broadcast();
     this.host.log("warn", "The device disconnected: the calibration session was cancelled. The captured views are kept on disk.");
@@ -437,12 +523,15 @@ export class MockCalib {
     const dist = f.distance ?? 0;
     if (dist < lo || dist > hi) warnings.push(`Board at ${Math.round(dist)} mm (aim for ${lo}–${hi} mm)`);
     if (!auto && steady < 0.6) warnings.push("Captured while moving: it may be blurred");
-    if (f.lines) {
-      const miss = (["vertical", "horizontal"] as const).filter((n) => f.lines![n].count < LINE_MIN);
-      if (miss.length) warnings.push(`The ${miss.join(" and ")} line${miss.length > 1 ? "s miss" : " misses"} the white margin`);
+    const lc = f.lines ? this.counts(f.lines) : null;
+    if (f.lines && lc) {
+      if (isStandard(this.lasers())) {
+        const miss = FAMS.filter((n) => (f.lines![n]?.count ?? 0) < LINE_MIN);
+        if (miss.length) warnings.push(`The ${miss.join(" and ")} line${miss.length > 1 ? "s miss" : " misses"} the white margin`);
+      } else warnings.push(...lc.missing.map((m) => m.text));
     }
     // a fresh picture for the thumbnail
-    this.renderL.draw({ lens: f.lens, pose: f.pose, paper: this.paper(), lasers: !!f.lines });
+    this.renderL.draw({ lens: f.lens, pose: f.pose, paper: this.paper(), lasers: f.lines ? this.lasers() : false });
     const view: CalibView = {
       index: this.nextIndex++,
       t: r2(this.clock),
@@ -451,7 +540,9 @@ export class MockCalib {
       corners_right: f.right ? f.right.uv.length / 2 : null,
       distance_mm: f.distance !== null ? r1(f.distance) : null,
       tilt_deg: f.tilt !== null ? r1(f.tilt) : null,
-      lines: f.lines ? { vertical: f.lines.vertical.count, horizontal: f.lines.horizontal.count } : null,
+      lines: lc ? { vertical: lc.fam.vertical, horizontal: lc.fam.horizontal } : null,
+      line_points: lc ? lc.points : null,
+      lines_found: lc ? lc.found : null,
       thumb_url: this.renderL.thumbnail(),
       error_px: null,
       bad: false,
@@ -470,6 +561,7 @@ export class MockCalib {
       region: regionOf(centre[0], centre[1]),
       blurred: steady < 0.6,
       glare: kind === "stereo" && view.index === 6,
+      linesOk: !!lc && lc.missing.length === 0,
     });
     this.cooldown = 1.0;
     this.op.capturedAt = this.clock;
@@ -487,7 +579,7 @@ export class MockCalib {
         : { ready: false, reason: "Show the whole board to the camera", hint: "Hold it 150–450 mm in front of the scanner." };
     if (kind === "stereo" && (f.common ?? 0) < 8)
       return { ready: false, reason: `Show the whole board to both cameras (${f.common} common corners, need 8)`, hint: "Move it towards the middle of the image." };
-    if (f.lines) {
+    if (f.lines && isStandard(this.lasers())) {
       const v = f.lines.vertical.count >= LINE_MIN,
         h = f.lines.horizontal.count >= LINE_MIN;
       if (!v || !h)
@@ -496,6 +588,9 @@ export class MockCalib {
           reason: !v && !h ? "Both laser lines miss the white margin" : `The ${!v ? "vertical" : "horizontal"} laser line misses the white margin`,
           hint: "Each line must cross the white paper around the squares.",
         };
+    } else if (f.lines) {
+      const miss = this.counts(f.lines).missing;
+      if (miss.length) return { ready: false, reason: miss[0].text, hint: "Each line must cross the white paper around the squares." };
     }
     if (this.motion > 6) return { ready: false, reason: "Hold still: the board is moving", hint: "Wait until the ring fills, or keep auto-capture on." };
     if (this.cooldown > 0 && this.recs.length)
@@ -540,6 +635,13 @@ export class MockCalib {
       return plan("That's plenty: press Enter to calibrate");
     }
     // lasers / check
+    const pair = kind === "lasers" ? FAMS.find((f) => laserFamilies(this.lasers())[f].length === 2) : undefined;
+    if (pair) {
+      // two lasers in a family: their lines meet at MEET_MM, and the fit needs views on both sides
+      const meet = `The two ${pair} laser lines meet about ${MEET_MM} mm from the scanner, and the calibration needs views on both sides of that point`;
+      if (div.near === 0) return plan(`${meet}: move the board closer, to under 220 mm`, { distance: "closer", bin: "near" });
+      if (div.far === 0) return plan(`${meet}: move the board farther away, to over 330 mm`, { distance: "farther", bin: "far" });
+    }
     if (div.near === 0) return plan("Bring the board closer: under 220 mm", { distance: "closer", bin: "near" });
     if (div.far === 0) return plan("Move the board farther away: over 330 mm", { distance: "farther", bin: "far" });
     if (div.mid === 0) return plan("Hold the board at a middle distance: about 280 mm", { bin: "mid" });
@@ -553,12 +655,18 @@ export class MockCalib {
     const centreRect = regionRect(4);
     if (!f.found) return { text: kind === "stereo" ? "Show the board to the cameras" : "Show the whole board to the camera", region: centreRect, tilt: null, distance: null };
     if (kind === "stereo" && (f.common ?? 0) < 8) return { text: "Bring the whole board back into view of both cameras", region: centreRect, tilt: null, distance: null };
-    if (f.lines && f.distance !== null && f.centre) {
+    if (f.lines && f.distance !== null && f.centre && isStandard(this.lasers())) {
       const [lu, lv] = laserCross(f.distance);
       if (f.lines.vertical.count < LINE_MIN)
         return { text: `The vertical line misses the white margin: move the board ${f.centre[0] < lu ? "right" : "left"}`, region: null, tilt: null, distance: null };
       if (f.lines.horizontal.count < LINE_MIN)
         return { text: `The horizontal line misses the white margin: move the board ${f.centre[1] < lv ? "down" : "up"}`, region: null, tilt: null, distance: null };
+    } else if (f.lines && f.found) {
+      const miss = this.counts(f.lines).missing[0];
+      if (miss) {
+        const where = miss.fam === "vertical" ? "above or below the pattern" : "left or right of the pattern";
+        return { text: `${miss.text}: move or turn the board so ${miss.name ? "it crosses" : "each one crosses"} the margin ${where}`, region: null, tilt: null, distance: null };
+      }
     }
     const p = this.plan();
     return { text: p.text, region: p.region !== null ? regionRect(p.region) : null, tilt: p.tilt, distance: p.distance };
@@ -774,7 +882,7 @@ export class MockCalib {
     }
     const found = left.uv.length / 2 >= 6;
     const c = project(lens, boardCentre(pose));
-    const lines = kind === "lasers" || kind === "check" ? laserLines(pose, this.paper()) : null;
+    const lines = kind === "lasers" || kind === "check" ? laserLines(pose, this.paper(), this.lasers()) : null;
     return {
       lens,
       pose,
@@ -857,9 +965,7 @@ export class MockCalib {
       tilt_deg: f.tilt !== null ? r1(f.tilt) : null,
       outline: f.found ? outlineUv(f.lens, f.pose) : null,
       page: f.lines && f.found ? pageUv(f.lens, f.pose) : null,
-      lines: f.lines
-        ? { vertical: f.lines.vertical.count, horizontal: f.lines.horizontal.count, vertical_uv: f.lines.vertical.uv, horizontal_uv: f.lines.horizontal.uv }
-        : null,
+      lines: f.lines ? this.liveLines(f.lines) : null,
       ready: rd.ready,
       reason: imu ? (this.session.state === "armed" ? "Press Start, then hold still for 2 s" : null) : rd.reason,
       steady: !imu && rd.ready ? r2(Math.min(1, this.still / STEADY_S)) : 0,
@@ -873,13 +979,29 @@ export class MockCalib {
     };
   }
 
+  private liveLines(lines: Record<string, LineInfo>): CalibLines {
+    const c = this.counts(lines);
+    const meet: Record<string, number> = {};
+    for (const f of FAMS) if (laserFamilies(this.lasers())[f].length === 2 && this.named(f)) meet[f] = MEET_MM;
+    return {
+      vertical: c.fam.vertical,
+      horizontal: c.fam.horizontal,
+      vertical_uv: c.uv.vertical,
+      horizontal_uv: c.uv.horizontal,
+      points: c.points,
+      found: c.found,
+      line_uv: c.lineUv,
+      meet_mm: meet,
+    };
+  }
+
   private async sendPreviews(f: Frame) {
     if (!this.host.wantsPreviews()) return;
     this.rendering = true;
     try {
       const kind = this.kind();
       const paper = this.paper();
-      this.renderL.draw({ lens: f.lens, pose: f.pose, paper, lasers: kind === "lasers" || kind === "check" });
+      this.renderL.draw({ lens: f.lens, pose: f.pose, paper, lasers: kind === "lasers" || kind === "check" ? this.lasers() : false });
       const jobs = [toJpeg(this.renderL.canvas, 0.8)];
       if (kind === "stereo") {
         this.renderR.draw({ lens: LENS_RAW_R, pose: rightPose(f.pose), paper, lasers: false });
@@ -1099,6 +1221,102 @@ export class MockCalib {
   }
 
   private lasersResult(): Omit<CalibResult, "kind"> {
+    const names = this.lasers();
+    if (!isStandard(names)) return this.lasersResultAny(names);
+    const r0 = this.lasersResultTwo();
+    return { ...r0, planes: this.planeRows(names, r0.grade === "failed" ? null : names.map(() => null)) };
+  }
+
+  /** CalibResult.planes: `fits` the median fit per laser (null entries: not shown), or null when none was calibrated. */
+  private planeRows(names: string[], fits: (number | null)[] | null): CalibPlaneRow[] {
+    const ok = fits !== null;
+    const views = this.recs.filter((r) => r.linesOk).length;
+    return names.map((name, k) => ({
+      name,
+      label: laserWords(name).charAt(0).toUpperCase() + laserWords(name).slice(1),
+      calibrated: ok,
+      median_mm: ok && fits[k] !== null ? Math.round((fits[k] as number) * 10000) / 10000 : null,
+      p95_mm: ok && fits[k] !== null ? Math.round((fits[k] as number) * 26000) / 10000 : null,
+      views: ok ? views : null,
+      points: ok ? 40 * views : null,
+      where: ok ? "margin" : null,
+      reason: ok ? null : "Too few poses with this line on the white margin",
+    }));
+  }
+
+  /** Any laser set but the two standard lasers: one plane per laser. */
+  private lasersResultAny(names: string[]): Omit<CalibResult, "kind"> {
+    const n = this.recs.length;
+    const all = this.recs.filter((r) => r.linesOk).length;
+    const dists = this.recs.map((r) => r.distance);
+    const lo = Math.round(Math.min(...dists)),
+      hi = Math.round(Math.max(...dists));
+    const spread = hi - lo;
+    const nearer = dists.filter((d) => d < MEET_MM - 25).length,
+      farther = dists.filter((d) => d > MEET_MM + 25).length;
+    const pairs = FAMS.filter((f) => laserFamilies(names)[f].length > 1);
+    const r = this.rand;
+    const report = "/api/calibration/report.json";
+    const word = (m: string) => laserWords(m).charAt(0).toUpperCase() + laserWords(m).slice(1);
+    if (n < 3 || all < 3) {
+      return {
+        ok: false,
+        grade: "failed",
+        headline: "Laser calibration failed",
+        verdict: `Only ${all} of ${n} poses had all ${names.length} laser lines on the white margin; each plane needs at least 3. Your poses are kept: add poses where every line crosses the paper around the squares.`,
+        metrics: [{ label: "Poses with every line", value: `${all} of ${n}`, ok: false, help: "Lines on the black-and-white squares are biased, so only the white margin counts." }],
+        advice: [{ text: `Add poses with all ${names.length} laser lines crossing the white margin.`, action: "add_views" }],
+        per_view: [],
+        sim_truth: null,
+        can_save: false,
+        report_url: report,
+        planes: this.planeRows(names, null),
+      };
+    }
+    const sides = !pairs.length || (nearer >= 2 && farther >= 2);
+    const grade: CalibGrade = spread >= 150 && n >= 6 && sides ? "excellent" : spread >= 90 && sides ? "good" : spread >= 50 ? "usable" : "poor";
+    const advice: CalibAdvice[] = [];
+    if (pairs.length && !sides)
+      advice.push({
+        text: `Add poses ${nearer < 2 ? "nearer" : "farther"} than ${MEET_MM} mm: the two ${pairs.join(" and the two ")} lines meet there, and the calibration tells them apart from views on both sides.`,
+        action: "add_views",
+      });
+    if (grade === "poor") advice.push({ text: "All poses are at a similar distance: start over and spread them from 150 to 450 mm.", action: "start_over" });
+    const fits = names.map(() => 0.028 + 0.09 / n + r() * 0.012);
+    return {
+      ok: grade !== "poor",
+      grade,
+      headline: `${grade === "excellent" ? "Excellent" : grade === "good" ? "Good" : grade === "usable" ? "Usable" : "Poor"} laser calibration`,
+      verdict:
+        grade === "poor"
+          ? `The poses span only ${spread} mm of distance, so the plane angles are uncertain.`
+          : `All ${names.length} laser planes fit the board within ${Math.max(...fits).toFixed(3)} mm over ${n} poses from ${lo} to ${hi} mm.`,
+      metrics: [
+        ...names.map((m, k) => ({
+          label: `${word(m)} laser: fit`,
+          value: `${fits[k].toFixed(3)} mm median (want < 0.15 mm)`,
+          ok: fits[k] < 0.15,
+          help: "How far the laser points lie from the fitted plane.",
+        })),
+        { label: "Poses", value: `${n} (aim for 6–10)`, ok: n >= 6 ? true : null, help: "Each pose adds line segments on the margin." },
+        { label: "Distance spread", value: `${lo}–${hi} mm (want 150 mm or more)`, ok: spread >= 150 ? true : spread >= 90 ? null : false, help: "Poses near and far pin down the angle of each plane." },
+        ...(pairs.length
+          ? [{ label: "Both sides of where the lines meet", value: `${nearer} nearer, ${farther} farther than ${MEET_MM} mm`, ok: sides, help: "Two lasers of the same direction are told apart by their lines on both sides of where they meet." }]
+          : []),
+        { label: "Every line on the margin", value: `${all} of ${n} poses`, ok: all === n ? true : null, help: "Poses where a line missed the margin only help the other planes." },
+      ],
+      advice,
+      per_view: this.recs.map((rec) => ({ index: rec.view.index, error_px: r2(0.18 + r() * 0.2), bad: false })),
+      sim_truth: this.sim()
+        ? names.map((m) => ({ label: `${word(m)} plane`, value: `${(0.02 + r() * 0.05).toFixed(2)}° and ${(0.01 + r() * 0.03).toFixed(2)} mm from the truth`, ok: true, help: "The fitted plane against the virtual laser's true plane." }))
+        : null,
+      can_save: true,
+      report_url: report,
+      planes: this.planeRows(names, fits),
+    };
+  }
+
+  private lasersResultTwo(): Omit<CalibResult, "kind"> {
     const n = this.recs.length;
     const both = this.recs.filter((r) => r.view.lines && Math.min(r.view.lines.vertical, r.view.lines.horizontal) >= LINE_MIN).length;
     const dists = this.recs.map((r) => r.distance);

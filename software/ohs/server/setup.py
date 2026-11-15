@@ -60,6 +60,7 @@ log = logging.getLogger(__name__)
 STEP_IDS = ("connect", "selftest", "print", "stereo", "lasers", "imu", "check")
 TARGETS = ("device", "sim")
 PARTS = ("stereo", "lasers", "imu")
+STANDARD_LINES = ("vertical", "horizontal")  # the config's default [lasers] lines
 PRINT_OK_PCT = 0.3  # |error| within this: the print is exact
 PRINT_APPLY_PCT = 4.0  # up to this: a printer's scaling, the measurement can be used
 BAR_MM = 100.0
@@ -229,6 +230,11 @@ class SetupManager:
             log.warning("cannot read the calibration %s: %s", p, e)
             return None
 
+    def configured_lasers(self) -> tuple[str, ...]:
+        """The build's line lasers (config ``[lasers] lines``)."""
+        lasers = getattr(self.st.cfg, "lasers", None)
+        return tuple(getattr(lasers, "lines", None) or STANDARD_LINES)
+
     def board_scale(self, target: str) -> float:
         if target == "sim":
             return 1.0
@@ -270,6 +276,7 @@ class SetupManager:
         modified = _mtime_iso(path) if exists else None
         backup = path.with_name(path.name + ".bak")
         lasers = sorted((calib.lasers or {}).keys()) if calib is not None else []
+        configured = list(self.configured_lasers())
         parts = {k: None for k in PARTS}
         if calib is not None:
             have = {"stereo": True, "lasers": bool(lasers), "imu": calib.imu is not None}
@@ -280,6 +287,7 @@ class SetupManager:
             "baseline_mm": round(float(calib.stereo.baseline), 3) if calib is not None else None,
             "stereo": calib is not None, "lasers": lasers, "imu": bool(calib is not None and calib.imu is not None),
             "parts": parts, "backup": str(backup) if backup.is_file() else None,
+            "lasers_configured": configured, "lasers_missing": [n for n in configured if n not in lasers],
         }
         dismissed = bool(sec.get("dismissed"))
         return {
@@ -361,13 +369,24 @@ class SetupManager:
             s, w = part_summary("stereo", text)
             out.append(step("stereo", "done", s, w))
             lasers = cal["lasers"]
-            if {"vertical", "horizontal"} <= set(lasers):
-                s, w = part_summary("lasers", "Both laser lines calibrated")
+            configured = cal["lasers_configured"]
+            missing = cal["lasers_missing"]
+            two = tuple(configured) == STANDARD_LINES
+            if not missing:
+                s, w = part_summary("lasers", "Both laser lines calibrated" if len(configured) == 2 else
+                                    f"All {len(configured)} laser lines calibrated")
                 out.append(step("lasers", "done", s, w))
-            elif lasers:
-                missing = "horizontal" if "vertical" in lasers else "vertical"
+            elif two and lasers:  # the two standard lasers: the words of the two-laser app
+                other = "horizontal" if "vertical" in lasers else "vertical"
                 out.append(step("lasers", "warn", f"Only the {lasers[0]} laser is calibrated: calibrate the "
-                                                  f"{missing} one too", modified))
+                                                  f"{other} one too", modified))
+            elif len(missing) < len(configured):
+                from ohs.server.calib_guide import line_label
+
+                names = " and the ".join(line_label(n) for n in missing)
+                out.append(step("lasers", "warn", f"{len(configured) - len(missing)} of {len(configured)} lasers "
+                                                  f"calibrated: calibrate the lasers again for the {names} "
+                                                  f"laser{'s' if len(missing) > 1 else ''}", modified))
             else:
                 out.append(step("lasers", "todo", "Calibrate the laser lines with the board (about 3 minutes)"))
             if calib.imu is not None:

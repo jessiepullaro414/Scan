@@ -25,6 +25,8 @@ import type {
 } from "../types";
 import { boardSheet, maskSheet, previewDataUrl, sheetPdf, tagsSheet, type Sheet } from "./board";
 import { HttpError, json, nowIso, type MockHost } from "./host";
+import { mockLaserNames } from "./calib";
+import { laserFamily, laserWords } from "../../lib/laserSet";
 
 type TargetData = {
   path: string;
@@ -33,6 +35,8 @@ type TargetData = {
   backup: string | null;
   baseline: number | null;
   parts: { stereo: PartInfo | null; lasers: PartInfo | null; imu: PartInfo | null };
+  /** The lasers with a calibrated plane. */
+  planes: string[];
   selftest: SelfTestResult | null;
   printCheck: PrintCheck | null;
   lastCheck: { when: string; ok: boolean; verdict: string } | null;
@@ -46,6 +50,7 @@ const fresh = (path: string): TargetData => ({
   backup: null,
   baseline: null,
   parts: { stereo: null, lasers: null, imu: null },
+  planes: [],
   selftest: null,
   printCheck: null,
   lastCheck: null,
@@ -107,10 +112,24 @@ export class MockSetup {
       path: d.path,
       image_size: d.parts.stereo ? ([1280, 800] as [number, number]) : null,
       baseline_mm: d.parts.stereo ? d.baseline : null,
-      lasers: d.parts.lasers ? ["horizontal", "vertical"] : [],
+      lasers: d.parts.lasers ? [...d.planes].sort() : [],
       imu: !!d.parts.imu,
     };
   }
+
+  /** The lasers of the current target with a calibrated plane. */
+  planes(t: CalibTarget = this.target()): string[] {
+    const d = this.data(t);
+    return d.parts.lasers ? [...d.planes] : [];
+  }
+
+  /** The configured lasers (settings `lasers.lines`). */
+  private configured(): string[] {
+    return mockLaserNames(this.host.settings);
+  }
+
+  /** Is a calibration under way? (Set by the mock server: the calibration mock is made after this one.) */
+  calibrating: () => boolean = () => false;
 
   // ---------------------------------------------------------------- state
   private board(): BoardInfo {
@@ -171,7 +190,18 @@ export class MockSetup {
     const ps = part("stereo");
     out.push(ps ? step("stereo", "done", ps.summary, ps.when) : step("stereo", "todo", "Not calibrated yet"));
     const pl = part("lasers");
-    out.push(pl ? step("lasers", "done", pl.summary, pl.when) : step("lasers", "todo", ps ? "Not calibrated yet" : "Needs the stereo calibration first"));
+    const conf = this.configured();
+    const missing = pl ? conf.filter((n) => !d.planes.includes(n)) : conf;
+    if (pl && missing.length)
+      out.push(
+        step(
+          "lasers",
+          "warn",
+          `${conf.length - missing.length} of ${conf.length} lasers calibrated: calibrate the lasers again for the ${missing.map(laserWords).join(" and the ")} laser${missing.length > 1 ? "s" : ""}`,
+          pl.when,
+        ),
+      );
+    else out.push(pl ? step("lasers", "done", pl.summary, pl.when) : step("lasers", "todo", ps ? "Not calibrated yet" : "Needs the stereo calibration first"));
     const pi = part("imu");
     const noImu = !sim && dev.connected && dev.source === "camera" && !dev.pico?.connected;
     out.push(
@@ -208,10 +238,12 @@ export class MockSetup {
         image_size: d.parts.stereo ? [1280, 800] : null,
         baseline_mm: d.parts.stereo ? d.baseline : null,
         stereo: !!d.parts.stereo,
-        lasers: d.parts.lasers ? ["horizontal", "vertical"] : [],
+        lasers: this.planes(t).sort(),
         imu: !!d.parts.imu,
         parts: { ...d.parts },
         backup: d.backup,
+        lasers_configured: this.configured(),
+        lasers_missing: this.configured().filter((n) => !this.planes(t).includes(n)),
       },
       selftest: d.selftest,
       print_check: t === "sim" ? null : d.printCheck,
@@ -232,6 +264,7 @@ export class MockSetup {
     const is = (m: string, n: number) => method === m && seg.length === n;
     if (a === "settings" && b === "camera" && is("POST", 2)) return json(200, this.setCamera(body));
     if (a === "settings" && b === "process" && is("POST", 2)) return json(200, this.setProcess(body));
+    if (a === "settings" && b === "lasers" && is("POST", 2)) return json(200, this.setLasers(body));
     if (a !== "setup") return undefined;
     if (is("GET", 1)) return json(200, this.state());
     if (b === "dismiss" && is("POST", 2)) {
@@ -284,6 +317,27 @@ export class MockSetup {
       (this.host.settings.process as Record<string, unknown>).thin_walls = v;
       this.host.log("info", "Meshing settings saved to ~/.ohs/config.toml: the next mesh uses them");
     }
+    return this.host.settings;
+  }
+
+  /** `lasers.lines`, checked as the engine's config checks it. Planes already calibrated are kept. */
+  private setLasers(body: Record<string, unknown>) {
+    const lines = body.lines;
+    if (!Array.isArray(lines) || !lines.every((x) => typeof x === "string"))
+      throw new HttpError(422, "lines must be a list of laser names", 'Send for example {"lines": ["vertical", "horizontal"]}.');
+    const hint = 'List every line laser once, each name starting with "vertical" or "horizontal" (for example ["vertical", "horizontal", "vertical_2", "horizontal_2"]).';
+    const bad = lines.filter((n) => !laserFamily(n));
+    if (bad.length) throw new HttpError(422, `${JSON.stringify(bad)} do not start with a laser family (vertical, horizontal)`, hint);
+    const twice = [...new Set(lines.filter((n, i) => lines.indexOf(n) !== i))];
+    if (twice.length) throw new HttpError(422, `${JSON.stringify(twice)} named twice`, hint);
+    for (const f of ["vertical", "horizontal"] as const)
+      if (!lines.some((n) => laserFamily(n) === f)) throw new HttpError(422, `lasers.lines needs at least one ${f} line`, hint);
+    if (this.host.scanning()) throw new HttpError(409, "A scan is running", "Stop the scan before changing the line lasers.");
+    if (this.calibrating()) throw new HttpError(409, "A calibration is running", "Finish or cancel it before changing the line lasers.");
+    this.host.settings.lasers = { lines: [...lines] };
+    const missing = this.state().calibration.lasers_missing ?? [];
+    this.host.log("info", `Line lasers saved: ${lines.length} lasers${missing.length && this.hasStereo() ? "; calibrate the lasers (setup step 5) for the new ones" : ""}`);
+    this.broadcast();
     return this.host.settings;
   }
 
@@ -572,9 +626,16 @@ export class MockSetup {
             .join(" and ")} step${dropped.length > 1 ? "s" : ""}.`,
         );
       d.parts = { stereo: info(`${head} · ${result.per_view.length} views`), lasers: null, imu: null };
+      d.planes = [];
       d.baseline = 60.03 + Math.random() * 0.03;
       d.lastCheck = null;
-    } else if (kind === "lasers") d.parts.lasers = info(`${head} · both planes`);
+    } else if (kind === "lasers") {
+      // like merge_calibration: fitted planes replace those of the same name, the others are kept
+      const fitted = result.planes?.filter((p) => p.calibrated).map((p) => p.name) ?? ["vertical", "horizontal"];
+      const kept = d.parts.lasers ? d.planes.filter((n) => !fitted.includes(n)) : [];
+      d.planes = [...fitted, ...kept];
+      d.parts.lasers = info(`${head} · ${fitted.length === 2 ? "both planes" : `all ${fitted.length} planes`}`);
+    }
     else if (kind === "imu") d.parts.imu = info(`${value(3)} of rotation · ${value(1)}`);
     d.backup = d.exists ? `${d.path}.bak` : null;
     d.exists = true;

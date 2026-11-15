@@ -17,8 +17,10 @@
 **Simulator scenes** (M2): :meth:`DeviceManager.set_sim_scene` swaps the sim connection between
 the scan demo (``"demo"``) and a live virtual scanner looking at the printed ChArUco page
 (``"calib_stereo"`` / ``"calib_lasers"`` / ``"calib_imu"`` / ``"calib_check"``:
-``sim_camera_factory(script, cfg)``, by default :class:`ohs.sim.board_camera.SimBoardCamera` with
-the configured board and paper). Its ``feed`` (IMU) replaces the replay feed. A calibration scene
+``sim_camera_factory(script, cfg)``, by default :func:`sim_board_camera`: a
+:class:`ohs.sim.board_camera.SimBoardCamera` with the configured board, paper and line lasers; the
+simulator knows the two standard lasers and the 4-laser build, and any other ``[lasers] lines``
+gets the two standard ones). Its ``feed`` (IMU) replaces the replay feed. A calibration scene
 carries the simulator's *sandbox* calibration (``sim_calib_path``), never the demo's truth.
 A swap is not a new connection: no "Connected" message, no launch check.
 
@@ -69,7 +71,7 @@ from ohs.server.imaging import PreviewPublisher, ViewTools, central_distance
 from ohs.server.protocol import ApiError, now_iso
 from ohs.server.util import RateMeter, join_thread, safe_call
 
-__all__ = ["DeviceManager", "ReplayFeed", "SOURCES", "SIM_SCENES"]
+__all__ = ["DeviceManager", "ReplayFeed", "SOURCES", "SIM_SCENES", "sim_board_camera", "sim_lasers"]
 
 log = logging.getLogger(__name__)
 
@@ -85,6 +87,29 @@ LAUNCH_SPACING_S = 0.3  # ... this far apart (frame clock)
 TEMP_PUBLISH_STEP_C = 0.5  # publish the device state again when the IMU temperature moves this much
 TEMP_STALE_S = 10.0  # no temperature for this long (IMU stopped): DeviceState.imu_temp_c is null
 _LEVEL_NAMES = ("vertical", "horizontal", "dots")
+
+
+def sim_lasers(cfg: Any) -> int:
+    """The simulator's laser count for the configured lasers (``[lasers] lines``): 4 for the
+    4-laser build (``vertical``, ``horizontal``, ``vertical_2``, ``horizontal_2`` in any order),
+    else 2 (the simulator knows no other laser set; a warning says so)."""
+    from ohs.sim.nominal import LASER_SETS
+
+    lines = list(getattr(getattr(cfg, "lasers", None), "lines", None) or LASER_SETS[2])
+    for n, names in LASER_SETS.items():
+        if sorted(lines) == sorted(names):
+            return int(n)
+    log.warning("the simulator has no lasers %s: it shows the two standard ones", lines)
+    return 2
+
+
+def sim_board_camera(script: str, cfg: Any, **kw: Any) -> Any:
+    """The simulator's virtual calibration scanner (:class:`ohs.sim.board_camera.SimBoardCamera`)
+    for ``script``, with the configured board, paper and line lasers (:func:`sim_lasers`); ``kw``
+    goes to the camera (tests: ``realtime=False``, shorter dwells)."""
+    from ohs.sim.board_camera import SimBoardCamera
+
+    return SimBoardCamera(script, spec=cfg.board.spec(), paper=cfg.board.paper, lasers=sim_lasers(cfg), **kw)
 
 
 # --------------------------------------------------------------------------- replay IMU/events
@@ -258,9 +283,7 @@ class DeviceManager:
 
     @staticmethod
     def _default_sim_camera(script: str, cfg: Any) -> Any:
-        from ohs.sim.board_camera import SimBoardCamera
-
-        return SimBoardCamera(script, spec=cfg.board.spec(), paper=cfg.board.paper)
+        return sim_board_camera(script, cfg)
 
     # ------------------------------------------------------------------ queries
     @property

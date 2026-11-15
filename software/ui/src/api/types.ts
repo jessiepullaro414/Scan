@@ -228,6 +228,10 @@ export type SetupCalibration = {
   imu: boolean;
   parts: { stereo: PartInfo | null; lasers: PartInfo | null; imu: PartInfo | null };
   backup: string | null; // the previous version (calibration.json.bak), if any
+  // the configured line lasers (config [lasers] lines) and those of them without a plane yet;
+  // optional: an older server leaves them out (two lasers)
+  lasers_configured?: string[];
+  lasers_missing?: string[];
 };
 
 export type BoardInfo = {
@@ -309,7 +313,11 @@ export type CalibView = {
   corners_right: number | null;
   distance_mm: number | null;
   tilt_deg: number | null;
-  lines: { vertical: number; horizontal: number } | null; // laser points on the page margin
+  lines: { vertical: number; horizontal: number } | null; // laser points on the page margin, per family
+  /** Per configured laser: margin points; null while its line cannot be named yet (several lasers in a family). */
+  line_points?: Record<string, number | null> | null;
+  /** Per family: margin points of each line found, largest first. */
+  lines_found?: Record<string, number[]> | null;
   thumb_url: string;
   error_px: number | null; // after a solve
   bad: boolean; // after a solve
@@ -339,6 +347,20 @@ export type CalibResult = {
   sim_truth: CalibMetric[] | null; // simulator only: the estimate against the true calibration
   can_save: boolean; // false for "check" and for "failed"
   report_url: string;
+  /** lasers only: one row per configured laser (missing from an older server). */
+  planes?: CalibPlaneRow[];
+};
+
+export type CalibPlaneRow = {
+  name: string; // "vertical", "vertical_2", ...
+  label: string; // "Vertical", "Second vertical"
+  calibrated: boolean;
+  median_mm: number | null; // median distance of its points from the plane
+  p95_mm: number | null;
+  views: number | null; // board poses it was fitted from
+  points: number | null;
+  where: "margin" | "both" | null; // "both": the margin alone had too few points
+  reason: string | null; // why it was not calibrated
 };
 
 export type CalibSession = {
@@ -357,6 +379,7 @@ export type CalibSession = {
   result: CalibResult | null;
   recording: string | null; // folder of the captured views
   saved: { path: string; backup: string | null; notes: string[] } | null;
+  lasers?: string[]; // the configured line lasers (config [lasers] lines)
 };
 
 export type CalibHintTilt = "left" | "right" | "up" | "down" | "more";
@@ -398,7 +421,18 @@ export type CalibImuLive = {
   board_pct: number;
 };
 
-export type CalibLines = { vertical: number; horizontal: number; vertical_uv: number[]; horizontal_uv: number[] };
+/** Laser lines in the live view. `vertical` / `horizontal` are per family (every line of it); the
+ * rest is per configured laser and is missing from an older server. */
+export type CalibLines = {
+  vertical: number; // margin points of the family
+  horizontal: number;
+  vertical_uv: number[]; // image points of the family, flattened
+  horizontal_uv: number[];
+  points?: Record<string, number | null>; // per laser; null: not named yet (a first calibration with two lasers in a family)
+  found?: Record<string, number[]>; // per family: margin points of each line found, largest first
+  line_uv?: Record<string, number[]>; // image points per named laser of a family with several lasers
+  meet_mm?: Record<string, number>; // a family with two lasers: where its two lines meet, mm from the scanner
+};
 
 /** The `calib` WebSocket message, about 10 Hz while a session is active. */
 export type CalibLive = {
@@ -435,6 +469,8 @@ export type CameraSettingsBody = { index?: number; swap_lr?: boolean };
  * without markers and leaves marker mode as it was; "on" and "off" force it. */
 export type ThinWalls = "auto" | "on" | "off";
 export type ProcessSettingsBody = { thin_walls?: ThinWalls };
+/** `[lasers] lines`: the build's line lasers, e.g. ["vertical", "horizontal", "vertical_2", "horizontal_2"]. */
+export type LaserSettingsBody = { lines: string[] };
 export type OpenFolderReply = { opened: boolean; dir: string };
 export type CaptureReply = { view: CalibView; session: CalibSession };
 export type SaveReply = { session: CalibSession; setup: SetupState };

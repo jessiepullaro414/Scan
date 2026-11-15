@@ -106,8 +106,48 @@ _REASON_HINTS = (
 )
 
 
+_COUNT_WORDS = {1: "one", 2: "two", 3: "three", 4: "four", 5: "five", 6: "six"}
+
+
 def _reason_hint(reason: str) -> str:
     return next((h for k, h in _REASON_HINTS if k in reason), "Move the board to a new pose and try again.")
+
+
+def guidance(kind: str, names: Any = None) -> str:
+    """The step's guidance for the configured lasers ``names`` (the two standard ones: :data:`GUIDANCE`)."""
+    names = tuple(names) if names else guide.STANDARD_LINES
+    if kind not in ("lasers", "check") or names == guide.STANDARD_LINES:
+        return GUIDANCE[kind]
+    n = _COUNT_WORDS.get(len(names), str(len(names)))
+    pairs = [fam for fam, members in guide.families(names).items() if len(members) > 1]
+    if kind == "check":
+        return f"Hold the board near, in the middle and far away (3–5 views), with all {n} laser lines on the page."
+    text = (f"Hold the board 150–450 mm away in 6–10 poses at different distances and tilts up to 30°, with all {n} "
+            "laser lines crossing the white margin around the pattern.")
+    if pairs:
+        what = " and the two ".join(pairs)
+        text += (f" The two {what} lines cross each other at some distance: hold the board on both sides of that "
+                 "point, some views nearer and some farther.")
+    return text
+
+
+def live_lines(d: guide.Detection) -> dict | None:
+    """The ``lines`` of the live ``calib`` message: the two families' margin points and image
+    points (the fields of the two-laser app), plus per configured laser ``points`` (None: not
+    named yet), per family ``found``, ``line_uv`` (named lasers of a family with several) and
+    ``meet_mm`` (where a family's two sheets meet, when known)."""
+    if d.lines is None:
+        return None
+    m = d.margin or {}
+    out = {"vertical": int(m.get("vertical", 0)), "horizontal": int(m.get("horizontal", 0)),
+           "vertical_uv": _flat(d.lines["vertical"], 1, MAX_LINE_POINTS) or [],
+           "horizontal_uv": _flat(d.lines["horizontal"], 1, MAX_LINE_POINTS) or []}
+    pts = d.line_points if d.line_points is not None else {n: int(m.get(n, 0)) for n in d.names}
+    out["points"] = {n: (None if v is None else int(v)) for n, v in pts.items()}
+    out["found"] = {f: [int(x) for x in v] for f, v in (d.lines_found or {}).items()}
+    out["line_uv"] = {n: _flat(uv, 1, MAX_LINE_POINTS) or [] for n, uv in (d.line_uv or {}).items()}
+    out["meet_mm"] = {f: float(v) for f, v in (d.meet_mm or {}).items()}
+    return out
 
 
 def _flat(a: np.ndarray | None, nd: int = 1, max_points: int | None = None) -> list[float] | None:
@@ -210,12 +250,17 @@ class _View:
     warnings: list[str] = field(default_factory=list)
     error_px: float | None = None
     bad: bool = False
+    line_points: dict | None = None  # per configured laser: margin points, None when not named yet
+    lines_found: dict | None = None  # per family: margin points per line found, largest first
+    line_sep: dict | None = None  # per family with two lasers: the gap between its lines on the board (mm)
 
     def to_dict(self, stereo: bool) -> dict:
         return {"index": self.index, "t": round(self.t, 3), "auto": self.auto, "corners_left": int(len(self.ids_l)),
                 "corners_right": int(len(self.ids_r)) if stereo and self.ids_r is not None else None,
                 "distance_mm": _r(self.distance_mm), "tilt_deg": _r(self.tilt_deg),
                 "lines": dict(self.lines) if self.lines is not None else None,
+                "line_points": dict(self.line_points) if self.line_points is not None else None,
+                "lines_found": {k: list(v) for k, v in self.lines_found.items()} if self.lines_found is not None else None,
                 "thumb_url": f"/api/calibration/views/{self.index}/thumb.jpg",
                 "error_px": _r(self.error_px, 3), "bad": bool(self.bad), "warnings": list(self.warnings)}
 
@@ -227,12 +272,13 @@ class CalibrationSession:
     def __init__(self, *, kind: str, target: str, spec: Any, calib: Any, paper: str, hub: Any, rec_base: str | Path,
                  source_name: str, meta: dict | None = None, emitters: str = "", truth: Any = None,
                  restart: Callable[[], None] | None = None, notify: Callable[[str, str], None] | None = None,
-                 on_change: Callable[[], None] | None = None, sim: bool = False) -> None:
+                 on_change: Callable[[], None] | None = None, sim: bool = False, lines: Any = None) -> None:
         if kind not in KINDS:
             raise ValueError(f"unknown calibration kind {kind!r}")
         from ohs.app.live import LatestSlot
 
         self.kind, self.target, self.spec, self.calib, self.paper = kind, target, spec, calib, paper
+        self.lines = tuple(lines) if lines else guide.STANDARD_LINES  # the configured lasers ([lasers] lines)
         self.hub = hub
         self.rec_base = Path(rec_base)
         self.source_name = source_name
@@ -303,9 +349,9 @@ class CalibrationSession:
             return {"state": self.state, "kind": self.kind, "target": self.target, "id": self.id, "started": self.started,
                     "auto": self.auto, "views": [v.to_dict(self.stereo) for v in self.views],
                     "target_views": list(TARGET_VIEWS[self.kind]), "min_views": MIN_VIEWS[self.kind],
-                    "guidance": GUIDANCE[self.kind], "emitters": self.emitters, "job_id": self.job_id,
+                    "guidance": guidance(self.kind, self.lines), "emitters": self.emitters, "job_id": self.job_id,
                     "result": self.result, "recording": str(self.recording) if self.recording is not None else None,
-                    "saved": self.saved}
+                    "saved": self.saved, "lasers": list(self.lines)}
 
     # ------------------------------------------------------------------ lifecycle
     def start(self, timeout: float = 30.0) -> None:
@@ -381,7 +427,7 @@ class CalibrationSession:
     # ------------------------------------------------------------------ processing thread
     def _run(self) -> None:
         try:
-            det = guide.BoardDetector(self.kind, self.spec, self.calib, self.paper)
+            det = guide.BoardDetector(self.kind, self.spec, self.calib, self.paper, names=self.lines)
         except BaseException as e:  # reported by start()
             log.exception("the board detector could not be created")
             self._start_error = e
@@ -477,12 +523,13 @@ class CalibrationSession:
 
     def _live(self, d: guide.Detection, steady: float, ready: bool, reason: str | None, views: list) -> dict:
         lo, hi = TARGET_VIEWS[self.kind]
-        lines = None
-        if d.lines is not None:
-            m = d.margin or {}
-            lines = {"vertical": int(m.get("vertical", 0)), "horizontal": int(m.get("horizontal", 0)),
-                     "vertical_uv": _flat(d.lines["vertical"], 1, MAX_LINE_POINTS) or [],
-                     "horizontal_uv": _flat(d.lines["horizontal"], 1, MAX_LINE_POINTS) or []}
+        lines = live_lines(d)
+        if lines is not None and self.kind == "lasers":
+            for fam, members in guide.families(self.lines).items():
+                if len(members) == 2 and fam not in lines["meet_mm"]:
+                    z0 = guide.meet_distance(views, fam)
+                    if z0 is not None:
+                        lines["meet_mm"][fam] = z0
         imu = None
         if self.kind == "imu":
             imu = self._imu_live()
@@ -579,7 +626,10 @@ class CalibrationSession:
                          np.array(d.ids_l), None if d.corners_r is None else np.array(d.corners_r),
                          None if d.ids_r is None else np.array(d.ids_r), d.distance_mm, d.tilt_deg,
                          None if d.face is None else np.array(d.face),
-                         None if d.center_uv is None else np.array(d.center_uv), lines, self._view_warnings(d))
+                         None if d.center_uv is None else np.array(d.center_uv), lines, self._view_warnings(d),
+                         line_points=dict(d.line_points) if d.line_points is not None else None,
+                         lines_found={k: list(v) for k, v in d.lines_found.items()} if d.lines_found is not None else None,
+                         line_sep=dict(d.line_sep) if d.line_sep else None)
             with self._lock:
                 rows = [(v.index, v.t_host, v.file) for v in (*self.views, view)]
             snap.write_index(rows)  # on disk first: whoever sees the view in the session finds it in the recording
@@ -723,7 +773,7 @@ class CalibrationSession:
                 need, n = MIN_VIEWS[self.kind], len(self.views)
                 if n < need:
                     raise ApiError(409, f"capture at least {need} view{'s' if need != 1 else ''} first ({n} so far)",
-                                   GUIDANCE[self.kind])
+                                   guidance(self.kind, self.lines))
             self.state = "solving"
             self.result = None
             return {"views": [v.index for v in self.views], "recording": self.recording,
@@ -765,10 +815,10 @@ class CalibrationSession:
 
 
 # --------------------------------------------------------------------------- the manager
-def _idle(target: str) -> dict:
+def _idle(target: str, lines: Any = None) -> dict:
     return {"state": "idle", "kind": None, "target": target, "id": None, "started": None, "auto": True, "views": [],
             "target_views": [0, 0], "min_views": 0, "guidance": "", "emitters": "", "job_id": None, "result": None,
-            "recording": None, "saved": None}
+            "recording": None, "saved": None, "lasers": list(lines or guide.STANDARD_LINES)}
 
 
 class CalibrationManager:
@@ -789,8 +839,13 @@ class CalibrationManager:
     def state(self) -> dict:
         s = self.session
         if s is None:
-            return _idle(self.st.setup.target())
+            return _idle(self.st.setup.target(), self.lines())
         return s.to_dict()
+
+    def lines(self) -> tuple[str, ...]:
+        """The configured lasers (``[lasers] lines``)."""
+        lasers = getattr(self.st.cfg, "lasers", None)
+        return tuple(getattr(lasers, "lines", None) or guide.STANDARD_LINES)
 
     def publish(self) -> None:
         self.st.hub.publish_json({"type": "calib_session", **self.state()})
@@ -867,20 +922,23 @@ class CalibrationManager:
                                        "calibrate the stereo pair again in this camera mode (step 4)")
                 cam = dev.sim_camera() if source == "sim" else None
                 spec = st.setup.calib_spec(target)
+                lines = self.lines()
                 base = (st.sim_dir / "calibration") if target == "sim" else (st.cfg.paths.scans_path / "calibration")
                 board = {"squares_x": spec.squares_x, "squares_y": spec.squares_y, "square_mm": spec.square_mm,
                          "marker_mm": spec.marker_mm, "dictionary": spec.dictionary}
                 meta = {"purpose": f"calib_{kind}", "ohs_version": __version__, "app": "OpenHandScan Studio",
                         "target": target, "board": board, "board_scale": st.setup.board_scale(target),
-                        "paper": st.cfg.board.paper, "guidance": GUIDANCE[kind], "camera": jsonable(dev.camera_info()),
+                        "paper": st.cfg.board.paper, "guidance": guidance(kind, lines), "camera": jsonable(dev.camera_info()),
                         "pico": dev.pico_hello() or None, "emitters": list(self._levels(kind)) if source == "camera" else None}
+                if kind in ("lasers", "check"):
+                    meta["lasers"] = list(lines)
                 s = CalibrationSession(
                     kind=kind, target=target, spec=spec, calib=calib, paper=str(st.cfg.board.paper).lower(), hub=st.hub,
                     rec_base=base, source_name=dev.source_name(), meta=meta,
                     emitters=self._emitters_text(kind, source, dev.has_pico),
                     truth=getattr(cam, "true_calibration", None) if cam is not None else None,
                     restart=getattr(cam, "restart", None) if (cam is not None and kind == "imu") else None,
-                    notify=st.notify, on_change=self.publish, sim=source == "sim")
+                    notify=st.notify, on_change=self.publish, sim=source == "sim", lines=lines)
                 s.start()
                 self._emitters_on(s)
                 dev.attach(s)
@@ -1054,7 +1112,8 @@ class CalibrationManager:
                 ctx.progress(0.05 + 0.85 * (k + 1) / max(n, 1), f"Looking at {what} {k + 1} of {n}")
 
             try:
-                value, report = capture.run_flow(kind, rec, s.spec, s.calib, step=step, paper=s.paper, progress=progress)
+                value, report = capture.run_flow(kind, rec, s.spec, s.calib, step=step, paper=s.paper, progress=progress,
+                                                 lasers=s.lines)
             except JobCancelled:
                 raise
             except Exception as e:
@@ -1066,7 +1125,8 @@ class CalibrationManager:
                 raise ApiError(422, reason, res["advice"][0]["text"] if res["advice"] else None) from e
             ctx.progress(0.93, "Checking the result…", force=True)
             res = calib_results.build_result(kind, value, report if isinstance(report, dict) else {"report": report},
-                                             view_ids=snap["views"], target=s.calib, truth=s.truth, sim=s.sim)
+                                             view_ids=snap["views"], target=s.calib, truth=s.truth, sim=s.sim,
+                                             lines=s.lines)
             full = jsonable(report if isinstance(report, dict) else {"report": report})
             full = {**full, "studio": {"kind": kind, "session": s.id, "target": s.target, "grade": res["grade"],
                                        "views": snap["views"]}}
@@ -1131,13 +1191,13 @@ class CalibrationManager:
                                "add views and calibrate again, or save it anyway (force)")
             path = st.setup.calibration_path(s.target)
             existing = st.setup.load_calibration(s.target)
-            new, _engine_notes = capture.merge_calibration(existing, s.kind, s.value)
+            new, _engine_notes = capture.merge_calibration(existing, s.kind, s.value, lasers=s.lines)
             try:
                 backup = capture.save_calibration(new, path)
             except OSError as e:
                 raise ApiError(500, f"the calibration could not be written to {path}: {e}",
                                "check that the folder is writable and the disk is not full") from e
-            notes = self._notes(s.kind, existing, new, s.value)
+            notes = self._notes(s.kind, existing, new, s.value, s.lines)
             if backup is not None:
                 notes.append(f"The previous calibration is kept as {Path(backup).name}.")
             st.setup.record_part(s.target, s.kind, calib_results.part_summary(s.kind, s.report or {}, s.value), s.id)
@@ -1157,7 +1217,7 @@ class CalibrationManager:
         return {"session": s.to_dict(), "setup": setup_state}
 
     @staticmethod
-    def _notes(kind: str, existing: Any, new: Any, value: Any) -> list[str]:
+    def _notes(kind: str, existing: Any, new: Any, value: Any, lines: Any = None) -> list[str]:
         notes: list[str] = []
         if kind == "stereo" and existing is not None:
             gone = (["laser planes"] if existing.lasers else []) + (["IMU calibration"] if existing.imu is not None else [])
@@ -1166,9 +1226,9 @@ class CalibrationManager:
                              f"{'were' if len(gone) > 1 else 'was'} removed: calibrate "
                              f"{'them' if len(gone) > 1 else 'it'} again (steps 5 and 6).")
         if kind == "lasers":
-            for name in ("vertical", "horizontal"):
+            for name in (tuple(lines) if lines else guide.STANDARD_LINES):
                 if name not in (value or {}):
                     kept = existing is not None and name in existing.lasers
-                    notes.append(f"The {name} laser could not be calibrated from these views: "
+                    notes.append(f"The {guide.line_label(name)} laser could not be calibrated from these views: "
                                  + ("its previous calibration was kept." if kept else "it is still missing."))
         return notes

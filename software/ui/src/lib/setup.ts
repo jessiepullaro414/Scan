@@ -66,7 +66,7 @@ export const STEP_META: Record<SetupPage, StepMeta> = {
   },
   lasers: {
     title: "Lasers",
-    why: "The two laser planes give precise reference points, even on black and glossy paint.",
+    why: "The laser planes give precise reference points, even on black and glossy paint.",
     icon: Zap,
     time: "3 min",
     minutes: 3,
@@ -168,7 +168,7 @@ export const KIND_META: Record<CalibKind, KindMeta> = {
   },
   lasers: {
     title: "Laser calibration",
-    how: "Hold the board so both laser lines cross its white margin. Change the distance and the tilt between views.",
+    how: "Hold the board so every laser line crosses its white margin. Change the distance and the tilt between views.",
     needs: "The board and the stereo calibration. The line lasers switch on.",
     minLabel: "poses",
     distance: [150, 450],
@@ -182,7 +182,7 @@ export const KIND_META: Record<CalibKind, KindMeta> = {
   },
   check: {
     title: "Calibration check",
-    how: "Show the board with both laser lines on its margin, at 3 to 5 different distances. Nothing is changed: it only reports.",
+    how: "Show the board with every laser line on its margin, at 3 to 5 different distances. Nothing is changed: it only reports.",
     needs: "The board and a saved calibration. The line lasers switch on.",
     minLabel: "views",
     distance: [150, 450],

@@ -27,6 +27,7 @@ import { ProgressBar, Skeleton, Spinner } from "../components/ui/Feedback";
 import { Field, Switch, TextInput } from "../components/ui/Form";
 import { Callout, Code, KeyValue, Page, PageHeader, Section } from "../components/ui/Layout";
 import { fmtFixed, humanize } from "../lib/format";
+import { laserLabel } from "../lib/laserSet";
 import { navigate, paths } from "../lib/router";
 import { cn, storage } from "../lib/util";
 import { SOURCE_LABEL, useDevice, useSimDemoReady } from "../store/device";
@@ -402,7 +403,7 @@ export function DevicePage() {
                       <span className="flex flex-wrap gap-1.5">
                         {calib.lasers.map((l) => (
                           <Badge key={l} tone="accent">
-                            {l}
+                            <span title={l}>{laserLabel(l)}</span>
                           </Badge>
                         ))}
                       </span>

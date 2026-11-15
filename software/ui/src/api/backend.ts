@@ -25,7 +25,8 @@ function detectMock(): boolean {
 
 export const MOCK = detectMock();
 
-export type MockOptions = { empty: boolean; fast: boolean; drift: boolean; nopico: boolean };
+/** `lasers`: the line lasers the demo starts with (`?lasers=4`: the 4-laser build; else the two standard ones). */
+export type MockOptions = { empty: boolean; fast: boolean; drift: boolean; nopico: boolean; lasers: 2 | 4 };
 
 let ready: Promise<void> | null = null;
 
@@ -40,6 +41,7 @@ export function initBackend(): Promise<void> {
       fast: queryFlag("fast") === "1",
       drift: queryFlag("drift") === "1",
       nopico: queryFlag("nopico") === "1",
+      lasers: queryFlag("lasers") === "4" ? 4 : 2,
     });
     setFetch(backend.fetch);
     setSocketFactory(backend.socket);

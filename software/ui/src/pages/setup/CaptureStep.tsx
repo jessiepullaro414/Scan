@@ -38,8 +38,8 @@ const HOW: Record<CalibKind, string[]> = {
     "At 15–25 views, press Enter. You get a grade and plain advice.",
   ],
   lasers: [
-    "The two line lasers switch on. Never look into them.",
-    "Hold the board so both lines cross the white paper around the squares.",
+    "The line lasers switch on. Never look into them.",
+    "Hold the board so every laser line crosses the white paper around the squares.",
     "Change the distance (15–45 cm) and the tilt between poses.",
     "At 6–10 poses, press Enter.",
   ],
@@ -51,7 +51,7 @@ const HOW: Record<CalibKind, string[]> = {
   ],
   check: [
     "The line lasers switch on. Never look into them.",
-    "Show the board at 3 to 5 different distances, with both lines on its white margin.",
+    "Show the board at 3 to 5 different distances, with every laser line on its white margin.",
     "Press Enter: everything is compared with the saved calibration, which never changes.",
   ],
 };

@@ -9,6 +9,7 @@ import type { CalibKind } from "../../../api/types";
 import { Button, IconButton } from "../../../components/ui/Button";
 import { Switch } from "../../../components/ui/Form";
 import { Tooltip } from "../../../components/ui/Popover";
+import { laserRows, TWO_LASERS } from "../../../lib/laserSet";
 import { asPercent, gridPercent, KIND_META } from "../../../lib/setup";
 import { unlockAudio } from "../../../lib/sound";
 import { cn, clamp } from "../../../lib/util";
@@ -209,33 +210,42 @@ export function BoardStat({ kind }: { kind: CalibKind }) {
 }
 
 export function LaserStat() {
-  const v = useCalib((s) => s.live?.lines?.vertical ?? null);
-  const h = useCalib((s) => s.live?.lines?.horizontal ?? null);
-  if (v === null || h === null) return null;
-  const row = (label: string, n: number, color: string) => {
-    const ok = n >= 15;
-    return (
-      <li className="flex items-center gap-2.5">
-        <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ background: color }} aria-hidden />
-        <span className="flex-1 text-sm text-fg">{label}</span>
-        <span className="font-mono text-xs text-muted tnum">{n} pts</span>
-        <span
-          className={cn("inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[10.5px] font-semibold", ok ? "bg-ok-soft text-ok" : "bg-warn-soft text-warn")}
-          aria-label={ok ? `${label}: on the white margin` : `${label}: misses the white margin`}
-        >
-          {ok ? <Check size={11} strokeWidth={3} aria-hidden /> : <X size={11} strokeWidth={3} aria-hidden />}
-          {ok ? "on margin" : "missing"}
-        </span>
-      </li>
-    );
-  };
+  const lines = useCalib((s) => s.live?.lines ?? null);
+  const names = useCalib((s) => s.session?.lasers ?? TWO_LASERS);
+  if (!lines) return null;
+  const rows = laserRows(lines, names);
+  const unnamed = rows.some((r) => r.unnamed);
+  const meet = Object.entries(lines.meet_mm ?? {});
   return (
     <Block title="Laser lines" icon={Zap}>
       <ul className="space-y-2">
-        {row("Vertical line", v, "#ff5a4f")}
-        {row("Horizontal line", h, "#3ad3ff")}
+        {rows.map((r) => (
+          <li key={r.key} className="flex items-center gap-2.5">
+            <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ background: r.color }} aria-hidden />
+            <span className="flex-1 text-sm text-fg">{r.label}</span>
+            <span className="font-mono text-xs text-muted tnum">{r.points} pts</span>
+            <span
+              className={cn("inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[10.5px] font-semibold", r.ok ? "bg-ok-soft text-ok" : "bg-warn-soft text-warn")}
+              aria-label={r.ok ? `${r.label}: on the white margin` : `${r.label}: misses the white margin`}
+            >
+              {r.ok ? <Check size={11} strokeWidth={3} aria-hidden /> : <X size={11} strokeWidth={3} aria-hidden />}
+              {r.ok ? "on margin" : "missing"}
+            </span>
+          </li>
+        ))}
       </ul>
       <p className="mt-2 text-[11px] text-subtle">Each line needs 15+ points on the white paper around the squares.</p>
+      {unnamed ? (
+        <p className="mt-1 text-[11px] text-subtle">
+          Two lasers draw lines in the same direction. The app counts them now and tells them apart after this calibration.
+        </p>
+      ) : null}
+      {meet.map(([fam, mm]) => (
+        <p key={fam} className="mt-1 text-[11px] text-muted">
+          The two {fam} lines meet about <span className="font-mono tnum">{Math.round(mm)}</span> mm away. Capture views both nearer and
+          farther than that.
+        </p>
+      ))}
     </Block>
   );
 }

@@ -2,6 +2,7 @@
 import { Hand, ImageOff, Sparkles, TriangleExclamationPoint, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { CalibKind, CalibView } from "../../../api/types";
+import { TWO_LASERS, viewLaserSummary } from "../../../lib/laserSet";
 import { cn } from "../../../lib/util";
 import { useCalib } from "../../../store/calib";
 
@@ -11,7 +12,7 @@ function errTone(v: CalibView) {
   return v.error_px < 0.5 ? "ok" : v.error_px < 1 ? "warn" : "bad";
 }
 
-function Thumb({ v, kind, editable, fresh }: { v: CalibView; kind: CalibKind; editable: boolean; fresh: boolean }) {
+function Thumb({ v, kind, editable, fresh, names }: { v: CalibView; kind: CalibKind; editable: boolean; fresh: boolean; names: readonly string[] }) {
   const del = useCalib((s) => s.deleteView);
   const busy = useCalib((s) => s.action === "delete");
   const [failed, setFailed] = useState(false);
@@ -19,7 +20,7 @@ function Thumb({ v, kind, editable, fresh }: { v: CalibView; kind: CalibKind; ed
   const label = `View ${v.index + 1}${v.auto ? ", auto" : ", by hand"}${v.distance_mm !== null ? `, ${Math.round(v.distance_mm)} mm` : ""}${
     v.error_px !== null ? `, error ${v.error_px.toFixed(2)} px${v.bad ? ", flagged bad" : ""}` : ""
   }`;
-  const lines = v.lines;
+  const laser = viewLaserSummary(v, names);
   return (
     <li
       data-view={v.index}
@@ -76,9 +77,9 @@ function Thumb({ v, kind, editable, fresh }: { v: CalibView; kind: CalibKind; ed
           <span title="Corners left / right">
             {v.corners_left}/{v.corners_right ?? "–"}
           </span>
-        ) : lines ? (
-          <span title="Laser points on the margin: vertical / horizontal" className={cn(Math.min(lines.vertical, lines.horizontal) < 15 && "text-warn")}>
-            V{lines.vertical} H{lines.horizontal}
+        ) : laser ? (
+          <span title={laser.title} className={cn("min-w-0 truncate", !laser.ok && "text-warn")}>
+            {laser.text}
           </span>
         ) : (
           <span>{v.corners_left} pts</span>
@@ -94,6 +95,7 @@ const NO_VIEWS: CalibView[] = [];
 
 export function ViewsStrip({ kind, editable, className }: { kind: CalibKind; editable: boolean; className?: string }) {
   const views = useCalib((s) => s.session?.views ?? NO_VIEWS);
+  const names = useCalib((s) => s.session?.lasers ?? TWO_LASERS);
   const min = useCalib((s) => s.session?.min_views ?? 0);
   const lo = useCalib((s) => s.session?.target_views[0] ?? 0);
   const listRef = useRef<HTMLUListElement>(null);
@@ -121,7 +123,7 @@ export function ViewsStrip({ kind, editable, className }: { kind: CalibKind; edi
       </div>
       <ul ref={listRef} className="flex gap-2 overflow-x-auto px-4 pb-3 pt-2" aria-label="Captured views">
         {views.map((v) => (
-          <Thumb key={v.index} v={v} kind={kind} editable={editable} fresh={v.index === freshIndex.current} />
+          <Thumb key={v.index} v={v} kind={kind} editable={editable} fresh={v.index === freshIndex.current} names={names} />
         ))}
         {Array.from({ length: placeholders }, (_, i) => (
           <li

@@ -333,6 +333,16 @@ export const LASERS = {
   vertical: { n: [0.9473, 0, 0.3205] as V3, d: -109.8, origin: [116.4, 0, -1.4] as V3, contains: [0, 1, 0] as V3 },
   horizontal: { n: [0, -0.9594, 0.2822] as V3, d: -71.67, origin: [30, -75.1, -1.2] as V3, contains: [1, 0, 0] as V3 },
 };
+/**
+ * The 4-laser build's second pair (calibration demo only): the mirror of the vertical laser on the
+ * left of the cameras, and a horizontal laser low on the right. Like the first pair, each sheet
+ * crosses the cameras' centre line about 254 mm ahead, so each family's two lines meet there.
+ */
+export const LASERS_4 = {
+  ...LASERS,
+  vertical_2: { n: [-0.9473, 0, 0.3205] as V3, d: -52.98, origin: [-56.4, 0, -1.4] as V3, contains: [0, 1, 0] as V3 },
+  horizontal_2: { n: [0, 0.9768, 0.2143] as V3, d: -54.43, origin: [88, 56, -1.2] as V3, contains: [1, 0, 0] as V3 },
+};
 
 /** Laser points along both stripes for a camera pose (scene frame), with ~0.03 mm noise. */
 export function laserPoints(pose: Pose, samples: number, rand: () => number, out: number[]): void {

@@ -7,7 +7,7 @@
  * Frames: the board frame has x right, y down, z away from the camera, in mm, origin at the
  * board's top-left corner. Poses map board to camera: X_c = R X_b + t (R row-major).
  */
-import { LASERS, normalize, rng, type V3 } from "./geom";
+import { LASERS_4, normalize, rng, type V3 } from "./geom";
 
 export const IMG_W = 1280;
 export const IMG_H = 800;
@@ -147,8 +147,8 @@ export const pageUv = (l: Lens, p: BoardPose) =>
 type Seg = [[number, number], [number, number]];
 
 /** The laser plane (rectified left camera frame) meets the board plane in a x + b y + c = 0 (board mm). */
-function lineOnBoard(p: BoardPose, which: "vertical" | "horizontal"): [number, number, number] {
-  const L = LASERS[which];
+function lineOnBoard(p: BoardPose, which: MockLaser): [number, number, number] {
+  const L = LASERS_4[which];
   const n = rot(transpose3(p.R), L.n);
   return [n[0], n[1], L.n[0] * p.t[0] + L.n[1] * p.t[1] + L.n[2] * p.t[2] + L.d];
 }
@@ -192,12 +192,19 @@ export type LineInfo = {
   uv: number[];
 };
 
-/** Both laser lines for a pose in the rectified left view. */
-export function laserLines(p: BoardPose, paper: [number, number]): { vertical: LineInfo; horizontal: LineInfo } {
+/** The lasers the mock can show: the two standard ones and the 4-laser build's second pair. */
+export type MockLaser = keyof typeof LASERS_4;
+export const isMockLaser = (n: string): n is MockLaser => Object.prototype.hasOwnProperty.call(LASERS_4, n);
+const NO_LINE: LineInfo = { paper: null, count: 0, uv: [] };
+
+/** The laser lines of `names` (default the two standard lasers) for a pose in the rectified left
+ * view; a name the mock has no laser for gets no line. */
+export function laserLines(p: BoardPose, paper: [number, number], names: readonly string[] = ["vertical", "horizontal"]): Record<string, LineInfo> {
   const m = PAGE_MARGIN_MM;
   const px0 = -(paper[0] - BOARD.w) / 2,
     py0 = -(paper[1] - BOARD.h) / 2;
-  const one = (which: "vertical" | "horizontal"): LineInfo => {
+  const one = (which: MockLaser): LineInfo => {
+    const vertical = LASERS_4[which].contains[1] === 1;
     const [a, b, c] = lineOnBoard(p, which);
     const full = clipLine(a, b, c, px0, py0, BOARD.w - px0, BOARD.h - py0);
     const page = clipLine(a, b, c, -m, -m, BOARD.w + m, BOARD.h + m);
@@ -227,7 +234,7 @@ export function laserLines(p: BoardPose, paper: [number, number]): { vertical: L
         const s = i / n;
         const q = project(LENS_RECT, applyPose(p, [A[0] + (B[0] - A[0]) * s, A[1] + (B[1] - A[1]) * s, 0]));
         if (!q || q[0] < 0 || q[1] < 0 || q[0] >= IMG_W || q[1] >= IMG_H) continue;
-        const key = which === "vertical" ? Math.floor(q[1]) : Math.floor(q[0]);
+        const key = vertical ? Math.floor(q[1]) : Math.floor(q[0]);
         if (seen.has(key)) continue;
         seen.add(key);
         if (k++ % 6 === 0) uv.push(round1(q[0]), round1(q[1]));
@@ -235,7 +242,9 @@ export function laserLines(p: BoardPose, paper: [number, number]): { vertical: L
     }
     return { paper: full, count: seen.size, uv };
   };
-  return { vertical: one("vertical"), horizontal: one("horizontal") };
+  const out: Record<string, LineInfo> = {};
+  for (const n of names) out[n] = isMockLaser(n) ? one(n) : NO_LINE;
+  return out;
 }
 
 /** Where a laser line crosses the image at a given board distance (fronto-parallel), full-res px. */
@@ -352,7 +361,8 @@ function workshopBackground(seed: number): HTMLCanvasElement {
   return c;
 }
 
-export type DrawOpts = { lens: Lens; pose: BoardPose; paper: [number, number]; lasers: boolean; light?: number };
+/** `lasers`: false, true (the two standard lasers) or the lasers to paint. */
+export type DrawOpts = { lens: Lens; pose: BoardPose; paper: [number, number]; lasers: boolean | readonly string[]; light?: number };
 
 /** Draws one calibration camera view (640 x 400) of the board on its page. */
 export class CalibRenderer {
@@ -445,8 +455,8 @@ export class CalibRenderer {
       ctx.fillRect(0, 0, PREV_W, PREV_H);
     }
     if (o.lasers) {
-      const lines = laserLines(pose, o.paper);
-      for (const L of [lines.vertical, lines.horizontal]) {
+      const lines = laserLines(pose, o.paper, o.lasers === true ? undefined : o.lasers);
+      for (const L of Object.values(lines)) {
         if (!L.paper) continue;
         const [A, B] = L.paper;
         ctx.beginPath();

@@ -94,7 +94,7 @@ const CLI: { text: string; cmd: string }[] = [
   { text: "Check the hardware", cmd: "ohs selftest" },
   { text: "Make the board, the tags and the projector mask (print at 100 %)", cmd: "ohs printables print/" },
   { text: "Stereo: 15–25 views, 200–500 mm, tilted 20–45°", cmd: "ohs calibrate stereo" },
-  { text: "Lasers: 6–10 poses, both lines on the white margin", cmd: "ohs calibrate lasers" },
+  { text: "Lasers: 6–10 poses, every laser line on the white margin", cmd: "ohs calibrate lasers" },
   { text: "IMU: hold still 2 s, then rotate for 20–60 s", cmd: "ohs calibrate imu" },
   { text: "Check: 3–5 views, reports and never writes", cmd: "ohs calibrate check" },
 ];

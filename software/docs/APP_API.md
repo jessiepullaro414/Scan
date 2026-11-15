@@ -268,6 +268,7 @@ type CalibLive = {
 | `GET /api/setup/devices` | | `DevicesProbe` (cameras found, the Pico's serial port) |
 | `POST /api/settings/camera` | `{index?: int, swap_lr?: bool}` | `Settings`. Written to the config file; takes effect on the next connect. |
 | `POST /api/settings/process` | `{thin_walls?: "auto" \| "on" \| "off"}` | `Settings`. Written to the config file (`[process] thin_walls`); the next mesh uses it. |
+| `POST /api/settings/lasers` | `{lines: string[]}` | `Settings`. The build's line lasers, written to the config file (`[lasers] lines`). See "Line lasers" below. |
 | `GET /api/setup/printables` | | `Printables` (what was generated last; `files` empty before) |
 | `POST /api/setup/printables` | `{paper?: "letter" \| "a4"}` | `Job` (kind `printables`, result `Printables`). A paper change is saved to `board.paper`. |
 | `GET /api/setup/printables/files/{name}` | | a generated file (PDF, PNG, Gerber); 404 for anything else |
@@ -328,7 +329,7 @@ Everything in the M2 section is implemented as written, with these clarification
   - `connect` is done once a camera (device target) or the simulator (sim target) has connected. Replays don't count. The summary reads like "Camera (2560x800) and Pico (firmware ohs-fw 1.0) connected, today".
   - `selftest` is done on PASS. It is a warning on WARN or FAIL, and its summary names the checks.
   - `print` (device) is done within ±0.3 % and a warning otherwise, even after "use my measurement".
-  - `lasers` is done with both planes and a warning with only one.
+  - `lasers` is done with both planes and a warning with only one. With another laser set (see "Line lasers"), it is done when every configured laser has a plane and a warning when some have.
   - `check` is done or a warning only when the last check is newer than the last save. The last save is Studio's part info, else the file's modification time. Otherwise the step is to do.
 - `when` is the time behind the summary, or null.
 - `calibration.parts.<part>` is set only for parts that are in the file and were saved by Studio. A file from `ohs calibrate` gives null.
@@ -472,6 +473,7 @@ Everything in the M2 section is implemented as written, with these clarification
     - usable: both, < 0.3 mm (a plane may also have needed the pattern);
     - poor: one plane only;
     - failed: none.
+    - "Both" means every configured laser: with four lasers, a missing plane makes the result poor.
   - **imu:**
     - excellent: the engine's verdict is good, residual < 0.1° and the board seen in ≥ 90 % of the frames;
     - good: the engine's verdict is good;
@@ -499,6 +501,44 @@ Everything in the M2 section is implemented as written, with these clarification
 
 **WebSocket**
 - New clients also get `setup` in the seed.
+
+**Line lasers** (added 2026-11-15)
+
+The scanner's line lasers are a setting: `[lasers] lines`, default `["vertical", "horizontal"]`. A laser's name is its family, `"vertical"` or `"horizontal"` (how its line runs in the image), optionally followed by `_` and anything. The 4-laser build is `["vertical", "horizontal", "vertical_2", "horizontal_2"]`: `vertical_2` on the left of the cameras, `horizontal_2` low on the right. The emitters stay three channels (`vertical`, `horizontal`, `dots`): the two lasers of a family share one.
+
+With the two standard lasers every response keeps its fields and values; the fields below are added next to them, so an app that does not know them still works.
+
+```ts
+// added fields (all optional for a client: an older engine leaves them out)
+// SetupState.calibration:
+//   lasers_configured: string[]            the configured lasers, in the config's order
+//   lasers_missing: string[]               configured lasers without a plane in the calibration file
+// CalibSession:
+//   lasers: string[]                       the configured lasers (also when idle)
+// CalibView (lasers / check):
+//   line_points: Record<string, number | null> | null   margin points per laser; null: the line cannot be named yet
+//   lines_found: Record<string, number[]> | null        per family: margin points of each line found, largest first
+// CalibLive.lines (lasers / check):
+//   points: Record<string, number | null>  per laser, as line_points
+//   found: Record<string, number[]>        per family, as lines_found
+//   line_uv: Record<string, number[]>      image points per named laser of a family with several lasers (flattened)
+//   meet_mm: Record<string, number>        a family with two lasers: how far ahead its two lines meet, when known
+// CalibResult (lasers only):
+//   planes: CalibPlaneRow[]                one row per configured laser
+type CalibPlaneRow = { name: string; label: string;          // "vertical_2", "Second vertical"
+                       calibrated: boolean; median_mm: number | null; p95_mm: number | null;   // distance of its points from the plane
+                       views: number | null; points: number | null;
+                       where: "margin" | "both" | null;      // "both": the margin alone had too few points
+                       reason: string | null };              // why it was not calibrated
+```
+
+- **Setting:** `POST /api/settings/lasers` with `{lines: [...]}` is checked as the config checks it: every name starts with a family, none twice, at least one of each family. Anything else is 422 with the problem in plain words, and nothing is written. 409 during a scan or a calibration. 500 when the config file cannot be written. It returns `Settings` (its `lasers.lines` is the new list) and publishes `setup` and `calib_session`.
+- **Planes are never deleted** by a change of the setting. `calibration.lasers` still lists the planes in the file; `lasers_missing` lists the configured lasers without one, and the `lasers` step says which, for example "2 of 4 lasers calibrated: calibrate the lasers again for the second vertical and the second horizontal lasers". Extra planes in the file stay there and do not count as missing.
+- **Counting the lines** (lasers / check): `CalibView.lines` and `CalibLive.lines.vertical` / `horizontal` stay per family: the margin points of every line of that family. A family with one laser counts as before. A family with several lasers is split into lines (straight lines in the rectified image). When the calibration in use already has the family's planes, each point is named after the nearest plane (within 5 mm), so `points` has a number per laser and `line_uv` holds each laser's points. A first laser calibration has no planes: the lines are counted (`found`) but not named, and `points` is null for those lasers.
+- **Usable view:** each laser that can be named needs ≥ 15 margin points; a family that cannot be named needs as many lines found as it has lasers, each with ≥ 15. The `reason` names the line: "The second horizontal laser line misses the white page margin (3 points, need 15)", or "Only 1 of the 2 horizontal laser lines crosses the white page margin (need 15 points on each)". With two lasers the words are as before.
+- **Where two lines meet:** the two sheets of a family meet at some distance, and the fit tells them apart only from views on both sides of it. `meet_mm` comes from the calibrated planes when the calibration in use has them; otherwise it is estimated from the captured views (the gap between the two lines on the board shrinks to zero there; it needs three views that measured the gap). Once known and within 150–450 mm, the hint asks for at least 2 views more than 25 mm nearer and 2 more than 25 mm farther: "The two vertical laser lines meet about 254 mm from the scanner, and the calibration needs views on both sides of that point: move the board closer, to about 202 mm". The session's `guidance` says so too.
+- **Solve and save:** the solve fits one plane per configured laser; `planes`, `metrics`, `advice` and `sim_truth` follow the configured set ("Second vertical laser: fit"). Saving replaces the fitted planes and keeps the others; `saved.notes` names each configured laser that could not be calibrated.
+- **Simulator:** the virtual calibration board renders the configured lasers when the set is the two standard lasers or the 4-laser build (in any order). For any other set it shows the two standard lasers and logs a warning. The scan demo keeps its two lasers.
 
 ---
 

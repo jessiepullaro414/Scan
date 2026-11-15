@@ -28,6 +28,7 @@ import { EmptyState, Skeleton } from "../components/ui/Feedback";
 import { Segmented, Switch } from "../components/ui/Form";
 import { Code, KeyValue, Page, PageHeader, Section } from "../components/ui/Layout";
 import { humanize } from "../lib/format";
+import { FOUR_LASERS, TWO_LASERS, laserChoice, laserColor, laserLabel, type LaserChoice } from "../lib/laserSet";
 import { useConnection } from "../store/connection";
 import { configPathOf } from "../store/setup";
 import { useUi } from "../store/ui";
@@ -41,6 +42,7 @@ const SECTION_ICON: Record<string, LucideIcon> = {
   process: Wand,
   board: Grid3x3,
   markers: Tag,
+  lasers: Zap,
   server: SettingsIcon,
   projects: FolderOpen,
 };
@@ -54,6 +56,7 @@ const SECTION_HELP: Record<string, string> = {
   process: "Meshing defaults (Standard and Best quality)",
   board: "ChArUco calibration board",
   markers: "AprilTag stickers",
+  lasers: "The scanner's line lasers, for the laser calibration",
 };
 
 function unitFor(key: string): string {
@@ -236,6 +239,74 @@ function MeshingSection({ settings, onSaved }: { settings: Settings; onSaved: (s
   );
 }
 
+/** `lasers.lines` of the engine's settings; `null` when this engine has no such setting (an older engine). */
+function laserLinesOf(settings: Settings | null): string[] | null {
+  const l = settings?.lasers;
+  const v = l && typeof l === "object" ? (l as Record<string, unknown>).lines : undefined;
+  return Array.isArray(v) && v.every((x) => typeof x === "string") ? (v as string[]) : null;
+}
+
+/** The build's line lasers: two (standard) or four. Saved to the config file; another list stays as it is unless a choice is picked. */
+function LasersSection({ settings, onSaved }: { settings: Settings; onSaved: (s: Settings) => void }) {
+  const lines = laserLinesOf(settings);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<ApiError | null>(null);
+  if (!lines) return null;
+  const choice = laserChoice(lines);
+  const save = async (v: LaserChoice) => {
+    if (v === choice || v === "custom" || saving) return;
+    setSaving(true);
+    try {
+      onSaved(await api.setLasers({ lines: [...(v === "four" ? FOUR_LASERS : TWO_LASERS)] }));
+      setError(null);
+    } catch (e) {
+      setError(e instanceof ApiError ? e : new ApiError(0, String(e), null, "/api/settings/lasers"));
+    } finally {
+      setSaving(false);
+    }
+  };
+  const options: { value: LaserChoice; label: string; disabled?: boolean; title?: string }[] = [
+    { value: "two", label: "Two (standard)" },
+    { value: "four", label: "Four" },
+  ];
+  if (choice === "custom") options.push({ value: "custom", label: "Custom", disabled: true, title: "Set in the config file" });
+  return (
+    <Section title="Line lasers" icon={Zap}>
+      <div className="flex flex-wrap items-center justify-between gap-4">
+        <div className="min-w-0 flex-1 basis-64">
+          <div className="text-sm text-fg">Line lasers</div>
+          <div className="text-xs text-subtle">
+            How many line lasers your scanner has. The standard build has two; the 4-laser build adds a second vertical laser
+            on the left and a second horizontal laser low on the right. After a change, calibrate the lasers again (setup step 5).
+            Planes you calibrated are kept.
+          </div>
+        </div>
+        <Segmented label="Line lasers" value={choice} disabled={saving} onChange={(v) => void save(v)} options={options} />
+      </div>
+      <div className="mt-3 flex flex-wrap items-center gap-1.5" aria-label="Configured lasers">
+        {lines.map((n) => (
+          <span key={n} className="inline-flex items-center gap-1.5 rounded-full border border-line bg-surface-2 px-2 py-0.5 text-xs text-fg">
+            <span className="h-2 w-2 rounded-full" style={{ background: laserColor(n, lines) }} aria-hidden />
+            {laserLabel(n)}
+            {choice === "custom" ? <span className="font-mono text-[10.5px] text-subtle">{n}</span> : null}
+          </span>
+        ))}
+      </div>
+      {choice === "custom" ? (
+        <div className="mt-2 text-xs text-subtle">
+          Your config file lists its own lasers. Pick Two or Four to replace that list; otherwise it stays as it is.
+        </div>
+      ) : null}
+      {error ? (
+        <div className="mt-2 text-xs text-danger" role="alert">
+          Couldn't save the setting: {error.detail}
+          {error.hint ? <span className="text-subtle"> {error.hint}</span> : null}
+        </div>
+      ) : null}
+    </Section>
+  );
+}
+
 export function SettingsPage() {
   const theme = useUi((s) => s.theme);
   const setTheme = useUi((s) => s.setTheme);
@@ -308,6 +379,7 @@ export function SettingsPage() {
           />
         </Section>
         {settings ? <MeshingSection settings={settings} onSaved={setSettings} /> : null}
+        {settings ? <LasersSection settings={settings} onSaved={setSettings} /> : null}
         <Section title="About" icon={Info}>
           <KeyValue
             rows={[

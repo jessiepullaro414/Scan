@@ -11,6 +11,7 @@ import type {
   CameraSettingsBody,
   CaptureReply,
   ProcessSettingsBody,
+  LaserSettingsBody,
   CheckResult,
   ConnectBody,
   DeviceState,
@@ -233,6 +234,8 @@ export const api = {
   setCamera: (body: CameraSettingsBody) => post<Settings>("/api/settings/camera", body),
   /** Written to the config file; the next Make mesh uses it. */
   setProcess: (body: ProcessSettingsBody) => post<Settings>("/api/settings/process", body),
+  /** The build's line lasers, written to the config file (409 during a scan or a calibration, 422 for a bad list). */
+  setLasers: (body: LaserSettingsBody) => post<Settings>("/api/settings/lasers", body),
   printables: () => get<Printables>("/api/setup/printables"),
   /** Job (kind `printables`, result `Printables`). A paper change is saved to `board.paper`. */
   generatePrintables: (paper?: Paper) => post<Job>("/api/setup/printables", paper ? { paper } : {}),

@@ -240,6 +240,87 @@ def test_meshing_settings_are_saved_to_the_config_file(env):
     assert _ok(_post(url, "/api/settings/process", {}))["process"]["thin_walls"] == "on"  # nothing to change
 
 
+FOUR = ["vertical", "horizontal", "vertical_2", "horizontal_2"]
+
+
+def test_laser_settings_are_saved_to_the_config_file(env):
+    """POST /api/settings/lasers saves ``lasers.lines``, validated as the config validates it."""
+    url, root, studio = env["url"], env["root"], env["studio"]
+    assert _ok(_get(url, "/api/settings"))["lasers"]["lines"] == ["vertical", "horizontal"]  # the default
+    s = _ok(_post(url, "/api/settings/lasers", {"lines": FOUR}))
+    assert s["lasers"]["lines"] == FOUR and studio.cfg.lasers.lines == FOUR
+    text = (root / "config.toml").read_text(encoding="utf-8")
+    assert 'lines = ["vertical", "horizontal", "vertical_2", "horizontal_2"]' in text
+    assert "# Stereo camera (ELP dual OV9281" in text  # the rest of the file stays
+    assert load_config(root / "config.toml").lasers.lines == FOUR
+    for bad, needle in ((["vertical"], "at least one horizontal"), (["vertical", "vertical", "horizontal"], "twice"),
+                        (["diagonal", "horizontal"], "laser family"), ([], "at least one")):
+        _refused(_post(url, "/api/settings/lasers", {"lines": bad}), 422, needle)
+    _refused(_post(url, "/api/settings/lasers", {"lines": "vertical"}), 422)
+    _refused(_post(url, "/api/settings/lasers", {}), 422)
+    assert load_config(root / "config.toml").lasers.lines == FOUR and studio.cfg.lasers.lines == FOUR  # nothing written
+    s = _ok(_post(url, "/api/settings/lasers", {"lines": ["vertical", "horizontal"]}))
+    assert s["lasers"]["lines"] == ["vertical", "horizontal"]
+    assert load_config(root / "config.toml").lasers.lines == ["vertical", "horizontal"]
+
+
+def test_laser_settings_are_refused_during_a_scan_or_a_calibration(env):
+    url, root = env["url"], env["root"]
+    _ok(_post(url, "/api/device/connect", {"source": "sim"}))
+    pid = _ok(_post(url, "/api/projects", {"name": "Lasers"}))["id"]
+    assert _ok(_post(url, "/api/scan/start", {"project_id": pid}))["state"] == "scanning"
+    _refused(_post(url, "/api/settings/lasers", {"lines": FOUR}), 409, "scan is running")
+    _ok(_post(url, "/api/scan/stop"))
+    _ok(_post(url, "/api/calibration/start", {"kind": "stereo"}))
+    _refused(_post(url, "/api/settings/lasers", {"lines": FOUR}), 409, "calibration is running")
+    _ok(_post(url, "/api/calibration/cancel"))
+    assert not (root / "config.toml").exists() or "vertical_2" not in (root / "config.toml").read_text(encoding="utf-8")
+    assert _ok(_post(url, "/api/settings/lasers", {"lines": FOUR}))["lasers"]["lines"] == FOUR
+
+
+def test_setup_state_follows_the_configured_lasers(env):
+    """Changing the laser set keeps the calibrated planes; the setup says which lasers still lack one."""
+    from ohs.sim.nominal import nominal_calibration
+
+    url, root = env["url"], env["root"]
+    path = root / "device" / "calibration.json"
+    path.parent.mkdir()
+    nominal_calibration((1280, 800)).save(path)  # the two standard planes
+    s = _ok(_get(url, "/api/setup"))
+    cal, st = s["calibration"], _steps(s)
+    assert cal["lasers"] == ["horizontal", "vertical"] and cal["lasers_configured"] == ["vertical", "horizontal"]
+    assert cal["lasers_missing"] == [] and st["lasers"]["state"] == "done"
+    assert st["lasers"]["summary"].startswith("Both laser lines calibrated")
+    _ok(_post(url, "/api/settings/lasers", {"lines": FOUR}))
+    s = _ok(_get(url, "/api/setup"))
+    cal, st = s["calibration"], _steps(s)
+    assert cal["lasers"] == ["horizontal", "vertical"] and cal["lasers_configured"] == FOUR
+    assert cal["lasers_missing"] == ["vertical_2", "horizontal_2"]
+    assert st["lasers"]["state"] == "warn"
+    assert "second vertical" in st["lasers"]["summary"] and "second horizontal" in st["lasers"]["summary"]
+    assert "2 of 4" in st["lasers"]["summary"]
+    from ohs.types import ScannerCalibration
+
+    assert sorted(ScannerCalibration.load(path).lasers) == ["horizontal", "vertical"]  # nothing deleted
+    nominal_calibration((1280, 800), lasers=4).save(path)
+    s = _ok(_get(url, "/api/setup"))
+    st = _steps(s)
+    assert s["calibration"]["lasers_missing"] == [] and st["lasers"]["state"] == "done"
+    assert st["lasers"]["summary"].startswith("All 4 laser lines calibrated")
+    # back to two: the extra planes stay in the file and the step is done
+    _ok(_post(url, "/api/settings/lasers", {"lines": ["vertical", "horizontal"]}))
+    s = _ok(_get(url, "/api/setup"))
+    assert s["calibration"]["lasers"] == ["horizontal", "horizontal_2", "vertical", "vertical_2"]
+    assert s["calibration"]["lasers_missing"] == [] and _steps(s)["lasers"]["state"] == "done"
+    # a two-laser build with one plane: the old words
+    nominal_calibration((1280, 800)).save(path)
+    c = ScannerCalibration.load(path)
+    ScannerCalibration(c.stereo, {"vertical": c.lasers["vertical"]}, c.imu).save(path)
+    st = _steps(_ok(_get(url, "/api/setup")))
+    assert st["lasers"]["state"] == "warn"
+    assert st["lasers"]["summary"] == "Only the vertical laser is calibrated: calibrate the horizontal one too"
+
+
 def test_config_writer_keeps_comments_and_inserts(tmp_path):
     p = tmp_path / "c.toml"
     p.write_text("# my scanner\n[camera]\nindex = 1   # the ELP\nbackend = \"dshow\"\n\n# my board\n[board]\n"
