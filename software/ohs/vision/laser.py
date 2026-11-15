@@ -68,10 +68,15 @@ the calibrated planes):
   stereo check (and the depth check, with a dense depth map) decide which plane it is on. Where
   several pass, the smallest stereo residual wins, if their 3D points agree within
   ``family_agree_mm`` (near the line where the sheets intersect); otherwise the point is dropped.
-  The stereo check of a horizontal line hardly depends on the depth (the line runs along the
-  epipolar rows), so with a dense depth map the plane must also agree with it: the point needs
-  dense depth around it, and where its own pixel has a value, the plane whose point is closest
-  to it.
+  With a dense depth map the dense depth must confirm the plane: the point needs dense depth
+  around it and must pass the depth check on some plane, and a plane is ruled out when its point
+  is farther from the dense depth (the median of the depth check's five samples) than another
+  plane's by more than the depth check's tolerance. The stereo check of a horizontal line hardly
+  depends on the depth (the line runs along the epipolar rows), so there it rules no plane out.
+  Near the depth where a family's sheets meet, their points on one ray are a few mm apart, less
+  than the dense depth can tell apart, and such points are dropped. (A first version let the
+  dense depth on the point's own pixel pick the closest plane; on the bracket 1-5 % of the
+  horizontal_2 points then went to the wrong plane, with errors of 2 to 100 mm.)
 
 On the tests' synthetic images (two lines per family, tilted, curved, gapped and crossing each
 other at 11-13 deg) the centre error is 0.03-0.06 px rms, as for one line per family; on a
@@ -1163,32 +1168,49 @@ def _plane_labels(uv: np.ndarray, planes: list[LaserPlane], K: np.ndarray, basel
             v = np.clip(np.rint(K[1, 1] * Q[:, 1] / Q[:, 2] + K[1, 2]).astype(np.int64), 0, h - 1)
             d = depth[v, u].astype(np.float64)
             dz[k, i] = np.where(d > 0, np.abs(Q[:, 2] - d), 0.0)
+    possible = passed  # the planes a point may still be on
     if depth is not None and m > 1 and n:
-        # the stereo check of a horizontal line hardly depends on the depth, so with several
-        # planes the dense depth must confirm the plane: some dense depth around the point
-        # (without it the depth check passes anything), and where the point's own pixel has dense
-        # depth, the chosen plane's point is the one closest to it
+        # With several planes the dense depth must confirm the plane. Some dense depth around the
+        # point is needed (without it the depth check passes anything), and the point as a whole
+        # must pass the depth check on some plane (a glint passes on none). Between the planes,
+        # the dense depth (the median of the depth check's five samples: on the line itself it can
+        # be wrong) rules a plane out only when its point is farther from it than another
+        # plane's by more than the depth check's tolerance. The stereo check of a horizontal line
+        # hardly depends on the depth (the line runs along the epipolar rows), so in a horizontal
+        # family it rules no plane out: only the depth range and the dense depth do. Near the
+        # depth where a family's sheets meet, their points on one ray are a few mm apart, less
+        # than the dense depth can tell apart; such points are dropped by the agreement rule below.
         h, w = depth.shape[:2]
         ui = np.clip(np.rint(uv[:, 0]).astype(np.int64), 0, w - 1)
         vi = np.clip(np.rint(uv[:, 1]).astype(np.int64), 0, h - 1)
         o = max(2, int(round(6.0 * w / 1280.0)))  # the depth check's sample offsets
-        seen = np.zeros(n, bool)
+        samples, sig = [], []
         for du, dv in ((0, 0), (0, -o), (0, o), (-o, 0), (o, 0)):
-            seen |= depth[np.clip(vi + dv, 0, h - 1), np.clip(ui + du, 0, w - 1)] > 0
-        here = depth[vi, ui].astype(np.float64)
-        gapz = np.where(in_range, np.abs(z - here[None, :]), np.inf)
-        closest = np.argmin(gapz, axis=0)
-        passed &= seen[None, :]
-        passed &= ~((here > 0)[None, :] & (np.arange(m)[:, None] != closest[None, :]))
+            yy, xx = np.clip(vi + dv, 0, h - 1), np.clip(ui + du, 0, w - 1)
+            dd = depth[yy, xx].astype(np.float64)
+            samples.append(np.where(dd > 0, dd, np.nan))
+            sig.append(np.where(dd > 0, depth_sigma[yy, xx] if depth_sigma is not None else DEPTH_SIGMA_REL * dd, np.nan))
+        samples, sig = np.array(samples), np.array(sig)
+        seen = np.isfinite(samples).any(axis=0)
+        here = np.full(n, np.nan)
+        s_here = np.full(n, np.nan)
+        here[seen] = np.nanmedian(samples[:, seen], axis=0)
+        s_here[seen] = np.nanmedian(sig[:, seen], axis=0)
+        tol = np.maximum(float(p.depth_check_min_mm), float(p.depth_check_k) * s_here)
+        along_rows = all(is_line_name(pl.name) and line_family(pl.name) == "horizontal" for pl in planes)
+        possible = (in_range if along_rows else ok) & (seen & passed.any(axis=0))[None, :]
+        gapz = np.where(possible, np.abs(z - here[None, :]), np.inf)
+        possible &= ~(gapz > gapz.min(axis=0)[None, :] + tol[None, :])
+        passed = ok & possible
     n_pass = passed.sum(axis=0)
     if m > 1 and n:
-        # several planes take the point: only where their 3D points agree (where the sheets
-        # intersect); elsewhere the checks cannot tell which line it is (a horizontal line runs
-        # along the epipolar rows, so its stereo check hardly depends on the depth)
-        Pz = np.where(passed[:, :, None], P, 0.0)
-        mean = Pz.sum(axis=0) / np.maximum(n_pass, 1)[:, None]
-        spread = np.where(passed, np.linalg.norm(Pz - mean[None], axis=2), 0.0).max(axis=0)
-        unsure = (n_pass > 1) & ~(spread <= 0.5 * float(p.family_agree_mm))
+        # several planes may take the point: only where their 3D points agree (where the sheets
+        # intersect); elsewhere the checks cannot tell which line it is
+        n_pos = possible.sum(axis=0)
+        Pz = np.where(possible[:, :, None], P, 0.0)
+        mean = Pz.sum(axis=0) / np.maximum(n_pos, 1)[:, None]
+        spread = np.where(possible, np.linalg.norm(Pz - mean[None], axis=2), 0.0).max(axis=0)
+        unsure = (n_pos > 1) & ~(spread <= 0.5 * float(p.family_agree_mm))
         passed[:, unsure] = False
     if right_uv is not None:
         score = np.where(passed, resid, np.inf)

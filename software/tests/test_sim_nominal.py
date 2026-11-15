@@ -89,7 +89,7 @@ def test_layouts_of_the_second_pair():
     from ohs.sim.render import _nominal_layout
 
     four = nominal_calibration(lasers=4)
-    assert {"2", "4", "4-straight", "4-cross600"} <= set(LASER_LAYOUTS)
+    assert {"2", "4", "4-straight", "4-cross350", "4-cross450", "4-cross600", "4-apart"} <= set(LASER_LAYOUTS)
     for name, pl in nominal_calibration(layout="4").lasers.items():
         assert np.array_equal(pl.normal, four.lasers[name].normal) and pl.d == four.lasers[name].d
     for layout in LASER_LAYOUTS:

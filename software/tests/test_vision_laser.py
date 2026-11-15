@@ -15,6 +15,7 @@ from ohs.types import LaserPlane
 from ohs.vision.laser import (
     LaserLines,
     LaserParams,
+    assign_planes,
     depth_check,
     draw_overlay,
     extract_laser_lines,
@@ -610,6 +611,45 @@ def test_laser_points_measure_each_plane_from_the_farther_camera():
     assert len(errs["farther"]) > 0.9 * len(errs["left"])
     assert np.median(errs["farther"]) < 0.75 * np.median(errs["left"])
     assert np.percentile(errs["farther"], 95) < 0.85 * np.percentile(errs["left"], 95)
+
+
+def test_dense_depth_decides_a_plane_only_where_it_can():
+    """Near where two horizontal sheets meet, their points on one ray are a few mm apart. A dense
+    depth 0.3 mm from the wrong plane's point and 2.5 mm from the right one's (within its 4-sigma
+    tolerance of both) cannot tell them apart: the point must not go to the wrong plane. A dense
+    depth that does tell them apart (both far beyond the tolerance from one) still decides."""
+    from ohs.sim.nominal import nominal_calibration
+
+    cal = nominal_calibration(lasers=4)
+    h1, h2 = cal.lasers["horizontal"], cal.lasers["horizontal_2"]
+    # a pixel row a little below the centre, where the two sheets' points on a ray differ by ~2.7 mm
+    v = np.full(40, 400.5)
+    u = np.linspace(500.0, 780.0, 40)
+    uv = np.stack([u, v], 1)
+    P1, P2 = triangulate_plane(uv, K_FULL, h1), triangulate_plane(uv, K_FULL, h2)
+    gap = np.abs(P1[:, 2] - P2[:, 2])
+    assert np.all((gap > 1.5) & (gap < 4.0))
+    # the right image's line of the true plane (h1) along that row: both planes pass the stereo
+    # check, since a horizontal line runs along the epipolar row
+    ur = np.arange(300.0, 900.0)
+    right_uv = np.stack([ur, np.full(len(ur), 400.5)], 1)
+    sigma = np.full((H, W), 0.64, np.float32)  # tolerance 4 sigma = 2.56 mm
+    depth = np.zeros((H, W), np.float32)
+    z_wrong = P2[:, 2] + 0.3 * np.sign(P1[:, 2] - P2[:, 2])  # between the two, as on the bracket
+    for k in range(len(u)):
+        ui = int(round(u[k]))
+        depth[390:411, ui - 7 : ui + 8] = z_wrong[k]
+    _, label = assign_planes(uv, [h1, h2], K_FULL, B, replace(LaserParams(), lines_per_family=2), right_uv, depth, sigma)
+    assert not np.any(label == 1), f"{np.sum(label == 1)} of {len(label)} points went to the wrong plane"
+    # a dense depth far from one plane's points (beyond the tolerance) still picks the other
+    far = np.zeros((H, W), np.float32)
+    for k in range(len(u)):
+        ui = int(round(u[k]))
+        far[390:411, ui - 7 : ui + 8] = P1[k, 2]
+    p6 = replace(LaserParams(), lines_per_family=2)
+    sig_small = np.full((H, W), 0.2, np.float32)  # tolerance max(1 mm, 0.8 mm): the planes are > 1.5 mm apart
+    _, label = assign_planes(uv, [h1, h2], K_FULL, B, p6, right_uv, far, sig_small)
+    assert np.all(label == 0)
 
 
 def test_laser_points_one_plane_per_family_is_unchanged():

@@ -117,6 +117,8 @@ LASER_LAYOUTS: dict[str, dict[str, float | tuple[str, float]]] = {
     # the second pair crossing the centre line a little farther out: its lines still near the image
     # centre at 250 mm, each family's sheets meeting at about 290-295 mm
     "4-cross350": {"vertical": _WORK_DIST, "horizontal": _WORK_DIST, "vertical_2": 350.0, "horizontal_2": 350.0},
+    # farther still: each family's sheets meeting at about 315-325 mm
+    "4-cross450": {"vertical": _WORK_DIST, "horizontal": _WORK_DIST, "vertical_2": 450.0, "horizontal_2": 450.0},
     # the second pair crossing the centre line near, so that each family's sheets meet at about 195-200 mm
     "4-cross150": {"vertical": _WORK_DIST, "horizontal": _WORK_DIST, "vertical_2": 150.0, "horizontal_2": 150.0},
     # the second pair turned slightly away from the centre line, so that each family's sheets meet
