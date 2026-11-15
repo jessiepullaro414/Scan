@@ -383,6 +383,17 @@ def _timed(fn: Callable[..., Any], *args: Any) -> tuple[Any, float]:
     return out, _ms(t0)
 
 
+def _lines_then_points(futs: tuple, points: Callable[..., dict]) -> tuple:
+    """In a laser thread: collect the two extractions ``futs`` (each ``(lines, ms)``; the right one
+    may be None), then ``points(lines_left=..., lines_right=...)``. Returns ``(lines, lines_right,
+    points, ms of both extractions, ms of the points, when the lines were there)``."""
+    lines, ms_l = futs[0].result()
+    lines_r, ms_r = futs[1].result() if futs[1] is not None else (None, 0.0)
+    t_lines = time.perf_counter()
+    pts = points(lines_left=lines, lines_right=lines_r)
+    return lines, lines_r, pts, ms_l + ms_r, _ms(t_lines), t_lines
+
+
 def _ms(t0: float) -> float:
     return 1e3 * (time.perf_counter() - t0)
 
@@ -646,8 +657,7 @@ class FramePipeline:
         tim["rectify"] = _ms(t0)
 
         # the laser lines are extracted in two CPU threads while the depth runs (on the GPU, or in
-        # SGBM's own threads): laser_extract is how long the frame then still waits for them,
-        # laser_extract_cpu the extraction's own time
+        # SGBM's own threads) and, when they take longer than it, while the frame is tracked
         futs = None
         if self.planes:
             if self._laser_pool is None:
@@ -671,23 +681,19 @@ class FramePipeline:
             if self.dual_model and (pose is not None or p.mode == "markerless"):
                 self._start_tracking_input(depth)
 
-        lines = lines_r = None
-        if futs is not None:
-            t0 = time.perf_counter()
-            lines, ms_l = futs[0].result()
-            lines_r, ms_r = futs[1].result() if futs[1] is not None else (None, 0.0)
-            tim["laser_extract"] = _ms(t0)
-            tim["laser_extract_cpu"] = ms_l + ms_r
-
-        # the laser points need the depth but not the pose: they are triangulated in a laser thread
-        # while the frame is tracked and fused. laser_triangulate is how long the frame then still
-        # waits for them (and adds them to the cloud), laser_triangulate_cpu their own time
+        # The lines are needed only for the laser points, and those need the depth but not the
+        # pose. So the frame does not wait for the lines here (with four lasers their extraction
+        # outlasts the depth): a laser thread collects them and triangulates the points while the
+        # frame is tracked and fused. After tracking the frame waits for what is left of that:
+        # laser_extract is the part of the wait until the lines are there, laser_triangulate the
+        # rest (the points, and adding them to the cloud); laser_extract_cpu and
+        # laser_triangulate_cpu are the work's own times
         fut_pts = None
         rejected: dict[str, int] = {}
-        if self.planes:
-            fut_pts = self._laser_pool.submit(_timed, partial(
+        if futs is not None:
+            fut_pts = self._laser_pool.submit(_lines_then_points, futs, partial(
                 laser_points, left_r, right_r, self.K, self.baseline, self.planes, self.laser_params,
-                lines_left=lines, lines_right=lines_r, depth=depth, depth_sigma=sigma, rejected=rejected))
+                depth=depth, depth_sigma=sigma, rejected=rejected))
 
         t0 = time.perf_counter()
         if pose is not None:
@@ -708,15 +714,18 @@ class FramePipeline:
         self._t_prev = t
 
         pts: dict[str, np.ndarray] = {}
+        lines = lines_r = None
         if fut_pts is not None:
             t0 = time.perf_counter()
-            pts, tim["laser_triangulate_cpu"] = fut_pts.result()
+            lines, lines_r, pts, tim["laser_extract_cpu"], tim["laser_triangulate_cpu"], t_lines = fut_pts.result()
             for name, n in rejected.items():
                 self.laser_rejected[name] = self.laser_rejected.get(name, 0) + n
             if track.ok:
                 for name, P in pts.items():
                     self.cloud.add(P, track.T_wc, name)
-            tim["laser_triangulate"] = _ms(t0)
+            wait = _ms(t0)
+            tim["laser_extract"] = min(wait, max(0.0, 1e3 * (t_lines - t0)))
+            tim["laser_triangulate"] = wait - tim["laser_extract"]
             tim["laser"] = tim["laser_extract"] + tim["laser_triangulate"]
         tim["total"] = _ms(t_start)
         if len(self.gpu_fallbacks) > n_fallbacks:  # a GPU stage failed on this frame: the rest runs on the CPU

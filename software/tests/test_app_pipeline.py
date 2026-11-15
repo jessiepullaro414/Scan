@@ -108,6 +108,53 @@ def test_laser_points_equal_the_inline_computation(reader):
             assert cloud.raw_points([name]).tobytes() == np.concatenate(chunks).tobytes()
 
 
+def test_tracking_does_not_wait_for_the_laser_lines(reader, monkeypatch):
+    """The lines are needed only for the laser points, so the frame is tracked and fused while they
+    are still being extracted (with four lasers the extraction outlasts the depth). The frame's
+    lines and points are the same however long the extraction takes."""
+    import time
+
+    import ohs.app.pipeline as pl
+
+    with FramePipeline(reader.calibration()) as pipe:
+        want = feed(pipe, reader, positions=range(2))
+    real = pl.extract_laser_lines
+    done: list[float] = []
+    fused: list[float] = []
+
+    def slow(img, params):
+        time.sleep(1.0)
+        out = real(img, params)
+        done.append(time.perf_counter())
+        return out
+
+    with FramePipeline(reader.calibration()) as pipe:
+        real_fuse = pipe._fuse
+
+        def fuse(*args, **kwargs):
+            fused.append(time.perf_counter())
+            return real_fuse(*args, **kwargs)
+
+        monkeypatch.setattr(pipe, "_fuse", fuse)
+        monkeypatch.setattr(pl, "extract_laser_lines", slow)
+        got = feed(pipe, reader, positions=range(2))
+    assert len(fused) == 2 and len(done) == 4
+    # the second frame (the first also builds the GPU programs): fused before either image's lines were there
+    assert fused[1] < min(done[2:]), f"fusion started {fused[1] - min(done[2:]):.2f} s after the lines were there"
+    for r, w in zip(got, want):
+        assert r.track.ok and isinstance(r.lines, LaserLines) and isinstance(r.lines_right, LaserLines)
+        for f in ("vertical", "horizontal", "vertical_segment", "horizontal_segment"):
+            assert getattr(r.lines, f).tobytes() == getattr(w.lines, f).tobytes()
+            assert getattr(r.lines_right, f).tobytes() == getattr(w.lines_right, f).tobytes()
+        assert list(r.laser_points) == list(w.laser_points)
+        for name, P in w.laser_points.items():
+            assert r.laser_points[name].tobytes() == P.tobytes()
+        # the frame waited for the lines at its end, and says so
+        assert r.timings_ms["laser_extract"] > 300.0
+        assert r.timings_ms["laser"] == r.timings_ms["laser_extract"] + r.timings_ms["laser_triangulate"]
+        assert r.timings_ms["laser_extract_cpu"] > 1900.0
+
+
 def test_defaults_follow_resolution():
     with pytest.raises(ValueError):
         PipelineParams(mode="slam")

@@ -1008,6 +1008,31 @@ bench medians before and after in the commit message.
   `VALIDATION.md` next to the Radeon's.
 - **Not measured:** the CPU path's frame time; real images.
 
+### [x] E9. The frame waits for the laser lines before it is tracked (M) ✔
+- **Done 2026-11-15** (the user chose this over compiling the linking loop, F8). The lines are
+  needed only for the laser points, and those need the depth but not the pose. The frame no
+  longer collects the lines before tracking: a laser thread waits for both extractions and
+  triangulates (`_lines_then_points` in `ohs/app/pipeline.py`), and the frame collects lines and
+  points once it is tracked and fused. `laser_extract` and `laser_triangulate` are now the two
+  parts of that one wait at the end (until the lines are there; the rest), so `laser` is still
+  their sum; `ohs/app/bench.py` says so.
+- **Guard, added first:** `tests/test_app_pipeline.py::test_tracking_does_not_wait_for_the_laser_lines`
+  slows the extraction by a second: the fusion must start before the lines are there, and the
+  frame's lines and laser points must be the same as without the delay. On the old code it
+  failed with "fusion started 0.06 s after the lines were there".
+- **Same results:** the snapshot (`tools/snapshot.py`, 90 frames, preview and full, GPU path) is
+  identical to the one of the code before; the pipeline tests pass on both paths.
+- **Measured on the Radeon PC** (`tools/frame_timing.py`, old and new alternated, four runs each,
+  median ms a frame): at 1280x800 four lasers 214-228 to 209-226 and two lasers 153-160 to
+  149-155; at 640x400 four lasers 120-131 to 109-129 and two lasers 72-87 to 72-79 (one first
+  run 98). A few ms at most, inside the spread. On this PC the laser work that held the frame
+  up now slows the tracking it runs beside instead (with four lasers at 1280x800 the wait
+  goes from 72-80 to 0-5 ms and tracking from 54-59 to 100-107 ms): F8. The PC also ran slower
+  in these runs than in the morning's with the same code (two lasers 154 against 135 ms); why
+  is not known.
+- **Not measured yet:** the RTX laptop, where work beside the GPU is not slowed and the frame
+  waited 11.5-12.8 ms for the lines (four lasers, 1280x800); the CPU path's frame time.
+
 ---
 
 ## P. Offline processing
@@ -1467,10 +1492,9 @@ Every task here: the type check, `npm test`, and for bundle tasks the chunk size
   640x400; nothing with two lasers). Likely the linking loop (`_link_tracks`), which is Python
   code and holds Python's lock; not measured apart.
 - **To do:** on this PC try the Windows power mode "Best performance" and note the GPU driver
-  version with each run. For the wait with four lasers, two ways that keep the results as
-  they are: let the frame stop waiting for the lines before tracking starts (they are needed
-  only for the laser points, which are already computed beside the tracker), or compile the
-  linking loop (a new dependency: ask first). Measure either on both machines.
+  version with each run. For the wait with four lasers there were two ways that keep the
+  results as they are: the frame no longer waits for the lines before tracking starts (done,
+  E9), and compiling the linking loop (a new dependency: ask first; not done).
 
 ### [ ] F9. Preview on the RTX laptop's bench reads slower than in tuning round 2
 - **Seen 2026-11-15**, one run of `ohs bench --device gpu` at d4af63a with the laptop's usual

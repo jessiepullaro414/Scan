@@ -17,11 +17,12 @@
 
    * speed: per stage of ``FrameResult.timings_ms`` the mean and median ms per frame, the total
      and frames per second, and the GPU speed-up per stage and overall. ``laser`` is
-     ``laser_extract + laser_triangulate``, where ``laser_extract`` is how long the frame still waits
-     for the laser lines (they are extracted in two threads during the depth; ``laser_extract_cpu``
-     is their own time, both images together) and ``laser_triangulate`` how long it still waits for
-     the laser points and adds them to the cloud (they are triangulated in a thread while the frame
-     is tracked and fused; ``laser_triangulate_cpu`` is their own time); ``track`` includes
+     ``laser_extract + laser_triangulate``: how long the frame, once it is tracked and fused, still
+     waits for the laser work. ``laser_extract`` is the part of that wait until the laser lines
+     are there (they are extracted in two threads during the depth and the tracking;
+     ``laser_extract_cpu`` is their own time, both images together) and ``laser_triangulate`` the
+     rest: the laser points, and adding them to the cloud (they are triangulated in a thread as
+     soon as the lines are there; ``laser_triangulate_cpu`` is their own time); ``track`` includes
      ``track_filter`` (on the GPU: the wait that is left for the filter, which starts when the depth
      is there), ``raycast``,
      ``icp`` and the integrations;
