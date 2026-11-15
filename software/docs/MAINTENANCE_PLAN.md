@@ -1526,6 +1526,18 @@ Every task here: the type check, `npm test`, and for bundle tasks the chunk size
 - **To do:** run the bench three times at each of the two commits on the laptop, idle, and
   compare the stage lines of preview (depth 15.0 / 14.7 ms and track 13.1 / 11.3 ms in this run).
 
+### [ ] F10. The wizard test's stereo step came up two views short once, in a slow full run
+- **Seen 2026-11-15**, once: `tests/test_server_calibration.py::test_wizard_end_to_end_on_the_simulator`
+  with `OHS_COMPUTE=cpu`, in the full suite at bb5ca37: the stereo step had 8 views when no new
+  view had come for 8 s, and the test wants 10 (`_views(url, 15, stall_s=8.0)`). The other 772
+  tests of that run passed, and the GPU-path run before it passed whole (823 passed, 6 skipped).
+- **Not repeated:** the test alone passed twice straight after on the CPU path. The calibration
+  session does not use the frame pipeline, which was the change under test (E9).
+- **Likely the clock, not the code:** the check depends on real time, and the PC was slow that
+  afternoon (the same suite took 20 minutes instead of 14 to 15; F8). Not proven.
+- **To do if it is seen again:** note how long the run took and what else ran. The test is not
+  loosened for now.
+
 ## Reviewed and fine: leave alone
 
 So nobody spends a session on these again.
