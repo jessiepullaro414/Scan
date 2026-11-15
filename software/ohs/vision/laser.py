@@ -114,8 +114,11 @@ from __future__ import annotations
 
 import logging
 import math
+import os
+import threading
 from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
+from typing import Any
 
 import cv2
 import numpy as np
@@ -375,18 +378,70 @@ def _link_tracks(t: np.ndarray, c: np.ndarray, p: "LaserParams") -> np.ndarray:
     into one, whose centre is biased: every candidate within ``family_sep`` of either prediction
     is dropped, and both tracks carry on along their predictions (``max_gap`` does not end them
     there) until they are apart again. Finally, points closer than ``family_sep`` to a point of
-    another track of ``min_segment`` points or more in the same row are dropped too."""
+    another track of ``min_segment`` points or more in the same row are dropped too.
+
+    The row-by-row part runs compiled when numba is installed (:func:`compiled_link_rows`), else
+    in Python (:func:`_link_rows`); both give the same labels."""
     n = len(t)
-    lab = np.full(n, -1, np.int64)
     if n == 0:
-        return lab
-    tl, cl = t.tolist(), c.tolist()
+        return np.full(0, -1, np.int64)
+    t = np.ascontiguousarray(t, dtype=np.int64)
+    c = np.ascontiguousarray(c, dtype=np.float64)
     sep = float(p.family_sep)
-    gap = int(p.max_gap) + 1
-    step = float(p.max_step)
     hist = 8  # points behind the slope estimate; also the length of an established track
+    rows = compiled_link_rows() or _link_rows
+    lab = rows(t, c, sep, int(p.max_gap) + 1, float(p.max_step), hist, _nms_radius(p))
+    # overlapping profiles: a point of another long track in the same row closer than the separation
+    long_ = np.zeros(n, bool)
+    ok = lab >= 0
+    long_[ok] = np.bincount(lab[ok])[lab[ok]] >= p.min_segment
+    same = (t[1:] == t[:-1]) & (np.abs(np.diff(c)) < sep) & long_[1:] & long_[:-1] & (lab[1:] != lab[:-1])
+    close = np.r_[same, False] | np.r_[False, same]
+    lab[close] = -1
+    return lab
+
+
+_LINK_COMPILED: Any = None  # the compiled loop; False: not to be had; None: not tried yet
+_LINK_LOCK = threading.Lock()
+
+
+def compiled_link_rows() -> Any:
+    """The compiled row loop (:func:`ohs.vision.laser_link.link_rows`), or None when numba is not
+    installed, cannot compile it, or the environment variable ``OHS_NUMBA`` is ``0`` (read once).
+    The first call imports numba and compiles or loads the cached code (seconds, once per
+    process); :class:`ohs.app.pipeline.FramePipeline` makes that call when it is built for a
+    scanner with several lines per family, so that no frame waits for it."""
+    global _LINK_COMPILED
+    if _LINK_COMPILED is None:
+        with _LINK_LOCK:
+            if _LINK_COMPILED is None:
+                found: Any = False
+                if os.environ.get("OHS_NUMBA", "1").strip().lower() in ("0", "off", "false", "no"):
+                    log.info("OHS_NUMBA is off: the laser lines are linked in Python")
+                else:
+                    try:
+                        from ohs.vision.laser_link import link_rows
+
+                        link_rows(np.zeros(0, np.int64), np.zeros(0, np.float64), 1.0, 1, 1.0, 8, 2)
+                        found = link_rows
+                    except ImportError:
+                        log.info("numba is not installed: the laser lines are linked in Python "
+                                 "(pip install numba shortens frames with several lines per direction)")
+                    except Exception as e:  # numba present but unable to compile here
+                        log.warning("the compiled line linking cannot be used (%s): linking in Python", e)
+                _LINK_COMPILED = found
+    return _LINK_COMPILED or None
+
+
+def _link_rows(t: np.ndarray, c: np.ndarray, sep: float, gap: int, step: float, hist: int, rad: int) -> np.ndarray:
+    """The row-by-row part of :func:`_link_tracks` in Python: the label of each candidate's track,
+    -1 for a dropped one. :func:`ohs.vision.laser_link.link_rows` is the same loop for numba; a
+    change here is a change there."""
+    n = len(t)
+    if n == 0:
+        return np.full(0, -1, np.int64)
+    tl, cl = t.tolist(), c.tolist()
     # one ridge: a row's candidates closer than the NMS radius (re-centring can bring two together)
-    rad = _nms_radius(p)
     drop = [False] * n
     for k in range(1, n):
         if tl[k] == tl[k - 1] and abs(cl[k] - cl[k - 1]) < rad and not drop[k - 1]:
@@ -475,15 +530,7 @@ def _link_tracks(t: np.ndarray, c: np.ndarray, p: "LaserParams") -> np.ndarray:
                 for bb in range(a + 1, len(here)):
                     tg = together.setdefault((here[a], here[bb]), [row, 0])
                     tg[0], tg[1] = row, tg[1] + 1
-    lab = np.asarray(labs, np.int64)
-    # overlapping profiles: a point of another long track in the same row closer than the separation
-    long_ = np.zeros(n, bool)
-    ok = lab >= 0
-    long_[ok] = np.bincount(lab[ok])[lab[ok]] >= p.min_segment
-    same = (t[1:] == t[:-1]) & (np.abs(np.diff(c)) < sep) & long_[1:] & long_[:-1] & (lab[1:] != lab[:-1])
-    close = np.r_[same, False] | np.r_[False, same]
-    lab[close] = -1
-    return lab
+    return np.asarray(labs, np.int64)
 
 
 def _seg_sizes(seg: np.ndarray) -> np.ndarray:

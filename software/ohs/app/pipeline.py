@@ -154,8 +154,8 @@ from ohs.track.markers import MarkerParams, MarkerTracker
 from ohs.track.recon_tsdf import BACK_VOXELS, GUARD_PX_1280, ConfidenceTsdf, gap_guard_mask
 from ohs.types import ImuSample, LaserPlane, ScannerCalibration, StereoFrame, TrackResult
 from ohs.vision.depth import SIGMA_MODELS, DepthEstimator, DepthParams
-from ohs.vision.laser import (LaserLines, LaserParams, extract_laser_lines, is_line_name, laser_points,
-                              lines_per_family)
+from ohs.vision.laser import (LaserLines, LaserParams, compiled_link_rows, extract_laser_lines, is_line_name,
+                              laser_points, lines_per_family)
 from ohs.vision.rectify import Rectifier
 
 __all__ = [
@@ -448,6 +448,8 @@ class FramePipeline:
         per_family = lines_per_family(planes)
         if per_family != self.laser_params.lines_per_family:
             self.laser_params = replace(self.laser_params, lines_per_family=per_family)
+        if per_family > 1:
+            compiled_link_rows()  # numba's start (about a second; the first time ever it compiles) is paid here, not by a frame
 
         # reconstruction TSDF (raw depth) and, in markerless mode, the tracking TSDF (filtered depth).
         # The confidence TSDF only reconstructs: with track_filter_px=0 the model also tracks, so Open3D.

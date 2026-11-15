@@ -1589,6 +1589,15 @@ The sphere-on-plane scan through `process_recording` (realistic camera model, ma
   | Radeon PC, new | 128.8 / 109.1 / 117.5 / 113.8 | 213.0 / 226.3 / 208.9 / 212.9 |
 
   On both machines the wait for the lines goes to zero and the tracking takes about that much longer (laptop, 1280x800: wait 7–13 ms to 0, tracking 15–20 to 25–34 ms; Radeon: wait 72–80 to 0–5 ms, tracking 54–59 to 100–107 ms). The laser threads and the tracker do not really work at the same time: on the Radeon PC the processor is slowed by the GPU, and on the laptop the likely reason is that both are mostly short Python and numpy steps, which run in one thread at a time. The Radeon PC also ran slower in this session than in the morning's table above with the same code (two lasers 154 against 135 ms at 1280x800); the reason is not known, so compare within this table only. The snapshot of 90 frames (preview and full, GPU path) is identical before and after.
+- **The linking loop compiled with numba (2026-11-15, plan E10; optional, the same lines without it).** The loop that links each row's candidates into lines was the Python part left in the extraction. With numba installed it runs as compiled code outside Python's lock. numba on and off in turns with `tools/frame_timing.py` on the Radeon PC, median ms a frame:
+
+  | | 640x400 | 1280x800 |
+  |---|---|---|
+  | Four lasers, without numba | 112.8 / 113.1 / 117.1 / 119.7 | 213.9 / 208.3 / 214.2 / 212.7 |
+  | Four lasers, with numba | 100.5 / 95.9 / 99.9 / 103.8 | 174.9 / 175.0 / 181.7 / 175.9 |
+  | Two lasers (do not use it) | 70–83 | 146–152 |
+
+  That is about 36 ms a frame less at 1280x800 (17 %) and about 16 ms at 640x400 (14 %). The lines are the same bit for bit (`tests/test_vision_laser_link.py`; the 120 four-laser images of the two recorded scans). Starting numba costs about a second when the pipeline is built, and 6.4 s the first time ever, when the loop is compiled.
 
 ### Calibration of four planes
 

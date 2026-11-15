@@ -1049,6 +1049,34 @@ bench medians before and after in the commit message.
   would rather have the old order back.
 - **Not measured:** the CPU path's frame time.
 
+### [x] E10. The linking loop of the line extraction, compiled (M) ✔
+- **Done 2026-11-15** (the user said yes to numba as an optional speed-up with a fallback, and
+  to installing it on both PCs). The row-by-row loop of `_link_tracks` is now `_link_rows` in
+  `ohs/vision/laser.py` (Python, as before) and `link_rows` in the new
+  `ohs/vision/laser_link.py` (the same loop written with arrays, compiled by numba, run without
+  Python's lock). `compiled_link_rows()` picks the compiled one when numba can be imported and
+  `OHS_NUMBA` is not `0`; otherwise the Python loop runs and a line in the log says so. numba is
+  the optional extra `fast` in `pyproject.toml`; nothing needs it. Only builds with several
+  lines per direction reach this code.
+- **Start-up:** importing numba and loading the cached code takes about 1 s per process, and
+  the first compile ever 6.4 s (Radeon PC). `FramePipeline` pays that when it is built for such
+  a scanner, not in a frame.
+- **Guard, added first:** `tests/test_vision_laser_link.py` (skipped without numba): compiled and
+  Python loop give the same labels on 200 made-up candidate sets (lines that cross, merge,
+  have gaps; crowded rows) and on a case with more pairs in a row than the first buffer holds;
+  the whole extraction is the same bit for bit on the synthetic two-lines images and on
+  rendered simulator frames; the compiled code rounds a multiply-add in two steps like Python;
+  the switch and the fallback work. A deliberate mistake in the compiled loop made four of the
+  tests fail. Outside the repository: the lines of the 120 four-laser images of two recorded
+  scans are identical to the morning's, with numba and with `OHS_NUMBA=0`.
+- **Measured on the Radeon PC** (`tools/frame_timing.py`, numba on and off in turns, four runs
+  each, median ms a frame, four lasers): at 1280x800 208-214 to 175-182; at 640x400 113-120 to
+  96-104. Two lasers stay at 146-152 and 70-83. So four lasers now cost about 27 ms a frame over
+  two at 1280x800 and about 25 ms at 640x400 on this PC (the PC was in its slow state: F8, E9).
+- **Two copies of one loop:** a change to `_link_rows` must be made in `link_rows` too; the
+  test fails when they drift apart, but only where numba is installed.
+- **Not measured yet:** the RTX laptop; the CPU path's frame time.
+
 ---
 
 ## P. Offline processing
