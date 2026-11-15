@@ -43,6 +43,45 @@ def test_emitters_consistent_with_planes():
     assert np.allclose(nominal_imu_position(60.0), [0.0, 0.0, -31.0])
 
 
+def test_four_laser_layout_adds_the_mirrored_pair():
+    """lasers=4: the 2-laser planes unchanged, plus vertical_2 (left, mirror of vertical) and
+    horizontal_2 (below the cameras, beside the yoke); all four sheets cross the centre line at 254 mm."""
+    two, four = nominal_calibration(), nominal_calibration(lasers=4)
+    assert list(two.lasers) == ["vertical", "horizontal"]
+    assert list(four.lasers) == ["vertical", "horizontal", "vertical_2", "horizontal_2"]
+    for name in two.lasers:
+        assert np.array_equal(four.lasers[name].normal, two.lasers[name].normal) and four.lasers[name].d == two.lasers[name].d
+    v, v2, h, h2 = (four.lasers[n] for n in ("vertical", "vertical_2", "horizontal", "horizontal_2"))
+    # vertical_2 is the mirror of vertical about the stereo midline x = 30 mm
+    assert np.allclose(v2.normal * [-1, 1, 1], v.normal, atol=1e-12) or np.allclose(-v2.normal * [-1, 1, 1], v.normal, atol=1e-12)
+    for pl in (v, v2):
+        z = (-pl.d - pl.normal[0] * 30.0) / pl.normal[2]
+        assert z == pytest.approx(254.0, abs=0.05)
+    for pl in (h, h2):
+        assert -pl.d / pl.normal[2] == pytest.approx(254.0, abs=0.05) and abs(pl.normal[0]) < 1e-12
+    em = nominal_emitters(lasers=4)
+    assert set(em) == {"dots", "vertical", "horizontal", "vertical_2", "horizontal_2"}
+    # module centres of hardware/scanner.scad (lasers = 4): left vertical at x = -92, low horizontal at
+    # x = 58, 56 mm below the cameras; emission points 17.5 mm ahead of the module centres
+    assert np.allclose(em["vertical_2"]["origin"], [60.0 - 116.4, 0.0, -1.4], atol=0.1)
+    a = np.arctan(56.0 / 272.0)
+    assert np.allclose(em["horizontal_2"]["origin"], [30.0 + 58.0, 56.0 - 17.5 * np.sin(a), -18.0 + 17.5 * np.cos(a)], atol=1e-9)
+    assert em["vertical_2"]["direction"][0] > 0 and em["horizontal_2"]["direction"][1] < 0  # aim right / up
+    assert np.allclose(em["vertical_2"]["fan_axis"], [0, 1, 0]) and np.allclose(em["horizontal_2"]["fan_axis"], [1, 0, 0])
+    for name, plane in four.lasers.items():
+        e = em[name]
+        assert abs(plane.distance(e["origin"][None])[0]) < 1e-9 and plane.d <= 0
+        assert abs(e["direction"] @ plane.normal) < 1e-12 and abs(e["fan_axis"] @ plane.normal) < 1e-12
+    # the 2-laser emitters are unchanged by the option
+    two_em = nominal_emitters(lasers=2)
+    assert set(two_em) == {"dots", "vertical", "horizontal"}
+    for name in ("vertical", "horizontal"):
+        for k, val in two_em[name].items():
+            assert np.array_equal(np.asarray(em[name][k]), np.asarray(val))
+    with pytest.raises(ValueError):
+        nominal_calibration(lasers=3)
+
+
 def test_ideal_calibration_is_parallel_and_scales():
     cal = nominal_calibration()
     st = cal.stereo

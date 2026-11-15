@@ -152,6 +152,35 @@ def test_markerless_without_imu_still_tracks_but_is_flagged(sphere_half, tmp_pat
     assert any(r.get("degenerate") for r in rep["per_frame"][1:])
 
 
+def test_four_lasers_sphere_half_resolution(sphere_half, tmp_path):
+    """The same scan with four lasers (two of each family, ``nominal_calibration(lasers=4)``): about
+    twice the laser points, and the mesh no worse, although more of the image is laser line and
+    less is dots for the stereo matching.
+
+    Measured (2 -> 4 lasers): 11.9k -> 21.6k laser points, laser median 0.140 -> 0.165 mm, p95
+    0.60 -> 0.69 mm, mesh median 0.118 -> 0.118 mm, trajectory max 0.22 -> 0.30 mm / 0.039 ->
+    0.040 deg (median 0.16 -> 0.14 mm). The laser error is higher because the new lasers sit
+    closer to the left camera, which triangulates every line: ``vertical_2`` 56 mm beside it
+    instead of 116 mm, ``horizontal_2`` 56 mm below instead of 80 mm above (at the true poses:
+    medians 0.12 and 0.21 mm against 0.08 and 0.19 mm for the first pair)."""
+    rec4 = tmp_path / "rec4"
+    cached_scan_recording(rec4, scene="sphere_on_plane", n_frames=24, image_size=(640, 400), realistic=True,
+                          depth_every=0, seed=0, lasers=4)
+    assert set(RecordingReader(rec4).calibration().lasers) == {"vertical", "horizontal", "vertical_2", "horizontal_2"}
+    rep2, m2 = _process(sphere_half, tmp_path / "out2")
+    rep4, m4 = _process(rec4, tmp_path / "out4")
+    metrics("scan_sphere_half_2_lasers", **m2)
+    metrics("scan_sphere_half_4_lasers", **m4)
+    assert set(rep4["lasers"]["planes"]) == {"vertical", "horizontal", "vertical_2", "horizontal_2"}
+    assert m4["tracked_fraction"] == 1.0
+    assert m4["laser_n"] > 1.6 * m2["laser_n"]
+    assert m4["laser_median_mm"] < 1.3 * m2["laser_median_mm"] and m4["laser_median_mm"] < 0.25
+    assert m4["laser_p95_mm"] < 1.3 * m2["laser_p95_mm"]
+    assert m4["mesh_median_mm"] <= 1.05 * m2["mesh_median_mm"] and m4["mesh_p95_mm"] <= 1.05 * m2["mesh_p95_mm"]
+    assert m4["traj_max_trans_mm"] < 1.5 * m2["traj_max_trans_mm"] + 0.1 and m4["traj_max_trans_mm"] < 1.5
+    assert m4["traj_max_rot_deg"] < 1.25 * m2["traj_max_rot_deg"] + 0.02
+
+
 def test_marker_mode_full_resolution_short(tmp_path):
     rec = scan_recording(tmp_path / "rec", "sphere_on_plane", 6, (1280, 800), seed=1)
     rep, m = _process(rec, tmp_path / "out", mode="markers")

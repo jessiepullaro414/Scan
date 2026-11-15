@@ -202,6 +202,35 @@ def test_laser_sheet_shadows_behind_sphere():
         assert (aux[f"E_{name}"][on_plane][band & shadow] == 0).all()
 
 
+def test_four_lasers_are_drawn_and_switched_by_family():
+    """A 4-laser calibration draws all four sheets; ``line_names`` names families, so "vertical"
+    switches both vertical-line lasers (they share one emitter channel), and a full name one laser."""
+    cal = nominal_calibration((640, 400), lasers=4)
+    quiet = dict(ambient_on=False, dots_on=False, noise_sigma=0.0, shot_noise=0.0, speckle=0.0, seed=5)
+    with Renderer(cal, None, sphere_on_plane(tags=False), RenderParams(**quiet)) as r:
+        aux = r.render_aux(POSE)
+        both = r.render(POSE)[0]
+    for name in ("vertical", "horizontal", "vertical_2", "horizontal_2"):
+        lit = aux[f"lit_{name}"]
+        assert lit.sum() > 200, name
+        # lit pixels lie on that laser's plane
+        P = aux["points_c"][lit]
+        assert np.abs(cal.lasers[name].distance(P)).max() < 3.0
+    for fam, names in (("vertical", ("vertical", "vertical_2")), ("horizontal", ("horizontal", "horizontal_2"))):
+        with Renderer(cal, None, sphere_on_plane(tags=False), RenderParams(line_names=(fam,), **quiet)) as r:
+            a = r.render_aux(POSE)
+        assert {k[4:] for k in a if k.startswith("lit_") and k != "lit_dots"} == set(names)
+    with Renderer(cal, None, sphere_on_plane(tags=False), RenderParams(line_names=("vertical_2",), **quiet)) as r:
+        one = r.render(POSE)[0]
+        a = r.render_aux(POSE)
+    assert {k[4:] for k in a if k.startswith("lit_") and k != "lit_dots"} == {"vertical_2"}
+    assert one.sum() < both.sum()
+    # the default calibration (two lasers) draws only the two
+    with Renderer(nominal_calibration((640, 400)), None, sphere_on_plane(tags=False), RenderParams(**quiet)) as r:
+        a = r.render_aux(POSE)
+    assert {k[4:] for k in a if k.startswith("lit_") and k != "lit_dots"} == {"vertical", "horizontal"}
+
+
 def test_apriltags_render_at_true_marker_corners():
     """scene.markers (world corners, ArUco order) must match what a detector finds in the image."""
     cal = nominal_calibration()

@@ -15,7 +15,10 @@ together. Live scanning runs it at ``scale=0.5`` for feedback, and offline proce
    planes with the right-image stereo check (:func:`~ohs.vision.laser.laser_points` with
    ``lines_left`` / ``lines_right``) and the check against the frame's dense depth and its sigma
    (:func:`~ohs.vision.laser.depth_check`; :attr:`FramePipeline.laser_rejected` counts the
-   points it drops, per line).
+   points it drops, per line). Every calibrated plane whose name is a laser line is used; with
+   two planes of a family (four lasers) the extraction looks for two lines of it
+   (``LaserParams.lines_per_family``, set from the planes) and ``laser_points`` decides which
+   plane each point is on.
 4. **Pose**.
 
    * ``"markerless"``: :class:`~ohs.track.markerless.MarkerlessTracker` frame-to-model ICP. The
@@ -151,7 +154,8 @@ from ohs.track.markers import MarkerParams, MarkerTracker
 from ohs.track.recon_tsdf import BACK_VOXELS, GUARD_PX_1280, ConfidenceTsdf, gap_guard_mask
 from ohs.types import ImuSample, LaserPlane, ScannerCalibration, StereoFrame, TrackResult
 from ohs.vision.depth import SIGMA_MODELS, DepthEstimator, DepthParams
-from ohs.vision.laser import LINE_NAMES, LaserLines, LaserParams, extract_laser_lines, laser_points
+from ohs.vision.laser import (LaserLines, LaserParams, extract_laser_lines, is_line_name, laser_points,
+                              lines_per_family)
 from ohs.vision.rectify import Rectifier
 
 __all__ = [
@@ -425,10 +429,14 @@ class FramePipeline:
 
         planes: dict[str, LaserPlane] = {}
         if p.use_lasers:
-            planes = {n: pl for n, pl in (calib.lasers or {}).items() if n in LINE_NAMES}
+            planes = {n: pl for n, pl in (calib.lasers or {}).items() if is_line_name(n)}
             if not planes:
                 log.info("no calibrated laser planes: laser triangulation is skipped")
         self.planes = planes
+        # as many lines of a family in the image as the calibration has planes of it (four lasers: 2)
+        per_family = lines_per_family(planes)
+        if per_family != self.laser_params.lines_per_family:
+            self.laser_params = replace(self.laser_params, lines_per_family=per_family)
 
         # reconstruction TSDF (raw depth) and, in markerless mode, the tracking TSDF (filtered depth).
         # The confidence TSDF only reconstructs: with track_filter_px=0 the model also tracks, so Open3D.

@@ -2,8 +2,11 @@
 7.3, a first version: poses only, no self-calibration yet).
 
 Every frame gives two accurate 3D curves, one per laser line, triangulated on the calibrated planes
-independently of the dense stereo. As the scanner moves, curves from different frames cross on the
-surface, and at every crossing the two curves must meet. :func:`laser_curve_adjustment` solves the
+independently of the dense stereo (four with four lasers: the points of a family go to the plane
+their stereo check picks, :func:`~ohs.vision.laser.assign_planes`; there is no dense depth here,
+so a point that passes on both planes with 3D points more than ``family_agree_mm`` apart, as
+often on a horizontal line, is dropped). As the scanner moves, curves from different
+frames cross on the surface, and at every crossing the two curves must meet. :func:`laser_curve_adjustment` solves the
 poses so that they do:
 
 1. **Curves** (:func:`frame_curves`): the lines of up to ``max_frames`` tracked frames, spread over
@@ -44,7 +47,7 @@ from __future__ import annotations
 import logging
 import math
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any, Callable, Sequence
 
@@ -86,13 +89,17 @@ def frame_curves(reader: Any, calib: Any, frames: Sequence[int], params: CurvePa
     """``{frame index: [(line, points, tangents)]}``: each frame's laser curves at full resolution,
     triangulated on the calibrated planes and checked against the right image (frame C, mm)."""
     from ohs.app.pipeline import default_laser_params, effective_scale  # noqa: PLC0415
-    from ohs.vision.laser import LINE_NAMES, extract_laser_lines, stereo_check, triangulate_plane  # noqa: PLC0415
+    from ohs.vision.laser import (  # noqa: PLC0415
+        assign_planes, extract_laser_lines, is_line_name, line_family, lines_per_family, stereo_check, triangulate_plane)
     from ohs.vision.rectify import Rectifier  # noqa: PLC0415
 
     rect = Rectifier(calib.stereo, 1.0)
     K, B = rect.K, rect.baseline
     lp = default_laser_params(effective_scale(rect.image_size[0]))
-    planes = {n: pl for n, pl in (calib.lasers or {}).items() if n in LINE_NAMES}
+    planes = {n: pl for n, pl in (calib.lasers or {}).items() if is_line_name(n)}
+    if lines_per_family(planes) != lp.lines_per_family:  # four lasers: two lines of each family
+        lp = replace(lp, lines_per_family=lines_per_family(planes))
+    family = {n: [m for m in planes if line_family(m) == line_family(n)] for n in planes}
     pos_of = {int(i): k for k, i in enumerate(reader.indices)}
     out: dict[int, list[Curve]] = {}
     for done, f in enumerate(frames):
@@ -107,14 +114,24 @@ def frame_curves(reader: Any, calib: Any, frames: Sequence[int], params: CurvePa
         ll = extract_laser_lines(L, lp)
         lr = extract_laser_lines(R, lp) if lp.stereo_check else None
         curves: list[Curve] = []
+        labels: dict[str, np.ndarray] = {}  # several planes of a family: which plane each point is on
         for name, plane in planes.items():
             uv, seg = ll.get(name), ll.segments(name)
             if len(uv) < 5:
                 continue
-            P = triangulate_plane(uv, K, plane)
-            ok = np.isfinite(P[:, 2]) & (P[:, 2] >= lp.min_depth_mm) & (P[:, 2] <= lp.max_depth_mm)
-            if lr is not None and ok.any():
-                ok &= stereo_check(P, lr.get(name), K, B, lp.stereo_tol_px)
+            fam = family[name]
+            if len(fam) > 1:
+                key = line_family(name)
+                if key not in labels:
+                    labels[key] = assign_planes(uv, [planes[m] for m in fam], K, B, lp,
+                                                lr.get(name) if lr is not None else None)[1]
+                P = triangulate_plane(uv, K, plane)
+                ok = labels[key] == fam.index(name)
+            else:
+                P = triangulate_plane(uv, K, plane)
+                ok = np.isfinite(P[:, 2]) & (P[:, 2] >= lp.min_depth_mm) & (P[:, 2] <= lp.max_depth_mm)
+                if lr is not None and ok.any():
+                    ok &= stereo_check(P, lr.get(name), K, B, lp.stereo_tol_px)
             n = len(P)
             inner = np.zeros(n, dtype=bool)  # both neighbours on the same polyline and valid
             if len(seg) == n:

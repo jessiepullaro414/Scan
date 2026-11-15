@@ -99,6 +99,7 @@ def make_scan_recording(
     depth_every: int = 1,
     frame_jitter_s: float = 2e-4,
     png_compression: int = 1,
+    lasers: int = 2,
 ) -> Path:
     """Simulate a hand-held scan and write it as a recording folder; returns its path.
 
@@ -106,11 +107,12 @@ def make_scan_recording(
     ``seed`` override the corresponding fields of ``params``. ``trajectory`` (camera-time
     ``pose(t)``) defaults to a :class:`HandheldTrajectory` around the scene target with the
     preset's suggested ranges. Sizes at 1280x800: ~1.3 MB PNG + 4.1 MB float32 depth per frame;
-    ``depth_every`` = k keeps ground-truth depth for every k-th frame only (0 = none).
+    ``depth_every`` = k keeps ground-truth depth for every k-th frame only (0 = none). ``lasers``
+    is the scanner's number of line lasers, 2 or 4 (:func:`~ohs.sim.nominal.nominal_calibration`).
     """
     out = Path(out_dir)
     wall = time.perf_counter()
-    calib = nominal_calibration(image_size, realistic=realistic)
+    calib = nominal_calibration(image_size, realistic=realistic, lasers=lasers)
     sc = make_scene(scene, seed)
     rp = replace(params or RenderParams(), dots_on=bool(dots), lines_on=bool(lines), seed=int(seed))
     to = float(calib.imu.time_offset)
@@ -139,7 +141,7 @@ def make_scan_recording(
         "render_params": asdict(rp),
         "trajectory": repr(trajectory),
     }
-    with Renderer(calib, nominal_emitters(baseline=calib.stereo.baseline), sc, rp) as renderer, RecordingWriter(
+    with Renderer(calib, nominal_emitters(baseline=calib.stereo.baseline, lasers=lasers), sc, rp) as renderer, RecordingWriter(
         out, overwrite=overwrite, png_compression=png_compression, source="sim", **meta
     ) as w:
         w.write_calibration(calib)

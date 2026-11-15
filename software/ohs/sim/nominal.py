@@ -14,6 +14,12 @@ reproduce the section-7 numbers to the printed precision and are exactly self-co
 places the emitters relative to the camera-block centre; frame C is the left camera, ``baseline/2``
 to the left of it, so emitter x coordinates shift with ``baseline`` (section 7 assumes 60 mm).
 
+The 4-laser variant (``lasers=4``; ``lasers = 4`` in the CAD) adds ``"vertical_2"``, the mirror of
+the vertical-line laser on the left of the cameras, and ``"horizontal_2"``, a horizontal-line laser
+58 mm right of and 56 mm below the camera centre (beside the grip's yoke), tilted up. All four
+sheets cross the cameras' centre line 254 mm ahead of the left camera. The module positions are in
+one table, :data:`LASER_MODULES`.
+
 Choices made where the contract is open (documented for the integrator):
 
 * ``fx=None`` (default) means 720 px at 1280 px width, scaled with the image width so that e.g.
@@ -42,6 +48,8 @@ __all__ = [
     "NOMINAL_WIDTH",
     "NOMINAL_FX",
     "NOMINAL_TIME_OFFSET",
+    "LASER_MODULES",
+    "LASER_SETS",
     "nominal_calibration",
     "nominal_emitters",
     "nominal_imu_position",
@@ -69,23 +77,54 @@ _IMU_BEHIND = 31.0  # IMU board on the back cover, mm behind the lens centres
 _IMU_X_WORLD = -30.0  # CAD imu_pos x (camera-block coordinates)
 
 
-def _laser_layout(baseline: float) -> dict[str, dict]:
-    """Origins, beam directions, fan axes and planes of both line lasers in frame C."""
+#: The line lasers' module centres in the housing's frame (X right, Z up, mm from the camera-block
+#: centre; ``hardware/scanner.scad``), by name: ``(x, z)``. Each one aims at the cameras' centre
+#: line, crossing it ``reach`` = 272 mm ahead of the module centres: a vertical-line laser is turned
+#: about the up axis by ``atan(x / reach)``, a horizontal-line one tilted by ``atan(z / reach)``.
+#: The 4-laser variant (``lasers = 4``) adds the mirror of the right laser on the left and a low
+#: horizontal laser beside the grip's yoke (``yoke_reach + lblk_l / 2`` = 58 mm right, ``base_h2``
+#: = 56 mm below).
+LASER_MODULES: dict[str, tuple[float, float]] = {
+    "vertical": (_BASE_V, 0.0),
+    "horizontal": (0.0, _BASE_H),
+    "vertical_2": (-_BASE_V, 0.0),
+    "horizontal_2": (58.0, -56.0),
+}
+#: the lasers of each variant, in order
+LASER_SETS: dict[int, tuple[str, ...]] = {
+    2: ("vertical", "horizontal"),
+    4: ("vertical", "horizontal", "vertical_2", "horizontal_2"),
+}
+
+
+def _laser_names(lasers: int) -> tuple[str, ...]:
+    if int(lasers) not in LASER_SETS:
+        raise ValueError(f"lasers must be one of {sorted(LASER_SETS)}, got {lasers!r}")
+    return LASER_SETS[int(lasers)]
+
+
+def _laser_layout(baseline: float, lasers: int = 2) -> dict[str, dict]:
+    """Origins, beam directions, fan axes and planes of the line lasers in frame C."""
     half = 0.5 * float(baseline)
     reach = _WORK_DIST + _FP_T + _HEAD_D / 2.0  # 272 mm from the laser pivots to the crossing
-    a_v = math.atan(_BASE_V / reach)
-    a_h = math.atan(_BASE_H / reach)
     front = _LASER_LEN / 2.0  # emission point ahead of the module centre
-    # Vertical-line laser: rotated about the up axis, aims back toward the centre line.
-    o_v = np.array([half + _BASE_V - front * math.sin(a_v), 0.0, -_HEAD_D / 2 + front * math.cos(a_v)])
-    b_v = np.array([-math.sin(a_v), 0.0, math.cos(a_v)])
-    f_v = np.array([0.0, 1.0, 0.0])  # the fan spreads along the camera y axis -> vertical line
-    # Horizontal-line laser: tilted about the x axis, aims down toward the centre line.
-    o_h = np.array([half, -(_BASE_H - front * math.sin(a_h)), -_HEAD_D / 2 + front * math.cos(a_h)])
-    b_h = np.array([0.0, math.sin(a_h), math.cos(a_h)])
-    f_h = np.array([1.0, 0.0, 0.0])  # the fan spreads along the camera x axis -> horizontal line
     out = {}
-    for name, o, b, f in (("vertical", o_v, b_v, f_v), ("horizontal", o_h, b_h, f_h)):
+    for name in _laser_names(lasers):
+        x, z = LASER_MODULES[name]
+        if name.startswith("vertical"):
+            # rotated about the up axis, aims back toward the centre line; the fan spreads along
+            # the camera y axis -> vertical line
+            a = math.atan(x / reach)
+            o = np.array([half + x - front * math.sin(a), 0.0 - z, -_HEAD_D / 2 + front * math.cos(a)])
+            b = np.array([-math.sin(a), 0.0, math.cos(a)])
+            f = np.array([0.0, 1.0, 0.0])
+        else:
+            # tilted about the x axis, aims toward the centre line (down from above, up from below);
+            # the fan spreads along the camera x axis -> horizontal line
+            a = math.atan(z / reach)
+            o = np.array([half + x, -(z - front * math.sin(a)), -_HEAD_D / 2 + front * math.cos(a)])
+            b = np.array([0.0, math.sin(a), math.cos(a)])
+            f = np.array([1.0, 0.0, 0.0])
         n = np.cross(f, b)
         n /= np.linalg.norm(n)
         d = -float(n @ o)
@@ -115,11 +154,14 @@ def nominal_calibration(
     fx: float | None = None,
     baseline: float = 60.0,
     realistic: bool = False,
+    lasers: int = 2,
 ) -> ScannerCalibration:
     """True scanner calibration for simulation (stereo + laser planes + IMU).
 
     ``fx=None`` scales the nominal 720 px (at 1280 px width) with ``image_size``. With
     ``realistic=False`` the cameras are ideal, parallel and undistorted, so raw == rectified.
+    ``lasers`` is 2 (``"vertical"``, ``"horizontal"``) or 4 (also ``"vertical_2"`` and
+    ``"horizontal_2"``, see :data:`LASER_MODULES`).
     """
     w, h = int(image_size[0]), int(image_size[1])
     s = w / NOMINAL_WIDTH
@@ -142,16 +184,16 @@ def nominal_calibration(
         R = np.eye(3)
         T = np.array([-float(baseline), 0.0, 0.0])
     stereo = StereoCalibration.build((w, h), K1, D1, K2, D2, R, T, rms=0.0)
-    lasers = {
+    planes = {
         name: LaserPlane(name, g["normal"], g["d"], rms=0.0, n_points=0)
-        for name, g in _laser_layout(baseline).items()
+        for name, g in _laser_layout(baseline, lasers).items()
     }
-    calib = ScannerCalibration(stereo=stereo, lasers=lasers, imu=nominal_imu_calibration())
+    calib = ScannerCalibration(stereo=stereo, lasers=planes, imu=nominal_imu_calibration())
     log.debug("nominal calibration %dx%d fx=%.2f baseline=%.1f realistic=%s", w, h, f, baseline, realistic)
     return calib
 
 
-def nominal_emitters(fan_deg: float = 60.0, baseline: float = 60.0) -> dict:
+def nominal_emitters(fan_deg: float = 60.0, baseline: float = 60.0, lasers: int = 2) -> dict:
     """Emitter layout in frame C, consistent with :func:`nominal_calibration` laser planes.
 
     Returns ``{"dots": {...}, "vertical": {...}, "horizontal": {...}}``:
@@ -174,6 +216,6 @@ def nominal_emitters(fan_deg: float = 60.0, baseline: float = 60.0) -> dict:
             "n_dots": _N_DOTS,
         }
     }
-    for name, g in _laser_layout(baseline).items():
+    for name, g in _laser_layout(baseline, lasers).items():
         out[name] = {"type": "line_laser", "fan_deg": float(fan_deg), **{k: np.array(v) if isinstance(v, np.ndarray) else v for k, v in g.items()}}
     return out

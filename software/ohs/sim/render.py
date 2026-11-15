@@ -12,7 +12,10 @@ Image model per pixel (Lambertian surfaces; irradiance ``E`` in DN for an albedo
 * ``E_lines`` - each laser sheet is Gaussian in the distance to its plane with
   ``sigma(r) = line_sigma_mm + line_sigma_growth * (r - r_ref)``, limited to the fan (soft edges,
   slightly brighter centre); peak ``line_power * (r_ref sigma_ref) / (r sigma)`` (power spread over
-  fan length and thickness), times ``cos(theta_inc)``.
+  fan length and thickness), times ``cos(theta_inc)``. Every line laser of the emitter layout is
+  drawn (two or four; by default the nominal layout with the lasers the calibration has).
+  ``line_names`` switches them by family: ``"vertical"`` is every vertical-line laser, since the
+  lasers of one family share one emitter channel; a full name (``"vertical_2"``) is one laser.
 * Every emitter term is multiplied by its **visibility**: a second (shadow) ray cast from the
   surface point to the emitter origin.
 * ``S`` - laser speckle, a multiplicative random field (grain ~1 px) on the coherent light only.
@@ -52,9 +55,10 @@ from dataclasses import dataclass, replace
 import cv2
 import numpy as np
 
-from ohs.sim.nominal import nominal_emitters
+from ohs.sim.nominal import LASER_SETS, nominal_emitters
 from ohs.sim.scene import Scene, _sample
 from ohs.types import ScannerCalibration, StereoCalibration
+from ohs.vision.laser import LINE_NAMES, is_line_name, line_family
 
 __all__ = [
     "RenderParams",
@@ -80,7 +84,7 @@ class RenderParams:
     ambient_on: bool = True
     dots_on: bool = True
     lines_on: bool = True
-    line_names: tuple[str, ...] = ("vertical", "horizontal")
+    line_names: tuple[str, ...] = ("vertical", "horizontal")  # families (all their lasers) or single lasers
     dot_count: int | None = None  # None -> emitter's n_dots (10k)
     dot_fwhm_mrad: float = 3.0  # angular dot size: ~2.2 px FWHM at fx=720 (~2.7 px after blur)
     dot_power: float = 480.0  # peak DN, un-blurred dot, albedo 1, normal incidence, 250 mm
@@ -229,6 +233,14 @@ def project_to_raw(P_c: np.ndarray, stereo: StereoCalibration, side: str = "left
     return np.stack([u, v], axis=1)
 
 
+def _nominal_lasers(calib: ScannerCalibration | StereoCalibration) -> int:
+    """The nominal laser set (:data:`~ohs.sim.nominal.LASER_SETS`) whose lasers a calibration has:
+    the largest one it holds completely (2 for a stereo calibration alone)."""
+    have = set(calib.lasers or {}) if isinstance(calib, ScannerCalibration) else set()
+    fits = [n for n, names in LASER_SETS.items() if set(names) <= have]
+    return max(fits) if fits else 2
+
+
 # --------------------------------------------------------------------------- renderer
 class Renderer:
     """Render raw stereo frames of a :class:`~ohs.sim.scene.Scene` seen by the scanner.
@@ -251,7 +263,9 @@ class Renderer:
         t0 = time.perf_counter()
         self.stereo = calib.stereo if isinstance(calib, ScannerCalibration) else calib
         self.params = params or RenderParams()
-        self.emitters = emitters if emitters is not None else nominal_emitters(baseline=self.stereo.baseline)
+        if emitters is None:
+            emitters = nominal_emitters(baseline=self.stereo.baseline, lasers=_nominal_lasers(calib))
+        self.emitters = emitters
         self.scene = scene
         self.size = (int(self.stereo.image_size[0]), int(self.stereo.image_size[1]))
         self._rng = np.random.default_rng(self.params.seed)
@@ -425,12 +439,21 @@ class Renderer:
         return _Projector(np.asarray(em["origin"], dtype=np.float64), R, tx, ty, pitch, pad, img)
 
     def _build_lasers(self) -> list[_Laser]:
-        out = []
-        for name in self.params.line_names:
-            em = self.emitters.get(name)
-            if em is None:
-                log.warning("no emitter named %r; line skipped", name)
+        """The line lasers ``params.line_names`` switches on, in that order.
+
+        An entry that is a family (``"vertical"`` / ``"horizontal"``) switches every line laser of
+        that family (they share one emitter channel); any other entry names one laser."""
+        lasers = [k for k, em in self.emitters.items() if em.get("type", "line_laser") == "line_laser" and is_line_name(k)]
+        chosen: list[str] = []
+        for entry in self.params.line_names:
+            names = [k for k in lasers if line_family(k) == entry] if entry in LINE_NAMES else [entry]
+            if not names or (entry not in LINE_NAMES and entry not in self.emitters):
+                log.warning("no emitter named %r; line skipped", entry)
                 continue
+            chosen += [k for k in names if k not in chosen]
+        out = []
+        for name in chosen:
+            em = self.emitters[name]
             fan = self.params.fan_deg if self.params.fan_deg is not None else float(em.get("fan_deg", 60.0))
             n = np.asarray(em["normal"], dtype=np.float64)
             out.append(

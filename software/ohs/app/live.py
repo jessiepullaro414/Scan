@@ -42,7 +42,7 @@ import queue
 import signal
 import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Iterator
@@ -1068,12 +1068,15 @@ class PreviewProcessor:
         self._lp = None
 
     def start(self) -> None:
-        from ohs.vision.laser import LaserParams
+        from ohs.vision.laser import LaserParams, lines_per_family
         from ohs.vision.rectify import Rectifier
 
         if self.calib is not None:
             self._rect = Rectifier(self.calib.stereo, self.scale)
         self._lp = LaserParams().scaled(self.scale)
+        n = lines_per_family((self.calib.lasers or {}) if self.calib is not None else ())
+        if n != self._lp.lines_per_family:  # four lasers: two lines of each family
+            self._lp = replace(self._lp, lines_per_family=n)
 
     def idle(self, frame: StereoFrame) -> ViewResult:
         return self.process(frame)

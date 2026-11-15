@@ -6,6 +6,13 @@ row is crossed by the vertical line at most once, and each column by the horizon
 vertical line is extracted as one sub-pixel centre per row and the horizontal line as one per
 column. The horizontal line uses exactly the same code on the transposed image.
 
+A laser line's name starts with its *family*, how its line runs in the image: ``"vertical"`` or
+``"horizontal"``, optionally followed by ``_`` and anything (``"vertical_2"``; :func:`line_family`).
+The 4-laser variant has two lines of each family. Extraction works per family (``LaserLines``
+holds all lines of a family together), and :func:`laser_points` decides per point which plane of
+its family it lies on (see "Several lines per family" below). With one line per family
+(``lines_per_family=1``, the default) everything below is exactly the 2-laser design.
+
 Per line (described for the vertical one, where ``t`` = row and ``c`` = column):
 
 1. **Ridge detection with dot suppression.** A separable filter: across the line, the
@@ -43,6 +50,34 @@ Per line (described for the vertical one, where ``t`` = row and ``c`` = column):
    ``4 * cross_radius`` (the other line is itself missing at the crossing). Only pairs whose
    directions differ by more than 20 deg count as a crossing. Segments are then re-validated.
 
+**Several lines per family** (``lines_per_family`` = 2 with four lasers; the pipeline sets it from
+the calibrated planes):
+
+* Step 2 takes up to ``lines_per_family`` candidates per row: local maxima of the response over
+  ``+-family_sep / 2`` px, strongest first.
+* Step 4 links them into tracks instead (:func:`_link_tracks`): each track predicts its next
+  centre from its slope over its last 8 points and takes the candidate it predicts best. Where
+  two tracks seen side by side come closer than ``family_sep`` (10 px at full resolution), the
+  two profiles overlap and then merge into one, whose centre is biased: those points are dropped,
+  and both tracks are carried on along their predictions until they are apart again. Points
+  closer than ``family_sep`` to a point of another track in the same row are dropped too. Later
+  steps only split tracks into segments (never join them), so a segment holds one line.
+* Step 7 measures the distance to each line of the other family separately, the line's
+  segments chained across gaps (up to ``4 * cross_radius``).
+* :func:`laser_points` triangulates each point of a family on every plane of that family; the
+  stereo check (and the depth check, with a dense depth map) decide which plane it is on. Where
+  several pass, the smallest stereo residual wins, if their 3D points agree within
+  ``family_agree_mm`` (near the line where the sheets intersect); otherwise the point is dropped.
+  The stereo check of a horizontal line hardly depends on the depth (the line runs along the
+  epipolar rows), so with a dense depth map the plane must also agree with it: the point needs
+  dense depth around it, and where its own pixel has a value, the plane whose point is closest
+  to it.
+
+On the tests' synthetic images (two lines per family, tilted, curved, gapped and crossing each
+other at 11-13 deg) the centre error is 0.03-0.06 px rms, as for one line per family; on a
+simulated 4-laser frame with the dense depth every kept point is on its true plane. Extraction
+takes about three times as long as with one line per family (tracking is a Python loop).
+
 Pixel parameters default to full resolution (1280x800). Use :meth:`LaserParams.scaled`
 (for example ``LaserParams().scaled(0.5)``) for the half-resolution live pipeline. Intensities are
 8-bit DN.
@@ -55,7 +90,7 @@ tested.
 Triangulation intersects the rays of the ideal pinhole ``K`` with the calibrated laser plane.
 :func:`stereo_check` validates each 3D point by predicting its position in the right rectified
 image (same row, ``u_r = u_l - f*B/z``) and requiring a right-image ridge point of the same line
-within ``stereo_tol_px``.
+(family) within ``stereo_tol_px``.
 """
 from __future__ import annotations
 
@@ -74,7 +109,13 @@ from ohs.types import LaserPlane
 __all__ = [
     "LaserParams",
     "LaserLines",
+    "LINE_NAMES",
+    "line_family",
+    "is_line_name",
+    "lines_per_family",
     "extract_laser_lines",
+    "stereo_residual",
+    "assign_planes",
     "triangulate_plane",
     "stereo_check",
     "depth_check",
@@ -84,7 +125,36 @@ __all__ = [
 
 log = logging.getLogger(__name__)
 
+#: the two line families: how a line runs in the image
 LINE_NAMES = ("vertical", "horizontal")
+
+
+def line_family(name: str) -> str:
+    """The family of laser line ``name``: ``"vertical"`` or ``"horizontal"``.
+
+    A line's name is its family, optionally followed by ``_`` and anything (``"vertical_2"``).
+    Raises ``KeyError`` for any other name.
+    """
+    for fam in LINE_NAMES:
+        if name == fam or (isinstance(name, str) and name.startswith(fam + "_")):
+            return fam
+    raise KeyError(f"unknown laser line {name!r}; a line's name starts with one of {LINE_NAMES}")
+
+
+def lines_per_family(names) -> int:
+    """The most laser lines of one family among ``names`` (plane names; others ignored), at least 1:
+    the :attr:`LaserParams.lines_per_family` a calibration with these planes needs."""
+    fams = [line_family(n) for n in names if is_line_name(n)]
+    return max([fams.count(f) for f in LINE_NAMES] + [1])
+
+
+def is_line_name(name: str) -> bool:
+    """True when ``name`` names a laser line (see :func:`line_family`)."""
+    try:
+        line_family(name)
+    except KeyError:
+        return False
+    return True
 
 
 # --------------------------------------------------------------------------- parameters / result
@@ -110,6 +180,10 @@ class LaserParams:
     end_trim: int = 2  # points dropped at each segment end
     cross_radius: float = 15.0  # px; exclusion distance from the other line
     border: int = 2  # px; ignore detections this close to the image border
+    # several lasers per family (module docstring, "Several lines per family")
+    lines_per_family: int = 1  # lines of one family that can cross an image row/column (2 with four lasers)
+    family_sep: float = 10.0  # px; where two lines of one family come closer than this, both are dropped
+    family_agree_mm: float = 1.0  # laser_points: a point several planes of its family take must agree this well
     # triangulation and validation (used by laser_points)
     min_depth_mm: float = 100.0
     max_depth_mm: float = 600.0
@@ -137,6 +211,7 @@ class LaserParams:
             end_trim=r(self.end_trim, 1) if self.end_trim > 0 else 0,
             cross_radius=max(3.0, self.cross_radius * f),
             border=r(self.border, 1),
+            family_sep=max(4.0, self.family_sep * f),
             stereo_tol_px=max(1.0, self.stereo_tol_px * f),
         )
 
@@ -145,11 +220,13 @@ class LaserParams:
 class LaserLines:
     """Sub-pixel laser-line centres in one rectified image (pixel coordinates ``(u, v)``).
 
-    ``vertical`` has one point per image row (integer ``v``), ``horizontal`` one per column
-    (integer ``u``). Strengths are peak-above-background contrasts in DN. ``*_segment`` hold
-    segment labels (consecutive points with the same label form a polyline).
+    ``vertical`` has one point per image row (integer ``v``) and line, ``horizontal`` one per
+    column (integer ``u``) and line. Strengths are peak-above-background contrasts in DN.
+    ``*_segment`` hold segment labels (consecutive points with the same label form a polyline;
+    a segment is on one line).
     """
 
+    # every line of the family (four lasers: two); their segments tell the lines apart
     vertical: np.ndarray
     horizontal: np.ndarray
     vertical_strength: np.ndarray
@@ -158,7 +235,7 @@ class LaserLines:
     horizontal_segment: np.ndarray = field(default_factory=lambda: np.zeros(0, np.int32))
 
     def get(self, name: str) -> np.ndarray:
-        """(N,2) centres of line ``name`` ("vertical" | "horizontal")."""
+        """(N,2) centres of the family of line ``name`` (``"vertical_2"`` gives the vertical ones)."""
         return self._pick(name, self.vertical, self.horizontal)
 
     def strength(self, name: str) -> np.ndarray:
@@ -173,11 +250,7 @@ class LaserLines:
 
     @staticmethod
     def _pick(name: str, a: np.ndarray, b: np.ndarray) -> np.ndarray:
-        if name == "vertical":
-            return a
-        if name == "horizontal":
-            return b
-        raise KeyError(f"unknown laser line {name!r}; expected one of {LINE_NAMES}")
+        return a if line_family(name) == "vertical" else b
 
     def __len__(self) -> int:
         return int(len(self.vertical) + len(self.horizontal))
@@ -214,6 +287,163 @@ def _link(t: np.ndarray, c: np.ndarray, max_step: float, max_gap: int) -> np.nda
     return np.concatenate([[0], np.cumsum(brk)])
 
 
+def _split(t: np.ndarray, c: np.ndarray, seg: np.ndarray, max_step: float, max_gap: int) -> np.ndarray:
+    """Segment labels for points laid out as contiguous runs of ``seg`` (each sorted by ``t``):
+    the runs, split where :func:`_link` would break them. Runs are never joined."""
+    if len(t) == 0:
+        return np.zeros(0, np.int64)
+    dt = np.diff(t)
+    brk = (seg[1:] != seg[:-1]) | (dt > max_gap + 1) | (np.abs(np.diff(c)) > max_step * np.abs(dt) + 0.3)
+    return np.concatenate([[0], np.cumsum(brk)])
+
+
+def _nms_radius(p: "LaserParams") -> int:
+    """Candidates of one row closer than this (px) are one ridge (several lines per family)."""
+    return max(2, int(math.ceil(0.5 * float(p.family_sep))))
+
+
+def _row_candidates(resp: np.ndarray, thr: float, n: int, radius: int) -> tuple[np.ndarray, np.ndarray]:
+    """Up to ``n`` ridge candidates per row: local maxima of ``resp`` over ``+-radius`` columns,
+    at least ``thr``, strongest first. Returns ``(row, column)`` sorted by row, then column."""
+    mx = cv2.dilate(resp, np.ones((1, 2 * radius + 1), np.uint8), borderType=cv2.BORDER_REPLICATE)
+    rr, cc = np.nonzero((resp >= mx) & (resp >= thr))
+    if len(rr) == 0:
+        return rr.astype(np.int64), cc.astype(np.int64)
+    # a flat top gives equal neighbours: keep the first of a row's candidates within the radius
+    dup = np.r_[False, (rr[1:] == rr[:-1]) & (cc[1:] - cc[:-1] <= radius)]
+    rr, cc = rr[~dup], cc[~dup]
+    val = resp[rr, cc]
+    order = np.lexsort((-val, rr))
+    rr, cc = rr[order], cc[order]
+    first = np.r_[0, np.flatnonzero(rr[1:] != rr[:-1]) + 1]
+    rank = np.arange(len(rr)) - np.repeat(first, np.diff(np.r_[first, len(rr)]))
+    keep = rank < n
+    rr, cc = rr[keep], cc[keep]
+    order = np.lexsort((cc, rr))
+    return rr[order].astype(np.int64), cc[order].astype(np.int64)
+
+
+def _link_tracks(t: np.ndarray, c: np.ndarray, p: "LaserParams") -> np.ndarray:
+    """Track labels for candidates with several per row (``t`` sorted); -1 = dropped.
+
+    Each track predicts its next centre from its slope over its last 8 points. A candidate goes
+    to the track that predicts it best within ``max_step * dt + 0.3`` px; the others start new
+    tracks. Two established tracks (8 points or more) seen side by side in 3 rows or more are two
+    lines; where their predictions come closer than ``family_sep``, the profiles overlap or merge
+    into one, whose centre is biased: every candidate within ``family_sep`` of either prediction
+    is dropped, and both tracks carry on along their predictions (``max_gap`` does not end them
+    there) until they are apart again. Finally, points closer than ``family_sep`` to a point of
+    another track of ``min_segment`` points or more in the same row are dropped too."""
+    n = len(t)
+    lab = np.full(n, -1, np.int64)
+    if n == 0:
+        return lab
+    tl, cl = t.tolist(), c.tolist()
+    sep = float(p.family_sep)
+    gap = int(p.max_gap) + 1
+    step = float(p.max_step)
+    hist = 8  # points behind the slope estimate; also the length of an established track
+    # one ridge: a row's candidates closer than the NMS radius (re-centring can bring two together)
+    rad = _nms_radius(p)
+    drop = [False] * n
+    for k in range(1, n):
+        if tl[k] == tl[k - 1] and abs(cl[k] - cl[k - 1]) < rad and not drop[k - 1]:
+            drop[k] = True
+    # a track: [last t, last c, slope, label, recent (t, c) points, real points]
+    tracks: list[list] = []
+    n_tracks = 0
+    labs = [-1] * n
+    together: dict[tuple[int, int], list[int]] = {}  # pair of labels -> [last row with both, rows with both]
+    merging: set[tuple[int, int]] = set()  # pairs carried on through a merge
+    ends = np.r_[np.flatnonzero(np.diff(t)) + 1, n].tolist()
+    i = 0
+    for k1 in ends:
+        row = tl[i]
+        cands = [k for k in range(i, k1) if not drop[k]]
+        i = k1
+        tracks = [tr for tr in tracks if row - tr[0] <= gap]
+        pred = [tr[1] + tr[2] * (row - tr[0]) for tr in tracks]
+        busy_t: set[int] = set()
+        busy_c: set[int] = set()
+        # two lines closer than the separation: drop what is near them, carry both on
+        still: set[tuple[int, int]] = set()
+        nt = len(tracks)
+        for a in range(nt):
+            ta = tracks[a]
+            for bb in range(a + 1, nt):
+                if abs(pred[a] - pred[bb]) >= sep:
+                    continue
+                tb = tracks[bb]
+                key = (ta[3], tb[3]) if ta[3] < tb[3] else (tb[3], ta[3])
+                if key not in merging:
+                    if ta[5] < hist or tb[5] < hist:
+                        continue
+                    tg = together.get(key)
+                    if tg is None or row - tg[0] > gap or tg[1] < 3:
+                        continue
+                still.add(key)
+                for q in (a, bb):
+                    busy_t.add(q)
+                    for k in cands:
+                        if abs(cl[k] - pred[q]) < sep:
+                            busy_c.add(k)
+        for q in busy_t:
+            tracks[q][1], tracks[q][0] = pred[q], row  # coast
+        merging = still
+        # the rest: best prediction first
+        pairs = []
+        for k in cands:
+            if k in busy_c:
+                continue
+            ck = cl[k]
+            for q in range(nt):
+                if q not in busy_t:
+                    e = abs(ck - pred[q])
+                    if e <= step * (row - tracks[q][0]) + 0.3:
+                        pairs.append((e, q, k))
+        if len(pairs) > 1:
+            pairs.sort()
+        for _, q, k in pairs:
+            if q in busy_t or k in busy_c:
+                continue
+            busy_t.add(q)
+            busy_c.add(k)
+            tr = tracks[q]
+            rec = tr[4]
+            rec.append((row, cl[k]))
+            if len(rec) > hist:
+                del rec[0]
+            t0, c0 = rec[0]
+            if row - t0 >= 3:
+                tr[2] = (cl[k] - c0) / (row - t0)
+            tr[0], tr[1] = row, cl[k]
+            tr[5] += 1
+            labs[k] = tr[3]
+        here = []
+        for k in cands:
+            if k not in busy_c:
+                tracks.append([row, cl[k], 0.0, n_tracks, [(row, cl[k])], 1])
+                labs[k] = n_tracks
+                n_tracks += 1
+            if labs[k] >= 0:
+                here.append(labs[k])
+        if len(here) > 1:
+            here.sort()
+            for a in range(len(here)):
+                for bb in range(a + 1, len(here)):
+                    tg = together.setdefault((here[a], here[bb]), [row, 0])
+                    tg[0], tg[1] = row, tg[1] + 1
+    lab = np.asarray(labs, np.int64)
+    # overlapping profiles: a point of another long track in the same row closer than the separation
+    long_ = np.zeros(n, bool)
+    ok = lab >= 0
+    long_[ok] = np.bincount(lab[ok])[lab[ok]] >= p.min_segment
+    same = (t[1:] == t[:-1]) & (np.abs(np.diff(c)) < sep) & long_[1:] & long_[:-1] & (lab[1:] != lab[:-1])
+    close = np.r_[same, False] | np.r_[False, same]
+    lab[close] = -1
+    return lab
+
+
 def _seg_sizes(seg: np.ndarray) -> np.ndarray:
     """Size of each point's segment."""
     return np.bincount(seg)[seg] if len(seg) else np.zeros(0, np.int64)
@@ -244,7 +474,7 @@ def _local_linear_fit(t: np.ndarray, c: np.ndarray, w: np.ndarray, seg: np.ndarr
     """
     t = t.astype(np.int64)
     seg_first = np.r_[True, seg[1:] != seg[:-1]]
-    t0 = np.maximum.accumulate(np.where(seg_first, t, np.iinfo(np.int64).min))
+    t0 = t[np.maximum.accumulate(np.where(seg_first, np.arange(len(t)), 0))]  # each run's first t
     # per-segment span and offset in the padded grid
     span_end = np.zeros(int(seg.max()) + 1, np.int64)
     np.maximum.at(span_end, seg, t - t0)
@@ -334,17 +564,22 @@ def _extract_axis(img: np.ndarray, p: LaserParams) -> tuple[np.ndarray, ...]:
     resp = cv2.sepFilter2D(img, cv2.CV_32F, _ridge_kernel(p.ridge_sigma), _gauss_kernel(p.along_sigma),
                            borderType=cv2.BORDER_REPLICATE)
     inner = resp[:, b : w - b]
-    j = np.argmax(inner, axis=1)
-    rows = np.arange(h)
-    r = inner[rows, j]
-    j = j + b
+    multi = int(p.lines_per_family) > 1
     # adaptive floor from a robust (median/MAD) noise estimate on ~5k samples of the response
     sub = inner[:: max(1, h // 60), :: max(1, (w - 2 * b) // 80)]
     med = float(np.median(sub))
     noise = 1.4826 * float(np.median(np.abs(sub - med)))
     thr = max(p.min_response, med + p.noise_k * noise)
-    sel = r >= thr
-    t, j = rows[sel], j[sel]
+    if multi:
+        t, j = _row_candidates(inner, thr, int(p.lines_per_family), _nms_radius(p))
+        j = j + b
+    else:
+        j = np.argmax(inner, axis=1)
+        rows = np.arange(h)
+        r = inner[rows, j]
+        j = j + b
+        sel = r >= thr
+        t, j = rows[sel], j[sel]
     if len(t) < 2:
         return empty
     # sub-pixel centre, re-centred once on the first estimate (only rows whose window moves)
@@ -357,12 +592,21 @@ def _extract_axis(img: np.ndarray, p: LaserParams) -> tuple[np.ndarray, ...]:
     t, c, con, wid = t[sel], c[sel], con[sel], wid[sel]
     if len(t) < 2:
         return empty
-    # isolated single-row jumps (dots) before linking
-    jump = 2.0 * p.max_step
-    dprev = np.abs(np.diff(c, prepend=np.nan))
-    dnext = np.abs(np.diff(c, append=np.nan))
-    keep = ~((dprev > jump) & (dnext > jump))
-    t, c, con, wid = t[keep], c[keep], con[keep], wid[keep]
+    seg = np.zeros(0, np.int64)
+    if multi:
+        # several candidates per row: link them into tracks, drop where two lines merge
+        seg = _link_tracks(t, c, p)
+        keep = seg >= 0
+        t, c, con, wid, seg = t[keep], c[keep], con[keep], wid[keep], seg[keep]
+        order = np.lexsort((t, seg))  # contiguous runs, one per track, along t
+        t, c, con, wid, seg = t[order], c[order], con[order], wid[order], seg[order]
+    else:
+        # isolated single-row jumps (dots) before linking
+        jump = 2.0 * p.max_step
+        dprev = np.abs(np.diff(c, prepend=np.nan))
+        dnext = np.abs(np.diff(c, append=np.nan))
+        keep = ~((dprev > jump) & (dnext > jump))
+        t, c, con, wid = t[keep], c[keep], con[keep], wid[keep]
 
     slope = np.zeros(len(t))
 
@@ -370,14 +614,15 @@ def _extract_axis(img: np.ndarray, p: LaserParams) -> tuple[np.ndarray, ...]:
         nonlocal t, c, con, wid, seg, slope
         if mask is not None:
             t, c, con, wid, slope = t[mask], c[mask], con[mask], wid[mask], slope[mask]
-        seg = _link(t, c, p.max_step, p.max_gap)
+            if multi:
+                seg = seg[mask]
+        seg = _split(t, c, seg, p.max_step, p.max_gap) if multi else _link(t, c, p.max_step, p.max_gap)
         long_ = _seg_sizes(seg) >= p.min_segment
         t, c, con, wid, seg, slope = t[long_], c[long_], con[long_], wid[long_], seg[long_], slope[long_]
         if len(seg):
             seg = np.unique(seg, return_inverse=True)[1]
         return len(t) > 0
 
-    seg = np.zeros(0, np.int64)
     if not relink():
         return empty
     if p.width_tol > 0:
@@ -456,6 +701,58 @@ def _near_other_line(pts: np.ndarray, dirs: np.ndarray, other: np.ndarray, other
     return near | (bridge & (dperp < radius) & crossing)
 
 
+def _chains(t: np.ndarray, c: np.ndarray, slope: np.ndarray, seg: np.ndarray, max_bridge: float) -> list[np.ndarray]:
+    """Point indices of each line of one family (several lines): segments chained across gaps.
+
+    Segments are contiguous runs sorted by ``t``. A segment's end is joined to the start of the
+    segment that continues it best, at most ``max_bridge`` further along ``t`` and within
+    ``max(3, 0.05 * gap)`` px of the end's straight continuation (each start is joined once)."""
+    if len(seg) == 0:
+        return []
+    first = np.r_[0, np.flatnonzero(seg[1:] != seg[:-1]) + 1]
+    last = np.r_[first[1:] - 1, len(seg) - 1]
+    n = len(first)
+    links = []
+    for a in range(n):
+        ea = last[a]
+        for b in range(n):
+            sb = first[b]
+            dt = t[sb] - t[ea]
+            if b == a or dt <= 0 or dt > max_bridge:
+                continue
+            miss = abs(c[sb] - (c[ea] + slope[ea] * dt))
+            if miss <= max(3.0, 0.05 * dt):
+                links.append((miss, a, b))
+    nxt = [-1] * n
+    has_prev = [False] * n
+    for _, a, b in sorted(links):
+        if nxt[a] < 0 and not has_prev[b]:
+            nxt[a], has_prev[b] = b, True
+    out = []
+    for a in range(n):
+        if has_prev[a]:
+            continue
+        idx, s = [], a
+        while s >= 0:
+            idx.append(np.arange(first[s], last[s] + 1))
+            s = nxt[s]
+        out.append(np.concatenate(idx))
+    return out
+
+
+def _near_other_lines(pts: np.ndarray, dirs: np.ndarray, other: np.ndarray, other_dirs: np.ndarray,
+                      other_slope: np.ndarray, other_seg: np.ndarray, other_vertical: bool, radius: float) -> np.ndarray:
+    """:func:`_near_other_line` for a family holding several lines: line by line (:func:`_chains`)."""
+    near = np.zeros(len(pts), bool)
+    if len(pts) == 0 or len(other) == 0:
+        return near
+    ot = other[:, 1] if other_vertical else other[:, 0]
+    oc = other[:, 0] if other_vertical else other[:, 1]
+    for idx in _chains(ot, oc, other_slope, other_seg, 4.0 * radius):
+        near |= _near_other_line(pts, dirs, other[idx], other_dirs[idx], other_vertical, radius)
+    return near
+
+
 def _family_duplicates(vert: np.ndarray, slope_v: np.ndarray, horz: np.ndarray, slope_h: np.ndarray,
                        tol: float = 1.5) -> tuple[np.ndarray, np.ndarray]:
     """Points found by both families (one line near 45 deg): keep the family with the smaller slope."""
@@ -492,21 +789,31 @@ def extract_laser_lines(img_r: np.ndarray, params: LaserParams | None = None) ->
         if p.cross_radius > 0:
             dir_v = _unit(slv, np.ones_like(slv))  # (du, dv) of the vertical line
             dir_h = _unit(np.ones_like(slh), slh)
-            keep_v &= ~_near_other_line(vert, dir_v, horz, dir_h, other_vertical=False, radius=p.cross_radius)
-            keep_h &= ~_near_other_line(horz, dir_h, vert, dir_v, other_vertical=True, radius=p.cross_radius)
-        vert, sv, segv = _revalidate(vert, sv, keep_v, p, vertical=True)
-        horz, sh, segh = _revalidate(horz, sh, keep_h, p, vertical=False)
+            if int(p.lines_per_family) > 1:
+                keep_v &= ~_near_other_lines(vert, dir_v, horz, dir_h, slh, segh, other_vertical=False, radius=p.cross_radius)
+                keep_h &= ~_near_other_lines(horz, dir_h, vert, dir_v, slv, segv, other_vertical=True, radius=p.cross_radius)
+            else:
+                keep_v &= ~_near_other_line(vert, dir_v, horz, dir_h, other_vertical=False, radius=p.cross_radius)
+                keep_h &= ~_near_other_line(horz, dir_h, vert, dir_v, other_vertical=True, radius=p.cross_radius)
+        vert, sv, segv = _revalidate(vert, sv, keep_v, p, vertical=True, seg=segv)
+        horz, sh, segh = _revalidate(horz, sh, keep_h, p, vertical=False, seg=segh)
     log.debug("extract_laser_lines: %d vertical, %d horizontal points", len(vert), len(horz))
     return LaserLines(vert, horz, sv, sh, segv.astype(np.int32), segh.astype(np.int32))
 
 
-def _revalidate(pts: np.ndarray, strength: np.ndarray, keep: np.ndarray, p: LaserParams, vertical: bool):
-    """Apply ``keep``, re-link and drop segments that became shorter than ``min_segment``."""
+def _revalidate(pts: np.ndarray, strength: np.ndarray, keep: np.ndarray, p: LaserParams, vertical: bool,
+                seg: np.ndarray | None = None):
+    """Apply ``keep``, re-link and drop segments that became shorter than ``min_segment``.
+
+    With several lines per family the segments ``seg`` are only split, never joined."""
     pts, strength = pts[keep], strength[keep]
     if len(pts) == 0:
         return pts, strength, np.zeros(0, np.int64)
     t, c = (pts[:, 1], pts[:, 0]) if vertical else (pts[:, 0], pts[:, 1])
-    seg = _link(t, c, p.max_step, p.max_gap)
+    if int(p.lines_per_family) > 1 and seg is not None:
+        seg = _split(t, c, np.asarray(seg)[keep], p.max_step, p.max_gap)
+    else:
+        seg = _link(t, c, p.max_step, p.max_gap)
     long_ = _seg_sizes(seg) >= p.min_segment
     pts, strength, seg = pts[long_], strength[long_], seg[long_]
     if len(seg):
@@ -532,25 +839,32 @@ def stereo_check(points_c: np.ndarray, right_uv: np.ndarray, K: np.ndarray, base
 
     ``points_c`` (N,3) in frame C (NaN allowed). In the rectified right image the point appears
     on the same row at ``u_r = u_l - f*B/z``. ``right_uv`` (M,2) are the ridge points of the *same*
-    laser line extracted from the right rectified image. A point passes when a ridge point lies
-    within ``tol_px``.
+    laser line extracted from the right rectified image (of its family, with several lasers per
+    family). A point passes when a ridge point lies within ``tol_px``.
     """
+    return np.isfinite(stereo_residual(points_c, right_uv, K, baseline_mm, tol_px))
+
+
+def stereo_residual(points_c: np.ndarray, right_uv: np.ndarray, K: np.ndarray, baseline_mm: float,
+                    tol_px: float = 1.5) -> np.ndarray:
+    """Distance (px) from each point's predicted right-image position to the nearest right ridge
+    point, ``inf`` beyond ``tol_px`` (or for invalid points): what :func:`stereo_check` tests."""
     P = np.asarray(points_c, dtype=np.float64).reshape(-1, 3)
-    ok = np.zeros(len(P), bool)
+    out = np.full(len(P), np.inf)
     right_uv = np.asarray(right_uv, dtype=np.float64).reshape(-1, 2)
     if len(P) == 0 or len(right_uv) == 0:
-        return ok
+        return out
     finite = np.all(np.isfinite(P), axis=1) & (P[:, 2] > 0)
     if not finite.any():
-        return ok
+        return out
     Q = P[finite]
     f, cx, cy, s = K[0, 0], K[0, 2], K[1, 2], K[0, 1]
     x, y = Q[:, 0] / Q[:, 2], Q[:, 1] / Q[:, 2]
     v = K[1, 1] * y + cy
     u_r = f * x + s * y + cx - f * float(baseline_mm) / Q[:, 2]
     d, _ = cKDTree(right_uv).query(np.stack([u_r, v], axis=1), k=1, distance_upper_bound=float(tol_px))
-    ok[np.nonzero(finite)[0]] = np.isfinite(d)
-    return ok
+    out[np.nonzero(finite)[0]] = d
+    return out
 
 
 #: the dense depth's standard deviation when no sigma map is given, as a share of the depth
@@ -618,8 +932,18 @@ def laser_points(
     ``params.stereo_check`` is set and the right image (or ``lines_right``) is available,
     applies :func:`stereo_check`. With a dense ``depth`` map of the left image (and its
     ``depth_sigma``) and ``params.depth_check``, also :func:`depth_check`; ``rejected`` (when
-    given) counts the points it drops per plane. Plane names other than "vertical"/"horizontal"
-    are ignored.
+    given) counts the points it drops per plane. Plane names that are not laser lines (see
+    :func:`line_family`) are ignored.
+
+    Several planes of one family (four lasers): each point of the family is triangulated on
+    every plane of that family and goes to the plane its checks pass on. Several pass (near
+    where two sheets intersect, where their 3D points agree anyway): the one with the smallest
+    stereo residual (:func:`stereo_residual`), else the one closest to the dense depth. None
+    passes, or several pass with 3D points further apart than ``family_agree_mm`` (the checks
+    cannot tell the lines apart there: a horizontal line runs along the epipolar rows, so
+    without the dense depth its stereo check hardly depends on the plane): dropped. A point
+    the depth check drops on every plane it otherwise passes on counts as rejected on the plane
+    with the best stereo residual there.
     """
     p = params if params is not None else LaserParams()
     if lines_left is None:
@@ -627,17 +951,33 @@ def laser_points(
     do_check = p.stereo_check and (lines_right is not None or right_r is not None)
     if do_check and lines_right is None:
         lines_right = extract_laser_lines(right_r, p)
+    use_depth = (p.depth_check and depth is not None and left_r is not None
+                 and depth.shape[:2] == np.asarray(left_r).shape[:2])
+    families: dict[str, list[str]] = {}
+    for name in planes:
+        if not is_line_name(name):
+            log.warning("laser_points: ignoring plane %r (a laser line's name starts with one of %s)", name, LINE_NAMES)
+            continue
+        families.setdefault(line_family(name), []).append(name)
+    multi: dict[str, np.ndarray] = {}
+    for fam, names in families.items():
+        if len(names) > 1:
+            multi.update(_assign_planes(lines_left.get(fam), [planes[n] for n in names], names, K, baseline, p,
+                                        lines_right.get(fam) if do_check else None,
+                                        depth if use_depth else None, depth_sigma, rejected))
     out: dict[str, np.ndarray] = {}
     for name, plane in planes.items():
-        if name not in LINE_NAMES:
-            log.warning("laser_points: ignoring plane %r (expected %s)", name, LINE_NAMES)
+        if not is_line_name(name):
+            continue
+        if name in multi:
+            out[name] = multi[name]
             continue
         P = triangulate_plane(lines_left.get(name), K, plane)
         z = P[:, 2]
         ok = np.isfinite(z) & (z >= p.min_depth_mm) & (z <= p.max_depth_mm)
         if do_check and ok.any():
             ok &= stereo_check(P, lines_right.get(name), K, baseline, p.stereo_tol_px)
-        if p.depth_check and depth is not None and ok.any() and depth.shape[:2] == left_r.shape[:2]:
+        if use_depth and ok.any():
             agree = depth_check(P[ok], depth, K, depth_sigma, p.depth_check_k, p.depth_check_min_mm)
             if rejected is not None:
                 rejected[name] = rejected.get(name, 0) + int((~agree).sum())
@@ -645,6 +985,103 @@ def laser_points(
             ok[keep[~agree]] = False
         out[name] = P[ok]
     return out
+
+
+def _assign_planes(uv: np.ndarray, planes: list[LaserPlane], names: list[str], K: np.ndarray, baseline: float,
+                   p: LaserParams, right_uv: np.ndarray | None, depth: np.ndarray | None,
+                   depth_sigma: np.ndarray | None, rejected: dict[str, int] | None) -> dict[str, np.ndarray]:
+    """The points of one family split between its planes (see :func:`laser_points`): ``{name: (N,3)}``."""
+    P, label, lost, blame = _plane_labels(uv, planes, K, baseline, p, right_uv, depth, depth_sigma)
+    if rejected is not None and depth is not None:
+        for k, name in enumerate(names):
+            rejected[name] = rejected.get(name, 0) + int((lost & (blame == k)).sum())
+    return {name: P[k][label == k] for k, name in enumerate(names)}
+
+
+def assign_planes(uv: np.ndarray, planes: list[LaserPlane], K: np.ndarray, baseline: float,
+                  params: LaserParams | None = None, right_uv: np.ndarray | None = None,
+                  depth: np.ndarray | None = None, depth_sigma: np.ndarray | None = None) -> tuple[np.ndarray, np.ndarray]:
+    """Which of the planes ``planes`` (one family's) each left-image point ``uv`` (N,2) lies on.
+
+    The rule of :func:`laser_points`: ``right_uv`` are the family's right-image ridge points
+    (``None``: no stereo check), ``depth`` / ``depth_sigma`` the dense depth (``None``: no depth
+    check). Returns ``(P, label)``: ``P`` (M,N,3) the points triangulated on every plane, ``label``
+    (N,) the index of the plane each point goes to, -1 for none."""
+    P, label, _, _ = _plane_labels(np.asarray(uv, dtype=np.float64).reshape(-1, 2), list(planes), K, baseline,
+                                   params if params is not None else LaserParams(), right_uv, depth, depth_sigma)
+    return P, label
+
+
+def _plane_labels(uv: np.ndarray, planes: list[LaserPlane], K: np.ndarray, baseline: float, p: LaserParams,
+                  right_uv: np.ndarray | None, depth: np.ndarray | None, depth_sigma: np.ndarray | None):
+    """``(P, label, lost, blame)``: :func:`assign_planes`, and the points the depth check dropped on
+    every plane they otherwise passed on (``lost``) with the plane of the best stereo residual there."""
+    n, m = len(uv), len(planes)
+    P = np.stack([triangulate_plane(uv, K, pl) for pl in planes]) if n else np.zeros((m, 0, 3))
+    z = P[:, :, 2]
+    ok = np.isfinite(z) & (z >= p.min_depth_mm) & (z <= p.max_depth_mm)
+    in_range = ok.copy()
+    resid = np.zeros((m, n))
+    if right_uv is not None:
+        for k in range(m):
+            resid[k] = stereo_residual(P[k], right_uv, K, baseline, p.stereo_tol_px) if ok[k].any() else np.inf
+        ok &= np.isfinite(resid)
+    passed = ok.copy()
+    dz = np.zeros((m, n))
+    if depth is not None:
+        h, w = depth.shape[:2]
+        for k in range(m):
+            if not ok[k].any():
+                continue
+            i = np.flatnonzero(ok[k])
+            passed[k, i] = depth_check(P[k, i], depth, K, depth_sigma, p.depth_check_k, p.depth_check_min_mm)
+            Q = P[k, i]
+            u = np.clip(np.rint(K[0, 0] * Q[:, 0] / Q[:, 2] + K[0, 1] * Q[:, 1] / Q[:, 2] + K[0, 2]).astype(np.int64), 0, w - 1)
+            v = np.clip(np.rint(K[1, 1] * Q[:, 1] / Q[:, 2] + K[1, 2]).astype(np.int64), 0, h - 1)
+            d = depth[v, u].astype(np.float64)
+            dz[k, i] = np.where(d > 0, np.abs(Q[:, 2] - d), 0.0)
+    if depth is not None and m > 1 and n:
+        # the stereo check of a horizontal line hardly depends on the depth, so with several
+        # planes the dense depth must confirm the plane: some dense depth around the point
+        # (without it the depth check passes anything), and where the point's own pixel has dense
+        # depth, the chosen plane's point is the one closest to it
+        h, w = depth.shape[:2]
+        ui = np.clip(np.rint(uv[:, 0]).astype(np.int64), 0, w - 1)
+        vi = np.clip(np.rint(uv[:, 1]).astype(np.int64), 0, h - 1)
+        o = max(2, int(round(6.0 * w / 1280.0)))  # the depth check's sample offsets
+        seen = np.zeros(n, bool)
+        for du, dv in ((0, 0), (0, -o), (0, o), (-o, 0), (o, 0)):
+            seen |= depth[np.clip(vi + dv, 0, h - 1), np.clip(ui + du, 0, w - 1)] > 0
+        here = depth[vi, ui].astype(np.float64)
+        gapz = np.where(in_range, np.abs(z - here[None, :]), np.inf)
+        closest = np.argmin(gapz, axis=0)
+        passed &= seen[None, :]
+        passed &= ~((here > 0)[None, :] & (np.arange(m)[:, None] != closest[None, :]))
+    n_pass = passed.sum(axis=0)
+    if m > 1 and n:
+        # several planes take the point: only where their 3D points agree (where the sheets
+        # intersect); elsewhere the checks cannot tell which line it is (a horizontal line runs
+        # along the epipolar rows, so its stereo check hardly depends on the depth)
+        Pz = np.where(passed[:, :, None], P, 0.0)
+        mean = Pz.sum(axis=0) / np.maximum(n_pass, 1)[:, None]
+        spread = np.where(passed, np.linalg.norm(Pz - mean[None], axis=2), 0.0).max(axis=0)
+        unsure = (n_pass > 1) & ~(spread <= 0.5 * float(p.family_agree_mm))
+        passed[:, unsure] = False
+    if right_uv is not None:
+        score = np.where(passed, resid, np.inf)
+    elif depth is not None:
+        score = np.where(passed, dz, np.inf)
+    else:  # nothing to rank by (and where several planes take a point, they agree)
+        score = np.where(passed, 0.0, np.inf)
+    best = np.argmin(score, axis=0) if n else np.zeros(0, np.int64)
+    take = np.isfinite(score[best, np.arange(n)]) if n else np.zeros(0, bool)
+    label = np.where(take, best, -1)
+    lost = (ok.any(axis=0) & (n_pass == 0)) if depth is not None else np.zeros(n, bool)
+    if right_uv is not None:
+        blame = np.argmin(np.where(ok, resid, np.inf), axis=0) if n else np.zeros(0, np.int64)
+    else:
+        blame = np.argmax(ok, axis=0) if n else np.zeros(0, np.int64)
+    return P, label, lost, blame
 
 
 # --------------------------------------------------------------------------- live preview
