@@ -90,6 +90,13 @@ def test_layouts_of_the_second_pair():
 
     four = nominal_calibration(lasers=4)
     assert {"2", "4", "4-straight", "4-cross350", "4-cross450", "4-cross600", "4-apart"} <= set(LASER_LAYOUTS)
+    # hybrids: the two new lasers aimed differently
+    hybrids = {f"4-v{v}-h{h}" for v in ("250", "350", "450") for h in ("apart", "straight")} | {"4-vapart-h350"}
+    assert hybrids <= set(LASER_LAYOUTS)
+    em = nominal_emitters(layout="4-v350-hstraight")
+    assert np.allclose(em["horizontal_2"]["direction"], [0, 0, 1])
+    assert np.array_equal(em["vertical_2"]["normal"], nominal_emitters(layout="4-cross350")["vertical_2"]["normal"])
+    assert np.array_equal(nominal_emitters(layout="4-vapart-h350")["vertical_2"]["normal"], nominal_emitters(layout="4-apart")["vertical_2"]["normal"])
     for name, pl in nominal_calibration(layout="4").lasers.items():
         assert np.array_equal(pl.normal, four.lasers[name].normal) and pl.d == four.lasers[name].d
     for layout in LASER_LAYOUTS:

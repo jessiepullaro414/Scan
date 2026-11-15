@@ -126,6 +126,13 @@ LASER_LAYOUTS: dict[str, dict[str, float | tuple[str, float]]] = {
     # image at 150 mm (2 deg: 26 px from its edge) and the low line inside the images (5 deg)
     "4-apart": {"vertical": _WORK_DIST, "horizontal": _WORK_DIST, "vertical_2": ("deg", -2.0), "horizontal_2": ("deg", -5.0)},
 }
+# hybrids: the two new lasers aimed differently, "4-v<vertical_2>-h<horizontal_2>" with a crossing
+# distance (mm ahead of the faceplate), "apart" (as in "4-apart") or "straight"
+_AIMS_V2 = {"250": _WORK_DIST, "350": 350.0, "450": 450.0, "apart": ("deg", -2.0)}
+_AIMS_H2 = {"350": 350.0, "apart": ("deg", -5.0), "straight": math.inf}
+for _v, _h in [(v, h) for v in ("250", "350", "450") for h in ("apart", "straight")] + [("apart", "350")]:
+    LASER_LAYOUTS[f"4-v{_v}-h{_h}"] = {"vertical": _WORK_DIST, "horizontal": _WORK_DIST,
+                                       "vertical_2": _AIMS_V2[_v], "horizontal_2": _AIMS_H2[_h]}
 
 
 def _laser_names(lasers: int) -> tuple[str, ...]:
