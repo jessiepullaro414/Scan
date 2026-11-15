@@ -31,8 +31,10 @@
 //  The faceplate is a separate part so that ONLY it needs reprinting if
 //  your stereo board's dimensions differ from the placeholders below.
 //
-//  Export:  openscad -D part=\"head\" -o head.stl scanner.scad            (2 lasers)
-//           openscad -D lasers=4 -D part=\"head\" -o head.stl scanner.scad  (4 lasers)
+//  Export:  openscad -D part=\"head\" -o head_led.stl scanner.scad            (2 lasers, LED projector)
+//           openscad -D lasers=4 -D part=\"head\" -o head_led_4laser.stl scanner.scad  (4 lasers, LED projector)
+//           openscad -D lasers=4 -D part=\"head\" -D holder_type=\"commonlands_cla020\" -o head_led_4laser_cla020.stl scanner.scad
+//           openscad -D lasers=4 -D part=\"head\" -D projector=\"laser\" -o head_4laser.stl scanner.scad  (4 lasers, option A)
 //  The faceplate, back cover, grip halves and LED cartridge are the same in both
 //  variants; only the head changes.
 // =====================================================================

@@ -30,8 +30,8 @@ Laser-sheet geometry: both sheets cross on the centre axis 250 mm in front of th
 **The order list with links is in [PARTS.md](PARTS.md).**
 
 Summary:
-- **Optics/electronics:** ELP synced OV9281 stereo camera, 2 line lasers and 1 dot laser (650 nm 5 mW, Ø12 mm), Lasermate DOE-RD10K650, Raspberry Pi Pico, Adafruit LSM6DSOX IMU, 16 mm momentary button, MTS-102 toggle, 3× PN2222 + 3× 1 kΩ, silicone wire, heat-shrink, micro-USB data cable.
-- **Hardware:** 22× M3×5.7 heat-set inserts. **M3×8 flat-head (countersunk)** ×12 for the faceplate and back cover, so they sit flush. Socket-head screws: **M3×10** ×8 (grip→head: 4 from above, 4 through the yoke), **M3×12** ×3 (laser pinch), **M3×16** ×2 (grip halves). Also M2×6 ×4 (camera), M2×5 ×4 (Pico) and M2.5×5 ×4 (IMU).
+- **Optics/electronics:** ELP synced OV9281 stereo camera, 2 line lasers and 1 dot laser (650 nm 5 mW, Ø12 mm), Lasermate DOE-RD10K650, Raspberry Pi Pico, Adafruit LSM6DSOX IMU, 16 mm momentary button, MTS-102 toggle, 3× PN2222 + 3× 1 kΩ (the optional 4-laser variant needs 4 line lasers and two more PN2222 and 1 kΩ: see [4-laser variant](#4-laser-variant-optional)), silicone wire, heat-shrink, micro-USB data cable.
+- **Hardware:** 22× M3×5.7 heat-set inserts. **M3×8 flat-head (countersunk)** ×12 for the faceplate and back cover, so they sit flush. Socket-head screws: **M3×10** ×8 (grip→head: 4 from above, 4 through the yoke), **M3×12** ×3 (laser pinch; ×5 for the 4-laser variant), **M3×16** ×2 (grip halves). Also M2×6 ×4 (camera), M2×5 ×4 (Pico) and M2.5×5 ×4 (IMU).
 - **Consumables:**
   - **ASA** filament (~350 g). A closed car reaches 70–80 °C; PLA warps and PETG is marginal.
   - **AESUB Blue** vanishing spray, for glossy paint, chrome and black trim.
@@ -74,6 +74,9 @@ Option B parts come in two versions:
 - `head_led_cla020.stl` + `led_cartridge_cla020.stl` fit the **Commonlands CLA020** holder.
 
 For a holder of a different height, set `holder_h` in `scanner.scad` and re-export.
+
+The 4-laser variant has its own head files; see [4-laser variant](#4-laser-variant-optional).
+
 | `faceplate.stl` | front face down | Made for the measured ELP board (see above). Four camera posts and two alignment pins point up |
 | `back_cover.stl` | outside face down | IMU standoffs and two alignment pins point up; the name is sunk into the first layers |
 | `grip_left.stl`, `grip_right.stl` | outer face down | The right half has two pins that locate the left half |
@@ -127,6 +130,43 @@ IMU (LSM6DSOX): VIN ── 3V3 (pin 36)  GND ── GND  SDA ── GP4 (pin 6) 
 6. **Camera:** screw the stereo board to the faceplate standoffs, focus both lenses at about 25 cm, lock them with a dab of nail polish, seat the faceplate on its two pins and screw it on (M3×8 flat-head).
 7. **Back cover:** mount the IMU and the kill toggle, wire everything per the diagram, seat the cover on its two pins and close with M3×8 flat-head.
 
+## 4-laser variant (optional)
+
+The standard build has two line lasers. This variant has four: it adds a second vertical-line laser on the **left** of the cameras (the mirror of the right one) and a second horizontal-line laser **low on the right**, beside the grip's yoke, 56 mm below the camera centre and aimed up. All four sheets still cross at the working distance of 250 mm. Build it if you have four laser modules and want about twice the laser points per frame. A line from the left also lights walls that a line from the right leaves in shadow. Other builders can keep two lasers; nothing else changes.
+
+**Software for four lasers is being added now and is not finished; until it is, the app works with the two standard lasers.**
+
+The housing has not been test printed yet, and this variant has not either: the fit of the new blocks is as designed, not as tried.
+
+**Print** the 4-laser head instead of the normal one. The faceplate, back cover, grip halves and `led_cartridge.stl` are the same as in the standard build. Orientation and print settings are the same too.
+
+| Your build | Head file |
+|---|---|
+| Option B, Arducam metal holder (the build this guide follows) | `head_led_4laser.stl` |
+| Option B, Commonlands CLA020 holder | `head_led_4laser_cla020.stl` (with `led_cartridge_cla020.stl`) |
+| Option A (laser + DOE) | `head_4laser.stl` |
+
+**Wiring.** The two lasers of a kind share one Pico pin, so the firmware and the `EMIT <v> <h> <d>` command do not change. Each laser still gets its own PN2222A and its own 1 kΩ base resistor. Add these to the diagram above:
+
+```
+V2-laser black ── C  Q4 PN2222A  E ── GND     B ── 1kΩ ── GP2 (pin 4)   (the same pin as Q1)
+H2-laser black ── C  Q5 PN2222A  E ── GND     B ── 1kΩ ── GP3 (pin 5)   (the same pin as Q2)
+```
+
+- V2 is the left vertical laser, H2 the low horizontal one. Their red wires join the toggle's output with the others, in the head.
+- That is two more PN2222A and two more 1 kΩ resistors: 5 of each with option A, 4 of each with the LED projector (option B), where a MOSFET drives the LED in place of Q3. Solder Q4 and Q5 on the same perfboard scrap as the others.
+- Each laser draws a few tens of mA, so the two extra ones add that much on top of the ≈0.45 A given above for option B.
+- Two more laser return wires run from the head to the grip through the slot under the camera. The guide's count of 3× laser returns becomes 5×.
+
+**Assembly.** Do steps 1 to 7 as above, with these differences in step 4:
+- **Left vertical laser:** slide it in from the back, like the right one. Pinch it with an M3×12 screw from the **top**. Turn it until its line is exactly vertical.
+- **Low horizontal laser:** it sits in the block that hangs below the camera block on the right, next to the yoke. Slide it in from the back and pinch it with an M3×12 screw from the **outside** (from the right). Turn it until its line is exactly horizontal.
+- The wire channels on the back face lead each new laser's wires to the stereo opening and on to the slot.
+- **Long hex driver:** the right yoke cross screws (the two M3×10 on the right side) now sit behind the low laser block. Their tunnel runs on through that block, and the screw heads are about 52 mm inside it. You need a 2.5 mm hex driver with at least 55 mm of shaft. The left side is unchanged.
+
+![front, 4 lasers](renders/front_led_4laser.png)
+![rear, 4 lasers](renders/rear_led_4laser.png)
+
 ## In-car notes
 
 - Store the scanner in a bag in the trunk or footwell, not on the dash.
@@ -135,7 +175,7 @@ IMU (LSM6DSOX): VIN ── 3V3 (pin 36)  GND ── GND  SDA ── GP4 (pin 6) 
 
 ## Files
 
-- `hardware/scanner.scad`: single parametric source for every part (all dimensions are at the top). `projector = "led"` (option B) is the default; set `projector = "laser"` for option A.
+- `hardware/scanner.scad`: single parametric source for every part (all dimensions are at the top). `projector = "led"` (option B) is the default; set `projector = "laser"` for option A. `lasers = 4` makes the 4-laser variant (see above).
 - `stl/`: print-ready parts
 - `renders/`: previews
 

@@ -12,20 +12,20 @@ Each link has a **Status**:
 | # | Part | Qty | Buy here | Backup | Price seen | Status |
 |---|---|---|---|---|---|---|
 | 1 | **Stereo camera**: ELP dual-lens, hardware-synced, global-shutter OV9281 mono, USB, "83° no distortion" lens | 1 | [Amazon B0D9VY8JG4](https://www.amazon.com/ELP-Monochrome-Synchronization-OmniVision-Distortion/dp/B0D9VY8JG4) | [hdusbcameras (ELP)](https://www.hdusbcameras.com/elp-ov9281-global-shutter-stereo-usb-camera-module-monochrome-120fps-at-800x600-210fps-at-320x240-hardware-synchronized-for-robotics-3d-vision-machine-vision.html) | ~$100–150 | search |
-| 2 | **Line laser module** 650 nm 5 mW, Ø12 mm, 3–5 V, adjustable focus (glass lens if offered) | 2 (+spare) | [Amazon search](https://www.amazon.com/s?k=650nm+5mW+line+laser+module+12mm+adjustable+focus) | [Phipps (ships from Australia)](https://www.phippselectronics.com/product/650nm-5mw-red-line-laser-module-with-adjustable-focus-5v-industrial-grade/) | ~$8–15 per pack | Amazon search |
+| 2 | **Line laser module** 650 nm 5 mW, Ø12 mm, 3–5 V, adjustable focus (glass lens if offered) | 2 (4 for the 4-laser variant) (+spare) | [Amazon search](https://www.amazon.com/s?k=650nm+5mW+line+laser+module+12mm+adjustable+focus) | [Phipps (ships from Australia)](https://www.phippselectronics.com/product/650nm-5mw-red-line-laser-module-with-adjustable-focus-5v-industrial-grade/) | ~$8–15 per pack | Amazon search |
 | 3–4 | **Pattern projector**: pick **option A** or **option B** from the tables below | — | — | — | — | — |
 | 5 | Raspberry Pi Pico (no headers) | 1 | [Adafruit 4864](https://www.adafruit.com/product/4864) | — | $4.00 | ✔ loaded |
 | 5b | **Instead of 5:** Waveshare ESP32-S3-Pico (no headers, SKU 23803); needs a USB-C data cable. Same wiring; not yet tried on a real board | 1 | [Amazon search](https://www.amazon.com/s?k=Waveshare+ESP32-S3-Pico) | [Waveshare](https://www.waveshare.com/esp32-s3-pico.htm?sku=23803) | ~$9 | Amazon search |
 | 6 | IMU: Adafruit LSM6DSOX 6-DoF | 1 | [Adafruit 4438](https://www.adafruit.com/product/4438) | — | $11.95 | ✔ loaded |
 | 7 | Trigger: 16 mm panel-mount momentary pushbutton | 1 | [Adafruit 1504 (green)](https://www.adafruit.com/products/1504) | [1503 (burgundy)](https://www.adafruit.com/products/1503) | ~$1 | search |
 | 8 | Laser kill switch: MTS-102 mini toggle (SPDT, 2-position ON-ON) | 1 | [Amazon search](https://www.amazon.com/s?k=MTS-102+mini+toggle+switch) | — | ~$7 per pack | Amazon search |
-| 9 | NPN transistors PN2222 (10-pack) | 3 | [Adafruit 756](https://www.adafruit.com/product/756) | — | $1.95 | ✔ loaded |
-| 10 | 1 kΩ resistors (25-pack) | 3 | [Adafruit 4294](https://www.adafruit.com/product/4294) | [Jameco](https://www.jameco.com/z/4294-Adafruit-Industries-Through-Hole-Resistors-1-0K-Ohm-5-1-4W-Pack-of-25_2517951.html) | $0.75 | ✔ loaded |
+| 9 | NPN transistors PN2222 (10-pack) | 3 (two more for the 4-laser variant) | [Adafruit 756](https://www.adafruit.com/product/756) | — | $1.95 | ✔ loaded |
+| 10 | 1 kΩ resistors (25-pack) | 3 (two more for the 4-laser variant) | [Adafruit 4294](https://www.adafruit.com/product/4294) | [Jameco](https://www.jameco.com/z/4294-Adafruit-Industries-Through-Hole-Resistors-1-0K-Ohm-5-1-4W-Pack-of-25_2517951.html) | $0.75 | ✔ loaded |
 | 11 | 26 AWG silicone wire (get 3 colours) | 3 spools | [Adafruit 2514 (blue)](https://www.adafruit.com/product/2514) | other colours: Adafruit 2517 black / 2516 green / 2518 white (IDs not checked) | $4.95 each | ✔ loaded (2514) |
 | 12 | Heat-shrink assortment | 1 | [Adafruit 4559](https://www.adafruit.com/product/4559) | — | $9.95 | ✔ loaded |
 | 13 | Micro-USB **data** cable, ~2 m (for the Pico) | 1 | [Amazon search](https://www.amazon.com/s?k=micro+usb+data+cable+6ft) | — | ~$8 | Amazon search |
 | 14 | M3 heat-set inserts, M3 × 5.7, OD 4.6 (100) | 22 used | [Prusa 100 pcs](https://www.prusa3d.com/en/product/threaded-inserts-m3-standard-100-pcs/) | [VXB (US)](https://vxb.com/products/100-pcs-m3-brass-heat-set-threaded-inserts-for-3d) | $10.99 / $19.99 | search |
-| 15 | M3 socket-head screw kit (must include 10, 12, 16 mm) | 1 | [Amazon search](https://www.amazon.com/s?k=M3+socket+head+cap+screw+assortment+kit+8mm+10mm+12mm+16mm) | — | ~$12 | Amazon search |
+| 15 | M3 socket-head screw kit (must include 10, 12, 16 mm; the 4-laser variant uses two more M3×12) | 1 | [Amazon search](https://www.amazon.com/s?k=M3+socket+head+cap+screw+assortment+kit+8mm+10mm+12mm+16mm) | — | ~$12 | Amazon search |
 | 15b | M3 × 8 flat-head (countersunk) screws, black, for the faceplate and back cover | 12 used | [Amazon search](https://www.amazon.com/s?k=M3+x+8mm+flat+head+countersunk+socket+screw+black) | — | ~$7 | Amazon search |
 | 16 | M2 + M2.5 screw kit (M2×5–6, M2.5×5) | 1 | [Amazon search](https://www.amazon.com/s?k=M2+M2.5+socket+head+screw+assortment+kit) | — | ~$12 | Amazon search |
 | 17 | ASA filament 1.75 mm, 1 kg, black | 1 | [MatterHackers: Polymaker PolyLite ASA](https://www.matterhackers.com/store/l/polymaker-polylite-asa-black-175mm-1kg/sk/M4QCXUKG) | [B&H](https://www.bhphotovideo.com/c/product/1721180-REG/polymaker_pf01001_polylite_asa_1_75mm_1000g.html) | ~$30 | ✔ loaded (MH) |
@@ -113,3 +113,13 @@ Print the mask with `ohs printables` at 100 % on a 1200 dpi laser printer. You g
 - **Trigger button:** the grip now takes a **16 mm** button (Adafruit's), not 12 mm. The STLs are updated.
 - **MTS-102:** comes with M6 or 1/4-40 threads; the back-cover hole fits either.
 - **Transistors:** Adafruit lists the part as PN2222, without the "A". The pinout is the same E-B-C as the PN2222A, so it works.
+
+## 4-laser variant
+
+The optional 4-laser build (see README.md) uses the same parts as above, with these changes:
+
+- **Line lasers (#2):** 4 instead of 2. Two of the same kind, so buy a pack of 5–10.
+- **PN2222 (#9) and 1 kΩ resistors (#10):** two more of each (5 instead of 3 with option A; 4 instead of 2 with the LED projector, which uses a MOSFET in place of the third). The packs already hold enough, so you do not need to buy more.
+- **Wire (#11):** two more laser return wires run to the grip. The spools you have are enough.
+- **Print:** `head_led_4laser.stl` (or `head_led_4laser_cla020.stl`, or `head_4laser.stl` for option A) instead of the normal head.
+- **Tool:** a 2.5 mm hex driver with at least 55 mm of shaft, for the right yoke cross screws.
