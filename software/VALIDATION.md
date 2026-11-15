@@ -1607,7 +1607,7 @@ The ranges are over the four planes. The two-laser calibration's limits in the t
 
 **Tests:** `tests/test_vision_laser.py` (two lines per direction: tilted, curved, gapped, crossing; the plane of every kept point against the truth), `tests/test_calib_laser_sets.py`, `tests/test_sim_board_camera.py`, `tests/test_sim_datasets.py`, `tests/test_sim_nominal.py`, `tests/test_e2e_scan.py` and `tests/test_track_curve_ba.py` (tracked scans with four lasers), `tests/test_server_calibration.py` and `tests/test_server_setup.py` (the laser set through the app).
 
-**Suite with the variant in** (819 tests, the code of 2026-11-15 with the chosen aim): GPU path 813 passed, 6 skipped; CPU path 763 passed, 56 skipped.
+**Suite with the variant in** (819 tests, the code of 2026-11-15 with the chosen aim): GPU path 813 passed, 6 skipped; CPU path 763 passed, 56 skipped. After the faster extraction and the change to the calibration guide (828 tests, commit c706c2b): GPU path 822 passed, 6 skipped; CPU path 772 passed, 56 skipped.
 
 Scripts: scratchpad `lasers4\` of the session of 2026-11-14/15 (`study2.py`, `summarise2.py`, `compare_scans.py`; results in `s2\`, `s3\`, `cmp2\`) and `shape\one_side.py`.
 
