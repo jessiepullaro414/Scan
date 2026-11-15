@@ -1596,8 +1596,11 @@ The sphere-on-plane scan through `process_recording` (realistic camera model, ma
   | Four lasers, without numba | 112.8 / 113.1 / 117.1 / 119.7 | 213.9 / 208.3 / 214.2 / 212.7 |
   | Four lasers, with numba | 100.5 / 95.9 / 99.9 / 103.8 | 174.9 / 175.0 / 181.7 / 175.9 |
   | Two lasers (do not use it) | 70–83 | 146–152 |
+  | RTX laptop: four lasers, without numba | 33.3 / 33.6 / 31.7 / 40.5 | 66.2 / 68.4 / 58.0 / 54.3 |
+  | RTX laptop: four lasers, with numba | 34.0 / 32.0 / 31.0 / 31.5 | 56.4 / 51.7 / 42.9 / 44.2 |
+  | RTX laptop: two lasers | 23–25 | 37–47 |
 
-  That is about 36 ms a frame less at 1280x800 (17 %) and about 16 ms at 640x400 (14 %). The lines are the same bit for bit (`tests/test_vision_laser_link.py`; the 120 four-laser images of the two recorded scans). Starting numba costs about a second when the pipeline is built, and 6.4 s the first time ever, when the loop is compiled.
+  That is about 36 ms a frame less at 1280x800 (17 %) and about 16 ms at 640x400 (14 %). The lines are the same bit for bit (`tests/test_vision_laser_link.py`; the 120 four-laser images of the two recorded scans). Starting numba costs about a second when the pipeline is built, and 6.4 s the first time ever, when the loop is compiled. On the laptop (the last three rows; one "on" and one "off" run of two rounds each, twice) the frame is about 13 ms shorter at 1280x800 in each pair of runs, about a fifth; the laptop itself ran 6 to 8 ms slower during the first pair, two lasers included, so compare the first two figures of a row with each other and the last two with each other. At 640x400 nothing stands out of the spread there. One image alone takes 13.5–14.1 ms with numba against 19.2–19.4 ms at 1280x800, and 5.3–5.4 against 7.7–7.9 ms at 640x400.
 
 ### Calibration of four planes
 

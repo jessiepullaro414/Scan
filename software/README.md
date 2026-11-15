@@ -50,8 +50,8 @@ sudo usermod -aG dialout $USER     # access to the Pico's serial port; log out a
 * `[fusion]` installs Open3D, which `ohs scan` and `ohs process` need. Everything else (devices,
   self-test, preview, printables, calibration, recording, simulation) works without it.
 * `[fast]` installs numba. It only matters for a build with four line lasers: one step of finding
-  the laser lines then runs as compiled code and a frame gets shorter (by about a sixth on the
-  PC it was measured on). The results are the same without it. The first scan after installing
+  the laser lines then runs as compiled code and a frame gets shorter (by a sixth to a fifth at
+  full resolution on the two PCs it was measured on). The results are the same without it. The first scan after installing
   starts a few seconds later, once, while that step is compiled. `OHS_NUMBA=0` turns it off.
 * **Windows path length:** Windows limits paths to 260 characters (MAX_PATH) by default, and
   Open3D and OpenCV install deep folder trees. Keep the virtual environment at a **short path**

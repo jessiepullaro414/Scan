@@ -1083,7 +1083,17 @@ bench medians before and after in the commit message.
   llvmlite, the size of the installer with and without them, and the first start.
 - **Two copies of one loop:** a change to `_link_rows` must be made in `link_rows` too; the
   test fails when they drift apart, but only where numba is installed.
-- **Not measured yet:** the RTX laptop; the CPU path's frame time.
+- **Measured on the RTX laptop the same day** (numba 0.68.1 installed there with the user's OK;
+  the guard test passed, 10 tests; numba on and off in turns, two runs of two rounds each). One
+  image alone, four lasers: 19.2-19.4 to 13.5-14.1 ms at 1280x800 and 7.7-7.9 to 5.3-5.4 ms at
+  640x400. The frame with four lasers at 1280x800: off 66.2 / 68.4 then 58.0 / 54.3, on 56.4 /
+  51.7 then 42.9 / 44.2: about 13 ms less in each pair of runs (the laptop itself ran 6 to 8 ms
+  slower in the first pair, two lasers included). At 640x400: off 33.3 / 33.6 / 31.7 / 40.5, on
+  34.0 / 32.0 / 31.0 / 31.5: no change that stands out of the spread. The tracking stage gets
+  back part of what E9 cost it (26-40 to 19-32 ms at 1280x800). No slow start was seen.
+- **Kept:** a gain on both machines at 1280x800, no loss at 640x400. Four lasers now cost about
+  7 to 10 ms a frame over two at 1280x800 on the laptop and about 8 ms at 640x400.
+- **Not measured:** the CPU path's frame time.
 
 ---
 
