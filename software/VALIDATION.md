@@ -1481,6 +1481,7 @@ Only a 1 mm grid with a 2 mm band holds every wall. A finer grid alone does not:
 - **Off is as before:** with the rule off, the volume after 36 views is bit-identical to the engine before the change.
 - **Time:** the bracket scan processed twice each way, in turn: tracking 66.8 and 66.2 ms a frame with the rule, 68.1 and 67.5 ms without; the whole frame 179 and 178 ms against 183 and 179 ms. No cost that can be measured.
 - **The scans again with the engine itself:** the study's numbers. Bracket 13 / 13 / 33 / 13 / 13 %, median 13.4 %, mean offset +0.01 mm, largest step 1.5 mm; sheet part 2.72–2.98 / 2.41–2.56 / 3.19–3.71 mm; end-to-end sphere 0.061 / 0.257 mm and car panel 0.084 / 0.393 mm; five car-panel scans: hole 0.90 mm small, floor 0.001 mm; the sphere without the gyro 109 mm.
+- **Suite after the change** (769 tests): GPU path 767 passed, 2 skipped; CPU path 717 passed, 52 skipped.
 - **Every tracked number in this document that was measured on the GPU path before this change was made without it.** Smooth scenes keep theirs. A part with edges reads about 0.1 mm less fat (the bracket's mean offset +0.12 → +0.01 mm), and its small bosses 0.08 mm smaller in radius (−0.10 → −0.18 mm; at the true poses −0.27 mm).
 
 Scripts: scratchpad `shape\` of the session of 2026-11-14 (`edit_track1.py`, `edit_track2.py`: the switches; `wall_proto.py`, `start_probe.py`, `tab_sheet.py`, `chain11.sh` to `chain18.sh`).
