@@ -1358,6 +1358,22 @@ Every task here: the type check, `npm test`, and for bundle tasks the chunk size
   It belongs to tracking and to the gap guard's cost (the per-voxel guard, parked until real
   scans).
 
+### [ ] F6. Open3D's ray cast crashed once on the CPU path
+- **Seen 2026-11-15**, once: `tests/test_e2e_scan.py::test_full_markerless_sphere` with
+  `OHS_COMPUTE=cpu` ended the whole test run with "Windows fatal exception: access violation". The
+  main thread was in `MarkerlessTracker._raycast` (`ohs/track/markerless.py`, Open3D's
+  `VoxelBlockGrid.ray_cast`), called from the pipeline's probe tracker (`_probe_track`) during
+  `process_recording`; the recording's reader thread was waiting on its queue.
+- **Not repeated:** the same five test files passed twice straight after (73 tests each), and the
+  full CPU-path suite had passed on the same code hours earlier. A two-laser scan; the laser
+  change under test at the time does not touch the tracker.
+- **What is not known:** whether it is a race inside Open3D (its ray cast already gives different
+  results from run to run on several threads, A6), memory pressure from another job on the machine
+  at that moment, or the probe tracker and the main tracker using Open3D at the same time.
+- **To do if it is seen again:** note which test and what else was running; try
+  `OHS_O3D_THREADS=1` (A6), under which Open3D runs on one thread. Nothing is changed for now: a
+  crash that ends a run is plain to see, and it has happened once.
+
 ## Reviewed and fine: leave alone
 
 So nobody spends a session on these again.
