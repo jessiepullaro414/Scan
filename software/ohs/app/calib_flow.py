@@ -14,7 +14,10 @@ one :func:`ohs.calib.board.render_charuco_page` prints, glued flat to glass.
   printed margin around the pattern is used, because stripe centres are biased where they cross
   ink (see :mod:`ohs.calib.laser_planes`; on simulated views the margin gives about 10x smaller
   laser-point errors). A laser that cannot be fitted from the margin alone is refitted with
-  ``"both"`` and the report says so.
+  ``"both"`` and the report says so. ``names`` is the build's laser set (``[lasers] lines`` of the
+  configuration; default the two standard lasers): the extraction looks for as many lines per
+  family as it has, and a family with several lasers is separated and named by
+  :func:`~ohs.calib.laser_planes.fit_laser_planes` (its module docstring, "Any set of line lasers").
 * :func:`imu_from_recording` - board pose on every rectified left frame (``K_rect``, no
   distortion; the board is the world, ``R_wc = R_cb^T``, frame time ``t_host``) and the raw gyro
   -> :func:`~ohs.calib.imu.calibrate_imu_camera`.
@@ -26,6 +29,7 @@ Each returns plain JSON-serialisable reports; ``progress(k, n)`` callbacks are o
 from __future__ import annotations
 
 import logging
+from dataclasses import replace
 from pathlib import Path
 from typing import Callable, Sequence
 
@@ -37,15 +41,17 @@ from ohs.calib.laser_planes import (
     LaserBoardObservation,
     board_points_from_line,
     check_laser_planes,
+    family_points,
     fit_laser_planes,
     make_observation,
+    points_by_laser,
 )
 from ohs.calib.stereo import calibrate_stereo, rectification_check
 from ohs.geometry import pixels_to_rays, ray_plane_intersect, rotation_angle_deg
 from ohs.io.recording import RecordingReader
 from ohs.track.imu_prior import GyroPredictor
 from ohs.types import ImuCalibration, LaserPlane, ScannerCalibration, StereoCalibration
-from ohs.vision.laser import LINE_NAMES, LaserParams, extract_laser_lines, stereo_check
+from ohs.vision.laser import LINE_NAMES, LaserParams, extract_laser_lines, is_line_name, line_family, lines_per_family, stereo_check
 from ohs.vision.rectify import Rectifier
 
 __all__ = [
@@ -107,6 +113,42 @@ def _default_laser_params(image_size: tuple[int, int]) -> LaserParams:
     return LaserParams() if abs(s - 1.0) < 1e-9 else LaserParams().scaled(s)
 
 
+def _line_names(names: Sequence[str]) -> list[str]:
+    """The laser lines among ``names`` (a calibration's planes may have other names), in order."""
+    return [n for n in names if is_line_name(n)]
+
+
+def _several(names: Sequence[str]) -> set[str]:
+    """The families with more than one laser among ``names``."""
+    fams = [line_family(n) for n in _line_names(names)]
+    return {f for f in fams if fams.count(f) > 1}
+
+
+def _point_counts(obs: LaserBoardObservation, K: np.ndarray, names: Sequence[str],
+                  planes: dict[str, LaserPlane] | None = None) -> dict:
+    """``{laser: {region: points}}`` of one observation (regions ``board`` and ``margin``, or only
+    ``board`` without a page layout). A family with several lasers is counted per laser when
+    ``planes`` has all of them (each point on the nearest plane), else per family."""
+    regions = ("board", "margin") if obs.page is not None else ("board",)
+    out: dict = {}
+    several = _several(names)
+    for name in names:
+        fam = line_family(name) if is_line_name(name) else None
+        if fam not in several:
+            out[name] = {r: int(len(board_points_from_line(obs, K, name, r) if name in obs.line_uv or fam is None
+                                    else family_points(obs, K, fam, r))) for r in regions}
+    for fam in sorted(several):
+        fam_names = [n for n in names if is_line_name(n) and line_family(n) == fam]
+        if planes is not None and all(n in planes for n in fam_names):
+            for r in regions:
+                by = points_by_laser(obs, K, {n: planes[n] for n in fam_names}, r)
+                for n in fam_names:
+                    out.setdefault(n, {})[r] = int(len(by[n]))
+        else:
+            out[fam] = {r: int(len(family_points(obs, K, fam, r))) for r in regions}
+    return out
+
+
 def _plane_change(a: LaserPlane, b: LaserPlane) -> dict:
     return {"angle_deg": float(np.degrees(np.arccos(np.clip(abs(float(a.normal @ b.normal)), 0.0, 1.0)))),
             "d_mm": float(b.d - a.d)}
@@ -165,7 +207,7 @@ def _stereo_filter(obs: LaserBoardObservation, lines_r, K: np.ndarray, baseline:
     n = T[:3, 2]
     d = -float(n @ T[:3, 3])
     for name, uv in obs.line_uv.items():
-        if name not in LINE_NAMES or len(uv) == 0:
+        if name not in LINE_NAMES or len(uv) == 0:  # line_uv holds the extraction's families
             counts[name] = (int(len(uv)), int(len(uv)))
             continue
         P = ray_plane_intersect(pixels_to_rays(uv, K), n, d)
@@ -188,13 +230,24 @@ def laser_observations_from_recording(
     laser_params: LaserParams | None = None,
     max_frames: int | None = None,
     progress: ProgressFn | None = None,
+    names: Sequence[str] = LINE_NAMES,
 ) -> tuple[list[LaserBoardObservation], list[dict], np.ndarray]:
-    """Board observations with laser lines from a recording: ``(observations, per_frame, K)``."""
+    """Board observations with laser lines from a recording: ``(observations, per_frame, K)``.
+
+    ``names``: the build's lasers; the extraction looks for as many lines per family as they have
+    (``laser_params.lines_per_family`` is raised to that). The observations hold the line pixels
+    per family (``LaserLines.as_dict()``). ``per_frame[k]["points"]``: board points per laser and
+    region (:func:`_point_counts`); a family with several lasers is counted as one entry under the
+    family's name here, since which line is which is only known after the fit.
+    """
     reader = _reader(rec_path)
     _check_size(reader, calib.stereo)
     rect = Rectifier(calib.stereo, 1.0)
     K = rect.K
     lp = laser_params if laser_params is not None else _default_laser_params(rect.image_size)
+    need = lines_per_family(names)
+    if lp.lines_per_family < need:
+        lp = replace(lp, lines_per_family=need)
     positions = _positions(len(reader), step, max_frames)
     observations: list[LaserBoardObservation] = []
     per_frame: list[dict] = []
@@ -209,10 +262,7 @@ def laser_observations_from_recording(
             if stereo_validate:
                 lines_r = extract_laser_lines(right_r, lp)
                 row["stereo_kept"] = {n: list(c) for n, c in _stereo_filter(obs, lines_r, K, rect.baseline, lp.stereo_tol_px).items()}
-            row["points"] = {
-                name: {r: int(len(board_points_from_line(obs, K, name, r))) for r in ("board", "margin")}
-                for name in LINE_NAMES
-            } if obs.page is not None else {name: {"board": int(len(board_points_from_line(obs, K, name, "board")))} for name in LINE_NAMES}
+            row["points"] = _point_counts(obs, K, _line_names(names) or list(LINE_NAMES))
             observations.append(obs)
         per_frame.append(row)
         if progress is not None:
@@ -239,22 +289,31 @@ def lasers_from_recording(
 
     ``calib.stereo`` must be the calibration of this camera (frames are rectified with it; the
     planes come out in its frame C). Hold the board at several distances (200-400 mm) and tilts
-    so that both lines cross the *white paper margin* in every view. ``region`` (``"margin"``
-    default, ``"board"``, ``"both"``) picks the line pixels used; ``paper`` must match how the
-    board was printed. Returns ``(planes, report)``: only fitted lasers are in ``planes``; the
-    report holds the :func:`fit_laser_planes` report, ``region_used`` per laser, in-sample
-    residuals, the change versus ``calib.lasers`` (if any) and per-frame counts.
+    so that every line crosses the *white paper margin* in every view. ``names`` is the build's
+    laser set (``[lasers] lines``), any number of lasers per family, within a family in the order
+    of the configuration (module docstring). ``region`` (``"margin"`` default, ``"board"``,
+    ``"both"``) picks the line pixels used; ``paper`` must match how the board was printed.
+    Returns ``(planes, report)``: only fitted lasers are in ``planes``; the report holds the
+    :func:`fit_laser_planes` report (per laser: views, points, plane; per family: the separated
+    sheets), ``names``, ``region_used`` per laser, in-sample residuals, the change versus
+    ``calib.lasers`` (if any) and per-frame counts per laser.
     """
+    names = tuple(names)
     observations, per_frame, K = laser_observations_from_recording(
         rec_path, calib, spec, step=step, region=region, paper=paper, margin_mm=margin_mm,
-        stereo_validate=stereo_validate, laser_params=laser_params, progress=progress,
+        stereo_validate=stereo_validate, laser_params=laser_params, progress=progress, names=names,
     )
     log.info("laser calibration: board found in %d of %d frames", len(observations), len(per_frame))
-    planes, report = fit_laser_planes(observations, K, names=tuple(names), ransac_thresh_mm=ransac_thresh_mm, region=region)
+    planes, report = fit_laser_planes(observations, K, names=names, ransac_thresh_mm=ransac_thresh_mm, region=region)
     region_used = {name: region for name in planes}
     missing = [n for n in names if n not in planes]
+    several = _several(names)
+    # a family with several lasers is refitted as a whole: its planes are only told apart together
+    refit = [n for n in names if n in missing or (is_line_name(n) and line_family(n) in several
+                                                  and any(line_family(m) == line_family(n) for m in missing if is_line_name(m)))]
     if region == "margin" and missing and observations and observations[0].page is not None:
-        extra, rep2 = fit_laser_planes(observations, K, names=tuple(missing), ransac_thresh_mm=ransac_thresh_mm, region="both")
+        extra, rep2 = fit_laser_planes(observations, K, names=tuple(refit), ransac_thresh_mm=ransac_thresh_mm, region="both")
+        extra = {n: p for n, p in extra.items() if n in missing}
         for name, plane in extra.items():
             log.warning("laser %r: too few margin points (%s); fitted on board + margin instead",
                         name, report["lasers"][name].get("reason"))
@@ -262,18 +321,27 @@ def lasers_from_recording(
             report["lasers"][name] = rep2["lasers"][name]
             planes[name] = plane
             region_used[name] = "both"
-        report["ok"] = len(planes) == len(tuple(names))
+        report["ok"] = len(planes) == len(names)
+    planes = {n: planes[n] for n in names if n in planes}
     for name in names:
         report["lasers"][name]["region_used"] = region_used.get(name)
+    report["names"] = list(names)
     report["region_used"] = region_used
     if planes:
         res = {}
         for name, plane in planes.items():
-            r = check_laser_planes({name: plane}, observations, K, region=region_used[name])
+            # with the other planes of its family, so that each of its points is measured on the nearest
+            fam = line_family(name) if is_line_name(name) else None
+            group = {m: p for m, p in planes.items() if fam is not None and is_line_name(m) and line_family(m) == fam}
+            r = check_laser_planes(group or {name: plane}, observations, K, region=region_used[name])
             res[name] = {k: v for k, v in r["lasers"][name].items() if k != "per_observation"}
         report["residuals"] = res
     if calib.lasers:
         report["change_vs_input"] = {n: _plane_change(calib.lasers[n], planes[n]) for n in planes if n in calib.lasers}
+    if several:  # per-frame counts per laser of those families, now that their planes are known
+        line_names = _line_names(names)
+        for row, obs in zip((r for r in per_frame if r["board"]), observations):
+            row["points"] = _point_counts(obs, K, line_names, planes)
     report.update(recording=str(rec_path), frames=len(per_frame), frames_with_board=len(observations),
                   board=spec.describe(), paper=paper, margin_mm=float(margin_mm), per_frame=per_frame)
     return planes, report
@@ -385,7 +453,8 @@ def check_from_recording(
     * ``stereo``: :func:`rectification_check` (vertical disparity, metric scale) on up to
       ``max_frames`` frames;
     * ``lasers`` (if the calibration has planes and the lines cross the board):
-      :func:`check_laser_planes` on the same frames (``region``, default the white margin);
+      :func:`check_laser_planes` on the same frames (``region``, default the white margin), per
+      plane of the calibration (as many lines per family are extracted as it has planes);
     * ``imu`` (if the calibration and the recording have IMU data): per-frame rotation residual
       between the board poses and the calibrated gyro (meaningful when the scanner moved).
 
@@ -405,9 +474,10 @@ def check_from_recording(
     verdicts = [] if st.get("ok") else [f"stereo: {st.get('verdict')}"]
 
     if calib.lasers:
+        lines = _line_names(list(calib.lasers))
         obs, _, K = laser_observations_from_recording(rec_path, calib, spec, step=step, region=region, paper=paper,
-                                                      max_frames=max_frames)
-        n_pts = sum(len(board_points_from_line(o, K, n)) for o in obs for n in calib.lasers if n in LINE_NAMES)
+                                                      max_frames=max_frames, names=lines or LINE_NAMES)
+        n_pts = sum(len(P) for o in obs for n, P in points_by_laser(o, K, calib.lasers).items() if n in lines)
         if n_pts == 0:
             report["lasers"] = {"ok": None, "verdict": "the laser lines were not seen on the board's white margin"}
         else:

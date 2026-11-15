@@ -3,8 +3,8 @@
 * :class:`Config` holds :class:`~ohs.devices.camera.CameraParams` and
   :class:`~ohs.devices.pico.PicoParams` unchanged, plus the app's own sections: emitter levels per
   profile, live (preview-quality) processing, offline processing defaults, the ChArUco board, the
-  AprilTag size, the default paths (including the Studio projects folder) and ``[app]`` (the
-  host and port of ``ohs app``).
+  AprilTag size, the default paths (including the Studio projects folder), ``[app]`` (the
+  host and port of ``ohs app``) and ``[lasers]`` (the build's line lasers, :class:`LasersConfig`).
 * :func:`load_config` reads ``~/.ohs/config.toml`` (or ``$OHS_CONFIG``, or an explicit path) with
   :mod:`tomllib` and merges it over the defaults. Every key is optional. Unknown keys produce a
   warning with a "did you mean" hint and are ignored. Values of the wrong type raise
@@ -59,6 +59,8 @@ __all__ = [
     "ProcessConfig",
     "BoardConfig",
     "MarkersConfig",
+    "LasersConfig",
+    "LASER_FAMILIES",
     "Config",
     "default_config_path",
     "load_config",
@@ -78,6 +80,8 @@ IMU_RATES = (104, 208, 416, 833)
 EXPORT_FORMATS = ("ply", "stl", "obj")
 PAPERS = ("letter", "a4")
 THIN_WALLS = ("auto", "on", "off")  # as ohs.app.pipeline.THIN_WALLS
+#: the laser line families, as ``ohs.vision.laser.LINE_NAMES`` (not imported here: it pulls in OpenCV)
+LASER_FAMILIES = ("vertical", "horizontal")
 
 #: Built-in emitter profiles: (vertical line laser, horizontal line laser, dot projector), percent.
 DEFAULT_PROFILES: dict[str, tuple[float, float, float]] = {
@@ -200,6 +204,36 @@ class MarkersConfig:
 
 
 @dataclass
+class LasersConfig:
+    """The build's line lasers (laser-plane calibration).
+
+    ``lines``: one name per laser. A name is its family, ``"vertical"`` or ``"horizontal"`` (how
+    its line runs in the image), optionally followed by ``_`` and anything (``"vertical_2"``).
+    Within a family the order is the order of the lasers: vertical lines from right to left (the
+    largest x of the camera frame first), horizontal lines from top to bottom. The calibration
+    names the planes it finds that way.
+    """
+
+    lines: list[str] = field(default_factory=lambda: ["vertical", "horizontal"])
+
+    def problems(self) -> list[str]:
+        """What is wrong with ``lines`` (empty when it is a valid laser set)."""
+        errs: list[str] = []
+        lines = list(self.lines)
+        bad = [n for n in lines if not any(n == f or n.startswith(f + "_") for f in LASER_FAMILIES)]
+        if bad:
+            errs.append(f"lasers.lines: {bad} do not start with a laser family ({', '.join(LASER_FAMILIES)}, "
+                        'optionally followed by "_" and a suffix, e.g. "vertical_2")')
+        twice = sorted({n for n in lines if lines.count(n) > 1})
+        if twice:
+            errs.append(f"lasers.lines: {twice} named twice")
+        for fam in LASER_FAMILIES:
+            if not any(n == fam or n.startswith(fam + "_") for n in lines):
+                errs.append(f"lasers.lines needs at least one {fam} line (got {lines})")
+        return errs
+
+
+@dataclass
 class ComputeConfig:
     """Where the heavy steps run (ohs.compute): "auto", "cpu", or part of a GPU's name."""
 
@@ -220,6 +254,7 @@ class Config:
     markers: MarkersConfig = field(default_factory=MarkersConfig)
     app: AppConfig = field(default_factory=AppConfig)
     compute: ComputeConfig = field(default_factory=ComputeConfig)
+    lasers: LasersConfig = field(default_factory=LasersConfig)
     source: Path | None = field(default=None, compare=False, repr=False, metadata={"toml": False})
     warnings: list[str] = field(default_factory=list, compare=False, repr=False, metadata={"toml": False})
 
@@ -266,6 +301,7 @@ class Config:
             self.board.spec()
         except ValueError as e:
             errs.append(f"board: {e}")
+        errs += self.lasers.problems()
         if self.markers.tag_mm <= 0:
             errs.append("markers.tag_mm must be positive")
         if not str(self.app.host).strip():
@@ -432,6 +468,7 @@ _SECTION_DOCS = {
     "markers": "AprilTag stickers (tag36h11) for marker mode.",
     "app": "OpenHandScan Studio (`ohs app`): the local web server behind the app window.",
     "compute": "Where the heavy processing runs. A GPU (NVIDIA, AMD or Intel) is used when there is one.",
+    "lasers": "The scanner's line lasers, for the laser-plane calibration (`ohs calibrate lasers`).",
 }
 
 _KEY_DOCS = {
@@ -448,6 +485,15 @@ _KEY_DOCS = {
     "compute.device": (
         '"auto" = the best GPU (a discrete one first), else the CPU; "cpu" = never the GPU; or part of a\n'
         'GPU\'s name, e.g. "RTX" or "Radeon". The environment variable OHS_COMPUTE overrides it.'
+    ),
+    "lasers.lines": (
+        'One name per line laser. A name starts with its family: "vertical" (its line runs up and down in\n'
+        'the image) or "horizontal", optionally followed by "_" and a suffix. The standard build has\n'
+        '["vertical", "horizontal"]; the 4-laser build ["vertical", "horizontal", "vertical_2", "horizontal_2"].\n'
+        "Within a family, list the lasers in this order: vertical ones from right to left (seen from\n"
+        "behind the scanner: the largest x of the camera frame first), horizontal ones from top to\n"
+        "bottom. The calibration finds the planes without knowing where the lasers sit and names them\n"
+        "in that order."
     ),
     "camera.index": "OpenCV index of the stereo camera.",
     "camera.backend": (

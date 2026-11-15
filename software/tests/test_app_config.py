@@ -175,6 +175,32 @@ def test_frames_by_motion_settings(tmp_path):
     assert "\nframe_motion_deg = 0.0\n" in text and "\nframe_max_gap = 4\n" in text and "gyro has turned" in text
 
 
+def test_laser_set_setting(tmp_path):
+    """[lasers] lines: the build's line lasers, two by default; names start with a family, are
+    unique, and each family has at least one."""
+    from ohs.vision.laser import LINE_NAMES
+
+    assert Config().lasers.lines == ["vertical", "horizontal"]
+    text = render_template(Config())
+    assert '\n[lasers]\n' in text and '\nlines = ["vertical", "horizontal"]\n' in text
+    assert "vertical_2" in text and "largest" in text  # the template explains the order within a family
+    four = ["vertical", "horizontal", "vertical_2", "horizontal_2"]
+    cfg = load_config(_write(tmp_path / "c.toml", '[lasers]\nlines = ["vertical", "horizontal", "vertical_2", "horizontal_2"]\n'))
+    assert cfg.lasers.lines == four and cfg.warnings == []
+    back = Config()
+    assert merge_into(back, tomllib.loads(render_template(cfg))) == [] and back == cfg
+    for bad, match in ((["vertical"], "horizontal"), (["vertical", "horizontal", "vertical"], "twice"),
+                       (["vertical", "horizontal", "diagonal"], "diagonal"), ([], "lasers.lines"),
+                       (["vertical", "horizontal", "verticalx"], "verticalx")):
+        with pytest.raises(ConfigError, match=match):
+            load_config(_write(tmp_path / "bad.toml", f"[lasers]\nlines = {list(bad)!r}\n".replace("'", '"')))
+    with pytest.raises(ConfigError, match="lasers.lines"):
+        load_config(_write(tmp_path / "bad.toml", '[lasers]\nlines = "vertical"\n'))
+    from ohs.app import config as config_mod
+
+    assert config_mod.LASER_FAMILIES == LINE_NAMES  # the config checks names without importing the vision code
+
+
 def test_frames_by_motion_reach_the_full_quality_only():
     from ohs.server.studio import process_params
 

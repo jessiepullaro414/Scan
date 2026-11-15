@@ -24,6 +24,7 @@ from ohs.sim.datasets import laser_calib_board_poses, stereo_calib_board_poses
 from ohs.sim.imu import so3_log_batch
 from ohs.sim.nominal import nominal_calibration, nominal_emitters
 from ohs.sim.render import project_to_raw
+from ohs.types import ScannerCalibration
 from ohs.vision.laser import extract_laser_lines
 from ohs.vision.rectify import Rectifier
 from test_e2e_calibration import imu_errors, metrics, plane_errors, stereo_errors
@@ -151,6 +152,25 @@ def test_lasers_fit_from_the_margin(lasers_cam, tmp_path):
     metrics("board_camera_lasers", **{f"{n}_{k}": v for n, e in err.items() for k, v in e.items()})
     for name, e in err.items():
         # measured: 0.001-0.005 deg; laser-point error median 0.01-0.02 mm, max < 0.16 mm (150-450 mm)
+        assert e["angle_deg"] < 0.1 and e["point_err_median_mm"] < 0.1 and e["point_err_max_mm"] < 0.5, (name, e)
+
+
+@pytest.mark.parametrize("layout", ["4", "4-cross350"])
+def test_four_lasers_fit_from_the_margin(layout, tmp_path):
+    """The 4-laser variant: all four lines painted, and the laser calibration names all four planes."""
+    four = ("vertical", "horizontal", "vertical_2", "horizontal_2")
+    cam = SimBoardCamera("lasers", realtime=False, layout=layout)
+    true = cam.true_calibration
+    assert set(true.lasers) == set(four) and set(cam.laser_lines_at(cam.dwell_times()[0])) == set(four)
+    assert set(SimBoardCamera("check", realtime=False, lasers=4).true_calibration.lasers) == set(four)
+    frames = [cam.frame_at(t, i) for i, t in enumerate(cam.dwell_times())]
+    rec = write_recording(tmp_path / "lasers", frames, true, "laser_calibration")
+    planes, rep = lasers_from_recording(rec, ScannerCalibration(true.stereo, {}, None), cam.spec, paper="letter", names=four)
+    assert rep["ok"] and set(planes) == set(four), {n: e.get("reason") for n, e in rep["lasers"].items()}
+    err = plane_errors(planes, true.lasers)
+    metrics(f"board_camera_lasers4_{layout}", **{f"{n}_{k}": v for n, e in err.items() for k, v in e.items()})
+    for name, e in err.items():
+        # the tolerance of the two-laser test above
         assert e["angle_deg"] < 0.1 and e["point_err_median_mm"] < 0.1 and e["point_err_max_mm"] < 0.5, (name, e)
 
 

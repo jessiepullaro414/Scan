@@ -880,7 +880,8 @@ def cmd_calibrate(args: argparse.Namespace) -> int:
     _say(f"Running the {kind} calibration...")
     bar = ProgressBar(f"calibrating {kind}")
     try:
-        value, report = capture.run_flow(kind, rec, spec, existing, step=args.step, paper=cfg.board.paper, progress=bar)
+        value, report = capture.run_flow(kind, rec, spec, existing, step=args.step, paper=cfg.board.paper, progress=bar,
+                                         lasers=cfg.lasers.lines)
     finally:
         bar.close()
     _say(f"{kind} report:")
@@ -896,7 +897,7 @@ def cmd_calibrate(args: argparse.Namespace) -> int:
             _warn("the calibration check failed: re-run `ohs calibrate stereo` and/or `ohs calibrate lasers`")
             return 1
         return 0
-    new, notes = capture.merge_calibration(existing, kind, value, keep=args.keep)
+    new, notes = capture.merge_calibration(existing, kind, value, keep=args.keep, lasers=cfg.lasers.lines)
     for n in notes:
         (_warn if "dropped" in n or "not fitted" in n else _say)(n)
     if args.no_save:

@@ -14,7 +14,9 @@ therefore run end to end without hardware, and every result can be compared with
   minimum jerk on the board centre and slerp on the rotation. The last pose moves back to the first,
   so the tour loops seamlessly. The scanner stands still: the gyro shows only noise and bias.
 * ``"lasers"``: the same with the 8 poses of :func:`~ohs.sim.datasets.laser_calib_board_poses`
-  and both laser lines painted on the page. ``"check"``: 4 laser poses (``seed + 1``), lines painted.
+  and every laser line painted on the page. ``"check"``: 4 laser poses (``seed + 1``), lines painted.
+  The scanner has the two standard lasers unless ``lasers=4`` or a ``layout`` of
+  :data:`~ohs.sim.nominal.LASER_LAYOUTS` says otherwise (the poses then make every line cross the page).
 * ``"imu"``: the board lies still on a table. The scanner holds still for 2.5 s, rotates about all
   three axes for 25 s, eases back to the start pose in 1.5 s and holds still for 2 s, so the pass
   loops seamlessly. The rotation is a :class:`~ohs.sim.trajectory.RotatingTrajectory` about a pivot
@@ -93,7 +95,6 @@ __all__ = [
 log = logging.getLogger(__name__)
 
 SCRIPTS = ("stereo", "lasers", "imu", "check")
-LINE_NAMES = ("vertical", "horizontal")
 
 DWELL_S = 1.6  # board tours: time at each pose
 MOVE_S = 0.7  # board tours: time to move to the next pose
@@ -443,20 +444,26 @@ class _Renderers:
 
 
 # --------------------------------------------------------------------------- script helpers
-def _true_calibration(image_size: tuple[int, int]) -> ScannerCalibration:
-    """``nominal_calibration(image_size, realistic=True)``, with both laser planes and the IMU.
+def _line_lasers(emitters: dict) -> list[str]:
+    """Names of the line lasers among ``emitters`` (in their order)."""
+    return [k for k, e in emitters.items() if e.get("type") == "line_laser"]
 
-    The nominal calibration already holds both planes (``ohs.sim.nominal``); a missing one would be
+
+def _true_calibration(image_size: tuple[int, int], lasers: int = 2, layout: str | None = None) -> ScannerCalibration:
+    """``nominal_calibration(image_size, realistic=True, lasers=lasers, layout=layout)``, with every
+    laser plane and the IMU.
+
+    The nominal calibration already holds every plane (``ohs.sim.nominal``); a missing one would be
     filled from :func:`~ohs.sim.nominal.nominal_emitters`, the sheets the simulator's renderer draws.
     """
-    calib = nominal_calibration(image_size, realistic=True)
-    em = nominal_emitters(baseline=calib.stereo.baseline)
-    lasers = dict(calib.lasers)
-    for name in LINE_NAMES:
-        if name not in lasers:
+    calib = nominal_calibration(image_size, realistic=True, lasers=lasers, layout=layout)
+    em = nominal_emitters(baseline=calib.stereo.baseline, lasers=lasers, layout=layout)
+    planes = dict(calib.lasers)
+    for name in _line_lasers(em):
+        if name not in planes:
             log.warning("nominal calibration without the %s laser plane; using the emitter's sheet", name)
-            lasers[name] = LaserPlane(name, em[name]["normal"], em[name]["d"], rms=0.0)
-    return ScannerCalibration(calib.stereo, lasers, calib.imu if calib.imu is not None else nominal_imu_calibration())
+            planes[name] = LaserPlane(name, em[name]["normal"], em[name]["d"], rms=0.0)
+    return ScannerCalibration(calib.stereo, planes, calib.imu if calib.imu is not None else nominal_imu_calibration())
 
 
 def _blend_poses(Ta: np.ndarray, Tb: np.ndarray, x: float, centre_b: np.ndarray) -> np.ndarray:
@@ -496,14 +503,16 @@ class SimBoardCamera:
 
     See the module docstring for the scripts, the rendering and the timing. ``spec`` / ``paper``
     describe the printed board (default ``CharucoSpec()`` on letter paper; ``ValueError`` if it does
-    not fit). ``t0`` is the virtual host time of frame 0's exposure. Thread-safe for one reader plus
+    not fit). ``lasers`` (2 or 4) / ``layout`` (a name of :data:`~ohs.sim.nominal.LASER_LAYOUTS`) are
+    the scanner's line lasers, as in :func:`~ohs.sim.nominal.nominal_calibration` (default: the two
+    standard ones). ``t0`` is the virtual host time of frame 0's exposure. Thread-safe for one reader plus
     :meth:`restart`, :meth:`phase`, :meth:`true_pose` and :meth:`close` from other threads.
     """
 
     def __init__(self, script: str, *, image_size: tuple[int, int] = (1280, 800), fps: float = 10.0,
                  spec: CharucoSpec | None = None, paper: str = "letter", seed: int = 0, realtime: bool = True,
                  loop: bool = True, dwell_s: float | None = None, move_s: float | None = None,
-                 t0: float = 100.0) -> None:
+                 t0: float = 100.0, lasers: int = 2, layout: str | None = None) -> None:
         if script not in SCRIPTS:
             raise ValueError(f"unknown script {script!r}; choose one of {SCRIPTS}")
         if not fps > 0:
@@ -521,8 +530,9 @@ class SimBoardCamera:
         self.move_s = MOVE_S if move_s is None else float(move_s)
         if self.dwell_s <= 0 or self.move_s < 0:
             raise ValueError("dwell_s must be positive and move_s not negative")
-        self.true_calibration = _true_calibration(self.image_size)
-        self._emitters = nominal_emitters(baseline=self.true_calibration.stereo.baseline)
+        self.true_calibration = _true_calibration(self.image_size, lasers, layout)
+        self._emitters = nominal_emitters(baseline=self.true_calibration.stereo.baseline, lasers=lasers, layout=layout)
+        self.laser_names = tuple(_line_lasers(self._emitters))
         self._lines = script in ("lasers", "check")
         self._exposure = LASER_EXPOSURE if self._lines else 1.0
         ppm = TEXTURE_PX_PER_MM * self.image_size[0] / 1280.0
@@ -538,7 +548,8 @@ class SimBoardCamera:
                 self._poses = stereo_calib_board_poses(TOUR_POSES[script], self.true_calibration, spec_d, self.seed)
             else:
                 seed_p = self.seed + (CHECK_SEED_OFFSET if script == "check" else 0)
-                self._poses = laser_calib_board_poses(TOUR_POSES[script], self.true_calibration, spec_d, seed_p)
+                self._poses = laser_calib_board_poses(TOUR_POSES[script], self.true_calibration, spec_d, seed_p,
+                                                      lasers=lasers, layout=layout)
             self.period_s = len(self._poses) * (self.dwell_s + self.move_s)
         self.frames_per_pass = int(math.ceil(self.period_s * self.fps - 1e-6))
         self._time_offset = float(self.true_calibration.imu.time_offset)
@@ -680,7 +691,7 @@ class SimBoardCamera:
         if not self._lines:
             return {}
         T_cb = self.pose_at(t)
-        return {name: self._stripe(name, T_cb)[0] for name in LINE_NAMES}
+        return {name: self._stripe(name, T_cb)[0] for name in self.laser_names}
 
     # ------------------------------------------------------------------ internals
     def _t_exp(self, k: int) -> float:
@@ -730,6 +741,6 @@ class SimBoardCamera:
         rng = np.random.default_rng([self.seed, int(index)])
         jitter = float(np.clip(rng.normal(0.0, JITTER_S), -3 * JITTER_S, 3 * JITTER_S))
         seeds = rng.integers(1, 2**31 - 1, size=2)
-        stripes = [self._stripe(name, T_cb) for name in LINE_NAMES] if self._lines else []
+        stripes = [self._stripe(name, T_cb) for name in self.laser_names] if self._lines else []
         left, right = (r.render(view, T_cb, stripes, int(sd)) for view, sd in zip(r.views, seeds))
         return StereoFrame(int(index), float(t_cam + jitter), left, right)

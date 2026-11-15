@@ -13,6 +13,7 @@ from ohs.calib.laser_planes import (
     make_observation,
 )
 from ohs.types import LaserPlane
+from ohs.vision.laser import line_family
 
 SIZE = (1280, 800)
 SPEC = CharucoSpec()
@@ -142,3 +143,96 @@ def test_check_laser_planes(observations, renderer):
     bad = check_laser_planes(moved, new, K)
     assert not bad["ok"] and bad["lasers"]["vertical"]["median_abs_mm"] > 1.0
     assert "recalibrate" in bad["lasers"]["vertical"]["verdict"]
+
+
+# --------------------------------------------------------------------------- several lasers per family
+def sheet(name: str, origin, aim_deg: float) -> LaserPlane:
+    """A laser sheet from its emitter position and aim. Vertical family: fan along camera y, turned
+    ``aim_deg`` toward -x; horizontal family: fan along camera x, tilted ``aim_deg`` toward +y."""
+    a = np.radians(aim_deg)
+    n = np.array([np.cos(a), 0.0, np.sin(a)]) if name.startswith("vertical") else np.array([0.0, -np.cos(a), np.sin(a)])
+    d = -float(n @ np.asarray(origin, dtype=np.float64))
+    return LaserPlane(name, n, d) if d <= 0 else LaserPlane(name, -n, -d)
+
+
+# the 4-laser housing: a mirrored vertical laser on the left, a low horizontal one, all aimed at the centre line
+FOUR = {**TRUE,
+        "vertical_2": sheet("vertical_2", (-56.0, 0.0, -1.4), -np.degrees(np.arctan(86.0 / 272.0))),
+        "horizontal_2": sheet("horizontal_2", (88.0, 56.0, -1.2), -np.degrees(np.arctan(56.0 / 272.0)))}
+# another build: both horizontal lasers above the cameras, the second one tilted up, so that their
+# lines swap places on the board beyond 175 mm; a straight-ahead right laser
+OTHER = {"vertical": sheet("vertical", (90.0, 0.0, 0.0), 0.0),
+         "vertical_2": sheet("vertical_2", (-40.0, 0.0, 0.0), -8.0),
+         "horizontal": sheet("horizontal", (30.0, -60.0, 0.0), 10.0),
+         "horizontal_2": sheet("horizontal_2", (30.0, -20.0, 0.0), -3.0)}
+NAMES4 = ("vertical", "horizontal", "vertical_2", "horizontal_2")
+
+
+def make_family_obs(renderer, T_cb, rng, planes):
+    """An observation whose lines are stored per family, as the extraction gives them
+    (``LaserLines.as_dict()``: every line of a family in one array)."""
+    img = renderer.render(T_cb, rng=rng)
+    lines: dict[str, list] = {}
+    for name, p in planes.items():
+        lines.setdefault(line_family(name), []).append(line_pixels(T_cb, p, rng))
+    return make_observation(img, K, SPEC, {f: np.vstack(v) for f, v in lines.items()})
+
+
+def plane_error(p: LaserPlane, true: LaserPlane) -> tuple[float, float]:
+    return float(np.degrees(np.arccos(np.clip(abs(p.normal @ true.normal), -1, 1)))), float(p.d - true.d)
+
+
+@pytest.mark.parametrize("layout", ["four", "other"])
+def test_fit_laser_planes_separates_and_names_two_lines_per_family(renderer, layout):
+    truth = FOUR if layout == "four" else OTHER
+    rng = np.random.default_rng(11)
+    obs = [make_family_obs(renderer, random_pose(rng), rng, truth) for _ in range(8)]
+    assert all(o is not None for o in obs)
+    planes, rep = fit_laser_planes(obs, K, names=NAMES4)
+    assert rep["ok"] and set(planes) == set(NAMES4), {n: e.get("reason") for n, e in rep["lasers"].items()}
+    for name, true in truth.items():
+        p = planes[name]
+        ang, dd = plane_error(p, true)
+        assert ang < 0.1 and abs(dd) < 0.3, (layout, name, ang, dd)  # the tolerance of the two-laser fit above
+        assert p.name == name and p.d <= 0
+        e = rep["lasers"][name]
+        assert e["ok"] and e["n_observations"] >= 3 and e["n_points"] > 0 and e["rms_mm"] < 0.3
+        assert e["intercept_mm"] == pytest.approx(-p.d / (p.normal[0] if name.startswith("vertical") else p.normal[1]))
+    for fam in ("vertical", "horizontal"):
+        f = rep["families"][fam]
+        assert f["names"] == [n for n in NAMES4 if n.startswith(fam)] and f["planes_found"] == 2
+    # the order of the families does not matter; within a family the first name is the sheet that
+    # starts at the largest x (vertical) or smallest y (horizontal)
+    planes2, _ = fit_laser_planes(obs, K, names=("horizontal", "vertical", "horizontal_2", "vertical_2"))
+    assert list(planes2) == ["horizontal", "vertical", "horizontal_2", "vertical_2"]
+    for name in NAMES4:
+        assert np.allclose(planes2[name].normal, planes[name].normal) and planes2[name].d == pytest.approx(planes[name].d)
+    swapped, _ = fit_laser_planes(obs, K, names=("vertical_2", "horizontal", "vertical", "horizontal_2"))
+    for a, b in (("vertical", "vertical_2"), ("vertical_2", "vertical")):
+        assert np.allclose(swapped[a].normal, planes[b].normal) and swapped[a].d == pytest.approx(planes[b].d)
+    # the check measures each plane on its own line
+    new = [make_family_obs(renderer, random_pose(rng), rng, truth) for _ in range(3)]
+    chk = check_laser_planes(planes, new, K)
+    assert chk["ok"] and set(chk["lasers"]) == set(NAMES4)
+    for name in NAMES4:
+        e = chk["lasers"][name]
+        assert e["median_abs_mm"] < 0.2 and abs(e["median_mm"]) < 0.1 and e["n_observations"] == 3, (name, e)
+    moved = dict(planes)
+    p = planes["vertical_2"]
+    moved["vertical_2"] = LaserPlane("vertical_2", G.so3_exp([0, np.radians(1.0), 0]) @ p.normal, p.d)
+    bad = check_laser_planes(moved, new, K)
+    assert not bad["ok"] and bad["lasers"]["vertical_2"]["median_abs_mm"] > 1.0 and bad["lasers"]["vertical"]["ok"]
+
+
+def test_fit_reports_a_family_with_fewer_planes_than_names(renderer):
+    """Two lasers drawn, four named: the second line of a family is not there, so which laser the
+    one plane belongs to cannot be told; none of the family is fitted and the report says why."""
+    rng = np.random.default_rng(11)
+    obs = [make_family_obs(renderer, random_pose(rng), rng, TRUE) for _ in range(6)]
+    planes, rep = fit_laser_planes(obs, K, names=NAMES4)
+    assert planes == {} and not rep["ok"]
+    for name in NAMES4:
+        assert not rep["lasers"][name]["ok"] and "1 of 2" in rep["lasers"][name]["reason"], name
+    # with one name per family it is the two-laser fit
+    planes, rep = fit_laser_planes(obs, K, names=("vertical", "horizontal"))
+    assert rep["ok"] and set(planes) == {"vertical", "horizontal"}

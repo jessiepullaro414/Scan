@@ -10,7 +10,10 @@ A capture writes a recording whose ``meta.json`` has ``purpose = "calib_<kind>"`
   distance and tilt (from the old calibration, or a nominal 83 deg lens when there is none).
 * **lasers** (line lasers on, dots off): needs the stereo calibration. The rectified left view
   shows the corners, the laser lines and the page outline. A pose is stored when the board pose is
-  found; the HUD counts laser points on the page and warns when a line misses it.
+  found; the HUD counts laser points on the page per configured laser (``[lasers] lines``) and
+  warns when a line misses it. With several lasers in a family the points of a line are named
+  with the planes of the calibration in use; a first laser calibration has none, so there the
+  lines of a family are counted (:func:`missing_lines`).
 * **imu** (all emitters off): continuous. SPACE or the trigger starts recording (every frame plus
   IMU); the HUD says HOLD STILL for 2 s, then ROTATE with a timer; SPACE or the trigger stops it
   (auto-stop after ``seconds``, default 62 s). Needs the Pico's IMU and the stereo calibration.
@@ -63,6 +66,7 @@ __all__ = [
     "BoardView",
     "BoardProcessor",
     "CaptureSession",
+    "missing_lines",
     "run_capture",
     "run_flow",
     "merge_calibration",
@@ -90,6 +94,9 @@ IMU_STILL_S = 2.0
 IMU_ROTATE_S = (20.0, 60.0)
 PAGE_MARGIN_MM = 12.0  # white paper around the printed board that still counts as "on the page"
 LINE_MIN_POINTS = 15
+LINE_GROUP_PX = 3.0  # several lines per family: segments within this of one image line are one line (1280 px wide)
+LINE_PLANE_TOL_MM = 5.0  # several lines per family: a page point is named after a calibrated plane this close
+STANDARD_LINES = ("vertical", "horizontal")  # the two standard lasers (config [lasers] lines default)
 COVERAGE_GRID = 8  # same grid as ohs.calib.stereo's coverage report
 
 
@@ -142,7 +149,8 @@ class BoardView:
     distance_mm: float = float("nan")
     tilt_deg: float = float("nan")
     lines: Any = None  # LaserLines in image_l (lasers / check)
-    line_counts: dict = field(default_factory=dict)  # points per line on the page
+    line_counts: dict = field(default_factory=dict)  # points on the page per laser that can be named
+    family_counts: dict = field(default_factory=dict)  # family -> points on the page per line found, largest first
     page_uv: np.ndarray | None = None  # page outline polygon (4, 2)
 
     @property
@@ -157,6 +165,55 @@ def _nominal_K(w: int, h: int) -> np.ndarray:
     return np.array([[f, 0.0, (w - 1) / 2.0], [0.0, f, (h - 1) / 2.0], [0.0, 0.0, 1.0]])
 
 
+def _families(lines: Any) -> dict[str, list[str]]:
+    """Laser names grouped by family (``"vertical"`` / ``"horizontal"``), in the given order."""
+    out: dict[str, list[str]] = {}
+    for name in lines:
+        fam = "vertical" if (name == "vertical" or name.startswith("vertical_")) else "horizontal"
+        out.setdefault(fam, []).append(name)
+    return out
+
+
+def _line_groups(uv: np.ndarray, seg: np.ndarray, vertical: bool, tol_px: float) -> list[int]:
+    """Points per image line (largest first) of one family: segments (one line each) whose points
+    lie within ``tol_px`` of another segment's straight line are one line (a laser line on the flat
+    page is straight in the rectified image)."""
+    if len(uv) == 0:
+        return []
+    t, c = (uv[:, 1], uv[:, 0]) if vertical else (uv[:, 0], uv[:, 1])
+    ids, sizes = np.unique(seg, return_counts=True)
+    groups: list[tuple[np.ndarray, np.ndarray]] = []  # (point mask, line coefficients)
+    for s in ids[np.argsort(-sizes, kind="stable")]:
+        m = seg == s
+        for k, (gm, coef) in enumerate(groups):
+            if np.median(np.abs(c[m] - np.polyval(coef, t[m]))) < tol_px:
+                gm = gm | m
+                groups[k] = (gm, np.polyfit(t[gm], c[gm], 1) if np.ptp(t[gm]) > 0 else coef)
+                break
+        else:
+            groups.append((m, np.polyfit(t[m], c[m], 1) if m.sum() >= 2 and np.ptp(t[m]) > 0 else np.array([0.0, float(c[m].mean())])))
+    return sorted((int(gm.sum()) for gm, _ in groups), reverse=True)
+
+
+def missing_lines(bv: BoardView, lines: Any = STANDARD_LINES) -> list[str]:
+    """What is missing on the page of one laser view, for the configured lasers ``lines``: named
+    lasers with fewer than :data:`LINE_MIN_POINTS` points (``bv.line_counts``), and families whose
+    lasers cannot be named (no planes yet) with fewer lines found than configured
+    (``bv.family_counts``). Empty when every line crosses the page."""
+    out: list[str] = []
+    named: list[str] = []
+    for fam, names in _families(lines).items():
+        if all(n in bv.line_counts for n in names):
+            named += [n for n in names if bv.line_counts[n] < LINE_MIN_POINTS]
+        else:
+            found = sum(c >= LINE_MIN_POINTS for c in bv.family_counts.get(fam, []))
+            if found < len(names):
+                out.append(f"only {found} of {len(names)} {fam} lines on the page")
+    if named:
+        out.insert(0, f"{' and '.join(named)} line not on the page")
+    return out
+
+
 def _inside_convex(uv: np.ndarray, poly: np.ndarray) -> np.ndarray:
     uv = np.asarray(uv, np.float64).reshape(-1, 2)
     if len(uv) == 0 or poly is None or not np.all(np.isfinite(poly)):
@@ -167,24 +224,79 @@ def _inside_convex(uv: np.ndarray, poly: np.ndarray) -> np.ndarray:
 
 
 class BoardProcessor:
-    """ChArUco detection (+ board pose, + laser lines for lasers/check) in the processing thread."""
+    """ChArUco detection (+ board pose, + laser lines for lasers/check) in the processing thread.
 
-    def __init__(self, kind: str, spec: Any, calib: ScannerCalibration | None) -> None:
+    ``lines``: the configured lasers (``[lasers] lines``; default the two standard ones). The
+    extraction looks for as many lines per family, and :meth:`process` counts the page points per
+    laser (:class:`BoardView` ``line_counts`` / ``family_counts``).
+    """
+
+    def __init__(self, kind: str, spec: Any, calib: ScannerCalibration | None, lines: Any = None) -> None:
         if kind not in KINDS:
             raise ValueError(f"unknown capture kind {kind!r}")
         if kind in ("lasers", "check", "imu") and calib is None:
             raise ValueError(f"`ohs calibrate {kind}` needs a stereo calibration (run `ohs calibrate stereo`)")
         self.kind, self.spec, self.calib = kind, spec, calib
+        self.lines = tuple(lines) if lines else STANDARD_LINES
         self._rect = None
         self._laser_params = None
 
     def start(self) -> None:
         if self.kind in ("lasers", "check"):
-            from ohs.vision.laser import LaserParams
+            from dataclasses import replace
+
+            from ohs.vision.laser import LaserParams, lines_per_family
             from ohs.vision.rectify import Rectifier
 
             self._rect = Rectifier(self.calib.stereo, 1.0)
             self._laser_params = LaserParams()
+            n = lines_per_family(self.lines)
+            if n != self._laser_params.lines_per_family:
+                self._laser_params = replace(self._laser_params, lines_per_family=n)
+
+    def _count_lines(self, view: BoardView, K: np.ndarray, poly: np.ndarray) -> None:
+        """``view.line_counts`` (per laser that can be named) and ``view.family_counts``.
+
+        A family with one laser: its points on the page (pattern and margin). A family with
+        several: only the points on the white margin around the pattern, the ones the laser fit
+        uses, because with several lines per family the extractor also takes ridges on the
+        printed pattern (seen on simulated views); there the lines are told apart by straight-line
+        grouping and, when the calibration in use has their planes, named by the nearest plane
+        (within :data:`LINE_PLANE_TOL_MM`).
+        """
+        from ohs.calib.board import board_outline_uv
+
+        lines = view.lines
+        pattern = None
+        for fam, names in _families(self.lines).items():
+            inside = _inside_convex(lines.get(fam), poly)
+            if len(names) == 1:
+                view.line_counts[names[0]] = int(inside.sum())
+                view.family_counts[fam] = [int(inside.sum())]
+                continue
+            if pattern is None:
+                pattern = board_outline_uv(view.T_cb, self.spec, K, margin_mm=0.0)
+            uv_all = np.asarray(lines.get(fam), np.float64).reshape(-1, 2)
+            inside &= ~_inside_convex(uv_all, pattern)
+            uv = uv_all[inside]
+            seg = np.asarray(lines.segments(fam)).reshape(-1)
+            seg = seg[inside] if len(seg) == len(inside) else np.zeros(len(uv), np.int64)
+            tol = LINE_GROUP_PX * view.image_l.shape[1] / 1280.0
+            view.family_counts[fam] = _line_groups(uv, seg, fam == "vertical", tol)[: len(names)]
+            planes = (self.calib.lasers or {}) if self.calib is not None else {}
+            if all(n in planes for n in names):
+                from ohs.calib.laser_planes import family_labels
+                from ohs.geometry import pixels_to_rays, ray_plane_intersect
+
+                nb = view.T_cb[:3, 2]
+                P = ray_plane_intersect(pixels_to_rays(uv, K), nb, -float(nb @ view.T_cb[:3, 3]))
+                sheets = [(planes[n].normal, planes[n].d) for n in names]
+                lab = family_labels(P, sheets)
+                if len(P):
+                    near = np.abs(np.stack([P @ n + d for n, d in sheets], axis=1)).min(axis=1) <= LINE_PLANE_TOL_MM
+                    lab = np.where(near, lab, -1)
+                for j, n in enumerate(names):
+                    view.line_counts[n] = int((lab == j).sum())
 
     def _camera_model(self, img: np.ndarray) -> tuple[np.ndarray, np.ndarray | None]:
         h, w = img.shape[:2]
@@ -222,7 +334,7 @@ class BoardProcessor:
             if view.T_cb is not None:
                 poly = board_outline_uv(view.T_cb, self.spec, K, margin_mm=-PAGE_MARGIN_MM)
                 view.page_uv = poly
-                view.line_counts = {n: int(_inside_convex(view.lines.get(n), poly).sum()) for n in ("vertical", "horizontal")}
+                self._count_lines(view, K, poly)
         return view
 
     def add_imu(self, samples: list) -> None:
@@ -262,6 +374,8 @@ class CaptureSession(LiveSession):
         self.require_calib_size = kind in ("lasers", "check", "imu")
         self.profile_levels = cfg.emitters.levels(PROFILE[kind])
         self.views_target = None if views is None else int(views)
+        lasers = getattr(cfg, "lasers", None)
+        self.lines = tuple(getattr(lasers, "lines", None) or STANDARD_LINES)
         self.n_views = 0
         self.state = "armed" if kind == "imu" else "capturing"
         self._last_capture_index: int | None = None
@@ -275,7 +389,7 @@ class CaptureSession(LiveSession):
 
     # ------------------------------------------------------------------ hooks
     def make_processor(self) -> BoardProcessor:
-        return BoardProcessor(self.kind, self.spec, self.calib)
+        return BoardProcessor(self.kind, self.spec, self.calib, lines=self.lines)
 
     def recording_meta(self) -> dict:
         board = {"squares_x": self.spec.squares_x, "squares_y": self.spec.squares_y, "square_mm": self.spec.square_mm,
@@ -369,9 +483,9 @@ class CaptureSession(LiveSession):
             self.cov[1].add(bv.corners_r)
             notes.append(f"coverage L {self.cov[0].fraction:.0%} R {self.cov[1].fraction:.0%}")
         else:
-            missing = [n for n in ("vertical", "horizontal") if bv.line_counts.get(n, 0) < LINE_MIN_POINTS]
+            missing = missing_lines(bv, self.lines)
             if missing:
-                notes.append(f"warning: {' and '.join(missing)} line not on the page in this view")
+                notes.append(f"warning: {'; '.join(missing)} in this view")
         lo, hi = DISTANCE_MM[self.kind]
         if math.isfinite(bv.distance_mm) and not lo <= bv.distance_mm <= hi:
             notes.append(f"board at {bv.distance_mm:.0f} mm (aim for {lo:.0f}-{hi:.0f})")
@@ -440,11 +554,17 @@ class CaptureSession(LiveSession):
         lo, hi = TARGET_VIEWS[self.kind]
         name = "LASER CALIBRATION" if self.kind == "lasers" else "CALIBRATION CHECK"
         counts = bv.line_counts or {}
-        nv, nh = counts.get("vertical", 0), counts.get("horizontal", 0)
-        lines_ok = nv >= LINE_MIN_POINTS and nh >= LINE_MIN_POINTS
+        parts = []
+        for fam, names in _families(self.lines).items():
+            if all(n in counts for n in names) or bv.T_cb is None:
+                parts += [f"{n} {counts.get(n, 0)}" for n in names]
+            else:  # not named yet (no planes): the lines found in the family
+                found = "/".join(str(c) for c in bv.family_counts.get(fam, [])) or "0"
+                parts.append(f"{fam} lines {found}")
+        lines_ok = bv.T_cb is not None and not missing_lines(bv, self.lines)
         return [(f"{name}  views {self.n_views} (aim for {lo}-{hi})", WHITE),
                 self._pose_text(bv),
-                (f"laser points on the page: vertical {nv}  horizontal {nh}", GREEN if lines_ok else YELLOW),
+                ("laser points on the page: " + "  ".join(parts), GREEN if lines_ok else YELLOW),
                 (live.emitter_text(self.levels, self.pico is not None), WHITE)]
 
     def _imu_hud(self, bv: BoardView) -> list[tuple[str, tuple]]:
@@ -512,11 +632,12 @@ def _call(fn: Any, *args: Any, **optional: Any) -> Any:
 
 
 def run_flow(kind: str, rec_path: str | Path, spec: Any, calib: ScannerCalibration | None = None, step: int = 1, *,
-             paper: str = "letter", progress: Any = None) -> tuple[Any, dict]:
+             paper: str = "letter", progress: Any = None, lasers: Any = None) -> tuple[Any, dict]:
     """Call the matching ``ohs.app.calib_flow`` function: ``(result, report)`` (``check``: ``(None, report)``).
 
     ``step``, ``paper`` (the printed paper size: the laser fit uses the page margin) and
-    ``progress`` are passed when the flow accepts them.
+    ``progress`` are passed when the flow accepts them. ``lasers``: the build's laser names
+    (``[lasers] lines``) for the laser calibration; default the two standard lasers.
     """
     if kind == "stereo":
         from ohs.app.calib_flow import stereo_from_recording
@@ -527,6 +648,9 @@ def run_flow(kind: str, rec_path: str | Path, spec: Any, calib: ScannerCalibrati
     if kind == "lasers":
         from ohs.app.calib_flow import lasers_from_recording
 
+        if lasers:
+            return _call(lasers_from_recording, rec_path, calib, spec, step=step, paper=paper, progress=progress,
+                         names=tuple(lasers))
         return _call(lasers_from_recording, rec_path, calib, spec, step=step, paper=paper, progress=progress)
     if kind == "imu":
         from ohs.app.calib_flow import imu_from_recording
@@ -539,13 +663,15 @@ def run_flow(kind: str, rec_path: str | Path, spec: Any, calib: ScannerCalibrati
     raise ValueError(f"unknown calibration kind {kind!r}")
 
 
-def merge_calibration(existing: ScannerCalibration | None, kind: str, value: Any, keep: bool = False) -> tuple[ScannerCalibration, list[str]]:
+def merge_calibration(existing: ScannerCalibration | None, kind: str, value: Any, keep: bool = False,
+                      lasers: Any = None) -> tuple[ScannerCalibration, list[str]]:
     """New calibration after a ``kind`` result, plus notes for the user.
 
     stereo: replaces the stereo part; the laser planes and the IMU calibration are dropped (they
     are expressed in the old rectified frame) unless ``keep``. lasers: the fitted planes replace
-    the ones with the same name; a plane that was not fitted keeps its old value. imu: replaces
-    the IMU calibration.
+    the ones with the same name; a plane that was not fitted keeps its old value, and each laser
+    of ``lasers`` (the build's laser names; default the two standard ones) without a fitted plane
+    gets a note. imu: replaces the IMU calibration.
     """
     notes: list[str] = []
     if kind == "stereo":
@@ -565,7 +691,7 @@ def merge_calibration(existing: ScannerCalibration | None, kind: str, value: Any
     if kind == "lasers":
         planes = dict(existing.lasers)
         planes.update(value or {})
-        for name in ("vertical", "horizontal"):
+        for name in (tuple(lasers) if lasers else STANDARD_LINES):
             if name not in (value or {}):
                 notes.append(f"the {name} plane was not fitted: " + ("kept the previous one" if name in existing.lasers
                                                                        else "there is no plane for it"))

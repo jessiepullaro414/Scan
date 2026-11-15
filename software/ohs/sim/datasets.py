@@ -7,7 +7,9 @@
   Z-up sim world, rectified-left depth maps).
 * :func:`make_stereo_calib_set` renders a ChArUco board (ambient light only) at varied poses for
   stereo calibration; :func:`make_laser_calib_set` renders the board with the line lasers on
-  (dots off) for laser-plane calibration and returns the true board poses ``T_cb``.
+  (dots off) for laser-plane calibration and returns the true board poses ``T_cb``. Both laser
+  functions take the scanner's laser set (``lasers`` = 2 or 4, or a ``layout`` of
+  :data:`~ohs.sim.nominal.LASER_LAYOUTS`); the default is the two standard lasers.
 * :func:`stereo_calib_board_poses` / :func:`laser_calib_board_poses` give the deterministic true
   board poses (frame C) behind those sets.
 
@@ -226,8 +228,11 @@ def stereo_calib_board_poses(
     return poses
 
 
-def _laser_hits_board(T_cb: np.ndarray, calib: ScannerCalibration, spec: dict, emitters: dict) -> int:
-    """Smallest number (over both lasers) of fan samples that land on the board inside the image."""
+def _laser_hits_board(T_cb: np.ndarray, calib: ScannerCalibration, spec: dict, emitters: dict,
+                      names: Sequence[str] | None = None) -> int:
+    """Smallest number (over the lasers) of fan samples that land on the board inside the image.
+
+    ``names``: the lasers to count (default: every line laser in ``emitters``)."""
     s = _spec(spec)
     W = float(s["squares_x"]) * float(s["square_mm"])
     H = float(s["squares_y"]) * float(s["square_mm"])
@@ -235,8 +240,10 @@ def _laser_hits_board(T_cb: np.ndarray, calib: ScannerCalibration, spec: dict, e
     o_b = T_cb[:3, 3]
     w, h = calib.stereo.image_size
     K = calib.stereo.K_rect
+    if names is None:
+        names = [k for k, e in emitters.items() if e.get("type") == "line_laser"]
     counts = []
-    for name in ("vertical", "horizontal"):
+    for name in names:
         em = emitters[name]
         phi = np.radians(np.linspace(-25.0, 25.0, 51))
         dirs = np.cos(phi)[:, None] * em["direction"][None] + np.sin(phi)[:, None] * em["fan_axis"][None]
@@ -257,13 +264,17 @@ def laser_calib_board_poses(
     calib: ScannerCalibration | None = None,
     spec: dict | None = None,
     seed: int = 0,
+    *,
+    lasers: int = 2,
+    layout: str | None = None,
 ) -> list[np.ndarray]:
     """Board poses ``T_cb`` for laser-plane calibration: board near the laser cross, at depths
-    spread over 200-390 mm, tilted 0-35 deg, both laser lines crossing it (>= 15 of 51 fan
-    samples each) and >= 90 % of the corners visible in both cameras."""
-    calib = calib or nominal_calibration()
+    spread over 200-390 mm, tilted 0-35 deg, every laser line crossing it (>= 15 of 51 fan
+    samples each) and >= 90 % of the corners visible in both cameras. ``lasers`` / ``layout``:
+    the scanner's line lasers (:func:`~ohs.sim.nominal.nominal_emitters`)."""
+    calib = calib or nominal_calibration(lasers=lasers, layout=layout)
     s = _spec(spec)
-    em = nominal_emitters(baseline=calib.stereo.baseline)
+    em = nominal_emitters(baseline=calib.stereo.baseline, lasers=lasers, layout=layout)
     rng = np.random.default_rng(seed + 17)
     depths = np.linspace(200.0, 390.0, max(int(n_views), 1))
     rng.shuffle(depths)
@@ -285,12 +296,14 @@ def laser_calib_board_poses(
 
 # --------------------------------------------------------------------------- calibration sets
 def _render_board_views(
-    calib: ScannerCalibration, spec: dict, poses: Sequence[np.ndarray], params: RenderParams, rectified: bool = False
+    calib: ScannerCalibration, spec: dict, poses: Sequence[np.ndarray], params: RenderParams, rectified: bool = False,
+    *, lasers: int = 2, layout: str | None = None,
 ) -> list[tuple[np.ndarray, np.ndarray]]:
     scene = charuco_board(None, **spec)
     T_wb = np.asarray(scene.meta["board"]["T_wb"])
     pairs = []
-    with Renderer(calib, nominal_emitters(baseline=calib.stereo.baseline), scene, params) as r:
+    emitters = nominal_emitters(baseline=calib.stereo.baseline, lasers=lasers, layout=layout)
+    with Renderer(calib, emitters, scene, params) as r:
         for T_cb in poses:
             left, right, _ = r.render(T_wb @ invert_se3(T_cb), rectified=rectified)
             pairs.append((left, right))
@@ -335,18 +348,27 @@ def make_laser_calib_set(
     ambient: float = 90.0,
     params: RenderParams | None = None,
     spec: dict | None = None,
+    lasers: int = 2,
+    layout: str | None = None,
+    poses: Sequence[np.ndarray] | None = None,
 ) -> tuple[list[tuple[np.ndarray, np.ndarray]], ScannerCalibration, list[np.ndarray], dict]:
     """``(pairs of (left, right) images, true calibration, true board poses T_cb, spec)``.
 
-    Board under ambient light with both line lasers on and the dot projector off. Images are raw
-    (``rectified=False``; identical to rectified when ``realistic=False``) or rendered directly
-    in the rectified geometry. Call again with ``lines=False`` (same seed) for laser-off images
-    of the same views.
+    Board under ambient light with the line lasers on and the dot projector off. ``lasers`` (2 or
+    4) / ``layout`` (a name of :data:`~ohs.sim.nominal.LASER_LAYOUTS`) pick the scanner's lasers,
+    as in :func:`~ohs.sim.nominal.nominal_calibration`. Images are raw (``rectified=False``;
+    identical to rectified when ``realistic=False``) or rendered directly in the rectified
+    geometry. ``poses`` (board poses ``T_cb``) replaces the ``n_views`` poses of
+    :func:`laser_calib_board_poses`. Call again with ``lines=False`` (same seed) for laser-off
+    images of the same views.
     """
-    calib = nominal_calibration(image_size, realistic=realistic)
+    calib = nominal_calibration(image_size, realistic=realistic, lasers=lasers, layout=layout)
     s = _spec(spec)
-    poses = laser_calib_board_poses(n_views, calib, s, seed)
+    if poses is None:
+        poses = laser_calib_board_poses(n_views, calib, s, seed, lasers=lasers, layout=layout)
+    else:
+        poses = [np.asarray(T, dtype=np.float64) for T in poses]
     rp = params or RenderParams(seed=seed)
     rp = replace(rp, ambient=float(ambient), dots_on=bool(dots), lines_on=bool(lines), ambient_on=True)
-    pairs = _render_board_views(calib, s, poses, rp, rectified=rectified)
+    pairs = _render_board_views(calib, s, poses, rp, rectified=rectified, lasers=lasers, layout=layout)
     return pairs, calib, poses, s

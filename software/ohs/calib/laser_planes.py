@@ -11,6 +11,36 @@ line pixels found in it (sub-pixel ridge centres from the vision module, passed 
 3. :func:`fit_laser_planes` pools the points of all observations per laser and fits
    ``n . X + d = 0`` with RANSAC + least squares (:func:`ohs.geometry.fit_plane_ransac`).
 
+**Any set of line lasers.** A laser's name starts with its family, ``"vertical"`` or
+``"horizontal"`` (:func:`ohs.vision.laser.line_family`), and the extraction gives the pixels of all
+lines of a family together (``LaserLines.as_dict()``: keys ``"vertical"`` and ``"horizontal"``).
+With one name per family (the two standard lasers) each name is fitted on its own pixels, exactly
+as before. With several names in a family (the 4-laser variant: ``"vertical"`` and
+``"vertical_2"``), :func:`fit_laser_planes` separates the sheets without any design data:
+
+* it pools the family's board points over all observations, fits the best plane (RANSAC), takes
+  its inliers out and fits the next, as many planes as the family has names. A plane counts only
+  when its inliers come from at least :data:`MIN_DISTINCT_POSES` distinct board poses (a single
+  view's points all lie on that view's board plane); with fewer planes than names none of the
+  family is fitted, because which laser a lone plane belongs to cannot be told;
+* each plane is named by where its sheet starts (:func:`plane_intercept`): the vertical family by
+  the x at which the plane meets the camera's x axis (``y = z = 0``), largest first; the
+  horizontal family by the y at which it meets the y axis, smallest first (camera y points down,
+  so the top laser comes first). The names of a family are taken in the order they are given:
+  ``("vertical", "vertical_2")`` makes the laser right of the cameras ``"vertical"`` (``[lasers]
+  lines`` in the configuration follows the same order);
+* every point of the family then goes to the nearest of these planes, except points closer than
+  :data:`FAMILY_CLEAR_MM` to another of them, and each plane is fitted and checked on its points
+  as a single laser is (counts, distinct poses, spread, RANSAC).
+
+Where the two lines of a family meet on the board the extraction drops them, and where they lie
+on top of each other over a whole view (the board near the depth at which the sheets meet, square
+to them) the merged stripe is left out by that clearance, so views near that depth simply have
+fewer points; the report gives each laser's views and points.
+:func:`check_laser_planes` and :func:`points_by_laser` measure a family with several planes the
+same way: each point on the nearest plane of its family, none within :data:`FAMILY_CLEAR_MM` of
+another.
+
 A plane is only determined if the points span two directions, i.e. the line was seen on the board
 at clearly different poses (distances / tilts). The fit therefore requires
 :data:`MIN_OBSERVATIONS` observations from at least :data:`MIN_DISTINCT_POSES` distinct board
@@ -52,6 +82,7 @@ import numpy as np
 
 from ..geometry import fit_plane_ransac, pixels_to_rays, ray_plane_intersect, rotation_angle_deg
 from ..types import LaserPlane
+from ..vision.laser import LINE_NAMES, is_line_name, line_family
 from .board import (
     CharucoPageLayout,
     CharucoSpec,
@@ -68,6 +99,10 @@ __all__ = [
     "board_points_from_line",
     "fit_laser_planes",
     "check_laser_planes",
+    "family_points",
+    "family_labels",
+    "points_by_laser",
+    "plane_intercept",
     "REGIONS",
     "MIN_OBSERVATIONS",
     "MIN_DISTINCT_POSES",
@@ -86,6 +121,11 @@ DISTINCT_ROT_DEG = 2.0  # two board poses closer than this (and DISTINCT_TRANS_M
 DISTINCT_TRANS_MM = 10.0
 CHECK_OK_MEDIAN_MM = 0.5  # check_laser_planes: median |residual| must stay below this
 CHECK_INLIER_MM = 1.0
+# several lasers per family: a point closer than this to another sheet of its family is not used for
+# the fit. There the two lines lie within a few pixels of each other (2 mm is 6 px at 250 mm) and
+# merge into one stripe whose centre lies between them, which the extraction cannot always drop
+# (it drops lines closer than 10 px only once it has seen them apart).
+FAMILY_CLEAR_MM = 2.0
 
 
 @dataclass
@@ -190,6 +230,11 @@ def board_points_from_line(obs: LaserBoardObservation, K: np.ndarray, name: str,
     uv = obs.line_uv.get(name)
     if uv is None or len(uv) == 0:
         return np.zeros((0, 3))
+    return _board_points(obs, K, uv, region)
+
+
+def _board_points(obs: LaserBoardObservation, K: np.ndarray, uv: np.ndarray, region: str) -> np.ndarray:
+    """:func:`board_points_from_line` for the pixels ``uv`` (N, 2) and a checked ``region``."""
     uv = np.asarray(uv, dtype=np.float64).reshape(-1, 2)
     uv = uv[np.all(np.isfinite(uv), axis=1)]
     n, d = _board_plane(np.asarray(obs.T_cb, dtype=np.float64))
@@ -212,6 +257,86 @@ def board_points_from_line(obs: LaserBoardObservation, K: np.ndarray, name: str,
     if region == "both":
         keep |= finite & _inside_convex_polygon(uv, obs.board_polygon_uv)
     return P[keep]
+
+
+def family_points(obs: LaserBoardObservation, K: np.ndarray, family: str, region: str | None = None) -> np.ndarray:
+    """3D points (N, 3) in C of every line of ``family`` (``"vertical"`` / ``"horizontal"``) on the
+    board of one observation: the pixels of all ``obs.line_uv`` keys of that family, as
+    :func:`board_points_from_line`."""
+    region = _check_region(obs.region if region is None else region)
+    uvs = [np.asarray(v, dtype=np.float64).reshape(-1, 2) for k, v in obs.line_uv.items()
+           if is_line_name(k) and line_family(k) == family and v is not None and len(v)]
+    if not uvs:
+        return np.zeros((0, 3))
+    return _board_points(obs, K, np.vstack(uvs), region)
+
+
+def plane_intercept(plane: LaserPlane | tuple[np.ndarray, float], family: str) -> float:
+    """Where a sheet of ``family`` starts (mm): the x at which the plane meets the camera's x axis
+    (vertical family) or the y at which it meets the y axis (horizontal family). The lasers of a
+    family are named in this order: vertical largest x first, horizontal smallest y first."""
+    if isinstance(plane, LaserPlane):
+        n, d = plane.normal, float(plane.d)
+    else:
+        n, d = np.asarray(plane[0], dtype=np.float64), float(plane[1])
+    c = float(n[0] if family == "vertical" else n[1])
+    if abs(c) < 1e-12:  # the sheet is parallel to that axis
+        return 0.0 if d == 0 else math.copysign(math.inf, -d if c >= 0 else d)
+    return -d / c
+
+
+def _families(names: Sequence[str]) -> dict[str, list[str]]:
+    """Names grouped by family, in the given order; a name that is not a laser line is its own group."""
+    groups: dict[str, list[str]] = {}
+    for name in names:
+        groups.setdefault(line_family(name) if is_line_name(name) else name, []).append(name)
+    return groups
+
+
+def _nearest(P: np.ndarray, planes: Sequence[tuple[np.ndarray, float]]) -> np.ndarray:
+    """Index (N,) of the nearest plane for each point."""
+    if len(P) == 0:
+        return np.zeros(0, dtype=np.int64)
+    dist = np.abs(np.stack([P @ n + d for n, d in planes], axis=1))
+    return np.argmin(dist, axis=1)
+
+
+def points_by_laser(obs: LaserBoardObservation, K: np.ndarray, planes: Mapping[str, LaserPlane],
+                    region: str | None = None, clear_mm: float | None = None) -> dict[str, np.ndarray]:
+    """3D board points (N, 3) of one observation per laser of ``planes``.
+
+    A family with one plane gets the points of its line (:func:`board_points_from_line` for the
+    plane's name when ``obs.line_uv`` has it, else all lines of the family). A family with several
+    planes gets the points of all its lines, each point given to the nearest of them; points
+    closer than ``clear_mm`` (default :data:`FAMILY_CLEAR_MM`) to another plane of the family are
+    left out, as in the fit.
+    """
+    clear = FAMILY_CLEAR_MM if clear_mm is None else float(clear_mm)
+    out: dict[str, np.ndarray] = {}
+    for fam, names in _families(list(planes)).items():
+        if len(names) == 1:
+            name = names[0]
+            if name in obs.line_uv or fam not in LINE_NAMES:
+                out[name] = board_points_from_line(obs, K, name, region)
+            else:
+                out[name] = family_points(obs, K, fam, region)
+            continue
+        P = family_points(obs, K, fam, region)
+        lab = family_labels(P, [(planes[n].normal, planes[n].d) for n in names], clear)
+        for j, name in enumerate(names):
+            out[name] = P[lab == j]
+    return out
+
+
+def family_labels(P: np.ndarray, sheets: Sequence[tuple[np.ndarray, float]], clear_mm: float = FAMILY_CLEAR_MM) -> np.ndarray:
+    """Index (N,) of the nearest sheet ``(normal, d)`` for each point (N, 3), -1 for a point closer
+    than ``clear_mm`` to another sheet (there the lines of the family merge)."""
+    lab = _nearest(P, sheets)
+    if len(P) == 0 or len(sheets) < 2 or clear_mm <= 0:
+        return lab
+    dist = np.abs(np.stack([P @ n + d for n, d in sheets], axis=1))
+    dist[np.arange(len(P)), lab] = np.inf
+    return np.where(dist.min(axis=1) < clear_mm, -1, lab)
 
 
 # --------------------------------------------------------------------------- fitting
@@ -305,30 +430,93 @@ def fit_laser_planes(
 ) -> tuple[dict[str, LaserPlane], dict]:
     """Fit one plane per laser from board observations (RANSAC + least squares).
 
-    ``region`` (``"board"`` | ``"margin"`` | ``"both"``; default: each observation's own) selects
-    which line pixels are used (module docstring). Returns ``(planes, report)``. ``planes`` only
-    holds the lasers that could be fitted; for every requested name ``report["lasers"][name]``
+    ``names``: the lasers, any number per family; within a family they are named, in the order
+    given, by where each sheet starts (module docstring, "Any set of line lasers"). ``region``
+    (``"board"`` | ``"margin"`` | ``"both"``; default: each observation's own) selects which line
+    pixels are used. Returns ``(planes, report)``, ``planes`` in the order of ``names``; it only
+    holds the lasers that could be fitted. For every requested name ``report["lasers"][name]``
     gives ``ok``, ``degenerate``, ``reason`` (when not ok), point/observation counts, ``rms_mm``,
-    the plane and rough uncertainties. ``report["ok"]`` is True when all requested lasers were fitted.
+    the plane, rough uncertainties and ``intercept_mm`` (:func:`plane_intercept`).
+    ``report["families"][family]`` gives its ``names`` and ``planes_found`` (with several names
+    also ``n_points`` and the separated sheets' ``intercepts_mm``). ``report["ok"]`` is True when
+    all requested lasers were fitted.
     """
     K = np.asarray(K, dtype=np.float64)
     if region is not None:
         _check_region(region)
+    names = tuple(names)
     planes: dict[str, LaserPlane] = {}
     used = sorted({o.region for o in observations}) if region is None else [region]
-    report: dict = {"n_observations": len(observations), "region": "+".join(used) if used else region, "lasers": {}}
+    report: dict = {"n_observations": len(observations), "region": "+".join(used) if used else region,
+                    "lasers": {}, "families": {}}
+    fitted: dict[str, LaserPlane | None] = {}
+    for fam, fam_names in _families(names).items():
+        if len(fam_names) == 1:
+            name = fam_names[0]
+            per_obs = [(i, board_points_from_line(o, K, name, region)) for i, o in enumerate(observations)]
+            if fam in LINE_NAMES and name != fam and not any(len(P) for _, P in per_obs):
+                # a single laser of the family under another name: the family's pixels are its line
+                per_obs = [(i, family_points(o, K, fam, region)) for i, o in enumerate(observations)]
+            plane, entry = _fit_one(name, per_obs, observations, ransac_thresh_mm)
+            group = {name: (plane, entry)}
+            if fam in LINE_NAMES:
+                report["families"][fam] = {"names": [name], "planes_found": int(plane is not None)}
+        else:
+            group = _fit_family(fam, fam_names, observations, K, region, ransac_thresh_mm, report)
+        for name, (plane, entry) in group.items():
+            if plane is not None and fam in LINE_NAMES:
+                entry["intercept_mm"] = plane_intercept(plane, fam)
+            report["lasers"][name] = entry
+            fitted[name] = plane
     for name in names:
-        per_obs = [(i, board_points_from_line(o, K, name, region)) for i, o in enumerate(observations)]
-        plane, entry = _fit_one(name, per_obs, observations, ransac_thresh_mm)
-        report["lasers"][name] = entry
+        plane, entry = fitted[name], report["lasers"][name]
         if plane is None:
             log.warning("laser plane %r not fitted: %s", name, entry.get("reason"))
             continue
         planes[name] = plane
         log.info("laser plane %r: n=(%.4f, %.4f, %.4f) d=%.2f mm, rms %.3f mm, %d inliers from %d observations",
                  name, *plane.normal, plane.d, plane.rms, plane.n_points, entry["n_observations"])
-    report["ok"] = len(planes) == len(tuple(names))
+    report["ok"] = len(planes) == len(names)
     return planes, report
+
+
+def _fit_family(fam: str, names: Sequence[str], observations: Sequence[LaserBoardObservation], K: np.ndarray,
+                region: str | None, thresh: float, report: dict) -> dict[str, tuple[LaserPlane | None, dict]]:
+    """Separate, name and fit the sheets of a family with several lasers (module docstring)."""
+    per_obs = [(i, family_points(o, K, fam, region)) for i, o in enumerate(observations)]
+    sheets: list[tuple[np.ndarray, float]] = []
+    remaining = [P for _, P in per_obs]
+    for j in range(len(names)):
+        use = [P for P in remaining if len(P) >= MIN_POINTS_PER_OBS]
+        if not use:
+            break
+        try:
+            n, d, _, _ = fit_plane_ransac(np.vstack(use), thresh=thresh, iters=1000, seed=j,
+                                          min_inliers=3 * MIN_POINTS_PER_OBS)
+        except ValueError:
+            break
+        inl = [np.abs(P @ n + d) < thresh for P in remaining]
+        support = [observations[i].T_cb for (i, _), m in zip(per_obs, inl) if m.sum() >= MIN_POINTS_PER_OBS]
+        if _count_distinct_poses(support) < MIN_DISTINCT_POSES:  # one view's board plane, not a sheet
+            break
+        sheets.append((n, float(d)))
+        remaining = [P[~m] for P, m in zip(remaining, inl)]
+    n_total = int(sum(len(P) for _, P in per_obs))
+    fam_rep: dict = {"names": list(names), "planes_found": len(sheets), "n_points": n_total}
+    report["families"][fam] = fam_rep
+    if len(sheets) < len(names):
+        why = (f"found {len(sheets)} of {len(names)} {fam} laser planes in the {n_total} points of the {fam} "
+               f"lines, so which laser is which cannot be told: every {fam} line ({', '.join(names)}) must "
+               "cross the board in several views at different distances and tilts")
+        return {name: (None, {"ok": False, "degenerate": False, "n_observations": 0, "n_points": 0, "reason": why})
+                for name in names}
+    # name the sheets by where they start, give each point to the nearest sheet, fit each on its points
+    sheets.sort(key=lambda s: plane_intercept(s, fam), reverse=(fam == "vertical"))
+    fam_rep["intercepts_mm"] = [plane_intercept(s, fam) for s in sheets]
+    labels = [family_labels(P, sheets, FAMILY_CLEAR_MM) for _, P in per_obs]
+    fam_rep["n_points_near_other_sheet"] = int(sum((lab < 0).sum() for lab in labels))
+    return {name: _fit_one(name, [(i, P[lab == j]) for (i, P), lab in zip(per_obs, labels)], observations, thresh)
+            for j, name in enumerate(names)}
 
 
 def check_laser_planes(
@@ -338,7 +526,8 @@ def check_laser_planes(
     """Residuals (mm) of new board observations against existing laser planes.
 
     Per laser: point count, signed mean, rms, median / p95 / max absolute distance, the fraction
-    within 1 mm and per-observation statistics; ``ok`` when the median |distance| is below
+    within 1 mm and per-observation statistics (the points of a family with several planes each
+    on the nearest of them, none near another, :func:`points_by_laser`); ``ok`` when the median |distance| is below
     :data:`CHECK_OK_MEDIAN_MM`. ``report["ok"]`` is False if any laser fails or has no points.
     ``region`` as in :func:`fit_laser_planes`.
     """
@@ -348,10 +537,11 @@ def check_laser_planes(
     used = sorted({o.region for o in observations}) if region is None else [region]
     report: dict = {"n_observations": len(observations), "region": "+".join(used) if used else region, "lasers": {}}
     all_ok = True
+    by_obs = [points_by_laser(o, K, planes, region) for o in observations]
     for name, plane in planes.items():
         rows, dists = [], []
         for i, o in enumerate(observations):
-            P = board_points_from_line(o, K, name, region)
+            P = by_obs[i][name]
             if len(P) == 0:
                 continue
             dd = plane.distance(P)

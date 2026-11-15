@@ -170,3 +170,29 @@ def test_laser_calib_set_lines_lie_on_board():
             assert np.isfinite(X).all()
             depths.append(np.median(X[:, 2]))
     assert max(depths) - min(depths) > 60  # views at different depths constrain the planes
+
+
+@pytest.mark.parametrize("layout", ["4", "4-cross350"])
+def test_laser_calib_set_for_four_lasers(layout):
+    """Any laser layout: every line laser of the layout is drawn, and every one crosses every view."""
+    from ohs.sim.datasets import _laser_hits_board
+    from ohs.sim.nominal import nominal_calibration, nominal_emitters
+
+    calib = nominal_calibration((640, 400), layout=layout)
+    em = nominal_emitters(baseline=calib.stereo.baseline, layout=layout)
+    poses = laser_calib_board_poses(4, calib, None, seed=0, layout=layout)
+    for T in poses:
+        assert _laser_hits_board(T, calib, None, em) >= 15  # the smallest over all four lasers
+        assert _laser_hits_board(T, calib, None, em, names=("vertical_2",)) >= 15
+    pairs, cal, poses2, spec = make_laser_calib_set(n_views=2, image_size=(640, 400), seed=0, layout=layout)
+    assert set(cal.lasers) == {"vertical", "horizontal", "vertical_2", "horizontal_2"}
+    assert [np.allclose(a, b) for a, b in zip(poses2, laser_calib_board_poses(2, cal, spec, seed=0, layout=layout))] == [True, True]
+    one, _, _, _ = make_laser_calib_set(n_views=2, image_size=(640, 400), seed=0, layout=layout,
+                                        params=RenderParams(line_names=("vertical_2",)))
+    off, _, _, _ = make_laser_calib_set(n_views=2, image_size=(640, 400), seed=0, layout=layout, lines=False)
+    assert (one[0][0].astype(int) - off[0][0] > 60).sum() > 50  # the left laser is drawn
+    # given poses are used as they are; lasers=4 is the layout as built
+    _, cal4, given, _ = make_laser_calib_set(image_size=(640, 400), lasers=4, poses=poses[:1], lines=False)
+    assert len(given) == 1 and np.allclose(given[0], poses[0]) and set(cal4.lasers) == set(cal.lasers)
+    # the default stays the two-laser set
+    assert set(make_laser_calib_set(n_views=1, image_size=(640, 400), lines=False)[1].lasers) == {"vertical", "horizontal"}
