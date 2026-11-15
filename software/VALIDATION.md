@@ -1402,6 +1402,47 @@ On the processing studio test's short recording (10 frames, 640x400, two seeds):
 - **Every Standard, Best or Preview mesh of a scan without markers that was made on the GPU path before 2026-11-14 had the whole band.** Smooth scenes keep their numbers. Parts with edges and thin walls read a little thinner now, and small bosses about 0.1 mm smaller in radius; the fitted-shapes study was not measured again.
 - **Still open:** with tracking, thin walls stay about 1 mm too thick (the tracking model's 2 mm voxels); a mesh model for the CPU path that can take the rule.
 
+**Thin walls with tracking: the tracking model (study of 2026-11-14, scratch copies of the engine; nothing of it is in the engine).** With tracking a thin wall reads 0.3–1.2 mm thicker than at the true poses. The tracked mesh takes its walls from the tracking model: a frame is registered to the model's faces, so where the model's wall is too thick the cameras on its two sides stand too far apart.
+
+*The tracking model on exact depth* (a wall on a table, 36 views, 1280x800; where the wall's face sits after both sides were seen, + = deeper than it is):
+
+| Grid / band | 1 mm wall | 2 mm wall | 3 mm wall | 4 mm wall |
+|---|---|---|---|---|
+| 2 mm / 4 mm (the engine) | −0.53 mm | +0.15 mm | +0.40 mm | 0.00 mm |
+| 1.5 mm / 3 mm | −0.27 mm | +0.25 mm | +0.01 mm | +0.01 mm |
+| 1 mm / 4 mm | −0.65 mm | −0.41 mm | −0.04 mm | +0.02 mm |
+| 1 mm / 3 mm | −0.46 mm | −0.25 mm | +0.10 mm | +0.01 mm |
+| 1 mm / 2 mm | +0.06 mm | +0.04 mm | +0.09 mm | +0.01 mm |
+
+Only a 1 mm grid with a 2 mm band holds every wall. A finer grid alone does not: the band has to be no wider than the wall.
+
+*On scans* (matcher's depth, tracked, GPU path, Standard quality). The sheet part in three recordings (seeds 0–2; 2 mm flange / 1 mm rib / 3 mm rib, the range over the three) and the five bracket scans (share of the part more than 0.3 mm off, per scan and in the median; the part's mean offset, + = too fat):
+
+| Tracking model | Sheet part: flange / 1 mm rib / 3 mm rib | Bracket per scan | Median | Mean offset |
+|---|---|---|---|---|
+| True poses (no tracking) | 2.72–2.85 / 1.96–2.04 / 3.04–3.06 mm | | 10.5 % | −0.02 mm |
+| The engine (2 mm grid, 4 mm band) | 3.01–3.20 / 2.46–2.80 / 3.66–4.30 mm | 12 / 16 / 47 / 14 / 27 % | 16.2 % | +0.12 mm |
+| 1 mm grid, 2 mm band | 2.69 / 2.22 / 2.99 mm (seed 0 only) | 45 / 19 / 52 / 63 / 24 % | 45 % | +0.12 mm |
+| The engine's grid; nothing integrated from more than 2 mm behind a surface at right angles | 2.70–2.89 / 2.26–2.56 / 2.90–3.61 mm | 43 / 13 / 21 / 13 / 15 % | 15.1 % | −0.01 mm |
+| The same, but only for voxels integrated 4 times already | 2.72–2.98 / 2.41–2.56 / 3.19–3.71 mm | 13 / 13 / 32 / 13 / 13 % | 13.3 % | +0.01 mm |
+| The same with 16 times | 2.83–3.07 / 2.42–2.73 / 3.55–4.13 mm | 12 / 13 / 43 / 13 / 16 % | 13.0 % | +0.05 mm |
+| The same with 1.5 mm and 4 times | 2.63–2.89 / 2.31–2.41 / 2.95–3.37 mm | 18 / 15 / 19 / 18 / 15 % | 17.7 % | −0.06 mm |
+| More than 2 mm behind along the view, voxels integrated 4 times | 2.60–2.79 / 1.99–2.36 / 2.78–3.08 mm | 34 / 30 / 14 / 43 / 17 % | 30.1 % | −0.13 mm |
+
+- **The 1 mm grid with the 2 mm band reaches the true poses' walls and is too fragile.**
+  - The second frame of a scan is registered to a model made of one frame, with the camera already 5 mm on. That model gives the ray cast 80,000 pixels where the engine's gives 123,000, the registration's fitness is 0.47 against 0.80, and the pose lands 3–11 mm off and stays there.
+  - On the bracket it slips by 6 mm at one frame of one scan and by 400 mm for a frame of another. It costs 15 ms a frame (tracking 78 ms against 63 ms) with a window of 512 voxels.
+  - With a 3 mm band the start is sound and the walls are not (2.85 / 2.41 / 3.74 mm on seed 0).
+- **The cut along the view repairs the sheet part and shrinks the bracket.** Seen at a slant, a voxel just inside a surface lies "deep" along the view, so thick bodies lose the votes that hold their surface: the bracket comes out 0.13 mm too thin and the car panel's hole 0.17 mm smaller.
+- **At right angles, for every voxel, the bracket is right in four scans and slips in the fifth** (43 % in one run and 63 % in a second run of the same scan)**:** 5–6 mm at one frame, where the scene holds one direction weakly (the registration's weakest-to-strongest ratio is 4e-5 there, at the tracker's own limit of 5e-5; the engine's model sits just above it and gets through).
+- **At right angles, only for voxels that were integrated 4 times, nothing slips** (largest step between two frames 1.5 mm; the engine's 2.0 mm), the bracket's fatness is gone and the thin walls are a third to a half of the way to the true poses' values.
+  - The end-to-end tests' sphere and car panel keep their numbers (0.061 / 0.257 mm and 0.084 / 0.393 mm), and so do the five car-panel scans (hole 0.90 mm small in diameter, floor 0.001 mm).
+  - The sphere scan without the gyro, which the tracker flags, drifts 109 mm instead of 59 mm.
+  - Not measured: its time per frame (the runs shared the machine with other work), and the test suite.
+- **What stays open:** walls under about 2 mm with tracking. They need the 1 mm grid, and a start and a hold in weak directions that take it.
+
+Scripts: scratchpad `shape\` of the session of 2026-11-14 (`edit_track1.py`, `edit_track2.py`: the switches; `wall_proto.py`, `start_probe.py`, `tab_sheet.py`, `chain11.sh` to `chain18.sh`).
+
 **Limits of this study:** one part with five seeds and one sheet part with one seed, all simulated; one scan pattern (an orbit); Standard quality only.
 
 Scripts and rows: scratchpad `shape\` of the session of 2026-11-14 (`run.sh`, `run_variant.py`, `measure.py`, `table.py`, `traj.py`, `icp_bias.py`, `wall_proto.py`, `sheet.py`; `results\measure.jsonl`, `results\sheet.jsonl`). The prototype: `edit_back.py`, `edit_back2.py`, `edit_back3.py` (the rule, applied to a copy of `recon_tsdf.py`), `wall_recon.py`, `run_c.sh`, `loops_count.py`, `panel_table.py`, `summ3.py`; `results\wall_recon.jsonl`, `results\wall_recon2.jsonl`.

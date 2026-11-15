@@ -114,7 +114,13 @@ about the scan itself, not the Fit tool, and they decide whether a measurement c
   it). With the engine itself the tracked bracket reads 16.2 %, and 2 sigma covers as before.
   GPU path only: the CPU path's mesh model (Open3D's) cannot take the rule. Still open: a
   pull of about 0.1 mm along the direction of motion; models for the CPU path that take a
-  short band (tracking and mesh); a tracking model that can hold a 1–2 mm sheet.
+  short band (tracking and mesh); a tracking model that can hold a 1–2 mm sheet. **Studied
+  2026-11-14 (not in the engine):** a 1 mm tracking grid with a 2 mm band reaches the true
+  poses' walls but stumbles at a scan's start and slips on the bracket. On the engine's grid,
+  taking nothing from more than 2 mm behind a surface (at right angles) once a voxel has been
+  integrated 4 times brings the tracked bracket from 16 % to 13 % with no slip and its mean
+  offset from +0.12 to +0.01 mm, and thin walls a third to a half of the way; smooth scenes keep
+  their numbers. It waits for the owner's decision.
 - **Small cylinders fit worse since the new sigma** (measured again 2026-11-13,
   [`VALIDATION.md`](../VALIDATION.md), "Fitted shapes against the truth"): a Ø 14 mm boss reads
   0.39 mm off in radius with tracking (before 0.18 mm) and its axis 12.5° off (before 8.0°),
