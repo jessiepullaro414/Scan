@@ -55,7 +55,7 @@ from dataclasses import dataclass, replace
 import cv2
 import numpy as np
 
-from ohs.sim.nominal import LASER_SETS, nominal_emitters
+from ohs.sim.nominal import LASER_LAYOUTS, layout_planes, nominal_emitters
 from ohs.sim.scene import Scene, _sample
 from ohs.types import ScannerCalibration, StereoCalibration
 from ohs.vision.laser import LINE_NAMES, is_line_name, line_family
@@ -233,12 +233,22 @@ def project_to_raw(P_c: np.ndarray, stereo: StereoCalibration, side: str = "left
     return np.stack([u, v], axis=1)
 
 
-def _nominal_lasers(calib: ScannerCalibration | StereoCalibration) -> int:
-    """The nominal laser set (:data:`~ohs.sim.nominal.LASER_SETS`) whose lasers a calibration has:
-    the largest one it holds completely (2 for a stereo calibration alone)."""
-    have = set(calib.lasers or {}) if isinstance(calib, ScannerCalibration) else set()
-    fits = [n for n, names in LASER_SETS.items() if set(names) <= have]
-    return max(fits) if fits else 2
+def _nominal_layout(calib: ScannerCalibration | StereoCalibration) -> str:
+    """The nominal layout (:data:`~ohs.sim.nominal.LASER_LAYOUTS`) a calibration's planes are: the
+    largest one whose sheets it holds (by name and plane); else the largest one it holds by name
+    ("2" for a stereo calibration alone)."""
+    have = dict(calib.lasers or {}) if isinstance(calib, ScannerCalibration) else {}
+    by_name = [k for k, aims in LASER_LAYOUTS.items() if set(aims) <= set(have)]
+    if not by_name:
+        return "2"
+    B = float(calib.stereo.baseline)
+
+    def same(k: str) -> bool:
+        return all(np.allclose(n, have[name].normal, atol=1e-9) and abs(d - have[name].d) < 1e-6
+                   for name, (n, d) in layout_planes(k, B).items())
+
+    exact = [k for k in by_name if same(k)]
+    return max(exact or by_name, key=lambda k: len(LASER_LAYOUTS[k]))
 
 
 # --------------------------------------------------------------------------- renderer
@@ -264,7 +274,7 @@ class Renderer:
         self.stereo = calib.stereo if isinstance(calib, ScannerCalibration) else calib
         self.params = params or RenderParams()
         if emitters is None:
-            emitters = nominal_emitters(baseline=self.stereo.baseline, lasers=_nominal_lasers(calib))
+            emitters = nominal_emitters(baseline=self.stereo.baseline, layout=_nominal_layout(calib))
         self.emitters = emitters
         self.scene = scene
         self.size = (int(self.stereo.image_size[0]), int(self.stereo.image_size[1]))

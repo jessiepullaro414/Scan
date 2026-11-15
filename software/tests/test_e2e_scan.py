@@ -157,12 +157,12 @@ def test_four_lasers_sphere_half_resolution(sphere_half, tmp_path):
     twice the laser points, and the mesh no worse, although more of the image is laser line and
     less is dots for the stereo matching.
 
-    Measured (2 -> 4 lasers): 11.9k -> 21.6k laser points, laser median 0.140 -> 0.165 mm, p95
-    0.60 -> 0.69 mm, mesh median 0.118 -> 0.118 mm, trajectory max 0.22 -> 0.30 mm / 0.039 ->
-    0.040 deg (median 0.16 -> 0.14 mm). The laser error is higher because the new lasers sit
-    closer to the left camera, which triangulates every line: ``vertical_2`` 56 mm beside it
-    instead of 116 mm, ``horizontal_2`` 56 mm below instead of 80 mm above (at the true poses:
-    medians 0.12 and 0.21 mm against 0.08 and 0.19 mm for the first pair)."""
+    Measured (2 -> 4 lasers): 11.9k -> 21.6k laser points, laser median 0.140 -> 0.147 mm, p95
+    0.60 -> 0.65 mm, mesh median 0.118 -> 0.118 mm, trajectory max 0.22 -> 0.30 mm / 0.039 ->
+    0.040 deg (median 0.16 -> 0.14 mm). ``vertical_2`` is measured from the right camera, 116 mm
+    from it (:func:`~ohs.vision.laser.measuring_camera`); ``horizontal_2`` is 56 mm below the
+    cameras where ``horizontal`` is 80 mm above, so it stays a little less accurate (at the true
+    poses: medians 0.061 / 0.21 mm against 0.081 / 0.19 mm for the first pair)."""
     rec4 = tmp_path / "rec4"
     cached_scan_recording(rec4, scene="sphere_on_plane", n_frames=24, image_size=(640, 400), realistic=True,
                           depth_every=0, seed=0, lasers=4)
@@ -174,8 +174,8 @@ def test_four_lasers_sphere_half_resolution(sphere_half, tmp_path):
     assert set(rep4["lasers"]["planes"]) == {"vertical", "horizontal", "vertical_2", "horizontal_2"}
     assert m4["tracked_fraction"] == 1.0
     assert m4["laser_n"] > 1.6 * m2["laser_n"]
-    assert m4["laser_median_mm"] < 1.3 * m2["laser_median_mm"] and m4["laser_median_mm"] < 0.25
-    assert m4["laser_p95_mm"] < 1.3 * m2["laser_p95_mm"]
+    assert m4["laser_median_mm"] < 1.1 * m2["laser_median_mm"] + 0.01 and m4["laser_median_mm"] < 0.25
+    assert m4["laser_p95_mm"] < 1.15 * m2["laser_p95_mm"]
     assert m4["mesh_median_mm"] <= 1.05 * m2["mesh_median_mm"] and m4["mesh_p95_mm"] <= 1.05 * m2["mesh_p95_mm"]
     assert m4["traj_max_trans_mm"] < 1.5 * m2["traj_max_trans_mm"] + 0.1 and m4["traj_max_trans_mm"] < 1.5
     assert m4["traj_max_rot_deg"] < 1.25 * m2["traj_max_rot_deg"] + 0.02

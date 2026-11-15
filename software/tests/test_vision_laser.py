@@ -21,8 +21,10 @@ from ohs.vision.laser import (
     is_line_name,
     laser_points,
     line_family,
+    measuring_camera,
     stereo_check,
     triangulate_plane,
+    triangulate_right,
 )
 
 W, H = 1280, 800
@@ -550,6 +552,64 @@ def test_laser_points_tell_the_planes_of_a_family_apart():
     # the 3D error is like the 2-laser case
     assert np.median(errs[4]) < 1.5 * np.median(errs[2]) + 0.02
     assert np.percentile(errs[4], 95) < 1.5 * np.percentile(errs[2], 95) + 0.05
+
+
+def test_measuring_camera_is_the_one_farther_from_the_plane():
+    from ohs.sim.nominal import nominal_calibration
+
+    two, four = nominal_calibration(), nominal_calibration(lasers=4)
+    B = two.stereo.baseline
+    assert {n: measuring_camera(pl, B) for n, pl in two.lasers.items()} == {"vertical": "left", "horizontal": "left"}
+    assert {n: measuring_camera(pl, B) for n, pl in four.lasers.items()} == {
+        "vertical": "left", "horizontal": "left", "vertical_2": "right", "horizontal_2": "left"}
+    # a tie (a plane as far from both cameras) goes to the left camera
+    assert measuring_camera(LaserPlane("vertical", np.array([1.0, 0.0, 0.0]), -30.0), 60.0) == "left"
+
+
+def test_triangulate_right_is_exact_on_exact_lines():
+    """Points of a plane seen in both images: measured from the right camera they come back exactly,
+    in frame C; a left point with no right line near it is not measured."""
+    n = np.array([-0.9473, 0.0, 0.3205])
+    plane = LaserPlane("vertical_2", n, -float(n @ [30.0, 0.0, 254.0]))  # the mirror of V_PLANE
+    v = np.arange(100.0, 700.0)
+    # a curved wall: depth varies along the line
+    z = 260.0 + 30.0 * np.sin(v / 90.0)
+    y = (v - K_FULL[1, 2]) * z / F
+    x = -(plane.normal[1] * y + plane.normal[2] * z + plane.d) / plane.normal[0]
+    X = np.stack([x, y, z], 1)
+    uv_l = G.project_points(X, K_FULL)
+    uv_r = project_right(X, K_FULL, B)
+    seg = np.zeros(len(uv_r), np.int64)
+    P, ok = triangulate_right(uv_l, plane, K_FULL, B, uv_r, seg, 1.5)
+    assert ok.all() and np.abs(P - X).max() < 1e-6
+    # a right line with a gap: the points there are not measured
+    keep = (v < 300) | (v > 340)
+    P, ok = triangulate_right(uv_l, plane, K_FULL, B, uv_r[keep], seg[keep], 1.5)
+    assert not ok[(v > 302) & (v < 338)].any() and ok[keep].all()
+    assert np.abs(P[ok] - X[ok]).max() < 1e-6
+
+
+def test_laser_points_measure_each_plane_from_the_farther_camera():
+    """Four lasers: vertical_2 is 56 mm beside the left camera and 116 mm beside the right one, so
+    the right camera measures it, about twice as well; the planes measured from the left camera
+    give the same points as before, and every point keeps the plane it was labelled with."""
+    cal, left, right, depth, aux = _rendered_frame(4)
+    K, B = cal.stereo.K_rect, cal.stereo.baseline
+    p = replace(LaserParams(), lines_per_family=2)
+    far = laser_points(left, right, K, B, cal.lasers, p, depth=depth)
+    near = laser_points(left, right, K, B, cal.lasers, replace(p, triangulate_from="left"), depth=depth)
+    for name in ("vertical", "horizontal", "horizontal_2"):
+        assert np.array_equal(far[name], near[name]), name
+    errs = {}
+    for tag, out in (("left", near), ("farther", far)):
+        rn, _ = _truth_errors(out, cal, depth, aux)
+        assert rn.mean() >= 0.99
+        _, e = _truth_errors({"vertical_2": out["vertical_2"]}, cal, depth, aux)
+        errs[tag] = e
+        print(tag, "vertical_2:", len(e), f"median {np.median(e):.3f} p95 {np.percentile(e, 95):.3f} mm")
+    assert len(errs["farther"]) > 0.9 * len(errs["left"])
+    assert np.median(errs["farther"]) < 0.75 * np.median(errs["left"])
+    assert np.percentile(errs["farther"], 95) < 0.85 * np.percentile(errs["left"], 95)
 
 
 def test_laser_points_one_plane_per_family_is_unchanged():

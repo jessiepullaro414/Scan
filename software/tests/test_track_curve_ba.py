@@ -59,6 +59,39 @@ def test_the_curves_meet_at_the_true_poses(orbit, truth):
     assert np.allclose(np.linalg.norm(cr.ta, axis=1), 1.0) and np.allclose(np.linalg.norm(cr.tb, axis=1), 1.0)
 
 
+def test_four_laser_curves_use_the_farther_camera(tmp_path, monkeypatch):
+    """Four lasers: curves of all four planes, vertical_2 measured from the right camera (about
+    twice as far from it as from the left one), so its points lie closer to the true surface."""
+    from dataclasses import replace
+
+    import ohs.app.pipeline as pipeline
+    from ohs import geometry as G
+    from test_e2e_scan import surface_distance
+
+    rec = scan_recording(tmp_path / "rec4", scene="sphere_on_plane", n_frames=6, image_size=(640, 400), realistic=True,
+                         depth_every=0, seed=7, lasers=4)
+    reader = RecordingReader(rec)
+    gt = reader.ground_truth_poses()
+    idx = sorted(gt)
+
+    def errors():
+        out: dict[str, list] = {}
+        for f, cs in frame_curves(reader, reader.calibration(), idx).items():
+            for name, P, _ in cs:
+                out.setdefault(name, []).append(surface_distance("sphere_on_plane", G.transform_points(gt[f], P))[0])
+        return {k: np.concatenate(v) for k, v in out.items()}
+
+    far = errors()
+    assert set(far) == {"vertical", "horizontal", "vertical_2", "horizontal_2"}
+    orig = pipeline.default_laser_params
+    monkeypatch.setattr(pipeline, "default_laser_params", lambda s: replace(orig(s), triangulate_from="left"))
+    near = errors()
+    for name in ("vertical", "horizontal", "horizontal_2"):
+        assert np.array_equal(far[name], near[name])
+    print("vertical_2 curve points, median error left / farther camera:", np.median(near["vertical_2"]), np.median(far["vertical_2"]))
+    assert np.median(far["vertical_2"]) < 0.8 * np.median(near["vertical_2"])
+
+
 def test_true_poses_are_left_alone(orbit, truth):
     idx, T, times = truth
     poses, rep = laser_curve_adjustment(orbit, None, rows(idx, T, times))

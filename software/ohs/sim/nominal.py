@@ -18,7 +18,9 @@ The 4-laser variant (``lasers=4``; ``lasers = 4`` in the CAD) adds ``"vertical_2
 the vertical-line laser on the left of the cameras, and ``"horizontal_2"``, a horizontal-line laser
 58 mm right of and 56 mm below the camera centre (beside the grip's yoke), tilted up. All four
 sheets cross the cameras' centre line 254 mm ahead of the left camera. The module positions are in
-one table, :data:`LASER_MODULES`.
+one table, :data:`LASER_MODULES`, their aims in another, :data:`LASER_LAYOUTS`: the layouts as
+built (``"2"``, ``"4"``) and the aims compared for the second pair (``layout=`` of
+:func:`nominal_calibration`; ``lasers=4`` is the layout as built).
 
 Choices made where the contract is open (documented for the integrator):
 
@@ -50,6 +52,8 @@ __all__ = [
     "NOMINAL_TIME_OFFSET",
     "LASER_MODULES",
     "LASER_SETS",
+    "LASER_LAYOUTS",
+    "layout_planes",
     "nominal_calibration",
     "nominal_emitters",
     "nominal_imu_position",
@@ -96,6 +100,31 @@ LASER_SETS: dict[int, tuple[str, ...]] = {
     4: ("vertical", "horizontal", "vertical_2", "horizontal_2"),
 }
 
+#: Where each laser aims, per layout: ``{layout: {laser: aim}}``, the modules at
+#: :data:`LASER_MODULES`. An aim is a number ``D``: the sheet crosses the cameras' centre line
+#: ``D`` mm ahead of the faceplate (``math.inf``: straight ahead, parallel to the optical axis), or
+#: ``("deg", a)``: turned ``a`` degrees toward the centre line (negative: away from it).
+#: ``"2"`` and ``"4"`` are the housing as built (``lasers = 2`` / ``4``: every sheet crosses at the
+#: working distance, 250 mm); the others are the aims compared for the second pair (``lasers=4``
+#: stays the layout as built until one is chosen).
+LASER_LAYOUTS: dict[str, dict[str, float | tuple[str, float]]] = {
+    "2": {"vertical": _WORK_DIST, "horizontal": _WORK_DIST},
+    "4": {"vertical": _WORK_DIST, "horizontal": _WORK_DIST, "vertical_2": _WORK_DIST, "horizontal_2": _WORK_DIST},
+    # the second pair straight ahead
+    "4-straight": {"vertical": _WORK_DIST, "horizontal": _WORK_DIST, "vertical_2": math.inf, "horizontal_2": math.inf},
+    # the second pair crossing the centre line far out
+    "4-cross600": {"vertical": _WORK_DIST, "horizontal": _WORK_DIST, "vertical_2": 600.0, "horizontal_2": 600.0},
+    # the second pair crossing the centre line a little farther out: its lines still near the image
+    # centre at 250 mm, each family's sheets meeting at about 290-295 mm
+    "4-cross350": {"vertical": _WORK_DIST, "horizontal": _WORK_DIST, "vertical_2": 350.0, "horizontal_2": 350.0},
+    # the second pair crossing the centre line near, so that each family's sheets meet at about 195-200 mm
+    "4-cross150": {"vertical": _WORK_DIST, "horizontal": _WORK_DIST, "vertical_2": 150.0, "horizontal_2": 150.0},
+    # the second pair turned slightly away from the centre line, so that each family's sheets meet
+    # beyond the working range (about 590 and 640 mm) while the left line stays inside the right
+    # image at 150 mm (2 deg: 26 px from its edge) and the low line inside the images (5 deg)
+    "4-apart": {"vertical": _WORK_DIST, "horizontal": _WORK_DIST, "vertical_2": ("deg", -2.0), "horizontal_2": ("deg", -5.0)},
+}
+
 
 def _laser_names(lasers: int) -> tuple[str, ...]:
     if int(lasers) not in LASER_SETS:
@@ -103,25 +132,42 @@ def _laser_names(lasers: int) -> tuple[str, ...]:
     return LASER_SETS[int(lasers)]
 
 
-def _laser_layout(baseline: float, lasers: int = 2) -> dict[str, dict]:
+def _layout_aims(lasers: int = 2, layout: str | dict | None = None) -> dict[str, float | tuple[str, float]]:
+    """The aims of a layout (a name of :data:`LASER_LAYOUTS` or such a dict); ``None``: as built for ``lasers``."""
+    if layout is None:
+        return LASER_LAYOUTS[str(len(_laser_names(lasers)))]
+    if isinstance(layout, str):
+        if layout not in LASER_LAYOUTS:
+            raise ValueError(f"unknown laser layout {layout!r}; layouts: {sorted(LASER_LAYOUTS)}")
+        return LASER_LAYOUTS[layout]
+    return dict(layout)
+
+
+def _aim_angle(offset: float, aim: float | tuple[str, float]) -> float:
+    """Aim angle (rad, positive toward the centre line) of a laser ``offset`` mm off the centre line."""
+    if isinstance(aim, tuple):
+        return math.radians(float(aim[1])) * (1.0 if offset >= 0 else -1.0)
+    return math.atan(offset / (aim + _FP_T + _HEAD_D / 2.0))  # crossing reach from the module centres
+
+
+def _laser_layout(baseline: float, lasers: int = 2, layout: str | dict | None = None) -> dict[str, dict]:
     """Origins, beam directions, fan axes and planes of the line lasers in frame C."""
     half = 0.5 * float(baseline)
-    reach = _WORK_DIST + _FP_T + _HEAD_D / 2.0  # 272 mm from the laser pivots to the crossing
     front = _LASER_LEN / 2.0  # emission point ahead of the module centre
     out = {}
-    for name in _laser_names(lasers):
+    for name, aim in _layout_aims(lasers, layout).items():
         x, z = LASER_MODULES[name]
         if name.startswith("vertical"):
             # rotated about the up axis, aims back toward the centre line; the fan spreads along
             # the camera y axis -> vertical line
-            a = math.atan(x / reach)
+            a = _aim_angle(x, aim)
             o = np.array([half + x - front * math.sin(a), 0.0 - z, -_HEAD_D / 2 + front * math.cos(a)])
             b = np.array([-math.sin(a), 0.0, math.cos(a)])
             f = np.array([0.0, 1.0, 0.0])
         else:
             # tilted about the x axis, aims toward the centre line (down from above, up from below);
             # the fan spreads along the camera x axis -> horizontal line
-            a = math.atan(z / reach)
+            a = _aim_angle(z, aim)
             o = np.array([half + x, -(z - front * math.sin(a)), -_HEAD_D / 2 + front * math.cos(a)])
             b = np.array([0.0, math.sin(a), math.cos(a)])
             f = np.array([1.0, 0.0, 0.0])
@@ -132,6 +178,11 @@ def _laser_layout(baseline: float, lasers: int = 2) -> dict[str, dict]:
             n, d = -n, -d
         out[name] = {"origin": o, "direction": b, "fan_axis": f, "normal": n, "d": d}
     return out
+
+
+def layout_planes(layout: str | dict, baseline: float = 60.0) -> dict[str, tuple[np.ndarray, float]]:
+    """``{laser: (normal, d)}`` of a layout's sheets in frame C."""
+    return {k: (g["normal"], g["d"]) for k, g in _laser_layout(baseline, 2, layout).items()}
 
 
 def nominal_imu_position(baseline: float = 60.0) -> np.ndarray:
@@ -155,13 +206,15 @@ def nominal_calibration(
     baseline: float = 60.0,
     realistic: bool = False,
     lasers: int = 2,
+    layout: str | None = None,
 ) -> ScannerCalibration:
     """True scanner calibration for simulation (stereo + laser planes + IMU).
 
     ``fx=None`` scales the nominal 720 px (at 1280 px width) with ``image_size``. With
     ``realistic=False`` the cameras are ideal, parallel and undistorted, so raw == rectified.
     ``lasers`` is 2 (``"vertical"``, ``"horizontal"``) or 4 (also ``"vertical_2"`` and
-    ``"horizontal_2"``, see :data:`LASER_MODULES`).
+    ``"horizontal_2"``, see :data:`LASER_MODULES`), aimed as built; ``layout`` (a name of
+    :data:`LASER_LAYOUTS`) picks other aims and then decides the lasers.
     """
     w, h = int(image_size[0]), int(image_size[1])
     s = w / NOMINAL_WIDTH
@@ -186,14 +239,14 @@ def nominal_calibration(
     stereo = StereoCalibration.build((w, h), K1, D1, K2, D2, R, T, rms=0.0)
     planes = {
         name: LaserPlane(name, g["normal"], g["d"], rms=0.0, n_points=0)
-        for name, g in _laser_layout(baseline, lasers).items()
+        for name, g in _laser_layout(baseline, lasers, layout).items()
     }
     calib = ScannerCalibration(stereo=stereo, lasers=planes, imu=nominal_imu_calibration())
     log.debug("nominal calibration %dx%d fx=%.2f baseline=%.1f realistic=%s", w, h, f, baseline, realistic)
     return calib
 
 
-def nominal_emitters(fan_deg: float = 60.0, baseline: float = 60.0, lasers: int = 2) -> dict:
+def nominal_emitters(fan_deg: float = 60.0, baseline: float = 60.0, lasers: int = 2, layout: str | None = None) -> dict:
     """Emitter layout in frame C, consistent with :func:`nominal_calibration` laser planes.
 
     Returns ``{"dots": {...}, "vertical": {...}, "horizontal": {...}}``:
@@ -216,6 +269,6 @@ def nominal_emitters(fan_deg: float = 60.0, baseline: float = 60.0, lasers: int 
             "n_dots": _N_DOTS,
         }
     }
-    for name, g in _laser_layout(baseline, lasers).items():
+    for name, g in _laser_layout(baseline, lasers, layout).items():
         out[name] = {"type": "line_laser", "fan_deg": float(fan_deg), **{k: np.array(v) if isinstance(v, np.ndarray) else v for k, v in g.items()}}
     return out

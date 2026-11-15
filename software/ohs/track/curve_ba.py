@@ -90,7 +90,8 @@ def frame_curves(reader: Any, calib: Any, frames: Sequence[int], params: CurvePa
     triangulated on the calibrated planes and checked against the right image (frame C, mm)."""
     from ohs.app.pipeline import default_laser_params, effective_scale  # noqa: PLC0415
     from ohs.vision.laser import (  # noqa: PLC0415
-        assign_planes, extract_laser_lines, is_line_name, line_family, lines_per_family, stereo_check, triangulate_plane)
+        assign_planes, extract_laser_lines, is_line_name, line_family, lines_per_family, measuring_camera, stereo_check,
+        triangulate_plane, triangulate_right)
     from ohs.vision.rectify import Rectifier  # noqa: PLC0415
 
     rect = Rectifier(calib.stereo, 1.0)
@@ -132,6 +133,14 @@ def frame_curves(reader: Any, calib: Any, frames: Sequence[int], params: CurvePa
                 ok = np.isfinite(P[:, 2]) & (P[:, 2] >= lp.min_depth_mm) & (P[:, 2] <= lp.max_depth_mm)
                 if lr is not None and ok.any():
                     ok &= stereo_check(P, lr.get(name), K, B, lp.stereo_tol_px)
+            if lr is not None and lp.triangulate_from == "farther" and measuring_camera(plane, B) == "right" and ok.any():
+                # measured from the right camera, the farther one (ohs.vision.laser.measuring_camera)
+                i = np.flatnonzero(ok)
+                Q, good_r = triangulate_right(uv[i], plane, K, B, lr.get(name), lr.segments(name), lp.stereo_tol_px)
+                good_r &= (Q[:, 2] >= lp.min_depth_mm) & (Q[:, 2] <= lp.max_depth_mm)
+                P = P.copy()
+                P[i] = Q
+                ok[i] = good_r
             n = len(P)
             inner = np.zeros(n, dtype=bool)  # both neighbours on the same polyline and valid
             if len(seg) == n:

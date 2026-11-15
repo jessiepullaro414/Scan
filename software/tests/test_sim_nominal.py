@@ -82,6 +82,34 @@ def test_four_laser_layout_adds_the_mirrored_pair():
         nominal_calibration(lasers=3)
 
 
+def test_layouts_of_the_second_pair():
+    """The aims compared for the second pair: "4" is lasers=4 exactly, the others change only it,
+    and the renderer draws the sheets of the layout a calibration has."""
+    from ohs.sim.nominal import LASER_LAYOUTS
+    from ohs.sim.render import _nominal_layout
+
+    four = nominal_calibration(lasers=4)
+    assert {"2", "4", "4-straight", "4-cross600"} <= set(LASER_LAYOUTS)
+    for name, pl in nominal_calibration(layout="4").lasers.items():
+        assert np.array_equal(pl.normal, four.lasers[name].normal) and pl.d == four.lasers[name].d
+    for layout in LASER_LAYOUTS:
+        cal = nominal_calibration(layout=layout)
+        em = nominal_emitters(layout=layout)
+        assert set(cal.lasers) == set(LASER_LAYOUTS[layout])
+        for name in ("vertical", "horizontal"):
+            assert np.array_equal(cal.lasers[name].normal, four.lasers[name].normal)
+        for name, pl in cal.lasers.items():
+            assert abs(pl.distance(em[name]["origin"][None])[0]) < 1e-9 and pl.d <= 0
+        assert _nominal_layout(cal) == layout
+    straight = nominal_emitters(layout="4-straight")
+    assert np.allclose(straight["vertical_2"]["direction"], [0, 0, 1]) and np.allclose(straight["horizontal_2"]["direction"], [0, 0, 1])
+    # crossing the centre line 600 mm ahead of the faceplate (622 mm from the module centres)
+    v2 = nominal_calibration(layout="4-cross600").lasers["vertical_2"]
+    assert (-v2.d - v2.normal[0] * 30.0) / v2.normal[2] == pytest.approx(604.0, abs=0.05)
+    with pytest.raises(ValueError):
+        nominal_calibration(layout="4-nowhere")
+
+
 def test_ideal_calibration_is_parallel_and_scales():
     cal = nominal_calibration()
     st = cal.stereo

@@ -87,6 +87,19 @@ Accuracy on synthetic images (see ``tests/test_vision_laser.py``): RMS centre er
 saturation, with under 0.2% false points. Lines tilted 0-30 deg, curved, gapped and crossing were
 tested.
 
+**Which camera measures a plane** (``triangulate_from="farther"``, the default): the one whose
+centre is farther from the plane (:func:`measuring_camera`; a tie goes to the left camera), since
+the depth error falls with that distance. The two standard lasers, right of and above the cameras,
+are measured from the left camera. The left laser of the 4-laser variant (``vertical_2``, 56 mm
+beside the left camera and 116 mm beside the right one) is measured from the right camera: its
+points are found and labelled in the left image as always, and :func:`triangulate_right` then
+takes the right-image ridge point the stereo check matched, moved along its line to the same
+row, and intersects its ray with the plane; the new point must project back onto the left point
+(within ``stereo_tol_px``) and pass the depth check again. Points stay in frame C. That about
+halves its error (at the true poses of a simulated scan: median 0.061 against 0.122 mm at
+640x400, 0.029 against 0.061 mm at 1280x800). Without a right image every plane is measured from
+the left camera.
+
 Triangulation intersects the rays of the ideal pinhole ``K`` with the calibrated laser plane.
 :func:`stereo_check` validates each 3D point by predicting its position in the right rectified
 image (same row, ``u_r = u_l - f*B/z``) and requiring a right-image ridge point of the same line
@@ -116,6 +129,8 @@ __all__ = [
     "extract_laser_lines",
     "stereo_residual",
     "assign_planes",
+    "measuring_camera",
+    "triangulate_right",
     "triangulate_plane",
     "stereo_check",
     "depth_check",
@@ -184,6 +199,9 @@ class LaserParams:
     lines_per_family: int = 1  # lines of one family that can cross an image row/column (2 with four lasers)
     family_sep: float = 10.0  # px; where two lines of one family come closer than this, both are dropped
     family_agree_mm: float = 1.0  # laser_points: a point several planes of its family take must agree this well
+    # which camera measures a plane: "farther" = the camera whose centre is farther from it (a tie:
+    # the left one; with the two standard lasers that is the left camera for both), "left" = always
+    triangulate_from: str = "farther"
     # triangulation and validation (used by laser_points)
     min_depth_mm: float = 100.0
     max_depth_mm: float = 600.0
@@ -833,6 +851,99 @@ def triangulate_plane(uv: np.ndarray, K: np.ndarray, plane: LaserPlane) -> np.nd
     return ray_plane_intersect(pixels_to_rays(uv, K), plane.normal, plane.d)
 
 
+def measuring_camera(plane: LaserPlane, baseline_mm: float) -> str:
+    """``"left"`` or ``"right"``: the rectified camera whose centre is farther from ``plane`` (the
+    longer triangulation baseline, so the smaller depth error); a tie goes to the left camera.
+
+    The left camera is at the origin of frame C, the right one at ``(baseline, 0, 0)``. The
+    standard lasers (right of and above the cameras) are both measured from the left camera."""
+    n = np.asarray(plane.normal, dtype=np.float64)
+    s = float(np.linalg.norm(n))
+    d_left = abs(float(plane.d)) / s
+    d_right = abs(float(n[0]) * float(baseline_mm) + float(plane.d)) / s
+    return "right" if d_right > d_left else "left"
+
+
+def triangulate_right(uv_left: np.ndarray, plane: LaserPlane, K: np.ndarray, baseline_mm: float,
+                      right_uv: np.ndarray, right_seg: np.ndarray | None, tol_px: float = 1.5) -> tuple[np.ndarray, np.ndarray]:
+    """Points of ``plane`` measured from the right rectified camera: ``(P (N,3) in frame C, ok (N,))``.
+
+    ``uv_left`` (N,2) are left-image points already known to lie on ``plane``; ``right_uv`` /
+    ``right_seg`` the right image's ridge points of the same family and their segments. For each
+    left point the stereo correspondence is the right ridge point nearest where its left
+    triangulation predicts it (as :func:`stereo_check` finds it), moved along its segment to the
+    left point's row (rectified rows are epipolar lines). That right pixel's ray, from the right
+    camera centre ``(baseline, 0, 0)``, is intersected with the plane. A point passes when the
+    correspondence exists within ``tol_px``, and its new 3D point projects into the left image
+    within ``tol_px`` of the left point (the stereo check the other way round)."""
+    uv = np.asarray(uv_left, dtype=np.float64).reshape(-1, 2)
+    n_pts = len(uv)
+    P = np.full((n_pts, 3), np.nan)
+    ok = np.zeros(n_pts, bool)
+    R = np.asarray(right_uv, dtype=np.float64).reshape(-1, 2)
+    if n_pts == 0 or len(R) == 0:
+        return P, ok
+    seg = np.asarray(right_seg) if right_seg is not None and len(right_seg) == len(R) else np.zeros(len(R), np.int64)
+    B = float(baseline_mm)
+    Pl = triangulate_plane(uv, K, plane)
+    good = np.all(np.isfinite(Pl), axis=1) & (Pl[:, 2] > 0)
+    zs = np.where(good, Pl[:, 2], 1.0)
+    x, y = Pl[:, 0] / zs, Pl[:, 1] / zs
+    u_pred = K[0, 0] * x + K[0, 1] * y + K[0, 2] - K[0, 0] * B / zs
+    v = uv[:, 1]
+    d, j = cKDTree(R).query(np.stack([np.where(good, u_pred, -1e9), v], axis=1), k=1, distance_upper_bound=float(tol_px))
+    hit = np.isfinite(d)
+    j = np.where(hit, j, 0)
+    # the right line at the left point's row: the matched ridge point, or the chord to its
+    # neighbour on the other side of that row
+    uj, vj = R[j, 0], R[j, 1]
+    u_r = np.where(vj == v, uj, np.nan)
+    for step in (-1, 1):
+        k = np.clip(j + step, 0, len(R) - 1)
+        same = (k != j) & (seg[k] == seg[j])
+        dv = R[k, 1] - vj
+        across = same & ((vj - v) * (R[k, 1] - v) < 0) & (np.abs(dv) > 1e-9) & (np.abs(dv) <= 4.0)  # not across a gap
+        with np.errstate(divide="ignore", invalid="ignore"):
+            ui = uj + (v - vj) * (R[k, 0] - uj) / dv
+        u_r = np.where(np.isnan(u_r) & across, ui, u_r)
+    hit &= np.isfinite(u_r)
+    if not hit.any():
+        return P, ok
+    i = np.flatnonzero(hit)
+    rays = pixels_to_rays(np.stack([u_r[i], v[i]], axis=1), K)
+    nrm = np.asarray(plane.normal, dtype=np.float64)
+    c_r = np.array([B, 0.0, 0.0])
+    den = rays @ nrm
+    with np.errstate(divide="ignore", invalid="ignore"):
+        s = -(nrm @ c_r + float(plane.d)) / den
+    Q = c_r + s[:, None] * rays
+    fine = np.isfinite(s) & (s > 0) & (np.abs(den) > 1e-12) & (Q[:, 2] > 0)
+    qz = np.where(fine, Q[:, 2], 1.0)
+    u_back = K[0, 0] * Q[:, 0] / qz + K[0, 1] * Q[:, 1] / qz + K[0, 2]
+    fine &= np.abs(u_back - uv[i, 0]) <= float(tol_px)
+    P[i[fine]] = Q[fine]
+    ok[i[fine]] = True
+    return P, ok
+
+
+def _remeasure(uv: np.ndarray, P: np.ndarray, plane: LaserPlane, K: np.ndarray, baseline: float, p: "LaserParams",
+               right_uv: np.ndarray | None, right_seg: np.ndarray | None, depth: np.ndarray | None,
+               depth_sigma: np.ndarray | None) -> np.ndarray:
+    """The kept points ``P`` of ``plane`` (left points ``uv``), measured from the camera that
+    measures it (:func:`measuring_camera`): ``P`` itself for the left camera; for the right one
+    :func:`triangulate_right`, then the depth range and, with a dense depth map, the depth check
+    again on the new points. Points that fail are left out."""
+    if p.triangulate_from != "farther" or right_uv is None or len(P) == 0 or measuring_camera(plane, baseline) == "left":
+        return P
+    Q, ok = triangulate_right(uv, plane, K, baseline, right_uv, right_seg, p.stereo_tol_px)
+    z = np.where(ok, Q[:, 2], np.nan)
+    ok &= (z >= p.min_depth_mm) & (z <= p.max_depth_mm)
+    if depth is not None and ok.any():
+        i = np.flatnonzero(ok)
+        ok[i] = depth_check(Q[i], depth, K, depth_sigma, p.depth_check_k, p.depth_check_min_mm)
+    return Q[ok]
+
+
 def stereo_check(points_c: np.ndarray, right_uv: np.ndarray, K: np.ndarray, baseline_mm: float,
                  tol_px: float = 1.5) -> np.ndarray:
     """Boolean mask of 3D points whose predicted right-image position lies on a right laser ridge.
@@ -964,7 +1075,8 @@ def laser_points(
         if len(names) > 1:
             multi.update(_assign_planes(lines_left.get(fam), [planes[n] for n in names], names, K, baseline, p,
                                         lines_right.get(fam) if do_check else None,
-                                        depth if use_depth else None, depth_sigma, rejected))
+                                        depth if use_depth else None, depth_sigma, rejected,
+                                        lines_right.segments(fam) if do_check else None))
     out: dict[str, np.ndarray] = {}
     for name, plane in planes.items():
         if not is_line_name(name):
@@ -984,18 +1096,29 @@ def laser_points(
             keep = np.flatnonzero(ok)
             ok[keep[~agree]] = False
         out[name] = P[ok]
+        if do_check and p.triangulate_from == "farther" and measuring_camera(plane, baseline) == "right":
+            out[name] = _remeasure(lines_left.get(name)[ok], P[ok], plane, K, baseline, p, lines_right.get(name),
+                                   lines_right.segments(name), depth if use_depth else None, depth_sigma)
     return out
 
 
 def _assign_planes(uv: np.ndarray, planes: list[LaserPlane], names: list[str], K: np.ndarray, baseline: float,
                    p: LaserParams, right_uv: np.ndarray | None, depth: np.ndarray | None,
-                   depth_sigma: np.ndarray | None, rejected: dict[str, int] | None) -> dict[str, np.ndarray]:
-    """The points of one family split between its planes (see :func:`laser_points`): ``{name: (N,3)}``."""
+                   depth_sigma: np.ndarray | None, rejected: dict[str, int] | None,
+                   right_seg: np.ndarray | None = None) -> dict[str, np.ndarray]:
+    """The points of one family split between its planes (see :func:`laser_points`): ``{name: (N,3)}``.
+
+    The plane of each point is decided in the left image; a plane the right camera measures
+    then gets its points from there (:func:`_remeasure`)."""
     P, label, lost, blame = _plane_labels(uv, planes, K, baseline, p, right_uv, depth, depth_sigma)
     if rejected is not None and depth is not None:
         for k, name in enumerate(names):
             rejected[name] = rejected.get(name, 0) + int((lost & (blame == k)).sum())
-    return {name: P[k][label == k] for k, name in enumerate(names)}
+    out = {}
+    for k, name in enumerate(names):
+        mine = label == k
+        out[name] = _remeasure(uv[mine], P[k][mine], planes[k], K, baseline, p, right_uv, right_seg, depth, depth_sigma)
+    return out
 
 
 def assign_planes(uv: np.ndarray, planes: list[LaserPlane], K: np.ndarray, baseline: float,
