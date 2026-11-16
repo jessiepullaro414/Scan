@@ -1081,6 +1081,14 @@ bench medians before and after in the commit message.
   If numba is left out of the exe, or fails there, the Python loop runs and only four-laser
   frames are slower. To check when the exe is built: that PyInstaller picks up numba and
   llvmlite, the size of the installer with and without them, and the first start.
+- **The point assignment, 2026-11-16 (same output):** `laser_points` with four lasers took 6.0-6.3
+  ms a frame at 1280x800 and about 5 ms at 640x400, against 1.1 ms with two lasers. Two things
+  done: the median of the dense depth's samples around each point is computed without numpy's
+  per-column loop (`_nanmedian_rows`, the same numbers bit for bit on 1,500 random cases), and
+  the right image's search tree is built once per family, not once per plane. Old and new taking
+  turns: 6.0-6.3 to 4.9-5.8 ms at 1280x800, 4.9-5.0 to 4.0 ms at 640x400; the points of the
+  recorded four-laser scans are identical. What is left is many small numpy steps over two
+  planes; the work runs beside the tracker, so it was left there.
 - **Two copies of one loop:** a change to `_link_rows` must be made in `link_rows` too; the
   test fails when they drift apart, but only where numba is installed.
 - **Measured on the RTX laptop the same day** (numba 0.68.1 installed there with the user's OK;
@@ -1561,7 +1569,7 @@ Every task here: the type check, `npm test`, and for bundle tasks the chunk size
   Python's lock, so what is left is less Python work in the extraction or work outside the
   lock.
 
-### [ ] F9. Preview on the RTX laptop's bench reads slower than in tuning round 2
+### [x] F9. Preview on the RTX laptop's bench reads slower than in tuning round 2 ✔
 - **Seen 2026-11-15**, one run of `ohs bench --device gpu` at d4af63a with the laptop's usual
   background programs running: preview 29.5 ms mean / 27.2 median a frame (33.9 frames a second)
   against 25.5 ms mean (39.2 a second) in round 2 on 2b1eae0. Full quality is faster: 43.0 ms
@@ -1588,9 +1596,12 @@ Every task here: the type check, `npm test`, and for bundle tasks the chunk size
   18.09-18.14 ms at 1280x800), the matcher alone is 0.2-0.7 ms faster in the new code, and the
   pipeline's depth stage changes places between the pairs (new 11.15 / 10.23 ms, old 10.46 /
   11.19 ms at 640x400). The 2 ms of the bench were the bench's run-to-run spread or the
-  laptop's state that day. Left open only as a note: a bench on the laptop the same evening was
-  20-100 % slower in nearly every stage, rectify included (whose code has not changed); a bench
-  of both commits taking turns was asked for.
+  laptop's state that day. A bench on the laptop the same evening was 20-100 % slower in nearly
+  every stage, rectify included (whose code has not changed); d4af63a and 25fb9d4 benched
+  taking turns that night were equally slow (full quality 16.97 against 16.98-16.99 frames a
+  second, preview 25.7-26.8 against 25.2-26.4), so it was the laptop, power mode unchanged
+  ("Best performance" on AC). The cause on the laptop is not found. **Closed** as far as the
+  code goes.
 - **When repeating old against new:** `python -m ohs.app.cli` puts the current folder first on
   the module path, so from `software/` an "old" run loads the checkout's engine whatever
   `PYTHONPATH` says. Run such comparisons from another folder and print `ohs.__file__` first.

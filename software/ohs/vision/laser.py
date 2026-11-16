@@ -1045,9 +1045,10 @@ def stereo_check(points_c: np.ndarray, right_uv: np.ndarray, K: np.ndarray, base
 
 
 def stereo_residual(points_c: np.ndarray, right_uv: np.ndarray, K: np.ndarray, baseline_mm: float,
-                    tol_px: float = 1.5) -> np.ndarray:
+                    tol_px: float = 1.5, tree: Any = None) -> np.ndarray:
     """Distance (px) from each point's predicted right-image position to the nearest right ridge
-    point, ``inf`` beyond ``tol_px`` (or for invalid points): what :func:`stereo_check` tests."""
+    point, ``inf`` beyond ``tol_px`` (or for invalid points): what :func:`stereo_check` tests.
+    ``tree``: a ``cKDTree`` of ``right_uv`` already built (a caller testing several planes)."""
     P = np.asarray(points_c, dtype=np.float64).reshape(-1, 3)
     out = np.full(len(P), np.inf)
     right_uv = np.asarray(right_uv, dtype=np.float64).reshape(-1, 2)
@@ -1061,7 +1062,8 @@ def stereo_residual(points_c: np.ndarray, right_uv: np.ndarray, K: np.ndarray, b
     x, y = Q[:, 0] / Q[:, 2], Q[:, 1] / Q[:, 2]
     v = K[1, 1] * y + cy
     u_r = f * x + s * y + cx - f * float(baseline_mm) / Q[:, 2]
-    d, _ = cKDTree(right_uv).query(np.stack([u_r, v], axis=1), k=1, distance_upper_bound=float(tol_px))
+    d, _ = (tree if tree is not None else cKDTree(right_uv)).query(np.stack([u_r, v], axis=1), k=1,
+                                                                   distance_upper_bound=float(tol_px))
     out[np.nonzero(finite)[0]] = d
     return out
 
@@ -1223,6 +1225,19 @@ def assign_planes(uv: np.ndarray, planes: list[LaserPlane], K: np.ndarray, basel
     return P, label
 
 
+def _nanmedian_rows(x: np.ndarray) -> np.ndarray:
+    """``np.nanmedian(x, axis=0)`` for a few rows and columns that each hold a number: the same
+    values (the two middle numbers of a column averaged as ``(a + b) / 2``, as numpy does), without
+    numpy's per-column loop for large arrays."""
+    x = np.asarray(x, dtype=np.float64)
+    k = np.count_nonzero(~np.isnan(x), axis=0)
+    srt = np.sort(x, axis=0)  # NaN sort last
+    cols = np.arange(x.shape[1])
+    lo = srt[np.maximum(k - 1, 0) // 2, cols]
+    hi = srt[k // 2 - (k == 0), cols]
+    return np.where(k > 0, (lo + hi) / 2.0, np.nan)
+
+
 def _plane_labels(uv: np.ndarray, planes: list[LaserPlane], K: np.ndarray, baseline: float, p: LaserParams,
                   right_uv: np.ndarray | None, depth: np.ndarray | None, depth_sigma: np.ndarray | None):
     """``(P, label, lost, blame)``: :func:`assign_planes`, and the points the depth check dropped on
@@ -1234,8 +1249,10 @@ def _plane_labels(uv: np.ndarray, planes: list[LaserPlane], K: np.ndarray, basel
     in_range = ok.copy()
     resid = np.zeros((m, n))
     if right_uv is not None:
+        ruv = np.asarray(right_uv, dtype=np.float64).reshape(-1, 2)
+        tree = cKDTree(ruv) if len(ruv) else None  # one tree for every plane of the family
         for k in range(m):
-            resid[k] = stereo_residual(P[k], right_uv, K, baseline, p.stereo_tol_px) if ok[k].any() else np.inf
+            resid[k] = stereo_residual(P[k], ruv, K, baseline, p.stereo_tol_px, tree) if ok[k].any() else np.inf
         ok &= np.isfinite(resid)
     passed = ok.copy()
     dz = np.zeros((m, n))
@@ -1277,8 +1294,8 @@ def _plane_labels(uv: np.ndarray, planes: list[LaserPlane], K: np.ndarray, basel
         seen = np.isfinite(samples).any(axis=0)
         here = np.full(n, np.nan)
         s_here = np.full(n, np.nan)
-        here[seen] = np.nanmedian(samples[:, seen], axis=0)
-        s_here[seen] = np.nanmedian(sig[:, seen], axis=0)
+        here[seen] = _nanmedian_rows(samples[:, seen])
+        s_here[seen] = _nanmedian_rows(sig[:, seen])
         tol = np.maximum(float(p.depth_check_min_mm), float(p.depth_check_k) * s_here)
         along_rows = all(is_line_name(pl.name) and line_family(pl.name) == "horizontal" for pl in planes)
         possible = (in_range if along_rows else ok) & (seen & passed.any(axis=0))[None, :]

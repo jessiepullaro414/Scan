@@ -153,3 +153,39 @@ def test_rendered_four_laser_frames_same_as_before(layout, monkeypatch):
                     for f in FIELDS:
                         assert same(getattr(new, f), getattr(old, f)), (eye, scale, f)
     assert n > 4000
+
+
+# --------------------------------------------------------------------------- the four-laser point assignment
+def test_nanmedian_rows_same_as_numpy():
+    """``_nanmedian_rows`` (the dense depth's samples around each laser point) gives numpy's
+    ``nanmedian(axis=0)`` bit for bit: ties, missing samples, one row, many columns."""
+    import warnings
+
+    rng = np.random.default_rng(5)
+    n_cols = 0
+    for t in range(1500):
+        r, n = int(rng.integers(1, 9)), int(rng.integers(1, 900))
+        x = rng.normal(300.0, 50.0, (r, n))
+        if t % 3 == 0:
+            x = np.round(x)  # equal numbers
+        x[rng.random((r, n)) < rng.uniform(0.0, 0.8)] = np.nan
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")  # numpy warns about all-NaN columns
+            want = np.nanmedian(x, axis=0)
+        got = laser._nanmedian_rows(x)
+        assert got.dtype == want.dtype and got.tobytes() == want.tobytes(), t
+        n_cols += n
+    assert n_cols > 500_000
+
+
+def test_stereo_residual_with_a_tree_already_built():
+    from scipy.spatial import cKDTree
+
+    rng = np.random.default_rng(6)
+    K = np.array([[900.0, 0.0, 640.0], [0.0, 900.0, 400.0], [0.0, 0.0, 1.0]])
+    P = np.column_stack([rng.uniform(-80, 80, 500), rng.uniform(-50, 50, 500), rng.uniform(150, 450, 500)])
+    P[::17] = np.nan
+    right = rng.uniform([0, 0], [1280, 800], (20000, 2))
+    a = laser.stereo_residual(P, right, K, 60.0, 3.0)
+    b = laser.stereo_residual(P, right, K, 60.0, 3.0, cKDTree(right))
+    assert a.tobytes() == b.tobytes() and np.isfinite(a).sum() > 50
