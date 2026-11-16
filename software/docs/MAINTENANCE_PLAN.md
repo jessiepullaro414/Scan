@@ -1582,6 +1582,15 @@ Every task here: the type check, `npm test`, and for bundle tasks the chunk size
   Something between the two commits in `ohs/vision/depth_gpu.py`, `depth.py` or the rectifier at
   640x400 (a buffer made again every frame, a wait, the sigma output). To do: time the matcher's
   kernels at 640x400 on the laptop at both commits (OpenCL profiling events, as in F5).
+- **Looked into 2026-11-16 (`tools/depth_timing.py`, on the laptop, old 2b1eae0 against new
+  25fb9d4, taking turns, two runs each at 640x400 and at 1280x800):** the depth code is not the
+  cause. The matcher's kernels take the same device time to 0.02 ms (6.29-6.31 ms at 640x400,
+  18.09-18.14 ms at 1280x800), the matcher alone is 0.2-0.7 ms faster in the new code, and the
+  pipeline's depth stage changes places between the pairs (new 11.15 / 10.23 ms, old 10.46 /
+  11.19 ms at 640x400). The 2 ms of the bench were the bench's run-to-run spread or the
+  laptop's state that day. Left open only as a note: a bench on the laptop the same evening was
+  20-100 % slower in nearly every stage, rectify included (whose code has not changed); a bench
+  of both commits taking turns was asked for.
 - **When repeating old against new:** `python -m ohs.app.cli` puts the current folder first on
   the module path, so from `software/` an "old" run loads the checkout's engine whatever
   `PYTHONPATH` says. Run such comparisons from another folder and print `ohs.__file__` first.

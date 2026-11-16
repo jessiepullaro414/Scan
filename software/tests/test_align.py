@@ -15,8 +15,8 @@ import pytest
 pytest.importorskip("open3d")
 
 from ohs import geometry as G  # noqa: E402
-from ohs.align import (AlignParams, ScanInput, align_pair, merge_scans, pose_from_point_pairs, scan_cloud,  # noqa: E402
-                       scan_cloud_from_mesh)
+from ohs.align import (AlignParams, ScanInput, align_many, align_pair, merge_scans, pose_from_point_pairs,  # noqa: E402
+                       scan_cloud, scan_cloud_from_mesh)
 from ohs.app.pipeline import PipelineParams  # noqa: E402
 from ohs.app.process import ProcessParams, process_recording  # noqa: E402
 from ohs.io.recording import RecordingReader  # noqa: E402
@@ -208,6 +208,52 @@ def test_a_rough_pose_from_picked_points():
     assert res.accepted and res.start == "given" and mm < 0.1 and deg < 0.05, res.verdict
 
 
+def test_several_scans_are_placed_through_the_links_between_them():
+    """Three scans of the part in three worlds are placed in the first one's world through the
+    pair links (all three pairs align: the loop is solved in a pose graph); a fourth scan of
+    something else is reported as not placed; and a scan that does not align to the first one is
+    placed through the second. Picked points give a pair its start, given either way round."""
+    rng = np.random.default_rng(14)
+    Ts = [np.eye(4), _motion(70.0, (0.1, 0.2, 1.0), (40.0, -30.0, 10.0)), _motion(-120.0, (0.0, 0.3, 1.0), (-20.0, 50.0, 5.0))]
+    clouds = [scan_cloud(*_moved(*_part(np.random.default_rng(20 + k)), G.invert_se3(T))) for k, T in enumerate(Ts)]
+    res = align_many(clouds)
+    assert res.accepted and res.placed == [0, 1, 2] and res.unplaced == [], res.verdict
+    assert res.verdict.startswith("All 3 scans placed through 2 links")
+    assert np.array_equal(res.T[0], np.eye(4))
+    for k in (1, 2):
+        mm, deg = _error(res.T[k], Ts[k])
+        assert mm < 0.15 and deg < 0.1, (k, mm, deg)
+    assert {(r["i"], r["j"]) for r in res.pairs} == {(0, 1), (0, 2), (1, 2)}
+    assert sum(r["used"] == "chain" for r in res.pairs) == 2 and res.loops == 1 and res.graph
+    assert all(r["used"] == "loop" for r in res.pairs if r["used"] != "chain") and res.worst_link_mm < 0.2
+    d = res.as_dict()
+    assert d["accepted"] and len(d["T"]) == 3 and d["verdict"] == res.verdict
+    # a fourth scan of something else: three placed, one not, in words
+    Q, M = _part(np.random.default_rng(15), symmetric=True)
+    res = align_many(clouds + [scan_cloud(Q, M)])
+    assert not res.accepted and res.placed == [0, 1, 2] and res.unplaced == [3] and res.T[3] is None
+    assert res.verdict.startswith("Not all placed: scan 4 could not be aligned") and "Pick matching points" in res.verdict
+    # without guesses from the shape a pair aligns only from picked points: scans 1-2 and 2-3 have
+    # them (one given the other way round), 1-3 has none and is refused, scan 3 is placed through scan 2
+    lone = AlignParams(ransac_seeds=0)
+    spots = np.array([[0.0, 0.0, 40.0], [60.0, 0.0, 12.0], [47.0, 20.0, 22.0], [14.0, 30.0, 12.0]])
+
+    def seen(k):  # the spots in scan k's own world, picked a millimetre off
+        T = G.invert_se3(Ts[k])
+        return spots @ T[:3, :3].T + T[:3, 3] + rng.normal(0.0, 1.0, spots.shape)
+
+    res = align_many(clouds, lone, picked={(1, 0): (seen(0), seen(1)), (1, 2): (seen(2), seen(1))})
+    assert res.accepted, res.verdict
+    by = {(r["i"], r["j"]): r for r in res.pairs}
+    assert by[(0, 1)]["start"] == "given" and by[(1, 2)]["start"] == "given" and not by[(0, 2)]["accepted"]
+    assert by[(0, 1)]["used"] == by[(1, 2)]["used"] == "chain" and res.loops == 0 and not res.graph
+    for k in (1, 2):
+        mm, deg = _error(res.T[k], Ts[k])
+        assert mm < 0.15 and deg < 0.1, (k, mm, deg)
+    with pytest.raises(ValueError):
+        align_many(clouds[:1])
+
+
 def test_two_shapes_that_do_not_belong_together_are_refused():
     rng = np.random.default_rng(6)
     P, N = _part(rng)
@@ -334,6 +380,31 @@ def test_merge_can_leave_each_scans_table_out(bracket_scans, tmp_path):
         high = P @ n + d > 5.0  # clear of the margin above the table
         dist, _ = tree.query(P[high])
         assert np.percentile(dist, 80) < 1.5, np.percentile(dist, [50, 80, 95])
+
+
+@pytest.mark.slow
+def test_three_scans_round_the_bracket(bracket_scans, tmp_path):
+    """Front, side and back: the back scan is placed in the front scan's world whether or not it
+    aligns to the front scan directly, and all three merge into one model with more of the part."""
+    back = _scan(tmp_path, "bracket", 200.0, 2)
+    scans = [*bracket_scans, back]
+    clouds = [scan_cloud_from_mesh(sc["out"] / "mesh.ply") for sc in scans]
+    res = align_many(clouds)
+    print("three scans:", res.verdict, [(r["i"], r["j"], r["accepted"], r["used"]) for r in res.pairs])
+    assert res.accepted, res.verdict
+    for k in (1, 2):
+        T_true = G.invert_se3(scans[0]["world"]) @ scans[k]["world"]
+        P = clouds[k].part.fine.pts
+        off = np.linalg.norm(P @ (res.T[k][:3, :3] - T_true[:3, :3]).T + (res.T[k][:3, 3] - T_true[:3, 3]), axis=1)
+        print(f"scan {k + 1}: off by {np.median(off):.2f} mm (median), {off.max():.2f} mm (largest)")
+        assert np.median(off) < 2.5 and off.max() < 5.0
+    rep = merge_scans([ScanInput(sc["rec"], sc["out"] / "trajectory.csv", T) for sc, T in zip(scans, res.T)],
+                      tmp_path / "merged", ProcessParams(pipeline=PipelineParams(), export=("ply",)))
+    assert rep["frames"]["fused"] == 3 * N_FRAMES and len(rep["scans"]) == 3
+    n_part = [c.n_part for c in clouds]
+    n_m = scan_cloud_from_mesh(tmp_path / "merged" / "mesh.ply").n_part
+    print(f"part surface: scans {n_part}, merged {n_m}")
+    assert n_m > 1.03 * max(n_part) and n_m < 0.95 * sum(n_part)
 
 
 def test_merge_refuses_scans_of_different_calibrations(tmp_path):

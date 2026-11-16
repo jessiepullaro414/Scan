@@ -1715,7 +1715,21 @@ A first slice of M4 (`ohs/align/`, research plan 4.7): two scans of one part are
 
 **In the app** (tried by hand on the two tracked bracket scans at 1280x800, through the real server): the page aligned them from the shape (accepted: 80 % of the part within 1 mm, 0.23 mm RMS, 8 of 9 guesses agreeing), showed both meshes on each other in two colours, merged 120 frames with a progress count into a new scan of 561,465 vertices, and the project listed it as merged from the two. In demo mode: picking three point pairs on the two views, aligning from them, the not-accepted case with its prompt to pick points, and the confirmation before a merge at a pose that was not accepted. Not tried: real scans, a cancelled merge on the real server, small screens.
 
-**Limits:** two scans at a time; the same calibration and image size for both; a part's own flat face that is 30 % or more of a scan made without a table is taken for the support; no Poisson meshing in a merge; simulator only.
+**Several scans at once** (`ohs.align.align_many`, 2026-11-16): every pair is aligned; the first scan stays where it is and each other scan is placed through the chain of best links that reaches it (a maximum spanning tree by overlap); where the accepted links form a loop, all of them are solved together in a pose graph (Open3D's global optimisation, as in Straighten) and a link that does not fit is left out. Front, side and back of the bracket (scans at 20°, 110° and 200°, fused at true poses):
+
+| | 1280x800 | 640x400 |
+|---|---|---|
+| Front–back pair on its own | refused (too little in common) | accepted, 37 % overlap |
+| How the back scan is placed | through the side scan | through the side scan, the front–back link checks the loop |
+| Side scan: part points off (median / largest) | 0.51 / 0.53 mm | 1.13 / 1.19 mm |
+| Back scan: part points off | 0.80 / 0.90 mm | 1.69 / 2.17 mm |
+| Time for the three pairs | 6.4 s | 4.9 s |
+
+Merged from all three at 1280x800, the part has 22,556 vertices within 0.5 mm of the true surface, against 10,433 for the front scan alone and 19,121 for the best single scan (the side): opposite sides are now covered without a picked start, at the price of the back scan's placement error (0.8 mm) adding to the errors of the chain. In the tests the same three scans at 640x400 are placed to 1.2 and 1.8 mm on the GPU path and 0.4–0.6 mm on the CPU path, with the merged part 1.2 times the largest single scan's.
+
+One warning from building it: on a made-up box-shaped part without a table, seen from three sides so that each scan sees only some faces, one run accepted a pose 7.5 mm and 4.5° off, with two guesses agreeing (the faces can slide along each other, and Open3D's guesses differ from run to run). The real scans did not do this, but a part made of a few flat faces is where the alignment is weakest: look at the scans together before merging.
+
+**Limits:** the same calibration and image size for all scans; a part's own flat face that is 30 % or more of a scan made without a table is taken for the support; no Poisson meshing in a merge; simulator only.
 
 **Tests** (`tests/test_align.py`, 10 tests, both compute paths; `tests/test_app_pipeline.py` for the clip plane): a known motion of 100° found again to under 0.1 mm on a made-up part, with and without the table; a part turned over (each scan its own table); a rough pose given; a symmetric part, a bare table, two unrelated shapes and a single unconfirmed guess refused in words; a detail scan inside a larger one; the two simulated bracket scans aligned and merged, the merged part larger than either scan and in the place of both; scans of different calibrations and Poisson refused. An independent review of the first version found eleven defects; the ones that could accept a wrong pose are fixed (the fit check could not fail, one guess alone was accepted, a pose 2–10 mm away never counted as a rival). On the laptop's NVIDIA GPU the tests pass with the same figures to the last digit shown (three runs). Full suites with the slice in (847 tests, commit 493d127): GPU path 841 passed, 6 skipped; CPU path 791 passed, 56 skipped.
 
