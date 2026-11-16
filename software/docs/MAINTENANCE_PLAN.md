@@ -904,7 +904,7 @@ bench medians before and after in the commit message.
   `test_gpu_brick_search_finds_the_cpu_bricks`. Add first: N frames with and without the waits
   give an identical `download()`, and `close()` straight after `integrate` works.
 
-### [ ] E5. Keep the depth on the GPU between stages (Opus, L) ○
+### [x] E5. Keep the depth on the GPU between stages (Opus, L) ○ (closed: the rest is not worth it)
 - **Where:** `ohs/track/filter_gpu.py:217-232`, `ohs/track/recon_tsdf.py:571-584`,
   `ohs/track/volume_gpu.py:714-735`.
 - **Problem:** the depth is downloaded, then uploaded again by the filter (4 MB), by the
@@ -950,6 +950,15 @@ bench medians before and after in the commit message.
   new, and not built if the gain is inside the noise.
 - **Guard:** `test_gpu_matches_cpu_filter`, `test_gpu_and_numpy_agree`,
   `test_integration_values_and_weights`, the A2 snapshot.
+- **Looked at again 2026-11-16 and closed.** What is left costs the frame almost nothing: the
+  reconstruction's two uploads (depth and sigma) have been non-blocking since E4, so the host
+  does not wait for them; the tracking volume's depth upload is blocking, 1.40 ms for a
+  1280x800 map on the Radeon (0.41 ms at 640x400, measured alone), but the next thing the
+  tracker does is integrate and ray cast that very map, so making the copy non-blocking would
+  only move the wait to the ray cast's read (the host work in between, the frustum box, is a
+  small fraction of a millisecond). Reading the matcher's buffers in place of the uploads would
+  save device time only, and needs a second pair of buffers or events between three queues.
+  Not worth that risk for at most about 2 % of a frame on the Radeon and less on the laptop.
 
 ### [x] E6. One copy of the constants shared by CPU and GPU depth (Sonnet, S) ○
 - **Done 2026-11-10:** `GPU_MIN_SIZE`, `LK_EPS2` and `LK_MIN_TEXTURE` are defined once in
