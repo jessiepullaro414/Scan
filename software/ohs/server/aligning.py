@@ -31,6 +31,7 @@ __all__ = ["AlignManager"]
 log = logging.getLogger(__name__)
 
 MIN_PAIRS = 3
+MAX_SCANS = 8  # scans aligned or merged at once (every pair is aligned: 28 pairs at 8)
 
 
 class AlignManager:
@@ -101,9 +102,71 @@ class AlignManager:
             return self.st.jobs.submit("align", run, message="Queued: align two scans",
                                        meta={"project_id": pid, "target": target, "source": source})
 
+    # ------------------------------------------------------------------ several scans
+    def align_all(self, pid: str, scans: list[str], same_setup: bool, picked: list[dict] | None) -> Any:
+        """``POST /api/projects/{pid}/align_all``: every scan placed in the first one's world."""
+        from ohs.align import pose_from_point_pairs
+
+        if len(scans) < 2:
+            raise ApiError(422, "at least two scans are needed", "pick two or more scans")
+        if len(set(scans)) != len(scans):
+            raise ApiError(409, "a scan is in the list twice", "pick each scan once")
+        if len(scans) > MAX_SCANS:
+            raise ApiError(422, f"{len(scans)} scans are too many at once (at most {MAX_SCANS})",
+                           "merge some of them first, then align the merged scan with the others")
+        with self.st._lock:
+            items = [self._scan(pid, sid, "first" if k == 0 else f"scan {k + 1}:") for k, sid in enumerate(scans)]
+            index = {sid: k for k, sid in enumerate(scans)}
+            starts: dict[tuple[int, int], tuple[Any, Any]] = {}
+            for e in picked or []:
+                if e.get("a") not in index or e.get("b") not in index or e["a"] == e["b"]:
+                    raise ApiError(422, "picked points name a scan that is not in the list", "pick points on two of the listed scans")
+                pairs = e.get("pairs") or []
+                if len(pairs) < MIN_PAIRS:
+                    raise ApiError(422, f"{len(pairs)} pair(s) of points are too few", "pick at least three matching points on each scan")
+                try:
+                    src = [q["source"] for q in pairs]  # on scan b
+                    dst = [q["target"] for q in pairs]  # on scan a
+                    pose_from_point_pairs(src, dst)
+                except (ValueError, KeyError, TypeError) as err:
+                    raise ApiError(422, f"the picked points do not give a pose: {err}",
+                                   "pick three or more matching points that span a triangle") from err
+                starts[(index[e["a"]], index[e["b"]])] = (src, dst)
+
+            def run(ctx: Any) -> dict:
+                from ohs.align import align_many, scan_cloud_from_mesh
+
+                clouds = []
+                for k, it in enumerate(items):
+                    ctx.progress(0.3 * k / len(items), f"Reading \"{it['name']}\"", force=True)
+                    clouds.append(scan_cloud_from_mesh(it["mesh"]))
+                    ctx.check()
+
+                def progress(f: float, msg: str) -> None:
+                    ctx.check()
+                    ctx.progress(0.3 + 0.7 * f, msg)
+
+                res = align_many(clouds, same_setup=bool(same_setup), picked=starts, progress=progress)
+                d = res.as_dict()
+                verdict = res.verdict
+                for k, it in enumerate(items):  # the engine counts scans; the user knows them by name
+                    verdict = verdict.replace(f"scan {k + 1} ", f"\"{it['name']}\" ").replace(f"scan {k + 1}.", f"\"{it['name']}\".")
+                return jsonable({
+                    "project_id": pid, "scans": scans, "accepted": d["accepted"],
+                    "T": {sid: d["T"][k] for k, sid in enumerate(scans)},
+                    "placed": [scans[k] for k in d["placed"]], "unplaced": [scans[k] for k in d["unplaced"]],
+                    "pairs": [{**{key: v for key, v in r.items() if key not in ("i", "j")}, "a": scans[r["i"]], "b": scans[r["j"]]}
+                              for r in d["pairs"]],
+                    "loops": d["loops"], "graph": d["graph"], "worst_link_mm": d["worst_link_mm"],
+                    "support": {sid: clouds[k].support is not None for k, sid in enumerate(scans)},
+                    "same_setup": bool(same_setup), "ms": d["ms"], "verdict": verdict, "message": verdict})
+
+            return self.st.jobs.submit("align_all", run, message="Queued: align several scans",
+                                       meta={"project_id": pid, "scans": list(scans)})
+
     # ------------------------------------------------------------------ merge
-    def merge(self, pid: str, target: str, source: str, T: Any, same_setup: bool, name: str | None) -> Any:
-        """``POST /api/projects/{pid}/merge``."""
+    @staticmethod
+    def _rigid(T: Any) -> np.ndarray:
         try:
             T = np.asarray(T, dtype=np.float64).reshape(4, 4)
         except (ValueError, TypeError) as e:
@@ -112,10 +175,31 @@ class AlignManager:
         if not (np.all(np.isfinite(T)) and np.allclose(R @ R.T, np.eye(3), atol=1e-6) and np.linalg.det(R) > 0
                 and np.allclose(T[3], [0.0, 0.0, 0.0, 1.0], atol=1e-9)):
             raise ApiError(422, "the pose is not a rigid motion", "send the pose the alignment returned")
+        return T
+
+    def merge(self, pid: str, target: str, source: str, T: Any, same_setup: bool, name: str | None) -> Any:
+        """``POST /api/projects/{pid}/merge`` with two scans: the source moved by ``T`` onto the target."""
+        if target == source:
+            raise ApiError(409, "a scan cannot be aligned to itself", "pick two different scans")
+        return self.merge_many(pid, [(target, np.eye(4)), (source, T)], same_setup, name)
+
+    def merge_many(self, pid: str, items_in: list[tuple[str, Any]], same_setup: bool, name: str | None) -> Any:
+        """``POST /api/projects/{pid}/merge``: every scan at its pose (in the first scan's world)."""
+        if len(items_in) < 2:
+            raise ApiError(422, "at least two scans are needed", "pick two or more scans")
+        if len(items_in) > MAX_SCANS:
+            raise ApiError(422, f"{len(items_in)} scans are too many at once (at most {MAX_SCANS})",
+                           "merge some of them first, then merge the result with the others")
+        sids = [sid for sid, _ in items_in]
+        if len(set(sids)) != len(sids):
+            raise ApiError(409, "a scan is in the list twice", "pick each scan once")
+        poses = [self._rigid(T) for _, T in items_in]
         with self.st._lock:
-            a, b = self._pair(pid, target, source, need_recording=True)
-            title = (name or "").strip() or f"{a['name']} + {b['name']}"
+            items = [self._scan(pid, sid, "first" if k == 0 else ("second" if len(sids) == 2 else f"scan {k + 1}:"),
+                                need_recording=True) for k, sid in enumerate(sids)]
+            title = (name or "").strip() or " + ".join(it["name"] for it in items)
             work = self.st.projects.project_dir(pid) / ".merge"
+            noun = "two scans" if len(items) == 2 else f"{len(items)} scans"
 
             def run(ctx: Any) -> dict:
                 from ohs.align import ScanInput, merge_scans, scan_cloud_from_mesh
@@ -124,14 +208,15 @@ class AlignManager:
                 from ohs.server.protocol import quality_or_none
                 from ohs.server.studio import process_params
 
-                supports = [None, None]
+                supports: list[Any] = [None] * len(items)
                 if not same_setup:  # the part was moved: each scan's table is elsewhere, and stays out
                     ctx.progress(0.02, "Finding what the part lay on", force=True)
-                    supports = [scan_cloud_from_mesh(s["mesh"]).support for s in (a, b)]
+                    supports = [scan_cloud_from_mesh(it["mesh"]).support for it in items]
                     ctx.check()
-                reader = RecordingReader(a["recording"])
+                first = items[0]
+                reader = RecordingReader(first["recording"])
                 width = int((reader.meta.get("image_size") or list(reader.frame(0).image_size))[0])
-                quality = quality_or_none(a["entry"].get("quality")) or "standard"
+                quality = quality_or_none(first["entry"].get("quality")) or "standard"
                 params = dataclasses.replace(process_params(self.st.cfg, "markerless", quality, width), poisson=False)
                 out = work / ctx.job.id
                 shutil.rmtree(out, ignore_errors=True)
@@ -141,11 +226,10 @@ class AlignManager:
                     ctx.progress(0.05 + 0.85 * (k + 1) / max(n, 1), f"Merging: frame {k + 1} of {n}")
 
                 try:
-                    rep = merge_scans([ScanInput(a["recording"], a["trajectory"], np.eye(4), a["name"], support=supports[0]),
-                                       ScanInput(b["recording"], b["trajectory"], T, b["name"], support=supports[1])],
-                                      out, params, progress)
+                    rep = merge_scans([ScanInput(it["recording"], it["trajectory"], T, it["name"], support=sup)
+                                       for it, T, sup in zip(items, poses, supports)], out, params, progress)
                     if rep["mesh"]["empty"]:
-                        raise ApiError(409, "the merged model is empty", "check that both scans have a mesh, and align them again")
+                        raise ApiError(409, "the merged model is empty", "check that the scans have a mesh, and align them again")
                     ctx.progress(0.95, "Adding the merged scan to the project", force=True)
                     scan, _ = self.st.projects.add_scan(pid, title, "markerless")
                     sid = scan["id"]
@@ -153,21 +237,23 @@ class AlignManager:
                     shutil.move(str(out), str(dst))
                     scan = self.st.projects.update_scan(
                         pid, sid, status="processed", n_frames=int(rep["frames"]["fused"]), quality=quality,
-                        duration_s=float(sum(float(x["entry"].get("duration_s", 0.0) or 0.0) for x in (a, b))),
+                        duration_s=float(sum(float(it["entry"].get("duration_s", 0.0) or 0.0) for it in items)),
                         report=report_summary({**rep, "quality": quality}),
-                        merged_from=[{"id": a["id"], "name": a["name"]}, {"id": b["id"], "name": b["name"]}])
+                        merged_from=[{"id": it["id"], "name": it["name"]} for it in items])
                 finally:
                     shutil.rmtree(out, ignore_errors=True)
                     if work.is_dir() and not any(work.iterdir()):
                         work.rmdir()
-                return {"project_id": pid, "scan_id": sid, "scan": scan, "merged_from": [target, source],
+                return {"project_id": pid, "scan_id": sid, "scan": scan, "merged_from": sids,
                         "message": f"Merged into \"{title}\""}
 
             def done(job: Any) -> None:
                 if job.state == "done":
                     self.st.notify("info", f"Merged scan ready: {title}")
                 elif job.state == "failed":
-                    self.st.notify("error", f"Merging failed: {job.error}. The two scans are unchanged.")
+                    self.st.notify("error", f"Merging failed: {job.error}. The scans it was made from are unchanged.")
 
-            return self.st.jobs.submit("merge", run, message="Queued: merge two scans",
-                                       meta={"project_id": pid, "target": target, "source": source}, on_done=done)
+            meta = {"project_id": pid, "scans": sids}
+            if len(sids) == 2:
+                meta.update(target=sids[0], source=sids[1])
+            return self.st.jobs.submit("merge", run, message=f"Queued: merge {noun}", meta=meta, on_done=done)

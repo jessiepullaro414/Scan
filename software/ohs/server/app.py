@@ -179,12 +179,30 @@ class AlignBody(BaseModel):
     pairs: Optional[List[PointPairBody]] = None
 
 
-class MergeBody(BaseModel):
-    target: str
-    source: str
+class MergeScanBody(BaseModel):
+    id: str
     T: List[List[float]]
+
+
+class MergeBody(BaseModel):
+    target: Optional[str] = None
+    source: Optional[str] = None
+    T: Optional[List[List[float]]] = None
+    scans: Optional[List[MergeScanBody]] = None  # several scans: each with its pose in the first one's world
     same_setup: bool = True
     name: Optional[str] = None
+
+
+class PickedBody(BaseModel):
+    a: str  # the scan the target points were picked on
+    b: str  # the scan the source points were picked on
+    pairs: List[PointPairBody]
+
+
+class AlignAllBody(BaseModel):
+    scans: List[str]
+    same_setup: bool = True
+    picked: Optional[List[PickedBody]] = None
 
 
 class RecipeOpBody(BaseModel):
@@ -542,8 +560,20 @@ def create_app(config: Any = None, *, projects_dir: Any = None, static_dir: Any 
         pairs = None if body.pairs is None else [{"source": p.source, "target": p.target} for p in body.pairs]
         return _json(st.aligning.align(pid, body.target, body.source, body.same_setup, pairs).to_dict())
 
+    @app.post("/api/projects/{pid}/align_all")
+    def align_all_scans(pid: str, body: AlignAllBody) -> JSONResponse:
+        picked = None if body.picked is None else [
+            {"a": e.a, "b": e.b, "pairs": [{"source": q.source, "target": q.target} for q in e.pairs]} for e in body.picked]
+        return _json(st.aligning.align_all(pid, body.scans, body.same_setup, picked).to_dict())
+
     @app.post("/api/projects/{pid}/merge")
     def merge_scans(pid: str, body: MergeBody) -> JSONResponse:
+        if body.scans is not None:
+            if body.target is not None or body.source is not None or body.T is not None:
+                raise ApiError(422, "give either scans, or target, source and T", "send one of the two forms")
+            return _json(st.aligning.merge_many(pid, [(e.id, e.T) for e in body.scans], body.same_setup, body.name).to_dict())
+        if body.target is None or body.source is None or body.T is None:
+            raise ApiError(422, "target, source and T are needed (or scans)", "send the scans and the pose the alignment returned")
         return _json(st.aligning.merge(pid, body.target, body.source, body.T, body.same_setup, body.name).to_dict())
 
     @app.get("/api/jobs")

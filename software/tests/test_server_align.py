@@ -29,7 +29,7 @@ pytestmark = pytest.mark.slow
 @pytest.fixture(scope="module")
 def env(tmp_path_factory):
     root = tmp_path_factory.mktemp("align-server")
-    scans = [_scan(root, "bracket", 20.0, 0), _scan(root, "bracket", 110.0, 1)]
+    scans = [_scan(root, "bracket", 20.0, 0), _scan(root, "bracket", 110.0, 1), _scan(root, "bracket", 200.0, 2)]
     cfg = Config()
     cfg.paths.calibration = str(root / "no-calibration.json")
     app = create_app(cfg, projects_dir=root / "projects", demo_dir=root / "demo", static_dir=root / "static",
@@ -38,7 +38,7 @@ def env(tmp_path_factory):
         st = app.state.studio
         pid = requests.post(srv.url + "/api/projects", json={"name": "Bracket"}, timeout=TIMEOUT).json()["id"]
         sids = []
-        for name, sc in (("Top", scans[0]), ("Side", scans[1]), ("No mesh", scans[0])):
+        for name, sc in (("Top", scans[0]), ("Side", scans[1]), ("No mesh", scans[0]), ("Back", scans[2])):
             scan, rec_dir = st.projects.add_scan(pid, name, "markerless")
             shutil.copytree(sc["rec"], rec_dir)
             n = len(RecordingReader(rec_dir))
@@ -49,7 +49,8 @@ def env(tmp_path_factory):
                 st.projects.update_scan(pid, scan["id"], status="processed", n_frames=n, duration_s=n / 30.0, quality="standard")
             sids.append(scan["id"])
         yield {"srv": srv, "url": srv.url, "studio": st, "pid": pid, "a": sids[0], "b": sids[1], "bare": sids[2],
-               "T_true": G.invert_se3(scans[0]["world"]) @ scans[1]["world"], "base": f"{srv.url}/api/projects/{pid}"}
+               "back": sids[3], "T_true": G.invert_se3(scans[0]["world"]) @ scans[1]["world"],
+               "T_back": G.invert_se3(scans[0]["world"]) @ scans[2]["world"], "base": f"{srv.url}/api/projects/{pid}"}
 
 
 def _off(env, T) -> tuple[float, float]:
@@ -129,3 +130,35 @@ def test_merge_adds_a_scan_to_the_project(env):
     scan2 = st.projects.get_scan(pid, done["result"]["scan_id"])
     assert scan2["name"] == "Top + Side"
     assert 500 < scan2["result"]["report"]["mesh"]["n_vertices"] < 0.3 * len(V)
+
+
+def test_align_and_merge_several_scans(env):
+    """Top, side and back at once: each placed in the top scan's world, then merged into one scan."""
+    scans = [env["a"], env["b"], env["back"]]
+    done = run_job(env, post(env["base"] + "/align_all", {"scans": scans}), "align_all")
+    res = done["result"]
+    assert res["accepted"] is True and res["placed"] == scans and res["unplaced"] == [] and done["message"] == res["verdict"]
+    assert res["verdict"].startswith("All 3 scans placed through 2 links") and res["scans"] == scans
+    assert np.allclose(res["T"][env["a"]], np.eye(4)) and len(res["pairs"]) == 3
+    assert {(q["a"], q["b"]) for q in res["pairs"]} == {(scans[0], scans[1]), (scans[0], scans[2]), (scans[1], scans[2])}
+    assert sum(q["used"] == "chain" for q in res["pairs"]) == 2 and res["support"] == {sid: True for sid in scans}
+    for sid, T_true in ((env["b"], env["T_true"]), (env["back"], env["T_back"])):
+        e = G.pose_error(T_true, np.asarray(res["T"][sid]))
+        assert e[1] < 3.0 and e[0] < 1.0, (sid, e)
+    # what is wrong with a request is said at once
+    err(post(env["base"] + "/align_all", {"scans": scans[:1]}), 422, "at least two")
+    err(post(env["base"] + "/align_all", {"scans": [env["a"], env["a"]]}), 409, "twice")
+    err(post(env["base"] + "/align_all", {"scans": [env["a"], env["bare"]]}), 409, "has no mesh yet")
+    bad = [{"a": env["a"], "b": "scan-19990101-000000", "pairs": [{"source": [0, 0, 0], "target": [0, 0, 0]}] * 3}]
+    err(post(env["base"] + "/align_all", {"scans": scans, "picked": bad}), 422, "not in the list")
+    # merge all three at the found poses
+    body = {"scans": [{"id": sid, "T": res["T"][sid]} for sid in scans]}
+    done = run_job(env, post(env["base"] + "/merge", body), "merge")
+    scan = env["studio"].projects.get_scan(env["pid"], done["result"]["scan_id"])
+    assert scan["name"] == "Top + Side + Back" and scan["n_frames"] == 3 * N_FRAMES
+    assert [m["name"] for m in scan["merged_from"]] == ["Top", "Side", "Back"] and done["result"]["merged_from"] == scans
+    assert done["scans"] == scans  # the job's meta
+    # one form or the other
+    err(post(env["base"] + "/merge", {**body, "target": env["a"]}), 422, "either scans")
+    err(post(env["base"] + "/merge", {"target": env["a"], "source": env["b"]}), 422, "are needed")
+    err(post(env["base"] + "/merge", {"scans": body["scans"][:1]}), 422, "at least two")

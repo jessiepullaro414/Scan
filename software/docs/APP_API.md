@@ -1106,3 +1106,59 @@ type MergeResult = { project_id: string; scan_id: string; scan: Scan; merged_fro
 - **A merged scan has no recording.** It can be viewed, edited, measured and exported, and another scan can be aligned to it; it cannot be tracked or merged again (409 "has no recording").
 - **Errors** (`{detail, hint}`): 404 unknown project or scan; 409 the two ids are the same, a scan is recording or processing, a scan has no mesh yet, and for a merge a scan without recording or without the camera path of its mesh; 422 fewer than three pairs, pairs that lie in one line or on one spot, a `T` that is not a 4x4 rigid motion.
 - **Limits of this slice:** two scans at a time; both must come from the same calibration and image size (otherwise the merge job fails and says so); the alignment is as good as the two meshes (about 0.2–0.5 mm on the simulated bracket at 1280x800); a merged model is not yet more accurate than the better of its two scans, it holds more of the part.
+
+## M4 second slice: several scans at once
+
+Two to eight scans of one part, in one project, placed in the world of the first one and merged into one new scan. Every pair is aligned as above; each scan is placed through the chain of best links that reaches it, so two scans that share too little to align to each other (opposite sides) can both be placed through a third. Where the links form a loop, they are solved together and a link that does not fit is left out (`VALIDATION.md`, "Several scans at once").
+
+### Types
+
+```ts
+type PickedPoints = { a: string; b: string; pairs: PointPair[] };   // `target` points on scan a, `source` points on scan b
+
+type AlignAllRequest = {
+  scans: string[];           // 2..8 scan ids; the first stays where it is
+  same_setup?: boolean;      // default true, as for two scans
+  picked?: PickedPoints[];   // optional rough starts for some pairs
+};
+
+// the `result` of a finished job of kind "align_all"
+type AlignAllResult = {
+  project_id: string; scans: string[];
+  accepted: boolean;                      // every scan placed
+  T: Record<string, number[][] | null>;   // per scan: 4x4 into the first scan's frame; null = not placed
+  placed: string[]; unplaced: string[];
+  pairs: {                                // every pair, as AlignResult without T, plus:
+    a: string; b: string;                 // b was aligned onto a
+    used: "chain" | "loop" | "left out" | "";   // how the placement used it ("" = not accepted)
+    disagree_mm?: number;                 // after placing: how far this link disagrees with the poses (RMS over the part)
+    accepted: boolean; verdict: string; overlap: number; rmse_mm: number | null; start: "features" | "given"; agree: number;
+  }[];
+  loops: number;             // accepted links beyond the chain
+  graph: boolean;            // the loops were solved together
+  worst_link_mm: number;
+  support: Record<string, boolean>;
+  same_setup: boolean; ms: number;
+  verdict: string;           // "All 3 scans placed through 2 links; 1 more link checked the chain, the worst disagrees by 0.27 mm."
+                             // or "Not all placed: \"Back\" could not be aligned to any placed scan. Pick matching points ..."
+  message: string;           // = verdict
+};
+
+// MergeRequest gains a second form (give one or the other):
+//   { scans: { id: string; T: number[][] }[]; same_setup?: boolean; name?: string }   // 2..8 scans, T from AlignAllResult
+```
+
+### REST
+
+| Method and path | Body | Returns |
+|---|---|---|
+| `POST /api/projects/{pid}/align_all` | `AlignAllRequest` | `Job` (kind `"align_all"`, meta `project_id`, `scans`); its `result` is an `AlignAllResult` |
+| `POST /api/projects/{pid}/merge` | `MergeRequest` in either form | `Job` (kind `"merge"`, meta `project_id`, `scans`, and `target` / `source` for two scans) |
+
+### Rules
+
+- **Time:** every pair is aligned, 1–5 s each: 3 pairs for three scans, 28 for eight.
+- **Not all placed is an answer:** the job ends `done` with `accepted: false`, the poses of the scans that were placed, and a verdict that names the others by their names. Picked points between an unplaced scan and any placed one (`picked`) are the way forward.
+- **A link that disagrees:** `worst_link_mm` above 2 mm adds "That is a lot: look at the scans together before merging." to the verdict.
+- **Merging several:** as for two scans; the name defaults to the scans' names joined by " + "; `merged_from` lists all of them in order.
+- **Errors:** 422 for fewer than two or more than eight scans, picked points that name a scan not in the list or are fewer than three pairs or in one line, both merge forms or neither; 409 for a scan listed twice, and as for two scans.
