@@ -127,8 +127,13 @@ about the scan itself, not the Fit tool, and they decide whether a measurement c
   offset from +0.12 to +0.01 mm, and thin walls a third to a half of the way; smooth scenes keep
   their numbers. **Done 2026-11-14 (the owner's decision):** it is in the GPU tracking model
   (`FusionParams.gpu_back_voxels`, set by the pipeline), with no cost in time. Still open: walls
-  under about 2 mm with tracking, which need a finer tracking grid that starts and holds as
-  well as this one.
+  under about 2 mm with tracking. **Studied 2026-11-16, not adopted** ([`VALIDATION.md`](../VALIDATION.md),
+  "A finer tracking model for thin walls"): a second 1 mm tracking model, used to refine each
+  pose, holds and thins walls by 0.1–0.4 mm, but undershoots on one scan, leaves a 1 mm rib at
+  2.35–2.39 mm and costs about 19 % per frame. A tracked wall's extra thickness follows the camera
+  path's scale (correlation 0.96–0.98 on the flange and the 3 mm rib), and a 2 mm flange reads
+  2.7–2.85 mm even at true poses. So thin walls wait on the pull along the direction of motion
+  and on the mesh model, not on a finer tracking grid.
 - **Small cylinders fit worse since the new sigma** (measured again 2026-11-13,
   [`VALIDATION.md`](../VALIDATION.md), "Fitted shapes against the truth"): a Ø 14 mm boss reads
   0.39 mm off in radius with tracking (before 0.18 mm) and its axis 12.5° off (before 8.0°),

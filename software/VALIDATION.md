@@ -1802,6 +1802,49 @@ are not comparable with the CPU path's: its mesh covers almost twice as much of 
 including the thin edges where the errors are largest.) What the band does for tracking on the
 CPU path (Open3D's tracking model, 8 mm) is not measured here and stays open.
 
+## A finer tracking model for thin walls: studied, not adopted (2026-11-16)
+
+The question was whether a second, finer (1 mm) GPU tracking model next to the tracker's 2 mm one
+lets a tracked scan hold walls under 2 mm. Same method as "Where a tracked scan's shape errors come
+from": the five bracket recordings and three sheet recordings (a 2 mm flange, a 1 mm and a 3 mm
+rib), Standard quality, GPU path, on a scratch copy of the engine (scratch scripts
+`walls/edit_fine.py`, `run_w.sh`, `tabw.py`, `scale_fit.py`). Bracket = share of the part more than
+0.3 mm off per scan; sheet = measured thickness in mm per scan (flange / 1 mm rib / 3 mm rib).
+
+| Tracking | Bracket per scan (%) | Median | Sheet s0 | Sheet s1 | Sheet s2 |
+|---|---|---|---|---|---|
+| True poses | 10 / 11 / 11 / 10 / 10 | 10.5 % | 2.72 / 2.04 / 3.06 | 2.72 / 1.96 / 3.05 | 2.85 / 1.99 / 3.04 |
+| Today's engine | 14 / 13 / 32 / 13 / 13 | 13.3 % | 2.86 / 2.41 / 3.54 | 2.72 / 2.49 / 3.19 | 2.98 / 2.56 / 3.71 |
+| One 1 mm model instead | 12 / 16 / 41 / 13 / 27 | 15.9 % | 2.95 / 2.44 / 3.76 | 2.80 / 2.57 / 3.44 | 3.08 / 2.62 / 3.92 |
+| Switch to the 1 mm model after 10 frames | 12 / 13 / 31 / 12 / 13 | 12.6 % | 2.75 / 2.29 / 3.24 | 2.64 / 1.91 / 2.73 | 2.93 / 2.57 / 3.73 |
+| Refine against the 1 mm model, 2 mm band | 11 / 13 / 53 / 16 / 16 | 16.3 % | 2.71 / 2.34 / 3.32 | 2.62 / 2.23 / 2.85 | 2.86 / 2.45 / 3.52 |
+| Refine, 2 mm band, 1 mm behind | 12 / 13 / 36 / 13 / 13 | 12.9 % | 2.66 / 2.33 / 3.23 | 2.53 / 1.13 / 2.66 | 2.81 / 2.37 / 3.25 |
+| Refine, 3 mm band, 1 mm behind (best) | 13 / 13 / 26 / 14 / 13 | 13.3 % | 2.72 / 2.35 / 3.27 | 2.55 / 1.93 / 2.77 | 2.85 / 2.39 / 3.26 |
+
+- **Switching** slips (7.6 mm at one bracket frame, 9.9 mm on a sheet scan). **Refining** (a few
+  finest-level ICP steps against the 1 mm model, held to the 2 mm result by a prior, taken only if
+  it moves under 1.5 mm) never slipped. Other forms tried (a stronger prior, a 4 mm band with 1, 1.5
+  or 2 mm behind) land between these rows.
+- **Why the best form is not a win:** its walls are 0.1–0.4 mm thinner than today's, but on sheet
+  s1 they go below the true-pose values (flange 2.55, 3 mm rib 2.77 mm), and the 1 mm rib still
+  reads 2.35–2.39 mm on two scans of three. It costs about 37 ms of tracking a frame (frame
+  178 → 212 ms on the Radeon 680M, about +19 %) and 512 MB more GPU memory. Smooth scenes keep their
+  numbers (full sphere 0.060 / 0.257 mm, car panel 0.083 / 0.393 mm); the car panel's hole reads
+  0.08 mm smaller.
+- **What sets a tracked wall's thickness is the camera path's scale.** Over 33 tracked sheet runs
+  (11 tracking models × 3 scans), a wall's thickness above its true-pose value follows how far out
+  the tracked cameras stand after a best fit: flange 0.77 × out (correlation 0.98), 3 mm rib
+  2.12 × out + 0.16 mm (0.96), 1 mm rib 1.27 × out + 0.29 mm (0.70). Today's engine stands
+  +0.17 / +0.04 / +0.20 mm out on the three scans; the finer models mostly move that offset rather
+  than shrink it. This is the pull along the direction of motion noted above.
+- **The 2 mm flange is the mesh model's limit:** 2.72–2.85 mm even at true poses, so no tracking
+  change brings it near 2.0. Only the 1 mm rib keeps a rest (about +0.3 mm with a correct path) that
+  is not the path's scale; no variant removed it, and it is not explained.
+
+So the next steps for thin walls are the camera path's scale and the mesh model, not a finer
+tracking grid. Limits: simulated, orbit pattern only, one run per recording (bracket s2 swings
+25–53 % across variants, so one scan can move a median); the CPU path was not run.
+
 ## What the metrics mean
 
 - **Stereo errors** compare the estimated raw intrinsics/extrinsics (`K1`, `K2`, `R`, `T`) with
