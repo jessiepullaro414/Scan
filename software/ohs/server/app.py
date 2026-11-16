@@ -167,6 +167,26 @@ class ScanRef(BaseModel):
     scan_id: str
 
 
+class PointPairBody(BaseModel):
+    source: List[float] = Field(min_length=3, max_length=3)
+    target: List[float] = Field(min_length=3, max_length=3)
+
+
+class AlignBody(BaseModel):
+    target: str
+    source: str
+    same_setup: bool = True
+    pairs: Optional[List[PointPairBody]] = None
+
+
+class MergeBody(BaseModel):
+    target: str
+    source: str
+    T: List[List[float]]
+    same_setup: bool = True
+    name: Optional[str] = None
+
+
 class RecipeOpBody(BaseModel):
     op: Literal["remove_floaters", "fill_holes", "smooth", "decimate"]
     params: dict[str, Any] = Field(default_factory=dict)
@@ -515,6 +535,16 @@ def create_app(config: Any = None, *, projects_dir: Any = None, static_dir: Any 
     def recipes_delete(rid: str) -> Response:
         proc.recipes.delete(rid)
         return Response(status_code=204)
+
+    # ------------------------------------------------------------------ M4: align and merge two scans
+    @app.post("/api/projects/{pid}/align")
+    def align_scans(pid: str, body: AlignBody) -> JSONResponse:
+        pairs = None if body.pairs is None else [{"source": p.source, "target": p.target} for p in body.pairs]
+        return _json(st.aligning.align(pid, body.target, body.source, body.same_setup, pairs).to_dict())
+
+    @app.post("/api/projects/{pid}/merge")
+    def merge_scans(pid: str, body: MergeBody) -> JSONResponse:
+        return _json(st.aligning.merge(pid, body.target, body.source, body.T, body.same_setup, body.name).to_dict())
 
     @app.get("/api/jobs")
     def jobs_list() -> JSONResponse:

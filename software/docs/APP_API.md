@@ -1036,3 +1036,73 @@ type CheckResult = {
 Rules: 409 before the scan has a mesh; 422 for a bad tolerance. Read-only and quick (about 0.5 s on a
 2M-triangle mesh). The answer rests on each vertex's sigma: statistical, and so far checked on
 simulated scans only (`VALIDATION.md`).
+
+## M4 first slice: align two scans and merge them
+
+Two processed scans of one part, in one project, are aligned to each other and merged into a new scan (`ohs/server/aligning.py`; the engine: `ohs.align`, measured in `VALIDATION.md`, "Aligning and merging two scans"). The *target* scan keeps its place; the *source* scan is moved onto it. A scan's mesh is in the scan's own world (see Coordinates), so points picked on a mesh are in that scan's frame, in mm.
+
+### Types
+
+```ts
+type PointPair = { source: [number, number, number]; target: [number, number, number] };
+
+type AlignRequest = {
+  target: string;            // scan id: stays where it is
+  source: string;            // scan id: is moved onto the target
+  same_setup?: boolean;      // default true: the part was not moved on its table between the two scans.
+                             // false: it was turned over or moved (each scan then has its own table)
+  pairs?: PointPair[];       // optional: 3 or more matching points picked on the two meshes, as a rough start
+};
+
+// the `result` of a finished job of kind "align"
+type AlignResult = {
+  project_id: string; target: string; source: string;
+  accepted: boolean;         // false: not aligned; `reason` and `verdict` say why and what to do
+  verdict: string;           // one sentence for the user ("Aligned: 76 % of ... agree." / "Not aligned: ... .")
+  reason: string | null;
+  T: number[][];             // 4x4, row-major rows: takes points of the source's mesh into the target's frame
+  start: "features" | "given";   // from the shape alone, or from the picked pairs
+  overlap: number;           // 0..1: share of the smaller scan's part within 1 mm of the other scan
+  rmse_mm: number | null;    // RMS along the normals of what matches
+  fit_mm: number | null;     // robust spread of the residuals within 3 mm
+  candidates: number; agree: number;   // starting guesses tried, and how many ended at the chosen pose
+  spread_mm: number;
+  dof: number;               // directions of motion the overlap pins down (6 = all)
+  same_setup: boolean;
+  used_support: boolean;     // the table was used for height and tilt
+  support: { target: boolean; source: boolean };   // a table was found in each scan
+  pairs_rms_mm: number | null;   // how well the picked pairs agree with each other (a large value: two pairs do not match)
+  n_matched: number; ms: number; message: string;  // message = verdict
+};
+
+type MergeRequest = {
+  target: string; source: string;
+  T: number[][];             // the pose to merge at (an AlignResult's T)
+  same_setup?: boolean;      // default true. false: each scan's table is left out of the merged model
+  name?: string;             // default "<target name> + <source name>"
+};
+
+// the `result` of a finished job of kind "merge"
+type MergeResult = { project_id: string; scan_id: string; scan: Scan; merged_from: [string, string]; message: string };
+
+// Scan gains:
+//   merged_from?: { id: string; name: string }[]   // present on a merged scan: the scans it was made from
+```
+
+### REST
+
+| Method and path | Body | Returns |
+|---|---|---|
+| `POST /api/projects/{pid}/align` | `AlignRequest` | `Job` (kind `"align"`, meta `project_id`, `target`, `source`); its `result` is an `AlignResult` |
+| `POST /api/projects/{pid}/merge` | `MergeRequest` | `Job` (kind `"merge"`, same meta); its `result` is a `MergeResult` |
+
+### Rules
+
+- **Align writes nothing.** It reads the two meshes (`result/mesh.ply`) and answers in a few seconds. A pose that is not accepted is still returned in `T`, for showing; do not merge at it without the user's say.
+- **Not accepted is an answer, not an error:** the job ends `done` with `accepted: false` and a verdict such as "Not aligned: the part fits in more than one position about equally well (...): give a rough starting pose, or scan with more of the part's distinct features in both." The app then offers picking points.
+- **Picked points:** each pair is one spot on the part, clicked on both meshes. Three pairs that span a triangle are enough; a millimetre or two of clicking error is fine, the alignment refines it. With pairs the result's `start` is `"given"` and no second guess has to confirm it, so check `pairs_rms_mm` (above about 5 mm two pairs probably do not match).
+- **Same setup or not:** with `same_setup: true` the table both scans share pins height and tilt. If the two tables turn out more than 5° or 5 mm apart after the part's fit, they are not used (`used_support: false`). With `false` only the part counts, and a merge leaves both tables out: frame by frame, everything on or behind the scan's table and up to 2 mm in front of it, so the part's bottom edge goes too.
+- **Merge** fuses the raw frames of both recordings again at the given pose, with the target scan's quality, and takes about as long as processing both scans. The job reports "Merging: frame k of n" and can be cancelled; nothing is added to the project then. On success a new scan appears (`status: "processed"`, `mode: "markerless"`, `n_frames` = frames fused, `merged_from`), with `mesh.ply`, `mesh.stl`, `laser_points.ply` and `report.json` in its result, and a notification "Merged scan ready: <name>". The two scans are unchanged.
+- **A merged scan has no recording.** It can be viewed, edited, measured and exported, and another scan can be aligned to it; it cannot be tracked or merged again (409 "has no recording").
+- **Errors** (`{detail, hint}`): 404 unknown project or scan; 409 the two ids are the same, a scan is recording or processing, a scan has no mesh yet, and for a merge a scan without recording or without the camera path of its mesh; 422 fewer than three pairs, pairs that lie in one line or on one spot, a `T` that is not a 4x4 rigid motion.
+- **Limits of this slice:** two scans at a time; both must come from the same calibration and image size (otherwise the merge job fails and says so); the alignment is as good as the two meshes (about 0.2–0.5 mm on the simulated bracket at 1280x800); a merged model is not yet more accurate than the better of its two scans, it holds more of the part.

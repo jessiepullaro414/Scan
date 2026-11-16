@@ -60,6 +60,7 @@ from ohs.server.devices import DeviceManager
 from ohs.server.hub import Hub
 from ohs.server.jobs import JobRunner
 from ohs.server.printables import MASK_DPI
+from ohs.server.aligning import AlignManager
 from ohs.server.processing import ProcessManager
 from ohs.server.projects import ProjectStore
 from ohs.server.protocol import PROTOCOL_VERSION, QUALITIES, ApiError, jsonable, log_message, normalize_quality
@@ -139,6 +140,7 @@ class Studio:
         self.setup = SetupManager(self)
         self.calibration = CalibrationManager(self)
         self.processing = ProcessManager(self)
+        self.aligning = AlignManager(self)
         self.session: ScanSession | None = None
         self.last_session: ScanSession | None = None
         self.last_project: str | None = None

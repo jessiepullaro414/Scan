@@ -198,6 +198,8 @@ class ProjectStore:
             out["error"] = entry["error"]
         if entry.get("quality"):
             out["quality"] = quality_or_none(entry["quality"]) or entry["quality"]
+        if entry.get("merged_from"):  # a scan merged from others (it has no recording of its own)
+            out["merged_from"] = entry["merged_from"]
         thumb = self.root / pid / "scans" / sid / "thumbnail.jpg"
         out["thumbnail_url"] = f"{base}/thumbnail.jpg" if thumb.is_file() else None
         return out
