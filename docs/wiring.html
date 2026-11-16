@@ -1,0 +1,548 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="description" content="OpenHandScan wiring: schematic, physical layout, part pinouts and a checklist.">
+<style>
+:root { padding-top: env(safe-area-inset-top, 0px); padding-bottom: env(safe-area-inset-bottom, 0px); }
+body { margin: 0; } img { max-width: 100%; } [hidden] { display: none !important; }
+</style>
+<title>OpenHandScan Wiring</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+/* Layout: a bench sheet. Controls, then the schematic, the physical layout, the part pinouts and a tick-off list, one column. */
+:root {
+  --bg: #f2f5f3; --surface: #ffffff; --ink: #16201b; --ink-2: #4c5b53; --line: #cfd9d3; --zone: #e8efeb;
+  --board: #1f5e43; --board-ink: #e9f4ee; --pad: #c9a43c;
+  --pwr: #c4372c; --ret: #5a6670; --gnd: #1b221e; --sig: #2160b0; --i2c: #7a45b7; --opt: #a46a0b;
+  --sans: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0f1311; --surface: #161c19; --ink: #e3eae6; --ink-2: #9db0a6; --line: #2b3631; --zone: #1a221e;
+    --board: #1c4a36; --board-ink: #dcefe4; --pad: #c9a43c;
+    --pwr: #ff6e61; --ret: #9ba8b0; --gnd: #d3dcd7; --sig: #6ba7ff; --i2c: #b591f6; --opt: #e3a843;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0f1311; --surface: #161c19; --ink: #e3eae6; --ink-2: #9db0a6; --line: #2b3631; --zone: #1a221e;
+  --board: #1c4a36; --board-ink: #dcefe4; --pad: #c9a43c;
+  --pwr: #ff6e61; --ret: #9ba8b0; --gnd: #d3dcd7; --sig: #6ba7ff; --i2c: #b591f6; --opt: #e3a843;
+  color-scheme: dark;
+}
+body { background: var(--bg); color: var(--ink); font-family: var(--sans); font-size: 15px; line-height: 1.5; }
+main { max-width: 1040px; margin: 0 auto; padding-block: 24px 56px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
+  display: grid; gap: 28px; }
+h1, h2, h3 { text-wrap: balance; margin: 0; line-height: 1.2; }
+h1 { font-size: 28px; font-weight: 600; letter-spacing: -0.01em; }
+h2 { font-size: 19px; font-weight: 600; }
+h3 { font-size: 15px; font-weight: 600; }
+p { margin: 0; max-width: 68ch; }
+.sub { color: var(--ink-2); }
+header { display: grid; gap: 8px; }
+.eyebrow { font-family: var(--mono); font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-2); }
+.controls { display: flex; flex-wrap: wrap; gap: 12px 24px; align-items: center; }
+.seg { display: inline-flex; align-items: center; gap: 8px; }
+.seg > span { font-size: 13px; color: var(--ink-2); }
+.seg .btns { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: var(--surface); }
+.seg button { font: 500 13px var(--sans); color: var(--ink); background: transparent; border: 0; padding: 7px 12px; cursor: pointer; }
+.seg button + button { border-left: 1px solid var(--line); }
+.seg button[aria-pressed="true"] { background: var(--board); color: var(--board-ink); }
+.seg button:focus-visible { outline: 2px solid var(--sig); outline-offset: -2px; }
+section { display: grid; gap: 12px; }
+.figure { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 12px; overflow-x: auto; }
+.figure svg { display: block; width: 100%; height: auto; }
+.wide svg { min-width: 780px; }
+.mid svg { min-width: 540px; }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: 13px; color: var(--ink-2); }
+.legend i { display: inline-block; width: 22px; height: 0; border-top: 3px solid; vertical-align: middle; margin-right: 6px; }
+.pinouts { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 12px; }
+.pinouts .figure { display: grid; gap: 8px; align-content: start; }
+.pinouts p { font-size: 13px; color: var(--ink-2); }
+.mono { font-family: var(--mono); font-size: 0.92em; }
+table { border-collapse: collapse; width: 100%; font-size: 14px; }
+.tablewrap { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; overflow-x: auto; }
+th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { font-size: 12px; font-weight: 500; letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-2); }
+tr:last-child td { border-bottom: 0; }
+td:first-child { width: 36px; }
+td input { width: 18px; height: 18px; accent-color: var(--board); margin: 2px 0 0; }
+tr.done td:not(:first-child) { color: var(--ink-2); text-decoration: line-through; text-decoration-color: var(--line); }
+.chip { display: inline-block; font-size: 11.5px; padding: 1px 7px; border-radius: 999px; border: 1px solid var(--line); color: var(--ink-2); white-space: nowrap; }
+.dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; vertical-align: -1px; margin-right: 6px; }
+.notes { display: grid; gap: 10px; padding-left: 20px; margin: 0; max-width: 76ch; }
+.warn { border-left: 3px solid var(--pwr); padding: 8px 12px; background: var(--surface); border-radius: 0 8px 8px 0; max-width: 76ch; }
+[data-board="pico"] .esp, [data-board="esp"] .pico { display: none; }
+[data-lasers="2"] .four { display: none; }
+/* svg */
+.w { fill: none; stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round; }
+.pwr { stroke: var(--pwr); } .ret { stroke: var(--ret); } .gw { stroke: var(--gnd); } .sig { stroke: var(--sig); } .i2c { stroke: var(--i2c); }
+.part { fill: var(--surface); stroke: var(--ink-2); stroke-width: 1.5; }
+.opt { stroke: var(--opt); stroke-dasharray: 5 4; }
+.zone { fill: var(--zone); stroke: var(--line); stroke-width: 1.2; stroke-dasharray: 6 5; }
+.boardfill { fill: var(--board); }
+.pad { fill: var(--pad); }
+.padoff { fill: var(--board-ink); opacity: 0.35; }
+.jd { fill: var(--ink); }
+.jp { fill: var(--pwr); } .js { fill: var(--sig); }
+svg text { font-family: var(--sans); fill: var(--ink); font-size: 12px; }
+svg .tl { font-size: 12px; font-weight: 500; }
+svg .ts { font-size: 11px; fill: var(--ink-2); }
+svg .tz { font-size: 11px; fill: var(--ink-2); letter-spacing: 0.06em; text-transform: uppercase; }
+svg .tm { font-family: var(--mono); font-size: 12px; }
+svg .tb { fill: var(--board-ink); }
+svg .tw { font-size: 11px; fill: var(--ink-2); }
+svg .topt { fill: var(--opt); }
+@media (prefers-reduced-motion: no-preference) { tr td { transition: color 0.15s; } }
+</style>
+</head>
+<body>
+<main id="app" data-board="pico" data-lasers="2">
+  <header>
+    <div class="eyebrow">OpenHandScan · build with the LED projector (option B)</div>
+    <h1>OpenHandScan Wiring</h1>
+    <p class="sub">Every electrical connection in the scanner, where each part sits, and a list to tick off at the bench. Taken from the repository's README, PARTS and firmware notes as of 16 Nov 2026.</p>
+    <div class="controls" role="group" aria-label="Show">
+      <div class="seg"><span>Board</span><div class="btns">
+        <button type="button" id="b-pico" aria-pressed="true" data-set="board" data-val="pico">Raspberry Pi Pico</button>
+        <button type="button" id="b-esp" aria-pressed="false" data-set="board" data-val="esp">ESP32-S3-Pico</button>
+      </div></div>
+      <div class="seg"><span>Line lasers</span><div class="btns">
+        <button type="button" id="l-2" aria-pressed="true" data-set="lasers" data-val="2">Two</button>
+        <button type="button" id="l-4" aria-pressed="false" data-set="lasers" data-val="4">Four</button>
+      </div></div>
+    </div>
+  </header>
+
+  <section aria-labelledby="h-sch">
+    <h2 id="h-sch">Schematic</h2>
+    <p class="sub">Pin numbers are the physical pins on the board's edge. Both boards use the same physical pins, so only the GPIO names change. <span class="esp">The ESP32-S3-Pico hasn't been tried on a real board yet.</span></p>
+    <div class="figure wide">
+      <svg viewBox="0 0 1000 800" role="img" aria-label="Wiring schematic of the scanner electronics">
+        <defs>
+          <g id="g"><path class="w gw" d="M0 0 v7 M-9 7 h18 M-5.5 11 h11 M-2 15 h4"/></g>
+        </defs>
+
+        <!-- zones -->
+        <rect class="zone" x="78" y="122" width="166" height="350" rx="10"/>
+        <text class="tz" x="88" y="464">In the head</text>
+        <rect class="zone" x="316" y="122" width="344" height="392" rx="10"/>
+        <text class="tz" x="326" y="506">Perfboard · in the grip</text>
+
+        <!-- board block -->
+        <rect class="boardfill" x="800" y="40" width="150" height="740" rx="10"/>
+        <text class="tb" x="875" y="62" text-anchor="middle" font-weight="600"><tspan class="pico">Pico</tspan><tspan class="esp">ESP32-S3-Pico</tspan></text>
+        <text class="tb" x="875" y="78" text-anchor="middle" font-size="10.5" opacity="0.85">USB cable to the PC</text>
+        <g class="tm">
+          <rect class="pad" x="794" y="95" width="12" height="10" rx="2"/><text class="tm tb" x="814" y="104">40 VBUS</text>
+          <rect class="pad" x="794" y="175" width="12" height="10" rx="2"/><text class="tm tb" x="814" y="184">4 <tspan class="pico">GP2</tspan><tspan class="esp">GPIO13</tspan></text>
+          <rect class="pad" x="794" y="315" width="12" height="10" rx="2"/><text class="tm tb" x="814" y="324">5 <tspan class="pico">GP3</tspan><tspan class="esp">GPIO14</tspan></text>
+          <rect class="pad" x="794" y="425" width="12" height="10" rx="2"/><text class="tm tb" x="814" y="434">9 <tspan class="pico">GP6</tspan><tspan class="esp">GPIO17</tspan></text>
+          <rect class="pad" x="794" y="475" width="12" height="10" rx="2"/><text class="tm tb" x="814" y="484">38 GND</text>
+          <rect class="pad" x="794" y="535" width="12" height="10" rx="2"/><text class="tm tb" x="814" y="544">36 3V3</text>
+          <rect class="pad" x="794" y="575" width="12" height="10" rx="2"/><text class="tm tb" x="814" y="584">6 <tspan class="pico">GP4</tspan><tspan class="esp">GPIO15</tspan></text>
+          <rect class="pad" x="794" y="615" width="12" height="10" rx="2"/><text class="tm tb" x="814" y="624">7 <tspan class="pico">GP5</tspan><tspan class="esp">GPIO16</tspan></text>
+          <rect class="pad" x="794" y="655" width="12" height="10" rx="2"/><text class="tm tb" x="814" y="664">8 GND</text>
+          <rect class="pad" x="794" y="715" width="12" height="10" rx="2"/><text class="tm tb" x="814" y="724">20 <tspan class="pico">GP15</tspan><tspan class="esp">GPIO40</tspan></text>
+          <rect class="pad" x="794" y="755" width="12" height="10" rx="2"/><text class="tm tb" x="814" y="764">18 GND</text>
+        </g>
+
+        <!-- kill toggle and switched +5 V rail -->
+        <text class="tl" x="175" y="58" text-anchor="middle">Kill toggle MTS-102</text>
+        <text class="ts" x="175" y="72" text-anchor="middle">on the back cover</text>
+        <path class="w pwr" d="M794 100 H204"/>
+        <circle cx="200" cy="100" r="4" class="part"/>
+        <circle cx="152" cy="86" r="4" class="part"/>
+        <circle cx="152" cy="114" r="4" class="part"/>
+        <path class="w pwr" d="M197 98 L157 88"/>
+        <text class="ts" x="206" y="118">middle lug</text>
+        <text class="ts" x="142" y="118" text-anchor="end">unused lug</text>
+        <path class="w pwr" d="M148 86 H60 V430"/>
+        <text class="ts" x="44" y="300" transform="rotate(-90 44 300)" text-anchor="middle">switched +5 V</text>
+        <text class="tw" x="790" y="93" text-anchor="end">5 V from USB</text>
+
+        <!-- V laser row y=150 -->
+        <g>
+          <circle class="jp" cx="60" cy="150" r="3.5"/>
+          <path class="w pwr" d="M60 150 H90"/>
+          <rect class="part" x="90" y="135" width="140" height="30" rx="15"/>
+          <text class="tl" x="160" y="154" text-anchor="middle">V laser · right arm</text>
+          <text class="ts" x="98" y="179">red +</text><text class="ts" x="224" y="179" text-anchor="end">black −</text>
+          <path class="w ret" d="M230 150 H330"/>
+          <rect class="part" x="330" y="135" width="80" height="30" rx="5"/>
+          <text class="tl" x="370" y="154" text-anchor="middle" font-size="11">Q1 PN2222</text>
+          <text class="ts" x="324" y="145" text-anchor="end">C</text><text class="ts" x="416" y="145">B</text><text class="ts" x="376" y="178">E</text>
+          <path class="w gw" d="M370 165 V172"/><use href="#g" x="370" y="172"/>
+          <path class="w sig" d="M410 150 H450"/>
+          <rect class="part" x="450" y="143" width="56" height="14" rx="2"/><text class="ts" x="478" y="138" text-anchor="middle">1 kΩ</text>
+          <path class="w sig" d="M506 150 H640 V180 H794"/>
+        </g>
+        <!-- V2 laser row y=210 (four lasers) -->
+        <g class="four">
+          <circle class="jp" cx="60" cy="210" r="3.5"/>
+          <path class="w pwr" d="M60 210 H90"/>
+          <rect class="part opt" x="90" y="195" width="140" height="30" rx="15"/>
+          <text class="tl topt" x="160" y="214" text-anchor="middle">V2 laser · left arm</text>
+          <path class="w ret" d="M230 210 H330"/>
+          <rect class="part opt" x="330" y="195" width="80" height="30" rx="5"/>
+          <text class="tl topt" x="370" y="214" text-anchor="middle" font-size="11">Q4 PN2222</text>
+          <path class="w gw" d="M370 225 V232"/><use href="#g" x="370" y="232"/>
+          <path class="w sig" d="M410 210 H450"/>
+          <rect class="part opt" x="450" y="203" width="56" height="14" rx="2"/><text class="ts" x="478" y="198" text-anchor="middle">1 kΩ</text>
+          <path class="w sig" d="M506 210 H640 V180"/>
+          <circle class="js" cx="640" cy="180" r="3.5"/>
+        </g>
+        <text class="tw" x="790" y="173" text-anchor="end">V lasers</text>
+
+        <!-- H laser row y=290 -->
+        <g>
+          <circle class="jp" cx="60" cy="290" r="3.5"/>
+          <path class="w pwr" d="M60 290 H90"/>
+          <rect class="part" x="90" y="275" width="140" height="30" rx="15"/>
+          <text class="tl" x="160" y="294" text-anchor="middle">H laser · top arm</text>
+          <path class="w ret" d="M230 290 H330"/>
+          <rect class="part" x="330" y="275" width="80" height="30" rx="5"/>
+          <text class="tl" x="370" y="294" text-anchor="middle" font-size="11">Q2 PN2222</text>
+          <text class="ts" x="324" y="285" text-anchor="end">C</text><text class="ts" x="416" y="285">B</text><text class="ts" x="376" y="318">E</text>
+          <path class="w gw" d="M370 305 V312"/><use href="#g" x="370" y="312"/>
+          <path class="w sig" d="M410 290 H450"/>
+          <rect class="part" x="450" y="283" width="56" height="14" rx="2"/><text class="ts" x="478" y="278" text-anchor="middle">1 kΩ</text>
+          <path class="w sig" d="M506 290 H640 V320 H794"/>
+        </g>
+        <!-- H2 laser row y=350 (four lasers) -->
+        <g class="four">
+          <circle class="jp" cx="60" cy="350" r="3.5"/>
+          <path class="w pwr" d="M60 350 H90"/>
+          <rect class="part opt" x="90" y="335" width="140" height="30" rx="15"/>
+          <text class="tl topt" x="160" y="354" text-anchor="middle">H2 laser · low right</text>
+          <path class="w ret" d="M230 350 H330"/>
+          <rect class="part opt" x="330" y="335" width="80" height="30" rx="5"/>
+          <text class="tl topt" x="370" y="354" text-anchor="middle" font-size="11">Q5 PN2222</text>
+          <path class="w gw" d="M370 365 V372"/><use href="#g" x="370" y="372"/>
+          <path class="w sig" d="M410 350 H450"/>
+          <rect class="part opt" x="450" y="343" width="56" height="14" rx="2"/><text class="ts" x="478" y="338" text-anchor="middle">1 kΩ</text>
+          <path class="w sig" d="M506 350 H640 V320"/>
+          <circle class="js" cx="640" cy="320" r="3.5"/>
+        </g>
+        <text class="tw" x="790" y="313" text-anchor="end">H lasers</text>
+
+        <!-- LED projector row y=430 -->
+        <g>
+          <path class="w pwr" d="M60 430 H90"/>
+          <rect class="part" x="90" y="415" width="140" height="30" rx="6"/>
+          <text class="tl" x="160" y="434" text-anchor="middle">LED star · projector</text>
+          <text class="ts" x="96" y="411">+</text><text class="ts" x="226" y="411" text-anchor="end">−</text>
+          <path class="w ret" d="M230 430 H250"/>
+          <rect class="part" x="250" y="423" width="50" height="14" rx="2"/><text class="ts" x="275" y="418" text-anchor="middle">8.2 Ω 3 W</text>
+          <path class="w ret" d="M300 430 H330"/>
+          <rect class="part" x="330" y="415" width="80" height="30" rx="5"/>
+          <text class="tl" x="370" y="434" text-anchor="middle" font-size="11">Q3 IRLB8721</text>
+          <text class="ts" x="324" y="425" text-anchor="end">D</text><text class="ts" x="416" y="425">G</text><text class="ts" x="376" y="458">S</text>
+          <path class="w gw" d="M370 445 V452"/><use href="#g" x="370" y="452"/>
+          <path class="w sig" d="M410 430 H794"/>
+          <circle class="js" cx="560" cy="430" r="3.5"/>
+          <path class="w sig" d="M560 430 V440"/>
+          <rect class="part" x="553" y="440" width="14" height="30" rx="2"/>
+          <text class="ts" x="573" y="459">10 kΩ</text>
+          <path class="w gw" d="M560 470 V474"/><use href="#g" x="560" y="474"/>
+        </g>
+        <text class="tw" x="790" y="423" text-anchor="end">projector</text>
+
+        <!-- perfboard ground to pin 38 -->
+        <path class="w gw" d="M794 480 H760 V486"/><use href="#g" x="760" y="486"/>
+        <text class="tw" x="748" y="496" text-anchor="end">ground of every ⏚</text>
+
+        <!-- IMU -->
+        <rect class="part" x="560" y="522" width="130" height="156" rx="8"/>
+        <text class="tl" x="572" y="590" font-weight="600">IMU</text>
+        <text class="ts" x="572" y="606">LSM6DSOX</text>
+        <text class="ts" x="572" y="622">back cover</text>
+        <text class="tm" x="682" y="544" text-anchor="end" font-size="11">VIN</text>
+        <text class="tm" x="682" y="584" text-anchor="end" font-size="11">SDA</text>
+        <text class="tm" x="682" y="624" text-anchor="end" font-size="11">SCL</text>
+        <text class="tm" x="682" y="664" text-anchor="end" font-size="11">GND</text>
+        <path class="w pwr" d="M690 540 H794"/>
+        <path class="w i2c" d="M690 580 H794"/>
+        <path class="w i2c" d="M690 620 H794"/>
+        <path class="w gw" d="M690 660 H794"/>
+        <text class="tw" x="790" y="533" text-anchor="end">3.3 V</text>
+        <text class="tw" x="790" y="573" text-anchor="end">SDA</text>
+        <text class="tw" x="790" y="613" text-anchor="end">SCL</text>
+        <text class="tw" x="790" y="653" text-anchor="end">ground</text>
+
+        <!-- trigger -->
+        <path class="w sig" d="M794 720 H700 V728"/>
+        <circle cx="700" cy="731" r="3" class="part"/>
+        <circle cx="700" cy="749" r="3" class="part"/>
+        <path class="w gw" d="M700 752 V760 H794"/>
+        <path class="w" stroke="var(--ink-2)" d="M688 724 V756 M688 740 H676 M676 734 V746"/>
+        <text class="tl" x="668" y="736" text-anchor="end">Trigger button</text>
+        <text class="ts" x="668" y="751" text-anchor="end">front of the grip</text>
+        <text class="tw" x="790" y="713" text-anchor="end">trigger</text>
+        <text class="tw" x="790" y="753" text-anchor="end">ground</text>
+      </svg>
+    </div>
+    <div class="legend">
+      <span><i style="border-color:var(--pwr)"></i>power (+5 V, 3.3 V)</span>
+      <span><i style="border-color:var(--ret)"></i>laser and LED return (to the switch)</span>
+      <span><i style="border-color:var(--gnd)"></i>ground</span>
+      <span><i style="border-color:var(--sig)"></i>signal from the board</span>
+      <span><i style="border-color:var(--i2c)"></i>IMU data (I²C)</span>
+      <span class="four"><i style="border-color:var(--opt);border-top-style:dashed"></i>added for four lasers</span>
+    </div>
+    <p class="sub">The colours show what a wire carries; use whatever wire colours you have. Each ⏚ symbol goes to one shared ground on the perfboard, and one wire takes that ground to pin 38. The two lasers of a kind share a board pin, but each laser has its own transistor and its own 1 kΩ.</p>
+  </section>
+
+  <section aria-labelledby="h-lay">
+    <h2 id="h-lay">Where everything sits</h2>
+    <p class="sub">Seen from behind, the way you hold it. The camera faces away from you; the lasers and the projector cartridge slide in from the back.</p>
+    <div class="figure mid">
+      <svg viewBox="0 0 640 720" role="img" aria-label="Physical layout of the scanner seen from behind">
+        <!-- left arm (four lasers) -->
+        <g class="four">
+          <rect class="part opt" x="62" y="274" width="110" height="56" rx="8"/>
+          <circle cx="86" cy="302" r="12" fill="var(--zone)" stroke="var(--opt)" stroke-width="2"/>
+          <text class="tl topt" x="117" y="262" text-anchor="middle">V2 laser</text>
+          <text class="ts" x="117" y="348" text-anchor="middle">left arm</text>
+        </g>
+        <!-- top arm -->
+        <rect class="part" x="232" y="56" width="80" height="196" rx="8"/>
+        <circle cx="272" cy="96" r="13" fill="var(--zone)" stroke="var(--pwr)" stroke-width="2"/>
+        <circle cx="272" cy="186" r="17" fill="var(--zone)" stroke="var(--ink-2)" stroke-width="2"/>
+        <circle cx="272" cy="186" r="6" fill="var(--pwr)" opacity="0.8"/>
+        <text class="tl" x="326" y="92">H-line laser</text>
+        <text class="ts" x="326" y="107">top arm, focus at 25 cm, line level</text>
+        <text class="tl" x="326" y="182">LED projector cartridge</text>
+        <text class="ts" x="326" y="197">LED star + heatsink at the back, mask, M12 lens</text>
+        <!-- camera block with back cover -->
+        <rect class="part" x="170" y="252" width="300" height="108" rx="10"/>
+        <text class="tz" x="182" y="272">Back cover</text>
+        <circle cx="214" cy="312" r="11" fill="var(--zone)" stroke="var(--pwr)" stroke-width="2"/>
+        <path d="M214 312 L222 298" stroke="var(--ink)" stroke-width="3" stroke-linecap="round"/>
+        <text class="tl" x="232" y="316">Kill toggle</text>
+        <rect x="366" y="290" width="74" height="44" rx="5" fill="var(--zone)" stroke="var(--i2c)" stroke-width="2"/>
+        <text class="tl" x="403" y="317" text-anchor="middle">IMU</text>
+        <text class="ts" x="320" y="352" text-anchor="middle">stereo camera behind the faceplate, on the far side</text>
+        <!-- right arm -->
+        <rect class="part" x="470" y="274" width="110" height="56" rx="8"/>
+        <circle cx="556" cy="302" r="12" fill="var(--zone)" stroke="var(--pwr)" stroke-width="2"/>
+        <text class="tl" x="525" y="262" text-anchor="middle">V-line laser</text>
+        <text class="ts" x="525" y="348" text-anchor="middle">right arm, line vertical</text>
+        <!-- low right block (four lasers) -->
+        <g class="four">
+          <rect class="part opt" x="392" y="360" width="76" height="64" rx="8"/>
+          <circle cx="430" cy="392" r="12" fill="var(--zone)" stroke="var(--opt)" stroke-width="2"/>
+          <text class="tl topt" x="480" y="388">H2 laser</text>
+          <text class="ts" x="480" y="403">low right, 56 mm below</text>
+          <text class="ts" x="480" y="417">the camera centre</text>
+        </g>
+        <!-- grip -->
+        <rect class="part" x="280" y="360" width="80" height="300" rx="16"/>
+        <rect x="300" y="358" width="40" height="10" rx="3" fill="var(--zone)" stroke="var(--ink-2)"/>
+        <circle cx="320" cy="404" r="10" fill="none" stroke="var(--sig)" stroke-width="2" stroke-dasharray="3 3"/>
+        <rect x="294" y="430" width="52" height="46" rx="4" fill="var(--zone)" stroke="var(--ink-2)"/>
+        <text class="ts" x="320" y="451" text-anchor="middle">perf-</text>
+        <text class="ts" x="320" y="464" text-anchor="middle">board</text>
+        <rect x="294" y="500" width="52" height="128" rx="4" class="boardfill"/>
+        <text class="tb" x="320" y="560" text-anchor="middle" font-size="11" transform="rotate(-90 320 560)"><tspan class="pico">Pico</tspan><tspan class="esp">ESP32-S3-Pico</tspan></text>
+        <rect x="310" y="622" width="20" height="10" rx="2" fill="var(--pad)"/>
+        <path d="M312 660 C300 690 240 700 200 704 M328 660 C340 690 400 700 440 704" stroke="var(--ink-2)" stroke-width="3" fill="none" stroke-linecap="round"/>
+        <!-- grip labels -->
+        <text class="tl" x="268" y="372" text-anchor="end">Cable slot</text>
+        <text class="ts" x="268" y="387" text-anchor="end">camera USB, 1× +5 V,</text>
+        <text class="ts" x="268" y="401" text-anchor="end"><tspan class="four">5×</tspan><tspan class="twoonly">3×</tspan> returns, 4× IMU</text>
+        <text class="tl" x="268" y="428" text-anchor="end">Trigger</text>
+        <text class="ts" x="268" y="443" text-anchor="end">16 mm button, front of the grip</text>
+        <text class="tl" x="372" y="452">Perfboard</text>
+        <text class="ts" x="372" y="467">Q1–Q3<tspan class="four">, Q4, Q5</tspan>, resistors</text>
+        <text class="ts" x="372" y="481">8.2 Ω gets warm: give it air</text>
+        <text class="tl" x="372" y="560"><tspan class="pico">Pico</tspan><tspan class="esp">ESP32-S3-Pico</tspan></text>
+        <text class="ts" x="372" y="575">right grip half, USB pointing down</text>
+        <text class="tl" x="200" y="700" text-anchor="end">Board USB</text>
+        <text class="ts" x="200" y="714" text-anchor="end">to the PC</text>
+        <text class="tl" x="440" y="700">Camera USB</text>
+        <text class="ts" x="440" y="714">to the PC</text>
+      </svg>
+    </div>
+  </section>
+
+  <section aria-labelledby="h-pin">
+    <h2 id="h-pin">Part pinouts</h2>
+    <div class="pinouts">
+      <div class="figure">
+        <h3>PN2222 transistor (Q1, Q2<span class="four">, Q4, Q5</span>)</h3>
+        <svg viewBox="0 0 200 150" role="img" aria-label="PN2222 pinout E B C">
+          <path class="part" d="M60 70 V30 Q60 18 72 18 H128 Q140 18 140 30 V70 Z"/>
+          <text class="ts" x="100" y="48" text-anchor="middle">flat face</text>
+          <text class="ts" x="100" y="62" text-anchor="middle">toward you</text>
+          <path class="w" stroke="var(--ink-2)" d="M75 70 V118 M100 70 V118 M125 70 V118"/>
+          <text class="tm" x="75" y="136" text-anchor="middle">E</text>
+          <text class="tm" x="100" y="136" text-anchor="middle">B</text>
+          <text class="tm" x="125" y="136" text-anchor="middle">C</text>
+        </svg>
+        <p><b>E</b> to ground, <b>B</b> to the 1 kΩ, <b>C</b> to the laser's black wire. This is the Adafruit part. Some "2N2222" parts are C-B-E, so check the datasheet of what arrives.</p>
+      </div>
+      <div class="figure">
+        <h3>IRLB8721 MOSFET (Q3)</h3>
+        <svg viewBox="0 0 200 150" role="img" aria-label="IRLB8721 pinout G D S">
+          <rect class="part" x="62" y="10" width="76" height="30" rx="3"/>
+          <circle cx="100" cy="25" r="7" fill="var(--bg)" stroke="var(--ink-2)" stroke-width="1.5"/>
+          <rect class="part" x="62" y="40" width="76" height="44" rx="3"/>
+          <text class="ts" x="100" y="66" text-anchor="middle">printed side</text>
+          <path class="w" stroke="var(--ink-2)" d="M78 84 V120 M100 84 V120 M122 84 V120"/>
+          <text class="tm" x="78" y="138" text-anchor="middle">G</text>
+          <text class="tm" x="100" y="138" text-anchor="middle">D</text>
+          <text class="tm" x="122" y="138" text-anchor="middle">S</text>
+        </svg>
+        <p><b>G</b> to pin 9 directly, plus 10 kΩ to ground. <b>D</b> to the 8.2 Ω resistor. <b>S</b> to ground. The metal tab is also the drain, so keep it off other wires.</p>
+      </div>
+      <div class="figure">
+        <h3>Kill toggle MTS-102</h3>
+        <svg viewBox="0 0 200 150" role="img" aria-label="MTS-102 lugs">
+          <rect class="part" x="40" y="20" width="120" height="60" rx="6"/>
+          <path class="w" stroke="var(--ink-2)" d="M100 20 L118 2"/>
+          <rect x="58" y="80" width="12" height="34" rx="2" fill="var(--pad)"/>
+          <rect x="94" y="80" width="12" height="34" rx="2" fill="var(--pad)"/>
+          <rect x="130" y="80" width="12" height="34" rx="2" fill="var(--pad)"/>
+          <text class="ts" x="64" y="132" text-anchor="middle">outer</text>
+          <text class="ts" x="100" y="132" text-anchor="middle">middle</text>
+          <text class="ts" x="136" y="132" text-anchor="middle">outer</text>
+          <text class="ts" x="100" y="146" text-anchor="middle">pin 40 VBUS on the middle</text>
+        </svg>
+        <p>The middle lug takes 5 V from pin 40. One outer lug feeds the lasers' red wires and the LED's +; the other outer lug stays empty. The lever joins the middle lug to the lug on the <i>opposite</i> side, so check with a meter which lug is live in your "on" position.</p>
+      </div>
+      <div class="figure">
+        <h3>Board pins used</h3>
+        <svg viewBox="0 0 380 500" role="img" aria-label="Board pin map with the pins used">
+          <rect class="boardfill" x="125" y="24" width="130" height="462" rx="8"/>
+          <rect x="170" y="12" width="40" height="22" rx="3" fill="var(--ink-2)"/>
+          <text class="tb" x="190" y="58" text-anchor="middle" font-size="10.5">USB end</text>
+          <g id="pinmap"></g>
+        </svg>
+        <p>Seen from the top, USB end up. In the grip the USB end points down. <span class="esp">On the ESP32-S3-Pico, confirm the GND pins against the silkscreen; any GND pin works.</span></p>
+      </div>
+    </div>
+    <p class="sub">IMU breakout (Adafruit LSM6DSOX): use only <span class="mono">VIN</span>, <span class="mono">GND</span>, <span class="mono">SCL</span> and <span class="mono">SDA</span>. LED star: the pads are marked + and −.</p>
+  </section>
+
+  <section aria-labelledby="h-chk">
+    <h2 id="h-chk">Connection checklist</h2>
+    <p class="sub">Tick each wire as you solder it. The ticks stay in this browser only.</p>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th scope="col"><span class="sr" style="position:absolute;left:-9999px">Done</span></th><th scope="col">From</th><th scope="col">To</th><th scope="col">Runs</th></tr></thead>
+        <tbody id="checks">
+          <tr><td><input type="checkbox" id="c1"></td><td><span class="dot" style="background:var(--pwr)"></span>Board pin 40 (VBUS)</td><td>Kill toggle, middle lug</td><td><span class="chip">grip → back cover</span></td></tr>
+          <tr><td><input type="checkbox" id="c2"></td><td><span class="dot" style="background:var(--pwr)"></span>Kill toggle, outer lug</td><td>Red wire of the V laser and the H laser<span class="four">, V2 and H2</span>; LED star +</td><td><span class="chip">in the head</span></td></tr>
+          <tr><td><input type="checkbox" id="c3"></td><td><span class="dot" style="background:var(--ret)"></span>V laser black</td><td>Q1 collector</td><td><span class="chip">head → grip</span></td></tr>
+          <tr><td><input type="checkbox" id="c4"></td><td><span class="dot" style="background:var(--ret)"></span>H laser black</td><td>Q2 collector</td><td><span class="chip">head → grip</span></td></tr>
+          <tr><td><input type="checkbox" id="c5"></td><td><span class="dot" style="background:var(--ret)"></span>LED star −</td><td>8.2 Ω 3 W resistor, then Q3 drain</td><td><span class="chip">head → grip</span></td></tr>
+          <tr class="four"><td><input type="checkbox" id="c6"></td><td><span class="dot" style="background:var(--opt)"></span>V2 laser black / H2 laser black</td><td>Q4 collector / Q5 collector</td><td><span class="chip">head → grip</span></td></tr>
+          <tr><td><input type="checkbox" id="c7"></td><td><span class="dot" style="background:var(--sig)"></span>Board pin 4 (<span class="pico">GP2</span><span class="esp">GPIO13</span>)</td><td>1 kΩ to Q1 base<span class="four">, and a second 1 kΩ to Q4 base</span></td><td><span class="chip">perfboard</span></td></tr>
+          <tr><td><input type="checkbox" id="c8"></td><td><span class="dot" style="background:var(--sig)"></span>Board pin 5 (<span class="pico">GP3</span><span class="esp">GPIO14</span>)</td><td>1 kΩ to Q2 base<span class="four">, and a second 1 kΩ to Q5 base</span></td><td><span class="chip">perfboard</span></td></tr>
+          <tr><td><input type="checkbox" id="c9"></td><td><span class="dot" style="background:var(--sig)"></span>Board pin 9 (<span class="pico">GP6</span><span class="esp">GPIO17</span>)</td><td>Q3 gate, and 10 kΩ from the gate to ground</td><td><span class="chip">perfboard</span></td></tr>
+          <tr><td><input type="checkbox" id="c10"></td><td><span class="dot" style="background:var(--gnd)"></span>Q1, Q2<span class="four">, Q4, Q5</span> emitters; Q3 source; the 10 kΩ</td><td>Perfboard ground, then board pin 38 (GND)</td><td><span class="chip">perfboard</span></td></tr>
+          <tr><td><input type="checkbox" id="c11"></td><td><span class="dot" style="background:var(--pwr)"></span>IMU VIN</td><td>Board pin 36 (3V3)</td><td><span class="chip">back cover → grip</span></td></tr>
+          <tr><td><input type="checkbox" id="c12"></td><td><span class="dot" style="background:var(--i2c)"></span>IMU SDA / SCL</td><td>Board pin 6 (<span class="pico">GP4</span><span class="esp">GPIO15</span>) / pin 7 (<span class="pico">GP5</span><span class="esp">GPIO16</span>)</td><td><span class="chip">back cover → grip</span></td></tr>
+          <tr><td><input type="checkbox" id="c13"></td><td><span class="dot" style="background:var(--gnd)"></span>IMU GND</td><td>Board pin 8 (GND, next to pins 6 and 7)</td><td><span class="chip">back cover → grip</span></td></tr>
+          <tr><td><input type="checkbox" id="c14"></td><td><span class="dot" style="background:var(--sig)"></span>Trigger button, one lug</td><td>Board pin 20 (<span class="pico">GP15</span><span class="esp">GPIO40</span>)</td><td><span class="chip">in the grip</span></td></tr>
+          <tr><td><input type="checkbox" id="c15"></td><td><span class="dot" style="background:var(--gnd)"></span>Trigger button, other lug</td><td>Board pin 18 (GND)</td><td><span class="chip">in the grip</span></td></tr>
+          <tr><td><input type="checkbox" id="c16"></td><td><span class="dot" style="background:var(--ink-2)"></span>Board USB<span class="pico"> (micro-USB data cable)</span><span class="esp"> (USB-C data cable)</span>; camera USB</td><td>The PC, two cables</td><td><span class="chip">out of the grip</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section aria-labelledby="h-notes">
+    <h2 id="h-notes">Before you power it</h2>
+    <div class="warn">The line lasers are Class 3R. Never look into them, and point the scanner at a wall or a sheet of paper while testing.</div>
+    <ul class="notes">
+      <li><b>Power budget.</b> The LED draws about 340 mA and each laser a few tens of mA, so about 0.45 A in all with two lasers, and a little more with four. A USB 2.0 port is rated for 0.5 A. With four lasers, use a USB 3 port (0.9 A) or a powered hub.</li>
+      <li><b>First test with the toggle off.</b> Plug in the board and send <span class="mono">HELLO</span> in a serial terminal; it should answer with <span class="mono">imu=LSM6DSOX</span>. Then switch the toggle on and try <span class="mono">EMIT 20 0 0</span>, <span class="mono">EMIT 0 20 0</span> and <span class="mono">EMIT 0 0 20</span>. The firmware turns everything off 1.5 s after the PC goes quiet.</li>
+      <li><b>Keep the emitters off during reset (optional).</b> A 10 kΩ resistor from each transistor base to ground keeps the lasers dark while the board is in reset or in boot mode.</li>
+      <li><b>Heat.</b> The 8.2 Ω resistor dissipates about 1 W and gets warm. Leave it room on the perfboard, away from the plastic.</li>
+      <li><b>Wires to the head.</b> Run them through the slot under the camera: the camera USB, one +5 V to the toggle, <span class="twoonly">three</span><span class="four">five</span> returns (<span class="twoonly">V, H, LED</span><span class="four">V, V2, H, H2, LED</span>) and four IMU wires. Sleeve each joint with heat-shrink.</li>
+    </ul>
+  </section>
+</main>
+
+<script>
+(function () {
+  var app = document.getElementById("app");
+  var store = {
+    get: function (k) { try { return localStorage.getItem(k); } catch (e) { return null; } },
+    set: function (k, v) { try { localStorage.setItem(k, v); } catch (e) { /* storage blocked: fine */ } }
+  };
+  // twoonly: shown only with two lasers
+  var style = document.createElement("style");
+  style.textContent = '[data-lasers="4"] .twoonly{display:none}';
+  document.head.appendChild(style);
+
+  function apply(kind, val) {
+    app.setAttribute(kind === "board" ? "data-board" : "data-lasers", val);
+    document.querySelectorAll('button[data-set="' + kind + '"]').forEach(function (b) {
+      b.setAttribute("aria-pressed", String(b.getAttribute("data-val") === val));
+    });
+    store.set("ohs-wiring-" + kind, val);
+  }
+  document.querySelectorAll("button[data-set]").forEach(function (b) {
+    b.addEventListener("click", function () { apply(b.getAttribute("data-set"), b.getAttribute("data-val")); });
+  });
+  var sb = store.get("ohs-wiring-board"), sl = store.get("ohs-wiring-lasers");
+  if (sb === "pico" || sb === "esp") apply("board", sb);
+  if (sl === "2" || sl === "4") apply("lasers", sl);
+
+  // checklist ticks, kept in this browser
+  document.querySelectorAll("#checks input").forEach(function (cb) {
+    var key = "ohs-wiring-" + cb.id;
+    cb.checked = store.get(key) === "1";
+    cb.closest("tr").classList.toggle("done", cb.checked);
+    cb.addEventListener("change", function () {
+      store.set(key, cb.checked ? "1" : "0");
+      cb.closest("tr").classList.toggle("done", cb.checked);
+    });
+  });
+
+  // board pin map: pins 1-20 down the left edge, 40-21 down the right edge
+  var NS = "http://www.w3.org/2000/svg";
+  var used = {
+    4: ["V lasers", "GP2", "GPIO13", "sig"], 5: ["H lasers", "GP3", "GPIO14", "sig"], 6: ["IMU SDA", "GP4", "GPIO15", "i2c"],
+    7: ["IMU SCL", "GP5", "GPIO16", "i2c"], 8: ["IMU GND", "GND", "GND", "gnd"], 9: ["projector", "GP6", "GPIO17", "sig"],
+    18: ["trigger GND", "GND", "GND", "gnd"], 20: ["trigger", "GP15", "GPIO40", "sig"],
+    36: ["IMU VIN", "3V3", "3V3", "pwr"], 38: ["perfboard GND", "GND", "GND", "gnd"], 40: ["to toggle", "VBUS", "VBUS", "pwr"]
+  };
+  var colour = { sig: "var(--sig)", i2c: "var(--i2c)", gnd: "var(--gnd)", pwr: "var(--pwr)" };
+  var g = document.getElementById("pinmap");
+  function el(name, attrs, text) {
+    var e = document.createElementNS(NS, name);
+    for (var k in attrs) e.setAttribute(k, attrs[k]);
+    if (text != null) e.textContent = text;
+    return e;
+  }
+  for (var n = 1; n <= 40; n++) {
+    var left = n <= 20;
+    var y = 74 + (left ? n - 1 : 40 - n) * 20.5;
+    var x = left ? 125 : 255;
+    var u = used[n];
+    g.appendChild(el("rect", { x: x - 6, y: y - 5, width: 12, height: 10, rx: 2, "class": u ? "pad" : "padoff" }));
+    g.appendChild(el("text", { x: left ? x + 12 : x - 12, y: y + 4, "class": "tm tb", "font-size": "10", "text-anchor": left ? "start" : "end", opacity: u ? "1" : "0.55" }, String(n)));
+    if (u) {
+      var t = el("text", { x: left ? x - 12 : x + 12, y: y + 4, "font-size": "11", "text-anchor": left ? "end" : "start" });
+      var a = el("tspan", { fill: colour[u[3]], "font-weight": "600" }, u[0] + " ");
+      var p = el("tspan", { "class": "pico tm", "font-size": "10" }, u[1]);
+      var s = el("tspan", { "class": "esp tm", "font-size": "10" }, u[2]);
+      if (left) { t.appendChild(a); t.appendChild(p); t.appendChild(s); }
+      else { t.appendChild(p); t.appendChild(s); a.textContent = " " + u[0]; t.appendChild(a); }
+      g.appendChild(t);
+    }
+  }
+})();
+</script>
+</body>
+</html>

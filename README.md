@@ -91,6 +91,8 @@ ASA settings: 0.2 mm layers, enclosure on, no part-cooling fan (or ≤20 %), bri
 
 ## Wiring (Raspberry Pi Pico)
 
+**Drawn out in [docs/wiring.html](docs/wiring.html):** the schematic, where each part sits, the pinouts of the transistors, the MOSFET, the toggle and the board, and a checklist to tick off while soldering. It has switches for two or four lasers and for the Pico or the ESP32-S3-Pico. Open the file in a browser. In it, the IMU's ground goes to pin 8, the GND pin next to its SDA and SCL pins.
+
 ```
                      ┌── toggle (back cover) ──┬── V-laser  red
 Pico VBUS (pin 40) ──┘                         ├── H-laser  red
