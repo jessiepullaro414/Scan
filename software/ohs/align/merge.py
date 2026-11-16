@@ -16,10 +16,16 @@ plane then: every frame's depth and laser points on or behind it (and up to ``su
 in front of it) are left out, so that only the part is merged. When the part was not moved the
 table is one surface in all scans and can stay in.
 
-Limits of this first version: all scans must have been taken with the same calibration and
-image size (one scanner, one camera mode; a session after a recalibration is refused); the
-frames are fused at the poses given, without a joint refinement across the scans; and Poisson
-meshing is not offered (``ProcessParams.poisson`` is refused, not ignored).
+**Scans of different calibrations** (a session after a recalibration, another camera mode, or
+another scanner) merge too: each scan's frames go through a pipeline of its own calibration
+(rectified, matched and triangulated as that scan was), and all of them fuse into one model,
+which is handed from pipeline to pipeline (:meth:`ohs.app.pipeline.FramePipeline.release_model`).
+That model's grid is the finest of the scans' own (``ProcessParams.pipeline.fusion`` unset: 1 mm
+when one scan is at full resolution); ``pipeline.scale`` applies to every scan alike. The report
+says which calibration each scan had (``scans[i].calibration``, ``calibrations``).
+
+Limits: the frames are fused at the poses given, without a joint refinement across the scans;
+and Poisson meshing is not offered (``ProcessParams.poisson`` is refused, not ignored).
 """
 from __future__ import annotations
 
@@ -32,11 +38,12 @@ from typing import Any, Callable, Sequence
 
 import numpy as np
 
-from ohs.app.pipeline import FramePipeline
+from ohs.app.pipeline import FramePipeline, default_fusion_params, effective_scale
 from ohs.app.process import READ_AHEAD_FRAMES, ProcessParams, _check_export, _jsonable
 from ohs.io.recording import RecordingReader
 from ohs.mesh.confidence import SIGMA_NONE_MM, sigma_stats
 from ohs.track.posegraph import read_trajectory
+from ohs.vision.rectify import Rectifier
 
 __all__ = ["ScanInput", "merge_scans"]
 
@@ -82,8 +89,8 @@ def merge_scans(scans: Sequence[ScanInput], out_dir: str | Path, params: Process
     """Fuse the frames of all ``scans`` into one model and write it to ``out_dir`` (module
     docstring). ``params``: as for :func:`ohs.app.process.process_recording` (its pipeline
     settings, export formats and cleaning; nothing is tracked). ``progress(k, n)`` after each of
-    the ``n`` frames. Returns the report (also ``report.json``). ``ValueError`` for no scans, a
-    scan without a usable frame, or scans of different calibrations."""
+    the ``n`` frames. Returns the report (also ``report.json``). ``ValueError`` for no scans, or a
+    scan without a calibration or without a usable frame."""
     wall0 = time.perf_counter()
     if not scans:
         raise ValueError("no scans to merge")
@@ -94,20 +101,17 @@ def merge_scans(scans: Sequence[ScanInput], out_dir: str | Path, params: Process
         raise ValueError("a merge cannot use Poisson meshing yet: leave ProcessParams.poisson off")
     out = Path(out_dir)
     plan = []
-    calib = None
+    cals: list[Any] = []  # the scans' calibrations, each one once, in the order of first use
     for k, sc in enumerate(scans):
         name = sc.name or Path(sc.recording).name
         reader = RecordingReader(sc.recording)
         cal = sc.calib if sc.calib is not None else reader.calibration()
         if cal is None:
             raise ValueError(f"scan {name}: the recording has no calibration")
-        if calib is None:
-            calib = cal
-        else:
-            why = _same_calibration(calib, cal)
-            if why is not None:
-                raise ValueError(f"scan {name} was taken with another calibration than the first scan ({why}): "
-                                 "scans of different calibrations cannot be merged yet")
+        ci = next((i for i, c in enumerate(cals) if _same_calibration(c, cal) is None), None)
+        if ci is None:
+            cals.append(cal)
+            ci = len(cals) - 1
         rows = read_trajectory(sc.trajectory) if isinstance(sc.trajectory, (str, Path)) else list(sc.trajectory)
         poses = {int(r[0]): np.asarray(r[3], dtype=np.float64).reshape(4, 4) for r in rows if r[2]}
         poses = {i: Tf for i, Tf in poses.items() if np.all(np.isfinite(Tf))}  # a lost frame, whatever its flag says
@@ -119,14 +123,32 @@ def merge_scans(scans: Sequence[ScanInput], out_dir: str | Path, params: Process
         if sc.support is not None:
             sn = np.asarray(sc.support[0], dtype=np.float64).reshape(3)
             support = (sn / np.linalg.norm(sn), float(sc.support[1]) / float(np.linalg.norm(sn)))
-        plan.append((name, reader, poses, positions, T, support))
+        plan.append((name, reader, poses, positions, T, support, ci))
     n = sum(len(pl[3]) for pl in plan)
+    pp = p.pipeline
+    widths = [Rectifier(c.stereo, pp.scale).image_size[0] for c in cals]
+    if len(cals) > 1 and pp.fusion is None:  # one model for all: the finest of the scans' own grids
+        pp = replace(pp, fusion=default_fusion_params(effective_scale(max(widths))))
     out.mkdir(parents=True, exist_ok=True)
-    pipe = FramePipeline(calib, p.pipeline)
+    pipe = FramePipeline(cals[plan[0][6]], pp)
+    cur = plan[0][6]
+    planes: set[str] = set()
     per_scan = []
     k = 0
     try:
-        for name, reader, poses, positions, T, support in plan:
+        for name, reader, poses, positions, T, support, ci in plan:
+            if ci != cur:  # another calibration: its own pipeline, fusing into the same model
+                planes |= set(pipe.planes)
+                cloud, model = pipe.laser_cloud(), pipe.release_model()
+                pipe.close()
+                try:
+                    pipe = FramePipeline(cals[ci], pp, model=model)
+                except BaseException:
+                    if model is not None:
+                        model.close()
+                    raise
+                pipe.cloud = cloud
+                cur = ci
             frames = reader.iter_ahead(positions, READ_AHEAD_FRAMES)
             try:
                 for frame in frames:
@@ -141,7 +163,8 @@ def merge_scans(scans: Sequence[ScanInput], out_dir: str | Path, params: Process
             finally:
                 frames.close()
             per_scan.append({"name": name, "recording": str(reader.path), "frames": len(positions), "T": T.tolist(),
-                             "support_left_out": support is not None})
+                             "support_left_out": support is not None, "calibration": ci,
+                             "image_size": list(pipe.image_size)})
             log.info("merged %s: %d frames", name, len(positions))
         V, F, N, S = pipe.mesh_with_sigma()
         n_faces_raw = int(len(F))
@@ -165,14 +188,15 @@ def merge_scans(scans: Sequence[ScanInput], out_dir: str | Path, params: Process
         laser_pts = cloud.points(float(p.laser_voxel_mm))
         save_points_ply(out / "laser_points.ply", laser_pts)
         files["laser_points"] = str(out / "laser_points.ply")
+        planes |= set(pipe.planes)
         report: dict[str, Any] = {
             "merged": True, "out_dir": str(out), "scans": per_scan, "frames": {"fused": n},
-            "image_size": list(pipe.image_size),
+            "image_size": per_scan[0]["image_size"], "calibrations": len(cals),
             "mesh": {"n_vertices": int(len(V)), "n_faces": int(len(F)), "n_faces_before_cleaning": n_faces_raw,
                      "voxel_mm": float(pipe.fusion_params.voxel_mm), "empty": len(F) == 0,
                      "bbox_mm": [V.min(0).tolist(), V.max(0).tolist()] if len(V) else None,
                      "reconstruction": pipe.recon_status, "sigma_mm": sigma_stats(S, V, F)},
-            "lasers": {"planes": sorted(pipe.planes), "n_points_exported": int(len(laser_pts)),
+            "lasers": {"planes": sorted(planes), "n_points_exported": int(len(laser_pts)),
                        "voxel_mm": float(p.laser_voxel_mm)},
             "files": files,
         }

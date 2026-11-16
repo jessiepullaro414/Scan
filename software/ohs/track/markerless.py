@@ -454,16 +454,31 @@ class MarkerlessTracker:
         _limit_open3d_threads(o3d)
         self._o3d, self._o3c = o3d, o3c
         self.params = params if params is not None else FusionParams()
-        self.K = np.asarray(K, dtype=np.float64).reshape(3, 3).copy()
-        self.image_size = (int(image_size[0]), int(image_size[1]))
         self.device = _resolve_device(self.params.device)
-        w, h = self.image_size
         p = self.params
         self._gpu: Any = None  # GpuTsdfVolume when the model is on the GPU
         self._vbg: Any = None
         self._gpu_status = self._make_gpu_volume(str(p.model_backend).strip().lower())
         self._trunc_mm = float(self._gpu.trunc_mm if self._gpu is not None else p.trunc_mm)  # kept after close()
         self._back_mm = self._gpu.back_mm if self._gpu is not None else None
+        self._set_camera(K, image_size)
+        log.info("MarkerlessTracker: %dx%d, voxel %.2f mm, trunc %.2f mm, model %s (%s), ray cast %dx%d",
+                 *self.image_size, p.voxel_mm, self.trunc_mm, self.model_backend, self.model_device, *self._ray_size)
+        self.reset()
+
+    def set_camera(self, K: np.ndarray, image_size: tuple[int, int]) -> None:
+        """Take the next depth maps from another camera (intrinsics ``K`` at ``(width, height)``),
+        keeping the model: a merge fuses scans of different calibrations into one model this way,
+        each frame at a pose given (not tracked)."""
+        self._set_camera(K, image_size)
+
+    def _set_camera(self, K: np.ndarray, image_size: tuple[int, int]) -> None:
+        """Everything that depends on the depth maps' camera."""
+        o3c = self._o3c
+        p = self.params
+        self.K = np.asarray(K, dtype=np.float64).reshape(3, 3).copy()
+        self.image_size = (int(image_size[0]), int(image_size[1]))
+        w, h = self.image_size
         # integration intrinsics: +0.5 px turns Open3D's truncating pixel lookup into rounding
         K_int = self.K.copy()
         K_int[0, 2] += 0.5
@@ -490,9 +505,6 @@ class MarkerlessTracker:
             y = (vv - self.K[1, 2]) / self.K[1, 1]
             x = (uu - self.K[0, 2] - self.K[0, 1] * y) / self.K[0, 0]
             self._src_levels.append((o, s, np.stack([x, y, np.ones_like(x)], axis=-1)))
-        log.info("MarkerlessTracker: %dx%d, voxel %.2f mm, trunc %.2f mm, model %s (%s), ray cast %dx%d",
-                 w, h, p.voxel_mm, self.trunc_mm, self.model_backend, self.model_device, *self._ray_size)
-        self.reset()
 
     def _make_gpu_volume(self, backend: str) -> str:
         """Create the GPU volume for ``backend`` "auto" / "gpu"; returns a plain-language status."""

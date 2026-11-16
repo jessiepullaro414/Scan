@@ -263,17 +263,17 @@ def test_two_shapes_that_do_not_belong_together_are_refused():
 
 
 # --------------------------------------------------------------------------- simulated scans
-def _scan(tmp: Path, scene: str, azimuth: float, seed: int) -> dict:
+def _scan(tmp: Path, scene: str, azimuth: float, seed: int, size: tuple[int, int] = SIZE) -> dict:
     """A simulated scan of ``scene`` starting at ``azimuth``, fused at its true poses."""
     sc = make_scene(scene, 0)
-    cal = nominal_calibration(SIZE, realistic=True)
+    cal = nominal_calibration(size, realistic=True)
     traj = HandheldTrajectory(target=sc.target, t0=100.0 + float(cal.imu.time_offset), duration=N_FRAMES / 30.0, seed=seed,
                               baseline=cal.stereo.baseline, azimuth0_deg=azimuth, **dict(sc.meta.get("trajectory", {})))
-    rec = scan_recording(tmp / f"rec_{scene}_{azimuth:.0f}", scene=scene, n_frames=N_FRAMES, image_size=SIZE, realistic=True,
-                         depth_every=0, seed=seed, trajectory=traj)
+    rec = scan_recording(tmp / f"rec_{scene}_{azimuth:.0f}_{size[0]}", scene=scene, n_frames=N_FRAMES, image_size=size,
+                         realistic=True, depth_every=0, seed=seed, trajectory=traj)
     gt = RecordingReader(rec).ground_truth_poses()
     first = min(gt)
-    out = tmp / f"out_{scene}_{azimuth:.0f}"
+    out = tmp / f"out_{scene}_{azimuth:.0f}_{size[0]}"
     T0inv = G.invert_se3(gt[first])
     process_recording(rec, out, params=ProcessParams(pipeline=PipelineParams(), export=("ply",)),
                       poses={i: T0inv @ T for i, T in gt.items()})
@@ -351,6 +351,28 @@ def test_merging_two_scans_from_their_recordings(bracket_scans, tmp_path):
 
 
 @pytest.mark.slow
+def test_merging_two_scans_of_different_calibrations(bracket_scans, tmp_path):
+    """Scan B recorded with another camera (800 x 500, another focal length and centre): merged
+    with scan A (640 x 400), the part is where each scan has it, and more of it than either."""
+    a = bracket_scans[0]
+    b = _scan(tmp_path, "bracket", 110.0, 1, size=(800, 500))
+    T_true = G.invert_se3(a["world"]) @ b["world"]
+    rep = merge_scans([ScanInput(a["rec"], a["out"] / "trajectory.csv"), ScanInput(b["rec"], b["out"] / "trajectory.csv", T_true)],
+                      tmp_path / "merged", ProcessParams(pipeline=PipelineParams(), export=("ply",)))
+    assert rep["calibrations"] == 2 and [s["image_size"] for s in rep["scans"]] == [[640, 400], [800, 500]]
+    assert rep["mesh"]["voxel_mm"] == 1.6  # the 800 px scan's own grid, the finer one
+    cm = scan_cloud_from_mesh(tmp_path / "merged" / "mesh.ply")
+    clouds = [scan_cloud_from_mesh(sc["out"] / "mesh.ply") for sc in (a, b)]
+    for c, T in zip(clouds, (np.eye(4), T_true)):
+        d, _ = cm.part.fine.tree.query(c.part.fine.pts @ T[:3, :3].T + T[:3, 3])
+        print(f"scan's part to the merged one: {np.percentile(d, [50, 80, 95]).round(2)} mm")
+        assert np.percentile(d, 80) < 1.5, np.percentile(d, [50, 80, 95])
+    n_part = [c.n_part for c in clouds]
+    print(f"part surface: scans {n_part}, merged {cm.n_part}")
+    assert cm.n_part > 1.03 * max(n_part) and cm.n_part < 0.95 * sum(n_part)
+
+
+@pytest.mark.slow
 def test_merge_can_leave_each_scans_table_out(bracket_scans, tmp_path):
     """A part that was moved lay on a table that is elsewhere in each scan: with the scans' support
     planes given, nothing on or behind them is merged, and the part is still there."""
@@ -407,9 +429,20 @@ def test_three_scans_round_the_bracket(bracket_scans, tmp_path):
     assert n_m > 1.03 * max(n_part) and n_m < 0.95 * sum(n_part)
 
 
-def test_merge_refuses_scans_of_different_calibrations(tmp_path):
+def test_merge_takes_scans_of_different_calibrations(tmp_path):
+    """Two image sizes (two calibrations), and back to the first: each scan through its own
+    calibration, one model on the finer scan's grid, and the report says which scan had which."""
     recs = [scan_recording(tmp_path / f"r{k}", n_frames=2, image_size=size, realistic=False, seed=0, depth_every=0)
-            for k, size in enumerate([(640, 400), (320, 200)])]
+            for k, size in enumerate([(320, 200), (640, 400)])]
     rows = [[(int(i), 0.0, True, np.eye(4)) for i in RecordingReader(r).indices] for r in recs]
-    with pytest.raises(ValueError, match="another calibration"):
-        merge_scans([ScanInput(recs[0], rows[0]), ScanInput(recs[1], rows[1])], tmp_path / "out")
+    rep = merge_scans([ScanInput(recs[0], rows[0]), ScanInput(recs[1], rows[1]), ScanInput(recs[0], rows[0], name="again")],
+                      tmp_path / "out", ProcessParams(pipeline=PipelineParams(), export=("ply",)))
+    assert rep["calibrations"] == 2 and [s["calibration"] for s in rep["scans"]] == [0, 1, 0]
+    assert [s["image_size"] for s in rep["scans"]] == [[320, 200], [640, 400], [320, 200]] and rep["image_size"] == [320, 200]
+    assert rep["mesh"]["voxel_mm"] == 2.0  # 640 px wide: 2 mm (320 px alone would be 4 mm)
+    assert rep["frames"]["fused"] == 6 and rep["mesh"]["n_faces"] > 0
+    assert rep["lasers"]["planes"] == ["horizontal", "vertical"] and rep["lasers"]["n_points_exported"] > 0
+    with pytest.raises(ValueError, match="only fuses"):  # a model passed on is for fusing at given poses
+        from ohs.app.pipeline import FramePipeline
+
+        FramePipeline(nominal_calibration((320, 200)), PipelineParams(), model=object())

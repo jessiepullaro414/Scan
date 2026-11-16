@@ -222,6 +222,98 @@ def holed_frames(rng, fill_mm: float, n: int = 10) -> list:
     return out
 
 
+# another camera (a scan of another calibration in a merge): another size, focal length and centre
+W2, H2 = 400, 250
+K2 = np.array([[226.0, 0.0, 201.3], [0.0, 225.4, 122.6], [0.0, 0.0, 1.0]])
+
+
+def plane_depth_at(Kc: np.ndarray, size: tuple[int, int], T_wc: np.ndarray, noise: float, rng) -> np.ndarray:
+    """:func:`plane_depth` for camera ``Kc`` at ``size``."""
+    w, h = size
+    vs, us = np.mgrid[0:h, 0:w].astype(np.float64)
+    y = (vs - Kc[1, 2]) / Kc[1, 1]
+    r = np.stack([(us - Kc[0, 2]) / Kc[0, 0], y, np.ones_like(us)], axis=-1)
+    d = r @ T_wc[:3, :3].T
+    lam = (Z0 - T_wc[2, 3]) / d[..., 2] + rng.normal(0.0, noise, us.shape)
+    return lam.astype(np.float32)
+
+
+def two_camera_frames() -> tuple[list, list]:
+    """Three frames from the test camera, then three from camera 2, with holes and sigmas."""
+    rng = np.random.default_rng(21)
+    out = []
+    for Kc, (w, h), x0 in ((K, (W, H), 0.0), (K2, (W2, H2), 30.0)):
+        fr = []
+        for k in range(3):
+            T = make_se3(np.eye(3), np.array([x0 + 5.0 * k, 2.0 * k, 0.0]))
+            d = plane_depth_at(Kc, (w, h), T, 0.3, rng)
+            d[40:70, 100 + 3 * k:140 + 3 * k] = 0.0
+            fr.append((d, (0.2 + 0.4 * rng.random((h, w))).astype(np.float32), T))
+        out.append(fr)
+    return out[0], out[1]
+
+
+@pytest.mark.parametrize("backend", ["cpu", "gpu"])
+def test_a_volume_switched_to_another_camera_fuses_as_one_made_for_it(backend):
+    """``set_camera``: frames of a second camera fused after the first camera's are fused exactly
+    as by a volume made for the second camera (whichever camera it was made for, and with the gap
+    guard scaled to the new width); what the first camera fused stays."""
+    if backend == "gpu" and compute.get_device() is None:
+        pytest.skip(f"no GPU: {compute.status()}")
+    first, second = two_camera_frames()
+
+    def run(start_K, start_size, frames_by_camera):
+        v = ConfidenceTsdf(start_K, start_size, voxel_mm=2.0, trunc_mm=8.0, depth_min_mm=150.0, depth_max_mm=450.0,
+                           backend=backend)
+        for (Kc, size), frames in frames_by_camera:
+            if not np.array_equal(Kc, v.K) or size != v.image_size:
+                v.set_camera(Kc, size)
+            for d, s, T in frames:
+                v.integrate(d, s, T)
+        return v
+
+    cam1, cam2 = (K, (W, H)), (K2, (W2, H2))
+    a = run(*cam1, [(cam1, first), (cam2, second)])  # made for camera 1, switched to 2
+    b = run(*cam2, [(cam1, first), (cam2, second)])  # made for camera 2, switched to 1 and back
+    assert a.gap_guard_px == pytest.approx(GUARD_PX_1280 * W2 / 1280.0) and a._step == b._step
+    (ka, ca), (kb, cb) = a.download(), b.download()
+    assert np.array_equal(ka, kb) and all(np.array_equal(ca[c], cb[c]) for c in ca)
+    # only the second camera's frames: switched before the first frame, or made for camera 2
+    c = run(*cam1, [(cam2, second)])
+    d = run(*cam2, [(cam2, second)])
+    (kc, cc), (kd, cd) = c.download(), d.download()
+    assert np.array_equal(kc, kd) and all(np.array_equal(cc[ch], cd[ch]) for ch in cc)
+    # the first camera's surface is still in the model: more of the plane than camera 2 saw
+    assert len(ka) > len(kd) and a.n_integrated == 6
+    for v in (a, b, c, d):
+        v.close()
+
+
+def test_open3d_model_switched_to_another_camera_fuses_as_one_made_for_it():
+    """The same for the Open3D model (:class:`MarkerlessTracker`, the CPU path's mesh model)."""
+    first, second = two_camera_frames()
+    fp = FusionParams(voxel_mm=2.0, depth_min_mm=150.0, depth_max_mm=450.0, model_backend="open3d")
+
+    def mesh(start, frames_by_camera):
+        m = MarkerlessTracker(*start, fp)
+        for cam, frames in frames_by_camera:
+            m.set_camera(*cam)
+            for d, _, T in frames:
+                m.integrate(d, None, T)
+        V, F, _ = m.extract_mesh()
+        m.close()
+        return V[np.lexsort(V.T[::-1])], len(F)  # Open3D lists the vertices in no fixed order
+
+    cam1, cam2 = (K, (W, H)), (K2, (W2, H2))
+    Va, nfa = mesh(cam1, [(cam1, first), (cam2, second)])
+    Vb, nfb = mesh(cam2, [(cam1, first), (cam2, second)])
+    assert len(Va) > 1000 and np.array_equal(Va, Vb) and nfa == nfb
+    Vc, _ = mesh(cam1, [(cam2, second)])
+    Vd, _ = mesh(cam2, [(cam2, second)])
+    assert np.array_equal(Vc, Vd)
+    assert Va[:, 0].min() < Vd[:, 0].min() - 5.0  # camera 1's surface is still there (it reaches further left)
+
+
 @pytest.mark.parametrize("backend", ["cpu", "gpu"])
 def test_gap_guard_keeps_the_fill_out_of_the_mesh(backend):
     """A hole whose first 2 mm every frame fills in: without the guard the mesh reaches into the

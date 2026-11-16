@@ -552,16 +552,13 @@ class ConfidenceTsdf:
                  look_px: float | None = None, initial_bricks: int = 4096, max_bricks: int | None = None,
                  hole_factor: tuple[float, float] | None = None, gap_guard_px: float | None = None,
                  back_mm: float | None = None) -> None:
-        self.K = np.asarray(K, dtype=np.float64).reshape(3, 3).copy()
-        self.image_size = (int(image_size[0]), int(image_size[1]))
         self.voxel_mm, self.trunc_mm = float(voxel_mm), float(trunc_mm)
         self.depth_min_mm, self.depth_max_mm = float(depth_min_mm), float(depth_max_mm)
         if not (self.voxel_mm > 0 and self.trunc_mm > 0 and 0 <= self.depth_min_mm < self.depth_max_mm):
             raise ValueError("voxel_mm and trunc_mm must be positive and depth_min_mm < depth_max_mm")
         if backend not in RECON_BACKENDS:
             raise ValueError(f"backend must be one of {RECON_BACKENDS}, got {backend!r}")
-        w = self.image_size[0]
-        self.look_px = float(look_px) if look_px is not None else LOOK_PX_1280 * w / 1280.0
+        self._look_px_given = None if look_px is None else float(look_px)
         if hole_factor is None:
             from ohs.vision.depth import SIGMA_MODELS
 
@@ -569,18 +566,10 @@ class ConfidenceTsdf:
         self.hole_amp, self.hole_r_px = float(hole_factor[0]), float(hole_factor[1])
         if not (self.hole_amp >= 0 and self.hole_r_px > 0):
             raise ValueError("hole_factor must be (amp >= 0, radius px > 0)")
-        self.gap_near_px = GAP_NEAR_PX_1280 * w / 1280.0
-        # the distance to missing depth is searched up to 3 radii of the factor (as the GPU matcher does)
-        self._gap_r = int(max(np.ceil(3.0 * self.hole_r_px), np.ceil(self.gap_near_px)))
-        self.gap_guard_px = GUARD_PX_1280 * w / 1280.0 if gap_guard_px is None else float(gap_guard_px)
-        if not self.gap_guard_px >= 0:
-            raise ValueError(f"gap_guard_px must be >= 0, got {gap_guard_px!r}")
         self.back_mm = None if back_mm is None else float(back_mm)
         if self.back_mm is not None and not self.back_mm > 0:
             raise ValueError(f"back_mm must be > 0 (or None for the whole truncation), got {back_mm!r}")
-        # brick sampling: every 4th pixel at 1280 px and 1 mm voxels; the same share of a brick at other sizes
-        # (2 mm voxels at 640 px: every 4th pixel too, a quarter of the samples of every 2nd)
-        self._step = max(1, int(round(4.0 * w / 1280.0 * float(self.voxel_mm))))
+        self._set_camera(K, image_size, gap_guard_px)
         self._initial = max(64, int(initial_bricks))
         self.dev: Any = None
         self.backend = "cpu"
@@ -602,11 +591,37 @@ class ConfidenceTsdf:
         self.max_bricks = int(max_bricks)
         L = np.stack(np.meshgrid(np.arange(BRICK), np.arange(BRICK), np.arange(BRICK), indexing="ij"), axis=-1)
         self._local = L[..., ::-1].reshape(NVOX, 3).astype(np.int64)  # (x, y, z) of voxel l = z * 64 + y * 8 + x
-        self._rays: np.ndarray | None = None
         self._warned_full = False
         self.reset()
         log.info("confidence TSDF: %s, %.2f mm voxels, trunc %.1f mm, %.1f px per independent look",
                  self.device or "CPU (numpy)", self.voxel_mm, self.trunc_mm, self.look_px)
+
+    def set_camera(self, K: np.ndarray, image_size: tuple[int, int], gap_guard_px: float | None = None) -> None:
+        """Take the next depth maps from another camera (intrinsics ``K`` at ``(width, height)``),
+        keeping what is fused: a merge fuses scans of different calibrations into one model this
+        way. ``gap_guard_px`` as for the constructor, for the new camera. (A voxel's independent
+        looks are counted by how far its pixel moved since the last one; across the change the two
+        cameras' pixels are compared as they are, as they are between two scans of one camera.)"""
+        self._wait()
+        self._set_camera(K, image_size, gap_guard_px)
+
+    def _set_camera(self, K: np.ndarray, image_size: tuple[int, int], gap_guard_px: float | None) -> None:
+        """Everything that depends on the depth maps' camera."""
+        self.K = np.asarray(K, dtype=np.float64).reshape(3, 3).copy()
+        self.image_size = (int(image_size[0]), int(image_size[1]))
+        w = self.image_size[0]
+        self.look_px = self._look_px_given if self._look_px_given is not None else LOOK_PX_1280 * w / 1280.0
+        self.gap_near_px = GAP_NEAR_PX_1280 * w / 1280.0
+        # the distance to missing depth is searched up to 3 radii of the factor (as the GPU matcher does)
+        self._gap_r = int(max(np.ceil(3.0 * self.hole_r_px), np.ceil(self.gap_near_px)))
+        guard = GUARD_PX_1280 * w / 1280.0 if gap_guard_px is None else float(gap_guard_px)
+        if not guard >= 0:
+            raise ValueError(f"gap_guard_px must be >= 0, got {gap_guard_px!r}")
+        self.gap_guard_px = guard
+        # brick sampling: every 4th pixel at 1280 px and 1 mm voxels; the same share of a brick at other sizes
+        # (2 mm voxels at 640 px: every 4th pixel too, a quarter of the samples of every 2nd)
+        self._step = max(1, int(round(4.0 * w / 1280.0 * float(self.voxel_mm))))
+        self._rays: np.ndarray | None = None
 
     # ------------------------------------------------------------------ backends
     def _init_gpu(self, dev: Any) -> None:

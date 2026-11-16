@@ -404,11 +404,19 @@ class FramePipeline:
     Single-threaded use; not thread-safe. See the module docstring for the stages and defaults.
     """
 
-    def __init__(self, calib: ScannerCalibration, params: PipelineParams | None = None) -> None:
+    def __init__(self, calib: ScannerCalibration, params: PipelineParams | None = None,
+                 model: MarkerlessTracker | ConfidenceTsdf | None = None) -> None:
+        """``model``: a reconstruction model to fuse into instead of a new one, taken from another
+        pipeline with :meth:`release_model` and switched to this pipeline's camera; the frames are
+        then fused at poses given (``params.tracking`` must be off). A merge of scans of different
+        calibrations passes one model on from scan to scan this way. The model should have been
+        made with the same fusion settings (``params.fusion``)."""
         self.calib = calib
         self.params = p = params if params is not None else PipelineParams()
         if p.mode not in MODES:  # PipelineParams validates too, but fields may have been reassigned
             raise ValueError(f"mode must be one of {MODES}, got {p.mode!r}")
+        if model is not None and p.tracking:
+            raise ValueError("a model passed on from another pipeline only fuses: set PipelineParams.tracking=False")
         self.rectifier = Rectifier(calib.stereo, p.scale)
         self.K = self.rectifier.K
         self.baseline = self.rectifier.baseline
@@ -461,9 +469,18 @@ class FramePipeline:
         self._guard_in_fuse = False  # True: the Open3D reconstruction, which gets its depth guarded here
         # how deep behind a surface the mesh model takes an observation in full (mm); None: the whole truncation
         self.thin_walls_mm: float | None = None
+        if model is not None and not self._need_depth:
+            raise ValueError("this pipeline fuses no depth (marker mode without integrate_depth): it takes no model")
         if self._need_depth:
             single = p.mode == "markerless" and p.tracking and self.track_filter_px <= 0
-            self.markerless = self._make_recon(p.recon, single_model=single)
+            if model is None:
+                self.markerless = self._make_recon(p.recon, single_model=single)
+            elif isinstance(model, ConfidenceTsdf):
+                model.set_camera(self.K, self.image_size, gap_guard_px=self.gap_guard_px)
+                self.markerless = model
+            else:
+                model.set_camera(self.K, self.image_size)
+                self.markerless = model
             # the confidence TSDF guards inside; a model that also tracks keeps every pixel (dropping
             # them for the tracker moved the trajectory)
             self._guard_in_fuse = (self.gap_guard_px > 0 and not single
@@ -915,6 +932,15 @@ class FramePipeline:
     def laser_cloud(self) -> LaserCloud:
         """The accumulated laser points (world frame, mm)."""
         return self.cloud
+
+    def release_model(self) -> MarkerlessTracker | ConfidenceTsdf | None:
+        """Hand over the reconstruction model (for another pipeline's ``model``): this pipeline
+        no longer has one, and :meth:`close` leaves it alone."""
+        self._check_open()
+        m, self.markerless = self.markerless, None
+        if self.tracker is m:
+            self.tracker = None
+        return m
 
     def trajectory(self) -> list[tuple[float, np.ndarray, bool]]:
         """``[(t, T_wc, ok), ...]`` for every processed frame (failed frames carry the last good pose)."""
