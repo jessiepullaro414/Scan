@@ -492,6 +492,7 @@ class FramePipeline:
 
         self.cloud = LaserCloud()
         self._laser_pool: ThreadPoolExecutor | None = None  # made at the first frame with lasers
+        self._clip_rays: tuple[np.ndarray, np.ndarray] | None = None  # per-pixel ray grid of a clip plane, on first use
         self._track_filter_gpu: TrackingFilterGpu | None | bool = None  # None: not tried yet; False: CPU
         self.gpu_fallbacks: dict[str, str] = {}  # GPU stages that failed during the run (now on the CPU): stage -> reason
         self._filter_pending: tuple | None = None  # (depth, the filter started for it), see _start_tracking_input
@@ -639,12 +640,16 @@ class FramePipeline:
             raise RuntimeError("FramePipeline is closed")
 
     # ------------------------------------------------------------------ processing
-    def process(self, frame: StereoFrame, pose: np.ndarray | None = None) -> FrameResult:
+    def process(self, frame: StereoFrame, pose: np.ndarray | None = None,
+                clip_plane: tuple[np.ndarray, float] | None = None) -> FrameResult:
         """Process one raw stereo frame (``t_host`` = camera timestamp).
 
         ``pose`` (optional, 4x4 ``T_wc``) skips tracking and fuses the frame at that pose, e.g. to
-        reprocess with poses known from elsewhere. Raises ``ValueError`` if the raw image size
-        does not match the calibration.
+        reprocess with poses known from elsewhere. ``clip_plane`` (optional, ``(n, d)`` in this
+        frame's camera frame C, mm): only what lies in the half-space ``n . X + d > 0`` is kept;
+        the depth elsewhere is set to 0 (no measurement) before anything is fused, and laser
+        points elsewhere are dropped. A merge uses it to leave out the table a part lay on.
+        Raises ``ValueError`` if the raw image size does not match the calibration.
         """
         self._check_open()
         p = self.params
@@ -678,9 +683,12 @@ class FramePipeline:
             tim["depth"] = _ms(t0)
             if self.depth_estimator.gpu_failure is not None:
                 self.gpu_fallbacks.setdefault("depth", self.depth_estimator.gpu_failure)
+            if clip_plane is not None:
+                depth = self._clip_depth(depth, clip_plane)
             # the tracking filter starts now and is collected when the frame is tracked
-            # (tracking_input): track_filter is how long the frame then still waits for it
-            if self.dual_model and (pose is not None or p.mode == "markerless"):
+            # (tracking_input): track_filter is how long the frame then still waits for it.
+            # (Not with a clip plane: the filter would start from the matcher's own, unclipped map.)
+            elif self.dual_model and (pose is not None or p.mode == "markerless"):
                 self._start_tracking_input(depth)
 
         # The lines are needed only for the laser points, and those need the depth but not the
@@ -722,6 +730,9 @@ class FramePipeline:
             lines, lines_r, pts, tim["laser_extract_cpu"], tim["laser_triangulate_cpu"], t_lines = fut_pts.result()
             for name, n in rejected.items():
                 self.laser_rejected[name] = self.laser_rejected.get(name, 0) + n
+            if clip_plane is not None:
+                cn, cd = np.asarray(clip_plane[0], dtype=np.float64).reshape(3), float(clip_plane[1])
+                pts = {name: P[P @ cn + cd > 0] for name, P in pts.items()}
             if track.ok:
                 for name, P in pts.items():
                     self.cloud.add(P, track.T_wc, name)
@@ -737,6 +748,20 @@ class FramePipeline:
         self._n_ok += int(track.ok)
         self._trajectory.append((t, np.asarray(track.T_wc, dtype=np.float64).copy(), bool(track.ok)))
         return FrameResult(int(frame.index), t, left_r, right_r, depth, lines, pts, track, tim, lines_r, extra, sigma)
+
+    def _clip_depth(self, depth: np.ndarray, plane: tuple[np.ndarray, float]) -> np.ndarray:
+        """``depth`` with 0 (no measurement) wherever the pixel's point is not in the half-space
+        ``n . X + d > 0`` (camera frame C)."""
+        if self._clip_rays is None:
+            w, h = self.image_size
+            v, u = np.mgrid[0:h, 0:w].astype(np.float32)
+            y = (v - self.K[1, 2]) / self.K[1, 1]
+            x = (u - self.K[0, 2] - self.K[0, 1] * y) / self.K[0, 0]
+            self._clip_rays = (x, y)  # the point of a pixel is depth * (x, y, 1)
+        n = np.asarray(plane[0], dtype=np.float32).reshape(3)
+        x, y = self._clip_rays
+        keep = depth * (n[0] * x + n[1] * y + n[2]) + np.float32(plane[1]) > 0
+        return np.where(keep, depth, np.float32(0.0)).astype(depth.dtype, copy=False)
 
     def _make_recon(self, recon: str, single_model: bool) -> MarkerlessTracker | ConfidenceTsdf:
         """The reconstruction model for ``PipelineParams.recon`` (module docstring, "Reconstruction model")."""

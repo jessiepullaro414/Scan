@@ -10,6 +10,12 @@ map is one map. It costs about as much as processing every scan again.
 confidence model made it) and the other formats asked for, ``laser_points.ply``, and
 ``report.json`` with what went in (per scan: recording, pose, frames fused) and what came out.
 
+**A part that was moved** between the scans (turned over, set down elsewhere) lay on a table
+that is in a different place, relative to the part, in each scan. Give each scan its ``support``
+plane then: every frame's depth and laser points on or behind it (and up to ``support_margin_mm``
+in front of it) are left out, so that only the part is merged. When the part was not moved the
+table is one surface in all scans and can stay in.
+
 Limits of this first version: all scans must have been taken with the same calibration and
 image size (one scanner, one camera mode; a session after a recalibration is refused); the
 frames are fused at the poses given, without a joint refinement across the scans; and Poisson
@@ -43,13 +49,16 @@ class ScanInput:
     ``trajectory.csv`` its processing wrote, or rows ``(index, t, ok, T_wc)``), and ``T``, the
     scan's world in the merged world (identity for the scan the others were aligned to).
     ``calib``: the calibration the scan was processed with, when that was not the recording's own
-    (as ``process_recording(calib=...)``)."""
+    (as ``process_recording(calib=...)``). ``support``: the plane ``(n, d)`` the part lay on, in
+    the scan's own world with ``n`` towards the part (:attr:`ohs.align.pairwise.ScanCloud.support`):
+    when given, nothing of that scan on or behind the plane goes into the merged model."""
 
     recording: Path
     trajectory: Any
     T: np.ndarray = field(default_factory=lambda: np.eye(4))
     name: str | None = None
     calib: Any = None
+    support: tuple[np.ndarray, float] | None = None
 
 
 def _same_calibration(a: Any, b: Any) -> str | None:
@@ -69,7 +78,7 @@ def _same_calibration(a: Any, b: Any) -> str | None:
 
 
 def merge_scans(scans: Sequence[ScanInput], out_dir: str | Path, params: ProcessParams | None = None,
-                progress: Callable[[int, int], None] | None = None) -> dict:
+                progress: Callable[[int, int], None] | None = None, support_margin_mm: float = 2.0) -> dict:
     """Fuse the frames of all ``scans`` into one model and write it to ``out_dir`` (module
     docstring). ``params``: as for :func:`ohs.app.process.process_recording` (its pipeline
     settings, export formats and cleaning; nothing is tracked). ``progress(k, n)`` after each of
@@ -106,24 +115,33 @@ def merge_scans(scans: Sequence[ScanInput], out_dir: str | Path, params: Process
         if not positions:
             raise ValueError(f"scan {name}: none of its frames has a pose")
         T = np.asarray(sc.T, dtype=np.float64).reshape(4, 4)
-        plan.append((name, reader, poses, positions, T))
+        support = None
+        if sc.support is not None:
+            sn = np.asarray(sc.support[0], dtype=np.float64).reshape(3)
+            support = (sn / np.linalg.norm(sn), float(sc.support[1]) / float(np.linalg.norm(sn)))
+        plan.append((name, reader, poses, positions, T, support))
     n = sum(len(pl[3]) for pl in plan)
     out.mkdir(parents=True, exist_ok=True)
     pipe = FramePipeline(calib, p.pipeline)
     per_scan = []
     k = 0
     try:
-        for name, reader, poses, positions, T in plan:
+        for name, reader, poses, positions, T, support in plan:
             frames = reader.iter_ahead(positions, READ_AHEAD_FRAMES)
             try:
                 for frame in frames:
-                    pipe.process(frame, pose=T @ poses[int(frame.index)])
+                    Tf = poses[int(frame.index)]  # the frame in its scan's world
+                    clip = None
+                    if support is not None:  # the support plane in this frame's camera, moved into the part by the margin
+                        clip = (Tf[:3, :3].T @ support[0], float(support[0] @ Tf[:3, 3]) + support[1] - float(support_margin_mm))
+                    pipe.process(frame, pose=T @ Tf, clip_plane=clip)
                     if progress is not None:
                         progress(k, n)
                     k += 1
             finally:
                 frames.close()
-            per_scan.append({"name": name, "recording": str(reader.path), "frames": len(positions), "T": T.tolist()})
+            per_scan.append({"name": name, "recording": str(reader.path), "frames": len(positions), "T": T.tolist(),
+                             "support_left_out": support is not None})
             log.info("merged %s: %d frames", name, len(positions))
         V, F, N, S = pipe.mesh_with_sigma()
         n_faces_raw = int(len(F))

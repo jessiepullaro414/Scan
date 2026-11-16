@@ -54,10 +54,11 @@ from typing import Any
 
 import numpy as np
 
-from ohs.geometry import fit_plane_ransac, invert_se3, so3_exp
+from ohs.geometry import fit_plane_ransac, invert_se3, kabsch, so3_exp
 from ohs.track import posegraph as pg
 
-__all__ = ["AlignParams", "ScanCloud", "PairAlignment", "scan_cloud", "scan_cloud_from_mesh", "align_pair"]
+__all__ = ["AlignParams", "ScanCloud", "PairAlignment", "scan_cloud", "scan_cloud_from_mesh", "align_pair",
+           "pose_from_point_pairs"]
 
 log = logging.getLogger(__name__)
 
@@ -217,6 +218,30 @@ def scan_cloud_from_mesh(path: str | Path, params: AlignParams | None = None, se
     if N is None or len(N) != len(V):
         N = vertex_normals(V, F)
     return scan_cloud(V, N, params, seed)
+
+
+# --------------------------------------------------------------------------- a rough pose from picked points
+def pose_from_point_pairs(src: np.ndarray, dst: np.ndarray) -> tuple[np.ndarray, float]:
+    """The rigid motion that takes points picked on the source scan onto the matching points
+    picked on the target scan (three pairs or more, not in one line), and how well they then
+    agree: ``(T, RMS distance of the pairs in mm)``. A start for :func:`align_pair` (``init``),
+    good to how well the points were picked; a large RMS means two pairs do not match.
+    ``ValueError`` for fewer than three pairs or pairs that lie in one line."""
+    A = np.asarray(src, dtype=np.float64).reshape(-1, 3)
+    B = np.asarray(dst, dtype=np.float64).reshape(-1, 3)
+    if len(A) != len(B) or len(A) < 3:
+        raise ValueError(f"three or more pairs of points are needed ({len(A)} and {len(B)} given)")
+    if not (np.all(np.isfinite(A)) and np.all(np.isfinite(B))):
+        raise ValueError("a picked point is not a number")
+    for P in (A, B):  # points in one line leave the turn about that line open
+        s = np.linalg.svd(P - P.mean(axis=0), compute_uv=False)
+        if s[1] < 0.05 * max(s[0], 1e-9) or s[0] < 1.0:
+            raise ValueError("the picked points lie in one line or on one spot: pick points that span a triangle")
+    R, t = kabsch(A, B)
+    T = np.eye(4)
+    T[:3, :3], T[:3, 3] = R, t
+    rms = float(np.sqrt(np.mean(np.sum((A @ R.T + t - B) ** 2, axis=1))))
+    return T, rms
 
 
 # --------------------------------------------------------------------------- scoring

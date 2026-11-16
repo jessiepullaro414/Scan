@@ -4,7 +4,8 @@
 * :mod:`ohs.align.merge`: one model from the raw frames of all aligned scans.
 """
 from ohs.align.merge import ScanInput, merge_scans
-from ohs.align.pairwise import AlignParams, PairAlignment, ScanCloud, align_pair, scan_cloud, scan_cloud_from_mesh
+from ohs.align.pairwise import (AlignParams, PairAlignment, ScanCloud, align_pair, pose_from_point_pairs, scan_cloud,
+                                scan_cloud_from_mesh)
 
-__all__ = ["AlignParams", "PairAlignment", "ScanCloud", "ScanInput", "align_pair", "merge_scans", "scan_cloud",
-           "scan_cloud_from_mesh"]
+__all__ = ["AlignParams", "PairAlignment", "ScanCloud", "ScanInput", "align_pair", "merge_scans",
+           "pose_from_point_pairs", "scan_cloud", "scan_cloud_from_mesh"]

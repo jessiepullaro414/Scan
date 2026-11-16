@@ -15,7 +15,8 @@ import pytest
 pytest.importorskip("open3d")
 
 from ohs import geometry as G  # noqa: E402
-from ohs.align import AlignParams, ScanInput, align_pair, merge_scans, scan_cloud, scan_cloud_from_mesh  # noqa: E402
+from ohs.align import (AlignParams, ScanInput, align_pair, merge_scans, pose_from_point_pairs, scan_cloud,  # noqa: E402
+                       scan_cloud_from_mesh)
 from ohs.app.pipeline import PipelineParams  # noqa: E402
 from ohs.app.process import ProcessParams, process_recording  # noqa: E402
 from ohs.io.recording import RecordingReader  # noqa: E402
@@ -178,6 +179,35 @@ def test_one_guess_alone_is_not_trusted_and_a_detail_scan_counts_by_its_own_shar
     assert mm < 0.15 and deg < 0.1
 
 
+def test_a_rough_pose_from_picked_points():
+    """Three or more matching points picked on the two scans give the starting pose: exact for
+    exact picks, with an RMS that shows a wrong pair, and refused when they cannot define a pose."""
+    rng = np.random.default_rng(12)
+    T_true = _motion(140.0, (0.2, 1.0, 0.3), (60.0, -20.0, 35.0))
+    dst = np.array([[0.0, 0.0, 0.0], [60.0, 0.0, 12.0], [14.0, 30.0, 40.0], [40.0, 14.0, 22.0]])
+    src = (dst - T_true[:3, 3]) @ T_true[:3, :3]  # the same points in the source's world
+    T, rms = pose_from_point_pairs(src, dst)
+    assert rms < 1e-9 and np.allclose(T, T_true, atol=1e-9)
+    T, rms = pose_from_point_pairs(src[:3] + rng.normal(0.0, 1.0, (3, 3)), dst[:3])  # picked by eye, a millimetre off
+    mm, deg = _error(T, T_true)
+    assert rms < 3.0 and mm < 10.0 and deg < 8.0
+    swapped = src[[1, 0, 2, 3]]
+    assert pose_from_point_pairs(swapped, dst)[1] > 10.0  # two picks exchanged: the pairs do not agree
+    for bad_src, bad_dst in ((src[:2], dst[:2]), (src[:3], dst), (np.array([[0.0, 0, 0], [10, 0, 0], [20, 0, 0]]), dst[:3]),
+                             (np.zeros((3, 3)), dst[:3]), (np.full((3, 3), np.nan), dst[:3])):
+        with pytest.raises(ValueError):
+            pose_from_point_pairs(bad_src, bad_dst)
+    # such a start, a few millimetres and degrees off, is enough for the alignment
+    P, N = _part(rng)
+    Ps, Ns = _moved(*_part(np.random.default_rng(13)), G.invert_se3(T_true))
+    pick_dst = np.array([[0.0, 0.0, 40.0], [60.0, 0.0, 12.0], [14.0, 30.0, 40.0], [47.0, 20.0, 22.0]])
+    pick_src = (pick_dst - T_true[:3, 3]) @ T_true[:3, :3] + rng.normal(0.0, 1.5, (4, 3))
+    rough, _ = pose_from_point_pairs(pick_src, pick_dst)
+    res = align_pair(scan_cloud(Ps, Ns), scan_cloud(P, N), init=rough, same_setup=True)
+    mm, deg = _error(res.T, T_true)
+    assert res.accepted and res.start == "given" and mm < 0.1 and deg < 0.05, res.verdict
+
+
 def test_two_shapes_that_do_not_belong_together_are_refused():
     rng = np.random.default_rng(6)
     P, N = _part(rng)
@@ -272,6 +302,38 @@ def test_merging_two_scans_from_their_recordings(bracket_scans, tmp_path):
         merge_scans([ScanInput(a["rec"], [(0, 0.0, True, np.full((4, 4), np.nan))])], tmp_path / "none")
     with pytest.raises(ValueError, match="Poisson"):
         merge_scans(scans, tmp_path / "none", ProcessParams(poisson=True))
+
+
+@pytest.mark.slow
+def test_merge_can_leave_each_scans_table_out(bracket_scans, tmp_path):
+    """A part that was moved lay on a table that is elsewhere in each scan: with the scans' support
+    planes given, nothing on or behind them is merged, and the part is still there."""
+    a, b = bracket_scans
+    T_true = G.invert_se3(a["world"]) @ b["world"]
+    ca, cb = scan_cloud_from_mesh(a["out"] / "mesh.ply"), scan_cloud_from_mesh(b["out"] / "mesh.ply")
+    params = ProcessParams(pipeline=PipelineParams(), export=("ply",))
+    with_table = merge_scans([ScanInput(a["rec"], a["out"] / "trajectory.csv"),
+                              ScanInput(b["rec"], b["out"] / "trajectory.csv", T_true)], tmp_path / "with", params)
+    rep = merge_scans([ScanInput(a["rec"], a["out"] / "trajectory.csv", support=ca.support),
+                       ScanInput(b["rec"], b["out"] / "trajectory.csv", T_true, support=cb.support)], tmp_path / "without", params)
+    assert [s["support_left_out"] for s in rep["scans"]] == [True, True]
+    assert [s["support_left_out"] for s in with_table["scans"]] == [False, False]
+    V, F, _ = load_mesh(tmp_path / "without" / "mesh.ply")
+    n, d = ca.support  # scan A's table in the merged world (scan A's own)
+    h = V @ n + d
+    print(f"without the tables: {len(V)} vertices (with: {with_table['mesh']['n_vertices']}); heights above scan A's table: "
+          f"{np.percentile(h, [0, 1, 50]).round(2)}")
+    assert len(V) < 0.25 * with_table["mesh"]["n_vertices"]  # the table was most of the model
+    assert np.percentile(h, 1) > 1.0 and h.min() > -1.0  # nothing of the table is left
+    # the part is still there: the single scans' part points have the merged surface close by
+    from scipy.spatial import cKDTree
+
+    tree = cKDTree(V)
+    for pts, T in ((ca.part.fine.pts, np.eye(4)), (cb.part.fine.pts, T_true)):
+        P = pts @ T[:3, :3].T + T[:3, 3]
+        high = P @ n + d > 5.0  # clear of the margin above the table
+        dist, _ = tree.query(P[high])
+        assert np.percentile(dist, 80) < 1.5, np.percentile(dist, [50, 80, 95])
 
 
 def test_merge_refuses_scans_of_different_calibrations(tmp_path):

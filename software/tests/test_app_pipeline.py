@@ -155,6 +155,29 @@ def test_tracking_does_not_wait_for_the_laser_lines(reader, monkeypatch):
         assert r.timings_ms["laser_extract_cpu"] > 1900.0
 
 
+def test_a_clip_plane_leaves_out_what_is_behind_it(reader):
+    """``clip_plane``: depth and laser points outside the half-space are not measured; a plane that
+    cuts nothing off changes nothing."""
+    T = np.eye(4)
+    frame = reader.frame(0)
+    with FramePipeline(reader.calibration()) as pipe:
+        plain = pipe.process(frame, pose=T)
+    with FramePipeline(reader.calibration()) as pipe:
+        same = pipe.process(frame, pose=T, clip_plane=(np.array([0.0, 0.0, 1.0]), 0.0))  # everything in front of the camera
+    assert same.depth.tobytes() == plain.depth.tobytes()
+    assert all(same.laser_points[k].tobytes() == plain.laser_points[k].tobytes() for k in plain.laser_points)
+    z_cut = float(np.median(plain.depth[plain.depth > 0]))
+    with FramePipeline(reader.calibration()) as pipe:
+        near = pipe.process(frame, pose=T, clip_plane=(np.array([0.0, 0.0, -1.0]), z_cut))  # only what is nearer than z_cut
+        V, F, _ = pipe.mesh()
+    kept = near.depth > 0
+    assert 0.2 < kept.sum() / (plain.depth > 0).sum() < 0.8
+    assert near.depth[kept].max() < z_cut and np.array_equal(near.depth[kept], plain.depth[kept])
+    assert sum(len(P) for P in near.laser_points.values()) < sum(len(P) for P in plain.laser_points.values())
+    assert all(np.all(P[:, 2] < z_cut) for P in near.laser_points.values())
+    assert len(V) > 100 and V[:, 2].max() < z_cut + 5.0  # the model holds only what was kept
+
+
 def test_defaults_follow_resolution():
     with pytest.raises(ValueError):
         PipelineParams(mode="slam")
