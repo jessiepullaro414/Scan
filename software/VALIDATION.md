@@ -1779,7 +1779,19 @@ The engine and the app packaged as a Windows program with PyInstaller (`software
 - **It works as `ohs` does:** `ohs.exe bench` on the GPU tracked 30 of 30 frames with the same accuracy as from Python (trajectory 0.09 mm median, depth 0.308 mm at full quality; 0.14 mm and 0.356 mm at preview); `ohs.exe app` served the page and the API, and an alignment of two scans through it gave the same verdict as from Python (80 %, 0.23 mm RMS, 8 of 9). A four-laser recording processed with `ohs.exe process` gave the same mesh and laser points as from Python (compared sorted, every coordinate equal).
 - **numba inside the program:** the first four-laser scan compiled the line linking (7.2 s for 24 frames, about 3.4 s of it compiling); the next one used the compiled code cached in the user's cache folder (3.8 s), as expected from numba's code.
 - **Starting the app from the program:** 0.88 s until the app accepts a connection and 1.59 s until its first status message (the bench, run from the program). The bench could not time it in the first build: it launched the app with Python's `-c`, which a packaged program does not take; it now launches `ohs.exe app` itself.
-- **Not done:** an installer, signing, a smaller build (Open3D's examples and unused libraries are in), the version in the file's properties, a test on a PC without the development tools, the window (pywebview) seen opening.
+- **Not done:** an installer, signing, the version in the file's properties, a test on a PC without the development tools, the window (pywebview) seen opening.
+
+**A smaller build (the same day).** `build_exe.py` now leaves out what neither the engine nor the app uses: Open3D's rendering resources (42 MB, only for Open3D's own windows), its PyTorch ops library, examples and ML code (`packaging/hooks/hook-open3d.py`); OpenCV's ffmpeg library for video files (29 MB; the scanner grabs camera frames and reads images; `hook-cv2.py`); numba's tests (`hook-numba.py`); plotly, dash, IPython, jedi and the rest that Open3D's web viewers pull in (about 80 MB; `import open3d` takes three names from plotly and dash, so the program answers them with empty stand-ins, `rthook_stub_viewers.py`); SciPy's stats, io, signal, integrate, interpolate, cluster and odr; Pillow's AVIF codec. Numba cache files from the source tree are no longer copied in.
+
+| | Folder | Files | Zipped (deflate) |
+|---|---|---|---|
+| Everything (before) | 706 MB | 6,645 | 266 MB |
+| Smaller build | 522 MB | 314 | 184 MB |
+
+- **Same results:** `ohs.exe bench` on the GPU at both qualities gives the same figures as the full build (30 of 30 frames; 0.09 / 0.308 mm and 0.14 / 0.356 mm). A four-laser recording processed with it gives the same mesh vertices (75,268) and laser points (23,680) as the full build and Python, compared sorted, and the same trajectory file byte for byte; numba compiles and caches as before. The app serves the page, `/api/health`, settings and projects, and an alignment and merge of two bracket scans through its API gives the same verdict, transform and merged scan (146,421 vertices) as the full build. On the CPU path the two builds differ only within that path's run-to-run spread.
+- **With the left-out modules blocked**, the test suite passes from Python (759 passed, 54 skipped; slow tests 53 passed, 3 skipped).
+- **What it gives up:** Open3D's own windows and web viewers, and OpenCV's video files and streams; the engine uses none of them. What is left is mostly Open3D.dll (157 MB), OpenCV (108 MB), numba's LLVM (115 MB) and two OpenBLAS copies (20 MB each); cutting those needs custom builds of the libraries, or the program without numba (about 120 MB less, four-laser line linking in Python).
+- **Not checked:** the window (pywebview) opening, a real camera through the program.
 
 ## The confidence model on the CPU path: measured, not adopted (2026-11-16)
 
