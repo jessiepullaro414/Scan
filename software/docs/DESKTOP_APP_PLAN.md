@@ -175,7 +175,7 @@ Settings are saved as a **recipe** you can reuse or script.
 | Engine | the existing `ohs` Python package (OpenCV, Open3D, numpy) | Already validated (294 tests, end-to-end accuracy in `VALIDATION.md`) |
 | Backend | **FastAPI + uvicorn**, REST + **WebSocket** | Async streaming of previews and meshes to the UI; typed, documented API; easy to test |
 | UI | **React + TypeScript + Vite**, **three.js** via **@react-three/fiber / drei**, **zustand**, **Tailwind**, **lucide** icons | The best 3D-in-a-web-view stack; a fast, modern, consistent UI; widely known, so open-source contributors can help |
-| Desktop shell | **pywebview** (Windows WebView2, macOS WKWebView, Linux WebKitGTK) | A native window with one runtime (Python) and no Electron |
+| Desktop shell | **pywebview** (Windows WebView2, macOS WKWebView, Linux WebKitGTK) | A native window with one runtime (Python) and no Electron. On Windows its title bar takes the app's colours and follows the theme (`ohs/server/title_bar.py`, 2026-11-16), and the window and `ohs.exe` carry the app's logo (`packaging/make_icon.py`) |
 | Remote use | the same UI in any browser on the LAN (opt-in) | Use a phone or tablet as the scan display; a scanner on a mini-PC later |
 | GPU compute | chosen by a spike at the start of M3; candidates are **wgpu** (WebGPU compute shaders on Vulkan / DX12 / Metal, so any vendor), **CUDA** through CuPy (NVIDIA), and **OpenCL** through OpenCV's T-API | One engine, auto-detected at start. Every GPU kernel has a CPU twin, and tests check that the results agree. The settings show which device is in use. |
 | Packaging | PyInstaller and an installer (M6) | One download, no Python needed. A trial build works (`packaging/build_exe.py`, 2026-11-16: 525 MB, about 184 MB zipped, after leaving out what is not used; same results as from Python; the app window opens since pywebview is named to PyInstaller); no installer yet |
@@ -237,7 +237,7 @@ Built and checked end to end in a browser against the simulator:
 Also done: 41 backend API tests and a clean UI type-check and build.
 
 Known gaps, carried into later milestones:
-- **Not yet verified:** 60 fps in the UI (the test browser was throttled), and the real pywebview window. That window is tested only with a stub, and downloads are now allowed in it.
+- **Not yet verified:** 60 fps in the UI (the test browser was throttled), and the real pywebview window. That window is tested only with a stub, and downloads are now allowed in it. (2026-11-16: the real window was opened from Python and from `ohs.exe` and looked at: it shows the app, closes cleanly, and its title bar matches the theme.)
 - **Processing speed:** full-quality processing of the 27 s demo scan (696 frames) took about 5.5 minutes on the CPU. Faster paths (frame subsampling for "preview", GPU depth) belong in M3.
 - **After a rewind:** the live model is coarser until new frames refine it.
 - **Not built yet:** marker-mode live tags, automated UI tests, and a "follow the scanner" camera.

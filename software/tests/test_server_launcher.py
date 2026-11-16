@@ -54,6 +54,7 @@ class FakeWebview:
 
     def start(self, **kw):
         self.started = True
+        self.start_kw = kw
         self.result = self.during(self.created[1]) if self.during else None
 
 
@@ -77,6 +78,9 @@ def test_window_close_stops_everything_and_saves_the_scan(tmp_path):
     assert title == "OpenHandScan Studio" and url == f"http://127.0.0.1:{port}/"
     assert (kw["width"], kw["height"], kw["resizable"]) == (1440, 900, True)
     assert wv.settings["ALLOW_DOWNLOADS"] is True  # the STL/PLY download buttons work in the window
+    # the page colours the title bar with its theme, and the window has the app's icon
+    assert callable(kw["js_api"].set_theme) and kw["js_api"].set_theme("purple") is False
+    assert wv.start_kw["icon"].endswith("ohs.ico")
     assert port_free("127.0.0.1", port)  # the server is gone
     assert any("running at" in s for s in lines) and any("stopped" in s for s in lines)
     import json
@@ -125,3 +129,24 @@ def test_cli_app_options_and_python_m():
     assert (a.host, a.port, a.no_window, a.open_browser) == (None, None, False, False)
     out = subprocess.run([sys.executable, "-m", "ohs.server", "--help"], capture_output=True, text=True, timeout=60)
     assert out.returncode == 0 and out.stdout.startswith("usage: ohs app") and "--no-window" in out.stdout
+
+
+def test_title_bar_colours_are_the_apps():
+    """The title bar's colours (``ohs.server.title_bar``) are the page's own: panel, text and the third
+    surface of each theme in ``ui/src/index.css``; COLORREF is 0x00BBGGRR; nothing happens without a window."""
+    import re
+    from pathlib import Path
+
+    from ohs.server.title_bar import THEMES, colorref, paint_title_bar
+
+    css = (Path(__file__).resolve().parents[1] / "ui" / "src" / "index.css").read_text(encoding="utf-8")
+    for theme, block in (("dark", css.split('[data-theme="dark"]')[1].split("}")[0]),
+                         ("light", css.split('[data-theme="light"]')[1].split("}")[0])):
+        var = dict(re.findall(r"--c-([\w-]+):\s*(#[0-9a-fA-F]{6})", block))
+        assert THEMES[theme] == {"caption": var["panel"], "text": var["fg"], "border": var["surface-3"]}, theme
+    assert colorref("#112233") == 0x332211 and colorref("ffffff") == 0xFFFFFF
+    with pytest.raises(ValueError):
+        colorref("#fff")
+    with pytest.raises(ValueError, match="theme"):
+        paint_title_bar(1, "purple")
+    assert paint_title_bar(0, "dark") is False  # no window

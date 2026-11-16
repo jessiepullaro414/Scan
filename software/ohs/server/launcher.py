@@ -6,7 +6,8 @@
 2. starts uvicorn with the app from :func:`ohs.server.app.create_app` in thread ``ohs-uvicorn``
    (no per-message deflate: JPEG and mesh payloads do not compress, and compressing them would
    block the event loop);
-3. opens a pywebview window "OpenHandScan Studio" (1440x900, resizable) on the app's URL and
+3. opens a pywebview window "OpenHandScan Studio" (1440x900, resizable, the app's icon, its title
+   bar in the app's colours following its theme: :mod:`ohs.server.title_bar`) on the app's URL and
    blocks until it is closed. With ``window=False`` (``--no-window``) it blocks until Ctrl-C
    instead; ``open_browser`` (``--open-browser``) opens the URL in the default browser. If
    pywebview is missing or the window cannot open, the browser is used instead;
@@ -32,12 +33,13 @@ import webbrowser
 from pathlib import Path
 from typing import Any, Callable
 
-__all__ = ["run_app", "port_free", "WINDOW_TITLE", "WINDOW_SIZE"]
+__all__ = ["run_app", "port_free", "WINDOW_TITLE", "WINDOW_SIZE", "WINDOW_ICON"]
 
 log = logging.getLogger(__name__)
 
 WINDOW_TITLE = "OpenHandScan Studio"
 WINDOW_SIZE = (1440, 900)
+WINDOW_ICON = Path(__file__).resolve().parent / "assets" / "ohs.ico"  # packaging/make_icon.py draws it
 
 
 def port_free(host: str, port: int) -> bool:
@@ -138,12 +140,17 @@ def _run_window(url: str, echo: Callable[[str], None], webview_module: Any = Non
     settings = getattr(webview, "settings", None)
     if isinstance(settings, dict):
         settings["ALLOW_DOWNLOADS"] = True
+    from ohs.server.title_bar import WindowApi
+
+    api = WindowApi(WINDOW_TITLE)  # the page sets the title bar's colours with its theme
     try:
         window = webview.create_window(WINDOW_TITLE, url, width=WINDOW_SIZE[0], height=WINDOW_SIZE[1], resizable=True,
-                                       min_size=(1024, 640), background_color="#14171d")
+                                       min_size=(1024, 640), background_color="#0b0d11", js_api=api)
     except Exception as e:
         echo(f"the app window could not be created ({e}): opening the app in your browser instead")
         return False
+    with contextlib.suppress(Exception):  # dark from the start, before the page says which theme
+        window.events.shown += api.on_shown
 
     def close_window() -> None:
         with contextlib.suppress(Exception):
@@ -157,7 +164,8 @@ def _run_window(url: str, echo: Callable[[str], None], webview_module: Any = Non
     try:
         with contextlib.suppress(OSError):
             storage.mkdir(parents=True, exist_ok=True)
-        webview.start(private_mode=False, storage_path=str(storage))
+        icon = {"icon": str(WINDOW_ICON)} if WINDOW_ICON.is_file() else {}
+        webview.start(private_mode=False, storage_path=str(storage), **icon)
         return True
     except Exception as e:  # no GUI backend / WebView2 runtime
         echo(f"the app window could not open ({e}): opening the app in your browser instead")

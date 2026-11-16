@@ -4,6 +4,7 @@ import type { ScanMode } from "../api/types";
 import { validLimit } from "../lib/deviation";
 import { validLaserLimit } from "../lib/lasers";
 import { storage } from "../lib/util";
+import { syncWindowTheme } from "../lib/windowChrome";
 
 export type Theme = "dark" | "light";
 
@@ -56,6 +57,7 @@ function readTheme(): Theme {
 
 function applyTheme(t: Theme) {
   document.documentElement.setAttribute("data-theme", t);
+  syncWindowTheme(t); // the desktop window's title bar
 }
 
 export const useUi = create<UiState>((set) => ({

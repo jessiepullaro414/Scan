@@ -61,6 +61,7 @@ def main(argv: list[str] | None = None) -> int:
     out.mkdir(parents=True, exist_ok=True)
     cmd = [sys.executable, "-m", "PyInstaller", str(HERE / "ohs_entry.py"), "--name", "ohs", "--noconfirm", "--clean",
            "--console", "--distpath", str(out), "--workpath", str(out / "work"), "--specpath", str(out),
+           "--icon", str(SOFTWARE / "ohs" / "server" / "assets" / "ohs.ico"),  # the app's logo (make_icon.py)
            "--paths", str(SOFTWARE), "--log-level", "WARN",
            "--additional-hooks-dir", str(HERE / "hooks"),  # Open3D and OpenCV without what is not used
            "--runtime-hook", str(HERE / "rthook_stub_viewers.py"),  # open3d imports plotly and dash: stand-ins
