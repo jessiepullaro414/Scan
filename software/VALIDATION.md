@@ -1781,6 +1781,27 @@ The engine and the app packaged as a Windows program with PyInstaller (`software
 - **Starting the app from the program:** 0.88 s until the app accepts a connection and 1.59 s until its first status message (the bench, run from the program). The bench could not time it in the first build: it launched the app with Python's `-c`, which a packaged program does not take; it now launches `ohs.exe app` itself.
 - **Not done:** an installer, signing, a smaller build (Open3D's examples and unused libraries are in), the version in the file's properties, a test on a PC without the development tools, the window (pywebview) seen opening.
 
+## The confidence model on the CPU path: measured, not adopted (2026-11-16)
+
+Without a GPU the mesh comes from Open3D's model, which has no short band behind the surface
+(`ROADMAP.md`, "models for the CPU path that take a short band"). The engine's confidence model
+has a numpy twin with the band (`PipelineParams.recon = "confidence"`). One bracket scan (640x400,
+60 frames, 20°, fused at its true poses), part vertices against the simulator's surface (scratch
+script `cpu_recon_study.py`):
+
+| | Integration a frame | Part vertices | Median off | More than 0.3 mm off | Mean |
+|---|---|---|---|---|---|
+| CPU path, Open3D's model (today) | 8 ms | 4,349 | 0.477 mm | 66.0 % | −0.414 mm |
+| CPU path, confidence model in numpy | 140 ms | 4,122 | 0.459 mm | 64.0 % | −0.352 mm |
+| GPU path, Open3D's model | 11 ms | 8,138 | 0.517 mm | 81.2 % | −0.506 mm |
+| GPU path, confidence model (today) | 6 ms | 7,763 | 0.510 mm | 80.4 % | −0.473 mm |
+
+Two points better for 18 times the integration (a 600-frame scan: about 80 s more), so it is not
+made the default; the CPU path's error is mostly its depth, not the band. (The GPU path's shares
+are not comparable with the CPU path's: its mesh covers almost twice as much of the part,
+including the thin edges where the errors are largest.) What the band does for tracking on the
+CPU path (Open3D's tracking model, 8 mm) is not measured here and stays open.
+
 ## What the metrics mean
 
 - **Stereo errors** compare the estimated raw intrinsics/extrinsics (`K1`, `K2`, `R`, `T`) with
