@@ -133,7 +133,13 @@ about the scan itself, not the Fit tool, and they decide whether a measurement c
   2.35–2.39 mm and costs about 19 % per frame. A tracked wall's extra thickness follows the camera
   path's scale (correlation 0.96–0.98 on the flange and the 3 mm rib), and a 2 mm flange reads
   2.7–2.85 mm even at true poses. So thin walls wait on the pull along the direction of motion
-  and on the mesh model, not on a finer tracking grid.
+  and on the mesh model, not on a finer tracking grid. **The pull, studied 2026-11-16, nothing
+  adopted** ([`VALIDATION.md`](../VALIDATION.md), "The camera path's scale"): it is real (a
+  camera-fixed share from the ICP normals' forward differences, a motion share from the matcher's
+  depth, unexplained), but a weak lever: 0.3 mm of path offset per mm of pull, so 0.03–0.1 mm on
+  the sheet. With today's engine the bracket's path is not too large (mean +0.02 mm). Symmetric
+  normals fix the camera-fixed share and change nothing measurable on scans. What is left for
+  thin walls is the tracking model's own wall thickness and the mesh model.
 - **Small cylinders fit worse since the new sigma** (measured again 2026-11-13,
   [`VALIDATION.md`](../VALIDATION.md), "Fitted shapes against the truth"): a Ø 14 mm boss reads
   0.39 mm off in radius with tracking (before 0.18 mm) and its axis 12.5° off (before 8.0°),

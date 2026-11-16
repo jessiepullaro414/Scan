@@ -1845,6 +1845,68 @@ So the next steps for thin walls are the camera path's scale and the mesh model,
 tracking grid. Limits: simulated, orbit pattern only, one run per recording (bracket s2 swings
 25–53 % across variants, so one scan can move a median); the CPU path was not run.
 
+## The camera path's scale: studied, nothing adopted (2026-11-16)
+
+The question was why each tracked frame is pulled about 0.1 mm along the direction of motion
+("What remains after 4 mm" above) and whether fixing it shrinks the path. GPU path, on a scratch
+copy of the engine (scratch folder `scale/`: `step.py` for the one-step check, `out.py` for how far
+out the cameras stand after a rigid best fit). One-step numbers are the mean pull along the camera's
+x on about 60 frames (standard error 0.02–0.04 mm on the bracket, 0.06–0.10 mm on the sheet).
+
+**Where the pull comes from:**
+- **Only about 1.5 % of the ICP points hold x** (about 130 of 9,600 at the finest level, on the
+  side faces); the table holds it to ±0.01 mm. Any small bias on the side faces shows as a pull.
+- **The model's side faces sit 0.1–0.2 mm too deep, even with true depth at true poses**: a view that
+  looks past a wall edge-on votes "free" into the voxels just outside it and nothing into those
+  inside. Integrating only within the band removes it in the one-step check but swells whole scans
+  (cameras +0.29–0.54 mm out, 3 mm rib 3.7–4.6 mm): those free-space votes are what keep the model
+  from swelling.
+- **The share fixed to the camera** (+0.09 to +0.14 mm with true depth) comes from the ICP source
+  normals' forward differences: a point needs valid right and lower neighbours, so right- and
+  bottom-facing faces lose their last sample before a depth step (125 left-facing against 73
+  right-facing points on the bracket). Central differences remove it.
+- **The share that follows the motion** (about ±0.11 mm on the bracket, ±0.17–0.20 mm on the sheet)
+  comes with the matcher's depth values and is absent with true depth at the matcher's pixels. It
+  sits on the left-facing faces and the base's sides. Not explained.
+- **Ruled out as the main cause:** the model's lag (+0.119 mm with the frame itself in the model
+  against +0.143 mm), the tracking filter (raw input pulls the same), the back rule, normal
+  smoothing, the weight threshold, the motion prior and gyro (the check starts at the true pose).
+
+**The pull is a weak lever on the path.** A known shift injected into every tracked frame of the
+three sheet scans moves the cameras' "out" by about 0.3 mm per mm of shift:
+
+| Injected per frame | Out, sheet s0 / s1 / s2 |
+|---|---|
+| None (today) | +0.17 / +0.04 / +0.20 mm |
+| −0.15 mm along the motion | +0.09 / +0.01 / +0.15 mm |
+| +0.15 mm along the motion | +0.21 / +0.08 / +0.26 mm |
+
+So the measured pull accounts for 0.03–0.1 mm of the sheet's out; the rest is most likely the thin
+walls being too thick in the 2 mm tracking model. With today's engine the bracket's path is not
+too large at all (out −0.06 / +0.06 / +0.12 / −0.06 / +0.04 mm, mean +0.02, not following the
+sweep), and the car panel's stands 0.01–0.04 mm in. The "0.05–0.2 % too large" above predates the
+back rule.
+
+**Prototype, symmetric source normals** (central differences in `_source_points`; off by default,
+scratch `central.diff`). A correct repair of a real asymmetry, within the scatter on scans:
+
+| | Today's engine | Symmetric normals |
+|---|---|---|
+| Bracket, more than 0.3 mm off per scan | 14 / 12 / 32 / 13 / 13 % (median 13.3 %) | 21 / 13 / 12 / 14 / 13 % (median 13.4 %) |
+| Bracket out | −0.06 / +0.06 / +0.12 / −0.06 / +0.04 mm | −0.09 / +0.08 / +0.06 / −0.05 / +0.09 mm |
+| Sheet out | +0.17 / +0.04 / +0.20 mm | +0.16 / +0.04 / +0.18 mm |
+| Sheet s0 / s1 / s2, 3 mm rib | 3.54 / 3.19 / 3.71 mm | 3.53 / 3.18 / 3.71 mm |
+| Car panel hole (five scans), diameter / centre | −0.90 / 0.33 mm | −0.92 / 0.31 mm |
+| Sphere without the gyro, drift | 109 mm | 128 mm |
+
+The end-to-end tests pass with it (7 of 7) with the same mesh numbers, and the time per frame is
+unchanged. On a sweep the other way the one-step pull grows with it (−0.08 → −0.21 mm on the
+reversed bracket), because the matcher's share no longer cancels the camera-fixed one. Not adopted.
+
+Limits: simulated, orbit pattern only, one run per recording; the one-step check on bracket s0 and
+sheet s0 only (the sheet without true depth); the CPU path was not run; the whole suite was not run
+on the prototype.
+
 ## What the metrics mean
 
 - **Stereo errors** compare the estimated raw intrinsics/extrinsics (`K1`, `K2`, `R`, `T`) with
