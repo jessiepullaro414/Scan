@@ -82,7 +82,7 @@ def test_align_from_picked_points(env):
     done = run_job(env, post(env["base"] + "/align", {"target": env["a"], "source": env["b"], "pairs": pairs}), "align")
     res = done["result"]
     assert res["start"] == "given" and res["candidates"] == 1 and res["accepted"], res["verdict"]
-    assert 0.0 < res["pairs_rms_mm"] < 3.0 and "given starting pose" in res["verdict"]
+    assert 0.0 < res["pairs_rms_mm"] < 3.0 and "from the start you gave" in res["verdict"]
     mm, deg = _off(env, res["T"])
     assert mm < 2.5 and deg < 0.6
     # too few points, points in one line: said at once, with what to do

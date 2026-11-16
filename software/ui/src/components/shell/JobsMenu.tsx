@@ -21,6 +21,8 @@ function JobRow({ job }: { job: Job }) {
   const est = jobEstimate(job);
   // A processing-studio job opens its scan's Process page.
   const studio = !link && isStudioJob(job.kind) ? (meta ? { pid: meta.pid, sid: meta.sid } : jobScanRef(job)) : null;
+  // A finished merge (M4) opens the scan it made (named in its result).
+  const mergedScan = !link && job.kind === "merge" && job.state === "done" ? jobScanRef(job) : null;
   return (
     <li className="px-3 py-2.5">
       <div className="flex items-center gap-2">
@@ -69,6 +71,12 @@ function JobRow({ job }: { job: Job }) {
         <div className="mt-1.5 pl-[23px]">
           <Button size="xs" variant="secondary" onClick={() => navigate(paths.viewer(link.pid, link.sid))}>
             Open result
+          </Button>
+        </div>
+      ) : mergedScan ? (
+        <div className="mt-1.5 pl-[23px]">
+          <Button size="xs" variant="secondary" onClick={() => navigate(paths.viewer(mergedScan.pid, mergedScan.sid))}>
+            Open the merged scan
           </Button>
         </div>
       ) : studio ? (

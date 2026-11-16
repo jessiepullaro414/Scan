@@ -128,7 +128,7 @@ def test_a_given_start_is_refined_and_the_part_may_have_moved():
     assert mm < 0.1 and deg < 0.05
     rough = T_true @ _motion(4.0, (0.2, 1.0, 0.4), (3.0, -2.0, 2.5))
     res = align_pair(src, dst, init=rough)
-    assert res.accepted and res.start == "given" and res.candidates == 1 and "given starting pose" in res.verdict
+    assert res.accepted and res.start == "given" and res.candidates == 1 and "from the start you gave" in res.verdict
     mm, deg = _error(res.T, T_true)
     assert mm < 0.1 and deg < 0.05
 

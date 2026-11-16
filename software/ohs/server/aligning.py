@@ -152,7 +152,8 @@ class AlignManager:
                     dst = self.st.projects.scan_dir(pid, sid) / "result"
                     shutil.move(str(out), str(dst))
                     scan = self.st.projects.update_scan(
-                        pid, sid, status="processed", n_frames=int(rep["frames"]["fused"]), duration_s=0.0, quality=quality,
+                        pid, sid, status="processed", n_frames=int(rep["frames"]["fused"]), quality=quality,
+                        duration_s=float(sum(float(x["entry"].get("duration_s", 0.0) or 0.0) for x in (a, b))),
                         report=report_summary({**rep, "quality": quality}),
                         merged_from=[{"id": a["id"], "name": a["name"]}, {"id": b["id"], "name": b["name"]}])
                 finally:

@@ -18,6 +18,8 @@
  * - M3: the processing studio (process.ts): stages, edits with undo / redo, stats, holes, the
  *   trajectory with loops, recipes; "Make mesh" runs the Default recipe. The meshes are real
  *   (scanmesh.ts, meshops.ts): about 250k triangles at 1 mm and 1M at 0.5 mm.
+ * - M4: align two scans and merge them (align.ts): made-up answers under the server's rules; a merge adds
+ *   a new scan to the project.
  * - M5: fitted shapes (fit.ts): a plane, cylinder or hole where the viewer was clicked; and Check
  *   (check.ts): the areas that miss a tolerance, from a made-up sigma that mesh.ply carries too.
  *
@@ -43,6 +45,7 @@ import type {
   StatusMsg,
   Tracking,
 } from "../types";
+import { MockAlign } from "./align";
 import { MockCalib } from "./calib";
 import { HttpError, json, nowIso, uid, type MockHost, type MockSettings, type TimedJobSpec, type WorkJobSpec, type WorkStep } from "./host";
 import { normalizeQuality } from "../../lib/quality";
@@ -60,6 +63,7 @@ import {
   occluded,
   plyPoints,
   rng,
+  SCENE,
   sceneMesh,
   sub,
   toRowMajor16,
@@ -70,6 +74,17 @@ import {
   type V3,
 } from "./geom";
 import { DEPTH_H, DEPTH_W, LEFT_H, LEFT_W, PreviewRenderer } from "./render";
+
+/**
+ * The pose the demo's alignment shows when it is not accepted (scan world frame, 4x4 rows): half a turn
+ * about the upright axis through the ball. The ball fits as well as before; the block and the table do not.
+ */
+function wrongAlignPose(T_ws: Pose): number[][] {
+  const c = SCENE.sphere.c;
+  const turn: Pose = { R: [-1, 0, 0, 0, 1, 0, 0, 0, -1], t: [2 * c[0], 0, 2 * c[2]] };
+  const T = toRowMajor16(compose(compose(T_ws, turn), invert(T_ws)));
+  return [T.slice(0, 4), T.slice(4, 8), T.slice(8, 12), [0, 0, 0, 1]];
+}
 
 const VERSION = "0.3.0";
 
@@ -206,6 +221,7 @@ class MockBackend {
   private setup: MockSetup;
   private calib: MockCalib;
   private studio: MockProcess;
+  private aligning: MockAlign;
   private previewSeqs: Record<string, number> = {};
   private session: SessionState = { state: "idle", project_id: null, scan_id: null, mode: "markerless", elapsed_s: 0, frames: 0 };
   private sim: ScanSim | null = null;
@@ -265,6 +281,18 @@ class MockBackend {
       const scan = project?.scans.find((x) => x.id === sid);
       return project && scan ? { project, scan } : null;
     });
+    this.aligning = new MockAlign(
+      {
+        startWorkJob: (kind, spec) => this.startWorkJob(kind, spec),
+        log: host.log,
+        fail: (status, detail, hint) => {
+          throw new HttpError(status, detail, hint);
+        },
+        uid,
+        now: () => nowIso(),
+      },
+      wrongAlignPose(this.T_ws),
+    );
     setInterval(() => this.tick(), 66);
   }
 
@@ -399,6 +427,9 @@ class MockBackend {
         this.projects.delete(p.id);
         return json(204, null);
       }
+      // M4: align two scans, merge them into a new one
+      if (p && c === "align" && is("POST", 3)) return json(200, this.aligning.align(p, body));
+      if (p && c === "merge" && is("POST", 3)) return json(200, this.aligning.merge(p, body));
       if (p && c === "scans" && d) {
         const s = p.scans.find((x) => x.id === d);
         if (!s) throw new HttpError(404, "Scan not found");
@@ -447,7 +478,7 @@ class MockBackend {
     const m2 = this.setup.route(method, seg, body) ?? this.calib.route(method, seg, body);
     if (m2) return m2;
 
-    throw new HttpError(404, `No such endpoint: ${method} ${path}`, "The demo backend implements APP_API.md up to M3 phase 2 (the processing studio).");
+    throw new HttpError(404, `No such endpoint: ${method} ${path}`, "The demo backend implements APP_API.md up to M3 phase 2 (the processing studio), M4's align and merge, and M5's fits and checks.");
   }
 
   private listProjects(): ProjectSummary[] {
@@ -1088,7 +1119,8 @@ class MockBackend {
     };
     mk("Intake manifold bracket", 2, [
       { name: "Bracket top", status: "processed", n_frames: 864, duration_s: 28.8 },
-      { name: "Bracket underside", status: "recorded", n_frames: 612, duration_s: 20.4 },
+      { name: "Bracket underside", status: "processed", n_frames: 612, duration_s: 20.4 }, // with "Bracket top": two scans to align (M4)
+      { name: "Bracket side", status: "recorded", n_frames: 450, duration_s: 15 },
       { name: "Quick test (fail)", status: "failed", n_frames: 96, duration_s: 3.2 },
     ]);
     mk("Fender flare, left", 27, [{ name: "Wheel arch", status: "processed", quality: "preview", mode: "markers", n_frames: 1530, duration_s: 51 }]);

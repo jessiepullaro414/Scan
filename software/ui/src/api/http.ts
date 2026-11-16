@@ -6,6 +6,7 @@
  * the same in both modes. Errors become `ApiError` carrying the API's `detail` and `hint`.
  */
 import type {
+  AlignRequest,
   CalibKind,
   CalibSession,
   CameraSettingsBody,
@@ -27,6 +28,7 @@ import type {
   Job,
   LaserInfo,
   LaserMap,
+  MergeRequest,
   NewRecipeBody,
   OpenFolderReply,
   Paper,
@@ -321,6 +323,17 @@ export const api = {
    * values, so there is nothing to check against. Each area's `faces` stays base64: decode the ones that
    * are shown with `decodeFaces` (lib/fits.ts). */
   check: (pid: string, sid: string, tolerance_mm: number) => post<CheckResult>(`${scanPath(pid, sid)}/check`, { tolerance_mm }),
+
+  // ---------------------------------------------------------------- M4: align two scans and merge them
+  /** Job (kind `align`, result `AlignResult`): the source scan aligned to the target scan, from their meshes.
+   * Writes nothing; "not accepted" is an answer (the job ends `done`), not an error. 404 unknown project or
+   * scan; 409 the same scan twice, a scan that is busy or has no mesh yet; 422 fewer than three pairs, or
+   * pairs in one line or on one spot. */
+  alignScans: (pid: string, body: AlignRequest) => post<Job>(`/api/projects/${enc(pid)}/align`, body),
+  /** Job (kind `merge`, result `MergeResult`): both recordings fused again at the pose `T` into a new scan
+   * of the project. Can be cancelled (nothing is added then). 409 also for a scan without a recording (a
+   * merged scan); 422 for a `T` that is not a 4x4 rigid motion. */
+  mergeScans: (pid: string, body: MergeRequest) => post<Job>(`/api/projects/${enc(pid)}/merge`, body),
 
   /** Built-ins first. */
   recipes: () => get<Recipe[]>("/api/recipes"),

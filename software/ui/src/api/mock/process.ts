@@ -328,6 +328,7 @@ export class MockProcess {
   makeMesh(p: Project, s: Scan, quality: ProcessQuality): Job {
     const st = this.ensure(p, s);
     this.guard(st, s, "This scan is already being processed");
+    this.needRecording(s);
     const recipe = this.recipes.find((r) => r.id === "default") ?? BUILTINS[0];
     const prev = s.status;
     s.status = "processing";
@@ -564,6 +565,11 @@ export class MockProcess {
       st.jobId = null;
       st.busy = null;
     }
+  }
+
+  /** 409 for a merged scan (M4): it has no recording, so nothing that goes through the frames again. */
+  private needRecording(s: Scan) {
+    if (s.merged_from?.length) throw new HttpError(409, "this scan has no recording", "it was merged from two scans: change those and merge them again");
   }
 
   private setCurrent(st: Studio, m: TriMesh | null) {
@@ -825,6 +831,7 @@ export class MockProcess {
   private startTrack(p: Project, s: Scan, quality: ProcessQuality): Job {
     const st = this.ensure(p, s);
     this.guard(st, s);
+    this.needRecording(s);
     const self = this;
     const work = (function* (): JobWork {
       const r = yield* self.trackWork(s, quality, true, 0, 0.97);
@@ -850,6 +857,7 @@ export class MockProcess {
   private startStraighten(p: Project, s: Scan): Job {
     const st = this.ensure(p, s);
     this.guard(st, s);
+    this.needRecording(s);
     if (st.stages.track.state !== "done") throw new HttpError(409, "Straighten needs a finished Track", "Run Track first.");
     const self = this;
     const work = (function* (): JobWork {
@@ -871,6 +879,7 @@ export class MockProcess {
   private startRefine(p: Project, s: Scan): Job {
     const st = this.ensure(p, s);
     this.guard(st, s);
+    this.needRecording(s);
     if (st.stages.track.state !== "done" || !st.base) throw new HttpError(409, "Refine with lasers needs a finished Track", "Run Track first.");
     const work = (function* (): JobWork {
       yield* tick(0, 0.3, 2, () => "Reading the laser points");
@@ -892,6 +901,7 @@ export class MockProcess {
   private startSpacetime(p: Project, s: Scan): Job {
     const st = this.ensure(p, s);
     this.guard(st, s);
+    this.needRecording(s);
     if (st.stages.track.state !== "done" || !st.base) throw new HttpError(409, "Refine from the images needs a finished Track", "Run Track first.");
     const self = this;
     const work = (function* (): JobWork {
@@ -920,6 +930,7 @@ export class MockProcess {
     const voxel = num(voxelIn);
     if (voxel === undefined || voxel < 0.25 || voxel > 10) return this.bad("The voxel size must be between 0.25 and 10 mm", "0.5, 1 or 2 mm are the usual sizes.");
     this.guard(st, s);
+    this.needRecording(s);
     if (st.stages.track.state !== "done") throw new HttpError(409, "Fuse needs a finished Track", "Run Track first.");
     const self = this;
     const work = (function* (): JobWork {
@@ -945,6 +956,7 @@ export class MockProcess {
     if (scope !== "edits" && scope !== "all") this.bad(`Unknown scope “${String(body.scope)}”`, "Use edits or all.");
     this.guard(st, s);
     const busy = `Applying “${recipe.name}”…`;
+    if (scope === "all") this.needRecording(s);
     if (scope === "all") return this.allJob(st, p, s, "process_recipe", recipe.settings, recipe.ops, busy, null, secondsFor(normalizeQuality(recipe.settings.quality) ?? "standard") + 1, null);
     if (!st.base) throw new HttpError(409, "There's no mesh to edit yet", "Apply “Everything”, or run Track first.");
     const base = st.base.mesh;

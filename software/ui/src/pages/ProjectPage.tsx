@@ -2,6 +2,7 @@ import {
   ArrowLeft,
   Box,
   CircleExclamationPoint,
+  Combine,
   Download,
   Eye,
   FolderOpen,
@@ -21,6 +22,7 @@ import { ConfirmDialog, PromptDialog } from "../components/ui/Dialog";
 import { EmptyState, Skeleton } from "../components/ui/Feedback";
 import { Code, Page, PageHeader } from "../components/ui/Layout";
 import { Menu } from "../components/ui/Popover";
+import { hasMesh, hasRecording, mergedFromText } from "../lib/align";
 import { downloadFile } from "../lib/download";
 import { fileStem, fmtDateTime, fmtDuration, fmtInt, fmtRelative } from "../lib/format";
 import { href, navigate, paths } from "../lib/router";
@@ -51,6 +53,9 @@ function ScanRow({ project, scan }: { project: Project; scan: Scan }) {
   const hasResult = scan.status === "processed" && !!scan.result;
   const urls = resultUrls(project, scan);
   const stem = fileStem(project.name, scan.name);
+  // A merged scan (M4) has no recording of its own: nothing that makes its mesh from the frames again.
+  const recorded = hasRecording(scan);
+  const mergedFrom = mergedFromText(scan);
 
   return (
     <li className={cn(ROW_GRID, "min-h-[64px] items-center px-4 py-2.5 transition-colors hover:bg-surface-2/60")}>
@@ -66,8 +71,9 @@ function ScanRow({ project, scan }: { project: Project; scan: Scan }) {
           ) : (
             <div className="truncate text-sm font-medium text-fg">{scan.name}</div>
           )}
-          <div className="truncate text-xs text-subtle" title={fmtDateTime(scan.created)}>
+          <div className="truncate text-xs text-subtle" title={mergedFrom ? `${fmtDateTime(scan.created)} · ${mergedFrom}` : fmtDateTime(scan.created)}>
             {fmtRelative(scan.created)}
+            {mergedFrom ? ` · ${mergedFrom}` : null}
           </div>
         </div>
       </div>
@@ -79,7 +85,13 @@ function ScanRow({ project, scan }: { project: Project; scan: Scan }) {
           <Tag size={12} aria-hidden /> {scan.mode === "markers" ? "Markers" : "Markerless"}
         </span>
         <span className="tnum">{fmtInt(scan.n_frames)} frames</span>
-        <span className="tnum">{fmtDuration(scan.duration_s)}</span>
+        {recorded ? (
+          <span className="tnum">{fmtDuration(scan.duration_s)}</span>
+        ) : (
+          <span className="inline-flex items-center gap-1" title="Made by merging two scans: it has no recording of its own">
+            <Combine size={12} aria-hidden /> Merged
+          </span>
+        )}
       </div>
       <div className="flex min-w-0 items-center justify-end gap-2">
         {processing && job ? (
@@ -121,8 +133,10 @@ function ScanRow({ project, scan }: { project: Project; scan: Scan }) {
                     </Button>
                   )}
                 />
-                <MakeMeshButton projectId={project.id} scan={scan} label="Remake" variant="ghost" />
+                {recorded ? <MakeMeshButton projectId={project.id} scan={scan} label="Remake" variant="ghost" /> : null}
               </>
+            ) : !recorded ? (
+              <ProcessButton projectId={project.id} scan={scan} label="Process" />
             ) : (
               <>
                 <MakeMeshButton projectId={project.id} scan={scan} variant={scan.status === "failed" ? "secondary" : "primary"} />
@@ -165,6 +179,8 @@ export function ProjectPage({ pid }: { pid: string }) {
 
   const name = project?.name ?? summary?.name ?? "";
   const scans = project ? [...project.scans].sort((a, b) => (a.created < b.created ? 1 : -1)) : null;
+  /** Two scans with a mesh can be aligned to each other and merged (M4). */
+  const canAlign = !!project && project.scans.filter(hasMesh).length >= 2;
 
   if (error && !project) {
     const notFound = error.status === 404;
@@ -222,6 +238,11 @@ export function ProjectPage({ pid }: { pid: string }) {
           <>
             <IconButton icon={Pencil} label="Rename project" variant="secondary" onClick={() => setRenaming(true)} disabled={!project} />
             <IconButton icon={Trash} label="Move project to trash" variant="secondary" onClick={() => setDeleting(true)} disabled={!project} />
+            {canAlign ? (
+              <Button icon={Combine} onClick={() => navigate(paths.align(pid))} title="Line up two scans of the same part and merge them into one">
+                Align two scans
+              </Button>
+            ) : null}
             <Button
               variant="primary"
               icon={ScanLine}

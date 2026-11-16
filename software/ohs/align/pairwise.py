@@ -363,7 +363,7 @@ def align_pair(src: ScanCloud, dst: ScanCloud, params: AlignParams | None = None
         out.ms = round(1e3 * (time.perf_counter() - t0), 1)
         if reason is None:
             sure = (f"{out.agree} of {out.candidates} starting guesses agree" if out.start == "features"
-                    else "from the given starting pose")
+                    else "from the start you gave")
             loose = "" if out.dof >= 6 else f" The overlap leaves {6 - out.dof} direction(s) of motion loose."
             out.verdict = (f"Aligned: {100 * out.overlap:.0f} % of the smaller scan's part lies within {p.match_mm:g} mm "
                            f"of the other scan, {out.rmse_mm:.2f} mm RMS; {sure}.{loose}")
@@ -432,11 +432,11 @@ def align_pair(src: ScanCloud, dst: ScanCloud, params: AlignParams | None = None
                     f"at most {p.max_fit_mm:g} mm)")
     if out.start == "features" and rival >= p.rival_share * best[0]:
         return done("the part fits in more than one position about equally well (a symmetric shape, a repeated "
-                    "feature, or a surface that can slide on itself): give a rough starting pose, or scan with more of "
-                    "the part's distinct features in both")
+                    "feature, or a surface that can slide on itself): give a rough start by picking matching points, or scan "
+                    "with more of the part's distinct features in both")
     if out.start == "features" and out.agree < 2:
         return done("only one of the starting guesses led to this pose, which is too little to trust it: "
-                    "give a rough starting pose, or scan with more overlap")
+                    "give a rough start by picking matching points, or scan with more overlap")
     log.info("aligned a pair: overlap %.0f %%, %.2f mm RMS, %d of %d guesses agree, %d directions pinned (%s)",
              100 * out.overlap, out.rmse_mm, out.agree, out.candidates, out.dof,
              "with the support" if out.used_support else "part only")

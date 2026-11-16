@@ -24,6 +24,7 @@ import { useSetup } from "./store/setup";
 const ScanPage = lazy(() => import("./pages/ScanPage"));
 const ViewerPage = lazy(() => import("./pages/ViewerPage"));
 const ProcessPage = lazy(() => import("./pages/ProcessPage"));
+const AlignPage = lazy(() => import("./pages/AlignPage"));
 const SetupPage = lazy(() => import("./pages/setup/SetupPage"));
 
 function LoadingPage() {
@@ -62,6 +63,12 @@ function PageFor({ route }: { route: Route }) {
       return (
         <Suspense fallback={<Loading3D />}>
           <ProcessPage key={`${route.pid}/${route.sid}`} pid={route.pid} sid={route.sid} />
+        </Suspense>
+      );
+    case "align":
+      return (
+        <Suspense fallback={<Loading3D />}>
+          <AlignPage key={route.pid} pid={route.pid} target={route.target} source={route.source} />
         </Suspense>
       );
     case "scan":

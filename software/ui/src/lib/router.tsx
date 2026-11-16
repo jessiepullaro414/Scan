@@ -14,6 +14,8 @@ export type Route =
   | { name: "viewer"; pid: string; sid: string }
   /** M3: the processing studio of one scan. */
   | { name: "process"; pid: string; sid: string }
+  /** M4: align two scans of a project and merge them; the two scans may be given in the address. */
+  | { name: "align"; pid: string; target: string | null; source: string | null }
   | { name: "scan"; project: string | null; first: boolean }
   | { name: "device" }
   | { name: "setup"; step: SetupPage | null }
@@ -48,6 +50,7 @@ export function parseRoute(hash: string): Route {
   const [a, b, c, d, e] = parts;
   if (a === "projects" && parts.length === 1) return { name: "home" };
   if (a === "projects" && b && parts.length === 2) return { name: "project", pid: b };
+  if (a === "projects" && b && c === "align" && parts.length === 3) return { name: "align", pid: b, target: query.get("target") || null, source: query.get("source") || null };
   if (a === "projects" && b && c === "scans" && d && parts.length === 4) return { name: "viewer", pid: b, sid: d };
   if (a === "projects" && b && c === "scans" && d && e === "process" && parts.length === 5) return { name: "process", pid: b, sid: d };
   if (a === "scan" && parts.length === 1) {
@@ -69,6 +72,14 @@ export const paths = {
   project: (pid: string) => `/projects/${enc(pid)}`,
   viewer: (pid: string, sid: string) => `/projects/${enc(pid)}/scans/${enc(sid)}`,
   process: (pid: string, sid: string) => `/projects/${enc(pid)}/scans/${enc(sid)}/process`,
+  /** Align two scans; `target` stays in place, `source` is moved onto it (both optional). */
+  align: (pid: string, target?: string | null, source?: string | null) => {
+    const q = new URLSearchParams();
+    if (target) q.set("target", target);
+    if (source) q.set("source", source);
+    const s = q.toString();
+    return `/projects/${enc(pid)}/align${s ? `?${s}` : ""}`;
+  },
   scan: (project?: string | null, opts: { first?: boolean } = {}) => {
     const q = new URLSearchParams();
     if (project) q.set("project", project);

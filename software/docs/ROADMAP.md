@@ -54,7 +54,7 @@ change what the hardware can physically measure.
 | Presets | **Partly** | Preview / Standard / Best quality; markerless or marker tracking. | Presets by object type and size. |
 | Editing and smoothing | **Partly** | Clean, fill, smooth, simplify, select, with undo / redo. | A deviation map of processed against raw; a limit on how far processing may move the surface. |
 | Measuring | **Started** | Point-to-point distance in the viewer. | Fitted planes, cylinders and holes, angles, sections, gap and flush, comparison with CAD, report (M5). |
-| Several sessions | **Started** | In the engine (`ohs.align`, 2026-11-15): two scans aligned to each other from their shape, and merged into one model from their raw frames. Simulator only; not in the app. | Several scans at once, a joint refinement across scans, a start from tags or picked points in the app, scans of different calibrations, the app's Align step (M4). |
+| Several sessions | **Started** | Two scans of a project are aligned to each other, from their shape or from points picked on both, and merged into a new scan from their raw frames ("Align two scans" on the project page, 2026-11-15). Tried on simulated scans only. | Several scans at once, scans of different calibrations, tags as a start, a merged model that is more accurate than its best scan (M4). |
 | Scan to CAD | **Not yet** | | Fitted shapes exported as STEP or a FreeCAD package (M5). |
 | Data retention | **Not yet** | | Standard / Engineering / Full modes, large projects read from disk. |
 | Plugins | **Not now** | Swappable parts inside the engine (GPU or CPU, two reconstruction methods). | A public plugin API (see section 5). |

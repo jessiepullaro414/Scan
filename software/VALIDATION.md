@@ -1660,7 +1660,7 @@ Scripts: scratchpad `lasers4\` of the session of 2026-11-14/15 (`study2.py`, `su
 
 ## Aligning and merging two scans (simulator, 2026-11-15)
 
-A first slice of M4 in the engine (`ohs/align/`, research plan 4.7): two scans of one part are aligned to each other from their meshes, and merged into one model from their raw frames. Engine only; nothing in the app yet.
+A first slice of M4 (`ohs/align/`, research plan 4.7): two scans of one part are aligned to each other from their meshes, and merged into one model from their raw frames. In the app since the same day as "Align two scans" on the project page (`docs/APP_API.md`, "M4 first slice"); the figures below are the engine's.
 
 **How it aligns** (`ohs.align.align_pair`):
 
@@ -1712,6 +1712,8 @@ A first slice of M4 in the engine (`ohs/align/`, research plan 4.7): two scans o
 **Reading the error figures:** the single scans here are short (60 frames, about a 40° sweep) and the error is taken along the normal at every vertex of the part, edges included, so the shares more than 0.3 mm off are larger than the bracket figures elsewhere in this file. Compare within this section.
 
 **A part that was moved** (built the same day): given each scan's support plane, the merge leaves out every frame's depth and laser points on or behind it and up to 2 mm in front (`FramePipeline.process(clip_plane=...)`). On the bracket pair the merged model then has 4,332 vertices instead of 106,441 and nothing within 5.6 mm of the table; the part's bottom edge goes with it (the margin, and the rim the gap guard takes next to missing depth). **A rough pose from picked points** (`pose_from_point_pairs`): three or more matching points, fitted rigidly; points picked a millimetre or two off give a start the alignment refines to the same result as before.
+
+**In the app** (tried by hand on the two tracked bracket scans at 1280x800, through the real server): the page aligned them from the shape (accepted: 80 % of the part within 1 mm, 0.23 mm RMS, 8 of 9 guesses agreeing), showed both meshes on each other in two colours, merged 120 frames with a progress count into a new scan of 561,465 vertices, and the project listed it as merged from the two. In demo mode: picking three point pairs on the two views, aligning from them, the not-accepted case with its prompt to pick points, and the confirmation before a merge at a pose that was not accepted. Not tried: real scans, a cancelled merge on the real server, small screens.
 
 **Limits:** two scans at a time; the same calibration and image size for both; a part's own flat face that is 30 % or more of a scan made without a table is taken for the support; no Poisson meshing in a merge; simulator only.
 

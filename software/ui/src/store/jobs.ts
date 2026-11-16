@@ -37,6 +37,13 @@ export const isActive = (j: Job | undefined | null) => !!j && (j.state === "queu
  */
 export const isStudioJob = (kind: string): boolean => /^process_(track|straighten|fuse|spacetime|refine)|mesh_edit|recipe|^edit/i.test(kind);
 
+/**
+ * Aligning two scans, or merging them into a new one (M4, kinds `align` / `merge`). Neither is a
+ * "Make mesh": an align job writes nothing, and a merge job's result names the new scan, which gets
+ * its own words below.
+ */
+export const isAlignJob = (kind: string): boolean => /^(align|merge)$/i.test(kind);
+
 /** The scan a job works on, when the engine says (top-level extras, else the result). */
 export function jobScanRef(job: Job): { pid: string; sid: string } | null {
   const top = job as Job & { project_id?: unknown; scan_id?: unknown };
@@ -48,12 +55,31 @@ export function jobScanRef(job: Job): { pid: string; sid: string } | null {
 
 function linkFromResult(job: Job): ScanJobLink | null {
   if (isStudioJob(job.kind)) return null; // not a "Make mesh": no "Mesh ready" toast after every edit
+  if (isAlignJob(job.kind)) return null; // nor these: a merge is told in its own words (`mergeFinished`)
   const r = job.result;
   if (r && typeof r.project_id === "string" && typeof r.scan_id === "string") {
     const scan = r.scan as { quality?: unknown } | null | undefined; // "Make mesh" has the quality in its scan
     return { pid: r.project_id, sid: r.scan_id, quality: normalizeQuality(r.quality ?? scan?.quality) ?? "standard" };
   }
   return null;
+}
+
+/** A merge job ended: the project has a new scan (or not), said in the merge's own words. */
+function mergeFinished(job: Job): void {
+  const top = job as Job & { project_id?: unknown };
+  const r = job.result;
+  const pid = typeof r?.project_id === "string" ? r.project_id : typeof top.project_id === "string" ? top.project_id : null;
+  if (pid) void useProjects.getState().fetchProject(pid);
+  // On the project's Align page nothing more is said: the page shows it.
+  if (pid && location.hash.replace(/\?.*$/, "") === "#" + paths.align(pid)) return;
+  if (job.state === "done" && pid && typeof r?.scan_id === "string") {
+    const sid = r.scan_id;
+    const name = (r.scan as { name?: unknown } | null | undefined)?.name;
+    toast.success("Merged scan ready", typeof name === "string" ? name : undefined, { label: "Open the merged scan", run: () => navigate(paths.viewer(pid, sid)) });
+  } else if (job.state === "cancelled") {
+    toast.info("Merging cancelled", "Nothing was added to the project. The two scans are unchanged.");
+  }
+  // a failed merge: the engine reports it itself (an error in its log, shown as a toast), and the Align page shows it
 }
 
 export const useJobs = create<JobsStore>((set, get) => ({
@@ -66,6 +92,7 @@ export const useJobs = create<JobsStore>((set, get) => ({
     const link = get().links[job.id] ?? linkFromResult(job);
     set((s) => ({ jobs: { ...s.jobs, [job.id]: job } }));
     const finished = prev && isActive(prev) && !isActive(job);
+    if (finished && /^merge$/i.test(job.kind)) return mergeFinished(job);
     if (!finished || !link) return;
     void useProjects.getState().fetchProject(link.pid);
     const label = link.name ? `"${link.name}"` : "the scan";
@@ -153,6 +180,8 @@ export const jobKindLabel = (kind: string): string => {
     if (k.includes("recipe")) return "Apply recipe";
     return "Mesh edit";
   }
+  if (k === "align") return "Align two scans";
+  if (k === "merge") return "Merge two scans";
   if (k.includes("process") || k.includes("mesh")) return "Make mesh";
   if (k.includes("sim") || k.includes("demo")) return "Simulator demo";
   if (k.includes("selftest") || k.includes("self_test")) return "Self-test";

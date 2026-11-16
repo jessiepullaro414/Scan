@@ -71,6 +71,8 @@ export type Scan = {
   duration_s: number;
   status: ScanStatus;
   result: ScanResult | null;
+  /** M4: present on a merged scan: the scans it was made from. A merged scan has no recording of its own. */
+  merged_from?: { id: string; name: string }[];
 };
 
 export type ProjectSummary = {
@@ -756,3 +758,54 @@ export type CheckResult = {
   n_areas: number; // all areas above the minimum
   areas: CheckArea[]; // largest first, at most 50
 };
+
+// ------------------------------------------------------------------ M4 first slice: align two scans and merge them
+// APP_API.md "M4 first slice: align two scans and merge them". The target scan keeps its place; the
+// source scan is moved onto it. Points picked on a mesh are in that scan's own frame, in mm.
+
+/** One spot on the part, clicked on both meshes. */
+export type PointPair = { source: [number, number, number]; target: [number, number, number] };
+
+export type AlignRequest = {
+  target: string; // scan id: stays where it is
+  source: string; // scan id: is moved onto the target
+  same_setup?: boolean; // default true: the part was not moved on its table between the two scans. false: it was turned over or moved
+  pairs?: PointPair[]; // optional: 3 or more matching points picked on the two meshes, as a rough start
+};
+
+/** The `result` of a finished job of kind "align". */
+export type AlignResult = {
+  project_id: string;
+  target: string;
+  source: string;
+  accepted: boolean; // false: not aligned; `reason` and `verdict` say why and what to do
+  verdict: string; // one sentence for the user
+  reason: string | null;
+  T: number[][]; // 4x4, row-major rows: takes points of the source's mesh into the target's frame
+  start: "features" | "given"; // from the shape alone, or from the picked pairs
+  overlap: number; // 0..1: share of the smaller scan's part within 1 mm of the other scan
+  rmse_mm: number | null; // RMS along the normals of what matches
+  fit_mm: number | null; // robust spread of the residuals within 3 mm
+  candidates: number; // starting guesses tried
+  agree: number; // how many ended at the chosen pose
+  spread_mm: number;
+  dof: number; // directions of motion the overlap pins down (6 = all)
+  same_setup: boolean;
+  used_support: boolean; // the table was used for height and tilt
+  support: { target: boolean; source: boolean }; // a table was found in each scan
+  pairs_rms_mm: number | null; // how well the picked pairs agree with each other (a large value: two pairs do not match)
+  n_matched: number;
+  ms: number;
+  message: string; // = verdict
+};
+
+export type MergeRequest = {
+  target: string;
+  source: string;
+  T: number[][]; // the pose to merge at (an AlignResult's T)
+  same_setup?: boolean; // default true. false: each scan's table is left out of the merged model
+  name?: string; // default "<target name> + <source name>"
+};
+
+/** The `result` of a finished job of kind "merge". */
+export type MergeResult = { project_id: string; scan_id: string; scan: Scan; merged_from: [string, string]; message: string };
