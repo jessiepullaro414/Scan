@@ -66,7 +66,11 @@ def main(argv: list[str] | None = None) -> int:
            "--runtime-hook", str(HERE / "rthook_stub_viewers.py"),  # open3d imports plotly and dash: stand-ins
            "--collect-data", "ohs", "--collect-submodules", "ohs",  # the app's page and every engine module
            "--collect-all", "pyopencl",  # native libraries and OpenCL kernels' sources
-           "--collect-submodules", "uvicorn", "--collect-data", "webview"]
+           "--collect-submodules", "uvicorn",
+           # the window: the launcher imports pywebview by name and pywebview its Windows backend (WinForms
+           # through pythonnet) the same way, so PyInstaller sees neither; without them only webview's data
+           # folder came along and `import webview` found an empty package
+           "--hidden-import", "webview", "--collect-submodules", "webview", "--collect-data", "webview"]
     for name in EXCLUDES:
         cmd += ["--exclude-module", name]
     print(" ".join(cmd))

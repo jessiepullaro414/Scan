@@ -178,7 +178,7 @@ Settings are saved as a **recipe** you can reuse or script.
 | Desktop shell | **pywebview** (Windows WebView2, macOS WKWebView, Linux WebKitGTK) | A native window with one runtime (Python) and no Electron |
 | Remote use | the same UI in any browser on the LAN (opt-in) | Use a phone or tablet as the scan display; a scanner on a mini-PC later |
 | GPU compute | chosen by a spike at the start of M3; candidates are **wgpu** (WebGPU compute shaders on Vulkan / DX12 / Metal, so any vendor), **CUDA** through CuPy (NVIDIA), and **OpenCL** through OpenCV's T-API | One engine, auto-detected at start. Every GPU kernel has a CPU twin, and tests check that the results agree. The settings show which device is in use. |
-| Packaging | PyInstaller and an installer (M6) | One download, no Python needed. A trial build works (`packaging/build_exe.py`, 2026-11-16: 522 MB, 184 MB zipped, after leaving out what is not used; same results as from Python); no installer yet |
+| Packaging | PyInstaller and an installer (M6) | One download, no Python needed. A trial build works (`packaging/build_exe.py`, 2026-11-16: 525 MB, about 184 MB zipped, after leaving out what is not used; same results as from Python; the app window opens since pywebview is named to PyInstaller); no installer yet |
 
 Rejected alternatives:
 - **Qt/PySide6:** native, but a dated look, LGPL packaging chores, and far fewer UI building blocks.

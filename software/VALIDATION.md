@@ -1793,6 +1793,24 @@ The engine and the app packaged as a Windows program with PyInstaller (`software
 - **What it gives up:** Open3D's own windows and web viewers, and OpenCV's video files and streams; the engine uses none of them. What is left is mostly Open3D.dll (157 MB), OpenCV (108 MB), numba's LLVM (115 MB) and two OpenBLAS copies (20 MB each); cutting those needs custom builds of the libraries, or the program without numba (about 120 MB less, four-laser line linking in Python).
 - **Not checked:** the window (pywebview) opening, a real camera through the program.
 
+**The window, and a build with thin walls (2026-11-16, later).** Built again from main at 785f41a
+(thin walls seen from opposite sides):
+- **The window did not open in either earlier build.** `ohs.exe app` printed "module 'webview' has no
+  attribute 'create_window'" and opened the browser instead. The launcher imports pywebview by
+  name, and pywebview imports its Windows backend (WinForms through pythonnet) the same way, so
+  PyInstaller packed neither: only pywebview's data folder came along, and Python took it for an
+  empty package. `build_exe.py` now names the package for PyInstaller (`--hidden-import webview
+  --collect-submodules webview`).
+- **With that, the window opens.** It is titled "OpenHandScan Studio", 1440×900, with its WebView2
+  process. It shows the Projects page with the user's projects. Closing it stops the app as
+  designed ("OpenHandScan Studio stopped.", the WebView2 process gone, the port free).
+- **Size:** 525 MB, 325 files (pythonnet and the WinForms backend add 2 MB).
+- **Same results:** the bracket recording s0 through `ohs.exe process` against Python from the
+  checkout gives the same trajectory and laser points byte for byte, and the same mesh (461,696
+  vertices, 910,618 faces; vertices, normals, sigma and faces equal when compared sorted). The
+  report gives `opposite_mm` 1.0 in both.
+- **Still not checked:** a real camera through the program, a PC without the development tools.
+
 ## The confidence model on the CPU path: measured, not adopted (2026-11-16)
 
 Without a GPU the mesh comes from Open3D's model, which has no short band behind the surface
