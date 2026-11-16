@@ -100,6 +100,32 @@ surface sinks where the frames disagree, as in marker mode). ``nobs`` (the meshi
 sigma's counts take every observation as before; 2 sigma covered the true error as before with it
 (``VALIDATION.md``, "A band that is short only behind the surface").
 
+**Seen from opposite sides** (``opposite_mm``; off by default here, the pipeline turns it on with
+the band above: :mod:`ohs.app.pipeline`, "Thin walls"). The cut above cannot
+go below 2 voxels everywhere: where the frames disagree, a short cut drops the observations a
+little behind the surface while those in front all count, and the surface sinks. But a voxel in
+the open air next to a thin wall can be told from a voxel at a noisy surface: some of its
+observations saw it *in front of* their surface (free space, seen from its own side), others saw
+it *deeper than* ``opposite_mm`` behind one, and the two groups saw surfaces that face opposite
+ways. With ``opposite_mm`` every voxel keeps a second mean with the cut at that depth (``t2``,
+``w2``), the number of observations that saw it in front (``npos``) and the sum ``D`` of the
+observed surfaces' unit normals (the depth map's own, as for the cosine; world frame, pointing
+away from the camera; the view direction where the depth map gives none), + for the observations
+in front and - for those deeper than the cut (``dx``, ``dy``, ``dz``): 24 bytes more. Two faces
+of a wall add up in ``D``, one surface's observations cancel however it was looked at, so
+``(|D| - |npos - ndeep|) / 2`` counts the pairs of opposite observations (at most
+``min(npos, ndeep)``). When the mesh is made, a voxel's value goes from the first mean to the
+second as ``f``, the pairs' share of the voxel's observations (plus ``OPPOSITE_PRIOR``, so that a
+voxel seen a few times is not judged), goes from ``OPPOSITE_FROM`` to ``OPPOSITE_FULL``.
+Everywhere else the mesh is the one without the rule, value for value. The sigma channels are
+untouched. On the simulated sheet at true poses a 2 mm flange read 2.10-2.18 instead of
+2.72-2.85 mm and a 1 mm rib 1.24-1.28 instead of 1.96-2.04 mm, with the same pinholes, bracket,
+bosses and car-panel hole; the price is 24 bytes per voxel and about 3 ms per integration
+(``VALIDATION.md``, "Thin walls seen from opposite sides"). What was tried and dropped: the
+shares without the normals (bosses and holes shrank, a table sank where frames disagree) and
+view directions instead of the normals (two views of a plane from opposite azimuths look like
+the two sides of a wall).
+
 **Backends.** ``"gpu"``: OpenCL on :func:`ohs.compute.get_device` (one work-item per voxel of the
 frame's bricks, so no voxel is written twice). ``"cpu"``: the same arithmetic in numpy, which is
 also the tests' reference. ``"auto"`` picks the GPU when there is one.
@@ -127,7 +153,7 @@ from typing import Any
 import numpy as np
 
 __all__ = ["ConfidenceTsdf", "BRICK", "RECON_BACKENDS", "voxel_sigma", "mesh_sigma_terms", "bias_scale", "pixel_weights",
-           "gap_guard_mask", "GUARD_PX_1280", "GUARD_SEED", "BACK_VOXELS", "BACK_WEIGHT",
+           "gap_guard_mask", "GUARD_PX_1280", "GUARD_SEED", "BACK_VOXELS", "BACK_WEIGHT", "OPPOSITE_VOXELS",
            "C_NOISE", "A_GAP", "A_SCATTER", "A_CURV", "A_BORDER", "GAP_NEAR_PX_1280", "BORDER_MM"]
 
 log = logging.getLogger(__name__)
@@ -153,6 +179,11 @@ GUARD_SEED = 13  # a pixel without depth is part of a patch when this many of th
 BACK_VOXELS = 2.0  # the cut the pipeline asks for, in voxels: full weight down to this far behind a surface
 BACK_WEIGHT = 1e-3  # the weight of an observation that lies deeper behind its surface than the cut
 _BACK_OFF = 3.0e38  # the kernel's cut when the rule is off: nothing lies that deep
+# Seen from opposite sides (module docstring; off unless ``opposite_mm`` is given)
+OPPOSITE_VOXELS = 1.0  # the second mean's cut behind a surface, in voxels
+OPPOSITE_FROM, OPPOSITE_FULL = 0.05, 0.15  # the share of opposite pairs from which the second mean counts / counts alone
+OPPOSITE_PRIOR = 16.0  # observations added to a voxel's count for the shares: a voxel seen a few times is not judged
+_OPP_CHANNELS = ("w2", "t2", "npos", "dx", "dy", "dz")
 
 _SRC = r"""
 // OpenCL C 1.2. Sparse confidence TSDF of ohs/track/recon_tsdf.py (see its docstring).
@@ -170,7 +201,9 @@ __kernel void recon_integrate(
     const float r20, const float r21, const float r22,
     const float t0, const float t1, const float t2,
     const float voxel, const float trunc, const float depth_min, const float depth_max, const float look2,
-    const float near2, const float hole_amp, const float hole_r2, const float back_cut, const float back_w)
+    const float near2, const float hole_amp, const float hole_r2, const float back_cut, const float back_w,
+    __global float *ow, __global float *ot, __global float *npos, const float cut2,
+    __global float *odx, __global float *ody, __global float *odz)
 {
     const int gid = get_global_id(0);
     const int b = gid >> 9;
@@ -206,6 +239,9 @@ __kernel void recon_integrate(
     }
     // cosine of the ray with the depth map's own normal (as the matcher's sigma_z); 1 next to no depth
     float cs = 1.0f;
+    // the depth map's normal in the camera frame, away from the camera; without one: the view direction
+    const float il0 = 1.0f / sqrt(px * px + py * py + pz * pz);
+    float ncx = px * il0, ncy = py * il0, ncz = pz * il0;
     if (ui > 0 && ui < w - 1 && vi > 0 && vi < h - 1) {
         const float dl = depth[pix - 1], dr = depth[pix + 1], dt = depth[pix - w], db = depth[pix + w];
         if (dl >= depth_min && dl <= depth_max && dr >= depth_min && dr <= depth_max &&
@@ -217,6 +253,11 @@ __kernel void recon_integrate(
             const float nn = sqrt(gu * gu + gv * gv + n3 * n3);
             const float rr = sqrt(ru * ru + rv * rv + 1.0f);
             cs = clamp(d / fmax(nn * rr, 1e-6f), 0.05f, 1.0f);
+            if (nn > 1e-6f) {
+                ncx = -gu / nn;
+                ncy = -gv / nn;
+                ncz = n3 / nn;
+            }
         }
     }
     // the weight of pixel_weights(), 1; deeper behind the surface than back_cut, at right angles to it: back_w
@@ -237,6 +278,22 @@ __kernel void recon_integrate(
     tsdf[a] = m1;
     wsum[a] = W1;
     nobs[a] += 1.0f;
+    if (cut2 > 0.0f) {
+        // the second mean (module docstring, "Seen from opposite sides"): the same average with the cut at
+        // cut2, and the number of observations that saw the voxel in front of their surface
+        const float wb = (sdf * cs < -cut2) ? back_w : 1.0f;
+        const float V1 = ow[a] + wb;
+        ot[a] += (wb / V1) * (x - ot[a]);
+        ow[a] = V1;
+        npos[a] += (sdf >= 0.0f) ? 1.0f : 0.0f;
+        // the observed surface's normal (world), + for an observation in front of its surface, - for one deeper than the cut
+        const float sg = (sdf >= 0.0f) ? 1.0f : ((wb < 1.0f) ? -1.0f : 0.0f);
+        if (sg != 0.0f) {
+            odx[a] += sg * (r00 * ncx + r10 * ncy + r20 * ncz);
+            ody[a] += sg * (r01 * ncx + r11 * ncy + r21 * ncz);
+            odz[a] += sg * (r02 * ncx + r12 * ncy + r22 * ncz);
+        }
+    }
     const uint uv = luv[a];
     const float du = (float)ui - (float)(uv & 0xFFFFu), dv = (float)vi - (float)(uv >> 16);
     if (nlook[a] == 0.0f || du * du + dv * dv >= look2) {
@@ -394,7 +451,8 @@ __kernel void recon_bricks(
 }
 """
 _I, _F = np.int32, np.float32
-_ARGS = [None] * 12 + [_I] + [None, None] + [_I, _I, _I] + [None, None] + [_F] * 5 + [_F] * 12 + [_F] * 10
+_ARGS = ([None] * 12 + [_I] + [None, None] + [_I, _I, _I] + [None, None] + [_F] * 5 + [_F] * 12 + [_F] * 10
+         + [None] * 3 + [_F] + [None] * 3)
 _GAP_ROW_ARGS = [None, None, _I, _I, _I, _F, _F, None, _I]
 _GAP_DIST_ARGS = [None, None, _I, _I, _I]
 _GUARD_MARK_ARGS = [None, None, _I, _I, _I, _F]
@@ -543,6 +601,10 @@ class ConfidenceTsdf:
         The band behind the surface (module docstring): an observation counts in full down to
         this far (mm) behind its surface, at right angles to it, and with ``BACK_WEIGHT`` beyond.
         ``None`` (the default): in full down to the truncation, along the view.
+    opposite_mm, opposite_shares:
+        Seen from opposite sides (module docstring): the second mean's cut behind a
+        surface (mm), ``None`` (the default): no second mean, no extra channels; and the shares
+        ``(from, full)`` between which a voxel's value goes from the first mean to the second.
     initial_bricks, max_bricks:
         Pool size at the start, and its limit (bricks beyond it are dropped, with a warning).
     """
@@ -551,7 +613,8 @@ class ConfidenceTsdf:
                  depth_min_mm: float = 120.0, depth_max_mm: float = 500.0, backend: str = "auto",
                  look_px: float | None = None, initial_bricks: int = 4096, max_bricks: int | None = None,
                  hole_factor: tuple[float, float] | None = None, gap_guard_px: float | None = None,
-                 back_mm: float | None = None) -> None:
+                 back_mm: float | None = None, opposite_mm: float | None = None,
+                 opposite_shares: tuple[float, float] = (OPPOSITE_FROM, OPPOSITE_FULL)) -> None:
         self.voxel_mm, self.trunc_mm = float(voxel_mm), float(trunc_mm)
         self.depth_min_mm, self.depth_max_mm = float(depth_min_mm), float(depth_max_mm)
         if not (self.voxel_mm > 0 and self.trunc_mm > 0 and 0 <= self.depth_min_mm < self.depth_max_mm):
@@ -569,6 +632,14 @@ class ConfidenceTsdf:
         self.back_mm = None if back_mm is None else float(back_mm)
         if self.back_mm is not None and not self.back_mm > 0:
             raise ValueError(f"back_mm must be > 0 (or None for the whole truncation), got {back_mm!r}")
+        self.opposite_mm = None if opposite_mm is None else float(opposite_mm)
+        if self.opposite_mm is not None and not self.opposite_mm > 0:
+            raise ValueError(f"opposite_mm must be > 0 (or None), got {opposite_mm!r}")
+        self.opposite_shares = (float(opposite_shares[0]), float(opposite_shares[1]))
+        if not 0 <= self.opposite_shares[0] < self.opposite_shares[1]:
+            raise ValueError(f"opposite_shares must be (from, full) with 0 <= from < full, got {opposite_shares!r}")
+        self.opposite_prior = OPPOSITE_PRIOR
+        self._channels = _FLOAT_CHANNELS + (_OPP_CHANNELS if self.opposite_mm is not None else ())
         self._set_camera(K, image_size, gap_guard_px)
         self._initial = max(64, int(initial_bricks))
         self.dev: Any = None
@@ -584,7 +655,7 @@ class ConfidenceTsdf:
         if max_bricks is None:
             if self.dev is not None:  # each channel buffer must fit one allocation; keep half the memory free
                 by_alloc = int(self.dev.max_alloc_mb * 2 ** 20 // (NVOX * 4))
-                by_mem = int(self.dev.mem_mb * 2 ** 20 * 0.5 // (NVOX * 4 * (len(_FLOAT_CHANNELS) + 1)))
+                by_mem = int(self.dev.mem_mb * 2 ** 20 * 0.5 // (NVOX * 4 * (len(self._channels) + 1)))
                 max_bricks = max(self._initial, min(by_alloc, by_mem))
             else:
                 max_bricks = 1 << 20
@@ -662,7 +733,7 @@ class ConfidenceTsdf:
 
     @property
     def memory_mb(self) -> float:
-        return self.capacity * NVOX * 4 * (len(_FLOAT_CHANNELS) + 1) / 2 ** 20
+        return self.capacity * NVOX * 4 * (len(self._channels) + 1) / 2 ** 20
 
     # ------------------------------------------------------------------ storage
     def _wait(self) -> None:
@@ -699,7 +770,7 @@ class ConfidenceTsdf:
             keys[:n] = self._keys[:n]
         self._keys = keys
         if self.dev is None:
-            new = {c: np.zeros(cap * NVOX, dtype=np.float32) for c in _FLOAT_CHANNELS}
+            new = {c: np.zeros(cap * NVOX, dtype=np.float32) for c in self._channels}
             new["luv"] = np.zeros(cap * NVOX, dtype=np.uint32)
             for c, a in self._bufs.items():
                 new[c][: n * NVOX] = a[: n * NVOX]
@@ -707,7 +778,7 @@ class ConfidenceTsdf:
         else:
             cl, q = self.cl, self.queue
             new = {}
-            for c in (*_FLOAT_CHANNELS, "luv"):
+            for c in (*self._channels, "luv"):
                 b = cl.Buffer(self.dev.ctx, cl.mem_flags.READ_WRITE, size=cap * NVOX * 4)
                 cl.enqueue_fill_buffer(q, b, np.uint32(0), 0, cap * NVOX * 4)
                 if n and c in self._bufs:
@@ -905,6 +976,28 @@ class ConfidenceTsdf:
         cos[1:-1, 1:-1] = np.where(ok, np.clip(c / np.maximum(nn * rr, np.float32(1e-6)), 0.05, 1.0), 1.0)
         return cos
 
+    def _normal_map(self, depth: np.ndarray) -> np.ndarray:
+        """The depth map's unit normal per pixel in the camera frame, away from the camera (what
+        :meth:`_cos_map` takes its cosine from); NaN where a neighbour has no depth, and on the border."""
+        z = np.asarray(depth, np.float32)
+        h, w = z.shape
+        K = self.K
+        out = np.full((h, w, 3), np.nan, np.float32)
+        c = z[1:-1, 1:-1]
+        dl, dr, dt, db = z[1:-1, :-2], z[1:-1, 2:], z[:-2, 1:-1], z[2:, 1:-1]
+        ok = (c > 0) & (dl > 0) & (dr > 0) & (dt > 0) & (db > 0)
+        zu, zv = np.float32(0.5) * (dr - dl), np.float32(0.5) * (db - dt)
+        pu = np.arange(1, w - 1, dtype=np.float32)[None, :] - np.float32(K[0, 2])
+        pv = np.arange(1, h - 1, dtype=np.float32)[:, None] - np.float32(K[1, 2])
+        gu, gv = zu * np.float32(K[0, 0]), zv * np.float32(K[1, 1])
+        n3 = pu * zu + pv * zv + c
+        nn = np.sqrt(gu ** 2 + gv ** 2 + n3 ** 2)
+        ok &= nn > 1e-6
+        with np.errstate(invalid="ignore", divide="ignore"):
+            n = np.stack([-gu / nn, -gv / nn, n3 / nn], axis=-1)
+        out[1:-1, 1:-1] = np.where(ok[..., None], n, np.nan)
+        return out
+
     def _integrate_cpu(self, slots: np.ndarray, keys: np.ndarray, depth: np.ndarray, wmap: np.ndarray,
                        sigma_mm: np.ndarray | None, R_cw: np.ndarray, t_cw: np.ndarray) -> None:
         h, w = depth.shape
@@ -960,6 +1053,22 @@ class ConfidenceTsdf:
         b["tsdf"][a] = m1
         b["wsum"][a] = W1
         b["nobs"][a] += 1.0
+        if self.opposite_mm is not None:  # the second mean, with the cut at opposite_mm, and the votes "in front"
+            wb = np.where(sdf * cmap[pix] < -np.float32(self.opposite_mm), np.float32(BACK_WEIGHT),
+                          np.float32(1.0)).astype(np.float32)
+            V1 = b["w2"][a] + wb
+            b["t2"][a] += (wb / V1) * (x - b["t2"][a])
+            b["w2"][a] = V1
+            b["npos"][a] += (sdf >= 0).astype(np.float32)
+            sg = np.where(sdf >= 0, 1.0, np.where(wb < 1.0, -1.0, 0.0)).astype(np.float32)
+            rc = Pc[sel]
+            nc = rc / np.linalg.norm(rc, axis=1, keepdims=True)  # without a normal: the view direction
+            nm = self._normal_map(depth).reshape(-1, 3)[pix]
+            has = np.isfinite(nm[:, 0])
+            nc[has] = nm[has]
+            rw = nc @ R_cw  # camera -> world: R_cw^T applied to rows
+            for j, c in enumerate(("dx", "dy", "dz")):
+                b[c][a] += sg * rw[:, j].astype(np.float32)
         uv = b["luv"][a]
         du = ui.astype(np.float32) - (uv & 0xFFFF).astype(np.float32)
         dv = vi.astype(np.float32) - (uv >> 16).astype(np.float32)
@@ -1048,7 +1157,9 @@ class ConfidenceTsdf:
                    K[0, 0], K[1, 1], K[0, 2], K[1, 2], K[0, 1], *R_cw.ravel(), *t_cw,
                    self.voxel_mm, self.trunc_mm, self.depth_min_mm, self.depth_max_mm, self.look_px ** 2,
                    self.gap_near_px ** 2, self.hole_amp, self.hole_r_px ** 2,
-                   _BACK_OFF if self.back_mm is None else self.back_mm, BACK_WEIGHT)
+                   _BACK_OFF if self.back_mm is None else self.back_mm, BACK_WEIGHT,
+                   *((b["w2"], b["t2"], b["npos"], self.opposite_mm, b["dx"], b["dy"], b["dz"]) if self.opposite_mm is not None
+                     else (b["tsdf"], b["tsdf"], b["tsdf"], 0.0, b["tsdf"], b["tsdf"], b["tsdf"])))  # off: the kernel does not touch them
         q.flush()  # the device starts as soon as it is free
         self._lists = (evs, hold)
 
@@ -1058,7 +1169,7 @@ class ConfidenceTsdf:
         n = self.n_bricks
         self._wait()  # the last frame's fusion
         out: dict[str, np.ndarray] = {}
-        for c in (*_FLOAT_CHANNELS, "luv"):
+        for c in (*self._channels, "luv"):
             if self.dev is None:
                 a = self._bufs[c][: n * NVOX].copy()
             else:
@@ -1082,10 +1193,35 @@ class ConfidenceTsdf:
             block_count=int(len(keys) + 64), device=o3c.Device("CPU:0"))
         buf, _ = vbg.hashmap().activate(o3c.Tensor(np.ascontiguousarray(keys, np.int32)))
         idx = buf.cpu().numpy().astype(np.int64)
-        vbg.attribute("tsdf").numpy()[idx] = np.clip(ch["tsdf"] / np.float32(self.trunc_mm), -1.0, 1.0)[..., None]
+        vbg.attribute("tsdf").numpy()[idx] = np.clip(self.fused_tsdf(ch) / np.float32(self.trunc_mm), -1.0, 1.0)[..., None]
         vbg.attribute("weight").numpy()[idx] = ch["nobs"][..., None]
         vbg.attribute("color").numpy()[idx] = np.stack([sig, ch["nlook"], ch["wsum"]], axis=-1)
         return vbg
+
+    def opposite_share(self, ch: dict[str, np.ndarray]) -> np.ndarray:
+        """Per voxel, ``f``: the share of its observations that pair up as one that saw it in front
+        of its surface and one that saw it deeper than ``opposite_mm`` behind a surface that
+        faces the other way (module docstring, "Seen from opposite sides"); 0 without the rule."""
+        if self.opposite_mm is None:
+            return np.zeros(ch["tsdf"].shape, np.float32)
+        n = ch["nobs"] + np.float32(self.opposite_prior)
+        # the observations the second mean counted in full
+        full2 = (ch["w2"] - np.float32(BACK_WEIGHT) * ch["nobs"]) / np.float32(1.0 - BACK_WEIGHT)
+        deep = np.clip(ch["nobs"] - full2, 0.0, None)
+        pairs = np.minimum(ch["npos"], deep)
+        # pairs of observations of surfaces that face opposite ways: they add up in D, one surface's cancel
+        D = np.sqrt(ch["dx"] ** 2 + ch["dy"] ** 2 + ch["dz"] ** 2)
+        pairs = np.clip(0.5 * (D - np.abs(ch["npos"] - deep)), 0.0, pairs)
+        return (pairs / np.maximum(n, np.float32(1.0))).astype(np.float32)
+
+    def fused_tsdf(self, ch: dict[str, np.ndarray]) -> np.ndarray:
+        """The value (mm) each voxel gives the mesh: ``tsdf``, or with ``opposite_mm`` its blend
+        with the second mean where the voxel is seen from opposite sides."""
+        if self.opposite_mm is None:
+            return ch["tsdf"]
+        lo, hi = self.opposite_shares
+        al = np.clip((self.opposite_share(ch) - np.float32(lo)) / np.float32(hi - lo), 0.0, 1.0).astype(np.float32)
+        return ch["tsdf"] + al * (ch["t2"] - ch["tsdf"])
 
     def _threshold(self, weight_threshold: float | None) -> float:
         thr = 3.0 if weight_threshold is None else float(weight_threshold)

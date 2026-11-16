@@ -1919,6 +1919,100 @@ Limits: simulated, orbit pattern only, one run per recording; the one-step check
 sheet s0 only (the sheet without true depth); the CPU path was not run; the whole suite was not run
 on the prototype.
 
+## Thin walls seen from opposite sides: adopted (2026-11-16)
+
+The mesh model's half of the thin-wall problem. With the cut at 2 voxels behind a surface (above, "A
+band that is short only behind the surface"), a 2 mm flange still read 2.72–2.85 mm and a 1 mm rib
+about 2.0 mm at true poses. Why:
+- **The flange:** the voxel plane on its face gets 40 % of its votes from the far side, with a mean
+  of −3.1 mm, and half of those count in full: the wall is exactly as thick as the cut, and noise
+  decides. The value there is −0.72 mm instead of 0.
+- **The 1 mm rib:** the far side's "inside" counts in full 2 mm behind the far face, which is 1 mm
+  into the air.
+- **A shorter cut everywhere** (1.5 voxels) helps the walls only partly, opens 15–20 % more pinholes,
+  and sinks a table when frames disagree.
+
+**The rule** (`ohs.track.recon_tsdf`, "Seen from opposite sides"; on wherever the short band is,
+that is, in a markerless scan with `thin_walls` "auto"):
+- Every voxel keeps a second mean with the cut at 1 voxel. It also keeps the count of observations
+  that saw it in front of their surface, and the sum D of the observed surfaces' unit normals: plus
+  for "in front", minus for "deeper than the cut".
+- Two faces of a wall add up in D; one surface's observations cancel however it was looked at.
+- Where such opposite pairs make 5–15 % of a voxel's observations, its value goes over to the
+  second mean. Everywhere else the mesh is value for value what it was.
+
+How it was measured: the matcher's depth of each recording was cached once and replayed into the mesh
+model (scratch folder `mesh/`). "Tracked" uses today's engine's own trajectories, so only the mesh
+model differs; the replay reproduces the earlier meshes exactly. Sheet = flange 2 mm / rib 1 mm /
+rib 3 mm, in mm.
+
+| | Before | Opposite sides |
+|---|---|---|
+| **True poses** | | |
+| Sheet s0 | 2.72 / 2.04 / 3.06 | 2.18 / 1.28 / 3.06 |
+| Sheet s1 | 2.72 / 1.96 / 3.05 | 2.16 / 1.25 / 3.05 |
+| Sheet s2 | 2.85 / 1.99 / 3.04 | 2.10 / 1.24 / 3.04 |
+| Bracket, more than 0.3 mm off per scan | 10.5 / 11.0 / 10.9 / 10.3 / 10.4 % | 10.0 / 10.3 / 10.2 / 9.8 / 9.8 % |
+| Bracket boss radius / tilt | −0.27 mm / 3.2° | −0.28 mm / 2.9° |
+| Open loops, sheets / bracket median | 691 / 728 / 728 / 708 | 691 / 729 / 727 / 709 |
+| **Tracked** | | |
+| Sheet s0 | 2.86 / 2.41 / 3.54 | 2.61 / 1.97 / 3.53 |
+| Sheet s1 | 2.72 / 2.49 / 3.19 | 2.26 / 1.66 / 3.17 |
+| Sheet s2 | 2.98 / 2.56 / 3.71 | 2.60 / 2.20 / 3.71 |
+| Bracket, more than 0.3 mm off per scan | 13.6 / 12.5 / 32.7 / 13.1 / 13.3 % | 12.7 / 11.6 / 31.3 / 11.8 / 12.6 % |
+| Bracket mean offset / boss radius | +0.015 / −0.18 mm | +0.008 / −0.19 mm |
+| Five car panels: hole diameter / centre / floor | −0.90 / 0.34 / 0.002 mm | −0.90 / 0.32 / 0.002 mm |
+| Open loops, sheets / bracket / car panel median | 1359 / 1217 / 1579 / 1304 / 773 | 1359 / 1216 / 1573 / 1303 / 773 |
+| **End-to-end tests** (median / 95 %) | | |
+| Full sphere / half-res sphere | 0.0609 / 0.2574, 0.1184 / 0.5169 | identical |
+| Car panel | 0.0838 / 0.3933 | 0.0838 / 0.3934 |
+| **Exact depth, a wall on a table, 36 views** | | |
+| 1 / 2 / 3 / 7 mm wall | 2.12 / 2.43 / 2.91 / 6.90 | 0.92 / 2.00 / 2.91 / 6.90 |
+| 7 mm block, frames 0.9 mm off: table offset | −0.07 | −0.07 |
+
+- **At true poses it reaches the ceiling** of any mesh rule, which is each face fused from its own
+  side's views alone: 2.12–2.14 / 1.03–1.31 / 2.91–2.94 mm.
+- **Tracked, the rest is the poses.** Walls are still 0.3–0.6 mm (flange) and 0.7–1.2 mm (1 mm
+  rib) too thick; the same ceiling tracked is 2.19–2.51 mm on the flange. The 1 mm rib's rest at a
+  correct path (+0.3 mm, "A finer tracking model" above) is still not explained.
+- **2 sigma** covers the bracket as before (99.5 % / 99.5 %).
+
+**What was tried and dropped:**
+- **The shares without the normals** (+12 bytes per voxel): the same walls, but the bosses shrank by
+  0.04–0.06 mm, the car panel's hole by 0.05 mm, and a table sank 0.09 mm when frames were 0.9 mm off.
+- **View directions instead of the normals:** clean on every scan measured, but two views of a
+  plane from opposite azimuths at 45° look as far apart as the two sides of a wall. A noisy plane
+  reached a share of 0.040 against the start of 0.03.
+
+**Cost:** 24 bytes more per voxel (40 → 64), so 640 MB → 1 GB on these scans. The largest scan the
+Radeon 680M's pool takes falls from about 299,000 to about 187,000 bricks; these scans use
+21,000–24,000. One integration at 1280×800 took 19.1 / 18.9 / 19.5 ms before and 22.6 / 22.1 /
+22.7 ms with the rule (three rounds, taking turns), and making the mesh 3.5–3.7 s before against
+4.1–4.4 s. In a whole scan the integration runs on the GPU beside the next frame's work, so most
+of it is hidden. The bracket recording s0 through `process_recording` (Standard, GPU path, old and
+new engine taking turns, three rounds, run from a scratch folder) gave:
+- a frame's median: 148.7 / 143.0 / 142.7 ms before, 145.9 / 145.4 / 147.0 ms with the rule
+  (means 148.4 against 150.3 ms, about +1 %);
+- the whole run, mesh included: 18.5 / 17.6 / 17.6 s before, 18.4 / 18.3 / 18.5 s with the rule
+  (+0.5 s).
+
+Guards: `tests/test_recon_opposite_sides.py` covers:
+- a 1 mm and a 2 mm wall keep their thickness;
+- a noisy table seen from one side is left alone bit for bit (largest share 0.044 against the start
+  of 0.05);
+- frames 0.9 mm off give the same table and the same open loops;
+- the first mean is untouched;
+- the GPU and numpy agree.
+
+`test_app_pipeline.py` checks that the pipeline hands the rule to markerless scans only, that a model
+handed on in a merge keeps it, and that the report says so. The camera-switch test runs with it too.
+
+Limits:
+- Simulated, orbit pattern only, one run per recording.
+- The CPU path's mesh comes from Open3D's model, which has no such rule: unchanged there.
+- Marker mode is unchanged (`thin_walls` "auto" leaves it as it was).
+- The processing studio's Preview and Best quality were not measured separately.
+
 ## What the metrics mean
 
 - **Stereo errors** compare the estimated raw intrinsics/extrinsics (`K1`, `K2`, `R`, `T`) with

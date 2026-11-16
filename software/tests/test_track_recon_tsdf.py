@@ -253,18 +253,20 @@ def two_camera_frames() -> tuple[list, list]:
     return out[0], out[1]
 
 
+@pytest.mark.parametrize("opposite", [None, 2.0])
 @pytest.mark.parametrize("backend", ["cpu", "gpu"])
-def test_a_volume_switched_to_another_camera_fuses_as_one_made_for_it(backend):
+def test_a_volume_switched_to_another_camera_fuses_as_one_made_for_it(backend, opposite):
     """``set_camera``: frames of a second camera fused after the first camera's are fused exactly
     as by a volume made for the second camera (whichever camera it was made for, and with the gap
-    guard scaled to the new width); what the first camera fused stays."""
+    guard scaled to the new width); what the first camera fused stays. Also with the channels of
+    "seen from opposite sides" (a merge of scans of two calibrations hands the model on)."""
     if backend == "gpu" and compute.get_device() is None:
         pytest.skip(f"no GPU: {compute.status()}")
     first, second = two_camera_frames()
 
     def run(start_K, start_size, frames_by_camera):
         v = ConfidenceTsdf(start_K, start_size, voxel_mm=2.0, trunc_mm=8.0, depth_min_mm=150.0, depth_max_mm=450.0,
-                           backend=backend)
+                           backend=backend, back_mm=None if opposite is None else 4.0, opposite_mm=opposite)
         for (Kc, size), frames in frames_by_camera:
             if not np.array_equal(Kc, v.K) or size != v.image_size:
                 v.set_camera(Kc, size)
@@ -278,6 +280,7 @@ def test_a_volume_switched_to_another_camera_fuses_as_one_made_for_it(backend):
     assert a.gap_guard_px == pytest.approx(GUARD_PX_1280 * W2 / 1280.0) and a._step == b._step
     (ka, ca), (kb, cb) = a.download(), b.download()
     assert np.array_equal(ka, kb) and all(np.array_equal(ca[c], cb[c]) for c in ca)
+    assert ("dx" in ca) == (opposite is not None)
     # only the second camera's frames: switched before the first frame, or made for camera 2
     c = run(*cam1, [(cam2, second)])
     d = run(*cam2, [(cam2, second)])

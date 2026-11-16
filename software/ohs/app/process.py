@@ -596,7 +596,8 @@ def process_recording(
             "fusion": asdict(pipe.fusion_params),
             # the mesh model, and how deep behind a surface it takes an observation in full (None: the truncation)
             "reconstruction": {"model": pipe.recon_status, "thin_walls": p.pipeline.thin_walls,
-                               "back_mm": pipe.thin_walls_mm},
+                               "back_mm": pipe.thin_walls_mm,
+                               "opposite_mm": pipe.opposite_mm},
             "tracking": ({"model": "none: fused at the given poses"} if poses is not None
                          else {"model": "separate (filtered depth)", "filter_px": pipe.track_filter_px,
                                "voxel_mm": pipe.track_fusion_params.voxel_mm,

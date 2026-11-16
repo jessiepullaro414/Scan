@@ -139,7 +139,12 @@ about the scan itself, not the Fit tool, and they decide whether a measurement c
   depth, unexplained), but a weak lever: 0.3 mm of path offset per mm of pull, so 0.03–0.1 mm on
   the sheet. With today's engine the bracket's path is not too large (mean +0.02 mm). Symmetric
   normals fix the camera-fixed share and change nothing measurable on scans. What is left for
-  thin walls is the tracking model's own wall thickness and the mesh model.
+  thin walls is the tracking model's own wall thickness and the mesh model. **The mesh model,
+  done 2026-11-16 (the owner's decision)** ([`VALIDATION.md`](../VALIDATION.md), "Thin walls seen
+  from opposite sides"): voxels seen from opposite sides take a second mean with a 1-voxel cut. At
+  true poses a 2 mm flange reads 2.10–2.18 mm (before 2.72–2.85), tracked 2.26–2.61 mm (before
+  2.72–2.98), with the same pinholes and smooth scenes; 24 bytes more per voxel, about 1 % per
+  frame and 0.5 s per scan. What is left of a tracked wall's excess is the poses.
 - **Small cylinders fit worse since the new sigma** (measured again 2026-11-13,
   [`VALIDATION.md`](../VALIDATION.md), "Fitted shapes against the truth"): a Ø 14 mm boss reads
   0.39 mm off in radius with tracking (before 0.18 mm) and its axis 12.5° off (before 8.0°),

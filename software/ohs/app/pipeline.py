@@ -103,14 +103,17 @@ confidence"), so the sigmas only measure.
 as inside, 4 voxels deep in the mesh model, so the two sides of a wall thinner than that write
 through it and the wall swells, and so do faces next to a convex edge. With the short band behind
 the surface (:mod:`ohs.track.recon_tsdf`, "The band behind the surface") the mesh model takes an
-observation in full only 2 voxels deep. ``"auto"`` (the default) turns it on in a markerless scan
+observation in full only 2 voxels deep, and 1 voxel deep where it is seen from opposite sides
+("Seen from opposite sides" there; :attr:`FramePipeline.opposite_mm`). ``"auto"`` (the default) turns it on in a markerless scan
 and leaves marker mode as it was: there the frames disagree by about 0.9 mm, and the whole band is
 what averages them. ``"on"`` and ``"off"`` force it. Only the confidence TSDF has the rule, so a
 mesh made by Open3D's model (no GPU, or ``recon="open3d"``) is as before whatever is set;
 :attr:`FramePipeline.thin_walls_mm` says what the mesh model uses. On the simulated bracket the
 share of a tracked scan more than 0.3 mm off fell from 20 % to 16.5 % and a 2 mm flange read 3.0
 instead of 3.4 mm, with 11-29 % more pinholes in the raw mesh (``VALIDATION.md``, "A band that is
-short only behind the surface").
+short only behind the surface"); seen from opposite sides, a tracked 2 mm flange then read
+2.26-2.61 instead of 2.72-2.98 mm, with the same pinholes (``VALIDATION.md``, "Thin walls seen
+from opposite sides").
 
 Graceful degradation: without calibrated laser planes (or ``use_lasers=False``) the laser stage
 is skipped; without an IMU calibration (or ``use_imu=False``) there is no rotation prior; a
@@ -151,7 +154,7 @@ from ohs.track.fusion import LaserCloud
 from ohs.track.imu_prior import GyroPredictor
 from ohs.track.markerless import FusionParams, MarkerlessTracker
 from ohs.track.markers import MarkerParams, MarkerTracker
-from ohs.track.recon_tsdf import BACK_VOXELS, GUARD_PX_1280, ConfidenceTsdf, gap_guard_mask
+from ohs.track.recon_tsdf import BACK_VOXELS, GUARD_PX_1280, OPPOSITE_VOXELS, ConfidenceTsdf, gap_guard_mask
 from ohs.types import ImuSample, LaserPlane, ScannerCalibration, StereoFrame, TrackResult
 from ohs.vision.depth import SIGMA_MODELS, DepthEstimator, DepthParams
 from ohs.vision.laser import (LaserLines, LaserParams, compiled_link_rows, extract_laser_lines, is_line_name,
@@ -182,6 +185,9 @@ GYRO_SIGMA_DEG = 0.02  # gyro rotation prior per frame used by the default fusio
 # truncation of the tracking model on the GPU, in voxels (4 mm at its 2 mm voxels; module docstring, "Model backends")
 TRACK_GPU_TRUNC_MULT = 2.0
 TRACK_GPU_BACK_VOXELS = 1.0  # the GPU tracking model's band behind the surface for established voxels (module docstring)
+# with thin walls on, the mesh model's second mean for voxels seen from opposite sides: its cut in voxels
+# (ohs.track.recon_tsdf, "Seen from opposite sides"); None turns it off
+THIN_WALLS_OPPOSITE_VOXELS: float | None = OPPOSITE_VOXELS
 DETAIL_PROBE_FRAMES = 10  # frames at the start of a scan that also track on with_raw_depth ("Detailed parts")
 # during them, a frame whose filtered depth holds its weakest translation less than this is a
 # detailed part. On the simulator smooth parts hold >= 1.1e-3 there; detailed ones 1e-5 to 4e-5
@@ -469,6 +475,8 @@ class FramePipeline:
         self._guard_in_fuse = False  # True: the Open3D reconstruction, which gets its depth guarded here
         # how deep behind a surface the mesh model takes an observation in full (mm); None: the whole truncation
         self.thin_walls_mm: float | None = None
+        # the mesh model's cut where a voxel is seen from opposite sides (mm); None: not used
+        self.opposite_mm: float | None = None
         if model is not None and not self._need_depth:
             raise ValueError("this pipeline fuses no depth (marker mode without integrate_depth): it takes no model")
         if self._need_depth:
@@ -487,6 +495,7 @@ class FramePipeline:
                                    and not isinstance(self.markerless, ConfidenceTsdf))
             self.has_confidence = isinstance(self.markerless, ConfidenceTsdf)
             self.thin_walls_mm = self.markerless.back_mm if self.has_confidence else None
+            self.opposite_mm = self.markerless.opposite_mm if self.has_confidence else None
             if p.thin_walls == "on" and self.thin_walls_mm is None:
                 log.warning("thin_walls is \"on\", but this mesh is made by Open3D's model (no GPU, or recon "
                             "\"open3d\"), which has no short band: the mesh is as with \"off\"")
@@ -799,7 +808,9 @@ class FramePipeline:
                                     depth_min_mm=fp.depth_min_mm, depth_max_mm=fp.depth_max_mm,
                                     backend="gpu" if want == "auto" else "auto",
                                     hole_factor=(sm.hole_amp, sm.hole_r_px), gap_guard_px=self.gap_guard_px,
-                                    back_mm=BACK_VOXELS * fp.voxel_mm if short else None)
+                                    back_mm=BACK_VOXELS * fp.voxel_mm if short else None,
+                                    opposite_mm=(THIN_WALLS_OPPOSITE_VOXELS * fp.voxel_mm
+                                                 if short and THIN_WALLS_OPPOSITE_VOXELS else None))
             except RuntimeError as e:  # "auto" without a GPU
                 log.info("reconstruction with Open3D on the CPU: %s", e)
         return MarkerlessTracker(self.K, self.image_size, self.fusion_params)

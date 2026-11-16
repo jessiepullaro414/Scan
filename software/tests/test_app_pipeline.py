@@ -571,8 +571,9 @@ def test_the_mesh_model_keeps_a_thin_wall_thin():
     side's views write through the wall into the air on the other side and both faces move out: the wall read
     2.6 mm (3.4 mm in a tracked scan of a sheet-metal part). In a markerless scan the pipeline's mesh model
     therefore takes an observation in full only down to two voxels behind its surface (``thin_walls``;
-    VALIDATION.md, "A band that is short only behind the surface"). What is left is the voxel inside the wall
-    averaging the two sides' distances."""
+    VALIDATION.md, "A band that is short only behind the surface"), and only one voxel deep where a voxel is seen
+    from opposite sides, as the air next to the wall is (VALIDATION.md, "Thin walls seen from opposite sides"):
+    the wall reads 2.0 mm."""
     from ohs import compute
     from ohs.track.recon_tsdf import ConfidenceTsdf
 
@@ -587,14 +588,14 @@ def test_the_mesh_model_keeps_a_thin_wall_thin():
                 vol.integrate(_wall_depth(pipe.K, pipe.image_size, _wall_pose(a), wall_mm=2.0), None, _wall_pose(a))
             read[setting] = _wall_thickness(vol, 2.0)
     assert read["off"] > 2.58, f"with the whole band behind the surface the 2 mm wall reads {read['off']:.2f} mm"
-    assert read["auto"] < 2.48, f"the 2 mm wall reads {read['auto']:.2f} mm"
+    assert 1.8 < read["auto"] < 2.15, f"the 2 mm wall reads {read['auto']:.2f} mm"
 
 
 def test_thin_walls_follows_the_mode_unless_it_is_forced():
     """``PipelineParams.thin_walls``: "auto" gives the mesh model its short band behind the surface in a
     markerless scan and leaves marker mode as it was (frames that disagree by 0.9 mm need the whole band to
-    average out); "on" and "off" force it. The cut is two voxels. Only the confidence TSDF has the rule: the
-    Open3D reconstruction of the CPU path does not."""
+    average out); "on" and "off" force it. The cut is two voxels, and one where a voxel is seen from opposite
+    sides. Only the confidence TSDF has the rule: the Open3D reconstruction of the CPU path does not."""
     from ohs import compute
 
     calib = nominal_calibration()
@@ -602,16 +603,24 @@ def test_thin_walls_follows_the_mode_unless_it_is_forced():
 
     def band(**kw) -> tuple:
         with FramePipeline(calib, PipelineParams(use_lasers=False, use_imu=False, **kw)) as pipe:
-            return pipe.thin_walls_mm, getattr(pipe.markerless, "back_mm", None)
+            return (pipe.thin_walls_mm, getattr(pipe.markerless, "back_mm", None),
+                    pipe.opposite_mm, getattr(pipe.markerless, "opposite_mm", None))
 
-    two = (2.0, 2.0) if gpu else (None, None)
+    none = (None,) * 4
+    two = (2.0, 2.0, 1.0, 1.0) if gpu else none
     assert band() == two  # markerless, 1 mm voxels
-    assert band(scale=0.5) == ((4.0, 4.0) if gpu else (None, None))  # 2 mm voxels
-    assert band(mode="markers") == (None, None)
+    assert band(scale=0.5) == ((4.0, 4.0, 2.0, 2.0) if gpu else none)  # 2 mm voxels
+    assert band(mode="markers") == none
     assert band(mode="markers", thin_walls="on") == two
-    assert band(thin_walls="off") == (None, None)
+    assert band(thin_walls="off") == none
     assert band(tracking=False) == two  # fused at given poses (after Straighten): still a markerless scan
-    assert band(recon="open3d", thin_walls="on") == (None, None)  # Open3D's model has no such rule
+    assert band(recon="open3d", thin_walls="on") == none  # Open3D's model has no such rule
+    if gpu:  # a model handed on (a merge of two calibrations' scans) keeps its rule, and the pipeline says so
+        params = PipelineParams(use_lasers=False, use_imu=False, tracking=False)
+        with FramePipeline(calib, params) as a:
+            model = a.release_model()
+        with FramePipeline(nominal_calibration((640, 400)), params, model=model) as b:
+            assert (b.thin_walls_mm, b.opposite_mm) == (2.0, 1.0) and b.markerless is model
     with pytest.raises(ValueError, match="thin_walls"):
         PipelineParams(thin_walls="maybe")
 
@@ -673,10 +682,12 @@ def test_process_recording_writes_everything(rec, tmp_path):
     # the tracking model: two voxels on the GPU, four on Open3D
     assert rep["params"]["tracking"]["trunc_mm"] == (4.0 if rep["params"]["compute"]["tracking_model"] == "gpu" else 8.0)
     assert rep["params"]["tracking"]["back_mm"] == (2.0 if rep["params"]["compute"]["tracking_model"] == "gpu" else None)
-    # the mesh model's short band behind the surface: two voxels in the confidence TSDF, none in Open3D's model
+    # the mesh model's short band behind the surface: two voxels in the confidence TSDF (one where a voxel is seen
+    # from opposite sides), none in Open3D's model
+    conf = "confidence" in rep["mesh"]["reconstruction"]
     assert rep["params"]["reconstruction"] == {
         "model": rep["mesh"]["reconstruction"], "thin_walls": "auto",
-        "back_mm": 4.0 if "confidence" in rep["mesh"]["reconstruction"] else None}
+        "back_mm": 4.0 if conf else None, "opposite_mm": 2.0 if conf else None}
     with open(out / "trajectory.csv", newline="", encoding="utf-8") as fh:
         rows = list(csv.DictReader(fh))
     assert len(rows) == N and rows[0]["ok"] == "1" and float(rows[0]["T00"]) == pytest.approx(1.0)
