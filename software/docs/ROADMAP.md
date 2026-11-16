@@ -206,7 +206,7 @@ about the scan itself, not the Fit tool, and they decide whether a measurement c
   separate from accuracy checks.
 - **Trusted, provisional and rejected geometry**, once confidence has been checked against real
   errors. Accepting a provisional area does not remove its uncertainty.
-- **Several sessions** (M4): align and merge scans, continue on another day. A first slice is in the engine ([`VALIDATION.md`](../VALIDATION.md), "Aligning and merging two scans"): it shows that the alignment of two scans is good to about half a millimetre at full resolution, which is not yet enough for the merged model to beat the better single scan; the joint refinement across scans is the next piece.
+- **Several sessions** (M4): align and merge scans, continue on another day. A first slice is in the engine ([`VALIDATION.md`](../VALIDATION.md), "Aligning and merging two scans"): it shows that two scans align to about half a millimetre at full resolution and merge correctly, but that the merged model does not yet beat the better single scan. A refinement of all frames together was tried and found nothing to correct: the limit is each scan's own surface error, which depends on where the scan looked from. Next for this: a fusion that takes each face from the scan that saw it best, the table taken out of the frames when the part was moved, and the app's Align step with a rough pose from picked points.
 - **Inspection** (M5): angles, sections, gap and flush, comparison with CAD, PDF report.
 - **Scan to CAD** (M5): fitted shapes to STEP or a FreeCAD package; suggested nominal dimensions
   that an engineer approves. Not "any mesh becomes CAD".
