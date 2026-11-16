@@ -12,6 +12,9 @@ dist/
 node_modules/
 software/ohs/server/static/
 
+# The packaged program (software/packaging/build_exe.py)
+software/packaging/out/
+
 # Scanner data (recordings, simulated datasets, results) - keep them out of git
 recordings/
 scans/

@@ -1731,11 +1731,33 @@ One warning from building it: on a made-up box-shaped part without a table, seen
 
 **Several scans in the app** (tried by hand the same night, through the real server): front, side and back of the bracket listed on the page, aligned at once ("All 3 scans placed through 2 links.", the back scan placed through the side scan, front–back not accepted at 50 % overlap), shown in three colours on each other, and merged (180 frames) into a new scan of 697,072 vertices that opened in the viewer. Not tried in the browser: picking points on a pair of three scans, a scan that is not placed (both covered by the demo's tests only).
 
+**Would taking each place from the scan that saw it best beat the averaging?** (a study, 2026-11-16, scratch script `fusion_study.py`; nothing in the engine). Two bracket scans in one world; where both saw a place (vertices within 1 mm), only one copy is kept: the one with the smaller sigma, or from the scan that looked more squarely at it, or, as an upper bound no rule can pass, the one with the smaller true error. Share of the part more than 0.3 mm off:
+
+| | 101° apart, true poses | 56° apart, true poses | 101° apart, tracked |
+|---|---|---|---|
+| Scan A alone / scan B alone | 46.5 % / 32.2 % | 46.5 % / 33.7 % | 50.5 % / 34.3 % |
+| Merged model (averaged in the fusion) | 39.0 % | 39.7 % | 45.1 % |
+| Best by sigma | 41.3 % | 43.4 % | 44.3 % |
+| Best by viewing angle | 41.2 % | 44.1 % | 43.8 % |
+| Best by true error (the upper bound) | 40.1 % | 41.9 % | 42.7 % |
+
+Even the upper bound is no better than the averaging, so the answer is no, and it is not built. Where two scans saw the same place, they are mostly wrong in the same way: every row has the same mean offset of the part, −0.14 to −0.19 mm with true poses (the surface lies a little inside the part), which is the fusion's and the bracket's thin walls' error (`ROADMAP.md`, "walls under about 2 mm"), not a scan's view. A merged model gains coverage, not accuracy; making it more accurate means making each scan's surface more accurate.
+
 **Limits:** the same calibration and image size for all scans; a part's own flat face that is 30 % or more of a scan made without a table is taken for the support; no Poisson meshing in a merge; simulator only.
 
 **Tests** (`tests/test_align.py`, 10 tests, both compute paths; `tests/test_app_pipeline.py` for the clip plane): a known motion of 100° found again to under 0.1 mm on a made-up part, with and without the table; a part turned over (each scan its own table); a rough pose given; a symmetric part, a bare table, two unrelated shapes and a single unconfirmed guess refused in words; a detail scan inside a larger one; the two simulated bracket scans aligned and merged, the merged part larger than either scan and in the place of both; scans of different calibrations and Poisson refused. An independent review of the first version found eleven defects; the ones that could accept a wrong pose are fixed (the fit check could not fail, one guess alone was accepted, a pose 2–10 mm away never counted as a rival). On the laptop's NVIDIA GPU the tests pass with the same figures to the last digit shown (three runs). Full suites with the slice in (847 tests, commit 493d127): GPU path 841 passed, 6 skipped; CPU path 791 passed, 56 skipped.
 
 Scripts: scratchpad `merge\` of the session of 2026-11-15 (`eval1.py`, `merge_eval.py`; results `w\final_matrix2.log`).
+
+## A trial exe (2026-11-16)
+
+The engine and the app packaged as a Windows program with PyInstaller (`software/packaging/build_exe.py`; plan M6), built on the Radeon PC from the engine's environment:
+
+- **Size and time:** a folder of about 720 MB with `ohs.exe` (Open3D, OpenCV, SciPy, PyOpenCL, numba and the app's server and window included), built in about 5 minutes. No installer yet; compressed it would be smaller, not measured.
+- **It works as `ohs` does:** `ohs.exe bench` on the GPU tracked 30 of 30 frames with the same accuracy as from Python (trajectory 0.09 mm median, depth 0.308 mm at full quality; 0.14 mm and 0.356 mm at preview); `ohs.exe app` served the page and the API, and an alignment of two scans through it gave the same verdict as from Python (80 %, 0.23 mm RMS, 8 of 9). A four-laser recording processed with `ohs.exe process` gave the same mesh and laser points as from Python (compared sorted, every coordinate equal).
+- **numba inside the program:** the first four-laser scan compiled the line linking (7.2 s for 24 frames, about 3.4 s of it compiling); the next one used the compiled code cached in the user's cache folder (3.8 s), as expected from numba's code.
+- **Starting the app from the program:** 0.88 s until the app accepts a connection and 1.59 s until its first status message (the bench, run from the program). The bench could not time it in the first build: it launched the app with Python's `-c`, which a packaged program does not take; it now launches `ohs.exe app` itself.
+- **Not done:** an installer, signing, a smaller build (Open3D's examples and unused libraries are in), the version in the file's properties, a test on a PC without the development tools, the window (pywebview) seen opening.
 
 ## What the metrics mean
 

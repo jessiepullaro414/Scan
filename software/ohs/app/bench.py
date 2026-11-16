@@ -494,7 +494,9 @@ def measure_engine_start(timeout: float = 90.0, python: str | None = None) -> di
         with tempfile.TemporaryDirectory(prefix="ohs-bench-start-", ignore_cleanup_errors=True) as home:
             env = {**os.environ, "OHS_CONFIG": str(Path(home) / "no-config.toml"), "USERPROFILE": home, "HOME": home}
             t0 = time.perf_counter()
-            proc = subprocess.Popen([python or sys.executable, "-c", code, "app", "--no-window", "--port", str(port)],
+            # a packaged program (PyInstaller's ohs.exe) is the ohs command itself and takes no "-c"
+            launch = [sys.executable] if python is None and getattr(sys, "frozen", False) else [python or sys.executable, "-c", code]
+            proc = subprocess.Popen([*launch, "app", "--no-window", "--port", str(port)],
                                     env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                                     stderr=subprocess.DEVNULL)
             try:
