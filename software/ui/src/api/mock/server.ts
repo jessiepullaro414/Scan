@@ -18,8 +18,8 @@
  * - M3: the processing studio (process.ts): stages, edits with undo / redo, stats, holes, the
  *   trajectory with loops, recipes; "Make mesh" runs the Default recipe. The meshes are real
  *   (scanmesh.ts, meshops.ts): about 250k triangles at 1 mm and 1M at 0.5 mm.
- * - M4: align two scans and merge them (align.ts): made-up answers under the server's rules; a merge adds
- *   a new scan to the project.
+ * - M4: align two scans or several (up to eight) and merge them (align.ts): made-up answers under the
+ *   server's rules; a merge adds a new scan to the project.
  * - M5: fitted shapes (fit.ts): a plane, cylinder or hole where the viewer was clicked; and Check
  *   (check.ts): the areas that miss a tolerance, from a made-up sigma that mesh.ply carries too.
  *
@@ -427,8 +427,9 @@ class MockBackend {
         this.projects.delete(p.id);
         return json(204, null);
       }
-      // M4: align two scans, merge them into a new one
+      // M4: align two scans or several, merge them into a new one
       if (p && c === "align" && is("POST", 3)) return json(200, this.aligning.align(p, body));
+      if (p && c === "align_all" && is("POST", 3)) return json(200, this.aligning.alignAll(p, body));
       if (p && c === "merge" && is("POST", 3)) return json(200, this.aligning.merge(p, body));
       if (p && c === "scans" && d) {
         const s = p.scans.find((x) => x.id === d);
@@ -478,7 +479,7 @@ class MockBackend {
     const m2 = this.setup.route(method, seg, body) ?? this.calib.route(method, seg, body);
     if (m2) return m2;
 
-    throw new HttpError(404, `No such endpoint: ${method} ${path}`, "The demo backend implements APP_API.md up to M3 phase 2 (the processing studio), M4's align and merge, and M5's fits and checks.");
+    throw new HttpError(404, `No such endpoint: ${method} ${path}`, "The demo backend implements APP_API.md up to M3 phase 2 (the processing studio), M4's align (two scans or several) and merge, and M5's fits and checks.");
   }
 
   private listProjects(): ProjectSummary[] {
@@ -1120,7 +1121,8 @@ class MockBackend {
     mk("Intake manifold bracket", 2, [
       { name: "Bracket top", status: "processed", n_frames: 864, duration_s: 28.8 },
       { name: "Bracket underside", status: "processed", n_frames: 612, duration_s: 20.4 }, // with "Bracket top": two scans to align (M4)
-      { name: "Bracket side", status: "recorded", n_frames: 450, duration_s: 15 },
+      { name: "Bracket side", status: "processed", n_frames: 450, duration_s: 15 }, // and a third: several at once (M4 second slice)
+      { name: "Bracket end", status: "recorded", n_frames: 390, duration_s: 13 }, // recorded only: shows "Make mesh"
       { name: "Quick test (fail)", status: "failed", n_frames: 96, duration_s: 3.2 },
     ]);
     mk("Fender flare, left", 27, [{ name: "Wheel arch", status: "processed", quality: "preview", mode: "markers", n_frames: 1530, duration_s: 51 }]);

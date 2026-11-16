@@ -1,7 +1,8 @@
 /**
- * The meshes of the scans the Align page shows: each is downloaded and read once and kept while its scan
- * stays chosen (so swapping the two scans, or switching between the views, reads nothing again), and
- * disposed when its scan is no longer chosen or the page is left.
+ * The meshes of the scans the Align page lists (two, or up to eight): each is downloaded and read once
+ * and kept while its scan stays in the list (so swapping scans, picking on another pair of them, or
+ * switching between the views reads nothing again), and disposed when its scan leaves the list or the
+ * page is left.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { BufferGeometry } from "three";

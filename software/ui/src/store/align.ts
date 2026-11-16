@@ -1,7 +1,11 @@
 /**
- * Align two scans and merge them (APP_API.md "M4 first slice"): what the Align page of one project has
- * chosen (the scan that stays, the scan that is moved, whether the part stayed where it was), the points
- * picked on the two meshes, the alignment job and its result, and the merge job and the scan it made.
+ * Align scans and merge them (APP_API.md "M4 first slice", two scans, and "M4 second slice", up to
+ * eight): what the Align page of one project has chosen (the list of scans, the first of which stays in
+ * place; whether the part stayed where it was), the points picked between two scans at a time, the
+ * alignment job and its result, and the merge job and the scan it made.
+ *
+ * With two scans the page calls `align` and the merge's first form (target, source, T), exactly as the
+ * first slice did; with three or more it calls `align_all` and the merge's `scans` form.
  *
  * Job progress comes from the `job` messages (the jobs store); when one of the two jobs ends, its result
  * or its plain reason is picked up here. A merge that runs when the page is opened (after a reload) is
@@ -9,8 +13,28 @@
  */
 import { create } from "zustand";
 import { api, describeError } from "../api/http";
-import type { AlignRequest, AlignResult, Job, MergeResult } from "../api/types";
-import { addPick, completePairs, isAlignResult, isMergeResult, MIN_PAIRS, removePair, type Picks, type Side, type Vec3 } from "../lib/align";
+import type { AlignAllRequest, AlignAllResult, AlignRequest, AlignResult, Job, MergeResult } from "../api/types";
+import {
+  addPick,
+  completePairs,
+  isAlignAllResult,
+  isAlignResult,
+  isMergeResult,
+  keepPicksOf,
+  MAX_SCANS,
+  mergeScansOf,
+  MIN_PAIRS,
+  pickedPoints,
+  pickPairOf,
+  picksFor,
+  removePair,
+  sameList,
+  suggestPickPair,
+  withPicks,
+  type PickBook,
+  type Side,
+  type Vec3,
+} from "../lib/align";
 import { isActive, useJobs } from "./jobs";
 import { useProjects } from "./projects";
 
@@ -19,16 +43,20 @@ export type Problem = { detail: string; hint: string | null };
 
 type AlignState = {
   pid: string | null;
-  /** The scan that stays in place, and the scan that is moved onto it. */
-  target: string | null;
-  source: string | null;
-  /** The part was not moved on its table between the two scans. */
+  /** The scans, in order: the first stays in place, the others are moved onto it. */
+  scans: string[];
+  /** The part was not moved on its table between the scans. */
   sameSetup: boolean;
-  picks: Picks;
+  /** The points picked so far, per pair of scans. */
+  picked: PickBook;
+  /** The two scans shown side by side to pick on (null: the first two of the list). */
+  pickPair: [string, string] | null;
 
   alignStarting: boolean;
   alignJobId: string | null;
+  /** The answer for two scans (`align`), or for several (`align_all`): at most one of the two is set. */
   result: AlignResult | null;
+  multi: AlignAllResult | null;
   alignProblem: Problem | null;
 
   mergeStarting: boolean;
@@ -39,35 +67,38 @@ type AlignState = {
 };
 
 type AlignStore = AlignState & {
-  /** The page of project `pid` is shown, maybe with the two scans given in the address. */
-  open: (pid: string, target?: string | null, source?: string | null) => void;
+  /** The page of project `pid` is shown, maybe with the scans given in the address. */
+  open: (pid: string, target?: string | null, source?: string | null, more?: readonly string[]) => void;
   /** The page is left: what a finished merge said is not kept for the next visit. */
   leave: () => void;
-  /** Other scans: the picked points and the result belonged to the old ones. */
-  setScans: (target: string | null, source: string | null) => void;
-  /** The two scans change roles; each keeps its picked points. */
+  /** Another list of scans: the result belonged to the old one, and so do the points of scans that left it. */
+  setScans: (scans: readonly string[]) => void;
+  /** Two scans change roles; each keeps its picked points. */
   swap: () => void;
   setSameSetup: (same: boolean) => void;
+  /** Pick on these two scans (shown in the order of the list). */
+  setPickPair: (a: string, b: string) => void;
+  /** A point on the pair's scan shown on the left (`target`) or on the right (`source`). */
   pick: (side: Side, p: Vec3) => void;
   removePair: (index: number) => void;
+  /** The points of the pair being picked on. */
   clearPicks: () => void;
   /** Start the alignment: from the shape alone, or (`fromPoints`) from the picked pairs. */
   align: (fromPoints: boolean) => Promise<boolean>;
-  /** Merge at the result's pose into a new scan called `name` (empty: the server's default). */
+  /** Merge at the result's poses into a new scan called `name` (empty: the server's default). */
   merge: (name: string) => Promise<boolean>;
 };
 
-const noPicks = (): Picks => ({ target: [], source: [] });
-
 const fresh = (): AlignState => ({
   pid: null,
-  target: null,
-  source: null,
+  scans: [],
   sameSetup: true,
-  picks: noPicks(),
+  picked: {},
+  pickPair: null,
   alignStarting: false,
   alignJobId: null,
   result: null,
+  multi: null,
   alignProblem: null,
   mergeStarting: false,
   mergeJobId: null,
@@ -76,8 +107,15 @@ const fresh = (): AlignState => ({
   mergeCancelled: false,
 });
 
-/** What belongs to one pair of scans and one alignment of them. */
-const noResult = { alignJobId: null, result: null, alignProblem: null, merged: null, mergeProblem: null, mergeCancelled: false } as const;
+/** What belongs to one list of scans and one alignment of them. */
+const noResult = { alignJobId: null, result: null, multi: null, alignProblem: null, merged: null, mergeProblem: null, mergeCancelled: false } as const;
+
+/** The scans asked for, each once, at most eight. */
+function asked(...ids: (string | null | undefined)[]): string[] {
+  const out: string[] = [];
+  for (const id of ids) if (id && !out.includes(id) && out.length < MAX_SCANS) out.push(id);
+  return out;
+}
 
 /** Put a job into the jobs store unless it knows a newer copy (the reply to a POST can be older than a `job` message). */
 function adoptJob(j: Job): void {
@@ -91,34 +129,33 @@ const running = (s: AlignState): boolean => s.alignStarting || s.mergeStarting |
 export const useAlign = create<AlignStore>((set, get) => ({
   ...fresh(),
 
-  open: (pid, target, source) => {
+  open: (pid, target, source, more = []) => {
     const s = get();
-    if (source && source === target) source = null; // the two must differ
+    const list = asked(target, source, ...more);
     if (s.pid !== pid) {
-      set({ ...fresh(), pid, target: target || null, source: source || null });
+      set({ ...fresh(), pid, scans: list });
       follow();
       return;
     }
-    const t = target || s.target;
-    const src = source || s.source;
-    if (t !== src && (t !== s.target || src !== s.source)) get().setScans(t, src);
+    // the address names at least the two scans; fewer: keep what the page has
+    if (list.length >= 2 && !sameList(list, s.scans)) get().setScans(list);
   },
 
   leave: () => {
     if (!isActive(jobOf(get().mergeJobId))) set({ merged: null, mergeProblem: null, mergeCancelled: false });
   },
 
-  setScans: (target, source) => {
+  setScans: (scans) => {
     const s = get();
-    if ((target === s.target && source === s.source) || running(s)) return;
-    if (target === s.source && source === s.target) return get().swap();
-    set({ ...noResult, target, source, picks: noPicks() });
+    if (sameList(scans, s.scans) || running(s)) return;
+    const list = [...scans];
+    set({ ...noResult, scans: list, picked: keepPicksOf(s.picked, list) });
   },
 
   swap: () => {
     const s = get();
-    if (running(s)) return;
-    set({ ...noResult, target: s.source, source: s.target, picks: { target: s.picks.source, source: s.picks.target } });
+    if (s.scans.length !== 2) return;
+    get().setScans([s.scans[1], s.scans[0]]);
   },
 
   setSameSetup: (sameSetup) => {
@@ -127,25 +164,55 @@ export const useAlign = create<AlignStore>((set, get) => ({
     set({ ...noResult, sameSetup }); // the result was worked out for the other case
   },
 
-  pick: (side, p) => set((s) => ({ picks: addPick(s.picks, side, p) })),
-  removePair: (index) => set((s) => ({ picks: removePair(s.picks, index) })),
-  clearPicks: () => set({ picks: noPicks() }),
+  setPickPair: (a, b) => {
+    if (a !== b) set({ pickPair: [a, b] });
+  },
+
+  pick: (side, p) =>
+    set((s) => {
+      const pair = pickPairOf(s.scans, s.pickPair);
+      if (!pair) return {};
+      return { picked: withPicks(s.picked, pair[0], pair[1], addPick(picksFor(s.picked, pair[0], pair[1]), side, p)) };
+    }),
+  removePair: (index) =>
+    set((s) => {
+      const pair = pickPairOf(s.scans, s.pickPair);
+      if (!pair) return {};
+      return { picked: withPicks(s.picked, pair[0], pair[1], removePair(picksFor(s.picked, pair[0], pair[1]), index)) };
+    }),
+  clearPicks: () =>
+    set((s) => {
+      const pair = pickPairOf(s.scans, s.pickPair);
+      return pair ? { picked: withPicks(s.picked, pair[0], pair[1], { target: [], source: [] }) } : {};
+    }),
 
   align: async (fromPoints) => {
     const s = get();
-    const { pid, target, source } = s;
-    if (!pid || !target || !source || running(s)) return false;
-    const body: AlignRequest = { target, source, same_setup: s.sameSetup };
-    if (fromPoints) {
-      body.pairs = completePairs(s.picks);
-      if (body.pairs.length < MIN_PAIRS) return false;
+    const { pid, scans } = s;
+    if (!pid || scans.length < 2 || running(s)) return false;
+    let start: () => Promise<Job>;
+    if (scans.length === 2) {
+      const [target, source] = scans;
+      const body: AlignRequest = { target, source, same_setup: s.sameSetup };
+      if (fromPoints) {
+        body.pairs = completePairs(picksFor(s.picked, target, source));
+        if (body.pairs.length < MIN_PAIRS) return false;
+      }
+      start = () => api.alignScans(pid, body);
+    } else {
+      const body: AlignAllRequest = { scans: [...scans], same_setup: s.sameSetup };
+      if (fromPoints) {
+        body.picked = pickedPoints(s.picked, scans);
+        if (!body.picked.length) return false;
+      }
+      start = () => api.alignAllScans(pid, body);
     }
     set({ alignStarting: true, alignProblem: null });
     try {
-      const job = await api.alignScans(pid, body);
+      const job = await start();
       adoptJob(job);
       // the old result goes only now: a request that is refused (points in one line…) leaves it on screen
-      set({ alignStarting: false, alignJobId: job.id, result: null, merged: null, mergeProblem: null, mergeCancelled: false });
+      set({ alignStarting: false, alignJobId: job.id, result: null, multi: null, merged: null, mergeProblem: null, mergeCancelled: false });
       follow();
       return true;
     } catch (e) {
@@ -156,13 +223,23 @@ export const useAlign = create<AlignStore>((set, get) => ({
 
   merge: async (name) => {
     const s = get();
-    const { pid, target, source, result } = s;
-    if (!pid || !target || !source || !result || running(s)) return false;
-    if (result.target !== target || result.source !== source) return false;
+    const { pid, scans, result, multi } = s;
+    if (!pid || scans.length < 2 || running(s)) return false;
+    const title = name.trim();
+    let start: () => Promise<Job>;
+    if (scans.length === 2) {
+      const [target, source] = scans;
+      if (!result || result.target !== target || result.source !== source) return false;
+      start = () => api.mergeScans(pid, { target, source, T: result.T, same_setup: result.same_setup, ...(title ? { name: title } : {}) });
+    } else {
+      if (!multi || !sameList(multi.scans, scans)) return false;
+      const list = mergeScansOf(multi, scans);
+      if (!list) return false; // a scan is not placed: nothing to merge it at
+      start = () => api.mergeScans(pid, { scans: list, same_setup: multi.same_setup, ...(title ? { name: title } : {}) });
+    }
     set({ mergeStarting: true, mergeProblem: null, mergeCancelled: false, merged: null });
     try {
-      const title = name.trim();
-      const job = await api.mergeScans(pid, { target, source, T: result.T, same_setup: result.same_setup, ...(title ? { name: title } : {}) });
+      const job = await start();
       adoptJob(job);
       set({ mergeStarting: false, mergeJobId: job.id });
       follow();
@@ -174,20 +251,29 @@ export const useAlign = create<AlignStore>((set, get) => ({
   },
 }));
 
+const isIdList = (x: unknown): x is string[] => Array.isArray(x) && x.length >= 2 && x.every((v) => typeof v === "string");
+
 /** Pick up the two jobs when they end, and a merge of this project that runs without this page knowing. */
 function follow(): void {
   const s = useAlign.getState();
   const jobs = useJobs.getState().jobs;
+  const both = s.scans.length > 2 ? "the scans" : "both scans";
 
   const al = s.alignJobId ? jobs[s.alignJobId] : undefined;
   if (al && !isActive(al)) {
-    if (al.state === "done" && isAlignResult(al.result)) useAlign.setState({ alignJobId: null, result: al.result, alignProblem: null });
+    if (al.state === "done" && isAlignAllResult(al.result)) {
+      const multi = al.result;
+      // scans not placed: pick on one of them and a placed one next (unless the pair picked on already has one)
+      const pair = pickPairOf(s.scans, s.pickPair);
+      const keep = pair && pair.some((id) => multi.unplaced.includes(id));
+      useAlign.setState({ alignJobId: null, multi, result: null, alignProblem: null, ...(keep ? {} : { pickPair: suggestPickPair(multi, s.scans) ?? s.pickPair }) });
+    } else if (al.state === "done" && isAlignResult(al.result)) useAlign.setState({ alignJobId: null, result: al.result, multi: null, alignProblem: null });
     else if (al.state === "done")
       useAlign.setState({ alignJobId: null, alignProblem: { detail: "The alignment finished, but its answer couldn't be read", hint: "Align again. If it happens again, check the engine log." } });
     else if (al.state === "failed")
       useAlign.setState({
         alignJobId: null,
-        alignProblem: describeError({ detail: al.error || al.message || "The alignment failed", hint: "Check that both scans open in the viewer, then align again." }),
+        alignProblem: describeError({ detail: al.error || al.message || "The alignment failed", hint: `Check that ${both} open in the viewer, then align again.` }),
       });
     else useAlign.setState({ alignJobId: null }); // cancelled: nothing was written, nothing to say
   }
@@ -203,7 +289,7 @@ function follow(): void {
         mergeJobId: null,
         mergeProblem: describeError({
           detail: (mg.state === "failed" ? mg.error || mg.message : null) || "The merge failed",
-          hint: "The two scans are unchanged. Fix what the message says, then merge again.",
+          hint: `${s.scans.length > 2 ? "The scans are" : "The two scans are"} unchanged. Fix what the message says, then merge again.`,
         }),
       });
   }
@@ -212,16 +298,15 @@ function follow(): void {
   if (s.pid && !s.mergeJobId && !s.mergeStarting) {
     const found = Object.values(jobs).find((j) => /^merge$/i.test(j.kind) && isActive(j) && (j as Job & { project_id?: unknown }).project_id === s.pid);
     if (found) {
-      const meta = found as Job & { target?: unknown; source?: unknown };
-      const same = meta.target === s.target && meta.source === s.source;
+      const meta = found as Job & { target?: unknown; source?: unknown; scans?: unknown };
+      const list = isIdList(meta.scans) ? meta.scans : typeof meta.target === "string" && typeof meta.source === "string" ? [meta.target, meta.source] : null;
+      const same = !list || sameList(list, s.scans);
       useAlign.setState({
         mergeJobId: found.id,
         merged: null,
         mergeProblem: null,
         mergeCancelled: false,
-        ...(same || typeof meta.target !== "string" || typeof meta.source !== "string"
-          ? {}
-          : { target: meta.target, source: meta.source, picks: noPicks(), result: null, alignJobId: null, alignProblem: null }),
+        ...(same || !list ? {} : { scans: [...list], picked: keepPicksOf(s.picked, list), result: null, multi: null, alignJobId: null, alignProblem: null }),
       });
     }
   }

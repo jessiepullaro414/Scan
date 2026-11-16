@@ -1,11 +1,12 @@
 /**
- * Aligning two scans (APP_API.md "M4 first slice"): the parts of the Align page that need no screen.
- * Which scans can be aligned or merged, the points picked on the two meshes and the pairs they form,
- * the pose as the 3D view takes it, and an alignment's figures in words.
+ * Aligning two scans (APP_API.md "M4 first slice") or several (the second slice): the parts of the
+ * Align page that need no screen. Which scans can be aligned or merged, the list of scans, the points
+ * picked on two meshes at a time and the pairs they form, the pose as the 3D view takes it, and an
+ * alignment's figures in words.
  *
  * Pure (no React, no store, no three.js), so `npm test` runs it with Node.
  */
-import type { AlignResult, MergeResult, PointPair, Scan } from "../api/types";
+import type { AlignAllPair, AlignAllResult, AlignResult, MergeResult, PairUse, PickedPoints, PointPair, Scan } from "../api/types";
 
 export type Vec3 = [number, number, number];
 
@@ -44,7 +45,138 @@ export function chooseScans(ids: readonly string[], target?: string | null, sour
 }
 
 /** The name a merged scan gets when none is typed (the server's default). */
-export const defaultMergeName = (targetName: string, sourceName: string): string => `${targetName} + ${sourceName}`;
+export const defaultMergeName = (targetName: string, sourceName: string): string => mergeNameOf([targetName, sourceName]);
+
+/** The name a merge of several scans gets when none is typed: their names joined by " + " (the server's default). */
+export const mergeNameOf = (names: readonly string[]): string => names.join(" + ");
+
+// ------------------------------------------------------------------ several scans (M4 second slice)
+/** At most this many scans are aligned at once. */
+export const MAX_SCANS = 8;
+
+/**
+ * The scans to start with: the two asked as `target` and `source` (as `chooseScans` does), then the
+ * further asked ones (`more`) that have a mesh, each once, at most `MAX_SCANS` in all.
+ */
+export function chooseList(ids: readonly string[], target?: string | null, source?: string | null, more: readonly string[] = []): string[] {
+  const c = chooseScans(ids, target, source);
+  const list = [c.target, c.source].filter((x): x is string => !!x);
+  for (const id of more) if (list.length < MAX_SCANS && ids.includes(id) && !list.includes(id)) list.push(id);
+  return list;
+}
+
+/** The first scan with a mesh that is not in the list yet, or null when none is left (or the list is full). */
+export function nextFreeScan(ids: readonly string[], list: readonly string[]): string | null {
+  if (list.length >= MAX_SCANS) return null;
+  return ids.find((id) => !list.includes(id)) ?? null;
+}
+
+/** The list with scan `id` at place `index`; a scan already in the list changes places with the one there. */
+export function chooseAt(list: readonly string[], index: number, id: string): string[] {
+  const next = [...list];
+  if (index < 0 || index >= next.length) return next;
+  const at = next.indexOf(id);
+  if (at >= 0) next[at] = next[index];
+  next[index] = id;
+  return next;
+}
+
+/** The list without place `index`; two scans always stay. */
+export const removeAt = (list: readonly string[], index: number): string[] => (list.length > 2 && index >= 0 && index < list.length ? list.filter((_, i) => i !== index) : [...list]);
+
+/** Two lists hold the same scans in the same order. */
+export const sameList = (a: readonly string[], b: readonly string[]): boolean => a.length === b.length && a.every((x, i) => x === b[i]);
+
+/** Every pair of the list, the earlier scan first (it is shown on the left, its points are the pair's `target`). */
+export function pairsOf(list: readonly string[]): [string, string][] {
+  const out: [string, string][] = [];
+  for (let i = 0; i < list.length; i++) for (let j = i + 1; j < list.length; j++) out.push([list[i], list[j]]);
+  return out;
+}
+
+/** Names in a sentence: “A”, “A” and “B”, “A”, “B” and “C”. */
+export function namesText(names: readonly string[]): string {
+  const q = names.map((n) => `“${n}”`);
+  return q.length <= 1 ? (q[0] ?? "") : `${q.slice(0, -1).join(", ")} and ${q[q.length - 1]}`;
+}
+
+/**
+ * A fixed palette of clearly different colours, one per place in the list: the first two are the
+ * two-scan page's (the one that stays, the one that is moved).
+ */
+export const SCAN_PALETTE = ["#3f83f0", "#f08c2e", "#2fae66", "#a35ee8", "#e0475b", "#19b4c8", "#d4b21c", "#e35fb7"] as const;
+export const scanColor = (index: number): string => SCAN_PALETTE[((index % SCAN_PALETTE.length) + SCAN_PALETTE.length) % SCAN_PALETTE.length];
+
+// ------------------------------------------------------------------ picked points of several pairs
+/** The points picked between two scans: `picks.target` on scan `a`, `picks.source` on scan `b`. */
+export type PairPicks = { a: string; b: string; picks: Picks };
+/** All picked points of the page, by pair of scans (`pairKey`). */
+export type PickBook = Record<string, PairPicks>;
+
+/** The same key for (x, y) and (y, x). */
+export const pairKey = (x: string, y: string): string => (x < y ? `${x}\n${y}` : `${y}\n${x}`);
+
+const flip = (p: Picks): Picks => ({ target: p.source, source: p.target });
+/** No points yet (one shared value: the views it is handed to need not draw again). Never changed: the helpers make new lists. */
+const NO_PICKS: Picks = Object.freeze({ target: Object.freeze([]) as unknown as Vec3[], source: Object.freeze([]) as unknown as Vec3[] });
+
+/** The points of the pair with `a` as the target side and `b` as the source side, however they were stored. */
+export function picksFor(book: PickBook, a: string, b: string): Picks {
+  const e = book[pairKey(a, b)];
+  if (!e) return NO_PICKS;
+  return e.a === a ? e.picks : flip(e.picks);
+}
+
+/** The book with the pair's points set (`picks.target` on `a`); an empty pair is dropped. */
+export function withPicks(book: PickBook, a: string, b: string, picks: Picks): PickBook {
+  const next = { ...book };
+  const k = pairKey(a, b);
+  if (!picks.target.length && !picks.source.length) delete next[k];
+  else next[k] = { a, b, picks };
+  return next;
+}
+
+/** Only the pairs of scans that are still in the list. */
+export function keepPicksOf(book: PickBook, list: readonly string[]): PickBook {
+  const next: PickBook = {};
+  for (const [k, e] of Object.entries(book)) if (list.includes(e.a) && list.includes(e.b)) next[k] = e;
+  return next;
+}
+
+/** The picked points to send (`AlignAllRequest.picked`): each pair of the list with enough complete pairs. */
+export function pickedPoints(book: PickBook, list: readonly string[]): PickedPoints[] {
+  const out: PickedPoints[] = [];
+  for (const [a, b] of pairsOf(list)) {
+    const pairs = completePairs(picksFor(book, a, b));
+    if (pairs.length >= MIN_PAIRS) out.push({ a, b, pairs });
+  }
+  return out;
+}
+
+/** Pairs of the list with some points, but too few complete pairs to be sent. */
+export function unfinishedPairs(book: PickBook, list: readonly string[]): [string, string][] {
+  return pairsOf(list).filter(([a, b]) => {
+    const p = picksFor(book, a, b);
+    return (p.target.length || p.source.length) && completePairs(p).length < MIN_PAIRS;
+  });
+}
+
+/** The pair to pick on: the asked one when both are in the list (earlier scan first), else the first two. */
+export function pickPairOf(list: readonly string[], asked: readonly [string, string] | null): [string, string] | null {
+  if (asked) {
+    const i = list.indexOf(asked[0]),
+      j = list.indexOf(asked[1]);
+    if (i >= 0 && j >= 0 && i !== j) return i < j ? [asked[0], asked[1]] : [asked[1], asked[0]];
+  }
+  return list.length >= 2 ? [list[0], list[1]] : null;
+}
+
+/** After a result with scans not placed: the pair to pick on next, an unplaced scan with the first placed one. */
+export function suggestPickPair(r: Pick<AlignAllResult, "placed" | "unplaced">, list: readonly string[]): [string, string] | null {
+  const lost = list.find((id) => r.unplaced.includes(id));
+  const anchor = list.find((id) => r.placed.includes(id));
+  return lost && anchor ? pickPairOf(list, [anchor, lost]) : null;
+}
 
 // ------------------------------------------------------------------ picked points
 export type PairRow = { n: number; target: Vec3 | null; source: Vec3 | null };
@@ -142,5 +274,103 @@ export function alignFigures(r: AlignResult): Figure[] {
   ];
   if (typeof r.pairs_rms_mm === "number") out.push({ label: "Your points", value: `agree to ${mm(r.pairs_rms_mm, 1)}`, warn: pairsDisagree(r) });
   if (r.same_setup) out.push({ label: "Shared table", value: r.used_support ? "Used for height and tilt" : "Not used: the two scans' tables did not line up" });
+  return out;
+}
+
+// ------------------------------------------------------------------ results of several scans
+/** A link (a pair used to place the scans) that disagrees by more than this (mm) asks for a look before merging. */
+export const LINK_WARN_MM = 2;
+
+export function isAlignAllResult(r: unknown): r is AlignAllResult {
+  const x = r as Partial<AlignAllResult> | null;
+  return (
+    !!x &&
+    typeof x === "object" &&
+    typeof x.accepted === "boolean" &&
+    typeof x.verdict === "string" &&
+    Array.isArray(x.scans) &&
+    Array.isArray(x.placed) &&
+    Array.isArray(x.unplaced) &&
+    Array.isArray(x.pairs) &&
+    !!x.T &&
+    typeof x.T === "object" &&
+    !Array.isArray(x.T)
+  );
+}
+
+/** A placed scan's pose (16 numbers, row-major) into the first scan's frame; null when it is not placed. */
+export function poseOf(r: Pick<AlignAllResult, "T" | "placed">, id: string): number[] | null {
+  return r.placed.includes(id) ? flattenPose(r.T[id]) : null;
+}
+
+/** How the placement used a pair, in words. */
+export function pairUseText(used: PairUse): string {
+  if (used === "chain") return "in the chain";
+  if (used === "loop") return "checks the chain";
+  if (used === "left out") return "left out";
+  return "not used";
+}
+
+/** One pair in a short line: “with “Top”: accepted, 76 % overlap, in the chain”. `other`: the other scan's name. */
+export function pairLine(p: AlignAllPair, other: string): string {
+  const parts = [`with “${other}”: ${p.accepted ? "accepted" : "not accepted"}`, `${Math.round(100 * p.overlap)} % overlap`, pairUseText(p.used)];
+  if (typeof p.disagree_mm === "number" && (p.used === "loop" || p.used === "left out")) parts.push(`disagrees by ${p.disagree_mm.toFixed(2)} mm`);
+  return parts.join(", ");
+}
+
+export type ScanPlacement = {
+  id: string;
+  /** Its place in the list (0: it stays in place). */
+  index: number;
+  placed: boolean;
+  /** The pairs it makes with the scans before it in the list (each pair is shown once, under its later scan). */
+  pairs: { pair: AlignAllPair; other: string }[];
+};
+
+/** Each scan of the list: placed or not, and its pairs with the scans before it. */
+export function scanPlacements(r: Pick<AlignAllResult, "placed" | "pairs">, list: readonly string[]): ScanPlacement[] {
+  return list.map((id, index) => {
+    const pairs: ScanPlacement["pairs"] = [];
+    for (const p of r.pairs) {
+      const other = p.a === id ? p.b : p.b === id ? p.a : null;
+      if (other === null || other === id) continue;
+      const j = list.indexOf(other);
+      if (j >= 0 && j < index) pairs.push({ pair: p, other });
+    }
+    pairs.sort((x, y) => list.indexOf(x.other) - list.indexOf(y.other));
+    return { id, index, placed: index === 0 || r.placed.includes(id), pairs };
+  });
+}
+
+/** The figures under the verdict of several scans. */
+export function alignAllFigures(r: AlignAllResult): Figure[] {
+  const n = r.scans.length;
+  const out: Figure[] = [{ label: "Placed", value: `${r.placed.length} of ${n} scans`, warn: r.unplaced.length > 0 }];
+  const checked = r.pairs.filter((p) => typeof p.disagree_mm === "number" && p.used !== "");
+  if (r.loops > 0 && checked.length) // a chain alone agrees with itself: nothing to show
+    out.push({ label: "Worst disagreement", value: `${r.worst_link_mm.toFixed(2)} mm`, note: "between a pair and where the scans were placed", warn: needsALook(r) });
+  const leftOut = r.pairs.filter((p) => p.used === "left out").length;
+  if (leftOut) out.push({ label: "Left out", value: `${leftOut} pair${leftOut === 1 ? "" : "s"}`, note: "that did not fit the others" });
+  if (r.same_setup) {
+    const found = r.scans.filter((id) => r.support[id]).length;
+    out.push({ label: "Shared table", value: `Found in ${found} of ${n} scans` });
+  }
+  return out;
+}
+
+/** A pair disagrees so much with where the scans were placed that they should be looked at before merging. */
+export const needsALook = (r: Pick<AlignAllResult, "worst_link_mm">): boolean => typeof r.worst_link_mm === "number" && r.worst_link_mm > LINK_WARN_MM;
+
+/** Merging several scans asks to confirm: not every scan placed, or a pair disagrees by more than 2 mm. */
+export const mergeNeedsConfirm = (r: Pick<AlignAllResult, "accepted" | "worst_link_mm">): boolean => !r.accepted || needsALook(r);
+
+/** The merge of several scans, as the API takes it: every scan at its pose, or null when one is not placed. */
+export function mergeScansOf(r: Pick<AlignAllResult, "T" | "placed">, list: readonly string[]): { id: string; T: number[][] }[] | null {
+  const out: { id: string; T: number[][] }[] = [];
+  for (const id of list) {
+    const T = r.T[id];
+    if (!r.placed.includes(id) || !T || flattenPose(T) === null) return null;
+    out.push({ id, T });
+  }
   return out;
 }

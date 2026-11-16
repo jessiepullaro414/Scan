@@ -18,7 +18,7 @@ const PAGE_TITLE: Partial<Record<Route["name"], string>> = {
   settings: "Settings",
   viewer: "Result viewer",
   process: "Process",
-  align: "Align two scans",
+  align: "Align scans",
   project: "Project",
 };
 

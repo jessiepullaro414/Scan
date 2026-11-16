@@ -4,29 +4,61 @@
  * that Node runs as it is (type stripping), no test framework: a failed check throws.
  */
 import { Vector3 } from "three";
-import type { AlignResult } from "../api/types.ts";
+import type { AlignAllPair, AlignAllResult, AlignResult } from "../api/types.ts";
 import { matrixFromRowMajor } from "../three/coords.ts";
 import {
   addPick,
+  alignAllFigures,
   alignFigures,
   applyPose,
+  chooseAt,
+  chooseList,
   chooseScans,
   completePairs,
   defaultMergeName,
   flattenPose,
   hasMesh,
   hasRecording,
+  isAlignAllResult,
   isAlignResult,
   isMergeResult,
+  keepPicksOf,
+  MAX_SCANS,
   mergedFromText,
+  mergeNameOf,
+  mergeNeedsConfirm,
+  mergeScansOf,
   MIN_PAIRS,
+  namesText,
+  nextFreeScan,
+  pairKey,
+  pairLine,
   pairRows,
   pairsDisagree,
+  pairsOf,
+  pairUseText,
+  pickedPoints,
   pickHint,
+  pickPairOf,
+  picksFor,
+  poseOf,
+  removeAt,
   removePair,
+  sameList,
+  SCAN_PALETTE,
+  scanColor,
+  scanPlacements,
+  suggestPickPair,
+  unfinishedPairs,
+  withPicks,
+  type PickBook,
   type Picks,
   type Vec3,
 } from "./align.ts";
+
+/** The two-scan page's colours (AlignCanvas.tsx's SCAN_COLOR, which needs three.js to import). */
+const SCAN_COLOR_TARGET = "#3f83f0";
+const SCAN_COLOR_SOURCE = "#f08c2e";
 
 let checks = 0;
 function check(ok: boolean, what: string): void {
@@ -164,5 +196,121 @@ check(f[1].value === "–", "no RMS: a dash");
 check(f[3].warn === true, "points that disagree by more than 5 mm are marked");
 check(/^Not used/.test(f[4].value), "same setup, but the tables did not line up");
 check(!pairsDisagree({ pairs_rms_mm: null }) && !pairsDisagree({ pairs_rms_mm: 5 }) && pairsDisagree({ pairs_rms_mm: 5.1 }), "the warning starts above 5 mm");
+
+// ------------------------------------------------------------------ several scans: the list
+check(mergeNameOf(["A", "B", "C"]) === "A + B + C" && defaultMergeName("A", "B") === mergeNameOf(["A", "B"]), "the default name of several: joined by “ + ”");
+const ids5 = ["a", "b", "c", "d", "e"];
+check(same(chooseList(ids5), ["a", "b"]), "nothing asked: the first two");
+check(same(chooseList(ids5, "c", "a"), ["c", "a"]), "two asked: as chooseScans");
+check(same(chooseList(ids5, "c", "a", ["e", "x", "a", "e", "b"]), ["c", "a", "e", "b"]), "more asked: each once, only scans with a mesh");
+check(same(chooseList(ids5, null, "b", ["d"]), ["a", "b", "d"]), "the first missing: the first free one stays");
+const many = Array.from({ length: 12 }, (_, i) => `s${i}`);
+check(chooseList(many, "s0", "s1", many.slice(2)).length === MAX_SCANS && MAX_SCANS === 8, "at most eight");
+check(nextFreeScan(ids5, ["a", "c"]) === "b" && nextFreeScan(["a", "b"], ["b", "a"]) === null, "the next scan to add, or none left");
+check(nextFreeScan(many, many.slice(0, 8)) === null, "a full list takes no more");
+check(same(chooseAt(["a", "b", "c"], 2, "d"), ["a", "b", "d"]), "another scan at a place");
+check(same(chooseAt(["a", "b", "c"], 0, "c"), ["c", "b", "a"]), "a scan already listed changes places");
+check(same(chooseAt(["a", "b"], 1, "a"), ["b", "a"]), "with two: the same as swapping them");
+check(same(removeAt(["a", "b", "c"], 0), ["b", "c"]) && same(removeAt(["a", "b"], 0), ["a", "b"]), "removing one; two always stay");
+check(sameList(["a", "b"], ["a", "b"]) && !sameList(["a", "b"], ["b", "a"]) && !sameList(["a"], ["a", "b"]), "same list, same order");
+check(same(pairsOf(["a", "b", "c"]), [["a", "b"], ["a", "c"], ["b", "c"]]) && pairsOf(many.slice(0, 8)).length === 28, "every pair, the earlier first: 3 for three, 28 for eight");
+check(namesText(["A"]) === "“A”" && namesText(["A", "B"]) === "“A” and “B”" && namesText(["A", "B", "C"]) === "“A”, “B” and “C”", "names in a sentence");
+check(new Set(SCAN_PALETTE).size === SCAN_PALETTE.length && SCAN_PALETTE.length >= MAX_SCANS, "one colour for each of eight scans, all different");
+check(scanColor(0) === SCAN_COLOR_TARGET && scanColor(1) === SCAN_COLOR_SOURCE && scanColor(8) === scanColor(0), "the first two are the two-scan colours");
+
+// ------------------------------------------------------------------ several scans: picked points by pair
+let book: PickBook = {};
+check(pairKey("a", "b") === pairKey("b", "a") && pairKey("a", "b") !== pairKey("a", "c"), "one key for a pair, either way round");
+book = withPicks(book, "a", "b", { target: [p(1), p(2), p(3)], source: [p(10), p(20), p(30)] });
+check(same(picksFor(book, "a", "b").target, [p(1), p(2), p(3)]), "the points on a, as stored");
+check(same(picksFor(book, "b", "a"), { target: [p(10), p(20), p(30)], source: [p(1), p(2), p(3)] }), "the other way round: the sides change");
+check(same(picksFor(book, "a", "c"), { target: [], source: [] }), "a pair without points");
+book = withPicks(book, "c", "b", { target: [p(4)], source: [p(40)] });
+check(Object.keys(book).length === 2, "points of two pairs");
+check(Object.keys(withPicks(book, "b", "c", { target: [], source: [] })).length === 1, "an emptied pair is dropped");
+const sent = pickedPoints(book, ["a", "b", "c"]);
+check(sent.length === 1 && sent[0].a === "a" && sent[0].b === "b" && sent[0].pairs.length === 3, "only pairs with three complete pairs are sent");
+check(same(sent[0].pairs[0], { source: p(10), target: p(1) }), "target points on a, source points on b");
+const rev = pickedPoints(book, ["b", "a", "c"]);
+check(rev[0].a === "b" && same(rev[0].pairs[0], { source: p(1), target: p(10) }), "in the list's order: the earlier scan is a");
+check(same(unfinishedPairs(book, ["a", "b", "c"]), [["b", "c"]]), "a pair with too few points is named");
+check(pickedPoints(book, ["a", "c"]).length === 0, "pairs of scans not in the list are not sent");
+check(Object.keys(keepPicksOf(book, ["a", "b"])).length === 1 && Object.keys(keepPicksOf(book, ["a", "b", "c"])).length === 2, "a scan leaves the list: its points go");
+check(same(pickPairOf(["a", "b", "c"], null), ["a", "b"]), "no pair asked: the first two");
+check(same(pickPairOf(["a", "b", "c"], ["c", "a"]), ["a", "c"]), "the asked pair, the earlier scan on the left");
+check(same(pickPairOf(["a", "b", "c"], ["a", "x"]), ["a", "b"]) && pickPairOf(["a"], null) === null, "a pair not in the list: the first two");
+
+// ------------------------------------------------------------------ several scans: results
+const I4 = [
+  [1, 0, 0, 0],
+  [0, 1, 0, 0],
+  [0, 0, 1, 0],
+  [0, 0, 0, 1],
+];
+const pr = (a: string, b: string, used: AlignAllPair["used"], extra: Partial<AlignAllPair> = {}): AlignAllPair => ({
+  a,
+  b,
+  used,
+  accepted: used !== "",
+  verdict: used ? "Aligned: …" : "Not aligned: …",
+  overlap: used ? 0.76 : 0.43,
+  rmse_mm: 0.25,
+  start: "features",
+  agree: 8,
+  ...extra,
+});
+const all: AlignAllResult = {
+  project_id: "p",
+  scans: ["a", "b", "c"],
+  accepted: true,
+  T: { a: I4, b: T, c: I4 },
+  placed: ["a", "b", "c"],
+  unplaced: [],
+  pairs: [pr("a", "b", "chain"), pr("a", "c", "chain"), pr("b", "c", "loop", { disagree_mm: 0.27 })],
+  loops: 1,
+  graph: true,
+  worst_link_mm: 0.27,
+  support: { a: true, b: true, c: false },
+  same_setup: true,
+  ms: 9000,
+  verdict: "All 3 scans placed through 2 links; 1 more link checked the chain, the worst disagrees by 0.27 mm.",
+  message: "",
+};
+check(isAlignAllResult(all) && !isAlignResult(all), "a result of several scans, not of two");
+check(!isAlignAllResult(accepted) && !isAlignAllResult(null) && !isAlignAllResult({ ...all, T: [] }), "a result of two is not one");
+check(same(poseOf(all, "b"), flat) && poseOf({ ...all, placed: ["a", "c"] }, "b") === null, "a placed scan's pose; none for one not placed");
+check(pairUseText("chain") === "in the chain" && pairUseText("loop") === "checks the chain" && pairUseText("left out") === "left out" && pairUseText("") === "not used", "how a pair was used, in words");
+check(pairLine(all.pairs[0], "Top") === "with “Top”: accepted, 76 % overlap, in the chain", "a pair in the chain");
+check(pairLine(all.pairs[2], "Side") === "with “Side”: accepted, 76 % overlap, checks the chain, disagrees by 0.27 mm", "a pair that checks the chain");
+check(pairLine(pr("a", "b", ""), "Top") === "with “Top”: not accepted, 43 % overlap, not used", "a pair not accepted");
+const rowsOf = scanPlacements(all, ["a", "b", "c"]);
+check(rowsOf.length === 3 && rowsOf[0].pairs.length === 0 && rowsOf[1].pairs.length === 1 && rowsOf[2].pairs.length === 2, "each pair once, under its later scan");
+check(rowsOf[2].pairs[0].other === "a" && rowsOf[2].pairs[1].other === "b", "in the list's order");
+check(rowsOf.every((r) => r.placed), "all placed");
+const lost: AlignAllResult = {
+  ...all,
+  accepted: false,
+  T: { a: I4, b: null, c: I4 },
+  placed: ["a", "c"],
+  unplaced: ["b"],
+  pairs: [pr("a", "b", ""), pr("a", "c", "chain"), pr("b", "c", "")],
+  loops: 0,
+  graph: false,
+  worst_link_mm: 0,
+};
+check(!scanPlacements(lost, ["a", "b", "c"])[1].placed && scanPlacements(lost, ["a", "b", "c"])[0].placed, "a scan not placed; the first always stays");
+check(same(suggestPickPair(lost, ["a", "b", "c"]), ["a", "b"]) && suggestPickPair(all, ["a", "b", "c"]) === null, "next: pick between the scan not placed and a placed one");
+check(same(suggestPickPair({ placed: ["c", "a"], unplaced: ["b"] }, ["c", "b", "a"]), ["c", "b"]), "in the list's order");
+check(mergeScansOf(lost, ["a", "b", "c"]) === null, "a scan not placed: nothing to merge");
+check(same(mergeScansOf(all, ["a", "b", "c"]), [{ id: "a", T: I4 }, { id: "b", T }, { id: "c", T: I4 }]), "the merge's scans form: every scan at its pose, in order");
+check(!mergeNeedsConfirm(all) && mergeNeedsConfirm(lost) && mergeNeedsConfirm({ ...all, worst_link_mm: 2.4 }) && !mergeNeedsConfirm({ ...all, worst_link_mm: 2 }), "confirm when not all placed or a pair disagrees by more than 2 mm");
+let ff = alignAllFigures(all);
+check(ff[0].label === "Placed" && ff[0].value === "3 of 3 scans" && !ff[0].warn, "how many were placed");
+check(ff[1].label === "Worst disagreement" && ff[1].value === "0.27 mm" && !ff[1].warn, "the worst disagreement");
+check(ff[ff.length - 1].label === "Shared table" && ff[ff.length - 1].value === "Found in 2 of 3 scans", "the shared table");
+ff = alignAllFigures({ ...lost, same_setup: false });
+check(ff.length === 1 && ff[0].value === "2 of 3 scans" && ff[0].warn === true, "not all placed is marked; no checks, no table");
+ff = alignAllFigures({ ...all, worst_link_mm: 3.1, pairs: [...all.pairs, pr("a", "d", "left out", { disagree_mm: 9 })] });
+check(ff[1].warn === true && ff.some((f) => f.label === "Left out" && f.value === "1 pair"), "a large disagreement is marked, a pair left out is counted");
 
 console.log(`align.test: ${checks} checks passed`);

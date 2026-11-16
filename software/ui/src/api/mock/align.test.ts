@@ -3,8 +3,20 @@
  * (APP_API.md "M4 first slice", `ohs/server/aligning.py`), the made-up answers, and the merge job.
  * Plain TypeScript that Node runs as it is (type stripping), no test framework: a failed check throws.
  */
-import type { AlignResult, Job, MergeResult, PointPair, Project, Scan } from "../types.ts";
-import { alignedVerdict, AMBIGUOUS_REASON, checkPairs, isPose, isRigid, MockAlign, type AlignHost } from "./align.ts";
+import type { AlignAllResult, AlignResult, Job, MergeResult, PointPair, Project, Scan } from "../types.ts";
+import {
+  alignAllVerdict,
+  alignedVerdict,
+  AMBIGUOUS_REASON,
+  checkPairs,
+  fitsFromShape,
+  isPose,
+  isRigid,
+  MockAlign,
+  quotedNames,
+  turnedOver,
+  type AlignHost,
+} from "./align.ts";
 import type { WorkJobSpec, WorkStep } from "./host.ts";
 
 let checks = 0;
@@ -284,5 +296,169 @@ logs.length = 0;
 mock.merge(p, { target: "top", source: "under", T: IDENTITY });
 last().spec.onFail?.("the two scans were recorded with different calibrations");
 check(logs.length === 1 && logs[0].level === "error" && /^Merging failed: .*The two scans are unchanged\.$/.test(logs[0].message), "a failed merge is reported");
+
+// ------------------------------------------------------------------ several scans (M4 second slice)
+/** The demo's seeded project now: three processed scans of the bracket, and one only recorded. */
+function project3(): Project {
+  const scans = [
+    scan("top", "Bracket top", "processed", 864, 28.8),
+    scan("under", "Bracket underside", "processed", 612, 20.4),
+    scan("side", "Bracket side", "processed", 450, 15),
+    scan("end", "Bracket end", "recorded", 390, 13),
+  ];
+  return { id: "p1", name: "Intake manifold bracket", created: "c", modified: "m", n_scans: scans.length, thumbnail_url: null, scans };
+}
+const THREE = ["top", "under", "side"];
+const runAll = (body: Record<string, unknown>) => {
+  mock.alignAll(p, body);
+  return run(last());
+};
+
+p = project3();
+const nJobs = started.length;
+// what is refused
+r = refused(() => mock.alignAll(p, {}));
+check(r?.status === 422 && r.detail === "scans: give the ids of 2 to 8 scans", "no list: 422");
+r = refused(() => mock.alignAll(p, { scans: ["top"] }));
+check(r?.status === 422 && r.detail === "1 scan(s) given: 2 to 8 are aligned at once" && r.hint === "add a second scan", "one scan: 422");
+r = refused(() => mock.alignAll(p, { scans: Array.from({ length: 9 }, (_, i) => `s${i}`) }));
+check(r?.status === 422 && /^9 scan\(s\) given/.test(r.detail), "nine scans: 422");
+r = refused(() => mock.alignAll(p, { scans: ["top", "under", "top"] }));
+check(r?.status === 409 && r.detail === 'the scan "Bracket top" is listed twice' && r.hint === "list each scan once", "a scan listed twice: 409");
+r = refused(() => mock.alignAll(p, { scans: ["top", "nope"] }));
+check(r?.status === 404, "an unknown scan: 404");
+r = refused(() => mock.alignAll(p, { scans: ["top", "under", "end"] }));
+check(r?.status === 409 && r.detail === 'the scan "Bracket end" has no mesh yet', "a scan without a mesh: 409, by name");
+r = refused(() => mock.alignAll(p, { scans: THREE, picked: [{ a: "top", b: "end", pairs: TRIANGLE }] }));
+check(r?.status === 422 && r.detail === "picked points name a scan that is not in the list ('end')" && r.hint === "pick points only on the listed scans", "picked points on a scan not in the list: 422");
+r = refused(() => mock.alignAll(p, { scans: THREE, picked: [{ a: "top", b: "side", pairs: TRIANGLE.slice(0, 2) }] }));
+check(r?.status === 422 && r.detail === '2 pair(s) of points between "Bracket top" and "Bracket side" are too few', "fewer than three picked pairs: 422");
+r = refused(() => mock.alignAll(p, { scans: THREE, picked: [{ a: "side", b: "under", pairs: LINE }] }));
+check(r?.status === 422 && /^the points picked between "Bracket side" and "Bracket underside" do not give a pose: the picked points lie in one line/.test(r.detail), "picked points in one line: 422");
+r = refused(() => mock.alignAll(p, { scans: THREE, picked: [{ a: "top", b: "top", pairs: TRIANGLE }] }));
+check(r?.status === 422, "picked points between a scan and itself: 422");
+check(started.length === nJobs, "a refused request starts no job");
+
+// the part stayed: all three placed
+const before3 = JSON.stringify(p);
+job = mock.alignAll(p, { scans: THREE });
+check(job.kind === "align_all" && JSON.stringify((job as Job & { scans?: string[] }).scans) === JSON.stringify(THREE) && (job as Job & { project_id?: string }).project_id === "p1", "an align_all job, with the project and the scans");
+done = run(last());
+check(done.steps.length === 4 && done.steps[0].message === 'Aligning "Bracket top" and "Bracket underside" (pair 1 of 3)', "every pair is aligned, one after the other");
+check(done.steps[done.steps.length - 1].message === "Placing the scans", "then the scans are placed");
+let all = done.result as AlignAllResult;
+check(all.accepted && all.unplaced.length === 0 && JSON.stringify(all.placed) === JSON.stringify(THREE), "all three placed");
+check(all.verdict === "All 3 scans placed through 2 links; 1 more link checked the chain, the worst disagrees by 0.27 mm.", "the contract's sentence");
+check(all.message === all.verdict && all.loops === 1 && all.graph === true && all.worst_link_mm === 0.27, "loops, graph and the worst link");
+check(JSON.stringify(all.pairs.map((x) => [x.a, x.b, x.used])) === JSON.stringify([["top", "under", "chain"], ["top", "side", "chain"], ["under", "side", "loop"]]), "every pair, and how it was used");
+check(all.pairs.every((x) => x.accepted && !("T" in x) && typeof x.verdict === "string" && x.start === "features"), "each pair as an alignment of two, without T");
+check(all.pairs[2].disagree_mm === 0.27, "the loop says how far it disagrees");
+check(THREE.every((id) => JSON.stringify(all.T[id]) === JSON.stringify(IDENTITY)), "the demo's scans share a frame: every pose is the identity");
+check(THREE.every((id) => all.support[id] === true) && all.same_setup === true, "a table in each");
+check(JSON.stringify(p) === before3, "align_all writes nothing");
+
+// the part was moved: the underside is not placed
+all = runAll({ scans: THREE, same_setup: false }).result as AlignAllResult;
+check(!all.accepted && JSON.stringify(all.unplaced) === JSON.stringify(["under"]) && JSON.stringify(all.placed) === JSON.stringify(["top", "side"]), "the part moved: “Bracket underside” is not placed");
+check(
+  all.verdict ===
+    'Not all placed: "Bracket underside" could not be aligned to any placed scan. Pick matching points between each of them and a placed scan, or scan with more overlap.',
+  "the contract's sentence, by name",
+);
+check(all.T.under === null && JSON.stringify(all.T.side) === JSON.stringify(IDENTITY), "no pose for it, the others placed");
+check(JSON.stringify(all.pairs.map((x) => x.used)) === JSON.stringify(["", "chain", ""]) && !all.pairs[0].accepted, "only top and side are accepted");
+check(all.pairs[0].verdict.startsWith("Not aligned: ") && all.loops === 0 && all.graph === false, "a pair not accepted says why");
+
+// picked points between the underside and a placed scan place it
+all = runAll({ scans: THREE, same_setup: false, picked: [{ a: "side", b: "under", pairs: TRIANGLE }] }).result as AlignAllResult;
+check(all.accepted && all.unplaced.length === 0, "picked points between the underside and the side: all placed");
+const us = all.pairs.find((x) => x.a === "under" && x.b === "side")!;
+check(us.accepted && us.start === "given" && us.used === "chain" && typeof us.pairs_rms_mm === "number" && us.pairs_rms_mm < 1, "that pair from the given points, in the chain");
+check(all.verdict === "All 3 scans placed through 2 links.", "no loop: nothing checked the chain");
+all = runAll({ scans: THREE, same_setup: false, picked: [{ a: "under", b: "top", pairs: TRIANGLE }] }).result as AlignAllResult;
+check(all.accepted, "either way round, with any placed scan");
+
+// picked points that do not match are left out; ones that disagree by more than 2 mm warn
+all = runAll({ scans: THREE, picked: [{ a: "under", b: "side", pairs: OFF }] }).result as AlignAllResult;
+const off = all.pairs.find((x) => x.a === "under" && x.b === "side")!;
+check(off.used === "left out" && typeof off.disagree_mm === "number" && off.disagree_mm > 5, "picked points that disagree by more than 5 mm: the loop is left out");
+check(all.accepted && all.loops === 1 && all.verdict === "All 3 scans placed through 2 links. 1 link did not fit the others and was left out.", "and the verdict says so");
+const ROUGH = pairs([
+  [[0, 0, 0], [0, 0, 0]],
+  [[40, 0, 0], [40, 0, 0]],
+  [[0, 30, 5], [0, 34, 5]],
+]); // agree to about 2.7 mm
+all = runAll({ scans: THREE, picked: [{ a: "under", b: "side", pairs: ROUGH }] }).result as AlignAllResult;
+check(all.worst_link_mm > 2 && all.worst_link_mm < 5, "a loop from rough points disagrees by more than 2 mm");
+check(/the worst disagrees by \d\.\d\d mm\. That is a lot: look at the scans together before merging\.$/.test(all.verdict), "the warning ends the verdict");
+
+// eight scans: 28 pairs
+const p8: Project = { ...project3(), scans: Array.from({ length: 8 }, (_, i) => scan(`s${i}`, `Part ${i + 1}`, "processed", 300, 10)) };
+mock.alignAll(p8, { scans: p8.scans.map((s) => s.id) });
+const eight = run(last());
+check(eight.steps.length === 29 && /\(pair 28 of 28\)$/.test(eight.steps[27].message) && last().spec.minSeconds <= 10, "eight scans: every one of the 28 pairs");
+all = eight.result as AlignAllResult;
+check(all.accepted && all.pairs.filter((x) => x.used === "chain").length === 7 && all.loops === 21, "seven links place them, the rest check");
+check(/^All 8 scans placed through 7 links; 21 more links checked the chain, the worst disagrees by 0\.\d\d mm\.$/.test(all.verdict), "the sentence for eight");
+
+// the pure helpers
+check(turnedOver({ name: "Bracket underside" }) && turnedOver({ name: "Bottom" }) && !turnedOver({ name: "Bracket side" }), "the demo's turned-over scans");
+check(fitsFromShape({ name: "a" }, { name: "Bottom" }, true) && !fitsFromShape({ name: "a" }, { name: "Bottom" }, false) && fitsFromShape({ name: "a" }, { name: "b" }, false), "the shape alone fits unless turned over, or the table settles it");
+check(quotedNames(["A"]) === '"A"' && quotedNames(["A", "B", "C"]) === '"A", "B" and "C"', "names in the engine's sentences");
+check(
+  alignAllVerdict({ n: 4, chain: 2, loops: 0, leftOut: 0, worst: 0, unplaced: ["Back", "Front"] }).startsWith('Not all placed: "Back" and "Front" could not be aligned to any placed scan.'),
+  "two scans not placed",
+);
+check(alignAllVerdict({ n: 2, chain: 1, loops: 0, leftOut: 0, worst: 0, unplaced: [] }) === "All 2 scans placed through 1 link.", "one link");
+
+// two scans: the first form, now with the scans in the job's meta
+p = project3();
+job = mock.merge(p, { target: "top", source: "side", T: IDENTITY });
+check(JSON.stringify((job as Job & { scans?: string[] }).scans) === JSON.stringify(["top", "side"]) && (job as Job & { target?: string }).target === "top", "a merge of two: target, source and the scans in its meta");
+m = run(last()).result as MergeResult;
+check(m.scan.name === "Bracket top + Bracket side" && JSON.stringify(m.merged_from) === JSON.stringify(["top", "side"]), "merged as before");
+
+// merging several: what is refused
+const at = (ids: string[]) => ids.map((id) => ({ id, T: IDENTITY }));
+r = refused(() => mock.merge(p, { target: "top", source: "under", T: IDENTITY, scans: at(THREE) }));
+check(r?.status === 422 && r.detail === "give either target, source and T, or scans, not both", "both forms: 422");
+r = refused(() => mock.merge(p, { name: "x" }));
+check(r?.status === 422 && r.detail === "nothing to merge: give target, source and T, or scans", "neither form: 422");
+r = refused(() => mock.merge(p, { scans: at(["top"]) }));
+check(r?.status === 422 && /^1 scan\(s\) given/.test(r.detail), "one scan: 422");
+r = refused(() => mock.merge(p, { scans: at(["top", "under", "under"]) }));
+check(r?.status === 409 && r.detail === 'the scan "Bracket underside" is listed twice', "a scan listed twice: 409");
+r = refused(() => mock.merge(p, { scans: [{ id: "top", T: IDENTITY }, { id: "under", T: [[2, 0, 0, 0], IDENTITY[1], IDENTITY[2], IDENTITY[3]] }, { id: "side", T: IDENTITY }] }));
+check(r?.status === 422 && r.detail === 'the pose of "Bracket underside" is not a rigid motion', "a pose that is not a rigid motion: 422, by name");
+r = refused(() => mock.merge(p, { scans: [{ id: "top", T: IDENTITY }, { id: "under" }, { id: "side", T: IDENTITY }] }));
+check(r?.status === 422 && r.detail === 'the pose of "Bracket underside" must be a 4x4 matrix', "a missing pose: 422");
+r = refused(() => mock.merge(p, { scans: ["top", "under"] }));
+check(r?.status === 422 && r.detail === "scans: give each scan as {id, T}", "scans without poses: 422");
+const mergedTwo = p.scans[p.scans.length - 1].id;
+r = refused(() => mock.merge(p, { scans: at(["top", "under", mergedTwo]) }));
+check(r?.status === 409 && /^the scan "Bracket top \+ Bracket side" has no recording/.test(r.detail), "a merged scan in the list: 409");
+
+// merging several: done
+logs.length = 0;
+const count3 = p.scans.length;
+job = mock.merge(p, { scans: at(THREE) });
+const meta3 = job as Job & { scans?: string[]; target?: string; source?: string };
+check(job.kind === "merge" && JSON.stringify(meta3.scans) === JSON.stringify(THREE) && meta3.target === undefined && meta3.source === undefined, "a merge job of three: the scans in its meta, no target or source");
+done = run(last());
+const frames3 = done.steps.map((s) => /^Merging: frame (\d+) of (\d+)$/.exec(s.message)).filter((x): x is RegExpExecArray => !!x);
+check(Number(frames3[0][2]) === 864 + 612 + 450, "n is the frames of all three recordings");
+m = done.result as MergeResult;
+made = p.scans[p.scans.length - 1];
+check(p.scans.length === count3 + 1 && m.scan_id === made.id, "one more scan");
+check(made.name === "Bracket top + Bracket underside + Bracket side", "the default name: the names joined by “ + ”");
+check(JSON.stringify(m.merged_from) === JSON.stringify(THREE) && JSON.stringify(made.merged_from?.map((x) => x.name)) === JSON.stringify(["Bracket top", "Bracket underside", "Bracket side"]), "merged_from: all of them, in order");
+check(logs.length === 1 && logs[0].message === "Merged scan ready: Bracket top + Bracket underside + Bracket side", "the notification");
+mock.merge(p, { scans: at(["side", "top", "under"]), same_setup: false, name: " All sides " });
+done = run(last());
+check(done.steps[0].message === "Finding what the part lay on" && (done.result as MergeResult).scan.name === "All sides", "the part moved, a given name");
+logs.length = 0;
+mock.merge(p, { scans: at(THREE) });
+last().spec.onFail?.("the scans were recorded with different calibrations");
+check(logs.length === 1 && /^Merging failed: .*The scans are unchanged\.$/.test(logs[0].message), "a failed merge of several is reported");
 
 console.log(`mock align.test: ${checks} checks passed`);

@@ -38,11 +38,11 @@ export const isActive = (j: Job | undefined | null) => !!j && (j.state === "queu
 export const isStudioJob = (kind: string): boolean => /^process_(track|straighten|fuse|spacetime|refine)|mesh_edit|recipe|^edit/i.test(kind);
 
 /**
- * Aligning two scans, or merging them into a new one (M4, kinds `align` / `merge`). Neither is a
- * "Make mesh": an align job writes nothing, and a merge job's result names the new scan, which gets
- * its own words below.
+ * Aligning two scans or several, or merging them into a new one (M4, kinds `align`, `align_all` and
+ * `merge`). None is a "Make mesh": an align job writes nothing (and says nothing when it ends: the Align
+ * page shows it), and a merge job's result names the new scan, which gets its own words below.
  */
-export const isAlignJob = (kind: string): boolean => /^(align|merge)$/i.test(kind);
+export const isAlignJob = (kind: string): boolean => /^(align|align_all|merge)$/i.test(kind);
 
 /** The scan a job works on, when the engine says (top-level extras, else the result). */
 export function jobScanRef(job: Job): { pid: string; sid: string } | null {
@@ -77,7 +77,9 @@ function mergeFinished(job: Job): void {
     const name = (r.scan as { name?: unknown } | null | undefined)?.name;
     toast.success("Merged scan ready", typeof name === "string" ? name : undefined, { label: "Open the merged scan", run: () => navigate(paths.viewer(pid, sid)) });
   } else if (job.state === "cancelled") {
-    toast.info("Merging cancelled", "Nothing was added to the project. The two scans are unchanged.");
+    const scans = (job as Job & { scans?: unknown }).scans;
+    const several = Array.isArray(scans) && scans.length > 2;
+    toast.info("Merging cancelled", `Nothing was added to the project. ${several ? "The scans are" : "The two scans are"} unchanged.`);
   }
   // a failed merge: the engine reports it itself (an error in its log, shown as a toast), and the Align page shows it
 }
@@ -181,7 +183,8 @@ export const jobKindLabel = (kind: string): string => {
     return "Mesh edit";
   }
   if (k === "align") return "Align two scans";
-  if (k === "merge") return "Merge two scans";
+  if (k === "align_all") return "Align several scans";
+  if (k === "merge") return "Merge scans";
   if (k.includes("process") || k.includes("mesh")) return "Make mesh";
   if (k.includes("sim") || k.includes("demo")) return "Simulator demo";
   if (k.includes("selftest") || k.includes("self_test")) return "Self-test";

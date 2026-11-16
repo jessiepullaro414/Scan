@@ -6,8 +6,9 @@
  * "leave the second scan where it is" (the identity), and nothing is measured:
  *
  * - an alignment from the shape alone of scans whose part was moved (`same_setup: false`, no pairs) is
- *   NOT accepted: the demo part (a ball and a block on a table) "fits in more than one position", and
- *   the pose returned for showing is such a wrong one (the constructor's `wrongPose`);
+ *   NOT accepted when one of the two was turned over (its name says "underside", "bottom" or "turned
+ *   over", `turnedOver`): the demo part (a ball and a block on a table) "fits in more than one
+ *   position", and the pose returned for showing is such a wrong one (the constructor's `wrongPose`);
  * - with picked pairs, or with `same_setup: true` (the shared table pins the rest), it is accepted, with
  *   plausible figures and the engine's sentence;
  * - `pairs_rms_mm` is real in spirit: how far the distances between the picked points differ on the two
@@ -16,10 +17,18 @@
  *   new processed scan with `merged_from` to the project. A merged scan has no recording: it can be
  *   aligned to, not merged again.
  *
+ * Several scans at once (APP_API.md "M4 second slice", `alignAll` and the merge's `scans` form): every
+ * pair is aligned by the rules above (a pair with picked points is accepted); the scans are placed from
+ * the first one through the accepted pairs of most overlap (the chain); the other accepted pairs check
+ * it ("loop", disagreeing by a few tenths of a mm, or by their picked points' spread when that is more)
+ * or, with picked points that disagree by more than 5 mm, are left out. A scan no accepted pair reaches
+ * is not placed (`T` null). So with all three seeded bracket scans the part staying where it was places
+ * all three, and with the part moved "Bracket underside" is placed only through picked points.
+ *
  * No imports at run time (types only), so `npm test` runs it with Node: the mock engine hands in what it
  * needs (`AlignHost`).
  */
-import type { AlignResult, Job, MergeResult, PointPair, ProcessQuality, Project, Scan } from "../types";
+import type { AlignAllPair, AlignAllResult, AlignResult, Job, MergeResult, PairUse, PointPair, ProcessQuality, Project, Scan } from "../types";
 import type { WorkJobSpec, WorkStep } from "./host";
 
 export type AlignHost = {
@@ -32,6 +41,41 @@ export type AlignHost = {
 };
 
 export const MIN_PAIRS = 3;
+/** Several scans at once: from two to this many. */
+export const MAX_SCANS = 8;
+/** Picked points that disagree by more than this (mm) make a pair that does not fit: left out of a loop. */
+const PAIRS_BAD_MM = 5;
+/** A pair that disagrees by more than this (mm) with the placement adds a warning to the verdict. */
+const LINK_WARN_MM = 2;
+
+/** The demo pretends a scan whose name says so was turned over between the scans. */
+export const turnedOver = (s: Pick<Scan, "name">): boolean => /underside|bottom|turned over/i.test(s.name);
+
+/** The demo's rule for an alignment from the shape alone: the shared table settles it, else neither may be turned over. */
+export const fitsFromShape = (a: Pick<Scan, "name">, b: Pick<Scan, "name">, sameSetup: boolean): boolean => sameSetup || (!turnedOver(a) && !turnedOver(b));
+
+/** Names in the engine's sentences: "A", "A" and "B", "A", "B" and "C". */
+export function quotedNames(names: readonly string[]): string {
+  const q = names.map((n) => `"${n}"`);
+  return q.length <= 1 ? (q[0] ?? "") : `${q.slice(0, -1).join(", ")} and ${q[q.length - 1]}`;
+}
+
+const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
+
+/** The engine's sentence for several scans (`align_all`). */
+export function alignAllVerdict(o: { n: number; chain: number; loops: number; leftOut: number; worst: number; unplaced: string[] }): string {
+  let v: string;
+  if (o.unplaced.length)
+    v = `Not all placed: ${quotedNames(o.unplaced)} could not be aligned to any placed scan. Pick matching points between each of them and a placed scan, or scan with more overlap.`;
+  else {
+    v = `All ${o.n} scans placed through ${plural(o.chain, "link")}`;
+    if (o.loops) v += `; ${o.loops} more link${o.loops === 1 ? "" : "s"} checked the chain, the worst disagrees by ${o.worst.toFixed(2)} mm`;
+    v += ".";
+  }
+  if (o.leftOut) v += ` ${plural(o.leftOut, "link")} did not fit the others and ${o.leftOut === 1 ? "was" : "were"} left out.`;
+  if (o.worst > LINK_WARN_MM) v += " That is a lot: look at the scans together before merging.";
+  return v;
+}
 
 /** The engine's reason when the shape alone leaves more than one answer (`ohs.align.pairwise`). */
 export const AMBIGUOUS_REASON =
@@ -179,14 +223,32 @@ export class MockAlign {
 
   // ---------------------------------------------------------------- checks
   /** The scan, or the 404 / 409 that says what is missing (the server's `_scan`). */
-  private scan(p: Project, sid: unknown, what: "first" | "second", needRecording: boolean): MockScan {
+  private scan(p: Project, sid: unknown, what: "first" | "second" | null, needRecording: boolean): MockScan {
     const s = p.scans.find((x) => x.id === sid);
     if (!s) return this.host.fail(404, `no scan '${String(sid)}' in project '${p.id}'`, "pick a scan from the project's scan list");
-    if (s.status === "recording" || s.status === "processing") this.host.fail(409, `the ${what} scan "${s.name}" is busy`, "wait until it has finished, then try again");
-    if (s.status !== "processed" || !s.result) this.host.fail(409, `the ${what} scan "${s.name}" has no mesh yet`, "make its mesh on the project page first");
+    const the = what ? `the ${what} scan` : "the scan";
+    if (s.status === "recording" || s.status === "processing") this.host.fail(409, `${the} "${s.name}" is busy`, "wait until it has finished, then try again");
+    if (s.status !== "processed" || !s.result) this.host.fail(409, `${the} "${s.name}" has no mesh yet`, "make its mesh on the project page first");
     if (needRecording && s.merged_from?.length)
-      this.host.fail(409, `the ${what} scan "${s.name}" has no recording (a merged scan, or its recording was removed)`, "merge scans that still have their recordings");
+      this.host.fail(409, `${the} "${s.name}" has no recording (a merged scan, or its recording was removed)`, "merge scans that still have their recordings");
     return s;
+  }
+
+  /** 2..8 different scans with a mesh (the server's checks of a list): 422 for the count, 409 for one listed twice. */
+  private list(p: Project, ids: unknown, needRecording: boolean): MockScan[] {
+    if (!Array.isArray(ids) || ids.some((x) => typeof x !== "string"))
+      return this.host.fail(422, "scans: give the ids of 2 to 8 scans", "pick the scans from the project's scan list");
+    if (ids.length < 2 || ids.length > MAX_SCANS)
+      this.host.fail(422, `${ids.length} scan(s) given: 2 to ${MAX_SCANS} are aligned at once`, ids.length < 2 ? "add a second scan" : "take at most eight scans at a time");
+    const seen = new Set<string>();
+    for (const id of ids as string[]) {
+      if (seen.has(id)) {
+        const name = p.scans.find((x) => x.id === id)?.name;
+        this.host.fail(409, `the scan ${name ? `"${name}"` : `'${id}'`} is listed twice`, "list each scan once");
+      }
+      seen.add(id);
+    }
+    return (ids as string[]).map((id) => this.scan(p, id, null, needRecording));
   }
 
   private pair(p: Project, body: Record<string, unknown>, needRecording: boolean): [MockScan, MockScan] {
@@ -210,7 +272,7 @@ export class MockAlign {
       else pairsRms = r3(c.rms);
     }
     const given = pairsRms !== null;
-    const accepted = given || sameSetup;
+    const accepted = given || fitsFromShape(a, b, sameSetup);
     const t0 = Date.now();
     const wrongPose = this.wrongPose;
     const work = (function* (): Generator<WorkStep, () => Record<string, unknown>, void> {
@@ -254,17 +316,184 @@ export class MockAlign {
     return this.host.startWorkJob("align", { minSeconds: 2.5, work, extra: { project_id: p.id, target: a.id, source: b.id } });
   }
 
-  // ---------------------------------------------------------------- merge
-  /** `POST /api/projects/{pid}/merge`: a job (kind `merge`) that adds the merged scan; its result is a `MergeResult`. */
-  merge(p: Project, body: Record<string, unknown>): Job {
-    const T = body.T;
-    if (!isPose(T)) return this.host.fail(422, "the pose must be a 4x4 matrix", "send the pose the alignment returned");
-    if (!isRigid(T)) this.host.fail(422, "the pose is not a rigid motion", "send the pose the alignment returned");
-    const [a, b] = this.pair(p, body, true);
+  // ---------------------------------------------------------------- several scans
+  /** `POST /api/projects/{pid}/align_all`: a job (kind `align_all`) whose result is an `AlignAllResult`. Writes nothing. */
+  alignAll(p: Project, body: Record<string, unknown>): Job {
+    const list = this.list(p, body.scans, false);
+    const ids = list.map((s) => s.id);
+    const nameOf = (id: string) => list.find((s) => s.id === id)?.name ?? id;
     const sameSetup = body.same_setup !== false;
-    const title = (typeof body.name === "string" ? body.name.trim() : "") || `${a.name} + ${b.name}`;
-    const quality: ProcessQuality = a.quality ?? "standard";
-    const n = fusedFrames(a, quality) + fusedFrames(b, quality);
+
+    // picked points, checked as for two scans; by pair, either way round
+    const picked = new Map<string, number>(); // pair key -> how well its points agree (mm)
+    const key = (x: string, y: string) => (x < y ? `${x}\n${y}` : `${y}\n${x}`);
+    if (body.picked !== undefined && !Array.isArray(body.picked)) this.host.fail(422, "picked: give a list of {a, b, pairs}", "pick matching points on two listed scans");
+    for (const e of (body.picked as unknown[] | undefined) ?? []) {
+      const { a, b, pairs } = (e ?? {}) as { a?: unknown; b?: unknown; pairs?: unknown };
+      for (const x of [a, b])
+        if (typeof x !== "string" || !ids.includes(x)) this.host.fail(422, `picked points name a scan that is not in the list ('${String(x)}')`, "pick points only on the listed scans");
+      if (a === b) this.host.fail(422, "picked points must be between two different scans", "pick the points on two different scans");
+      const between = `"${nameOf(a as string)}" and "${nameOf(b as string)}"`;
+      const pts = Array.isArray(pairs) ? (pairs as PointPair[]) : [];
+      if (pts.length < MIN_PAIRS) this.host.fail(422, `${pts.length} pair(s) of points between ${between} are too few`, "pick at least three matching points on each scan");
+      const c = checkPairs(pts);
+      if ("error" in c) this.host.fail(422, `the points picked between ${between} do not give a pose: ${c.error}`, "pick three or more matching points that span a triangle");
+      else picked.set(key(a as string, b as string), r3(c.rms));
+    }
+
+    // every pair, by the two-scan rules
+    type Link = AlignAllPair & { rms: number | null };
+    const links: Link[] = [];
+    let k = 0;
+    for (let i = 0; i < list.length; i++)
+      for (let j = i + 1; j < list.length; j++, k++) {
+        const A = list[i],
+          B = list[j];
+        const pairsRms = picked.get(key(A.id, B.id)) ?? null;
+        const given = pairsRms !== null;
+        const accepted = given || fitsFromShape(A, B, sameSetup);
+        const overlap = accepted ? r3(Math.max(0.4, (sameSetup ? 0.76 : 0.71) - 0.03 * k)) : 0.43;
+        const rmse = accepted ? 0.25 : 0.41;
+        const candidates = given ? 1 : 9;
+        const agree = given ? 1 : accepted ? 8 : 4;
+        const verdict = accepted ? alignedVerdict(overlap, rmse, given ? "given" : "features", agree, candidates) : `Not aligned: ${AMBIGUOUS_REASON}.`;
+        links.push({
+          project_id: p.id,
+          target: A.id,
+          source: B.id,
+          a: A.id,
+          b: B.id,
+          used: "",
+          accepted,
+          verdict,
+          reason: accepted ? null : AMBIGUOUS_REASON,
+          start: given ? "given" : "features",
+          overlap,
+          rmse_mm: rmse,
+          fit_mm: accepted ? 0.21 : 0.38,
+          candidates,
+          agree,
+          spread_mm: accepted ? 0.12 : 0.31,
+          dof: 6,
+          same_setup: sameSetup,
+          used_support: sameSetup,
+          support: { target: true, source: true },
+          pairs_rms_mm: pairsRms,
+          n_matched: accepted ? 18240 : 10310,
+          ms: 0,
+          message: verdict,
+          rms: pairsRms,
+        });
+      }
+
+    const t0 = Date.now();
+    const work = (function* (): Generator<WorkStep, () => Record<string, unknown>, void> {
+      for (let i = 0; i < links.length; i++) {
+        const l = links[i];
+        yield { p: 0.03 + (0.9 * i) / links.length, message: `Aligning "${nameOf(l.a)}" and "${nameOf(l.b)}" (pair ${i + 1} of ${links.length})` };
+      }
+      yield { p: 0.95, message: "Placing the scans" };
+      return () => {
+        // the chain: from the first scan, always the accepted pair of most overlap that reaches a new scan
+        const placed = new Set<string>([ids[0]]);
+        for (;;) {
+          let best: Link | null = null;
+          for (const l of links)
+            if (l.accepted && l.used === "" && placed.has(l.a) !== placed.has(l.b) && (!best || l.overlap > best.overlap)) best = l;
+          if (!best) break;
+          best.used = "chain";
+          placed.add(best.a);
+          placed.add(best.b);
+        }
+        // the other accepted pairs between placed scans check the chain, or do not fit and are left out
+        const SPREAD = [0.27, 0.19, 0.33, 0.22, 0.3, 0.24, 0.21];
+        let loops = 0;
+        let checked = 0;
+        let leftOut = 0;
+        for (const l of links) {
+          if (!l.accepted || l.used !== "" || !placed.has(l.a) || !placed.has(l.b)) continue;
+          loops++;
+          if (l.rms !== null && l.rms > PAIRS_BAD_MM) {
+            l.used = "left out";
+            l.disagree_mm = r3(l.rms);
+            leftOut++;
+          } else {
+            l.used = "loop";
+            l.disagree_mm = r3(Math.max(SPREAD[checked % SPREAD.length], l.rms ?? 0));
+            checked++;
+          }
+        }
+        const graph = loops > 0;
+        if (graph) for (const l of links) if (l.used === "chain") l.disagree_mm = 0.14;
+        const worst = links.reduce((w, l) => (l.used === "chain" || l.used === "loop" ? Math.max(w, l.disagree_mm ?? 0) : w), 0);
+        const unplaced = ids.filter((id) => !placed.has(id));
+        const T: Record<string, number[][] | null> = {};
+        for (const id of ids) T[id] = placed.has(id) ? IDENTITY.map((r) => [...r]) : null;
+        const verdict = alignAllVerdict({ n: ids.length, chain: links.filter((l) => l.used === "chain").length, loops: checked, leftOut, worst, unplaced: unplaced.map(nameOf) });
+        const result: AlignAllResult = {
+          project_id: p.id,
+          scans: [...ids],
+          accepted: unplaced.length === 0,
+          T,
+          placed: ids.filter((id) => placed.has(id)),
+          unplaced,
+          pairs: links.map(({ rms: _rms, ...l }) => ({ ...l, used: l.used as PairUse })),
+          loops,
+          graph,
+          worst_link_mm: r3(worst),
+          support: Object.fromEntries(ids.map((id) => [id, true])),
+          same_setup: sameSetup,
+          ms: Date.now() - t0,
+          verdict,
+          message: verdict,
+        };
+        return result;
+      };
+    })();
+    return this.host.startWorkJob("align_all", { minSeconds: Math.min(10, 1.5 + 1.2 * links.length), work, extra: { project_id: p.id, scans: [...ids] } });
+  }
+
+  // ---------------------------------------------------------------- merge
+  /**
+   * `POST /api/projects/{pid}/merge`: a job (kind `merge`) that adds the merged scan; its result is a
+   * `MergeResult`. Either form: two scans (`target`, `source`, `T`) or several (`scans: [{id, T}]`).
+   */
+  merge(p: Project, body: Record<string, unknown>): Job {
+    const several = body.scans !== undefined;
+    const two = body.target !== undefined || body.source !== undefined || body.T !== undefined;
+    if (several && two) this.host.fail(422, "give either target, source and T, or scans, not both", "send one form of the merge");
+    if (!several && !two) this.host.fail(422, "nothing to merge: give target, source and T, or scans", "send the scans and the poses the alignment returned");
+    const sameSetup = body.same_setup !== false;
+    const name = typeof body.name === "string" ? body.name.trim() : "";
+    if (!several) {
+      const T = body.T;
+      if (!isPose(T)) return this.host.fail(422, "the pose must be a 4x4 matrix", "send the pose the alignment returned");
+      if (!isRigid(T)) this.host.fail(422, "the pose is not a rigid motion", "send the pose the alignment returned");
+      const [a, b] = this.pair(p, body, true);
+      return this.startMerge(p, [a, b], sameSetup, name, { target: a.id, source: b.id });
+    }
+    const entries = body.scans;
+    if (!Array.isArray(entries) || entries.some((e) => !e || typeof e !== "object" || typeof (e as { id?: unknown }).id !== "string"))
+      return this.host.fail(422, "scans: give each scan as {id, T}", "send the scans and the poses the alignment returned");
+    const list = this.list(
+      p,
+      entries.map((e) => (e as { id: string }).id),
+      true,
+    );
+    entries.forEach((e, i) => {
+      const T = (e as { T?: unknown }).T;
+      if (!isPose(T)) this.host.fail(422, `the pose of "${list[i].name}" must be a 4x4 matrix`, "send the poses the alignment returned");
+      else if (!isRigid(T)) this.host.fail(422, `the pose of "${list[i].name}" is not a rigid motion`, "send the poses the alignment returned");
+    });
+    return this.startMerge(p, list, sameSetup, name, list.length === 2 ? { target: list[0].id, source: list[1].id } : {});
+  }
+
+  /** The merge job of 2..8 checked scans (the first one's quality); `name` empty: their names joined by " + ". */
+  private startMerge(p: Project, list: MockScan[], sameSetup: boolean, name: string, meta: Record<string, unknown>): Job {
+    const title = name || list.map((s) => s.name).join(" + ");
+    const quality: ProcessQuality = list[0].quality ?? "standard";
+    const n = list.reduce((sum, s) => sum + fusedFrames(s, quality), 0);
+    const unchanged = list.length > 2 ? "The scans are unchanged." : "The two scans are unchanged.";
     const host = this.host;
     const work = (function* (): Generator<WorkStep, () => Record<string, unknown>, void> {
       if (!sameSetup) yield { p: 0.02, message: "Finding what the part lay on" };
@@ -291,25 +520,22 @@ export class MockAlign {
             laser_points_url: `${base}/laser_points.ply`,
             report: { mode: "markerless", quality, frames: { processed: n, tracked: n } },
           },
-          merged_from: [
-            { id: a.id, name: a.name },
-            { id: b.id, name: b.name },
-          ],
+          merged_from: list.map((x) => ({ id: x.id, name: x.name })),
           quality,
         };
         p.scans.push(scan);
         p.n_scans = p.scans.length;
         p.modified = host.now();
         host.log("info", `Merged scan ready: ${title}`);
-        const result: MergeResult = { project_id: p.id, scan_id: id, scan: { ...scan }, merged_from: [a.id, b.id], message: `Merged into "${title}"` };
+        const result: MergeResult = { project_id: p.id, scan_id: id, scan: { ...scan }, merged_from: list.map((x) => x.id), message: `Merged into "${title}"` };
         return result;
       };
     })();
     return host.startWorkJob("merge", {
       minSeconds: Math.min(12, 4 + n / 200),
       work,
-      onFail: (error) => host.log("error", `Merging failed: ${error}. The two scans are unchanged.`),
-      extra: { project_id: p.id, target: a.id, source: b.id },
+      onFail: (error) => host.log("error", `Merging failed: ${error}. ${unchanged}`),
+      extra: { project_id: p.id, scans: list.map((x) => x.id), ...meta },
     });
   }
 }

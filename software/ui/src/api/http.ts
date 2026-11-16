@@ -6,6 +6,7 @@
  * the same in both modes. Errors become `ApiError` carrying the API's `detail` and `hint`.
  */
 import type {
+  AlignAllRequest,
   AlignRequest,
   CalibKind,
   CalibSession,
@@ -330,9 +331,15 @@ export const api = {
    * scan; 409 the same scan twice, a scan that is busy or has no mesh yet; 422 fewer than three pairs, or
    * pairs in one line or on one spot. */
   alignScans: (pid: string, body: AlignRequest) => post<Job>(`/api/projects/${enc(pid)}/align`, body),
-  /** Job (kind `merge`, result `MergeResult`): both recordings fused again at the pose `T` into a new scan
-   * of the project. Can be cancelled (nothing is added then). 409 also for a scan without a recording (a
-   * merged scan); 422 for a `T` that is not a 4x4 rigid motion. */
+  /** Job (kind `align_all`, result `AlignAllResult`, M4 second slice): 2 to 8 scans placed in the first one's
+   * frame. Writes nothing; "not all placed" is an answer (the job ends `done`). 422 for fewer than two or
+   * more than eight scans, or picked points that name a scan not in the list, are fewer than three pairs or
+   * lie in one line; 409 for a scan listed twice, and as for two scans. */
+  alignAllScans: (pid: string, body: AlignAllRequest) => post<Job>(`/api/projects/${enc(pid)}/align_all`, body),
+  /** Job (kind `merge`, result `MergeResult`): the recordings fused again into a new scan of the project,
+   * either two scans at the pose `T` (`target`, `source`, `T`) or several, each at its own `T` (`scans`).
+   * Can be cancelled (nothing is added then). 409 also for a scan without a recording (a merged scan);
+   * 422 for a `T` that is not a 4x4 rigid motion, and for both forms or neither. */
   mergeScans: (pid: string, body: MergeRequest) => post<Job>(`/api/projects/${enc(pid)}/merge`, body),
 
   /** Built-ins first. */

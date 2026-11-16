@@ -569,7 +569,7 @@ export class MockProcess {
 
   /** 409 for a merged scan (M4): it has no recording, so nothing that goes through the frames again. */
   private needRecording(s: Scan) {
-    if (s.merged_from?.length) throw new HttpError(409, "this scan has no recording", "it was merged from two scans: change those and merge them again");
+    if (s.merged_from?.length) throw new HttpError(409, "this scan has no recording", "it was merged from other scans: change those and merge them again");
   }
 
   private setCurrent(st: Studio, m: TriMesh | null) {

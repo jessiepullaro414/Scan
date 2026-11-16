@@ -4,8 +4,9 @@
  * - `PickView`: one scan's mesh, orbitable; a click on the part (without dragging) adds a numbered
  *   marker. The point is in the mesh's own frame (OpenCV, mm), which is what the API's pairs take.
  *   Its raycast tree is built when the pointer first comes over the view, not before.
- * - `TogetherView`: both meshes in the target scan's frame, the source moved by the alignment's `T`,
- *   in two colours, so the fit can be judged by eye.
+ * - `TogetherView`: the meshes in the first scan's frame, each other one moved by its pose (for two
+ *   scans the alignment's `T`, for several each scan's `T` of `align_all`), each in its own colour, so
+ *   the fit can be judged by eye. One view (one canvas) for any number of scans.
  *
  * The geometries are the page's (useScanMeshes.ts): the views share them and dispose nothing but their
  * own materials.
@@ -14,7 +15,7 @@ import { Bvh, Html, OrbitControls } from "@react-three/drei";
 import { Canvas, useThree } from "@react-three/fiber";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { DoubleSide, MeshStandardMaterial, NeutralToneMapping, Sphere, Vector3, type BufferGeometry, type Group, type Mesh } from "three";
-import { applyPose, type Vec3 } from "../../lib/align";
+import { applyPose, SCAN_PALETTE, type Vec3 } from "../../lib/align";
 import { CameraRig } from "../../three/CameraRig";
 import { CV_TO_THREE_ROTATION, cvToThree, matrixFromRowMajor } from "../../three/coords";
 import { AxisGizmo, SceneGrid, StudioEnvironment, StudioLights } from "../../three/Studio";
@@ -22,7 +23,7 @@ import { useSurfacePick } from "../viewer/picking";
 import { BVH_SPLIT_CENTER, Model, VIEW_DIR } from "../viewer/ViewerCanvas";
 
 /** The two scans' colours, in every view and list: the one that stays, and the one that is moved. */
-export const SCAN_COLOR = { target: "#3f83f0", source: "#f08c2e" } as const;
+export const SCAN_COLOR = { target: SCAN_PALETTE[0], source: SCAN_PALETTE[1] } as const;
 
 function Stage({
   label,
@@ -176,7 +177,7 @@ function useScanMaterial(color: string): MeshStandardMaterial {
   return mat;
 }
 
-/** Its children moved by `pose` (16 numbers, row-major): the source scan in the target scan's frame. */
+/** Its children moved by `pose` (16 numbers, row-major): a scan in the first (target) scan's frame. */
 function Moved({ pose, children }: { pose: number[]; children: ReactNode }) {
   const ref = useRef<Group | null>(null);
   const invalidate = useThree((s) => s.invalidate);
@@ -194,33 +195,47 @@ function Moved({ pose, children }: { pose: number[]; children: ReactNode }) {
   );
 }
 
-function TogetherScene({ target, source, pose }: { target: BufferGeometry; source: BufferGeometry; pose: number[] }) {
-  const targetMat = useScanMaterial(SCAN_COLOR.target);
-  const sourceMat = useScanMaterial(SCAN_COLOR.source);
-  return (
-    <>
-      {/* dispose={null}: the geometries are the page's, the materials this view's own (disposed above) */}
-      <mesh geometry={target} material={targetMat} raycast={() => null} dispose={null} />
-      <Moved pose={pose}>
-        <mesh geometry={source} material={sourceMat} raycast={() => null} dispose={null} />
-      </Moved>
-    </>
-  );
+/** One scan in the first scan's frame: its mesh, moved by `pose` unless it is the first, in its own colour. */
+function ScanInFrame({ geometry, pose, color }: { geometry: BufferGeometry; pose: number[] | null; color: string }) {
+  const mat = useScanMaterial(color);
+  // dispose={null}: the geometry is the page's, the material this view's own (disposed in useScanMaterial)
+  const mesh = <mesh geometry={geometry} material={mat} raycast={() => null} dispose={null} />;
+  return pose ? <Moved pose={pose}>{mesh}</Moved> : mesh;
 }
 
-/** Both meshes in the target's frame, the source moved by `pose` (the alignment's `T`, 16 numbers row-major). */
-export function TogetherView({ target, source, pose, label, frameKey }: { target: BufferGeometry; source: BufferGeometry; pose: number[]; label: string; frameKey: string | number }) {
+/** A scan to show together with the others: `pose` (16 numbers, row-major) into the first scan's frame; null for the first one. */
+export type PlacedMesh = { id: string; geometry: BufferGeometry; pose: number[] | null; color: string };
+
+/**
+ * The scans in the first one's frame, each other one moved by its pose: two scans (the source moved by
+ * the alignment's `T`) or several (each placed scan by its `T` of `align_all`). The grid sits under the
+ * first scan (the one with no pose).
+ */
+export function TogetherView({ items, label, frameKey }: { items: PlacedMesh[]; label: string; frameKey: string | number }) {
   const b = useMemo(() => {
-    const a = boundsOf(target);
-    if (!source.boundingSphere) source.computeBoundingSphere();
-    const s = source.boundingSphere!;
-    const c = applyPose(pose, [s.center.x, s.center.y, s.center.z]);
-    const moved = new Sphere(cvToThree(new Vector3(c[0], c[1], c[2])), s.radius);
-    return { sphere: a.sphere.clone().union(moved), gridY: a.gridY };
-  }, [target, source, pose]);
+    let sphere: Sphere | null = null;
+    let gridY = 0;
+    for (const it of items) {
+      const g = it.geometry;
+      if (!g.boundingSphere) g.computeBoundingSphere();
+      if (!it.pose) {
+        const a = boundsOf(g);
+        gridY = a.gridY;
+        sphere = sphere ? sphere.union(a.sphere) : a.sphere.clone();
+        continue;
+      }
+      const s = g.boundingSphere!;
+      const c = applyPose(it.pose, [s.center.x, s.center.y, s.center.z]);
+      const moved = new Sphere(cvToThree(new Vector3(c[0], c[1], c[2])), s.radius);
+      sphere = sphere ? sphere.union(moved) : moved;
+    }
+    return { sphere: sphere ?? new Sphere(new Vector3(), 100), gridY };
+  }, [items]);
   return (
     <Stage label={label} bounds={b.sphere} gridY={b.gridY} frameKey={frameKey}>
-      <TogetherScene target={target} source={source} pose={pose} />
+      {items.map((it) => (
+        <ScanInFrame key={it.id} geometry={it.geometry} pose={it.pose} color={it.color} />
+      ))}
     </Stage>
   );
 }

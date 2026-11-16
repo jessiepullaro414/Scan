@@ -68,7 +68,7 @@ function PageFor({ route }: { route: Route }) {
     case "align":
       return (
         <Suspense fallback={<Loading3D />}>
-          <AlignPage key={route.pid} pid={route.pid} target={route.target} source={route.source} />
+          <AlignPage key={route.pid} pid={route.pid} target={route.target} source={route.source} more={route.more} />
         </Suspense>
       );
     case "scan":

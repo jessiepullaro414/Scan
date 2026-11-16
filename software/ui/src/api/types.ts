@@ -799,7 +799,8 @@ export type AlignResult = {
   message: string; // = verdict
 };
 
-export type MergeRequest = {
+/** The first form of a merge: two scans, the second at the pose of an `AlignResult`. */
+export type MergeTwoRequest = {
   target: string;
   source: string;
   T: number[][]; // the pose to merge at (an AlignResult's T)
@@ -807,5 +808,64 @@ export type MergeRequest = {
   name?: string; // default "<target name> + <source name>"
 };
 
-/** The `result` of a finished job of kind "merge". */
-export type MergeResult = { project_id: string; scan_id: string; scan: Scan; merged_from: [string, string]; message: string };
+/** The second form of a merge (M4 second slice): 2..8 scans, each at its `T` from an `AlignAllResult`. */
+export type MergeScansRequest = {
+  scans: { id: string; T: number[][] }[];
+  same_setup?: boolean;
+  name?: string; // default: the scans' names joined by " + "
+};
+
+/** A merge: one form or the other, never both. */
+export type MergeRequest = MergeTwoRequest | MergeScansRequest;
+
+/** The `result` of a finished job of kind "merge". `merged_from`: the scans' ids, in order. */
+export type MergeResult = { project_id: string; scan_id: string; scan: Scan; merged_from: string[]; message: string };
+
+// ------------------------------------------------------------------ M4 second slice: several scans at once
+// APP_API.md "M4 second slice: several scans at once". The first scan stays where it is; each other one is
+// placed in its frame through the chain of best links that reaches it, or is not placed.
+
+/** Picked points between two scans: `target` points on scan `a`, `source` points on scan `b`. */
+export type PickedPoints = { a: string; b: string; pairs: PointPair[] };
+
+export type AlignAllRequest = {
+  scans: string[]; // 2..8 scan ids; the first stays where it is
+  same_setup?: boolean; // default true, as for two scans
+  picked?: PickedPoints[]; // optional rough starts for some pairs
+};
+
+/** How the placement used one pair: in the chain, as a check of it (a loop), left out (does not fit), or not ("": not accepted). */
+export type PairUse = "chain" | "loop" | "left out" | "";
+
+/** One pair of an `AlignAllResult`: as an `AlignResult` without `T` (b was aligned onto a), plus how it was used. */
+export type AlignAllPair = Partial<Omit<AlignResult, "T">> & {
+  a: string;
+  b: string;
+  used: PairUse;
+  disagree_mm?: number; // after placing: how far this link disagrees with the poses (RMS over the part)
+  accepted: boolean;
+  verdict: string;
+  overlap: number;
+  rmse_mm: number | null;
+  start: "features" | "given";
+  agree: number;
+};
+
+/** The `result` of a finished job of kind "align_all". */
+export type AlignAllResult = {
+  project_id: string;
+  scans: string[];
+  accepted: boolean; // every scan placed
+  T: Record<string, number[][] | null>; // per scan: 4x4 into the first scan's frame; null = not placed
+  placed: string[];
+  unplaced: string[];
+  pairs: AlignAllPair[];
+  loops: number; // accepted links beyond the chain
+  graph: boolean; // the loops were solved together
+  worst_link_mm: number;
+  support: Record<string, boolean>;
+  same_setup: boolean;
+  ms: number;
+  verdict: string;
+  message: string; // = verdict
+};
