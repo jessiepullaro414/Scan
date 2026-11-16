@@ -177,6 +177,7 @@ class AlignBody(BaseModel):
     source: str
     same_setup: bool = True
     pairs: Optional[List[PointPairBody]] = None
+    use_tags: bool = True
 
 
 class MergeScanBody(BaseModel):
@@ -203,6 +204,7 @@ class AlignAllBody(BaseModel):
     scans: List[str]
     same_setup: bool = True
     picked: Optional[List[PickedBody]] = None
+    use_tags: bool = True
 
 
 class RecipeOpBody(BaseModel):
@@ -558,13 +560,13 @@ def create_app(config: Any = None, *, projects_dir: Any = None, static_dir: Any 
     @app.post("/api/projects/{pid}/align")
     def align_scans(pid: str, body: AlignBody) -> JSONResponse:
         pairs = None if body.pairs is None else [{"source": p.source, "target": p.target} for p in body.pairs]
-        return _json(st.aligning.align(pid, body.target, body.source, body.same_setup, pairs).to_dict())
+        return _json(st.aligning.align(pid, body.target, body.source, body.same_setup, pairs, body.use_tags).to_dict())
 
     @app.post("/api/projects/{pid}/align_all")
     def align_all_scans(pid: str, body: AlignAllBody) -> JSONResponse:
         picked = None if body.picked is None else [
             {"a": e.a, "b": e.b, "pairs": [{"source": q.source, "target": q.target} for q in e.pairs]} for e in body.picked]
-        return _json(st.aligning.align_all(pid, body.scans, body.same_setup, picked).to_dict())
+        return _json(st.aligning.align_all(pid, body.scans, body.same_setup, picked, body.use_tags).to_dict())
 
     @app.post("/api/projects/{pid}/merge")
     def merge_scans(pid: str, body: MergeBody) -> JSONResponse:

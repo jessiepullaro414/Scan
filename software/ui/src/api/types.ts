@@ -771,6 +771,16 @@ export type AlignRequest = {
   source: string; // scan id: is moved onto the target
   same_setup?: boolean; // default true: the part was not moved on its table between the two scans. false: it was turned over or moved
   pairs?: PointPair[]; // optional: 3 or more matching points picked on the two meshes, as a rough start
+  use_tags?: boolean; // default true: without pairs, start from the AprilTags both scans saw
+};
+
+/** What the tags two scans share did for their alignment (APP_API.md, "TagStart"). */
+export type TagStart = {
+  shared: number[]; // tag ids both scans saw
+  used: number[]; // those the start was made from
+  left_out: number[]; // shared tags that did not fit the others
+  rms_mm: number | null; // how well the used tags' corners agree
+  start: string; // "accepted", or why the tags gave no accepted start (the shape's own guesses were then used)
 };
 
 /** The `result` of a finished job of kind "align". */
@@ -782,7 +792,8 @@ export type AlignResult = {
   verdict: string; // one sentence for the user
   reason: string | null;
   T: number[][]; // 4x4, row-major rows: takes points of the source's mesh into the target's frame
-  start: "features" | "given"; // from the shape alone, or from the picked pairs
+  start: "features" | "given" | "tags"; // from the shape alone, from the picked pairs, or from the tags
+  tags?: TagStart | null; // null: no shared tags, or tags not looked for
   overlap: number; // 0..1: share of the smaller scan's part within 1 mm of the other scan
   rmse_mm: number | null; // RMS along the normals of what matches
   fit_mm: number | null; // robust spread of the residuals within 3 mm
@@ -832,6 +843,7 @@ export type AlignAllRequest = {
   scans: string[]; // 2..8 scan ids; the first stays where it is
   same_setup?: boolean; // default true, as for two scans
   picked?: PickedPoints[]; // optional rough starts for some pairs
+  use_tags?: boolean; // default true: pairs without picked points start from the tags they share
 };
 
 /** How the placement used one pair: in the chain, as a check of it (a loop), left out (does not fit), or not ("": not accepted). */
@@ -847,8 +859,9 @@ export type AlignAllPair = Partial<Omit<AlignResult, "T">> & {
   verdict: string;
   overlap: number;
   rmse_mm: number | null;
-  start: "features" | "given";
+  start: "features" | "given" | "tags";
   agree: number;
+  tags?: TagStart; // present when the two scans share tags
 };
 
 /** The `result` of a finished job of kind "align_all". */

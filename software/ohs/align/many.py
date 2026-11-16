@@ -11,7 +11,8 @@ uses), and a link that does not fit the others is left out.
 The result gives each scan's pose in the reference scan's world (``None`` for a scan that no
 accepted link reaches), every pair's outcome, and a sentence for the user.
 
-Points picked on two scans (``picked``) give that pair a rough start, as for one pair.
+Points picked on two scans (``picked``) give that pair a rough start, as for one pair; so do the
+tags two scans both saw (``tags``, :mod:`ohs.align.tags`), where no points were picked.
 """
 from __future__ import annotations
 
@@ -23,6 +24,7 @@ from typing import Any, Callable, Sequence
 import numpy as np
 
 from ohs.align.pairwise import AlignParams, ScanCloud, _apart_mm, align_pair, pose_from_point_pairs
+from ohs.align.tags import TagMap, align_with_tags
 from ohs.geometry import invert_se3
 
 __all__ = ["ManyAlignment", "align_many"]
@@ -123,16 +125,22 @@ def _information(src: ScanCloud, dst: ScanCloud, Tij: np.ndarray, dist: float) -
 
 def align_many(clouds: Sequence[ScanCloud], params: AlignParams | None = None, *, same_setup: bool = True,
                picked: dict[tuple[int, int], tuple[Any, Any]] | None = None,
+               tags: Sequence[TagMap | None] | None = None,
                progress: Callable[[float, str], None] | None = None) -> ManyAlignment:
     """Place all ``clouds`` in the world of ``clouds[0]`` (module docstring). ``picked[(i, j)]``:
     points picked on scan ``j`` and the matching points on scan ``i`` (``(points_j, points_i)``),
-    a rough start for that pair. ``ValueError`` for fewer than two scans or picked points that do
-    not give a pose."""
+    a rough start for that pair. ``tags[k]``: the tags scan ``k`` saw (:func:`ohs.align.tags.tag_map`;
+    ``None``: none known): a pair without picked points that shares tags starts from them, and
+    if that start does not lead to an accepted alignment, from the shape's guesses as without
+    tags (the pair's ``tags`` entry says what happened). ``ValueError`` for fewer than two scans,
+    picked points that do not give a pose, or a ``tags`` list of another length."""
     p = params if params is not None else AlignParams()
     t0 = time.perf_counter()
     n = len(clouds)
     if n < 2:
         raise ValueError("at least two scans are needed")
+    if tags is not None and len(tags) != n:
+        raise ValueError(f"tags: {len(tags)} maps for {n} scans")
     say = progress or (lambda f, m: None)
     starts: dict[tuple[int, int], np.ndarray] = {}
     for (i, j), (pj, pi) in (picked or {}).items():
@@ -146,8 +154,14 @@ def align_many(clouds: Sequence[ScanCloud], params: AlignParams | None = None, *
     rows: dict[tuple[int, int], dict] = {}
     for k, (i, j) in enumerate(pair_list):
         say(0.85 * k / len(pair_list), f"Aligning scan {j + 1} to scan {i + 1}")
-        res = align_pair(clouds[j], clouds[i], p, init=starts.get((i, j)), same_setup=same_setup)
+        tag_row = None
+        if (i, j) not in starts and tags is not None:
+            res, tag_row = align_with_tags(clouds[j], clouds[i], tags[j], tags[i], p, same_setup=same_setup)
+        else:
+            res = align_pair(clouds[j], clouds[i], p, init=starts.get((i, j)), same_setup=same_setup)
         row = {"i": i, "j": j, **{key: v for key, v in res.as_dict().items() if key != "T"}, "used": ""}
+        if tag_row is not None:
+            row["tags"] = tag_row
         rows[(i, j)] = row
         if res.accepted:
             links[(i, j)] = res.T

@@ -44,6 +44,7 @@ import {
   poseOf,
   removeAt,
   removePair,
+  tagsNote,
   sameList,
   SCAN_PALETTE,
   scanColor,
@@ -196,6 +197,12 @@ check(f[1].value === "–", "no RMS: a dash");
 check(f[3].warn === true, "points that disagree by more than 5 mm are marked");
 check(/^Not used/.test(f[4].value), "same setup, but the tables did not line up");
 check(!pairsDisagree({ pairs_rms_mm: null }) && !pairsDisagree({ pairs_rms_mm: 5 }) && pairsDisagree({ pairs_rms_mm: 5.1 }), "the warning starts above 5 mm");
+
+const tags = { shared: [2, 3, 4, 5], used: [2, 4, 5], left_out: [3], rms_mm: 0.41, start: "accepted" };
+f = alignFigures({ ...accepted, start: "tags", candidates: 1, agree: 1, tags });
+check(f[2].label === "Start" && f[2].value === "From the tags", "from the tags: no starting guesses to count");
+check(f[2].note === "tags 2, 4 and 5 seen by both scans; tag 3 left out (moved?)", "which tags, and which were left out");
+check(tagsNote({ ...tags, used: [5], left_out: [] }) === "tag 5 seen by both scans" && tagsNote(null) === undefined, "one tag; none");
 
 // ------------------------------------------------------------------ several scans: the list
 check(mergeNameOf(["A", "B", "C"]) === "A + B + C" && defaultMergeName("A", "B") === mergeNameOf(["A", "B"]), "the default name of several: joined by “ + ”");

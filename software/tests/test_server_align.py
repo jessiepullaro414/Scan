@@ -92,6 +92,39 @@ def test_align_from_picked_points(env):
     err(post(env["base"] + "/align", {"target": env["a"], "source": env["b"], "pairs": line}), 422, "do not give a pose")
 
 
+def test_align_from_the_tags_both_scans_saw(env, tmp_path):
+    """Two scans of the sphere on its tagged table, 150 degrees apart: from the shape alone they
+    cannot be aligned (a sphere turns into itself); the server finds the tags in both recordings
+    and aligns from them, for a pair and for several scans; ``use_tags: false`` turns that off."""
+    from test_align_tags import _scan as sphere_scan
+
+    a, b = sphere_scan(tmp_path, 0.0, 0), sphere_scan(tmp_path, 150.0, 1)
+    st = env["studio"]
+    pid = requests.post(env["url"] + "/api/projects", json={"name": "Sphere"}, timeout=TIMEOUT).json()["id"]
+    ids = []
+    for name, sc in (("Front", a), ("Back", b)):
+        scan, rec_dir = st.projects.add_scan(pid, name, "markerless")
+        shutil.copytree(sc["rec"], rec_dir)
+        shutil.copytree(sc["out"], st.projects.scan_dir(pid, scan["id"]) / "result")
+        n = len(RecordingReader(rec_dir))
+        st.projects.update_scan(pid, scan["id"], status="processed", n_frames=n, duration_s=n / 30.0, quality="standard")
+        ids.append(scan["id"])
+    base = f"{env['url']}/api/projects/{pid}"
+    T_true = G.invert_se3(a["world"]) @ b["world"]
+    res = run_job(env, post(base + "/align", {"target": ids[0], "source": ids[1]}), "align")["result"]
+    assert res["accepted"] and res["start"] == "tags" and "from the tags both scans saw" in res["verdict"], res["verdict"]
+    assert len(res["tags"]["used"]) >= 2 and res["tags"]["start"] == "accepted"
+    deg, mm = G.pose_error(T_true, np.asarray(res["T"]))
+    print(f"from the tags {res['tags']}: {mm:.2f} mm, {deg:.3f} deg off")
+    assert mm < 2.0 and deg < 0.3
+    res = run_job(env, post(base + "/align", {"target": ids[0], "source": ids[1], "use_tags": False}), "align")["result"]
+    assert res["tags"] is None and res["start"] == "features" and not res["accepted"]  # a sphere fits itself turned
+    res = run_job(env, post(base + "/align_all", {"scans": ids}), "align_all")["result"]
+    assert res["accepted"] and res["pairs"][0]["start"] == "tags" and len(res["tags"][ids[0]]) >= 3, res["verdict"]
+    deg, mm = G.pose_error(T_true, np.asarray(res["T"][ids[1]]))
+    assert mm < 2.0 and deg < 0.3
+
+
 def test_align_and_merge_say_what_is_missing(env):
     err(post(env["base"] + "/align", {"target": env["a"], "source": env["a"]}), 409, "to itself")
     err(post(env["base"] + "/align", {"target": env["a"], "source": env["bare"]}), 409, "has no mesh yet")

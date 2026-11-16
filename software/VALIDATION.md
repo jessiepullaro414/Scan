@@ -1753,6 +1753,18 @@ Even the upper bound is no better than the averaging, so the answer is no, and i
 
 The figures are of the same kind as the two scans of one calibration (each scan's part where the merged one has it; a finer grid than scan A's own, so its points lie a little further from the merged surface). Merges of scans of one calibration are unchanged (same code path, same grid). One scale (`pipeline.scale`) applies to every scan.
 
+**Tags as a start** (`ohs.align.tags`, 2026-11-16): the AprilTags a scan saw are found in its recording at the poses of its mesh (each view triangulated, snapped to the printed square, the median of the views kept), and the corners of the tags two scans share give the start, which the alignment refines from the shape. On two scans of the simulated sphere on its tagged table, 150° apart (640x400, 60 frames each, true poses):
+
+| | GPU path | CPU path |
+|---|---|---|
+| Tags found (worst corner off the truth) | 5 and 4 tags, 0.74 mm | 5 and 4 tags, 0.74 mm |
+| Start from the three shared tags (corners' RMS; the tags' corners then land) | 0.41 mm; 0.35 mm off | 0.44 mm; 0.32 mm off |
+| From the shape alone | refused: fits in more than one position | refused |
+| From the tags, refined (the tags' corners land) | accepted, 0.26 mm off | accepted, 1.02 mm off |
+| Through the server (pose error) | 0.33 mm, 0.04° | 0.87 mm, 0.04° |
+
+Two things were needed besides the tags. A start from tags is kept along the directions the shape pins only weakly (`AlignParams.start_weak_rel`, 3 % of the strongest): free, the refinement spun the sphere 139 mm (at the tags) away from a 0.35 mm start, to where the two partial views overlap most; with Straighten's 0.3 % the step on the shared table still drifted 13 mm, at 3 % it stayed and fitted better (33 % against 31 % overlap). Points picked by hand are not kept that way: they are a few millimetres off, and a rough start held along a weak direction stayed 1.9 mm off on the made-up part. And the tags must be looked for in enough frames: tags at the edge of the view are in 2–3 frames of 60, so 24 frames found one shared tag and 120 (every frame here, 1.3 s a scan) three. Not tried: real tags, tags on the part itself with the part moved, a marker-mode scan's own map (read, not measured).
+
 **Limits:** a part's own flat face that is 30 % or more of a scan made without a table is taken for the support; no Poisson meshing in a merge; simulator only.
 
 **Tests** (`tests/test_align.py`, 10 tests, both compute paths; `tests/test_app_pipeline.py` for the clip plane): a known motion of 100° found again to under 0.1 mm on a made-up part, with and without the table; a part turned over (each scan its own table); a rough pose given; a symmetric part, a bare table, two unrelated shapes and a single unconfirmed guess refused in words; a detail scan inside a larger one; the two simulated bracket scans aligned and merged, the merged part larger than either scan and in the place of both; Poisson refused (and, since 2026-11-16, scans of different calibrations merged instead of refused; `tests/test_track_recon_tsdf.py` for the models' change of camera). An independent review of the first version found eleven defects; the ones that could accept a wrong pose are fixed (the fit check could not fail, one guess alone was accepted, a pose 2–10 mm away never counted as a rival). On the laptop's NVIDIA GPU the tests pass with the same figures to the last digit shown (three runs). Full suites with the slice in (847 tests, commit 493d127): GPU path 841 passed, 6 skipped; CPU path 791 passed, 56 skipped.

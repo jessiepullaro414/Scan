@@ -1052,6 +1052,15 @@ type AlignRequest = {
   same_setup?: boolean;      // default true: the part was not moved on its table between the two scans.
                              // false: it was turned over or moved (each scan then has its own table)
   pairs?: PointPair[];       // optional: 3 or more matching points picked on the two meshes, as a rough start
+  use_tags?: boolean;        // default true: without pairs, start from the AprilTags both scans saw (see Rules)
+};
+
+type TagStart = {            // what the tags did (null: the two scans share no tag, or tags were not looked for)
+  shared: number[];          // tag ids both scans saw
+  used: number[];            // those the start was made from
+  left_out: number[];        // shared tags that did not fit the others (moved between the scans)
+  rms_mm: number | null;     // how well the used tags' corners agree
+  start: string;             // "accepted", or why the tags gave no accepted start (then the shape's own guesses were used)
 };
 
 // the `result` of a finished job of kind "align"
@@ -1061,7 +1070,8 @@ type AlignResult = {
   verdict: string;           // one sentence for the user ("Aligned: 76 % of ... agree." / "Not aligned: ... .")
   reason: string | null;
   T: number[][];             // 4x4, row-major rows: takes points of the source's mesh into the target's frame
-  start: "features" | "given";   // from the shape alone, or from the picked pairs
+  start: "features" | "given" | "tags";   // from the shape alone, from the picked pairs, or from the tags
+  tags: TagStart | null;
   overlap: number;           // 0..1: share of the smaller scan's part within 1 mm of the other scan
   rmse_mm: number | null;    // RMS along the normals of what matches
   fit_mm: number | null;     // robust spread of the residuals within 3 mm
@@ -1101,6 +1111,7 @@ type MergeResult = { project_id: string; scan_id: string; scan: Scan; merged_fro
 - **Align writes nothing.** It reads the two meshes (`result/mesh.ply`) and answers in a few seconds. A pose that is not accepted is still returned in `T`, for showing; do not merge at it without the user's say.
 - **Not accepted is an answer, not an error:** the job ends `done` with `accepted: false` and a verdict such as "Not aligned: the part fits in more than one position about equally well (...): give a rough start by picking matching points, or scan with more of the part's distinct features in both." The app then offers picking points.
 - **Picked points:** each pair is one spot on the part, clicked on both meshes. Three pairs that span a triangle are enough; a millimetre or two of clicking error is fine, the alignment refines it. With pairs the result's `start` is `"given"` and no second guess has to confirm it, so check `pairs_rms_mm` (above about 5 mm two pairs probably do not match).
+- **Tags** (since 2026-11-16; `ohs.align.tags`): without picked points, the job looks for AprilTags (`[markers]` dictionary and `tag_mm`) in both scans: a marker-mode scan's own map (`result/marker_map.json`), or in its recording at the poses of its mesh (up to 120 frames, about 1 s per 60 frames at 640x400). When the two share tags that agree, the alignment starts from them (`start: "tags"`, verdict "... from the tags both scans saw.") and keeps that start along the directions the shape pins only weakly: a sphere, a cylinder or a plate is then turned as the tags say. If that start is not accepted, the shape's own guesses are tried as without tags (`tags.start` says why). Tags on the table help only when the part was not moved on it (same setup); for a part that was moved, only tags on the part. A merged scan has no recording, so no tags of its own.
 - **Same setup or not:** with `same_setup: true` the table both scans share pins height and tilt. If the two tables turn out more than 5° or 5 mm apart after the part's fit, they are not used (`used_support: false`). With `false` only the part counts, and a merge leaves both tables out: frame by frame, everything on or behind the scan's table and up to 2 mm in front of it, so the part's bottom edge goes too.
 - **Merge** fuses the raw frames of both recordings again at the given pose, with the target scan's quality, and takes about as long as processing both scans. The job reports "Merging: frame k of n" and can be cancelled; nothing is added to the project then. On success a new scan appears (`status: "processed"`, `mode: "markerless"`, `n_frames` = frames fused, `merged_from`), with `mesh.ply`, `mesh.stl`, `laser_points.ply` and `report.json` in its result, and a notification "Merged scan ready: <name>". The two scans are unchanged.
 - **Scans of different calibrations merge too** (since 2026-11-16: a session after a recalibration, another camera mode or another scanner): each scan's frames are processed with its own recording's calibration and fused into one model, whose grid is the finest of the scans' own unless `[process] voxel_mm` sets it. The merged scan's `report.json` says which calibration each scan had (`scans[i].calibration`, `calibrations`).
@@ -1121,6 +1132,7 @@ type AlignAllRequest = {
   scans: string[];           // 2..8 scan ids; the first stays where it is
   same_setup?: boolean;      // default true, as for two scans
   picked?: PickedPoints[];   // optional rough starts for some pairs
+  use_tags?: boolean;        // default true: pairs without picked points start from the tags they share
 };
 
 // the `result` of a finished job of kind "align_all"
@@ -1133,8 +1145,10 @@ type AlignAllResult = {
     a: string; b: string;                 // b was aligned onto a
     used: "chain" | "loop" | "left out" | "";   // how the placement used it ("" = not accepted)
     disagree_mm?: number;                 // after placing: how far this link disagrees with the poses (RMS over the part)
-    accepted: boolean; verdict: string; overlap: number; rmse_mm: number | null; start: "features" | "given"; agree: number;
+    accepted: boolean; verdict: string; overlap: number; rmse_mm: number | null; start: "features" | "given" | "tags"; agree: number;
+    tags?: TagStart;                      // present when the two scans share tags
   }[];
+  tags: Record<string, number[]>;         // per scan: the tag ids found in it ([] none, or tags not looked for)
   loops: number;             // accepted links beyond the chain
   graph: boolean;            // the loops were solved together
   worst_link_mm: number;

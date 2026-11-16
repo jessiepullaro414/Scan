@@ -16,6 +16,11 @@ the rigid motion ``T`` that takes points of the *source* scan into the *target* 
 3. **Refinement.** From every guess, point-to-plane ICP of the part clouds, coarse to fine, free
    in all six directions (:func:`ohs.track.posegraph._icp` with a tiny ``weak_rel``: Straighten
    keeps a tracked guess along weak directions; here the guess is not to be trusted anywhere).
+   Points picked by hand are a rough start and treated the same way. A start from tags
+   (``init_from="tags"``, a few tenths of a millimetre off) is different: it is kept along the
+   directions the surfaces pin weakly (``start_weak_rel``), so a sphere or a cylinder stays turned as
+   the tags say instead of spinning to wherever two partial views overlap most. (From picked
+   points such a part still turns freely: tags are the way to align it.)
 4. **The pick.** A refined guess is scored by the share of part points that find the other scan
    within ``match_mm`` with an agreeing normal (the smaller of the two directions). The best one
    wins. It is accepted only if at least one other guess ended at the same pose (``agree``,
@@ -94,6 +99,10 @@ class AlignParams:
     rival_share: float = 0.9  # another answer with this share of the best score makes the pair ambiguous
     min_part_points: int = 300
     weak_rel: float = 3e-3  # a direction with less than this share of the strongest constraint is not pinned
+    # a start from tags is kept along directions with less than this share
+    # (a sphere's turn about the vertical changes how much of two partial views overlap: at 3e-3 the
+    # fit drifted 13 mm from a 0.3 mm start on the simulated sphere, at 0.03 it stayed and fitted better)
+    start_weak_rel: float = 0.03
 
     def __post_init__(self) -> None:
         for name in ("voxel_mm", "coarse_voxel_mm", "support_dist_mm", "match_mm", "agree_mm", "max_fit_mm"):
@@ -127,7 +136,7 @@ class PairAlignment:
     T: np.ndarray  # source scan's world into the target scan's world
     accepted: bool = False
     reason: str | None = None  # why not, in plain words
-    start: str = "features"  # or "given"
+    start: str = "features"  # or "given" (picked points), "tags"
     overlap: float = 0.0  # share of the smaller scan's part points with a counterpart within match_mm
     rmse_mm: float = float("nan")  # of the matches within match_mm, along the normals
     fit_mm: float = float("nan")  # robust spread (1.4826 median) of the residuals of the matches within 3 match_mm
@@ -311,9 +320,13 @@ def _onto_support(T: np.ndarray, src_plane: tuple[np.ndarray, float], dst_plane:
     return C @ T, float(np.degrees(angle)), float(shift)
 
 
-def _in_plane_icp(src: Any, dst: Any, T: np.ndarray, normal_src: np.ndarray, levels: tuple, robust_min_mm: float) -> np.ndarray:
+def _in_plane_icp(src: Any, dst: Any, T: np.ndarray, normal_src: np.ndarray, levels: tuple, robust_min_mm: float,
+                  weak_rel: float | None = None) -> np.ndarray:
     """Point-to-plane ICP of ``src`` onto ``dst`` from ``T`` that only slides on the support plane
-    and turns about its normal (``normal_src``: the plane's normal in the source's world)."""
+    and turns about its normal (``normal_src``: the plane's normal in the source's world). With
+    ``weak_rel`` it moves only along the directions the surfaces pin (at least that share of the
+    strongest, the turn scaled to mm at the part's size), as :func:`ohs.track.posegraph._icp`
+    does: a start that was given is kept along the others (a sphere's turn about the normal)."""
     n = np.asarray(normal_src, dtype=np.float64)
     n = n / np.linalg.norm(n)
     u = np.cross(n, [1.0, 0.0, 0.0] if abs(n[0]) < 0.9 else [0.0, 1.0, 0.0])
@@ -324,6 +337,7 @@ def _in_plane_icp(src: Any, dst: Any, T: np.ndarray, normal_src: np.ndarray, lev
     step = max(1, -(-len(src.fine.pts) // pg._ICP_POINTS))
     P, N = src.fine.pts[::step], src.fine.nrm[::step]
     c = P.mean(axis=0)
+    size = float(np.median(np.linalg.norm(P - c, axis=1))) or 1.0
     T = T.copy()
     for dist, n_it in levels:
         for _ in range(int(n_it)):
@@ -335,10 +349,19 @@ def _in_plane_icp(src: Any, dst: Any, T: np.ndarray, normal_src: np.ndarray, lev
             Bc = B.copy()
             Bc[3:, 0] = -np.cross(n, c)
             A = Bc.T @ H @ Bc
-            try:
-                a = -np.linalg.solve(A + 1e-9 * np.trace(A) * np.eye(3), Bc.T @ g)
-            except np.linalg.LinAlgError:
-                return T
+            if weak_rel is None:
+                try:
+                    a = -np.linalg.solve(A + 1e-9 * np.trace(A) * np.eye(3), Bc.T @ g)
+                except np.linalg.LinAlgError:
+                    return T
+            else:
+                S = np.array([1.0 / size, 1.0, 1.0])  # the turn in mm at the part's size
+                lam, U = np.linalg.eigh(A * S[:, None] * S[None, :])
+                keep = lam > max(float(weak_rel) * float(lam[-1]), 1e-30)
+                U, lam = U[:, keep], lam[keep]
+                a = -S * (U @ ((U.T @ (S * (Bc.T @ g))) / lam))
+                if not np.all(np.isfinite(a)):
+                    return T
             xi = Bc @ a
             T = T @ pg._exp6(xi)
             if np.linalg.norm(xi[:3]) < 1e-6 and np.linalg.norm(xi[3:]) < 1e-4:
@@ -348,14 +371,18 @@ def _in_plane_icp(src: Any, dst: Any, T: np.ndarray, normal_src: np.ndarray, lev
 
 # --------------------------------------------------------------------------- the pair
 def align_pair(src: ScanCloud, dst: ScanCloud, params: AlignParams | None = None, *, init: np.ndarray | None = None,
-               same_setup: bool = False) -> PairAlignment:
+               same_setup: bool = False, init_from: str = "given") -> PairAlignment:
     """Align the scan ``src`` to the scan ``dst`` (module docstring). ``init``: a known rough pose
     of the source in the target's world (from tags or picked points); without it the first guesses
-    come from the shape. ``same_setup``: the part was not moved on its support between the scans."""
+    come from the shape. ``same_setup``: the part was not moved on its support between the scans.
+    ``init_from``: where ``init`` came from, for the result's ``start`` and its sentence
+    (``"given"``: points picked by the user; ``"tags"``: :func:`ohs.align.tags.pose_from_tags`)."""
     p = params if params is not None else AlignParams()
     t0 = time.perf_counter()
+    if init_from not in ("given", "tags"):
+        raise ValueError(f"init_from must be 'given' or 'tags', got {init_from!r}")
     out = PairAlignment(T=np.eye(4) if init is None else np.asarray(init, dtype=np.float64).reshape(4, 4).copy(),
-                        start="features" if init is None else "given", same_setup=bool(same_setup))
+                        start="features" if init is None else init_from, same_setup=bool(same_setup))
 
     def done(reason: str | None = None) -> PairAlignment:
         out.reason = reason
@@ -363,7 +390,7 @@ def align_pair(src: ScanCloud, dst: ScanCloud, params: AlignParams | None = None
         out.ms = round(1e3 * (time.perf_counter() - t0), 1)
         if reason is None:
             sure = (f"{out.agree} of {out.candidates} starting guesses agree" if out.start == "features"
-                    else "from the start you gave")
+                    else "from the tags both scans saw" if out.start == "tags" else "from the start you gave")
             loose = "" if out.dof >= 6 else f" The overlap leaves {6 - out.dof} direction(s) of motion loose."
             out.verdict = (f"Aligned: {100 * out.overlap:.0f} % of the smaller scan's part lies within {p.match_mm:g} mm "
                            f"of the other scan, {out.rmse_mm:.2f} mm RMS; {sure}.{loose}")
@@ -392,10 +419,14 @@ def align_pair(src: ScanCloud, dst: ScanCloud, params: AlignParams | None = None
                 starts.append(Tg)
     if not starts:
         return done("no starting guess could be made from the shapes")
-    free = 1e-9  # ICP free in every direction: nothing of a feature guess is worth keeping
+    # from the shape's guesses ICP is free in every direction: nothing of a feature guess is worth
+    # keeping, nor of points picked by hand (a few millimetres and degrees off); a start from the
+    # tags is better than the shape along the directions the surfaces pin weakly, and kept there
+    keep = init is not None and init_from == "tags"
+    rel = float(p.start_weak_rel) if keep else 1e-9
     refined = []
     for T0 in starts:
-        T = pg._icp(a, b, T0, p.icp_part, free, p.robust_min_mm)
+        T = pg._icp(a, b, T0, p.icp_part, rel, p.robust_min_mm)
         if np.all(np.isfinite(T)):
             refined.append((T, _score(a, b, T, p.match_mm)))
     if not refined:
@@ -414,7 +445,8 @@ def align_pair(src: ScanCloud, dst: ScanCloud, params: AlignParams | None = None
         pivot = a.fine.pts.mean(axis=0) @ T[:3, :3].T + T[:3, 3]
         T2, turn, shift = _onto_support(T, src.support, dst.support, pivot)
         if turn <= p.support_max_deg and abs(shift) <= p.support_max_mm:
-            T2 = _in_plane_icp(a, b, T2, src.support[0], p.in_plane, p.robust_min_mm)
+            T2 = _in_plane_icp(a, b, T2, src.support[0], p.in_plane, p.robust_min_mm,
+                               weak_rel=float(p.start_weak_rel) if keep else None)
             s2 = _score(a, b, T2, p.match_mm)
             if np.all(np.isfinite(T2)) and s2[0] >= 0.9 * best[0]:  # the part still fits: keep what the support added
                 out.T, out.used_support = T2, True

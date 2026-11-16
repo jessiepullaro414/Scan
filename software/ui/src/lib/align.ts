@@ -6,7 +6,7 @@
  *
  * Pure (no React, no store, no three.js), so `npm test` runs it with Node.
  */
-import type { AlignAllPair, AlignAllResult, AlignResult, MergeResult, PairUse, PickedPoints, PointPair, Scan } from "../api/types";
+import type { AlignAllPair, AlignAllResult, AlignResult, MergeResult, PairUse, PickedPoints, PointPair, Scan, TagStart } from "../api/types";
 
 export type Vec3 = [number, number, number];
 
@@ -263,6 +263,14 @@ export type Figure = { label: string; value: string; note?: string; warn?: boole
 
 const mm = (v: number, digits = 2) => `${v.toFixed(digits)} mm`;
 
+/** Which tags a start from tags used, e.g. "tags 2, 4 and 5 seen by both scans; tag 3 left out (moved?)". */
+export function tagsNote(t: TagStart | null | undefined): string | undefined {
+  if (!t || !t.used.length) return undefined;
+  const list = (ids: number[]) => (ids.length === 1 ? `${ids[0]}` : `${ids.slice(0, -1).join(", ")} and ${ids[ids.length - 1]}`);
+  const used = `tag${t.used.length > 1 ? "s" : ""} ${list(t.used)} seen by both scans`;
+  return t.left_out.length ? `${used}; tag${t.left_out.length > 1 ? "s" : ""} ${list(t.left_out)} left out (moved?)` : used;
+}
+
 /** An alignment's figures for the small list under its verdict. */
 export function alignFigures(r: AlignResult): Figure[] {
   const out: Figure[] = [
@@ -270,7 +278,9 @@ export function alignFigures(r: AlignResult): Figure[] {
     { label: "Distance apart", value: typeof r.rmse_mm === "number" ? `${mm(r.rmse_mm)} RMS` : "–", note: "where the two overlap" },
     r.start === "given"
       ? { label: "Start", value: "From your points" }
-      : { label: "Starting guesses", value: `${r.agree} of ${r.candidates} agree`, note: "each one starts from a different rough fit" },
+      : r.start === "tags"
+        ? { label: "Start", value: "From the tags", note: tagsNote(r.tags) }
+        : { label: "Starting guesses", value: `${r.agree} of ${r.candidates} agree`, note: "each one starts from a different rough fit" },
   ];
   if (typeof r.pairs_rms_mm === "number") out.push({ label: "Your points", value: `agree to ${mm(r.pairs_rms_mm, 1)}`, warn: pairsDisagree(r) });
   if (r.same_setup) out.push({ label: "Shared table", value: r.used_support ? "Used for height and tilt" : "Not used: the two scans' tables did not line up" });

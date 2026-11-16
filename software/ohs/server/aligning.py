@@ -32,6 +32,7 @@ log = logging.getLogger(__name__)
 
 MIN_PAIRS = 3
 MAX_SCANS = 8  # scans aligned or merged at once (every pair is aligned: 28 pairs at 8)
+TAG_FRAMES = 120  # frames of a scan looked at for tags (an even pick of those with a pose; about 2 s at 640x400)
 
 
 class AlignManager:
@@ -59,14 +60,39 @@ class AlignManager:
         return {"id": sid, "name": name, "entry": entry, "mesh": res / "mesh.ply", "trajectory": res / "trajectory.csv",
                 "recording": rec}
 
+    def _tags(self, it: dict) -> Any:
+        """The tags the scan saw, in its mesh's world (:mod:`ohs.align.tags`): a marker-mode scan's own
+        map, or those found in its recording at the poses of its mesh; ``None`` when there are none
+        or nothing to find them in (a merged scan). Tags only help: any failure here is logged and
+        the scan is aligned from its shape."""
+        from ohs.align import load_tag_map, tag_map
+        from ohs.track.markers import MarkerParams
+
+        res = it["mesh"].parent
+        try:
+            if (res / "marker_map.json").is_file():
+                m = load_tag_map(res / "marker_map.json")
+            elif (not it["entry"].get("merged_from") and (it["recording"] / "frames.csv").is_file()
+                  and it["trajectory"].is_file()):
+                m = tag_map(it["recording"], it["trajectory"], params=MarkerParams(tag_mm=float(self.st.cfg.markers.tag_mm)),
+                            max_frames=TAG_FRAMES)
+            else:
+                return None
+        except Exception as e:  # noqa: BLE001
+            log.warning("no tags for scan %s: %s", it["id"], e)
+            return None
+        return m if len(m) else None
+
     def _pair(self, pid: str, target: str, source: str, need_recording: bool = False) -> tuple[dict, dict]:
         if target == source:
             raise ApiError(409, "a scan cannot be aligned to itself", "pick two different scans")
         return self._scan(pid, target, "first", need_recording), self._scan(pid, source, "second", need_recording)
 
     # ------------------------------------------------------------------ align
-    def align(self, pid: str, target: str, source: str, same_setup: bool, pairs: list[dict] | None) -> Any:
-        """``POST /api/projects/{pid}/align``."""
+    def align(self, pid: str, target: str, source: str, same_setup: bool, pairs: list[dict] | None,
+              use_tags: bool = True) -> Any:
+        """``POST /api/projects/{pid}/align``. Without picked points and with ``use_tags``, tags both
+        scans saw give the start (:func:`ohs.align.align_with_tags`)."""
         from ohs.align import pose_from_point_pairs
 
         with self.st._lock:
@@ -82,18 +108,28 @@ class AlignManager:
                                    "pick three or more matching points that span a triangle") from e
 
             def run(ctx: Any) -> dict:
-                from ohs.align import align_pair, scan_cloud_from_mesh
+                from ohs.align import align_pair, align_with_tags, scan_cloud_from_mesh
 
                 ctx.progress(0.05, f"Reading \"{a['name']}\"", force=True)
                 dst = scan_cloud_from_mesh(a["mesh"])
                 ctx.check()
-                ctx.progress(0.25, f"Reading \"{b['name']}\"", force=True)
+                ctx.progress(0.2, f"Reading \"{b['name']}\"", force=True)
                 src = scan_cloud_from_mesh(b["mesh"])
                 ctx.check()
-                ctx.progress(0.45, "Aligning the two scans", force=True)
-                res = align_pair(src, dst, init=init, same_setup=bool(same_setup))
+                tags_row = None
+                if init is None and use_tags:
+                    ctx.progress(0.3, "Looking for tags in both scans", force=True)
+                    ta = self._tags(a)
+                    ctx.check()
+                    tb = self._tags(b) if ta else None
+                    ctx.check()
+                    ctx.progress(0.5, "Aligning the two scans", force=True)
+                    res, tags_row = align_with_tags(src, dst, tb, ta, same_setup=bool(same_setup))
+                else:
+                    ctx.progress(0.45, "Aligning the two scans", force=True)
+                    res = align_pair(src, dst, init=init, same_setup=bool(same_setup))
                 out = res.as_dict()
-                out.update(project_id=pid, target=target, source=source,
+                out.update(project_id=pid, target=target, source=source, tags=tags_row,
                            pairs_rms_mm=None if pairs_rms is None else round(float(pairs_rms), 3),
                            support={"target": dst.support is not None, "source": src.support is not None},
                            message=res.verdict)
@@ -103,8 +139,10 @@ class AlignManager:
                                        meta={"project_id": pid, "target": target, "source": source})
 
     # ------------------------------------------------------------------ several scans
-    def align_all(self, pid: str, scans: list[str], same_setup: bool, picked: list[dict] | None) -> Any:
-        """``POST /api/projects/{pid}/align_all``: every scan placed in the first one's world."""
+    def align_all(self, pid: str, scans: list[str], same_setup: bool, picked: list[dict] | None,
+                  use_tags: bool = True) -> Any:
+        """``POST /api/projects/{pid}/align_all``: every scan placed in the first one's world (with
+        ``use_tags``, pairs without picked points start from the tags they share)."""
         from ohs.align import pose_from_point_pairs
 
         if len(scans) < 2:
@@ -136,17 +174,22 @@ class AlignManager:
             def run(ctx: Any) -> dict:
                 from ohs.align import align_many, scan_cloud_from_mesh
 
-                clouds = []
+                clouds, tags = [], []
                 for k, it in enumerate(items):
                     ctx.progress(0.3 * k / len(items), f"Reading \"{it['name']}\"", force=True)
                     clouds.append(scan_cloud_from_mesh(it["mesh"]))
                     ctx.check()
+                    if use_tags:
+                        ctx.progress(0.3 * (k + 0.5) / len(items), f"Looking for tags in \"{it['name']}\"", force=True)
+                        tags.append(self._tags(it))
+                        ctx.check()
 
                 def progress(f: float, msg: str) -> None:
                     ctx.check()
                     ctx.progress(0.3 + 0.7 * f, msg)
 
-                res = align_many(clouds, same_setup=bool(same_setup), picked=starts, progress=progress)
+                res = align_many(clouds, same_setup=bool(same_setup), picked=starts, tags=tags if use_tags else None,
+                                 progress=progress)
                 d = res.as_dict()
                 verdict = res.verdict
                 for k, it in enumerate(items):  # the engine counts scans; the user knows them by name
@@ -159,6 +202,7 @@ class AlignManager:
                               for r in d["pairs"]],
                     "loops": d["loops"], "graph": d["graph"], "worst_link_mm": d["worst_link_mm"],
                     "support": {sid: clouds[k].support is not None for k, sid in enumerate(scans)},
+                    "tags": {sid: (sorted(tags[k].corners) if use_tags and tags[k] else []) for k, sid in enumerate(scans)},
                     "same_setup": bool(same_setup), "ms": d["ms"], "verdict": verdict, "message": verdict})
 
             return self.st.jobs.submit("align_all", run, message="Queued: align several scans",
