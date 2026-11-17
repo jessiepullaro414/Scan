@@ -86,7 +86,8 @@ def test_preview_then_remove_the_table_undo_and_redo(env):
     assert pv["area_mm2"] == pytest.approx(float(A[sel].sum()), rel=1e-3)
     assert pv["normal"] and pv["share"] > 0.3 and pv["rule"] and pv["summary"].startswith("Found the table")
     assert isinstance(pv["warnings"], list) and pv["lowest_mm"] is not None and pv["triangles"] == n0
-    assert isinstance(pv["raised"], list) and all("faces" not in x and x["n_faces"] > 0 for x in pv["raised"])
+    assert isinstance(pv["raised"], list) and all(x["n_faces"] > 0 and (x["faces"] is None) == (x["verdict"] == "uneven")
+                                                  for x in pv["raised"])  # drawn areas come with their faces
     assert get(b + "/process").json()["current"]["version"] == s0["current"]["version"]
     # the same again (kept for this version and margin)
     assert post(b + "/process/remove-table/preview", {}).json()["faces"] == pv["faces"]
@@ -181,3 +182,49 @@ def test_a_user_recipe_may_remove_the_table(env, monkeypatch):
     assert [e["op"] for e in get(b + "/process").json()["edits"]] == ["remove_floaters"]
     requests.delete(f"{url}/{rec['id']}", timeout=T)
     requests.delete(f"{url}/{fs['id']}", timeout=T)
+
+
+def test_keep_this_travels_with_the_edit(env):
+    """A scan whose mesh is a box on a table with a 0.2 mm disc beside it (a part processed before:
+    its result is taken over as the base). The preview draws the disc as a raised area that goes, with
+    its faces; "Keep this" (a point on it) keeps exactly that area through the edit, undo and redo."""
+    from ohs.track.export import save_mesh
+    from test_mesh_support import DISC_AT, _wide_scene, raise_disc
+
+    pid, sid = add_scan(env, "Shim beside a box", env["rec"])
+    V, F, _ = _wide_scene()
+    V = raise_disc(V, [0, 0, 1], 0.0, DISC_AT, 15.0, 0.2)
+    res = env["root"] / "projects" / pid / "scans" / sid / "result"
+    res.mkdir(parents=True, exist_ok=True)
+    save_mesh(res / "mesh.ply", V, F)
+    env["studio"].projects.update_scan(pid, sid, status="processed", quality="preview")
+    b = base_url(env, pid, sid)
+    s0 = get(b + "/process").json()
+    m0 = mesh(env, s0)
+    pv = post(b + "/process/remove-table/preview", {}).json()
+    disc = [x for x in pv["raised"] if np.linalg.norm(np.asarray(x["centre"])[:2] - DISC_AT[:2]) < 5.0]
+    assert disc and disc[0]["verdict"] == "warned" and disc[0]["faces"], pv["raised"]
+    area = faces_of(disc[0])
+    assert np.isin(area, faces_of(pv)).all()  # it would go with the table ...
+    assert pv["thin_limit_mm"] > 0 and pv["limit"]
+    point = [float(x) for x in np.asarray(disc[0]["centre"])]
+    kp = post(b + "/process/remove-table/preview", {"keep": [point]}).json()
+    assert not np.isin(area, faces_of(kp)).any()  # ... unless kept
+    assert set(faces_of(pv)) - set(faces_of(kp)) == set(area.tolist())  # that area, and nothing else
+    err(post(b + "/process/remove-table/preview", {"keep": [[1, 2]]}), 422, "keep")
+    j = run_job(env, post(b + "/process/edits", {"op": "remove_table", "params": {"keep": [point]}}), "mesh_edit")
+    e = j["result"]["edit"]
+    assert e["label"] == f"Remove the table ({len(faces_of(kp)):,} faces, 1 area kept)"
+    assert e["params"] == {"margin_mm": 1.0, "keep": [[round(x, 2) for x in point]]}
+    s1 = get(b + "/process").json()
+    m1 = mesh(env, s1)
+    keep = np.ones(len(m0["faces"]), dtype=bool)
+    keep[faces_of(kp)] = False
+    _, F2, _ = compact(m0["vertices"].astype(np.float64), m0["faces"][keep])
+    assert np.array_equal(m1["faces"], F2)
+    u = post(b + "/process/undo").json()
+    assert same(mesh(env, u), m0)
+    proc = env["root"] / "projects" / pid / "scans" / sid / "process"
+    (proc / "cache" / f"{e['id']}.npz").unlink()  # rebuilt from the faces the edit removed
+    rd = post(b + "/process/redo").json()
+    assert same(mesh(env, rd), m1)

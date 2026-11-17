@@ -164,6 +164,7 @@ class EditBody(BaseModel):
 class TablePreviewBody(BaseModel):
     margin_mm: Optional[float] = None  # checked with the edit's own rule (0 to 20 mm; default 1)
     version: Optional[int] = None  # the mesh version the page shows
+    keep: Optional[List[Any]] = None  # "Keep this": a point [x, y, z] (mm) on each raised area to keep (checked as the edit's)
 
 
 class RecipeApplyBody(BaseModel):
@@ -656,7 +657,7 @@ def create_app(config: Any = None, *, projects_dir: Any = None, static_dir: Any 
     @app.post("/api/projects/{pid}/scans/{sid}/process/remove-table/preview")
     def process_table_preview(pid: str, sid: str, body: Optional[TablePreviewBody] = None) -> JSONResponse:
         b = body if body is not None else TablePreviewBody()
-        return _json(proc.table_preview(pid, sid, b.margin_mm, b.version))
+        return _json(proc.table_preview(pid, sid, b.margin_mm, b.version, b.keep))
 
     @app.post("/api/projects/{pid}/scans/{sid}/process/undo")
     def process_undo(pid: str, sid: str) -> JSONResponse:

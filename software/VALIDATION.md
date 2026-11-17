@@ -2482,6 +2482,64 @@ Table left near the part / part lost, in mm²:
   back.
 - **Not tried:** real scans; a table that is not flat (a cloth, a turntable with a rim).
 
+### A thin part lying flat on the table
+
+The owner's point: the thing scanned may be a fraction of a millimetre thick. As first built,
+the edit took any flat part thinner than its margin away with the table. Now a raised area
+inside the margin that is steady in height (a plateau, not a foot rising into a wall) is
+compared with **the table right round it** (the faces 3–10 mm outside it):
+
+- **kept** as a thin part when it rises at least 4 times that table's scatter, its top is
+  parallel to the table, it is 20 mm across or more, and the table round it is flat;
+- **warned about** when it rises 2.5 times the scatter or more but fails one of those: it
+  goes with the table, and the preview draws it in the warning colour, lists it (where, how
+  large, how high) and offers "Keep this";
+- **"uneven"** where the table itself rises in many places (near a scan's border): one
+  warning for all of them, not drawn.
+
+Each scan's own limit is in the finding and shown in the preview: on these four tables a part
+thinner than 0.18–0.19 mm cannot be told from the table at all, and from 0.28–0.31 mm it stays.
+
+A disc raised on each of the four real tables (the bracket's three views, the ball scan), at
+three places, by the agent's measurement. K kept, W warned and drawn, u in the "uneven"
+warning only, – gone without a word; thickness 0.1 / 0.2 / 0.3 / 0.5 / 0.8 mm:
+
+| Table, place | 10 mm across | 30 mm across | 100 mm across |
+|---|---|---|---|
+| Bracket front, near the part | – W W W W | – K K K K | – u K K K |
+| Bracket front, 75 mm out | – – W W W | – K K K K | – u K K K |
+| Bracket front, at the border | – – u u u | – u u K K | u – K K K |
+| Bracket side, near | – W W W W | – K K K K | – – K K K |
+| Bracket side, 75 mm out | – W W W W | – u K K K | – – K K K |
+| Bracket side, border | – u u u u | – – u u u | – u u K K |
+| Bracket back, near | – W W W W | – K K K K | – – K K K |
+| Bracket back, 75 mm out | – W W W W | – K K K K | – u K K K |
+| Bracket back, border | – – u – – | – u u u u | u u u K K |
+| Ball, near | – W W W W | – K K K K | – – K K K |
+| Ball, 75 mm out | – – W W W | – W K K K | – u K K K |
+| Ball, border | u u – – – | – u u u K | u u u K K |
+
+- **Near the part and 75 mm out, nothing of 0.3 mm or more and 30 mm or more across is
+  lost:** it is kept. Small parts (10 mm) of 0.2–0.3 mm and more are warned about, drawn and
+  can be kept with one click.
+- **What still goes without a word:** 0.1 mm everywhere (below every table's limit); 0.2 mm
+  in places; and 10 mm discs at the border of two scans. At a scan's border the table rises
+  by itself in steady patches of 0.2–0.6 mm, so a thin part there is at best in the
+  "uneven" warning.
+- **No false thin part is kept** on any of the four bare tables; 0, 1, 1 and 3 areas are
+  warned about there (small raised bits at the mesh's border), and 54–71 are "uneven".
+- **The review's own check** (a 40 mm disc 75 mm from the bracket on the front view): before
+  this, kept at 0.8 mm, warned at 0.5 mm, gone without a word at 0.3 mm (it was judged against
+  the scan's vertex sigma, 0.2 mm there, though the table is flat to 0.07 mm). Now kept at
+  0.3, 0.5 and 0.8 mm; at 0.2 mm, at this table's limit, 43 % of its top goes.
+- Thick parts are as before: the table left and the part lost on the bracket's three views
+  are unchanged. A click takes 2.3–3.0 s now.
+- **The merge of several scans is not covered by this:** with "The part was moved or turned
+  over" each frame's depth within 2 mm of that scan's table is left out before fusing, so a
+  flat part thinner than 2 mm keeps none of its pixels and is missing from the merged scan
+  (checked on `FramePipeline._clip_depth`: discs of 0.3, 0.8 and 1.5 mm keep 0 %, 2.5 and
+  4 mm keep 100 %).
+
 ## What the metrics mean
 
 - **Stereo errors** compare the estimated raw intrinsics/extrinsics (`K1`, `K2`, `R`, `T`) with

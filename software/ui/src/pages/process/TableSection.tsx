@@ -2,24 +2,45 @@
  * "Remove the table" (FEATURE_PLAN X1), at the foot of the Floaters tab. "Find the table" asks the
  * engine which faces are the surface the part stands on (nothing changes yet) and shows them with
  * the view's selection highlight, with their count and area; "Remove" removes them as an edit (undo
- * brings them back), "Cancel" lets them go. A thin part lying flat that the engine kept is said; a
- * raised area it could not tell from the table goes with it, and its warning stands out before Remove
- * (where, how large, how high). When there is no table to stand behind, the engine says
- * so in its own words and nothing is highlighted. The margin is an advanced value.
+ * brings them back), "Cancel" lets them go.
+ *
+ * Raised areas: a thin part lying flat that the engine keeps is drawn green; a raised area it is not
+ * sure of goes with the table, drawn amber, listed (where, how large, how high), each with Look (the
+ * view turns to it) and Keep this (it is taken out of what goes: the preview is asked again with a
+ * point on it, and the same points go with the edit, so undo and redo stay exact). The scan's own limit
+ * is said. When there is no table to stand behind, the engine says so in its own words and nothing is
+ * highlighted. The margin is an advanced value.
  */
-import { CircleHelp, PanelBottom, TriangleAlert } from "lucide-react";
+import { CircleHelp, Eye, PanelBottom, Pin, PinOff, TriangleAlert } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import { Vector3 } from "three";
 import { ApiError, api } from "../../api/http";
 import type { TablePreview } from "../../api/types";
 import { Button } from "../../components/ui/Button";
-import { Tooltip } from "../../components/ui/Popover";
 import { Callout } from "../../components/ui/Layout";
+import { Tooltip } from "../../components/ui/Popover";
 import { decodeFaces } from "../../lib/fits";
-import { TABLE_HELP, TABLE_MARGIN_HELP, TABLE_MARGIN_MAX_MM, TABLE_MARGIN_MM, tableEditLabel, tableFacts } from "../../lib/table";
+import {
+  areaText,
+  drawnAreas,
+  TABLE_HELP,
+  TABLE_MARGIN_HELP,
+  TABLE_MARGIN_MAX_MM,
+  TABLE_MARGIN_MM,
+  tableEditLabel,
+  tableFacts,
+  toggleKeep,
+} from "../../lib/table";
 import { processKey, useProcess } from "../../store/process";
 import { toast } from "../../store/toasts";
+import { cvToThree } from "../../three/coords";
+import { viewBus } from "../../three/viewBus";
 import { Help, NumberField } from "./bits";
 import type { LoadedMesh } from "./mesh";
+import type { MarkedArea } from "./ProcessCanvas";
+
+/** The colours of the raised areas on the model: kept (green, as the holes a fill would close) and going (amber). */
+export const AREA_COLORS = { kept: "#3fb950", warned: "#f5a524" } as const;
 
 type Phase =
   | { kind: "idle" }
@@ -48,6 +69,7 @@ export function TableSection({
   mesh,
   onSelection,
   onUseSelection,
+  onAreas,
 }: {
   pid: string;
   sid: string;
@@ -58,18 +80,24 @@ export function TableSection({
   onSelection: (n: number) => void;
   /** Tell the page the highlighted faces are used (the next mesh then clears them without a word). */
   onUseSelection: () => void;
+  /** The raised areas to draw on the model (empty: none). */
+  onAreas: (areas: MarkedArea[]) => void;
 }) {
   const edit = useProcess((s) => s.edit);
   const action = useProcess((s) => s.entries[processKey(pid, sid)]?.action);
   const [phase, setPhase] = useState<Phase>({ kind: "idle" });
   const [margin, setMargin] = useState(TABLE_MARGIN_MM);
+  const [keep, setKeep] = useState<number[][]>([]);
   const [advanced, setAdvanced] = useState(false);
   const ours = useRef(false); // the highlight is the table's (not the user's own selection)
+  const onAreasRef = useRef(onAreas);
+  onAreasRef.current = onAreas;
 
-  // A new mesh (an edit, undo, redo) or a change of the margin: what was shown no longer holds.
+  // A new mesh (an edit, undo, redo): what was shown, and the areas kept on it, no longer hold.
   const version = mesh?.version ?? null;
   useEffect(() => {
     setPhase((p) => (p.kind === "shown" && p.version !== version ? { kind: "idle" } : p.kind === "refused" ? { kind: "idle" } : p));
+    setKeep([]);
   }, [version]);
   // Selecting by hand over the shown table: the faces are the user's now (Delete removes them as they are).
   useEffect(() => {
@@ -78,6 +106,17 @@ export function TableSection({
       if (!ours.current) setPhase({ kind: "idle" });
     });
   }, [phase.kind, mesh]);
+  // The raised areas on the model, while the preview is shown.
+  useEffect(() => {
+    if (phase.kind !== "shown") {
+      onAreasRef.current([]);
+      return;
+    }
+    onAreasRef.current(
+      drawnAreas(phase.preview).map((a) => ({ key: `${phase.version}:${a.index}:${a.verdict}`, faces: a.faces, color: AREA_COLORS[a.verdict] })),
+    );
+  }, [phase]);
+  useEffect(() => () => onAreasRef.current([]), []);
 
   const clearShown = () => {
     if (mesh && phase.kind === "shown") {
@@ -89,12 +128,12 @@ export function TableSection({
     setPhase({ kind: "idle" });
   };
 
-  const find = async () => {
+  const find = async (points: number[][] = keep) => {
     if (!mesh || busy) return;
     const m = mesh;
     setPhase({ kind: "finding" });
     try {
-      const r = await api.processTablePreview(pid, sid, { margin_mm: margin, version: m.version });
+      const r = await api.processTablePreview(pid, sid, { margin_mm: margin, version: m.version, ...(points.length ? { keep: points } : {}) });
       ours.current = true;
       const n = m.selection.selectFaces(decodeFaces(r.faces));
       ours.current = false;
@@ -102,7 +141,7 @@ export function TableSection({
       setPhase({ kind: "shown", preview: r, version: m.version });
     } catch (e) {
       ours.current = false;
-      if (e instanceof ApiError && e.status === 422 && !/margin_mm/.test(e.detail)) {
+      if (e instanceof ApiError && e.status === 422 && !/margin_mm|keep/.test(e.detail)) {
         setPhase({ kind: "refused", detail: e.detail, hint: e.hint ?? null });
         return;
       }
@@ -115,10 +154,18 @@ export function TableSection({
   const remove = async () => {
     if (phase.kind !== "shown" || busy) return;
     onUseSelection();
-    if (await edit(pid, sid, { op: "remove_table", params: { margin_mm: margin } }, tableEditLabel(phase.preview.n_faces))) setPhase({ kind: "idle" });
+    const body = { op: "remove_table" as const, params: { margin_mm: margin, ...(keep.length ? { keep } : {}) } };
+    if (await edit(pid, sid, body, tableEditLabel(phase.preview.n_faces))) setPhase({ kind: "idle" });
+  };
+
+  const look = (centre: [number, number, number], radius: number) => {
+    const c = cvToThree(new Vector3(centre[0], centre[1], centre[2]));
+    viewBus.emit({ type: "frame", animate: true, sphere: { center: [c.x, c.y, c.z], radius } });
   };
 
   const facts = phase.kind === "shown" ? tableFacts(phase.preview) : null;
+  const drawn = phase.kind === "shown" ? drawnAreas(phase.preview) : [];
+  const areaWarnings = (w: string) => /^A raised area .* goes with the table|^A thin part lying flat is kept|^\d+ more raised areas like these/.test(w);
 
   return (
     <div className="space-y-2.5 border-t border-line pt-3">
@@ -154,12 +201,53 @@ export function TableSection({
           <span aria-live="polite">
             Highlighted in the view. {facts.detail}
           </span>
-          {phase.preview.warnings.map((w) => (
-            // a raised area that may be a thin part, going with the table: said before Remove, and stands out
-            <span key={w} className={/goes with the table|go with it/.test(w) ? "mt-1 block font-medium text-warn" : "mt-1 block"}>
-              {w}
-            </span>
-          ))}
+          {drawn.length ? (
+            <ul className="mt-2 space-y-1.5" aria-label="Raised areas on the table">
+              {drawn.map((a) => {
+                const r = phase.preview.raised[a.index];
+                const going = a.verdict === "warned";
+                return (
+                  <li key={a.index} className="rounded-md border border-line bg-surface-2 px-2 py-1.5">
+                    <div className="flex items-start gap-1.5">
+                      <span className="mt-1 h-2.5 w-2.5 shrink-0 rounded-full" style={{ background: AREA_COLORS[a.verdict] }} aria-hidden />
+                      <span className={going ? "font-medium text-warn" : "text-fg"}>
+                        {going ? "Goes with the table, may be a thin part: " : a.byUser ? "Kept, as you chose: " : "A thin part, kept: "}
+                        <span className="font-normal text-muted">{areaText(r)}</span>
+                      </span>
+                    </div>
+                    <div className="mt-1 flex gap-1.5 pl-4">
+                      <Button size="xs" variant="ghost" icon={Eye} onClick={() => look(a.centre, a.radius)}>
+                        Look
+                      </Button>
+                      {going || a.byUser ? (
+                        <Button
+                          size="xs"
+                          variant={going ? "secondary" : "ghost"}
+                          icon={going ? Pin : PinOff}
+                          disabled={busy || phase.kind !== "shown"}
+                          onClick={() => {
+                            const next = toggleKeep(keep, r);
+                            setKeep(next);
+                            void find(next);
+                          }}
+                        >
+                          {going ? "Keep this" : "Let it go"}
+                        </Button>
+                      ) : null}
+                    </div>
+                  </li>
+                );
+              })}
+            </ul>
+          ) : null}
+          {phase.preview.warnings
+            .filter((w) => !areaWarnings(w))
+            .map((w) => (
+              <span key={w} className={/where it is uneven itself/.test(w) ? "mt-1 block font-medium text-warn" : "mt-1 block"}>
+                {w}
+              </span>
+            ))}
+          {phase.preview.limit ? <span className="mt-1 block text-subtle">{phase.preview.limit}</span> : null}
         </Callout>
       ) : phase.kind === "refused" ? (
         <Callout

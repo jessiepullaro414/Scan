@@ -1912,8 +1912,9 @@ never in a built-in one. The Process page shows the faces it would remove first 
 
 ```ts
 type MeshOp = ... | "remove_table";     // added to the edits of "M3 phase 2"
-//   remove_table { margin_mm?: number }  // 0-20 mm, default 1: how far above the table's plane a face that
+//   remove_table { margin_mm?: number;   // 0-20 mm, default 1: how far above the table's plane a face that
 //                                        // faces the table's way still counts as the table
+//                  keep?: number[][] }   // "Keep this": a point [x, y, z] (mm) on each raised area to keep (at most 50)
 type TablePreview = {
   version: number; triangles: number;   // the mesh it was found on
   faces: string;                        // base64 of little-endian uint32 face indices of result/mesh.ply, sorted
@@ -1929,9 +1930,16 @@ type TablePreview = {
   loose_left: number; loose_left_mm2: number;     // other loose pieces, left for Remove floaters
   skipped: string[];                    // larger flat surfaces set aside first (a box's top), and why
   raised: { centre: [number, number, number]; size_mm: number; area_mm2: number;   // raised areas within the margin
-            height_mm: number; scatter_mm: number;   // its level above the table; the scatter it was told from
-            kept: boolean;                            // true: a thin part lying flat, it stays; false: it goes, warned
-            n_faces: number }[];
+            height_mm: number;                        // its rise above the table round it
+            scatter_mm: number;                       // how much the table round it scatters (what it is told from)
+            tilt_deg: number; top_mm: number;         // its top against the table; how flat its top is
+            verdict: "kept" | "warned" | "uneven";    // stays | goes, drawn and listed | the table's own unevenness, said once
+            kept: boolean; by_user: boolean;          // by_user: kept by a keep point
+            neighbours?: number;                      // other raised areas within 80 mm
+            n_faces: number;
+            faces: string | null }[];                 // base64 uint32 face indices (kept and warned areas; preview only)
+  thin_limit_mm: number; thin_keep_mm: number;    // this scan's own limit for thin parts lying flat (2.5 and 4 x RMS)
+  limit: string;                                  // the same in words
   warnings: string[]; rule: string;     // the rule in words
   summary: string; ms: number;
 };
@@ -1941,8 +1949,8 @@ Paths are relative to `/api/projects/{pid}/scans/{sid}`.
 
 | Method and path | Body | Returns |
 |---|---|---|
-| `POST .../process/remove-table/preview` | `{margin_mm?, version?}` | `TablePreview`; nothing changes |
-| `POST .../process/edits` | `{op: "remove_table", params: {margin_mm?}}` | `Job` (kind `mesh_edit`), as every edit |
+| `POST .../process/remove-table/preview` | `{margin_mm?, version?, keep?}` | `TablePreview`; nothing changes |
+| `POST .../process/edits` | `{op: "remove_table", params: {margin_mm?, keep?}}` | `Job` (kind `mesh_edit`), as every edit |
 
 Rules:
 - **The plane** is found as the alignment finds its support plane (`ohs.align.pairwise.scan_cloud`), from
@@ -1954,15 +1962,17 @@ Rules:
   it faces the table's way (within 45°), lies at most `margin_mm` above the plane and is joined through such
   faces to the plane's own surface. Faces turned further away (the part's walls) stay at any height. Loose
   pieces left wholly within the margin plus the band are crumbs of table and go too.
-- **Thin parts lying flat** (a shim, a gasket, a sheet) stay: a raised area within the margin, of steady
-  height, not joined to a wall that rises above the margin, at least 4 times the table's scatter above it (its
-  RMS, or the scan's own sigma there when larger), is kept with its rim. On the simulated scans that is from
-  0.5 mm thick (0.2-0.3 mm on a very smooth table), losing 0-0.2 mm of its rim. One between 2.5 and 4 times the
-  scatter (about 0.2-0.4 mm) goes with the table, and a warning says where it is, how large and how high, before
-  anything is removed; when there are many, they are the table's own unevenness and one warning says how thin a
-  part cannot be told from the table. Thinner than about 0.2 mm a part lying flat cannot be told from the table
-  at all. A table with only thin parts on it is a table; with nothing on it, it is refused (and the refusal names
-  a raised area it could not tell).
+- **Thin parts lying flat** (a shim, a gasket, a sheet): a raised area within the margin, of steady height, not
+  joined to a wall that rises above the margin, is judged against the table round it (3-10 mm away): its rise
+  above that table's level, against that table's scatter. From 2.5 times the scatter it is listed: kept (from 4
+  times, top parallel to the table within 0.25°, 20 mm across or more, the table round it flat to 0.1 mm), else
+  `warned`: it goes with the table, drawn and listed, and `keep` (a point on it) keeps it, through the edit, undo
+  and redo. Where the table round it scatters more than 0.1 mm, or two other raised areas lie within 80 mm, it is
+  the table's own unevenness (`uneven`): it goes and one warning says how thin a part cannot be told there. The
+  scan's own limit is in `thin_limit_mm` / `thin_keep_mm` / `limit`. A table with only thin parts on it is a
+  table; with nothing on it, it is refused (and the refusal names a raised area it could not tell).
+- The edit's label says the areas kept: `Remove the table (12,345 faces, 1 area kept)`; its `params` hold the keep
+  points (to 0.01 mm). Each drawn area of the preview comes with its faces.
 - **No table** (none of the planes passes, or there is too little flat surface): the preview answers 422 with the
   engine's sentence ("No table found: …. Nothing was removed; …") and a hint to select the table by hand; the edit's
   job fails with the same sentence and the mesh is as it was. In a recipe the step is skipped, in the same words,

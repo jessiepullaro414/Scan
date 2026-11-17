@@ -862,9 +862,27 @@ no object size anywhere in the engine or the app.
     at 0.8 mm, **goes with a warning at 0.5 mm, and goes without a word at 0.3 mm**. The
     scatter an area is judged against is the larger of the table's flatness and the scan's
     sigma, and the sigma is the larger one there. So "kept from 0.5 mm" does not hold on every
-    scan, and a part can still vanish silently. **Open, being worked on:** judge an area
-    against the table around it, state the limit of the scan at hand, and show the areas that
-    would go on the model before Remove.
+    scan, and a part can still vanish silently.
+  - **Second round, 2026-11-17, done.** A raised area is now judged against the table right
+    round it (the faces 3–10 mm outside it), not the vertex sigma. It is kept when it rises 4
+    times that scatter, is parallel to the table, 20 mm across or more, on a table that is
+    flat round it; otherwise it is warned about, drawn on the model in the warning colour and
+    listed with "Look" and "Keep this" (the kept areas travel with the edit, so undo and redo
+    stay bit for bit). Where the table itself rises in many places (a scan's border), one
+    warning says so. The finding states the scan's own limit ("on this table a part thinner
+    than 0.18 mm cannot be told from it; from 0.28 mm it stays"), and the hover card no
+    longer promises a fixed number.
+    - The review's disc on the bracket scan is now kept at 0.3, 0.5 and 0.8 mm. Across the
+      four real tables, near the part and 75 mm out, nothing of 0.3 mm or more and 30 mm or
+      more across is lost; the whole table is in `VALIDATION.md`, "A thin part lying flat on
+      the table".
+    - **Still lost without a word:** 0.1 mm everywhere, 0.2 mm in places, and small (10 mm)
+      discs at a scan's border. A thin part near the border is at best in the "uneven"
+      warning.
+    - Checked in the app on the ball scan: three areas listed, "Look" turns the view to one,
+      "Keep this" draws it green and takes it out of what is removed (785,092 → 784,973
+      faces); nothing was removed.
+    - Tests: 83 pass on both paths with the mesh-edit and processing tests.
   - **The merge of several scans has the same fault, and worse** (checked by the agent on
     `FramePipeline._clip_depth`): with "The part was moved or turned over" every depth pixel
     within 2 mm of each scan's table is left out before fusing, so a part thinner than 2 mm

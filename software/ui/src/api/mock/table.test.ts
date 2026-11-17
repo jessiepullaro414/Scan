@@ -40,7 +40,8 @@ function scene(withTable = true): Mesh {
     s = Math.sin(Math.PI / 6);
   quad(m, [50, -10, 0], [20 * c, 0, 20 * s], [0, 20, 0], 20, "ramp"); // rises 10 mm over 17 mm, faces 30° from up
   quad(m, [-80, -80, 0.6], [30, 0, 0], [0, 30, 0], 15, "shim"); // a shim 0.6 mm thick lying flat
-  quad(m, [-80, 40, 0.2], [30, 0, 0], [0, 30, 0], 15, "foil"); // a foil 0.2 mm thick: within the demo's band
+  quad(m, [-80, 40, 0.15], [30, 0, 0], [0, 30, 0], 15, "foil"); // a foil 0.15 mm thick: below the demo's limit, unsaid
+  quad(m, [30, 50, 0.35], [20, 0, 0], [0, 20, 0], 10, "sticker"); // a sticker 0.35 mm thick: drawn and listed
   return m;
 }
 
@@ -68,6 +69,14 @@ const up: Plane = { n: [0, 0, 1], d: 0 };
     const kept = r.info.raised.filter((x) => x.kept);
     check(kept.length === 1 && Math.abs(kept[0].height_mm - 0.6) < 0.01 && Math.abs(kept[0].size_mm - 30) < 5, JSON.stringify(r.info.raised));
     check(r.info.warnings.some((w) => w.startsWith("A thin part lying flat is kept")), r.info.warnings.join(" | "));
+    // the sticker goes with the table, but is a warned area with its faces; a point on it keeps exactly it
+    const warned = r.info.raised.filter((x) => x.verdict === "warned");
+    check(warned.length === 1 && Math.abs(warned[0].height_mm - 0.35) < 0.01 && count("sticker", false) === 0, JSON.stringify(warned));
+    check(r.areas.length === 2 && r.areas.some((a) => a.verdict === "warned" && a.faces.length === 200), "the drawn areas carry their faces");
+    const k = mockTable(new Float32Array(m.P), new Uint32Array(m.I), up, 1, [[40, 60, 0.35]]);
+    check(k.ok && k.faces.length === r.faces.length - 200 && m.kind.every((x, f) => (x === "sticker") === (gone.has(f) && !new Set(k.ok ? k.faces : []).has(f))), "Keep this keeps the sticker and nothing else");
+    check(k.ok && k.info.raised.some((x) => x.by_user && x.verdict === "kept"), "said as kept by the user");
+    check(typeof r.info.thin_limit_mm === "number" && !!r.info.limit, "the demo's own limit is said");
     check(r.faces.every((f, i) => i === 0 || f > r.faces[i - 1]), "the faces ascend");
     const r3 = mockTable(new Float32Array(m.P), new Uint32Array(m.I), up, 3);
     check(r3.ok && r3.faces.length > r.faces.length, "a larger margin takes more of the ramp");

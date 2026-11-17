@@ -2,8 +2,9 @@
  * Checks for the words around "Remove the table" (`npm test`). Plain TypeScript that Node runs as
  * it is (type stripping), no test framework: a failed check throws.
  */
-import type { TablePreview } from "../api/types";
-import { fmtArea, TABLE_HELP, TABLE_MARGIN_MM, tableEditLabel, tableFacts, validMargin } from "./table.ts";
+import type { TablePreview, TableRaised } from "../api/types";
+import { encodeFaces } from "./fits.ts";
+import { areaText, drawnAreas, fmtArea, TABLE_HELP, TABLE_MARGIN_MM, tableEditLabel, tableFacts, toggleKeep, validMargin } from "./table.ts";
 
 let checks = 0;
 function check(ok: boolean, what: string): void {
@@ -58,7 +59,7 @@ check(fmtArea(320) === "3.2 cm²", fmtArea(320));
   const none = tableFacts(preview({ lowest_mm: null }));
   check(none.detail.endsWith("Nothing of the scan would be left."), none.detail);
   // a thin part kept is said; one the rule is unsure of is in the engine's warnings, not here
-  const raised = (kept: boolean) => ({ centre: [0, 0, 0] as [number, number, number], size_mm: 30, area_mm2: 700, height_mm: 0.5, scatter_mm: 0.08, kept, n_faces: 1400 });
+  const raised = (kept: boolean): TableRaised => ({ centre: [0, 0, 0], size_mm: 30, area_mm2: 700, height_mm: 0.5, scatter_mm: 0.08, verdict: kept ? "kept" : "warned", kept, n_faces: 1400 });
   const thin = tableFacts(preview({ raised: [raised(true), raised(false)] }));
   check(thin.detail.endsWith("The part is kept right down to the table. A thin part lying flat stays."), thin.detail);
   const two = tableFacts(preview({ raised: [raised(true), raised(true)] }));
@@ -75,8 +76,26 @@ check(validMargin(-0.1) === null && validMargin(20.5) === null && validMargin(Nu
   const labels = TABLE_HELP.lines.map((l) => l.label);
   check(labels.join("|") === "What it does|What it keeps|What it costs|Its limit|When it says no", labels.join("|"));
   const limit = TABLE_HELP.lines.find((l) => l.label === "Its limit")!.text;
-  check(/thinner than about 0\.5 mm/.test(limit) && /cannot be told from the table/.test(limit), limit);
+  check(/the preview says this scan's own limit/i.test(limit) && !/0\.\d mm/.test(limit), limit); // no fixed promise
   check(TABLE_HELP.lines.every((l) => l.text.endsWith(".")), "each line is a sentence");
+}
+
+// the raised areas the preview draws: kept and warned ones with their faces; the table's own unevenness is not drawn
+{
+  const r = (verdict: TableRaised["verdict"], faces: number[] | null, by_user = false): TableRaised => ({
+    centre: [12.345, -6.789, 300.111], size_mm: 30.4, area_mm2: 700, height_mm: 0.214, scatter_mm: 0.06, verdict, kept: verdict === "kept",
+    by_user, n_faces: faces?.length ?? 0, faces: faces ? encodeFaces(faces) : null,
+  });
+  const p = preview({ raised: [r("warned", [3, 1, 2]), r("kept", [7, 9]), r("uneven", null), r("kept", [5], true)] });
+  const d = drawnAreas(p);
+  check(d.length === 3 && d.map((x) => x.verdict).join() === "warned,kept,kept" && d[0].index === 0 && d[2].index === 3, JSON.stringify(d.map((x) => [x.verdict, x.index])));
+  check(Array.from(d[0].faces).join() === "3,1,2" && d[2].byUser && !d[1].byUser, "faces and who kept it");
+  check(d[0].radius > 15 && d[0].radius < 20, `a view round it (${d[0].radius})`);
+  check(areaText(p.raised[0]) === "30 mm across, 0.21 mm high, at (12, -7, 300) mm", areaText(p.raised[0]));
+  // "Keep this" adds a point on the area (its centre, to 0.01 mm); again takes it back
+  const k1 = toggleKeep([], p.raised[0]);
+  check(JSON.stringify(k1) === "[[12.35,-6.79,300.11]]", JSON.stringify(k1));
+  check(toggleKeep(k1, p.raised[0]).length === 0, "Keep this twice: not kept");
 }
 
 console.log(`table.test: ${checks} checks passed`);

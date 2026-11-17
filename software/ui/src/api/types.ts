@@ -520,21 +520,30 @@ export type FacesParams = { faces: string };
  * "Remove the table" (FEATURE_PLAN X1): how far above the table's plane a face that faces the
  * table's way still counts as the table, mm (0 to 20; the engine's default 1 mm).
  */
-export type RemoveTableParams = { margin_mm?: number };
+export type RemoveTableParams = { margin_mm?: number; keep?: number[][] }; // keep: a point (mm) on each raised area to keep
 
 /**
  * `POST .../process/remove-table/preview`: the faces "Remove the table" would remove from the
  * current mesh, and what the engine found; nothing changes. A 422 answers the engine's refusal
  * in its own words (no table to stand behind).
  */
+/**
+ * A raised area within the margin. `kept`: a thin part lying flat, it stays (or the user kept it:
+ * `by_user`); `warned`: it may be a thin part and goes with the table unless kept; `uneven`: the
+ * table's own unevenness there (said once, not drawn).
+ */
 export type TableRaised = {
   centre: [number, number, number]; // mm, world frame
   size_mm: number; // across
   area_mm2: number;
-  height_mm: number; // its level above the table
-  scatter_mm: number; // the table's scatter it was told from (its RMS, or the scan's sigma there when larger)
+  height_mm: number; // its level above the table round it
+  scatter_mm: number; // how much the table round it scatters (what it is told from)
+  tilt_deg?: number; // its top against the table
+  verdict: "kept" | "warned" | "uneven";
   kept: boolean;
+  by_user?: boolean;
   n_faces: number;
+  faces?: string | null; // base64 of little-endian uint32 face indices (kept and warned areas, in the preview)
 };
 export type TablePreview = {
   version: number; // the mesh version it was found on
@@ -559,6 +568,9 @@ export type TablePreview = {
   skipped: string[]; // larger flat surfaces set aside first, and why
   /** Raised areas within the margin: a thin part lying flat (kept) or one too close to the table's unevenness to tell (goes, with a warning). */
   raised: TableRaised[];
+  thin_limit_mm?: number | null; // this scan's own limit: thinner than this a part lying flat cannot be told from the table
+  thin_keep_mm?: number | null; // from this it stays, where the table round it is as flat as the table
+  limit?: string; // the same, in words
   warnings: string[];
   rule: string; // the rule, in words
   summary: string; // "Found the table (95 % of the scan, …)"

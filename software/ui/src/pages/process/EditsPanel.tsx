@@ -17,6 +17,7 @@ import { cn } from "../../lib/util";
 import { processKey, useProcess } from "../../store/process";
 import { Help, NumberField, Panel } from "./bits";
 import type { LoadedMesh } from "./mesh";
+import type { MarkedArea } from "./ProcessCanvas";
 import { TableSection } from "./TableSection";
 
 export type EditTab = "floaters" | "holes" | "smooth" | "simplify";
@@ -101,7 +102,7 @@ export function EditsPanel({
   /** The current mesh's holes (for the fill preview), when loaded. */
   holes: HoleOutline[] | null;
   /** "Remove the table" (Floaters tab): the mesh its faces are shown on, and the page's selection count. */
-  table?: { mesh: LoadedMesh | null; onSelection: (n: number) => void; onUseSelection: () => void };
+  table?: { mesh: LoadedMesh | null; onSelection: (n: number) => void; onUseSelection: () => void; onAreas: (areas: MarkedArea[]) => void };
 }) {
   const edit = useProcess((s) => s.edit);
   const action = useProcess((s) => s.entries[processKey(pid, sid)]?.action);
@@ -471,7 +472,15 @@ export function EditsPanel({
           </Help>
         )}
         {tab === "floaters" && table && hasMesh ? (
-          <TableSection pid={pid} sid={sid} busy={busy} mesh={table.mesh} onSelection={table.onSelection} onUseSelection={table.onUseSelection} />
+          <TableSection
+            pid={pid}
+            sid={sid}
+            busy={busy}
+            mesh={table.mesh}
+            onSelection={table.onSelection}
+            onUseSelection={table.onUseSelection}
+            onAreas={table.onAreas}
+          />
         ) : null}
       </div>
     </Panel>

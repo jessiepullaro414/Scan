@@ -202,7 +202,7 @@ def normalize_op(op: str, params: dict | None) -> tuple[dict, str]:
                "fill_holes": {"max_hole_mm", "watertight"},
                "smooth": {"method", "strength", "keep_edges", "within_sigma", "flat_only", "away_from_edges"},
                "decimate": {"target_triangles", "ratio", "max_error_mm"}, "delete_faces": {"faces"},
-               "keep_faces": {"faces"}, "remove_table": {"margin_mm"}}
+               "keep_faces": {"faces"}, "remove_table": {"margin_mm", "keep"}}
     if op not in allowed:
         raise ApiError(422, f"unknown edit {op!r}", f"use one of {', '.join(MESH_OPS)}")
     extra = sorted(set(params) - allowed[op])
@@ -300,8 +300,20 @@ def normalize_op(op: str, params: dict | None) -> tuple[dict, str]:
         from ohs.mesh.support import MARGIN_MM
 
         m = _num(params, "margin_mm", op, 0, 20)
+        out_t: dict[str, Any] = {"margin_mm": MARGIN_MM if m is None else m}
+        # "Keep this": points (mm) on raised areas the user keeps; they travel with the edit
+        keep = params.get("keep")
+        if keep is not None:
+            ok = isinstance(keep, list) and len(keep) <= 50 and all(
+                isinstance(q, list) and len(q) == 3 and all(isinstance(x, (int, float)) and not isinstance(x, bool)
+                                                          and math.isfinite(float(x)) for x in q) for q in keep)
+            if not ok:
+                raise ApiError(422, "remove_table: keep must be a list of at most 50 points [x, y, z] in mm",
+                               "send keep: [[x, y, z], ...], a point on each raised area to keep")
+            if keep:
+                out_t["keep"] = [[round(float(x), 2) for x in q] for q in keep]
         # the label gets the count of faces when the edit has run ("Remove the table (12,345 faces)")
-        return {"margin_mm": MARGIN_MM if m is None else m}, "Remove the table"
+        return out_t, "Remove the table"
     return params, op
 
 
@@ -982,7 +994,7 @@ class ProcessManager:
             if faces is None and edit_id is not None and sp.selection_path(str(edit_id)).is_file():
                 faces = np.load(sp.selection_path(str(edit_id)))
             if faces is None:
-                faces = self._find_table(V, F, S, float(params.get("margin_mm", 1.0)))[0]
+                faces = self._find_table(V, F, S, params)[0]
             if len(faces) and int(faces.max()) >= len(F):
                 raise ApiError(409, "the table's faces refer to triangles the current mesh does not have",
                                "undo to the step it was removed from, or remove it again")
@@ -1071,17 +1083,25 @@ class ProcessManager:
             return {key: v for key, v in entry.items() if key != "stats"}
 
     @staticmethod
-    def _find_table(V: np.ndarray, F: np.ndarray, S: np.ndarray | None, margin_mm: float) -> tuple[np.ndarray, dict]:
-        """:func:`ohs.mesh.support.find_support` on a step's mesh: ``(the faces it removes, what it
-        found)``; its refusal is a 422 in its own words, and nothing changes."""
+    def _find_table(V: np.ndarray, F: np.ndarray, S: np.ndarray | None, params: dict) -> tuple[np.ndarray, dict]:
+        """:func:`ohs.mesh.support.find_support` on a step's mesh with an edit's ``params`` (margin, the
+        areas kept): ``(the faces it removes, what it found)``, the finding with each raised area's faces
+        beside it (``_raised_faces``, for the preview); its refusal is a 422 in its own words, and nothing
+        changes."""
         from ohs.mesh import support
 
         try:
             r = support.find_support(V, F, sigma=S if S is not None and len(S) == len(V) else None,
-                                     params=support.SupportParams(margin_mm=float(margin_mm)))
+                                     params=support.SupportParams(margin_mm=float(params.get("margin_mm", 1.0))),
+                                     keep=params.get("keep") or None)
         except support.SupportRefused as e:
             raise ApiError(422, str(e), TABLE_HINT) from None
-        return r.faces.astype(np.int64), r.to_dict()
+        return r.faces.astype(np.int64), {**r.to_dict(), "_raised_faces": [x["faces"] for x in r.raised]}
+
+    @staticmethod
+    def _table_key(params: dict) -> tuple:
+        """What a "Remove the table" answer depends on besides the mesh: the margin and the areas kept."""
+        return float(params["margin_mm"]), tuple(tuple(q) for q in params.get("keep") or ())
 
     @staticmethod
     def _table_summary(info: dict) -> str:
@@ -1107,12 +1127,13 @@ class ProcessManager:
         t0 = time.perf_counter()
         info = None
         if op == "remove_table":  # the faces of the preview on this very mesh, else found now
-            if table is not None and table[0] == version and table[1] == float(params["margin_mm"]):
+            if table is not None and table[0] == version and table[1] == self._table_key(params):
                 faces, info = table[2], table[3]
             else:
                 prog(0.05, f"{label}: finding the table", force=True)
-                faces, info = self._find_table(V, F, S, float(params["margin_mm"]))
-            label = f"Remove the table ({len(faces):,} faces)"
+                faces, info = self._find_table(V, F, S, params)
+            n_keep = sum(1 for r in info["raised"] if r.get("by_user"))
+            label = f"Remove the table ({len(faces):,} faces" + (f", {n_keep} area{'s' if n_keep != 1 else ''} kept)" if n_keep else ")")
         V2, F2, by = self._apply(sp, op, params, V, F, faces=faces, S=S,
                                  progress=lambda f, m=None: prog(0.05 + 0.8 * f, f"{label}: {m}" if m else label))
         ms = 1e3 * (time.perf_counter() - t0)
@@ -1127,14 +1148,19 @@ class ProcessManager:
         prog(0.94, f"{label}: saving", force=True)
         return self._commit_edit(sp, op, params, label, V2, F2, ms, summary, ctx.job.id, faces, stats, S2, Fl2)
 
-    def table_preview(self, pid: str, sid: str, margin_mm: float | None = None, version: int | None = None) -> dict:
+    def table_preview(self, pid: str, sid: str, margin_mm: float | None = None, version: int | None = None,
+                      keep: list | None = None) -> dict:
         """``POST .../process/remove-table/preview``: the faces "Remove the table" would remove from
         the current mesh, and what the engine found, without changing anything. Read-only; uses the
         arrays the fits keep per mesh version, and keeps the answer for the edit that follows.
         ``version``: the mesh version the page shows (409 when it changed). The engine's refusal
-        is a 422 in its own words."""
-        params, _ = normalize_op("remove_table", {} if margin_mm is None else {"margin_mm": margin_mm})
-        m = float(params["margin_mm"])
+        is a 422 in its own words. ``keep``: points on raised areas the user keeps ("Keep this"), as the
+        edit takes them. Each raised area that is drawn (kept, or warned about) comes with its faces."""
+        body: dict[str, Any] = {} if margin_mm is None else {"margin_mm": margin_mm}
+        if keep is not None:
+            body["keep"] = keep
+        params, _ = normalize_op("remove_table", body)
+        m = self._table_key(params)
         sp = self.scan(pid, sid)
         self._need_base(sp)
         with sp.lock:
@@ -1150,12 +1176,17 @@ class ProcessManager:
             faces, info = table[2], table[3]
         else:
             _, V, F, S, _ = cached
-            faces, info = self._find_table(V, F, S, m)
+            faces, info = self._find_table(V, F, S, params)
             with sp.lock:
                 if int(sp.state["version"]) == v:  # not changed meanwhile
                     sp._table = (v, m, faces, info)
-        return {**info, "version": v, "triangles": int(len(cached[2])),
-                "faces": base64.b64encode(np.asarray(faces, dtype="<u4").tobytes()).decode("ascii")}
+        def b64(x: np.ndarray) -> str:
+            return base64.b64encode(np.asarray(x, dtype="<u4").tobytes()).decode("ascii")
+
+        raised = [{**r, "faces": b64(f) if r["verdict"] in ("kept", "warned") else None}
+                  for r, f in zip(info["raised"], info["_raised_faces"])]
+        out = {k: x for k, x in info.items() if k != "_raised_faces"}
+        return {**out, "raised": raised, "version": v, "triangles": int(len(cached[2])), "faces": b64(faces)}
 
     def submit_edit(self, pid: str, sid: str, op: str, params: dict | None, version: int | None = None) -> Any:
         if op not in MESH_OPS:

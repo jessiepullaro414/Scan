@@ -8,6 +8,8 @@ import { Bvh, Line, OrbitControls } from "@react-three/drei";
 import { Canvas, useThree } from "@react-three/fiber";
 import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import {
+  BufferAttribute,
+  BufferGeometry,
   Color,
   DoubleSide,
   Matrix4,
@@ -20,7 +22,6 @@ import {
   Sphere,
   Vector3,
   WebGLRenderTarget,
-  type BufferGeometry,
   type InterleavedBufferAttribute,
   type PerspectiveCamera,
   type WebGLRenderer,
@@ -37,6 +38,7 @@ import { AxisGizmo, SceneGrid, StudioEnvironment, StudioLights, useThemeColors }
 import { CheckMark } from "../viewer/CheckMark";
 import type { CheckLit } from "../viewer/useCheck";
 import { BVH_SPLIT_CENTER, DeviationProbe, LaserProbe, Model, VIEW_DIR, type Shading } from "../viewer/ViewerCanvas";
+import { regionTriangles } from "../../lib/fits";
 import { highlightOf, type LoadedMesh } from "./mesh";
 import { buildGrid, buildScreenMap, polygonMask, type DepthImage, type ScreenMap, type SelectMode } from "./selection";
 
@@ -210,6 +212,47 @@ function Ghost({ geometry }: { geometry: BufferGeometry }) {
   );
   useEffect(() => () => mat.dispose(), [mat]);
   return <mesh geometry={geometry} material={mat} renderOrder={1} raycast={() => null} />;
+}
+
+/** A raised area of "Remove the table" (a thin part kept, or one that goes unless kept), drawn over the surface. */
+export type MarkedArea = { key: string; faces: Uint32Array; color: string };
+
+function AreaMark({ mesh, area }: { mesh: LoadedMesh; area: MarkedArea }) {
+  const geometry = useMemo(() => {
+    const g = new BufferGeometry();
+    g.setAttribute("position", mesh.geometry.getAttribute("position"));
+    let idx: Uint32Array;
+    try {
+      idx = regionTriangles(area.faces, mesh.selection.index, mesh.selection.faceOfTri);
+    } catch {
+      idx = new Uint32Array(0); // an answer about another version of the mesh: nothing to draw
+    }
+    g.setIndex(new BufferAttribute(idx, 1));
+    g.boundingSphere = mesh.geometry.boundingSphere;
+    return g;
+  }, [mesh, area.faces]);
+  const mat = useMemo(
+    () =>
+      new MeshBasicMaterial({
+        color: area.color,
+        transparent: true,
+        opacity: 0.8,
+        depthWrite: false,
+        side: DoubleSide,
+        polygonOffset: true,
+        polygonOffsetFactor: -2,
+        polygonOffsetUnits: -8,
+      }),
+    [area.color],
+  );
+  useEffect(
+    () => () => {
+      geometry.dispose();
+      mat.dispose();
+    },
+    [geometry, mat],
+  );
+  return <mesh geometry={geometry} material={mat} renderOrder={3} raycast={() => null} />;
 }
 
 // ------------------------------------------------------------------ holes
@@ -700,6 +743,7 @@ export function ProcessCanvas({
   fillUpTo,
   trajectory,
   checkLit,
+  areas,
   tool,
   through,
   brushRadius,
@@ -722,6 +766,8 @@ export function ProcessCanvas({
   trajectory: TrajectoryView | null;
   /** The area of the Check panel lit on the current mesh, if any. */
   checkLit: CheckLit | null;
+  /** "Remove the table": its raised areas, each in its colour (kept, or going unless kept). */
+  areas?: MarkedArea[];
   tool: SelectTool;
   through: boolean;
   brushRadius: number;
@@ -797,6 +843,7 @@ export function ProcessCanvas({
           {holes && !before ? <HoleLines holes={holes} fillUpTo={fillUpTo} hovered={hoverHole} /> : null}
           {trajectory ? <Trajectory view={trajectory} accent={colors.accent} /> : null}
           {checkLit && !before ? <CheckMark lit={checkLit} geometry={mesh.geometry} /> : null}
+          {!before ? areas?.map((a) => <AreaMark key={a.key} mesh={mesh} area={a} />) : null}
         </group>
         {holes && holes.length && !before ? <HoleHover holes={holes} label={holeLabel} onHover={setHoverHole} /> : null}
         <SelectionController

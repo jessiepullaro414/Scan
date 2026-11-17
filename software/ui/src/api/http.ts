@@ -359,7 +359,7 @@ export const api = {
    * shows; 409 when it changed), and what the engine found. Nothing changes; a 422 is the
    * engine's refusal in its own words.
    */
-  processTablePreview: (pid: string, sid: string, body: { margin_mm?: number; version?: number }) =>
+  processTablePreview: (pid: string, sid: string, body: { margin_mm?: number; version?: number; keep?: number[][] }) =>
     post<TablePreview>(`${scanPath(pid, sid)}/process/remove-table/preview`, body),
   processTrajectory: (pid: string, sid: string) => get<TrajectoryView>(`${scanPath(pid, sid)}/process/trajectory.json`),
 

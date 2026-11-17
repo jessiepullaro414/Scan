@@ -210,11 +210,24 @@ function label(op: MeshOp, p: Record<string, unknown>, faces?: number): string {
     case "keep_faces":
       return `Keep ${int(faces ?? 0)} faces`;
     case "remove_table":
-      return faces === undefined ? "Remove the table" : `Remove the table (${int(faces)} faces)`;
+      if (faces === undefined) return "Remove the table";
+      {
+        const k = Array.isArray(p.keep) ? p.keep.length : 0; // the demo takes one area per point
+        return `Remove the table (${int(faces)} faces${k ? `, ${k} area${k === 1 ? "" : "s"} kept` : ""})`;
+      }
   }
 }
 
 /** A "Remove the table" margin: the engine's default, or a number from 0 to 20 mm. */
+/** "Keep this" points of a "Remove the table" body: a list of [x, y, z] (mm), or null when malformed. */
+function tableKeep(p: Record<string, unknown>): number[][] | null {
+  const k = p.keep;
+  if (k === undefined || k === null) return [];
+  if (!Array.isArray(k) || k.length > 50) return null;
+  for (const q of k) if (!Array.isArray(q) || q.length !== 3 || !q.every((x) => typeof x === "number" && Number.isFinite(x))) return null;
+  return k as number[][];
+}
+
 function tableMargin(p: Record<string, unknown>): number | null {
   const v = p.margin_mm;
   if (v === undefined || v === null) return MOCK_MARGIN_MM;
@@ -718,7 +731,7 @@ export class MockProcess {
       }
       case "remove_table": {
         // replayed from the faces it removed; else found now (a refusal leaves the mesh as it is)
-        const r = faces ? null : mockTable(m.positions, m.indices, TABLE_PLANE, tableMargin(p) ?? MOCK_MARGIN_MM);
+        const r = faces ? null : mockTable(m.positions, m.indices, TABLE_PLANE, tableMargin(p) ?? MOCK_MARGIN_MM, tableKeep(p) ?? []);
         const list = faces ?? (r && r.ok ? r.faces : new Uint32Array());
         return (function* () {
           yield 0.5;
@@ -771,7 +784,8 @@ export class MockProcess {
         return faces;
       }
       case "remove_table":
-        for (const k of Object.keys(p)) if (k !== "margin_mm") this.bad(`remove_table: unknown parameter '${k}'`, "remove_table takes margin_mm");
+        for (const k of Object.keys(p)) if (k !== "margin_mm" && k !== "keep") this.bad(`remove_table: unknown parameter '${k}'`, "remove_table takes keep, margin_mm");
+        if (tableKeep(p) === null) this.bad("remove_table: keep must be a list of at most 50 points [x, y, z] in mm", "send keep: [[x, y, z], ...], a point on each raised area to keep");
         if (tableMargin(p) === null) this.bad("remove_table: margin_mm must be at least 0 and at most 20", "choose a margin_mm at least 0 and at most 20");
         return undefined;
     }
@@ -790,9 +804,13 @@ export class MockProcess {
     if (typeof v === "number" && v !== st.version) throw new HttpError(409, "the mesh changed since the page loaded it", "reload the mesh and try again");
     const margin = tableMargin(body);
     if (margin === null) this.bad("remove_table: margin_mm must be at least 0 and at most 20", "choose a margin_mm at least 0 and at most 20");
-    const r = mockTable(m.positions, m.indices, TABLE_PLANE, margin);
+    const keep = tableKeep(body);
+    if (keep === null) this.bad("remove_table: keep must be a list of at most 50 points [x, y, z] in mm", "send keep: [[x, y, z], ...], a point on each raised area to keep");
+    const r = mockTable(m.positions, m.indices, TABLE_PLANE, margin, keep);
     if (!r.ok) throw new HttpError(422, r.detail, r.hint);
-    return { ...r.info, version: st.version, triangles: m.indices.length / 3, faces: encodeFaces(r.faces) };
+    // the drawn areas (kept, warned) come with their faces, in the order of the list
+    const raised = r.info.raised.map((x, i) => ({ ...x, faces: encodeFaces(r.areas[i].faces) }));
+    return { ...r.info, raised, version: st.version, triangles: m.indices.length / 3, faces: encodeFaces(r.faces) };
   }
 
   private startEdit(p: Project, s: Scan, body: Record<string, unknown>): Job {
@@ -805,7 +823,7 @@ export class MockProcess {
     if (!start || !st.base) throw new HttpError(409, "Edits need a mesh", "Run Track first (or Make mesh).");
     const faces = this.validate(st, op, params);
     // "Remove the table": the faces are found now, as the engine finds them in the job; a refusal fails the job
-    const table = op === "remove_table" ? mockTable(start.positions, start.indices, TABLE_PLANE, tableMargin(params) ?? MOCK_MARGIN_MM) : null;
+    const table = op === "remove_table" ? mockTable(start.positions, start.indices, TABLE_PLANE, tableMargin(params) ?? MOCK_MARGIN_MM, tableKeep(params) ?? []) : null;
     const sel = faces ?? (table?.ok ? table.faces : undefined);
     const id = uid("e-");
     const entryLabel = label(op, params, sel?.length);
@@ -826,7 +844,12 @@ export class MockProcess {
           id,
           op,
           // the face list itself stays on the engine (it can be megabytes); the table's margin is written down
-          params: op === "remove_table" ? { margin_mm: tableMargin(params) ?? MOCK_MARGIN_MM } : faces ? { faces: `${faces.length} faces` } : { ...params },
+          params:
+            op === "remove_table"
+              ? { margin_mm: tableMargin(params) ?? MOCK_MARGIN_MM, ...(tableKeep(params)?.length ? { keep: tableKeep(params) } : {}) }
+              : faces
+                ? { faces: `${faces.length} faces` }
+                : { ...params },
           label: entryLabel,
           created: nowIso(),
           triangles_after: out.indices.length / 3,
@@ -1101,7 +1124,7 @@ export class MockProcess {
       if (o.op === "remove_table") {
         // as the engine: a scan without a table skips the step, and the rest runs
         const margin = tableMargin(o.params) ?? MOCK_MARGIN_MM;
-        const r = mockTable(m.positions, m.indices, TABLE_PLANE, margin);
+        const r = mockTable(m.positions, m.indices, TABLE_PLANE, margin, tableKeep(o.params) ?? []);
         if (!r.ok) continue;
         removed = r.faces.length;
         params = { margin_mm: margin };

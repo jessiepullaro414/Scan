@@ -356,6 +356,11 @@ def test_a_thin_part_lying_flat_is_kept(t, diameter):
     V, F = flat_table(half=max(80.0, diameter / 2 + 30.0))
     c = np.array([0.0, 0.0, 0.0])
     V = raise_disc(V, [0, 0, 1], 0.0, c, diameter / 2, t)
+    small = t < MARGIN_MM and diameter < 20.0  # under 20 mm across a thin part is drawn and listed, not kept
+    if small:  # alone on the table, nothing is kept on it: refused, naming it (nothing is removed)
+        with pytest.raises(SupportRefused, match="may be a thin part"):
+            find_support(V, F)
+        return
     r = find_support(V, F)
     gone = _removed_mask(r, len(F))
     plate = _plate(V, F, c, diameter / 2)
@@ -401,6 +406,71 @@ def test_a_thick_part_beside_a_thin_one_loses_no_more_than_before(box_scene):
     # and the table that is not the plate still goes
     assert np.array_equal(g[(lab == TABLE) & ~_plate(V, F, np.array([-62.0, 0.0]), 13.0)],
                           g0[(lab == TABLE) & ~_plate(V, F, np.array([-62.0, 0.0]), 13.0)])
+
+
+def _wide_scene(noise=0.07, seed=31):
+    """A 60 x 40 x 30 mm box on a table 320 mm across, the table flat to ``noise``."""
+    return _swept(lambda Q: _rounded_rect(Q, 30.0, 20.0, 3.0), _box_profile(30.0, 1.0), 160.0, 1.0, seed, noise)
+
+
+DISC_AT = np.array([-95.0, 0.0, 0.0])
+
+
+def test_a_thin_part_is_judged_against_the_table_round_it_not_the_scans_sigma():
+    """The table is flat to 0.07 mm but the scan's own sigma on it is 0.2 mm (as on the simulated
+    bracket's front view, 75 mm from the part): a 0.3 mm disc 30 mm across is at least warned, and the
+    finding carries this scan's own limit."""
+    V, F, lab = _wide_scene()
+    V = raise_disc(V, [0, 0, 1], 0.0, DISC_AT, 15.0, 0.3)
+    r = find_support(V, F, sigma=np.full(len(V), 0.2))
+    mine = [x for x in r.raised if np.linalg.norm(np.asarray(x["centre"])[:2] - DISC_AT[:2]) < 5.0]
+    assert mine and mine[0]["verdict"] in ("kept", "warned"), r.raised
+    assert r.thin_limit_mm == pytest.approx(2.5 * r.flatness_mm, rel=1e-6)
+    assert r.thin_keep_mm == pytest.approx(4.0 * r.flatness_mm, rel=1e-6)
+    d = r.to_dict()
+    assert d["thin_limit_mm"] == pytest.approx(r.thin_limit_mm) and f"{r.thin_limit_mm:.2f} mm" in d["limit"]
+
+
+def test_keep_this_keeps_exactly_that_area():
+    """A 0.2 mm disc goes with the table, warned; a point on it ("Keep this") keeps it, and only it."""
+    V, F, lab = _wide_scene()
+    V = raise_disc(V, [0, 0, 1], 0.0, DISC_AT, 15.0, 0.2)
+    r = find_support(V, F)
+    mine = [x for x in r.raised if np.linalg.norm(np.asarray(x["centre"])[:2] - DISC_AT[:2]) < 5.0]
+    assert mine and mine[0]["verdict"] == "warned", r.raised
+    area = np.zeros(len(F), dtype=bool)
+    area[mine[0]["faces"]] = True
+    assert _removed_mask(r, len(F))[area].all()
+    k = find_support(V, F, keep=[DISC_AT + [3.0, 2.0, 0.2]])
+    g0, g1 = _removed_mask(r, len(F)), _removed_mask(k, len(F))
+    assert not g1[area].any() and np.array_equal(g1[~area], g0[~area])  # that area, and nothing else
+    km = [x for x in k.raised if x["by_user"]]
+    assert len(km) == 1 and km[0]["kept"] and km[0]["verdict"] == "kept"
+    assert any("as you chose" in w for w in k.warnings)
+    far = find_support(V, F, keep=[[120.0, 120.0, 0.0]])  # a point on no raised area keeps nothing
+    assert np.array_equal(_removed_mask(far, len(F)), g0)
+
+
+def test_a_table_that_rises_in_many_places_gives_no_false_thin_part():
+    """Where the table itself rises in steady patches close together (a scan's far edge), none of them
+    is kept or listed one by one: one warning says the table is uneven there and how thin a part cannot
+    be told from it. A real thin part elsewhere is still kept."""
+    V, F, lab = _wide_scene()
+    rng = np.random.default_rng(32)
+    bumps = np.column_stack([rng.uniform(60.0, 140.0, 12), rng.uniform(-60.0, 60.0, 12)])
+    on_table = np.abs(V[:, 2]) < 1.0
+    far = on_table * np.clip((V[:, 0] - 50.0) / 10.0, 0.0, 1.0)  # the far side is wavy all over (0.15 mm) ...
+    V[:, 2] += far * _noise(V, 0.15, 33)
+    for b in bumps:  # ... and rises in smooth domes 0.3-0.45 mm high, 6-12 mm wide
+        r2 = np.sum((V[:, :2] - b) ** 2, axis=1)
+        V[:, 2] += on_table * rng.uniform(0.3, 0.45) * np.exp(-r2 / (2 * rng.uniform(3.0, 6.0) ** 2))
+    V = raise_disc(V, [0, 0, 1], 0.0, DISC_AT, 15.0, 0.4)
+    r = find_support(V, F, sigma=np.full(len(V), 0.6))
+    at_bumps = [x for x in r.raised if x["centre"][0] > 50.0]
+    assert at_bumps and all(x["verdict"] == "uneven" for x in at_bumps), [(x["centre"], x["verdict"]) for x in at_bumps]
+    assert sum("uneven" in w for w in r.warnings) == 1
+    mine = [x for x in r.raised if np.linalg.norm(np.asarray(x["centre"])[:2] - DISC_AT[:2]) < 5.0]
+    assert mine and mine[0]["kept"]
 
 
 def test_sigma_and_normals_are_optional_and_filled_vertices_do_not_make_a_table(box_scene):

@@ -63,7 +63,7 @@ import { Panel } from "./process/bits";
 import { EditsPanel, type EditTab } from "./process/EditsPanel";
 import { HistoryPanel } from "./process/HistoryPanel";
 import { useVersionedMesh, type LoadedMesh } from "./process/mesh";
-import { ProcessCanvas, type CompareMode, type SelectTool } from "./process/ProcessCanvas";
+import { ProcessCanvas, type CompareMode, type MarkedArea, type SelectTool } from "./process/ProcessCanvas";
 import { RecipesPanel } from "./process/RecipesPanel";
 import { StagesPanel } from "./process/StagesPanel";
 import { DownloadPanel, StatsPanel } from "./process/StatsPanel";
@@ -199,6 +199,7 @@ export default function ProcessPage({ pid, sid }: { pid: string; sid: string }) 
   const [count, setCount] = useState(0);
   const [tab, setTab] = useState<EditTab>("floaters");
   const [fillMm, setFillMm] = useState(10);
+  const [tableAreas, setTableAreas] = useState<MarkedArea[]>([]); // "Remove the table": its raised areas on the model
   const overlayRef = useRef<SVGSVGElement>(null);
   const holeLabelRef = useRef<HTMLDivElement>(null);
   const liveCountRef = useRef<HTMLSpanElement>(null);
@@ -634,6 +635,7 @@ export default function ProcessPage({ pid, sid }: { pid: string; sid: string }) 
                 onUseSelection: () => {
                   usedSelection.current = mesh?.version ?? null;
                 },
+                onAreas: setTableAreas,
               }}
             />
             <HistoryPanel pid={pid} sid={sid} state={state} busy={busy} />
@@ -662,6 +664,7 @@ export default function ProcessPage({ pid, sid }: { pid: string; sid: string }) 
               fillUpTo={tab === "holes" ? fillMm : null}
               trajectory={showTraj ? traj.data : null}
               checkLit={check.lit}
+              areas={tableAreas}
               tool={tool}
               through={through}
               brushRadius={brush}

@@ -58,22 +58,34 @@ mesh edit: :func:`find_support` says which faces are the table (or refuses, in w
    ``thin_min_mm2`` (25 mm²; the table's own noise makes patches up to 13 mm²) is looked at when it
    does not touch surface rising above the margin (a thick part's foot), and when it is steady: at
    least ``thin_steady`` (40 %) of its area lies at its level (its upper quartile height, within
-   twice the RMS or 15 %), not spread up a slope or a warp. Its height is the median of that level.
-   It is told from the table's *scatter*: the table's RMS, or the scan's own sigma there when that
-   is larger (at a table scan's far edge, 200-500 mm from the part, sigma is 0.15-0.9 mm and the
-   table rises in steady patches 0.25-0.45 mm high). From ``thin_keep_k`` (4) times the scatter it
-   is a thin part and stays, its rim down to 2.5 times the RMS. Between 2.5 and 4 times it goes with
-   the table and the result says so: where, how large, how high (one warning each, or one for many:
-   then it is the table's own unevenness, and the warning says how thin a part cannot be told from
-   it). Measured (the scan's noise 0.05-0.1 mm, edges smeared over 1.5 mm, 10-100 mm across, alone
-   and beside a box; and raised patches of the simulated ball scan's real table, flat to 0.08 mm):
-   kept from 0.5 mm (0.2-0.3 mm on a table flat to 0.05 mm), losing 0-0.2 mm of its rim; 0.2-0.3 mm
-   found and warned when 30 mm or more across; 0.1 mm, and 0.2 mm at 10 mm across, cannot be told
-   from the table at all. To find the table's level under a large thin part (a 100 mm sheet can be
-   a third of the plane's band), the plane is refitted from the most common height and its band
-   narrows on a robust spread. When nothing stands on the largest plane and nothing lies behind it,
-   it is the table if a thin part (or anything above the margin) is found on it, else refused; the
-   refusal names a raised area it could not tell.
+   twice the RMS or 15 %), not spread up a slope.
+
+   It is judged against **the table round it**, not the scan's sigma: the candidate faces 3 to
+   10 mm from it (``ring_mm``, past its smeared rim) give the level it stands on (their median) and
+   the scatter it is told from (1.4826 times their median distance from it, at least half the
+   table's RMS). Its *rise* above that level must be 2.5 times that scatter to be listed at all.
+   It is **kept** from 4 times the scatter (``thin_keep_k``) when its top is parallel to the table
+   (within ``thin_tilt_deg``, 0.25°), it is at least ``thin_keep_size_mm`` (20 mm) across and the
+   table round it is flat (scatter at most ``flat_table_mm``, 0.1 mm, or 1.5 times the RMS).
+   Otherwise it goes with the table and is **warned** about: drawn, listed (where, how large, how
+   high) and the user may keep it ("Keep this": ``keep`` points). Two exceptions keep the far edges
+   quiet: where the table round it scatters more than that, or where two other raised areas lie
+   within ``crowd_mm`` (80 mm), the area is the table's own **unevenness**: it goes, and one warning
+   for all of them says how thin a part cannot be told from the table there. A clear plateau (kept)
+   stands out even among them. The scan's sigma was tried for this and dropped: on the simulated
+   bracket's front view the table is flat to 0.07 mm 75 mm from the part while its sigma there is
+   0.15-0.2 mm, and judged by the sigma a 0.3 mm disc 40 mm across went without a word.
+
+   Measured on the four real-size tables (the simulated bracket's front, side and back views and the
+   ball scan; discs 10-100 mm across raised by 0.1-0.8 mm with a 1.5 mm smeared edge, near the
+   part, 75 mm out and near the scan's border): the bare tables give 0-2 listed areas and 9-71 said
+   once as unevenness, none kept. The finding carries the scan's own limit, ``thin_limit_mm`` (2.5
+   times the RMS: thinner cannot be told at all) and ``thin_keep_mm`` (4 times). To find the table's
+   level under a large thin part (a 100 mm sheet can be a third of the plane's band), the plane is
+   refitted from the most common height and its band narrows on a robust spread. When nothing
+   stands on the largest plane and nothing lies behind it, it is the table if a thin part (or
+   anything above the margin) is found on it, else refused; the refusal names a raised area it
+   could not tell.
 
 3. **What is left** is the part. Pieces of it (joined by edges) that lie wholly within the margin
    plus the band above the plane are crumbs of table the rule did not reach (noisy faces at the
@@ -135,7 +147,14 @@ class SupportParams:
     thin_find_k: float = 2.5  # a raised area: faces this many times the table's RMS above the plane ...
     thin_min_mm2: float = 25.0  # ... joined over at least this area (the table's own noise: up to 13 mm²)
     thin_steady: float = 0.4  # at least this share of its area at its own level (a plateau, not a slope)
-    thin_keep_k: float = 4.0  # kept as a part from this many times the table's RMS; below it, warned
+    thin_keep_k: float = 4.0  # kept as a part from this many times the scatter of the table round it; below, warned
+    ring_mm: tuple[float, float] = (3.0, 10.0)  # the table round a raised area: this far from it (past its smeared rim)
+    flat_table_mm: float = 0.1  # a table round it scattered more than this (or 1.5 x the table's RMS) is uneven there
+    thin_tilt_deg: float = 0.25  # kept only with a top this parallel to the table ...
+    thin_keep_size_mm: float = 20.0  # ... and at least this large across; smaller or tilted: warned
+    crowd_mm: float = 80.0  # with crowd_n other raised areas within this, the table there is uneven
+    crowd_n: int = 2
+    keep_reach_mm: float = 3.0  # "Keep this": a point this close to a raised area's face keeps that area
 
     def __post_init__(self) -> None:
         m = float(self.margin_mm)
@@ -180,6 +199,10 @@ class SupportFinding:
     #: raised areas within the margin (module docstring, 2b.): centre (mm), size_mm (across), area_mm2,
     #: height_mm (median, above the plane), kept (a thin part: stays) or not (goes, with a warning), faces
     raised: list[dict] = field(default_factory=list)
+    #: the scan's own limit (module docstring, 2b.): thinner than thin_limit_mm a part lying flat cannot be told
+    #: from this table at all; from thin_keep_mm it stays where the table round it is as flat as the table
+    thin_limit_mm: float = float("nan")
+    thin_keep_mm: float = float("nan")
     warnings: list[str] = field(default_factory=list)
     ms: float = 0.0
 
@@ -198,6 +221,15 @@ class SupportFinding:
                 "raised area of steady height at least 4 times the table's scatter above it. Faces turned further away "
                 f"(the part's walls) stay at any height. Loose pieces left wholly within {top + self.band_mm:.2g} mm of the plane are "
                 "crumbs of table and go too; any other loose piece is left for Remove floaters.")
+
+    @property
+    def limit(self) -> str:
+        """The scan's own limit for thin parts lying flat, in words."""
+        if not math.isfinite(self.thin_limit_mm):
+            return ""
+        return (f"On this table a part lying flat that is thinner than {self.thin_limit_mm:.2f} mm cannot be told from it. "
+                f"From {self.thin_keep_mm:.2f} mm (and 20 mm across) it stays, where the table round it is as flat as here; "
+                "between the two it goes with the table, drawn and listed, unless you keep it.")
 
     @property
     def summary(self) -> str:
@@ -219,6 +251,7 @@ class SupportFinding:
                 "loose_left_mm2": float(self.loose_left_mm2), "skipped": list(self.skipped),
                 "raised": [{k: v for k, v in r.items() if k != "faces"} | {"n_faces": int(len(r["faces"]))}
                            for r in self.raised],
+                "thin_limit_mm": f(self.thin_limit_mm), "thin_keep_mm": f(self.thin_keep_mm), "limit": self.limit,
                 "warnings": list(self.warnings), "rule": self.rule, "summary": self.summary, "ms": float(self.ms)}
 
 
@@ -342,8 +375,7 @@ def _wquant(x: np.ndarray, w: np.ndarray, q) -> np.ndarray:
 
 
 def _raised(V: np.ndarray, F: np.ndarray, fa: np.ndarray, hc: np.ndarray, hmax: np.ndarray, cand: np.ndarray,
-            behind: np.ndarray, pairs, n: np.ndarray, rms: float, top: float, band: float, p: SupportParams,
-            sigma: np.ndarray | None = None) -> list[dict]:
+            behind: np.ndarray, pairs, n: np.ndarray, rms: float, top: float, band: float, p: SupportParams) -> list[dict]:
     """Raised areas among the faces that face the table's way within the margin (module docstring,
     2b.): each with where it is, how large, how high, and whether it is kept as a thin part."""
     lo = max(float(p.thin_find_k) * rms, 0.02)
@@ -354,14 +386,16 @@ def _raised(V: np.ndarray, F: np.ndarray, fa: np.ndarray, hc: np.ndarray, hmax: 
     big = np.flatnonzero(area >= float(p.thin_min_mm2))
     if not len(big):
         return []
-    # surface that rises above the margin (a thick part's walls): a raised area joined to it is that part's foot
+    # surface that rises well above the margin (a thick part's walls): a raised area joined to it is that part's
+    # foot. Twice the margin, not just past it: a 0.8 mm disc near a scan's edge, where the table itself rises
+    # 0.2-0.3 mm, pokes past a 1 mm margin, and was taken for a wall's foot and lost without a word
     rest = ~cand & ~behind
     ridx, rnc, rlab = _components(rest, pairs)
     rising = np.zeros(len(F), dtype=bool)
     if rnc:
         high = np.full(rnc, -np.inf)
         np.maximum.at(high, rlab, hmax[ridx])
-        rising[ridx] = high[rlab] > top + band
+        rising[ridx] = high[rlab] > top + max(band, top)
     comp = np.full(len(F), -1, dtype=np.int64)
     comp[idx] = lab
     a, b = pairs
@@ -370,7 +404,8 @@ def _raised(V: np.ndarray, F: np.ndarray, fa: np.ndarray, hc: np.ndarray, hmax: 
         hit = (comp[x] >= 0) & rising[y]
         touch[comp[x[hit]]] = True
     C = (V[F[:, 0]] + V[F[:, 1]] + V[F[:, 2]]) / 3.0
-    out = []
+    X = C - (C @ n)[:, None] * n  # seen along the normal
+    steady = []
     for k in big:
         if touch[k]:
             continue
@@ -382,32 +417,75 @@ def _raised(V: np.ndarray, F: np.ndarray, fa: np.ndarray, hc: np.ndarray, hmax: 
         core = np.abs(hc[f] - level) <= max(2.0 * rms, 0.15 * level)
         if w[core].sum() < float(p.thin_steady) * w.sum():
             continue  # a slope or a warp of the table, not a part of steady height
-        m = float(_wquant(hc[f][core], w[core], 0.5))
-        # the scatter it is told from: the table's RMS, or the scan's own sigma there when that is larger
-        # (at a table scan's far edge, 200-500 mm from the part, sigma is 0.15-0.9 mm and the table rises
-        # in steady patches 0.25-0.45 mm high: on the simulated bracket and ball, 90-110 of them)
-        scatter = rms
-        if sigma is not None:
-            scatter = max(rms, float(np.median(sigma[F[f].reshape(-1)])))
-        if m < float(p.thin_find_k) * scatter:
-            continue
-        P = C[f] - (C[f] @ n)[:, None] * n
+        steady.append((k, f, w, core, float(_wquant(hc[f][core], w[core], 0.5))))
+    if not steady:
+        return []
+    # the table round each area (module docstring, 2b.): the candidate faces 3 to 10 mm from it, not in a
+    # raised area. Its median is the level the area stands on, its robust spread the scatter it is told from
+    from scipy.spatial import cKDTree  # noqa: PLC0415
+
+    allf = np.concatenate([f for _, f, _, _, _ in steady])
+    owner = np.concatenate([np.full(len(f), i) for i, (_, f, _, _, _) in enumerate(steady)])
+    inraised = np.zeros(len(F), dtype=bool)
+    inraised[idx] = True
+    ring_c = np.flatnonzero(cand & ~inraised)
+    dist, j = cKDTree(X[allf]).query(X[ring_c], k=1, distance_upper_bound=float(p.ring_mm[1]))
+    near = np.isfinite(dist) & (dist >= float(p.ring_mm[0]))
+    ring_f, ring_o = ring_c[near], owner[j[near]]
+    order = np.argsort(ring_o, kind="stable")
+    ring_f, ring_o = ring_f[order], ring_o[order]
+    starts = np.searchsorted(ring_o, np.arange(len(steady) + 1))
+    out = []
+    for i, (k, f, w, core, m) in enumerate(steady):
+        rf = ring_f[starts[i]:starts[i + 1]]
+        if len(rf) >= 20:
+            base = float(np.median(hc[rf]))
+            scatter = 1.4826 * float(np.median(np.abs(hc[rf] - base)))
+        else:  # no table round it to speak of (it fills the view): the table's own level and spread
+            base, scatter = 0.0, rms
+        scatter = max(scatter, 0.5 * rms)
+        rise = m - base
+        if rise < float(p.thin_find_k) * scatter:
+            continue  # within the unevenness of the table round it: the table's own
+        # its top: how flat, and how parallel to the table (a plane through the faces at its level)
+        fc, wc = f[core], w[core]
+        cc = (wc[:, None] * C[fc]).sum(axis=0) / wc.sum()
+        _, U = np.linalg.eigh(((C[fc] - cc) * wc[:, None]).T @ (C[fc] - cc))
+        tilt = float(np.degrees(np.arccos(min(1.0, abs(float(U[:, 0] @ n))))))
+        flat = float(np.sqrt(np.average(((C[fc] - cc) @ U[:, 0]) ** 2, weights=wc)))
         c = (w[:, None] * C[f]).sum(axis=0) / w.sum()
-        Pc = P - (c - (c @ n) * n)
+        Pc = X[f] - (c - (c @ n) * n)
         size = 2.0 * float(np.percentile(np.linalg.norm(Pc, axis=1), 98))
-        out.append({"centre": [float(x) for x in c], "size_mm": size, "area_mm2": float(area[k]), "height_mm": float(m),
-                    "scatter_mm": float(scatter), "kept": bool(m >= float(p.thin_keep_k) * scatter), "faces": f})
+        uneven = scatter > max(float(p.flat_table_mm), 1.5 * rms)
+        keep = (rise >= float(p.thin_keep_k) * scatter and tilt <= float(p.thin_tilt_deg) and size >= float(p.thin_keep_size_mm)
+                and not uneven)
+        out.append({"centre": [float(x) for x in c], "size_mm": size, "area_mm2": float(area[k]), "height_mm": float(rise),
+                    "scatter_mm": float(scatter), "tilt_deg": tilt, "top_mm": flat,
+                    "verdict": "kept" if keep else "uneven" if uneven else "warned", "kept": bool(keep), "by_user": False,
+                    "faces": f})
+    # crowded: where the table rises in steady patches in many places close by (at a table scan's far
+    # edge, 230-460 mm from the part on the simulated bracket and ball: 20-37 of them per scan, 6-28 mm
+    # across, 0.2-0.6 mm high), one more is the table's own unevenness, not a part: said once, not each
+    if len(out) > 1:
+        cs = np.array([r["centre"] for r in out])
+        cs = cs - (cs @ n)[:, None] * n
+        near_n = (cKDTree(cs).query_ball_point(cs, float(p.crowd_mm), return_length=True) - 1).astype(int)
+        for r, k in zip(out, near_n):
+            r["neighbours"] = int(k)
+            if k >= int(p.crowd_n) and r["verdict"] == "warned":  # a clear plateau (kept) stands out even there
+                r["verdict"], r["kept"] = "uneven", False
     out.sort(key=lambda r: -r["area_mm2"])
     return out
 
 
 def find_support(V: np.ndarray, F: np.ndarray, *, normals: np.ndarray | None = None, sigma: np.ndarray | None = None,
-                 params: SupportParams | None = None, seed: int = 0) -> SupportFinding:
+                 params: SupportParams | None = None, seed: int = 0, keep=None) -> SupportFinding:
     """The faces of ``(V, F)`` that are the surface the part stands on (module docstring).
 
     ``normals``: unit vertex normals pointing to where the surface was seen from (default: from
     the faces' winding); ``sigma``: each vertex's sigma in mm, to leave made-up surface (filled
-    holes) out of the plane. Raises :class:`SupportRefused` with a sentence when no such surface
+    holes) out of the plane; ``keep``: points (mm) on raised areas the user chose to keep ("Keep this":
+    each keeps the raised area with a face within ``keep_reach_mm`` of it). Raises :class:`SupportRefused` with a sentence when no such surface
     can be told apart, ``ValueError`` for bad input."""
     from ohs.geometry import fit_plane_ransac  # noqa: PLC0415
 
@@ -496,11 +574,18 @@ def find_support(V: np.ndarray, F: np.ndarray, *, normals: np.ndarray | None = N
         seed_area = np.bincount(lab, weights=np.where(np.abs(hc[ci]) <= band, fa[ci], 0.0), minlength=nc)
         table[ci] = seed_area[lab] >= float(p.min_patch_mm2)
     # thin parts lying flat (module docstring, 2b.): kept, or said
-    svals = None
-    if sigma is not None:
-        svals = np.where(measured, np.asarray(sigma, dtype=np.float64).reshape(-1), SIGMA_NONE_MM)
-    raised = [r for r in _raised(V, F, fa, hc, hmax, cand, behind, pairs, n, rms, top, band, p, svals)
-              if table[r["faces"]].any()]
+    raised = [r for r in _raised(V, F, fa, hc, hmax, cand, behind, pairs, n, rms, top, band, p) if table[r["faces"]].any()]
+    # "Keep this": a raised area the user chose to keep (a point on it, mm), whatever the rule said of it
+    if keep:
+        from scipy.spatial import cKDTree  # noqa: PLC0415
+
+        Cn = (V[F[:, 0]] + V[F[:, 1]] + V[F[:, 2]]) / 3.0
+        for q in np.asarray(keep, dtype=np.float64).reshape(-1, 3):
+            for r in raised:
+                dq, _ = cKDTree(Cn[r["faces"]]).query(q, k=1)
+                if dq <= float(p.keep_reach_mm):
+                    r.update(kept=True, by_user=True, verdict="kept")
+                    break
     thin = np.zeros(len(F), dtype=bool)
     for r in raised:
         if r["kept"]:
@@ -546,23 +631,23 @@ def find_support(V: np.ndarray, F: np.ndarray, *, normals: np.ndarray | None = N
 
     for r in raised:
         if r["kept"]:
-            warnings.append(f"A thin part lying flat is kept: {r['size_mm']:.0f} mm across, {r['height_mm']:.2f} mm above the "
+            who = "kept, as you chose" if r["by_user"] else "kept"
+            warnings.append(f"A thin part lying flat is {who}: {r['size_mm']:.0f} mm across, {r['height_mm']:.2f} mm above the "
                             f"table, {at(r)}. It is a piece of its own now: Remove floaters may take it if it is small.")
-    unsure = [r for r in raised if not r["kept"]]
-    if 0 < len(unsure) <= 3:
-        for r in unsure:
-            how = (f"lower the margin below {r['height_mm']:.1f} mm, or select it by hand" if r["height_mm"] > band
-                   else "select it by hand")
-            warnings.append(f"A raised area {r['size_mm']:.0f} mm across, {r['height_mm']:.2f} mm above the table, {at(r)}, goes "
-                            f"with the table: it may be a thin part, too close to the table's own scatter "
-                            f"({r['scatter_mm']:.2f} mm) to tell. To keep it, {how}.")
-    elif unsure:  # many: the table's own unevenness, said once (on the simulated ball's table, 27 of them)
-        hi = max(r["height_mm"] for r in unsure)
-        big = ", ".join(f"{r['size_mm']:.0f} mm across {at(r)}" for r in unsure[:3])
-        warnings.append(f"{len(unsure)} raised areas up to {hi:.2f} mm above the table go with it (the largest: {big}): the "
-                        f"table is that uneven, so a thin part lying flat that is thinner than about "
-                        f"{math.ceil(10 * hi) / 10:.1f} mm cannot be "
-                        "told from it. If there is one, it may be among them: select it by hand to keep it.")
+    warned = [r for r in raised if r["verdict"] == "warned"]
+    for r in warned[:8]:
+        warnings.append(f"A raised area {r['size_mm']:.0f} mm across, {r['height_mm']:.2f} mm above the table round it, {at(r)}, "
+                        f"goes with the table: it may be a thin part (the table round it scatters {r['scatter_mm']:.2f} mm). "
+                        "To keep it, choose Keep this, or select it by hand.")
+    if len(warned) > 8:
+        warnings.append(f"{len(warned) - 8} more raised areas like these go with the table; each is listed and drawn.")
+    uneven = [r for r in raised if r["verdict"] == "uneven"]
+    if uneven:
+        hi = max(r["height_mm"] for r in uneven)
+        warnings.append(f"{len(uneven)} raised area{'s' if len(uneven) != 1 else ''} up to {hi:.2f} mm high go with the table "
+                        "where it is uneven itself (it scatters more than "
+                        f"{max(float(p.flat_table_mm), 1.5 * rms):.2f} mm there, or rises in many places close by): there a "
+                        f"thin part lying flat that is thinner than about {math.ceil(10 * hi) / 10:.1f} mm cannot be told from it.")
     if tried:
         s0, why0 = tried[0]
         warnings.append(f"The largest flat surface ({100 * s0:.0f} % of the scan) was not taken for the table: it {why0}. "
@@ -580,14 +665,15 @@ def find_support(V: np.ndarray, F: np.ndarray, *, normals: np.ndarray | None = N
                           facing_deg=float(p.facing_deg), faces=faces, kept=kept, area_mm2=float(fa[gone].sum()),
                           area_left_mm2=float(fa[~gone].sum()), lowest_mm=lowest, loose_removed=loose_removed,
                           loose_left=loose_left, loose_left_mm2=loose_left_mm2, skipped=[w for _, w in tried],
-                          raised=raised, warnings=warnings, ms=round(1e3 * (time.perf_counter() - t0), 1))
+                          raised=raised, thin_limit_mm=float(p.thin_find_k) * rms, thin_keep_mm=float(p.thin_keep_k) * rms,
+                          warnings=warnings, ms=round(1e3 * (time.perf_counter() - t0), 1))
 
 
 def remove_support(V: np.ndarray, F: np.ndarray, *, normals: np.ndarray | None = None, sigma: np.ndarray | None = None,
-                   params: SupportParams | None = None, seed: int = 0) -> tuple[np.ndarray, np.ndarray, SupportFinding]:
+                   params: SupportParams | None = None, seed: int = 0, keep=None) -> tuple[np.ndarray, np.ndarray, SupportFinding]:
     """:func:`find_support`, applied: ``(V2, F2, finding)``, the kept faces in their order and
     their vertices (as :func:`ohs.mesh.keep_faces` with ``finding.kept``)."""
-    r = find_support(V, F, normals=normals, sigma=sigma, params=params, seed=seed)
+    r = find_support(V, F, normals=normals, sigma=sigma, params=params, seed=seed, keep=keep)
     V, F = as_mesh(V, F)
     V2, F2, _ = compact(V, F[r.kept])
     return (V2.copy() if V2 is V else V2), F2, r
