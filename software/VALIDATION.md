@@ -2183,6 +2183,33 @@ Same 20 meshes; means over the seeds (true poses and tracking alike unless said)
 
 Both are options, off by default, chosen in the Smooth tab's "Where to smooth" (Everywhere / Off edges / Flat only, with the numbers above in its hover card): `flat_only` since 2026-11-16, `away_from_edges` since 2026-11-17 (the owner's decision: both, explained, not the default). Scripts and rows: scratchpad `m5v3\check\` (`run_flat.py`, `agg2.py`).
 
+## The part's coordinate system: its ± (2026-11-17)
+
+`ohs.measure.frame.part_frame` builds the part's own axes from three fitted features
+([`docs/FEATURE_PLAN.md`](docs/FEATURE_PLAN.md), K3; the engine only so far). The frame's ± (its
+angle, its turn about the first axis, its origin) is carried over from the fits' own ± values.
+Checked on fits to noisy points with a known true frame, 200 seeded trials per case, 0.02–0.1 mm
+of noise per point (`tests/test_measure_frame.py`):
+
+| Features | Whole angle: ±2σ covers / mean (error/σ)² | Turn | Origin |
+|---|---|---|---|
+| Top face, side face, hole | 99.0 % / 0.92 | 94.5 % / 0.91 | 100 % / 0.85 |
+| Face, hole, hole | 98.5 % / 0.81 | 97.0 % / 0.76 | 99.0 % / 0.93 |
+| Three faces (a corner) | 98.5 % / 0.93 | 94.5 % / 1.02 | 99.0 % / 0.84 |
+| Face, side face, hole, strict 3-2-1 | 100 % / 0.98 | 94.5 % / 1.13 | 99.5 % / 0.98 |
+
+For an error in three directions at twice its RMS, 95–99.3 % is expected, and a mean of 1. With
+exact fits the frame is exact to 1e-9 mm, and a mesh turned into the frame, saved and loaded has
+its hole at the origin to 1e-4 mm (the file's 32-bit numbers).
+
+- **What the ± covers:** the spread from scan to scan that the fits' ± covers. It leaves out
+  what is the same on every scan (a hole's edge read small, the calibration's scale).
+- **A hole used for its direction has no ±** (only its centre has one); the frame says so and
+  gives no ± for what depends on it.
+- **Not yet tried on meshes of simulated scans:** these trials use points with independent
+  noise. On a scan the fits' ± is widened for errors that come in patches ("The fits' ± on
+  today's engine"); how well the frame's ± holds there is still to be measured.
+
 ## What the metrics mean
 
 - **Stereo errors** compare the estimated raw intrinsics/extrinsics (`K1`, `K2`, `R`, `T`) with

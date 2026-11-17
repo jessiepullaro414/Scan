@@ -110,6 +110,21 @@ number is in the scan's own frame.
 - **Test first:** on a box with a hole, the frame built from (top face, side face, hole) puts the
   hole's centre at the origin and the faces on the axes to within their ±; a mesh exported in the
   frame and loaded again has the hole at the origin.
+- **Engine done 2026-11-17** (`ohs/measure/frame.py`, `part_frame` and `PartFrame`; 151 tests on
+  both paths). The primary is a plane; the secondary a side face, an axis lying along the
+  primary, or a second hole across it ("face, hole, hole"); the origin a hole, a cylinder, a
+  point or a third face (a corner). Signs come from where the features lie, never from a
+  normal's sign, so the same features always give the same frame; two switches flip an axis.
+  - *A choice made:* with a hole as the origin, the hole's centre **is** the origin (the test
+    above asks for it), which is "level, turn, origin" as measuring machines do it: the primary
+    sets three degrees of freedom, the secondary one, the hole two. The strict 3-2-1 count (the
+    side face is X = 0 and the hole sets only Y) is the option `secondary_zero`; three faces are
+    strict 3-2-1 by themselves.
+  - The frame's ± is carried over from the fits'; ±2σ covers the true frame as it should
+    (`VALIDATION.md`, "The part's coordinate system").
+  - **Left:** keeping the frame with the scan (it goes under `frame` in K1's file), the routes,
+    the viewer's panel and the downloads in the part's frame; the ± on meshes of simulated
+    scans.
 
 ---
 
