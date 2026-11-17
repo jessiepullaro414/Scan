@@ -36,6 +36,7 @@ import type {
   KeptMeasurement,
   KeptRelation,
   NewFeature,
+  MoveChoice,
   NewMeasurement,
   NewNominal,
   NominalAnswer,
@@ -146,6 +147,12 @@ async function toApiError(res: Response, path: string): Promise<ApiError> {
 
 export type RawResponse<T> = { status: number; data: T };
 
+/** The query of `GET .../nominal`: "?value=radius&with_bias=true", or "" for the defaults. */
+export function nominalQuery(value?: "diameter" | "radius", withBias = false): string {
+  const q = [value ? `value=${value}` : "", withBias ? "with_bias=true" : ""].filter(Boolean);
+  return q.length ? `?${q.join("&")}` : "";
+}
+
 async function send<T>(method: string, path: string, body?: unknown): Promise<RawResponse<T>> {
   let res: Response;
   try {
@@ -171,6 +178,7 @@ async function send<T>(method: string, path: string, body?: unknown): Promise<Ra
 const get = async <T>(path: string) => (await send<T>("GET", path)).data;
 const post = async <T>(path: string, body?: unknown) => (await send<T>("POST", path, body ?? {})).data;
 const patch = async <T>(path: string, body: unknown) => (await send<T>("PATCH", path, body)).data;
+const put = async <T>(path: string, body: unknown) => (await send<T>("PUT", path, body)).data;
 const del = async (path: string) => {
   await send<void>("DELETE", path);
 };
@@ -377,12 +385,17 @@ export const api = {
   cadFileUrl: (pid: string, sid: string, name: CadFile, boundary: CadBoundary = "rectangle", measuredOnly = false) =>
     `${scanPath(pid, sid)}/features/cad/${name}?boundary=${boundary}${measuredOnly ? "&measured_only=true" : ""}`,
   /** What is offered as a nominal value for a kept fit (its diameter, or `value` "radius") or relation (each of its
-   * values), with its approvals; a plane has no offers. */
-  nominal: (pid: string, sid: string, id: string, value?: "diameter" | "radius") =>
-    get<NominalAnswer>(`${scanPath(pid, sid)}/features/${enc(id)}/nominal${value ? `?value=${value}` : ""}`),
+   * values), with its approvals; a plane has no offers. `withBias`: also the values only a known bias allows (each
+   * marked so); without it those are left out (each offer's `bias_only` names them). */
+  nominal: (pid: string, sid: string, id: string, value?: "diameter" | "radius", withBias = false) =>
+    get<NominalAnswer>(`${scanPath(pid, sid)}/features/${enc(id)}/nominal${nominalQuery(value, withBias)}`),
   /** Approve a nominal value: the one offered (`source` "suggested", 422 when it isn't offered now) or one typed
-   * ("entered", 422 when it makes no sense for that value). Replaces an approval of the same value. */
+   * ("entered", 422 when it makes no sense for that value). Replaces an approval of the same value. `with_bias` is
+   * kept as the approval's rule; a relation's `move` can be chosen with it. */
   approveNominal: (pid: string, sid: string, id: string, body: NewNominal) => post<NominalAnswer>(`${scanPath(pid, sid)}/features/${enc(id)}/nominal`, body),
+  /** Which of a kept relation's two fits moves to suit its approved values in the CAD export ("listed": none, the
+   * default). Returns the relation as `GET .../features` shows it. */
+  setRelationMove: (pid: string, sid: string, id: string, move: MoveChoice) => put<KeptRelation>(`${scanPath(pid, sid)}/features/${enc(id)}/move`, { move }),
   /** Forget an approval (404 when there is none). */
   removeNominal: (pid: string, sid: string, id: string, value: string) => del(`${scanPath(pid, sid)}/features/${enc(id)}/nominal/${enc(value)}`),
 

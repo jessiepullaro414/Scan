@@ -10,7 +10,9 @@
  *   outline, their points (at most 5,000, not simplified) and their holes as left out;
  * - approved nominal values (features.ts, nominal.ts): the summary's `nominal` lists the approved sizes as used and
  *   the approved relations as listed, not applied, each with a note as the engine writes it; with
- *   `measured_only=true` none. The fixed files below do not change with them;
+ *   `measured_only=true` none. A relation whose move is chosen is listed under `moves` as not applied, with the
+ *   reason that the demo moves no shape (the engine's rules are ohs/cad/moves.py). The fixed files below do not
+ *   change with them;
  * - `GET .../features/cad/fits.step` and `.../fits.FCMacro` serve small fixed texts, not the real files: a STEP
  *   file with an empty DATA section and a macro that only prints a line in FreeCAD, both saying they come from the
  *   demo. No name goes into them. The sizes in the summary are those texts'.
@@ -80,7 +82,7 @@ const num = (x: number) => x.toFixed(6).replace(/\.?0+$/, "");
 /** The approved values the demo's summary lists: approved sizes as used, relations listed, not applied. "Check
  * again" is the engine's (features.ts shows it); the demo's summary does not work it out. */
 function cadNominal(s: CadStored, measuredOnly: boolean): { nominal: CadNominal; notes: string[] } {
-  const nominal: CadNominal = { measured_only: measuredOnly, sizes_used: 0, sizes: [], relations_listed: 0, relations: [], relations_note: null };
+  const nominal: CadNominal = { measured_only: measuredOnly, sizes_used: 0, sizes: [], relations_listed: 0, relations_applied: 0, relations: [], relations_note: null, moves: [] };
   const notes: string[] = [];
   if (measuredOnly) return { nominal, notes };
   for (const f of s.features) {
@@ -91,16 +93,40 @@ function cadNominal(s: CadStored, measuredOnly: boolean): { nominal: CadNominal;
     nominal.sizes.push({ id: f.id, name: f.name, value: n.value as "diameter" | "radius", nominal: n.nominal, measured, sigma, check_again: false });
     notes.push(`${f.name}: nominal ${n.value} ${num(n.nominal)} mm (measured ${measured.toFixed(2)} +/- ${sigma.toFixed(2)} mm)`);
   }
+  const moving = (s.relations ?? []).filter((r) => r.move && (r.nominals ?? []).length).sort((x, y) => x.move!.order - y.move!.order);
+  for (const r of moving) {
+    const names = [r.a, r.b].map((id) => s.features.find((f) => f.id === id)?.name ?? null);
+    const [moved, fixed] = r.move!.shape === "a" ? names : [names[1], names[0]];
+    nominal.moves!.push({
+      id: r.id,
+      name: r.name,
+      shape: r.move!.shape,
+      moved_id: r.move!.shape === "a" ? r.a : r.b,
+      moved,
+      fixed_id: r.move!.shape === "a" ? r.b : r.a,
+      to_suit: fixed,
+      applied: false,
+      turn_deg: 0,
+      slide_mm: 0,
+      slide: [0, 0, 0],
+      values: [],
+      holds: false,
+      check_again: false,
+      reason: "the demo engine moves no shape: its files are small fixed texts",
+      warnings: [],
+      sentence: "",
+    });
+  }
   for (const r of s.relations ?? [])
     for (const n of r.nominals ?? []) {
-      nominal.relations.push({ id: r.id, name: r.name, value: n.value, nominal: n.nominal, word: n.word, check_again: false });
+      nominal.relations.push({ id: r.id, name: r.name, value: n.value, nominal: n.nominal, word: n.word, check_again: false, move: r.move?.shape ?? "listed", applied: false });
       notes.push(`${r.name}: approved ${n.word ?? `${n.value.replace("_", " ")} ${num(n.nominal)}${n.unit === "deg" ? " deg" : " mm"}`}; not applied to the geometry`);
     }
   nominal.sizes_used = nominal.sizes.length;
   nominal.relations_listed = nominal.relations.length;
   if (nominal.relations_listed)
     nominal.relations_note =
-      "approved relations (parallel, perpendicular, an angle, a distance) are listed in the notes and not applied to the geometry: turning one shape to suit another needs a rule for which one moves, and that is not decided";
+      "approved relations listed only (the default) are named in the notes and not applied to the geometry: choose which of a relation's two fits moves to suit it, and the export moves a copy of that fit (the measured fits stay as they are)";
   return { nominal, notes };
 }
 

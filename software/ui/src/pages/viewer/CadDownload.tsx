@@ -7,8 +7,9 @@
  * scan has no kept fits. The words are cadExport.ts's.
  *
  * Approved nominal values (FEATURE_PLAN.md C3): the files use the approved sizes, and a line says how many, and how
- * many approved relations are only listed in the notes. Once anything is approved a second switch, "Measured values
- * only", downloads the files as if nothing were approved.
+ * many approved relations are only listed in the notes or applied by moving a shape (chosen in the relation's card),
+ * with a line per move saying how far its shape was turned and slid. Once anything is approved a second switch,
+ * "Measured values only", downloads the files as if nothing were approved.
  */
 import { CircleHelp, Download, TriangleExclamationPoint } from "lucide-react";
 import { useEffect, useState } from "react";
@@ -18,7 +19,7 @@ import { Button } from "../../components/ui/Button";
 import { Switch } from "../../components/ui/Form";
 import { Tooltip } from "../../components/ui/Popover";
 import { downloadFile } from "../../lib/download";
-import { CAD_MEASURED_HELP, CAD_OUTLINE_HELP, cadDownloadName, cadLine, cadNominalLine, cadUnavailable, outlineCost } from "./cadExport";
+import { CAD_MEASURED_HELP, CAD_OUTLINE_HELP, cadDownloadName, cadLine, cadMoveLines, cadNominalLine, cadUnavailable, outlineCost } from "./cadExport";
 
 type Summaries = Record<CadBoundary, CadSummary | null>;
 
@@ -63,6 +64,8 @@ export function CadDownload({ pid, sid, stem, kept, hasMesh }: { pid: string; si
   // the measured-only switch is there once something is approved (or while it is on)
   const approved = measuredOnly || !!kept && [...kept.features, ...kept.relations].some((x) => (x.nominals ?? []).length > 0);
   const nominalLine = sum ? cadNominalLine(sum.nominal) : null;
+  // the moves applied (one not applied is among the warnings, with why)
+  const moveLines = sum?.nominal ? cadMoveLines({ ...sum.nominal, moves: (sum.nominal.moves ?? []).filter((m) => m.applied) }) : [];
   const where = sum ? ` (${sum.frame_label})` : "";
 
   return (
@@ -113,6 +116,13 @@ export function CadDownload({ pid, sid, stem, kept, hasMesh }: { pid: string; si
       ) : null}
       <p className="mt-2 text-xs text-subtle">{why ?? error ?? (sum ? cadLine(sum) : "Reading the kept fits…")}</p>
       {!why && nominalLine ? <p className="mt-1 text-xs text-subtle" title={sum?.nominal?.relations_note ?? undefined}>{nominalLine}</p> : null}
+      {!why && moveLines.length ? (
+        <ul className="mt-1 space-y-0.5 text-[11.5px] leading-4 text-subtle" aria-label="Shapes moved in the CAD files">
+          {moveLines.map((l) => (
+            <li key={l}>{l}</li>
+          ))}
+        </ul>
+      ) : null}
       {!why && sum && sum.warnings.length ? (
         <ul className="mt-1.5 space-y-1 text-[11.5px] leading-4 text-warn">
           {sum.warnings.map((w) => (

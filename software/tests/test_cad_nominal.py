@@ -131,7 +131,7 @@ def test_a_relation_dict_and_record_give_the_same():
 # --------------------------------------------------------------------------- the bias table
 def test_a_boss_read_small_is_suggested_only_with_its_known_bias():
     # tracked Ø 14 bosses read 0.15-0.19 mm small in radius: 13.66 is 0.34 below 14, far outside 2σ (0.02)
-    offer = only(suggest_fit(cylinder(13.66, 0.01), form="boss", poses="tracked"), "diameter")
+    offer = only(suggest_fit(cylinder(13.66, 0.01), form="boss", poses="tracked", with_bias=True), "diameter")
     assert nominals(offer) == [14.0]
     s = offer.suggestions[0]
     assert s.allowed_by == "bias"
@@ -155,7 +155,7 @@ def test_the_same_reading_outside_the_tables_size_range_is_not_suggested():
 def test_a_boss_of_14_3_with_tracking_is_offered_14_5_only_with_the_bias():
     # the plan's "Ø 14.3 suggests nothing" holds for a cylinder not known to be a boss (above); known
     # as a tracked boss, which reads 0.30-0.38 mm small in diameter, 14.5 is within reach of the bias
-    offer = only(suggest_fit(cylinder(14.3, 0.03), form="boss", poses="tracked"), "diameter")
+    offer = only(suggest_fit(cylinder(14.3, 0.03), form="boss", poses="tracked", with_bias=True), "diameter")
     assert nominals(offer) == [14.5] and offer.suggestions[0].allowed_by == "bias"
 
 
@@ -171,9 +171,10 @@ def test_a_kept_cylinder_that_says_it_is_a_boss_gets_the_boss_bias_without_being
     """A kept cylinder carries its form (``features.json``, set by the fit): the app need not pass
     it. A ``form`` given by the caller still wins; a record without one, or with null, is as before."""
     boss = {**cylinder(13.66, 0.01), "form": "boss"}
-    offer = only(suggest_fit(boss, poses="tracked"), "diameter")
+    offer = only(suggest_fit(boss, poses="tracked", with_bias=True), "diameter")
     assert nominals(offer) == [14.0] and offer.suggestions[0].allowed_by == "bias"
-    assert nominals(only(suggest_fit({**cylinder(14.3, 0.03), "form": "boss"}, poses="tracked"), "diameter")) == [14.5]
+    assert nominals(only(suggest_fit({**cylinder(14.3, 0.03), "form": "boss"}, poses="tracked", with_bias=True),
+                         "diameter")) == [14.5]
     # the caller's form wins over the record's
     offer = only(suggest_fit(boss, form="bore", poses="tracked"), "diameter")
     assert 14.0 not in nominals(offer) and "bore" in offer.reason
@@ -190,13 +191,13 @@ def test_a_kept_cylinder_that_says_it_is_a_boss_gets_the_boss_bias_without_being
     shape = CylinderFit(point=np.zeros(3), axis=np.array([0.0, 0.0, 1.0]), radius_mm=6.83, rms_mm=0.05, n=800,
                         radius_sigma_mm=0.005, axis_sigma_deg=0.5, point_sigma_mm=0.02)
     r = SimpleNamespace(kind="cylinder", fit=shape, faces=np.zeros(0), warnings=[], form="boss")
-    assert nominals(only(suggest_fit(r, poses="tracked"), "diameter")) == [14.0]
+    assert nominals(only(suggest_fit(r, poses="tracked", with_bias=True), "diameter")) == [14.0]
 
 
 def test_a_hole_with_a_wall_follows_the_level_it_is_read_at():
     # at the 0.5 mm level a Ø 25 hole with a wall reads 0.57-0.70 mm large at true poses
     at_half = hole(25.62, 0.09, warnings=[wall_warning(0.5)])
-    offer = only(suggest_fit(at_half, poses="true"), "diameter")
+    offer = only(suggest_fit(at_half, poses="true", with_bias=True), "diameter")
     assert nominals(offer) == [25.0] and offer.suggestions[0].allowed_by == "bias"
     assert any(src["section"].startswith("The Hole tool on holes with a wall")
                for src in offer.suggestions[0].bias["sources"])
@@ -214,7 +215,7 @@ def test_a_thin_wall_seen_from_both_sides_reads_thick_and_its_bias_is_known():
     rel = {"kinds": ["plane", "plane"], "parallel": True, "notes": [],
            "values": [{"name": "angle", "label": "Angle (parallel)", "value": 0.0, "sigma": 0.05, "unit": "deg"},
                       {"name": "distance", "label": "Distance", "value": 2.45, "sigma": 0.03, "unit": "mm"}]}
-    offer = only(suggest_relation(rel, form="wall", poses="tracked"), "distance")
+    offer = only(suggest_relation(rel, form="wall", poses="tracked", with_bias=True), "distance")
     assert nominals(offer) == [2.0] and offer.suggestions[0].allowed_by == "bias"
     offer = only(suggest_relation(rel), "distance")
     assert 2.0 not in nominals(offer)
@@ -316,7 +317,7 @@ def test_fits_their_dicts_and_kept_features_go_in():
 def test_an_offer_is_plain_json():
     import json
 
-    offers = suggest_fit(cylinder(13.66, 0.01), form="boss", poses="tracked")
+    offers = suggest_fit(cylinder(13.66, 0.01), form="boss", poses="tracked", with_bias=True)
     d = json.loads(json.dumps([o.to_dict() for o in offers]))
     s = d[0]["suggestions"][0]
     for key in ("nominal", "difference", "step", "word", "allowed_by", "bias", "sentence"):
@@ -431,7 +432,7 @@ def test_the_check_says_why_and_is_plain_json():
     assert set(d) == {"value", "unit", "nominal", "measured", "sigma", "allowed", "allowed_by", "word", "reason"}
     assert d["unit"] == "mm" and d["value"] == "diameter"
     # a known bias allows it, and the check says so
-    biased = check_fit_nominal({**cylinder(13.66, 0.01), "form": "boss"}, 14.0, poses="tracked")
+    biased = check_fit_nominal({**cylinder(13.66, 0.01), "form": "boss"}, 14.0, poses="tracked", with_bias=True)
     assert biased.allowed and biased.allowed_by == "bias" and "bias" in biased.reason
     # a value shown as already round is allowed as it reads
     at = check_fit_nominal(cylinder(14.003, 0.001), 14.0)
@@ -451,6 +452,54 @@ def test_the_check_refuses_what_the_offers_refuse():
         check_fit_nominal({"kind": "plane", "shape": {"kind": "plane"}}, 1.0)
     with pytest.raises(ValueError):
         check_fit_nominal(cylinder(14.02, 0.03), 14.0, value="angle")
+
+
+#   --------------------------------------------------------------------------- offers a bias alone allows: asked for
+def test_the_plans_14_3_boss_gets_no_offer_by_default_and_14_5_only_when_asked():
+    """The owner (after C3): a Ø 14.3 boss may well be a Ø 14.3 boss. By default only the ± makes an
+    offer; the ones a known bias alone allows come only when asked for (``with_bias``), marked."""
+    boss = {**cylinder(14.3, 0.03), "form": "boss"}
+    off = only(suggest_fit(boss, poses="tracked"), "diameter")
+    assert off.suggestions == [] and off.reason_code == "already_round"
+    assert off.bias_only == [14.5]  # what turning it on would add
+    assert "14.5" in off.reason and "known bias" in off.reason
+    on = only(suggest_fit(boss, poses="tracked", with_bias=True), "diameter")
+    assert nominals(on) == [14.5] and on.suggestions[0].allowed_by == "bias" and on.bias_only == []
+    assert "only because of a known bias" in on.suggestions[0].sentence
+    assert "bias_only" in off.to_dict() and off.to_dict()["bias_only"] == [14.5]
+
+
+def test_off_keeps_the_offers_the_sigma_alone_allows():
+    # Ø 14.3 ± 0.2 boss, tracked: 14 is within 2σ, 15 only with the bias (bosses read up to 0.38 mm small)
+    boss = {**cylinder(14.3, 0.2), "form": "boss"}
+    on = only(suggest_fit(boss, poses="tracked", with_bias=True), "diameter")
+    assert [(s.nominal, s.allowed_by) for s in on.suggestions] == [(14.0, "2 sigma"), (15.0, "bias")]
+    off = only(suggest_fit(boss, poses="tracked"), "diameter")
+    assert [(s.nominal, s.allowed_by) for s in off.suggestions] == [(14.0, "2 sigma")] and off.bias_only == [15.0]
+    # off is as if no bias were known: a finer step is searched when only the bias fitted a coarser one
+    boss = {**cylinder(14.45, 0.1), "form": "boss"}
+    assert [(s.nominal, s.allowed_by) for s in only(suggest_fit(boss, poses="tracked", with_bias=True),
+                                                    "diameter").suggestions] == [(15.0, "bias")]
+    off = only(suggest_fit(boss, poses="tracked"), "diameter")
+    assert [(s.nominal, s.allowed_by) for s in off.suggestions] == [(14.5, "2 sigma")] and off.bias_only == [15.0]
+    # nothing a bias would add: bias_only stays empty
+    assert only(suggest_fit(cylinder(14.02, 0.03)), "diameter").bias_only == []
+
+
+def test_the_check_follows_the_rule_it_is_given():
+    boss = {**cylinder(13.66, 0.01), "form": "boss"}
+    on = check_fit_nominal(boss, 14.0, poses="tracked", with_bias=True)
+    assert on.allowed and on.allowed_by == "bias"
+    off = check_fit_nominal(boss, 14.0, poses="tracked")
+    assert not off.allowed and off.allowed_by is None and "only a known bias" in off.reason
+    # within 2σ it is allowed either way
+    assert check_fit_nominal(cylinder(14.02, 0.03), 14.0).allowed_by == "2 sigma"
+    rel = {"kinds": ["plane", "plane"], "parallel": True, "notes": [],
+           "values": [{"name": "angle", "label": "Angle (parallel)", "value": 0.0, "sigma": 0.05, "unit": "deg"},
+                      {"name": "distance", "label": "Distance", "value": 2.45, "sigma": 0.03, "unit": "mm"}]}
+    assert check_relation_nominal(rel, "distance", 2.0, form="wall", with_bias=True).allowed
+    assert not check_relation_nominal(rel, "distance", 2.0, form="wall").allowed
+    assert 2.0 not in nominals(only(suggest_relation(rel, form="wall", poses="tracked"), "distance"))
 
 
 def test_relation_words_come_with_the_check():

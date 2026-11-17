@@ -190,6 +190,12 @@ class NominalBody(BaseModel):
     value: str  # "diameter" or "radius" (a fit), "angle", "distance" or "centre_distance" (a relation)
     nominal: float = Field(allow_inf_nan=False)  # mm, or degrees for an angle
     source: str = "entered"  # "suggested": the value offered now; "entered": typed by the engineer
+    with_bias: bool = False  # approved with the offers a known bias alone allows shown (kept as its rule)
+    move: Optional[str] = None  # a relation: "listed", "a" or "b" (which fit moves in the CAD export); None: as it is
+
+
+class MoveBody(BaseModel):
+    move: str  # "listed" (the default), "a" or "b": which fit of a kept relation moves to suit it in the CAD export
 
 
 class RefitBody(BaseModel):
@@ -675,12 +681,17 @@ def create_app(config: Any = None, *, projects_dir: Any = None, static_dir: Any 
 
     # approved nominal values (FEATURE_PLAN C3): for a kept fit or a kept relation
     @app.get(fpath + "/{fid}/nominal")
-    def features_nominal(pid: str, sid: str, fid: str, value: Optional[str] = None) -> JSONResponse:
-        return _json(feats.nominal(pid, sid, fid, value))
+    def features_nominal(pid: str, sid: str, fid: str, value: Optional[str] = None, with_bias: bool = False) -> JSONResponse:
+        return _json(feats.nominal(pid, sid, fid, value, with_bias))
 
     @app.post(fpath + "/{fid}/nominal")
     def features_approve(pid: str, sid: str, fid: str, body: NominalBody) -> JSONResponse:
-        return _json(feats.approve(pid, sid, fid, body.value, body.nominal, body.source))
+        return _json(feats.approve(pid, sid, fid, body.value, body.nominal, body.source, body.with_bias, body.move))
+
+    # a kept relation's move in the CAD export (after C3: listed only, or one of its two fits moves to suit it)
+    @app.put(fpath + "/{fid}/move")
+    def features_move(pid: str, sid: str, fid: str, body: MoveBody) -> JSONResponse:
+        return _json(feats.set_move(pid, sid, fid, body.move))
 
     @app.delete(fpath + "/{fid}/nominal/{value}")
     def features_unapprove(pid: str, sid: str, fid: str, value: str) -> Response:

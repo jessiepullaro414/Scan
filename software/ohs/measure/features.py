@@ -22,6 +22,7 @@ mesh; :mod:`ohs.server.features` fits and refits through the fit route and keeps
                        "mesh_version", "created"}],
      "relations": [{"id": "r-…", "name": "Relation 1", "a": "<feature id>", "b": "<feature id>",
                     "nominals": [...],   # as a feature's
+                    "move": {...},       # which fit moves to suit it in the CAD export (below); left out: listed only
                     "created"}]}
 
 A relation keeps only which two features the user asked to relate: its numbers are worked out
@@ -69,6 +70,7 @@ for a fit's size or a relation's values, kept beside the measured ones, which ne
      "word": "parallel" | ... | null,   # what the nominal means for a relation (an angle of 0: "parallel")
      "source": "suggested" | "entered",   # the value offered (ohs.cad.nominal), or one typed
      "measured": 14.02, "sigma": 0.03 | null,   # the measurement it was approved against
+     "with_bias": true,             # only when approved with offers a known bias alone allows (below)
      "approved": "2026-11-17T12:00:00"}
 
 A fit keeps at most one size (a diameter or a radius: they are the same size), a relation at most
@@ -77,6 +79,20 @@ so a file written before approvals existed is read and written as it was. They g
 record: deleting a fit or a relation deletes them; a fit fitted again keeps them, and
 :mod:`ohs.server.features` says when the new measurement no longer allows one ("check again").
 :func:`validate` checks each number against :data:`NOMINAL_LIMITS`.
+
+``with_bias`` keeps the rule an approval was made under: true when the engineer had asked to see
+the values a known bias alone allows (``ohs.cad.nominal``, ``with_bias``), so "check again" goes on
+judging it by that rule; left out when only the ± made the offers. An approval kept before the
+choice existed has none and is judged by the ± alone.
+
+**A relation's move** (the owner's decision after C3): which of its two fits moves to suit its
+approved values in the CAD export (``ohs.cad.moves``)::
+
+    {"shape": "a" | "b", "order": 3, "chosen": "2026-11-17T12:00:00"}
+
+``order`` is when it was chosen among the scan's moves (1, 2, ...: the export applies them in this
+order). Left out, the relation is listed only, as every relation was before moves existed; a file
+written then loads and is written as it was. :func:`validate` checks the shape and the order.
 
 **The part's frame** (``frame``) is written by :mod:`ohs.server.features` from
 :func:`ohs.measure.frame.part_frame`. :func:`validate` passes it through as it is (an object or
@@ -106,7 +122,7 @@ __all__ = ["FORMAT_VERSION", "FILE_NAME", "FACES_DIR", "KINDS", "SHAPE_OF", "FOR
            "validate", "load", "save", "faces_path", "save_faces", "load_faces", "remove_faces", "new_id",
            "next_name", "now", "frame_state", "EDGE_MAX_POINTS", "split_extent", "outline_path", "save_outline",
            "load_outline", "remove_outline", "FIT_NOMINAL_VALUES", "RELATION_NOMINAL_VALUES", "NOMINAL_UNITS",
-           "NOMINAL_LIMITS", "NOMINAL_SOURCES", "check_nominal_value"]
+           "NOMINAL_LIMITS", "NOMINAL_SOURCES", "check_nominal_value", "MOVE_SHAPES"]
 
 FORMAT_VERSION = 1
 FILE_NAME = "features.json"
@@ -129,6 +145,8 @@ NOMINAL_LIMITS = {"diameter": (0.0, 10_000.0, True), "radius": (0.0, 5_000.0, Tr
                   "distance": (0.0, 10_000.0, False), "centre_distance": (0.0, 10_000.0, False)}
 #: whether an approved value was the one offered or one the engineer typed
 NOMINAL_SOURCES = ("suggested", "entered")
+#: which of a relation's two fits moves to suit its approved values in the CAD export (none: listed only)
+MOVE_SHAPES = ("a", "b")
 #: an id: letters, digits, "-" and "_" (it names a file)
 ID_RE = re.compile(r"[A-Za-z0-9_-]{1,64}")
 
@@ -332,6 +350,8 @@ def _nominals(items: Any, where: str, values: tuple[str, ...]) -> list[dict]:
             _fail(w, "word must be text or null")
         if n.get("source") not in NOMINAL_SOURCES:
             _fail(w, f"source must be one of {', '.join(NOMINAL_SOURCES)}, got {n.get('source')!r}")
+        if "with_bias" in n and not isinstance(n["with_bias"], bool):
+            _fail(w, f"with_bias must be true or false, got {n['with_bias']!r}")
         measured = n.get("measured")
         if not isinstance(measured, (int, float)) or isinstance(measured, bool) or not math.isfinite(measured):
             _fail(w, f"measured must be the finite number it was approved against, got {measured!r}")
@@ -414,8 +434,22 @@ def _relation(r: Any, i: int, feature_ids: set[str]) -> dict:
         _fail(where, "a feature cannot be related to itself")
     if "nominals" in r:
         out["nominals"] = _nominals(r["nominals"], where, RELATION_NOMINAL_VALUES)
+    if "move" in r:  # a file written before moves existed has none: it loads as it is (listed only)
+        out["move"] = _move(r["move"], where)
     out["created"] = _text(r.get("created", ""), where, "created")
     return out
+
+
+def _move(m: Any, where: str) -> dict:
+    """Check a relation's move (module docstring, "A relation's move")."""
+    if not isinstance(m, dict):
+        _fail(where, "move must be an object (shape, order, chosen)")
+    if m.get("shape") not in MOVE_SHAPES:
+        _fail(where, f"move shape must be one of {', '.join(MOVE_SHAPES)}, got {m.get('shape')!r}")
+    order = m.get("order")
+    if not isinstance(order, int) or isinstance(order, bool) or order < 1:
+        _fail(where, f"move order must be a whole number from 1, got {order!r}")
+    return {**m, "chosen": _text(m.get("chosen", ""), where, "move chosen")}
 
 
 def validate(doc: Any) -> dict:

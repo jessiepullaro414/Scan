@@ -23,6 +23,8 @@ type UiState = {
   deviationLimit: number;
   /** The Lasers shading's scale: the distance between the lasers and the mesh (mm) that shows as the strongest colour. */
   laserLimit: number;
+  /** Nominal offers: also show the values a known bias alone allows (off: only where the ± alone allows one). */
+  nominalWithBias: boolean;
   setTheme: (t: Theme) => void;
   setCurrentProject: (pid: string | null) => void;
   setScanMode: (m: ScanMode) => void;
@@ -32,6 +34,7 @@ type UiState = {
   setAutoMesh: (on: boolean) => void;
   setDeviationLimit: (mm: number) => void;
   setLaserLimit: (mm: number) => void;
+  setNominalWithBias: (on: boolean) => void;
 };
 
 const K = {
@@ -44,6 +47,7 @@ const K = {
   autoMesh: "ohs.autoMesh",
   deviationLimit: "ohs.deviationLimit",
   laserLimit: "ohs.laserLimit",
+  nominalWithBias: "ohs.nominalWithBias",
 };
 
 function readTheme(): Theme {
@@ -70,6 +74,7 @@ export const useUi = create<UiState>((set) => ({
   autoMesh: storage.get<boolean>(K.autoMesh, true),
   deviationLimit: validLimit(storage.get<unknown>(K.deviationLimit, null)),
   laserLimit: validLaserLimit(storage.get<unknown>(K.laserLimit, null)),
+  nominalWithBias: storage.get<unknown>(K.nominalWithBias, false) === true,
   setTheme: (theme) => {
     try {
       localStorage.setItem(K.theme, theme);
@@ -112,6 +117,10 @@ export const useUi = create<UiState>((set) => ({
     const laserLimit = validLaserLimit(mm);
     storage.set(K.laserLimit, laserLimit);
     set({ laserLimit });
+  },
+  setNominalWithBias: (on) => {
+    storage.set(K.nominalWithBias, on);
+    set({ nominalWithBias: on });
   },
 }));
 

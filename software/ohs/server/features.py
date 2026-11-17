@@ -44,7 +44,14 @@ the numbers a click in the viewer gives. This module adds:
   Fitting again keeps the approvals; reading marks one **check again** when the measurement has
   changed since and no longer allows it by the engine's rule
   (:func:`ohs.cad.nominal.check_fit_nominal`), with the old and the new measured value. Nothing is
-  re-approved or dropped on its own.
+  re-approved or dropped on its own. Offers that only a known bias allows are made only when asked
+  for (``with_bias``, off by default); an approval made that way keeps the rule (``with_bias``
+  true in its record) and is judged by it when measured again;
+* **a relation's move** (after C3): ``PUT .../features/{id}/move`` chooses whether a kept relation
+  is listed only in the CAD export (the default) or one of its two fits moves to suit it
+  (:mod:`ohs.cad.moves`, applied by :mod:`ohs.server.cad`); it can also be chosen with an approval
+  (``move`` in ``POST .../nominal``). Kept on the relation (``ohs.measure.features``, "A
+  relation's move"), with its place in the order the moves are applied.
 
 **Locking.** One lock per scan around reading, changing and writing ``features.json``. Fits run
 outside it (they can take a second); a refit is only kept when its feature has not been changed
@@ -199,19 +206,21 @@ class FeatureManager:
         except (ValueError, TypeError, KeyError):
             return None, warnings
 
-    def _check(self, doc: dict, key: str, item: dict, value: str, nominal: float, poses: str):
+    def _check(self, doc: dict, key: str, item: dict, value: str, nominal: float, poses: str,
+               with_bias: bool = False):
         """:func:`ohs.cad.nominal.check_fit_nominal` (or ``check_relation_nominal``) for one value of a
-        kept fit or relation as it is measured now."""
+        kept fit or relation as it is measured now, by the rule given (``with_bias``: whether a known
+        bias alone may allow it)."""
         from ohs.cad.nominal import NominalCheck, check_fit_nominal, check_relation_nominal
 
         if key == "features":
-            return check_fit_nominal(item, nominal, value=value, poses=poses)
+            return check_fit_nominal(item, nominal, value=value, poses=poses, with_bias=with_bias)
         rel, warnings = self._related(doc, item)
         if rel is None:
             unit = kf.NOMINAL_UNITS.get(value, "mm")
             return NominalCheck(value, unit, float(nominal), None, None, False, None, None,
                                 "the two fits cannot be related now")
-        return check_relation_nominal(rel, value, nominal, poses=poses, warnings=warnings)
+        return check_relation_nominal(rel, value, nominal, poses=poses, warnings=warnings, with_bias=with_bias)
 
     @staticmethod
     def _differs(a: float | None, b: float | None) -> bool:
@@ -222,9 +231,10 @@ class FeatureManager:
     def _nominal_view(self, doc: dict, key: str, item: dict, n: dict, poses: str) -> dict:
         """An approval as the API shows it: as kept, with the value measured now (``measured_now``,
         ``sigma_now``) and ``check_again``: true when the measurement has changed since the approval
-        and the new one no longer allows the nominal (:meth:`_check`), with ``check_reason`` saying
-        the old and the new measured value and why. Nothing is changed."""
-        chk = self._check(doc, key, item, n["value"], n["nominal"], poses)
+        and the new one no longer allows the nominal (:meth:`_check`, by the rule it was approved
+        under: a known bias counts only for one approved with ``with_bias``), with ``check_reason``
+        saying the old and the new measured value and why. Nothing is changed."""
+        chk = self._check(doc, key, item, n["value"], n["nominal"], poses, bool(n.get("with_bias", False)))
         changed = (chk.measured is None or self._differs(n.get("measured"), chk.measured)
                    or self._differs(n.get("sigma"), chk.sigma))
         again = bool(changed and not chk.allowed)
@@ -260,50 +270,60 @@ class FeatureManager:
                            "pick a kept fit or a kept relation")
         raise ApiError(404, f"no kept fit or relation {item_id!r}", "read the list again (GET .../features)")
 
-    def _offers(self, doc: dict, key: str, item: dict, poses: str, value: str | None) -> list:
+    def _offers(self, doc: dict, key: str, item: dict, poses: str, value: str | None, with_bias: bool = False) -> list:
         """The engine's offers for a kept fit (``suggest_fit``, its own ``form``) or relation
-        (``suggest_relation`` on the engine's record, with both fits' warnings): a list of ``Offer``."""
+        (``suggest_relation`` on the engine's record, with both fits' warnings): a list of ``Offer``.
+        ``with_bias``: also the values a known bias alone allows (off unless asked)."""
         from ohs.cad.nominal import suggest_fit, suggest_relation
 
         if key == "features":
             if value not in (None, *kf.FIT_NOMINAL_VALUES):
                 raise ApiError(422, f"a fit's nominal value is its diameter or its radius, not {value!r}",
                                "leave value out for the diameter, or give 'radius'")
-            return suggest_fit(item, poses=poses, value=value)
+            return suggest_fit(item, poses=poses, value=value, with_bias=with_bias)
         if value is not None:
             raise ApiError(422, "a relation's offers are for all its values: give no value",
                            "leave value out")
         rel, warnings = self._related(doc, item)
         if rel is None:
             raise ApiError(409, f"the two fits of {item['name']!r} cannot be related", "fit them again, or delete the relation")
-        return suggest_relation(rel, poses=poses, warnings=warnings)
+        return suggest_relation(rel, poses=poses, warnings=warnings, with_bias=with_bias)
 
-    def _nominal_answer(self, doc: dict, key: str, item: dict, poses: tuple[str, str], value: str | None) -> dict:
+    def _nominal_answer(self, doc: dict, key: str, item: dict, poses: tuple[str, str], value: str | None,
+                        with_bias: bool = False) -> dict:
         p, why = poses
         return {"id": item["id"], "name": item["name"], "kind": "fit" if key == "features" else "relation",
                 "form": item.get("form") if key == "features" else None, "poses": p, "poses_reason": why,
-                "offers": [o.to_dict() for o in self._offers(doc, key, item, p, value)],
+                "with_bias": bool(with_bias), "move": item.get("move") if key == "relations" else None,
+                "offers": [o.to_dict() for o in self._offers(doc, key, item, p, value, with_bias)],
                 "nominals": [self._nominal_view(doc, key, item, n, p) for n in item.get("nominals") or []]}
 
-    def nominal(self, pid: str, sid: str, item_id: str, value: str | None = None) -> dict:
+    def nominal(self, pid: str, sid: str, item_id: str, value: str | None = None, with_bias: bool = False) -> dict:
         """``GET .../features/{id}/nominal``: what is offered for a kept fit (its diameter, or its
         radius with ``value="radius"``) or a kept relation (each of its values), as
         :mod:`ohs.cad.nominal` offers it, with the poses used and why (:meth:`poses`), and its
-        approvals (with "check again"). A plane alone has no offers. 404 for an unknown id."""
+        approvals (with "check again"). ``with_bias``: also the values only a known bias allows
+        (each marked so); without it those are left out, and each offer's ``bias_only`` names them.
+        A plane alone has no offers. 404 for an unknown id."""
         self._dir(pid, sid)
         poses = self.poses(pid, sid)
         with self._lock(pid, sid):
             doc = self._load(pid, sid)
         key, item = self._nominal_item(doc, item_id)
-        return self._nominal_answer(doc, key, item, poses, value)
+        return self._nominal_answer(doc, key, item, poses, value, with_bias)
 
-    def approve(self, pid: str, sid: str, item_id: str, value: str, nominal: float, source: str) -> dict:
+    def approve(self, pid: str, sid: str, item_id: str, value: str, nominal: float, source: str,
+                with_bias: bool = False, move: str | None = None) -> dict:
         """``POST .../features/{id}/nominal``: keep an approved nominal value for a kept fit's size or
         one of a kept relation's values, against the value measured now. ``source`` "suggested": the
-        value must be one offered now (422 otherwise); "entered": any number that makes sense for that
-        kind of value (:func:`ohs.measure.features.check_nominal_value`). It replaces an approval of
-        the same value (for a fit, of its size: a diameter and a radius are one size). The measured
-        values are not touched. Returns the answer of :meth:`nominal`."""
+        value must be one offered now (422 otherwise), under the rule asked for (``with_bias``: the
+        offers include those only a known bias allows); "entered": any number that makes sense for
+        that kind of value (:func:`ohs.measure.features.check_nominal_value`). The rule is kept with the
+        approval (``with_bias``: true, left out when false), so "check again" judges it by that rule.
+        It replaces an approval of the same value (for a fit, of its size: a diameter and a radius are
+        one size). ``move`` (a relation only): "a", "b" or "listed", chosen with it
+        (:meth:`set_move`); None leaves the choice as it is. The measured values are not touched.
+        Returns the answer of :meth:`nominal`."""
         self._dir(pid, sid)
         poses = self.poses(pid, sid)
         if source not in kf.NOMINAL_SOURCES:
@@ -312,6 +332,8 @@ class FeatureManager:
         with self._lock(pid, sid):
             doc = self._load(pid, sid)
             key, item = self._nominal_item(doc, item_id)
+            if move is not None:
+                self._check_move(key, move)
             if key == "features" and item["kind"] == "plane":
                 raise ApiError(422, "a plane alone has no size to approve", "approve a relation between two planes instead")
             values = kf.FIT_NOMINAL_VALUES if key == "features" else kf.RELATION_NOMINAL_VALUES
@@ -322,7 +344,7 @@ class FeatureManager:
                 nominal = kf.check_nominal_value(value, nominal)
             except ValueError as e:
                 raise ApiError(422, str(e), "enter a number that makes sense for this value") from None
-            offers = self._offers(doc, key, item, poses[0], value if key == "features" else None)
+            offers = self._offers(doc, key, item, poses[0], value if key == "features" else None, with_bias)
             offer = next((o for o in offers if o.value == value), None)
             if offer is None:
                 raise ApiError(422, f"the relation {item['name']!r} has no {value.replace('_', ' ')} to approve",
@@ -339,12 +361,57 @@ class FeatureManager:
                 word = hit.word
             entry = {"value": value, "nominal": nominal, "unit": offer.unit, "word": word, "source": source,
                      "measured": float(offer.measured), "sigma": None if offer.sigma is None else float(offer.sigma),
-                     "approved": kf.now()}
+                     **({"with_bias": True} if with_bias else {}), "approved": kf.now()}
             same = kf.FIT_NOMINAL_VALUES if key == "features" else (value,)
             item["nominals"] = [n for n in item.get("nominals") or [] if n["value"] not in same] + [entry]
+            if move is not None:
+                self._choose_move(doc, item, move)
             saved = self._save(pid, sid, doc)
             key, item = self._nominal_item(saved, item_id)
-        return self._nominal_answer(saved, key, item, poses, value if key == "features" else None)
+        return self._nominal_answer(saved, key, item, poses, value if key == "features" else None, with_bias)
+
+    # ------------------------------------------------------------------ a relation's move (after C3)
+    @staticmethod
+    def _check_move(key: str, move: str) -> None:
+        if key != "relations":
+            raise ApiError(422, "a move is chosen for a relation: a fit alone does not move",
+                           "choose the move on a kept relation")
+        if move not in ("listed", *kf.MOVE_SHAPES):
+            raise ApiError(422, f"move must be 'listed', 'a' or 'b', got {move!r}",
+                           "'listed' keeps the relation in the notes only; 'a' or 'b' moves that fit to suit it")
+
+    @staticmethod
+    def _choose_move(doc: dict, rel: dict, move: str) -> None:
+        """Set a kept relation's move (``ohs.measure.features``, "A relation's move"): "listed" takes
+        it away; "a" or "b" keeps it, with the next place in the order, unless the same shape was
+        already chosen (then it keeps its place)."""
+        if move == "listed":
+            rel.pop("move", None)
+            return
+        if (rel.get("move") or {}).get("shape") == move:
+            return
+        last = max((int(r["move"]["order"]) for r in doc["relations"] if r.get("move")), default=0)
+        rel["move"] = {"shape": move, "order": last + 1, "chosen": kf.now()}
+
+    def set_move(self, pid: str, sid: str, item_id: str, move: str) -> dict:
+        """``PUT .../features/{id}/move``: which of a kept relation's two fits moves to suit its
+        approved values in the CAD export (``ohs.cad.moves``): "a", "b", or "listed" (only listed in
+        the notes, the default). Choosing again the shape already chosen keeps its place in the order
+        the moves are applied; another choice is placed last. The measured fits are not touched.
+        Returns the relation as ``GET .../features`` shows it. 404 for an unknown id, 422 for a fit
+        or another value."""
+        self._dir(pid, sid)
+        version = self._version(pid, sid)
+        poses = self.poses(pid, sid)[0]
+        with self._lock(pid, sid):
+            doc = self._load(pid, sid)
+            key, item = self._nominal_item(doc, item_id)
+            self._check_move(key, move)
+            self._choose_move(doc, item, move)
+            saved = self._save(pid, sid, doc)
+            _, item = self._nominal_item(saved, item_id)
+        views = self.nominal_views(saved, poses)
+        return {**self._relation_view(item, saved["features"], version), "nominals": views.get(item_id, [])}
 
     def unapprove(self, pid: str, sid: str, item_id: str, value: str) -> None:
         """``DELETE .../features/{id}/nominal/{value}``: forget an approval (404 when there is none).

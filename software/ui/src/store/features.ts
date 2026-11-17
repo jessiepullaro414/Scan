@@ -12,11 +12,12 @@
  *
  * Approved nominal values (APP_API.md "Nominal values") are approved and removed here; the set is then read again,
  * since the engine says whether each one needs checking again. The offers themselves are read by the viewer
- * (pages/viewer/useNominals.ts), not kept here.
+ * (pages/viewer/useNominals.ts), not kept here. A kept relation's move in the CAD file (listed only, or one of its
+ * two fits moves to suit it) is chosen here too.
  */
 import { create } from "zustand";
 import { ApiError, api } from "../api/http";
-import type { FeatureSet, KeptFit, KeptMeasurement, KeptRelation, NewFeature, NewFrame, NewMeasurement, NewNominal, NominalAnswer, RefitResult } from "../api/types";
+import type { FeatureSet, KeptFit, KeptMeasurement, KeptRelation, MoveChoice, NewFeature, NewFrame, NewMeasurement, NewNominal, NominalAnswer, RefitResult } from "../api/types";
 import { frameUses, withFeature, withFrame, withMeasurement, withName, withRelation, without } from "./featureSet";
 import { toast } from "./toasts";
 
@@ -52,6 +53,9 @@ type FeaturesStore = {
   approveNominal: (pid: string, sid: string, id: string, body: NewNominal) => Promise<NominalAnswer | null>;
   /** Forget an approval; false after a toast. */
   removeNominal: (pid: string, sid: string, id: string, value: string) => Promise<boolean>;
+  /** Which of a kept relation's two fits moves to suit it in the CAD file ("listed": none); the set is read again.
+   * False after a toast. */
+  setRelationMove: (pid: string, sid: string, id: string, move: MoveChoice) => Promise<boolean>;
 };
 
 export const featuresKey = (pid: string, sid: string) => `${pid}/${sid}`;
@@ -201,6 +205,17 @@ export const useFeatures = create<FeaturesStore>((set, get) => {
           toast.error("Couldn't remove the nominal value", e);
           return false;
         }
+      }
+      void get().load(pid, sid);
+      return true;
+    },
+
+    setRelationMove: async (pid, sid, id, move) => {
+      try {
+        await api.setRelationMove(pid, sid, id, move);
+      } catch (e) {
+        toast.error("Couldn't change how the relation goes into the CAD file", e);
+        return false;
       }
       void get().load(pid, sid);
       return true;

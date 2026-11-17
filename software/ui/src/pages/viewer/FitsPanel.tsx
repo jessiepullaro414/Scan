@@ -10,19 +10,24 @@
  *
  * Beside a cylinder's or a hole's diameter, and beside each value of a kept relation, a suggested nominal value
  * ("Ø 14?") to accept, change or ignore, or the approved one ("nominal Ø 14", "check again" when the engine marked
- * it): NominalSlot.tsx. The measured numbers stay as they are.
+ * it): NominalSlot.tsx. The measured numbers stay as they are. A kept relation with an approved value says how it goes
+ * into the CAD file: listed only (the default), or one of its two fits moves to suit it (the engine's ohs/cad/moves.py).
+ * Under the list, a switch "Offers a known bias allows" (off by default, kept in this browser) also shows the values
+ * only a known bias allows, with a hover card that says what a known bias is.
  */
-import { Bookmark, CircleDashed, Cylinder, Link2, RefreshCw, Shapes, Square, TriangleExclamationPoint, X } from "lucide-react";
+import { Bookmark, CircleDashed, CircleHelp, Cylinder, Link2, RefreshCw, Shapes, Square, TriangleExclamationPoint, X } from "lucide-react";
 import type { ReactNode } from "react";
 import { sentence } from "../../api/http";
-import type { FitKind, KeptRelation, NominalAnswer, PartFrameView } from "../../api/types";
+import type { FitKind, KeptRelation, MoveChoice, NominalAnswer, PartFrameView } from "../../api/types";
 import { Badge } from "../../components/ui/Badge";
 import { Button, IconButton } from "../../components/ui/Button";
 import { Kbd } from "../../components/ui/Feedback";
+import { Segmented, Switch } from "../../components/ui/Form";
+import { Tooltip } from "../../components/ui/Popover";
 import { extentRows } from "../../lib/extent";
 import { fitName, fitValue, fmtLength, fmtPm, fmtSmall } from "../../lib/fits";
 import { fmtInt } from "../../lib/format";
-import { approvedText, offerFor, sizeApproval, valueApproval } from "../../lib/nominal";
+import { BIAS_SWITCH_HELP, MOVE_HELP, approvedText, moveChoice, moveOptions, moveText, offerFor, sizeApproval, valueApproval } from "../../lib/nominal";
 import { fmtVec, placeOf } from "../../lib/partFrame";
 import { relationFooter, relationRows } from "../../lib/relationView";
 import { cn } from "../../lib/util";
@@ -216,6 +221,7 @@ function Relation({
               {n}
             </div>
           ))}
+          {kept && actions?.setMove && (kept.nominals ?? []).length ? <MoveChoiceRow kept={kept} a={a} b={b} setMove={actions.setMove} /> : null}
         </>
       ) : relation.error ? (
         <div className="flex items-start gap-1.5 text-[11px] leading-4 text-warn">
@@ -231,6 +237,27 @@ function Relation({
           {a.version !== b.version ? "They were fitted on different versions of the mesh." : "Both were fitted on an earlier mesh."}
         </div>
       ) : null}
+    </div>
+  );
+}
+
+/** How a kept relation with an approved value goes into the CAD file: listed only, or one of its two fits moves. The
+ * kept relation's own order of its fits counts ("a" is its first), whatever order they were picked in. */
+function MoveChoiceRow({ kept, a, b, setMove }: { kept: KeptRelation; a: FitItem; b: FitItem; setMove: (id: string, move: MoveChoice) => void }) {
+  const [first, second] = kept.a === a.fid ? [a, b] : [b, a];
+  const choice = moveChoice(kept);
+  return (
+    <div className="mt-2 border-t border-line pt-2">
+      <div className="mb-1 flex items-center gap-1 text-[11px] text-subtle">
+        <span className="flex-1">In the CAD file</span>
+        <Tooltip side="top" content={<div className="max-w-[300px] text-muted">{MOVE_HELP}</div>}>
+          <button type="button" className="grid h-4 w-4 place-items-center rounded text-subtle hover:text-fg" aria-label={`In the CAD file: ${MOVE_HELP}`}>
+            <CircleHelp size={12} aria-hidden />
+          </button>
+        </Tooltip>
+      </div>
+      <Segmented size="sm" className="w-full" label={`How ${kept.name} goes into the CAD file`} value={choice} options={moveOptions(first.name, second.name)} onChange={(v) => setMove(kept.id, v)} />
+      <div className="mt-1 text-[11px] leading-4 text-subtle">{moveText(choice, first.name, second.name)}</div>
     </div>
   );
 }
@@ -255,6 +282,7 @@ export function FitList({
   frame = null,
   nominals,
   nominalActions,
+  biasOffers,
 }: {
   fits: FitItem[];
   /** The relations kept with the scan. */
@@ -282,6 +310,8 @@ export function FitList({
   /** The engine's nominal offers by kept fit or relation id (useNominals.ts); without them no nominal is shown. */
   nominals?: NominalAnswers;
   nominalActions?: NominalActions;
+  /** The switch "Offers a known bias allows" (a viewer preference); without it the switch is not shown. */
+  biasOffers?: { on: boolean; onChange: (on: boolean) => void };
 }) {
   const byId = (fid: string) => fits.find((f) => f.fid === fid);
   /** Beside a cylinder's or a hole's diameter (or a cylinder's radius, where a radius was approved): its nominal value. */
@@ -431,6 +461,11 @@ export function FitList({
                       {n.check_again ? " · check again" : ""}
                     </span>
                   ))}
+                  {r.move && (r.nominals ?? []).length ? (
+                    <span className="ml-1.5 text-[10.5px] text-subtle" title={moveText(r.move.shape, a?.name ?? "?", b?.name ?? "?")}>
+                      · moves {(r.move.shape === "a" ? a : b)?.name ?? "?"} in CAD
+                    </span>
+                  ) : null}
                 </button>
                 <IconButton icon={X} size="xs" label={`Remove ${r.name}`} className="opacity-60 group-hover:opacity-100" onClick={() => onRemoveRelation(r.id)} />
               </li>
@@ -440,6 +475,18 @@ export function FitList({
       ) : null}
       {hint ? <div className="mt-2 text-[11.5px] text-subtle">{hint}</div> : null}
       {fits.length ? <div className="mt-2 text-[11px] leading-4 text-subtle">{SIGMA_NOTE}</div> : null}
+      {biasOffers && fits.some((f) => f.kind !== "plane") ? (
+        <div className="mt-2 flex items-start gap-1">
+          <div className="min-w-0 flex-1">
+            <Switch checked={biasOffers.on} onChange={biasOffers.onChange} label="Offers a known bias allows" />
+          </div>
+          <Tooltip side="top" content={<div className="max-w-[300px] text-muted">{BIAS_SWITCH_HELP}</div>}>
+            <button type="button" className="grid h-5 w-5 shrink-0 place-items-center rounded text-subtle hover:text-fg" aria-label={`Offers a known bias allows: ${BIAS_SWITCH_HELP}`}>
+              <CircleHelp size={13} aria-hidden />
+            </button>
+          </Tooltip>
+        </div>
+      ) : null}
       {ready && !fitOn ? (
         <Button size="sm" className="mt-3" icon={Shapes} onClick={onStart}>
           Fit a shape

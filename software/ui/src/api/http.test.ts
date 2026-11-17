@@ -3,7 +3,7 @@
  * with a fake `Response`. Plain TypeScript that Node runs as it is (type stripping), no test framework: a
  * failed check throws.
  */
-import { ApiError, api, setFetch } from "./http.ts";
+import { ApiError, api, nominalQuery, setFetch } from "./http.ts";
 
 let checks = 0;
 function check(ok: boolean, what: string): void {
@@ -218,5 +218,9 @@ for (const name of ["deviation", "lasers"] as const) {
     check(err instanceof ApiError && err.unreachable, `${name}: a network failure is an unreachable ApiError`);
   }
 }
+
+// the nominal offers' query: the bias choice only when asked
+check(nominalQuery() === "" && nominalQuery("radius") === "?value=radius", "the value alone");
+check(nominalQuery(undefined, true) === "?with_bias=true" && nominalQuery("radius", true) === "?value=radius&with_bias=true", "with the bias");
 
 console.log(`http.test: ${checks} checks passed`);

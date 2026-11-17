@@ -424,10 +424,33 @@ but nothing can be uploaded.
     radius 7 with the approval and 7.01 with "measured only", the measured shape unchanged.
   - Tests: 14 new (routes, the file, the check-again rule) on both paths; 189 pass over the
     CAD, nominal and kept-features files; 33 UI test files.
-  - **Left, for the owner:** which shape moves when a relation is approved (so "parallel" can
-    reach the CAD file); whether a bias alone may make an offer. Not seen by eye: "check
-    again" and a bias chip against the real engine. Wall-thickness biases are never offered in
-    the app (it cannot tell that two planes are one wall's faces).
+  - **The owner's two decisions, done 2026-11-17** (see "Decided by the owner"):
+    - *An approved relation can move a shape in the CAD files.* In a kept relation's card,
+      "In the CAD file": Listed only (the default, as before) / Move the first fit / Move the
+      second. `ohs/cad/moves.py` turns the chosen shape about its own point and slides it, by
+      the smallest change, so the approved values hold on the exported shapes (checked to
+      1e-9, or nothing moves); the other shape and the measured fits stay as they are. The
+      notes say how far each shape was turned and slid. A shape is moved by one relation only,
+      in the order the moves were chosen; one that an applied relation was measured against
+      may not be moved afterwards. What cannot be applied stays listed, with the reason.
+      "Listed only" gives byte-identical files to before.
+    - *Offers that only a known bias allows are a choice, off by default.* The suggest
+      functions take `with_bias` (off: the search runs as if no bias were known); the viewer
+      has a switch "Offers a known bias allows" with what a known bias is on hover, kept as a
+      preference. An approval remembers the rule it was made under, so "check again" judges
+      it by that rule. The plan's Ø 14.3 boss gets no offer by default and "14.5?" (marked)
+      with the switch on.
+    - Checked in the app against the real engine: two planes 0.3° apart, "parallel" offered
+      and approved with the second to move: the export turned it 0.3000° and reads 0° to
+      1e-14; the card's three-way choice and the panel's line. (In review: long fit names
+      pushed that choice past the card's edge; the labels are shorter now.)
+    - Tests: 22 new for the moves (engine and routes); 211 pass on both paths over the CAD,
+      nominal and kept-features files. Nine existing bias tests now ask for the bias
+      (`with_bias=True`) and assert the same offers.
+  - **Left:** not seen by eye: "check again", a bias chip and the bias switch against the real
+    engine (the switch shows once a cylinder or a hole is kept); a moved file opened in
+    FreeCAD's window. Wall-thickness biases are never offered in the app (it cannot tell that
+    two planes are one wall's faces).
   - Seen on the way: `VALIDATION.md`, "Known limitations", still says small bosses read 0.1 mm
     small in radius; the newer sections say 0.15–0.28 mm. And
     `test_an_edit_marks_a_fit_and_fit_again_brings_it_back` failed once for the agent in a

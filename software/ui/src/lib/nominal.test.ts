@@ -4,16 +4,22 @@
  * ignored offers that come back when the value is measured again. Plain TypeScript that Node runs as it is (type
  * stripping), no test framework.
  */
-import type { ApprovedNominal, NominalSuggestion } from "../api/types";
+import type { ApprovedNominal, KeptRelation, NominalOffer, NominalSuggestion } from "../api/types";
 import {
+  BIAS_SWITCH_HELP,
+  MOVE_HELP,
   approvedText,
   approvedTip,
+  biasOnlyHint,
   chipText,
   fmtNominal,
   ignoreKey,
   isIgnored,
   measuredText,
   memoryIgnoreStore,
+  moveChoice,
+  moveOptions,
+  moveText,
   nominalText,
   parseNominal,
   setIgnored,
@@ -89,5 +95,30 @@ check(!isIgnored(store, key, 14.03), "shown again when measured again");
 check(!isIgnored(store, ignoreKey("p/s", "f-other", "diameter"), 14.02), "only for that fit");
 setIgnored(store, key, 14.02, false);
 check(!isIgnored(store, key, 14.02), "shown again on request");
+
+// offers a known bias alone allows: off unless asked; the switch's hover card says what a bias is and what it does
+check(BIAS_SWITCH_HELP.includes("simulator") && BIAS_SWITCH_HELP.includes("not yet measured on the real scanner"), `bias help: ${BIAS_SWITCH_HELP}`);
+check(BIAS_SWITCH_HELP.includes("consistently") && BIAS_SWITCH_HELP.toLowerCase().includes("turned on"), "what a bias is, and what turning it on does");
+const offerOff: NominalOffer = { value: "diameter", label: "Diameter", unit: "mm", measured: 14.3, sigma: 0.03, suggestions: [], reason_code: "already_round", reason: "…", bias_only: [14.5] };
+check(biasOnlyHint(offerOff, false) === "A known bias alone would allow Ø 14.5: turn on “Offers a known bias allows” to see it.", `hint: ${biasOnlyHint(offerOff, false)}`);
+check(biasOnlyHint(offerOff, true) === null && biasOnlyHint({ ...offerOff, bias_only: [] }, false) === null, "no hint when on, or with nothing held back");
+check(biasOnlyHint({ ...offerOff, bias_only: undefined }, false) === null && biasOnlyHint(null, false) === null, "an older server: no hint");
+check(biasOnlyHint({ ...offerOff, value: "angle", unit: "deg", bias_only: [0, 1] }, false)?.includes("0° or 1°") === true, "two values");
+// an approval made with the bias allowed says that its check counts the bias
+const withBias = approvedTip({ ...appr, check_again: false, with_bias: true });
+check(withBias.includes("known bias"), `approved with the bias: ${withBias}`);
+check(!approvedTip({ ...appr, check_again: false }).includes("known bias"), "an approval by the ± alone says nothing of a bias");
+
+// a relation's move in the CAD file: listed only, or one of its two fits moves
+const relListed = { a: "f-top", b: "f-bottom" } as Pick<KeptRelation, "a" | "b" | "move">;
+check(moveChoice(relListed) === "listed" && moveChoice({ ...relListed, move: { shape: "b", order: 1, chosen: "2026-11-17T12:00:00" } }) === "b", "the choice");
+const opts = moveOptions("Top", "Bottom");
+check(opts.map((o) => o.value).join() === "listed,a,b" && opts.map((o) => o.label).join() === "Listed only,Move Top,Move Bottom", `options: ${JSON.stringify(opts)}`);
+check(opts.every((o) => !!o.title), "each option says what it does");
+check(moveOptions("A very long name for a plane", "B")[1].label === "Move A very lo…", `a long name: ${moveOptions("A very long name for a plane", "B")[1].label}`);
+check(moveText("listed", "Top", "Bottom") === "Listed in the CAD file's notes only; no shape moves.", moveText("listed", "Top", "Bottom"));
+check(moveText("b", "Top", "Bottom") === "In the CAD file, a copy of Bottom is turned and slid to suit Top; the measured fits stay as they are.", moveText("b", "Top", "Bottom"));
+check(moveText("a", "Top", "Bottom").includes("a copy of Top") && moveText("a", "Top", "Bottom").includes("to suit Bottom"), "the first moves");
+check(MOVE_HELP.includes("smallest") && MOVE_HELP.includes("order"), `move help: ${MOVE_HELP}`);
 
 console.log(`nominal.test: ${checks} checks passed`);

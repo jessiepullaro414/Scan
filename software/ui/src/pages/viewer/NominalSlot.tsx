@@ -8,25 +8,33 @@
  *   measured again (kept in this browser only: lib/nominal.ts);
  * - **an approved value:** "nominal Ø 14" next to the measured "14.02 ± 0.03", with a cross to remove it, and
  *   "check again" in the warn colour when the engine marked it (measured again, the new value does not allow it);
- * - **no offer:** nothing, but a small pencil when the card is hovered, for "Other value…".
+ * - **no offer:** nothing, but a small pencil when the card is hovered, for "Other value…" (its title says when a
+ *   known bias alone would allow a value and the "Offers a known bias allows" switch is off).
+ *
+ * Offers that only a known bias allows are asked for only while that switch is on (useNominals.ts); an approval keeps
+ * the rule it was made under (`with_bias`, sent with it).
  *
  * The measured value is never changed: an approval is kept beside it and used in the CAD files.
  */
 import { Check, EyeOff, Pencil, TriangleExclamationPoint, X } from "lucide-react";
 import { useRef, useState } from "react";
-import type { ApprovedNominal, NominalAnswer, NominalOffer, NominalValueName } from "../../api/types";
+import type { ApprovedNominal, MoveChoice, NominalAnswer, NominalOffer, NominalValueName } from "../../api/types";
 import { Button, IconButton } from "../../components/ui/Button";
 import { TextInput } from "../../components/ui/Form";
 import { Menu, Popover, Tooltip } from "../../components/ui/Popover";
-import { approvedText, approvedTip, chipText, fmtNominal, measuredText, nominalText, parseNominal, suggestionTip } from "../../lib/nominal";
+import { approvedText, approvedTip, biasOnlyHint, chipText, fmtNominal, measuredText, nominalText, parseNominal, suggestionTip } from "../../lib/nominal";
 import { cn } from "../../lib/util";
 
-/** What a slot can do: approve (the value offered, or one typed), remove an approval, ignore an offer. */
+/** What a slot can do: approve (the value offered, or one typed), remove an approval, ignore an offer; and, for a
+ * kept relation, choose its move in the CAD file. `withBias`: the offers shown include those a known bias alone
+ * allows (the viewer's switch). */
 export type NominalActions = {
   approve: (id: string, value: NominalValueName, nominal: number, source: "suggested" | "entered") => Promise<boolean>;
   remove: (id: string, value: NominalValueName) => void;
   ignore: (id: string, value: NominalValueName, measured: number) => void;
   ignored: (id: string, value: NominalValueName, measured: number) => boolean;
+  setMove?: (id: string, move: MoveChoice) => void;
+  withBias?: boolean;
 };
 
 export function NominalSlot({
@@ -56,6 +64,7 @@ export function NominalSlot({
   const [busy, setBusy] = useState(false);
   const offered = offer && offer.suggestions.length && !(approval && !approval.check_again) && !actions.ignored(id, value, offer.measured) ? offer : null;
   const unitText = value === "angle" ? "°" : "mm";
+  const hint = biasOnlyHint(offer, !!actions.withBias);
 
   const openEntry = () => {
     setText(approval ? fmtNominal(approval.nominal) : offered ? fmtNominal(offered.suggestions[0].nominal) : "");
@@ -137,7 +146,7 @@ export function NominalSlot({
           ))
         : null}
       {!approval && !offered ? (
-        <IconButton icon={Pencil} size="xs" label={`Other value for the ${measuredLabel.toLowerCase()}: enter a nominal value`} title="Other value…: enter a nominal value" className="h-4 w-4 opacity-0 group-hover:opacity-60 hover:opacity-100 focus-visible:opacity-100" onClick={openEntry} />
+        <IconButton icon={Pencil} size="xs" label={`Other value for the ${measuredLabel.toLowerCase()}: enter a nominal value`} title={`Other value…: enter a nominal value${hint ? `. ${hint}` : ""}`} className="h-4 w-4 opacity-0 group-hover:opacity-60 hover:opacity-100 focus-visible:opacity-100" onClick={openEntry} />
       ) : approval ? (
         <IconButton icon={Pencil} size="xs" label={`Other value for the ${measuredLabel.toLowerCase()}`} title="Other value…" className="h-4 w-4 opacity-0 group-hover:opacity-60 hover:opacity-100 focus-visible:opacity-100" onClick={openEntry} />
       ) : null}

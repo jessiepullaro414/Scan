@@ -56,6 +56,7 @@ import { isActive, useScanJob } from "../store/jobs";
 import { processKey, useProcess } from "../store/process";
 import { useProjects } from "../store/projects";
 import { toast } from "../store/toasts";
+import { useUi } from "../store/ui";
 import { sigmaOf } from "../three/confidence";
 import { disposeMeshGeometry, plyGeometry, readPly } from "../three/ply";
 import { viewBus } from "../three/viewBus";
@@ -588,18 +589,26 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
   const pairRelation = usePairRelation(pid, sid, pickedFits[0], pickedFits[1], kept);
   const pickedNums = useMemo(() => fits.filter((f) => pickedFits.includes(f.fid)).map((f) => f.id), [fits, pickedFits]);
   // Suggested nominal values beside the measured ones (FEATURE_PLAN C3): the engine's offers, the approvals, and the
-  // offers ignored in this browser (until their value is measured again).
-  const nominalOffers = useNominalOffers(pid, sid, kept);
+  // offers ignored in this browser (until their value is measured again). Offers that only a known bias allows are
+  // asked for only while the switch under the fitted shapes is on (a preference kept in this browser); an approval is
+  // sent with that choice, which the engine keeps as its rule. A kept relation's move in the CAD file is chosen here too.
+  const nominalWithBias = useUi((u) => u.nominalWithBias);
+  const setNominalWithBias = useUi((u) => u.setNominalWithBias);
+  const nominalOffers = useNominalOffers(pid, sid, kept, nominalWithBias);
   const ignoredOffers = useIgnoredOffers(pid, sid);
   const nominalActions = useMemo<NominalActions>(
     () => ({
-      approve: async (id, value, nominal, source) => !!(await useFeatures.getState().approveNominal(pid, sid, id, { value, nominal, source })),
+      approve: async (id, value, nominal, source) =>
+        !!(await useFeatures.getState().approveNominal(pid, sid, id, { value, nominal, source, ...(nominalWithBias ? { with_bias: true } : {}) })),
       remove: (id, value) => void useFeatures.getState().removeNominal(pid, sid, id, value),
       ignore: ignoredOffers.ignore,
       ignored: ignoredOffers.ignored,
+      setMove: (id, move) => void useFeatures.getState().setRelationMove(pid, sid, id, move),
+      withBias: nominalWithBias,
     }),
-    [pid, sid, ignoredOffers.ignore, ignoredOffers.ignored],
+    [pid, sid, ignoredOffers.ignore, ignoredOffers.ignored, nominalWithBias],
   );
+  const biasOffers = useMemo(() => ({ on: nominalWithBias, onChange: setNominalWithBias }), [nominalWithBias, setNominalWithBias]);
   const keptMeasurements = useMemo(() => kept?.measurements ?? [], [kept]);
   const measurements = useMemo<Measurement[]>(() => keptMeasurements.map((m, i) => ({ id: i + 1, a: m.a, b: m.b })), [keptMeasurements]);
 
@@ -1052,6 +1061,7 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
             frame={shownFrame}
             nominals={nominalOffers}
             nominalActions={nominalActions}
+            biasOffers={biasOffers}
           />
         </Panel>
 

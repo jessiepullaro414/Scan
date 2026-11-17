@@ -1,7 +1,9 @@
 /**
  * Suggested nominal values as the viewer shows them (FEATURE_PLAN.md C3; APP_API.md "Nominal values"): the chip
  * beside a measured size ("Ø 14?"), its hover text, an approved value ("nominal Ø 14") next to the measured one, a
- * value typed by hand checked as the engine checks it, and which offers the user has ignored.
+ * value typed by hand checked as the engine checks it, and which offers the user has ignored. After C3 (the owner's
+ * decisions): the words of the switch for offers that only a known bias allows (off by default), and of a kept
+ * relation's move in the CAD file (listed only, or one of its two fits moves to suit it).
  *
  * **Ignored offers** are kept in this browser only (localStorage, one entry per scan, fit or relation and value),
  * with the measured value they were ignored for: when the fit is measured again (a different value) the offer shows
@@ -10,7 +12,7 @@
  *
  * Pure functions (nominal.test.ts) but `localIgnoreStore`, which wraps the browser's storage.
  */
-import type { ApprovedNominal, NominalAnswer, NominalOffer, NominalSuggestion, NominalValueName } from "../api/types";
+import type { ApprovedNominal, KeptRelation, MoveChoice, NominalAnswer, NominalOffer, NominalSuggestion, NominalValueName } from "../api/types";
 
 /** What makes sense for each value (as the engine's `ohs.measure.features.NOMINAL_LIMITS`): lowest, highest, and
  * whether the lowest itself is left out. */
@@ -108,8 +110,58 @@ export function approvedTip(n: ApprovedNominal): string {
   const parts = [`${how} on ${n.approved.replace("T", " ")}, against ${measuredText(n.measured, n.sigma, n.unit)}.`];
   if (n.measured_now !== null && n.measured_now !== n.measured) parts.push(`Measured now: ${measuredText(n.measured_now, n.sigma_now, n.unit)}.`);
   if (n.check_again && n.check_reason) parts.push(`${n.check_reason[0].toUpperCase()}${n.check_reason.slice(1)}`);
+  if (n.with_bias) parts.push("Approved with the offers a known bias allows shown: when it is measured again, the known bias still counts for it.");
   parts.push("It is used in the CAD files; the measured value stays as it is.");
   return parts.join(" ");
+}
+
+// ------------------------------------------------------------------ offers a known bias alone allows (off unless asked)
+/** The hover card of the switch "Offers a known bias allows" (a viewer preference, store/ui.ts). */
+export const BIAS_SWITCH_HELP =
+  "A known bias: on the simulator some features read consistently small or large, the same on every scan (small bosses about 0.3 mm small in diameter, some holes larger or smaller). The ± does not show it. These numbers are not yet measured on the real scanner. Off (the default): a value is offered only where the ± alone allows it, so a Ø 14.3 boss stays Ø 14.3. Turned on: values that only a known bias allows are offered too, in the warning colour, each saying which bias. An approval keeps the rule it was made under.";
+
+/** "Ø 14.5", "0° or 1°": the values a known bias alone would allow, as the card names them. */
+function heldBack(offer: NominalOffer): string {
+  return (offer.bias_only ?? []).map((x) => nominalText(offer.value, x)).join(" or ");
+}
+
+/** A hint where an offer is held back because the bias switch is off: "A known bias alone would allow Ø 14.5: turn on
+ * “Offers a known bias allows” to see it."; null when nothing is held back, the switch is on, or the server is older. */
+export function biasOnlyHint(offer: NominalOffer | null, withBias: boolean): string | null {
+  if (!offer || withBias || !offer.bias_only?.length) return null;
+  return `A known bias alone would allow ${heldBack(offer)}: turn on “Offers a known bias allows” to see it.`;
+}
+
+// ------------------------------------------------------------------ a relation's move in the CAD file
+/** The hover card of a kept relation's "In the CAD file" choice. */
+export const MOVE_HELP =
+  "Listed only (the default): the approved values are named in the CAD file's notes and no shape moves. Move one of the two: the CAD file gets a copy of that fit turned about its own point and slid, the smallest change that makes the approved angle and distance hold; the other stays as measured. Moves are applied in the order they were chosen: a shape is moved by one relation only, and one that an earlier move was measured against stays where it is (the notes say when a move can't be applied, and why). The measured fits and the part's frame never change.";
+
+/** What a kept relation's move is: "listed" when none is kept. */
+export function moveChoice(r: Pick<KeptRelation, "move">): MoveChoice {
+  return r.move?.shape ?? "listed";
+}
+
+/**
+ * A fit's name short enough for a segmented button (the whole name is in its title and in the sentence under
+ * the buttons). Ten characters: with two names of sixteen the three buttons ran past the card's edge.
+ */
+const shortName = (name: string) => (name.length > 10 ? `${name.slice(0, 9).trimEnd()}…` : name);
+
+/** The choices for a kept relation's move: listed only, or move the first or the second fit. */
+export function moveOptions(aName: string, bName: string): { value: MoveChoice; label: string; title: string }[] {
+  return [
+    { value: "listed", label: "Listed only", title: moveText("listed", aName, bName) },
+    { value: "a", label: `Move ${shortName(aName)}`, title: moveText("a", aName, bName) },
+    { value: "b", label: `Move ${shortName(bName)}`, title: moveText("b", aName, bName) },
+  ];
+}
+
+/** What a move choice does, in a sentence. */
+export function moveText(choice: MoveChoice, aName: string, bName: string): string {
+  if (choice === "listed") return "Listed in the CAD file's notes only; no shape moves.";
+  const [moved, fixed] = choice === "a" ? [aName, bName] : [bName, aName];
+  return `In the CAD file, a copy of ${moved} is turned and slid to suit ${fixed}; the measured fits stay as they are.`;
 }
 
 // ------------------------------------------------------------------ ignored offers (this browser only)

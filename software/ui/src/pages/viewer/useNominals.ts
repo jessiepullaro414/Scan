@@ -1,8 +1,9 @@
 /**
  * The nominal values offered for the kept fits and relations on screen (APP_API.md "Nominal values"): the engine's
  * offers for each kept cylinder and hole (its diameter) and each kept relation (its values), read again whenever the
- * kept set changes (a fit kept, fitted again, an approval made). Planes alone have none and are not asked. While a
- * read is on its way the last answer stays, so the chips do not flicker.
+ * kept set changes (a fit kept, fitted again, an approval made) and when the bias switch is turned (`withBias`: also
+ * the values a known bias alone allows; off by default, a viewer preference in store/ui.ts). Planes alone have none
+ * and are not asked. While a read is on its way the last answer stays, so the chips do not flicker.
  *
  * Which offers the user ignored is kept in this browser only (lib/nominal.ts, "Ignored offers"), per scan, fit or
  * relation and value, with the measured value: a new measurement shows the offer again.
@@ -14,7 +15,7 @@ import { ignoreKey, isIgnored, localIgnoreStore, setIgnored } from "../../lib/no
 
 export type NominalAnswers = Record<string, NominalAnswer | undefined>;
 
-export function useNominalOffers(pid: string, sid: string, kept: FeatureSet | null): NominalAnswers {
+export function useNominalOffers(pid: string, sid: string, kept: FeatureSet | null, withBias = false): NominalAnswers {
   const [answers, setAnswers] = useState<NominalAnswers>({});
   useEffect(() => {
     if (!kept) return;
@@ -22,7 +23,7 @@ export function useNominalOffers(pid: string, sid: string, kept: FeatureSet | nu
     const ids = [...kept.features.filter((f) => f.kind !== "plane").map((f) => f.id), ...kept.relations.map((r) => r.id)];
     setAnswers((cur) => Object.fromEntries(ids.map((id) => [id, cur[id]])));
     for (const id of ids)
-      api.nominal(pid, sid, id).then(
+      api.nominal(pid, sid, id, undefined, withBias).then(
         (a) => live && setAnswers((cur) => ({ ...cur, [id]: a })),
         () => {
           /* no offers shown for it: "Other value…" still works */
@@ -31,7 +32,7 @@ export function useNominalOffers(pid: string, sid: string, kept: FeatureSet | nu
     return () => {
       live = false;
     };
-  }, [pid, sid, kept]);
+  }, [pid, sid, kept, withBias]);
   return answers;
 }
 

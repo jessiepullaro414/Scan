@@ -7,14 +7,23 @@ only an offer.** Nothing here changes a fit or rounds a number silently: :func:`
 ignores it, and :func:`apply_nominal` writes accepted values into a *copy* of a fit's shape for the
 CAD export, leaving the measured shape as it was.
 
-**When a round value is offered.** Only where it lies inside the measurement's ±2σ, or inside the
-±2σ widened by the known bias of that kind of feature and size (:data:`BIASES`). The ± of a fit or a
-relation is the spread from scan to scan, not the accuracy (``ohs.measure.region``, "The ± values";
-``ohs.measure.relate``): a bias that is the same on every scan is not in it. So a boss that reads
-0.3 mm small in diameter, with a ± of 0.01 mm, is offered its round size only because the table
-says such bosses read that much small, and the offer says so and names the section of
-``VALIDATION.md`` the number comes from. A bias only widens the window on its own side: a value
-inside ±2σ alone is always allowed.
+**When a round value is offered.** Where it lies inside the measurement's ±2σ; and, only when asked
+for (``with_bias=True``), also where it lies inside the ±2σ widened by the known bias of that kind of
+feature and size (:data:`BIASES`). The ± of a fit or a relation is the spread from scan to scan, not
+the accuracy (``ohs.measure.region``, "The ± values"; ``ohs.measure.relate``): a bias that is the same
+on every scan is not in it. So a boss that reads 0.3 mm small in diameter, with a ± of 0.01 mm, can be
+offered its round size only because the table says such bosses read that much small; that offer
+says so and names the section of ``VALIDATION.md`` the number comes from. A bias only widens the
+window on its own side: a value inside ±2σ alone is always allowed.
+
+**A bias alone makes no offer unless asked** (the owner, after C3: "a Ø 14.3 boss may well be a
+Ø 14.3 boss; do not assume"). With ``with_bias`` False, the default, the search runs as if no bias
+were known: a round value only a bias would allow is not a candidate, so it neither counts towards
+"too many" nor stops the search at its step, and a finer step can then offer a value the ± alone
+allows (a Ø 14.45 ± 0.05 boss: 14.5, where the bias would have offered 15). An offer that would
+have had both kinds keeps the ± ones. What the bias would add is not hidden: :attr:`Offer.bias_only`
+lists those values, and the reason of an offer without suggestions names them. The notes on the
+bias (which rows exist for the case) are the same either way.
 
 **The bias table is made of simulator numbers.** Every row is a number ``VALIDATION.md`` states for
 simulated scans (GPU path, scans without markers, Standard quality, an orbit), at the true poses or
@@ -57,16 +66,17 @@ nothing is offered (finer steps would be worse).
 
 **Is an approved value still allowed?** :func:`check_fit_nominal` and :func:`check_relation_nominal`
 put one given nominal value against a measurement by the same rule: inside ±2σ, inside the window
-a known bias widens, or what the value already reads as. The app keeps an approved value with the
-scan; when the fit is measured again it asks this, and marks the approval "check again" when the
-new measurement no longer allows it. Nothing is changed here either.
+a known bias widens (only with ``with_bias``), or what the value already reads as. The app keeps an
+approved value with the scan, and with it the rule it was approved under; when the fit is measured
+again it asks this by that rule, and marks the approval "check again" when the new measurement no
+longer allows it. Nothing is changed here either.
 """
 from __future__ import annotations
 
 import copy
 import math
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 import numpy as np
 
@@ -269,12 +279,15 @@ class Offer:
     suggestions: list[Suggestion] = field(default_factory=list)
     reason_code: str | None = None  # when there are none: "already_round", "no_candidate", "too_many", "no_sigma", "warning"
     reason: str | None = None  # the same in words
+    #: the round values a known bias alone would allow and that are not offered because that was not
+    #: asked for (``with_bias`` False; module docstring), nearest first; empty otherwise
+    bias_only: list[float] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return {"value": self.value, "label": self.label, "unit": self.unit, "measured": float(self.measured),
                 "sigma": None if self.sigma is None else float(self.sigma),
                 "suggestions": [s.to_dict() for s in self.suggestions], "reason_code": self.reason_code,
-                "reason": self.reason}
+                "reason": self.reason, "bias_only": [float(x) for x in self.bias_only]}
 
 
 # --------------------------------------------------------------------------- reading the inputs
@@ -379,14 +392,19 @@ class _Case:
     words: dict = field(default_factory=dict)  # nominal -> (word, directions)
     lowest: float = 0.0  # candidates must be at least this (a diameter more than 0)
     highest: float = math.inf
+    with_bias: bool = False  # whether a known bias alone may allow a value (module docstring)
 
 
-def _allowed(case: _Case, nominal: float, rows: list[Bias]) -> tuple[str, Bias | None] | None:
-    """How ``nominal`` fits ``case``: ("2 sigma", None), ("bias", row), or None."""
+def _allowed(case: _Case, nominal: float, rows: list[Bias], with_bias: bool | None = None
+             ) -> tuple[str, Bias | None] | None:
+    """How ``nominal`` fits ``case``: ("2 sigma", None), ("bias", row), or None. A bias counts only
+    with ``with_bias`` (the case's own choice when not given)."""
     d = case.measured - nominal
     two = 2.0 * case.sigma + EPS
     if abs(d) <= two:
         return "2 sigma", None
+    if not (case.with_bias if with_bias is None else with_bias):
+        return None
     size = nominal / case.scale
     for b in rows:
         if b.size_mm[0] - EPS <= size <= b.size_mm[1] + EPS:
@@ -448,7 +466,25 @@ def _sentence(case: _Case, nominal: float, how: str, row: Bias | None, note: str
 
 
 def _offer(case: _Case) -> Offer:
-    """Search the steps of ``case`` (module docstring) and say what is offered, or why nothing is."""
+    """Search the steps of ``case`` (module docstring) and say what is offered, or why nothing is.
+    Without ``with_bias``, also what a known bias alone would add (:attr:`Offer.bias_only`, and a
+    sentence in the reason when nothing is offered)."""
+    offer = _search(case)
+    rows = _rows(case.feature, case.poses, case.level)
+    if case.with_bias or not rows:
+        return offer
+    on = _search(replace(case, with_bias=True))
+    offer.bias_only = [s.nominal for s in on.suggestions if s.allowed_by == "bias"]
+    if offer.bias_only and not offer.suggestions:
+        named = " or ".join(_offered(case, x, case.words.get(x, (None, None))[0]) for x in offer.bias_only)
+        stated = "; ".join(dict.fromkeys(s.bias["stated"] for s in on.suggestions if s.bias))
+        offer.reason = (f"{offer.reason} Only with a known bias ({stated}, on simulated scans) would {named} be "
+                        "offered: an offer that only a bias allows is made only when asked for.")
+    return offer
+
+
+def _search(case: _Case) -> Offer:
+    """The search itself (:func:`_offer`)."""
     offer = Offer(case.value, case.label, case.unit, case.measured, case.sigma)
     rows = _rows(case.feature, case.poses, case.level)
     steps = ANGLE_STEPS if case.unit == "deg" else tuple((s, None) for s in LENGTH_STEPS)
@@ -491,8 +527,11 @@ def _offer(case: _Case) -> Offer:
     offer.reason_code = "no_candidate"
     size = case.measured / case.scale
     near = [b for b in rows if b.size_mm[0] - EPS <= size <= b.size_mm[1] + EPS]
-    if near:
+    if near and case.with_bias:
         note = f"The known bias was allowed for ({'; '.join(b.stated for b in near)})."
+    elif near:
+        note = (f"No known bias was counted ({'; '.join(b.stated for b in near)}): an offer that only a bias "
+                "allows is made only when asked for.")
     else:
         note = _no_bias_note(case.feature, case.why_no_feature, rows, size if rows else None, case.poses, case.level)
     offer.reason = f"No round value lies within twice the ± of {shown} ({2 * case.sigma:.2f}{unit}). {note}"
@@ -509,7 +548,16 @@ def _check_poses(poses: str) -> None:
 
 
 # --------------------------------------------------------------------------- fits
-def suggest_fit(feature, *, form: str | None = None, poses: str = "tracked", value: str | None = None) -> list[Offer]:
+def _biased(cases, with_bias: bool):
+    """Set the bias choice on the cases of a search (refusals and None pass as they are)."""
+    for c in cases:
+        if isinstance(c, _Case):
+            c.with_bias = bool(with_bias)
+    return cases
+
+
+def suggest_fit(feature, *, form: str | None = None, poses: str = "tracked", value: str | None = None,
+                with_bias: bool = False) -> list[Offer]:
     """Suggested nominal sizes for one fit: a list of :class:`Offer` (empty for a plane).
 
     ``feature``: a kept feature (``{"kind", "shape", "warnings", ...}`` as ``features.json`` holds
@@ -521,9 +569,10 @@ def suggest_fit(feature, *, form: str | None = None, poses: str = "tracked", val
     hole's form comes from its warnings (with a wall, and the level it was read at, or not); a
     ``form`` given for a hole is an error. ``poses``: "tracked" (a scan as a user makes it) or
     "true" (a simulated scan fused at its true poses), which picks the table's rows. ``value``:
-    "diameter" (the default) or "radius".
+    "diameter" (the default) or "radius". ``with_bias``: also offer the round values that only a
+    known bias allows (module docstring, "A bias alone makes no offer unless asked"); off by default.
     """
-    c = _fit_case(feature, form=form, poses=poses, value=value)
+    (c,) = _biased([_fit_case(feature, form=form, poses=poses, value=value)], with_bias)
     if c is None:
         return []
     return [c if isinstance(c, Offer) else _offer(c)]
@@ -583,20 +632,22 @@ def _fit_case(feature, *, form: str | None, poses: str, value: str | None) -> _C
 
 
 # --------------------------------------------------------------------------- relations
-def suggest_relation(relation, *, form: str | None = None, poses: str = "tracked", warnings=()) -> list[Offer]:
+def suggest_relation(relation, *, form: str | None = None, poses: str = "tracked", warnings=(),
+                     with_bias: bool = False) -> list[Offer]:
     """Suggested nominal values for a relation between two fits: one :class:`Offer` per value.
 
     ``relation``: a :class:`~ohs.measure.relate.Relation` or its ``to_dict()``. ``form``: "wall"
     when two parallel planes are the two faces of one wall (seen from opposite sides), so that its
-    thickness's bias applies; None otherwise. ``poses`` as for :func:`suggest_fit`. ``warnings``:
-    the two fits' warnings (a relation keeps none of its own); one that counts stops every value.
+    thickness's bias applies; None otherwise. ``poses`` and ``with_bias`` as for
+    :func:`suggest_fit`. ``warnings``: the two fits' warnings (a relation keeps none of its own); one
+    that counts stops every value.
 
     Words: an angle of 0° is "parallel", of 90° "perpendicular" (for a plane and an axis: the axis
     along the plane, or square to it); a distance of 0 between two parallel planes is "in one
     plane", between two parallel axes "coaxial", when the angle allows parallel as well.
     """
-    return [c if isinstance(c, Offer) else _offer(c) for c in _relation_cases(relation, form=form, poses=poses,
-                                                                              warnings=warnings)]
+    cases = _biased(_relation_cases(relation, form=form, poses=poses, warnings=warnings), with_bias)
+    return [c if isinstance(c, Offer) else _offer(c) for c in cases]
 
 
 def _relation_cases(relation, *, form: str | None, poses: str, warnings) -> list[_Case | Offer]:
@@ -709,6 +760,12 @@ def _check(c: _Case | Offer, nominal: float) -> NominalCheck:
     if how is None:
         size = nominal / c.scale
         near = [b for b in rows if b.size_mm[0] - EPS <= size <= b.size_mm[1] + EPS]
+        biased = None if c.with_bias else _allowed(c, nominal, rows, with_bias=True)
+        if biased is not None:  # a bias would allow it, and the rule asked for does not count one
+            out.reason = (f"{offered} is {gap:.2f}{unit} from {shown}: more than twice the ± ({two:.2f}{unit}); "
+                          f"only a known bias would allow it ({biased[1].stated} on simulated scans), and a "
+                          "known bias is not counted for this value.")
+            return out
         beyond = f", and beyond the known bias ({'; '.join(b.stated for b in near)})" if near else ""
         out.reason = (f"{offered} is {gap:.2f}{unit} from {shown}: more than twice the ± ({two:.2f}{unit}){beyond}. "
                       "The measurement does not support it.")
@@ -725,27 +782,28 @@ def _check(c: _Case | Offer, nominal: float) -> NominalCheck:
 
 
 def check_fit_nominal(feature, nominal: float, *, value: str | None = None, form: str | None = None,
-                      poses: str = "tracked") -> NominalCheck:
+                      poses: str = "tracked", with_bias: bool = False) -> NominalCheck:
     """Whether ``nominal`` (mm) is allowed for a fit's diameter (or radius, ``value="radius"``) by
     the rule :func:`suggest_fit` offers by: inside twice the ±, inside the window a known bias
-    widens, or what the value already reads as (within :data:`AT_STEP`). It is how the app tells
-    that an approved value no longer fits a fit measured again. A value nothing could be offered
-    for (no ±, a warning that counts) is not allowed, with that reason. Arguments as for
-    :func:`suggest_fit`; a plane has no size (ValueError)."""
-    c = _fit_case(feature, form=form, poses=poses, value=value)
+    widens (only with ``with_bias``: give the rule the value was approved under), or what the value
+    already reads as (within :data:`AT_STEP`). It is how the app tells that an approved value no
+    longer fits a fit measured again. A value nothing could be offered for (no ±, a warning that
+    counts) is not allowed, with that reason. Arguments as for :func:`suggest_fit`; a plane has no
+    size (ValueError)."""
+    (c,) = _biased([_fit_case(feature, form=form, poses=poses, value=value)], with_bias)
     if c is None:
         raise ValueError("a plane alone has no size to check")
     return _check(c, nominal)
 
 
 def check_relation_nominal(relation, value: str, nominal: float, *, form: str | None = None, poses: str = "tracked",
-                           warnings=()) -> NominalCheck:
+                           warnings=(), with_bias: bool = False) -> NominalCheck:
     """Whether ``nominal`` (mm or degrees) is allowed for the relation's ``value`` ("angle",
     "distance", "centre_distance") by the rule :func:`suggest_relation` offers by, as
     :func:`check_fit_nominal`; ``word`` is what the nominal means there ("parallel" for an angle of
     0, ...). A value the relation does not have (any more) is not allowed: ``measured`` is None and
     the reason says so. Arguments as for :func:`suggest_relation`."""
-    for c in _relation_cases(relation, form=form, poses=poses, warnings=warnings):
+    for c in _biased(_relation_cases(relation, form=form, poses=poses, warnings=warnings), with_bias):
         if c.value == value:
             return _check(c, nominal)
     unit = "deg" if value == "angle" else "mm"

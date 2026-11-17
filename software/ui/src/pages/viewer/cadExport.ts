@@ -55,19 +55,30 @@ export function outlineCost(rect: CadSummary | null, outline: CadSummary | null)
 
 /** What the measured-only switch does, for its hover card. */
 export const CAD_MEASURED_HELP =
-  "Off: the approved nominal sizes (a cylinder's or a hole's diameter) are written in place of the measured ones, and the notes list each one with its measured value. On: the measured values only, as if nothing were approved. Approved relations (parallel, an angle, a distance) are only listed in the notes either way: no shape is turned to suit another.";
+  "Off: the approved nominal sizes (a cylinder's or a hole's diameter) are written in place of the measured ones, and the notes list each one with its measured value. An approved relation is listed in the notes, or, where you chose it in the relation's card, one of its two shapes is turned and slid to suit it. On: the measured values only, as if nothing were approved: no shape moves.";
 
 /** "2 approved sizes are used in place of the measured ones; 1 approved relation is listed in the notes, not applied.",
  * or null when nothing is approved (or the server says nothing of it). */
 export function cadNominalLine(n: CadSummary["nominal"]): string | null {
   if (!n) return null;
   if (n.measured_only) return "Measured values only: the approved nominal values are left out.";
-  if (!n.sizes_used && !n.relations_listed) return null;
+  const applied = n.relations_applied ?? 0;
+  if (!n.sizes_used && !n.relations_listed && !applied) return null;
   const parts: string[] = [];
   if (n.sizes_used) parts.push(`${plural(n.sizes_used, "approved size")} ${n.sizes_used === 1 ? "is" : "are"} used in place of the measured ${n.sizes_used === 1 ? "one" : "ones"}`);
+  if (applied) parts.push(`${plural(applied, "approved relation value")} ${applied === 1 ? "is" : "are"} applied by moving a shape`);
   if (n.relations_listed) parts.push(`${plural(n.relations_listed, "approved relation")} ${n.relations_listed === 1 ? "is" : "are"} listed in the notes, not applied to the shapes`);
   const s = parts.join("; ");
   return `${s[0].toUpperCase()}${s.slice(1)}.`;
+}
+
+/** One line per relation with a move chosen: how far its shape was turned and slid, or why it was not moved. */
+export function cadMoveLines(n: CadSummary["nominal"]): string[] {
+  return (n?.moves ?? []).map((m) =>
+    m.applied
+      ? `${m.name}: ${m.moved} turned ${m.turn_deg.toFixed(2)}° about its own point and slid ${m.slide_mm.toFixed(3)} mm, to suit ${m.to_suit}.`
+      : `${m.name}: not applied (${m.reason ?? "no reason given"}), listed only.`,
+  );
 }
 
 /** The name a CAD file is saved under: after the scan, so the STEP file and the macro of two scans stay apart. */

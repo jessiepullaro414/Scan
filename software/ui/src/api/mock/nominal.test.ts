@@ -5,7 +5,7 @@
  * allow it; deleting a fit takes its approvals; the CAD summary lists the approvals. Plain TypeScript that Node runs as
  * it is (type stripping), no test framework.
  */
-import type { CadSummary, FeatureSet, FitResult, FitShape, NominalAnswer } from "../types";
+import type { CadSummary, FeatureSet, FitResult, FitShape, KeptRelation, NominalAnswer } from "../types";
 import { MockFeatures, type FeatureEngine } from "./features.ts";
 import { HttpError } from "./host.ts";
 import { mockOffer } from "./nominal.ts";
@@ -101,6 +101,30 @@ let s = (await call("GET", ["cad"]).json()) as CadSummary;
 check(s.nominal?.sizes_used === 1 && s.notes.some((x) => x.includes("nominal diameter 10.4 mm")), `CAD: ${JSON.stringify(s.nominal)}`);
 s = (await call("GET", ["cad"], { measured_only: "true" }).json()) as CadSummary;
 check(s.nominal?.measured_only === true && s.nominal.sizes_used === 0 && !s.notes.some((x) => x.includes("nominal")), "measured only");
+
+// the bias choice: the demo has no bias table, so it offers the same and keeps the rule with the approval
+a = await ans(call("GET", [hole.id, "nominal"], { with_bias: "true" }));
+check(a.with_bias === true && a.offers.length === 1, `with_bias asked: ${JSON.stringify(a)}`);
+check((await ans(call("GET", [hole.id, "nominal"]))).with_bias === false, "off by default");
+a = await ans(call("POST", [hole.id, "nominal"], { value: "diameter", nominal: 10.4, source: "entered", with_bias: true }));
+check(a.nominals[0].with_bias === true, "the rule is kept with the approval");
+a = await ans(call("POST", [hole.id, "nominal"], { value: "diameter", nominal: 10.4, source: "entered" }));
+check(a.nominals[0].with_bias === undefined, "left out when off, as the engine keeps it");
+
+// a relation's move: chosen with an approval or afterwards; the demo lists it as not applied
+check(call("POST", [rel.id, "nominal"], { value: "angle", nominal: 0, source: "entered", move: "b" }).status === 200, "approved with a move");
+set = (await call("GET", []).json()) as FeatureSet;
+check(set.relations[0].move?.shape === "b" && set.relations[0].move.order === 1, `the move kept: ${JSON.stringify(set.relations[0].move)}`);
+let moved = (await call("PUT", [rel.id, "move"], { move: "a" }).json()) as KeptRelation;
+check(moved.move?.shape === "a" && moved.move.order === 2, "chosen again: placed last");
+moved = (await call("PUT", [rel.id, "move"], { move: "a" }).json()) as KeptRelation;
+check(moved.move?.order === 2, "the same choice keeps its place");
+check(call("PUT", [hole.id, "move"], { move: "a" }).status === 422 && call("PUT", [rel.id, "move"], { move: "c" }).status === 422, "a fit has no move; a, b or listed");
+s = (await call("GET", ["cad"]).json()) as CadSummary;
+check(s.nominal?.moves?.length === 1 && s.nominal.moves[0].applied === false && !!s.nominal.moves[0].reason?.includes("demo"), `CAD moves: ${JSON.stringify(s.nominal?.moves)}`);
+moved = (await call("PUT", [rel.id, "move"], { move: "listed" }).json()) as KeptRelation;
+check(moved.move === undefined, "listed only again");
+check(((await call("GET", ["cad"]).json()) as CadSummary).nominal?.moves?.length === 0, "no move listed");
 
 // deleting the fit takes its approvals
 check(call("DELETE", [hole.id]).status === 204, "fit deleted");

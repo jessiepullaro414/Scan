@@ -1022,7 +1022,8 @@ type KeptRelation = { id: string;       // "r-…"
                       stale: boolean;   // one of the two fits was fitted on another mesh version than the current one
                       relation: RelationRecord | null;   // the engine's values for the two kept shapes
                       error?: string;   // only when relation is null: why the engine could not relate them
-                      nominals: ApprovedNominal[] };     // as a fit's (GET .../features and the refit answer)
+                      nominals: ApprovedNominal[];       // as a fit's (GET .../features and the refit answer)
+                      move?: RelationMove };             // one of its fits moves in the CAD export ("Nominal values"); left out: listed only
 type PairRelation = { a: string; b: string; stale: boolean; relation: RelationRecord | null; error?: string };
 type FeatureSet = {
   format_version: 1;
@@ -1041,7 +1042,8 @@ type RefitResult = { features: FeatureSet; refitted: string[];
 In `features.json` the records are the same without `stale` (and `FeatureSet` without `mesh_version`); a
 relation keeps only `id`, `name`, `a`, `b` and `created`. A fit or relation with approved nominal values
 keeps them under `nominals` as approved, without the `measured_now`, `sigma_now`, `check_again` and
-`check_reason` that reading adds; one without any has no `nominals` key, as before.
+`check_reason` that reading adds; one without any has no `nominals` key, as before. A relation whose move
+was chosen keeps `move` as shown; one listed only has no `move` key, as before.
 
 ### REST
 Paths are relative to `/api/projects/{pid}/scans/{sid}`.
@@ -1187,6 +1189,12 @@ engineer accepts it, enters another value, or ignores it. Approved values are ke
 measured ones and used in the CAD files ("For CAD" below). **Nothing is rounded silently:** the measured
 values in `features.json` never change.
 
+**Changed after C3 (the owner's decision):** an offer that only a known bias allows is no longer made by
+default. "A Ø 14.3 boss may well be a Ø 14.3 boss": by default a value is offered only where the ± alone
+allows it; `with_bias=true` asks for the bias-only ones too, marked as before (`allowed_by: "bias"`, the
+sentence naming the bias). Before, they were always offered. An approved relation may also move one of its
+two fits in the CAD export, when the user chooses so (`move`, below).
+
 ```ts
 type NominalValueName = "diameter" | "radius" | "angle" | "distance" | "centre_distance";
 type NominalSuggestion = {                      // ohs.cad.nominal Suggestion.to_dict()
@@ -1203,13 +1211,17 @@ type NominalOffer = {                           // ohs.cad.nominal Offer.to_dict
   measured: number; sigma: number | null;       // 1σ, the spread from scan to scan
   suggestions: NominalSuggestion[];             // nearest first; none: reason_code and reason say why
   reason_code: "already_round" | "no_candidate" | "too_many" | "no_sigma" | "warning" | null;
-  reason: string | null };
+  reason: string | null;
+  bias_only: number[] };                        // without with_bias: the values a known bias alone would allow,
+                                                // left out (the reason names them when nothing is offered)
 type ApprovedNominal = {
   value: NominalValueName;
   nominal: number; unit: "mm" | "deg";
   word: string | null;                          // what the nominal means for a relation (an angle of 0: "parallel")
   source: "suggested" | "entered";              // the value offered, or one typed
   measured: number; sigma: number | null;       // the measurement it was approved against
+  with_bias?: true;                             // approved with with_bias: "check again" counts the known bias for it
+                                                // (left out: by the ± alone)
   approved: string;                             // when (local time, to the second)
   measured_now: number | null; sigma_now: number | null;   // the value measured now (null: the relation has
                                                 // no such value any more)
@@ -1220,17 +1232,25 @@ type NominalAnswer = {                          // GET .../features/{id}/nominal
   form: "boss" | "bore" | null;                 // a cylinder's, from its record (what the offers used)
   poses: "tracked" | "true";                    // which rows of the bias table apply (below)
   poses_reason: string;                         // how that was decided, in words
+  with_bias: boolean;                           // whether the offers include those a known bias alone allows
+  move: RelationMove | null;                    // a relation's move (null: listed only; always null for a fit)
   offers: NominalOffer[];                       // a fit: its diameter (or its radius); a relation: each value
   nominals: ApprovedNominal[] };
 type NewNominal = { value: NominalValueName; nominal: number;
-                    source?: "suggested" | "entered" };   // default "entered"
+                    source?: "suggested" | "entered";     // default "entered"
+                    with_bias?: boolean;                  // default false: the rule the value is approved under
+                    move?: "listed" | "a" | "b" };        // a relation only: its move, chosen with the approval
+type RelationMove = { shape: "a" | "b";         // the relation's first or second fit moves to suit it
+                      order: number;            // its place in the order the moves are applied (1, 2, ...)
+                      chosen: string };         // when (local time, to the second)
 ```
 
 | Method and path | Body or query | Returns |
 |---|---|---|
-| `GET .../features/{id}/nominal` | `value?: "diameter" \| "radius"` (a fit) | `NominalAnswer` |
+| `GET .../features/{id}/nominal` | `value?: "diameter" \| "radius"` (a fit), `with_bias?: boolean` | `NominalAnswer` |
 | `POST .../features/{id}/nominal` | `NewNominal` | `NominalAnswer` |
 | `DELETE .../features/{id}/nominal/{value}` | | 204 |
+| `PUT .../features/{id}/move` | `{move: "listed" \| "a" \| "b"}` | the `KeptRelation` |
 
 Rules:
 - **Offers** are `ohs.cad.nominal.suggest_fit` on the kept record (a cylinder's `form` from its record: bosses
@@ -1240,6 +1260,11 @@ Rules:
   faces). Each sentence says why the value is offered and, for an offer made only because of a known bias,
   that it is a simulator number. 404 for an id that is no kept fit or relation, 422 for a `value` other than
   the diameter or the radius of a fit (a relation's offers are always all its values).
+- **A known bias alone** makes an offer only with `with_bias=true` (`ohs.cad.nominal`, `with_bias`).
+  Without it the search runs as if no bias were known: a value only a bias allows is not a candidate, an
+  offer that would have had both kinds keeps the ± ones, and a finer step can then offer a value the ±
+  allows (a Ø 14.45 ± 0.05 boss: 14.5, where the bias would offer 15). `bias_only` lists what the bias
+  would add. The viewer asks for it only while its switch "Offers a known bias allows" is on.
 - **The poses** (which bias rows apply) come from the scan's processing report, `result/report.json` (the
   stage the current mesh was made by): "true" only when it says `"poses": "given"` and its ground truth (a
   simulated recording) shows those poses equal the true ones (every frame within 0.001 mm and 0.001°: the
@@ -1252,7 +1277,15 @@ Rules:
   otherwise, and for a value the item does not have: a fit's angle, a plane's size, a relation without a
   centre distance). It is kept with the value measured now (`measured`, `sigma`) and replaces an approval
   of the same value; a fit keeps one size, so a diameter replaces a radius and the other way round. An
-  entered value needs no offer.
+  entered value needs no offer. A suggested value must be offered under the rule asked for: one only a
+  bias allows needs `with_bias: true`, which is then kept with the approval (`with_bias: true`; left out
+  when false). `move` (a relation only; 422 for a fit) chooses its move with the approval.
+- **A relation's move** (`PUT .../move`, or `move` with an approval): `"listed"` (the default, as every
+  relation was before) names the approved values in the CAD files' notes only; `"a"` or `"b"` moves that
+  fit of the relation to suit them in the CAD export ("For CAD", `ohs.cad.moves`). Kept on the relation as
+  `move` (`RelationMove`); choosing the shape already chosen keeps its place in the order, another choice
+  is placed last; `"listed"` removes it. 422 for a fit's id or another value, 404 for an unknown id. The
+  measured fits are not touched. A move chosen before any value is approved does nothing until one is.
 - **Remove** (`DELETE`): 204; 404 when there is none. A record left without approvals loses its `nominals`
   key. Deleting a fit or a relation deletes its approvals (and a fit's relations with theirs). A rename
   keeps them.
@@ -1260,14 +1293,17 @@ Rules:
   .../nominal`) marks one `check_again` when the measurement has changed since it was approved and the new
   one no longer allows the nominal by the engine's own rule (`ohs.cad.nominal.check_fit_nominal`,
   `check_relation_nominal`: within twice the ±, within the window a known bias widens, or what the value
-  already reads as); `check_reason` gives the old and the new measured value. Nothing is approved again or
-  dropped on its own: the engineer approves again or removes it. A measurement that has not changed is
-  never marked (a value entered by hand outside the rule stays as the engineer chose it).
+  already reads as); `check_reason` gives the old and the new measured value. The rule is the one the
+  approval was made under: the known bias counts only for one kept with `with_bias: true`, whatever the
+  viewer's switch is now. An approval kept before the choice existed has no `with_bias` and is judged by the
+  ± alone. Nothing is approved again or dropped on its own: the engineer approves again or removes it. A
+  measurement that has not changed is never marked (a value entered by hand outside the rule stays as the
+  engineer chose it).
 - **Ignore** is the viewer's: it hides an offer in that browser until the value is measured again, and
   sends nothing.
 
 ### For CAD
-[`FEATURE_PLAN.md`](FEATURE_PLAN.md), C2. The scan's kept fits as a STEP file (`ohs.cad.step`) and as a
+[`FEATURE_PLAN.md`](FEATURE_PLAN.md), C2 (and C3, with the owner's decisions after it). The scan's kept fits as a STEP file (`ohs.cad.step`) and as a
 FreeCAD macro (`ohs.cad.fcmacro`, a short Python text that builds the same shapes as named objects in a new
 document), both made from `ohs.cad.shapes.cad_shapes` of the kept fits as `features.json` holds them, in the
 part's frame when the scan has one (`ohs/server/cad.py`). Each plane is a flat face, each cylinder a
@@ -1300,11 +1336,29 @@ type CadSummary = {                             // GET .../features/cad: what th
     sizes_used: number;                         // approved sizes written in place of the measured ones
     sizes: { id: string; name: string; value: "diameter" | "radius"; nominal: number;
              measured: number | null; sigma: number | null; check_again: boolean }[];
-    relations_listed: number;                   // approved relations, listed in the notes, not applied
+    relations_listed: number;                   // approved relation values listed in the notes, not applied
+    relations_applied: number;                  // approved relation values a move applied
     relations: { id: string; name: string; value: NominalValueName; nominal: number; word: string | null;
-                 check_again: boolean }[];
-    relations_note: string | null };            // with any: that they are not applied to the geometry, and why
+                 check_again: boolean;
+                 move: "listed" | "a" | "b";    // the relation's move as chosen
+                 applied: boolean }[];          // whether that move was applied
+    relations_note: string | null;              // with any listed: that they are not applied to the geometry
+    moves: CadMove[] };                         // each relation with a move chosen and a value approved, in order
 };
+type CadMove = {                                // ohs.cad.moves Move.to_dict()
+  id: string; name: string;                     // the relation
+  shape: "a" | "b";                             // which of its fits was to move
+  moved_id: string | null; moved: string | null;          // that fit (id, name)
+  fixed_id: string | null; to_suit: string | null;        // the other one, which stays where it is
+  applied: boolean;
+  turn_deg: number;                             // how far the moved fit was turned about its own point
+  slide_mm: number; slide: number[];            // how far it was slid, and the slide as a vector (the scan's frame)
+  values: { value: NominalValueName; nominal: number; word: string | null;
+            exported: number | null }[];        // each approved value as the exported shapes read it
+  holds: boolean;                               // they all read their nominal to 1e-9 after every move
+  check_again: boolean;                         // an approval of it is marked "check again"
+  reason: string | null;                        // why it was not applied
+  warnings: string[]; sentence: string };       // "Bottom turned 0.0500 deg about its own point and slid ..."
 ```
 
 | Method and path | Query | Returns |
@@ -1331,13 +1385,32 @@ Rules:
   its radius) is written in place of the measured one, in the STEP file and the macro alike
   (`ohs.cad.nominal.apply_nominal` on a copy of the shape), and the notes list each one as "Boss: nominal
   diameter 14 mm (measured 14.02 +/- 0.03 mm)" (the value measured now; plain ASCII, so the macro's comments
-  read as they are). An approval marked "check again" is used too, with a warning that names it. Approved
-  **relations** (parallel, perpendicular, an angle, a distance) move no shape: turning one shape to suit
-  another needs a rule for which one moves, which is not decided. Each is listed in the notes ("Top to
-  bottom (Top and Bottom): approved parallel (measured angle 0.05 +/- 0.07 deg); not applied to the
-  geometry"), and `nominal.relations_note` says so. `measured_only=true` leaves every approval out: the
-  files are then byte for byte those of the same fits with nothing approved, as are the files of a scan
-  with no approvals. The measured shapes in `features.json` are never changed.
+  read as they are). An approval marked "check again" is used too, with a warning that names it.
+- **Approved relations, listed only** (a relation's `move` not chosen: the default) move no shape. Each is
+  listed in the notes ("Top to bottom (Top and Bottom): approved parallel (measured angle 0.05 +/- 0.07
+  deg); not applied to the geometry"), and `nominal.relations_note` says so. A scan whose relations are all
+  listed only gets byte for byte the files it got before moves existed.
+- **Approved relations that move a shape** (`move` "a" or "b", "Nominal values" above): a copy of that fit,
+  after its approved size is in, is turned about its own point and slid to suit the approved values
+  (`ohs.cad.moves.apply_moves`; its docstring has every rule): an angle (or "parallel", "perpendicular")
+  turns its direction the least, in the plane of the two directions; a distance slides it along the
+  direction the distance is measured in (two planes' mean normal, a plane's normal for a plane and an
+  axis, across two parallel axes, along the line square to two skew ones), keeping its side; two holes'
+  centre distance slides it along the line of the centres (with the distance across the axes approved too,
+  along the axes after it); "coaxial" and "in one plane" are both, the turn first. A moved plane takes its
+  rectangle and outline with it. The pair as exported must read every approved value to 1e-9, else nothing
+  moves. **Order:** the moves are applied in the order they were chosen (`RelationMove.order`); a fit is
+  moved by one relation only, and a fit an applied relation was measured against stays where it is (a later
+  relation that would move it is refused: it would undo the earlier one). A move that cannot be applied
+  moves nothing: the relation stays listed, "not applied to the geometry: <why>", and `warnings` says so. A
+  move whose approval is marked "check again" is applied, with a warning. The notes say "applied by moving
+  Bottom" for each value and, in a note of their own, "Top to bottom: Bottom turned 0.0500 deg about its own
+  point and slid 0.0000 mm, to suit Top (in the export only; the measured fit is unchanged)"; a listed
+  relation one of whose fits another relation moved gets a note with what it reads in the export.
+  `nominal.moves` gives the same per move. The part's frame stays the one built from the measured fits.
+- `measured_only=true` leaves every approval and every move out: the files are then byte for byte those of
+  the same fits with nothing approved, as are the files of a scan with no approvals. The measured shapes in
+  `features.json` are never changed.
 - **The macro** is plain ASCII. Each name is a Python string literal (`ascii()`), and every comment one line
   of printable ASCII, so no name or note can run as code. In FreeCAD (checked with 1.1.4) it builds the
   objects in the groups "Planes", "Cylinders", "Holes", "Axes", "Points" and "Part frame", each equal to what

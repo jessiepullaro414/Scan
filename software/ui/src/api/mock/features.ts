@@ -156,7 +156,7 @@ export class MockFeatures {
     });
   }
 
-  private nominalAnswer(s: Stored, id: string, size?: "diameter" | "radius"): NominalAnswer {
+  private nominalAnswer(s: Stored, id: string, size?: "diameter" | "radius", withBias = false): NominalAnswer {
     const { list, item } = this.nominalItem(s, id);
     const f = list === "features" ? s.features.find((x) => x.id === id)! : null;
     return {
@@ -166,13 +166,31 @@ export class MockFeatures {
       form: f?.form ?? null,
       poses: "tracked",
       poses_reason: "the demo engine reads no processing report: the poses are taken as tracked",
+      with_bias: withBias, // the demo has no bias table: the offers are the same either way
+      move: list === "relations" ? ((item as KeptRelation).move ?? null) : null,
       offers: this.nominalValues(s, id, size).map(mockOffer),
       nominals: this.nominalViews(s, id),
     };
   }
 
+  /** A relation's move (APP_API.md "Nominal values", "A relation's move"): "listed" takes it away; "a" or "b" keeps
+   * it, placed last unless the same shape was chosen already. */
+  private chooseMove(s: Stored, id: string, move: unknown): KeptRelation {
+    const { list, item } = this.nominalItem(s, id);
+    if (list !== "relations") bad("a move is chosen for a relation: a fit alone does not move", "Choose the move on a kept relation.");
+    if (move !== "listed" && move !== "a" && move !== "b") bad(`move must be 'listed', 'a' or 'b', got ${String(move)}`);
+    const r = item as KeptRelation;
+    if (move === "listed") delete r.move;
+    else if (r.move?.shape !== move) {
+      const last = Math.max(0, ...s.relations.map((x) => x.move?.order ?? 0));
+      r.move = { shape: move as "a" | "b", order: last + 1, chosen: nowIso() };
+    }
+    return r;
+  }
+
   private approveNominal(s: Stored, id: string, body: Record<string, unknown>): NominalAnswer {
     const { list, item } = this.nominalItem(s, id);
+    if (body.move !== undefined && body.move !== null && list !== "relations") bad("a move is chosen for a relation: a fit alone does not move", "Choose the move on a kept relation.");
     const value = body.value as NominalValueName;
     const allowed: NominalValueName[] = list === "features" ? ["diameter", "radius"] : ["angle", "distance", "centre_distance"];
     if (list === "features" && s.features.find((x) => x.id === id)!.kind === "plane") bad("a plane alone has no size to approve", "Approve a relation between two planes instead.");
@@ -189,10 +207,12 @@ export class MockFeatures {
     const hit = offer.suggestions.find((x) => Math.abs(x.nominal - nominal) <= 1e-9);
     if (source === "suggested" && !hit) bad(`${nominal} is not offered now for this ${value.replace("_", " ")}`, "Approve one of the values offered, or send it as 'entered'.");
     const word = hit?.word ?? (offer.unit === "deg" ? ({ 0: "parallel", 90: "perpendicular" } as Record<number, string>)[nominal] ?? null : null);
-    const entry: StoredNominal = { value, nominal, unit: offer.unit, word, source: source as "suggested" | "entered", measured: offer.measured, sigma: offer.sigma, approved: nowIso() };
+    const withBias = body.with_bias === true;
+    const entry: StoredNominal = { value, nominal, unit: offer.unit, word, source: source as "suggested" | "entered", measured: offer.measured, sigma: offer.sigma, ...(withBias ? { with_bias: true } : {}), approved: nowIso() };
     const same: string[] = list === "features" ? ["diameter", "radius"] : [value];
     item.nominals = [...(item.nominals ?? []).filter((n) => !same.includes(n.value)), entry];
-    return this.nominalAnswer(s, id, list === "features" ? (value as "diameter" | "radius") : undefined);
+    if (body.move !== undefined && body.move !== null) this.chooseMove(s, id, body.move);
+    return this.nominalAnswer(s, id, list === "features" ? (value as "diameter" | "radius") : undefined, withBias);
   }
 
   private removeNominal(s: Stored, id: string, value: string): void {
@@ -276,9 +296,14 @@ export class MockFeatures {
     if (a && b === "nominal" && is("GET", 2)) {
       const size = body.value === undefined || body.value === null ? undefined : body.value;
       if (size !== undefined && size !== "diameter" && size !== "radius") bad(`a fit's nominal value is its diameter or its radius, not ${String(size)}`);
-      return json(200, this.nominalAnswer(s, a, size as "diameter" | "radius" | undefined));
+      const withBias = body.with_bias === true || body.with_bias === "true";
+      return json(200, this.nominalAnswer(s, a, size as "diameter" | "radius" | undefined, withBias));
     }
     if (a && b === "nominal" && is("POST", 2)) return json(200, this.approveNominal(s, a, body));
+    if (a && b === "move" && is("PUT", 2)) {
+      const r = this.chooseMove(s, a, body.move);
+      return json(200, { ...this.relationView(s, r, engine.version()), nominals: this.nominalViews(s, a) });
+    }
     if (a && b === "nominal" && rest[2] && is("DELETE", 3)) {
       this.removeNominal(s, a, rest[2]);
       return json(204, null);

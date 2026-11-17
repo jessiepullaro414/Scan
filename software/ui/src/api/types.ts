@@ -751,6 +751,9 @@ export type NominalOffer = {
   suggestions: NominalSuggestion[];
   reason_code: string | null; // when there are none: "already_round", "no_candidate", "too_many", "no_sigma", "warning"
   reason: string | null;
+  // the round values a known bias alone would allow, left out because they were not asked for (with_bias off);
+  // left out by older servers
+  bias_only?: number[];
 };
 /** An approved nominal value as kept, with the measurement now and whether to check it again. */
 export type ApprovedNominal = {
@@ -761,6 +764,7 @@ export type ApprovedNominal = {
   source: NominalSource;
   measured: number; // what it was approved against
   sigma: number | null;
+  with_bias?: boolean; // approved with the offers a known bias alone allows shown: "check again" counts the bias for it
   approved: string;
   measured_now: number | null; // the value measured now (null: the relation has no such value any more)
   sigma_now: number | null;
@@ -775,10 +779,22 @@ export type NominalAnswer = {
   form: CylinderForm | null;
   poses: "tracked" | "true"; // which biases apply, from the scan's processing report
   poses_reason: string;
+  with_bias?: boolean; // whether the offers include those a known bias alone allows (asked with `with_bias`)
+  move?: RelationMove | null; // a relation's move in the CAD export (null: listed only; always null for a fit)
   offers: NominalOffer[];
   nominals: ApprovedNominal[];
 };
-export type NewNominal = { value: NominalValueName; nominal: number; source: NominalSource };
+export type NewNominal = {
+  value: NominalValueName;
+  nominal: number;
+  source: NominalSource;
+  with_bias?: boolean; // the offers were asked with the known biases (kept as the approval's rule)
+  move?: MoveChoice; // a relation: which fit moves in the CAD export, chosen with the approval
+};
+/** Which of a kept relation's two fits moves to suit its approved values in the CAD export; "listed": none (the default). */
+export type MoveChoice = "listed" | "a" | "b";
+/** A relation's move as kept: the fit that moves, and its place in the order the moves are applied. */
+export type RelationMove = { shape: "a" | "b"; order: number; chosen: string };
 /** What a kept cylinder is (ohs.measure.region `cylinder_form`). */
 export type CylinderForm = "boss" | "bore";
 // Where a kept fit's region lies on its shape (ohs.measure.region_extent; the small part features.json keeps,
@@ -845,6 +861,7 @@ export type KeptRelation = {
   relation?: RelationRecord | null; // the engine's values for the two kept shapes (null: it could not relate them, see error)
   error?: string;
   nominals?: ApprovedNominal[]; // approved nominal values, as for a fit
+  move?: RelationMove; // one of its fits moves to suit it in the CAD export; left out: listed only
 };
 export type FeatureSet = {
   format_version: number;
@@ -952,9 +969,40 @@ export type CadNominal = {
   measured_only: boolean; // asked for the measured values only: no approval is used
   sizes_used: number; // approved sizes put into the shapes
   sizes: { id: string; name: string; value: "diameter" | "radius"; nominal: number; measured: number | null; sigma: number | null; check_again: boolean }[];
-  relations_listed: number; // approved relations, listed in the notes, not applied to the geometry
-  relations: { id: string; name: string; value: NominalValueName; nominal: number; word: string | null; check_again: boolean }[];
+  relations_listed: number; // approved relation values only listed in the notes, not applied to the geometry
+  relations_applied?: number; // approved relation values a move applied (left out by older servers)
+  relations: {
+    id: string;
+    name: string;
+    value: NominalValueName;
+    nominal: number;
+    word: string | null;
+    check_again: boolean;
+    move?: MoveChoice;
+    applied?: boolean;
+  }[];
   relations_note: string | null;
+  moves?: CadMove[]; // each relation with a move chosen, in the order applied
+};
+/** What became of one relation's move in the CAD files (ohs.cad.moves `Move.to_dict()`). */
+export type CadMove = {
+  id: string;
+  name: string;
+  shape: "a" | "b";
+  moved_id: string | null;
+  moved: string | null; // the fit moved
+  fixed_id: string | null;
+  to_suit: string | null; // the fit it was moved to suit
+  applied: boolean;
+  turn_deg: number; // turned about its own point
+  slide_mm: number;
+  slide: number[];
+  values: { value: NominalValueName; nominal: number; word: string | null; exported: number | null }[];
+  holds: boolean;
+  check_again: boolean;
+  reason: string | null; // why it was not applied
+  warnings: string[];
+  sentence: string;
 };
 
 // ------------------------------------------------------------------ M5 second slice: the deviation map
