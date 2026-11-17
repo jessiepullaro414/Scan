@@ -138,6 +138,12 @@ cart_gap     = 2.5;   // clearance for the LED dome
 star_d       = 20.6;  // 20 mm LED star
 star_t       = 1.7;
 mask_win     = [6.4, 5.0];
+// The star's solder pads are on its FRONT face (the LED side), one per lobe, and that face lies on
+// the pocket's ledge. So the ledge is cut away under the lobes next to the lead notch: the solder
+// joints and the wires sit in that recess and leave through a channel under the notch. A thin rim
+// stays under the lobe tips so the star still lies flat.
+pad_relief_r   = 9.5;   // outer radius of the recess (pads end about 9 mm from the centre)
+pad_relief_ang = cla ? [62, 150] : [20, 160];  // degrees from +x; keeps clear of the holder screw heads
 heatsink     = [25, 25, 20];
 
 /* [Fasteners] */
@@ -401,6 +407,9 @@ module led_cartridge() {
             translate([0, 0, cart_plate_t + 1.0]) cylinder(d=4.2, h=cart_t);
         }
         translate([-2, s/2 - 4, cart_plate_t + cart_gap]) cube([4, 5, star_t + eps]);            // LED lead notch
+        translate([0, 0, cart_plate_t]) linear_extrude(cart_gap + eps)                           // recess for the solder pads
+            polygon(concat([[0, 0]], [for (a = [pad_relief_ang[0] : 5 : pad_relief_ang[1]]) pad_relief_r * [cos(a), sin(a)]]));
+        translate([-2, 6, cart_plate_t]) cube([4, s/2 - 6 + 1, cart_gap + eps]);                 // wire channel under the notch
     }
 }
 

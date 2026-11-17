@@ -129,7 +129,7 @@ IMU (LSM6DSOX): VIN ── 3V3 (pin 36)  GND ── GND  SDA ── GP4 (pin 6) 
    1. Cut the cleanest mask from the printed sheet. Lay a 10×10 mm piece of diffusion film in the cartridge's front recess, and put the mask on top of it.
    2. Screw the M12 lens holder over both films from the cartridge's back; this clamps them. Use 2× M2×6 for the Arducam holder, or M1.6×6 for the Commonlands one. If the holder's holes aren't threaded, add nuts on the holder side. Then thread in the 3.6 mm lens.
    3. Slide the cartridge into the projector bay from the back, lens first, and fix it with 4× M2×8 into the ledge.
-   4. Drop the LED star into the cartridge's back pocket, with its leads through the notch. Press the heatsink onto it with its thermal tape.
+   4. Solder the two leads to a **+** and a **−** pad on the star's front face (the LED side), on two lobes next to each other. Drop the star into the cartridge's back pocket, LED side first, with those two lobes over the recess beside the notch and the leads out through the notch. Press the heatsink onto it with its thermal tape.
    5. Turn the lens until the dots are sharp on a wall 25 cm away.
 6. **Camera:** screw the stereo board to the faceplate standoffs, focus both lenses at about 25 cm, lock them with a dab of nail polish, seat the faceplate on its two pins and screw it on (M3×8 flat-head).
 7. **Back cover:** mount the IMU and the kill toggle, wire everything per the diagram, seat the cover on its two pins and close with M3×8 flat-head.

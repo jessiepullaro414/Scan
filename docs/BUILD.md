@@ -155,9 +155,16 @@ Handle both by the edges. A fingerprint on the mask shows up in the projected do
 2. Put the M12 lens holder over both and screw it on from the cartridge's **back** with 2× M2 × 6.
    This clamps the films. If the holder's holes are not threaded, add nuts on the holder side.
 3. Thread the 3.6 mm lens into the holder a few turns.
-4. Solder two wires, about 20 cm, to the LED star's **+** and **−** pads. Mark the + wire.
+4. Solder two wires, about 20 cm, to the LED star. Its solder pads are on the **front** face, the
+   side with the LED, one pad on each of the six lobes. Use one pad marked **+** and one marked
+   **−** on two lobes **next to each other**. Lay each wire flat on its pad, pointing away from
+   the LED, and keep the solder low: the joint has 2.5 mm of room. Mark the + wire.
 5. Leave the LED and the heatsink out for now. They go in after the cartridge is in the head
    (step 10).
+
+The cartridge has a recess for these two joints, in the ledge the star lies on, beside the notch
+in the cartridge's edge. A cartridge printed before 2026-11-16 does not have it: print
+`led_cartridge.stl` again (it is a small part).
 
 ---
 
@@ -256,8 +263,12 @@ through it.
    out. It must still turn.
 2. Slide the projector cartridge into the bay from the back, lens first, and fix it with
    4× M2 × 8.
-3. Drop the LED star into the pocket at the cartridge's back, its wires through the notch. Stick
-   the heatsink onto the star with its thermal tape.
+3. Drop the LED star into the pocket at the cartridge's back, **LED side first**, so the LED looks
+   through the mask and the bare metal back faces you. Turn it until the two soldered lobes lie
+   over the recess and two of its edge cut-outs sit over the lens holder's screw heads. Lead both
+   wires out through the channel and the notch, then back along the side of the heatsink. The
+   star must lie flat, level with the cartridge's back. Stick the heatsink onto it with its
+   thermal tape.
 4. Press the lasers' wires into the channels on the head's back face. They lead to the camera
    opening. Bring the LED's wires there too.
 
