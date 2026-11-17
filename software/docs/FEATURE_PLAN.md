@@ -62,6 +62,20 @@ other, so any of them can be taken first.
 | D5 | Presets: which ones, and what are they called? | Decided after P1's measurements. "General" is today's behaviour, unchanged. |
 | D6 | May `mesh.ply` carry one more value per vertex (how many independent looks it had)? | Needed by N1 to say *why* an area is weak. It adds a property and changes no existing one. |
 
+**Decided by the owner (2026-11-17):**
+- **D1:** go ahead with Inspection; the report is a self-contained HTML page that prints to PDF.
+- **D2:** our own small STEP writer. **D3:** FreeCAD is on this PC for the round-trip check (a
+  portable copy of 1.1.4 under `C:\Users\Garage\Tools\`; the installer needs an administrator
+  prompt).
+- **An approved relation and the CAD file** (asked after C3): the user gets the option. When a
+  relation is approved, they choose whether one of its two shapes moves to suit it in the
+  export, and which one, or whether it stays listed only.
+- **Offers that only a known bias allows** (asked after C3): not assumed. A Ø 14.3 boss may
+  well be a Ø 14.3 boss. By default only the ± makes an offer; the user can choose to see the
+  bias-only ones as well, marked as such.
+- **K3:** with a hole as the origin its centre is the origin; strict 3-2-1 stays a switch (no
+  objection raised).
+
 ---
 
 ## K. Kept features and a coordinate system
