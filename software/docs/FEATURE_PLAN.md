@@ -903,6 +903,27 @@ no object size anywhere in the engine or the app.
     more stay. The plateau rule cannot be used there as it is (the merge clips frames, not a
     mesh): it needs the table removed from the merged mesh instead, or a much smaller margin
     and this edit afterwards. For the owner.
+  - **The merge, mended 2026-11-17 (the owner: "Go ahead and fix it").** Each scan's own mesh
+    tells the merge where its table is bare and where the part or a thin part stands, as a
+    map on the table's plane (`support_map` in `ohs/mesh/support.py`); each frame is clipped
+    by that map (`FramePipeline`'s clip takes it), and what is left of a table in the merged
+    mesh is taken out by the single-scan rule and counted. Raised areas the rule would only
+    warn about are **kept** in a merge and named in a warning. A scan whose table cannot be
+    told apart falls back to the old 2 mm cut for that scan alone, with a warning. The
+    merge's report and the Align page say, for each scan, what was left out and what to look
+    at. A part that was not moved merges exactly as before.
+    - *Measured* (`VALIDATION.md`, "The merge of several scans keeps the part's foot and thin
+      parts"): the bracket's bottom 4 mm, missing from every merge before, is half to two
+      thirds there; a 1 mm and a 0.5 mm plate, gone before, are kept whole. Turned over, the
+      plate reads 0.3–0.8 mm too thick (the fusion's thin-wall effect, not the map).
+    - *Tried and dropped:* fusing everything and removing the tables afterwards: the tables
+      fuse into sheets that touch the part, and 27,000–41,000 mm² of them is left.
+    - Checked through the app on the bracket's front and side scans. Tests: 11 new, 99 pass
+      on the GPU path and 95 on the CPU path with the alignment, pipeline and table tests.
+    - **Left:** the merge drops pieces under 1 % of the triangles, so a small thin part
+      beside a large one could still go (next); the page's callout has not been looked at in
+      a browser; the single-scan rule keeps a few bare-table bumps as thin parts on the plate
+      scenes' tables (23–26 mm across, 0.25–0.30 mm high).
   - **Seen on the way:** the merge of several scans cuts 2 mm off each part's foot
     (`support_margin_mm`); this rule could keep the part to within a millimetre there too.
     That would change merged scans, so it waits for the owner. And the alignment's own

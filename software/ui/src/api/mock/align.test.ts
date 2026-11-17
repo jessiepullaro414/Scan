@@ -252,6 +252,7 @@ check(Number(frames[0][1]) >= 1 && Number(frames[frames.length - 1][1]) === tota
 check(done.steps.every((s, i) => s.p >= 0 && s.p <= 1 && (i === 0 || s.p >= done.steps[i - 1].p)), "the progress only grows");
 check(done.steps[done.steps.length - 1].message === "Adding the merged scan to the project", "the last step adds the scan");
 check(!done.steps.some((s) => s.message === "Finding what the part lay on"), "same setup: the tables stay in");
+check(JSON.stringify((done.result as MergeResult).tables) === "[]" && JSON.stringify((done.result as MergeResult).warnings) === "[]", "same setup: nothing left out, nothing said");
 
 let m = done.result as MergeResult;
 check(p.scans.length === count + 1 && p.n_scans === count + 1, "the project has one more scan");
@@ -279,6 +280,11 @@ m = done.result as MergeResult;
 made = p.scans[p.scans.length - 1];
 check(made.name === "Whole bracket" && m.scan.name === "Whole bracket", "a given name, trimmed");
 check(JSON.stringify(m.merged_from) === JSON.stringify(["under", "top"]), "target first");
+check(
+  m.tables?.length === 2 && m.tables[0].id === "under" && m.tables[0].name === "Bracket underside" && m.tables.every((t) => t.rule === "map" && t.summary.length > 20),
+  "the part was moved: each scan says what of it was left out",
+);
+check(Array.isArray(m.warnings) && m.warnings.some((w) => w.includes("Bracket underside") && /thin part/.test(w)), "and a raised area that may be a thin part is said, with the scan's name");
 
 // a merged scan has no recording: it can be aligned to, not merged again
 const mergedId = made.id;
@@ -456,6 +462,7 @@ check(logs.length === 1 && logs[0].message === "Merged scan ready: Bracket top +
 mock.merge(p, { scans: at(["side", "top", "under"]), same_setup: false, name: " All sides " });
 done = run(last());
 check(done.steps[0].message === "Finding what the part lay on" && (done.result as MergeResult).scan.name === "All sides", "the part moved, a given name");
+check(JSON.stringify((done.result as MergeResult).tables?.map((t) => t.id)) === JSON.stringify(["side", "top", "under"]), "each of the three scans' tables, in order");
 logs.length = 0;
 mock.merge(p, { scans: at(THREE) });
 last().spec.onFail?.("the scans were recorded with different calibrations");

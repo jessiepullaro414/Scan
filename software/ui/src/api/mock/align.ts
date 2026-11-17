@@ -28,7 +28,7 @@
  * No imports at run time (types only), so `npm test` runs it with Node: the mock engine hands in what it
  * needs (`AlignHost`).
  */
-import type { AlignAllPair, AlignAllResult, AlignResult, Job, MergeResult, PairUse, PointPair, ProcessQuality, Project, Scan } from "../types";
+import type { AlignAllPair, AlignAllResult, AlignResult, Job, MergeResult, MergeTable, PairUse, PointPair, ProcessQuality, Project, Scan } from "../types";
 import type { WorkJobSpec, WorkStep } from "./host";
 
 export type AlignHost = {
@@ -527,7 +527,35 @@ export class MockAlign {
         p.n_scans = p.scans.length;
         p.modified = host.now();
         host.log("info", `Merged scan ready: ${title}`);
-        const result: MergeResult = { project_id: p.id, scan_id: id, scan: { ...scan }, merged_from: list.map((x) => x.id), message: `Merged into "${title}"` };
+        // the part was moved: each scan's table found on its own mesh and left out (the engine's words); the
+        // first scan's table has a raised area the engine cannot tell from a thin part: kept, and said
+        const tables: MergeTable[] = sameSetup
+          ? []
+          : list.map((s, i) => {
+              const warnings =
+                i === 0
+                  ? [
+                      `"${s.name}": A raised area 14 mm across, 0.27 mm above the table round it, at (62, -40, 0) mm, may be a thin part: it is kept in the merged scan (if it is the table's own, a patch of table that size is left there).`,
+                    ]
+                  : [];
+              const area = 2404 - 180 * i;
+              return {
+                id: s.id,
+                name: s.name,
+                rule: "map" as const,
+                summary: `Its table is left out (${area.toLocaleString("en-US")}.0 cm² of its mesh, flat to 0.08 mm); the part is kept right down to it${i === 0 ? "; 1 raised area that may be a thin part is kept too" : ""}. What the frames left of it next to the part, ${(812 + 97 * i).toLocaleString("en-US")} triangles (${35 + 4 * i} mm²), was taken out of the merged scan.`,
+                warnings,
+              };
+            });
+        const result: MergeResult = {
+          project_id: p.id,
+          scan_id: id,
+          scan: { ...scan },
+          merged_from: list.map((x) => x.id),
+          message: `Merged into "${title}"`,
+          tables,
+          warnings: tables.flatMap((t) => t.warnings),
+        };
         return result;
       };
     })();

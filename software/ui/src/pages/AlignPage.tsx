@@ -33,7 +33,7 @@ import {
 } from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { api, sentence } from "../api/http";
-import type { AlignAllResult, AlignResult, Scan } from "../api/types";
+import type { AlignAllResult, AlignResult, MergeResult, Scan } from "../api/types";
 import { JobProgress } from "../components/ScanBits";
 import { ErrorBoundary } from "../components/shell/ErrorBoundary";
 import { Button, IconButton } from "../components/ui/Button";
@@ -51,9 +51,11 @@ import {
   hasMesh,
   hasRecording,
   MAX_SCANS,
+  mergeLeftOut,
   mergeNameOf,
   mergeNeedsConfirm,
   MIN_PAIRS,
+  SETUP_TEXT,
   namesText,
   needsALook,
   nextFreeScan,
@@ -98,15 +100,42 @@ const SETUPS: { same: boolean; title: string; text: string; several: string }[] 
     same: true,
     title: "The part stayed where it was",
     text: "The table both scans share helps to line them up, and it stays in the merged scan.",
-    several: "The table the scans share helps to line them up, and it stays in the merged scan.",
+    several: SETUP_TEXT.same,
   },
   {
     same: false,
     title: "The part was moved or turned over",
-    text: "Only the part itself is matched. Each scan's table is left out of the merged scan, and with it about 2 mm of the part's bottom edge.",
-    several: "Only the part itself is matched. Each scan's table is left out of the merged scan, and with it about 2 mm of the part's bottom edge.",
+    text: SETUP_TEXT.moved,
+    several: SETUP_TEXT.moved,
   },
 ];
+
+/** What the merge left out of each scan's table (the part was moved), and what to look at. */
+function LeftOut({ merged }: { merged: MergeResult }) {
+  const { lines, warnings, warn } = mergeLeftOut(merged);
+  if (!lines.length && !warnings.length) return null;
+  return (
+    <Callout tone={warn ? "warn" : "neutral"} icon={warn ? TriangleExclamationPoint : Layers} title={warn ? "What was left out, and what to look at" : "What was left out"} className="mt-3">
+      <ul className="space-y-1.5" aria-label="What was left out of each scan">
+        {lines.map((l) => (
+          <li key={l} className="leading-5">
+            {l}
+          </li>
+        ))}
+      </ul>
+      {warnings.length ? (
+        <ul className="mt-2 space-y-1.5" aria-label="Warnings">
+          {warnings.map((w) => (
+            <li key={w} className="flex items-start gap-1.5 leading-5 text-warn">
+              <TriangleExclamationPoint size={13} className="mt-1 shrink-0" aria-hidden />
+              <span>{w}</span>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+    </Callout>
+  );
+}
 
 const EMPTY_PICKS: Picks = { target: [], source: [] };
 const NO_SCANS: string[] = [];
@@ -1014,6 +1043,7 @@ export default function AlignPage({
               </Button>
             </>
           )}
+          {merged ? <LeftOut merged={merged} /> : null}
           {st.mergeCancelled && !merging && !merged ? (
             <Callout tone="neutral" title="Merging was cancelled" className="mt-3">
               {several

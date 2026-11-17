@@ -165,6 +165,28 @@ def test_merge_adds_a_scan_to_the_project(env):
     assert 500 < scan2["result"]["report"]["mesh"]["n_vertices"] < 0.3 * len(V)
 
 
+def test_a_merge_of_a_moved_part_says_what_it_left_out(env):
+    """The part was moved (``same_setup: false``): each scan's table is found on its own mesh and left
+    out, place by place; the job's result says for each scan what was left out and carries the
+    warnings for the page, and the merged scan's report.json holds the same."""
+    import json
+
+    T = env.get("T", env["T_true"].tolist())
+    done = run_job(env, post(env["base"] + "/merge", {"target": env["a"], "source": env["b"], "T": T, "same_setup": False,
+                                                     "name": "Moved"}), "merge")
+    res = done["result"]
+    assert [t["id"] for t in res["tables"]] == [env["a"], env["b"]] and [t["name"] for t in res["tables"]] == ["Top", "Side"]
+    assert all(t["rule"] == "map" and isinstance(t["summary"], str) and t["summary"] for t in res["tables"]), res["tables"]
+    assert isinstance(res["warnings"], list) and all(isinstance(w, str) for w in res["warnings"])
+    rep = json.loads((env["studio"].projects.scan_dir(env["pid"], res["scan_id"]) / "result" / "report.json").read_text(encoding="utf-8"))
+    assert [s["table"]["rule"] for s in rep["scans"]] == ["map", "map"] and rep["warnings"] == res["warnings"]
+    for s in rep["scans"]:
+        assert s["table"]["table_area_mm2"] > 1e4 and s["table"]["left_in_mesh"]["faces"] >= 0
+    # the part stayed: nothing is left out and nothing is said
+    done = run_job(env, post(env["base"] + "/merge", {"target": env["a"], "source": env["b"], "T": T, "name": "Stayed"}), "merge")
+    assert done["result"]["warnings"] == [] and done["result"]["tables"] == []
+
+
 def test_align_and_merge_several_scans(env):
     """Top, side and back at once: each placed in the top scan's world, then merged into one scan."""
     scans = [env["a"], env["b"], env["back"]]

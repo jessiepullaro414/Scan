@@ -256,6 +256,23 @@ export function isMergeResult(r: unknown): r is MergeResult {
   return !!x && typeof x === "object" && typeof x.project_id === "string" && typeof x.scan_id === "string";
 }
 
+/**
+ * The two answers to "Was the part moved between the scans?", in the page's words: what the merge then
+ * does with each scan's table (APP_API.md, "M4 first slice", the merge).
+ */
+export const SETUP_TEXT = {
+  same: "The table the scans share helps to line them up, and it stays in the merged scan.",
+  moved:
+    "Only the part itself is matched. Each scan's table is found on its own mesh and left out of the merged scan; the part is kept right down to the table, and thin parts lying flat on it are kept. A part thinner than the scan can tell from its table (about 0.2 mm) goes with the table; the merge says what it left out.",
+} as const;
+
+/** What a merge left out of each scan's table, and what to look at: one line per scan ("“Top”: …"), and the warnings. */
+export function mergeLeftOut(r: Pick<MergeResult, "scan_id" | "tables" | "warnings">): { lines: string[]; warnings: string[]; warn: boolean } {
+  const lines = (r.tables ?? []).map((t) => `“${t.name}”: ${t.summary}`);
+  const warnings = [...(r.warnings ?? [])];
+  return { lines, warnings, warn: warnings.length > 0 };
+}
+
 /** The picked pairs agree badly: one of them probably does not match. */
 export const pairsDisagree = (r: Pick<AlignResult, "pairs_rms_mm">): boolean => typeof r.pairs_rms_mm === "number" && r.pairs_rms_mm > PAIRS_WARN_MM;
 

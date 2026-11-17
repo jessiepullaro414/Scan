@@ -1372,7 +1372,7 @@ export type MergeTwoRequest = {
   target: string;
   source: string;
   T: number[][]; // the pose to merge at (an AlignResult's T)
-  same_setup?: boolean; // default true. false: each scan's table is left out of the merged model
+  same_setup?: boolean; // default true. false: each scan's table is left out of the merged model (MergeResult.tables says how)
   name?: string; // default "<target name> + <source name>"
 };
 
@@ -1386,8 +1386,35 @@ export type MergeScansRequest = {
 /** A merge: one form or the other, never both. */
 export type MergeRequest = MergeTwoRequest | MergeScansRequest;
 
-/** The `result` of a finished job of kind "merge". `merged_from`: the scans' ids, in order. */
-export type MergeResult = { project_id: string; scan_id: string; scan: Scan; merged_from: string[]; message: string };
+/**
+ * What a merge left out of one scan when the part was moved (`same_setup: false`): its table, found on
+ * the scan's own mesh and left out place by place ("map": the part kept down to the table, thin parts
+ * lying flat kept), or, where no table could be found on the mesh, as before ("slab": everything within
+ * 2 mm of the alignment's support plane, with the part's bottom edge) or nothing ("none").
+ */
+export type MergeTable = {
+  id: string;
+  name: string;
+  rule: "map" | "slab" | "none";
+  summary: string; // in words, the engine's
+  warnings: string[]; // this scan's, as in `MergeResult.warnings`
+};
+
+/**
+ * The `result` of a finished job of kind "merge". `merged_from`: the scans' ids, in order. `tables`: one
+ * per scan when the part was moved (empty when it stayed); `warnings`: what to look at, each naming its
+ * scan (a raised area kept that may be the table's own, a scan whose table could not be found...). Both
+ * left out by older servers.
+ */
+export type MergeResult = {
+  project_id: string;
+  scan_id: string;
+  scan: Scan;
+  merged_from: string[];
+  message: string;
+  tables?: MergeTable[];
+  warnings?: string[];
+};
 
 // ------------------------------------------------------------------ M4 second slice: several scans at once
 // APP_API.md "M4 second slice: several scans at once". The first scan stays where it is; each other one is

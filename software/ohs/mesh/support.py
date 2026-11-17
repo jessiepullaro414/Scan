@@ -97,6 +97,37 @@ The result (:class:`SupportFinding`) says what was found and done: the plane, it
 scan, how much lies in front of and behind it, its flatness, the faces removed and their area,
 the lowest height of what is left above the plane, the raised areas (thin parts kept, or said),
 and warnings.
+
+4. **For a merge of several scans** of a part that was moved or turned over (:mod:`ohs.align.merge`),
+   each scan's table lies somewhere else relative to the part and must stay out of the merged model.
+   The merge fuses raw frames, not meshes, so the finding is turned into a map on the table's plane
+   (:func:`support_map`, :class:`SupportMap`; cells of ``cell_mm``, 1 mm), place by place:
+
+   * *the part stands here* (``core``): a face that is left (the part, a thin part kept, a loose bit)
+     reaches down to within ``reach_mm`` (3 mm) of the plane; and the raised areas that are only
+     warned about (they may be thin parts: in a merge they are kept, since a patch of table left is
+     better than a part lost). ``stands`` is that grown by ``spread_mm`` (2 mm), for a single frame's
+     scatter across the part's edge;
+   * *the table was found here* (``table``): a face the finding removes;
+   * *a thin part* (``thin``): the raised areas kept or warned about.
+
+   **A frame** (its depth and its laser points, :meth:`SupportMap.in_camera`) keeps a point when it
+   lies more than ``clip_mm`` (2 mm, the old slab's margin, for a single frame's noise) above the
+   plane, or, where the part stands, anywhere up from ``behind_mm`` (1 mm) behind it. So the table
+   goes, a thin part lying flat is kept whatever its thickness, and a part's foot right down to the
+   table; what is left of the table is a ring at the part's foot, as wide as ``spread_mm``.
+
+   **The merged mesh** then loses what is left of the table (:func:`table_left`) by the rule of 2.
+   and 3. above with this scan's plane, where this scan found its table and not on a thin part: a
+   face that faces the table's way (within 45°), lies at most the margin (1 mm) above the plane and
+   is joined to faces on the plane itself; and loose pieces wholly within the margin and the band of
+   the plane, over this scan's table and with nothing of a thin part, besides the largest piece.
+   Laser points go by the same cells (:func:`laser_points_on_table`): within the margin of the plane,
+   where the scan found table and the part does not stand.
+
+   Raised areas the single-scan edit only warns about are kept in a merge (said in the map's
+   warnings); those where the table itself is uneven go with the table, said once; a part thinner
+   than the scan's own limit (``thin_limit_mm``) cannot be told from the table and goes with it.
 """
 from __future__ import annotations
 
@@ -109,8 +140,8 @@ import numpy as np
 from ohs.mesh.confidence import SIGMA_NONE_MM
 from ohs.mesh.topology import as_mesh, compact, edge_table, face_normals, rows, vertex_normals
 
-__all__ = ["MARGIN_MM", "FACING_DEG", "SupportParams", "SupportFinding", "SupportRefused", "find_support",
-           "remove_support"]
+__all__ = ["MARGIN_MM", "FACING_DEG", "CLIP_MM", "SupportParams", "SupportFinding", "SupportRefused", "SupportMap",
+           "TableLeft", "find_support", "remove_support", "support_map", "table_left", "laser_points_on_table"]
 
 #: how far above the plane a face that faces the table's way still counts as the table (mm). Measured
 #: on the simulated bracket seen from three sides (judged by its true shape): at 0.5 mm 180-460 mm² of
@@ -121,6 +152,14 @@ MARGIN_MM = 1.0
 FACING_DEG = 45.0
 _REFINE_DEG = 30.0  # faces fitted to the plane: within this of its normal
 _REACH_MIN_MM = 10.0
+#: a merge (module docstring, 4.): a single frame's depth and laser points on bare table are left out up to
+#: this far above the plane (the old slab's margin: a frame scatters several times more than a fused mesh)
+CLIP_MM = 2.0
+_MAP_CELL_MM = 1.0  # the map's cells on the plane
+_MAP_REACH_MM = 3.0  # the part stands where a face that is left reaches this close to the plane
+_MAP_SPREAD_MM = 2.0  # ... grown by this, for a frame's scatter across the part's edge
+_MAP_BEHIND_MM = 1.0  # where the part stands, a frame keeps what lies up to this far behind the plane
+_MAP_MAX_CELLS = 16_000_000
 
 
 class SupportRefused(ValueError):
@@ -677,3 +716,303 @@ def remove_support(V: np.ndarray, F: np.ndarray, *, normals: np.ndarray | None =
     V, F = as_mesh(V, F)
     V2, F2, _ = compact(V, F[r.kept])
     return (V2.copy() if V2 is V else V2), F2, r
+
+
+# --------------------------------------------------------------------------- a merge of several scans (4.)
+def _plane_basis(n: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Two unit vectors across the plane's normal ``n`` (always the same pair for the same ``n``)."""
+    n = np.asarray(n, dtype=np.float64)
+    a = np.array([1.0, 0.0, 0.0]) if abs(float(n[0])) < 0.9 else np.array([0.0, 1.0, 0.0])
+    e1 = a - float(a @ n) * n
+    e1 /= np.linalg.norm(e1)
+    return e1, np.cross(n, e1)
+
+
+class _MapInCamera:
+    """A :class:`SupportMap` seen from one frame's camera (``T_wc``: the camera in the scan's world): what
+    :meth:`ohs.app.pipeline.FramePipeline.process` keeps of the frame's depth and laser points
+    (``clip_plane``), point by point in the camera's frame."""
+
+    def __init__(self, m: SupportMap, T_wc: np.ndarray) -> None:
+        T = np.asarray(T_wc, dtype=np.float64).reshape(4, 4)
+        R, t = T[:3, :3], T[:3, 3]
+        # a camera point X lies at R X + t in the scan's world: its height and plane coordinates are linear in X
+        self.A = np.stack([R.T @ m.normal, R.T @ m.e1, R.T @ m.e2]).astype(np.float32)
+        self.b = np.array([float(m.normal @ t) + m.d, float(m.e1 @ t) - m.origin[0], float(m.e2 @ t) - m.origin[1]],
+                          dtype=np.float32)
+        self.map = m
+
+    def keep(self, P: np.ndarray) -> np.ndarray:
+        """Which of the points ``P`` (..., 3), in the camera's frame, are kept."""
+        P = np.asarray(P)
+        Q = P.reshape(-1, 3).astype(np.float32, copy=False) @ self.A.T + self.b
+        return self.map._keep_huv(Q[:, 0], Q[:, 1], Q[:, 2]).reshape(P.shape[:-1])
+
+
+@dataclass
+class SupportMap:
+    """Where a scan's table is, place by place on its plane (module docstring, 4.), in the scan's own
+    world. The grids are of ``cell_mm`` cells: cell ``(i, j)`` covers the plane coordinates (along
+    ``e1``, ``e2``) from ``origin + cell_mm * (i, j)`` to ``origin + cell_mm * (i + 1, j + 1)``; heights
+    are along ``normal`` from the plane ``normal . x + d = 0``, + towards the part. ``core``: the part
+    (or a thin part) stands here; ``stands``: ``core`` grown by the frames' scatter; ``table``: the scan's
+    table was found here; ``thin``: a thin part lying flat (kept, or warned about) is here. ``info``:
+    what the finding said, for the merge's report (:meth:`to_dict`)."""
+
+    normal: np.ndarray
+    d: float
+    e1: np.ndarray
+    e2: np.ndarray
+    origin: np.ndarray
+    cell_mm: float
+    stands: np.ndarray
+    core: np.ndarray
+    table: np.ndarray
+    thin: np.ndarray
+    clip_mm: float = CLIP_MM
+    behind_mm: float = _MAP_BEHIND_MM
+    margin_mm: float = MARGIN_MM
+    band_mm: float = 0.3
+    facing_deg: float = FACING_DEG
+    min_patch_mm2: float = 10.0
+    info: dict = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        self.normal = np.asarray(self.normal, dtype=np.float64).reshape(3)
+        self.e1 = np.asarray(self.e1, dtype=np.float64).reshape(3)
+        self.e2 = np.asarray(self.e2, dtype=np.float64).reshape(3)
+        self.origin = np.asarray(self.origin, dtype=np.float64).reshape(2)
+        self.d, self.cell_mm = float(self.d), float(self.cell_mm)
+        for name in ("stands", "core", "table", "thin"):
+            setattr(self, name, np.asarray(getattr(self, name), dtype=bool))
+        if not (self.stands.shape == self.core.shape == self.table.shape == self.thin.shape and self.stands.ndim == 2):
+            raise ValueError("the map's grids must be 2-D and of one shape")
+
+    # ------------------------------------------------------------------ looking things up
+    def heights(self, P: np.ndarray) -> np.ndarray:
+        """Heights of the points ``P`` (n, 3), in the scan's world, above the plane."""
+        return np.asarray(P, dtype=np.float64).reshape(-1, 3) @ self.normal + self.d
+
+    def _cells(self, u: np.ndarray, v: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        nu, nv = self.stands.shape
+        with np.errstate(invalid="ignore"):
+            fi, fj = np.floor(u / self.cell_mm), np.floor(v / self.cell_mm)
+            inside = (fi >= 0) & (fi < nu) & (fj >= 0) & (fj < nv)  # NaN is outside
+        return fi[inside].astype(np.int64), fj[inside].astype(np.int64), inside
+
+    def _lookup(self, grid: np.ndarray, u: np.ndarray, v: np.ndarray) -> np.ndarray:
+        i, j, inside = self._cells(u, v)
+        out = np.zeros(len(u), dtype=bool)
+        out[inside] = grid[i, j]
+        return out
+
+    def at(self, grid: np.ndarray, P: np.ndarray) -> np.ndarray:
+        """``grid`` (one of the map's) at the points ``P`` (n, 3), in the scan's world; False outside the map."""
+        P = np.asarray(P, dtype=np.float64).reshape(-1, 3)
+        return self._lookup(grid, P @ self.e1 - self.origin[0], P @ self.e2 - self.origin[1])
+
+    def _keep_huv(self, h: np.ndarray, u: np.ndarray, v: np.ndarray) -> np.ndarray:
+        stands = self._lookup(self.stands, u, v)
+        return h > np.where(stands, np.float32(-self.behind_mm), np.float32(self.clip_mm))
+
+    def keep(self, P: np.ndarray) -> np.ndarray:
+        """Which of the points ``P`` (n, 3), in the scan's world, a frame keeps (module docstring, 4.)."""
+        P = np.asarray(P, dtype=np.float64).reshape(-1, 3)
+        return self._keep_huv(self.heights(P), P @ self.e1 - self.origin[0], P @ self.e2 - self.origin[1])
+
+    def in_camera(self, T_wc: np.ndarray) -> _MapInCamera:
+        """The map as one frame's ``clip_plane`` (:meth:`ohs.app.pipeline.FramePipeline.process`): the frame
+        at ``T_wc`` in the scan's world keeps what :meth:`keep` keeps."""
+        return _MapInCamera(self, T_wc)
+
+    # ------------------------------------------------------------------ what it says
+    @property
+    def stands_mm2(self) -> float:
+        return float(self.core.sum()) * self.cell_mm ** 2
+
+    def to_dict(self) -> dict:
+        """The map in plain numbers and words, for the merge's report (no grids)."""
+        out = {"plane": {"normal": [float(x) for x in self.normal], "d": float(self.d)}, "cell_mm": self.cell_mm,
+               "clip_mm": float(self.clip_mm), "behind_mm": float(self.behind_mm), "margin_mm": float(self.margin_mm),
+               "band_mm": float(self.band_mm), "stands_mm2": self.stands_mm2}
+        info = {"share": None, "flatness_mm": None, "table_area_mm2": None, "table_faces": None, "thin_parts": [], "uneven": None,
+                "thin_limit_mm": None, "thin_keep_mm": None, "limit": "", "warnings": []}
+        info.update(self.info)
+        out.update(info)
+        out["thin_parts"] = [dict(x) for x in out["thin_parts"]]
+        out["warnings"] = list(out["warnings"])
+        return out
+
+
+def _mark(grid: np.ndarray, m: SupportMap, V: np.ndarray, F: np.ndarray) -> None:
+    """Set the cells of ``grid`` under the faces ``F`` (their corners, edge middles and centres)."""
+    if not len(F):
+        return
+    a, b, c = V[F[:, 0]], V[F[:, 1]], V[F[:, 2]]
+    for P in (a, b, c, (a + b) / 2, (b + c) / 2, (c + a) / 2, (a + b + c) / 3):
+        i, j, _ = m._cells(P @ m.e1 - m.origin[0], P @ m.e2 - m.origin[1])
+        grid[i, j] = True
+
+
+def support_map(V: np.ndarray, F: np.ndarray, finding: SupportFinding, *, cell_mm: float = _MAP_CELL_MM,
+                reach_mm: float = _MAP_REACH_MM, spread_mm: float = _MAP_SPREAD_MM, clip_mm: float = CLIP_MM,
+                behind_mm: float = _MAP_BEHIND_MM) -> SupportMap:
+    """The map on the table's plane of a scan's mesh ``(V, F)`` from its :func:`find_support` finding
+    (module docstring, 4.), for a merge of several scans of a part that was moved."""
+    from scipy.ndimage import binary_dilation  # noqa: PLC0415
+
+    V, F = as_mesh(V, F)
+    n, d = np.asarray(finding.normal, dtype=np.float64), float(finding.d)
+    e1, e2 = _plane_basis(n)
+    used = np.zeros(len(V), dtype=bool)
+    used[F.reshape(-1)] = True
+    used &= np.all(np.isfinite(V), axis=1)
+    UV = np.column_stack([V[used] @ e1, V[used] @ e2])
+    pad = float(spread_mm) + 2.0 * float(cell_mm)
+    lo, hi = UV.min(axis=0) - pad, UV.max(axis=0) + pad
+    cell = float(cell_mm)
+    while math.ceil((hi[0] - lo[0]) / cell) * math.ceil((hi[1] - lo[1]) / cell) > _MAP_MAX_CELLS:
+        cell *= 1.5  # a very large table: coarser cells, the same rule
+    shape = (int(math.ceil((hi[0] - lo[0]) / cell)), int(math.ceil((hi[1] - lo[1]) / cell)))
+    p = SupportParams()
+    m = SupportMap(normal=n, d=d, e1=e1, e2=e2, origin=lo, cell_mm=cell, stands=np.zeros(shape, bool),
+                   core=np.zeros(shape, bool), table=np.zeros(shape, bool), thin=np.zeros(shape, bool),
+                   clip_mm=float(clip_mm), behind_mm=float(behind_mm), margin_mm=float(finding.margin_mm),
+                   band_mm=float(finding.band_mm), facing_deg=float(finding.facing_deg), min_patch_mm2=float(p.min_patch_mm2))
+    hv = V @ n + d
+    low = np.minimum(np.minimum(hv[F[:, 0]], hv[F[:, 1]]), hv[F[:, 2]])
+    kept = np.asarray(finding.kept, dtype=np.int64)
+    _mark(m.table, m, V, F[np.asarray(finding.faces, dtype=np.int64)])
+    _mark(m.core, m, V, F[kept[low[kept] <= float(reach_mm)]])
+    warned = [r for r in finding.raised if r["verdict"] == "warned"]
+    for r in finding.raised:
+        if r["kept"] or r["verdict"] == "warned":  # a thin part, or what may be one: kept in a merge
+            _mark(m.thin, m, V, F[np.asarray(r["faces"], dtype=np.int64)])
+    if m.thin.any():
+        # whole: a raised area is the faces above 2.5 times the table's RMS, and the scan's noise dips a thin
+        # part's top below that in spots (a 0.3 mm disc on a table of 0.1 mm: 6 % of its top); and a cell more
+        # of its smeared rim
+        from scipy.ndimage import binary_fill_holes  # noqa: PLC0415
+
+        m.thin = binary_dilation(binary_fill_holes(m.thin), structure=np.ones((3, 3), dtype=bool))
+    m.core |= m.thin
+    k = int(math.ceil(float(spread_mm) / cell))
+    yy, xx = np.mgrid[-k:k + 1, -k:k + 1]
+    m.stands = binary_dilation(m.core, structure=(xx * xx + yy * yy) * cell * cell <= float(spread_mm) ** 2 + 1e-9) if k else m.core.copy()
+    # what it says (the merge's report)
+    def at(r: dict) -> str:
+        return "at ({:.0f}, {:.0f}, {:.0f}) mm".format(*r["centre"])
+
+    thin_parts = [{"centre": [float(x) for x in r["centre"]], "size_mm": float(r["size_mm"]), "area_mm2": float(r["area_mm2"]),
+                   "height_mm": float(r["height_mm"]), "verdict": "kept" if r["kept"] else "warned", "in_merge": "kept"}
+                  for r in finding.raised if r["kept"] or r["verdict"] == "warned"]
+    uneven = [r for r in finding.raised if r["verdict"] == "uneven"]
+    warnings = []
+    for r in warned[:8]:
+        warnings.append(f"A raised area {r['size_mm']:.0f} mm across, {r['height_mm']:.2f} mm above the table round it, {at(r)}, "
+                        "may be a thin part: it is kept in the merged scan (if it is the table's own, a patch of table that "
+                        "size is left there).")
+    if len(warned) > 8:
+        warnings.append(f"{len(warned) - 8} more raised areas like these are kept in the merged scan.")
+    if uneven:
+        hi_mm = max(r["height_mm"] for r in uneven)
+        warnings.append(f"{len(uneven)} raised area{'s' if len(uneven) != 1 else ''} up to {hi_mm:.2f} mm high, where the table is "
+                        "uneven itself (near the scan's border), go with the table: there a part lying flat that is thinner "
+                        f"than about {math.ceil(10 * hi_mm) / 10:.1f} mm cannot be told from it.")
+    if finding.flatness_mm > 0.3:
+        warnings.append(f"The table is not flat to the scan's level ({finding.flatness_mm:.2f} mm RMS about its plane): parts of "
+                        f"it further than {max(finding.margin_mm, finding.band_mm):.2g} mm from the plane may be left in the merged scan.")
+    limit = ""
+    if math.isfinite(finding.thin_limit_mm):
+        limit = (f"On this table a part lying flat that is thinner than {finding.thin_limit_mm:.2f} mm, or smaller than about "
+                 f"{2.0 * math.sqrt(float(p.thin_min_mm2) / math.pi):.0f} mm across, cannot be told from it and is left out "
+                 f"with it. Thicker, it is kept.")
+    m.info = {"share": float(finding.share), "flatness_mm": float(finding.flatness_mm), "table_area_mm2": float(finding.area_mm2),
+              "table_faces": int(finding.n_faces), "thin_parts": thin_parts,
+              "uneven": {"count": len(uneven), "highest_mm": float(max(r["height_mm"] for r in uneven))} if uneven else None,
+              "thin_limit_mm": float(finding.thin_limit_mm) if math.isfinite(finding.thin_limit_mm) else None,
+              "thin_keep_mm": float(finding.thin_keep_mm) if math.isfinite(finding.thin_keep_mm) else None,
+              "limit": limit, "warnings": warnings}
+    return m
+
+
+@dataclass
+class TableLeft:
+    """What :func:`table_left` found of a scan's table in a merged mesh: ``faces`` (indices, sorted)."""
+
+    faces: np.ndarray
+    area_mm2: float
+    pieces: int  # loose pieces among them (crumbs)
+    ms: float = 0.0
+
+    @property
+    def n_faces(self) -> int:
+        return int(len(self.faces))
+
+    def to_dict(self) -> dict:
+        return {"faces": self.n_faces, "area_mm2": float(self.area_mm2), "pieces": int(self.pieces), "ms": float(self.ms)}
+
+
+def table_left(V: np.ndarray, F: np.ndarray, m: SupportMap, *, T: np.ndarray | None = None) -> TableLeft:
+    """The faces of a merged mesh ``(V, F)`` that are what is left of the table of the scan ``m`` maps
+    (module docstring, 4.). ``T``: that scan's world in the mesh's (default: the same)."""
+    t0 = time.perf_counter()
+    V, F = as_mesh(V, F)
+    if T is not None:
+        Ti = np.linalg.inv(np.asarray(T, dtype=np.float64).reshape(4, 4))
+        V = V @ Ti[:3, :3].T + Ti[:3, 3]
+    if not len(F):
+        return TableLeft(np.zeros(0, dtype=np.int64), 0.0, 0)
+    n = m.normal
+    fn, fa = face_normals(V, F)
+    hv = V @ n + m.d
+    h0, h1, h2 = hv[F[:, 0]], hv[F[:, 1]], hv[F[:, 2]]
+    hc = (h0 + h1 + h2) / 3.0
+    hmax = np.maximum(np.maximum(h0, h1), h2)
+    hmin = np.minimum(np.minimum(h0, h1), h2)
+    C = (V[F[:, 0]] + V[F[:, 1]] + V[F[:, 2]]) / 3.0
+    tab, thin = m.at(m.table, C), m.at(m.thin, C)
+    band = float(m.band_mm)
+    top = max(float(m.margin_mm), band)
+    # faces of the table (2. above): facing its way, within the margin, where this scan found table, joined to the plane
+    with np.errstate(invalid="ignore"):
+        cand = (hc >= -band) & (hc <= top) & (fn @ n >= math.cos(math.radians(m.facing_deg))) & tab & ~thin
+    pairs = _face_pairs(F, len(V))
+    gone = np.zeros(len(F), dtype=bool)
+    ci, nc, lab = _components(cand, pairs)
+    if nc:
+        seed = np.bincount(lab, weights=np.where(np.abs(hc[ci]) <= band, fa[ci], 0.0), minlength=nc)
+        gone[ci] = seed[lab] >= float(m.min_patch_mm2)
+    # crumbs (3. above): loose pieces wholly within the margin and the band, mostly over this scan's table
+    pieces = 0
+    ri, npc, lab = _components(~gone, pairs)
+    if npc > 1:
+        area = np.bincount(lab, weights=fa[ri], minlength=npc)
+        high = np.full(npc, -np.inf)
+        np.maximum.at(high, lab, hmax[ri])
+        low = np.full(npc, np.inf)
+        np.minimum.at(low, lab, hmin[ri])
+        over = np.bincount(lab, weights=fa[ri] * tab[ri], minlength=npc)
+        has_thin = np.bincount(lab, weights=thin[ri].astype(np.float64), minlength=npc) > 0
+        crumb = (high <= top + band) & (low >= -(top + band)) & (over >= 0.5 * area) & ~has_thin
+        crumb[int(np.argmax(area))] = False
+        gone[ri[crumb[lab]]] = True
+        pieces = int(crumb.sum())
+    faces = np.flatnonzero(gone)
+    return TableLeft(faces, float(fa[gone].sum()), pieces, round(1e3 * (time.perf_counter() - t0), 1))
+
+
+def laser_points_on_table(P: np.ndarray, m: SupportMap, *, T: np.ndarray | None = None) -> np.ndarray:
+    """Which laser points ``P`` (n, 3) of a merged cloud are on the table of the scan ``m`` maps (module
+    docstring, 4.): at most the margin above its plane (or behind it), where that scan found its table and
+    the part does not stand. ``T``: that scan's world in the cloud's (default: the same)."""
+    P = np.asarray(P, dtype=np.float64).reshape(-1, 3)
+    if T is not None:
+        Ti = np.linalg.inv(np.asarray(T, dtype=np.float64).reshape(4, 4))
+        P = P @ Ti[:3, :3].T + Ti[:3, 3]
+    if not len(P):
+        return np.zeros(0, dtype=bool)
+    top = max(float(m.margin_mm), float(m.band_mm))
+    with np.errstate(invalid="ignore"):
+        low = m.heights(P) <= top
+    return low & m.at(m.table, P) & ~m.at(m.core, P)

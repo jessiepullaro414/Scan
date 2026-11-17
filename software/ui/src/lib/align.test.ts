@@ -4,7 +4,7 @@
  * that Node runs as it is (type stripping), no test framework: a failed check throws.
  */
 import { Vector3 } from "three";
-import type { AlignAllPair, AlignAllResult, AlignResult } from "../api/types.ts";
+import type { AlignAllPair, AlignAllResult, AlignResult, MergeResult } from "../api/types.ts";
 import { matrixFromRowMajor } from "../three/coords.ts";
 import {
   addPick,
@@ -28,7 +28,9 @@ import {
   mergeNameOf,
   mergeNeedsConfirm,
   mergeScansOf,
+  mergeLeftOut,
   MIN_PAIRS,
+  SETUP_TEXT,
   namesText,
   nextFreeScan,
   pairKey,
@@ -319,5 +321,38 @@ ff = alignAllFigures({ ...lost, same_setup: false });
 check(ff.length === 1 && ff[0].value === "2 of 3 scans" && ff[0].warn === true, "not all placed is marked; no checks, no table");
 ff = alignAllFigures({ ...all, worst_link_mm: 3.1, pairs: [...all.pairs, pr("a", "d", "left out", { disagree_mm: 9 })] });
 check(ff[1].warn === true && ff.some((f) => f.label === "Left out" && f.value === "1 pair"), "a large disagreement is marked, a pair left out is counted");
+
+// ------------------------------------------------------------------ what a merge of a moved part left out
+{
+  const base = { project_id: "p", scan_id: "s", scan: { id: "s", name: "Both" } as never, merged_from: ["a", "b"], message: 'Merged into "Both"' };
+  const moved: MergeResult = {
+    ...base,
+    tables: [
+      { id: "a", name: "Top", rule: "map", summary: "Its table is left out (2,404 cm²); the part is kept down to the table.", warnings: [] },
+      {
+        id: "b",
+        name: "Side",
+        rule: "slab",
+        summary: "Its table is left out as everything within 2 mm of its plane, and with it about 2 mm of the part's bottom edge.",
+        warnings: ['No table could be told apart on "Side": the largest flat surface has nothing standing on it.'],
+      },
+    ],
+    warnings: ['No table could be told apart on "Side": the largest flat surface has nothing standing on it.'],
+  };
+  const lo = mergeLeftOut(moved);
+  check(lo.lines.length === 2 && lo.lines[0] === "“Top”: Its table is left out (2,404 cm²); the part is kept down to the table.", `one line per scan: ${lo.lines[0]}`);
+  check(lo.lines[1].startsWith("“Side”: ") && lo.lines[1].includes("2 mm"), "the scan left out the old way says so");
+  check(same(lo.warnings, moved.warnings) && lo.warn, "the warnings, as the engine gave them, and a reason to look");
+  const clean = mergeLeftOut({ ...moved, tables: [moved.tables![0]], warnings: [] });
+  check(clean.lines.length === 1 && clean.warnings.length === 0 && !clean.warn, "nothing to warn about");
+  const stayed = mergeLeftOut({ ...base, tables: [], warnings: [] });
+  check(stayed.lines.length === 0 && stayed.warnings.length === 0 && !stayed.warn, "the part stayed: nothing was left out");
+  const older = mergeLeftOut(base);
+  check(older.lines.length === 0 && older.warnings.length === 0, "an older server says nothing of it");
+  // the choice before merging says plainly what goes and what stays
+  const movedText = SETUP_TEXT.moved;
+  check(!/2 mm of the part's bottom edge/.test(movedText), "no longer: 2 mm of the part's bottom edge");
+  check(/table/.test(movedText) && /thin part/.test(movedText) && /down to the table/.test(movedText), `what goes and what stays: ${movedText}`);
+}
 
 console.log(`align.test: ${checks} checks passed`);

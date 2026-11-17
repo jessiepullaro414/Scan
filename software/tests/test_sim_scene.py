@@ -182,6 +182,33 @@ def test_presets_build_and_are_hit_from_above():
         make_scene("nope")
 
 
+def test_a_thin_plate_lies_flat_and_can_be_moved_and_turned_over():
+    """``thin_plate``: a plate a fraction of a millimetre to a millimetre thick lying flat on the
+    table, with a notch off its centre (so that two scans of it can be told apart); moved and turned
+    over for a second scan, its pose in ``meta`` says where each of its points went."""
+    from ohs.sim.scene import thin_plate
+
+    for t in (1.0, 0.5):
+        sc = make_scene("thin_plate") if t == 1.0 else thin_plate(thickness=t)
+        assert sc.name == "thin_plate" and sc.meta["thickness_mm"] == t
+        down = np.array([[0.0, 0.0, -1.0]])
+        top = sc.cast(np.array([-10.0, -5.0, 300.0]), down, 1e-3)  # on the plate
+        assert sc.primitives[top.obj[0]].name.startswith("plate") and top.t[0] == pytest.approx(300.0 - t)
+        notch = np.array(sc.meta["notch_local"])  # the notch's centre, in the plate's own frame
+        hole = sc.cast(np.array([notch[0], notch[1], 300.0]), down, 1e-3)
+        assert sc.primitives[hole.obj[0]].name == "table" and hole.t[0] == pytest.approx(300.0)
+        assert np.allclose(sc.meta["plate_T"], np.eye(4))
+    moved = thin_plate(thickness=0.5, at=(40.0, -25.0, 35.0), turned=True)
+    T = np.array(moved.meta["plate_T"])
+    assert np.allclose(T[:3, :3] @ [0.0, 0.0, 1.0], [0.0, 0.0, -1.0])  # turned over: its top faces the table
+    for local, z in (([-10.0, -5.0, 0.5], 0.0), ([-10.0, -5.0, 0.0], 0.5)):  # its top now at the table, its bottom on top
+        p = T[:3, :3] @ local + T[:3, 3]
+        assert p[2] == pytest.approx(z)
+        hit = moved.cast(np.array([p[0], p[1], 300.0]), np.array([[0.0, 0.0, -1.0]]), 1e-3)
+        assert hit.t[0] == pytest.approx(300.0 - 0.5)
+    assert moved.target[0] == pytest.approx(40.0) and moved.target[1] == pytest.approx(-25.0)
+
+
 def test_triangle_mesh_matches_the_analytic_sphere(tmp_path):
     """A finely tessellated sphere hits and shades like the analytic one; shadow rays leaving its
     surface don't hit it; load_mesh lays a long thin mesh flat and scales it; mesh_on_floor puts it

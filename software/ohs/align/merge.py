@@ -8,13 +8,27 @@ map is one map. It costs about as much as processing every scan again.
 
 :func:`merge_scans` writes into ``out_dir``: ``mesh.ply`` (with each vertex's sigma when the
 confidence model made it) and the other formats asked for, ``laser_points.ply``, and
-``report.json`` with what went in (per scan: recording, pose, frames fused) and what came out.
+``report.json`` with what went in (per scan: recording, pose, frames fused, and what of its table
+was left out and why: ``scans[i].table``), what came out, and ``warnings`` (each naming its scan).
 
 **A part that was moved** between the scans (turned over, set down elsewhere) lay on a table
-that is in a different place, relative to the part, in each scan. Give each scan its ``support``
-plane then: every frame's depth and laser points on or behind it (and up to ``support_margin_mm``
-in front of it) are left out, so that only the part is merged. When the part was not moved the
-table is one surface in all scans and can stay in.
+that is in a different place, relative to the part, in each scan, and each scan's table must stay
+out of the merged model, and nothing else. Give each scan its ``support`` then: the map of its
+table that its own mesh gives (:func:`scan_support`; :class:`ohs.mesh.support.SupportMap`, whose
+module docstring, 4., states the rule). Each frame keeps its depth and laser points where the part
+stands (down to the table, so a part's foot and a thin part lying flat stay, whatever their
+thickness) and loses them on the bare table up to 2 mm above it; what the frames leave of the table
+(a ring at the part's foot, crumbs) is taken out of the merged mesh by the single-scan edit's rule,
+and counted in the report. Fusing everything and removing the tables from the merged mesh
+afterwards is not sound: where the part was turned over, one scan's table lies in space another
+scan saw as empty, so the fusion half-erases it and what is left touches the part.
+
+When a scan's table cannot be found (:func:`ohs.mesh.support.find_support` refuses), the merge does
+not guess: that scan is clipped as before this map existed, by the alignment's support plane
+(``support`` given as a plane ``(n, d)``: everything on or behind it and up to
+``support_margin_mm`` in front of it, with the part's bottom edge), or not at all when there is no
+such plane, and a warning names the scan. When the part was not moved the table is one surface in
+all scans and stays in: no ``support``, and the merge is a plain fusion of the frames.
 
 **Scans of different calibrations** (a session after a recalibration, another camera mode, or
 another scanner) merge too: each scan's frames go through a pipeline of its own calibration
@@ -41,13 +55,17 @@ import numpy as np
 from ohs.app.pipeline import FramePipeline, default_fusion_params, effective_scale
 from ohs.app.process import READ_AHEAD_FRAMES, ProcessParams, _check_export, _jsonable
 from ohs.io.recording import RecordingReader
+from ohs.mesh import support as _support
 from ohs.mesh.confidence import SIGMA_NONE_MM, sigma_stats
+from ohs.mesh.support import SupportMap
 from ohs.track.posegraph import read_trajectory
 from ohs.vision.rectify import Rectifier
 
-__all__ = ["ScanInput", "merge_scans"]
+__all__ = ["ScanInput", "merge_scans", "scan_support", "scan_support_from_mesh"]
 
 log = logging.getLogger(__name__)
+
+SLAB_MM = 2.0  # a scan whose table was not found: left out up to this far in front of the alignment's support plane
 
 
 @dataclass
@@ -56,16 +74,102 @@ class ScanInput:
     ``trajectory.csv`` its processing wrote, or rows ``(index, t, ok, T_wc)``), and ``T``, the
     scan's world in the merged world (identity for the scan the others were aligned to).
     ``calib``: the calibration the scan was processed with, when that was not the recording's own
-    (as ``process_recording(calib=...)``). ``support``: the plane ``(n, d)`` the part lay on, in
-    the scan's own world with ``n`` towards the part (:attr:`ohs.align.pairwise.ScanCloud.support`):
-    when given, nothing of that scan on or behind the plane goes into the merged model."""
+    (as ``process_recording(calib=...)``). ``support``, when the part was moved (module docstring):
+    the map of the scan's table (:func:`scan_support`), or a plane ``(n, d)`` in the scan's own world
+    with ``n`` towards the part (:attr:`ohs.align.pairwise.ScanCloud.support`): nothing of that scan on
+    or behind it, nor up to ``support_margin_mm`` in front, goes into the merged model. ``warnings``:
+    what the merge's report says of this scan's table besides (why it is left out as it is)."""
 
     recording: Path
     trajectory: Any
     T: np.ndarray = field(default_factory=lambda: np.eye(4))
     name: str | None = None
     calib: Any = None
-    support: tuple[np.ndarray, float] | None = None
+    support: SupportMap | tuple[np.ndarray, float] | None = None
+    warnings: list[str] = field(default_factory=list)
+
+
+def scan_support(V: np.ndarray, F: np.ndarray, *, normals: np.ndarray | None = None, sigma: np.ndarray | None = None,
+                 name: str | None = None) -> tuple[SupportMap | tuple[np.ndarray, float] | None, list[str]]:
+    """What of a scan to leave out of a merge when the part was moved, from the scan's mesh ``(V, F)``
+    (``normals``, ``sigma``: as :func:`ohs.mesh.support.find_support` takes them): ``(support, warnings)``
+    for :class:`ScanInput`. The map of its table (module docstring); or, when no table can be told
+    apart on the mesh, the alignment's support plane (the old slab, with the part's bottom edge) and a
+    warning naming the scan, or nothing at all, also said."""
+    from ohs.align.pairwise import scan_cloud  # noqa: PLC0415
+    from ohs.mesh.topology import vertex_normals  # noqa: PLC0415
+
+    who = f"\"{name}\"" if name else "a scan"
+    try:
+        f = _support.find_support(V, F, normals=normals, sigma=sigma)
+    except _support.SupportRefused as e:
+        why = str(e).split(" Nothing was removed", 1)[0].strip()
+        why = why[len("No table found: "):] if why.startswith("No table found: ") else why
+        N = normals if normals is not None else vertex_normals(*_as_mesh(V, F))
+        try:
+            plane = scan_cloud(np.asarray(V, dtype=np.float64), np.asarray(N, dtype=np.float64)).support
+        except ValueError:
+            plane = None
+        if plane is not None:
+            return plane, [f"No table could be told apart on {who}: {why} Its table is left out as before: everything within "
+                           f"{SLAB_MM:g} mm of the largest flat surface the alignment found, and with it about {SLAB_MM:g} mm of "
+                           "the part's bottom edge (or of whatever that surface is)."]
+        return None, [f"No table could be told apart on {who}: {why} Nothing of it is left out, so its table, if it has one, "
+                      "is in the merged scan."]
+    return _support.support_map(V, F, f), []
+
+
+def _as_mesh(V: np.ndarray, F: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    from ohs.mesh.topology import as_mesh  # noqa: PLC0415
+
+    return as_mesh(V, F)
+
+
+def scan_support_from_mesh(path: str | Path, name: str | None = None) -> tuple[SupportMap | tuple[np.ndarray, float] | None, list[str]]:
+    """:func:`scan_support` of a processed scan's mesh file (``result/mesh.ply``, its sigma read from the
+    vertices' quality)."""
+    from ohs.track.export import load_ply  # noqa: PLC0415
+
+    d = load_ply(path)
+    V = d["vertices"]
+    F = d["faces"] if d["faces"] is not None else np.zeros((0, 3), dtype=np.int64)
+    S = d["quality"]
+    return scan_support(V, F, sigma=S if S is not None and len(S) == len(V) else None, name=name)
+
+
+def _table_entry(sup: Any, warnings: list[str]) -> dict | None:
+    """What the report says of a scan's table, before the merge has run (its counts are added after)."""
+    if isinstance(sup, SupportMap):
+        e = {"rule": "map", **sup.to_dict()}
+        e["warnings"] = list(warnings) + e["warnings"]
+        return e
+    if sup is not None:
+        return {"rule": "slab", "plane": {"normal": [float(x) for x in sup[0]], "d": float(sup[1])}, "margin_mm": SLAB_MM,
+                "warnings": list(warnings),
+                "summary": f"Its table is left out as before this map existed: everything within {SLAB_MM:g} mm of the "
+                           f"plane the alignment found, and with it about {SLAB_MM:g} mm of the part's bottom edge."}
+    if warnings:
+        return {"rule": "none", "warnings": list(warnings), "summary": "Nothing of it is left out: no table was found on its mesh."}
+    return None
+
+
+def _map_summary(e: dict) -> str:
+    """One sentence on what a scan's table map left out and kept, with what the merged mesh lost of it."""
+    s = (f"Its table is left out ({(e.get('table_area_mm2') or 0.0) / 100.0:,.1f} cm² of its mesh, flat to "
+         f"{e.get('flatness_mm') or 0.0:.2f} mm); the part is kept right down to it")
+    kept = [x for x in e["thin_parts"] if x["verdict"] == "kept"]
+    warned = [x for x in e["thin_parts"] if x["verdict"] == "warned"]
+    if kept:
+        s += "; " + ("a thin part lying flat is kept (" if len(kept) == 1 else f"{len(kept)} thin parts lying flat are kept (")
+        s += ", ".join(f"{x['size_mm']:.0f} mm across, {x['height_mm']:.2f} mm" for x in kept[:4]) + ")"
+    if warned:
+        s += (f"; {len(warned)} raised area{'s' if len(warned) != 1 else ''} that may be thin parts "
+              f"{'are' if len(warned) != 1 else 'is'} kept too")
+    left = e.get("left_in_mesh")
+    if left and left["faces"]:
+        s += (f". What the frames left of it next to the part, {left['faces']:,} triangles ({left['area_mm2']:,.0f} mm²), "
+              "was taken out of the merged scan")
+    return s + "."
 
 
 def _same_calibration(a: Any, b: Any) -> str | None:
@@ -101,6 +205,7 @@ def merge_scans(scans: Sequence[ScanInput], out_dir: str | Path, params: Process
         raise ValueError("a merge cannot use Poisson meshing yet: leave ProcessParams.poisson off")
     out = Path(out_dir)
     plan = []
+    tables: list[dict | None] = []  # what each scan's table entry in the report says
     cals: list[Any] = []  # the scans' calibrations, each one once, in the order of first use
     for k, sc in enumerate(scans):
         name = sc.name or Path(sc.recording).name
@@ -120,9 +225,12 @@ def merge_scans(scans: Sequence[ScanInput], out_dir: str | Path, params: Process
             raise ValueError(f"scan {name}: none of its frames has a pose")
         T = np.asarray(sc.T, dtype=np.float64).reshape(4, 4)
         support = None
-        if sc.support is not None:
+        if isinstance(sc.support, SupportMap):
+            support = sc.support
+        elif sc.support is not None:
             sn = np.asarray(sc.support[0], dtype=np.float64).reshape(3)
             support = (sn / np.linalg.norm(sn), float(sc.support[1]) / float(np.linalg.norm(sn)))
+        tables.append(_table_entry(support, list(sc.warnings)))
         plan.append((name, reader, poses, positions, T, support, ci))
     n = sum(len(pl[3]) for pl in plan)
     pp = p.pipeline
@@ -154,7 +262,9 @@ def merge_scans(scans: Sequence[ScanInput], out_dir: str | Path, params: Process
                 for frame in frames:
                     Tf = poses[int(frame.index)]  # the frame in its scan's world
                     clip = None
-                    if support is not None:  # the support plane in this frame's camera, moved into the part by the margin
+                    if isinstance(support, SupportMap):  # the table's map, seen from this frame's camera
+                        clip = support.in_camera(Tf)
+                    elif support is not None:  # the support plane in this frame's camera, moved into the part by the margin
                         clip = (Tf[:3, :3].T @ support[0], float(support[0] @ Tf[:3, 3]) + support[1] - float(support_margin_mm))
                     pipe.process(frame, pose=T @ Tf, clip_plane=clip)
                     if progress is not None:
@@ -164,10 +274,24 @@ def merge_scans(scans: Sequence[ScanInput], out_dir: str | Path, params: Process
                 frames.close()
             per_scan.append({"name": name, "recording": str(reader.path), "frames": len(positions), "T": T.tolist(),
                              "support_left_out": support is not None, "calibration": ci,
-                             "image_size": list(pipe.image_size)})
+                             "image_size": list(pipe.image_size), "table": tables[len(per_scan)]})
             log.info("merged %s: %d frames", name, len(positions))
         V, F, N, S = pipe.mesh_with_sigma()
         n_faces_raw = int(len(F))
+        # what the frames left of each moved scan's table (module docstring): its rule on the merged mesh
+        gone = np.zeros(len(F), dtype=bool)
+        for (name, _, _, _, T, support, _), entry in zip(plan, tables):
+            if isinstance(support, SupportMap):
+                left = _support.table_left(V, F, support, T=T)
+                gone[left.faces] = True
+                entry["left_in_mesh"] = left.to_dict()
+        if gone.any():
+            from ohs.mesh.topology import compact  # noqa: PLC0415
+
+            V, F, idx = compact(V, F[~gone])
+            N = N[idx] if N is not None and len(N) else N
+            S = S[idx] if S is not None and len(S) else S
+        n_faces_table = int(gone.sum())
         if p.clean_min_component > 0 and len(F):
             from ohs.track.export import clean_mesh  # noqa: PLC0415
 
@@ -186,9 +310,25 @@ def merge_scans(scans: Sequence[ScanInput], out_dir: str | Path, params: Process
             files[f"mesh_{ext}"] = str(path)
         cloud = pipe.laser_cloud()
         laser_pts = cloud.points(float(p.laser_voxel_mm))
+        on_table = np.zeros(len(laser_pts), dtype=bool)
+        for (_, _, _, _, T, support, _), entry in zip(plan, tables):
+            if isinstance(support, SupportMap):
+                hit = _support.laser_points_on_table(laser_pts, support, T=T) & ~on_table
+                entry["laser_points_removed"] = int(hit.sum())
+                on_table |= hit
+        if on_table.any():
+            laser_pts = laser_pts[~on_table]
         save_points_ply(out / "laser_points.ply", laser_pts)
         files["laser_points"] = str(out / "laser_points.ply")
         planes |= set(pipe.planes)
+        warnings: list[str] = []
+        for s, entry in zip(per_scan, tables):
+            if entry is None:
+                continue
+            if entry["rule"] == "map":
+                entry["summary"] = _map_summary(entry)
+            tag = f"\"{s['name']}\""
+            warnings += [w if tag in w else f"{tag}: {w}" for w in entry["warnings"]]
         report: dict[str, Any] = {
             "merged": True, "out_dir": str(out), "scans": per_scan, "frames": {"fused": n},
             "image_size": per_scan[0]["image_size"], "calibrations": len(cals),
@@ -199,7 +339,11 @@ def merge_scans(scans: Sequence[ScanInput], out_dir: str | Path, params: Process
             "lasers": {"planes": sorted(planes), "n_points_exported": int(len(laser_pts)),
                        "voxel_mm": float(p.laser_voxel_mm)},
             "files": files,
+            "warnings": warnings,
         }
+        if any(isinstance(pl[5], SupportMap) for pl in plan):
+            report["mesh"]["n_faces_table_removed"] = n_faces_table
+            report["lasers"]["n_points_table_removed"] = int(on_table.sum())
         files["report"] = str(out / "report.json")
         report["wall_time_s"] = time.perf_counter() - wall0
         report = _jsonable(report)

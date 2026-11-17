@@ -246,17 +246,20 @@ class AlignManager:
             noun = "two scans" if len(items) == 2 else f"{len(items)} scans"
 
             def run(ctx: Any) -> dict:
-                from ohs.align import ScanInput, merge_scans, scan_cloud_from_mesh
+                from ohs.align import ScanInput, merge_scans
+                from ohs.align.merge import scan_support_from_mesh
                 from ohs.io.recording import RecordingReader
                 from ohs.server.projects import report_summary
                 from ohs.server.protocol import quality_or_none
                 from ohs.server.studio import process_params
 
                 supports: list[Any] = [None] * len(items)
-                if not same_setup:  # the part was moved: each scan's table is elsewhere, and stays out
+                notes: list[list[str]] = [[] for _ in items]
+                if not same_setup:  # the part was moved: each scan's table is elsewhere, and stays out (found on its own mesh)
                     ctx.progress(0.02, "Finding what the part lay on", force=True)
-                    supports = [scan_cloud_from_mesh(it["mesh"]).support for it in items]
-                    ctx.check()
+                    for k, it in enumerate(items):
+                        supports[k], notes[k] = scan_support_from_mesh(it["mesh"], name=it["name"])
+                        ctx.check()
                 first = items[0]
                 reader = RecordingReader(first["recording"])
                 width = int((reader.meta.get("image_size") or list(reader.frame(0).image_size))[0])
@@ -270,8 +273,8 @@ class AlignManager:
                     ctx.progress(0.05 + 0.85 * (k + 1) / max(n, 1), f"Merging: frame {k + 1} of {n}")
 
                 try:
-                    rep = merge_scans([ScanInput(it["recording"], it["trajectory"], T, it["name"], support=sup)
-                                       for it, T, sup in zip(items, poses, supports)], out, params, progress)
+                    rep = merge_scans([ScanInput(it["recording"], it["trajectory"], T, it["name"], support=sup, warnings=note)
+                                       for it, T, sup, note in zip(items, poses, supports, notes)], out, params, progress)
                     if rep["mesh"]["empty"]:
                         raise ApiError(409, "the merged model is empty", "check that the scans have a mesh, and align them again")
                     ctx.progress(0.95, "Adding the merged scan to the project", force=True)
@@ -288,8 +291,11 @@ class AlignManager:
                     shutil.rmtree(out, ignore_errors=True)
                     if work.is_dir() and not any(work.iterdir()):
                         work.rmdir()
-                return {"project_id": pid, "scan_id": sid, "scan": scan, "merged_from": sids,
-                        "message": f"Merged into \"{title}\""}
+                # what each scan's table lost, and what to look at (only when the part was moved)
+                tables = [{"id": it["id"], "name": it["name"], "rule": s["table"]["rule"], "summary": s["table"]["summary"],
+                           "warnings": list(s["table"]["warnings"])} for it, s in zip(items, rep["scans"]) if s.get("table")]
+                return jsonable({"project_id": pid, "scan_id": sid, "scan": scan, "merged_from": sids,
+                                 "message": f"Merged into \"{title}\"", "tables": tables, "warnings": list(rep.get("warnings", []))})
 
             def done(job: Any) -> None:
                 if job.state == "done":

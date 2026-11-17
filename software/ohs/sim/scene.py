@@ -70,6 +70,7 @@ __all__ = [
     "sphere_on_plane",
     "car_panel",
     "bracket",
+    "thin_plate",
     "panel_seam",
     "panel_seam_mesh",
     "panel_seam_truth",
@@ -1035,6 +1036,40 @@ def bracket(seed: int = 0) -> Scene:
     )
 
 
+#: the thin plate's outline in its own frame (x, y ranges of its boxes, mm): 60 x 40 mm with a notch 14 x 10 mm
+#: off the middle of one long edge, so that it cannot be turned into itself
+_PLATE_BOXES = (((-30.0, 30.0), (-20.0, 10.0)), ((-30.0, 0.0), (10.0, 20.0)), ((14.0, 30.0), (10.0, 20.0)))
+_PLATE_NOTCH = (7.0, 15.0)
+
+
+def thin_plate(seed: int = 0, thickness: float = 1.0, at: Sequence[float] = (0.0, 0.0, 0.0), turned: bool = False) -> Scene:
+    """A thin plate lying flat on a table: a shim or a gasket a fraction of a millimetre to a
+    millimetre thick, 60 x 40 mm with a notch (``meta["notch_local"]``, its centre). ``at`` = (x, y,
+    turn in degrees about the table's normal) moves it on the table and ``turned`` turns it over, for a
+    second scan of it: ``meta["plate_T"]`` takes the plate's own frame (its bottom face at z = 0, its
+    top at z = ``thickness``, as it lies unmoved) into the world."""
+    t = float(thickness)
+    if not t > 0:
+        raise ValueError(f"thickness must be above 0, got {thickness!r}")
+    Rz = so3_exp(np.array([0.0, 0.0, math.radians(float(at[2]))]))
+    flip = so3_exp(np.array([math.pi, 0.0, 0.0])) if turned else np.eye(3)  # over about its own x axis
+    T = make_se3(Rz @ flip, [float(at[0]), float(at[1]), t if turned else 0.0])
+    metal = NoiseAlbedo(mean=0.62, contrast=0.03, scale_mm=2.0, seed=seed + 3)  # brushed steel shim
+    prims: list[Primitive] = [_table(0.0, 600.0, NoiseAlbedo(mean=0.45, contrast=0.06, scale_mm=4.0, seed=seed), name="table")]
+    for k, ((x0, x1), (y0, y1)) in enumerate(_PLATE_BOXES):
+        c = T @ np.array([(x0 + x1) / 2, (y0 + y1) / 2, t / 2, 1.0])
+        prims.append(Box(make_se3(T[:3, :3], c[:3]), ((x1 - x0) / 2, (y1 - y0) / 2, t / 2), metal, name=f"plate_{k}"))
+    return Scene(
+        prims,
+        name="thin_plate",
+        target=(float(at[0]), float(at[1]), 0.0),
+        radius=50.0,
+        meta={"thickness_mm": t, "plate_T": T.tolist(), "plate_boxes": [list(map(list, b)) for b in _PLATE_BOXES],
+              "notch_local": list(_PLATE_NOTCH), "turned": bool(turned),
+              "trajectory": {"distance": (200.0, 260.0), "elevation_deg": (50.0, 75.0), "sweep_deg_s": 20.0}},
+    )
+
+
 # --------------------------------------------------------------------------- two panels and their seam
 _SEAM_RX = 2000.0  # mm, the panels' radius of curvature along the seam ...
 _SEAM_RY = 1200.0  # ... and across it (slightly curved, like a door and a wing)
@@ -1267,6 +1302,7 @@ SCENE_PRESETS: dict[str, Callable[..., Scene]] = {
     "car_panel": car_panel,
     "bracket": bracket,
     "panel_seam": panel_seam,
+    "thin_plate": thin_plate,
 }
 
 

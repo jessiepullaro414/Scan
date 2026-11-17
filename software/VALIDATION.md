@@ -2538,7 +2538,68 @@ warning only, – gone without a word; thickness 0.1 / 0.2 / 0.3 / 0.5 / 0.8 mm:
   over" each frame's depth within 2 mm of that scan's table is left out before fusing, so a
   flat part thinner than 2 mm keeps none of its pixels and is missing from the merged scan
   (checked on `FramePipeline._clip_depth`: discs of 0.3, 0.8 and 1.5 mm keep 0 %, 2.5 and
-  4 mm keep 100 %).
+  4 mm keep 100 %). **Mended the same day: the next section.**
+
+### The merge of several scans keeps the part's foot and thin parts (2026-11-17)
+
+The owner's decision. When the part was moved or turned over between the scans, each scan's
+table must stay out of the merged model. Until now every frame's depth and laser points within
+2 mm of that scan's table were left out. Now each scan's own mesh says where its table is bare
+and where the part stands (`ohs.mesh.support.support_map`, a map of 1 mm cells on the table's
+plane, made from the single-scan table finding). A frame's point is kept when it lies more
+than 2 mm above the plane, or, where the part or a thin part stands, anywhere from 1 mm behind
+the plane upward. What is left of a table in the merged mesh is then taken out by the
+single-scan rule (`table_left`), and counted.
+
+The simulated bracket, its tracked front, side and back scans, judged against the bracket's
+true shape. "Table left" is surface not on the true shape within 3 mm of a table; "foot
+covered" is how much of the true wall next to the base has merged surface within 1 mm.
+
+| Merge | Table left | Foot covered at 0–1 / 1–2 / 2–4 mm | Within ± 0.3 mm | Part vertices | Median error |
+|---|---|---|---|---|---|
+| Front + side, before (2 mm cut) | 0 mm² | **0 / 0 / 0 %** | 79.3 % | 15,881 | 0.104 mm |
+| Front + side, now | 2.1 mm² | **40 / 50 / 51 %** | 79.4 % | 17,155 | 0.109 mm |
+| Front + side + back, before | 0 mm² | **0 / 0 / 0 %** | 78.7 % | 17,020 | 0.102 mm |
+| Front + side + back, now | 2.1 mm² | **52 / 70 / 70 %** | 76.7 % | 18,857 | 0.113 mm |
+
+- **The foot is back.** The bottom 4 mm of the bracket was missing from every merge of a
+  moved part; half to two thirds of it is now there (a single scan covers 16–30 % of the
+  bottom millimetre; the rest is not seen by any scan).
+- **The new surface at the foot is less accurate than the rest,** as the foot is in a single
+  scan: the share within ± 0.3 mm of the three-scan merge falls from 78.7 to 76.7 % and the
+  median error rises by 0.01 mm, because 1,800 more vertices are in it, next to the table.
+- **2 mm² of table is left** (0 before); the rule took 3–4 faces and 147–224 laser points
+  out of the merged scan.
+- A merge takes 23–28 s now (15–23 s before): each scan's table map costs about 3.6 s.
+
+A thin plate (a new simulator scene, `thin_plate`: 60 × 40 mm with a notch), scanned lying
+flat, then turned over and moved, then slid and turned; fused at the true poses and merged at
+the true motion:
+
+| Plate, pair | Before | Now: top / bottom covered | Table left | Thickness reads |
+|---|---|---|---|---|
+| 1.0 mm, turned over | **gone (0 faces)** | 100 / 100 % | 278 mm² | 1.42 mm |
+| 1.0 mm, slid | **gone** | 100 % / – | 76 mm² | 0.99 mm above the table |
+| 0.5 mm, turned over | **gone** | 100 / 99.7 % | 196 mm² | 1.28 mm |
+| 0.5 mm, slid | **gone** | 100 % / – | 58 mm² | 0.49 mm above the table |
+
+- **A thin part survives a merge now;** before, it was missing altogether.
+- **Turned over, the plate reads 0.3–0.8 mm too thick.** Its two faces are seen from opposite
+  sides, the thin-wall effect of the fusion ("Thin walls seen from opposite sides"); the same
+  frames fused without any table rule read the same, so it is not the map's doing. Slid on
+  the table, it reads right to 0.01 mm.
+- **The table left** (58–278 mm²) is raised areas of the bare tables that the rule cannot tell
+  from a thin part (for example 15 mm across and 0.21 mm high, 300 mm from the plate). They
+  are kept on purpose and named in a warning: a little table left is better than a part lost.
+- **A scan whose table cannot be told apart** falls back to the old 2 mm cut for that scan
+  alone, with a warning that names it. When the part was not moved, nothing changes: the mesh
+  is the same vertex for vertex.
+- Through the app on the bracket's front and side scans: both tables found, "the part is kept
+  right down to it", one raised area on the side scan kept and named, the uneven borders said
+  once per scan.
+- **Open:** the merge still drops pieces smaller than 1 % of the triangles; a small thin part
+  beside a large one would be a piece of its own and could go that way. Being mended next.
+- Repeat it with `python tools/merge_table_study.py` (see its head for the two cases).
 
 ## What the metrics mean
 

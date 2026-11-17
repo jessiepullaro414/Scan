@@ -674,7 +674,10 @@ class FramePipeline:
         reprocess with poses known from elsewhere. ``clip_plane`` (optional, ``(n, d)`` in this
         frame's camera frame C, mm): only what lies in the half-space ``n . X + d > 0`` is kept;
         the depth elsewhere is set to 0 (no measurement) before anything is fused, and laser
-        points elsewhere are dropped. A merge uses it to leave out the table a part lay on.
+        points elsewhere are dropped. It may instead be anything with a ``keep(P)`` method that
+        says which camera-frame points ``P`` (..., 3) are kept (a scan's table map seen from this
+        frame, :meth:`ohs.mesh.support.SupportMap.in_camera`). A merge uses it to leave out the
+        table a part lay on.
         Raises ``ValueError`` if the raw image size does not match the calibration.
         """
         self._check_open()
@@ -757,8 +760,7 @@ class FramePipeline:
             for name, n in rejected.items():
                 self.laser_rejected[name] = self.laser_rejected.get(name, 0) + n
             if clip_plane is not None:
-                cn, cd = np.asarray(clip_plane[0], dtype=np.float64).reshape(3), float(clip_plane[1])
-                pts = {name: P[P @ cn + cd > 0] for name, P in pts.items()}
+                pts = {name: self._clip_points(P, clip_plane) for name, P in pts.items()}
             if track.ok:
                 for name, P in pts.items():
                     self.cloud.add(P, track.T_wc, name)
@@ -775,19 +777,32 @@ class FramePipeline:
         self._trajectory.append((t, np.asarray(track.T_wc, dtype=np.float64).copy(), bool(track.ok)))
         return FrameResult(int(frame.index), t, left_r, right_r, depth, lines, pts, track, tim, lines_r, extra, sigma)
 
-    def _clip_depth(self, depth: np.ndarray, plane: tuple[np.ndarray, float]) -> np.ndarray:
+    def _clip_depth(self, depth: np.ndarray, plane: Any) -> np.ndarray:
         """``depth`` with 0 (no measurement) wherever the pixel's point is not in the half-space
-        ``n . X + d > 0`` (camera frame C)."""
+        ``n . X + d > 0`` (camera frame C), or, for a ``clip_plane`` with a ``keep`` method, wherever
+        it is not kept."""
         if self._clip_rays is None:
             w, h = self.image_size
             v, u = np.mgrid[0:h, 0:w].astype(np.float32)
             y = (v - self.K[1, 2]) / self.K[1, 1]
             x = (u - self.K[0, 2] - self.K[0, 1] * y) / self.K[0, 0]
             self._clip_rays = (x, y)  # the point of a pixel is depth * (x, y, 1)
-        n = np.asarray(plane[0], dtype=np.float32).reshape(3)
         x, y = self._clip_rays
+        if callable(getattr(plane, "keep", None)):  # a map: what to keep, point by point
+            d = depth.astype(np.float32, copy=False)
+            keep = plane.keep(np.stack([d * x, d * y, d], axis=-1))
+            return np.where(keep, depth, np.float32(0.0)).astype(depth.dtype, copy=False)
+        n = np.asarray(plane[0], dtype=np.float32).reshape(3)
         keep = depth * (n[0] * x + n[1] * y + n[2]) + np.float32(plane[1]) > 0
         return np.where(keep, depth, np.float32(0.0)).astype(depth.dtype, copy=False)
+
+    @staticmethod
+    def _clip_points(P: np.ndarray, clip: Any) -> np.ndarray:
+        """The laser points ``P`` (camera frame C) that ``clip`` keeps: as :meth:`_clip_depth` does."""
+        if callable(getattr(clip, "keep", None)):
+            return P[np.asarray(clip.keep(P), dtype=bool).reshape(len(P))]
+        cn, cd = np.asarray(clip[0], dtype=np.float64).reshape(3), float(clip[1])
+        return P[P @ cn + cd > 0]
 
     def _make_recon(self, recon: str, single_model: bool) -> MarkerlessTracker | ConfidenceTsdf:
         """The reconstruction model for ``PipelineParams.recon`` (module docstring, "Reconstruction model")."""
