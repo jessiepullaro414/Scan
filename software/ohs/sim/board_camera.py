@@ -46,6 +46,14 @@ maximum then lands on the pattern instead of the stripe, so no margin points are
 **One laser at a time** (the 4-laser build with a channel per laser): :meth:`SimBoardCamera.light`
 names the lasers whose stripes the following frames show (None: all of them), as the Pico's
 ``EMIT`` with five levels does on the real scanner. It takes effect from the next rendered frame.
+The app lights them in turn for each view and tells the person to hold the board still until the
+view is captured; the simulated operator does so: while only some lasers are lit, the script clock
+stands still (the board stays at the pose of the last frame), for at most ``lit_hold_s``
+(:data:`LIT_HOLD_S`, 10 s) of frame time per stretch, and goes on from there when every laser is
+lit again (``lit_hold_s=0``: the board keeps to the script whatever is lit). Without it, whether a
+view was taken depended on how many frames the app could process before the scripted dwell ended,
+so a busy PC lost views. Nothing changes while every laser is lit, so the two-laser build and the
+deterministic :meth:`SimBoardCamera.frame_at` are as before.
 
 **Frames:** board poses are ``T_cb`` in frame C, the rectified left camera of
 ``true_calibration``. The raw left camera is ``x_C = R1 x_rawL``; the raw right camera is
@@ -56,7 +64,8 @@ exposed at host time ``t_exp = t0 + k / fps`` of a virtual clock and stamped
 ``t_host = t_exp + time_offset`` (the true ``imu.time_offset``) plus about 0.2 ms of jitter. IMU
 samples carry host time; a sample at host time ``s`` sees the motion at camera time
 ``s + time_offset``. The script time of frame ``k`` is ``(k - k_restart) / fps`` (modulo
-``period_s`` when looping): :meth:`SimBoardCamera.restart` moves ``k_restart`` to the next frame,
+``period_s`` when looping), less the frames the operator held still for the lasers (above):
+:meth:`SimBoardCamera.restart` moves ``k_restart`` to the next frame,
 and the virtual clock keeps running. With ``realtime`` the frames are paced to the wall clock
 (frame ``k`` is due ``k / fps`` after the first read); a reader that falls more than a second
 behind is paced from then on instead of getting a burst of frames, so the virtual clock then runs
@@ -92,6 +101,7 @@ __all__ = [
     "IMU_PEAK_DEG",
     "LASER_DN",
     "LASER_EXPOSURE",
+    "LIT_HOLD_S",
     "SimFeed",
     "SimBoardCamera",
 ]
@@ -102,6 +112,7 @@ SCRIPTS = ("stereo", "lasers", "imu", "check")
 
 DWELL_S = 1.6  # board tours: time at each pose
 MOVE_S = 0.7  # board tours: time to move to the next pose
+LIT_HOLD_S = 10.0  # the operator holds the board still this long at most while only some lasers are lit
 TOUR_POSES = {"stereo": 16, "lasers": 8, "check": 4}
 CHECK_SEED_OFFSET = 1  # the check poses are laser_calib_board_poses(..., seed + 1)
 IMU_STILL_S = 2.5  # imu script: still, rotate, return, still
@@ -509,14 +520,17 @@ class SimBoardCamera:
     describe the printed board (default ``CharucoSpec()`` on letter paper; ``ValueError`` if it does
     not fit). ``lasers`` (2 or 4) / ``layout`` (a name of :data:`~ohs.sim.nominal.LASER_LAYOUTS`) are
     the scanner's line lasers, as in :func:`~ohs.sim.nominal.nominal_calibration` (default: the two
-    standard ones). ``t0`` is the virtual host time of frame 0's exposure. Thread-safe for one reader plus
-    :meth:`restart`, :meth:`phase`, :meth:`true_pose` and :meth:`close` from other threads.
+    standard ones). ``t0`` is the virtual host time of frame 0's exposure. ``lit_hold_s``: how long
+    (frame time) the operator holds the board still at most while only some lasers are lit (module
+    docstring; 0: not at all). Thread-safe for one reader plus :meth:`restart`, :meth:`light`,
+    :meth:`phase`, :meth:`true_pose` and :meth:`close` from other threads.
     """
 
     def __init__(self, script: str, *, image_size: tuple[int, int] = (1280, 800), fps: float = 10.0,
                  spec: CharucoSpec | None = None, paper: str = "letter", seed: int = 0, realtime: bool = True,
                  loop: bool = True, dwell_s: float | None = None, move_s: float | None = None,
-                 t0: float = 100.0, lasers: int = 2, layout: str | None = None) -> None:
+                 t0: float = 100.0, lasers: int = 2, layout: str | None = None,
+                 lit_hold_s: float = LIT_HOLD_S) -> None:
         if script not in SCRIPTS:
             raise ValueError(f"unknown script {script!r}; choose one of {SCRIPTS}")
         if not fps > 0:
@@ -534,6 +548,10 @@ class SimBoardCamera:
         self.move_s = MOVE_S if move_s is None else float(move_s)
         if self.dwell_s <= 0 or self.move_s < 0:
             raise ValueError("dwell_s must be positive and move_s not negative")
+        if not lit_hold_s >= 0:
+            raise ValueError("lit_hold_s must not be negative")
+        self.lit_hold_s = float(lit_hold_s)
+        self._hold_frames = int(math.ceil(self.lit_hold_s * self.fps - 1e-6))
         self.true_calibration = _true_calibration(self.image_size, lasers, layout)
         self._emitters = nominal_emitters(baseline=self.true_calibration.stereo.baseline, lasers=lasers, layout=layout)
         self.laser_names = tuple(_line_lasers(self._emitters))
@@ -562,6 +580,8 @@ class SimBoardCamera:
         self._lock = threading.Lock()
         self._k = 0  # next frame index
         self._k_start = 0  # frame index at script time 0
+        self._held = 0  # frames since then on which the operator held still for the lasers
+        self._hold_run = 0  # of those, in the current stretch of only some lasers lit
         self._restart_pending = False
         self._pace: tuple[float, int] | None = None  # (wall time, frame index) the realtime pacing starts from
         self._latest: tuple[np.ndarray, str] | None = None
@@ -632,8 +652,14 @@ class SimBoardCamera:
             if self._restart_pending:
                 self._restart_pending = False
                 self._k_start = k
+                self._held = self._hold_run = 0
                 self.feed._restart(self._t_exp(k) + self._time_offset)
-            n = k - self._k_start
+            if self._lit is None:
+                self._hold_run = 0
+            elif self._hold_run < self._hold_frames and k > self._k_start:
+                self._held += 1  # only some lasers lit: the board stays where the last frame showed it
+                self._hold_run += 1
+            n = k - self._k_start - self._held
             if not self.loop and n >= self.frames_per_pass:
                 raise EOFError(f"end of the {self.script} script")
             s = (n / self.fps) % self.period_s if self.loop else n / self.fps

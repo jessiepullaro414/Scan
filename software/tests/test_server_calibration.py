@@ -835,7 +835,9 @@ def sim_factory_configured(script, cfg):
 
 
 def sim_factory_one_at_a_time(script, cfg):
-    """As :func:`sim_factory_configured`, with the board held long enough for a frame per laser."""
+    """As :func:`sim_factory_configured`, with the board held 3 s at each pose; the virtual operator
+    also holds it still while the lasers take turns (``SimBoardCamera``'s ``lit_hold_s``), as the
+    app asks, so a busy PC does not lose views while the lasers take turns."""
     from ohs.server.devices import sim_board_camera
 
     return sim_board_camera(script, cfg, fps=5.0, **{**SIM_KW, "dwell_s": 3.0})

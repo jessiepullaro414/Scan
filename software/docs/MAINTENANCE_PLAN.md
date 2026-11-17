@@ -1626,6 +1626,14 @@ Every task here: the type check, `npm test`, and for bundle tasks the chunk size
   afternoon (the same suite took 20 minutes instead of 14 to 15; F8). Not proven.
 - **To do if it is seen again:** note how long the run took and what else ran. The test is not
   loosened for now.
+- **Cause found 2026-11-17 (with F12):** the tests' simulator does not run in real time: its
+  clock runs at rendering speed, while the calibration's processing takes only the newest
+  frame. A pose gives the app a fixed number of frames (the wizard: 5 a pose, and the steady
+  check needs 3 of them), so a busy PC that skips frames loses views. Seen again the same
+  day: the stereo step got 13 of 15 views (it wants at least 10) in a run of the file alone.
+  **To mend:** a simulated operator who holds each pose until the session reports the view
+  taken, as F12 did for the lasers taking turns. It needs a hook from the session to
+  `SimBoardCamera` (stereo gives the camera no signal). Not done yet.
 
 ### [ ] F11. The alignment from shape can accept a pose turned 180° when stray points are left
 - **Found 2026-11-17** while building the comparison with a reference model
@@ -1655,6 +1663,31 @@ Every task here: the type check, `npm test`, and for bundle tasks the chunk size
   of the part is shared; and when it is not sure (a pose turned round scores nearly as well,
   the guesses disagree, too little is shared) it says so and lets the person align the scans
   by picked points, and does not accept a guess.
+
+### [x] F12. The four-laser one-at-a-time calibration test lost views in full runs ✔
+- **Seen 2026-11-17:** `tests/test_server_calibration.py::test_four_lasers_calibrated_one_at_a_time_on_the_simulator`
+  got 4 views where it wants at least 5, on both paths, in the full suite at 04ce43a. Alone,
+  with its whole file, and after all 958 tests that come before it, it passed; no earlier
+  test file leaves a busy thread behind (measured before each module).
+- **Cause:** the simulated operator held each pose for a fixed 15 frames (3 s at 5 frames a
+  second, the simulator not in real time), and one view needs exactly 15 when the app
+  processes every frame: 3 to be steady, then 3 for each of the four lasers (the switch, one
+  settle frame, the kept frame). No margin. Even on a quiet PC only 5 of 30 tries were
+  captured; the rest ended with "the board moved while the lasers took turns". Two busy
+  threads gave 3 views, 40 ms more per board detection gave none. Not a fault of the app,
+  and nothing in the product got slower.
+- **Mended 2026-11-17, in the simulation:** `SimBoardCamera` holds the board still while only
+  some lasers are lit (`lit_hold_s`, at most 10 s of frame time for each stretch), which is
+  what the app tells a person to do ("hold the board still until the view is captured").
+  Nothing changes while every laser is lit, so the two-laser build and every other script
+  are as before; a real camera's capture is untouched. The test's own lines are unchanged
+  (hold, timeouts, at least 5 of 6 views, a frame per laser, the planes, the grades); only
+  its factory's docstring says what the operator now does. New tests:
+  `tests/test_sim_board_hold.py` (failed first: the name did not exist).
+- **Result:** 10 of 10 runs with 6 of 6 views, 4 of them under heavy load (the test takes
+  13–15 s quiet, about 2 minutes loaded). Views are still lost when the processing is about
+  7 times slower than the rendering or more: the app then starts the lasers' turn after the
+  hold has ended.
 
 ## Reviewed and fine: leave alone
 

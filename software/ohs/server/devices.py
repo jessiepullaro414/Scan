@@ -112,7 +112,8 @@ def sim_board_camera(script: str, cfg: Any, **kw: Any) -> Any:
     lasers = getattr(cfg, "lasers", None)
     if script == "lasers" and lasers is not None and lasers.separate():
         # one laser at a time: a capture takes a frame per laser after the steady view, so each
-        # board pose is held a second longer
+        # board pose is held a second longer (and the virtual operator holds the board still while
+        # the lasers take turns: SimBoardCamera's lit_hold_s)
         kw.setdefault("dwell_s", DWELL_S + 1.0)
     return SimBoardCamera(script, spec=cfg.board.spec(), paper=cfg.board.paper, lasers=sim_lasers(cfg), **kw)
 
