@@ -117,6 +117,8 @@ IMU (LSM6DSOX): VIN ── 3V3 (pin 36)  GND ── GND  SDA ── GP4 (pin 6) 
 
 ## Assembly
 
+**The full step-by-step guide is [docs/BUILD.md](docs/BUILD.md):** tools, a screw table, what to test before you solder, the wiring order, first power-up, focusing and aiming. The steps below are the short version.
+
 1. **Inserts:** press M3 inserts into the head (6 front, 6 back), into each grip-half ledge (2 + 2 from above, 2 + 2 from the sides), and into the left grip half's bottom bosses (2).
 2. **Grip:** screw the Pico onto the standoffs in the right half, with USB pointing down. The 16 mm trigger button sits in the split front hole. Spin its nut down to leave a ~2.5 mm gap under the bezel, then close the halves around it; the right half's two pins find the left half.
 3. **Grip → head:** join the halves at the bottom with M3×16 and slide the top of the grip up between the head's two cheeks (the yoke). With the head's camera opening still empty, drop M3×10 screws through the pocket floor into each half's ledge. Then put 4× M3×10 through the cheeks from the sides. These side screws are what stops the head rocking on the grip.
