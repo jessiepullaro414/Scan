@@ -6,7 +6,9 @@
  * (CheckMark.tsx), the part's axes when it has a coordinate system (PartAxes.tsx) and the Section tool's plane,
  * cut and three clicked points (SectionMarks.tsx; hiding the front is the model's clipping), and the comparison with a
  * reference (the "Against the reference" shading with the deviation under the cursor, the reference as a faint ghost,
- * the area picked in the Compare panel: ReferenceMark.tsx). Renders on demand (no work while the view is still).
+ * the area picked in the Compare panel: ReferenceMark.tsx), the Flush tool's two clicks and the stations along the seam
+ * (FlushMarks.tsx), and pictures of the view for the report (ViewCapture.tsx). Renders on demand (no work while the view
+ * is still).
  */
 import { Bvh, Html, Line, OrbitControls } from "@react-three/drei";
 import { Canvas, useThree } from "@react-three/fiber";
@@ -31,7 +33,7 @@ import {
 } from "three";
 import { useUi } from "../../store/ui";
 import { CameraRig } from "../../three/CameraRig";
-import type { FitKind, PartFrameView, SectionAnswer, SectionPlane } from "../../api/types";
+import type { FitKind, FlushAnswer, PartFrameView, SectionAnswer, SectionPlane } from "../../api/types";
 import { deviationReadout, interpolateMove } from "../../lib/deviation";
 import { laserReadout } from "../../lib/lasers";
 import { referenceReadout, stateAt, STATE_OFF_REFERENCE } from "../../lib/reference";
@@ -46,6 +48,8 @@ import { FitTool, type FitItem } from "./FitTool";
 import { PartAxes } from "./PartAxes";
 import { useSurfacePick } from "./picking";
 import { SectionMarks } from "./SectionMarks";
+import { FlushMarks } from "./FlushMarks";
+import { ViewCapture, type CaptureMark } from "./ViewCapture";
 import { ReferenceMark, type ReferenceLit } from "./ReferenceMark";
 import { refDeviationOf, applyReferenceColors } from "./referenceShading";
 import type { CheckLit } from "./useCheck";
@@ -56,6 +60,7 @@ export type Shading = "clay" | "studio" | "normals" | "confidence" | "deviation"
 const isMap = (s: Shading) => s === "confidence" || s === "deviation" || s === "lasers" || s === "reference";
 export type Vec3 = [number, number, number];
 export type Measurement = { id: number; a: Vec3; b: Vec3 };
+const NO_MARKS: CaptureMark[] = [];
 
 /** The default view direction of the result views (three.js coordinates). */
 export const VIEW_DIR: [number, number, number] = [0.42, 0.5, 1];
@@ -456,6 +461,8 @@ export function ViewerCanvas({
   partFrame = null,
   section = null,
   reference = null,
+  flush = null,
+  captureMarks = NO_MARKS,
 }: {
   geometry: BufferGeometry;
   laser: BufferGeometry | null;
@@ -482,13 +489,17 @@ export function ViewerCanvas({
   section?: { plane: SectionPlane | null; answer: SectionAnswer | null; hideFront: boolean; picking: boolean; points: Vec3[]; onPickPoint: (p: Vec3) => void } | null;
   /** The comparison with a reference (ComparePanel.tsx): its ghost over the scan, the area lit, the shading's limit. */
   reference?: { ghost: { geometry: BufferGeometry; matrix: number[] } | null; lit: ReferenceLit | null; limit: number } | null;
+  /** The Flush tool, while it is on (FlushMarks.tsx): the two clicks and the stations along the seam. */
+  flush?: { clicks: Vec3[]; answer: FlushAnswer | null; picking: boolean; onPick: (p: Vec3) => void } | null;
+  /** What a picture of the view for the report marks (ViewCapture.tsx): the fits' numbers and names at their places. */
+  captureMarks?: CaptureMark[];
 }) {
   const meshRef = useRef<Mesh | null>(null);
   const sigma = shading === "confidence" ? sigmaOf(geometry) : null;
   const moves = shading === "deviation" ? deviationOf(geometry) : null;
   const gaps = shading === "lasers" ? laserValuesOf(geometry) : null;
   const refDev = shading === "reference" ? refDeviationOf(geometry) : null;
-  const picking = !!section?.picking;
+  const picking = !!section?.picking || !!flush?.picking;
   const [bvh, setBvh] = useState(false);
   useEffect(() => {
     if (measure || fit || picking || sigma || moves || gaps || refDev) setBvh(true); // build the raycast acceleration on first use only
@@ -558,7 +569,9 @@ export function ViewerCanvas({
               markerRadius={markerRadius}
             />
           ) : null}
+          {flush ? <FlushMarks clicks={flush.clicks} answer={flush.answer} picking={flush.picking} onPick={flush.onPick} target={meshRef} markerRadius={markerRadius} /> : null}
         </group>
+        <ViewCapture marks={captureMarks} />
         <SceneGrid y={bounds.gridY} />
         <AxisGizmo margin={[62, 62]} />
       </Canvas>

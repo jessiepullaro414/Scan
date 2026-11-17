@@ -24,7 +24,8 @@ mesh; :mod:`ohs.server.features` fits and refits through the fit route and keeps
                     "nominals": [...],   # as a feature's
                     "move": {...},       # which fit moves to suit it in the CAD export (below); left out: listed only
                     "created"}],
-     "sections": [...]}              # kept sections (below); left out until the first is kept
+     "sections": [...],              # kept sections (below); left out until the first is kept
+     "seams": [...]}                 # kept seams (below); left out until the first is kept
 
 A relation keeps only which two features the user asked to relate: its numbers are worked out
 when it is shown, so they always match the features. Ids are short and safe as file names; they
@@ -119,6 +120,19 @@ id and name then, an axis of the part's frame and its value, a point and a norma
 deleted, so a file written before sections existed is read and written as it was. Ids are unique
 with those of the other lists. :func:`validate` checks the plane's numbers and the definition's kind;
 other keys are kept.
+
+**Kept seams** (FEATURE_PLAN I4; :mod:`ohs.server.flush`): the flush along a seam between two panels,
+kept as the two clicks it is measured from (:func:`ohs.inspect.gapflush.measure_gap_flush`)::
+
+    {"id": "sm-…", "name": "Seam 1",
+     "a": [x, y, z], "b": [x, y, z],  # the clicks on the first and the second panel, in the scan's frame
+     "mesh_version",                  # the mesh version it was last measured on (kept, or marked current)
+     "created"}
+
+The stations are not kept: a kept seam is measured again on the current mesh when it is opened. Like
+``sections``, ``seams`` is left out of a file until a seam is kept and again when the last one is
+deleted, so a file written before seams existed is read and written as it was; ids are unique with
+those of the other lists. :func:`validate` checks the clicks and the version; other keys are kept.
 
 **Writing** is atomic: a temporary file next to the real one, then a rename, so a crash or a full
 disk leaves the old file whole. A document that does not pass :func:`validate` is never written.
@@ -504,6 +518,21 @@ def _section(s: Any, i: int) -> dict:
     return out
 
 
+def _seam(s: Any, i: int) -> dict:
+    """Check a kept seam (module docstring, "Kept seams")."""
+    where = f"seams[{i}]"
+    if not isinstance(s, dict):
+        _fail(where, "must be an object")
+    out = dict(s)
+    out["id"] = _check_id(s.get("id"), where)
+    out["name"] = clean_name(s.get("name"), where)
+    out["a"] = _point(s.get("a"), where, "the first click (a)")
+    out["b"] = _point(s.get("b"), where, "the second click (b)")
+    out["mesh_version"] = _whole(s.get("mesh_version"), where, "mesh_version")
+    out["created"] = _text(s.get("created", ""), where, "created")
+    return out
+
+
 def validate(doc: Any) -> dict:
     """Check a features document and return a clean copy (names trimmed, numbers as floats where
     they are points). Raises ValueError with a plain message saying where and what.
@@ -533,8 +562,12 @@ def validate(doc: Any) -> dict:
         if not isinstance(doc["sections"], list):
             raise ValueError("sections must be a list")
         out["sections"] = [_section(s, i) for i, s in enumerate(doc["sections"])]
+    if "seams" in doc:  # a file written before seams existed has none: it loads as it is
+        if not isinstance(doc["seams"], list):
+            raise ValueError("seams must be a list")
+        out["seams"] = [_seam(s, i) for i, s in enumerate(doc["seams"])]
     seen: set[str] = set()
-    for item in out["features"] + out["measurements"] + out["relations"] + out.get("sections", []):
+    for item in out["features"] + out["measurements"] + out["relations"] + out.get("sections", []) + out.get("seams", []):
         if item["id"] in seen:
             raise ValueError(f"the id {item['id']!r} is used twice")
         seen.add(item["id"])

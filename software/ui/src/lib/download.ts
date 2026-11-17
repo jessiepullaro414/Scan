@@ -17,6 +17,13 @@ function clickLink(url: string, filename: string) {
   a.remove();
 }
 
+/** Save a file made in memory (a report made on request: a POST, so no link can fetch it). */
+export function saveBlob(blob: Blob, filename: string): void {
+  const obj = URL.createObjectURL(blob);
+  clickLink(obj, filename);
+  setTimeout(() => URL.revokeObjectURL(obj), 30_000);
+}
+
 export async function downloadFile(url: string, filename: string): Promise<void> {
   if (!MOCK) {
     clickLink(url, filename);

@@ -1697,6 +1697,144 @@ Rules:
   answers `{comparison: null}`); 409 before there is a mesh, while the units wait, and before it is aligned
   (the deviation and the tolerance); 422 for bad bodies.
 
+## Flush along a seam
+[`FEATURE_PLAN.md`](FEATURE_PLAN.md), I4. The step between two panels along their seam, read on the scan's
+current mesh from two clicks, one on each panel near the seam (`ohs/server/flush.py`; the engine is
+`ohs.inspect.gapflush.measure_gap_flush`, on the same arrays the fits use: each vertex's sigma, each face's
+filled flag). The first click is **panel A**, the second **panel B**; the flush is + where B stands above A,
+square to A. **Flush is offered, gap is not** (`VALIDATION.md`, "Gap and flush between two panels"): the gap
+is worked out for the record, and `gap_offered` is false with the engine's reason in `gap_note`.
+
+```ts
+type FlushSide = "measured" | "filled" | "bridged" | "missing";   // what a side of a section saw
+type FlushStation = {                           // GapFlushStation.to_dict(): one section across the seam
+  position_mm: number;                          // along the seam from the clicks
+  point: number[]; direction: number[]; normal: number[];   // the seam's middle on A's surface line; the seam's
+                                                // direction; A's normal (the scan's frame)
+  gap_mm: number | null; gap_sigma_mm: number | null;   // for the record only: not offered
+  flush_mm: number | null; flush_sigma_mm: number | null;   // + : B above A; 1σ, the spread from scan to scan
+  edge_a: number[] | null; edge_b: number[] | null;
+  side_a: FlushSide; side_b: FlushSide; bridged: boolean;
+  gap_trusted: boolean; flush_trusted: boolean;
+  notes: string[];                              // why a reading is not trusted, in words
+  gap_by_rule: Record<string, number | null>;
+  n_points_a: number; n_points_b: number; rms_a_mm: number | null; rms_b_mm: number | null };
+type SeamStats = {                              // over the trusted stations; null when none is trusted
+  lowest: number | null; lowest_at_mm: number | null; mean: number | null;
+  highest: number | null; highest_at_mm: number | null; n_trusted: number; n_stations: number };
+type FlushRecord = {                            // GapFlush.to_dict(), as it is
+  format_version: 1; units: "mm"; rule: string; step_mm: number; flush_sign: string;
+  gap: SeamStats;                               // for the record only
+  flush: SeamStats;
+  gap_offered: boolean; gap_note: string;       // false, and why, in the engine's words
+  correlated_points: number; clicks: number[][]; stations: FlushStation[] };   // stations in order along the seam
+type FlushAnswer = FlushRecord & {
+  mesh_version: number;                         // the mesh version measured
+  warnings: string[];                           // the mesh changed since a kept seam was kept; stations not trusted
+  filename: string;                             // the stations CSV's download name
+  kept: KeptSeam | null };                      // GET .../seams/{id}: the kept record; else null
+type FlushRequest = { a: number[]; b: number[] };   // the two clicks, the scan's frame, mm
+type KeptSeam = {
+  id: string;                                   // "sm-…"
+  name: string;                                 // "Seam N" unless the user named it; 1 to 80 characters
+  a: number[]; b: number[];                     // the two clicks, kept as numbers
+  mesh_version: number;                         // the mesh version it was last measured on
+  created: string;
+  mesh_changed: boolean };                      // the current mesh is another one (not stored)
+type KeptSeams = { mesh_version: number | null; seams: KeptSeam[] };   // oldest first
+type NewSeam = FlushRequest & { name?: string };
+```
+
+| Method and path | Body or query | Returns |
+|---|---|---|
+| `POST .../flush` | `FlushRequest` | `FlushAnswer` |
+| `GET .../flush/stations.csv` | `?a=x,y,z&b=x,y,z` | the stations as CSV (UTF-8 with a byte-order mark) |
+| `GET .../seams` | | `KeptSeams` |
+| `POST .../seams` | `NewSeam` | `KeptSeam` |
+| `GET .../seams/{id}` | | `FlushAnswer` (with `kept`) |
+| `GET .../seams/{id}/stations.csv` | | the kept seam's stations, measured on the current mesh |
+| `PATCH .../seams/{id}` | `{name?: string, mark_current?: boolean}` | `KeptSeam` |
+| `DELETE .../seams/{id}` | | 204 |
+
+Rules:
+- **The answer** is the engine's record key for key, with the mesh version, the warnings and the download
+  name beside it. A click the engine refuses (more than 3 mm from the mesh, the two clicks closer than 2 mm,
+  one above the other, no seam between them) is 422 with the engine's own words as the detail. On the
+  gap-and-flush study's tracked scan with a flush of 2 mm (190,522 triangles): 0.66 to 0.73 s, 86 stations
+  (78 trusted), 85 kB of JSON, a CSV of 23 kB; the mean flush 2.023 mm, the study's own reading for that scan
+  (the truth 1.999 mm).
+- **The CSV** has one row per station, in order along the seam: `position_mm`, `x_mm`, `y_mm`, `z_mm` (the
+  seam's middle), `flush_mm`, `flush_sigma_mm`, `flush_trusted` (`yes` / `no`), `side_a`, `side_b`,
+  `bridged`, `notes` (joined by " | "); numbers in full, empty where there is none; text a spreadsheet could
+  take for a formula starts with an apostrophe. No gap column: the gap is not offered.
+  `Content-Disposition` names it `<scan>-flush.csv` (a kept seam `<scan>-flush-<name>.csv`);
+  `X-OHS-Mesh-Version` is the mesh version measured.
+- **Keep** (`POST .../seams`): the two clicks, a name, the current mesh version and when; kept under `seams`
+  in `features.json` (`ohs.measure.features`, "Kept seams"). Nothing is measured, and the stations are never
+  stored. `GET .../features` answers as before: seams are not in it.
+- **Open** (`GET .../seams/{id}`): measured again on the current mesh from the kept clicks; when the mesh is
+  not the version it was kept on, `kept.mesh_changed` is true and a warning says so. Reading writes nothing;
+  `PATCH` with `mark_current: true` marks it as measured on the current mesh (409 before there is a mesh). A
+  rename keeps everything else; `PATCH` with neither is 422.
+- `seams` is left out of `features.json` until a seam is kept and again when the last one is deleted, so a
+  file written before seams existed loads, and is written, as it was. Seam ids are unique with the other
+  kept items' ids.
+- 409 before there is a mesh (a measurement, a download, keeping); 404 for an unknown project, scan or seam
+  and for another file name; 422 for a click that is not three finite numbers, a click the engine refuses,
+  an empty or too long name.
+
+## The report
+[`FEATURE_PLAN.md`](FEATURE_PLAN.md), I3. A scan's data collected on the server (`ohs/server/report.py`), each
+part from its own manager, into the plain structure `ohs.report.data` documents, and answered as one
+self-contained HTML page that prints to PDF from any browser (`ohs.report.build_html`), the kept features as
+CSV (`ohs.report.tables.features_csv`) and as JSON (`features_json`). Built on request, written nowhere.
+
+```ts
+type ReportFile = "report.html" | "features.csv" | "features.json";
+type ReportPicture = {
+  title: string;                                // 1 to 120 characters
+  caption?: string | null;                      // at most 500 characters
+  data: string };                               // the picture's bytes in base64: PNG (JPEG, GIF, WebP taken too)
+type ReportRequest = {                          // every key optional
+  tolerance_mm?: number | null;                 // the Check answer at this tolerance (0 < t <= 100); none: left out
+  numbers_in_part_frame?: boolean;              // the fits' positions and directions in the part's frame
+  seam?: string | null;                         // the kept seam whose flush is shown (default: the first that
+                                                // the engine can measure)
+  pictures?: ReportPicture[] };                 // views of the model, in order (the page only)
+```
+
+| Method and path | Body | Returns |
+|---|---|---|
+| `POST .../report/report.html` | `ReportRequest` | the page (`text/html; charset=utf-8`), `<scan>-report.html` |
+| `POST .../report/features.csv` | `ReportRequest` | the kept fits and relations (`text/csv`, UTF-8 with a byte-order mark), `<scan>-features.csv` |
+| `POST .../report/features.json` | `ReportRequest` | the kept features (`application/json`), `<scan>-features.json` |
+
+Rules:
+- **Collected, only what exists** (a part the scan does not have is left out of the page, never shown
+  empty): the project's and the scan's names, the date (read once per request), the app's version; how the
+  scan was made (`result/report.json`, its known keys); the calibration (the setup state's calibration part
+  and last board check; its health is "not assessed" until H3); the Check answer at `tolerance_mm`
+  (`POST .../check`'s, before there is a mesh left out); the kept features **as `GET .../features` shows
+  them** (stale marks, relations with the engine's record, approvals with "check again" and its reason, the
+  frame's state) and the CAD export's moves when a relation has one; every kept section cut again on the
+  current mesh (with "the mesh has changed" as its warning when it has); the kept comparison with a
+  reference (the reference, its units, the alignment and, once aligned, the deviation of the current mesh and
+  the answer at the comparison's kept tolerance and `k`; the mesh-changed note goes with the alignment's
+  warnings); one kept seam's flush, measured on the current mesh; the pictures. Every part's warnings are
+  shown in it and again in the list near the top. The CSV holds the features only; the JSON the features and
+  the sections' numbers (not their drawings).
+- **Pictures:** at most 6 (422 above), each at most 3 MB decoded and 12 MB in all (413, with the limit in
+  words), base64 text (422 otherwise). A picture that is not a PNG, JPEG, GIF or WebP image is left out of the
+  page with a note naming it. The viewer makes them from the 3D view, at most 1600 pixels across.
+- **Nothing on disk changes:** a report reads through the managers, which write nothing on a read (the
+  comparison's answer at its tolerance is worked out here, not through `POST .../comparison/tolerance`, which
+  keeps the tolerance it is given). On the ball-on-a-table scan (804,372 triangles, one kept plane, a kept
+  section 40 mm off it): the page in 0.4 s with the mesh in memory (22 kB with the Check answer at ± 0.3 mm),
+  the CSV in 0.01 s, the JSON in 0.04 s.
+- **The page holds one seam** (`ohs.report.data` takes one `gap_flush`): with several kept seams, `seam` picks
+  which; a kept seam the engine cannot measure on the current mesh is passed over.
+- 404 for an unknown project, scan, seam (`seam`) or file name; 422 for a bad body.
+
 ## M5 second slice: the deviation map
 The plan is in [`DESKTOP_APP_PLAN.md`](DESKTOP_APP_PLAN.md), "M5 plan, second slice". It compares the scan's
 current mesh with its base mesh: the last stage's result, before any edit.

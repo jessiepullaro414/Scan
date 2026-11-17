@@ -12,7 +12,10 @@
  * useSectionTool.ts), the comparison with a reference model (the Compare panel: a reference of the project, its
  * units, the alignment, the "Against the reference" shading (7) with a tolerance and the areas outside it, the
  * reference as a ghost, matching points picked side by side; viewer/ComparePanel.tsx, useComparison.ts,
- * PointPairPicker.tsx) and the processing report.
+ * PointPairPicker.tsx), the Flush tool (U: two clicks across a seam, the flush along it with a chart, kept seams;
+ * viewer/FlushPanel.tsx, FlushChart.tsx, FlushMarks.tsx, useFlushTool.ts), the scan's report (the Download panel's
+ * "Report" group: the HTML page with views of the model added from the 3D view, the kept features as CSV and JSON;
+ * viewer/ReportGroup.tsx, ViewCapture.tsx) and the processing report.
  */
 import {
   ArrowLeft,
@@ -90,6 +93,12 @@ import { COMPARE_ICON, ComparePanel } from "./viewer/ComparePanel";
 import { PointPairPicker } from "./viewer/PointPairPicker";
 import { ReferenceLegend } from "./viewer/ReferenceLegend";
 import { useComparison } from "./viewer/useComparison";
+import { FLUSH_ICON, FlushPanel } from "./viewer/FlushPanel";
+import { useFlushTool } from "./viewer/useFlushTool";
+import { ReportGroup } from "./viewer/ReportGroup";
+import type { CaptureMark } from "./viewer/ViewCapture";
+import { seamsKey, useSeams } from "../store/seams";
+import type { ReportView } from "../lib/report";
 
 type Load =
   | { phase: "idle" }
@@ -247,6 +256,10 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
   const [sectionOn, setSectionOn] = useState(false);
   /** Matching points are being picked on the scan and the reference (FEATURE_PLAN I2). */
   const [pickPairs, setPickPairs] = useState(false);
+  /** The Flush tool is on (FEATURE_PLAN I4). */
+  const [flushOn, setFlushOn] = useState(false);
+  /** The views of the model added to the report (this page's memory only; FEATURE_PLAN I3). */
+  const [reportViews, setReportViews] = useState<ReportView[]>([]);
   /** The fits, measurements and relations kept with the scan (those made on an earlier mesh stay, marked so). */
   const kept = useFeatures((s) => s.entries[featuresKey(pid, sid)]?.set ?? null);
   const refitting = useFeatures((s) => s.entries[featuresKey(pid, sid)]?.refitting ?? false);
@@ -419,11 +432,12 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
     [pid, sid],
   );
 
-  // Measure, Fit and Section are one tool at a time.
-  const pickTool = (t: "measure" | "fit" | "section" | null) => {
+  // Measure, Fit, Section and Flush are one tool at a time.
+  const pickTool = (t: "measure" | "fit" | "section" | "flush" | null) => {
     setMeasure(t === "measure");
     setFitOn(t === "fit");
     setSectionOn(t === "section");
+    setFlushOn(t === "flush");
   };
   const fitShape = (k: FitKind) => {
     setFitKind(k);
@@ -497,6 +511,7 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
     c: () => fitShape("cylinder"),
     h: () => fitShape("hole"),
     s: () => pickTool(sectionOn ? null : "section"),
+    u: () => pickTool(flushOn ? null : "flush"),
     w: () => setWireframe((v) => !v),
     l: () => urls?.laser && setShowLaser((v) => !v),
     "1": () => setShading("clay"),
@@ -511,6 +526,7 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
       else if (measure) setMeasure(false);
       else if (fitOn) setFitOn(false);
       else if (sectionOn) setSectionOn(false);
+      else if (flushOn) setFlushOn(false);
     },
   });
 
@@ -661,6 +677,19 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
         : null,
     [sectionOn, section.plane, section.answer, section.hideFront, section.picking, section.points, section.addPoint],
   );
+  // The Flush tool (FEATURE_PLAN I4): two clicks, the flush along the seam; the kept seams (read again with each mesh
+  // version: which were measured on an earlier mesh).
+  const flushTool = useFlushTool({ pid, sid, on: flushOn && !!geometry, meshVersion });
+  const keptSeams = useSeams((s) => s.entries[seamsKey(pid, sid)]?.set?.seams ?? null);
+  useEffect(() => {
+    void useSeams.getState().load(pid, sid);
+  }, [pid, sid, meshVersion]);
+  const flushView = useMemo(
+    () => (flushOn ? { clicks: flushTool.clicks, answer: flushTool.answer, picking: flushTool.picking, onPick: flushTool.addClick } : null),
+    [flushOn, flushTool.clicks, flushTool.answer, flushTool.picking, flushTool.addClick],
+  );
+  // a picture of the view for the report marks the fits drawn on the mesh by their numbers and names
+  const captureMarks = useMemo<CaptureMark[]>(() => meshFits.filter((f) => f.region).map((f) => ({ p: f.region!.anchor as [number, number, number], text: `${f.id}. ${f.name}` })), [meshFits]);
   // the Compare panel's ghost, picked area and the shading's limit (the tolerance), for the 3D view
   const referenceView = useMemo(
     () => ({
@@ -799,6 +828,8 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
               partFrame={partFrame ? { frame: partFrame, outOfDate: partFrame.out_of_date } : null}
               section={sectionView}
               reference={referenceView}
+              flush={flushView}
+              captureMarks={captureMarks}
             />
           </ErrorBoundary>
         ) : (
@@ -896,6 +927,16 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
               >
                 Section
               </Button>
+              <Button
+                size="sm"
+                variant={flushOn ? "primary" : "ghost"}
+                icon={FLUSH_ICON}
+                onClick={() => pickTool(flushOn ? null : "flush")}
+                aria-pressed={flushOn}
+                title="The flush between two panels along their seam: click once on each panel (U)"
+              >
+                Flush
+              </Button>
               {fitOn ? (
                 <Segmented<FitKind>
                   label="Shape to fit"
@@ -974,6 +1015,19 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
             <div className="glass flex animate-pop-in items-center gap-2 whitespace-nowrap rounded-full border border-accent-line px-4 py-2 text-sm text-fg shadow-lg" role="status">
               <SECTION_ICON size={15} className="text-accent" aria-hidden />
               Click point {section.points.length + 1} of 3 on the surface
+              <span className="text-subtle">·</span>
+              <span className="text-xs text-muted">
+                <Kbd>Esc</Kbd> done
+              </span>
+            </div>
+          </div>
+        ) : null}
+
+        {flushOn && geometry && flushTool.picking ? (
+          <div className="pointer-events-none absolute bottom-5 left-1/2 -translate-x-1/2">
+            <div className="glass flex animate-pop-in items-center gap-2 whitespace-nowrap rounded-full border border-accent-line px-4 py-2 text-sm text-fg shadow-lg" role="status">
+              <FLUSH_ICON size={15} className="text-accent" aria-hidden />
+              {flushTool.clicks.length === 0 ? "Click panel A, near the seam" : "Now click panel B, across the seam"}
               <span className="text-subtle">·</span>
               <span className="text-xs text-muted">
                 <Kbd>Esc</Kbd> done
@@ -1208,6 +1262,10 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
           />
         </Panel>
 
+        <Panel title="Flush along a seam" icon={FLUSH_ICON}>
+          <FlushPanel pid={pid} sid={sid} on={flushOn && !!geometry} onToggle={(on) => pickTool(on ? "flush" : null)} tool={flushTool} kept={keptSeams ?? []} ready={!!geometry} />
+        </Panel>
+
         {hasResult ? (
           <Panel title="Check" icon={CHECK_ICON}>
             <CheckPanel
@@ -1266,8 +1324,14 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
                   Laser points
                 </Button>
               ) : null}
-              <Button size="sm" icon={FileText} onClick={() => void downloadFile(urls.report, `${stem}-report.json`)}>
-                Report
+              <Button
+                size="sm"
+                className={urls.laser ? undefined : "col-span-2"}
+                icon={FileText}
+                onClick={() => void downloadFile(urls.report, `${stem}-processing-report.json`)}
+                title="How the engine made the mesh (frames, tracking, timings), as JSON: not the scan's report below"
+              >
+                Processing report (JSON)
               </Button>
               {partFrame ? (
                 <>
@@ -1284,6 +1348,9 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
             <div className="text-sm text-muted">Make the mesh first.</div>
           )}
           {hasResult && urls ? <CadDownload pid={pid} sid={sid} stem={stem} kept={kept} hasMesh={hasResult} /> : null}
+          {hasResult ? (
+            <ReportGroup pid={pid} sid={sid} checkTolerance={check.tolerance} hasFrame={!!partFrame} seams={keptSeams ?? []} views={reportViews} onViews={setReportViews} ready={!!geometry} />
+          ) : null}
           {hasResult && project && scan ? (
             <div className="mt-3 flex items-center justify-between gap-2">
               <span className="text-xs text-subtle">
@@ -1295,7 +1362,7 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
           ) : null}
         </Panel>
 
-        <Panel title="Report" icon={FileText}>
+        <Panel title="Processing report" icon={FileText}>
           {report ? (
             <ReportSummary report={report} />
           ) : hasResult ? (
@@ -1322,6 +1389,9 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
             </span>
             <span>
               <Kbd>S</Kbd> section
+            </span>
+            <span>
+              <Kbd>U</Kbd> flush
             </span>
             <span>
               <Kbd>W</Kbd> wireframe

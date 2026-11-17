@@ -327,7 +327,7 @@ but nothing can be uploaded.
     engine edge in `ScanSurface.part_cloud` to look at. `test_fit_a_plane_on_the_table`
     failed once for the agent on the CPU path under load and passed on the rerun.
 
-### I3. The report (M) **(D1)**
+### [x] I3. The report (M) **(D1)**
 - **What:** one page per scan: project and scan, date, calibration and its health (H3), how the
   scan was made (mode, quality, preset), the Check answer at the user's tolerance, the kept
   features with their ± and names, relations, sections, the comparison with the reference, and
@@ -362,13 +362,31 @@ but nothing can be uploaded.
     read in order and a fit named with markup shows as text. The example printed to a 6-page
     PDF; its paging has not been looked at.
   - Tests: 21 on both paths.
-  - **Left:** collecting a scan's data on the server, the pictures of the model, the Report
-    button and the CSV / JSON downloads (the CSV should be written with a byte-order mark so
-    spreadsheets read ± and Ø). The "check again" reason is only in the API's view of the
-    features, so the collector must pass that view. A long section title is cut off in the
-    SVG (`ohs/cad/svg.py`); the report titles drawings itself.
+  - A long section title is cut off in the SVG (`ohs/cad/svg.py`); the report titles drawings
+    itself.
+- **In the app, done 2026-11-17.** `ohs/server/report.py` collects a scan's data, each part
+  from its own manager and only what exists: names, date, version; the processing report; the
+  calibration from the setup state; the Check answer at the tolerance asked for; the kept
+  features as the API shows them (so "check again" is there), the frame, relations and CAD
+  moves; kept sections cut on the current mesh; the kept comparison; a kept seam's flush; the
+  pictures sent along. `POST .../report/report.html`, `features.csv` (with a byte-order mark)
+  and `features.json`. The report is built on request and written nowhere.
+  - *Pictures:* the viewer draws the 3D view once and copies it in the same tick (no permanent
+    drawing buffer), with the fits' labels drawn on; at most 6 pictures, 3 MB each, 12 MB in
+    all. They live in the page until it closes.
+  - *The Download panel's "Report" group:* the tolerance to report against (the Check panel's
+    until edited), "numbers in the part's frame", "Add this view to the report" with the
+    views as small pictures, and Report (HTML), Features (CSV), Features (JSON). The older
+    button is now "Processing report (JSON)", so the two cannot be confused.
+  - At real size (804,372 triangles, a kept plane and a kept section): 0.44 s, a page of
+    22 kB; the scan's folder is byte-identical before and after.
+  - Tests: 13 for the flush and report routes on both paths; 42 UI test files.
+  - **Left:** the report holds one seam (the first, or the one chosen); the features CSV has
+    no seams; the calibration shown is the app's current one, not the one the scan was made
+    with (the recording has its own copy: to use); the printed look with pictures has not
+    been looked at.
 
-### I4. Gap and flush (L, an experiment)
+### [x] I4. Gap and flush (L, an experiment)
 - **What:** between two panels: the user clicks either side of the seam; the engine follows the
   seam, takes a section across it every few millimetres, and reads the gap (edge to edge, in the
   panels' surface) and the flush (the step between the two surfaces). Result: lowest, mean and
@@ -397,8 +415,17 @@ but nothing can be uploaded.
     the seam; the gap is worked out for the record with `GAP_OFFERED = False` and the reason
     in `GAP_NOTE`), `tools/gapflush_study.py` to repeat the study (5.5 minutes), 9 light tests
     on synthetic plates on both paths.
-  - **Left:** the tool in the viewer (two clicks, the flush along the seam as a small chart,
-    "gap: not offered" with the reason). **For gap to become measurable** the depth must stop
+- **In the app, done 2026-11-17.** `POST .../flush` measures from two clicks, one on each
+  panel; kept seams live in `features.json` (`seams`: a name and the two clicks, not the
+  stations) and are measured again when opened; the stations as CSV (`APP_API.md`, "Flush
+  along a seam"). The Flush tool (key U): the mean first, as the number to trust, with "each
+  station ± about …"; lowest and highest and where; which panel stands proud, in words; a
+  small chart of the flush along the seam with its ± band and the untrusted stations hollow;
+  "Gap: not offered" with the engine's reason on hover; Keep, rename, delete. On the model:
+  the clicks, the seam and the stations coloured by flush.
+  - At real size (the study's tracked scan with 2 mm of flush, 190,522 triangles): 0.7 s, 86
+    stations, mean 2.023 mm against a true 1.999 mm.
+  - **For gap to become measurable** the depth must stop
     filling narrow gaps: that is pipeline work (the roadmap's "small holes stay closed"), and
     a real seam, with an inner panel close behind it, may read differently: to be tried on
     the real scanner **(hw)**.
@@ -771,6 +798,31 @@ no object size anywhere in the engine or the app.
   and the voxel, and a large object meets the tracking model's 768 mm cube.
 - **"Auto" suggests a preset** and says why, from the first frames (the detail probe exists).
 - **Surface presets** (dark, shiny): exposure and emitter levels. **(hw)**
+
+---
+
+## Asked for along the way
+
+### X1. Remove the surface the part stands on, for a single scan (M)
+- **Asked by the owner 2026-11-17** ("That sounds cool"), after asking whether scans of a part
+  standing up and lying down lose their table.
+- **Today:** when several scans are merged and "The part was moved or turned over" is chosen,
+  each scan's table is found and left out (`ohs/align/pairwise.py`, the support plane;
+  `ohs/align/merge.py`), with about 2 mm of the part's bottom edge. A single scan keeps its
+  table in the mesh; it is removed by hand with the selection tools on the Process page.
+- **What:** one edit on the Process page, "Remove the table": the app finds the surface the
+  part stands on, shows what it would remove, and removes it as an edit like the others
+  (undo, redo, usable in a recipe, never part of the Default recipe). When no such surface is
+  clear (a scan with no table; a part whose own largest face could be taken for one) it says
+  so and removes nothing.
+- **Measure first:** on the real-size simulated scans with known truth (the bracket on its
+  table, the ball on its table): how much table is left, how much of the part is lost, and
+  how the margin trades the two. The merge's 2 mm is a starting point, not a given: a mesh
+  edit can keep faces that turn away from the table's plane (the part's walls) right down to
+  it.
+- **Test first:** a part on a table with noise: the table goes, the part's faces stay to within
+  the stated margin; a scan without a table is refused in words; a part with a large flat top
+  keeps its top; undo brings the table back bit for bit.
 
 ---
 

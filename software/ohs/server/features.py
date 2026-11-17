@@ -55,6 +55,8 @@ the numbers a click in the viewer gives. This module adds:
 * **kept sections** (FEATURE_PLAN I1) are :mod:`ohs.server.sections`'s: it writes the ``sections``
   list through :meth:`FeatureManager.change_sections` and reads it with :meth:`FeatureManager.snapshot`.
   ``GET .../features`` answers as before, without them.
+* **kept seams** (FEATURE_PLAN I4) are :mod:`ohs.server.flush`'s, in the same way: the ``seams`` list,
+  written through :meth:`FeatureManager.change_seams`. ``GET .../features`` answers as before, without them.
 
 **Locking.** One lock per scan around reading, changing and writing ``features.json``. Fits run
 outside it (they can take a second); a refit is only kept when its feature has not been changed
@@ -516,6 +518,26 @@ class FeatureManager:
                     doc["sections"] = sections
                 else:
                     doc.pop("sections", None)
+                self._save(pid, sid, doc)
+        return out
+
+    def change_seams(self, pid: str, sid: str, fn: Callable[[list[dict], dict], Any]) -> Any:
+        """Change the scan's kept seams (FEATURE_PLAN I4) under the scan's lock, for
+        :mod:`ohs.server.flush`, as :meth:`change_sections` does for the sections: ``fn(seams, doc)``
+        changes copies of the records in place and returns the answer; the list is written only when
+        it changed, and left out of the file when it is empty. An error raised by ``fn`` writes
+        nothing. 404 for an unknown project or scan."""
+        self._dir(pid, sid)
+        with self._lock(pid, sid):
+            doc = self._load(pid, sid)
+            before = list(doc.get("seams") or [])
+            seams = [dict(s) for s in before]
+            out = fn(seams, doc)
+            if seams != before:
+                if seams:
+                    doc["seams"] = seams
+                else:
+                    doc.pop("seams", None)
                 self._save(pid, sid, doc)
         return out
 

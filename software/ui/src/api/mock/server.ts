@@ -26,6 +26,9 @@
  *   when the mesh changes and fitted again on request.
  * - Sections (section.ts): the current mesh cut by a plane with a simple triangle-plane cut of the
  *   demo's own, its DXF and SVG, sections kept per scan (in memory).
+ * - The flush along a seam (flush.ts): a simple reading of the demo's own across a straight seam, its stations as CSV,
+ *   seams kept per scan (in memory); the report (report.ts): a small HTML page of the demo's own, the kept fits as
+ *   CSV and JSON.
  * - References and the comparison with one (reference.ts): files uploaded as the raw body and read in the
  *   browser (STL, OBJ, PLY), a demo part made from a project's scan, the units finding, alignments that move
  *   the centres together, the deviation to points spread over the reference, the answer for a tolerance.
@@ -58,6 +61,8 @@ import { HttpError, json, nowIso, uid, type MockHost, type MockSettings, type Ti
 import { normalizeQuality } from "../../lib/quality";
 import { MockFeatures } from "./features";
 import { MockSections } from "./section";
+import { MockFlush } from "./flush";
+import { MockReport } from "./report";
 import { MockReferences } from "./reference";
 import { MockProcess, mockStep } from "./process";
 import { cameraByIndex, MockSetup } from "./setup";
@@ -233,6 +238,8 @@ class MockBackend {
   private studio: MockProcess;
   private features = new MockFeatures();
   private sections = new MockSections();
+  private flush = new MockFlush();
+  private reports = new MockReport();
   private references = new MockReferences();
   private aligning: MockAlign;
   private previewSeqs: Record<string, number> = {};
@@ -486,6 +493,39 @@ class MockBackend {
             mesh: () => fe.mesh?.() ?? null,
             names: fe.names,
             kept: () => this.features.keptSet(key),
+          });
+          if (r) return r;
+        }
+        if (e === "flush" || e === "seams") {
+          // the flush along a seam (flush.ts): the demo's own simple reading of the current mesh, kept seams in memory
+          const fe = this.studio.featureEngine(p, s);
+          const r = this.flush.route(method, `${p.id}/${s.id}`, e, seg.slice(5), body, { version: fe.version, mesh: () => fe.mesh?.() ?? null, names: fe.names });
+          if (r) return r;
+        }
+        if (e === "report") {
+          // the report (report.ts): the demo's own small HTML page, the kept fits as CSV and JSON
+          const key = `${p.id}/${s.id}`;
+          const fe = this.studio.featureEngine(p, s);
+          const flushEngine = { version: fe.version, mesh: () => fe.mesh?.() ?? null, names: fe.names };
+          const r = await this.reports.route(method, seg.slice(5), body, {
+            names: () => ({ part: p.name, scan: s.name }),
+            hasMesh: () => fe.version() !== null,
+            features: () => this.features.keptView(key, fe.version()),
+            sections: () => (this.sections.kept(key) ?? []).map((x) => ({ name: x.name, description: x.plane.description })),
+            seam: (id) => {
+              const kept = this.flush.kept(key);
+              const pick = id ? kept.filter((x) => x.id === id) : kept;
+              if (id && !pick.length) throw new HttpError(404, `No kept seam “${id}”`, "Read the list again.");
+              for (const k of pick) {
+                try {
+                  const m = this.flush.measureKept(key, k.id, flushEngine);
+                  return { name: k.name, mean: m.record.flush.mean, n_trusted: m.record.flush.n_trusted, n_stations: m.record.flush.n_stations };
+                } catch {
+                  /* not measurable on this mesh: the next one */
+                }
+              }
+              return null;
+            },
           });
           if (r) return r;
         }

@@ -12,7 +12,9 @@
   ``.../features/cad`` (:mod:`ohs.server.cad`), and the sections of a scan ``.../section`` and
   ``.../sections`` (:mod:`ohs.server.sections`), and a project's reference models
   ``/api/projects/{pid}/references`` with a scan's comparison with one ``.../comparison``
-  (:mod:`ohs.server.reference`);
+  (:mod:`ohs.server.reference`), the flush along a seam ``.../flush`` and ``.../seams``
+  (:mod:`ohs.server.flush`), and the scan's report ``.../report/{report.html | features.csv |
+  features.json}`` (:mod:`ohs.server.report`);
 * ``/api/ws/live``: ``hello``, then the current ``device`` / ``session`` / ``calib_session`` /
   ``setup`` / active ``job`` messages, then everything the :class:`~ohs.server.hub.Hub`
   publishes for this client; ``subscribe`` messages from the client set its options;
@@ -53,8 +55,10 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from ohs import __version__
 from ohs.server.cad import CadExport
 from ohs.server.features import FeatureManager
+from ohs.server.flush import FlushManager
 from ohs.server.protocol import PROTOCOL_VERSION, ApiError, dumps, jsonable
 from ohs.server.reference import ReferenceManager
+from ohs.server.report import ReportManager
 from ohs.server.sections import SectionManager
 from ohs.server.studio import Studio
 
@@ -247,6 +251,37 @@ class SectionKeepBody(SectionPlaneBody):
 class SectionPatchBody(BaseModel):
     name: Optional[str] = Field(None, max_length=80)
     recut: bool = False  # mark it as cut on the current mesh
+
+
+class FlushBody(BaseModel):
+    """Two clicks, one on each panel near the seam (APP_API.md "Flush along a seam"; checked by ohs.server.flush)."""
+
+    a: List[float] = Field(min_length=3, max_length=3)  # on the first panel (panel A), the scan's frame, mm
+    b: List[float] = Field(min_length=3, max_length=3)  # on the second panel (panel B)
+
+
+class SeamKeepBody(FlushBody):
+    name: Optional[str] = Field(None, max_length=80)  # default "Seam N"
+
+
+class SeamPatchBody(BaseModel):
+    name: Optional[str] = Field(None, max_length=80)
+    mark_current: bool = False  # mark it as measured on the current mesh
+
+
+class ReportPictureBody(BaseModel):
+    title: str = Field(min_length=1, max_length=120)
+    caption: Optional[str] = Field(None, max_length=500)
+    data: str  # the picture's bytes (PNG) in base64; limits in ohs.server.report
+
+
+class ReportBody(BaseModel):
+    """What the report holds beyond the scan's own data (APP_API.md "The report")."""
+
+    tolerance_mm: Optional[float] = Field(None, gt=0.0, le=100.0)  # the Check answer at this tolerance; none: left out
+    numbers_in_part_frame: bool = False  # the fits' positions and directions in the part's frame
+    seam: Optional[str] = None  # the kept seam whose flush is shown (default: the first)
+    pictures: List[ReportPictureBody] = Field(default_factory=list)  # views of the model
 
 
 class CheckBody(BaseModel):
@@ -865,6 +900,59 @@ def create_app(config: Any = None, *, projects_dir: Any = None, static_dir: Any 
     @app.post(cpath + "/tolerance")
     def comparison_tolerance(pid: str, sid: str, body: ComparisonToleranceBody) -> JSONResponse:
         return _json(refs.tolerance(pid, sid, body.tolerance_mm, body.k))
+
+    # ------------------------------------------------------------------ flush along a seam (FEATURE_PLAN I4, ohs/server/flush.py)
+    flush = FlushManager(feats)
+
+    def _csv_file(data: bytes, filename: str, version: int) -> Response:
+        return Response(data, media_type="text/csv; charset=utf-8",
+                        headers={"Cache-Control": "no-cache", "X-OHS-Mesh-Version": str(version),
+                                 "Content-Disposition": f'attachment; filename="{filename}"'})
+
+    # the engine's record is plain JSON already: sent as it is
+    @app.post(spath + "/flush")
+    def flush_measure(pid: str, sid: str, body: FlushBody) -> JSONResponse:
+        return JSONResponse(flush.flush(pid, sid, body.a, body.b))
+
+    @app.get(spath + "/flush/{name}")
+    def flush_file(pid: str, sid: str, name: str, request: Request) -> Response:
+        return _csv_file(*flush.file(pid, sid, name, dict(request.query_params)))
+
+    @app.get(spath + "/seams")
+    def seams_list(pid: str, sid: str) -> JSONResponse:
+        return _json(flush.list(pid, sid))
+
+    @app.post(spath + "/seams")
+    def seams_keep(pid: str, sid: str, body: SeamKeepBody) -> JSONResponse:
+        return _json(flush.keep(pid, sid, body.a, body.b, body.name))
+
+    @app.get(spath + "/seams/{xid}")
+    def seams_get(pid: str, sid: str, xid: str) -> JSONResponse:
+        return JSONResponse(flush.get(pid, sid, xid))
+
+    @app.get(spath + "/seams/{xid}/{name}")
+    def seams_file(pid: str, sid: str, xid: str, name: str) -> Response:
+        return _csv_file(*flush.kept_file(pid, sid, xid, name))
+
+    @app.patch(spath + "/seams/{xid}")
+    def seams_update(pid: str, sid: str, xid: str, body: SeamPatchBody) -> JSONResponse:
+        return _json(flush.update(pid, sid, xid, body.name, body.mark_current))
+
+    @app.delete(spath + "/seams/{xid}")
+    def seams_delete(pid: str, sid: str, xid: str) -> Response:
+        flush.delete(pid, sid, xid)
+        return Response(status_code=204)
+
+    # ------------------------------------------------------------------ the report (FEATURE_PLAN I3, ohs/server/report.py)
+    rep = ReportManager(feats, cad, secs, refs, flush)
+    app.state.report = rep
+
+    @app.post(spath + "/report/{name}")
+    def report_file(pid: str, sid: str, name: str, body: Optional[ReportBody] = None) -> Response:
+        opts = body.model_dump() if body is not None else {}
+        data, filename, media = rep.file(pid, sid, name, opts)
+        return Response(data, media_type=media, headers={"Cache-Control": "no-cache",
+                                                         "Content-Disposition": f'attachment; filename="{filename}"'})
 
     @app.get("/api/projects/{pid}/scans/{sid}/process/trajectory.json")
     def process_trajectory(pid: str, sid: str) -> JSONResponse:

@@ -61,6 +61,13 @@ import type {
   SectionFile,
   SectionPlaneDef,
   SectionRequest,
+  FlushAnswer,
+  FlushRequest,
+  KeptSeam,
+  KeptSeams,
+  NewSeam,
+  ReportFile,
+  ReportRequest,
   HoleOutline,
   Job,
   LaserInfo,
@@ -450,6 +457,41 @@ export const api = {
   deleteSection: (pid: string, sid: string, id: string) => del(`${scanPath(pid, sid)}/sections/${enc(id)}`),
   /** URL of a kept section's DXF or SVG, cut on the current mesh. */
   keptSectionFileUrl: (pid: string, sid: string, id: string, name: SectionFile) => `${scanPath(pid, sid)}/sections/${enc(id)}/${name}`,
+
+  // ---------------------------------------------------------------- flush along a seam (FEATURE_PLAN I4)
+  /** The flush along the seam between the panels of two clicks, on the current mesh (APP_API.md "Flush along a seam"). */
+  flush: (pid: string, sid: string, body: FlushRequest) => post<FlushAnswer>(`${scanPath(pid, sid)}/flush`, body),
+  /** URL of the stations as CSV for two clicks. */
+  flushStationsUrl: (pid: string, sid: string, body: FlushRequest) =>
+    `${scanPath(pid, sid)}/flush/stations.csv?a=${enc(body.a.join(","))}&b=${enc(body.b.join(","))}`,
+  /** The kept seams, each with `mesh_changed`. */
+  seams: (pid: string, sid: string) => get<KeptSeams>(`${scanPath(pid, sid)}/seams`),
+  /** Keep a seam (its two clicks, the current mesh version). */
+  keepSeam: (pid: string, sid: string, body: NewSeam) => post<KeptSeam>(`${scanPath(pid, sid)}/seams`, body),
+  /** A kept seam measured again on the current mesh, with `kept` (and a warning when the mesh has changed). */
+  keptSeam: (pid: string, sid: string, id: string) => get<FlushAnswer>(`${scanPath(pid, sid)}/seams/${enc(id)}`),
+  /** Rename a kept seam, and/or mark it as measured on the current mesh. */
+  updateSeam: (pid: string, sid: string, id: string, body: { name?: string; mark_current?: boolean }) => patch<KeptSeam>(`${scanPath(pid, sid)}/seams/${enc(id)}`, body),
+  deleteSeam: (pid: string, sid: string, id: string) => del(`${scanPath(pid, sid)}/seams/${enc(id)}`),
+  /** URL of a kept seam's stations as CSV, measured on the current mesh. */
+  keptSeamStationsUrl: (pid: string, sid: string, id: string) => `${scanPath(pid, sid)}/seams/${enc(id)}/stations.csv`,
+
+  // ---------------------------------------------------------------- the report (FEATURE_PLAN I3)
+  /** The scan's report as a file made on request (APP_API.md "The report"): the HTML page, or the kept features as
+   * CSV or JSON. A POST (it carries the pictures), so the file comes back here and the caller saves it. */
+  async reportFile(pid: string, sid: string, name: ReportFile, body: ReportRequest): Promise<{ blob: Blob; filename: string }> {
+    const path = `${scanPath(pid, sid)}/report/${name}`;
+    let res: Response;
+    try {
+      res = await fetchImpl(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    } catch {
+      throw new ApiError(0, "Can't reach the OpenHandScan engine", UNREACHABLE_HINT, path);
+    }
+    if (!res.ok) throw await toApiError(res, path);
+    const cd = res.headers.get("content-disposition") ?? "";
+    const m = /filename="([^"]+)"/.exec(cd);
+    return { blob: await res.blob(), filename: m ? m[1] : name };
+  },
 
   // ---------------------------------------------------------------- a reference model and the comparison with it (FEATURE_PLAN I2)
   /** The project's reference models, oldest first. */

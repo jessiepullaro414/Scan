@@ -287,6 +287,11 @@ export class MockSections {
     return s;
   }
 
+  /** A scan's kept sections (for the report, report.ts). */
+  kept(key: string): KeptRecord[] {
+    return this.list(key);
+  }
+
   private mesh(engine: SectionEngine): { version: number; mesh: SectionMesh } {
     const version = engine.version();
     const mesh = engine.mesh();

@@ -1080,6 +1080,93 @@ export type KeptSections = { mesh_version: number | null; sections: KeptSection[
 export type NewSection = SectionPlaneDef & { name?: string };
 export type SectionFile = "section.dxf" | "section.svg";
 
+// ------------------------------------------------------------------ flush along a seam (FEATURE_PLAN I4)
+// APP_API.md "Flush along a seam": the step between two panels from two clicks, one on each panel near the seam.
+
+/** Where a side of a station's section was read: on measured surface up to its edge, into filled (not measured)
+ * surface, across the gap (the scan has closed it there), or no surface at all. */
+export type FlushSide = "measured" | "filled" | "bridged" | "missing";
+/** One section across the seam (ohs.inspect.gapflush GapFlushStation.to_dict()); lengths in mm, the scan's frame. */
+export type FlushStation = {
+  position_mm: number; // along the seam from the clicks
+  point: number[]; // the seam's middle on the first panel's surface line
+  direction: number[]; // the seam's direction here
+  normal: number[]; // the first panel's normal here
+  gap_mm: number | null; // worked out for the record; not offered (see gap_offered)
+  gap_sigma_mm: number | null;
+  flush_mm: number | null; // + : the second panel stands above the first
+  flush_sigma_mm: number | null; // 1σ, the spread from scan to scan
+  edge_a: number[] | null;
+  edge_b: number[] | null;
+  side_a: FlushSide;
+  side_b: FlushSide;
+  bridged: boolean;
+  gap_trusted: boolean;
+  flush_trusted: boolean;
+  notes: string[]; // why a reading is not trusted, in words
+  gap_by_rule: Record<string, number | null>;
+  n_points_a: number;
+  n_points_b: number;
+  rms_a_mm: number | null;
+  rms_b_mm: number | null;
+};
+/** Lowest, mean and highest over the trusted stations, with where along the seam (null: none trusted). */
+export type SeamStats = {
+  lowest: number | null;
+  lowest_at_mm: number | null;
+  mean: number | null;
+  highest: number | null;
+  highest_at_mm: number | null;
+  n_trusted: number;
+  n_stations: number;
+};
+/** ohs.inspect.gapflush GapFlush.to_dict(): the engine's record. */
+export type FlushRecord = {
+  format_version: number;
+  units: "mm";
+  rule: string;
+  step_mm: number;
+  flush_sign: string;
+  gap: SeamStats; // for the record only
+  flush: SeamStats;
+  gap_offered: boolean; // false: the app shows the flush alone and says why (gap_note)
+  gap_note: string;
+  correlated_points: number;
+  clicks: number[][];
+  stations: FlushStation[];
+};
+export type FlushAnswer = FlushRecord & {
+  mesh_version: number;
+  warnings: string[]; // the mesh changed since a kept seam was kept; stations not trusted
+  filename: string; // the stations CSV's download name
+  kept: KeptSeam | null; // GET .../seams/{id}: the kept record; else null
+};
+export type FlushRequest = { a: [number, number, number]; b: [number, number, number] };
+export type KeptSeam = {
+  id: string; // "sm-…"
+  name: string; // "Seam N" unless the user named it
+  a: [number, number, number]; // the click on the first panel (panel A)
+  b: [number, number, number]; // the click on the second panel
+  mesh_version: number; // the mesh version it was last measured on
+  created: string;
+  mesh_changed: boolean; // the current mesh is not that one
+};
+export type KeptSeams = { mesh_version: number | null; seams: KeptSeam[] };
+export type NewSeam = FlushRequest & { name?: string };
+
+// ------------------------------------------------------------------ the report (FEATURE_PLAN I3)
+// APP_API.md "The report": the scan's data as one self-contained HTML page, the kept features as CSV and JSON.
+
+export type ReportFile = "report.html" | "features.csv" | "features.json";
+/** A view of the model for the report: PNG bytes in base64 (no "data:" prefix). */
+export type ReportPicture = { title: string; caption?: string | null; data: string };
+export type ReportRequest = {
+  tolerance_mm?: number | null; // the Check answer at this tolerance; left out without one
+  numbers_in_part_frame?: boolean;
+  seam?: string | null; // the kept seam shown (default: the first)
+  pictures?: ReportPicture[];
+};
+
 // ------------------------------------------------------------------ M5 second slice: the deviation map
 // APP_API.md "M5 second slice: the deviation map". Compares the current mesh with the base mesh.
 

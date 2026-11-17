@@ -122,6 +122,11 @@ export class MockFeatures {
     return { features: s.features, frame: s.frame };
   }
 
+  /** A scan's kept set as `GET .../features` shows it (for the report, report.ts). */
+  keptView(key: string, version: number | null): FeatureSet {
+    return this.view(this.kept(key), version);
+  }
+
   private view(s: Stored, version: number | null): FeatureSet {
     const stale = (v: number | null) => version === null || v !== version;
     return {
