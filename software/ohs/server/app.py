@@ -6,7 +6,8 @@
   M1's plus M2's ``/api/setup/*``, ``/api/settings/camera``, ``/api/settings/process``, ``/api/settings/lasers``
   and ``/api/calibration/*``
   (:mod:`ohs.server.setup`, :mod:`ohs.server.calibration`), and M3's processing studio
-  ``/api/projects/{pid}/scans/{sid}/process/*`` and ``/api/recipes`` (:mod:`ohs.server.processing`);
+  ``/api/projects/{pid}/scans/{sid}/process/*`` and ``/api/recipes`` (:mod:`ohs.server.processing`),
+  and the kept fits and measurements ``/api/projects/{pid}/scans/{sid}/features`` (:mod:`ohs.server.features`);
 * ``/api/ws/live``: ``hello``, then the current ``device`` / ``session`` / ``calib_session`` /
   ``setup`` / active ``job`` messages, then everything the :class:`~ohs.server.hub.Hub`
   publishes for this client; ``subscribe`` messages from the client set its options;
@@ -45,6 +46,7 @@ from pydantic import BaseModel, Field
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from ohs import __version__
+from ohs.server.features import FeatureManager
 from ohs.server.protocol import PROTOCOL_VERSION, ApiError, dumps, jsonable
 from ohs.server.studio import Studio
 
@@ -158,6 +160,31 @@ class FitBody(BaseModel):
     point: list[float] = Field(min_length=3, max_length=3)
     tolerance_mm: Optional[float] = Field(None, gt=0.0, le=10.0)
     version: Optional[int] = None  # the mesh version the click was made on
+
+
+class FeatureFitBody(FitBody):
+    name: Optional[str] = Field(None, max_length=80)  # default "Fit N"
+
+
+class MeasurementBody(BaseModel):
+    a: list[float] = Field(min_length=3, max_length=3)
+    b: list[float] = Field(min_length=3, max_length=3)
+    version: Optional[int] = Field(None, ge=0)  # the mesh version the points were picked on
+    name: Optional[str] = Field(None, max_length=80)  # default "Distance N"
+
+
+class RelationBody(BaseModel):
+    a: str
+    b: str
+    name: Optional[str] = Field(None, max_length=80)  # default "Relation N"
+
+
+class RenameBody(BaseModel):
+    name: str = Field(min_length=1, max_length=80)
+
+
+class RefitBody(BaseModel):
+    ids: Optional[list[str]] = None  # None: every stale feature
 
 
 class CheckBody(BaseModel):
@@ -537,6 +564,44 @@ def create_app(config: Any = None, *, projects_dir: Any = None, static_dir: Any 
     @app.post("/api/projects/{pid}/scans/{sid}/fit")
     def scan_fit(pid: str, sid: str, body: FitBody) -> JSONResponse:
         return _json(proc.fit(pid, sid, body.kind, body.face, body.point, body.tolerance_mm, body.version))
+
+    # ------------------------------------------------------------------ kept features (FEATURE_PLAN K1)
+    feats = FeatureManager(st)
+    fpath = "/api/projects/{pid}/scans/{sid}/features"
+
+    @app.get(fpath)
+    def features_get(pid: str, sid: str) -> JSONResponse:
+        return _json(feats.get(pid, sid))
+
+    @app.post(fpath)
+    def features_add_fit(pid: str, sid: str, body: FeatureFitBody) -> JSONResponse:
+        return _json(feats.add_fit(pid, sid, body.kind, body.face, body.point, body.tolerance_mm, body.version,
+                                   body.name))
+
+    @app.post(fpath + "/measurements")
+    def features_add_measurement(pid: str, sid: str, body: MeasurementBody) -> JSONResponse:
+        return _json(feats.add_measurement(pid, sid, body.a, body.b, body.version, body.name))
+
+    @app.post(fpath + "/relations")
+    def features_add_relation(pid: str, sid: str, body: RelationBody) -> JSONResponse:
+        return _json(feats.add_relation(pid, sid, body.a, body.b, body.name))
+
+    @app.post(fpath + "/refit")
+    def features_refit(pid: str, sid: str, body: Optional[RefitBody] = None) -> JSONResponse:
+        return _json(feats.refit(pid, sid, body.ids if body is not None else None))
+
+    @app.patch(fpath + "/{fid}")
+    def features_rename(pid: str, sid: str, fid: str, body: RenameBody) -> JSONResponse:
+        return _json(feats.rename(pid, sid, fid, body.name))
+
+    @app.delete(fpath + "/{fid}")
+    def features_delete(pid: str, sid: str, fid: str) -> Response:
+        feats.delete(pid, sid, fid)
+        return Response(status_code=204)
+
+    @app.get(fpath + "/{fid}/faces")
+    def features_faces(pid: str, sid: str, fid: str) -> JSONResponse:
+        return _json(feats.faces(pid, sid, fid))
 
     @app.get("/api/projects/{pid}/scans/{sid}/process/trajectory.json")
     def process_trajectory(pid: str, sid: str) -> JSONResponse:

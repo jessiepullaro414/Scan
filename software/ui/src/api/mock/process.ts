@@ -41,6 +41,7 @@ import type {
 import { encodeFaces } from "../../lib/fits";
 import { normalizeQuality } from "../../lib/quality";
 import { weakAreas } from "./check";
+import type { FeatureEngine } from "./features";
 import { mockFit } from "./fit";
 import { apply, stlMesh } from "./geom";
 import { HttpError, json, nowIso, uid, type MockHost, type WorkStep } from "./host";
@@ -366,6 +367,38 @@ export class MockProcess {
       correlated_points: null, // nor does it measure how its points err together
       warnings: r.warnings,
       version: st.version,
+    };
+  }
+
+  /** What the kept features (features.ts) need of this scan: its fits, its mesh version, and the face
+   * nearest a saved click on the current mesh (by the faces' centres). */
+  featureEngine(p: Project, s: Scan): FeatureEngine {
+    return {
+      fit: (body) => this.fit(p, s, body),
+      version: () => {
+        const st = this.ensure(p, s);
+        return st.current ? st.version : null;
+      },
+      nearestFace: (q) => {
+        const m = this.ensure(p, s).current;
+        if (!m) return 0;
+        const P = m.positions,
+          I = m.indices;
+        let best = 0,
+          bd = Infinity;
+        for (let f = 0, t = 0; t < I.length; f++, t += 3) {
+          let d = 0;
+          for (let k = 0; k < 3; k++) {
+            const c = (P[I[t] * 3 + k] + P[I[t + 1] * 3 + k] + P[I[t + 2] * 3 + k]) / 3 - q[k];
+            d += c * c;
+          }
+          if (d < bd) {
+            bd = d;
+            best = f;
+          }
+        }
+        return best;
+      },
     };
   }
 

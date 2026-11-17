@@ -22,9 +22,19 @@ import type {
   DevicesProbe,
   EditBody,
   Emitters,
+  FeatureFaces,
+  FeatureSet,
   FitRequest,
   FitResult,
   Health,
+  KeptFeature,
+  KeptFit,
+  KeptMeasurement,
+  KeptRelation,
+  NewFeature,
+  NewMeasurement,
+  NewRelation,
+  RefitResult,
   HoleOutline,
   Job,
   LaserInfo,
@@ -317,6 +327,24 @@ export const api = {
    * for a face outside the mesh or when no such shape is there (the detail says why, the hint what to
    * try). `faces` stays base64: decode it once with `decodeFaces` (lib/fits.ts). */
   fit: (pid: string, sid: string, body: FitRequest) => post<FitResult>(`${scanPath(pid, sid)}/fit`, body),
+
+  // ---------------------------------------------------------------- kept features (fits, measurements, relations)
+  /** The scan's kept set; each fit and measurement made on another mesh version is marked `stale`. */
+  features: (pid: string, sid: string) => get<FeatureSet>(`${scanPath(pid, sid)}/features`),
+  /** Fit as `fit` does and keep it with the scan (the same 409 / 422 answers). */
+  keepFit: (pid: string, sid: string, body: NewFeature) => post<KeptFit>(`${scanPath(pid, sid)}/features`, body),
+  keepMeasurement: (pid: string, sid: string, body: NewMeasurement) => post<KeptMeasurement>(`${scanPath(pid, sid)}/features/measurements`, body),
+  /** 422 unless `a` and `b` are two different kept fits. */
+  keepRelation: (pid: string, sid: string, body: NewRelation) => post<KeptRelation>(`${scanPath(pid, sid)}/features/relations`, body),
+  /** A new name for a fit, measurement or relation (1 to 80 characters). */
+  renameFeature: (pid: string, sid: string, id: string, name: string) =>
+    patch<KeptFeature | KeptMeasurement | KeptRelation>(`${scanPath(pid, sid)}/features/${enc(id)}`, { name }),
+  /** A fit takes its relations with it. */
+  deleteFeature: (pid: string, sid: string, id: string) => del(`${scanPath(pid, sid)}/features/${enc(id)}`),
+  /** A kept fit's region, valid on the mesh version it says. */
+  featureFaces: (pid: string, sid: string, id: string) => get<FeatureFaces>(`${scanPath(pid, sid)}/features/${enc(id)}/faces`),
+  /** Fit the stale fits again on the current mesh, from their saved clicks; those that can't be stay marked. */
+  refitFeatures: (pid: string, sid: string, ids?: string[]) => post<RefitResult>(`${scanPath(pid, sid)}/features/refit`, ids ? { ids } : {}),
 
   // ---------------------------------------------------------------- M5: areas that need another pass
   /** Which parts of the current mesh miss a tolerance (above 0, at most 100 mm): the share of the surface

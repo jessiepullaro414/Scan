@@ -22,6 +22,8 @@
  *   server's rules; a merge adds a new scan to the project.
  * - M5: fitted shapes (fit.ts): a plane, cylinder or hole where the viewer was clicked; and Check
  *   (check.ts): the areas that miss a tolerance, from a made-up sigma that mesh.ply carries too.
+ * - Kept features (features.ts): fits, measurements and relations kept per scan (in memory), marked
+ *   when the mesh changes and fitted again on request.
  *
  * Options in the URL: `empty=1` (no projects), `fast=1` (short jobs), `drift=1` (the launch check
  * after a connect finds drift), `nopico=1` (the camera connects without the Pico).
@@ -49,6 +51,7 @@ import { MockAlign } from "./align";
 import { MockCalib } from "./calib";
 import { HttpError, json, nowIso, uid, type MockHost, type MockSettings, type TimedJobSpec, type WorkJobSpec, type WorkStep } from "./host";
 import { normalizeQuality } from "../../lib/quality";
+import { MockFeatures } from "./features";
 import { MockProcess, mockStep } from "./process";
 import { cameraByIndex, MockSetup } from "./setup";
 import {
@@ -221,6 +224,7 @@ class MockBackend {
   private setup: MockSetup;
   private calib: MockCalib;
   private studio: MockProcess;
+  private features = new MockFeatures();
   private aligning: MockAlign;
   private previewSeqs: Record<string, number> = {};
   private session: SessionState = { state: "idle", project_id: null, scan_id: null, mode: "markerless", elapsed_s: 0, frames: 0 };
@@ -441,6 +445,11 @@ class MockBackend {
           if (r) return r;
         }
         if (e === "fit" && is("POST", 5)) return json(200, this.studio.fit(p, s, body)); // M5 fitted shapes
+        if (e === "features") {
+          // kept fits, measurements and relations (features.ts)
+          const r = this.features.route(method, `${p.id}/${s.id}`, seg.slice(5), body, this.studio.featureEngine(p, s));
+          if (r) return r;
+        }
         if (e === "check" && is("POST", 5)) return json(200, this.studio.check(p, s, body)); // M5 areas that need another pass
         if (e === "files" && f && (is("GET", 6) || is("HEAD", 6))) return this.file(p, s, f, method === "HEAD");
       }

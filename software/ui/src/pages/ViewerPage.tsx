@@ -2,7 +2,8 @@
  * Scan result viewer: loads `mesh.ply` from the engine (the fast PLY reader), studio shading,
  * wireframe, normals, the confidence map (each point's sigma, when the mesh has them) and
  * laser-point overlays, two-click distance measurement, fitted shapes (plane, cylinder, hole: one
- * click, the engine fits it, with its ± and the relation of two fits), the Check panel (which areas
+ * click, the engine fits it, with its ± and the relation of two fits; fits, measurements and relations
+ * are kept with the scan, with names, through store/features.ts), the Check panel (which areas
  * miss the tolerance the part needs), bounding box in mm, downloads and the processing report.
  */
 import {
@@ -32,7 +33,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import type { BufferGeometry } from "three";
 import { PLYLoader } from "three/examples/jsm/loaders/PLYLoader.js";
 import { ApiError, api } from "../api/http";
-import type { FitKind, FitResult, Project, Scan } from "../api/types";
+import type { FitKind, KeptFeature, KeptFit, Project, Scan } from "../api/types";
 import { JobProgress, MakeMeshButton, ProcessButton, ScanStatusBadge } from "../components/ScanBits";
 import { ErrorBoundary } from "../components/shell/ErrorBoundary";
 import { Button, IconButton } from "../components/ui/Button";
@@ -40,12 +41,13 @@ import { EmptyState, Kbd, ProgressBar, Skeleton, Spinner } from "../components/u
 import { Segmented } from "../components/ui/Form";
 import { KeyValue } from "../components/ui/Layout";
 import { downloadFile } from "../lib/download";
-import { decodeFaces, fitLabel, fitName, regionTriangles, summarizeRegion } from "../lib/fits";
+import { decodeFaces, fitLabel, fitName, regionTriangles, summarizeRegion, type RegionSummary } from "../lib/fits";
 import { fileStem, fmtBytes, fmtCompact, fmtDateTime, fmtDuration, fmtFixed, fmtInt, fmtPct } from "../lib/format";
 import { hasLaserValues } from "../lib/lasers";
 import { href, navigate, paths } from "../lib/router";
 import { describeReason } from "../lib/tracking";
 import { cn, useHotkeys } from "../lib/util";
+import { featuresKey, useFeatures } from "../store/features";
 import { isActive, useScanJob } from "../store/jobs";
 import { processKey, useProcess } from "../store/process";
 import { useProjects } from "../store/projects";
@@ -62,6 +64,7 @@ import { useDeviation } from "./viewer/useDeviation";
 import { useLasers } from "./viewer/useLasers";
 import { FIT_ICON, FitList } from "./viewer/FitsPanel";
 import type { FitItem } from "./viewer/FitTool";
+import { NameEdit } from "./viewer/NameEdit";
 import { fmtSigma, ViewerCanvas, type Measurement, type Shading, type Vec3 } from "./viewer/ViewerCanvas";
 
 type Load =
@@ -179,8 +182,14 @@ function Panel({ title, icon: Icon, children, aside }: { title: string; icon: ty
   );
 }
 
-let measureId = 1;
-let fitId = 1;
+/** A kept fit's region on one mesh on screen (its geometry's uuid): the triangles, and where to draw the label. */
+type Region = { meshId: string; version: number; tris: Uint32Array; region: RegionSummary };
+
+/** A fit's region (base64 face indices of mesh.ply) on the mesh on screen; throws when it doesn't match that mesh. */
+function regionOn(g: BufferGeometry, faces: string, f: Pick<KeptFeature, "shape" | "seed" | "mesh_version">): Region {
+  const tris = regionTriangles(decodeFaces(faces), g.index!.array, (g.userData.faceOfTri as Uint32Array | null | undefined) ?? null, g.userData.faceCount as number | undefined);
+  return { meshId: g.uuid, version: f.mesh_version, tris, region: summarizeRegion(tris, g.getAttribute("position").array, f.shape, f.seed.point) };
+}
 
 const FIT_HINT: Record<FitKind, string> = {
   plane: "Click a flat face to fit a plane",
@@ -207,18 +216,18 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
   const [wireframe, setWireframe] = useState(false);
   const [showLaser, setShowLaser] = useState(false);
   const [measure, setMeasure] = useState(false);
-  const [measurements, setMeasurements] = useState<Measurement[]>([]);
   const [pending, setPending] = useState<Vec3 | null>(null);
   const [fitOn, setFitOn] = useState(false);
   const [fitKind, setFitKind] = useState<FitKind>("plane");
-  /** Every fit of this visit; those made on an earlier mesh stay listed, marked so. */
-  const [fits, setFits] = useState<FitItem[]>([]);
+  /** The fits, measurements and relations kept with the scan (those made on an earlier mesh stay, marked so). */
+  const kept = useFeatures((s) => s.entries[featuresKey(pid, sid)]?.set ?? null);
+  const refitting = useFeatures((s) => s.entries[featuresKey(pid, sid)]?.refitting ?? false);
+  /** The kept fits' regions on the mesh on screen, by feature id (read once per mesh). */
+  const [regions, setRegions] = useState<Record<string, Region>>({});
   const [fitBusy, setFitBusy] = useState<{ p: Vec3; kind: FitKind } | null>(null);
-  /** Fits picked for a relation (two at most, the latest kept). */
-  const [pickedFits, setPickedFits] = useState<number[]>([]);
+  /** Fits picked for a relation (their ids; two at most, the latest kept). */
+  const [pickedFits, setPickedFits] = useState<string[]>([]);
   const geomRef = useRef<BufferGeometry | null>(null);
-  const fitsRef = useRef(fits);
-  fitsRef.current = fits;
   const fitRunning = useRef(false);
 
   useEffect(() => {
@@ -363,18 +372,21 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
       setPending(null);
     }
   }, [measure]);
-  const onPick = useCallback((p: Vec3) => {
-    const a = pendingRef.current;
-    if (!a) {
-      pendingRef.current = p;
-      setPending(p);
-      return;
-    }
-    const m: Measurement = { id: measureId++, a, b: p };
-    pendingRef.current = null;
-    setPending(null);
-    setMeasurements((all) => [...all, m]);
-  }, []);
+  const onPick = useCallback(
+    (p: Vec3) => {
+      const a = pendingRef.current;
+      if (!a) {
+        pendingRef.current = p;
+        setPending(p);
+        return;
+      }
+      pendingRef.current = null;
+      setPending(null);
+      const version = geomRef.current?.userData.meshVersion;
+      void useFeatures.getState().keepMeasurement(pid, sid, typeof version === "number" ? { a, b: p, version } : { a, b: p });
+    },
+    [pid, sid],
+  );
 
   // Measure and Fit are one tool at a time.
   const pickTool = (t: "measure" | "fit" | null) => {
@@ -391,45 +403,27 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
     setReloadKey((k) => k + 1);
   }, []);
 
-  /** A fit's answer: its region decoded once, mapped onto the mesh it was asked on, and summed up. */
+  /** A fit just kept: its region decoded once and mapped onto the mesh it was asked on. */
   const addFit = useCallback(
-    (r: FitResult, g: BufferGeometry, asked: FitKind, click: Vec3) => {
-      let tris: Uint32Array;
-      try {
-        const faces = decodeFaces(r.faces);
-        tris = regionTriangles(faces, g.index!.array, (g.userData.faceOfTri as Uint32Array | null | undefined) ?? null, g.userData.faceCount as number | undefined);
-      } catch (e) {
-        toast.error("The fit's region doesn't match the mesh on screen", e, { label: "Reload the mesh", run: reloadInPlace });
-        return;
-      }
-      // The fits on the mesh on screen share one version: another one means the engine's mesh changed meanwhile.
-      if (fitsRef.current.some((f) => f.meshId === g.uuid && f.version !== r.version)) {
-        toast.warn("The mesh changed since the viewer opened it", `The engine fitted version ${r.version}, not the one shown.`, "Reloading it: click again to fit.");
+    (r: KeptFit, g: BufferGeometry) => {
+      // the mesh on screen has a known version: the engine fitted another one only when it changed meanwhile
+      const shown = g.userData.meshVersion;
+      if (typeof shown === "number" && shown !== r.mesh_version) {
+        toast.warn("The mesh changed since the viewer opened it", `The engine fitted version ${r.mesh_version}, not the one shown. The fit is kept.`, "Reloading the mesh.");
         reloadInPlace();
         return;
       }
-      const kind = r.kind ?? asked;
-      const item: FitItem = {
-        id: fitId++,
-        kind,
-        shape: r.shape,
-        nFaces: r.n_faces,
-        tolerance: r.tolerance_mm ?? null,
-        meanSigma: r.mean_sigma_mm ?? null,
-        correlated: r.correlated_points ?? null,
-        warnings: r.warnings ?? [],
-        version: r.version,
-        meshId: g.uuid,
-        tris,
-        region: summarizeRegion(tris, g.getAttribute("position").array, r.shape, click),
-        label: fitLabel(kind, r.shape),
-      };
-      setFits((all) => [...all, item]);
+      try {
+        const reg = regionOn(g, r.faces, r);
+        setRegions((all) => ({ ...all, [r.id]: reg }));
+      } catch (e) {
+        toast.error("The fit's region doesn't match the mesh on screen", e, { label: "Reload the mesh", run: reloadInPlace });
+      }
     },
     [reloadInPlace],
   );
 
-  /** One click with the Fit tool: ask the engine (one at a time). */
+  /** One click with the Fit tool: ask the engine to fit and keep it (one at a time). */
   const onFitPick = useCallback(
     (p: Vec3, face: number) => {
       const g = geomRef.current;
@@ -439,9 +433,10 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
       // the version of the mesh on screen, when known: the engine refuses the click (409) if it changed since
       const version = typeof g.userData.meshVersion === "number" ? (g.userData.meshVersion as number) : undefined;
       setFitBusy({ p, kind });
-      api
-        .fit(pid, sid, version === undefined ? { kind, face, point: p } : { kind, face, point: p, version })
-        .then((r) => addFit(r, g, kind, p))
+      useFeatures
+        .getState()
+        .keepFit(pid, sid, version === undefined ? { kind, face, point: p } : { kind, face, point: p, version })
+        .then((r) => addFit(r, g))
         .catch((e: unknown) => {
           if (e instanceof ApiError && e.status === 409 && version !== undefined) {
             toast.warn("The mesh changed since it was loaded", "The viewer is reloading it.", "Click again once it shows.");
@@ -455,11 +450,12 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
     },
     [pid, sid, fitKind, addFit, reloadInPlace],
   );
-  const removeFit = (id: number) => {
-    setFits((all) => all.filter((f) => f.id !== id));
+  const removeFit = (id: string) => {
+    void useFeatures.getState().remove(pid, sid, id);
     setPickedFits((ids) => ids.filter((x) => x !== id));
   };
-  const togglePick = (id: number) => setPickedFits((ids) => (ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id].slice(-2)));
+  const togglePick = (id: string) => setPickedFits((ids) => (ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id].slice(-2)));
+  const renameKept = (id: string, name: string) => useFeatures.getState().rename(pid, sid, id, name);
 
   useHotkeys({
     f: () => viewBus.emit({ type: "frame", animate: true }),
@@ -516,18 +512,76 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
   const tris = geometry ? (geometry.index ? geometry.index.count / 3 : geometry.getAttribute("position").count / 3) : 0;
   const verts = geometry ? geometry.getAttribute("position").count : 0;
   const stem = project && scan ? fileStem(project.name, scan.name) : "scan";
-  const meshFits = useMemo(() => (geometry ? fits.filter((f) => f.meshId === geometry.uuid) : []), [fits, geometry]);
   const FitKindIcon = FIT_ICON[fitKind];
+
+  // The kept set: read when the scan opens and again whenever another mesh version is shown (which fits are stale).
+  useEffect(() => {
+    void useFeatures.getState().load(pid, sid);
+  }, [pid, sid, meshVersion]);
+  /** Fitted on the mesh on screen (so its region can be drawn on it). */
+  const onScreen = useCallback((f: KeptFeature) => (meshVersion !== null ? f.mesh_version === meshVersion : !f.stale), [meshVersion]);
+  // The regions of the kept fits made on the mesh on screen: read once per fit and mesh.
+  const asked = useRef(new Set<string>());
+  useEffect(() => {
+    const g = geometry;
+    if (!g || !kept) return;
+    for (const f of kept.features) {
+      const have = regions[f.id];
+      if (!onScreen(f) || (have && have.meshId === g.uuid && have.version === f.mesh_version)) continue;
+      const key = `${g.uuid}/${f.id}/${f.mesh_version}`;
+      if (asked.current.has(key)) continue;
+      asked.current.add(key);
+      api
+        .featureFaces(pid, sid, f.id)
+        .then((r) => {
+          if (geomRef.current !== g || r.mesh_version !== f.mesh_version) return;
+          const reg = regionOn(g, r.faces, f);
+          setRegions((all) => ({ ...all, [f.id]: reg }));
+        })
+        .catch(() => {
+          /* listed without its region on the mesh */
+        });
+    }
+  }, [geometry, kept, regions, onScreen, pid, sid]);
+  const fits = useMemo<FitItem[]>(
+    () =>
+      (kept?.features ?? []).map((f, i) => {
+        const reg = geometry && onScreen(f) ? regions[f.id] : undefined;
+        const drawn = reg && reg.meshId === geometry!.uuid && reg.version === f.mesh_version ? reg : null;
+        return {
+          id: i + 1,
+          fid: f.id,
+          name: f.name,
+          kind: f.kind,
+          shape: f.shape,
+          nFaces: f.n_faces,
+          tolerance: f.tolerance_mm,
+          meanSigma: f.mean_sigma_mm,
+          correlated: f.correlated_points,
+          warnings: f.warnings,
+          version: f.mesh_version,
+          stale: f.stale,
+          tris: drawn?.tris ?? null,
+          region: drawn?.region ?? null,
+          label: fitLabel(f.kind, f.shape),
+        };
+      }),
+    [kept, regions, geometry, onScreen],
+  );
+  const meshFits = useMemo(() => fits.filter((f) => f.tris), [fits]);
+  const pickedNums = useMemo(() => fits.filter((f) => pickedFits.includes(f.fid)).map((f) => f.id), [fits, pickedFits]);
+  const keptMeasurements = useMemo(() => kept?.measurements ?? [], [kept]);
+  const measurements = useMemo<Measurement[]>(() => keptMeasurements.map((m, i) => ({ id: i + 1, a: m.a, b: m.b })), [keptMeasurements]);
 
   const measureRows = useMemo(
     () =>
-      measurements.map((m, i) => {
+      keptMeasurements.map((m, i) => {
         const dx = m.b[0] - m.a[0],
           dy = m.b[1] - m.a[1],
           dz = m.b[2] - m.a[2];
         return { m, i, d: Math.hypot(dx, dy, dz), dx, dy, dz };
       }),
-    [measurements],
+    [keptMeasurements],
   );
 
   // ---------------------------------------------------------------- render
@@ -638,7 +692,7 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
               fit={fitOn}
               fits={meshFits}
               fitBusy={fitBusy}
-              pickedFits={pickedFits}
+              pickedFits={pickedNums}
               onFitPick={onFitPick}
               checkLit={check.lit}
               frameKey={frameKey}
@@ -851,13 +905,18 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
           title="Measurements"
           icon={Ruler}
           aside={
-            measurements.length ? (
+            keptMeasurements.length ? (
               <Button
                 size="xs"
                 variant="ghost"
                 icon={Trash}
+                title="Remove all measurements"
                 onClick={() => {
-                  setMeasurements([]);
+                  void useFeatures.getState().removeAll(
+                    pid,
+                    sid,
+                    keptMeasurements.map((m) => m.id),
+                  );
                   setPendingPoint(null);
                 }}
               >
@@ -871,14 +930,15 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
               {measureRows.map(({ m, i, d, dx, dy, dz }) => (
                 <li key={m.id} className="group rounded-lg border border-line bg-surface-2/60 px-3 py-2">
                   <div className="flex items-center gap-2">
-                    <span className="grid h-5 w-5 place-items-center rounded-full bg-accent-soft text-[10.5px] font-bold text-accent">{i + 1}</span>
-                    <span className="flex-1 font-mono text-[15px] font-semibold text-fg tnum">{d.toFixed(2)} mm</span>
+                    <span className="grid h-5 w-5 shrink-0 place-items-center rounded-full bg-accent-soft text-[10.5px] font-bold text-accent">{i + 1}</span>
+                    <NameEdit value={m.name} what="measurement" onRename={(n) => renameKept(m.id, n)} className="min-w-0 max-w-[45%] text-xs font-semibold text-fg" />
+                    <span className="flex-1 text-right font-mono text-[15px] font-semibold text-fg tnum">{d.toFixed(2)} mm</span>
                     <IconButton
                       icon={X}
                       size="xs"
-                      label={`Remove measurement ${i + 1}`}
+                      label={`Remove ${m.name}`}
                       className="opacity-60 group-hover:opacity-100"
-                      onClick={() => setMeasurements((all) => all.filter((x) => x.id !== m.id))}
+                      onClick={() => void useFeatures.getState().remove(pid, sid, m.id)}
                     />
                   </div>
                   <div className="mt-1 flex gap-3 pl-7 font-mono text-[11px] text-subtle tnum">
@@ -918,7 +978,11 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
                 icon={Trash}
                 title="Remove all fits"
                 onClick={() => {
-                  setFits([]);
+                  void useFeatures.getState().removeAll(
+                    pid,
+                    sid,
+                    fits.map((f) => f.fid),
+                  );
                   setPickedFits([]);
                 }}
               >
@@ -929,10 +993,16 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
         >
           <FitList
             fits={fits}
-            meshId={geometry?.uuid ?? null}
+            relations={kept?.relations ?? []}
             picked={pickedFits}
             onTogglePick={togglePick}
+            onPickPair={(a, b) => setPickedFits([a, b])}
             onRemove={removeFit}
+            onRename={renameKept}
+            onKeepRelation={(a, b) => void useFeatures.getState().keepRelation(pid, sid, a, b)}
+            onRemoveRelation={(id) => void useFeatures.getState().remove(pid, sid, id)}
+            onRefit={() => void useFeatures.getState().refit(pid, sid)}
+            refitting={refitting}
             onStart={() => pickTool("fit")}
             fitOn={fitOn}
             ready={!!geometry}

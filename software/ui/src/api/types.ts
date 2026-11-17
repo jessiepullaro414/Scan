@@ -691,6 +691,63 @@ export type FitResult = {
   version: number; // the mesh version it was fitted on
 };
 
+// ------------------------------------------------------------------ kept features (FEATURE_PLAN.md K1)
+// APP_API.md "Kept features": fits, measurements and relations saved with the scan (features.json).
+
+/** The click a fit was grown from: enough to fit it again on a later mesh. */
+export type FeatureSeed = {
+  kind: FitKind;
+  face: number; // the clicked face on the mesh version it was fitted on
+  point: [number, number, number];
+  tolerance_mm: number | null; // as asked (null = chosen from the seed's scatter)
+};
+export type KeptFeature = {
+  id: string; // "f-…"
+  name: string; // "Fit 1" unless the user named it
+  kind: FitKind;
+  shape: FitShape; // exactly as the fit route returned it, with its ± values
+  seed: FeatureSeed;
+  n_faces: number;
+  tolerance_mm: number | null;
+  mean_sigma_mm: number | null;
+  correlated_points: number | null;
+  warnings: string[];
+  mesh_version: number; // the mesh version it was fitted on
+  extent: Record<string, unknown> | null; // its outline or span (null for now)
+  created: string;
+  stale: boolean; // fitted on an earlier mesh than the current one
+};
+export type KeptMeasurement = {
+  id: string; // "m-…"
+  name: string; // "Distance 1" unless the user named it
+  a: [number, number, number];
+  b: [number, number, number];
+  mesh_version: number | null; // the mesh version the points were picked on
+  created: string;
+  stale: boolean;
+};
+/** Two kept fits the user asked to relate; the numbers are worked out when shown. */
+export type KeptRelation = { id: string; name: string; a: string; b: string; created: string };
+export type FeatureSet = {
+  format_version: number;
+  frame: Record<string, unknown> | null; // the part's coordinate system (a later task)
+  mesh_version: number | null; // the current mesh's version (null before there is a mesh)
+  features: KeptFeature[];
+  measurements: KeptMeasurement[];
+  relations: KeptRelation[];
+};
+export type NewFeature = FitRequest & { name?: string };
+/** A fit just kept: the feature with its region (base64, as in `FitResult`). */
+export type KeptFit = KeptFeature & { faces: string };
+export type NewMeasurement = { a: [number, number, number]; b: [number, number, number]; version?: number; name?: string };
+export type NewRelation = { a: string; b: string; name?: string };
+export type FeatureFaces = { id: string; mesh_version: number; n_faces: number; faces: string };
+export type RefitResult = {
+  features: FeatureSet;
+  refitted: string[];
+  failed: { id: string; detail: string; hint: string | null }[]; // stay as they were, still marked
+};
+
 // ------------------------------------------------------------------ M5 second slice: the deviation map
 // APP_API.md "M5 second slice: the deviation map". Compares the current mesh with the base mesh.
 

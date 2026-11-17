@@ -1,12 +1,13 @@
 /**
- * The viewer's list of fitted shapes: each fit's numbers with their ± (1σ, statistical only, counting points that
- * err together), its warnings in plain words, and whether it was made on an earlier version of the mesh. Two
- * fits picked from the list show their relation (lib/fits.ts `relate`).
+ * The viewer's list of fitted shapes, kept with the scan: each fit's name (the user can change it in place), its
+ * numbers with their ± (1σ, statistical only, counting points that err together), its warnings in plain words,
+ * and whether it was fitted on an earlier mesh, with one "Fit again" for those. Two fits picked from the list show
+ * their relation (lib/fits.ts `relate`), which can be kept too.
  */
-import { CircleDashed, Cylinder, Link2, Shapes, Square, TriangleExclamationPoint, X } from "lucide-react";
+import { Bookmark, CircleDashed, Cylinder, Link2, RefreshCw, Shapes, Square, TriangleExclamationPoint, X } from "lucide-react";
 import type { ReactNode } from "react";
 import { sentence } from "../../api/http";
-import type { FitKind } from "../../api/types";
+import type { FitKind, KeptRelation } from "../../api/types";
 import { Badge } from "../../components/ui/Badge";
 import { Button, IconButton } from "../../components/ui/Button";
 import { Kbd } from "../../components/ui/Feedback";
@@ -14,6 +15,7 @@ import { fitName, fitValue, fmtLength, fmtPm, fmtSmall, relate } from "../../lib
 import { fmtInt } from "../../lib/format";
 import { cn } from "../../lib/util";
 import { PICKED_COLOR, type FitItem } from "./FitTool";
+import { NameEdit } from "./NameEdit";
 import { fmtSigma } from "./ViewerCanvas";
 
 export const FIT_ICON: Record<FitKind, typeof Square> = { plane: Square, cylinder: Cylinder, hole: CircleDashed };
@@ -83,15 +85,36 @@ function KV({ rows }: { rows: Row[] }) {
   );
 }
 
-function Relation({ a, b, meshId }: { a: FitItem; b: FitItem; meshId: string | null }) {
+/** The relation of two picked fits, worked out here from their shapes (lib/fits.ts); kept with the scan on request. */
+function Relation({ a, b, kept, onKeep, onRename }: { a: FitItem; b: FitItem; kept: KeptRelation | null; onKeep: () => void; onRename: (name: string) => Promise<boolean> }) {
   const r = relate(a, b);
-  const stale = a.meshId !== meshId || b.meshId !== meshId;
+  const stale = a.stale || b.stale;
   return (
     <div className="mt-3 rounded-lg border bg-surface-2/60 px-3 py-2.5" style={{ borderColor: `${PICKED_COLOR}80` }} aria-label="Relation of the two picked fits">
       <div className="mb-1.5 flex items-center gap-1.5 text-xs font-semibold text-fg">
-        <Link2 size={13} style={{ color: PICKED_COLOR }} aria-hidden />
-        Fit {a.id} and fit {b.id}
+        <Link2 size={13} className="shrink-0" style={{ color: PICKED_COLOR }} aria-hidden />
+        {kept ? (
+          <NameEdit value={kept.name} what="relation" onRename={onRename} className="min-w-0 flex-1" />
+        ) : (
+          <span className="min-w-0 flex-1 truncate">
+            {a.name} and {b.name}
+          </span>
+        )}
+        {kept ? (
+          <span className="text-[11px] font-normal text-subtle" title="Kept with the scan: it comes back when the viewer opens again">
+            kept
+          </span>
+        ) : (
+          <Button size="xs" variant="ghost" icon={Bookmark} onClick={onKeep} title="Keep this relation with the scan">
+            Keep
+          </Button>
+        )}
       </div>
+      {kept ? (
+        <div className="-mt-1 mb-1.5 truncate pl-[19px] text-[11px] text-subtle">
+          {a.name} and {b.name}
+        </div>
+      ) : null}
       <dl className="space-y-1">
         {r.rows.map((row) => (
           <div key={row.label} className="flex items-baseline justify-between gap-3" title={row.tip}>
@@ -113,78 +136,103 @@ function Relation({ a, b, meshId }: { a: FitItem; b: FitItem; meshId: string | n
       {stale ? (
         <div className="mt-1.5 flex items-start gap-1.5 text-[11px] leading-4 text-warn">
           <TriangleExclamationPoint size={12} className="mt-px shrink-0" aria-hidden />
-          {a.meshId === b.meshId ? "Both were made on an earlier version of the mesh." : "They were made on different versions of the mesh."}
+          {a.version !== b.version ? "They were fitted on different versions of the mesh." : "Both were fitted on an earlier mesh."}
         </div>
       ) : null}
     </div>
   );
 }
 
-/** The fits, newest last, with their numbers; click one to pick it for a relation (two at most). */
+/** The kept fits, oldest first, with their numbers; click one to pick it for a relation (two at most). */
 export function FitList({
   fits,
-  meshId,
+  relations,
   picked,
   onTogglePick,
+  onPickPair,
   onRemove,
+  onRename,
+  onKeepRelation,
+  onRemoveRelation,
+  onRefit,
+  refitting,
   onStart,
   fitOn,
   ready,
 }: {
   fits: FitItem[];
-  /** The mesh on screen (its geometry's uuid). */
-  meshId: string | null;
-  picked: number[];
-  onTogglePick: (id: number) => void;
-  onRemove: (id: number) => void;
+  /** The relations kept with the scan. */
+  relations: KeptRelation[];
+  /** Ids of the fits picked for a relation. */
+  picked: string[];
+  onTogglePick: (fid: string) => void;
+  /** Pick these two fits (a kept relation was clicked). */
+  onPickPair: (a: string, b: string) => void;
+  onRemove: (fid: string) => void;
+  /** Rename a fit or a relation; false when the engine refused it. */
+  onRename: (id: string, name: string) => Promise<boolean>;
+  onKeepRelation: (a: string, b: string) => void;
+  onRemoveRelation: (id: string) => void;
+  /** Fit the stale fits again on the current mesh. */
+  onRefit: () => void;
+  refitting: boolean;
   onStart: () => void;
   fitOn: boolean;
   ready: boolean;
 }) {
-  const pickedFits = picked.map((id) => fits.find((f) => f.id === id)).filter((f): f is FitItem => !!f);
+  const byId = (fid: string) => fits.find((f) => f.fid === fid);
+  const pickedFits = picked.map(byId).filter((f): f is FitItem => !!f);
+  const [p0, p1] = pickedFits;
+  const keptPair = p0 && p1 ? (relations.find((r) => (r.a === p0.fid && r.b === p1.fid) || (r.a === p1.fid && r.b === p0.fid)) ?? null) : null;
+  const stale = fits.filter((f) => f.stale).length;
   let hint: ReactNode = null;
   if (fits.length >= 2 && pickedFits.length === 0) hint = "Click two fits to see how they relate: the angle and the distance between them.";
   else if (pickedFits.length === 1) hint = "Click one more fit to see how they relate.";
   return (
     <>
+      {stale ? (
+        <div className="mb-2 flex items-center gap-2 rounded-lg border border-line bg-surface-2/60 px-3 py-2 text-[11.5px] leading-4 text-warn">
+          <TriangleExclamationPoint size={13} className="shrink-0" aria-hidden />
+          <span className="flex-1">{stale === 1 ? "One fit was" : `${stale} fits were`} fitted on an earlier mesh.</span>
+          <Button size="xs" icon={RefreshCw} loading={refitting} disabled={!ready} onClick={onRefit} title="Fit them again on the current mesh, from the clicks they were made with">
+            Fit again
+          </Button>
+        </div>
+      ) : null}
       {fits.length ? (
         <ul className="space-y-2">
           {fits.map((f) => {
-            const on = picked.includes(f.id);
-            const stale = f.meshId !== meshId;
+            const on = picked.includes(f.fid);
             const Icon = FIT_ICON[f.kind];
             return (
-              <li key={f.id} className={cn("group rounded-lg border bg-surface-2/60 px-3 py-2", !on && "border-line", stale && "opacity-75")} style={on ? { borderColor: PICKED_COLOR } : undefined}>
+              <li key={f.fid} className={cn("group rounded-lg border bg-surface-2/60 px-3 py-2", !on && "border-line", f.stale && "opacity-75")} style={on ? { borderColor: PICKED_COLOR } : undefined}>
                 <div className="flex items-center gap-2">
                   <button
                     type="button"
                     aria-pressed={on}
+                    aria-label={on ? `${f.name}: picked for a relation` : `Pick ${f.name} for a relation`}
                     title={on ? "Picked for a relation: click to drop it" : "Pick it for a relation (two at most)"}
-                    onClick={() => onTogglePick(f.id)}
-                    className="flex min-w-0 flex-1 items-start gap-2 rounded text-left focus-visible:outline-2 focus-visible:outline-accent"
+                    onClick={() => onTogglePick(f.fid)}
+                    className={cn("grid h-5 min-w-5 shrink-0 place-items-center rounded-full px-1 text-[10.5px] font-bold focus-visible:outline-2 focus-visible:outline-accent", !on && "bg-accent-soft text-accent")}
+                    style={on ? { background: PICKED_COLOR, color: "#0b0d11" } : undefined}
                   >
-                    <span
-                      className={cn("grid h-5 min-w-5 place-items-center rounded-full px-1 text-[10.5px] font-bold", !on && "bg-accent-soft text-accent")}
-                      style={on ? { background: PICKED_COLOR, color: "#0b0d11" } : undefined}
-                    >
-                      {f.id}
-                    </span>
-                    <span className="flex min-w-0 flex-1 flex-wrap items-baseline gap-x-2">
-                      <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-fg">
-                        <Icon size={13} className="shrink-0 text-muted" aria-hidden />
-                        {fitName(f.kind)}
-                      </span>
-                      <span className="font-mono text-[13px] font-semibold text-fg tnum" title={f.shape.kind === "plane" ? undefined : SIGMA_NOTE}>
-                        {fitValue(f.shape)}
-                      </span>
-                    </span>
+                    {f.id}
                   </button>
-                  <IconButton icon={X} size="xs" label={`Remove fit ${f.id}`} className="opacity-60 group-hover:opacity-100" onClick={() => onRemove(f.id)} />
+                  <div className="flex min-w-0 flex-1 cursor-pointer flex-wrap items-baseline gap-x-2" onClick={() => onTogglePick(f.fid)}>
+                    <span className="inline-flex min-w-0 max-w-full items-center gap-1.5 text-xs font-semibold text-fg" title={fitName(f.kind)}>
+                      <Icon size={13} className="shrink-0 text-muted" aria-hidden />
+                      <NameEdit value={f.name} what="fit" onRename={(n) => onRename(f.fid, n)} />
+                    </span>
+                    <span className="font-mono text-[13px] font-semibold text-fg tnum" title={f.shape.kind === "plane" ? undefined : SIGMA_NOTE}>
+                      {fitValue(f.shape)}
+                    </span>
+                  </div>
+                  <IconButton icon={X} size="xs" label={`Remove ${f.name}`} className="opacity-60 group-hover:opacity-100" onClick={() => onRemove(f.fid)} />
                 </div>
-                {stale ? (
+                {f.stale ? (
                   <div className="mt-1.5 pl-7">
-                    <Badge tone="warn" icon={TriangleExclamationPoint} title="The mesh was changed after this fit (an edit). Its numbers are for that version; fit again to measure the mesh shown now.">
-                      Made on an earlier version (v{f.version})
+                    <Badge tone="warn" icon={TriangleExclamationPoint} title="The mesh was changed after this fit (an edit, or the mesh made again). Its numbers are for that version; Fit again measures the current mesh.">
+                      Fitted on an earlier mesh (v{f.version})
                     </Badge>
                   </div>
                 ) : null}
@@ -209,14 +257,38 @@ export function FitList({
         <div className="text-sm text-muted">
           {ready ? (
             <>
-              Turn on <b className="text-fg">Fit</b> (<Kbd>G</Kbd>), choose Plane, Cylinder or Hole, and click the surface: the shape is fitted there with its ±.
+              Turn on <b className="text-fg">Fit</b> (<Kbd>G</Kbd>), choose Plane, Cylinder or Hole, and click the surface: the shape is fitted there with its ±, and kept with the scan.
             </>
           ) : (
             "Available once the mesh is loaded."
           )}
         </div>
       )}
-      {pickedFits.length === 2 ? <Relation a={pickedFits[0]} b={pickedFits[1]} meshId={meshId} /> : null}
+      {p0 && p1 ? (
+        <Relation a={p0} b={p1} kept={keptPair} onKeep={() => onKeepRelation(p0.fid, p1.fid)} onRename={(n) => (keptPair ? onRename(keptPair.id, n) : Promise.resolve(false))} />
+      ) : null}
+      {relations.length ? (
+        <ul className="mt-3 space-y-1" aria-label="Kept relations">
+          {relations.map((r) => {
+            const a = byId(r.a),
+              b = byId(r.b);
+            const on = picked.includes(r.a) && picked.includes(r.b);
+            return (
+              <li key={r.id} className={cn("group flex items-center gap-1.5 rounded-md px-1.5 py-1 text-[11.5px]", on ? "bg-surface-2" : "hover:bg-surface-2/60")}>
+                <Link2 size={12} className="shrink-0 text-muted" style={on ? { color: PICKED_COLOR } : undefined} aria-hidden />
+                <button type="button" className="min-w-0 flex-1 truncate text-left text-fg" title="Show this relation" onClick={() => onPickPair(r.a, r.b)}>
+                  {r.name}
+                  <span className="text-subtle">
+                    {" "}
+                    · {a?.name ?? "?"} and {b?.name ?? "?"}
+                  </span>
+                </button>
+                <IconButton icon={X} size="xs" label={`Remove ${r.name}`} className="opacity-60 group-hover:opacity-100" onClick={() => onRemoveRelation(r.id)} />
+              </li>
+            );
+          })}
+        </ul>
+      ) : null}
       {hint ? <div className="mt-2 text-[11.5px] text-subtle">{hint}</div> : null}
       {fits.length ? <div className="mt-2 text-[11px] leading-4 text-subtle">{SIGMA_NOTE}</div> : null}
       {ready && !fitOn ? (

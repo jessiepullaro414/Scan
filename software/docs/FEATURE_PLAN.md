@@ -73,7 +73,7 @@ and a cylinder no length; the UI works those out for drawing (`summarizeRegion`,
 and only the distance between parallel planes has a ±. There is no coordinate system: every
 number is in the scan's own frame.
 
-### K1. Fits and measurements are kept with the scan (M)
+### [x] K1. Fits and measurements are kept with the scan (M)
 - **What:** `scans/<sid>/features.json` (with a `format_version`): each feature has an id, a name
   the user can change, the kind, the fitted shape with its ± values, the click it was grown from
   (point, kind, tolerances), its warnings, and the mesh version it was fitted on. Two-point
@@ -88,6 +88,23 @@ number is in the scan's own frame.
 - **Test first:** save, reload and rename over the API; a feature saved on mesh version 3 is
   marked after an edit and comes back within its ± after "fit again".
 - **Done when:** closing and reopening the viewer shows the same named fits.
+- **Done 2026-11-17.** `ohs/measure/features.py` (the file, checked on every read and write,
+  written through a temporary file), `ohs/server/features.py` and eight routes under
+  `.../features` (`APP_API.md`, "Kept features"). A fit click in the viewer now keeps the fit;
+  fits, distances and relations can be renamed (double-click, or the pencil); each fit's region
+  is kept in its own file (`features/<id>.npy`) for the mesh it was fitted on. After an edit a
+  fit shows "Fitted on an earlier mesh" and one "Fit again" button refits all such fits on the
+  server from their saved clicks; one that cannot be refitted stays, marked, with the reason.
+  - *Found in review, test first:* a fit whose whole region had been cut away was fitted again
+    on the nearest other surface, under the same name. Now refused ("the surface under this fit
+    is gone") when the nearest measured face is more than 2 mm and 1.5 of its own longest edge
+    from the saved click.
+  - Checked in the app on a real scan of 804,382 triangles: a plane kept, renamed, there again
+    after a reload; marked after an edit; fitted again with its name.
+  - Tests: 37 on both paths (the file, the routes), 51 UI checks (the mock routes, the store).
+  - **Left:** `extent` is still null (K2 fills it); `frame` is stored untouched (K3's routes
+    fill it); the manager reads two private members of `ProcessManager` (`_load_step`,
+    `_fit_mesh`) and should get a public way in when `processing.py` is next touched.
 
 ### K2. Extents and relations move into the engine (M)
 - **What:** `RegionFit` gains the extent of its region: a plane's outline (the region's boundary
