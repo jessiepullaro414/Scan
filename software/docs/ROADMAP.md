@@ -8,6 +8,9 @@ The details live elsewhere:
   reverse engineering, M6 ship it).
 - [`RESEARCH_PLAN.md`](RESEARCH_PLAN.md): the algorithms, ranked, and what will not work.
 - [`MAINTENANCE_PLAN.md`](MAINTENANCE_PLAN.md): fixes and speed-ups to the code as it is.
+- [`FEATURE_PLAN.md`](FEATURE_PLAN.md): the six larger items of section 4 as tasks (presets,
+  calibration health, inspection, scan to CAD, data retention, next-best-view). A proposal of
+  2026-11-17; nothing in it is started.
 - [`../VALIDATION.md`](../VALIDATION.md): what has been measured, and how.
 
 ---
@@ -220,6 +223,10 @@ about the scan itself, not the Fit tool, and they decide whether a measurement c
 ---
 
 ## 4. Later
+
+Six of these are laid out as tasks in [`FEATURE_PLAN.md`](FEATURE_PLAN.md) (2026-11-17, a
+proposal): presets, calibration health, inspection, scan to CAD, data retention and
+next-best-view guidance.
 
 - **Presets by object type** (car panel, precision part, fine detail, large object), kept separate
   from object size. Start with two or three, chosen where measurements show the settings matter.
