@@ -3,8 +3,10 @@
  * wireframe, normals, the confidence map (each point's sigma, when the mesh has them) and
  * laser-point overlays, two-click distance measurement, fitted shapes (plane, cylinder, hole: one
  * click, the engine fits it, with its ± and the relation of two fits; fits, measurements and relations
- * are kept with the scan, with names, through store/features.ts), the Check panel (which areas
- * miss the tolerance the part needs), bounding box in mm, downloads and the processing report.
+ * are kept with the scan, with names, through store/features.ts), the part's coordinate system built from
+ * three kept fits (the Coordinate system panel: its axes drawn in the view, the panels' numbers in it on
+ * request, the mesh downloaded in it), the Check panel (which areas miss the tolerance the part needs),
+ * bounding box in mm, downloads and the processing report.
  */
 import {
   ArrowLeft,
@@ -44,6 +46,7 @@ import { downloadFile } from "../lib/download";
 import { decodeFaces, fitLabel, fitName, regionTriangles, summarizeRegion, type RegionSummary } from "../lib/fits";
 import { fileStem, fmtBytes, fmtCompact, fmtDateTime, fmtDuration, fmtFixed, fmtInt, fmtPct } from "../lib/format";
 import { hasLaserValues } from "../lib/lasers";
+import { axisOrder, deltaOf, fmtVec, pointToPart, readFrame } from "../lib/partFrame";
 import { href, navigate, paths } from "../lib/router";
 import { describeReason } from "../lib/tracking";
 import { cn, useHotkeys } from "../lib/util";
@@ -63,6 +66,7 @@ import { useCheck } from "./viewer/useCheck";
 import { useDeviation } from "./viewer/useDeviation";
 import { useLasers } from "./viewer/useLasers";
 import { FIT_ICON, FitList } from "./viewer/FitsPanel";
+import { FRAME_ICON, FramePanel } from "./viewer/FramePanel";
 import type { FitItem } from "./viewer/FitTool";
 import { NameEdit } from "./viewer/NameEdit";
 import { fmtSigma, ViewerCanvas, type Measurement, type Shading, type Vec3 } from "./viewer/ViewerCanvas";
@@ -222,6 +226,9 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
   /** The fits, measurements and relations kept with the scan (those made on an earlier mesh stay, marked so). */
   const kept = useFeatures((s) => s.entries[featuresKey(pid, sid)]?.set ?? null);
   const refitting = useFeatures((s) => s.entries[featuresKey(pid, sid)]?.refitting ?? false);
+  const framing = useFeatures((s) => s.entries[featuresKey(pid, sid)]?.framing ?? false);
+  /** Show the panels' positions and directions in the part's frame (when it has one). */
+  const [inPart, setInPart] = useState(false);
   /** The kept fits' regions on the mesh on screen, by feature id (read once per mesh). */
   const [regions, setRegions] = useState<Record<string, Region>>({});
   const [fitBusy, setFitBusy] = useState<{ p: Vec3; kind: FitKind } | null>(null);
@@ -573,15 +580,20 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
   const keptMeasurements = useMemo(() => kept?.measurements ?? [], [kept]);
   const measurements = useMemo<Measurement[]>(() => keptMeasurements.map((m, i) => ({ id: i + 1, a: m.a, b: m.b })), [keptMeasurements]);
 
+  // The part's coordinate system: drawn in the view when this version can read it; the panels' numbers in it on request.
+  const partFrame = useMemo(() => readFrame(kept?.frame ?? null), [kept]);
+  const shownFrame = inPart ? partFrame : null;
+  const deltaNames = shownFrame ? ["ΔX", "ΔY", "ΔZ"] : ["Δx", "Δy", "Δz"];
   const measureRows = useMemo(
     () =>
       keptMeasurements.map((m, i) => {
-        const dx = m.b[0] - m.a[0],
-          dy = m.b[1] - m.a[1],
-          dz = m.b[2] - m.a[2];
-        return { m, i, d: Math.hypot(dx, dy, dz), dx, dy, dz };
+        const [dx, dy, dz] = deltaOf(m.a, m.b, shownFrame);
+        const where = shownFrame ? `in the part's frame (${axisOrder(shownFrame).join(" ")})` : "in the scan's frame";
+        const at = (p: Vec3) => fmtVec(shownFrame ? pointToPart(shownFrame, p) : p);
+        const tip = `From (${at(m.a)}) to (${at(m.b)}) mm, ${where}.`;
+        return { m, i, d: Math.hypot(dx, dy, dz), dx, dy, dz, tip };
       }),
-    [keptMeasurements],
+    [keptMeasurements, shownFrame],
   );
 
   // ---------------------------------------------------------------- render
@@ -696,6 +708,7 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
               onFitPick={onFitPick}
               checkLit={check.lit}
               frameKey={frameKey}
+              partFrame={partFrame ? { frame: partFrame, outOfDate: partFrame.out_of_date } : null}
             />
           </ErrorBoundary>
         ) : (
@@ -927,8 +940,8 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
         >
           {measureRows.length ? (
             <ul className="space-y-2">
-              {measureRows.map(({ m, i, d, dx, dy, dz }) => (
-                <li key={m.id} className="group rounded-lg border border-line bg-surface-2/60 px-3 py-2">
+              {measureRows.map(({ m, i, d, dx, dy, dz, tip }) => (
+                <li key={m.id} className="group rounded-lg border border-line bg-surface-2/60 px-3 py-2" title={tip}>
                   <div className="flex items-center gap-2">
                     <span className="grid h-5 w-5 shrink-0 place-items-center rounded-full bg-accent-soft text-[10.5px] font-bold text-accent">{i + 1}</span>
                     <NameEdit value={m.name} what="measurement" onRename={(n) => renameKept(m.id, n)} className="min-w-0 max-w-[45%] text-xs font-semibold text-fg" />
@@ -942,9 +955,15 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
                     />
                   </div>
                   <div className="mt-1 flex gap-3 pl-7 font-mono text-[11px] text-subtle tnum">
-                    <span>Δx {dx.toFixed(1)}</span>
-                    <span>Δy {dy.toFixed(1)}</span>
-                    <span>Δz {dz.toFixed(1)}</span>
+                    <span>
+                      {deltaNames[0]} {dx.toFixed(1)}
+                    </span>
+                    <span>
+                      {deltaNames[1]} {dy.toFixed(1)}
+                    </span>
+                    <span>
+                      {deltaNames[2]} {dz.toFixed(1)}
+                    </span>
                   </div>
                 </li>
               ))}
@@ -1006,6 +1025,24 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
             onStart={() => pickTool("fit")}
             fitOn={fitOn}
             ready={!!geometry}
+            frame={shownFrame}
+          />
+        </Panel>
+
+        <Panel title="Coordinate system" icon={FRAME_ICON}>
+          <FramePanel
+            raw={kept?.frame ?? null}
+            fits={fits}
+            selected={pickedFits.length ? pickedFits[pickedFits.length - 1] : null}
+            inPart={inPart}
+            onInPart={setInPart}
+            framing={framing}
+            onBuild={(body) => useFeatures.getState().buildFrame(pid, sid, body)}
+            onRemove={() => {
+              void useFeatures.getState().removeFrame(pid, sid);
+              setInPart(false);
+            }}
+            ready={!!geometry}
           />
         </Panel>
 
@@ -1056,13 +1093,26 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
               <Button size="sm" icon={FileText} onClick={() => void downloadFile(urls.report, `${stem}-report.json`)}>
                 Report
               </Button>
+              {partFrame ? (
+                <>
+                  <Button size="sm" className="col-span-2" icon={Download} onClick={() => void downloadFile(api.frameMeshUrl(pid, sid, "mesh.stl"), `${stem}-part-frame.stl`)} title="The mesh in the part's coordinate system">
+                    STL in the part's frame
+                  </Button>
+                  <Button size="sm" className="col-span-2" icon={Download} onClick={() => void downloadFile(api.frameMeshUrl(pid, sid, "mesh.ply"), `${stem}-part-frame.ply`)} title="The mesh in the part's coordinate system">
+                    PLY in the part's frame
+                  </Button>
+                </>
+              ) : null}
             </div>
           ) : (
             <div className="text-sm text-muted">Make the mesh first.</div>
           )}
           {hasResult && project && scan ? (
             <div className="mt-3 flex items-center justify-between gap-2">
-              <span className="text-xs text-subtle">Units: mm. STL for CAD and slicers.</span>
+              <span className="text-xs text-subtle">
+                Units: mm. STL for CAD and slicers.
+                {partFrame ? ` STL and PLY are in the scan's frame unless "in the part's frame".${partFrame.out_of_date ? " The coordinate system is out of date." : ""}` : ""}
+              </span>
               <MakeMeshButton projectId={project.id} scan={scan} label="Remake" variant="ghost" size="xs" />
             </div>
           ) : null}

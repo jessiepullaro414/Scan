@@ -370,8 +370,8 @@ export class MockProcess {
     };
   }
 
-  /** What the kept features (features.ts) need of this scan: its fits, its mesh version, and the face
-   * nearest a saved click on the current mesh (by the faces' centres). */
+  /** What the kept features (features.ts) need of this scan: its fits, its mesh version, the face nearest a
+   * saved click on the current mesh (by the faces' centres), and the current mesh in the part's frame. */
   featureEngine(p: Project, s: Scan): FeatureEngine {
     return {
       fit: (body) => this.fit(p, s, body),
@@ -398,6 +398,23 @@ export class MockProcess {
           }
         }
         return best;
+      },
+      partMesh: (M, name) => {
+        const st = this.ensure(p, s);
+        const m = st.current;
+        if (!m) return null;
+        // vertices moved and normals turned into the part's frame; the faces and each vertex's sigma as they are
+        const P = m.positions,
+          N = m.normals;
+        const positions = new Float32Array(P.length),
+          normals = new Float32Array(N.length);
+        for (let i = 0; i < P.length; i += 3)
+          for (let r = 0; r < 3; r++) {
+            positions[i + r] = M[r][0] * P[i] + M[r][1] * P[i + 1] + M[r][2] * P[i + 2] + M[r][3];
+            normals[i + r] = M[r][0] * N[i] + M[r][1] * N[i + 1] + M[r][2] * N[i + 2];
+          }
+        const turned = { positions, normals, indices: m.indices };
+        return name === "mesh.ply" ? encodePly(turned, this.sigma(st)) : stlMesh(turned);
       },
     };
   }

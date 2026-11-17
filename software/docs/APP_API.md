@@ -983,7 +983,7 @@ type KeptRelation = { id: string;       // "r-…"
                       created: string };
 type FeatureSet = {
   format_version: 1;
-  frame: object | null;                 // the part's coordinate system (FEATURE_PLAN.md K3): kept as given
+  frame: PartFrameView | null;          // the part's coordinate system ("The part's frame" below)
   mesh_version: number | null;          // the current mesh's version (null before there is a mesh)
   features: KeptFeature[]; measurements: KeptMeasurement[]; relations: KeptRelation[];   // oldest first
 };
@@ -1032,6 +1032,77 @@ Rules:
 - 404 for an unknown project, scan or id; 422 for invalid bodies (a name that is empty or longer than
   80 characters, a point that is not three numbers); 500 when `features.json` cannot be read (the
   file is left as it is).
+
+### The part's frame
+[`FEATURE_PLAN.md`](FEATURE_PLAN.md), K3. The part's own coordinate system, built from three kept fits by
+the 3-2-1 rule (`ohs.measure.frame.part_frame`; its module docstring has every rule and refusal) and
+kept under `frame` in `features.json` as `PartFrame.to_dict()`. Until one is built nothing changes:
+`frame` is null, and the scan's files and downloads stay in the scan's frame.
+
+```ts
+type AxisName = "X" | "Y" | "Z";
+type FrameSlot = { role: "primary" | "secondary" | "origin";
+                   id: string | null;           // the kept fit's id; null for a point given as the origin
+                   name: string | null;         // the fit's name when the frame was built
+                   kind: "plane" | "cylinder" | "circle" | "point";
+                   sets: string;                // in words, e.g. "the Z axis (its normal) and Z = 0 (the plane)"
+                   fit: object };               // the shape it was built from, as it was then
+type FrameSigma = { angle_deg: number | null;   // 1σ of the whole rotation (RMS); null where a fit has no ±
+                    tilt_deg: number | null; turn_deg: number | null;   // about the in-plane axes / the first axis
+                    origin_mm: number | null;   // 1σ of the origin's place (RMS)
+                    origin_axes_mm: (number | null)[] };                // per part axis X, Y, Z
+type PartFrameRecord = {                        // what features.json keeps under "frame"
+  format_version: 1; units: "mm";
+  matrix: number[][];                           // 4x4: x_part = R x_scan + t; R's rows are the part's X, Y, Z in the scan's frame
+  axes: { primary: AxisName; secondary: AxisName; third: AxisName };
+  flip_primary: boolean; flip_secondary: boolean; secondary_zero: boolean;
+  built_from: FrameSlot[];                      // primary, secondary, origin
+  sigma: FrameSigma; warnings: string[];
+};
+type PartFrameView = PartFrameRecord & {        // FeatureSet.frame as GET .../features shows it
+  readable: boolean;                            // false: this version cannot read it (then only the stored keys and the reason)
+  out_of_date: boolean;                         // a fit it was built from was deleted, fitted again or changed since
+  out_of_date_reasons: string[];                // e.g. 'the origin "Hole" was fitted again or changed since'
+};
+type FramePoint = { point: [number, number, number]; sigma_mm?: number | null };   // the scan's frame, mm
+type NewFrame = { primary: string;              // a kept plane
+                  secondary: string;            // a kept plane, cylinder or hole
+                  origin: string | FramePoint;  // a kept hole, cylinder or plane, or a point
+                  axes?: string;                // the primary's and the secondary's axis names, default "ZX"
+                  flip_primary?: boolean; flip_secondary?: boolean;
+                  secondary_zero?: boolean };   // strict 3-2-1
+```
+
+| Method and path | Body | Returns |
+|---|---|---|
+| `POST .../features/frame` | `NewFrame` | `PartFrameView` |
+| `DELETE .../features/frame` | | 204 |
+| `GET .../features/frame/mesh.ply` | | the current mesh in the part's frame (binary PLY) |
+| `GET .../features/frame/mesh.stl` | | the same as binary STL |
+
+Rules:
+- **Build** (`POST`): each fit goes to `part_frame` as its id, name and shape; the record replaces a frame
+  kept before. A refusal of the engine (a wrong kind of fit for a slot, a secondary that cannot set the
+  turn, an origin that cannot be found, bad `axes`) is 422 with the engine's message as the `detail`. 409
+  before there is a mesh, and for a fit made on an earlier mesh (fit it again first: its numbers are not
+  this mesh's). 422 for an id that names no kept fit.
+- **Out of date** (on reading): the shapes kept in `built_from` are compared with the kept fits of the
+  same id; a fit deleted, or whose shape is not the one the frame was built from (fitted again, changed),
+  makes it out of date, with a reason per slot. A rename is not a change; a mesh edit alone is not either
+  (the fits are then `stale`, their shapes unchanged). Nothing is rebuilt on its own: "Build again" is a
+  `POST` with the same three ids and options.
+- A `frame` this version cannot read (a later `format_version`, a damaged matrix) does not stop the
+  features from loading: it is shown with `readable: false`, `out_of_date: true` and the reason, kept in
+  the file as it is, and replaced by the next build or removed.
+- **Remove** (`DELETE`): `frame` goes back to null (204 also when there was none). The fits stay.
+- **The mesh in the part's frame**: the scan's current `result/mesh.ply` with its vertices moved and its
+  normals turned by the frame's matrix (the PLY keeps each vertex's `quality` and each face's `filled`),
+  made on request; `Content-Disposition` names it `mesh-part-frame.ply` / `.stl`, and
+  `X-OHS-Mesh-Version` is the mesh version read before it. An out-of-date frame is used as it is. 404
+  without a frame or a mesh, 409 for a frame this version cannot read, 404 for another file name. The
+  scan's own files (`.../files/...`) and everything on disk stay exactly as they are.
+- Sizes, distances, angles and ± values are the same in every frame; the viewer shows positions and
+  directions in the part's frame on request and keeps its 3D view in the scan's frame.
 
 ## M5 second slice: the deviation map
 The plan is in [`DESKTOP_APP_PLAN.md`](DESKTOP_APP_PLAN.md), "M5 plan, second slice". It compares the scan's

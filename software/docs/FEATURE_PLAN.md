@@ -102,9 +102,7 @@ number is in the scan's own frame.
   - Checked in the app on a real scan of 804,382 triangles: a plane kept, renamed, there again
     after a reload; marked after an edit; fitted again with its name.
   - Tests: 37 on both paths (the file, the routes), 51 UI checks (the mock routes, the store).
-  - **Left:** `extent` is still null (K2 fills it); `frame` is stored untouched (K3's routes
-    fill it); the manager reads two private members of `ProcessManager` (`_load_step`,
-    `_fit_mesh`) and should get a public way in when `processing.py` is next touched.
+  - **Left:** `extent` is still null (K2 fills it).
 
 ### K2. Extents and relations move into the engine (M)
 - **What:** `RegionFit` gains the extent of its region: a plane's outline (the region's boundary
@@ -118,7 +116,7 @@ number is in the scan's own frame.
   the UI's numbers to 1e-6; ±2σ covers the true relation about 95 % of the time over seeded
   trials, as for the fits themselves.
 
-### K3. A coordinate system for the part (M)
+### [x] K3. A coordinate system for the part (M)
 - **What:** the 3-2-1 rule from kept features: a plane gives the first axis, a second plane or an
   axis gives the direction of the second, a hole centre or a point gives the origin. Stored in
   `features.json` as the part's frame. The viewer shows the axes and can show every number in
@@ -139,9 +137,30 @@ number is in the scan's own frame.
     strict 3-2-1 by themselves.
   - The frame's ± is carried over from the fits'; ±2σ covers the true frame as it should
     (`VALIDATION.md`, "The part's coordinate system").
-  - **Left:** keeping the frame with the scan (it goes under `frame` in K1's file), the routes,
-    the viewer's panel and the downloads in the part's frame; the ± on meshes of simulated
-    scans.
+- **Server and viewer done 2026-11-17.** `POST / DELETE .../features/frame` build the frame from
+  three kept fits and keep it under `frame` in `features.json`; a refusal is answered in the
+  engine's words, and a fit made on an earlier mesh may not be used. `GET
+  .../features/frame/mesh.ply` and `mesh.stl` give the current mesh in the part's frame; the
+  ordinary downloads are byte-identical with or without a frame (`APP_API.md`, "The part's
+  frame").
+  - The viewer's "Coordinate system" panel: three slots filled from the kept fits, the axis
+    names, two flips and "Strict 3-2-1", each with a card on hover; the frame's ± and warnings;
+    the part's axes drawn at its origin; one switch, "Numbers in the part's frame", for the
+    positions and directions in the fits and measurements panels (sizes, distances, angles and
+    ± do not change with the frame); "STL / PLY in the part's frame" in the Download panel.
+  - The frame is **out of date** when a fit it was built from was deleted, fitted again or
+    changed; it is then shown dashed with the reasons and a "Build again" button. Nothing is
+    rebuilt on its own. A rename does not count.
+  - Each fit's card now also shows its position and direction (it showed none before, so the
+    switch would have had nothing to change).
+  - `ProcessManager.mesh_arrays` is the public way to the current mesh; the kept features no
+    longer read private members (K1's note).
+  - Checked in the app on a simulated bracket scan (715,226 triangles) with one real fit and two
+    made up for the check: built, the axes drawn, the hole's centre reads 0, 0, 0 with the
+    switch on, the STL in the part's frame downloads with all its triangles.
+  - Tests: 14 for the routes and 3 for the file on both paths, 60 UI checks.
+  - **Left:** picking a point (not a kept fit) as the origin in the viewer (the route takes
+    one); the frame's ± on meshes of simulated scans.
 
 ---
 

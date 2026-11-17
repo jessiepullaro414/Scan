@@ -8,7 +8,7 @@ mesh; :mod:`ohs.server.features` fits and refits through the fit route and keeps
 **The file** (``format_version`` 1)::
 
     {"format_version": 1,
-     "frame": null,                  # the part's coordinate system (a later task): kept as given
+     "frame": null,                  # the part's coordinate system: PartFrame.to_dict() (ohs.measure.frame), or null
      "features": [{"id": "f-…", "name": "Fit 1", "kind": "plane" | "cylinder" | "hole",
                    "shape": {...},   # exactly as the fit route returns it, with its ± values
                    "seed": {"kind", "face", "point", "tolerance_mm"},   # the click, to fit it again
@@ -30,6 +30,12 @@ are unique across the three lists.
 selections (``process/selections/<id>.npy``). A region is only valid on the mesh version its
 feature was fitted on.
 
+**The part's frame** (``frame``) is written by :mod:`ohs.server.features` from
+:func:`ohs.measure.frame.part_frame`. :func:`validate` passes it through as it is (an object or
+null), so a frame this version cannot read (a later ``format_version``, a damaged matrix) never
+stops the features from loading, and is not stripped when the file is written again;
+:func:`frame_state` says whether it can be read and whether it is still current.
+
 **Writing** is atomic: a temporary file next to the real one, then a rename, so a crash or a full
 disk leaves the old file whole. A document that does not pass :func:`validate` is never written.
 """
@@ -50,7 +56,7 @@ import numpy as np
 
 __all__ = ["FORMAT_VERSION", "FILE_NAME", "FACES_DIR", "KINDS", "SHAPE_OF", "NAME_MAX", "ID_RE", "empty",
            "validate", "load", "save", "faces_path", "save_faces", "load_faces", "remove_faces", "new_id",
-           "next_name", "now"]
+           "next_name", "now", "frame_state"]
 
 FORMAT_VERSION = 1
 FILE_NAME = "features.json"
@@ -242,6 +248,43 @@ def validate(doc: Any) -> dict:
             raise ValueError(f"the id {item['id']!r} is used twice")
         seen.add(item["id"])
     return out
+
+
+def frame_state(frame: Any, features: list[dict]) -> dict | None:
+    """Whether the kept part's frame can be read and is still current, for showing it.
+
+    Returns None without a frame, else ``{"readable", "out_of_date", "out_of_date_reasons"}``.
+    The frame is *out of date* when a fit it was built from has been deleted, or its shape is no
+    longer the one the frame was built from (fitted again, or changed): the shapes kept in the
+    frame's ``built_from`` are compared with the kept fits of the same id. A rename is not a change;
+    a point given as the origin has no id and never goes out of date. A frame that cannot be read
+    (:meth:`PartFrame.from_dict <ohs.measure.frame.PartFrame.from_dict>` refuses it, e.g. a later
+    ``format_version``) is shown as not readable and out of date, with the reason. Nothing is
+    rebuilt here."""
+    if frame is None:
+        return None
+    from ohs.measure.frame import PartFrame
+
+    try:
+        built_from = PartFrame.from_dict(frame).built_from
+        if not isinstance(built_from, list) or not all(isinstance(x, dict) for x in built_from):
+            raise ValueError("its built_from must be a list of objects")
+    except (ValueError, TypeError, AttributeError, KeyError) as e:
+        return {"readable": False, "out_of_date": True,
+                "out_of_date_reasons": [f"this version cannot read the part's frame: {e}"]}
+    by_id = {f.get("id"): f for f in features}
+    reasons = []
+    for slot in built_from:
+        fid = slot.get("id")
+        if fid is None:
+            continue
+        role = slot.get("role") or "fit"
+        f = by_id.get(fid)
+        if f is None:
+            reasons.append(f"the {role} \"{slot.get('name') or fid}\" was deleted")
+        elif f.get("shape") != slot.get("fit"):
+            reasons.append(f"the {role} \"{f.get('name') or fid}\" was fitted again or changed since")
+    return {"readable": True, "out_of_date": bool(reasons), "out_of_date_reasons": reasons}
 
 
 # --------------------------------------------------------------------------- files

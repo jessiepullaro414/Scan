@@ -34,6 +34,8 @@ import type {
   NewFeature,
   NewMeasurement,
   NewRelation,
+  NewFrame,
+  PartFrameView,
   RefitResult,
   HoleOutline,
   Job,
@@ -345,6 +347,13 @@ export const api = {
   featureFaces: (pid: string, sid: string, id: string) => get<FeatureFaces>(`${scanPath(pid, sid)}/features/${enc(id)}/faces`),
   /** Fit the stale fits again on the current mesh, from their saved clicks; those that can't be stay marked. */
   refitFeatures: (pid: string, sid: string, ids?: string[]) => post<RefitResult>(`${scanPath(pid, sid)}/features/refit`, ids ? { ids } : {}),
+  /** Build the part's frame from three kept fits and keep it (replaces one kept before). 422 with the engine's
+   * words when the fits can't make a frame (the detail says why), 409 for a fit made on an earlier mesh. */
+  buildFrame: (pid: string, sid: string, body: NewFrame) => post<PartFrameView>(`${scanPath(pid, sid)}/features/frame`, body),
+  /** Forget the part's frame. */
+  removeFrame: (pid: string, sid: string) => del(`${scanPath(pid, sid)}/features/frame`),
+  /** URL of the current mesh turned into the part's frame (`mesh.ply` or `mesh.stl`); 404 without a frame. */
+  frameMeshUrl: (pid: string, sid: string, name: "mesh.ply" | "mesh.stl") => `${scanPath(pid, sid)}/features/frame/${name}`,
 
   // ---------------------------------------------------------------- M5: areas that need another pass
   /** Which parts of the current mesh miss a tolerance (above 0, at most 100 mm): the share of the surface

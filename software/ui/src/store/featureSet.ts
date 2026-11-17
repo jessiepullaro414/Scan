@@ -4,7 +4,7 @@
  * reading the whole set again. Pure functions (store/features.ts uses them; featureSet.test.ts
  * checks them).
  */
-import type { FeatureSet, KeptFeature, KeptFit, KeptMeasurement, KeptRelation } from "../api/types.ts";
+import type { FeatureSet, KeptFeature, KeptFit, KeptMeasurement, KeptRelation, PartFrameView } from "../api/types.ts";
 
 /** A fit just kept, its region left out (the set never holds regions). */
 export function withFeature(set: FeatureSet, f: KeptFit | KeptFeature): FeatureSet {
@@ -42,4 +42,15 @@ export function without(set: FeatureSet, id: string): FeatureSet {
 /** How many fits were made on an earlier mesh. */
 export function staleFits(set: FeatureSet | null): number {
   return set ? set.features.filter((f) => f.stale).length : 0;
+}
+
+/** The set with the part's frame just built (or none: removed); the fits untouched. */
+export function withFrame(set: FeatureSet, frame: PartFrameView | null): FeatureSet {
+  return { ...set, frame: frame as FeatureSet["frame"] };
+}
+
+/** Whether the kept frame was built from this fit (deleting it makes the frame out of date: read the set again). */
+export function frameUses(set: FeatureSet | null, id: string): boolean {
+  const built = (set?.frame as { built_from?: unknown } | null | undefined)?.built_from;
+  return Array.isArray(built) && built.some((s) => !!s && typeof s === "object" && (s as { id?: unknown }).id === id);
 }

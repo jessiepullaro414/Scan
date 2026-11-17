@@ -6,11 +6,14 @@
  *
  * Errors of a rename, delete or "fit again" become a toast with the engine's detail and hint;
  * keeping a fit throws, so the viewer can tell a changed mesh (409) from a click that fits nothing.
+ *
+ * The part's frame (APP_API.md "The part's frame") is built and removed here too. A refusal is not a toast: the
+ * Coordinate system panel shows the engine's words next to the slots, so `buildFrame` returns the error.
  */
 import { create } from "zustand";
 import { ApiError, api } from "../api/http";
-import type { FeatureSet, KeptFit, KeptMeasurement, KeptRelation, NewFeature, NewMeasurement, RefitResult } from "../api/types";
-import { withFeature, withMeasurement, withName, withRelation, without } from "./featureSet";
+import type { FeatureSet, KeptFit, KeptMeasurement, KeptRelation, NewFeature, NewFrame, NewMeasurement, RefitResult } from "../api/types";
+import { frameUses, withFeature, withFrame, withMeasurement, withName, withRelation, without } from "./featureSet";
 import { toast } from "./toasts";
 
 export type FeaturesEntry = {
@@ -20,6 +23,8 @@ export type FeaturesEntry = {
   error: ApiError | null;
   /** "Fit again" is running. */
   refitting: boolean;
+  /** The part's frame is being built or removed. */
+  framing: boolean;
 };
 
 type FeaturesStore = {
@@ -35,11 +40,14 @@ type FeaturesStore = {
   removeAll: (pid: string, sid: string, ids: string[]) => Promise<void>;
   /** Fit the stale fits again on the current mesh. */
   refit: (pid: string, sid: string) => Promise<RefitResult | null>;
+  /** Build the part's frame (or build it again); null when built, else the engine's error to show. */
+  buildFrame: (pid: string, sid: string, body: NewFrame) => Promise<ApiError | null>;
+  removeFrame: (pid: string, sid: string) => Promise<boolean>;
 };
 
 export const featuresKey = (pid: string, sid: string) => `${pid}/${sid}`;
 
-const blank = (): FeaturesEntry => ({ set: null, loading: false, error: null, refitting: false });
+const blank = (): FeaturesEntry => ({ set: null, loading: false, error: null, refitting: false, framing: false });
 
 export const useFeatures = create<FeaturesStore>((set, get) => {
   const patch = (pid: string, sid: string, p: Partial<FeaturesEntry>) =>
@@ -111,7 +119,9 @@ export const useFeatures = create<FeaturesStore>((set, get) => {
     remove: async (pid, sid, id) => {
       try {
         await api.deleteFeature(pid, sid, id);
+        const usedByFrame = frameUses(get().entries[featuresKey(pid, sid)]?.set ?? null, id);
         change(pid, sid, (s) => without(s, id));
+        if (usedByFrame) void get().load(pid, sid); // the frame is now out of date: the engine says so
         return true;
       } catch (e) {
         if (e instanceof ApiError && e.status === 404) {
@@ -147,6 +157,33 @@ export const useFeatures = create<FeaturesStore>((set, get) => {
         patch(pid, sid, { refitting: false });
         toast.error("Couldn't fit them again", err);
         return null;
+      }
+    },
+
+    buildFrame: async (pid, sid, body) => {
+      patch(pid, sid, { framing: true });
+      try {
+        const f = await api.buildFrame(pid, sid, body);
+        patch(pid, sid, { framing: false });
+        change(pid, sid, (s) => withFrame(s, f));
+        return null;
+      } catch (e) {
+        patch(pid, sid, { framing: false });
+        return e instanceof ApiError ? e : new ApiError(0, String(e), null, "frame");
+      }
+    },
+
+    removeFrame: async (pid, sid) => {
+      patch(pid, sid, { framing: true });
+      try {
+        await api.removeFrame(pid, sid);
+        patch(pid, sid, { framing: false });
+        change(pid, sid, (s) => withFrame(s, null));
+        return true;
+      } catch (e) {
+        patch(pid, sid, { framing: false });
+        toast.error("Couldn't remove the coordinate system", e);
+        return false;
       }
     },
   };

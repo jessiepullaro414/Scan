@@ -881,6 +881,21 @@ class ProcessManager:
         self._need_base(sp)
         return self.load_step(sp, sp.state["cursor"])
 
+    def mesh_arrays(self, pid: str, sid: str) -> tuple[int, np.ndarray, np.ndarray, np.ndarray | None,
+                                                       np.ndarray | None]:
+        """The current mesh as ``(version, V, F, sigma, filled)``: the arrays the fit route keeps
+        per mesh version (loaded once, shared with the fits and the check; read them, do not change
+        them). 409 before there is a mesh."""
+        sp = self.scan(pid, sid)
+        self._need_base(sp)
+        with sp.lock:
+            v = int(sp.state["version"])
+            cached = sp._fit_mesh
+            if cached is None or cached[0] != v:
+                V, F, S, Fl = self._load_step(sp, int(sp.state["cursor"]))
+                cached = sp._fit_mesh = (v, V, F, S, Fl)
+        return cached
+
     def _formats(self) -> tuple[str, ...]:
         fmts = ["ply", "stl"]
         if "obj" in [str(e).lower() for e in getattr(self.st.cfg.process, "export", [])]:

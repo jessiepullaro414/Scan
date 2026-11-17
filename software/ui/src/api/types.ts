@@ -730,7 +730,9 @@ export type KeptMeasurement = {
 export type KeptRelation = { id: string; name: string; a: string; b: string; created: string };
 export type FeatureSet = {
   format_version: number;
-  frame: Record<string, unknown> | null; // the part's coordinate system (a later task)
+  // the part's coordinate system: a `PartFrameView` when this version can read it (lib/partFrame.ts `readFrame`),
+  // else what the file holds, with `readable: false`; null without one
+  frame: Record<string, unknown> | null;
   mesh_version: number | null; // the current mesh's version (null before there is a mesh)
   features: KeptFeature[];
   measurements: KeptMeasurement[];
@@ -746,6 +748,59 @@ export type RefitResult = {
   features: FeatureSet;
   refitted: string[];
   failed: { id: string; detail: string; hint: string | null }[]; // stay as they were, still marked
+};
+
+// ------------------------------------------------------------------ the part's frame (FEATURE_PLAN.md K3)
+// APP_API.md "Kept features", "The part's frame": built from three kept fits by the 3-2-1 rule (ohs/measure/frame.py).
+
+export type AxisName = "X" | "Y" | "Z";
+export type FrameRole = "primary" | "secondary" | "origin";
+/** One slot of a frame: the feature it was built from, as it was then. */
+export type FrameSlot = {
+  role: FrameRole;
+  id: string | null; // the kept fit's id; null for a point given as the origin
+  name: string | null; // the fit's name when the frame was built
+  kind: "plane" | "cylinder" | "circle" | "point";
+  sets: string; // in words, what it sets, e.g. "the Z axis (its normal) and Z = 0 (the plane)"
+  fit: Record<string, unknown>; // the shape it was built from (a point: {kind: "point", point, sigma_mm?})
+};
+/** The frame's 1σ (null where a fit gives no ±; a warning says which). */
+export type FrameSigma = {
+  angle_deg: number | null; // the whole rotation, RMS
+  tilt_deg: number | null; // its part about the two in-plane axes
+  turn_deg: number | null; // about the first axis
+  origin_mm: number | null; // the origin's displacement, RMS
+  origin_axes_mm: (number | null)[]; // per part axis X, Y, Z
+};
+/** `PartFrame.to_dict()`: what features.json keeps under `frame`. */
+export type PartFrameRecord = {
+  format_version: 1;
+  units: "mm";
+  matrix: number[][]; // 4x4, rows: x_part = R x_scan + t (R's rows are the part's X, Y, Z in the scan's frame)
+  axes: { primary: AxisName; secondary: AxisName; third: AxisName };
+  flip_primary: boolean;
+  flip_secondary: boolean;
+  secondary_zero: boolean;
+  built_from: FrameSlot[]; // primary, secondary, origin
+  sigma: FrameSigma;
+  warnings: string[];
+};
+/** The frame as `GET .../features` shows it. */
+export type PartFrameView = PartFrameRecord & {
+  readable: true;
+  out_of_date: boolean; // a fit it was built from was deleted, fitted again or changed since: "Build again"
+  out_of_date_reasons: string[];
+};
+/** A point as the origin, in the scan's frame (mm); `sigma_mm` its 1σ when known. */
+export type FramePoint = { point: [number, number, number]; sigma_mm?: number | null };
+export type NewFrame = {
+  primary: string; // a kept plane
+  secondary: string; // a kept plane, cylinder or hole
+  origin: string | FramePoint; // a kept hole, cylinder or plane, or a point
+  axes?: string; // the primary's and the secondary's axis names, default "ZX"
+  flip_primary?: boolean;
+  flip_secondary?: boolean;
+  secondary_zero?: boolean; // strict 3-2-1
 };
 
 // ------------------------------------------------------------------ M5 second slice: the deviation map

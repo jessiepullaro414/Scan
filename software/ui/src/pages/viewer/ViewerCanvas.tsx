@@ -2,8 +2,9 @@
  * The result viewer's 3D view: the processed mesh (clay matcap, studio PBR, normals or the
  * confidence map with the sigma under the cursor, the deviation map with the move under it, the Lasers
  * shading with the distance to the laser points under it), an optional wireframe overlay and laser point
- * cloud, the two-click distance tool, the fitted shapes (FitTool.tsx) and the Check panel's picked area
- * (CheckMark.tsx). Renders on demand (no work while the view is still).
+ * cloud, the two-click distance tool, the fitted shapes (FitTool.tsx), the Check panel's picked area
+ * (CheckMark.tsx) and the part's axes when it has a coordinate system (PartAxes.tsx). Renders on demand (no
+ * work while the view is still).
  */
 import { Bvh, Html, Line, OrbitControls } from "@react-three/drei";
 import { Canvas, useThree } from "@react-three/fiber";
@@ -26,7 +27,7 @@ import {
 } from "three";
 import { useUi } from "../../store/ui";
 import { CameraRig } from "../../three/CameraRig";
-import type { FitKind } from "../../api/types";
+import type { FitKind, PartFrameView } from "../../api/types";
 import { deviationReadout, interpolateMove } from "../../lib/deviation";
 import { laserReadout } from "../../lib/lasers";
 import { applyConfidenceColors, confidenceMaterial, filledGeometry, filledMaterial, SIGMA_NONE_MM, sigmaOf } from "../../three/confidence";
@@ -37,6 +38,7 @@ import { clayMatcap } from "../../three/materials";
 import { AxisGizmo, SceneGrid, StudioEnvironment, StudioLights, useThemeColors } from "../../three/Studio";
 import { CheckMark } from "./CheckMark";
 import { FitTool, type FitItem } from "./FitTool";
+import { PartAxes } from "./PartAxes";
 import { useSurfacePick } from "./picking";
 import type { CheckLit } from "./useCheck";
 
@@ -361,6 +363,7 @@ export function ViewerCanvas({
   onFitPick,
   checkLit,
   frameKey,
+  partFrame = null,
 }: {
   geometry: BufferGeometry;
   laser: BufferGeometry | null;
@@ -381,6 +384,8 @@ export function ViewerCanvas({
   /** The area of the Check panel lit on this mesh, if any. */
   checkLit: CheckLit | null;
   frameKey: number;
+  /** The part's coordinate system, drawn at its origin; `outOfDate` draws it dashed. */
+  partFrame?: { frame: PartFrameView; outOfDate: boolean } | null;
 }) {
   const meshRef = useRef<Mesh | null>(null);
   const sigma = shading === "confidence" ? sigmaOf(geometry) : null;
@@ -431,6 +436,7 @@ export function ViewerCanvas({
           <MeasureTool enabled={measure} target={meshRef} onPick={onPick} pending={pending} measurements={measurements} markerRadius={markerRadius} />
           <FitTool enabled={fit} busy={fitBusy} target={meshRef} geometry={geometry} fits={fits} picked={pickedFits} markerRadius={markerRadius} onPick={onFitPick} />
           {checkLit ? <CheckMark lit={checkLit} geometry={geometry} /> : null}
+          {partFrame ? <PartAxes frame={partFrame.frame} outOfDate={partFrame.outOfDate} length={Math.max(5, bounds.radius * 0.35)} /> : null}
         </group>
         <SceneGrid y={bounds.gridY} />
         <AxisGizmo margin={[62, 62]} />

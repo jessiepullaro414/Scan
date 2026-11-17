@@ -7,7 +7,8 @@
   and ``/api/calibration/*``
   (:mod:`ohs.server.setup`, :mod:`ohs.server.calibration`), and M3's processing studio
   ``/api/projects/{pid}/scans/{sid}/process/*`` and ``/api/recipes`` (:mod:`ohs.server.processing`),
-  and the kept fits and measurements ``/api/projects/{pid}/scans/{sid}/features`` (:mod:`ohs.server.features`);
+  and the kept fits and measurements ``/api/projects/{pid}/scans/{sid}/features``, with the part's
+  frame under ``.../features/frame`` (:mod:`ohs.server.features`);
 * ``/api/ws/live``: ``hello``, then the current ``device`` / ``session`` / ``calib_session`` /
   ``setup`` / active ``job`` messages, then everything the :class:`~ohs.server.hub.Hub`
   publishes for this client; ``subscribe`` messages from the client set its options;
@@ -34,7 +35,7 @@ import json
 import logging
 import mimetypes
 from pathlib import Path
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional, Union
 from urllib.parse import urlsplit
 
 from fastapi import FastAPI, Request, WebSocket
@@ -185,6 +186,21 @@ class RenameBody(BaseModel):
 
 class RefitBody(BaseModel):
     ids: Optional[list[str]] = None  # None: every stale feature
+
+
+class FramePoint(BaseModel):
+    point: list[float] = Field(min_length=3, max_length=3)  # in the scan's frame, mm
+    sigma_mm: Optional[float] = Field(None, ge=0.0)  # its 1σ; None: the frame's ± leaves it out
+
+
+class FrameBody(BaseModel):
+    primary: str  # a kept plane's id
+    secondary: str  # a kept plane, cylinder or hole's id
+    origin: Union[str, FramePoint]  # a kept hole, cylinder or plane's id, or a point
+    axes: str = "ZX"  # the primary's and the secondary's axis names (checked by the engine)
+    flip_primary: bool = False
+    flip_secondary: bool = False
+    secondary_zero: bool = False  # strict 3-2-1
 
 
 class CheckBody(BaseModel):
@@ -589,6 +605,27 @@ def create_app(config: Any = None, *, projects_dir: Any = None, static_dir: Any 
     @app.post(fpath + "/refit")
     def features_refit(pid: str, sid: str, body: Optional[RefitBody] = None) -> JSONResponse:
         return _json(feats.refit(pid, sid, body.ids if body is not None else None))
+
+    # the part's frame (FEATURE_PLAN K3): before ".../{fid}", which would take "frame" as an id
+    @app.post(fpath + "/frame")
+    def features_build_frame(pid: str, sid: str, body: FrameBody) -> JSONResponse:
+        origin = body.origin.model_dump() if isinstance(body.origin, FramePoint) else body.origin
+        return _json(feats.build_frame(pid, sid, body.primary, body.secondary, origin, body.axes, body.flip_primary,
+                                       body.flip_secondary, body.secondary_zero))
+
+    @app.delete(fpath + "/frame")
+    def features_remove_frame(pid: str, sid: str) -> Response:
+        feats.remove_frame(pid, sid)
+        return Response(status_code=204)
+
+    @app.get(fpath + "/frame/{name}")
+    def features_frame_mesh(pid: str, sid: str, name: str) -> Response:
+        data, filename, version = feats.frame_mesh(pid, sid, name)
+        headers = {"Cache-Control": "no-cache", "Content-Disposition": f'attachment; filename="{filename}"'}
+        if version is not None:
+            headers["X-OHS-Mesh-Version"] = str(version)
+        return Response(data, media_type="model/stl" if name.endswith(".stl") else "application/octet-stream",
+                        headers=headers)
 
     @app.patch(fpath + "/{fid}")
     def features_rename(pid: str, sid: str, fid: str, body: RenameBody) -> JSONResponse:

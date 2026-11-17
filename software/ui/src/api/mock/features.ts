@@ -8,8 +8,13 @@
  *
  * The fits themselves are the demo's fit route (`MockProcess.fit`), passed in as a `FeatureEngine`,
  * so this file has no mesh code and can be checked on its own (features.test.ts).
+ *
+ * The part's frame (`.../features/frame`, frame.test.ts): built from three kept fits with the simplified rule of
+ * frame.ts, kept per scan, shown with whether it is still current (a fit it was built from deleted or changed),
+ * removed; the current mesh in it comes from the engine (`partMesh`).
  */
-import type { FeatureSet, FitResult, KeptFeature, KeptMeasurement, KeptRelation } from "../types";
+import type { FeatureSet, FitResult, KeptFeature, KeptMeasurement, KeptRelation, PartFrameRecord } from "../types";
+import { frameState, mockPartFrame, type FrameInput } from "./frame.ts";
 import { HttpError, json } from "./host.ts";
 
 /** What a scan's kept features need from the demo engine. */
@@ -20,6 +25,9 @@ export type FeatureEngine = {
   version: () => number | null;
   /** The current mesh's face nearest a point (to find a saved click again after an edit). */
   nearestFace: (point: number[]) => number;
+  /** The current mesh with its vertices and normals turned by `matrix` (4x4 rows), as `mesh.ply` or `mesh.stl`;
+   * null before there is a mesh. */
+  partMesh?: (matrix: number[][], name: "mesh.ply" | "mesh.stl") => ArrayBuffer | null;
 };
 
 type Stored = {
@@ -28,6 +36,8 @@ type Stored = {
   relations: KeptRelation[];
   /** Each fit's region, base64 as the fit route gives it. */
   faces: Map<string, string>;
+  /** The part's frame, as `features.json` keeps it. */
+  frame: PartFrameRecord | null;
 };
 
 const NAME_MAX = 80;
@@ -65,7 +75,7 @@ export class MockFeatures {
 
   private kept(key: string): Stored {
     let s = this.sets.get(key);
-    if (!s) this.sets.set(key, (s = { features: [], measurements: [], relations: [], faces: new Map() }));
+    if (!s) this.sets.set(key, (s = { features: [], measurements: [], relations: [], faces: new Map(), frame: null }));
     return s;
   }
 
@@ -73,12 +83,16 @@ export class MockFeatures {
     const stale = (v: number | null) => version === null || v !== version;
     return {
       format_version: 1,
-      frame: null,
+      frame: this.frameView(s),
       mesh_version: version,
       features: s.features.map((f) => ({ ...f, stale: stale(f.mesh_version) })),
       measurements: s.measurements.map((m) => ({ ...m, stale: stale(m.mesh_version) })),
       relations: s.relations.map((r) => ({ ...r })),
     };
+  }
+
+  private frameView(s: Stored): FeatureSet["frame"] {
+    return s.frame ? { ...s.frame, ...frameState(s.frame, s.features) } : null;
   }
 
   private find(s: Stored, id: string): { list: "features" | "measurements" | "relations"; i: number } {
@@ -99,6 +113,12 @@ export class MockFeatures {
     if (a === "measurements" && is("POST", 1)) return json(200, this.keepMeasurement(s, body, engine));
     if (a === "relations" && is("POST", 1)) return json(200, this.keepRelation(s, body));
     if (a === "refit" && is("POST", 1)) return json(200, this.refit(s, body, engine));
+    if (a === "frame" && is("POST", 1)) return json(200, this.buildFrame(s, body, engine));
+    if (a === "frame" && is("DELETE", 1)) {
+      s.frame = null;
+      return json(204, null);
+    }
+    if (a === "frame" && b && is("GET", 2)) return this.frameMesh(s, b, engine);
     if (a && is("PATCH", 1)) {
       const name = cleanName(body.name);
       const { list, i } = this.find(s, a);
@@ -181,6 +201,43 @@ export class MockFeatures {
     const r: KeptRelation = { id: newId("r"), name: cleanName(body.name, nextName(s.relations, "Relation")), a, b, created: nowIso() };
     s.relations.push(r);
     return r;
+  }
+
+  private buildFrame(s: Stored, body: Record<string, unknown>, engine: FeatureEngine) {
+    const version = engine.version();
+    if (version === null) throw new HttpError(409, "This scan has no mesh yet", "Make the mesh, fit the features, then build the frame.");
+    const inputs = (["primary", "secondary", "origin"] as const).map((role): FrameInput => {
+      const ref = body[role];
+      if (role === "origin" && ref && typeof ref === "object" && !Array.isArray(ref)) {
+        const pt = ref as Record<string, unknown>;
+        if (!isVec3(pt.point)) bad("origin.point: must be three numbers");
+        const sg = pt.sigma_mm;
+        if (sg !== undefined && sg !== null && !(typeof sg === "number" && sg >= 0)) bad("origin.sigma_mm: must be 0 or more");
+        return { point: [...(pt.point as [number, number, number])], sigma_mm: typeof sg === "number" ? sg : null };
+      }
+      if (typeof ref !== "string") return bad(`${role}: the id of a kept fit`);
+      const f = s.features.find((x) => x.id === ref);
+      if (!f) return bad(`No kept fit “${ref}” for the ${role}`, "Pick one of the kept fits.");
+      if (f.mesh_version !== version)
+        throw new HttpError(409, `The ${role} “${f.name}” was fitted on an earlier mesh (version ${f.mesh_version}, the mesh is now version ${version})`, "Fit it again first, then build the frame.");
+      return { feature: f };
+    }) as [FrameInput, FrameInput, FrameInput];
+    for (const k of ["flip_primary", "flip_secondary", "secondary_zero"])
+      if (body[k] !== undefined && typeof body[k] !== "boolean") bad(`${k}: must be true or false`);
+    if (body.axes !== undefined && typeof body.axes !== "string") bad("axes: must be text, e.g. \"ZX\"");
+    s.frame = mockPartFrame(inputs, body as { axes?: string; flip_primary?: boolean; flip_secondary?: boolean; secondary_zero?: boolean });
+    return this.frameView(s);
+  }
+
+  private frameMesh(s: Stored, name: string, engine: FeatureEngine): Response {
+    if (name !== "mesh.ply" && name !== "mesh.stl") throw new HttpError(404, `No file “${name}” in the part's frame`, "Available: mesh.ply, mesh.stl.");
+    if (!s.frame) throw new HttpError(404, "This scan has no part's frame", "Build one first.");
+    const buf = engine.partMesh?.(s.frame.matrix, name) ?? null;
+    if (!buf) throw new HttpError(404, `${name} isn't there yet`, "Make the mesh first.");
+    return new Response(buf, {
+      status: 200,
+      headers: { "content-type": "application/octet-stream", "content-disposition": `attachment; filename="mesh-part-frame.${name.slice(5)}"` },
+    });
   }
 
   private refit(s: Stored, body: Record<string, unknown>, engine: FeatureEngine) {

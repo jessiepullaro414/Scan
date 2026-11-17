@@ -14,7 +14,13 @@ the numbers a click in the viewer gives. This module adds:
   seeds. Face numbers change with an edit, so the seed's face is found again as the measured face
   nearest the saved point; when that face is not under the point any more (the region was cut
   away), the feature is not fitted on some other surface. A feature that cannot be fitted again
-  stays as it was, still marked, and the answer says why.
+  stays as it was, still marked, and the answer says why;
+* **the part's frame** (FEATURE_PLAN K3): ``POST .../features/frame`` builds the part's coordinate
+  system from three kept fits (:func:`ohs.measure.frame.part_frame`) and keeps it under ``frame``;
+  a refusal of the engine is answered 422 with its own words, a fit made on an earlier mesh 409.
+  Reading shows whether the frame is still current (:func:`ohs.measure.features.frame_state`);
+  nothing is rebuilt on its own. ``GET .../features/frame/mesh.ply`` (or ``.stl``) is the scan's
+  current result mesh turned into the frame, made on request: the scan's own files stay as they are.
 
 **Locking.** One lock per scan around reading, changing and writing ``features.json``. Fits run
 outside it (they can take a second); a refit is only kept when its feature has not been changed
@@ -23,7 +29,9 @@ or deleted meanwhile.
 from __future__ import annotations
 
 import base64
+import tempfile
 import threading
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -76,8 +84,16 @@ class FeatureManager:
         """A feature or measurement as the API shows it: with ``stale`` when it was made on another mesh."""
         return {**item, "stale": version is None or item.get("mesh_version") != version}
 
+    @staticmethod
+    def _frame_view(frame: dict | None, features: list[dict]) -> dict | None:
+        """The kept frame as the API shows it: with ``readable``, ``out_of_date`` and why
+        (:func:`ohs.measure.features.frame_state`); None without one."""
+        state = kf.frame_state(frame, features)
+        return None if state is None else {**frame, **state}
+
     def _set_view(self, doc: dict, version: int | None) -> dict:
-        return {"format_version": doc["format_version"], "frame": doc["frame"], "mesh_version": version,
+        return {"format_version": doc["format_version"], "frame": self._frame_view(doc["frame"], doc["features"]),
+                "mesh_version": version,
                 "features": [self._view(f, version) for f in doc["features"]],
                 "measurements": [self._view(m, version) for m in doc["measurements"]],
                 "relations": list(doc["relations"])}
@@ -264,6 +280,97 @@ class FeatureManager:
                 self._save(pid, sid, doc)
         return {"features": self._set_view(doc, self._version(pid, sid)), "refitted": refitted, "failed": failed}
 
+    # ------------------------------------------------------------------ the part's frame (K3)
+    def build_frame(self, pid: str, sid: str, primary: str, secondary: str, origin: Any, axes: str = "ZX",
+                    flip_primary: bool = False, flip_secondary: bool = False, secondary_zero: bool = False) -> dict:
+        """``POST .../features/frame``: build the part's frame from three kept fits and keep it.
+
+        ``primary`` and ``secondary`` are kept fit ids; ``origin`` is one too, or a point
+        ``{"point": [x, y, z], "sigma_mm": s | None}`` in the scan's frame. Each fit goes to
+        :func:`~ohs.measure.frame.part_frame` as its id, name and shape. Replaces a frame kept
+        before. Returns the frame as ``GET`` shows it. 422 for an unknown fit or a refusal of the
+        engine (its message as the detail), 409 before there is a mesh and for a fit made on an
+        earlier mesh (its numbers are not this mesh's)."""
+        from ohs.measure.frame import part_frame
+
+        self._dir(pid, sid)
+        version = self._version(pid, sid)
+        if version is None:
+            raise ApiError(409, "this scan has no mesh yet", "run Track (or Make mesh), fit the features, then build the frame")
+        with self._lock(pid, sid):
+            doc = self._load(pid, sid)
+            by_id = {f["id"]: f for f in doc["features"]}
+            slots = []
+            for role, ref in (("primary", primary), ("secondary", secondary), ("origin", origin)):
+                if isinstance(ref, dict):  # a point as the origin
+                    point = {"kind": "point", "point": [float(x) for x in ref["point"]]}
+                    if ref.get("sigma_mm") is not None:
+                        point["sigma_mm"] = float(ref["sigma_mm"])
+                    slots.append(point)
+                    continue
+                f = by_id.get(ref)
+                if f is None:
+                    raise ApiError(422, f"no kept fit {ref!r} for the {role}",
+                                   "pick one of the kept fits (GET .../features), or keep the fit first")
+                if f["mesh_version"] != version:
+                    raise ApiError(409, f"the {role} \"{f['name']}\" was fitted on an earlier mesh (version "
+                                        f"{f['mesh_version']}, the mesh is now version {version})",
+                                   "fit it again first (POST .../features/refit), then build the frame")
+                slots.append({"id": f["id"], "name": f["name"], "fit": f["shape"]})
+            try:
+                frame = part_frame(*slots, axes=axes, flip_primary=flip_primary, flip_secondary=flip_secondary,
+                                   secondary_zero=secondary_zero)
+            except ValueError as e:
+                raise ApiError(422, str(e), "pick other fits for the slots, or change the options") from None
+            doc["frame"] = frame.to_dict()
+            saved = self._save(pid, sid, doc)
+        return self._frame_view(saved["frame"], saved["features"])
+
+    def remove_frame(self, pid: str, sid: str) -> None:
+        """``DELETE .../features/frame``: forget the part's frame (nothing happens without one)."""
+        with self._lock(pid, sid):
+            doc = self._load(pid, sid)
+            if doc["frame"] is not None:
+                doc["frame"] = None
+                self._save(pid, sid, doc)
+
+    def frame_mesh(self, pid: str, sid: str, name: str) -> tuple[bytes, str, int | None]:
+        """``GET .../features/frame/mesh.ply`` (or ``mesh.stl``): the scan's current result mesh
+        (``result/mesh.ply``) with its vertices and normals turned into the part's frame
+        (:meth:`PartFrame.mesh_to_part <ohs.measure.frame.PartFrame.mesh_to_part>`); the PLY keeps
+        each vertex's sigma and each face's filled flag. Made on request in a temporary folder: the
+        scan's own files are not touched. Returns the file's bytes, its download name and the mesh
+        version read before it (the file is that version or a newer one). 404 without a frame or a
+        mesh, 409 for a frame this version cannot read. An out-of-date frame is used as it is (the
+        viewer says so)."""
+        from ohs.measure.frame import PartFrame
+        from ohs.track.export import load_ply, save_mesh, write_stl
+
+        if name not in ("mesh.ply", "mesh.stl"):
+            raise ApiError(404, f"no file {name!r} in the part's frame", "available: mesh.ply, mesh.stl")
+        with self._lock(pid, sid):
+            frame = self._load(pid, sid)["frame"]
+        if frame is None:
+            raise ApiError(404, "this scan has no part's frame", "build one first (POST .../features/frame)")
+        try:
+            pf = PartFrame.from_dict(frame)
+        except (ValueError, TypeError, AttributeError, KeyError) as e:
+            raise ApiError(409, f"this version cannot read the part's frame: {e}",
+                           "build the frame again, or remove it") from None
+        version = self._version(pid, sid)
+        path, _ = self.st.projects.file_path(pid, sid, "mesh.ply")  # 404 before there is a mesh
+        m = load_ply(path)
+        V, N = pf.mesh_to_part(m["vertices"], m["normals"])
+        F = m["faces"] if m["faces"] is not None else np.zeros((0, 3), dtype=np.int64)
+        with tempfile.TemporaryDirectory(prefix="ohs-frame-") as tmp:
+            out = Path(tmp) / name
+            if name == "mesh.stl":
+                write_stl(out, V, F)
+            else:
+                save_mesh(out, V, F, N, quality=m["quality"], filled=m["filled"])
+            data = out.read_bytes()
+        return data, f"mesh-part-frame.{name.rsplit('.', 1)[1]}", version
+
     @staticmethod
     def _gone(V: np.ndarray, F: np.ndarray, C: np.ndarray, face: int | None, p: np.ndarray) -> str | None:
         """Why a saved click cannot be fitted again, when the surface under it is gone: the nearest
@@ -283,14 +390,7 @@ class FeatureManager:
 
     def _mesh(self, pid: str, sid: str) -> tuple[np.ndarray, np.ndarray, np.ndarray | None, int]:
         """The current mesh's vertices, faces, filled flags and version: the arrays the fit route
-        keeps per mesh version (loaded once, shared with it)."""
-        proc = self.st.processing
-        sp = proc.scan(pid, sid)
-        with sp.lock:
-            v = int(sp.state["version"])
-            cached = sp._fit_mesh
-            if cached is None or cached[0] != v:
-                V, F, S, Fl = proc._load_step(sp, int(sp.state["cursor"]))
-                cached = sp._fit_mesh = (v, V, F, S, Fl)
-        _, V, F, _, Fl = cached
+        keeps per mesh version (:meth:`ProcessManager.mesh_arrays
+        <ohs.server.processing.ProcessManager.mesh_arrays>`, loaded once, shared with it)."""
+        v, V, F, _, Fl = self.st.processing.mesh_arrays(pid, sid)
         return V, F, Fl, v

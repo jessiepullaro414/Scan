@@ -176,3 +176,59 @@ def test_default_names_and_ids():
     assert kf.next_name([{"name": "Bore"}, {"name": "Shaft"}], "Fit") == "Fit 3"
     a, b = kf.new_id("f"), kf.new_id("f")
     assert a != b and a.startswith("f-") and kf.ID_RE.fullmatch(a)
+
+
+# --------------------------------------------------------------------------- the part's frame (K3)
+def _side_feature() -> dict:
+    f = plane_feature("f-3", "Side")
+    f["shape"] = {**f["shape"], "point": [-4.0, 5.0, 0.0], "normal": [1.0, 0.0, 0.0]}
+    return f
+
+
+def _box_frame(features: list[dict]) -> dict:
+    from ohs.measure.frame import part_frame
+
+    top, hole, side = (next(f for f in features if f["id"] == i) for i in ("f-1", "f-2", "f-3"))
+    return part_frame(*({"id": f["id"], "name": f["name"], "fit": f["shape"]} for f in (top, side, hole))).to_dict()
+
+
+def test_frame_state_of_a_current_frame():
+    feats = [plane_feature(), hole_feature(), _side_feature()]
+    feats[0]["shape"]["point"] = [0.0, 0.0, 2.0]  # the top face through the hole's edge
+    frame = _box_frame(feats)
+    assert kf.frame_state(None, feats) is None
+    assert kf.frame_state(frame, feats) == {"readable": True, "out_of_date": False, "out_of_date_reasons": []}
+    # a rename is not a change
+    renamed = [dict(f, name="Renamed") if f["id"] == "f-2" else f for f in feats]
+    assert kf.frame_state(frame, renamed)["out_of_date"] is False
+    # it round-trips through the file untouched
+    kf.validate({**kf.empty(), "features": feats, "frame": frame})
+
+
+def test_frame_state_names_what_changed_or_went():
+    feats = [plane_feature(), hole_feature(), _side_feature()]
+    feats[0]["shape"]["point"] = [0.0, 0.0, 2.0]
+    frame = _box_frame(feats)
+    moved = copy.deepcopy(feats)
+    moved[1]["shape"]["center"] = [5.5, 5.0, 2.0]
+    moved[1]["name"] = "Bore"
+    s = kf.frame_state(frame, moved)
+    assert s["readable"] is True and s["out_of_date"] is True
+    assert len(s["out_of_date_reasons"]) == 1 and "origin" in s["out_of_date_reasons"][0]
+    assert "Bore" in s["out_of_date_reasons"][0]
+    gone = [f for f in feats if f["id"] != "f-3"]
+    s = kf.frame_state(frame, gone)
+    assert s["out_of_date"] is True and "Side" in s["out_of_date_reasons"][0] and "deleted" in s["out_of_date_reasons"][0]
+    both = [f for f in moved if f["id"] != "f-3"]
+    assert len(kf.frame_state(frame, both)["out_of_date_reasons"]) == 2
+
+
+def test_frame_state_of_a_frame_this_version_cannot_read(tmp_path):
+    for frame in ({}, {"format_version": 2, "matrix": [[1, 0, 0, 0]] * 4}, {"x": [1, 0, 0]},
+                  {"format_version": 1, "matrix": "no", "axes": 3}):
+        s = kf.frame_state(frame, [plane_feature()])
+        assert s["readable"] is False and s["out_of_date"] is True and s["out_of_date_reasons"][0]
+        doc = {**kf.empty(), "features": [plane_feature()], "frame": copy.deepcopy(frame)}
+        kf.save(tmp_path, doc)
+        back = kf.load(tmp_path)  # the features still load, the frame kept as it was
+        assert back["frame"] == frame and back["features"][0]["id"] == "f-1"

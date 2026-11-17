@@ -2,17 +2,20 @@
  * The viewer's list of fitted shapes, kept with the scan: each fit's name (the user can change it in place), its
  * numbers with their ± (1σ, statistical only, counting points that err together), its warnings in plain words,
  * and whether it was fitted on an earlier mesh, with one "Fit again" for those. Two fits picked from the list show
- * their relation (lib/fits.ts `relate`), which can be kept too.
+ * their relation (lib/fits.ts `relate`), which can be kept too. Each fit's position and direction are shown in the
+ * scan's frame, or in the part's frame when the Coordinate system panel's switch is on (lib/partFrame.ts); its
+ * sizes, ± values and the relations are the same in both.
  */
 import { Bookmark, CircleDashed, Cylinder, Link2, RefreshCw, Shapes, Square, TriangleExclamationPoint, X } from "lucide-react";
 import type { ReactNode } from "react";
 import { sentence } from "../../api/http";
-import type { FitKind, KeptRelation } from "../../api/types";
+import type { FitKind, KeptRelation, PartFrameView } from "../../api/types";
 import { Badge } from "../../components/ui/Badge";
 import { Button, IconButton } from "../../components/ui/Button";
 import { Kbd } from "../../components/ui/Feedback";
 import { fitName, fitValue, fmtLength, fmtPm, fmtSmall, relate } from "../../lib/fits";
 import { fmtInt } from "../../lib/format";
+import { fmtVec, placeOf } from "../../lib/partFrame";
 import { cn } from "../../lib/util";
 import { PICKED_COLOR, type FitItem } from "./FitTool";
 import { NameEdit } from "./NameEdit";
@@ -31,7 +34,18 @@ const mmSigma = (x: number) => `±${fmtSmall(x)} mm`;
 
 type Row = [label: string, value: string, tip?: string];
 
-function rowsOf(f: FitItem): Row[] {
+/** Where the fit is and which way it points: in the part's frame when `frame` is given, else in the scan's. */
+function placeRows(f: FitItem, frame: PartFrameView | null): Row[] {
+  const p = placeOf(f.shape, frame);
+  const where = frame ? "in the part's frame" : "in the scan's frame";
+  const sign = f.shape.kind === "plane" || f.shape.kind === "circle" ? " Which way a normal points is not measured: either sign is the same face." : " Which way an axis points is not measured.";
+  return [
+    [p.positionLabel, fmtVec(p.position), `${f.shape.kind === "plane" ? "The centre of the points the plane was fitted on" : f.shape.kind === "cylinder" ? "The point on the axis nearest the centre of its points" : "The hole's centre"}, mm, ${where}.`],
+    [p.directionLabel, fmtVec(p.direction, 3), `The ${p.directionLabel.toLowerCase()} as a unit direction, ${where}.${sign}`],
+  ];
+}
+
+function rowsOf(f: FitItem, frame: PartFrameView | null): Row[] {
   const s = f.shape;
   const rows: Row[] = [];
   if (s.kind === "plane") {
@@ -65,6 +79,7 @@ function rowsOf(f: FitItem): Row[] {
     ]);
   if (f.meanSigma !== null) rows.push(["Mean sigma", fmtSigma(f.meanSigma), "The fitted points' own 1σ from the scan (the confidence map's values), averaged."]);
   if (f.tolerance !== null) rows.push(["Tolerance", fmtLength(f.tolerance), "How far from the shape a face could lie and still join the region."]);
+  rows.push(...placeRows(f, frame));
   return rows;
 }
 
@@ -159,6 +174,7 @@ export function FitList({
   onStart,
   fitOn,
   ready,
+  frame = null,
 }: {
   fits: FitItem[];
   /** The relations kept with the scan. */
@@ -179,6 +195,8 @@ export function FitList({
   onStart: () => void;
   fitOn: boolean;
   ready: boolean;
+  /** Show positions and directions in this part's frame (null: the scan's). */
+  frame?: PartFrameView | null;
 }) {
   const byId = (fid: string) => fits.find((f) => f.fid === fid);
   const pickedFits = picked.map(byId).filter((f): f is FitItem => !!f);
@@ -237,7 +255,7 @@ export function FitList({
                   </div>
                 ) : null}
                 <div className="mt-1.5 pl-7">
-                  <KV rows={rowsOf(f)} />
+                  <KV rows={rowsOf(f, frame)} />
                 </div>
                 {f.warnings.length ? (
                   <ul className="mt-1.5 space-y-0.5 pl-7">
