@@ -6,10 +6,11 @@ Step-by-step instructions for building the scanner, from the printed parts to th
 projector** (option B) with the Arducam lens holder, and a **Raspberry Pi Pico**. Other choices are
 covered in [Variants](#variants) at the end.
 
-**Status, read this first.** The housing has **not been test printed** and no scanner has been
-built from these files yet. This guide is written from the CAD model, the wiring drawing and the
-firmware, not from a finished build. Fits (pins, the yoke around the grip, the laser bores) are as
-designed, not as tried. Dry-fit everything before you solder, and expect to ream a hole or two.
+**Status, read this first.** All the parts were **printed in ASA and dry-fitted** on 2026-11-16:
+they fit as designed, with no value changed. No scanner has been assembled and wired from these
+files yet, so the steps from the wiring onward are written from the CAD model, the wiring drawing
+and the firmware, not from a finished build. Printers differ: dry-fit your own parts before you
+solder.
 
 ![The scanner from the front](../renders/front_led.png)
 

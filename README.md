@@ -140,7 +140,7 @@ The standard build has two line lasers. This variant has four: it adds a second 
 
 **Software.** The app and the engine work with four lasers. Before the laser calibration, open **Settings → Line lasers** in the app and choose **Four** (or set `[lasers] lines` in the config file, see [software/README.md](software/README.md)). The calibration then finds one plane for each of the four lasers, and scans use all four. This is tested on the simulator only and has not run on a real scanner yet: [software/VALIDATION.md](software/VALIDATION.md), "Four line lasers", has the numbers and the limits.
 
-The housing has not been test printed yet, and this variant has not either: the fit of the new blocks is as designed, not as tried.
+The housing has been printed in ASA and dry-fitted (2026-11-16, see [docs/BUILD.md](docs/BUILD.md)). This variant's two extra laser blocks have not been confirmed on a print yet: their fit is as designed, not as tried.
 
 **Print** the 4-laser head instead of the normal one. The faceplate, back cover, grip halves and `led_cartridge.stl` are the same as in the standard build. Orientation and print settings are the same too.
 
