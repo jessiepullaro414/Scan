@@ -9,7 +9,8 @@
   ``/api/projects/{pid}/scans/{sid}/process/*`` and ``/api/recipes`` (:mod:`ohs.server.processing`),
   and the kept fits and measurements ``/api/projects/{pid}/scans/{sid}/features``, with the part's
   frame under ``.../features/frame`` (:mod:`ohs.server.features`) and the fits for CAD under
-  ``.../features/cad`` (:mod:`ohs.server.cad`);
+  ``.../features/cad`` (:mod:`ohs.server.cad`), and the sections of a scan ``.../section`` and
+  ``.../sections`` (:mod:`ohs.server.sections`);
 * ``/api/ws/live``: ``hello``, then the current ``device`` / ``session`` / ``calib_session`` /
   ``setup`` / active ``job`` messages, then everything the :class:`~ohs.server.hub.Hub`
   publishes for this client; ``subscribe`` messages from the client set its options;
@@ -51,6 +52,7 @@ from ohs import __version__
 from ohs.server.cad import CadExport
 from ohs.server.features import FeatureManager
 from ohs.server.protocol import PROTOCOL_VERSION, ApiError, dumps, jsonable
+from ohs.server.sections import SectionManager
 from ohs.server.studio import Studio
 
 __all__ = ["create_app", "CORS_ORIGINS", "LocalGuard"]
@@ -215,6 +217,33 @@ class FrameBody(BaseModel):
     flip_primary: bool = False
     flip_secondary: bool = False
     secondary_zero: bool = False  # strict 3-2-1
+
+
+class SectionPlaneBody(BaseModel):
+    """How a section's plane is named (APP_API.md "Sections"; checked by ohs.server.sections, with plain messages)."""
+
+    kind: str  # "fit" | "frame" | "point_normal" | "points"
+    fit: Optional[str] = None  # a kept plane's id ("fit")
+    offset_mm: Optional[float] = Field(None, allow_inf_nan=False)  # along the kept plane's normal ("fit"), default 0
+    axis: Optional[str] = None  # "X", "Y", "Z", or "-X" ... ("frame")
+    value_mm: Optional[float] = Field(None, allow_inf_nan=False)  # where along that axis ("frame")
+    point: Optional[List[float]] = Field(None, min_length=3, max_length=3)  # "point_normal", the scan's frame
+    normal: Optional[List[float]] = Field(None, min_length=3, max_length=3)
+    points: Optional[List[List[float]]] = Field(None, min_length=3, max_length=3)  # "points": three points
+
+
+class SectionBody(SectionPlaneBody):
+    compact: bool = False  # the viewer's smaller answer (2D points to the micrometre, at most max_points)
+    max_points: Optional[int] = Field(None, ge=1)  # default: all (20,000 when compact)
+
+
+class SectionKeepBody(SectionPlaneBody):
+    name: Optional[str] = Field(None, max_length=80)  # default "Section N"
+
+
+class SectionPatchBody(BaseModel):
+    name: Optional[str] = Field(None, max_length=80)
+    recut: bool = False  # mark it as cut on the current mesh
 
 
 class CheckBody(BaseModel):
@@ -696,6 +725,48 @@ def create_app(config: Any = None, *, projects_dir: Any = None, static_dir: Any 
     @app.delete(fpath + "/{fid}/nominal/{value}")
     def features_unapprove(pid: str, sid: str, fid: str, value: str) -> Response:
         feats.unapprove(pid, sid, fid, value)
+        return Response(status_code=204)
+
+    # ------------------------------------------------------------------ sections (FEATURE_PLAN I1, ohs/server/sections.py)
+    secs = SectionManager(feats)
+    spath = "/api/projects/{pid}/scans/{sid}"
+
+    def _section_file(data: bytes, filename: str, media: str, version: int) -> Response:
+        return Response(data, media_type=media, headers={"Cache-Control": "no-cache", "X-OHS-Mesh-Version": str(version),
+                                                         "Content-Disposition": f'attachment; filename="{filename}"'})
+
+    # the cut's answer is plain JSON already (lists of floats): sent as it is, without walking it again
+    @app.post(spath + "/section")
+    def section_cut(pid: str, sid: str, body: SectionBody) -> JSONResponse:
+        return JSONResponse(secs.cut(pid, sid, body.model_dump(), body.compact, body.max_points))
+
+    @app.get(spath + "/section/{name}")
+    def section_file(pid: str, sid: str, name: str, request: Request) -> Response:
+        return _section_file(*secs.file(pid, sid, name, dict(request.query_params)))
+
+    @app.get(spath + "/sections")
+    def sections_list(pid: str, sid: str) -> JSONResponse:
+        return _json(secs.list(pid, sid))
+
+    @app.post(spath + "/sections")
+    def sections_keep(pid: str, sid: str, body: SectionKeepBody) -> JSONResponse:
+        return _json(secs.keep(pid, sid, body.model_dump(), body.name))
+
+    @app.get(spath + "/sections/{xid}")
+    def sections_get(pid: str, sid: str, xid: str, compact: bool = False, max_points: Optional[int] = None) -> JSONResponse:
+        return JSONResponse(secs.get(pid, sid, xid, compact, max_points))
+
+    @app.get(spath + "/sections/{xid}/{name}")
+    def sections_file(pid: str, sid: str, xid: str, name: str) -> Response:
+        return _section_file(*secs.kept_file(pid, sid, xid, name))
+
+    @app.patch(spath + "/sections/{xid}")
+    def sections_update(pid: str, sid: str, xid: str, body: SectionPatchBody) -> JSONResponse:
+        return _json(secs.update(pid, sid, xid, body.name, body.recut))
+
+    @app.delete(spath + "/sections/{xid}")
+    def sections_delete(pid: str, sid: str, xid: str) -> Response:
+        secs.delete(pid, sid, xid)
         return Response(status_code=204)
 
     @app.get("/api/projects/{pid}/scans/{sid}/process/trajectory.json")

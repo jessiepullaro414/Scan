@@ -7,7 +7,9 @@
  * three kept fits (the Coordinate system panel: its axes drawn in the view, the panels' numbers in it on
  * request, the mesh downloaded in it), the Check panel (which areas miss the tolerance the part needs),
  * bounding box in mm, downloads (the kept fits for CAD too: a STEP file and a FreeCAD macro,
- * viewer/CadDownload.tsx) and the processing report.
+ * viewer/CadDownload.tsx), the Section tool (S: the scan cut by a plane, its 2D profile with a distance
+ * on it, kept sections, DXF and SVG; viewer/SectionPanel.tsx, SectionProfile.tsx, SectionMarks.tsx,
+ * useSectionTool.ts) and the processing report.
  */
 import {
   ArrowLeft,
@@ -75,7 +77,12 @@ import { FRAME_ICON, FramePanel } from "./viewer/FramePanel";
 import type { FitItem } from "./viewer/FitTool";
 import { usePairRelation } from "./viewer/usePairRelation";
 import { NameEdit } from "./viewer/NameEdit";
+import { SECTION_ICON, SectionPanel } from "./viewer/SectionPanel";
+import { SectionProfile } from "./viewer/SectionProfile";
+import { useSectionTool, type Bounds } from "./viewer/useSectionTool";
 import { fmtSigma, ViewerCanvas, type Measurement, type Shading, type Vec3 } from "./viewer/ViewerCanvas";
+import { useSections, sectionsKey } from "../store/sections";
+import type { PlaneFit } from "../lib/section";
 
 type Load =
   | { phase: "idle" }
@@ -229,6 +236,8 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
   const [pending, setPending] = useState<Vec3 | null>(null);
   const [fitOn, setFitOn] = useState(false);
   const [fitKind, setFitKind] = useState<FitKind>("plane");
+  /** The Section tool is on (FEATURE_PLAN I1). */
+  const [sectionOn, setSectionOn] = useState(false);
   /** The fits, measurements and relations kept with the scan (those made on an earlier mesh stay, marked so). */
   const kept = useFeatures((s) => s.entries[featuresKey(pid, sid)]?.set ?? null);
   const refitting = useFeatures((s) => s.entries[featuresKey(pid, sid)]?.refitting ?? false);
@@ -401,10 +410,11 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
     [pid, sid],
   );
 
-  // Measure and Fit are one tool at a time.
-  const pickTool = (t: "measure" | "fit" | null) => {
+  // Measure, Fit and Section are one tool at a time.
+  const pickTool = (t: "measure" | "fit" | "section" | null) => {
     setMeasure(t === "measure");
     setFitOn(t === "fit");
+    setSectionOn(t === "section");
   };
   const fitShape = (k: FitKind) => {
     setFitKind(k);
@@ -477,6 +487,7 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
     p: () => fitShape("plane"),
     c: () => fitShape("cylinder"),
     h: () => fitShape("hole"),
+    s: () => pickTool(sectionOn ? null : "section"),
     w: () => setWireframe((v) => !v),
     l: () => urls?.laser && setShowLaser((v) => !v),
     "1": () => setShading("clay"),
@@ -489,6 +500,7 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
       if (pendingRef.current) setPendingPoint(null);
       else if (measure) setMeasure(false);
       else if (fitOn) setFitOn(false);
+      else if (sectionOn) setSectionOn(false);
     },
   });
 
@@ -615,6 +627,23 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
   // The part's coordinate system: drawn in the view when this version can read it; the panels' numbers in it on request.
   const partFrame = useMemo(() => readFrame(kept?.frame ?? null), [kept]);
   const shownFrame = inPart ? partFrame : null;
+
+  // The Section tool (FEATURE_PLAN I1): the kept planes to cut along, the mesh's box for the sliders, the kept sections
+  // (read again with each mesh version: which were cut on an earlier mesh).
+  const planeFits = useMemo<PlaneFit[]>(() => (kept?.features ?? []).filter((f) => f.kind === "plane").map((f) => ({ id: f.id, name: f.name, kind: f.kind, shape: f.shape })), [kept]);
+  const meshBounds = useMemo<Bounds | null>(() => (box ? { min: [box.min.x, box.min.y, box.min.z], max: [box.max.x, box.max.y, box.max.z] } : null), [box]);
+  const section = useSectionTool({ pid, sid, on: sectionOn && !!geometry, fits: planeFits, frame: partFrame, meshVersion, bounds: meshBounds });
+  const keptSections = useSections((s) => s.entries[sectionsKey(pid, sid)]?.set?.sections ?? null);
+  useEffect(() => {
+    void useSections.getState().load(pid, sid);
+  }, [pid, sid, meshVersion]);
+  const sectionView = useMemo(
+    () =>
+      sectionOn
+        ? { plane: section.plane, answer: section.answer, hideFront: section.hideFront, picking: section.picking, points: section.points, onPickPoint: section.addPoint }
+        : null,
+    [sectionOn, section.plane, section.answer, section.hideFront, section.picking, section.points, section.addPoint],
+  );
   const deltaNames = shownFrame ? ["ΔX", "ΔY", "ΔZ"] : ["Δx", "Δy", "Δz"];
   const measureRows = useMemo(
     () =>
@@ -741,6 +770,7 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
               checkLit={check.lit}
               frameKey={frameKey}
               partFrame={partFrame ? { frame: partFrame, outOfDate: partFrame.out_of_date } : null}
+              section={sectionView}
             />
           </ErrorBoundary>
         ) : (
@@ -821,6 +851,16 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
               >
                 Fit
               </Button>
+              <Button
+                size="sm"
+                variant={sectionOn ? "primary" : "ghost"}
+                icon={SECTION_ICON}
+                onClick={() => pickTool(sectionOn ? null : "section")}
+                aria-pressed={sectionOn}
+                title="Cut the scan with a plane: its 2D profile, a distance on it, DXF and SVG (S)"
+              >
+                Section
+              </Button>
               {fitOn ? (
                 <Segmented<FitKind>
                   label="Shape to fit"
@@ -872,6 +912,23 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
               </span>
             </div>
           </div>
+        ) : null}
+
+        {sectionOn && geometry && section.picking ? (
+          <div className="pointer-events-none absolute bottom-5 left-4">
+            <div className="glass flex animate-pop-in items-center gap-2 whitespace-nowrap rounded-full border border-accent-line px-4 py-2 text-sm text-fg shadow-lg" role="status">
+              <SECTION_ICON size={15} className="text-accent" aria-hidden />
+              Click point {section.points.length + 1} of 3 on the surface
+              <span className="text-subtle">·</span>
+              <span className="text-xs text-muted">
+                <Kbd>Esc</Kbd> done
+              </span>
+            </div>
+          </div>
+        ) : null}
+
+        {sectionOn && geometry && section.answer ? (
+          <SectionProfile answer={section.answer} frame={partFrame} busy={section.busy} onClose={() => setSectionOn(false)} />
         ) : null}
 
         {fitOn && geometry ? (
@@ -1082,6 +1139,20 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
           />
         </Panel>
 
+        <Panel title="Sections" icon={SECTION_ICON}>
+          <SectionPanel
+            pid={pid}
+            sid={sid}
+            on={sectionOn && !!geometry}
+            onToggle={(on) => pickTool(on ? "section" : null)}
+            tool={section}
+            fits={fits}
+            hasFrame={!!partFrame}
+            kept={keptSections ?? []}
+            ready={!!geometry}
+          />
+        </Panel>
+
         {hasResult ? (
           <Panel title="Check" icon={CHECK_ICON}>
             <CheckPanel
@@ -1179,6 +1250,9 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
             </span>
             <span>
               <Kbd>G</Kbd> fit (<Kbd>P</Kbd> <Kbd>C</Kbd> <Kbd>H</Kbd>)
+            </span>
+            <span>
+              <Kbd>S</Kbd> section
             </span>
             <span>
               <Kbd>W</Kbd> wireframe

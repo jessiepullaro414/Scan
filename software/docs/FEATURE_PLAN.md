@@ -219,7 +219,7 @@ shading. No section or clipping plane, no reference model, no report other than 
 `report.json`. Mesh readers for PLY, STL and OBJ exist (`load_mesh`, `ohs/track/export.py:405`)
 but nothing can be uploaded.
 
-### I1. Sections (M)
+### [x] I1. Sections (M)
 - **What:** cut the mesh with a plane: a kept plane moved along its normal, a plane of the part's
   frame (K3), or three clicked points. The engine returns the cut as ordered lines in the plane's
   own 2D coordinates, each point with its sigma. The viewer hides one side of the cut and shows
@@ -240,9 +240,32 @@ but nothing can be uploaded.
   - A cut of a real-size scan takes about 30 ms; the numbers are in `VALIDATION.md`,
     "Sections". FreeCAD 1.1.4 reads the DXF back to 1e-6 mm.
   - Tests: 42 on both paths, with a DXF reader of our own (`tests/dxf_reader.py`).
-  - **Left:** the route, the viewer's panel (hide one side of the cut, the 2D profile, two
-    clicks for a distance, the downloads). `section` is not exported from `ohs/mesh/__init__.py`
-    because a function of that name would hide the module: import `ohs.mesh.section`.
+  - `section` is not exported from `ohs/mesh/__init__.py` because a function of that name would
+    hide the module: import `ohs.mesh.section`.
+- **In the app, done 2026-11-17.** `POST .../section` cuts the current mesh; the plane is
+  named by a kept plane and an offset, an axis of the part's frame and a value, a point and a
+  normal, or three points. `.../section/section.dxf` and `.svg` are the downloads. Kept
+  sections live in `features.json` (`sections`: a name and the plane as numbers, not the
+  lines) and are cut again on the current mesh when opened; the answer says when the mesh has
+  changed since. Deleting a fit leaves a section defined from it as it is (`APP_API.md`,
+  "Sections").
+  - *The Section tool* (key S): the plane from a kept plane with an offset to type or drag,
+    from the part's frame, or from three clicks; the plane shown faintly and the cut drawn on
+    the model; "Hide the part in front"; a panel with the 2D profile (measured stretches
+    solid, not-measured dashed red, a scale bar, named axes) that can be zoomed and panned;
+    two clicks on the profile measure a distance, snapping to its points; Keep with a name;
+    DXF and SVG.
+  - *While dragging:* a compact answer (2D points only, at most 20,000, the longest lines
+    first; the numbers and the downloads always hold the whole cut), one request at a time
+    with only the newest waiting, and the plane itself moves at once.
+  - Checked in the app on the real-size scan (804,372 triangles): a cut 40 mm off the table
+    shows the ball's arc (46.9 mm), hiding the front works, two clicks read 32.193 mm, Keep
+    and both downloads work. A cut exactly in the noisy table's plane has 3,218 lines and
+    211,086 points; the panel shows the longest and says so.
+  - Tests: 12 for the routes on both paths; 91 UI checks.
+  - **Left:** not seen by eye: the part's frame mode and the three-click mode against the real
+    engine. A cut lying exactly in a noisy fitted plane takes 0.9 s in the engine, and that
+    is where the tool opens (offset 0 on the first kept plane): worth a better first offset.
 
 ### I2. Comparison with a reference model (L)
 - **What:** load an STL, OBJ or PLY as the reference, align the scan to it, and show the

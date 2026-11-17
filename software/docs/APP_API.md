@@ -1424,6 +1424,130 @@ Rules:
   and the scan's files and every other download stay exactly as they are. 404 for an unknown project or
   scan, and for another file name.
 
+## Sections
+[`FEATURE_PLAN.md`](FEATURE_PLAN.md), I1. The scan's current mesh cut by a plane (`ohs.mesh.section.section`
+on the same arrays the fits use: each vertex's sigma, each face's filled flag), as the 2D profile an
+engineer measures and traces, its DXF (`ohs.cad.dxf`, R12) and SVG (`ohs.cad.svg`) at 1:1 in mm, and the
+sections a user keeps with the scan (`ohs/server/sections.py`). The plane's drawing axes follow the
+engine's rule (`ohs/mesh/section.py`): the cut seen from the side the normal points to, "up" is Z turned
+into the plane (Y for a plane within 45° of horizontal), never mirrored, in the part's axes when the scan
+has a part's frame this version can read.
+
+```ts
+type SectionPlaneDef =                          // how the plane is named; points and normals in the scan's frame, mm
+  | { kind: "fit"; fit: string; offset_mm?: number }        // a kept plane moved along its normal (default 0)
+  | { kind: "frame"; axis: string; value_mm: number }       // "X" | "Y" | "Z" = value in the part's frame;
+                                                            // "-X" ... sees it from the other side
+  | { kind: "point_normal"; point: number[]; normal: number[] }
+  | { kind: "points"; points: number[][] };                 // three points; normal (p2 − p1) x (p3 − p1)
+type SectionDefinition = SectionPlaneDef & {    // as understood (and kept)
+  fit_name?: string; fit_mesh_version?: number };           // "fit": the fit's name and the mesh it was fitted on
+type SectionPlane = {                           // ohs.mesh.section SectionPlane.to_dict()
+  point: number[];                              // the drawing's (0, 0): where the frame's origin falls on the plane
+  normal: number[]; u: number[]; v: number[];   // unit; (x, y) in the drawing is point + x u + y v
+  description: string;                          // "Section on Top, moved +2 mm along its normal"
+  in_part_frame: boolean };
+type SectionStretch = [number, number, boolean];  // segments [first, end) over measured (false) or filled (true)
+                                                  // faces; segment i runs from point i to i + 1 (a closed line's
+                                                  // last one back to point 0)
+type SectionLineFull = {                        // ohs.mesh.section SectionLine.to_dict(), with its stretches
+  closed: boolean; length_mm: number;
+  area_mm2: number | null;                      // signed: + an outline (counter-clockwise), − a hole; null if open
+  bbox: number[];                               // [umin, vmin, umax, vmax]
+  points: number[][]; points3d: number[][];     // 2D in the drawing, 3D in the scan's frame
+  sigma: number[] | null;                       // each point's 1σ (null: the mesh has none)
+  filled: boolean[]; faces: number[];           // per segment
+  stretches: SectionStretch[] };
+type SectionLineCompact = {                     // compact: what the viewer asks for
+  closed: boolean; length_mm: number; area_mm2: number | null; bbox: number[];   // rounded like the points
+  n_points: number;
+  points: number[];                             // [x0, y0, x1, y1, ...], to 0.001 mm
+  sigma_mm: { mean: number | null; max: number | null } | null;   // over its measured points
+  stretches: SectionStretch[] };
+type SectionAnswer = {
+  format_version: 1; units: "mm";
+  plane: SectionPlane;
+  lines: (SectionLineFull | SectionLineCompact)[];   // longest first
+  length_mm: number; n_points: number;          // the whole cut's, also when lines were left out
+  bbox: number[] | null;                        // null: the plane misses the scan (lines empty)
+  n_lines: number; n_closed: number;
+  mesh_version: number;                         // the mesh version cut
+  definition: SectionDefinition;
+  stale_fit: boolean;                           // named from a fit made on an earlier mesh (its plane is used)
+  warnings: string[];                           // that fit; a frame out of date or not readable; the mesh changed
+                                                // since a kept section was kept
+  compact: boolean;
+  truncated: { lines_shown: number; points_shown: number; lines: number; points: number } | null;
+  filenames: { dxf: string; svg: string };      // the download names
+  kept: KeptSection | null };                   // GET .../sections/{id}: the kept record; else null
+type SectionRequest = SectionPlaneDef & { compact?: boolean; max_points?: number };
+type KeptSection = {
+  id: string;                                   // "s-…"
+  name: string;                                 // "Section N" unless the user named it; 1 to 80 characters
+  plane: SectionPlane;                          // kept as numbers, with its drawing axes
+  definition: SectionDefinition;
+  mesh_version: number;                         // the mesh version it was last cut on (kept, or marked current)
+  created: string;
+  mesh_changed: boolean };                      // the current mesh is another one (not stored)
+type KeptSections = { mesh_version: number | null; sections: KeptSection[] };   // oldest first
+type NewSection = SectionPlaneDef & { name?: string };
+```
+
+| Method and path | Body or query | Returns |
+|---|---|---|
+| `POST .../section` | `SectionRequest` | `SectionAnswer` |
+| `GET .../section/section.dxf` | the `SectionPlaneDef` as a query (below) | the DXF (R12, ASCII, mm; `application/dxf`) |
+| `GET .../section/section.svg` | the same | the SVG (1:1, mm, UTF-8; `image/svg+xml`) |
+| `GET .../sections` | | `KeptSections` |
+| `POST .../sections` | `NewSection` | `KeptSection` |
+| `GET .../sections/{id}` | `compact?: boolean`, `max_points?: number` | `SectionAnswer` (with `kept`) |
+| `GET .../sections/{id}/section.dxf`, `.../section.svg` | | the kept section's files, cut on the current mesh |
+| `PATCH .../sections/{id}` | `{name?: string, recut?: boolean}` | `KeptSection` |
+| `DELETE .../sections/{id}` | | 204 |
+
+Rules:
+- **The cut** is the engine's, number for number (full detail is `Section.to_dict()` with each line's
+  `stretches` added). A fit made on an earlier mesh is used for its plane (a plane is a plane), with
+  `stale_fit` and a warning that names it. With a part's frame this version can read, the drawing is in the
+  part's axes for every kind of plane; an out-of-date frame is used as it is (with a warning for `"frame"`);
+  one that cannot be read leaves the drawing in the scan's axes, with a warning, and is 409 for `"frame"`.
+- **Compact** (`compact: true`): the 2D points as one flat list rounded to 0.001 mm (the 3D points are
+  `plane.point + x u + y v`), each line's numbers rounded alike, no per-segment `filled` and `faces` (the
+  stretches say the same), the sigma as each line's mean and largest over its measured points; and at most
+  `max_points` points (20,000 by default): the lines, longest first, are sent whole while they fit (the
+  first always), `truncated` says how many were sent of how many; the totals are the whole cut's. Measured
+  on the ball-on-a-table scan (804,372 triangles): upright through the ball, 4 lines of 1,118 points, 134 kB
+  in full, 18 kB compact, cut in 33 ms and made into JSON in 1 to 3 ms; 0.3 mm off the table's fitted plane,
+  657 lines of 13,394 points, 1.8 MB in full and 353 kB compact (cut 74 ms, JSON 65 ms); 0.2 mm off, 1,356
+  lines of 32,243 points, 4.3 MB in full, 401 kB compact with the 289 longest lines (cut 145 ms, JSON 59
+  ms); in the fitted plane itself, 3,218 lines of 211,086 points, 27 MB in full, 260 kB compact (the cut
+  itself takes 0.86 s there). `max_points` below 1 is 422. Without `compact` nothing is left out unless
+  `max_points` is given.
+- **The query** of the two downloads holds the same names: `kind`, `fit`, `offset_mm`, `axis`,
+  `value_mm`, `point` and `normal` as `x,y,z`, `points` as nine numbers `x1,y1,z1,x2,...`. The files are
+  `dxf_text` / `svg_text` of the very cut `POST .../section` gives for the same plane, at full precision and
+  with every line; `Content-Disposition` names them after the scan and the section
+  (`<scan>-section-<fit>-offset-2mm.dxf`, `<scan>-section-Z12mm.svg`, `<scan>-section.dxf`; a kept one
+  `<scan>-section-<name>.dxf`); `X-OHS-Mesh-Version` is the mesh version cut.
+- **Keep** (`POST .../sections`): the plane as numbers (`SectionPlane`, with its drawing axes), how it was
+  named (`definition`, a fit with its name and mesh version), the current mesh version and when; kept under
+  `sections` in `features.json` (`ohs.measure.features`, "Kept sections"). Nothing is cut. The lines are not
+  stored. `GET .../features` answers as before: sections are not in it.
+- **Open** (`GET .../sections/{id}`): cut again on the current mesh with the stored plane; when the mesh is
+  not the version it was kept on, `kept.mesh_changed` is true and a warning says so. Reading writes nothing;
+  `PATCH` with `recut: true` marks it as cut on the current mesh (409 before there is a mesh). A rename keeps
+  everything else. `PATCH` with neither is 422.
+- **Kept as numbers:** deleting the fit a section was named from does not delete the section, and changing or
+  removing the part's frame does not move it: its plane and axes are stored, `definition` only says how it
+  was named.
+- `sections` is left out of `features.json` until a section is kept and again when the last one is deleted, so
+  a file written before sections existed loads, and is written, as it was. Section ids are unique with the
+  other kept items' ids.
+- 409 before there is a mesh (a cut, a download, keeping); 404 for an unknown project, scan, section or fit
+  (`"fit"`), and for another file name; 422 for a body that names no plane (an unknown `kind`, a missing
+  value), three points on a line, a zero normal, a kept fit that is not a plane, `"frame"` without a part's
+  frame, an axis other than X, Y or Z, an empty or too long name. A cut and the downloads write nothing.
+
 ## M5 second slice: the deviation map
 The plan is in [`DESKTOP_APP_PLAN.md`](DESKTOP_APP_PLAN.md), "M5 plan, second slice". It compares the scan's
 current mesh with its base mesh: the last stage's result, before any edit.

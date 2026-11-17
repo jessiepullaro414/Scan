@@ -45,6 +45,13 @@ import type {
   PairRelation,
   PartFrameView,
   RefitResult,
+  KeptSection,
+  KeptSections,
+  NewSection,
+  SectionAnswer,
+  SectionFile,
+  SectionPlaneDef,
+  SectionRequest,
   HoleOutline,
   Job,
   LaserInfo,
@@ -151,6 +158,23 @@ export type RawResponse<T> = { status: number; data: T };
 export function nominalQuery(value?: "diameter" | "radius", withBias = false): string {
   const q = [value ? `value=${value}` : "", withBias ? "with_bias=true" : ""].filter(Boolean);
   return q.length ? `?${q.join("&")}` : "";
+}
+
+/** A section's plane as the downloads' query: "kind=fit&fit=f-1&offset_mm=2", points as "x,y,z" (three points: nine
+ * numbers). The engine reads the same names as in a body. */
+export function sectionQuery(def: SectionPlaneDef): string {
+  const q = new URLSearchParams({ kind: def.kind });
+  if (def.kind === "fit") {
+    q.set("fit", def.fit);
+    if (def.offset_mm) q.set("offset_mm", String(def.offset_mm));
+  } else if (def.kind === "frame") {
+    q.set("axis", def.axis);
+    q.set("value_mm", String(def.value_mm));
+  } else if (def.kind === "point_normal") {
+    q.set("point", def.point.join(","));
+    q.set("normal", def.normal.join(","));
+  } else q.set("points", def.points.flat().join(","));
+  return q.toString();
 }
 
 async function send<T>(method: string, path: string, body?: unknown): Promise<RawResponse<T>> {
@@ -398,6 +422,25 @@ export const api = {
   setRelationMove: (pid: string, sid: string, id: string, move: MoveChoice) => put<KeptRelation>(`${scanPath(pid, sid)}/features/${enc(id)}/move`, { move }),
   /** Forget an approval (404 when there is none). */
   removeNominal: (pid: string, sid: string, id: string, value: string) => del(`${scanPath(pid, sid)}/features/${enc(id)}/nominal/${enc(value)}`),
+
+  // ---------------------------------------------------------------- sections (FEATURE_PLAN I1)
+  /** The current mesh cut by a plane (APP_API.md "Sections"). The viewer asks `compact` (2D points to the micrometre,
+   * at most `max_points`, 20,000 by default). 409 before there is a mesh, 422 for a plane that isn't one, 404 for an
+   * unknown fit. */
+  section: (pid: string, sid: string, body: SectionRequest) => post<SectionAnswer>(`${scanPath(pid, sid)}/section`, body),
+  /** URL of a cut's DXF or SVG (1:1, mm), the plane in the query. */
+  sectionFileUrl: (pid: string, sid: string, def: SectionPlaneDef, name: SectionFile) => `${scanPath(pid, sid)}/section/${name}?${sectionQuery(def)}`,
+  /** The kept sections, each with `mesh_changed`. */
+  sections: (pid: string, sid: string) => get<KeptSections>(`${scanPath(pid, sid)}/sections`),
+  /** Keep a section (its plane as numbers, the current mesh version). */
+  keepSection: (pid: string, sid: string, body: NewSection) => post<KeptSection>(`${scanPath(pid, sid)}/sections`, body),
+  /** A kept section cut again on the current mesh (compact), with `kept` (and a warning when the mesh has changed). */
+  keptSection: (pid: string, sid: string, id: string) => get<SectionAnswer>(`${scanPath(pid, sid)}/sections/${enc(id)}?compact=true`),
+  /** Rename a kept section, and/or mark it as cut on the current mesh (`recut`). */
+  updateSection: (pid: string, sid: string, id: string, body: { name?: string; recut?: boolean }) => patch<KeptSection>(`${scanPath(pid, sid)}/sections/${enc(id)}`, body),
+  deleteSection: (pid: string, sid: string, id: string) => del(`${scanPath(pid, sid)}/sections/${enc(id)}`),
+  /** URL of a kept section's DXF or SVG, cut on the current mesh. */
+  keptSectionFileUrl: (pid: string, sid: string, id: string, name: SectionFile) => `${scanPath(pid, sid)}/sections/${enc(id)}/${name}`,
 
   // ---------------------------------------------------------------- M5: areas that need another pass
   /** Which parts of the current mesh miss a tolerance (above 0, at most 100 mm): the share of the surface

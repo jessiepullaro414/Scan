@@ -3,7 +3,8 @@
  * confidence map with the sigma under the cursor, the deviation map with the move under it, the Lasers
  * shading with the distance to the laser points under it), an optional wireframe overlay and laser point
  * cloud, the two-click distance tool, the fitted shapes (FitTool.tsx), the Check panel's picked area
- * (CheckMark.tsx) and the part's axes when it has a coordinate system (PartAxes.tsx). Renders on demand (no
+ * (CheckMark.tsx), the part's axes when it has a coordinate system (PartAxes.tsx) and the Section tool's plane,
+ * cut and three clicked points (SectionMarks.tsx; hiding the front is the model's clipping). Renders on demand (no
  * work while the view is still).
  */
 import { Bvh, Html, Line, OrbitControls } from "@react-three/drei";
@@ -16,6 +17,7 @@ import {
   MeshNormalMaterial,
   MeshStandardMaterial,
   NeutralToneMapping,
+  Plane,
   Raycaster,
   Sphere,
   Triangle,
@@ -27,7 +29,7 @@ import {
 } from "three";
 import { useUi } from "../../store/ui";
 import { CameraRig } from "../../three/CameraRig";
-import type { FitKind, PartFrameView } from "../../api/types";
+import type { FitKind, PartFrameView, SectionAnswer, SectionPlane } from "../../api/types";
 import { deviationReadout, interpolateMove } from "../../lib/deviation";
 import { laserReadout } from "../../lib/lasers";
 import { applyConfidenceColors, confidenceMaterial, filledGeometry, filledMaterial, SIGMA_NONE_MM, sigmaOf } from "../../three/confidence";
@@ -40,6 +42,7 @@ import { CheckMark } from "./CheckMark";
 import { FitTool, type FitItem } from "./FitTool";
 import { PartAxes } from "./PartAxes";
 import { useSurfacePick } from "./picking";
+import { SectionMarks } from "./SectionMarks";
 import type { CheckLit } from "./useCheck";
 
 export type Shading = "clay" | "studio" | "normals" | "confidence" | "deviation" | "lasers";
@@ -83,8 +86,25 @@ export function useTheme(): "light" | "dark" {
   return useUi((s) => s.theme) === "light" ? "light" : "dark";
 }
 
-/** The mesh with the chosen shading and an optional wireframe overlay. */
-export function Model({ geometry, shading, wireframe, meshRef }: { geometry: BufferGeometry; shading: Shading; wireframe: boolean; meshRef?: RefObject<Mesh | null> }) {
+/**
+ * The mesh with the chosen shading and an optional wireframe overlay. `clip` (the Section tool's plane, in the scan's
+ * frame) hides the part on the side its normal points to: three.js clipping on the model's own materials, so the
+ * geometry is never rebuilt; moving the plane only changes the clipping plane's numbers (no shader is compiled again,
+ * except once when the clipping is switched on or off).
+ */
+export function Model({
+  geometry,
+  shading,
+  wireframe,
+  meshRef,
+  clip = null,
+}: {
+  geometry: BufferGeometry;
+  shading: Shading;
+  wireframe: boolean;
+  meshRef?: RefObject<Mesh | null>;
+  clip?: { point: ArrayLike<number>; normal: ArrayLike<number> } | null;
+}) {
   const theme = useTheme();
   const deviationLimit = useUi((s) => s.deviationLimit);
   const laserLimit = useUi((s) => s.laserLimit);
@@ -118,6 +138,27 @@ export function Model({ geometry, shading, wireframe, meshRef }: { geometry: Buf
     [wireColor, shading],
   );
   useEffect(() => () => wire.dispose(), [wire]);
+  // the clipping plane in three.js's world: the model sits under a group turned 180° about X, (x, y, z) -> (x, -y, -z);
+  // three.js keeps what has normal . x + constant >= 0, so the plane's normal is turned over to hide its + side
+  const clipPlane = useMemo(() => new Plane(), []);
+  useEffect(() => {
+    if (clip) {
+      const n = clip.normal,
+        p = clip.point;
+      clipPlane.normal.set(-n[0], n[1], n[2]);
+      clipPlane.constant = n[0] * p[0] + n[1] * p[1] + n[2] * p[2];
+    }
+    invalidate();
+  }, [clip, clipPlane, invalidate]);
+  const clipping = !!clip;
+  useEffect(() => {
+    for (const m of [mat, filledMat, wire]) {
+      const had = (m.clippingPlanes?.length ?? 0) > 0;
+      m.clippingPlanes = clipping ? [clipPlane] : null;
+      if (had !== clipping) m.needsUpdate = true;
+    }
+    invalidate();
+  }, [clipping, clipPlane, mat, filledMat, wire, invalidate]);
   return (
     <>
       <mesh ref={meshRef} geometry={geometry} material={mat} />
@@ -364,6 +405,7 @@ export function ViewerCanvas({
   checkLit,
   frameKey,
   partFrame = null,
+  section = null,
 }: {
   geometry: BufferGeometry;
   laser: BufferGeometry | null;
@@ -386,25 +428,34 @@ export function ViewerCanvas({
   frameKey: number;
   /** The part's coordinate system, drawn at its origin; `outOfDate` draws it dashed. */
   partFrame?: { frame: PartFrameView; outOfDate: boolean } | null;
+  /** The Section tool, while it is on (SectionMarks.tsx): its plane, the cut, the front hidden, the three points. */
+  section?: { plane: SectionPlane | null; answer: SectionAnswer | null; hideFront: boolean; picking: boolean; points: Vec3[]; onPickPoint: (p: Vec3) => void } | null;
 }) {
   const meshRef = useRef<Mesh | null>(null);
   const sigma = shading === "confidence" ? sigmaOf(geometry) : null;
   const moves = shading === "deviation" ? deviationOf(geometry) : null;
   const gaps = shading === "lasers" ? laserValuesOf(geometry) : null;
+  const picking = !!section?.picking;
   const [bvh, setBvh] = useState(false);
   useEffect(() => {
-    if (measure || fit || sigma || moves || gaps) setBvh(true); // build the raycast acceleration on first use only
-  }, [measure, fit, sigma, moves, gaps]);
+    if (measure || fit || picking || sigma || moves || gaps) setBvh(true); // build the raycast acceleration on first use only
+  }, [measure, fit, picking, sigma, moves, gaps]);
 
   const bounds = useMemo(() => {
     if (!geometry.boundingSphere) geometry.computeBoundingSphere();
     if (!geometry.boundingBox) geometry.computeBoundingBox();
     const s = geometry.boundingSphere!;
-    return { sphere: new Sphere(cvToThree(s.center), s.radius), gridY: -geometry.boundingBox!.max.y - 0.5, radius: s.radius };
+    return {
+      sphere: new Sphere(cvToThree(s.center), s.radius),
+      gridY: -geometry.boundingBox!.max.y - 0.5,
+      radius: s.radius,
+      centre: [s.center.x, s.center.y, s.center.z] as Vec3,
+    };
   }, [geometry]);
 
   const markerRadius = Math.max(0.6, bounds.radius * 0.007);
-  const model = <Model geometry={geometry} shading={shading} wireframe={wireframe} meshRef={meshRef} />;
+  const clip = section?.hideFront && section.plane ? section.plane : null;
+  const model = <Model geometry={geometry} shading={shading} wireframe={wireframe} meshRef={meshRef} clip={clip} />;
   return (
     <div className="absolute inset-0" role="img" aria-label="3D view of the scan result">
       <Canvas
@@ -415,6 +466,7 @@ export function ViewerCanvas({
         onCreated={({ gl }) => {
           gl.toneMapping = NeutralToneMapping;
           gl.setClearColor(0x000000, 0);
+          gl.localClippingEnabled = true; // the Section tool's "hide the front" (materials without planes are not clipped)
         }}
       >
         <StudioEnvironment intensity={shading === "studio" ? 0.55 : 0.4} />
@@ -437,6 +489,19 @@ export function ViewerCanvas({
           <FitTool enabled={fit} busy={fitBusy} target={meshRef} geometry={geometry} fits={fits} picked={pickedFits} markerRadius={markerRadius} onPick={onFitPick} />
           {checkLit ? <CheckMark lit={checkLit} geometry={geometry} /> : null}
           {partFrame ? <PartAxes frame={partFrame.frame} outOfDate={partFrame.outOfDate} length={Math.max(5, bounds.radius * 0.35)} /> : null}
+          {section ? (
+            <SectionMarks
+              plane={section.plane}
+              answer={section.answer}
+              centre={bounds.centre}
+              radius={bounds.radius}
+              picking={section.picking}
+              points={section.points}
+              onPickPoint={section.onPickPoint}
+              target={meshRef}
+              markerRadius={markerRadius}
+            />
+          ) : null}
         </group>
         <SceneGrid y={bounds.gridY} />
         <AxisGizmo margin={[62, 62]} />

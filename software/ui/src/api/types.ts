@@ -1005,6 +1005,81 @@ export type CadMove = {
   sentence: string;
 };
 
+// ------------------------------------------------------------------ sections (FEATURE_PLAN I1)
+// APP_API.md "Sections": the current mesh cut by a plane, its 2D profile, its DXF and SVG; sections kept with the scan.
+
+/** How the cutting plane is named. Points and normals are in the scan's frame, mm. */
+export type SectionPlaneDef =
+  | { kind: "fit"; fit: string; offset_mm?: number } // a kept plane moved along its normal
+  | { kind: "frame"; axis: string; value_mm: number } // "X" | "Y" | "Z" (or "-X" ...) = value in the part's frame
+  | { kind: "point_normal"; point: number[]; normal: number[] }
+  | { kind: "points"; points: number[][] }; // three points; the normal by the right-hand rule
+/** The definition as the engine understood it (and keeps it): a fit's name and the mesh version it was fitted on. */
+export type SectionDefinition = SectionPlaneDef & { fit_name?: string; fit_mesh_version?: number };
+/** The plane and its drawing's axes (ohs.mesh.section SectionPlane.to_dict()): a drawing point (x, y) is
+ * `point + x u + y v` in the scan's frame; the drawing is seen from the side `normal` points to. */
+export type SectionPlane = { point: number[]; normal: number[]; u: number[]; v: number[]; description: string; in_part_frame: boolean };
+/** A run of a line's segments over measured or filled (not measured) faces: [first, end (exclusive), filled].
+ * Segment i runs from point i to point i + 1 (the last of a closed line back to point 0). */
+export type SectionStretch = [number, number, boolean];
+/** A line in full (the engine's SectionLine.to_dict(), with its stretches). */
+export type SectionLineFull = {
+  closed: boolean;
+  length_mm: number;
+  area_mm2: number | null; // signed: + an outline (counter-clockwise), − a hole; null for an open line
+  bbox: number[]; // [umin, vmin, umax, vmax]
+  points: number[][];
+  points3d: number[][];
+  sigma: number[] | null;
+  filled: boolean[];
+  faces: number[];
+  stretches: SectionStretch[];
+};
+/** A line in the compact answer (what the viewer asks for): 2D points as one flat list, to the micrometre. */
+export type SectionLineCompact = {
+  closed: boolean;
+  length_mm: number;
+  area_mm2: number | null;
+  bbox: number[];
+  n_points: number;
+  points: number[]; // [x0, y0, x1, y1, ...]
+  sigma_mm: { mean: number | null; max: number | null } | null; // over its measured points; null: the mesh has none
+  stretches: SectionStretch[];
+};
+export type SectionAnswer<L = SectionLineCompact> = {
+  format_version: number;
+  units: "mm";
+  plane: SectionPlane;
+  lines: L[]; // longest first
+  length_mm: number; // the whole cut's
+  n_points: number;
+  bbox: number[] | null; // null: the plane misses the scan
+  n_lines: number;
+  n_closed: number;
+  mesh_version: number;
+  definition: SectionDefinition;
+  stale_fit: boolean; // named from a fit made on an earlier mesh (its plane is used as kept)
+  warnings: string[];
+  compact: boolean;
+  /** Only the longest lines were sent (a compact answer holds at most `max_points`); the totals are the whole cut's. */
+  truncated: { lines_shown: number; points_shown: number; lines: number; points: number } | null;
+  filenames: { dxf: string; svg: string };
+  kept: KeptSection | null; // a kept section's record (GET .../sections/{id}), else null
+};
+export type SectionRequest = SectionPlaneDef & { compact?: boolean; max_points?: number };
+export type KeptSection = {
+  id: string; // "s-…"
+  name: string; // "Section N" unless the user named it
+  plane: SectionPlane; // kept as numbers: a fit or frame changed or deleted later does not move it
+  definition: SectionDefinition;
+  mesh_version: number; // the mesh version it was last cut on
+  created: string;
+  mesh_changed: boolean; // the current mesh is not that one
+};
+export type KeptSections = { mesh_version: number | null; sections: KeptSection[] };
+export type NewSection = SectionPlaneDef & { name?: string };
+export type SectionFile = "section.dxf" | "section.svg";
+
 // ------------------------------------------------------------------ M5 second slice: the deviation map
 // APP_API.md "M5 second slice: the deviation map". Compares the current mesh with the base mesh.
 

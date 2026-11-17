@@ -390,6 +390,10 @@ export class MockProcess {
         const st = this.ensure(p, s);
         return st.current ? st.version : null;
       },
+      mesh: () => {
+        const st = this.ensure(p, s);
+        return st.current ? { positions: st.current.positions, indices: st.current.indices, sigma: this.sigma(st) } : null;
+      },
       nearestFace: (q) => {
         const m = this.ensure(p, s).current;
         if (!m) return 0;

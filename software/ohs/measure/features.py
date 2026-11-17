@@ -23,7 +23,8 @@ mesh; :mod:`ohs.server.features` fits and refits through the fit route and keeps
      "relations": [{"id": "r-…", "name": "Relation 1", "a": "<feature id>", "b": "<feature id>",
                     "nominals": [...],   # as a feature's
                     "move": {...},       # which fit moves to suit it in the CAD export (below); left out: listed only
-                    "created"}]}
+                    "created"}],
+     "sections": [...]}              # kept sections (below); left out until the first is kept
 
 A relation keeps only which two features the user asked to relate: its numbers are worked out
 when it is shown, so they always match the features. Ids are short and safe as file names; they
@@ -100,6 +101,25 @@ null), so a frame this version cannot read (a later ``format_version``, a damage
 stops the features from loading, and is not stripped when the file is written again;
 :func:`frame_state` says whether it can be read and whether it is still current.
 
+**Kept sections** (FEATURE_PLAN I1; :mod:`ohs.server.sections`): a cut of the mesh the user keeps,
+with its cutting plane as absolute numbers and how it was named::
+
+    {"id": "s-…", "name": "Section 1",
+     "plane": {"point", "normal", "u", "v",   # SectionPlane.to_dict() (ohs.mesh.section): the plane and
+               "description", "in_part_frame"},  # its drawing's axes, in the scan's frame
+     "definition": {"kind": "fit" | "frame" | "point_normal" | "points", ...},   # how it was named
+     "mesh_version",                  # the mesh version it was last cut on (kept, or marked current)
+     "created"}
+
+The lines are not kept: a kept section is cut again on the current mesh when it is opened. The
+plane is kept as numbers, so deleting the fit a section was named from, or changing or removing
+the part's frame, leaves the section as it was; ``definition`` only says how it was named (a fit's
+id and name then, an axis of the part's frame and its value, a point and a normal, three points).
+``sections`` is left out of a file until a section is kept, and again when the last one is
+deleted, so a file written before sections existed is read and written as it was. Ids are unique
+with those of the other lists. :func:`validate` checks the plane's numbers and the definition's kind;
+other keys are kept.
+
 **Writing** is atomic: a temporary file next to the real one, then a rename, so a crash or a full
 disk leaves the old file whole. A document that does not pass :func:`validate` is never written.
 """
@@ -122,7 +142,7 @@ __all__ = ["FORMAT_VERSION", "FILE_NAME", "FACES_DIR", "KINDS", "SHAPE_OF", "FOR
            "validate", "load", "save", "faces_path", "save_faces", "load_faces", "remove_faces", "new_id",
            "next_name", "now", "frame_state", "EDGE_MAX_POINTS", "split_extent", "outline_path", "save_outline",
            "load_outline", "remove_outline", "FIT_NOMINAL_VALUES", "RELATION_NOMINAL_VALUES", "NOMINAL_UNITS",
-           "NOMINAL_LIMITS", "NOMINAL_SOURCES", "check_nominal_value", "MOVE_SHAPES"]
+           "NOMINAL_LIMITS", "NOMINAL_SOURCES", "check_nominal_value", "MOVE_SHAPES", "SECTION_KINDS"]
 
 FORMAT_VERSION = 1
 FILE_NAME = "features.json"
@@ -147,6 +167,9 @@ NOMINAL_LIMITS = {"diameter": (0.0, 10_000.0, True), "radius": (0.0, 5_000.0, Tr
 NOMINAL_SOURCES = ("suggested", "entered")
 #: which of a relation's two fits moves to suit its approved values in the CAD export (none: listed only)
 MOVE_SHAPES = ("a", "b")
+#: how a kept section's plane was named: a kept plane moved along its normal, a plane of the part's frame, a point
+#: and a normal, three points
+SECTION_KINDS = ("fit", "frame", "point_normal", "points")
 #: an id: letters, digits, "-" and "_" (it names a file)
 ID_RE = re.compile(r"[A-Za-z0-9_-]{1,64}")
 
@@ -452,6 +475,35 @@ def _move(m: Any, where: str) -> dict:
     return {**m, "chosen": _text(m.get("chosen", ""), where, "move chosen")}
 
 
+def _section(s: Any, i: int) -> dict:
+    """Check a kept section (module docstring, "Kept sections")."""
+    where = f"sections[{i}]"
+    if not isinstance(s, dict):
+        _fail(where, "must be an object")
+    out = dict(s)
+    out["id"] = _check_id(s.get("id"), where)
+    out["name"] = clean_name(s.get("name"), where)
+    plane = s.get("plane")
+    if not isinstance(plane, dict):
+        _fail(where, "plane must be an object (point, normal, u, v, description)")
+    clean = dict(plane)
+    for key in ("point", "normal", "u", "v"):
+        clean[key] = _point(plane.get(key), where, f"the plane's {key}")
+    for key in ("normal", "u", "v"):
+        if not math.isclose(math.hypot(*clean[key]), 1.0, abs_tol=1e-6):
+            _fail(where, f"the plane's {key} must be a unit direction, got {plane.get(key)!r}")
+    clean["description"] = _text(plane.get("description", ""), where, "the plane's description")
+    if not isinstance(plane.get("in_part_frame", False), bool):
+        _fail(where, "the plane's in_part_frame must be true or false")
+    out["plane"] = clean
+    definition = s.get("definition")
+    if not isinstance(definition, dict) or definition.get("kind") not in SECTION_KINDS:
+        _fail(where, f"definition must be an object whose kind is one of {', '.join(SECTION_KINDS)}")
+    out["mesh_version"] = _whole(s.get("mesh_version"), where, "mesh_version")
+    out["created"] = _text(s.get("created", ""), where, "created")
+    return out
+
+
 def validate(doc: Any) -> dict:
     """Check a features document and return a clean copy (names trimmed, numbers as floats where
     they are points). Raises ValueError with a plain message saying where and what.
@@ -477,8 +529,12 @@ def validate(doc: Any) -> dict:
     out["measurements"] = [_measurement(m, i) for i, m in enumerate(doc["measurements"])]
     fids = {f["id"] for f in out["features"]}
     out["relations"] = [_relation(r, i, fids) for i, r in enumerate(doc["relations"])]
+    if "sections" in doc:  # a file written before sections existed has none: it loads as it is
+        if not isinstance(doc["sections"], list):
+            raise ValueError("sections must be a list")
+        out["sections"] = [_section(s, i) for i, s in enumerate(doc["sections"])]
     seen: set[str] = set()
-    for item in out["features"] + out["measurements"] + out["relations"]:
+    for item in out["features"] + out["measurements"] + out["relations"] + out.get("sections", []):
         if item["id"] in seen:
             raise ValueError(f"the id {item['id']!r} is used twice")
         seen.add(item["id"])

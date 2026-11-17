@@ -51,7 +51,10 @@ the numbers a click in the viewer gives. This module adds:
   is listed only in the CAD export (the default) or one of its two fits moves to suit it
   (:mod:`ohs.cad.moves`, applied by :mod:`ohs.server.cad`); it can also be chosen with an approval
   (``move`` in ``POST .../nominal``). Kept on the relation (``ohs.measure.features``, "A
-  relation's move"), with its place in the order the moves are applied.
+  relation's move"), with its place in the order the moves are applied;
+* **kept sections** (FEATURE_PLAN I1) are :mod:`ohs.server.sections`'s: it writes the ``sections``
+  list through :meth:`FeatureManager.change_sections` and reads it with :meth:`FeatureManager.snapshot`.
+  ``GET .../features`` answers as before, without them.
 
 **Locking.** One lock per scan around reading, changing and writing ``features.json``. Fits run
 outside it (they can take a second); a refit is only kept when its feature has not been changed
@@ -65,7 +68,7 @@ import math
 import tempfile
 import threading
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import numpy as np
 
@@ -495,6 +498,26 @@ class FeatureManager:
                     if ol is not None and ol["mesh_version"] == f["mesh_version"]:  # not left over from another fit
                         outlines[f["id"]] = ol
         return doc, outlines, self._version(pid, sid)
+
+    def change_sections(self, pid: str, sid: str, fn: Callable[[list[dict], dict], Any]) -> Any:
+        """Change the scan's kept sections (FEATURE_PLAN I1) under the scan's lock, for
+        :mod:`ohs.server.sections`: ``fn(sections, doc)`` gets the list (copies of the records, to
+        change in place) and the whole kept set (to read), and returns the answer. The list is
+        written only when it changed, and left out of the file when it is empty (as before any
+        section was kept). An error raised by ``fn`` writes nothing. 404 for an unknown project or scan."""
+        self._dir(pid, sid)
+        with self._lock(pid, sid):
+            doc = self._load(pid, sid)
+            before = list(doc.get("sections") or [])
+            sections = [dict(s) for s in before]
+            out = fn(sections, doc)
+            if sections != before:
+                if sections:
+                    doc["sections"] = sections
+                else:
+                    doc.pop("sections", None)
+                self._save(pid, sid, doc)
+        return out
 
     def add_fit(self, pid: str, sid: str, kind: str, face: int, point: Any, tolerance_mm: float | None,
                 version: int | None, name: str | None) -> dict:

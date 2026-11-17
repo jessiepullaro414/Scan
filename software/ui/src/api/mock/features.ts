@@ -61,6 +61,8 @@ export type FeatureEngine = {
   extent?: (r: FitResult) => { extent: FitExtent; outline: MockOutline } | null;
   /** Whether a cylinder just fitted is a boss or a bore (extent.ts `mockForm`); without it kept fits have form null. */
   form?: (r: FitResult) => CylinderForm | null;
+  /** The current mesh with each vertex's sigma, for the sections (section.ts); null before there is a mesh. */
+  mesh?: () => { positions: ArrayLike<number>; indices: ArrayLike<number>; sigma: ArrayLike<number> | null } | null;
 };
 
 type Stored = {
@@ -112,6 +114,12 @@ export class MockFeatures {
     let s = this.sets.get(key);
     if (!s) this.sets.set(key, (s = { features: [], measurements: [], relations: [], faces: new Map(), outlines: new Map(), frame: null }));
     return s;
+  }
+
+  /** A scan's kept fits and part's frame as kept (for the sections, section.ts). */
+  keptSet(key: string): { features: Omit<KeptFeature, "stale">[]; frame: PartFrameRecord | null } {
+    const s = this.kept(key);
+    return { features: s.features, frame: s.frame };
   }
 
   private view(s: Stored, version: number | null): FeatureSet {
