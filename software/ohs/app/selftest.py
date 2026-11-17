@@ -341,7 +341,9 @@ def run_selftest(cfg: Any, *, seconds: float = 3.0, emitter_seconds: float = 1.0
     if use_camera and camera is None:
         camera = StereoCamera(cfg.camera)
     if use_pico and pico is None:
-        pico = Pico(cfg.pico)
+        from ohs.app.live import with_laser_scales
+
+        pico = with_laser_scales(Pico(cfg.pico), cfg)
     t = _SelfTest(cfg, seconds, emitter_seconds, camera if use_camera else None, pico if use_pico else None, emitters, echo)
     try:
         t.open_camera()

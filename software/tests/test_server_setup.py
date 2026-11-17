@@ -278,6 +278,95 @@ def test_laser_settings_are_refused_during_a_scan_or_a_calibration(env):
     assert _ok(_post(url, "/api/settings/lasers", {"lines": FOUR}))["lasers"]["lines"] == FOUR
 
 
+def test_laser_brightness_may_change_during_a_scan_but_not_a_calibration(env):
+    """The brightness is like the emitter sliders: allowed during a scan; the wiring is not."""
+    url, root = env["url"], env["root"]
+    _ok(_post(url, "/api/device/connect", {"source": "sim"}))  # no Pico: the brightness is only saved
+    pid = _ok(_post(url, "/api/projects", {"name": "Brightness"}))["id"]
+    assert _ok(_post(url, "/api/scan/start", {"project_id": pid}))["state"] == "scanning"
+    _refused(_post(url, "/api/settings/lasers", {"own_channels": False}), 409, "scan is running")
+    _refused(_post(url, "/api/settings/lasers", {"lines": FOUR, "brightness": {"vertical_2": 50}}), 409, "scan is running")
+    s = _ok(_post(url, "/api/settings/lasers", {"brightness": {"vertical": 90}}))
+    assert s["lasers"]["brightness"] == {"vertical": 90.0} and s["lasers"]["own_channels"] is True
+    _ok(_post(url, "/api/scan/stop"))
+    _ok(_post(url, "/api/calibration/start", {"kind": "stereo"}))
+    _refused(_post(url, "/api/settings/lasers", {"brightness": {"vertical": 80}}), 409, "calibration is running")
+    _refused(_post(url, "/api/settings/lasers", {"own_channels": False}), 409, "calibration is running")
+    _ok(_post(url, "/api/calibration/cancel"))
+    c = load_config(root / "config.toml")  # the refused ones wrote nothing
+    assert c.lasers.brightness == {"vertical": 90.0} and c.lasers.own_channels is True and c.lasers.lines == ["vertical", "horizontal"]
+
+
+def test_laser_brightness_and_wiring_are_saved_to_the_config_file(env):
+    """POST /api/settings/lasers also takes ``own_channels`` and ``brightness``, each on its own."""
+    url, root, studio = env["url"], env["root"], env["studio"]
+    s = _ok(_get(url, "/api/settings"))
+    assert s["lasers"]["own_channels"] is True and s["lasers"]["brightness"] == {}  # the defaults
+    _ok(_post(url, "/api/settings/lasers", {"lines": FOUR}))
+    s = _ok(_post(url, "/api/settings/lasers", {"brightness": {"vertical_2": 85, "horizontal_2": 60.5}}))
+    want = {"vertical_2": 85.0, "horizontal_2": 60.5}
+    assert s["lasers"] == {"lines": FOUR, "own_channels": True, "brightness": want}
+    assert _ok(_get(url, "/api/settings"))["lasers"]["brightness"] == want
+    assert studio.cfg.lasers.channel_scales() == (1.0, 1.0, 0.85, 0.605)
+    text = (root / "config.toml").read_text(encoding="utf-8")
+    assert "brightness = {" in text and "# Stereo camera (ELP dual OV9281" in text
+    c = load_config(root / "config.toml")
+    assert c.lasers.brightness == want and c.lasers.lines == FOUR
+    for bad, needle in (({"vertical_3": 50}, "not in lasers.lines"), ({"vertical_2": 120}, "0..100"),
+                        ({"horizontal": -1}, "0..100")):
+        _refused(_post(url, "/api/settings/lasers", {"brightness": bad}), 422, needle)
+    _refused(_post(url, "/api/settings/lasers", {"brightness": {"vertical_2": "bright"}}), 422)
+    _refused(_post(url, "/api/settings/lasers", {"brightness": [85]}), 422)
+    _refused(_post(url, "/api/settings/lasers", {"own_channels": "maybe"}), 422)
+    assert load_config(root / "config.toml").lasers.brightness == want and studio.cfg.lasers.brightness == want  # nothing written
+    # each pair on one wire: the first laser's brightness counts for both
+    s = _ok(_post(url, "/api/settings/lasers", {"own_channels": False}))
+    assert s["lasers"]["own_channels"] is False and s["lasers"]["brightness"] == want and s["lasers"]["lines"] == FOUR
+    assert "own_channels = false" in (root / "config.toml").read_text(encoding="utf-8")
+    assert load_config(root / "config.toml").lasers.own_channels is False
+    assert studio.cfg.lasers.channel_scales() == (1.0, 1.0, 1.0, 1.0)
+    assert _ok(_post(url, "/api/settings/lasers", {"own_channels": True}))["lasers"]["own_channels"] is True
+    assert load_config(root / "config.toml").lasers.own_channels is True
+    # fewer lasers: the brightness of the ones that are gone goes too
+    s = _ok(_post(url, "/api/settings/lasers", {"lines": ["vertical", "horizontal", "vertical_2"]}))
+    assert s["lasers"]["brightness"] == {"vertical_2": 85.0}
+    assert load_config(root / "config.toml").lasers.brightness == {"vertical_2": 85.0}
+    s = _ok(_post(url, "/api/settings/lasers", {"lines": ["vertical", "horizontal"]}))
+    assert s["lasers"]["brightness"] == {} and load_config(root / "config.toml").lasers.brightness == {}
+    # given together, the new lines and brightness are checked together
+    s = _ok(_post(url, "/api/settings/lasers", {"lines": FOUR, "brightness": {"horizontal_2": 70}}))
+    assert s["lasers"]["lines"] == FOUR and s["lasers"]["brightness"] == {"horizontal_2": 70.0}
+    _refused(_post(url, "/api/settings/lasers", {"lines": ["vertical", "horizontal"], "brightness": {"horizontal_2": 70}}),
+             422, "not in lasers.lines")
+    assert load_config(root / "config.toml").lasers.lines == FOUR
+
+
+def test_laser_brightness_reaches_the_pico_at_once(tmp_path, demo_dir):
+    from test_app_live import FakeCamera, SimPico
+
+    sp = SimPico()  # firmware 1.2.0: a level per laser
+    app = _app(tmp_path, demo_dir, camera_factory=lambda _c: FakeCamera(size=(1280, 800), fps=30.0),
+               pico_factory=lambda _c: sp.pico())
+    try:
+        with ServerThread(app) as srv:
+            url = srv.url
+            _ok(_post(url, "/api/settings/lasers", {"lines": FOUR}))
+            _ok(_post(url, "/api/device/connect", {"source": "camera"}))
+            pico = app.state.studio.devices._conn.pico
+            assert pico.connected and pico.per_laser and pico.laser_scales == (1.0, 1.0, 1.0, 1.0)
+            _ok(_post(url, "/api/device/emitters", {"vertical": 80, "horizontal": 50, "dots": 0}))
+            assert sp.emits()[-1] == "EMIT 80 50 0"
+            _ok(_post(url, "/api/settings/lasers", {"brightness": {"vertical_2": 50, "horizontal_2": 80}}))
+            assert pico.laser_scales == (1.0, 1.0, 0.5, 0.8) and sp.emits()[-1] == "EMIT 80 50 0 40 40"
+            _ok(_post(url, "/api/settings/lasers", {"own_channels": False}))  # each pair on one wire
+            assert pico.laser_scales == (1.0, 1.0, 1.0, 1.0) and sp.emits()[-1] == "EMIT 80 50 0"
+            _ok(_post(url, "/api/settings/lasers", {"own_channels": True}))
+            assert sp.emits()[-1] == "EMIT 80 50 0 40 40"
+            _ok(_post(url, "/api/device/disconnect"))
+    finally:
+        sp.close()
+
+
 def test_setup_state_follows_the_configured_lasers(env):
     """Changing the laser set keeps the calibrated planes; the setup says which lasers still lack one."""
     from ohs.sim.nominal import nominal_calibration

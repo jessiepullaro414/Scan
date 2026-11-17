@@ -18,16 +18,17 @@ import {
   CircleExclamationPoint,
   type LucideIcon,
 } from "lucide-react";
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { MOCK } from "../api/backend";
 import { ApiError, api } from "../api/http";
-import type { Settings, ThinWalls } from "../api/types";
+import type { LaserSettingsBody, Settings, ThinWalls } from "../api/types";
 import { Badge } from "../components/ui/Badge";
 import { Button } from "../components/ui/Button";
 import { EmptyState, Skeleton } from "../components/ui/Feedback";
-import { Segmented, Switch } from "../components/ui/Form";
+import { Segmented, Slider, Switch } from "../components/ui/Form";
 import { Code, KeyValue, Page, PageHeader, Section } from "../components/ui/Layout";
 import { humanize } from "../lib/format";
+import { brightnessRows, laserSettingsOf } from "../lib/laserBrightness";
 import { FOUR_LASERS, TWO_LASERS, laserChoice, laserColor, laserLabel, type LaserChoice } from "../lib/laserSet";
 import { useConnection } from "../store/connection";
 import { configPathOf } from "../store/setup";
@@ -303,7 +304,94 @@ function LasersSection({ settings, onSaved }: { settings: Settings; onSaved: (s:
           {error.hint ? <span className="text-subtle"> {error.hint}</span> : null}
         </div>
       ) : null}
+      <LaserBrightness settings={settings} onSaved={onSaved} />
     </Section>
+  );
+}
+
+/** A build with two lasers in a family: whether each laser has its own wire, and each laser's brightness (saved on release). */
+function LaserBrightness({ settings, onSaved }: { settings: Settings; onSaved: (s: Settings) => void }) {
+  const lasers = laserSettingsOf(settings);
+  const server = lasers?.brightness ?? {};
+  const serverKey = JSON.stringify(server);
+  const [local, setLocal] = useState<Record<string, number>>(server);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<ApiError | null>(null);
+  const dragging = useRef(false);
+  useEffect(() => {
+    if (!dragging.current) setLocal(JSON.parse(serverKey) as Record<string, number>);
+  }, [serverKey]);
+  const rows = brightnessRows(lasers ? { ...lasers, brightness: local } : null);
+  if (!lasers || !rows) return null;
+  const own = lasers.own_channels !== false;
+
+  const send = async (body: LaserSettingsBody) => {
+    setSaving(true);
+    try {
+      onSaved(await api.setLasers(body));
+      setError(null);
+    } catch (e) {
+      setError(e instanceof ApiError ? e : new ApiError(0, String(e), null, "/api/settings/lasers"));
+      setLocal(JSON.parse(serverKey) as Record<string, number>);
+    } finally {
+      setSaving(false);
+    }
+  };
+  const commit = (name: string, v: number) => {
+    dragging.current = false;
+    const next = { ...local, [name]: v };
+    setLocal(next);
+    if ((server[name] ?? 100) !== v) void send({ brightness: next });
+  };
+
+  return (
+    <div className="mt-4 space-y-4 border-t border-line pt-4">
+      <Switch
+        label="Each laser has its own wire (firmware 1.2.0 or later)"
+        description="Lets each laser have its own brightness, and lets the laser calibration light them one at a time."
+        checked={own}
+        disabled={saving}
+        onChange={(v) => void send({ own_channels: v })}
+      />
+      <div>
+        <div className="text-sm text-fg">Brightness</div>
+        <div className="text-xs text-subtle">
+          Each laser in percent of its family's level (the emitter sliders). Turn down a laser whose line looks brighter than the others.
+        </div>
+      </div>
+      <div className="space-y-3">
+        {rows.map((r) => (
+          <div key={r.name}>
+            <div className="mb-1 flex items-center justify-between">
+              <label htmlFor={`laser-brightness-${r.name}`} className="flex items-center gap-1.5 text-sm text-fg">
+                <span className="h-2 w-2 rounded-full" style={{ background: laserColor(r.name, lasers.lines) }} aria-hidden />
+                {r.label}
+              </label>
+              <span className="w-12 text-right font-mono text-sm text-fg tnum">{Math.round(r.value)}%</span>
+            </div>
+            <Slider
+              id={`laser-brightness-${r.name}`}
+              label={`${r.label} brightness`}
+              value={r.value}
+              onChange={(v) => {
+                dragging.current = true;
+                setLocal((l) => ({ ...l, [r.name]: v }));
+              }}
+              onCommit={(v) => commit(r.name, v)}
+            />
+          </div>
+        ))}
+      </div>
+      {!own ? (
+        <div className="text-xs text-subtle">Each pair of lasers shares one wire, so both lasers of a pair get the same brightness.</div>
+      ) : null}
+      {error ? (
+        <div className="text-xs text-danger" role="alert">
+          Couldn't save the setting: {error.detail}
+          {error.hint ? <span className="text-subtle"> {error.hint}</span> : null}
+        </div>
+      ) : null}
+    </div>
   );
 }
 

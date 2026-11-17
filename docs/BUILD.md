@@ -183,6 +183,7 @@ each part's pinout and a checklist you can tick. What follows is the order to do
 |---|---|---|
 | V-line laser switch | PN2222 (Q1), 1 kΩ | Base through 1 kΩ to **GP2 (pin 4)**; emitter to GND; collector to the laser's black wire |
 | H-line laser switch | PN2222 (Q2), 1 kΩ | Base through 1 kΩ to **GP3 (pin 5)**; emitter to GND; collector to the laser's black wire |
+| 4-laser variant only: second V-line and H-line laser switches | PN2222 (Q4, Q5), 1 kΩ each | Q4's base through 1 kΩ to **GP0 (pin 1)**, Q5's to **GP1 (pin 2)**; emitters to GND; collectors to those lasers' black wires (firmware 1.2.0 or later) |
 | LED switch | IRLB8721 (Q3), 8.2 Ω 3 W, 10 kΩ | Gate straight to **GP6 (pin 9)**, with 10 kΩ from gate to GND; source to GND; drain through the 8.2 Ω resistor to the LED's − wire |
 
 - PN2222 legs are **E-B-C** with the flat face toward you and the legs down. Check the datasheet

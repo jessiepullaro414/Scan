@@ -107,8 +107,13 @@ def sim_board_camera(script: str, cfg: Any, **kw: Any) -> Any:
     """The simulator's virtual calibration scanner (:class:`ohs.sim.board_camera.SimBoardCamera`)
     for ``script``, with the configured board, paper and line lasers (:func:`sim_lasers`); ``kw``
     goes to the camera (tests: ``realtime=False``, shorter dwells)."""
-    from ohs.sim.board_camera import SimBoardCamera
+    from ohs.sim.board_camera import DWELL_S, SimBoardCamera
 
+    lasers = getattr(cfg, "lasers", None)
+    if script == "lasers" and lasers is not None and lasers.separate():
+        # one laser at a time: a capture takes a frame per laser after the steady view, so each
+        # board pose is held a second longer
+        kw.setdefault("dwell_s", DWELL_S + 1.0)
     return SimBoardCamera(script, spec=cfg.board.spec(), paper=cfg.board.paper, lasers=sim_lasers(cfg), **kw)
 
 
@@ -279,7 +284,9 @@ class DeviceManager:
     def _default_pico(cfg: Any) -> Any:
         from ohs.devices.pico import Pico
 
-        return Pico(cfg.pico)
+        from ohs.app.live import with_laser_scales
+
+        return with_laser_scales(Pico(cfg.pico), cfg)  # each laser's brightness ([lasers])
 
     @staticmethod
     def _default_sim_camera(script: str, cfg: Any) -> Any:
@@ -833,13 +840,17 @@ class DeviceManager:
         self._emitters_off()
         self._on_change()
 
-    def emitters_to(self, levels: tuple[float, float, float]) -> bool:
-        """Emitters to ``levels`` (a calibration profile). False (no error) without a Pico."""
+    def emitters_to(self, levels: tuple[float, float, float], only=None) -> bool:
+        """Emitters to ``levels`` (a calibration profile); ``only``: the laser channels to light
+        (``ohs.devices.pico.LASER_CHANNELS``), the others off. False (no error) without a Pico."""
         c = self._conn
         if c is None or c.pico is None or not getattr(c.pico, "connected", False):
             return False
         try:
-            c.pico.set_emitters(*(float(v) for v in levels))
+            if only is None:
+                c.pico.set_emitters(*(float(v) for v in levels))
+            else:
+                c.pico.set_emitters(*(float(v) for v in levels), only=tuple(only))
             return True
         except Exception as e:
             self._notify("warn", f"the emitters could not be switched on ({e}): check the Pico's USB cable")
@@ -859,6 +870,26 @@ class DeviceManager:
             c.pico.set_emitters(*levels)
         except Exception as e:
             self._notify("warn", f"the emitters could not be switched on ({e}): check the Pico's USB cable")
+        self._on_change()
+
+    def pico_per_laser(self) -> bool:
+        """Is a Pico connected whose firmware sets each laser on its own (1.2.0+)?"""
+        c = self._conn
+        return bool(c is not None and c.pico is not None and getattr(c.pico, "connected", False)
+                    and getattr(c.pico, "per_laser", False))
+
+    def set_laser_scales(self, scales: tuple[float, float, float, float]) -> None:
+        """Each laser's brightness share (``LasersConfig.channel_scales``) to the connected Pico; the
+        lasers that are on take it at once. Nothing happens without a Pico."""
+        c = self._conn
+        if c is None or c.pico is None or not hasattr(c.pico, "laser_scales"):
+            return
+        c.pico.laser_scales = tuple(scales)
+        if getattr(c.pico, "connected", False) and any(getattr(c.pico, "emitters", (0, 0, 0))):
+            try:
+                c.pico.set_emitters(*c.pico.emitters)
+            except Exception as e:
+                self._notify("warn", f"the new laser brightness could not be applied ({e}): check the Pico's USB cable")
         self._on_change()
 
     def set_emitters(self, levels: dict, scanning: bool = False, apply: bool = True) -> None:

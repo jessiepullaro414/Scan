@@ -40,9 +40,22 @@ for at most its own timeout), ``write(bytes)`` and ``close()``; ``in_waiting`` a
 pyserial port (``params.port`` or :func:`find_pico_port`) and closes it again in :meth:`Pico.close`.
 An injected transport is never closed by ``Pico``: the caller owns it.
 
+A channel per laser
+-------------------
+The 4-laser build wires each laser to its own channel (firmware 1.2.0: ``EMIT v h d v2 h2``).
+:meth:`Pico.set_emitters` still takes the three levels the app works with (vertical lasers,
+horizontal lasers, dots) and turns them into the five channel levels with ``laser_scales`` (each
+laser's brightness as a share of its family's level: first vertical, first horizontal, second
+vertical, second horizontal; ``[lasers] brightness``) and ``only`` (the lasers to light, e.g. one at
+a time for the laser calibration). While the second lasers would follow the first ones anyway, the
+three-level ``EMIT`` goes out, exactly as before, so a 2-laser build and older firmware see no
+change. Firmware before 1.2.0 cannot set the second lasers on their own: their scales are then
+ignored (with one warning) and ``only`` raises :class:`PicoError`.
+
 Deviations from ARCHITECTURE.md: none in the contract API. Extras are ``PicoParams.resync_s``,
 ``sync_samples``, ``timeout_s`` and ``drift_prior_ppm``; ``Pico.status()``,
-``device_to_host()``, and the ``hello``, ``connected``, ``emitters``, ``imu_scales``,
+``device_to_host()``, and the ``hello``, ``connected``, ``emitters``, ``channels``, ``laser_scales``,
+``per_laser``, ``imu_scales``,
 ``clock_model``, ``temperature_c`` and ``stats`` properties; ``PicoError``; ``read_events()``
 also returns ``temperature`` events. The firmware already sends unwrapped
 64-bit ``t_us`` values (see firmware/main.py), so the host does not unwrap them.
@@ -143,6 +156,19 @@ def _drain(dq: collections.deque) -> list:
         return out
 
 
+#: The firmware's laser channels, in ``EMIT`` order after the dots: (first vertical, first
+#: horizontal, second vertical, second horizontal) are "v", "h", "v2", "h2".
+LASER_CHANNELS = ("v", "h", "v2", "h2")
+PER_LASER_FIRMWARE = (1, 2, 0)  # the first firmware with a channel per laser
+
+
+def _version(text: str) -> tuple[int, ...]:
+    try:
+        return tuple(int(x) for x in str(text).split("."))
+    except ValueError:
+        return ()
+
+
 def _pct(value: float) -> int:
     v = float(value)
     if not math.isfinite(v):
@@ -154,8 +180,12 @@ def _pct(value: float) -> int:
 class Pico:
     """Client for the OpenHandScan Pico firmware. Use as a context manager."""
 
-    def __init__(self, params: PicoParams | None = None, transport: Any | None = None) -> None:
+    def __init__(self, params: PicoParams | None = None, transport: Any | None = None,
+                 laser_scales: tuple[float, float, float, float] | None = None) -> None:
         self.params = params or PicoParams()
+        self._laser_scales = (1.0, 1.0, 1.0, 1.0)
+        if laser_scales is not None:
+            self.laser_scales = laser_scales
         self._transport = transport
         self._owns_transport = transport is None
         self._port_name: str | None = None if transport is None else "<injected>"
@@ -173,6 +203,8 @@ class Pico:
         self._last_t_imu: int | None = None
         self._temp_c: float | None = None
         self._levels: tuple[int, int, int] = (0, 0, 0)
+        self._channels: tuple[int, int, int, int, int] = (0, 0, 0, 0, 0)
+        self._warned_old_firmware = False
         self._stop = threading.Event()
         self._reader: threading.Thread | None = None
         self._maint: threading.Thread | None = None
@@ -212,6 +244,7 @@ class Pico:
         _drain(self._imu_q)
         _drain(self._evt_q)
         self._scales, self._imu_rate, self._levels, self._error = None, 0, (0, 0, 0), None
+        self._channels = (0, 0, 0, 0, 0)
         self._temp_c = None
         self._connected = self._opened = True
         self._reader = threading.Thread(target=self._read_loop, name="pico-reader", daemon=True)
@@ -316,8 +349,31 @@ class Pico:
 
     @property
     def emitters(self) -> tuple[int, int, int]:
-        """Last confirmed emitter levels (percent): (vertical, horizontal, dots)."""
+        """Last confirmed emitter levels (percent) as set: (vertical lasers, horizontal lasers, dots),
+        before ``laser_scales`` and ``only``."""
         return self._levels
+
+    @property
+    def channels(self) -> tuple[int, int, int, int, int]:
+        """Last confirmed channel levels (percent): (V, H, dots, V2, H2), what the lasers get."""
+        return self._channels
+
+    @property
+    def per_laser(self) -> bool:
+        """Can the firmware set each laser on its own (1.2.0+)? False before ``open``."""
+        return _version(self.hello.get("version", "")) >= PER_LASER_FIRMWARE
+
+    @property
+    def laser_scales(self) -> tuple[float, float, float, float]:
+        """Each laser's brightness as a share (0..1) of its family's level: (V, H, V2, H2)."""
+        return self._laser_scales
+
+    @laser_scales.setter
+    def laser_scales(self, scales) -> None:
+        s = tuple(float(x) for x in scales)
+        if len(s) != 4 or not all(math.isfinite(x) and 0.0 <= x <= 1.0 for x in s):
+            raise ValueError(f"laser_scales must be four shares in 0..1 (V, H, V2, H2), got {scales!r}")
+        self._laser_scales = s  # type: ignore[assignment]
 
     @property
     def imu_scales(self) -> tuple[float, float] | None:
@@ -345,17 +401,52 @@ class Pico:
         return self._error
 
     # ------------------------------------------------------------------ commands
-    def set_emitters(self, vertical: float, horizontal: float, dots: float) -> None:
-        """Set the emitter PWM levels in percent (clamped to 0..100, rounded to integers)."""
-        req = (_pct(vertical), _pct(horizontal), _pct(dots))
-        line, _, _ = self._request("EMIT %d %d %d" % req, "OK EMIT")
+    def set_emitters(self, vertical: float, horizontal: float, dots: float, *, only=None) -> None:
+        """Set the emitter levels in percent (clamped to 0..100, rounded to integers): the vertical
+        lasers, the horizontal lasers and the dots. Each laser gets its family's level times its
+        ``laser_scales`` share; ``only`` (channel names of :data:`LASER_CHANNELS`) lights just those
+        lasers, the others off (module docstring, "A channel per laser")."""
+        fam = (_pct(vertical), _pct(horizontal), _pct(dots))
+        sv, sh, sv2, sh2 = self._laser_scales
+        ch = [fam[0] * sv, fam[1] * sh, fam[2], fam[0] * sv2, fam[1] * sh2]
+        if only is not None:
+            keep = set(only)
+            unknown = keep - set(LASER_CHANNELS)
+            if unknown:
+                raise ValueError(f"unknown laser channels {sorted(unknown)}; use {', '.join(LASER_CHANNELS)}")
+            for i, name in ((0, "v"), (1, "h"), (3, "v2"), (4, "h2")):
+                if name not in keep:
+                    ch[i] = 0.0
+        req = tuple(_pct(x) for x in ch)
+        own = req[3] != req[0] or req[4] != req[1]
+        if own and not self.per_laser:
+            if only is not None:
+                raise PicoError(f"firmware {self.hello.get('version') or '?'} drives each pair of lasers together; "
+                                "update it to 1.2.0 or later (firmware/main.py) to light one laser at a time")
+            if not self._warned_old_firmware:
+                self._warned_old_firmware = True
+                log.warning("firmware %s drives each pair of lasers together: the second lasers' brightness is "
+                            "ignored (update to 1.2.0)", self.hello.get("version") or "?")
+            req = (req[0], req[1], req[2], req[0], req[1])
+            own = False
+        if own:
+            line, _, _ = self._request("EMIT %d %d %d %d %d" % req, "OK EMIT")
+            n = 5
+        else:
+            line, _, _ = self._request("EMIT %d %d %d" % req[:3], "OK EMIT")
+            n = 3
         try:
-            got = tuple(int(x) for x in line.split()[2:5])
+            got = tuple(int(x) for x in line.split()[2:2 + n])
         except ValueError:
             raise PicoError(f"malformed reply {line!r}") from None
+        if len(got) != n:
+            raise PicoError(f"malformed reply {line!r}")
+        if n == 3:
+            got = got + (got[0], got[1])
         if got != req:
             log.warning("firmware set emitters to %s (requested %s)", got, req)
-        self._levels = got  # type: ignore[assignment]
+        self._channels = got  # type: ignore[assignment]
+        self._levels = fam if got == req else got[:3]  # type: ignore[assignment]
 
     def all_off(self) -> None:
         self.set_emitters(0, 0, 0)
@@ -372,7 +463,9 @@ class Pico:
         self._request("IMU 0", "OK IMU")
 
     def status(self) -> dict:
-        """``STATUS`` parsed: ``{"emit": (v, h, d), "imu": rate, "btn": 0|1, "up": s, "raw": line}``,
+        """``STATUS`` parsed: ``{"emit": (v, h, d), "imu": rate, "btn": 0|1, "up": s, "raw": line}``
+        (``emit`` has five levels, ``(v, h, d, v2, h2)``, while firmware 1.2.0's second lasers are set
+        on their own),
         plus ``"temp"`` (degC) once firmware 1.1+ has read the IMU chip's temperature."""
         line, _, _ = self._request("STATUS", "S ")
         out: dict[str, Any] = {"raw": line}
@@ -576,7 +669,7 @@ class Pico:
         elif line.startswith("L "):
             msg = line[2:]
             if msg.startswith("emitters-off"):
-                self._levels = (0, 0, 0)
+                self._levels, self._channels = (0, 0, 0), (0, 0, 0, 0, 0)
                 log.warning("Pico turned the emitters off by itself (%s)", msg)
             else:
                 log.info("Pico: %s", msg)
@@ -646,7 +739,7 @@ class Pico:
         while not self._stop.is_set():
             now = time.perf_counter()
             try:
-                if any(self._levels) and now >= next_hb:
+                if any(self._channels) and now >= next_hb:
                     self._send("HB")
                     next_hb = now + p.heartbeat_s
                 if now >= next_sync:

@@ -74,6 +74,8 @@ The lasers are Class 3R. Never look into them, and point the scanner at a wall o
 |---|---|---|---|
 | V-line laser | GP2 | 4 | PWM 10 kHz, 1 kOhm to the PN2222A base (low-side switch) |
 | H-line laser | GP3 | 5 | same |
+| Second V-line laser (4-laser build) | GP0 | 1 | same; 1.2.0+ |
+| Second H-line laser (4-laser build) | GP1 | 2 | same; 1.2.0+ |
 | Dot projector | GP6 | 9 | same |
 | Trigger button | GP15 | 20 | to GND (pin 18), internal pull-up, 20 ms debounce |
 | IMU SDA | GP4 | 6 | I2C0, 400 kHz, LSM6DSOX at 0x6A (fallback 0x6B) |
@@ -92,6 +94,7 @@ firmware picks them by itself (`PINS` in `main.py`, chosen by `sys.platform`):
 |---|---|---|
 | V-line laser | 4 | GP13 |
 | H-line laser | 5 | GP14 |
+| Second V / H-line laser (4-laser build) | 1 / 2 | GP11 / GP12 |
 | Dot projector | 9 | GP17 |
 | Trigger button | 20 (to GND, pin 18) | GP40 |
 | IMU SDA / SCL | 6 / 7 | GP15 / GP16 |
@@ -116,11 +119,12 @@ Commands are case-insensitive.
 | Host -> Pico | Reply |
 |---|---|
 | `HELLO` | `OK HELLO ohs-fw <ver> imu=<LSM6DSOX\|NONE>` |
-| `EMIT <v> <h> <d>` (percent, clamped to 0..100) | `OK EMIT <v> <h> <d>` (the values actually applied) |
+| `EMIT <v> <h> <d>` (percent, clamped to 0..100) | `OK EMIT <v> <h> <d>` (the values actually applied); the 4-laser build's second lasers follow V and H |
+| `EMIT <v> <h> <d> <v2> <h2>` (1.2.0+) | `OK EMIT <v> <h> <d> <v2> <h2>`: each laser on its own (the 4-laser build's GP0 / GP1) |
 | `IMU <rate_hz>` (0 = stop; 104/208/416/833) | `OK IMU <rate> <gyro_rad_per_lsb> <accel_ms2_per_lsb>` |
 | `TIME` | `T <t_us>` |
 | `HB` | (no reply, keeps the emitters alive) |
-| `STATUS` | `S emit=<v>,<h>,<d> imu=<rate> btn=<0\|1> up=<s>`, plus ` temp=<degC>` once a temperature was read |
+| `STATUS` | `S emit=<v>,<h>,<d> imu=<rate> btn=<0\|1> up=<s>`, plus ` temp=<degC>` once a temperature was read; `emit=` has five values while the second lasers differ from the first |
 
 Asynchronous lines: `I <t_us> <gx> <gy> <gz> <ax> <ay> <az>` (raw int16 counts, IMU frame),
 `B <t_us> <0|1>`, `C <t_us> <centi_degC>`, `E <msg>`, `L <msg>`.

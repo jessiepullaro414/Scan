@@ -186,10 +186,10 @@ class SimPico:
     START_US = 3600 * 1_000_000 + 12_345  # the device has been up for an hour
 
     def __init__(self, drift_ppm: float = 0.0, start_ticks: int = MASK30 - 400_000, with_imu: bool = True,
-                 delay_time_replies: bool = False) -> None:
+                 delay_time_replies: bool = False, channels: int = 3) -> None:
         self.devtime = DeviceTime(drift_ppm, start_ticks)  # ticks wrap 0.4 s after start
         self.clock = FW.UnwrappedClock(self.devtime.ticks_us, mp_ticks_diff, self.START_US)
-        self.pwms = [FakePWM() for _ in range(3)]
+        self.pwms = [FakePWM() for _ in range(channels)]  # 5: the 4-laser build's V2 and H2 too
         self.button = FakePin()
         self.imu = FakeImu(self.clock) if with_imu else None
         self.lock = threading.Lock()
@@ -300,6 +300,70 @@ def test_emitters_clamping_heartbeat_and_close(sim):
         pico.close()
     assert sim.duties() == [0, 0, 0]  # close() turned the projector off
     assert [c for c in sim.received if c != "HB"][-2:] == ["EMIT 0 0 0", "IMU 0"]
+
+
+def pct(*levels) -> list:
+    return [x * 65535 // 100 for x in levels]
+
+
+def test_a_level_per_laser_from_brightness_shares():
+    """The 4-laser build: each laser's brightness is a share of its family's level; the client sends
+    five levels only when the second lasers differ from the first, so a build without shares sends
+    the three-level EMIT exactly as before."""
+    s = SimPico(channels=5)
+    try:
+        with Pico(PicoParams(), transport=s.port) as pico:
+            assert pico.per_laser and pico.laser_scales == (1.0, 1.0, 1.0, 1.0)
+            pico.set_emitters(80, 50, 0)
+            assert s.received[-1] == "EMIT 80 50 0" and s.duties() == pct(80, 50, 0, 80, 50)
+            pico.laser_scales = (1.0, 1.0, 0.5, 0.8)
+            pico.set_emitters(80, 50, 0)
+            assert s.received[-1] == "EMIT 80 50 0 40 40" and s.duties() == pct(80, 50, 0, 40, 40)
+            assert pico.emitters == (80, 50, 0) and pico.channels == (80, 50, 0, 40, 40)
+            assert pico.status()["emit"] == (80, 50, 0, 40, 40)
+            with pytest.raises(ValueError):
+                pico.laser_scales = (1.0, 1.0, 1.5, 1.0)
+    finally:
+        s.close()
+
+
+def test_one_laser_at_a_time():
+    s = SimPico(channels=5)
+    try:
+        with Pico(PicoParams(heartbeat_s=0.2), transport=s.port) as pico:
+            for only, want in ((("v",), (100, 0, 0, 0, 0)), (("v2",), (0, 0, 0, 100, 0)),
+                               (("h",), (0, 100, 0, 0, 0)), (("h2",), (0, 0, 0, 0, 100))):
+                pico.set_emitters(100, 100, 0, only=only)
+                assert pico.channels == want and s.duties() == pct(*want)
+            assert pico.emitters == (100, 100, 0)  # the levels as set, before "only"
+            n0 = s.received.count("HB")
+            time.sleep(0.6)
+            assert s.received.count("HB") > n0 and s.duties() == pct(0, 0, 0, 0, 100)  # H2 alone keeps the heartbeat
+            pico.set_emitters(100, 100, 0, only=("v", "h"))
+            assert pico.channels == (100, 100, 0, 0, 0)
+            with pytest.raises(ValueError, match="unknown laser channels"):
+                pico.set_emitters(100, 100, 0, only=("v3",))
+            pico.all_off()
+            assert s.duties() == [0] * 5
+    finally:
+        s.close()
+
+
+def test_firmware_before_1_2_drives_each_pair_together(monkeypatch, caplog):
+    monkeypatch.setattr(FW, "FW_VERSION", "1.1.0")
+    s = SimPico(channels=3)
+    try:
+        with Pico(PicoParams(), transport=s.port, laser_scales=(1.0, 1.0, 0.5, 0.5)) as pico:
+            assert not pico.per_laser
+            with caplog.at_level(logging.WARNING, logger="ohs.devices.pico"):
+                pico.set_emitters(80, 60, 0)
+                pico.set_emitters(70, 60, 0)
+            assert s.received[-1] == "EMIT 70 60 0" and pico.channels == (70, 60, 0, 70, 60)
+            assert sum("drives each pair of lasers together" in r.getMessage() for r in caplog.records) == 1
+            with pytest.raises(PicoError, match="update it to 1.2.0"):
+                pico.set_emitters(100, 100, 0, only=("v",))
+    finally:
+        s.close()
 
 
 def test_imu_streaming_si_conversion(sim):

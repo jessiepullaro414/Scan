@@ -320,11 +320,23 @@ export class MockSetup {
     return this.host.settings;
   }
 
-  /** `lasers.lines`, checked as the engine's config checks it. Planes already calibrated are kept. */
+  /** Any of `lasers.lines`, `own_channels` and `brightness`, checked as the engine's config checks them. Planes
+   * already calibrated are kept. The brightness alone may change during a scan, like the emitter sliders. */
   private setLasers(body: Record<string, unknown>) {
-    const lines = body.lines;
+    const cur = (this.host.settings.lasers ?? {}) as { lines?: string[]; own_channels?: boolean; brightness?: Record<string, number> };
+    const curLines = cur.lines ?? ["vertical", "horizontal"];
+    const curBright = cur.brightness ?? {};
+    if (body.lines === undefined && body.own_channels === undefined && body.brightness === undefined)
+      throw new HttpError(422, "nothing to change", "Send lines, own_channels or brightness.");
+    const lines = body.lines === undefined ? curLines : body.lines;
     if (!Array.isArray(lines) || !lines.every((x) => typeof x === "string"))
       throw new HttpError(422, "lines must be a list of laser names", 'Send for example {"lines": ["vertical", "horizontal"]}.');
+    if (body.own_channels !== undefined && typeof body.own_channels !== "boolean")
+      throw new HttpError(422, "own_channels must be true or false", "Send true when each laser has its own wire.");
+    const own = typeof body.own_channels === "boolean" ? body.own_channels : (cur.own_channels ?? true);
+    const given = body.brightness;
+    if (given !== undefined && (given === null || typeof given !== "object" || Array.isArray(given)))
+      throw new HttpError(422, "brightness must be a table of laser name -> percent", 'Send for example {"brightness": {"vertical_2": 85}}.');
     const hint = 'List every line laser once, each name starting with "vertical" or "horizontal" (for example ["vertical", "horizontal", "vertical_2", "horizontal_2"]).';
     const bad = lines.filter((n) => !laserFamily(n));
     if (bad.length) throw new HttpError(422, `${JSON.stringify(bad)} do not start with a laser family (vertical, horizontal)`, hint);
@@ -332,11 +344,27 @@ export class MockSetup {
     if (twice.length) throw new HttpError(422, `${JSON.stringify(twice)} named twice`, hint);
     for (const f of ["vertical", "horizontal"] as const)
       if (!lines.some((n) => laserFamily(n) === f)) throw new HttpError(422, `lasers.lines needs at least one ${f} line`, hint);
-    if (this.host.scanning()) throw new HttpError(409, "A scan is running", "Stop the scan before changing the line lasers.");
-    if (this.calibrating()) throw new HttpError(409, "A calibration is running", "Finish or cancel it before changing the line lasers.");
-    this.host.settings.lasers = { lines: [...lines] };
-    const missing = this.state().calibration.lasers_missing ?? [];
-    this.host.log("info", `Line lasers saved: ${lines.length} lasers${missing.length && this.hasStereo() ? "; calibrate the lasers (setup step 5) for the new ones" : ""}`);
+    // a change of lines without a brightness drops the brightness of the lasers that are gone
+    const bright: Record<string, number> = {};
+    for (const [k, v] of Object.entries((given as Record<string, unknown> | undefined) ?? curBright))
+      if (given !== undefined || lines.includes(k)) bright[k] = Number(v);
+    const bHint = 'Give each laser\'s brightness as a percent from 0 to 100, by the names in lasers.lines (for example {"vertical_2": 85}).';
+    const unknown = Object.keys(bright).filter((k) => !lines.includes(k));
+    if (unknown.length) throw new HttpError(422, `lasers.brightness: ${JSON.stringify(unknown.sort())} are not in lasers.lines`, bHint);
+    for (const [k, v] of Object.entries(bright))
+      if (!Number.isFinite(v) || v < 0 || v > 100) throw new HttpError(422, `lasers.brightness.${k} must be a percent in 0..100 (got ${String(v)})`, bHint);
+    const wiring = body.lines !== undefined || body.own_channels !== undefined;
+    const what = wiring ? "the line lasers" : "the laser brightness";
+    if (wiring && this.host.scanning()) throw new HttpError(409, "A scan is running", `Stop the scan before changing ${what}.`);
+    if (this.calibrating()) throw new HttpError(409, "A calibration is running", `Finish or cancel it before changing ${what}.`);
+    const linesChanged = lines.join() !== curLines.join();
+    const ownChanged = own !== (cur.own_channels ?? true);
+    this.host.settings.lasers = { lines: [...lines], own_channels: own, brightness: bright };
+    if (linesChanged) {
+      const missing = this.state().calibration.lasers_missing ?? [];
+      this.host.log("info", `Line lasers saved: ${lines.length} lasers${missing.length && this.hasStereo() ? "; calibrate the lasers (setup step 5) for the new ones" : ""}`);
+    } else if (ownChanged) this.host.log("info", `Laser wiring saved: ${own ? "each laser has its own wire" : "each pair of lasers shares one wire"}`);
+    else if (JSON.stringify(bright) !== JSON.stringify(curBright)) this.host.log("info", "Laser brightness saved");
     this.broadcast();
     return this.host.settings;
   }

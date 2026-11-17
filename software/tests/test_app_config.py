@@ -175,6 +175,49 @@ def test_frames_by_motion_settings(tmp_path):
     assert "\nframe_motion_deg = 0.0\n" in text and "\nframe_max_gap = 4\n" in text and "gyro has turned" in text
 
 
+def test_laser_channels_and_brightness(tmp_path):
+    """[lasers] own_channels and brightness: each laser's Pico channel, its share of its family's
+    level, validation, and a round trip through the file (an inline table)."""
+    from ohs.app.config import LasersConfig, set_config_values
+
+    two = LasersConfig()
+    assert two.own_channels and two.brightness == {} and not two.separate()
+    assert two.channel_scales() == (1.0, 1.0, 1.0, 1.0)  # the second channels follow: the old 3-level EMIT
+    assert [two.channel_of(n) for n in two.lines] == ["v", "h"]
+    four = LasersConfig(lines=["vertical", "horizontal", "vertical_2", "horizontal_2"],
+                        brightness={"vertical_2": 80.0, "horizontal": 50.0})
+    assert four.separate() and [four.channel_of(n) for n in four.lines] == ["v", "h", "v2", "h2"]
+    assert four.channel_of("vertical_3") is None and four.channel_of("nope") is None
+    assert four.channel_scales() == (1.0, 0.5, 0.8, 1.0)  # horizontal_2 left out: 100 %
+    shared = LasersConfig(lines=four.lines, own_channels=False, brightness=dict(four.brightness))
+    assert not shared.separate() and shared.channel_scales() == (1.0, 0.5, 1.0, 0.5)  # a pair follows its first laser
+    assert four.problems() == []
+    assert any("not in lasers.lines" in p for p in LasersConfig(brightness={"vertical_2": 50}).problems())
+    assert any("0..100" in p for p in LasersConfig(brightness={"vertical": 120}).problems())
+    assert any("0..100" in p for p in LasersConfig(brightness={"vertical": "bright"}).problems())
+    path = _write(tmp_path / "c.toml", '[lasers]\nlines = ["vertical", "horizontal", "vertical_2", "horizontal_2"]\n')
+    cfg = load_config(path)
+    set_config_values({"lasers": {"brightness": {"vertical_2": 85.0}, "own_channels": False}}, path, cfg=cfg)
+    assert "brightness = { vertical_2 = 85.0 }" in path.read_text(encoding="utf-8")
+    back = load_config(path)
+    assert back.lasers.brightness == {"vertical_2": 85.0} and back.lasers.own_channels is False
+    with pytest.raises(ConfigError, match="lasers.brightness"):
+        set_config_values({"lasers": {"brightness": {"horizontal_3": 10.0}}}, path, cfg=back)
+    assert load_config(path).lasers.brightness == {"vertical_2": 85.0}  # a refused value is not written
+    clean = Config()
+    assert merge_into(clean, tomllib.loads(render_template(back))) == [] and clean.lasers == back.lasers
+    # a file made from the template (``ohs config --init``) takes a new brightness without a second table
+    made = tmp_path / "made.toml"
+    write_template(made)
+    assert "\nbrightness = {}\n" in made.read_text(encoding="utf-8") and "[lasers.brightness]" not in made.read_text(encoding="utf-8")
+    set_config_values({"lasers": {"lines": four.lines, "brightness": {"vertical_2": 60.0}}}, made, cfg=load_config(made))
+    got = load_config(made)
+    assert got.lasers.brightness == {"vertical_2": 60.0}
+    # a brightness in a file replaces the whole map (a laser left out is back at 100 %)
+    set_config_values({"lasers": {"brightness": {"horizontal": 70.0}}}, made, cfg=got)
+    assert load_config(made).lasers.brightness == {"horizontal": 70.0}
+
+
 def test_laser_set_setting(tmp_path):
     """[lasers] lines: the build's line lasers, two by default; names start with a family, are
     unique, and each family has at least one."""

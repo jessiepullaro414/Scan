@@ -604,33 +604,69 @@ class Studio:
             self.notify("info", "Meshing settings saved; the next mesh uses them")
         return self.settings()
 
-    def set_laser_settings(self, lines: list[str]) -> dict:
-        """Save ``lasers.lines`` (the build's line lasers) to the config file, validated as the
-        config validates it (422 when it is not a valid laser set); refused during a scan or a
-        calibration. Calibrated planes are never deleted: the setup then lists the configured
+    def set_laser_settings(self, lines: list[str] | None = None, own_channels: bool | None = None,
+                           brightness: dict[str, float] | None = None) -> dict:
+        """Save any of ``lasers.lines`` (the build's line lasers), ``lasers.own_channels`` (each
+        laser on its own Pico channel) and ``lasers.brightness`` (a laser's level in percent of its
+        family's) to the config file. The result is checked as the config checks it (422 when it is
+        not a valid laser set). A change of ``lines`` without ``brightness`` drops the brightness of
+        lasers that are no longer listed. ``lines`` and ``own_channels`` are refused during a scan
+        or a calibration; ``brightness`` alone only during a calibration, and the connected Pico
+        takes it at once. Calibrated planes are never deleted: the setup then lists the configured
         lasers that have no plane yet (``calibration.lasers_missing``)."""
         from ohs.app.config import ConfigError, LasersConfig, set_config_values
 
-        lines = [str(n) for n in lines]
-        problems = LasersConfig(lines=lines).problems()
-        if problems:
-            raise ApiError(422, "; ".join(p.removeprefix("lasers.lines: ") for p in problems),
-                           'list every line laser once, each name starting with "vertical" or "horizontal" '
-                           '(for example ["vertical", "horizontal", "vertical_2", "horizontal_2"])')
+        if lines is None and own_channels is None and brightness is None:
+            raise ApiError(422, "nothing to change", "send lines, own_channels or brightness")
+        wiring = lines is not None or own_channels is not None
         with self._lock:
-            if self.session is not None and self.session.active:
-                raise ApiError(409, "a scan is running", "stop the scan before changing the line lasers")
+            cur = self.cfg.lasers
+            new = LasersConfig(
+                lines=list(cur.lines) if lines is None else [str(n) for n in lines],
+                own_channels=bool(cur.own_channels) if own_channels is None else bool(own_channels),
+                brightness={str(k): v for k, v in (brightness if brightness is not None else cur.brightness).items()})
+            if brightness is None:  # lasers that are gone take their brightness with them
+                new.brightness = {k: v for k, v in new.brightness.items() if k in new.lines}
+            problems = new.problems()
+            if problems:
+                if all(p.startswith("lasers.brightness") for p in problems):
+                    hint = ("give each laser's brightness as a percent from 0 to 100, by the names in lasers.lines "
+                            '(for example {"vertical_2": 85})')
+                else:
+                    hint = ('list every line laser once, each name starting with "vertical" or "horizontal" '
+                            '(for example ["vertical", "horizontal", "vertical_2", "horizontal_2"])')
+                raise ApiError(422, "; ".join(p.removeprefix("lasers.lines: ") for p in problems), hint)
+            what = "the line lasers" if wiring else "the laser brightness"
+            if wiring and self.session is not None and self.session.active:
+                raise ApiError(409, "a scan is running", f"stop the scan before changing {what}")
             if self.calibration.active:
-                raise ApiError(409, "a calibration is running", "finish or cancel it before changing the line lasers")
-            try:
-                set_config_values({"lasers": {"lines": lines}}, self.config_path, cfg=self.cfg)
-            except (ConfigError, OSError) as e:
-                raise ApiError(500, f"the line lasers could not be saved to {self.config_path}: {e}",
-                               "check that the config file is valid TOML and writable") from e
-        n = len(lines)
-        self.notify("info", f"Line lasers saved: {n} laser{'s' if n != 1 else ''}"
-                    + ("" if not self.setup.state()["calibration"]["lasers_missing"] else
-                       "; calibrate the lasers (setup step 5) for the new ones"))
+                raise ApiError(409, "a calibration is running", f"finish or cancel it before changing {what}")
+            changes: dict[str, Any] = {}
+            if new.lines != list(cur.lines):
+                changes["lines"] = new.lines
+            if new.own_channels != bool(cur.own_channels):
+                changes["own_channels"] = new.own_channels
+            if {k: float(v) for k, v in new.brightness.items()} != {k: float(v) for k, v in cur.brightness.items()}:
+                changes["brightness"] = {k: float(v) for k, v in new.brightness.items()}
+            if changes:
+                try:
+                    set_config_values({"lasers": changes}, self.config_path, cfg=self.cfg)
+                except (ConfigError, OSError) as e:
+                    raise ApiError(500, f"the line lasers could not be saved to {self.config_path}: {e}",
+                                   "check that the config file is valid TOML and writable") from e
+        if "brightness" in changes or "own_channels" in changes:
+            safe_call("sending the laser brightness to the Pico",
+                      lambda: self.devices.set_laser_scales(self.cfg.lasers.channel_scales()))
+        if "lines" in changes:
+            n = len(new.lines)
+            self.notify("info", f"Line lasers saved: {n} laser{'s' if n != 1 else ''}"
+                        + ("" if not self.setup.state()["calibration"]["lasers_missing"] else
+                           "; calibrate the lasers (setup step 5) for the new ones"))
+        elif "own_channels" in changes:
+            self.notify("info", "Laser wiring saved: " + ("each laser has its own wire" if new.own_channels
+                                                          else "each pair of lasers shares one wire"))
+        elif "brightness" in changes:
+            self.notify("info", "Laser brightness saved")
         safe_call("publishing the setup", self.setup.publish)
         safe_call("publishing the calibration", self.calibration.publish)
         return self.settings()

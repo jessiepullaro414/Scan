@@ -43,6 +43,10 @@ calibration on the real scanner would: on 220 DN paper a stripe clips at 255 wit
 contrast, weaker than the white bars of the printed pattern, and the laser extractor's per-row
 maximum then lands on the pattern instead of the stripe, so no margin points are found.
 
+**One laser at a time** (the 4-laser build with a channel per laser): :meth:`SimBoardCamera.light`
+names the lasers whose stripes the following frames show (None: all of them), as the Pico's
+``EMIT`` with five levels does on the real scanner. It takes effect from the next rendered frame.
+
 **Frames:** board poses are ``T_cb`` in frame C, the rectified left camera of
 ``true_calibration``. The raw left camera is ``x_C = R1 x_rawL``; the raw right camera is
 ``x_rawR = R x_rawL + T`` (OpenCV ``stereoCalibrate`` convention).
@@ -562,6 +566,7 @@ class SimBoardCamera:
         self._pace: tuple[float, int] | None = None  # (wall time, frame index) the realtime pacing starts from
         self._latest: tuple[np.ndarray, str] | None = None
         self._renderers: _Renderers | None = None
+        self._lit: tuple[str, ...] | None = None  # the lasers lit (None: all); light()
         self._open = False
         log.debug("SimBoardCamera %s: %d poses, period %.1f s, %d frames per pass", script, len(self._poses),
                   self.period_s, self.frames_per_pass)
@@ -642,6 +647,22 @@ class SimBoardCamera:
             if wait > 0:
                 time.sleep(wait)
         return frame
+
+    def light(self, names=None) -> None:
+        """Light only the lasers ``names`` from the next frame on (None: all of them again)."""
+        if names is not None:
+            names = tuple(str(n) for n in names)
+            unknown = [n for n in names if n not in self.laser_names]
+            if unknown:
+                raise ValueError(f"no laser {unknown} on this scanner (it has {list(self.laser_names)})")
+        with self._lock:
+            self._lit = names
+
+    @property
+    def lit(self) -> tuple[str, ...]:
+        """The lasers the next frame shows."""
+        with self._lock:
+            return self.laser_names if self._lit is None else self._lit
 
     def restart(self) -> None:
         """Start the script again at script time 0 with the next frame (the virtual clock keeps running)."""
@@ -741,6 +762,7 @@ class SimBoardCamera:
         rng = np.random.default_rng([self.seed, int(index)])
         jitter = float(np.clip(rng.normal(0.0, JITTER_S), -3 * JITTER_S, 3 * JITTER_S))
         seeds = rng.integers(1, 2**31 - 1, size=2)
-        stripes = [self._stripe(name, T_cb) for name in self.laser_names] if self._lines else []
+        lit = self.lit
+        stripes = [self._stripe(name, T_cb) for name in self.laser_names if name in lit] if self._lines else []
         left, right = (r.render(view, T_cb, stripes, int(sd)) for view, sd in zip(r.views, seeds))
         return StereoFrame(int(index), float(t_cam + jitter), left, right)

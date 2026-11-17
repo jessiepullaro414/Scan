@@ -212,12 +212,44 @@ class LasersConfig:
     Within a family the order is the order of the lasers: vertical lines from right to left (the
     largest x of the camera frame first), horizontal lines from top to bottom. The calibration
     names the planes it finds that way.
+
+    ``own_channels``: each laser on its own channel of the Pico (firmware 1.2.0: the 4-laser build's
+    second lasers on GP0 and GP1), so that each can have its own brightness and the calibration can
+    light one at a time; false when each pair is wired to one channel. ``brightness``: a laser's
+    level in percent of its family's (``[emitters]`` levels); a laser left out gets 100. On a pair
+    that shares a channel only the first laser's counts.
     """
 
     lines: list[str] = field(default_factory=lambda: ["vertical", "horizontal"])
+    own_channels: bool = True
+    brightness: dict[str, float] = field(default_factory=dict)
+
+    def channel_of(self, name: str) -> str | None:
+        """The Pico channel that drives laser ``name``: "v", "h" (the first of each family), "v2",
+        "h2" (the second), or None (not a configured laser, or a third one of its family)."""
+        for fam, ch in (("vertical", "v"), ("horizontal", "h")):
+            members = [n for n in self.lines if n == fam or n.startswith(fam + "_")]
+            if name in members:
+                i = members.index(name)
+                return ch if i == 0 else (ch + "2" if i == 1 else None)
+        return None
+
+    def separate(self) -> bool:
+        """Can the lasers of a family be lit on their own (own channels, and a family has two)?"""
+        return bool(self.own_channels) and any(self.channel_of(n) in ("v2", "h2") for n in self.lines)
+
+    def channel_scales(self) -> tuple[float, float, float, float]:
+        """Each channel's share of its family's level, for :class:`ohs.devices.pico.Pico`:
+        (V, H, V2, H2). A channel no laser uses follows its family's first one."""
+        by_ch = {self.channel_of(n): n for n in self.lines}
+        share = {ch: min(100.0, max(0.0, float(self.brightness.get(n, 100.0)))) / 100.0 for ch, n in by_ch.items() if ch}
+        v, h = share.get("v", 1.0), share.get("h", 1.0)
+        if not self.own_channels:
+            return v, h, v, h
+        return v, h, share.get("v2", v), share.get("h2", h)
 
     def problems(self) -> list[str]:
-        """What is wrong with ``lines`` (empty when it is a valid laser set)."""
+        """What is wrong with ``lines`` and ``brightness`` (empty when it is a valid laser set)."""
         errs: list[str] = []
         lines = list(self.lines)
         bad = [n for n in lines if not any(n == f or n.startswith(f + "_") for f in LASER_FAMILIES)]
@@ -230,6 +262,16 @@ class LasersConfig:
         for fam in LASER_FAMILIES:
             if not any(n == fam or n.startswith(fam + "_") for n in lines):
                 errs.append(f"lasers.lines needs at least one {fam} line (got {lines})")
+        unknown = sorted(set(self.brightness) - set(lines))
+        if unknown:
+            errs.append(f"lasers.brightness: {unknown} are not in lasers.lines")
+        for n, v in self.brightness.items():
+            try:
+                ok = 0.0 <= float(v) <= 100.0
+            except (TypeError, ValueError):
+                ok = False
+            if not ok:
+                errs.append(f"lasers.brightness.{n} must be a percent in 0..100 (got {v!r})")
         return errs
 
 
@@ -400,7 +442,7 @@ def merge_into(obj: Any, data: dict, path: str = "", warnings: list[str] | None 
             if not isinstance(value, dict):
                 raise ConfigError(f"[{p}] must be a table, got {value!r}")
             merge_into(current, value, p, warnings)
-        elif typing.get_origin(tp) is dict and isinstance(current, dict):
+        elif typing.get_origin(tp) is dict and isinstance(current, dict) and p not in INLINE_TABLES:
             merged = dict(current)
             merged.update(_coerce(value, tp, p))
             setattr(obj, key, merged)
@@ -495,6 +537,15 @@ _KEY_DOCS = {
         "bottom. The calibration finds the planes without knowing where the lasers sit and names them\n"
         "in that order."
     ),
+    "lasers.own_channels": (
+        "true: each laser has its own channel on the Pico (the 4-laser build's second lasers on GP0 and\n"
+        "GP1, firmware 1.2.0 or later), so each can have its own brightness and the laser calibration\n"
+        "lights them one at a time. false: each pair of lasers is wired to one channel (GP2 / GP3)."
+    ),
+    "lasers.brightness": (
+        'A laser\'s level in percent of its family\'s level, e.g. { vertical_2 = 85 }. Lasers left out\n'
+        "get 100. Use it to even out lasers of different strength; 0 switches a laser off."
+    ),
     "camera.index": "OpenCV index of the stereo camera.",
     "camera.backend": (
         '"auto" (Windows: DirectShow then Media Foundation; Linux: V4L2), "dshow", "msmf", "v4l2" or "any".'
@@ -584,6 +635,8 @@ def _toml_value(v: Any) -> str:
         return json.dumps(str(v), ensure_ascii=False)
     if isinstance(v, (list, tuple)):
         return "[" + ", ".join(_toml_value(x) for x in v) + "]"
+    if isinstance(v, dict):  # an inline table on one line, e.g. lasers.brightness
+        return "{ " + ", ".join(f"{_toml_key(str(k))} = {_toml_value(x)}" for k, x in v.items()) + " }" if v else "{}"
     raise TypeError(f"cannot write {type(v).__name__} to TOML")
 
 
@@ -596,12 +649,18 @@ def _comment(lines: list[str], text: str | None) -> None:
         lines.extend("# " + ln if ln else "#" for ln in text.splitlines())
 
 
+#: dict fields written as one inline table (``brightness = { vertical_2 = 85.0 }``) and replaced as
+#: a whole when a file sets them; other dict fields (``emitters.profiles``) are tables of their own
+#: whose keys a file adds to the defaults
+INLINE_TABLES = {"lasers.brightness"}
+
+
 def _emit_table(obj: Any, path: str, lines: list[str], comments: bool) -> None:
     subtables: list[tuple[str, Any]] = []
     for f in _toml_fields(obj):
         v = getattr(obj, f.name)
         p = f"{path}.{f.name}"
-        if dataclasses.is_dataclass(v) or isinstance(v, dict):
+        if dataclasses.is_dataclass(v) or (isinstance(v, dict) and p not in INLINE_TABLES):
             subtables.append((f.name, v))
             continue
         if comments:

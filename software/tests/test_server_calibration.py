@@ -834,6 +834,65 @@ def sim_factory_configured(script, cfg):
     return sim_board_camera(script, cfg, fps=5.0, **SIM_KW)
 
 
+def sim_factory_one_at_a_time(script, cfg):
+    """As :func:`sim_factory_configured`, with the board held long enough for a frame per laser."""
+    from ohs.server.devices import sim_board_camera
+
+    return sim_board_camera(script, cfg, fps=5.0, **{**SIM_KW, "dwell_s": 3.0})
+
+
+@pytest.mark.slow
+def test_four_lasers_calibrated_one_at_a_time_on_the_simulator(tmp_path, demo_dir):
+    """Each laser on its own channel (the default for four lasers): every view also gets a frame
+    per laser with only that laser lit, the recording says which, and the solve fits each laser
+    on its own frames; the planes match the simulator's truth by name and are saved."""
+    import json
+
+    from ohs.sim.board_camera import SimBoardCamera
+    from ohs.types import ScannerCalibration
+
+    app = _app(tmp_path, demo_dir, sim_camera_factory=sim_factory_one_at_a_time)
+    studio = app.state.studio
+    true = SimBoardCamera("lasers", lasers=4, **SIM_KW).true_calibration
+    sandbox = studio.sim_calib_path
+    sandbox.parent.mkdir(parents=True, exist_ok=True)
+    ScannerCalibration(true.stereo, {}, None).save(sandbox)
+    with ServerThread(app) as srv:
+        url = srv.url
+        _ok(_post(url, "/api/settings/lasers", {"lines": list(FOUR)}))
+        assert studio.cfg.lasers.own_channels and studio.cfg.lasers.separate()
+        _connect_sim(url)
+        s = _ok(_post(url, "/api/calibration/start", {"kind": "lasers"}))
+        assert s["one_at_a_time"] is True
+        s = _views(url, 6, timeout=150.0, stall_s=25.0)
+        assert len(s["views"]) >= 5, s["views"]
+        for v in s["views"]:
+            assert v["lit"] == list(FOUR), v
+        rec = Path(s["recording"])
+        meta = json.loads((rec / "meta.json").read_text(encoding="utf-8"))
+        lit = meta["lit"]
+        assert len(lit) == 4 * len(s["views"]) and meta["one_at_a_time"] is True
+        assert {e["view"] for e in lit.values()} == {v["index"] for v in s["views"]}
+        assert sorted(e["laser"] for e in lit.values()) == sorted(list(FOUR) * len(s["views"]))
+        n_rows = len((rec / "frames.csv").read_text(encoding="utf-8").strip().splitlines()) - 1
+        assert n_rows == 5 * len(s["views"])  # each view: its frame with every laser on, and one per laser
+        # removing a view removes its one-laser frames too
+        gone = s["views"][0]["index"]
+        _ok(requests.delete(url + f"/api/calibration/views/{gone}", timeout=T))
+        meta = json.loads((rec / "meta.json").read_text(encoding="utf-8"))
+        assert all(e["view"] != gone for e in meta["lit"].values()) and len(meta["lit"]) == 4 * (len(s["views"]) - 1)
+        job, s = _solve(url)
+        r = s["result"]
+        assert job["state"] == "done" and r["grade"] in ("excellent", "good", "usable"), r
+        assert [p["name"] for p in r["planes"]] == list(FOUR) and all(p["calibrated"] for p in r["planes"]), r["planes"]
+        assert {v["index"] for v in r["per_view"]} == {v["index"] for v in s["views"]}  # rows grouped by view
+        e = _truth(r, "lasers")
+        for name in FOUR:
+            assert e[name]["angle_deg"] < 0.2 and abs(e[name]["d_err_mm"]) < 0.5, (name, e)
+        _ok(_post(url, "/api/calibration/save", {"force": not r["ok"]}))
+        assert sorted(ScannerCalibration.load(sandbox).lasers) == sorted(FOUR)
+
+
 @pytest.mark.slow
 def test_four_laser_calibration_on_the_simulator(tmp_path, demo_dir):
     """Four lasers configured: the simulator renders four lines, the capture counts them, the solve
@@ -851,11 +910,13 @@ def test_four_laser_calibration_on_the_simulator(tmp_path, demo_dir):
     with ServerThread(app) as srv, ws_connect(srv.ws_url, max_size=None, open_timeout=5) as ws:
         url = srv.url
         _ok(_post(url, "/api/settings/lasers", {"lines": list(FOUR)}))
+        studio.cfg.lasers.own_channels = False  # each pair on one channel: all lines at once (one at a time: below)
         _connect_sim(url)
         setup = _ok(_get(url, "/api/setup"))
         assert setup["calibration"]["lasers_missing"] == list(FOUR)
         s = _ok(_post(url, "/api/calibration/start", {"kind": "lasers"}))
         assert s["lasers"] == list(FOUR) and "four laser lines" in s["guidance"] and "both sides" not in s["guidance"]
+        assert s["one_at_a_time"] is False
         live = recv_until(ws, lambda m, p, raw: m.get("type") == "calib" and m.get("lines") and m.get("board_found"),
                           timeout=30)[-1][0]
         lines = live["lines"]

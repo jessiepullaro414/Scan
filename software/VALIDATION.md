@@ -1644,6 +1644,23 @@ The ranges are over the four planes. The two-laser calibration's limits in the t
 - **Views on one side of the meeting distance are enough to tell the planes apart.** With `4-cross250` and 8 views all nearer than 230 mm, or all farther than 280 mm, all four planes were found and named right. What the accuracy follows is the spread of distances: 0.009–0.015° and up to 0.9 mm largest point error from the 8 near views (191–218 mm), 0.003–0.007° and up to 0.33 mm from the 8 far views (295–392 mm). The app's guide asked for views nearer and farther than a meeting distance inside 150–450 mm until 2026-11-15, which was more than the fit needs; it no longer does (`docs/MAINTENANCE_PLAN.md`, F7).
 - **A meeting distance outside 150–450 mm is not reported.** With the chosen aim the capture panel's note (the two lines run into each other about 254 mm away) speaks of the vertical pair only.
 
+### Four lasers, one at a time (2026-11-16)
+
+With each laser on its own Pico pin (firmware 1.2.0: `EMIT v h d v2 h2`; the second vertical laser on GP0, the second horizontal one on GP1), the app's laser calibration takes, for every view, the frame with all lasers on (the one the guide judged) and then one frame per laser with only that laser lit. It waits 3 camera frames after each switch (1 on the simulator), and the board must not move by more than 2 px meanwhile. The recording says which laser each frame shows (`meta["lit"]`). The solve uses only the one-laser frames and fits each laser on its own frames: no separation of a pair, no naming by where the sheets start, and no points left out near the other sheet of the pair.
+
+Same simulated board camera and poses as the last row of the table above (aim `4`, 8 views):
+
+| | Plane angle error | Plane offset error | Laser-point error from it, median / largest |
+|---|---|---|---|
+| All four lines at once (the table above) | 0.005–0.011° | 0.026–0.040 mm | 0.023–0.033 / 0.14–0.21 mm |
+| One laser at a time | 0.003–0.006° | 0.007–0.022 mm | 0.010–0.024 / 0.09–0.17 mm |
+
+- **About twice as accurate**, mostly because each laser keeps all its points: with all lines on, the extraction drops the stretches where the two lines of a pair run close, and the fit leaves out points within 2 mm of the other sheet.
+- **In the app** (the simulator through the server, `tests/test_server_calibration.py`): each view has its four one-laser frames, deleting a view deletes them, the result lists each view once, and the four planes are within 0.2° and 0.5 mm of the truth by name. The session says `one_at_a_time` and its guidance asks the user to hold the board still.
+- **When it is used:** four lasers configured, `[lasers] own_channels` true (the default) and either the simulator or a Pico with firmware 1.2.0 or later. With older firmware the lasers are calibrated together, as before, and the app says why. A build whose pairs share a pin sets `own_channels = false`.
+- **Brightness per laser** (`[lasers] brightness`, percent of the family's level): sent to the Pico with the levels; with all at 100 the firmware gets the old three-level `EMIT`, so a 2-laser build and older firmware see no change (`tests/test_devices_pico.py`).
+- **Not done:** the command line's `ohs calibrate lasers` still records all lines at once; the self-test still switches each pair together; nothing of this has run on the real scanner.
+
 ### Limits
 
 - Simulator only. The real lasers' line width and speckle, and how well two lines of one direction can be told apart on a dark or shiny part, are not known.

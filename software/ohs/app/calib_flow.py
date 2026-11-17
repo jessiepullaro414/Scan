@@ -18,6 +18,10 @@ one :func:`ohs.calib.board.render_charuco_page` prints, glued flat to glass.
   configuration; default the two standard lasers): the extraction looks for as many lines per
   family as it has, and a family with several lasers is separated and named by
   :func:`~ohs.calib.laser_planes.fit_laser_planes` (its module docstring, "Any set of line lasers").
+  A recording made **one laser at a time** (the app's laser calibration with a channel per laser)
+  says in ``meta["lit"]`` which laser each of its frames showed (frame index -> ``{"laser",
+  "view"}``): only those frames are used, each looked at for one line and fitted as that laser's,
+  and the frames with every laser on (the views as the guide saw them) are left out.
 * :func:`imu_from_recording` - board pose on every rectified left frame (``K_rect``, no
   distortion; the board is the world, ``R_wc = R_cb^T``, frame time ``t_host``) and the raw gyro
   -> :func:`~ohs.calib.imu.calibrate_imu_camera`.
@@ -139,7 +143,13 @@ def _point_counts(obs: LaserBoardObservation, K: np.ndarray, names: Sequence[str
                                     else family_points(obs, K, fam, r))) for r in regions}
     for fam in sorted(several):
         fam_names = [n for n in names if is_line_name(n) and line_family(n) == fam]
-        if planes is not None and all(n in planes for n in fam_names):
+        if obs.lit is not None and is_line_name(obs.lit) and line_family(obs.lit) == fam:
+            for n in fam_names:  # one laser lit: the family's points are its own
+                out[n] = {r: int(len(family_points(obs, K, fam, r))) if n == obs.lit else 0 for r in regions}
+        elif obs.lit is not None:
+            for n in fam_names:  # another family's laser was lit: none of these was on
+                out[n] = dict.fromkeys(regions, 0)
+        elif planes is not None and all(n in planes for n in fam_names):
             for r in regions:
                 by = points_by_laser(obs, K, {n: planes[n] for n in fam_names}, r)
                 for n in fam_names:
@@ -248,19 +258,31 @@ def laser_observations_from_recording(
     need = lines_per_family(names)
     if lp.lines_per_family < need:
         lp = replace(lp, lines_per_family=need)
+    lp_one = replace(lp, lines_per_family=1)  # a frame with one laser lit shows one line of its family
+    lit_map = {int(k): v for k, v in (dict(getattr(reader, "meta", {}) or {}).get("lit") or {}).items()}
     positions = _positions(len(reader), step, max_frames)
     observations: list[LaserBoardObservation] = []
     per_frame: list[dict] = []
     for k, pos in enumerate(positions):
         f = reader.frame(pos)
+        lit = lit_map.get(int(f.index))
+        if lit_map and lit is None:
+            if progress is not None:
+                progress(k, len(positions))
+            continue  # a view with every laser on: the guide's frame, not used for the planes
+        lpf = lp if lit is None else lp_one
         left_r, right_r = rect.rectify(f.left, f.right)
-        lines = extract_laser_lines(left_r, lp)
+        lines = extract_laser_lines(left_r, lpf)
         row: dict = {"index": int(f.index), "board": False}
+        if lit is not None:
+            row.update(lit=str(lit["laser"]), view=int(lit["view"]))
         obs = make_observation(left_r, K, spec, lines.as_dict(), margin_mm, region=region, paper=paper)
         if obs is not None:
+            if lit is not None:
+                obs.lit = str(lit["laser"])
             row.update(board=True, n_corners=obs.n_corners, reproj_rms_px=obs.reproj_rms_px)
             if stereo_validate:
-                lines_r = extract_laser_lines(right_r, lp)
+                lines_r = extract_laser_lines(right_r, lpf)
                 row["stereo_kept"] = {n: list(c) for n, c in _stereo_filter(obs, lines_r, K, rect.baseline, lp.stereo_tol_px).items()}
             row["points"] = _point_counts(obs, K, _line_names(names) or list(LINE_NAMES))
             observations.append(obs)

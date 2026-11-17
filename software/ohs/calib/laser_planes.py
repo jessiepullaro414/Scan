@@ -33,6 +33,13 @@ as before. With several names in a family (the 4-laser variant: ``"vertical"`` a
   :data:`FAMILY_CLEAR_MM` to another of them, and each plane is fitted and checked on its points
   as a single laser is (counts, distinct poses, spread, RANSAC).
 
+**One laser at a time.** With a channel per laser (the 4-laser build, firmware 1.2.0) the
+calibration lights one laser at a time for every view, and each observation says which
+(``LaserBoardObservation.lit``). A family whose observations are lit that way is fitted without the
+separation above: each laser on the family's points of the observations that lit it, as a single
+laser is. Observations that lit another laser do not count for a laser; observations with ``lit``
+None (all lasers on) count as before.
+
 Where the two lines of a family meet on the board the extraction drops them, and where they lie
 on top of each other over a whole view (the board near the depth at which the sheets meet, square
 to them) the merged stripe is left out by that clearance, so views near that depth simply have
@@ -136,7 +143,8 @@ class LaserBoardObservation:
     area. ``line_uv``: laser name -> (N, 2) line pixel centres in the rectified left image.
     ``region``: default region for :func:`board_points_from_line` (see the module docstring);
     ``page``: layout of the printed page (needed for ``"margin"`` / ``"both"``); ``margin_mm``:
-    clearance from the pattern, ink and paper edges used by the margin region.
+    clearance from the pattern, ink and paper edges used by the margin region. ``lit``: the one
+    laser that was on in this view (None: all of them); see the module docstring.
     """
 
     T_cb: np.ndarray
@@ -147,6 +155,7 @@ class LaserBoardObservation:
     region: str = "board"
     page: CharucoPageLayout | None = None
     margin_mm: float = 5.0
+    lit: str | None = None
 
 
 def _check_region(region: str) -> str:
@@ -451,16 +460,24 @@ def fit_laser_planes(
                     "lasers": {}, "families": {}}
     fitted: dict[str, LaserPlane | None] = {}
     for fam, fam_names in _families(names).items():
-        if len(fam_names) == 1:
-            name = fam_names[0]
-            per_obs = [(i, board_points_from_line(o, K, name, region)) for i, o in enumerate(observations)]
-            if fam in LINE_NAMES and name != fam and not any(len(P) for _, P in per_obs):
-                # a single laser of the family under another name: the family's pixels are its line
-                per_obs = [(i, family_points(o, K, fam, region)) for i, o in enumerate(observations)]
-            plane, entry = _fit_one(name, per_obs, observations, ransac_thresh_mm)
-            group = {name: (plane, entry)}
+        lit_each = len(fam_names) > 1 and any(o.lit in fam_names for o in observations)
+        if len(fam_names) == 1 or lit_each:
+            group = {}
+            for name in fam_names:
+                # an observation counts for a laser when all lasers were on or this one was
+                use = [i for i, o in enumerate(observations) if o.lit is None or o.lit == name]
+                if lit_each:
+                    use = [i for i in use if observations[i].lit == name]
+                per_obs = [(i, board_points_from_line(observations[i], K, name, region)) for i in use]
+                if fam in LINE_NAMES and name != fam and not any(len(P) for _, P in per_obs):
+                    # a laser of the family under another name: the family's pixels are its line
+                    per_obs = [(i, family_points(observations[i], K, fam, region)) for i in use]
+                group[name] = _fit_one(name, per_obs, observations, ransac_thresh_mm)
             if fam in LINE_NAMES:
-                report["families"][fam] = {"names": [name], "planes_found": int(plane is not None)}
+                report["families"][fam] = {"names": list(fam_names),
+                                           "planes_found": int(sum(pl is not None for pl, _ in group.values()))}
+                if lit_each:
+                    report["families"][fam]["one_at_a_time"] = True
         else:
             group = _fit_family(fam, fam_names, observations, K, region, ransac_thresh_mm, report)
         for name, (plane, entry) in group.items():

@@ -299,6 +299,49 @@ def test_emit_clamping_pwm_duty_and_bad_args():
     assert f.levels == [12, 0, 1]  # unchanged by bad commands
 
 
+def five_pwms():
+    return [FakePWM() for _ in range(5)]
+
+
+def test_emit_with_a_level_per_laser():
+    """The 4-laser build (1.2.0): EMIT with five levels sets each laser on its own channel; with three
+    the second lasers follow V and H, as before (an older host, or a board wiring each pair together)."""
+    f, out, _, pwms = make_fw(pwms=five_pwms())
+    assert duties(pwms) == [0] * 5  # all off at boot
+    f.feed("EMIT 40 50 0\n")
+    assert out.take() == ["OK EMIT 40 50 0"]
+    assert duties(pwms) == [d * 65535 // 100 for d in (40, 50, 0, 40, 50)]  # the second lasers follow
+    f.feed("STATUS\n")
+    assert out.take()[0].startswith("S emit=40,50,0 imu=0 ")  # unchanged while they follow
+    f.feed("EMIT 0 100 0 80 -3\n")
+    assert out.take() == ["OK EMIT 0 100 0 80 0"]  # clamped like the others
+    assert duties(pwms) == [0, 65535, 0, 80 * 65535 // 100, 0]
+    assert f.levels == [0, 100, 0] and f.levels2 == [80, 0]
+    f.feed("STATUS\n")
+    assert out.take()[0].startswith("S emit=0,100,0,80,0 imu=0 ")
+    f.feed("EMIT 1 2 3 4\nEMIT 1 2 3 4 x\nEMIT 1 2 3 4 5 6\n")
+    lines = out.take()
+    assert len(lines) == 3 and all(l.startswith("E EMIT bad args (EMIT <v> <h> <d> [<v2> <h2>]") for l in lines)
+    assert f.levels == [0, 100, 0] and f.levels2 == [80, 0]  # unchanged by bad commands
+    f.feed("EMIT 0 0 0 0 0\n")
+    assert out.take() == ["OK EMIT 0 0 0 0 0"] and not f.emitters_on()
+
+
+def test_a_second_laser_alone_keeps_the_watchdog_and_the_safety_paths():
+    f, out, clock, pwms = make_fw(pwms=five_pwms())
+    f.feed("EMIT 0 0 0 0 60\n")
+    out.take()
+    assert f.emitters_on()  # only H2 is on, and that counts
+    clock.advance(1_500_001)
+    f.process("")
+    assert duties(pwms) == [0] * 5 and f.levels2 == [0, 0]
+    assert out.take() == ["L emitters-off watchdog"]
+    f.feed("EMIT 0 0 0 70 0\n")
+    out.take()
+    f.all_off()
+    assert duties(pwms) == [0] * 5 and not f.emitters_on()
+
+
 def test_watchdog_turns_emitters_off_after_1500ms():
     f, out, clock, pwms = make_fw()
     f.feed("EMIT 50 60 70\n")
@@ -615,7 +658,7 @@ def test_run_loop_with_stub_modules(fw_on_path):
     out = Out()
     stdout = types.SimpleNamespace(write=out)
     f = fw.run(machine, time_mod, select_mod, stdin, stdout, max_iterations=3000)
-    assert sorted(p.pin for p in pwms) == [2, 3, 6]
+    assert sorted(p.pin for p in pwms) == [0, 1, 2, 3, 6]  # V, H, dots, and the 4-laser build's own V2 / H2 channels
     assert all(p.f == 10_000 for p in pwms)
     assert pins[15]["mode"] == machine.Pin.IN and pins[15]["pull"] == machine.Pin.PULL_UP
     assert i2cs == [dict(id=0, sda=4, scl=5, freq=400_000)]
@@ -637,7 +680,7 @@ def test_run_on_an_esp32_uses_its_pin_map(fw_on_path):
     out = Out()
     f = fw.run(machine, time_mod, select_mod, stdin, types.SimpleNamespace(write=out), max_iterations=300,
                platform="esp32")
-    assert [p.pin for p in pwms] == [13, 14, 17]  # V laser, H laser, dots
+    assert [p.pin for p in pwms] == [13, 14, 17, 11, 12]  # V laser, H laser, dots, second V and H lasers
     assert pins[40]["mode"] == machine.Pin.IN and pins[40]["pull"] == machine.Pin.PULL_UP
     assert i2cs == [dict(id=0, sda=15, scl=16, freq=400_000)]
     assert out.lines[0] == "L boot ohs-fw %s imu=LSM6DSOX" % fw.FW_VERSION  # the same first line as on a Pico

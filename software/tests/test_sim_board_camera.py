@@ -174,6 +174,51 @@ def test_four_lasers_fit_from_the_margin(layout, tmp_path):
         assert e["angle_deg"] < 0.1 and e["point_err_median_mm"] < 0.1 and e["point_err_max_mm"] < 0.5, (name, e)
 
 
+def test_four_lasers_lit_one_at_a_time(tmp_path):
+    """A channel per laser: every view is captured once with all lasers on (the guide's frame) and
+    once per laser with only that one on; the recording's meta says which. The flow uses only the
+    one-laser frames, fits each laser on its own (no separation of a family) and reaches the
+    accuracy of the all-at-once test above; the all-on frames are left out."""
+    four = ("vertical", "horizontal", "vertical_2", "horizontal_2")
+    cam = SimBoardCamera("lasers", realtime=False, lasers=4)
+    true = cam.true_calibration
+    frames, lit = [], {}
+    for v, t in enumerate(cam.dwell_times()):
+        cam.light(None)
+        frames.append(cam.frame_at(t, len(frames)))  # all on: not used for the planes
+        for name in four:
+            cam.light([name])
+            assert cam.lit == (name,)
+            lit[str(len(frames))] = {"laser": name, "view": v}
+            frames.append(cam.frame_at(t, len(frames)))
+    cam.light(None)
+    assert cam.lit == cam.laser_names
+    with pytest.raises(ValueError, match="no laser"):
+        cam.light(["vertical_3"])
+    # a frame with one laser lit differs from the all-on frame only by the other lasers' stripes
+    all_on, one = frames[0].left.astype(int), frames[1 + four.index("vertical_2")].left.astype(int)
+    assert (all_on - one).max() > 50 and (one - all_on).max() < 10
+    path = tmp_path / "lasers"
+    with RecordingWriter(path, source="sim", purpose="laser_calibration") as w:
+        for f in frames:
+            w.write_frame(f)
+        w.write_calibration(true)
+        w.update_meta(lit=lit)
+    planes, rep = lasers_from_recording(path, ScannerCalibration(true.stereo, {}, None), cam.spec, paper="letter",
+                                        names=four)
+    assert rep["ok"] and set(planes) == set(four), {n: e.get("reason") for n, e in rep["lasers"].items()}
+    assert rep["families"]["vertical"].get("one_at_a_time") and rep["families"]["horizontal"].get("one_at_a_time")
+    assert len(rep["per_frame"]) == 4 * len(cam.dwell_times())  # the all-on frames are not looked at
+    assert all(r["lit"] in four and 0 <= r["view"] < len(cam.dwell_times()) for r in rep["per_frame"])
+    for r in rep["per_frame"]:  # each frame's points count for its own laser only
+        assert all(c["margin"] == 0 for n, c in r["points"].items() if n != r["lit"]), r
+    err = plane_errors(planes, true.lasers)
+    metrics("board_camera_lasers4_one_at_a_time", **{f"{n}_{k}": v for n, e in err.items() for k, v in e.items()})
+    for name, e in err.items():
+        # the tolerance of the tests above
+        assert e["angle_deg"] < 0.1 and e["point_err_median_mm"] < 0.1 and e["point_err_max_mm"] < 0.5, (name, e)
+
+
 def test_check_script_passes_the_health_check(tmp_path):
     cam = SimBoardCamera("check", realtime=False)
     assert len(cam.dwell_times()) == 4

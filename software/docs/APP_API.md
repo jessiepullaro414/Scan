@@ -268,7 +268,7 @@ type CalibLive = {
 | `GET /api/setup/devices` | | `DevicesProbe` (cameras found, the Pico's serial port) |
 | `POST /api/settings/camera` | `{index?: int, swap_lr?: bool}` | `Settings`. Written to the config file; takes effect on the next connect. |
 | `POST /api/settings/process` | `{thin_walls?: "auto" \| "on" \| "off"}` | `Settings`. Written to the config file (`[process] thin_walls`); the next mesh uses it. |
-| `POST /api/settings/lasers` | `{lines: string[]}` | `Settings`. The build's line lasers, written to the config file (`[lasers] lines`). See "Line lasers" below. |
+| `POST /api/settings/lasers` | `{lines?: string[], own_channels?: boolean, brightness?: Record<string, number>}` (at least one) | `Settings`. The build's line lasers, their wiring and each laser's brightness, written to the config file (`[lasers] lines`, `own_channels`, `brightness`). See "Line lasers" below. |
 | `GET /api/setup/printables` | | `Printables` (what was generated last; `files` empty before) |
 | `POST /api/setup/printables` | `{paper?: "letter" \| "a4"}` | `Job` (kind `printables`, result `Printables`). A paper change is saved to `board.paper`. |
 | `GET /api/setup/printables/files/{name}` | | a generated file (PDF, PNG, Gerber); 404 for anything else |
@@ -504,7 +504,7 @@ Everything in the M2 section is implemented as written, with these clarification
 
 **Line lasers** (added 2026-11-15)
 
-The scanner's line lasers are a setting: `[lasers] lines`, default `["vertical", "horizontal"]`. A laser's name is its family, `"vertical"` or `"horizontal"` (how its line runs in the image), optionally followed by `_` and anything. The 4-laser build is `["vertical", "horizontal", "vertical_2", "horizontal_2"]`: `vertical_2` on the left of the cameras, `horizontal_2` low on the right. The emitters stay three channels (`vertical`, `horizontal`, `dots`): the two lasers of a family share one.
+The scanner's line lasers are a setting: `[lasers] lines`, default `["vertical", "horizontal"]`. A laser's name is its family, `"vertical"` or `"horizontal"` (how its line runs in the image), optionally followed by `_` and anything. The 4-laser build is `["vertical", "horizontal", "vertical_2", "horizontal_2"]`: `vertical_2` on the left of the cameras, `horizontal_2` low on the right. The emitters API stays three levels (`vertical`, `horizontal`, `dots`); with `[lasers] own_channels` (firmware 1.2.0 or later) each laser has its own Pico channel and gets its family's level times its brightness share, otherwise the two lasers of a family share one channel.
 
 With the two standard lasers every response keeps its fields and values; the fields below are added next to them, so an app that does not know them still works.
 
@@ -515,9 +515,11 @@ With the two standard lasers every response keeps its fields and values; the fie
 //   lasers_missing: string[]               configured lasers without a plane in the calibration file
 // CalibSession:
 //   lasers: string[]                       the configured lasers (also when idle)
+//   one_at_a_time: boolean                 lasers: each view also gets a frame per laser with only it lit (2026-11-16)
 // CalibView (lasers / check):
 //   line_points: Record<string, number | null> | null   margin points per laser; null: the line cannot be named yet
 //   lines_found: Record<string, number[]> | null        per family: margin points of each line found, largest first
+//   lit: string[] | null                                one at a time: the lasers that had a frame of their own
 // CalibLive.lines (lasers / check):
 //   points: Record<string, number | null>  per laser, as line_points
 //   found: Record<string, number[]>        per family, as lines_found
@@ -539,6 +541,10 @@ type CalibPlaneRow = { name: string; label: string;          // "vertical_2", "S
 - **Where two lines meet:** the two sheets of a family can meet at some distance. When that distance is inside the range of the laser views (150–450 mm), `meet_mm` reports it: on a board held there the two lines run into each other and are not measured where they do, and the capture panel says to hold the board a little nearer or farther if a line goes missing. In the 4-laser build the two vertical sheets meet about 254 mm out; the two horizontal sheets meet about 640 mm out, beyond the range, so `meet_mm` has no entry for them. `meet_mm` comes from the calibrated planes when the calibration in use has them; otherwise it is estimated from the captured views (the gap between the two lines on the board shrinks to zero there; it needs three views that measured the gap). The guide does not ask for views on both sides of that distance, and the results do not check for them: the fit finds and names the planes from views on one side (`VALIDATION.md`, "Calibration of four planes"). What the accuracy follows is the spread of distances, which the hints ask for with any set of lasers.
 - **Solve and save:** the solve fits one plane per configured laser; `planes`, `metrics`, `advice` and `sim_truth` follow the configured set ("Second vertical laser: fit"). Saving replaces the fitted planes and keeps the others; `saved.notes` names each configured laser that could not be calibrated.
 - **Simulator:** the virtual calibration board renders the configured lasers when the set is the two standard lasers or the 4-laser build (in any order). For any other set it shows the two standard lasers and logs a warning. The scan demo keeps its two lasers.
+
+**Wiring and brightness** (added 2026-11-16). `Settings.lasers` also has `own_channels` (boolean, default true: each laser on its own Pico channel; false: each pair of a family wired to one channel) and `brightness` (laser name -> percent of its family's level, 0–100; a laser left out gets 100; with `own_channels` false only the first laser of a pair counts). `POST /api/settings/lasers` takes any of `lines`, `own_channels` and `brightness` (an empty body is 422); `brightness` is the whole map and replaces the old one. The result is checked as the config checks it: a `brightness` name that is not in `lines`, or a value outside 0–100, is 422 and nothing is written. A change of `lines` without `brightness` drops the brightness of the lasers no longer listed. Changing `lines` or `own_channels` is 409 during a scan or a calibration; changing only `brightness` is allowed during a scan (like the emitter sliders) and 409 during a calibration. A new `brightness` or `own_channels` reaches the connected Pico at once: lasers that are on change brightness without waiting for the next emitter change. An older engine leaves both fields out of `Settings`.
+
+**One laser at a time** (added 2026-11-16). With four lasers, `own_channels` true and the simulator or a Pico with firmware 1.2.0 or later, the lasers step lights the lasers one at a time for each view: after the frame the guide judged (all lasers on) it lights each laser alone, waits 3 frames (1 on the simulator) and keeps the next one, then lights them all again; the board must not move by more than 2 px meanwhile, or nothing is captured ("Not captured: the board moved while the lasers took turns"). A manual `capture` waits for these frames (at most 8 s). `CalibSession.one_at_a_time` says so, its `guidance` adds "hold the board still until the view is captured", and each `CalibView.lit` lists the lasers that had a frame. The snapshot recording keeps the one-laser frames (indices from 100000) and `meta.json` `lit` (frame index -> `{laser, view}`); deleting a view deletes them too. The solve uses only those frames, fits each laser on its own, and `CalibResult.per_view` has one row per view. With older firmware the lasers are calibrated together as before, with a warning that says why.
 
 ---
 

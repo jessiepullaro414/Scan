@@ -26,6 +26,17 @@ include the target's calibration as ``calibration.json``. Device target:
 (:mod:`ohs.server.calib_guide`), at least 1 s of frame time after the previous capture, until the
 upper target view count. A manual capture needs only a usable view and a frame not captured yet.
 
+**One laser at a time** (lasers, when every laser has its own channel: ``[lasers] own_channels``
+with a family of two, and a Pico with firmware 1.2.0, or the simulator): a capture first keeps the
+frame with every laser on (the view the guide judged), then lights each configured laser alone,
+waits :data:`BURST_SETTLE_FRAMES` frames after each switch (the camera's frames already under way
+still show the old lasers) and keeps the next frame, then lights them all again. The board must not
+move meanwhile (corners within :data:`BURST_MOVE_PX`): else nothing is captured and the guide says
+"Hold still". The view's one-laser frames go into the snapshot recording with indices from
+:data:`BURST_INDEX0` on, and ``meta["lit"]`` says which laser each shows and which view it belongs
+to; the laser solve then uses only those (``ohs.app.calib_flow``). A manual capture waits for its
+frames (at most :data:`BURST_TIMEOUT_S`).
+
 **IMU**: ``armed`` -> ``imu_start`` -> ``recording`` (every frame, the IMU and events through
 :class:`ohs.app.live.Recorder`, with the IMU history of the last second) -> ``imu_stop`` ->
 ``capturing`` (ready to solve). Phases by frame time since the first recorded frame: still for
@@ -178,6 +189,13 @@ def _replace(tmp: Path, dst: Path) -> None:
             time.sleep(0.02)
 
 
+BURST_SETTLE_FRAMES = {"camera": 3, "sim": 1}  # frames to let pass after a laser switch before one is kept
+BURST_MOVE_PX = 2.0  # the board may move this much (90th percentile of its corners) while the lasers take turns
+BURST_INDEX0 = 100000  # frame indices of the one-laser frames in the snapshot recording start here
+BURST_TIMEOUT_S = 8.0  # a manual capture waits this long for its one-laser frames
+ONE_AT_A_TIME_TEXT = " For each view the lasers light up one at a time: hold the board still until the view is captured."
+
+
 # --------------------------------------------------------------------------- the snapshot recording
 class SnapshotRecording:
     """A recording folder of captured views, complete on disk after every change (see the module docstring)."""
@@ -253,6 +271,11 @@ class _View:
     line_points: dict | None = None  # per configured laser: margin points, None when not named yet
     lines_found: dict | None = None  # per family: margin points per line found, largest first
     line_sep: dict | None = None  # per family with two lasers: the gap between its lines on the board (mm)
+    lit: list = field(default_factory=list)  # one laser at a time: (frame index, t_host, file, laser) per laser
+
+    def rows(self) -> list[tuple[int, float, str]]:
+        """This view's frames in the snapshot recording: its own, then its one-laser frames."""
+        return [(self.index, self.t_host, self.file)] + [(i, th, f) for i, th, f, _ in self.lit]
 
     def to_dict(self, stereo: bool) -> dict:
         return {"index": self.index, "t": round(self.t, 3), "auto": self.auto, "corners_left": int(len(self.ids_l)),
@@ -262,6 +285,7 @@ class _View:
                 "line_points": dict(self.line_points) if self.line_points is not None else None,
                 "lines_found": {k: list(v) for k, v in self.lines_found.items()} if self.lines_found is not None else None,
                 "thumb_url": f"/api/calibration/views/{self.index}/thumb.jpg",
+                "lit": [laser for _, _, _, laser in self.lit] or None,
                 "error_px": _r(self.error_px, 3), "bad": bool(self.bad), "warnings": list(self.warnings)}
 
 
@@ -272,7 +296,8 @@ class CalibrationSession:
     def __init__(self, *, kind: str, target: str, spec: Any, calib: Any, paper: str, hub: Any, rec_base: str | Path,
                  source_name: str, meta: dict | None = None, emitters: str = "", truth: Any = None,
                  restart: Callable[[], None] | None = None, notify: Callable[[str, str], None] | None = None,
-                 on_change: Callable[[], None] | None = None, sim: bool = False, lines: Any = None) -> None:
+                 on_change: Callable[[], None] | None = None, sim: bool = False, lines: Any = None,
+                 light: Callable[[Any], None] | None = None, settle_frames: int = 3) -> None:
         if kind not in KINDS:
             raise ValueError(f"unknown calibration kind {kind!r}")
         from ohs.app.live import LatestSlot
@@ -334,8 +359,17 @@ class CalibrationSession:
         self._imu_hist: collections.deque = collections.deque(maxlen=4096)
         self._gyro: collections.deque = collections.deque(maxlen=512)  # (t_host, |gyro| deg/s)
         self._last_frame_t: float | None = None
+        # one laser at a time (lasers): light(names) lights only those lasers (None: all of them)
+        self._light = light if kind == "lasers" else None
+        self._settle = max(0, int(settle_frames))
+        self._burst: dict | None = None
+        self._seen_index = -1  # the newest frame index the device delivered
+        self._next_lit = BURST_INDEX0
 
-    # ------------------------------------------------------------------ status (any thread)
+    @property
+    def one_at_a_time(self) -> bool:
+        """Does a capture light the lasers one at a time (module docstring)?"""
+        return self._light is not None
     @property
     def active(self) -> bool:
         return self.state not in ("saved", "stopped")
@@ -349,9 +383,10 @@ class CalibrationSession:
             return {"state": self.state, "kind": self.kind, "target": self.target, "id": self.id, "started": self.started,
                     "auto": self.auto, "views": [v.to_dict(self.stereo) for v in self.views],
                     "target_views": list(TARGET_VIEWS[self.kind]), "min_views": MIN_VIEWS[self.kind],
-                    "guidance": guidance(self.kind, self.lines), "emitters": self.emitters, "job_id": self.job_id,
+                    "guidance": guidance(self.kind, self.lines) + (ONE_AT_A_TIME_TEXT if self.one_at_a_time else ""),
+                    "emitters": self.emitters, "job_id": self.job_id,
                     "result": self.result, "recording": str(self.recording) if self.recording is not None else None,
-                    "saved": self.saved, "lasers": list(self.lines)}
+                    "saved": self.saved, "lasers": list(self.lines), "one_at_a_time": self.one_at_a_time}
 
     # ------------------------------------------------------------------ lifecycle
     def start(self, timeout: float = 30.0) -> None:
@@ -370,7 +405,10 @@ class CalibrationSession:
             if self.state != "saved":
                 self.state = "stopped"
             rec, self._imu_rec = self._imu_rec, None
+            burst = self._burst
         self._stop.set()
+        if burst is not None:  # a manual capture waiting for its frames: wake it, light nothing
+            self._end_burst(burst, ApiError(409, "Not captured: the calibration ended", "start it again"))
         join_thread(self._thread, 10.0)
         if self._preview is not None:
             self._preview.close(timeout=3.0)
@@ -392,6 +430,7 @@ class CalibrationSession:
     def on_frame(self, frame: Any, t_recv: float) -> None:
         with self._lock:
             self._last_frame_t = float(frame.t_host)
+            self._seen_index = max(self._seen_index, int(frame.index))
             rec = self._imu_rec if self.state == "recording" else None
             if rec is not None and self._imu_skip > 0:
                 self._imu_skip -= 1  # rendered before the simulator's restart took effect
@@ -459,6 +498,11 @@ class CalibrationSession:
         if self._stop.is_set() or self.state in ("stopped", "saved"):
             return  # ended meanwhile: publish nothing more
         self.rate.tick()
+        with self._lock:
+            burst = self._burst
+        if burst is not None:
+            self._burst_step(burst, frame, d)
+            return
         if self._steady_reset:
             self._steady_reset = False
             self._steady.reset()
@@ -498,6 +542,10 @@ class CalibrationSession:
         elif self.kind == "imu":
             reason = None if d.T_cb is not None else "Keep the whole board in view"
         ready = state == "capturing" and self.kind != "imu" and unusable is None
+        if capture and self._light is not None:
+            self._begin_burst(frame, d, auto=True)  # the view is stored when every laser has had its frame
+            capture = False
+            reason = "Lighting the lasers one at a time: hold still"
         if capture:
             try:
                 view = self._store(frame, d, auto=True)
@@ -520,6 +568,90 @@ class CalibrationSession:
         if hz > 0 and now - self._t_preview >= 1.0 / hz - 0.004 and self._preview is not None:
             self._t_preview = now
             self._preview.submit((d.left, d.right if self.stereo else None))
+
+    # ------------------------------------------------------------------ one laser at a time
+    def _begin_burst(self, frame: Any, d: guide.Detection, auto: bool) -> dict:
+        """Start lighting the lasers one at a time for a view of ``frame`` (module docstring)."""
+        burst = {"frame": frame, "d": d, "auto": auto, "names": list(self.lines), "i": 0, "got": [],
+                 "after": 0, "done": threading.Event(), "result": None}
+        with self._lock:
+            if self._burst is not None:
+                raise ApiError(409, "Not captured: the lasers are still taking turns for the last view",
+                               "wait a moment, then capture")
+            self._burst = burst
+        self._switch(burst)
+        return burst
+
+    def _capturing(self) -> bool:
+        with self._lock:
+            return self.state == "capturing" and not self._stop.is_set()
+
+    def _switch(self, burst: dict) -> None:
+        name = burst["names"][burst["i"]]
+        if not self._capturing():  # solving or ended meanwhile: the manager has the emitters now
+            self._end_burst(burst, ApiError(409, "Not captured: the calibration moved on", "capture again"))
+            return
+        try:
+            self._light((name,))
+        except Exception as e:
+            self._end_burst(burst, ApiError(409, f"Not captured: the {guide.line_label(name)} laser could not be "
+                                                 f"switched on alone ({e})", "check the Pico's USB cable"))
+            return
+        with self._lock:
+            burst["after"] = self._seen_index + self._settle
+
+    def _burst_step(self, burst: dict, frame: Any, d: guide.Detection) -> None:
+        if burst["done"].is_set():
+            return
+        if not self._capturing():
+            self._end_burst(burst, ApiError(409, "Not captured: the calibration moved on", "capture again"))
+            return
+        if int(frame.index) <= burst["after"]:
+            return
+        d0 = burst["d"]
+        moved = None
+        if d.ids_l is not None and d0.ids_l is not None and len(d.ids_l) and len(d0.ids_l):
+            moved = guide._corner_motion(d0.corners_l, d0.ids_l, d.corners_l, d.ids_l)
+        if moved is None or moved > BURST_MOVE_PX:
+            self._end_burst(burst, ApiError(409, "Not captured: the board moved while the lasers took turns",
+                                            "hold the board still until the view is captured"))
+            return
+        burst["got"].append((burst["names"][burst["i"]], frame))
+        burst["i"] += 1
+        if burst["i"] < len(burst["names"]):
+            self._switch(burst)
+            return
+        self._end_burst(burst, None)
+
+    def _end_burst(self, burst: dict, error: ApiError | None) -> None:
+        """All lasers on again (while still capturing: else the manager has switched the emitters
+        already); store the view (unless ``error``) and wake a waiting manual capture."""
+        with self._lock:
+            if burst.get("ending"):
+                return  # ended by another thread
+            burst["ending"] = True
+        if self._capturing():
+            safe_call("lighting every laser again", lambda: self._light(None))
+        result: Any = error
+        if error is None:
+            try:
+                result = self._store(burst["frame"], burst["d"], burst["auto"], lit=burst["got"])
+                if burst["auto"]:
+                    self._steady.reset()
+                    safe_call("publishing the session", self._on_change)
+            except ApiError as e:
+                result = e
+            except Exception as e:
+                log.exception("capturing the view failed")
+                self._notify("error", f"The view could not be saved ({e}): check the free disk space")
+                result = ApiError(500, f"the view could not be saved: {e}", "check the free disk space")
+        elif burst["auto"]:
+            self._steady.reset()
+        burst["result"] = result
+        with self._lock:
+            if self._burst is burst:
+                self._burst = None
+        burst["done"].set()
 
     def _live(self, d: guide.Detection, steady: float, ready: bool, reason: str | None, views: list) -> dict:
         lo, hi = TARGET_VIEWS[self.kind]
@@ -605,7 +737,7 @@ class CalibrationSession:
             out.append("Part of the board is outside one of the pictures")
         return out
 
-    def _store(self, frame: Any, d: guide.Detection, auto: bool) -> _View:
+    def _store(self, frame: Any, d: guide.Detection, auto: bool, lit: list | None = None) -> _View:
         with self._cap_lock:  # begin_solve takes it too: no view slips into a solve
             if self.state != "capturing":
                 raise ApiError(409, f"views can only be captured while capturing (now: {self.state})",
@@ -619,6 +751,12 @@ class CalibrationSession:
                 self._next_index += 1
                 t0 = self._t0 if self._t0 is not None else d.t
             name = snap.add(idx, frame)
+            lit_rows = []
+            for laser, f in lit or []:
+                with self._lock:
+                    li = self._next_lit
+                    self._next_lit += 1
+                lit_rows.append((li, float(f.t_host), snap.add(li, f), str(laser)))
             lines = None
             if d.margin is not None:
                 lines = {"vertical": int(d.margin.get("vertical", 0)), "horizontal": int(d.margin.get("horizontal", 0))}
@@ -629,9 +767,12 @@ class CalibrationSession:
                          None if d.center_uv is None else np.array(d.center_uv), lines, self._view_warnings(d),
                          line_points=dict(d.line_points) if d.line_points is not None else None,
                          lines_found={k: list(v) for k, v in d.lines_found.items()} if d.lines_found is not None else None,
-                         line_sep=dict(d.line_sep) if d.line_sep else None)
+                         line_sep=dict(d.line_sep) if d.line_sep else None, lit=lit_rows)
             with self._lock:
-                rows = [(v.index, v.t_host, v.file) for v in (*self.views, view)]
+                rows = [r for v in (*self.views, view) for r in v.rows()]
+                lit_meta = {str(i): {"laser": laser, "view": v.index} for v in (*self.views, view) for i, _, _, laser in v.lit}
+            if lit_meta or "lit" in snap.meta:
+                snap.meta["lit"] = lit_meta
             snap.write_index(rows)  # on disk first: whoever sees the view in the session finds it in the recording
             with self._lock:
                 self.views.append(view)
@@ -655,6 +796,15 @@ class CalibrationSession:
         reason = guide.usable_reason(d)
         if reason is not None:
             raise ApiError(409, f"Not captured: {reason}", _reason_hint(reason))
+        if self._light is not None:
+            burst = self._begin_burst(latest[0], d, auto=False)
+            if not burst["done"].wait(BURST_TIMEOUT_S):
+                self._end_burst(burst, ApiError(409, "Not captured: the camera sent no frames while the lasers took turns",
+                                                "check the camera, then capture again"))
+            if isinstance(burst["result"], ApiError):
+                raise burst["result"]
+            self._steady_reset = True
+            return burst["result"]
         view = self._store(latest[0], d, auto=False)
         self._steady_reset = True
         return view
@@ -670,10 +820,14 @@ class CalibrationSession:
                     raise ApiError(404, f"no view {index}", "use an index from the session's views")
                 self.views.remove(view)
                 self._thumbs.pop(view.index, None)
-                rows = [(v.index, v.t_host, v.file) for v in self.views]
+                rows = [r for v in self.views for r in v.rows()]
+                lit_meta = {str(i): {"laser": laser, "view": v.index} for v in self.views for i, _, _, laser in v.lit}
             if self._snap is not None:
+                if "lit" in self._snap.meta:
+                    self._snap.meta["lit"] = lit_meta
                 self._snap.write_index(rows)
-                self._snap.remove(view.file)
+                for _, _, f in view.rows():
+                    self._snap.remove(f)
         log.info("calibration view %d removed", index)
 
     def set_auto(self, enabled: bool) -> None:
@@ -818,7 +972,7 @@ class CalibrationSession:
 def _idle(target: str, lines: Any = None) -> dict:
     return {"state": "idle", "kind": None, "target": target, "id": None, "started": None, "auto": True, "views": [],
             "target_views": [0, 0], "min_views": 0, "guidance": "", "emitters": "", "job_id": None, "result": None,
-            "recording": None, "saved": None, "lasers": list(lines or guide.STANDARD_LINES)}
+            "recording": None, "saved": None, "lasers": list(lines or guide.STANDARD_LINES), "one_at_a_time": False}
 
 
 class CalibrationManager:
@@ -866,6 +1020,32 @@ class CalibrationManager:
         dev = self.st.devices
         if dev.source == "camera" and dev.has_pico and any(self._levels(s.kind)):
             dev.emitters_to(self._levels(s.kind))
+
+    def _one_at_a_time(self, kind: str, source: str, cam: Any, lines: tuple[str, ...]) -> tuple[Any, str | None]:
+        """``(light, why_not)``: the function that lights only some lasers, when the laser step can
+        light them one at a time (module docstring), else None and, when the build asks for it but
+        the device cannot, why."""
+        lasers = getattr(self.st.cfg, "lasers", None)
+        if kind != "lasers" or lasers is None or not lasers.separate():
+            return None, None
+        if source == "sim":
+            if cam is None or not hasattr(cam, "light") or not set(lines) <= set(getattr(cam, "laser_names", ())):
+                return None, None
+            return cam.light, None
+        dev = self.st.devices
+        if not dev.has_pico:
+            return None, None
+        if not dev.pico_per_laser():
+            return None, ("The Pico's firmware switches each pair of lasers together, so the lasers are calibrated "
+                          "all at once. Update the firmware to 1.2.0 (firmware/main.py) to light them one at a time.")
+        levels = self._levels(kind)
+
+        def light(names: Any) -> None:
+            only = None if names is None else tuple(lasers.channel_of(n) for n in names)
+            if not dev.emitters_to(levels, only=only):
+                raise RuntimeError("the Pico did not take the new levels")
+
+        return light, None
 
     def _emitters_text(self, kind: str, source: str, has_pico: bool) -> str:
         lines = any(self._levels(kind))
@@ -932,13 +1112,19 @@ class CalibrationManager:
                         "pico": dev.pico_hello() or None, "emitters": list(self._levels(kind)) if source == "camera" else None}
                 if kind in ("lasers", "check"):
                     meta["lasers"] = list(lines)
+                light, why_not = self._one_at_a_time(kind, source, cam, tuple(lines))
+                if why_not:
+                    warn = why_not
+                if light is not None:
+                    meta["one_at_a_time"] = True
                 s = CalibrationSession(
                     kind=kind, target=target, spec=spec, calib=calib, paper=str(st.cfg.board.paper).lower(), hub=st.hub,
                     rec_base=base, source_name=dev.source_name(), meta=meta,
                     emitters=self._emitters_text(kind, source, dev.has_pico),
                     truth=getattr(cam, "true_calibration", None) if cam is not None else None,
                     restart=getattr(cam, "restart", None) if (cam is not None and kind == "imu") else None,
-                    notify=st.notify, on_change=self.publish, sim=source == "sim", lines=lines)
+                    notify=st.notify, on_change=self.publish, sim=source == "sim", lines=lines,
+                    light=light, settle_frames=BURST_SETTLE_FRAMES["sim" if source == "sim" else "camera"])
                 s.start()
                 self._emitters_on(s)
                 dev.attach(s)

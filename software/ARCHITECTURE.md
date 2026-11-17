@@ -160,7 +160,8 @@ in hundredths of a degree, about once a second while the IMU streams; firmware 1
 
 **Safety:** emitters are off at boot. Any emitter turns off if no host line arrives for 1.5 s. Values are clamped to 0..100.
 
-Pins: V-laser GP2, H-laser GP3, dot projector GP6 (each drives an NPN low-side switch, PWM ~10 kHz),
+Pins: V-laser GP2, H-laser GP3, dot projector GP6, and in the 4-laser build the second V-laser GP0 and
+second H-laser GP1 (firmware 1.2.0; each drives an NPN low-side switch, PWM ~10 kHz),
 trigger GP15 (to GND, internal pull-up), IMU I2C0 SDA GP4 / SCL GP5 @ 400 kHz, LSM6DSOX address 0x6A (fallback 0x6B).
 IMU config: gyro +-1000 dps, accel +-8 g, both at the requested ODR. Timestamps must be accurate to better than 1 ms.
 

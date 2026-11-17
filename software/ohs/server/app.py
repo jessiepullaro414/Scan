@@ -33,7 +33,7 @@ import json
 import logging
 import mimetypes
 from pathlib import Path
-from typing import Any, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional
 from urllib.parse import urlsplit
 
 from fastapi import FastAPI, Request, WebSocket
@@ -107,7 +107,9 @@ class ProcessSettingsBody(BaseModel):
 
 
 class LaserSettingsBody(BaseModel):
-    lines: List[str] = Field(..., max_length=16)
+    lines: Optional[List[str]] = Field(None, max_length=16)
+    own_channels: Optional[bool] = None
+    brightness: Optional[Dict[str, float]] = Field(None, max_length=16)
 
 
 class PrintablesBody(BaseModel):
@@ -617,7 +619,7 @@ def create_app(config: Any = None, *, projects_dir: Any = None, static_dir: Any 
 
     @app.post("/api/settings/lasers")
     def settings_lasers(body: LaserSettingsBody) -> JSONResponse:
-        return _json(st.set_laser_settings(body.lines))
+        return _json(st.set_laser_settings(body.lines, body.own_channels, body.brightness))
 
     @app.get("/api/setup/printables")
     def printables_state() -> JSONResponse:

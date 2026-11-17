@@ -143,6 +143,11 @@ svg .topt { fill: var(--opt); }
           <rect class="pad" x="794" y="95" width="12" height="10" rx="2"/><text class="tm tb" x="814" y="104">40 VBUS</text>
           <rect class="pad" x="794" y="175" width="12" height="10" rx="2"/><text class="tm tb" x="814" y="184">4 <tspan class="pico">GP2</tspan><tspan class="esp">GPIO13</tspan></text>
           <rect class="pad" x="794" y="315" width="12" height="10" rx="2"/><text class="tm tb" x="814" y="324">5 <tspan class="pico">GP3</tspan><tspan class="esp">GPIO14</tspan></text>
+          <!-- pins 1 and 2: the second lasers (four lasers); drawn beside their rows, the pin map shows where they sit -->
+          <g class="four">
+            <rect class="pad" x="794" y="205" width="12" height="10" rx="2"/><text class="tm tb" x="814" y="214">1 <tspan class="pico">GP0</tspan><tspan class="esp">GPIO11</tspan></text>
+            <rect class="pad" x="794" y="345" width="12" height="10" rx="2"/><text class="tm tb" x="814" y="354">2 <tspan class="pico">GP1</tspan><tspan class="esp">GPIO12</tspan></text>
+          </g>
           <rect class="pad" x="794" y="425" width="12" height="10" rx="2"/><text class="tm tb" x="814" y="434">9 <tspan class="pico">GP6</tspan><tspan class="esp">GPIO17</tspan></text>
           <rect class="pad" x="794" y="475" width="12" height="10" rx="2"/><text class="tm tb" x="814" y="484">38 GND</text>
           <rect class="pad" x="794" y="535" width="12" height="10" rx="2"/><text class="tm tb" x="814" y="544">36 3V3</text>
@@ -195,10 +200,10 @@ svg .topt { fill: var(--opt); }
           <path class="w gw" d="M370 225 V232"/><use href="#g" x="370" y="232"/>
           <path class="w sig" d="M410 210 H450"/>
           <rect class="part opt" x="450" y="203" width="56" height="14" rx="2"/><text class="ts" x="478" y="198" text-anchor="middle">1 kΩ</text>
-          <path class="w sig" d="M506 210 H640 V180"/>
-          <circle class="js" cx="640" cy="180" r="3.5"/>
+          <path class="w sig" d="M506 210 H794"/>
+          <text class="tw" x="790" y="203" text-anchor="end">V2 laser</text>
         </g>
-        <text class="tw" x="790" y="173" text-anchor="end">V lasers</text>
+        <text class="tw" x="790" y="173" text-anchor="end">V laser</text>
 
         <!-- H laser row y=290 -->
         <g>
@@ -227,10 +232,10 @@ svg .topt { fill: var(--opt); }
           <path class="w gw" d="M370 365 V372"/><use href="#g" x="370" y="372"/>
           <path class="w sig" d="M410 350 H450"/>
           <rect class="part opt" x="450" y="343" width="56" height="14" rx="2"/><text class="ts" x="478" y="338" text-anchor="middle">1 kΩ</text>
-          <path class="w sig" d="M506 350 H640 V320"/>
-          <circle class="js" cx="640" cy="320" r="3.5"/>
+          <path class="w sig" d="M506 350 H794"/>
+          <text class="tw" x="790" y="343" text-anchor="end">H2 laser</text>
         </g>
-        <text class="tw" x="790" y="313" text-anchor="end">H lasers</text>
+        <text class="tw" x="790" y="313" text-anchor="end">H laser</text>
 
         <!-- LED projector row y=430 -->
         <g>
@@ -296,7 +301,7 @@ svg .topt { fill: var(--opt); }
       <span><i style="border-color:var(--i2c)"></i>IMU data (I²C)</span>
       <span class="four"><i style="border-color:var(--opt);border-top-style:dashed"></i>added for four lasers</span>
     </div>
-    <p class="sub">The colours show what a wire carries; use whatever wire colours you have. Each ⏚ symbol goes to one shared ground on the perfboard, and one wire takes that ground to pin 38. The two lasers of a kind share a board pin, but each laser has its own transistor and its own 1 kΩ.</p>
+    <p class="sub">The colours show what a wire carries; use whatever wire colours you have. Each ⏚ symbol goes to one shared ground on the perfboard, and one wire takes that ground to pin 38.<span class="four"> In the four-laser build each laser has its own board pin, its own transistor and its own 1 kΩ: pin 1 drives V2 and pin 2 drives H2. That gives each laser its own brightness, and the laser calibration can light them one at a time, which is more accurate. This needs firmware 1.2.0 or newer. If you already wired each pair to one pin (pin 4 or pin 5), you can keep it: in the app, open Settings → Line lasers and switch off "Each laser has its own wire"; the lasers of each pair are then calibrated together, as before.</span></p>
   </section>
 
   <section aria-labelledby="h-lay">
@@ -444,8 +449,10 @@ svg .topt { fill: var(--opt); }
           <tr><td><input type="checkbox" id="c4"></td><td><span class="dot" style="background:var(--ret)"></span>H laser black</td><td>Q2 collector</td><td><span class="chip">head → grip</span></td></tr>
           <tr><td><input type="checkbox" id="c5"></td><td><span class="dot" style="background:var(--ret)"></span>LED star −</td><td>8.2 Ω 3 W resistor, then Q3 drain</td><td><span class="chip">head → grip</span></td></tr>
           <tr class="four"><td><input type="checkbox" id="c6"></td><td><span class="dot" style="background:var(--opt)"></span>V2 laser black / H2 laser black</td><td>Q4 collector / Q5 collector</td><td><span class="chip">head → grip</span></td></tr>
-          <tr><td><input type="checkbox" id="c7"></td><td><span class="dot" style="background:var(--sig)"></span>Board pin 4 (<span class="pico">GP2</span><span class="esp">GPIO13</span>)</td><td>1 kΩ to Q1 base<span class="four">, and a second 1 kΩ to Q4 base</span></td><td><span class="chip">perfboard</span></td></tr>
-          <tr><td><input type="checkbox" id="c8"></td><td><span class="dot" style="background:var(--sig)"></span>Board pin 5 (<span class="pico">GP3</span><span class="esp">GPIO14</span>)</td><td>1 kΩ to Q2 base<span class="four">, and a second 1 kΩ to Q5 base</span></td><td><span class="chip">perfboard</span></td></tr>
+          <tr><td><input type="checkbox" id="c7"></td><td><span class="dot" style="background:var(--sig)"></span>Board pin 4 (<span class="pico">GP2</span><span class="esp">GPIO13</span>)</td><td>1 kΩ to Q1 base</td><td><span class="chip">perfboard</span></td></tr>
+          <tr><td><input type="checkbox" id="c8"></td><td><span class="dot" style="background:var(--sig)"></span>Board pin 5 (<span class="pico">GP3</span><span class="esp">GPIO14</span>)</td><td>1 kΩ to Q2 base</td><td><span class="chip">perfboard</span></td></tr>
+          <tr class="four"><td><input type="checkbox" id="c17"></td><td><span class="dot" style="background:var(--opt)"></span>Board pin 1 (<span class="pico">GP0</span><span class="esp">GPIO11</span>)</td><td>1 kΩ to Q4 base</td><td><span class="chip">perfboard</span></td></tr>
+          <tr class="four"><td><input type="checkbox" id="c18"></td><td><span class="dot" style="background:var(--opt)"></span>Board pin 2 (<span class="pico">GP1</span><span class="esp">GPIO12</span>)</td><td>1 kΩ to Q5 base</td><td><span class="chip">perfboard</span></td></tr>
           <tr><td><input type="checkbox" id="c9"></td><td><span class="dot" style="background:var(--sig)"></span>Board pin 9 (<span class="pico">GP6</span><span class="esp">GPIO17</span>)</td><td>Q3 gate, and 10 kΩ from the gate to ground</td><td><span class="chip">perfboard</span></td></tr>
           <tr><td><input type="checkbox" id="c10"></td><td><span class="dot" style="background:var(--gnd)"></span>Q1, Q2<span class="four">, Q4, Q5</span> emitters; Q3 source; the 10 kΩ</td><td>Perfboard ground, then board pin 38 (GND)</td><td><span class="chip">perfboard</span></td></tr>
           <tr><td><input type="checkbox" id="c11"></td><td><span class="dot" style="background:var(--pwr)"></span>IMU VIN</td><td>Board pin 36 (3V3)</td><td><span class="chip">back cover → grip</span></td></tr>
@@ -464,7 +471,7 @@ svg .topt { fill: var(--opt); }
     <div class="warn">The line lasers are Class 3R. Never look into them, and point the scanner at a wall or a sheet of paper while testing.</div>
     <ul class="notes">
       <li><b>Power budget.</b> The LED draws about 340 mA and each laser a few tens of mA, so about 0.45 A in all with two lasers, and a little more with four. A USB 2.0 port is rated for 0.5 A. With four lasers, use a USB 3 port (0.9 A) or a powered hub.</li>
-      <li><b>First test with the toggle off.</b> Plug in the board and send <span class="mono">HELLO</span> in a serial terminal; it should answer with <span class="mono">imu=LSM6DSOX</span>. Then switch the toggle on and try <span class="mono">EMIT 20 0 0</span>, <span class="mono">EMIT 0 20 0</span> and <span class="mono">EMIT 0 0 20</span>. The firmware turns everything off 1.5 s after the PC goes quiet.</li>
+      <li><b>First test with the toggle off.</b> Plug in the board and send <span class="mono">HELLO</span> in a serial terminal; it should answer with <span class="mono">imu=LSM6DSOX</span>. Then switch the toggle on and try <span class="mono">EMIT 20 0 0</span>, <span class="mono">EMIT 0 20 0</span> and <span class="mono">EMIT 0 0 20</span><span class="four">, then <span class="mono">EMIT 0 0 0 20 0</span> and <span class="mono">EMIT 0 0 0 0 20</span> for V2 and H2 (firmware 1.2.0 or newer)</span>. The firmware turns everything off 1.5 s after the PC goes quiet.</li>
       <li><b>Keep the emitters off during reset (optional).</b> A 10 kΩ resistor from each transistor base to ground keeps the lasers dark while the board is in reset or in boot mode.</li>
       <li><b>Heat.</b> The 8.2 Ω resistor dissipates about 1 W and gets warm. Leave it room on the perfboard, away from the plastic.</li>
       <li><b>Wires to the head.</b> Run them through the slot under the camera: the camera USB, one +5 V to the toggle, <span class="twoonly">three</span><span class="four">five</span> returns (<span class="twoonly">V, H, LED</span><span class="four">V, V2, H, H2, LED</span>) and four IMU wires. Sleeve each joint with heat-shrink.</li>
@@ -509,10 +516,12 @@ svg .topt { fill: var(--opt); }
     });
   });
 
-  // board pin map: pins 1-20 down the left edge, 40-21 down the right edge
+  // board pin map: pins 1-20 down the left edge, 40-21 down the right edge.
+  // A fifth entry "four" marks a pin used only in the four-laser build.
   var NS = "http://www.w3.org/2000/svg";
   var used = {
-    4: ["V lasers", "GP2", "GPIO13", "sig"], 5: ["H lasers", "GP3", "GPIO14", "sig"], 6: ["IMU SDA", "GP4", "GPIO15", "i2c"],
+    1: ["V2 laser", "GP0", "GPIO11", "sig", "four"], 2: ["H2 laser", "GP1", "GPIO12", "sig", "four"],
+    4: ["V laser", "GP2", "GPIO13", "sig"], 5: ["H laser", "GP3", "GPIO14", "sig"], 6: ["IMU SDA", "GP4", "GPIO15", "i2c"],
     7: ["IMU SCL", "GP5", "GPIO16", "i2c"], 8: ["IMU GND", "GND", "GND", "gnd"], 9: ["projector", "GP6", "GPIO17", "sig"],
     18: ["trigger GND", "GND", "GND", "gnd"], 20: ["trigger", "GP15", "GPIO40", "sig"],
     36: ["IMU VIN", "3V3", "3V3", "pwr"], 38: ["perfboard GND", "GND", "GND", "gnd"], 40: ["to toggle", "VBUS", "VBUS", "pwr"]
@@ -530,10 +539,17 @@ svg .topt { fill: var(--opt); }
     var y = 74 + (left ? n - 1 : 40 - n) * 20.5;
     var x = left ? 125 : 255;
     var u = used[n];
-    g.appendChild(el("rect", { x: x - 6, y: y - 5, width: 12, height: 10, rx: 2, "class": u ? "pad" : "padoff" }));
-    g.appendChild(el("text", { x: left ? x + 12 : x - 12, y: y + 4, "class": "tm tb", "font-size": "10", "text-anchor": left ? "start" : "end", opacity: u ? "1" : "0.55" }, String(n)));
+    var only = u && u[4] ? u[4] : null;
+    if (only) {
+      // unused with two lasers, used with four: draw both looks, the CSS shows one
+      g.appendChild(el("rect", { x: x - 6, y: y - 5, width: 12, height: 10, rx: 2, "class": "padoff twoonly" }));
+      g.appendChild(el("text", { x: left ? x + 12 : x - 12, y: y + 4, "class": "tm tb twoonly", "font-size": "10", "text-anchor": left ? "start" : "end", opacity: "0.55" }, String(n)));
+    }
+    g.appendChild(el("rect", { x: x - 6, y: y - 5, width: 12, height: 10, rx: 2, "class": (u ? "pad" : "padoff") + (only ? " " + only : "") }));
+    g.appendChild(el("text", { x: left ? x + 12 : x - 12, y: y + 4, "class": "tm tb" + (only ? " " + only : ""), "font-size": "10", "text-anchor": left ? "start" : "end", opacity: u ? "1" : "0.55" }, String(n)));
     if (u) {
       var t = el("text", { x: left ? x - 12 : x + 12, y: y + 4, "font-size": "11", "text-anchor": left ? "end" : "start" });
+      if (only) t.setAttribute("class", only);
       var a = el("tspan", { fill: colour[u[3]], "font-weight": "600" }, u[0] + " ");
       var p = el("tspan", { "class": "pico tm", "font-size": "10" }, u[1]);
       var s = el("tspan", { "class": "esp tm", "font-size": "10" }, u[2]);

@@ -321,6 +321,8 @@ export type CalibView = {
   /** Per family: margin points of each line found, largest first. */
   lines_found?: Record<string, number[]> | null;
   thumb_url: string;
+  /** lasers, one at a time: the lasers that each had a frame of their own for this view. */
+  lit?: string[] | null;
   error_px: number | null; // after a solve
   bad: boolean; // after a solve
   warnings: string[];
@@ -382,6 +384,8 @@ export type CalibSession = {
   recording: string | null; // folder of the captured views
   saved: { path: string; backup: string | null; notes: string[] } | null;
   lasers?: string[]; // the configured line lasers (config [lasers] lines)
+  /** lasers: each view also gets a frame per laser with only that laser lit (each laser on its own wire). */
+  one_at_a_time?: boolean;
 };
 
 export type CalibHintTilt = "left" | "right" | "up" | "down" | "more";
@@ -471,8 +475,12 @@ export type CameraSettingsBody = { index?: number; swap_lr?: boolean };
  * without markers and leaves marker mode as it was; "on" and "off" force it. */
 export type ThinWalls = "auto" | "on" | "off";
 export type ProcessSettingsBody = { thin_walls?: ThinWalls };
-/** `[lasers] lines`: the build's line lasers, e.g. ["vertical", "horizontal", "vertical_2", "horizontal_2"]. */
-export type LaserSettingsBody = { lines: string[] };
+/** `[lasers]`, any of: `lines`, the build's line lasers, e.g. ["vertical", "horizontal", "vertical_2", "horizontal_2"];
+ * `own_channels`, each laser on its own Pico channel (firmware 1.2.0+); `brightness`, the whole map of laser name ->
+ * percent of its family's level (a laser left out gets 100). */
+export type LaserSettingsBody = { lines?: string[]; own_channels?: boolean; brightness?: Record<string, number> };
+/** `lasers` of `Settings`; `own_channels` and `brightness` are missing from an older server. */
+export type LaserSettings = { lines: string[]; own_channels?: boolean; brightness?: Record<string, number> };
 export type OpenFolderReply = { opened: boolean; dir: string };
 export type CaptureReply = { view: CalibView; session: CalibSession };
 export type SaveReply = { session: CalibSession; setup: SetupState };

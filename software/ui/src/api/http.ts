@@ -237,7 +237,8 @@ export const api = {
   setCamera: (body: CameraSettingsBody) => post<Settings>("/api/settings/camera", body),
   /** Written to the config file; the next Make mesh uses it. */
   setProcess: (body: ProcessSettingsBody) => post<Settings>("/api/settings/process", body),
-  /** The build's line lasers, written to the config file (409 during a scan or a calibration, 422 for a bad list). */
+  /** The build's line lasers, their wiring and brightness, written to the config file (422 for a bad laser set;
+   * 409 during a calibration, and during a scan unless only the brightness changes). */
   setLasers: (body: LaserSettingsBody) => post<Settings>("/api/settings/lasers", body),
   printables: () => get<Printables>("/api/setup/printables"),
   /** Job (kind `printables`, result `Printables`). A paper change is saved to `board.paper`. */

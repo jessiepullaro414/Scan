@@ -6,12 +6,17 @@ pin map is picked by ``sys.platform`` (see PINS). Not yet tried on a real ESP32.
 Serial protocol (software/ARCHITECTURE.md section 5A), ASCII lines over USB CDC (stdin/stdout):
 
     HELLO             -> OK HELLO ohs-fw <ver> imu=<LSM6DSOX|NONE>
-    EMIT <v> <h> <d>  -> OK EMIT <v> <h> <d>     percent PWM, clamped to 0..100
+    EMIT <v> <h> <d>  -> OK EMIT <v> <h> <d>     percent PWM, clamped to 0..100; the second
+                         lasers (V2, H2) follow V and H, as on a board that wires each pair together
+    EMIT <v> <h> <d> <v2> <h2>
+                      -> OK EMIT <v> <h> <d> <v2> <h2>   each laser on its own (1.2.0+; the 4-laser
+                         build with a channel per laser)
     IMU <rate_hz>     -> OK IMU <rate> <gyro_rad_per_lsb> <accel_ms2_per_lsb>   (0 = stop;
                          104/208/416/833 Hz)
     TIME              -> T <t_us>
     HB                -> (no reply; only keeps the emitter watchdog alive)
-    STATUS            -> S emit=<v>,<h>,<d> imu=<rate> btn=<0|1> up=<s> [temp=<degC>]
+    STATUS            -> S emit=<v>,<h>,<d>[,<v2>,<h2>] imu=<rate> btn=<0|1> up=<s> [temp=<degC>]
+                         (v2, h2 only while they differ from v, h)
     other             -> E unknown <cmd>
     async             -> I <t_us> <gx> <gy> <gz> <ax> <ay> <az>   raw int16 counts, IMU frame
                          B <t_us> <0|1>                            debounced trigger, 1 = pressed
@@ -35,7 +40,8 @@ Choices where the contract leaves room (all documented for the host client):
   failed temperature read sends ``E temp-read ...`` once and stops temperature reads; the IMU
   and the emitters carry on.
 
-Safety: emitters (PWM ~10 kHz on GP2 V-laser, GP3 H-laser, GP6 dot projector) are off at boot,
+Safety: emitters (PWM ~10 kHz on GP2 V-laser, GP3 H-laser, GP6 dot projector, and the 4-laser
+build's GP0 second V-laser and GP1 second H-laser) are off at boot,
 off on any exception, off when the main loop exits (including Ctrl-C), and off after 1.5 s
 without a complete host line (watchdog).
 
@@ -49,11 +55,13 @@ the main program (``main.py`` at boot, ``mpremote run``, Thonny "Run"), never on
 import sys
 
 FW_NAME = "ohs-fw"
-FW_VERSION = "1.1.0"  # 1.1.0: IMU chip temperature (C lines, STATUS temp=)
+FW_VERSION = "1.2.0"  # 1.1.0: IMU chip temperature (C lines, STATUS temp=); 1.2.0: a channel per laser (EMIT with 5 levels)
 
 # Pin map (README.md wiring section): GPIO numbers on the Raspberry Pi Pico
 PIN_LASER_V = 2  # vertical-line laser, NPN low-side switch via 1 kOhm
 PIN_LASER_H = 3  # horizontal-line laser
+PIN_LASER_V2 = 0  # 4-laser build: the second vertical-line laser (left), own channel
+PIN_LASER_H2 = 1  # 4-laser build: the second horizontal-line laser (low), own channel
 PIN_DOTS = 6  # random-dot projector
 PIN_TRIGGER = 15  # trigger button to GND, internal pull-up
 PIN_SDA = 4  # I2C0 SDA (LSM6DSOX)
@@ -66,6 +74,12 @@ I2C_ID = 0
 PINS = {
     "rp2": (PIN_LASER_V, PIN_LASER_H, PIN_DOTS, PIN_TRIGGER, PIN_SDA, PIN_SCL),
     "esp32": (13, 14, 17, 40, 15, 16),
+}
+# The 4-laser build's second lasers, each on its own channel: (V2 laser, H2 laser). Pins 1 and 2 on
+# both boards (on a 2-laser build they stay unconnected and do nothing).
+PINS_LASER2 = {
+    "rp2": (PIN_LASER_V2, PIN_LASER_H2),
+    "esp32": (11, 12),
 }
 I2C_FREQ = 400000
 PWM_FREQ_HZ = 10000
@@ -135,7 +149,8 @@ class UnwrappedClock:
 class Firmware:
     """Protocol and safety state machine. Pure logic: every piece of hardware is injected.
 
-    ``emitters``: three objects with ``duty_u16(int)`` (V-laser, H-laser, dots), e.g. machine.PWM.
+    ``emitters``: objects with ``duty_u16(int)``, e.g. machine.PWM: (V-laser, H-laser, dots) and,
+    for the 4-laser build, (second V-laser, second H-laser) after them.
     ``button``: object with ``value()`` returning 0 while pressed (pull-up), or None.
     ``imu``: LSM6DSOX-like (``name``, ``gyro_scale``, ``accel_scale``, ``set_rate(hz)``,
     ``data_ready()``, ``read_raw()``, optionally ``read_temp_c100()``) or None.
@@ -149,7 +164,8 @@ class Firmware:
         self.imu = imu
         self.now = clock
         self._out = write
-        self.levels = [0, 0, 0]
+        self.levels = [0, 0, 0]  # V, H, dots
+        self.levels2 = [0, 0]  # the second V and H lasers (they follow V and H unless set on their own)
         self.imu_rate = 0
         self._period_us = 0
         self._t_poll = None  # time of the previous IMU status poll
@@ -179,11 +195,14 @@ class Firmware:
         return getattr(self.imu, "name", "IMU")
 
     # ------------------------------------------------------------------ emitters
-    def set_levels(self, v, h, d):
+    def set_levels(self, v, h, d, v2=None, h2=None):
+        """Percent levels; ``v2``/``h2`` (the second lasers) follow ``v``/``h`` when not given."""
         levels = [_clamp_pct(v), _clamp_pct(h), _clamp_pct(d)]
-        for pwm, pct in zip(self.emitters, levels):
+        levels2 = [levels[0] if v2 is None else _clamp_pct(v2), levels[1] if h2 is None else _clamp_pct(h2)]
+        for pwm, pct in zip(self.emitters, levels + levels2):
             pwm.duty_u16(pct * 65535 // 100)
         self.levels = levels
+        self.levels2 = levels2
 
     def all_off(self):
         """Every emitter off. This is the safety path, so it never raises."""
@@ -193,9 +212,10 @@ class Firmware:
             except Exception:
                 pass
         self.levels = [0, 0, 0]
+        self.levels2 = [0, 0]
 
     def emitters_on(self):
-        return self.levels[0] > 0 or self.levels[1] > 0 or self.levels[2] > 0
+        return self.levels[0] > 0 or self.levels[1] > 0 or self.levels[2] > 0 or self.levels2[0] > 0 or self.levels2[1] > 0
 
     def fault(self, context, exc):
         """Any unexpected exception: emitters off, report it, keep running."""
@@ -246,11 +266,16 @@ class Firmware:
             self.send("T %d" % self.now())
         elif cmd == "EMIT":
             vals = [_parse_int(p) for p in parts[1:]]
-            if nargs != 3 or None in vals:
-                self.send("E EMIT bad args (EMIT <v> <h> <d>, percent)")
+            if nargs not in (3, 5) or None in vals:
+                self.send("E EMIT bad args (EMIT <v> <h> <d> [<v2> <h2>], percent)")
                 return
-            self.set_levels(vals[0], vals[1], vals[2])
-            self.send("OK EMIT %d %d %d" % (self.levels[0], self.levels[1], self.levels[2]))
+            if nargs == 3:
+                self.set_levels(vals[0], vals[1], vals[2])
+                self.send("OK EMIT %d %d %d" % (self.levels[0], self.levels[1], self.levels[2]))
+            else:
+                self.set_levels(vals[0], vals[1], vals[2], vals[3], vals[4])
+                self.send("OK EMIT %d %d %d %d %d" % (self.levels[0], self.levels[1], self.levels[2],
+                                                      self.levels2[0], self.levels2[1]))
         elif cmd == "IMU":
             rate = _parse_int(parts[1]) if nargs == 1 else None
             if rate is None:
@@ -268,9 +293,10 @@ class Firmware:
                 self.send("OK IMU %d %.7e %.7e" % (rate, self.imu.gyro_scale, self.imu.accel_scale))
         elif cmd == "STATUS":
             up_ms = (self.now() - self.t_boot) // 1000
-            line = "S emit=%d,%d,%d imu=%d btn=%d up=%d.%03d" % (
-                self.levels[0], self.levels[1], self.levels[2], self.imu_rate, self.btn,
-                up_ms // 1000, up_ms % 1000)
+            emit = "%d,%d,%d" % (self.levels[0], self.levels[1], self.levels[2])
+            if self.levels2 != self.levels[:2]:
+                emit += ",%d,%d" % (self.levels2[0], self.levels2[1])
+            line = "S emit=%s imu=%d btn=%d up=%d.%03d" % (emit, self.imu_rate, self.btn, up_ms // 1000, up_ms % 1000)
             if self.temp_c100 is not None:
                 line += " temp=" + _fmt_c100(self.temp_c100)
             self.send(line)
@@ -394,6 +420,11 @@ def pin_map(platform):
     return PINS.get(platform, PINS["rp2"])
 
 
+def laser2_pins(platform):
+    """(second V laser, second H laser) for ``sys.platform`` (the 4-laser build's own channels)."""
+    return PINS_LASER2.get(platform, PINS_LASER2["rp2"])
+
+
 def run(machine=None, time=None, select=None, stdin=None, stdout=None, max_iterations=None, platform=None):
     """Device entry point: set up the hardware, then run the main loop.
 
@@ -404,6 +435,7 @@ def run(machine=None, time=None, select=None, stdin=None, stdout=None, max_itera
     if platform is None:
         platform = sys.platform
     pin_v, pin_h, pin_dots, pin_trigger, pin_sda, pin_scl = pin_map(platform)
+    pin_v2, pin_h2 = laser2_pins(platform)
     if machine is None:
         import machine
     if time is None:
@@ -418,7 +450,7 @@ def run(machine=None, time=None, select=None, stdin=None, stdout=None, max_itera
 
     # 1. Emitters off before anything else can fail.
     pwms = []
-    for pin in (pin_v, pin_h, pin_dots):
+    for pin in (pin_v, pin_h, pin_dots, pin_v2, pin_h2):
         machine.Pin(pin, machine.Pin.OUT, value=0)
         pwm = machine.PWM(machine.Pin(pin))
         pwm.duty_u16(0)

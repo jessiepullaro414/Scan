@@ -145,15 +145,20 @@ def _laser_per_view(report: dict, view_ids: Sequence[int]) -> list[dict]:
             if 0 <= i < len(obs_frame) and n > 0 and k < 0.5 * n:
                 weak.add(obs_frame[i])
     ids = set(int(v) for v in view_ids)
-    out = []
+    by_view: dict[int, dict] = {}
     for r in rows:
-        idx = int(r.get("index", -1))
+        # a view captured one laser at a time has a row per laser ("view" says whose): the view is
+        # bad when any of them is, and its error is the largest
+        idx = int(r["view"]) if r.get("view") is not None else int(r.get("index", -1))
         if idx not in ids:
             continue
         e = _num(r.get("reproj_rms_px"))
-        bad = (not r.get("board")) or idx in weak
-        out.append({"index": idx, "error_px": None if e is None else round(e, 3), "bad": bool(bad)})
-    return out
+        bad = (not r.get("board")) or int(r.get("index", -1)) in weak
+        cur = by_view.setdefault(idx, {"index": idx, "error_px": None, "bad": False})
+        if e is not None and (cur["error_px"] is None or e > cur["error_px"]):
+            cur["error_px"] = round(e, 3)
+        cur["bad"] = bool(cur["bad"] or bad)
+    return list(by_view.values())
 
 
 # --------------------------------------------------------------------------- stereo

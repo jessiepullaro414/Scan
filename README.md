@@ -139,7 +139,7 @@ IMU (LSM6DSOX): VIN ── 3V3 (pin 36)  GND ── GND  SDA ── GP4 (pin 6) 
 
 The standard build has two line lasers. This variant has four: it adds a second vertical-line laser on the **left** of the cameras (the mirror of the right one) and a second horizontal-line laser **low on the right**, beside the grip's yoke, 56 mm below the camera centre. The left vertical line crosses the centre line 250 mm in front of the faceplate, like the right one (it is the exact mirror of it). The low horizontal line points slightly down (5 degrees below straight ahead) and stays below the top one: the two horizontal lines would lie on top of each other on any surface near the point where they meet, so they are aimed not to meet inside the working range (they would meet only about 640 mm out). Build it if you have four laser modules and want about twice the laser points per frame. A line from the left also lights walls that a line from the right leaves in shadow. Other builders can keep two lasers; nothing else changes.
 
-**Software.** The app and the engine work with four lasers. Before the laser calibration, open **Settings → Line lasers** in the app and choose **Four** (or set `[lasers] lines` in the config file, see [software/README.md](software/README.md)). The calibration then finds one plane for each of the four lasers, and scans use all four. This is tested on the simulator only and has not run on a real scanner yet: [software/VALIDATION.md](software/VALIDATION.md), "Four line lasers", has the numbers and the limits.
+**Software.** The app and the engine work with four lasers. Before the laser calibration, open **Settings → Line lasers** in the app and choose **Four** (or set `[lasers] lines` in the config file, see [software/README.md](software/README.md)). The calibration then finds one plane for each of the four lasers, and scans use all four. With each laser on its own Pico pin (below; firmware 1.2.0 or later) the calibration lights the lasers one at a time for each view, and **Settings → Line lasers** gives each laser its own brightness. This is tested on the simulator only and has not run on a real scanner yet: [software/VALIDATION.md](software/VALIDATION.md), "Four line lasers", has the numbers and the limits.
 
 The housing has been printed in ASA and dry-fitted (2026-11-16, see [docs/BUILD.md](docs/BUILD.md)). This variant's two extra laser blocks have not been confirmed on a print yet: their fit is as designed, not as tried.
 
@@ -151,12 +151,16 @@ The housing has been printed in ASA and dry-fitted (2026-11-16, see [docs/BUILD.
 | Option B, Commonlands CLA020 holder | `head_led_4laser_cla020.stl` (with `led_cartridge_cla020.stl`) |
 | Option A (laser + DOE) | `head_4laser.stl` |
 
-**Wiring.** The two lasers of a kind share one Pico pin, so the firmware and the `EMIT <v> <h> <d>` command do not change. Each laser still gets its own PN2222A and its own 1 kΩ base resistor. Add these to the diagram above:
+**Wiring.** Each laser gets its own PN2222A, its own 1 kΩ base resistor and its own Pico pin. Add these to the diagram above:
 
 ```
-V2-laser black ── C  Q4 PN2222A  E ── GND     B ── 1kΩ ── GP2 (pin 4)   (the same pin as Q1)
-H2-laser black ── C  Q5 PN2222A  E ── GND     B ── 1kΩ ── GP3 (pin 5)   (the same pin as Q2)
+V2-laser black ── C  Q4 PN2222A  E ── GND     B ── 1kΩ ── GP0 (pin 1)
+H2-laser black ── C  Q5 PN2222A  E ── GND     B ── 1kΩ ── GP1 (pin 2)
 ```
+
+- This needs firmware 1.2.0 or later (`firmware/main.py`): its `EMIT` command takes a level per laser. On the ESP32-S3-Pico the same pins 1 and 2 are GPIO11 and GPIO12.
+- Why its own pin: each laser can then have its own brightness, and the laser calibration lights one laser at a time, which separates the two lines of a kind without guessing (on the simulator about twice as accurate: [software/VALIDATION.md](software/VALIDATION.md), "Four lasers, one at a time").
+- An earlier build of this variant joined Q4's 1 kΩ to GP2 and Q5's to GP3. That still works: in **Settings → Line lasers** switch off **Each laser has its own wire**, and the two lasers of a kind are then lit and calibrated together, as before.
 
 - V2 is the left vertical laser, H2 the low horizontal one. Their red wires join the toggle's output with the others, in the head.
 - That is two more PN2222A and two more 1 kΩ resistors: 5 of each with option A, 4 of each with the LED projector (option B), where a MOSFET drives the LED in place of Q3. Solder Q4 and Q5 on the same perfboard scrap as the others.

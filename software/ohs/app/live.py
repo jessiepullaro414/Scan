@@ -105,8 +105,16 @@ def make_camera(cfg: Any, replay: str | Path | None = None) -> Any:
 
 
 def make_pico(cfg: Any) -> Pico:
-    """Session Pico client (not opened yet)."""
-    return Pico(cfg.pico)
+    """Session Pico client (not opened yet), with each laser's brightness (``[lasers]``)."""
+    return with_laser_scales(Pico(cfg.pico), cfg)
+
+
+def with_laser_scales(pico: Any, cfg: Any) -> Any:
+    """``pico`` with each laser's brightness share from ``[lasers]`` (a client without
+    ``laser_scales``, e.g. a stand-in, is returned as it is)."""
+    if hasattr(pico, "laser_scales") and getattr(cfg, "lasers", None) is not None:
+        pico.laser_scales = cfg.lasers.channel_scales()
+    return pico
 
 
 def new_recording_dir(base: str | Path, prefix: str) -> Path:
