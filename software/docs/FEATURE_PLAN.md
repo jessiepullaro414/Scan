@@ -265,7 +265,7 @@ but nothing can be uploaded.
 
 **Today:** nothing. The roadmap's rule stands: fitted shapes, not "any mesh becomes CAD".
 
-### C1. A STEP writer for fitted shapes (M) **(D2, D3)**
+### [x] C1. A STEP writer for fitted shapes (M) **(D2, D3)**
 - **What:** `ohs/cad/step.py` writes the kept features as STEP (AP214): each plane as a flat face
   with its outline, each cylinder as a cylindrical face over its measured span and arc with its
   axis, each hole as a circle on its plane, points, and the part's coordinate system (K3). Names
@@ -273,6 +273,33 @@ but nothing can be uploaded.
 - **Test first:** the file read back by a small reader in the tests gives every shape's
   parameters to 1e-6 mm; the entity references are all resolved; a fixed set of test files is
   kept for the check in real CAD (D3).
+- **Done 2026-11-17** (the owner: our own writer; FreeCAD on this PC for the check).
+  `ohs/cad/shapes.py` (`cad_shapes`: the kept fits, their outlines and the part's frame as
+  shapes to export) and `ohs/cad/step.py` (`write_step`: AP214 text, millimetres, the same
+  input gives the same bytes). One named thing per shape: each plane and cylinder face, each
+  hole's circle, an axis line for every cylinder and hole, and with a frame the part's X, Y and
+  Z lines and its origin.
+  - *A plane's edge:* by default the fit's rectangle, four clean edges. As an option
+    (`boundary="outline"`) the real outline: its largest outer loop and its real holes,
+    simplified to 0.5 mm (never more than 2 mm), at most 5,000 points.
+  - *Found on the real scan, test added:* the first outline option gave a face FreeCAD called
+    not valid on the table of a real-size scan (684 pits of scan noise kept as holes, the
+    tolerance pushed to 64 mm, loops crossing; the outer loop also touches itself at 95
+    points). Now holes under 3 % of the outline's size are left out as pits (at most the 50
+    largest stay), the writer checks every loop itself (`face_problems`: simple, holes
+    strictly inside, none touching) and never writes a face it has not checked; one that
+    cannot be mended becomes the rectangle, with a note. That table: 1 mm, 2,039 points and 48
+    holes, 2.0 MB, 1 s, valid in FreeCAD.
+  - *In FreeCAD 1.1.4* (`tools/freecad_check.py`, run by the tests when FreeCAD is found):
+    every sample opens with all shapes valid, planes as planes and cylinders as cylinders
+    (a full round and a part round), the numbers equal to 6e-14 mm, and each shape under its
+    fit's name, odd characters included. FreeCAD's STEP import does not show lone points, so
+    the origin shows as where the three axis lines meet. Other CAD programs: not tried.
+  - Sample files for a CAD program: `python tools/step_samples.py <folder>` (five files).
+  - Tests: 21 on both paths (our own reader, `tests/step_reader.py`; the FreeCAD round trips
+    are skipped where FreeCAD is not installed).
+  - **Left:** the export in the app (C2); the hole rule looks at size only, so on a table with
+    gaps in the measured surface some kept "holes" are gaps (the notes say what was left out).
 
 ### C2. Export from the app, and a FreeCAD macro (S)
 - **What:** "For CAD" in the viewer's Download panel: the STEP file, and a FreeCAD macro
