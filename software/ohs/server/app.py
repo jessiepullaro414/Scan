@@ -8,7 +8,8 @@
   (:mod:`ohs.server.setup`, :mod:`ohs.server.calibration`), and M3's processing studio
   ``/api/projects/{pid}/scans/{sid}/process/*`` and ``/api/recipes`` (:mod:`ohs.server.processing`),
   and the kept fits and measurements ``/api/projects/{pid}/scans/{sid}/features``, with the part's
-  frame under ``.../features/frame`` (:mod:`ohs.server.features`);
+  frame under ``.../features/frame`` (:mod:`ohs.server.features`) and the fits for CAD under
+  ``.../features/cad`` (:mod:`ohs.server.cad`);
 * ``/api/ws/live``: ``hello``, then the current ``device`` / ``session`` / ``calib_session`` /
   ``setup`` / active ``job`` messages, then everything the :class:`~ohs.server.hub.Hub`
   publishes for this client; ``subscribe`` messages from the client set its options;
@@ -47,6 +48,7 @@ from pydantic import BaseModel, Field
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from ohs import __version__
+from ohs.server.cad import CadExport
 from ohs.server.features import FeatureManager
 from ohs.server.protocol import PROTOCOL_VERSION, ApiError, dumps, jsonable
 from ohs.server.studio import Studio
@@ -630,6 +632,22 @@ def create_app(config: Any = None, *, projects_dir: Any = None, static_dir: Any 
             headers["X-OHS-Mesh-Version"] = str(version)
         return Response(data, media_type="model/stl" if name.endswith(".stl") else "application/octet-stream",
                         headers=headers)
+
+    # the kept fits for CAD (FEATURE_PLAN C2, ohs/server/cad.py): also before ".../{fid}"
+    cad = CadExport(feats)
+
+    @app.get(fpath + "/cad")
+    def features_cad(pid: str, sid: str, boundary: Literal["rectangle", "outline"] = "rectangle") -> JSONResponse:
+        return _json(cad.summary(pid, sid, boundary))
+
+    @app.get(fpath + "/cad/{name}")
+    def features_cad_file(pid: str, sid: str, name: str,
+                          boundary: Literal["rectangle", "outline"] = "rectangle") -> Response:
+        data, filename, media, version = cad.file(pid, sid, name, boundary)
+        headers = {"Cache-Control": "no-cache", "Content-Disposition": f'attachment; filename="{filename}"'}
+        if version is not None:
+            headers["X-OHS-Mesh-Version"] = str(version)
+        return Response(data, media_type=media, headers=headers)
 
     @app.patch(fpath + "/{fid}")
     def features_rename(pid: str, sid: str, fid: str, body: RenameBody) -> JSONResponse:

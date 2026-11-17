@@ -301,12 +301,37 @@ but nothing can be uploaded.
   - **Left:** the export in the app (C2); the hole rule looks at size only, so on a table with
     gaps in the measured surface some kept "holes" are gaps (the notes say what was left out).
 
-### C2. Export from the app, and a FreeCAD macro (S)
+### [x] C2. Export from the app, and a FreeCAD macro (S)
 - **What:** "For CAD" in the viewer's Download panel: the STEP file, and a FreeCAD macro
   (`.FCMacro`, a short Python text) that builds the same planes, cylinders, circles and axes as
   named objects. A new allowed file in `RESULT_FILES` (`ohs/server/projects.py`).
 - **Test first:** the route returns both files for a scan with kept features and a clear message
   for a scan with none; the macro's numbers equal the features'.
+- **Done 2026-11-17.** `ohs/cad/fcmacro.py` writes the same shapes as a FreeCAD macro: a new
+  document named after the part, each fit an object under its name, in groups (Planes,
+  Cylinders, Holes, Axes, Points, Part frame), the notes as comments on top. A name is written
+  as an escaped text constant, so it cannot run as code. `GET .../features/cad` says what
+  would be exported (counts, the frame, notes, warnings, sizes), `.../features/cad/fits.step`
+  and `.../fits.FCMacro` are the downloads (`?boundary=rectangle|outline`), built in memory
+  from the kept fits; nothing on disk changes (`APP_API.md`, "For CAD"). They are served under
+  the kept features, not as result files, so `RESULT_FILES` is unchanged.
+  - The viewer's Download panel has "For CAD": STEP, FreeCAD macro, a switch "Planes with
+    their real outline" with its cost on hover, and a line such as "1 fit (1 plane), in the
+    scan's own frame" with the notes. Fits made on an earlier mesh are exported and named in
+    a warning; an out-of-date frame is used and warned about. With no kept fit the buttons say
+    why they are off.
+  - The real outline's summary costs the server about a second for a large plane, so the
+    panel reads it only when the switch is turned on or its help is opened (changed in
+    review; it was read every time the kept fits changed).
+  - *In FreeCAD 1.1.4:* the macro of every sample builds valid objects of the right kind in
+    the right group, equal to the same shapes' STEP round trip to 6e-14 mm; a name full of
+    quotes and code-like text comes back as the label. From the app on a real-size scan: both
+    files, with the rectangle and with the real outline (4,607 edges), download and build a
+    valid face.
+  - Tests: 18 new (macro, routes) on both paths, the FreeCAD runs skipped where it is not
+    installed; 39 UI checks.
+  - **Left:** the approved sizes in the export (C3); seen only in FreeCAD's command-line
+    program, not its window; a fit named like a group ("Planes") is "Planes (2)" in the macro.
 
 ### C3. Suggested nominal sizes, for an engineer to approve (M)
 - **What:** beside each measured value a suggestion: Ø 14.02 ± 0.03 → "14?", 89.7° → "90?", two

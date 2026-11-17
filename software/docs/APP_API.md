@@ -1175,6 +1175,71 @@ Rules:
 - Sizes, distances, angles and ± values are the same in every frame; the viewer shows positions and
   directions in the part's frame on request and keeps its 3D view in the scan's frame.
 
+### For CAD
+[`FEATURE_PLAN.md`](FEATURE_PLAN.md), C2. The scan's kept fits as a STEP file (`ohs.cad.step`) and as a
+FreeCAD macro (`ohs.cad.fcmacro`, a short Python text that builds the same shapes as named objects in a new
+document), both made from `ohs.cad.shapes.cad_shapes` of the kept fits as `features.json` holds them, in the
+part's frame when the scan has one (`ohs/server/cad.py`). Each plane is a flat face, each cylinder a
+cylindrical face over its span and arc, each hole a circle; an axis line for every cylinder and hole; with a
+frame the part's X, Y and Z axes and its origin. Every shape is named after its fit.
+
+```ts
+type CadBoundary = "rectangle" | "outline";     // a plane's edge: its rectangle (four clean edges), or its real
+                                                // outline (largest outer loop and real holes, simplified)
+type CadSummary = {                             // GET .../features/cad: what the two files would hold
+  boundary: CadBoundary;
+  n_fits: number;                               // the kept fits exported (all of them)
+  counts: { plane: number; cylinder: number; hole: number; point: number };
+  frame: "part" | "scan";                       // the frame the files are in
+  frame_label: string;                          // "the part's frame" | "the scan's own frame"
+  notes: string[];                              // the writer's (cad_shapes): a fit kept with no size, what an
+                                                // outline left out, "no part frame: ...", in plain words
+  warnings: string[];                           // fits made on an earlier mesh, a frame out of date or not readable
+  stale: string[];                              // the ids of the fits made on an earlier mesh
+  outline: { planes: number;                    // with boundary "outline": the planes written with their outline,
+             points: number;                    // the points their loops hold,
+             holes_kept: number;                // the holes kept in them, and the outlines' holes left out
+             holes_left_out: number } | null;   // (pits of the scan, and holes that touch); null for "rectangle"
+  step_bytes: number | null; macro_bytes: number | null;   // the files' sizes (null without kept fits)
+  filenames: { step: string; macro: string };   // the download names, from the scan's name
+  mesh_version: number | null;                  // the current mesh's version
+  reason: string | null;                        // why nothing can be exported (no kept fits), else null
+};
+```
+
+| Method and path | Query | Returns |
+|---|---|---|
+| `GET .../features/cad` | `boundary?: CadBoundary` | `CadSummary` |
+| `GET .../features/cad/fits.step` | `boundary?: CadBoundary` | the STEP file (AP214, mm, ASCII; `model/step`) |
+| `GET .../features/cad/fits.FCMacro` | `boundary?: CadBoundary` | the FreeCAD macro (ASCII Python; `text/x-python`) |
+
+Rules:
+- **What goes in:** every kept fit, in its order, with its measured values (approved nominal sizes come
+  later, C3); each plane's stored outline with `boundary=outline` (only an outline kept for the fit's own
+  mesh version: a plane without one is written with its rectangle, with a note); the part's frame when the
+  scan has one this version can read. `boundary` defaults to `rectangle`; another value is 422.
+- **Inside**, the files are named after the part (the project's name: the STEP file's root product, the
+  macro's document) and each shape after its fit, a name taken twice getting " (2)". **Outside**,
+  `Content-Disposition` names them after the scan (`<scan>-fits.step`, `<scan>-fits.FCMacro`), so the two
+  files, and the files of two scans, cannot be mistaken for each other. `X-OHS-Mesh-Version` is the mesh
+  version read with the fits.
+- **Kept as kept:** a fit made on an earlier mesh is exported as it was kept, and `warnings` says so by its
+  name; an out-of-date frame is used as it is (as for the mesh in the part's frame), with a warning; a frame
+  this version cannot read is not used (the files are in the scan's own frame), with a warning. The writer's
+  notes are also in the files: in the STEP file's `FILE_DESCRIPTION`, in the macro as comments at the top.
+- **The macro** is plain ASCII. Each name is a Python string literal (`ascii()`), and every comment one line
+  of printable ASCII, so no name or note can run as code. In FreeCAD (checked with 1.1.4) it builds the
+  objects in the groups "Planes", "Cylinders", "Holes", "Axes", "Points" and "Part frame", each equal to what
+  FreeCAD reads from the STEP file of the same shapes (to 1e-13 mm on the sample files); unlike FreeCAD's
+  STEP import it shows the part's origin as a point. The group names are taken: a fit named "Planes" is
+  "Planes (2)" in the macro (and "Planes" in the STEP file).
+- **No kept fits:** the files answer 409 ("this scan has no kept fits to export", with a hint), never an
+  empty file; the summary answers 200 with `reason`, the counts 0 and the sizes null. A kept fit the writer
+  cannot export (a damaged shape) is 409 with its words.
+- The same kept fits give the same bytes. Made on request in memory from what is read: nothing is written,
+  and the scan's files and every other download stay exactly as they are. 404 for an unknown project or
+  scan, and for another file name.
+
 ## M5 second slice: the deviation map
 The plan is in [`DESKTOP_APP_PLAN.md`](DESKTOP_APP_PLAN.md), "M5 plan, second slice". It compares the scan's
 current mesh with its base mesh: the last stage's result, before any edit.

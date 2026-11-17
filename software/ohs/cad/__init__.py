@@ -6,5 +6,6 @@ suggested nominal sizes for an engineer to approve.
 
 * :mod:`ohs.cad.shapes`: the kept fits as shapes to export;
 * :mod:`ohs.cad.step`: a small STEP writer for those shapes;
+* :mod:`ohs.cad.fcmacro`: the same shapes as a FreeCAD macro that builds them as named objects;
 * :mod:`ohs.cad.nominal`: suggested nominal sizes.
 """

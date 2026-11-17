@@ -33,7 +33,9 @@ the numbers a click in the viewer gives. This module adds:
   a refusal of the engine is answered 422 with its own words, a fit made on an earlier mesh 409.
   Reading shows whether the frame is still current (:func:`ohs.measure.features.frame_state`);
   nothing is rebuilt on its own. ``GET .../features/frame/mesh.ply`` (or ``.stl``) is the scan's
-  current result mesh turned into the frame, made on request: the scan's own files stay as they are.
+  current result mesh turned into the frame, made on request: the scan's own files stay as they are;
+* **for CAD** (FEATURE_PLAN C2): :meth:`FeatureManager.snapshot` reads the kept set and the planes'
+  outlines for :mod:`ohs.server.cad`, which serves them as a STEP file and a FreeCAD macro.
 
 **Locking.** One lock per scan around reading, changing and writing ``features.json``. Fits run
 outside it (they can take a second); a refit is only kept when its feature has not been changed
@@ -175,6 +177,23 @@ class FeatureManager:
         with self._lock(pid, sid):
             doc = self._load(pid, sid)
         return self._set_view(doc, self._version(pid, sid))
+
+    def snapshot(self, pid: str, sid: str, plane_outlines: bool = False) -> tuple[dict, dict, int | None]:
+        """The scan's kept set as ``features.json`` holds it (no ``stale`` marks), read under the
+        scan's lock, with (when ``plane_outlines``) each kept plane's outline by its id, only one
+        kept for the fit's own mesh version (as :func:`ohs.measure.features.load_outline` gives it),
+        and the current mesh's version (None before there is a mesh). Reads only; 404 for an
+        unknown project or scan. For the CAD export (:mod:`ohs.server.cad`)."""
+        d = self._dir(pid, sid)
+        outlines: dict[str, dict] = {}
+        with self._lock(pid, sid):
+            doc = self._load(pid, sid)
+            for f in doc["features"] if plane_outlines else []:
+                if f["kind"] == "plane":
+                    ol = kf.load_outline(d, f["id"])
+                    if ol is not None and ol["mesh_version"] == f["mesh_version"]:  # not left over from another fit
+                        outlines[f["id"]] = ol
+        return doc, outlines, self._version(pid, sid)
 
     def add_fit(self, pid: str, sid: str, kind: str, face: int, point: Any, tolerance_mm: float | None,
                 version: int | None, name: str | None) -> dict:

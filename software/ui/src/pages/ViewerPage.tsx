@@ -6,7 +6,8 @@
  * are kept with the scan, with names, through store/features.ts), the part's coordinate system built from
  * three kept fits (the Coordinate system panel: its axes drawn in the view, the panels' numbers in it on
  * request, the mesh downloaded in it), the Check panel (which areas miss the tolerance the part needs),
- * bounding box in mm, downloads and the processing report.
+ * bounding box in mm, downloads (the kept fits for CAD too: a STEP file and a FreeCAD macro,
+ * viewer/CadDownload.tsx) and the processing report.
  */
 import {
   ArrowLeft,
@@ -58,6 +59,7 @@ import { toast } from "../store/toasts";
 import { sigmaOf } from "../three/confidence";
 import { disposeMeshGeometry, plyGeometry, readPly } from "../three/ply";
 import { viewBus } from "../three/viewBus";
+import { CadDownload } from "./viewer/CadDownload";
 import { CHECK_ICON, CheckPanel } from "./viewer/CheckPanel";
 import { ConfidenceLegend } from "./viewer/ConfidenceLegend";
 import { DeviationLegend } from "./viewer/DeviationLegend";
@@ -1113,6 +1115,7 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
           ) : (
             <div className="text-sm text-muted">Make the mesh first.</div>
           )}
+          {hasResult && urls ? <CadDownload pid={pid} sid={sid} stem={stem} kept={kept} hasMesh={hasResult} /> : null}
           {hasResult && project && scan ? (
             <div className="mt-3 flex items-center justify-between gap-2">
               <span className="text-xs text-subtle">

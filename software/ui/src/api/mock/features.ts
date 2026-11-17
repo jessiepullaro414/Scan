@@ -19,9 +19,13 @@
  * The part's frame (`.../features/frame`, frame.test.ts): built from three kept fits with the simplified rule of
  * frame.ts, kept per scan, shown with whether it is still current (a fit it was built from deleted or changed),
  * removed; the current mesh in it comes from the engine (`partMesh`).
+ *
+ * The kept fits for CAD (`.../features/cad`, cad.ts, cad.test.ts): the summary as the engine gives it, the STEP
+ * file and the FreeCAD macro as small fixed texts that say they come from the demo.
  */
 import { relationRecord } from "../../lib/fits.ts";
 import type { CylinderForm, FeatureSet, FitExtent, FitResult, KeptFeature, KeptMeasurement, KeptRelation, PairRelation, PartFrameRecord } from "../types";
+import { cadBoundary, mockCadFile, mockCadSummary } from "./cad.ts";
 import { outlineAnswer, type MockOutline } from "./extent.ts";
 import { frameState, mockPartFrame, type FrameInput } from "./frame.ts";
 import { HttpError, json } from "./host.ts";
@@ -32,6 +36,8 @@ export type FeatureEngine = {
   fit: (body: Record<string, unknown>) => FitResult;
   /** The current mesh's version, null before there is a mesh. */
   version: () => number | null;
+  /** The part's (project's) and the scan's names, for the CAD files' names (cad.ts); "scan" without it. */
+  names?: () => { part: string; scan: string };
   /** The current mesh's face nearest a point (to find a saved click again after an edit). */
   nearestFace: (point: number[]) => number;
   /** The current mesh with its vertices and normals turned by `matrix` (4x4 rows), as `mesh.ply` or `mesh.stl`;
@@ -152,6 +158,9 @@ export class MockFeatures {
       return json(204, null);
     }
     if (a === "frame" && b && is("GET", 2)) return this.frameMesh(s, b, engine);
+    // the kept fits for CAD (cad.ts: the summary as the engine's, the files small fixed texts)
+    if (a === "cad" && is("GET", 1)) return json(200, mockCadSummary(s, cadBoundary(body.boundary), engine.version(), engine.names?.().scan ?? "scan"));
+    if (a === "cad" && b && is("GET", 2)) return mockCadFile(s, b, cadBoundary(body.boundary), engine.version(), engine.names?.().scan ?? "scan");
     if (a && is("PATCH", 1)) {
       const name = cleanName(body.name);
       const { list, i } = this.find(s, a);

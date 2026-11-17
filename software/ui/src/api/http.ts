@@ -8,6 +8,9 @@
 import type {
   AlignAllRequest,
   AlignRequest,
+  CadBoundary,
+  CadFile,
+  CadSummary,
   CalibKind,
   CalibSession,
   CameraSettingsBody,
@@ -363,6 +366,13 @@ export const api = {
   removeFrame: (pid: string, sid: string) => del(`${scanPath(pid, sid)}/features/frame`),
   /** URL of the current mesh turned into the part's frame (`mesh.ply` or `mesh.stl`); 404 without a frame. */
   frameMeshUrl: (pid: string, sid: string, name: "mesh.ply" | "mesh.stl") => `${scanPath(pid, sid)}/features/frame/${name}`,
+  /** What the kept fits' CAD files would hold (counts, frame, the writer's notes, warnings, sizes); read-only. With
+   * no kept fits `reason` says so. */
+  cadSummary: (pid: string, sid: string, boundary: CadBoundary = "rectangle") =>
+    get<CadSummary>(`${scanPath(pid, sid)}/features/cad?boundary=${boundary}`),
+  /** URL of the kept fits as a STEP file or a FreeCAD macro (in the part's frame when there is one); 409 with no kept fits. */
+  cadFileUrl: (pid: string, sid: string, name: CadFile, boundary: CadBoundary = "rectangle") =>
+    `${scanPath(pid, sid)}/features/cad/${name}?boundary=${boundary}`,
 
   // ---------------------------------------------------------------- M5: areas that need another pass
   /** Which parts of the current mesh miss a tolerance (above 0, at most 100 mm): the share of the surface

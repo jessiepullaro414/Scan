@@ -861,6 +861,32 @@ export type NewFrame = {
   secondary_zero?: boolean; // strict 3-2-1
 };
 
+// ------------------------------------------------------------------ kept fits for CAD (FEATURE_PLAN C2)
+// APP_API.md "For CAD": the kept fits as a STEP file and a FreeCAD macro, in the part's frame when there is one.
+
+/** A plane's edge in the CAD files: its rectangle (four clean edges), or its real outline (simplified). */
+export type CadBoundary = "rectangle" | "outline";
+export type CadFile = "fits.step" | "fits.FCMacro";
+/** `GET .../features/cad`: what the two files would hold. */
+export type CadSummary = {
+  boundary: CadBoundary;
+  n_fits: number; // the kept fits exported (all of them)
+  counts: { plane: number; cylinder: number; hole: number; point: number };
+  frame: "part" | "scan"; // the frame the files are in
+  frame_label: string; // "the part's frame" | "the scan's own frame"
+  notes: string[]; // the writer's, in plain words (a fit kept with no size, what an outline left out, ...)
+  warnings: string[]; // fits made on an earlier mesh, a frame out of date or not readable
+  stale: string[]; // ids of the fits made on an earlier mesh
+  /** With boundary "outline": the planes written with their outline, their points, the holes kept and the outlines'
+   * holes left out (pits of the scan, holes that touch); null for "rectangle". */
+  outline: { planes: number; points: number; holes_kept: number; holes_left_out: number } | null;
+  step_bytes: number | null; // null without kept fits
+  macro_bytes: number | null;
+  filenames: { step: string; macro: string }; // the download names, from the scan's name
+  mesh_version: number | null;
+  reason: string | null; // why nothing can be exported (no kept fits), else null
+};
+
 // ------------------------------------------------------------------ M5 second slice: the deviation map
 // APP_API.md "M5 second slice: the deviation map". Compares the current mesh with the base mesh.
 

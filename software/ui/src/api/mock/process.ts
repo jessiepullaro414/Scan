@@ -377,6 +377,7 @@ export class MockProcess {
   featureEngine(p: Project, s: Scan): FeatureEngine {
     return {
       fit: (body) => this.fit(p, s, body),
+      names: () => ({ part: p.name, scan: s.name }),
       extent: (r) => {
         const m = this.ensure(p, s).current;
         return m ? mockExtent(m.positions, m.indices, decodeFaces(r.faces) ?? new Uint32Array(0), r.shape) : null;
