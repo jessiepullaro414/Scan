@@ -290,6 +290,30 @@ but nothing can be uploaded.
   measured and nominal side by side. Nothing is rounded silently.
 - **Test first:** a Ø 14.02 ± 0.03 boss suggests 14; a Ø 14.3 ± 0.03 one suggests nothing; an
   accepted nominal appears in the STEP file and the measured value stays in `features.json`.
+- **Engine done 2026-11-17** (`ohs/cad/nominal.py`: `suggest_fit`, `suggest_relation`,
+  `apply_nominal`; 25 tests on both paths). An offer names the value, the measured number and
+  its ±, the round value, the difference, what allows it (±2σ alone, or a known bias, with the
+  `VALIDATION.md` section it rests on) and a sentence the app can show. No offer comes with its
+  reason too (already round, nothing fits, too many fit, no ±, a warning on the fit).
+  - *Round values, coarsest first:* whole mm, then halves, then tenths; angles 0° and 90°, then
+    30°, 45°, 60°, then whole degrees; "parallel", "perpendicular", "in one plane", "coaxial"
+    for relations. Two that fit equally are both given.
+  - *Known biases* are one table in the module (bosses Ø 13–17, the Ø 25 and Ø 10 holes with
+    and without a wall, wall thickness 1–3 mm; true poses and tracked apart), each row quoting
+    the document; a test reads `VALIDATION.md` and fails when a quote is gone. They are
+    simulator numbers; where the document has none (bores, other sizes, every angle), no bias
+    is used and the offer says so.
+  - `apply_nominal` gives a copy of a fit's shape with the approved sizes; the measured shape
+    is untouched.
+  - *A choice to confirm:* the example above, Ø 14.3 ± 0.03, gets no offer as a plain cylinder
+    (it is already round to a tenth). Told that it is a boss scanned with tracking, 14.5 is
+    offered, marked "only because of a known bias" (bosses read 0.30–0.38 mm small in
+    diameter there). That follows the rule; say if a bias alone should never make an offer.
+  - **Left:** keeping approved values with the scan, the routes, the viewer, and their use in
+    the STEP export. A kept cylinder does not yet say whether it is a boss or a bore
+    (`region.py` knows it while fitting), so the boss rows cannot be used by the app until it
+    does. Seen on the way: `VALIDATION.md`, "Known limitations", still says small bosses read
+    0.1 mm small in radius; the newer sections say 0.15–0.28 mm.
 
 **Not planned here:** sphere and cone fits, free-form surfaces, automatic CAD from a mesh
 (`RESEARCH_PLAN.md` 4.8.7–4.8.8).
