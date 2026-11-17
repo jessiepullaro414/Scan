@@ -70,6 +70,9 @@ __all__ = [
     "sphere_on_plane",
     "car_panel",
     "bracket",
+    "panel_seam",
+    "panel_seam_mesh",
+    "panel_seam_truth",
     "charuco_board",
     "SCENE_PRESETS",
     "make_scene",
@@ -1032,6 +1035,161 @@ def bracket(seed: int = 0) -> Scene:
     )
 
 
+# --------------------------------------------------------------------------- two panels and their seam
+_SEAM_RX = 2000.0  # mm, the panels' radius of curvature along the seam ...
+_SEAM_RY = 1200.0  # ... and across it (slightly curved, like a door and a wing)
+_SEAM_ARC = 23  # points inside the round edge's half circle (odd: the middle one is its outermost point), 7.5° apart
+
+
+def _seam_value(v: Sequence[float], x, length: float) -> np.ndarray:
+    """A seam parameter ``(at the start, at the end)`` at ``x`` (local, mm): linear along the seam."""
+    v0, v1 = float(v[0]), float(v[1])
+    return v0 + (v1 - v0) * (np.asarray(x, dtype=np.float64) / float(length) + 0.5)
+
+
+def _seam_height(x, y):
+    """The panels' common surface ``z = h(x, y)`` (local, mm): gently doubly curved, highest at the seam's middle."""
+    return -(x * x) / (2.0 * _SEAM_RX) - (y * y) / (2.0 * _SEAM_RY)
+
+
+def panel_seam_mesh(gap_mm: Sequence[float] = (2.0, 6.0), flush_mm: Sequence[float] = (0.0, 0.0),
+                    length_mm: float = 240.0, width_mm: float = 80.0, radius_mm: float = 1.0,
+                    step_mm: float = 1.0) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """The two panels of :func:`panel_seam` as closed triangle meshes in their local frame:
+    ``(V, F, panel of each face)``, panel 0 the first (y < 0), 1 the second (y > 0).
+
+    The seam runs along local x from ``-length_mm / 2`` to ``+length_mm / 2``; ``gap_mm`` and
+    ``flush_mm`` are ``(at the start, at the end)``, linear in between. Each panel is a hemmed
+    edge seen in section: its outer sheet's surface ``z = h(x, y)`` (the second panel's raised by
+    the flush) runs to the seam, rolls over a half circle of ``radius_mm`` (a hem's outer radius is
+    about the sheet's thickness) and returns underneath ``2 * radius_mm`` lower: the folded sheet
+    with the inner panel's flange in it, as one solid. The half circle's outermost points (its
+    middle, halfway down) are ``gap / 2`` either side of the seam's middle. ``width_mm`` from the
+    edge the panel is closed by a wall. Rows every ``step_mm`` along the seam (the gap and flush
+    are linear in x, so the rows hold them exactly); across, 1 mm on the panel, 0.25 mm within
+    4 mm of the round, 7.5° on it."""
+    L, W, R = float(length_mm), float(width_mm), float(radius_mm)
+    xs = np.linspace(-L / 2, L / 2, int(round(L / float(step_mm))) + 1)
+    dist = np.concatenate([np.arange(W, 4.0, -1.0), np.arange(4.0, 0.0, -0.25), [0.0]])  # from the round's start, inner end first
+    th = np.radians(90.0 - 180.0 * np.arange(1, _SEAM_ARC + 1) / (_SEAM_ARC + 1))  # from the top round to the bottom
+    K = 2 * len(dist) + _SEAM_ARC
+    Vs, Fs, panel, n0 = [], [], [], 0
+    for p, side in ((0, -1.0), (1, 1.0)):
+        rows = []
+        for x in xs:
+            g = float(_seam_value(gap_mm, x, L))
+            f = float(_seam_value(flush_mm, x, L)) if side > 0 else 0.0
+            yc = side * (g / 2 + R)  # the half circle's centre; the panel lies on side * y > |yc|
+            zc = float(_seam_height(x, yc)) + f - R
+            y_in = yc + side * dist
+            top = np.column_stack([y_in, _seam_height(x, y_in) + f])
+            arc = np.column_stack([yc - side * R * np.cos(th), zc + R * np.sin(th)])
+            bottom = np.column_stack([y_in[::-1], _seam_height(x, y_in[::-1]) + f - 2.0 * R])
+            prof = np.vstack([top, arc, bottom])
+            rows.append(np.column_stack([np.full(K, x), prof]))
+        V = np.vstack(rows)
+        F = []
+        for j in range(len(xs) - 1):  # the swept profile (a closed loop: the inner wall joins its ends)
+            a, b = j * K, (j + 1) * K
+            for k in range(K):
+                k1 = (k + 1) % K
+                F += [(a + k, a + k1, b + k1), (a + k, b + k1, b + k)]
+        for j, flip in ((0, False), (len(xs) - 1, True)):  # the ends: strips between points of the same y
+            a = j * K
+            for k in range((K - 1) // 2):
+                q, q1 = K - 1 - k, K - 2 - k
+                tris = [(a + k + 1, a + k, a + q)] + ([(a + k + 1, a + q, a + q1)] if k + 1 != q1 else [])
+                F += [t[::-1] if flip else t for t in tris]
+        F = np.asarray(F, dtype=np.int64)
+        P0, P1, P2 = V[F[:, 0]], V[F[:, 1]], V[F[:, 2]]
+        if float(np.einsum("ij,ij->i", P0, np.cross(P1, P2)).sum()) < 0:  # wound outward (a positive volume)
+            F = F[:, ::-1].copy()
+        Vs.append(V)
+        Fs.append(F + n0)
+        panel.append(np.full(len(F), p, dtype=np.int64))
+        n0 += len(V)
+    return np.vstack(Vs), np.vstack(Fs), np.concatenate(panel)
+
+
+def panel_seam(seed: int = 0, gap_mm: Sequence[float] = (2.0, 6.0), flush_mm: Sequence[float] = (0.0, 0.0),
+               length_mm: float = 240.0, width_mm: float = 80.0, radius_mm: float = 1.0, height_mm: float = 120.0) -> Scene:
+    """Two painted body panels side by side with a seam between them (gap and flush, FEATURE_PLAN
+    I4), ``height_mm`` above a dark floor that is all that shows through the gap.
+
+    The panels (:func:`panel_seam_mesh`) are 240 x 80 mm each, curved a little (radii 2,000 mm
+    along the seam and 1,200 mm across), with hemmed edges of radius 1 mm at the seam. The gap
+    (between the edges' outermost points) and the flush (the second panel's surface above the
+    first's) are ``(at the start, at the end)`` of the seam, linear in between, so one scan
+    carries a range of values; :func:`panel_seam_truth` gives them at any point. The seam runs
+    along the panels' local x, turned 30° about the vertical (so it is not lined up with the
+    scanner's baseline) and tilted a few degrees. The scan pans along the seam.
+
+    ``meta``: ``seam`` (the parameters and ``T_wo``), ``mesh`` (world vertices and faces of both
+    panels: the truth), ``panel_of_face``, ``clicks`` (a point on each panel's top 6 mm in from
+    its round, halfway along the seam: first panel, then second) and ``seam_points`` (points on
+    the seam's middle line at the surface's height)."""
+    L = float(length_mm)
+    T = make_se3(so3_exp(np.radians([4.0, -3.0, 30.0])), [0.0, 0.0, float(height_mm)])
+    V, F, which = panel_seam_mesh(gap_mm, flush_mm, L, width_mm, radius_mm)
+    paint = NoiseAlbedo(mean=0.72, contrast=0.015, scale_mm=4.0, seed=seed)
+    prims: list[Primitive] = [_table(0.0, 800.0, NoiseAlbedo(mean=0.1, contrast=0.08, scale_mm=5.0, seed=seed + 1), name="floor")]
+    for p, name in ((0, "panel_a"), (1, "panel_b")):
+        f = F[which == p]
+        used = np.unique(f)
+        remap = np.full(len(V), -1, dtype=np.int64)
+        remap[used] = np.arange(len(used))
+        prims.append(TriangleMesh(T, V[used], remap[f], paint, name=name))
+    R, t = T[:3, :3], T[:3, 3]
+
+    def world(P):
+        return np.asarray(P, dtype=np.float64) @ R.T + t
+
+    g0 = float(_seam_value(gap_mm, 0.0, L))
+    f0 = float(_seam_value(flush_mm, 0.0, L))
+    away = 6.0 + float(radius_mm)
+    ya, yb = -(g0 / 2 + away), g0 / 2 + away
+    clicks = world([[0.0, ya, _seam_height(0.0, ya)], [0.0, yb, _seam_height(0.0, yb) + f0]])
+    xm = np.linspace(-0.45 * L, 0.45 * L, 9)
+    seam_points = world(np.column_stack([xm, np.zeros(9), _seam_height(xm, 0.0)]))
+    pan = tuple(float(v) for v in 120.0 * R[:, 0])
+    return Scene(
+        prims,
+        name="panel_seam",
+        target=tuple(float(v) for v in t),
+        radius=0.5 * L + 40.0,
+        meta={
+            "seam": {"gap_mm": [float(v) for v in gap_mm], "flush_mm": [float(v) for v in flush_mm], "length_mm": L,
+                     "width_mm": float(width_mm), "radius_mm": float(radius_mm), "T_wo": T.tolist(),
+                     "curvature_mm": [_SEAM_RX, _SEAM_RY]},
+            "mesh": (world(V), F),
+            "panel_of_face": which,
+            "clicks": (clicks[0], clicks[1]),
+            "seam_points": seam_points,
+            "trajectory": {"distance": (230.0, 300.0), "elevation_deg": (60.0, 80.0), "sweep_deg_s": 12.0, "pan_mm": pan},
+        },
+    )
+
+
+def panel_seam_truth(scene: Scene, points) -> dict[str, np.ndarray]:
+    """The true gap and flush of a :func:`panel_seam` scene at world points (k,3) near its seam:
+    ``along_mm`` (local x, along the seam), ``gap_mm`` (between the edges' outermost points),
+    ``flush_mm`` (the second panel's surface above the first's, square to the first) and
+    ``on_seam`` (more than 2 mm from the seam's ends).
+
+    The flush is the step ``f`` along z times the first panel's normal's z at the seam, ``1 /
+    sqrt(1 + (x / 2000)^2)``: up to 0.2 % less than ``f``. The gap is the distance across the seam
+    in the local y, which lies in the panels' surface to within 0.2° at the seam. Both are exact to
+    about 0.005 mm (the second panel's tilt by the flush's slope, the curvature over the round)."""
+    s = scene.meta["seam"]
+    T = np.asarray(s["T_wo"], dtype=np.float64)
+    local = (np.asarray(points, dtype=np.float64).reshape(-1, 3) - T[:3, 3]) @ T[:3, :3]
+    x = local[:, 0]
+    L = float(s["length_mm"])
+    nz = 1.0 / np.sqrt(1.0 + (x / _SEAM_RX) ** 2)
+    return {"along_mm": x, "gap_mm": _seam_value(s["gap_mm"], x, L), "flush_mm": _seam_value(s["flush_mm"], x, L) * nz,
+            "on_seam": np.abs(x) <= L / 2 - 2.0}
+
+
 def charuco_board(
     T_wb: np.ndarray | None = None,
     background: bool = True,
@@ -1108,11 +1266,12 @@ SCENE_PRESETS: dict[str, Callable[..., Scene]] = {
     "sphere_on_plane": sphere_on_plane,
     "car_panel": car_panel,
     "bracket": bracket,
+    "panel_seam": panel_seam,
 }
 
 
 def make_scene(scene: str | Scene, seed: int = 0) -> Scene:
-    """A preset by name (``sphere_on_plane``, ``car_panel``, ``bracket``) or the scene itself."""
+    """A preset by name (``sphere_on_plane``, ``car_panel``, ``bracket``, ``panel_seam``) or the scene itself."""
     if isinstance(scene, Scene):
         return scene
     try:

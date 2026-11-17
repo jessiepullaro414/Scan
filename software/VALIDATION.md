@@ -2362,6 +2362,82 @@ shape accepted a pose turned 180°.
 - **Not tried:** real scans and CAD exports from other programs; OBJ files; references that
   cannot be wound one way; a STEP file as the reference (it needs a reader we do not have).
 
+## Gap and flush between two panels: flush yes, gap no (2026-11-17)
+
+An experiment with a stop rule ([`docs/FEATURE_PLAN.md`](docs/FEATURE_PLAN.md), I4): along a seam
+between two body panels, can the scan give the **flush** (the step between the two surfaces)
+and the **gap** (edge to edge)? The rule, set beforehand: flush is offered if it reads within
+0.2 mm; gap only if its bias is the same within 0.2 mm across gap sizes.
+
+**The scene** (`panel_seam` in `ohs/sim/scene.py`): two panels of 240 × 80 mm, slightly curved,
+each with a hemmed edge (the surface rolls over a half circle of 1 mm radius), 120 mm above a
+dark floor that is all that shows through the gap; the seam turned 30° against the stereo
+baseline. Gap and flush can change along the seam. Three recordings of 60 frames, each
+processed with tracking and at the true poses (GPU path, Standard quality, defaults):
+
+| Recording | Gap | Flush |
+|---|---|---|
+| taper | 2 → 6 mm | 0 |
+| taper_flush2 | 6 → 2 mm | 2 mm |
+| flush_ramp | 3 mm | 0 → 2 mm |
+
+`ohs.inspect.gapflush.measure_gap_flush` follows the seam from two clicks, takes a section
+across it every 3 mm (`ohs.mesh.section`), fits each panel's surface line over 12 mm ending
+2 mm inside the edge, and reads the flush between the two lines at the seam's middle.
+
+**Flush** (stations along the seam; error = reading − truth):
+
+| Poses | True flush | Stations | Mean error | Spread | 95 % of the errors within | Stated ± | Within 2σ |
+|---|---|---|---|---|---|---|---|
+| Tracked | 0 mm | 88 | +0.005 mm | 0.075 mm | 0.145 mm | 0.119 mm | 100 % |
+| Tracked | 0.5 mm | 20 | −0.016 | 0.111 | 0.200 | 0.122 | 100 % |
+| Tracked | 1 mm | 18 | +0.001 | 0.111 | 0.221 | 0.117 | 94 % |
+| Tracked | 1.5 mm | 20 | −0.080 | 0.081 | 0.223 | 0.121 | 95 % |
+| Tracked | 2 mm | 86 | +0.011 | 0.122 | 0.251 | 0.131 | 98 % |
+| True | 0 mm | 87 | +0.005 | 0.081 | 0.144 | 0.119 | 100 % |
+| True | 2 mm | 82 | +0.015 | 0.109 | 0.203 | 0.128 | 98 % |
+
+- **The mean along a seam is within 0.04 mm of the truth** in all six scans, and the bias is
+  at most 0.08 mm at any flush. The error does not depend on the gap's size.
+- **A single station is noisier:** within 0.2 mm 95 % of the time at flush 0, and 0.20–0.26 mm
+  at 0.5–2 mm, so about one station in ten to twenty is more than 0.2 mm off. The lowest and
+  the highest along a seam are stretched by that noise (a true 2.00 everywhere reads 1.77 /
+  2.02 / 2.33): the mean is the number to trust.
+- **The stated ± is honest:** 94–100 % of the stations lie within 2σ.
+
+**Gap: not measurable.** In every scan, tracked and at the true poses, the gap is closed:
+where it is, the mesh shows a shallow valley about 1 mm deep and about 8 mm wide (at 5.2 mm of
+gap the surface dips 1.0 mm, at 3.1 mm it dips 0.85 mm). Neither panel's edge is in the mesh.
+All sections are bridged, and no gap reading is trusted.
+
+| Edge rule | Bias at a true gap of 2 / 3 / 4 / 5 / 6 mm (tracked) | Change across gaps |
+|---|---|---|
+| The outermost point of each panel | no reading (bridged) | |
+| Where the profile has dropped 0.25 mm below its line | +4.17 / +2.87 / +3.52 / +3.76 / +3.86 mm | 1.29 mm |
+| Dropped 0.5 mm | +1.99 / +1.17 / +1.35 / +1.49 / +1.23 mm | 0.83 mm |
+| Dropped 1 mm | – / −2.11 / −2.75 / −2.93 / −3.36 mm | 1.25 mm |
+
+- The bias changes by 0.8–1.3 mm across the gap sizes, against the rule's 0.2 mm. These
+  readings measure the fill's valley, not edges. The numbers at the true poses are the same,
+  so it is not tracking.
+- It is the known fault of "Holes filled in": over a far, dark background the stereo depth
+  carries the surface into a narrow opening, and holes of Ø 6–10 mm stay closed. A gap of
+  2–6 mm is narrower still. No rule applied to the mesh afterwards can recover the edges.
+- **The laser lines do not save it:** the laser cloud does not fill the gap, but it ends
+  1.5–2.6 mm short of the true edges with 1.2–2.1 mm of scatter; a gap from it was 4.3 mm too
+  wide. Likely because laser points that disagree with the frame's dense depth are dropped, and
+  at the seam that depth is the fill; not checked.
+
+**By the stop rule:** flush is offered, with each station's ± and the mean along the seam; gap
+is worked out for the record and **not offered** (`GAP_OFFERED = False`, with the reason in
+`GAP_NOTE`).
+
+- **Limits of the experiment:** one seed per recording, one hem radius (1 mm), one turn of the
+  seam (30°), the GPU path only, the simulator only. A real gap has an inner panel a few tens
+  of millimetres behind it, not a dark floor at 120 mm, which may read differently either way.
+- Repeat it with `python tools/gapflush_study.py run <folder>` (about 5.5 minutes) and
+  `summary <folder>`.
+
 ## What the metrics mean
 
 - **Stereo errors** compare the estimated raw intrinsics/extrinsics (`K1`, `K2`, `R`, `T`) with

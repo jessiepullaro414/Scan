@@ -330,6 +330,27 @@ but nothing can be uploaded.
 - **Stop rule:** flush is shipped if it reads within 0.2 mm. Gap is shipped only if its bias is
   steady enough to state (the same within 0.2 mm across the scene's gaps); otherwise the tool
   shows flush alone and says why.
+- **Measured 2026-11-17: flush is offered, gap is not** (`VALIDATION.md`, "Gap and flush
+  between two panels").
+  - *Flush:* the mean along a seam is within 0.04 mm of the truth in all six scans (flush 0 to
+    2 mm, tracked and at true poses); a single station is within 0.15–0.25 mm 95 % of the
+    time; the stated ± covers 94–100 % at 2σ.
+  - *Gap:* the scan closes every gap of 2–6 mm (a valley about 1 mm deep where the gap is;
+    neither edge is in the mesh), at true poses as with tracking. The readings are 1–4 mm off
+    and their bias changes by 0.8–1.3 mm across gap sizes, against the rule's 0.2 mm. It is
+    the known filling of narrow openings over a far, dark background; nothing done to the mesh
+    afterwards recovers it, and the laser points end 1.5–2.6 mm short of the edges.
+  - *Built:* the scene `panel_seam` (`ohs/sim/scene.py`; the existing scenes cast bit-identical
+    rays before and after), `ohs/inspect/gapflush.py` (`measure_gap_flush` from two clicks:
+    a section every 3 mm, each station marked with what it saw, lowest / mean / highest along
+    the seam; the gap is worked out for the record with `GAP_OFFERED = False` and the reason
+    in `GAP_NOTE`), `tools/gapflush_study.py` to repeat the study (5.5 minutes), 9 light tests
+    on synthetic plates on both paths.
+  - **Left:** the tool in the viewer (two clicks, the flush along the seam as a small chart,
+    "gap: not offered" with the reason). **For gap to become measurable** the depth must stop
+    filling narrow gaps: that is pipeline work (the roadmap's "small holes stay closed"), and
+    a real seam, with an inner panel close behind it, may read differently: to be tried on
+    the real scanner **(hw)**.
 
 ---
 
