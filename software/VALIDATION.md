@@ -1659,7 +1659,7 @@ Same simulated board camera and poses as the last row of the table above (aim `4
 - **In the app** (the simulator through the server, `tests/test_server_calibration.py`): each view has its four one-laser frames, deleting a view deletes them, the result lists each view once, and the four planes are within 0.2° and 0.5 mm of the truth by name. The session says `one_at_a_time` and its guidance asks the user to hold the board still.
 - **When it is used:** four lasers configured, `[lasers] own_channels` true (the default) and either the simulator or a Pico with firmware 1.2.0 or later. With older firmware the lasers are calibrated together, as before, and the app says why. A build whose pairs share a pin sets `own_channels = false`.
 - **Brightness per laser** (`[lasers] brightness`, percent of the family's level): sent to the Pico with the levels; with all at 100 the firmware gets the old three-level `EMIT`, so a 2-laser build and older firmware see no change (`tests/test_devices_pico.py`).
-- **Not done:** the command line's `ohs calibrate lasers` still records all lines at once; the self-test still switches each pair together; nothing of this has run on the real scanner.
+- **Not done:** the command line's `ohs calibrate lasers` still records all lines at once; nothing of this has run on the real scanner. The self-test checks each laser on its own since 2026-11-16 (802b442).
 
 ### Limits
 
@@ -2122,6 +2122,29 @@ The Smooth step can keep each vertex within twice its own sigma ("within 2σ", o
 - So "within 2σ" protects nothing that needs protecting and costs a little where smoothing helps. What would protect edges is a limit that is small where the surface turns sharply (the edge detection of `keep_edges`), not one that follows the sigma.
 
 Changing or removing the option changes what a mesh edit gives, so it is the owner's decision; the code is unchanged. Scripts and rows: scratchpad `m5v3\check\` of the session of 2026-11-16 (`run_smooth.py`, `agg.py`, `B_*.json`).
+
+**Smoothing that finds flat surface by itself (prototypes, the same night).** The owner asked for smoothing that detects flat surface and leaves the rest. Two prototypes keep a share `w` (0 to 1) of each vertex's smoothing move; both use the denoised normals that `keep_edges` already computes (bilateral filter, 8 rounds):
+
+- **Flat:** `w` from how much the surface turns within 2 mm of the vertex (RMS angle between its normal and its neighbours'): 1 below 4°, 0 above 12°. It holds 11–25 % of the vertices.
+- **Edge:** `w` = 0 within 1.5 mm of an edge sharper than 25°, rising to 1 at 3 mm; curved surface away from edges is smoothed in full. It holds 3–9 %.
+
+Same 20 meshes; means over the seeds (true poses and tracking alike unless said):
+
+| Setting, scene | Edge vertices made worse by > 0.05 mm: free / 2σ / flat / edge | Median error after: free / 2σ / flat / edge (before) | Shaft, mean error after: free / flat / edge (before) |
+|---|---|---|---|
+| Taubin 50 %, bracket, true poses | 30 / 30 / 0.9 / 2.6 % | 0.0184 / 0.0208 / 0.0179 / 0.0181 mm (0.0245) | 0.171 / 0.177 / 0.174 mm (0.183) |
+| Taubin 50 %, bracket, tracking | 26 / 26 / 0.4 / 1.5 % | 0.0475 / 0.0479 / 0.0475 / 0.0475 mm (0.0504) | 0.173 / 0.179 / 0.176 mm (0.184) |
+| Taubin 50 %, car panel, true poses | 20 / 20 / 3.6 / 8.1 % | 0.0253 / 0.0267 / 0.0243 / 0.0248 mm (0.0322) | – |
+| Taubin 50 %, car panel, tracking | 18 / 18 / 2.9 / 7.3 % | 0.0598 / 0.0601 / 0.0600 / 0.0598 mm (0.0655) | – |
+| Bilateral 25 % (bracket recipe), bracket, true poses | 23 / 23 / 0.1 / 1.4 % | 0.0252 / 0.0252 / 0.0244 / 0.0249 mm (0.0245) | 0.177 / 0.180 / 0.179 mm (0.183) |
+| Bilateral 50 % (body-panel recipe), bracket, true poses | 46 / 46 / 0.1 / 2.9 % | 0.0242 / 0.0242 / 0.0234 / 0.0238 mm (0.0242) | 0.186 / 0.191 / 0.190 mm (0.195) |
+
+- **Both nearly end the harm at edges.** The edge vertices' mean error stays where it was (bracket 0.252 → 0.253 mm with flat, 0.279 mm free), and the share made worse falls from 17–46 % (bracket) and 3–20 % (car panel) to 0.1–3.6 % (flat) and 0.7–8.1 % (edge).
+- **The noise on flat surface goes as with free smoothing:** the median error is the same or a little better (Taubin, bracket, true poses: 0.0179 mm against 0.0184 free and 0.0208 within 2σ). The car panel's gently curved surface is smoothed as much as without a limit (its mean error 0.0245 → 0.0208 mm with all three).
+- **The price:** small round features such as the Ø 16 shaft keep a little of their noise (0.177 against 0.171 mm, flat; 0.174 mm, edge), and the RMS error over everything is about 1 % higher (0.1028 against 0.1014 mm), from the outliers at edges and rims that free smoothing pulls in and these leave.
+- **Of the two, "flat" protects edges best** (at most 3.6 % made worse, against 8.1 %); "edge" keeps more of the smoothing on round features.
+
+Not adopted yet: it changes what the Smooth step gives, so the owner decides. Scripts and rows: scratchpad `m5v3\check\` (`run_flat.py`, `agg2.py`).
 
 ## What the metrics mean
 
