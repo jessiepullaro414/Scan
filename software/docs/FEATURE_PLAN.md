@@ -258,6 +258,27 @@ but nothing can be uploaded.
 - **Test first:** a simulated scan against its scene's own mesh reads the known scan error (the
   numbers of `VALIDATION.md`); the same scan against a reference with one face moved 1 mm shows
   that face 1 mm off and the rest unchanged.
+- **Engine done 2026-11-17.** `ohs/inspect/reference.py`: `read_reference` (STL, OBJ, PLY;
+  refusals in words; the winding made consistent, an inside-out model turned round; a
+  reference about an inch, cm, m or µm factor off is a finding to confirm, never guessed), three
+  alignments (`align_by_shape`, `align_by_points` with or without a refinement,
+  `align_by_datums` from the part's frame with no fit), the deviation per vertex with the
+  scan's sigma beside it, and the answer for a tolerance (shares by area, worst values, robust
+  statistics, the areas outside as regions, each saying whether it exceeds the scan's own
+  uncertainty). A best fit given the datums also says how far it is from the datum pose.
+  - *Not on the reference:* scan surface more than 3 mm from the reference, outside its box
+    or facing the other way (the table, clamps) counts in no share; reference area the scan
+    did not cover is reported.
+  - At real size (the bracket on its table, 715,226 triangles): 0.5 s to read, 4.7 s to align
+    from the shapes, 0.3 s for the deviation; the pose is found with the table in the scan;
+    87 % within ± 0.3 mm. Numbers in `VALIDATION.md`, "A scan compared with a reference model".
+  - Tests: 12 on both paths (one marked slow, 11 s, on a cached recording).
+  - *Found on the way:* the alignment engine accepted a pose turned 180° when stray points
+    were left on the table; worked round here, and written up as `MAINTENANCE_PLAN.md`, F11,
+    because the Align page uses the same engine.
+  - **Left:** the upload route and the viewer (pick the file, confirm the units, choose the
+    alignment, the deviation shading with a tolerance, the areas outside); the simulator has
+    no true mesh for its scenes built from primitives (the test builds the bracket's itself).
 
 ### I3. The report (M) **(D1)**
 - **What:** one page per scan: project and scan, date, calibration and its health (H3), how the

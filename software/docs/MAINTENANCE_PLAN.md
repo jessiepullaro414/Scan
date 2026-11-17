@@ -1627,6 +1627,30 @@ Every task here: the type check, `npm test`, and for bundle tasks the chunk size
 - **To do if it is seen again:** note how long the run took and what else ran. The test is not
   loosened for now.
 
+### [ ] F11. The alignment from shape can accept a pose turned 180° when stray points are left
+- **Found 2026-11-17** while building the comparison with a reference model
+  (`FEATURE_PLAN.md`, I2). `align_pair` (`ohs/align/pairwise.py`) aligned the simulated bracket
+  scan (the bracket on its table, 715,226 triangles) to the bracket's true shape. After the
+  table was set aside, 33 stray points were left on it (1.4 % of the part's points, up to
+  290 mm from the part). With them, 8 of 9 first guesses (24 of 25 with more guesses) ended at
+  a pose turned 180°, and that pose was **accepted**, although the true pose scores better
+  (0.148 against 0.130): no guess reached the true pose, and "two guesses agree" cannot catch a
+  wrong pose that several guesses share.
+- **Worked round in `ohs/inspect/reference.py`, not in the engine:** only the main connected
+  piece of the part's points is used, 24 guesses instead of 8, and the result is tried again
+  turned 180° about each of the part's main axes and the better one kept.
+- **Not known:** whether the same happens when two *scans* are aligned (the Align page). Both
+  scans then carry the same kind of stray points, which may hide it or not.
+- **Two more things seen there:** the support-plane step takes a part's own largest face for a
+  table when the scan has no table (the whole block was removed); and the final fit uses Tukey
+  weights at 0.5 mm, so it is not a least-squares best fit (a block 0.5 mm too long read 0.07
+  and 0.43 mm at its ends instead of 0.25 and 0.25).
+- **To do:** try the bracket's two-sided scans on the Align page's engine with and without
+  stray points left on the table; if a turned pose is accepted there too, move the three
+  guards into `align_pair`, test first, and measure the alignment numbers of `VALIDATION.md`,
+  "Aligning and merging two scans", before and after. It changes alignment results, so it
+  waits for the owner's yes.
+
 ## Reviewed and fine: leave alone
 
 So nobody spends a session on these again.

@@ -2305,6 +2305,63 @@ On real-size scans:
   (a millimetre prints as a millimetre), not mirrored, with a scale bar. Not tried: AutoCAD or
   other programs; the SVG has been checked as XML, not looked at.
 
+## A scan compared with a reference model (2026-11-17)
+
+`ohs.inspect.reference` reads a reference model (STL, OBJ, PLY), aligns the scan to it and
+gives each scan vertex's signed distance from the reference, with the share of the surface
+within a tolerance and the areas outside it ([`docs/FEATURE_PLAN.md`](docs/FEATURE_PLAN.md), I2;
+the engine only so far).
+
+**On shapes with known truth** (`tests/test_inspect_reference.py`): a noisy copy of the
+reference at a random pose aligns from its shape and reads zero within the noise; a boss made
+1 mm taller reads 1.00 mm on its cap and is found as one region; an inside-out reference
+gives the same deviations; a reference in inches or metres is not guessed (the alignment
+refuses until the factor is applied or kept); shares are by area, so a finer mesh in one place
+changes nothing.
+
+**Best fit against datums**, on a block 0.5 mm too long:
+
+| Alignment | One end | The other end |
+|---|---|---|
+| Best fit from the shape | 0.24 mm | 0.26 mm |
+| On the part's datums (no fit) | 0.00 mm | 0.50 mm |
+
+A best fit spreads an overall error over the part; an alignment on datums shows where it is.
+The result says which was used, and a best fit says how far it is from the datum pose.
+
+**At real size:** the simulated bracket scan (the bracket on its table, 715,226 triangles)
+against the bracket's true shape.
+
+| Step | Time |
+|---|---|
+| Reading the reference and checking its units | 0.5 s |
+| Aligning from the shapes | 4.7 s |
+| The deviation and the answer at one tolerance | 0.3 s |
+| The answer at each further tolerance | 0.01–0.02 s |
+
+- **The pose is found from the shape alone with the table in the scan:** 0.10° and 0.92 mm
+  from the pose the scan's own frames give, which themselves differ by up to 1.2 mm (tracking).
+- **Within ± 0.1 / 0.3 / 0.5 mm:** 61 % / 87 % / 95 % of the compared surface (by area); the
+  median is 0.009 mm and the robust spread 0.10 mm. At the frames' pose instead of the fitted
+  one, 69 % within ± 0.3 mm: a best fit takes the tracking's overall error out, as it must.
+- **The table** is 98 % of the scan's area. It is "not on the reference" (more than 3 mm from
+  it, or outside its box, or facing the other way) and counts in no share. 74 % of the
+  reference was not scanned (the far side, the bottom).
+- **No area exceeds the scan's own uncertainty at ± 0.3 mm:** on the part the sigma's median
+  per area is 0.35–1.2 mm, so 2σ is wider than the tolerance on 90 % of the compared surface.
+  The answer says so for each area: a deviation inside the scan's own 2σ is not evidence of a
+  real difference.
+- **On a tracked scan fused at true poses** (the cached 640×400 recording of the tests): the
+  median distance from the reference is 0.20 mm (CPU path 0.17), against 0.23 mm (0.20) by an
+  independent ray cast to the scene; from the shape it lands 0.7 mm from the true pose.
+
+**Found on the way, in the alignment engine** (worked round here, not changed there; now
+`docs/MAINTENANCE_PLAN.md`, F11): with 33 stray points left on the table, the alignment from
+shape accepted a pose turned 180°.
+
+- **Not tried:** real scans and CAD exports from other programs; OBJ files; references that
+  cannot be wound one way; a STEP file as the reference (it needs a reader we do not have).
+
 ## What the metrics mean
 
 - **Stereo errors** compare the estimated raw intrinsics/extrinsics (`K1`, `K2`, `R`, `T`) with
