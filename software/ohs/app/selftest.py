@@ -64,6 +64,25 @@ def gravity_ok(g: float) -> bool:
     stream test as the mean of the norms (a replayed scan moves)."""
     return G_REST[0] <= g <= G_REST[1]
 EMITTERS = (("vertical line laser", 0), ("horizontal line laser", 1), ("dot projector", 2))
+# a build with a channel per laser (``[lasers] own_channels``, firmware 1.2.0): each laser on its own
+LASER_CHECK_NAMES = {"v": "vertical line laser (right)", "v2": "vertical line laser (left)",
+                     "h": "horizontal line laser (top)", "h2": "horizontal line laser (low)"}
+
+
+def emitter_checks(cfg: Any, pico: Any) -> list[tuple[str, int, tuple[str, ...] | None]]:
+    """``(check name, level index, only)`` per emitter to switch on alone: one per laser when every
+    laser has its own channel and the firmware can light it alone, else one per family (both lasers
+    of a pair together), then the dot projector."""
+    lasers = getattr(cfg, "lasers", None)
+    if lasers is None or not lasers.separate() or not getattr(pico, "per_laser", False):
+        return [(name, i, None) for name, i in EMITTERS]
+    out: list[tuple[str, int, tuple[str, ...] | None]] = []
+    for line in lasers.lines:
+        ch = lasers.channel_of(line)
+        if ch is not None:
+            out.append((LASER_CHECK_NAMES[ch], 0 if ch.startswith("v") else 1, (ch,)))
+    out.append(("dot projector", 2, None))
+    return out
 CHANGED_DN = 25  # an emitter "shows" in the camera if this many DN brighter ...
 CHANGED_FRACTION = 2e-4  # ... in at least this fraction of pixels (a thin line is ~0.3 %)
 
@@ -275,13 +294,16 @@ class _SelfTest:
         self.echo("Switching each emitter on for "
                   f"{self.emitter_seconds:g} s. Point the scanner at a wall 20-40 cm away. "
                   "The lasers are Class 3R: never look into them.")
-        for name, i in EMITTERS:
+        for name, i, only in emitter_checks(self.cfg, self.pico):
             level = scan[i] if scan[i] > 0 else 100.0
             levels = [0.0, 0.0, 0.0]
             levels[i] = level
             off_img = self._grab_latest(0.15)
             try:
-                self.pico.set_emitters(*levels)
+                if only is None:
+                    self.pico.set_emitters(*levels)
+                else:
+                    self.pico.set_emitters(*levels, only=only)
             except Exception as e:
                 self.add(name, "FAIL", f"could not switch it on: {e}")
                 continue

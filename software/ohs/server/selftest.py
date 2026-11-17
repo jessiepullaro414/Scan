@@ -47,6 +47,8 @@ _LABELS = {
     "camera": "Camera", "camera fps": "Camera frame rate", "camera image": "Camera image", "pico": "Pico",
     "imu": "IMU", "imu rate": "IMU rate", "imu values": "IMU values", "clock sync": "Clock sync",
     "vertical line laser": "Vertical laser", "horizontal line laser": "Horizontal laser",
+    "vertical line laser (right)": "Vertical laser, right", "vertical line laser (left)": "Vertical laser, left",
+    "horizontal line laser (top)": "Horizontal laser, top", "horizontal line laser (low)": "Horizontal laser, low",
     "dot projector": "Dot projector", "emitters": "Emitters", "trigger": "Trigger",
 }
 _RESULT_LINE = re.compile(r"^\s{2}(PASS|WARN|FAIL|SKIP|INFO)\s+([^:]+):\s?(.*)$")
@@ -100,7 +102,7 @@ def fix_for(name: str, status: str, detail: str = "") -> str | None:
         return "Keep the scanner still on the table while it measures, then run the self-test again."
     if name == "clock sync":
         return "Plug the Pico straight into the PC (no hub) and close programs that keep the USB bus busy."
-    if name in ("vertical line laser", "horizontal line laser", "dot projector"):
+    if name == "dot projector" or name.startswith(("vertical line laser", "horizontal line laser")):
         if status == "FAIL":
             return "Check the Pico's USB cable and the emitter wiring (firmware/README.md), then run the self-test again."
         return ("If you did not see it light up: check the laser key switch and the wiring, and aim at a light wall "

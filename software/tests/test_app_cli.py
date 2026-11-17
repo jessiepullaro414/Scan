@@ -504,6 +504,30 @@ def test_selftest_with_fake_camera_and_pico(tmp_path, monkeypatch, capsys):
     assert sim.emits()[-1] == "EMIT 0 0 0"
 
 
+def test_selftest_checks_each_of_four_lasers_on_its_own(tmp_path, monkeypatch, capsys):
+    """Four lasers, each on its own channel (firmware 1.2.0): each laser is switched on alone and
+    checked under its own name, then the dot projector; a pair sharing a channel is checked together."""
+    sim = SimPico(channels=5)
+    cam = FakeCamera(size=(160, 100), fps=60, brightness=lambda: sum(d or 0 for d in sim.duties()) * 40 // 65535)
+    monkeypatch.setattr(selftest, "StereoCamera", lambda params, **kw: cam)
+    monkeypatch.setattr(selftest, "Pico", lambda params: sim.pico(params))
+    cfg = tmp_path / "c.toml"
+    cfg.write_text('[camera]\nwidth = 320\nheight = 100\nfps = 60\n'
+                   '[lasers]\nlines = ["vertical", "horizontal", "vertical_2", "horizontal_2"]\n', encoding="utf-8")
+    try:
+        cli.main(["--config", str(cfg), "selftest", "--seconds", "0.3", "--emitter-seconds", "0.3"])
+    finally:
+        sim.close()
+    out = capsys.readouterr().out
+    summary = out[out.index("Self-test summary"):]
+    for line in ("PASS  vertical line laser (right)", "PASS  vertical line laser (left)",
+                 "PASS  horizontal line laser (top)", "PASS  horizontal line laser (low)", "PASS  dot projector"):
+        assert line in summary, (line, summary)
+    assert [e for e in sim.emits() if e not in ("EMIT 0 0 0", "EMIT 0 0 0 0 0")] == [
+        "EMIT 100 0 0 0 0", "EMIT 0 100 0 0 0", "EMIT 0 0 0 100 0", "EMIT 0 0 0 0 100", "EMIT 0 0 100"]
+    assert sim.duties() == [0] * 5
+
+
 def test_selftest_image_and_gravity_checks_keep_their_messages():
     # shared by the hardware test (with its hints) and the app's stream test (without)
     from ohs.app.selftest import _IMAGE_HINTS, gravity_ok, image_check

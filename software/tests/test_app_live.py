@@ -139,10 +139,10 @@ class HostPort:
 class SimPico:
     """``firmware/main.py`` Firmware + fake hardware behind a :class:`HostPort`."""
 
-    def __init__(self, with_imu: bool = True) -> None:
+    def __init__(self, with_imu: bool = True, channels: int = 3) -> None:
         t0 = time.perf_counter()
         self.clock = lambda: int((time.perf_counter() - t0) * 1e6) + 5_000_000
-        self.pwms = [FakePWM() for _ in range(3)]
+        self.pwms = [FakePWM() for _ in range(channels)]  # 5: the 4-laser build's own V2 / H2 channels
         self.button = FakePin()
         self.imu = FakeImu(self.clock) if with_imu else None
         self.lock = threading.Lock()
