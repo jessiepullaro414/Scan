@@ -53,6 +53,7 @@ ELP doesn't publish the lens spacing or mounting holes, so the **faceplate** is 
 - Lenses 60 mm centre to centre (`st_base`), 14 mm across, 16 mm above the PCB
 - Four M2 holes, one per corner, their edges 0.8 mm in from the board edges (`st_holes`)
 - Posts 10 mm tall (`st_standoff_h`), so the lenses stand about 2 mm proud of the faceplate and can be turned to focus
+- Each lens holder's square base reaches to about 1.1 mm from the centres of the two holes at its end of the board (`st_base_gap`, estimated from a photo) and is about 2.5 mm tall (`st_base_h`). The posts are notched there and stretched away from the lens
 
 If your board differs, edit those values and re-export `faceplate.stl`. The head, grip and back cover accept a board up to about 104 × 38 mm.
 

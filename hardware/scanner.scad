@@ -89,6 +89,14 @@ st_lens_d     = 14;        // lens + holder, round
 st_lens_len   = 16;        // lens front above the PCB front
 st_standoff_h = 10;        // faceplate back -> PCB front; lenses stand 16 - 10 - fp_t = 2 mm proud, to grip for focus
 st_lens_hole  = 16;        // M12 lenses pass through (focus from the front)
+// Each lens holder has a square base on the PCB that reaches almost to the two mounting holes at
+// its end of the board (found on the first print, 2026-11-16: the round posts hit it). So each
+// post is notched at its top on the side of the lens, and made longer away from the lens to keep
+// its strength.
+st_base_gap   = 1.1;       // hole centre -> edge of the holder's base (estimated from a photo: measure yours)
+st_base_h     = 2.5;       // height of that base above the PCB
+st_base_clear = 0.3;       // gap left between the post and the base
+st_post_ext   = 2.5;       // how far each post is stretched away from the lens
 
 /* [Head] */
 head_d      = 36;
@@ -419,14 +427,17 @@ module faceplate() {
     difference() {
         union() {
             plate(bw, bh, fp_t);
-            for (h = st_holes) translate([h[0], h[1], fp_t - eps])
-                cylinder(d=st_standoff_d, h=st_standoff_h + eps);
+            for (h = st_holes) translate([0, 0, fp_t - eps]) linear_extrude(st_standoff_h + eps) hull() // posts, stretched outward
+                for (e = [0, st_post_ext]) translate([h[0] + sign(h[0])*e, h[1]]) circle(d=st_standoff_d);
             for (p = pin_pos) translate([p[0], p[1], fp_t - eps]) pin(pin_d, pin_h);   // into the head's front
         }
         for (sx=[-1,1]) translate([sx*st_base/2, 0, -eps])               // lens openings, 45 deg flare
             cylinder(d1=st_lens_hole + 2*fp_t, d2=st_lens_hole, h=fp_t + 2*eps);
         for (h = st_holes) translate([h[0], h[1], fp_t + 1])
             cylinder(d=st_pilot_d, h=st_standoff_h);
+        for (h = st_holes)                                               // notch for the lens holder's base
+            translate([h[0] - sign(h[0])*(st_base_gap - st_base_clear + 2), h[1], fp_t + st_standoff_h - (st_base_h + 0.5)/2 + eps])
+                cube([4, st_standoff_d + 2, st_base_h + 0.5], center=true);
         for (p = frame_screws) translate([p[0], p[1], -eps]) screw_seat(fp_t);
     }
 }

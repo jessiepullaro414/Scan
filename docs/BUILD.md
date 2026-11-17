@@ -280,7 +280,11 @@ through it.
 
 1. Screw the stereo board to the four posts on the faceplate's back with 4× M2 × 6, lenses
    through the two holes. The lenses stand about 2 mm proud of the front, so you can turn them to
-   focus later.
+   focus later. The board must sit flat on all four posts. Each post is notched at its top, on
+   the side of the lens, to clear the square base of the lens holder. A faceplate printed before
+   2026-11-16 has round posts that hit those bases: print `faceplate.stl` again, or cut the
+   notch by hand (the top 3 mm of each post, on the lens side, back to the edge of the screw
+   hole).
 2. Plug the camera's cable into the board.
 3. Seat the faceplate on its two pins and fix it with 6× M3 × 8 flat-head. They should sit flush.
 
