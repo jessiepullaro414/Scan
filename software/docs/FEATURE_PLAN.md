@@ -229,6 +229,20 @@ but nothing can be uploaded.
 - **Test first:** a box cut square gives a rectangle of the true size, closed; a cylinder cut at
   an angle gives an ellipse with the right axes; the DXF read back gives the same points; a cut
   through a filled (not measured) area marks that stretch as not measured.
+- **Engine done 2026-11-17.** `ohs/mesh/section.py`: the cutting plane from a point and a
+  normal, a fitted plane moved along its normal, a plane of the part's frame ("Z = 12") or
+  three points; `section` gives ordered lines (closed where the surface is closed) in the
+  plane's 2D axes and in 3D, each point with its sigma, each stretch measured or filled, with
+  lengths, signed areas and the bounding box. The drawing is seen from the side the normal
+  points to, "up" is Z (Y for a nearly level cut), in the part's axes when there is a frame,
+  and never mirrored. `ohs/cad/dxf.py` (R12, mm, two layers) and `ohs/cad/svg.py` (1:1, a
+  scale bar) write it.
+  - A cut of a real-size scan takes about 30 ms; the numbers are in `VALIDATION.md`,
+    "Sections". FreeCAD 1.1.4 reads the DXF back to 1e-6 mm.
+  - Tests: 42 on both paths, with a DXF reader of our own (`tests/dxf_reader.py`).
+  - **Left:** the route, the viewer's panel (hide one side of the cut, the 2D profile, two
+    clicks for a distance, the downloads). `section` is not exported from `ohs/mesh/__init__.py`
+    because a function of that name would hide the module: import `ohs.mesh.section`.
 
 ### I2. Comparison with a reference model (L)
 - **What:** load an STL, OBJ or PLY as the reference, align the scan to it, and show the

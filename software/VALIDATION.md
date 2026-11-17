@@ -2275,6 +2275,36 @@ before against a 0.17 s fit, 0.02 s now) guards it.
 - **Not yet tried:** extents on meshes of tracked scans beyond the table above; the extent is
   not sent to the viewer yet.
 
+## Sections: the mesh cut by a plane (2026-11-17)
+
+`ohs.mesh.section.section` cuts a mesh with a plane into ordered lines in the plane's own 2D
+axes, each point with the mesh's sigma and each stretch marked measured or filled
+([`docs/FEATURE_PLAN.md`](docs/FEATURE_PLAN.md), I1; the engine and the DXF and SVG writers so
+far). On shapes with known truth (`tests/test_mesh_section.py`): a box gives its rectangle and
+area, a cylinder cut at an angle its ellipse, a sphere its circles, a torus two loops; the same
+cut of a mesh in another pose gives the same profile; planes through vertices, along edges and
+in a face are handled exactly (crossing points are computed once per edge, so lines join
+without a distance test).
+
+On real-size scans:
+
+| Cut | Time | Lines (closed) | Points | Length |
+|---|---|---|---|---|
+| The ball-on-a-table scan (804,372 triangles), through the ball 60 mm up | 30 ms | 6 (0) | 288 | 105.3 mm |
+| The same, upright through the ball and across the table | 32 ms | 6 (0) | 1,092 | 485.2 mm |
+| The same, along the noisy table 0.3 mm above it (a stress case) | 124 ms | 908 (672) | 28,921 | 10,903 mm |
+| The simulated bracket scan (715,226 triangles), upright through the bracket | 30 ms | 5 (0) | 1,171 | 532.3 mm |
+
+- Every total length equals the plain sum over the crossed faces to 0.001 mm; no point is
+  repeated and no segment has zero length.
+- **A scan seen from one side gives open lines:** the ball is a cap and the bracket's side
+  walls are missing, so their sections are arcs and steps with gaps, not closed loops. That is
+  the scan's shape, not a fault of the cut.
+- **The files:** DXF (R12, ASCII, mm, the measured and the not-measured stretches on two
+  layers) read back by our own reader and by FreeCAD 1.1.4's importer to 1e-6 mm; SVG at 1:1
+  (a millimetre prints as a millimetre), not mirrored, with a scale bar. Not tried: AutoCAD or
+  other programs; the SVG has been checked as XML, not looked at.
+
 ## What the metrics mean
 
 - **Stereo errors** compare the estimated raw intrinsics/extrinsics (`K1`, `K2`, `R`, `T`) with
