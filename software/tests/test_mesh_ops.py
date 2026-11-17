@@ -203,6 +203,35 @@ def test_taubin_smooths_and_keep_edges_rounds_less(noisy_box):
         smooth(Vn, F, "taubin", 1.5)
 
 
+def test_flat_only_smooths_the_faces_and_leaves_the_edges():
+    """flat_only on a box meshed like a scan (1 mm, the Standard quality's voxel; 0.05 mm noise): the
+    faces lose their noise as with plain smoothing, but within 0.3 mm of an edge the vertices stay
+    as they were (keep_edges alone still rounds there); the default is unchanged."""
+    from ohs.mesh.smoothing import flat_weights
+
+    V, F = box(20.0, 20)
+    Vn = V + vertex_normals(V, F) * np.random.default_rng(1).normal(0, 0.05, len(V))[:, None]
+    flat0, edge0, corner0 = _box_errors(V, Vn)
+    w = flat_weights(Vn, F)
+    second = np.sort(np.abs(V), axis=1)[:, 1]
+    assert w.shape == (len(V),) and 0.0 <= w.min() and w.max() <= 1.0
+    assert np.mean(w[second < 7.0] == 1.0) > 0.95 and np.all(w[second > 9.7] < 0.1)  # faces free, edges held
+    for method in ("taubin", "bilateral"):
+        X, _ = smooth(Vn, F, method, 0.5, keep_edges=True)
+        Xf, Ff = smooth(Vn, F, method, 0.5, keep_edges=True, flat_only=True)
+        assert np.array_equal(Ff, F)
+        flat, edge, _ = _box_errors(V, X)
+        flat_f, edge_f, corner_f = _box_errors(V, Xf)
+        assert flat_f < flat0 / 2 and flat_f < 1.2 * flat, method  # the faces as smooth as without it
+        assert edge_f <= edge0 * 1.05 and corner_f <= corner0 + 1e-9, method  # the edges no worse than scanned
+        assert np.allclose(Xf[second > 9.7], Vn[second > 9.7]), method
+    plain, _ = smooth(Vn, F, "taubin", 0.5)
+    assert np.array_equal(plain, smooth(Vn, F, "taubin", 0.5, flat_only=False)[0])
+    # a flat sheet is smoothed everywhere
+    Vg, Fg = grid(41, 41, 0.5)
+    assert np.all(flat_weights(Vg + np.random.default_rng(2).normal(0, 0.01, Vg.shape) * [0, 0, 1], Fg) == 1.0)
+
+
 def test_bilateral_keeps_a_bracket_step():
     V, F = step()
     rng = np.random.default_rng(3)

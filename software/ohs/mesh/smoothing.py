@@ -21,6 +21,19 @@ over its faces of ``n_f (n_f . (c_f - x))``, repeated; with the normals fixed th
 ``(B (n t) - S x) / count`` per vertex, ``t_f = n_f . c_f`` and ``S = sum n n^T`` over the vertex's
 faces, so one iteration is two sparse products. ``strength`` sets the iterations (normals
 ``2 + 18 s``, vertices ``5 + 15 s``) and ``sigma_r`` (``0.25 + 0.2 s`` with ``keep_edges``).
+
+**Flat surface only** (``flat_only``, off by default). Smoothing removes noise on flat and gently
+curved surface but rounds edges, even with ``keep_edges`` (on the simulated bracket 17-46 % of the
+vertices at edges end more than 0.05 mm further from the truth). With ``flat_only`` each vertex
+keeps a share of its move (:func:`flat_weights`): all of it where the denoised surface turns less
+than :data:`FLAT_FULL_DEG` within :data:`FLAT_RADIUS_MM` of it (the RMS angle between its normal
+and its neighbours'), none above :data:`FLAT_NONE_DEG`, in between linearly. The normals are the
+bilateral ones of :func:`sharp_edges` (noise gone, edges kept). Measured on the simulated bracket
+and car panel (``VALIDATION.md``, "Smoothing's 'within 2σ' limit on today's engine"): 0.1-3.6 % of
+the edge vertices made worse, the noise on flat surface removed as without it; small round
+features keep a little of their noise. The thresholds suit meshes at about 1 mm (Standard
+quality's voxel): on a much finer mesh whose noise is large for its spacing (0.05 mm at 0.3 mm)
+part of the flat surface is held back too.
 """
 from __future__ import annotations
 
@@ -32,12 +45,15 @@ import numpy as np
 
 from ohs.mesh.topology import EdgeTable, as_mesh, edge_lengths, edge_table, face_normals, rows, sorted_unique
 
-__all__ = ["smooth", "bilateral_normals", "sharp_edges", "sharp_vertices", "METHODS", "SHARP_EDGE_DEG"]
+__all__ = ["smooth", "bilateral_normals", "sharp_edges", "sharp_vertices", "flat_weights", "METHODS", "SHARP_EDGE_DEG"]
 
 log = logging.getLogger(__name__)
 
 METHODS = ("taubin", "bilateral")
 SHARP_EDGE_DEG = 45.0
+FLAT_RADIUS_MM = 2.0  # flat_only: how far around a vertex the surface is looked at ...
+FLAT_FULL_DEG = 4.0  # ... turning less than this (RMS normal angle) it is smoothed fully ...
+FLAT_NONE_DEG = 12.0  # ... more than this, not at all
 TAUBIN_LAMBDA, TAUBIN_MU = 0.5, -0.53
 Progress = Callable[[float, str], None]
 
@@ -134,6 +150,39 @@ def sharp_vertices(V: np.ndarray, F: np.ndarray, angle_deg: float = SHARP_EDGE_D
     return out
 
 
+def flat_weights(V: np.ndarray, F: np.ndarray, *, et: EdgeTable | None = None, radius_mm: float = FLAT_RADIUS_MM,
+                 full_deg: float = FLAT_FULL_DEG, none_deg: float = FLAT_NONE_DEG) -> np.ndarray:
+    """Per vertex (N,), 0..1: how flat the denoised surface is around it (module docstring, "Flat
+    surface only"). Vertices of no face get 1 (nothing to protect)."""
+    from scipy.spatial import cKDTree
+
+    N = len(V)
+    out = np.ones(N)
+    if len(F) == 0 or N == 0:
+        return out
+    if et is None:
+        et = edge_table(F, N)
+    n = bilateral_normals(V, F, 8, 0.3, et=et)
+    vn = np.zeros((N, 3))
+    for k in range(3):
+        np.add.at(vn, F[:, k], n)
+    nrm = np.sqrt(np.einsum("ij,ij->i", vn, vn))
+    used = nrm > 0
+    vn = np.divide(vn, nrm[:, None], out=np.zeros_like(vn), where=used[:, None])
+    idx = np.flatnonzero(used)
+    pairs = cKDTree(V[idx]).query_pairs(float(radius_mm), output_type="ndarray")
+    a2 = np.zeros(N)
+    cnt = np.zeros(N)
+    if len(pairs):
+        i, j = idx[pairs[:, 0]], idx[pairs[:, 1]]
+        ang2 = np.degrees(np.arccos(np.clip(np.einsum("ij,ij->i", vn[i], vn[j]), -1.0, 1.0))) ** 2
+        a2 += np.bincount(i, weights=ang2, minlength=N) + np.bincount(j, weights=ang2, minlength=N)
+        cnt += np.bincount(i, minlength=N) + np.bincount(j, minlength=N)
+    spread = np.sqrt(np.divide(a2, cnt, out=np.zeros(N), where=cnt > 0))
+    out[used] = np.clip((none_deg - spread[used]) / (none_deg - full_deg), 0.0, 1.0)
+    return out
+
+
 # --------------------------------------------------------------------------- taubin
 def _taubin(V: np.ndarray, iterations: int, sharp: np.ndarray | None, et: EdgeTable,
             progress: Progress | None) -> np.ndarray:
@@ -201,12 +250,14 @@ def _vertex_update(V: np.ndarray, F: np.ndarray, n: np.ndarray, iterations: int,
 
 # --------------------------------------------------------------------------- entry
 def smooth(V: np.ndarray, F: np.ndarray, method: str = "taubin", strength: float = 0.5, keep_edges: bool = True, *,
-           limit: np.ndarray | None = None, progress: Progress | None = None) -> tuple[np.ndarray, np.ndarray]:
+           limit: np.ndarray | None = None, flat_only: bool = False,
+           progress: Progress | None = None) -> tuple[np.ndarray, np.ndarray]:
     """Smooth the mesh (see the module docstring). Faces are unchanged; returns ``(V, F)``.
 
     ``limit`` (N,) is the most each vertex may move, mm: e.g. twice its sigma, so that smoothing
     removes noise where the scan is uncertain and leaves the confident surface where it was
-    (a longer move is shortened along its direction)."""
+    (a longer move is shortened along its direction). ``flat_only``: smooth flat surface only
+    (module docstring, "Flat surface only"); with ``limit`` too, both apply."""
     if method not in METHODS:
         raise ValueError(f"unknown smoothing method {method!r}; use {' or '.join(METHODS)}")
     s = float(strength)
@@ -227,6 +278,8 @@ def smooth(V: np.ndarray, F: np.ndarray, method: str = "taubin", strength: float
         kn, kv, sigma_r = _bilateral_params(s, bool(keep_edges))
         n = bilateral_normals(V, F, kn, sigma_r, et=et, progress=progress, p0=0.0, p1=0.5)
         X = _vertex_update(V, F, n, kv, progress, 0.5, 1.0)
+    if flat_only:
+        X = V + (X - V) * flat_weights(V, F, et=et)[:, None]
     if limit is not None:
         d = X - V
         dl = np.sqrt(np.einsum("ij,ij->i", d, d))
