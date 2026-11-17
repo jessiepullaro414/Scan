@@ -500,8 +500,8 @@ export type RemoveFloatersParams = { min_triangles?: number; min_size_mm?: numbe
 /** `max_hole_mm`: the largest hole perimeter to fill; `watertight`: the outer edge too. */
 export type FillHolesParams = { max_hole_mm: number; watertight?: boolean };
 export type SmoothMethod = "taubin" | "bilateral";
-/** `strength` 0..1; `within_sigma`: no vertex moves more than twice its sigma. */
-export type SmoothParams = { method: SmoothMethod; strength: number; keep_edges?: boolean; within_sigma?: boolean };
+/** `strength` 0..1; `within_sigma`: no vertex moves more than twice its sigma; `flat_only`: only flat areas move. */
+export type SmoothParams = { method: SmoothMethod; strength: number; keep_edges?: boolean; within_sigma?: boolean; flat_only?: boolean };
 /** A target (one of the two) and / or a tolerance in mm. */
 export type DecimateParams = { target_triangles?: number; ratio?: number; max_error_mm?: number };
 /** base64 of little-endian uint32 face indices of the CURRENT mesh. */

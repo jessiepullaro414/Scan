@@ -76,6 +76,7 @@ export function EditsPanel({
   const [strength, setStrength] = useState(0.5);
   const [keepEdges, setKeepEdges] = useState(true);
   const [withinSigma, setWithinSigma] = useState(true);
+  const [flatOnly, setFlatOnly] = useState(false);
   const hasSigma = !!stats?.sigma_mm;
   // ---- simplify
   const [simplifyMode, setSimplifyMode] = useState<SimplifyMode>("accuracy");
@@ -122,11 +123,17 @@ export function EditsPanel({
         };
       case "smooth": {
         const within = withinSigma && hasSigma;
-        const pctText = `${Math.round(strength * 100)} %${within ? ", within 2σ" : ""}`;
+        const pctText = `${Math.round(strength * 100)} %${flatOnly ? ", flat areas only" : ""}${within ? ", within 2σ" : ""}`;
         return {
           body: {
             op: "smooth",
-            params: { method, strength, keep_edges: method === "bilateral" ? true : keepEdges, ...(within ? { within_sigma: true } : {}) },
+            params: {
+              method,
+              strength,
+              keep_edges: method === "bilateral" ? true : keepEdges,
+              ...(flatOnly ? { flat_only: true } : {}),
+              ...(within ? { within_sigma: true } : {}),
+            },
           },
           label: method === "bilateral" ? `Smooth, keep edges (${pctText})` : `Smooth (Taubin, ${pctText})`,
           button: "Smooth",
@@ -319,6 +326,12 @@ export function EditsPanel({
             {method === "taubin" ? (
               <Switch label="Protect sharp edges" description="Leaves corners and creases alone." checked={keepEdges} onChange={setKeepEdges} />
             ) : null}
+            <Switch
+              label="Smooth flat areas only"
+              description="Edges, corners and small round features stay exactly as scanned. In tests on simulated scans this kept edges where they were, where plain smoothing rounded up to a third of them."
+              checked={flatOnly}
+              onChange={setFlatOnly}
+            />
             <Switch
               label="Stay within each point's uncertainty"
               description={

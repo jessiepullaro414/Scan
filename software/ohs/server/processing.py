@@ -195,7 +195,7 @@ def normalize_op(op: str, params: dict | None) -> tuple[dict, str]:
     ``delete_faces`` / ``keep_faces`` are validated by the caller (the faces are decoded there)."""
     params = dict(params or {})
     allowed = {"remove_floaters": {"min_triangles", "min_size_mm", "keep_largest_only", "min_fraction"},
-               "fill_holes": {"max_hole_mm", "watertight"}, "smooth": {"method", "strength", "keep_edges", "within_sigma"},
+               "fill_holes": {"max_hole_mm", "watertight"}, "smooth": {"method", "strength", "keep_edges", "within_sigma", "flat_only"},
                "decimate": {"target_triangles", "ratio", "max_error_mm"}, "delete_faces": {"faces"},
                "keep_faces": {"faces"}}
     if op not in allowed:
@@ -252,8 +252,14 @@ def normalize_op(op: str, params: dict | None) -> tuple[dict, str]:
         within = params.get("within_sigma", False)
         if not isinstance(within, bool):
             raise ApiError(422, "smooth: within_sigma must be true or false", "send true or false")
-        label = f"Smooth ({method}, {round(100 * s)} %{', edges kept' if keep else ''}{', within 2σ' if within else ''})"
+        flat = params.get("flat_only", False)
+        if not isinstance(flat, bool):
+            raise ApiError(422, "smooth: flat_only must be true or false", "send true or false")
+        label = (f"Smooth ({method}, {round(100 * s)} %{', edges kept' if keep else ''}{', flat areas only' if flat else ''}"
+                 f"{', within 2σ' if within else ''})")
         out_s: dict[str, Any] = {"method": method, "strength": s, "keep_edges": keep}
+        if flat:
+            out_s["flat_only"] = True
         if within:
             out_s["within_sigma"] = True
         return out_s, label
@@ -943,7 +949,7 @@ class ProcessManager:
             # within 2 sigma: each vertex moves at most twice its own standard deviation (no sigmas: no limit)
             limit = 2.0 * S if params.get("within_sigma") and S is not None and len(S) == len(V) else None
             return (*M.smooth(V, F, params["method"], params["strength"], params.get("keep_edges", True), limit=limit,
-                              progress=progress), None)
+                              flat_only=bool(params.get("flat_only", False)), progress=progress), None)
         if op == "decimate":
             return (*M.decimate(V, F, params.get("target_triangles"), params.get("ratio"),
                                 max_error_mm=params.get("max_error_mm"), progress=progress), None)

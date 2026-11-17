@@ -571,7 +571,8 @@ type MeshOp = "remove_floaters" | "fill_holes" | "smooth" | "decimate" | "delete
 //   remove_floaters { min_triangles?: number; min_size_mm?: number; keep_largest_only?: boolean }
 //   fill_holes      { max_hole_mm: number; watertight?: boolean }  // largest hole perimeter to fill; the outer edge too
 //   smooth          { method: "taubin" | "bilateral"; strength: number /* 0..1 */; keep_edges?: boolean;
-//                     within_sigma?: boolean }                     // no vertex moves more than 2 sigma
+//                     within_sigma?: boolean;                      // no vertex moves more than 2 sigma
+//                     flat_only?: boolean }                        // smooth flat areas only (2026-11-16)
 //   decimate        { target_triangles?: number; ratio?: number;   // at most one of the two, and / or
 //                     max_error_mm?: number }                      // a tolerance (0.001-10 mm)
 //   delete_faces / keep_faces { faces: string }                    // base64 of little-endian uint32 face indices
@@ -795,6 +796,7 @@ Everything in the M3 phase 2 section is implemented as written, with these clari
   - `keep_edges` defaults to true; `strength` must be 0–1.
   - Strength sets the work: Taubin `1 + 49 s` iterations; bilateral `2 + 18 s` normal and `5 + 15 s` vertex iterations.
   - `within_sigma` (M3 phase 3; the Process page sends it by default when the mesh has sigmas, and the Body panel and Bracket recipes use it): no vertex moves more than twice its own sigma; a longer move is shortened. Without sigmas it does nothing.
+  - `flat_only` (2026-11-16, default false; the Process page's "Smooth flat areas only" switch, off by default; no recipe uses it yet): each vertex keeps its move only where the surface around it is flat (`ohs.mesh.smoothing`, "Flat surface only"), so edges, corners and small round features stay as scanned. The label says "flat areas only".
 - `decimate`:
   - Send at most one of `target_triangles` (at least 4) or `ratio` (above 0, at most 1), and / or `max_error_mm` (0.001–10). A target at or above the current count changes nothing.
   - `max_error_mm` (M3 phase 3) simplifies only while the surface stays within that tolerance, with the outer edge and folds held; with a target too, whichever stops first.

@@ -819,6 +819,8 @@ def test_measurement_safe_edits(env):
     err(post(b + "/process/edits", {"op": "decimate", "params": {}}), 422, "max_error_mm")
     err(post(b + "/process/edits", {"op": "smooth", "params": {"method": "taubin", "strength": 0.3,
                                                                 "within_sigma": "yes"}}), 422, "within_sigma")
+    err(post(b + "/process/edits", {"op": "smooth", "params": {"method": "taubin", "strength": 0.3,
+                                                                "flat_only": 1}}), 422, "flat_only")
     err(post(b + "/process/edits", {"op": "fill_holes", "params": {"max_hole_mm": 5, "watertight": 1}}), 422,
         "watertight")
     s0 = get(b + "/process").json()["current"]["stats"]
@@ -837,14 +839,18 @@ def test_measurement_safe_edits(env):
                                                                           "within_sigma": True}}), "mesh_edit")
     s = get(b + "/process").json()
     assert s["edits"][-1]["label"].endswith("within 2σ)") and s["current"]["stats"]["filled_cm2"] > 0
+    run_job(env, post(b + "/process/edits", {"op": "smooth", "params": {"method": "taubin", "strength": 0.3,
+                                                                          "flat_only": True}}), "mesh_edit")
+    s = get(b + "/process").json()
+    assert s["edits"][-1]["label"] == "Smooth (taubin, 30 %, edges kept, flat areas only)"
+    assert s["edits"][-1]["params"]["flat_only"] is True and s["current"]["stats"]["filled_cm2"] > 0
     run_job(env, post(b + "/process/edits", {"op": "decimate", "params": {"max_error_mm": 0.05}}), "mesh_edit")
     s = get(b + "/process").json()
     e = s["edits"][-1]
     assert e["label"] == "Simplify to within 0.05 mm" and "moved at most" in e["summary"]
     assert e["triangles_after"] < s["edits"][-2]["triangles_after"] and s["current"]["stats"]["filled_cm2"] > 0
-    u = post(b + "/process/undo").json()
-    u = post(b + "/process/undo").json()
-    u = post(b + "/process/undo").json()
+    for _ in range(4):  # simplify, the two smoothings, fill
+        u = post(b + "/process/undo").json()
     assert u["cursor"] == 0 and u["current"]["stats"]["filled_cm2"] == 0.0
     p.write_bytes(get(env["url"] + u["current"]["mesh_url"]).content)
     assert load_ply(p)["filled"] is None
