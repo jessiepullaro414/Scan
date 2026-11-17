@@ -4,14 +4,16 @@
  * shading with the distance to the laser points under it), an optional wireframe overlay and laser point
  * cloud, the two-click distance tool, the fitted shapes (FitTool.tsx), the Check panel's picked area
  * (CheckMark.tsx), the part's axes when it has a coordinate system (PartAxes.tsx) and the Section tool's plane,
- * cut and three clicked points (SectionMarks.tsx; hiding the front is the model's clipping). Renders on demand (no
- * work while the view is still).
+ * cut and three clicked points (SectionMarks.tsx; hiding the front is the model's clipping), and the comparison with a
+ * reference (the "Against the reference" shading with the deviation under the cursor, the reference as a faint ghost,
+ * the area picked in the Compare panel: ReferenceMark.tsx). Renders on demand (no work while the view is still).
  */
 import { Bvh, Html, Line, OrbitControls } from "@react-three/drei";
 import { Canvas, useThree } from "@react-three/fiber";
-import { memo, useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
 import {
   DoubleSide,
+  type Group,
   MeshBasicMaterial,
   MeshMatcapMaterial,
   MeshNormalMaterial,
@@ -32,8 +34,9 @@ import { CameraRig } from "../../three/CameraRig";
 import type { FitKind, PartFrameView, SectionAnswer, SectionPlane } from "../../api/types";
 import { deviationReadout, interpolateMove } from "../../lib/deviation";
 import { laserReadout } from "../../lib/lasers";
+import { referenceReadout, stateAt, STATE_OFF_REFERENCE } from "../../lib/reference";
 import { applyConfidenceColors, confidenceMaterial, filledGeometry, filledMaterial, SIGMA_NONE_MM, sigmaOf } from "../../three/confidence";
-import { CV_TO_THREE_ROTATION, cvToThree } from "../../three/coords";
+import { CV_TO_THREE_ROTATION, cvToThree, matrixFromRowMajor } from "../../three/coords";
 import { applyDeviationColors, deviationOf } from "../../three/deviation";
 import { applyLaserColors, laserValuesOf } from "../../three/lasers";
 import { clayMatcap } from "../../three/materials";
@@ -43,12 +46,14 @@ import { FitTool, type FitItem } from "./FitTool";
 import { PartAxes } from "./PartAxes";
 import { useSurfacePick } from "./picking";
 import { SectionMarks } from "./SectionMarks";
+import { ReferenceMark, type ReferenceLit } from "./ReferenceMark";
+import { refDeviationOf, applyReferenceColors } from "./referenceShading";
 import type { CheckLit } from "./useCheck";
 
-export type Shading = "clay" | "studio" | "normals" | "confidence" | "deviation" | "lasers";
+export type Shading = "clay" | "studio" | "normals" | "confidence" | "deviation" | "lasers" | "reference";
 
 /** The shadings that paint a per-vertex map into the geometry's colours (the rest need none). */
-const isMap = (s: Shading) => s === "confidence" || s === "deviation" || s === "lasers";
+const isMap = (s: Shading) => s === "confidence" || s === "deviation" || s === "lasers" || s === "reference";
 export type Vec3 = [number, number, number];
 export type Measurement = { id: number; a: Vec3; b: Vec3 };
 
@@ -98,19 +103,22 @@ export function Model({
   wireframe,
   meshRef,
   clip = null,
+  referenceLimit = 0.3,
 }: {
   geometry: BufferGeometry;
   shading: Shading;
   wireframe: boolean;
   meshRef?: RefObject<Mesh | null>;
   clip?: { point: ArrayLike<number>; normal: ArrayLike<number> } | null;
+  /** "Against the reference": the strongest colour at ± this (mm; the tolerance). */
+  referenceLimit?: number;
 }) {
   const theme = useTheme();
   const deviationLimit = useUi((s) => s.deviationLimit);
   const laserLimit = useUi((s) => s.laserLimit);
-  const limit = shading === "lasers" ? laserLimit : deviationLimit;
+  const limit = shading === "lasers" ? laserLimit : shading === "reference" ? referenceLimit : deviationLimit;
   // the confidence map needs the mesh's sigmas, the deviation map its moves, the Lasers shading its
-  // distances to the laser points; a mesh without them shows clay
+  // distances to the laser points, "Against the reference" the comparison; a mesh without them shows clay
   const map = useMemo(
     () =>
       shading === "confidence"
@@ -119,7 +127,9 @@ export function Model({
           ? applyDeviationColors(geometry, theme, limit)
           : shading === "lasers"
             ? applyLaserColors(geometry, theme, limit)
-            : false,
+            : shading === "reference"
+              ? applyReferenceColors(geometry, theme, limit)
+              : false,
     [geometry, shading, theme, limit],
   );
   const mat = useMaterial(isMap(shading) && !map ? "clay" : shading);
@@ -291,6 +301,45 @@ export function LaserProbe({ target, values }: { target: RefObject<Mesh | null>;
   return <MapProbe target={target} valueAt={valueAt} text={laserReadout} deps={values} />;
 }
 
+/** "Against the reference": the deviation under the cursor, or which kind of surface was not compared. */
+function ReferenceProbe({ target, values, states }: { target: RefObject<Mesh | null>; values: Float32Array; states: Uint8Array }) {
+  // the state rides on the value: Infinity = not on the reference, null = not measured (MapProbe passes one number)
+  const valueAt = useCallback(
+    (a: number, b: number, c: number, w: number[]) => {
+      const s = stateAt(states, a, b, c, w);
+      if (s === STATE_OFF_REFERENCE) return Infinity;
+      if (s !== 0) return null;
+      return interpolateMove(values, a, b, c, w);
+    },
+    [values, states],
+  );
+  const text = useCallback((v: number | null) => (v === Infinity ? referenceReadout(null, STATE_OFF_REFERENCE) : referenceReadout(v, v === null ? 1 : 0)), []);
+  return <MapProbe target={target} valueAt={valueAt} text={text} deps={values} />;
+}
+
+/** The reference drawn over the scan as a faint ghost: its display mesh moved by `matrix` (16 numbers, row-major) into the scan's frame. */
+function ReferenceGhost({ geometry, matrix }: { geometry: BufferGeometry; matrix: number[] }) {
+  const ref = useRef<Group | null>(null);
+  const invalidate = useThree((s) => s.invalidate);
+  const mat = useMemo(
+    () => new MeshStandardMaterial({ color: "#7fa8ff", roughness: 0.6, metalness: 0, transparent: true, opacity: 0.2, depthWrite: false, side: DoubleSide }),
+    [],
+  );
+  useEffect(() => () => mat.dispose(), [mat]);
+  useLayoutEffect(() => {
+    const g = ref.current;
+    if (!g) return;
+    matrixFromRowMajor(matrix, g.matrix);
+    g.matrixWorldNeedsUpdate = true;
+    invalidate();
+  }, [matrix, invalidate]);
+  return (
+    <group ref={ref} matrixAutoUpdate={false}>
+      <mesh geometry={geometry} material={mat} raycast={() => null} renderOrder={2} />
+    </group>
+  );
+}
+
 function LaserCloud({ geometry, size }: { geometry: BufferGeometry; size: number }) {
   const hasColor = !!geometry.getAttribute("color");
   return (
@@ -406,6 +455,7 @@ export function ViewerCanvas({
   frameKey,
   partFrame = null,
   section = null,
+  reference = null,
 }: {
   geometry: BufferGeometry;
   laser: BufferGeometry | null;
@@ -430,16 +480,19 @@ export function ViewerCanvas({
   partFrame?: { frame: PartFrameView; outOfDate: boolean } | null;
   /** The Section tool, while it is on (SectionMarks.tsx): its plane, the cut, the front hidden, the three points. */
   section?: { plane: SectionPlane | null; answer: SectionAnswer | null; hideFront: boolean; picking: boolean; points: Vec3[]; onPickPoint: (p: Vec3) => void } | null;
+  /** The comparison with a reference (ComparePanel.tsx): its ghost over the scan, the area lit, the shading's limit. */
+  reference?: { ghost: { geometry: BufferGeometry; matrix: number[] } | null; lit: ReferenceLit | null; limit: number } | null;
 }) {
   const meshRef = useRef<Mesh | null>(null);
   const sigma = shading === "confidence" ? sigmaOf(geometry) : null;
   const moves = shading === "deviation" ? deviationOf(geometry) : null;
   const gaps = shading === "lasers" ? laserValuesOf(geometry) : null;
+  const refDev = shading === "reference" ? refDeviationOf(geometry) : null;
   const picking = !!section?.picking;
   const [bvh, setBvh] = useState(false);
   useEffect(() => {
-    if (measure || fit || picking || sigma || moves || gaps) setBvh(true); // build the raycast acceleration on first use only
-  }, [measure, fit, picking, sigma, moves, gaps]);
+    if (measure || fit || picking || sigma || moves || gaps || refDev) setBvh(true); // build the raycast acceleration on first use only
+  }, [measure, fit, picking, sigma, moves, gaps, refDev]);
 
   const bounds = useMemo(() => {
     if (!geometry.boundingSphere) geometry.computeBoundingSphere();
@@ -455,7 +508,7 @@ export function ViewerCanvas({
 
   const markerRadius = Math.max(0.6, bounds.radius * 0.007);
   const clip = section?.hideFront && section.plane ? section.plane : null;
-  const model = <Model geometry={geometry} shading={shading} wireframe={wireframe} meshRef={meshRef} clip={clip} />;
+  const model = <Model geometry={geometry} shading={shading} wireframe={wireframe} meshRef={meshRef} clip={clip} referenceLimit={reference?.limit} />;
   return (
     <div className="absolute inset-0" role="img" aria-label="3D view of the scan result">
       <Canvas
@@ -485,6 +538,9 @@ export function ViewerCanvas({
           {sigma ? <SigmaProbe target={meshRef} sigma={sigma} /> : null}
           {moves ? <DeviationProbe target={meshRef} values={moves} /> : null}
           {gaps ? <LaserProbe target={meshRef} values={gaps} /> : null}
+          {refDev ? <ReferenceProbe target={meshRef} values={refDev.values} states={refDev.states} /> : null}
+          {reference?.ghost ? <ReferenceGhost geometry={reference.ghost.geometry} matrix={reference.ghost.matrix} /> : null}
+          {reference?.lit ? <ReferenceMark lit={reference.lit} geometry={geometry} /> : null}
           <MeasureTool enabled={measure} target={meshRef} onPick={onPick} pending={pending} measurements={measurements} markerRadius={markerRadius} />
           <FitTool enabled={fit} busy={fitBusy} target={meshRef} geometry={geometry} fits={fits} picked={pickedFits} markerRadius={markerRadius} onPick={onFitPick} />
           {checkLit ? <CheckMark lit={checkLit} geometry={geometry} /> : null}

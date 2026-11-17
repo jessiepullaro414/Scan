@@ -185,6 +185,7 @@ export const jobKindLabel = (kind: string): string => {
   if (k === "align") return "Align two scans";
   if (k === "align_all") return "Align several scans";
   if (k === "merge") return "Merge scans";
+  if (k === "reference_align") return "Align with the reference";
   if (k.includes("process") || k.includes("mesh")) return "Make mesh";
   if (k.includes("sim") || k.includes("demo")) return "Simulator demo";
   if (k.includes("selftest") || k.includes("self_test")) return "Self-test";

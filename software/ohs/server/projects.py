@@ -5,6 +5,7 @@
                             scans/<scan_id>/recording/     raw recording (ARCHITECTURE.md section 6)
                             scans/<scan_id>/result/        process_recording output (mesh.ply, mesh.stl, ...)
                             scans/<scan_id>/thumbnail.jpg  left camera view at the end of the scan
+                            references/                    reference models of the part (ohs.server.reference)
 <projects_dir>/.trash/<project_id>-<time>/                 deleted projects (never hard-deleted)
 ```
 
@@ -116,6 +117,13 @@ class ProjectStore:
 
     def result_dir(self, pid: str, sid: str) -> Path:
         return self.scan_dir(pid, sid) / "result"
+
+    def references_dir(self, pid: str) -> Path:
+        """The folder of the project's reference models (FEATURE_PLAN I2, :mod:`ohs.server.reference`); 404 for
+        an unknown project. Not made here: the first reference added makes it."""
+        with self._lock:
+            self._load(pid)
+        return self.project_dir(pid) / "references"
 
     def file_path(self, pid: str, sid: str, name: str) -> tuple[Path, str]:
         """``(path, media type)`` of a downloadable scan file; 404 if unknown or missing."""

@@ -267,7 +267,7 @@ but nothing can be uploaded.
     engine. A cut lying exactly in a noisy fitted plane takes 0.9 s in the engine, and that
     is where the tool opens (offset 0 on the first kept plane): worth a better first offset.
 
-### I2. Comparison with a reference model (L)
+### [x] I2. Comparison with a reference model (L)
 - **What:** load an STL, OBJ or PLY as the reference, align the scan to it, and show the
   Deviation shading against it with a tolerance: "93 % within ± 0.5 mm", and the areas outside.
 - **Where:** an upload route that stores the file under `<project>/references/`; alignment
@@ -299,9 +299,33 @@ but nothing can be uploaded.
   - *Found on the way:* the alignment engine accepted a pose turned 180° when stray points
     were left on the table; worked round here, and written up as `MAINTENANCE_PLAN.md`, F11,
     because the Align page uses the same engine.
-  - **Left:** the upload route and the viewer (pick the file, confirm the units, choose the
-    alignment, the deviation shading with a tolerance, the areas outside); the simulator has
-    no true mesh for its scenes built from primitives (the test builds the bracket's itself).
+  - The simulator has no true mesh for its scenes built from primitives (the test builds the
+    bracket's itself).
+- **In the app, done 2026-11-17.** References belong to a project (`<project>/references/`:
+  the file as it came, a display copy, an index); a file is added as the raw request body
+  (no upload package needed), 100 MB at most, its name never used as a path. A scan's
+  comparison is kept in `scans/<sid>/comparison.json` (the reference, the units decision, the
+  alignment and its pose, the tolerance; not the arrays). Aligning from the shape runs as a
+  job with progress and cancel; the deviation is served like the existing deviation shading;
+  a tolerance answers in 0.02 s (`APP_API.md`, "References and the comparison with one").
+  - *The viewer's "Compare with a reference" panel:* add or pick a reference; the units
+    question with both sizes when the engine is not sure; how to align (from the shape, on
+    the part's axes, from points picked side by side on scan and reference) with a card on
+    hover for each; the result in words; the reference as a faint ghost; the shading
+    "Reference" (key 7) with a tolerance, grey for what is not on the reference; the sentence
+    and a share bar; what was not compared; the areas outside the tolerance, each saying
+    plainly whether it exceeds the scan's own uncertainty and flying to its place.
+  - Checked in the app against the real engine: the simulated bracket scan (715,226
+    triangles) against the bracket's true shape, added as an STL: aligned from the shape in a
+    few seconds with the table set aside, "86 % within ± 0.3 mm (8.5 % above, 5.1 % below)",
+    the table grey, 38 areas listed.
+  - Tests: 10 for the routes on both paths; 38 UI test files.
+  - **Left:** not seen by eye: the units question, the point picker and "on the part's axes"
+    against the real engine; a real file dropped on the panel. On the CPU path's preview mesh
+    of the ball-on-a-table test scan the engine keeps the table as part of the part (774 mm
+    instead of about 105 mm) and so asks about units for a reference of the right size: an
+    engine edge in `ScanSurface.part_cloud` to look at. `test_fit_a_plane_on_the_table`
+    failed once for the agent on the CPU path under load and passed on the rerun.
 
 ### I3. The report (M) **(D1)**
 - **What:** one page per scan: project and scan, date, calibration and its health (H3), how the

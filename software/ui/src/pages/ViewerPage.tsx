@@ -9,7 +9,10 @@
  * bounding box in mm, downloads (the kept fits for CAD too: a STEP file and a FreeCAD macro,
  * viewer/CadDownload.tsx), the Section tool (S: the scan cut by a plane, its 2D profile with a distance
  * on it, kept sections, DXF and SVG; viewer/SectionPanel.tsx, SectionProfile.tsx, SectionMarks.tsx,
- * useSectionTool.ts) and the processing report.
+ * useSectionTool.ts), the comparison with a reference model (the Compare panel: a reference of the project, its
+ * units, the alignment, the "Against the reference" shading (7) with a tolerance and the areas outside it, the
+ * reference as a ghost, matching points picked side by side; viewer/ComparePanel.tsx, useComparison.ts,
+ * PointPairPicker.tsx) and the processing report.
  */
 import {
   ArrowLeft,
@@ -83,6 +86,10 @@ import { useSectionTool, type Bounds } from "./viewer/useSectionTool";
 import { fmtSigma, ViewerCanvas, type Measurement, type Shading, type Vec3 } from "./viewer/ViewerCanvas";
 import { useSections, sectionsKey } from "../store/sections";
 import type { PlaneFit } from "../lib/section";
+import { COMPARE_ICON, ComparePanel } from "./viewer/ComparePanel";
+import { PointPairPicker } from "./viewer/PointPairPicker";
+import { ReferenceLegend } from "./viewer/ReferenceLegend";
+import { useComparison } from "./viewer/useComparison";
 
 type Load =
   | { phase: "idle" }
@@ -238,6 +245,8 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
   const [fitKind, setFitKind] = useState<FitKind>("plane");
   /** The Section tool is on (FEATURE_PLAN I1). */
   const [sectionOn, setSectionOn] = useState(false);
+  /** Matching points are being picked on the scan and the reference (FEATURE_PLAN I2). */
+  const [pickPairs, setPickPairs] = useState(false);
   /** The fits, measurements and relations kept with the scan (those made on an earlier mesh stay, marked so). */
   const kept = useFeatures((s) => s.entries[featuresKey(pid, sid)]?.set ?? null);
   const refitting = useFeatures((s) => s.entries[featuresKey(pid, sid)]?.refitting ?? false);
@@ -496,6 +505,7 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
     "4": () => hasSigma && setShading("confidence"),
     "5": () => devEnabled && setShading("deviation"),
     "6": () => setShading("lasers"),
+    "7": () => refEnabled && setShading("reference"),
     escape: () => {
       if (pendingRef.current) setPendingPoint(null);
       else if (measure) setMeasure(false);
@@ -518,6 +528,9 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
   const las = useLasers(pid, sid, geometry, meshVersion, shading === "lasers");
   const lasShown = las.state.phase === "ready" && hasLaserValues(las.state.data.info);
   const check = useCheck(pid, sid, geometry, meshVersion, reloadInPlace);
+  // the comparison with a reference: its shading once the scan is aligned with one
+  const cmp = useComparison(pid, sid, geometry, meshVersion, shading === "reference");
+  const refEnabled = !!cmp.comparison?.alignment && cmp.comparison.ready;
   // open holes: the count in the mesh's numbers, which this page reads with the mesh version
   const openHoles = useProcess((s) => s.entries[processKey(pid, sid)]?.state?.current?.stats.holes ?? null);
   const shown: Shading =
@@ -529,9 +542,13 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
         ? lasShown
           ? "lasers"
           : "clay"
-        : shading === "confidence" && !hasSigma
-          ? "clay"
-          : shading;
+        : shading === "reference"
+          ? cmp.map.phase === "ready"
+            ? "reference"
+            : "clay"
+          : shading === "confidence" && !hasSigma
+            ? "clay"
+            : shading;
   const box = geometry?.boundingBox ?? null;
   const size = box ? { x: box.max.x - box.min.x, y: box.max.y - box.min.y, z: box.max.z - box.min.z } : null;
   const tris = geometry ? (geometry.index ? geometry.index.count / 3 : geometry.getAttribute("position").count / 3) : 0;
@@ -644,6 +661,16 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
         : null,
     [sectionOn, section.plane, section.answer, section.hideFront, section.picking, section.points, section.addPoint],
   );
+  // the Compare panel's ghost, picked area and the shading's limit (the tolerance), for the 3D view
+  const referenceView = useMemo(
+    () => ({
+      ghost: cmp.ghost && cmp.refGeometry && cmp.matrix ? { geometry: cmp.refGeometry, matrix: cmp.matrix } : null,
+      lit: cmp.lit,
+      limit: cmp.tolerance,
+    }),
+    [cmp.ghost, cmp.refGeometry, cmp.matrix, cmp.lit, cmp.tolerance],
+  );
+  const frameState: "none" | "out_of_date" | "current" = partFrame ? (partFrame.out_of_date ? "out_of_date" : "current") : kept?.frame ? "out_of_date" : "none";
   const deltaNames = shownFrame ? ["ΔX", "ΔY", "ΔZ"] : ["Δx", "Δy", "Δz"];
   const measureRows = useMemo(
     () =>
@@ -771,6 +798,7 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
               frameKey={frameKey}
               partFrame={partFrame ? { frame: partFrame, outOfDate: partFrame.out_of_date } : null}
               section={sectionView}
+              reference={referenceView}
             />
           </ErrorBoundary>
         ) : (
@@ -794,7 +822,7 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
               <Segmented<Shading>
                 label="Shading"
                 size="sm"
-                value={devOn ? "deviation" : shading === "lasers" ? "lasers" : shown}
+                value={devOn ? "deviation" : shading === "lasers" || shading === "reference" ? shading : shown}
                 onChange={setShading}
                 options={[
                   { value: "clay", label: "Clay", icon: Brush, title: "Matcap clay (1)" },
@@ -817,6 +845,13 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
                     title: devEnabled ? "How far the edits moved the surface from the mesh as measured (5)" : "No edits yet: the mesh is as measured",
                   },
                   { value: "lasers", label: "Lasers", icon: ScanLine, title: "Where the laser lines and the mesh agree, and where they differ (6)" },
+                  {
+                    value: "reference",
+                    label: "Reference",
+                    icon: COMPARE_ICON,
+                    disabled: !refEnabled,
+                    title: refEnabled ? "How far the scan is from the reference model, against a tolerance (7)" : "Compare the scan with a reference model first (the Compare panel)",
+                  },
                 ]}
               />
               <span className="mx-1 h-5 w-px bg-line-strong" aria-hidden />
@@ -899,6 +934,26 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
           <div className="glass absolute bottom-4 left-4 animate-pop-in rounded-xl border border-line-strong px-3 py-2.5 shadow-md">
             <LasersLegend state={las.state} onRetry={las.retry} onReload={reloadInPlace} />
           </div>
+        ) : null}
+
+        {shading === "reference" && geometry ? (
+          <div className="glass absolute bottom-4 left-4 animate-pop-in rounded-xl border border-line-strong px-3 py-2.5 shadow-md">
+            <ReferenceLegend state={refEnabled ? cmp.map : { phase: "idle" }} tolerance={cmp.tolerance} answer={cmp.answer} />
+          </div>
+        ) : null}
+
+        {pickPairs && geometry && cmp.refGeometry && cmp.comparison ? (
+          <PointPairPicker
+            scan={geometry}
+            reference={cmp.refGeometry}
+            scale={cmp.comparison.scale}
+            busy={cmp.busy}
+            onClose={() => setPickPairs(false)}
+            onAlign={(pairs, refine) => {
+              cmp.align({ method: "points", pairs, refine });
+              setPickPairs(false);
+            }}
+          />
         ) : null}
 
         {measure && geometry ? (
@@ -1176,6 +1231,20 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
           </Panel>
         ) : null}
 
+        {hasResult ? (
+          <Panel title="Compare with a reference" icon={COMPARE_ICON}>
+            <ComparePanel
+              tool={cmp}
+              ready={!!geometry}
+              frame={frameState}
+              shadingOn={shading === "reference"}
+              onShading={(on) => setShading(on ? "reference" : "clay")}
+              onPickPoints={() => setPickPairs(true)}
+              picking={pickPairs}
+            />
+          </Panel>
+        ) : null}
+
         {hasResult && project && scan ? (
           <Panel title="Fine-tune" icon={SlidersHorizontal}>
             <p className="text-sm text-muted">Remove floating bits, fill holes, smooth or simplify, cut away what you don't need. Every step can be undone.</p>
@@ -1273,7 +1342,12 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
                 <>
                   <Kbd>1</Kbd>–<Kbd>{hasSigma ? 4 : 3}</Kbd>, <Kbd>6</Kbd>
                 </>
-              )}{" "}
+              )}
+              {refEnabled ? (
+                <>
+                  , <Kbd>7</Kbd>
+                </>
+              ) : null}{" "}
               shading
             </span>
           </div>

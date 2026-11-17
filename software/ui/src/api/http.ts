@@ -18,6 +18,15 @@ import type {
   ProcessSettingsBody,
   LaserSettingsBody,
   CheckResult,
+  Comparison,
+  ComparisonAlignAnswer,
+  ComparisonAlignRequest,
+  ComparisonState,
+  RefDeviation,
+  RefDeviationInfo,
+  ReferenceList,
+  ReferenceModel,
+  ToleranceAnswer,
   ConnectBody,
   DeviceState,
   Deviation,
@@ -441,6 +450,75 @@ export const api = {
   deleteSection: (pid: string, sid: string, id: string) => del(`${scanPath(pid, sid)}/sections/${enc(id)}`),
   /** URL of a kept section's DXF or SVG, cut on the current mesh. */
   keptSectionFileUrl: (pid: string, sid: string, id: string, name: SectionFile) => `${scanPath(pid, sid)}/sections/${enc(id)}/${name}`,
+
+  // ---------------------------------------------------------------- a reference model and the comparison with it (FEATURE_PLAN I2)
+  /** The project's reference models, oldest first. */
+  references: (pid: string) => get<ReferenceList>(`/api/projects/${enc(pid)}/references`),
+  /**
+   * Add a reference to the project: the file's bytes are the request body and its name goes in the query (its
+   * extension says the format; only its last part is kept). 422 for another format (in the engine's words: a STEP
+   * file must be exported as STL first), an empty or broken file; 413 above the size limit. Reading a large file takes
+   * some seconds.
+   */
+  uploadReference: async (pid: string, file: Blob, name: string): Promise<ReferenceModel> => {
+    const path = `/api/projects/${enc(pid)}/references?name=${enc(name)}`;
+    let res: Response;
+    try {
+      res = await fetchImpl(path, { method: "POST", headers: { "Content-Type": "application/octet-stream", Accept: "application/json" }, body: file });
+    } catch {
+      throw new ApiError(0, "Can't reach the OpenHandScan engine", UNREACHABLE_HINT, path);
+    }
+    if (!res.ok) throw await toApiError(res, path);
+    return (await res.json()) as ReferenceModel;
+  },
+  renameReference: (pid: string, rid: string, name: string) => patch<ReferenceModel>(`/api/projects/${enc(pid)}/references/${enc(rid)}`, { name }),
+  /** Also removes the comparisons of the project's scans that use it. */
+  deleteReference: (pid: string, rid: string) => del(`/api/projects/${enc(pid)}/references/${enc(rid)}`),
+  /** URL of the reference's display copy (binary PLY, in its own numbers; decimated when large). */
+  referenceMeshUrl: (pid: string, rid: string) => `/api/projects/${enc(pid)}/references/${enc(rid)}/mesh.ply`,
+  /** The scan's kept comparison (null when it has none) and the current mesh version. */
+  comparison: (pid: string, sid: string) => get<ComparisonState>(`${scanPath(pid, sid)}/comparison`),
+  /** Compare the scan with a reference of its project (replaces a kept comparison). The answer carries the units
+   * finding: a "pending" one waits for `comparisonUnits`. 409 before there is a mesh. */
+  startComparison: (pid: string, sid: string, reference_id: string, tolerance_mm?: number) =>
+    post<Comparison>(`${scanPath(pid, sid)}/comparison`, tolerance_mm === undefined ? { reference_id } : { reference_id, tolerance_mm }),
+  /** Apply the units factor (the finding's, or `factor`) or keep the reference's numbers as mm. Drops a kept alignment. */
+  comparisonUnits: (pid: string, sid: string, action: "apply" | "keep", factor?: number) =>
+    post<Comparison>(`${scanPath(pid, sid)}/comparison/units`, factor === undefined ? { action } : { action, factor }),
+  /** Align the scan with the reference: a best fit (from the shapes, or from picked points refined) is a job of kind
+   * "reference_align" (result `ReferenceAlignResult`); on the datums, or from points as they are, the answer comes at
+   * once. 409 while the units wait, and for a part frame that is out of date; 422 without a frame, for bad pairs. */
+  alignComparison: (pid: string, sid: string, body: ComparisonAlignRequest) => post<ComparisonAlignAnswer>(`${scanPath(pid, sid)}/comparison/align`, body),
+  /**
+   * The deviation of the current mesh from the reference at the kept pose: the numbers (deviation.json) and, per vertex
+   * of mesh.ply, a float32 (mm, + outside the reference, NaN where not compared) then a state byte (deviation.bin). Read
+   * like the edits' deviation map: both files are checked to be of one mesh version, else read once more (a second
+   * mismatch is a 409). 409 before it is aligned.
+   */
+  comparisonDeviation: async (pid: string, sid: string, signal?: AbortSignal): Promise<RefDeviation> => {
+    const base = `${scanPath(pid, sid)}/comparison/deviation`;
+    for (let attempt = 0; ; attempt++) {
+      const info = await get<RefDeviationInfo>(`${base}.json`);
+      if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
+      let res: Response;
+      try {
+        res = await fetchImpl(`${base}.bin`, { signal });
+      } catch (e) {
+        if ((e as { name?: string }).name === "AbortError") throw e;
+        throw new ApiError(0, "Can't reach the OpenHandScan engine", UNREACHABLE_HINT, `${base}.bin`);
+      }
+      if (!res.ok) throw await toApiError(res, `${base}.bin`);
+      const buf = await res.arrayBuffer();
+      const version = Number(res.headers.get("X-OHS-Mesh-Version") ?? NaN);
+      const n = info.vertices;
+      if (buf.byteLength === n * 5 && version === info.version) return { info, values: new Float32Array(buf, 0, n), states: new Uint8Array(buf, n * 4, n) };
+      if (attempt >= 1) throw new ApiError(409, "The mesh changed while its comparison was being read", "Try again in a moment.", `${base}.bin`);
+    }
+  },
+  /** The answer at a tolerance (kept with the comparison): shares by area, the areas outside it. Fast once the deviation is made. */
+  comparisonTolerance: (pid: string, sid: string, tolerance_mm: number) => post<ToleranceAnswer>(`${scanPath(pid, sid)}/comparison/tolerance`, { tolerance_mm }),
+  /** Forget the comparison (404 when there is none). */
+  removeComparison: (pid: string, sid: string) => del(`${scanPath(pid, sid)}/comparison`),
 
   // ---------------------------------------------------------------- M5: areas that need another pass
   /** Which parts of the current mesh miss a tolerance (above 0, at most 100 mm): the share of the surface

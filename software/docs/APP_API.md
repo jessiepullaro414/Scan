@@ -1548,6 +1548,155 @@ Rules:
   value), three points on a line, a zero normal, a kept fit that is not a plane, `"frame"` without a part's
   frame, an axis other than X, Y or Z, an empty or too long name. A cut and the downloads write nothing.
 
+## References and the comparison with one
+[`FEATURE_PLAN.md`](FEATURE_PLAN.md), I2. The part as it should be (an STL, OBJ or PLY from CAD, or a scan
+of a good part) is added to a project, and a scan of the part as it is is compared with it: "87 % within
+± 0.3 mm", and where the rest is (`ohs/server/reference.py`; the engine is `ohs/inspect/reference.py`, on
+the same arrays the fits use: each vertex's sigma, each face's filled flag). A **reference** belongs to a
+project (`<project>/references/`: the file as it came, `<id>.stl` / `.obj` / `.ply`, a display copy
+`<id>.view.ply`, and `index.json`); a scan keeps at most one **comparison** (`scans/<sid>/comparison.json`:
+which reference, the units decision, the alignment with its pose and the mesh version it was made on, the
+tolerance; not the arrays).
+
+```ts
+type ReferenceModel = {                         // as the engine read it, in its own numbers (no units factor)
+  id: string;                                   // "ref-…"
+  name: string;                                 // the file's name (its last part only); renamable, 1 to 120 characters
+  format: "stl" | "obj" | "ply";
+  bytes: number; triangles: number; vertices: number;   // after welding and dropping faces without area
+  extent_mm: number[];                          // the sides of its box along its principal axes, largest first
+  size_mm: number;                              // that box's diagonal
+  area_mm2: number;
+  bounds: number[][];                           // [min, max] in its own frame
+  closed: boolean;                              // every piece closed (a solid)
+  orientation: string;                          // what the engine did about its winding, in words
+  dropped_faces: number; warnings: string[];
+  display: { triangles: number; decimated: boolean };   // the copy served by .../mesh.ply
+  added: string };
+type UnitsFinding = {                           // ohs.inspect.reference UnitsFinding.to_dict()
+  status: "same" | "pending" | "applied" | "kept";
+  ratio: number | null;                         // the scan's part's size over the reference's
+  factor: number | null; unit: string | null;   // mm per unit, when one fits: "inch", "cm", "m", "µm"
+  candidates: { unit: string; factor: number }[];
+  reference_size_mm: number | null; scan_size_mm: number | null;
+  message: string };
+type ReferenceAlignment = {                     // ReferenceAlignment.to_dict(): T takes the scan's points into the
+  format_version: 1;                            // reference's frame (mm, after the units factor)
+  method: "shape" | "points" | "points+shape" | "datums" | "given";
+  described: string; accepted: boolean; verdict: string; T: number[][];
+  pair: object | null;                          // the alignment engine's own numbers (overlap, RMS, guesses, ...)
+  points_rms_mm: number | null; n_points: number;
+  frame: object | null;                         // "datums": the part frame used
+  fit: { robust_mm: number; moved_mm: number | null; taken: boolean; note: string } | null;
+  turn_check: object | null;
+  vs_datums: { rms_mm: number; max_mm: number; shift_mm: number; angle_deg: number; note: string } | null;
+  warnings: string[]; ms: number };
+type Comparison = {
+  format_version: 1;
+  reference_id: string;
+  reference: ReferenceModel | null;             // null when its reference is gone
+  units: UnitsFinding;
+  scale: number;                                // the units factor applied (1 otherwise)
+  ready: boolean;                               // false while units.status is "pending"
+  alignment: ReferenceAlignment | null;         // null before it is aligned (and after the units change)
+  aligned_mesh_version: number | null;
+  mesh_version: number | null;                  // the current mesh
+  mesh_changed: boolean;                        // aligned on another mesh version: the pose is kept
+  view_matrix: number[][] | null;               // the reference's file numbers into the scan's frame:
+                                                // inv(T) · diag(scale), for drawing it over the scan
+  tolerance_mm: number;                         // the last tolerance asked (default 0.3)
+  k: number;                                    // 2: the scan's own uncertainty is k sigma
+  created: string; modified: string;
+  aligning: string | null };                    // the id of the alignment job running for this scan
+type ComparisonAlignRequest =
+  | { method: "shape" }
+  | { method: "datums" }
+  | { method: "points"; pairs: { scan: number[]; reference: number[] }[]; refine?: boolean };   // default true
+type ReferenceAlignResult = {                   // the result of a finished job of kind "reference_align"
+  alignment: ReferenceAlignment; kept: boolean; comparison: Comparison | null; mesh_version: number;
+  message: string };                            // = alignment.verdict
+type RefDeviationInfo = Deviation.to_dict() & { // ohs.inspect.reference Deviation.to_dict(): counts, areas, shares,
+  version: number; vertices: number;            // the rule; with the mesh version and the vertices of mesh.ply
+  reference_id: string; scale: number;
+  aligned_mesh_version: number | null; mesh_changed: boolean;
+  note: string | null;                          // when the mesh has changed since it was aligned
+  layout: string;
+  states: ["compared", "not measured", "not on the reference"] };   // by state byte
+type ToleranceRegion = DeviationRegion.to_dict() & {   // side, area_mm2, share, center (the reference's frame),
+  center_scan: number[];                        // extent_mm, radius_mm, n_faces, mean_mm, worst_mm,
+  faces: string };                              // sigma_median_mm, exceeds_uncertainty, share_beyond_uncertainty;
+                                                // the centre in the scan's frame, the faces as base64 uint32
+type ToleranceAnswer = ToleranceSummary.to_dict() & {  // shares by area, worst values, stats, regions, sentence
+  regions: ToleranceRegion[];
+  version: number; mesh_changed: boolean; aligned_mesh_version: number | null; method: string;
+  coverage: { scan_area_mm2: number; compared_area_mm2: number; off_reference_share: number;
+              not_measured_share: number; uncovered_share: number | null; uncovered_area_mm2: number | null;
+              reference_area_mm2: number } };
+```
+
+| Method and path | Body or query | Returns |
+|---|---|---|
+| `GET /api/projects/{pid}/references` | | `{references: ReferenceModel[]}` (oldest first) |
+| `POST /api/projects/{pid}/references` | `?name=<file name>`, the file's bytes as the body | `ReferenceModel` |
+| `PATCH /api/projects/{pid}/references/{rid}` | `{name}` | `ReferenceModel` |
+| `DELETE /api/projects/{pid}/references/{rid}` | | 204 |
+| `GET /api/projects/{pid}/references/{rid}/mesh.ply` | | the display copy (binary PLY) |
+| `GET .../comparison` | | `{comparison: Comparison \| null, mesh_version}` |
+| `POST .../comparison` | `{reference_id, tolerance_mm?}` | `Comparison` |
+| `POST .../comparison/units` | `{action: "apply" \| "keep", factor?}` | `Comparison` |
+| `POST .../comparison/align` | `ComparisonAlignRequest` | `{job: Job, comparison: null}` or `{job: null, comparison: Comparison}` |
+| `GET .../comparison/deviation.json` | | `RefDeviationInfo` |
+| `GET .../comparison/deviation.bin` | | float32 per vertex, then a state byte per vertex |
+| `POST .../comparison/tolerance` | `{tolerance_mm, k?}` | `ToleranceAnswer` |
+| `DELETE .../comparison` | | 204 |
+
+Rules:
+- **Upload without multipart.** FastAPI's multipart parser needs a package that is not installed, so the file
+  is the raw request body (`Content-Type: application/octet-stream`) and its name is in the query. Only the
+  name's last part is kept (`../../x.stl`, `C:\x.stl` and `/x.stl` are all `x.stl`); it is a label and its
+  extension says the format; the file is stored under the reference's id. Another format is 422 in the
+  engine's words, before anything is written ("a reference must be an STL, OBJ or PLY mesh; part.step is
+  .step (export a STEP or other CAD file as STL first)"), as are a missing name, an empty body and a file the
+  engine cannot read or check (a point cloud, faces without area, a size no unit makes a part of). **The
+  limit is 100 MB** (413 above it, with or without a `Content-Length`): a binary STL of about two million
+  triangles, several times a fine CAD export of a hand-sized part. The body is held in memory once and then
+  read and checked by the engine; a 715,143-triangle PLY (19.4 MB) takes 6.1 s in all on this PC, its display
+  copy decimated to 250,086 triangles (4.8 MB) included. A body over the limit is read to its end and dropped,
+  so the client is not cut off mid-send.
+- **The display copy** is the reference's triangles as the engine wound them, as a binary PLY (the form the
+  viewer reads for scan meshes), decimated (`ohs.mesh.decimate`) to 250,000 triangles when there are more.
+  It is in the file's own numbers: `view_matrix` puts it over the scan.
+- **Units** (`POST .../comparison`): the engine's finding (`check_units`) for the reference's size and the
+  scan's part (its table set aside). A `"pending"` finding is answered as it is; the alignment, the deviation
+  and the tolerance answer are then 409 until `POST .../comparison/units` applies the factor (the finding's,
+  or `factor`; 422 when neither is there) or keeps the units. Changing the units drops the alignment.
+- **Aligning.** `"shape"` (a best fit, `align_by_shape`) and `"points"` with `refine` (`align_by_points`
+  refined on the shapes) are jobs of kind `reference_align` with progress and cancel (a cancelled job keeps
+  nothing); `"points"` without `refine` and `"datums"` (`align_by_datums` with the scan's part frame) are
+  answered at once. A best fit made while the scan has a current part frame carries `vs_datums` (how far it
+  lies from the datum pose). An alignment the engine does not accept is answered (`kept: false` in the job's
+  result) and not kept: the one kept before stays. 409 while another alignment of the scan runs; `"datums"`
+  is 422 without a part frame and 409 with one that is out of date or cannot be read; `"points"` is 422 with
+  fewer than three pairs or pairs in one line.
+- **The deviation** is the engine's `deviation_from_reference` on the current mesh at the kept pose. The
+  binary is one little-endian float32 per vertex of `result/mesh.ply` (mm, + outside the reference; NaN where
+  not compared), then one byte per vertex: 0 compared, 1 not measured (a filled face, no usable sigma), 2 not
+  on the reference (a table, a clamp, surface more than 3 mm off); `X-OHS-Mesh-Version` is the mesh version.
+  Made once per mesh version and pose and kept in memory. On the simulated bracket scan (715,226 triangles,
+  362,330 vertices): 0.32 s, 1,811,650 bytes, `deviation.json` 1.8 kB.
+- **The answer for a tolerance** is the engine's `tolerance_summary` on that deviation (20 to 30 ms at that
+  size; 13 to 56 kB with 17 to 65 regions at ± 0.5 to ± 0.1 mm); the tolerance asked is kept with the
+  comparison. Each region adds its centre in the scan's frame and its faces, as the Check areas.
+- **When the mesh changes** (an edit, Make mesh again) the scan's frame is the same, so the kept pose stays:
+  the deviation is worked out again on the current mesh, and `mesh_changed` (with `note` in
+  `deviation.json`) says so.
+- **Removing** the comparison removes `comparison.json`; removing a reference removes its files and the
+  comparisons of the project's scans that use it. Nothing else on disk changes: the scan's other files stay
+  byte for byte as they were.
+- 404 for an unknown project, scan or reference, and for a comparison that is not there (`GET .../comparison`
+  answers `{comparison: null}`); 409 before there is a mesh, while the units wait, and before it is aligned
+  (the deviation and the tolerance); 422 for bad bodies.
+
 ## M5 second slice: the deviation map
 The plan is in [`DESKTOP_APP_PLAN.md`](DESKTOP_APP_PLAN.md), "M5 plan, second slice". It compares the scan's
 current mesh with its base mesh: the last stage's result, before any edit.

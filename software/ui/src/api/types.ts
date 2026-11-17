@@ -1292,3 +1292,188 @@ export type AlignAllResult = {
   verdict: string;
   message: string; // = verdict
 };
+
+// ------------------------------------------------------------------ FEATURE_PLAN I2: a reference model and the comparison with it
+// APP_API.md "References and the comparison with one". A reference (the part as it should be: STL, OBJ or PLY)
+// belongs to a project; a scan keeps at most one comparison with one of them (`comparison.json`).
+
+/** A reference model of a project, as the engine read it (in its own numbers: before any units factor). */
+export type ReferenceModel = {
+  id: string;
+  name: string;
+  format: "stl" | "obj" | "ply";
+  bytes: number;
+  triangles: number;
+  vertices: number;
+  extent_mm: [number, number, number]; // the sides of its box along its principal axes, largest first
+  size_mm: number; // the diagonal of that box
+  area_mm2: number;
+  bounds: [[number, number, number], [number, number, number]];
+  closed: boolean; // every piece closed (a solid)
+  orientation: string; // what the engine did about its winding, in words
+  dropped_faces: number;
+  warnings: string[];
+  /** The copy served for display (`.../references/{id}/mesh.ply`): decimated when the file has more triangles. */
+  display: { triangles: number; decimated: boolean };
+  added: string;
+};
+
+export type ReferenceList = { references: ReferenceModel[] };
+
+/** The engine's units finding (`UnitsFinding.to_dict()`): "pending" waits for the user's answer. */
+export type UnitsFinding = {
+  status: "same" | "pending" | "applied" | "kept";
+  ratio: number | null; // the scan's part's size over the reference's, as read
+  factor: number | null; // mm per unit of the reference, when a unit fits
+  unit: string | null; // "inch", "cm", "m", "µm"
+  candidates: { unit: string; factor: number }[];
+  reference_size_mm: number | null;
+  scan_size_mm: number | null;
+  message: string;
+};
+
+/** How far a best fit lies from the alignment on the datums (the scan has a part frame). */
+export type VsDatums = { rms_mm: number; max_mm: number; shift_mm: number; angle_deg: number; note: string };
+
+/** The engine's alignment record (`ReferenceAlignment.to_dict()`): `T` takes the scan's points into the reference's frame. */
+export type ReferenceAlignment = {
+  format_version: number;
+  method: "shape" | "points" | "points+shape" | "datums" | "given";
+  described: string; // "best fit on the shapes", ...
+  accepted: boolean;
+  verdict: string;
+  T: number[][];
+  pair: Record<string, unknown> | null; // the alignment engine's own numbers, when it ran
+  points_rms_mm: number | null;
+  n_points: number;
+  frame: Record<string, unknown> | null;
+  fit: { robust_mm: number; moved_mm: number | null; taken: boolean; note: string } | null;
+  turn_check: Record<string, unknown> | null;
+  vs_datums: VsDatums | null;
+  warnings: string[];
+  ms: number;
+};
+
+/** A scan's comparison with a reference, as kept and shown. */
+export type Comparison = {
+  format_version: number;
+  reference_id: string;
+  reference: ReferenceModel | null; // null when the reference is gone
+  units: UnitsFinding;
+  scale: number; // what the reference's numbers are multiplied by (the units factor applied, else 1)
+  ready: boolean; // false while the units finding waits
+  alignment: ReferenceAlignment | null;
+  aligned_mesh_version: number | null;
+  mesh_version: number | null;
+  mesh_changed: boolean; // aligned on an earlier mesh: the pose is kept, the deviation worked out again
+  /** The reference's file numbers into the scan's frame (4 x 4, for drawing it over the scan); null before it is aligned. */
+  view_matrix: number[][] | null;
+  tolerance_mm: number;
+  k: number;
+  created: string;
+  modified: string;
+  aligning: string | null; // the id of the alignment job running for this scan
+};
+
+export type ComparisonState = { comparison: Comparison | null; mesh_version: number | null };
+
+export type PickedPair = { scan: [number, number, number]; reference: [number, number, number] };
+
+export type ComparisonAlignRequest = { method: "shape" } | { method: "datums" } | { method: "points"; pairs: PickedPair[]; refine?: boolean };
+
+/** A best fit is a job (kind "reference_align"); what needs no fitting is answered at once. */
+export type ComparisonAlignAnswer = { job: Job; comparison: null } | { job: null; comparison: Comparison };
+
+/** The `result` of a finished job of kind "reference_align". `kept` is false for an alignment the engine did not accept. */
+export type ReferenceAlignResult = { alignment: ReferenceAlignment; kept: boolean; comparison: Comparison | null; mesh_version: number; message: string };
+
+/** `deviation.json` of a comparison: the engine's `Deviation.to_dict()` with the mesh version and how the array is laid out. */
+export type RefDeviationInfo = {
+  version: number;
+  vertices: number;
+  reference_id: string;
+  scale: number;
+  aligned_mesh_version: number | null;
+  mesh_changed: boolean;
+  note: string | null;
+  layout: string;
+  states: string[]; // by state byte: "compared", "not measured", "not on the reference"
+  method: string;
+  n_vertices: number;
+  n_compared: number;
+  n_not_measured: number;
+  n_off_reference: number;
+  n_along_normal: number;
+  scan_area_mm2: number | null;
+  compared_area_mm2: number | null;
+  off_reference_area_mm2: number | null;
+  off_reference_share: number | null;
+  not_measured_area_mm2: number | null;
+  not_measured_share: number | null;
+  reference_area_mm2: number | null;
+  uncovered_share: number | null;
+  uncovered_area_mm2: number | null;
+  near_mm: number;
+  snap_mm: number;
+  normal_deg: number;
+  cover_mm: number | null;
+  has_sigma: boolean;
+  rule: string;
+  notes: string[];
+};
+
+/** Per vertex of mesh.ply: the deviation (mm, + outside the reference, NaN where not compared) and its state (0 compared, 1 not measured, 2 not on the reference). */
+export type RefDeviation = { info: RefDeviationInfo; values: Float32Array; states: Uint8Array };
+
+/** One area outside the tolerance (the engine's `DeviationRegion`), with its centre in the scan's frame and its faces. */
+export type ToleranceRegion = {
+  side: "above" | "below";
+  area_mm2: number;
+  share: number; // of the compared area
+  center: [number, number, number]; // the reference's frame
+  center_scan: [number, number, number]; // the scan's frame (where the viewer draws it)
+  extent_mm: number;
+  radius_mm: number;
+  n_faces: number;
+  mean_mm: number;
+  worst_mm: number;
+  sigma_median_mm: number | null;
+  exceeds_uncertainty: boolean | null; // |mean| above k times the median sigma
+  share_beyond_uncertainty: number | null;
+  faces: string; // base64 uint32 face indices of mesh.ply
+};
+
+/** The coverage beside an answer: what of the scan was not compared, and what of the reference the scan did not cover. */
+export type ComparisonCoverage = {
+  scan_area_mm2: number | null;
+  compared_area_mm2: number | null;
+  off_reference_share: number | null;
+  not_measured_share: number | null;
+  uncovered_share: number | null;
+  uncovered_area_mm2: number | null;
+  reference_area_mm2: number | null;
+};
+
+/** The answer for a tolerance (the engine's `ToleranceSummary.to_dict()`, with the regions' extras and the coverage). */
+export type ToleranceAnswer = {
+  format_version: number;
+  tolerance_mm: number;
+  k: number;
+  compared_area_mm2: number | null;
+  share_within: number | null;
+  share_above: number | null;
+  share_below: number | null;
+  share_uncertain: number | null; // compared area where k sigma is wider than the tolerance itself
+  worst_above_mm: number | null;
+  worst_below_mm: number | null;
+  stats: Record<string, number | null>;
+  min_area_mm2: number;
+  n_regions: number;
+  regions: ToleranceRegion[];
+  sentence: string;
+  version: number;
+  mesh_changed: boolean;
+  aligned_mesh_version: number | null;
+  method: string;
+  coverage: ComparisonCoverage;
+};

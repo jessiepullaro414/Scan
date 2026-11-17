@@ -26,6 +26,9 @@
  *   when the mesh changes and fitted again on request.
  * - Sections (section.ts): the current mesh cut by a plane with a simple triangle-plane cut of the
  *   demo's own, its DXF and SVG, sections kept per scan (in memory).
+ * - References and the comparison with one (reference.ts): files uploaded as the raw body and read in the
+ *   browser (STL, OBJ, PLY), a demo part made from a project's scan, the units finding, alignments that move
+ *   the centres together, the deviation to points spread over the reference, the answer for a tolerance.
  *
  * Options in the URL: `empty=1` (no projects), `fast=1` (short jobs), `drift=1` (the launch check
  * after a connect finds drift), `nopico=1` (the camera connects without the Pico).
@@ -55,6 +58,7 @@ import { HttpError, json, nowIso, uid, type MockHost, type MockSettings, type Ti
 import { normalizeQuality } from "../../lib/quality";
 import { MockFeatures } from "./features";
 import { MockSections } from "./section";
+import { MockReferences } from "./reference";
 import { MockProcess, mockStep } from "./process";
 import { cameraByIndex, MockSetup } from "./setup";
 import {
@@ -229,6 +233,7 @@ class MockBackend {
   private studio: MockProcess;
   private features = new MockFeatures();
   private sections = new MockSections();
+  private references = new MockReferences();
   private aligning: MockAlign;
   private previewSeqs: Record<string, number> = {};
   private session: SessionState = { state: "idle", project_id: null, scan_id: null, mode: "markerless", elapsed_s: 0, frames: 0 };
@@ -332,10 +337,16 @@ class MockBackend {
         return json(422, { detail: "The request body isn't valid JSON" });
       }
     }
-    if (method === "GET") for (const [k, v] of url.searchParams) body[k] = v; // a GET's query (features/relate?a=&b=)
+    // a file sent as the raw body (a reference model): its bytes, its name in the query
+    let raw: ArrayBuffer | null = null;
+    const b0 = init?.body;
+    if (b0 instanceof Blob) raw = await b0.arrayBuffer();
+    else if (b0 instanceof ArrayBuffer) raw = b0;
+    else if (ArrayBuffer.isView(b0)) raw = b0.buffer.slice(b0.byteOffset, b0.byteOffset + b0.byteLength) as ArrayBuffer;
+    if (method === "GET" || raw) for (const [k, v] of url.searchParams) body[k] = v; // a GET's query (features/relate?a=&b=), an upload's name
     if (!url.pathname.includes("/files/") && !this.opts.fast) await new Promise((r) => setTimeout(r, 70 + Math.random() * 120));
     try {
-      return await this.route(method, url.pathname, body);
+      return await this.route(method, url.pathname, body, raw);
     } catch (e) {
       if (e instanceof HttpError) return json(e.status, e.hint ? { detail: e.detail, hint: e.hint } : { detail: e.detail });
       console.error("mock backend error", e);
@@ -380,7 +391,7 @@ class MockBackend {
   }
 
   // ---------------------------------------------------------------- REST
-  private async route(method: string, path: string, body: Record<string, unknown>): Promise<Response> {
+  private async route(method: string, path: string, body: Record<string, unknown>, raw: ArrayBuffer | null = null): Promise<Response> {
     const seg = path.replace(/^\/api\/?/, "").split("/").filter(Boolean).map(decodeURIComponent);
     const [a, b, c, d, e, f] = seg;
     const is = (m: string, n: number) => method === m && seg.length === n;
@@ -440,6 +451,17 @@ class MockBackend {
       if (p && c === "align" && is("POST", 3)) return json(200, this.aligning.align(p, body));
       if (p && c === "align_all" && is("POST", 3)) return json(200, this.aligning.alignAll(p, body));
       if (p && c === "merge" && is("POST", 3)) return json(200, this.aligning.merge(p, body));
+      if (p && c === "references") {
+        // reference models of the project (reference.ts); the first list of a project with a mesh brings a demo part
+        const r = this.references.routeReferences(method, p.id, seg.slice(2), body, raw, () => {
+          for (const s of p.scans) {
+            const m = s.status === "processed" ? this.studio.featureEngine(p, s).mesh?.() : null;
+            if (m) return { positions: Float32Array.from(m.positions), indices: Uint32Array.from(m.indices), sid: s.id };
+          }
+          return null;
+        });
+        if (r) return r;
+      }
       if (p && c === "scans" && d) {
         const s = p.scans.find((x) => x.id === d);
         if (!s) throw new HttpError(404, "Scan not found");
@@ -464,6 +486,19 @@ class MockBackend {
             mesh: () => fe.mesh?.() ?? null,
             names: fe.names,
             kept: () => this.features.keptSet(key),
+          });
+          if (r) return r;
+        }
+        if (e === "comparison") {
+          // the comparison with a reference (reference.ts)
+          const key = `${p.id}/${s.id}`;
+          const fe = this.studio.featureEngine(p, s);
+          const r = this.references.routeComparison(method, p.id, s.id, seg.slice(4), body, {
+            version: fe.version,
+            mesh: () => fe.mesh?.() ?? null,
+            frame: () => this.features.keptSet(key).frame,
+            featureIds: () => this.features.keptSet(key).features.map((x) => x.id),
+            startWorkJob: (kind, spec) => this.startWorkJob(kind, spec),
           });
           if (r) return r;
         }

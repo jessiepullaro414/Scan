@@ -10,7 +10,9 @@
   and the kept fits and measurements ``/api/projects/{pid}/scans/{sid}/features``, with the part's
   frame under ``.../features/frame`` (:mod:`ohs.server.features`) and the fits for CAD under
   ``.../features/cad`` (:mod:`ohs.server.cad`), and the sections of a scan ``.../section`` and
-  ``.../sections`` (:mod:`ohs.server.sections`);
+  ``.../sections`` (:mod:`ohs.server.sections`), and a project's reference models
+  ``/api/projects/{pid}/references`` with a scan's comparison with one ``.../comparison``
+  (:mod:`ohs.server.reference`);
 * ``/api/ws/live``: ``hello``, then the current ``device`` / ``session`` / ``calib_session`` /
   ``setup`` / active ``job`` messages, then everything the :class:`~ohs.server.hub.Hub`
   publishes for this client; ``subscribe`` messages from the client set its options;
@@ -52,6 +54,7 @@ from ohs import __version__
 from ohs.server.cad import CadExport
 from ohs.server.features import FeatureManager
 from ohs.server.protocol import PROTOCOL_VERSION, ApiError, dumps, jsonable
+from ohs.server.reference import ReferenceManager
 from ohs.server.sections import SectionManager
 from ohs.server.studio import Studio
 
@@ -248,6 +251,36 @@ class SectionPatchBody(BaseModel):
 
 class CheckBody(BaseModel):
     tolerance_mm: float = Field(gt=0.0, le=100.0)
+
+
+class ReferenceRenameBody(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+
+
+class ComparisonStartBody(BaseModel):
+    reference_id: str  # a reference of the scan's project
+    tolerance_mm: Optional[float] = Field(None, gt=0.0, le=100.0)  # default 0.3
+
+
+class ComparisonUnitsBody(BaseModel):
+    action: Literal["apply", "keep"]  # apply the unit factor, or keep the reference's numbers as mm
+    factor: Optional[float] = Field(None, gt=0.0, allow_inf_nan=False)  # default: the finding's
+
+
+class ReferencePairBody(BaseModel):
+    scan: List[float] = Field(min_length=3, max_length=3)  # a point on the scan, the scan's frame (mm)
+    reference: List[float] = Field(min_length=3, max_length=3)  # the same point on the reference, its frame (mm)
+
+
+class ComparisonAlignBody(BaseModel):
+    method: Literal["shape", "points", "datums"]
+    pairs: Optional[List[ReferencePairBody]] = Field(None, max_length=100)  # "points": three or more
+    refine: bool = True  # "points": refined on the shapes (a job), or used as they are
+
+
+class ComparisonToleranceBody(BaseModel):
+    tolerance_mm: float = Field(gt=0.0, le=100.0)
+    k: Optional[float] = Field(None, gt=0.0, le=10.0)  # the scan's own uncertainty: k sigma (default 2)
 
 
 class ScanRef(BaseModel):
@@ -768,6 +801,70 @@ def create_app(config: Any = None, *, projects_dir: Any = None, static_dir: Any 
     def sections_delete(pid: str, sid: str, xid: str) -> Response:
         secs.delete(pid, sid, xid)
         return Response(status_code=204)
+
+    # ------------------------------------------------------------------ references (FEATURE_PLAN I2, ohs/server/reference.py)
+    refs = ReferenceManager(st, feats)
+    app.state.references = refs
+    rpath = "/api/projects/{pid}/references"
+    cpath = spath + "/comparison"
+
+    @app.get(rpath)
+    def references_list(pid: str) -> JSONResponse:
+        return _json(refs.list(pid))
+
+    # the file is the raw request body (multipart needs a package that is not installed), its name in the query
+    @app.post(rpath)
+    async def references_add(pid: str, request: Request, name: Optional[str] = None) -> JSONResponse:
+        return _json(await refs.upload(pid, name, request.headers.get("content-length"), request.stream()))
+
+    @app.patch(rpath + "/{rid}")
+    def references_rename(pid: str, rid: str, body: ReferenceRenameBody) -> JSONResponse:
+        return _json(refs.rename(pid, rid, body.name))
+
+    @app.delete(rpath + "/{rid}")
+    def references_delete(pid: str, rid: str) -> Response:
+        refs.delete(pid, rid)
+        return Response(status_code=204)
+
+    @app.get(rpath + "/{rid}/mesh.ply")
+    def references_mesh(pid: str, rid: str) -> FileResponse:
+        return FileResponse(refs.mesh(pid, rid), media_type="application/octet-stream", headers={"Cache-Control": "no-cache"})
+
+    @app.get(cpath)
+    def comparison_get(pid: str, sid: str) -> JSONResponse:
+        return _json(refs.get(pid, sid))
+
+    @app.post(cpath)
+    def comparison_start(pid: str, sid: str, body: ComparisonStartBody) -> JSONResponse:
+        return _json(refs.start(pid, sid, body.reference_id, body.tolerance_mm))
+
+    @app.delete(cpath)
+    def comparison_remove(pid: str, sid: str) -> Response:
+        refs.remove(pid, sid)
+        return Response(status_code=204)
+
+    @app.post(cpath + "/units")
+    def comparison_units(pid: str, sid: str, body: ComparisonUnitsBody) -> JSONResponse:
+        return _json(refs.units(pid, sid, body.action, body.factor))
+
+    @app.post(cpath + "/align")
+    def comparison_align(pid: str, sid: str, body: ComparisonAlignBody) -> JSONResponse:
+        pairs = None if body.pairs is None else [{"scan": p.scan, "reference": p.reference} for p in body.pairs]
+        return _json(refs.align(pid, sid, body.method, pairs, body.refine))
+
+    @app.get(cpath + "/deviation.json")
+    def comparison_deviation(pid: str, sid: str) -> JSONResponse:
+        return _json(refs.deviation(pid, sid)[0])
+
+    @app.get(cpath + "/deviation.bin")
+    def comparison_deviation_bin(pid: str, sid: str) -> Response:
+        data, version = refs.deviation_bin(pid, sid)
+        return Response(data, media_type="application/octet-stream",
+                        headers={"Cache-Control": "no-cache", "X-OHS-Mesh-Version": str(version)})
+
+    @app.post(cpath + "/tolerance")
+    def comparison_tolerance(pid: str, sid: str, body: ComparisonToleranceBody) -> JSONResponse:
+        return _json(refs.tolerance(pid, sid, body.tolerance_mm, body.k))
 
     @app.get("/api/projects/{pid}/scans/{sid}/process/trajectory.json")
     def process_trajectory(pid: str, sid: str) -> JSONResponse:
