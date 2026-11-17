@@ -316,6 +316,33 @@ but nothing can be uploaded.
   figure until the reference parts have been measured (roadmap, "On accuracy claims").
 - **Test first:** the report of a simulated scan with three kept features holds exactly those
   names and numbers; an unresolved warning appears; the file opens with no network access.
+- **Engine done 2026-11-17** (the owner: an HTML page that prints to PDF). `ohs/report/`:
+  `build_html` makes one self-contained page from plain data, every part optional; in order:
+  the head, **the warnings that were not resolved** (each linked to its part), what the
+  numbers mean (a ± is the spread from scan to scan, not the accuracy; no accuracy figure
+  until the scanner is measured against reference parts), how the scan was made, the
+  calibration (its health says "not assessed" until H3 exists), the Check answer, the part's
+  coordinate system, pictures, the measured features with their ± and approved nominals
+  ("nominal Ø 14 (measured 14.021 ± 0.001)", "check again"), distances, relations (and whether
+  one moves a shape in the CAD files), sections (the drawing, with a note that it is not 1:1
+  here), the comparison with a reference, the flush along a seam with why gap is not offered.
+  - *Self-contained and safe:* no script, no link to anything outside the file, a content
+    policy that forbids loading anything, every text from the data escaped; drawings and
+    pictures are embedded as images, so an SVG cannot run code. The same data gives the same
+    bytes.
+  - *Prints cleanly:* portrait with margins that suit A4 and Letter, black on white, table
+    heads repeated, rows and drawings not split, page numbers where the browser allows.
+  - `features_csv` (one row per fit and per relation, values and ± in separate columns, text
+    that could be read as a spreadsheet formula made safe) and `features_json`.
+  - Looked at as a picture of the example (headless Edge, screen and print styles): the parts
+    read in order and a fit named with markup shows as text. The example printed to a 6-page
+    PDF; its paging has not been looked at.
+  - Tests: 21 on both paths.
+  - **Left:** collecting a scan's data on the server, the pictures of the model, the Report
+    button and the CSV / JSON downloads (the CSV should be written with a byte-order mark so
+    spreadsheets read ± and Ø). The "check again" reason is only in the API's view of the
+    features, so the collector must pass that view. A long section title is cut off in the
+    SVG (`ohs/cad/svg.py`); the report titles drawings itself.
 
 ### I4. Gap and flush (L, an experiment)
 - **What:** between two panels: the user clicks either side of the seam; the engine follows the
