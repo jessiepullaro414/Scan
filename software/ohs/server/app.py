@@ -602,6 +602,10 @@ def create_app(config: Any = None, *, projects_dir: Any = None, static_dir: Any 
     def features_add_relation(pid: str, sid: str, body: RelationBody) -> JSONResponse:
         return _json(feats.add_relation(pid, sid, body.a, body.b, body.name))
 
+    @app.get(fpath + "/relate")
+    def features_relate(pid: str, sid: str, a: str, b: str) -> JSONResponse:
+        return _json(feats.relate(pid, sid, a, b))
+
     @app.post(fpath + "/refit")
     def features_refit(pid: str, sid: str, body: Optional[RefitBody] = None) -> JSONResponse:
         return _json(feats.refit(pid, sid, body.ids if body is not None else None))
@@ -639,6 +643,10 @@ def create_app(config: Any = None, *, projects_dir: Any = None, static_dir: Any 
     @app.get(fpath + "/{fid}/faces")
     def features_faces(pid: str, sid: str, fid: str) -> JSONResponse:
         return _json(feats.faces(pid, sid, fid))
+
+    @app.get(fpath + "/{fid}/outline")
+    def features_outline(pid: str, sid: str, fid: str) -> JSONResponse:
+        return _json(feats.outline(pid, sid, fid))
 
     @app.get("/api/projects/{pid}/scans/{sid}/process/trajectory.json")
     def process_trajectory(pid: str, sid: str) -> JSONResponse:

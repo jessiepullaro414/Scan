@@ -8,12 +8,16 @@
   (:func:`region_extent`: a plane's outline, a cylinder's span and arc, a hole's edge) and warnings.
 * :func:`relate` (:mod:`ohs.measure.relate`): the angles and distances between two fits, as the
   viewer gives them, each with a ± from both fits.
+* :func:`part_frame` (:mod:`ohs.measure.frame`): the part's own coordinate system from three fits
+  (the 3-2-1 rule), a :class:`PartFrame` with its ±.
 """
 from __future__ import annotations
 
 from ohs.measure.fit import CircleFit, CylinderFit, PlaneFit, fit_circle, fit_cylinder, fit_plane
+from ohs.measure.frame import PartFrame, part_frame
 from ohs.measure.region import KINDS, RegionFit, fit_at, region_extent
 from ohs.measure.relate import PARALLEL_DEG, Quantity, Relation, relate
 
 __all__ = ["fit_plane", "fit_cylinder", "fit_circle", "PlaneFit", "CylinderFit", "CircleFit", "fit_at", "RegionFit",
-           "region_extent", "KINDS", "relate", "Relation", "Quantity", "PARALLEL_DEG"]
+           "region_extent", "KINDS", "relate", "Relation", "Quantity", "PARALLEL_DEG",
+           "part_frame", "PartFrame"]

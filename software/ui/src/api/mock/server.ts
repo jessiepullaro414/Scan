@@ -328,6 +328,7 @@ class MockBackend {
         return json(422, { detail: "The request body isn't valid JSON" });
       }
     }
+    if (method === "GET") for (const [k, v] of url.searchParams) body[k] = v; // a GET's query (features/relate?a=&b=)
     if (!url.pathname.includes("/files/") && !this.opts.fast) await new Promise((r) => setTimeout(r, 70 + Math.random() * 120));
     try {
       return await this.route(method, url.pathname, body);

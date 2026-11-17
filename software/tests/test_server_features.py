@@ -83,7 +83,11 @@ def test_keep_reload_rename_and_delete(tracked, tmp_path):
     assert r.status_code == 200, r.text
     f1 = r.json()
     assert f1["id"].startswith("f-") and f1["name"] == "Fit 1" and f1["kind"] == "plane" and f1["stale"] is False
-    assert f1["mesh_version"] == click["version"] and f1["extent"] is None and f1["created"]
+    assert f1["mesh_version"] == click["version"] and f1["created"]
+    # where the region lies (K2): a plane's rectangle and area, the outline itself in its own file
+    ext = f1["extent"]
+    assert ext["kind"] == "plane" and ext["area_mm2"] > 0 and min(ext["rectangle"]["half_sizes_mm"]) > 0
+    assert "outer" not in ext and ext["n_outer"] >= 1
     assert f1["seed"] == {"kind": "plane", "face": click["face"], "point": click["point"], "tolerance_mm": None}
     assert f1["shape"]["kind"] == "plane" and f1["shape"]["normal_sigma_deg"] > 0 and f1["shape"]["offset_sigma_mm"] > 0
     faces = decoded(f1["faces"])

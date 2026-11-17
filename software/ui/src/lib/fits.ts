@@ -3,15 +3,19 @@
  * (base64 of little-endian uint32), the region's triangles in the mesh on screen, a summary of the
  * region, the labels, and the relations between two fits (angles and distances).
  *
- * The ± values of a fit are 1σ, statistical only. A relation gets a ± only where the parts' ±
- * values give one soundly: the distance between two parallel planes (the root-sum-square of their
- * offset ±, which are along the normal; it ignores their tilt). The ± of a direction or of a
- * position across one is the RMS of a two-component error (the engine's `fit.py`), so its share
- * along any one angle or distance is not known: those relations have no ±.
+ * The ± values of a fit are 1σ, statistical only.
+ *
+ * **Relations: the engine is the source.** The viewer shows the engine's relations
+ * (`ohs/measure/relate.py`, through `KeptRelation.relation` and `GET .../features/relate`; shown by
+ * lib/relationView.ts), each value with a ± from both fits. `relate` below stays for the demo backend
+ * (`?mock=1`), which has no engine: `relationRecord` gives its answer in the engine's form. Its values
+ * equal the engine's: `relate.test.ts` holds the two to the same numbers, labels and notes on the
+ * shared fixture `tests/data/relations.json`. Its ± are not the engine's: only the distance between
+ * two parallel planes has one here (the root-sum-square of their offset ±; it leaves out their tilt).
  *
  * Imports nothing at run time, so `npm test` checks it with plain node.
  */
-import type { CircleShape, CylinderShape, FitKind, FitShape, PlaneShape } from "../api/types";
+import type { CircleShape, CylinderShape, FitKind, FitShape, PlaneShape, RelationRecord, RelationValue } from "../api/types";
 
 type V = ArrayLike<number>;
 
@@ -327,10 +331,26 @@ function planeAxis(plane: PlaneShape, other: FitPart & { shape: CylinderShape | 
   return { rows, notes };
 }
 
-/** What applies between two fits: angles, and the distances that have one meaning. */
+/** What applies between two fits: angles, and the distances that have one meaning. The demo backend's (the engine's
+ * `ohs.measure.relate` is the source; see the top of this file). */
 export function relate(a: FitPart, b: FitPart): Relation {
   if (a.shape.kind === "plane" && b.shape.kind === "plane") return planes(a.shape, b.shape);
   if (a.shape.kind === "plane") return planeAxis(a.shape, b as FitPart & { shape: CylinderShape | CircleShape });
   if (b.shape.kind === "plane") return planeAxis(b.shape, a as FitPart & { shape: CylinderShape | CircleShape });
   return axes(a as FitPart & { shape: CylinderShape | CircleShape }, b as FitPart & { shape: CylinderShape | CircleShape });
+}
+
+/**
+ * `relate` in the engine's form (`ohs.measure.relate` `Relation.to_dict()`, the `RelationRecord` of APP_API.md), for
+ * the demo backend: the same labels, values and notes, the value named and its unit given as the engine does.
+ */
+export function relationRecord(a: FitPart, b: FitPart): RelationRecord {
+  const r = relate(a, b);
+  const values: RelationValue[] = r.rows.map((row) => {
+    const angle = row.label.startsWith("Angle");
+    return { name: angle ? "angle" : row.label === "Centre to centre" ? "centre_distance" : "distance", label: row.label, value: row.x, sigma: row.sigma, unit: angle ? "deg" : "mm" };
+  });
+  const first = values[0];
+  const parallel = !!first && (first.label.endsWith("(parallel)") || (first.label.endsWith("to the plane") && first.value <= PARALLEL_DEG));
+  return { kinds: [a.kind, b.kind], parallel, values, notes: [...r.notes] };
 }

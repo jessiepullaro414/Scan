@@ -713,10 +713,54 @@ export type KeptFeature = {
   correlated_points: number | null;
   warnings: string[];
   mesh_version: number; // the mesh version it was fitted on
-  extent: Record<string, unknown> | null; // its outline or span (null for now)
+  extent: FitExtent | null; // where its region lies (null: kept before extents existed; "fit again" measures it)
   created: string;
   stale: boolean; // fitted on an earlier mesh than the current one
 };
+// Where a kept fit's region lies on its shape (ohs.measure.region_extent; the small part features.json keeps,
+// ohs/measure/features.py "The extent"). mm, the scan's frame.
+export type PlaneExtent = {
+  kind: "plane";
+  origin: number[]; // the plane's 2D basis: a point is origin + x u + y v
+  u: number[];
+  v: number[];
+  // the smallest rectangle round the outline: its centre, its axes (the longer side's first) and half sizes
+  rectangle: { center: number[]; axes: number[][]; half_sizes_mm: [number, number] };
+  area_mm2: number; // the outline's area (its outer loops' less its holes')
+  n_outer: number; // loops of the outline (the loops themselves: GET .../features/{id}/outline)
+  n_holes: number;
+  n_points: number;
+};
+export type CylinderExtent = {
+  kind: "cylinder";
+  along_mm: [number, number]; // the region along the axis, from the shape's point
+  length_mm: number;
+  zero: number[]; // unit, square to the axis: angles are taken from it, turning right-handed about the axis
+  start_deg: number;
+  arc_deg: number; // how much of the round the region covers (360: all of it)
+};
+export type HoleExtent = {
+  kind: "hole";
+  n_edge: number; // points on its edge
+  edge: number[][] | null; // the edge in order round the loop when short; else null (GET .../features/{id}/outline)
+};
+export type FitExtent = PlaneExtent | CylinderExtent | HoleExtent;
+/** `GET .../features/{id}/outline`: a plane's outline loops (2D in its basis) or a hole's edge (3D). */
+export type FeatureOutline =
+  | { id: string; mesh_version: number; kind: "plane"; origin: number[]; u: number[]; v: number[]; outer: number[][][]; holes: number[][][] }
+  | { id: string; mesh_version: number; kind: "hole"; edge: number[][] };
+/** One value of a relation as the engine gives it (ohs.measure.relate `Quantity`). */
+export type RelationValue = {
+  name: "angle" | "distance" | "centre_distance";
+  label: string; // "Angle (parallel)", "Distance between the axes", ...
+  value: number;
+  sigma: number | null; // 1σ from both fits' ±; null where the fits give none (an angle with a hole's axis)
+  unit: "deg" | "mm";
+};
+/** What applies between two fits (ohs.measure.relate `Relation.to_dict()`). */
+export type RelationRecord = { kinds: [FitKind, FitKind]; parallel: boolean; values: RelationValue[]; notes: string[] };
+/** `GET .../features/relate?a=&b=`: two kept fits' relation, not kept. */
+export type PairRelation = { a: string; b: string; stale: boolean; relation: RelationRecord | null; error?: string };
 export type KeptMeasurement = {
   id: string; // "m-…"
   name: string; // "Distance 1" unless the user named it
@@ -726,8 +770,17 @@ export type KeptMeasurement = {
   created: string;
   stale: boolean;
 };
-/** Two kept fits the user asked to relate; the numbers are worked out when shown. */
-export type KeptRelation = { id: string; name: string; a: string; b: string; created: string };
+/** Two kept fits the user asked to relate; the numbers are worked out when shown (by the engine: `relation`). */
+export type KeptRelation = {
+  id: string;
+  name: string;
+  a: string;
+  b: string;
+  created: string;
+  stale?: boolean; // one of the two fits was fitted on an earlier mesh
+  relation?: RelationRecord | null; // the engine's values for the two kept shapes (null: it could not relate them, see error)
+  error?: string;
+};
 export type FeatureSet = {
   format_version: number;
   // the part's coordinate system: a `PartFrameView` when this version can read it (lib/partFrame.ts `readFrame`),

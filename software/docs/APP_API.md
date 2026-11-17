@@ -950,10 +950,13 @@ Rules:
   edit job of the scan: it uses the current version and says which in `version`.
 
 ## Kept features: fits and measurements saved with the scan
-[`FEATURE_PLAN.md`](FEATURE_PLAN.md), K1. Fits, two-point measurements and relations are kept in
+[`FEATURE_PLAN.md`](FEATURE_PLAN.md), K1 and K2. Fits, two-point measurements and relations are kept in
 `scans/<sid>/features.json` (`ohs.measure.features`, `format_version` 1), each fit's region in
 `scans/<sid>/features/<id>.npy` (sorted uint32 face indices, valid on the mesh version it was fitted on).
-They have names the user can change, and come back when the viewer opens the scan again.
+They have names the user can change, and come back when the viewer opens the scan again. Each fit also
+carries where its region lies on its shape (its extent, `ohs.measure.region_extent`); a plane's outline
+loops are kept beside the region in `scans/<sid>/features/<id>.outline.npz`. The relations shown are the
+engine's (`ohs.measure.relate`), worked out when shown.
 
 ### Types
 ```ts
@@ -969,7 +972,7 @@ type KeptFeature = {
   n_faces: number; tolerance_mm: number | null; mean_sigma_mm: number | null;
   correlated_points: number | null; warnings: string[];  // as in FitResult
   mesh_version: number;                 // the mesh version it was fitted on
-  extent: object | null;                // its outline or span: null for now (FEATURE_PLAN.md K2)
+  extent: FitExtent | null;             // where its region lies; null: kept before extents existed ("fit again")
   created: string;
   stale: boolean;                       // fitted on another mesh version than the current one ("fitted on an earlier mesh")
 };
@@ -977,10 +980,45 @@ type KeptMeasurement = { id: string;    // "m-…"
                          name: string;  // "Distance N" unless the user named it
                          a: [number, number, number]; b: [number, number, number];
                          mesh_version: number | null; created: string; stale: boolean };
+// Where a fit's region lies on its shape, in mm, the scan's frame. Only this small part is kept in features.json
+// (it is read and sent on every GET .../features); a plane's outline loops are served by .../outline.
+type PlaneExtent = { kind: "plane";
+                     origin: number[]; u: number[]; v: number[];   // the plane's 2D basis: origin + x u + y v
+                     rectangle: { center: number[];                 // the smallest rectangle round the outline
+                                  axes: number[][];                 // its two sides' directions, the longer first
+                                  half_sizes_mm: [number, number] };
+                     area_mm2: number;                 // the outline's area (its outer loops' less its holes')
+                     n_outer: number; n_holes: number; // loops of the outline (specks of a few faces left out)
+                     n_points: number };               // points in those loops
+type CylinderExtent = { kind: "cylinder";
+                        along_mm: [number, number];    // the region along the axis, from the shape's point
+                        length_mm: number;
+                        zero: number[];                // unit, square to the axis: angles are taken from it,
+                        start_deg: number;             // turning right-handed about the axis; the region covers
+                        arc_deg: number };             // start_deg through start_deg + arc_deg (360: all round)
+type HoleExtent = { kind: "hole"; n_edge: number;      // points on the hole's edge
+                    edge: number[][] | null };         // the edge in order round it, when at most 128 points; else null
+type FitExtent = PlaneExtent | CylinderExtent | HoleExtent;
+type FeatureOutline =                                  // GET .../features/{id}/outline
+  | { id: string; mesh_version: number; kind: "plane"; origin: number[]; u: number[]; v: number[];
+      outer: number[][][];                             // outer loops, counter-clockwise seen from the normal's side
+      holes: number[][][] }                            // loops inside them, clockwise; 2D points [x, y] in the basis
+  | { id: string; mesh_version: number; kind: "hole"; edge: number[][] };   // 3D points
+// What applies between two fits: ohs.measure.relate's Relation.to_dict(). Each value's sigma is its 1σ from both
+// fits' ± (statistical only; calibration, scale and errors a whole region shares come on top); null where the fits
+// give none (an angle with a hole's axis: a hole's direction has no ±).
+type RelationValue = { name: "angle" | "distance" | "centre_distance"; label: string;   // "Angle (parallel)", ...
+                       value: number; sigma: number | null; unit: "deg" | "mm" };
+type RelationRecord = { kinds: [FitKind, FitKind]; parallel: boolean; values: RelationValue[];
+                        notes: string[] };             // why a distance is missing, in plain words
 type KeptRelation = { id: string;       // "r-…"
                       name: string;     // "Relation N" unless the user named it
                       a: string; b: string;   // two kept fits; the numbers are worked out when shown, not stored
-                      created: string };
+                      created: string;
+                      stale: boolean;   // one of the two fits was fitted on another mesh version than the current one
+                      relation: RelationRecord | null;   // the engine's values for the two kept shapes
+                      error?: string }; // only when relation is null: why the engine could not relate them
+type PairRelation = { a: string; b: string; stale: boolean; relation: RelationRecord | null; error?: string };
 type FeatureSet = {
   format_version: 1;
   frame: PartFrameView | null;          // the part's coordinate system ("The part's frame" below)
@@ -995,7 +1033,8 @@ type FeatureFaces = { id: string; mesh_version: number; n_faces: number; faces: 
 type RefitResult = { features: FeatureSet; refitted: string[];
                      failed: { id: string; detail: string; hint: string | null }[] };
 ```
-In `features.json` the records are the same without `stale` (and `FeatureSet` without `mesh_version`).
+In `features.json` the records are the same without `stale` (and `FeatureSet` without `mesh_version`); a
+relation keeps only `id`, `name`, `a`, `b` and `created`.
 
 ### REST
 Paths are relative to `/api/projects/{pid}/scans/{sid}`.
@@ -1009,15 +1048,32 @@ Paths are relative to `/api/projects/{pid}/scans/{sid}`.
 | `PATCH .../features/{id}` | `{name}` | the renamed `KeptFeature`, `KeptMeasurement` or `KeptRelation` |
 | `DELETE .../features/{id}` | | 204 |
 | `GET .../features/{id}/faces` | | `FeatureFaces` |
+| `GET .../features/{id}/outline` | | `FeatureOutline` |
+| `GET .../features/relate?a={id}&b={id}` | | `PairRelation` |
 | `POST .../features/refit` | `{ids?: string[]}` | `RefitResult` |
 
 Rules:
 - `GET` reads only: a scan without kept features answers an empty set (and writes nothing).
 - `POST .../features` fits exactly as `POST .../fit` (the same 409 and 422 answers) and keeps the
-  answer, the click and the mesh version in one step.
+  answer, the click, the mesh version and the extent in one step. `POST .../fit` itself answers as
+  before, without the extent.
+- **Extent:** `features.json` keeps only its small part (`FitExtent`): a scan's plane outline can be
+  tens of thousands of points in hundreds of loops (a plane on a simulated scan of a door on a table:
+  61,403 points in 750 loops, 2.5 MB as JSON, against about 1.5 kB for the whole kept feature). A
+  plane's loops, and a hole's edge of more than 128 points, are in `features/<id>.outline.npz` (each
+  loop's points one after the other and each loop's length, so the loops stay apart; 1 MB there),
+  valid on the fit's `mesh_version`, written and removed with the region file. `GET
+  .../features/{id}/outline` serves them as plain JSON; 404 for a cylinder (its span and arc are all
+  of its extent) and for a fit without an extent.
 - A measurement's `version` is the mesh it was picked on (the current one when left out).
-- A relation needs two different kept fits (422 otherwise). Deleting a fit deletes its relations
-  and its region file.
+- A relation needs two different kept fits (422 otherwise). Deleting a fit deletes its relations,
+  its region file and its outline file.
+- **Relations:** every kept relation shown (in `GET .../features`, and the answers of `POST
+  .../features/relations` and of a rename) carries `relation`, `ohs.measure.relate` on the two kept
+  shapes, and `stale` when one of them was fitted on another mesh version than the current one (its
+  numbers are then that mesh's). `GET .../features/relate?a=&b=` answers the same for any two kept fits
+  without keeping anything: 404 for an id that names no kept fit, 422 for one fit twice or a missing
+  `a` or `b`.
 - **Stale:** a fit or measurement made on another mesh version than the current one (after an edit,
   undo / redo, or the mesh made again) is marked `stale`. Nothing is refitted on its own.
 - **Fit again** (`refit`) fits the stale fits (all, or those in `ids`) again on the current mesh from
@@ -1025,10 +1081,12 @@ Rules:
   face nearest the saved point. When that face is farther from the point than 2 mm and 1.5 of its
   own longest edge, the surface under the fit is gone (its region was cut away) and the fit is not
   fitted again on another surface. A refitted fit keeps its id, name and click; its shape, counts,
-  warnings, region and `mesh_version` are the new mesh's, its `extent` goes back to null. One that
-  cannot be fitted again stays as it was, still marked, and is listed in `failed` with the fit's
-  detail and hint. 409 before there is a mesh.
-- A region file (`faces`) is for the `mesh_version` it states: draw it only on that mesh.
+  warnings, region, extent, outline and `mesh_version` are the new mesh's. One that cannot be fitted
+  again stays as it was, still marked, and is listed in `failed` with the fit's detail and hint. A fit
+  kept before extents existed (`extent` null) is fitted again too: when it is not stale, from its own
+  clicked face on its own mesh, so its shape stays the same and it gains its extent. 409 before there
+  is a mesh.
+- A region file (`faces`) and an outline are for the `mesh_version` they state: draw them only on that mesh.
 - 404 for an unknown project, scan or id; 422 for invalid bodies (a name that is empty or longer than
   80 characters, a point that is not three numbers); 500 when `features.json` cannot be read (the
   file is left as it is).

@@ -23,6 +23,7 @@ import type {
   EditBody,
   Emitters,
   FeatureFaces,
+  FeatureOutline,
   FeatureSet,
   FitRequest,
   FitResult,
@@ -35,6 +36,7 @@ import type {
   NewMeasurement,
   NewRelation,
   NewFrame,
+  PairRelation,
   PartFrameView,
   RefitResult,
   HoleOutline,
@@ -345,7 +347,14 @@ export const api = {
   deleteFeature: (pid: string, sid: string, id: string) => del(`${scanPath(pid, sid)}/features/${enc(id)}`),
   /** A kept fit's region, valid on the mesh version it says. */
   featureFaces: (pid: string, sid: string, id: string) => get<FeatureFaces>(`${scanPath(pid, sid)}/features/${enc(id)}/faces`),
-  /** Fit the stale fits again on the current mesh, from their saved clicks; those that can't be stay marked. */
+  /** A kept fit's whole outline (a plane's loops, a hole's long edge), valid on the mesh version it says; 404 for a
+   * cylinder and for a fit kept before outlines were measured. */
+  featureOutline: (pid: string, sid: string, id: string) => get<FeatureOutline>(`${scanPath(pid, sid)}/features/${enc(id)}/outline`),
+  /** How two kept fits relate, worked out by the engine (as a kept relation shows it), without keeping it. */
+  relateFeatures: (pid: string, sid: string, a: string, b: string) =>
+    get<PairRelation>(`${scanPath(pid, sid)}/features/relate?a=${encodeURIComponent(a)}&b=${encodeURIComponent(b)}`),
+  /** Fit the stale fits again on the current mesh, from their saved clicks; those that can't be stay marked. Fits kept
+   * before their extent was measured are fitted again too (on their own mesh, from their own click). */
   refitFeatures: (pid: string, sid: string, ids?: string[]) => post<RefitResult>(`${scanPath(pid, sid)}/features/refit`, ids ? { ids } : {}),
   /** Build the part's frame from three kept fits and keep it (replaces one kept before). 422 with the engine's
    * words when the fits can't make a frame (the detail says why), 409 for a fit made on an earlier mesh. */

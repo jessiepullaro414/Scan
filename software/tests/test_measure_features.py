@@ -232,3 +232,120 @@ def test_frame_state_of_a_frame_this_version_cannot_read(tmp_path):
         kf.save(tmp_path, doc)
         back = kf.load(tmp_path)  # the features still load, the frame kept as it was
         assert back["frame"] == frame and back["features"][0]["id"] == "f-1"
+
+
+# --------------------------------------------------------------------------- the extent (K2)
+def plane_extent(n_holes: int = 2, points: int = 40) -> dict:
+    """An extent as ``region_extent`` gives it for a plane: a square outline with small square holes."""
+    t = np.linspace(0.0, 1.0, points // 4, endpoint=False)
+    side = lambda a, b: [[a[0] + (b[0] - a[0]) * s, a[1] + (b[1] - a[1]) * s] for s in t]  # noqa: E731
+    sq = lambda c, h: side([c - h, c - h], [c + h, c - h]) + side([c + h, c - h], [c + h, c + h]) + \
+        side([c + h, c + h], [c - h, c + h]) + side([c - h, c + h], [c - h, c - h])  # noqa: E731
+    return {"kind": "plane", "origin": [1.0, 2.0, 3.0], "u": [1.0, 0.0, 0.0], "v": [0.0, 1.0, 0.0],
+            "outer": [sq(0.0, 10.0)], "holes": [sq(-5.0 + 4.0 * k, 1.0)[::-1] for k in range(n_holes)],
+            "rectangle": {"center": [1.0, 2.0, 3.0], "axes": [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+                          "half_sizes_mm": [10.0, 10.0]},
+            "area_mm2": 400.0 - 4.0 * n_holes}
+
+
+def cylinder_extent() -> dict:
+    return {"kind": "cylinder", "along_mm": [-3.0, 9.5], "length_mm": 12.5, "zero": [0.0, 1.0, 0.0],
+            "start_deg": 20.0, "arc_deg": 180.0}
+
+
+def hole_extent(n: int) -> dict:
+    a = np.linspace(0.0, 2 * np.pi, n, endpoint=False)
+    return {"kind": "hole", "edge": np.c_[5 + 6 * np.cos(a), 5 + 6 * np.sin(a), np.full(n, 2.0)].tolist()}
+
+
+def test_split_extent_keeps_the_small_part_in_the_json():
+    ext = plane_extent()
+    small, side = kf.split_extent(ext)
+    assert small == {"kind": "plane", "origin": ext["origin"], "u": ext["u"], "v": ext["v"],
+                     "rectangle": ext["rectangle"], "area_mm2": ext["area_mm2"], "n_outer": 1, "n_holes": 2,
+                     "n_points": 40 + 2 * 40}
+    assert side == {"kind": "plane", "origin": ext["origin"], "u": ext["u"], "v": ext["v"], "outer": ext["outer"],
+                    "holes": ext["holes"]}
+    small, side = kf.split_extent(cylinder_extent())
+    assert small == cylinder_extent() and side is None
+    # a hole's edge stays when it is short, else it goes to the side file and the JSON keeps its count
+    short = hole_extent(kf.EDGE_MAX_POINTS)
+    small, side = kf.split_extent(short)
+    assert small == {"kind": "hole", "n_edge": kf.EDGE_MAX_POINTS, "edge": short["edge"]} and side is None
+    long = hole_extent(kf.EDGE_MAX_POINTS + 1)
+    small, side = kf.split_extent(long)
+    assert small == {"kind": "hole", "n_edge": kf.EDGE_MAX_POINTS + 1, "edge": None}
+    assert side == {"kind": "hole", "edge": long["edge"]}
+    assert kf.split_extent(None) == (None, None)
+    with pytest.raises(ValueError, match="extent"):
+        kf.split_extent({"kind": "cone"})
+
+
+def test_a_stored_extent_is_checked(tmp_path):
+    for ext in (kf.split_extent(plane_extent())[0], cylinder_extent(), kf.split_extent(hole_extent(12))[0],
+                kf.split_extent(hole_extent(500))[0], None):
+        doc = full_doc()
+        doc["features"][0]["extent"] = copy.deepcopy(ext)
+        kf.save(tmp_path, doc)
+        assert kf.load(tmp_path)["features"][0]["extent"] == ext
+
+
+@pytest.mark.parametrize("change", [
+    lambda e: e.update(kind="cone"),
+    lambda e: e.pop("kind"),
+    lambda e: e.update(origin=[1, 2]),
+    lambda e: e.update(u="x"),
+    lambda e: e.update(rectangle=None),
+    lambda e: e["rectangle"].update(center=[0, 0, float("nan")]),
+    lambda e: e["rectangle"].update(axes=[[1, 0, 0]]),
+    lambda e: e["rectangle"].update(half_sizes_mm=[1.0, -1.0]),
+    lambda e: e.update(area_mm2=-3.0),
+    lambda e: e.update(area_mm2="big"),
+    lambda e: e.update(n_outer=1.5),
+    lambda e: e.update(n_holes=-1),
+])
+def test_a_bad_plane_extent_is_refused(change):
+    doc = full_doc()
+    ext = kf.split_extent(plane_extent())[0]
+    change(ext)
+    doc["features"][0]["extent"] = ext
+    with pytest.raises(ValueError, match="extent"):
+        kf.validate(doc)
+
+
+@pytest.mark.parametrize("ext", [
+    {**cylinder_extent(), "along_mm": [1.0]},
+    {**cylinder_extent(), "length_mm": -1.0},
+    {**cylinder_extent(), "zero": [0, 0]},
+    {**cylinder_extent(), "arc_deg": None},
+    {"kind": "hole", "n_edge": 3, "edge": [[0, 0, 0], [1, 0]]},
+    {"kind": "hole", "n_edge": -1, "edge": None},
+    {"kind": "hole", "edge": "loop"},
+])
+def test_a_bad_cylinder_or_hole_extent_is_refused(ext):
+    doc = full_doc()
+    doc["features"][1]["extent"] = ext
+    with pytest.raises(ValueError, match="extent"):
+        kf.validate(doc)
+
+
+def test_outline_side_files(tmp_path):
+    ext = plane_extent(n_holes=3)
+    _, side = kf.split_extent(ext)
+    p = kf.save_outline(tmp_path, "f-1", side, mesh_version=7)
+    assert p == kf.outline_path(tmp_path, "f-1")
+    assert p.parent == kf.faces_path(tmp_path, "f-1").parent and p.is_file()
+    back = kf.load_outline(tmp_path, "f-1")
+    assert back == {**side, "mesh_version": 7}  # the loops apart, each as it was
+    assert [len(x) for x in back["holes"]] == [40, 40, 40]
+    # a long hole edge
+    _, side = kf.split_extent(hole_extent(300))
+    kf.save_outline(tmp_path, "f-2", side, mesh_version=2)
+    assert kf.load_outline(tmp_path, "f-2") == {**side, "mesh_version": 2}
+    assert kf.load_outline(tmp_path, "f-404") is None
+    kf.remove_outline(tmp_path, "f-1")
+    kf.remove_outline(tmp_path, "f-1")  # twice is fine
+    assert kf.load_outline(tmp_path, "f-1") is None and not p.exists()
+    assert sorted(x.name for x in p.parent.iterdir()) == ["f-2.outline.npz"]  # no temporary file left
+    with pytest.raises(ValueError, match="id"):
+        kf.outline_path(tmp_path, "../escape")

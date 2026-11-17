@@ -1,8 +1,11 @@
 /**
  * The viewer's Fit tool, in the 3D view: a click on the surface asks the engine for a plane,
  * cylinder or hole there and keeps it with the scan (ViewerPage sends it); each kept fit made on the
- * mesh on screen has its region drawn over the mesh with the shape's outline (a plane's square, a
- * cylinder's axis, a hole's circle) and its label.
+ * mesh on screen has its region drawn over the mesh with the shape's outline and its label. Where the
+ * engine measured the fit's extent (lib/extent.ts) the outline is the engine's: a plane's rectangle
+ * round its region, a cylinder's axis over the region's span and the arc of the round it covers. A
+ * fit kept before extents existed is drawn as before, from the viewer's own `summarizeRegion`: a
+ * square where it was clicked, the axis over the region. A hole is its circle either way.
  *
  * A region is its own small geometry: an index of the region's triangles over the mesh's position
  * attribute (shared, so its GPU buffer is too). Nothing of the mesh is copied or rebuilt, and each
@@ -12,7 +15,8 @@
 import { Html, Line } from "@react-three/drei";
 import { memo, useEffect, useMemo, type RefObject } from "react";
 import { BufferAttribute, BufferGeometry, DoubleSide, MeshBasicMaterial, type Mesh } from "three";
-import type { FitKind, FitShape } from "../../api/types";
+import type { FitExtent, FitKind, FitShape } from "../../api/types";
+import { cylinderMarks, rectangleOutline } from "../../lib/extent";
 import { fitName, type RegionSummary } from "../../lib/fits";
 import { useThemeColors } from "../../three/Studio";
 import { useSurfacePick } from "./picking";
@@ -43,6 +47,8 @@ export type FitItem = {
   /** The region's triangles (corner triples into the vertices of the mesh on screen); null while not read, or when stale. */
   tris: Uint32Array | null;
   region: RegionSummary | null;
+  /** Where the region lies, as the engine measured it; null for a fit kept before extents existed. */
+  extent: FitExtent | null;
   /** "Plane · RMS 0.04 mm". */
   label: string;
 };
@@ -76,8 +82,28 @@ function across(n: number[]): [number[], number[]] {
   return [u, [d[1] * u[2] - d[2] * u[1], d[2] * u[0] - d[0] * u[2], d[0] * u[1] - d[1] * u[0]]];
 }
 
-/** The shape's outline: a plane's square where it was clicked, a cylinder's axis over the region, a hole's circle. */
-function outlineOf(s: FitShape, region: RegionSummary, size: number): Vec3[] {
+/** One line of a fit's outline; a cylinder's axis is dashed. */
+type OutlineLine = { points: Vec3[]; dashed: boolean };
+
+/**
+ * The shape's outline. With the engine's extent: a plane's rectangle, a cylinder's axis over its span and its arc.
+ * Without (a fit kept before extents existed): a plane's square where it was clicked, a cylinder's axis over the
+ * region as the viewer measured it. A hole: its circle.
+ */
+function outlineOf(s: FitShape, region: RegionSummary, extent: FitExtent | null, size: number): OutlineLine[] {
+  if (s.kind === "plane" && extent?.kind === "plane") return [{ points: rectangleOutline(extent), dashed: false }];
+  if (s.kind === "cylinder" && extent?.kind === "cylinder") {
+    const { axis, arc } = cylinderMarks(s, extent, 0.15 * extent.length_mm + size * 2);
+    return [
+      { points: axis, dashed: true },
+      { points: arc, dashed: false },
+    ];
+  }
+  return [{ points: ownOutline(s, region, size), dashed: s.kind === "cylinder" }];
+}
+
+/** The viewer's own outline (no extent from the engine): a plane's square where it was clicked, a cylinder's axis over the region, a hole's circle. */
+function ownOutline(s: FitShape, region: RegionSummary, size: number): Vec3[] {
   const at = (o: number[], a: number[], x: number, b: number[], y: number): Vec3 => [o[0] + a[0] * x + b[0] * y, o[1] + a[1] * x + b[1] * y, o[2] + a[2] * x + b[2] * y];
   if (s.kind === "plane") {
     const [u, v] = across(s.normal);
@@ -134,6 +160,7 @@ const FitMark = memo(function FitMark({
   shape,
   tris,
   region,
+  extent,
   base,
   material,
   color,
@@ -144,16 +171,19 @@ const FitMark = memo(function FitMark({
   shape: FitShape;
   tris: Uint32Array;
   region: RegionSummary;
+  extent: FitExtent | null;
   base: BufferGeometry;
   material: MeshBasicMaterial;
   color: string;
   size: number;
 }) {
-  const outline = useMemo(() => outlineOf(shape, region, size), [shape, region, size]);
+  const outline = useMemo(() => outlineOf(shape, region, extent, size), [shape, region, extent, size]);
   return (
     <group>
       <RegionOverlay tris={tris} base={base} material={material} />
-      <Line points={outline} color={color} lineWidth={shape.kind === "cylinder" ? 2.2 : 1.8} dashed={shape.kind === "cylinder"} dashSize={size * 3} gapSize={size * 1.6} depthTest={false} renderOrder={10} transparent />
+      {outline.map((l, i) => (
+        <Line key={i} points={l.points} color={color} lineWidth={l.dashed ? 2.2 : 1.8} dashed={l.dashed} dashSize={size * 3} gapSize={size * 1.6} depthTest={false} renderOrder={10} transparent />
+      ))}
       <Html position={region.anchor} center zIndexRange={[30, 0]} className="html-label">
         <div
           className="flex items-center gap-1.5 rounded-full border bg-[rgb(17_20_25/0.9)] py-1 pl-1 pr-2.5 font-mono text-[12.5px] font-semibold text-white shadow-lg tnum"
@@ -215,7 +245,7 @@ export function FitTool({
         if (!f.tris || !f.region) return null;
         const on = picked.includes(f.id);
         return (
-          <FitMark key={f.fid} num={f.id} label={f.label} shape={f.shape} tris={f.tris} region={f.region} base={geometry} material={on ? strong : plain} color={on ? PICKED_COLOR : accent} size={r} />
+          <FitMark key={f.fid} num={f.id} label={f.label} shape={f.shape} tris={f.tris} region={f.region} extent={f.extent} base={geometry} material={on ? strong : plain} color={on ? PICKED_COLOR : accent} size={r} />
         );
       })}
       {busy ? (

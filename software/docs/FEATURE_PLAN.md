@@ -102,9 +102,9 @@ number is in the scan's own frame.
   - Checked in the app on a real scan of 804,382 triangles: a plane kept, renamed, there again
     after a reload; marked after an edit; fitted again with its name.
   - Tests: 37 on both paths (the file, the routes), 51 UI checks (the mock routes, the store).
-  - **Left:** `extent` is still null (K2 fills it).
+  - `extent`, null at first, is filled since K2 reached the app (below).
 
-### K2. Extents and relations move into the engine (M)
+### [x] K2. Extents and relations move into the engine (M)
 - **What:** `RegionFit` gains the extent of its region: a plane's outline (the region's boundary
   projected onto the plane, plus its oriented rectangle), a cylinder's span along its axis and
   the arc it covers, a hole's edge loop (`RegionFit.edge` exists; `processing.py:1808` does not
@@ -126,8 +126,28 @@ number is in the scan's own frame.
     the scan's table 2,810). Now 0.12–0.14 s there, with a test on a plate of 529 holes.
   - **Known limits:** a hole's direction has no ±, so angles with it have none; the ± of skew
     axes is up to 1.4 times off on part-round cylinders (the fits keep no full covariance).
-  - **Left:** the fit route and the kept features do not carry the extent yet, and the viewer
-    still computes relations itself (the next task).
+- **In the app, done 2026-11-17.** A kept fit carries its extent: the small part in
+  `features.json` (a plane's rectangle, area and loop counts; a cylinder's span and arc; a
+  hole's edge up to 128 points), a plane's outline in its own file
+  (`features/<id>.outline.npz`, served by `GET .../features/{id}/outline`). `POST .../fit`
+  answers exactly what it did. Kept relations and the viewer's two-fit card show the engine's
+  record with its ± (`GET .../features/relate?a=&b=`); where the engine has no ±, the card says
+  why in the engine's words. Each fit's card shows its size (a plane's two sides and area, a
+  cylinder's length and arc), and the 3D outline is the engine's rectangle or span and arc.
+  - A fit kept before this has no extent: a note with "Fit again" measures it on its own mesh
+    (the shape stays identical, so the part's frame stays current).
+  - On a real-size scan (804,372 triangles; the table's outline 60,627 points in 720 loops):
+    the kept fit's record is about 1.3 kB and `GET .../features` answers in 18 ms; the outline
+    is 2.4 MB as JSON, in its own file; keeping the fit takes 1.5 s, the fit's own time.
+  - Checked in the app on that scan: the note and "Fit again", the size and area, the rectangle
+    drawn, the relation card with the engine's ±.
+  - Tests: a new file for the routes (`test_server_extent.py`), 383 pass on both paths over the
+    measure and kept-features files; 28 UI test files.
+  - `test_server_features.py` asserted a kept fit's extent was None (K1's state); that line
+    now asserts the plane's extent.
+  - **Left, seen on the way:** writing a 1.27M-face region's file takes about 0.8 s on the
+    simulated door scan (K1's `save_faces`): worth a look. Not seen by eye: a cylinder's arc
+    and span drawn in 3D (no cylinder on the scans at hand).
 
 ### [x] K3. A coordinate system for the part (M)
 - **What:** the 3-2-1 rule from kept features: a plane gives the first axis, a second plane or an

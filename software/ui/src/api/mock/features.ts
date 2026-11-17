@@ -7,13 +7,21 @@
  * that can't be found again stays as it was, still marked. Nothing is refitted on its own.
  *
  * The fits themselves are the demo's fit route (`MockProcess.fit`), passed in as a `FeatureEngine`,
- * so this file has no mesh code and can be checked on its own (features.test.ts).
+ * so this file has no mesh code and can be checked on its own (features.test.ts). Where the engine
+ * can say where a fit's region lies (`extent`, extent.ts) a kept fit carries it, its outline is
+ * served by `.../features/{id}/outline`, and "fit again" also measures the fits kept without one.
+ *
+ * Relations (`relation` on each kept relation, `GET .../features/relate?a=&b=`) are lib/fits.ts's
+ * `relate` in the engine's form (`relationRecord`): the demo has no engine, and those values equal
+ * the engine's (lib/relate.test.ts); their ± are the viewer's older ones.
  *
  * The part's frame (`.../features/frame`, frame.test.ts): built from three kept fits with the simplified rule of
  * frame.ts, kept per scan, shown with whether it is still current (a fit it was built from deleted or changed),
  * removed; the current mesh in it comes from the engine (`partMesh`).
  */
-import type { FeatureSet, FitResult, KeptFeature, KeptMeasurement, KeptRelation, PartFrameRecord } from "../types";
+import { relationRecord } from "../../lib/fits.ts";
+import type { FeatureSet, FitExtent, FitResult, KeptFeature, KeptMeasurement, KeptRelation, PairRelation, PartFrameRecord } from "../types";
+import { outlineAnswer, type MockOutline } from "./extent.ts";
 import { frameState, mockPartFrame, type FrameInput } from "./frame.ts";
 import { HttpError, json } from "./host.ts";
 
@@ -28,6 +36,8 @@ export type FeatureEngine = {
   /** The current mesh with its vertices and normals turned by `matrix` (4x4 rows), as `mesh.ply` or `mesh.stl`;
    * null before there is a mesh. */
   partMesh?: (matrix: number[][], name: "mesh.ply" | "mesh.stl") => ArrayBuffer | null;
+  /** Where a fit's region lies (extent.ts `mockExtent`) and its outline; without it kept fits have no extent. */
+  extent?: (r: FitResult) => { extent: FitExtent; outline: MockOutline } | null;
 };
 
 type Stored = {
@@ -36,6 +46,8 @@ type Stored = {
   relations: KeptRelation[];
   /** Each fit's region, base64 as the fit route gives it. */
   faces: Map<string, string>;
+  /** Each plane fit's outline (the outline route's answer, for the mesh version the fit was made on). */
+  outlines: Map<string, NonNullable<MockOutline>>;
   /** The part's frame, as `features.json` keeps it. */
   frame: PartFrameRecord | null;
 };
@@ -75,7 +87,7 @@ export class MockFeatures {
 
   private kept(key: string): Stored {
     let s = this.sets.get(key);
-    if (!s) this.sets.set(key, (s = { features: [], measurements: [], relations: [], faces: new Map(), frame: null }));
+    if (!s) this.sets.set(key, (s = { features: [], measurements: [], relations: [], faces: new Map(), outlines: new Map(), frame: null }));
     return s;
   }
 
@@ -87,8 +99,25 @@ export class MockFeatures {
       mesh_version: version,
       features: s.features.map((f) => ({ ...f, stale: stale(f.mesh_version) })),
       measurements: s.measurements.map((m) => ({ ...m, stale: stale(m.mesh_version) })),
-      relations: s.relations.map((r) => ({ ...r })),
+      relations: s.relations.map((r) => this.relationView(s, r, version)),
     };
+  }
+
+  /** A kept relation as the engine shows it: its two fits' relation and whether one was fitted on an earlier mesh. */
+  private relationView(s: Stored, r: Pick<KeptRelation, "a" | "b">, version: number | null) {
+    const fa = s.features.find((f) => f.id === r.a),
+      fb = s.features.find((f) => f.id === r.b);
+    const stale = [fa, fb].some((f) => !f || version === null || f.mesh_version !== version);
+    const relation = fa && fb ? relationRecord(fa, fb) : null;
+    return { ...r, stale, relation } as KeptRelation & { stale: boolean };
+  }
+
+  /** The extent and outline of a fit just made (none without the engine's `extent`). */
+  private measure(s: Stored, id: string, r: FitResult, engine: FeatureEngine): FitExtent | null {
+    const m = engine.extent?.(r) ?? null;
+    if (m?.outline) s.outlines.set(id, m.outline);
+    else s.outlines.delete(id);
+    return m?.extent ?? null;
   }
 
   private frameView(s: Stored): FeatureSet["frame"] {
@@ -111,7 +140,8 @@ export class MockFeatures {
     if (is("GET", 0)) return json(200, this.view(s, engine.version()));
     if (is("POST", 0)) return json(200, this.keepFit(s, body, engine));
     if (a === "measurements" && is("POST", 1)) return json(200, this.keepMeasurement(s, body, engine));
-    if (a === "relations" && is("POST", 1)) return json(200, this.keepRelation(s, body));
+    if (a === "relations" && is("POST", 1)) return json(200, this.relationView(s, this.keepRelation(s, body), engine.version()));
+    if (a === "relate" && is("GET", 1)) return json(200, this.relate(s, body, engine));
     if (a === "refit" && is("POST", 1)) return json(200, this.refit(s, body, engine));
     if (a === "frame" && is("POST", 1)) return json(200, this.buildFrame(s, body, engine));
     if (a === "frame" && is("DELETE", 1)) {
@@ -124,7 +154,7 @@ export class MockFeatures {
       const { list, i } = this.find(s, a);
       const items = s[list] as { name: string; mesh_version?: number | null }[];
       items[i] = { ...items[i], name };
-      if (list === "relations") return json(200, items[i]);
+      if (list === "relations") return json(200, { ...this.relationView(s, items[i] as KeptRelation, engine.version()) });
       const v = engine.version();
       return json(200, { ...items[i], stale: v === null || items[i].mesh_version !== v });
     }
@@ -134,6 +164,7 @@ export class MockFeatures {
       if (list === "features") {
         s.relations = s.relations.filter((r) => r.a !== a && r.b !== a);
         s.faces.delete(a);
+        s.outlines.delete(a);
       }
       return json(204, null);
     }
@@ -142,6 +173,14 @@ export class MockFeatures {
       const faces = s.faces.get(a);
       if (!f || faces === undefined) throw new HttpError(404, `No kept region for “${a}”`, "Read the list again.");
       return json(200, { id: a, mesh_version: f.mesh_version, n_faces: f.n_faces, faces });
+    }
+    if (a && b === "outline" && is("GET", 2)) {
+      const f = s.features.find((x) => x.id === a);
+      if (!f) throw new HttpError(404, `No kept fit “${a}”`, "Read the list again.");
+      const o = s.outlines.get(a);
+      if (o) return json(200, outlineAnswer(a, f.mesh_version, o));
+      if (f.extent?.kind === "hole" && f.extent.edge) return json(200, { id: a, mesh_version: f.mesh_version, kind: "hole", edge: f.extent.edge });
+      throw new HttpError(404, `No outline kept for “${a}”`, f.extent ? "A cylinder has none: its span and arc are in its extent." : "Fit it again.");
     }
     return undefined;
   }
@@ -167,7 +206,7 @@ export class MockFeatures {
       correlated_points: r.correlated_points ?? null,
       warnings: [...r.warnings],
       mesh_version: r.version,
-      extent: null,
+      extent: this.measure(s, id, r, engine),
       created: nowIso(),
     };
     s.features.push(f);
@@ -201,6 +240,16 @@ export class MockFeatures {
     const r: KeptRelation = { id: newId("r"), name: cleanName(body.name, nextName(s.relations, "Relation")), a, b, created: nowIso() };
     s.relations.push(r);
     return r;
+  }
+
+  /** `GET .../features/relate?a=&b=`: two kept fits' relation, not kept. */
+  private relate(s: Stored, body: Record<string, unknown>, engine: FeatureEngine): PairRelation {
+    const { a, b } = body;
+    if (typeof a !== "string" || typeof b !== "string") return bad("a, b: the ids of two kept fits (?a=…&b=…)");
+    for (const ref of [a, b]) if (!s.features.some((f) => f.id === ref)) throw new HttpError(404, `No kept fit “${ref}”`, "Read the list again.");
+    if (a === b) bad("A fit can't be related to itself", "Pick two different fits.");
+    const v = this.relationView(s, { a, b }, engine.version());
+    return { a, b, stale: v.stale, relation: v.relation ?? null };
   }
 
   private buildFrame(s: Stored, body: Record<string, unknown>, engine: FeatureEngine) {
@@ -250,8 +299,10 @@ export class MockFeatures {
     const refitted: string[] = [];
     const failed: { id: string; detail: string; hint: string | null }[] = [];
     s.features.forEach((f, i) => {
-      if (f.mesh_version === version || (wanted && !wanted.includes(f.id))) return;
-      const face = engine.nearestFace(f.seed.point);
+      // stale, or (where the engine measures extents) kept without one: then from its own click on its own mesh
+      const unmeasured = !!engine.extent && f.extent === null && f.mesh_version === version;
+      if ((f.mesh_version === version && !unmeasured) || (wanted && !wanted.includes(f.id))) return;
+      const face = unmeasured ? f.seed.face : engine.nearestFace(f.seed.point);
       let r: FitResult;
       try {
         r = engine.fit({ kind: f.kind, face, point: f.seed.point, tolerance_mm: f.seed.tolerance_mm, version });
@@ -270,7 +321,7 @@ export class MockFeatures {
         correlated_points: r.correlated_points ?? null,
         warnings: [...r.warnings],
         mesh_version: r.version,
-        extent: null,
+        extent: this.measure(s, f.id, r, engine),
       };
       s.faces.set(f.id, r.faces);
       refitted.push(f.id);

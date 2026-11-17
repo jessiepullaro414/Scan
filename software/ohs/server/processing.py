@@ -1791,10 +1791,13 @@ class ProcessManager:
         return sp.holes(lambda: self.current_mesh(sp))
 
     def fit(self, pid: str, sid: str, kind: str, face: int, point: Any, tolerance_mm: float | None = None,
-            version: int | None = None) -> dict:
+            version: int | None = None, with_extent: bool = False) -> dict:
         """``POST .../fit``: one click on the current mesh grows a plane, cylinder or hole region and
         fits it (:func:`ohs.measure.fit_at`). Read-only; the mesh is kept per version for the next
-        click. ``version``: the mesh version the click was made on (409 when it changed)."""
+        click. ``version``: the mesh version the click was made on (409 when it changed).
+        ``with_extent``: the answer also has ``extent``, where the region lies on its shape
+        (:attr:`RegionFit.extent <ohs.measure.region.RegionFit.extent>`, made with every fit anyway);
+        the kept features ask for it. Off by default: the route answers as it did before."""
         from ohs.measure import KINDS, fit_at
 
         if kind not in KINDS:
@@ -1820,12 +1823,15 @@ class ProcessManager:
                     "hole": "click near the edge of a hole that was scanned all round"}[kind]
             raise ApiError(422, str(e), hint) from None
         faces = np.asarray(r.faces, dtype="<u4")
-        return {"kind": kind, "shape": r.fit.to_dict(), "faces": base64.b64encode(faces.tobytes()).decode("ascii"),
-                "n_faces": int(len(faces)),
-                "tolerance_mm": None if r.tolerance_mm is None else float(r.tolerance_mm),  # None for a hole
-                "mean_sigma_mm": None if r.mean_sigma_mm is None else float(r.mean_sigma_mm),
-                "correlated_points": None if r.correlated_points is None else float(r.correlated_points),  # None for a hole
-                "warnings": [str(w) for w in r.warnings], "version": v}
+        out = {"kind": kind, "shape": r.fit.to_dict(), "faces": base64.b64encode(faces.tobytes()).decode("ascii"),
+               "n_faces": int(len(faces)),
+               "tolerance_mm": None if r.tolerance_mm is None else float(r.tolerance_mm),  # None for a hole
+               "mean_sigma_mm": None if r.mean_sigma_mm is None else float(r.mean_sigma_mm),
+               "correlated_points": None if r.correlated_points is None else float(r.correlated_points),  # None for a hole
+               "warnings": [str(w) for w in r.warnings], "version": v}
+        if with_extent:
+            out["extent"] = r.extent
+        return out
 
     def deviation(self, pid: str, sid: str) -> tuple[dict, np.ndarray]:
         """The deviation map of the current mesh: how far each vertex lies from the scan's base mesh

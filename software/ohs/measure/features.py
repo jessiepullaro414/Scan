@@ -14,7 +14,7 @@ mesh; :mod:`ohs.server.features` fits and refits through the fit route and keeps
                    "seed": {"kind", "face", "point", "tolerance_mm"},   # the click, to fit it again
                    "n_faces", "tolerance_mm", "mean_sigma_mm", "correlated_points", "warnings",
                    "mesh_version",   # the mesh version it was fitted on
-                   "extent": null,   # its outline or span (a later task fills it)
+                   "extent": {...} | null,   # where its region lies: the small part (below)
                    "created"}],
      "measurements": [{"id": "m-…", "name": "Distance 1", "a": [x, y, z], "b": [x, y, z],
                        "mesh_version", "created"}],
@@ -29,6 +29,26 @@ are unique across the three lists.
 ``.npy`` of sorted ``uint32`` face indices per feature, as the processing studio keeps its
 selections (``process/selections/<id>.npy``). A region is only valid on the mesh version its
 feature was fitted on.
+
+**The extent** (FEATURE_PLAN K2) says where a fit's region lies on its shape:
+:attr:`ohs.measure.region.RegionFit.extent`, split by :func:`split_extent`. ``features.json`` is read
+and sent whole on every ``GET .../features``, and a scan's plane outline can be large (a scanned
+table: about 60,000 points in 722 loops), so the file keeps only the small part:
+
+* plane: ``{"kind": "plane", "origin", "u", "v", "rectangle": {"center", "axes", "half_sizes_mm"},
+  "area_mm2", "n_outer", "n_holes", "n_points"}``: the plane's 2D basis, the smallest rectangle round
+  the outline, its area, how many outer loops and holes it has and how many points they hold;
+* cylinder: as the engine gives it, ``{"kind": "cylinder", "along_mm", "length_mm", "zero",
+  "start_deg", "arc_deg"}``;
+* hole: ``{"kind": "hole", "n_edge", "edge"}``: the edge's points when there are at most
+  :data:`EDGE_MAX_POINTS`, else ``edge`` null.
+
+The rest, a plane's outline loops (and a long hole edge), goes to ``features/<id>.outline.npz``
+beside the region file (:func:`save_outline`), valid on the same mesh version as the region. The
+loops stay apart: their points one after the other (``outer_points``, ``holes_points``, 2D in the
+plane's basis) and each loop's length (``outer_sizes``, ``holes_sizes``). ``extent`` null is a fit
+kept before extents existed (or whose extent could not be kept): it loads and shows as before.
+:func:`validate` checks the small part's shape; keys it does not know are kept.
 
 **The part's frame** (``frame``) is written by :mod:`ohs.server.features` from
 :func:`ohs.measure.frame.part_frame`. :func:`validate` passes it through as it is (an object or
@@ -56,11 +76,15 @@ import numpy as np
 
 __all__ = ["FORMAT_VERSION", "FILE_NAME", "FACES_DIR", "KINDS", "SHAPE_OF", "NAME_MAX", "ID_RE", "empty",
            "validate", "load", "save", "faces_path", "save_faces", "load_faces", "remove_faces", "new_id",
-           "next_name", "now", "frame_state"]
+           "next_name", "now", "frame_state", "EDGE_MAX_POINTS", "split_extent", "outline_path", "save_outline",
+           "load_outline", "remove_outline"]
 
 FORMAT_VERSION = 1
 FILE_NAME = "features.json"
 FACES_DIR = "features"
+OUTLINE_SUFFIX = ".outline.npz"
+#: a hole's edge with at most this many points is kept in features.json (a few kB), a longer one in its own file
+EDGE_MAX_POINTS = 128
 #: the kinds of fit (as the fit route names them) and the shape each one gives
 KINDS = ("plane", "cylinder", "hole")
 SHAPE_OF = {"plane": "plane", "cylinder": "cylinder", "hole": "circle"}
@@ -151,6 +175,82 @@ def _text(value: Any, where: str, what: str) -> str:
     return value
 
 
+def _extent(e: Any, where: str) -> None:
+    """Check a stored extent (the small part, module docstring "The extent"); null is allowed."""
+    if e is None:
+        return
+    if not isinstance(e, dict):
+        _fail(where, "extent must be an object or null")
+
+    def need(ok: bool, what: str) -> None:
+        if not ok:
+            _fail(where, f"extent: {what}")
+
+    def finite(x: Any, low: float | None = None) -> bool:
+        return isinstance(x, (int, float)) and not isinstance(x, bool) and math.isfinite(x) and (low is None or x >= low)
+
+    def vec(x: Any, n: int = 3) -> bool:
+        return isinstance(x, (list, tuple)) and len(x) == n and all(finite(c) for c in x)
+
+    def whole(x: Any) -> bool:
+        return isinstance(x, int) and not isinstance(x, bool) and x >= 0
+
+    kind = e.get("kind")
+    if kind == "plane":
+        for key in ("origin", "u", "v"):
+            need(vec(e.get(key)), f"a plane's {key} must be three finite numbers")
+        rect = e.get("rectangle")
+        need(isinstance(rect, dict), "a plane's rectangle must be an object")
+        need(vec(rect.get("center")), "the rectangle's center must be three finite numbers")
+        axes = rect.get("axes")
+        need(isinstance(axes, list) and len(axes) == 2 and all(vec(a) for a in axes),
+             "the rectangle's axes must be two directions of three numbers")
+        half = rect.get("half_sizes_mm")
+        need(isinstance(half, list) and len(half) == 2 and all(finite(h, 0.0) for h in half),
+             "the rectangle's half_sizes_mm must be two numbers of at least 0")
+        need(finite(e.get("area_mm2"), 0.0), "a plane's area_mm2 must be a number of at least 0")
+        for key in ("n_outer", "n_holes", "n_points"):
+            need(whole(e.get(key, 0)), f"a plane's {key} must be a whole number of at least 0")
+    elif kind == "cylinder":
+        along = e.get("along_mm")
+        need(isinstance(along, list) and len(along) == 2 and all(finite(a) for a in along),
+             "a cylinder's along_mm must be two finite numbers")
+        need(finite(e.get("length_mm"), 0.0), "a cylinder's length_mm must be a number of at least 0")
+        need(vec(e.get("zero")), "a cylinder's zero must be three finite numbers")
+        for key in ("start_deg", "arc_deg"):
+            need(finite(e.get(key)), f"a cylinder's {key} must be a finite number")
+    elif kind == "hole":
+        need(whole(e.get("n_edge", 0)), "a hole's n_edge must be a whole number of at least 0")
+        edge = e.get("edge")
+        need(edge is None or (isinstance(edge, list) and all(vec(p) for p in edge)),
+             "a hole's edge must be a list of points of three finite numbers, or null")
+    else:
+        _fail(where, f"extent: kind must be one of {', '.join(KINDS)}, got {kind!r}")
+
+
+def split_extent(extent: dict | None) -> tuple[dict | None, dict | None]:
+    """An extent as :func:`ohs.measure.region.region_extent` gives it, split into ``(the small part
+    kept in features.json, the large part for the side file or None)``; module docstring, "The
+    extent". ``(None, None)`` for None. Raises ValueError for a kind it does not know."""
+    if extent is None:
+        return None, None
+    kind = extent.get("kind")
+    if kind == "plane":
+        outer, holes = list(extent.get("outer", [])), list(extent.get("holes", []))
+        basis = {"origin": extent["origin"], "u": extent["u"], "v": extent["v"]}
+        small = {"kind": "plane", **basis, "rectangle": extent["rectangle"], "area_mm2": extent["area_mm2"],
+                 "n_outer": len(outer), "n_holes": len(holes), "n_points": sum(len(x) for x in outer + holes)}
+        return small, {"kind": "plane", **basis, "outer": outer, "holes": holes}
+    if kind == "cylinder":
+        return dict(extent), None
+    if kind == "hole":
+        edge = list(extent.get("edge") or [])
+        if len(edge) <= EDGE_MAX_POINTS:
+            return {"kind": "hole", "n_edge": len(edge), "edge": edge}, None
+        return {"kind": "hole", "n_edge": len(edge), "edge": None}, {"kind": "hole", "edge": edge}
+    raise ValueError(f"extent: kind must be one of {', '.join(KINDS)}, got {kind!r}")
+
+
 def _feature(f: Any, i: int) -> dict:
     where = f"features[{i}]"
     if not isinstance(f, dict):
@@ -179,9 +279,7 @@ def _feature(f: Any, i: int) -> dict:
     warnings = f.get("warnings", [])
     if not isinstance(warnings, list) or not all(isinstance(w, str) for w in warnings):
         _fail(where, "warnings must be a list of text")
-    extent = f.get("extent")
-    if extent is not None and not isinstance(extent, dict):
-        _fail(where, "extent must be an object or null")
+    _extent(f.get("extent"), where)
     out["created"] = _text(f.get("created", ""), where, "created")
     return out
 
@@ -368,5 +466,78 @@ def remove_faces(scan_dir: str | Path, fid: str) -> None:
     """Forget a feature's region (nothing happens when there is none)."""
     try:
         _retry(lambda: faces_path(scan_dir, fid).unlink(), "removing a region")
+    except FileNotFoundError:
+        pass
+
+
+def outline_path(scan_dir: str | Path, fid: str) -> Path:
+    """Where a feature's outline is kept: ``<scan_dir>/features/<id>.outline.npz``."""
+    return Path(scan_dir) / FACES_DIR / f"{_check_id(fid, 'outline')}{OUTLINE_SUFFIX}"
+
+
+def _loops(loops: list, dim: int) -> tuple[np.ndarray, np.ndarray]:
+    """Loops (lists of points) as ``(their points one after the other (n, dim), each loop's length)``."""
+    sizes = np.array([len(x) for x in loops], dtype=np.int64)
+    pts = np.asarray([p for x in loops for p in x], dtype=np.float64).reshape(-1, dim)
+    return pts, sizes
+
+
+def _unloops(pts: np.ndarray, sizes: np.ndarray) -> list:
+    ends = np.cumsum(sizes)
+    return [pts[e - n: e].tolist() for e, n in zip(ends.tolist(), sizes.tolist())]
+
+
+def save_outline(scan_dir: str | Path, fid: str, side: dict, mesh_version: int) -> Path:
+    """Keep the large part of a feature's extent (:func:`split_extent`): a plane's outline loops or
+    a long hole edge, with the mesh version it is valid on (atomic write; module docstring)."""
+    kind = side.get("kind")
+    arrays: dict[str, np.ndarray] = {"kind": np.array(kind), "mesh_version": np.array(int(mesh_version), dtype=np.int64)}
+    if kind == "plane":
+        for key in ("origin", "u", "v"):
+            arrays[key] = np.asarray(side[key], dtype=np.float64).reshape(3)
+        arrays["outer_points"], arrays["outer_sizes"] = _loops(side["outer"], 2)
+        arrays["holes_points"], arrays["holes_sizes"] = _loops(side["holes"], 2)
+    elif kind == "hole":
+        arrays["edge"] = np.asarray(side["edge"], dtype=np.float64).reshape(-1, 3)
+    else:
+        raise ValueError(f"outline: kind must be plane or hole, got {kind!r}")
+    path = outline_path(scan_dir, fid)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{fid}.tmp-{secrets.token_hex(4)}{OUTLINE_SUFFIX}")
+    try:
+        with open(tmp, "wb") as fh:
+            np.savez(fh, **arrays)
+        _retry(lambda: os.replace(tmp, path), f"replacing {path}")
+    finally:
+        if tmp.exists():
+            tmp.unlink()
+    return path
+
+
+def load_outline(scan_dir: str | Path, fid: str) -> dict | None:
+    """A feature's outline as plain JSON, or None when it has none kept: ``{"kind": "plane",
+    "origin", "u", "v", "outer", "holes", "mesh_version"}`` (the loops as ``region_extent`` gives
+    them) or ``{"kind": "hole", "edge", "mesh_version"}``."""
+    try:
+        with np.load(outline_path(scan_dir, fid), allow_pickle=False) as z:
+            kind = str(z["kind"])
+            out: dict[str, Any] = {"kind": kind}
+            if kind == "plane":
+                for key in ("origin", "u", "v"):
+                    out[key] = z[key].tolist()
+                out["outer"] = _unloops(z["outer_points"], z["outer_sizes"])
+                out["holes"] = _unloops(z["holes_points"], z["holes_sizes"])
+            else:
+                out["edge"] = z["edge"].tolist()
+            out["mesh_version"] = int(z["mesh_version"])
+            return out
+    except FileNotFoundError:
+        return None
+
+
+def remove_outline(scan_dir: str | Path, fid: str) -> None:
+    """Forget a feature's outline (nothing happens when there is none)."""
+    try:
+        _retry(lambda: outline_path(scan_dir, fid).unlink(), "removing an outline")
     except FileNotFoundError:
         pass

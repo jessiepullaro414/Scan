@@ -68,6 +68,7 @@ import { useLasers } from "./viewer/useLasers";
 import { FIT_ICON, FitList } from "./viewer/FitsPanel";
 import { FRAME_ICON, FramePanel } from "./viewer/FramePanel";
 import type { FitItem } from "./viewer/FitTool";
+import { usePairRelation } from "./viewer/usePairRelation";
 import { NameEdit } from "./viewer/NameEdit";
 import { fmtSigma, ViewerCanvas, type Measurement, type Shading, type Vec3 } from "./viewer/ViewerCanvas";
 
@@ -570,12 +571,15 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
           stale: f.stale,
           tris: drawn?.tris ?? null,
           region: drawn?.region ?? null,
+          extent: f.extent ?? null,
           label: fitLabel(f.kind, f.shape),
         };
       }),
     [kept, regions, geometry, onScreen],
   );
   const meshFits = useMemo(() => fits.filter((f) => f.tris), [fits]);
+  /** The relation of the two fits picked in the list, from the engine. */
+  const pairRelation = usePairRelation(pid, sid, pickedFits[0], pickedFits[1], kept);
   const pickedNums = useMemo(() => fits.filter((f) => pickedFits.includes(f.fid)).map((f) => f.id), [fits, pickedFits]);
   const keptMeasurements = useMemo(() => kept?.measurements ?? [], [kept]);
   const measurements = useMemo<Measurement[]>(() => keptMeasurements.map((m, i) => ({ id: i + 1, a: m.a, b: m.b })), [keptMeasurements]);
@@ -1014,6 +1018,7 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
             fits={fits}
             relations={kept?.relations ?? []}
             picked={pickedFits}
+            pairRelation={pairRelation}
             onTogglePick={togglePick}
             onPickPair={(a, b) => setPickedFits([a, b])}
             onRemove={removeFit}

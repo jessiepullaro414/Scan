@@ -1,8 +1,10 @@
 /**
  * The viewer's list of fitted shapes, kept with the scan: each fit's name (the user can change it in place), its
  * numbers with their ± (1σ, statistical only, counting points that err together), its warnings in plain words,
- * and whether it was fitted on an earlier mesh, with one "Fit again" for those. Two fits picked from the list show
- * their relation (lib/fits.ts `relate`), which can be kept too. Each fit's position and direction are shown in the
+ * where its region lies (a plane's size and area, a cylinder's length and arc, as the engine measured them:
+ * lib/extent.ts), and whether it was fitted on an earlier mesh, with one "Fit again" for those (and for fits kept
+ * before their extent was measured). Two fits picked from the list show their relation as the engine works it out
+ * (ohs/measure/relate.py, with its ±: lib/relationView.ts), which can be kept too. Each fit's position and direction are shown in the
  * scan's frame, or in the part's frame when the Coordinate system panel's switch is on (lib/partFrame.ts); its
  * sizes, ± values and the relations are the same in both.
  */
@@ -13,12 +15,15 @@ import type { FitKind, KeptRelation, PartFrameView } from "../../api/types";
 import { Badge } from "../../components/ui/Badge";
 import { Button, IconButton } from "../../components/ui/Button";
 import { Kbd } from "../../components/ui/Feedback";
-import { fitName, fitValue, fmtLength, fmtPm, fmtSmall, relate } from "../../lib/fits";
+import { extentRows } from "../../lib/extent";
+import { fitName, fitValue, fmtLength, fmtPm, fmtSmall } from "../../lib/fits";
 import { fmtInt } from "../../lib/format";
 import { fmtVec, placeOf } from "../../lib/partFrame";
+import { relationFooter, relationRows } from "../../lib/relationView";
 import { cn } from "../../lib/util";
 import { PICKED_COLOR, type FitItem } from "./FitTool";
 import { NameEdit } from "./NameEdit";
+import type { PairRelationState } from "./usePairRelation";
 import { fmtSigma } from "./ViewerCanvas";
 
 export const FIT_ICON: Record<FitKind, typeof Square> = { plane: Square, cylinder: Cylinder, hole: CircleDashed };
@@ -70,6 +75,7 @@ function rowsOf(f: FitItem, frame: PartFrameView | null): Row[] {
       ["Centre", mmSigma(s.center_sigma_mm), `1σ of the centre in the hole's plane (RMS distance). ${HOLE_NOTE}`],
     );
   }
+  rows.push(...extentRows(f.extent));
   rows.push(["Points", `${fmtInt(s.n)} · ${fmtInt(f.nFaces)} faces`, "Points the fit used, and the faces of the region lit on the mesh."]);
   if (f.correlated !== null && f.correlated > 0)
     rows.push([
@@ -100,9 +106,24 @@ function KV({ rows }: { rows: Row[] }) {
   );
 }
 
-/** The relation of two picked fits, worked out here from their shapes (lib/fits.ts); kept with the scan on request. */
-function Relation({ a, b, kept, onKeep, onRename }: { a: FitItem; b: FitItem; kept: KeptRelation | null; onKeep: () => void; onRename: (name: string) => Promise<boolean> }) {
-  const r = relate(a, b);
+/** The relation of two picked fits as the engine works it out (its values, notes and ±); kept with the scan on request. */
+function Relation({
+  a,
+  b,
+  kept,
+  relation,
+  onKeep,
+  onRename,
+}: {
+  a: FitItem;
+  b: FitItem;
+  kept: KeptRelation | null;
+  relation: PairRelationState;
+  onKeep: () => void;
+  onRename: (name: string) => Promise<boolean>;
+}) {
+  const r = relation.record;
+  const rows = r ? relationRows(r) : [];
   const stale = a.stale || b.stale;
   return (
     <div className="mt-3 rounded-lg border bg-surface-2/60 px-3 py-2.5" style={{ borderColor: `${PICKED_COLOR}80` }} aria-label="Relation of the two picked fits">
@@ -130,24 +151,35 @@ function Relation({ a, b, kept, onKeep, onRename }: { a: FitItem; b: FitItem; ke
           {a.name} and {b.name}
         </div>
       ) : null}
-      <dl className="space-y-1">
-        {r.rows.map((row) => (
-          <div key={row.label} className="flex items-baseline justify-between gap-3" title={row.tip}>
-            <dt className="text-xs text-muted">{row.label}</dt>
-            <dd className="font-mono text-[13.5px] font-semibold text-fg tnum">{row.value}</dd>
-          </div>
-        ))}
-      </dl>
-      {r.notes.map((n) => (
-        <div key={n} className="mt-1.5 text-[11px] leading-4 text-subtle">
-          {n}
+      {r ? (
+        <>
+          <dl className="space-y-1">
+            {rows.map((row) => (
+              <div key={row.label} className="flex items-baseline justify-between gap-3" title={row.tip}>
+                <dt className="text-xs text-muted">{row.label}</dt>
+                <dd className="font-mono text-[13.5px] font-semibold text-fg tnum">{row.value}</dd>
+              </div>
+            ))}
+          </dl>
+          {r.notes.map((n) => (
+            <div key={n} className="mt-1.5 text-[11px] leading-4 text-subtle">
+              {n}
+            </div>
+          ))}
+          {relationFooter(r).map((n) => (
+            <div key={n} className="mt-1.5 text-[11px] leading-4 text-subtle">
+              {n}
+            </div>
+          ))}
+        </>
+      ) : relation.error ? (
+        <div className="flex items-start gap-1.5 text-[11px] leading-4 text-warn">
+          <TriangleExclamationPoint size={12} className="mt-px shrink-0" aria-hidden />
+          {sentence(relation.error)}
         </div>
-      ))}
-      <div className="mt-1.5 text-[11px] leading-4 text-subtle">
-        {r.rows.some((x) => x.sigma !== null)
-          ? "A ± is shown only where the fits' ± give one soundly; hover a number for how it is made."
-          : "No ± here: the fits' ± don't give one soundly for these numbers (hover for why)."}
-      </div>
+      ) : (
+        <div className="text-[11px] leading-4 text-subtle">Working out how they relate…</div>
+      )}
       {stale ? (
         <div className="mt-1.5 flex items-start gap-1.5 text-[11px] leading-4 text-warn">
           <TriangleExclamationPoint size={12} className="mt-px shrink-0" aria-hidden />
@@ -163,6 +195,7 @@ export function FitList({
   fits,
   relations,
   picked,
+  pairRelation,
   onTogglePick,
   onPickPair,
   onRemove,
@@ -181,6 +214,8 @@ export function FitList({
   relations: KeptRelation[];
   /** Ids of the fits picked for a relation. */
   picked: string[];
+  /** The engine's relation of the two picked fits (usePairRelation). */
+  pairRelation: PairRelationState;
   onTogglePick: (fid: string) => void;
   /** Pick these two fits (a kept relation was clicked). */
   onPickPair: (a: string, b: string) => void;
@@ -203,6 +238,8 @@ export function FitList({
   const [p0, p1] = pickedFits;
   const keptPair = p0 && p1 ? (relations.find((r) => (r.a === p0.fid && r.b === p1.fid) || (r.a === p1.fid && r.b === p0.fid)) ?? null) : null;
   const stale = fits.filter((f) => f.stale).length;
+  // kept before the engine measured where a fit's region lies: "Fit again" measures it (on its own mesh)
+  const unmeasured = fits.filter((f) => !f.stale && !f.extent).length;
   let hint: ReactNode = null;
   if (fits.length >= 2 && pickedFits.length === 0) hint = "Click two fits to see how they relate: the angle and the distance between them.";
   else if (pickedFits.length === 1) hint = "Click one more fit to see how they relate.";
@@ -213,6 +250,13 @@ export function FitList({
           <TriangleExclamationPoint size={13} className="shrink-0" aria-hidden />
           <span className="flex-1">{stale === 1 ? "One fit was" : `${stale} fits were`} fitted on an earlier mesh.</span>
           <Button size="xs" icon={RefreshCw} loading={refitting} disabled={!ready} onClick={onRefit} title="Fit them again on the current mesh, from the clicks they were made with">
+            Fit again
+          </Button>
+        </div>
+      ) : unmeasured ? (
+        <div className="mb-2 flex items-center gap-2 rounded-lg border border-line bg-surface-2/60 px-3 py-2 text-[11.5px] leading-4 text-muted">
+          <span className="flex-1">{unmeasured === 1 ? "One fit was kept before its size was measured." : `${unmeasured} fits were kept before their size was measured.`}</span>
+          <Button size="xs" icon={RefreshCw} loading={refitting} disabled={!ready} onClick={onRefit} title="Fit them again from the clicks they were made with, on the same mesh: the shapes stay the same, and their size and outline are measured">
             Fit again
           </Button>
         </div>
@@ -283,7 +327,7 @@ export function FitList({
         </div>
       )}
       {p0 && p1 ? (
-        <Relation a={p0} b={p1} kept={keptPair} onKeep={() => onKeepRelation(p0.fid, p1.fid)} onRename={(n) => (keptPair ? onRename(keptPair.id, n) : Promise.resolve(false))} />
+        <Relation a={p0} b={p1} kept={keptPair} relation={pairRelation} onKeep={() => onKeepRelation(p0.fid, p1.fid)} onRename={(n) => (keptPair ? onRename(keptPair.id, n) : Promise.resolve(false))} />
       ) : null}
       {relations.length ? (
         <ul className="mt-3 space-y-1" aria-label="Kept relations">
