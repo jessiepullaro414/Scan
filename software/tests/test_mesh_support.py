@@ -30,6 +30,8 @@ from ohs.mesh.topology import compact, face_areas, face_normals, vertex_normals
 
 TABLE, PART, BLEND = 0, 1, 2
 NOISE_MM = 0.1
+RIM_MM = 1.0  # a thin part kept loses at most this width of its rim, on average
+WARN_MM = 0.3  # a thin part this high above a table of NOISE_MM scatter is found but not kept: warned
 
 
 # --------------------------------------------------------------------------- swept scenes
@@ -319,6 +321,86 @@ def test_a_table_with_a_hole_and_a_loose_patch_and_a_loose_bit_of_the_part():
     assert _area(V, Fm, gone[:n_main] & (lab == TABLE)) >= 0.999 * _area(V, Fm, lab == TABLE)
     assert not (gone[:n_main] & (lab == PART)).any()
     assert r.loose_left == 1  # the blob, said in the result
+
+
+# --------------------------------------------------------------------------- thin parts lying flat
+def raise_disc(V: np.ndarray, n, d: float, centre, radius: float, t: float, smear: float = 1.5) -> np.ndarray:
+    """``V`` with a disc of the table raised by ``t`` along the plane's normal ``n`` (``n . x + d = 0``):
+    a thin part lying flat, its edge smeared over ``smear`` mm as a scan smears a step (a half cosine
+    from ``radius - smear / 2`` to ``radius + smear / 2``). Only vertices on the table (within 1 mm of
+    the plane) move, so the scan's own noise and pits stay in it."""
+    n = np.asarray(n, dtype=np.float64)
+    h = V @ n + d
+    X = V - h[:, None] * n - np.asarray(centre, dtype=np.float64)
+    r = np.linalg.norm(X - (X @ n)[:, None] * n, axis=1)
+    u = np.clip((r - (radius - smear / 2)) / smear, 0.0, 1.0)
+    lift = t * 0.5 * (1.0 + np.cos(math.pi * u)) * (np.abs(h) < 1.0)
+    return V + lift[:, None] * n
+
+
+def flat_table(half=80.0, seed=20, noise=NOISE_MM):
+    """A bare table (z = 0) with the scan's noise."""
+    return _swept(lambda Q: _rounded_rect(Q, 1.0, 1.0, 0.5), _box_profile(0.0, 0.0), half, 1.0, seed, noise)[:2]
+
+
+def _plate(V, F, centre, radius):
+    """The faces of a disc's plate (centre inside its true edge, the middle of the smear) on a z = 0 table."""
+    C = V[F].mean(axis=1)
+    return np.linalg.norm(C[:, :2] - centre[:2], axis=1) <= radius
+
+
+@pytest.mark.parametrize("t,diameter", [(0.5, 30.0), (0.8, 10.0), (0.8, 100.0), (1.5, 30.0)])
+def test_a_thin_part_lying_flat_is_kept(t, diameter):
+    """A shim, a gasket, a sheet: a plateau at a steady height clearly above the table's scatter, with a
+    rim. It stays (its rim to within RIM_MM of its true edge); the table round it goes."""
+    V, F = flat_table(half=max(80.0, diameter / 2 + 30.0))
+    c = np.array([0.0, 0.0, 0.0])
+    V = raise_disc(V, [0, 0, 1], 0.0, c, diameter / 2, t)
+    r = find_support(V, F)
+    gone = _removed_mask(r, len(F))
+    plate = _plate(V, F, c, diameter / 2)
+    lost = _area(V, F, gone & plate)
+    assert lost <= RIM_MM * math.pi * diameter, f"{lost:.1f} mm² of the plate lost at its rim"
+    assert _area(V, F, gone & ~plate) >= 0.98 * _area(V, F, ~plate)  # the table still goes
+    kept = [x for x in r.raised if x["kept"]]
+    if t < MARGIN_MM:  # thicker than the margin, its top was never the table's: kept as any part
+        assert len(kept) == 1 and kept[0]["height_mm"] == pytest.approx(t, abs=0.1)
+        assert kept[0]["size_mm"] == pytest.approx(diameter, rel=0.2)
+
+
+def test_thinner_than_the_limit_is_not_removed_silently(box_scene):
+    """Below the thickness the rule can stand behind, the raised area goes with the table, and the
+    finding says where it is, how large and how high, before anything is removed. Alone on the
+    table there is nothing it can stand behind: refused, and the refusal names the raised area."""
+    V0, F, lab, r0 = box_scene
+    V = raise_disc(V0, [0, 0, 1], 0.0, [-62.0, 0.0, 0.0], 12.0, WARN_MM)
+    r = find_support(V, F)
+    unsure = [x for x in r.raised if not x["kept"]]
+    assert unsure, r.raised
+    x = unsure[0]
+    assert np.linalg.norm(np.asarray(x["centre"])[:2] - [-62.0, 0.0]) < 3.0 and x["size_mm"] == pytest.approx(24.0, rel=0.3)
+    assert x["height_mm"] == pytest.approx(WARN_MM, abs=0.1)
+    w = [w for w in r.warnings if "thin part" in w]
+    assert w and "mm above the table" in w[0] and "select it by hand" in w[0], r.warnings
+    assert any(x["kept"] is False for x in r.to_dict()["raised"])
+    V, F2 = flat_table()
+    V = raise_disc(V, [0, 0, 1], 0.0, [20.0, -10.0, 0.0], 15.0, WARN_MM)
+    with pytest.raises(SupportRefused, match="may be a thin part"):
+        find_support(V, F2)
+
+
+def test_a_thick_part_beside_a_thin_one_loses_no_more_than_before(box_scene):
+    V0, F, lab, r0 = box_scene
+    V = raise_disc(V0, [0, 0, 1], 0.0, [-62.0, 0.0, 0.0], 10.0, 0.5)
+    r = find_support(V, F)
+    g0, g = _removed_mask(r0, len(F)), _removed_mask(r, len(F))
+    foot = lab != TABLE
+    assert np.array_equal(g[foot], g0[foot])  # the box and its foot as before
+    plate = _plate(V, F, np.array([-62.0, 0.0]), 10.0)
+    assert _area(V, F, g & plate) <= RIM_MM * math.pi * 20.0
+    # and the table that is not the plate still goes
+    assert np.array_equal(g[(lab == TABLE) & ~_plate(V, F, np.array([-62.0, 0.0]), 13.0)],
+                          g0[(lab == TABLE) & ~_plate(V, F, np.array([-62.0, 0.0]), 13.0)])
 
 
 def test_sigma_and_normals_are_optional_and_filled_vertices_do_not_make_a_table(box_scene):

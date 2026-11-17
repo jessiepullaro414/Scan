@@ -1928,6 +1928,10 @@ type TablePreview = {
   loose_removed: number;                // crumbs of table removed with it
   loose_left: number; loose_left_mm2: number;     // other loose pieces, left for Remove floaters
   skipped: string[];                    // larger flat surfaces set aside first (a box's top), and why
+  raised: { centre: [number, number, number]; size_mm: number; area_mm2: number;   // raised areas within the margin
+            height_mm: number; scatter_mm: number;   // its level above the table; the scatter it was told from
+            kept: boolean;                            // true: a thin part lying flat, it stays; false: it goes, warned
+            n_faces: number }[];
   warnings: string[]; rule: string;     // the rule in words
   summary: string; ms: number;
 };
@@ -1950,6 +1954,15 @@ Rules:
   it faces the table's way (within 45°), lies at most `margin_mm` above the plane and is joined through such
   faces to the plane's own surface. Faces turned further away (the part's walls) stay at any height. Loose
   pieces left wholly within the margin plus the band are crumbs of table and go too.
+- **Thin parts lying flat** (a shim, a gasket, a sheet) stay: a raised area within the margin, of steady
+  height, not joined to a wall that rises above the margin, at least 4 times the table's scatter above it (its
+  RMS, or the scan's own sigma there when larger), is kept with its rim. On the simulated scans that is from
+  0.5 mm thick (0.2-0.3 mm on a very smooth table), losing 0-0.2 mm of its rim. One between 2.5 and 4 times the
+  scatter (about 0.2-0.4 mm) goes with the table, and a warning says where it is, how large and how high, before
+  anything is removed; when there are many, they are the table's own unevenness and one warning says how thin a
+  part cannot be told from the table. Thinner than about 0.2 mm a part lying flat cannot be told from the table
+  at all. A table with only thin parts on it is a table; with nothing on it, it is refused (and the refusal names
+  a raised area it could not tell).
 - **No table** (none of the planes passes, or there is too little flat surface): the preview answers 422 with the
   engine's sentence ("No table found: …. Nothing was removed; …") and a hint to select the table by hand; the edit's
   job fails with the same sentence and the mesh is as it was. In a recipe the step is skipped, in the same words,
@@ -1961,7 +1974,7 @@ Rules:
 - The preview is read-only and kept per mesh version and margin: the edit that follows on the same version and
   margin removes exactly its faces without looking again. `version`: the mesh version the page shows (409 when it
   changed); 422 for a margin out of range; 409 before the scan has a mesh.
-- 1.2–1.9 s on simulated scans of 0.7–0.8 million triangles (the other edits: 0.4–2.4 s). On the simulated bracket
+- 1.8–2.3 s on simulated scans of 0.7–0.8 million triangles (the other edits: 0.4–2.4 s). On the simulated bracket
   seen from three sides it leaves 0.5–3.3 mm² of table near the part and takes 17–19 mm² of the part's rounded
   foot, all within 1 mm of the table (a 1 mm slab: 50–70 mm²; the merge's 2 mm: 118–171 mm²).
 

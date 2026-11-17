@@ -845,6 +845,33 @@ no object size anywhere in the engine or the app.
     removed (the bracket alone left, 15,846 triangles), and brought back by undo.
   - Tests: 26 new (engine and routes); 73 pass on both paths with the mesh-edit and
     processing tests; 44 UI test files.
+- **Thin parts lying flat (the owner, 2026-11-17: "the thing we scan may be a fraction of a
+  millimetre; we need to be mindful of that").** As first built, the edit took any flat part
+  thinner than the margin (1 mm) with the table. **First round, 2026-11-17:** a raised area
+  inside the margin that is steady in height (a plateau, not a foot that rises into a wall)
+  is kept as a thin part when it stands at least 4 times the scatter above the table, with a
+  warning that it is now a piece of its own; between 2.5 and 4 times it goes with the table
+  and the preview warns, saying where it is, how large and how high. The plane is fitted at
+  the table's most common height, so a large sheet no longer pulls it up. Thick parts lose
+  what they lost before (the bracket's numbers are unchanged).
+  - *What the agent measured:* on synthetic tables with 0.05 mm of noise a part is kept from
+    0.3 mm, with 0.1 mm of noise from 0.5 mm; on the ball scan's real table (flat to 0.08 mm)
+    a disc is kept from 0.5 mm, warned about at 0.3 mm and lost without a word at 0.1 mm.
+  - *What the review found on another scan:* on the bracket scan's table (flat to 0.07 mm, but
+    the scan's own sigma there is 0.2 mm) a disc 40 mm across, 75 mm from the bracket, is kept
+    at 0.8 mm, **goes with a warning at 0.5 mm, and goes without a word at 0.3 mm**. The
+    scatter an area is judged against is the larger of the table's flatness and the scan's
+    sigma, and the sigma is the larger one there. So "kept from 0.5 mm" does not hold on every
+    scan, and a part can still vanish silently. **Open, being worked on:** judge an area
+    against the table around it, state the limit of the scan at hand, and show the areas that
+    would go on the model before Remove.
+  - **The merge of several scans has the same fault, and worse** (checked by the agent on
+    `FramePipeline._clip_depth`): with "The part was moved or turned over" every depth pixel
+    within 2 mm of each scan's table is left out before fusing, so a part thinner than 2 mm
+    lying flat keeps 0 % of its pixels and vanishes from the merged scan; discs of 2.5 mm and
+    more stay. The plateau rule cannot be used there as it is (the merge clips frames, not a
+    mesh): it needs the table removed from the merged mesh instead, or a much smaller margin
+    and this edit afterwards. For the owner.
   - **Seen on the way:** the merge of several scans cuts 2 mm off each part's foot
     (`support_margin_mm`); this rule could keep the part to within a millimetre there too.
     That would change merged scans, so it waits for the owner. And the alignment's own

@@ -4,15 +4,21 @@
  * the demo knows where its table is (the scene's y = 0, moved into the scan's world by `T_WS`), so
  * its rule is simpler: a face is the table's when it faces the table's way (its normal within 45°
  * of the table's) and its centre lies at most the margin above the plane (never less than the
- * 0.3 mm noise band), or when all its corners lie more than the band behind the plane. No faces
- * are grown or joined and no loose crumbs are looked for. When less than 15 % of the surface is
- * the table (the table removed already, or cut away by hand) it refuses, in the engine's words.
+ * 0.3 mm noise band), or when all its corners lie more than the band behind the plane. A thin part
+ * lying flat stays: a face that lies flat (within 10° of the table) and more than 0.5 mm above it
+ * (the demo's meshes are noisier than the engine's, up to 0.2 mm) is kept, and the faces kept so,
+ * joined through shared corners, are reported as thin parts with a warning. Thinner ones go with
+ * the table, unsaid: the demo does not look for them. No faces are grown or joined and no loose
+ * crumbs are looked for. When less than 15 % of the surface is the table (the table removed already,
+ * or cut away by hand) it refuses, in the engine's words.
  */
-import type { TablePreview } from "../types";
+import type { TablePreview, TableRaised } from "../types";
 
 export const MOCK_MARGIN_MM = 1;
 const BAND_MM = 0.3;
 const FACING_COS = Math.cos((45 * Math.PI) / 180);
+const FLAT_COS = Math.cos((10 * Math.PI) / 180);
+const THIN_MM = 0.5;
 const MIN_SHARE = 0.15;
 
 export type TableAnswer =
@@ -31,6 +37,67 @@ export function tablePlane(pose: { R: ArrayLike<number>; t: ArrayLike<number> })
 
 const HINT = "if the part does stand on a table in this scan, select the table with the selection tools and delete it";
 
+/** The thin parts kept: their faces joined through shared corners, at least 25 mm² each. */
+function thinParts(positions: Float32Array, indices: Uint32Array, faces: number[], h: (v: number) => number): TableRaised[] {
+  const parent = new Map<number, number>();
+  const find = (x: number): number => {
+    let r = x;
+    while (parent.get(r) !== r) r = parent.get(r)!;
+    parent.set(x, r);
+    return r;
+  };
+  for (const f of faces) for (let k = 0; k < 3; k++) if (!parent.has(indices[f * 3 + k])) parent.set(indices[f * 3 + k], indices[f * 3 + k]);
+  for (const f of faces) {
+    const a = find(indices[f * 3]);
+    for (let k = 1; k < 3; k++) {
+      const b = find(indices[f * 3 + k]);
+      if (a !== b) parent.set(b, a);
+    }
+  }
+  const groups = new Map<number, number[]>();
+  for (const f of faces) {
+    const g = find(indices[f * 3]);
+    if (!groups.has(g)) groups.set(g, []);
+    groups.get(g)!.push(f);
+  }
+  const out: TableRaised[] = [];
+  for (const fs of groups.values()) {
+    let area = 0;
+    let hs = 0;
+    const c = [0, 0, 0];
+    const lo = [Infinity, Infinity, Infinity];
+    const hi = [-Infinity, -Infinity, -Infinity];
+    for (const f of fs) {
+      const v = [indices[f * 3], indices[f * 3 + 1], indices[f * 3 + 2]];
+      const p = v.map((i) => [positions[i * 3], positions[i * 3 + 1], positions[i * 3 + 2]]);
+      const u = [0, 1, 2].map((k) => p[1][k] - p[0][k]);
+      const w = [0, 1, 2].map((k) => p[2][k] - p[0][k]);
+      const A = Math.hypot(u[1] * w[2] - u[2] * w[1], u[2] * w[0] - u[0] * w[2], u[0] * w[1] - u[1] * w[0]) / 2;
+      area += A;
+      hs += (A * (h(v[0]) + h(v[1]) + h(v[2]))) / 3;
+      for (let k = 0; k < 3; k++) {
+        c[k] += (A * (p[0][k] + p[1][k] + p[2][k])) / 3;
+        for (const q of p) {
+          lo[k] = Math.min(lo[k], q[k]);
+          hi[k] = Math.max(hi[k], q[k]);
+        }
+      }
+    }
+    if (area < 25) continue;
+    const ext = [0, 1, 2].map((k) => hi[k] - lo[k]).sort((a, b) => b - a);
+    out.push({
+      centre: [c[0] / area, c[1] / area, c[2] / area],
+      size_mm: ext[0],
+      area_mm2: area,
+      height_mm: hs / area,
+      scatter_mm: 0.1,
+      kept: true,
+      n_faces: fs.length,
+    });
+  }
+  return out.sort((a, b) => b.area_mm2 - a.area_mm2);
+}
+
 /** The faces of the mesh that are the table (module docstring). */
 export function mockTable(positions: Float32Array, indices: Uint32Array, plane: Plane, margin = MOCK_MARGIN_MM): TableAnswer {
   const t0 = performance.now();
@@ -42,6 +109,7 @@ export function mockTable(positions: Float32Array, indices: Uint32Array, plane: 
   let removed = 0;
   let tableArea = 0;
   let lowest = Infinity;
+  const thin: number[] = [];
   const h = (v: number) => nx * positions[v * 3] + ny * positions[v * 3 + 1] + nz * positions[v * 3 + 2] + plane.d;
   for (let f = 0; f < F; f++) {
     const a = indices[f * 3],
@@ -66,9 +134,13 @@ export function mockTable(positions: Float32Array, indices: Uint32Array, plane: 
       hb = h(b),
       hc = h(c);
     const centre = (ha + hb + hc) / 3;
-    const facing = len > 0 && (cx * nx + cy * ny + cz * nz) / len >= FACING_COS;
+    const cosn = len > 0 ? (cx * nx + cy * ny + cz * nz) / len : 0;
+    const facing = cosn >= FACING_COS;
     if (facing && Math.abs(centre) <= BAND_MM) tableArea += A;
-    if (Math.max(ha, hb, hc) < -BAND_MM || (facing && centre <= top)) {
+    if (cosn >= FLAT_COS && centre > THIN_MM && centre <= top) {
+      thin.push(f); // the top of a thin part lying flat: it stays
+      lowest = Math.min(lowest, ha, hb, hc);
+    } else if (Math.max(ha, hb, hc) < -BAND_MM || (facing && centre <= top)) {
       mark[f] = 1;
       removed += A;
     } else lowest = Math.min(lowest, ha, hb, hc);
@@ -86,6 +158,11 @@ export function mockTable(positions: Float32Array, indices: Uint32Array, plane: 
   for (let f = 0, k = 0; f < F; f++) if (mark[f]) faces[k++] = f;
   const kept = Number.isFinite(lowest) ? lowest : null;
   const low = kept === null ? "" : kept <= BAND_MM ? "; the part is kept right down to it" : `; the part is kept from ${kept.toFixed(2)} mm above it`;
+  const raised = thinParts(positions, indices, thin, h);
+  const warnings = raised.map(
+    (r) =>
+      `A thin part lying flat is kept: ${r.size_mm.toFixed(0)} mm across, ${r.height_mm.toFixed(2)} mm above the table, at (${r.centre.map((x) => x.toFixed(0)).join(", ")}) mm. It is a piece of its own now: Remove floaters may take it if it is small.`,
+  );
   return {
     ok: true,
     faces,
@@ -107,10 +184,12 @@ export function mockTable(positions: Float32Array, indices: Uint32Array, plane: 
       loose_left: 0,
       loose_left_mm2: 0,
       skipped: [],
-      warnings: [],
+      raised,
+      warnings,
       rule:
         "The demo knows where its table is. A face is removed when it faces the table's way (within 45° of its normal) and lies at most " +
-        `${margin} mm above it, or lies wholly behind it. Faces turned further away (the part's walls) stay at any height.`,
+        `${margin} mm above it, or lies wholly behind it. Faces turned further away (the part's walls) stay at any height, and so do flat ` +
+        `faces more than ${THIN_MM} mm above the table (a thin part lying flat).`,
       summary: `Found the table (${Math.round(share * 100)} % of the scan, flat to 0.10 mm RMS): ${n.toLocaleString("en-US")} faces (${(removed / 100).toFixed(1)} cm²) are the table${low}`,
       ms: Math.round(performance.now() - t0),
     },

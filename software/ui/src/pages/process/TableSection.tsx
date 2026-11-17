@@ -2,7 +2,9 @@
  * "Remove the table" (FEATURE_PLAN X1), at the foot of the Floaters tab. "Find the table" asks the
  * engine which faces are the surface the part stands on (nothing changes yet) and shows them with
  * the view's selection highlight, with their count and area; "Remove" removes them as an edit (undo
- * brings them back), "Cancel" lets them go. When there is no table to stand behind, the engine says
+ * brings them back), "Cancel" lets them go. A thin part lying flat that the engine kept is said; a
+ * raised area it could not tell from the table goes with it, and its warning stands out before Remove
+ * (where, how large, how high). When there is no table to stand behind, the engine says
  * so in its own words and nothing is highlighted. The margin is an advanced value.
  */
 import { CircleHelp, PanelBottom, TriangleAlert } from "lucide-react";
@@ -153,7 +155,8 @@ export function TableSection({
             Highlighted in the view. {facts.detail}
           </span>
           {phase.preview.warnings.map((w) => (
-            <span key={w} className="mt-1 block">
+            // a raised area that may be a thin part, going with the table: said before Remove, and stands out
+            <span key={w} className={/goes with the table|go with it/.test(w) ? "mt-1 block font-medium text-warn" : "mt-1 block"}>
               {w}
             </span>
           ))}

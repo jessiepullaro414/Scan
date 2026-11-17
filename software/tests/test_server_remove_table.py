@@ -86,6 +86,7 @@ def test_preview_then_remove_the_table_undo_and_redo(env):
     assert pv["area_mm2"] == pytest.approx(float(A[sel].sum()), rel=1e-3)
     assert pv["normal"] and pv["share"] > 0.3 and pv["rule"] and pv["summary"].startswith("Found the table")
     assert isinstance(pv["warnings"], list) and pv["lowest_mm"] is not None and pv["triangles"] == n0
+    assert isinstance(pv["raised"], list) and all("faces" not in x and x["n_faces"] > 0 for x in pv["raised"])
     assert get(b + "/process").json()["current"]["version"] == s0["current"]["version"]
     # the same again (kept for this version and margin)
     assert post(b + "/process/remove-table/preview", {}).json()["faces"] == pv["faces"]

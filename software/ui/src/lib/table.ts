@@ -21,11 +21,15 @@ export const TABLE_HELP: { title: string; lines: { label: string; text: string }
     },
     {
       label: "What it keeps",
-      text: "Every face turned more than 45° from the table, at any height: the part's walls stay right down to the table. Loose bits that are not the table stay for Remove floaters.",
+      text: "Every face turned more than 45° from the table, at any height: the part's walls stay right down to the table. A thin part lying flat (a shim, a gasket, a sheet) stays when it stands at a steady height clearly above the table's own unevenness: on the simulated scans from 0.5 mm thick. Loose bits that are not the table stay for Remove floaters.",
     },
     {
       label: "What it costs",
-      text: "Where the part meets the table the scan's surface is rounded: its lower half goes with the table (on the simulated bracket about 0.1 mm² per mm of the part's edge, all within 1 mm of the table). A surface that meets the table at less than 45° (a low dome, a chamfer) loses its bottom margin.",
+      text: "Where the part meets the table the scan's surface is rounded: its lower half goes with the table (on the simulated bracket about 0.1 mm² per mm of the part's edge, all within 1 mm of the table). A thin part kept loses at most about 0.3 mm of its rim (on the real-size test, under 0.1 mm). A surface that meets the table at less than 45° (a low dome, a chamfer) loses its bottom margin.",
+    },
+    {
+      label: "Its limit",
+      text: "A part lying flat that is thinner than about 0.5 mm cannot always be told from the table, whose own unevenness rises 0.2-0.3 mm in patches. From about 0.2 mm it is found and goes with the table, and the preview says where it is: select it by hand to keep it. Thinner than about 0.2 mm it cannot be told from the table at all.",
     },
     {
       label: "When it says no",
@@ -58,9 +62,11 @@ export function tableFacts(p: TablePreview): { head: string; detail: string } {
         ? "The part is kept right down to the table."
         : `The part is kept from ${p.lowest_mm.toFixed(1)} mm above the table.`;
   const pct = p.triangles > 0 ? Math.round((p.n_faces / p.triangles) * 100) : 0;
+  const thin = (p.raised ?? []).filter((r) => r.kept).length;
+  const thinText = thin ? ` ${thin === 1 ? "A thin part lying flat stays" : `${thin} thin parts lying flat stay`}.` : "";
   return {
     head: `${fmtInt(p.n_faces)} faces (${fmtArea(p.area_mm2)}, ${pct} % of the mesh) are the table.`,
-    detail: `The table holds ${share} % of the scan and is flat to ${p.flatness_mm.toFixed(2)} mm. ${kept}`,
+    detail: `The table holds ${share} % of the scan and is flat to ${p.flatness_mm.toFixed(2)} mm. ${kept}${thinText}`,
   };
 }
 

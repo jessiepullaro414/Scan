@@ -32,6 +32,7 @@ const preview = (over: Partial<TablePreview> = {}): TablePreview => ({
   loose_left: 0,
   loose_left_mm2: 0,
   skipped: [],
+  raised: [],
   warnings: [],
   rule: "",
   summary: "",
@@ -56,6 +57,12 @@ check(fmtArea(320) === "3.2 cm²", fmtArea(320));
   check(up.detail.endsWith("The part is kept from 2.0 mm above the table."), up.detail);
   const none = tableFacts(preview({ lowest_mm: null }));
   check(none.detail.endsWith("Nothing of the scan would be left."), none.detail);
+  // a thin part kept is said; one the rule is unsure of is in the engine's warnings, not here
+  const raised = (kept: boolean) => ({ centre: [0, 0, 0] as [number, number, number], size_mm: 30, area_mm2: 700, height_mm: 0.5, scatter_mm: 0.08, kept, n_faces: 1400 });
+  const thin = tableFacts(preview({ raised: [raised(true), raised(false)] }));
+  check(thin.detail.endsWith("The part is kept right down to the table. A thin part lying flat stays."), thin.detail);
+  const two = tableFacts(preview({ raised: [raised(true), raised(true)] }));
+  check(two.detail.endsWith("2 thin parts lying flat stay."), two.detail);
 }
 
 // the margin the engine takes
@@ -66,7 +73,9 @@ check(validMargin(-0.1) === null && validMargin(20.5) === null && validMargin(Nu
 // the hover card says what it does, keeps and costs, and when it refuses
 {
   const labels = TABLE_HELP.lines.map((l) => l.label);
-  check(labels.join("|") === "What it does|What it keeps|What it costs|When it says no", labels.join("|"));
+  check(labels.join("|") === "What it does|What it keeps|What it costs|Its limit|When it says no", labels.join("|"));
+  const limit = TABLE_HELP.lines.find((l) => l.label === "Its limit")!.text;
+  check(/thinner than about 0\.5 mm/.test(limit) && /cannot be told from the table/.test(limit), limit);
   check(TABLE_HELP.lines.every((l) => l.text.endsWith(".")), "each line is a sentence");
 }
 

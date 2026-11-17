@@ -39,6 +39,8 @@ function scene(withTable = true): Mesh {
   const c = Math.cos(Math.PI / 6),
     s = Math.sin(Math.PI / 6);
   quad(m, [50, -10, 0], [20 * c, 0, 20 * s], [0, 20, 0], 20, "ramp"); // rises 10 mm over 17 mm, faces 30° from up
+  quad(m, [-80, -80, 0.6], [30, 0, 0], [0, 30, 0], 15, "shim"); // a shim 0.6 mm thick lying flat
+  quad(m, [-80, 40, 0.2], [30, 0, 0], [0, 30, 0], 15, "foil"); // a foil 0.2 mm thick: within the demo's band
   return m;
 }
 
@@ -60,6 +62,12 @@ const up: Plane = { n: [0, 0, 1], d: 0 };
     check(rampGone.length > 0 && maxH <= 1, `the ramp is cut at the margin (up to ${maxH.toFixed(2)} mm)`);
     check(r.info.margin_mm === 1 && r.info.n_faces === r.faces.length && r.info.share > 0.5, "the numbers");
     check(r.info.lowest_mm !== null && r.info.lowest_mm <= 0.3, `the part is kept down to the table (${r.info.lowest_mm})`);
+    // a thin part lying flat stays, and is said; one within the band goes, and is said too
+    check(count("shim", true) === 0, `${count("shim", true)} faces of the shim removed`);
+    check(count("foil", false) === 0, "the foil, within the demo's band, goes with the table");
+    const kept = r.info.raised.filter((x) => x.kept);
+    check(kept.length === 1 && Math.abs(kept[0].height_mm - 0.6) < 0.01 && Math.abs(kept[0].size_mm - 30) < 5, JSON.stringify(r.info.raised));
+    check(r.info.warnings.some((w) => w.startsWith("A thin part lying flat is kept")), r.info.warnings.join(" | "));
     check(r.faces.every((f, i) => i === 0 || f > r.faces[i - 1]), "the faces ascend");
     const r3 = mockTable(new Float32Array(m.P), new Uint32Array(m.I), up, 3);
     check(r3.ok && r3.faces.length > r.faces.length, "a larger margin takes more of the ramp");

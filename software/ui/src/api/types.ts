@@ -527,6 +527,15 @@ export type RemoveTableParams = { margin_mm?: number };
  * current mesh, and what the engine found; nothing changes. A 422 answers the engine's refusal
  * in its own words (no table to stand behind).
  */
+export type TableRaised = {
+  centre: [number, number, number]; // mm, world frame
+  size_mm: number; // across
+  area_mm2: number;
+  height_mm: number; // its level above the table
+  scatter_mm: number; // the table's scatter it was told from (its RMS, or the scan's sigma there when larger)
+  kept: boolean;
+  n_faces: number;
+};
 export type TablePreview = {
   version: number; // the mesh version it was found on
   triangles: number; // of the current mesh
@@ -548,6 +557,8 @@ export type TablePreview = {
   loose_left: number; // loose pieces left besides the part (Remove floaters takes them)
   loose_left_mm2: number;
   skipped: string[]; // larger flat surfaces set aside first, and why
+  /** Raised areas within the margin: a thin part lying flat (kept) or one too close to the table's unevenness to tell (goes, with a warning). */
+  raised: TableRaised[];
   warnings: string[];
   rule: string; // the rule, in words
   summary: string; // "Found the table (95 % of the scan, …)"
