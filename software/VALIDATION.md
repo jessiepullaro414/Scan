@@ -1116,9 +1116,46 @@ How it was checked: 16 simulated recordings (car panel and bracket, seeds 0–4;
 - **The sigma with the guard:** counted on the depth as the matcher made it, the "observations next to missing depth" all but vanish with the guard on, and 2σ then covered only 90–94 % (first run, car panel). The count now treats what the guard drops as missing. With that, 2σ covers 96.5–96.8 % (tracked) and 97.7–97.9 % (true poses) of the car-panel scans, as without the guard, and 95.8–96.8 % and 98.0–98.3 % of the bracket's. On the bracket's small faces with tracking it covers less than without the guard (upright 70–100 % against 79–100 %, base 89–96 % against 91–99 %), and the panel's outer edge and rim 77–81 % against 84–89 %.
 - **Speed:** a frame takes 1.2 to 1.6 ms longer with the guard on (median over the 16 recordings: 91.6 → 92.8 ms tracked poses, 90.4 → 92.0 ms true poses). Switched off, a scan comes out as before the guard: the same vertices and the same sigma.
 - **The CPU path** (the Open3D reconstruction, which gets its depth guarded; one car-panel and one bracket scan at true poses): the car panel's error falls from 0.129 / 2.53 to 0.111 / 1.91 mm (median / 95 %), but its hole still fails to fit (the CPU matcher fills further in than 8 px); the bracket's object error falls from 0.149 / 2.0 to 0.128 / 0.57 mm and its shaft reads +0.09 mm instead of +0.39 mm, with 3.7 points less coverage (95.5 → 91.8 %). A frame takes 13 ms longer there (157 → 170 ms).
-- **An idea not tried:** decide per voxel instead of per pixel. A filled-in voxel is next to a gap in every frame that sees it; real surface next to a moving shadow is also seen away from one. Keeping every observation of a voxel that was seen away from a gap a few times should keep the bracket's coverage and still open the holes. It needs two more values per voxel and its own check.
+- **An idea, since tried:** decide per voxel instead of per pixel. A filled-in voxel is next to a gap in every frame that sees it; real surface next to a moving shadow is also seen away from one. Keeping every observation of a voxel that was seen away from a gap a few times should keep the bracket's coverage and still open the holes. Tried on 2026-11-16 and rejected (next section).
+- **The tracked bracket rows above are out of date.** With the tracking of 2026-11-16 (trajectory error 0.49–0.76 mm median) the guard costs the tracked bracket 0.7–2.0 points of coverage, not 1.1–7.4; its 95 % error is better with the guard than without on all 5 seeds (0.45–0.49 against 0.50–0.96 mm), and the bosses no longer read larger (next section).
 
 Scripts and rows: scratchpad `holes\` (`guard_ab.py`, `guard_ab_summary.py`, `res\guard_ab.jsonl`).
+
+## The gap guard per voxel: tried and rejected (2026-11-16)
+
+A study with a patched copy of the engine outside the repository; nothing in the engine changed. The idea is the last one in "The gap guard in the engine": hold back what the guard would drop until the voxel has been seen away from a gap K times, then fuse it after all.
+
+**In short:** no. It wins back half of the bracket's lost coverage at best (K=2: 0.4–1.0 points) and gives back the bias the guard removes, so the bracket's errors return to the level without the guard, and K=2 closes the holes again by 0.4–0.8 mm. K=4 wins back almost nothing. The guard stays per pixel.
+
+**The rule as built:** an observation the per-pixel guard would drop is held aside while its voxel has fewer than K observations away from a gap; only observations within 2 voxels of the surface count. Once a voxel has K, it fuses everything. When the mesh is made, the held observations are merged into the mean and the count of the voxels that reached K. 16 more bytes per voxel (64 → 80 B with the thin-wall channels), 1.1–1.3 ms more per frame on the GPU (fusion alone: off 21.1, per pixel 23.0, K=2 24.3, K=4 24.1 ms; 6 alternating rounds of 60 frames). Checked exactly: K=0 gives the mesh without the guard and a very large K today's mesh, vertex for vertex.
+
+**Setup:** the 16 recordings of "The gap guard in the engine", on the engine of 3c0aa5f, each tracked once and fused at the tracked and the true poses with four guards: off, per pixel (today), per voxel K=2 and K=4. Ranges over seeds; hole fits from 3 clicks per recording.
+
+| Scene | Poses | Measure | Off | Per pixel (today) | K=2 | K=4 |
+|---|---|---|---|---|---|---|
+| Car panel, Ø 25 hole (as fitted: 25.20) | tracked | Hole fit | fails 13 of 15 | 23.82–24.23 | 23.03–23.71 | 23.88–24.20 |
+| | true | Hole fit | fails 15 of 15 | 23.49–24.11 | 23.26–23.53 | 23.71–24.10 |
+| | tracked | Panel error, 95 % | 2.03–2.18 mm | 0.60–0.80 | 0.59–0.82 | 0.57–0.75 |
+| Bracket | tracked | Object error, median | 0.094–0.175 mm | 0.073–0.227 | 0.090–0.172 | 0.089–0.171 |
+| | tracked | Object error, 95 % | 0.50–0.96 mm | **0.45–0.49** | 0.48–0.54 | 0.48–0.54 |
+| | tracked | Object covered | 96.3–96.8 % | 94.5–95.6 | 95.2–96.0 | 94.5–95.6 |
+| | tracked | Radius error: shaft / bosses | +0.01 to +0.18 / −0.31 to −0.10 mm | −0.07 to +0.07 / −0.27 to −0.07 | +0.01 to +0.18 / −0.32 to −0.13 | +0.01 to +0.16 / −0.31 to −0.13 |
+| | true | Object error, median / 95 % | 0.090–0.098 / 0.49–0.62 mm | **0.056–0.062 / 0.42–0.43** | 0.087–0.095 / 0.46–0.48 | 0.086–0.095 / 0.46–0.48 |
+| | true | Object covered | 96.2–96.6 % | 94.3–95.3 | 94.9–95.8 | 94.4–95.5 |
+| Plate 120 mm above the floor, Ø 25 | tracked | Hole fit | 10.3–23.4 | 18.1–22.1 | 15.6–21.5, 1 fails | 17.7–21.9 |
+| | true | Hole fit | 23.4–23.8, 1 fails | 23.4–23.6 | 22.8–23.2 | 23.2–23.5 |
+| Both plates | both | Plate error, 95 % | 2.4–3.1 mm | 1.3–2.0 | 1.6–2.6 | 1.5–2.2 |
+
+- Coverage of the car panel and the plates is 99.4–100 % in every variant. The floor's 95 % error is the same as with today's guard or slightly better (K=4 by about 0.05 mm).
+- The Ø 25 hole 10 mm above the floor fits in every variant (about Ø 24.4–25.8): the Hole tool reads holes with a wall since 2026-11-14.
+
+**Why it fails** (fused at true poses with K never reached, counting each voxel's observations away from a gap):
+- **The bracket's lost voxels are never seen away from a gap.** Of the about 1,450 voxels with 3 or fewer fused observations (seed 0), 70 % have none away from a gap and only 5 % have 3. No K brings them back.
+- **The rest get their bias back.** 84 % of the bracket's surface voxels have observations near a gap, and 87 % of those are seen away from one 16 times or more, so they unlock at any K. The observations near a gap are biased (the upright's surface sinks by about 0.06 mm), so the error returns to the level without the guard. **The guard's gain on the bracket is a bias filter**, everywhere, not only at holes, and the per-voxel rule removes exactly that.
+- **The premise does not hold for the hole either.** In the 3 mm inside the rim, 49 % of the filled voxels are seen away from a gap twice or more, 38 % four times or more: frames where the fill reaches further than the guard's 8 px. That is why K=2 closes the holes by 0.4–0.8 mm.
+- Not explained: K=4 covers slightly less than per pixel on the bracket's upright and side walls in some runs (96.0 against 96.4 %), although it fuses more observations. Probably the restored bias moves the surface more than 1 mm from part of the truth; not checked.
+
+Scripts, the patch and rows: scratchpad `voxguard\` (`voxguard_recon_tsdf.diff`, `vox_ab.py`, `vox_summary.py`, `diag_vfar.py`, `bench_fuse.py`, `res\vox_ab.jsonl`, `res\diag_vfar.jsonl`).
 
 ## The Hole tool on holes with a wall (2026-11-14)
 

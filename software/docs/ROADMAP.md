@@ -79,8 +79,11 @@ about the scan itself, not the Fit tool, and they decide whether a measurement c
   guard in the engine"): on 16 recordings fused with and without it at the same poses, the Ø 25
   hole can be measured every time (Ø 22.0–24.3 with tracking), and flat surface and the floor get
   better; but on the bracket with tracking 1–7 points of coverage are lost and the worst errors
-  grow by 0.1–0.2 mm. The user chose to turn it on as it is. To do: the per-voxel variant that
-  should keep the bracket's coverage. Small holes (Ø 6–10 mm) over a far, dark background stay
+  grow by 0.1–0.2 mm. The user chose to turn it on as it is. **Measured again 2026-11-16** with
+  today's tracking: the tracked bracket loses only 0.7–2.0 points and its worst errors are now
+  better with the guard. The per-voxel variant was tried and rejected: it gives back the bias the
+  guard removes and closes the holes again ([`VALIDATION.md`](../VALIDATION.md), "The gap guard
+  per voxel"). Small holes (Ø 6–10 mm) over a far, dark background stay
   closed with every fix tried: they need another cue, such as the laser lines' end points at a
   rim. **Done 2026-11-14:** the Hole tool reads a hole with a wall (a bore, a thick plate, a
   near floor) from the flat face around it, at a fixed level below the face; a Ø 25 mm hole

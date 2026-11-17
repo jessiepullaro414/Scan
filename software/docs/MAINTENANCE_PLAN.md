@@ -1490,8 +1490,8 @@ Every task here: the type check, `npm test`, and for bundle tasks the chunk size
   Numbers in `VALIDATION.md`, "The bosses' two remaining losses".
 - **Not a Fit tool matter (measured, no change):** the bosses' axis position with tracking
   (0.6 mm). The wall is that far off in the tracked mesh; the Fit tool reports it where it is.
-  It belongs to tracking and to the gap guard's cost (the per-voxel guard, parked until real
-  scans).
+  It belongs to tracking and to the gap guard's cost (the per-voxel guard was tried on
+  2026-11-16 and rejected: `VALIDATION.md`, "The gap guard per voxel").
 
 ### [ ] F6. Open3D's ray cast crashed once on the CPU path
 - **Seen 2026-11-15**, once: `tests/test_e2e_scan.py::test_full_markerless_sphere` with
