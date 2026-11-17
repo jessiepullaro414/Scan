@@ -20,6 +20,10 @@ the numbers a click in the viewer gives. This module adds:
   its small part, the outline goes to its own file (:func:`ohs.measure.features.split_extent`),
   served by ``GET .../features/{id}/outline``. A fit kept before extents existed has none; "fit
   again" gives it one (from its own click, on its own mesh, when it is not stale);
+* **a cylinder's form:** a fit is kept and fitted again with whether a cylinder is a boss or a bore
+  (the fit route's ``form``, asked for with ``with_form``; null for a plane or a hole, and when the
+  fit cannot tell). A fit kept before forms existed has no ``form`` and is not fitted again for it;
+  its next "fit again" sets it;
 * **relations from the engine:** every relation shown (a kept one in ``GET .../features``, any two
   kept fits in ``GET .../features/relate``) carries :func:`ohs.measure.relate.relate` on the two
   kept shapes, its values with their 1σ, and ``stale`` when one of the fits was made on an earlier
@@ -144,14 +148,15 @@ class FeatureManager:
 
     @staticmethod
     def _record(fit: dict, seed: dict, fid: str, name: str, created: str) -> tuple[dict, dict | None]:
-        """A feature record from the fit route's answer (asked ``with_extent``), and the large part
-        of its extent for the side file (or None). The faces are left out: they go to their own file."""
+        """A feature record from the fit route's answer (asked ``with_extent`` and ``with_form``), and
+        the large part of its extent for the side file (or None). The faces are left out: they go to
+        their own file."""
         extent, side = kf.split_extent(fit.get("extent"))
         rec = {"id": fid, "name": name, "kind": fit["kind"], "shape": fit["shape"], "seed": seed,
                "n_faces": int(fit["n_faces"]), "tolerance_mm": fit["tolerance_mm"],
                "mean_sigma_mm": fit["mean_sigma_mm"], "correlated_points": fit["correlated_points"],
                "warnings": list(fit["warnings"]), "mesh_version": int(fit["version"]), "extent": extent,
-               "created": created}
+               "form": fit.get("form"), "created": created}
         return rec, side
 
     @staticmethod
@@ -177,7 +182,8 @@ class FeatureManager:
         its region (``faces``, base64 as in the fit's answer)."""
         self._dir(pid, sid)
         name = None if name is None else self._name(name, "")
-        fit = self.st.processing.fit(pid, sid, kind, face, point, tolerance_mm, version, with_extent=True)
+        fit = self.st.processing.fit(pid, sid, kind, face, point, tolerance_mm, version, with_extent=True,
+                                     with_form=True)
         seed = {"kind": kind, "face": int(face), "point": [float(x) for x in point],
                 "tolerance_mm": None if tolerance_mm is None else float(tolerance_mm)}
         d = self.st.projects.scan_dir(pid, sid)
@@ -348,7 +354,7 @@ class FeatureManager:
                     continue
                 try:
                     fit = self.st.processing.fit(pid, sid, f["kind"], face, seed["point"], seed["tolerance_mm"], v,
-                                                 with_extent=True)
+                                                 with_extent=True, with_form=True)
                 except ApiError as e:
                     failed.append({"id": f["id"], "detail": e.detail, "hint": e.hint})
                     continue

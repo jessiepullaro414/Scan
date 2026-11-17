@@ -309,10 +309,17 @@ but nothing can be uploaded.
     (it is already round to a tenth). Told that it is a boss scanned with tracking, 14.5 is
     offered, marked "only because of a known bias" (bosses read 0.30–0.38 mm small in
     diameter there). That follows the rule; say if a bias alone should never make an offer.
+  - **A cylinder says whether it is a boss or a bore (2026-11-17).** The offers need it: the
+    two are biased differently. Each face of the fitted region votes with its area, away from
+    the axis ("boss") or towards it ("bore"); 80 % must agree, else the form is unknown and a
+    warning says so. It is in `RegionFit.form` (`to_dict(with_form=True)`), in the kept record
+    (`form` in `features.json`; `POST .../fit` answers what it did), on the cylinder's card
+    ("Form: Boss / Bore / Not known"), and `suggest_fit` reads it from a kept record. The fits
+    are bit-identical; the vote costs 6 ms on a million-triangle tube. On the simulated bracket
+    scan 44 of 45 cylinders clicked at random got a form. A cylinder kept earlier gets its
+    form when it is next fitted again.
   - **Left:** keeping approved values with the scan, the routes, the viewer, and their use in
-    the STEP export. A kept cylinder does not yet say whether it is a boss or a bore
-    (`region.py` knows it while fitting), so the boss rows cannot be used by the app until it
-    does. Seen on the way: `VALIDATION.md`, "Known limitations", still says small bosses read
+    the STEP export. Seen on the way: `VALIDATION.md`, "Known limitations", still says small bosses read
     0.1 mm small in radius; the newer sections say 0.15–0.28 mm.
 
 **Not planned here:** sphere and cone fits, free-form surfaces, automatic CAD from a mesh

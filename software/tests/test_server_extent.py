@@ -324,3 +324,70 @@ def test_the_relation_of_two_fits_not_kept_as_one(block):
     err(get(f"{b}/features/relate?a=f-top&b=f-top"), 422, "itself")
     assert get(f"{b}/features/relate?a=f-top").status_code == 422
     err(get(base_url(block, sid="scan-missing") + "/features/relate?a=f-top&b=f-pin"), 404)
+
+
+# --------------------------------------------------------------------------- a cylinder's form
+def test_a_kept_cylinder_keeps_its_form_and_a_file_without_one_loads(clean):
+    """A kept cylinder says whether it is a boss or a bore (``form``, from the fit). Written into
+    ``features.json`` with "boss", "bore", null or no ``form`` at all (kept before it existed), the
+    file loads and the features answer as kept; another value, or a form on a plane, is refused."""
+    v = arrays(clean)[0]
+    doc = kf.empty()
+    old = record("f-pin", v)  # no "form" key: kept before forms existed
+    doc["features"] = [old, {**record("f-pin", v), "id": "f-boss", "form": "boss"},
+                       {**record("f-pin", v), "id": "f-bore", "form": "bore"},
+                       {**record("f-pin", v), "id": "f-unknown", "form": None},
+                       {**record("f-top", v), "form": None}]
+    kf.save(scan_dir(clean), doc)
+    s = get(base_url(clean) + "/features")
+    assert s.status_code == 200, s.text
+    got = {f["id"]: f for f in s.json()["features"]}
+    assert "form" not in got["f-pin"]
+    assert got["f-boss"]["form"] == "boss" and got["f-bore"]["form"] == "bore" and got["f-unknown"]["form"] is None
+    assert got["f-top"]["form"] is None
+    for bad, kind, what in (("shaft", "f-pin", "form"), (1, "f-pin", "form"), ("boss", "f-top", "cylinder")):
+        d = kf.empty()
+        d["features"] = [{**record(kind, v), "form": bad}]
+        with pytest.raises(ValueError, match=what):
+            kf.validate(d)
+
+
+def test_the_form_is_asked_for_when_a_fit_is_kept_and_fitted_again(clean, monkeypatch):
+    """``POST .../fit`` answers today's keys; the kept features ask the fit for its form
+    (``with_form``) when a fit is kept and when it is fitted again, and keep it (a plane's is null).
+    A ball on a table has no cylinder to click, so a cylinder's form is checked through the record
+    the kept features make of a fit's answer."""
+    from ohs.server.features import FeatureManager
+
+    b = base_url(clean)
+    click = table_click(clean)
+    r = post(b + "/fit", {"kind": "plane", **click})
+    assert r.status_code == 200 and set(r.json()) == FIT_KEYS
+    pm = clean["studio"].processing
+    asked = []
+    real = pm.fit
+
+    def fit(*args, **kwargs):
+        asked.append(kwargs.get("with_form", False))
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(pm, "fit", fit)
+    f = post(b + "/features", {"kind": "plane", **click})
+    assert f.status_code == 200, f.text
+    assert f.json()["form"] is None and kf.load(scan_dir(clean))["features"][0]["form"] is None
+    doc = kf.load(scan_dir(clean))
+    doc["features"][0]["extent"] = None  # "fit again" measures it from its own click
+    del doc["features"][0]["form"]
+    kf.save(scan_dir(clean), doc)
+    out = post(b + "/features/refit", {}).json()
+    assert out["refitted"] == [f.json()["id"]]
+    assert asked == [True, True]
+    assert "form" in kf.load(scan_dir(clean))["features"][0]
+    # a cylinder's answer: its form goes into the record
+    answer = {"kind": "cylinder", "shape": SHAPES["f-pin"][2], "faces": "", "n_faces": 3, "tolerance_mm": 0.1,
+              "mean_sigma_mm": None, "correlated_points": 2.0, "warnings": [], "version": 1, "extent": None}
+    seed = {"kind": "cylinder", "face": 0, "point": [0.0, 0.0, 0.0], "tolerance_mm": None}
+    for form in ("boss", "bore", None):
+        rec, _ = FeatureManager._record({**answer, "form": form}, seed, "f-c", "Pin", "2026-11-17T12:00:00")
+        assert rec["form"] == form
+        assert kf.validate({**kf.empty(), "features": [rec]})["features"][0]["form"] == form

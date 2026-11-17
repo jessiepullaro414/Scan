@@ -9,7 +9,8 @@
  * The fits themselves are the demo's fit route (`MockProcess.fit`), passed in as a `FeatureEngine`,
  * so this file has no mesh code and can be checked on its own (features.test.ts). Where the engine
  * can say where a fit's region lies (`extent`, extent.ts) a kept fit carries it, its outline is
- * served by `.../features/{id}/outline`, and "fit again" also measures the fits kept without one.
+ * served by `.../features/{id}/outline`, and "fit again" also measures the fits kept without one. A kept cylinder
+ * says whether it is a boss or a bore (`form`, from the engine's `form`: its mock cylinders read it from their faces).
  *
  * Relations (`relation` on each kept relation, `GET .../features/relate?a=&b=`) are lib/fits.ts's
  * `relate` in the engine's form (`relationRecord`): the demo has no engine, and those values equal
@@ -20,7 +21,7 @@
  * removed; the current mesh in it comes from the engine (`partMesh`).
  */
 import { relationRecord } from "../../lib/fits.ts";
-import type { FeatureSet, FitExtent, FitResult, KeptFeature, KeptMeasurement, KeptRelation, PairRelation, PartFrameRecord } from "../types";
+import type { CylinderForm, FeatureSet, FitExtent, FitResult, KeptFeature, KeptMeasurement, KeptRelation, PairRelation, PartFrameRecord } from "../types";
 import { outlineAnswer, type MockOutline } from "./extent.ts";
 import { frameState, mockPartFrame, type FrameInput } from "./frame.ts";
 import { HttpError, json } from "./host.ts";
@@ -38,6 +39,8 @@ export type FeatureEngine = {
   partMesh?: (matrix: number[][], name: "mesh.ply" | "mesh.stl") => ArrayBuffer | null;
   /** Where a fit's region lies (extent.ts `mockExtent`) and its outline; without it kept fits have no extent. */
   extent?: (r: FitResult) => { extent: FitExtent; outline: MockOutline } | null;
+  /** Whether a cylinder just fitted is a boss or a bore (extent.ts `mockForm`); without it kept fits have form null. */
+  form?: (r: FitResult) => CylinderForm | null;
 };
 
 type Stored = {
@@ -207,6 +210,7 @@ export class MockFeatures {
       warnings: [...r.warnings],
       mesh_version: r.version,
       extent: this.measure(s, id, r, engine),
+      form: engine.form?.(r) ?? null,
       created: nowIso(),
     };
     s.features.push(f);
@@ -322,6 +326,7 @@ export class MockFeatures {
         warnings: [...r.warnings],
         mesh_version: r.version,
         extent: this.measure(s, f.id, r, engine),
+        form: engine.form?.(r) ?? null,
       };
       s.faces.set(f.id, r.faces);
       refitted.push(f.id);

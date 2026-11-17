@@ -572,6 +572,7 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
           tris: drawn?.tris ?? null,
           region: drawn?.region ?? null,
           extent: f.extent ?? null,
+          form: f.form ?? null,
           label: fitLabel(f.kind, f.shape),
         };
       }),

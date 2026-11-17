@@ -973,6 +973,8 @@ type KeptFeature = {
   correlated_points: number | null; warnings: string[];  // as in FitResult
   mesh_version: number;                 // the mesh version it was fitted on
   extent: FitExtent | null;             // where its region lies; null: kept before extents existed ("fit again")
+  form?: "boss" | "bore" | null;        // a cylinder: boss or bore (below); null for a plane or a hole, or when not
+                                        // clear; left out for a fit kept before forms existed
   created: string;
   stale: boolean;                       // fitted on another mesh version than the current one ("fitted on an earlier mesh")
 };
@@ -1065,6 +1067,17 @@ Rules:
   valid on the fit's `mesh_version`, written and removed with the region file. `GET
   .../features/{id}/outline` serves them as plain JSON; 404 for a cylinder (its span and arc are all
   of its extent) and for a fit without an extent.
+- **Form:** a kept cylinder says whether it is a `"boss"` (its surface faces away from its axis:
+  material inside, as a shaft or a pin) or a `"bore"` (a hole's wall, the surface faces its axis).
+  The engine decides it from the region itself (`ohs.measure.region.cylinder_form`): each face's
+  normal against the direction from the axis to it, weighed by the face's area; 80 % of the area must
+  agree, else `form` is null and the fit carries a warning that says so ("whether this cylinder is a
+  boss or a bore is not clear: …"). A plane or a hole has `form` null. It is set when a fit is kept
+  and when it is fitted again; a fit kept before forms existed has no `form` and loads as it is (it
+  is not fitted again for it). `features.json` may hold only `"boss"`, `"bore"` or null, and null for
+  a plane or a hole. The suggested nominal sizes use it (`ohs.cad.nominal.suggest_fit` reads it from
+  the kept record): bosses and bores are biased differently. `POST .../fit` itself answers as before,
+  without `form`.
 - A measurement's `version` is the mesh it was picked on (the current one when left out).
 - A relation needs two different kept fits (422 otherwise). Deleting a fit deletes its relations,
   its region file and its outline file.

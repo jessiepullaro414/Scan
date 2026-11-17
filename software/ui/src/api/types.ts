@@ -714,9 +714,14 @@ export type KeptFeature = {
   warnings: string[];
   mesh_version: number; // the mesh version it was fitted on
   extent: FitExtent | null; // where its region lies (null: kept before extents existed; "fit again" measures it)
+  // a cylinder: a boss (faces away from its axis) or a bore (a hole's wall); null for a plane or a hole, or when the
+  // engine could not tell; left out for a fit kept before forms existed
+  form?: CylinderForm | null;
   created: string;
   stale: boolean; // fitted on an earlier mesh than the current one
 };
+/** What a kept cylinder is (ohs.measure.region `cylinder_form`). */
+export type CylinderForm = "boss" | "bore";
 // Where a kept fit's region lies on its shape (ohs.measure.region_extent; the small part features.json keeps,
 // ohs/measure/features.py "The extent"). mm, the scan's frame.
 export type PlaneExtent = {

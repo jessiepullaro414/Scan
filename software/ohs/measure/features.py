@@ -15,6 +15,7 @@ mesh; :mod:`ohs.server.features` fits and refits through the fit route and keeps
                    "n_faces", "tolerance_mm", "mean_sigma_mm", "correlated_points", "warnings",
                    "mesh_version",   # the mesh version it was fitted on
                    "extent": {...} | null,   # where its region lies: the small part (below)
+                   "form": "boss" | "bore" | null,   # a cylinder's (below); null for a plane or a hole
                    "created"}],
      "measurements": [{"id": "m-…", "name": "Distance 1", "a": [x, y, z], "b": [x, y, z],
                        "mesh_version", "created"}],
@@ -50,6 +51,13 @@ plane's basis) and each loop's length (``outer_sizes``, ``holes_sizes``). ``exte
 kept before extents existed (or whose extent could not be kept): it loads and shows as before.
 :func:`validate` checks the small part's shape; keys it does not know are kept.
 
+**The form** says whether a kept cylinder is a boss (its surface faces away from the axis: a
+shaft, a pin) or a bore (a hole's wall): :attr:`ohs.measure.region.RegionFit.form`, set when the
+fit is kept and when it is fitted again. The suggested nominal sizes use it
+(:func:`ohs.cad.nominal.suggest_fit`): the two are biased differently. Null when the fit could not
+tell, and for a plane or a hole; a feature kept before forms existed has no ``form`` key and
+loads as it is. :func:`validate` refuses any other value, and a form on a plane or a hole.
+
 **The part's frame** (``frame``) is written by :mod:`ohs.server.features` from
 :func:`ohs.measure.frame.part_frame`. :func:`validate` passes it through as it is (an object or
 null), so a frame this version cannot read (a later ``format_version``, a damaged matrix) never
@@ -74,7 +82,7 @@ from typing import Any, Iterable
 
 import numpy as np
 
-__all__ = ["FORMAT_VERSION", "FILE_NAME", "FACES_DIR", "KINDS", "SHAPE_OF", "NAME_MAX", "ID_RE", "empty",
+__all__ = ["FORMAT_VERSION", "FILE_NAME", "FACES_DIR", "KINDS", "SHAPE_OF", "FORMS", "NAME_MAX", "ID_RE", "empty",
            "validate", "load", "save", "faces_path", "save_faces", "load_faces", "remove_faces", "new_id",
            "next_name", "now", "frame_state", "EDGE_MAX_POINTS", "split_extent", "outline_path", "save_outline",
            "load_outline", "remove_outline"]
@@ -88,6 +96,8 @@ EDGE_MAX_POINTS = 128
 #: the kinds of fit (as the fit route names them) and the shape each one gives
 KINDS = ("plane", "cylinder", "hole")
 SHAPE_OF = {"plane": "plane", "cylinder": "cylinder", "hole": "circle"}
+#: what a kept cylinder is (``form``; null: not known, and always for a plane or a hole)
+FORMS = ("boss", "bore")
 NAME_MAX = 80
 #: an id: letters, digits, "-" and "_" (it names a file)
 ID_RE = re.compile(r"[A-Za-z0-9_-]{1,64}")
@@ -280,6 +290,12 @@ def _feature(f: Any, i: int) -> dict:
     if not isinstance(warnings, list) or not all(isinstance(w, str) for w in warnings):
         _fail(where, "warnings must be a list of text")
     _extent(f.get("extent"), where)
+    if "form" in f:  # a file written before forms existed has none: it loads as it is
+        form = f["form"]
+        if form is not None and (not isinstance(form, str) or form not in FORMS):
+            _fail(where, f"form must be 'boss', 'bore' or null, got {form!r}")
+        if form is not None and kind != "cylinder":
+            _fail(where, f"only a cylinder is a boss or a bore, and this feature is a {kind}")
     out["created"] = _text(f.get("created", ""), where, "created")
     return out
 

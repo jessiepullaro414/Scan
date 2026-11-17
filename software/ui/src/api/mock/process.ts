@@ -41,7 +41,7 @@ import type {
 import { encodeFaces } from "../../lib/fits";
 import { normalizeQuality } from "../../lib/quality";
 import { weakAreas } from "./check";
-import { mockExtent } from "./extent";
+import { mockExtent, mockForm } from "./extent";
 import type { FeatureEngine } from "./features";
 import { mockFit } from "./fit";
 import { apply, stlMesh } from "./geom";
@@ -373,13 +373,17 @@ export class MockProcess {
 
   /** What the kept features (features.ts) need of this scan: its fits, its mesh version, the face nearest a
    * saved click on the current mesh (by the faces' centres), the current mesh in the part's frame, and where a fit
-   * just made lies on its shape (extent.ts). */
+   * just made lies on its shape and whether a cylinder is a boss or a bore (extent.ts). */
   featureEngine(p: Project, s: Scan): FeatureEngine {
     return {
       fit: (body) => this.fit(p, s, body),
       extent: (r) => {
         const m = this.ensure(p, s).current;
         return m ? mockExtent(m.positions, m.indices, decodeFaces(r.faces) ?? new Uint32Array(0), r.shape) : null;
+      },
+      form: (r) => {
+        const m = this.ensure(p, s).current;
+        return m ? mockForm(m.positions, m.indices, decodeFaces(r.faces) ?? new Uint32Array(0), r.shape) : null;
       },
       version: () => {
         const st = this.ensure(p, s);

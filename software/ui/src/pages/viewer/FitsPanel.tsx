@@ -2,7 +2,7 @@
  * The viewer's list of fitted shapes, kept with the scan: each fit's name (the user can change it in place), its
  * numbers with their ± (1σ, statistical only, counting points that err together), its warnings in plain words,
  * where its region lies (a plane's size and area, a cylinder's length and arc, as the engine measured them:
- * lib/extent.ts), and whether it was fitted on an earlier mesh, with one "Fit again" for those (and for fits kept
+ * lib/extent.ts), whether a cylinder is a boss or a bore (the engine's `form`), and whether it was fitted on an earlier mesh, with one "Fit again" for those (and for fits kept
  * before their extent was measured). Two fits picked from the list show their relation as the engine works it out
  * (ohs/measure/relate.py, with its ±: lib/relationView.ts), which can be kept too. Each fit's position and direction are shown in the
  * scan's frame, or in the part's frame when the Coordinate system panel's switch is on (lib/partFrame.ts); its
@@ -34,7 +34,11 @@ const SIGMA_NOTE =
   "± (1σ) is how far the fit could move with the scan's scatter, counting that neighbouring points err together. It is not the accuracy: on simulated scans it covered the spread from one scan to the next, but the shapes were also off the same way on every scan (small bosses 0.15–0.25 mm small in radius).";
 const HOLE_NOTE =
   "± is how well the edge points agree with the circle (1σ). It is not the accuracy: on simulated scans a hole's edge read about 1 mm small in diameter, several times its ±.";
-const degSigma = (x: number) => `±${fmtSmall(x)}°`;
+const FORM_TIP = {
+  boss: "A boss: the surface faces away from the axis, with material inside (a shaft, a pin). Read by the engine from the region's faces. Bosses and bores read off in size differently on scans.",
+  bore: "A bore: the surface faces the axis, the wall of a hole. Read by the engine from the region's faces. Bosses and bores read off in size differently on scans.",
+} as const;
+const degSigma =(x: number) => `±${fmtSmall(x)}°`;
 const mmSigma = (x: number) => `±${fmtSmall(x)} mm`;
 
 type Row = [label: string, value: string, tip?: string];
@@ -62,6 +66,11 @@ function rowsOf(f: FitItem, frame: PartFrameView | null): Row[] {
     );
   } else if (s.kind === "cylinder") {
     rows.push(
+      [
+        "Form",
+        f.form === "boss" ? "Boss" : f.form === "bore" ? "Bore" : "Not known",
+        f.form ? FORM_TIP[f.form] : "Whether this cylinder is a boss or a bore is not known: its faces did not clearly face away from the axis or towards it, or it was kept before this was read.",
+      ],
       ["Diameter", fmtPm(s.diameter_mm, s.diameter_sigma_mm), SIGMA_NOTE],
       ["Radius", fmtPm(s.radius_mm, s.radius_sigma_mm), SIGMA_NOTE],
       ["Residual RMS", fmtLength(s.rms_mm), "How far the points lie from the cylinder, RMS."],

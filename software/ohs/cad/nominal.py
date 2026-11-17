@@ -503,7 +503,9 @@ def suggest_fit(feature, *, form: str | None = None, poses: str = "tracked", val
     ``feature``: a kept feature (``{"kind", "shape", "warnings", ...}`` as ``features.json`` holds
     it), a :class:`~ohs.measure.region.RegionFit` or its dict, or a bare fit or its ``to_dict()``
     (then there are no warnings). ``form``, for a cylinder: "boss" (convex: a boss, a shaft, a pin)
-    or "bore"; None when not known, and then no bias is used: a fit does not say which it is. A
+    or "bore"; None to take the feature's own ``form`` (a kept cylinder's, or a RegionFit's,
+    ``ohs.measure.region.cylinder_form``). When neither says, no bias is used. A form given here
+    wins over the feature's. A
     hole's form comes from its warnings (with a wall, and the level it was read at, or not); a
     ``form`` given for a hole is an error. ``poses``: "tracked" (a scan as a user makes it) or
     "true" (a simulated scan fused at its true poses), which picks the table's rows. ``value``:
@@ -537,6 +539,8 @@ def suggest_fit(feature, *, form: str | None = None, poses: str = "tracked", val
                          f"Not suggested: the fit warns {bad}. Its size is not reliable enough to name a nominal one.")]
     case = _Case(value, label, "mm", measured, sigma, scale=scale, poses=poses, lowest=1e-6)
     if shape_kind == "cylinder" or kind == "cylinder":
+        if form is None:
+            form = _get(feature, "form")  # a kept cylinder (or a RegionFit) says what it is
         if form == "boss":
             case.feature = "boss"
         elif form == "bore":

@@ -9,9 +9,11 @@
  *   but the widest gap between their angles; a gap under 30° counts as all round);
  * - hole: its circle as 72 points.
  *
+ * And a cylinder's form (`mockForm`): a boss or a bore, read from its region's faces as the engine reads it.
+ *
  * Imports nothing at run time, so `npm test` checks it with plain node (extent.test.ts).
  */
-import type { FeatureOutline, FitExtent, FitShape } from "../types";
+import type { CylinderForm, FeatureOutline, FitExtent, FitShape } from "../types";
 
 type V = number[];
 const RAD = Math.PI / 180;
@@ -120,6 +122,37 @@ export function mockExtent(positions: ArrayLike<number>, indices: ArrayLike<numb
     edge.push([shape.center[0] + u[0] * c + v[0] * s, shape.center[1] + u[1] * c + v[1] * s, shape.center[2] + u[2] * c + v[2] * s]);
   }
   return { extent: { kind: "hole", n_edge: edge.length, edge }, outline: null };
+}
+
+/** A share of a cylinder's region area this large facing one way decides its form (as the engine's FORM_MAJORITY). */
+const FORM_MAJORITY = 0.8;
+
+/**
+ * Whether a cylinder fit is a boss or a bore, as `ohs.measure.region.cylinder_form` reads it: each face of the region
+ * votes with its area, its normal (from the order of its corners) against the direction from the axis to its centre;
+ * away from the axis is a boss, towards it a bore. null when no clear majority, and for a plane or a hole.
+ */
+export function mockForm(positions: ArrayLike<number>, indices: ArrayLike<number>, faces: ArrayLike<number>, shape: FitShape): CylinderForm | null {
+  if (shape.kind !== "cylinder") return null;
+  const d = unit(shape.axis);
+  let away = 0,
+    towards = 0;
+  for (let i = 0; i < faces.length; i++) {
+    const [a, b, c] = [0, 1, 2].map((k) => {
+      const v = indices[faces[i] * 3 + k];
+      return [positions[v * 3], positions[v * 3 + 1], positions[v * 3 + 2]];
+    });
+    const n = cross([b[0] - a[0], b[1] - a[1], b[2] - a[2]], [c[0] - a[0], c[1] - a[1], c[2] - a[2]]);
+    const w = [(a[0] + b[0] + c[0]) / 3 - shape.point[0], (a[1] + b[1] + c[1]) / 3 - shape.point[1], (a[2] + b[2] + c[2]) / 3 - shape.point[2]];
+    const t = dot(w, d);
+    const along = dot(n, [w[0] - t * d[0], w[1] - t * d[1], w[2] - t * d[2]]);
+    const area = Math.hypot(n[0], n[1], n[2]);
+    if (along > 0) away += area;
+    else if (along < 0) towards += area;
+  }
+  if (!(away + towards > 0)) return null;
+  const share = away / (away + towards);
+  return share >= FORM_MAJORITY ? "boss" : 1 - share >= FORM_MAJORITY ? "bore" : null;
 }
 
 /** The outline route's answer from a kept mock outline. */

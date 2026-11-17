@@ -1791,13 +1791,16 @@ class ProcessManager:
         return sp.holes(lambda: self.current_mesh(sp))
 
     def fit(self, pid: str, sid: str, kind: str, face: int, point: Any, tolerance_mm: float | None = None,
-            version: int | None = None, with_extent: bool = False) -> dict:
+            version: int | None = None, with_extent: bool = False, with_form: bool = False) -> dict:
         """``POST .../fit``: one click on the current mesh grows a plane, cylinder or hole region and
         fits it (:func:`ohs.measure.fit_at`). Read-only; the mesh is kept per version for the next
         click. ``version``: the mesh version the click was made on (409 when it changed).
         ``with_extent``: the answer also has ``extent``, where the region lies on its shape
         (:attr:`RegionFit.extent <ohs.measure.region.RegionFit.extent>`, made with every fit anyway);
-        the kept features ask for it. Off by default: the route answers as it did before."""
+        the kept features ask for it. ``with_form``: the answer also has ``form``, whether a cylinder
+        is a "boss" or a "bore" (:attr:`RegionFit.form <ohs.measure.region.RegionFit.form>`; None
+        when not clear, and for a plane or a hole); the kept features ask for it too. Both off by
+        default: the route answers as it did before."""
         from ohs.measure import KINDS, fit_at
 
         if kind not in KINDS:
@@ -1831,6 +1834,8 @@ class ProcessManager:
                "warnings": [str(w) for w in r.warnings], "version": v}
         if with_extent:
             out["extent"] = r.extent
+        if with_form:
+            out["form"] = r.form
         return out
 
     def deviation(self, pid: str, sid: str) -> tuple[dict, np.ndarray]:

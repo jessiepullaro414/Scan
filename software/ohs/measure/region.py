@@ -68,6 +68,15 @@ radius is more than :data:`SEED_DRIFT` times the seed's, or less than the seed's
 the answer is an error that gives both radii: no guess. (On real cylinders of simulated scans the
 two stay within 15 %.)
 
+**Boss or bore.** A cylinder's answer says which it is (:attr:`RegionFit.form`): "boss" when its
+surface faces away from the axis (material inside: a shaft, a pin), "bore" when it faces the axis
+(a hole's wall). The bias of a size depends on it (``ohs.cad.nominal``). The seed picks a side to
+grow with, but the answer is decided again from the region itself, on the final fit
+(:func:`cylinder_form`): each face's normal against the direction from the axis to it, weighed by
+its area, and :data:`FORM_MAJORITY` of the area must agree. When it does not (a mesh folded on
+itself, a surface scanned from both sides), the form is None and a warning says why. It is not in
+``to_dict()`` unless asked (``with_form``), so today's answers keep their keys; it changes no fit.
+
 **The default tolerance** is ``max(3 x the seed's median sigma, 3 x the seed fit's RMS, 0.02 mm)``,
 and with sigma each vertex may also stray 3 times its own sigma when that is more; but sigma counts
 only while it agrees with the seed's measured scatter (median sigma at most :data:`SIGMA_TRUST`
@@ -179,7 +188,7 @@ from ohs.mesh.confidence import SIGMA_NONE_MM
 from ohs.mesh.holes import find_holes
 from ohs.mesh.topology import as_mesh, compact, components, rows, sorted_unique
 
-__all__ = ["RegionFit", "fit_at", "region_extent", "KINDS"]
+__all__ = ["RegionFit", "fit_at", "region_extent", "cylinder_form", "KINDS"]
 
 KINDS = ("plane", "cylinder", "hole")
 TOL_SIGMAS = 3.0  # the default tolerance: this many times the seed's sigma or scatter ...
@@ -218,6 +227,8 @@ CORR_MAX_LAG_EDGES = 12.0  # ... then while it stays above 0, at most this far
 CORR_POINTS = 50000  # measured on at most this many of the region's points (picked by id) ...
 CORR_ANCHORS = 3000  # ... each of the first this many against all of them
 OUTLINE_SPECK_EDGES = 2.0  # a plane's outline leaves out loops smaller than a circle this many mesh edges in radius
+FORM_MAJORITY = 0.8  # a cylinder is a boss (a bore) when this share of its region's area faces away from (towards) its axis
+FORM_FACES = 20000  # ... judged on at most this many of the region's faces (every k-th)
 
 
 @dataclass
@@ -237,10 +248,14 @@ class RegionFit:
     correlated_points: float | None = None
     # where the region lies on its shape, as plain JSON (:func:`region_extent`); :func:`fit_at` sets it
     extent: dict | None = None
+    # a cylinder: "boss" (its surface faces away from the axis: a shaft, a pin) or "bore" (a hole's
+    # wall), from its region's faces (:func:`cylinder_form`); None when they do not say clearly, and
+    # for a plane or a hole
+    form: str | None = None
 
-    def to_dict(self, with_extent: bool = False) -> dict:
-        """Plain JSON. The extent only ``with_extent``: without it the answer is as it was before
-        the extent existed."""
+    def to_dict(self, with_extent: bool = False, with_form: bool = False) -> dict:
+        """Plain JSON. The extent only ``with_extent``, the form only ``with_form``: without them
+        the answer is as it was before they existed."""
         out = {"kind": self.kind, "fit": self.fit.to_dict(), "faces": [int(f) for f in self.faces],
                "edge": [int(v) for v in self.edge], "warnings": list(self.warnings),
                "tolerance_mm": None if self.tolerance_mm is None else float(self.tolerance_mm),
@@ -249,6 +264,8 @@ class RegionFit:
                "correlated_points": None if self.correlated_points is None else float(self.correlated_points)}
         if with_extent:
             out["extent"] = self.extent
+        if with_form:
+            out["form"] = self.form
         return out
 
 
@@ -339,6 +356,36 @@ def _side(m: _Surface, faces: np.ndarray, kind: str, fit) -> float:
     P = m.corners(faces)
     n, a = _unit_normals(P)
     return 1.0 if float(a @ np.einsum("ij,ij->i", n, _direction(kind, fit, P.mean(axis=1)))) >= 0 else -1.0
+
+
+def cylinder_form(V: np.ndarray, F: np.ndarray, faces: np.ndarray, fit: CylinderFit) -> tuple[str | None, str | None]:
+    """Is the cylinder ``fit`` of the region ``faces`` a boss or a bore: ``(form, why not)``.
+
+    Each face of the region votes with its area: its normal (from the order of its corners, as the
+    mesh gives it: a scan's faces face out of the material) against the direction from the axis to
+    its centre. Away from the axis is a boss (material inside: a shaft, a pin), towards it a bore (a
+    hole's wall). It is the region's own geometry, decided once on the final fit, not the side the
+    seed chose while growing. When at least :data:`FORM_MAJORITY` of the area agrees the answer is
+    ``(form, None)``; otherwise ``(None, a sentence saying so)``: a region that faces both ways (a
+    mesh folded on itself, a surface scanned from both sides) is neither, and no guess is made.
+    At most :data:`FORM_FACES` faces vote (every k-th, so the same click gives the same answer):
+    a few milliseconds on a whole 1M-triangle tube."""
+    faces = np.asarray(faces, dtype=np.int64).reshape(-1)
+    faces = faces[:: max(1, len(faces) // FORM_FACES)]
+    P = rows(V, F[faces].reshape(-1)).reshape(-1, 3, 3)
+    c = _cross_normals(P)
+    along = np.einsum("ij,ij->i", c, _direction("cylinder", fit, (P[:, 0] + P[:, 1] + P[:, 2]) / 3.0))
+    area = np.sqrt(np.einsum("ij,ij->i", c, c))
+    away, towards = float(area[along > 0].sum()), float(area[along < 0].sum())
+    if not away + towards > 0:
+        return None, "whether this cylinder is a boss or a bore is not known: its region has no area to tell"
+    share = away / (away + towards)
+    if share >= FORM_MAJORITY:
+        return "boss", None
+    if 1.0 - share >= FORM_MAJORITY:
+        return "bore", None
+    return None, (f"whether this cylinder is a boss or a bore is not clear: {100 * share:.0f} % of its region faces "
+                  f"away from its axis and {100 * (1 - share):.0f} % towards it")
 
 
 def _agrees(m: _Surface, faces: np.ndarray, kind: str, fit, side: float, tol: float, cos_tol: float,
@@ -600,6 +647,7 @@ def _grow(m: _Surface, face: int, kind: str, tolerance_mm, angle_tol_deg) -> Reg
     edge = float(np.median(np.linalg.norm(e[:, 1] - e[:, 0], axis=1)))
     n_c = correlated_points(verts, P, _distance(kind, fit, P), edge)
     fit = _widened(fit, math.sqrt(n_c))
+    form, unclear = cylinder_form(m.V, m.F, faces, fit) if kind == "cylinder" else (None, None)
     warnings = []
     if fit.n < SMALL_REGION_POINTS:
         warnings.append(f"small region: {fit.n} points")
@@ -612,9 +660,12 @@ def _grow(m: _Surface, face: int, kind: str, tolerance_mm, angle_tol_deg) -> Reg
                             f"(RMS {fit.rms_mm:.3f} mm): a curved or rough surface?")
     if still_growing:
         warnings.append(f"the region was still growing after {MAX_ROUNDS} rounds")
+    if unclear:
+        warnings.append(unclear)
     return RegionFit(kind=kind, fit=fit, faces=faces, edge=np.zeros(0, dtype=np.int64), warnings=warnings,
                      tolerance_mm=tol, angle_tol_deg=angle,
-                     mean_sigma_mm=None if m.S is None else float(np.mean(m.S[verts])), correlated_points=n_c)
+                     mean_sigma_mm=None if m.S is None else float(np.mean(m.S[verts])), correlated_points=n_c,
+                     form=form)
 
 
 # --------------------------------------------------------------------------- hole

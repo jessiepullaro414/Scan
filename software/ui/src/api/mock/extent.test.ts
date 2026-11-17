@@ -1,12 +1,12 @@
 /**
  * Checks for the demo engine's extents and relations (`npm test`): `mockExtent` on a small flat grid and a half
  * tube; a kept fit carries its extent and its outline route answers, both go with the fit; "fit again" measures a
- * fit kept without one; kept relations and `features/relate` answer the engine's record (lib/fits.ts's values).
+ * fit kept without one; a cylinder's form (boss or bore) from its faces, kept with it; kept relations and `features/relate` answer the engine's record (lib/fits.ts's values).
  * Plain TypeScript that Node runs as it is (type stripping), no test framework: a failed check throws.
  */
 import { relationRecord } from "../../lib/fits.ts";
 import type { CylinderShape, FeatureOutline, FeatureSet, FitResult, KeptFit, KeptRelation, PairRelation, PlaneShape, RefitResult } from "../types";
-import { mockExtent } from "./extent.ts";
+import { mockExtent, mockForm } from "./extent.ts";
 import { MockFeatures, type FeatureEngine } from "./features.ts";
 import { HttpError } from "./host.ts";
 
@@ -31,6 +31,7 @@ function grid(): { positions: number[]; indices: number[] } {
   return { positions, indices };
 }
 const g = grid();
+const mockFeatures = new MockFeatures();
 const allFaces = Array.from({ length: g.indices.length / 3 }, (_, k) => k);
 const flat: PlaneShape = { kind: "plane", point: [15, 10, 2], normal: [0, 0, 1], rms_mm: 0, flatness_mm: 0, n: 651, normal_sigma_deg: 0.01, offset_sigma_mm: 0.001 };
 {
@@ -61,6 +62,26 @@ const flat: PlaneShape = { kind: "plane", point: [15, 10, 2], normal: [0, 0, 1],
     check(near(extent.along_mm[0], -4) && near(extent.along_mm[1], 8) && near(extent.length_mm, 12), `along ${extent.along_mm}`);
     check(near(extent.arc_deg, 180, 1e-6), `half the round: ${extent.arc_deg}`);
   }
+  // its faces face away from the axis: a boss; turned over, towards it: a bore; half and half: not known
+  const faces = Array.from({ length: 2 * n }, (_, k) => k);
+  check(mockForm(positions, indices, faces, shape) === "boss", "the half tube is a boss");
+  const turned = indices.map((_, i) => indices[i - (i % 3) + [0, 2, 1][i % 3]]);
+  check(mockForm(positions, turned, faces, shape) === "bore", "turned over, a bore");
+  const mixed = indices.map((v, i) => (Math.floor(i / 3) % 2 ? turned[i] : v));
+  check(mockForm(positions, mixed, faces, shape) === null, "half and half: not known");
+  check(mockForm(g.positions, g.indices, allFaces, flat) === null, "a plane has no form");
+  // a kept cylinder keeps its form; a plane's is null
+  const cylEngine: FeatureEngine = {
+    version: () => 1,
+    nearestFace: () => 0,
+    fit: (): FitResult => ({ kind: "cylinder", shape, faces: "AAAAAAEAAAA=", n_faces: 2, tolerance_mm: 0.1, mean_sigma_mm: null, correlated_points: null, warnings: [], version: 1 }),
+    form: (r) => mockForm(positions, indices, faces, r.shape),
+  };
+  const kept = mockFeatures.route("POST", "p0/s0", [], { kind: "cylinder", face: 0, point: [5, 0, 2] }, cylEngine);
+  const k = (await kept!.json()) as KeptFit;
+  check(k.form === "boss", `a kept cylinder carries its form: ${k.form}`);
+  const set = (await mockFeatures.route("GET", "p0/s0", [], {}, cylEngine)!.json()) as FeatureSet;
+  check(set.features[0].form === "boss", "and the set shows it");
 }
 
 // ------------------------------------------------------------------ kept fits, outlines and relations
@@ -102,6 +123,7 @@ const call = async <T>(method: string, rest: string[], body: Record<string, unkn
 };
 
 const f1 = (await call<KeptFit>("POST", [], { kind: "plane", face: 1, point: [15, 10, 2] })).data;
+check(f1.form === null, "a kept plane's form is null");
 const f2 = (await call<KeptFit>("POST", [], { kind: "plane", face: 2, point: [3, 4, 12] })).data;
 check(f1.extent?.kind === "plane" && f2.extent?.kind === "plane", "a kept fit carries its extent");
 {

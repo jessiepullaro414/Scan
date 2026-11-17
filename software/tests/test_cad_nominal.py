@@ -166,6 +166,32 @@ def test_a_feature_without_a_number_in_the_document_gets_no_bias_and_says_so():
     assert 14.0 not in nominals(offer)
 
 
+def test_a_kept_cylinder_that_says_it_is_a_boss_gets_the_boss_bias_without_being_told():
+    """A kept cylinder carries its form (``features.json``, set by the fit): the app need not pass
+    it. A ``form`` given by the caller still wins; a record without one, or with null, is as before."""
+    boss = {**cylinder(13.66, 0.01), "form": "boss"}
+    offer = only(suggest_fit(boss, poses="tracked"), "diameter")
+    assert nominals(offer) == [14.0] and offer.suggestions[0].allowed_by == "bias"
+    assert nominals(only(suggest_fit({**cylinder(14.3, 0.03), "form": "boss"}, poses="tracked"), "diameter")) == [14.5]
+    # the caller's form wins over the record's
+    offer = only(suggest_fit(boss, form="bore", poses="tracked"), "diameter")
+    assert 14.0 not in nominals(offer) and "bore" in offer.reason
+    # a bore says so, and no bias is used
+    offer = only(suggest_fit({**cylinder(14.02, 0.03), "form": "bore"}), "diameter")
+    assert nominals(offer) == [14.0] and "a bore" in offer.suggestions[0].sentence
+    # null, or no form at all: not known, as before
+    for rec in ({**cylinder(13.66, 0.01), "form": None}, cylinder(13.66, 0.01)):
+        offer = only(suggest_fit(rec, poses="tracked"), "diameter")
+        assert 14.0 not in nominals(offer) and "boss or a bore" in offer.reason
+    # a RegionFit-like answer with a form attribute counts too
+    from types import SimpleNamespace
+
+    shape = CylinderFit(point=np.zeros(3), axis=np.array([0.0, 0.0, 1.0]), radius_mm=6.83, rms_mm=0.05, n=800,
+                        radius_sigma_mm=0.005, axis_sigma_deg=0.5, point_sigma_mm=0.02)
+    r = SimpleNamespace(kind="cylinder", fit=shape, faces=np.zeros(0), warnings=[], form="boss")
+    assert nominals(only(suggest_fit(r, poses="tracked"), "diameter")) == [14.0]
+
+
 def test_a_hole_with_a_wall_follows_the_level_it_is_read_at():
     # at the 0.5 mm level a Ø 25 hole with a wall reads 0.57-0.70 mm large at true poses
     at_half = hole(25.62, 0.09, warnings=[wall_warning(0.5)])
