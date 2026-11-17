@@ -73,8 +73,21 @@ other, so any of them can be taken first.
 - **Offers that only a known bias allows** (asked after C3): not assumed. A Ø 14.3 boss may
   well be a Ø 14.3 boss. By default only the ± makes an offer; the user can choose to see the
   bias-only ones as well, marked as such.
-- **K3:** with a hole as the origin its centre is the origin; strict 3-2-1 stays a switch (no
-  objection raised).
+- **K3:** with a hole as the origin its centre is the origin; strict 3-2-1 stays a switch.
+  Asked again on 2026-11-17 whether changing the default would be an improvement: it would
+  not (the hole's centre as the origin is what measuring machines do and what the tests ask
+  for), so it stays.
+- **The merge of several scans** (2026-11-17, "Go ahead and fix it"): it must keep thin parts
+  and each part's foot; the table is kept out with the single-scan rule, not by cutting 2 mm
+  off every frame. It changes merged scans.
+- **The alignment from shape, `MAINTENANCE_PLAN.md` F11** (2026-11-17): we cannot know what
+  the parts will be. The alignment should find the pose from whatever angle the scans were
+  taken when enough of the part is shared, and when it is not sure it must say so and let the
+  person align the scans (picked points), not accept a guess.
+- **Smoothing's "within 2σ" limit** (2026-11-17): "if it doesn't protect the edges it's
+  probably not worth it". It was added with smoothing as a safety limit; measured, it holds
+  back only well-measured surface and protects no edge. What takes its place in the two
+  built-in recipes that use it is still to be settled with the owner.
 
 ---
 

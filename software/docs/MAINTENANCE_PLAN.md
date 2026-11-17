@@ -1650,6 +1650,11 @@ Every task here: the type check, `npm test`, and for bundle tasks the chunk size
   guards into `align_pair`, test first, and measure the alignment numbers of `VALIDATION.md`,
   "Aligning and merging two scans", before and after. It changes alignment results, so it
   waits for the owner's yes.
+- **The owner, 2026-11-17:** go ahead, with this aim: we cannot know what the parts will be,
+  so the alignment should find the pose from whatever angle the scans were taken when enough
+  of the part is shared; and when it is not sure (a pose turned round scores nearly as well,
+  the guesses disagree, too little is shared) it says so and lets the person align the scans
+  by picked points, and does not accept a guess.
 
 ## Reviewed and fine: leave alone
 
