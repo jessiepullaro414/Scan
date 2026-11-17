@@ -2105,6 +2105,24 @@ Limits: simulated scans of two parts only, at Standard quality (1 mm voxels); th
 
 Scripts and rows: scratchpad `m5v3\` of the session of 2026-11-16 (`run.sh`, `compare.py`, `candidates.py`, `compare_models.py`, `cand2.py`, `rules2.py`; `results\` before, `results2\` with the widened ±).
 
+## Smoothing's "within 2σ" limit on today's engine (2026-11-16)
+
+The Smooth step can keep each vertex within twice its own sigma ("within 2σ", on in the Smooth tab and both recipes). With the old sigma it never took effect ("The deviation map against the truth"). Measured again on the meshes of "The fits' ± on today's engine" (bracket and car panel, 5 seeds, true poses and tracking), each setting with and without the limit, errors against the true surface:
+
+| Setting | Vertices the limit holds back (all / at edges) | Median error, before → after (free / within 2σ) | RMS error, before → after (free / within 2σ) |
+|---|---|---|---|
+| Taubin 50 % (the Smooth tab), bracket, true poses | 29 % / 0 % | 0.0245 → 0.0184 / 0.0208 mm | 0.1104 → 0.1014 / 0.1016 mm |
+| Taubin 50 %, bracket, tracking | 36 % / 0 % | 0.0504 → 0.0475 / 0.0479 mm | 0.1353 → 0.1289 / 0.1290 mm |
+| Taubin 50 %, car panel, true poses | 19 % / 7 % | 0.0322 → 0.0253 / 0.0267 mm | 0.3292 → 0.3207 / 0.3208 mm |
+| Taubin 50 %, car panel, tracking | 23 % / 12 % | 0.0655 → 0.0598 / 0.0601 mm | 0.3470 → 0.3393 / 0.3394 mm |
+| Bilateral 25 % (bracket recipe) and 50 % (body-panel recipe), all four | 0 % | the same with and without | the same with and without |
+
+- **The limit now binds, but in the wrong places.** It holds back a fifth to a third of the vertices, all on well-measured surface (median sigma 0.09–0.13 mm, so 2σ is about 0.2 mm), where smoothing removes noise: at true poses it keeps 10–20 % of that gain from happening. It never holds back the bracket's edges and only 7–12 % of the panel's, because at edges and rims the sigma is large (median 0.54–0.79 mm: it holds the bias terms of curvature, gaps and borders), and that is where smoothing does harm: Taubin rounds 26–30 % of the bracket's edge vertices by more than 0.05 mm, with or without the limit.
+- **The bilateral recipes never reach the limit:** their moves stay below 2σ everywhere.
+- So "within 2σ" protects nothing that needs protecting and costs a little where smoothing helps. What would protect edges is a limit that is small where the surface turns sharply (the edge detection of `keep_edges`), not one that follows the sigma.
+
+Changing or removing the option changes what a mesh edit gives, so it is the owner's decision; the code is unchanged. Scripts and rows: scratchpad `m5v3\check\` of the session of 2026-11-16 (`run_smooth.py`, `agg.py`, `B_*.json`).
+
 ## What the metrics mean
 
 - **Stereo errors** compare the estimated raw intrinsics/extrinsics (`K1`, `K2`, `R`, `T`) with

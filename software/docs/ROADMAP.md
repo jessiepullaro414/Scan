@@ -170,8 +170,11 @@ about the scan itself, not the Fit tool, and they decide whether a measurement c
   numbers as the prototype (58–60 % passed at ± 0.3 mm on the held-out scans, 99.8 % of it truly
   within). It costs 192 MB more per scan, 2 ms per frame and 1–2 s when the mesh is made. Item 3
   below is no longer blocked. Still to do: it cannot see a tracking error that shifts a whole
-  region (that needs a per-scan pose-quality term); smoothing's "within 2σ" limit can bind now and
-  a fit's ± follows the smaller sigma, and neither has been measured again; real scans.
+  region (that needs a per-scan pose-quality term); real scans. Both measured again 2026-11-16: a
+  fit's ± now counts points that err together (above); smoothing's "within 2σ" limit binds on a
+  fifth to a third of the vertices, but only on well-measured surface, and never protects the
+  edges that smoothing rounds ([`VALIDATION.md`](../VALIDATION.md), "Smoothing's "within 2σ"
+  limit on today's engine"); what to do with it is the owner's decision.
 
 1. **Fit simple shapes in the viewer.** Pick a region; fit a plane, a cylinder or a circle. Show hole
    diameters, plane-to-plane distances and angles, with the fit's residual and the region's
