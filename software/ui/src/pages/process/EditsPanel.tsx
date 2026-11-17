@@ -5,11 +5,12 @@
  * accuracy in mm), each with sensible defaults and a one-line explanation, then Apply. Deleting
  * or keeping a selection happens in the view.
  */
-import { Eraser, PaintBucket, Shrink, Sparkles, WandSparkles, WavesHorizontal, type LucideIcon } from "lucide-react";
+import { CircleHelp, Eraser, PaintBucket, Shrink, Sparkles, WandSparkles, WavesHorizontal, type LucideIcon } from "lucide-react";
 import { useEffect, useId, useMemo, useState } from "react";
 import type { EditBody, HoleOutline, MeshStats, SmoothMethod } from "../../api/types";
 import { Button } from "../../components/ui/Button";
 import { Segmented, Slider, Switch } from "../../components/ui/Form";
+import { Tooltip } from "../../components/ui/Popover";
 import { fmtFixed, fmtInt } from "../../lib/format";
 import { cn } from "../../lib/util";
 import { processKey, useProcess } from "../../store/process";
@@ -25,6 +26,41 @@ const TABS: { id: EditTab; label: string; icon: LucideIcon }[] = [
 ];
 
 type FloaterMode = "size" | "triangles" | "largest";
+type SmoothWhere = "all" | "edges" | "flat";
+
+/** The "Where to smooth" choices; the text is the hover card's and each button's title. */
+const WHERE_HELP: { value: SmoothWhere; label: string; text: string }[] = [
+  {
+    value: "all",
+    label: "Everywhere",
+    text: "Evens out the noise on the whole part. It also rounds sharp edges: on simulated scans 17–46 % of the edge points moved by more than 0.05 mm.",
+  },
+  {
+    value: "edges",
+    label: "Off edges",
+    text: "Leaves 1.5 mm on each side of a sharp edge as scanned and smooths everything else, round features like shafts and bosses too. 1–8 % of the edge points moved.",
+  },
+  {
+    value: "flat",
+    label: "Flat only",
+    text: "Smooths only where the surface is flat. Edges, corners and small round features stay as scanned: 0–4 % of the edge points moved, and a small shaft keeps a few microns of noise.",
+  },
+];
+
+function WhereHelp() {
+  return (
+    <div className="space-y-1.5">
+      <div className="font-semibold">Where to smooth</div>
+      {WHERE_HELP.map((w) => (
+        <div key={w.value}>
+          <span className="font-medium text-fg">{w.label}: </span>
+          <span className="text-muted">{w.text}</span>
+        </div>
+      ))}
+      <div className="text-muted">Measuring edges or holes? Flat only keeps them truest.</div>
+    </div>
+  );
+}
 type SimplifyMode = "accuracy" | "percent" | "count";
 const TOLERANCES = [0.01, 0.02, 0.05, 0.1];
 
@@ -76,7 +112,7 @@ export function EditsPanel({
   const [strength, setStrength] = useState(0.5);
   const [keepEdges, setKeepEdges] = useState(true);
   const [withinSigma, setWithinSigma] = useState(true);
-  const [flatOnly, setFlatOnly] = useState(false);
+  const [where, setWhere] = useState<SmoothWhere>("all");
   const hasSigma = !!stats?.sigma_mm;
   // ---- simplify
   const [simplifyMode, setSimplifyMode] = useState<SimplifyMode>("accuracy");
@@ -123,7 +159,8 @@ export function EditsPanel({
         };
       case "smooth": {
         const within = withinSigma && hasSigma;
-        const pctText = `${Math.round(strength * 100)} %${flatOnly ? ", flat areas only" : ""}${within ? ", within 2σ" : ""}`;
+        const whereText = where === "flat" ? ", flat areas only" : where === "edges" ? ", away from edges" : "";
+        const pctText = `${Math.round(strength * 100)} %${whereText}${within ? ", within 2σ" : ""}`;
         return {
           body: {
             op: "smooth",
@@ -131,7 +168,7 @@ export function EditsPanel({
               method,
               strength,
               keep_edges: method === "bilateral" ? true : keepEdges,
-              ...(flatOnly ? { flat_only: true } : {}),
+              ...(where === "flat" ? { flat_only: true } : where === "edges" ? { away_from_edges: true } : {}),
               ...(within ? { within_sigma: true } : {}),
             },
           },
@@ -326,12 +363,28 @@ export function EditsPanel({
             {method === "taubin" ? (
               <Switch label="Protect sharp edges" description="Leaves corners and creases alone." checked={keepEdges} onChange={setKeepEdges} />
             ) : null}
-            <Switch
-              label="Smooth flat areas only"
-              description="Edges, corners and small round features stay exactly as scanned. In tests on simulated scans this kept edges where they were, where plain smoothing rounded up to a third of them."
-              checked={flatOnly}
-              onChange={setFlatOnly}
-            />
+            <div>
+              <div className="mb-1 flex items-center gap-1 text-xs">
+                <span className="text-muted">Where to smooth</span>
+                <Tooltip side="top" content={<WhereHelp />}>
+                  <button
+                    type="button"
+                    className="grid h-5 w-5 place-items-center rounded text-subtle hover:text-fg"
+                    aria-label={`Where to smooth: ${WHERE_HELP.map((w) => `${w.label}: ${w.text}`).join(" ")}`}
+                  >
+                    <CircleHelp size={13} aria-hidden />
+                  </button>
+                </Tooltip>
+              </div>
+              <Segmented<SmoothWhere>
+                label="Where to smooth"
+                size="sm"
+                className="w-full"
+                value={where}
+                onChange={setWhere}
+                options={WHERE_HELP.map((w) => ({ value: w.value, label: w.label, title: w.text }))}
+              />
+            </div>
             <Switch
               label="Stay within each point's uncertainty"
               description={

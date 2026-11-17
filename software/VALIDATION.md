@@ -2181,7 +2181,7 @@ Same 20 meshes; means over the seeds (true poses and tracking alike unless said)
 - **The price:** small round features such as the Ø 16 shaft keep a little of their noise (0.177 against 0.171 mm, flat; 0.174 mm, edge), and the RMS error over everything is about 1 % higher (0.1028 against 0.1014 mm), from the outliers at edges and rims that free smoothing pulls in and these leave.
 - **Of the two, "flat" protects edges best** (at most 3.6 % made worse, against 8.1 %); "edge" keeps more of the smoothing on round features.
 
-Not adopted yet: it changes what the Smooth step gives, so the owner decides. Scripts and rows: scratchpad `m5v3\check\` (`run_flat.py`, `agg2.py`).
+Both are options, off by default, chosen in the Smooth tab's "Where to smooth" (Everywhere / Off edges / Flat only, with the numbers above in its hover card): `flat_only` since 2026-11-16, `away_from_edges` since 2026-11-17 (the owner's decision: both, explained, not the default). Scripts and rows: scratchpad `m5v3\check\` (`run_flat.py`, `agg2.py`).
 
 ## What the metrics mean
 

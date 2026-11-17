@@ -34,6 +34,14 @@ the edge vertices made worse, the noise on flat surface removed as without it; s
 features keep a little of their noise. The thresholds suit meshes at about 1 mm (Standard
 quality's voxel): on a much finer mesh whose noise is large for its spacing (0.05 mm at 0.3 mm)
 part of the flat surface is held back too.
+
+**Away from edges** (``away_from_edges``, off by default; not with ``flat_only``). Each vertex
+keeps none of its move within :data:`EDGE_NEAR_MM` of a vertex on an edge sharper than
+:data:`EDGE_DEG` (the same denoised normals), all of it from :data:`EDGE_FAR_MM` on, in between
+linearly (:func:`edge_weights`). Curved surface away from edges, such as a shaft or a boss, is
+smoothed in full. Measured on the same meshes: 0.7-8.1 % of the edge vertices made worse (against
+17-46 % without), the noise on flat surface removed as without it, the Ø 16 shaft smoother than
+with ``flat_only`` (mean error 0.174 against 0.177 mm; 0.171 without either).
 """
 from __future__ import annotations
 
@@ -45,7 +53,8 @@ import numpy as np
 
 from ohs.mesh.topology import EdgeTable, as_mesh, edge_lengths, edge_table, face_normals, rows, sorted_unique
 
-__all__ = ["smooth", "bilateral_normals", "sharp_edges", "sharp_vertices", "flat_weights", "METHODS", "SHARP_EDGE_DEG"]
+__all__ = ["smooth", "bilateral_normals", "sharp_edges", "sharp_vertices", "flat_weights", "edge_weights", "METHODS",
+           "SHARP_EDGE_DEG"]
 
 log = logging.getLogger(__name__)
 
@@ -54,6 +63,9 @@ SHARP_EDGE_DEG = 45.0
 FLAT_RADIUS_MM = 2.0  # flat_only: how far around a vertex the surface is looked at ...
 FLAT_FULL_DEG = 4.0  # ... turning less than this (RMS normal angle) it is smoothed fully ...
 FLAT_NONE_DEG = 12.0  # ... more than this, not at all
+EDGE_DEG = 25.0  # away_from_edges: an edge sharper than this is kept ...
+EDGE_NEAR_MM = 1.5  # ... nothing within this of it is moved ...
+EDGE_FAR_MM = 3.0  # ... from this on, everything is
 TAUBIN_LAMBDA, TAUBIN_MU = 0.5, -0.53
 Progress = Callable[[float, str], None]
 
@@ -183,6 +195,19 @@ def flat_weights(V: np.ndarray, F: np.ndarray, *, et: EdgeTable | None = None, r
     return out
 
 
+def edge_weights(V: np.ndarray, F: np.ndarray, *, et: EdgeTable | None = None, angle_deg: float = EDGE_DEG,
+                 near_mm: float = EDGE_NEAR_MM, far_mm: float = EDGE_FAR_MM) -> np.ndarray:
+    """Per vertex (N,), 0..1: how far it is from a sharp edge (module docstring, "Away from
+    edges"). A mesh without sharp edges gets 1 everywhere."""
+    from scipy.spatial import cKDTree
+
+    sv = sharp_vertices(V, F, angle_deg, et=et) if len(F) else np.zeros(len(V), dtype=bool)
+    if not sv.any():
+        return np.ones(len(V))
+    d, _ = cKDTree(V[sv]).query(V, workers=-1)
+    return np.clip((d - near_mm) / (far_mm - near_mm), 0.0, 1.0)
+
+
 # --------------------------------------------------------------------------- taubin
 def _taubin(V: np.ndarray, iterations: int, sharp: np.ndarray | None, et: EdgeTable,
             progress: Progress | None) -> np.ndarray:
@@ -250,16 +275,19 @@ def _vertex_update(V: np.ndarray, F: np.ndarray, n: np.ndarray, iterations: int,
 
 # --------------------------------------------------------------------------- entry
 def smooth(V: np.ndarray, F: np.ndarray, method: str = "taubin", strength: float = 0.5, keep_edges: bool = True, *,
-           limit: np.ndarray | None = None, flat_only: bool = False,
+           limit: np.ndarray | None = None, flat_only: bool = False, away_from_edges: bool = False,
            progress: Progress | None = None) -> tuple[np.ndarray, np.ndarray]:
     """Smooth the mesh (see the module docstring). Faces are unchanged; returns ``(V, F)``.
 
     ``limit`` (N,) is the most each vertex may move, mm: e.g. twice its sigma, so that smoothing
     removes noise where the scan is uncertain and leaves the confident surface where it was
-    (a longer move is shortened along its direction). ``flat_only``: smooth flat surface only
-    (module docstring, "Flat surface only"); with ``limit`` too, both apply."""
+    (a longer move is shortened along its direction). ``flat_only``: smooth flat surface only;
+    ``away_from_edges``: leave the surface near sharp edges as it is (module docstring); one of
+    the two at most. With ``limit`` too, both apply."""
     if method not in METHODS:
         raise ValueError(f"unknown smoothing method {method!r}; use {' or '.join(METHODS)}")
+    if flat_only and away_from_edges:
+        raise ValueError("choose flat_only or away_from_edges, not both")
     s = float(strength)
     if not math.isfinite(s) or not 0.0 <= s <= 1.0:
         raise ValueError("strength must be between 0 and 1")
@@ -280,6 +308,8 @@ def smooth(V: np.ndarray, F: np.ndarray, method: str = "taubin", strength: float
         X = _vertex_update(V, F, n, kv, progress, 0.5, 1.0)
     if flat_only:
         X = V + (X - V) * flat_weights(V, F, et=et)[:, None]
+    elif away_from_edges:
+        X = V + (X - V) * edge_weights(V, F, et=et)[:, None]
     if limit is not None:
         d = X - V
         dl = np.sqrt(np.einsum("ij,ij->i", d, d))

@@ -232,6 +232,41 @@ def test_flat_only_smooths_the_faces_and_leaves_the_edges():
     assert np.all(flat_weights(Vg + np.random.default_rng(2).normal(0, 0.01, Vg.shape) * [0, 0, 1], Fg) == 1.0)
 
 
+def test_away_from_edges_holds_the_edges_and_smooths_round_features():
+    """away_from_edges on the same box: within 1.5 mm of a sharp edge the vertices stay as scanned,
+    the faces are smoothed; on a sphere of a shaft's size (no sharp edge) every vertex is smoothed,
+    where flat_only holds much of it back. Both at once is refused."""
+    from ohs.mesh.smoothing import edge_weights, flat_weights
+
+    V, F = box(20.0, 20)
+    Vn = V + vertex_normals(V, F) * np.random.default_rng(1).normal(0, 0.05, len(V))[:, None]
+    flat0, edge0, corner0 = _box_errors(V, Vn)
+    w = edge_weights(Vn, F)
+    second = np.sort(np.abs(V), axis=1)[:, 1]
+    assert w.shape == (len(V),) and 0.0 <= w.min() and w.max() <= 1.0
+    assert np.all(w[second > 8.7] == 0.0) and np.all(w[second < 6.5] == 1.0)
+    for method in ("taubin", "bilateral"):
+        X, _ = smooth(Vn, F, method, 0.5, keep_edges=True)
+        Xe, Fe = smooth(Vn, F, method, 0.5, keep_edges=True, away_from_edges=True)
+        assert np.array_equal(Fe, F)
+        flat, _, _ = _box_errors(V, X)
+        flat_e, edge_e, corner_e = _box_errors(V, Xe)
+        assert flat_e < flat0 / 2 and flat_e < 1.2 * flat, method
+        assert edge_e <= edge0 * 1.05 and corner_e <= corner0 + 1e-9, method
+        assert np.allclose(Xe[second > 8.7], Vn[second > 8.7]), method
+    # a round feature: smoothed in full, where flat_only holds most of it back
+    Vs, Fs = icosphere(8.0, 3)
+    Vsn = Vs + vertex_normals(Vs, Fs) * np.random.default_rng(4).normal(0, 0.05, len(Vs))[:, None]
+    assert np.all(edge_weights(Vsn, Fs) == 1.0)
+    assert float(np.mean(flat_weights(Vsn, Fs))) < 0.5
+    err = lambda X: float(np.std(np.linalg.norm(X, axis=1)))  # noqa: E731 - the roughness, not the size
+    Xs, _ = smooth(Vsn, Fs, "taubin", 0.5, away_from_edges=True)
+    assert np.array_equal(Xs, smooth(Vsn, Fs, "taubin", 0.5)[0])
+    assert err(Xs) < err(Vsn) / 2
+    with pytest.raises(ValueError):
+        smooth(Vn, F, "taubin", 0.5, flat_only=True, away_from_edges=True)
+
+
 def test_bilateral_keeps_a_bracket_step():
     V, F = step()
     rng = np.random.default_rng(3)

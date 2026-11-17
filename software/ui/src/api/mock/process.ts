@@ -184,7 +184,7 @@ function label(op: MeshOp, p: Record<string, unknown>, faces?: number): string {
         ? `Make watertight: close every opening up to ${mm(num(p.max_hole_mm) ?? 0)} mm`
         : `Fill holes up to ${mm(num(p.max_hole_mm) ?? 0)} mm`;
     case "smooth": {
-      const pct = `${Math.round((num(p.strength) ?? 0.5) * 100)} %${p.flat_only === true ? ", flat areas only" : ""}${p.within_sigma === true ? ", within 2σ" : ""}`;
+      const pct = `${Math.round((num(p.strength) ?? 0.5) * 100)} %${p.flat_only === true ? ", flat areas only" : p.away_from_edges === true ? ", away from edges" : ""}${p.within_sigma === true ? ", within 2σ" : ""}`;
       return p.method === "bilateral" ? `Smooth, keep edges (${pct})` : `Smooth (Taubin, ${pct})`;
     }
     case "decimate": {
