@@ -43,6 +43,24 @@ round feature, and weighted by them the fit was left to a narrow band of the wal
 simulated bracket's 14 mm bosses that doubled the radius error with tracking and tilted the
 axis by half as much again (``VALIDATION.md``, "Fitted shapes against the truth").
 
+**The ± values.** A fused scan's errors come in patches: on simulated scans the residuals of
+vertices 1-2 mm apart correlate 0.5-0.7, and :mod:`ohs.measure.fit` takes the points as
+independent, so its ± were several times too small. The region measures the correlation of its
+own residuals (the distances of its points from the answer) by distance, in bins of
+:data:`CORR_BIN_EDGES` of the mesh's median edge length, and sums it over a point's neighbours:
+through :data:`CORR_MIN_LAG_EDGES` edge lengths in any case (a mesh's own pattern makes the nearest
+bins jump between near 0 and 0.6 at true poses), then while it stays above 0, up to
+:data:`CORR_MAX_LAG_EDGES`. That is ``correlated_points``, ``N_c``: about the number of points in
+a patch (1 when the points err independently). The fit's ± values are widened by ``sqrt(N_c)``,
+as if the region had ``n / N_c`` independent points. Measured on at most :data:`CORR_POINTS` points
+picked by id (so the same click gives the same answer), each of the first :data:`CORR_ANCHORS`
+against all of them: 15-80 ms a click. On the simulated bracket and car panel (``VALIDATION.md``,
+"The fits' ± on today's engine") the widened ± covers the spread from scan to scan at ±2σ for
+62-100 % of the fits (cylinders 100 %), against 18-98 % before. What it cannot see is an error
+shared by the whole region (a bias of the depth, the fusion or the tracking, the same on every
+scan: small bosses read 0.15-0.25 mm small in radius); the ± is not the accuracy. A hole's circle is
+not widened.
+
 **A cylinder must stay the seed's cylinder.** The refits follow the region, so a region can drift
 into another shape: from a shallow bump out over a flat, noisy plate, where the radius goes to
 metres, or along a rim that curls ever tighter, where there is no one radius. When the answer's
@@ -162,6 +180,11 @@ ROUND_RMS = 0.05  # a hole edge straying more than this times its radius is not 
 RIM_DROP_MM = 0.5  # a hole with a wall: its edge is where the surface is this far below the flat face ...
 RIM_DROP_TOLS = 3.0  # ... and at least this many of the face's tolerances (a coarse or noisy mesh)
 RIM_DEPTH_DROPS = 3.0  # ... and the surface inside must go this many drops below the face: less is a dent
+CORR_BIN_EDGES = 0.5  # the residuals' correlation by distance, in bins of this many edge lengths ...
+CORR_MIN_LAG_EDGES = 2.0  # ... summed at least this far (the mesh's own pattern makes the nearest bins jump) ...
+CORR_MAX_LAG_EDGES = 12.0  # ... then while it stays above 0, at most this far
+CORR_POINTS = 50000  # measured on at most this many of the region's points (picked by id) ...
+CORR_ANCHORS = 3000  # ... each of the first this many against all of them
 
 
 @dataclass
@@ -176,13 +199,17 @@ class RegionFit:
     tolerance_mm: float | None  # plane, cylinder: how far a face's vertices may stray from the fit
     angle_tol_deg: float | None  # plane, cylinder: how far a face's normal may turn from the fit's
     mean_sigma_mm: float | None  # mean sigma of the fitted points (None without sigma)
+    # plane, cylinder: how many of the region's points err together with each one (1 = independent);
+    # the fit's ± are widened by its square root (module docstring, "The ± values"). None for a hole
+    correlated_points: float | None = None
 
     def to_dict(self) -> dict:
         return {"kind": self.kind, "fit": self.fit.to_dict(), "faces": [int(f) for f in self.faces],
                 "edge": [int(v) for v in self.edge], "warnings": list(self.warnings),
                 "tolerance_mm": None if self.tolerance_mm is None else float(self.tolerance_mm),
                 "angle_tol_deg": None if self.angle_tol_deg is None else float(self.angle_tol_deg),
-                "mean_sigma_mm": None if self.mean_sigma_mm is None else float(self.mean_sigma_mm)}
+                "mean_sigma_mm": None if self.mean_sigma_mm is None else float(self.mean_sigma_mm),
+                "correlated_points": None if self.correlated_points is None else float(self.correlated_points)}
 
 
 # --------------------------------------------------------------------------- the mesh, indexed
@@ -308,6 +335,55 @@ def _fit_vertices(m: _Surface, kind: str, verts: np.ndarray, prev=None, normals:
         if prev is None:
             raise
         raise ValueError(f"the region around the click does not fix a {kind}: {e}") from None
+
+
+def correlated_points(verts: np.ndarray, P: np.ndarray, r: np.ndarray, edge_mm: float) -> float:
+    """How many points err together with each one: ``N_c = 1 + sum of the correlation of the
+    residuals ``r`` over a point's neighbours`` (module docstring, "The ± values"). ``verts``: the
+    points' vertex ids (they pick the sample, so the answer is the same on every call), ``P`` (N,3)
+    their positions, ``edge_mm`` the mesh's median edge length (it sets the bins and the reach)."""
+    from scipy.spatial import cKDTree
+
+    n = len(r)
+    if n < 2 or not edge_mm > 0:
+        return 1.0
+    rc = r - r.mean()
+    var = float(rc @ rc) / n
+    if not var > 0:
+        return 1.0
+    h = (np.asarray(verts).astype(np.uint64) * np.uint64(2654435761)) % np.uint64(2**32)  # as _grow's refits
+    q = np.argsort(h, kind="stable")[:CORR_POINTS]
+    Q, rq = P[q], rc[q]
+    na = min(len(q), CORR_ANCHORS)
+    step = CORR_BIN_EDGES * edge_mm
+    reach = CORR_MAX_LAG_EDGES * edge_mm
+    D = cKDTree(Q[:na]).sparse_distance_matrix(cKDTree(Q), reach, output_type="ndarray")
+    i, j, d = D["i"], D["j"], D["v"]
+    other = i != j
+    i, j, d = i[other], j[other], d[other]
+    nb = int(round(CORR_MAX_LAG_EDGES / CORR_BIN_EDGES))
+    b = np.minimum((d / step).astype(np.int64), nb - 1)
+    cnt = np.bincount(b, minlength=nb)
+    s = np.bincount(b, weights=rq[i] * rq[j], minlength=nb)
+    per_point = s / var / na * (n / len(q))  # the correlation summed over a point's neighbours, bin by bin
+    n_c = 1.0
+    for k in range(nb):
+        if not cnt[k]:
+            continue
+        if (k + 1) * CORR_BIN_EDGES > CORR_MIN_LAG_EDGES and s[k] <= 0.0:
+            break
+        n_c += float(per_point[k])
+    return max(n_c, 1.0)
+
+
+def _widened(fit, k: float):
+    """``fit`` with its ± values times ``k``."""
+    from dataclasses import replace
+
+    if isinstance(fit, PlaneFit):
+        return replace(fit, normal_sigma_deg=fit.normal_sigma_deg * k, offset_sigma_mm=fit.offset_sigma_mm * k)
+    return replace(fit, radius_sigma_mm=fit.radius_sigma_mm * k, axis_sigma_deg=fit.axis_sigma_deg * k,
+                   point_sigma_mm=fit.point_sigma_mm * k)
 
 
 def _vertex_normals(m: _Surface, faces: np.ndarray, verts: np.ndarray) -> np.ndarray:
@@ -479,6 +555,11 @@ def _grow(m: _Surface, face: int, kind: str, tolerance_mm, angle_tol_deg) -> Reg
         raise ValueError(f"the surface around the click is not one cylinder: its radius is {seed_radius:.0f} mm at the "
                          f"click and {fit.radius_mm:.0f} mm over the region that grew from it (a flat surface, or one "
                          "whose curve changes?)")
+    P = rows(m.V, verts)
+    e = m.corners(faces[:: max(1, len(faces) // 20000)])
+    edge = float(np.median(np.linalg.norm(e[:, 1] - e[:, 0], axis=1)))
+    n_c = correlated_points(verts, P, _distance(kind, fit, P), edge)
+    fit = _widened(fit, math.sqrt(n_c))
     warnings = []
     if fit.n < SMALL_REGION_POINTS:
         warnings.append(f"small region: {fit.n} points")
@@ -493,7 +574,7 @@ def _grow(m: _Surface, face: int, kind: str, tolerance_mm, angle_tol_deg) -> Reg
         warnings.append(f"the region was still growing after {MAX_ROUNDS} rounds")
     return RegionFit(kind=kind, fit=fit, faces=faces, edge=np.zeros(0, dtype=np.int64), warnings=warnings,
                      tolerance_mm=tol, angle_tol_deg=angle,
-                     mean_sigma_mm=None if m.S is None else float(np.mean(m.S[verts])))
+                     mean_sigma_mm=None if m.S is None else float(np.mean(m.S[verts])), correlated_points=n_c)
 
 
 # --------------------------------------------------------------------------- hole

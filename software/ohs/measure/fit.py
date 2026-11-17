@@ -30,7 +30,9 @@ residuals: the scale is the reduced chi-square itself. All ± values are 1σ:
   dominates) to 98 % (both alike) of the time.
 
 These are statistical errors only: calibration and scale errors come on top (the artefact test,
-``RESEARCH_PLAN.md`` 4.9.6, measures those). They also assume every point belongs to the shape:
+``RESEARCH_PLAN.md`` 4.9.6, measures those). They take the points as independent; on a scan
+neighbouring points err together, and :func:`ohs.measure.fit_at` widens the ± of a region's fit
+for that (``ohs.measure.region``, "The ± values"). They also assume every point belongs to the shape:
 a fillet, an outlier or a filled face in the region biases the fit, and shows in the residual RMS.
 
 Bad input (too few points, points all at one place or on a straight line, an arc or a patch that

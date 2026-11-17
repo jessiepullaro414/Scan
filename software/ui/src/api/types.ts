@@ -666,6 +666,9 @@ export type FitResult = {
   n_faces: number;
   tolerance_mm: number | null; // the tolerance used (null for a hole)
   mean_sigma_mm: number | null; // mean sigma of the fitted points (null when the mesh has none)
+  // plane, cylinder: how many points err together with each one (1 = independent); the shape's ± are already
+  // widened by its square root. null for a hole, and from engines older than 2026-11-16
+  correlated_points?: number | null;
   warnings: string[]; // plain language, e.g. "small region: 23 points"
   version: number; // the mesh version it was fitted on
 };

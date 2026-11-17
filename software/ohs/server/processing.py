@@ -1794,6 +1794,7 @@ class ProcessManager:
                 "n_faces": int(len(faces)),
                 "tolerance_mm": None if r.tolerance_mm is None else float(r.tolerance_mm),  # None for a hole
                 "mean_sigma_mm": None if r.mean_sigma_mm is None else float(r.mean_sigma_mm),
+                "correlated_points": None if r.correlated_points is None else float(r.correlated_points),  # None for a hole
                 "warnings": [str(w) for w in r.warnings], "version": v}
 
     def deviation(self, pid: str, sid: str) -> tuple[dict, np.ndarray]:

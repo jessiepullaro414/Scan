@@ -2031,6 +2031,63 @@ Limits:
 - Marker mode is unchanged (`thin_walls` "auto" leaves it as it was).
 - The processing studio's Preview and Best quality were not measured separately.
 
+## The fits' ± on today's engine (2026-11-16)
+
+The study of "Fitted shapes against the truth" again, on the same ten recordings (bracket and car panel, seeds 0–4) processed with today's engine (thin walls, the 4 mm tracking band, the opposite-sides rule), with the same clicks and method: 15 fits per shape and pose source, 200 plane and cylinder fits and 30 holes in all.
+
+**The fits themselves got better** since 2026-11-13, mostly with tracking:
+
+| Shape | Quantity | True poses, 2026-11-13 → now | Tracking, 2026-11-13 → now |
+|---|---|---|---|
+| Bosses, Ø 14 | radius | −0.15 / −0.18 → −0.26 / −0.23 mm | +0.40 / +0.34 → −0.15 / −0.16 mm |
+| | axis direction | 8.2° / 6.6° → 2.2° / 1.8° | 14.2° / 10.8° → 3.7° / 4.9° |
+| | axis position | 0.07 → 0.11 / 0.17 mm | 0.48 / 0.64 → 0.21 / 0.13 mm |
+| | clicks answered | 26 → 30 of 30 | 27 → 30 of 30 |
+| Shaft, Ø 16 | radius | −0.08 → −0.13 mm | +0.60 → +0.02 mm |
+| | axis position | 0.03 → 0.06 mm | 0.74 → 0.12 mm |
+| Upright face | offset | −0.023 → −0.027 mm | +0.72 → −0.008 mm (worst +0.33) |
+| Car-panel hole, Ø 25.2 | diameter | 1.2 → 1.3 mm small | 1.1 → 1.1 mm small |
+
+(Median errors; two numbers are the two bosses.) At true poses the bosses now read 0.23–0.26 mm small in radius, the same on every seed: the shorter band behind the surface shows the shrinkage the 8 mm band hid ("Where a tracked scan's shape errors come from").
+
+**The ± was still too small**: ±2σ covered the true error for 13–55 % of plane fits and 4–73 % of cylinder quantities. Most of the gap is not bias but correlation: a fused scan's errors come in patches. Measured on each region's own residuals, the correlation of two vertices falls to 1/e at 1.5–2.5 mm (4 mm on the tracked table), and the sum of the correlation over a vertex's neighbours, N_c, is 12–19 on the bosses and the shaft and 6–60 on the planes (in the median per shape; larger with tracking). A fit that takes its points as independent is too sure by about √N_c, 2.5–8 times.
+
+**Adopted: the region widens its fit's ± by √N_c** (`ohs.measure.region`, "The ± values"; `correlated_points` in the answer). N_c is summed in bins of half an edge length, through 2 edge lengths in any case, then while the correlation stays above 0, to at most 12 edge lengths (12 mm on these meshes). The "through 2 edge lengths" matters: at true poses a fused plane's nearest bins jump between 0 and 0.6 (the mesh's own pattern), and stopping at the first bin at or below 0 gave answers that differed by up to 5.5 times in √N_c between two samples of the same region; with the rule, at most 1.3 times. Measured on at most 50,000 points of the region picked by id, the first 3,000 of them against all: the click takes 15–80 ms more (median click 372 → 423 ms, the slowest 1.7 s as before). The fits and their regions are unchanged, to the digit.
+
+Share of fits whose ±2σ covers the error, before → now, pooled over the shapes:
+
+| Quantity | True poses: the true error | Tracking: the true error | True poses: the spread from scan to scan | Tracking: the spread from scan to scan |
+|---|---|---|---|---|
+| Plane normal | 55 → 95 % | 45 → 71 % | 78 → 98 % | 64 → 91 % |
+| Plane offset | 25 → 78 % | 13 → 44 % | 75 → 96 % | 18 → 62 % |
+| Cylinder radius | 4 → 42 % | 22 → 84 % | 89 → 100 % | 62 → 100 % |
+| Cylinder axis direction | 73 → 100 % | 36 → 100 % | 93 → 100 % | 82 → 100 % |
+| Cylinder axis position | 36 → 100 % | 27 → 100 % | 98 → 100 % | 73 → 100 % |
+
+("The spread from scan to scan" is each fit's error less the median error of its shape over the 15 fits: what is left once the shape's bias is taken out.)
+
+What the widened ± does not cover:
+
+- **Biases, the same on every scan.** The bosses' radius at true poses (−0.23 to −0.26 mm against a ± of 0.10 mm: covered 7–27 %), with tracking −0.15 mm (73–80 %); the shaft at true poses −0.13 mm (93 %). No ± made from one scan's points can see these.
+- **Tracking errors that move a whole face.** The tracked upright face sits −0.14, −0.01, +0.32, −0.07 and +0.09 mm off on the five seeds (its offset is covered for 27 %); its points agree with each other.
+- **The large planes' offsets**: the table and the car panel's floor (300–700k points, 400 mm across) are off by 0.3–7 µm in the median against ± of 0.4–0.9 µm. Their correlation reaches beyond the 12 mm measured. With tracking these numbers are also after the best fit of the whole scan, which the table dominates. A few µm do not matter for a part.
+
+The hole's centre was covered before (100 %) and is not widened; its diameter reads 1.1–1.3 mm small with ± 0.22 mm, and no ± covers that.
+
+Two other models were tried on the same fits and not adopted:
+- **A floor per quantity** added to the ± (taken on seeds 0–2, tested on 3–4) covers 95–100 % of the held-out fits, but its numbers (0.08–0.16 mm on a radius or an offset) come from two simulated parts: an accuracy claim before the real parts of `ROADMAP.md` section 3, item 6.
+- **The ± from the residuals' own scatter** (dropping the sigma's floor) times √N_c covers less of the shaft's spread from scan to scan (33–53 %): the fit hides what the residual field cannot show (a uniform offset becomes the radius), and today the sigma's pessimism stands in for that.
+
+Guard tests: `tests/test_measure_correlated.py`:
+- on a flat sheet with independent noise, N_c stays below 2;
+- on a sheet and a half shaft with noise in 2 mm patches, the ± matches the spread over 24 draws (0.86–1.08 times) where the plain ± would be 0.13–0.14 times, and ±2σ covers 88–100 %;
+- the same click gives the same factor;
+- a hole has none.
+
+Limits: simulated scans of two parts only, at Standard quality (1 mm voxels); the factor follows the mesh's edge length, so Preview's 2 mm mesh is measured the same way but was not checked against the truth. Two fits on the same scan share some of their errors; a relation's ± (lib/fits.ts) still takes them as independent. Real scans may have longer patches.
+
+Scripts and rows: scratchpad `m5v3\` of the session of 2026-11-16 (`run.sh`, `compare.py`, `candidates.py`, `compare_models.py`, `cand2.py`, `rules2.py`; `results\` before, `results2\` with the widened ±).
+
 ## What the metrics mean
 
 - **Stereo errors** compare the estimated raw intrinsics/extrinsics (`K1`, `K2`, `R`, `T`) with

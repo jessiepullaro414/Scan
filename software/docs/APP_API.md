@@ -897,7 +897,8 @@ type FitRequest = {
   tolerance_mm?: number | null;        // null = chosen from the seed's measured scatter (and sigma, when it agrees)
   version?: number;                    // the mesh version the click was made on: 409 when it is no longer current
 };
-// All ± values are 1σ, statistical only (calibration and scale errors come on top).
+// All ± values are 1σ, statistical only (calibration and scale errors come on top). A plane's and a cylinder's
+// count that neighbouring points err together (correlated_points below); they do not know the scan's biases.
 type PlaneShape = { kind: "plane"; point: number[]; normal: number[]; rms_mm: number; flatness_mm: number; n: number;
                     normal_sigma_deg: number; offset_sigma_mm: number };
 type CylinderShape = { kind: "cylinder"; point: number[]; axis: number[]; radius_mm: number; diameter_mm: number;
@@ -912,6 +913,9 @@ type FitResult = {
   n_faces: number;
   tolerance_mm: number | null;          // the tolerance used (null for a hole)
   mean_sigma_mm: number | null;         // mean sigma of the fitted points (null when the mesh has none)
+  correlated_points: number | null;     // plane, cylinder: how many points err together with each one (1 =
+                                        // independent); the shape's ± are already widened by its square root.
+                                        // null for a hole (its circle is not widened)
   warnings: string[];                   // plain language, e.g. "small region: 23 points"
   version: number;                      // the mesh version it was fitted on
 };

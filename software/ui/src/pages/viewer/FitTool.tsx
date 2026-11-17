@@ -28,6 +28,8 @@ export type FitItem = {
   tolerance: number | null;
   /** Mean sigma of the fitted points (null when the mesh has no sigmas). */
   meanSigma: number | null;
+  /** How many points err together with each one (the engine's `correlated_points`); null for a hole. */
+  correlated: number | null;
   warnings: string[];
   /** The mesh version the engine fitted it on. */
   version: number;

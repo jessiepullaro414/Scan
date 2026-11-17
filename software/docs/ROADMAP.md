@@ -156,7 +156,7 @@ about the scan itself, not the Fit tool, and they decide whether a measurement c
   (0.6 mm) is where the wall is in the tracked mesh, so it is a matter of tracking and of the gap
   guard's cost, not of the fit; and the refused clicks (8 of 60, all with the right radius) are
   answered now, 59 of 60, because a seed that bends through 45° or more is judged by its scatter
-  where the sigma is pessimistic. Still open: the fits' ± too small.
+  where the sigma is pessimistic. Still open: the fits' ± too small. **Done 2026-11-16** ([`VALIDATION.md`](../VALIDATION.md), "The fits' ± on today's engine"): a scan's errors come in patches, and a region's fit now widens its ± by the square root of how many points err together, measured on its own residuals. ±2σ now covers the spread from scan to scan for 91–100 % of the fits (a tracked plane's offset 62 %), and a cylinder's axis 100 % of the true error. Biases the same on every scan stay outside it (small bosses 0.15–0.25 mm small in radius), so the ± is still not the accuracy.
 - **The vertex sigma is 2–6 times too large**, and a fit's ± is several times too small. To do:
   an honest sigma, an error model for fits that knows the biases, and until then no ± shown as
   an accuracy. Measured since: on flat surface sigma is about 2.5 times too large, at edges and

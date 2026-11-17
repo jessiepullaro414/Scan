@@ -363,6 +363,7 @@ export class MockProcess {
       n_faces: r.faces.length,
       tolerance_mm: r.tolerance,
       mean_sigma_mm: null, // the demo engine's fits leave it out (its sigma is made up, see `sigma`)
+      correlated_points: null, // nor does it measure how its points err together
       warnings: r.warnings,
       version: st.version,
     };

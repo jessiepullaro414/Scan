@@ -416,6 +416,7 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
         nFaces: r.n_faces,
         tolerance: r.tolerance_mm ?? null,
         meanSigma: r.mean_sigma_mm ?? null,
+        correlated: r.correlated_points ?? null,
         warnings: r.warnings ?? [],
         version: r.version,
         meshId: g.uuid,

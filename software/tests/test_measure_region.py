@@ -562,7 +562,8 @@ def test_results_are_plain_json(bracket_mesh):
     face, point = nearest_face(V, F, (0.0, 15.0, 0.0))
     d = fit_at(V, F, face, point, "plane", sigma=S).to_dict()
     assert json.loads(json.dumps(d)) == d
-    assert set(d) == {"kind", "fit", "faces", "edge", "warnings", "tolerance_mm", "angle_tol_deg", "mean_sigma_mm"}
+    assert set(d) == {"kind", "fit", "faces", "edge", "warnings", "tolerance_mm", "angle_tol_deg", "mean_sigma_mm",
+                      "correlated_points"}
     assert d["kind"] == "plane" and d["fit"]["kind"] == "plane" and d["edge"] == []
     assert all(type(f) is int for f in d["faces"][:10]) and d["faces"] == sorted(d["faces"])
 

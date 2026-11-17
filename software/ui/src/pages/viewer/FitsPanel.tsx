@@ -1,7 +1,7 @@
 /**
- * The viewer's list of fitted shapes: each fit's numbers with their ± (1σ, statistical only), its
- * warnings in plain words, and whether it was made on an earlier version of the mesh. Two fits
- * picked from the list show their relation (lib/fits.ts `relate`).
+ * The viewer's list of fitted shapes: each fit's numbers with their ± (1σ, statistical only, counting points that
+ * err together), its warnings in plain words, and whether it was made on an earlier version of the mesh. Two
+ * fits picked from the list show their relation (lib/fits.ts `relate`).
  */
 import { CircleDashed, Cylinder, Link2, Shapes, Square, TriangleExclamationPoint, X } from "lucide-react";
 import type { ReactNode } from "react";
@@ -18,10 +18,12 @@ import { fmtSigma } from "./ViewerCanvas";
 
 export const FIT_ICON: Record<FitKind, typeof Square> = { plane: Square, cylinder: Cylinder, hole: CircleDashed };
 
-// Measured on simulated scans (VALIDATION.md, "Fitted shapes against the truth"): the true errors were
-// several times the ±, because the scan's shapes are biased and the ± only knows the points' scatter.
+// Measured on simulated scans (VALIDATION.md, "The fits' ± on today's engine"): a plane's and a cylinder's ±
+// count that neighbouring points err together, and cover the spread from scan to scan; the scan's biases come on top.
 const SIGMA_NOTE =
-  "± is how well the points agree with the fitted shape (1σ). It is not the accuracy: in tests on simulated scans the real errors were several times larger.";
+  "± (1σ) is how far the fit could move with the scan's scatter, counting that neighbouring points err together. It is not the accuracy: on simulated scans it covered the spread from one scan to the next, but the shapes were also off the same way on every scan (small bosses 0.15–0.25 mm small in radius).";
+const HOLE_NOTE =
+  "± is how well the edge points agree with the circle (1σ). It is not the accuracy: on simulated scans a hole's edge read about 1 mm small in diameter, several times its ±.";
 const degSigma = (x: number) => `±${fmtSmall(x)}°`;
 const mmSigma = (x: number) => `±${fmtSmall(x)} mm`;
 
@@ -47,12 +49,18 @@ function rowsOf(f: FitItem): Row[] {
     );
   } else {
     rows.push(
-      ["Diameter", fmtPm(s.diameter_mm, s.diameter_sigma_mm), SIGMA_NOTE],
+      ["Diameter", fmtPm(s.diameter_mm, s.diameter_sigma_mm), HOLE_NOTE],
       ["Residual RMS", fmtLength(s.rms_mm), "How far the edge points lie from the circle, in its plane, RMS."],
-      ["Centre", mmSigma(s.center_sigma_mm), `1σ of the centre in the hole's plane (RMS distance). ${SIGMA_NOTE}`],
+      ["Centre", mmSigma(s.center_sigma_mm), `1σ of the centre in the hole's plane (RMS distance). ${HOLE_NOTE}`],
     );
   }
   rows.push(["Points", `${fmtInt(s.n)} · ${fmtInt(f.nFaces)} faces`, "Points the fit used, and the faces of the region lit on the mesh."]);
+  if (f.correlated !== null && f.correlated > 0)
+    rows.push([
+      "Independent",
+      `≈ ${fmtInt(Math.max(1, Math.round(s.n / f.correlated)))}`,
+      `Neighbouring points err together, in patches of about ${fmtInt(Math.round(f.correlated))} points, so the fit knows about as much as this many independent points would tell. Its ± are counted that way.`,
+    ]);
   if (f.meanSigma !== null) rows.push(["Mean sigma", fmtSigma(f.meanSigma), "The fitted points' own 1σ from the scan (the confidence map's values), averaged."]);
   if (f.tolerance !== null) rows.push(["Tolerance", fmtLength(f.tolerance), "How far from the shape a face could lie and still join the region."]);
   return rows;
