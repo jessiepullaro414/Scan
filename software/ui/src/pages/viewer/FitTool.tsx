@@ -15,7 +15,7 @@
 import { Html, Line } from "@react-three/drei";
 import { memo, useEffect, useMemo, type RefObject } from "react";
 import { BufferAttribute, BufferGeometry, DoubleSide, MeshBasicMaterial, type Mesh } from "three";
-import type { CylinderForm, FitExtent, FitKind, FitShape } from "../../api/types";
+import type { ApprovedNominal, CylinderForm, FitExtent, FitKind, FitShape } from "../../api/types";
 import { cylinderMarks, rectangleOutline } from "../../lib/extent";
 import { fitName, type RegionSummary } from "../../lib/fits";
 import { useThemeColors } from "../../three/Studio";
@@ -51,6 +51,8 @@ export type FitItem = {
   extent: FitExtent | null;
   /** A cylinder: a boss or a bore, as the engine read it; null when not known, and for a plane or a hole. */
   form: CylinderForm | null;
+  /** Approved nominal values (its size), with the engine's "check again" marks; none when left out. */
+  nominals?: ApprovedNominal[];
   /** "Plane · RMS 0.04 mm". */
   label: string;
 };

@@ -68,6 +68,8 @@ import { useCheck } from "./viewer/useCheck";
 import { useDeviation } from "./viewer/useDeviation";
 import { useLasers } from "./viewer/useLasers";
 import { FIT_ICON, FitList } from "./viewer/FitsPanel";
+import type { NominalActions } from "./viewer/NominalSlot";
+import { useIgnoredOffers, useNominalOffers } from "./viewer/useNominals";
 import { FRAME_ICON, FramePanel } from "./viewer/FramePanel";
 import type { FitItem } from "./viewer/FitTool";
 import { usePairRelation } from "./viewer/usePairRelation";
@@ -575,6 +577,7 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
           region: drawn?.region ?? null,
           extent: f.extent ?? null,
           form: f.form ?? null,
+          nominals: f.nominals ?? [],
           label: fitLabel(f.kind, f.shape),
         };
       }),
@@ -584,6 +587,19 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
   /** The relation of the two fits picked in the list, from the engine. */
   const pairRelation = usePairRelation(pid, sid, pickedFits[0], pickedFits[1], kept);
   const pickedNums = useMemo(() => fits.filter((f) => pickedFits.includes(f.fid)).map((f) => f.id), [fits, pickedFits]);
+  // Suggested nominal values beside the measured ones (FEATURE_PLAN C3): the engine's offers, the approvals, and the
+  // offers ignored in this browser (until their value is measured again).
+  const nominalOffers = useNominalOffers(pid, sid, kept);
+  const ignoredOffers = useIgnoredOffers(pid, sid);
+  const nominalActions = useMemo<NominalActions>(
+    () => ({
+      approve: async (id, value, nominal, source) => !!(await useFeatures.getState().approveNominal(pid, sid, id, { value, nominal, source })),
+      remove: (id, value) => void useFeatures.getState().removeNominal(pid, sid, id, value),
+      ignore: ignoredOffers.ignore,
+      ignored: ignoredOffers.ignored,
+    }),
+    [pid, sid, ignoredOffers.ignore, ignoredOffers.ignored],
+  );
   const keptMeasurements = useMemo(() => kept?.measurements ?? [], [kept]);
   const measurements = useMemo<Measurement[]>(() => keptMeasurements.map((m, i) => ({ id: i + 1, a: m.a, b: m.b })), [keptMeasurements]);
 
@@ -1034,6 +1050,8 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
             fitOn={fitOn}
             ready={!!geometry}
             frame={shownFrame}
+            nominals={nominalOffers}
+            nominalActions={nominalActions}
           />
         </Panel>
 

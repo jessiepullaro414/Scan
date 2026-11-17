@@ -25,6 +25,7 @@ import numpy as np
 import pytest
 
 from ohs.cad.nominal import BIASES, UNRELIABLE_WARNINGS, apply_nominal, suggest_fit, suggest_relation
+from ohs.cad.nominal import check_fit_nominal, check_relation_nominal
 from ohs.measure.fit import CylinderFit, PlaneFit
 from ohs.measure.relate import relate
 
@@ -380,3 +381,81 @@ def test_every_bias_names_a_section_of_validation_md_and_quotes_it():
                 assert f"**{src.part}" in body, f"{src.part!r} is not a part of {src.section!r}"
             for quote in src.quotes:
                 assert _plain(quote) in body, f"{quote!r} is not in {src.section!r}"
+
+
+# --------------------------------------------------------------------------- is an approved value still allowed?
+def _check_cases():
+    """Fits and relations with their keyword arguments, for comparing the check with the offers."""
+    fits = [(cylinder(14.02, 0.03), {}), (cylinder(13.66, 0.01), {"form": "boss"}), (cylinder(14.3, 0.03), {"form": "boss"}),
+            (cylinder(14.3, 0.03), {"form": "boss", "poses": "true"}), (cylinder(14.02, 0.03), {"form": "bore"}),
+            (hole(10.04, 0.03), {}), (hole(25.0 - 1.3, 0.1), {}), (hole(25.6, 0.02, [wall_warning(0.5)]), {}),
+            (cylinder(9.87, 0.1), {}), (cylinder(14.02, 0.03), {"value": "radius"})]
+    rels = [(relate(plane([0, 0, 1], sn=0.2), plane(tilted(0.3), point=(0, 0, 5), sn=0.2)), {}),
+            (angle_relation(("plane", "plane"), 89.7, 0.2), {}), (angle_relation(("plane", "plane"), 44.6, 0.3), {})]
+    return fits, rels
+
+
+def test_a_suggested_value_is_allowed_by_the_check_as_the_offer_says():
+    """The check (an approved value against a measurement) follows the offers' own rule: every value
+    offered is allowed, by the same thing (twice the ± or a known bias); the round values of the
+    steps searched that are not offered are not allowed."""
+    fits, rels = _check_cases()
+    for feature, kw in fits:
+        offer = only(suggest_fit(feature, **kw), kw.get("value", "diameter"))
+        for s in offer.suggestions:
+            c = check_fit_nominal(feature, s.nominal, **kw)
+            assert c.allowed and c.allowed_by == s.allowed_by, (offer.to_dict(), c.to_dict())
+            assert c.measured == pytest.approx(offer.measured) and c.sigma == pytest.approx(offer.sigma)
+            assert c.word == s.word
+        for k in range(-3, 4):
+            x = round(offer.measured) + k
+            if x > 0 and x not in nominals(offer) and offer.reason_code != "too_many" and abs(x - offer.measured) >= 0.005:
+                assert not check_fit_nominal(feature, float(x), **kw).allowed, (x, offer.to_dict())
+    for rel, kw in rels:
+        for offer in suggest_relation(rel, **kw):
+            for s in offer.suggestions:
+                c = check_relation_nominal(rel, offer.value, s.nominal, **kw)
+                assert c.allowed and c.allowed_by == s.allowed_by and c.word == s.word, (offer.to_dict(), c.to_dict())
+
+
+def test_the_check_says_why_and_is_plain_json():
+    boss = {**cylinder(14.02, 0.03), "form": "boss"}
+    ok = check_fit_nominal(boss, 14.0)
+    assert ok.allowed and ok.allowed_by == "2 sigma" and "14" in ok.reason
+    moved = {**cylinder(14.40, 0.03), "form": "bore"}  # measured again: 14 is now far outside its ±
+    no = check_fit_nominal(moved, 14.0)
+    assert not no.allowed and no.allowed_by is None
+    assert "14.40" in no.reason and "twice the ±" in no.reason
+    assert no.measured == pytest.approx(14.40)
+    d = no.to_dict()
+    assert set(d) == {"value", "unit", "nominal", "measured", "sigma", "allowed", "allowed_by", "word", "reason"}
+    assert d["unit"] == "mm" and d["value"] == "diameter"
+    # a known bias allows it, and the check says so
+    biased = check_fit_nominal({**cylinder(13.66, 0.01), "form": "boss"}, 14.0, poses="tracked")
+    assert biased.allowed and biased.allowed_by == "bias" and "bias" in biased.reason
+    # a value shown as already round is allowed as it reads
+    at = check_fit_nominal(cylinder(14.003, 0.001), 14.0)
+    assert at.allowed and at.allowed_by == "at step"
+
+
+def test_the_check_refuses_what_the_offers_refuse():
+    no_sigma = check_fit_nominal(cylinder(14.02, float("nan")), 14.0)
+    assert not no_sigma.allowed and no_sigma.sigma is None and no_sigma.reason
+    warned = check_fit_nominal(cylinder(14.02, 0.03, ["the points scatter 0.4 mm about the fitted shape"]), 14.0)
+    assert not warned.allowed and "scatter" in warned.reason
+    # a relation value that is not there any more (the angle grew past parallel: no distance)
+    rel = angle_relation(("plane", "plane"), 12.0, 0.2)
+    gone = check_relation_nominal(rel, "distance", 10.0)
+    assert not gone.allowed and gone.measured is None and "distance" in gone.reason
+    with pytest.raises(ValueError):
+        check_fit_nominal({"kind": "plane", "shape": {"kind": "plane"}}, 1.0)
+    with pytest.raises(ValueError):
+        check_fit_nominal(cylinder(14.02, 0.03), 14.0, value="angle")
+
+
+def test_relation_words_come_with_the_check():
+    rel = relate(plane([0, 0, 1], sn=0.2), plane(tilted(0.3), point=(0, 0, 5), sn=0.2))
+    c = check_relation_nominal(rel, "angle", 0.0)
+    assert c.allowed and c.word == "parallel" and c.unit == "deg"
+    assert check_relation_nominal(angle_relation(("plane", "plane"), 89.7, 0.2), "angle", 90.0).word == "perpendicular"
+    assert check_relation_nominal(rel, "angle", 1.0).word is None

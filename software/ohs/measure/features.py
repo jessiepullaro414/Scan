@@ -16,10 +16,12 @@ mesh; :mod:`ohs.server.features` fits and refits through the fit route and keeps
                    "mesh_version",   # the mesh version it was fitted on
                    "extent": {...} | null,   # where its region lies: the small part (below)
                    "form": "boss" | "bore" | null,   # a cylinder's (below); null for a plane or a hole
+                   "nominals": [...],   # approved nominal values (below); left out when there are none
                    "created"}],
      "measurements": [{"id": "m-…", "name": "Distance 1", "a": [x, y, z], "b": [x, y, z],
                        "mesh_version", "created"}],
      "relations": [{"id": "r-…", "name": "Relation 1", "a": "<feature id>", "b": "<feature id>",
+                    "nominals": [...],   # as a feature's
                     "created"}]}
 
 A relation keeps only which two features the user asked to relate: its numbers are worked out
@@ -58,6 +60,24 @@ fit is kept and when it is fitted again. The suggested nominal sizes use it
 tell, and for a plane or a hole; a feature kept before forms existed has no ``form`` key and
 loads as it is. :func:`validate` refuses any other value, and a form on a plane or a hole.
 
+**Approved nominal values** (FEATURE_PLAN C3): the round values an engineer accepted (or typed)
+for a fit's size or a relation's values, kept beside the measured ones, which never change::
+
+    {"value": "diameter" | "radius" | "angle" | "distance" | "centre_distance",
+     "nominal": 14.0,               # mm, or degrees for an angle
+     "unit": "mm" | "deg",
+     "word": "parallel" | ... | null,   # what the nominal means for a relation (an angle of 0: "parallel")
+     "source": "suggested" | "entered",   # the value offered (ohs.cad.nominal), or one typed
+     "measured": 14.02, "sigma": 0.03 | null,   # the measurement it was approved against
+     "approved": "2026-11-17T12:00:00"}
+
+A fit keeps at most one size (a diameter or a radius: they are the same size), a relation at most
+one approval per value; a plane alone has none. ``nominals`` is left out of a record without any,
+so a file written before approvals existed is read and written as it was. They go with their
+record: deleting a fit or a relation deletes them; a fit fitted again keeps them, and
+:mod:`ohs.server.features` says when the new measurement no longer allows one ("check again").
+:func:`validate` checks each number against :data:`NOMINAL_LIMITS`.
+
 **The part's frame** (``frame``) is written by :mod:`ohs.server.features` from
 :func:`ohs.measure.frame.part_frame`. :func:`validate` passes it through as it is (an object or
 null), so a frame this version cannot read (a later ``format_version``, a damaged matrix) never
@@ -85,7 +105,8 @@ import numpy as np
 __all__ = ["FORMAT_VERSION", "FILE_NAME", "FACES_DIR", "KINDS", "SHAPE_OF", "FORMS", "NAME_MAX", "ID_RE", "empty",
            "validate", "load", "save", "faces_path", "save_faces", "load_faces", "remove_faces", "new_id",
            "next_name", "now", "frame_state", "EDGE_MAX_POINTS", "split_extent", "outline_path", "save_outline",
-           "load_outline", "remove_outline"]
+           "load_outline", "remove_outline", "FIT_NOMINAL_VALUES", "RELATION_NOMINAL_VALUES", "NOMINAL_UNITS",
+           "NOMINAL_LIMITS", "NOMINAL_SOURCES", "check_nominal_value"]
 
 FORMAT_VERSION = 1
 FILE_NAME = "features.json"
@@ -99,6 +120,15 @@ SHAPE_OF = {"plane": "plane", "cylinder": "cylinder", "hole": "circle"}
 #: what a kept cylinder is (``form``; null: not known, and always for a plane or a hole)
 FORMS = ("boss", "bore")
 NAME_MAX = 80
+#: approved nominal values (module docstring): which values a fit and a relation can have one for
+FIT_NOMINAL_VALUES = ("diameter", "radius")
+RELATION_NOMINAL_VALUES = ("angle", "distance", "centre_distance")
+#: each value's unit, and the numbers that make sense for it: (lowest, highest, lowest itself left out)
+NOMINAL_UNITS = {"diameter": "mm", "radius": "mm", "angle": "deg", "distance": "mm", "centre_distance": "mm"}
+NOMINAL_LIMITS = {"diameter": (0.0, 10_000.0, True), "radius": (0.0, 5_000.0, True), "angle": (0.0, 90.0, False),
+                  "distance": (0.0, 10_000.0, False), "centre_distance": (0.0, 10_000.0, False)}
+#: whether an approved value was the one offered or one the engineer typed
+NOMINAL_SOURCES = ("suggested", "entered")
 #: an id: letters, digits, "-" and "_" (it names a file)
 ID_RE = re.compile(r"[A-Za-z0-9_-]{1,64}")
 
@@ -261,6 +291,57 @@ def split_extent(extent: dict | None) -> tuple[dict | None, dict | None]:
     raise ValueError(f"extent: kind must be one of {', '.join(KINDS)}, got {kind!r}")
 
 
+def check_nominal_value(value: Any, nominal: Any, where: str = "nominal") -> float:
+    """A nominal value as it may be kept: a finite number in :data:`NOMINAL_LIMITS` for its kind of
+    value (a diameter more than 0 and at most 10 m, an angle 0 to 90°, ...). Returns it as a float;
+    raises ValueError with a plain message otherwise."""
+    if value not in NOMINAL_LIMITS:
+        _fail(where, f"value must be one of {', '.join(NOMINAL_LIMITS)}, got {value!r}")
+    lo, hi, open_lo = NOMINAL_LIMITS[value]
+    unit = NOMINAL_UNITS[value]
+    ok = isinstance(nominal, (int, float)) and not isinstance(nominal, bool) and math.isfinite(nominal)
+    if not ok or nominal > hi or nominal < lo or (open_lo and nominal <= lo):
+        span = f"more than {lo:g}" if open_lo else f"at least {lo:g}"
+        _fail(where, f"a nominal {value.replace('_', ' ')} must be a number {span} and at most {hi:g} {unit}, "
+                     f"got {nominal!r}")
+    return float(nominal)
+
+
+def _nominals(items: Any, where: str, values: tuple[str, ...]) -> list[dict]:
+    """Check a fit's or a relation's approved nominal values (module docstring, "Approved nominal
+    values"): each value at most once, a fit at most one size (a diameter or a radius)."""
+    if not isinstance(items, list):
+        _fail(where, "nominals must be a list")
+    out, seen = [], set()
+    for k, n in enumerate(items):
+        w = f"{where}.nominals[{k}]"
+        if not isinstance(n, dict):
+            _fail(w, "must be an object")
+        value = n.get("value")
+        if value not in values:
+            _fail(w, f"value must be one of {', '.join(values)} here, got {value!r}")
+        slot = "size" if value in ("diameter", "radius") else value
+        if slot in seen:
+            _fail(w, f"a second approved {'size' if slot == 'size' else value}: keep one")
+        seen.add(slot)
+        nominal = check_nominal_value(value, n.get("nominal"), w)
+        if n.get("unit") != NOMINAL_UNITS[value]:
+            _fail(w, f"unit must be {NOMINAL_UNITS[value]!r} for a {value}, got {n.get('unit')!r}")
+        word = n.get("word")
+        if word is not None and not isinstance(word, str):
+            _fail(w, "word must be text or null")
+        if n.get("source") not in NOMINAL_SOURCES:
+            _fail(w, f"source must be one of {', '.join(NOMINAL_SOURCES)}, got {n.get('source')!r}")
+        measured = n.get("measured")
+        if not isinstance(measured, (int, float)) or isinstance(measured, bool) or not math.isfinite(measured):
+            _fail(w, f"measured must be the finite number it was approved against, got {measured!r}")
+        sigma = _number(n.get("sigma"), w, "sigma")
+        if sigma is not None and sigma < 0:
+            _fail(w, f"sigma must be at least 0 or null, got {sigma!r}")
+        out.append({**n, "nominal": nominal, "approved": _text(n.get("approved", ""), w, "approved")})
+    return out
+
+
 def _feature(f: Any, i: int) -> dict:
     where = f"features[{i}]"
     if not isinstance(f, dict):
@@ -296,6 +377,10 @@ def _feature(f: Any, i: int) -> dict:
             _fail(where, f"form must be 'boss', 'bore' or null, got {form!r}")
         if form is not None and kind != "cylinder":
             _fail(where, f"only a cylinder is a boss or a bore, and this feature is a {kind}")
+    if "nominals" in f:  # a file written before approvals existed has none: it loads as it is
+        if kind == "plane" and f["nominals"]:
+            _fail(where, "a plane has no size to approve a nominal value for")
+        out["nominals"] = _nominals(f["nominals"], where, FIT_NOMINAL_VALUES)
     out["created"] = _text(f.get("created", ""), where, "created")
     return out
 
@@ -327,6 +412,8 @@ def _relation(r: Any, i: int, feature_ids: set[str]) -> dict:
             _fail(where, f"{key} names no kept feature: {ref!r}")
     if r["a"] == r["b"]:
         _fail(where, "a feature cannot be related to itself")
+    if "nominals" in r:
+        out["nominals"] = _nominals(r["nominals"], where, RELATION_NOMINAL_VALUES)
     out["created"] = _text(r.get("created", ""), where, "created")
     return out
 

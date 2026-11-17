@@ -5,6 +5,10 @@
  * points, the holes left out). A line says what will be exported and in which frame; the warnings (fits made on an
  * earlier mesh, a frame out of date) and the writer's notes are shown under it. Disabled, with the reason, while the
  * scan has no kept fits. The words are cadExport.ts's.
+ *
+ * Approved nominal values (FEATURE_PLAN.md C3): the files use the approved sizes, and a line says how many, and how
+ * many approved relations are only listed in the notes. Once anything is approved a second switch, "Measured values
+ * only", downloads the files as if nothing were approved.
  */
 import { CircleHelp, Download, TriangleExclamationPoint } from "lucide-react";
 import { useEffect, useState } from "react";
@@ -14,7 +18,7 @@ import { Button } from "../../components/ui/Button";
 import { Switch } from "../../components/ui/Form";
 import { Tooltip } from "../../components/ui/Popover";
 import { downloadFile } from "../../lib/download";
-import { CAD_OUTLINE_HELP, cadDownloadName, cadLine, cadUnavailable, outlineCost } from "./cadExport";
+import { CAD_MEASURED_HELP, CAD_OUTLINE_HELP, cadDownloadName, cadLine, cadNominalLine, cadUnavailable, outlineCost } from "./cadExport";
 
 type Summaries = Record<CadBoundary, CadSummary | null>;
 
@@ -23,7 +27,7 @@ type Summaries = Record<CadBoundary, CadSummary | null>;
  * read. The outline one makes the server simplify every plane's real outline (about a second for a large plane),
  * so it is only read once the user has asked for it (`withOutline`: the switch is on, or its help was opened).
  */
-function useCadSummaries(pid: string, sid: string, kept: FeatureSet | null, enabled: boolean, withOutline: boolean): { sums: Summaries; error: string | null } {
+function useCadSummaries(pid: string, sid: string, kept: FeatureSet | null, enabled: boolean, withOutline: boolean, measuredOnly: boolean): { sums: Summaries; error: string | null } {
   const [sums, setSums] = useState<Summaries>({ rectangle: null, outline: null });
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
@@ -34,7 +38,7 @@ function useCadSummaries(pid: string, sid: string, kept: FeatureSet | null, enab
     }
     let live = true;
     for (const b of (withOutline ? ["rectangle", "outline"] : ["rectangle"]) as CadBoundary[]) {
-      api.cadSummary(pid, sid, b).then(
+      api.cadSummary(pid, sid, b, measuredOnly).then(
         (s) => live && setSums((x) => ({ ...x, [b]: s })),
         (e: unknown) => live && setError(sentence((e as { detail?: string }).detail ?? String(e))),
       );
@@ -42,19 +46,23 @@ function useCadSummaries(pid: string, sid: string, kept: FeatureSet | null, enab
     return () => {
       live = false;
     };
-  }, [pid, sid, kept, enabled, withOutline]);
+  }, [pid, sid, kept, enabled, withOutline, measuredOnly]);
   return { sums, error };
 }
 
 export function CadDownload({ pid, sid, stem, kept, hasMesh }: { pid: string; sid: string; stem: string; kept: FeatureSet | null; hasMesh: boolean }) {
   const [outline, setOutline] = useState(false);
   const [asked, setAsked] = useState(false); // the outline's help was opened: its cost is worth reading
+  const [measuredOnly, setMeasuredOnly] = useState(false);
   const why = cadUnavailable(kept?.features.length ?? 0, hasMesh);
-  const { sums, error } = useCadSummaries(pid, sid, kept, !why, outline || asked);
+  const { sums, error } = useCadSummaries(pid, sid, kept, !why, outline || asked, measuredOnly);
   const boundary: CadBoundary = outline ? "outline" : "rectangle";
   const sum = sums[boundary];
   const cost = outlineCost(sums.rectangle, sums.outline);
-  const get = (file: CadFile) => void downloadFile(api.cadFileUrl(pid, sid, file, boundary), cadDownloadName(stem, file));
+  const get = (file: CadFile) => void downloadFile(api.cadFileUrl(pid, sid, file, boundary, measuredOnly), cadDownloadName(stem, file));
+  // the measured-only switch is there once something is approved (or while it is on)
+  const approved = measuredOnly || !!kept && [...kept.features, ...kept.relations].some((x) => (x.nominals ?? []).length > 0);
+  const nominalLine = sum ? cadNominalLine(sum.nominal) : null;
   const where = sum ? ` (${sum.frame_label})` : "";
 
   return (
@@ -91,7 +99,20 @@ export function CadDownload({ pid, sid, stem, kept, hasMesh }: { pid: string; si
           </button>
         </Tooltip>
       </div>
+      {approved ? (
+        <div className="mt-1 flex items-start gap-1">
+          <div className="min-w-0 flex-1">
+            <Switch checked={measuredOnly} onChange={setMeasuredOnly} disabled={!!why} label="Measured values only" />
+          </div>
+          <Tooltip side="top" content={<div className="max-w-[300px] text-muted">{CAD_MEASURED_HELP}</div>}>
+            <button type="button" className="grid h-5 w-5 shrink-0 place-items-center rounded text-subtle hover:text-fg" aria-label={`Measured values only: ${CAD_MEASURED_HELP}`}>
+              <CircleHelp size={13} aria-hidden />
+            </button>
+          </Tooltip>
+        </div>
+      ) : null}
       <p className="mt-2 text-xs text-subtle">{why ?? error ?? (sum ? cadLine(sum) : "Reading the kept fits…")}</p>
+      {!why && nominalLine ? <p className="mt-1 text-xs text-subtle" title={sum?.nominal?.relations_note ?? undefined}>{nominalLine}</p> : null}
       {!why && sum && sum.warnings.length ? (
         <ul className="mt-1.5 space-y-1 text-[11.5px] leading-4 text-warn">
           {sum.warnings.map((w) => (

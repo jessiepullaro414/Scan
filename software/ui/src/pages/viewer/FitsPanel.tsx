@@ -7,22 +7,29 @@
  * (ohs/measure/relate.py, with its ±: lib/relationView.ts), which can be kept too. Each fit's position and direction are shown in the
  * scan's frame, or in the part's frame when the Coordinate system panel's switch is on (lib/partFrame.ts); its
  * sizes, ± values and the relations are the same in both.
+ *
+ * Beside a cylinder's or a hole's diameter, and beside each value of a kept relation, a suggested nominal value
+ * ("Ø 14?") to accept, change or ignore, or the approved one ("nominal Ø 14", "check again" when the engine marked
+ * it): NominalSlot.tsx. The measured numbers stay as they are.
  */
 import { Bookmark, CircleDashed, Cylinder, Link2, RefreshCw, Shapes, Square, TriangleExclamationPoint, X } from "lucide-react";
 import type { ReactNode } from "react";
 import { sentence } from "../../api/http";
-import type { FitKind, KeptRelation, PartFrameView } from "../../api/types";
+import type { FitKind, KeptRelation, NominalAnswer, PartFrameView } from "../../api/types";
 import { Badge } from "../../components/ui/Badge";
 import { Button, IconButton } from "../../components/ui/Button";
 import { Kbd } from "../../components/ui/Feedback";
 import { extentRows } from "../../lib/extent";
 import { fitName, fitValue, fmtLength, fmtPm, fmtSmall } from "../../lib/fits";
 import { fmtInt } from "../../lib/format";
+import { approvedText, offerFor, sizeApproval, valueApproval } from "../../lib/nominal";
 import { fmtVec, placeOf } from "../../lib/partFrame";
 import { relationFooter, relationRows } from "../../lib/relationView";
 import { cn } from "../../lib/util";
 import { PICKED_COLOR, type FitItem } from "./FitTool";
 import { NameEdit } from "./NameEdit";
+import { NominalSlot, type NominalActions } from "./NominalSlot";
+import type { NominalAnswers } from "./useNominals";
 import type { PairRelationState } from "./usePairRelation";
 import { fmtSigma } from "./ViewerCanvas";
 
@@ -41,7 +48,10 @@ const FORM_TIP = {
 const degSigma =(x: number) => `±${fmtSmall(x)}°`;
 const mmSigma = (x: number) => `±${fmtSmall(x)} mm`;
 
-type Row = [label: string, value: string, tip?: string];
+type Row = [label: string, value: string, tip?: string, extra?: ReactNode];
+
+/** What goes beside a fit's diameter or radius (a nominal value: NominalSlot), or null. */
+type SizeSlot = (value: "diameter" | "radius") => ReactNode;
 
 /** Where the fit is and which way it points: in the part's frame when `frame` is given, else in the scan's. */
 function placeRows(f: FitItem, frame: PartFrameView | null): Row[] {
@@ -54,7 +64,7 @@ function placeRows(f: FitItem, frame: PartFrameView | null): Row[] {
   ];
 }
 
-function rowsOf(f: FitItem, frame: PartFrameView | null): Row[] {
+function rowsOf(f: FitItem, frame: PartFrameView | null, slot: SizeSlot = () => null): Row[] {
   const s = f.shape;
   const rows: Row[] = [];
   if (s.kind === "plane") {
@@ -71,15 +81,15 @@ function rowsOf(f: FitItem, frame: PartFrameView | null): Row[] {
         f.form === "boss" ? "Boss" : f.form === "bore" ? "Bore" : "Not known",
         f.form ? FORM_TIP[f.form] : "Whether this cylinder is a boss or a bore is not known: its faces did not clearly face away from the axis or towards it, or it was kept before this was read.",
       ],
-      ["Diameter", fmtPm(s.diameter_mm, s.diameter_sigma_mm), SIGMA_NOTE],
-      ["Radius", fmtPm(s.radius_mm, s.radius_sigma_mm), SIGMA_NOTE],
+      ["Diameter", fmtPm(s.diameter_mm, s.diameter_sigma_mm), SIGMA_NOTE, slot("diameter")],
+      ["Radius", fmtPm(s.radius_mm, s.radius_sigma_mm), SIGMA_NOTE, slot("radius")],
       ["Residual RMS", fmtLength(s.rms_mm), "How far the points lie from the cylinder, RMS."],
       ["Axis", degSigma(s.axis_sigma_deg), `1σ of the axis direction (RMS angle). ${SIGMA_NOTE}`],
       ["Axis position", mmSigma(s.point_sigma_mm), `1σ of the axis across itself (RMS distance). ${SIGMA_NOTE}`],
     );
   } else {
     rows.push(
-      ["Diameter", fmtPm(s.diameter_mm, s.diameter_sigma_mm), HOLE_NOTE],
+      ["Diameter", fmtPm(s.diameter_mm, s.diameter_sigma_mm), HOLE_NOTE, slot("diameter")],
       ["Residual RMS", fmtLength(s.rms_mm), "How far the edge points lie from the circle, in its plane, RMS."],
       ["Centre", mmSigma(s.center_sigma_mm), `1σ of the centre in the hole's plane (RMS distance). ${HOLE_NOTE}`],
     );
@@ -101,14 +111,21 @@ function rowsOf(f: FitItem, frame: PartFrameView | null): Row[] {
 function KV({ rows }: { rows: Row[] }) {
   return (
     <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-[11.5px]">
-      {rows.map(([k, v, tip]) => (
+      {rows.map(([k, v, tip, extra]) => (
         <div key={k} className="contents">
           <dt className="text-subtle" title={tip}>
             {k}
           </dt>
-          <dd className="text-right font-mono text-fg tnum" title={tip}>
-            {v}
-          </dd>
+          {extra ? (
+            <dd className="flex flex-wrap items-center justify-end gap-x-1.5 text-right font-mono text-fg tnum">
+              <span title={tip}>{v}</span>
+              {extra}
+            </dd>
+          ) : (
+            <dd className="text-right font-mono text-fg tnum" title={tip}>
+              {v}
+            </dd>
+          )}
         </div>
       ))}
     </dl>
@@ -123,6 +140,8 @@ function Relation({
   relation,
   onKeep,
   onRename,
+  answer,
+  actions,
 }: {
   a: FitItem;
   b: FitItem;
@@ -130,12 +149,15 @@ function Relation({
   relation: PairRelationState;
   onKeep: () => void;
   onRename: (name: string) => Promise<boolean>;
+  /** The engine's offers for the kept relation (nominal values; none until it is kept). */
+  answer?: NominalAnswer;
+  actions?: NominalActions;
 }) {
   const r = relation.record;
   const rows = r ? relationRows(r) : [];
   const stale = a.stale || b.stale;
   return (
-    <div className="mt-3 rounded-lg border bg-surface-2/60 px-3 py-2.5" style={{ borderColor: `${PICKED_COLOR}80` }} aria-label="Relation of the two picked fits">
+    <div className="group mt-3 rounded-lg border bg-surface-2/60 px-3 py-2.5" style={{ borderColor: `${PICKED_COLOR}80` }} aria-label="Relation of the two picked fits">
       <div className="mb-1.5 flex items-center gap-1.5 text-xs font-semibold text-fg">
         <Link2 size={13} className="shrink-0" style={{ color: PICKED_COLOR }} aria-hidden />
         {kept ? (
@@ -163,12 +185,26 @@ function Relation({
       {r ? (
         <>
           <dl className="space-y-1">
-            {rows.map((row) => (
-              <div key={row.label} className="flex items-baseline justify-between gap-3" title={row.tip}>
-                <dt className="text-xs text-muted">{row.label}</dt>
-                <dd className="font-mono text-[13.5px] font-semibold text-fg tnum">{row.value}</dd>
-              </div>
-            ))}
+            {rows.map((row, i) => {
+              const name = r.values[i]?.name;
+              const slot =
+                kept && actions && name ? (
+                  <NominalSlot id={kept.id} value={name} measuredLabel={row.label} answer={answer} offer={offerFor(answer, name)} approval={valueApproval(kept.nominals, name)} actions={actions} />
+                ) : null;
+              return (
+                <div key={row.label} className="flex items-baseline justify-between gap-3">
+                  <dt className="text-xs text-muted" title={row.tip}>
+                    {row.label}
+                  </dt>
+                  <dd className="flex flex-wrap items-center justify-end gap-x-1.5">
+                    <span className="font-mono text-[13.5px] font-semibold text-fg tnum" title={row.tip}>
+                      {row.value}
+                    </span>
+                    {slot}
+                  </dd>
+                </div>
+              );
+            })}
           </dl>
           {r.notes.map((n) => (
             <div key={n} className="mt-1.5 text-[11px] leading-4 text-subtle">
@@ -217,6 +253,8 @@ export function FitList({
   fitOn,
   ready,
   frame = null,
+  nominals,
+  nominalActions,
 }: {
   fits: FitItem[];
   /** The relations kept with the scan. */
@@ -241,8 +279,33 @@ export function FitList({
   ready: boolean;
   /** Show positions and directions in this part's frame (null: the scan's). */
   frame?: PartFrameView | null;
+  /** The engine's nominal offers by kept fit or relation id (useNominals.ts); without them no nominal is shown. */
+  nominals?: NominalAnswers;
+  nominalActions?: NominalActions;
 }) {
   const byId = (fid: string) => fits.find((f) => f.fid === fid);
+  /** Beside a cylinder's or a hole's diameter (or a cylinder's radius, where a radius was approved): its nominal value. */
+  const sizeSlot =
+    (f: FitItem): SizeSlot =>
+    (value) => {
+      if (!nominalActions || f.shape.kind === "plane") return null;
+      const approval = sizeApproval(f.nominals);
+      const ownRow = f.shape.kind === "cylinder" ? approval?.value === value : value === "diameter"; // a hole shows a radius on its diameter's row
+      const here = approval && ownRow ? approval : null;
+      if (value === "radius" && !here) return null; // the radius row has no offers of its own
+      const answer = nominals?.[f.fid];
+      return (
+        <NominalSlot
+          id={f.fid}
+          value={here?.value ?? value}
+          measuredLabel={here?.value === "radius" ? "Radius" : "Diameter"}
+          answer={answer}
+          offer={(approval && !here) || (here?.value ?? value) !== "diameter" ? null : offerFor(answer, "diameter")}
+          approval={here}
+          actions={nominalActions}
+        />
+      );
+    };
   const pickedFits = picked.map(byId).filter((f): f is FitItem => !!f);
   const [p0, p1] = pickedFits;
   const keptPair = p0 && p1 ? (relations.find((r) => (r.a === p0.fid && r.b === p1.fid) || (r.a === p1.fid && r.b === p0.fid)) ?? null) : null;
@@ -308,7 +371,7 @@ export function FitList({
                   </div>
                 ) : null}
                 <div className="mt-1.5 pl-7">
-                  <KV rows={rowsOf(f, frame)} />
+                  <KV rows={rowsOf(f, frame, sizeSlot(f))} />
                 </div>
                 {f.warnings.length ? (
                   <ul className="mt-1.5 space-y-0.5 pl-7">
@@ -336,7 +399,16 @@ export function FitList({
         </div>
       )}
       {p0 && p1 ? (
-        <Relation a={p0} b={p1} kept={keptPair} relation={pairRelation} onKeep={() => onKeepRelation(p0.fid, p1.fid)} onRename={(n) => (keptPair ? onRename(keptPair.id, n) : Promise.resolve(false))} />
+        <Relation
+          a={p0}
+          b={p1}
+          kept={keptPair}
+          relation={pairRelation}
+          onKeep={() => onKeepRelation(p0.fid, p1.fid)}
+          onRename={(n) => (keptPair ? onRename(keptPair.id, n) : Promise.resolve(false))}
+          answer={keptPair ? nominals?.[keptPair.id] : undefined}
+          actions={nominalActions}
+        />
       ) : null}
       {relations.length ? (
         <ul className="mt-3 space-y-1" aria-label="Kept relations">
@@ -353,6 +425,12 @@ export function FitList({
                     {" "}
                     · {a?.name ?? "?"} and {b?.name ?? "?"}
                   </span>
+                  {(r.nominals ?? []).map((n) => (
+                    <span key={n.value} className={cn("ml-1.5 text-[10.5px] font-semibold", n.check_again ? "text-warn" : "text-accent")} title={n.check_again ? (n.check_reason ?? undefined) : undefined}>
+                      {approvedText(n)}
+                      {n.check_again ? " · check again" : ""}
+                    </span>
+                  ))}
                 </button>
                 <IconButton icon={X} size="xs" label={`Remove ${r.name}`} className="opacity-60 group-hover:opacity-100" onClick={() => onRemoveRelation(r.id)} />
               </li>

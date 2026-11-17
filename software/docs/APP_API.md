@@ -975,6 +975,8 @@ type KeptFeature = {
   extent: FitExtent | null;             // where its region lies; null: kept before extents existed ("fit again")
   form?: "boss" | "bore" | null;        // a cylinder: boss or bore (below); null for a plane or a hole, or when not
                                         // clear; left out for a fit kept before forms existed
+  nominals: ApprovedNominal[];          // approved nominal values ("Nominal values" below); in GET .../features and
+                                        // the refit answer only (the other answers keep their keys)
   created: string;
   stale: boolean;                       // fitted on another mesh version than the current one ("fitted on an earlier mesh")
 };
@@ -1019,7 +1021,8 @@ type KeptRelation = { id: string;       // "r-…"
                       created: string;
                       stale: boolean;   // one of the two fits was fitted on another mesh version than the current one
                       relation: RelationRecord | null;   // the engine's values for the two kept shapes
-                      error?: string }; // only when relation is null: why the engine could not relate them
+                      error?: string;   // only when relation is null: why the engine could not relate them
+                      nominals: ApprovedNominal[] };     // as a fit's (GET .../features and the refit answer)
 type PairRelation = { a: string; b: string; stale: boolean; relation: RelationRecord | null; error?: string };
 type FeatureSet = {
   format_version: 1;
@@ -1036,7 +1039,9 @@ type RefitResult = { features: FeatureSet; refitted: string[];
                      failed: { id: string; detail: string; hint: string | null }[] };
 ```
 In `features.json` the records are the same without `stale` (and `FeatureSet` without `mesh_version`); a
-relation keeps only `id`, `name`, `a`, `b` and `created`.
+relation keeps only `id`, `name`, `a`, `b` and `created`. A fit or relation with approved nominal values
+keeps them under `nominals` as approved, without the `measured_now`, `sigma_now`, `check_again` and
+`check_reason` that reading adds; one without any has no `nominals` key, as before.
 
 ### REST
 Paths are relative to `/api/projects/{pid}/scans/{sid}`.
@@ -1175,6 +1180,92 @@ Rules:
 - Sizes, distances, angles and ± values are the same in every frame; the viewer shows positions and
   directions in the part's frame on request and keeps its 3D view in the scan's frame.
 
+### Nominal values
+[`FEATURE_PLAN.md`](FEATURE_PLAN.md), C3. Beside a measured size the engine offers a round one
+(`ohs.cad.nominal`: Ø 14.02 ± 0.03 → "Ø 14?", 89.7° → "90?", two planes 0.05° apart → "parallel?"); the
+engineer accepts it, enters another value, or ignores it. Approved values are kept with the scan beside the
+measured ones and used in the CAD files ("For CAD" below). **Nothing is rounded silently:** the measured
+values in `features.json` never change.
+
+```ts
+type NominalValueName = "diameter" | "radius" | "angle" | "distance" | "centre_distance";
+type NominalSuggestion = {                      // ohs.cad.nominal Suggestion.to_dict()
+  nominal: number;                              // mm, or degrees
+  difference: number;                           // nominal − measured
+  step: number;                                 // 1, 0.5, 0.1 mm; 90 (0°/90°), 15 (30°/45°/60°) or 1 degree
+  allowed_by: "2 sigma" | "bias";               // "bias": offered only because of a known bias (simulator numbers)
+  bias: object | null;                          // that bias's row, with the VALIDATION.md section it rests on
+  word: string | null;                          // "parallel", "perpendicular", "in one plane", "coaxial"
+  directions: string | null;                    // for 0° / 90°: whether the two directions are parallel or square
+  sentence: string };                           // why it is offered, for the app to show
+type NominalOffer = {                           // ohs.cad.nominal Offer.to_dict(): one measured value
+  value: NominalValueName; label: string; unit: "mm" | "deg";
+  measured: number; sigma: number | null;       // 1σ, the spread from scan to scan
+  suggestions: NominalSuggestion[];             // nearest first; none: reason_code and reason say why
+  reason_code: "already_round" | "no_candidate" | "too_many" | "no_sigma" | "warning" | null;
+  reason: string | null };
+type ApprovedNominal = {
+  value: NominalValueName;
+  nominal: number; unit: "mm" | "deg";
+  word: string | null;                          // what the nominal means for a relation (an angle of 0: "parallel")
+  source: "suggested" | "entered";              // the value offered, or one typed
+  measured: number; sigma: number | null;       // the measurement it was approved against
+  approved: string;                             // when (local time, to the second)
+  measured_now: number | null; sigma_now: number | null;   // the value measured now (null: the relation has
+                                                // no such value any more)
+  check_again: boolean;                         // measured again, and the new value no longer allows it
+  check_reason: string | null };                // then: the old and the new measured value, and why
+type NominalAnswer = {                          // GET .../features/{id}/nominal, and the answer of POST
+  id: string; name: string; kind: "fit" | "relation";
+  form: "boss" | "bore" | null;                 // a cylinder's, from its record (what the offers used)
+  poses: "tracked" | "true";                    // which rows of the bias table apply (below)
+  poses_reason: string;                         // how that was decided, in words
+  offers: NominalOffer[];                       // a fit: its diameter (or its radius); a relation: each value
+  nominals: ApprovedNominal[] };
+type NewNominal = { value: NominalValueName; nominal: number;
+                    source?: "suggested" | "entered" };   // default "entered"
+```
+
+| Method and path | Body or query | Returns |
+|---|---|---|
+| `GET .../features/{id}/nominal` | `value?: "diameter" \| "radius"` (a fit) | `NominalAnswer` |
+| `POST .../features/{id}/nominal` | `NewNominal` | `NominalAnswer` |
+| `DELETE .../features/{id}/nominal/{value}` | | 204 |
+
+Rules:
+- **Offers** are `ohs.cad.nominal.suggest_fit` on the kept record (a cylinder's `form` from its record: bosses
+  and bores are biased differently; a hole's from its warnings) and `suggest_relation` on the engine's
+  relation of the two kept shapes, with both fits' warnings. A plane alone has none (an empty list, not an
+  error); a relation's `form` "wall" is not used (the app does not know that two planes are one wall's two
+  faces). Each sentence says why the value is offered and, for an offer made only because of a known bias,
+  that it is a simulator number. 404 for an id that is no kept fit or relation, 422 for a `value` other than
+  the diameter or the radius of a fit (a relation's offers are always all its values).
+- **The poses** (which bias rows apply) come from the scan's processing report, `result/report.json` (the
+  stage the current mesh was made by): "true" only when it says `"poses": "given"` and its ground truth (a
+  simulated recording) shows those poses equal the true ones (every frame within 0.001 mm and 0.001°: the
+  scan was fused at its true poses); otherwise "tracked": no report, a report that cannot be read, tracked
+  poses, or poses given by the app's own straighten and fuse stages, which start from the tracked ones.
+  `poses_reason` says which.
+- **Approve** (`POST`): `source` "suggested" approves a value offered now (422 when it is not); "entered" any
+  number that makes sense for that kind of value: a diameter more than 0 and at most 10,000 mm, a radius
+  more than 0 and at most 5,000 mm, an angle 0 to 90°, a distance or centre distance 0 to 10,000 mm (422
+  otherwise, and for a value the item does not have: a fit's angle, a plane's size, a relation without a
+  centre distance). It is kept with the value measured now (`measured`, `sigma`) and replaces an approval
+  of the same value; a fit keeps one size, so a diameter replaces a radius and the other way round. An
+  entered value needs no offer.
+- **Remove** (`DELETE`): 204; 404 when there is none. A record left without approvals loses its `nominals`
+  key. Deleting a fit or a relation deletes its approvals (and a fit's relations with theirs). A rename
+  keeps them.
+- **Measured again:** "fit again" keeps the approvals as they were. Reading (`GET .../features`, `GET
+  .../nominal`) marks one `check_again` when the measurement has changed since it was approved and the new
+  one no longer allows the nominal by the engine's own rule (`ohs.cad.nominal.check_fit_nominal`,
+  `check_relation_nominal`: within twice the ±, within the window a known bias widens, or what the value
+  already reads as); `check_reason` gives the old and the new measured value. Nothing is approved again or
+  dropped on its own: the engineer approves again or removes it. A measurement that has not changed is
+  never marked (a value entered by hand outside the rule stays as the engineer chose it).
+- **Ignore** is the viewer's: it hides an offer in that browser until the value is measured again, and
+  sends nothing.
+
 ### For CAD
 [`FEATURE_PLAN.md`](FEATURE_PLAN.md), C2. The scan's kept fits as a STEP file (`ohs.cad.step`) and as a
 FreeCAD macro (`ohs.cad.fcmacro`, a short Python text that builds the same shapes as named objects in a new
@@ -1204,18 +1295,27 @@ type CadSummary = {                             // GET .../features/cad: what th
   filenames: { step: string; macro: string };   // the download names, from the scan's name
   mesh_version: number | null;                  // the current mesh's version
   reason: string | null;                        // why nothing can be exported (no kept fits), else null
+  nominal: {                                    // the approved nominal values used (C3)
+    measured_only: boolean;                     // asked for the measured values only: none used
+    sizes_used: number;                         // approved sizes written in place of the measured ones
+    sizes: { id: string; name: string; value: "diameter" | "radius"; nominal: number;
+             measured: number | null; sigma: number | null; check_again: boolean }[];
+    relations_listed: number;                   // approved relations, listed in the notes, not applied
+    relations: { id: string; name: string; value: NominalValueName; nominal: number; word: string | null;
+                 check_again: boolean }[];
+    relations_note: string | null };            // with any: that they are not applied to the geometry, and why
 };
 ```
 
 | Method and path | Query | Returns |
 |---|---|---|
-| `GET .../features/cad` | `boundary?: CadBoundary` | `CadSummary` |
-| `GET .../features/cad/fits.step` | `boundary?: CadBoundary` | the STEP file (AP214, mm, ASCII; `model/step`) |
-| `GET .../features/cad/fits.FCMacro` | `boundary?: CadBoundary` | the FreeCAD macro (ASCII Python; `text/x-python`) |
+| `GET .../features/cad` | `boundary?: CadBoundary`, `measured_only?: boolean` | `CadSummary` |
+| `GET .../features/cad/fits.step` | `boundary?: CadBoundary`, `measured_only?: boolean` | the STEP file (AP214, mm, ASCII; `model/step`) |
+| `GET .../features/cad/fits.FCMacro` | `boundary?: CadBoundary`, `measured_only?: boolean` | the FreeCAD macro (ASCII Python; `text/x-python`) |
 
 Rules:
-- **What goes in:** every kept fit, in its order, with its measured values (approved nominal sizes come
-  later, C3); each plane's stored outline with `boundary=outline` (only an outline kept for the fit's own
+- **What goes in:** every kept fit, in its order, with its measured values or its approved size (below);
+  each plane's stored outline with `boundary=outline` (only an outline kept for the fit's own
   mesh version: a plane without one is written with its rectangle, with a note); the part's frame when the
   scan has one this version can read. `boundary` defaults to `rectangle`; another value is 422.
 - **Inside**, the files are named after the part (the project's name: the STEP file's root product, the
@@ -1227,6 +1327,17 @@ Rules:
   name; an out-of-date frame is used as it is (as for the mesh in the part's frame), with a warning; a frame
   this version cannot read is not used (the files are in the scan's own frame), with a warning. The writer's
   notes are also in the files: in the STEP file's `FILE_DESCRIPTION`, in the macro as comments at the top.
+- **Approved values** ("Nominal values" above): an approved **size** (a cylinder's or a hole's diameter, or
+  its radius) is written in place of the measured one, in the STEP file and the macro alike
+  (`ohs.cad.nominal.apply_nominal` on a copy of the shape), and the notes list each one as "Boss: nominal
+  diameter 14 mm (measured 14.02 +/- 0.03 mm)" (the value measured now; plain ASCII, so the macro's comments
+  read as they are). An approval marked "check again" is used too, with a warning that names it. Approved
+  **relations** (parallel, perpendicular, an angle, a distance) move no shape: turning one shape to suit
+  another needs a rule for which one moves, which is not decided. Each is listed in the notes ("Top to
+  bottom (Top and Bottom): approved parallel (measured angle 0.05 +/- 0.07 deg); not applied to the
+  geometry"), and `nominal.relations_note` says so. `measured_only=true` leaves every approval out: the
+  files are then byte for byte those of the same fits with nothing approved, as are the files of a scan
+  with no approvals. The measured shapes in `features.json` are never changed.
 - **The macro** is plain ASCII. Each name is a Python string literal (`ascii()`), and every comment one line
   of printable ASCII, so no name or note can run as code. In FreeCAD (checked with 1.1.4) it builds the
   objects in the groups "Planes", "Cylinders", "Holes", "Axes", "Points" and "Part frame", each equal to what

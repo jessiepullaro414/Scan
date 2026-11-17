@@ -37,6 +37,8 @@ import type {
   KeptRelation,
   NewFeature,
   NewMeasurement,
+  NewNominal,
+  NominalAnswer,
   NewRelation,
   NewFrame,
   PairRelation,
@@ -368,11 +370,21 @@ export const api = {
   frameMeshUrl: (pid: string, sid: string, name: "mesh.ply" | "mesh.stl") => `${scanPath(pid, sid)}/features/frame/${name}`,
   /** What the kept fits' CAD files would hold (counts, frame, the writer's notes, warnings, sizes); read-only. With
    * no kept fits `reason` says so. */
-  cadSummary: (pid: string, sid: string, boundary: CadBoundary = "rectangle") =>
-    get<CadSummary>(`${scanPath(pid, sid)}/features/cad?boundary=${boundary}`),
-  /** URL of the kept fits as a STEP file or a FreeCAD macro (in the part's frame when there is one); 409 with no kept fits. */
-  cadFileUrl: (pid: string, sid: string, name: CadFile, boundary: CadBoundary = "rectangle") =>
-    `${scanPath(pid, sid)}/features/cad/${name}?boundary=${boundary}`,
+  cadSummary: (pid: string, sid: string, boundary: CadBoundary = "rectangle", measuredOnly = false) =>
+    get<CadSummary>(`${scanPath(pid, sid)}/features/cad?boundary=${boundary}${measuredOnly ? "&measured_only=true" : ""}`),
+  /** URL of the kept fits as a STEP file or a FreeCAD macro (in the part's frame when there is one); 409 with no kept
+   * fits. Approved nominal sizes are used unless `measuredOnly`. */
+  cadFileUrl: (pid: string, sid: string, name: CadFile, boundary: CadBoundary = "rectangle", measuredOnly = false) =>
+    `${scanPath(pid, sid)}/features/cad/${name}?boundary=${boundary}${measuredOnly ? "&measured_only=true" : ""}`,
+  /** What is offered as a nominal value for a kept fit (its diameter, or `value` "radius") or relation (each of its
+   * values), with its approvals; a plane has no offers. */
+  nominal: (pid: string, sid: string, id: string, value?: "diameter" | "radius") =>
+    get<NominalAnswer>(`${scanPath(pid, sid)}/features/${enc(id)}/nominal${value ? `?value=${value}` : ""}`),
+  /** Approve a nominal value: the one offered (`source` "suggested", 422 when it isn't offered now) or one typed
+   * ("entered", 422 when it makes no sense for that value). Replaces an approval of the same value. */
+  approveNominal: (pid: string, sid: string, id: string, body: NewNominal) => post<NominalAnswer>(`${scanPath(pid, sid)}/features/${enc(id)}/nominal`, body),
+  /** Forget an approval (404 when there is none). */
+  removeNominal: (pid: string, sid: string, id: string, value: string) => del(`${scanPath(pid, sid)}/features/${enc(id)}/nominal/${enc(value)}`),
 
   // ---------------------------------------------------------------- M5: areas that need another pass
   /** Which parts of the current mesh miss a tolerance (above 0, at most 100 mm): the share of the surface

@@ -9,10 +9,14 @@
  *
  * The part's frame (APP_API.md "The part's frame") is built and removed here too. A refusal is not a toast: the
  * Coordinate system panel shows the engine's words next to the slots, so `buildFrame` returns the error.
+ *
+ * Approved nominal values (APP_API.md "Nominal values") are approved and removed here; the set is then read again,
+ * since the engine says whether each one needs checking again. The offers themselves are read by the viewer
+ * (pages/viewer/useNominals.ts), not kept here.
  */
 import { create } from "zustand";
 import { ApiError, api } from "../api/http";
-import type { FeatureSet, KeptFit, KeptMeasurement, KeptRelation, NewFeature, NewFrame, NewMeasurement, RefitResult } from "../api/types";
+import type { FeatureSet, KeptFit, KeptMeasurement, KeptRelation, NewFeature, NewFrame, NewMeasurement, NewNominal, NominalAnswer, RefitResult } from "../api/types";
 import { frameUses, withFeature, withFrame, withMeasurement, withName, withRelation, without } from "./featureSet";
 import { toast } from "./toasts";
 
@@ -43,6 +47,11 @@ type FeaturesStore = {
   /** Build the part's frame (or build it again); null when built, else the engine's error to show. */
   buildFrame: (pid: string, sid: string, body: NewFrame) => Promise<ApiError | null>;
   removeFrame: (pid: string, sid: string) => Promise<boolean>;
+  /** Approve a nominal value for a kept fit or relation (APP_API.md "Nominal values"); the set is read again, so the
+   * approval shows as the engine keeps it. The engine's answer (offers and approvals), or null after a toast. */
+  approveNominal: (pid: string, sid: string, id: string, body: NewNominal) => Promise<NominalAnswer | null>;
+  /** Forget an approval; false after a toast. */
+  removeNominal: (pid: string, sid: string, id: string, value: string) => Promise<boolean>;
 };
 
 export const featuresKey = (pid: string, sid: string) => `${pid}/${sid}`;
@@ -171,6 +180,30 @@ export const useFeatures = create<FeaturesStore>((set, get) => {
         patch(pid, sid, { framing: false });
         return e instanceof ApiError ? e : new ApiError(0, String(e), null, "frame");
       }
+    },
+
+    approveNominal: async (pid, sid, id, body) => {
+      try {
+        const a = await api.approveNominal(pid, sid, id, body);
+        void get().load(pid, sid);
+        return a;
+      } catch (e) {
+        toast.error("Couldn't approve the nominal value", e);
+        return null;
+      }
+    },
+
+    removeNominal: async (pid, sid, id, value) => {
+      try {
+        await api.removeNominal(pid, sid, id, value);
+      } catch (e) {
+        if (!(e instanceof ApiError && e.status === 404)) {
+          toast.error("Couldn't remove the nominal value", e);
+          return false;
+        }
+      }
+      void get().load(pid, sid);
+      return true;
     },
 
     removeFrame: async (pid, sid) => {

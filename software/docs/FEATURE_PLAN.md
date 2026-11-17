@@ -333,7 +333,7 @@ but nothing can be uploaded.
   - **Left:** the approved sizes in the export (C3); seen only in FreeCAD's command-line
     program, not its window; a fit named like a group ("Planes") is "Planes (2)" in the macro.
 
-### C3. Suggested nominal sizes, for an engineer to approve (M)
+### [x] C3. Suggested nominal sizes, for an engineer to approve (M)
 - **What:** beside each measured value a suggestion: Ø 14.02 ± 0.03 → "14?", 89.7° → "90?", two
   planes 0.3° apart → "parallel?". A suggestion is made only where the round value lies inside
   the measurement's ±2σ *and* the known bias for that kind of feature (small bosses read
@@ -370,9 +370,41 @@ but nothing can be uploaded.
     are bit-identical; the vote costs 6 ms on a million-triangle tube. On the simulated bracket
     scan 44 of 45 cylinders clicked at random got a form. A cylinder kept earlier gets its
     form when it is next fitted again.
-  - **Left:** keeping approved values with the scan, the routes, the viewer, and their use in
-    the STEP export. Seen on the way: `VALIDATION.md`, "Known limitations", still says small bosses read
-    0.1 mm small in radius; the newer sections say 0.15–0.28 mm.
+- **In the app, done 2026-11-17.** Approved values are kept with the scan: a `nominals` list on
+  a kept fit or relation in `features.json` (which value, the nominal, suggested or entered,
+  when, and the measurement it was approved against); the measured shape is never changed.
+  Routes under `.../features/{id}/nominal` give the offers, approve one (the suggested value,
+  or an entered one that makes sense for that kind of value) and remove it (`APP_API.md`,
+  "Nominal values").
+  - *In the viewer:* beside a cylinder's or a hole's diameter, and beside a kept relation's
+    values, a chip such as "Ø 14?" (in the warning colour when a known bias alone allows it)
+    with the engine's sentence on hover, and "Accept", "Other value…", "Ignore". An approved
+    value shows as "nominal Ø 14" next to the measured one, with remove and edit. Ignoring
+    hides the chip in this browser until the value is measured again.
+  - *When the measurement changes:* approvals stay. One is marked **check again**, with the
+    old and the new measured value, only when the new measurement no longer allows it by the
+    engine's rule. Nothing is dropped or applied on its own.
+  - *Tracked or true poses* (the biases differ): "true" only when the scan's report says the
+    poses were given and equal to the true ones; everything else counts as tracked.
+  - *The CAD export* uses approved sizes (a diameter or a radius) in the STEP file and the
+    macro, lists each as "nominal 14 mm (measured 14.02 +/- 0.03 mm)" in the notes, and has a
+    "Measured values only" switch that gives exactly the files without approvals. Approved
+    relations (parallel, an angle, a distance) are listed in the notes and **not applied to
+    the geometry**: turning one shape to suit another needs a rule for which one moves.
+  - Checked in the app on the simulated bracket scan with a boss written in for the check
+    (Ø 14.02 ± 0.03): the chip, Accept, "nominal Ø 14" on the card, the STEP cylinder at
+    radius 7 with the approval and 7.01 with "measured only", the measured shape unchanged.
+  - Tests: 14 new (routes, the file, the check-again rule) on both paths; 189 pass over the
+    CAD, nominal and kept-features files; 33 UI test files.
+  - **Left, for the owner:** which shape moves when a relation is approved (so "parallel" can
+    reach the CAD file); whether a bias alone may make an offer. Not seen by eye: "check
+    again" and a bias chip against the real engine. Wall-thickness biases are never offered in
+    the app (it cannot tell that two planes are one wall's faces).
+  - Seen on the way: `VALIDATION.md`, "Known limitations", still says small bosses read 0.1 mm
+    small in radius; the newer sections say 0.15–0.28 mm. And
+    `test_an_edit_marks_a_fit_and_fit_again_brings_it_back` failed once for the agent in a
+    CPU-path run (the list of refitted fits differed); it passed 6 of 6 times straight after
+    and in every run since. Noted, not chased.
 
 **Not planned here:** sphere and cone fits, free-form surfaces, automatic CAD from a mesh
 (`RESEARCH_PLAN.md` 4.8.7–4.8.8).

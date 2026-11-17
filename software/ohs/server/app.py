@@ -186,6 +186,12 @@ class RenameBody(BaseModel):
     name: str = Field(min_length=1, max_length=80)
 
 
+class NominalBody(BaseModel):
+    value: str  # "diameter" or "radius" (a fit), "angle", "distance" or "centre_distance" (a relation)
+    nominal: float = Field(allow_inf_nan=False)  # mm, or degrees for an angle
+    source: str = "entered"  # "suggested": the value offered now; "entered": typed by the engineer
+
+
 class RefitBody(BaseModel):
     ids: Optional[list[str]] = None  # None: every stale feature
 
@@ -637,13 +643,14 @@ def create_app(config: Any = None, *, projects_dir: Any = None, static_dir: Any 
     cad = CadExport(feats)
 
     @app.get(fpath + "/cad")
-    def features_cad(pid: str, sid: str, boundary: Literal["rectangle", "outline"] = "rectangle") -> JSONResponse:
-        return _json(cad.summary(pid, sid, boundary))
+    def features_cad(pid: str, sid: str, boundary: Literal["rectangle", "outline"] = "rectangle",
+                     measured_only: bool = False) -> JSONResponse:
+        return _json(cad.summary(pid, sid, boundary, measured_only))
 
     @app.get(fpath + "/cad/{name}")
-    def features_cad_file(pid: str, sid: str, name: str,
-                          boundary: Literal["rectangle", "outline"] = "rectangle") -> Response:
-        data, filename, media, version = cad.file(pid, sid, name, boundary)
+    def features_cad_file(pid: str, sid: str, name: str, boundary: Literal["rectangle", "outline"] = "rectangle",
+                          measured_only: bool = False) -> Response:
+        data, filename, media, version = cad.file(pid, sid, name, boundary, measured_only)
         headers = {"Cache-Control": "no-cache", "Content-Disposition": f'attachment; filename="{filename}"'}
         if version is not None:
             headers["X-OHS-Mesh-Version"] = str(version)
@@ -665,6 +672,20 @@ def create_app(config: Any = None, *, projects_dir: Any = None, static_dir: Any 
     @app.get(fpath + "/{fid}/outline")
     def features_outline(pid: str, sid: str, fid: str) -> JSONResponse:
         return _json(feats.outline(pid, sid, fid))
+
+    # approved nominal values (FEATURE_PLAN C3): for a kept fit or a kept relation
+    @app.get(fpath + "/{fid}/nominal")
+    def features_nominal(pid: str, sid: str, fid: str, value: Optional[str] = None) -> JSONResponse:
+        return _json(feats.nominal(pid, sid, fid, value))
+
+    @app.post(fpath + "/{fid}/nominal")
+    def features_approve(pid: str, sid: str, fid: str, body: NominalBody) -> JSONResponse:
+        return _json(feats.approve(pid, sid, fid, body.value, body.nominal, body.source))
+
+    @app.delete(fpath + "/{fid}/nominal/{value}")
+    def features_unapprove(pid: str, sid: str, fid: str, value: str) -> Response:
+        feats.unapprove(pid, sid, fid, value)
+        return Response(status_code=204)
 
     @app.get("/api/projects/{pid}/scans/{sid}/process/trajectory.json")
     def process_trajectory(pid: str, sid: str) -> JSONResponse:

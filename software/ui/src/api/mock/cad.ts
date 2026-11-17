@@ -8,13 +8,16 @@
  *   kept fits. The notes are not the engine's writer's (the demo has none): one says so, one says when there is no
  *   part frame, one names each fit kept with no size. With `boundary=outline` it counts the planes that have an
  *   outline, their points (at most 5,000, not simplified) and their holes as left out;
+ * - approved nominal values (features.ts, nominal.ts): the summary's `nominal` lists the approved sizes as used and
+ *   the approved relations as listed, not applied, each with a note as the engine writes it; with
+ *   `measured_only=true` none. The fixed files below do not change with them;
  * - `GET .../features/cad/fits.step` and `.../fits.FCMacro` serve small fixed texts, not the real files: a STEP
  *   file with an empty DATA section and a macro that only prints a line in FreeCAD, both saying they come from the
  *   demo. No name goes into them. The sizes in the summary are those texts'.
  *
  * Plain functions on the stored records, checked on their own (cad.test.ts).
  */
-import type { CadBoundary, CadSummary, KeptFeature, PartFrameRecord } from "../types";
+import type { CadBoundary, CadNominal, CadSummary, KeptFeature, KeptRelation, PartFrameRecord } from "../types";
 import type { MockOutline } from "./extent.ts";
 import { frameState } from "./frame.ts";
 import { HttpError } from "./host.ts";
@@ -60,10 +63,49 @@ function macroText(counts: CadSummary["counts"]): string {
 }
 
 /** What the demo keeps of a scan's fits (features.ts). */
-export type CadStored = { features: Omit<KeptFeature, "stale">[]; outlines: Map<string, NonNullable<MockOutline>>; frame: PartFrameRecord | null };
+export type CadStored = {
+  features: Omit<KeptFeature, "stale">[];
+  outlines: Map<string, NonNullable<MockOutline>>;
+  frame: PartFrameRecord | null;
+  relations?: KeptRelation[];
+};
+
+/** Whether the query asks for the measured values only (`measured_only=true`). */
+export function cadMeasuredOnly(v: unknown): boolean {
+  return v === true || v === "true" || v === "1";
+}
+
+const num = (x: number) => x.toFixed(6).replace(/\.?0+$/, "");
+
+/** The approved values the demo's summary lists: approved sizes as used, relations listed, not applied. "Check
+ * again" is the engine's (features.ts shows it); the demo's summary does not work it out. */
+function cadNominal(s: CadStored, measuredOnly: boolean): { nominal: CadNominal; notes: string[] } {
+  const nominal: CadNominal = { measured_only: measuredOnly, sizes_used: 0, sizes: [], relations_listed: 0, relations: [], relations_note: null };
+  const notes: string[] = [];
+  if (measuredOnly) return { nominal, notes };
+  for (const f of s.features) {
+    const n = (f.nominals ?? []).find((x) => x.value === "diameter" || x.value === "radius");
+    if (!n || f.kind === "plane" || f.shape.kind === "plane") continue;
+    const measured = n.value === "diameter" ? f.shape.diameter_mm : f.shape.radius_mm;
+    const sigma = n.value === "diameter" ? f.shape.diameter_sigma_mm : f.shape.radius_sigma_mm;
+    nominal.sizes.push({ id: f.id, name: f.name, value: n.value as "diameter" | "radius", nominal: n.nominal, measured, sigma, check_again: false });
+    notes.push(`${f.name}: nominal ${n.value} ${num(n.nominal)} mm (measured ${measured.toFixed(2)} +/- ${sigma.toFixed(2)} mm)`);
+  }
+  for (const r of s.relations ?? [])
+    for (const n of r.nominals ?? []) {
+      nominal.relations.push({ id: r.id, name: r.name, value: n.value, nominal: n.nominal, word: n.word, check_again: false });
+      notes.push(`${r.name}: approved ${n.word ?? `${n.value.replace("_", " ")} ${num(n.nominal)}${n.unit === "deg" ? " deg" : " mm"}`}; not applied to the geometry`);
+    }
+  nominal.sizes_used = nominal.sizes.length;
+  nominal.relations_listed = nominal.relations.length;
+  if (nominal.relations_listed)
+    nominal.relations_note =
+      "approved relations (parallel, perpendicular, an angle, a distance) are listed in the notes and not applied to the geometry: turning one shape to suit another needs a rule for which one moves, and that is not decided";
+  return { nominal, notes };
+}
 
 /** `GET .../features/cad`: what the demo's two files would hold. */
-export function mockCadSummary(s: CadStored, boundary: CadBoundary, version: number | null, scanName: string): CadSummary {
+export function mockCadSummary(s: CadStored, boundary: CadBoundary, version: number | null, scanName: string, measuredOnly = false): CadSummary {
   const stem = cadFileStem(scanName);
   const counts = { plane: 0, cylinder: 0, hole: 0, point: 0 };
   for (const f of s.features) counts[f.kind] += 1;
@@ -81,6 +123,8 @@ export function mockCadSummary(s: CadStored, boundary: CadBoundary, version: num
   for (const f of s.features)
     if (f.extent === null && f.kind !== "hole") notes.push(`${f.name}: kept with no measured size (before extents existed): written at a stated size; fit it again for its real size`);
   if (!part) notes.push("no part frame: the shapes are in the scan's own frame (wherever the scanner started), and no part axes are written");
+  const nom = cadNominal(s, measuredOnly);
+  notes.push(...nom.notes);
   let outline: CadSummary["outline"] = null;
   if (boundary === "outline") {
     const planes = s.features.filter((f) => f.kind === "plane" && s.outlines.has(f.id));
@@ -109,6 +153,7 @@ export function mockCadSummary(s: CadStored, boundary: CadBoundary, version: num
     filenames: { step: `${stem}-fits.step`, macro: `${stem}-fits.FCMacro` },
     mesh_version: version,
     reason: empty ? `${NO_FITS}: ${NO_FITS_HINT}` : null,
+    nominal: nom.nominal,
   };
 }
 

@@ -24,11 +24,25 @@
  * file and the FreeCAD macro as small fixed texts that say they come from the demo.
  */
 import { relationRecord } from "../../lib/fits.ts";
-import type { CylinderForm, FeatureSet, FitExtent, FitResult, KeptFeature, KeptMeasurement, KeptRelation, PairRelation, PartFrameRecord } from "../types";
-import { cadBoundary, mockCadFile, mockCadSummary } from "./cad.ts";
+import type {
+  ApprovedNominal,
+  CylinderForm,
+  FeatureSet,
+  FitExtent,
+  FitResult,
+  KeptFeature,
+  KeptMeasurement,
+  KeptRelation,
+  NominalAnswer,
+  NominalValueName,
+  PairRelation,
+  PartFrameRecord,
+} from "../types";
+import { cadBoundary, cadMeasuredOnly, mockCadFile, mockCadSummary } from "./cad.ts";
 import { outlineAnswer, type MockOutline } from "./extent.ts";
 import { frameState, mockPartFrame, type FrameInput } from "./frame.ts";
 import { HttpError, json } from "./host.ts";
+import { badNominal, fitValue, mockOffer, nominalView, relationValues, type StoredNominal } from "./nominal.ts";
 
 /** What a scan's kept features need from the demo engine. */
 export type FeatureEngine = {
@@ -106,10 +120,87 @@ export class MockFeatures {
       format_version: 1,
       frame: this.frameView(s),
       mesh_version: version,
-      features: s.features.map((f) => ({ ...f, stale: stale(f.mesh_version) })),
+      features: s.features.map((f) => ({ ...f, stale: stale(f.mesh_version), nominals: this.nominalViews(s, f.id) })),
       measurements: s.measurements.map((m) => ({ ...m, stale: stale(m.mesh_version) })),
-      relations: s.relations.map((r) => this.relationView(s, r, version)),
+      relations: s.relations.map((r) => ({ ...this.relationView(s, r, version), nominals: this.nominalViews(s, r.id) })),
     };
+  }
+
+  // ------------------------------------------------------------------ nominal values (nominal.ts: plain ±2σ rounding)
+  /** A kept fit or relation by id, for its nominal values. */
+  private nominalItem(s: Stored, id: string): { list: "features" | "relations"; item: { id: string; name: string; nominals?: StoredNominal[] } } {
+    const f = s.features.find((x) => x.id === id);
+    if (f) return { list: "features", item: f as { id: string; name: string; nominals?: StoredNominal[] } };
+    const r = s.relations.find((x) => x.id === id);
+    if (r) return { list: "relations", item: r as { id: string; name: string; nominals?: StoredNominal[] } };
+    throw new HttpError(404, `No kept fit or relation “${id}”`, "Read the list again.");
+  }
+
+  /** The values of a kept fit (its diameter or radius) or relation, measured now. */
+  private nominalValues(s: Stored, id: string, size: "diameter" | "radius" = "diameter") {
+    const f = s.features.find((x) => x.id === id);
+    if (f) {
+      const v = fitValue(f.shape, size);
+      return v ? [v] : [];
+    }
+    const r = s.relations.find((x) => x.id === id);
+    const rec = r ? this.relationView(s, r, null).relation : null;
+    return rec ? relationValues(rec) : [];
+  }
+
+  private nominalViews(s: Stored, id: string): ApprovedNominal[] {
+    const { item } = this.nominalItem(s, id);
+    return (item.nominals ?? []).map((n) => {
+      const now = this.nominalValues(s, id, n.value === "radius" ? "radius" : "diameter").find((v) => v.value === n.value) ?? null;
+      return nominalView(n, now);
+    });
+  }
+
+  private nominalAnswer(s: Stored, id: string, size?: "diameter" | "radius"): NominalAnswer {
+    const { list, item } = this.nominalItem(s, id);
+    const f = list === "features" ? s.features.find((x) => x.id === id)! : null;
+    return {
+      id,
+      name: item.name,
+      kind: list === "features" ? "fit" : "relation",
+      form: f?.form ?? null,
+      poses: "tracked",
+      poses_reason: "the demo engine reads no processing report: the poses are taken as tracked",
+      offers: this.nominalValues(s, id, size).map(mockOffer),
+      nominals: this.nominalViews(s, id),
+    };
+  }
+
+  private approveNominal(s: Stored, id: string, body: Record<string, unknown>): NominalAnswer {
+    const { list, item } = this.nominalItem(s, id);
+    const value = body.value as NominalValueName;
+    const allowed: NominalValueName[] = list === "features" ? ["diameter", "radius"] : ["angle", "distance", "centre_distance"];
+    if (list === "features" && s.features.find((x) => x.id === id)!.kind === "plane") bad("a plane alone has no size to approve", "Approve a relation between two planes instead.");
+    if (!allowed.includes(value)) bad(`a ${list === "features" ? "fit" : "relation"}'s nominal value is one of ${allowed.join(", ")}, not ${String(value)}`, "Pick one of those.");
+    const source = body.source ?? "entered";
+    if (source !== "suggested" && source !== "entered") bad(`source must be 'suggested' or 'entered', got ${String(source)}`);
+    const why = badNominal(value, body.nominal);
+    if (why) bad(why, "Enter a number that makes sense for this value.");
+    const nominal = body.nominal as number;
+    const offer = this.nominalValues(s, id, value === "radius" ? "radius" : "diameter")
+      .map(mockOffer)
+      .find((o) => o.value === value);
+    if (!offer) return bad(`this relation has no ${value.replace("_", " ")} to approve`, "Pick one of the values it shows.");
+    const hit = offer.suggestions.find((x) => Math.abs(x.nominal - nominal) <= 1e-9);
+    if (source === "suggested" && !hit) bad(`${nominal} is not offered now for this ${value.replace("_", " ")}`, "Approve one of the values offered, or send it as 'entered'.");
+    const word = hit?.word ?? (offer.unit === "deg" ? ({ 0: "parallel", 90: "perpendicular" } as Record<number, string>)[nominal] ?? null : null);
+    const entry: StoredNominal = { value, nominal, unit: offer.unit, word, source: source as "suggested" | "entered", measured: offer.measured, sigma: offer.sigma, approved: nowIso() };
+    const same: string[] = list === "features" ? ["diameter", "radius"] : [value];
+    item.nominals = [...(item.nominals ?? []).filter((n) => !same.includes(n.value)), entry];
+    return this.nominalAnswer(s, id, list === "features" ? (value as "diameter" | "radius") : undefined);
+  }
+
+  private removeNominal(s: Stored, id: string, value: string): void {
+    const { item } = this.nominalItem(s, id);
+    const rest = (item.nominals ?? []).filter((n) => n.value !== value);
+    if (rest.length === (item.nominals ?? []).length) throw new HttpError(404, `No approved ${value.replace("_", " ")} for “${item.name}”`, "Read the list again.");
+    if (rest.length) item.nominals = rest;
+    else delete item.nominals;
   }
 
   /** A kept relation as the engine shows it: its two fits' relation and whether one was fitted on an earlier mesh. */
@@ -159,7 +250,8 @@ export class MockFeatures {
     }
     if (a === "frame" && b && is("GET", 2)) return this.frameMesh(s, b, engine);
     // the kept fits for CAD (cad.ts: the summary as the engine's, the files small fixed texts)
-    if (a === "cad" && is("GET", 1)) return json(200, mockCadSummary(s, cadBoundary(body.boundary), engine.version(), engine.names?.().scan ?? "scan"));
+    if (a === "cad" && is("GET", 1))
+      return json(200, mockCadSummary(s, cadBoundary(body.boundary), engine.version(), engine.names?.().scan ?? "scan", cadMeasuredOnly(body.measured_only)));
     if (a === "cad" && b && is("GET", 2)) return mockCadFile(s, b, cadBoundary(body.boundary), engine.version(), engine.names?.().scan ?? "scan");
     if (a && is("PATCH", 1)) {
       const name = cleanName(body.name);
@@ -178,6 +270,17 @@ export class MockFeatures {
         s.faces.delete(a);
         s.outlines.delete(a);
       }
+      return json(204, null);
+    }
+    // nominal values (nominal.ts)
+    if (a && b === "nominal" && is("GET", 2)) {
+      const size = body.value === undefined || body.value === null ? undefined : body.value;
+      if (size !== undefined && size !== "diameter" && size !== "radius") bad(`a fit's nominal value is its diameter or its radius, not ${String(size)}`);
+      return json(200, this.nominalAnswer(s, a, size as "diameter" | "radius" | undefined));
+    }
+    if (a && b === "nominal" && is("POST", 2)) return json(200, this.approveNominal(s, a, body));
+    if (a && b === "nominal" && rest[2] && is("DELETE", 3)) {
+      this.removeNominal(s, a, rest[2]);
       return json(204, null);
     }
     if (a && b === "faces" && is("GET", 2)) {

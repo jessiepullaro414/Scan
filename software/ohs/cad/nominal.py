@@ -54,6 +54,12 @@ nothing is offered (finer steps would be worse).
   normal; a fit stored without one);
 * ``"warning"``: the fit carries a warning that makes its size unreliable
   (:data:`UNRELIABLE_WARNINGS`, from what ``ohs.measure.region`` writes).
+
+**Is an approved value still allowed?** :func:`check_fit_nominal` and :func:`check_relation_nominal`
+put one given nominal value against a measurement by the same rule: inside ±2σ, inside the window
+a known bias widens, or what the value already reads as. The app keeps an approved value with the
+scan; when the fit is measured again it asks this, and marks the approval "check again" when the
+new measurement no longer allows it. Nothing is changed here either.
 """
 from __future__ import annotations
 
@@ -65,7 +71,8 @@ from dataclasses import dataclass, field
 import numpy as np
 
 __all__ = ["AT_STEP", "MAX_CANDIDATES", "LENGTH_STEPS", "ANGLE_STEPS", "UNRELIABLE_WARNINGS", "Source", "Bias",
-           "BIASES", "Suggestion", "Offer", "suggest_fit", "suggest_relation", "apply_nominal"]
+           "BIASES", "Suggestion", "Offer", "suggest_fit", "suggest_relation", "apply_nominal", "NominalCheck",
+           "check_fit_nominal", "check_relation_nominal"]
 
 AT_STEP = 0.005  # mm or degrees: a value this close to a step is shown as it (the app shows two decimals)
 MAX_CANDIDATES = 2  # more round values than this fitting at one step: the ± cannot tell them apart
@@ -406,19 +413,24 @@ def _candidates(case: _Case, step: float, values: tuple[float, ...] | None, coar
     return out
 
 
+def _offered(case: _Case, nominal: float, word: str | None) -> str:
+    """A round value as an offer names it: "Ø 14 mm", "parallel (0°)", "10 mm"."""
+    unit = "°" if case.unit == "deg" else " mm"
+    if word and case.value == "angle":
+        return f"{word} ({_fmt(nominal)}°)"
+    if word:
+        return f"{word} ({_fmt(nominal)} mm)"
+    if case.value == "diameter":
+        return f"Ø {_fmt(nominal)} mm"
+    if case.value == "radius":
+        return f"R {_fmt(nominal)} mm"
+    return f"{_fmt(nominal)}{unit}"
+
+
 def _sentence(case: _Case, nominal: float, how: str, row: Bias | None, note: str, word: str | None) -> str:
     shown = _shown(case.value, case.label, case.measured, case.sigma, case.unit)
     unit = "°" if case.unit == "deg" else " mm"
-    if word and case.value == "angle":
-        offered = f"{word} ({_fmt(nominal)}°)"
-    elif word:
-        offered = f"{word} ({_fmt(nominal)} mm)"
-    elif case.value == "diameter":
-        offered = f"Ø {_fmt(nominal)} mm"
-    elif case.value == "radius":
-        offered = f"R {_fmt(nominal)} mm"
-    else:
-        offered = f"{_fmt(nominal)}{unit}"
+    offered = _offered(case, nominal, word)
     gap = abs(nominal - case.measured)
     two = 2.0 * case.sigma
     if how == "2 sigma":
@@ -511,13 +523,23 @@ def suggest_fit(feature, *, form: str | None = None, poses: str = "tracked", val
     "true" (a simulated scan fused at its true poses), which picks the table's rows. ``value``:
     "diameter" (the default) or "radius".
     """
+    c = _fit_case(feature, form=form, poses=poses, value=value)
+    if c is None:
+        return []
+    return [c if isinstance(c, Offer) else _offer(c)]
+
+
+def _fit_case(feature, *, form: str | None, poses: str, value: str | None) -> _Case | Offer | None:
+    """The measured value of a fit as the search sees it (:func:`suggest_fit`): a :class:`_Case`, a
+    refusal (an :class:`Offer` with its reason) when nothing can be offered for it, or None for a
+    plane. Raises ValueError as :func:`suggest_fit` does."""
     _check_poses(poses)
     kind, shape, warnings = _unwrap(feature)
     shape_kind = _shape_kind(shape)
     if shape_kind not in ("plane", "cylinder", "circle"):
         raise ValueError(f"not a fitted shape (a plane, a cylinder or a hole): {shape_kind!r}")
     if shape_kind == "plane":
-        return []
+        return None
     value = value or "diameter"
     if value not in ("diameter", "radius"):
         raise ValueError(f"value must be 'diameter' or 'radius', got {value!r}")
@@ -530,13 +552,13 @@ def suggest_fit(feature, *, form: str | None = None, poses: str = "tracked", val
     sigma = None if rs is None else 2.0 * float(rs) * scale
     label = "Diameter" if value == "diameter" else "Radius"
     if sigma is None or not math.isfinite(sigma) or sigma < 0:
-        return [_refused(value, label, "mm", measured, None, "no_sigma",
-                         f"This fit has no ± for its {value}, so no size is suggested: a round value is only offered "
-                         "where the spread of the measurement is known.")]
+        return _refused(value, label, "mm", measured, None, "no_sigma",
+                        f"This fit has no ± for its {value}, so no size is suggested: a round value is only offered "
+                        "where the spread of the measurement is known.")
     bad = _unreliable(warnings)
     if bad:
-        return [_refused(value, label, "mm", measured, sigma, "warning",
-                         f"Not suggested: the fit warns {bad}. Its size is not reliable enough to name a nominal one.")]
+        return _refused(value, label, "mm", measured, sigma, "warning",
+                        f"Not suggested: the fit warns {bad}. Its size is not reliable enough to name a nominal one.")
     case = _Case(value, label, "mm", measured, sigma, scale=scale, poses=poses, lowest=1e-6)
     if shape_kind == "cylinder" or kind == "cylinder":
         if form is None:
@@ -557,7 +579,7 @@ def suggest_fit(feature, *, form: str | None = None, poses: str = "tracked", val
             case.feature = "hole_edge"
         else:
             case.feature, case.level = "hole_wall", level
-    return [_offer(case)]
+    return case
 
 
 # --------------------------------------------------------------------------- relations
@@ -573,6 +595,13 @@ def suggest_relation(relation, *, form: str | None = None, poses: str = "tracked
     along the plane, or square to it); a distance of 0 between two parallel planes is "in one
     plane", between two parallel axes "coaxial", when the angle allows parallel as well.
     """
+    return [c if isinstance(c, Offer) else _offer(c) for c in _relation_cases(relation, form=form, poses=poses,
+                                                                              warnings=warnings)]
+
+
+def _relation_cases(relation, *, form: str | None, poses: str, warnings) -> list[_Case | Offer]:
+    """Each value of a relation as the search sees it (:func:`suggest_relation`): a :class:`_Case`,
+    or a refusal (an :class:`Offer` with its reason). Raises ValueError as :func:`suggest_relation`."""
     _check_poses(poses)
     rel = relation.to_dict() if hasattr(relation, "to_dict") else relation
     kinds = tuple(rel.get("kinds") or ())
@@ -583,7 +612,7 @@ def suggest_relation(relation, *, form: str | None = None, poses: str = "tracked
         raise ValueError("form 'wall' is for the distance between two planes")
     bad = _unreliable(warnings)
     values = list(rel.get("values") or [])
-    offers: list[Offer] = []
+    offers: list[_Case | Offer] = []
     angle_parallel = False
     for q in values:
         if q.get("name") == "angle" and q.get("sigma") is not None:
@@ -623,8 +652,105 @@ def suggest_relation(relation, *, form: str | None = None, poses: str = "tracked
                 case.why_no_feature = ("VALIDATION.md has no bias for this distance"
                                        if planes != 2 or name != "distance" else
                                        "VALIDATION.md has a bias for a thin wall's thickness only (form 'wall')")
-        offers.append(_offer(case))
+        offers.append(case)
     return offers
+
+
+# --------------------------------------------------------------------------- is an approved value still allowed?
+@dataclass
+class NominalCheck:
+    """Whether a nominal value (one the engineer approved, or is about to) is allowed for a
+    measurement by the rule the offers follow (module docstring, "When a round value is offered")."""
+
+    value: str  # "diameter", "radius", "angle", "distance", "centre_distance"
+    unit: str  # "mm" or "deg"
+    nominal: float
+    measured: float | None  # None: the measurement has no such value (a relation's distance gone)
+    sigma: float | None
+    allowed: bool
+    allowed_by: str | None  # "at step" (the value reads as it), "2 sigma", "bias"; None when not allowed
+    word: str | None  # "parallel", "perpendicular", "in one plane", "coaxial" for that value, else None
+    reason: str  # the same in words
+
+    def to_dict(self) -> dict:
+        return {"value": self.value, "unit": self.unit, "nominal": float(self.nominal),
+                "measured": None if self.measured is None else float(self.measured),
+                "sigma": None if self.sigma is None else float(self.sigma), "allowed": bool(self.allowed),
+                "allowed_by": self.allowed_by, "word": self.word, "reason": self.reason}
+
+
+def _word_of(case: _Case, nominal: float) -> str | None:
+    return next((w for x, (w, _) in case.words.items() if abs(x - nominal) <= EPS), None)
+
+
+def _check(c: _Case | Offer, nominal: float) -> NominalCheck:
+    """``nominal`` against one measured value (a case of the search, or a refusal)."""
+    nominal = float(nominal)
+    if isinstance(c, Offer):  # nothing could be offered for this value: nothing is allowed for it either
+        offered = _offered(_Case(c.value, c.label, c.unit, c.measured, 0.0), nominal, None)
+        return NominalCheck(c.value, c.unit, nominal, c.measured, c.sigma, False, None, None,
+                            f"{offered} cannot be checked against the measurement: {c.reason}")
+    word = _word_of(case=c, nominal=nominal)
+    shown = _shown(c.value, c.label, c.measured, c.sigma, c.unit)
+    offered = _offered(c, nominal, word)
+    unit = "°" if c.unit == "deg" else " mm"
+    out = NominalCheck(c.value, c.unit, nominal, c.measured, c.sigma, False, None, word, "")
+    if not (math.isfinite(nominal) and c.lowest - EPS <= nominal <= c.highest + EPS):
+        out.reason = f"{offered} is not a value {c.label.lower()} can have."
+        return out
+    gap = abs(nominal - c.measured)
+    two = 2.0 * c.sigma
+    if gap < AT_STEP:
+        out.allowed, out.allowed_by = True, "at step"
+        out.reason = f"{shown} reads {offered} as shown."
+        return out
+    rows = _rows(c.feature, c.poses, c.level)
+    how = _allowed(c, nominal, rows)
+    if how is None:
+        size = nominal / c.scale
+        near = [b for b in rows if b.size_mm[0] - EPS <= size <= b.size_mm[1] + EPS]
+        beyond = f", and beyond the known bias ({'; '.join(b.stated for b in near)})" if near else ""
+        out.reason = (f"{offered} is {gap:.2f}{unit} from {shown}: more than twice the ± ({two:.2f}{unit}){beyond}. "
+                      "The measurement does not support it.")
+        return out
+    out.allowed, out.allowed_by = True, how[0]
+    if how[0] == "2 sigma":
+        out.reason = f"{offered} is {gap:.2f}{unit} from {shown}, within twice the ± ({two:.2f}{unit})."
+    else:
+        row = how[1]
+        out.reason = (f"{offered} is {gap:.2f}{unit} from {shown}, more than twice the ± ({two:.2f}{unit}), and is "
+                      f"allowed only by a known bias: {row.stated} on simulated scans (VALIDATION.md, "
+                      f"“{row.sources[0].section}”).")
+    return out
+
+
+def check_fit_nominal(feature, nominal: float, *, value: str | None = None, form: str | None = None,
+                      poses: str = "tracked") -> NominalCheck:
+    """Whether ``nominal`` (mm) is allowed for a fit's diameter (or radius, ``value="radius"``) by
+    the rule :func:`suggest_fit` offers by: inside twice the ±, inside the window a known bias
+    widens, or what the value already reads as (within :data:`AT_STEP`). It is how the app tells
+    that an approved value no longer fits a fit measured again. A value nothing could be offered
+    for (no ±, a warning that counts) is not allowed, with that reason. Arguments as for
+    :func:`suggest_fit`; a plane has no size (ValueError)."""
+    c = _fit_case(feature, form=form, poses=poses, value=value)
+    if c is None:
+        raise ValueError("a plane alone has no size to check")
+    return _check(c, nominal)
+
+
+def check_relation_nominal(relation, value: str, nominal: float, *, form: str | None = None, poses: str = "tracked",
+                           warnings=()) -> NominalCheck:
+    """Whether ``nominal`` (mm or degrees) is allowed for the relation's ``value`` ("angle",
+    "distance", "centre_distance") by the rule :func:`suggest_relation` offers by, as
+    :func:`check_fit_nominal`; ``word`` is what the nominal means there ("parallel" for an angle of
+    0, ...). A value the relation does not have (any more) is not allowed: ``measured`` is None and
+    the reason says so. Arguments as for :func:`suggest_relation`."""
+    for c in _relation_cases(relation, form=form, poses=poses, warnings=warnings):
+        if c.value == value:
+            return _check(c, nominal)
+    unit = "deg" if value == "angle" else "mm"
+    return NominalCheck(value, unit, float(nominal), None, None, False, None, None,
+                        f"the relation has no {value.replace('_', ' ')} now (the two fits are related differently).")
 
 
 # --------------------------------------------------------------------------- applying accepted values

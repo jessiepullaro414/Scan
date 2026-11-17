@@ -717,9 +717,68 @@ export type KeptFeature = {
   // a cylinder: a boss (faces away from its axis) or a bore (a hole's wall); null for a plane or a hole, or when the
   // engine could not tell; left out for a fit kept before forms existed
   form?: CylinderForm | null;
+  // approved nominal values (FEATURE_PLAN C3), as `GET .../features` shows them; left out by older servers
+  nominals?: ApprovedNominal[];
   created: string;
   stale: boolean; // fitted on an earlier mesh than the current one
 };
+
+// ------------------------------------------------------------------ nominal values (FEATURE_PLAN.md C3)
+// APP_API.md "Kept features", "Nominal values": round values offered beside measured ones (ohs/cad/nominal.py), and
+// the ones an engineer approved, kept with the scan. The measured values never change.
+
+/** Which value a nominal is for: a fit's size, or one of a relation's values. */
+export type NominalValueName = "diameter" | "radius" | "angle" | "distance" | "centre_distance";
+export type NominalSource = "suggested" | "entered";
+/** One round value offered (ohs.cad.nominal `Suggestion.to_dict()`). */
+export type NominalSuggestion = {
+  nominal: number; // mm, or degrees
+  difference: number; // nominal − measured
+  step: number;
+  allowed_by: "2 sigma" | "bias"; // "bias": offered only because of a known bias (simulator numbers)
+  bias: Record<string, unknown> | null;
+  word: string | null; // "parallel", "perpendicular", "in one plane", "coaxial"
+  directions: string | null;
+  sentence: string; // why it is offered, in the engine's words
+};
+/** What is offered for one measured value, or nothing and why (ohs.cad.nominal `Offer.to_dict()`). */
+export type NominalOffer = {
+  value: NominalValueName;
+  label: string;
+  unit: "mm" | "deg";
+  measured: number;
+  sigma: number | null;
+  suggestions: NominalSuggestion[];
+  reason_code: string | null; // when there are none: "already_round", "no_candidate", "too_many", "no_sigma", "warning"
+  reason: string | null;
+};
+/** An approved nominal value as kept, with the measurement now and whether to check it again. */
+export type ApprovedNominal = {
+  value: NominalValueName;
+  nominal: number;
+  unit: "mm" | "deg";
+  word: string | null;
+  source: NominalSource;
+  measured: number; // what it was approved against
+  sigma: number | null;
+  approved: string;
+  measured_now: number | null; // the value measured now (null: the relation has no such value any more)
+  sigma_now: number | null;
+  check_again: boolean; // measured again, and the new measurement no longer allows it
+  check_reason: string | null;
+};
+/** `GET .../features/{id}/nominal` (and the answer of POST): the offers and the approvals of a kept fit or relation. */
+export type NominalAnswer = {
+  id: string;
+  name: string;
+  kind: "fit" | "relation";
+  form: CylinderForm | null;
+  poses: "tracked" | "true"; // which biases apply, from the scan's processing report
+  poses_reason: string;
+  offers: NominalOffer[];
+  nominals: ApprovedNominal[];
+};
+export type NewNominal = { value: NominalValueName; nominal: number; source: NominalSource };
 /** What a kept cylinder is (ohs.measure.region `cylinder_form`). */
 export type CylinderForm = "boss" | "bore";
 // Where a kept fit's region lies on its shape (ohs.measure.region_extent; the small part features.json keeps,
@@ -785,6 +844,7 @@ export type KeptRelation = {
   stale?: boolean; // one of the two fits was fitted on an earlier mesh
   relation?: RelationRecord | null; // the engine's values for the two kept shapes (null: it could not relate them, see error)
   error?: string;
+  nominals?: ApprovedNominal[]; // approved nominal values, as for a fit
 };
 export type FeatureSet = {
   format_version: number;
@@ -885,6 +945,16 @@ export type CadSummary = {
   filenames: { step: string; macro: string }; // the download names, from the scan's name
   mesh_version: number | null;
   reason: string | null; // why nothing can be exported (no kept fits), else null
+  nominal?: CadNominal; // the approved values used (FEATURE_PLAN C3); left out by older servers
+};
+/** What the CAD files do with the approved nominal values. */
+export type CadNominal = {
+  measured_only: boolean; // asked for the measured values only: no approval is used
+  sizes_used: number; // approved sizes put into the shapes
+  sizes: { id: string; name: string; value: "diameter" | "radius"; nominal: number; measured: number | null; sigma: number | null; check_again: boolean }[];
+  relations_listed: number; // approved relations, listed in the notes, not applied to the geometry
+  relations: { id: string; name: string; value: NominalValueName; nominal: number; word: string | null; check_again: boolean }[];
+  relations_note: string | null;
 };
 
 // ------------------------------------------------------------------ M5 second slice: the deviation map

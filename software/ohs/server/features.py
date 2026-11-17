@@ -35,7 +35,16 @@ the numbers a click in the viewer gives. This module adds:
   nothing is rebuilt on its own. ``GET .../features/frame/mesh.ply`` (or ``.stl``) is the scan's
   current result mesh turned into the frame, made on request: the scan's own files stay as they are;
 * **for CAD** (FEATURE_PLAN C2): :meth:`FeatureManager.snapshot` reads the kept set and the planes'
-  outlines for :mod:`ohs.server.cad`, which serves them as a STEP file and a FreeCAD macro.
+  outlines for :mod:`ohs.server.cad`, which serves them as a STEP file and a FreeCAD macro;
+* **nominal values** (FEATURE_PLAN C3): ``GET .../features/{id}/nominal`` gives what
+  :mod:`ohs.cad.nominal` offers for a kept fit or relation (a fit's ``form`` from its record; the
+  poses, tracked or true, from the scan's processing report: :meth:`FeatureManager.poses`);
+  ``POST`` keeps an approved value (the one offered, or one entered) beside the measured ones and
+  ``DELETE .../nominal/{value}`` forgets it (``ohs.measure.features``, "Approved nominal values").
+  Fitting again keeps the approvals; reading marks one **check again** when the measurement has
+  changed since and no longer allows it by the engine's rule
+  (:func:`ohs.cad.nominal.check_fit_nominal`), with the old and the new measured value. Nothing is
+  re-approved or dropped on its own.
 
 **Locking.** One lock per scan around reading, changing and writing ``features.json``. Fits run
 outside it (they can take a second); a refit is only kept when its feature has not been changed
@@ -44,6 +53,8 @@ or deleted meanwhile.
 from __future__ import annotations
 
 import base64
+import json
+import math
 import tempfile
 import threading
 from pathlib import Path
@@ -58,6 +69,8 @@ __all__ = ["FeatureManager"]
 
 GONE_MIN_MM = 2.0  # fit again: the surface under a saved click is gone when the nearest face is farther than this
 GONE_EDGES = 1.5  # ... and than this many of that face's longest edge
+TRUE_POSES_MM = 0.001  # given poses this close to the ground truth (every frame) are the true poses ...
+TRUE_POSES_DEG = 0.001  # ... and this close in rotation
 _HINT_FILE ="check or restore the file (the scan's mesh and recording are untouched), or delete it to start again"
 
 
@@ -123,12 +136,233 @@ class FeatureManager:
             out["relation"], out["error"] = None, f"these two fits cannot be related: {e}"
         return out
 
-    def _set_view(self, doc: dict, version: int | None) -> dict:
+    def _set_view(self, doc: dict, version: int | None, poses: str = "tracked") -> dict:
+        """The kept set as ``GET .../features`` shows it: each feature and relation with its approved
+        nominal values and their "check again" marks (:meth:`nominal_views`)."""
+        views = self.nominal_views(doc, poses)
         return {"format_version": doc["format_version"], "frame": self._frame_view(doc["frame"], doc["features"]),
                 "mesh_version": version,
-                "features": [self._view(f, version) for f in doc["features"]],
+                "features": [{**self._view(f, version), "nominals": views.get(f["id"], [])} for f in doc["features"]],
                 "measurements": [self._view(m, version) for m in doc["measurements"]],
-                "relations": [self._relation_view(r, doc["features"], version) for r in doc["relations"]]}
+                "relations": [{**self._relation_view(r, doc["features"], version), "nominals": views.get(r["id"], [])}
+                              for r in doc["relations"]]}
+
+    # ------------------------------------------------------------------ nominal values (C3)
+    def poses(self, pid: str, sid: str) -> tuple[str, str]:
+        """Which rows of the bias table apply to this scan (``ohs.cad.nominal``, ``poses``), and why,
+        from the scan's processing report (``result/report.json``, copied from the stage the current
+        mesh was made by):
+
+        * no report, or one that cannot be read: "tracked" (a scan as a user makes it);
+        * the report does not say ``"poses": "given"``: "tracked", the poses were tracked;
+        * ``"poses": "given"`` and the report's ground truth (a simulated recording) shows the given
+          poses equal the true ones (every frame within :data:`TRUE_POSES_MM` and
+          :data:`TRUE_POSES_DEG`): "true", the scan was fused at its true poses;
+        * ``"poses": "given"`` otherwise: "tracked". The app gives poses only from its own straighten
+          and fuse stages, which start from the tracked poses, so the tracked biases apply."""
+        path = Path(self.st.projects.scan_dir(pid, sid)) / "result" / "report.json"
+        try:
+            report = json.loads(path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return "tracked", "no processing report: the poses are taken as tracked"
+        except (OSError, ValueError):
+            return "tracked", "the processing report cannot be read: the poses are taken as tracked"
+        if not isinstance(report, dict) or report.get("poses") != "given":
+            return "tracked", "the processing report says the poses were tracked"
+        gt = report.get("ground_truth") if isinstance(report.get("ground_truth"), dict) else {}
+
+        def worst(key: str) -> float | None:
+            stats = gt.get(key)
+            x = stats.get("max") if isinstance(stats, dict) else None
+            return float(x) if isinstance(x, (int, float)) and not isinstance(x, bool) and math.isfinite(x) else None
+
+        rot, trans = worst("rot_deg"), worst("trans_mm")
+        if gt.get("n") and rot is not None and trans is not None and rot <= TRUE_POSES_DEG and trans <= TRUE_POSES_MM:
+            return "true", ("the processing report says the poses were given and equal the simulator's true poses "
+                            f"(within {TRUE_POSES_MM:g} mm and {TRUE_POSES_DEG:g}°): the biases at true poses apply")
+        return "tracked", ("the processing report says the poses were given (straightened or fused again from the "
+                           "tracked poses): the biases with tracking apply")
+
+    @staticmethod
+    def _related(doc: dict, rel: dict) -> tuple[dict | None, list[str]]:
+        """A kept relation's engine record (``Relation.to_dict()``, None when the two fits cannot be
+        related) and its two fits' warnings."""
+        from ohs.measure.relate import relate
+
+        by_id = {f["id"]: f for f in doc["features"]}
+        a, b = by_id.get(rel["a"]), by_id.get(rel["b"])
+        if a is None or b is None:
+            return None, []
+        warnings = list(a.get("warnings") or []) + list(b.get("warnings") or [])
+        try:
+            return relate({"kind": a["kind"], "shape": a["shape"]}, {"kind": b["kind"], "shape": b["shape"]}).to_dict(), warnings
+        except (ValueError, TypeError, KeyError):
+            return None, warnings
+
+    def _check(self, doc: dict, key: str, item: dict, value: str, nominal: float, poses: str):
+        """:func:`ohs.cad.nominal.check_fit_nominal` (or ``check_relation_nominal``) for one value of a
+        kept fit or relation as it is measured now."""
+        from ohs.cad.nominal import NominalCheck, check_fit_nominal, check_relation_nominal
+
+        if key == "features":
+            return check_fit_nominal(item, nominal, value=value, poses=poses)
+        rel, warnings = self._related(doc, item)
+        if rel is None:
+            unit = kf.NOMINAL_UNITS.get(value, "mm")
+            return NominalCheck(value, unit, float(nominal), None, None, False, None, None,
+                                "the two fits cannot be related now")
+        return check_relation_nominal(rel, value, nominal, poses=poses, warnings=warnings)
+
+    @staticmethod
+    def _differs(a: float | None, b: float | None) -> bool:
+        if a is None or b is None:
+            return (a is None) != (b is None)
+        return abs(float(a) - float(b)) > 1e-9 * max(1.0, abs(float(a)))
+
+    def _nominal_view(self, doc: dict, key: str, item: dict, n: dict, poses: str) -> dict:
+        """An approval as the API shows it: as kept, with the value measured now (``measured_now``,
+        ``sigma_now``) and ``check_again``: true when the measurement has changed since the approval
+        and the new one no longer allows the nominal (:meth:`_check`), with ``check_reason`` saying
+        the old and the new measured value and why. Nothing is changed."""
+        chk = self._check(doc, key, item, n["value"], n["nominal"], poses)
+        changed = (chk.measured is None or self._differs(n.get("measured"), chk.measured)
+                   or self._differs(n.get("sigma"), chk.sigma))
+        again = bool(changed and not chk.allowed)
+        reason = None
+        if again:
+            unit = "°" if n["unit"] == "deg" else " mm"
+
+            def shown(x, s):
+                return "nothing" if x is None else f"{x:.2f}" + ("" if s is None else f" ± {s:.2f}") + unit
+
+            reason = (f"check again: it was approved against {shown(n.get('measured'), n.get('sigma'))}, and it now "
+                      f"measures {shown(chk.measured, chk.sigma)}. {chk.reason[:1].upper()}{chk.reason[1:]}")
+        return {**n, "measured_now": chk.measured, "sigma_now": chk.sigma, "check_again": again, "check_reason": reason}
+
+    def nominal_views(self, doc: dict, poses: str) -> dict[str, list[dict]]:
+        """Every kept fit's and relation's approvals as the API shows them (:meth:`_nominal_view`), by
+        their id; items without approvals are left out. For :mod:`ohs.server.cad` too."""
+        out: dict[str, list[dict]] = {}
+        for key in ("features", "relations"):
+            for item in doc[key]:
+                if item.get("nominals"):
+                    out[item["id"]] = [self._nominal_view(doc, key, item, n, poses) for n in item["nominals"]]
+        return out
+
+    def _nominal_item(self, doc: dict, item_id: str) -> tuple[str, dict]:
+        """A kept fit or relation by its id: ``("features" | "relations", the record)``; 404 otherwise."""
+        for key in ("features", "relations"):
+            for it in doc[key]:
+                if it["id"] == item_id:
+                    return key, it
+        if any(m["id"] == item_id for m in doc["measurements"]):
+            raise ApiError(404, f"{item_id!r} is a two-point measurement: nominal values are for fits and relations",
+                           "pick a kept fit or a kept relation")
+        raise ApiError(404, f"no kept fit or relation {item_id!r}", "read the list again (GET .../features)")
+
+    def _offers(self, doc: dict, key: str, item: dict, poses: str, value: str | None) -> list:
+        """The engine's offers for a kept fit (``suggest_fit``, its own ``form``) or relation
+        (``suggest_relation`` on the engine's record, with both fits' warnings): a list of ``Offer``."""
+        from ohs.cad.nominal import suggest_fit, suggest_relation
+
+        if key == "features":
+            if value not in (None, *kf.FIT_NOMINAL_VALUES):
+                raise ApiError(422, f"a fit's nominal value is its diameter or its radius, not {value!r}",
+                               "leave value out for the diameter, or give 'radius'")
+            return suggest_fit(item, poses=poses, value=value)
+        if value is not None:
+            raise ApiError(422, "a relation's offers are for all its values: give no value",
+                           "leave value out")
+        rel, warnings = self._related(doc, item)
+        if rel is None:
+            raise ApiError(409, f"the two fits of {item['name']!r} cannot be related", "fit them again, or delete the relation")
+        return suggest_relation(rel, poses=poses, warnings=warnings)
+
+    def _nominal_answer(self, doc: dict, key: str, item: dict, poses: tuple[str, str], value: str | None) -> dict:
+        p, why = poses
+        return {"id": item["id"], "name": item["name"], "kind": "fit" if key == "features" else "relation",
+                "form": item.get("form") if key == "features" else None, "poses": p, "poses_reason": why,
+                "offers": [o.to_dict() for o in self._offers(doc, key, item, p, value)],
+                "nominals": [self._nominal_view(doc, key, item, n, p) for n in item.get("nominals") or []]}
+
+    def nominal(self, pid: str, sid: str, item_id: str, value: str | None = None) -> dict:
+        """``GET .../features/{id}/nominal``: what is offered for a kept fit (its diameter, or its
+        radius with ``value="radius"``) or a kept relation (each of its values), as
+        :mod:`ohs.cad.nominal` offers it, with the poses used and why (:meth:`poses`), and its
+        approvals (with "check again"). A plane alone has no offers. 404 for an unknown id."""
+        self._dir(pid, sid)
+        poses = self.poses(pid, sid)
+        with self._lock(pid, sid):
+            doc = self._load(pid, sid)
+        key, item = self._nominal_item(doc, item_id)
+        return self._nominal_answer(doc, key, item, poses, value)
+
+    def approve(self, pid: str, sid: str, item_id: str, value: str, nominal: float, source: str) -> dict:
+        """``POST .../features/{id}/nominal``: keep an approved nominal value for a kept fit's size or
+        one of a kept relation's values, against the value measured now. ``source`` "suggested": the
+        value must be one offered now (422 otherwise); "entered": any number that makes sense for that
+        kind of value (:func:`ohs.measure.features.check_nominal_value`). It replaces an approval of
+        the same value (for a fit, of its size: a diameter and a radius are one size). The measured
+        values are not touched. Returns the answer of :meth:`nominal`."""
+        self._dir(pid, sid)
+        poses = self.poses(pid, sid)
+        if source not in kf.NOMINAL_SOURCES:
+            raise ApiError(422, f"source must be 'suggested' or 'entered', got {source!r}",
+                           "'suggested' for the value offered, 'entered' for one typed")
+        with self._lock(pid, sid):
+            doc = self._load(pid, sid)
+            key, item = self._nominal_item(doc, item_id)
+            if key == "features" and item["kind"] == "plane":
+                raise ApiError(422, "a plane alone has no size to approve", "approve a relation between two planes instead")
+            values = kf.FIT_NOMINAL_VALUES if key == "features" else kf.RELATION_NOMINAL_VALUES
+            if value not in values:
+                raise ApiError(422, f"a {'fit' if key == 'features' else 'relation'}'s nominal value is one of "
+                                    f"{', '.join(values)}, not {value!r}", "pick one of those")
+            try:
+                nominal = kf.check_nominal_value(value, nominal)
+            except ValueError as e:
+                raise ApiError(422, str(e), "enter a number that makes sense for this value") from None
+            offers = self._offers(doc, key, item, poses[0], value if key == "features" else None)
+            offer = next((o for o in offers if o.value == value), None)
+            if offer is None:
+                raise ApiError(422, f"the relation {item['name']!r} has no {value.replace('_', ' ')} to approve",
+                               "pick one of the values it shows")
+            chk = self._check(doc, key, item, value, nominal, poses[0])
+            word = chk.word
+            if source == "suggested":
+                hit = next((s for s in offer.suggestions if abs(s.nominal - nominal) <= 1e-9), None)
+                if hit is None:
+                    offered = ", ".join(f"{s.nominal:g}" for s in offer.suggestions) or "nothing"
+                    raise ApiError(422, f"{nominal:g} is not offered now for this {value.replace('_', ' ')} "
+                                        f"(offered: {offered})",
+                                   "approve one of the values offered, or send it as 'entered'")
+                word = hit.word
+            entry = {"value": value, "nominal": nominal, "unit": offer.unit, "word": word, "source": source,
+                     "measured": float(offer.measured), "sigma": None if offer.sigma is None else float(offer.sigma),
+                     "approved": kf.now()}
+            same = kf.FIT_NOMINAL_VALUES if key == "features" else (value,)
+            item["nominals"] = [n for n in item.get("nominals") or [] if n["value"] not in same] + [entry]
+            saved = self._save(pid, sid, doc)
+            key, item = self._nominal_item(saved, item_id)
+        return self._nominal_answer(saved, key, item, poses, value if key == "features" else None)
+
+    def unapprove(self, pid: str, sid: str, item_id: str, value: str) -> None:
+        """``DELETE .../features/{id}/nominal/{value}``: forget an approval (404 when there is none).
+        A record left with none loses its ``nominals`` key, as it was before."""
+        self._dir(pid, sid)
+        with self._lock(pid, sid):
+            doc = self._load(pid, sid)
+            _, item = self._nominal_item(doc, item_id)
+            kept = item.get("nominals") or []
+            rest = [n for n in kept if n["value"] != value]
+            if len(rest) == len(kept):
+                raise ApiError(404, f"no approved {value.replace('_', ' ')} for {item['name']!r}",
+                               "read the list again (GET .../features)")
+            if rest:
+                item["nominals"] = rest
+            else:
+                item.pop("nominals", None)
+            self._save(pid, sid, doc)
 
     @staticmethod
     def _name(name: str | None, default: str) -> str:
@@ -176,7 +410,7 @@ class FeatureManager:
         when it was made on another mesh version than the current one."""
         with self._lock(pid, sid):
             doc = self._load(pid, sid)
-        return self._set_view(doc, self._version(pid, sid))
+        return self._set_view(doc, self._version(pid, sid), self.poses(pid, sid)[0])
 
     def snapshot(self, pid: str, sid: str, plane_outlines: bool = False) -> tuple[dict, dict, int | None]:
         """The scan's kept set as ``features.json`` holds it (no ``stale`` marks), read under the
@@ -396,7 +630,8 @@ class FeatureManager:
                 refitted.append(cur["id"])
             if refitted:
                 self._save(pid, sid, doc)
-        return {"features": self._set_view(doc, self._version(pid, sid)), "refitted": refitted, "failed": failed}
+        return {"features": self._set_view(doc, self._version(pid, sid), self.poses(pid, sid)[0]), "refitted": refitted,
+                "failed": failed}
 
     # ------------------------------------------------------------------ the part's frame (K3)
     def build_frame(self, pid: str, sid: str, primary: str, secondary: str, origin: Any, axes: str = "ZX",
