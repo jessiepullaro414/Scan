@@ -2438,6 +2438,50 @@ is worked out for the record and **not offered** (`GAP_OFFERED = False`, with th
 - Repeat it with `python tools/gapflush_study.py run <folder>` (about 5.5 minutes) and
   `summary <folder>`.
 
+## Removing the table from a single scan (2026-11-17)
+
+The edit "Remove the table" ([`docs/FEATURE_PLAN.md`](docs/FEATURE_PLAN.md), X1;
+`ohs/mesh/support.py`) finds the surface the part stands on and removes it. A face is table
+when it faces within 45° of the plane's normal, its centre is at most a margin above the plane,
+and it is joined through such faces to the plane's own region; everything behind the plane
+goes; the part's walls stay at any height. Measured on the three simulated scans of the
+bracket on its table (the front, the side and the back view; 715,226 triangles and about as
+many) with the bracket's true shape as the judge (`ohs.inspect.reference`), and on the ball on
+its table (804,372 triangles) judged by its sphere.
+
+Table left near the part / part lost, in mm²:
+
+| Margin | Front | Side | Back | Ball: table left |
+|---|---|---|---|---|
+| 0 mm | 962 / 5.3 | 1,870 / 3.1 | 1,025 / 1.0 | 2,793 |
+| 0.5 mm | 180 / 9.5 | 460 / 11.7 | 236 / 12.3 | 1,617 |
+| **1 mm (the default)** | **0.7 / 18.0** | **3.3 / 18.6** | **0.5 / 16.9** | **519** |
+| 1.5 mm | 0 / 18.8 | 3.3 / 18.6 | 0.5 / 17.7 | 194 |
+| 2 mm | 0 / 18.8 | 3.3 / 18.6 | 0.5 / 17.7 | 135 |
+| 3 mm | 0 / 23.9 | 3.3 / 18.6 | 0.5 / 17.7 | 91 |
+
+- **1 mm is the knee** on all three views: under 4 mm² of table is left near the part, and
+  more margin takes no more table there but costs more of any part that slopes into the table.
+- **What is lost of the part** at 1 mm is 17–19 mm², all of it within 1 mm of the table (the
+  lower half of the rounded foot where part and table blend). A plain 1 mm slab would lose
+  50–70 mm², and the 2 mm slab the merge of several scans uses, 118–171 mm².
+- **The ball** is a cap that starts 27 mm above the table in this scan, so nothing of it is
+  lost. The table left there is 64 loose pieces at the scan's border, 285–494 mm from the ball
+  and rising 1–5 mm with a sigma of about 1 mm; the Default recipe's Remove floaters takes
+  them. The edit says how many such pieces it left.
+- **What it costs by rule:** a surface that meets the table at less than 45° (a dome, a
+  chamfer) loses its bottom millimetre, and a part thinner than the margin lying flat goes
+  with the table.
+- **When it says no:** a flat surface is taken for a table only when something stands on it,
+  little lies behind it, and the part does not go on behind it beside what stands on it. A
+  box whose top is larger than the table seen around it keeps its top. A scan with no table
+  is refused in words and nothing is removed.
+- It takes 1.2–1.9 s on these meshes (Remove floaters 0.4 s, Fill holes 0.8 s, Smooth 2.4 s).
+- In the app on the front view: 699,380 faces (98 % of the mesh) found as the table, flat to
+  0.09 mm; after the edit the bracket alone is left (15,846 triangles); undo brings the table
+  back.
+- **Not tried:** real scans; a table that is not flat (a cloth, a turntable with a rim).
+
 ## What the metrics mean
 
 - **Stereo errors** compare the estimated raw intrinsics/extrinsics (`K1`, `K2`, `R`, `T`) with

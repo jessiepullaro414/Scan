@@ -19,6 +19,9 @@ operation returns a new ``(V, F)`` and leaves its inputs alone; the slow ones ta
 * :func:`surface_offset`, :func:`offset_stats` (:mod:`ohs.mesh.offset`): how far an edited mesh
   lies from the measured one, signed, per vertex (the deviation map).
 
+* :func:`find_support`, :func:`remove_support` (:mod:`ohs.mesh.support`): the surface the part
+  stands on (a table), found and removed ("Remove the table"), or refused in words.
+
 * :func:`weak_areas` (:mod:`ohs.mesh.check`): the areas whose confidence misses a tolerance, or
   that hole filling made up (the "Check" answer: what needs another pass).
 
@@ -35,8 +38,10 @@ from ohs.mesh.offset import offset_stats, surface_offset
 from ohs.mesh.simplify import decimate, deviation
 from ohs.mesh.smoothing import smooth
 from ohs.mesh.stats import mesh_stats
+from ohs.mesh.support import SupportFinding, SupportParams, SupportRefused, find_support, remove_support
 from ohs.mesh.topology import vertex_normals
 
 __all__ = ["remove_floaters", "fill_holes", "smooth", "decimate", "delete_faces", "keep_faces", "mesh_stats",
            "hole_outlines", "vertex_normals", "sigma_stats", "carry_sigma", "SIGMA_NONE_MM", "AnchorParams",
-           "anchor_to_points", "laser_agreement", "carry_filled", "filled_area", "deviation", "surface_offset", "offset_stats", "weak_areas"]
+           "anchor_to_points", "laser_agreement", "carry_filled", "filled_area", "deviation", "surface_offset", "offset_stats", "weak_areas",
+           "find_support", "remove_support", "SupportParams", "SupportFinding", "SupportRefused"]

@@ -3,7 +3,8 @@
  * the view; optionally the outer edge too, for a watertight mesh), smooth (by default no point
  * moves more than 2 sigma, when the mesh has its confidence) and simplify (by default to an
  * accuracy in mm), each with sensible defaults and a one-line explanation, then Apply. Deleting
- * or keeping a selection happens in the view.
+ * or keeping a selection happens in the view. The Floaters tab also has "Remove the table"
+ * (TableSection: its faces are shown first, then removed).
  */
 import { CircleHelp, Eraser, PaintBucket, Shrink, Sparkles, WandSparkles, WavesHorizontal, type LucideIcon } from "lucide-react";
 import { useEffect, useId, useMemo, useState } from "react";
@@ -15,6 +16,8 @@ import { fmtFixed, fmtInt } from "../../lib/format";
 import { cn } from "../../lib/util";
 import { processKey, useProcess } from "../../store/process";
 import { Help, NumberField, Panel } from "./bits";
+import type { LoadedMesh } from "./mesh";
+import { TableSection } from "./TableSection";
 
 export type EditTab = "floaters" | "holes" | "smooth" | "simplify";
 
@@ -84,6 +87,7 @@ export function EditsPanel({
   fillMm,
   setFillMm,
   holes,
+  table,
 }: {
   pid: string;
   sid: string;
@@ -96,6 +100,8 @@ export function EditsPanel({
   setFillMm: (v: number) => void;
   /** The current mesh's holes (for the fill preview), when loaded. */
   holes: HoleOutline[] | null;
+  /** "Remove the table" (Floaters tab): the mesh its faces are shown on, and the page's selection count. */
+  table?: { mesh: LoadedMesh | null; onSelection: (n: number) => void; onUseSelection: () => void };
 }) {
   const edit = useProcess((s) => s.edit);
   const action = useProcess((s) => s.entries[processKey(pid, sid)]?.action);
@@ -464,6 +470,9 @@ export function EditsPanel({
             Adds “{plan.label}” to the history. <span className="whitespace-nowrap">Ctrl+Z</span> undoes it.
           </Help>
         )}
+        {tab === "floaters" && table && hasMesh ? (
+          <TableSection pid={pid} sid={sid} busy={busy} mesh={table.mesh} onSelection={table.onSelection} onUseSelection={table.onUseSelection} />
+        ) : null}
       </div>
     </Panel>
   );

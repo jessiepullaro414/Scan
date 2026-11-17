@@ -40,6 +40,8 @@ export function opChip(o: RecipeOp): string {
       if (n(p.ratio) !== null) return `Simplify ${Math.round(n(p.ratio)! * 100)} %`;
       if (n(p.target_triangles) !== null) return `Simplify ${fmtInt(n(p.target_triangles))} tri`;
       return "Simplify";
+    case "remove_table":
+      return n(p.margin_mm) !== null ? `No table (${fmtFixed(n(p.margin_mm), n(p.margin_mm)! % 1 ? 1 : 0)} mm margin)` : "No table";
     default:
       return String(o.op);
   }

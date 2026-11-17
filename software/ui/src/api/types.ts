@@ -492,8 +492,8 @@ export type SaveReply = { session: CalibSession; setup: SetupState };
 export type StageId = "track" | "straighten" | "fuse" | "spacetime" | "refine";
 export type StageState = "none" | "running" | "done" | "failed" | "skipped";
 
-export type MeshOp = "remove_floaters" | "fill_holes" | "smooth" | "decimate" | "delete_faces" | "keep_faces";
-/** The edits a recipe can hold (a selection only fits the scan it was made on). */
+export type MeshOp = "remove_floaters" | "fill_holes" | "smooth" | "decimate" | "delete_faces" | "keep_faces" | "remove_table";
+/** The edits a recipe can hold (a selection only fits the scan it was made on). "Remove the table" is in no built-in recipe. */
 export type RecipeMeshOp = Exclude<MeshOp, "delete_faces" | "keep_faces">;
 
 export type RemoveFloatersParams = { min_triangles?: number; min_size_mm?: number; keep_largest_only?: boolean };
@@ -516,6 +516,43 @@ export type SmoothParams = {
 export type DecimateParams = { target_triangles?: number; ratio?: number; max_error_mm?: number };
 /** base64 of little-endian uint32 face indices of the CURRENT mesh. */
 export type FacesParams = { faces: string };
+/**
+ * "Remove the table" (FEATURE_PLAN X1): how far above the table's plane a face that faces the
+ * table's way still counts as the table, mm (0 to 20; the engine's default 1 mm).
+ */
+export type RemoveTableParams = { margin_mm?: number };
+
+/**
+ * `POST .../process/remove-table/preview`: the faces "Remove the table" would remove from the
+ * current mesh, and what the engine found; nothing changes. A 422 answers the engine's refusal
+ * in its own words (no table to stand behind).
+ */
+export type TablePreview = {
+  version: number; // the mesh version it was found on
+  triangles: number; // of the current mesh
+  faces: string; // base64 of little-endian uint32 face indices, ascending
+  n_faces: number;
+  area_mm2: number; // removed
+  area_left_mm2: number;
+  normal: [number, number, number]; // the table's plane n . x + d = 0, n towards the part (mm, world frame)
+  d: number;
+  share: number; // of the scan on the plane, 0..1
+  front_share: number; // in front of it (the part)
+  behind_share: number; // behind it
+  flatness_mm: number; // RMS of the table about its plane
+  band_mm: number; // the noise band: the faces of the plane itself
+  margin_mm: number;
+  facing_deg: number; // a face turned less than this from the plane's normal faces the table's way
+  lowest_mm: number | null; // the lowest corner of what is left, above the plane
+  loose_removed: number; // crumbs of table removed with it
+  loose_left: number; // loose pieces left besides the part (Remove floaters takes them)
+  loose_left_mm2: number;
+  skipped: string[]; // larger flat surfaces set aside first, and why
+  warnings: string[];
+  rule: string; // the rule, in words
+  summary: string; // "Found the table (95 % of the scan, …)"
+  ms: number;
+};
 
 export type MeshStats = {
   triangles: number;

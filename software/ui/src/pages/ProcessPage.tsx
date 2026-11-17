@@ -628,6 +628,13 @@ export default function ProcessPage({ pid, sid }: { pid: string; sid: string }) 
               fillMm={fillMm}
               setFillMm={setFillMm}
               holes={holes.data}
+              table={{
+                mesh: canSelect ? mesh : null,
+                onSelection: onCommit,
+                onUseSelection: () => {
+                  usedSelection.current = mesh?.version ?? null;
+                },
+              }}
             />
             <HistoryPanel pid={pid} sid={sid} state={state} busy={busy} />
             {!wide ? details : null}

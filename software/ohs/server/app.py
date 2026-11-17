@@ -156,9 +156,14 @@ class FuseBody(BaseModel):
 
 
 class EditBody(BaseModel):
-    op: Literal["remove_floaters", "fill_holes", "smooth", "decimate", "delete_faces", "keep_faces"]
+    op: Literal["remove_floaters", "fill_holes", "smooth", "decimate", "delete_faces", "keep_faces", "remove_table"]
     params: dict[str, Any] = Field(default_factory=dict)
     version: Optional[int] = None  # extra: the mesh version a selection was made on
+
+
+class TablePreviewBody(BaseModel):
+    margin_mm: Optional[float] = None  # checked with the edit's own rule (0 to 20 mm; default 1)
+    version: Optional[int] = None  # the mesh version the page shows
 
 
 class RecipeApplyBody(BaseModel):
@@ -364,7 +369,7 @@ class AlignAllBody(BaseModel):
 
 
 class RecipeOpBody(BaseModel):
-    op: Literal["remove_floaters", "fill_holes", "smooth", "decimate"]
+    op: Literal["remove_floaters", "fill_holes", "smooth", "decimate", "remove_table"]
     params: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -647,6 +652,11 @@ def create_app(config: Any = None, *, projects_dir: Any = None, static_dir: Any 
     @app.post("/api/projects/{pid}/scans/{sid}/process/edits")
     def process_edit(pid: str, sid: str, body: EditBody) -> JSONResponse:
         return _json(proc.submit_edit(pid, sid, body.op, body.params, body.version).to_dict())
+
+    @app.post("/api/projects/{pid}/scans/{sid}/process/remove-table/preview")
+    def process_table_preview(pid: str, sid: str, body: Optional[TablePreviewBody] = None) -> JSONResponse:
+        b = body if body is not None else TablePreviewBody()
+        return _json(proc.table_preview(pid, sid, b.margin_mm, b.version))
 
     @app.post("/api/projects/{pid}/scans/{sid}/process/undo")
     def process_undo(pid: str, sid: str) -> JSONResponse:

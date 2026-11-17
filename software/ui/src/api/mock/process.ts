@@ -5,7 +5,8 @@
  * as the scan's mesh.ply / .stl / .obj, its stats and hole outlines, and the camera trajectory
  * with its loops. Plus the recipes (built-ins and saved ones), and "Make mesh", which now runs
  * the Default recipe. And the M5 fitted shapes (fit.ts) and Check (check.ts) on the current mesh, its
- * deviation from the base mesh, and its comparison with the laser points (lasers.ts).
+ * deviation from the base mesh, and its comparison with the laser points (lasers.ts). "Remove the table"
+ * and its preview follow a simpler rule of the demo's own (table.ts: the demo knows where its table is).
  *
  * The demo engine measures nothing, so each mesh gets a made-up sigma per vertex (scanmesh.ts
  * `mockSigma`), written into mesh.ply as the engine does and used by Check. Meshes of preview quality
@@ -36,6 +37,7 @@ import type {
   Scan,
   StageId,
   StraightenStage,
+  TablePreview,
   TrackStage,
 } from "../types";
 import { encodeFaces } from "../../lib/fits";
@@ -63,6 +65,7 @@ import {
   type Work,
 } from "./meshops";
 import { mockSigma, mockTrajectory, scanMesh, T_WS } from "./scanmesh";
+import { MOCK_MARGIN_MM, mockTable, tablePlane } from "./table";
 
 type Stages = { track: TrackStage; straighten: StraightenStage; fuse: FuseStage; spacetime: SpacetimeStage; refine: RefineStage };
 
@@ -143,7 +146,7 @@ const BUILTINS: Recipe[] = [
   },
 ];
 
-const OPS: MeshOp[] = ["remove_floaters", "fill_holes", "smooth", "decimate", "delete_faces", "keep_faces"];
+const OPS: MeshOp[] = ["remove_floaters", "fill_holes", "smooth", "decimate", "delete_faces", "keep_faces", "remove_table"];
 const BUSY: Record<MeshOp, string> = {
   remove_floaters: "Removing floaters…",
   fill_holes: "Filling holes…",
@@ -151,7 +154,10 @@ const BUSY: Record<MeshOp, string> = {
   decimate: "Simplifying…",
   delete_faces: "Deleting the selection…",
   keep_faces: "Cropping to the selection…",
+  remove_table: "Removing the table…",
 };
+/** The demo's table in the scan's world (table.ts). */
+const TABLE_PLANE = tablePlane(T_WS);
 const doing = (op: MeshOp) => BUSY[op].replace("…", "");
 
 const int = (n: number) => Math.round(n).toLocaleString("en-US");
@@ -203,7 +209,16 @@ function label(op: MeshOp, p: Record<string, unknown>, faces?: number): string {
       return `Delete ${int(faces ?? 0)} faces`;
     case "keep_faces":
       return `Keep ${int(faces ?? 0)} faces`;
+    case "remove_table":
+      return faces === undefined ? "Remove the table" : `Remove the table (${int(faces)} faces)`;
   }
+}
+
+/** A "Remove the table" margin: the engine's default, or a number from 0 to 20 mm. */
+function tableMargin(p: Record<string, unknown>): number | null {
+  const v = p.margin_mm;
+  if (v === undefined || v === null) return MOCK_MARGIN_MM;
+  return typeof v === "number" && Number.isFinite(v) && v >= 0 && v <= 20 ? v : null;
 }
 
 /** Steps that only take time (paced by the job's clock). */
@@ -286,6 +301,7 @@ export class MockProcess {
     if (a === "undo" && is("POST", 1)) return json(200, this.step(p, s, -1));
     if (a === "redo" && is("POST", 1)) return json(200, this.step(p, s, 1));
     if (a === "recipe" && is("POST", 1)) return json(200, this.startRecipe(p, s, body));
+    if (a === "remove-table" && rest[1] === "preview" && is("POST", 2)) return json(200, this.tablePreview(p, s, body));
     if ((a === "deviation.json" || a === "deviation.bin") && is("GET", 1)) {
       const d = this.deviation(p, s);
       if (a === "deviation.json") return json(200, d.info);
@@ -700,6 +716,15 @@ export class MockProcess {
           return deleteFaces(m, list, keep);
         })();
       }
+      case "remove_table": {
+        // replayed from the faces it removed; else found now (a refusal leaves the mesh as it is)
+        const r = faces ? null : mockTable(m.positions, m.indices, TABLE_PLANE, tableMargin(p) ?? MOCK_MARGIN_MM);
+        const list = faces ?? (r && r.ok ? r.faces : new Uint32Array());
+        return (function* () {
+          yield 0.5;
+          return list.length ? deleteFaces(m, list, false) : m;
+        })();
+      }
     }
   }
 
@@ -745,7 +770,29 @@ export class MockProcess {
           if (faces[i] >= F) this.bad(`Face ${faces[i]} is out of range: the mesh has ${int(F)} triangles`, "The mesh changed since the selection was made: select again.");
         return faces;
       }
+      case "remove_table":
+        for (const k of Object.keys(p)) if (k !== "margin_mm") this.bad(`remove_table: unknown parameter '${k}'`, "remove_table takes margin_mm");
+        if (tableMargin(p) === null) this.bad("remove_table: margin_mm must be at least 0 and at most 20", "choose a margin_mm at least 0 and at most 20");
+        return undefined;
     }
+  }
+
+  /**
+   * `POST .../process/remove-table/preview`: the faces "Remove the table" would remove from the current
+   * mesh (table.ts, the demo's own rule), read-only; 409 when `version` is no longer current, 422 with the
+   * engine's words when there is no table.
+   */
+  tablePreview(p: Project, s: Scan, body: Record<string, unknown>): TablePreview {
+    const st = this.ensure(p, s);
+    const m = st.current;
+    if (!m) throw new HttpError(409, "this scan has no mesh yet", "run Track (or Make mesh) first");
+    const v = body.version;
+    if (typeof v === "number" && v !== st.version) throw new HttpError(409, "the mesh changed since the page loaded it", "reload the mesh and try again");
+    const margin = tableMargin(body);
+    if (margin === null) this.bad("remove_table: margin_mm must be at least 0 and at most 20", "choose a margin_mm at least 0 and at most 20");
+    const r = mockTable(m.positions, m.indices, TABLE_PLANE, margin);
+    if (!r.ok) throw new HttpError(422, r.detail, r.hint);
+    return { ...r.info, version: st.version, triangles: m.indices.length / 3, faces: encodeFaces(r.faces) };
   }
 
   private startEdit(p: Project, s: Scan, body: Record<string, unknown>): Job {
@@ -757,25 +804,29 @@ export class MockProcess {
     const start = st.current;
     if (!start || !st.base) throw new HttpError(409, "Edits need a mesh", "Run Track first (or Make mesh).");
     const faces = this.validate(st, op, params);
+    // "Remove the table": the faces are found now, as the engine finds them in the job; a refusal fails the job
+    const table = op === "remove_table" ? mockTable(start.positions, start.indices, TABLE_PLANE, tableMargin(params) ?? MOCK_MARGIN_MM) : null;
+    const sel = faces ?? (table?.ok ? table.faces : undefined);
     const id = uid("e-");
-    const entryLabel = label(op, params, faces?.length);
+    const entryLabel = label(op, params, sel?.length);
     const t0 = performance.now();
     const self = this;
     const work = (function* (): JobWork {
       yield { p: 0.02, message: doing(op) };
-      const out = yield* run(self.applyOp(start, { op, params }, faces), 0.05, 0.9, doing(op));
+      if (table && !table.ok) throw new Error(table.detail);
+      const out = yield* run(self.applyOp(start, { op, params }, sel), 0.05, 0.9, doing(op));
       if (out.indices.length === 0) throw new Error("That would leave no triangles, so nothing was changed. Select less, or use Keep instead of Delete.");
       yield* tick(0.9, 1, 3, () => "Writing PLY and STL");
       return () => {
         for (let i = st.cursor; i < st.edits.length; i++) st.faces.delete(st.edits[i].id);
         st.edits = st.edits.slice(0, st.cursor);
         for (const k of [...st.snaps.keys()]) if (k > st.cursor) st.snaps.delete(k);
-        if (faces) st.faces.set(id, faces);
+        if (sel) st.faces.set(id, sel);
         st.edits.push({
           id,
           op,
-          // the face list itself stays on the engine (it can be megabytes)
-          params: faces ? { faces: `${faces.length} faces` } : { ...params },
+          // the face list itself stays on the engine (it can be megabytes); the table's margin is written down
+          params: op === "remove_table" ? { margin_mm: tableMargin(params) ?? MOCK_MARGIN_MM } : faces ? { faces: `${faces.length} faces` } : { ...params },
           label: entryLabel,
           created: nowIso(),
           triangles_after: out.indices.length / 3,
@@ -1045,9 +1096,19 @@ export class MockProcess {
     for (let i = 0; i < ops.length; i++) {
       const o = ops[i];
       const t0 = performance.now();
+      let removed: number | undefined;
+      let params = { ...o.params };
+      if (o.op === "remove_table") {
+        // as the engine: a scan without a table skips the step, and the rest runs
+        const margin = tableMargin(o.params) ?? MOCK_MARGIN_MM;
+        const r = mockTable(m.positions, m.indices, TABLE_PLANE, margin);
+        if (!r.ok) continue;
+        removed = r.faces.length;
+        params = { margin_mm: margin };
+      }
       const next = yield* run(this.applyOp(m, o), a + ((b - a) * i) / ops.length, a + ((b - a) * (i + 1)) / ops.length, doing(o.op));
       if (!next.indices.length) throw new Error(`“${label(o.op, o.params)}” would leave no triangles, so nothing was changed.`);
-      entries.push({ id: uid("e-"), op: o.op, params: { ...o.params }, label: label(o.op, o.params), created: nowIso(), triangles_after: next.indices.length / 3, ms: Math.round(performance.now() - t0) });
+      entries.push({ id: uid("e-"), op: o.op, params, label: label(o.op, o.params, removed), created: nowIso(), triangles_after: next.indices.length / 3, ms: Math.round(performance.now() - t0) });
       meshes.push(next);
       m = next;
     }

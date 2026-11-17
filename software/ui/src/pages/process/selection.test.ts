@@ -213,4 +213,22 @@ for (const deg of [0, 30, 60, 75, 85]) {
   check(through > 1000 && visible === through, `far part of a 70° plane: ${visible} faces visible only, ${through} through`);
 }
 
+// 4. An engine's face list ("Remove the table" shows its faces) replaces the selection, triangle for
+// face; with polygons split into triangles, every triangle of a listed face; a face not in the mesh throws.
+{
+  const P = new Float32Array(15);
+  const plain = new MeshSelection(1, P, new Uint32Array([0, 1, 2, 1, 2, 3, 2, 3, 4]), null);
+  plain.all();
+  check(plain.selectFaces([0, 2]) === 2 && plain.count === 2 && plain.selected.join("") === "101", `plain: ${plain.selected.join("")}`);
+  const split = new MeshSelection(1, P, new Uint32Array([0, 1, 2, 0, 2, 3, 1, 2, 3, 2, 3, 4]), new Uint32Array([0, 0, 1, 2]));
+  check(split.selectFaces([0, 2]) === 3 && split.selected.join("") === "1101", `split: ${split.selected.join("")}`);
+  let threw = false;
+  try {
+    plain.selectFaces([3]);
+  } catch {
+    threw = true;
+  }
+  check(threw && plain.count === 2, "a face of another version throws and leaves the selection");
+}
+
 console.log(`selection.test: ${checks} checks passed`);

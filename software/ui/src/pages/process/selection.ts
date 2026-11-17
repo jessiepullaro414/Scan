@@ -95,6 +95,31 @@ export class MeshSelection {
     this.changed();
   }
 
+  /**
+   * Select exactly these faces of the file (an engine's answer, e.g. the table "Remove the table"
+   * would remove), replacing the selection; returns how many triangles are selected. Throws when a
+   * face is not in this mesh: the answer belongs to another version of it.
+   */
+  selectFaces(faces: ArrayLike<number>): number {
+    const T = this.faces;
+    const F = this.faceOfTri ? (T ? this.faceOfTri[T - 1] + 1 : 0) : T;
+    const mark = new Uint8Array(F);
+    for (let i = 0; i < faces.length; i++) {
+      const f = faces[i];
+      if (!(f < F)) throw new Error(`face ${f} is not in this mesh (it has ${F} faces)`);
+      mark[f] = 1;
+    }
+    const s = this.selected;
+    let n = 0;
+    for (let t = 0; t < T; t++) {
+      s[t] = mark[this.faceOfTri ? this.faceOfTri[t] : t];
+      n += s[t];
+    }
+    this.count = n;
+    this.changed();
+    return n;
+  }
+
   // ---------------------------------------------------------------- regions
   /** Faces whose centroid is inside the screen rectangle. */
   applyBox(map: ScreenMap, x0: number, y0: number, x1: number, y1: number, mode: SelectMode): void {

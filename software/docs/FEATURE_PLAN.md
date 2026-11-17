@@ -803,7 +803,7 @@ no object size anywhere in the engine or the app.
 
 ## Asked for along the way
 
-### X1. Remove the surface the part stands on, for a single scan (M)
+### [x] X1. Remove the surface the part stands on, for a single scan (M)
 - **Asked by the owner 2026-11-17** ("That sounds cool"), after asking whether scans of a part
   standing up and lying down lose their table.
 - **Today:** when several scans are merged and "The part was moved or turned over" is chosen,
@@ -823,6 +823,33 @@ no object size anywhere in the engine or the app.
 - **Test first:** a part on a table with noise: the table goes, the part's faces stay to within
   the stated margin; a scan without a table is refused in words; a part with a large flat top
   keeps its top; undo brings the table back bit for bit.
+- **Done 2026-11-17.** `ohs/mesh/support.py` finds the table (the alignment's support-plane
+  search, with three guards: something stands on it, little lies behind it, the part does not
+  go on behind it beside what stands on it; up to three candidates, else a refusal in words)
+  and the faces that are table: facing within 45° of the plane, at most a margin above it,
+  joined to the plane's own region; everything behind the plane; loose crumbs within the
+  margin. The part's walls stay down to the table.
+  - *Measured* (`VALIDATION.md`, "Removing the table from a single scan"): at the default
+    margin of 1 mm under 4 mm² of table is left near the bracket on all three views, and
+    17–19 mm² of the part is lost, all within 1 mm of the table; the merge's 2 mm slab loses
+    118–171 mm².
+  - *The edit:* `remove_table` with `margin_mm`, in the history like the others (undo and redo
+    bit for bit), usable in a user's recipe, in no built-in recipe. A refusal changes nothing.
+    `POST .../process/remove-table/preview` answers the faces without removing them, and the
+    edit that follows removes exactly those.
+  - *On the Process page,* at the foot of the Floaters tab: "Find the table" highlights what
+    would go and says how much ("699,380 faces (2,404 cm², 98 % of the mesh) are the table"),
+    then Remove or Cancel; a card on hover says what it does, keeps and costs; the margin is
+    an advanced value.
+  - Checked in the app on the simulated bracket scan: the table found and highlighted,
+    removed (the bracket alone left, 15,846 triangles), and brought back by undo.
+  - Tests: 26 new (engine and routes); 73 pass on both paths with the mesh-edit and
+    processing tests; 44 UI test files.
+  - **Seen on the way:** the merge of several scans cuts 2 mm off each part's foot
+    (`support_margin_mm`); this rule could keep the part to within a millimetre there too.
+    That would change merged scans, so it waits for the owner. And the alignment's own
+    "is this a table" test counts points just outside the plane's band, which on a noisy
+    CPU-path mesh can take a real table for a face of the part (`MAINTENANCE_PLAN.md`, F11).
 
 ---
 

@@ -566,7 +566,8 @@ The Process page of a scan (see the M3 plan in [`DESKTOP_APP_PLAN.md`](DESKTOP_A
 
 ```ts
 type StageState = "none" | "running" | "done" | "failed" | "skipped";
-type MeshOp = "remove_floaters" | "fill_holes" | "smooth" | "decimate" | "delete_faces" | "keep_faces";
+type MeshOp = "remove_floaters" | "fill_holes" | "smooth" | "decimate" | "delete_faces" | "keep_faces"
+            | "remove_table";                                       // "Remove the table" (its own section, below)
 // params per op:
 //   remove_floaters { min_triangles?: number; min_size_mm?: number; keep_largest_only?: boolean }
 //   fill_holes      { max_hole_mm: number; watertight?: boolean }  // largest hole perimeter to fill; the outer edge too
@@ -1903,6 +1904,66 @@ Rules:
   second request during the first waits for it.
 - On simulated scans at Standard quality the lines cover 8–9 % of the surface, and there the mesh and the lasers
   agree within 0.1 mm for 62–69 % of the vertices and within 0.3 mm for 91–97 % (median 0.06–0.07 mm).
+
+## Remove the table (an edit)
+[`FEATURE_PLAN.md`](FEATURE_PLAN.md), X1. A single scan keeps the table the part stood on; this edit finds
+that surface and removes it (`ohs.mesh.support`), as an edit like the others: undo, redo, in a user's recipe,
+never in a built-in one. The Process page shows the faces it would remove first (the preview below).
+
+```ts
+type MeshOp = ... | "remove_table";     // added to the edits of "M3 phase 2"
+//   remove_table { margin_mm?: number }  // 0-20 mm, default 1: how far above the table's plane a face that
+//                                        // faces the table's way still counts as the table
+type TablePreview = {
+  version: number; triangles: number;   // the mesh it was found on
+  faces: string;                        // base64 of little-endian uint32 face indices of result/mesh.ply, sorted
+  n_faces: number; area_mm2: number; area_left_mm2: number;
+  normal: [number, number, number]; d: number;   // the table's plane n . x + d = 0, n towards the part (mm)
+  share: number;                        // of the scan's surface on the plane, 0..1
+  front_share: number; behind_share: number;     // ... in front of it (the part) and behind it
+  flatness_mm: number;                  // RMS of the table about its plane
+  band_mm: number;                      // the noise band (4 x flatness, 0.3-1.5 mm): the plane's own faces
+  margin_mm: number; facing_deg: number;          // 45: a face turned less than this faces the table's way
+  lowest_mm: number | null;             // the lowest corner of what is left, above the plane
+  loose_removed: number;                // crumbs of table removed with it
+  loose_left: number; loose_left_mm2: number;     // other loose pieces, left for Remove floaters
+  skipped: string[];                    // larger flat surfaces set aside first (a box's top), and why
+  warnings: string[]; rule: string;     // the rule in words
+  summary: string; ms: number;
+};
+```
+
+Paths are relative to `/api/projects/{pid}/scans/{sid}`.
+
+| Method and path | Body | Returns |
+|---|---|---|
+| `POST .../process/remove-table/preview` | `{margin_mm?, version?}` | `TablePreview`; nothing changes |
+| `POST .../process/edits` | `{op: "remove_table", params: {margin_mm?}}` | `Job` (kind `mesh_edit`), as every edit |
+
+Rules:
+- **The plane** is found as the alignment finds its support plane (`ohs.align.pairwise.scan_cloud`), from
+  measured surface only (filled holes are left out), holding at least 15 % of the scan; it is the table only
+  when something stands on it, no more of the scan lies behind it than in front, and the part does not go on
+  behind it next to what stands on it (a part's own face). A plane that fails is set aside and the next largest
+  is tried (three at most): a box whose top is larger than the table seen round it keeps its top.
+- **The faces**: behind the plane (all corners further than the band) everything goes; above it, a face goes when
+  it faces the table's way (within 45°), lies at most `margin_mm` above the plane and is joined through such
+  faces to the plane's own surface. Faces turned further away (the part's walls) stay at any height. Loose
+  pieces left wholly within the margin plus the band are crumbs of table and go too.
+- **No table** (none of the planes passes, or there is too little flat surface): the preview answers 422 with the
+  engine's sentence ("No table found: …. Nothing was removed; …") and a hint to select the table by hand; the edit's
+  job fails with the same sentence and the mesh is as it was. In a recipe the step is skipped, in the same words,
+  and the recipe goes on ("Remove the table: skipped (…)").
+- The edit's label is `Remove the table (12,345 faces)`; its `params` are `{"margin_mm": m}` (the default written
+  down). The faces it removed are kept in `selections/` like a deleted selection, so a step rebuilt for undo /
+  redo removes exactly the same faces; each vertex's sigma and each face's filled flag follow as for a deleted
+  selection.
+- The preview is read-only and kept per mesh version and margin: the edit that follows on the same version and
+  margin removes exactly its faces without looking again. `version`: the mesh version the page shows (409 when it
+  changed); 422 for a margin out of range; 409 before the scan has a mesh.
+- 1.2–1.9 s on simulated scans of 0.7–0.8 million triangles (the other edits: 0.4–2.4 s). On the simulated bracket
+  seen from three sides it leaves 0.5–3.3 mm² of table near the part and takes 17–19 mm² of the part's rounded
+  foot, all within 1 mm of the table (a 1 mm slab: 50–70 mm²; the merge's 2 mm: 118–171 mm²).
 
 ## M5 third slice: areas that need another pass
 The plan is in [`DESKTOP_APP_PLAN.md`](DESKTOP_APP_PLAN.md), "M5 plan, third slice". It works on the scan's

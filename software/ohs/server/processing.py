@@ -108,8 +108,12 @@ __all__ = ["ProcessManager", "RecipeStore", "ScanProcess", "BUILTIN_RECIPES", "P
 log = logging.getLogger(__name__)
 
 STAGES = ("track", "straighten", "fuse", "spacetime", "refine")
-MESH_OPS = ("remove_floaters", "fill_holes", "smooth", "decimate", "delete_faces", "keep_faces")
-RECIPE_OPS = MESH_OPS[:4]
+MESH_OPS = ("remove_floaters", "fill_holes", "smooth", "decimate", "delete_faces", "keep_faces", "remove_table")
+#: edits a recipe may hold (selections belong to one scan); "Remove the table" may be in a user's
+#: recipe, never in a built-in one
+RECIPE_OPS = MESH_OPS[:4] + ("remove_table",)
+_SELECTION_OPS = ("delete_faces", "keep_faces", "remove_table")  # edits replayed from their saved faces
+TABLE_HINT = "if the part does stand on a table in this scan, select the table with the selection tools and delete it"
 PROCESS_KINDS = ("process_scan", "process_track", "process_straighten", "process_fuse", "process_spacetime",
                  "process_refine", "mesh_edit", "process_recipe")
 MIN_LASER_POINTS = 200  # fewer laser points than this can't anchor anything
@@ -131,7 +135,7 @@ _BUSY = {"process_scan": "Making the mesh…", "process_track": "Tracking the sc
          "process_recipe": "Applying the recipe…"}
 _BUSY_OPS = {"remove_floaters": "Removing floaters…", "fill_holes": "Filling holes…", "smooth": "Smoothing…",
              "decimate": "Simplifying…", "delete_faces": "Deleting the selection…",
-             "keep_faces": "Keeping the selection…"}
+             "keep_faces": "Keeping the selection…", "remove_table": "Removing the table…"}
 
 # --------------------------------------------------------------------------- recipes
 BUILTIN_RECIPES: list[dict] = [
@@ -198,7 +202,7 @@ def normalize_op(op: str, params: dict | None) -> tuple[dict, str]:
                "fill_holes": {"max_hole_mm", "watertight"},
                "smooth": {"method", "strength", "keep_edges", "within_sigma", "flat_only", "away_from_edges"},
                "decimate": {"target_triangles", "ratio", "max_error_mm"}, "delete_faces": {"faces"},
-               "keep_faces": {"faces"}}
+               "keep_faces": {"faces"}, "remove_table": {"margin_mm"}}
     if op not in allowed:
         raise ApiError(422, f"unknown edit {op!r}", f"use one of {', '.join(MESH_OPS)}")
     extra = sorted(set(params) - allowed[op])
@@ -291,7 +295,20 @@ def normalize_op(op: str, params: dict | None) -> tuple[dict, str]:
             out_d["max_error_mm"] = e
             label = f"{label} (within {_fmt(e)} mm)" if label else f"Simplify to within {_fmt(e)} mm"
         return out_d, label
+    if op == "remove_table":
+        # the margin is always written down, so that a recipe runs the same when the default moves
+        from ohs.mesh.support import MARGIN_MM
+
+        m = _num(params, "margin_mm", op, 0, 20)
+        # the label gets the count of faces when the edit has run ("Remove the table (12,345 faces)")
+        return {"margin_mm": MARGIN_MM if m is None else m}, "Remove the table"
     return params, op
+
+
+def _carry_op(op: str) -> str:
+    """The edit the sigmas and filled flags follow ``op`` as: "Remove the table" deletes the faces
+    it found, as a selection is deleted."""
+    return "delete_faces" if op == "remove_table" else op
 
 
 def _decode_faces(text: Any) -> np.ndarray:
@@ -554,6 +571,9 @@ class ScanProcess:
         # the same for the laser agreement map (lasers.json / lasers.bin)
         self._lasers: tuple[int, np.ndarray, dict] | None = None
         self._lasers_lock = threading.Lock()
+        # (version, margin, faces, finding) of the last "Remove the table" preview: the edit on the
+        # same version and margin removes those faces without looking again
+        self._table: tuple[int, float, np.ndarray, dict] | None = None
 
     # ------------------------------------------------------------------ persistence
     @property
@@ -868,10 +888,10 @@ class ProcessManager:
             log.info("scan %s/%s: rebuilding step %d from step %d (%d edits)", sp.pid, sp.sid, k, j, k - j)
             for i in range(j, k):
                 e = edits[i]
-                faces = np.load(sp.selection_path(str(e["id"]))) if e["op"] in ("delete_faces", "keep_faces") else None
+                faces = np.load(sp.selection_path(str(e["id"]))) if e["op"] in _SELECTION_OPS else None
                 V2, F2, by = self._apply(sp, e["op"], e["params"], V, F, edit_id=e["id"], faces=faces, S=S)
-                S = carry_sigma(e["op"], V, F, S, V2, by)
-                Fl = carry_filled(e["op"], V, F, Fl, V2, F2, by)
+                S = carry_sigma(_carry_op(e["op"]), V, F, S, V2, by)
+                Fl = carry_filled(_carry_op(e["op"]), V, F, Fl, V2, F2, by)
                 V, F = V2, F2
                 if i + 1 >= k - CACHE_STEPS:
                     _save_npz(sp.cache_path(i + 1), V, F, S=S, filled=Fl)
@@ -956,6 +976,17 @@ class ProcessManager:
         :func:`ohs.mesh.carry_sigma` and :func:`ohs.mesh.carry_filled` follow the mesh by."""
         from ohs import mesh as M
 
+        if op == "remove_table":
+            # the faces it removes: from the saved selection when replayed (the same faces, bit for
+            # bit, whatever the engine finds today), else found now
+            if faces is None and edit_id is not None and sp.selection_path(str(edit_id)).is_file():
+                faces = np.load(sp.selection_path(str(edit_id)))
+            if faces is None:
+                faces = self._find_table(V, F, S, float(params.get("margin_mm", 1.0)))[0]
+            if len(faces) and int(faces.max()) >= len(F):
+                raise ApiError(409, "the table's faces refer to triangles the current mesh does not have",
+                               "undo to the step it was removed from, or remove it again")
+            return (*M.delete_faces(V, F, faces), faces)
         if op in ("delete_faces", "keep_faces"):
             if faces is None:
                 faces = np.load(sp.selection_path(str(edit_id)))
@@ -1039,16 +1070,49 @@ class ProcessManager:
             self._show_step(sp, k + 1, V, F, N, S, filled)
             return {key: v for key, v in entry.items() if key != "stats"}
 
+    @staticmethod
+    def _find_table(V: np.ndarray, F: np.ndarray, S: np.ndarray | None, margin_mm: float) -> tuple[np.ndarray, dict]:
+        """:func:`ohs.mesh.support.find_support` on a step's mesh: ``(the faces it removes, what it
+        found)``; its refusal is a 422 in its own words, and nothing changes."""
+        from ohs.mesh import support
+
+        try:
+            r = support.find_support(V, F, sigma=S if S is not None and len(S) == len(V) else None,
+                                     params=support.SupportParams(margin_mm=float(margin_mm)))
+        except support.SupportRefused as e:
+            raise ApiError(422, str(e), TABLE_HINT) from None
+        return r.faces.astype(np.int64), r.to_dict()
+
+    @staticmethod
+    def _table_summary(info: dict) -> str:
+        """What "Remove the table" did, in plain words (from the engine's finding)."""
+        low = info.get("lowest_mm")
+        kept = ("" if low is None else "; the part is kept right down to it" if low <= info["band_mm"]
+                else f"; the part is kept from {low:.2f} mm above it")
+        out = (f"Removed the table: {info['n_faces']:,} triangles ({info['area_mm2'] / 100.0:,.1f} cm², "
+               f"{100 * info['share']:.0f} % of the scan, flat to {info['flatness_mm']:.2f} mm){kept}")
+        return " ".join([out + "."] + list(info.get("warnings") or []))
+
     def _run_edit(self, ctx: Any, sp: ScanProcess, op: str, params: dict, label: str, prog: _Prog,
                   faces: np.ndarray | None = None) -> dict:
         from ohs.mesh import carry_filled, carry_sigma
 
         with sp.lock:
             k = sp.state["cursor"]
+            version = int(sp.state["version"])
             before = sp.stats_at(k)
+            table = sp._table
         prog(0.02, f"{label}: loading the mesh", force=True)
         V, F, S, Fl = self._load_step(sp, k)
         t0 = time.perf_counter()
+        info = None
+        if op == "remove_table":  # the faces of the preview on this very mesh, else found now
+            if table is not None and table[0] == version and table[1] == float(params["margin_mm"]):
+                faces, info = table[2], table[3]
+            else:
+                prog(0.05, f"{label}: finding the table", force=True)
+                faces, info = self._find_table(V, F, S, float(params["margin_mm"]))
+            label = f"Remove the table ({len(faces):,} faces)"
         V2, F2, by = self._apply(sp, op, params, V, F, faces=faces, S=S,
                                  progress=lambda f, m=None: prog(0.05 + 0.8 * f, f"{label}: {m}" if m else label))
         ms = 1e3 * (time.perf_counter() - t0)
@@ -1056,12 +1120,42 @@ class ProcessManager:
             raise ApiError(409, "this would remove the whole mesh", "change the settings or the selection")
         ctx.check()
         prog(0.88, f"{label}: measuring the result", force=True)
-        S2 = carry_sigma(op, V, F, S, V2, by)
-        Fl2 = carry_filled(op, V, F, Fl, V2, F2, by)
+        S2 = carry_sigma(_carry_op(op), V, F, S, V2, by)
+        Fl2 = carry_filled(_carry_op(op), V, F, Fl, V2, F2, by)
         stats = _stats(V2, F2, S2, Fl2)
-        summary = self._summary(op, params, V, F, V2, F2, before, stats)
+        summary = self._table_summary(info) if info is not None else self._summary(op, params, V, F, V2, F2, before, stats)
         prog(0.94, f"{label}: saving", force=True)
         return self._commit_edit(sp, op, params, label, V2, F2, ms, summary, ctx.job.id, faces, stats, S2, Fl2)
+
+    def table_preview(self, pid: str, sid: str, margin_mm: float | None = None, version: int | None = None) -> dict:
+        """``POST .../process/remove-table/preview``: the faces "Remove the table" would remove from
+        the current mesh, and what the engine found, without changing anything. Read-only; uses the
+        arrays the fits keep per mesh version, and keeps the answer for the edit that follows.
+        ``version``: the mesh version the page shows (409 when it changed). The engine's refusal
+        is a 422 in its own words."""
+        params, _ = normalize_op("remove_table", {} if margin_mm is None else {"margin_mm": margin_mm})
+        m = float(params["margin_mm"])
+        sp = self.scan(pid, sid)
+        self._need_base(sp)
+        with sp.lock:
+            v = int(sp.state["version"])
+            if version is not None and int(version) != v:
+                raise ApiError(409, "the mesh changed since the page loaded it", "reload the mesh and try again")
+            cached = sp._fit_mesh
+            if cached is None or cached[0] != v:
+                V, F, S, Fl = self._load_step(sp, int(sp.state["cursor"]))
+                cached = sp._fit_mesh = (v, V, F, S, Fl)
+            table = sp._table
+        if table is not None and table[0] == v and table[1] == m:
+            faces, info = table[2], table[3]
+        else:
+            _, V, F, S, _ = cached
+            faces, info = self._find_table(V, F, S, m)
+            with sp.lock:
+                if int(sp.state["version"]) == v:  # not changed meanwhile
+                    sp._table = (v, m, faces, info)
+        return {**info, "version": v, "triangles": int(len(cached[2])),
+                "faces": base64.b64encode(np.asarray(faces, dtype="<u4").tobytes()).decode("ascii")}
 
     def submit_edit(self, pid: str, sid: str, op: str, params: dict | None, version: int | None = None) -> Any:
         if op not in MESH_OPS:
@@ -1664,7 +1758,14 @@ class ProcessManager:
         out = []
         for i, o in enumerate(ops):
             params, label = normalize_op(o["op"], o.get("params") or {})
-            entry = self._run_edit(ctx, sp, o["op"], params, label, prog.sub(i / max(len(ops), 1), (i + 1) / max(len(ops), 1)))
+            try:
+                entry = self._run_edit(ctx, sp, o["op"], params, label, prog.sub(i / max(len(ops), 1), (i + 1) / max(len(ops), 1)))
+            except ApiError as e:
+                if o["op"] != "remove_table" or e.status != 422:
+                    raise
+                # a scan without a table: the step is skipped, in the engine's words, and the rest runs
+                out.append(f"Remove the table: skipped ({e.detail.rstrip('.')})")
+                continue
             out.append(entry["summary"])
             self.publish(sp)
         return out
