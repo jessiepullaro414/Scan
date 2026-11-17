@@ -129,6 +129,37 @@ reading depends on the level: on simulated plates with a floor 10 mm under them 
 26.1 mm at 0.3 mm, 25.6 mm at 0.5 mm and 24.9 mm at 1 mm (``VALIDATION.md``, "The Hole tool on
 holes with a wall").
 
+**Extent.** A fit alone has no size: a plane is endless, a cylinder has no length. The answer also
+says where its region lies on it (:attr:`RegionFit.extent`, from :func:`region_extent`), so that a
+report or a CAD export can give the numbers the viewer draws. Plain JSON, in mm:
+
+* plane: the region's boundary loops projected onto the fitted plane, as 2D points ``(x, y)`` in
+  the basis ``origin`` (the fit's point), ``u``, ``v`` (``u``, ``v`` and the fit's normal
+  orthonormal and right-handed; a point is ``origin + x u + y v``). ``outer`` holds the outer loops
+  (counter-clockwise seen from the normal's side; one, unless the region is in pieces that touch
+  at a corner), ``holes`` the loops inside them (clockwise). Loops smaller than a circle
+  :data:`OUTLINE_SPECK_EDGES` mesh edges in radius are left out: they are specks, a few faces in
+  the region that its tests turned down in the noise (a noisy plate's region has a hundred), not
+  holes in the part. ``rectangle``: the smallest rectangle round the outline in the plane, its
+  ``center``, its ``axes`` (the longer side's first) and its ``half_sizes_mm``. ``area_mm2``: the
+  outline's area (the outer loops' less the holes');
+* cylinder: ``along_mm`` ``[low, high]``, the region's vertices measured along the axis from the
+  fit's point (the viewer's ``summarizeRegion`` measures the same), and ``length_mm``; the arc
+  the region covers round the axis, from ``start_deg`` through ``arc_deg``, angles taken from the
+  unit vector ``zero`` (square to the axis) turning right-handed about the axis. The arc is all
+  of the round but its widest gap between vertices; a region whose faces bridge that gap goes all
+  the way round (``start_deg`` 0, ``arc_deg`` 360). So a fillet or a boss seen from one side says
+  how much of its round it is;
+* hole: ``edge``, its edge's points in order round the loop (the last joins the first).
+
+It is measured on the mesh's own vertices, so it is good to about a mesh edge. It costs a click
+little (dev PC, 1M-triangle meshes): 20 ms for a plane on one side of a box, 50 ms for a plane
+that is the whole plate, 100 ms for a cylinder that is the whole tube (90 ms for 120° of a noisy
+one), nothing for a hole. A scanned table (a 400k-face plane region on an 800k-face scan, 2,800
+loops of which 722 are not specks) takes 0.12-0.13 s, a tenth of its fit: a scan's region is full
+of pits, and everything done with its loops is done for all of them at once (:func:`_loops`,
+:func:`_nesting`); testing each loop against each other one took 23 s there.
+
 **Speed** (dev PC, CPU, numpy/scipy; the slow test in ``tests/test_measure_region.py``). On
 1M-triangle meshes: a hole 0.1-0.2 s (it looks only in a window); a plane on one side of a box
 (170k faces) 0.2 s; the worst cases, a region that is the whole mesh: a plane over the whole plate
@@ -137,17 +168,18 @@ Growing costs about 1 µs a face; indexing the mesh (the faces of each vertex) a
 """
 from __future__ import annotations
 
+import functools
 import math
 from dataclasses import dataclass
 
 import numpy as np
 
-from ohs.measure.fit import CircleFit, CylinderFit, PlaneFit, fit_circle, fit_cylinder, fit_plane
+from ohs.measure.fit import CircleFit, CylinderFit, PlaneFit, _basis, fit_circle, fit_cylinder, fit_plane
 from ohs.mesh.confidence import SIGMA_NONE_MM
 from ohs.mesh.holes import find_holes
 from ohs.mesh.topology import as_mesh, compact, components, rows, sorted_unique
 
-__all__ = ["RegionFit", "fit_at", "KINDS"]
+__all__ = ["RegionFit", "fit_at", "region_extent", "KINDS"]
 
 KINDS = ("plane", "cylinder", "hole")
 TOL_SIGMAS = 3.0  # the default tolerance: this many times the seed's sigma or scatter ...
@@ -185,6 +217,7 @@ CORR_MIN_LAG_EDGES = 2.0  # ... summed at least this far (the mesh's own pattern
 CORR_MAX_LAG_EDGES = 12.0  # ... then while it stays above 0, at most this far
 CORR_POINTS = 50000  # measured on at most this many of the region's points (picked by id) ...
 CORR_ANCHORS = 3000  # ... each of the first this many against all of them
+OUTLINE_SPECK_EDGES = 2.0  # a plane's outline leaves out loops smaller than a circle this many mesh edges in radius
 
 
 @dataclass
@@ -202,14 +235,21 @@ class RegionFit:
     # plane, cylinder: how many of the region's points err together with each one (1 = independent);
     # the fit's ± are widened by its square root (module docstring, "The ± values"). None for a hole
     correlated_points: float | None = None
+    # where the region lies on its shape, as plain JSON (:func:`region_extent`); :func:`fit_at` sets it
+    extent: dict | None = None
 
-    def to_dict(self) -> dict:
-        return {"kind": self.kind, "fit": self.fit.to_dict(), "faces": [int(f) for f in self.faces],
-                "edge": [int(v) for v in self.edge], "warnings": list(self.warnings),
-                "tolerance_mm": None if self.tolerance_mm is None else float(self.tolerance_mm),
-                "angle_tol_deg": None if self.angle_tol_deg is None else float(self.angle_tol_deg),
-                "mean_sigma_mm": None if self.mean_sigma_mm is None else float(self.mean_sigma_mm),
-                "correlated_points": None if self.correlated_points is None else float(self.correlated_points)}
+    def to_dict(self, with_extent: bool = False) -> dict:
+        """Plain JSON. The extent only ``with_extent``: without it the answer is as it was before
+        the extent existed."""
+        out = {"kind": self.kind, "fit": self.fit.to_dict(), "faces": [int(f) for f in self.faces],
+               "edge": [int(v) for v in self.edge], "warnings": list(self.warnings),
+               "tolerance_mm": None if self.tolerance_mm is None else float(self.tolerance_mm),
+               "angle_tol_deg": None if self.angle_tol_deg is None else float(self.angle_tol_deg),
+               "mean_sigma_mm": None if self.mean_sigma_mm is None else float(self.mean_sigma_mm),
+               "correlated_points": None if self.correlated_points is None else float(self.correlated_points)}
+        if with_extent:
+            out["extent"] = self.extent
+        return out
 
 
 # --------------------------------------------------------------------------- the mesh, indexed
@@ -825,6 +865,378 @@ def _fit_edge(V: np.ndarray, F: np.ndarray, S: np.ndarray | None, measured: np.n
                      mean_sigma_mm=None if sig is None else float(np.mean(sig[loop])))
 
 
+# --------------------------------------------------------------------------- extent
+@functools.lru_cache(maxsize=2)
+def _vertex_weights(n: int) -> np.ndarray:
+    """Each vertex's weight for the border test of :func:`_border_loops`: its id and a hash of it in
+    one number (kept for the next click on the same mesh; read-only)."""
+    ids = np.arange(n, dtype=np.int64)
+    # both sums in one number: the id times 2^20 plus a 20-bit hash of it (exact up to 8M vertices; beyond,
+    # rounding can only put an inside vertex on the border, which widens the band and changes nothing).
+    # The hash must not be linear: on a grid the ids alone cancel at some border vertices (a vertex with
+    # two faces on a test plate: 23468 - 23308 + 23470 - 23630 = 0), and a linear hash cancels with them
+    # (a multiplicative hash is linear too, in its top bits). Random numbers drawn from a fixed seed are not
+    hashed = np.random.default_rng(20261117).integers(0, 1048576, n, dtype=np.int64)
+    out = (ids * 1048576 + hashed).astype(np.float64)
+    out.setflags(write=False)
+    return out
+
+
+def _border_loops(V: np.ndarray, Fr: np.ndarray, to_2d=None, min_area: float = 0.0) -> tuple[np.ndarray, np.ndarray]:
+    """The boundary loops of the faces ``Fr`` (a region) with 3 points or more: ``(vertex ids loop
+    after loop, in order; each loop's length)``. With ``to_2d`` (positions (k,3) -> (k,2)), the
+    loops that enclose less than ``min_area`` there are left out early (:func:`_loops`).
+
+    :func:`ohs.mesh.topology.boundary_loops` sorts every edge (0.2 s on a 1M-face region); here only
+    the border's are. A vertex inside the region has its faces closed round it: each neighbour comes
+    once after it and once before it (in the faces' order), so the sums of the neighbours' ids after
+    and before agree; at a border they nearly always do not. The ids alone can agree by chance (on a
+    grid they do, a few times a mesh); a second sum, of a hash of the ids, makes that a one in a
+    million chance, and then the loop through that vertex is left open. A border edge joins two
+    border vertices, so only those edges are counted (:func:`_loops`), in the faces with a border
+    vertex (the band along the border, which the walks round a bowtie vertex need)."""
+    n = len(V)
+    Fc = np.ascontiguousarray(Fr.T)  # corner by corner (bincount is faster on contiguous columns)
+    W = _vertex_weights(n)[Fc]
+    balance = np.zeros(n)
+    for j in range(3):
+        balance += np.bincount(Fc[j], weights=W[(j + 1) % 3] - W[(j + 2) % 3], minlength=n)
+    border = np.abs(balance) > 0.5
+    band = Fr[border[Fc[0]] | border[Fc[1]] | border[Fc[2]]]
+    if not len(band):
+        return np.zeros(0, dtype=np.int64), np.zeros(0, dtype=np.int64)
+    xy = None
+    if to_2d is not None:  # only the border's vertices need a place in the plane
+        at = np.flatnonzero(border)
+        xy = np.zeros((n, 2))
+        xy[at] = to_2d(rows(V, at))
+    seq, size = _loops(band, n, xy, min_area, border)
+    start = np.cumsum(size) - size
+    ok = (size >= 3) & border[seq[start]] if len(size) else np.zeros(0, dtype=bool)
+    return seq[np.repeat(ok, size)], size[ok]
+
+
+def _loops(F: np.ndarray, n_vertices: int, xy: np.ndarray | None = None, min_area: float = 0.0,
+           starts: np.ndarray | None = None) -> tuple[np.ndarray, np.ndarray]:
+    """``(vertices loop after loop, each loop's length)``: the same loops, in the same order and from
+    the same first vertex, as :func:`ohs.mesh.topology.boundary_loops`, which walks them one
+    half-edge at a time in Python (0.16 s for the 141k border half-edges of a scanned table's band).
+    Here a loop that is a plain cycle (each of its half-edges has one successor and one
+    predecessor) is put in order all at once: from its first half-edge, each one's distance to the
+    end, by pointer doubling. Anything else (an open chain, two half-edges sent to one at a bowtie)
+    is walked as there.
+
+    With ``starts`` (a flag per vertex), only the loops along flagged vertices are looked for: only
+    the edges between two of them are counted. With ``xy`` too (each vertex's 2D position), plain
+    cycles that enclose less than ``min_area`` or whose first vertex is not flagged are left out
+    before they are put in order (most loops of a scan's region are specks); when none is large
+    enough, all stay, so that the caller can pick the largest."""
+    from scipy.sparse import coo_matrix
+    from scipy.sparse.csgraph import connected_components
+
+    from ohs.mesh.topology import _fan_partner, edge_table
+
+    if not len(F):
+        return np.zeros(0, dtype=np.int64), np.zeros(0, dtype=np.int64)
+    # the border half-edges: those whose edge only one face has. With ``starts``, only the edges
+    # between two flagged vertices can be (a border edge's ends are border vertices, and so are those
+    # of its twin): only those are counted
+    a, b = F.reshape(-1), F[:, [1, 2, 0]].reshape(-1)
+    he = np.arange(len(a)) if starts is None else np.flatnonzero(starts[a] & starts[b])
+    key = np.minimum(a[he], b[he]) * n_vertices + np.maximum(a[he], b[he])
+    o = np.argsort(key, kind="stable")
+    k = key[o]
+    alone = np.ones(len(k), dtype=bool)
+    if len(k) > 1:
+        same = k[1:] == k[:-1]
+        alone[1:] &= ~same
+        alone[:-1] &= ~same
+    bh = np.sort(he[o[alone]])
+    if not len(bh):
+        return np.zeros(0, dtype=np.int64), np.zeros(0, dtype=np.int64)
+    # each border half-edge's successor, exactly as boundary_loops finds it
+    start = a[bh]
+    end = b[bh]
+    order = np.argsort(start, kind="stable")
+    s_sorted = start[order]
+    lo = np.searchsorted(s_sorted, end, "left")
+    cnt = np.searchsorted(s_sorted, end, "right") - lo
+    nxt = np.full(len(bh), -1, dtype=np.int64)
+    one = cnt == 1
+    nxt[one] = order[lo[one]]
+    taken: set[int] = set()
+    where = np.full(3 * len(F), -1, dtype=np.int64)  # half-edge -> its place in bh
+    where[bh] = np.arange(len(bh))
+    multi = np.flatnonzero(cnt > 1)
+    found = np.zeros(0, dtype=np.int64)
+    if len(multi):
+        # the walks round a bowtie vertex pass only faces that hold it: an edge table of those faces
+        # gives the same walks as one of all the faces
+        bow = np.zeros(n_vertices, dtype=bool)
+        bow[end[multi]] = True
+        rows_ = np.flatnonzero(bow[F[:, 0]] | bow[F[:, 1]] | bow[F[:, 2]])
+        local = np.full(len(F), -1, dtype=np.int64)
+        local[rows_] = np.arange(len(rows_))
+        Fs = F[rows_]
+        et = edge_table(Fs, n_vertices)
+        hs = bh[multi]
+        outs = np.array([_fan_partner(h, Fs, et, max_steps=64) for h in (3 * local[hs // 3] + hs % 3).tolist()],
+                        dtype=np.int64)
+        found = where[3 * rows_[np.maximum(outs, 0) // 3] + np.maximum(outs, 0) % 3]
+        found[outs < 0] = -1
+    for i, lo_i, cnt_i, pos in zip(multi.tolist(), lo[multi].tolist(), cnt[multi].tolist(), found.tolist()):
+        cands = order[lo_i: lo_i + cnt_i].tolist()  # bowtie vertices: paired through the face fans
+        if pos < 0 or pos not in cands or pos in taken:
+            free = [c for c in cands if c not in taken]
+            pos = free[0] if free else cands[0]
+        taken.add(pos)
+        nxt[i] = pos
+    # the loops as pieces of the successor graph; a piece is a plain cycle when every half-edge in it
+    # has a successor and is the successor of exactly one
+    m = len(bh)
+    has = nxt >= 0
+    n_pieces, piece = connected_components(coo_matrix((np.ones(int(has.sum())), (np.flatnonzero(has), nxt[has])),
+                                                      shape=(m, m)), directed=False)
+    pred = np.bincount(nxt[has], minlength=m)
+    plain = np.ones(n_pieces, dtype=bool)
+    plain[piece[~has | (pred != 1)]] = False
+    head = np.unique(piece, return_index=True)[1]  # each piece's first half-edge
+    keep = plain.copy()
+    if xy is not None:
+        twice = np.bincount(piece, weights=xy[start, 0] * xy[end, 1] - xy[start, 1] * xy[end, 0], minlength=n_pieces)
+        able = np.bincount(piece, minlength=n_pieces) >= 3
+        if starts is not None:
+            able &= starts[start[head]]
+        big = 0.5 * np.abs(twice) >= min_area
+        keep &= able & big if (big & able & plain).any() else able  # none large enough: the caller picks
+    # plain cycles: the distance of each half-edge to the one before the head, by pointer doubling
+    idx = np.flatnonzero(keep[piece])
+    local = np.full(m, -1, dtype=np.int64)  # the doubling runs on the plain cycles' half-edges only
+    local[idx] = np.arange(len(idx))
+    succ = local[nxt[idx]]
+    end = nxt[idx] == head[piece[idx]]
+    succ[end] = np.flatnonzero(end)
+    d = (~end).astype(np.int64)
+    while True:
+        s2 = succ[succ]
+        if np.array_equal(s2, succ):
+            break
+        d = d + d[succ]
+        succ = s2
+    dist = np.zeros(m, dtype=np.int64)
+    dist[idx] = d
+    # each half-edge's loop (named by the half-edge it starts from) and its place in it
+    key = head[piece]
+    place = -dist
+    # the rest: walked one half-edge at a time, as boundary_loops does
+    seen = np.zeros(m, dtype=bool)
+    seen[idx] = True
+    dropped = ~keep[piece] & plain[piece]
+    seen[dropped] = True
+    key[dropped] = -1
+    nxt_l = nxt.tolist()
+    for s in np.flatnonzero(~seen).tolist():
+        if seen[s]:
+            continue
+        i, k = s, 0
+        while i != -1 and not seen[i]:
+            seen[i] = True
+            key[i], place[i] = s, k
+            k += 1
+            i = nxt_l[i]
+    hs = np.flatnonzero(key >= 0)
+    hs = hs[np.lexsort((place[hs], key[hs]))]  # loop after loop, as boundary_loops orders them (by their first half-edge)
+    k = key[hs]
+    first = np.r_[True, k[1:] != k[:-1]] if len(k) else np.zeros(0, dtype=bool)
+    return start[hs], np.diff(np.append(np.flatnonzero(first), len(hs)))
+
+
+def _plane_extent(V: np.ndarray, F: np.ndarray, fit: PlaneFit, faces: np.ndarray) -> dict:
+    """A plane region's outline, oriented rectangle and area (module docstring, "Extent")."""
+    u, v = _basis(fit.normal)
+    o = fit.point
+    # specks are no outline: a few faces inside the region that its tests turned down in the noise, a
+    # sliver at its edge. Left out before anything else is done with the loops
+    e = rows(V, F[faces[:: max(1, len(faces) // 20000)]].reshape(-1)).reshape(-1, 3, 3)
+    speck = math.pi * (OUTLINE_SPECK_EDGES * float(np.median(np.linalg.norm(e[:, 1] - e[:, 0], axis=1)))) ** 2
+    seq, size = _border_loops(V, rows(F, faces), lambda P: np.c_[(P - o) @ u, (P - o) @ v],
+                              0.99 * speck)  # a little less: the exact test follows
+    # every loop's signed area at once (a real scan's region has thousands of loops, most of them specks)
+    Q = rows(V, seq) - o
+    x, y = Q @ u, Q @ v
+    start = np.cumsum(size) - size
+    if len(size):
+        nxt = np.arange(len(x)) + 1
+        nxt[start + size - 1] = start  # each loop's last point joins its first
+        signed = 0.5 * np.add.reduceat(x * y[nxt] - y * x[nxt], start)
+    else:
+        signed = np.zeros(0)
+    keep = np.flatnonzero(np.abs(signed) >= speck)
+    if not len(keep) and len(size):
+        keep = np.array([int(np.argmax(np.abs(signed)))])
+    XY = np.c_[x, y]
+    rings = [XY[a:b] for a, b in zip(start[keep].tolist(), (start + size)[keep].tolist())]
+    boxes = (np.minimum.reduceat(XY, start)[keep], np.maximum.reduceat(XY, start)[keep]) if len(keep) else None
+    signed = [float(signed[k]) for k in keep]
+    depth = _nesting(rings, signed, boxes)
+    outer, holes = [], []
+    area = 0.0
+    for k in np.argsort([-abs(a) for a in signed], kind="stable"):
+        ring = rings[k] if (signed[k] >= 0) == (depth[k] % 2 == 0) else rings[k][::-1]  # outer ccw, holes cw
+        (holes if depth[k] % 2 else outer).append(ring)
+        area += -abs(signed[k]) if depth[k] % 2 else abs(signed[k])
+    return {"kind": "plane", "origin": [float(x) for x in o], "u": [float(x) for x in u], "v": [float(x) for x in v],
+            "outer": [r.tolist() for r in outer], "holes": [r.tolist() for r in holes],
+            "rectangle": _rectangle(np.concatenate(outer) if outer else np.zeros((0, 2)), o, u, v),
+            "area_mm2": area}
+
+
+def _nesting(rings: list[np.ndarray], signed: list[float], boxes: tuple | None = None) -> np.ndarray:
+    """How many larger loops each of the 2D ``rings`` lies inside (odd: a hole). A loop is judged by
+    most of up to 16 of its points, so that a vertex shared with the loop around it does not decide.
+
+    The rule and the answers are those of testing each loop's points against every larger loop
+    with :func:`_inside`, which on a real scan's table (722 loops) took 23 s. A point outside a
+    loop's bounding box is outside the loop, so a pair is tested only when most of the smaller
+    loop's points lie in the larger one's box (on that table: the pits in the 33 outer loops); then
+    each larger loop is tested once, with the points of all the loops it may hold
+    (:func:`_inside_many`). ``boxes``: the loops' bounding boxes ``(lower corners, upper corners)``
+    when known."""
+    n = len(rings)
+    depth = np.zeros(n, dtype=np.int64)
+    if n < 2:
+        return depth
+    big = np.abs(np.asarray(signed))
+    rank = np.empty(n, dtype=np.int64)
+    rank[np.argsort(-big, kind="stable")] = np.arange(n)  # larger first; equal ones in their order
+    probes = [r[:: max(1, len(r) // 16)] for r in rings]
+    n_probes = np.array([len(q) for q in probes])
+    Q = np.concatenate(probes)
+    q_first = np.cumsum(n_probes) - n_probes
+    if boxes is None:
+        boxes = (np.array([r.min(axis=0) for r in rings]), np.array([r.max(axis=0) for r in rings]))
+    box_lo, box_hi = boxes
+    # the pairs (larger j, smaller k) whose boxes meet, then those with most of k's points in j's box
+    (x0, y0), (x1, y1) = box_lo.T, box_hi.T
+    meet = (x0[:, None] <= x1) & (y0[:, None] <= y1) & (x1[:, None] >= x0) & (y1[:, None] >= y0)
+    J, K = np.nonzero(meet & (rank[:, None] < rank))
+    pair = np.repeat(np.arange(len(J)), n_probes[K])
+    q = np.repeat(q_first[K], n_probes[K]) + np.arange(len(pair)) - np.repeat(np.cumsum(n_probes[K]) - n_probes[K], n_probes[K])
+    in_box = np.all((Q[q] >= box_lo[J[pair]]) & (Q[q] <= box_hi[J[pair]]), axis=1)
+    likely = np.bincount(pair, weights=in_box, minlength=len(J)) * 2 > n_probes[K]
+    J, K = J[likely], K[likely]
+    for j in np.unique(J).tolist():
+        held = K[J == j]
+        pts = np.concatenate([probes[k] for k in held])
+        owner = np.repeat(np.arange(len(held)), n_probes[held])
+        votes = np.bincount(owner, weights=_inside_many(pts, rings[j]), minlength=len(held))
+        depth[held] += votes * 2 > n_probes[held]
+    return depth
+
+
+def _inside_many(xy: np.ndarray, poly: np.ndarray) -> np.ndarray:
+    """:func:`_inside` (the same rule, the same answers) for many points against a long polygon:
+    each polygon edge meets only the points whose height it spans, found by sorting them by height,
+    so the work grows with the points and the edges, not with their product."""
+    order = np.argsort(xy[:, 1], kind="stable")
+    xs, ys = xy[order, 0], xy[order, 1]
+    x0, y0 = poly[:, 0], poly[:, 1]
+    x1, y1 = np.roll(x0, -1), np.roll(y0, -1)
+    # an edge counts for the points with min(y0, y1) <= y < max(y0, y1), as (y0 > y) != (y1 > y) says
+    first = np.searchsorted(ys, np.minimum(y0, y1), side="left")
+    count = np.searchsorted(ys, np.maximum(y0, y1), side="left") - first
+    some = np.flatnonzero(count)
+    first, count = first[some], count[some]
+    x0, y0, dx, dy = x0[some], y0[some], x1[some] - x0[some], y1[some] - y0[some]
+    edge = np.repeat(np.arange(len(some)), count)
+    at = np.arange(len(edge)) - np.repeat(np.cumsum(count) - count - first, count)  # the point, in height order
+    crosses = xs[at] < x0[edge] + (ys[at] - y0[edge]) * dx[edge] / dy[edge]
+    out = np.zeros(len(xy), dtype=bool)
+    out[order] = np.bincount(at[crosses], minlength=len(xy)) % 2 == 1
+    return out
+
+
+def _rectangle(xy: np.ndarray, o: np.ndarray, u: np.ndarray, v: np.ndarray) -> dict:
+    """The smallest rectangle round 2D points ``xy`` (one of its sides lies along an edge of their
+    convex hull), in 3D: centre, axes (the longer side first) and half sizes."""
+    from scipy.spatial import ConvexHull, QhullError
+
+    try:
+        P = xy[ConvexHull(xy).vertices]
+    except (QhullError, ValueError):
+        P = xy  # a sliver: its points are all there is
+    if not len(P):
+        return {"center": [float(x) for x in o], "axes": [[float(x) for x in u], [float(x) for x in v]],
+                "half_sizes_mm": [0.0, 0.0]}
+    e = np.roll(P, -1, axis=0) - P
+    e = e[np.linalg.norm(e, axis=1) > 0]
+    e = e / np.linalg.norm(e, axis=1)[:, None] if len(e) else np.array([[1.0, 0.0]])
+    n = np.c_[-e[:, 1], e[:, 0]]
+    a, b = P @ e.T, P @ n.T
+    k = int(np.argmin((a.max(0) - a.min(0)) * (b.max(0) - b.min(0))))
+    sides = [(e[k], a[:, k]), (n[k], b[:, k])]
+    sides.sort(key=lambda s: -float(np.ptp(s[1])))
+    centre = sum(d * 0.5 * (float(t.min()) + float(t.max())) for d, t in sides)
+    axes = []
+    for d, _ in sides:
+        d = -d if d[0] < 0 or (d[0] == 0 and d[1] < 0) else d  # a fixed sign: x towards +u
+        axes.append([float(x) for x in d[0] * u + d[1] * v])
+    return {"center": [float(x) for x in o + centre[0] * u + centre[1] * v], "axes": axes,
+            "half_sizes_mm": [0.5 * float(np.ptp(t)) for _, t in sides]}
+
+
+def _cylinder_extent(V: np.ndarray, F: np.ndarray, fit: CylinderFit, faces: np.ndarray) -> dict:
+    """A cylinder region's span along the axis and the arc it covers (module docstring, "Extent")."""
+    Fr = F[faces]
+    used = np.zeros(len(V), dtype=bool)
+    used[Fr] = True
+    verts = np.flatnonzero(used)
+    q = rows(V, verts) - fit.point
+    a = fit.axis / np.linalg.norm(fit.axis)
+    t = q @ a  # as the viewer's summarizeRegion: every vertex of the region, from the fit's point
+    lo, hi = float(t.min()), float(t.max())
+    zero, side = _basis(a)
+    ang = np.arctan2(q @ side, q @ zero) % (2 * math.pi)
+    s = np.sort(ang)
+    gaps = np.diff(np.append(s, s[0] + 2 * math.pi))
+    k = int(np.argmax(gaps))
+    # the widest gap between the vertices' angles is where the region is not; unless a face of the
+    # region bridges it, with a corner on each side of it (a whole round: its widest gap is one face wide)
+    r = (ang - (s[k] + 0.5 * gaps[k]) + math.pi) % (2 * math.pi) - math.pi
+    near = np.zeros(len(V), dtype=np.int8)
+    near[verts] = np.where(r < 0, -1, 1) * (np.abs(r) < 0.5 * math.pi)
+    c = near[Fr]
+    if len(s) < 2 or bool(np.any((c.min(axis=1) < 0) & (c.max(axis=1) > 0))):
+        start, arc = 0.0, 360.0
+    else:
+        start, arc = math.degrees(float(s[(k + 1) % len(s)])), math.degrees(2 * math.pi - float(gaps[k]))
+    return {"kind": "cylinder", "along_mm": [lo, hi], "length_mm": hi - lo, "zero": [float(x) for x in zero],
+            "start_deg": start, "arc_deg": arc}
+
+
+def region_extent(V, F, kind: str, fit, faces, edge=None) -> dict:
+    """Where a region lies on its fitted shape, as plain JSON (module docstring, "Extent").
+
+    ``V``, ``F``: the mesh; ``kind``: "plane", "cylinder" or "hole"; ``fit``: the region's
+    :class:`PlaneFit`, :class:`CylinderFit` or :class:`CircleFit`; ``faces``: the region's face
+    indices; ``edge``: a hole's edge vertices in order. :func:`fit_at` puts the answer in
+    :attr:`RegionFit.extent`.
+    """
+    V, F = as_mesh(V, F)
+    return _extent(V, F, kind, fit, np.asarray(faces, dtype=np.int64).reshape(-1),
+                   None if edge is None else np.asarray(edge, dtype=np.int64).reshape(-1))
+
+
+def _extent(V: np.ndarray, F: np.ndarray, kind: str, fit, faces: np.ndarray, edge: np.ndarray | None) -> dict:
+    if kind == "plane":
+        return _plane_extent(V, F, fit, faces)
+    if kind == "cylinder":
+        return _cylinder_extent(V, F, fit, faces)
+    if kind == "hole":
+        return {"kind": "hole", "edge": rows(V, edge).tolist() if edge is not None else []}
+    raise ValueError(f"kind must be one of {', '.join(KINDS)}, got {kind!r}")
+
+
 # --------------------------------------------------------------------------- the click
 def fit_at(V, F, face: int, point, kind: str, sigma=None, filled=None, tolerance_mm: float | None = None,
            angle_tol_deg: float | None = None) -> RegionFit:
@@ -858,5 +1270,8 @@ def fit_at(V, F, face: int, point, kind: str, sigma=None, filled=None, tolerance
     if not measured[face]:
         raise ValueError("the clicked face is filled or not measured: click on the scanned surface")
     if kind == "hole":
-        return _fit_hole(V, F, S, measured, face, point)
-    return _grow(_Surface(V, F, S, measured), face, kind, tolerance_mm, angle_tol_deg)
+        r = _fit_hole(V, F, S, measured, face, point)
+    else:
+        r = _grow(_Surface(V, F, S, measured), face, kind, tolerance_mm, angle_tol_deg)
+    r.extent = _extent(V, F, kind, r.fit, r.faces, r.edge)
+    return r

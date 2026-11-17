@@ -2210,6 +2210,71 @@ its hole at the origin to 1e-4 mm (the file's 32-bit numbers).
   noise. On a scan the fits' ± is widened for errors that come in patches ("The fits' ± on
   today's engine"); how well the frame's ± holds there is still to be measured.
 
+## Relations between two fits, and where a fit's region lies (2026-11-17)
+
+`ohs.measure.relate.relate` gives what the viewer shows for two fits (the angle; the distance
+between parallel planes or axes, or the closest distance of skew axes; an axis or a hole's centre
+to a plane; two holes' centres), now each with a 1σ carried over from both fits
+([`docs/FEATURE_PLAN.md`](docs/FEATURE_PLAN.md), K2; the engine only so far). The values equal the
+viewer's own (`ui/src/lib/fits.ts`) to 1e-6 on a shared set of cases
+(`tests/data/relations.json`, read by a Python test and a UI test).
+
+**The ± of a relation**, on fits to noisy points with a known truth, 200 seeded trials per case
+(`tests/test_measure_relate.py`):
+
+| Case | ±2σ covers | Mean (error/σ)² |
+|---|---|---|
+| Parallel planes 30 mm aside: angle / distance | 94.5 % / 97.5 % | 1.13 / 0.84 |
+| Planes at 90° / at 40°: angle | 95.0 % / 95.5 % | 0.90 / 0.87 |
+| Parallel axes: angle / distance | 97.0 % / 97.0 % | 1.15 / 0.88 |
+| Coaxial axes: distance | 95.5 % | 1.21 |
+| Skew axes at 60°: angle / distance | 96.5 % / 98.0 % | 0.89 / 0.87 |
+| Axis along a plane: angle / distance | 96.0 % / 97.0 % | 1.04 / 0.86 |
+| Axis square to a plane: angle | 95.0 % | 1.21 |
+| Two holes in one face: centre to centre | 94.5 % | 1.10 |
+| Hole in a side face to a plane | 94.5 % | 0.97 |
+
+- **Where it is off:** a fit's ± across its direction is split evenly over the two directions.
+  For cylinders seen over part of their round that is not so: skew axes fitted on 180° arcs are
+  covered 99.5 % of the time (the ± too large by about 1.4), on 90° arcs 89.5 % (too small by
+  about 1.2). A test holds it to that. Mending it needs the fits to keep their full covariance.
+- **No ±:** any angle with a hole's direction (a hole has a ± for its centre only), and a hole's
+  depth below a face parallel to its own gets the face's ± alone, which is too small.
+- **The viewer's own ±** for the distance between parallel planes leaves out the tilt of the two
+  normals over the sideways distance between the planes' points; the engine's includes it. The
+  values agree.
+- As everywhere: the ± is the spread from scan to scan, not the accuracy.
+
+**Extents** (`RegionFit.extent`): a plane's outline in the plane's own 2D axes (outer loops and
+holes told apart, specks under two mesh edges left out), its smallest rectangle and its area; a
+cylinder's span along its axis and the arc it covers; a hole's edge. The fits themselves are
+unchanged: identical numbers and regions before and after on a simulated bracket scan (10
+clicks) and on the tests' meshes.
+
+**What it costs on a click:**
+
+| Click | Fit alone | Extent |
+|---|---|---|
+| The table of a real-size scan (804,372 triangles; the region 394,044 faces, 2,810 loops, 722 after the specks) | 1.15–1.22 s | 0.12–0.14 s |
+| A whole plate, 1M triangles (synthetic) | 0.56 s | 0.05 s |
+| One side of a box, 1M triangles | 0.19 s | 0.02 s |
+| A whole tube, 1M triangles | 1.21 s | 0.10 s |
+| 120° of a pitted tube, 685k faces | 1.39 s | 0.09 s |
+| A hole | 0.10 s | 0 |
+
+The first version took 23 s on that table: it tested every loop of the outline against every
+other, which the synthetic meshes, with a handful of loops, did not show. Found by trying it in
+the app on the scan. Loops are now only tested against larger loops whose box holds them, all
+points at once (49 tests instead of 262,450), and
+`test_a_plane_with_hundreds_of_loops_costs_less_than_its_fit` (a plate with 529 holes: 6.4 s
+before against a 0.17 s fit, 0.02 s now) guards it.
+
+- **A fault found on the way and mended:** the test for "is this vertex on the region's border"
+  summed a linear function of the neighbours' numbers, which cancels on regular grids, so a
+  border vertex could be missed. It now uses fixed random weights.
+- **Not yet tried:** extents on meshes of tracked scans beyond the table above; the extent is
+  not sent to the viewer yet.
+
 ## What the metrics mean
 
 - **Stereo errors** compare the estimated raw intrinsics/extrinsics (`K1`, `K2`, `R`, `T`) with

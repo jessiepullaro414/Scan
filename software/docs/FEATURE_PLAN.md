@@ -115,6 +115,19 @@ number is in the scan's own frame.
 - **Test first:** on the synthetic meshes of `tests/test_measure_*` the engine's relations equal
   the UI's numbers to 1e-6; ±2σ covers the true relation about 95 % of the time over seeded
   trials, as for the fits themselves.
+- **Engine done 2026-11-17.** `RegionFit.extent` (`region_extent` in `ohs/measure/region.py`;
+  in `to_dict(with_extent=True)`, so today's answers keep their keys) and
+  `ohs/measure/relate.py` (`relate`, with a 1σ on every relation that can have one). The values
+  equal the viewer's on a shared set of cases; ±2σ covers the truth 94.5–98 % of the time; the
+  fits are unchanged (`VALIDATION.md`, "Relations between two fits, and where a fit's region
+  lies").
+  - *Found by trying it in the app:* the first version's plane outline took 23 s on a real-size
+    scan (every loop tested against every other; the synthetic meshes have a handful of loops,
+    the scan's table 2,810). Now 0.12–0.14 s there, with a test on a plate of 529 holes.
+  - **Known limits:** a hole's direction has no ±, so angles with it have none; the ± of skew
+    axes is up to 1.4 times off on part-round cylinders (the fits keep no full covariance).
+  - **Left:** the fit route and the kept features do not carry the extent yet, and the viewer
+    still computes relations itself (the next task).
 
 ### [x] K3. A coordinate system for the part (M)
 - **What:** the 3-2-1 rule from kept features: a plane gives the first axis, a second plane or an
