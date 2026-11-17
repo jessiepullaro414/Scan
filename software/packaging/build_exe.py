@@ -19,8 +19,9 @@ the app's page is in ``ohs/server/static``; needs ``pip install pyinstaller``). 
   interpolate and Pillow's AVIF codec.
 
 Measured (``VALIDATION.md``, "A trial exe"): the first build with everything was about 720 MB
-unpacked, 5 minutes to build; the same results as from Python. Signing, an installer and the
-version in the file's properties are not done.
+unpacked, 5 minutes to build; the same results as from Python. ``ohs.exe`` carries the app's
+version, name and licence in its file properties (Windows: right click, Properties, Details;
+:func:`version_info`). Signing and an installer are not done.
 """
 from __future__ import annotations
 
@@ -50,6 +51,35 @@ EXCLUDES = [
 ]
 
 
+def version_info(version: str) -> str:
+    """The text of a PyInstaller version file (``--version-file``) for ``version`` ("0.3.0"):
+    what Windows shows under the file's Properties, Details."""
+    nums = [int(x) for x in version.split(".")[:4] if x.isdigit()]
+    nums += [0] * (4 - len(nums))
+    four = tuple(nums[:4])
+    strings = {
+        "CompanyName": "OpenHandScan contributors",
+        "FileDescription": "OpenHandScan Studio",
+        "FileVersion": version,
+        "InternalName": "ohs",
+        "LegalCopyright": "MIT License",
+        "OriginalFilename": "ohs.exe",
+        "ProductName": "OpenHandScan",
+        "ProductVersion": version,
+    }
+    table = ",\n          ".join(f"StringStruct({k!r}, {v!r})" for k, v in strings.items())
+    return f"""VSVersionInfo(
+  ffi=FixedFileInfo(filevers={four}, prodvers={four}, mask=0x3f, flags=0x0, OS=0x40004, fileType=0x1,
+                    subtype=0x0, date=(0, 0)),
+  kids=[
+    StringFileInfo([StringTable('040904B0', [
+          {table}])]),
+    VarFileInfo([VarStruct('Translation', [0x0409, 1200])])
+  ]
+)
+"""
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--out", type=Path, default=HERE / "out", help="folder for the build and the result")
@@ -59,9 +89,15 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     out = a.out.resolve()
     out.mkdir(parents=True, exist_ok=True)
+    sys.path.insert(0, str(SOFTWARE))
+    from ohs import __version__
+
+    version_file = out / "version_info.txt"
+    version_file.write_text(version_info(__version__), encoding="utf-8")
     cmd = [sys.executable, "-m", "PyInstaller", str(HERE / "ohs_entry.py"), "--name", "ohs", "--noconfirm", "--clean",
            "--console", "--distpath", str(out), "--workpath", str(out / "work"), "--specpath", str(out),
            "--icon", str(SOFTWARE / "ohs" / "server" / "assets" / "ohs.ico"),  # the app's logo (make_icon.py)
+           "--version-file", str(version_file),  # version, name and licence in the file's properties
            "--paths", str(SOFTWARE), "--log-level", "WARN",
            "--additional-hooks-dir", str(HERE / "hooks"),  # Open3D and OpenCV without what is not used
            "--runtime-hook", str(HERE / "rthook_stub_viewers.py"),  # open3d imports plotly and dash: stand-ins
