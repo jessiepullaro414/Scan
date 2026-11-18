@@ -151,8 +151,10 @@ BUILTIN_RECIPES: list[dict] = [
      "settings": {"quality": "standard", "straighten": "auto", "refine": "auto", "voxel_mm": None},
      "ops": [{"op": "remove_floaters", "params": {"min_size_mm": 5.0, "min_fraction": 0.01}},
              {"op": "fill_holes", "params": {"max_hole_mm": 15.0}},
+             # away from edges ("Off edges"), the owner's decision of 2026-11-17: it protects edges, where
+             # "within 2σ", used here until then, protected none (VALIDATION.md, "Smoothing's "within 2σ" limit")
              {"op": "smooth", "params": {"method": "bilateral", "strength": 0.5, "keep_edges": True,
-                                         "within_sigma": True}}]},
+                                         "away_from_edges": True}}]},
     {"id": "bracket", "name": "Bracket / mechanical", "builtin": True,
      "description": "For brackets and machined parts: keeps sharp edges, light smoothing, closes pin holes up to "
                     "5 mm.",
@@ -160,7 +162,7 @@ BUILTIN_RECIPES: list[dict] = [
      "ops": [{"op": "remove_floaters", "params": {"min_size_mm": 5.0, "min_fraction": 0.01}},
              {"op": "fill_holes", "params": {"max_hole_mm": 5.0}},
              {"op": "smooth", "params": {"method": "bilateral", "strength": 0.25, "keep_edges": True,
-                                         "within_sigma": True}}]},
+                                         "away_from_edges": True}}]},
     {"id": "quick-preview", "name": "Quick preview", "builtin": True,
      "description": "Fast look at a scan: preview quality, no straightening, simplified to about 200,000 "
                     "triangles. Not for measuring.",

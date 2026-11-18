@@ -86,8 +86,12 @@ other, so any of them can be taken first.
   person align the scans (picked points), not accept a guess.
 - **Smoothing's "within 2σ" limit** (2026-11-17): "if it doesn't protect the edges it's
   probably not worth it". It was added with smoothing as a safety limit; measured, it holds
-  back only well-measured surface and protects no edge. What takes its place in the two
-  built-in recipes that use it is still to be settled with the owner.
+  back only well-measured surface and protects no edge. **Settled the same day ("Off edges
+  is fine"):** the "Body panel" and "Bracket / mechanical" recipes smooth away from edges
+  instead (`away_from_edges`); on the bracket the edge vertices made worse fall from 23–46 %
+  to 1.4–2.9 % (`VALIDATION.md`, "Smoothing's "within 2σ" limit on today's engine"). The
+  Smooth tab's own switch for the limit is unchanged and still on by default; whether it
+  stays is not asked yet.
 
 ---
 

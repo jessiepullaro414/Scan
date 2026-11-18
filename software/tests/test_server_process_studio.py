@@ -600,7 +600,15 @@ def test_recipes_apply_edits_and_all(env):
     assert j["result"]["message"].startswith("Bracket / mechanical applied")
     s = get(b + "/process").json()
     assert [e["op"] for e in s["edits"]] == ["remove_floaters", "fill_holes", "smooth"] and s["cursor"] == 3
-    assert s["edits"][2]["params"] == {"method": "bilateral", "strength": 0.25, "keep_edges": True, "within_sigma": True}
+    # the owner's decision of 2026-11-17: the built-in recipes smooth away from edges ("Off edges"), which
+    # protects edges, and no longer "within 2σ", which protected none (VALIDATION.md, "Smoothing's
+    # "within 2σ" limit on today's engine")
+    assert s["edits"][2]["params"] == {"method": "bilateral", "strength": 0.25, "keep_edges": True, "away_from_edges": True}
+    from ohs.server.processing import BUILTIN_RECIPES
+
+    smooths = {r["id"]: o["params"] for r in BUILTIN_RECIPES for o in r["ops"] if o["op"] == "smooth"}
+    assert set(smooths) == {"body-panel", "bracket"}
+    assert all(p.get("away_from_edges") is True and "within_sigma" not in p for p in smooths.values()), smooths
     assert s["base"] == before["base"] and s["stages"]["track"] == before["stages"]["track"]
     # all: the stages with the recipe's settings, then its ops
     rid = env["user_recipe"]

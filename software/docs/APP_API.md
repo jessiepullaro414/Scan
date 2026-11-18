@@ -797,7 +797,7 @@ Everything in the M3 phase 2 section is implemented as written, with these clari
 - `smooth`:
   - `keep_edges` defaults to true; `strength` must be 0–1.
   - Strength sets the work: Taubin `1 + 49 s` iterations; bilateral `2 + 18 s` normal and `5 + 15 s` vertex iterations.
-  - `within_sigma` (M3 phase 3; the Process page sends it by default when the mesh has sigmas, and the Body panel and Bracket recipes use it): no vertex moves more than twice its own sigma; a longer move is shortened. Without sigmas it does nothing.
+  - `within_sigma` (M3 phase 3; the Process page sends it by default when the mesh has sigmas; the Body panel and Bracket recipes used it until 2026-11-17 and now send `away_from_edges` instead, the owner's decision): no vertex moves more than twice its own sigma; a longer move is shortened. Without sigmas it does nothing.
   - `flat_only` (2026-11-16, default false; the Process page's "Where" choice "Flat only"; no recipe uses it yet): each vertex keeps its move only where the surface around it is flat (`ohs.mesh.smoothing`, "Flat surface only"), so edges, corners and small round features stay as scanned. The label says "flat areas only".
   - `away_from_edges` (2026-11-17, default false; the "Where" choice "Off edges"; no recipe uses it): nothing within 1.5 mm of a sharp edge (over 25°) moves, and everything from 3 mm on is smoothed in full, round features too (`ohs.mesh.smoothing`, "Away from edges"). The label says "away from edges". Sent with `flat_only` it is a 422.
 - `decimate`:

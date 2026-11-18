@@ -2179,7 +2179,7 @@ Scripts and rows: scratchpad `m5v3\` of the session of 2026-11-16 (`run.sh`, `co
 
 ## Smoothing's "within 2σ" limit on today's engine (2026-11-16)
 
-The Smooth step can keep each vertex within twice its own sigma ("within 2σ", on in the Smooth tab and both recipes). With the old sigma it never took effect ("The deviation map against the truth"). Measured again on the meshes of "The fits' ± on today's engine" (bracket and car panel, 5 seeds, true poses and tracking), each setting with and without the limit, errors against the true surface:
+The Smooth step can keep each vertex within twice its own sigma ("within 2σ", on in the Smooth tab and, until 2026-11-17, in both recipes; see the end of this section). With the old sigma it never took effect ("The deviation map against the truth"). Measured again on the meshes of "The fits' ± on today's engine" (bracket and car panel, 5 seeds, true poses and tracking), each setting with and without the limit, errors against the true surface:
 
 | Setting | Vertices the limit holds back (all / at edges) | Median error, before → after (free / within 2σ) | RMS error, before → after (free / within 2σ) |
 |---|---|---|---|
@@ -2216,7 +2216,9 @@ Same 20 meshes; means over the seeds (true poses and tracking alike unless said)
 - **The price:** small round features such as the Ø 16 shaft keep a little of their noise (0.177 against 0.171 mm, flat; 0.174 mm, edge), and the RMS error over everything is about 1 % higher (0.1028 against 0.1014 mm), from the outliers at edges and rims that free smoothing pulls in and these leave.
 - **Of the two, "flat" protects edges best** (at most 3.6 % made worse, against 8.1 %); "edge" keeps more of the smoothing on round features.
 
-Both are options, off by default, chosen in the Smooth tab's "Where to smooth" (Everywhere / Off edges / Flat only, with the numbers above in its hover card): `flat_only` since 2026-11-16, `away_from_edges` since 2026-11-17 (the owner's decision: both, explained, not the default). Scripts and rows: scratchpad `m5v3\check\` (`run_flat.py`, `agg2.py`).
+Both are options, off by default, chosen in the Smooth tab's "Where to smooth" (Everywhere / Off edges / Flat only, with the numbers above in its hover card): `flat_only` since 2026-11-16, `away_from_edges` since 2026-11-17 (the owner's decision: both, explained, not the default).
+
+**The two built-in recipes use "Off edges" since 2026-11-17** (the owner: "if it doesn't protect the edges it's probably not worth it", then "Off edges is fine"). "Body panel" (bilateral 50 %) and "Bracket / mechanical" (bilateral 25 %) sent "within 2σ", which their moves never reached; they now send `away_from_edges`. What that changes is the two bilateral rows above: on the bracket the edge vertices made worse by more than 0.05 mm fall from 23 % to 1.4 % (25 %) and from 46 % to 2.9 % (50 %), the median error stays the same or a little better (0.0252 → 0.0249 and 0.0242 → 0.0238 mm), and the Ø 16 shaft keeps a little of its noise (0.179 against 0.177 mm, 0.190 against 0.186 mm). The bilateral settings were not measured on the car panel; with Taubin 50 % the panel's share made worse fell from 20 % to 8.1 %. A recipe someone saved, and an edit already applied, keep what they had. The Smooth tab's own switch "Stay within each point's uncertainty" is unchanged (still on by default). Through the app on the bracket's back scan (1280x800): the Bracket recipe ran in 10 s, "Moved the surface by 0.021 mm on average and 0.29 mm at most". Scripts and rows: scratchpad `m5v3\check\` (`run_flat.py`, `agg2.py`).
 
 ## The part's coordinate system: its ± (2026-11-17)
 
