@@ -776,6 +776,8 @@ class SupportMap:
     facing_deg: float = FACING_DEG
     min_patch_mm2: float = 10.0
     info: dict = field(default_factory=dict)
+    #: each of ``info["thin_parts"]``'s own cells (flat indices into the grids), in the same order
+    thin_cells: list = field(default_factory=list, repr=False)
 
     def __post_init__(self) -> None:
         self.normal = np.asarray(self.normal, dtype=np.float64).reshape(3)
@@ -885,16 +887,20 @@ def support_map(V: np.ndarray, F: np.ndarray, finding: SupportFinding, *, cell_m
     _mark(m.table, m, V, F[np.asarray(finding.faces, dtype=np.int64)])
     _mark(m.core, m, V, F[kept[low[kept] <= float(reach_mm)]])
     warned = [r for r in finding.raised if r["verdict"] == "warned"]
-    for r in finding.raised:
-        if r["kept"] or r["verdict"] == "warned":  # a thin part, or what may be one: kept in a merge
-            _mark(m.thin, m, V, F[np.asarray(r["faces"], dtype=np.int64)])
-    if m.thin.any():
-        # whole: a raised area is the faces above 2.5 times the table's RMS, and the scan's noise dips a thin
-        # part's top below that in spots (a 0.3 mm disc on a table of 0.1 mm: 6 % of its top); and a cell more
-        # of its smeared rim
+    thin_raised = [r for r in finding.raised if r["kept"] or r["verdict"] == "warned"]  # a thin part, or what may be one
+    if thin_raised:
+        # each whole: a raised area is the faces above 2.5 times the table's RMS, and the scan's noise dips a thin
+        # part's top below that in spots (a 0.3 mm disc on a table of 0.1 mm: 6 % of its top); and a cell more of
+        # its smeared rim. Each area's own cells are kept too, so that a merge can say whether it is in the result
         from scipy.ndimage import binary_fill_holes  # noqa: PLC0415
 
-        m.thin = binary_dilation(binary_fill_holes(m.thin), structure=np.ones((3, 3), dtype=bool))
+        for r in thin_raised:
+            g = np.zeros(shape, dtype=bool)
+            _mark(g, m, V, F[np.asarray(r["faces"], dtype=np.int64)])
+            g = binary_fill_holes(g)
+            m.thin_cells.append(np.flatnonzero(g))
+            m.thin |= g
+        m.thin = binary_dilation(m.thin, structure=np.ones((3, 3), dtype=bool))
     m.core |= m.thin
     k = int(math.ceil(float(spread_mm) / cell))
     yy, xx = np.mgrid[-k:k + 1, -k:k + 1]
@@ -903,17 +909,21 @@ def support_map(V: np.ndarray, F: np.ndarray, finding: SupportFinding, *, cell_m
     def at(r: dict) -> str:
         return "at ({:.0f}, {:.0f}, {:.0f}) mm".format(*r["centre"])
 
+    # what a merge means to do with each (a merge says afterwards what of each is in its result: ohs.align.merge)
     thin_parts = [{"centre": [float(x) for x in r["centre"]], "size_mm": float(r["size_mm"]), "area_mm2": float(r["area_mm2"]),
-                   "height_mm": float(r["height_mm"]), "verdict": "kept" if r["kept"] else "warned", "in_merge": "kept"}
-                  for r in finding.raised if r["kept"] or r["verdict"] == "warned"]
+                   "height_mm": float(r["height_mm"]), "verdict": "kept" if r["kept"] else "warned", "in_merge": "kept",
+                   "where": at(r)} for r in thin_raised]
     uneven = [r for r in finding.raised if r["verdict"] == "uneven"]
     warnings = []
-    for r in warned[:8]:
-        warnings.append(f"A raised area {r['size_mm']:.0f} mm across, {r['height_mm']:.2f} mm above the table round it, {at(r)}, "
-                        "may be a thin part: it is kept in the merged scan (if it is the table's own, a patch of table that "
-                        "size is left there).")
+    for x in [x for x in thin_parts if x["verdict"] == "warned"][:8]:
+        x["warning"] = (f"A raised area {x['size_mm']:.0f} mm across, {x['height_mm']:.2f} mm above the table round it, "
+                        f"{x['where']}, may be a thin part: it is kept in the merged scan (if it is the table's own, a patch "
+                        "of table that size is left there).")
+        warnings.append(x["warning"])
     if len(warned) > 8:
-        warnings.append(f"{len(warned) - 8} more raised areas like these are kept in the merged scan.")
+        more = len(warned) - 8
+        warnings.append(f"{more} more raised area{'s' if more != 1 else ''} like these {'are' if more != 1 else 'is'} kept in "
+                        "the merged scan.")
     if uneven:
         hi_mm = max(r["height_mm"] for r in uneven)
         warnings.append(f"{len(uneven)} raised area{'s' if len(uneven) != 1 else ''} up to {hi_mm:.2f} mm high, where the table is "

@@ -125,6 +125,37 @@ def test_align_from_the_tags_both_scans_saw(env, tmp_path):
     assert mm < 2.0 and deg < 0.3
 
 
+def test_an_alignment_the_engine_is_not_sure_of_carries_its_poses(env, tmp_path):
+    """MAINTENANCE_PLAN F11: two scans of the sphere on its table from the shape alone. A sphere fits
+    itself turned round, so the job says "not sure" (not a guess presented as an answer), why in one
+    word and in words, and carries the poses it had in mind for the page to show; for several scans
+    the pair carries them too and the verdict says the engine was not sure."""
+    from test_align_tags import _scan as sphere_scan
+
+    a, b = sphere_scan(tmp_path, 0.0, 0), sphere_scan(tmp_path, 150.0, 1)
+    st = env["studio"]
+    pid = requests.post(env["url"] + "/api/projects", json={"name": "Sphere, not sure"}, timeout=TIMEOUT).json()["id"]
+    ids = []
+    for name, sc in (("Front", a), ("Back", b)):
+        scan, rec_dir = st.projects.add_scan(pid, name, "markerless")
+        shutil.copytree(sc["out"], st.projects.scan_dir(pid, scan["id"]) / "result")
+        st.projects.update_scan(pid, scan["id"], status="processed", n_frames=1, duration_s=1.0, quality="standard")
+        ids.append(scan["id"])
+    base = f"{env['url']}/api/projects/{pid}"
+    done = run_job(env, post(base + "/align", {"target": ids[0], "source": ids[1], "use_tags": False}), "align")
+    res = done["result"]
+    assert res["accepted"] is False and res["sure"] is False and res["doubt"] in ("rival", "turned", "one_guess"), res
+    assert res["verdict"].startswith("Not aligned: not sure") and done["message"] == res["verdict"]
+    poses = res["poses"]
+    assert 2 <= len(poses) <= 4 and poses[0]["chosen"] and not any(q["chosen"] for q in poses[1:])
+    assert np.allclose(poses[0]["T"], res["T"]) and all(np.asarray(q["T"]).shape == (4, 4) for q in poses)
+    assert all(set(q) >= {"pick", "overlap", "reached", "from", "apart_mm"} for q in poses)
+    res = run_job(env, post(base + "/align_all", {"scans": ids, "use_tags": False}), "align_all")["result"]
+    pair = res["pairs"][0]
+    assert not res["accepted"] and pair["sure"] is False and len(pair["poses"]) >= 2
+    assert "not sure of" in res["verdict"] and "Pick matching points" in res["verdict"], res["verdict"]
+
+
 def test_align_and_merge_say_what_is_missing(env):
     err(post(env["base"] + "/align", {"target": env["a"], "source": env["a"]}), 409, "to itself")
     err(post(env["base"] + "/align", {"target": env["a"], "source": env["bare"]}), 409, "has no mesh yet")

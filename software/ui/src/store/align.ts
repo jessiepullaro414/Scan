@@ -5,7 +5,9 @@
  * alignment job and its result, and the merge job and the scan it made.
  *
  * With two scans the page calls `align` and the merge's first form (target, source, T), exactly as the
- * first slice did; with three or more it calls `align_all` and the merge's `scans` form.
+ * first slice did; with three or more it calls `align_all` and the merge's `scans` form. When the engine
+ * was not sure of two scans, the pose the person chose (`chosenPose`) is the one merged at, and without a
+ * choice (or their own picked points) nothing is merged (lib/alignChoice.ts).
  *
  * Job progress comes from the `job` messages (the jobs store); when one of the two jobs ends, its result
  * or its plain reason is picked up here. A merge that runs when the page is opened (after a reload) is
@@ -35,6 +37,7 @@ import {
   type Side,
   type Vec3,
 } from "../lib/align";
+import { mergeOffer, poseInUse } from "../lib/alignChoice";
 import { isActive, useJobs } from "./jobs";
 import { useProjects } from "./projects";
 
@@ -58,6 +61,8 @@ type AlignState = {
   result: AlignResult | null;
   multi: AlignAllResult | null;
   alignProblem: Problem | null;
+  /** Two scans, the engine not sure: the pose the person looked at and chose (an index into `result.poses`). */
+  chosenPose: number | null;
 
   mergeStarting: boolean;
   mergeJobId: string | null;
@@ -85,7 +90,9 @@ type AlignStore = AlignState & {
   clearPicks: () => void;
   /** Start the alignment: from the shape alone, or (`fromPoints`) from the picked pairs. */
   align: (fromPoints: boolean) => Promise<boolean>;
-  /** Merge at the result's poses into a new scan called `name` (empty: the server's default). */
+  /** The person chooses one of the poses the engine was not sure between (null: none). */
+  choosePose: (index: number | null) => void;
+  /** Merge at the result's poses (two scans: at the chosen pose, if one was chosen) into a new scan called `name` (empty: the server's default). */
   merge: (name: string) => Promise<boolean>;
 };
 
@@ -100,6 +107,7 @@ const fresh = (): AlignState => ({
   result: null,
   multi: null,
   alignProblem: null,
+  chosenPose: null,
   mergeStarting: false,
   mergeJobId: null,
   merged: null,
@@ -108,7 +116,7 @@ const fresh = (): AlignState => ({
 });
 
 /** What belongs to one list of scans and one alignment of them. */
-const noResult = { alignJobId: null, result: null, multi: null, alignProblem: null, merged: null, mergeProblem: null, mergeCancelled: false } as const;
+const noResult = { alignJobId: null, result: null, multi: null, alignProblem: null, chosenPose: null, merged: null, mergeProblem: null, mergeCancelled: false } as const;
 
 /** The scans asked for, each once, at most eight. */
 function asked(...ids: (string | null | undefined)[]): string[] {
@@ -212,13 +220,19 @@ export const useAlign = create<AlignStore>((set, get) => ({
       const job = await start();
       adoptJob(job);
       // the old result goes only now: a request that is refused (points in one line…) leaves it on screen
-      set({ alignStarting: false, alignJobId: job.id, result: null, multi: null, merged: null, mergeProblem: null, mergeCancelled: false });
+      set({ alignStarting: false, alignJobId: job.id, result: null, multi: null, chosenPose: null, merged: null, mergeProblem: null, mergeCancelled: false });
       follow();
       return true;
     } catch (e) {
       set({ alignStarting: false, alignProblem: describeError(e) });
       return false;
     }
+  },
+
+  choosePose: (index) => {
+    const s = get();
+    if (running(s) || !s.result) return;
+    set({ chosenPose: index !== null && index >= 0 && index < (s.result.poses?.length ?? 0) ? index : null });
   },
 
   merge: async (name) => {
@@ -230,7 +244,9 @@ export const useAlign = create<AlignStore>((set, get) => ({
     if (scans.length === 2) {
       const [target, source] = scans;
       if (!result || result.target !== target || result.source !== source) return false;
-      start = () => api.mergeScans(pid, { target, source, T: result.T, same_setup: result.same_setup, ...(title ? { name: title } : {}) });
+      if (!mergeOffer(result, s.chosenPose).offered) return false; // the engine was not sure, and nothing was chosen
+      const T = poseInUse(result, s.chosenPose);
+      start = () => api.mergeScans(pid, { target, source, T, same_setup: result.same_setup, ...(title ? { name: title } : {}) });
     } else {
       if (!multi || !sameList(multi.scans, scans)) return false;
       const list = mergeScansOf(multi, scans);
@@ -267,7 +283,7 @@ function follow(): void {
       const pair = pickPairOf(s.scans, s.pickPair);
       const keep = pair && pair.some((id) => multi.unplaced.includes(id));
       useAlign.setState({ alignJobId: null, multi, result: null, alignProblem: null, ...(keep ? {} : { pickPair: suggestPickPair(multi, s.scans) ?? s.pickPair }) });
-    } else if (al.state === "done" && isAlignResult(al.result)) useAlign.setState({ alignJobId: null, result: al.result, multi: null, alignProblem: null });
+    } else if (al.state === "done" && isAlignResult(al.result)) useAlign.setState({ alignJobId: null, result: al.result, multi: null, alignProblem: null, chosenPose: null });
     else if (al.state === "done")
       useAlign.setState({ alignJobId: null, alignProblem: { detail: "The alignment finished, but its answer couldn't be read", hint: "Align again. If it happens again, check the engine log." } });
     else if (al.state === "failed")

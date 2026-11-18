@@ -162,12 +162,17 @@ let a = done.result as AlignResult;
 check(a.accepted === false, "top and underside, the part moved, no points: NOT accepted");
 check(
   a.verdict ===
-    "Not aligned: the part fits in more than one position about equally well (a symmetric shape, a repeated feature, or a surface that can slide on itself): give a rough start by picking matching points, or scan with more of the part's distinct features in both.",
+    "Not aligned: not sure which way it goes: it fits about as well turned round (98 % as well, 61 mm away; a symmetric shape, a repeated feature, or a surface that can slide on itself): pick three or more matching points on both scans, or choose one of the poses.",
   "with the engine's sentence",
 );
 check(a.reason === AMBIGUOUS_REASON && a.message === a.verdict, "the reason, and the message is the verdict");
 check(a.start === "features" && a.pairs_rms_mm === null && a.same_setup === false && a.used_support === false, "from the shape alone, the tables not used");
 check(JSON.stringify(a.T) === JSON.stringify(WRONG) && isRigid(a.T), "a pose is still returned, for showing");
+check(a.sure === false && a.doubt === "turned" && a.poses?.length === 2, "not sure, with the poses it had in mind (F11)");
+check(
+  !!a.poses && a.poses[0].chosen && !a.poses[1].chosen && JSON.stringify(a.poses[0].T) === JSON.stringify(a.T) && a.poses.every((q) => isRigid(q.T)),
+  "the engine's pose first, then the other",
+);
 check(a.project_id === "p1" && a.target === "top" && a.source === "under", "the result names the project and the two scans");
 check(!("scan_id" in a), "an align result names no scan of its own (no “mesh ready” for it)");
 check(JSON.stringify(p) === before, "align writes nothing");

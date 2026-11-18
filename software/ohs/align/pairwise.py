@@ -1,18 +1,28 @@
 """Aligning two scans of one part to each other (research plan 4.7.1 and 4.7.2).
 
 Each scan is a mesh in its own world (the camera frame of its first tracked frame). The answer is
-the rigid motion ``T`` that takes points of the *source* scan into the *target* scan's world.
+the rigid motion ``T`` that takes points of the *source* scan into the *target* scan's world. We
+cannot know what the parts will be: the pose is found from whatever angle the scans were taken
+when enough of the part is shared, and when the evidence is not there the answer says "not sure",
+why, and which poses it had in mind, and is not accepted (MAINTENANCE_PLAN F11).
 
 1. **Clouds.** The mesh's vertices and normals are thinned to one point per ``voxel_mm`` (fine)
    and per ``coarse_voxel_mm`` (coarse). If one plane holds at least ``support_min_share`` of the
-   surface, it is what the part rests on (a table): it is set aside together with everything
-   behind it (the fringe a mesh grows at a table's rim), and what is in front is the *part*.
-   On a table scan that plane is nine tenths of the mesh and has no features; left in, it decides
-   the answer, and every in-plane position and turn fits it equally well (measured: every guess
-   came out about 100 degrees wrong on the simulated bracket).
+   surface and passes the three tests of a table (:func:`_not_a_table`, as
+   :mod:`ohs.mesh.support` judges it: something stands on it; no more of the scan lies well
+   behind it than in front; the part does not go on behind it beside what stands on it), it is
+   what the part rests on: it is set aside together with everything behind it (the fringe a mesh
+   grows at a table's rim), and what is in front is the *part*. A plane that fails them is one of
+   the part's own faces and stays (``support_note`` says why); the next largest plane is tried
+   once. On a table scan that plane is nine tenths of the mesh and has no features; left in, it
+   decides the answer, and every in-plane position and turn fits it equally well (measured: every
+   guess came out about 100 degrees wrong on the simulated bracket). Then **stray bits**: the
+   part's points joined over gaps of ``piece_link_voxels`` voxels form pieces, and pieces under
+   ``piece_min_share`` of the largest (bits left on the table, ``stray``) are left out.
 2. **First guesses**, when no ``init`` is given: FPFH features of the coarse part clouds, matched
    by Fast Global Registration and by RANSAC with ``ransac_seeds`` seeds
-   (:func:`ohs.track.posegraph.global_match`). Any of them may be wrong.
+   (:func:`ohs.track.posegraph.global_match`). Any of them may be wrong, and several can be wrong
+   together.
 3. **Refinement.** From every guess, point-to-plane ICP of the part clouds, coarse to fine, free
    in all six directions (:func:`ohs.track.posegraph._icp` with a tiny ``weak_rel``: Straighten
    keeps a tracked guess along weak directions; here the guess is not to be trusted anywhere).
@@ -20,16 +30,40 @@ the rigid motion ``T`` that takes points of the *source* scan into the *target* 
    (``init_from="tags"``, a few tenths of a millimetre off) is different: it is kept along the
    directions the surfaces pin weakly (``start_weak_rel``), so a sphere or a cylinder stays turned as
    the tags say instead of spinning to wherever two partial views overlap most. (From picked
-   points such a part still turns freely: tags are the way to align it.)
-4. **The pick.** A refined guess is scored by the share of part points that find the other scan
-   within ``match_mm`` with an agreeing normal (the smaller of the two directions). The best one
-   wins. It is accepted only if at least one other guess ended at the same pose (``agree``,
-   within ``agree_mm``): a pose that only one guess leads to is not trusted. A guess that ended
-   somewhere else and scores nearly as well (``rival_share``) means the part fits in more than
-   one position (a symmetric shape, a row of equal holes, a surface that can slide on itself),
-   and the pair is not accepted either: the user then gives a rough pose. ``spread_mm`` says how
-   far the guesses near the chosen pose ended from it.
-5. **Same setup.** If the part was not moved on its support between the two scans
+   points such a part still turns freely: tags are the way to align it.) The ICP's Tukey weights
+   (scale ``robust_min_mm``) keep it a robust fit, not a least-squares one; for two scans of one
+   part that is the better choice (measured, F11).
+4. **Turned round.** The best pose is refined again from itself turned half round about each
+   principal axis of the source's part and of the target's part, and a quarter round both ways
+   about the source's thinnest direction (:func:`_turned_starts`, ``turn_starts``). A wrong pose
+   that scores well is most often the right one turned round, whatever the part (its axes are
+   where its shape balances), and the first guesses can all fall into it together: on the
+   simulated bracket against its true shape 8 of 9 guesses agreed on a pose turned 180°, which
+   scored worse than the true pose that none of them reached.
+5. **Sure or not sure.** Every refined pose is scored by the share of part points that find the
+   other scan within ``match_mm`` with an agreeing normal (the smaller of the two directions),
+   and poses within ``agree_mm`` of each other are one pose. From the shape (no ``init``), the
+   best pose is accepted only when
+
+   * enough is shared: ``overlap`` of at least ``min_overlap`` and a tight fit (``fit_mm`` at
+     most ``max_fit_mm``);
+   * it beats every other pose by a clear margin: the next scores less than ``rival_share``
+     (0.9) of it. Measured: on every pair that was found the next pose scored 0.24-0.79 of the
+     right one; on a ball, a sphere and a plain plate 0.93-1.0;
+   * starts that differ reach it: at least two (``reached``: the first guesses that ended there;
+     turned starts count only when they found it from elsewhere, not when they came back to the
+     pose they were turned from).
+
+   Otherwise it is "not sure" (``doubt``: ``rival``, ``turned``, ``one_guess``), says why in
+   words and what settles it (picked points, or choosing one of its poses), and carries the poses
+   in ``poses`` (the best first, then the others that score best, at most :data:`MAX_POSES`).
+   A start that was given is checked too: picked points decide between poses that fit alike, but
+   when another pose scores better than the points' by ``points_rival_share`` (their pose less
+   than 0.8 of it), or the refinement pulled the scan more than ``rival_mm`` from where the points
+   put it, the answer is "not sure" (``doubt="points"``). A start from the tags is not overruled
+   by a better-scoring pose (a sphere turned round always overlaps more of itself somewhere).
+   ``spread_mm`` says how far the starts near the chosen pose ended from it.
+6. **Same setup.** If the part was not moved on its support between the two scans
    (``same_setup=True``), the support plane is the same surface in both: the pose is turned and
    lifted, about the part's centre, until the two planes coincide (height and tilt, which a large
    plane pins much better than a small part can), and the part is fitted once more along the
@@ -41,19 +75,22 @@ the rigid motion ``T`` that takes points of the *source* scan into the *target* 
 The result says how much of the smaller scan's part overlaps (``overlap``) and how well: the RMS
 along the normals of what matches within ``match_mm`` (``rmse_mm``), and a robust spread of the
 residuals of everything within three times that (``fit_mm``), which is what a poor fit shows in;
-how many directions the overlap pins down (``dof``: 6 when all); and a sentence for the user. It
-is a pair's alignment; several scans at once (a pose graph over all pairs, 4.7.3) build on it.
+how many directions the overlap pins down (``dof``: 6 when all); whether it is sure, and a
+sentence for the user. It is a pair's alignment; several scans at once (a pose graph over all
+pairs, 4.7.3) build on it.
 
-Known limits: a part's own flat face that is 30 % or more of a scan made without a table is taken
-for the support and set aside (``support_min_share`` above 1 turns the step off); the feature
-guesses of Open3D's RANSAC are not the same on every run (its threads share one random
-generator), so a pair near the limits can be accepted on one run and refused on the next.
+Known limits: the feature guesses of Open3D's RANSAC are not the same on every run (its threads
+share one random generator), so a pair near the limits can be sure on one run and not sure on the
+next; a thin plate (1 mm) on its table lies within the table's band, so it goes with the table and
+the answer is "too little of the part" (picked points do not help: tags on the part, or a scan of
+it standing up, do).
 """
 from __future__ import annotations
 
 import logging
+import math
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -96,8 +133,22 @@ class AlignParams:
     max_fit_mm: float = 0.7  # the robust spread of the residuals within 3 match_mm
     agree_mm: float = 2.0  # two refined guesses are the same answer within this RMS point distance
     rival_mm: float = 10.0  # a refined guess farther than this from the chosen pose is another answer
-    rival_share: float = 0.9  # another answer with this share of the best score makes the pair ambiguous
+    # another pose with this share of the best score makes the pair "not sure" (module docstring, 5.;
+    # measured: the next pose scored 0.24-0.79 of the right one on every pair that was found, 0.93-1.0
+    # on a ball, a sphere and a plain plate)
+    rival_share: float = 0.9
+    # picked points are contradicted when their pose scores less than this share of another pose's
+    points_rival_share: float = 0.8
     min_part_points: int = 300
+    # a plane is the table only when something stands on it, little of the scan lies well behind it,
+    # and the part does not go on behind it beside what stands on it (module docstring, 1.)
+    support_stand_points: int = 30  # coarse points in front of it, at least
+    support_behind_share: float = 0.1  # of those: points well behind it, beside them, at most
+    # stray bits left on the table: the part's points joined over gaps of this many voxels form a piece,
+    # and pieces under this share of the largest are left out
+    piece_link_voxels: float = 3.0
+    piece_min_share: float = 0.1
+    turn_starts: bool = True  # the chosen pose is tried again turned round (module docstring, 4.)
     weak_rel: float = 3e-3  # a direction with less than this share of the strongest constraint is not pinned
     # a start from tags is kept along directions with less than this share
     # (a sphere's turn about the vertical changes how much of two partial views overlap: at 3e-3 the
@@ -123,6 +174,8 @@ class ScanCloud:
     both: Any  # the part and as many points of the support as the part has: neither outvotes the other
     support: tuple[np.ndarray, float] | None  # the plane n . x + d = 0 that was set aside
     support_share: float  # the share of the surface on it (0 when none was set aside)
+    stray: int = 0  # part points left out as stray bits (away from the part's main pieces)
+    support_note: str | None = None  # why a large plane was not taken for the table
 
     @property
     def n_part(self) -> int:
@@ -149,11 +202,18 @@ class PairAlignment:
     used_support: bool = False  # the last step ran on all points
     ms: float = 0.0
     verdict: str = ""
+    sure: bool = False  # = accepted: the evidence is there (module docstring, 5.)
+    doubt: str | None = None  # why not, in one word: part, guess, overlap, fit, rival, turned, one_guess, points
+    poses: list[dict] = field(default_factory=list)  # the poses it had in mind, the chosen one first (module docstring, 5.)
+    turned: int = 0  # starts tried turned round
+    reached: int = 0  # starts that ended at the chosen pose independently of it (module docstring, 5.)
 
     def as_dict(self) -> dict:
         d = {k: getattr(self, k) for k in ("accepted", "reason", "start", "overlap", "rmse_mm", "fit_mm", "n_matched", "candidates",
-                                           "agree", "spread_mm", "dof", "same_setup", "used_support", "ms", "verdict")}
+                                           "agree", "spread_mm", "dof", "same_setup", "used_support", "ms", "verdict", "sure",
+                                           "doubt", "turned", "reached")}
         d["T"] = np.asarray(self.T).tolist()
+        d["poses"] = [dict(p) for p in self.poses]
         return d
 
 
@@ -189,21 +249,32 @@ def scan_cloud(V: np.ndarray, N: np.ndarray, params: AlignParams | None = None, 
     order = np.lexsort((V[:, 2], V[:, 1], V[:, 0]))  # a mesh comes with its vertices in a different order every run
     V, N = V[order], N[order]
     full = _cloud(V, N, p.voxel_mm, p.coarse_voxel_mm)
-    support, share, part_mask = None, 0.0, np.ones(len(V), bool)
+    support, share, part_mask, note = None, 0.0, np.ones(len(V), bool), None
     C = full.coarse.pts  # evenly spread, so a share of points is a share of the surface
-    if len(C) >= 50:
+    left = np.ones(len(C), bool)
+    for _ in range(2):  # the largest plane, and when that is a face of the part, the next one
+        if left.sum() < 50:
+            break
         try:
-            n, d, mask, _ = fit_plane_ransac(C, thresh=float(p.support_dist_mm), iters=800, seed=seed, min_inliers=10)
+            n, d, _, _ = fit_plane_ransac(C[left], thresh=float(p.support_dist_mm), iters=800, seed=seed, min_inliers=10)
         except ValueError:
-            mask = np.zeros(len(C), bool)
-        if mask.mean() >= p.support_min_share:
-            # the plane's normal towards the side it was seen from: the part rests on that side, and what
-            # lies behind the support (the fringe a mesh grows at a table's rim and underside) is not the part
-            if float(np.sum(full.coarse.nrm[mask] @ n)) < 0:
-                n, d = -n, -d
+            break
+        mask = np.abs(C @ n + d) <= p.support_dist_mm
+        if mask.mean() < p.support_min_share:
+            break
+        # the plane's normal towards the side it was seen from: the part rests on that side, and what
+        # lies behind the support (the fringe a mesh grows at a table's rim and underside) is not the part
+        if float(np.sum(full.coarse.nrm[mask] @ n)) < 0:
+            n, d = -n, -d
+        why = _not_a_table(C, n, float(d), p)
+        if why is None:
             support, share = (n, float(d)), float(mask.mean())
             part_mask = V @ n + d > p.support_dist_mm
+            break
+        note = f"a plane holding {100 * mask.mean():.0f} % of the scan was kept as part of the part: it {why}"
+        left &= ~mask
     part = _cloud(V[part_mask], N[part_mask], p.voxel_mm, p.coarse_voxel_mm) if part_mask.any() else None
+    part, stray = _main_pieces(part, p)
     both = full
     if support is not None and part is not None and part.n:
         # the support near the part, thinned to the part's number of points
@@ -215,7 +286,72 @@ def scan_cloud(V: np.ndarray, N: np.ndarray, params: AlignParams | None = None, 
         if len(idx) > part.n:
             idx = idx[np.random.default_rng(seed).choice(len(idx), part.n, replace=False)]
         both = _cloud(np.vstack([part.fine.pts, S[idx]]), np.vstack([part.fine.nrm, NS[idx]]), p.voxel_mm, p.coarse_voxel_mm)
-    return ScanCloud(part, full, both, support, share)
+    return ScanCloud(part, full, both, support, share, stray=stray, support_note=note)
+
+
+def _not_a_table(C: np.ndarray, n: np.ndarray, d: float, p: AlignParams) -> str | None:
+    """Why the plane ``n . x + d = 0`` (its normal towards where it was seen from) is not what the
+    part stands on, or None when it can be. The three guards of :mod:`ohs.mesh.support`, on the
+    same coarse cloud:
+
+    * something stands on it: ``support_stand_points`` points or more in front of it (or nothing
+      lies behind it either: a bare table, or one with only a thin part on it, is still a table);
+    * no more of the scan lies well behind it than in front (a part's own face has the part
+      behind it). Only what lies more than twice the band behind counts: a noisy table (Open3D's
+      mesh of a short scan, 0.4-0.8 mm scatter) has as many points just outside its band behind
+      it as a small part has in front;
+    * the part does not go on behind it beside what stands on it (a face of the part with more of
+      the part beyond its edge): points well behind it, seen along its normal, within the reach of
+      what stands in front, fewer than ``support_behind_share`` of the front.
+
+    Without these, a block scanned all round lost itself: its top face (31 % of the surface) was
+    taken for the table and everything behind it, the whole block, set aside."""
+    from scipy.spatial import cKDTree  # noqa: PLC0415
+
+    band = float(p.support_dist_mm)
+    h = C @ n + d
+    front = h > band
+    deep = h < -2.0 * band
+    nf = int(front.sum())
+    if nf < int(p.support_stand_points):
+        if int(deep.sum()) < int(p.support_stand_points):
+            return None  # nothing in front and nothing behind: a bare table (or one with only a thin part on it)
+        return "has nothing standing on it"
+    if int(deep.sum()) > nf:
+        return "has more of the scan behind it than in front, as a face of the part has the part behind it"
+    if deep.any():
+        X = C - h[:, None] * n  # seen along the normal
+        Xf = X[front]
+        reach = max(10.0, float(np.percentile(np.linalg.norm(Xf - Xf.mean(axis=0), axis=1), 95)))
+        dist, _ = cKDTree(Xf).query(X[deep], k=1, distance_upper_bound=reach)
+        near = int(np.isfinite(dist).sum())
+        if near >= max(10, float(p.support_behind_share) * nf):
+            return "has the part going on behind it beside what stands on it, as a part's own face has"
+    return None
+
+
+def _main_pieces(c: Any, p: AlignParams) -> tuple[Any, int]:
+    """The part's cloud with stray bits left out: its fine points joined over gaps of
+    ``piece_link_voxels`` voxels form pieces, and pieces under ``piece_min_share`` of the largest
+    go. A table scan leaves such bits on the table when the plane is set aside (33 points, 1.4 %
+    of the simulated bracket's part, up to 290 mm away); few as they are, with them 8 of 9 first
+    guesses of that scan against the bracket's true shape agreed on a pose turned 180°.
+    ``(cloud, points left out)``."""
+    from scipy.sparse import coo_matrix  # noqa: PLC0415
+    from scipy.sparse.csgraph import connected_components  # noqa: PLC0415
+    from scipy.spatial import cKDTree  # noqa: PLC0415
+
+    if c is None or c.n < 2:
+        return c, 0
+    P, N = c.fine.pts, c.fine.nrm
+    pairs = cKDTree(P).query_pairs(float(p.piece_link_voxels) * float(p.voxel_mm), output_type="ndarray")
+    A = coo_matrix((np.ones(len(pairs), dtype=np.int8), (pairs[:, 0], pairs[:, 1])), shape=(len(P), len(P)))
+    _, lab = connected_components(A, directed=False)
+    size = np.bincount(lab)
+    keep = size[lab] >= float(p.piece_min_share) * size.max()
+    if keep.all():
+        return c, 0
+    return _cloud(P[keep], N[keep], p.voxel_mm, p.coarse_voxel_mm), int((~keep).sum())
 
 
 def scan_cloud_from_mesh(path: str | Path, params: AlignParams | None = None, seed: int = 0) -> ScanCloud:
@@ -384,9 +520,12 @@ def align_pair(src: ScanCloud, dst: ScanCloud, params: AlignParams | None = None
     out = PairAlignment(T=np.eye(4) if init is None else np.asarray(init, dtype=np.float64).reshape(4, 4).copy(),
                         start="features" if init is None else init_from, same_setup=bool(same_setup))
 
-    def done(reason: str | None = None) -> PairAlignment:
+    given = {"given": "your points", "tags": "the tags"}.get(out.start, "")
+
+    def done(reason: str | None = None, doubt: str | None = None) -> PairAlignment:
         out.reason = reason
-        out.accepted = reason is None
+        out.accepted = out.sure = reason is None
+        out.doubt = doubt
         out.ms = round(1e3 * (time.perf_counter() - t0), 1)
         if reason is None:
             sure = (f"{out.agree} of {out.candidates} starting guesses agree" if out.start == "features"
@@ -394,6 +533,8 @@ def align_pair(src: ScanCloud, dst: ScanCloud, params: AlignParams | None = None
             loose = "" if out.dof >= 6 else f" The overlap leaves {6 - out.dof} direction(s) of motion loose."
             out.verdict = (f"Aligned: {100 * out.overlap:.0f} % of the smaller scan's part lies within {p.match_mm:g} mm "
                            f"of the other scan, {out.rmse_mm:.2f} mm RMS; {sure}.{loose}")
+            if out.start != "features" and len(out.poses) > 1 and out.poses[1]["pick"] >= p.rival_share * out.poses[0]["pick"]:
+                out.verdict += f" The shapes alone fit about as well another way: {given} decided."
         else:
             out.verdict = f"Not aligned: {reason}."
         return out
@@ -401,46 +542,77 @@ def align_pair(src: ScanCloud, dst: ScanCloud, params: AlignParams | None = None
     a, b = src.part, dst.part
     if a is None or b is None or min(a.n, b.n) < p.min_part_points:
         return done("one of the scans shows too little of the part besides its support "
-                    f"({0 if a is None else a.n} and {0 if b is None else b.n} points; at least {p.min_part_points} each)")
+                    f"({0 if a is None else a.n} and {0 if b is None else b.n} points; at least {p.min_part_points} each)",
+                    "part")
     sp = pg.StraightenParams(fpfh_radius_mm=float(p.fpfh_radius_mm), fgr_max_corr_mm=float(p.feature_dist_mm))
     for c in (a, b):  # the features are kept on the cloud: made again when the radius is another
         if getattr(c, "fpfh_radius_mm", None) != float(p.fpfh_radius_mm):
             c.feat, c.fpfh_radius_mm = None, float(p.fpfh_radius_mm)
-    starts: list[np.ndarray] = []
-    if init is not None:
-        starts.append(out.T.copy())
-    else:
-        o3d = pg._open3d()
-        for method, seed in [("fgr", 0)] + [("ransac", k) for k in range(int(p.ransac_seeds))]:
-            if hasattr(o3d.utility, "random"):
-                o3d.utility.random.seed(int(seed))  # the same guesses on every run, as far as Open3D allows
-            Tg = pg.global_match(a, b, sp, method, seed)
-            if Tg is not None:
-                starts.append(Tg)
+    starts = [out.T.copy()] if init is not None else _first_guesses(a, b, sp, p)
     if not starts:
-        return done("no starting guess could be made from the shapes")
+        return done("no starting guess could be made from the shapes", "guess")
     # from the shape's guesses ICP is free in every direction: nothing of a feature guess is worth
     # keeping, nor of points picked by hand (a few millimetres and degrees off); a start from the
     # tags is better than the shape along the directions the surfaces pin weakly, and kept there
     keep = init is not None and init_from == "tags"
     rel = float(p.start_weak_rel) if keep else 1e-9
-    refined = []
+    kind = "guess" if init is None else out.start
+    cands: list[tuple[np.ndarray, tuple, str]] = []
     for T0 in starts:
         T = pg._icp(a, b, T0, p.icp_part, rel, p.robust_min_mm)
         if np.all(np.isfinite(T)):
-            refined.append((T, _score(a, b, T, p.match_mm)))
-    if not refined:
-        return done("the refinement failed from every starting guess")
-    out.candidates = len(refined)
-    T, best = max(refined, key=lambda c: (c[1][0], -c[1][3] if np.isfinite(c[1][3]) else -np.inf))
-    apart = [_apart_mm(a.fine.pts, c[0], T) for c in refined]
-    out.agree = sum(d <= p.agree_mm for d in apart)
+            cands.append((T, _score(a, b, T, p.match_mm), kind))
+    if not cands:
+        return done("the refinement failed from every starting guess", "guess")
+    out.candidates = len(cands)
+    Pa = a.fine.pts[:: max(1, len(a.fine.pts) // 3000)]  # enough to tell poses apart
+    if init is None:
+        chosen = max(cands, key=lambda c: _rank(c[1]))
+    else:
+        chosen = cands[0]
+        if chosen[1][1] < p.min_overlap:  # the start fits badly: what do the shapes alone say?
+            for T0 in _first_guesses(a, b, sp, p):
+                T = pg._icp(a, b, T0, p.icp_part, 1e-9, p.robust_min_mm)
+                if np.all(np.isfinite(T)):
+                    cands.append((T, _score(a, b, T, p.match_mm), "guess"))
+    # the chosen pose tried again turned round: a wrong pose that scores well is most often the
+    # right one turned half round (or a quarter, about the thinnest direction), and the first
+    # guesses can all fall into it together
+    T_before_turns = chosen[0]
+    if p.turn_starts and (chosen[1][0] > 0 or init is not None):
+        for T0 in _turned_starts(a, b, chosen[0]):
+            T = pg._icp(a, b, T0, p.icp_part, 1e-9, p.robust_min_mm)
+            if np.all(np.isfinite(T)):
+                cands.append((T, _score(a, b, T, p.match_mm), "turned"))
+                out.turned += 1
+        if init is None:
+            chosen = max(cands, key=lambda c: _rank(c[1]))
+    groups = _group(cands, Pa, p.agree_mm, chosen[0])
+    T, best = chosen[0], chosen[1]
+    first = groups[0]  # the chosen pose's group
+    out.agree = sum(1 for k in first["members"] if cands[k][2] != "turned")
+    # starts that reached the chosen pose independently: a turned start that came back to the pose it
+    # was turned from says nothing new; turned starts that found a better pose elsewhere do
+    found_by_turning = _apart_mm(Pa, T_before_turns, chosen[0]) > p.agree_mm
+    out.reached = len(first["members"]) if found_by_turning else out.agree
+    apart = [_apart_mm(Pa, c[0], T) for c in cands]
     out.spread_mm = round(max((d for d in apart if d <= p.rival_mm), default=0.0), 3)
-    rival = max((c[1][0] for c, d in zip(refined, apart) if d > p.agree_mm), default=0.0)
+    out.poses = [_pose_row(g, cands, Pa, T, k == 0, out.start) for k, g in enumerate(groups[:MAX_POSES])]
     out.T = T
     _, out.overlap, out.rmse_mm, out.fit_mm, out.n_matched = best
+    other = groups[1] if len(groups) > 1 else None
+    if out.start == "given" and other is not None and other["score"][0] * p.points_rival_share > best[0]:
+        # points picked by hand are checked against the shapes: they decide between poses that fit
+        # alike and are not overruled, but a pose that fits clearly better says the points are off.
+        # (Not the tags: measured, they hold a sphere where it is, and a sphere turned round always
+        # overlaps more of itself somewhere.)
+        return done(f"not sure: {given} put the scan where the shapes fit "
+                    + (f"{100 * best[0] / other['score'][0]:.0f} % as well as at another pose"
+                       if best[0] > 0 else "nowhere, but they fit at another pose")
+                    + f" {other['apart']:.0f} mm away: check {given} (two may be swapped), or choose that pose", "points")
     if best[0] <= 0:
-        return done("the two scans do not overlap at any of the starting guesses")
+        out.poses = []
+        return done("the two scans do not overlap at any of the starting guesses", "overlap")
     if same_setup and src.support is not None and dst.support is not None:
         pivot = a.fine.pts.mean(axis=0) @ T[:3, :3].T + T[:3, 3]
         T2, turn, shift = _onto_support(T, src.support, dst.support, pivot)
@@ -451,6 +623,7 @@ def align_pair(src: ScanCloud, dst: ScanCloud, params: AlignParams | None = None
             if np.all(np.isfinite(T2)) and s2[0] >= 0.9 * best[0]:  # the part still fits: keep what the support added
                 out.T, out.used_support = T2, True
                 _, out.overlap, out.rmse_mm, out.fit_mm, out.n_matched = s2
+                out.poses[0]["T"] = np.asarray(T2).tolist()
         else:
             log.info("same setup asked for, but the two supports are %.1f deg and %.1f mm apart after the part's fit: "
                      "left out", turn, shift)
@@ -458,18 +631,110 @@ def align_pair(src: ScanCloud, dst: ScanCloud, params: AlignParams | None = None
     out.dof = _dof(src.both if use_all else a, dst.both if use_all else b, out.T, p.match_mm, p.weak_rel)
     if out.overlap < p.min_overlap:
         return done(f"too little of the two scans overlaps ({100 * out.overlap:.0f} % of the smaller scan's part within "
-                    f"{p.match_mm:g} mm; at least {100 * p.min_overlap:.0f} %)")
+                    f"{p.match_mm:g} mm; at least {100 * p.min_overlap:.0f} %)", "overlap")
     if not out.fit_mm <= p.max_fit_mm:
         return done(f"the overlapping surfaces do not match closely (the residuals spread over {out.fit_mm:.2f} mm; "
-                    f"at most {p.max_fit_mm:g} mm)")
-    if out.start == "features" and rival >= p.rival_share * best[0]:
-        return done("the part fits in more than one position about equally well (a symmetric shape, a repeated "
-                    "feature, or a surface that can slide on itself): give a rough start by picking matching points, or scan "
-                    "with more of the part's distinct features in both")
-    if out.start == "features" and out.agree < 2:
-        return done("only one of the starting guesses led to this pose, which is too little to trust it: "
-                    "give a rough start by picking matching points, or scan with more overlap")
-    log.info("aligned a pair: overlap %.0f %%, %.2f mm RMS, %d of %d guesses agree, %d directions pinned (%s)",
-             100 * out.overlap, out.rmse_mm, out.agree, out.candidates, out.dof,
+                    f"at most {p.max_fit_mm:g} mm)", "fit")
+    if out.start != "features":
+        moved = _apart_mm(Pa, starts[0], chosen[0])  # a refinement that pulled the scan far from the start
+        if moved > p.rival_mm:
+            return done(f"not sure: the shapes pulled the scan {moved:.0f} mm from where {given} put it: check {given}",
+                        "points")
+    else:
+        if other is not None and other["score"][0] >= p.rival_share * best[0]:
+            turned = all(cands[k][2] == "turned" for k in other["members"])
+            what = ("it fits about as well turned round" if turned else
+                    "the part fits in more than one position about equally well")
+            return done(f"not sure which way it goes: {what} ({100 * other['score'][0] / best[0]:.0f} % as well, "
+                        f"{other['apart']:.0f} mm away; a symmetric shape, a repeated feature, or a surface that can slide "
+                        "on itself): pick three or more matching points on both scans, or choose one of the poses",
+                        "turned" if turned else "rival")
+        if out.reached < 2:
+            return done(f"not sure: only one of the {out.candidates + out.turned} starts led to this pose, which is too "
+                        "little to trust it: pick three or more matching points on both scans, or scan with more overlap",
+                        "one_guess")
+    log.info("aligned a pair: overlap %.0f %%, %.2f mm RMS, %d of %d guesses agree (%d starts in all), %d directions "
+             "pinned (%s)", 100 * out.overlap, out.rmse_mm, out.agree, out.candidates, out.reached, out.dof,
              "with the support" if out.used_support else "part only")
     return done()
+
+
+MAX_POSES = 4  # poses kept in the result for the person to look at
+
+
+def _first_guesses(a: Any, b: Any, sp: Any, p: AlignParams) -> list[np.ndarray]:
+    """First guesses from the shape: FPFH features matched by FGR and by RANSAC with ``ransac_seeds`` seeds."""
+    o3d = pg._open3d()
+    out = []
+    for method, seed in [("fgr", 0)] + [("ransac", k) for k in range(int(p.ransac_seeds))]:
+        if hasattr(o3d.utility, "random"):
+            o3d.utility.random.seed(int(seed))  # the same guesses on every run, as far as Open3D allows
+        Tg = pg.global_match(a, b, sp, method, seed)
+        if Tg is not None:
+            out.append(Tg)
+    return out
+
+
+def _rank(s: tuple) -> tuple:
+    """How a refined pose is ranked: by the share of matching surface, then by a tight fit."""
+    return s[0], -s[3] if np.isfinite(s[3]) else -np.inf
+
+
+def _turned_starts(a: Any, b: Any, T: np.ndarray) -> list[np.ndarray]:
+    """``T`` turned half round about each principal axis of the source's part (through its centre,
+    in its own world) and of the target's part (in the target's world), and a quarter round both
+    ways about the source's thinnest direction. These are the poses a part that looks alike from
+    two sides fits in, whatever the part: its axes are where its shape is balanced."""
+    from ohs.geometry import make_se3, so3_exp  # noqa: PLC0415
+
+    def axes(P):
+        m = P.mean(axis=0)
+        _, U = np.linalg.eigh((P - m).T @ (P - m))  # columns: smallest spread first
+        return m, U
+
+    out = []
+    m, U = axes(a.fine.pts)
+    for k in range(3):
+        R = so3_exp(math.pi * U[:, k])
+        out.append(T @ make_se3(R, m - R @ m))
+    for ang in (0.5 * math.pi, -0.5 * math.pi):
+        R = so3_exp(ang * U[:, 0])
+        out.append(T @ make_se3(R, m - R @ m))
+    m2, U2 = axes(b.fine.pts)
+    c = T[:3, :3] @ m + T[:3, 3]  # the source's centre where T puts it
+    for k in range(3):
+        R = so3_exp(math.pi * U2[:, k])
+        out.append(make_se3(R, c - R @ c) @ T)
+    del m2
+    return out
+
+
+def _group(cands: list, P: np.ndarray, agree_mm: float, T_first: np.ndarray) -> list[dict]:
+    """The refined poses gathered into distinct poses (within ``agree_mm`` RMS over ``P`` of each
+    other's best), the one at ``T_first`` first, the others by their score."""
+    order = sorted(range(len(cands)), key=lambda k: _rank(cands[k][1]), reverse=True)
+    groups: list[dict] = [{"T": T_first, "score": None, "members": [], "apart": 0.0}]
+    for k in order:
+        T, s, _ = cands[k]
+        for g in groups:
+            if _apart_mm(P, T, g["T"]) <= agree_mm:
+                g["members"].append(k)
+                if g["score"] is None:
+                    g["score"] = s
+                break
+        else:
+            groups.append({"T": T, "score": s, "members": [k], "apart": _apart_mm(P, T, T_first)})
+    first, rest = groups[0], sorted(groups[1:], key=lambda g: _rank(g["score"]), reverse=True)
+    return [first] + rest
+
+
+def _pose_row(g: dict, cands: list, P: np.ndarray, T_first: np.ndarray, chosen: bool, start: str) -> dict:
+    """One pose for the result (module docstring, 5.)."""
+    s = g["score"]
+    kinds = {cands[k][2] for k in g["members"]}
+    how = {"guess": "the first guesses", "turned": "turned round", "given": "your points", "tags": "the tags"}
+    return {"T": np.asarray(g["T"]).tolist(), "chosen": bool(chosen), "pick": round(float(s[0]), 4),
+            "overlap": round(float(s[1]), 4), "rmse_mm": None if not np.isfinite(s[2]) else round(float(s[2]), 3),
+            "fit_mm": None if not np.isfinite(s[3]) else round(float(s[3]), 3), "reached": len(g["members"]),
+            "from": [how[k] for k in ("given", "tags", "guess", "turned") if k in kinds],
+            "apart_mm": round(float(g["apart"]), 2)}

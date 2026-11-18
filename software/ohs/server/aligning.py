@@ -294,8 +294,10 @@ class AlignManager:
                 # what each scan's table lost, and what to look at (only when the part was moved)
                 tables = [{"id": it["id"], "name": it["name"], "rule": s["table"]["rule"], "summary": s["table"]["summary"],
                            "warnings": list(s["table"]["warnings"])} for it, s in zip(items, rep["scans"]) if s.get("table")]
+                cleaning = (rep["mesh"].get("cleaning") or {}).get("summary") if tables else None
                 return jsonable({"project_id": pid, "scan_id": sid, "scan": scan, "merged_from": sids,
-                                 "message": f"Merged into \"{title}\"", "tables": tables, "warnings": list(rep.get("warnings", []))})
+                                 "message": f"Merged into \"{title}\"", "tables": tables, "warnings": list(rep.get("warnings", [])),
+                                 "cleaning": cleaning})
 
             def done(job: Any) -> None:
                 if job.state == "done":

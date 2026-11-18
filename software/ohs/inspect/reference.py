@@ -36,14 +36,14 @@ a scan of the part as it is. The answer is "93 % within ± 0.5 mm", and where th
      (:func:`ohs.align.pairwise.align_pair`: the scan's table set aside, first guesses from
      features, ICP, the checks), against points spread evenly over the reference's surface (its
      own support plane step turned off: a reference has no table). Its numbers (overlap, RMS, the
-     agreeing guesses, the directions pinned) are passed on in ``pair``. Four things are added
-     for a one-sided scan against a complete model, each found on the simulated bracket or the
-     test block (``ScanSurface.part_cloud``, :func:`_main_piece`, :func:`_turn_check`,
-     :func:`_least_squares`): the scan's largest plane is set aside only when it is a table (more
-     of the scan in front of it than behind, and larger than the reference); stray bits left on
-     the table are dropped; :data:`RANSAC_SEEDS` first guesses instead of 8; the pose is checked
-     against itself turned 180° about each of the part's axes; and a last least-squares step,
-     since the engine's robust weights keep an overall error at one end of the part.
+     agreeing guesses, the directions pinned, whether it is sure, the poses it had in mind) are
+     passed on in ``pair``. The engine's own guards (a table only when it is one, stray bits
+     dropped, the pose tried again turned round, "not sure" when the evidence is not there;
+     MAINTENANCE_PLAN F11) do the rest, with two settings of the comparison's own
+     (:data:`DEFAULT_PARAMS`): :data:`RANSAC_SEEDS` first guesses instead of 8, and
+     :data:`REFERENCE_RIVAL` for the margin. Then a last least-squares step
+     (:func:`_least_squares`), since the engine's robust weights keep an overall error at one end
+     of the part.
    * ``"points"`` / ``"points+shape"`` (:func:`align_by_points`): three or more pairs of points
      picked on the scan and on the reference (:func:`ohs.align.pairwise.pose_from_point_pairs`),
      used as they are or refined on the shapes from there (with the least-squares step).
@@ -136,17 +136,16 @@ COVER_EDGES = 3.0  # cover_mm: this many median scan edges, at least COVER_MIN_M
 COVER_MIN_MM = 1.0
 SAMPLES_MAX = 2_000_000  # points spread over the reference, at most
 VOTE_POINTS = 50_000  # scan vertices that decide an open reference piece's outside
-PIECE_LINK_VOXELS = 3.0  # the scan's part points joined over gaps of this many voxels form a piece
-PIECE_MIN_SHARE = 0.1  # pieces under this share of the largest are stray bits
 #: first guesses from the shape: more than for two scans. A complete reference has more places for
-#: a one-sided view to fit; on the simulated bracket 1 of 9 guesses reached the true pose, 3 of 25 did
+#: a one-sided view to fit; on the simulated bracket (640 x 400) against its true shape 1 of 25
+#: starts reached the true pose with 8 guesses ("not sure"), 3 of 33 with 24 (sure)
 RANSAC_SEEDS = 24
-TURN_MARGIN = 1.05  # a turned start must score this many times the engine's pose to replace it
-#: a turned pose elsewhere scoring this share of the pose or more: the part fits both ways. (The
-#: engine's rival_share of 0.9 is too wide here: the test block, told apart only by its hole and
-#: boss, scored 0.89-0.90 turned against 0.98-1.0)
-TURN_RIVAL = 0.97
-DEFAULT_PARAMS = AlignParams(ransac_seeds=RANSAC_SEEDS)
+#: another pose with this share of the best's score makes the comparison "not sure". Wider than
+#: the engine's 0.9 for two scans: the reference is exact and whole, so a pose turned round that
+#: misses only the small features still fits it well (the test block, told apart only by its hole
+#: and boss, scored 0.89-0.92 turned against 1.0), while a ball or a plain plate scores 0.93-1.0
+REFERENCE_RIVAL = 0.97
+DEFAULT_PARAMS = AlignParams(ransac_seeds=RANSAC_SEEDS, rival_share=REFERENCE_RIVAL)
 
 
 # --------------------------------------------------------------------------- small helpers
@@ -376,33 +375,6 @@ def check_units(reference_size_mm: float, scan_size_mm: float) -> UnitsFinding:
 
 
 # --------------------------------------------------------------------------- the scan
-def _main_piece(c, params: AlignParams) -> tuple[Any, int]:
-    """The scan cloud ``c`` with only the part's main pieces kept: its part points joined by gaps
-    of up to :data:`PIECE_LINK_VOXELS` voxels, pieces under :data:`PIECE_MIN_SHARE` of the largest
-    left out. A table scan leaves bits on the table after the plane is set aside (1.4 % of the
-    simulated bracket's part points, up to 290 mm away); few as they are, with them the first
-    guesses of the bracket against its reference ended at a pose turned 180° (8 of 9 agreeing),
-    without them at the true one. ``(cloud, points left out)``."""
-    from scipy.sparse import coo_matrix  # noqa: PLC0415
-    from scipy.sparse.csgraph import connected_components  # noqa: PLC0415
-    from scipy.spatial import cKDTree  # noqa: PLC0415
-
-    from ohs.align import pairwise as pw  # noqa: PLC0415
-
-    if c.part is None or c.part.n < 2:
-        return c, 0
-    P, N = c.part.fine.pts, c.part.fine.nrm
-    pairs = cKDTree(P).query_pairs(PIECE_LINK_VOXELS * float(params.voxel_mm), output_type="ndarray")
-    A = coo_matrix((np.ones(len(pairs), dtype=np.int8), (pairs[:, 0], pairs[:, 1])), shape=(len(P), len(P)))
-    _, lab = connected_components(A, directed=False)
-    sizes = np.bincount(lab)
-    keep = sizes[lab] >= PIECE_MIN_SHARE * sizes.max()
-    if keep.all():
-        return c, 0
-    part = pw._cloud(P[keep], N[keep], params.voxel_mm, params.coarse_voxel_mm)
-    return pw.ScanCloud(part, c.full, c.both, c.support, c.support_share), int((~keep).sum())
-
-
 @dataclass
 class ScanSurface:
     """The scan as it is compared: its mesh in its own world, each vertex's sigma (mm; the PLY
@@ -466,41 +438,16 @@ class ScanSurface:
             self._cache[key] = scan_cloud(self.V, self.normals(), params, seed)
         return self._cache[key]
 
-    def part_cloud(self, params: AlignParams, seed: int = 0, reference_mm: float | None = None) -> tuple[Any, str | None]:
-        """The scan's cloud with its table set aside only when it is one: ``(cloud, a note when the
-        plane was kept)``.
-
-        The alignment of two scans sets aside the largest plane when it holds 30 % or more of the
-        surface. On a scan made without a table that plane is one of the part's own faces, and the
-        part behind it goes with it. Here it counts as a table only when more of the rest of the
-        scan lies in front of it than behind (a table's fringe is behind it, the part in front) and,
-        given the reference's largest side ``reference_mm``, it is larger than that; else the cloud
-        is made again with the plane kept."""
-        key = ("part", params, seed, reference_mm)
-        if key in self._cache:
-            return self._cache[key]
+    def part_cloud(self, params: AlignParams, seed: int = 0) -> tuple[Any, str | None]:
+        """The scan's alignment cloud and, when there is something to say, a note: a large plane
+        kept as a face of the part (not a table), stray bits left out. Both are the alignment
+        engine's own guards (:func:`ohs.align.pairwise.scan_cloud`, MAINTENANCE_PLAN F11)."""
         c = self.cloud(params, seed)
-        notes = []
-        if c.support is not None:
-            n, d = c.support
-            P = c.full.fine.pts
-            h = P @ n + d
-            on = np.abs(h) <= params.support_dist_mm
-            front, behind = int((h > params.support_dist_mm).sum()), int((h < -params.support_dist_mm).sum())
-            side = float(_extents(P[on], trim=0.5)[0]) if on.sum() >= 10 else 0.0
-            table = front >= behind and c.n_part >= params.min_part_points
-            if not (table and (reference_mm is None or side > 1.2 * float(reference_mm))):
-                why = ("more of the scan lies behind it than in front" if not table
-                       else "it is no larger than the reference")
-                notes.append(f"the scan's largest plane ({100 * c.support_share:.0f} % of it, {side:.0f} mm across) was "
-                             f"taken as the part's own face, not a table, and kept: {why}")
-                c = self.cloud(replace(params, support_min_share=2.0), seed)
-        c, dropped = _main_piece(c, params)
-        if dropped:
-            notes.append(f"{dropped} stray point(s) of the scan away from the part (bits left on the table) were left out "
+        notes = [c.support_note] if c.support_note else []
+        if c.stray:
+            notes.append(f"{c.stray} stray point(s) of the scan away from the part (bits left on the table) were left out "
                          "of the alignment")
-        self._cache[key] = (c, "; ".join(notes) or None)
-        return self._cache[key]
+        return c, "; ".join(notes) or None
 
     def part_size_mm(self, params: AlignParams | None = None) -> float:
         """How large the scan's part is across: the diagonal of its box along its principal axes,
@@ -779,18 +726,12 @@ def _scan_points(c) -> np.ndarray:
     return c.part.fine.pts if c.part is not None and c.part.n else c.full.fine.pts
 
 
-def _scan_cloud_for(scan: ScanSurface, ref: ReferenceModel, p: AlignParams, seed: int) -> tuple[Any, str | None]:
-    """The scan's alignment cloud, its table told from the part's own largest face by the
-    reference's size (:meth:`ScanSurface.part_cloud`)."""
-    return scan.part_cloud(p, seed, reference_mm=float(ref.extent_mm[0]))
-
-
 def _pair(scan: ScanSurface, ref: ReferenceModel, p: AlignParams, seed: int, init=None):
     """:func:`align_pair` of the scan onto the reference; an open reference that does not align is
     tried once more seen from its other side. ``(result, the scan's cloud, the reference's cloud,
     notes)``."""
     kw = {} if init is None else {"init": init, "init_from": "given"}
-    src, note = _scan_cloud_for(scan, ref, p, seed)
+    src, note = scan.part_cloud(p, seed)
     notes = [note] if note else []
     dst = ref.cloud(p, seed)
     res = align_pair(src, dst, p, **kw)
@@ -800,57 +741,15 @@ def _pair(scan: ScanSurface, ref: ReferenceModel, p: AlignParams, seed: int, ini
         if res2.accepted:
             res, dst = res2, dst2
             notes.append("the reference's open surface was matched from its other side")
-    check = None
-    if init is None:
-        res, check = _turn_check(res, src, dst, p)
-        if check.get("note"):
-            notes.append(check["note"])
+    # what the engine's own check of the pose turned round found (MAINTENANCE_PLAN F11)
+    found_turned = bool(res.poses) and res.poses[0]["from"] == ["turned round"]
+    check = {"turned": int(res.turned), "reached": int(res.reached), "doubt": res.doubt, "poses": len(res.poses),
+             "taken": 0 if found_turned else None, "note": None}
+    if found_turned:
+        check["note"] = ("the first guesses ended at a pose that fits worse than the same turned round, and the turned pose "
+                         "was taken")
+        notes.append(check["note"])
     return res, src, dst, notes, check
-
-
-def _turn_check(res, src, dst, p: AlignParams):
-    """The pose from the shape, checked against itself turned half round (module docstring, 2.).
-
-    A one-sided view of a part fits its complete reference in more than one place, and the first
-    guesses can all fall into the wrong one: on the simulated bracket 24 of 25 ended at a pose
-    turned 180°, accepted, which fitted worse than the truth (0.130 against 0.148 by the
-    engine's score) that none of them reached. So the pose is turned 180° about each of the
-    part's three principal axes (through its centre) and refined from there as a given start. A
-    turned pose that scores :data:`TURN_MARGIN` times better replaces it; one that ends elsewhere
-    and scores nearly as well (:data:`TURN_RIVAL`) means the part fits both ways, and the
-    alignment is refused. ``(result, what was tried)``."""
-    from ohs.align import pairwise as pw  # noqa: PLC0415
-    from ohs.geometry import make_se3, so3_exp  # noqa: PLC0415
-
-    out: dict = {"engine_score": None, "turned_scores": [], "taken": None, "note": None}
-    if src.part is None or dst.part is None or not np.all(np.isfinite(res.T)) or res.candidates == 0:
-        return res, out
-    best = pw._score(src.part, dst.part, res.T, p.match_mm)[0]
-    out["engine_score"] = float(best)
-    Q = src.part.fine.pts
-    m = Q.mean(axis=0)
-    _, U = np.linalg.eigh((Q - m).T @ (Q - m))
-    turned = []
-    for k in range(3):
-        R = so3_exp(math.pi * U[:, k])
-        r2 = align_pair(src, dst, p, init=res.T @ make_se3(R, m - R @ m), init_from="given")
-        s2 = pw._score(src.part, dst.part, r2.T, p.match_mm)[0] if np.all(np.isfinite(r2.T)) else 0.0
-        turned.append((r2, float(s2), pw._apart_mm(Q, r2.T, res.T)))
-    out["turned_scores"] = [round(s, 4) for _, s, _ in turned]
-    r2, s2, apart = max(turned, key=lambda x: x[1])
-    if r2.accepted and s2 > TURN_MARGIN * best and apart > p.rival_mm:
-        out["taken"] = int(np.argmax([s for _, s, _ in turned]))
-        out["note"] = (f"the first guesses ({res.agree} of {res.candidates} agreeing) ended at a pose that fits worse than "
-                       f"the same turned 180° about one of the part's axes ({100 * s2:.1f} against {100 * best:.1f} by the "
-                       "alignment's score): the turned pose was taken")
-        return r2, out
-    rival = max((s for _, s, a in turned if a > p.rival_mm), default=0.0)
-    if res.accepted and rival >= TURN_RIVAL * best:
-        res.accepted = False
-        res.reason = ("the part fits about as well turned 180° as it is (a symmetric shape seen from one side): pick "
-                      "matching points on the scan and the reference")
-        out["note"] = "the pose turned 180° fits about as well: refused"
-    return res, out
 
 
 def _least_squares(src, dst, T: np.ndarray, fit_mm: float | None) -> tuple[np.ndarray, dict | None]:
@@ -878,7 +777,7 @@ def _pair_verdict(res, sc, p: AlignParams, what: str, turned: bool = False) -> s
     table = (f" The scan's support plane ({100 * sc.support_share:.0f} % of it, a table) was set aside."
              if sc.support is not None else "")
     if res.accepted:
-        sure = ("turned 180° from where the first guesses ended, where it fits better" if turned
+        sure = ("turned round from where the first guesses ended, where it fits better" if turned
                 else f"{res.agree} of {res.candidates} starting guesses agree" if res.start == "features"
                 else "from the picked points")
         loose = "" if res.dof >= 6 else f" The surfaces leave {6 - res.dof} direction(s) of motion loose."
@@ -937,7 +836,7 @@ def align_by_points(scan: ScanSurface, ref: ReferenceModel, scan_points, referen
                                  points_rms_mm=rms, pair=res.as_dict(), fit=fit, warnings=warnings + notes,
                                  verdict=_pair_verdict(res, src, p, f"from {n} picked pairs, refined on the shapes"))
     if datums is not None:
-        out.vs_datums = _versus(out.T, _datum_T(datums, reference_frame), _scan_points(_scan_cloud_for(scan, ref, p, seed)[0]))
+        out.vs_datums = _versus(out.T, _datum_T(datums, reference_frame), _scan_points(scan.part_cloud(p, seed)[0]))
     out.ms = round(1e3 * (time.perf_counter() - t0), 1)
     return out
 

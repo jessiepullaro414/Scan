@@ -267,8 +267,9 @@ export const SETUP_TEXT = {
 } as const;
 
 /** What a merge left out of each scan's table, and what to look at: one line per scan ("“Top”: …"), and the warnings. */
-export function mergeLeftOut(r: Pick<MergeResult, "scan_id" | "tables" | "warnings">): { lines: string[]; warnings: string[]; warn: boolean } {
+export function mergeLeftOut(r: Pick<MergeResult, "scan_id" | "tables" | "warnings" | "cleaning">): { lines: string[]; warnings: string[]; warn: boolean } {
   const lines = (r.tables ?? []).map((t) => `“${t.name}”: ${t.summary}`);
+  if (lines.length && r.cleaning) lines.push(`The merged scan: ${r.cleaning}`);
   const warnings = [...(r.warnings ?? [])];
   return { lines, warnings, warn: warnings.length > 0 };
 }

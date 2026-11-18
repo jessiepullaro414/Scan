@@ -702,7 +702,7 @@ class FramePipeline:
                     self._laser_pool.submit(_timed, extract_laser_lines, right_r, self.laser_params)
                     if self.laser_params.stereo_check else None)
 
-        depth = sigma = None
+        depth = sigma = seen = None
         if self.depth_estimator is not None:
             t0 = time.perf_counter()
             if self.has_confidence:
@@ -713,6 +713,10 @@ class FramePipeline:
             if self.depth_estimator.gpu_failure is not None:
                 self.gpu_fallbacks.setdefault("depth", self.depth_estimator.gpu_failure)
             if clip_plane is not None:
+                # the depth as the camera saw it stays for what judges the frame's depth as a whole: the
+                # fusion's gap guard (_fuse) and the laser points' depth check. What the clip leaves out
+                # was measured, and is no patch the matcher could not match
+                seen = depth
                 depth = self._clip_depth(depth, clip_plane)
             # the tracking filter starts now and is collected when the frame is tracked
             # (tracking_input): track_filter is how long the frame then still waits for it.
@@ -732,7 +736,7 @@ class FramePipeline:
         if futs is not None:
             fut_pts = self._laser_pool.submit(_lines_then_points, futs, partial(
                 laser_points, left_r, right_r, self.K, self.baseline, self.planes, self.laser_params,
-                depth=depth, depth_sigma=sigma, rejected=rejected))
+                depth=depth if seen is None else seen, depth_sigma=sigma, rejected=rejected))
 
         t0 = time.perf_counter()
         if pose is not None:
@@ -740,7 +744,7 @@ class FramePipeline:
             track = TrackResult(T.copy(), True, {"method": "external"})
             if self.dual_model and depth is not None:
                 self.tracker.integrate(self.tracking_input(depth), None, T)
-            self._fuse(depth, T, t, tim, sigma)
+            self._fuse(depth, T, t, tim, sigma, seen=seen)
         elif p.mode == "markerless":
             if self.tracker is None:
                 raise ValueError("this pipeline does not track (PipelineParams.tracking=False): pass the frame's pose")
@@ -748,7 +752,7 @@ class FramePipeline:
         else:
             track = self.markers.track(left_r, right_r, t)
             if track.ok:
-                self._fuse(depth, track.T_wc, t, tim, sigma)
+                self._fuse(depth, track.T_wc, t, tim, sigma, seen=seen)
         tim["track"] = _ms(t0)
         self._t_prev = t
 
@@ -842,18 +846,24 @@ class FramePipeline:
         return "Open3D TSDF (every frame weighs the same)"
 
     def _fuse(self, depth: np.ndarray | None, T_wc: np.ndarray, t: float, tim: dict[str, float],
-              sigma: np.ndarray | None = None) -> None:
-        """Integrate the raw depth (and its sigma, for the confidence TSDF) into the reconstruction TSDF at ``T_wc``."""
+              sigma: np.ndarray | None = None, seen: np.ndarray | None = None) -> None:
+        """Integrate the raw depth (and its sigma, for the confidence TSDF) into the reconstruction TSDF at ``T_wc``.
+        ``seen``: the depth before a ``clip_plane`` left some of it out (:meth:`process`): the gap guard is
+        worked out on it, since what the clip left out was measured, and is no patch without depth."""
         if self.markerless is None or depth is None:
             return
         ti = time.perf_counter()
         if self._guard_in_fuse:
             fp = self.fusion_params
-            ok = (depth >= fp.depth_min_mm) & (depth <= fp.depth_max_mm)  # the fused range; NaN compares false
-            drop = gap_guard_mask(np.where(ok, depth, np.float32(0.0)), self.gap_guard_px)
+            g = depth if seen is None else seen
+            ok = (g >= fp.depth_min_mm) & (g <= fp.depth_max_mm)  # the fused range; NaN compares false
+            drop = gap_guard_mask(np.where(ok, g, np.float32(0.0)), self.gap_guard_px)
             if drop.any():
                 depth = np.where(drop, np.float32(0.0), depth)
-        self.markerless.integrate(depth, sigma if self.has_confidence else None, T_wc, t=t)
+        if seen is not None and self.has_confidence:
+            self.markerless.integrate(depth, sigma, T_wc, t=t, seen=seen)
+        else:
+            self.markerless.integrate(depth, sigma if self.has_confidence else None, T_wc, t=t)
         tim["integrate"] = _ms(ti)
 
     def _track_markerless(self, depth: np.ndarray, t: float, tim: dict[str, float], extra: dict,

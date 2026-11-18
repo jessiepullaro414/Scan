@@ -920,15 +920,27 @@ no object size anywhere in the engine or the app.
       fuse into sheets that touch the part, and 27,000–41,000 mm² of them is left.
     - Checked through the app on the bracket's front and side scans. Tests: 11 new, 99 pass
       on the GPU path and 95 on the CPU path with the alignment, pipeline and table tests.
-    - **Left:** the merge drops pieces under 1 % of the triangles, so a small thin part
-      beside a large one could still go (next); the page's callout has not been looked at in
-      a browser; the single-scan rule keeps a few bare-table bumps as thin parts on the plate
-      scenes' tables (23–26 mm across, 0.25–0.30 mm high).
+    - **A small thin part beside a large one, mended the same day.** The small-piece
+      cleaning keeps a piece that lies over a scan's thin part whatever its size
+      (`clean_merged`) and says what it left out. What really lost a small area was the
+      fusion's gap guard, which took the bare table the merge leaves out for missing depth
+      and ate the rim of everything kept; it now judges the depth as the camera saw it
+      (`seen` in `FramePipeline` and `ConfidenceTsdf.integrate`). The side scan's 14 mm area
+      is in the merge (539 of 589 faces), the foot is covered as with the tables left in,
+      and the report says of each thin part what is true of the merged mesh (`in_merge`).
+      The price: 151–221 mm² of table left away from the part on the bracket and
+      505–2,062 mm² on the plates, over raised areas kept on purpose; the share within
+      ± 0.3 mm falls by 1–2 points; merges take 20–30 s. A scan nothing is clipped from is
+      fused bit for bit as before (`tests/test_merge_guard.py`).
+    - **Left:** the single-scan rule calls a few bare-table bumps thin parts on the plate
+      scenes' tables (23–26 mm across, 0.25–0.30 mm high), and a merge then leaves table
+      there; about 730 mm² of the table left on the turned-over plates is not traced.
   - **Seen on the way:** the merge of several scans cuts 2 mm off each part's foot
     (`support_margin_mm`); this rule could keep the part to within a millimetre there too.
-    That would change merged scans, so it waits for the owner. And the alignment's own
-    "is this a table" test counts points just outside the plane's band, which on a noisy
-    CPU-path mesh can take a real table for a face of the part (`MAINTENANCE_PLAN.md`, F11).
+    That would change merged scans, so it waits for the owner (done since, above). And the
+    alignment's own "is this a table" test counted points just outside the plane's band,
+    which on a noisy CPU-path mesh could take a real table for a face of the part (mended
+    with `MAINTENANCE_PLAN.md`, F11: only what lies more than twice the band behind counts).
 
 ---
 

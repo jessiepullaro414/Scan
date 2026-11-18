@@ -2067,6 +2067,26 @@ type AlignResult = {
   support: { target: boolean; source: boolean };   // a table was found in each scan
   pairs_rms_mm: number | null;   // how well the picked pairs agree with each other (a large value: two pairs do not match)
   n_matched: number; ms: number; message: string;  // message = verdict
+  // since 2026-11-17 (MAINTENANCE_PLAN F11; Rules, "Sure or not sure"):
+  sure: boolean;             // = accepted: the evidence is there
+  doubt: AlignDoubt | null;  // why not, in one word (null when sure)
+  poses: AlignPose[];        // the chosen pose first (= T), then the others that fit best; at most 4
+  turned: number;            // starts tried turned round
+  reached: number;           // starts that reached the chosen pose independently (first guesses; turned starts only when they found it from elsewhere)
+};
+
+// "rival", "turned", "one_guess", "points": the engine had a pose in mind but is not sure (poses hold it);
+// "part", "guess", "overlap", "fit": no usable pose (too little of the part, no starting guess, too little shared, a loose fit)
+type AlignDoubt = "rival" | "turned" | "one_guess" | "points" | "part" | "guess" | "overlap" | "fit";
+
+type AlignPose = {
+  T: number[][];             // as AlignResult.T
+  chosen: boolean;           // the engine's own answer (the first)
+  pick: number;              // the engine's score: the share of matching surface (the smaller of the two scans' shares)
+  overlap: number; rmse_mm: number | null; fit_mm: number | null;
+  reached: number;           // starts that ended here
+  from: string[];            // "your points", "the tags", "the first guesses", "turned round"
+  apart_mm: number;          // how far from the chosen pose (RMS over the source's part)
 };
 
 type MergeRequest = {
@@ -2081,6 +2101,8 @@ type MergeResult = {
   project_id: string; scan_id: string; scan: Scan; merged_from: [string, string]; message: string;
   tables: MergeTable[];      // since 2026-11-17: one per scan when the part was moved (same_setup false), else []
   warnings: string[];        // since 2026-11-17: what to look at, each naming its scan; [] when the part stayed
+  cleaning: string | null;   // since 2026-11-17: the part was moved: in words, the small loose pieces the merge left out
+                             // and the small pieces over a thin part it kept (report.json: mesh.cleaning); null otherwise
 };
 // what a merge of a moved part left out of one scan (Rules, "Same setup or not")
 type MergeTable = {
@@ -2104,7 +2126,8 @@ type MergeTable = {
 ### Rules
 
 - **Align writes nothing.** It reads the two meshes (`result/mesh.ply`) and answers in a few seconds. A pose that is not accepted is still returned in `T`, for showing; do not merge at it without the user's say.
-- **Not accepted is an answer, not an error:** the job ends `done` with `accepted: false` and a verdict such as "Not aligned: the part fits in more than one position about equally well (...): give a rough start by picking matching points, or scan with more of the part's distinct features in both." The app then offers picking points.
+- **Not accepted is an answer, not an error:** the job ends `done` with `accepted: false` and a verdict such as "Not aligned: not sure which way it goes: it fits about as well turned round (93 % as well, 55 mm away; ...): pick three or more matching points on both scans, or choose one of the poses." The app then offers picking points.
+- **Sure or not sure** (since 2026-11-17, MAINTENANCE_PLAN F11): an alignment from the shape is accepted (`sure: true`) only when enough of the part is shared (overlap at least 15 %, the residuals within 0.7 mm), the chosen pose beats every other pose by a clear margin (the next scores less than 0.9 of it), and at least two different starts reached it. The engine also tries the chosen pose turned half round about each main axis of both scans' parts (and a quarter round about the thinnest direction), because a wrong pose that scores well is most often the right one turned round. When the evidence is not there the answer is "not sure": `doubt` says why in one word, the verdict in words, and `poses` holds the poses it had in mind, the engine's best first (`T`). The page shows them laid over the first scan; the user chooses one or picks points. **Do not merge at a pose the engine was not sure of unless the user chose it or picked the points.** Picked points are checked against the shapes: when another pose fits clearly better than theirs (theirs scores less than 0.8 of it) or the refinement pulls the scan more than 10 mm from where the points put it, the answer is "not sure" with `doubt: "points"`. A start from the tags is not overruled by a better-fitting pose (a sphere turned round always overlaps more of itself somewhere). Before the scans are matched, a large plane is taken for the table only when something stands on it and the part does not go on behind it (else it is kept as a face of the part), and stray bits left on the table are dropped.
 - **Picked points:** each pair is one spot on the part, clicked on both meshes. Three pairs that span a triangle are enough; a millimetre or two of clicking error is fine, the alignment refines it. With pairs the result's `start` is `"given"` and no second guess has to confirm it, so check `pairs_rms_mm` (above about 5 mm two pairs probably do not match).
 - **Tags** (since 2026-11-16; `ohs.align.tags`): without picked points, the job looks for AprilTags (`[markers]` dictionary and `tag_mm`) in both scans: a marker-mode scan's own map (`result/marker_map.json`), or in its recording at the poses of its mesh (up to 120 frames, about 1 s per 60 frames at 640x400). When the two share tags that agree, the alignment starts from them (`start: "tags"`, verdict "... from the tags both scans saw.") and keeps that start along the directions the shape pins only weakly: a sphere, a cylinder or a plate is then turned as the tags say. If that start is not accepted, the shape's own guesses are tried as without tags (`tags.start` says why). Tags on the table help only when the part was not moved on it (same setup); for a part that was moved, only tags on the part. A merged scan has no recording, so no tags of its own.
 - **Same setup or not:** with `same_setup: true` the table both scans share pins height and tilt. If the two tables turn out more than 5° or 5 mm apart after the part's fit, they are not used (`used_support: false`). With `false` only the part counts, and a merge leaves each scan's table out, and nothing else (since 2026-11-17; before, everything up to 2 mm in front of each table went, with the bottom 2 mm of the part and any part thinner than that lying flat). The job ("Finding what the part lay on") finds each scan's table on its own mesh as "Remove the table" does (`ohs.mesh.support`, module docstring, 4.), and turns it into a map on the table's plane: where the table is bare, a frame's depth and laser points are left out up to 2 mm above it; where the part, a thin part lying flat, or a raised area that may be one stands, nothing above the table is left out. What the frames leave of the table (a ring at the part's foot about 2 mm wide, crumbs) is then taken out of the merged mesh by the single-scan edit's rule (faces facing the table's way within 1 mm of it, where that scan found its table, not on a thin part; loose crumbs within that height), and laser points within 1 mm of it where the part does not stand. Raised areas the single-scan edit only warns about are **kept** in a merge (a patch of table left is better than a part lost) and said; where the table is uneven itself (near a scan's border) its raised areas go with it, said once; a part thinner than the scan's own limit (about 0.2 mm on the simulated tables) cannot be told from the table and goes with it, which the scan's `limit` says. A scan whose table cannot be found on its mesh is clipped as before by the alignment's support plane (2 mm, with the part's bottom edge), or not at all when there is none, and a warning names it. `MergeResult.tables` and `warnings` say all this per scan; the merged scan's `report.json` has it in full (`scans[i].table`: `rule`, `plane`, `flatness_mm`, `table_area_mm2`, `stands_mm2`, `thin_parts` with `verdict` and `in_merge`, `uneven`, `thin_limit_mm`, `limit`, `left_in_mesh` {`faces`, `area_mm2`, `pieces`}, `laser_points_removed`, `summary`, `warnings`; top-level `warnings`; `mesh.n_faces_table_removed`, `lasers.n_points_table_removed`). With `same_setup: true` the merge is unchanged: a plain fusion of the frames, its mesh bit for bit as before, `tables` and `warnings` empty.
@@ -2169,6 +2192,7 @@ type AlignAllResult = {
 
 - **Time:** every pair is aligned, 1–5 s each: 3 pairs for three scans, 28 for eight.
 - **Not all placed is an answer:** the job ends `done` with `accepted: false`, the poses of the scans that were placed, and a verdict that names the others by their names. Picked points between an unplaced scan and any placed one (`picked`) are the way forward.
+- **Sure or not sure** (since 2026-11-17): only pairs the engine is sure of are links; each pair carries `sure`, `doubt` and `poses` as for two scans (there `T` takes scan `b` into scan `a`). Where a scan is not placed because a pair was "not sure", the verdict says so in brackets ("... could not be aligned to any placed scan (not sure of scan 3 with scan 1: the shapes fit more than one way). Pick matching points ...").
 - **A link that disagrees:** `worst_link_mm` above 2 mm adds "That is a lot: look at the scans together before merging." to the verdict.
 - **Merging several:** as for two scans; the name defaults to the scans' names joined by " + "; `merged_from` lists all of them in order.
 - **Errors:** 422 for fewer than two or more than eight scans, picked points that name a scan not in the list or are fewer than three pairs or in one line, both merge forms or neither; 409 for a scan listed twice, and as for two scans.

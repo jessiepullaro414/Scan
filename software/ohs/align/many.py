@@ -9,7 +9,9 @@ are solved together in a pose graph (Open3D's global optimisation, the machinery
 uses), and a link that does not fit the others is left out.
 
 The result gives each scan's pose in the reference scan's world (``None`` for a scan that no
-accepted link reaches), every pair's outcome, and a sentence for the user.
+accepted link reaches), every pair's outcome, and a sentence for the user. Only pairs the engine is
+sure of are links (MAINTENANCE_PLAN F11): a pair it is not sure of carries its doubt and the poses
+it had in mind, and where that leaves a scan unplaced the sentence says so.
 
 Points picked on two scans (``picked``) give that pair a rough start, as for one pair; so do the
 tags two scans both saw (``tags``, :mod:`ohs.align.tags`), where no points were picked.
@@ -32,6 +34,7 @@ __all__ = ["ManyAlignment", "align_many"]
 log = logging.getLogger(__name__)
 
 LINK_CONFLICT_MM = 2.0  # a loop's links that disagree by more than this (RMS over the part) are a conflict
+UNSURE = ("rival", "turned", "one_guess", "points")  # a pair's doubts where the engine had poses in mind
 
 
 @dataclass
@@ -208,8 +211,14 @@ def align_many(clouds: Sequence[ScanCloud], params: AlignParams | None = None, *
     out.ms = round(1e3 * (time.perf_counter() - t0), 1)
     if out.unplaced:
         names = ", ".join(str(k + 1) for k in out.unplaced)
+        # where the engine had a pose but was not sure of it, say so: picking points (or choosing one
+        # of its poses) settles it, where more scanning would not
+        unsure = [f"scan {r['j'] + 1} with scan {r['i'] + 1}" for r in rows.values()
+                  if not r["accepted"] and r.get("poses") and (r["i"] in out.unplaced or r["j"] in out.unplaced)
+                  and r.get("doubt") in UNSURE]
         out.verdict = (f"Not all placed: scan{'s' if len(out.unplaced) > 1 else ''} {names} could not be aligned to any "
-                       "placed scan. Pick matching points between each of them and a placed scan, or scan with more overlap.")
+                       "placed scan" + (f" (not sure of {', '.join(unsure)}: the shapes fit more than one way)" if unsure else "")
+                       + ". Pick matching points between each of them and a placed scan, or scan with more overlap.")
     else:
         via = "" if out.loops == 0 else (f"; {out.loops} more link{'s' if out.loops > 1 else ''} checked the chain"
                                          + (f", the worst disagrees by {worst:.2f} mm" if worst > 0 else ""))

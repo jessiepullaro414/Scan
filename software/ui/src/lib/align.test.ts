@@ -347,6 +347,9 @@ check(ff[1].warn === true && ff.some((f) => f.label === "Left out" && f.value ==
   check(clean.lines.length === 1 && clean.warnings.length === 0 && !clean.warn, "nothing to warn about");
   const stayed = mergeLeftOut({ ...base, tables: [], warnings: [] });
   check(stayed.lines.length === 0 && stayed.warnings.length === 0 && !stayed.warn, "the part stayed: nothing was left out");
+  const cleaned = mergeLeftOut({ ...moved, cleaning: "1 small loose piece (3 mm²) was left out as too small (under 1 % of the triangles each); 1 small piece over a thin part was kept." });
+  check(cleaned.lines.length === 3 && cleaned.lines[2] === "The merged scan: 1 small loose piece (3 mm²) was left out as too small (under 1 % of the triangles each); 1 small piece over a thin part was kept.", `the cleaning, said: ${cleaned.lines[2]}`);
+  check(mergeLeftOut({ ...base, tables: [], warnings: [], cleaning: "x" }).lines.length === 0, "no cleaning line when nothing was left out of a table");
   const older = mergeLeftOut(base);
   check(older.lines.length === 0 && older.warnings.length === 0, "an older server says nothing of it");
   // the choice before merging says plainly what goes and what stays

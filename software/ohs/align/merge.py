@@ -113,7 +113,8 @@ def scan_support(V: np.ndarray, F: np.ndarray, *, normals: np.ndarray | None = N
         if plane is not None:
             return plane, [f"No table could be told apart on {who}: {why} Its table is left out as before: everything within "
                            f"{SLAB_MM:g} mm of the largest flat surface the alignment found, and with it about {SLAB_MM:g} mm of "
-                           "the part's bottom edge (or of whatever that surface is)."]
+                           f"the part's bottom edge (or of whatever that surface is), and any part lying flat on it that is "
+                           f"thinner than {SLAB_MM:g} mm."]
         return None, [f"No table could be told apart on {who}: {why} Nothing of it is left out, so its table, if it has one, "
                       "is in the merged scan."]
     return _support.support_map(V, F, f), []
@@ -147,29 +148,143 @@ def _table_entry(sup: Any, warnings: list[str]) -> dict | None:
         return {"rule": "slab", "plane": {"normal": [float(x) for x in sup[0]], "d": float(sup[1])}, "margin_mm": SLAB_MM,
                 "warnings": list(warnings),
                 "summary": f"Its table is left out as before this map existed: everything within {SLAB_MM:g} mm of the "
-                           f"plane the alignment found, and with it about {SLAB_MM:g} mm of the part's bottom edge."}
+                           f"plane the alignment found, and with it about {SLAB_MM:g} mm of the part's bottom edge and any "
+                           f"part lying flat on it that is thinner than {SLAB_MM:g} mm."}
     if warnings:
         return {"rule": "none", "warnings": list(warnings), "summary": "Nothing of it is left out: no table was found on its mesh."}
     return None
 
 
+def _count(n: int, one: str, many: str | None = None) -> str:
+    """``n`` and the noun in the right number: "1 triangle", "3 triangles", "1,204 triangles"."""
+    return f"{n:,} {one if n == 1 else (many or one + 's')}"
+
+
 def _map_summary(e: dict) -> str:
-    """One sentence on what a scan's table map left out and kept, with what the merged mesh lost of it."""
+    """One sentence on what a scan's table map left out and kept, with what the merged mesh lost of it.
+    A thin part counts as kept only when the merge found it in its result (:func:`settle_thin_parts`)."""
     s = (f"Its table is left out ({(e.get('table_area_mm2') or 0.0) / 100.0:,.1f} cm² of its mesh, flat to "
          f"{e.get('flatness_mm') or 0.0:.2f} mm); the part is kept right down to it")
-    kept = [x for x in e["thin_parts"] if x["verdict"] == "kept"]
-    warned = [x for x in e["thin_parts"] if x["verdict"] == "warned"]
+    kept = [x for x in e["thin_parts"] if x["verdict"] == "kept" and x.get("in_merge", "kept") == "kept"]
+    warned = [x for x in e["thin_parts"] if x["verdict"] == "warned" and x.get("in_merge", "kept") == "kept"]
+    lost = [x for x in e["thin_parts"] if x.get("in_merge", "kept") != "kept"]
     if kept:
         s += "; " + ("a thin part lying flat is kept (" if len(kept) == 1 else f"{len(kept)} thin parts lying flat are kept (")
         s += ", ".join(f"{x['size_mm']:.0f} mm across, {x['height_mm']:.2f} mm" for x in kept[:4]) + ")"
     if warned:
-        s += (f"; {len(warned)} raised area{'s' if len(warned) != 1 else ''} that may be thin parts "
-              f"{'are' if len(warned) != 1 else 'is'} kept too")
+        s += (f"; {_count(len(warned), 'raised area')} that may be "
+              f"{'a thin part is' if len(warned) == 1 else 'thin parts are'} kept too")
+    if lost:
+        s += (f"; {_count(len(lost), 'thin part or raised area', 'thin parts or raised areas')} found on its table "
+              f"{'is' if len(lost) == 1 else 'are'} not whole in the merged scan (see the warnings)")
     left = e.get("left_in_mesh")
     if left and left["faces"]:
-        s += (f". What the frames left of it next to the part, {left['faces']:,} triangles ({left['area_mm2']:,.0f} mm²), "
-              "was taken out of the merged scan")
+        s += (f". What the frames left of it next to the part, {_count(left['faces'], 'triangle')} "
+              f"({left['area_mm2']:,.0f} mm²), was taken out of the merged scan")
     return s + "."
+
+
+def _over_thin(V: np.ndarray, F: np.ndarray, supports: Sequence[tuple[SupportMap, np.ndarray]]) -> np.ndarray:
+    """The faces of a merged mesh that lie over a scan's thin part (a raised area kept or warned about),
+    near its table's plane (1 mm behind it to 3 mm in front), seen in that scan's world."""
+    out = np.zeros(len(F), dtype=bool)
+    if not len(F):
+        return out
+    C = (V[F[:, 0]] + V[F[:, 1]] + V[F[:, 2]]) / 3.0
+    for m, T in supports:
+        if not m.thin.any():
+            continue
+        Ti = np.linalg.inv(np.asarray(T, dtype=np.float64).reshape(4, 4))
+        Cs = C @ Ti[:3, :3].T + Ti[:3, 3]
+        h = m.heights(Cs)
+        near = (h >= -1.0) & (h <= 3.0)
+        out[near] |= m.at(m.thin, Cs[near])
+    return out
+
+
+def clean_merged(V: np.ndarray, F: np.ndarray, supports: Sequence[tuple[SupportMap, np.ndarray]],
+                 min_component_fraction: float) -> tuple[np.ndarray, np.ndarray, np.ndarray, dict]:
+    """The merge's cleaning (:func:`ohs.track.export.clean_mesh`: degenerate faces, then pieces joined by
+    their vertices with fewer than ``min_component_fraction`` of the faces) for a merge of a moved part:
+    a piece that lies over a scan's thin part (``supports``: each moved scan's map and its world in the
+    mesh's) is not cleaned away, whatever its size. ``(V, F, kept vertex indices, info)``, ``info``: the
+    pieces kept for being thin parts, and the pieces removed and their area."""
+    from scipy.sparse import coo_matrix  # noqa: PLC0415
+    from scipy.sparse.csgraph import connected_components  # noqa: PLC0415
+
+    from ohs.mesh.topology import face_areas  # noqa: PLC0415
+
+    V = np.asarray(V)
+    F = np.asarray(F, dtype=np.int64).reshape(-1, 3)
+    F = F[(F[:, 0] != F[:, 1]) & (F[:, 1] != F[:, 2]) & (F[:, 0] != F[:, 2])]
+    info = {"thin_pieces_kept": 0, "pieces_removed": 0, "area_removed_mm2": 0.0}
+    if len(F) == 0:
+        return V[:0], F[:0], np.zeros(0, dtype=np.int64), info
+    rows = np.concatenate([F[:, 0], F[:, 1], F[:, 2]])
+    cols = np.concatenate([F[:, 1], F[:, 2], F[:, 0]])
+    A = coo_matrix((np.ones(len(rows), dtype=np.int8), (rows, cols)), shape=(len(V), len(V)))
+    n_comp, labels = connected_components(A, directed=False)
+    comp = labels[F[:, 0]]
+    counts = np.bincount(comp, minlength=n_comp)
+    big = counts >= float(min_component_fraction) * len(F)
+    thin = np.zeros(n_comp, dtype=bool)
+    over = _over_thin(V, F, supports)
+    thin[comp[over]] = True
+    keep = big | thin
+    present = counts > 0
+    info["thin_pieces_kept"] = int((thin & ~big).sum())
+    gone = present & ~keep
+    info["pieces_removed"] = int(gone.sum())
+    info["area_removed_mm2"] = float(face_areas(V, F)[gone[comp]].sum()) if gone.any() else 0.0
+    F = F[keep[comp]]
+    used = np.unique(F)
+    remap = np.full(len(V), -1, dtype=np.int64)
+    remap[used] = np.arange(len(used))
+    return V[used], remap[F], used, info
+
+
+def settle_thin_parts(e: dict, m: SupportMap, V: np.ndarray, F: np.ndarray, T: np.ndarray) -> None:
+    """Say in a scan's report entry ``e`` what of each of its thin parts (kept or warned about) is in the
+    merged mesh ``(V, F)`` (``T``: the scan's world in the mesh's): ``in_merge`` "kept" (half or more of
+    its cells have merged surface over them, near the table's plane), "in part" or "missing", and
+    ``in_merge_share``; where it is not kept, its warning says so instead of "it is kept in the merged
+    scan", and a thin part the scan kept gets a warning of its own. The merge means to keep them all,
+    but the fusion can still lose one: another scan may have seen through where it lay, or the scan's
+    depth had holes round it (the gap guard, ``ohs.track.recon_tsdf``, leaves out the depth next to a
+    hole; it judges the frame as the camera saw it, so the table the merge leaves out is no hole to it)."""
+    if not e.get("thin_parts"):
+        return
+    covered = np.zeros(m.thin.size, dtype=bool)
+    if len(F):
+        Ti = np.linalg.inv(np.asarray(T, dtype=np.float64).reshape(4, 4))
+        Vs = np.asarray(V, dtype=np.float64) @ Ti[:3, :3].T + Ti[:3, 3]
+        C = Vs[F].mean(axis=1)
+        h = m.heights(C)
+        near = (h >= -1.0) & (h <= 3.0)
+        g = np.zeros(m.thin.shape, dtype=bool)
+        _support._mark(g, m, Vs, F[near])
+        covered = g.ravel()
+    for x, cells in zip(e["thin_parts"], m.thin_cells):
+        share = float(covered[cells].mean()) if len(cells) else 0.0
+        x["in_merge_share"] = share
+        x["in_merge"] = "kept" if share >= 0.5 else "in part" if share >= 0.05 else "missing"
+        if x["in_merge"] == "kept":
+            continue
+        what = ("only {:.0f} % of it is in the merged scan".format(100 * share) if x["in_merge"] == "in part"
+                else "it is not in the merged scan")
+        why = ("; the fusion lost it: another scan saw through where it lay, or the scan's own depth had holes there "
+               "(the fusion leaves out the depth next to a hole)")
+        if x["verdict"] == "warned":
+            new = (f"A raised area {x['size_mm']:.0f} mm across, {x['height_mm']:.2f} mm above the table round it, "
+                   f"{x.get('where', '')}, may be a thin part: the merge kept it, but {what}{why}.")
+            old = x.get("warning")
+            e["warnings"] = [new if w == old else w for w in e["warnings"]]
+            if old not in e["warnings"] and new not in e["warnings"]:
+                e["warnings"].append(new)
+            x["warning"] = new
+        else:
+            e["warnings"].append(f"A thin part lying flat, {x['size_mm']:.0f} mm across and {x['height_mm']:.2f} mm high, "
+                                 f"{x.get('where', '')}, was found on this scan's table and kept, but {what}{why}.")
 
 
 def _same_calibration(a: Any, b: Any) -> str | None:
@@ -292,12 +407,20 @@ def merge_scans(scans: Sequence[ScanInput], out_dir: str | Path, params: Process
             N = N[idx] if N is not None and len(N) else N
             S = S[idx] if S is not None and len(S) else S
         n_faces_table = int(gone.sum())
+        maps = [(support, T) for (_, _, _, _, T, support, _) in plan if isinstance(support, SupportMap)]
+        cleaning = None
         if p.clean_min_component > 0 and len(F):
-            from ohs.track.export import clean_mesh  # noqa: PLC0415
+            if maps:  # a thin part lying flat is a piece of its own: not cleaned away for being small
+                V, F, idx, cleaning = clean_merged(V, F, maps, float(p.clean_min_component))
+            else:
+                from ohs.track.export import clean_mesh  # noqa: PLC0415
 
-            V, F, idx = clean_mesh(V, F, min_component_fraction=float(p.clean_min_component), return_index=True)
+                V, F, idx = clean_mesh(V, F, min_component_fraction=float(p.clean_min_component), return_index=True)
             N = N[idx] if N is not None and len(N) else N
             S = S[idx] if S is not None and len(S) else S
+        for (_, _, _, _, T, support, _), entry in zip(plan, tables):
+            if isinstance(support, SupportMap):  # what of its thin parts is in the result
+                settle_thin_parts(entry, support, V, F, T)
         if S is not None:
             S = np.minimum(S, np.float32(SIGMA_NONE_MM)).astype(np.float32)
         from ohs.track.export import save_mesh, save_points_ply  # noqa: PLC0415
@@ -344,6 +467,15 @@ def merge_scans(scans: Sequence[ScanInput], out_dir: str | Path, params: Process
         if any(isinstance(pl[5], SupportMap) for pl in plan):
             report["mesh"]["n_faces_table_removed"] = n_faces_table
             report["lasers"]["n_points_table_removed"] = int(on_table.sum())
+            if cleaning is not None:  # what the small-piece cleaning did besides: nothing goes unsaid
+                n_gone = cleaning["pieces_removed"]
+                report["mesh"]["cleaning"] = {
+                    **cleaning, "min_component_fraction": float(p.clean_min_component),
+                    "summary": (f"{_count(n_gone, 'small loose piece')} ({cleaning['area_removed_mm2']:,.0f} mm²) "
+                                f"{'was' if n_gone == 1 else 'were'} left out as too small (under "
+                                f"{100 * p.clean_min_component:g} % of the triangles each); "
+                                f"{_count(cleaning['thin_pieces_kept'], 'small piece')} over a thin part "
+                                f"{'was' if cleaning['thin_pieces_kept'] == 1 else 'were'} kept.")}
         files["report"] = str(out / "report.json")
         report["wall_time_s"] = time.perf_counter() - wall0
         report = _jsonable(report)

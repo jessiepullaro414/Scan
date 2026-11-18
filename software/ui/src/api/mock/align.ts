@@ -28,7 +28,7 @@
  * No imports at run time (types only), so `npm test` runs it with Node: the mock engine hands in what it
  * needs (`AlignHost`).
  */
-import type { AlignAllPair, AlignAllResult, AlignResult, Job, MergeResult, MergeTable, PairUse, PointPair, ProcessQuality, Project, Scan } from "../types";
+import type { AlignAllPair, AlignAllResult, AlignPose, AlignResult, Job, MergeResult, MergeTable, PairUse, PointPair, ProcessQuality, Project, Scan } from "../types";
 import type { WorkJobSpec, WorkStep } from "./host";
 
 export type AlignHost = {
@@ -77,10 +77,26 @@ export function alignAllVerdict(o: { n: number; chain: number; loops: number; le
   return v;
 }
 
-/** The engine's reason when the shape alone leaves more than one answer (`ohs.align.pairwise`). */
+/** The engine's reason when the shape alone leaves more than one answer (`ohs.align.pairwise`, MAINTENANCE_PLAN F11: "not sure"). */
 export const AMBIGUOUS_REASON =
-  "the part fits in more than one position about equally well (a symmetric shape, a repeated feature, or a surface that can slide on itself): " +
-  "give a rough start by picking matching points, or scan with more of the part's distinct features in both";
+  "not sure which way it goes: it fits about as well turned round (98 % as well, 61 mm away; a symmetric shape, a repeated feature, or a surface that can slide on itself): " +
+  "pick three or more matching points on both scans, or choose one of the poses";
+
+/** The poses a "not sure" answer carries: the engine's best (`best`, where it put the scan) and the same turned round. */
+function notSurePoses(best: number[][], other: number[][]): AlignPose[] {
+  const row = (T: number[][], chosen: boolean, pick: number, reached: number, from: string[], apart: number): AlignPose => ({
+    T: T.map((r) => [...r]),
+    chosen,
+    pick,
+    overlap: pick,
+    rmse_mm: 0.41,
+    fit_mm: 0.38,
+    reached,
+    from,
+    apart_mm: apart,
+  });
+  return [row(best, true, 0.43, 4, ["the first guesses"], 0), row(other, false, 0.42, 2, ["turned round"], 61)];
+}
 
 const IDENTITY: number[][] = [
   [1, 0, 0, 0],
@@ -309,6 +325,11 @@ export class MockAlign {
           n_matched: accepted ? 18240 : 10310,
           ms: Date.now() - t0,
           message: verdict,
+          sure: accepted,
+          doubt: accepted ? null : "turned",
+          poses: accepted ? [] : notSurePoses(wrongPose, IDENTITY),
+          turned: 8,
+          reached: accepted ? agree : 4,
         };
         return result;
       };
@@ -555,6 +576,7 @@ export class MockAlign {
           message: `Merged into "${title}"`,
           tables,
           warnings: tables.flatMap((t) => t.warnings),
+          cleaning: sameSetup ? null : "2 small loose pieces (14 mm²) were left out as too small (under 1 % of the triangles each); 1 small piece over a thin part was kept.",
         };
         return result;
       };

@@ -5,6 +5,11 @@
  * time; its verdict and figures are shown, the scans can be looked at together where it put them, and a
  * merge makes a new scan of them.
  *
+ * When the engine is not sure (MAINTENANCE_PLAN F11: a pose turned round fits nearly as well, the guesses
+ * disagree, the shapes contradict the picked points), the page says so in the engine's words, shows the
+ * poses it had in mind to look at laid over the first scan and to choose, and leads to picking points. No
+ * merge is offered on such a pose unless the person chose it or picked the points (lib/alignChoice.ts).
+ *
  * With exactly two scans the page is the first slice's: `align` and the merge's target / source form.
  * With three or more it calls `align_all` and the merge's `scans` form, shows where each scan was placed,
  * and picks points between any two of the listed scans.
@@ -80,6 +85,7 @@ import {
   type Side,
   type Vec3,
 } from "../lib/align";
+import { choiceText, mergeOffer, poseChoices, poseInUse, standingLabel, standingOf } from "../lib/alignChoice";
 import { fmtBytes } from "../lib/format";
 import { href, navigate, paths } from "../lib/router";
 import { cn } from "../lib/util";
@@ -302,8 +308,66 @@ function Verdict({ ok, verdict, okLabel, notLabel, figures }: { ok: boolean; ver
 }
 
 const TwoVerdict = ({ result }: { result: AlignResult }) => (
-  <Verdict ok={result.accepted} verdict={result.verdict} okLabel="Accepted" notLabel="Not accepted" figures={alignFigures(result)} />
+  <Verdict ok={result.accepted} verdict={result.verdict} okLabel="Accepted" notLabel={standingLabel(result)} figures={alignFigures(result)} />
 );
+
+/**
+ * The engine was not sure (MAINTENANCE_PLAN F11): the poses it had in mind, each to look at laid over the
+ * first scan and to choose. The choice is the person's, and is said as theirs.
+ */
+function PoseChooser({
+  result,
+  looking,
+  chosen,
+  disabled,
+  onLook,
+  onChoose,
+}: {
+  result: AlignResult;
+  looking: number | null;
+  chosen: number | null;
+  disabled: boolean;
+  onLook: (index: number) => void;
+  onChoose: (index: number | null) => void;
+}) {
+  const choices = poseChoices(result);
+  const shown = looking ?? chosen ?? 0;
+  const mine = choiceText(result, chosen);
+  return (
+    <div className="mt-3 rounded-lg border border-warn/30 bg-surface-2/50 px-3 py-2.5">
+      <div className="text-xs font-semibold text-fg">The poses the engine had in mind</div>
+      <p className="mt-0.5 text-xs leading-5 text-muted">
+        Look at each one laid over the first scan. Where the two scans sit on each other, with the colours finely mixed, choose it. If none fits, pick matching points.
+      </p>
+      <ul className="mt-2 space-y-1.5" aria-label="The poses the engine had in mind">
+        {choices.map((c) => (
+          <li key={c.index} className={cn("rounded-md border px-2.5 py-2 text-xs", shown === c.index ? "border-accent bg-accent-soft/40" : "border-line")}>
+            <div className="flex items-center gap-2">
+              <span className="min-w-0 flex-1 font-medium text-fg">{c.title}</span>
+              {chosen === c.index ? <span className="shrink-0 font-medium text-ok">Your choice</span> : null}
+            </div>
+            <div className="mt-0.5 leading-5 text-subtle">{c.detail}</div>
+            <div className="mt-1.5 flex gap-1.5">
+              <Button size="xs" icon={Eye} disabled={disabled} onClick={() => onLook(c.index)} title="Show this pose with both scans together">
+                Look
+              </Button>
+              {chosen === c.index ? (
+                <Button size="xs" variant="ghost" disabled={disabled} onClick={() => onChoose(null)}>
+                  Undo the choice
+                </Button>
+              ) : (
+                <Button size="xs" variant="secondary" icon={CircleCheck} disabled={disabled} onClick={() => onChoose(c.index)} title="Use this pose for the merge">
+                  Choose this pose
+                </Button>
+              )}
+            </div>
+          </li>
+        ))}
+      </ul>
+      {mine ? <p className="mt-2 text-xs font-medium leading-5 text-ok">{mine}</p> : null}
+    </div>
+  );
+}
 
 /** Several scans: the verdict, then each scan placed or not, with a short line for each of its pairs. */
 function MultiVerdict({ result, list, nameOf, colorOf }: { result: AlignAllResult; list: string[]; nameOf: (id: string) => string; colorOf: (id: string) => string }) {
@@ -418,7 +482,11 @@ export default function AlignPage({
   const result = mine && !several ? st.result : null;
   const multi = mine && several && st.multi && sameList(st.multi.scans, list) ? st.multi : null;
   const merged = mine ? st.merged : null;
-  const pose = useMemo(() => (result ? flattenPose(result.T) : null), [result]);
+  /** Two scans, the engine not sure: the pose being looked at (null: the chosen one, else the engine's). */
+  const [looking, setLooking] = useState<number | null>(null);
+  useEffect(() => setLooking(null), [result]);
+  const chosenPose = mine ? st.chosenPose : null;
+  const pose = useMemo(() => (result ? flattenPose(poseInUse(result, looking ?? chosenPose)) : null), [result, looking, chosenPose]);
   const hasAnswer = !!result || !!multi;
 
   // A new result: look at the scans together. No result (other scans, another setting): back to picking.
@@ -472,6 +540,8 @@ export default function AlignPage({
   /** A merged scan has no recording: it can be aligned to, not merged again. */
   const noRecording = listScans.find((s) => s && !hasRecording(s)) ?? null;
   const unplacedNames = multi ? list.filter((id) => multi.unplaced.includes(id)).map(nameOf) : [];
+  /** Two scans: whether a merge is offered at all (not on a pose the engine was not sure of, unless chosen or picked). */
+  const offer = result ? mergeOffer(result, chosenPose) : null;
 
   const onPick = useCallback((side: Side, p: Vec3) => useAlign.getState().pick(side, p), []);
   const choose = (index: number, id: string) => st.setScans(chooseAt(list, index, id));
@@ -655,6 +725,12 @@ export default function AlignPage({
                   );
                 })}
               </div>
+              {result && standingOf(result) === "not_sure" ? (
+                <div className="mt-1 font-medium text-warn">
+                  Showing pose {(looking ?? chosenPose ?? 0) + 1} of {result.poses?.length ?? 1}
+                  {chosenPose !== null && (looking ?? chosenPose) === chosenPose ? ", your choice" : ""}. The engine was not sure which one is right.
+                </div>
+              ) : null}
               <div className="mt-1 text-subtle">
                 {several ? "A good fit shows the colours finely mixed where the scans overlap." : "A good fit shows the two colours finely mixed where the scans overlap."} Doubled edges
                 or a gap mean it is off.
@@ -799,6 +875,22 @@ export default function AlignPage({
           {result && !aligning ? (
             <>
               <TwoVerdict result={result} />
+              {standingOf(result) === "not_sure" ? (
+                <PoseChooser
+                  result={result}
+                  looking={looking}
+                  chosen={chosenPose}
+                  disabled={busy}
+                  onLook={(i) => {
+                    setLooking(i);
+                    setView("together");
+                  }}
+                  onChoose={(i) => {
+                    setLooking(null);
+                    st.choosePose(i);
+                  }}
+                />
+              ) : null}
               {pairsDisagree(result) ? (
                 <Callout tone="warn" icon={TriangleExclamationPoint} title="Two of your points probably do not match" className="mt-3">
                   The picked points disagree by {result.pairs_rms_mm?.toFixed(1)} mm. Compare the numbers on the two scans, remove the point that is off, and align from the
@@ -821,7 +913,9 @@ export default function AlignPage({
                 >
                   {result.start === "given"
                     ? "Each number must sit on the same spot of the part in both scans. Remove a point that is off, add points further apart, then align from the points again."
-                    : "The shape alone did not settle it. Click three or more matching spots on both scans, then choose “Align from these points”."}
+                    : standingOf(result) === "not_sure"
+                      ? "The shape alone did not settle it, so the engine does not guess. Choose one of its poses above after looking at it, or click three or more matching spots on both scans, then choose “Align from these points”."
+                      : "The shape alone did not settle it. Click three or more matching spots on both scans, then choose “Align from these points”."}
                 </Callout>
               ) : view !== "together" && pose ? (
                 <div className="mt-3">
@@ -996,6 +1090,11 @@ export default function AlignPage({
                 ? "It is a merged scan and has no recording of its own. You can align to it and compare the scans here; to merge, remove it from the list or choose scans that were recorded."
                 : "It is a merged scan and has no recording of its own. You can align to it and compare the two here; to merge, choose two scans that were recorded."}
             </Callout>
+          ) : offer && !offer.offered ? (
+            <p className="flex items-start gap-1.5 text-sm leading-5 text-muted">
+              <TriangleExclamationPoint size={15} className="mt-0.5 shrink-0 text-warn" aria-hidden />
+              {offer.why}
+            </p>
           ) : (
             <>
               <Field label="Name of the new scan" htmlFor="merge-name">
@@ -1006,10 +1105,15 @@ export default function AlignPage({
                   ? "All the recordings are fused again into one new scan, which takes about as long as making all their meshes. The scans stay as they are."
                   : "Both recordings are fused again into one new scan, which takes about as long as making both meshes. The two scans stay as they are."}
               </p>
-              {result && !result.accepted ? (
+              {result && choiceText(result, chosenPose) ? (
+                <p className="mt-2 flex items-start gap-1.5 text-xs leading-5 text-ok">
+                  <CircleCheck size={13} className="mt-1 shrink-0" aria-hidden />
+                  {choiceText(result, chosenPose)} The merge puts the second scan there.
+                </p>
+              ) : offer?.confirm ? (
                 <p className="mt-2 flex items-start gap-1.5 text-xs leading-5 text-warn">
                   <TriangleExclamationPoint size={13} className="mt-1 shrink-0" aria-hidden />
-                  The alignment was not accepted, so the second scan may be in the wrong place. Merging asks you to confirm.
+                  The shapes did not confirm your points, so the second scan may be in the wrong place. Merging asks you to confirm.
                 </p>
               ) : null}
               {multi && unplacedNames.length ? (
@@ -1034,7 +1138,7 @@ export default function AlignPage({
                 loading={st.mergeStarting}
                 disabled={aligning || (!!multi && unplacedNames.length > 0)}
                 onClick={() => {
-                  const confirm = result ? !result.accepted : multi ? mergeNeedsConfirm(multi) : false;
+                  const confirm = result ? !!offer?.confirm : multi ? mergeNeedsConfirm(multi) : false;
                   if (confirm) setConfirming(true);
                   else void st.merge(mergeName);
                 }}
@@ -1074,13 +1178,13 @@ export default function AlignPage({
         <ConfirmDialog
           open={confirming}
           onClose={() => setConfirming(false)}
-          title="Merge although the alignment was not accepted?"
+          title="Merge at your points although the shapes did not confirm them?"
           confirmLabel="Merge anyway"
           tone="danger"
           onConfirm={() => st.merge(mergeName)}
         >
           The second scan may be in the wrong place. The merged scan would then show the part twice, or smeared. Look at both scans together first: if they do not sit on
-          each other, pick matching points and align again instead.
+          each other, check your points (two may be swapped) and align again instead.
         </ConfirmDialog>
       )}
     </div>

@@ -1635,7 +1635,7 @@ Every task here: the type check, `npm test`, and for bundle tasks the chunk size
   taken, as F12 did for the lasers taking turns. It needs a hook from the session to
   `SimBoardCamera` (stereo gives the camera no signal). Not done yet.
 
-### [ ] F11. The alignment from shape can accept a pose turned 180° when stray points are left
+### [x] F11. The alignment from shape can accept a pose turned 180° when stray points are left ✔
 - **Found 2026-11-17** while building the comparison with a reference model
   (`FEATURE_PLAN.md`, I2). `align_pair` (`ohs/align/pairwise.py`) aligned the simulated bracket
   scan (the bracket on its table, 715,226 triangles) to the bracket's true shape. After the
@@ -1663,6 +1663,36 @@ Every task here: the type check, `npm test`, and for bundle tasks the chunk size
   of the part is shared; and when it is not sure (a pose turned round scores nearly as well,
   the guesses disagree, too little is shared) it says so and lets the person align the scans
   by picked points, and does not accept a guess.
+- **Mended 2026-11-17.** `align_pair` itself now has:
+  - a table test with the three guards of `ohs/mesh/support.py` (a part's own face is kept;
+    "well behind" is twice the band, so a noisy table is not taken for a face);
+  - stray bits dropped from the matching (pieces under 10 % of the largest);
+  - the best pose tried again from 8 turned starts;
+  - a rule for sure: overlap ≥ 15 %, fit ≤ 0.7 mm, every other pose under 0.9 of its score,
+    two independent starts.
+
+  Otherwise the answer is "not sure", with its doubt (`rival`, `turned`, `one_guess`,
+  `points`), the reason in words, and up to 4 poses. Picked points are checked against the
+  shapes; a start from tags is not overruled. The Align page shows the poses to look at and
+  choose, and offers no merge on a pose the engine was not sure of unless the person chose
+  it or picked the points. `ohs/inspect/reference.py` uses the engine's guards and keeps its
+  24 guesses and a margin of 0.97. The robust final fit is kept: least squares was worse on
+  6 of 6 scan pairs (median 1.10 against 0.70 mm).
+  - *Measured* (`VALIDATION.md`, "Aligning and merging two scans", "Sure or not sure"): the
+    wrong accept (104.8 mm, 179.8°) is now "not sure" with the right pose first; every pair
+    accepted before is still accepted with the same error to 0.01–0.06 mm; an alignment
+    takes 1.5 to 4 times as long.
+  - *Tests:* `tests/test_align_sure.py` (10), one more in `tests/test_server_align.py`,
+    `ui/src/lib/alignChoice.test.ts`. No existing Python test line changed; one UI mock test's
+    expected sentence follows the engine's new wording. The new tests were written first but
+    not seen failing against the old engine; the before-measurement shows the old wrong accept.
+  - *Re-run in review:* 154 pass on the GPU path and 135 (19 GPU-only skipped) on the CPU
+    path over the alignment, reference, merge, pipeline, table and fusion tests. Tried
+    through the real server and page on the test projects' scans (`VALIDATION.md`).
+  - **Left:** choosing between poses for three or more scans (the verdict names the pairs
+    and the page leads to picking points); the thresholds rest on simulated parts; Open3D's
+    RANSAC can flip a pair near the limits between sure and not sure; a thin plate (1 mm)
+    lying on its table goes with the table for the alignment, and picked points do not help.
 
 ### [x] F12. The four-laser one-at-a-time calibration test lost views in full runs ✔
 - **Seen 2026-11-17:** `tests/test_server_calibration.py::test_four_lasers_calibrated_one_at_a_time_on_the_simulator`

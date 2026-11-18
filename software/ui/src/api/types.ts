@@ -1365,6 +1365,33 @@ export type AlignResult = {
   n_matched: number;
   ms: number;
   message: string; // = verdict
+  // MAINTENANCE_PLAN F11 (left out by older servers):
+  sure?: boolean; // = accepted: the evidence is there. false with poses: "not sure", the poses it had in mind
+  doubt?: AlignDoubt | null; // why not, in one word
+  poses?: AlignPose[]; // the chosen pose first, then the others that fit best (at most 4)
+  turned?: number; // starts tried turned round
+  reached?: number; // starts that reached the chosen pose independently (first guesses; turned starts only when they found it from elsewhere)
+};
+
+/**
+ * Why an alignment is not accepted (APP_API.md, "Sure or not sure"). "rival", "turned", "one_guess" and
+ * "points": the engine had a pose in mind but is not sure of it (its `poses` hold it and the others); the
+ * rest: no usable pose ("part": too little of the part besides its table; "guess": no starting guess;
+ * "overlap": too little shared; "fit": the surfaces do not match closely).
+ */
+export type AlignDoubt = "rival" | "turned" | "one_guess" | "points" | "part" | "guess" | "overlap" | "fit";
+
+/** One pose the engine had in mind: `T` as `AlignResult.T`, and how well the shapes fit there. */
+export type AlignPose = {
+  T: number[][];
+  chosen: boolean; // the engine's own answer (the first)
+  pick: number; // the engine's score: the share of matching surface (the smaller of the two scans' shares)
+  overlap: number;
+  rmse_mm: number | null;
+  fit_mm: number | null;
+  reached: number; // starts that ended here
+  from: string[]; // which starts: "your points", "the tags", "the first guesses", "turned round"
+  apart_mm: number; // how far it lies from the chosen pose (RMS over the second scan's part)
 };
 
 /** The first form of a merge: two scans, the second at the pose of an `AlignResult`. */
@@ -1414,6 +1441,8 @@ export type MergeResult = {
   message: string;
   tables?: MergeTable[];
   warnings?: string[];
+  /** The part was moved: what the merge's small-piece cleaning left out, and the small thin parts it kept (null otherwise). */
+  cleaning?: string | null;
 };
 
 // ------------------------------------------------------------------ M4 second slice: several scans at once

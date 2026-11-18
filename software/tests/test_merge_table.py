@@ -458,3 +458,110 @@ def test_a_merge_with_the_part_not_moved_is_a_plain_fusion(two_frames, tmp_path,
 
     a, b = canon(tmp_path / "by_hand.ply"), canon(tmp_path / "m" / "mesh.ply")
     assert len(a[0]) > 1000 and all(np.array_equal(x, y) for x, y in zip(a, b))
+
+
+# --------------------------------------------------------------------------- what the merge says it kept is in the merged scan
+def _merged_from_scene(scene, with_warned=True):
+    """A merged mesh as a moved-part merge leaves it: the box (one large piece), the kept disc and, unless
+    left out, the warned disc (each a piece of its own, the table between them gone), and a small loose
+    bit of something above the table; moved by T into the merged world."""
+    V, F, lab, r = scene
+    C = V[F].mean(axis=1)
+    part = lab != TABLE
+    kept_disc = np.linalg.norm(C[:, :2] - KEEP_AT[:2], axis=1) < 15.0  # out to the middle of its smeared edge
+    warned_disc = np.linalg.norm(C[:, :2] - WARN_AT[:2], axis=1) < 12.0
+    Vm, Fm, _ = compact(V, F[part | kept_disc | (warned_disc if with_warned else False)])
+    Vs, Fs, _ = box_on_table(hx=3.0, hy=3.0, H=3.0, rf=0.5, half=6.0, seed=12)
+    Vs, Fs, _ = compact(Vs, Fs[Vs[Fs].mean(axis=1)[:, 2] > 1.0])
+    blob = float(face_areas(Vs, Fs).sum())
+    Fm = np.vstack([Fm, Fs + len(Vm)])
+    Vm = np.vstack([Vm, Vs + [60.0, -60.0, 20.0]])
+    T = G.make_se3(G.so3_exp(np.array([0.4, -1.1, 2.0])), [120.0, -40.0, 300.0])
+    return G.transform_points(T, Vm), Fm, T, blob
+
+
+def test_a_small_thin_part_is_not_cleaned_away_and_the_cleaning_is_counted(scene):
+    """The merge drops pieces smaller than a share of the mesh (``clean_min_component``). A piece over a
+    scan's thin part (kept, or warned about) is not such a piece: it stays, and the report counts it;
+    whatever else the cleaning drops is counted too (how many pieces, how much area)."""
+    from ohs.align.merge import clean_merged
+
+    V, F, lab, r = scene
+    m = support_map(V, F, r)
+    Vm, Fm, T, blob = _merged_from_scene(scene)
+    V2, F2, idx, info = clean_merged(Vm, Fm, [(m, T)], 0.1)  # each disc is under a tenth of the mesh, as is the blob
+    Ti = G.invert_se3(T)
+    C = G.transform_points(Ti, V2[F2].mean(axis=1))
+    assert (np.linalg.norm(C[:, :2] - KEEP_AT[:2], axis=1) < 10.0).sum() > 300  # the kept disc
+    assert (np.linalg.norm(C[:, :2] - WARN_AT[:2], axis=1) < 8.0).sum() > 200  # the warned one too
+    assert not ((np.linalg.norm(C[:, :2] - [60.0, -60.0], axis=1) < 8.0) & (C[:, 2] > 15.0)).any()  # the blob went
+    assert info["thin_pieces_kept"] == 2 and info["pieces_removed"] == 1
+    assert info["area_removed_mm2"] == pytest.approx(blob, rel=1e-6)
+    assert np.array_equal(Vm[idx], V2)
+    # with no map it is the plain cleaning: both discs go with the blob
+    from ohs.track.export import clean_mesh
+
+    Va, Fa = clean_mesh(Vm, Fm, min_component_fraction=0.1)
+    Vb, Fb, _, info = clean_merged(Vm, Fm, [], 0.1)
+    assert np.array_equal(Va, Vb) and np.array_equal(Fa, Fb) and info["pieces_removed"] == 3
+
+
+def test_what_the_report_says_was_kept_is_in_the_merged_scan(scene):
+    """A raised area the merge means to keep may still not reach the merged mesh (the fusion drops depth
+    next to the table left out round a small one). The report says what is there: "kept" only when it
+    is, and in words when it is not."""
+    from ohs.align.merge import _map_summary, _table_entry, settle_thin_parts
+
+    V, F, lab, r = scene
+    m = support_map(V, F, r)
+    for with_warned, want in ((True, "kept"), (False, "missing")):
+        Vm, Fm, T, _ = _merged_from_scene(scene, with_warned)
+        e = _table_entry(m, [])
+        settle_thin_parts(e, m, Vm, Fm, T)
+        by = {x["verdict"]: x for x in e["thin_parts"]}
+        assert by["kept"]["in_merge"] == "kept" and by["kept"]["in_merge_share"] > 0.9
+        assert by["warned"]["in_merge"] == want, by["warned"]
+        said = [w for w in e["warnings"] if "may be a thin part" in w]
+        assert len(said) == 1
+        if want == "kept":
+            assert "it is kept in the merged scan" in said[0]
+        else:
+            assert "kept in the merged scan" not in said[0] and "not in the merged scan" in said[0], said[0]
+        e["left_in_mesh"] = {"faces": 0, "area_mm2": 0.0, "pieces": 0}
+        s = _map_summary(e)
+        assert ("may be a thin part is kept" in s) == (want == "kept"), s
+
+
+def test_counts_are_said_in_the_right_number():
+    from ohs.align.merge import _map_summary
+
+    base = {"table_area_mm2": 240000.0, "flatness_mm": 0.08}
+    one = {**base, "left_in_mesh": {"faces": 1, "area_mm2": 0.4, "pieces": 0},
+           "thin_parts": [{"verdict": "warned", "size_mm": 14.0, "height_mm": 0.26, "in_merge": "kept"},
+                          {"verdict": "kept", "size_mm": 30.0, "height_mm": 0.8, "in_merge": "kept"}]}
+    s = _map_summary(one)
+    assert "1 triangle (" in s and "1 triangles" not in s, s
+    assert "1 raised area that may be a thin part is kept" in s and "a thin part lying flat is kept" in s, s
+    two = {**base, "left_in_mesh": {"faces": 3, "area_mm2": 1.0, "pieces": 0},
+           "thin_parts": [{"verdict": "warned", "size_mm": 14.0, "height_mm": 0.26, "in_merge": "kept"}] * 2
+           + [{"verdict": "kept", "size_mm": 30.0, "height_mm": 0.8, "in_merge": "kept"}] * 2}
+    s = _map_summary(two)
+    assert "3 triangles (" in s and "2 raised areas that may be thin parts are kept" in s and "2 thin parts lying flat are kept" in s, s
+
+
+def test_a_scan_on_the_old_slab_says_that_thin_parts_go_with_it(monkeypatch):
+    """Refused by find_support, with a support plane from the alignment (given here, so that the wording is
+    checked whatever the alignment's own table test decides on this mesh)."""
+    import ohs.align.pairwise as pw
+    from ohs.align.merge import _table_entry, scan_support
+
+    monkeypatch.setattr(pw, "scan_cloud", lambda V, N, *a, **k: SimpleNamespace(support=(np.array([0.0, 0.0, 1.0]), -8.0)))
+    Vp, Fp, lp = box_on_table(hx=45.0, hy=30.0, H=8.0, rf=0.5, half=60.0, seed=6)
+    Vp, Fp, _ = compact(Vp, Fp[lp == PART])
+    Vb, Fb, lb = box_on_table(hx=20.0, hy=15.0, H=25.0, rf=0.5, half=60.0, seed=7)
+    Vb, Fb, _ = compact(Vb, Fb[lb == PART])
+    V, F = np.vstack([Vp, Vb + [15.0, 0.0, 8.0]]), np.vstack([Fp, Fb + len(Vp)])
+    sup, warnings = scan_support(V, F, name="Upside down")
+    assert sup is not None and not isinstance(sup, SupportMap)
+    assert "thinner than 2 mm" in warnings[0], warnings[0]
+    assert "thinner than 2 mm" in _table_entry(sup, warnings)["summary"]

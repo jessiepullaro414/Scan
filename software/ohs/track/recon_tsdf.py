@@ -911,14 +911,22 @@ class ConfidenceTsdf:
 
     # ------------------------------------------------------------------ integration
     def integrate(self, depth_mm: np.ndarray, sigma_mm: np.ndarray | None, T_wc: np.ndarray,
-                  t: float | None = None) -> None:
+                  t: float | None = None, seen: np.ndarray | None = None) -> None:
         """Fuse a depth map (mm, 0 = invalid) with its standard deviation (mm; ``None``: unknown,
         taken as a third of the truncation) at pose ``T_wc``. ``t`` is accepted for the
-        MarkerlessTracker interface and not used."""
+        MarkerlessTracker interface and not used. ``seen``: the depth map as the camera saw it, when
+        some of it was left out on purpose before (a merge leaves out a scan's bare table): the
+        distance to missing depth and the gap guard are measured on it, since depth left out on
+        purpose was measured and is no patch the matcher could not match; only ``depth_mm`` is fused.
+        ``None``: measured on ``depth_mm`` itself, as always."""
         depth = np.ascontiguousarray(depth_mm, dtype=np.float32)
         w, h = self.image_size
         if depth.shape != (h, w):
             raise ValueError(f"depth has shape {depth.shape}, expected {(h, w)}")
+        if seen is not None:
+            seen = np.ascontiguousarray(seen, dtype=np.float32)
+            if seen.shape != depth.shape:
+                raise ValueError(f"seen has shape {seen.shape}, expected {depth.shape}")
         T = np.asarray(T_wc, dtype=np.float64).reshape(4, 4)
         R_cw = T[:3, :3].T
         t_cw = -R_cw @ T[:3, 3]
@@ -931,7 +939,7 @@ class ConfidenceTsdf:
                 raise ValueError(f"sigma has shape {sig.shape}, expected {depth.shape}")
             self._upload_images(depth, sig)
             bricks = self._frame_bricks_gpu(self._img_bufs[1], T, depth.shape)
-            self._queue_gaps(depth.shape)  # after the search, whose result is waited for: these run meanwhile
+            self._queue_gaps(depth.shape, seen)  # after the search, whose result is waited for: these run meanwhile
             if bricks is None:
                 bricks = self._frame_bricks(depth, T)
             slots, keys = self._slots_for(bricks)
@@ -941,10 +949,13 @@ class ConfidenceTsdf:
         else:
             depth = np.where(np.isfinite(depth) & (depth >= self.depth_min_mm) & (depth <= self.depth_max_mm),
                              depth, np.float32(0.0)).astype(np.float32)
+            if seen is not None:
+                seen = np.where(np.isfinite(seen) & (seen >= self.depth_min_mm) & (seen <= self.depth_max_mm),
+                                seen, np.float32(0.0)).astype(np.float32)
             wmap, vmap = pixel_weights(depth, sigma_mm, self.trunc_mm)
             slots, keys = self._slots_for(self._frame_bricks(depth, T))
             if len(slots):
-                self._integrate_cpu(slots, keys, depth, wmap, sigma_mm, R_cw, t_cw)
+                self._integrate_cpu(slots, keys, depth, wmap, sigma_mm, R_cw, t_cw, seen)
         self.n_integrated += 1
 
     def _gap2(self, depth: np.ndarray) -> np.ndarray:
@@ -999,12 +1010,14 @@ class ConfidenceTsdf:
         return out
 
     def _integrate_cpu(self, slots: np.ndarray, keys: np.ndarray, depth: np.ndarray, wmap: np.ndarray,
-                       sigma_mm: np.ndarray | None, R_cw: np.ndarray, t_cw: np.ndarray) -> None:
+                       sigma_mm: np.ndarray | None, R_cw: np.ndarray, t_cw: np.ndarray,
+                       seen: np.ndarray | None = None) -> None:
         h, w = depth.shape
-        g2 = self._gap2(depth).ravel()
-        guard = gap_guard_mask(depth, self.gap_guard_px)
+        gd = depth if seen is None else seen  # the gaps are those of the frame as the camera saw it (integrate)
+        g2 = self._gap2(gd).ravel()
+        guard = gap_guard_mask(gd, self.gap_guard_px)
         # for the count of observations next to missing depth, what the guard drops is missing too
-        gg = self._gap2(np.where(guard, np.float32(0.0), depth)).ravel() if guard.any() else g2
+        gg = self._gap2(np.where(guard, np.float32(0.0), gd)).ravel() if guard.any() else g2
         guard = guard.ravel()
         cmap = self._cos_map(depth).ravel()
         if sigma_mm is None:
@@ -1101,14 +1114,24 @@ class ConfidenceTsdf:
         cl.wait_for_events(evs)
         return depth, sigma
 
-    def _queue_gaps(self, shape: tuple[int, int]) -> None:
+    def _queue_gaps(self, shape: tuple[int, int], seen: np.ndarray | None = None) -> None:
         """Queue the kernels that measure, from the uploaded depth, every pixel's squared distance to
         the nearest one without depth (into ``_img_bufs[4]``; see :meth:`_gap2`) and, with the gap
         guard, to the nearest one without depth or dropped by the guard (into ``_img_bufs[7]``: 0
-        at a pixel with depth says the guard dropped it, :func:`gap_guard_mask`)."""
+        at a pixel with depth says the guard dropped it, :func:`gap_guard_mask`). With ``seen`` (the
+        frame as the camera saw it, :meth:`integrate`) they measure that instead, uploaded first."""
         h, w = shape
         q = self.queue
         _, dbuf, _, hx, g2, mark, hs, gg = self._img_bufs
+        if seen is not None:
+            cl = self.cl
+            if getattr(self, "_seen_buf", None) is None or self._seen_buf[0] != (h, w):
+                if getattr(self, "_seen_buf", None) is not None:
+                    self._wait()
+                    self._seen_buf[1].release()
+                self._seen_buf = ((h, w), cl.Buffer(self.dev.ctx, cl.mem_flags.READ_ONLY, size=h * w * 4))
+            cl.enqueue_copy(q, self._seen_buf[1], seen, is_blocking=True)
+            dbuf = self._seen_buf[1]
         dmin, dmax, r = self.depth_min_mm, self.depth_max_mm, self._gap_r
         self._gkern[0](q, (w, h), None, dbuf, hx, w, h, r, dmin, dmax, mark, 0)
         self._gkern[1](q, (w, h), None, hx, g2, w, h, r)
@@ -1272,6 +1295,9 @@ class ConfidenceTsdf:
             for bb in self._img_bufs[1:]:
                 bb.release()
             self._img_bufs = None
+        if getattr(self, "_seen_buf", None) is not None:
+            self._seen_buf[1].release()
+            self._seen_buf = None
         for bb in (getattr(self, "_slot_buf", None), getattr(self, "_key_buf", None)):
             if bb is not None:
                 bb.release()

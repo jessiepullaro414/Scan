@@ -1819,7 +1819,42 @@ The figures are of the same kind as the two scans of one calibration (each scan'
 
 Two things were needed besides the tags. A start from tags is kept along the directions the shape pins only weakly (`AlignParams.start_weak_rel`, 3 % of the strongest): free, the refinement spun the sphere 139 mm (at the tags) away from a 0.35 mm start, to where the two partial views overlap most; with Straighten's 0.3 % the step on the shared table still drifted 13 mm, at 3 % it stayed and fitted better (33 % against 31 % overlap). Points picked by hand are not kept that way: they are a few millimetres off, and a rough start held along a weak direction stayed 1.9 mm off on the made-up part. And the tags must be looked for in enough frames: tags at the edge of the view are in 2–3 frames of 60, so 24 frames found one shared tag and 120 (every frame here, 1.3 s a scan) three. Not tried: real tags, tags on the part itself with the part moved, a marker-mode scan's own map (read, not measured).
 
-**Limits:** a part's own flat face that is 30 % or more of a scan made without a table is taken for the support; no Poisson meshing in a merge; simulator only.
+**Sure or not sure** (2026-11-17, `docs/MAINTENANCE_PLAN.md`, F11; the owner's direction: we cannot know what the parts will be, so find the pose from whatever angle when enough is shared, and when not sure say so and let the person align). The engine had accepted a wrong pose: the 640x400 bracket scan against the bracket's true shape, with 33 stray points left on the table, turned 180° and 105 mm off, because 8 of 9 first guesses fell into that pose together and "two guesses agree" cannot catch that. `align_pair` itself now has four things, and the paragraphs "How it aligns" above describe the engine before them:
+
+- **A table test** with the three guards of `ohs/mesh/support.py`: a large plane is the table only if something stands on it, no more of the scan lies well behind it than in front (more than twice the 1.5 mm band, so that a noisy table is not taken for a face), and the part does not go on behind it beside what stands on it. A plane that fails is a face of the part and stays; the next largest plane is tried once. (A block scanned all round had lost itself: its top face, 31 % of the surface, was taken for the table.)
+- **Stray bits dropped:** the part's points joined over gaps of 3 voxels form pieces, and pieces under 10 % of the largest are left out of the matching (not out of any mesh).
+- **Turned starts:** the best pose is refined again from itself turned half round about each principal axis of either part, and a quarter round both ways about the thinnest direction (8 starts).
+- **A rule for sure.** From the shape, a pose is accepted only when overlap is at least 15 % and the fit at most 0.7 mm (as before), every other pose scores under 0.9 of it, and two independent starts reached it (a turned start counts only when it found the pose from elsewhere). Otherwise the answer is "not sure", with the reason in words and up to 4 poses to look at. Picked points are checked against the shapes too: "not sure, check your points" when another pose scores 1.25 times better or the refinement pulls the scan more than 10 mm from them. A start from tags is not overruled (a sphere turned round always overlaps more of itself).
+
+What the margin of 0.9 rests on: on every pair that was found, the next pose scored 0.24–0.79 of the right one; on a ball, a sphere and a plain plate 0.93–1.0.
+
+| Case (engine defaults; time per alignment) | Before | After |
+|---|---|---|
+| Bracket 640x400, 110° → 20°, part only | accepted, 1.18 mm / 0.38°, 1.4 s | accepted, 1.14 mm / 0.35°, 3.9 s |
+| The same pair, same setup | accepted, 1.12 mm / 0.23°, 1.3 s | accepted, 1.10 mm / 0.22°, 3.7 s |
+| 200° → 20° | accepted, 1.94 mm / 0.45°, 1.5 s | accepted, 1.90 mm / 0.47°, 3.5 s |
+| 200° → 110° | accepted, 0.67 mm / 0.42°, 1.3 s | accepted, 0.61 mm / 0.40°, 2.5 s |
+| Three scans at once (110° and 200° placed in 20°) | 1.19 and 1.74 mm, 4.3 s | 1.17 and 1.68 mm, 10.1 s |
+| Sphere 150° apart, from the tags | accepted, 0.27 mm, 0.05 s | accepted, 0.18 mm, 0.8 s |
+| Sphere, shape only | refused (more than one position) | not sure (rival) |
+| The project's 1280x800 scans, all 6 pairs, part moved | all accepted, 0.43–0.78 mm, 1.4–2.2 s | all accepted, the same errors, 2.6–3.6 s |
+| Bracket 1280x800 against its true shape, stray points left in | refused (one guess) | not sure, the right pose first (0.30 mm) |
+| **Bracket 640x400 against its true shape, stray points left in** | **accepted wrong, 104.8 mm / 179.8°** | **not sure, the right pose first (0.34 mm)** |
+| Ball against itself turned, 3 poses | accepted (the points were identical) | 3 of 3 not sure, the right pose first |
+| Thin plate (1 mm) on its table, against itself turned and scan against scan | refused: too little of the part | the same: the plate lies within the table's band |
+| Front → side at 12 random poses | 12 of 12 right | 12 of 12 sure and right |
+| Side against itself at 24 random poses | 24 of 24, 0.6 s each | 24 of 24 sure, 2.5 s each |
+
+- **No wrong pose is accepted in any case measured, and no pair that was accepted became "not sure".** The poses of accepted pairs are the same to 0.01–0.06 mm.
+- **The price is time:** an alignment from the shape takes 1.5 to 4 times as long (the turned starts), the three bracket scans at once 10 s instead of 4 s.
+- **First guesses stay at 8.** With 16 the 1280x800 scan-against-reference case becomes sure, with 24 both do (3 and 7 starts reach the right pose), at about 3.5 times the old time instead of 2; every scan pair was already sure and right with 8. The comparison with a reference model keeps its 24 (`ohs/inspect/reference.py`, margin 0.97: the test block scored 0.89–0.92 turned round).
+- **The robust final fit stays.** Against a least-squares polish on 6 scan pairs it was better on all 6 (median 0.70 against 1.10 mm).
+- **In the app:** a pose the engine was not sure of is labelled "Not sure" with the engine's sentence and the poses it had in mind, each to look at laid over the first scan and to choose; a merge is offered only on a pose the engine was sure of, one the person chose, or one from their own points (after a confirmation). For three or more scans the verdict names the pairs it was not sure of and the page leads to picking points; choosing between poses there is not built.
+- **Tried through the real server and page** (the tracked 1280x800 scans of the test projects): bracket front + side accepted as before (80 % of the part within 1 mm, 0.23 mm RMS, 7 of 9 guesses, 4 s); front + back accepted at 50 % overlap, and with all three at once the front–back link agrees with the chain through the side scan to 0.25 mm (11 s for the three pairs); the two ball scans are accepted from their tags ("The shapes alone fit about as well another way: the tags decided.") and from the shape alone are "Not sure" (turned round fits 95 % as well, 55 mm away) with four poses listed; "Look" shows a pose over the first scan (pose 2 visibly wrong, the tables crossing), "Choose this pose" marks it as the person's choice, and without a choice the Merge section offers nothing. Not tried: a merge at a chosen pose, picked points that the shapes contradict.
+- **Limits:** the thresholds rest on simulated parts; Open3D's RANSAC is not repeatable, so a pair near the limits can be sure on one run and not sure on the next; a thin plate (1 mm) lying on its table goes with the table for the alignment and picked points do not help (tags, or a scan of it standing up, do).
+- Tests: `tests/test_align_sure.py` (10); scripts and logs in the scratchpad `f11\` of the session of 2026-11-17 (`measure.py`, `compare.py`, `lsq.py`).
+
+**Limits:** no Poisson meshing in a merge; simulator only. (A part's own flat face of 30 % or more of a scan made without a table was taken for the support until 2026-11-17; see "Sure or not sure".)
 
 **Tests** (`tests/test_align.py`, 10 tests, both compute paths; `tests/test_app_pipeline.py` for the clip plane): a known motion of 100° found again to under 0.1 mm on a made-up part, with and without the table; a part turned over (each scan its own table); a rough pose given; a symmetric part, a bare table, two unrelated shapes and a single unconfirmed guess refused in words; a detail scan inside a larger one; the two simulated bracket scans aligned and merged, the merged part larger than either scan and in the place of both; Poisson refused (and, since 2026-11-16, scans of different calibrations merged instead of refused; `tests/test_track_recon_tsdf.py` for the models' change of camera). An independent review of the first version found eleven defects; the ones that could accept a wrong pose are fixed (the fit check could not fail, one guess alone was accepted, a pose 2–10 mm away never counted as a rival). On the laptop's NVIDIA GPU the tests pass with the same figures to the last digit shown (three runs). Full suites with the slice in (847 tests, commit 493d127): GPU path 841 passed, 6 skipped; CPU path 791 passed, 56 skipped.
 
@@ -2597,9 +2632,67 @@ the true motion:
 - Through the app on the bracket's front and side scans: both tables found, "the part is kept
   right down to it", one raised area on the side scan kept and named, the uneven borders said
   once per scan.
-- **Open:** the merge still drops pieces smaller than 1 % of the triangles; a small thin part
-  beside a large one would be a piece of its own and could go that way. Being mended next.
 - Repeat it with `python tools/merge_table_study.py` (see its head for the two cases).
+
+**A small thin part beside a large one: two more things had to change (later the same day).**
+The tables above are from before them; the figures after are below.
+
+1. **The small-piece cleaning.** A merge drops loose pieces under 1 % of the triangles. A piece
+   that lies over a scan's thin part (a raised area kept or warned about) is now kept whatever
+   its size (`ohs.align.merge.clean_merged`), and the report says what the cleaning left out
+   (`mesh.cleaning`; on the bracket 50 pieces, 29 mm², none of them over a thin part).
+2. **The gap guard.** That was not what lost the small area: the fusion did. Its gap guard
+   leaves out depth next to a patch without depth, because the matcher carries a surface into
+   a patch it could not match. To the guard, the bare table the merge had just left out looked
+   like such a patch, so it ate the rim of everything the clip kept: all of an area 14 mm
+   across, and the foot of the part. The guard, the distance to missing depth and the laser
+   points' depth check are now worked out on the depth as the camera saw it
+   (`FramePipeline` keeps it as `seen`; `ConfidenceTsdf.integrate(seen=...)`); only the depth
+   the clip keeps is fused. A real hole in the depth is guarded as before, and a frame nothing
+   was clipped from is fused bit for bit as before (`tests/test_merge_guard.py`).
+
+And the report now says of each thin part what is true of the merged mesh (`in_merge`: kept,
+in part or missing, from the share of its cells with merged surface over them), where before
+it said "kept" of what the merge meant to keep.
+
+| Merge (bracket, part moved) | Table left near the part / in all | Foot covered at 0–1 / 1–2 / 2–4 mm | Within ± 0.3 mm | Part vertices | Time |
+|---|---|---|---|---|---|
+| Front + side, guard on the clipped depth | 2.1 / 2.1 mm² | 40 / 50 / 51 % | 79.4 % | 17,155 | 14–22 s |
+| Front + side, guard on what was seen | **0 / 221 mm²** | **46 / 52 / 52 %** | 78.1 % | 17,964 | 20.4 s |
+| Front + side + back, guard on the clipped depth | 2.1 / 2.1 mm² | 52 / 70 / 70 % | 76.7 % | 18,857 | |
+| Front + side + back, guard on what was seen | **0.5 / 151 mm²** | **59 / 72 / 71 %** | 74.4 % | 19,852 | 30.3 s |
+| For comparison: the tables left in (front + side / all three) | 6,740 mm² near | 46 / 52 / 56 % and 61 / 72 / 71 % | 74.4 / 73.9 % | 18,924 / 20,204 | 16.7 / 22.6 s |
+
+| Plate, pair | Top / bottom covered | Table left, before → now | Thickness reads |
+|---|---|---|---|
+| 1.0 mm, turned over | 100 / 100 % | 278 → 2,062 mm² | 1.42 mm (unchanged) |
+| 1.0 mm, slid | 100 % / – | 76 → 585 mm² | 0.99 mm (unchanged) |
+| 0.5 mm, turned over | 100 / 99.9 % | 196 → 1,764 mm² | 1.28 mm (unchanged) |
+| 0.5 mm, slid | 100 % / – | 58 → 505 mm² | 0.49 mm (unchanged) |
+
+- **The small thin area is in the merge:** the side scan's raised area 14 mm across had 0
+  faces in the merged mesh and has 539 (589 in its own scan); the report's "kept" is now true.
+- **The foot is covered as well as with the tables left in** (46 / 52 / 52 % against
+  46 / 52 / 56 %), with no table next to the part.
+- **The price is table left away from the part:** 151–221 mm² on the bracket and
+  505–2,062 mm² on the plate scenes. It lies over raised areas a scan could not tell from a
+  thin part, which a merge keeps on purpose and names in a warning; the guard used to eat them
+  without a word. On the plates 1,328 of 2,062, 539 of 585, 1,044 of 1,764 and 459 of 505 mm²
+  lie over such areas; the rest on the turned-over plates (about 730 mm²) is not traced, most
+  likely the rings round them where the other scan's table shows. Two of these areas the
+  single-scan rule even calls thin parts (26 mm across and 0.25 mm high, 23 mm and 0.30 mm, on
+  bare table): its false alarms on these scenes are open.
+- **The share within ± 0.3 mm falls a little** (79.4 → 78.1 % and 76.7 → 74.4 %): the part's
+  rim next to the left-out table, less accurate than the rest, now stays.
+- **The 2 mm cut for a scan whose table cannot be told apart** is a clip too, so it also
+  changed: on front + side it keeps a little of the foot (0 / 6.5 / 48 %) and leaves 18 mm².
+- A merge takes 20–30 s (one more depth image uploaded per frame).
+- **Through the app** (the tracked front and side scans, merged at the aligned pose, 24 s):
+  both tables found; 450 and 682 triangles (159 and 218 mm²) of table ring taken out next to
+  the part; the side scan's 14 mm area kept and named in its warning; "46 small loose pieces
+  (24 mm²) were left out as too small; 0 small pieces over a thin part were kept." In the
+  viewer the kept area is a small patch 200 mm from the bracket, which makes the merged scan's
+  bounding box 348 mm long: what "kept and named" looks like when the area was the table's own.
 
 ## What the metrics mean
 
