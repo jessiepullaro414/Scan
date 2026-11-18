@@ -90,8 +90,8 @@ other, so any of them can be taken first.
   is fine"):** the "Body panel" and "Bracket / mechanical" recipes smooth away from edges
   instead (`away_from_edges`); on the bracket the edge vertices made worse fall from 23–46 %
   to 1.4–2.9 % (`VALIDATION.md`, "Smoothing's "within 2σ" limit on today's engine"). The
-  Smooth tab's own switch for the limit is unchanged and still on by default; whether it
-  stays is not asked yet.
+  Smooth tab's own switch for the limit is **off by default** since the same day ("Off by
+  default please"); it can still be turned on.
 
 ---
 

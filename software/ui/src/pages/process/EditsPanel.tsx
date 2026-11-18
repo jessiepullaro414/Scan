@@ -1,7 +1,7 @@
 /**
  * Edits on the mesh: remove floaters, fill holes (the holes it would close are highlighted in
- * the view; optionally the outer edge too, for a watertight mesh), smooth (by default no point
- * moves more than 2 sigma, when the mesh has its confidence) and simplify (by default to an
+ * the view; optionally the outer edge too, for a watertight mesh), smooth (where to smooth is a
+ * choice; "no point moves more than 2 sigma" is a switch, off by default) and simplify (by default to an
  * accuracy in mm), each with sensible defaults and a one-line explanation, then Apply. Deleting
  * or keeping a selection happens in the view. The Floaters tab also has "Remove the table"
  * (TableSection: its faces are shown first, then removed).
@@ -13,6 +13,7 @@ import { Button } from "../../components/ui/Button";
 import { Segmented, Slider, Switch } from "../../components/ui/Form";
 import { Tooltip } from "../../components/ui/Popover";
 import { fmtFixed, fmtInt } from "../../lib/format";
+import { SMOOTH_DEFAULTS, smoothEdit, type SmoothWhere } from "../../lib/smoothEdit";
 import { cn } from "../../lib/util";
 import { processKey, useProcess } from "../../store/process";
 import { Help, NumberField, Panel } from "./bits";
@@ -30,7 +31,6 @@ const TABS: { id: EditTab; label: string; icon: LucideIcon }[] = [
 ];
 
 type FloaterMode = "size" | "triangles" | "largest";
-type SmoothWhere = "all" | "edges" | "flat";
 
 /** The "Where to smooth" choices; the text is the hover card's and each button's title. */
 const WHERE_HELP: { value: SmoothWhere; label: string; text: string }[] = [
@@ -115,11 +115,11 @@ export function EditsPanel({
   // ---- holes
   const [watertight, setWatertight] = useState(false);
   // ---- smooth
-  const [method, setMethod] = useState<SmoothMethod>("taubin");
-  const [strength, setStrength] = useState(0.5);
-  const [keepEdges, setKeepEdges] = useState(true);
-  const [withinSigma, setWithinSigma] = useState(true);
-  const [where, setWhere] = useState<SmoothWhere>("all");
+  const [method, setMethod] = useState<SmoothMethod>(SMOOTH_DEFAULTS.method);
+  const [strength, setStrength] = useState(SMOOTH_DEFAULTS.strength);
+  const [keepEdges, setKeepEdges] = useState(SMOOTH_DEFAULTS.keepEdges);
+  const [withinSigma, setWithinSigma] = useState(SMOOTH_DEFAULTS.withinSigma);
+  const [where, setWhere] = useState<SmoothWhere>(SMOOTH_DEFAULTS.where);
   const hasSigma = !!stats?.sigma_mm;
   // ---- simplify
   const [simplifyMode, setSimplifyMode] = useState<SimplifyMode>("accuracy");
@@ -164,26 +164,8 @@ export function EditsPanel({
           button: "Fill holes",
           invalid: stats && stats.holes === 0 ? "No holes to fill" : fillCount === 0 ? "No hole is that small" : null,
         };
-      case "smooth": {
-        const within = withinSigma && hasSigma;
-        const whereText = where === "flat" ? ", flat areas only" : where === "edges" ? ", away from edges" : "";
-        const pctText = `${Math.round(strength * 100)} %${whereText}${within ? ", within 2σ" : ""}`;
-        return {
-          body: {
-            op: "smooth",
-            params: {
-              method,
-              strength,
-              keep_edges: method === "bilateral" ? true : keepEdges,
-              ...(where === "flat" ? { flat_only: true } : where === "edges" ? { away_from_edges: true } : {}),
-              ...(within ? { within_sigma: true } : {}),
-            },
-          },
-          label: method === "bilateral" ? `Smooth, keep edges (${pctText})` : `Smooth (Taubin, ${pctText})`,
-          button: "Smooth",
-          invalid: strength <= 0 ? "Choose a strength above 0" : null,
-        };
-      }
+      case "smooth":
+        return { ...smoothEdit({ method, strength, keepEdges, withinSigma, where }, hasSigma), button: "Smooth" };
       case "simplify":
         if (simplifyMode === "accuracy")
           return {
@@ -396,7 +378,7 @@ export function EditsPanel({
               label="Stay within each point's uncertainty"
               description={
                 hasSigma
-                  ? "No point moves more than 2σ from where it was measured: confident areas stay put, noisy ones smooth out."
+                  ? "No point moves more than 2σ from where it was measured. It holds back well-measured surface and does not protect edges: for edges, use “Where to smooth” above."
                   : "Needs a mesh with confidence data (made with a GPU): this one has none."
               }
               checked={withinSigma && hasSigma}
