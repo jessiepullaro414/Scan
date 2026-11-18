@@ -670,7 +670,7 @@ rotation the tracker finds against the gyro's (`jump_deg`) is not saved.
     the horizontal line scatters six times as much against the stereo depth as the vertical
     one, which H2 must allow for.
 
-### H2. Which signs show a stale calibration, measured (M)
+### [x] H2. Which signs show a stale calibration, measured (M)
 - **What:** process the same simulated recordings with a calibration that is slightly wrong:
   the cameras' angle (0.01–0.1°), the baseline (0.1–1 %), a laser plane's tilt and offset, the
   IMU's rotation and time offset. For each: how far each sign of H1 moves, and how far the mesh
@@ -679,6 +679,27 @@ rotation the tracker finds against the gyro's (`jump_deg`) is not saved.
   not move as much on a hard but well-calibrated scene (dark, shiny, thin walls). The rest are
   dropped from the status and stay in the report.
 - **Result:** a table in `VALIDATION.md` and two limits per kept sign ("check", "recalibrate").
+- **Done 2026-11-18.** `tools/calib_health_study.py` (perturbation helpers importable, 98 runs
+  kept as JSON, the tables rebuild from them), the limits in `ohs/calib/health.py` (`LIMITS`,
+  `CPU_PATH`, `DROPPED`, `values()`; no status logic), `tests/test_calib_health_study.py` (41).
+  - **Kept, GPU path, provisional until H5:** the row error 0.15 / 0.3 px (cameras); each laser
+    line against the mesh 0.05 / 0.10 mm (lasers); the tracker against the gyro 0.015 / 0.03°
+    (IMU). Everything else is dropped from the status and stays in the report, the laser points
+    against the stereo depth among them (too loud on a speckled surface).
+  - **What it takes to be 0.1 mm off:** 0.01–0.04° between the cameras, 0.1 % of baseline,
+    0.02° or 0.05–0.1 mm of a laser plane. An IMU fault never cost 0.1 mm (to 5° and 20 ms).
+  - **For H3:** read the row error first (a pitch moves the horizontal line too); yaw and
+    baseline move both lines alike, a laser fault its own line only; a line missing from
+    `laser_mesh.per_line` is a sign in itself (a pitch of 0.03–0.05° loses the horizontal
+    line's points); on the CPU path use the row error only.
+  - **What no sign catches rightly:** a camera roll reads as a vertical-laser fault; on the CPU
+    path no laser or IMU fault can be seen; the margins are thin on a dark part and on a
+    speckled one (`VALIDATION.md`, "Which signs show a stale calibration").
+  - **For the owner:** the launch check's limit of 0.6 px comes late (the products are then
+    0.12–0.17 mm off). Lowering it changes when the app's drift alert shows, so it is asked,
+    not done.
+  - **Left:** two faults at once, a bent head, negative directions, the four-laser build, the
+    dark bracket's yaw crossing, the temperature (H5), Straighten's correction.
 
 ### H3. The status (M)
 - **What:** `ohs/calib/health.py` joins the launch check, the age of the last board check and the

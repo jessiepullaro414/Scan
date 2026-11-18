@@ -1732,6 +1732,12 @@ Every task here: the type check, `npm test`, and for bundle tasks the chunk size
 - **Why it matters:** "bit-identical with and without" cannot be tested for a tracked scan on
   the CPU path (H1 tests it there at given poses only), and a CPU-path user gets a slightly
   different scan each time.
+- **More, from the study of H2 the same day** (also the agent's report, not checked again):
+  on the simulated bracket at 1280x800 the CPU path's mesh with the true calibration is 0.67 mm
+  (median) from the true shape, against 0.32 mm on the GPU path; its tracker turns 0.036° a
+  frame away from the gyro (0.005° on the GPU). And several `process_recording` calls in one
+  process crashed natively now and then on the CPU path (exit code 5, once 0xC0000005, no
+  Python traceback); the same case passed in a fresh process.
 - **To do:** find where the two runs first differ (Open3D's tracker or TSDF threads, an
   unseeded choice, the order of a parallel sum); say whether the 37–219 mm on the short
   half-resolution recording is the same thing or a separate fault of that setting. Measure

@@ -2740,6 +2740,174 @@ block yet. On a simulated bracket scan with the true calibration (600 frames at 
 - **Not in the block:** a merged scan has none. The four-laser build's per-line split is not
   checked by a test of its own. Nothing here is from a real scanner.
 
+## Which signs show a stale calibration (calibration health, 2026-11-18)
+
+[`docs/FEATURE_PLAN.md`](docs/FEATURE_PLAN.md), H2. Recordings rendered with the true calibration
+(1280x800, realistic lenses, both lasers; 120 and 90 frames), processed with `process_recording`'s
+defaults (every frame, GPU path) and a calibration that is slightly wrong, one fault at a time
+(`tools/calib_health_study.py`; 98 runs, kept as JSON, and its tables rebuild from them). A cost is
+how far a product moved from the run with the true calibration on the same recording, judged
+against the simulator's true shapes, each product placed by ICP on its own: **mesh** (the part's
+median distance and median offset), **measure** (the largest change among the bracket's shaft
+diameter and the heights of base top, tab top, upright top and shaft axis above the table),
+**laser** (the laser cloud), **refined** (the mesh after Refine with lasers). A product is
+"0.1 mm off" when any of these reaches 0.1 mm. The floor: a 0.001° pitch already moves them by up
+to 0.03 mm, because tracking takes a slightly different path.
+
+**The answer.** Three signs pass the rule (they move clearly before a product is 0.1 mm off, and
+stay quiet on hard scenes with a right calibration). Their limits are in `ohs/calib/health.py`,
+for the GPU path, provisional until the real scanner (H5):
+
+| Part | Sign in `report["health"]` | Check | Recalibrate | True calibration, 7 scenes |
+|---|---|---|---|---|
+| Cameras | row error, `row_error.median_px` | 0.15 px | 0.3 px | 0.046–0.066 px; 0.126 px on the speckled bracket |
+| Lasers, per line | signed median against the mesh, `laser_mesh.per_line.<line>.median_mm` | 0.05 mm | 0.10 mm | within ±0.016 mm on every scene, both lines |
+| IMU | tracker's rotation against the gyro's, `tracking.gyro_jump_deg.median` | 0.015° | 0.03° | 0.0023–0.0074°; 0.0099° on the speckled bracket |
+
+### The true calibration on every scene
+
+| Sign | bracket s0 | bracket s1 | dark bracket | speckled bracket | 0.5 mm plate | sphere | car panel |
+|---|---|---|---|---|---|---|---|
+| Row error, median (px) | 0.062 | 0.063 | 0.066 | **0.126** | 0.052 | 0.047 | 0.046 |
+| Vertical line − mesh, median (mm) | +0.004 | +0.007 | +0.003 | +0.015 | +0.002 | −0.000 | +0.005 |
+| Horizontal line − mesh, median (mm) | −0.010 | −0.003 | +0.007 | +0.016 | −0.002 | −0.002 | −0.003 |
+| Tracker vs gyro, median (°) | 0.0047 | 0.0059 | 0.0050 | **0.0099** | 0.0025 | 0.0023 | 0.0074 |
+| (dropped) vertical laser − stereo depth (mm) | +0.002 | −0.001 | +0.002 | +0.003 | −0.001 | +0.003 | −0.006 |
+| (dropped) horizontal laser − stereo depth (mm) | +0.018 | +0.026 | −0.051 | **−0.131** | −0.022 | −0.018 | −0.016 |
+| (dropped) both lines − mesh, median abs (mm) | 0.064 | 0.075 | 0.072 | 0.118 | 0.054 | 0.084 | 0.073 |
+| (dropped) tracking residual (mm) | 0.36 | 0.35 | 0.35 | 0.59 | 0.11 | 0.11 | 0.20 |
+
+The dark bracket has an albedo of 0.12; the speckled bracket has strong speckle and noise and
+stands in for a shiny part (the renderer has no specular reflection).
+
+### Bracket, seed 0: the signs and the costs per fault
+
+| Fault | Size | Row error px | V − mesh mm | H − mesh mm | Gyro jump ° | mesh | measure | laser | refined |
+|---|---|---|---|---|---|---|---|---|---|
+| true | – | 0.062 | +0.004 | −0.010 | 0.005 | 0 | 0 | 0 | 0 |
+| cameras pitch | 0.001° (floor) | 0.061 | +0.005 | −0.015 | 0.005 | 0.03 | 0.03 | 0.02 | 0.03 |
+| | 0.01° | 0.124 | +0.015 | −0.060 | 0.004 | 0.03 | 0.10 | 0.03 | 0.10 |
+| | 0.02° | 0.253 | +0.023 | −0.127 | 0.005 | 0.05 | 0.09 | 0.03 | 0.06 |
+| | 0.05° | 0.632 | +0.054 | −0.195 | 0.005 | 0.14 | 0.17 | 0.03 | 0.17 |
+| | 0.1° | 1.300 | −0.278 | – | – | tracking lost (0.8 % of frames) | | | |
+| cameras yaw | 0.01° | 0.064 | −0.110 | −0.149 | 0.005 | 0.08 | 0.05 | 0.01 | 0.08 |
+| | 0.02° | 0.065 | −0.218 | −0.290 | 0.005 | 0.10 | 0.16 | 0.02 | 0.15 |
+| | 0.05° | 0.065 | −0.551 | −0.717 | 0.005 | 0.15 | 0.26 | 0.05 | 0.51 |
+| | 0.1° | 0.070 | −1.094 | −1.431 | 0.005 | 0.37 | 0.51 | 0.12 | 0.94 |
+| cameras roll | 0.02° | 0.076 | +0.073 | −0.013 | 0.005 | 0.02 | 0.04 | 0.01 | 0.04 |
+| | 0.05° | 0.118 | +0.178 | −0.017 | 0.005 | 0.03 | 0.08 | 0.03 | 0.07 |
+| | 0.1° | 0.200 | +0.353 | −0.025 | 0.006 | 0.11 | 0.14 | 0.07 | 0.12 |
+| baseline | 0.1 % | 0.062 | +0.184 | +0.166 | 0.005 | 0.02 | 0.06 | 0.00 | 0.09 |
+| | 0.2 % | 0.062 | +0.366 | +0.331 | 0.005 | 0.10 | 0.12 | 0.02 | 0.33 |
+| | 0.5 % | 0.062 | +0.909 | +0.876 | 0.005 | 0.30 | 0.29 | 0.03 | 0.90 |
+| | 1 % | 0.062 | +1.991 | +1.730 | 0.005 | 0.57 | 0.59 | 0.09 | 1.68 |
+| vertical laser tilt | 0.02° | 0.062 | +0.120 | −0.010 | 0.005 | 0.00 | 0.00 | 0.02 | 0.03 |
+| | 0.05° | 0.062 | +0.293 | −0.010 | 0.005 | 0.01 | 0.00 | 0.06 | 0.24 |
+| | 0.1° | 0.062 | +0.576 | −0.010 | 0.005 | 0.00 | 0.00 | 0.14 | 0.49 |
+| | 0.2° | 0.062 | +1.118 | −0.010 | 0.005 | 0.00 | 0.00 | 0.25 | 0.58 |
+| horizontal laser tilt | 0.02° | 0.062 | +0.004 | +0.216 | 0.005 | 0.00 | 0.00 | 0.02 | 0.09 |
+| | 0.05° | 0.062 | +0.004 | +0.556 | 0.005 | 0.00 | 0.00 | 0.10 | 0.55 |
+| | 0.1° | 0.062 | +0.004 | +1.117 | 0.005 | 0.00 | 0.01 | 0.23 | 1.00 |
+| | 0.2° | 0.062 | +0.004 | +2.181 | 0.005 | 0.00 | 0.00 | 0.31 | 0.49 |
+| vertical laser offset | 0.05 mm | 0.062 | −0.078 | −0.010 | 0.005 | 0.00 | 0.00 | 0.01 | 0.00 |
+| | 0.1 mm | 0.062 | −0.159 | −0.010 | 0.005 | 0.00 | 0.01 | 0.01 | 0.10 |
+| | 0.2 mm | 0.062 | −0.319 | −0.010 | 0.005 | 0.00 | 0.01 | 0.04 | 0.21 |
+| | 0.5 mm | 0.062 | −0.794 | −0.010 | 0.005 | 0.00 | 0.00 | 0.15 | 0.18 |
+| horizontal laser offset | 0.05 mm | 0.062 | +0.004 | −0.131 | 0.005 | 0.01 | 0.01 | 0.02 | 0.07 |
+| | 0.1 mm | 0.062 | +0.004 | −0.252 | 0.005 | 0.00 | 0.01 | 0.05 | 0.32 |
+| | 0.2 mm | 0.062 | +0.004 | −0.497 | 0.005 | 0.00 | 0.00 | 0.12 | 0.57 |
+| | 0.5 mm | 0.062 | +0.004 | −1.231 | 0.005 | 0.01 | 0.01 | 0.30 | 0.64 |
+| IMU rotation | 0.5° | 0.062 | +0.004 | −0.010 | 0.008 | 0.02 | 0.01 | 0.00 | 0.02 |
+| | 1° | 0.062 | +0.004 | −0.011 | 0.014 | 0.03 | 0.01 | 0.00 | 0.03 |
+| | 2° | 0.062 | +0.004 | −0.011 | 0.026 | 0.02 | 0.02 | 0.00 | 0.02 |
+| | 5° | 0.062 | +0.003 | −0.011 | 0.066 | 0.04 | 0.02 | 0.01 | 0.04 |
+| IMU time offset | 2 ms | 0.062 | +0.003 | −0.010 | 0.005 | 0.03 | 0.01 | 0.00 | 0.03 |
+| | 5 ms | 0.062 | +0.003 | −0.010 | 0.007 | 0.01 | 0.01 | 0.00 | 0.01 |
+| | 10 ms | 0.062 | +0.003 | −0.009 | 0.012 | 0.00 | 0.02 | 0.00 | 0.02 |
+| | 20 ms | 0.062 | +0.001 | −0.009 | 0.021 | 0.00 | 0.02 | 0.00 | 0.02 |
+
+### The smallest fault that puts a product 0.1 mm off, and what the kept signs read there
+
+Linear between the two sizes around it; a size counts only when every larger size also costs
+0.1 mm.
+
+| Fault | bracket s0 | bracket s1 | speckled | dark | Row error px | V − mesh mm | H − mesh mm | Gyro ° |
+|---|---|---|---|---|---|---|---|---|
+| cameras pitch | 0.025° | 0.039° | 0.040° | ~0.012° | 0.31 / 0.51 / 0.52 / 0.20 | ≤0.06 | −0.14 / gone | ≤0.007 |
+| cameras yaw | 0.012° | 0.010° | 0.009° | < 0.02° (not resolved) | 0.064–0.128 | −0.11 to −0.14 | −0.14 to −0.18 | ≤0.010 |
+| cameras roll | 0.066° | 0.038° | – | – | **0.14 / 0.09** | +0.23 / +0.16 | −0.02 / +0.01 | 0.005–0.007 |
+| baseline | 0.10 % | 0.07 % | – | – | 0.062 | +0.19 / +0.15 | +0.17 / +0.14 | 0.005 |
+| vertical laser tilt | 0.030° | 0.022° | – | – | 0.062 | +0.18 / +0.16 | ≤0.01 | 0.005 |
+| horizontal laser tilt | 0.020° | 0.022° | – | – | 0.062 | ≤0.01 | +0.22 / +0.30 | 0.005 |
+| vertical laser offset | 0.10 mm | > 0.2 mm | > 0.1 mm | > 0.1 mm | 0.062 | −0.17 (s0) | ≤0.01 | 0.005 |
+| horizontal laser offset | 0.055 mm | 0.10 mm | > 0.1 mm | > 0.1 mm | 0.062 | ≤0.01 | −0.14 / −0.28 | 0.005 |
+| IMU rotation | > 5° | > 5° | – | – | – | – | – | 0.066–0.070 at 5° |
+| IMU time offset | > 20 ms | > 10 ms | > 10 ms | > 10 ms | – | – | – | 0.012–0.014 at 10 ms |
+
+### What this says
+
+- **How little it takes.** A hundredth to a few hundredths of a degree between the cameras, a
+  tenth of a percent of baseline, two hundredths of a degree of a laser plane or 0.05–0.1 mm of
+  its offset put a product 0.1 mm off. An IMU fault never did (up to 5° and 20 ms): the
+  tracker's own fit holds the pose on these parts.
+- **How each fault shows.** A pitch shows in the row error. The yaw and the baseline do not
+  show in the row error at all; they move both laser lines' gaps the same way and by about the
+  same amount. A laser fault moves its own line only. A pitch moves the horizontal line too
+  (−0.13 mm at 0.02°), so the row error is read first.
+- **The launch check's 0.6 px comes late.** At 0.6 px (a pitch of about 0.05°) the products are
+  already 0.12–0.17 mm off, and at 1.3 px (0.1°) tracking was lost on every scene. Its limit is
+  unchanged; lowering it is the owner's decision.
+- **Dropped from the status** (they stay in the report; `health.DROPPED` says why): the laser
+  points against the stereo depth (the horizontal line reads −0.13 mm on the speckled bracket
+  with the true calibration and only 0.2–0.4 mm where a fault costs 0.1 mm), the row error's
+  90 % and signed values, the depth check's drops and the points per frame (gross faults only),
+  both lines together against the mesh (0.05–0.12 mm by scene), the tracking residual
+  (0.11–0.59 mm by scene), the gyro jump's 95 %.
+- **The IMU limits are not tied to a product,** since no IMU fault cost 0.1 mm: "check" is 1.5
+  times the hardest true scene, "recalibrate" 1.5 times the gyro prior's own sigma (0.02° a
+  frame). They catch a rotation from about 1° and a time offset from about 12–15 ms, and the
+  sign grows with how fast the scanner turns (12–22° a second here).
+
+### What no sign catches rightly before a product is 0.1 mm off
+
+1. **A camera roll (about the optical axis) reads as a vertical-laser fault.** It costs 0.1 mm
+   at 0.038–0.066°, where the row error reads 0.09–0.14 px, under its check limit, and the
+   vertical line's gap reads 0.16–0.23 mm. So it is caught, but the wrong part is named, and
+   redoing the lasers would not mend it.
+2. **On the CPU path only the row error can be used.** With the true calibration the CPU path
+   reads 0.036° for the gyro sign (over "recalibrate") and 0.08–0.13 mm for the horizontal
+   line's gap, because its tracking is less accurate and does not repeat
+   (`docs/MAINTENANCE_PLAN.md`, F13). The row error is the same on both paths (0.0618 px) and
+   still caught the pitch. A laser or IMU fault cannot be seen there
+   (`health.CPU_PATH = ("row_error",)`).
+3. **Thin margins on the dark bracket.** A pitch costs 0.1 mm there at about 0.012°, where the
+   row error reads 0.20 px: over "check", under "recalibrate". The yaw's crossing there is not
+   resolved: at 0.02°, the smallest size run, the mesh is already 0.55 mm off (both gaps read
+   0.27 and 0.35 mm, well past "recalibrate"), and it did not grow steadily with the fault.
+4. **A thin margin on the speckled bracket:** its row error with the true calibration is
+   0.126 px against a "check" limit of 0.15 px. A harder real surface may read "Check
+   recommended" with a good calibration; the status warns, it does not block.
+5. **Not measured:** two faults at once (a yaw and a baseline error push the gaps opposite
+   ways and could cancel there while the mesh bends), a bent head that moves cameras and lasers
+   together, faults in the negative direction, the four-laser build, the temperature (the
+   simulator has no warm-up: H5), Straighten's correction (only the server's stages fill it in).
+
+**Cut to keep the study to 70 minutes of computing:** the second seed got a reduced sweep; the
+hard scenes 4 faults at 1–2 sizes each; the plate, sphere and car panel the true calibration
+only; default settings, not the app's Standard quality; the row error from 4 frames a scan.
+The costs have a floor of about 0.03 mm, so a crossing near 0.1 mm is coarse (the pitch read
+0.103 mm at 0.01° and 0.087 at 0.02°). The bracket's boss diameters were left out of
+"measure": their fits moved 4 mm between two runs of the same calibration.
+
+**CPU-path check** (bracket s0): the row error at a 0.02° pitch is 0.2525 px, as on the GPU; a
+yaw of 0.02° / 0.1° reads −0.25 / −1.02 mm (vertical) and −0.22 / −1.41 mm (horizontal); the
+product costs run 0.10–0.12 mm even for faults that cost nothing on the GPU path, so costs
+cannot be measured to 0.1 mm there.
+
+Tests: `tests/test_calib_health_study.py` (41: the perturbation helpers, the limits, and one
+fault per part past its "check" limit on a 12-frame scan with the true calibration below it);
+50 pass with H1's on both paths. Repeat with `python tools/calib_health_study.py all <folder>`.
+
 ## What the metrics mean
 
 - **Stereo errors** compare the estimated raw intrinsics/extrinsics (`K1`, `K2`, `R`, `T`) with
