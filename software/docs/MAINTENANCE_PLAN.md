@@ -1719,6 +1719,24 @@ Every task here: the type check, `npm test`, and for bundle tasks the chunk size
   7 times slower than the rendering or more: the app then starts the lasers' turn after the
   hold has ended.
 
+### [ ] F13. The CPU path's tracking does not repeat from run to run
+- **Reported 2026-11-18** by the agent that built the calibration health block
+  (`FEATURE_PLAN.md`, H1), while testing "the same with and without the block". Not checked
+  again in review, and no cause looked for.
+- **What was seen** (with `OHS_COMPUTE=cpu`): two identical runs of `process_recording` on one
+  recording give different poses, in the 4th decimal at full resolution and from frame 6 on
+  at half resolution. On the 8-frame recording of `tests/test_app_pipeline.py` at half
+  resolution the CPU tracking ends 37–219 mm from the ground truth, where the GPU path is
+  fine. The GPU path repeats exactly (poses, laser points, and the mesh as a set of vertices;
+  its `mesh.ply` has the vertices in another order each run, which is known).
+- **Why it matters:** "bit-identical with and without" cannot be tested for a tracked scan on
+  the CPU path (H1 tests it there at given poses only), and a CPU-path user gets a slightly
+  different scan each time.
+- **To do:** find where the two runs first differ (Open3D's tracker or TSDF threads, an
+  unseeded choice, the order of a parallel sum); say whether the 37–219 mm on the short
+  half-resolution recording is the same thing or a separate fault of that setting. Measure
+  first; a fix that changes CPU-path results waits for the owner.
+
 ## Reviewed and fine: leave alone
 
 So nobody spends a session on these again.

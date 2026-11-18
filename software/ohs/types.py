@@ -286,21 +286,58 @@ class ImuCalibration:
         return cls(_arr(d["R_ci"], (3, 3)), float(d["time_offset"]), _arr(d["gyro_bias"]).reshape(3))
 
 
+def _opt_str(x: Any) -> str | None:
+    return None if x is None else str(x)
+
+
+def _opt_celsius(x: Any) -> float | None:
+    """A temperature (degC) from a file, or None when it is missing or not a finite number."""
+    try:
+        c = float(x)
+    except (TypeError, ValueError):
+        return None
+    return c if math.isfinite(c) else None
+
+
+def _opt_steps(x: Any) -> dict[str, dict] | None:
+    if not isinstance(x, dict):
+        return None
+    return {str(k): {"created": _opt_str(v.get("created")), "temperature_c": _opt_celsius(v.get("temperature_c"))}
+            for k, v in x.items() if isinstance(v, dict)}
+
+
 @dataclass
 class ScannerCalibration:
-    """Everything the pipeline needs to turn images into geometry."""
+    """Everything the pipeline needs to turn images into geometry.
+
+    The last four fields say which calibration this is (calibration health, FEATURE_PLAN H1). They
+    are optional: a file written before them has none, loads with ``None`` and saves without them.
+    ``id`` is new each time the file changes (any step saved), so a scan's report can name the
+    exact calibration it was processed with; ``created`` (ISO 8601) and ``temperature_c`` (the IMU
+    chip, degC) are of that change. ``steps`` keeps ``{"created", "temperature_c"}`` per part
+    (``"stereo"``, ``"lasers"``, ``"imu"``) as it was calibrated last; a part a new stereo
+    calibration dropped is dropped from it too (:func:`ohs.app.capture.merge_calibration`).
+    """
 
     stereo: StereoCalibration
     lasers: dict[str, LaserPlane] = field(default_factory=dict)
     imu: ImuCalibration | None = None
+    id: str | None = None
+    created: str | None = None
+    temperature_c: float | None = None
+    steps: dict[str, dict] | None = None
 
     def to_dict(self) -> dict:
-        return {
+        d = {
             "format_version": CALIBRATION_FORMAT_VERSION,
             "stereo": self.stereo.to_dict(),
             "lasers": {k: v.to_dict() for k, v in self.lasers.items()},
             "imu": None if self.imu is None else self.imu.to_dict(),
         }
+        for k in ("id", "created", "temperature_c", "steps"):  # only when known: an old file saves as it was
+            if getattr(self, k) is not None:
+                d[k] = getattr(self, k)
+        return d
 
     @classmethod
     def from_dict(cls, d: dict) -> "ScannerCalibration":
@@ -309,6 +346,10 @@ class ScannerCalibration:
             StereoCalibration.from_dict(d["stereo"]),
             {k: LaserPlane.from_dict(v) for k, v in d.get("lasers", {}).items()},
             None if imu is None else ImuCalibration.from_dict(imu),
+            _opt_str(d.get("id")),
+            _opt_str(d.get("created")),
+            _opt_celsius(d.get("temperature_c")),
+            _opt_steps(d.get("steps")),
         )
 
     def save(self, path: str | Path) -> None:

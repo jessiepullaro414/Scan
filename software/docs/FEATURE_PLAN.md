@@ -632,7 +632,7 @@ recording carries a copy of its calibration. During a scan nothing watches the c
 laser points that disagree with the depth are counted (`n_rejected_by_depth`), not measured; the
 rotation the tracker finds against the gyro's (`jump_deg`) is not saved.
 
-### H1. Each scan writes down what it saw of the calibration (M)
+### [x] H1. Each scan writes down what it saw of the calibration (M)
 - **What:** a `health` block in the scan's `report.json`:
   - the row error on every 30th frame (`row_error`; done while processing, so the live frame
     pays nothing);
@@ -647,6 +647,28 @@ rotation the tracker finds against the gyro's (`jump_deg`) is not saved.
   keys (old files load as before; `ScannerCalibration` must carry them through a save).
 - **Test first:** the block is there with every key on both paths; the mesh and the poses are
   bit-identical with and without it.
+- **Done 2026-11-18.** `report["health"]` (`ohs/calib/scan_health.py`, written by
+  `process_recording`; `ProcessParams.health`, `row_error_every`): which calibration (`id`,
+  `created`, `temperature_c`, per-step times), the temperatures, the row error on every 30th
+  processed frame (in a thread), each laser line against the stereo depth before the depth
+  check (`depth_gap`) and against the mesh (`laser_agreement_by_line`), the tracking residual
+  and the tracker's rotation against the gyro's (`jump_deg`, now also in each `per_frame`
+  row), and Straighten's correction (filled in by the server's stages). If the block fails
+  the scan is still written. The calibration file has optional `id`, `created`,
+  `temperature_c` and `steps`, stamped by `merge_calibration` on every save (the app's wizard
+  and `ohs calibrate`); an old file loads and saves as it was.
+  - *Measured* (`VALIDATION.md`, "What a scan sees of its calibration"): the values of a
+    right calibration on the 600-frame bracket scan, and the cost, +2.6 s (2.7 %).
+  - *The rule "bit-identical with and without" holds in part:* at given poses on both paths;
+    tracked, on the GPU path only, because the CPU path's tracking does not repeat from run to
+    run with or without the block (`MAINTENANCE_PLAN.md`, F13, new).
+  - Tests: `tests/test_scan_health.py` (9), 2 more in `tests/test_server_process_studio.py`,
+    and the saved file's stamps checked in two wizard tests of
+    `tests/test_server_calibration.py` (added in review).
+  - **Left:** a merged scan has no block; the four-laser per-line split has no test of its
+    own; the laser cloud against the mesh builds its search tree twice (2.5 s of the cost);
+    the horizontal line scatters six times as much against the stereo depth as the vertical
+    one, which H2 must allow for.
 
 ### H2. Which signs show a stale calibration, measured (M)
 - **What:** process the same simulated recordings with a calibration that is slightly wrong:

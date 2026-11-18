@@ -1064,3 +1064,58 @@ def test_make_mesh_reports_its_frames_and_rate(env):
     # the pass is over: the next update has no frame counter
     after = msgs[msgs.index(last) + 1:]
     assert after and "frames" not in after[0] and get(f"{env['url']}/api/jobs/{jid}").json().get("frames") is None
+
+# --------------------------------------------------------------------------- calibration health (FEATURE_PLAN H1)
+def test_each_stage_report_says_what_straighten_corrected(env):
+    """The track's report has a health block without Straighten; once Straighten ran (here it finds no
+    loop and is skipped), the result's report and a later fuse's say what it corrected."""
+    pid, sid = add_scan(env, "Health", env["rec"])
+    b = base_url(env, pid, sid)
+    scan_dir = env["root"] / "projects" / pid / "scans" / sid
+    run_job(env, post(b + "/process/track", {"quality": "preview"}), "process_track")
+    rep = json.loads((scan_dir / "result" / "report.json").read_text(encoding="utf-8"))
+    assert rep["health"]["straighten"] is None and rep["health"]["calibration"]["source"] == "recording"
+    run_job(env, post(b + "/process/straighten", {}), "process_straighten")
+    stt = get(b + "/process").json()["stages"]["straighten"]
+    assert stt["state"] == "skipped", stt
+    st_rep = json.loads((scan_dir / "process" / "straighten.json").read_text(encoding="utf-8"))
+    want = {"reason": st_rep["reason"], "changed": False, "loops_accepted": 0, "correction_mm": 0.0,
+            "correction_deg": 0.0}
+    rep = json.loads((scan_dir / "result" / "report.json").read_text(encoding="utf-8"))
+    got = rep["health"]["straighten"]
+    assert got is not None and {k: got[k] for k in want} == want, got
+    assert rep["frames"] == json.loads((scan_dir / "process" / "track" / "report.json")
+                                       .read_text(encoding="utf-8"))["frames"]  # the rest is the track's
+    run_job(env, post(b + "/process/fuse", {"voxel_mm": 3.0}), "process_fuse")
+    fz = json.loads((scan_dir / "process" / "fuse" / "report.json").read_text(encoding="utf-8"))
+    assert fz["health"]["straighten"] == got
+    assert json.loads((scan_dir / "result" / "report.json").read_text(encoding="utf-8"))["health"]["straighten"] == got
+
+
+@pytest.mark.slow
+def test_a_straightened_scan_reports_its_correction(env, orbit):
+    pytest.importorskip("ohs.track.posegraph")
+    from ohs.geometry import invert_se3
+    from ohs.sim.trajectory import add_drift
+    from ohs.track.posegraph import write_trajectory
+
+    pid, sid = add_scan(env, "Orbit health", orbit)
+    b = base_url(env, pid, sid)
+    run_job(env, post(b + "/process/track", {"quality": "preview"}), "process_track")
+    reader = RecordingReader(orbit)
+    gt = reader.ground_truth_poses()
+    idx = sorted(gt)
+    Tt = np.stack([invert_se3(gt[idx[0]]) @ gt[i] for i in idx])
+    times = reader.times()
+    proc = env["root"] / "projects" / pid / "scans" / sid / "process"
+    drifted = add_drift(Tt, 0.1, 0.3, 2)
+    write_trajectory(proc / "track" / "trajectory.csv", [(i, float(times[k]), True, drifted[k]) for k, i in enumerate(idx)])
+    run_job(env, post(b + "/process/straighten", {}), "process_straighten")
+    stt = get(b + "/process").json()["stages"]["straighten"]
+    assert stt["state"] == "done", stt
+    st_rep = json.loads((proc / "straighten.json").read_text(encoding="utf-8"))
+    for path in (proc / "straighten" / "report.json", proc.parent / "result" / "report.json"):
+        h = json.loads(path.read_text(encoding="utf-8"))["health"]["straighten"]
+        assert h["changed"] is True and h["loops_accepted"] == st_rep["loops_accepted"] >= 1, path
+        assert h["correction_mm"] == pytest.approx(st_rep["correction_mm"]) and h["correction_mm"] > 0.3
+        assert (h["laser_curves"] is None) == (st_rep.get("laser_curves") is None)

@@ -35,7 +35,7 @@ import numpy as np
 
 from ohs.mesh.topology import as_mesh, edge_table, rows, vertex_normals
 
-__all__ = ["AnchorParams", "anchor_to_points", "laser_agreement", "AGREEMENT_GATE_MM"]
+__all__ = ["AnchorParams", "anchor_to_points", "laser_agreement", "laser_agreement_by_line", "AGREEMENT_GATE_MM"]
 
 AGREEMENT_GATE_MM = 3.0  # laser_agreement: laser points farther than this from the surface are stray
 
@@ -228,3 +228,50 @@ def laser_agreement(V: np.ndarray, F: np.ndarray, P: np.ndarray, *, N: np.ndarra
                   "p50_mm": round(float(p50), 4), "p95_mm": round(float(p95), 4), "max_mm": round(float(a.max()), 4),
                   "within_0_1": round(float(np.mean(a <= 0.1)), 4), "within_0_3": round(float(np.mean(a <= 0.3)), 4)})
     return values, report
+
+
+def laser_agreement_by_line(V: np.ndarray, F: np.ndarray, lines: dict[str, np.ndarray], *, N: np.ndarray | None = None,
+                            gate_mm: float = AGREEMENT_GATE_MM, lateral: float = 1.5) -> dict[str, dict]:
+    """The laser points of each line against the mesh ``(V, F)``, paired as in :func:`laser_agreement`.
+
+    ``lines``: ``{name: points (M,3)}``, the same frame and units as the mesh. A laser plane that
+    moved since it was calibrated puts its line's points off the surface while the other lines
+    stay on it, so each line is summarised alone, by its points' signed distances (mm, along the
+    nearest vertex's normal, + = the laser sees the surface further out): ``points``, ``used``
+    (on the surface and within ``gate_mm``), ``stray`` (on the surface, farther), ``median_mm`` and
+    ``mean_mm`` (signed) and ``abs_p95_mm`` of the used points (None without any). Calibration
+    health (FEATURE_PLAN H1).
+    """
+    from scipy.spatial import cKDTree  # noqa: PLC0415
+
+    V, F = as_mesh(V, F)
+    n = len(V)
+    empty = {"points": 0, "used": 0, "stray": 0, "median_mm": None, "mean_mm": None, "abs_p95_mm": None}
+    out: dict[str, dict] = {}
+    tree = h = None
+    if n and len(F):
+        if N is None:
+            N = vertex_normals(V, F)
+        et = edge_table(F, n)
+        h = float(np.median(np.linalg.norm(rows(V, et.v0) - rows(V, et.v1), axis=1)))
+    for name, P in lines.items():
+        P = np.asarray(P, dtype=np.float64).reshape(-1, 3)
+        P = P[np.all(np.isfinite(P), axis=1)]
+        s = dict(empty, points=int(len(P)))
+        out[name] = s
+        if h is None or not len(P):
+            continue
+        if tree is None:
+            tree = cKDTree(V)
+        _, j = tree.query(P, workers=-1)
+        Nj = rows(N, j)
+        rv = P - rows(V, j)
+        r = np.einsum("ij,ij->i", rv, Nj)
+        on = np.linalg.norm(rv - r[:, None] * Nj, axis=1) <= lateral * h
+        ok = on & (np.abs(r) <= gate_mm)
+        s.update(used=int(ok.sum()), stray=int(on.sum() - ok.sum()))
+        if ok.any():
+            d = r[ok]
+            s.update(median_mm=round(float(np.median(d)), 4), mean_mm=round(float(d.mean()), 4),
+                     abs_p95_mm=round(float(np.percentile(np.abs(d), 95)), 4))
+    return out

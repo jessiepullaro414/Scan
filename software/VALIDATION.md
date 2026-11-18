@@ -2696,6 +2696,50 @@ it said "kept" of what the merge meant to keep.
   viewer the kept area is a small patch 200 mm from the bracket, which makes the merged scan's
   bounding box 348 mm long: what "kept and named" looks like when the area was the table's own.
 
+## What a scan sees of its calibration (calibration health, 2026-11-18)
+
+Every scan's `report.json` now has a `health` block ([`docs/FEATURE_PLAN.md`](docs/FEATURE_PLAN.md),
+H1; `ohs/calib/scan_health.py`; its keys are in `docs/APP_API.md`). It only writes down; which
+of these signs really show a stale calibration is the next task (H2), and nothing reads the
+block yet. On a simulated bracket scan with the true calibration (600 frames at 30 a second,
+1280x800, tracked, GPU path), so these are the values of a calibration that is right:
+
+| Sign | Value |
+|---|---|
+| Row error (every 30th frame: 20 frames, 8,298 matches) | median 0.058 px, 90 % under 0.17 px, signed median 0.002 px |
+| Laser points minus stereo depth, horizontal line (263,778 points) | median +0.005 mm; half within 0.56 mm; 5–95 %: −1.51 to +1.44 mm; 210 dropped by the depth check |
+| The same, vertical line (156,984 points) | median +0.001 mm; half within 0.09 mm; 5–95 %: −0.25 to +0.27 mm; none dropped |
+| Laser points against the mesh, per line (signed median) | horizontal −0.005 mm, vertical +0.016 mm; 95 % within 0.31 and 0.21 mm |
+| Laser points against the mesh, all | median 0.060 mm, 95 % within 0.26 mm |
+| Tracking residual (599 frames) | median 0.34 mm, 95 % under 0.41 mm |
+| Tracker's rotation against the gyro's | median 0.0045°, 95 % under 0.0099°, largest 0.019° |
+| Temperature (the IMU chip) | 26.5–26.6 °C during the scan; none known for the simulator's calibration |
+
+- **The horizontal line scatters six times as much against the stereo depth as the vertical
+  one** (half within 0.56 mm against 0.09 mm), with the same median. Probably because a
+  horizontal line runs along the image rows, where the stereo depth is weakest; not looked
+  into. A limit for this sign (H2) will have to be per line.
+- **One sign was tried against a fault already:** a vertical laser plane moved 1.5 mm along
+  its normal moves that line's laser-minus-stereo median past 0.8 mm and leaves the other
+  line's within 0.05 mm (8 frames, 640x400 sphere, `tests/test_scan_health.py`).
+- **It changes nothing it measures.** At given poses (the Straighten and Fuse stages) the
+  mesh, the poses and the laser points are bit-identical with and without the block on both
+  paths; tracked, on the GPU path. On the CPU path a tracked scan does not repeat from run to
+  run with or without it (`docs/MAINTENANCE_PLAN.md`, F13), so it cannot be compared there.
+- **Cost:** three runs each way, alternating, nothing else running, the PC on the "High
+  performance" power plan: 95.75 s without and 98.33 s with the block (+2.6 s, 2.7 %).
+  Almost all of it is at the end, the laser cloud against the mesh, which builds the mesh's
+  search tree twice; the per-frame part does not show. Not timed on the CPU path.
+- **The calibration file** has four optional keys since the same day: `id` (new on every
+  save), `created`, `temperature_c`, and `steps` (when each of stereo, lasers and IMU was last
+  calibrated, and at what temperature). An old file loads and saves as it was.
+- **Through the app** (Make mesh on the bracket's back scan, 60 frames at 1280x800, 23 s): the
+  result's report has the block, with the same picture as the long scan (row error median
+  0.060 px; horizontal line half within 0.56 mm of the stereo depth, vertical 0.09 mm; tracker
+  against gyro 0.0045°) and Straighten's entry filled in ("no_candidates", nothing changed).
+- **Not in the block:** a merged scan has none. The four-laser build's per-line split is not
+  checked by a test of its own. Nothing here is from a real scanner.
+
 ## What the metrics mean
 
 - **Stereo errors** compare the estimated raw intrinsics/extrinsics (`K1`, `K2`, `R`, `T`) with

@@ -1377,7 +1377,12 @@ class CalibrationManager:
                                "add views and calibrate again, or save it anyway (force)")
             path = st.setup.calibration_path(s.target)
             existing = st.setup.load_calibration(s.target)
-            new, _engine_notes = capture.merge_calibration(existing, s.kind, s.value, lasers=s.lines)
+            # the temperature of the step: its recording's (an IMU recording has it), else the IMU's now
+            temp = capture.recording_temperature(s.recording) if s.recording is not None else None
+            if temp is None:
+                temp = safe_call("reading the IMU temperature", lambda: st.devices.imu_temp_c())
+            new, _engine_notes = capture.merge_calibration(existing, s.kind, s.value, lasers=s.lines,
+                                                           temperature_c=temp)
             try:
                 backup = capture.save_calibration(new, path)
             except OSError as e:

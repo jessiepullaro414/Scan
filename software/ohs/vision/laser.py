@@ -142,6 +142,7 @@ __all__ = [
     "triangulate_plane",
     "stereo_check",
     "depth_check",
+    "depth_gap",
     "laser_points",
     "draw_overlay",
 ]
@@ -1112,6 +1113,35 @@ def depth_check(points_c: np.ndarray, depth: np.ndarray, K: np.ndarray, sigma: n
     return ok
 
 
+def depth_gap(points_c: np.ndarray, depth: np.ndarray, K: np.ndarray, offset_px: int | None = None) -> np.ndarray:
+    """Signed distance in depth (mm, float32) of laser points (frame C, (N,3)) to the dense depth:
+    the point's ``z`` minus the median of the dense depth at the five pixels :func:`depth_check`
+    reads (+ = the laser point lies farther from the camera). NaN where there is no dense depth
+    around the point. Measures only; a calibration that drifted shows here as a shift (calibration
+    health, FEATURE_PLAN H1)."""
+    P = np.asarray(points_c, dtype=np.float64).reshape(-1, 3)
+    out = np.full(len(P), np.nan, dtype=np.float32)
+    if len(P) == 0:
+        return out
+    h, w = depth.shape[:2]
+    o = int(offset_px) if offset_px is not None else max(2, int(round(6.0 * w / 1280.0)))
+    z = P[:, 2]
+    good = np.isfinite(P).all(axis=1) & (z > 0)
+    zs = np.where(good, z, 1.0)
+    u = np.rint(K[0, 0] * P[:, 0] / zs + K[0, 1] * P[:, 1] / zs + K[0, 2]).astype(np.int64)
+    v = np.rint(K[1, 1] * P[:, 1] / zs + K[1, 2]).astype(np.int64)
+    samples = np.full((5, len(P)), np.nan)
+    for r, (du, dv) in enumerate(((0, 0), (0, -o), (0, o), (-o, 0), (o, 0))):
+        uu, vv = u + du, v + dv
+        idx = np.flatnonzero(good & (uu >= 0) & (uu < w) & (vv >= 0) & (vv < h))
+        d = depth[vv[idx], uu[idx]].astype(np.float64)
+        samples[r, idx] = np.where(d > 0, d, np.nan)
+    seen = np.isfinite(samples).any(axis=0)
+    if seen.any():
+        out[seen] = (z[seen] - _nanmedian_rows(samples[:, seen])).astype(np.float32)
+    return out
+
+
 def laser_points(
     left_r: np.ndarray,
     right_r: np.ndarray | None,
@@ -1125,6 +1155,7 @@ def laser_points(
     depth: np.ndarray | None = None,
     depth_sigma: np.ndarray | None = None,
     rejected: dict[str, int] | None = None,
+    depth_gaps: dict[str, list[np.ndarray]] | None = None,
 ) -> dict[str, np.ndarray]:
     """Validated laser points (mm, frame C) per calibrated plane: ``{name: (N,3)}``.
 
@@ -1133,7 +1164,9 @@ def laser_points(
     ``params.stereo_check`` is set and the right image (or ``lines_right``) is available,
     applies :func:`stereo_check`. With a dense ``depth`` map of the left image (and its
     ``depth_sigma``) and ``params.depth_check``, also :func:`depth_check`; ``rejected`` (when
-    given) counts the points it drops per plane. Plane names that are not laser lines (see
+    given) counts the points it drops per plane, and ``depth_gaps`` (when given) gets, per plane,
+    the :func:`depth_gap` of every point the depth check looks at, before it drops any (appended
+    as one array per call; this changes no point). Plane names that are not laser lines (see
     :func:`line_family`) are ignored.
 
     Several planes of one family (four lasers): each point of the family is triangulated on
@@ -1166,7 +1199,7 @@ def laser_points(
             multi.update(_assign_planes(lines_left.get(fam), [planes[n] for n in names], names, K, baseline, p,
                                         lines_right.get(fam) if do_check else None,
                                         depth if use_depth else None, depth_sigma, rejected,
-                                        lines_right.segments(fam) if do_check else None))
+                                        lines_right.segments(fam) if do_check else None, depth_gaps))
     out: dict[str, np.ndarray] = {}
     for name, plane in planes.items():
         if not is_line_name(name):
@@ -1180,6 +1213,8 @@ def laser_points(
         if do_check and ok.any():
             ok &= stereo_check(P, lines_right.get(name), K, baseline, p.stereo_tol_px)
         if use_depth and ok.any():
+            if depth_gaps is not None:
+                depth_gaps.setdefault(name, []).append(depth_gap(P[ok], depth, K))
             agree = depth_check(P[ok], depth, K, depth_sigma, p.depth_check_k, p.depth_check_min_mm)
             if rejected is not None:
                 rejected[name] = rejected.get(name, 0) + int((~agree).sum())
@@ -1195,15 +1230,22 @@ def laser_points(
 def _assign_planes(uv: np.ndarray, planes: list[LaserPlane], names: list[str], K: np.ndarray, baseline: float,
                    p: LaserParams, right_uv: np.ndarray | None, depth: np.ndarray | None,
                    depth_sigma: np.ndarray | None, rejected: dict[str, int] | None,
-                   right_seg: np.ndarray | None = None) -> dict[str, np.ndarray]:
+                   right_seg: np.ndarray | None = None,
+                   depth_gaps: dict[str, list[np.ndarray]] | None = None) -> dict[str, np.ndarray]:
     """The points of one family split between its planes (see :func:`laser_points`): ``{name: (N,3)}``.
 
     The plane of each point is decided in the left image; a plane the right camera measures
-    then gets its points from there (:func:`_remeasure`)."""
+    then gets its points from there (:func:`_remeasure`). ``depth_gaps`` measures each plane's
+    points and the ones the depth check dropped that are counted as its rejected ones."""
     P, label, lost, blame = _plane_labels(uv, planes, K, baseline, p, right_uv, depth, depth_sigma)
     if rejected is not None and depth is not None:
         for k, name in enumerate(names):
             rejected[name] = rejected.get(name, 0) + int((lost & (blame == k)).sum())
+    if depth_gaps is not None and depth is not None:
+        for k, name in enumerate(names):
+            sel = (label == k) | (lost & (blame == k))
+            if sel.any():
+                depth_gaps.setdefault(name, []).append(depth_gap(P[k][sel], depth, K))
     out = {}
     for k, name in enumerate(names):
         mine = label == k

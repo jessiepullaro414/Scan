@@ -328,6 +328,14 @@ class DeviceManager:
         c = self._conn
         return None if c is None else c.last_frame_t
 
+    def imu_temp_c(self) -> float | None:
+        """The IMU chip's latest temperature (degC), or None when there is none or it is stale
+        (as ``DeviceState.imu_temp_c``, unrounded)."""
+        c = self._conn
+        if c is None or c.temp_c is None or time.monotonic() - c.temp_t >= TEMP_STALE_S:
+            return None
+        return float(c.temp_c)
+
     def imu_available(self) -> bool:
         c = self._conn
         if c is None:

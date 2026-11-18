@@ -527,6 +527,10 @@ class FramePipeline:
         self._probe_left = DETAIL_PROBE_FRAMES
         #: laser points dropped because they disagree with the frame's dense depth, per line
         self.laser_rejected: dict[str, int] = {}
+        #: when a dict (set by the caller; None: not measured), each frame appends per line the signed
+        #: distance of its laser points to the dense depth before the depth check (``laser_points``'s
+        #: ``depth_gaps``, :func:`~ohs.vision.laser.depth_gap`): calibration health, FEATURE_PLAN H1
+        self.laser_depth_gaps: dict[str, list[np.ndarray]] | None = None
         self._trajectory: list[tuple[float, np.ndarray, bool]] = []
         self._t_prev: float | None = None
         self._n_frames = 0
@@ -733,10 +737,11 @@ class FramePipeline:
         # laser_triangulate_cpu are the work's own times
         fut_pts = None
         rejected: dict[str, int] = {}
+        gaps: dict[str, list[np.ndarray]] | None = {} if self.laser_depth_gaps is not None else None
         if futs is not None:
             fut_pts = self._laser_pool.submit(_lines_then_points, futs, partial(
                 laser_points, left_r, right_r, self.K, self.baseline, self.planes, self.laser_params,
-                depth=depth if seen is None else seen, depth_sigma=sigma, rejected=rejected))
+                depth=depth if seen is None else seen, depth_sigma=sigma, rejected=rejected, depth_gaps=gaps))
 
         t0 = time.perf_counter()
         if pose is not None:
@@ -763,6 +768,9 @@ class FramePipeline:
             lines, lines_r, pts, tim["laser_extract_cpu"], tim["laser_triangulate_cpu"], t_lines = fut_pts.result()
             for name, n in rejected.items():
                 self.laser_rejected[name] = self.laser_rejected.get(name, 0) + n
+            if gaps and self.laser_depth_gaps is not None:
+                for name, arrs in gaps.items():
+                    self.laser_depth_gaps.setdefault(name, []).append(np.concatenate(arrs))
             if clip_plane is not None:
                 pts = {name: self._clip_points(P, clip_plane) for name, P in pts.items()}
             if track.ok:
@@ -998,6 +1006,8 @@ class FramePipeline:
             self.markers.reset()
         self.cloud.clear()
         self.laser_rejected = {}
+        if self.laser_depth_gaps is not None:
+            self.laser_depth_gaps = {}
         self._trajectory = []
         self._t_prev = None
         self._n_frames = 0

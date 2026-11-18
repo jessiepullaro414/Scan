@@ -477,6 +477,26 @@ def _write_json(path: Path, data: Any) -> None:
     _retry(lambda: os.replace(tmp, path), f"replacing {path}")
 
 
+def _set_straighten(report: dict, rep: dict | None) -> bool:
+    """Write what Straighten corrected (``rep``: its ``straighten.json``) into a stage report's
+    calibration health block (FEATURE_PLAN H1). False when the report has no block to write into."""
+    from ohs.calib.scan_health import straighten_summary
+
+    h = report.get("health")
+    if not isinstance(h, dict) or "error" in h:
+        return False
+    h["straighten"] = straighten_summary(rep)
+    return True
+
+
+def _read_json(path: Path) -> dict | None:
+    try:
+        d = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return d if isinstance(d, dict) else None
+
+
 def _save_npz(path: Path, V: np.ndarray, F: np.ndarray, N: np.ndarray | None = None,
               S: np.ndarray | None = None, filled: np.ndarray | None = None) -> None:
     """A cached step: V float32, F int32 and, when given, the vertex normals (float16), sigmas
@@ -1379,6 +1399,10 @@ class ProcessManager:
             report = process_recording(rec, tmp, params=params, progress=progress, poses=poses)
             ctx.check()
             report["quality"] = quality
+            if name != "track":  # a later stage: what Straighten corrected so far (calibration health)
+                st_rep = _read_json(sp.dir / "straighten.json")
+                if st_rep is not None:
+                    _set_straighten(report, st_rep)
             (tmp / "report.json").write_text(json.dumps(jsonable(report), indent=1), encoding="utf-8")
             _move_dir(tmp, sp.dir / name)
         finally:
@@ -1489,6 +1513,10 @@ class ProcessManager:
                 # no loop (or loops that show the passes already line up) and nothing for the lasers to fix:
                 # the base (and its edits) stay
                 msg = verdict or "No loops found: nothing to straighten"
+                with sp.lock:  # the base stays; its report says that Straighten found nothing to correct
+                    res_rep = _read_json(sp.result_dir / "report.json")
+                    if res_rep is not None and _set_straighten(res_rep, rep):
+                        _write_json(sp.result_dir / "report.json", res_rep)
                 self._stage_end(sp, "straighten", state="skipped", summary=msg, loops=int(loops or 0),
                                 correction_mm=0.0, correction_deg=0.0, crossings=None)
                 return msg
@@ -1500,6 +1528,8 @@ class ProcessManager:
                                for i in new_poses if i in track_poses), default=0.0)
                 corr_deg = max(float(corr_deg or 0.0), float(crep.get("moved_deg") or 0.0))
             (sp.dir / "straighten" / "straighten.json").write_text(json.dumps(jsonable(rep), indent=1), encoding="utf-8")
+            if _set_straighten(report, rep):  # with the laser crossings, which came after the first fuse
+                _write_json(sp.dir / "straighten" / "report.json", report)
             prog(0.96, "Saving the mesh", force=True)
             with sp.lock:  # fuse and the refinements built on the old poses
                 for name in ("fuse", "spacetime", "refine"):

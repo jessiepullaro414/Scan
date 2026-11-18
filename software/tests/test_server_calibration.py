@@ -271,6 +271,13 @@ def test_wizard_end_to_end_on_the_simulator(env):
     final = ScannerCalibration.load(sandbox)
     assert final.lasers and final.imu is not None and (sandbox.parent / "calibration.json.bak").is_file()
     assert not device_calib.exists() and not (root / "scans").exists()
+    # calibration health (FEATURE_PLAN H1): each save stamped the file. The id and time are the last save's
+    # (the IMU step), and every part has its own time, in the order the steps were saved
+    assert final.id and len(final.id) == 12 and final.created, (final.id, final.created)
+    assert list(final.steps) == ["stereo", "lasers", "imu"], final.steps
+    assert final.steps["imu"]["created"] == final.created
+    assert final.steps["stereo"]["created"] <= final.steps["lasers"]["created"] <= final.steps["imu"]["created"]
+    assert final.id != ScannerCalibration.load(sandbox.parent / "calibration.json.bak").id  # a new id on every save
     truths["check"] = r["sim_truth_values"]
     print("SIM_TRUTH " + json.dumps({"truth": truths, "timings_s": {k: round(v, 1) for k, v in timings.items()}},
                                     default=float))
@@ -560,6 +567,11 @@ def test_device_target_stereo_is_saved_and_the_camera_reloads_it(tmp_path, demo_
         new = ScannerCalibration.load(path)
         assert not new.lasers and new.imu is None and new.stereo.baseline == pytest.approx(59.4, abs=0.3)
         assert ScannerCalibration.load(path.with_name("calibration.json.bak")).lasers  # the old one, kept
+        # calibration health (FEATURE_PLAN H1): the save stamped the new file; the old one had no such keys,
+        # and its backup still has none
+        assert new.id and len(new.id) == 12 and new.created and list(new.steps) == ["stereo"], (new.id, new.steps)
+        assert new.steps["stereo"]["created"] == new.created
+        assert ScannerCalibration.load(path.with_name("calibration.json.bak")).id is None
         dev = _get(url, "/api/device").json()  # the connection reloaded it
         assert dev["calibration"]["loaded"] and dev["calibration"]["lasers"] == [] and dev["calibration"]["imu"] is False
         assert dev["calibration"]["baseline_mm"] == pytest.approx(59.4, abs=0.3)

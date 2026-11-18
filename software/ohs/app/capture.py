@@ -32,7 +32,9 @@ import logging
 import math
 import os
 import shutil
-from dataclasses import dataclass, field
+import uuid
+from dataclasses import dataclass, field, replace
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -70,6 +72,7 @@ __all__ = [
     "run_capture",
     "run_flow",
     "merge_calibration",
+    "recording_temperature",
     "save_calibration",
     "format_report",
     "write_report",
@@ -664,7 +667,8 @@ def run_flow(kind: str, rec_path: str | Path, spec: Any, calib: ScannerCalibrati
 
 
 def merge_calibration(existing: ScannerCalibration | None, kind: str, value: Any, keep: bool = False,
-                      lasers: Any = None) -> tuple[ScannerCalibration, list[str]]:
+                      lasers: Any = None, *, temperature_c: float | None = None,
+                      when: str | None = None) -> tuple[ScannerCalibration, list[str]]:
     """New calibration after a ``kind`` result, plus notes for the user.
 
     stereo: replaces the stereo part; the laser planes and the IMU calibration are dropped (they
@@ -672,7 +676,38 @@ def merge_calibration(existing: ScannerCalibration | None, kind: str, value: Any
     the ones with the same name; a plane that was not fitted keeps its old value, and each laser
     of ``lasers`` (the build's laser names; default the two standard ones) without a fitted plane
     gets a note. imu: replaces the IMU calibration.
+
+    The result is a new calibration in the sense of :class:`~ohs.types.ScannerCalibration`'s
+    optional keys: a new ``id``, ``created`` = ``when`` (ISO 8601; default now, UTC) and
+    ``temperature_c`` (the IMU chip during the step, degC, or None). ``steps[kind]`` gets the same
+    time and temperature; the other parts keep theirs, except those a new stereo calibration
+    dropped. A calibration from before these keys knows no times for its older parts.
     """
+    new, notes = _merge(existing, kind, value, keep, lasers)
+    when = when or datetime.now(timezone.utc).isoformat(timespec="seconds")
+    temp = None if temperature_c is None or not math.isfinite(float(temperature_c)) else float(temperature_c)
+    parts = {"stereo": True, "lasers": bool(new.lasers), "imu": new.imu is not None}
+    steps = {k: dict(v) for k, v in ((existing.steps or {}) if existing is not None else {}).items()
+             if k != kind and parts.get(k, False)}
+    steps[kind] = {"created": when, "temperature_c": temp}
+    steps = {k: steps[k] for k in ("stereo", "lasers", "imu") if k in steps}
+    return replace(new, id=uuid.uuid4().hex[:12], created=when, temperature_c=temp, steps=steps), notes
+
+
+def recording_temperature(rec: str | Path) -> float | None:
+    """The IMU chip's temperature during a recording (degC): the mean of the first and the last
+    reading in its ``meta.json`` (``temperature_c``), or None when it has none."""
+    try:
+        meta = json.loads((Path(rec) / "meta.json").read_text(encoding="utf-8"))
+        t = meta["temperature_c"]
+        c = 0.5 * (float(t["first"]) + float(t["last"]))
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    return round(c, 2) if math.isfinite(c) else None
+
+
+def _merge(existing: ScannerCalibration | None, kind: str, value: Any, keep: bool,
+           lasers: Any) -> tuple[ScannerCalibration, list[str]]:
     notes: list[str] = []
     if kind == "stereo":
         lasers: dict = {}

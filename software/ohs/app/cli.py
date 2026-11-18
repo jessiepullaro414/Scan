@@ -897,7 +897,8 @@ def cmd_calibrate(args: argparse.Namespace) -> int:
             _warn("the calibration check failed: re-run `ohs calibrate stereo` and/or `ohs calibrate lasers`")
             return 1
         return 0
-    new, notes = capture.merge_calibration(existing, kind, value, keep=args.keep, lasers=cfg.lasers.lines)
+    new, notes = capture.merge_calibration(existing, kind, value, keep=args.keep, lasers=cfg.lasers.lines,
+                                           temperature_c=capture.recording_temperature(rec))
     for n in notes:
         (_warn if "dropped" in n or "not fitted" in n else _say)(n)
     if args.no_save:

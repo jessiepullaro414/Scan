@@ -10,8 +10,8 @@ resolution, 1 mm voxels) over the raw frames of a recording folder and writes in
 * ``trajectory.csv``: ``index,t,ok,T00..T33`` (``T_wc`` row-major) per processed frame;
 * ``marker_map.json`` (marker mode): the refined tag map (world corners, mm);
 * ``report.json``: frame counts, tracked fraction, failure reasons, per-stage timings, mesh /
-  laser statistics, effective parameters and, when the recording has ``ground_truth/poses.csv``
-  (simulated data), the trajectory error against it.
+  laser statistics, effective parameters, the calibration's health and, when the recording has
+  ``ground_truth/poses.csv`` (simulated data), the trajectory error against it.
 
 The calibration defaults to the recording's ``calibration.json``. IMU samples are fed to the
 pipeline incrementally (up to 0.25 s ahead of each frame), so recordings longer than the gyro
@@ -45,6 +45,14 @@ Marker mode calls ``MarkerTracker.refine_map()`` after the last frame and saves 
 refined map; the fused model and laser cloud use the poses tracked online (refinement mostly
 improves the map itself; see VALIDATION.md).
 
+**Calibration health** (FEATURE_PLAN H1, ``ProcessParams.health``, on by default):
+``report["health"]`` is what the scan saw of its calibration (:mod:`ohs.calib.scan_health`): the
+calibration's id and time, the temperatures, the row error on every ``row_error_every``-th processed
+frame, the laser lines against the stereo depth (before the depth check drops any) and against the
+mesh, the tracker's residual and its rotation against the gyro's (also ``jump_deg`` in each
+``per_frame`` row). It only measures: the mesh, the poses and the laser points are the same without
+it. Should it fail, the scan is still written and the block is ``{"version", "error"}``.
+
 Ground-truth trajectory errors are computed after aligning the estimated world frame with the
 ground truth at the first tracked frame: ``A = T_gt[f] @ inv(T_est[f])`` and per frame
 ``pose_error(inv(A) @ T_gt[i], T_est[i])``. In markerless mode ``T_est[f] = I``, so this is
@@ -71,6 +79,7 @@ from typing import Any, Callable
 import numpy as np
 
 from ohs.app.pipeline import FrameResult, FramePipeline, PipelineParams
+from ohs.calib.scan_health import HEALTH_VERSION, ScanHealth
 from ohs.geometry import integrate_gyro, invert_se3, pose_error
 from ohs.io.recording import RecordingReader, effective_frame_step, recorded_frame_rate
 from ohs.mesh.confidence import SIGMA_NONE_MM, sigma_stats
@@ -105,6 +114,9 @@ class ProcessParams:
     frame_max_gap: int = 4
     # process at most this many frames per second of scanning (module docstring, "Frame selection"): 0 = off
     max_frame_rate: float = 0.0
+    # write report["health"] (module docstring, "Calibration health"), the row error on every n-th processed frame
+    health: bool = True
+    row_error_every: int = 30
 
 
 # --------------------------------------------------------------------------- frame selection
@@ -310,8 +322,8 @@ def _frame_row(res: FrameResult) -> dict:
                            "total_ms": res.timings_ms.get("total")}
     if not res.track.ok:
         row["reason"] = info.get("reason", "unknown")
-    for k in ("fitness", "rmse_mm", "n_inliers", "degenerate", "gyro_prior", "method", "n_tags", "n_stereo",
-              "reproj_px", "rms_mm"):
+    for k in ("fitness", "rmse_mm", "n_inliers", "degenerate", "gyro_prior", "jump_deg", "method", "n_tags",
+              "n_stereo", "reproj_px", "rms_mm"):
         if k in info:
             row[k] = info[k]
     weak = sorted({str(w.get("kind")) for w in info.get("weak") or () if isinstance(w, dict)})
@@ -365,6 +377,8 @@ def process_recording(
     max_rate = float(p.max_frame_rate)
     if not (math.isfinite(max_rate) and max_rate >= 0):
         raise ValueError("max_frame_rate must be >= 0 (0 = every frame)")
+    if p.health and int(p.row_error_every) < 1:
+        raise ValueError("row_error_every must be >= 1")
     reader = RecordingReader(rec_path)
     calib_source = "argument"
     if calib is None:
@@ -388,6 +402,7 @@ def process_recording(
     out.mkdir(parents=True, exist_ok=True)
 
     pipe = FramePipeline(calib, p.pipeline)
+    health = ScanHealth(pipe, int(p.row_error_every)) if p.health else None
     imu = reader.imu_arrays()
     order = np.argsort(imu["t_host"], kind="stable")
     imu_t, imu_g = imu["t_host"][order], imu["gyro"][order]
@@ -473,6 +488,8 @@ def process_recording(
                 reasons[str(res.track.info.get("reason", "unknown"))] += 1
             n_prior += int(bool(res.track.info.get("gyro_prior", False)))
             rows.append(_frame_row(res))
+            if health is not None:
+                health.frame(k, res)
             traj_rows.append((res.index, res.t, bool(res.track.ok), res.track.T_wc))
             if progress is not None:
                 progress(k, n, res)
@@ -580,6 +597,13 @@ def process_recording(
             # dropped because they disagreed with their frame's dense depth (reflections, glints)
             "n_rejected_by_depth": {name: int(n) for name, n in pipe.laser_rejected.items()},
         }
+        if health is not None:
+            try:
+                report["health"] = health.block(calib=calib, calib_source=calib_source, meta=reader.meta, rows=rows,
+                                                V=V, F=F, N=N, laser_pts=laser_pts, laser_voxel_mm=float(p.laser_voxel_mm))
+            except Exception as exc:  # noqa: BLE001 - a measurement must not cost the scan
+                log.warning("the calibration health block failed: %s", exc, exc_info=True)
+                report["health"] = {"version": HEALTH_VERSION, "error": str(exc)}
 
         tp = out / "trajectory.csv"
         write_trajectory(tp, traj_rows)
@@ -627,6 +651,8 @@ def process_recording(
         (out / "report.json").write_text(json.dumps(report, indent=1), encoding="utf-8")
     finally:
         frames.close()  # ends the reader thread, also after an error or a cancelled job
+        if health is not None:
+            health.close()
         pipe.close()
     fr = report["frames"]
     log.info("processed %d frames (%d tracked, %.0f %%) in %.1f s -> %s", fr["processed"], fr["tracked"],

@@ -36,7 +36,7 @@ import numpy as np
 from ohs.types import StereoCalibration, StereoFrame
 from ohs.vision.rectify import Rectifier
 
-__all__ = ["drift_check", "row_error"]
+__all__ = ["drift_check", "row_error", "disparity_band"]
 
 log = logging.getLogger(__name__)
 
@@ -122,6 +122,15 @@ def _px(v: float) -> str:
     return f"{v:.2f}" if v < 1.0 else f"{v:.1f}"
 
 
+def disparity_band(rect: Rectifier) -> tuple[float, float]:
+    """``(lowest, highest)`` disparity (px of ``rect``'s images) of a scene point at a plausible depth
+    (``DEPTH_RANGE_MM``): the band :func:`row_error` matches in."""
+    f = float(rect.K[0, 0])
+    p1, p2 = rect.calib.P1, rect.calib.P2
+    d_inf = float(p1[0, 2] - p2[0, 2])  # disparity of a point at infinity (0 with zero-disparity rectification)
+    return d_inf + f * rect.baseline / DEPTH_RANGE_MM[1], d_inf + f * rect.baseline / DEPTH_RANGE_MM[0]
+
+
 def drift_check(frames: Sequence[StereoFrame], stereo: StereoCalibration, *, scale: float = 0.5,
                 threshold_px: float = 0.6, min_matches: int = 40, max_dv_px: float = 8.0,
                 max_features: int = 2000) -> dict:
@@ -134,11 +143,7 @@ def drift_check(frames: Sequence[StereoFrame], stereo: StereoCalibration, *, sca
     rectified images at ``scale``. Frames whose size does not match the calibration are skipped.
     """
     rect = Rectifier(stereo, scale)
-    f = float(rect.K[0, 0])
-    p1, p2 = rect.calib.P1, rect.calib.P2
-    d_inf = float(p1[0, 2] - p2[0, 2])  # disparity of a point at infinity (0 with zero-disparity rectification)
-    d_lo = d_inf + f * rect.baseline / DEPTH_RANGE_MM[1]
-    d_hi = d_inf + f * rect.baseline / DEPTH_RANGE_MM[0]
+    d_lo, d_hi = disparity_band(rect)
     w, h = rect.raw_image_size
     pooled: list[np.ndarray] = []
     n_frames = 0
