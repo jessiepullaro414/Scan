@@ -701,13 +701,57 @@ rotation the tracker finds against the gyro's (`jump_deg`) is not saved.
   - **Left:** two faults at once, a bent head, negative directions, the four-laser build, the
     dark bracket's yaw crossing, the temperature (H5), Straighten's correction.
 
-### H3. The status (M)
+### [x] H3. The status (M)
 - **What:** `ohs/calib/health.py` joins the launch check, the age of the last board check and the
   last scans' health blocks into **Valid**, **Check recommended** or **Recalibration required**,
   with the part concerned (cameras, lasers, IMU) and the reason in words. It is part of the
   setup state the app already reads, and is written into each scan's report.
 - **Test first:** with H2's perturbed calibrations the status names the right part; with the true
   calibration it stays Valid on every simulated scene, including the hard ones.
+- **Done 2026-11-19.** In `ohs/calib/health.py`: `status()` joins the launch check, the last
+  2-minute check and the last 3 scans made with this calibration (2 must agree) into Valid /
+  Check recommended / Recalibration required, with the part, one sentence, `action` / `then`
+  and the wizard step; `scan_status()` says the same of one scan alone and is written into its
+  `report.json` as `health_status`. The setup state gains `calibration_health`; `setup.json`
+  gains `scan_health` (the last 20 tracked scans' signs, recorded by the Track stage),
+  `launch_source` and `last_check.parts`. Nothing blocks a scan.
+  - **The rules, in order:** one scan is read row error first (over its limit: the cameras,
+    and the lasers are not judged in that scan); both laser lines off the same way and alike:
+    the cameras (yaw, baseline); one line off: the lasers, with "then redo the cameras";
+    a line without points while the other has them: the lasers, "check"; the IMU on its own.
+    Then 2 of the last 3 scans must agree; the launch check; the 2-minute check and its age;
+    the worst wins, cameras before lasers before IMU.
+  - **Choices made, for the owner to confirm** (each one constant, all provisional):
+    a check older than 14 days: Check recommended; 2 of the last 3 scans; the launch check
+    recommends a check from 0.3 px (its 0.6 px alert is unchanged; a right calibration read
+    up to 0.148 px there, so 0.15 px cannot be used); a scan under 90 processed frames, or
+    processed on the CPU path, judges the cameras only and says so.
+  - *Measured* (`VALIDATION.md`, "The calibration's status"): replayed over H2's runs, of 19
+    faults that cost 0.1 mm, 15 were warned with the right part (5 of them only at the first
+    size run, already past 0.1 mm) and 4 with the wrong part first (camera roll; a pitch of
+    0.01° read as the horizontal laser); none was silent; the true calibration is Valid on all
+    seven scenes.
+  - Tests: `tests/test_calib_health_status.py` (43), `tests/test_server_calib_health.py` (5),
+    `tests/test_calib_health_scans.py` (6, each processing in a child process with a limit).
+  - **On the way:** the agent's CPU-path test run hung for 21.5 hours and was stopped by
+    hand, and the CPU path crashed natively in review as well. The cause was found and
+    mended the same day, before this was committed (`MAINTENANCE_PLAN.md`, F6: Open3D's ray
+    cast ran out of room in a buffer on every cast). The scan tests keep their child process
+    and time limit as a guard.
+  - **Left:** the pages (H4); the HTML inspection report still says "Health: Not assessed";
+    scans processed before this are not counted until their Track is run again; deleted
+    scans stay in `scan_health` until newer ones push them out; the four-laser build is not
+    tested; the limits rest on 30 processed frames a second, which is what Standard quality
+    processes whatever the recording's rate. The gyro sign is counted per processed frame, so
+    at another rate (Best quality on a 60 fps recording, or frames picked by motion, off by
+    default) it has not been measured: to settle with H5.
+  - **Checked in the app (2026-11-19)**, real engine, simulator connected: the setup state
+    reads Valid, "Nothing looks off for the cameras: the launch check (today) and the
+    2-minute check (on 2026-11-09) found nothing wrong", lasers and IMU not judged. A
+    355-frame scan tracked at Standard on the GPU wrote its own status into its report:
+    Valid for all three parts (row error 0.048 px, laser lines 0.003 and 0.011 mm off the
+    mesh, gyro 0.003° a frame). It was recorded with an older simulator calibration, so the
+    setup state rightly did not count it (`scans.used` 0).
 
 ### H4. In the app (S–M)
 - **What:** the state on the device chip and the setup overview; a line on the Scan page when it

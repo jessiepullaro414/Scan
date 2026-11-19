@@ -465,6 +465,24 @@ def _imu(value: Any, report: dict, truth: tuple | None) -> dict:
 
 
 # --------------------------------------------------------------------------- check
+def check_failed_parts(report: dict, sim: bool = False) -> list[str]:
+    """The parts the 2-minute check found off (``"cameras"``, ``"lasers"``, ``"imu"``), from the
+    engine's check report: kept with the last check for the calibration's status to name (H3). On
+    the simulator the IMU part does not count (see :func:`_check`)."""
+    st = report.get("stereo") or {}
+    la = report.get("lasers") or {}
+    imu = report.get("imu") or {}
+    out = []
+    if st.get("ok") is False:
+        out.append("cameras")
+    if isinstance(la.get("lasers"), dict) and any(isinstance(e, dict) and e.get("ok") is False
+                                                  for e in la["lasers"].values()):
+        out.append("lasers")
+    if not sim and imu.get("ok") is False:
+        out.append("imu")
+    return out
+
+
 def _check(report: dict, truth: tuple | None, sim: bool = False) -> dict:
     st = report.get("stereo") or {}
     la = report.get("lasers") or {}

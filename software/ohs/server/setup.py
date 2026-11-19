@@ -7,8 +7,11 @@
 **Persistence.** :class:`SetupStore` keeps ``<data_dir>/setup.json``: one section per target
 (the dismissed flag, when the scanner / simulator was last connected, the last self-test, the
 print check and the board scale (device only), what Studio recorded when it saved each
-calibration part (:data:`PartInfo`), the last 2-minute check and the last launch check) plus the
-manifest of the last generated printables. Every change is written at once (temporary file +
+calibration part (:data:`PartInfo`), the last 2-minute check and the last launch check, with the
+source it ran on) plus the manifest of the last generated printables and the health signs of the
+last processed scans (``scan_health``, :meth:`SetupManager.record_scan_health`). The state's
+``calibration_health`` joins them (``ohs.calib.health.status``, FEATURE_PLAN H3): it warns, it never
+blocks a scan. Every change is written at once (temporary file +
 rename), so a crash never leaves half a file; an unreadable file is set aside as
 ``setup.json.bad-<time>`` and the wizard starts over.
 
@@ -66,6 +69,7 @@ PRINT_APPLY_PCT = 4.0  # up to this: a printer's scaling, the measurement can be
 BAR_MM = 100.0
 MAX_CAMERA_INDEX = 8
 FORMAT_VERSION = 1
+SCAN_HEALTH_KEEP = 20  # processed scans kept in setup.json for the calibration's status (FEATURE_PLAN H3)
 
 
 # --------------------------------------------------------------------------- small helpers
@@ -125,7 +129,7 @@ def _replace(tmp: Path, dst: Path) -> None:
 # --------------------------------------------------------------------------- persistence
 def _empty_target() -> dict:
     return {"dismissed": False, "connect": None, "selftest": None, "print_check": None, "board_scale": 1.0,
-            "parts": {k: None for k in PARTS}, "last_check": None, "launch_check": None}
+            "parts": {k: None for k in PARTS}, "last_check": None, "launch_check": None, "launch_source": None}
 
 
 class SetupStore:
@@ -152,7 +156,9 @@ class SetupStore:
                     pass
                 data = {}
         targets = data.get("targets") if isinstance(data.get("targets"), dict) else {}
-        out = {"format_version": FORMAT_VERSION, "targets": {}, "printables": data.get("printables")}
+        scans = data.get("scan_health") if isinstance(data.get("scan_health"), list) else []
+        out = {"format_version": FORMAT_VERSION, "targets": {}, "printables": data.get("printables"),
+               "scan_health": [s for s in scans if isinstance(s, dict)]}
         for t in TARGETS:
             sec = _empty_target()
             got = targets.get(t)
@@ -195,6 +201,20 @@ class SetupStore:
     def set_printables(self, manifest: dict | None) -> None:
         with self._lock:
             self._data["printables"] = manifest
+            self._save()
+
+    def scan_health(self) -> list[dict]:
+        """The last scans' health, newest recorded first (:meth:`add_scan_health`)."""
+        with self._lock:
+            return json.loads(json.dumps(jsonable(self._data["scan_health"])))
+
+    def add_scan_health(self, entry: dict, keep: int = SCAN_HEALTH_KEEP) -> None:
+        """Keep one processed scan's health (``ohs.calib.health.scan_item``), replacing that scan's
+        earlier one; only the newest ``keep`` are kept, whatever their calibration."""
+        ref = entry.get("scan")
+        with self._lock:
+            rest = [e for e in self._data["scan_health"] if ref is None or e.get("scan") != ref]
+            self._data["scan_health"] = ([entry] + rest)[:keep]
             self._save()
 
 
@@ -301,7 +321,31 @@ class SetupManager:
             "board": self.board_info(target),
             "launch_check": sec.get("launch_check"),
             "last_check": sec.get("last_check"),
+            "calibration_health": self._health(sec, calib, cal),
         }
+
+    def _health(self, sec: dict, calib: Any, cal: dict) -> dict | None:
+        """The calibration's status (``ohs.calib.health.status``, FEATURE_PLAN H3): the launch check,
+        the last 2-minute check and the last scans made with this calibration. None without one.
+        A launch check from a replay judged the replay's own calibration, so it is left out."""
+        if calib is None:
+            return None
+        from ohs.calib import health
+
+        saved = calib.created
+        for k in PARTS:
+            info = cal["parts"].get(k)
+            if isinstance(info, dict):
+                saved = _later(saved, info.get("when"))
+        lc = sec.get("launch_check") if sec.get("launch_source") != "replay" else None
+        key = health.calibration_key(calib)
+        scans = [e for e in self.store.scan_health() if e.get("calibration") == key]
+        try:
+            return health.status(saved=saved or cal["modified"], launch_check=lc, last_check=sec.get("last_check"),
+                                 scans=scans)
+        except Exception as e:  # a status must never cost the setup state
+            log.warning("the calibration status could not be made: %s", e, exc_info=True)
+            return None
 
     def _steps(self, target: str, sec: dict, calib: Any, cal: dict) -> list[dict]:
         sim = target == "sim"
@@ -450,11 +494,41 @@ class SetupManager:
         self.publish()
 
     def record_launch_check(self, source: str, lc: dict) -> None:
-        self.store.update("sim" if source == "sim" else "device", launch_check=lc)
+        self.store.update("sim" if source == "sim" else "device", launch_check=lc, launch_source=str(source))
         self.publish()
 
-    def record_last_check(self, target: str, ok: bool, verdict: str) -> None:
-        self.store.update(target, last_check={"when": now_iso(), "ok": bool(ok), "verdict": str(verdict)})
+    def record_last_check(self, target: str, ok: bool, verdict: str, parts: list[str] | None = None) -> None:
+        """The 2-minute check's result; ``parts``: the parts it found off (cameras, lasers, imu), for the
+        calibration's status to name (kept only when given)."""
+        last: dict[str, Any] = {"when": now_iso(), "ok": bool(ok), "verdict": str(verdict)}
+        if parts is not None:
+            last["parts"] = [str(p) for p in parts]
+        self.store.update(target, last_check=last)
+
+    def record_scan_health(self, pid: str, sid: str, report: dict, recording: str | Path | None = None) -> None:
+        """Keep what a tracked scan saw of its calibration (FEATURE_PLAN H3), for the status of the
+        calibration it was made with: the scan's time (when it was recorded), its health signs and
+        which calibration (the block's ``id``, else the recording's calibration by its numbers)."""
+        from ohs.calib import health
+
+        block = report.get("health") if isinstance(report, dict) else None
+        key = (block.get("calibration") or {}).get("id") if isinstance(block, dict) else None
+        if not key and recording is not None:
+            from ohs.io.recording import RecordingReader
+
+            key = health.calibration_key(RecordingReader(recording).calibration())
+        when = None
+        try:
+            when = self.st.projects.scan_entry(pid, sid).get("created")
+        except Exception:  # an unknown scan: the time it was processed
+            pass
+        item = health.scan_item(report, when=when or now_iso(), scan={"project_id": pid, "scan_id": sid},
+                                calibration=key)
+        if item is None:
+            return
+        item["processed"] = now_iso()
+        self.store.add_scan_health(item)
+        self.publish()
 
     def record_part(self, target: str, part: str, summary: str, session: str | None) -> None:
         self.store.set_part(target, part, {"when": now_iso(), "summary": summary, "session": session})

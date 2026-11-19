@@ -2908,6 +2908,74 @@ Tests: `tests/test_calib_health_study.py` (41: the perturbation helpers, the lim
 fault per part past its "check" limit on a 12-frame scan with the true calibration below it);
 50 pass with H1's on both paths. Repeat with `python tools/calib_health_study.py all <folder>`.
 
+## The calibration's status (calibration health, 2026-11-19)
+
+[`docs/FEATURE_PLAN.md`](docs/FEATURE_PLAN.md), H3. `ohs.calib.health.status` joins the launch
+check, the last 2-minute check and the last scans made with this calibration into **Valid**,
+**Check recommended** or **Recalibration required**, with the part, one sentence and the wizard
+step to do next; `scan_status` says the same of one scan alone, in its report (`health_status`).
+It warns; it never blocks a scan. The limits are those of the section before; four choices were
+added here, each one named constant in `ohs/calib/health.py`, all provisional until the real
+scanner:
+
+| Choice | Value | What it rests on |
+|---|---|---|
+| A 2-minute check (or a calibration step) older than this: Check recommended | 14 days | nothing measured: the simulator cannot say how fast a real scanner drifts |
+| How many of the last scans must agree before the status moves | 2 of the last 3 | one hard surface reads high with a right calibration (the speckled bracket's row error 0.126 px against 0.15) |
+| The launch check's row error from which a check is recommended | 0.3 px (its 0.6 px alert is unchanged) | the table below |
+| The fewest processed frames for a scan's laser and IMU signs to count | 90 | the short-scan figures below |
+
+**The launch check against a scan's row error** (3 idle frames at half resolution, 6 groups of
+frames per scene on the seven scenes, in full-resolution pixels as a scan's row error is):
+
+| Calibration | The launch check reads | Its own state |
+|---|---|---|
+| True | 0.054–0.115 px (median per scene); up to 0.148 px for one group on the speckled bracket | ok |
+| Pitch 0.01° | 0.14–0.18 px | ok |
+| Pitch 0.02° | 0.26–0.31 px | ok |
+| Pitch 0.03° | 0.40–0.44 px | ok |
+| Pitch 0.05° | 0.65–0.71 px | drift, on every scene |
+
+It reads about 0.03 px above a scan's row error at the same pitch, and a right calibration
+reached 0.148 px once, so the scans' "check" limit of 0.15 px cannot judge it honestly; 0.3 px
+can, as "Check recommended, confirm with the 2-minute check".
+
+**Short scans.** The true calibration on pieces of the study's recordings: on the speckled
+bracket the horizontal line against the mesh reads 0.04–0.11 mm at 12 frames and 0.03–0.08 mm
+at 30, against 0.016 mm at 90, past both laser limits; the plain and dark brackets stay under
+0.031 mm; the row error holds at 0.12–0.13 px on every piece. So a scan under 90 processed
+frames judges the cameras only, and says that the lasers and the IMU need a longer scan.
+
+**The status replayed over the study's 98 runs** (each run as one scan's own status, GPU path;
+30 pairs of fault and recording):
+
+| Outcome | Pairs | Which |
+|---|---|---|
+| The right part named before the fault costs 0.1 mm | 10 | |
+| The right part, first at the smallest size that was run, already past 0.1 mm | 5 | dark pitch and yaw, second-seed baseline and yaw, speckled yaw |
+| The wrong part named first | 4 | camera roll on both seeds (named: vertical laser); pitch 0.01° on both seeds (named: horizontal laser, "check"; the cameras from 0.02°) |
+| No warning before 0.1 mm | 0 | |
+| The fault never cost 0.1 mm | 11 | 8 warned, with the right part; 3 IMU time offsets silent |
+
+- **No false alarm:** the true calibration is Valid on all seven scenes.
+- **Where the wrong part is named, the words say so:** for one laser line off, the action is
+  "Redo the laser calibration" and then "If later scans still show it, redo the camera
+  calibration: a small turn of one camera looks just the same".
+- **On the CPU path** the pitch is caught; a yaw, a laser offset and an IMU rotation are not
+  judged there by design, although they cost 0.1 mm or more: the status says "the lasers and
+  the IMU cannot be judged on this computer", neither stale nor fine.
+- **Silent and harmless:** an IMU rotation up to 1° and a time offset up to 10 ms, a pitch of
+  0.001°. None cost 0.1 mm.
+- **Two scans, not one:** with "2 of the last 3" a real fault moves the calibration's status on
+  the second scan after it; the first scan's own report already says it. A gross camera fault
+  is caught by the launch check at the next connect.
+
+Tests: `tests/test_calib_health_status.py` (43, on hand-made data: every rule),
+`tests/test_server_calib_health.py` (5), `tests/test_calib_health_scans.py` (6, slow: real
+processing with the study's wrong calibrations; each processing runs in a child process with a
+15-minute limit, because the CPU path can crash natively, `docs/MAINTENANCE_PLAN.md`, F6).
+Not verified: anything on real hardware; the four-laser build; two faults at once.
+
 ## The CPU path's ray cast: a crash, a hang and runs that differed (2026-11-19)
 
 `MAINTENANCE_PLAN.md` F6 and F13. On a computer without a usable GPU the tracker's model is

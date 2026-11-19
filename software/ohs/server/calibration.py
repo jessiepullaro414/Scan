@@ -1320,7 +1320,8 @@ class CalibrationManager:
             safe_call("writing the report", lambda: capture.write_report(full, Path(rec) / f"calib_report_{kind}.json"))
             s.finish_solve(res, full, value)
             if kind == "check":
-                st.setup.record_last_check(s.target, bool(res["ok"]), res["verdict"])
+                parts = calib_results.check_failed_parts(report if isinstance(report, dict) else {}, bool(s.sim))
+                st.setup.record_last_check(s.target, bool(res["ok"]), res["verdict"], parts=parts)
                 safe_call("publishing the setup", st.setup.publish)
             if res["grade"] == "failed":
                 raise ApiError(422, f"{res['headline']}: {res['verdict']}",

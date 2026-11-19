@@ -52,6 +52,8 @@ frame, the laser lines against the stereo depth (before the depth check drops an
 mesh, the tracker's residual and its rotation against the gyro's (also ``jump_deg`` in each
 ``per_frame`` row). It only measures: the mesh, the poses and the laser points are the same without
 it. Should it fail, the scan is still written and the block is ``{"version", "error"}``.
+``report["health_status"]`` (H3) is what that block alone says: Valid, Check recommended or
+Recalibration required, the part and why (:func:`ohs.calib.health.scan_status`). It warns only.
 
 Ground-truth trajectory errors are computed after aligning the estimated world frame with the
 ground truth at the first tracked frame: ``A = T_gt[f] @ inv(T_est[f])`` and per frame
@@ -643,6 +645,16 @@ def process_recording(
             "depth": getattr(de, "backend", None), "depth_device": getattr(de, "device", None),
             "tracking_model": getattr(pipe, "model_backend", None), "tracking_device": getattr(pipe, "model_device", None),
         }
+        if isinstance(report.get("health"), dict) and "error" not in report["health"]:
+            # what this scan alone says of its calibration (FEATURE_PLAN H3): it warns, it never stops the scan
+            try:
+                from ohs.calib import health as calib_health  # noqa: PLC0415
+
+                report["health_status"] = calib_health.scan_status(
+                    report["health"], tracking_model=report["params"]["compute"]["tracking_model"],
+                    lines=calib_health.lines_of_report(report), frames=report["frames"]["processed"])
+            except Exception as exc:  # noqa: BLE001 - a status must not cost the scan
+                log.warning("the calibration status of the scan failed: %s", exc, exc_info=True)
         report["per_frame"] = rows
         files["report"] = str(out / "report.json")
         report["files"] = files

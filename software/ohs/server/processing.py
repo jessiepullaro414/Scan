@@ -1426,6 +1426,9 @@ class ProcessManager:
                 if p.exists():
                     safe_call("removing straighten.json", p.unlink)
             self._new_base(sp, "track", sp.dir / "track", report, quality)
+            # the tracked pass is the one with every sign (calibration health, FEATURE_PLAN H3)
+            safe_call("recording the calibration health",
+                      lambda: self.st.setup.record_scan_health(sp.pid, sp.sid, report, sp.recording_dir))
             self._stage_end(sp, "track", state="done", summary=self._track_summary(report, quality), quality=quality,
                             tracked_pct=round(100.0 * float(fr.get("tracked_fraction", 0.0)), 1), voxel_mm=voxel_mm,
                             job_id=ctx.job.id)
