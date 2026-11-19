@@ -6,6 +6,7 @@ import {
   Download,
   Eye,
   FolderOpen,
+  HardDrive,
   Pencil,
   RefreshCw,
   ScanLine,
@@ -15,7 +16,7 @@ import {
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { api } from "../api/http";
-import type { Project, Scan } from "../api/types";
+import type { Project, ProjectDiskUse, Scan, ScanDiskUse } from "../api/types";
 import { JobProgress, MakeMeshButton, ProcessButton, ScanStatusBadge } from "../components/ScanBits";
 import { Button, IconButton } from "../components/ui/Button";
 import { ConfirmDialog, PromptDialog } from "../components/ui/Dialog";
@@ -23,8 +24,9 @@ import { EmptyState, Skeleton } from "../components/ui/Feedback";
 import { Code, Page, PageHeader } from "../components/ui/Layout";
 import { Menu } from "../components/ui/Popover";
 import { hasMesh, hasRecording, mergedFromText } from "../lib/align";
+import { projectDiskText, scanDiskTitle, trashText } from "../lib/diskUse";
 import { downloadFile } from "../lib/download";
-import { fileStem, fmtDateTime, fmtDuration, fmtInt, fmtRelative } from "../lib/format";
+import { fileStem, fmtBytes, fmtDateTime, fmtDuration, fmtInt, fmtRelative } from "../lib/format";
 import { href, navigate, paths } from "../lib/router";
 import { cn, useTicker } from "../lib/util";
 import { useConnection } from "../store/connection";
@@ -46,7 +48,28 @@ function resultUrls(project: Project, scan: Scan) {
   };
 }
 
-function ScanRow({ project, scan }: { project: Project; scan: Scan }) {
+/**
+ * R1: what the project takes on disk. Asked for after the page has painted (the engine walks the
+ * folder), again when a scan's status changes; a failure shows nothing (it informs only).
+ */
+function useDiskUse(pid: string, project: Project | undefined): ProjectDiskUse | null {
+  const [disk, setDisk] = useState<ProjectDiskUse | null>(null);
+  const key = project ? project.scans.map((s) => `${s.id}:${s.status}`).join(",") || "-" : "";
+  useEffect(() => {
+    if (!key) return;
+    let live = true;
+    api.projectDisk(pid).then(
+      (d) => live && setDisk(d),
+      () => live && setDisk(null),
+    );
+    return () => {
+      live = false;
+    };
+  }, [pid, key]);
+  return disk && disk.project_id === pid ? disk : null;
+}
+
+function ScanRow({ project, scan, disk }: { project: Project; scan: Scan; disk?: ScanDiskUse }) {
   const job = useScanJob(scan.id);
   const active = isActive(job);
   const processing = active || scan.status === "processing";
@@ -92,6 +115,11 @@ function ScanRow({ project, scan }: { project: Project; scan: Scan }) {
             <Combine size={12} aria-hidden /> Merged
           </span>
         )}
+        {disk && disk.bytes > 0 ? (
+          <span className="inline-flex cursor-help items-center gap-1 tnum" title={scanDiskTitle(disk)}>
+            <HardDrive size={12} aria-hidden /> {fmtBytes(disk.bytes)}
+          </span>
+        ) : null}
       </div>
       <div className="flex min-w-0 items-center justify-end gap-2">
         {processing && job ? (
@@ -164,6 +192,8 @@ export function ProjectPage({ pid }: { pid: string }) {
   const [renaming, setRenaming] = useState(false);
   const [deleting, setDeleting] = useState(false);
   useTicker(30_000);
+  const disk = useDiskUse(pid, project);
+  const trash = disk ? trashText(disk) : null;
 
   useEffect(() => {
     void fetchProject(pid);
@@ -300,13 +330,22 @@ export function ProjectPage({ pid }: { pid: string }) {
         ) : (
           <ul className="divide-y divide-line">
             {scans.map((s) => (
-              <ScanRow key={s.id} project={project!} scan={s} />
+              <ScanRow key={s.id} project={project!} scan={s} disk={disk?.scans.find((d) => d.id === s.id)} />
             ))}
           </ul>
         )}
       </section>
+      {project && disk ? (
+        <p className="mt-4 flex items-start gap-1.5 text-xs text-muted">
+          <HardDrive size={13} className="mt-px shrink-0" aria-hidden />
+          <span>
+            <span className="tnum">This project takes {projectDiskText(disk)}.</span>
+            {trash ? <span className="tnum"> {trash}</span> : null} Point at a scan's size for its parts.
+          </span>
+        </p>
+      ) : null}
       {project ? (
-        <p className="mt-4 text-xs text-subtle">
+        <p className="mt-2 text-xs text-subtle">
           Raw recordings stay in <Code>scans/&lt;id&gt;/recording</Code>; meshes in <Code>scans/&lt;id&gt;/result</Code> inside
           the project folder.
         </p>

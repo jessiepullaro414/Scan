@@ -54,6 +54,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from ohs import __version__
 from ohs.server.cad import CadExport
+from ohs.server.disk import project_disk_use
 from ohs.server.features import FeatureManager
 from ohs.server.flush import FlushManager
 from ohs.server.protocol import PROTOCOL_VERSION, ApiError, dumps, jsonable
@@ -579,6 +580,10 @@ def create_app(config: Any = None, *, projects_dir: Any = None, static_dir: Any 
     @app.get("/api/projects/{pid}")
     def projects_get(pid: str) -> JSONResponse:
         return _json(st.projects.get(pid))
+
+    @app.get("/api/projects/{pid}/disk")
+    def projects_disk(pid: str) -> JSONResponse:  # walks the folder: a plain function, so it runs in the thread pool
+        return _json(project_disk_use(st.projects, pid))
 
     @app.patch("/api/projects/{pid}")
     def projects_rename(pid: str, body: NameBody) -> JSONResponse:

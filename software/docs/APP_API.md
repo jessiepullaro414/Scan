@@ -2244,3 +2244,45 @@ type AlignAllResult = {
 - **Merging several:** as for two scans; the name defaults to the scans' names joined by " + "; `merged_from` lists all of them in order.
 - **Errors:** 422 for fewer than two or more than eight scans, picked points that name a scan not in the list or are fewer than three pairs or in one line, both merge forms or neither; 409 for a scan listed twice, and as for two scans.
 
+## Disk use of a project
+
+What a project's folder takes on disk, per scan and in total (FEATURE_PLAN R1, `ohs/server/disk.py`). It informs only: nothing is removed.
+
+### Types
+
+```ts
+type ScanDiskUse = {
+  id: string; name: string; n_frames: number; duration_s: number;   // as in Scan
+  bytes: number;            // the whole scan folder
+  recording: number;        // recording/
+  frames: number;           // recording/frames/ alone (inside recording)
+  n_frame_files: number;    // files in recording/frames/
+  stages: Record<string, number>;  // each folder under process/ but cache and selections: track, straighten, fuse, spacetime, refine
+  stages_bytes: number;     // their sum
+  undo: number;             // process/cache/ and process/selections/
+  result: number;           // result/
+  other: number;            // everything else (process/state.json, thumbnail, features, comparison, ...)
+};                          // recording + stages_bytes + undo + result + other == bytes
+
+type ProjectDiskUse = {
+  project_id: string;
+  bytes: number;            // the whole project folder
+  scans: ScanDiskUse[];     // in project.json order; a scan without a folder has zeros
+  parts: { recording: number; stages: number; undo: number; result: number };  // sums over the scans
+  references: number;       // references/
+  other: number;            // project.json and folders project.json does not list
+  trash: { bytes: number; projects: number };  // <projects>/.trash: all deleted projects, not part of this one
+  seconds: number;          // how long the walk took
+};
+```
+
+### REST
+
+| Method and path | Body | Returns |
+|---|---|---|
+| `GET /api/projects/{pid}/disk` | | `ProjectDiskUse`; 404 for an unknown project |
+
+### Rules
+
+- **Sizes** are the files' sizes in bytes (`st_size`), all integers, not the space the file system allocates. Links and junctions are not followed.
+- **Cost:** one walk of the project folder and the trash on every request, nothing cached (so never stale); about 50 to 150 ms for 4,700 files. A plain function, so it runs in the server's thread pool and never holds up the event loop. `GET /api/projects/{pid}` does not include it: the project page asks for it after it has painted.

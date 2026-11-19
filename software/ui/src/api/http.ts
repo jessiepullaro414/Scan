@@ -81,6 +81,7 @@ import type {
   ProcessQuality,
   ProcessState,
   Project,
+  ProjectDiskUse,
   ProjectSummary,
   Recipe,
   RecipeScope,
@@ -278,6 +279,8 @@ export const api = {
   project: (pid: string) => get<Project>(`/api/projects/${enc(pid)}`),
   renameProject: (pid: string, name: string) => patch<Project>(`/api/projects/${enc(pid)}`, { name }),
   deleteProject: (pid: string) => del(`/api/projects/${enc(pid)}`),
+  /** R1: what the project's folder takes on disk (walks the folder: ask after the page has painted). */
+  projectDisk: (pid: string) => get<ProjectDiskUse>(`/api/projects/${enc(pid)}/disk`),
 
   session: () => get<SessionState>("/api/scan"),
   startScan: (body: StartBody) => post<SessionState>("/api/scan/start", body),

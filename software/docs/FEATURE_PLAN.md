@@ -819,11 +819,30 @@ recording and keep the mesh, and the app shows no disk use. A simulated frame is
 if real frames are that size, a 2-minute scan at 60 frames a second is about 9 GB. Real sizes
 have not been measured (roadmap question 9).
 
-### R1. Show what is on disk (S)
+### [x] R1. Show what is on disk (S)
 - **What:** per scan and per project, the size of the recording, the stages, the undo cache and
   the result; shown on the project page. A table in `VALIDATION.md` for the simulated scans:
   bytes per frame and per second, and each part's share.
 - **Test first:** the sizes the route reports equal the files' sizes.
+- **Done 2026-11-19.** `GET /api/projects/{pid}/disk` (`ohs/server/disk.py`) reports per scan
+  the recording (and its frames), each stage folder, the undo history (`process/cache` and
+  `process/selections`), the result and other files, plus the project's totals and the trash
+  on its own. It is worked out on each request in the server's thread pool, nothing cached
+  (a folder's time stamp does not change on Windows when a file deep inside grows): about
+  50 ms for 4,700 files (6 GB). The project page asks for it after it has painted: a size on
+  each scan's row with the parts on hover, one line for the project and one for the trash.
+  - Guard: `tests/test_server_disk.py` (4; every size against an independent sum of the
+    files, links and junctions not followed), `ui/src/lib/diskUse.test.ts` (20 checks).
+  - *Measured* (`VALIDATION.md`, "What a scan takes on disk"): a simulated 1280x800 frame is
+    1.2 MB at PNG level 1, 36 MB a second of scanning at 30 frames a second; the recording
+    is about 80 % of a scan's folder, a stage run 19–24 MB, the undo history 13–95 MB, the
+    result 62–65 MB. PNG levels above 1 save at most 4 % for 2 to 3 times the encoding time
+    (for R4).
+  - *Checked in the app:* "My first scan" reads 5.85 GB (recordings 4.85 GB), each scan's
+    hover lists its parts, and the trash line says what one deleted project holds.
+  - **Left:** real camera frames and a 60 frames a second recording (question 9); a size on
+    the projects list; the in-browser mock has no such route (the page then shows no size);
+    the trash is walked on every visit (7 ms for 1 GB today); freeing space is R2.
 
 ### R2. Free space, on purpose (M) **(D4)**
 - **What:** the three modes, as what a scan keeps:

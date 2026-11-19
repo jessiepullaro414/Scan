@@ -86,6 +86,38 @@ export type ProjectSummary = {
 
 export type Project = ProjectSummary & { scans: Scan[] };
 
+/** R1: one scan's folder on disk, in bytes (`GET /api/projects/{pid}/disk`). The parts add up to `bytes`. */
+export type ScanDiskUse = {
+  id: string;
+  name: string;
+  n_frames: number;
+  duration_s: number;
+  bytes: number;
+  recording: number;
+  /** The frame images alone (inside `recording`). */
+  frames: number;
+  n_frame_files: number;
+  /** Each folder under `process/` but the undo cache: track, straighten, fuse, spacetime, refine. */
+  stages: Record<string, number>;
+  stages_bytes: number;
+  /** `process/cache` and `process/selections`. */
+  undo: number;
+  result: number;
+  other: number;
+};
+
+/** R1: a project's folder on disk; the trash is counted on its own, not in `bytes`. */
+export type ProjectDiskUse = {
+  project_id: string;
+  bytes: number;
+  scans: ScanDiskUse[];
+  parts: { recording: number; stages: number; undo: number; result: number };
+  references: number;
+  other: number;
+  trash: { bytes: number; projects: number };
+  seconds: number;
+};
+
 export type SessionPhase = "idle" | "scanning" | "paused" | "stopping";
 export type SessionState = {
   state: SessionPhase;

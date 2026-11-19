@@ -3014,6 +3014,76 @@ aligned at the first frame.
   off the mesh with a right calibration, which is why the calibration status judges only the
   cameras on this path. That is what is left of F13.
 
+## What a scan takes on disk (data retention, 2026-11-19)
+
+Measured with `GET /api/projects/{pid}/disk` (`ohs/server/disk.py`, FEATURE_PLAN R1) on the
+example projects of the simulated scanner (Studio's demo replay and the simulated datasets).
+Sizes are the files' sizes; 1 MB is 1,048,576 bytes and 1 KB 1,024 bytes, as the app shows them.
+Frame count and duration are each recording's own (`meta.json`, or `project.json` where the
+recording has no duration). Every frame is one 8-bit grey PNG with both eyes side by side,
+written at PNG compression level 1 (`RecordingWriter`, `png_compression=1`, `ohs/io/recording.py`).
+All recordings ran at 30 frames a second (29.85 to 30.07).
+
+**Per scan** (only scans with a recording; shares are of the scan's whole folder):
+
+| Scan | Quality | Eye size | Frames | Seconds | Scan folder | Bytes a frame | Recording a second | Recording | Stages | Undo | Result | Other |
+|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| my-first-scan / 20261109-104221 | full | 1280×800 | 449 | 14.9 | 688.6 MB | 1232 KB | 36.2 MB | 79 % | 7 % | 5 % | 9 % | 0 % |
+| my-first-scan / 20261109-155808 | none | 640×400 | 525 | 17.5 | 164.6 MB | 320 KB | 9.4 MB | 100 % | 0 % | 0 % | 0 % | 0 % |
+| my-first-scan / 20261109-184008 | preview | 1280×800 | 481 | 16.1 | 620.5 MB | 1232 KB | 36.1 MB | 93 % | 2 % | 2 % | 3 % | 0 % |
+| my-first-scan / 20261109-184037 | full | 1280×800 | 584 | 19.6 | 885.2 MB | 1232 KB | 36.0 MB | 79 % | 3 % | 11 % | 7 % | 0 % |
+| my-first-scan / 20261110-200857 | standard | 1280×800 | 355 | 11.9 | 572.4 MB | 1232 KB | 36.0 MB | 75 % | 4 % | 10 % | 11 % | 0 % |
+| my-first-scan / 20261112-190513 | standard | 1280×800 | 619 | 20.7 | 934.4 MB | 1232 KB | 36.0 MB | 80 % | 5 % | 8 % | 7 % | 0 % |
+| my-first-scan / 20261113-141218 | standard | 1280×800 | 761 | 25.4 | 1055.2 MB | 1232 KB | 36.1 MB | 87 % | 2 % | 5 % | 6 % | 0 % |
+| my-first-scan / 20261113-154619 | standard | 1280×800 | 734 | 24.5 | 1066.1 MB | 1232 KB | 36.1 MB | 83 % | 4 % | 7 % | 6 % | 0 % |
+| bracket / 20261115-202720 | standard | 1280×800 | 60 | 2.0 | 167.1 MB | 1210 KB | 35.5 MB | 42 % | 11 % | 13 % | 32 % | 2 % |
+| bracket / 20261115-202720-2 | standard | 1280×800 | 60 | 2.0 | 91.0 MB | 1192 KB | 35.0 MB | 77 % | 0 % | 0 % | 23 % | 0 % |
+| bracket / 20261115-211837 | standard | 1280×800 | 60 | 2.0 | 204.0 MB | 1190 KB | 34.9 MB | 34 % | 10 % | 26 % | 29 % | 0 % |
+
+"Quality" is the last processing's ("full" is the old name of standard; "none": never
+processed). A stage folder holds 19 to 24 MB for each stage run (track, straighten,
+spacetime; track and refine of the preview scan 5.9 MB each), the undo cache 13 to 95 MB, and
+the result 62 to 65 MB at standard or full quality in my-first-scan (15.6 MB at preview), 21 to
+60 MB in the bracket project. In scan 20261113-154619, `mesh.stl` is 38.4 MB of the result's
+62.0 MB.
+
+**All 1280×800 recordings together:** 4,163 frames, 139.0 s, 1,260,338 bytes (1231 KB) a frame
+and 36.0 MB a second of scanning. The IMU, frame list and events add 0.4 to 0.8 MB a recording.
+Of the 6,284.7 MB of those ten scan folders: recording 79.7 %, stages 4.1 %, undo 7.7 %,
+result 8.4 %, other files (state, thumbnail, kept features) 0.1 %.
+
+**Scans without a recording** (made by merging, or imported results): 2.6 to 170.3 MB each, of
+which the result is 60 % to 100 %.
+
+**Projects:** my-first-scan 5,987.1 MB (recordings 4,962.3 MB, stages 219.0, undo 406.3,
+result 396.5); bracket-two-sides 776.5 MB (recordings 210.8, stages 108.1, undo 130.5, result
+324.6). The trash held one deleted project of 976.2 MB, counted on its own.
+
+**PNG level against size and time to save** (30 frames of the 2560×800 side-by-side image of
+scan 20261113-154619 encoded again in memory with OpenCV, one thread, on this PC while other
+heavy jobs ran, so the times are rough):
+
+| Level | Bytes a frame | Of the raw image | Time a frame |
+|---:|---:|---:|---:|
+| 0 (stored) | 2004 KB | 100 % | 21 ms |
+| 1 (today) | 1232 KB | 62 % | 55 ms |
+| 2 | 1226 KB | 61 % | 72 ms |
+| 3 | 1206 KB | 60 % | 97 ms |
+| 6 | 1178 KB | 59 % | 173 ms |
+| 9 | 1178 KB | 59 % | 159 ms |
+
+Levels above 1 save at most 4 % more space for two to three times the time. The simulated frames
+are synthetic (rendered dots and noise); real camera frames may compress differently (roadmap
+question 9).
+
+**What the route costs:** one walk of the project folder, 56 to 148 ms for my-first-scan
+(4,680 files, 5,987 MB) on this PC while other jobs ran, 20 to 119 ms for bracket-two-sides. It runs
+in the server's thread pool and the project page asks for it after it has painted.
+
+Tests: `tests/test_server_disk.py` (4: every number equals the files' sizes, the trash on its
+own, links not followed, unknown projects), `ui/src/lib/diskUse.test.ts`.
+Not verified: real camera frames; a recording at 60 frames a second.
+
 ## What the metrics mean
 
 - **Stereo errors** compare the estimated raw intrinsics/extrinsics (`K1`, `K2`, `R`, `T`) with
