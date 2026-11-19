@@ -1493,7 +1493,7 @@ Every task here: the type check, `npm test`, and for bundle tasks the chunk size
   It belongs to tracking and to the gap guard's cost (the per-voxel guard was tried on
   2026-11-16 and rejected: `VALIDATION.md`, "The gap guard per voxel").
 
-### [ ] F6. Open3D's ray cast crashed once on the CPU path
+### [x] F6. Open3D's ray cast crashed once on the CPU path ✔
 - **Seen 2026-11-15**, once: `tests/test_e2e_scan.py::test_full_markerless_sphere` with
   `OHS_COMPUTE=cpu` ended the whole test run with "Windows fatal exception: access violation". The
   main thread was in `MarkerlessTracker._raycast` (`ohs/track/markerless.py`, Open3D's
@@ -1508,6 +1508,78 @@ Every task here: the type check, `npm test`, and for bundle tasks the chunk size
 - **To do if it is seen again:** note which test and what else was running; try
   `OHS_O3D_THREADS=1` (A6), under which Open3D runs on one thread. Nothing is changed for now: a
   crash that ends a run is plain to see, and it has happened once.
+- **Seen again 2026-11-18 and 19, several times, and once as a hang** (the agent building the
+  calibration status, `FEATURE_PLAN.md` H3; its report, not repeated in review). All on the
+  CPU path, in `process_recording`:
+  - A 90-frame 1280x800 bracket recording (processed with a calibration pitched 0.03°) as a
+    plain script, no pytest: crashed in 1 of 2 runs with Open3D's default threads; two earlier
+    runs of the agent's test file crashed the same way.
+  - With `OHS_O3D_THREADS=1` the same cases ran clean 3 of 3 times, with identical results.
+    But one later run with one thread still crashed, at another place:
+    `ohs/app/pipeline.py:317` (`cv2.distanceTransform` in `_tracking_depth_small`), on the
+    0.5 mm plate scene; the other threads were the recording reader's queue and idle workers.
+  - **A hang:** one CPU-path test run of the same file spun on 11 cores for 21.5 hours until
+    it was stopped by hand (2026-11-18 09:50 to 2026-11-19 07:30). No thread dump was taken,
+    and it could not be made to hang again; run again with a dump after 240 s, the first test
+    was only slow (the main thread in Open3D's ray cast, `ohs/track/markerless.py:747`).
+  - So it is not once any more, not only the ray cast, and not always a crash. It concerns
+    every user without a GPU. `tests/test_calib_health_scans.py` therefore runs each
+    processing in a child process with a 15-minute limit. See also F13 (the same path does
+    not repeat its results).
+- **Seen in review, 2026-11-19:** the 90-frame bracket case as a plain script, three runs with
+  a thread dump on a crash: one ran clean (41 s), one ended with heap corruption (0xC0000374;
+  the main thread at the return of `MarkerlessTracker._raycast`, where Open3D's tensors are
+  freed), and one **hung**: two threads at 100 % for two hours, 68 others waiting, stopped by
+  hand. A fourth run with Open3D's messages switched on ended in an access violation inside
+  `ray_cast`.
+- **The cause (2026-11-19), in Open3D itself** (0.19 and 0.20, `EstimateRange` in
+  `cpp/open3d/t/geometry/kernel/VoxelBlockGridImpl.h`; read in the source, then measured).
+  A ray cast first lists "fragments" of the blocks in view, one for every 16 x 16 cells of the
+  range map a block's outline covers, in a buffer the grid keeps from cast to cast. After a
+  cast that ran out of room the buffer is replaced by a new one of exactly the size that cast
+  needed, and nothing is written into it. The next cast finds a block turned away as soon as
+  it would *fill* the buffer (`>=`), so a cast that needs as many fragments as the last one
+  runs out of room again. Such a cast
+  1. leaves the blocks that found no room out of its range map (which blocks depends on the
+     order the threads ran in: pixels of the model view come and go from run to run, A6);
+  2. reads the entries of the one block that crossed the end, which nobody wrote. In a new
+     buffer that is whatever the memory held before. An index from there writes outside the
+     range map: an access violation at once, or a corrupted heap that ends the process later
+     in any library (hence `cv2.distanceTransform` above). A depth from there, very large,
+     makes a ray march in steps too small to change a 32-bit float: it never ends (the hang).
+  Open3D warns ("Could not generate full range map"); the tracker silenced its messages
+  around the cast. **Measured on the 90-frame bracket: 71 warnings in 49 casts**, that is
+  every cast, the warm-up casts included. The warm-up cast the tracker made after
+  each growth cured the first cast's "misses most of the image" but could not cure this: it
+  leaves the buffer at exactly the size the real cast then needs.
+- **Fixed 2026-11-19** (the owner: "Go for it! I wanna clear the list out"). Open3D is not
+  changed; the tracker keeps the buffer larger than any cast can need
+  (`MarkerlessTracker._reserve_fragments`, `ohs/track/markerless.py`): before a cast, room for
+  every block times the most fragments one outline can take (20 at 640 x 400 with a range map
+  of 80 x 50), plus one. The only way to size the buffer from Python is a cast that needs
+  exactly that many, so one is made of a 64 x 64 image of copies of one block, each a single
+  fragment; with one fragment a block the unwritten entries are never read, so that cast is
+  safe although it runs out of room on purpose. The room grows by half each time, so it is
+  rare. It costs 24 bytes an entry: about 0.7 MB for 1,000 blocks, some 2 % of what the
+  blocks themselves take (32 KB each). The warm-up cast and `FusionParams.warmup_growth` are gone.
+  - *Guard:* `tests/test_track_markerless.py::test_open3d_ray_cast_always_has_room_for_its_fragments`
+    lets Open3D's warning through and fails on any; before the fix it failed with one or two
+    warnings a cast. It also casts from beside the model and after `set_camera` to twice the
+    image size.
+  - *Measured* (`VALIDATION.md`, "The CPU path's ray cast"; the 90-frame bracket at
+    1280x800, true calibration, several threads, one process a run): **before**, 4 runs: 1
+    access violation, and 3 runs that lost the part (85-87 of 90 frames tracked, the median
+    position error 47-50 mm, the last frame 267-271 mm off, three different sets of poses).
+    **After**, 2 runs: 90 of 90 tracked, median 7.8 mm, last frame 9.4 mm, the same poses and
+    the same mesh vertices bit for bit (in another order in the file). With the calibration
+    pitched 0.03°, the case that crashed and hung: 6 of 6 runs clean and identical (it still
+    loses the part there: 359 mm, where the GPU path is 0.9 mm off; before the fix 274 mm).
+  - **This changes CPU-path results**, for the better and by a lot: every cast used to leave
+    blocks out of its range map. The GPU path does not use Open3D for its model and is
+    untouched.
+  - **Not solved by it:** the CPU path is still far less accurate than the GPU path on this
+    scan (7.8 mm against 0.37 mm), with its tracker turning 0.043° a frame away from the gyro
+    (GPU: 0.005°). That is F13's remaining half.
 
 ### [x] F7. The calibration guide asks for views on both sides of where two laser lines meet ✔
 - **Done 2026-11-15:** the guide no longer asks for it. Gone: the hint (`_meet_hint` in
@@ -1742,6 +1814,21 @@ Every task here: the type check, `npm test`, and for bundle tasks the chunk size
   unseeded choice, the order of a parallel sum); say whether the 37–219 mm on the short
   half-resolution recording is the same thing or a separate fault of that setting. Measure
   first; a fix that changes CPU-path results waits for the owner.
+- **The first half is answered (2026-11-19, with F6's fix).** The runs differed because every
+  ray cast of Open3D's model left blocks out of its range map, and which blocks depended on
+  the order its threads ran in (F6, "the cause"). With the fragment buffer kept large enough,
+  repeated runs of the 90-frame bracket on several threads give the same poses and the same
+  mesh vertices bit for bit (2 of 2 with the true calibration, 6 of 6 with a pitched one;
+  the vertices come in another order in the file, as on the GPU path). `OHS_O3D_THREADS=1`
+  is no longer needed for that.
+- **What is left:** the accuracy. On that scan the CPU path's last frame is 9.4 mm and 3.6°
+  from the truth (GPU: 0.6 mm, 0.17°): its tracker turns 0.043° a frame away from the gyro
+  where the GPU path's turns 0.005°, steadily, from the first frames on. The laser lines
+  then sit 0.11 and 0.18 mm off the mesh with a right calibration, which is why the
+  calibration status judges only the cameras on this path. Not yet looked at: whether the
+  short half-resolution recording's 37–219 mm is gone with F6's fix; and where the steady
+  turn comes from (the model view's pixel convention at half size, the +0.5 px of the
+  integration, or the plain ICP against Open3D's coarser normals).
 
 ## Reviewed and fine: leave alone
 

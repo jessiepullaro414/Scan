@@ -2908,6 +2908,44 @@ Tests: `tests/test_calib_health_study.py` (41: the perturbation helpers, the lim
 fault per part past its "check" limit on a 12-frame scan with the true calibration below it);
 50 pass with H1's on both paths. Repeat with `python tools/calib_health_study.py all <folder>`.
 
+## The CPU path's ray cast: a crash, a hang and runs that differed (2026-11-19)
+
+`MAINTENANCE_PLAN.md` F6 and F13. On a computer without a usable GPU the tracker's model is
+Open3D's voxel grid, and each frame is registered against a ray cast of it. That ray cast (Open3D
+0.19 and 0.20) ran out of room in a buffer it keeps from cast to cast, on every cast of a growing
+model: it then left blocks out, and read a few entries nobody had written. The tracker now keeps
+that buffer larger than any cast can need (`MarkerlessTracker._reserve_fragments`).
+
+**How often it ran out of room.** The 90-frame simulated bracket at 1280x800 (H2's `bracket-s0`,
+seed 7), processed on the CPU path with Open3D's messages let through: 49 ray casts of the two
+trackers (the probe and the main one), **71 warnings** "Could not generate full range map", one or
+two a cast (the warm-up cast and the cast itself). With the fix: none
+(`tests/test_track_markerless.py::test_open3d_ray_cast_always_has_room_for_its_fragments`).
+
+**Before and after**, the same recording, `process_recording` in a new process each run, several
+threads, power plan High performance. "Before" is the cast as it was (a warm-up cast after each
+growth of 3 %, no room kept). Position error: of the camera, against the simulator's truth,
+aligned at the first frame.
+
+| Calibration | Code | Runs | Ended | Frames tracked | Position error, median | Last frame | Runs alike |
+|---|---|---:|---|---:|---:|---:|---|
+| true | before | 4 | 1 access violation, 3 clean | 85–87 of 90 | 47–50 mm | 267–271 mm | no: 3 different sets of poses |
+| true | after | 2 | clean | 90 of 90 | 7.8 mm | 9.4 mm | yes, bit for bit |
+| pitched 0.03° | before | 4 | 1 clean, 1 heap corruption, 1 access violation, 1 hang (2 h, stopped by hand) | 87 of 90 | 18.9 mm | 274 mm | (one run) |
+| pitched 0.03° | after | 6 | clean | 88 of 90 | 22.5 mm | 359 mm | yes, bit for bit |
+| true | GPU path | 1 | clean | 90 of 90 | 0.37 mm | 0.61 mm | (known to repeat) |
+| pitched 0.03° | GPU path | 1 | clean | 90 of 90 | 0.24 mm | 0.90 mm | |
+
+- "Alike, bit for bit": the same poses, and the same mesh vertices as a set (428,366 with the
+  true calibration; the file has them in another order each run, as on the GPU path).
+- A run takes 46–48 s after and 41–54 s before (GPU path: 21 s), so the time is about the same:
+  the warm-up casts are gone, and the sizing casts are rare.
+- **What it does not mend.** The CPU path is still far from the GPU path on this scan: its
+  tracker turns 0.043° a frame away from the gyro (GPU: 0.005°), the last frame ends 3.6° off,
+  and with the pitched calibration it loses the part. The laser lines then read 0.11 and 0.18 mm
+  off the mesh with a right calibration, which is why the calibration status judges only the
+  cameras on this path. That is what is left of F13.
+
 ## What the metrics mean
 
 - **Stereo errors** compare the estimated raw intrinsics/extrinsics (`K1`, `K2`, `R`, `T`) with

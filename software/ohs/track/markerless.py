@@ -102,9 +102,9 @@ Open3D notes (0.20, verified empirically):
   are ``T_cw`` in mm;
 * ``integrate`` truncates the projected pixel coordinate; the integration intrinsics are shifted
   by +0.5 px so the lookup becomes round-to-nearest (removes a ~0.35 mm bias on tilted surfaces);
-* the first ``ray_cast`` after the map grows uses an undersized range-map fragment buffer and
-  misses most of the image; a throw-away warm-up cast is done whenever the block count grew by
-  more than ``warmup_growth``;
+* ``ray_cast`` must never need as many "fragments" as its buffer holds: it then leaves blocks out
+  of its range map and reads entries nobody filled in, which crashes or hangs now and then
+  (:meth:`MarkerlessTracker._reserve_fragments` keeps the buffer larger than any cast can need);
 * ``ray_cast`` hangs when ``range_map_down_factor`` does not divide the image size (a divisor is
   chosen automatically);
 * ray-cast ``vertex``/``normal`` are in the camera frame and normals point *away* from the camera
@@ -159,16 +159,22 @@ def _limit_open3d_threads(o3d: Any) -> None:
     """Apply ``OHS_O3D_THREADS`` (a whole number; unset or empty: leave Open3D alone; 0: Open3D's
     own choice) as Open3D's process-wide thread limit.
 
-    Why: on several threads Open3D's ``VoxelBlockGrid.ray_cast`` (0.20, CPU) gives slightly
-    different answers for the same grid and pose (a few of some 25,000 surface pixels come and
-    go, points move by up to 2 mm), and its hash map hands the blocks out in a different order.
-    So two runs of the same recording on the Open3D model differ a little: poses by up to 0.008
+    Why: on several threads Open3D's ``VoxelBlockGrid.ray_cast`` (0.20, CPU) gave slightly
+    different answers for the same grid and pose (a few of some 25,000 surface pixels came and
+    went, points moved by up to 2 mm), and its hash map hands the blocks out in a different order.
+    So two runs of the same recording on the Open3D model differed a little: poses by up to 0.008
     in a matrix entry, the mesh by a few vertices. With ``OHS_O3D_THREADS=1`` they are the same
     bit for bit, at about half the speed (ray cast 43 -> 106 ms, integration 9 -> 55 ms a frame
     at 640 x 400). It is a switch for before/after comparisons, not the default
     (``tools/snapshot.py`` does the same on the CPU path with :func:`open3d_threads`, for the
     time it processes only). The limit stays for the life of the process. The GPU model does not
-    use these calls and is repeatable as it is."""
+    use these calls and is repeatable as it is.
+
+    Since 2026-11-19 the pixels that came and went have a known cause, and it is gone: the ray
+    cast ran out of room for its fragments and left blocks out, which ones by the order of its
+    threads (:meth:`MarkerlessTracker._reserve_fragments`). Runs on several threads have given
+    the same poses and the same mesh vertices since (in another order in the file), so the
+    switch is kept as a second safeguard only."""
     v = os.environ.get(O3D_THREADS_ENV, "").strip()
     if not v:
         return
@@ -184,6 +190,8 @@ def _limit_open3d_threads(o3d: Any) -> None:
     o3d.utility.set_max_threads(n)
 SLIDE_SV = 0.8  # the weak subspace holds a translation this close to a pure one: "slide"
 TURN_SV = 0.5  # ... a rotation (about any axis, e.g. through the scene) at least this strongly: "turn"
+
+_FRAGMENT_CELLS = 16  # Open3D's range map is filled from fragments of 16 x 16 of its cells
 
 # trilinear cell corners in the order of Open3D's ray-cast "index"/"interp_ratio" outputs
 _CORNERS = np.array([[j & 1, (j >> 1) & 1, (j >> 2) & 1] for j in range(8)], dtype=np.float64)
@@ -224,7 +232,6 @@ class FusionParams:
     # model ray casting
     raycast_scale: float = 0.5  # model maps rendered at this fraction of the input resolution
     raycast_weight_threshold: float = 3.0  # capped by the number of integrated frames
-    warmup_growth: float = 0.03  # warm-up ray cast when the block count grew by more than 3 %
     model_normal_window: int = 5  # box-average model normals over k x k ray-cast pixels (1 = off)
     extract_weight_threshold: float = 3.0
     # ICP
@@ -592,7 +599,7 @@ class MarkerlessTracker:
             )
         self.trajectory: list[tuple[float, np.ndarray, bool]] = []
         self._n_integrated = 0
-        self._warm_blocks = 0
+        self._frag_room = 0  # entries the grid's fragment buffer is known to hold (_reserve_fragments)
         self._initialized = False
         self._T_last = np.eye(4)  # last good pose
         self._t_last: float | None = None
@@ -725,6 +732,52 @@ class MarkerlessTracker:
         return _ModelView(np.asarray(T_wc, dtype=np.float64).copy(), valid, self._K_ray, (w, h),
                           rays=self._rays_ray, maps=maps)
 
+    def _reserve_fragments(self, n_blocks: int) -> None:
+        """Make Open3D's fragment buffer larger than a ray cast of ``n_blocks`` blocks can need.
+
+        Open3D (0.19 and 0.20, ``EstimateRange`` in ``VoxelBlockGridImpl.h``) builds the range map
+        of a cast from "fragments": each block in view takes one for every 16 x 16 cells of the
+        range map its outline covers. They go into a buffer the grid keeps from cast to cast,
+        sized to exactly what the last cast needed. A cast that needs as many or more
+
+        * leaves the blocks that found no room out of the range map (which ones depends on the
+          order its threads ran in, so pixels come and go from run to run), and
+        * reads the entries of the block that crossed the end, which nothing wrote. In a fresh
+          buffer that is whatever the memory held: an index from there writes outside the range
+          map (an access violation, or a corrupted heap that ends the process later, anywhere),
+          and a depth from there can make a ray march for ever (``MAINTENANCE_PLAN.md`` F6).
+
+        Left alone, every cast of a growing model is such a cast. So before a cast the buffer is
+        made larger than the most that cast can need: every block times the most fragments one
+        outline can take. The only way to size it from Python is a cast that needs exactly that
+        many, so one is made of a tiny image of copies of one block, each a single fragment.
+        With one fragment a block the unwritten entries are never read, so that cast is safe
+        although it overflows on purpose. The room grows by half each time, so this is rare.
+        """
+        w, h = self._ray_size
+        cells_w, cells_h = w // self._range_down, h // self._range_down
+        per_block = -(-cells_w // _FRAGMENT_CELLS) * -(-cells_h // _FRAGMENT_CELLS)
+        need = n_blocks * per_block + 1  # Open3D turns a block away already when it would fill the buffer
+        if need <= self._frag_room:
+            return
+        o3d, o3c = self._o3d, self._o3c
+        want = need + need // 2
+        b = float(self.params.voxel_mm) * int(self.params.block_resolution)  # a block's edge, mm
+        keys = o3c.Tensor(np.zeros((want, 3), dtype=np.int32)).to(self.device)
+        # block (0, 0, 0) from one block's edge in front of it, at so short a focal length that
+        # its outline is 2 x 2 cells of a 64 x 64 image: one fragment for each copy of the key
+        K = o3c.Tensor(np.array([[0.2, 0.0, 32.5], [0.0, 0.2, 32.5], [0.0, 0.0, 1.0]]), o3c.float64)
+        T_cw = np.eye(4)
+        T_cw[:3, 3] = (-0.5 * b, -0.5 * b, b)
+        level = o3d.utility.get_verbosity_level()
+        o3d.utility.set_verbosity_level(o3d.utility.VerbosityLevel.Error)  # it warns, as it must here
+        try:
+            self._vbg.ray_cast(keys, K, o3c.Tensor(T_cw, o3c.float64), 64, 64, ["depth"],
+                               1.0, 0.5 * b, 4.0 * b, 1.0, float(self.params.trunc_mult), 1)
+        finally:
+            o3d.utility.set_verbosity_level(level)
+        self._frag_room = want
+
     def _raycast(self, T_wc: np.ndarray) -> _ModelView | None:
         """Ray cast the model at ``T_wc`` and refine depths with the trilinear TSDF."""
         if self._gpu is not None:
@@ -739,11 +792,8 @@ class MarkerlessTracker:
         ext = o3c.Tensor(invert_se3(T_wc), o3c.float64)
         wthr = self._raycast_weight_threshold()
         args = (1.0, p.depth_min_mm, p.depth_max_mm, wthr, p.trunc_mult, self._range_down)
+        self._reserve_fragments(n_blocks)
         with o3d.utility.VerbosityContextManager(o3d.utility.VerbosityLevel.Error):
-            if n_blocks > self._warm_blocks * (1.0 + p.warmup_growth):
-                # grows Open3D's range-map fragment buffer; the first cast after growth is incomplete
-                self._vbg.ray_cast(keys, self._K_ray_t, ext, w, h, ["depth"], *args)
-                self._warm_blocks = n_blocks
             res = self._vbg.ray_cast(keys, self._K_ray_t, ext, w, h,
                                      ["depth", "normal", "index", "mask", "interp_ratio"], *args)
         depth_all = res.depth.cpu().numpy().reshape(h * w)

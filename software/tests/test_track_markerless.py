@@ -369,6 +369,45 @@ def test_one_open3d_thread_makes_the_open3d_model_repeatable(monkeypatch):
     assert o3d.utility.get_max_threads() != 1
 
 
+def test_open3d_ray_cast_always_has_room_for_its_fragments(monkeypatch, capfd):
+    """Open3D's ray cast (0.19, 0.20; CPU) first lists "fragments" of the blocks it will cross in
+    a buffer it keeps from cast to cast, sized to exactly what the last cast needed. A cast that
+    needs as many or more leaves blocks out of its range map, and it reads a few entries of a
+    freshly allocated buffer that nothing has filled in: an index from there writes outside the
+    range map (a crash now or later), a depth from there can keep a ray marching for ever
+    (``MAINTENANCE_PLAN.md`` F6). Open3D says so with a warning that the tracker used to
+    silence, and before the fix it came on every cast. The tracker now keeps the buffer larger
+    than any cast can need, so the warning must never come."""
+    import contextlib
+
+    import open3d as o3d
+
+    @contextlib.contextmanager
+    def loud(*_a, **_k):  # in place of the tracker's VerbosityContextManager(Error) around its casts
+        before = o3d.utility.get_verbosity_level()
+        o3d.utility.set_verbosity_level(o3d.utility.VerbosityLevel.Warning)
+        try:
+            yield
+        finally:
+            o3d.utility.set_verbosity_level(before)
+
+    monkeypatch.setattr(o3d.utility, "VerbosityContextManager", loud)
+    rng = np.random.default_rng(4)
+    poses = arc_trajectory(12)
+    tracker = MarkerlessTracker(K, (W, H), FusionParams(voxel_mm=2.0, model_backend="open3d", device="cpu"))
+    res = [tracker.track(render_depth(T, rng), None, k / FPS, gyro_prior(poses, k, rng) if k else None)
+           for k, T in enumerate(poses)]
+    assert all(r.ok for r in res)
+    # a view from beside the model, where blocks close to the camera take several fragments each
+    side = res[-1].T_wc @ G.make_se3(G.so3_exp(np.array([0.0, np.radians(50.0), 0.0])), np.array([120.0, 0.0, 150.0]))
+    tracker._raycast(side)
+    # the same model seen by a larger camera (a merge of scans does this): more fragments a block
+    tracker.set_camera(K * np.array([[2.0], [2.0], [1.0]]), (2 * W, 2 * H))
+    assert tracker._raycast(res[-1].T_wc) is not None
+    out = capfd.readouterr().out
+    assert "Could not generate full range map" not in out, out[:600]
+
+
 # ---------------------------------------------------------------- _clean_depth / _source_points guards
 def _old_clean_depth(depth_mm, params, size):
     """Reference: the body of MarkerlessTracker._clean_depth before it stopped copying clean maps."""
