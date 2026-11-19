@@ -175,7 +175,36 @@ type SetupState = {
   print_check: PrintCheck | null;                     // null for the sim target (its board is virtual and exact)
   board: BoardInfo;
   launch_check: LaunchCheck | null;
-  last_check: { when: string; ok: boolean; verdict: string } | null;
+  last_check: { when: string; ok: boolean; verdict: string;
+                parts?: ("cameras" | "lasers" | "imu")[] } | null;   // parts: what it found off (since H3; older checks have none)
+  calibration_health: CalibHealth | null;   // since H3; null without a calibration
+};
+
+// ---- calibration health (FEATURE_PLAN H3, ohs.calib.health): warns, never blocks a scan
+type HealthState = "valid" | "check" | "recalibrate";
+type HealthPart = "cameras" | "lasers" | "imu";
+type HealthAction = { step: "check" | "stereo" | "lasers" | "imu"; text: string };   // step: a SetupStep id
+type HealthReason = { state: HealthState; source: "scans" | "launch_check" | "board_check" | "board_check_age" | "scan";
+                      part: HealthPart | null; reason: string; action: HealthAction | null; then: HealthAction | null;
+                      kind: string; value: number | string[] | null };
+type CalibHealth = {
+  version: 1;
+  state: HealthState;
+  label: "Valid" | "Check recommended" | "Recalibration required";
+  part: HealthPart | null;        // null: the calibration as a whole (its age), or nothing (valid)
+  part_label: "Cameras" | "Lasers" | "IMU" | null;
+  reason: string;                 // one plain sentence: what was seen and what it may mean
+  action: HealthAction | null;    // what to do next, and the wizard step it is (null when valid)
+  then: HealthAction | null;      // what to try if that does not mend it (e.g. a camera roll reads as a vertical-laser fault)
+  reasons: HealthReason[];        // every finding that is not valid, worst first (the first is the one above)
+  parts: { cameras: HealthState | null; lasers: HealthState | null; imu: HealthState | null };   // null: not judged
+  not_judged: HealthPart[];
+  note: string | null;            // e.g. scans processed without a GPU: the lasers and the IMU cannot be judged there
+  provisional: true;              // the limits come from the simulator (H2) until the real scanner is measured (H5)
+  source: "setup" | "scan";
+  scans?: { used: number; window: number; agree: number };   // setup only: scans looked at, the window (3), how many must agree (2)
+  signs?: { [name: string]: { value: number | null; unit: string; check: number; recalibrate: number;
+                              state: HealthState | null; missing?: boolean } };   // scan only: "row_error", "laser:<line>", "gyro_jump"
 };
 type BoardInfo = { squares_x: number; squares_y: number; square_mm: number; marker_mm: number;   // as printed (config [board])
                    dictionary: string; paper: "letter" | "a4"; scale: number;                    // measured print scale used for calibration (1 = exact)
@@ -316,6 +345,11 @@ type CalibLive = {
   - After each connect with a calibration, the device compares the rectified rows of left and right features on a few idle frames.
   - It stays silent unless they disagree (`launch_check.state: "drift"`). Then a `warn` log and a `DeviceState.warnings` entry suggest running the check.
   - `"unknown"` (too few features, e.g. a blank wall) is also silent.
+- **Calibration health** (*since H3*, `SetupState.calibration_health`, `ohs.calib.health.status`): one of Valid / Check recommended / Recalibration required for the target's calibration, with the part, one sentence, what to do next and the wizard step it is. The app warns with it; it never blocks a scan. It joins, in this order:
+  - the **last scans** made with this calibration (matched by the calibration's `id`, or by its numbers for a file without one): Studio keeps each scan's health signs after its Track stage (`setup.json`, `scan_health`, the newest 20, whatever their calibration). The newest 3 are looked at; a part moves the state only when 2 of them agree (one hard surface can read high with a right calibration). One scan reads the cameras' row error first, then the laser lines (both off alike: the cameras; one: its laser, with "redo the cameras" as what to try next), then the IMU. Scans processed without a GPU judge the cameras only, and `note` says the lasers and the IMU cannot be judged on this computer.
+  - the **launch check**, when it ran after the last save and not on a replay (`setup.json` keeps `launch_source`): its `"drift"` (over 0.6 px, the alert as before) is Recalibration required for the cameras, and an `"ok"` from 0.3 px (`dv_px`) is Check recommended; both are to confirm with the 2-minute check.
+  - the **2-minute check**, when it ran after the last save: failed is Recalibration required for the parts it found off (`last_check.parts`); passed (or failed on other parts only) answers an earlier launch drift and earlier row-error "check" readings. With no check nor calibration step for 14 days: Check recommended for the calibration as a whole.
+  - The worst wins; on a tie the cameras first (redoing them redoes the rest). The limits are provisional (`provisional: true`) until the real scanner is measured (H5). `null` without a calibration.
 
 ## API deviations (M2)
 
@@ -754,7 +788,7 @@ Everything in the M3 phase 2 section is implemented as written, with these clari
   - When it moves the mesh, it is `done`, the refined mesh becomes the base (each vertex keeps its sigma), and the summary says how much, e.g. "Measured 45 % of the surface against 36 frames (20,338 patches, on the GPU); it moved by up to 0.12 mm (95 %)". `report.json` gets a `spacetime` section with the full numbers.
   - It resets `refine`: run it before Refine with lasers. Recipes and Make mesh don't run it (a trial build).
 - **Laser points** are also checked per frame against that frame's dense depth (`ohs.vision.laser.depth_check`: within 4 sigma, at least 1 mm, at the point's pixel or 6 px to a side). The report counts the dropped ones as `lasers.n_rejected_by_depth`.
-- **Calibration health** (*extra*, since 2026-11-18, FEATURE_PLAN H1): every stage's `report.json` (and so `result/report.json`) has a `health` block, what the scan saw of its calibration (`ohs.calib.scan_health`; lengths mm, angles degrees, pixels full resolution). It only measures: the mesh, the poses and the laser points are the same without it. Nothing reads it yet (H3 will).
+- **Calibration health** (*extra*, since 2026-11-18, FEATURE_PLAN H1): every stage's `report.json` (and so `result/report.json`) has a `health` block, what the scan saw of its calibration (`ohs.calib.scan_health`; lengths mm, angles degrees, pixels full resolution). It only measures: the mesh, the poses and the laser points are the same without it. The calibration's status reads it (H3: `health_status` below, and `SetupState.calibration_health`).
   - `version`: 1.
   - `calibration`: `{id, created, temperature_c, steps}` of the calibration the scan was processed with (null for a file from before these keys), and `source` (`"recording"`: the recording's own copy).
   - `temperature_c`: `scan` (the recording's `meta.json` summary `{first, last, min, max, n}`, or null), `calibration` (its `temperature_c`), `change` (`{min, max}`: the scan's minus the calibration's, or null).
@@ -765,6 +799,7 @@ Everything in the M3 phase 2 section is implemented as written, with these clari
   - `straighten`: what Straighten had to correct, from `straighten.json`: `{reason, changed, keyframes, loop_candidates, loops_accepted, correction_mm, correction_deg, residual_mm: {before_max, after_max} | null, drift_scale, laser_curves: {changed, reason, crossings, miss_mm, moved_mm, moved_deg} | null}`. Null in the track's report; the straighten and fuse stages' reports have it, and when Straighten is skipped (nothing to correct) `result/report.json` gets it.
   - `ms`: what the block cost the processing (its share on the processing thread).
   - Should the block fail, the scan is still processed and `health` is `{version, error}`.
+- **The scan's calibration status** (*extra*, since H3): every stage's `report.json` with a `health` block (not a failed one) also has `health_status`, a `CalibHealth` (`source: "scan"`, with `signs`) of what this scan alone saw (`ohs.calib.health.scan_status`): Valid, Check recommended or Recalibration required, the part, one sentence and the step to redo. One scan is enough here; the setup state's status waits for 2 of the last 3. A scan processed without a GPU judges the cameras only (`note`). At given poses (the straighten and fuse stages) nothing is tracked, so the IMU is not judged there. It warns only: the scan is processed as before.
 - **Scan status:** stage jobs and recipe `all` jobs set the scan to `processing`. Afterwards it is `processed` when it has a mesh, else `failed` (with `error`) or `recorded`. Edit jobs leave the status alone.
 - **Make mesh** (`POST .../process`) is the Default recipe with scope `all` at the requested quality. Its job kind (`process_scan`), result `{project_id, scan_id, scan, message: "Mesh ready"}` and statuses are M1's.
   - Second Make mesh on the same scan: 409 "this scan is already being processed".
@@ -2208,3 +2243,4 @@ type AlignAllResult = {
 - **A link that disagrees:** `worst_link_mm` above 2 mm adds "That is a lot: look at the scans together before merging." to the verdict.
 - **Merging several:** as for two scans; the name defaults to the scans' names joined by " + "; `merged_from` lists all of them in order.
 - **Errors:** 422 for fewer than two or more than eight scans, picked points that name a scan not in the list or are fewer than three pairs or in one line, both merge forms or neither; 409 for a scan listed twice, and as for two scans.
+
