@@ -5,7 +5,8 @@ above, the left and the right: no path comes up from below. Between the projecte
 matching cost has no texture, a pixel takes the disparity of the pixels above it. On a surface whose
 disparity grows down the image (a bench seen from above at an angle, the usual view) that is too small a
 disparity, so the depth is too far: 0.07-0.08 px on the simulated scans at 1280 x 800 (+0.10 to +0.14 mm),
-over the whole image. ``DepthParams.flip_average`` (off by default) also matches the pair upside down,
+over the whole image. ``DepthParams.flip_average`` (off in the class; the processing pipeline turns it on for
+the CPU matcher at full resolution since 2026-11-20) also matches the pair upside down,
 where the same paths come from below, and averages the two (``ohs.vision.depth``, "Paths from above
 only"). The GPU matcher sums its paths both ways and ignores the option.
 
@@ -45,7 +46,7 @@ def _mean_error(slope: float, params: DepthParams) -> float:
 
 @pytest.mark.parametrize("slope", [0.05, -0.05])
 def test_the_3way_matcher_lags_on_a_surface_slanted_up_and_down_the_image(slope):
-    """Option off (the default): the bias is there, with the sign of the slope (too far where the disparity
+    """Option off (the class default): the bias is there, with the sign of the slope (too far where the disparity
     grows downwards). Measured -0.062 / +0.071 px."""
     assert not DepthParams().flip_average
     m = _mean_error(slope, FULL)
@@ -71,9 +72,11 @@ def test_flip_average_leaves_the_gpu_matcher_alone():
 @pytest.mark.slow
 def test_with_flip_average_a_dark_part_does_not_slide_on_the_cpu_path(tmp_path_factory):
     """The first 12 frames of a dark bracket (H2's ``bracket-dark`` scene, seed 12), CPU matcher and Open3D
-    model, the option on. With it detail mode leaves out only 2 px around the matcher's holes instead of 6
-    (``ohs.app.pipeline.DETAIL_HOLE_PX_FLIP_1280``). Off (today's default) the pose slides 35 mm a frame
-    from the second frame on and ends 307 mm off: the 6 px leave the dark part almost without depth."""
+    model, the option set by hand both ways (the CPU path's defaults turn it on: ``test_cpu_path_defaults.py``).
+    With it detail mode leaves out only 2 px around the matcher's holes instead of 6
+    (``ohs.app.pipeline.DETAIL_HOLE_PX_FLIP_1280``). Off, the pose slides away from the second frame on (before
+    the guard and weight 8 became defaults: 35 mm a frame, 307 mm at the end): the 6 px leave the dark part
+    almost without depth."""
     from ohs import geometry as G
     from ohs.app.pipeline import FramePipeline, PipelineParams, default_depth_params, default_fusion_params
     from ohs.io.recording import RecordingReader

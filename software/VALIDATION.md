@@ -3490,6 +3490,35 @@ Bold: worse than today. Every scene tracks every frame in C and Cw8 (today dark2
 - With both options on, the GPU path gave the same camera path and laser points byte for byte and
   the same mesh vertices on the bracket.
 
+**Switched on (2026-11-20, the owner's decision D7).** The CPU path's defaults, with nothing set
+by hand, 90 frames at 1280x800 (the last row: 8 frames at 640x400):
+
+| Scene | Position error, median / last (mm) | Rotation, last frame | Tracker against gyro (° a frame) | Laser lines h / v (mm) | Before: last, rotation |
+|---|---|---|---|---|---|
+| Bracket | 0.47 / 0.20 | 0.161° | 0.0055 | -0.006 / +0.013 | 0.95 mm, 0.577° |
+| Bracket, calibration pitched 0.03° | 0.35 / 0.19 | 0.224° | 0.0062 | -0.072 / +0.034 | 1.18 mm, 0.564° |
+| Dark | 41.74 / 42.32 | 0.028° | 0.0048 | -0.000 / +0.004 | 167.2 mm, 0.129° |
+| Dark2 | 2.30 / 0.90 | 0.067° | 0.0063 | -0.003 / +0.011 | 248.6 mm, 0.139° |
+| Speckled | 5.28 / 5.35 | 0.116° | 0.0083 | -0.005 / +0.001 | 23.1 mm, 0.127° |
+| Speck2 | 1.36 / 1.17 | 0.117° | 0.0093 | -0.002 / +0.006 | 2.31 mm, 0.204° |
+| Plate 0.5 mm | 5.15 / 5.69 | 0.043° | 0.0031 | -0.004 / +0.005 | 36.2 mm, 0.115° |
+| Plate2 0.5 mm | 5.05 / 5.66 | 0.030° | 0.0034 | +0.001 / -0.001 | 49.6 mm, 0.134° |
+| Sphere | 0.13 / 0.11 | 0.004° | 0.0027 | -0.006 / +0.011 | 0.31 mm, 0.045° |
+| Car panel | 0.17 / 0.42 | 0.018° | 0.0087 (before 0.0081: accepted) | -0.008 / +0.005 | 0.60 mm, 0.064° |
+| 8 frames, half resolution | 0.10 / 0.04 | 0.007° | 0.0083 | -0.007 / +0.029 | the same bit for bit |
+
+- Every scene tracks every frame. The camera paths are the same bytes as the "Cw8" runs above.
+- The depth fix and threshold 8 act from 960 px of width, the guard at every size.
+- The GPU path with the same code: the same camera path and laser points byte for byte and the same
+  mesh on the bracket (427,312 vertices; repeated in review), the 0.5 mm plate and the 8-frame
+  recording.
+- Frame time on the bracket, CPU path, a quiet PC: 445 to 532 ms before, 603 to 730 ms after; of
+  it the matcher 189 to 212 ms before, 337 to 410 ms after. Ray cast and ICP are unchanged.
+- The calibration status, if it judged this path (it does not yet): every right calibration at
+  1280x800 would read Valid (lines 0.013 mm at most against 0.05, gyro 0.0093° at most against
+  0.015°), the 0.2 mm laser fault "Recalibrate, lasers" (0.357 mm), the 3° IMU fault "Recalibrate,
+  IMU" (0.0335°).
+
 
 ## Keeping only the frames Standard uses (R3, 2026-11-20)
 

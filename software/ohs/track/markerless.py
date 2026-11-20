@@ -66,7 +66,9 @@ slid, the filter's leftover fragments of it then look well held but are biased, 
 trim it only made the worst frames worse. A frame that fails a gate still tries ``alt_depth``
 before it is lost (``VALIDATION.md``, "Large and detailed parts").
 
-**The velocity guard** (``FusionParams.velocity_max_accel``, Open3D model only; off by default). On a
+**The velocity guard** (``FusionParams.velocity_max_accel``, Open3D model only; off in this class by
+default, on in the processing pipeline's CPU path since 2026-11-20: :mod:`ohs.app.pipeline`, "The CPU
+path's defaults"). On a
 scene the depth barely holds sideways (a dark part a few percent of the image, the rest a bench), one
 frame can be pushed far off, and the constant-velocity prediction then carries the error on: the
 directions the data cannot hold stay at the prediction, so a wrong velocity repeats every frame. With the
@@ -208,6 +210,7 @@ _FRAGMENT_CELLS = 16  # Open3D's range map is filled from fragments of 16 x 16 o
 # the velocity guard's bound (m/s^2; module docstring, "The velocity guard"): the simulator's hand moves the
 # scanner with at most 0.48 m/s^2 (frame to frame, over the recordings of MAINTENANCE_PLAN F14), times 4
 VELOCITY_MAX_ACCEL = 2.0
+RAYCAST_WEIGHT_THRESHOLD = 3.0  # the Open3D model's ray-cast weight threshold where FusionParams leaves it None
 # ... and the first velocity after the start or a lost frame (mm/s): the simulator's hand moves at most 119 mm/s
 # (4 mm a frame at 30 fps), times 2.5
 VELOCITY_MAX_SPEED = 300.0
@@ -250,7 +253,10 @@ class FusionParams:
     gpu_back_after: int = 4
     # model ray casting
     raycast_scale: float = 0.5  # model maps rendered at this fraction of the input resolution
-    raycast_weight_threshold: float = 3.0  # capped by the number of integrated frames
+    # Open3D model: a hit's voxel must have been fused this often (capped by the number of integrated frames).
+    # None: RAYCAST_WEIGHT_THRESHOLD (3) here; ohs.app.pipeline fills in 8 on the CPU path at full resolution
+    # (MAINTENANCE_PLAN F14, the owner's decision D7 of 2026-11-20). The GPU model uses gpu_weight_threshold.
+    raycast_weight_threshold: float | None = None
     model_normal_window: int = 5  # box-average model normals over k x k ray-cast pixels (1 = off)
     extract_weight_threshold: float = 3.0
     # ICP
@@ -271,8 +277,9 @@ class FusionParams:
     trans_sigma_mm: float = 20.0  # weak translation prior
     constant_velocity: bool = True
     # Open3D model only (the GPU model ignores it): the most the scanner's velocity may change between two
-    # frames, as an acceleration (m/s^2), when it is carried into the next prediction; None: no limit
-    # (module docstring, "The velocity guard")
+    # frames, as an acceleration (m/s^2), when it is carried into the next prediction (module docstring, "The
+    # velocity guard"). None or 0: no limit here; ohs.app.pipeline fills in VELOCITY_MAX_ACCEL (2) on the CPU
+    # path since 2026-11-20 (MAINTENANCE_PLAN F14, D7), and 0 turns it off there
     velocity_max_accel: float | None = None
     # sanity gates
     min_points: int = 300  # valid source points at the finest ICP level, counted at stride 4 (scaled by the stride)
@@ -739,7 +746,9 @@ class MarkerlessTracker:
         self._n_integrated += 1
 
     def _raycast_weight_threshold(self) -> float:
-        thr = self.params.gpu_weight_threshold if self._gpu is not None else self.params.raycast_weight_threshold
+        p = self.params
+        thr = (p.gpu_weight_threshold if self._gpu is not None
+               else RAYCAST_WEIGHT_THRESHOLD if p.raycast_weight_threshold is None else p.raycast_weight_threshold)
         return float(min(thr, max(self._n_integrated, 1)))
 
     def _raycast_gpu_start(self, T_wc: np.ndarray) -> Any:
@@ -1192,7 +1201,7 @@ class MarkerlessTracker:
             D = invert_se3(self._T_last) @ T_wc
             dt = None if (t is None or self._t_last is None) else float(t - self._t_last)
             step = D[:3, 3].copy()
-            if self._gpu is None and self.params.velocity_max_accel is not None and dt:
+            if self._gpu is None and self.params.velocity_max_accel and dt:
                 step = self._guard_velocity(step, dt)
             self._last_step = (D[:3, :3].copy(), step, dt)
         else:

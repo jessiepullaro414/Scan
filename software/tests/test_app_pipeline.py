@@ -187,7 +187,8 @@ def test_defaults_follow_resolution():
     with FramePipeline(calib, PipelineParams(scale=0.5)) as live:
         assert live.image_size == (640, 400)
         assert live.fusion_params.voxel_mm == 2.0 and live.track_fusion_params.voxel_mm == 2.0
-        assert live.laser_params == LaserParams().scaled(0.5) and live.depth_params == DepthParams()
+        # flip_average: None (the pipeline decides) is resolved; off at half resolution on either path (F14, D7)
+        assert live.laser_params == LaserParams().scaled(0.5) and live.depth_params == DepthParams(flip_average=False)
         assert live.track_filter_px == pytest.approx(4.0)
     with FramePipeline(calib, PipelineParams(scale=1.0, use_lasers=False, use_imu=False)) as full:
         assert full.fusion_params.voxel_mm == 1.0 and full.track_fusion_params.voxel_mm == 2.0

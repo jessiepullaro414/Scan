@@ -76,10 +76,36 @@ From the CPU matcher (SGBM) the raw depth added this way leaves out every pixel 
 gaps, which move with the scanner: a camera-fixed error that pulled each frame towards the previous
 pose. The tracker turned 6.5 % less than the scanner every frame and the 90-frame bracket ended
 3.6 deg and 9.4 mm off; with the rule 0.58 deg and 0.95 mm (``MAINTENANCE_PLAN.md`` F13). When the CPU
-matcher averages the pair with the pair upside down (``DepthParams.flip_average``, off by default; most of
+matcher averages the pair with the pair upside down (``DepthParams.flip_average``, on by default on the CPU
+path at full resolution since 2026-11-20, "The CPU path's defaults" below; most of
 that bias was SGBM's paths coming only from above, :mod:`ohs.vision.depth`) the bias is confined to 2 px of
 a hole, and ``DETAIL_HOLE_PX_FLIP_1280`` = 2 px are left out instead (``MAINTENANCE_PLAN.md`` F14). The GPU
 matcher's depth has no such bias (its depth is used as it is). The mesh model fuses the whole depth.
+
+**The CPU path's defaults** (since 2026-11-20; ``MAINTENANCE_PLAN.md`` F14, the owner's decision D7).
+Without a GPU, a scan of a dark or plain part slid tens to hundreds of mm, and the matcher read 0.08 px too
+far. When the depth comes from the CPU matcher and the tracking model is Open3D's (a separate tracking
+model, markerless mode), three settings left ``None`` are filled in here:
+
+* ``DepthParams.flip_average`` on (:mod:`ohs.vision.depth`, "Paths from above only"), with
+  ``DETAIL_HOLE_PX_FLIP_1280`` = 2 px for detail mode;
+* the velocity guard, ``FusionParams.velocity_max_accel`` = ``VELOCITY_MAX_ACCEL`` (2 m/s^2;
+  :mod:`ohs.track.markerless`, "The velocity guard");
+* ``FusionParams.raycast_weight_threshold`` = 8 (``CPU_RAYCAST_WEIGHT_THRESHOLD``; 3 before).
+
+The flip average and the weight threshold apply from an effective scale of ``CPU_DEFAULTS_MIN_SCALE`` = 0.75
+on (960 px wide and more, the boundary of the full-resolution SGBM settings): at 640 x 400 the matcher's
+bias is 0.01 px, so the flip would double its time for nothing, and the weight threshold 8 made the 8-frame
+half-resolution recording a little worse. The guard applies at every size (on that recording it never
+acts). Each stays an option: ``flip_average=False``, ``velocity_max_accel=0`` and an explicit
+``raycast_weight_threshold`` keep what is set. Elsewhere (the GPU path, a GPU matcher with the Open3D
+model, the single-model tracking of ``track_filter_px=0``, marker mode, fusing at given poses with
+``tracking=False``) the ``None`` settings become what
+they were before (no flip, no guard, 3), so those results are as before. A report shows what was on in
+``params.depth.flip_average`` and ``params.fusion`` (``velocity_max_accel``, ``raycast_weight_threshold``).
+On the simulated scans (true calibration, last frame) the bracket went from 0.95 to 0.20 mm, the dark
+bracket from 167 to 42 mm and from 249 to 0.9 mm (two seeds), the speckled one from 23 to 5.4 mm, the
+0.5 mm plates from 36 and 50 to 5.7 mm, and the laser lines from 0.06-0.14 to under 0.02 mm off the mesh.
 
 **Model backends.** The tracking model may live on the GPU
 (:class:`~ohs.track.volume_gpu.GpuTsdfVolume`, a rolling cube): it takes
@@ -164,7 +190,7 @@ import numpy as np
 from ohs.track.filter_gpu import TrackingFilterGpu
 from ohs.track.fusion import LaserCloud
 from ohs.track.imu_prior import GyroPredictor
-from ohs.track.markerless import FusionParams, MarkerlessTracker
+from ohs.track.markerless import RAYCAST_WEIGHT_THRESHOLD, VELOCITY_MAX_ACCEL, FusionParams, MarkerlessTracker
 from ohs.track.markers import MarkerParams, MarkerTracker
 from ohs.track.recon_tsdf import BACK_VOXELS, GUARD_PX_1280, OPPOSITE_VOXELS, ConfidenceTsdf, gap_guard_mask
 from ohs.types import ImuSample, LaserPlane, ScannerCalibration, StereoFrame, TrackResult
@@ -212,6 +238,10 @@ DETAIL_HOLE_PX_1280 = 6.0
 # ... when the CPU matcher averages the pair with the pair upside down (DepthParams.flip_average): the bias
 # next to a hole is then confined to 2 px (ohs.vision.depth, "Paths from above only"; MAINTENANCE_PLAN.md F14)
 DETAIL_HOLE_PX_FLIP_1280 = 2.0
+# the CPU path's defaults (module docstring, "The CPU path's defaults"): the flip average and the weight
+# threshold 8 from this effective scale on (960 px wide and more: the full-resolution SGBM settings' boundary)
+CPU_DEFAULTS_MIN_SCALE = 0.75
+CPU_RAYCAST_WEIGHT_THRESHOLD = 8.0
 
 
 def effective_scale(image_width: int) -> float:
@@ -482,6 +512,7 @@ class FramePipeline:
         if p.mode == "markerless" and not p.integrate_depth:
             log.info("integrate_depth=False has no effect in markerless mode (the fused model is the tracking reference)")
         self.depth_estimator = DepthEstimator(self.K, self.baseline, self.depth_params) if self._need_depth else None
+        self.cpu_defaults_full = s_eff >= CPU_DEFAULTS_MIN_SCALE  # "The CPU path's defaults" (module docstring)
 
         planes: dict[str, LaserPlane] = {}
         if p.use_lasers:
@@ -536,6 +567,7 @@ class FramePipeline:
                 self.tracker = MarkerlessTracker(self.K, self.image_size, self.track_fusion_params)
             else:
                 self.tracker = self.markerless
+        self._resolve_tracking_defaults()
         self.markers: MarkerTracker | None = None
         if p.mode == "markers":
             self.markers = MarkerTracker(self.K, self.baseline, self.marker_params)
@@ -960,6 +992,33 @@ class FramePipeline:
         if self._probe_left <= 0:
             self._end_probe()
         return res
+
+    def _resolve_tracking_defaults(self) -> None:
+        """The CPU path's defaults (module docstring): fill in ``DepthParams.flip_average`` and the tracking
+        model's ``velocity_max_accel`` and ``raycast_weight_threshold`` where they are left ``None``. On the CPU
+        path (CPU matcher, Open3D tracking model, separate tracking model) the guard is on and, at full
+        resolution, the flip average and the weight threshold 8; everywhere else what they were before (no
+        flip, no guard, 3). The reconstruction model's parameters (``fusion_params``, what a report shows) get
+        the same values; it only integrates there, so they change nothing in it."""
+        def resolved(fp: FusionParams, cpu: bool) -> FusionParams:
+            va = fp.velocity_max_accel if fp.velocity_max_accel is not None else (VELOCITY_MAX_ACCEL if cpu else None)
+            wt = (fp.raycast_weight_threshold if fp.raycast_weight_threshold is not None
+                  else CPU_RAYCAST_WEIGHT_THRESHOLD if cpu and self.cpu_defaults_full else RAYCAST_WEIGHT_THRESHOLD)
+            return replace(fp, velocity_max_accel=va, raycast_weight_threshold=wt)
+
+        de = self.depth_estimator
+        cpu = (self.dual_model and getattr(self.tracker, "model_backend", None) == "open3d"
+               and de is not None and de.backend == "cpu")
+        if self.depth_params.flip_average is None:
+            self.depth_params = replace(self.depth_params, flip_average=cpu and self.cpu_defaults_full)
+            if de is not None:
+                de.params = self.depth_params
+        self.track_fusion_params = resolved(self.track_fusion_params, cpu)
+        self.fusion_params = resolved(self.fusion_params, cpu)
+        if self.tracker is not None:
+            self.tracker.params = self.track_fusion_params if self.dual_model else self.fusion_params
+        if self.markerless is not None and self.markerless is not self.tracker and not self.has_confidence:
+            self.markerless.params = self.fusion_params  # the Open3D reconstruction
 
     def _detail_raw(self, depth: np.ndarray) -> np.ndarray:
         """The raw depth detail mode adds where the filter dropped a pixel: ``depth`` itself from the GPU

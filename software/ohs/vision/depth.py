@@ -64,7 +64,8 @@ sideways 0.00 px. On the simulated scans the 3-way SGBM read 0.07-0.08 px too fa
 after the sub-pixel step at 1280 x 800 (bracket, car panel, dark bracket; +0.10 to +0.14 mm of depth),
 0.01 px at 640 x 400, and 0.10 px within 2 px of a hole. The sub-pixel step cannot mend it: it corrects
 a pixel by its textured neighbours, which are right (``MAINTENANCE_PLAN.md`` F14). With
-``flip_average`` (off by default) SGBM also matches the pair turned upside down, where its paths come
+``flip_average`` (off in this class by default; the processing pipeline turns it on for the CPU matcher at
+full resolution since 2026-11-20, :mod:`ohs.app.pipeline`, "The CPU path's defaults") SGBM also matches the pair turned upside down, where its paths come
 from below and the lag has the other sign, and the two disparities are averaged (a pixel needs a
 disparity in both). The bias left is 0.00-0.01 px over the image and -0.05 px within 2 px of a hole, for
 twice the SGBM time. ``mode="hh4"`` (two passes) does as well at about three times the time.
@@ -147,10 +148,12 @@ class DepthParams:
     wls_lambda: float = 8000.0
     wls_sigma_color: float = 1.5
     wls_min_confidence: float = 64.0  # 0..255, pixels below are invalidated
-    # CPU only, off by default: match the pair upside down as well and average the two disparities, which
-    # takes out SGBM's bias on surfaces slanted up and down the image (module docstring, "Paths from above
-    # only"). Twice the SGBM time. The GPU matcher sums its paths both ways and ignores it.
-    flip_average: bool = False
+    # CPU only: match the pair upside down as well and average the two disparities, which takes out SGBM's
+    # bias on surfaces slanted up and down the image (module docstring, "Paths from above only"). Twice the
+    # SGBM time. The GPU matcher sums its paths both ways and ignores it. None: off here; the processing
+    # pipeline turns it on for the CPU matcher at full resolution since 2026-11-20 (ohs.app.pipeline, "The CPU
+    # path's defaults"; MAINTENANCE_PLAN F14, the owner's decision D7). False turns it off there too.
+    flip_average: bool | None = None
     # where the matching runs: "auto" (the GPU if there is one), "cpu" or "gpu" (module docstring)
     backend: str = "auto"
 

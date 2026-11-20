@@ -1926,7 +1926,7 @@ Every task here: the type check, `npm test`, and for bundle tasks the chunk size
     tracked, 0.10 mm median).
   - **What is left is F14.**
 
-### [ ] F14. The CPU path on hard surfaces, and its matcher's small depth bias
+### [x] F14. The CPU path on hard surfaces, and its matcher's small depth bias ✔
 Found 2026-11-19 by the study for F13 (the agent's numbers, not re-measured in review).
 - **Hard scenes slide.** With the true calibration on the CPU path, the last frame's position
   error after F13's fix: dark bracket 167 mm (GPU path 1.1–3.8 mm on these scenes), speckled
@@ -2013,6 +2013,39 @@ Found 2026-11-19 by the study for F13 (the agent's numbers, not re-measured in r
   - Guard: `tests/test_cpu_matcher_slant.py` (the bias is there with the option off and gone
     with it on; a 12-frame dark bracket ends 307 mm off without and under 5 mm with),
     `tests/test_track_velocity_guard.py`.
+
+- **Switched on 2026-11-20, the owner's decision D7** (third round, the same agent). Where
+  nothing is set by hand, the pipeline now turns the three on for the CPU path (CPU matcher with
+  Open3D's tracking model, scans without markers): `ohs/app/pipeline.py`, "The CPU path's
+  defaults".
+  - *What and where:* the depth fix with its 2 px rule and the ray cast's weight threshold 8
+    from 960 px of image width (the boundary the depth settings already use for "full
+    resolution"; at 640x400 the bias is 0.01 px and threshold 8 was worse); the velocity guard at
+    every size. Each can still be set by hand, to off too. A scan's report says which were on.
+  - *The GPU path is untouched.* In review: the bracket recording processed with the code
+    before and after gives the same camera path and laser points byte for byte and the same mesh
+    (427,312 vertices). The agent's proof covers three recordings and the report's settings.
+  - *With the defaults, last frame's position error, before to after:* bracket 0.95 to 0.20 mm
+    (rotation 0.58° to 0.16°), dark brackets 167 to 42 mm and 249 to 0.9 mm, speckled 23 to
+    5.4 mm and 2.3 to 1.2 mm, the 0.5 mm plates 36 to 5.7 and 50 to 5.7 mm, sphere 0.31 to
+    0.11 mm, car panel 0.60 to 0.42 mm; every frame tracked on every scene. The 8-frame
+    half-resolution recording is the same bit for bit. Accepted with the decision: the car
+    panel's tracker against the gyro, 0.0081° to 0.0087° a frame.
+  - *The price:* the matcher takes about 1.75 times as long at 1280x800 (212 to 349 ms a frame),
+    a frame about 30 % more (about 0.6 s instead of 0.5 s), a 90-frame scan about 15 s more.
+    Scanning live at 640x400 is not affected.
+  - *One pinned value changed:* `tests/test_app_pipeline.py::test_defaults_follow_resolution`
+    compared the live pipeline's depth settings with `DepthParams()`; the class's default for
+    the depth fix is now "the pipeline decides", so the test names the resolved value. No bound
+    was changed; `tests/test_cpu_detail_depth.py` is as committed and passes with the new
+    defaults.
+  - Guard: `tests/test_cpu_path_defaults.py` (on where nothing is set, each can be turned off,
+    everywhere else as before, and a 12-frame dark bracket that ends 1.5 mm off where it ended
+    307 mm off).
+  - **Left for the owner:** the calibration status still judges only the cameras on this path.
+    With the defaults it could judge the lasers and the IMU too: right calibrations read at most
+    0.013 mm (limit 0.05) and 0.0093° a frame (limit 0.015); the 0.2 mm laser fault reads
+    0.357 mm and the 3° IMU fault 0.0335°. Prepared, not switched on.
 
 ### [x] F15. Hole filling triangulates by vertex number, so two runs can fill a hole differently ✔
 - **Found 2026-11-20** in the review of R3 (`FEATURE_PLAN.md`). A scan made twice from the same
@@ -2169,3 +2202,13 @@ no hang. The two wall-clock tests that failed under load during the night
 `test_server_rewind.py::test_rebuild_of_a_two_minute_scan_fits_the_budget`) pass on the quiet PC.
 UI: typecheck clean, 54 test files pass, build done. For comparison, at 1ce04d3 (2026-11-19): GPU
 1576 passed, 6 skipped, 41 minutes; CPU 1515 passed, 67 skipped, 29 minutes.
+
+**Full suites, 2026-11-20, with the CPU path's new defaults (D7) and the repeatable-edits
+option:** CPU path 1710 passed, 73 skipped, 37 minutes. GPU path 1775 passed, 6 skipped, 2
+failed, 45 minutes, while three review and build agents were also working on the PC. Neither
+failure is in the CPU path's change, and both tests pass run again on the quiet PC:
+`test_measure_region.py::test_a_click_answers_fast_on_a_1m_triangle_mesh` is a wall-clock
+limit (a cylinder fit took 3.05 s against 3.0 s); and
+`test_server_second_pass.py::test_two_passes_through_the_route...` caught a real race in the
+second pass's chain, mended the same day (`tests/test_pass_chain_race.py`): a look at the chain
+between one step's end and the next step's start called it "stopped: the app was closed".
