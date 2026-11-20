@@ -77,15 +77,15 @@ def _slug(name: str) -> str:
 def _clean_name(name: Any, what: str) -> str:
     n = " ".join(str(name or "").split())
     if not n:
-        raise ApiError(400, f"the {what} name is empty", f"type a name for the {what}")
+        raise ApiError(400, f"The {what} name is empty.", f"Type a name for the {what}.")
     if len(n) > NAME_MAX:
-        raise ApiError(400, f"the {what} name is too long ({len(n)} characters)", f"use at most {NAME_MAX} characters")
+        raise ApiError(400, f"The {what} name is too long ({len(n)} characters).", f"Use at most {NAME_MAX} characters.")
     return n
 
 
 def check_id(value: str, what: str) -> str:
     if not isinstance(value, str) or not _SAFE_ID.match(value) or ".." in value:
-        raise ApiError(404, f"no {what} {value!r}", f"use a {what} id from the projects list")
+        raise ApiError(404, f"There is no such {what}: it may have been deleted.", "Go back to the projects list.")
     return value
 
 
@@ -139,14 +139,13 @@ class ProjectStore:
         """``(path, media type)`` of a downloadable scan file; 404 if unknown or missing."""
         self._scan_entry(self._load(pid), sid)
         if name not in RESULT_FILES:
-            raise ApiError(404, f"no file {name!r}", "available: " + ", ".join(sorted(RESULT_FILES)))
+            raise ApiError(404, "A scan has no file of this name.", "Download one of the files the page lists.")
         sub, media = RESULT_FILES[name]
         base = self.scan_dir(pid, sid)
         path = (base / sub / name) if sub else (base / name)
         if not path.is_file():
-            hint = ("process the scan first (POST .../process)" if sub == "result"
-                    else "the thumbnail is written when a scan stops")
-            raise ApiError(404, f"{name} does not exist for scan {sid}", hint)
+            hint = ("Press Make mesh first." if sub == "result" else "The picture is made when a scan stops.")
+            raise ApiError(404, f"This scan has no {name} yet.", hint)
         return path, media
 
     # ------------------------------------------------------------------ io
@@ -158,10 +157,12 @@ class ProjectStore:
         try:
             data = json.loads(p.read_text(encoding="utf-8"))
         except FileNotFoundError:
-            raise ApiError(404, f"no project {pid!r}", "pick a project from the projects list or create one") from None
+            raise ApiError(404, "There is no such project: it may have been deleted.",
+                           "Pick a project from the projects list, or make a new one.") from None
         except (OSError, ValueError) as e:
-            raise ApiError(500, f"project {pid} cannot be read: {e}",
-                           f"check or restore {p} (the scans inside the folder are untouched)") from None
+            log.warning("project %s cannot be read: %s", pid, e)
+            raise ApiError(500, "The project's file cannot be read.",
+                           f"Restore {p} from a backup; the scans inside the project's folder are untouched.") from None
         data.setdefault("scans", [])
         data["id"] = pid
         return data
@@ -254,7 +255,8 @@ class ProjectStore:
         for e in data.get("scans", []):
             if e.get("id") == sid:
                 return e
-        raise ApiError(404, f"no scan {sid!r} in project {data.get('id')!r}", "pick a scan from the project's scan list")
+        raise ApiError(404, "There is no such scan in this project: it may have been deleted.",
+                       "Pick a scan from the project's list.")
 
     # ------------------------------------------------------------------ projects
     def list_projects(self) -> list[dict]:
@@ -284,7 +286,7 @@ class ProjectStore:
                 if not (self.root / pid).exists():
                     break
             else:  # pragma: no cover - 65536 collisions
-                raise ApiError(500, "could not find a free project id", "try another name")
+                raise ApiError(500, "The project could not be made under this name.", "Try another name.")
             (self.root / pid / "scans").mkdir(parents=True)
             now = now_iso()
             data = {"format_version": FORMAT_VERSION, "id": pid, "name": n, "created": now, "modified": now,
@@ -327,8 +329,9 @@ class ProjectStore:
                     last = e
                     time.sleep(0.1)
             else:
-                raise ApiError(409, f"project {pid} could not be moved to the trash: {last}",
-                               "close any program that has a file of this project open, then try again")
+                log.warning("project %s could not be moved to the trash: %s", pid, last)
+                raise ApiError(409, "The project could not be moved to the trash.",
+                               "Close any program that has a file of this project open, then try again.")
         log.info("moved project %s to %s", pid, dst)
         return dst
 

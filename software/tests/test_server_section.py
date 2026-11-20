@@ -293,27 +293,27 @@ def test_bad_bodies(kept):
     r = err(post(b + "/section", {"kind": "points", "points": [c, [c[0] + 1, c[1], c[2]], [c[0] + 2, c[1], c[2]]]}), 422)
     assert "line" in r["detail"]
     err(post(b + "/section", {"kind": "point_normal", "point": c, "normal": [0, 0, 0]}), 422, "zero")
-    err(post(b + "/section", {"kind": "frame", "axis": "Z", "value_mm": 3}), 422, "frame")
+    err(post(b + "/section", {"kind": "frame", "axis": "Z", "value_mm": 3}), 422, "part's axes")
     err(post(b + "/section", {"kind": "fit", "fit": "f-pin"}), 422, "plane")
-    err(post(b + "/section", {"kind": "fit"}), 422, "fit")
-    err(post(b + "/section", {"kind": "point_normal", "point": c}), 422, "normal")
+    err(post(b + "/section", {"kind": "fit"}), 422, "needs the plane")
+    err(post(b + "/section", {"kind": "point_normal", "point": c}), 422, "direction is missing")
     err(post(b + "/section", {"kind": "points", "points": [c, c]}), 422)
     err(post(b + "/section", {"kind": "points", "points": [c, c, [1, 2]]}), 422)
-    err(post(b + "/section", {"kind": "sideways"}), 422, "kind")
+    err(post(b + "/section", {"kind": "sideways"}), 422, "way of choosing the plane")
     err(post(b + "/section", {"kind": "fit", "fit": "f-cut", "offset_mm": "far"}), 422)
     err(post(b + "/section", {}), 422)
-    err(post(b + "/section", {"kind": "fit", "fit": "f-nope"}), 404, "f-nope")
+    err(post(b + "/section", {"kind": "fit", "fit": "f-nope"}), 404, "no longer in the scan")
     # the downloads take the same plane as a query
     err(requests.get(b + "/section/section.dxf", params={"kind": "point_normal", "point": "1,2", "normal": "0,0,1"},
                      timeout=T), 422)
-    err(requests.get(b + "/section/section.dxf", params={"kind": "frame", "axis": "Z", "value_mm": "1"}, timeout=T), 422, "frame")
+    err(requests.get(b + "/section/section.dxf", params={"kind": "frame", "axis": "Z", "value_mm": "1"}, timeout=T), 422, "part's axes")
     err(requests.get(b + "/section/section.pdf", params={"kind": "fit", "fit": "f-cut"}, timeout=T), 404)
 
 
 def test_frame_axis_refusals_with_a_frame(framed):
     b = base_url(framed)
     err(post(b + "/section", {"kind": "frame", "axis": "W", "value_mm": 3}), 422, "axis")
-    err(post(b + "/section", {"kind": "frame", "axis": "Z"}), 422, "value")
+    err(post(b + "/section", {"kind": "frame", "axis": "Z"}), 422, "where along the axis")
 
 
 # --------------------------------------------------------------------------- the files
@@ -412,7 +412,7 @@ def test_keep_list_rename_and_delete(kept):
     assert delete(f"{b}/sections/{s2['id']}").status_code == 204
     assert "sections" not in json.loads((sd / kf.FILE_NAME).read_text(encoding="utf-8"))  # as before any was kept
     # bad bodies keep nothing
-    err(post(b + "/sections", {"kind": "frame", "axis": "Z", "value_mm": 1}), 422, "frame")
+    err(post(b + "/sections", {"kind": "frame", "axis": "Z", "value_mm": 1}), 422, "part's axes")
     err(post(b + "/sections", {"kind": "point_normal", "point": c, "normal": [0, 1, 0], "name": ""}), 422)
     assert get(b + "/sections").json()["sections"] == []
 

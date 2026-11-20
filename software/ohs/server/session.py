@@ -131,7 +131,7 @@ def tracking_state(track: Any, mode: str) -> dict:
     if not getattr(track, "ok", False):
         code = str(info.get("reason", "lost"))
         out.update(state="lost", code=code,
-                   reason=LOST_HINTS.get(code, f"Tracking lost ({code}): go back slowly to the scanned area"))
+                   reason=LOST_HINTS.get(code, "Tracking lost: go back slowly to the scanned area"))
         return out
     if mode == "markers":
         n = int(info.get("n_tags", 0) or 0)
@@ -330,13 +330,14 @@ class ScanSession:
         self._thread.start()
         if not self._ready.wait(timeout):
             self._abort_start()
-            raise ApiError(500, f"the live processing did not start within {timeout:.0f} s",
-                           "the PC may be overloaded; close other programs and try again")
+            raise ApiError(500, f"The live preview did not start within {timeout:.0f} s.",
+                           "The computer may be busy: close other programs and try again.")
         if self._start_error is not None:
             err = self._start_error
             self._abort_start()
-            raise ApiError(500, f"the live processing could not start: {err}",
-                           "check the calibration (ohs calibrate ...) and that Open3D is installed (pip install -e .[fusion])")
+            log.warning("the live processing could not start: %s", err)
+            raise ApiError(500, "The live preview could not start.",
+                           "Check the calibration in Setup. You can still record and make the mesh afterwards.")
         try:
             self._start_recording()
         except BaseException:
@@ -356,8 +357,9 @@ class ScanSession:
         except Exception as e:
             safe_call("switching the emitters off", self._emitters_off)
             self._abort_start()
-            raise ApiError(500, f"cannot create the recording folder {self.rec_dir}: {e}",
-                           "check that the projects folder is writable and the disk is not full") from e
+            log.warning("cannot create the recording folder %s: %s", self.rec_dir, e)
+            raise ApiError(500, "The scan could not start: its recording folder could not be made.",
+                           "Check the free disk space, then start the scan again.") from e
         with self._lock:
             self._recorder = rec
             self._state = "scanning"
@@ -390,7 +392,7 @@ class ScanSession:
             if self._state == "paused":
                 return
             if self._state != "scanning":
-                raise ApiError(409, "no scan is running", "start a scan first")
+                raise ApiError(409, "No scan is running.", "Start a scan first.")
             self._state = "paused"
             if self._t_active is not None:
                 self._active_s += time.monotonic() - self._t_active
@@ -405,7 +407,7 @@ class ScanSession:
             if self._state == "scanning":
                 return
             if self._state != "paused":
-                raise ApiError(409, "no paused scan", "start a scan first")
+                raise ApiError(409, "No scan is paused.", "Start a scan first.")
         safe_call("switching the emitters on", self._emitters_on)
         with self._lock:
             self._state = "scanning"
@@ -417,19 +419,19 @@ class ScanSession:
         """Drop the last ``seconds`` from the live model and record a cut (see the module docstring)."""
         s = float(seconds)
         if not (np.isfinite(s) and s > 0):
-            raise ApiError(400, f"rewind needs a positive number of seconds, got {seconds!r}", 'send {"seconds": 2.0}')
+            raise ApiError(400, "Rewind needs a number of seconds above 0.", "Pick how far to rewind, for example 2 s.")
         with self._lock:
             if self._state not in ("scanning", "paused"):
-                raise ApiError(409, "no scan is running", "start a scan first")
+                raise ApiError(409, "No scan is running.", "Start a scan first.")
         if self._thread is None or not self._thread.is_alive() or self.disabled:
-            raise ApiError(409, "the live processing is not running, so there is no live model to rewind",
-                           "stop the scan; the recording is complete and can be processed")
+            raise ApiError(409, "The live preview is not running, so there is nothing to rewind.",
+                           "Stop the scan: the recording is complete, and its mesh can be made.")
         fut: Future = Future()
         self._cmds.put(("rewind", s, fut))
         try:
             return fut.result(timeout=timeout)
         except TimeoutError:
-            raise ApiError(503, "the rewind did not finish in time", "try again in a moment") from None
+            raise ApiError(503, "The rewind did not finish in time.", "Try again in a moment.") from None
 
     def mark_stopping(self) -> None:
         """Enter ``stopping`` (no more frames are recorded); :meth:`stop` does the rest."""
@@ -542,12 +544,13 @@ class ScanSession:
         self._ready.set()
         try:
             self._loop(pipe, tools)
-        except Exception as e:  # keep the recording going; tell the user
+        except Exception:  # keep the recording going; tell the user
             log.exception("live processing stopped")
             self.disabled = True
             self._stats = {**self._stats, "tracking": _idle_tracking(
-                f"Live processing stopped ({e}); the recording continues")}
-            self._notify("error", f"Live processing stopped ({e}). The recording continues; stop the scan and process it.")
+                "The live preview stopped; the recording continues")}
+            self._notify("error", "The live preview stopped. The recording continues: stop the scan, then make the "
+                                  "mesh.")
         finally:
             self._fail_commands("the scan stopped")
             safe_call("closing the live pipeline", pipe.close)
@@ -590,13 +593,14 @@ class ScanSession:
         self._errors += 1
         if self._errors == 1:
             log.exception("live processing failed on frame %d", frame.index)
-            self._notify("warn", f"Live processing error: {e}")
+            self._notify("warn", "The live preview could not use a frame. The recording continues.")
         if self._errors >= MAX_CONSECUTIVE_ERRORS and not self.disabled:
             self.disabled = True
+            log.error("live processing disabled after %d errors in a row: %s", self._errors, e)
             self._stats = {**self._stats, "tracking": _idle_tracking(
-                f"Live processing disabled after repeated errors ({e}); the recording continues")}
-            self._notify("error", f"Live processing disabled after {self._errors} errors in a row ({e}). "
-                                  "The recording continues; stop the scan and process it.")
+                "The live preview stopped after repeated errors; the recording continues")}
+            self._notify("error", f"The live preview stopped after {self._errors} errors in a row. The recording "
+                                  "continues: stop the scan, then make the mesh.")
 
     def _view(self, tools: ViewTools, frame: Any, t_recv: float) -> None:
         """Preview / distance only (not recorded, paused, starting or processing disabled)."""
@@ -751,8 +755,8 @@ class ScanSession:
                         raise ValueError(kind)
                 except BaseException as e:
                     log.exception("%s failed", kind)
-                    fut.set_exception(e if isinstance(e, ApiError) else ApiError(500, f"{kind} failed: {e}",
-                                                                                 "see the log; the recording is not affected"))
+                    fut.set_exception(e if isinstance(e, ApiError) else ApiError(
+                        500, "The rewind failed.", "The recording is not affected. Go on scanning, or try again."))
 
     def _fail_commands(self, why: str) -> None:
         while True:
@@ -761,7 +765,7 @@ class ScanSession:
             except queue.Empty:
                 return
             if fut.set_running_or_notify_cancel():
-                fut.set_exception(ApiError(409, f"cannot rewind: {why}", "start a new scan"))
+                fut.set_exception(ApiError(409, f"Cannot rewind: {why}.", "Start a new scan."))
 
     def _do_rewind(self, pipe: Any, seconds: float) -> dict:
         from ohs.types import Event

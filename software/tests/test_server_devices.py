@@ -137,7 +137,7 @@ def test_camera_without_pico_connects_with_a_warning(tmp_path, sim_rec):
     try:
         code, dev = st.connect("camera")
         assert code == 200 and dev["connected"] and dev["pico"]["connected"] is False and dev["pico"]["firmware"] is None
-        assert any("No Pico" in w and "firmware" in w for w in dev["warnings"])
+        assert any("control board (Pico) was not found" in w and "firmware" in w for w in dev["warnings"])
         assert dev["imu_stream"] is False and dev["pico"]["error"]
         assert st.set_emitters({"vertical": 30})["pico"]["emitters"]["vertical"] == 0.0  # ignored, no error
         pid = st.projects.create("No Pico")["id"]

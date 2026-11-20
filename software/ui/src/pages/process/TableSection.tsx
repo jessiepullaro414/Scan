@@ -141,7 +141,7 @@ export function TableSection({
       setPhase({ kind: "shown", preview: r, version: m.version });
     } catch (e) {
       ours.current = false;
-      if (e instanceof ApiError && e.status === 422 && !/margin_mm|keep/.test(e.detail)) {
+      if (e instanceof ApiError && e.status === 422 && !/margin_mm|keep|the margin must be|areas to keep cannot be read/.test(e.detail)) {
         setPhase({ kind: "refused", detail: e.detail, hint: e.hint ?? null });
         return;
       }

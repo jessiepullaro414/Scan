@@ -28,6 +28,7 @@ requests = pytest.importorskip("requests")
 
 import ohs.measure.features as kf  # noqa: E402
 from ohs.inspect.gapflush import GAP_NOTE, measure_gap_flush  # noqa: E402
+from ohs.server.protocol import sentence  # noqa: E402
 from test_inspect_gapflush import _clicks, _plates  # noqa: E402
 from test_server_process_studio import T, base_url, env, err, faces_b64, get, post, run_job  # noqa: E402,F401
 
@@ -238,7 +239,7 @@ def test_bad_bodies_and_unknown_ids(plates):
     with pytest.raises(ValueError) as refused:
         engine(plates, a_, a_)
     r = err(post(b + "/flush", {"a": a_, "b": a_}), 422)
-    assert r["detail"] == str(refused.value)
+    assert r["detail"] == sentence(str(refused.value))
     err(post(b + "/flush", {"a": [a_[0], a_[1], a_[2] + 40.0], "b": b_}), 422, "mesh")
     err(post(b + "/seams", {"a": a_, "b": b_, "name": ""}), 422)
     err(post(b + "/seams", {"a": a_}), 422)

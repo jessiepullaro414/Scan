@@ -51,6 +51,7 @@ writers give text; no temporary file is needed) and nothing is written.
 """
 from __future__ import annotations
 
+import logging
 import re
 from typing import Any
 
@@ -58,13 +59,15 @@ from ohs.server.protocol import ApiError
 
 __all__ = ["CadExport", "CAD_FILES", "BOUNDARIES"]
 
+log = logging.getLogger(__name__)
+
 #: the files, by their name in the route: (their kind, the download name's ending, the media type)
 CAD_FILES = {"fits.step": ("step", "-fits.step", "model/step"),
              "fits.FCMacro": ("macro", "-fits.FCMacro", "text/x-python")}
 BOUNDARIES = ("rectangle", "outline")
-_NO_FITS = "this scan has no kept fits to export"
-_NO_FITS_HINT = ("fit planes, cylinders or holes in the viewer first (each fit is kept with the scan), "
-                 "then download them for CAD")
+_NO_FITS = "This scan has no fitted shapes to export yet."
+_NO_FITS_HINT = ("Fit planes, cylinders or holes in the viewer first (each one is kept with the scan), "
+                 "then download them for CAD.")
 
 
 _RELATIONS_NOTE = ("approved relations listed only (the default) are named in the notes and not applied to the geometry: "
@@ -203,8 +206,8 @@ class CadExport:
         from ohs.cad.shapes import cad_shapes
 
         if boundary not in BOUNDARIES:
-            raise ApiError(422, f"boundary must be 'rectangle' or 'outline', got {boundary!r}",
-                           "leave it out for each plane's rectangle, or give 'outline' for its real outline")
+            raise ApiError(422, "The page asked for a plane edge the app does not know.",
+                           "Pick the rectangle or the real outline for the planes, then download again.")
         project = self.st.projects.get(pid)  # 404 for an unknown project
         scan = self.st.projects.scan_entry(pid, sid)  # ... or scan
         doc, outlines, version = self.feats.snapshot(pid, sid, plane_outlines=boundary == "outline")
@@ -212,18 +215,17 @@ class CadExport:
         warnings = []
         stale = [f for f in features if version is None or f["mesh_version"] != version]
         for f in stale:
-            warnings.append(f"\"{f['name']}\" was fitted on an earlier mesh (version {f['mesh_version']}"
-                            + (f", the mesh is now version {version}" if version is not None else "")
-                            + "): exported as it was kept; fit it again for this mesh's numbers")
+            warnings.append(f"\"{f['name']}\" was fitted on an earlier mesh, before the last edit: exported as it "
+                            "was kept; fit it again for this mesh's numbers")
         frame = None
         state = kf.frame_state(doc["frame"], features)
         if state is not None and not state["readable"]:
-            warnings.append(f"{state['out_of_date_reasons'][0]}: the shapes are in the scan's own frame")
+            warnings.append(f"{state['out_of_date_reasons'][0]}: the shapes are along the scan's own axes")
         elif state is not None:
             frame = doc["frame"]
             if state["out_of_date"]:
-                warnings.append("the part's frame is out of date (" + "; ".join(state["out_of_date_reasons"])
-                                + "): used as it is; build it again for the fits as they are now")
+                warnings.append("the part's axes are out of date (" + "; ".join(state["out_of_date_reasons"])
+                                + "): used as they are; set them again for the fitted shapes as they are now")
         nominal = self._nominals(pid, sid, doc, measured_only, outlines)
         warnings.extend(nominal["warnings"])
         shapes = None
@@ -231,8 +233,9 @@ class CadExport:
             try:
                 shapes = cad_shapes(nominal["features"], outlines=nominal["outlines"], frame=frame, boundary=boundary)
             except ValueError as e:
-                raise ApiError(409, f"the kept fits cannot be exported: {e}",
-                               "fit that fit again, or delete it, then download again") from None
+                log.warning("kept fits of %s/%s cannot be exported: %s", pid, sid, e)
+                raise ApiError(409, "One of the fitted shapes cannot be made into a CAD shape.",
+                               "Fit it again, or delete it, then download again.") from None
             shapes.notes.extend(nominal["notes"])
         return {"project": project, "scan": scan, "features": features, "outlines": outlines, "shapes": shapes,
                 "boundary": boundary, "version": version, "stale": [f["id"] for f in stale], "warnings": warnings,
@@ -279,7 +282,7 @@ class CadExport:
                "macro_bytes": None, "filenames": self._filenames(r["scan"]), "mesh_version": r["version"],
                "reason": None, "nominal": r["nominal"]}
         if shapes is None:
-            out["reason"] = f"{_NO_FITS}: {_NO_FITS_HINT}"
+            out["reason"] = f"{_NO_FITS} {_NO_FITS_HINT}"
             return out
         kind = {PlaneFace: "plane", CylinderFace: "cylinder", HoleCircle: "hole", PointMark: "point"}
         for s in shapes.shapes:
@@ -303,7 +306,7 @@ class CadExport:
         name, 409 when the scan has no kept fits (or one that cannot be exported). With
         ``measured_only`` the approved values are left out: the measured shapes only."""
         if name not in CAD_FILES:
-            raise ApiError(404, f"no CAD file {name!r}", "available: " + ", ".join(CAD_FILES))
+            raise ApiError(404, "The app does not make this kind of CAD file.", "Download the STEP file or the FreeCAD macro.")
         r = self._read(pid, sid, boundary, measured_only)
         if r["shapes"] is None:
             raise ApiError(409, _NO_FITS, _NO_FITS_HINT)

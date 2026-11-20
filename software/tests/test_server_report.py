@@ -255,7 +255,7 @@ def test_pictures_are_embedded_and_bad_ones_refused_or_left_out(clean):
     text, p = page(e, pictures=[{"title": "Front", "data": b64(png)}, {"title": "Not a picture", "data": b64(b"hello there")}])
     assert "data:image/png;base64," + b64(png) in text
     assert "Not shown" in p.text("pictures") and "Not a picture" in p.text("pictures")
-    err(report(e, pictures=[{"title": "Broken", "data": "@@@ not base64 @@@"}]), 422, "base64")
+    err(report(e, pictures=[{"title": "Broken", "data": "@@@ not base64 @@@"}]), 422, "cannot be read")
     err(report(e, pictures=[{"title": f"View {i}", "data": b64(png)} for i in range(7)]), 422, "6")
     err(report(e, pictures=[{"title": "", "data": b64(png)}]), 422)
     rep = e["srv"].app.state.report

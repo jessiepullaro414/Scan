@@ -73,7 +73,7 @@ from typing import Any, AsyncIterator, Mapping
 import numpy as np
 
 import ohs.measure.features as kf
-from ohs.server.protocol import ApiError, jsonable
+from ohs.server.protocol import ApiError, jsonable, plain_reason, sentence
 
 __all__ = ["ReferenceManager", "MAX_BYTES", "DISPLAY_MAX_TRIANGLES", "STATES", "clean_file_name"]
 
@@ -91,8 +91,10 @@ DEFAULT_K = 2.0
 JOB_KIND = "reference_align"
 #: the state byte of each vertex in deviation.bin, by its value
 STATES = ["compared", "not measured", "not on the reference"]
-_HINT_FORMAT = "export the part from CAD as STL (binary), OBJ or PLY, and add that file"
-_HINT_FILE = "check or restore the file (the scan's mesh and recording are untouched), or delete it to start again"
+_HINT_FORMAT = "Export the part from CAD as STL (binary), OBJ or PLY, and add that file."
+_HINT_FILE = ("The scan's mesh and recording are untouched. Restore the file comparison.json in the scan's folder "
+              "from a backup, or delete it to compare again.")
+_GONE = "Reload the page to see the project's CAD models."
 
 
 def _bad(detail: str, hint: str) -> ApiError:
@@ -104,13 +106,14 @@ def clean_file_name(name: Any) -> str:
     ``../../x.stl``, ``C:\\x.stl`` and ``/x.stl`` all give ``x.stl``), spaces collapsed, no control characters.
     422 for an empty name or one that is only dots."""
     if not isinstance(name, str) or not name.strip():
-        raise _bad("the file's name is missing", "send it as ?name=part.stl: its extension says the format")
+        raise _bad("The file has no name, so its format is not known.", _HINT_FORMAT)
     base = re.split(r"[\\/:]", name)[-1]
     base = " ".join("".join(ch for ch in base if ch.isprintable()).split())
     if not base.strip("."):
-        raise _bad(f"{name!r} is not a file name", "send the file's own name, e.g. ?name=part.stl")
+        raise _bad("This is not a file name.", "Pick the file itself, for example part.stl.")
     if len(base) > NAME_MAX:
-        raise _bad(f"the file's name is too long ({len(base)} characters)", f"use at most {NAME_MAX} characters")
+        raise _bad(f"The file's name is too long ({len(base)} characters).",
+                   f"Rename it to at most {NAME_MAX} characters, then add it again.")
     return base
 
 
@@ -181,10 +184,13 @@ class ReferenceManager:
         except FileNotFoundError:
             return []
         except (OSError, ValueError) as e:
-            raise ApiError(500, f"the project's list of references cannot be read: {e}", f"check or restore {p}") from None
+            log.warning("the project's list of references %s cannot be read: %s", p, e)
+            raise ApiError(500, "The project's list of CAD models cannot be read.",
+                           f"Restore {p} from a backup; the scans are untouched.") from None
         refs = data.get("references") if isinstance(data, dict) else None
         if not isinstance(refs, list):
-            raise ApiError(500, "the project's list of references has no list of references", f"check or restore {p}")
+            raise ApiError(500, "The project's list of CAD models cannot be read.",
+                           f"Restore {p} from a backup; the scans are untouched.")
         return [r for r in refs if isinstance(r, dict) and isinstance(r.get("id"), str)]
 
     @staticmethod
@@ -201,7 +207,7 @@ class ReferenceManager:
         for r in self._read_index(folder):
             if r["id"] == rid:
                 return folder, r
-        raise ApiError(404, f"no reference {rid!r} in this project", "read the list again (GET .../references)")
+        raise ApiError(404, "This CAD model is no longer in the project.", _GONE)
 
     def _base_model(self, pid: str, rid: str, scale: float = 1.0):
         """The reference as the engine reads it (cached per file and scale): its numbers times ``scale``."""
@@ -212,8 +218,8 @@ class ReferenceManager:
         try:
             mtime = path.stat().st_mtime_ns
         except FileNotFoundError:
-            raise ApiError(404, f"the file of the reference \"{rec['name']}\" is missing",
-                           "remove the reference and add the file again") from None
+            raise ApiError(404, f"The file of the CAD model \"{rec['name']}\" is missing.",
+                           "Remove the CAD model and add the file again.") from None
         key = (pid, rid, mtime, float(scale))
         with self._guard:
             m = self._models.get(key)
@@ -226,7 +232,8 @@ class ReferenceManager:
             try:
                 base = read_reference(path, name=rec["name"])
             except ValueError as e:
-                raise ApiError(409, str(e), "remove the reference and add the file again") from None
+                raise ApiError(409, plain_reason(e, "The CAD model's file cannot be read."),
+                               "Remove the CAD model and add the file again.") from None
             with self._guard:
                 self._models[base_key] = base
         m = base if scale == 1.0 else base.apply_units(scale)
@@ -280,7 +287,7 @@ class ReferenceManager:
             try:  # the engine says it first, about the extension, before it looks for the file
                 read_reference(Path(f"never-read{ext}"), name=clean)
             except ValueError as e:
-                raise _bad(str(e), _HINT_FORMAT) from None
+                raise _bad(plain_reason(e, "This file cannot be read as a CAD model."), _HINT_FORMAT) from None
         return clean, ext
 
     async def upload(self, pid: str, name: Any, length: str | None, chunks: AsyncIterator[bytes]) -> dict:
@@ -304,11 +311,11 @@ class ReferenceManager:
                 continue
             buf += c
         if too_big:
-            raise ApiError(413, f"the file is larger than {limit / 2**20:g} MB, the most a reference may be",
-                           "export it with coarser triangles (a chord tolerance of 0.01 mm is plenty), as binary STL "
-                           "rather than ASCII")
+            raise ApiError(413, f"The file is larger than {limit / 2**20:g} MB, the most a CAD model may be.",
+                           "Export it with coarser triangles (a chord tolerance of 0.01 mm is plenty), as binary STL "
+                           "rather than ASCII.")
         if not buf:
-            raise _bad("the file is empty", "send the file's bytes as the request body")
+            raise _bad("The file is empty.", _HINT_FORMAT)
         return await asyncio.to_thread(self._add, pid, folder, clean, ext, bytes(buf))
 
     def _add(self, pid: str, folder: Path, clean: str, ext: str, data: bytes) -> dict:
@@ -323,7 +330,7 @@ class ReferenceManager:
             try:
                 ref = read_reference(tmp, name=clean)
             except ValueError as e:
-                raise _bad(str(e), _HINT_FORMAT) from None
+                raise _bad(plain_reason(e, "This file cannot be read as a CAD model."), _HINT_FORMAT) from None
             os.replace(tmp, final)
             display = self._write_display(folder, rid, ref)
         except BaseException:
@@ -380,9 +387,9 @@ class ReferenceManager:
         """``PATCH .../references/{rid}``: a new name (its label only; the format stays as it was read)."""
         n = " ".join(str(name or "").split())
         if not n:
-            raise _bad("the name is empty", "type a name for the reference")
+            raise _bad("The name is empty.", "Type a name for the CAD model.")
         if len(n) > NAME_MAX:
-            raise _bad(f"the name is too long ({len(n)} characters)", f"use at most {NAME_MAX} characters")
+            raise _bad(f"The name is too long ({len(n)} characters).", f"Use at most {NAME_MAX} characters.")
         folder = self._folder(pid)
         with self._lock("index", pid):
             refs = self._read_index(folder)
@@ -391,7 +398,7 @@ class ReferenceManager:
                     r["name"] = n
                     self._write_index(folder, refs)
                     return self._ref_view(r)
-        raise ApiError(404, f"no reference {rid!r} in this project", "read the list again (GET .../references)")
+        raise ApiError(404, "This CAD model is no longer in the project.", _GONE)
 
     def delete(self, pid: str, rid: str) -> None:
         """``DELETE .../references/{rid}``: its files and the comparisons of the project's scans that use it."""
@@ -400,7 +407,7 @@ class ReferenceManager:
             refs = self._read_index(folder)
             rec = next((r for r in refs if r["id"] == rid), None)
             if rec is None:
-                raise ApiError(404, f"no reference {rid!r} in this project", "read the list again (GET .../references)")
+                raise ApiError(404, "This CAD model is no longer in the project.", _GONE)
             self._write_index(folder, [r for r in refs if r["id"] != rid])
             for p in folder.iterdir():
                 if p.name.startswith(rid + "."):
@@ -429,14 +436,17 @@ class ReferenceManager:
         except FileNotFoundError:
             if missing_ok:
                 return None
-            raise ApiError(404, "this scan has no comparison with a reference",
-                           "start one: POST .../comparison with a reference of the project") from None
+            raise ApiError(404, "This scan is not compared with a CAD model yet.",
+                           "Pick one of the project's CAD models to compare it with.") from None
         except (OSError, ValueError) as e:
-            raise ApiError(500, f"the comparison of scan {sid} cannot be read: {e}", _HINT_FILE) from None
+            log.warning("the comparison of %s/%s cannot be read: %s", pid, sid, e)
+            raise ApiError(500, "This scan's comparison with the CAD model cannot be read.", _HINT_FILE) from None
         if not isinstance(doc, dict) or not isinstance(doc.get("reference_id"), str) or not isinstance(doc.get("units"), dict):
-            raise ApiError(500, f"the comparison of scan {sid} is not one this version can read", _HINT_FILE)
+            raise ApiError(500, "This scan's comparison with the CAD model is not one this version of the app can "
+                                "read.", _HINT_FILE)
         if int(doc.get("format_version", 0)) > FORMAT_VERSION:
-            raise ApiError(409, f"the comparison of scan {sid} was written by a later version", "update the app, or remove it")
+            raise ApiError(409, "This scan's comparison with the CAD model was made by a later version of the app.",
+                           "Update the app, or remove the comparison.")
         return doc
 
     def _load(self, pid: str, sid: str) -> dict:
@@ -478,8 +488,8 @@ class ReferenceManager:
     @staticmethod
     def _require_ready(doc: dict) -> None:
         if doc["units"].get("status") == "pending":
-            raise ApiError(409, f"the reference's units are not settled: {doc['units'].get('message')}",
-                           "apply the factor or keep the units first (POST .../comparison/units)")
+            raise ApiError(409, f"The CAD model's units are not settled yet. {sentence(doc['units'].get('message'))}",
+                           "Apply the factor, or keep the units as they are, first.")
 
     # ------------------------------------------------------------------ comparison routes
     def get(self, pid: str, sid: str) -> dict:
@@ -501,7 +511,8 @@ class ReferenceManager:
         try:
             finding = check_units(base.size_mm, scan.part_size_mm())
         except ValueError as e:
-            raise _bad(str(e), "check the scan and the reference") from None
+            raise _bad(plain_reason(e, "The scan and the CAD model cannot be compared."),
+                       "Check that the scan has a mesh and that the CAD model is the right part.") from None
         now = kf.now()
         doc = {"format_version": FORMAT_VERSION, "reference_id": rid, "units": finding.to_dict(), "scale": 1.0,
                "alignment": None, "aligned_mesh_version": None,
@@ -524,16 +535,18 @@ class ReferenceManager:
             if action == "apply":
                 f = factor if factor is not None else doc["units"].get("factor")
                 if f is None:
-                    raise _bad("there is no unit factor to apply: the sizes fit no unit", "give the factor, or keep the units")
+                    raise _bad("There is no unit factor to apply: the sizes fit no unit.",
+                               "Type the factor, or keep the units as they are.")
                 try:
                     m = base.apply_units(float(f))
                 except ValueError as e:
-                    raise _bad(str(e), "give a factor above 0") from None
+                    raise _bad(plain_reason(e, "This factor cannot be used."), "Give a factor above 0.") from None
                 doc["units"], doc["scale"] = m.units.to_dict(), float(f)
             elif action == "keep":
                 doc["units"], doc["scale"] = base.keep_units().units.to_dict(), 1.0
             else:
-                raise _bad(f"action must be apply or keep, got {action!r}", "send {\"action\": \"apply\"} or \"keep\"")
+                raise _bad("The page asked for something the units cannot do.",
+                           "Apply the factor, or keep the units as they are.")
             doc["alignment"], doc["aligned_mesh_version"] = None, None
             self._save(pid, sid, doc)
             with self._guard:
@@ -564,45 +577,52 @@ class ReferenceManager:
         doc = self._load(pid, sid)
         self._require_ready(doc)
         if method not in ("shape", "points", "datums"):
-            raise _bad(f"method must be shape, points or datums, got {method!r}", "see APP_API.md, \"References\"")
+            raise _bad("The app does not know this way of aligning.",
+                       "Align from the shape, on the part's axes, or from picked points.")
         rid, scale = doc["reference_id"], float(doc.get("scale", 1.0))
         if self._aligning_job(pid, sid) is not None:
-            raise ApiError(409, "this scan is being aligned with the reference already", "wait for it, or cancel it")
+            raise ApiError(409, "This scan is being aligned with the CAD model already.", "Wait for it, or cancel it.")
         sp = rp = None
         if method == "points":
             if not pairs or len(pairs) < 3:
-                raise _bad(f"{len(pairs or [])} pair(s) of points are too few",
-                           "pick at least three matching points on the scan and on the reference")
+                raise _bad(f"{len(pairs or [])} {'pair' if len(pairs or []) == 1 else 'pairs'} of matching points "
+                           f"{'is' if len(pairs or []) == 1 else 'are'} too few.",
+                           "Pick at least three matching points on the scan and on the CAD model.")
             sp = [p["scan"] for p in pairs]
             rp = [p["reference"] for p in pairs]
             try:
                 pose_from_point_pairs(sp, rp)
             except ValueError as e:
-                raise _bad(f"the picked points do not give a pose: {e}", "pick three or more points that span a triangle") from None
+                log.info("picked points give no pose: %s", e)
+                raise _bad("The picked points cannot place the scan: they may lie on a line.",
+                           "Pick three or more points that span a triangle.") from None
         if method == "datums":
             frame, state = self._frame(pid, sid)
             if state is None:
-                raise _bad("this scan has no part's frame (coordinate system) to align on",
-                           "build the coordinate system from three kept fits first, or align from the shape")
+                raise _bad("The part's axes are not set for this scan, so there is nothing to align on.",
+                           "Set the part's axes from three fitted shapes first, or align from the shape.")
             if not state["readable"]:
-                raise ApiError(409, state["out_of_date_reasons"][0], "build the coordinate system again, or remove it")
+                raise ApiError(409, state["out_of_date_reasons"][0], "Set the part's axes again, or remove them.")
             if state["out_of_date"]:
-                raise ApiError(409, "the part's frame is out of date (" + "; ".join(state["out_of_date_reasons"]) + ")",
-                               "build the coordinate system again for the fits as they are now")
+                raise ApiError(409, "The part's axes are out of date (" + "; ".join(state["out_of_date_reasons"]) + ").",
+                               "Set the part's axes again for the shapes as they are now.")
             v = self._version(pid, sid)
             if v is None:
-                raise ApiError(409, "this scan has no mesh yet", "make its mesh first")
+                raise ApiError(409, "This scan has no mesh yet.", "Press Make mesh first.")
             try:
                 al = align_by_datums(frame)
             except ValueError as e:
-                raise ApiError(409, f"the part's frame cannot be used: {e}", "build the coordinate system again") from None
+                raise ApiError(409, plain_reason(e, "The part's axes cannot be used to align."),
+                               "Set the part's axes again.") from None
             return {"job": None, "comparison": self._keep(pid, sid, rid, scale, al, v)[1]}
         if method == "points" and not refine:
             v, scan = self._scan(pid, sid)
             try:
                 al = align_by_points(scan, self._base_model(pid, rid, scale), sp, rp, refine=False)
             except ValueError as e:
-                raise _bad(f"the picked points do not give a pose: {e}", "pick three or more points that span a triangle") from None
+                log.info("picked points give no pose: %s", e)
+                raise _bad("The picked points cannot place the scan: they may lie on a line.",
+                           "Pick three or more points that span a triangle.") from None
             return {"job": None, "comparison": self._keep(pid, sid, rid, scale, al, v)[1]}
         return {"job": self._submit(pid, sid, rid, scale, method, sp, rp).to_dict(), "comparison": None}
 
@@ -613,7 +633,7 @@ class ReferenceManager:
             ctx.progress(0.05, "Reading the scan", force=True)
             v, scan = self._scan(pid, sid)
             ctx.check()
-            ctx.progress(0.15, "Reading the reference", force=True)
+            ctx.progress(0.15, "Reading the CAD model", force=True)
             model = self._base_model(pid, rid, scale)
             frame = self._current_frame(pid, sid)
             ctx.check()
@@ -628,7 +648,7 @@ class ReferenceManager:
             kept, view = self._keep(pid, sid, rid, scale, al, v)
             return {"alignment": al.to_dict(), "kept": kept, "comparison": view, "mesh_version": v, "message": al.verdict}
 
-        return self.st.jobs.submit(JOB_KIND, run, message="Queued: align the scan with the reference",
+        return self.st.jobs.submit(JOB_KIND, run, message="Queued: align the scan with the CAD model",
                                    meta={"project_id": pid, "scan_id": sid, "reference_id": rid, "method": method})
 
     def deviation(self, pid: str, sid: str) -> tuple[dict, Any]:
@@ -640,8 +660,8 @@ class ReferenceManager:
         self._require_ready(doc)
         al = doc.get("alignment")
         if al is None:
-            raise ApiError(409, "the scan is not aligned with the reference yet",
-                           "align it first: from the shape, on the datums or from picked points")
+            raise ApiError(409, "The scan is not aligned with the CAD model yet.",
+                           "Align it first: from the shape, on the part's axes, or from picked points.")
         rid, scale = doc["reference_id"], float(doc.get("scale", 1.0))
         with self._lock("dev", pid, sid):  # a second request waits for the first one's result
             v, scan = self._scan(pid, sid)
@@ -656,13 +676,14 @@ class ReferenceManager:
             try:
                 dev = deviation_from_reference(scan, model, ra)
             except ValueError as e:
-                raise ApiError(409, f"the deviation cannot be worked out: {e}", "align the scan again") from None
+                raise ApiError(409, plain_reason(e, "The deviation from the CAD model cannot be worked out."),
+                               "Align the scan again.") from None
             changed = doc.get("aligned_mesh_version") != v
             info = jsonable({"version": v, "vertices": int(len(dev.V)), "reference_id": rid, "scale": scale,
                              "aligned_mesh_version": doc.get("aligned_mesh_version"), "mesh_changed": changed,
-                             "note": (f"The mesh has changed since the scan was aligned (version "
-                                      f"{doc.get('aligned_mesh_version')}, now {v}): the pose is kept, since the scan's "
-                                      "frame is the same, and the deviation is worked out again on the current mesh."
+                             "note": ("The mesh has changed since the scan was aligned with the CAD model. The "
+                                      "alignment is kept (the scan's axes are the same) and the deviation is worked "
+                                      "out again on the current mesh."
                                       if changed else None),
                              "layout": "float32 per vertex (mm, NaN where not compared), then one state byte per vertex",
                              "states": STATES, **dev.to_dict()})
@@ -681,14 +702,15 @@ class ReferenceManager:
         from ohs.inspect.reference import tolerance_summary
 
         if not (isinstance(tolerance_mm, (int, float)) and math.isfinite(tolerance_mm) and tolerance_mm > 0):
-            raise _bad(f"the tolerance must be above 0 mm, got {tolerance_mm!r}", "give the tolerance in mm, e.g. 0.3")
+            raise _bad("The tolerance must be a number of mm above 0.", "Give the tolerance in mm, for example 0.3.")
         info, dev = self.deviation(pid, sid)
         doc = self._load(pid, sid)
         kk = float(k) if k is not None else float(doc.get("k", DEFAULT_K))
         try:
             s = tolerance_summary(dev, float(tolerance_mm), k=kk)
         except ValueError as e:
-            raise _bad(str(e), "give the tolerance in mm, e.g. 0.3") from None
+            raise _bad(plain_reason(e, "The comparison cannot be worked out at this tolerance."),
+                       "Give the tolerance in mm, for example 0.3.") from None
         Tinv = np.linalg.inv(np.asarray(doc["alignment"]["T"], dtype=np.float64))
         out = s.to_dict()
         regions = []

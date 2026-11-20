@@ -8,7 +8,7 @@ This is the contract between the backend (`software/ohs/server/`, FastAPI) and t
 - JSON uses snake_case.
 - Lengths are in **mm**, times in seconds, timestamps in ISO 8601.
 
-**Errors:** 4xx/5xx responses carry JSON `{"detail": "what happened", "hint": "what to do"}`. `hint` is optional.
+**Errors:** 4xx/5xx responses carry JSON `{"detail": "what happened", "hint": "what to do"}`. `hint` is optional. Each is a full sentence in plain words (a capital, a full stop: `ohs.server.protocol.sentence`); neither carries an exception's words, an id, a route or a command line (UX_PLAN U9, guarded by `tests/test_server_error_words.py`). The cause of an unexpected error is in the log. A failed job's `error` is its refusal's detail and hint as two sentences, or, for an unexpected error, fixed words for its kind (`ohs.server.jobs.FAILURE_TEXT`).
 
 ## Types
 
@@ -427,7 +427,7 @@ Everything in the M2 section is implemented as written, with these clarification
 - `dv_px` is rounded to 0.001 px.
 - `"unknown"` also covers a camera image size that differs from the calibration.
 - The result is recorded for the target: `sim` for the simulator, else `device`.
-- The drift warning reads "The cameras may have moved since the calibration … Run the 2-minute check (Setup, step 7)."
+- The drift warning reads "The cameras may have moved since the calibration … Run the 2-minute check in Setup."
 
 **Calibration session**
 - **Views:**
@@ -457,7 +457,7 @@ Everything in the M2 section is implemented as written, with these clarification
   - On the simulator, `imu/start` restarts the script and drops the one frame rendered before the restart.
 - **Emitters:**
   - The kind's profile is on while capturing. The emitters are off while solving and while the result is shown, on again after `continue` or a failed solve, and off after save, cancel or a lost device.
-  - `CalibSession.emitters` reads, for example, "Line lasers on: Class 3R, never look into the beams", "Emitters off: ambient light only", "No Pico: the line lasers stay off, …" or "Simulated line lasers on".
+  - `CalibSession.emitters` reads, for example, "Line lasers on: Class 3R, never look into the beams", "Lasers and dots off: room light only", "No control board (Pico): the line lasers stay off, …" or "Simulated line lasers on".
 - **More 409 rules:**
   - lasers, imu and check also need the camera's image size to match the target's stereo calibration;
   - connect is refused during a calibration, and disconnect cancels it first (the views are kept);
@@ -630,7 +630,7 @@ type SigmaStats = {                   // each vertex's sigma (1 standard deviati
   not_measured: number;               // share nothing measured (sigma 50 mm: filled holes)
 };
 type EditEntry = { id: string; op: MeshOp; params: Record<string, unknown>;
-                   label: string;               // "Fill holes up to 12 mm"
+                   label: string;               // "Fill holes up to 12 mm around (about Ø 4 mm)"
                    created: string; triangles_after: number; ms: number };
 type StageInfo = { state: StageState; summary: string | null; when: string | null; job_id: string | null };
 type ProcessState = {
@@ -766,7 +766,7 @@ Everything in the M3 phase 2 section is implemented as written, with these clari
 - **The base keeps every piece.** The M1 filter that dropped pieces under 1 % of the triangles is no longer part of tracking, so removing floaters is an edit you can see and undo. The Default recipe removes the same pieces (see Recipes).
 - `POST .../process/track`: `quality` defaults to `"standard"`; anything but `"standard"`, `"best"`, `"preview"` and `"full"` is 422.
 - `POST .../process/straighten`: the body is optional. It runs `ohs.track.posegraph.straighten_trajectory` on the track stage's trajectory, then fuses at the corrected poses (`process_recording(poses=...)`). The stage is `skipped`, and the base and edits stay, when:
-  - the engine's loop closure is missing ("Straightening is not available in this version of the engine, so the scan was left as it is") or fails ("Straightening failed (…), so the scan was left as it is");
+  - the engine's loop closure is missing ("Straightening is not available in this version of the engine, so the scan was left as it is") or fails ("Straightening could not finish, so the scan was left as it is"; the cause is in the log);
   - it accepts no loop;
   - its loops show that the passes already line up (report `changed: false`).
 
@@ -803,8 +803,8 @@ Everything in the M3 phase 2 section is implemented as written, with these clari
   - *Since H4* the scan's summary in `project.json` (`Scan.result.report`, which the project page's scan list reads) keeps it in short: `health_status: {state: HealthState, part: HealthPart | null, reason: string}`, written with the rest of the summary when a stage gives the scan a new base. A scan whose summary was written before H4 has none (nothing is shown for it); the full status stays in `result/report.json`.
 - **Scan status:** stage jobs and recipe `all` jobs set the scan to `processing`. Afterwards it is `processed` when it has a mesh, else `failed` (with `error`) or `recorded`. Edit jobs leave the status alone.
 - **Make mesh** (`POST .../process`) is the Default recipe with scope `all` at the requested quality. Its job kind (`process_scan`), result `{project_id, scan_id, scan, message: "Mesh ready"}` and statuses are M1's.
-  - Second Make mesh on the same scan: 409 "this scan is already being processed".
-  - Any other processing job running on the scan: 409 "this scan is busy (…)".
+  - Second Make mesh on the same scan: 409 "This scan's mesh is already being made."
+  - Any other processing job running on the scan: 409 "This scan is busy: …" (hint "Wait for it to finish, or press Cancel.").
 
 **Jobs**
 - Kinds: `process_track`, `process_straighten`, `process_fuse`, `process_spacetime`, `process_refine`, `mesh_edit`, `process_recipe` (the contract leaves the recipe kind open) and `process_scan`.
@@ -817,7 +817,7 @@ Everything in the M3 phase 2 section is implemented as written, with these clari
   - stage jobs and recipe `all`: `{project_id, scan_id, scan, message}`, where `message` is the stage's summary;
   - `mesh_edit`: `{project_id, scan_id, edit: EditEntry, message}`;
   - recipe `edits`: `{project_id, scan_id, recipe_id, message}`.
-- Progress messages read like "Tracking: frame 12 of 696 on the GPU (…)", "Fill holes up to 12 mm: Filling hole 3 of 40" or "Simplify to 200,000 triangles: Simplifying: 412,000 triangles".
+- Progress messages read like "Tracking: frame 12 of 696 on the GPU (…)", "Fill holes up to 12 mm around (about Ø 4 mm): Filling hole 3 of 40" or "Simplify to 200,000 triangles: Simplifying: 412,000 triangles".
 
 **Edits**
 - `params` in an `EditEntry` are normalised (defaults filled in). For `delete_faces` / `keep_faces` they are `{"count": n}`: the indices themselves are kept in `selections/`.
@@ -827,7 +827,7 @@ Everything in the M3 phase 2 section is implemented as written, with these clari
 - Labels:
   - "Remove loose pieces smaller than 5 mm or under 1 % of the mesh";
   - "Keep the largest piece only";
-  - "Fill holes up to 12 mm";
+  - "Fill holes up to 12 mm around (about Ø 4 mm)" (the size is the length round the hole; the diameter is that over π, UX_PLAN U13);
   - "Smooth (bilateral, 50 %, edges kept)";
   - "Simplify to 200,000 triangles", "Simplify to 50 % of the triangles" or "Simplify to within 0.02 mm";
   - "Delete 1,234 triangles" or "Keep 1,234 triangles".
@@ -860,7 +860,7 @@ Everything in the M3 phase 2 section is implemented as written, with these clari
   - An edit that would leave no triangle fails ("this would remove the whole mesh"), and the mesh stays as it was.
   - The redo steps are dropped only when the new edit succeeds.
   - An edit that matches nothing is still recorded, with a summary saying so, and its version counts.
-- Parameter errors are 422 naming the parameter, e.g. "fill_holes: max_hole_mm is missing", "remove_floaters: unknown parameter 'size'".
+- Parameter errors are 422 naming the edit and the setting in words, e.g. "Fill holes: the hole size is missing.", "Remove loose bits: the page sent a setting this edit does not have." (hint "Reload the page and try again."; the parameter's own name is in the log).
 - **Repeatable edits** (`MAINTENANCE_PLAN.md` F15, the owner's decision D9; the config's `[process] repeatable_edits`, off by default):
   - On, `remove_floaters`, `fill_holes`, `smooth`, `decimate` and `remove_table` give the same result for the same mesh whatever order it lists its vertices and faces in (the GPU path lists them in another order on every run): where two choices are equally good (which diagonals close a hole, which of two equal pieces is the largest, the order of equal-cost collapses) the vertices' positions decide, not their numbers (`ohs.mesh.order`). Nothing measured changes.
   - The server adds `by_position: true` to such an edit's `params` (`EditEntry.params`) when it runs it; it is not a parameter a client sends (it is a 422 like any unknown one). Undo, redo and a step rebuilt from the cache replay an edit as it recorded it, whatever the setting is now. Off, the params are exactly as before.
@@ -1471,7 +1471,7 @@ Rules:
   FreeCAD reads from the STEP file of the same shapes (to 1e-13 mm on the sample files); unlike FreeCAD's
   STEP import it shows the part's origin as a point. The group names are taken: a fit named "Planes" is
   "Planes (2)" in the macro (and "Planes" in the STEP file).
-- **No kept fits:** the files answer 409 ("this scan has no kept fits to export", with a hint), never an
+- **No kept fits:** the files answer 409 ("This scan has no fitted shapes to export yet.", with a hint), never an
   empty file; the summary answers 200 with `reason`, the counts 0 and the sizes null. A kept fit the writer
   cannot export (a damaged shape) is 409 with its words.
 - The same kept fits give the same bytes. Made on request in memory from what is read: nothing is written,
@@ -2210,8 +2210,8 @@ type PassCompare = {
 
 Rules:
 - **Start.** `continues` is checked before anything is made (404 unknown scan; 409 the first scan is recording or
-  processing, "has no mesh yet, so there is nothing to join a pass to", or its mesh "changed since its Check was
-  shown"; 422 a bad tolerance, an area "not in the Check answer", an area asked for twice, a pose without three
+  processing, "has no mesh yet, so there is nothing to join a second pass to", or its mesh "changed since its Scan
+  check was shown"; 422 a bad tolerance, an area "not in the Scan check", an area asked for twice, a pose without three
   numbers, `same_setup` not true or false). The areas are taken from the first scan's Check answer at that
   tolerance (`ohs.mesh.check.weak_areas`, as `POST .../check` gives it), and their faces' centres, normals and
   areas are kept next to the pass (`scans/<pass>/pass_areas.npz`), so an edit of the first scan later does not
@@ -2518,22 +2518,22 @@ type ProjectKeepResult = { project_id: string; to: KeepMode; freed_bytes: number
 | Method and path | Body | Returns |
 |---|---|---|
 | `GET /api/projects/{pid}/scans/{sid}/keep?mode=&thin=` | | `ScanKeepPlan`; writes nothing (no processing state is made or taken over, no cache file is rebuilt); 422 for an unknown mode, 404 for an unknown scan |
-| `POST /api/projects/{pid}/scans/{sid}/keep` | `{mode, confirm?: bool, thin?: bool}` | `ScanKeepResult`; 409 with the plan's refusal, 409 "removing this scan's recording cannot be undone" without `confirm` when the plan says `confirm`, 409 "N files could not be removed ... the scan still opens" when some files were held open |
+| `POST /api/projects/{pid}/scans/{sid}/keep` | `{mode, confirm?: bool, thin?: bool}` | `ScanKeepResult`; 409 with the plan's refusal, 409 "Removing this scan's recording cannot be undone." without `confirm` when the plan says `confirm`, 409 "N files could not be removed; ... the scan still opens." when some files were held open |
 | `GET /api/projects/{pid}/keep?mode=&thin=` | | `ProjectKeepPlan` |
 | `POST /api/projects/{pid}/keep` | `{mode, confirm?: bool, scans?: string[], thin?: bool}` | `ProjectKeepResult`: every scan that can move moves; the others are listed with the reason; 409 without `confirm` when one would lose its recording |
 
 ### Rules
 
-- **Busy:** a scan that is recording, processing (its status), or named by any queued or running job (its processing, an align, a merge, a comparison) is refused ("this scan is busy: ..."), and its cache is not touched.
-- **Only lighter:** `full` is never a target ("what was removed to free space cannot be brought back"); `standard` to `engineering` is refused; the same mode again is allowed when something came back (a mesh made again, new undo steps). A net of zero or less is refused: "nothing to free". `engineering` needs a recording (a merged scan: "no recording of its own", choose the result only); `standard` needs a mesh.
+- **Busy:** a scan that is recording, processing (its status), or named by any queued or running job (its processing, an align, a merge, a comparison) is refused ("This scan is busy: ..."), and its cache is not touched.
+- **Only lighter:** `full` is never a target ("What was removed to free space cannot be brought back from here."); `standard` to `engineering` is refused; the same mode again is allowed when something came back (a mesh made again, new undo steps). A net of zero or less is refused: "There is nothing to free: …". `engineering` needs a recording (a merged scan: "This scan has no recording of its own …", choose the result only); `standard` needs a mesh.
 - **Order:** the base is kept (`state.json`), the mode goes into `project.json`, then the recording (`frames.csv` first), the undo files, the stage folders. A file held open is retried for a second, then left: the answer is a 409 with what was freed, the scan opens, and freeing again removes the rest. Links and junctions are neither followed nor counted.
-- **After freeing:** edits, undo of new edits, fits, the Check answer, sections, the comparison, the laser map, the report and the downloads work as before; the deviation map starts again from the kept mesh; `process/trajectory.json` reads `result/trajectory.csv` when the track stage's is gone (its `raw` is then the result's path, `straightened` null). Refusals, in plain words: a stage on its own (Straighten, Fuse, Refine with lasers, Refine from the images) without its stage files: 409 "the stage files this needs were removed to free space" (`engineering`: "make the mesh again ... to rebuild them"); everything that reads the frames (Make mesh, Track, Straighten, Fuse, Refine from the images, a recipe with scope `all`) without the recording: 409 "this scan's recording was removed to free space ..."; Merge: 409 "... has no recording: it was removed to free space"; undo past the kept mesh: 409 "nothing to undo: the earlier steps were removed to free space". Align still works (from the meshes; without a recording, a markerless scan's tags are not looked for).
+- **After freeing:** edits, undo of new edits, fits, the Check answer, sections, the comparison, the laser map, the report and the downloads work as before; the deviation map starts again from the kept mesh; `process/trajectory.json` reads `result/trajectory.csv` when the track stage's is gone (its `raw` is then the result's path, `straightened` null). Refusals, in plain words: a stage on its own (Straighten, Fuse, Refine with lasers, Refine from the images) without its stage files: 409 "The stage files this needs were removed to free space …" (`engineering`: hint "Press Make mesh again (or run Track first) to make them again from the recording."); everything that reads the frames (Make mesh, Track, Straighten, Fuse, Refine from the images, a recipe with scope `all`) without the recording: 409 "This scan's recording was removed to free space …"; Merge: 409 "The scan "…" cannot be merged: its recording was removed to free space …"; undo past the kept mesh: 409 "There is nothing to undo: the earlier steps were removed to free space.". Align still works (from the meshes; without a recording, a markerless scan's tags are not looked for).
 - **Made again:** a scan freed to `engineering` and then processed has stage folders and undo history again. `keep` still says what was removed and `freed` when; what is on disk now is `GET .../disk` and `has_recording`.
 - **"Refine with lasers"** needs no recording: only the base stage's mesh and laser points (a merged scan can be refined).
 
 ### Only the frames Standard quality uses (R3)
 
-`thin=true` on the four routes above, with `mode=engineering` only (any other mode: 422 "keeping only the frames Standard quality uses goes with keeping the recording and the result"). It removes what `engineering` removes and the camera frames Standard quality skips: with the default `process.standard_frame_rate = 30`, every 2nd frame of a 60 frames a second recording. The mode stays `engineering` (every rule above for it holds: Make mesh, Track and the stages work as there).
+`thin=true` on the four routes above, with `mode=engineering` only (any other mode: 422 "Keeping only the frames Standard quality uses goes with keeping the recording and the result."). It removes what `engineering` removes and the camera frames Standard quality skips: with the default `process.standard_frame_rate = 30`, every 2nd frame of a 60 frames a second recording. The mode stays `engineering` (every rule above for it holds: Make mesh, Track and the stages work as there).
 
 - **What stays:** the frames Standard picks (positions `0, step, 2 step, ...`, the same as `ohs.app.process` picks them, cuts included) with their own `index`, `t_host` and file name; `imu.csv`, `events.csv`, `calibration.json` and `ground_truth/` byte for byte. `frames.csv` is written again with exactly those rows (the same bytes per row); `meta.json` gets `n_frames` and `thinned: {fps, fps_before, step, frames, frames_before}`; the scan entry gets the same as `thinned` (with `when`) and its `n_frames`, and its `freed` record `thin: true`.
 - **The promise:** Standard quality on the thinner recording (its rate is now about 30, so its step is 1) processes the same frames with the same motion sensor samples and gives the same mesh, every value bit for bit (every vertex's position, normal, sigma and looks, and every face); the camera path and the laser points are the same files byte for byte. `mesh.ply` may list the vertices in another order: two runs of the same full recording do too, on both compute paths. Best quality still runs, from the frames that stay, and then gives the Standard mesh; the dialog says beforehand what that costs (`loses` has `"best"`; the numbers are in `VALIDATION.md`, "Keeping only the frames Standard uses").

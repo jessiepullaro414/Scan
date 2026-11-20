@@ -178,8 +178,7 @@ def listing(manifest: dict | None, default_dir: str | Path, paper: str) -> dict:
 def file_path(manifest: dict | None, name: str) -> tuple[Path, str]:
     """``(path, media type)`` of a generated printable; 404 for anything else."""
     if not isinstance(name, str) or not NAME_RE.match(name) or not manifest or name not in manifest.get("files", []):
-        raise ApiError(404, f"no printable {name!r}", "generate the printables first, then use the names from "
-                                                      "GET /api/setup/printables")
+        raise ApiError(404, "This printable has not been made.", "Make the printables first, then download them.")
     folder = Path(manifest.get("dir") or "")
     path = (folder / name).resolve()
     try:
@@ -187,7 +186,7 @@ def file_path(manifest: dict | None, name: str) -> tuple[Path, str]:
     except OSError:
         inside = False
     if not inside or not path.is_file():
-        raise ApiError(404, f"{name} is no longer in {folder}", "generate the printables again")
+        raise ApiError(404, f"{name} is no longer in {folder}.", "Make the printables again.")
     return path, MEDIA_TYPES[path.suffix.lower()]
 
 

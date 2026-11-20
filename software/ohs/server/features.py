@@ -66,6 +66,7 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 import math
 import tempfile
 import threading
@@ -75,15 +76,20 @@ from typing import Any, Callable
 import numpy as np
 
 import ohs.measure.features as kf
-from ohs.server.protocol import ApiError
+from ohs.server.protocol import ApiError, plain_reason, sentence
 
 __all__ = ["FeatureManager"]
+
+log = logging.getLogger(__name__)
 
 GONE_MIN_MM = 2.0  # fit again: the surface under a saved click is gone when the nearest face is farther than this
 GONE_EDGES = 1.5  # ... and than this many of that face's longest edge
 TRUE_POSES_MM = 0.001  # given poses this close to the ground truth (every frame) are the true poses ...
 TRUE_POSES_DEG = 0.001  # ... and this close in rotation
-_HINT_FILE ="check or restore the file (the scan's mesh and recording are untouched), or delete it to start again"
+_HINT_FILE = ("The scan's mesh and recording are untouched. Restore the file features.json in the scan's folder "
+              "from a backup, or delete it to start the fitted shapes again.")
+#: an item the page asked for that is not in the scan's list (deleted meanwhile, or another window)
+_GONE = "Reload the page to see the scan's current list."
 
 
 class FeatureManager:
@@ -108,7 +114,8 @@ class FeatureManager:
         try:
             return kf.load(d)
         except ValueError as e:
-            raise ApiError(500, f"the kept features of scan {sid} cannot be read: {e}", _HINT_FILE) from None
+            log.warning("the kept features of %s/%s cannot be read: %s", pid, sid, e)
+            raise ApiError(500, "The fitted shapes and measurements of this scan cannot be read.", _HINT_FILE) from None
 
     def _save(self, pid: str, sid: str, doc: dict) -> dict:
         return kf.save(self.st.projects.scan_dir(pid, sid), doc)
@@ -145,7 +152,10 @@ class FeatureManager:
         try:
             out["relation"] = relate({"kind": a["kind"], "shape": a["shape"]}, {"kind": b["kind"], "shape": b["shape"]}).to_dict()
         except (ValueError, TypeError, KeyError) as e:
-            out["relation"], out["error"] = None, f"these two fits cannot be related: {e}"
+            why = plain_reason(e, "")
+            out["relation"] = None
+            out["error"] = sentence(f"These two fitted shapes cannot be related: {why}" if why else
+                                    "These two fitted shapes cannot be related.")
         return out
 
     def _set_view(self, doc: dict, version: int | None, poses: str = "tracked") -> dict:
@@ -271,9 +281,9 @@ class FeatureManager:
                 if it["id"] == item_id:
                     return key, it
         if any(m["id"] == item_id for m in doc["measurements"]):
-            raise ApiError(404, f"{item_id!r} is a two-point measurement: nominal values are for fits and relations",
-                           "pick a kept fit or a kept relation")
-        raise ApiError(404, f"no kept fit or relation {item_id!r}", "read the list again (GET .../features)")
+            raise ApiError(404, "A measurement between two points has no nominal value: only fitted shapes and "
+                                "relations have one.", "Pick a fitted shape or a relation.")
+        raise ApiError(404, "This fitted shape or relation is no longer in the scan.", _GONE)
 
     def _offers(self, doc: dict, key: str, item: dict, poses: str, value: str | None, with_bias: bool = False) -> list:
         """The engine's offers for a kept fit (``suggest_fit``, its own ``form``) or relation
@@ -283,15 +293,15 @@ class FeatureManager:
 
         if key == "features":
             if value not in (None, *kf.FIT_NOMINAL_VALUES):
-                raise ApiError(422, f"a fit's nominal value is its diameter or its radius, not {value!r}",
-                               "leave value out for the diameter, or give 'radius'")
+                raise ApiError(422, "A fitted shape's nominal value is its diameter or its radius.",
+                               "Pick the diameter or the radius.")
             return suggest_fit(item, poses=poses, value=value, with_bias=with_bias)
         if value is not None:
-            raise ApiError(422, "a relation's offers are for all its values: give no value",
-                           "leave value out")
+            raise ApiError(422, "A relation offers values for all its sizes at once.", _GONE)
         rel, warnings = self._related(doc, item)
         if rel is None:
-            raise ApiError(409, f"the two fits of {item['name']!r} cannot be related", "fit them again, or delete the relation")
+            raise ApiError(409, f"The two fitted shapes of \"{item['name']}\" cannot be related.",
+                           "Fit them again, or delete the relation.")
         return suggest_relation(rel, poses=poses, warnings=warnings, with_bias=with_bias)
 
     def _nominal_answer(self, doc: dict, key: str, item: dict, poses: tuple[str, str], value: str | None,
@@ -332,28 +342,28 @@ class FeatureManager:
         self._dir(pid, sid)
         poses = self.poses(pid, sid)
         if source not in kf.NOMINAL_SOURCES:
-            raise ApiError(422, f"source must be 'suggested' or 'entered', got {source!r}",
-                           "'suggested' for the value offered, 'entered' for one typed")
+            raise ApiError(422, "The page did not say whether the value was offered or typed.", _GONE)
         with self._lock(pid, sid):
             doc = self._load(pid, sid)
             key, item = self._nominal_item(doc, item_id)
             if move is not None:
                 self._check_move(key, move)
             if key == "features" and item["kind"] == "plane":
-                raise ApiError(422, "a plane alone has no size to approve", "approve a relation between two planes instead")
+                raise ApiError(422, "A plane alone has no size to approve.", "Approve a relation between two planes instead.")
             values = kf.FIT_NOMINAL_VALUES if key == "features" else kf.RELATION_NOMINAL_VALUES
             if value not in values:
-                raise ApiError(422, f"a {'fit' if key == 'features' else 'relation'}'s nominal value is one of "
-                                    f"{', '.join(values)}, not {value!r}", "pick one of those")
+                raise ApiError(422, f"A {'fitted shape' if key == 'features' else 'relation'} has no such size to "
+                                    "approve.", "Pick one of the sizes it shows.")
             try:
                 nominal = kf.check_nominal_value(value, nominal)
             except ValueError as e:
-                raise ApiError(422, str(e), "enter a number that makes sense for this value") from None
+                raise ApiError(422, plain_reason(e, "This number cannot be used for this size."),
+                               "Enter a number that makes sense for this size.") from None
             offers = self._offers(doc, key, item, poses[0], value if key == "features" else None, with_bias)
             offer = next((o for o in offers if o.value == value), None)
             if offer is None:
-                raise ApiError(422, f"the relation {item['name']!r} has no {value.replace('_', ' ')} to approve",
-                               "pick one of the values it shows")
+                raise ApiError(422, f"The relation \"{item['name']}\" has no {value.replace('_', ' ')} to approve.",
+                               "Pick one of the sizes it shows.")
             chk = self._check(doc, key, item, value, nominal, poses[0])
             word = chk.word
             if source == "suggested":
@@ -361,8 +371,8 @@ class FeatureManager:
                 if hit is None:
                     offered = ", ".join(f"{s.nominal:g}" for s in offer.suggestions) or "nothing"
                     raise ApiError(422, f"{nominal:g} is not offered now for this {value.replace('_', ' ')} "
-                                        f"(offered: {offered})",
-                                   "approve one of the values offered, or send it as 'entered'")
+                                        f"(offered: {offered}).",
+                                   "Approve one of the values offered, or type the value yourself.")
                 word = hit.word
             entry = {"value": value, "nominal": nominal, "unit": offer.unit, "word": word, "source": source,
                      "measured": float(offer.measured), "sigma": None if offer.sigma is None else float(offer.sigma),
@@ -379,11 +389,11 @@ class FeatureManager:
     @staticmethod
     def _check_move(key: str, move: str) -> None:
         if key != "relations":
-            raise ApiError(422, "a move is chosen for a relation: a fit alone does not move",
-                           "choose the move on a kept relation")
+            raise ApiError(422, "A move is chosen for a relation: a fitted shape alone does not move.",
+                           "Choose the move on a relation.")
         if move not in ("listed", *kf.MOVE_SHAPES):
-            raise ApiError(422, f"move must be 'listed', 'a' or 'b', got {move!r}",
-                           "'listed' keeps the relation in the notes only; 'a' or 'b' moves that fit to suit it")
+            raise ApiError(422, "The app does not know this kind of move.",
+                           "Choose to list the relation in the notes only, or to move one of its two shapes.")
 
     @staticmethod
     def _choose_move(doc: dict, rel: dict, move: str) -> None:
@@ -428,8 +438,7 @@ class FeatureManager:
             kept = item.get("nominals") or []
             rest = [n for n in kept if n["value"] != value]
             if len(rest) == len(kept):
-                raise ApiError(404, f"no approved {value.replace('_', ' ')} for {item['name']!r}",
-                               "read the list again (GET .../features)")
+                raise ApiError(404, f"\"{item['name']}\" has no approved {value.replace('_', ' ')} any more.", _GONE)
             if rest:
                 item["nominals"] = rest
             else:
@@ -443,7 +452,8 @@ class FeatureManager:
         try:
             return kf.clean_name(name)
         except ValueError as e:
-            raise ApiError(422, str(e), f"give a name of 1 to {kf.NAME_MAX} characters") from None
+            raise ApiError(422, plain_reason(e, "This name cannot be used."),
+                           f"Give a name of 1 to {kf.NAME_MAX} characters.") from None
 
     @staticmethod
     def _find(doc: dict, item_id: str) -> tuple[str, int]:
@@ -451,8 +461,7 @@ class FeatureManager:
             for i, it in enumerate(doc[key]):
                 if it["id"] == item_id:
                     return key, i
-        raise ApiError(404, f"no kept feature, measurement or relation {item_id!r}",
-                       "read the list again (GET .../features)")
+        raise ApiError(404, "This fitted shape, measurement or relation is no longer in the scan.", _GONE)
 
     @staticmethod
     def _record(fit: dict, seed: dict, fid: str, name: str, created: str) -> tuple[dict, dict | None]:
@@ -590,9 +599,10 @@ class FeatureManager:
             ids = {f["id"] for f in doc["features"]}
             for ref in (a, b):
                 if ref not in ids:
-                    raise ApiError(422, f"no kept fit {ref!r} to relate", "keep both fits first, then relate them")
+                    raise ApiError(422, "One of the two shapes to relate is not kept.",
+                                   "Keep both fitted shapes first, then relate them.")
             if a == b:
-                raise ApiError(422, "a fit cannot be related to itself", "pick two different fits")
+                raise ApiError(422, "A fitted shape cannot be related to itself.", "Pick two different shapes.")
             rec = {"id": kf.new_id("r"), "name": self._name(name, kf.next_name(doc["relations"], "Relation")),
                    "a": a, "b": b, "created": kf.now()}
             doc["relations"].append(rec)
@@ -610,9 +620,9 @@ class FeatureManager:
         ids = {f["id"] for f in doc["features"]}
         for ref in (a, b):
             if ref not in ids:
-                raise ApiError(404, f"no kept fit {ref!r}", "read the list again (GET .../features)")
+                raise ApiError(404, "One of these fitted shapes is no longer in the scan.", _GONE)
         if a == b:
-            raise ApiError(422, "a fit cannot be related to itself", "pick two different fits")
+            raise ApiError(422, "A fitted shape cannot be related to itself.", "Pick two different shapes.")
         out = self._relation_view({"a": a, "b": b}, doc["features"], version)
         return {"a": a, "b": b, "stale": out["stale"], "relation": out["relation"],
                 **({"error": out["error"]} if "error" in out else {})}
@@ -649,7 +659,7 @@ class FeatureManager:
             feat = next((f for f in doc["features"] if f["id"] == fid), None)
             faces = None if feat is None else kf.load_faces(self.st.projects.scan_dir(pid, sid), fid)
         if feat is None or faces is None:
-            raise ApiError(404, f"no kept region for {fid!r}", "read the list again (GET .../features)")
+            raise ApiError(404, "The surface this shape was fitted on is no longer kept.", _GONE)
         return {"id": fid, "mesh_version": int(feat["mesh_version"]), "n_faces": int(len(faces)),
                 "faces": base64.b64encode(faces.astype("<u4").tobytes()).decode("ascii")}
 
@@ -665,15 +675,15 @@ class FeatureManager:
         if out is not None and out["mesh_version"] != feat["mesh_version"]:
             out = None  # left over from another fit of it (a write that did not finish): not this fit's
         if feat is None:
-            raise ApiError(404, f"no kept fit {fid!r}", "read the list again (GET .../features)")
+            raise ApiError(404, "This fitted shape is no longer in the scan.", _GONE)
         ext = feat.get("extent")
         if out is None and ext is not None and ext.get("kind") == "hole" and ext.get("edge") is not None:
             out = {"kind": "hole", "edge": ext["edge"]}  # a short edge is kept in features.json itself
         if out is None:
-            why = ("a cylinder has no outline: its span and arc are in its extent" if ext is not None
-                   else "it was kept before outlines were measured")
-            raise ApiError(404, f"no outline kept for {fid!r}: {why}",
-                           "fit it again (POST .../features/refit)" if ext is None else "read its extent instead")
+            why = ("A cylinder has no outline: its length and its arc are shown instead." if ext is not None
+                   else "This shape was kept before outlines were measured, so it has none.")
+            raise ApiError(404, why, "Press Fit again to measure its outline." if ext is None else
+                           "Look at its length and arc instead.")
         out.pop("mesh_version", None)
         return {"id": fid, "mesh_version": int(feat["mesh_version"]), **out}
 
@@ -689,10 +699,10 @@ class FeatureManager:
             known = {f["id"] for f in doc["features"]}
             for i in ids:
                 if i not in known:
-                    raise ApiError(404, f"no kept fit {i!r}", "read the list again (GET .../features)")
+                    raise ApiError(404, "One of these fitted shapes is no longer in the scan.", _GONE)
         version = self._version(pid, sid)
         if version is None:
-            raise ApiError(409, "this scan has no mesh yet", "run Track (or Make mesh) first")
+            raise ApiError(409, "This scan has no mesh yet.", "Press Make mesh first.")
         todo = [f for f in doc["features"] if (f["mesh_version"] != version or f.get("extent") is None)
                 and (ids is None or f["id"] in ids)]
         done: dict[str, tuple[dict, dict]] = {}
@@ -714,8 +724,8 @@ class FeatureManager:
                     face = None
                 gone = self._gone(V, F, C, face, p)
                 if gone is not None:
-                    failed.append({"id": f["id"], "detail": gone,
-                                   "hint": "click the feature again on this mesh, or delete the kept fit"})
+                    failed.append({"id": f["id"], "detail": sentence(gone),
+                                   "hint": "Click the shape again on this mesh, or delete it."})
                     continue
                 try:
                     fit = self.st.processing.fit(pid, sid, f["kind"], face, seed["point"], seed["tolerance_mm"], v,
@@ -761,7 +771,8 @@ class FeatureManager:
         self._dir(pid, sid)
         version = self._version(pid, sid)
         if version is None:
-            raise ApiError(409, "this scan has no mesh yet", "run Track (or Make mesh), fit the features, then build the frame")
+            raise ApiError(409, "This scan has no mesh yet.",
+                           "Press Make mesh, fit the shapes, then set the part's axes.")
         with self._lock(pid, sid):
             doc = self._load(pid, sid)
             by_id = {f["id"]: f for f in doc["features"]}
@@ -775,18 +786,18 @@ class FeatureManager:
                     continue
                 f = by_id.get(ref)
                 if f is None:
-                    raise ApiError(422, f"no kept fit {ref!r} for the {role}",
-                                   "pick one of the kept fits (GET .../features), or keep the fit first")
+                    raise ApiError(422, f"The shape chosen for the {role} is not kept.",
+                                   "Pick one of the kept shapes, or keep the shape first.")
                 if f["mesh_version"] != version:
-                    raise ApiError(409, f"the {role} \"{f['name']}\" was fitted on an earlier mesh (version "
-                                        f"{f['mesh_version']}, the mesh is now version {version})",
-                                   "fit it again first (POST .../features/refit), then build the frame")
+                    raise ApiError(409, f"The {role} \"{f['name']}\" was fitted on an earlier mesh, before the "
+                                        "last edit.", "Press Fit again on it first, then set the part's axes.")
                 slots.append({"id": f["id"], "name": f["name"], "fit": f["shape"]})
             try:
                 frame = part_frame(*slots, axes=axes, flip_primary=flip_primary, flip_secondary=flip_secondary,
                                    secondary_zero=secondary_zero)
             except ValueError as e:
-                raise ApiError(422, str(e), "pick other fits for the slots, or change the options") from None
+                raise ApiError(422, plain_reason(e, "These shapes cannot set the part's axes."),
+                               "Pick other shapes, or change the options.") from None
             doc["frame"] = frame.to_dict()
             saved = self._save(pid, sid, doc)
         return self._frame_view(saved["frame"], saved["features"])
@@ -812,16 +823,17 @@ class FeatureManager:
         from ohs.track.export import load_ply, save_mesh, write_stl
 
         if name not in ("mesh.ply", "mesh.stl"):
-            raise ApiError(404, f"no file {name!r} in the part's frame", "available: mesh.ply, mesh.stl")
+            raise ApiError(404, "The mesh in the part's axes comes as PLY or STL only.", "Download one of those two.")
         with self._lock(pid, sid):
             frame = self._load(pid, sid)["frame"]
         if frame is None:
-            raise ApiError(404, "this scan has no part's frame", "build one first (POST .../features/frame)")
+            raise ApiError(404, "The part's axes are not set for this scan.", "Set them first, from the fitted shapes.")
         try:
             pf = PartFrame.from_dict(frame)
         except (ValueError, TypeError, AttributeError, KeyError) as e:
-            raise ApiError(409, f"this version cannot read the part's frame: {e}",
-                           "build the frame again, or remove it") from None
+            log.warning("the part's frame of %s/%s cannot be read: %s", pid, sid, e)
+            raise ApiError(409, "This version of the app cannot read the part's axes of this scan.",
+                           "Set the axes again, or remove them.") from None
         version = self._version(pid, sid)
         path, _ = self.st.projects.file_path(pid, sid, "mesh.ply")  # 404 before there is a mesh
         m = load_ply(path)

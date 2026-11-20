@@ -159,6 +159,18 @@ const pd = projectDoneLines({
 });
 check(pd.text === "Freed 296.0\u202fMB on 2 scans.", `project done: ${pd.text}`);
 check(pd.failed.length === 1 && pd.failed[0].startsWith("D: this scan is busy"), "only real refusals are listed");
+// found in review: the engine's sentences now start with a capital and end with a full stop
+const pd2 = projectDoneLines({
+  project_id: "p",
+  to: "engineering",
+  freed_bytes: 0,
+  results: [
+    { scan_id: "c", name: "C", ok: false, freed_bytes: 0, error: { detail: "There is nothing to free in this scan.", hint: null } },
+    { scan_id: "e", name: "E", ok: false, freed_bytes: 0, error: { detail: "There is nothing to free: this scan would not take less space afterwards.", hint: null } },
+    { scan_id: "d", name: "D", ok: false, freed_bytes: 0, error: { detail: "This scan is busy: it is being processed.", hint: "Wait." } },
+  ],
+});
+check(pd2.failed.length === 1 && pd2.failed[0] === "D: This scan is busy: it is being processed.", `the engine's new words: ${pd2.failed.join(" | ")}`);
 
 // ---------------------------------------------------------------- what a freed scan can still run (Process page, viewer)
 // The engine's rules (ohs/server/processing.py): Make mesh, Track and a recipe on "everything" read the frames;

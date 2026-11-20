@@ -18,7 +18,9 @@ Also here: :class:`ApiError` (the ``{detail, hint}`` error of every REST call) a
 from __future__ import annotations
 
 import json
+import logging
 import math
+import re
 import struct
 from datetime import datetime, timezone
 from pathlib import Path
@@ -26,9 +28,14 @@ from typing import Any, Sequence
 
 import numpy as np
 
+log = logging.getLogger(__name__)
+
 __all__ = [
     "PROTOCOL_VERSION",
     "ApiError",
+    "sentence",
+    "plain_reason",
+    "SETTINGS_FILE_HINT",
     "jsonable",
     "dumps",
     "now_iso",
@@ -73,14 +80,56 @@ def quality_or_none(quality: Any) -> str | None:
         return None
 
 
+def sentence(text: Any) -> str:
+    """``text`` as a sentence: a capital first letter and a full stop at the end (unless it ends
+    with ``.``, ``!``, ``?`` or ``:``, a closing quote after one of them, or is empty). Every error
+    text the user reads passes through here (:class:`ApiError`, a failed job's ``error``), so the
+    detail and the hint are each a full sentence."""
+    s = " ".join(str(text or "").split())
+    if not s:
+        return ""
+    if s[0].isalpha() and s[0].islower():
+        s = s[0].upper() + s[1:]
+    end = s.rstrip("\"'”’)")
+    if not end.endswith((".", "!", "?", ":", "…")):
+        s += "."
+    return s
+
+
+#: what is never shown for a caught exception: its message reads like a program's, not a person's
+_NOT_PLAIN = re.compile(
+    r"Error\b|Exception\b|Traceback|\bErrno\b|errno|__|\bNone\b|\bdtype\b|ndarray|numpy|open3d|cv2|"
+    r"[\\/<>{}\[\]`|=]|\w\(|(?<!\w)'[^'\s]*'(?!\w)|\bline \d+|\bshape \(|0x[0-9a-f]|[a-z0-9]_[a-z0-9]")
+
+
+def plain_reason(e: BaseException | str | None, fallback: str) -> str:
+    """The message of ``e`` when it reads as a plain sentence written for the user (for example a
+    ``ValueError`` from a check of a typed value: "a name must be 1 to 80 characters"), else
+    ``fallback``. The guard test (``tests/test_server_error_words.py``) refuses ``str(e)`` and
+    ``{e}`` in what the user reads; this is the one way a caught exception's words get there,
+    filtered. What is refused here goes to the log."""
+    s = " ".join(str(e or "").split())
+    if s and len(s) <= 240 and not _NOT_PLAIN.search(s):
+        return s
+    if s:
+        log.info("not shown to the user (%s): %s", type(e).__name__ if isinstance(e, BaseException) else "text", s)
+    return fallback
+
+
+#: what to do when the settings file cannot be written (it is the one file the Settings page names)
+SETTINGS_FILE_HINT = ("Check that no other program has the settings file open and that it is not read-only; if you "
+                      "edited it by hand, look for a typing mistake in it.")
+
 class ApiError(Exception):
-    """An error with an HTTP status, a message saying what happened and a hint saying what to do."""
+    """An error with an HTTP status, a message saying what happened and a hint saying what to do.
+    Both are made full sentences (:func:`sentence`)."""
 
     def __init__(self, status: int, detail: str, hint: str | None = None) -> None:
+        detail = sentence(detail)
         super().__init__(detail)
         self.status = int(status)
-        self.detail = str(detail)
-        self.hint = hint
+        self.detail = detail
+        self.hint = sentence(hint) or None
 
     def body(self) -> dict:
         out: dict[str, Any] = {"detail": self.detail}
@@ -89,7 +138,8 @@ class ApiError(Exception):
         return out
 
     def __str__(self) -> str:
-        return self.detail if not self.hint else f"{self.detail} ({self.hint})"
+        """The detail and the hint as two sentences (a failed job's ``error``)."""
+        return self.detail if not self.hint else f"{self.detail} {self.hint}"
 
 
 def jsonable(x: Any) -> Any:

@@ -54,7 +54,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from ohs.server.protocol import ApiError, jsonable, now_iso
+from ohs.server.jobs import failure_notice
+from ohs.server.protocol import SETTINGS_FILE_HINT, ApiError, jsonable, now_iso
 
 __all__ = ["SetupStore", "SetupManager", "STEP_IDS", "TARGETS", "ago", "parse_iso", "PRINT_OK_PCT", "PRINT_APPLY_PCT"]
 
@@ -541,8 +542,8 @@ class SetupManager:
         """Check the printed 100 mm bar (stored for the device: the print is physical)."""
         m = float(measured_mm)
         if not (m > 0 and m < 1000):
-            raise ApiError(400, f"{measured_mm!r} mm is not a plausible length for the 100 mm bar",
-                           "measure the bar between its outer edges with calipers and type the reading in mm")
+            raise ApiError(400, f"{m:g} mm is not a plausible length for the 100 mm bar.",
+                           "Measure the bar between its outer edges with calipers and type the reading in mm.")
         err = (m - BAR_MM) / BAR_MM * 100.0
         pct = m / BAR_MM * 100.0
         square = float(self.st.cfg.board.square_mm)
@@ -581,13 +582,14 @@ class SetupManager:
         st = self.st
         with st._lock:
             if st.session is not None and st.session.active:
-                raise ApiError(409, "a scan is running", "stop the scan before running the self-test")
+                raise ApiError(409, "A scan is running.", "Stop the scan before running the self-test.")
             if st.calibration.active:
-                raise ApiError(409, "a calibration is running", "finish or cancel the calibration first")
+                raise ApiError(409, "A calibration is running.", "Finish or cancel the calibration first.")
             if st.jobs.active("selftest"):
-                raise ApiError(409, "the self-test is already running", "wait for it to finish")
+                raise ApiError(409, "The self-test is already running.", "Wait for it to finish.")
             if st.devices.busy:
-                raise ApiError(409, f"the device is busy: {st.devices.busy}", "wait until it finishes")
+                busy = str(st.devices.busy).strip().rstrip(".…")
+                raise ApiError(409, f"The scanner is busy: {busy[:1].lower() + busy[1:]}.", "Wait until it has finished.")
             source = st.devices.source
         target = "sim" if source == "sim" else "device"
 
@@ -605,7 +607,7 @@ class SetupManager:
             else:
                 with st._lock:
                     if (st.session is not None and st.session.active) or st.calibration.active:
-                        raise ApiError(409, "a scan or a calibration started meanwhile", "run the self-test again later")
+                        raise ApiError(409, "A scan or a calibration started meanwhile.", "Run the self-test again later.")
                     was_connected = st.devices.source == "camera"
                     st.devices.set_busy("Running the self-test…")
                     try:
@@ -625,7 +627,7 @@ class SetupManager:
                             try:
                                 st.devices.connect("camera")
                             except ApiError as e:
-                                st.notify("error", f"The camera could not be connected again after the self-test: {e}")
+                                st.notify("error", f"The camera could not be connected again after the self-test. {e}")
                 res = selftest.result_dict(checks, "camera")
             self.record_selftest(target, {k: v for k, v in res.items() if k != "message"})
             return res
@@ -635,7 +637,7 @@ class SetupManager:
                 level = {"PASS": "info", "WARN": "warn", "FAIL": "error"}.get(job.result.get("overall"), "info")
                 st.notify(level, job.result.get("message", "Self-test finished"))
             elif job.state == "failed":
-                st.notify("error", f"The self-test could not run: {job.error}")
+                st.notify("error", failure_notice(job, "The self-test could not run."))
 
         return st.jobs.submit("selftest", run, message="Starting the self-test…", on_done=done)
 
@@ -654,16 +656,17 @@ class SetupManager:
         st = self.st
         cfg = st.cfg
         if st.jobs.active("printables"):
-            raise ApiError(409, "the printables are already being generated", "wait for the job to finish")
+            raise ApiError(409, "The printables are already being made.", "Wait for them to finish.")
         paper = str(paper or cfg.board.paper).lower()
         if paper not in ("letter", "a4"):
-            raise ApiError(400, f"unknown paper {paper!r}", "use letter or a4")
+            raise ApiError(400, "The app knows two paper sizes only.", "Pick Letter or A4.")
         if paper != str(cfg.board.paper).lower():
             try:
                 set_config_values({"board": {"paper": paper}}, st.config_path, cfg=cfg)
             except (ConfigError, OSError) as e:
-                raise ApiError(500, f"the paper size could not be saved to {st.config_path}: {e}",
-                               "check that the config file is valid TOML and writable") from e
+                log.warning("the paper size could not be saved to %s: %s", st.config_path, e)
+                raise ApiError(500, f"The paper size could not be saved to the settings file {st.config_path}.",
+                               SETTINGS_FILE_HINT) from e
         spec = cfg.board.spec()  # as configured: a measured print scale never changes the print
         out = cfg.paths.printables_path
         tag_mm = float(cfg.markers.tag_mm)
@@ -677,11 +680,13 @@ class SetupManager:
             try:
                 manifest = printables.generate(out, spec, paper, tag_mm=tag_mm, mask_dpi=dpi, progress=progress)
             except OSError as e:
-                raise ApiError(500, f"the printables could not be written to {out}: {e}",
-                               "check that the folder is writable and the disk is not full") from e
+                log.warning("the printables could not be written to %s: %s", out, e)
+                raise ApiError(500, f"The printables could not be saved in {out}.",
+                               "Check the free disk space and that no other program has these files open, then try "
+                               "again.") from e
             self.store.set_printables(manifest)
             listing = printables.listing(manifest, out, paper)
-            return {**listing, "message": f"Printables ready: {len(listing['files'])} files in {out}"}
+            return {**listing, "message": f"Printables ready: {len(listing['files'])} files in {out}."}
 
         return st.jobs.submit("printables", run, message="Preparing the printables…")
 

@@ -35,5 +35,14 @@ check(emptyAdviceText("check", false, "Left and right rows match.") === "Nothing
 check(emptyAdviceText("stereo", false, "x") === "Nothing to improve. Save it.", "a result to save");
 check(emptyAdviceText("stereo", true, "x") === "Nothing to improve.", "a saved result");
 
+// U31: the demo says what the server says. The server's verdicts (ohs/server/calib_results.py, read as text, not
+// run) hold the same sentences for the cameras and the lasers.
+{
+  const fs = (await import(["node", "fs"].join(":"))) as { readFileSync: (u: URL, enc: "utf8") => string };
+  const py = fs.readFileSync(new URL("../../../ohs/server/calib_results.py", import.meta.url), "utf8");
+  check(py.includes(CALIB_VERDICT.stereoExcellent), `the server says it too: ${CALIB_VERDICT.stereoExcellent}`);
+  check(py.includes(CALIB_VERDICT.stereoGood), `the server says it too: ${CALIB_VERDICT.stereoGood}`);
+  check(py.includes("laser lines are calibrated well."), "the server says it too: ... laser lines are calibrated well.");
+}
 
 console.log(`calibWords.test: ${checks} checks passed`);

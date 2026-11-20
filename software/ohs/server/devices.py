@@ -68,12 +68,25 @@ import numpy as np
 
 from ohs.server.demo import DEFAULT_DEMO, DemoParams, demo_path, demo_ready, generate_demo
 from ohs.server.imaging import PreviewPublisher, ViewTools, central_distance
+from ohs.server.jobs import failure_notice
 from ohs.server.protocol import ApiError, now_iso
 from ohs.server.util import RateMeter, join_thread, safe_call
 
 __all__ = ["DeviceManager", "ReplayFeed", "SOURCES", "SIM_SCENES", "sim_board_camera", "sim_lasers"]
 
 log = logging.getLogger(__name__)
+
+#: the device's warnings that a reloaded calibration replaces (DeviceManager.reload_calibration)
+_NO_CALIB = "The scanner is not calibrated yet. Calibrate it in Setup before you scan."
+_NO_IMU_CALIB = ("The motion sensor (IMU) is not calibrated, so scanning holds on less surely on fast sweeps and "
+                 "plain surfaces. Calibrate it in Setup.")
+_LASERS_NOT_ON = "The lasers and dots could not be switched on. Check the USB cable of the control board (Pico)."
+
+
+def _lower(busy: Any) -> str:
+    """What the device is doing (``busy``: "Connecting to the camera..."), for the middle of a sentence."""
+    s = str(busy or "busy").strip().rstrip(".…")
+    return s[:1].lower() + s[1:]
 
 SOURCES = ("camera", "replay", "sim")
 SIM_SCENES = ("demo", "calib_stereo", "calib_lasers", "calib_imu", "calib_check")
@@ -451,9 +464,9 @@ class DeviceManager:
         if c.calib is not None and c.frame_size is not None:
             want = tuple(int(v) for v in c.calib.stereo.image_size)
             if tuple(c.frame_size) != want:
-                warnings.append(f"the camera delivers {c.frame_size[0]}x{c.frame_size[1]} images per camera but the "
-                                f"calibration is for {want[0]}x{want[1]}: set camera.width / camera.height to the "
-                                "calibrated mode, or calibrate this mode")
+                warnings.append(f"The camera sends {c.frame_size[0]}×{c.frame_size[1]} pictures, but the scanner was "
+                                f"calibrated at {want[0]}×{want[1]}. Calibrate the cameras again at this size (the "
+                                "Stereo step in Setup).")
         replay = None
         if c.source == "replay" or (c.source == "sim" and c.replay_path is not None):
             replay = {"path": str(c.replay_path), "loop": bool(c.loop)}
@@ -486,16 +499,18 @@ class DeviceManager:
     def connect(self, source: str, recording: str | None = None, loop: bool | None = None) -> Any:
         """Connect ``source``; returns ``None``, or the ``generate_demo`` job for a first ``sim`` connect."""
         if self._closed:
-            raise ApiError(503, "the app is shutting down", "start OpenHandScan Studio again")
+            raise ApiError(503, "The app is shutting down.", "Start OpenHandScan Studio again.")
         if source not in SOURCES:
-            raise ApiError(400, f"unknown source {source!r}", "use camera, replay or sim")
+            raise ApiError(400, "The app does not know this kind of scanner.",
+                           "Pick the camera, a recording to replay or the simulator.")
         if self.busy:
-            raise ApiError(409, f"the device is busy: {self.busy}", "wait until it finishes (or cancel its job)")
+            raise ApiError(409, f"The scanner is busy: {_lower(self.busy)}.",
+                           "Wait until it has finished (or cancel it in Jobs), then try again.")
         if self._sink is not None:
-            raise ApiError(409, "the device is in use by a scan or a calibration",
-                           "stop the scan, or finish or cancel the calibration, before changing the device")
+            raise ApiError(409, "The scanner is in use by a scan or a calibration.",
+                           "Stop the scan, or finish or cancel the calibration, before changing the scanner.")
         if source == "replay" and not recording:
-            raise ApiError(400, "replay needs a recording folder", 'send {"source": "replay", "recording": "<folder>"}')
+            raise ApiError(400, "No recording was chosen to replay.", "Pick a recording folder, then press Connect.")
         if source == "sim":
             path = demo_path(self.demo_dir)
             if not demo_ready(path):
@@ -520,7 +535,7 @@ class DeviceManager:
         """Mark the device busy (e.g. "Running the self-test…"; connect is refused meanwhile), or clear it."""
         with self._lock:
             if text is not None and self.busy:
-                raise ApiError(409, f"the device is busy: {self.busy}", "wait until it finishes")
+                raise ApiError(409, f"The scanner is busy: {_lower(self.busy)}.", "Wait until it has finished.")
             self.busy = text
         self._on_change()
 
@@ -554,13 +569,15 @@ class DeviceManager:
                 cam = self.sim_camera_factory(script, self.cfg)
                 cam.open()
             except ImportError as e:
-                raise ApiError(503, f"the simulator's calibration board is not available in this version ({e})",
-                               "update OpenHandScan, or calibrate the real scanner") from e
+                log.warning("the simulator's calibration board is missing: %s", e)
+                raise ApiError(503, "The simulator's calibration board is not part of this version of the app.",
+                               "Update OpenHandScan Studio, or calibrate the real scanner.") from e
             except Exception as e:
+                log.exception("the simulator's calibration board could not start")
                 if cam is not None:
                     safe_call("closing the virtual camera", cam.close)
-                raise ApiError(503, f"the simulator's calibration board could not start: {e}",
-                               "try again; if it keeps failing, run `ohs -v app` and look at the log") from e
+                raise ApiError(503, "The simulator's calibration board could not start.",
+                               "Try again; if it fails again, please report it, saying which step it was.") from e
             calib, path = self._sim_sandbox()
             conn = _Connection(self._next_id(), "sim", cam, calib=calib, calib_path=path, loop=True)
             conn.feed = getattr(cam, "feed", None)
@@ -572,15 +589,16 @@ class DeviceManager:
     def set_sim_scene(self, scene: str) -> None:
         """Switch the simulator to ``scene`` (SIM_SCENES). The caller detaches any sink first."""
         if scene not in SIM_SCENES:
-            raise ApiError(400, f"unknown simulator scene {scene!r}", "use " + ", ".join(SIM_SCENES))
+            log.warning("unknown simulator scene %r (known: %s)", scene, ", ".join(SIM_SCENES))
+            raise ApiError(400, "The simulator has no such scene.", "Connect the simulator again.")
         with self._op_lock:
             conn = self._conn
             if conn is None or conn.source != "sim":
-                raise ApiError(409, "the simulator is not connected", "connect the simulator first")
+                raise ApiError(409, "The simulator is not connected.", "Connect the simulator first.")
             if conn.sim_scene == scene:
                 return
             if self._sink is not None:
-                raise ApiError(409, "the simulator is in use", "stop the scan or the calibration first")
+                raise ApiError(409, "The simulator is in use.", "Stop the scan or the calibration first.")
             self._disconnect_locked("switching the simulator scene", quiet=True)
             try:
                 new = self._open_demo() if scene == "demo" else self._open_sim_board(scene)
@@ -610,24 +628,28 @@ class DeviceManager:
             try:
                 cam.open()
             except Exception as e:
+                log.warning("the camera could not be opened: %s", e)
                 safe_call("closing the camera", cam.close)
-                raise ApiError(503, f"the camera could not be opened: {e}",
-                               "check the USB cable, close other programs that use the camera, then run `ohs devices` "
-                               "and set camera.index in the settings") from e
+                raise ApiError(503, "The camera could not be opened.",
+                               "Check the USB cable and close other programs that use a camera, then press Connect "
+                               "again.") from e
             conn = _Connection(self._next_id(), "camera", cam, calib=calib, calib_path=path)
             if calib is None:
-                conn.warnings.append(f"no calibration at {path}: run `ohs calibrate stereo`, then lasers and imu")
+                log.info("no calibration at %s", path)
+                conn.warnings.append(_NO_CALIB)
             pico = None
             try:
                 pico = self.pico_factory(self.cfg)
                 conn.pico_hello = dict(pico.open() or {})
                 conn.pico = pico
             except Exception as e:
+                log.warning("no Pico: %s", e)
                 if pico is not None:
                     safe_call("closing the Pico", pico.close)
-                conn.pico_error = str(e)
-                msg = (f"No Pico ({e}): scanning works, but without emitters, IMU and trigger. Check the data USB cable "
-                       "and the firmware (firmware/README.md), then connect again.")
+                conn.pico_error = "The control board (Pico) was not found."
+                msg = ("The scanner's control board (Pico) was not found. You can still scan, but the lasers, the "
+                       "motion sensor and the trigger will not work. Check its USB cable (one that carries data) and "
+                       "its firmware, then press Connect again.")
                 conn.warnings.append(msg)
                 self._notify("warn", msg)
             if conn.pico is not None and str((conn.pico_hello or {}).get("imu", "NONE")).upper() != "NONE":
@@ -635,9 +657,11 @@ class DeviceManager:
                     conn.pico.start_imu()
                     conn.imu_live = True
                 except Exception as e:
-                    conn.warnings.append(f"the Pico's IMU did not start ({e}): tracking runs without the gyro prior")
+                    log.warning("the Pico's IMU did not start: %s", e)
+                    conn.warnings.append("The motion sensor on the control board did not start. Scanning works, but "
+                                         "holds on less surely on fast sweeps and plain surfaces.")
             if calib is not None and conn.imu_live and calib.imu is None:
-                conn.warnings.append("no IMU calibration: tracking runs without the gyro prior (run `ohs calibrate imu`)")
+                conn.warnings.append(_NO_IMU_CALIB)
             return conn
         finally:
             self.busy = None
@@ -647,13 +671,15 @@ class DeviceManager:
         from ohs.types import ScannerCalibration
 
         if not (path / "frames.csv").is_file():
-            raise ApiError(404, f"{path} is not a recording folder (no frames.csv)",
-                           "pick a recording folder: a scan's recording/ folder or one written by `ohs sim` or `ohs record`")
+            raise ApiError(404, f"{path} is not a recording folder.",
+                           "Pick a scan's recording folder (the one named recording inside the scan's folder).")
         cam = ReplayCamera(path, realtime=True, loop=loop)
         try:
             cam.open()
         except Exception as e:
-            raise ApiError(400, f"the recording {path} cannot be replayed: {e}", "pick another recording folder") from e
+            log.warning("the recording %s cannot be replayed: %s", path, e)
+            raise ApiError(400, f"The recording in {path} cannot be replayed: its files cannot be read.",
+                           "Pick another recording folder.") from e
         calib, cpath = None, None
         if (path / "calibration.json").is_file():
             cpath = str(path / "calibration.json")
@@ -666,9 +692,11 @@ class DeviceManager:
         conn = _Connection(self._next_id(), source, cam, calib=calib, calib_path=cpath, replay_path=path, loop=loop)
         conn.feed = ReplayFeed(cam.reader, loop)
         if calib is None:
-            conn.warnings.append("no calibration for this recording: live scanning is not possible (add calibration.json)")
+            conn.warnings.append("This recording has no calibration, so the live preview cannot be shown while it "
+                                 "plays.")
         elif not conn.feed.has_imu:
-            conn.warnings.append("the recording has no IMU data: tracking runs without the gyro prior")
+            conn.warnings.append("This recording has no motion sensor data. It replays, but it holds on less surely on fast "
+                                 "sweeps and plain surfaces.")
         return conn
 
     def _start(self, conn: _Connection, fresh: bool = True) -> None:
@@ -690,12 +718,12 @@ class DeviceManager:
             self._thread(conn, "ohs-pico", self._pico_loop)
         self._thread(conn, "ohs-preview", self._preview_loop)
         sim_what = "simulator demo" if conn.sim_scene in (None, "demo") else f"simulator ({conn.sim_scene})"
-        what = {"camera": "camera", "replay": f"replay of {conn.replay_path}", "sim": sim_what}[conn.source]
+        what = {"camera": "camera", "replay": "a replayed recording", "sim": sim_what}[conn.source]
         for w in conn.warnings:
             log.warning("%s", w)
-        log.info("device connected: %s", what)
+        log.info("device connected: %s (%s)", what, conn.replay_path or "")
         if fresh:
-            self._notify("info", f"Connected: {what}")
+            self._notify("info", f"Connected: {what}.")
             safe_call("recording the connection", lambda: self._on_connected(conn.source))
 
     @staticmethod
@@ -725,7 +753,7 @@ class DeviceManager:
         safe_call("closing the camera", conn.camera.close)
         log.info("device disconnected (%s)", reason or "requested")
         if not quiet:
-            self._notify("info", "Disconnected" + (f": {reason}" if reason else ""))
+            self._notify("info", "Disconnected" + (f": {reason.rstrip('.')}." if reason else "."))
 
     def handle_lost(self, kind: str, message: str) -> None:
         """Act on a reported failure (called by the owner, not from a device thread)."""
@@ -768,18 +796,20 @@ class DeviceManager:
                 try:
                     self.connect("sim")
                 except ApiError as e:
-                    self._notify("error", f"The simulator demo is ready but could not be connected: {e}")
-                except Exception as e:  # report, never raise in the worker
+                    self._notify("error", f"The simulator demo is ready but could not be connected. {e}")
+                except Exception:  # report, never raise in the worker
                     log.exception("connecting the simulator demo failed")
-                    self._notify("error", f"The simulator demo is ready but could not be connected: {e}")
+                    self._notify("error", "The simulator demo is ready but could not be connected. Press Connect "
+                                          "again.")
             elif job.state == "failed":
-                self._notify("error", f"The simulator demo could not be generated: {job.error}. "
-                                      "Check free disk space in the demo folder and try again.")
+                self._notify("error", failure_notice(job, "The simulator demo could not be made.",
+                                                     "Check the free disk space, then try again."))
             self._on_change()
 
         with self._lock:
             if self.busy:
-                raise ApiError(409, f"the device is busy: {self.busy}", "wait until it finishes (or cancel its job)")
+                raise ApiError(409, f"The scanner is busy: {_lower(self.busy)}.",
+                               "Wait until it has finished (or cancel it in Jobs), then try again.")
             self.busy = "Generating simulator demo…"
         est = params.estimate_s()
         try:
@@ -799,7 +829,7 @@ class DeviceManager:
         the latest IMU temperature, so even a short recording has one."""
         conn = self._conn
         if conn is None:
-            raise ApiError(409, "no device is connected", "connect the camera, a replay or the simulator first")
+            raise ApiError(409, "No scanner is connected.", "Connect the camera, a replay or the simulator first.")
         with self._imu_lock:
             t_ref = conn.last_frame_t
             hist = list(self._recent_imu)
@@ -836,11 +866,12 @@ class DeviceManager:
             return
         calib, path = self._config_calibration()
         c.calib, c.calib_path = calib, path
-        c.warnings = [w for w in c.warnings if not w.startswith(("no calibration at ", "no IMU calibration"))]
+        c.warnings = [w for w in c.warnings if w not in (_NO_CALIB, _NO_IMU_CALIB)]
         if calib is None:
-            c.warnings.append(f"no calibration at {path}: run the calibration in Setup")
+            log.info("no calibration at %s", path)
+            c.warnings.append(_NO_CALIB)
         elif c.imu_live and calib.imu is None:
-            c.warnings.append("no IMU calibration: tracking runs without the gyro prior (calibrate the IMU in Setup)")
+            c.warnings.append(_NO_IMU_CALIB)
         log.info("camera connection: calibration reloaded from %s", path)
         self._on_change()
 
@@ -872,7 +903,8 @@ class DeviceManager:
                 c.pico.set_emitters(*(float(v) for v in levels), only=tuple(only))
             return True
         except Exception as e:
-            self._notify("warn", f"the emitters could not be switched on ({e}): check the Pico's USB cable")
+            log.warning("the emitters could not be switched on: %s", e)
+            self._notify("warn", _LASERS_NOT_ON)
             return False
         finally:
             self._on_change()
@@ -888,7 +920,8 @@ class DeviceManager:
         try:
             c.pico.set_emitters(*levels)
         except Exception as e:
-            self._notify("warn", f"the emitters could not be switched on ({e}): check the Pico's USB cable")
+            log.warning("the emitters could not be switched on: %s", e)
+            self._notify("warn", _LASERS_NOT_ON)
         self._on_change()
 
     def pico_per_laser(self) -> bool:
@@ -908,7 +941,9 @@ class DeviceManager:
             try:
                 c.pico.set_emitters(*c.pico.emitters)
             except Exception as e:
-                self._notify("warn", f"the new laser brightness could not be applied ({e}): check the Pico's USB cable")
+                log.warning("the new laser brightness could not be applied: %s", e)
+                self._notify("warn", "The new laser brightness could not be set. Check the USB cable of the "
+                                     "control board (Pico).")
         self._on_change()
 
     def set_emitters(self, levels: dict, scanning: bool = False, apply: bool = True) -> None:
@@ -919,10 +954,11 @@ class DeviceManager:
         """
         c = self._conn
         if c is None:
-            raise ApiError(409, "no device is connected", "connect the camera first")
+            raise ApiError(409, "No scanner is connected.", "Connect the camera first.")
         if c.pico is None or not getattr(c.pico, "connected", False):
             if c.source == "camera":
-                self._notify("warn", "No Pico connected: the emitters cannot be switched")
+                self._notify("warn", "The control board (Pico) is not connected, so the lasers and dots cannot be "
+                                     "switched.")
             return
         base = c.scan_levels if (not apply and c.scan_levels is not None) else getattr(c.pico, "emitters", (0, 0, 0))
         cur = dict(zip(_LEVEL_NAMES, (float(v) for v in base)))
@@ -931,15 +967,17 @@ class DeviceManager:
                 continue
             fv = float(v)
             if k not in cur or not math.isfinite(fv) or not 0.0 <= fv <= 100.0:
-                raise ApiError(400, f"invalid emitter level {k}={v!r}", "levels are percent, 0 to 100")
+                raise ApiError(400, "A brightness of the lasers and dots is out of range.",
+                               "Give each one in percent, from 0 to 100.")
             cur[k] = fv
         new = tuple(cur[n] for n in _LEVEL_NAMES)
         if apply:
             try:
                 c.pico.set_emitters(*new)
             except Exception as e:
-                raise ApiError(503, f"the Pico did not accept the emitter levels: {e}",
-                               "check the Pico's USB cable and connect again") from e
+                log.warning("the Pico did not accept the emitter levels: %s", e)
+                raise ApiError(503, "The control board (Pico) did not take the new brightness.",
+                               "Check its USB cable, then press Connect again.") from e
         if scanning:
             c.scan_levels = new  # type: ignore[assignment]
         self._on_change()
@@ -965,7 +1003,9 @@ class DeviceManager:
                 self._report_lost(conn, "eof", "the replayed recording ended")
                 return
             except Exception as e:  # camera unplugged, unreadable frame file, ...
-                self._report_lost(conn, "error", f"camera: {e}")
+                log.warning("camera: %s", e)
+                self._report_lost(conn, "error", "the camera stopped sending pictures. Check its USB cable, then "
+                                                 "press Connect again")
                 return
             t_recv = time.perf_counter()
             conn.cam_rate.tick()
@@ -1004,8 +1044,9 @@ class DeviceManager:
             for e in events:
                 self._on_event(e, control=True)
             if not getattr(pico, "connected", True):
-                self._report_lost(conn, "pico", f"the Pico disconnected ({getattr(pico, 'error', None) or 'cable?'}); "
-                                                "the emitters are off. Check the USB cable and connect again")
+                log.warning("the Pico disconnected: %s", getattr(pico, "error", None) or "no reason given")
+                self._report_lost(conn, "pico", "The control board (Pico) disconnected, so the lasers are off. Check "
+                                                "its USB cable, then press Connect again.")
                 return
             conn.stop.wait(0.005)
 
@@ -1111,8 +1152,9 @@ class DeviceManager:
                 raise ValueError("no calibration")
             size = tuple(int(v) for v in frames[0].image_size)
             if size != tuple(int(v) for v in stereo.image_size):
-                res = {"state": "unknown", "message": f"the camera delivers {size[0]}x{size[1]} images but the calibration "
-                                                      f"is for {stereo.image_size[0]}x{stereo.image_size[1]}"}
+                res = {"state": "unknown", "message": f"The camera sends {size[0]}×{size[1]} pictures, but the scanner "
+                                                      f"was calibrated at {stereo.image_size[0]}×"
+                                                      f"{stereo.image_size[1]}."}
             else:
                 fn = self.drift_check
                 if fn is None:
@@ -1120,10 +1162,11 @@ class DeviceManager:
                 res = dict(fn(frames, stereo) or {})
         except ImportError as e:
             log.info("launch check skipped: %s", e)
-            res = {"state": "unknown", "message": "the launch check is not available in this version"}
-        except Exception as e:  # never break the connection over it
+            res = {"state": "unknown", "message": "The start-up check is not part of this version of the app."}
+        except Exception:  # never break the connection over it
             log.exception("the launch check failed")
-            res = {"state": "unknown", "message": f"the launch check could not run ({e})"}
+            res = {"state": "unknown", "message": "The start-up check could not run this time. Scanning is not "
+                                                  "affected."}
         state = str(res.get("state") or "unknown")
         if state not in ("ok", "drift", "unknown"):
             state = "unknown"
@@ -1144,7 +1187,7 @@ class DeviceManager:
         if state == "drift":
             rows = f" by {dv:.1f} px" if dv is not None else ""
             msg = (f"The cameras may have moved since the calibration: matching points in the left and right images "
-                   f"disagree{rows} in height (want under 0.6 px). Run the 2-minute check (Setup, step 7).")
+                   f"disagree{rows} in height (want under 0.6 px). Run the 2-minute check in Setup.")
             conn.warnings.append(msg)
             self._notify("warn", msg)
         safe_call("recording the launch check", lambda: self._on_launch_check(conn.source, dict(lc)))

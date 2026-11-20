@@ -99,26 +99,27 @@ class ReportManager:
         (module docstring, "Pictures")."""
         items = list(items or [])
         if len(items) > self.max_pictures:
-            raise ApiError(422, f"{len(items)} pictures: a report takes at most {self.max_pictures}",
-                           "remove some of the views added to the report")
+            raise ApiError(422, f"{len(items)} pictures are too many: a report takes at most {self.max_pictures}.",
+                           "Remove some of the views added to the report.")
         out, total = [], 0
         for i, p in enumerate(items, 1):
             title = str(p.get("title") or "").strip()
             if not title:
-                raise ApiError(422, f"picture {i} has no title", "give each picture a title")
+                raise ApiError(422, f"Picture {i} has no title.", "Give each picture a title.")
             raw = p.get("data")
             try:
                 data = base64.b64decode(raw if isinstance(raw, str) else "", validate=True)
             except (binascii.Error, ValueError):
-                raise ApiError(422, f"the picture \"{title}\" is not base64 text",
-                               "send each picture's bytes in base64 (as a PNG's data URL holds them)") from None
+                raise ApiError(422, f"The picture \"{title}\" cannot be read.",
+                               "Remove it and add the view to the report again.") from None
             if len(data) > self.max_picture_bytes:
-                raise ApiError(413, f"the picture \"{title}\" is {_size(len(data))}, more than the {_size(self.max_picture_bytes)} "
-                                    "a picture may be", "add a smaller view (the viewer makes them at most 1600 pixels across)")
+                raise ApiError(413, f"The picture \"{title}\" is {_size(len(data))}, more than the "
+                                    f"{_size(self.max_picture_bytes)} a picture may be.",
+                               "Add a smaller view (the viewer makes them at most 1600 pixels across).")
             total += len(data)
             if total > self.max_total_bytes:
-                raise ApiError(413, f"the pictures come to more than the {_size(self.max_total_bytes)} a report takes in all",
-                               "add fewer views")
+                raise ApiError(413, f"The pictures come to more than the {_size(self.max_total_bytes)} a report takes "
+                                    "in all.", "Add fewer views.")
             caption = p.get("caption")
             out.append({"title": title, "caption": str(caption).strip() if caption else None, "data": data})
         return out
@@ -182,8 +183,7 @@ class ReportManager:
                                  description=str(p.get("description", "")), in_part_frame=bool(p.get("in_part_frame", False)))
             warnings = []
             if rec["mesh_version"] != version:
-                warnings.append(f"the mesh has changed since this section was kept (it was cut on version "
-                                f"{rec['mesh_version']}, the mesh is now version {version}): this is the cut of the current mesh")
+                warnings.append("the mesh has changed since this section was kept: this is the cut of the current mesh")
             cut = section(V, F, plane, sigma=S, filled=Fl)
             out.append(section_entry(cut, name=rec["name"], warnings=warnings))
         return out
@@ -215,7 +215,7 @@ class ReportManager:
         try:
             info, dev = self.refs.deviation(pid, sid)
         except ApiError as e:
-            al["warnings"].append(f"the deviation could not be worked out: {e.detail}")
+            al["warnings"].append(f"The deviation could not be worked out. {e.detail}")
             return out
         out["deviation"] = dev.to_dict()
         out["tolerance"] = tolerance_summary(dev, float(view.get("tolerance_mm") or 0.3), k=float(view.get("k") or 2.0)).to_dict()
@@ -228,7 +228,7 @@ class ReportManager:
         seams = doc.get("seams") or []
         if wanted is not None:
             if not any(s["id"] == wanted for s in seams):
-                raise ApiError(404, f"no kept seam {wanted!r}", "read the list again (GET .../seams)")
+                raise ApiError(404, "This seam is no longer kept with the scan.", "Reload the page to see the kept seams.")
             seams = [s for s in seams if s["id"] == wanted]
         for s in seams:
             try:
@@ -247,7 +247,7 @@ class ReportManager:
         the CSV (the kept features only), ``"tables"`` for the JSON (the features and the sections)."""
         if tolerance_mm is not None and not (isinstance(tolerance_mm, (int, float)) and math.isfinite(tolerance_mm)
                                              and tolerance_mm > 0):
-            raise ApiError(422, f"the tolerance must be above 0 mm, got {tolerance_mm!r}", "give the tolerance in mm, e.g. 0.3")
+            raise ApiError(422, "The tolerance must be a number of mm above 0.", "Give the tolerance in mm, for example 0.3.")
         project = self.st.projects.get(pid)  # 404 for an unknown project
         scan = self.st.projects.scan_entry(pid, sid)  # ... or scan
         pics = self.pictures(pictures) if parts == "all" else []
@@ -292,7 +292,7 @@ class ReportManager:
             if g is not None:
                 data["gap_flush"] = g
         elif seam is not None and not any(s["id"] == seam for s in doc.get("seams") or []):
-            raise ApiError(404, f"no kept seam {seam!r}", "read the list again (GET .../seams)")
+            raise ApiError(404, "This seam is no longer kept with the scan.", "Reload the page to see the kept seams.")
         if pics:
             data["pictures"] = pics
         return data
@@ -306,7 +306,8 @@ class ReportManager:
         from ohs.server.cad import _file_stem
 
         if name not in FILES:
-            raise ApiError(404, f"no report file {name!r}", "available: " + ", ".join(FILES))
+            raise ApiError(404, "The report has no file of this name.",
+                           "Download the report page, or its table of fitted shapes (CSV or JSON).")
         opts = {k: options.get(k) for k in ("tolerance_mm", "seam")}
         parts = {"report.html": "all", "features.csv": "features", "features.json": "tables"}[name]
         data = self.collect(pid, sid, tolerance_mm=opts["tolerance_mm"],

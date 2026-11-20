@@ -67,7 +67,7 @@ from typing import Any, Mapping
 import numpy as np
 
 import ohs.measure.features as kf
-from ohs.server.protocol import ApiError
+from ohs.server.protocol import ApiError, plain_reason
 
 __all__ = ["SectionManager", "KINDS", "FILES", "MAX_POINTS", "COMPACT_DECIMALS", "definition", "definition_from_query"]
 
@@ -77,7 +77,13 @@ FILES = {"section.dxf": ("dxf", ".dxf", "application/dxf"), "section.svg": ("svg
 COMPACT_DECIMALS = 3  # a compact answer's coordinates: to the micrometre
 MAX_POINTS = 20_000  # a compact answer's points unless asked otherwise (about 340 kB)
 _AXES = ("X", "Y", "Z")
-_HINT_BODY = "name the plane as APP_API.md \"Sections\" says: a kept plane, an axis of the part's frame, a point and a normal, or three points"
+_HINT_BODY = ("Choose the plane to cut with: a kept plane, an axis of the part, a point and a direction, or three "
+              "points.")
+
+
+#: the body's fields in words
+_WORDS = {"offset_mm": "offset", "value_mm": "place along the axis", "point": "point", "normal": "direction",
+          "point 1": "first point", "point 2": "second point", "point 3": "third point"}
 
 
 def _bad(detail: str, hint: str = _HINT_BODY) -> ApiError:
@@ -87,13 +93,13 @@ def _bad(detail: str, hint: str = _HINT_BODY) -> ApiError:
 def _number(x: Any, what: str) -> float:
     """A finite number from a body (a number) or a query (text)."""
     if isinstance(x, bool):
-        raise _bad(f"{what} must be a number, got {x!r}")
+        raise _bad(f"The {_WORDS.get(what, what)} of the section is not a number.")
     try:
         v = float(x)
     except (TypeError, ValueError):
-        raise _bad(f"{what} must be a number, got {x!r}") from None
+        raise _bad(f"The {_WORDS.get(what, what)} of the section is not a number.") from None
     if not math.isfinite(v):
-        raise _bad(f"{what} must be a finite number, got {x!r}")
+        raise _bad(f"The {_WORDS.get(what, what)} of the section is not a number.")
     return v
 
 
@@ -102,7 +108,7 @@ def _vec(x: Any, what: str, n: int = 3) -> list[float]:
     if isinstance(x, str):
         x = [p for p in x.replace(";", ",").split(",") if p.strip()]
     if not isinstance(x, (list, tuple)) or len(x) != n:
-        raise _bad(f"{what} must be {n} numbers, got {x!r}")
+        raise _bad(f"The {_WORDS.get(what, what)} of the section must be {n} numbers.")
     return [_number(v, what) for v in x]
 
 
@@ -111,11 +117,11 @@ def definition(body: Mapping[str, Any]) -> dict:
     with a plain message otherwise. Says nothing yet about whether the fit or the frame exists."""
     kind = body.get("kind")
     if kind not in KINDS:
-        raise _bad(f"kind must be one of {', '.join(KINDS)}, got {kind!r}")
+        raise _bad("The app does not know this way of choosing the plane.")
     if kind == "fit":
         fid = body.get("fit")
         if not isinstance(fid, str) or not fid:
-            raise _bad("a section on a kept plane needs the kept fit's id (fit)", "give fit: the id of a kept plane")
+            raise _bad("A section on a kept plane needs the plane.", "Pick a kept plane.")
         off = body.get("offset_mm")
         return {"kind": "fit", "fit": fid, "offset_mm": 0.0 if off is None else _number(off, "offset_mm")}
     if kind == "frame":
@@ -123,22 +129,22 @@ def definition(body: Mapping[str, Any]) -> dict:
         a = axis.strip().upper() if isinstance(axis, str) else ""
         a = a[1:] if a.startswith("+") else a
         if a.lstrip("-") not in _AXES or len(a) > 2:
-            raise _bad(f"axis must be X, Y or Z (with an optional '-' to see the plane from the other side), got {axis!r}")
+            raise _bad("The axis must be X, Y or Z (or -X, -Y or -Z to see the plane from the other side).")
         if body.get("value_mm") is None:
-            raise _bad("a section of the part's frame needs value_mm: where along the axis the plane lies",
-                       "give value_mm, e.g. 12 for Z = 12")
+            raise _bad("A section along an axis of the part needs where along the axis the plane lies.",
+                       "Give it in mm, for example 12 for Z = 12.")
         return {"kind": "frame", "axis": a, "value_mm": _number(body.get("value_mm"), "value_mm")}
     if kind == "point_normal":
         for key in ("point", "normal"):
             if body.get(key) is None:
-                raise _bad(f"a section through a point needs a point and a normal (three numbers each); {key} is missing")
+                raise _bad(f"A section through a point needs a point and a direction; the {_WORDS[key]} is missing.")
         return {"kind": "point_normal", "point": _vec(body["point"], "point"), "normal": _vec(body["normal"], "normal")}
     pts = body.get("points")
     if isinstance(pts, str):  # a query: nine numbers
         flat = _vec(pts, "points", 9)
         pts = [flat[0:3], flat[3:6], flat[6:9]]
     if not isinstance(pts, (list, tuple)) or len(pts) != 3:
-        raise _bad(f"a section through three points needs points: three points of three numbers, got {pts!r}")
+        raise _bad("A section through three points needs three points.")
     return {"kind": "points", "points": [_vec(p, f"point {i + 1}") for i, p in enumerate(pts)]}
 
 
@@ -228,32 +234,32 @@ class SectionManager:
             if kind == "fit":
                 f = next((x for x in doc["features"] if x["id"] == d["fit"]), None)
                 if f is None:
-                    raise ApiError(404, f"no kept fit {d['fit']!r}", "read the list again (GET .../features)")
+                    raise ApiError(404, "This fitted shape is no longer in the scan.",
+                                   "Reload the page to see the scan's current list.")
                 if f["kind"] != "plane":
-                    raise _bad(f"a section is cut by a plane, and \"{f['name']}\" is a {f['kind']}", "pick a kept plane")
+                    raise _bad(f"A section is cut by a plane, and \"{f['name']}\" is a {f['kind']}.", "Pick a kept plane.")
                 plane = sec.plane_from_fit({"name": f["name"], "fit": f["shape"]}, d["offset_mm"], frame=pf)
                 full.update(fit_name=f["name"], fit_mesh_version=int(f["mesh_version"]))
                 stale = version is not None and int(f["mesh_version"]) != version
                 if stale:
-                    warnings.append(f"\"{f['name']}\" was fitted on an earlier mesh (version {f['mesh_version']}, the mesh "
-                                    f"is now version {version}): its plane is used as it was kept; fit it again for this "
-                                    "mesh's plane")
+                    warnings.append(f"\"{f['name']}\" was fitted on an earlier mesh, before the last edit: its plane is "
+                                    "used as it was kept; fit it again for this mesh's plane")
             elif kind == "frame":
                 if state is None:
-                    raise _bad("this scan has no part's frame to cut along",
-                               "build the coordinate system first, or name the plane another way")
+                    raise _bad("The part's axes are not set for this scan, so there is no axis to cut along.",
+                               "Set the part's axes first, or choose the plane another way.")
                 if pf is None:
-                    raise ApiError(409, state["out_of_date_reasons"][0], "build the coordinate system again, or remove it")
+                    raise ApiError(409, state["out_of_date_reasons"][0], "Set the part's axes again, or remove them.")
                 if state["out_of_date"]:
-                    warnings.append("the part's frame is out of date (" + "; ".join(state["out_of_date_reasons"])
-                                    + "): used as it is; build it again for the fits as they are now")
+                    warnings.append("the part's axes are out of date (" + "; ".join(state["out_of_date_reasons"])
+                                    + "): used as they are; set them again for the fitted shapes as they are now")
                 plane = sec.plane_from_frame(pf, d["axis"], d["value_mm"])
             elif kind == "point_normal":
                 plane = sec.plane_from_point_normal(d["point"], d["normal"], frame=pf)
             else:
                 plane = sec.plane_from_points(*d["points"], frame=pf)
         except ValueError as e:
-            raise _bad(str(e), "name another plane") from None
+            raise _bad(plain_reason(e, "No section can be cut with this plane."), "Choose another plane.") from None
         if state is not None and not state["readable"] and kind != "frame":
             warnings.append(f"{state['out_of_date_reasons'][0]}: the drawing is in the scan's axes")
         return plane, full, stale, warnings
@@ -287,7 +293,7 @@ class SectionManager:
         for i, s in enumerate(sections):
             if s["id"] == xid:
                 return i
-        raise ApiError(404, f"no kept section {xid!r}", "read the list again (GET .../sections)")
+        raise ApiError(404, "This section is no longer kept with the scan.", "Reload the page to see the kept sections.")
 
     def _kept(self, pid: str, sid: str, xid: str) -> dict:
         doc, _, _ = self.feats.snapshot(pid, sid)
@@ -301,7 +307,7 @@ class SectionManager:
         if compact and max_points is None:
             max_points = MAX_POINTS
         if max_points is not None and max_points < 1:
-            raise _bad(f"max_points must be at least 1, got {max_points}", "leave it out for the default")
+            raise _bad("The page asked for a section with no points.", "Reload the page and cut it again.")
         shown, total = [], 0
         for ln in lines:
             if max_points is not None and shown and total + len(ln.points) > max_points:
@@ -338,8 +344,7 @@ class SectionManager:
         view = self._view(rec, v)
         warnings = []
         if view["mesh_changed"]:
-            warnings.append(f"the mesh has changed since this section was kept (it was cut on version {rec['mesh_version']}, "
-                            f"the mesh is now version {v}): this is the cut of the current mesh")
+            warnings.append("the mesh has changed since this section was kept: this is the cut of the current mesh")
         return sec.section(V, F, _stored_plane(rec), sigma=S, filled=Fl), v, view, warnings
 
     @staticmethod
@@ -354,7 +359,7 @@ class SectionManager:
     @staticmethod
     def _check_file(name: str) -> None:
         if name not in FILES:
-            raise ApiError(404, f"no section file {name!r}", "available: " + ", ".join(FILES))
+            raise ApiError(404, "A section has no file of this name.", "Download one of the files the page lists.")
 
     # ------------------------------------------------------------------ routes
     def cut(self, pid: str, sid: str, body: Mapping[str, Any], compact: bool = False, max_points: int | None = None) -> dict:
@@ -384,7 +389,8 @@ class SectionManager:
         try:
             name = None if name is None else kf.clean_name(name)
         except ValueError as e:
-            raise _bad(str(e), f"give a name of 1 to {kf.NAME_MAX} characters") from None
+            raise _bad(plain_reason(e, "This name cannot be used."),
+                       f"Give a name of 1 to {kf.NAME_MAX} characters.") from None
         v = self._mesh(pid, sid)[0]
 
         def add(sections: list[dict], doc: dict) -> dict:
@@ -413,11 +419,12 @@ class SectionManager:
         """``PATCH .../sections/{id}``: a new name, and/or (``recut``) mark it as cut on the current
         mesh (its plane stays as it is). 422 for neither."""
         if name is None and not recut:
-            raise _bad("give a new name, or recut: true", "send {\"name\": ...} or {\"recut\": true}")
+            raise _bad("Nothing to change on this section.", "Give it a new name, or cut it again on this mesh.")
         try:
             name = None if name is None else kf.clean_name(name)
         except ValueError as e:
-            raise _bad(str(e), f"give a name of 1 to {kf.NAME_MAX} characters") from None
+            raise _bad(plain_reason(e, "This name cannot be used."),
+                       f"Give a name of 1 to {kf.NAME_MAX} characters.") from None
         v = self._mesh(pid, sid)[0] if recut else None
 
         def change(sections: list[dict], doc: dict) -> dict:

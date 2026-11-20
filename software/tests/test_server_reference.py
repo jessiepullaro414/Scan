@@ -28,6 +28,7 @@ from ohs.align.pairwise import scan_cloud  # noqa: E402
 from ohs.inspect.reference import (ReferenceAlignment, ScanSurface, check_units, deviation_from_reference,  # noqa: E402
                                    read_reference, tolerance_summary)
 from ohs.measure.frame import PartFrame  # noqa: E402
+from ohs.server.protocol import sentence  # noqa: E402
 from ohs.mesh.topology import vertex_normals  # noqa: E402
 from ohs.track.export import load_ply, save_mesh  # noqa: E402
 from test_server_frame import SHAPES as FRAME_SHAPES, record as frame_record  # noqa: E402
@@ -123,7 +124,7 @@ def tracked(env, tmp_path_factory):  # noqa: F811 (the fixture imported above)
     assert r.status_code == 200, r.text
     tetra = r.json()["id"]
     err(post(b + "/comparison", {"reference_id": tetra}), 409, "mesh")
-    err(get(b + "/comparison/deviation.json"), 404, "comparison")  # none was started
+    err(get(b + "/comparison/deviation.json"), 404, "not compared with a CAD model")  # none was started
     assert get(b + "/comparison").json() == {"comparison": None, "mesh_version": None}
     assert delete(f"{refs_url(env)}/{tetra}").status_code == 204
     run_job(env, post(b + "/process/track", {"quality": "preview"}), "process_track")
@@ -230,7 +231,7 @@ def test_upload_list_rename_serve_and_delete(tracked):
     assert get(refs_url(tracked)).json()["references"] == []
     assert not any(p.name.startswith(rec["id"]) for p in folder.iterdir())
     for call in (lambda u: get(u + "/mesh.ply"), lambda u: patch(u, {"name": "x"}), delete):
-        err(call(f"{refs_url(tracked)}/{rec['id']}"), 404, "reference")
+        err(call(f"{refs_url(tracked)}/{rec['id']}"), 404, "CAD model")
     err(get(f"{tracked['url']}/api/projects/no-such-project/references"), 404)
 
 
@@ -242,7 +243,7 @@ def test_wrong_formats_broken_files_and_oversized_bodies_are_refused(tracked):
     with pytest.raises(ValueError) as refused:
         read_reference(tracked["root"] / "part.step")
     r = err(upload(tracked, b"ISO-10303-21;", "part.step"), 422, "STL")
-    assert r["detail"] == str(refused.value) and "export" in r["detail"]
+    assert r["detail"] == sentence(str(refused.value)) and "export" in r["detail"]
     err(upload(tracked, data, "ball"), 422)  # no extension
     err(upload(tracked, data, None), 422, "name")  # no name at all
     err(upload(tracked, b"", "empty.stl"), 422)
@@ -373,7 +374,7 @@ def test_the_scans_other_files_stay_byte_identical(tracked, ball):
     assert {k: v for k, v in after.items() if k != "comparison.json"} == before
     assert delete(b + "/comparison").status_code == 204
     assert on_disk(scan_dir(tracked)) == before
-    err(delete(b + "/comparison"), 404, "comparison")
+    err(delete(b + "/comparison"), 404, "not compared with a CAD model")
     assert get(b + "/comparison").json()["comparison"] is None
 
 
@@ -394,7 +395,7 @@ def test_datums_refused_without_a_frame_then_on_the_frame_and_a_best_fit_beside_
     b = base_url(tracked)
     sd = scan_dir(tracked)
     start(tracked, ball["id"])
-    err(post(b + "/comparison/align", {"method": "datums"}), 422, "frame")
+    err(post(b + "/comparison/align", {"method": "datums"}), 422, "part's axes")
     v = int(get(b + "/process").json()["current"]["version"])
     doc = kf.empty()
     doc["features"] = [frame_record(fid, v) for fid in FRAME_SHAPES]
@@ -427,10 +428,10 @@ def test_datums_refused_without_a_frame_then_on_the_frame_and_a_best_fit_beside_
 
 def test_bad_bodies_unknown_ids_and_a_busy_or_missing_comparison(tracked, ball):
     b = base_url(tracked)
-    err(post(b + "/comparison/align", {"method": "shape"}), 404, "comparison")
-    err(post(b + "/comparison/units", {"action": "keep"}), 404, "comparison")
-    err(get(b + "/comparison/deviation.json"), 404, "comparison")
-    err(post(b + "/comparison", {"reference_id": "r-nothing"}), 404, "reference")
+    err(post(b + "/comparison/align", {"method": "shape"}), 404, "not compared with a CAD model")
+    err(post(b + "/comparison/units", {"action": "keep"}), 404, "not compared with a CAD model")
+    err(get(b + "/comparison/deviation.json"), 404, "not compared with a CAD model")
+    err(post(b + "/comparison", {"reference_id": "r-nothing"}), 404, "CAD model")
     err(post(b + "/comparison", {}), 422)
     err(post(b + "/comparison", {"reference_id": ball["id"], "tolerance_mm": -1}), 422)
     err(get(f"{tracked['url']}/api/projects/{tracked['pid']}/scans/scan-nope/comparison"), 404)

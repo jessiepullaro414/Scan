@@ -77,10 +77,15 @@ def _result(kind: str, grade: str, headline: str, verdict: str, metrics: list, a
 
 
 def plain_error(e: BaseException | str) -> str:
-    """An engine error message in plain words (capitalised, no ">=", degrees as deg -> °)."""
-    s = str(e).strip() or type(e).__name__ if isinstance(e, BaseException) else str(e)
-    s = s.replace(">=", "at least").replace("deg ", "° ").replace("`ohs calibrate stereo`", "the stereo calibration")
+    """An engine error message in plain words (capitalised, no ">=", degrees as deg -> °). A message
+    that reads like a program's (an exception's class name, code, a path:
+    :func:`~ohs.server.protocol.plain_reason`) gives a fixed sentence instead; it is in the log."""
+    from ohs.server.protocol import plain_reason
+
+    s = str(e).strip()
+    s = s.replace(">=", "at least").replace("deg ", "° ").replace("`ohs calibrate stereo`", "the camera calibration")
     s = re.sub(r"\(15-25 recommended\)", "(15–25 recommended)", s)
+    s = plain_reason(s, "The calibration could not be worked out from these views")
     return s[:1].upper() + s[1:] if s else "The calibration failed"
 
 
@@ -233,8 +238,8 @@ def _stereo(value: Any, report: dict, view_ids: Sequence[int], truth: tuple | No
         headline = f"{grade.capitalize()} stereo calibration"
         verdict = (f"The two cameras are calibrated to {rms:.2f} px from {used} views"
                    + (f", and rows match to {dv:.2f} px after rectification" if dv is not None else "") + ". "
-                   + ("Depth from this calibration will be accurate." if grade == "excellent" else
-                      "Good enough for accurate scans."))
+                   + ("This calibration is as good as the board allows." if grade == "excellent" else
+                      "Good: no step needs redoing."))  # no accuracy is promised until measured (UX_PLAN U10)
     elif grade == "usable":
         headline = "Usable stereo calibration"
         verdict = (f"It works ({rms:.2f} px from {used} views), but scans will be less accurate than they could be. "
@@ -371,7 +376,8 @@ def _lasers(planes: dict, report: dict, view_ids: Sequence[int], truth: tuple | 
     every = "Both" if two else f"All {len(names)}"
     if grade in ("excellent", "good"):
         headline = f"{grade.capitalize()} laser calibration"
-        verdict = f"{every} laser planes are calibrated: the laser points fit them within {fit} (median)."
+        verdict = (f"{every} laser lines are calibrated well. The laser points lie within {fit} of their planes "
+                   "(median).")
     elif grade == "usable":
         headline = "Usable laser calibration"
         verdict = (f"{'Both' if two else every} planes are calibrated ({fit} median), "
@@ -659,9 +665,10 @@ def sim_truth(kind: str, value: Any, target: Any, truth: Any) -> tuple[list, dic
                 metric("Gyro bias vs truth", f"{e['gyro_bias_err_mrad_s']:.2f} mrad/s", e["gyro_bias_err_mrad_s"] < 1.0,
                        "Error of the gyro bias."),
             ]
-    except Exception as e:  # a comparison only
+    except Exception:  # a comparison only
         log.exception("simulator truth comparison failed")
-        rows.append(metric("Comparison with the truth", "not available", None, f"It could not be computed: {e}"))
+        rows.append(metric("Comparison with the truth", "not available", None,
+                           "It could not be worked out this time. The calibration itself is not affected."))
     return rows, nums
 
 

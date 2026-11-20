@@ -42,14 +42,14 @@ from typing import Any, Mapping
 
 import ohs.measure.features as kf
 from ohs.inspect.gapflush import measure_gap_flush
-from ohs.server.protocol import ApiError
+from ohs.server.protocol import ApiError, plain_reason
 
 __all__ = ["FlushManager", "CSV_COLUMNS", "stations_csv", "clicks_from_query"]
 
 #: the stations CSV's columns, in order
 CSV_COLUMNS = ("position_mm", "x_mm", "y_mm", "z_mm", "flush_mm", "flush_sigma_mm", "flush_trusted", "side_a", "side_b",
                "bridged", "notes")
-_HINT_CLICKS = "click once on each panel, a few millimetres from the seam: the first click's panel is panel A"
+_HINT_CLICKS = "Click once on each panel, a few millimetres from the seam: the first click's panel is panel A."
 
 
 def _bad(detail: str, hint: str = _HINT_CLICKS) -> ApiError:
@@ -61,7 +61,7 @@ def _click(x: Any, what: str) -> list[float]:
     if isinstance(x, str):
         x = [p for p in x.replace(";", ",").split(",") if p.strip()]
     if not isinstance(x, (list, tuple)) or len(x) != 3:
-        raise _bad(f"{what} must be three numbers (x, y, z in mm), got {x!r}")
+        raise _bad(f"The {what} the page sent is not a point on the mesh.")
     out = []
     for v in x:
         try:
@@ -69,14 +69,14 @@ def _click(x: Any, what: str) -> list[float]:
         except (TypeError, ValueError):
             f = math.nan
         if not math.isfinite(f):
-            raise _bad(f"{what} must be three finite numbers, got {x!r}")
+            raise _bad(f"The {what} the page sent is not a point on the mesh.")
         out.append(f)
     return out
 
 
 def clicks_from_query(q: Mapping[str, str]) -> tuple[list[float], list[float]]:
     """The two clicks of a download's query: ``a`` and ``b`` as "x,y,z"."""
-    return _click(q.get("a"), "a (the click on the first panel)"), _click(q.get("b"), "b (the click on the second panel)")
+    return _click(q.get("a"), "click on the first panel"), _click(q.get("b"), "click on the second panel")
 
 
 def _cell(x: Any) -> str:
@@ -141,7 +141,7 @@ class FlushManager:
         try:
             gf = measure_gap_flush(V, F, a, b, sigma=S, filled=Fl)
         except ValueError as e:
-            raise _bad(str(e)) from None
+            raise _bad(plain_reason(e, "The gap and flush cannot be measured from these two clicks.")) from None
         return gf.to_dict(), v
 
     def _filename(self, pid: str, sid: str, name: str | None) -> str:
@@ -161,7 +161,7 @@ class FlushManager:
         for i, s in enumerate(seams):
             if s["id"] == xid:
                 return i
-        raise ApiError(404, f"no kept seam {xid!r}", "read the list again (GET .../seams)")
+        raise ApiError(404, "This seam is no longer kept with the scan.", "Reload the page to see the kept seams.")
 
     def _kept(self, pid: str, sid: str, xid: str) -> dict:
         doc, _, _ = self.feats.snapshot(pid, sid)
@@ -182,8 +182,7 @@ class FlushManager:
         view = self._view(rec, v)
         warnings = []
         if view["mesh_changed"]:
-            warnings.append(f"the mesh has changed since this seam was kept (it was measured on version "
-                            f"{rec['mesh_version']}, the mesh is now version {v}): this is the flush of the current mesh")
+            warnings.append("the mesh has changed since this seam was kept: this is the flush of the current mesh")
         un = untrusted_warning(record)
         if un:
             warnings.append(un)
@@ -192,8 +191,8 @@ class FlushManager:
     # ------------------------------------------------------------------ routes
     def flush(self, pid: str, sid: str, a: Any, b: Any) -> dict:
         """``POST .../flush``: the flush along the seam between the panels of two clicks (module docstring)."""
-        a = _click(a, "a (the click on the first panel)")
-        b = _click(b, "b (the click on the second panel)")
+        a = _click(a, "click on the first panel")
+        b = _click(b, "click on the second panel")
         record, v = self.measure(pid, sid, a, b)
         un = untrusted_warning(record)
         return self._answer(record, v, [un] if un else [], self._filename(pid, sid, None))
@@ -209,7 +208,7 @@ class FlushManager:
     @staticmethod
     def _check_file(name: str) -> None:
         if name != "stations.csv":
-            raise ApiError(404, f"no flush file {name!r}", "available: stations.csv")
+            raise ApiError(404, "A seam's measurements download as a table (CSV) only.", "Download the table.")
 
     def list(self, pid: str, sid: str) -> dict:
         """``GET .../seams``: the kept seams, oldest first, each with ``mesh_changed``."""
@@ -219,12 +218,13 @@ class FlushManager:
     def keep(self, pid: str, sid: str, a: Any, b: Any, name: str | None = None) -> dict:
         """``POST .../seams``: keep a seam: its two clicks, a name, the current mesh version. Returns it as
         ``GET .../seams`` shows it. Measures nothing (opening it does)."""
-        a = _click(a, "a (the click on the first panel)")
-        b = _click(b, "b (the click on the second panel)")
+        a = _click(a, "click on the first panel")
+        b = _click(b, "click on the second panel")
         try:
             name = None if name is None else kf.clean_name(name)
         except ValueError as e:
-            raise _bad(str(e), f"give a name of 1 to {kf.NAME_MAX} characters") from None
+            raise _bad(plain_reason(e, "This name cannot be used."),
+                       f"Give a name of 1 to {kf.NAME_MAX} characters.") from None
         v = self._mesh(pid, sid)[0]
 
         def add(seams: list[dict], doc: dict) -> dict:
@@ -250,11 +250,12 @@ class FlushManager:
         """``PATCH .../seams/{id}``: a new name, and/or (``mark_current``) mark it as measured on the current mesh
         (its clicks stay as they are). 422 for neither."""
         if name is None and not mark_current:
-            raise _bad("give a new name, or mark_current: true", "send {\"name\": ...} or {\"mark_current\": true}")
+            raise _bad("Nothing to change on this seam.", "Give it a new name, or mark it as measured on this mesh.")
         try:
             name = None if name is None else kf.clean_name(name)
         except ValueError as e:
-            raise _bad(str(e), f"give a name of 1 to {kf.NAME_MAX} characters") from None
+            raise _bad(plain_reason(e, "This name cannot be used."),
+                       f"Give a name of 1 to {kf.NAME_MAX} characters.") from None
         v = self._mesh(pid, sid)[0] if mark_current else None
 
         def change(seams: list[dict], doc: dict) -> dict:

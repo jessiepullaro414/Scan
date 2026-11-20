@@ -274,12 +274,12 @@ def test_wizard_end_to_end_on_the_simulator(env):
     t0 = time.monotonic()
     s = _ok(_post(url, "/api/calibration/start", {"kind": "imu"}))
     assert s["state"] == "armed" and s["views"] == [] and s["target_views"] == [0, 0]
-    _refused(_post(url, "/api/calibration/capture"), 409, "records continuously")
-    _refused(_post(url, "/api/calibration/solve"), 409, "cannot calibrate now")
+    _refused(_post(url, "/api/calibration/capture"), 409, "records all the time")
+    _refused(_post(url, "/api/calibration/solve"), 409, "cannot be worked out while")
     s = _ok(_post(url, "/api/calibration/imu/start"))
     assert s["state"] == "recording" and s["recording"]
     first = _post(url, "/api/calibration/imu/stop")
-    _refused(first, 409, "keep rotating")
+    _refused(first, 409, "keep turning")
     _wait(lambda: _post(url, "/api/calibration/imu/stop").status_code == 200, 120, "the IMU minimum", every=0.5)
     s = _get(url, "/api/calibration").json()
     assert s["state"] == "capturing"
@@ -293,7 +293,7 @@ def test_wizard_end_to_end_on_the_simulator(env):
     truths["imu_grade"] = r["grade"]
     assert e["R_ci_err_deg"] < 0.5 and abs(e["time_offset_err_ms"]) < 3.0 and e["gyro_bias_err_mrad_s"] < 1.5, e
     if not r["ok"]:
-        _refused(_post(url, "/api/calibration/save"), 409, "needs force")
+        _refused(_post(url, "/api/calibration/save"), 409, "not saved unless you ask")
     saved = _ok(_post(url, "/api/calibration/save", {"force": not r["ok"]}))["setup"]
     assert saved["calibration"]["imu"] is True
 
@@ -369,8 +369,8 @@ def test_calibration_rules_on_the_simulator(env, monkeypatch):
     _ok(_post(url, "/api/device/connect", {"source": "replay", "recording": str(rec), "loop": True}))
     _refused(_post(url, "/api/calibration/start", {"kind": "stereo"}), 409, "replayed recording")
     _connect_sim(url)
-    _refused(_post(url, "/api/calibration/start", {"kind": "lasers"}), 409, "stereo calibration first")
-    _refused(_post(url, "/api/calibration/start", {"kind": "imu"}), 409, "stereo calibration first")
+    _refused(_post(url, "/api/calibration/start", {"kind": "lasers"}), 409, "cameras calibrated first")
+    _refused(_post(url, "/api/calibration/start", {"kind": "imu"}), 409, "cameras calibrated first")
     s = _ok(_post(url, "/api/calibration/start", {"kind": "stereo"}))
     _refused(_post(url, "/api/calibration/start", {"kind": "stereo"}), 409, "already running")
     pid = _ok(_post(url, "/api/projects", {"name": "Blocked"}))["id"]
@@ -378,7 +378,7 @@ def test_calibration_rules_on_the_simulator(env, monkeypatch):
     _refused(_post(url, "/api/device/connect", {"source": "sim"}), 409, "calibration is running")
     _refused(_post(url, "/api/settings/camera", {"index": 1}), 409, "calibration")
     _refused(_post(url, "/api/setup/selftest"), 409, "calibration")
-    _refused(_post(url, "/api/calibration/imu/start"), 409, "only the imu step")
+    _refused(_post(url, "/api/calibration/imu/start"), 409, "only the motion sensor step")
     # manual captures with auto-capture off
     s = _ok(_post(url, "/api/calibration/auto", {"enabled": False}))
     assert s["auto"] is False and s["views"] == []
@@ -402,8 +402,8 @@ def test_calibration_rules_on_the_simulator(env, monkeypatch):
         rows = list(csv.DictReader(fh))
     assert [int(r["index"]) for r in rows] == [0, 2] and not (folder / "frames" / "000001.png").exists()
     assert json.loads((folder / "meta.json").read_text(encoding="utf-8"))["n_frames"] == 2
-    _refused(_get(url, "/api/calibration/views/1/thumb.jpg"), 404, "no view")
-    _refused(requests.delete(url + "/api/calibration/views/99", timeout=T), 404, "no view")
+    _refused(_get(url, "/api/calibration/views/1/thumb.jpg"), 404, "view 2 is no longer")
+    _refused(requests.delete(url + "/api/calibration/views/99", timeout=T), 404, "view 100 is no longer")
     while len(_get(url, "/api/calibration").json()["views"]) < 4:
         _post(url, "/api/calibration/capture")
         time.sleep(0.3)
@@ -536,10 +536,10 @@ def test_calibration_with_the_camera(tmp_path, demo_dir):
             dev = _ok(_post(url, "/api/device/connect", {"source": "camera"}))
             assert dev["source"] == "camera" and dev["pico"]["connected"] and dev["sim_scene"] is None
             s = _ok(_post(url, "/api/calibration/start", {"kind": "stereo"}))
-            assert s["target"] == "device" and s["emitters"] == "Emitters off: ambient light only"
+            assert s["target"] == "device" and s["emitters"] == "Lasers and dots off: room light only"
             body = _wait(lambda: (r := _post(url, "/api/calibration/capture")).status_code == 409 and
                          "cameras" in r.json()["detail"] and r.json(), 20, "the refusal")
-            assert body["detail"] == "Not captured: both cameras must see the board (0 common corners, need 8)"
+            assert body["detail"] == "Not captured: both cameras must see the board (0 common corners, need 8)."
             assert "both cameras" in body["hint"]
             sp.press(0.08)  # the trigger captures too, and says why it cannot
             msgs = recv_until(ws, lambda m, p, raw: m["type"] == "log" and "Not captured" in m["message"], timeout=10)
@@ -556,14 +556,14 @@ def test_calibration_with_the_camera(tmp_path, demo_dir):
             _ok(_post(url, "/api/calibration/cancel"))
             assert sp.emits()[-1] == "EMIT 0 0 0" and all(d == 0 for d in sp.duties())
             s = _ok(_post(url, "/api/calibration/start", {"kind": "imu"}))
-            assert s["state"] == "armed" and s["emitters"] == "Emitters off: ambient light only"
+            assert s["state"] == "armed" and s["emitters"] == "Lasers and dots off: room light only"
             sp.press(0.08)  # a short press starts the IMU recording
             s = _wait(lambda: (x := _get(url, "/api/calibration").json())["state"] == "recording" and x, 10, "recording")
             folder = Path(s["recording"])
             assert folder.parent == tmp_path / "scans" / "calibration" and folder.name.startswith("imu-")
-            _refused(_post(url, "/api/calibration/imu/stop"), 409, "keep rotating")
+            _refused(_post(url, "/api/calibration/imu/stop"), 409, "keep turning")
             sp.press(0.08)  # ... and too early, the trigger says so
-            recv_until(ws, lambda m, p, raw: m["type"] == "log" and "Keep rotating" in m["message"], timeout=10)
+            recv_until(ws, lambda m, p, raw: m["type"] == "log" and "Keep turning" in m["message"], timeout=10)
             assert _get(url, "/api/calibration").json()["state"] == "recording"
             time.sleep(0.5)
             _ok(_post(url, "/api/calibration/cancel"))
@@ -603,7 +603,7 @@ def test_device_lost_cancels_the_calibration(tmp_path, demo_dir):
 
         msgs = recv_until(ws, cancelled, timeout=20)
         logs = [m["message"] for m, _, _ in msgs if m["type"] == "log"]
-        assert any("calibration was cancelled because the device stopped" in s for s in logs), logs
+        assert any("calibration was cancelled because the scanner stopped" in s for s in logs), logs
         dev = _get(url, "/api/device").json()
         assert dev["connected"] is False and "camera" in (dev["error"] or "")
 
@@ -628,7 +628,7 @@ def test_device_target_stereo_is_saved_and_the_camera_reloads_it(tmp_path, demo_
         pc = _ok(_post(url, "/api/setup/print-check", {"measured_mm": 99.0, "apply": True}))
         assert pc["scale"] == pytest.approx(0.99)
         s = _ok(_post(url, "/api/calibration/start", {"kind": "stereo"}))
-        assert s["target"] == "device" and "Emitters off" in s["emitters"]
+        assert s["target"] == "device" and "Lasers and dots off" in s["emitters"]
         s = _views(url, 15, stall_s=8.0)
         rec = Path(s["recording"])
         assert rec.parent == tmp_path / "scans" / "calibration" and rec.name.startswith("stereo-")
@@ -886,7 +886,7 @@ def test_results_for_four_lasers():
     planes = dict.fromkeys(FOUR, object())
     r = cr.build_result("lasers", planes, rep, view_ids=range(7))
     assert r["grade"] == "excellent" and r["ok"] and r["headline"] == "Excellent laser calibration"
-    assert r["verdict"].startswith("All 4 laser planes are calibrated")
+    assert r["verdict"].startswith("All 4 laser lines are calibrated well")
     assert [p["name"] for p in r["planes"]] == list(FOUR) and all(p["calibrated"] for p in r["planes"])
     assert [p["label"] for p in r["planes"]] == ["Vertical", "Horizontal", "Second vertical", "Second horizontal"]
     assert r["planes"][3]["median_mm"] == pytest.approx(0.045) and r["planes"][3]["where"] == "margin"
@@ -912,8 +912,8 @@ def test_results_for_four_lasers():
     two = dict(rep, names=["vertical", "horizontal"], lasers={n: entry() for n in FOUR[:2]},
                residuals={n: rep["residuals"][n] for n in FOUR[:2]}, region_used=dict.fromkeys(FOUR[:2], "margin"))
     r = cr.build_result("lasers", dict.fromkeys(FOUR[:2], object()), two, view_ids=range(7))
-    assert r["verdict"] == ("Both laser planes are calibrated: the laser points fit them within vertical 0.03 mm, "
-                            "horizontal 0.04 mm (median).")
+    assert r["verdict"] == ("Both laser lines are calibrated well. The laser points lie within vertical 0.03 mm, "
+                            "horizontal 0.04 mm of their planes (median).")
     assert [p["name"] for p in r["planes"]] == ["vertical", "horizontal"]
     assert cr.part_summary("lasers", two, dict.fromkeys(FOUR[:2], object())) == \
         "Both laser lines (vertical 0.03 mm, horizontal 0.04 mm)"

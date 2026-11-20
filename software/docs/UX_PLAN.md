@@ -25,10 +25,11 @@ self-test (U18), the amber "Calibration loaded" under "Recalibration required" (
 on Cancel in danger dialogs (U6), "Making the mesh" after Stop (U30), "1–7" with a CAD model
 loaded (U25). Not ticked yet, with what is left:
 
-- **U8, U10, U13, U48:** the pages' half is done (the words on the pages, the demo's verdict
-  sentences through `lib/calibWords.ts`, the chips "Holes up to 5 mm around (Ø 1.6)", "Calibration
-  valid"). The server's half (its own words, which the demo copies in places: "floaters",
-  "voxels", "RMS", "Your calibration still holds") comes with U9.
+- **U8, U48:** the pages' half is done (the words on the pages, "Calibration valid"). Left in
+  the server, because the pages use the same names and both sides change together in the first
+  wave of choices: "Your calibration still holds", "2-minute check", "σ" in the Smooth labels,
+  "Remove loose pieces", "the part's frame" in `frame_label`, the stereo and "laser planes" words
+  in the calibration's metric rows.
 - **U25:** the key ranges are right ("1–7" from the modes that work); the shortcut sheet is the
   choice half.
 - **U31:** the recipes and the stereo and laser verdict sentences are now compared with the
@@ -38,7 +39,44 @@ loaded (U25). Not ticked yet, with what is left:
   "Open the project folder" needs a route in the server (today only the printables folder opens),
   so it goes with the third wave.
 - **U32** is complete for every number the pages write; texts that come whole from the server
-  still have a plain space before the unit (with U9).
+  still have a plain space before the unit.
+
+**Done (2026-11-20), the server's words: U9, U10, U13.** About 530 texts in 23 files of
+`ohs/server`. How it holds from now on:
+
+- Every error's detail and hint pass through `protocol.sentence()` (a capital, a full stop), so
+  the pages no longer have to repair them.
+- A caught exception reaches the user only through `protocol.plain_reason()`: a sentence written
+  for a person passes, anything that reads like a program's goes to the log and a fixed plain
+  sentence is shown instead.
+- A job that fails on a program error says fixed words for its kind (`jobs.FAILURE_TEXT`: what
+  failed, that the recording is safe, what to try); the exception is in the log.
+- No ids, routes, command lines, Python quotes or parameter names in what the user reads. The
+  guard is `tests/test_server_error_words.py` (27 checks); it cannot see a text built in a
+  variable first, or the Free space refusals (returned as tuples): those were read by hand.
+- U10: "This calibration is as good as the board allows." / "Good: no step needs redoing." /
+  "… laser lines are calibrated well."; U13: "Fill holes up to 15 mm around (about Ø 5 mm)".
+
+The pages matched on the old words in four places, mended with it: the Free space toast listed
+"nothing to free" as a failure (`lib/keepMode.ts`), Setup's "Go to Connect / Go to Stereo" links
+(`pages/setup/common.tsx`), a wrong margin shown as "no table" (`TableSection.tsx`), and the
+mesh-changed note under Compare. Checked on the real engine: six refusals read through the API
+(no scanner, a task that is gone, an unknown address, a project that is gone, a calibration
+without a scanner, a scan without a scanner).
+
+Left from this, small:
+
+- A length typed with a comma ("100,2") in the print check, which U9 guessed was refused: the
+  page already turns the comma into a point before it sends the number
+  (`pages/setup/PrintStep.tsx`), so the user is not refused. The server still takes a number
+  only, as before; nothing to change.
+- The demo's copies of server texts (`api/mock/*.ts`) still have the old words in about twenty
+  places ("Reading the reference", "Emitters off", "No Pico", lower-case refusals): they follow
+  in the first wave, with the names.
+- Two engine messages for the part's axes ("secondary_zero…", "Axes must be … got 'XX'") now
+  show the generic "These shapes cannot set the part's axes." They need words of their own in
+  the engine (`ohs/measure`), not in the server.
+- "no pose: …" in a Scan check area's reason comes from the engine (`ohs/guide/views.py`).
 
 ## The ten that matter most
 
@@ -127,7 +165,7 @@ loaded (U25). Not ticked yet, with what is left:
 - **Align:** "0.25 mm RMS" → "typically 0.25 mm apart"; "ACCEPTED" → "Aligned"; "fused again" →
   "rebuilt together".
 
-### [ ] U9. Server error texts leak exceptions, ids, routes and command lines (defect, M)
+### [x] U9. Server error texts leak exceptions, ids, routes and command lines (defect, M)
 - About 54 errors put `str(e)` into what the user reads, about 30 job and stage messages too;
   about 30 hints name API routes; about 10 name command lines; about 35 show internal ids.
 - **Worst, with the rewrite:**
@@ -156,7 +194,7 @@ loaded (U25). Not ticked yet, with what is left:
   - `keep.py`: "a scan keeps full, engineering or standard" matches no label in the app.
 - Also: lowercase fragments and whole sentences are mixed; capitalise in one place.
 
-### [ ] U10. Accuracy promised from a calibration grade (defect, S)
+### [x] U10. Accuracy promised from a calibration grade (defect, S)
 - Demo: "Depth will be accurate to about 0.1 mm at 250 mm." Server (`calib_results.py`): "Depth
   from this calibration will be accurate.", "Laser points will be accurate across the scanning
   range."; Process: "...are more accurate."
@@ -181,7 +219,7 @@ loaded (U25). Not ticked yet, with what is left:
   rest under a closed "Advanced: what the settings file says" with "Open the settings folder";
   explain or drop "Scans folder"; drop "(M3)".
 
-### [ ] U13. What a hole's size means; the demo's recipes differ from the engine's (defect, S)
+### [x] U13. What a hole's size means; the demo's recipes differ from the engine's (defect, S)
 - Chip "Holes ≤ 5 mm" and history "Fill holes up to 10 mm" mean the length round the hole, so
   15 mm is about Ø 4.8 mm. Car parts are mounted by holes.
 - **Mend:** "Holes up to 15 mm around (Ø 5)"; the history the same. The demo's built-in recipes

@@ -182,7 +182,7 @@ def test_a_fresh_scan_and_the_409_rules(env):
     err(post(b + "/process/fuse", {"voxel_mm": 0.01}), 422)
     err(post(b + "/process/edits", {"op": "explode"}), 422)
     err(post(b + "/process/recipe", {"recipe_id": "nope", "scope": "edits"}), 404, "recipe")
-    err(get(base_url(env, sid="scan-missing") + "/process"), 404, "no scan")
+    err(get(base_url(env, sid="scan-missing") + "/process"), 404, "no such scan")
 
 
 def test_track_edits_undo_redo_and_the_process_messages(env):
@@ -235,7 +235,7 @@ def test_track_edits_undo_redo_and_the_process_messages(env):
     # edits
     v0 = cur["version"]
     plan = [("remove_floaters", {"min_size_mm": 5}, "Remove loose pieces smaller than 5 mm"),
-            ("fill_holes", {"max_hole_mm": 30}, "Fill holes up to 30 mm"),
+            ("fill_holes", {"max_hole_mm": 30}, "Fill holes up to 30 mm around (about Ø 10 mm)"),
             ("smooth", {"method": "bilateral", "strength": 0.3}, "Smooth (bilateral, 30 %, edges kept)"),
             ("decimate", {"ratio": 0.5}, "Simplify to 50 % of the triangles")]
     tris = [s["base"]["triangles"]]
@@ -395,16 +395,16 @@ def test_selections_and_their_checks(env):
     sel_dir = env["root"] / "projects" / env["pid"] / "scans" / env["sid"] / "process" / "selections"
     assert len(list(sel_dir.glob("*.npy"))) == 2  # kept for replays until the edit is dropped
     err(post(b + "/process/edits", {"op": "delete_faces", "params": {"faces": faces_b64([m])}}), 422, "has triangle")
-    err(post(b + "/process/edits", {"op": "delete_faces", "params": {"faces": "not base64!"}}), 422, "base64")
+    err(post(b + "/process/edits", {"op": "delete_faces", "params": {"faces": "not base64!"}}), 422, "cannot be read")
     err(post(b + "/process/edits", {"op": "delete_faces", "params": {"faces": base64.b64encode(b"abc").decode()}}),
-        422, "bytes")
+        422, "cannot be read")
     err(post(b + "/process/edits", {"op": "keep_faces", "params": {}}), 422, "missing")
     err(post(b + "/process/edits", {"op": "delete_faces", "params": {"faces": faces_b64([0])}, "version": 1}),
         409, "changed")
-    err(post(b + "/process/edits", {"op": "fill_holes", "params": {}}), 422, "max_hole_mm")
-    err(post(b + "/process/edits", {"op": "smooth", "params": {"method": "gauss", "strength": 0.5}}), 422, "method")
+    err(post(b + "/process/edits", {"op": "fill_holes", "params": {}}), 422, "hole size is missing")
+    err(post(b + "/process/edits", {"op": "smooth", "params": {"method": "gauss", "strength": 0.5}}), 422, "way of smoothing")
     err(post(b + "/process/edits", {"op": "decimate", "params": {"ratio": 0.5, "target_triangles": 100}}), 422)
-    err(post(b + "/process/edits", {"op": "remove_floaters", "params": {"size": 5}}), 422, "unknown parameter")
+    err(post(b + "/process/edits", {"op": "remove_floaters", "params": {"size": 5}}), 422, "a setting this edit does not have")
     # deleting everything is refused and leaves the mesh as it was
     r = post(b + "/process/edits", {"op": "delete_faces", "params": {"faces": faces_b64(range(m))}})
     failed = wait_job(env, r.json()["id"])
@@ -458,8 +458,8 @@ def test_fit_a_plane_on_the_table(env, tmp_path):
     assert 0 < fit["tolerance_mm"] < 3.0 and isinstance(fit["warnings"], list)
     assert fit["mean_sigma_mm"] is None or fit["mean_sigma_mm"] > 0
     # clear answers for what does not fit
-    err(post(b + "/fit", {"kind": "cone", **click}), 422, "unknown kind")
-    err(post(b + "/fit", {**click, "kind": "plane", "face": len(F) + 5}), 422, "not on the mesh")
+    err(post(b + "/fit", {"kind": "cone", **click}), 422, "does not know this kind of shape")
+    err(post(b + "/fit", {**click, "kind": "plane", "face": len(F) + 5}), 422, "not on the current mesh")
     err(post(b + "/fit", {**click, "kind": "plane", "version": cur["version"] - 1}), 409, "changed")
     # shapes the scene does not have: a cylinder or a hole in a table with a sphere on it. (On this
     # short, noisy scan the cylinder was at times accepted, with a radius of metres: MAINTENANCE_PLAN.md, F1.)
@@ -584,12 +584,12 @@ def test_recipes_crud(env):
     assert fs["settings"]["quality"] == "preview" and fs["settings"]["straighten"] == "off"
     assert fs["ops"] == []  # the sphere's edits are all undone (cursor 0)
     err(post(url, {"name": "Bad", "settings": {}, "ops": [{"op": "delete_faces", "params": {}}]}), 422)
-    err(post(url, {"name": "Bad", "settings": {}, "ops": [{"op": "fill_holes", "params": {}}]}), 422, "max_hole_mm")
-    err(post(url, {"name": "Bad"}), 422, "from_scan")
+    err(post(url, {"name": "Bad", "settings": {}, "ops": [{"op": "fill_holes", "params": {}}]}), 422, "hole size is missing")
+    err(post(url, {"name": "Bad"}), 422, "what the recipe holds")
     err(post(url, {"name": "   ", "settings": {}, "ops": []}), 400, "empty")
     err(requests.delete(f"{url}/default", timeout=T), 409, "built-in")
     assert requests.delete(f"{url}/{fs['id']}", timeout=T).status_code == 204
-    err(requests.delete(f"{url}/{fs['id']}", timeout=T), 404, "no recipe")
+    err(requests.delete(f"{url}/{fs['id']}", timeout=T), 404, "no longer in the app")
     env["user_recipe"] = rec["id"]
 
 
@@ -824,13 +824,13 @@ def test_measurement_safe_edits(env):
     pid, sid = add_scan(env, "Safe edits", env["rec"])
     b = base_url(env, pid, sid)
     run_job(env, post(b + "/process/track", {"quality": "preview"}), "process_track")
-    err(post(b + "/process/edits", {"op": "decimate", "params": {}}), 422, "max_error_mm")
+    err(post(b + "/process/edits", {"op": "decimate", "params": {}}), 422, "the largest change")
     err(post(b + "/process/edits", {"op": "smooth", "params": {"method": "taubin", "strength": 0.3,
-                                                                "within_sigma": "yes"}}), 422, "within_sigma")
+                                                                "within_sigma": "yes"}}), 422, "the limit by the scan's scatter")
     err(post(b + "/process/edits", {"op": "smooth", "params": {"method": "taubin", "strength": 0.3,
-                                                                "flat_only": 1}}), 422, "flat_only")
+                                                                "flat_only": 1}}), 422, "flat areas only")
     err(post(b + "/process/edits", {"op": "smooth", "params": {"method": "taubin", "strength": 0.3,
-                                                                "away_from_edges": "on"}}), 422, "away_from_edges")
+                                                                "away_from_edges": "on"}}), 422, "away from edges")
     err(post(b + "/process/edits", {"op": "smooth", "params": {"method": "taubin", "strength": 0.3, "flat_only": True,
                                                                 "away_from_edges": True}}), 422, "not both")
     err(post(b + "/process/edits", {"op": "fill_holes", "params": {"max_hole_mm": 5, "watertight": 1}}), 422,
@@ -875,7 +875,7 @@ def test_measurement_safe_edits(env):
     run_job(env, post(b + "/process/edits", {"op": "fill_holes", "params": {"max_hole_mm": 60, "watertight": True}}),
             "mesh_edit")
     e = get(b + "/process").json()["edits"][-1]
-    assert e["label"] == "Make watertight: close every opening up to 60 mm" and "not watertight yet" in e["summary"]
+    assert e["label"] == "Make watertight: close every opening up to 60 mm around (about Ø 19 mm)" and "not watertight yet" in e["summary"]
 
 
 @pytest.mark.slow

@@ -393,7 +393,7 @@ export function ComparePanel({
           {n}
         </div>
       ))}
-      {c.mesh_changed ? <div className="mt-1 text-warn">The mesh has changed since it was aligned: the pose is kept (the scan's frame is the same) and the comparison is worked out on the current mesh.</div> : null}
+      {c.mesh_changed ? <div className="mt-1 text-warn">The mesh has changed since the scan was aligned with the CAD model. The alignment is kept (the scan's axes are the same) and the deviation is worked out again on the current mesh.</div> : null}
     </div>
   ) : null;
 

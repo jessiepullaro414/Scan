@@ -5,8 +5,10 @@ It reports progress with ``ctx.progress(fraction, message)`` (and, during a pass
 recording's frames, ``ctx.set_frames(...)``: the job's optional ``frames`` field) and calls ``ctx.check()`` (or reads
 ``ctx.cancelled``) at convenient points: cancellation is **cooperative**. ``ctx.check()`` raises
 :class:`JobCancelled` once :meth:`JobRunner.cancel` was called, and the job then ends in state
-``"cancelled"``. Any other exception ends it in ``"failed"`` with ``error`` = the message (an
-:class:`~ohs.server.protocol.ApiError` contributes its hint).
+``"cancelled"``. Any other exception ends it in ``"failed"``: an
+:class:`~ohs.server.protocol.ApiError` gives ``error`` its detail and its hint, two sentences; any
+other exception gives the fixed plain words of :data:`FAILURE_TEXT` for the job's kind, and the
+exception itself goes to the log.
 
 States: ``queued -> running -> done | failed | cancelled`` (a queued job that is cancelled never
 runs). ``on_done(job)`` runs exactly once per job, whatever state it ends in: in the worker, or, for a
@@ -26,13 +28,59 @@ from typing import Callable
 
 from ohs.server.protocol import ApiError, jsonable, now_iso
 
-__all__ = ["Job", "JobContext", "JobCancelled", "JobRunner", "ACTIVE_STATES"]
+__all__ = ["Job", "JobContext", "JobCancelled", "JobRunner", "ACTIVE_STATES", "FAILURE_TEXT", "failure_text",
+           "failure_notice"]
 
 log = logging.getLogger(__name__)
 
 ACTIVE_STATES = ("queued", "running")
 KEEP_FINISHED = 200
 UPDATE_PERIOD_S = 0.2
+
+
+#: what a job of each kind says when it fails for a reason that is not an ApiError (a program error:
+#: the exception goes to the log): what failed, that the recording is safe where it is, what to try
+_RETRY = "Try again; if it fails again, please report it, saying what you were doing."
+FAILURE_TEXT = {
+    "process_scan": "Making the mesh failed. Your recording is safe: try Make mesh again, or at Preview quality.",
+    "process_recipe": "The recipe stopped partway. Your recording is safe: try the recipe again, or Make mesh "
+                      "at Standard quality.",
+    "process_track": "Following the camera path failed. Your recording is safe: try Track again, or Make mesh at "
+                     "Preview quality.",
+    "process_straighten": "Straightening the scan failed. Your recording is safe: try it again, or go on without "
+                          "it.",
+    "process_refine": "Refining with the laser lines failed. Your recording is safe: try it again, or go on "
+                      "without it.",
+    "process_spacetime": "Refining from the images failed. Your recording is safe: try it again, or go on without "
+                         "it.",
+    "process_fuse": "Building the surface failed. Try again, or Make mesh at Standard quality. Your recording "
+                    "is safe.",
+    "mesh_edit": "The mesh edit failed, and the mesh is unchanged. " + _RETRY,
+    "align": "Aligning the scans failed. The scans are unchanged. " + _RETRY,
+    "align_all": "Aligning the scans failed. The scans are unchanged. " + _RETRY,
+    "merge": "Merging the scans failed. The scans it was made from are unchanged. " + _RETRY,
+    "reference_align": "Aligning the scan with the CAD model failed. The scan is unchanged. " + _RETRY,
+    "calibrate": "The calibration could not be worked out. Your views are kept: try again, or add a few views "
+                 "first.",
+    "generate_demo": "The simulator demo could not be made. Nothing else is affected. " + _RETRY,
+    "selftest": "The self-test could not finish. Nothing was changed. Check the connection, then run it again.",
+    "printables": "The printables could not be made. Check the free disk space, then try again.",
+}
+
+
+def failure_text(kind: str) -> str:
+    """The fixed plain words of a job of ``kind`` that failed for a program error."""
+    return FAILURE_TEXT.get(kind, "The task failed. Your recordings are safe. " + _RETRY)
+
+
+def failure_notice(job: "Job", what: str, safe: str = "") -> str:
+    """The words of a notice about the failed ``job``: ``what`` failed (a sentence), why (the job's
+    ``error``, its detail and hint) and ``safe`` (what is unchanged). The fixed words of a program
+    error (:func:`failure_text`) say all of that already, and stand alone."""
+    err = job.error or ""
+    if err and err == failure_text(job.kind):
+        return err
+    return " ".join(x for x in (what, err, safe) if x)
 
 
 class JobCancelled(Exception):
@@ -109,7 +157,8 @@ class JobRunner:
         with self._lock:
             job = self._jobs.get(job_id)
         if job is None:
-            raise ApiError(404, f"no job {job_id!r}", "list the jobs with GET /api/jobs")
+            raise ApiError(404, "This task is no longer in the list.",
+                           "It may have finished a while ago: look at the scan or the page it was for.")
         return job
 
     def list(self) -> list[Job]:
@@ -126,7 +175,7 @@ class JobRunner:
                meta: dict | None = None, on_done: Callable[[Job], None] | None = None) -> Job:
         """Queue ``fn(ctx)``. ``on_done(job)`` runs in the worker after the job finished (any state)."""
         if self._closed:
-            raise ApiError(503, "the app is shutting down", "start OpenHandScan Studio again")
+            raise ApiError(503, "The app is shutting down.", "Start OpenHandScan Studio again.")
         job = Job(id=f"j-{uuid.uuid4().hex[:10]}", kind=kind, message=message, meta=dict(meta or {}),
                   on_done=on_done)
         with self._lock:
@@ -213,13 +262,12 @@ class JobRunner:
         except (JobCancelled, InterruptedError):
             job.state, job.message = "cancelled", "Cancelled"
             log.info("job %s (%s) cancelled", job.id, job.kind)
-        except ApiError as e:
+        except ApiError as e:  # its detail and its hint, two sentences
             job.state, job.error, job.message = "failed", str(e), "Failed"
             log.warning("job %s (%s) failed: %s", job.id, job.kind, e)
-        except Exception as e:  # report every failure to the UI
-            text = str(e) or type(e).__name__
+        except Exception:  # report every failure to the UI, in plain words; the cause goes to the log
             job.state, job.message = "failed", "Failed"
-            job.error = f"{text} (try again; if it keeps failing, run `ohs -v app` and look at the log)"
+            job.error = failure_text(job.kind)
             log.exception("job %s (%s) failed", job.id, job.kind)
         finally:
             job.frames = None  # no frame pass runs any more

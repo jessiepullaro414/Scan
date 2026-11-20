@@ -63,7 +63,7 @@ def tracked(env):  # noqa: F811 (the fixture imported above)
     assert s.json() == {"format_version": 1, "frame": None, "mesh_version": None, "features": [],
                         "measurements": [], "relations": []}
     err(post(b + "/features", {"kind": "plane", "face": 0, "point": [0, 0, 250]}), 409, "no mesh")
-    err(get(base_url(env, sid="scan-missing") + "/features"), 404, "no scan")
+    err(get(base_url(env, sid="scan-missing") + "/features"), 404, "no such scan")
     run_job(env, post(b + "/process/track", {"quality": "preview"}), "process_track")
     return env
 
@@ -102,7 +102,7 @@ def test_keep_reload_rename_and_delete(tracked, tmp_path):
     assert np.array_equal(kf.load_faces(scan_dir(tracked), f1["id"]), faces)
     fr = get(f"{b}/features/{f1['id']}/faces").json()
     assert fr == {"id": f1["id"], "mesh_version": click["version"], "n_faces": len(faces), "faces": f1["faces"]}
-    err(get(f"{b}/features/f-nope/faces"), 404, "f-nope")
+    err(get(f"{b}/features/f-nope/faces"), 404, "no longer kept")
 
     f2 = post(b + "/features", {"kind": "plane", **click, "name": "  Table  "}).json()
     assert f2["name"] == "Table" and f2["id"] != f1["id"]
@@ -134,9 +134,9 @@ def test_keep_reload_rename_and_delete(tracked, tmp_path):
     assert s["relations"][0]["name"] == "Twins"
     assert kf.load(scan_dir(tracked))["features"][0]["name"] == "Table top"
     err(patch(f"{b}/features/{f1['id']}", {"name": "   "}), 422, "name")
-    err(patch(f"{b}/features/f-nope", {"name": "x"}), 404, "f-nope")
+    err(patch(f"{b}/features/f-nope", {"name": "x"}), 404, "no longer in the scan")
     # a relation needs two kept fits
-    err(post(b + "/features/relations", {"a": f1["id"], "b": "f-nope"}), 422, "f-nope")
+    err(post(b + "/features/relations", {"a": f1["id"], "b": "f-nope"}), 422, "not kept")
     err(post(b + "/features/relations", {"a": f1["id"], "b": f1["id"]}), 422, "itself")
     # the next default name counts on from the highest
     f3 = post(b + "/features", {"kind": "plane", **click}).json()
@@ -149,7 +149,7 @@ def test_keep_reload_rename_and_delete(tracked, tmp_path):
     assert kf.load_faces(scan_dir(tracked), f2["id"]) is None
     assert delete(f"{b}/features/{m1['id']}").status_code == 204
     assert get(b + "/features").json()["measurements"] == []
-    err(delete(f"{b}/features/{f2['id']}"), 404, f2["id"])
+    err(delete(f"{b}/features/{f2['id']}"), 404, "no longer in the scan")
     for f in (f1, f3):
         assert delete(f"{b}/features/{f['id']}").status_code == 204
     s = get(b + "/features").json()
@@ -159,7 +159,7 @@ def test_keep_reload_rename_and_delete(tracked, tmp_path):
 def test_bad_bodies_answer_422(tracked, tmp_path):
     b = base_url(tracked)
     click = table_click(tracked, tmp_path)
-    err(post(b + "/features", {"kind": "cone", **click}), 422, "unknown kind")
+    err(post(b + "/features", {"kind": "cone", **click}), 422, "does not know this kind of shape")
     err(post(b + "/features", {**click, "kind": "plane", "face": -1}), 422)
     err(post(b + "/features", {**click, "kind": "plane", "point": [0, 0]}), 422)
     err(post(b + "/features", {"kind": "plane"}), 422)
@@ -238,7 +238,7 @@ def test_an_edit_marks_a_fit_and_fit_again_brings_it_back(tracked, tmp_path):
     # nothing left to fit again: an empty answer
     again = post(b + "/features/refit", {"ids": [f["id"]]}).json()
     assert again["refitted"] == [] and again["failed"] == []
-    err(post(b + "/features/refit", {"ids": ["f-nope"]}), 404, "f-nope")
+    err(post(b + "/features/refit", {"ids": ["f-nope"]}), 404, "no longer in the scan")
 
 
 def test_fit_again_refuses_when_the_surface_under_the_click_is_gone(tracked, tmp_path):

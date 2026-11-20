@@ -36,7 +36,7 @@ from typing import Any
 
 import numpy as np
 
-from ohs.server.protocol import ApiError, jsonable
+from ohs.server.protocol import ApiError, jsonable, plain_reason
 
 __all__ = ["PassManager", "MERGE_NOTE", "CHAIN_STEPS"]
 
@@ -54,6 +54,9 @@ SETUP_WORDS = {True: "The part was not moved since the first scan: the table hel
                False: "The part was moved since the first scan: the alignment uses the part alone, and each scan's table "
                       "is left out of the merge."}
 MAX_POSES = 12
+#: a place to scan from that the page sent and cannot be read (an old page, or a bug)
+_POSE_WORDS = "A place to scan from that the Scan check suggested cannot be used"
+_POSE_HINT = "Open the Scan check of the first scan again, then press Scan these areas again."
 MAX_AREAS = 50
 AREAS_FILE = "pass_areas.npz"
 POSE_VECTORS = ("position_mm", "camera_position_mm", "look_dir", "up", "target_mm")
@@ -64,23 +67,23 @@ def _finite(x: Any, what: str) -> float:
     try:
         v = float(x)
     except (TypeError, ValueError):
-        raise ApiError(422, f"{what} is not a number", "send the pose as the Check panel gave it") from None
+        raise ApiError(422, f"{_POSE_WORDS}: {what} is not a number.", _POSE_HINT) from None
     if not math.isfinite(v):
-        raise ApiError(422, f"{what} is not a finite number", "send the pose as the Check panel gave it")
+        raise ApiError(422, f"{_POSE_WORDS}: {what} is not a number.", _POSE_HINT)
     return v
 
 
 def _pose(p: Any, k: int) -> dict:
     """One pose to scan from, as the Check panel gave it (its numbers and its sentence), checked."""
     if not isinstance(p, dict):
-        raise ApiError(422, f"pose {k + 1} is not an object", "send the poses as the Check panel gave them")
+        raise ApiError(422, f"{_POSE_WORDS}: place {k + 1} cannot be read.", _POSE_HINT)
     pose = p.get("pose") if isinstance(p.get("pose"), dict) else p
     out: dict[str, Any] = {}
     for key in POSE_VECTORS:
         if key in pose:
             v = pose[key]
             if not isinstance(v, (list, tuple)) or len(v) != 3:
-                raise ApiError(422, f"pose {k + 1}: {key} must have three numbers", "send the pose as the Check panel gave it")
+                raise ApiError(422, f"{_POSE_WORDS}: place {k + 1} cannot be read.", _POSE_HINT)
             out[key] = [_finite(x, f"pose {k + 1}: {key}") for x in v]
     for key in POSE_NUMBERS:
         if key in pose and pose[key] is not None:
@@ -88,10 +91,10 @@ def _pose(p: Any, k: int) -> dict:
     if "T_wc" in pose:
         T = np.asarray(pose["T_wc"], dtype=object)
         if T.shape != (4, 4):
-            raise ApiError(422, f"pose {k + 1}: T_wc must be 4x4", "send the pose as the Check panel gave it")
+            raise ApiError(422, f"{_POSE_WORDS}: place {k + 1} cannot be read.", _POSE_HINT)
         out["T_wc"] = [[_finite(x, f"pose {k + 1}: T_wc") for x in row] for row in T.tolist()]
     if "target_mm" not in out or "look_dir" not in out:
-        raise ApiError(422, f"pose {k + 1} has no target_mm or look_dir", "send the pose as the Check panel gave it")
+        raise ApiError(422, f"{_POSE_WORDS}: place {k + 1} does not say where to look.", _POSE_HINT)
     area = p.get("area")
     text = p.get("text")
     return {"area": int(area) if isinstance(area, (int, float)) and not isinstance(area, bool) else None,
@@ -116,10 +119,10 @@ class PassManager:
         entry = self.st.projects.scan_entry(pid, sid)  # 404
         name = entry.get("name", sid)
         if entry.get("status") in ("recording", "processing"):
-            raise ApiError(409, f"the scan \"{name}\" is busy", "wait until it has finished, then scan its areas again")
+            raise ApiError(409, f"The scan \"{name}\" is busy.", "Wait until it has finished, then scan its areas again.")
         if not (self.st.projects.result_dir(pid, sid) / "mesh.ply").is_file():
-            raise ApiError(409, f"the scan \"{name}\" has no mesh yet, so there is nothing to join a pass to",
-                           "make its mesh first; then Check shows which areas to scan again")
+            raise ApiError(409, f"The scan \"{name}\" has no mesh yet, so there is nothing to join a second pass to.",
+                           "Make its mesh first; then the Scan check shows which areas to scan again.")
         return entry
 
     def merge_problem(self, pid: str, sid: str, entry: dict | None = None) -> str | None:
@@ -174,34 +177,35 @@ class PassManager:
         from ohs.server.projects import check_id
 
         if not isinstance(body, dict):
-            raise ApiError(422, "continues must be an object", "send {scan_id, tolerance_mm, areas}")
+            raise ApiError(422, "The page did not say which scan this second pass continues.", _POSE_HINT)
         sid = check_id(str(body.get("scan_id") or ""), "scan")
         tol = body.get("tolerance_mm")
         if isinstance(tol, bool) or not isinstance(tol, (int, float)) or not math.isfinite(float(tol)) or not 0 < float(tol) <= 100:
-            raise ApiError(422, "the tolerance must be a number of mm above 0 (at most 100)",
-                           "send the tolerance the Check panel used, for example 0.3")
+            raise ApiError(422, "The tolerance must be a number of mm above 0 (at most 100).",
+                           "Give the tolerance the Scan check used, for example 0.3.")
         tol = float(tol)
         areas = body.get("areas") or []
         if not isinstance(areas, list) or not all(isinstance(a, int) and not isinstance(a, bool) for a in areas):
-            raise ApiError(422, "areas must be a list of area numbers", "send the areas' places in the Check answer, from 0")
+            raise ApiError(422, "The areas to scan again that the page sent cannot be read.", _POSE_HINT)
         if len(set(areas)) != len(areas):
-            raise ApiError(422, "an area is asked for twice", "send each area once")
+            raise ApiError(422, "An area is asked for twice.", "Pick each area once.")
         if len(areas) > MAX_AREAS:
-            raise ApiError(422, f"{len(areas)} areas are too many (at most {MAX_AREAS})", "pick the areas to scan again")
+            raise ApiError(422, f"{len(areas)} areas are too many (at most {MAX_AREAS}).", "Pick fewer areas to scan again.")
         poses_in = body.get("poses") or []
         if not isinstance(poses_in, list) or len(poses_in) > MAX_POSES:
-            raise ApiError(422, f"poses must be a list of at most {MAX_POSES}", "send the places the Check panel suggested")
+            raise ApiError(422, f"Too many places to scan from (at most {MAX_POSES}).", _POSE_HINT)
         poses = [_pose(p, k) for k, p in enumerate(poses_in)]
         same_setup = body.get("same_setup", True)
         if not isinstance(same_setup, bool):
-            raise ApiError(422, "same_setup must be true or false", "true when the part was not moved since the first scan")
+            raise ApiError(422, "The page did not say whether the part was moved since the first scan.",
+                           "Answer the question about the part, then press Scan these areas again.")
         entry = self._first(pid, sid)
         name = entry.get("name", sid)
         v, V, F, S, Fl = self.st.processing.mesh_arrays(pid, sid)
         version = body.get("version")
         if version is not None and (not isinstance(version, int) or int(version) != int(v)):
-            raise ApiError(409, f"the mesh of \"{name}\" changed since its Check was shown",
-                           "check it again, then press Scan these areas")
+            raise ApiError(409, f"The mesh of \"{name}\" changed since its Scan check was shown.",
+                           "Run the Scan check again, then press Scan these areas.")
         samples = {"points": np.zeros((0, 3)), "normals": np.zeros((0, 3)), "weights": np.zeros(0),
                    "area": np.zeros(0, dtype=np.int32), "faces": np.zeros(0, dtype=np.int64)}
         listed: list[dict] = []
@@ -209,12 +213,13 @@ class PassManager:
             try:
                 r = weak_areas(V, F, S, Fl if Fl is not None and len(Fl) == len(F) else None, tolerance_mm=tol, why=False)
             except ValueError as e:
-                raise ApiError(422, str(e), "send the tolerance the Check panel used, for example 0.3") from None
+                raise ApiError(422, plain_reason(e, "The Scan check cannot be worked out at this tolerance."),
+                               "Give the tolerance the Scan check used, for example 0.3.") from None
             n = len(r["areas"])
             bad = [a for a in areas if not 0 <= a < n]
             if bad:
-                raise ApiError(422, f"area {bad[0] + 1} is not in the Check answer of \"{name}\" at ± {tol:g} mm "
-                                    f"({n} areas)", "check the scan again, then press Scan these areas")
+                raise ApiError(422, f"Area {bad[0] + 1} is not in the Scan check of \"{name}\" at ± {tol:g} mm "
+                                    f"({n} areas).", "Run the Scan check again, then press Scan these areas.")
             picked = [r["areas"][a] for a in areas]
             samples = area_samples(V, F, [np.asarray(a["faces"]) for a in picked])
             samples["faces"] = np.concatenate([np.asarray(a["faces"], dtype=np.int64) for a in picked])
@@ -262,8 +267,8 @@ class PassManager:
         entry = self.st.projects.scan_entry(pid, sid)
         c = entry.get("continues")
         if not isinstance(c, dict) or not c.get("scan_id"):
-            raise ApiError(409, f"\"{entry.get('name', sid)}\" is not a second pass of another scan",
-                           "start one from the Check panel of the first scan: Scan these areas")
+            raise ApiError(409, f"\"{entry.get('name', sid)}\" is not a second pass of another scan.",
+                           "Start one from the Scan check of the first scan: Scan these areas again.")
         return entry, c
 
     def _set_chain(self, pid: str, sid: str, **fields: Any) -> dict:
@@ -318,7 +323,8 @@ class PassManager:
         try:
             self._start_step(pid, sid, "process")
         except ApiError as e:
-            self._set_chain(pid, sid, state="failed", step="process", message=f"The pass could not be processed: {e}.")
+            self._set_chain(pid, sid, state="failed", step="process",
+                            message=f"The pass's mesh could not be made. {e} The pass is kept as its own scan.")
 
     def run(self, pid: str, sid: str) -> dict:
         """``POST .../pass/run``: run what is left of the chain (after a cancel, a failure or a refusal)."""
@@ -327,11 +333,12 @@ class PassManager:
             c = self._settle_stale(pid, sid, c)
             chain = c.get("chain") or {}
             if chain.get("state") in ACTIVE or (pid, sid) in self._starting:
-                raise ApiError(409, "the pass's steps are running already", "follow them, or cancel the running one")
+                raise ApiError(409, "The second pass's steps are running already.",
+                               "Follow them here, or cancel the running one in Jobs.")
             if entry.get("status") == "recording":
-                raise ApiError(409, "the pass is still recording", "stop the scan first")
+                raise ApiError(409, "The second pass is still recording.", "Stop the scan first.")
             if chain.get("state") == "merged" and chain.get("merged_scan_id"):
-                raise ApiError(409, "the pass is merged already", "open the merged scan, or scan the areas again")
+                raise ApiError(409, "The second pass is merged already.", "Open the merged scan, or scan the areas again.")
             self._first(pid, c["scan_id"])
             step = "process" if not (self.st.projects.result_dir(pid, sid) / "mesh.ply").is_file() else "align"
             self._starting[(pid, sid)] = self._starting.get((pid, sid), 0) + 1  # a second run waits its turn
@@ -371,7 +378,7 @@ class PassManager:
             self._follow(job, pid, sid, step)
         except ApiError as e:
             self._set_chain(pid, sid, state="failed", step=step,
-                            message=f"Could not start {STEP_DOING[step]}: {e}. The pass is kept as its own scan.")
+                            message=f"Could not start {STEP_DOING[step]}. {e} The pass is kept as its own scan.")
             raise
         finally:
             with self._lock:
@@ -414,11 +421,11 @@ class PassManager:
         try:
             self._finished(job, pid, sid, step)
         except Exception as e:  # never let a job update fail; the chain says what happened
-            log.exception("the second pass %s/%s after %s", pid, sid, step)
-            safe = str(e) or type(e).__name__
+            log.exception("the second pass %s/%s after %s: %s", pid, sid, step, e)
             try:
                 self._set_chain(pid, sid, state="failed", step=step,
-                                message=f"Stopped after {STEP_DOING[step]}: {safe}. The pass is kept as its own scan.")
+                                message=f"Stopped after {STEP_DOING[step]}: the next step could not start. The pass "
+                                        "is kept as its own scan; Continue runs the rest.")
             except Exception:  # noqa: BLE001
                 log.exception("could not record the chain's state")
         finally:
@@ -440,8 +447,8 @@ class PassManager:
             return
         if state == "failed":
             self._set_chain(pid, sid, state="failed", step=step,
-                            message=f"Failed while {STEP_DOING[step]}: {job.get('error') or 'unknown error'}. "
-                                    "The pass is kept as its own scan.")
+                            message=" ".join(x for x in (f"Failed while {STEP_DOING[step]}.", job.get("error"),
+                                                         "The pass is kept as its own scan.") if x))
             self.st.notify("error", f"Second pass: failed while {STEP_DOING[step]}. The pass is kept as its own scan.")
             return
         res = job.get("result") or {}
@@ -531,16 +538,17 @@ class PassManager:
         chain = c.get("chain") or {}
         mid = chain.get("merged_scan_id")
         if chain.get("state") != "merged" or not mid:
-            raise ApiError(409, "the pass is not merged with the first scan", chain.get("message") or
-                           "wait for the pass's steps to finish")
+            raise ApiError(409, "The second pass is not merged with the first scan yet.", chain.get("message") or
+                           "Wait for the second pass's steps to finish.")
         tol = float(c["tolerance_mm"] if tolerance_mm is None else tolerance_mm)
         if not math.isfinite(tol) or tol <= 0:
-            raise ApiError(422, f"the tolerance must be above 0 mm, got {tolerance_mm}", "give the tolerance in mm, for example 0.3")
+            raise ApiError(422, f"The tolerance must be above 0 mm, not {tol:g}.",
+                           "Give the tolerance in mm, for example 0.3.")
         first = c["scan_id"]
         try:
             me = self.st.projects.scan_entry(pid, mid)
         except ApiError:
-            raise ApiError(409, "the merged scan is no longer in the project", "scan the areas again") from None
+            raise ApiError(409, "The merged scan is no longer in the project.", "Scan the areas again.") from None
         fe = self.st.projects.scan_entry(pid, first)
         out: dict[str, Any] = {"tolerance_mm": tol, "note": MERGE_NOTE,
                                "rule": {"match_mm": MATCH_MM, "match_angle_deg": MATCH_ANGLE_DEG, "passes_share": PASSES_SHARE}}

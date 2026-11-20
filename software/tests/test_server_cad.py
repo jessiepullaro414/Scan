@@ -90,7 +90,7 @@ def on_disk(e: dict) -> dict:
 @pytest.fixture(scope="module")
 def tracked(env):  # noqa: F811 (the fixture imported above)
     b = base_url(env)
-    err(get(b + "/features/cad/fits.step"), 409, "no kept fits")  # before there is a mesh too
+    err(get(b + "/features/cad/fits.step"), 409, "no fitted shapes")  # before there is a mesh too
     run_job(env, post(b + "/process/track", {"quality": "preview"}), "process_track")
     return env
 
@@ -113,12 +113,12 @@ def cad(e: dict, name: str = "", **query):
 # --------------------------------------------------------------------------- tests
 def test_no_kept_fits_is_a_clear_message(clean):
     for name in ("fits.step", "fits.FCMacro"):
-        r = err(cad(clean, name), 409, "no kept fits")
+        r = err(cad(clean, name), 409, "no fitted shapes")
         assert "fit" in r["hint"].lower()
     s = cad(clean)
     assert s.status_code == 200, s.text
     s = s.json()
-    assert s["n_fits"] == 0 and s["reason"] and "no kept fits" in s["reason"].lower()
+    assert s["n_fits"] == 0 and s["reason"] and "no fitted shapes" in s["reason"].lower()
     assert s["counts"] == {"plane": 0, "cylinder": 0, "hole": 0, "point": 0}
 
 
@@ -214,7 +214,7 @@ def test_unknown_project_scan_or_file(clean):
     for url in (base_url(clean, pid="nope"), base_url(clean, sid="nope")):
         for tail in ("/features/cad", "/features/cad/fits.step", "/features/cad/fits.FCMacro"):
             err(get(url + tail), 404)
-    err(cad(clean, "fits.iges"), 404, "fits.iges")
+    err(cad(clean, "fits.iges"), 404, "kind of CAD file")
 
 
 def test_nothing_on_disk_changes_and_other_downloads_stay_the_same(clean):

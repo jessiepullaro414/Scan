@@ -143,11 +143,11 @@ def test_without_its_table_the_scan_is_refused_and_nothing_changes(env):
 def test_the_parameters_are_checked(env):
     b = base_url(env)
     v = get(b + "/process").json()["current"]["version"]
-    err(post(b + "/process/edits", {"op": "remove_table", "params": {"margin_mm": -1}}), 422, "margin_mm")
-    err(post(b + "/process/edits", {"op": "remove_table", "params": {"margin_mm": 50}}), 422, "margin_mm")
-    err(post(b + "/process/edits", {"op": "remove_table", "params": {"margin_mm": "1"}}), 422, "margin_mm")
-    err(post(b + "/process/edits", {"op": "remove_table", "params": {"height": 1}}), 422, "unknown parameter")
-    err(post(b + "/process/remove-table/preview", {"margin_mm": 21}), 422, "margin_mm")
+    err(post(b + "/process/edits", {"op": "remove_table", "params": {"margin_mm": -1}}), 422, "the margin must be")
+    err(post(b + "/process/edits", {"op": "remove_table", "params": {"margin_mm": 50}}), 422, "the margin must be")
+    err(post(b + "/process/edits", {"op": "remove_table", "params": {"margin_mm": "1"}}), 422, "the margin must be")
+    err(post(b + "/process/edits", {"op": "remove_table", "params": {"height": 1}}), 422, "a setting this edit does not have")
+    err(post(b + "/process/remove-table/preview", {"margin_mm": 21}), 422, "the margin must be")
     err(post(b + "/process/remove-table/preview", {"version": v - 1}), 409, "changed")
     err(post(base_url(env, sid="scan-missing") + "/process/remove-table/preview", {}), 404)
 
@@ -178,7 +178,7 @@ def test_a_user_recipe_may_remove_the_table(env, monkeypatch):
 
     monkeypatch.setattr(sup, "find_support", refuse)
     j = run_job(env, post(b + "/process/recipe", {"recipe_id": rec["id"], "scope": "edits"}), "process_recipe")
-    assert "Remove the table: skipped (No table found: a test" in j["result"]["message"], j["result"]["message"]
+    assert "Remove the table: skipped. No table found: a test" in j["result"]["message"], j["result"]["message"]
     assert [e["op"] for e in get(b + "/process").json()["edits"]] == ["remove_floaters"]
     requests.delete(f"{url}/{rec['id']}", timeout=T)
     requests.delete(f"{url}/{fs['id']}", timeout=T)

@@ -48,6 +48,7 @@ from __future__ import annotations
 import dataclasses
 import logging
 import queue
+import re
 import threading
 import time
 from pathlib import Path
@@ -65,7 +66,8 @@ from ohs.server.passes import PassManager
 from ohs.server.presets import PresetManager
 from ohs.server.processing import ProcessManager
 from ohs.server.projects import ProjectStore
-from ohs.server.protocol import PROTOCOL_VERSION, QUALITIES, ApiError, jsonable, log_message, normalize_quality
+from ohs.server.protocol import (PROTOCOL_VERSION, QUALITIES, SETTINGS_FILE_HINT, ApiError, jsonable, log_message,
+                                 normalize_quality, plain_reason, sentence)
 from ohs.server.session import ScanSession
 from ohs.server.setup import SetupManager
 from ohs.server.util import join_thread, safe_call
@@ -76,6 +78,25 @@ log = logging.getLogger(__name__)
 
 MODES = ("markerless", "markers")
 STATUS_HZ = 10.0
+
+#: the settings check's problems with the line lasers (``ohs.app.config``), in words (UX_PLAN U9)
+_LASER_WORDS = (
+    (re.compile(r"needs at least one (vertical|horizontal) line"), r"The line lasers need at least one \1 line"),
+    (re.compile(r"named twice"), "A line laser is named twice"),
+    (re.compile(r"do not start with a laser family"),
+     "A line laser's name does not start with a laser family (vertical or horizontal)"),
+    (re.compile(r"are not in lasers\.lines"), "A brightness is given for a laser that is not in the list of line lasers"),
+    (re.compile(r"must be a percent in 0\.\.100"), "A laser's brightness must be from 0 to 100 %"),
+)
+
+
+def _laser_words(problem: str) -> str:
+    """One problem of the line lasers' settings in words, or "" when it has none here."""
+    for rx, words in _LASER_WORDS:
+        m = rx.search(problem)
+        if m:
+            return m.expand(words)
+    return plain_reason(problem.removeprefix("lasers.lines: ").removeprefix("lasers.brightness: "), "")
 
 
 def process_params(cfg: Any, mode: str, quality: str, image_width: int) -> Any:
@@ -193,6 +214,8 @@ class Studio:
 
     # ------------------------------------------------------------------ messages
     def notify(self, level: str, message: str) -> None:
+        """A notice for the user (a toast): made a sentence, like every error text (:func:`sentence`)."""
+        message = sentence(message)
         getattr(log, {"warn": "warning"}.get(level, level), log.info)("%s", message)
         self.hub.publish_json(log_message(level, message))
 
@@ -297,10 +320,12 @@ class Studio:
                 elif ev == "trigger":
                     self._handle_trigger(kind)
             except ApiError as e:
-                self.notify("warn", str(e))
-            except Exception as e:  # never let the event thread die
+                self.notify("warn", str(e))  # its detail and its hint
+            except Exception:  # never let the event thread die
                 log.exception("handling %s/%s failed", ev, kind)
-                self.notify("error", f"internal error while handling {ev} ({e}); see the log")
+                self.notify("error", "Something went wrong inside the app while handling the scanner"
+                                     + (" trigger." if ev == "trigger" else ".")
+                                     + " Your recordings are safe; if it happens again, please report it.")
 
     def _handle_lost(self, kind: str, message: str) -> None:
         with self._lock:
@@ -311,10 +336,10 @@ class Studio:
             self.devices.handle_lost(kind, message)
         tail = " The scan was stopped and saved." if stopped else ""
         if kind == "eof":
-            self.notify("info", "The replayed recording ended; the device disconnected." + tail +
-                        " Connect again (or replay with loop) to continue.")
+            self.notify("info", "The replayed recording ended, so the scanner disconnected." + tail +
+                        " Connect again (or replay it in a loop) to go on.")
         else:
-            self.notify("error", f"Device problem: {message}.{tail}")
+            self.notify("error", f"Scanner problem: {sentence(message)}{tail}")
 
     def _handle_trigger(self, kind: str) -> None:
         if self.calibration.active:
@@ -337,7 +362,7 @@ class Studio:
             except ApiError:
                 self.last_project = None
         if self.last_project is None:
-            self.notify("info", "Trigger pressed: choose a project and press Start in the app to begin scanning")
+            self.notify("info", "Trigger pressed: choose a project and press Start in the app to begin scanning.")
             return
         self.start_scan(self.last_project)
 
@@ -345,9 +370,10 @@ class Studio:
     def connect(self, source: str, recording: str | None = None, loop: bool | None = None) -> tuple[int, dict]:
         with self._lock:
             if self.session is not None and self.session.active:
-                raise ApiError(409, "a scan is running", "stop the scan before changing the device")
+                raise ApiError(409, "A scan is running.", "Stop the scan before changing the scanner.")
             if self.calibration.active:
-                raise ApiError(409, "a calibration is running", "finish or cancel the calibration before changing the device")
+                raise ApiError(409, "A calibration is running.", "Finish or cancel the calibration before changing the "
+                                                                 "scanner.")
             job = self.devices.connect(source, recording, loop)
         if job is not None:
             return 202, {"job": job.to_dict()}
@@ -356,13 +382,15 @@ class Studio:
     def disconnect(self) -> dict:
         with self._lock:
             if self.session is not None and self.session.active:
-                self._stop_scan_locked("the device was disconnected")
+                self._stop_scan_locked("the scanner was disconnected")
             if self.calibration.active:
                 s = self.calibration.session
                 folder = s.recording if s is not None else None
                 self.calibration._end(s)
-                self.notify("info", "Calibration cancelled: the device was disconnected"
-                                    + (f"; the captured views are kept in {folder}" if folder else ""))
+                if folder:
+                    log.info("the cancelled calibration's views are kept in %s", folder)
+                self.notify("info", "Calibration cancelled: the scanner was disconnected."
+                                    + (" The views captured so far are kept on disk." if folder else ""))
                 self.calibration.publish()
             self.devices.disconnect("requested")
         return self.devices.state()
@@ -393,7 +421,7 @@ class Studio:
         pass of, and the areas asked for; then ``preset`` None means the first scan's preset. After Stop the
         pass is processed, aligned to it and merged with it."""
         if mode not in MODES:
-            raise ApiError(400, f"unknown mode {mode!r}", "use markerless or markers")
+            raise ApiError(400, "The app does not know this tracking mode.", "Pick markerless or markers.")
         link = samples = None
         if continues is not None:
             self.projects.get(project_id)  # 404 if missing
@@ -407,29 +435,30 @@ class Studio:
             link["preset"] = first_preset or preset_record["name"]
         with self._lock:
             if self.session is not None and self.session.active:
-                raise ApiError(409, "a scan is already running", "stop it first (Stop, or POST /api/scan/stop)")
+                raise ApiError(409, "A scan is already running.", "Press Stop first.")
             if self.calibration.active:
-                raise ApiError(409, "a calibration is running", "finish or cancel the calibration in Setup first")
+                raise ApiError(409, "A calibration is running.", "Finish or cancel the calibration in Setup first.")
             dev = self.devices
             if dev.busy:
-                raise ApiError(409, f"the device is not ready: {dev.busy}", "wait until it finishes")
+                busy = str(dev.busy).strip().rstrip(".…")
+                raise ApiError(409, f"The scanner is not ready: {busy[:1].lower() + busy[1:]}.",
+                               "Wait until it has finished.")
             if not dev.connected:
-                raise ApiError(409, "no device is connected",
-                               "connect the camera, a replay or the simulator in the device panel first")
+                raise ApiError(409, "No scanner is connected.",
+                               "Connect the camera, a replay or the simulator in the scanner panel first.")
             calib = dev.calib
             if calib is None:
-                raise ApiError(409, "no calibration is loaded",
-                               "calibrate the scanner first (ohs calibrate stereo, then lasers and imu), "
-                               "or connect the simulator, which brings its own calibration")
+                raise ApiError(409, "The scanner is not calibrated yet.",
+                               "Calibrate it in Setup, or try the app with the simulator.")
             self.projects.get(project_id)  # 404 if missing
             size = self._wait_first_frame()
             if size is None:
-                raise ApiError(409, "the device delivers no frames", "check the camera, or connect again")
+                raise ApiError(409, "The scanner sends no pictures.", "Check the camera, or connect again.")
             want = tuple(int(v) for v in calib.stereo.image_size)
             if tuple(size) != want:
-                raise ApiError(409, f"the camera delivers {size[0]}x{size[1]} images per camera but the calibration is "
-                                    f"for {want[0]}x{want[1]}",
-                               "set camera.width / camera.height to the calibrated mode, or calibrate this mode")
+                raise ApiError(409, f"The camera sends {size[0]}×{size[1]} pictures, but the scanner was calibrated "
+                                    f"at {want[0]}×{want[1]}.",
+                               "Calibrate the cameras again at this picture size (the Stereo step in Setup).")
             scan, rec_dir = self.projects.add_scan(project_id, name, mode)
             self.projects.update_scan(project_id, scan["id"], preset=self.presets.stored(preset_record))
             if link is not None:
@@ -462,12 +491,13 @@ class Studio:
             dev.attach(session)
             notes = []
             if calib.imu is None:
-                notes.append("no IMU calibration, so no gyro prior")
+                notes.append("the motion sensor is not calibrated, so it does not help to follow the part")
             elif not use_imu:
-                notes.append("no IMU data, so no gyro prior")
+                notes.append("there is no motion sensor data, so it does not help to follow the part")
             if not calib.lasers:
-                notes.append("no laser planes, so no laser points")
-            self.notify("info", f"Scanning '{scan['name']}' ({mode})" + (f"; note: {', '.join(notes)}" if notes else ""))
+                notes.append("the lasers are not calibrated, so there are no laser points")
+            self.notify("info", f"Scanning \u201c{scan['name']}\u201d ({mode})."
+                        + (f" Note: {'; '.join(notes)}." if notes else ""))
         self.publish_session()
         self.publish_device()
         out = session.state_dict()
@@ -478,7 +508,7 @@ class Studio:
     def _session_or_409(self) -> ScanSession:
         s = self.session
         if s is None or not s.active:
-            raise ApiError(409, "no scan is running", "start a scan first")
+            raise ApiError(409, "No scan is running.", "Start a scan first.")
         return s
 
     def pause_scan(self) -> dict:
@@ -502,9 +532,9 @@ class Studio:
             s = self._session_or_409()
             res = s.rewind(seconds)
         if res.get("t0") is not None:
-            self.notify("info", f"Rewound {res['seconds']:g} s: dropped {res['dropped_frames']} live frames, rebuilt the "
-                                f"live model from {res['rebuilt_keyframes']} keyframes in {res['rebuild_s']:.1f} s. "
-                                "Go back to the ghost to continue.")
+            self.notify("info", f"Rewound {res['seconds']:g} s: the last {res['dropped_frames']} frames are out of the "
+                                f"live preview (rebuilt in {res['rebuild_s']:.1f} s). Go back to the ghost scanner to "
+                                "go on.")
         self.publish_session()
         out = s.state_dict()
         out["rewind"] = res
@@ -536,7 +566,7 @@ class Studio:
         self.publish_session()
         self.publish_device()
         msg = f"Scan saved: {fields['n_frames']} frames, {fields['duration_s']:.1f} s"
-        self.notify("info", msg + (f" ({reason})" if reason else ""))
+        self.notify("info", msg + (f" ({reason.rstrip('.')})." if reason else "."))
         if s.meta.get("continues"):  # FEATURE_PLAN N2: the pass is processed, aligned and merged, as jobs
             safe_call("starting the second pass's steps", lambda: self.passes.after_stop(s.project_id, s.scan_id))
             scan = safe_call("reading the scan", lambda: self.projects.get_scan(s.project_id, s.scan_id)) or scan
@@ -547,10 +577,11 @@ class Studio:
         with self._lock:
             s = self.session
             if s is not None and s.active and s.project_id == pid:
-                raise ApiError(409, "a scan of this project is recording", "stop the scan first")
+                raise ApiError(409, "A scan of this project is recording.", "Stop the scan first.")
             for job in self.jobs.active():
                 if job.meta.get("project_id") == pid:
-                    raise ApiError(409, "a scan of this project is being processed", "wait for the job or cancel it")
+                    raise ApiError(409, "A scan of this project is busy (its mesh is being made, aligned or merged).",
+                                   "Wait for it to finish (see Jobs), or cancel it.")
             self.processing.wait_moves(pid)  # an undo / redo of one of its scans finishes writing first
             self.projects.delete(pid)
             self.processing.forget(pid)
@@ -565,7 +596,7 @@ class Studio:
         try:
             quality = normalize_quality(quality)
         except ValueError:
-            raise ApiError(400, f"unknown quality {quality!r}", "use standard, best or preview") from None
+            raise ApiError(400, "The app does not know this quality.", "Pick Preview, Standard or Best.") from None
         return self.processing.make_mesh(pid, sid, quality)
 
     # ------------------------------------------------------------------ info
@@ -616,18 +647,19 @@ class Studio:
             updates["swap_lr"] = bool(swap_lr)
         with self._lock:
             if self.session is not None and self.session.active:
-                raise ApiError(409, "a scan is running", "stop the scan before changing the camera settings")
+                raise ApiError(409, "A scan is running.", "Stop the scan before changing the camera settings.")
             if self.calibration.active:
-                raise ApiError(409, "a calibration is running", "finish or cancel it before changing the camera settings")
+                raise ApiError(409, "A calibration is running.", "Finish or cancel it before changing the camera settings.")
             if updates:
                 try:
                     set_config_values({"camera": updates}, self.config_path, cfg=self.cfg)
                 except (ConfigError, OSError) as e:
-                    raise ApiError(500, f"the camera settings could not be saved to {self.config_path}: {e}",
-                                   "check that the config file is valid TOML and writable") from e
+                    log.warning("the camera settings could not be saved to %s: %s", self.config_path, e)
+                    raise ApiError(500, f"The camera settings could not be saved to the settings file "
+                                        f"{self.config_path}.", SETTINGS_FILE_HINT) from e
         if updates:
             self.notify("info", "Camera settings saved"
-                        + ("; connect the camera again to use them" if self.devices.source == "camera" else ""))
+                        + (". Connect the camera again to use them." if self.devices.source == "camera" else "."))
         return self.settings()
 
     def set_process_settings(self, thin_walls: str | None = None) -> dict:
@@ -643,9 +675,10 @@ class Studio:
                 try:
                     set_config_values({"process": updates}, self.config_path, cfg=self.cfg)
                 except (ConfigError, OSError) as e:
-                    raise ApiError(500, f"the meshing settings could not be saved to {self.config_path}: {e}",
-                                   "check that the config file is valid TOML and writable") from e
-            self.notify("info", "Meshing settings saved; the next mesh uses them")
+                    log.warning("the meshing settings could not be saved to %s: %s", self.config_path, e)
+                    raise ApiError(500, f"The meshing settings could not be saved to the settings file "
+                                        f"{self.config_path}.", SETTINGS_FILE_HINT) from e
+            self.notify("info", "Meshing settings saved: the next mesh uses them.")
         return self.settings()
 
     def set_laser_settings(self, lines: list[str] | None = None, own_channels: bool | None = None,
@@ -661,7 +694,8 @@ class Studio:
         from ohs.app.config import ConfigError, LasersConfig, set_config_values
 
         if lines is None and own_channels is None and brightness is None:
-            raise ApiError(422, "nothing to change", "send lines, own_channels or brightness")
+            raise ApiError(422, "There is nothing to change in the line lasers.",
+                           "Change the lasers, their wiring or their brightness, then save.")
         wiring = lines is not None or own_channels is not None
         with self._lock:
             cur = self.cfg.lasers
@@ -673,18 +707,21 @@ class Studio:
                 new.brightness = {k: v for k, v in new.brightness.items() if k in new.lines}
             problems = new.problems()
             if problems:
-                if all(p.startswith("lasers.brightness") for p in problems):
-                    hint = ("give each laser's brightness as a percent from 0 to 100, by the names in lasers.lines "
-                            '(for example {"vertical_2": 85})')
+                log.info("line lasers refused: %s", "; ".join(problems))
+                bright = all(p.startswith("lasers.brightness") for p in problems)
+                if bright:
+                    hint = "Give each laser's brightness in percent, from 0 to 100."
                 else:
-                    hint = ('list every line laser once, each name starting with "vertical" or "horizontal" '
-                            '(for example ["vertical", "horizontal", "vertical_2", "horizontal_2"])')
-                raise ApiError(422, "; ".join(p.removeprefix("lasers.lines: ") for p in problems), hint)
+                    hint = "List every line laser once; each one is a vertical or a horizontal line."
+                words = [_laser_words(p) for p in problems]
+                detail = ("; ".join(words) if all(words) else
+                          "A laser's brightness cannot be used." if bright else "These line lasers cannot be saved.")
+                raise ApiError(422, detail, hint)
             what = "the line lasers" if wiring else "the laser brightness"
             if wiring and self.session is not None and self.session.active:
-                raise ApiError(409, "a scan is running", f"stop the scan before changing {what}")
+                raise ApiError(409, "A scan is running.", f"Stop the scan before changing {what}.")
             if self.calibration.active:
-                raise ApiError(409, "a calibration is running", f"finish or cancel it before changing {what}")
+                raise ApiError(409, "A calibration is running.", f"Finish or cancel it before changing {what}.")
             changes: dict[str, Any] = {}
             if new.lines != list(cur.lines):
                 changes["lines"] = new.lines
@@ -696,21 +733,22 @@ class Studio:
                 try:
                     set_config_values({"lasers": changes}, self.config_path, cfg=self.cfg)
                 except (ConfigError, OSError) as e:
-                    raise ApiError(500, f"the line lasers could not be saved to {self.config_path}: {e}",
-                                   "check that the config file is valid TOML and writable") from e
+                    log.warning("the line lasers could not be saved to %s: %s", self.config_path, e)
+                    raise ApiError(500, f"The line lasers could not be saved to the settings file "
+                                        f"{self.config_path}.", SETTINGS_FILE_HINT) from e
         if "brightness" in changes or "own_channels" in changes:
             safe_call("sending the laser brightness to the Pico",
                       lambda: self.devices.set_laser_scales(self.cfg.lasers.channel_scales()))
         if "lines" in changes:
             n = len(new.lines)
-            self.notify("info", f"Line lasers saved: {n} laser{'s' if n != 1 else ''}"
+            self.notify("info", f"Line lasers saved: {n} laser{'s' if n != 1 else ''}."
                         + ("" if not self.setup.state()["calibration"]["lasers_missing"] else
-                           "; calibrate the lasers (setup step 5) for the new ones"))
+                           " Calibrate the lasers (the Lasers step in Setup) for the new ones."))
         elif "own_channels" in changes:
-            self.notify("info", "Laser wiring saved: " + ("each laser has its own wire" if new.own_channels
-                                                          else "each pair of lasers shares one wire"))
+            self.notify("info", "Laser wiring saved: " + ("each laser has its own wire." if new.own_channels
+                                                          else "each pair of lasers shares one wire."))
         elif "brightness" in changes:
-            self.notify("info", "Laser brightness saved")
+            self.notify("info", "Laser brightness saved.")
         safe_call("publishing the setup", self.setup.publish)
         safe_call("publishing the calibration", self.calibration.publish)
         return self.settings()

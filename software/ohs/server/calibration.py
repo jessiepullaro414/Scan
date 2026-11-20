@@ -78,6 +78,7 @@ from ohs import __version__
 from ohs.server import calib_guide as guide
 from ohs.server import calib_results
 from ohs.server.imaging import encode_jpeg
+from ohs.server.jobs import failure_notice
 from ohs.server.protocol import ApiError, jsonable, now_iso, preview_message
 from ohs.server.util import LatestWorker, RateMeter, join_thread, safe_call
 
@@ -118,6 +119,24 @@ _REASON_HINTS = (
 
 
 _COUNT_WORDS = {1: "one", 2: "two", 3: "three", 4: "four", 5: "five", 6: "six"}
+
+
+#: the steps as Setup names them (UX_PLAN glossary), in "the ... calibration"
+_STEP_WORDS = {"stereo": "camera", "lasers": "laser", "imu": "motion sensor (IMU)", "check": "check"}
+#: a session's states in words, in "the calibration is ..."
+_STATE_WORDS = {"armed": "waiting for Start", "capturing": "capturing views", "recording": "recording",
+                "solving": "being worked out", "result": "showing its result", "stopped": "over", "saved": "saved"}
+
+
+def _state_words(state: str) -> str:
+    return _STATE_WORDS.get(state, "busy")
+
+
+def _busy_words(busy: Any) -> str:
+    """What the device is doing (``Devices.busy``: "Connecting…", "Generating the simulator demo…"), in
+    lower case for the middle of a sentence."""
+    s = str(busy or "busy").strip().rstrip(".…")
+    return s[:1].lower() + s[1:]
 
 
 def _reason_hint(reason: str) -> str:
@@ -400,8 +419,10 @@ class CalibrationSession:
         if not self._ready.wait(timeout) or self._start_error is not None:
             err = self._start_error
             self.stop()
-            raise ApiError(500, f"the calibration could not start: {err or 'timeout'}",
-                           "check the calibration file of this step; if it keeps failing, see the log (ohs -v app)")
+            log.warning("the calibration could not start: %s", err or "timeout")
+            raise ApiError(500, "The calibration could not start.",
+                           "Connect the scanner again, then start the step again. If it keeps failing, please report "
+                           "it, saying which step it was.")
 
     def stop(self) -> None:
         """Stop the threads; an IMU recording in progress is closed (kept on disk)."""
@@ -412,7 +433,7 @@ class CalibrationSession:
             burst = self._burst
         self._stop.set()
         if burst is not None:  # a manual capture waiting for its frames: wake it, light nothing
-            self._end_burst(burst, ApiError(409, "Not captured: the calibration ended", "start it again"))
+            self._end_burst(burst, ApiError(409, "Not captured: the calibration ended.", "Start it again."))
         join_thread(self._thread, 10.0)
         self._tell_view(None, "ended")
         if self._preview is not None:
@@ -487,11 +508,12 @@ class CalibrationSession:
                 continue
             try:
                 d = det.detect(frame)
-            except Exception as e:
+            except Exception:
                 self._errors += 1
                 if self._errors == 1:
                     log.exception("board detection failed on frame %d", frame.index)
-                    self._notify("warn", f"Board detection failed ({e}); the calibration keeps trying")
+                    self._notify("warn", "The board could not be looked for in one picture. The calibration keeps "
+                                         "trying.")
                 continue
             self._errors = 0
             try:
@@ -573,8 +595,8 @@ class CalibrationSession:
             except ApiError:
                 outcome = "wait"
             except Exception as e:
-                log.exception("auto-capture failed")
-                self._notify("error", f"The view could not be saved ({e}): check the free disk space")
+                log.exception("auto-capture failed: %s", e)
+                self._notify("error", "The view could not be saved. Check the free disk space.")
         if self._on_view is not None:
             self._tell_view(frame.index, outcome)
         now = time.monotonic()
@@ -618,8 +640,10 @@ class CalibrationSession:
         try:
             self._light((name,))
         except Exception as e:
+            log.warning("the %s laser could not be switched on alone: %s", name, e)
             self._end_burst(burst, ApiError(409, f"Not captured: the {guide.line_label(name)} laser could not be "
-                                                 f"switched on alone ({e})", "check the Pico's USB cable"))
+                                                 "switched on alone.", "Check the USB cable of the control board "
+                                                                       "(Pico), then capture again."))
             return
         with self._lock:
             burst["after"] = self._seen_index + self._settle
@@ -665,10 +689,10 @@ class CalibrationSession:
                     safe_call("publishing the session", self._on_change)
             except ApiError as e:
                 result = e
-            except Exception as e:
+            except Exception:
                 log.exception("capturing the view failed")
-                self._notify("error", f"The view could not be saved ({e}): check the free disk space")
-                result = ApiError(500, f"the view could not be saved: {e}", "check the free disk space")
+                self._notify("error", "The view could not be saved. Check the free disk space.")
+                result = ApiError(500, "The view could not be saved.", "Check the free disk space, then capture again.")
         elif burst["auto"]:
             self._steady.reset()
         burst["result"] = result
@@ -764,11 +788,11 @@ class CalibrationSession:
     def _store(self, frame: Any, d: guide.Detection, auto: bool, lit: list | None = None) -> _View:
         with self._cap_lock:  # begin_solve takes it too: no view slips into a solve
             if self.state != "capturing":
-                raise ApiError(409, f"views can only be captured while capturing (now: {self.state})",
-                               "wait until the calibration finishes")
+                raise ApiError(409, f"Not captured: the calibration is {_state_words(self.state)}.",
+                               "Wait until it has finished, then capture.")
             if frame.index == self._last_capture_frame:
-                raise ApiError(409, "Not captured: this camera frame was captured already",
-                               "move the board to a new pose, then capture")
+                raise ApiError(409, "Not captured: this picture was captured already.",
+                               "Move the board to a new place, then capture.")
             snap = self._ensure_snapshot()
             with self._lock:
                 idx = self._next_index
@@ -809,12 +833,12 @@ class CalibrationSession:
         """A manual capture of the newest processed frame (409 with the plain reason if it cannot be used)."""
         with self._lock:
             if self.kind == "imu":
-                raise ApiError(409, "the IMU step records continuously and takes no views",
-                               "press Start to record, then Stop after 20–60 s of rotation")
+                raise ApiError(409, "The motion sensor step records all the time and takes no views.",
+                               "Press Start to record, then Stop after 20 to 60 s of turning.")
             if self.state != "capturing":
-                raise ApiError(409, f"views can only be captured while capturing (now: {self.state})",
-                               "press Continue to add more views" if self.state == "result" else
-                               "wait until the calibration finishes")
+                raise ApiError(409, f"Not captured: the calibration is {_state_words(self.state)}.",
+                               "Press Continue to add more views." if self.state == "result" else
+                               "Wait until it has finished, then capture.")
             latest = self._latest
         d = latest[1] if latest is not None else None
         reason = guide.usable_reason(d)
@@ -823,8 +847,8 @@ class CalibrationSession:
         if self._light is not None:
             burst = self._begin_burst(latest[0], d, auto=False)
             if not burst["done"].wait(BURST_TIMEOUT_S):
-                self._end_burst(burst, ApiError(409, "Not captured: the camera sent no frames while the lasers took turns",
-                                                "check the camera, then capture again"))
+                self._end_burst(burst, ApiError(409, "Not captured: the camera sent no pictures while the lasers took "
+                                                     "turns.", "Check the camera, then capture again."))
             if isinstance(burst["result"], ApiError):
                 raise burst["result"]
             self._steady_reset = True
@@ -837,11 +861,12 @@ class CalibrationSession:
         with self._cap_lock:
             with self._lock:
                 if self.state not in ("capturing", "result"):
-                    raise ApiError(409, f"views cannot be removed now (state: {self.state})",
-                                   "wait until the calibration finishes")
+                    raise ApiError(409, f"Views cannot be removed while the calibration is {_state_words(self.state)}.",
+                                   "Wait until it has finished.")
                 view = next((v for v in self.views if v.index == int(index)), None)
                 if view is None:
-                    raise ApiError(404, f"no view {index}", "use an index from the session's views")
+                    raise ApiError(404, f"View {int(index) + 1} is no longer in this calibration.",
+                                   "Reload the page to see the views it has.")
                 self.views.remove(view)
                 self._thumbs.pop(view.index, None)
                 rows = [r for v in self.views for r in v.rows()]
@@ -866,12 +891,13 @@ class CalibrationSession:
             cached = self._thumbs.get(int(index))
             folder = self.recording
         if view is None or folder is None:
-            raise ApiError(404, f"no view {index}", "use an index from the session's views")
+            raise ApiError(404, f"View {int(index) + 1} is no longer in this calibration.",
+                           "Reload the page to see the views it has.")
         if cached is not None:
             return cached
         img = cv2.imread(str(folder / "frames" / view.file), cv2.IMREAD_GRAYSCALE)
         if img is None:
-            raise ApiError(404, f"the image of view {index} is missing", "capture the view again")
+            raise ApiError(404, f"The picture of view {int(index) + 1} is missing.", "Capture the view again.")
         left = img[:, : img.shape[1] // 2]
         h, w = left.shape[:2]
         small = cv2.resize(left, (THUMB_W, max(1, int(round(h * THUMB_W / w)))), interpolation=cv2.INTER_AREA)
@@ -886,18 +912,19 @@ class CalibrationSession:
 
         with self._lock:
             if self.kind != "imu":
-                raise ApiError(409, "only the IMU step records continuously", "capture views instead")
+                raise ApiError(409, "Only the motion sensor step records all the time.", "Capture views instead.")
             if self.state not in ("armed", "capturing", "result"):
-                raise ApiError(409, f"cannot start recording now (state: {self.state})",
-                               "stop the recording first" if self.state == "recording" else "wait until it finishes")
+                raise ApiError(409, f"Recording cannot start while the calibration is {_state_words(self.state)}.",
+                               "Press Stop first." if self.state == "recording" else "Wait until it has finished.")
         if self._restart is not None:
             safe_call("restarting the virtual scanner", self._restart)
         path = new_recording_dir(self.rec_base, "imu")
         try:
             rec = Recorder(path, calib=self.calib, source=self.source_name, meta=self.meta)
         except Exception as e:
-            raise ApiError(500, f"cannot create the recording folder {path}: {e}",
-                           "check that the folder is writable and the disk is not full") from e
+            log.warning("cannot create the recording folder %s: %s", path, e)
+            raise ApiError(500, "The recording could not be started: its folder could not be made.",
+                           "Check the free disk space, then press Start again.") from e
         with self._lock:
             t_ref = self._last_frame_t
             hist = [] if self._restart is not None else [s for s in self._imu_hist
@@ -920,12 +947,12 @@ class CalibrationSession:
             if self.state != "recording":
                 if auto:
                     return
-                raise ApiError(409, "the IMU is not recording", "press Start first")
+                raise ApiError(409, "The motion sensor is not recording.", "Press Start first.")
             elapsed = (self._imu_t_last - self._imu_t0) if (self._imu_t0 is not None and self._imu_t_last is not None) else 0.0
             if not auto and elapsed < IMU_MIN_S:
-                raise ApiError(409, f"Keep rotating: {max(1, math.ceil(IMU_MIN_S - elapsed))} s more",
-                               "the IMU calibration needs 2 s of holding still and then at least 20 s of rotation; "
-                               "or cancel to start over")
+                raise ApiError(409, f"Keep turning: {max(1, math.ceil(IMU_MIN_S - elapsed))} s more.",
+                               "The motion sensor calibration needs 2 s of holding still and then at least 20 s of "
+                               "turning. Or press Cancel to start over.")
             rec, self._imu_rec = self._imu_rec, None
             self.state = "capturing"
             self._imu_done_s = float(elapsed)
@@ -940,17 +967,18 @@ class CalibrationSession:
     def begin_solve(self) -> dict:
         with self._cap_lock, self._lock:
             if self.state not in ("capturing", "result"):
-                raise ApiError(409, f"cannot calibrate now (state: {self.state})",
-                               "stop the IMU recording first" if self.state == "recording" else
-                               "press Start and record first" if self.state == "armed" else "wait for it to finish")
+                raise ApiError(409, f"The calibration cannot be worked out while it is {_state_words(self.state)}.",
+                               "Press Stop first." if self.state == "recording" else
+                               "Press Start and record first." if self.state == "armed" else
+                               "Wait until it has finished.")
             if self.kind == "imu":
                 if self.recording is None or self._imu_done_s is None:
-                    raise ApiError(409, "there is no IMU recording yet", "press Start, hold still 2 s, rotate 20–60 s, "
-                                                                       "then press Stop")
+                    raise ApiError(409, "There is no motion sensor recording yet.",
+                                   "Press Start, hold still for 2 s, turn the scanner for 20 to 60 s, then press Stop.")
             else:
                 need, n = MIN_VIEWS[self.kind], len(self.views)
                 if n < need:
-                    raise ApiError(409, f"capture at least {need} view{'s' if need != 1 else ''} first ({n} so far)",
+                    raise ApiError(409, f"Capture at least {need} view{'s' if need != 1 else ''} first ({n} so far).",
                                    guidance(self.kind, self.lines))
             self.state = "solving"
             self.result = None
@@ -984,7 +1012,8 @@ class CalibrationSession:
     def continue_(self) -> None:
         with self._lock:
             if self.state not in ("result", "capturing"):
-                raise ApiError(409, f"nothing to continue (state: {self.state})", "start a calibration first")
+                raise ApiError(409, f"There is nothing to continue: the calibration is {_state_words(self.state)}.",
+                               "Start a calibration first.")
             self.state = "armed" if (self.kind == "imu" and self.state == "result") else "capturing"
             if self.kind == "imu" and self.state == "armed":
                 self._imu_done_s = None
@@ -1031,7 +1060,8 @@ class CalibrationManager:
     def _active_or_409(self) -> CalibrationSession:
         s = self.session
         if s is None or not s.active:
-            raise ApiError(409, "no calibration is running", "start one in Setup (stereo, lasers, IMU or check)")
+            raise ApiError(409, "No calibration is running.",
+                           "Start one in Setup: Cameras, Lasers, Motion sensor (IMU) or the Calibration check.")
         return s
 
     # ------------------------------------------------------------------ emitters
@@ -1074,45 +1104,51 @@ class CalibrationManager:
     def _emitters_text(self, kind: str, source: str, has_pico: bool) -> str:
         lines = any(self._levels(kind))
         if source == "sim":
-            return "Simulated line lasers on" if lines else "Emitters off: ambient light only (simulated)"
+            return "Simulated line lasers on" if lines else "Lasers and dots off: room light only (simulated)"
         if not lines:
-            return "Emitters off: ambient light only"
+            return "Lasers and dots off: room light only"
         if not has_pico:
-            return "No Pico: the line lasers stay off, so switch them on another way (Class 3R, never look into the beams)"
+            return ("No control board (Pico): the line lasers stay off, so switch them on another way (Class 3R, "
+                    "never look into the beams)")
         return "Line lasers on: Class 3R, never look into the beams"
 
     # ------------------------------------------------------------------ start / end
     def start(self, kind: str) -> dict:
         st = self.st
         if kind not in KINDS:
-            raise ApiError(400, f"unknown calibration kind {kind!r}", "use stereo, lasers, imu or check")
+            raise ApiError(400, "The app does not know this calibration step.",
+                           "Pick Cameras, Lasers, Motion sensor (IMU) or the Calibration check in Setup.")
         warn = None
         with st._lock:
             if st.session is not None and st.session.active:
-                raise ApiError(409, "a scan is running", "stop the scan first, then calibrate")
+                raise ApiError(409, "A scan is running.", "Stop the scan first, then calibrate.")
             if self.active:
-                raise ApiError(409, f"a {self.session.kind} calibration is already running",
-                               "finish or cancel it first")
+                raise ApiError(409, f"The {_STEP_WORDS.get(self.session.kind, 'other')} calibration is already "
+                                    "running.", "Finish it or cancel it first.")
             dev = st.devices
             if dev.busy:
-                raise ApiError(409, f"the device is not ready: {dev.busy}", "wait until it finishes")
+                raise ApiError(409, f"The scanner is not ready: {_busy_words(dev.busy)}.",
+                               "Wait until it has finished, then try again.")
             if not dev.connected:
-                raise ApiError(409, "no scanner is connected", "connect the camera or the simulator first (step 1)")
+                raise ApiError(409, "No scanner is connected.",
+                               "Connect the camera or the simulator first (the Connect step in Setup).")
             source = dev.source
             if source == "replay":
-                raise ApiError(409, "calibration needs the live camera or the simulator, not a replayed recording",
-                               "connect the camera or the simulator first")
+                raise ApiError(409, "Calibration needs the live camera or the simulator, not a replayed recording.",
+                               "Connect the camera or the simulator first.")
             target = "sim" if source == "sim" else "device"
             calib = st.setup.load_calibration(target)
             if kind != "stereo" and calib is None:
-                raise ApiError(409, f"the {kind} step needs the stereo calibration first",
-                               "calibrate the two cameras first (step 4, Stereo)")
+                raise ApiError(409, f"The {_STEP_WORDS.get(kind, kind)} calibration needs the cameras calibrated "
+                                    "first.", "Calibrate the cameras first (the Stereo step in Setup).")
             if kind == "imu" and source == "camera" and not dev.imu_available():
-                raise ApiError(409, "the IMU calibration needs the Pico's IMU, which is not streaming",
-                               "connect the Pico with a data USB cable, then connect the camera again")
+                raise ApiError(409, "The motion sensor calibration needs the motion sensor on the control board "
+                                    "(Pico), and it sends nothing.",
+                               "Connect the control board with a USB cable that carries data, then connect the camera "
+                               "again.")
             if source == "camera" and kind in ("lasers", "check") and not dev.has_pico:
-                warn = ("No Pico: the line lasers cannot be switched on by the app. Switch them on another way, or "
-                        "connect the Pico and start again. Class 3R lasers: never look into the beams.")
+                warn = ("No control board (Pico): the line lasers cannot be switched on by the app. Switch them on "
+                        "another way, or connect the control board and start again. Class 3R lasers: never look into the beams.")
             if source == "sim":
                 dev.set_sim_scene(f"calib_{kind}")
             s = None
@@ -1121,9 +1157,9 @@ class CalibrationManager:
                     size = st._wait_first_frame(5.0)
                     want = tuple(int(v) for v in calib.stereo.image_size)
                     if size is not None and tuple(size) != want:
-                        raise ApiError(409, f"the camera delivers {size[0]}x{size[1]} images but the stereo calibration "
-                                            f"is for {want[0]}x{want[1]}",
-                                       "calibrate the stereo pair again in this camera mode (step 4)")
+                        raise ApiError(409, f"The camera sends {size[0]}×{size[1]} pictures, but the cameras were "
+                                            f"calibrated at {want[0]}×{want[1]}.",
+                                       "Calibrate the cameras again at this picture size (the Stereo step in Setup).")
                 cam = dev.sim_camera() if source == "sim" else None
                 spec = st.setup.calib_spec(target)
                 lines = self.lines()
@@ -1196,7 +1232,9 @@ class CalibrationManager:
                 return self.state()
             folder = s.recording
             self._end(s)
-        st.notify("info", "Calibration cancelled" + (f"; the captured views are kept in {folder}" if folder else ""))
+        if folder:
+            log.info("the cancelled calibration's views are kept in %s", folder)
+        st.notify("info", "Calibration cancelled." + (" The views captured so far are kept on disk." if folder else ""))
         self.publish()
         st.publish_device()
         return self.state()
@@ -1207,12 +1245,16 @@ class CalibrationManager:
         if s is None or not s.active:
             return
         if kind == "pico" and s.kind != "imu":
-            self.st.notify("warn", "The Pico disconnected: the lasers are off. Connect it again before you capture more views.")
+            self.st.notify("warn", "The control board (Pico) disconnected: the lasers are off. Connect it again before "
+                                   "you capture more views.")
             return
         folder = s.recording
         self._end(s)
-        self.st.notify("error", "The calibration was cancelled because the device stopped"
-                                + (f"; the captured views are kept in {folder}" if folder else ""))
+        if folder:
+            log.info("the cancelled calibration's views are kept in %s", folder)
+        self.st.notify("error", "The calibration was cancelled because the scanner stopped."
+                                + (" The views captured so far are kept on disk." if folder else "")
+                                + " Connect the scanner again, then start the step again.")
         self.publish()
 
     def shutdown(self) -> None:
@@ -1237,14 +1279,15 @@ class CalibrationManager:
                 elif s.state == "recording":
                     self.imu_stop()
                 else:
-                    self.st.notify("info", "Long-press the trigger to calibrate, or press Start in the app to record again")
+                    self.st.notify("info", "Hold the trigger down to work out the calibration, or press Start in the "
+                                           "app to record again.")
                 return
             if s.state == "capturing":
                 self.capture()
             elif s.state == "result":
-                self.st.notify("info", "Press Continue in the app to add more views, or save the calibration")
+                self.st.notify("info", "Press Continue in the app to add more views, or save the calibration.")
         except ApiError as e:
-            self.st.notify("warn", e.detail[:1].upper() + e.detail[1:] + (f": {e.hint}" if e.hint else ""))
+            self.st.notify("warn", str(e))  # its detail and its hint, two sentences
 
     # ------------------------------------------------------------------ views
     def capture(self) -> dict:
@@ -1269,7 +1312,8 @@ class CalibrationManager:
         with self.st._lock:
             s = self._active_or_409()
             s.imu_start()
-        self.st.notify("info", "IMU recording: hold the scanner still for 2 s, then rotate it slowly about all three axes")
+        self.st.notify("info", "Recording the motion sensor: hold the scanner still for 2 s, then turn it slowly about "
+                               "all three axes.")
         self.publish()
         return s.to_dict()
 
@@ -1281,12 +1325,12 @@ class CalibrationManager:
     def thumb(self, index: int) -> bytes:
         s = self.session
         if s is None:
-            raise ApiError(404, f"no view {index}", "start a calibration and capture views first")
+            raise ApiError(404, "There is no calibration with views now.", "Start a calibration and capture views first.")
         return s.thumb(index)
 
     def report(self) -> dict:
         if self.last_report is None:
-            raise ApiError(404, "no calibration has been solved yet", "press Finish & calibrate first")
+            raise ApiError(404, "No calibration has been worked out yet.", "Press Finish & calibrate first.")
         return self.last_report
 
     # ------------------------------------------------------------------ solve
@@ -1295,7 +1339,7 @@ class CalibrationManager:
         with st._lock:
             s = self._active_or_409()
             if self._job is not None and self._job.active:
-                raise ApiError(409, "the calibration is already being computed", "wait for it to finish")
+                raise ApiError(409, "The calibration is already being worked out.", "Wait for it to finish.")
             snap = s.begin_solve()
         safe_call("switching the emitters off", st.devices.emitters_off)
         kind = s.kind
@@ -1311,7 +1355,9 @@ class CalibrationManager:
 
                 n_frames = len(RecordingReader(rec))
             except Exception as e:
-                raise ApiError(409, f"the recording {rec} cannot be read: {e}", "capture again") from e
+                log.warning("the calibration recording %s cannot be read: %s", rec, e)
+                raise ApiError(409, "The captured views cannot be read back from the disk.",
+                               "Check the free disk space, then capture the views again.") from e
             step = max(1, math.ceil(n_frames / IMU_FLOW_FRAMES)) if kind == "imu" else 1
             first = {"stereo": "Calibrating the two cameras (up to a minute)…",
                      "lasers": "Finding the laser lines and the board…", "imu": "Following the board in every frame…",
@@ -1351,20 +1397,20 @@ class CalibrationManager:
                 safe_call("publishing the setup", st.setup.publish)
             if res["grade"] == "failed":
                 raise ApiError(422, f"{res['headline']}: {res['verdict']}",
-                               res["advice"][0]["text"] if res["advice"] else None)
+                               res["advice"][0]["text"] if res["advice"] else None)  # the result's own plain words
             return {"kind": kind, "session": s.id, "result": res, "message": res["headline"]}
 
         def done(job: Any) -> None:
             if job.state == "cancelled":
                 s.solve_aborted()
             elif job.state == "failed" and s.state == "solving":  # an unexpected error before the result
-                s.solve_aborted(job.error or "the calibration failed")
+                s.solve_aborted(job.error or "The calibration failed.")
             if s.active and s.state == "capturing":
                 safe_call("switching the emitters on", lambda: self._emitters_on(s))
             if job.state == "done":
                 self.st.notify("info", f"{s.result['headline']}: {s.result['verdict']}" if s.result else "Calibrated")
             elif job.state == "failed":
-                self.st.notify("warn", f"Calibration failed: {job.error}")
+                self.st.notify("warn", failure_notice(job, "The calibration failed."))
             self.publish()
 
         job = st.jobs.submit("calibrate", run, message="Queued for calibration",
@@ -1393,15 +1439,16 @@ class CalibrationManager:
             s = self._active_or_409()
             r = s.result
             if s.kind == "check":
-                raise ApiError(409, "a check is not saved: it only tells you whether the calibration still holds",
-                               "its result is already in Setup; recalibrate the parts it flagged")
+                raise ApiError(409, "A calibration check is not saved: it only tells you whether the calibration "
+                                    "still holds.", "Its result is already in Setup. Calibrate again the parts it "
+                                                    "flagged.")
             if r is None or s.state != "result":
-                raise ApiError(409, "there is no calibration result to save", "press Finish & calibrate first")
+                raise ApiError(409, "There is no calibration result to save.", "Press Finish & calibrate first.")
             if r.get("grade") == "failed":
-                raise ApiError(409, "a failed calibration cannot be saved", "add views and calibrate again")
+                raise ApiError(409, "A failed calibration cannot be saved.", "Add views and calibrate again.")
             if not r.get("ok") and not force:
-                raise ApiError(409, f"this calibration is only {r.get('grade')}: saving it needs force",
-                               "add views and calibrate again, or save it anyway (force)")
+                raise ApiError(409, f"This calibration is only {r.get('grade')}, so it is not saved unless you ask "
+                                    "for it.", "Add views and calibrate again, or press Save anyway.")
             path = st.setup.calibration_path(s.target)
             existing = st.setup.load_calibration(s.target)
             # the temperature of the step: its recording's (an IMU recording has it), else the IMU's now
@@ -1413,8 +1460,10 @@ class CalibrationManager:
             try:
                 backup = capture.save_calibration(new, path)
             except OSError as e:
-                raise ApiError(500, f"the calibration could not be written to {path}: {e}",
-                               "check that the folder is writable and the disk is not full") from e
+                log.warning("the calibration could not be written to %s: %s", path, e)
+                raise ApiError(500, f"The calibration could not be saved to {path}.",
+                               "Check the free disk space and that no other program has the file open, then save "
+                               "again.") from e
             notes = self._notes(s.kind, existing, new, s.value, s.lines)
             if backup is not None:
                 notes.append(f"The previous calibration is kept as {Path(backup).name}.")
@@ -1428,7 +1477,8 @@ class CalibrationManager:
             if s.target == "device":
                 st.devices.reload_calibration()
         setup_state = st.setup.state()
-        st.notify("info", f"Saved the {s.kind} calibration to {path}" + (f". {' '.join(notes)}" if notes else ""))
+        st.notify("info", f"Saved the {_STEP_WORDS.get(s.kind, s.kind)} calibration to {path}."
+                  + (f" {' '.join(notes)}" if notes else ""))
         st.hub.publish_json({"type": "setup", **setup_state})
         self.publish()
         st.publish_device()

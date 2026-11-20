@@ -226,7 +226,7 @@ def test_what_cannot_be_thinned_is_refused_in_plain_words(env):
     b60, sd = scan_url(env, pid, s60), scan_dir(env, pid, s60)
     cfg = env["studio"].cfg
     snap = snapshot(sd)
-    for field, value, needle in (("frame_motion_deg", 2.0, "by motion"), ("frame_step", 2, "every 2nd frame"),
+    for field, value, needle in (("frame_motion_deg", 2.0, "by how far the scanner turned"), ("frame_step", 2, "every 2nd frame"),
                                  ("standard_frame_rate", 0.0, "every frame")):
         old = getattr(cfg.process, field)
         setattr(cfg.process, field, value)

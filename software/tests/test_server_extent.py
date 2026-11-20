@@ -157,8 +157,8 @@ def test_a_kept_plane_has_its_extent_and_its_outline_beside_it(clean, capsys):
     # deleted with the feature
     assert delete(f"{b}/features/{f['id']}").status_code == 204
     assert not p.exists()
-    err(get(f"{b}/features/{f['id']}/outline"), 404, f["id"])
-    err(get(f"{b}/features/f-nope/outline"), 404, "f-nope")
+    err(get(f"{b}/features/{f['id']}/outline"), 404, "no longer in the scan")
+    err(get(f"{b}/features/f-nope/outline"), 404, "no longer in the scan")
 
 
 def test_fit_again_refreshes_the_extent_and_the_outline(clean):
@@ -209,7 +209,7 @@ def test_a_fit_kept_before_extents_loads_and_gets_one_on_fit_again(clean):
     s = get(b + "/features").json()
     old = s["features"][0]
     assert old["extent"] is None and old["stale"] is False and old["shape"] == fit["shape"]
-    err(get(f"{b}/features/f-old/outline"), 404, "f-old")
+    err(get(f"{b}/features/f-old/outline"), 404, "before outlines were measured")
     out = post(b + "/features/refit", {}).json()
     assert out["refitted"] == ["f-old"] and out["failed"] == []
     g = out["features"]["features"][0]
@@ -319,8 +319,8 @@ def test_the_relation_of_two_fits_not_kept_as_one(block):
     assert hole_top["values"][0]["name"] == "angle" and hole_top["values"][0]["sigma"] is None
     # nothing was kept by asking
     assert kf.load(scan_dir(block))["relations"] == []
-    err(get(f"{b}/features/relate?a=f-top&b=f-nope"), 404, "f-nope")
-    err(get(f"{b}/features/relate?a=f-nope&b=f-top"), 404, "f-nope")
+    err(get(f"{b}/features/relate?a=f-top&b=f-nope"), 404, "no longer in the scan")
+    err(get(f"{b}/features/relate?a=f-nope&b=f-top"), 404, "no longer in the scan")
     err(get(f"{b}/features/relate?a=f-top&b=f-top"), 422, "itself")
     assert get(f"{b}/features/relate?a=f-top").status_code == 422
     err(get(base_url(block, sid="scan-missing") + "/features/relate?a=f-top&b=f-pin"), 404)

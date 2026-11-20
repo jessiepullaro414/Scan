@@ -99,10 +99,10 @@ def test_projects_crud_and_trash(env):
     trashed = list((root / "projects" / ".trash").iterdir())
     assert len(trashed) == 1 and trashed[0].name.startswith(a["id"]) and (trashed[0] / "project.json").exists()
     assert a["id"] not in [p["id"] for p in _get(url, "/api/projects").json()]
-    _assert_error(_get(url, f"/api/projects/{a['id']}"), 404, "no project")
+    _assert_error(_get(url, f"/api/projects/{a['id']}"), 404, "no such project")
     _assert_error(requests.delete(url + f"/api/projects/{a['id']}", timeout=TIMEOUT), 404)
     _assert_error(_post(url, "/api/projects", {"name": "   "}), 400, "empty")
-    _assert_error(_post(url, "/api/projects", {}), 422, "invalid request")
+    _assert_error(_post(url, "/api/projects", {}), 422, "not valid")
     _assert_error(_get(url, "/api/projects/..%2F..%2Fsecret"), 404)
 
 
@@ -118,7 +118,7 @@ def test_settings(env):
 def test_scan_needs_a_device_and_errors_have_hints(env):
     url = env["url"]
     pid = _post(url, "/api/projects", {"name": "No device"}).json()["id"]
-    body = _assert_error(_post(url, "/api/scan/start", {"project_id": pid}), 409, "no device")
+    body = _assert_error(_post(url, "/api/scan/start", {"project_id": pid}), 409, "no scanner")
     assert "connect" in body["hint"].lower()
     assert _get(url, "/api/scan").json() == {"state": "idle", "project_id": None, "scan_id": None,
                                              "mode": "markerless", "elapsed_s": 0.0, "frames": 0}
@@ -126,7 +126,7 @@ def test_scan_needs_a_device_and_errors_have_hints(env):
         _assert_error(_post(url, path), 409, "no scan")
     _assert_error(_post(url, "/api/scan/rewind", {"seconds": 2.0}), 409, "no scan")
     _assert_error(_post(url, "/api/scan/start", {"project_id": pid, "mode": "fast"}), 422)
-    _assert_error(_post(url, "/api/device/emitters", {"vertical": 50}), 409, "no device")
+    _assert_error(_post(url, "/api/device/emitters", {"vertical": 50}), 409, "no scanner")
     _assert_error(_post(url, "/api/device/emitters", {"vertical": 150}), 422)
     _assert_error(_post(url, "/api/device/connect", {"source": "replay"}), 400, "recording")
     _assert_error(_post(url, "/api/device/connect", {"source": "replay", "recording": str(env["root"])}), 404,
@@ -139,14 +139,14 @@ def test_scan_needs_a_device_and_errors_have_hints(env):
 
 def test_unknown_routes_and_files_are_json_404(env):
     url = env["url"]
-    _assert_error(_get(url, "/api/nope"), 404, "unknown")
-    _assert_error(_post(url, "/api/nope"), 404, "unknown")
-    assert "POST" in _assert_error(_get(url, "/api/scan/start"), 405, "not allowed")["hint"]
-    _assert_error(_get(url, "/api/jobs/j-missing"), 404, "no job")
+    _assert_error(_get(url, "/api/nope"), 404, "does not know this address")
+    _assert_error(_post(url, "/api/nope"), 404, "does not know this address")
+    _assert_error(_get(url, "/api/scan/start"), 405, "does not accept this kind of request")  # UX_PLAN U9: no route names
+    _assert_error(_get(url, "/api/jobs/j-missing"), 404, "no longer in the list")
     _assert_error(_post(url, "/api/jobs/j-missing/cancel"), 404)
     pid = _post(url, "/api/projects", {"name": "Files"}).json()["id"]
-    _assert_error(_get(url, f"/api/projects/{pid}/scans/scan-1/files/mesh.ply"), 404, "no scan")
-    _assert_error(_post(url, f"/api/projects/{pid}/scans/scan-1/process", {"quality": "full"}), 404, "no scan")
+    _assert_error(_get(url, f"/api/projects/{pid}/scans/scan-1/files/mesh.ply"), 404, "no such scan")
+    _assert_error(_post(url, f"/api/projects/{pid}/scans/scan-1/process", {"quality": "full"}), 404, "no such scan")
     assert _get(url, "/api/jobs").json() == [] or isinstance(_get(url, "/api/jobs").json(), list)
 
 
@@ -191,9 +191,9 @@ def test_cors_for_the_vite_dev_server(env):
 
 def test_local_guard_blocks_other_sites(env):
     url = env["url"]
-    _assert_error(_post(url, "/api/projects", {"name": "x"}, headers={"Origin": "http://evil.example"}), 403, "cross-origin")
+    _assert_error(_post(url, "/api/projects", {"name": "x"}, headers={"Origin": "http://evil.example"}), 403, "another web page")
     _assert_error(_post(url, "/api/scan/stop", headers={"Origin": "null"}), 403)
-    _assert_error(_get(url, "/api/health", headers={"Host": "rebind.example:8765"}), 403, "host")
+    _assert_error(_get(url, "/api/health", headers={"Host": "rebind.example:8765"}), 403, "its own address")
     ok = _post(url, "/api/projects", {"name": "Same origin"}, headers={"Origin": url})
     assert ok.status_code == 200
     with pytest.raises(Exception):
@@ -460,7 +460,7 @@ def test_job_runner_progress_failure_and_cooperative_cancel():
         assert jr.wait(j1.id, 5).state == "done" and j1.result == {"answer": 42} and j1.progress == 1.0
         assert any(u["id"] == j1.id and u["message"] == "half" for u in updates)
         j2 = jr.submit("bad", bad)
-        assert jr.wait(j2.id, 5).state == "failed" and "nope" in j2.error and "do something else" in j2.error
+        assert jr.wait(j2.id, 5).state == "failed" and "Nope" in j2.error and "Do something else" in j2.error
         j3 = jr.submit("slow", slow)
         j4 = jr.submit("queued", ok)  # waits behind j3 (one worker)
         assert started.wait(5)

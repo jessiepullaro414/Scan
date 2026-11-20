@@ -312,7 +312,10 @@ export function doneLine(freed: number, mode: KeepMode, name?: string, thin = fa
 /** The project move's toast: what was freed, and the scans left as they were. */
 export function projectDoneLines(r: ProjectKeepResult): { text: string; failed: string[] } {
   const moved = r.results.filter((x) => x.ok).length;
-  const failed = r.results.filter((x) => !x.ok && x.error && !x.error.detail.startsWith("nothing to free")).map((x) => `${x.name}: ${x.error!.detail}.`);
+  // the engine's words: "There is nothing to free: …" (older engines: "nothing to free…"); not a failure, not listed
+  const nothing = (detail: string) => /^(there is )?nothing to free/i.test(detail);
+  const stop = (s: string) => (/[.!?…]$/.test(s) ? s : `${s}.`);
+  const failed = r.results.filter((x) => !x.ok && x.error && !nothing(x.error.detail)).map((x) => `${x.name}: ${stop(x.error!.detail)}`);
   return { text: `Freed ${fmtBytes(r.freed_bytes)} on ${fmtInt(moved)} scan${moved === 1 ? "" : "s"}.`, failed };
 }
 

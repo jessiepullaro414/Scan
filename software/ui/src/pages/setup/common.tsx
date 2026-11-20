@@ -198,8 +198,8 @@ function errorLinks(text: string, here?: SetupPage | null): { label: string; to:
     if (page !== undefined && page === here) return;
     if (!out.some((o) => o.to === to)) out.push({ label, to });
   };
-  if (/no device|not connected|connect (the|a)|replay|pico|stereo camera|camera marked/i.test(text)) add("Go to Connect", paths.setup("connect"), "connect");
-  if (/stereo (step|calibration)|calibrate stereo|stereo first/i.test(text)) add("Go to Stereo", paths.setup("stereo"), "stereo");
+  if (/no (device|scanner)|not connected|connect (the|a)|replay|pico|control board|stereo camera|camera marked/i.test(text)) add("Go to Connect", paths.setup("connect"), "connect");
+  if (/stereo (step|calibration)|calibrate stereo|stereo first|cameras calibrated first|calibrate the cameras/i.test(text)) add("Go to Stereo", paths.setup("stereo"), "stereo");
   if (/scan is running|stop the scan/i.test(text)) add("Open the Scan page", paths.scan());
   if (/print|scale bar/i.test(text)) add("Go to Print targets", paths.setup("print"), "print");
   return out.slice(0, 2);

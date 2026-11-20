@@ -25,6 +25,7 @@ from typing import Any
 
 import numpy as np
 
+from ohs.server.jobs import failure_notice
 from ohs.server.protocol import ApiError, jsonable
 
 __all__ = ["AlignManager"]
@@ -37,6 +38,10 @@ MAX_SCANS = 8  # scans aligned or merged at once (every pair is aligned: 28 pair
 TAG_FRAMES = 120  # frames of a scan looked at for tags (an even pick of those with a pose; about 2 s at 640x400)
 
 
+def _too_few(n: int) -> str:
+    return f"{n} {'pair' if n == 1 else 'pairs'} of matching points {'is' if n == 1 else 'are'} too few."
+
+
 class AlignManager:
     def __init__(self, studio: Any) -> None:
         self.st = studio
@@ -47,22 +52,22 @@ class AlignManager:
         entry = self.st.projects.scan_entry(pid, sid)
         name = entry.get("name", sid)
         if entry.get("status") in ("recording", "processing"):
-            raise ApiError(409, f"the {what} scan \"{name}\" is busy", "wait until it has finished, then try again")
+            raise ApiError(409, f"The scan \"{name}\" is busy.", "Wait until it has finished, then try again.")
         res = self.st.projects.scan_dir(pid, sid) / "result"
         if not (res / "mesh.ply").is_file():
-            raise ApiError(409, f"the {what} scan \"{name}\" has no mesh yet", "make its mesh on the project page first")
+            raise ApiError(409, f"The scan \"{name}\" has no mesh yet.", "Press Make mesh for it on the project page first.")
         rec = self.st.projects.recording_dir(pid, sid)
         if need_recording:  # a merge fuses the frames again: it needs them and their poses
             if entry.get("keep") == "standard" and not (rec / "frames.csv").is_file():  # FEATURE_PLAN R2
-                raise ApiError(409, f"the {what} scan \"{name}\" has no recording: it was removed to free space (the scan "
-                                    "keeps its result only)", "merge scans that still have their recordings; this one can "
-                                                              "still be aligned, edited, measured and exported")
+                raise ApiError(409, f"The scan \"{name}\" cannot be merged: its recording was removed to free space (it "
+                                    "keeps the result only).", "Merge scans that still have their recordings. This one can "
+                                                               "still be aligned, edited, measured and exported.")
             if entry.get("merged_from") or not (rec / "frames.csv").is_file():
-                raise ApiError(409, f"the {what} scan \"{name}\" has no recording (a merged scan, or its recording was removed)",
-                               "merge scans that still have their recordings")
+                raise ApiError(409, f"The scan \"{name}\" cannot be merged: it has no recording of its own (it is a merged scan, "
+                               "or its recording was removed).", "Merge scans that still have their recordings.")
             if not (res / "trajectory.csv").is_file():
-                raise ApiError(409, f"the {what} scan \"{name}\" has no camera path with its mesh",
-                               "make its mesh again on the project page")
+                raise ApiError(409, f"The scan \"{name}\" cannot be merged: its camera path is missing.",
+                               "Press Make mesh again for it on the project page.")
         return {"id": sid, "name": name, "entry": entry, "mesh": res / "mesh.ply", "trajectory": res / "trajectory.csv",
                 "recording": rec}
 
@@ -91,7 +96,7 @@ class AlignManager:
 
     def _pair(self, pid: str, target: str, source: str, need_recording: bool = False) -> tuple[dict, dict]:
         if target == source:
-            raise ApiError(409, "a scan cannot be aligned to itself", "pick two different scans")
+            raise ApiError(409, "A scan cannot be aligned with itself.", "Pick two different scans.")
         return self._scan(pid, target, "first", need_recording), self._scan(pid, source, "second", need_recording)
 
     # ------------------------------------------------------------------ align
@@ -106,12 +111,13 @@ class AlignManager:
             init, pairs_rms = None, None
             if pairs:
                 if len(pairs) < MIN_PAIRS:
-                    raise ApiError(422, f"{len(pairs)} pair(s) of points are too few", "pick at least three matching points on each scan")
+                    raise ApiError(422, _too_few(len(pairs)), "Pick at least three matching points on each scan.")
                 try:
                     init, pairs_rms = pose_from_point_pairs([p["source"] for p in pairs], [p["target"] for p in pairs])
                 except (ValueError, KeyError, TypeError) as e:
-                    raise ApiError(422, f"the picked points do not give a pose: {e}",
-                                   "pick three or more matching points that span a triangle") from e
+                    log.info("picked points give no pose: %s", e)
+                    raise ApiError(422, "The picked points cannot place the scans: they may lie on a line.",
+                                   "Pick three or more matching points that span a triangle.") from e
 
             def run(ctx: Any) -> dict:
                 from ohs.align import align_pair, align_with_tags, scan_cloud_from_mesh
@@ -152,29 +158,30 @@ class AlignManager:
         from ohs.align import pose_from_point_pairs
 
         if len(scans) < 2:
-            raise ApiError(422, "at least two scans are needed", "pick two or more scans")
+            raise ApiError(422, "At least two scans are needed.", "Pick two or more scans.")
         if len(set(scans)) != len(scans):
-            raise ApiError(409, "a scan is in the list twice", "pick each scan once")
+            raise ApiError(409, "A scan is in the list twice.", "Pick each scan once.")
         if len(scans) > MAX_SCANS:
-            raise ApiError(422, f"{len(scans)} scans are too many at once (at most {MAX_SCANS})",
-                           "merge some of them first, then align the merged scan with the others")
+            raise ApiError(422, f"{len(scans)} scans are too many at once (at most {MAX_SCANS}).",
+                           "Merge some of them first, then align the merged scan with the others.")
         with self.st._lock:
             items = [self._scan(pid, sid, "first" if k == 0 else f"scan {k + 1}:") for k, sid in enumerate(scans)]
             index = {sid: k for k, sid in enumerate(scans)}
             starts: dict[tuple[int, int], tuple[Any, Any]] = {}
             for e in picked or []:
                 if e.get("a") not in index or e.get("b") not in index or e["a"] == e["b"]:
-                    raise ApiError(422, "picked points name a scan that is not in the list", "pick points on two of the listed scans")
+                    raise ApiError(422, "Some picked points are on a scan that is not in the list.", "Pick points on two of the listed scans.")
                 pairs = e.get("pairs") or []
                 if len(pairs) < MIN_PAIRS:
-                    raise ApiError(422, f"{len(pairs)} pair(s) of points are too few", "pick at least three matching points on each scan")
+                    raise ApiError(422, _too_few(len(pairs)), "Pick at least three matching points on each scan.")
                 try:
                     src = [q["source"] for q in pairs]  # on scan b
                     dst = [q["target"] for q in pairs]  # on scan a
                     pose_from_point_pairs(src, dst)
                 except (ValueError, KeyError, TypeError) as err:
-                    raise ApiError(422, f"the picked points do not give a pose: {err}",
-                                   "pick three or more matching points that span a triangle") from err
+                    log.info("picked points give no pose: %s", err)
+                    raise ApiError(422, "The picked points cannot place the scans: they may lie on a line.",
+                                   "Pick three or more matching points that span a triangle.") from err
                 starts[(index[e["a"]], index[e["b"]])] = (src, dst)
 
             def run(ctx: Any) -> dict:
@@ -244,29 +251,29 @@ class AlignManager:
         try:
             T = np.asarray(T, dtype=np.float64).reshape(4, 4)
         except (ValueError, TypeError) as e:
-            raise ApiError(422, "the pose must be a 4x4 matrix", "send the pose the alignment returned") from e
+            raise ApiError(422, "The position of a scan the page sent cannot be read, so nothing was merged.", "Align the scans again, then press Merge.") from e
         R = T[:3, :3]
         if not (np.all(np.isfinite(T)) and np.allclose(R @ R.T, np.eye(3), atol=1e-6) and np.linalg.det(R) > 0
                 and np.allclose(T[3], [0.0, 0.0, 0.0, 1.0], atol=1e-9)):
-            raise ApiError(422, "the pose is not a rigid motion", "send the pose the alignment returned")
+            raise ApiError(422, "The position of a scan the page sent would bend or stretch it, so nothing was merged.", "Align the scans again, then press Merge.")
         return T
 
     def merge(self, pid: str, target: str, source: str, T: Any, same_setup: bool, name: str | None) -> Any:
         """``POST /api/projects/{pid}/merge`` with two scans: the source moved by ``T`` onto the target."""
         if target == source:
-            raise ApiError(409, "a scan cannot be aligned to itself", "pick two different scans")
+            raise ApiError(409, "A scan cannot be aligned with itself.", "Pick two different scans.")
         return self.merge_many(pid, [(target, np.eye(4)), (source, T)], same_setup, name)
 
     def merge_many(self, pid: str, items_in: list[tuple[str, Any]], same_setup: bool, name: str | None) -> Any:
         """``POST /api/projects/{pid}/merge``: every scan at its pose (in the first scan's world)."""
         if len(items_in) < 2:
-            raise ApiError(422, "at least two scans are needed", "pick two or more scans")
+            raise ApiError(422, "At least two scans are needed.", "Pick two or more scans.")
         if len(items_in) > MAX_SCANS:
-            raise ApiError(422, f"{len(items_in)} scans are too many at once (at most {MAX_SCANS})",
-                           "merge some of them first, then merge the result with the others")
+            raise ApiError(422, f"{len(items_in)} scans are too many at once (at most {MAX_SCANS}).",
+                           "Merge some of them first, then merge the result with the others.")
         sids = [sid for sid, _ in items_in]
         if len(set(sids)) != len(sids):
-            raise ApiError(409, "a scan is in the list twice", "pick each scan once")
+            raise ApiError(409, "A scan is in the list twice.", "Pick each scan once.")
         poses = [self._rigid(T) for _, T in items_in]
         with self.st._lock:
             items = [self._scan(pid, sid, "first" if k == 0 else ("second" if len(sids) == 2 else f"scan {k + 1}:"),
@@ -313,7 +320,7 @@ class AlignManager:
                     rep = merge_scans([ScanInput(it["recording"], it["trajectory"], T, it["name"], support=sup, warnings=note)
                                        for it, T, sup, note in zip(items, poses, supports, notes)], out, params, progress)
                     if rep["mesh"]["empty"]:
-                        raise ApiError(409, "the merged model is empty", "check that the scans have a mesh, and align them again")
+                        raise ApiError(409, "The merged mesh came out empty.", "Check that the scans have a mesh, then align them again.")
                     if used or others:  # which preset made the model, and what differed (General alone: nothing added)
                         presets = getattr(self.st, "presets", None)
                         if used and presets is not None:
@@ -350,7 +357,8 @@ class AlignManager:
                 if job.state == "done":
                     self.st.notify("info", f"Merged scan ready: {title}")
                 elif job.state == "failed":
-                    self.st.notify("error", f"Merging failed: {job.error}. The scans it was made from are unchanged.")
+                    self.st.notify("error", failure_notice(job, "Merging failed.",
+                                                           "The scans it was made from are unchanged."))
 
             meta = {"project_id": pid, "scans": sids}
             if len(sids) == 2:

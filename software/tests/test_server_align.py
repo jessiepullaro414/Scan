@@ -89,7 +89,7 @@ def test_align_from_picked_points(env):
     # too few points, points in one line: said at once, with what to do
     err(post(env["base"] + "/align", {"target": env["a"], "source": env["b"], "pairs": pairs[:2]}), 422, "too few")
     line = [{"source": [float(k), 0.0, 0.0], "target": [float(k), 0.0, 0.0]} for k in (0, 10, 20)]
-    err(post(env["base"] + "/align", {"target": env["a"], "source": env["b"], "pairs": line}), 422, "do not give a pose")
+    err(post(env["base"] + "/align", {"target": env["a"], "source": env["b"], "pairs": line}), 422, "cannot place the scans")
 
 
 def test_align_from_the_tags_both_scans_saw(env, tmp_path):
@@ -157,15 +157,15 @@ def test_an_alignment_the_engine_is_not_sure_of_carries_its_poses(env, tmp_path)
 
 
 def test_align_and_merge_say_what_is_missing(env):
-    err(post(env["base"] + "/align", {"target": env["a"], "source": env["a"]}), 409, "to itself")
+    err(post(env["base"] + "/align", {"target": env["a"], "source": env["a"]}), 409, "with itself")
     err(post(env["base"] + "/align", {"target": env["a"], "source": env["bare"]}), 409, "has no mesh yet")
     err(post(env["base"] + "/align", {"target": "scan-19990101-000000", "source": env["b"]}), 404)
     eye = np.eye(4).tolist()
     err(post(env["base"] + "/merge", {"target": env["a"], "source": env["bare"], "T": eye}), 409, "has no mesh yet")
     bad = np.eye(4)
     bad[0, 0] = 2.0
-    err(post(env["base"] + "/merge", {"target": env["a"], "source": env["b"], "T": bad.tolist()}), 422, "not a rigid motion")
-    err(post(env["base"] + "/merge", {"target": env["a"], "source": env["b"], "T": [[1.0, 0.0], [0.0, 1.0]]}), 422, "4x4")
+    err(post(env["base"] + "/merge", {"target": env["a"], "source": env["b"], "T": bad.tolist()}), 422, "would bend or stretch")
+    err(post(env["base"] + "/merge", {"target": env["a"], "source": env["b"], "T": [[1.0, 0.0], [0.0, 1.0]]}), 422, "cannot be read")
 
 
 def test_merge_adds_a_scan_to_the_project(env):
@@ -245,6 +245,6 @@ def test_align_and_merge_several_scans(env):
     assert [m["name"] for m in scan["merged_from"]] == ["Top", "Side", "Back"] and done["result"]["merged_from"] == scans
     assert done["scans"] == scans  # the job's meta
     # one form or the other
-    err(post(env["base"] + "/merge", {**body, "target": env["a"]}), 422, "either scans")
-    err(post(env["base"] + "/merge", {"target": env["a"], "source": env["b"]}), 422, "are needed")
+    err(post(env["base"] + "/merge", {**body, "target": env["a"]}), 422, "two different ways of merging")
+    err(post(env["base"] + "/merge", {"target": env["a"], "source": env["b"]}), 422, "did not say which scans")
     err(post(env["base"] + "/merge", {"scans": body["scans"][:1]}), 422, "at least two")

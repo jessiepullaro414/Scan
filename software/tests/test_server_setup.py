@@ -23,6 +23,7 @@ from websockets.sync.client import connect as ws_connect  # noqa: E402
 from ohs.app.config import Config, ConfigError, load_config, render_template, set_config_values  # noqa: E402
 from ohs.server.app import create_app  # noqa: E402
 from ohs.server.demo import DemoParams, demo_path, generate_demo  # noqa: E402
+from ohs.server.protocol import ApiError  # noqa: E402
 from ohs.server.testing import ServerThread, recv_until  # noqa: E402
 
 T = 30
@@ -152,6 +153,14 @@ def test_print_check_every_branch(env):
     _refused(_post(url, "/api/setup/print-check", {"measured_mm": "x"}), 422)
 
 
+def test_print_check_refusal_has_no_python_quotes(env):
+    """UX_PLAN U9: a length that is not plausible is refused in words without Python quotes."""
+    studio = env["studio"]
+    with pytest.raises(ApiError) as e:
+        studio.setup.print_check(-3.0)
+    assert e.value.status == 400 and "'" not in e.value.detail and "-3" in e.value.detail
+
+
 # --------------------------------------------------------------------------- printables
 @pytest.mark.slow
 def test_printables_listed_served_and_whitelisted(env, monkeypatch):
@@ -163,7 +172,7 @@ def test_printables_listed_served_and_whitelisted(env, monkeypatch):
     monkeypatch.setattr(printables, "open_folder", lambda p: opened.append(Path(p)) or True)
     p = _ok(_get(url, "/api/setup/printables"))
     assert p["files"] == [] and p["generated"] is None and p["dir"] == str(root / "printables") and p["paper"] == "letter"
-    _refused(_get(url, "/api/setup/printables/files/charuco_board.pdf"), 404, "no printable")
+    _refused(_get(url, "/api/setup/printables/files/charuco_board.pdf"), 404, "has not been made")
     job = _ok(_post(url, "/api/setup/printables", {"paper": "a4"}))
     assert job["kind"] == "printables"
     _refused(_post(url, "/api/setup/printables", {"paper": "a4"}), 409, "already")
@@ -312,8 +321,8 @@ def test_laser_brightness_and_wiring_are_saved_to_the_config_file(env):
     assert "brightness = {" in text and "# Stereo camera (ELP dual OV9281" in text
     c = load_config(root / "config.toml")
     assert c.lasers.brightness == want and c.lasers.lines == FOUR
-    for bad, needle in (({"vertical_3": 50}, "not in lasers.lines"), ({"vertical_2": 120}, "0..100"),
-                        ({"horizontal": -1}, "0..100")):
+    for bad, needle in (({"vertical_3": 50}, "not in the list of line lasers"), ({"vertical_2": 120}, "from 0 to 100"),
+                        ({"horizontal": -1}, "from 0 to 100")):
         _refused(_post(url, "/api/settings/lasers", {"brightness": bad}), 422, needle)
     _refused(_post(url, "/api/settings/lasers", {"brightness": {"vertical_2": "bright"}}), 422)
     _refused(_post(url, "/api/settings/lasers", {"brightness": [85]}), 422)
@@ -337,7 +346,7 @@ def test_laser_brightness_and_wiring_are_saved_to_the_config_file(env):
     s = _ok(_post(url, "/api/settings/lasers", {"lines": FOUR, "brightness": {"horizontal_2": 70}}))
     assert s["lasers"]["lines"] == FOUR and s["lasers"]["brightness"] == {"horizontal_2": 70.0}
     _refused(_post(url, "/api/settings/lasers", {"lines": ["vertical", "horizontal"], "brightness": {"horizontal_2": 70}}),
-             422, "not in lasers.lines")
+             422, "not in the list of line lasers")
     assert load_config(root / "config.toml").lasers.lines == FOUR
 
 
@@ -580,7 +589,7 @@ def test_selftest_without_a_pico_says_what_to_do():
     checks = run_camera_selftest(cfg, lambda _c: FakeCamera(size=(160, 100), fps=60.0), no_pico, messages.append,
                                  lambda f: None, seconds=0.3)
     by = {c["id"]: c for c in checks}
-    assert by["pico"]["status"] == "FAIL" and "no Pico found" in by["pico"]["detail"]
+    assert by["pico"]["status"] == "FAIL" and "control board (Pico) was not found" in by["pico"]["detail"]
     assert "data USB cable" in by["pico"]["fix"] and by["camera"]["status"] == "PASS"
     assert "trigger" not in by and "Opening the camera…" in messages
     res = result_dict(checks, "camera")

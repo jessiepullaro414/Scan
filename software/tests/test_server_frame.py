@@ -21,6 +21,7 @@ requests = pytest.importorskip("requests")
 
 import ohs.measure.features as kf  # noqa: E402
 from ohs.measure.frame import PartFrame, part_frame  # noqa: E402
+from ohs.server.protocol import plain_reason, sentence  # noqa: E402
 from ohs.track.export import load_ply  # noqa: E402
 from test_server_process_studio import T, base_url, env, err, get, post, run_job  # noqa: E402,F401
 
@@ -96,7 +97,7 @@ def tracked(env):  # noqa: F811 (the fixture imported above)
     """The sphere scan tracked at preview quality; the frame routes answer before there is a mesh first."""
     b = base_url(env)
     err(post(b + "/features/frame", {"primary": "f-top", "secondary": "f-side", "origin": "f-hole"}), 409, "mesh")
-    err(get(b + "/features/frame/mesh.ply"), 404, "frame")
+    err(get(b + "/features/frame/mesh.ply"), 404, "part's axes")
     run_job(env, post(b + "/process/track", {"quality": "preview"}), "process_track")
     return env
 
@@ -187,13 +188,14 @@ def test_each_refusal_answers_422_with_the_engines_words(box, slots, opts):
     with pytest.raises(ValueError) as refused:
         part_frame(*(kept(s) for s in slots), **opts)
     r = err(post(base_url(box) + "/features/frame", body(*slots, **opts)), 422)
-    assert r["detail"] == str(refused.value)
+    # the engine's own words when they read as a sentence for the user (UX_PLAN U9), else the server's fixed words
+    assert r["detail"] == sentence(plain_reason(refused.value, "These shapes cannot set the part's axes."))
     assert kf.load(scan_dir(box))["frame"] is None  # nothing kept
 
 
 def test_unknown_and_stale_fits_are_refused(box):
     b = base_url(box)
-    err(post(b + "/features/frame", body(origin="f-nope")), 422, "f-nope")
+    err(post(b + "/features/frame", body(origin="f-nope")), 422, "not kept")
     sd = scan_dir(box)
     doc = kf.load(sd)
     doc["features"][3]["mesh_version"] = version(box) - 1  # the hole, fitted on an earlier mesh
@@ -265,7 +267,7 @@ def _result_files(e: dict) -> dict:
 
 def test_the_mesh_in_the_parts_frame(box, tmp_path):
     b = base_url(box)
-    err(get(b + "/features/frame/mesh.ply"), 404, "frame")
+    err(get(b + "/features/frame/mesh.ply"), 404, "part's axes")
     names = ("mesh.ply", "mesh.stl")
     before = {n: get(f"{b}/files/{n}").content for n in names}
     on_disk = _result_files(box)
@@ -301,4 +303,4 @@ def test_the_mesh_in_the_parts_frame(box, tmp_path):
     assert {n: get(f"{b}/files/{n}").content for n in names} == before
     assert _result_files(box) == on_disk
     assert delete(b + "/features/frame").status_code == 204
-    err(get(b + "/features/frame/mesh.stl"), 404, "frame")
+    err(get(b + "/features/frame/mesh.stl"), 404, "part's axes")

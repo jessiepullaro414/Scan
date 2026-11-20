@@ -106,9 +106,10 @@ from typing import Any, Callable
 
 import numpy as np
 
-from ohs.server.jobs import JobCancelled
+from ohs.server.jobs import JobCancelled, failure_notice, failure_text
 from ohs.server.projects import report_summary
-from ohs.server.protocol import QUALITY_NAMES, ApiError, jsonable, normalize_quality, now_iso, quality_or_none
+from ohs.server.protocol import (QUALITY_NAMES, ApiError, jsonable, normalize_quality, now_iso, plain_reason,
+                                 quality_or_none)
 from ohs.server.util import safe_call
 from ohs.track.posegraph import read_trajectory  # the one reader of trajectory.csv (also in __all__ here)
 
@@ -127,7 +128,21 @@ _SELECTION_OPS = ("delete_faces", "keep_faces", "remove_table")  # edits replaye
 #: an edit records ``by_position: true`` in its params, and a replay (undo / redo, a step rebuilt from the
 #: cache) goes by what the edit recorded, not by today's setting. A selection is its faces' numbers.
 _BY_POSITION_OPS = ("remove_floaters", "fill_holes", "smooth", "decimate", "remove_table")
-TABLE_HINT = "if the part does stand on a table in this scan, select the table with the selection tools and delete it"
+TABLE_HINT = "If the part does stand on a table in this scan, select the table with the selection tools and delete it."
+#: an edit's and a parameter's names in words (what the user reads in a refusal; UX_PLAN U9)
+_OP_WORDS = {"remove_floaters": "Remove loose bits", "fill_holes": "Fill holes", "smooth": "Smooth",
+             "decimate": "Simplify", "delete_faces": "Delete the selection", "keep_faces": "Keep the selection",
+             "remove_table": "Remove the table", "settings": "The recipe's settings", "fuse": "Fuse"}
+_PARAM_WORDS = {"min_triangles": "the smallest piece (in triangles)", "min_size_mm": "the size of a loose bit",
+                "min_fraction": "the share of the mesh", "max_hole_mm": "the hole size",
+                "strength": "the strength", "target_triangles": "the number of triangles",
+                "ratio": "the share of the triangles", "max_error_mm": "the largest change",
+                "margin_mm": "the margin", "voxel_mm": "the mesh detail"}
+#: a stage's work in words, for "... failed"
+_STAGE_WHAT = {"track": "Tracking", "straighten": "Straightening", "fuse": "Building the surface",
+               "refine": "Refining with the laser lines", "spacetime": "Refining from the images"}
+#: a request the page should never send (an old page, or a bug)
+_RELOAD = "Reload the page and try again."
 PROCESS_KINDS = ("process_scan", "process_track", "process_straighten", "process_fuse", "process_spacetime",
                  "process_refine", "mesh_edit", "process_recipe")
 MIN_LASER_POINTS = 200  # fewer laser points than this can't anchor anything
@@ -157,13 +172,14 @@ _BUSY_OPS = {"remove_floaters": "Removing floaters…", "fill_holes": "Filling h
 BUILTIN_RECIPES: list[dict] = [
     {"id": "default", "name": "Default", "builtin": True,
      "description": "What Make mesh does: refines the surface with the laser lines, removes loose bits and closes "
-                    "pin holes up to 5 mm. No smoothing and no simplification, so measurements stay true to the scan.",
+                    "pin holes up to 5 mm around (about Ø 1.6 mm). No smoothing and no simplification, so "
+                    "measurements stay true to the scan.",
      "settings": {"quality": "standard", "straighten": "auto", "refine": "auto", "voxel_mm": None},
      "ops": [{"op": "remove_floaters", "params": {"min_size_mm": 5.0, "min_fraction": 0.01}},
              {"op": "fill_holes", "params": {"max_hole_mm": 5.0}}]},
     {"id": "body-panel", "name": "Body panel", "builtin": True,
-     "description": "For smooth sheet metal: closes holes up to 15 mm and smooths the surface while keeping "
-                    "creases and edges.",
+     "description": "For smooth sheet metal: closes holes up to 15 mm around (about Ø 5 mm) and smooths the "
+                    "surface while keeping creases and edges.",
      "settings": {"quality": "standard", "straighten": "auto", "refine": "auto", "voxel_mm": None},
      "ops": [{"op": "remove_floaters", "params": {"min_size_mm": 5.0, "min_fraction": 0.01}},
              {"op": "fill_holes", "params": {"max_hole_mm": 15.0}},
@@ -173,7 +189,7 @@ BUILTIN_RECIPES: list[dict] = [
                                          "away_from_edges": True}}]},
     {"id": "bracket", "name": "Bracket / mechanical", "builtin": True,
      "description": "For brackets and machined parts: keeps sharp edges, light smoothing, closes pin holes up to "
-                    "5 mm.",
+                    "5 mm around (about Ø 1.6 mm).",
      "settings": {"quality": "standard", "straighten": "auto", "refine": "auto", "voxel_mm": None},
      "ops": [{"op": "remove_floaters", "params": {"min_size_mm": 5.0, "min_fraction": 0.01}},
              {"op": "fill_holes", "params": {"max_hole_mm": 5.0}},
@@ -192,22 +208,42 @@ def _fmt(x: float) -> str:
     return f"{x:g}" if abs(x) >= 1 or x == 0 else f"{x:.2g}"
 
 
+def holes_mm(around_mm: float) -> str:
+    """A hole size as the edit means it, the length round the hole, with the diameter of a round hole of that
+    length (UX_PLAN U13): "15 mm around (about Ø 5 mm)", "5 mm around (about Ø 1.6 mm)"."""
+    d = float(around_mm) / math.pi
+    dia = f"{d:.0f}" if d >= 3 else f"{d:.1f}" if d >= 0.1 else f"{d:.2g}"
+    return f"{_fmt(float(around_mm))} mm around (about Ø {dia} mm)"
+
+
+def _stage_failed(stage: str, e: BaseException) -> str:
+    """A stage's summary when it failed: the refusal's own words (an ApiError), else the fixed words of a
+    program error of that stage (:data:`ohs.server.jobs.FAILURE_TEXT`); the exception is in the log."""
+    if isinstance(e, ApiError):
+        return f"{_STAGE_WHAT.get(stage, stage.capitalize())} failed. {e}"
+    log.warning("stage %s failed: %s: %s", stage, type(e).__name__, e)
+    return failure_text(f"process_{stage}")
+
+
 def _num(params: dict, key: str, op: str, lo: float, hi: float, *, integer: bool = False,
          lo_open: bool = False) -> float | int | None:
     if key not in params or params[key] is None:
         return None
     v = params[key]
     if isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(float(v)):
-        raise ApiError(422, f"{op}: {key} must be a number", f"send a number for {key}")
+        raise ApiError(422, f"{_OP_WORDS.get(op, op)}: {_PARAM_WORDS.get(key, key)} must be a number.",
+                       "Type a number.")
     if integer:
         if float(v) != int(v):
-            raise ApiError(422, f"{op}: {key} must be a whole number", f"send a whole number for {key}")
+            raise ApiError(422, f"{_OP_WORDS.get(op, op)}: {_PARAM_WORDS.get(key, key)} must be a whole number.",
+                           "Type a whole number.")
         v = int(v)
     else:
         v = float(v)
     if (v <= lo if lo_open else v < lo) or v > hi:
         rng = f"{'above' if lo_open else 'at least'} {_fmt(lo)} and at most {_fmt(hi)}"
-        raise ApiError(422, f"{op}: {key} must be {rng} (got {v})", f"choose a {key} {rng}")
+        raise ApiError(422, f"{_OP_WORDS.get(op, op)}: {_PARAM_WORDS.get(key, key)} must be {rng} (not {v:g}).",
+                       f"Choose {_PARAM_WORDS.get(key, key)} {rng}.")
     return v
 
 
@@ -222,10 +258,12 @@ def normalize_op(op: str, params: dict | None) -> tuple[dict, str]:
                "decimate": {"target_triangles", "ratio", "max_error_mm"}, "delete_faces": {"faces"},
                "keep_faces": {"faces"}, "remove_table": {"margin_mm", "keep"}}
     if op not in allowed:
-        raise ApiError(422, f"unknown edit {op!r}", f"use one of {', '.join(MESH_OPS)}")
+        log.warning("unknown edit %r", op)
+        raise ApiError(422, "The app does not know this mesh edit.", _RELOAD)
     extra = sorted(set(params) - allowed[op])
     if extra:
-        raise ApiError(422, f"{op}: unknown parameter {extra[0]!r}", f"{op} takes {', '.join(sorted(allowed[op]))}")
+        log.warning("%s: unknown parameter %r", op, extra[0])
+        raise ApiError(422, f"{_OP_WORDS[op]}: the page sent a setting this edit does not have.", _RELOAD)
     if op == "remove_floaters":
         out: dict[str, Any] = {}
         n = _num(params, "min_triangles", op, 1, 1e9, integer=True)
@@ -233,7 +271,7 @@ def normalize_op(op: str, params: dict | None) -> tuple[dict, str]:
         fr = _num(params, "min_fraction", op, 0, 1, lo_open=True)
         keep = params.get("keep_largest_only")
         if keep is not None and not isinstance(keep, bool):
-            raise ApiError(422, f"{op}: keep_largest_only must be true or false", "send true or false")
+            raise ApiError(422, "Remove loose bits: keeping the largest piece only is either on or off.", _RELOAD)
         if keep:
             return {"keep_largest_only": True}, "Keep the largest piece only"
         if n is not None:
@@ -255,34 +293,35 @@ def normalize_op(op: str, params: dict | None) -> tuple[dict, str]:
     if op == "fill_holes":
         m = _num(params, "max_hole_mm", op, 0, 1e5, lo_open=True)
         if m is None:
-            raise ApiError(422, "fill_holes: max_hole_mm is missing", "send the largest hole perimeter to fill, in mm")
+            raise ApiError(422, "Fill holes: the hole size is missing.",
+                           "Give the largest hole to fill, as the length round it in mm.")
         wt = params.get("watertight", False)
         if not isinstance(wt, bool):
-            raise ApiError(422, "fill_holes: watertight must be true or false", "send true or false")
+            raise ApiError(422, "Fill holes: watertight is either on or off.", _RELOAD)
         if wt:
-            return {"max_hole_mm": m, "watertight": True}, f"Make watertight: close every opening up to {_fmt(m)} mm"
-        return {"max_hole_mm": m}, f"Fill holes up to {_fmt(m)} mm"
+            return {"max_hole_mm": m, "watertight": True}, f"Make watertight: close every opening up to {holes_mm(m)}"
+        return {"max_hole_mm": m}, f"Fill holes up to {holes_mm(m)}"
     if op == "smooth":
         method = params.get("method")
         if method not in ("taubin", "bilateral"):
-            raise ApiError(422, "smooth: method must be taubin or bilateral", "send method: \"taubin\" or \"bilateral\"")
+            raise ApiError(422, "Smooth: the app does not know this way of smoothing.", _RELOAD)
         s = _num(params, "strength", op, 0, 1)
         if s is None:
-            raise ApiError(422, "smooth: strength is missing", "send a strength from 0 to 1")
+            raise ApiError(422, "Smooth: the strength is missing.", "Choose a strength from 0 to 100 %.")
         keep = params.get("keep_edges", True)
         if not isinstance(keep, bool):
-            raise ApiError(422, "smooth: keep_edges must be true or false", "send true or false")
+            raise ApiError(422, "Smooth: keeping the edges is either on or off.", _RELOAD)
         within = params.get("within_sigma", False)
         if not isinstance(within, bool):
-            raise ApiError(422, "smooth: within_sigma must be true or false", "send true or false")
+            raise ApiError(422, "Smooth: the limit by the scan's scatter is either on or off.", _RELOAD)
         flat = params.get("flat_only", False)
         if not isinstance(flat, bool):
-            raise ApiError(422, "smooth: flat_only must be true or false", "send true or false")
+            raise ApiError(422, "Smooth: flat areas only is either on or off.", _RELOAD)
         away = params.get("away_from_edges", False)
         if not isinstance(away, bool):
-            raise ApiError(422, "smooth: away_from_edges must be true or false", "send true or false")
+            raise ApiError(422, "Smooth: away from edges is either on or off.", _RELOAD)
         if flat and away:
-            raise ApiError(422, "smooth: flat_only and away_from_edges, not both", "send one of the two")
+            raise ApiError(422, "Smooth: flat areas only, or away from edges, not both.", "Choose one of the two.")
         where = ", flat areas only" if flat else ", away from edges" if away else ""
         label = f"Smooth ({method}, {round(100 * s)} %{', edges kept' if keep else ''}{where}{', within 2σ' if within else ''})"
         out_s: dict[str, Any] = {"method": method, "strength": s, "keep_edges": keep}
@@ -298,8 +337,8 @@ def normalize_op(op: str, params: dict | None) -> tuple[dict, str]:
         r = _num(params, "ratio", op, 0, 1, lo_open=True)
         e = _num(params, "max_error_mm", op, 0.001, 10)
         if t is not None and r is not None or (t is None and r is None and e is None):
-            raise ApiError(422, "decimate: send target_triangles or ratio, and / or max_error_mm",
-                           "for example {\"target_triangles\": 200000} or {\"max_error_mm\": 0.02}")
+            raise ApiError(422, "Simplify: give a number of triangles or a share of them (not both), or the "
+                                "largest change.", "For example 200,000 triangles, or at most 0.02 mm of change.")
         out_d: dict[str, Any] = {}
         if t is not None:
             out_d["target_triangles"] = t
@@ -326,8 +365,8 @@ def normalize_op(op: str, params: dict | None) -> tuple[dict, str]:
                 isinstance(q, list) and len(q) == 3 and all(isinstance(x, (int, float)) and not isinstance(x, bool)
                                                           and math.isfinite(float(x)) for x in q) for q in keep)
             if not ok:
-                raise ApiError(422, "remove_table: keep must be a list of at most 50 points [x, y, z] in mm",
-                               "send keep: [[x, y, z], ...], a point on each raised area to keep")
+                raise ApiError(422, "Remove the table: the areas to keep cannot be read (at most 50).",
+                               "Click Keep this on each raised area to keep again.")
             if keep:
                 out_t["keep"] = [[round(float(x), 2) for x in q] for q in keep]
         # the label gets the count of faces when the edit has run ("Remove the table (12,345 faces)")
@@ -343,16 +382,17 @@ def _carry_op(op: str) -> str:
 
 def _decode_faces(text: Any) -> np.ndarray:
     if not isinstance(text, str) or not text:
-        raise ApiError(422, "the selection is missing", "send faces: base64 of little-endian uint32 face indices")
+        raise ApiError(422, "The selection is missing.", "Select some triangles first.")
     try:
         raw = base64.b64decode(text, validate=True)
     except (binascii.Error, ValueError):
-        raise ApiError(422, "the selection is not valid base64", "send faces as base64 of little-endian uint32 indices") from None
+        log.warning("a selection that is not base64")
+        raise ApiError(422, "The selection the page sent cannot be read (it is not in the form the app reads).", _RELOAD) from None
     if len(raw) == 0:
-        raise ApiError(422, "the selection is empty", "select some triangles first")
+        raise ApiError(422, "The selection is empty.", "Select some triangles first.")
     if len(raw) % 4:
-        raise ApiError(422, f"the selection has {len(raw)} bytes, not a whole number of uint32 indices",
-                       "send 4 bytes (little-endian uint32) per face index")
+        log.warning("a selection of %d bytes", len(raw))
+        raise ApiError(422, "The selection the page sent cannot be read.", _RELOAD)
     return np.frombuffer(raw, dtype="<u4").astype(np.int64)
 
 
@@ -360,6 +400,9 @@ def _slug(name: str) -> str:
     s = unicodedata.normalize("NFKD", name).encode("ascii", "ignore").decode("ascii").lower()
     s = re.sub(r"[^a-z0-9]+", "-", s).strip("-")[:40].strip("-")
     return s or "recipe"
+
+
+_NO_RECIPE = "Reload the page to see the recipes the app has."
 
 
 class RecipeStore:
@@ -377,7 +420,7 @@ class RecipeStore:
 
     def _path(self, rid: str) -> Path:
         if not isinstance(rid, str) or not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,63}", rid):
-            raise ApiError(404, f"no recipe {rid!r}", "pick a recipe from GET /api/recipes")
+            raise ApiError(404, "This recipe is no longer in the app.", _NO_RECIPE)
         return self.root / f"{rid}.json"
 
     def list(self) -> list[dict]:
@@ -410,9 +453,11 @@ class RecipeStore:
         try:
             return self._view(json.loads(p.read_text(encoding="utf-8")))
         except FileNotFoundError:
-            raise ApiError(404, f"no recipe {rid!r}", "pick a recipe from GET /api/recipes") from None
+            raise ApiError(404, "This recipe is no longer in the app.", _NO_RECIPE) from None
         except (OSError, ValueError) as e:
-            raise ApiError(500, f"recipe {rid} cannot be read: {e}", f"fix or delete {p}") from None
+            log.warning("recipe %s cannot be read: %s", p, e)
+            raise ApiError(500, "This recipe's file cannot be read.",
+                           f"Delete the recipe, or restore {p} from a backup.") from None
 
     @staticmethod
     def validate(settings: dict, ops: list) -> tuple[dict, list[dict]]:
@@ -420,22 +465,21 @@ class RecipeStore:
         try:  # "full" is the old name of "standard"
             quality = normalize_quality(s.get("quality", "standard"))
         except ValueError:
-            raise ApiError(422, "settings.quality must be standard, best or preview",
-                           "use \"standard\", \"best\" or \"preview\"") from None
+            raise ApiError(422, "The recipe's quality must be Preview, Standard or Best.", _RELOAD) from None
         straighten = s.get("straighten", "auto")
         if straighten not in ("auto", "off"):
-            raise ApiError(422, "settings.straighten must be auto or off", "use \"auto\" or \"off\"")
+            raise ApiError(422, "The recipe's Straighten is either automatic or off.", _RELOAD)
         refine = s.get("refine", "auto")
         if refine not in ("auto", "off"):
-            raise ApiError(422, "settings.refine must be auto or off", "use \"auto\" or \"off\"")
+            raise ApiError(422, "The recipe's Refine with the laser lines is either automatic or off.", _RELOAD)
         voxel = _num(s, "voxel_mm", "settings", *VOXEL_RANGE)
         if not isinstance(ops, list) or len(ops) > 30:
-            raise ApiError(422, "ops must be a list of at most 30 steps", "send ops: [{op, params}, ...]")
+            raise ApiError(422, "A recipe has at most 30 steps.", "Remove some steps, then save it again.")
         out_ops = []
         for o in ops:
             if not isinstance(o, dict) or o.get("op") not in RECIPE_OPS:
-                raise ApiError(422, f"a recipe step must be one of {', '.join(RECIPE_OPS)}",
-                               "selections (delete / keep faces) belong to one scan and cannot be part of a recipe")
+                raise ApiError(422, "A recipe can hold Remove loose bits, Fill holes, Smooth, Simplify and Remove "
+                                    "the table only.", "Selections belong to one scan and cannot be part of a recipe.")
             p, _ = normalize_op(o["op"], o.get("params") or {})
             out_ops.append({"op": o["op"], "params": p})
         return {"quality": quality, "straighten": straighten, "refine": refine, "voxel_mm": voxel}, out_ops
@@ -443,9 +487,9 @@ class RecipeStore:
     def create(self, name: str, description: str | None, settings: dict, ops: list) -> dict:
         n = " ".join(str(name or "").split())
         if not n:
-            raise ApiError(400, "the recipe name is empty", "type a name for the recipe")
+            raise ApiError(400, "The recipe name is empty.", "Type a name for the recipe.")
         if len(n) > 80:
-            raise ApiError(400, f"the recipe name is too long ({len(n)} characters)", "use at most 80 characters")
+            raise ApiError(400, f"The recipe name is too long ({len(n)} characters).", "Use at most 80 characters.")
         s, o = self.validate(settings, ops)
         builtin_ids = {r["id"] for r in BUILTIN_RECIPES}
         with self._lock:
@@ -455,7 +499,7 @@ class RecipeStore:
                 if rid not in builtin_ids and not (self.root / f"{rid}.json").exists():
                     break
             else:  # pragma: no cover
-                raise ApiError(500, "could not find a free recipe id", "try another name")
+                raise ApiError(500, "The recipe could not be saved under this name.", "Try another name.")
             rec = {"id": rid, "name": n, "description": " ".join(str(description or "").split())[:500],
                    "builtin": False, "settings": s, "ops": o, "created": now_iso()}
             _write_json(self.root / f"{rid}.json", rec)
@@ -464,14 +508,14 @@ class RecipeStore:
 
     def delete(self, rid: str) -> None:
         if self._builtin(rid) is not None:
-            raise ApiError(409, f"{rid!r} is a built-in recipe and cannot be deleted",
-                           "only recipes you saved can be deleted")
+            raise ApiError(409, f"\u201c{self._builtin(rid)['name']}\u201d is a built-in recipe and cannot be deleted.",
+                           "Only recipes you saved can be deleted.")
         p = self._path(rid)
         with self._lock:
             try:
                 p.unlink()
             except FileNotFoundError:
-                raise ApiError(404, f"no recipe {rid!r}", "pick a recipe from GET /api/recipes") from None
+                raise ApiError(404, "This recipe is no longer in the app.", _NO_RECIPE) from None
 
 
 # --------------------------------------------------------------------------- files
@@ -964,15 +1008,14 @@ class ProcessManager:
         entry = self.st.projects.scan_entry(pid, sid)
         s = self.st.session
         if s is not None and s.active and s.project_id == pid and s.scan_id == sid:
-            raise ApiError(409, "this scan is still recording", "stop the scan first")
+            raise ApiError(409, "This scan is still recording.", "Stop the scan first.")
         job = self.active_job(pid, sid)
         if job is not None:
             if make_mesh and job.kind == "process_scan":
-                raise ApiError(409, "this scan is already being processed", f"wait for job {job.id} to finish, or cancel it")
+                raise ApiError(409, "This scan's mesh is already being made.", "Wait for it to finish, or press Cancel.")
             sp = self._scans.get((pid, sid))
-            busy = (self.view(sp)["busy"] if sp is not None else None) or "processing"
-            raise ApiError(409, f"this scan is busy ({busy.rstrip('…').lower()})",
-                           f"wait for job {job.id} to finish, or cancel it")
+            busy = (self.view(sp)["busy"] if sp is not None else None) or "Making the mesh"
+            raise ApiError(409, f"This scan is busy: {busy.rstrip('…').lower()}.", "Wait for it to finish, or press Cancel.")
         return entry
 
     def _need_recording(self, pid: str, sid: str) -> Path:
@@ -980,13 +1023,15 @@ class ProcessManager:
         if not (rec / "frames.csv").is_file():
             entry = self.st.projects.scan_entry(pid, sid)
             if entry.get("keep") == "standard":  # FEATURE_PLAN R2: removed on purpose, by the user
-                raise ApiError(409, "this scan's recording was removed to free space (it keeps its result only), so its "
-                                    "mesh cannot be made again from the frames",
-                               "the mesh can still be edited, measured and exported; to make it again, scan the part again")
+                raise ApiError(409, "This scan's recording was removed to free space (it keeps its result only), so its "
+                                    "mesh cannot be made again from the frames.",
+                               "The mesh can still be edited, measured and exported. To make it again, scan the part "
+                               "again.")
             if entry.get("merged_from"):
-                raise ApiError(409, "this scan has no recording of its own (it was merged from other scans)",
-                               "it can be edited, measured and exported; to make it again, merge the scans it was made from again")
-            raise ApiError(409, "this scan has no recording", "record the scan again")
+                raise ApiError(409, "This scan has no recording of its own (it was merged from other scans).",
+                               "It can be edited, measured and exported. To make it again, merge the scans it was made "
+                               "from again.")
+            raise ApiError(409, "This scan has no recording.", "Record the scan again.")
         return rec
 
     def _removed(self, pid: str, sid: str) -> ApiError:
@@ -994,11 +1039,12 @@ class ProcessManager:
         entry = self.st.projects.scan_entry(pid, sid)
         rec = self.st.projects.recording_dir(pid, sid)
         if entry.get("keep") == "standard" or not (rec / "frames.csv").is_file():
-            return ApiError(409, "the stage files this needs were removed to free space (this scan keeps its result only)",
-                            "the mesh can still be edited, measured and exported; the stage files can only be made "
-                            "again from a recording, which this scan no longer has")
-        return ApiError(409, "the stage files this needs were removed to free space (this scan keeps its recording and "
-                             "its result)", "make the mesh again (Make mesh, or Track first) to rebuild them from the recording")
+            return ApiError(409, "The stage files this needs were removed to free space (this scan keeps its result only).",
+                            "The mesh can still be edited, measured and exported. The stage files can only be made "
+                            "again from a recording, which this scan no longer has.")
+        return ApiError(409, "The stage files this needs were removed to free space (this scan keeps its recording and "
+                             "its result).", "Press Make mesh again (or run Track first) to make them again from the "
+                                             "recording.")
 
     def _freed(self, sp: ScanProcess) -> bool:
         """True when the scan's space was freed (FEATURE_PLAN R2): stage files may be missing on purpose."""
@@ -1009,27 +1055,28 @@ class ProcessManager:
         if done and not (sp.dir / "track" / "trajectory.csv").is_file() and self._freed(sp):
             raise self._removed(sp.pid, sp.sid)
         if not done or not (sp.dir / "track" / "trajectory.csv").is_file():
-            raise ApiError(409, "this needs a finished Track stage", "run Track (or Make mesh) first")
+            raise ApiError(409, "This step needs a finished Track stage.", "Run Track first, or press Make mesh.")
 
     def _need_refine_source(self, sp: ScanProcess) -> None:
         """"Refine with lasers" reads only the base stage's mesh and laser points (no recording, no
         trajectory), so a merged scan can be refined too."""
         st = sp.state
         if st["stages"]["track"]["state"] != "done" or st["base"] is None:
-            raise ApiError(409, "this needs a finished Track stage", "run Track (or Make mesh) first")
+            raise ApiError(409, "This step needs a finished Track stage.", "Run Track first, or press Make mesh.")
         src = st["base"].get("stage")
         if src == "refine":
             src = st["stages"]["refine"].get("source") or "track"
         if not (sp.dir / str(src) / "mesh.ply").is_file():
             if self._freed(sp):
                 raise self._removed(sp.pid, sp.sid)
-            raise ApiError(409, f"the {src} stage's mesh is missing from the process folder",
-                           "run Track (or Make mesh) again")
+            log.warning("scan %s/%s: the %s stage's mesh is missing", sp.pid, sp.sid, src)
+            raise ApiError(409, f"The mesh of the {str(src).capitalize()} stage is missing.",
+                           "Run Track again, or press Make mesh.")
 
     @staticmethod
     def _need_base(sp: ScanProcess) -> None:
         if sp.state["base"] is None:
-            raise ApiError(409, "this scan has no mesh yet", "run Track (or Make mesh) first")
+            raise ApiError(409, "This scan has no mesh yet.", "Press Make mesh first (or run Track).")
 
     # ------------------------------------------------------------------ mesh access
     def load_step(self, sp: ScanProcess, k: int) -> tuple[np.ndarray, np.ndarray]:
@@ -1052,8 +1099,9 @@ class ProcessManager:
                 j -= 1
             got = self._cached(sp, j)
             if got is None:
-                raise ApiError(500, "the base mesh of this scan is missing from the process folder",
-                               "run the last stage again (Track, Straighten or Fuse)")
+                log.warning("scan %s/%s: no cached step before %d", sp.pid, sp.sid, k)
+                raise ApiError(500, "The starting mesh of this scan is missing.",
+                               "Run its last stage again (Track, Straighten or Fuse), or press Make mesh.")
             V, F, _, S, Fl, L = got
             edits = sp.state["edits"]
             log.info("scan %s/%s: rebuilding step %d from step %d (%d edits)", sp.pid, sp.sid, k, j, k - j)
@@ -1252,15 +1300,14 @@ class ProcessManager:
             if faces is None:
                 faces = self._find_table(V, F, S, params)[0]
             if len(faces) and int(faces.max()) >= len(F):
-                raise ApiError(409, "the table's faces refer to triangles the current mesh does not have",
-                               "undo to the step it was removed from, or remove it again")
+                raise ApiError(409, "The table this edit removed is not on the current mesh.",
+                               "Undo to the step it was removed from, or remove it again.")
             return (*M.delete_faces(V, F, faces), faces)
         if op in ("delete_faces", "keep_faces"):
             if faces is None:
                 faces = np.load(sp.selection_path(str(edit_id)))
             if len(faces) and int(faces.max()) >= len(F):
-                raise ApiError(409, "the selection refers to triangles the current mesh does not have",
-                               "reload the mesh and select again")
+                raise ApiError(409, "The selection is not on the current mesh.", "Reload the mesh and select again.")
             return (*(M.delete_faces if op == "delete_faces" else M.keep_faces)(V, F, faces), faces)
         # by position only as the edit recorded it (F15); off, the call is exactly the one before F15
         bp = {"by_position": True} if params.get("by_position") else {}
@@ -1279,7 +1326,8 @@ class ProcessManager:
         if op == "decimate":
             return (*M.decimate(V, F, params.get("target_triangles"), params.get("ratio"),
                                 max_error_mm=params.get("max_error_mm"), progress=progress, **bp), None)
-        raise ApiError(422, f"unknown edit {op!r}", f"use one of {', '.join(MESH_OPS)}")
+        log.warning("unknown edit %r", op)
+        raise ApiError(422, "The app does not know this mesh edit.", _RELOAD)
 
     @staticmethod
     def _summary(op: str, params: dict, V: np.ndarray, F: np.ndarray, V2: np.ndarray, F2: np.ndarray,
@@ -1295,14 +1343,14 @@ class ProcessManager:
             left = int(after["holes"]) + (after.get("border_mm") is not None)
             if params.get("watertight"):
                 if len(F2) == len(F):
-                    return (f"No opening up to {_fmt(params['max_hole_mm'])} mm: nothing was closed"
+                    return (f"No opening up to {holes_mm(params['max_hole_mm'])}: nothing was closed"
                             if left else "Already watertight: nothing to close")
                 return (f"Closed every opening ({len(F2) - len(F):,} new triangles): the mesh is watertight"
                         if after.get("watertight") else
                         f"Closed openings with {len(F2) - len(F):,} new triangles; not watertight yet: {left:,} "
-                        f"opening{'s are' if left != 1 else ' is'} larger than {_fmt(params['max_hole_mm'])} mm")
+                        f"opening{'s are' if left != 1 else ' is'} larger than {holes_mm(params['max_hole_mm'])}")
             if len(F2) == len(F):
-                return f"No holes up to {_fmt(params['max_hole_mm'])} mm: nothing was filled"
+                return f"No holes up to {holes_mm(params['max_hole_mm'])}: nothing was filled"
             n = int(b.get("holes", 0)) - int(after["holes"])
             return f"Filled {n:,} hole{'s' if n != 1 else ''} ({len(F2) - len(F):,} new triangles)"
         if op == "smooth" and len(V2) == len(V) and len(V):
@@ -1356,7 +1404,7 @@ class ProcessManager:
                                      params=support.SupportParams(margin_mm=float(params.get("margin_mm", 1.0))),
                                      keep=params.get("keep") or None, **bp)
         except support.SupportRefused as e:
-            raise ApiError(422, str(e), TABLE_HINT) from None
+            raise ApiError(422, plain_reason(e, "No table was found under the part."), TABLE_HINT) from None
         return r.faces.astype(np.int64), {**r.to_dict(), "_raised_faces": [x["faces"] for x in r.raised]}
 
     @staticmethod
@@ -1409,7 +1457,8 @@ class ProcessManager:
                                  progress=lambda f, m=None: prog(0.05 + 0.8 * f, f"{label}: {m}" if m else label))
         ms = 1e3 * (time.perf_counter() - t0)
         if len(F2) == 0:
-            raise ApiError(409, "this would remove the whole mesh", "change the settings or the selection")
+            raise ApiError(409, "This would remove the whole mesh, so nothing was changed.",
+                           "Change the settings or the selection.")
         ctx.check()
         prog(0.88, f"{label}: measuring the result", force=True)
         bp = {"by_position": True} if params.get("by_position") else {}
@@ -1440,7 +1489,7 @@ class ProcessManager:
         with sp.lock:
             v = int(sp.state["version"])
             if version is not None and int(version) != v:
-                raise ApiError(409, "the mesh changed since the page loaded it", "reload the mesh and try again")
+                raise ApiError(409, "The mesh changed since the page loaded it.", "Reload the mesh and try again.")
             cached = sp._fit_mesh
             if cached is None or cached[0] != v:
                 V, F, S, Fl = self._load_step(sp, int(sp.state["cursor"]))
@@ -1464,13 +1513,15 @@ class ProcessManager:
 
     def submit_edit(self, pid: str, sid: str, op: str, params: dict | None, version: int | None = None) -> Any:
         if op not in MESH_OPS:
-            raise ApiError(422, f"unknown edit {op!r}", f"use one of {', '.join(MESH_OPS)}")
+            log.warning("unknown edit %r", op)
+            raise ApiError(422, "The app does not know this mesh edit.", _RELOAD)
         faces = None
         if op in ("delete_faces", "keep_faces"):
             p = dict(params or {})
             extra = sorted(set(p) - {"faces"})
             if extra:
-                raise ApiError(422, f"{op}: unknown parameter {extra[0]!r}", f"{op} takes faces (base64)")
+                log.warning("%s: unknown parameter %r", op, extra[0])
+                raise ApiError(422, f"{_OP_WORDS[op]}: the page sent a setting this edit does not have.", _RELOAD)
             from ohs.mesh.topology import sorted_unique
 
             faces = sorted_unique(_decode_faces(p.get("faces")))
@@ -1484,12 +1535,11 @@ class ProcessManager:
             self._need_base(sp)
             with sp.lock:
                 if version is not None and int(version) != int(sp.state["version"]):
-                    raise ApiError(409, f"the mesh changed since you selected (version {version}, now "
-                                        f"{sp.state['version']})", "select again on the current mesh")
+                    raise ApiError(409, "The mesh changed since you selected.", "Select again on the current mesh.")
                 n_cur = (sp.stats_at(sp.state["cursor"]) or {}).get("triangles")
             if faces is not None and n_cur is not None and len(faces) and int(faces.max()) >= int(n_cur):
-                raise ApiError(422, f"the selection has triangle {int(faces.max())} but the mesh has {n_cur}",
-                               "reload the mesh and select again")
+                raise ApiError(422, f"The selection has triangle {int(faces.max()):,}, but the mesh has {int(n_cur):,}.",
+                               "Reload the mesh and select again.")
 
             def run(ctx: Any) -> dict:
                 entry = self._run_edit(ctx, sp, op, norm, label, _Prog(ctx, 0.0, 1.0), faces)
@@ -1504,7 +1554,7 @@ class ProcessManager:
 
     def _edit_done(self, sp: ScanProcess, job: Any, label: str) -> None:
         if job.state == "failed":
-            self.st.notify("warn", f"{label} failed: {job.error}. The mesh is unchanged.")
+            self.st.notify("warn", failure_notice(job, f"{label} failed.", "The mesh is unchanged."))
 
     def undo(self, pid: str, sid: str) -> dict:
         return self._move(pid, sid, -1)
@@ -1522,11 +1572,11 @@ class ProcessManager:
             k = sp.state["cursor"] + step
             if k < 0:
                 if (sp.state["base"] or {}).get("applied"):  # FEATURE_PLAN R2: the history was removed on purpose
-                    raise ApiError(409, "nothing to undo: the earlier steps were removed to free space",
-                                   "undo stops at the mesh as it was when the space was freed; new edits can be undone")
-                raise ApiError(409, "nothing to undo", "the mesh is the stage's result already")
+                    raise ApiError(409, "There is nothing to undo: the earlier steps were removed to free space.",
+                                   "Undo stops at the mesh as it was when the space was freed; new edits can be undone.")
+                raise ApiError(409, "There is nothing to undo.", "The mesh is the stage's result already.")
             if k > len(sp.state["edits"]):
-                raise ApiError(409, "nothing to redo", "redo only works after an undo")
+                raise ApiError(409, "There is nothing to redo.", "Redo only works after an undo.")
             self._show_step(sp, k)
         finally:
             sp.lock.release()
@@ -1541,7 +1591,7 @@ class ProcessManager:
         mode = entry.get("mode") if entry.get("mode") in ("markerless", "markers") else "markerless"
         reader = RecordingReader(sp.recording_dir)
         if len(reader) == 0:
-            raise ApiError(409, "the recording has no frames", "record the scan again")
+            raise ApiError(409, "The recording has no frames.", "Record the scan again.")
         size = reader.meta.get("image_size") or list(reader.frame(0).image_size)
         return sp.recording_dir, mode, int(size[0])
 
@@ -1581,8 +1631,8 @@ class ProcessManager:
             try:
                 return self.recipes.get(rid)
             except ApiError:
-                self.st.notify("warn", f"The preset's recipe {rid!r} is no longer in the app; Make mesh uses the "
-                                       "Default recipe")
+                self.st.notify("warn", "The preset's recipe is no longer in the app, so Make mesh uses the Default "
+                                       "recipe.")
         return self.recipes.get("default")
 
     @staticmethod
@@ -1725,7 +1775,7 @@ class ProcessManager:
             self._stage_restore(sp, "track", before)
             raise
         except Exception as e:
-            self._stage_end(sp, "track", state="failed", summary=f"Tracking failed: {e}")
+            self._stage_end(sp, "track", state="failed", summary=_stage_failed("track", e))
             raise
 
     def _do_straighten(self, ctx: Any, sp: ScanProcess, prog: _Prog) -> str:
@@ -1757,7 +1807,7 @@ class ProcessManager:
                 if ctx.cancelled:
                     raise JobCancelled() from e
                 log.exception("straighten_trajectory failed")
-                msg = f"Straightening failed ({e}), so the scan was left as it is"
+                msg = "Straightening could not finish, so the scan was left as it is"
                 self._stage_end(sp, "straighten", state="skipped", summary=msg, loops=None, correction_mm=None,
                                 correction_deg=None)
                 return msg
@@ -1795,7 +1845,7 @@ class ProcessManager:
                 if ctx.cancelled:
                     raise JobCancelled() from e
                 log.exception("laser_curve_adjustment failed")
-                crep = {"changed": False, "reason": "failed", "verdict": f"Lining up the laser crossings failed ({e})"}
+                crep = {"changed": False, "reason": "failed", "verdict": "Lining up the laser crossings could not finish"}
             ctx.check()
             rep["laser_curves"] = crep
             _write_json(sp.dir / "straighten.json", rep)
@@ -1843,7 +1893,7 @@ class ProcessManager:
             self._stage_restore(sp, "straighten", before)
             raise
         except Exception as e:
-            self._stage_end(sp, "straighten", state="failed", summary=f"Straightening failed: {e}")
+            self._stage_end(sp, "straighten", state="failed", summary=_stage_failed("straighten", e))
             raise
 
     def _current_poses(self, sp: ScanProcess) -> dict[int, np.ndarray]:
@@ -1859,7 +1909,7 @@ class ProcessManager:
                 track = dict(sp.state["stages"]["track"])
             poses = self._current_poses(sp)
             if not poses:
-                raise ApiError(409, "the track stage has no tracked frames to fuse", "run Track again")
+                raise ApiError(409, "The Track stage has no tracked frames to build the surface from.", "Run Track again.")
             report = self._fuse_into(ctx, sp, "fuse", prog.sub(0.0, 0.95), quality=quality_or_none(track.get("quality")) or "standard",
                                      voxel_mm=voxel_mm if voxel_mm is not None else track.get("voxel_mm"), poses=poses)
             prog(0.96, "Saving the mesh", force=True)
@@ -1871,12 +1921,13 @@ class ProcessManager:
             used = (report.get("mesh") or {}).get("voxel_mm")
             n = (report.get("frames") or {}).get("processed")
             self._stage_end(sp, "fuse", state="done", voxel_mm=used, job_id=ctx.job.id,
-                            summary=f"Fused {n:,} frames at {_fmt(float(used))} mm voxels" if used and n else "Fused")
+                            summary=f"Built the surface from {n:,} frames at a mesh detail of {_fmt(float(used))} mm"
+                            if used and n else "Built the surface")
         except (JobCancelled, InterruptedError):
             self._stage_restore(sp, "fuse", before)
             raise
         except Exception as e:
-            self._stage_end(sp, "fuse", state="failed", summary=f"Fusing failed: {e}")
+            self._stage_end(sp, "fuse", state="failed", summary=_stage_failed("fuse", e))
             raise
 
     def _do_refine(self, ctx: Any, sp: ScanProcess, prog: _Prog) -> str:
@@ -1946,7 +1997,7 @@ class ProcessManager:
             self._stage_restore(sp, "refine", before)
             raise
         except Exception as e:
-            self._stage_end(sp, "refine", state="failed", summary=f"Refining failed: {e}")
+            self._stage_end(sp, "refine", state="failed", summary=_stage_failed("refine", e))
             raise
 
     def _do_spacetime(self, ctx: Any, sp: ScanProcess, prog: _Prog) -> str:
@@ -1973,7 +2024,7 @@ class ProcessManager:
             poses = self._current_poses(sp)
             calib = RecordingReader(sp.recording_dir).calibration()
             if calib is None or not poses:
-                raise ApiError(409, "this scan has no calibration or no tracked frames", "run Track again")
+                raise ApiError(409, "This scan has no calibration or no tracked frames.", "Run Track again.")
             params = SpacetimeParams()
             left, right, T, K, B = frames_from_recording(
                 str(sp.recording_dir), calib, poses, params.max_frames, cancelled=lambda: ctx.cancelled,
@@ -2025,7 +2076,7 @@ class ProcessManager:
             self._stage_restore(sp, "spacetime", before)
             raise
         except Exception as e:
-            self._stage_end(sp, "spacetime", state="failed", summary=f"Refining from the images failed: {e}")
+            self._stage_end(sp, "spacetime", state="failed", summary=_stage_failed("spacetime", e))
             raise
 
     def _stage_job(self, pid: str, sid: str, kind: str, body: Callable[[Any, ScanProcess, _Prog], str],
@@ -2050,7 +2101,7 @@ class ProcessManager:
             def done(job: Any) -> None:
                 self._settle_status(sp, job, had_result)
                 if job.state == "failed":
-                    self.st.notify("error", f"{message} failed: {job.error}")
+                    self.st.notify("error", failure_notice(job, f"{message} failed."))
                 self.publish(sp)
 
             job = self.st.jobs.submit(kind, run, message=f"Queued: {message}",
@@ -2074,7 +2125,7 @@ class ProcessManager:
         try:
             return normalize_quality(quality)
         except ValueError:
-            raise ApiError(400, f"unknown quality {quality!r}", "use standard, best or preview") from None
+            raise ApiError(400, "The app does not know this quality.", "Pick Preview, Standard or Best.") from None
 
     def submit_track(self, pid: str, sid: str, quality: str | None) -> Any:
         if quality is None:  # P2: the scan's preset's quality, else standard
@@ -2131,7 +2182,7 @@ class ProcessManager:
                 if o["op"] != "remove_table" or e.status != 422:
                     raise
                 # a scan without a table: the step is skipped, in the engine's words, and the rest runs
-                out.append(f"Remove the table: skipped ({e.detail.rstrip('.')})")
+                out.append(f"Remove the table: skipped. {e.detail.rstrip('.')}")  # the steps are joined with "; "
                 continue
             out.append(entry["summary"])
             self.publish(sp)
@@ -2166,7 +2217,7 @@ class ProcessManager:
 
     def submit_recipe(self, pid: str, sid: str, recipe_id: str, scope: str) -> Any:
         if scope not in ("edits", "all"):
-            raise ApiError(422, f"unknown scope {scope!r}", "use edits or all")
+            raise ApiError(422, "The recipe can run on the edits only, or on everything.", _RELOAD)
         recipe = self.recipes.get(recipe_id)  # 404
         if scope == "edits":
             with self.st._lock:
@@ -2180,7 +2231,7 @@ class ProcessManager:
 
                 def done(job: Any) -> None:
                     if job.state == "failed":
-                        self.st.notify("warn", f"The recipe {recipe['name']} stopped: {job.error}")
+                        self.st.notify("warn", failure_notice(job, f"The recipe \u201c{recipe['name']}\u201d stopped."))
                     self.publish(sp)
 
                 job = self.st.jobs.submit("process_recipe", run, message=f"Queued: recipe {recipe['name']}",
@@ -2211,15 +2262,16 @@ class ProcessManager:
 
             def done(job: Any) -> None:
                 if job.state == "done":
-                    self.st.notify("info", f"Processing done: {entry.get('name', sid)}")
+                    self.st.notify("info", f"Mesh ready: \u201c{entry.get('name', sid)}\u201d.")
                 elif job.state == "failed":  # as in M1: failed, with the reason
                     safe_call("updating the scan",
                               lambda: self.st.projects.update_scan(pid, sid, status="failed", error=job.error))
-                    self.st.notify("error", f"Processing failed: {job.error}. The raw recording is kept; try again "
-                                            "(or with quality 'preview').")
+                    self.st.notify("error", failure_notice(job, "Making the mesh failed.",
+                                                           "Your recording is safe: try Make mesh again, or at "
+                                                           "Preview quality."))
                 else:
                     self._settle_status(sp, job, had_result)
-                    self.st.notify("info", "Processing cancelled; the raw recording is kept")
+                    self.st.notify("info", "Making the mesh was cancelled. Your recording is safe.")
                 self.publish(sp)
 
             job = self.st.jobs.submit("process_scan", run, message="Queued for processing",
@@ -2234,7 +2286,8 @@ class ProcessManager:
             with sp.lock:
                 st = sp.state
                 if st["base"] is None:
-                    raise ApiError(409, "this scan has no processing steps to save", "run Track and some edits first")
+                    raise ApiError(409, "This scan has no processing steps to save as a recipe.",
+                                   "Make its mesh and some edits first.")
                 track = st["stages"]["track"]
                 made_by = st["base"]["stage"]
                 for name in ("refine", "spacetime"):  # a refinement: the stage it refined
@@ -2250,8 +2303,7 @@ class ProcessManager:
                 ops = [{"op": e["op"], "params": {k: v for k, v in e["params"].items() if k != "by_position"}} for e in
                        list(st["base"].get("applied") or []) + st["edits"][: st["cursor"]] if e["op"] in RECIPE_OPS]
         elif settings is None or ops is None:
-            raise ApiError(422, "send either from_scan or both settings and ops",
-                           "for example {name, from_scan: {project_id, scan_id}}")
+            raise ApiError(422, "The page did not say what the recipe holds.", _RELOAD)
         return self.recipes.create(name, description, settings, ops)
 
     # ------------------------------------------------------------------ overlays
@@ -2274,27 +2326,27 @@ class ProcessManager:
         from ohs.measure import KINDS, fit_at
 
         if kind not in KINDS:
-            raise ApiError(422, f"unknown kind {kind!r}", f"use one of: {', '.join(KINDS)}")
+            raise ApiError(422, "The app does not know this kind of shape.", "Pick a plane, a cylinder or a hole.")
         sp = self.scan(pid, sid)
         self._need_base(sp)
         with sp.lock:  # the step's arrays, loaded once per version
             v = int(sp.state["version"])
             if version is not None and int(version) != v:
-                raise ApiError(409, "the mesh changed since this click", "reload the mesh and click again")
+                raise ApiError(409, "The mesh changed since this click.", "Reload the mesh and click again.")
             cached = sp._fit_mesh
             if cached is None or cached[0] != v:
                 V, F, S, Fl = self._load_step(sp, int(sp.state["cursor"]))
                 cached = sp._fit_mesh = (v, V, F, S, Fl)
         _, V, F, S, Fl = cached
         if not 0 <= int(face) < len(F):
-            raise ApiError(422, f"face {face} is not on the mesh ({len(F)} faces)", "reload the mesh and click again")
+            raise ApiError(422, "The click is not on the current mesh.", "Reload the mesh and click again.")
         try:
             r = fit_at(V, F, int(face), point, kind, sigma=S, filled=Fl, tolerance_mm=tolerance_mm)
         except ValueError as e:
-            hint = {"plane": "click in the middle of a flat area",
-                    "cylinder": "click on the curved wall of a boss, shaft or bore",
-                    "hole": "click near the edge of a hole that was scanned all round"}[kind]
-            raise ApiError(422, str(e), hint) from None
+            hint = {"plane": "Click in the middle of a flat area.",
+                    "cylinder": "Click on the curved wall of a boss, shaft or bore.",
+                    "hole": "Click near the edge of a hole that was scanned all round."}[kind]
+            raise ApiError(422, plain_reason(e, f"No {kind} could be fitted where you clicked."), hint) from None
         faces = np.asarray(r.faces, dtype="<u4")
         out = {"kind": kind, "shape": r.fit.to_dict(), "faces": base64.b64encode(faces.tobytes()).decode("ascii"),
                "n_faces": int(len(faces)),
@@ -2391,7 +2443,8 @@ class ProcessManager:
                            why=False)
             r.pop("reasons", None)
         except ValueError as e:
-            raise ApiError(422, str(e), "give the tolerance in mm, for example 0.1") from None
+            raise ApiError(422, plain_reason(e, "The Scan check cannot be worked out at this tolerance."),
+                           "Give the tolerance in mm, for example 0.1.") from None
         # kept (the areas with their faces as arrays) for the reasons route, which explains these areas
         sp._check = (v, float(tolerance_mm), {**r, "areas": [dict(a) for a in r["areas"]]})
         for a in r["areas"]:
@@ -2417,13 +2470,13 @@ class ProcessManager:
         t0 = time.perf_counter()
         tol = float(tolerance_mm)
         if not math.isfinite(tol) or tol <= 0:
-            raise ApiError(422, f"the tolerance must be above 0 mm, got {tolerance_mm}", "give the tolerance in mm, "
-                                                                                         "for example 0.1")
+            raise ApiError(422, "The tolerance must be a number of mm above 0.", "Give the tolerance in mm, for "
+                                                                                 "example 0.1.")
         sp = self.scan(pid, sid)
         self._need_base(sp)
         v, V, F, S, Fl = self.mesh_arrays(pid, sid)
         if version is not None and int(version) != v:
-            raise ApiError(409, "the mesh changed since the page checked it", "reload the mesh and check again")
+            raise ApiError(409, "The mesh changed since the page checked it.", "Reload the mesh and check again.")
         Fl = Fl if Fl is not None and len(Fl) == len(F) else None
         with sp._why_lock:  # a second request waits for the first one's answer
             got = sp._why
@@ -2450,7 +2503,8 @@ class ProcessManager:
                 sugg = suggest_views(V, F, r, views[0], context=ctx) if views else None
                 plan = plan_views(V, F, r, views[0], PLAN_POSES, suggestions=sugg, context=ctx) if views else []
             except ValueError as e:
-                raise ApiError(422, str(e), "give the tolerance in mm, for example 0.1") from None
+                raise ApiError(422, plain_reason(e, "The reasons cannot be worked out at this tolerance."),
+                               "Give the tolerance in mm, for example 0.1.") from None
             answer = self._why_answer(r, sugg, plan, cam, v, tol)
             answer["ms"] = int(round(1e3 * (time.perf_counter() - t0)))
             answer = jsonable(answer)
@@ -2556,7 +2610,8 @@ class ProcessManager:
                 try:
                     rows = read_trajectory(traj)
                 except (OSError, ValueError) as e:
-                    return none(f"the camera path of \"{name}\" cannot be read ({e})")
+                    log.warning("the camera path %s cannot be read: %s", traj, e)
+                    return none(f"the camera path of \"{name}\" cannot be read")
                 n = frames(rows)
                 if isinstance(inp.get("frames"), int) and n != int(inp["frames"]):
                     return none(f"the camera path of \"{name}\" changed since the merge ({n:,} frames now, "
@@ -2578,13 +2633,14 @@ class ProcessManager:
         traj = next((p for p in (sp.dir / stage / "trajectory.csv", sp.result_dir / "trajectory.csv",
                                  sp.dir / "track" / "trajectory.csv") if p.is_file()), None)
         if traj is None:
-            return none("the scan's camera path (its trajectory) is not here")
+            return none("the scan's camera path is not here")
         try:
             rows = read_trajectory(traj)
         except (OSError, ValueError) as e:
-            return none(f"the scan's camera path cannot be read ({e})")
+            log.warning("the camera path %s cannot be read: %s", traj, e)
+            return none("the scan's camera path cannot be read")
         if not frames(rows):
-            return none("no frame of the scan's camera path has a pose")
+            return none("the scan's camera path has no tracked frame")
         return [ScanViews.from_calibration(rows, cal, rng)], {
             "available": True, "why": None, "scans": [{"name": str(entry.get("name") or sp.sid), "frames": frames(rows),
                                                       "trajectory": str(traj)}]}
@@ -2595,7 +2651,7 @@ class ProcessManager:
         if not path.is_file():  # the track stage's files were removed to free space (R2): the result's path
             path = sp.result_dir / "trajectory.csv"
         if not path.is_file():
-            raise ApiError(404, "this scan has no trajectory yet", "run Track (or Make mesh) first")
+            raise ApiError(404, "This scan has no camera path (trajectory) yet.", "Press Make mesh first (or run Track).")
         rows = [(i, T) for i, _, ok, T in read_trajectory(path) if ok]
         step = max(1, math.ceil(len(rows) / MAX_TRAJ_POINTS))
         keep = rows[::step]

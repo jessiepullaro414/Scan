@@ -301,7 +301,7 @@ def test_standard_keeps_the_result_and_refuses_what_needs_the_recording(env):
     err(post(b + "/process/refine", {}), 409, "removed to free space")
     err(post(b + "/process/recipe", {"recipe_id": "default", "scope": "all"}), 409, "recording was removed")
     err(post(f"{env['url']}/api/projects/{pid}/merge", {"target": other, "source": sid, "T": np.eye(4).tolist()}),
-        409, "has no recording")
+        409, "its recording was removed")
     err(post(b + "/keep", {"mode": "engineering"}), 409, "cannot keep")
     err(post(b + "/keep", {"mode": "full"}), 409, "cannot be brought back")
 
@@ -437,9 +437,9 @@ def test_a_busy_scan_is_not_moved(env):
     rec_only = scan_url(env, pid, add_recorded(env, pid, "Recorded only"))
     err(post(rec_only + "/keep", {"mode": "standard", "confirm": True}), 409, "no mesh")  # nothing would be left
     err(post(rec_only + "/keep", {"mode": "engineering"}), 409, "nothing to free")  # no stages, no history
-    err(post(b + "/keep", {"mode": "sometimes"}), 422, "full, engineering or standard")
-    err(get(b + "/keep?mode=sometimes"), 422, "full, engineering or standard")
-    err(get(f"{env['url']}/api/projects/{pid}/scans/scan-missing/keep?mode=engineering"), 404, "no scan")
+    err(post(b + "/keep", {"mode": "sometimes"}), 422, "keep the result only")
+    err(get(b + "/keep?mode=sometimes"), 422, "keep the result only")
+    err(get(f"{env['url']}/api/projects/{pid}/scans/scan-missing/keep?mode=engineering"), 404, "no such scan")
 
 
 # --------------------------------------------------------------------------- failures

@@ -34,7 +34,7 @@ from typing import Any, Callable
 
 import numpy as np
 
-from ohs.server.protocol import ApiError, now_iso
+from ohs.server.protocol import ApiError, now_iso, plain_reason
 
 __all__ = ["CAMERA_SECONDS", "STREAM_SECONDS", "fix_for", "plain_prompt", "label", "run_camera_selftest",
            "run_stream_selftest", "result_dict", "overall"]
@@ -112,7 +112,7 @@ def fix_for(name: str, status: str, detail: str = "") -> str | None:
                 "wiring (GP15 to GND).")
     if status == "INFO":
         return None
-    return "Run the self-test again; if it keeps failing, see the log (ohs -v app)."
+    return "Run the self-test again; if it keeps failing, please report it with the self-test's result."
 
 
 def plain_prompt(line: str) -> str | None:
@@ -210,11 +210,13 @@ def run_camera_selftest(cfg: Any, camera_factory: Callable[[Any], Any], pico_fac
     try:
         camera = camera_factory(cfg)
     except Exception as e:
-        cam_error = str(e)
+        log.warning("selftest: the camera could not be set up: %s", e)
+        cam_error = plain_reason(e, "")
     try:
         pico = pico_factory(cfg)
     except Exception as e:
-        pico_error = str(e)
+        log.warning("selftest: no Pico: %s", e)
+        pico_error = plain_reason(e, "")
     ticker = _Ticker(progress)
 
     def echo(line: str) -> None:
@@ -236,9 +238,9 @@ def run_camera_selftest(cfg: Any, camera_factory: Callable[[Any], Any], pico_fac
     for c in checks:
         status, detail = c.status, c.detail
         if c.name == "camera" and status == "SKIP" and cam_error is not None:
-            status, detail = "FAIL", f"the camera could not be set up: {cam_error}"
+            status, detail = "FAIL", "the camera could not be set up" + (f": {cam_error}" if cam_error else "")
         elif c.name == "pico" and status == "SKIP" and pico_error is not None:
-            status, detail = "FAIL", f"no Pico: {pico_error}"
+            status, detail = "FAIL", "the control board (Pico) was not found" + (f": {pico_error}" if pico_error else "")
         out.append(_check(c.name, status, detail))
     return out
 
@@ -284,7 +286,8 @@ def run_stream_selftest(devices: Any, source: str, message: Callable[[str], None
             if cancelled():
                 raise InterruptedError("self-test cancelled")
             if not devices.connected:
-                raise ApiError(409, "the device disconnected during the self-test", "connect it again and run the self-test")
+                raise ApiError(409, "The scanner disconnected during the self-test.",
+                               "Connect it again, then run the self-test again.")
             progress(0.05 + 0.85 * (time.monotonic() - t0) / seconds)
             time.sleep(0.1)
     finally:
@@ -325,11 +328,12 @@ def run_stream_selftest(devices: Any, source: str, message: Callable[[str], None
         detail = f"|accel| {g:.2f} m/s^2"
         checks.append(_check("imu values", "PASS" if gravity_ok(g) else "WARN",
                              detail if gravity_ok(g) else detail + " (expected about 9.81 m/s^2)"))
-    no_pico = "the simulator has no Pico" if source == "sim" else "a replayed recording has no Pico"
+    no_pico = ("the simulator has no control board (Pico)" if source == "sim"
+               else "a replayed recording has no control board (Pico)")
     checks.append(_check("pico", "SKIP", no_pico))
     checks.append(_check("clock sync", "SKIP", f"{no_pico}: there is no clock to synchronise"))
-    checks.append(_check("emitters", "SKIP", "the simulator's lasers and dot projector are virtual" if source == "sim"
-                         else "a recording cannot switch emitters"))
+    checks.append(_check("emitters", "SKIP", "the simulator's lasers and dots are virtual" if source == "sim"
+                         else "a recording cannot switch the lasers and dots"))
     checks.append(_check("trigger", "SKIP", f"{no_pico}: use the buttons in the app"))
     progress(0.98)
     return checks

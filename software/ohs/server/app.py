@@ -58,7 +58,7 @@ from ohs.server.disk import project_disk_use
 from ohs.server.features import FeatureManager
 from ohs.server.flush import FlushManager
 from ohs.server.keep import KeepManager
-from ohs.server.protocol import PROTOCOL_VERSION, ApiError, dumps, jsonable
+from ohs.server.protocol import PROTOCOL_VERSION, ApiError, dumps, jsonable, sentence
 from ohs.server.reference import ReferenceManager
 from ohs.server.report import ReportManager
 from ohs.server.sections import SectionManager
@@ -429,10 +429,14 @@ def _json(x: Any, status: int = 200) -> JSONResponse:
 
 
 def _err(status: int, detail: str, hint: Optional[str] = None) -> JSONResponse:
-    body: dict = {"detail": detail}
+    body: dict = {"detail": sentence(detail)}
     if hint:
-        body["hint"] = hint
+        body["hint"] = sentence(hint)
     return JSONResponse(body, status_code=status)
+
+
+#: a request the page should never send (a bug, or an old page after an update): what the user reads
+_RELOAD = "Reload the page and try again; if it happens again, please report it, saying what you were doing."
 
 
 _NO_UI = """<!doctype html>
@@ -504,14 +508,18 @@ class LocalGuard:
         origin = headers.get("origin")
         problem = None
         if not self.host_ok(host):
-            problem = (f"requests for host {host!r} are refused", "open the app at http://127.0.0.1:<port>")
+            problem = (f"requests for host {host!r} are refused",
+                       "The app only answers at its own address on this computer (127.0.0.1).",
+                       "Open it from the OpenHandScan Studio shortcut.")
         elif origin and (kind == "websocket" or scope.get("method") in _UNSAFE) and not self.origin_ok(origin, host):
             problem = (f"cross-origin request from {origin} refused",
-                       "use the app's own page (http://127.0.0.1:<port>) or the Vite dev server (port 5173)")
+                       "Another web page tried to use the app, and was refused.",
+                       "Use the app in its own window.")
         if problem is None:
             await self.app(scope, receive, send)
             return
         log.warning("refused %s %s: %s", kind, scope.get("path"), problem[0])
+        problem = problem[1:]
         if kind == "websocket":
             await send({"type": "websocket.close", "code": 1008})
             return
@@ -563,19 +571,23 @@ def create_app(config: Any = None, *, projects_dir: Any = None, static_dir: Any 
         for e in exc.errors():
             loc = ".".join(str(x) for x in e.get("loc", ()) if x != "body")
             parts.append(f"{loc}: {e.get('msg')}" if loc else str(e.get("msg")))
-        return _err(422, "invalid request: " + "; ".join(parts), "check the request body against APP_API.md")
+        log.warning("invalid request %s %s: %s", request.method, request.url.path, "; ".join(parts))
+        return _err(422, "A value the page sent is not valid, so nothing was changed.", _RELOAD)
 
     @app.exception_handler(StarletteHTTPException)
     async def _http_error(request: Any, exc: StarletteHTTPException) -> JSONResponse:
-        hints = {404: "check the URL (the API is under /api, see APP_API.md)", 405: "check the HTTP method of this route"}
         detail = exc.detail if isinstance(exc.detail, str) else str(exc.detail)
-        return _err(exc.status_code, detail, hints.get(exc.status_code))
+        log.warning("%s %s: HTTP %d %s", request.method, request.url.path, exc.status_code, detail)
+        words = {404: "The app does not know this address.",
+                 405: "The app does not accept this kind of request here."}.get(exc.status_code)
+        return _err(exc.status_code, words or "The app could not answer this request.", _RELOAD)
 
     @app.exception_handler(Exception)
     async def _unexpected(request: Any, exc: Exception) -> JSONResponse:
         log.exception("unexpected error in %s %s", request.method, request.url.path)
-        return _err(500, f"internal error: {type(exc).__name__}: {exc}",
-                    "this is a bug: see the log (ohs -v app) and report it; your recordings are safe")
+        return _err(500, "Something went wrong inside the app.",
+                    "Your recordings are safe. Try again; if it happens again, please report it, saying what "
+                    "you were doing.")
 
     # ------------------------------------------------------------------ REST
     @app.get("/api/health")
@@ -1098,10 +1110,12 @@ def create_app(config: Any = None, *, projects_dir: Any = None, static_dir: Any 
     def merge_scans(pid: str, body: MergeBody) -> JSONResponse:
         if body.scans is not None:
             if body.target is not None or body.source is not None or body.T is not None:
-                raise ApiError(422, "give either scans, or target, source and T", "send one of the two forms")
+                raise ApiError(422, "The page sent two different ways of merging at once, so nothing was merged.",
+                               _RELOAD)
             return _json(st.aligning.merge_many(pid, [(e.id, e.T) for e in body.scans], body.same_setup, body.name).to_dict())
         if body.target is None or body.source is None or body.T is None:
-            raise ApiError(422, "target, source and T are needed (or scans)", "send the scans and the pose the alignment returned")
+            raise ApiError(422, "The page did not say which scans to merge, so nothing was merged.",
+                           "Align the scans again, then press Merge.")
         return _json(st.aligning.merge(pid, body.target, body.source, body.T, body.same_setup, body.name).to_dict())
 
     @app.get("/api/jobs")
@@ -1272,8 +1286,10 @@ def create_app(config: Any = None, *, projects_dir: Any = None, static_dir: Any 
         allowed = sorted({m for r in app.routes if isinstance(r, APIRoute) and r.name != "api_unknown"
                           and r.path.startswith("/api/") and r.path_regex.match(path) for m in (r.methods or ())})
         if allowed and request.method not in allowed:
-            return _err(405, f"{request.method} is not allowed on {path}", f"use {' or '.join(allowed)}")
-        return _err(404, f"unknown API route /api/{rest}", "see software/docs/APP_API.md for the routes")
+            log.warning("%s is not allowed on %s (use %s)", request.method, path, " or ".join(allowed))
+            return _err(405, "The app does not accept this kind of request here.", _RELOAD)
+        log.warning("unknown API route %s %s", request.method, path)
+        return _err(404, "The app does not know this address.", _RELOAD)
 
     @app.get("/{full_path:path}", include_in_schema=False)
     def ui(full_path: str) -> Response:
@@ -1292,7 +1308,9 @@ def create_app(config: Any = None, *, projects_dir: Any = None, static_dir: Any 
                 cache = "public, max-age=31536000, immutable" if full_path.startswith("assets/") else "no-cache"
                 return FileResponse(candidate, media_type=media, headers={"Cache-Control": cache})
             if "." in full_path.rsplit("/", 1)[-1]:  # a missing file, not an app route
-                return _err(404, f"/{full_path} not found", "rebuild the UI (npm run build in software/ui)")
+                log.warning("UI file /%s not found in %s", full_path, root)
+                return _err(404, "A file of the app's pages is missing.",
+                            "Reload the page. If it stays missing, install OpenHandScan Studio again.")
         return FileResponse(index, media_type="text/html", headers={"Cache-Control": "no-cache"})
 
     return app

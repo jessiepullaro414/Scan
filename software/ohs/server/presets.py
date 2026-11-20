@@ -20,11 +20,12 @@ says so in ``note``.
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 
 from ohs.app.presets import (GENERAL_ID, GENERAL_TOLERANCE_MM, KEYS, LABELS, PresetError, PresetStore, acting,
                              scan_record, validate_values)
-from ohs.server.protocol import ApiError
+from ohs.server.protocol import ApiError, plain_reason
 
 __all__ = ["PresetManager", "BEFORE_PRESETS_NOTE"]
 
@@ -33,8 +34,22 @@ log = logging.getLogger(__name__)
 BEFORE_PRESETS_NOTE = "This scan was made before presets, so it is made as General."
 
 
+#: what a refused preset says when the engine's words read like a program's (a route, a key name)
+_PRESET_DETAIL = {400: "This preset name cannot be used.", 404: "This preset or recipe is no longer in the app.",
+                  409: "This preset cannot be changed this way.", 422: "A value of this preset cannot be used.",
+                  500: "The preset could not be saved."}
+_PRESET_HINT = "Reload the page, then pick one of the presets and recipes the app lists."
+
+
 def _api(e: PresetError) -> ApiError:
-    return ApiError(e.status, str(e), e.hint)
+    """The preset's refusal in the engine's words where they are plain, else in fixed ones (both in the log)."""
+    log.info("preset refused (%d): %s (%s)", e.status, e, e.hint)
+
+    def words(s: Any) -> str:  # a setting's key in words ("depth_range": "depth range"), 'x' as “x”
+        return re.sub(r"(?<!\w)'([^'\s]*)'(?!\w)", "“\\1”", str(s or "")).replace("_", " ")
+
+    return ApiError(e.status, plain_reason(words(e), _PRESET_DETAIL.get(e.status, "This preset cannot be used as it is.")),
+                    plain_reason(words(e.hint), _PRESET_HINT))
 
 
 class PresetManager:
@@ -157,8 +172,8 @@ class PresetManager:
         changed by hand (``None`` for a value: back to the preset's). The next mesh uses them. 409 while the
         scan records or is being processed; 422 for a value the app does not take, and for the mode."""
         if values is not None and "mode" in values:
-            raise ApiError(422, "the tracking mode cannot change after scanning",
-                           "start a new scan with the other tracking mode")
+            raise ApiError(422, "The tracking mode cannot change after scanning.",
+                           "Start a new scan with the other tracking mode.")
         with self.st._lock:
             entry = self.st.processing._check_free(pid, sid)
             try:

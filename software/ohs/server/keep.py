@@ -81,7 +81,7 @@ from ohs.io.recording import effective_frame_step
 from ohs.server.disk import UNDO_DIRS, _is_link, folder_bytes, folder_use
 from ohs.server.processing import json_file_size
 from ohs.server.projects import KEEP_MODES
-from ohs.server.protocol import ApiError, jsonable, now_iso
+from ohs.server.protocol import ApiError, jsonable, now_iso, sentence
 from ohs.server.util import safe_call
 
 __all__ = ["KeepManager", "MODES", "RECORDING_KEPT"]
@@ -180,16 +180,16 @@ def _remove(path: Path, is_dir: bool, errors: list[str]) -> None:
 
 def _mode(mode: Any) -> str:
     if mode not in MODES:
-        raise ApiError(422, f"unknown mode {mode!r}: a scan keeps full, engineering or standard",
-                       "send mode: \"engineering\" (the recording and the result) or \"standard\" (the result only)")
+        raise ApiError(422, "The app does not know this choice of what a scan keeps.",
+                       f"Pick {_ENGINEERING}, {_THIN} or {_STANDARD}.")
     return str(mode)
 
 
 def _thin_arg(mode: str, thin: Any) -> bool:
     thin = bool(thin)
     if thin and mode != "engineering":
-        raise ApiError(422, "keeping only the frames Standard quality uses goes with keeping the recording and the result",
-                       "send mode: \"engineering\" with thin: true")
+        raise ApiError(422, "Keeping only the frames Standard quality uses goes with keeping the recording and the "
+                            "result.", f"Pick {_THIN}.")
     return thin
 
 
@@ -211,9 +211,14 @@ def _write_bytes(path: Path, data: bytes) -> None:
                 pass
 
 
+#: the Free space dialog's three choices, by their titles (the only names the app shows for them, UX_PLAN U37)
+_ENGINEERING = "\u201cKeep the recording and the result\u201d"
+_THIN = "\u201cKeep the frames Standard quality uses, and the result\u201d"
+_STANDARD = "\u201cKeep the result only\u201d"
+
 #: what keeping only the frames Standard uses can not promise, and what to do instead
 _SAME_MESH = "so the thinner recording would not give the same mesh"
-_THIN_HINT = "keep the recording and the result without thinning, or change the setting back first"
+_THIN_HINT = f"Pick {_ENGINEERING} instead."
 
 
 def _thinning(sd: Path, entry: dict, cfg: Any) -> dict:
@@ -228,17 +233,17 @@ def _thinning(sd: Path, entry: dict, cfg: Any) -> dict:
         return out  # no recording: the engineering refusal says so
     p = cfg.process
     if float(p.frame_motion_deg) > 0:
-        out["refusal"] = (f"Standard quality here picks frames by motion (process.frame_motion_deg = {float(p.frame_motion_deg):g}), "
-                          f"{_SAME_MESH}", _THIN_HINT)
+        out["refusal"] = (f"Standard quality is set here to pick frames by how far the scanner turned, {_SAME_MESH}",
+                          _THIN_HINT)
         return out
     if int(p.frame_step) != 1:
-        out["refusal"] = (f"Standard quality here uses every {_ordinal(int(p.frame_step))} frame (process.frame_step = "
-                          f"{int(p.frame_step)}), {_SAME_MESH}", _THIN_HINT)
+        out["refusal"] = (f"Standard quality is set here to use every {_ordinal(int(p.frame_step))} frame, {_SAME_MESH}",
+                          _THIN_HINT)
         return out
     rate = float(p.standard_frame_rate)
     if not rate > 0:
-        out["refusal"] = (f"Standard quality here uses every frame (process.standard_frame_rate = 0): it skips none, {_SAME_MESH} "
-                          "if any were removed", _THIN_HINT)
+        out["refusal"] = (f"Standard quality is set here to use every frame: it skips none, {_SAME_MESH} if any were "
+                          "removed", _THIN_HINT)
         return out
     raw = fcsv.read_bytes()
     lines = raw.splitlines(keepends=True)
@@ -247,8 +252,8 @@ def _thinning(sd: Path, entry: dict, cfg: Any) -> dict:
     header, rows = lines[:1], lines[1:]
     parsed = list(csv.DictReader(io.StringIO(b"".join(lines).decode("utf-8"), newline="")))
     if len(parsed) != len(rows) or not all(r.get("file") and r.get("t_host") for r in parsed):
-        out["refusal"] = ("this scan's frames list has lines the app does not read as frames, so it cannot be thinned safely",
-                          "keep the recording and the result without thinning")
+        out["refusal"] = ("This scan's list of frames has lines the app does not read as frames, so it cannot be "
+                          "thinned safely", _THIN_HINT)
         return out
     times = [float(r["t_host"]) for r in parsed]
     files = [r["file"] for r in parsed]
@@ -269,15 +274,15 @@ def _thinning(sd: Path, entry: dict, cfg: Any) -> dict:
         step_after, fps_after = effective_frame_step(kept_times, 1, rate)
         if step_after != 1:
             out["refusal"] = ("Standard quality would not pick the same frames from the thinner recording, "
-                              f"{_SAME_MESH}", "keep the recording and the result without thinning")
+                              f"{_SAME_MESH}", _THIN_HINT)
             return out
         info = {"fps": round(float(fps_after or 0.0), 3), "fps_before": round(float(fps or 0.0), 3), "step": int(step),
                 "frames": len(kept_times), "frames_before": n}
         out["files"] = [f for k, f in enumerate(files) if k % step] + orphans
         out["frames_csv"] = b"".join(header + rows[::step])
     elif thinned is None:
-        out["refusal"] = (f"this recording has {fps or 0:.0f} frames a second: Standard quality uses every one of them, so "
-                          "there are no frames to remove", "keep the recording and the result without thinning, or the result only")
+        out["refusal"] = (f"This recording has {fps or 0:.0f} frames a second: Standard quality uses every one of them, so "
+                          "there are no frames to remove", f"Pick {_ENGINEERING} or {_STANDARD} instead.")
         return out
     else:  # thinned before: what a failure half way left
         info = {k: thinned[k] for k in ("fps", "fps_before", "step", "frames", "frames_before") if k in thinned}
@@ -303,18 +308,18 @@ class KeepManager:
     def _busy(self, pid: str, sid: str, entry: dict) -> tuple[str, str] | None:
         s = self.st.session
         if s is not None and s.active and s.project_id == pid and s.scan_id == sid:
-            return "this scan is busy: it is still recording", "stop the scan first, then free its space"
+            return "This scan is busy: it is still recording", "Stop the scan first, then free its space."
         for job in self.st.jobs.active():
             m = job.meta or {}
             if m.get("project_id") != pid:
                 continue
             if sid in (m.get("scan_id"), m.get("target"), m.get("source")) or sid in (m.get("scans") or []):
                 state = "waiting to run" if job.state == "queued" else "running"
-                return (f"this scan is busy: a job that uses it is {state}",
-                        f"wait for job {job.id} to finish, or cancel it, then free its space")
+                return (f"This scan is busy: a task that uses it is {state}",
+                        "Wait for it to finish (see Jobs), or cancel it, then free its space.")
         if entry.get("status") in ("recording", "processing"):
             doing = "recorded" if entry["status"] == "recording" else "processed"
-            return f"this scan is busy: it is being {doing}", "wait until it has finished, then free its space"
+            return f"This scan is busy: it is being {doing}", "Wait until it has finished, then free its space."
         return None
 
     @staticmethod
@@ -356,8 +361,9 @@ class KeepManager:
                 with sp.lock:
                     ks = self.st.processing.kept_step(sp)
                     if ks is None and sp.state["base"] is not None:
-                        refusal = ("this scan's current mesh cannot be found (neither result/mesh.ply nor its cache file "
-                                   "is there)", "make the mesh again, or run its last stage again")
+                        log.warning("scan %s/%s: neither result/mesh.ply nor its cache file is there", pid, sid)
+                        refusal = ("This scan's current mesh cannot be found on disk",
+                                   "Press Make mesh again, or run its last step again.")
                     if ks is not None:
                         kept, in_result = ks
                         kept_bytes = _file_use(kept)[0] if kept is not None else 0
@@ -408,7 +414,7 @@ class KeepManager:
                                  ("features", (sd / "features.json").is_file())) if ok]
         ok = refusal is None
         plan = {"scan_id": sid, "name": entry.get("name", sid), "keep": cur, "to": mode, "ok": ok,
-                "refusal": None if ok else {"detail": refusal[0], "hint": refusal[1]},
+                "refusal": None if ok else {"detail": sentence(refusal[0]), "hint": sentence(refusal[1])},
                 "bytes": folder_bytes(sd), "frees_bytes": frees if ok else 0,
                 "remove": remove if ok else [], "writes": writes if ok else [],
                 "kept_step_bytes": kept_bytes if ok else 0, "loses": loses, "keeps": keeps,
@@ -421,26 +427,26 @@ class KeepManager:
                  thin_refusal: tuple[str, str] | None = None) -> tuple[str, str] | None:
         if mode == "full":
             if cur == "full":
-                return ("this scan keeps everything already",
-                        "choose what to remove: keep the recording and the result, or the result only")
-            hint = ("the stage files come back when you make the mesh again" if cur == "engineering" else
-                    "the recording is gone for good; scan the part again to have one")
-            return "what was removed to free space cannot be brought back from here", hint
+                return ("This scan keeps everything already",
+                        f"Choose what to remove: {_ENGINEERING} or {_STANDARD}.")
+            hint = ("The stage files come back when you make the mesh again." if cur == "engineering" else
+                    "The recording is gone for good: scan the part again to have one.")
+            return "What was removed to free space cannot be brought back from here", hint
         if _RANK[mode] < _RANK[cur]:
-            return ("this scan cannot keep its recording again: it was removed to free space",
-                    "it keeps its result only; it can still be edited, measured and exported")
+            return ("This scan cannot keep its recording again: it was removed to free space",
+                    "It keeps its result only, and can still be edited, measured and exported.")
         if mode == "engineering" and not has_rec:
             why = "of its own (it was merged from other scans)" if entry.get("merged_from") else "on disk"
-            return (f"this scan has no recording {why}, so it cannot keep one",
-                    "choose the result only to free its processing files")
+            return (f"This scan has no recording {why}, so it cannot keep one",
+                    f"Pick {_STANDARD} to free its processing files.")
         if mode == "standard" and not has_mesh:
-            return ("this scan has no mesh yet: keeping its result only would leave nothing of it",
-                    "make its mesh first, or keep the recording and the result")
+            return ("This scan has no mesh yet: keeping its result only would leave nothing of it",
+                    f"Make its mesh first, or pick {_ENGINEERING}.")
         if thin_refusal is not None:
             return thin_refusal
         if frees <= 0:
-            return ("nothing to free: this scan would not take less space afterwards",
-                    "it has none of what this choice removes on disk")
+            return ("There is nothing to free: this scan would not take less space afterwards",
+                    "It has none of what this choice removes on disk.")
         return None
 
     # ------------------------------------------------------------------ one scan
@@ -469,7 +475,7 @@ class KeepManager:
                     raise ApiError(409, plan["refusal"]["detail"], plan["refusal"]["hint"])
                 if plan["confirm"] and not confirm:
                     what = "the frames Standard quality skips" if mode == "engineering" else "this scan's recording"
-                    raise ApiError(409, f"removing {what} cannot be undone", "ask once more, then send confirm: true")
+                    raise ApiError(409, f"Removing {what} cannot be undone.", "Confirm it once more to go ahead.")
                 if sp is not None:
                     self.st.processing.keep_current_only(sp, in_result)
                 entry = self.st.projects.scan_entry(pid, sid)
@@ -500,9 +506,10 @@ class KeepManager:
         log.info("scan %s/%s now keeps %s: freed %d bytes (%d could not be removed)", pid, sid, mode, freed, len(errors))
         if errors:
             n = len(errors)
-            raise ApiError(409, f"{n} file{'s' if n != 1 else ''} could not be removed (first: {errors[0]}); "
-                                f"{_fmt_bytes(freed)} were freed and the scan still opens",
-                           "close any program that may have a file of this scan open, then free its space again")
+            log.warning("scan %s/%s: %d files could not be removed, the first: %s", pid, sid, n, errors[0])
+            raise ApiError(409, f"{n} file{'s' if n != 1 else ''} could not be removed; {_fmt_bytes(freed)} were "
+                                "freed and the scan still opens.",
+                           "Close any program that may have a file of this scan open, then free its space again.")
         return {"scan": scan, "freed_bytes": freed, "planned_bytes": plan["frees_bytes"]}
 
     # ------------------------------------------------------------------ a whole project
@@ -525,7 +532,7 @@ class KeepManager:
         plan = self.project_plan(pid, mode, thin)
         if plan["confirm"] and not confirm:
             what = "the frames Standard quality skips" if thin else "these scans' recordings"
-            raise ApiError(409, f"removing {what} cannot be undone", "ask once more, then send confirm: true")
+            raise ApiError(409, f"Removing {what} cannot be undone.", "Confirm it once more to go ahead.")
         want = None if scans is None else set(scans)
         results, freed = [], 0
         for p in plan["scans"]:
@@ -534,7 +541,8 @@ class KeepManager:
             row: dict[str, Any] = {"scan_id": p["scan_id"], "name": p["name"]}
             if not p["ok"] or p["frees_bytes"] == 0 and p["keep"] == mode:
                 results.append({**row, "ok": False, "freed_bytes": 0,
-                                "error": p["refusal"] or {"detail": "nothing to free", "hint": "nothing to do"}})
+                                "error": p["refusal"] or {"detail": "There is nothing to free in this scan.",
+                                                          "hint": "Nothing needs doing."}})
                 continue
             try:
                 out = self.apply(pid, p["scan_id"], mode, confirm=True, thin=thin)

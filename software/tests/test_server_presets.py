@@ -213,7 +213,7 @@ def test_a_value_changed_by_hand_wins_and_is_recorded(env, calls):
     err(put(b + "/preset", {"values": {"voxel_mm": 0.1}}), 422, "at least 0.25 mm")
     err(put(b + "/preset", {"values": {"depth_range": [100, 600]}}), 422, "depth range")
     err(put(b + "/preset", {"preset_id": "nope-0000"}), 404, "no preset")
-    err(put(scan_url(env, pid, "scan-nope") + "/preset", {"preset_id": THIN}), 404, "no scan")
+    err(put(scan_url(env, pid, "scan-nope") + "/preset", {"preset_id": THIN}), 404, "no such scan")
 
 
 # --------------------------------------------------------------------------- the user's presets
@@ -230,7 +230,7 @@ def test_the_users_presets_routes_and_a_preset_that_is_gone(env, calls):
                                                            "check_tolerance_mm": 0.5}
     assert (env["root"] / "data" / "presets" / f"{mine['id']}.json").is_file()
     assert mine["id"] in [p["id"] for p in get(url + "/api/presets").json()]
-    err(post(url + "/api/presets", {"name": "Odd", "values": {"colour": "red"}}), 422, "no value called 'colour'")
+    err(post(url + "/api/presets", {"name": "Odd", "values": {"colour": "red"}}), 422, "no value called \u201ccolour\u201d")
     err(post(url + "/api/presets", {"name": "Odd", "values": {"voxel_mm": 50}}), 422, "at most 10 mm")
     err(post(url + "/api/presets", {"name": "Odd", "values": {"recipe": "nope-0000"}}), 422, "no recipe")
     err(post(url + "/api/presets", {"name": "General", "values": {}}), 409, "built-in")
