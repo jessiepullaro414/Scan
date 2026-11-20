@@ -518,14 +518,16 @@ def _raised(V: np.ndarray, F: np.ndarray, fa: np.ndarray, hc: np.ndarray, hmax: 
 
 
 def find_support(V: np.ndarray, F: np.ndarray, *, normals: np.ndarray | None = None, sigma: np.ndarray | None = None,
-                 params: SupportParams | None = None, seed: int = 0, keep=None) -> SupportFinding:
+                 params: SupportParams | None = None, seed: int = 0, keep=None, by_position: bool = False) -> SupportFinding:
     """The faces of ``(V, F)`` that are the surface the part stands on (module docstring).
 
     ``normals``: unit vertex normals pointing to where the surface was seen from (default: from
     the faces' winding); ``sigma``: each vertex's sigma in mm, to leave made-up surface (filled
     holes) out of the plane; ``keep``: points (mm) on raised areas the user chose to keep ("Keep this":
     each keeps the raised area with a face within ``keep_reach_mm`` of it). Raises :class:`SupportRefused` with a sentence when no such surface
-    can be told apart, ``ValueError`` for bad input."""
+    can be told apart, ``ValueError`` for bad input. ``by_position``: found on the mesh numbered by
+    position (:mod:`ohs.mesh.order`), so the same faces are found whatever order the mesh lists its
+    vertices and faces in; the face indices returned are the input's."""
     from ohs.geometry import fit_plane_ransac  # noqa: PLC0415
 
     p = params if params is not None else SupportParams()
@@ -533,6 +535,22 @@ def find_support(V: np.ndarray, F: np.ndarray, *, normals: np.ndarray | None = N
     V, F = as_mesh(V, F)
     if len(F) == 0:
         raise ValueError("the mesh has no faces")
+    if by_position:
+        from ohs.mesh.order import canonical, faces_back  # noqa: PLC0415
+
+        if normals is not None and len(normals) != len(V):
+            raise ValueError(f"{len(normals)} normals for {len(V)} vertices")
+        if sigma is not None and len(np.asarray(sigma).reshape(-1)) != len(V):
+            raise ValueError(f"{len(np.asarray(sigma).reshape(-1))} sigma values for {len(V)} vertices")
+        c = canonical(V, F)
+        Nc = None if normals is None else np.asarray(normals, dtype=np.float64).reshape(-1, 3)[c.pv]
+        Sc = None if sigma is None else np.asarray(sigma, dtype=np.float64).reshape(-1)[c.pv]
+        r = find_support(c.V, c.F, normals=Nc, sigma=Sc, params=params, seed=seed, keep=keep)
+        r.faces, r.kept = faces_back(c, r.faces), faces_back(c, r.kept)
+        for x in r.raised:
+            x["faces"] = faces_back(c, x["faces"])
+        r.ms = round(1e3 * (time.perf_counter() - t0), 1)
+        return r
     N = vertex_normals(V, F) if normals is None else np.asarray(normals, dtype=np.float64).reshape(-1, 3)
     if len(N) != len(V):
         raise ValueError(f"{len(N)} normals for {len(V)} vertices")
@@ -709,10 +727,11 @@ def find_support(V: np.ndarray, F: np.ndarray, *, normals: np.ndarray | None = N
 
 
 def remove_support(V: np.ndarray, F: np.ndarray, *, normals: np.ndarray | None = None, sigma: np.ndarray | None = None,
-                   params: SupportParams | None = None, seed: int = 0, keep=None) -> tuple[np.ndarray, np.ndarray, SupportFinding]:
+                   params: SupportParams | None = None, seed: int = 0, keep=None,
+                   by_position: bool = False) -> tuple[np.ndarray, np.ndarray, SupportFinding]:
     """:func:`find_support`, applied: ``(V2, F2, finding)``, the kept faces in their order and
     their vertices (as :func:`ohs.mesh.keep_faces` with ``finding.kept``)."""
-    r = find_support(V, F, normals=normals, sigma=sigma, params=params, seed=seed, keep=keep)
+    r = find_support(V, F, normals=normals, sigma=sigma, params=params, seed=seed, keep=keep, by_position=by_position)
     V, F = as_mesh(V, F)
     V2, F2, _ = compact(V, F[r.kept])
     return (V2.copy() if V2 is V else V2), F2, r

@@ -362,8 +362,13 @@ def _round(V: np.ndarray, F: np.ndarray, Q: np.ndarray, target: int, rng: np.ran
 
 
 def decimate(V: np.ndarray, F: np.ndarray, target_triangles: int | None = None, ratio: float | None = None, *,
-             max_error_mm: float | None = None, progress: Progress | None = None) -> tuple[np.ndarray, np.ndarray]:
+             max_error_mm: float | None = None, progress: Progress | None = None,
+             by_position: bool = False) -> tuple[np.ndarray, np.ndarray]:
     """Quadric decimation to ``target_triangles`` or ``ratio`` (see the module docstring).
+
+    ``by_position``: simplified on the mesh numbered by position (:mod:`ohs.mesh.order`), so
+    equal costs are ordered the same way and the result is the same mesh, bit for bit, whatever
+    order the input lists its vertices and faces in (its own order is then that numbering's).
 
     ``max_error_mm`` (alone, or with a target: whichever stops first) keeps the surface within
     a tolerance: an edge collapses only while the RMS distance of its new point to the original
@@ -384,6 +389,11 @@ def decimate(V: np.ndarray, F: np.ndarray, target_triangles: int | None = None, 
     M0 = len(F)
     if target >= M0:
         return V.copy(), F.copy()
+    if by_position:
+        from ohs.mesh.order import canonical  # noqa: PLC0415
+
+        c = canonical(V, F, scramble=True)  # spread over the part, as a scan's own order is (order.py)
+        return decimate(c.V, c.F, target_triangles, ratio, max_error_mm=max_error_mm, progress=progress)
     center = 0.5 * (V.min(axis=0) + V.max(axis=0))
     X = V - center
     Q = _vertex_quadrics(X, F)

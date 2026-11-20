@@ -3527,6 +3527,57 @@ filling (MAINTENANCE_PLAN F15: not the thinning).
 
 Limits: two simulated scenes, 2 s each; real 60 frames a second recordings may differ.
 
+## Repeatable edits (MAINTENANCE_PLAN F15, 2026-11-20)
+
+`[process] repeatable_edits` (off by default): the app's mesh edits run on the mesh numbered by
+position, so the same mesh gives the same result whatever order it lists its points in. Built and
+measured by an Opus agent; the "off" row for the example mesh is from the review.
+
+**What depends on the order today** (each edit on a mesh and on the same mesh with its points and
+faces shuffled, three shuffles; a grid, a box and a sphere with holes, and a 12,392-point mesh from
+a simulated scan):
+
+| Edit | After a shuffle |
+|---|---|
+| Fill holes | other triangles (at a 40 mm limit and when closing everything; holes up to 5 mm come out the same) |
+| Simplify | other triangles on every mesh |
+| Smooth (both kinds, "flat areas only", "away from edges") | the same choice, last bits only: 1.3e-12 mm at most |
+| Remove loose pieces | the same, except two pieces of the same size tying for largest |
+| Remove the table | the same on the meshes tried |
+| Carrying sigmas, looks and filled flags after simplifying | follows the numbering (a new point half way along an edge is as near to both ends) |
+
+**Off: nothing changes.** Every edit on the example mesh (409,127 points, 808,631 triangles) with
+the code before and after: loose pieces, fill at 15 mm (809,514 triangles) and 40 mm (809,569),
+Taubin and bilateral smoothing, simplify to 200,000 (200,064), the carried sigmas and flags, the
+table's faces (789,483): every array the same. On the test meshes 138 arrays the same; the Default,
+Body panel and Bracket recipes and one with every edit, through the server on one scan, give the
+same result files byte for byte on both paths.
+
+**On: what changes.**
+
+| Mesh, fill at 30 mm | Patch area, on against off | New faces, off / on |
+|---|---|---|
+| Grid with holes | the same | 164 / 172 |
+| Box | the same | 37 / 37 (identical) |
+| Sphere | 0.0001 mm² | 4 / 4 |
+| Sheet with a seam of doubled points | +0.003 % | 70 / 70 |
+| 0.3 mm plate, a hole in each face | the same | 246 / 238 |
+| Real mesh | -0.16 % (166.63 to 166.36 mm²) | 51 / 49 (22 differ) |
+
+- The surface that was there and the holes left open are the same on every mesh. New patch points
+  lie up to 0.88 mm (grid) and 0.05 mm (real mesh) from the other version's: other diagonals over
+  the same hole.
+- Normals on the real mesh: 11 of 12,392 old points turned by more than 1°, two of them by 90° and
+  170°, at a fold where the faces round the point nearly cancel in either version.
+- The 0.3 mm plate: each hole is closed in its own face, flat to 1e-6 mm, and no triangle reaches
+  across, with the option on and off.
+- Simplify in plain position order moved the thin plate's surface 0.59 mm instead of 0.30 mm
+  (equal-cost collapses bunched at one end); with runs of 64 points shuffled by a fixed shuffle it
+  is 0.30 mm again.
+- Times on the example mesh, off / on (medians of 3, a busy PC): fill 5 mm 1.3 / 1.2 s, fill 15 mm
+  1.5 to 1.7 / 1.3 to 1.5 s, loose pieces 0.8 to 1.1 / 1.1 s, smooth 7.4 to 8.5 / 5.2 to 5.3 s,
+  simplify 9.9 / 8.8 s. The renumbering itself takes 0.28 s.
+
 ## Projects larger than memory (FEATURE_PLAN R5, 2026-11-20)
 
 **Method.** A copy of the project "My first scan", served by its own server on its own data folder.

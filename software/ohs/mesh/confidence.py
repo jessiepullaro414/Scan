@@ -56,7 +56,7 @@ def sigma_stats(S: np.ndarray | None, V: np.ndarray | None = None, F: np.ndarray
 
 
 def carry_sigma(op: str, V: np.ndarray, F: np.ndarray, S: np.ndarray | None, V2: np.ndarray,
-                faces: np.ndarray | None = None) -> np.ndarray | None:
+                faces: np.ndarray | None = None, by_position: bool = False) -> np.ndarray | None:
     """The sigmas of ``V2``, the vertices after the :mod:`ohs.mesh` operation ``op`` on ``(V, F)``.
 
     * ``smooth`` moves the vertices: each keeps its sigma;
@@ -66,7 +66,10 @@ def carry_sigma(op: str, V: np.ndarray, F: np.ndarray, S: np.ndarray | None, V2:
     * the rest (``decimate``, and ``remove_floaters`` without its faces) take the sigma of the
       nearest vertex before.
 
-    None without sigmas (or when ``S`` doesn't fit ``V``)."""
+    None without sigmas (or when ``S`` doesn't fit ``V``). ``by_position`` (the edit ran with it,
+    :mod:`ohs.mesh.order`): the nearest vertex is searched among the old ones numbered by position, so
+    of two at the same distance (a simplified vertex halfway along an edge) the same one gives its
+    sigma whatever order the mesh listed them in."""
     if S is None:
         return None
     S = np.asarray(S, dtype=np.float32).reshape(-1)
@@ -92,12 +95,18 @@ def carry_sigma(op: str, V: np.ndarray, F: np.ndarray, S: np.ndarray | None, V2:
         return np.zeros(0, np.float32)
     from scipy.spatial import cKDTree  # noqa: PLC0415 (only for these edits)
 
+    if by_position:
+        from ohs.mesh.order import canonical  # noqa: PLC0415
+
+        c = canonical(*as_mesh(V, F))
+        _, idx = cKDTree(c.V).query(np.asarray(V2, dtype=np.float64), workers=-1)
+        return S[c.pv[idx]]
     _, idx = cKDTree(np.asarray(V, dtype=np.float64)).query(np.asarray(V2, dtype=np.float64), workers=-1)
     return S[idx]
 
 
 def carry_looks(op: str, V: np.ndarray, F: np.ndarray, L: np.ndarray | None, V2: np.ndarray,
-                faces: np.ndarray | None = None) -> np.ndarray | None:
+                faces: np.ndarray | None = None, by_position: bool = False) -> np.ndarray | None:
     """Each vertex's count of independent looks (the PLY ``looks``, float32) after the :mod:`ohs.mesh`
     operation ``op``, by the rules of :func:`carry_sigma`, except that the vertices ``fill_holes`` adds
     get 0: no look measured them (:func:`ohs.mesh.check.weak_areas` reads 0 as "no looks here").
@@ -109,11 +118,11 @@ def carry_looks(op: str, V: np.ndarray, F: np.ndarray, L: np.ndarray | None, V2:
         return None
     if op == "fill_holes" and len(V2) >= len(V):
         return np.concatenate([L, np.zeros(len(V2) - len(V), np.float32)])
-    return carry_sigma(op, V, F, L, V2, faces)
+    return carry_sigma(op, V, F, L, V2, faces, by_position=by_position)
 
 
 def carry_filled(op: str, V: np.ndarray, F: np.ndarray, filled: np.ndarray | None, V2: np.ndarray,
-                 F2: np.ndarray, faces: np.ndarray | None = None) -> np.ndarray | None:
+                 F2: np.ndarray, faces: np.ndarray | None = None, by_position: bool = False) -> np.ndarray | None:
     """Each face's *filled* flag after the :mod:`ohs.mesh` operation ``op`` turned ``(V, F)`` into
     ``(V2, F2)``; None when no face is filled.
 
@@ -122,7 +131,8 @@ def carry_filled(op: str, V: np.ndarray, F: np.ndarray, filled: np.ndarray | Non
     * ``delete_faces`` / ``keep_faces`` (given their ``faces``) keep the faces left, in order; so
       does ``remove_floaters`` given the faces it kept;
     * the rest (``decimate``, and ``remove_floaters`` without its faces) take the flag of the old
-      face nearest to each new face's centre."""
+      face nearest to each new face's centre (``by_position``: searched among the old faces numbered
+      by position, as :func:`carry_sigma` does)."""
     n2 = len(F2)
     old = None if filled is None else np.asarray(filled, dtype=bool).reshape(-1)
     if old is not None and len(old) != len(F):
@@ -147,6 +157,11 @@ def carry_filled(op: str, V: np.ndarray, F: np.ndarray, filled: np.ndarray | Non
     V, F = as_mesh(V, F)
     V2 = np.asarray(V2, dtype=np.float64)
     F2 = np.asarray(F2, dtype=np.int64).reshape(-1, 3)
+    if by_position:
+        from ohs.mesh.order import canonical  # noqa: PLC0415
+
+        c = canonical(V, F)
+        V, F, old = c.V, c.F, old[c.pf]
     c_old = (rows(V, F[:, 0]) + rows(V, F[:, 1]) + rows(V, F[:, 2])) / 3.0
     c_new = (rows(V2, F2[:, 0]) + rows(V2, F2[:, 1]) + rows(V2, F2[:, 2])) / 3.0
     _, idx = cKDTree(c_old).query(c_new, workers=-1)

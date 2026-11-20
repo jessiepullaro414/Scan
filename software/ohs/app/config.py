@@ -180,6 +180,7 @@ class ProcessConfig:
     thin_walls: str = "auto"  # the mesh model's short band behind the surface: "auto" | "on" | "off"
     poisson: bool = False
     export: list[str] = field(default_factory=lambda: ["ply", "stl"])
+    repeatable_edits: bool = False  # MAINTENANCE_PLAN F15: the app's mesh edits break ties by position
 
 
 @dataclass
@@ -603,6 +604,13 @@ _KEY_DOCS = {
     ),
     "process.poisson": "Also build a watertight Poisson mesh.",
     "process.export": 'Mesh formats to write: "ply", "stl", "obj" (all in mm).',
+    "process.repeatable_edits": (
+        "The app's mesh edits (remove loose pieces, fill holes, smooth, simplify, remove the table)\n"
+        "give the same result for the same mesh, whatever order it lists its points in: where two\n"
+        "choices are equally good (which way to split a hole into triangles), the points' positions\n"
+        "decide, not their numbers. Nothing measured changes. Each edit records the setting it ran\n"
+        "with, so undo, redo and a step rebuilt later give the same triangles. Off: as before."
+    ),
     "board.squares_x": "Chessboard squares, square and marker size (mm) and ArUco dictionary of the board.",
     "board.paper": '"letter" or "a4" (used by `ohs printables`).',
     "markers.tag_mm": "Side of the black square of the printed tags (mm).",

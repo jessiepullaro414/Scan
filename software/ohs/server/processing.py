@@ -123,6 +123,10 @@ MESH_OPS = ("remove_floaters", "fill_holes", "smooth", "decimate", "delete_faces
 #: recipe, never in a built-in one
 RECIPE_OPS = MESH_OPS[:4] + ("remove_table",)
 _SELECTION_OPS = ("delete_faces", "keep_faces", "remove_table")  # edits replayed from their saved faces
+#: edits that break ties by position when ``[process] repeatable_edits`` is on (MAINTENANCE_PLAN F15): such
+#: an edit records ``by_position: true`` in its params, and a replay (undo / redo, a step rebuilt from the
+#: cache) goes by what the edit recorded, not by today's setting. A selection is its faces' numbers.
+_BY_POSITION_OPS = ("remove_floaters", "fill_holes", "smooth", "decimate", "remove_table")
 TABLE_HINT = "if the part does stand on a table in this scan, select the table with the selection tools and delete it"
 PROCESS_KINDS = ("process_scan", "process_track", "process_straighten", "process_fuse", "process_spacetime",
                  "process_refine", "mesh_edit", "process_recipe")
@@ -1057,9 +1061,10 @@ class ProcessManager:
                 e = edits[i]
                 faces = np.load(sp.selection_path(str(e["id"]))) if e["op"] in _SELECTION_OPS else None
                 V2, F2, by = self._apply(sp, e["op"], e["params"], V, F, edit_id=e["id"], faces=faces, S=S)
-                S = carry_sigma(_carry_op(e["op"]), V, F, S, V2, by)
-                L = carry_looks(_carry_op(e["op"]), V, F, L, V2, by)
-                Fl = carry_filled(_carry_op(e["op"]), V, F, Fl, V2, F2, by)
+                bp = {"by_position": True} if e["params"].get("by_position") else {}  # as the edit recorded (F15)
+                S = carry_sigma(_carry_op(e["op"]), V, F, S, V2, by, **bp)
+                L = carry_looks(_carry_op(e["op"]), V, F, L, V2, by, **bp)
+                Fl = carry_filled(_carry_op(e["op"]), V, F, Fl, V2, F2, by, **bp)
                 V, F = V2, F2
                 if i + 1 >= k - CACHE_STEPS:
                     _save_npz(sp.cache_path(i + 1), V, F, S=S, filled=Fl, L=L)
@@ -1257,20 +1262,23 @@ class ProcessManager:
                 raise ApiError(409, "the selection refers to triangles the current mesh does not have",
                                "reload the mesh and select again")
             return (*(M.delete_faces if op == "delete_faces" else M.keep_faces)(V, F, faces), faces)
+        # by position only as the edit recorded it (F15); off, the call is exactly the one before F15
+        bp = {"by_position": True} if params.get("by_position") else {}
         if op == "remove_floaters":
-            return M.remove_floaters(V, F, **params, return_kept=True)
+            return M.remove_floaters(V, F, **{k: v for k, v in params.items() if k != "by_position"}, return_kept=True,
+                                     **bp)
         if op == "fill_holes":
             return (*M.fill_holes(V, F, params["max_hole_mm"], include_borders=bool(params.get("watertight")),
-                                  progress=progress), None)
+                                  progress=progress, **bp), None)
         if op == "smooth":
             # within 2 sigma: each vertex moves at most twice its own standard deviation (no sigmas: no limit)
             limit = 2.0 * S if params.get("within_sigma") and S is not None and len(S) == len(V) else None
             return (*M.smooth(V, F, params["method"], params["strength"], params.get("keep_edges", True), limit=limit,
                               flat_only=bool(params.get("flat_only", False)),
-                              away_from_edges=bool(params.get("away_from_edges", False)), progress=progress), None)
+                              away_from_edges=bool(params.get("away_from_edges", False)), progress=progress, **bp), None)
         if op == "decimate":
             return (*M.decimate(V, F, params.get("target_triangles"), params.get("ratio"),
-                                max_error_mm=params.get("max_error_mm"), progress=progress), None)
+                                max_error_mm=params.get("max_error_mm"), progress=progress, **bp), None)
         raise ApiError(422, f"unknown edit {op!r}", f"use one of {', '.join(MESH_OPS)}")
 
     @staticmethod
@@ -1342,18 +1350,28 @@ class ProcessManager:
         changes."""
         from ohs.mesh import support
 
+        bp = {"by_position": True} if params.get("by_position") else {}
         try:
             r = support.find_support(V, F, sigma=S if S is not None and len(S) == len(V) else None,
                                      params=support.SupportParams(margin_mm=float(params.get("margin_mm", 1.0))),
-                                     keep=params.get("keep") or None)
+                                     keep=params.get("keep") or None, **bp)
         except support.SupportRefused as e:
             raise ApiError(422, str(e), TABLE_HINT) from None
         return r.faces.astype(np.int64), {**r.to_dict(), "_raised_faces": [x["faces"] for x in r.raised]}
 
     @staticmethod
     def _table_key(params: dict) -> tuple:
-        """What a "Remove the table" answer depends on besides the mesh: the margin and the areas kept."""
-        return float(params["margin_mm"]), tuple(tuple(q) for q in params.get("keep") or ())
+        """What a "Remove the table" answer depends on besides the mesh: the margin, the areas kept, and
+        whether ties are broken by position (F15)."""
+        return (float(params["margin_mm"]), tuple(tuple(q) for q in params.get("keep") or ()),
+                bool(params.get("by_position")))
+
+    def _edit_params(self, op: str, params: dict) -> dict:
+        """An edit's params as it runs and is recorded: with ``by_position: true`` when ``[process]
+        repeatable_edits`` is on and the edit breaks ties (F15), else exactly as given."""
+        if op in _BY_POSITION_OPS and bool(getattr(self.st.cfg.process, "repeatable_edits", False)):
+            return {**params, "by_position": True}
+        return params
 
     @staticmethod
     def _table_summary(info: dict) -> str:
@@ -1369,6 +1387,7 @@ class ProcessManager:
                   faces: np.ndarray | None = None) -> dict:
         from ohs.mesh import carry_filled, carry_looks, carry_sigma
 
+        params = self._edit_params(op, params)  # recorded with the edit: a replay goes by it (F15)
         with sp.lock:
             k = sp.state["cursor"]
             version = int(sp.state["version"])
@@ -1393,9 +1412,10 @@ class ProcessManager:
             raise ApiError(409, "this would remove the whole mesh", "change the settings or the selection")
         ctx.check()
         prog(0.88, f"{label}: measuring the result", force=True)
-        S2 = carry_sigma(_carry_op(op), V, F, S, V2, by)
-        L2 = carry_looks(_carry_op(op), V, F, L, V2, by)  # each vertex's count of looks, as its sigma
-        Fl2 = carry_filled(_carry_op(op), V, F, Fl, V2, F2, by)
+        bp = {"by_position": True} if params.get("by_position") else {}
+        S2 = carry_sigma(_carry_op(op), V, F, S, V2, by, **bp)
+        L2 = carry_looks(_carry_op(op), V, F, L, V2, by, **bp)  # each vertex's count of looks, as its sigma
+        Fl2 = carry_filled(_carry_op(op), V, F, Fl, V2, F2, by, **bp)
         stats = _stats(V2, F2, S2, Fl2)
         summary = self._table_summary(info) if info is not None else self._summary(op, params, V, F, V2, F2, before, stats)
         prog(0.94, f"{label}: saving", force=True)
@@ -1413,6 +1433,7 @@ class ProcessManager:
         if keep is not None:
             body["keep"] = keep
         params, _ = normalize_op("remove_table", body)
+        params = self._edit_params("remove_table", params)  # as the edit that follows will run (F15)
         m = self._table_key(params)
         sp = self.scan(pid, sid)
         self._need_base(sp)
@@ -2225,7 +2246,8 @@ class ProcessManager:
                             "refine": "auto" if st["stages"]["refine"]["state"] in ("done", "skipped") else "off",
                             "voxel_mm": voxel}
                 # the edits before the space was freed (FEATURE_PLAN R2: kept by name in the base), then the rest
-                ops = [{"op": e["op"], "params": e["params"]} for e in
+                # without by_position (F15): how ties are broken is the app's setting when the recipe runs
+                ops = [{"op": e["op"], "params": {k: v for k, v in e["params"].items() if k != "by_position"}} for e in
                        list(st["base"].get("applied") or []) + st["edits"][: st["cursor"]] if e["op"] in RECIPE_OPS]
         elif settings is None or ops is None:
             raise ApiError(422, "send either from_scan or both settings and ops",

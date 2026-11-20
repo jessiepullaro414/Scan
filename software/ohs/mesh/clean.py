@@ -56,13 +56,27 @@ def piece_sizes(V: np.ndarray, F: np.ndarray) -> tuple[np.ndarray, np.ndarray, n
 
 def remove_floaters(V: np.ndarray, F: np.ndarray, min_triangles: int | None = None, min_size_mm: float | None = None,
                     keep_largest_only: bool = False, min_fraction: float | None = None,
-                    return_kept: bool = False) -> tuple:
+                    return_kept: bool = False, by_position: bool = False) -> tuple:
     """Drop small disconnected pieces (see the module docstring). Returns ``(V, F)``; with
     ``return_kept`` also the indices of the faces kept, in order (what
-    :func:`ohs.mesh.carry_sigma` needs to follow the vertices without a search)."""
+    :func:`ohs.mesh.carry_sigma` needs to follow the vertices without a search).
+    ``by_position``: the pieces are judged on the mesh numbered by position
+    (:mod:`ohs.mesh.order`), so of two pieces with the same count of triangles the same one is
+    "the largest" whatever order the mesh lists its faces in; the kept faces stay in their order."""
     V, F = as_mesh(V, F)
     if len(F) == 0:
         return (V.copy(), F.copy(), np.zeros(0, dtype=np.int64)) if return_kept else (V.copy(), F.copy())
+    if by_position:
+        from ohs.mesh.order import canonical, faces_back  # noqa: PLC0415
+
+        c = canonical(V, F)
+        _, _, kc = remove_floaters(c.V, c.F, min_triangles, min_size_mm, keep_largest_only, min_fraction, return_kept=True)
+        if len(kc) == len(F):
+            return (V.copy(), F.copy(), np.arange(len(F), dtype=np.int64)) if return_kept else (V.copy(), F.copy())
+        kept = faces_back(c, kc)
+        V2, F2, _ = compact(V, F[kept])
+        V2 = V2.copy() if V2 is V else V2
+        return (V2, F2, kept) if return_kept else (V2, F2)
     flab, tri, diag = piece_sizes(V, F)
     largest = int(np.argmax(tri))
     if keep_largest_only:

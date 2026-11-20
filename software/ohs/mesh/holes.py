@@ -459,16 +459,28 @@ def _simple_loops(verts: list[int]) -> list[list[int]]:
 
 
 def fill_holes(V: np.ndarray, F: np.ndarray, max_hole_mm: float, *, include_borders: bool = False,
-               progress: Progress | None = None) -> tuple[np.ndarray, np.ndarray]:
+               progress: Progress | None = None, by_position: bool = False) -> tuple[np.ndarray, np.ndarray]:
     """Fill every hole whose perimeter is at most ``max_hole_mm`` (see the module docstring).
 
     Outer borders are left open unless ``include_borders`` ("watertight": the edge of a part
     scanned all round, e.g. where it sat on the table, is closed too, within the same size
     limit). Returns ``(V, F)``: the input vertices and faces first, then the new ones.
+    ``by_position``: the holes are filled on the mesh numbered by position
+    (:mod:`ohs.mesh.order`), so the new vertices and faces are the same whatever order the mesh
+    lists its vertices and faces in; the input's own vertices and faces stay as they are.
     """
     V, F = as_mesh(V, F)
     if len(F) == 0 or not max_hole_mm or max_hole_mm <= 0:
         return V.copy(), F.copy()
+    if by_position:
+        from ohs.mesh.order import canonical  # noqa: PLC0415
+
+        c = canonical(V, F)
+        Vc, Fc = fill_holes(c.V, c.F, max_hole_mm, include_borders=include_borders, progress=progress)
+        n, m = len(V), len(F)
+        Fn = Fc[m:]
+        Fn = np.where(Fn < n, c.pv[np.minimum(Fn, n - 1)], Fn)  # the loop's vertices by their input numbers
+        return np.vstack([V, Vc[n:]]), np.vstack([F, Fn])
     loops, is_border, info = find_holes(V, F)
     cand = [k for k in range(len(loops)) if loops.closed[k] and (include_borders or not is_border[k])
             and loops.perimeter[k] <= float(max_hole_mm) and len(loops.verts(k)) >= 3]

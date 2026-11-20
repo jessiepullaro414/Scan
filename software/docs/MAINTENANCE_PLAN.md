@@ -2014,7 +2014,7 @@ Found 2026-11-19 by the study for F13 (the agent's numbers, not re-measured in r
     with it on; a 12-frame dark bracket ends 307 mm off without and under 5 mm with),
     `tests/test_track_velocity_guard.py`.
 
-### [ ] F15. Hole filling triangulates by vertex number, so two runs can fill a hole differently
+### [x] F15. Hole filling triangulates by vertex number, so two runs can fill a hole differently ✔
 - **Found 2026-11-20** in the review of R3 (`FEATURE_PLAN.md`). A scan made twice from the same
   frames (GPU path, default recipe) had the same 389,649 vertices with the same position, sigma
   and count of looks, but 12 of its 769,362 faces differed, with 24 vertex normals (by up to
@@ -2026,6 +2026,36 @@ Found 2026-11-19 by the study for F13 (the agent's numbers, not re-measured in r
   holes, and a byte comparison of two results fails.
 - **To do:** break ties by position (as the Check's samples now are), with a test that shuffles
   the vertices and expects the same faces. The same question for simplifying and smoothing.
+- **Done 2026-11-20, as an option that is off** (the owner's decision D9; an Opus agent).
+  `[process] repeatable_edits = false` in the config. With it on, an edit runs on the mesh
+  numbered by position (`ohs/mesh/order.py`), so the same mesh gives the same result bit for
+  bit whatever order it lists its points in. Each edit records the setting it was made with,
+  and undo, redo and a rebuilt step go by that record, not by today's setting.
+  - **What depends on the order today** (each edit on a mesh and on the same mesh shuffled):
+    hole filling and simplifying make other triangles; smoothing differs in the last bits only
+    (1.3e-12 mm at most); removing loose pieces only when two pieces tie for largest; removing
+    the table not on the meshes tried. Carrying the sigmas, looks and filled flags after
+    simplifying followed the numbering too.
+  - **Off, nothing changes.** In review, every edit on the real-size example mesh (809,000
+    triangles: loose pieces, fill at 15 and 40 mm, both smoothings, simplify to 200,000, the
+    carried sigmas and flags, the table) gives the same arrays with the code before and after.
+    The agent's proof: 138 arrays on the test meshes, and four recipes through the server byte
+    for byte on both paths.
+  - **On:** the same holes are closed; the patch area differs by 0.16 % at most (a real mesh:
+    166.63 to 166.36 mm², 22 of about 50 new faces differ); the surface that was there is not
+    touched. A 0.3 mm plate with a hole in each face: each hole is closed in its own face, flat
+    to 1e-6 mm, and no triangle reaches across. No edit is slower (fill 1.3 to 1.2 s, smooth 8
+    to 5 s, simplify 9.9 to 8.8 s on the example mesh).
+  - **Found on the way:** simplifying in plain position order made the result worse on the thin
+    plate (the surface moved 0.59 mm instead of 0.30 mm), because equal-cost collapses bunched
+    at one end of the part; runs of 64 points are shuffled by a fixed shuffle instead, and a
+    test guards it.
+  - Guard: `tests/test_mesh_repeatable.py` (57), `tests/test_server_repeatable_edits.py` (5,
+    both paths).
+  - **For the owner before switching it on:** look at one or two real scans with it on (the
+    filled patches' diagonals change, and at a fold two normals turned by 90° and 170° on the
+    test mesh, where the faces round a point nearly cancel either way). There is no switch on
+    the Settings page yet; it is the config line.
 
 ## Reviewed and fine: leave alone
 

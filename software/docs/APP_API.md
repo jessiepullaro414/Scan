@@ -861,6 +861,11 @@ Everything in the M3 phase 2 section is implemented as written, with these clari
   - The redo steps are dropped only when the new edit succeeds.
   - An edit that matches nothing is still recorded, with a summary saying so, and its version counts.
 - Parameter errors are 422 naming the parameter, e.g. "fill_holes: max_hole_mm is missing", "remove_floaters: unknown parameter 'size'".
+- **Repeatable edits** (`MAINTENANCE_PLAN.md` F15, the owner's decision D9; the config's `[process] repeatable_edits`, off by default):
+  - On, `remove_floaters`, `fill_holes`, `smooth`, `decimate` and `remove_table` give the same result for the same mesh whatever order it lists its vertices and faces in (the GPU path lists them in another order on every run): where two choices are equally good (which diagonals close a hole, which of two equal pieces is the largest, the order of equal-cost collapses) the vertices' positions decide, not their numbers (`ohs.mesh.order`). Nothing measured changes.
+  - The server adds `by_position: true` to such an edit's `params` (`EditEntry.params`) when it runs it; it is not a parameter a client sends (it is a 422 like any unknown one). Undo, redo and a step rebuilt from the cache replay an edit as it recorded it, whatever the setting is now. Off, the params are exactly as before.
+  - A recipe saved from a scan (`from_scan`) leaves `by_position` out: the setting when the recipe runs decides.
+  - Selections (`delete_faces`, `keep_faces`) are face numbers of one mesh and are not affected.
 
 **Undo / redo**
 - The last 10 steps around the cursor are cached on disk, with their normals, so undo and redo only load the step and write `mesh.ply` + `mesh.stl`: about 0.3 s per step at 1.3M triangles.

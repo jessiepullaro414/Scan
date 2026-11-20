@@ -276,14 +276,16 @@ def _vertex_update(V: np.ndarray, F: np.ndarray, n: np.ndarray, iterations: int,
 # --------------------------------------------------------------------------- entry
 def smooth(V: np.ndarray, F: np.ndarray, method: str = "taubin", strength: float = 0.5, keep_edges: bool = True, *,
            limit: np.ndarray | None = None, flat_only: bool = False, away_from_edges: bool = False,
-           progress: Progress | None = None) -> tuple[np.ndarray, np.ndarray]:
+           progress: Progress | None = None, by_position: bool = False) -> tuple[np.ndarray, np.ndarray]:
     """Smooth the mesh (see the module docstring). Faces are unchanged; returns ``(V, F)``.
 
     ``limit`` (N,) is the most each vertex may move, mm: e.g. twice its sigma, so that smoothing
     removes noise where the scan is uncertain and leaves the confident surface where it was
     (a longer move is shortened along its direction). ``flat_only``: smooth flat surface only;
     ``away_from_edges``: leave the surface near sharp edges as it is (module docstring); one of
-    the two at most. With ``limit`` too, both apply."""
+    the two at most. With ``limit`` too, both apply. ``by_position``: smoothed on the mesh
+    numbered by position (:mod:`ohs.mesh.order`), so each vertex ends at the same point, bit for
+    bit, whatever order the mesh lists its vertices and faces in."""
     if method not in METHODS:
         raise ValueError(f"unknown smoothing method {method!r}; use {' or '.join(METHODS)}")
     if flat_only and away_from_edges:
@@ -298,6 +300,15 @@ def smooth(V: np.ndarray, F: np.ndarray, method: str = "taubin", strength: float
             raise ValueError("limit must have one value per vertex")
     if s == 0.0 or len(F) == 0:
         return V.copy(), F.copy()
+    if by_position:
+        from ohs.mesh.order import canonical  # noqa: PLC0415
+
+        c = canonical(V, F)
+        Xc, _ = smooth(c.V, c.F, method, s, keep_edges, limit=c.vertex_values(limit), flat_only=flat_only,
+                       away_from_edges=away_from_edges, progress=progress)
+        X = np.empty_like(Xc)
+        X[c.pv] = Xc
+        return X, F.copy()
     et = edge_table(F, len(V))
     if method == "taubin":
         sharp = sharp_edges(V, F, et=et) if keep_edges else None
