@@ -3407,8 +3407,50 @@ right calibrations read 0.06 to 0.14 mm, over the 0.05 mm limit). The IMU sign i
 resolution (0.0129° a frame with a right calibration against the 0.015° limit; the fault 0.0339°).
 Neither is switched on.
 
-**Next:** a guard against the velocity runaway in directions the geometry does not hold, on the
-Open3D backend, then flip-average again.
+**Second round (2026-11-20): the depth fix and a velocity guard as options that are off.**
+`DepthParams.flip_average` is the fix above; with it detail mode leaves out 2 px round holes
+instead of 6. `FusionParams.velocity_max_accel` is a guard on the Open3D model: the velocity a
+frame carries into the next prediction may change by at most 2 m/s² times the frame time, and the
+first one after a start or a lost frame is at most 300 mm/s (the simulated hand reaches 0.48 m/s²
+and 119 mm/s over these recordings). The pose ICP found is kept.
+
+CPU path, position error median / last frame (mm) and rotation at the last frame. "C": guard,
+depth fix, 2 px rule. "Cw8": C with the ray cast's weight threshold 8 instead of 3 at full
+resolution (the 8-frame recording, at half resolution, runs without it and without the depth fix).
+
+| Scene | Today | Guard alone | Guard + fix, 6 px | Guard + fix, 3 px | C | Cw8 |
+|---|---|---|---|---|---|---|
+| Bracket | 0.88 / 0.95, 0.577° | | | | 0.73 / 0.43, 0.263° | 0.47 / 0.20, 0.161° |
+| Bracket, pitched 0.03° | 1.18 / 1.18, 0.564° | | | | 0.59 / 0.27, 0.350° | 0.35 / 0.19, 0.224° |
+| Dark | 166.6 / 167.2, 0.129° | 194.6 / **195.1** | 122 / 123, **0.202°** | 162 / 162, 0.022° | 31.7 / 32.0, **0.176°** | 41.7 / 42.3, 0.028° |
+| Dark2 | 348 / 249, 0.139° | 406 / **622** | 61 / **498** | 1.6 / 15.3, 0.130° | 1.0 / 2.4, 0.137° | 2.3 / 0.9, 0.067° |
+| Speckled | 31.1 / 23.1, 0.127° | 29.8 / 22.5 | 3.4 / 20.0, 0.062° | 4.9 / 1.9, **0.148°** | 4.0 / 1.5, **0.181°** | 5.3 / 5.4, 0.116° |
+| Speck2 | 3.73 / 2.31, 0.204° | 3.6 / **2.8** | 9.9 / **9.7** | 1.2 / 0.95, 0.135° | 1.1 / 0.88, 0.162° | 1.4 / 1.2, 0.117° |
+| Plate 0.5 mm | 15.4 / 36.2, 0.115° | 14.8 / **40.4** | 1.8 / 1.8 | 2.6 / 2.9 | 6.4 / 8.1, 0.088° | 5.2 / 5.7, 0.043° |
+| Plate2 0.5 mm | 18.6 / 49.6, 0.134° | 16.7 / 46.8 | 1.0 / 1.2 | 3.2 / 4.3 | 11.2 / 11.8, 0.075° | 5.1 / 5.7, 0.030° |
+| Sphere | 0.23 / 0.31, 0.045° | | | | 0.13 / 0.10, 0.005° | 0.13 / 0.11, 0.004° |
+| Car panel | 0.54 / 0.60, 0.064° | | | | 0.19 / 0.46, 0.036° | 0.17 / 0.42, 0.018° |
+| 8 frames, half resolution | 0.10 / 0.04, 0.007° | | | | the same as today | the same as today |
+
+Bold: worse than today. Every scene tracks every frame in C and Cw8 (today dark2 loses one).
+
+- **Tracker against the gyro** (median per frame): today 0.0030 to 0.0116°; C 0.0029 to 0.0091°,
+  better or the same on every scene; Cw8 better everywhere but the car panel, **0.0087° against
+  0.0081°**.
+- **Laser lines off the mesh** with a right calibration: today 0.06 to 0.14 mm; C and Cw8 -0.009
+  to +0.016 mm at full resolution. The 0.2 mm laser fault reads -0.357 mm. The IMU sign reads
+  0.0027 to 0.0093° a frame with a right calibration and 0.0335° with the 3° fault.
+- **The weight threshold matters with the guard in place:** 8 instead of 3 takes the bracket from
+  0.43 to 0.20 mm and the plates from 8.1 and 11.8 to 5.7 mm, and no frame is lost to it any more;
+  the dark and speckled brackets' positions are worse with it (32 to 42 mm, 1.5 to 5.4 mm) and
+  their rotations better (0.176° to 0.028°, 0.181° to 0.116°). Without the guard, the depth fix
+  with threshold 8 loses 4 frames on the dark bracket and ends 104 mm off.
+- **No combination is better than today on every number of every scene,** so none is on by
+  default. The nearest is Cw8, whose one miss is the car panel's gyro number above. The owner
+  decides.
+- With both options on, the GPU path gave the same camera path and laser points byte for byte and
+  the same mesh vertices on the bracket.
+
 
 ## Keeping only the frames Standard uses (R3, 2026-11-20)
 

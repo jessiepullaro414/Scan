@@ -75,7 +75,10 @@ From the CPU matcher (SGBM) the raw depth added this way leaves out every pixel 
 +0.3 to +0.5 mm within 6 px, +0.19 mm farther in), and its holes lie where the projected dots leave
 gaps, which move with the scanner: a camera-fixed error that pulled each frame towards the previous
 pose. The tracker turned 6.5 % less than the scanner every frame and the 90-frame bracket ended
-3.6 deg and 9.4 mm off; with the rule 0.58 deg and 0.95 mm (``MAINTENANCE_PLAN.md`` F13). The GPU
+3.6 deg and 9.4 mm off; with the rule 0.58 deg and 0.95 mm (``MAINTENANCE_PLAN.md`` F13). When the CPU
+matcher averages the pair with the pair upside down (``DepthParams.flip_average``, off by default; most of
+that bias was SGBM's paths coming only from above, :mod:`ohs.vision.depth`) the bias is confined to 2 px of
+a hole, and ``DETAIL_HOLE_PX_FLIP_1280`` = 2 px are left out instead (``MAINTENANCE_PLAN.md`` F14). The GPU
 matcher's depth has no such bias (its depth is used as it is). The mesh model fuses the whole depth.
 
 **Model backends.** The tracking model may live on the GPU
@@ -206,6 +209,9 @@ DETAIL_PROBE_STRENGTH = 5e-4
 # detail mode on the CPU matcher's depth: its raw depth within this many px (at 1280 px width, scaled with the
 # width) of a pixel without depth is left out (module docstring, "Detailed parts"; MAINTENANCE_PLAN.md F13)
 DETAIL_HOLE_PX_1280 = 6.0
+# ... when the CPU matcher averages the pair with the pair upside down (DepthParams.flip_average): the bias
+# next to a hole is then confined to 2 px (ohs.vision.depth, "Paths from above only"; MAINTENANCE_PLAN.md F14)
+DETAIL_HOLE_PX_FLIP_1280 = 2.0
 
 
 def effective_scale(image_width: int) -> float:
@@ -551,7 +557,8 @@ class FramePipeline:
         self._probe: MarkerlessTracker | None = None
         self._probe_left = DETAIL_PROBE_FRAMES
         #: detail mode on the CPU matcher's depth leaves its raw depth out this close (px) to a hole ("Detailed parts")
-        self.detail_hole_px = int(round(DETAIL_HOLE_PX_1280 * self.image_size[0] / NOMINAL_WIDTH))
+        hole = DETAIL_HOLE_PX_FLIP_1280 if self.depth_params.flip_average else DETAIL_HOLE_PX_1280
+        self.detail_hole_px = int(round(hole * self.image_size[0] / NOMINAL_WIDTH))
         #: laser points dropped because they disagree with the frame's dense depth, per line
         self.laser_rejected: dict[str, int] = {}
         #: when a dict (set by the caller; None: not measured), each frame appends per line the signed

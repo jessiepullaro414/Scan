@@ -324,8 +324,9 @@ def _frame_row(res: FrameResult) -> dict:
                            "total_ms": res.timings_ms.get("total")}
     if not res.track.ok:
         row["reason"] = info.get("reason", "unknown")
+    # velocity_guard_mm: only when the velocity guard (FusionParams.velocity_max_accel, off by default) acted
     for k in ("fitness", "rmse_mm", "n_inliers", "degenerate", "gyro_prior", "jump_deg", "method", "n_tags",
-              "n_stereo", "reproj_px", "rms_mm"):
+              "n_stereo", "reproj_px", "rms_mm", "velocity_guard_mm"):
         if k in info:
             row[k] = info[k]
     weak = sorted({str(w.get("kind")) for w in info.get("weak") or () if isinstance(w, dict)})

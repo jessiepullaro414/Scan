@@ -66,6 +66,19 @@ slid, the filter's leftover fragments of it then look well held but are biased, 
 trim it only made the worst frames worse. A frame that fails a gate still tries ``alt_depth``
 before it is lost (``VALIDATION.md``, "Large and detailed parts").
 
+**The velocity guard** (``FusionParams.velocity_max_accel``, Open3D model only; off by default). On a
+scene the depth barely holds sideways (a dark part a few percent of the image, the rest a bench), one
+frame can be pushed far off, and the constant-velocity prediction then carries the error on: the
+directions the data cannot hold stay at the prediction, so a wrong velocity repeats every frame. With the
+guard, the velocity a frame carries into the next prediction (not its pose, which is what ICP found)
+differs from the last one by at most ``velocity_max_accel`` times the frame time, and the first one after
+the start or a lost frame is at most :data:`VELOCITY_MAX_SPEED`. The bounds come from the simulator's hand
+(at most 0.48 m/s^2 and 119 mm/s over the F14 recordings) with margins of 4 and 2.5
+(:data:`VELOCITY_MAX_ACCEL`, 2 m/s^2: 2.2 mm a frame at 30 frames a second). A frame it acted on says
+so: ``info["velocity_guard_mm"]``, how much of its velocity (mm a frame) was not carried on. The ICP's own
+information was no guide: the frame that started the dark bracket's slide held its weakest translation
+at 5e-3, ten times the detail-mode threshold (``MAINTENANCE_PLAN.md`` F14).
+
 Two stronger treatments from the literature made tracking worse on the simulator
 (VALIDATION.md, "Degeneracy-aware tracking"), so neither is used:
 - remapping the update so that ICP never moves along weak directions (Zhang, Kaess and Singh
@@ -192,6 +205,12 @@ SLIDE_SV = 0.8  # the weak subspace holds a translation this close to a pure one
 TURN_SV = 0.5  # ... a rotation (about any axis, e.g. through the scene) at least this strongly: "turn"
 
 _FRAGMENT_CELLS = 16  # Open3D's range map is filled from fragments of 16 x 16 of its cells
+# the velocity guard's bound (m/s^2; module docstring, "The velocity guard"): the simulator's hand moves the
+# scanner with at most 0.48 m/s^2 (frame to frame, over the recordings of MAINTENANCE_PLAN F14), times 4
+VELOCITY_MAX_ACCEL = 2.0
+# ... and the first velocity after the start or a lost frame (mm/s): the simulator's hand moves at most 119 mm/s
+# (4 mm a frame at 30 fps), times 2.5
+VELOCITY_MAX_SPEED = 300.0
 
 # trilinear cell corners in the order of Open3D's ray-cast "index"/"interp_ratio" outputs
 _CORNERS = np.array([[j & 1, (j >> 1) & 1, (j >> 2) & 1] for j in range(8)], dtype=np.float64)
@@ -251,6 +270,10 @@ class FusionParams:
     rot_sigma_deg: float = 5.0  # weak rotation prior without gyro
     trans_sigma_mm: float = 20.0  # weak translation prior
     constant_velocity: bool = True
+    # Open3D model only (the GPU model ignores it): the most the scanner's velocity may change between two
+    # frames, as an acceleration (m/s^2), when it is carried into the next prediction; None: no limit
+    # (module docstring, "The velocity guard")
+    velocity_max_accel: float | None = None
     # sanity gates
     min_points: int = 300  # valid source points at the finest ICP level, counted at stride 4 (scaled by the stride)
     min_model_px: int = 300  # valid model pixels in the ray cast
@@ -604,6 +627,8 @@ class MarkerlessTracker:
         self._T_last = np.eye(4)  # last good pose
         self._t_last: float | None = None
         self._last_step: tuple[np.ndarray, np.ndarray, float | None] | None = None  # (R, t, dt)
+        self._v_w: np.ndarray | None = None  # the velocity guard's last velocity (world, mm/s); None: at rest
+        self._guard_mm = 0.0  # how far (mm a frame) the guard moved the last accepted frame's velocity
         self._R_acc = np.eye(3)  # gyro rotation accumulated since the last good frame
         self._n_lost = 0
         self._frame = 0
@@ -1141,6 +1166,8 @@ class MarkerlessTracker:
         if lost:
             log.info("markerless: relocalised after %d lost frames (%s, fitness %.2f)", lost, name, res.fitness)
         self._accept(T_est, t, consecutive=(lost == 0))
+        if self._guard_mm > 0:  # the velocity guard changed what this frame carries into the next prediction
+            info["velocity_guard_mm"] = self._guard_mm
         return self._finish(TrackResult(T_est.copy(), True, info), t, t0, timings)
 
     def _gate(self, res: _IcpOutput, T_pred: np.ndarray, T_est: np.ndarray, widen: float) -> str | None:
@@ -1160,16 +1187,40 @@ class MarkerlessTracker:
         return None
 
     def _accept(self, T_wc: np.ndarray, t: float | None, consecutive: bool | None) -> None:
+        self._guard_mm = 0.0
         if consecutive:
             D = invert_se3(self._T_last) @ T_wc
             dt = None if (t is None or self._t_last is None) else float(t - self._t_last)
-            self._last_step = (D[:3, :3].copy(), D[:3, 3].copy(), dt)
+            step = D[:3, 3].copy()
+            if self._gpu is None and self.params.velocity_max_accel is not None and dt:
+                step = self._guard_velocity(step, dt)
+            self._last_step = (D[:3, :3].copy(), step, dt)
         else:
             self._last_step = None
+            self._v_w = None
         self._T_last = np.asarray(T_wc, dtype=np.float64).copy()
         self._t_last = t
         self._R_acc = np.eye(3)
         self._n_lost = 0
+
+    def _guard_velocity(self, step: np.ndarray, dt: float) -> np.ndarray:
+        """The velocity guard (module docstring): the frame's translation ``step`` (mm, in the previous
+        frame's camera frame, over ``dt`` s) as it is carried into the next prediction, its velocity
+        changed from the last one by at most ``velocity_max_accel * dt``. Sets :attr:`_guard_mm`."""
+        R_last = self._T_last[:3, :3]
+        v = R_last @ step / dt  # mm/s, world
+        if self._v_w is None:  # the first velocity of a run of frames: the scanner's speed is not known, only bounded
+            ref, lim = np.zeros(3), VELOCITY_MAX_SPEED
+        else:
+            ref, lim = self._v_w, float(self.params.velocity_max_accel) * 1000.0 * dt  # mm/s
+        dv = v - ref
+        n = float(np.linalg.norm(dv))
+        if n > lim:
+            v = ref + dv * (lim / n)
+            self._guard_mm = (n - lim) * dt
+            step = R_last.T @ v * dt
+        self._v_w = v
+        return step
 
     def _fail(self, reason: str, t: float | None, info: dict, t0: float, timings: dict) -> TrackResult:
         if self._initialized:

@@ -1950,8 +1950,45 @@ Found 2026-11-19 by the study for F13 (the agent's numbers, not re-measured in r
   - With flip-average the laser sign could be judged on this path (right calibrations 0.035 mm or
     less, the 0.2 mm fault -0.35 mm); the IMU sign is thin at half resolution (0.0129° against the
     0.015° limit). Neither is switched on.
-  - **Second round, running:** `flip_average` as an option that is off; a guard against the
-    velocity runaway on the Open3D backend; then every scene again.
+- **Second round, measured 2026-11-20** (the same agent; every CPU-path run repeats bit for bit).
+  - *Two options, both off, so nothing changes by default on either path:*
+    `DepthParams.flip_average` (the CPU matcher also matches the pair upside down and averages; with
+    it detail mode leaves out 2 px round holes instead of 6) and
+    `FusionParams.velocity_max_accel` (the velocity guard, Open3D model only).
+  - *The velocity guard:* the velocity a frame carries into the next prediction may differ from
+    the last one by at most 2 m/s² times the frame time, and the first one after a start or a
+    lost frame is at most 300 mm/s. The pose ICP found is kept. The bounds come from the
+    simulator's hand (at most 0.48 m/s² and 119 mm/s over these recordings), with margins of 4
+    and 2.5. A frame it acted on says so in the report (`velocity_guard_mm`). Why not the other
+    two ideas: ICP's own information did not flag the frame that started the slide (its weakest
+    direction held at ten times the threshold), and an accelerometer does not see a runaway,
+    whose wrong velocity is constant.
+  - *Alone the guard does not help* (dark 195 mm, dark2 622 mm at the last frame). With the
+    depth fix it stops the late runaways (speckled 222 mm to 1.5 mm).
+  - *Best combination* ("Cw8": depth fix, 2 px rule, guard, and the ray cast's weight threshold
+    8 at full resolution), last frame against today: bracket 0.95 to 0.20 mm (0.58° to 0.16°),
+    dark 167 to 42 mm, dark2 249 to 0.9 mm, speckled 23 to 5.4 mm, the 0.5 mm plates 36 to 5.7
+    and 50 to 5.7 mm; sphere, car panel and the 8-frame recording better or the same; every
+    frame tracked on every scene. Laser lines 0.016 mm or less off the mesh with a right
+    calibration (today 0.06 to 0.14 mm), -0.36 mm with the 0.2 mm laser fault; the IMU sign
+    0.003 to 0.009° a frame against 0.034° with the fault. So with it the calibration status
+    could judge the lasers and the IMU on this path.
+  - **Not adopted: one number of one scene is worse.** The car panel's tracker against the gyro
+    reads 0.0087° a frame instead of 0.0081° (its position, 0.42 against 0.60 mm, and rotation,
+    0.018° against 0.064°, are better), and the owner's rule asks for every scene. No other
+    combination is nearer: without the weight threshold the last-frame rotation is worse on the
+    dark and the speckled bracket (+0.05°); with a 3 px or 6 px rule dark2 or the speckled
+    bracket slide.
+  - **For the owner to decide:** whether that one number rules it out, or the combination goes
+    on by default for the CPU path. With both options on, the GPU path is still bit for bit the
+    same.
+  - *In review:* the bracket recording processed before and after the change with today's
+    defaults gives the same camera path and laser points byte for byte and the same mesh, on
+    both paths (the numbers are in `VALIDATION.md`).
+  - Guard: `tests/test_cpu_matcher_slant.py` (the bias is there with the option off and gone
+    with it on; a 12-frame dark bracket ends 307 mm off without and under 5 mm with),
+    `tests/test_track_velocity_guard.py`.
+
 ### [ ] F15. Hole filling triangulates by vertex number, so two runs can fill a hole differently
 - **Found 2026-11-20** in the review of R3 (`FEATURE_PLAN.md`). A scan made twice from the same
   frames (GPU path, default recipe) had the same 389,649 vertices with the same position, sigma

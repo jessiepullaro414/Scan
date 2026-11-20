@@ -52,6 +52,23 @@ CPU pipeline
    reduces the median disparity error by 30-60% and is robust to a 30% left/right gain mismatch.
 6. ``z = f * B / d``. Depths outside ``[min_depth_mm, max_depth_mm]`` are set to 0.
 
+Paths from above only
+---------------------
+OpenCV's SGBM sums its path costs in one pass down the image (all its modes but ``hh``/``hh4``): the
+paths come from the left, the right and above, none from below. Where the matching cost has no texture
+(between the projected dots) a pixel takes the disparity of the pixels above it, so on a surface whose
+disparity changes down the image the result lags behind: too far where the disparity grows downwards (a
+bench seen from above at an angle, the usual view), too near where it shrinks. On synthetic dots at
+1280 x 800 a plane changing by 0.05 px a row read -0.06 px, by -0.05 px a row +0.07 px, a plane slanted
+sideways 0.00 px. On the simulated scans the 3-way SGBM read 0.07-0.08 px too far over the whole image
+after the sub-pixel step at 1280 x 800 (bracket, car panel, dark bracket; +0.10 to +0.14 mm of depth),
+0.01 px at 640 x 400, and 0.10 px within 2 px of a hole. The sub-pixel step cannot mend it: it corrects
+a pixel by its textured neighbours, which are right (``MAINTENANCE_PLAN.md`` F14). With
+``flip_average`` (off by default) SGBM also matches the pair turned upside down, where its paths come
+from below and the lag has the other sign, and the two disparities are averaged (a pixel needs a
+disparity in both). The bias left is 0.00-0.01 px over the image and -0.05 px within 2 px of a hole, for
+twice the SGBM time. ``mode="hh4"`` (two passes) does as well at about three times the time.
+
 Search range
 ------------
 ``d = f * B / z`` with ``f = K[0, 0]`` (pixels at the processed resolution) and ``B`` in mm, so
@@ -130,6 +147,10 @@ class DepthParams:
     wls_lambda: float = 8000.0
     wls_sigma_color: float = 1.5
     wls_min_confidence: float = 64.0  # 0..255, pixels below are invalidated
+    # CPU only, off by default: match the pair upside down as well and average the two disparities, which
+    # takes out SGBM's bias on surfaces slanted up and down the image (module docstring, "Paths from above
+    # only"). Twice the SGBM time. The GPU matcher sums its paths both ways and ignores it.
+    flip_average: bool = False
     # where the matching runs: "auto" (the GPU if there is one), "cpu" or "gpu" (module docstring)
     backend: str = "auto"
 
@@ -507,7 +528,12 @@ class DepthEstimator:
                 self._gpu_failed(e)
         raw = self._match(ml, mr)
         valid = (raw >= self.min_disparity * 16) & (raw <= self.max_disparity * 16)
-        disp = raw.astype(np.float32) * np.float32(1.0 / 16.0)
+        if p.flip_average:  # the same pair upside down: SGBM's paths then come from below (module docstring)
+            raw_up = self._match(np.ascontiguousarray(ml[::-1]), np.ascontiguousarray(mr[::-1]))[::-1]
+            valid &= (raw_up >= self.min_disparity * 16) & (raw_up <= self.max_disparity * 16)
+            disp = (raw.astype(np.float32) + raw_up.astype(np.float32)) * np.float32(1.0 / 32.0)
+        else:
+            disp = raw.astype(np.float32) * np.float32(1.0 / 16.0)
         # The match window must lie inside the right image: with left padding, SGBM can
         # otherwise propagate disparities into the left strip that has no correspondence.
         half = np.float32(self.params.block_size // 2)
