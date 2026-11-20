@@ -1925,6 +1925,33 @@ Found 2026-11-19 by the study for F13 (the agent's numbers, not re-measured in r
   is adopted when it measures better on every test scene and leaves the GPU path bit for
   bit unchanged. Investigating and iterating is welcome.
 
+- **First round, measured 2026-11-20** (an Opus agent; `VALIDATION.md`, "SGBM's paths from above,
+  and the CPU path's slides"; second seeds of the three hard scenes added).
+  - *The depth bias, found:* OpenCV's SGBM (3-way and every single-pass mode) sums its paths only
+    from the left, the right and above. Between the dots a pixel inherits the disparity from above,
+    so where the disparity grows down the image (a bench seen from above) it reads too far:
+    -0.055 px on a synthetic plane at +0.05 px a row, 0.00 on the GPU matcher and SGBM's two-pass
+    modes. Simulated scans: -0.075 px (bracket), -0.068 (panel), -0.084 (dark bracket) at 1280;
+    -0.012 at 640. Not the images, not our rectification, not the sub-pixel step.
+  - *A fix, measured:* match the pair upside down too and average (`flip_average`): +0.007 to
+    +0.011 px at 1280, -0.003 at 640, for twice the SGBM time. A constant correction is not
+    justified (the bias follows the surface's slope and the dot density).
+  - *The slides, mechanism:* a runaway of the constant-velocity prediction where the geometry
+    barely holds the pose (a dark part is about 5 % of the image, the rest a bench). The first
+    frame is pushed about 19 mm (true step 3 mm) and the velocity carries it on for 8 to 19 frames.
+    The dark scenes slide mainly because of the CPU depth, the plate because of Open3D's model.
+    F13's 6 px rule round holes leaves a dark part almost without raw depth; a smaller radius with
+    flip-average mends some scenes and breaks others (dark 28 / 293 / 138 mm at 2 / 3 / 6 px,
+    speckled 222 / 1.6 mm at 2 / 3 px).
+  - **Not adopted** (the owner's rule): flip-average with a 2 px rule is better on 9 of 11 scenes
+    but worse on the speckled bracket (last frame 23 to 222 mm) and slightly on the 8-frame
+    recording; flip-average alone is worse on dark2 (249 to 426 mm). The GPU path stayed bit for
+    bit with it.
+  - With flip-average the laser sign could be judged on this path (right calibrations 0.035 mm or
+    less, the 0.2 mm fault -0.35 mm); the IMU sign is thin at half resolution (0.0129° against the
+    0.015° limit). Neither is switched on.
+  - **Second round, running:** `flip_average` as an option that is off; a guard against the
+    velocity runaway on the Open3D backend; then every scene again.
 ## Reviewed and fine: leave alone
 
 So nobody spends a session on these again.

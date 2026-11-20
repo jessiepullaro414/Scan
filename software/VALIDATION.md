@@ -3250,6 +3250,122 @@ share of the *first scan's surface* that meets the tolerance:
 Guards: `tests/test_mesh_looks.py` (9), `test_mesh_check_reasons.py` (12), `test_guide_views.py`
 (10), `test_guide_loop.py` (5, slow).
 
+## SGBM's paths from above, and the CPU path's slides (2026-11-20)
+
+MAINTENANCE_PLAN F14, first round (an Opus agent; scratch in the session's `f14\` folder). CPU path
+only; the GPU path is not touched. Runs repeat bit for bit; timings were taken on a fully loaded PC
+and are not evidence. Three more recordings were made with only the seed changed: dark bracket
+(seed 12, "dark2"), speckled bracket (13, "speck2"), 0.5 mm plate (14, "plate2").
+
+**The depth bias: found.** OpenCV's SGBM, in its 3-way mode and every single-pass mode, sums its
+path costs only from the left, the right and above; no path comes up from below. Between the dots a
+pixel inherits the disparity of the pixels above it. Where the disparity grows down the image (a
+bench seen from above at an angle) that reads too far.
+
+Synthetic dot planes, 1280x800, no simulator (mean disparity error, px):
+
+| Plane | 3-way SGBM | GPU matcher | SGBM's two-pass modes |
+|---|---|---|---|
+| disparity +0.05 px a row | -0.055 | 0.000 | 0.007 or less |
+| disparity -0.05 px a row | +0.066 | 0.000 | 0.007 or less |
+| slanted sideways | 0.003 | | |
+| facing the cameras | 0.003 | | |
+
+- Single-pass `sgbm` mode doubles it (-0.108 px).
+- Not the images: with the simulator's gain mismatch, vignetting, noise, blur, speckle, lasers or
+  ambient light changed one at a time, the bias stays (-0.070 to -0.084 px).
+- Not our rectification or depth conversion: the GPU matcher shares them and reads 0.000.
+- Not the sub-pixel (LK) step: it corrects a pixel by its textured neighbours, which are right, so
+  it cannot mend the pixels between the dots where the bias sits. Raw SGBM -0.106 px, after the
+  step -0.075, after six steps -0.069; the 30 % of pixels the step leaves alone read -0.19 px.
+
+**A fix, measured: match the pair upside down too, and average** (`flip_average`; a pixel needs a
+disparity in both). It cancels the bias by symmetry and costs twice the SGBM time. Mean disparity
+error after the sub-pixel step (px):
+
+| Scene | 3-way | Flip-average | Two-pass, 4 paths | GPU |
+|---|---|---|---|---|
+| Bracket, 1280 | -0.075 | +0.008 | +0.008 | 0.000 |
+| Car panel, 1280 | -0.068 | +0.011 | +0.010 | +0.001 |
+| Dark bracket, 1280 | -0.084 | +0.007 | | +0.003 |
+| Sphere, 640 (8 frames) | -0.012 | -0.003 | -0.003 | +0.001 |
+
+- A constant correction is not justified: the bias follows the vertical disparity gradient, the dot
+  density and the block size (-0.075 px on the bracket at 1280, -0.012 px at 640).
+- Next to holes (dark bracket): 3-way reads -0.10 px within 2 px and -0.09 px at 2 to 6 px;
+  flip-average -0.054, -0.016, and +0.008 beyond. Most of F13's "biased next to holes" is this.
+- Laser lines off the mesh with a right calibration: +0.06 to +0.14 mm on 10 of 11 scenes before;
+  -0.035 to +0.019 mm with flip-average on every scene but the pitched calibration.
+
+**The slides: mechanism.** A runaway of the constant-velocity prediction on geometry that barely
+holds the pose, in the first frames. On the dark bracket the position error per frame was 0, 4, 12,
+65, 85, 104 ... 155 mm, then it stayed near 167 mm; on dark2 about 20 mm a frame for 19 frames,
+then 348 mm. The rotation stays right. The dark part is 4.6 % of the image, so the scene is almost
+only the bench, a plane. At frame 1 the tracker moves 18.7 mm where the true step is 3 mm, and the
+prediction carries that on.
+
+Which half carries it (90 frames, last frame's position error):
+
+| Combination | Dark | Dark2 | Plate 0.5 mm |
+|---|---|---|---|
+| GPU depth + Open3D model | 15 mm | 1.1 mm | 20 mm |
+| CPU depth + GPU model | 262 mm | 53 mm | 2.7 mm |
+
+The dark scenes slide mainly because of the CPU depth, the plate mainly because of Open3D's model.
+ICP started at the true pose against a one-frame model drifts 19 mm (CPU depth, Open3D model),
+4.8 mm (GPU depth, Open3D model), 2.6 to 2.7 mm (GPU model): the geometry is barely held on any
+path.
+
+In the CPU depth two things push: the bias above (with flip-average the plate goes from 36 to
+0.90 mm, the dark bracket from 167 to 138 mm), and F13's 6 px rule round holes, which leaves a dark
+part almost without raw depth. But the radius is a chaotic knob. Last frame with flip-average on:
+
+| Radius | Dark | Dark2 | Speckled | Plate |
+|---|---|---|---|---|
+| 0 px | 18 mm (rotation 0.43°) | | | |
+| 2 px | 28 mm | 2.1 mm | **222 mm** (runs away from frame 76) | 10 mm |
+| 3 px | **293 mm** | 14 mm | 1.6 mm | 0.90 mm |
+| 4 px | | | 1.75 mm | 2.25 mm |
+| 6 px (today's) | 138 mm | **426 mm** | | 0.90 mm |
+
+No radius is good on every scene. Also tried, not a fix: the GPU model's border test on Open3D's
+ray cast (bracket 0.95 to 2.34 mm, dark 167 to 167 mm, dark2 249 to 354 mm, plate 36 to 11.9 mm).
+
+**Every scene, today against flip-average with a 2 px rule** (CPU path, 90 frames; position error
+median / last, rotation at the last frame, tracker against gyro per frame, laser lines off the mesh):
+
+| Scene | Median (mm) | Last (mm) | Rotation (°) | Gyro (°/frame) | Lines h / v (mm) |
+|---|---|---|---|---|---|
+| Bracket | 0.88 → 0.73 | 0.95 → 0.43 | 0.577 → 0.263 | 0.0086 → 0.0060 | 0.117 / 0.117 → -0.006 / 0.016 |
+| Bracket, calibration pitched 0.03° | 1.18 → 0.58 | 1.18 → 0.37 | 0.564 → 0.353 | 0.0091 → 0.0070 | -0.034 / 0.135 → -0.093 / 0.037 |
+| Dark | 166.6 → 27.5 | 167.2 → 28.0 | 0.129 → 0.150 | 0.0065 → 0.0051 | 0.114 / 0.102 → 0.000 / 0.006 |
+| Dark2 | 348.1 → 1.00 | 248.6 → 2.09 | 0.139 → 0.137 | 0.0099 → 0.0065 | 0.101 / 0.107 → -0.002 / 0.017 |
+| Speckled | 31.1 → 4.26 | 23.1 → **221.8** | 0.127 → 0.163 | 0.0093 → 0.0089 | 0.116 / 0.087 → 0.006 / 0.019 |
+| Speck2 | 3.73 → 1.60 | 2.31 → 1.28 | 0.204 → 0.181 | 0.0116 → 0.0100 | 0.118 / 0.087 → 0.001 / 0.008 |
+| Plate 0.5 mm | 15.4 → 6.88 | 36.2 → 10.2 | 0.115 → 0.087 | 0.0042 → 0.0035 | 0.062 / 0.079 → -0.003 / 0.005 |
+| Plate2 0.5 mm | 18.6 → 10.0 | 49.6 → 26.7 | 0.134 → 0.073 | 0.0040 → 0.0032 | 0.085 / 0.076 → 0.005 / -0.002 |
+| Sphere | 0.23 → 0.13 | 0.31 → 0.10 | 0.045 → 0.005 | 0.0030 → 0.0029 | 0.084 / 0.097 → -0.006 / 0.011 |
+| Car panel | 0.54 → 0.19 | 0.60 → 0.46 | 0.064 → 0.036 | 0.0081 → 0.0078 | 0.089 / 0.102 → -0.009 / 0.006 |
+| 8 frames, half resolution | 0.10 → 0.09 | 0.04 → **0.07** | 0.007 → **0.012** | 0.0083 → **0.0129** | -0.007 / 0.029 → -0.035 / 0.007 |
+
+All frames tracked except dark2 before (89 of 90) and the speckled bracket after (89 of 90). With
+this change the GPU path stayed bit for bit (camera path and laser points the same bytes, the
+mesh's vertices the same set, on the bracket, the plate and the 8-frame recording).
+
+**Not adopted** (the owner's rule: better on every scene). Flip-average with a 2 px rule is better
+on 9 of 11 scenes but worse on the speckled bracket (last frame 23 to 222 mm) and slightly on the
+8-frame recording. Flip-average alone is worse on dark2 (249 to 426 mm) and on the bracket's median
+(0.88 to 1.10 mm). A 3 px rule: dark 293 mm. No rule: rotation 0.42 to 0.75°.
+
+**The calibration's signs on this path, with flip-average:** the lasers could be judged (right
+calibrations 0.035 mm or less on all scenes, the 0.2 mm laser fault reads -0.351 mm; without it
+right calibrations read 0.06 to 0.14 mm, over the 0.05 mm limit). The IMU sign is thin at half
+resolution (0.0129° a frame with a right calibration against the 0.015° limit; the fault 0.0339°).
+Neither is switched on.
+
+**Next:** a guard against the velocity runaway in directions the geometry does not hold, on the
+Open3D backend, then flip-average again.
+
 ## What the metrics mean
 
 - **Stereo errors** compare the estimated raw intrinsics/extrinsics (`K1`, `K2`, `R`, `T`) with
