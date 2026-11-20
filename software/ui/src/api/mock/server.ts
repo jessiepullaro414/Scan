@@ -64,7 +64,7 @@ import { MockFeatures } from "./features";
 import { MockSections } from "./section";
 import { MockFlush } from "./flush";
 import { MockReport } from "./report";
-import { keepModeArg, MockKeep } from "./keep";
+import { keepModeArg, keepThinArg, MockKeep } from "./keep";
 import { mockScanStatus, SEEDED_SCAN_HEALTH } from "./health";
 import { scanHealthOf } from "../../lib/calibHealth";
 import { MockReferences } from "./reference";
@@ -462,8 +462,8 @@ class MockBackend {
       }
       // R1: disk use; R2: what a scan keeps (keep.ts)
       if (p && c === "disk" && is("GET", 3)) return json(200, this.keep.projectDisk(p));
-      if (p && c === "keep" && is("GET", 3)) return json(200, this.keep.projectPlan(p, keepModeArg(body.mode)));
-      if (p && c === "keep" && is("POST", 3)) return json(200, this.keep.projectApply(p, keepModeArg(body.mode), body.confirm === true));
+      if (p && c === "keep" && is("GET", 3)) return json(200, this.keep.projectPlan(p, keepModeArg(body.mode), keepThinArg(body.thin, keepModeArg(body.mode))));
+      if (p && c === "keep" && is("POST", 3)) return json(200, this.keep.projectApply(p, keepModeArg(body.mode), body.confirm === true, keepThinArg(body.thin, keepModeArg(body.mode))));
       // M4: align two scans or several, merge them into a new one
       if (p && c === "align" && is("POST", 3)) return json(200, this.aligning.align(p, body));
       if (p && c === "align_all" && is("POST", 3)) return json(200, this.aligning.alignAll(p, body));
@@ -482,8 +482,8 @@ class MockBackend {
       if (p && c === "scans" && d) {
         const s = p.scans.find((x) => x.id === d);
         if (!s) throw new HttpError(404, "Scan not found");
-        if (e === "keep" && is("GET", 5)) return json(200, this.keep.plan(p, s, keepModeArg(body.mode)));
-        if (e === "keep" && is("POST", 5)) return json(200, this.keep.apply(p, s, keepModeArg(body.mode), body.confirm === true));
+        if (e === "keep" && is("GET", 5)) return json(200, this.keep.plan(p, s, keepModeArg(body.mode), keepThinArg(body.thin, keepModeArg(body.mode))));
+        if (e === "keep" && is("POST", 5)) return json(200, this.keep.apply(p, s, keepModeArg(body.mode), body.confirm === true, keepThinArg(body.thin, keepModeArg(body.mode))));
         // what was removed to free space (R2) cannot be used: the same refusals as the engine
         if (e === "process" && method === "POST") {
           const sub = seg[5] ?? "";
@@ -1247,7 +1247,7 @@ class MockBackend {
     mk("Intake manifold bracket", 2, [
       { name: "Bracket top", status: "processed", n_frames: 864, duration_s: 28.8 },
       { name: "Bracket underside", status: "processed", n_frames: 612, duration_s: 20.4 }, // with "Bracket top": two scans to align (M4)
-      { name: "Bracket side", status: "processed", n_frames: 450, duration_s: 15 }, // and a third: several at once (M4 second slice)
+      { name: "Bracket side", status: "processed", n_frames: 900, duration_s: 15 }, // and a third: several at once (M4 second slice); 60 frames a second (R3)
       { name: "Bracket end", status: "recorded", n_frames: 390, duration_s: 13 }, // recorded only: shows "Make mesh"
       { name: "Quick test (fail)", status: "failed", n_frames: 96, duration_s: 3.2 },
     ]);

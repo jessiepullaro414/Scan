@@ -287,10 +287,15 @@ export const api = {
   /** R1: what the project's folder takes on disk (walks the folder: ask after the page has painted). */
   projectDisk: (pid: string) => get<ProjectDiskUse>(`/api/projects/${enc(pid)}/disk`),
   /** R2: what moving a scan (or every scan of a project) to a lighter mode would free; changes nothing. */
-  keepPlan: (pid: string, sid: string, mode: KeepMode) => get<ScanKeepPlan>(`${scanPath(pid, sid)}/keep?mode=${mode}`),
-  keep: (pid: string, sid: string, mode: KeepMode, confirm = false) => post<ScanKeepResult>(`${scanPath(pid, sid)}/keep`, { mode, confirm }),
-  projectKeepPlan: (pid: string, mode: KeepMode) => get<ProjectKeepPlan>(`/api/projects/${enc(pid)}/keep?mode=${mode}`),
-  projectKeep: (pid: string, mode: KeepMode, confirm = false) => post<ProjectKeepResult>(`/api/projects/${enc(pid)}/keep`, { mode, confirm }),
+  /** R3: `thin` (with "engineering") also removes the frames Standard quality skips. */
+  keepPlan: (pid: string, sid: string, mode: KeepMode, thin = false) =>
+    get<ScanKeepPlan>(`${scanPath(pid, sid)}/keep?mode=${mode}${thin ? "&thin=true" : ""}`),
+  keep: (pid: string, sid: string, mode: KeepMode, confirm = false, thin = false) =>
+    post<ScanKeepResult>(`${scanPath(pid, sid)}/keep`, thin ? { mode, confirm, thin } : { mode, confirm }),
+  projectKeepPlan: (pid: string, mode: KeepMode, thin = false) =>
+    get<ProjectKeepPlan>(`/api/projects/${enc(pid)}/keep?mode=${mode}${thin ? "&thin=true" : ""}`),
+  projectKeep: (pid: string, mode: KeepMode, confirm = false, thin = false) =>
+    post<ProjectKeepResult>(`/api/projects/${enc(pid)}/keep`, thin ? { mode, confirm, thin } : { mode, confirm }),
 
   session: () => get<SessionState>("/api/scan"),
   startScan: (body: StartBody) => post<SessionState>("/api/scan/start", body),

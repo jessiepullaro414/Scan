@@ -15,7 +15,9 @@ scan ``n_frames``, ``duration_s``, ``quality`` (of the last processing), ``error
 processing) and ``report`` (a compact summary of ``result/report.json``, :func:`report_summary`; since H4 with
 the scan's own calibration status in short, ``health_status: {state, part, reason}``); since R2 ``keep``
 (``engineering`` or ``standard`` once the user freed the scan's space; absent means ``full``) and ``freed``
-(``[{when, keep, bytes}]``, each time it was freed). It is written
+(``[{when, keep, bytes}]``, each time it was freed; ``thin: true`` when the recording was thinned); since R3
+``thinned`` (``{when, fps, fps_before, step, frames, frames_before}``: the recording holds only the frames
+Standard quality uses, ``fps`` of them a second). It is written
 atomically (temporary file + rename), so a crash never leaves half a file.
 
 Ids are filesystem-safe: projects ``<slug of the name>-<4 hex>``, scans ``scan-<local time>``.
@@ -221,6 +223,8 @@ class ProjectStore:
         out["keep"] = entry.get("keep") if entry.get("keep") in KEEP_MODES else "full"
         if entry.get("freed"):
             out["freed"] = entry["freed"]
+        if entry.get("thinned"):  # R3: the recording holds only the frames Standard quality uses (at this rate)
+            out["thinned"] = entry["thinned"]
         out["has_recording"] = (self.root / pid / "scans" / sid / "recording" / "frames.csv").is_file()
         thumb = self.root / pid / "scans" / sid / "thumbnail.jpg"
         out["thumbnail_url"] = f"{base}/thumbnail.jpg" if thumb.is_file() else None

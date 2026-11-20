@@ -7,7 +7,11 @@ import {
   KEEP_CHOICE,
   KEEP_CHOICES,
   canRemake,
+  choiceArgs,
   confirmStandard,
+  confirmThin,
+  fpsText,
+  thinnedLine,
   doneLine,
   keepLabel,
   keepTitle,
@@ -73,7 +77,7 @@ const disk = (over: Partial<ScanDiskUse> = {}): ScanDiskUse => ({
 });
 
 // the choices, in order, in plain words (no jargon such as "retention mode")
-check(KEEP_CHOICES.join(",") === "engineering,standard", "two lighter choices, in order");
+check(KEEP_CHOICES.join(",") === "engineering,thinned,standard", "three lighter choices, in order (R3: the frames Standard uses between)");
 check(KEEP_CHOICE.engineering.title === "Keep the recording and the result", "engineering title");
 check(KEEP_CHOICE.standard.title === "Keep the result only", "standard title");
 check(KEEP_CHOICE.standard.text.endsWith("This cannot be undone."), "standard says it cannot be undone");
@@ -224,5 +228,45 @@ for (const [k, s] of Object.entries(BLOCK)) check(/^[A-Z].*\.$/.test(s) && s.spl
 check(remakeBlock(full) === null && remakeBlock(eng) === null, "remake: a scan with its recording");
 check(remakeBlock(resOnly) === BLOCK.resultOnly && remakeBlock(merged) === BLOCK.merged, "remake: no recording");
 for (const s of [full, eng, resOnly, merged, {}]) check((remakeBlock(s) === null) === canRemake(s), "remakeBlock agrees with canRemake");
+
+// ---------------------------------------------------------------- R3: only the frames Standard quality uses
+// the choice is the engine's "recording and result" with thin: true, so every rule above for "engineering" holds
+check(JSON.stringify(choiceArgs("thinned")) === '{"mode":"engineering","thin":true}', "thinned: engineering with thin");
+check(JSON.stringify(choiceArgs("engineering")) === '{"mode":"engineering","thin":false}' && choiceArgs("standard").thin === false, "the others: no thinning");
+check(KEEP_CHOICE.thinned.title === "Keep the frames Standard quality uses, and the result", `thinned title: ${KEEP_CHOICE.thinned.title}`);
+check(KEEP_CHOICE.thinned.text.endsWith("This cannot be undone.") && KEEP_CHOICE.thinned.text.includes("gives the same mesh"), "thinned: same mesh, cannot be undone");
+check(!/—/.test(Object.values(KEEP_CHOICE).map((x) => x.title + x.text).join(" ")), "no em dashes");
+const thinned = { when: "2026-11-19T22:00:00", fps: 29.98, fps_before: 59.96, step: 2, frames: 1800, frames_before: 3600 };
+check(fpsText(29.98) === "30 frames a second" && fpsText(7.5) === "7.5 frames a second" && fpsText(1) === "1 frame a second", "frame rates in words");
+check(keepLabel("engineering", thinned) === "Keeps recording (30 frames a second) and result", `thinned label: ${keepLabel("engineering", thinned)}`);
+check(keepLabel("engineering", null) === "Keeps recording and result" && keepLabel("standard", thinned) === "Keeps result only", "labels without, or past, thinning");
+check(
+  thinnedLine(thinned) === "Its recording holds the frames Standard quality uses: 30 frames a second (1,800 of 3,600 frames, recorded at 60 frames a second).",
+  `thinned line: ${thinnedLine(thinned)}`,
+);
+check(thinnedLine(thinned, true).startsWith("Its recording will hold the frames") && thinnedLine(null) === "", "the plan's line, and none");
+const tt = keepTitle({ keep: "engineering", thinned, freed: [{ when: "x", keep: "engineering", bytes: 3 * GB, thin: true }] }, null, () => "19 Nov");
+check(tt.startsWith("To free space (19 Nov), the camera frames Standard quality skips, its processing stages and undo history were removed: 3.00 GB freed."), `thinned title: ${tt}`);
+check(tt.includes("1,800 of 3,600 frames") && tt.includes("at Standard quality it gives the same mesh as before"), `thinned hover: ${tt}`);
+check(removeLines(plan({ remove: [{ part: "frames", bytes: 2 * GB, files: 1800 }] }))[0] === "The camera frames Standard quality skips: 2.00 GB", "frames line");
+const pt = plan({ writes: [{ what: "state", bytes: -2048 }, { what: "frames_list", bytes: -46800 }, { what: "meta", bytes: 160 }] });
+check(
+  writeLines(pt).join("|") ===
+    "The processing record is written again without the history: 2 KB smaller|The list of frames is written again with the frames that stay: 46 KB smaller|The recording's notes say what it holds now: 160 B larger",
+  `thinning writes: ${writeLines(pt).join("|")}`,
+);
+// Best quality's loss is said beforehand, in numbers (measured, VALIDATION.md)
+const best = lossLines(["best"])[0];
+check(/^Best quality /.test(best) && /\d/.test(best) && best.endsWith(".") && !/TODO|—/.test(best), `best loss in numbers: ${best}`);
+check(best.includes("same mesh as Standard"), `best: what it gives then: ${best}`);
+const ct = confirmThin({ name: "Bracket top" }, 3 * GB);
+check(ct.title === "Delete the frames Standard quality skips?" && ct.button === "Delete the skipped frames", "thin: second question");
+check(ct.text.startsWith("The camera frames Standard quality skips of “Bracket top” will be deleted from disk (3.00 GB freed in all). This cannot be undone."), `thin second question: ${ct.text}`);
+check(confirmThin({ scans: 2 }, GB).text.includes("of 2 scans"), "the project's second question");
+check(doneLine(3 * GB, "engineering", "B", true) === "Freed 3.00 GB. “B” now keeps the frames Standard quality uses and its result.", "done, thinned");
+// a thinned scan is a scan that keeps its recording: Make mesh and the stages as for "recording and result"
+const engThin = { ...eng, thinned };
+check(canRemake(engThin) && remakeBlock(engThin) === null, "thinned: Make mesh runs");
+for (const a of ["straighten", "fuse"] as const) check(stageBlock(engThin, madeBefore, a) === BLOCK.stagesGone, `thinned: ${a} as engineering`);
 
 console.log(`keepMode.test: ${checks} checks passed`);

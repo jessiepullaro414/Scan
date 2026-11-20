@@ -16,10 +16,14 @@ import type {
   Scan,
   ScanDiskUse,
   ScanKeepPlan,
+  ThinnedRecording,
 } from "../types";
 import { HttpError, nowIso } from "./host.ts";
 
 const MB = 1024 * 1024;
+const STANDARD_FPS = 30; // process.standard_frame_rate
+const LIST_ROW = 26; // a row of frames.csv ("123,456.789012,000123.png")
+const META_NOTE = 160; // the "thinned" note meta.json gets
 const RANK: Record<KeepMode, number> = { full: 0, engineering: 1, standard: 2 };
 const KEPT_REC = 48 * 1024; // calibration.json and meta.json
 const STATE_SHRINK = 2048; // what the processing record loses with the history
@@ -119,21 +123,48 @@ export class MockKeep {
     };
   }
 
-  plan(p: Project, s: Scan, mode: KeepMode): ScanKeepPlan {
+  /** R3: what keeping only the frames Standard quality uses would remove (as `ohs/server/keep.py` `_thinning`). */
+  private thinning(s: Scan, d: Parts): { refusal: Refusal | null; info: ThinnedRecording | null; bytes: number; files: number; writes: ScanKeepPlan["writes"] } {
+    const none = { info: null, bytes: 0, files: 0, writes: [] as ScanKeepPlan["writes"] };
+    if (d.frames <= 0) return { refusal: null, ...none };
+    const fps = s.duration_s > 0 ? d.n_frame_files / s.duration_s : 30;
+    const step = Math.max(1, Math.floor(fps / STANDARD_FPS + 0.5 + 1e-6));
+    if (step < 2) {
+      if (s.thinned) return { refusal: null, ...none, info: { ...s.thinned } };
+      return {
+        refusal: {
+          detail: `this recording has ${Math.round(fps)} frames a second: Standard quality uses every one of them, so there are no frames to remove`,
+          hint: "keep the recording and the result without thinning, or the result only",
+        },
+        ...none,
+      };
+    }
+    const kept = Math.ceil(d.n_frame_files / step);
+    const files = d.n_frame_files - kept;
+    const bytes = Math.round((d.frames * files) / d.n_frame_files);
+    const info: ThinnedRecording = { fps: Math.round((fps / step) * 1000) / 1000, fps_before: Math.round(fps * 1000) / 1000, step, frames: kept, frames_before: d.n_frame_files };
+    return { refusal: null, info, bytes, files, writes: [{ what: "frames_list", bytes: -LIST_ROW * files }, { what: "meta", bytes: META_NOTE }] };
+  }
+
+  plan(p: Project, s: Scan, mode: KeepMode, thin = false): ScanKeepPlan {
     const d = this.partsOf(p, s);
     const cur: KeepMode = s.keep ?? "full";
     const hasRec = d.frames > 0;
     const hasMesh = s.status === "processed" && !!s.result;
+    const busy = s.status === "processing" || s.status === "recording";
+    const th = thin && cur !== "standard" && !busy ? this.thinning(s, d) : null;
     const remove: KeepPart[] = [];
     if (mode === "standard" && d.recording > KEPT_REC) remove.push({ part: "recording", bytes: d.recording - KEPT_REC, files: d.n_frame_files + 4 });
+    if (th && th.bytes > 0) remove.push({ part: "frames", bytes: th.bytes, files: th.files });
     if (mode !== "full" && d.undo > 0) remove.push({ part: "undo", bytes: d.undo, files: 3 }); // result/mesh.ply serves as the base
     const stages = Object.values(d.stages).reduce((a, b) => a + b, 0);
     if (mode !== "full" && stages > 0) remove.push({ part: "stages", bytes: stages, files: 5 * Object.keys(d.stages).length });
     // the processing record is written again without the history (as the engine: frees = removed - written)
     const writes: ScanKeepPlan["writes"] = mode !== "full" && d.undo > 0 ? [{ what: "state", bytes: -STATE_SHRINK }] : [];
+    if (th && th.bytes > 0) writes.push(...th.writes);
     const frees = remove.reduce((a, r) => a + r.bytes, 0) - writes.reduce((a, w) => a + w.bytes, 0);
     let refusal: Refusal | null = null;
-    if (s.status === "processing" || s.status === "recording")
+    if (busy)
       refusal = { detail: `this scan is busy: it is being ${s.status === "recording" ? "recorded" : "processed"}`, hint: "wait until it has finished, then free its space" };
     else if (mode === "full")
       refusal =
@@ -149,10 +180,13 @@ export class MockKeep {
       };
     else if (mode === "standard" && !hasMesh)
       refusal = { detail: "this scan has no mesh yet: keeping its result only would leave nothing of it", hint: "make its mesh first, or keep the recording and the result" };
+    else if (th?.refusal) refusal = th.refusal;
     else if (frees <= 0) refusal = { detail: "nothing to free: this scan would not take less space afterwards", hint: "it has none of what this choice removes on disk" };
     const loses: KeepLoss[] = [];
     if (d.undo > 0) loses.push("undo");
     if (mode === "engineering" && stages) loses.push("stages");
+    const thinning = !!th && th.bytes > 0;
+    if (thinning) loses.push("best");
     if (mode === "standard") {
       if (hasRec) loses.push("remake", "merge", "frames");
       if (hasRec || stages) loses.push("refine");
@@ -175,15 +209,27 @@ export class MockKeep {
       kept_step_bytes: 0,
       loses,
       keeps,
-      confirm: mode === "standard" && remove.some((r) => r.part === "recording"),
+      confirm: (mode === "standard" && remove.some((r) => r.part === "recording")) || thinning,
+      thin,
+      thinned: !refusal && thin ? (th?.info ?? null) : null,
     };
   }
 
-  apply(p: Project, s: Scan, mode: KeepMode, confirm: boolean): { scan: Scan; freed_bytes: number; planned_bytes: number } {
-    const plan = this.plan(p, s, mode);
+  apply(p: Project, s: Scan, mode: KeepMode, confirm: boolean, thin = false): { scan: Scan; freed_bytes: number; planned_bytes: number } {
+    const plan = this.plan(p, s, mode, thin);
     if (plan.refusal) throw new HttpError(409, plan.refusal.detail, plan.refusal.hint);
-    if (plan.confirm && !confirm) throw new HttpError(409, "removing this scan's recording cannot be undone", "ask once more, then send confirm: true");
+    if (plan.confirm && !confirm)
+      throw new HttpError(409, `removing ${thin ? "the frames Standard quality skips" : "this scan's recording"} cannot be undone`, "ask once more, then send confirm: true");
     const d = this.partsOf(p, s);
+    const gone = plan.remove.find((r) => r.part === "frames");
+    if (gone && plan.thinned) {
+      const written = plan.writes.filter((w) => w.what !== "state").reduce((a, w) => a + w.bytes, 0);
+      d.frames -= gone.bytes;
+      d.recording += written - gone.bytes;
+      d.n_frame_files = plan.thinned.frames;
+      s.thinned = { when: nowIso(), ...plan.thinned };
+      s.n_frames = plan.thinned.frames;
+    }
     if (mode === "standard") {
       d.recording = Math.min(d.recording, KEPT_REC);
       d.frames = 0;
@@ -193,18 +239,19 @@ export class MockKeep {
     d.undo = 0;
     d.stages = {};
     s.keep = mode;
-    s.freed = [...(s.freed ?? []), { when: nowIso(), keep: mode, bytes: plan.frees_bytes }];
+    s.freed = [...(s.freed ?? []), { when: nowIso(), keep: mode, bytes: plan.frees_bytes, ...(thin ? { thin: true } : {}) }];
     s.has_recording = d.frames > 0;
     p.modified = nowIso();
     return { scan: s, freed_bytes: plan.frees_bytes, planned_bytes: plan.frees_bytes };
   }
 
-  projectPlan(p: Project, mode: KeepMode): ProjectKeepPlan {
-    const scans = p.scans.map((s) => this.plan(p, s, mode));
+  projectPlan(p: Project, mode: KeepMode, thin = false): ProjectKeepPlan {
+    const scans = p.scans.map((s) => this.plan(p, s, mode, thin));
     const ok = scans.filter((x) => x.ok);
     return {
       project_id: p.id,
       to: mode,
+      thin,
       scans,
       frees_bytes: ok.reduce((a, x) => a + x.frees_bytes, 0),
       n_scans: ok.filter((x) => x.frees_bytes > 0).length,
@@ -212,9 +259,10 @@ export class MockKeep {
     };
   }
 
-  projectApply(p: Project, mode: KeepMode, confirm: boolean): ProjectKeepResult {
-    const plan = this.projectPlan(p, mode);
-    if (plan.confirm && !confirm) throw new HttpError(409, "removing these scans' recordings cannot be undone", "ask once more, then send confirm: true");
+  projectApply(p: Project, mode: KeepMode, confirm: boolean, thin = false): ProjectKeepResult {
+    const plan = this.projectPlan(p, mode, thin);
+    if (plan.confirm && !confirm)
+      throw new HttpError(409, `removing ${thin ? "the frames Standard quality skips" : "these scans' recordings"} cannot be undone`, "ask once more, then send confirm: true");
     const results: ProjectKeepResult["results"] = [];
     let freed = 0;
     for (const x of plan.scans) {
@@ -223,12 +271,20 @@ export class MockKeep {
         results.push({ scan_id: x.scan_id, name: x.name, ok: false, freed_bytes: 0, error: x.refusal ?? { detail: "nothing to free", hint: "nothing to do" } });
         continue;
       }
-      const r = this.apply(p, s, mode, true);
+      const r = this.apply(p, s, mode, true, thin);
       freed += r.freed_bytes;
       results.push({ scan_id: x.scan_id, name: x.name, ok: true, freed_bytes: r.freed_bytes });
     }
-    return { project_id: p.id, to: mode, results, freed_bytes: freed };
+    return { project_id: p.id, to: mode, thin, results, freed_bytes: freed };
   }
+}
+
+/** R3: `thin` from a request (a query string says "true"); with any mode but "engineering", the API's 422. */
+export function keepThinArg(v: unknown, mode: KeepMode): boolean {
+  const thin = v === true || v === "true" || v === "1";
+  if (thin && mode !== "engineering")
+    throw new HttpError(422, "keeping only the frames Standard quality uses goes with keeping the recording and the result", 'send mode: "engineering" with thin: true');
+  return thin;
 }
 
 /** A mode from a request, or the API's 422. */

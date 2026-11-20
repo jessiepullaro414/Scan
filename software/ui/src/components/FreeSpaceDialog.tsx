@@ -1,18 +1,22 @@
 /**
  * R2: free a scan's space (or every scan's of a project) on purpose. The dialog asks the engine what each
  * choice would remove and free (`GET .../keep?mode=`, R1's numbers), says what can no longer be done
- * afterwards, and for "the result only" asks once more, because that cannot be undone. Nothing is
+ * afterwards, and for "the result only" asks once more, because that cannot be undone. R3 adds a choice
+ * between the two: the recording thinned to the frames Standard quality uses (the engine's "engineering" with
+ * `thin`), which also asks once more and says beforehand what Best quality then loses. Nothing is
  * removed before the user confirms. The words come from `lib/keepMode.ts`.
  */
 import { HardDrive } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 import { api, ApiError } from "../api/http";
-import type { KeepMode, Project, ProjectKeepPlan, Scan, ScanKeepPlan } from "../api/types";
+import type { Project, ProjectKeepPlan, Scan, ScanKeepPlan } from "../api/types";
 import { fmtBytes } from "../lib/format";
 import {
   KEEP_CHOICE,
   KEEP_CHOICES,
+  choiceArgs,
   confirmStandard,
+  confirmThin,
   doneLine,
   keptLine,
   lossLines,
@@ -20,15 +24,23 @@ import {
   projectDoneLines,
   projectPlanLines,
   removeLines,
+  thinnedLine,
   writeLines,
+  type KeepChoice,
 } from "../lib/keepMode";
 import { cn } from "../lib/util";
 import { toast } from "../store/toasts";
 import { Button } from "./ui/Button";
 import { ConfirmDialog, Dialog } from "./ui/Dialog";
 
-type Choice = Exclude<KeepMode, "full">;
+type Choice = KeepChoice;
 type Plans = Partial<Record<Choice, ScanKeepPlan | ProjectKeepPlan | ApiError>>;
+
+/** The choice the dialog opens on: the next lighter one than what the scan keeps now. */
+function firstChoice(scan: Scan | null): Choice {
+  if (scan?.keep !== "engineering") return "engineering";
+  return scan.thinned ? "standard" : "thinned";
+}
 
 const isProjectPlan = (p: ScanKeepPlan | ProjectKeepPlan): p is ProjectKeepPlan => "scans" in p;
 
@@ -63,9 +75,10 @@ export function FreeSpaceDialog({
     if (!open) return;
     let live = true;
     setPlans({});
-    setMode(scan?.keep === "engineering" ? "standard" : "engineering");
+    setMode(firstChoice(scan));
     for (const m of KEEP_CHOICES) {
-      const ask = sid ? api.keepPlan(project.id, sid, m) : api.projectKeepPlan(project.id, m);
+      const a = choiceArgs(m);
+      const ask = sid ? api.keepPlan(project.id, sid, a.mode, a.thin) : api.projectKeepPlan(project.id, a.mode, a.thin);
       ask.then(
         (p) => live && setPlans((s) => ({ ...s, [m]: p })),
         (e) => live && setPlans((s) => ({ ...s, [m]: e instanceof ApiError ? e : new ApiError(0, String(e), null, "") })),
@@ -74,7 +87,7 @@ export function FreeSpaceDialog({
     return () => {
       live = false;
     };
-  }, [open, project.id, sid, scan?.keep]);
+  }, [open, project.id, sid, scan?.keep, scan?.thinned]);
 
   const plan = plans[mode];
   const { ok, frees } = planState(plan);
@@ -82,12 +95,14 @@ export function FreeSpaceDialog({
 
   async function run() {
     setBusy(true);
+    const a = choiceArgs(mode);
+    const confirm = needsSecondYes; // asked once more already (it cannot be undone)
     try {
       if (sid) {
-        const r = await api.keep(project.id, sid, mode, mode === "standard");
-        toast.success(doneLine(r.freed_bytes, mode, scan?.name));
+        const r = await api.keep(project.id, sid, a.mode, confirm, a.thin);
+        toast.success(doneLine(r.freed_bytes, a.mode, scan?.name, a.thin));
       } else {
-        const r = await api.projectKeep(project.id, mode, mode === "standard");
+        const r = await api.projectKeep(project.id, a.mode, confirm, a.thin);
         const d = projectDoneLines(r);
         if (d.failed.length) toast.warn(d.text, `Left as they were: ${d.failed.join(" ")}`);
         else toast.success(d.text);
@@ -102,7 +117,8 @@ export function FreeSpaceDialog({
     }
   }
 
-  const second = confirmStandard(sid ? { name: scan?.name } : { scans: plan && !(plan instanceof ApiError) && isProjectPlan(plan) ? plan.n_scans : 0 }, frees);
+  const whose = sid ? { name: scan?.name } : { scans: plan && !(plan instanceof ApiError) && isProjectPlan(plan) ? plan.n_scans : 0 };
+  const second = mode === "thinned" ? confirmThin(whose, frees) : confirmStandard(whose, frees);
 
   return (
     <>
@@ -119,7 +135,7 @@ export function FreeSpaceDialog({
             </Button>
             <Button
               data-autofocus
-              variant={mode === "standard" ? "danger" : "primary"}
+              variant={needsSecondYes ? "danger" : "primary"}
               icon={HardDrive}
               loading={busy}
               disabled={!ok || !plan}
@@ -193,8 +209,10 @@ function PlanDetails({ plan }: { plan: ScanKeepPlan | ProjectKeepPlan }) {
     return plan.refusal?.hint ? <p className="mt-4 text-sm text-muted">{plan.refusal.hint[0].toUpperCase() + plan.refusal.hint.slice(1)}.</p> : null;
   }
   const kept = keptLine(plan.keeps);
+  const thin = thinnedLine(plan.thinned, true);
   return (
     <div className="mt-4 space-y-3 text-sm">
+      {thin && plan.remove.some((p) => p.part === "frames") ? <p className="text-xs text-fg">{thin}</p> : null}
       {plan.remove.length ? (
         <Section title="What is removed">
           {[...removeLines(plan), ...writeLines(plan)].map((l) => (

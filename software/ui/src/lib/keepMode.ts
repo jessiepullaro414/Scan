@@ -3,19 +3,48 @@
  * `GET/POST /api/projects/{pid}/scans/{sid}/keep`, `/api/projects/{pid}/keep`). Pure functions: the
  * project page and its dialog only show what these return.
  */
-import type { KeepKept, KeepLoss, KeepMode, KeepPart, ProjectKeepPlan, ProjectKeepResult, Scan, ScanDiskUse, ScanKeepPlan, StageId, StageState } from "../api/types";
+import type {
+  KeepKept,
+  KeepLoss,
+  KeepMode,
+  KeepPart,
+  ProjectKeepPlan,
+  ProjectKeepResult,
+  Scan,
+  ScanDiskUse,
+  ScanKeepPlan,
+  StageId,
+  StageState,
+} from "../api/types";
 import { fmtBytes, fmtInt } from "./format.ts";
 
-/** The two lighter modes a user can choose, in the order the dialog shows them. */
-export const KEEP_CHOICES: Exclude<KeepMode, "full">[] = ["engineering", "standard"];
+/**
+ * What the dialog offers, lightest last: the two lighter modes, and between them (R3) "recording and result" with the
+ * camera frames Standard quality skips removed too. That one is the engine's "engineering" with `thin: true`, so the
+ * scan still keeps its recording and everything that needs only the frames Standard uses works as before.
+ */
+export type KeepChoice = "engineering" | "thinned" | "standard";
+export const KEEP_CHOICES: KeepChoice[] = ["engineering", "thinned", "standard"];
+
+/** The route's arguments for a choice. */
+export function choiceArgs(c: KeepChoice): { mode: Exclude<KeepMode, "full">; thin: boolean } {
+  return c === "thinned" ? { mode: "engineering", thin: true } : { mode: c, thin: false };
+}
 
 /** A choice's title and what it means, in plain words. */
-export const KEEP_CHOICE: Record<Exclude<KeepMode, "full">, { title: string; text: string }> = {
+export const KEEP_CHOICE: Record<KeepChoice, { title: string; text: string }> = {
   engineering: {
     title: "Keep the recording and the result",
     text:
       "The processing stages and the undo history are removed. They can be rebuilt from the recording, so every number " +
       "can still be checked and the mesh made again.",
+  },
+  thinned: {
+    title: "Keep the frames Standard quality uses, and the result",
+    text:
+      "As above, and the camera frames Standard quality skips are removed too (every 2nd frame of a recording made at 60 " +
+      "frames a second). Make mesh at Standard quality gives the same mesh as before, and the motion sensor, the events " +
+      "and the calibration stay. Best quality then works from the frames that stay. This cannot be undone.",
   },
   standard: {
     title: "Keep the result only",
@@ -26,24 +55,48 @@ export const KEEP_CHOICE: Record<Exclude<KeepMode, "full">, { title: string; tex
   },
 };
 
+/** "30 frames a second" (whole numbers; one decimal below 10). */
+export function fpsText(fps: number): string {
+  const v = fps >= 10 ? Math.round(fps) : Math.round(fps * 10) / 10;
+  return `${v} frame${v === 1 ? "" : "s"} a second`;
+}
+
 /** What the scan's row says it keeps ("" for a scan that keeps everything). */
-export function keepLabel(mode: KeepMode | undefined): string {
+export function keepLabel(mode: KeepMode | undefined, thinned?: Scan["thinned"] | null): string {
+  if (mode === "engineering" && thinned) return `Keeps recording (${fpsText(thinned.fps)}) and result`;
   return mode === "engineering" ? "Keeps recording and result" : mode === "standard" ? "Keeps result only" : "";
 }
 
+/** R3: what a thinned recording holds (or, with `future`, would hold), one line ("" when it is not thinned). */
+export function thinnedLine(thinned: Scan["thinned"] | ScanKeepPlan["thinned"] | null | undefined, future = false): string {
+  if (!thinned) return "";
+  return (
+    `Its recording ${future ? "will hold" : "holds"} the frames Standard quality uses: ${fpsText(thinned.fps)} ` +
+    `(${fmtInt(thinned.frames)} of ${fmtInt(thinned.frames_before)} frames, recorded at ${fpsText(thinned.fps_before)}).`
+  );
+}
+
 /** The hover text of that label: what was removed and when, and what is on disk again since (R1's numbers). */
-export function keepTitle(scan: Pick<Scan, "keep" | "freed">, disk?: ScanDiskUse | null, when?: (iso: string) => string): string {
+export function keepTitle(scan: Pick<Scan, "keep" | "freed" | "thinned">, disk?: ScanDiskUse | null, when?: (iso: string) => string): string {
   const mode = scan.keep ?? "full";
   if (mode === "full") return "";
   const freed = scan.freed ?? [];
   const total = freed.reduce((a, f) => a + f.bytes, 0);
   const last = freed.length ? freed[freed.length - 1].when : null;
-  const what = mode === "standard" ? "its recording, processing stages and undo history were removed" : "its processing stages and undo history were removed";
+  const what =
+    mode === "standard"
+      ? "its recording, processing stages and undo history were removed"
+      : scan.thinned
+        ? "the camera frames Standard quality skips, its processing stages and undo history were removed"
+        : "its processing stages and undo history were removed";
   const lines = [`To free space${last && when ? ` (${when(last)})` : ""}, ${what}${total ? `: ${fmtBytes(total)} freed` : ""}.`];
+  if (mode === "engineering" && scan.thinned) lines.push(thinnedLine(scan.thinned));
   lines.push(
     mode === "standard"
       ? "The mesh can be edited, measured and exported. It cannot be made again, merged or refined."
-      : "Make mesh rebuilds the stages from the recording.",
+      : scan.thinned
+        ? "Make mesh rebuilds the stages from the recording; at Standard quality it gives the same mesh as before."
+        : "Make mesh rebuilds the stages from the recording.",
   );
   const back = disk ? disk.stages_bytes + disk.undo : 0;
   if (disk && disk.stages_bytes > 0) lines.push(`The mesh was made again since: stage files take ${fmtBytes(disk.stages_bytes)} again.`);
@@ -139,6 +192,7 @@ export function remakeBlock(scan: Pick<Scan, "keep" | "freed" | "has_recording" 
 
 const PART_LABEL: Record<KeepPart["part"], string> = {
   recording: "The recording (camera frames, motion sensor, events)",
+  frames: "The camera frames Standard quality skips",
   stages: "The processing stages",
   undo: "The undo history",
 };
@@ -153,14 +207,28 @@ export function removeLines(plan: Pick<ScanKeepPlan, "remove">): string[] {
  * to the "Frees" number (the cache file that stays is not counted: it is on disk before and after).
  */
 export function writeLines(plan: Pick<ScanKeepPlan, "writes" | "kept_step_bytes">): string[] {
-  const out = plan.writes.map((w) =>
-    w.bytes < 0
-      ? `The processing record is written again without the history: ${fmtBytes(-w.bytes)} smaller`
-      : `The processing record is written again: ${fmtBytes(w.bytes)} larger`,
-  );
+  const what: Record<ScanKeepPlan["writes"][number]["what"], [string, string]> = {
+    state: ["The processing record is written again without the history", "The processing record is written again"],
+    frames_list: ["The list of frames is written again with the frames that stay", "The list of frames is written again"],
+    meta: ["The recording's notes are written again", "The recording's notes say what it holds now"],
+  };
+  const out = plan.writes.map((w) => {
+    const [smaller, larger] = what[w.what] ?? what.state;
+    return w.bytes < 0 ? `${smaller}: ${fmtBytes(-w.bytes)} smaller` : `${larger}: ${fmtBytes(w.bytes)} larger`;
+  });
   if (plan.kept_step_bytes > 0) out.push(`The current mesh stays as the starting point for new edits: ${fmtBytes(plan.kept_step_bytes)} (not freed)`);
   return out;
 }
+
+/**
+ * R3: what Best quality loses once only the frames Standard uses are kept, measured on the simulated scans
+ * (VALIDATION.md, "Keeping only the frames Standard uses"). Best then works from the frames that stay and gives the
+ * Standard mesh.
+ */
+export const BEST_LOSS =
+  "Best quality from every recorded frame: it then works from the frames that stay and gives the same mesh as Standard. " +
+  "On the simulated test scans that meant 3.6 to 4.9 % less surface within 0.5 mm of the true shape and half the laser " +
+  "points; the median error was 0.019 mm larger on the car panel and 0.011 mm smaller on the bracket.";
 
 const LOSS: Record<KeepLoss, string> = {
   undo: "Undo the edits made so far. The mesh stays as it is now, and new edits can be undone.",
@@ -169,6 +237,7 @@ const LOSS: Record<KeepLoss, string> = {
   merge: "Merge this scan with others. Aligning still works.",
   refine: "Refine with lasers, or from the images.",
   frames: "Go back to the camera frames to check a number.",
+  best: BEST_LOSS,
 };
 
 /** What can no longer be done afterwards, one sentence each. */
@@ -221,9 +290,22 @@ export function confirmStandard(what: { name?: string; scans?: number }, bytes: 
   };
 }
 
+/** R3, the second question for "the frames Standard quality uses": the title and the words. */
+export function confirmThin(what: { name?: string; scans?: number }, bytes: number): { title: string; text: string; button: string } {
+  const whose = what.name ? `of “${what.name}”` : `of ${what.scans ?? 0} scan${what.scans === 1 ? "" : "s"}`;
+  return {
+    title: "Delete the frames Standard quality skips?",
+    text:
+      `The camera frames Standard quality skips ${whose} will be deleted from disk (${fmtBytes(bytes)} freed in all). This ` +
+      "cannot be undone. Make mesh at Standard quality still gives the same mesh; Best quality will work from the frames " +
+      "that stay, so it gives the Standard mesh too.",
+    button: "Delete the skipped frames",
+  };
+}
+
 /** What the toast says once it is done. */
-export function doneLine(freed: number, mode: KeepMode, name?: string): string {
-  const keeps = mode === "standard" ? "its result only" : "its recording and its result";
+export function doneLine(freed: number, mode: KeepMode, name?: string, thin = false): string {
+  const keeps = mode === "standard" ? "its result only" : thin ? "the frames Standard quality uses and its result" : "its recording and its result";
   return name ? `Freed ${fmtBytes(freed)}. “${name}” now keeps ${keeps}.` : `Freed ${fmtBytes(freed)}.`;
 }
 

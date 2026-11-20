@@ -2332,10 +2332,10 @@ type ProjectKeepResult = { project_id: string; to: KeepMode; freed_bytes: number
 
 | Method and path | Body | Returns |
 |---|---|---|
-| `GET /api/projects/{pid}/scans/{sid}/keep?mode=` | | `ScanKeepPlan`; writes nothing (no processing state is made or taken over, no cache file is rebuilt); 422 for an unknown mode, 404 for an unknown scan |
-| `POST /api/projects/{pid}/scans/{sid}/keep` | `{mode, confirm?: bool}` | `ScanKeepResult`; 409 with the plan's refusal, 409 "removing this scan's recording cannot be undone" without `confirm` when the plan says `confirm`, 409 "N files could not be removed ... the scan still opens" when some files were held open |
-| `GET /api/projects/{pid}/keep?mode=` | | `ProjectKeepPlan` |
-| `POST /api/projects/{pid}/keep` | `{mode, confirm?: bool, scans?: string[]}` | `ProjectKeepResult`: every scan that can move moves; the others are listed with the reason; 409 without `confirm` when one would lose its recording |
+| `GET /api/projects/{pid}/scans/{sid}/keep?mode=&thin=` | | `ScanKeepPlan`; writes nothing (no processing state is made or taken over, no cache file is rebuilt); 422 for an unknown mode, 404 for an unknown scan |
+| `POST /api/projects/{pid}/scans/{sid}/keep` | `{mode, confirm?: bool, thin?: bool}` | `ScanKeepResult`; 409 with the plan's refusal, 409 "removing this scan's recording cannot be undone" without `confirm` when the plan says `confirm`, 409 "N files could not be removed ... the scan still opens" when some files were held open |
+| `GET /api/projects/{pid}/keep?mode=&thin=` | | `ProjectKeepPlan` |
+| `POST /api/projects/{pid}/keep` | `{mode, confirm?: bool, scans?: string[], thin?: bool}` | `ProjectKeepResult`: every scan that can move moves; the others are listed with the reason; 409 without `confirm` when one would lose its recording |
 
 ### Rules
 
@@ -2345,3 +2345,22 @@ type ProjectKeepResult = { project_id: string; to: KeepMode; freed_bytes: number
 - **After freeing:** edits, undo of new edits, fits, the Check answer, sections, the comparison, the laser map, the report and the downloads work as before; the deviation map starts again from the kept mesh; `process/trajectory.json` reads `result/trajectory.csv` when the track stage's is gone (its `raw` is then the result's path, `straightened` null). Refusals, in plain words: a stage on its own (Straighten, Fuse, Refine with lasers, Refine from the images) without its stage files: 409 "the stage files this needs were removed to free space" (`engineering`: "make the mesh again ... to rebuild them"); everything that reads the frames (Make mesh, Track, Straighten, Fuse, Refine from the images, a recipe with scope `all`) without the recording: 409 "this scan's recording was removed to free space ..."; Merge: 409 "... has no recording: it was removed to free space"; undo past the kept mesh: 409 "nothing to undo: the earlier steps were removed to free space". Align still works (from the meshes; without a recording, a markerless scan's tags are not looked for).
 - **Made again:** a scan freed to `engineering` and then processed has stage folders and undo history again. `keep` still says what was removed and `freed` when; what is on disk now is `GET .../disk` and `has_recording`.
 - **"Refine with lasers"** needs no recording: only the base stage's mesh and laser points (a merged scan can be refined).
+
+### Only the frames Standard quality uses (R3)
+
+`thin=true` on the four routes above, with `mode=engineering` only (any other mode: 422 "keeping only the frames Standard quality uses goes with keeping the recording and the result"). It removes what `engineering` removes and the camera frames Standard quality skips: with the default `process.standard_frame_rate = 30`, every 2nd frame of a 60 frames a second recording. The mode stays `engineering` (every rule above for it holds: Make mesh, Track and the stages work as there).
+
+- **What stays:** the frames Standard picks (positions `0, step, 2 step, ...`, the same as `ohs.app.process` picks them, cuts included) with their own `index`, `t_host` and file name; `imu.csv`, `events.csv`, `calibration.json` and `ground_truth/` byte for byte. `frames.csv` is written again with exactly those rows (the same bytes per row); `meta.json` gets `n_frames` and `thinned: {fps, fps_before, step, frames, frames_before}`; the scan entry gets the same as `thinned` (with `when`) and its `n_frames`, and its `freed` record `thin: true`.
+- **The promise:** Standard quality on the thinner recording (its rate is now about 30, so its step is 1) processes the same frames with the same motion sensor samples and gives the same mesh, every value bit for bit (every vertex's position, normal, sigma and looks, and every face); the camera path and the laser points are the same files byte for byte. `mesh.ply` may list the vertices in another order: two runs of the same full recording do too, on both compute paths. Best quality still runs, from the frames that stay, and then gives the Standard mesh; the dialog says beforehand what that costs (`loses` has `"best"`; the numbers are in `VALIDATION.md`, "Keeping only the frames Standard uses").
+- **Refused** (the plan's `refusal`, 409 on `POST`), because Standard would pick other frames from the thinner recording: frames picked by motion (`process.frame_motion_deg` > 0), `process.frame_step` other than 1, `process.standard_frame_rate = 0`, or a thinner recording whose rate would not give a step of 1. A recording at 30 frames a second or fewer: "Standard quality uses every one of them, so there are no frames to remove". A scan that keeps its result only: as for `engineering`.
+- **Asked twice:** the plan's `confirm` is true when frames would go; without `confirm: true` the move answers 409 "removing the frames Standard quality skips cannot be undone".
+- **Order:** the base and the mode (and `thinned`) as for `engineering`, then the shorter `frames.csv` (temporary file + rename: from then on the recording holds the frames that stay), then `meta.json` the same way, then the frame files, the undo files and the stage folders. A frame file left behind (held open) is no longer listed, so nothing reads it; the same move again removes it (`remove` then lists only those files) and does not write `meta.json` again.
+- **Thinned already:** with `thin=true` again, nothing more goes from the recording (`confirm` false; stage files that came back go as for `engineering`). `mode=full` stays refused.
+
+```ts
+// ScanKeepPlan gains: thin: boolean; thinned: { fps, fps_before, step, frames, frames_before } | null  (what the recording
+//   holds now and would hold afterwards; null when refused or without thin);
+//   remove[].part may be "frames"; writes[].what may be "frames_list" (negative) or "meta"; loses may have "best".
+// ProjectKeepPlan and ProjectKeepResult gain: thin: boolean.
+// Scan gains: thinned?: { when, fps, fps_before, step, frames, frames_before }; freed[].thin?: true.
+```

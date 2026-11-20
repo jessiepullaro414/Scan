@@ -5,7 +5,7 @@
  */
 import type { Project, Scan } from "../types.ts";
 import { HttpError } from "./host.ts";
-import { keepModeArg, MockKeep } from "./keep.ts";
+import { keepModeArg, keepThinArg, MockKeep } from "./keep.ts";
 
 let checks = 0;
 function check(ok: boolean, what: string): void {
@@ -85,5 +85,36 @@ try {
 } catch (e) {
   check(e instanceof HttpError && e.status === 422, "an unknown mode is a 422");
 }
+
+// R3: only the frames Standard quality uses (a 60 frames a second scan; "engineering" with thin)
+const p3: Project = { ...project, id: "p3", scans: [scan("f", { n_frames: 600, duration_s: 10 }), scan("t", { n_frames: 300, duration_s: 10 })] };
+const [f60, t30] = p3.scans;
+const b0 = k.scanDisk(p3, f60).bytes;
+const pt = k.plan(p3, f60, "engineering", true);
+check(pt.ok && pt.thin === true && pt.confirm && pt.loses.includes("best") && pt.keeps.includes("recording"), "thin plan");
+check(pt.thinned?.step === 2 && pt.thinned.frames === 300 && pt.thinned.frames_before === 600 && pt.thinned.fps === 30, `what it holds after: ${JSON.stringify(pt.thinned)}`);
+const fr = pt.remove.find((x) => x.part === "frames");
+check(!!fr && fr.files === 300 && fr.bytes > 0, "the frames it removes");
+check(pt.remove.reduce((s, x) => s + x.bytes, 0) - pt.writes.reduce((s, w) => s + w.bytes, 0) === pt.frees_bytes, "thin: the lines add up");
+check(pt.frees_bytes > k.plan(p3, f60, "engineering").frees_bytes && !k.plan(p3, f60, "engineering").confirm, "more than without, and only it asks twice");
+check(k.scanDisk(p3, f60).bytes === b0, "a thin plan changes nothing");
+throws(() => k.apply(p3, f60, "engineering", false, true), "cannot be undone", "thin: the second yes is needed");
+const rt = k.apply(p3, f60, "engineering", true, true);
+check(rt.freed_bytes === pt.frees_bytes && b0 - k.scanDisk(p3, f60).bytes === pt.frees_bytes, "thin: freed what it said");
+check(f60.keep === "engineering" && f60.thinned?.fps === 30 && f60.n_frames === 300 && f60.has_recording === true && f60.freed?.at(-1)?.thin === true, "thinned, recorded");
+check(k.refusal(p3, f60, "remake") === null, "thinned: make mesh still works");
+const again3 = k.plan(p3, f60, "engineering", true);
+check(!again3.remove.some((x) => x.part === "frames") && !again3.confirm, "nothing left to thin");
+const p30 = k.plan(p3, t30, "engineering", true);
+check(!p30.ok && p30.refusal!.detail.includes("every one of them"), `30 frames a second: ${p30.refusal?.detail}`);
+const pp3 = k.projectPlan(p3, "engineering", true);
+check(pp3.thin === true && pp3.scans.find((x) => x.scan_id === "t")!.ok === false, "project thin plan");
+try {
+  keepThinArg("true", "standard");
+  check(false, "thin with standard is refused");
+} catch (e) {
+  check(e instanceof HttpError && e.status === 422 && e.detail.includes("recording and the result"), "thin with another mode: 422");
+}
+check(keepThinArg("true", "engineering") === true && keepThinArg(undefined, "standard") === false, "thin from a query");
 
 console.log(`mock keep.test: ${checks} checks passed`);

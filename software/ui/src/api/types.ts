@@ -76,17 +76,22 @@ export type Scan = {
   /** R2: what the user chose to keep on disk ("full" until space was freed); says what was removed. */
   keep?: KeepMode;
   /** R2: each time the scan's space was freed. */
-  freed?: { when: string; keep: KeepMode; bytes: number }[];
+  freed?: { when: string; keep: KeepMode; bytes: number; thin?: boolean }[];
   /** R2: whether the recording's frames are on disk now (false for a merged scan or one that keeps its result only). */
   has_recording?: boolean;
+  /** R3: present once the recording holds only the frames Standard quality uses (`fps` of them a second). */
+  thinned?: ThinnedRecording & { when: string };
 };
+
+/** R3: what a recording thinned to the frames Standard quality uses holds, and held before. */
+export type ThinnedRecording = { fps: number; fps_before: number; step: number; frames: number; frames_before: number };
 
 /** R2: what a scan keeps on disk, the lightest last. */
 export type KeepMode = "full" | "engineering" | "standard";
 /** R2: what freeing a scan's space would remove (sizes as R1 counts them). */
-export type KeepPart = { part: "recording" | "undo" | "stages"; bytes: number; files: number };
+export type KeepPart = { part: "recording" | "frames" | "undo" | "stages"; bytes: number; files: number };
 /** R2: what can no longer be done once the space is freed. */
-export type KeepLoss = "undo" | "stages" | "remake" | "merge" | "refine" | "frames";
+export type KeepLoss = "undo" | "stages" | "remake" | "merge" | "refine" | "frames" | "best";
 /** R2: what stays on disk. */
 export type KeepKept = "recording" | "result" | "laser_points" | "trajectory" | "report" | "calibration" | "features";
 
@@ -103,21 +108,26 @@ export type ScanKeepPlan = {
   /** What goes, gross per part. */
   remove: KeepPart[];
   /** What the move writes (signed bytes): `frees_bytes` = the sum of `remove` minus the sum of `writes`. */
-  writes: { what: "state"; bytes: number }[];
+  writes: { what: "state" | "frames_list" | "meta"; bytes: number }[];
   /** The current step's cache file that stays as the base (only when the result does not hold it); not freed. */
   kept_step_bytes: number;
   loses: KeepLoss[];
   keeps: KeepKept[];
-  /** Standard removes the recording: ask once more, then send `confirm: true`. */
+  /** Standard removes the recording, thinning removes frames: ask once more, then send `confirm: true`. */
   confirm: boolean;
+  /** R3: the plan keeps only the frames Standard quality uses (`thin=true`, with "engineering"). */
+  thin?: boolean;
+  /** R3: with `thin`, what the recording holds now and would hold afterwards (null when refused). */
+  thinned?: ThinnedRecording | null;
 };
 
 /** R2: `GET /api/projects/{pid}/keep?mode=`. */
-export type ProjectKeepPlan = { project_id: string; to: KeepMode; scans: ScanKeepPlan[]; frees_bytes: number; n_scans: number; confirm: boolean };
+export type ProjectKeepPlan = { project_id: string; to: KeepMode; thin?: boolean; scans: ScanKeepPlan[]; frees_bytes: number; n_scans: number; confirm: boolean };
 export type ScanKeepResult = { scan: Scan; freed_bytes: number; planned_bytes: number };
 export type ProjectKeepResult = {
   project_id: string;
   to: KeepMode;
+  thin?: boolean;
   results: { scan_id: string; name: string; ok: boolean; freed_bytes: number; error?: { detail: string; hint: string | null } }[];
   freed_bytes: number;
 };

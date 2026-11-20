@@ -85,7 +85,7 @@ function ScanRow({ project, scan, disk, onFreeSpace }: { project: Project; scan:
   const recorded = hasRecording(scan);
   // R2: a scan that keeps its result only has no frames to make its mesh from again
   const remakable = canRemake(scan);
-  const kept = keepLabel(scan.keep);
+  const kept = keepLabel(scan.keep, scan.thinned); // R3: and at what rate its recording is kept
   const mergedFrom = mergedFromText(scan);
   const own = hasResult ? scanHealthOf(scan.result?.report) : null;
   const health = scanHealthLine(own);

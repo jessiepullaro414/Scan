@@ -978,7 +978,49 @@ have not been measured (roadmap question 9).
 - **Test first:** after Engineering, Make mesh gives the bit-identical mesh; after Standard,
   edits, fits, the Check answer and downloads work and Make mesh answers with the clear refusal.
 
-### R3. Keep only the frames the mesh used (M, an experiment)
+### [x] R3. Keep only the frames the mesh used (M, an experiment)
+- **Done 2026-11-20; the stop rule is met** (the task as written follows below). "Recording and
+  result" can also remove the frames Standard quality skips (`thin: true` on the keep routes; in
+  the dialog a third choice, "Keep the frames Standard quality uses, and the result", between
+  R2's two).
+  - **The same mesh.** On two simulated scans recorded at 60 frames a second (bracket, car
+    panel) the Standard mesh from the thinned recording equals the one from the full recording
+    in every value of every vertex and in every face, on the GPU and the CPU path; the camera
+    path and the laser points are the same bytes (`VALIDATION.md`, "Keeping only the frames
+    Standard uses"). The file may list the vertices in another order: two runs of the same full
+    recording do too.
+  - **How.** The frames that stay keep their own index, time stamp and file name; the motion
+    sensor, the events, the calibration and the ground truth are not touched. The thinner
+    recording measures 30 frames a second, so Standard takes every frame of it: the same frames.
+    The recording halves (147.1 to 73.6 MB on the bracket).
+  - **Best quality still runs** and then gives the Standard mesh. The dialog says so before,
+    in numbers: 3.6 to 4.9 % less surface within 0.5 mm of the true shape and half the laser
+    points on the two test scans.
+  - **R2's promises hold:** the plan writes nothing and "Frees X" is the true net drop; it asks
+    once more ("Delete the frames Standard quality skips? ... This cannot be undone"); a busy
+    scan is not touched; a failure half way leaves a recording that opens, and the same choice
+    again finishes it. Refused in plain words where Standard would pick other frames (frames
+    picked by motion, a frame step other than 1, no rate limit) and on a recording of 30 frames
+    a second or fewer ("Standard quality uses every one of them, so there are no frames to
+    remove"): that is every example project today. The scan and its `meta.json` say what the
+    recording holds now. New scans stay kept in full (D4).
+  - Guard: `tests/test_server_keep_thin.py` (6, both paths), `ui/src/lib/keepMode.test.ts`
+    (128 checks), `ui/src/api/mock/keep.test.ts` (37).
+  - *Found in review:* the bit-for-bit test failed once on the GPU path with "faces differ".
+    The comparison was at fault: that mesh holds two vertices with the same values in every
+    bit, and which one a file lists first is chance. Faces are now compared by their vertices'
+    values; three runs in a row pass.
+  - *Checked in the app* on a throwaway project with one 60 frames a second scan (120 frames):
+    the dialog planned 155,318,253 bytes and the move freed exactly that; the row went from
+    277.6 MB to 129.5 MB and reads "Keeps recording (30 frames a second) and result"; 60 frame
+    files stay. Make mesh at Standard afterwards: the camera path is the same bytes, and every
+    one of the 389,649 vertices has the same position, sigma and count of looks. 12 of the
+    769,362 faces differ, all of them faces the default recipe's hole filling made (24 normals
+    with them): hole filling triangulates by vertex number, which changes from run to run with
+    or without thinning (`MAINTENANCE_PLAN.md`, F15).
+  - **Left:** the Process page does not repeat the Best warning beside the Best choice on a
+    thinned scan; the HTML report does not say how many frames a recording holds; real 60 frames
+    a second recordings (question 9).
 - **What:** Standard quality uses 30 of the 60 frames a second. A recording thinned to those
   frames (still lossless) would halve Engineering.
 - **Stop rule:** adopted only if the Standard mesh from the thinned recording is bit-identical,

@@ -300,6 +300,7 @@ class KeepBody(BaseModel):  # FEATURE_PLAN R2: what a scan keeps (the mode is ch
     mode: Optional[str] = None
     confirm: bool = False  # Standard removes the recording for good: the user said yes twice
     scans: Optional[list[str]] = None  # the project route: only these scans (default: every scan that can move)
+    thin: bool = False  # R3, with mode "engineering": also remove the frames Standard quality skips
 
 
 class ReferenceRenameBody(BaseModel):
@@ -596,20 +597,20 @@ def create_app(config: Any = None, *, projects_dir: Any = None, static_dir: Any 
     keep = KeepManager(st)
 
     @app.get("/api/projects/{pid}/keep")
-    def projects_keep_plan(pid: str, mode: Optional[str] = None) -> JSONResponse:
-        return _json(keep.project_plan(pid, mode))
+    def projects_keep_plan(pid: str, mode: Optional[str] = None, thin: bool = False) -> JSONResponse:
+        return _json(keep.project_plan(pid, mode, thin))
 
     @app.post("/api/projects/{pid}/keep")
     def projects_keep(pid: str, body: KeepBody) -> JSONResponse:
-        return _json(keep.project_apply(pid, body.mode, body.confirm, body.scans))
+        return _json(keep.project_apply(pid, body.mode, body.confirm, body.scans, body.thin))
 
     @app.get("/api/projects/{pid}/scans/{sid}/keep")
-    def scan_keep_plan(pid: str, sid: str, mode: Optional[str] = None) -> JSONResponse:
-        return _json(keep.plan(pid, sid, mode))
+    def scan_keep_plan(pid: str, sid: str, mode: Optional[str] = None, thin: bool = False) -> JSONResponse:
+        return _json(keep.plan(pid, sid, mode, thin))
 
     @app.post("/api/projects/{pid}/scans/{sid}/keep")
     def scan_keep(pid: str, sid: str, body: KeepBody) -> JSONResponse:
-        return _json(keep.apply(pid, sid, body.mode, body.confirm))
+        return _json(keep.apply(pid, sid, body.mode, body.confirm, body.thin))
 
     @app.patch("/api/projects/{pid}")
     def projects_rename(pid: str, body: NameBody) -> JSONResponse:

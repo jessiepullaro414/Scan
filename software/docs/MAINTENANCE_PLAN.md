@@ -1952,6 +1952,19 @@ Found 2026-11-19 by the study for F13 (the agent's numbers, not re-measured in r
     0.015° limit). Neither is switched on.
   - **Second round, running:** `flip_average` as an option that is off; a guard against the
     velocity runaway on the Open3D backend; then every scene again.
+### [ ] F15. Hole filling triangulates by vertex number, so two runs can fill a hole differently
+- **Found 2026-11-20** in the review of R3 (`FEATURE_PLAN.md`). A scan made twice from the same
+  frames (GPU path, default recipe) had the same 389,649 vertices with the same position, sigma
+  and count of looks, but 12 of its 769,362 faces differed, with 24 vertex normals (by up to
+  0.023): all 12 are faces hole filling made (1,132 of them in that mesh).
+- **Why:** the GPU path lists the same vertices in a different order from run to run, and
+  `fill_holes` (`ohs/mesh`) picks among equally good triangulations by vertex number.
+- **What it means:** nothing measured changes; a filled patch is marked "not measured" either
+  way. But "the same mesh, bit for bit" holds for a stage's mesh, not for a result with filled
+  holes, and a byte comparison of two results fails.
+- **To do:** break ties by position (as the Check's samples now are), with a test that shuffles
+  the vertices and expects the same faces. The same question for simplifying and smoothing.
+
 ## Reviewed and fine: leave alone
 
 So nobody spends a session on these again.

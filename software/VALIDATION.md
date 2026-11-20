@@ -3366,6 +3366,42 @@ Neither is switched on.
 **Next:** a guard against the velocity runaway in directions the geometry does not hold, on the
 Open3D backend, then flip-average again.
 
+## Keeping only the frames Standard uses (R3, 2026-11-20)
+
+Setup: simulated 1280x800 recordings at 60 frames a second, 120 frames (2 s): bracket (seed 0) and
+car panel (seed 1); every simulated and example recording before was 30 frames a second. Processed
+with the app's Standard and Best parameters. The thinned copy holds the frames at positions 0, 2,
+4, ... with their own indices and time stamps; motion sensor, events, calibration and ground truth
+unchanged.
+
+| Scene, path | Standard mesh, full against thinned | Camera path and laser points |
+|---|---|---|
+| Bracket, GPU | the same in every value (389,973 vertices, 768,590 faces) | the same bytes |
+| Car panel, GPU | the same (407,381 / 805,906) | the same bytes |
+| Bracket, CPU | the same (387,125 / 760,397) | the same bytes |
+| Car panel, CPU | the same (413,079 / 817,611; 2 thinned runs, 2 full runs) | the same bytes |
+
+"The same" means every vertex's position, normal, sigma and count of looks bit for bit, and every
+face; `mesh.ply` lists the vertices in a different order from run to run on both paths, with the
+full recording too. Recording size: 147.1 to 73.6 MB (bracket), 144.9 to 72.5 MB (car panel).
+
+Best quality from every frame, against Best from the thinned recording (which then gives the
+Standard mesh). Error along each vertex's normal to the true surface, whole mesh, GPU path:
+
+| | Area within 0.5 mm | Median error | More than 0.3 mm off | Laser points | Camera path RMS |
+|---|---|---|---|---|---|
+| Bracket, every frame | 263,735 mm² | 0.100 mm | 9.5 % | 65,686 | 1.03 mm |
+| Bracket, thinned | 254,333 mm² (-3.6 %) | 0.089 mm | 8.6 % | 33,875 | 0.74 mm |
+| Car panel, every frame | 302,255 mm² | 0.067 mm | 7.5 % | 101,770 | 0.22 mm |
+| Car panel, thinned | 287,564 mm² (-4.9 %) | 0.086 mm | 11.7 % | 51,237 | 0.20 mm |
+
+In the app (a 120-frame scan at 60 frames a second, default recipe): planned and freed
+155,318,253 bytes; after Make mesh at Standard the camera path is the same bytes and all 389,649
+vertices have the same position, sigma and looks; 12 of 769,362 faces differ, all made by hole
+filling (MAINTENANCE_PLAN F15: not the thinning).
+
+Limits: two simulated scenes, 2 s each; real 60 frames a second recordings may differ.
+
 ## What the metrics mean
 
 - **Stereo errors** compare the estimated raw intrinsics/extrinsics (`K1`, `K2`, `R`, `T`) with

@@ -41,17 +41,43 @@ processing, an align, a merge) is not moved, and its cache is not touched by the
 A scan moved to a lighter mode and processed again has stage folders and undo history again: the
 mode then says what was removed and when (``freed``); what is on disk now is R1's report and the
 scan's ``has_recording``. Freeing again removes what came back.
+
+**Only the frames Standard uses** (FEATURE_PLAN R3, ``thin: true``, with ``engineering`` only): what
+``engineering`` removes, and the camera frames Standard quality skips (every 2nd of a 60 frames a second
+recording at the default 30). The frames that stay keep their own index, time stamp and file name; the
+motion sensor (``imu.csv``), the events, the calibration and the ground truth stay as they are, so
+Standard quality picks the same frames from the thinner recording (its rate is now about 30, so its step
+is 1) and gives the same mesh, every value bit for bit (VALIDATION.md, "Keeping only the frames
+Standard uses"). Best quality still runs, from the frames that stay: it then gives the Standard mesh.
+``frames.csv`` is written again with the rows of the frames that stay (the same bytes per row),
+``meta.json`` gets ``thinned`` (``fps``, ``fps_before``, ``step``, ``frames``, ``frames_before``) and its
+``n_frames``, the scan entry ``thinned`` (the same, and ``when``) and ``n_frames``. It cannot be undone:
+the request must say ``confirm: true``. Refused, in plain words, when Standard quality would pick other
+frames from the thinner recording: frames picked by motion (``process.frame_motion_deg`` > 0), a
+``process.frame_step`` other than 1, no rate limit (``process.standard_frame_rate`` = 0), or a recording
+it does not slow down (30 frames a second or fewer: nothing to remove).
+
+*Order:* the processing state as for ``engineering``, the mode and ``thinned`` into ``project.json``,
+the shorter ``frames.csv`` (temporary file + rename: from then on the recording holds the frames that stay
+and nothing else reads the others), ``meta.json`` the same way, then the frame files, the undo files and
+the stage folders. A frame file left behind (held open) is not listed in ``frames.csv``; freeing again
+with ``thin: true`` removes it.
 """
 from __future__ import annotations
 
+import csv
+import io
+import json
 import logging
 import os
 import stat
 import threading
 import time
+import uuid
 from pathlib import Path
 from typing import Any
 
+from ohs.io.recording import effective_frame_step
 from ohs.server.disk import UNDO_DIRS, _is_link, folder_bytes, folder_use
 from ohs.server.processing import json_file_size
 from ohs.server.projects import KEEP_MODES
@@ -159,6 +185,114 @@ def _mode(mode: Any) -> str:
     return str(mode)
 
 
+def _thin_arg(mode: str, thin: Any) -> bool:
+    thin = bool(thin)
+    if thin and mode != "engineering":
+        raise ApiError(422, "keeping only the frames Standard quality uses goes with keeping the recording and the result",
+                       "send mode: \"engineering\" with thin: true")
+    return thin
+
+
+def _ordinal(n: int) -> str:
+    return {2: "2nd", 3: "3rd"}.get(n, f"{n}th")
+
+
+def _write_bytes(path: Path, data: bytes) -> None:
+    """Replace a file with ``data`` (a temporary file next to it, then a rename: never half a file)."""
+    tmp = path.with_name(f"{path.name}.tmp-{uuid.uuid4().hex[:8]}")
+    try:
+        tmp.write_bytes(data)
+        os.replace(tmp, path)
+    finally:
+        if tmp.exists():
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
+
+
+#: what keeping only the frames Standard uses can not promise, and what to do instead
+_SAME_MESH = "so the thinner recording would not give the same mesh"
+_THIN_HINT = "keep the recording and the result without thinning, or change the setting back first"
+
+
+def _thinning(sd: Path, entry: dict, cfg: Any) -> dict:
+    """R3, read-only: what keeping only the frames Standard uses would do to the scan's recording.
+
+    ``{"refusal": (detail, hint) | None, "files": [frame files to remove], "frames_csv": bytes | None,
+    "meta": bytes | None, "writes": [...], "info": {...} | None}``. Reads only."""
+    out: dict[str, Any] = {"refusal": None, "files": [], "frames_csv": None, "meta": None, "writes": [], "info": None}
+    rec = sd / "recording"
+    fcsv = rec / "frames.csv"
+    if not fcsv.is_file():
+        return out  # no recording: the engineering refusal says so
+    p = cfg.process
+    if float(p.frame_motion_deg) > 0:
+        out["refusal"] = (f"Standard quality here picks frames by motion (process.frame_motion_deg = {float(p.frame_motion_deg):g}), "
+                          f"{_SAME_MESH}", _THIN_HINT)
+        return out
+    if int(p.frame_step) != 1:
+        out["refusal"] = (f"Standard quality here uses every {_ordinal(int(p.frame_step))} frame (process.frame_step = "
+                          f"{int(p.frame_step)}), {_SAME_MESH}", _THIN_HINT)
+        return out
+    rate = float(p.standard_frame_rate)
+    if not rate > 0:
+        out["refusal"] = (f"Standard quality here uses every frame (process.standard_frame_rate = 0): it skips none, {_SAME_MESH} "
+                          "if any were removed", _THIN_HINT)
+        return out
+    raw = fcsv.read_bytes()
+    lines = raw.splitlines(keepends=True)
+    if lines and not lines[-1].endswith((b"\n", b"\r")):
+        lines.pop()  # cut by a crash: the reader does not read it either
+    header, rows = lines[:1], lines[1:]
+    parsed = list(csv.DictReader(io.StringIO(b"".join(lines).decode("utf-8"), newline="")))
+    if len(parsed) != len(rows) or not all(r.get("file") and r.get("t_host") for r in parsed):
+        out["refusal"] = ("this scan's frames list has lines the app does not read as frames, so it cannot be thinned safely",
+                          "keep the recording and the result without thinning")
+        return out
+    times = [float(r["t_host"]) for r in parsed]
+    files = [r["file"] for r in parsed]
+    n = len(files)
+    step, fps = effective_frame_step(times, 1, rate)
+    thinned = entry.get("thinned") if isinstance(entry.get("thinned"), dict) else None
+    listed = set(files)
+    # a frame file a failure half way left behind: no longer listed, so nothing reads it
+    orphans = [e.name for e in _entries(rec / "frames") if thinned and not _is_link(e) and not _is_dir(e)
+               and e.name not in listed]
+    meta_path = rec / "meta.json"
+    try:
+        meta = json.loads(meta_path.read_text(encoding="utf-8")) if meta_path.is_file() else {}
+    except (OSError, ValueError):
+        meta = None
+    if step > 1:
+        kept_times = times[::step]
+        step_after, fps_after = effective_frame_step(kept_times, 1, rate)
+        if step_after != 1:
+            out["refusal"] = ("Standard quality would not pick the same frames from the thinner recording, "
+                              f"{_SAME_MESH}", "keep the recording and the result without thinning")
+            return out
+        info = {"fps": round(float(fps_after or 0.0), 3), "fps_before": round(float(fps or 0.0), 3), "step": int(step),
+                "frames": len(kept_times), "frames_before": n}
+        out["files"] = [f for k, f in enumerate(files) if k % step] + orphans
+        out["frames_csv"] = b"".join(header + rows[::step])
+    elif thinned is None:
+        out["refusal"] = (f"this recording has {fps or 0:.0f} frames a second: Standard quality uses every one of them, so "
+                          "there are no frames to remove", "keep the recording and the result without thinning, or the result only")
+        return out
+    else:  # thinned before: what a failure half way left
+        info = {k: thinned[k] for k in ("fps", "fps_before", "step", "frames", "frames_before") if k in thinned}
+        out["files"] = orphans
+    if meta is not None and (step > 1 or "thinned" not in meta):
+        meta = {**meta, "n_frames": int(info.get("frames", n)), "thinned": info}
+        out["meta"] = json.dumps(meta, indent=2, default=str).encode("utf-8")
+    out["info"] = info
+    if out["frames_csv"] is not None:
+        out["writes"].append({"what": "frames_list", "bytes": len(out["frames_csv"]) - len(raw)})
+    if out["meta"] is not None:
+        out["writes"].append({"what": "meta", "bytes": len(out["meta"]) - _file_use(meta_path)[0]})
+    return out
+
+
 class KeepManager:
     """``GET`` / ``POST /api/projects/{pid}/scans/{sid}/keep`` and ``/api/projects/{pid}/keep``."""
 
@@ -202,9 +336,9 @@ class KeepManager:
         out += [(Path(e.path), "stages", True) for e in dirs if e.name not in UNDO_DIRS]
         return out
 
-    def _plan(self, pid: str, sid: str, mode: str) -> tuple[dict, list[tuple[Path, str, bool]], bool]:
-        """``(plan, what goes, the base stays in result/)``. Reads only: no file is written, no processing
-        state is made or taken over, and a missing cache file is not rebuilt."""
+    def _plan(self, pid: str, sid: str, mode: str, thin: bool = False) -> tuple[dict, list[tuple[Path, str, bool]], bool, dict]:
+        """``(plan, what goes, the base stays in result/, the thinning)``. Reads only: no file is written, no
+        processing state is made or taken over, and a missing cache file is not rebuilt."""
         entry = self.st.projects.scan_entry(pid, sid)  # 404 for an unknown project or scan
         sd = self.st.projects.scan_dir(pid, sid)
         cur = entry.get("keep") if entry.get("keep") in MODES else "full"
@@ -213,6 +347,7 @@ class KeepManager:
         refusal = self._busy(pid, sid, entry)
         items: list[tuple[Path, str, bool]] = []
         writes: list[dict] = []
+        th: dict = {"refusal": None, "files": [], "frames_csv": None, "meta": None, "writes": [], "info": None}
         had_edits, in_result, kept_bytes = False, False, 0
         if refusal is None:  # a busy scan's cache is left alone, even by the plan
             sp = self.st.processing.peek(pid, sid)  # None: no processing state (nothing to keep of it)
@@ -232,25 +367,33 @@ class KeepManager:
                         writes.append({"what": "state", "bytes": json_file_size(new_state) - old})
                     had_edits = int(sp.state["cursor"]) > 0 or len(sp.state["edits"]) > 0
             items = self._items(sd, mode, kept)
+            if thin and cur != "standard":
+                th = _thinning(sd, entry, self.st.cfg)
+                # the frames go first, after the shorter frames list: nothing reads them from then on
+                items = [(sd / "recording" / "frames" / f, "frames", False) for f in th["files"]] + items
+                writes += th["writes"]
         parts: dict[str, list[int]] = {}
         for path, part, is_dir in items:
             b, n = folder_use(path) if is_dir else _file_use(path)
             parts.setdefault(part, [0, 0])
             parts[part][0] += b
             parts[part][1] += n
-        remove = [{"part": p, "bytes": parts[p][0], "files": parts[p][1]} for p in ("recording", "undo", "stages")
+        remove = [{"part": p, "bytes": parts[p][0], "files": parts[p][1]} for p in ("recording", "frames", "undo", "stages")
                   if p in parts and parts[p][0] > 0]
         writes = [w for w in writes if w["bytes"] != 0]
         # the net drop of the scan folder: what goes, less what the move writes (R1's number now minus after)
         frees = sum(r["bytes"] for r in remove) - sum(w["bytes"] for w in writes)
         if refusal is None:
-            refusal = self._refusal(entry, cur, mode, has_rec, has_mesh, frees)
+            refusal = self._refusal(entry, cur, mode, has_rec, has_mesh, frees, th["refusal"])
+        frames = "frames" in parts and parts["frames"][0] > 0
         loses: list[str] = []
         if had_edits:
             loses.append("undo")
         stages = "stages" in parts and parts["stages"][0] > 0
         if mode == "engineering" and stages:
             loses.append("stages")
+        if frames and th["frames_csv"] is not None:
+            loses.append("best")  # Best quality then works from the frames that stay
         if mode == "standard":
             if has_rec:
                 loses += ["remake", "merge", "frames"]
@@ -269,11 +412,13 @@ class KeepManager:
                 "bytes": folder_bytes(sd), "frees_bytes": frees if ok else 0,
                 "remove": remove if ok else [], "writes": writes if ok else [],
                 "kept_step_bytes": kept_bytes if ok else 0, "loses": loses, "keeps": keeps,
-                "confirm": mode == "standard" and "recording" in parts}
-        return jsonable(plan), items, in_result
+                "confirm": (mode == "standard" and "recording" in parts) or frames,
+                "thin": thin, "thinned": th["info"] if ok and thin else None}
+        return jsonable(plan), items, in_result, th
 
     @staticmethod
-    def _refusal(entry: dict, cur: str, mode: str, has_rec: bool, has_mesh: bool, frees: int) -> tuple[str, str] | None:
+    def _refusal(entry: dict, cur: str, mode: str, has_rec: bool, has_mesh: bool, frees: int,
+                 thin_refusal: tuple[str, str] | None = None) -> tuple[str, str] | None:
         if mode == "full":
             if cur == "full":
                 return ("this scan keeps everything already",
@@ -291,20 +436,24 @@ class KeepManager:
         if mode == "standard" and not has_mesh:
             return ("this scan has no mesh yet: keeping its result only would leave nothing of it",
                     "make its mesh first, or keep the recording and the result")
+        if thin_refusal is not None:
+            return thin_refusal
         if frees <= 0:
             return ("nothing to free: this scan would not take less space afterwards",
                     "it has none of what this choice removes on disk")
         return None
 
     # ------------------------------------------------------------------ one scan
-    def plan(self, pid: str, sid: str, mode: Any) -> dict:
-        """``GET .../scans/{sid}/keep?mode=``: what moving the scan would free and what it would cost. Changes
-        nothing on disk."""
-        return self._plan(pid, sid, _mode(mode))[0]
+    def plan(self, pid: str, sid: str, mode: Any, thin: Any = False) -> dict:
+        """``GET .../scans/{sid}/keep?mode=&thin=``: what moving the scan would free and what it would cost.
+        Changes nothing on disk."""
+        mode = _mode(mode)
+        return self._plan(pid, sid, mode, _thin_arg(mode, thin))[0]
 
-    def apply(self, pid: str, sid: str, mode: Any, confirm: bool = False) -> dict:
+    def apply(self, pid: str, sid: str, mode: Any, confirm: bool = False, thin: Any = False) -> dict:
         """``POST .../scans/{sid}/keep``: move the scan; see the module docstring."""
         mode = _mode(mode)
+        thin = _thin_arg(mode, thin)
         errors: list[str] = []
         sd = self.st.projects.scan_dir(pid, sid)
         with self.st._lock:  # no job starts on the scan meanwhile
@@ -315,20 +464,36 @@ class KeepManager:
             lock = sp.lock if sp is not None else threading.RLock()
             with lock:  # fits, checks and undo wait for the move
                 before = folder_bytes(sd)  # before anything: the number the row shows
-                plan, items, in_result = self._plan(pid, sid, mode)
+                plan, items, in_result, th = self._plan(pid, sid, mode, thin)
                 if plan["refusal"] is not None:
                     raise ApiError(409, plan["refusal"]["detail"], plan["refusal"]["hint"])
                 if plan["confirm"] and not confirm:
-                    raise ApiError(409, "removing this scan's recording cannot be undone",
-                                   "ask once more, then send confirm: true")
+                    what = "the frames Standard quality skips" if mode == "engineering" else "this scan's recording"
+                    raise ApiError(409, f"removing {what} cannot be undone", "ask once more, then send confirm: true")
                 if sp is not None:
                     self.st.processing.keep_current_only(sp, in_result)
                 entry = self.st.projects.scan_entry(pid, sid)
-                self.st.projects.update_scan(pid, sid, keep=mode)
+                fields: dict[str, Any] = {"keep": mode}
+                if th["frames_csv"] is not None:  # R3: say what the recording holds before it holds less
+                    fields.update(thinned={"when": now_iso(), **th["info"]}, n_frames=int(th["info"]["frames"]))
+                self.st.projects.update_scan(pid, sid, **fields)
+                rec = sd / "recording"
+                listed = th["frames_csv"] is None
+                try:
+                    if th["frames_csv"] is not None:
+                        _write_bytes(rec / "frames.csv", th["frames_csv"])
+                        listed = True
+                    if th["meta"] is not None:
+                        _write_bytes(rec / "meta.json", th["meta"])
+                except OSError as e:
+                    errors.append(f"{e.filename and Path(e.filename).name or 'frames.csv'}: {e.strerror or e}")
+                    if not listed:  # the recording holds every frame still: the scan says so, and the frames stay
+                        self.st.projects.update_scan(pid, sid, thinned=entry.get("thinned"), n_frames=entry.get("n_frames"))
+                        items = [it for it in items if it[1] != "frames"]
                 for path, _, is_dir in items:
                     _remove(path, is_dir, errors)
                 freed = max(0, before - folder_bytes(sd))
-                record = {"when": now_iso(), "keep": mode, "bytes": freed}
+                record = {"when": now_iso(), "keep": mode, "bytes": freed, **({"thin": True} if thin else {})}
                 scan = self.st.projects.update_scan(pid, sid, keep=mode, freed=[*(entry.get("freed") or []), record])
         if sp is not None:
             safe_call("publishing the process state", lambda: self.st.processing.publish(sp))
@@ -341,21 +506,26 @@ class KeepManager:
         return {"scan": scan, "freed_bytes": freed, "planned_bytes": plan["frees_bytes"]}
 
     # ------------------------------------------------------------------ a whole project
-    def project_plan(self, pid: str, mode: Any) -> dict:
-        """``GET /api/projects/{pid}/keep?mode=``: the plan of every scan; the totals count the scans that would move."""
+    def project_plan(self, pid: str, mode: Any, thin: Any = False) -> dict:
+        """``GET /api/projects/{pid}/keep?mode=&thin=``: the plan of every scan; the totals count the scans that
+        would move."""
         mode = _mode(mode)
-        scans = [self._plan(pid, e["id"], mode)[0] for e in self.st.projects.get(pid)["scans"]]
+        thin = _thin_arg(mode, thin)
+        scans = [self._plan(pid, e["id"], mode, thin)[0] for e in self.st.projects.get(pid)["scans"]]
         ok = [p for p in scans if p["ok"]]
-        return {"project_id": pid, "to": mode, "scans": scans, "frees_bytes": sum(p["frees_bytes"] for p in ok),
+        return {"project_id": pid, "to": mode, "thin": thin, "scans": scans, "frees_bytes": sum(p["frees_bytes"] for p in ok),
                 "n_scans": sum(1 for p in ok if p["frees_bytes"] > 0), "confirm": any(p["confirm"] for p in ok)}
 
-    def project_apply(self, pid: str, mode: Any, confirm: bool = False, scans: list[str] | None = None) -> dict:
+    def project_apply(self, pid: str, mode: Any, confirm: bool = False, scans: list[str] | None = None,
+                      thin: Any = False) -> dict:
         """``POST /api/projects/{pid}/keep``: move every scan that can move (or those of ``scans``); a scan that
         cannot is left as it is, with the reason."""
         mode = _mode(mode)
-        plan = self.project_plan(pid, mode)
+        thin = _thin_arg(mode, thin)
+        plan = self.project_plan(pid, mode, thin)
         if plan["confirm"] and not confirm:
-            raise ApiError(409, "removing these scans' recordings cannot be undone", "ask once more, then send confirm: true")
+            what = "the frames Standard quality skips" if thin else "these scans' recordings"
+            raise ApiError(409, f"removing {what} cannot be undone", "ask once more, then send confirm: true")
         want = None if scans is None else set(scans)
         results, freed = [], 0
         for p in plan["scans"]:
@@ -367,12 +537,12 @@ class KeepManager:
                                 "error": p["refusal"] or {"detail": "nothing to free", "hint": "nothing to do"}})
                 continue
             try:
-                out = self.apply(pid, p["scan_id"], mode, confirm=True)
+                out = self.apply(pid, p["scan_id"], mode, confirm=True, thin=thin)
                 results.append({**row, "ok": True, "freed_bytes": out["freed_bytes"]})
                 freed += out["freed_bytes"]
             except ApiError as e:
                 results.append({**row, "ok": False, "freed_bytes": 0, "error": {"detail": e.detail, "hint": e.hint}})
-        return {"project_id": pid, "to": mode, "results": results, "freed_bytes": freed}
+        return {"project_id": pid, "to": mode, "thin": thin, "results": results, "freed_bytes": freed}
 
 
 def _file_use(path: Path) -> tuple[int, int]:
