@@ -64,6 +64,7 @@ import { MockFeatures } from "./features";
 import { MockSections } from "./section";
 import { MockFlush } from "./flush";
 import { MockReport } from "./report";
+import { keepModeArg, MockKeep } from "./keep";
 import { mockScanStatus, SEEDED_SCAN_HEALTH } from "./health";
 import { scanHealthOf } from "../../lib/calibHealth";
 import { MockReferences } from "./reference";
@@ -243,6 +244,7 @@ class MockBackend {
   private sections = new MockSections();
   private flush = new MockFlush();
   private reports = new MockReport();
+  private keep = new MockKeep(); // R1's disk use and R2's "what a scan keeps"
   private references = new MockReferences();
   private aligning: MockAlign;
   private previewSeqs: Record<string, number> = {};
@@ -458,6 +460,10 @@ class MockBackend {
         this.projects.delete(p.id);
         return json(204, null);
       }
+      // R1: disk use; R2: what a scan keeps (keep.ts)
+      if (p && c === "disk" && is("GET", 3)) return json(200, this.keep.projectDisk(p));
+      if (p && c === "keep" && is("GET", 3)) return json(200, this.keep.projectPlan(p, keepModeArg(body.mode)));
+      if (p && c === "keep" && is("POST", 3)) return json(200, this.keep.projectApply(p, keepModeArg(body.mode), body.confirm === true));
       // M4: align two scans or several, merge them into a new one
       if (p && c === "align" && is("POST", 3)) return json(200, this.aligning.align(p, body));
       if (p && c === "align_all" && is("POST", 3)) return json(200, this.aligning.alignAll(p, body));
@@ -476,6 +482,18 @@ class MockBackend {
       if (p && c === "scans" && d) {
         const s = p.scans.find((x) => x.id === d);
         if (!s) throw new HttpError(404, "Scan not found");
+        if (e === "keep" && is("GET", 5)) return json(200, this.keep.plan(p, s, keepModeArg(body.mode)));
+        if (e === "keep" && is("POST", 5)) return json(200, this.keep.apply(p, s, keepModeArg(body.mode), body.confirm === true));
+        // what was removed to free space (R2) cannot be used: the same refusals as the engine
+        if (e === "process" && method === "POST") {
+          const sub = seg[5] ?? "";
+          let removed: HttpError | null = null;
+          if (seg.length === 5 || sub === "track" || (sub === "recipe" && body.scope === "all")) removed = this.keep.refusal(p, s, "remake");
+          else if (["straighten", "fuse", "spacetime"].includes(sub)) removed = this.keep.refusal(p, s, "remake") ?? this.keep.refusal(p, s, "stage");
+          else if (sub === "refine") removed = this.keep.refusal(p, s, "stage");
+          if (removed) throw removed;
+          if (seg.length === 5 || sub === "track") this.keep.remade(p, s); // the stage files come back
+        }
         // M1 "Make mesh" (now the Default recipe), then the M3 processing studio
         if (e === "process" && is("POST", 5)) return json(200, this.studio.makeMesh(p, s, normalizeQuality(body.quality) ?? "standard"));
         if (e === "process") {

@@ -876,7 +876,43 @@ have not been measured (roadmap question 9).
     the projects list; the in-browser mock has no such route (the page then shows no size);
     the trash is walked on every visit (7 ms for 1 GB today); freeing space is R2.
 
-### R2. Free space, on purpose (M) **(D4)**
+### [x] R2. Free space, on purpose (M) **(D4)**
+- **Done 2026-11-19** (the task as written follows below). `ohs/server/keep.py`: `GET` /
+  `POST .../scans/{sid}/keep` and `/api/projects/{pid}/keep`. New scans stay Full (D4 not
+  changed). A scan's row shows "Keeps recording and result" or "Keeps result only"; its
+  size is the button that opens the dialog, and the project has "Free space…".
+  - **What goes.** *Recording and result* (Engineering): every stage folder under
+    `process/`, `process/selections/` and the undo cache. *Result only* (Standard): that,
+    and `recording/` but its `calibration.json` and `meta.json`. `result/`, the kept
+    features and `process/state.json` stay in both. The current mesh becomes the base new
+    edits start from, read from `result/mesh.ply` (it holds the current step bit for bit),
+    so nothing has to be written but a shorter `state.json`.
+  - **The promise is the truth.** Asking what a move would free changes nothing on disk, and
+    "Frees X" is what the scan takes now minus what it takes afterwards; the move measures
+    the folder before and after, and the two were equal in every test and in the app.
+    (Found in review: the first version prepared the scan when the dialog opened, which
+    grew it by up to 40 MB and overstated the saving; sent back and fixed.)
+  - **Asked twice for the recording:** "Delete the recording for good? ... This cannot be
+    undone", and the route refuses without `confirm: true`. A busy scan (recording,
+    processing, or named by a queued or running job) is not moved. A failure half way leaves
+    a scan that opens; freeing again finishes.
+  - **Afterwards:** edits and their undo, fits, kept features, the Check answer, the report,
+    downloads and aligning work in both. Make mesh after "recording and result" gives the
+    same mesh bit for bit (both paths). What needs what was removed is refused in plain
+    words, e.g. "this scan's recording was removed to free space (it keeps its result
+    only), so its mesh cannot be made again from the frames".
+  - **On the way:** "Refine with lasers" no longer asks for a recording it never read.
+  - Guard: `tests/test_server_keep.py` (9), `ui/src/lib/keepMode.test.ts` (41 checks),
+    `ui/src/api/mock/keep.test.ts` (22).
+  - *Checked in the app* on a copy of the bracket project: "recording and result" on one
+    scan planned and freed 58,988,885 bytes; "result only" on another planned and freed
+    116,902,779 bytes, its row went from 167.1 MB to 55.7 MB, and afterwards an edit and its
+    undo worked, the mesh downloaded, and Make mesh, Track and Refine were refused with the
+    words above.
+  - **Left:** the Process page and the viewer still offer stage actions on a freed scan
+    (the server refuses them); the Align page does not mark a "result only" scan; the move
+    holds the app's main lock while it removes files (seconds for gigabytes); Refine with
+    lasers on a "result only" scan, from the kept laser points, would be a new behaviour.
 - **What:** the three modes, as what a scan keeps:
   - **Full:** everything, as today.
   - **Engineering:** the recording, and the result. Stage folders and the undo cache are removed

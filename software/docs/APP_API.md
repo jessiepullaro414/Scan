@@ -2289,3 +2289,59 @@ type ProjectDiskUse = {
 
 - **Sizes** are the files' sizes in bytes (`st_size`), all integers, not the space the file system allocates. Links and junctions are not followed.
 - **Cost:** one walk of the project folder and the trash on every request, nothing cached (so never stale); about 50 to 150 ms for 4,700 files. A plain function, so it runs in the server's thread pool and never holds up the event loop. `GET /api/projects/{pid}` does not include it: the project page asks for it after it has painted.
+
+## What a scan keeps
+
+Freeing a scan's space on purpose (FEATURE_PLAN R2, `ohs/server/keep.py`). Only the user moves a scan, per scan or for a whole project, after the app showed what is freed and what can no longer be done; nothing is removed on a timer or as a side effect. New scans keep everything (`full`), the owner's default (D4). Removal is real removal (not the trash): the point is to free space.
+
+| Mode | Keeps | Removes |
+|---|---|---|
+| `full` | everything | nothing |
+| `engineering` | `recording/`, `result/`, everything else | every folder under `process/` but `cache/` (the stages, and left-over `*.tmp-*` / `*.old-*` folders), `process/selections/`, `process/cache/` (the current step's file stays only when `result/mesh.ply` does not hold that step bit for bit) |
+| `standard` | `result/` (mesh with its sigma, STL, OBJ, laser points, `trajectory.csv`, `report.json`, `marker_map.json`), `recording/calibration.json` and `recording/meta.json`, the kept features, the thumbnail, `process/state.json`, `process/straighten.json`, every other file | what `engineering` removes, and the rest of `recording/` (frames, `frames.csv`, `imu.csv`, `events.csv`, `ground_truth/`). Cannot be undone |
+
+Both lighter modes make the current mesh the base (`base.in_result` in `state.json`: it is read from `result/mesh.ply`, which stores the vertices, normals and sigmas as float32 and the filled flags as uchar, so it holds the step bit for bit; the first new edit writes its cache file before the result changes. When the result does not equal the step's cache file, as for a scan taken over from before the studio, that file stays and `base.key` names it. `base.applied` lists the edits that made it): its version, its sigmas and its filled flags do not change, so kept features stay current; edits and their undo work from there; undo stops there.
+
+### Types
+
+```ts
+type KeepMode = "full" | "engineering" | "standard";
+// Scan gains:  keep: KeepMode ("full" until freed); freed?: {when, keep, bytes}[]; has_recording: boolean (frames.csv on disk now)
+
+type ScanKeepPlan = {
+  scan_id: string; name: string;
+  keep: KeepMode;           // what it keeps now
+  to: KeepMode;             // what was asked
+  ok: boolean;
+  refusal: { detail: string; hint: string } | null;   // why it cannot move (busy, no recording, no mesh, nothing to free, a heavier mode)
+  bytes: number;            // the scan folder now
+  frees_bytes: number;      // the net drop of the scan folder: its bytes now (the row's number) minus after the move; sum(remove) - sum(writes); 0 when refused
+  remove: { part: "recording" | "undo" | "stages"; bytes: number; files: number }[];   // what goes, gross per non-empty part
+  loses: ("undo" | "stages" | "remake" | "merge" | "refine" | "frames")[];  // what can no longer be done afterwards
+  keeps: ("recording" | "result" | "laser_points" | "trajectory" | "report" | "calibration" | "features")[];  // what stays, from disk
+  confirm: boolean;         // the move removes a recording: ask once more, then send confirm: true
+};
+type ScanKeepResult = { scan: Scan; freed_bytes: number; planned_bytes: number };   // freed: the folder before minus after
+type ProjectKeepPlan = { project_id: string; to: KeepMode; scans: ScanKeepPlan[]; frees_bytes: number;  // over the scans that are ok
+                         n_scans: number; confirm: boolean };                          // scans that free something; any removes a recording
+type ProjectKeepResult = { project_id: string; to: KeepMode; freed_bytes: number;
+                           results: { scan_id: string; name: string; ok: boolean; freed_bytes: number; error?: { detail: string; hint: string } }[] };
+```
+
+### REST
+
+| Method and path | Body | Returns |
+|---|---|---|
+| `GET /api/projects/{pid}/scans/{sid}/keep?mode=` | | `ScanKeepPlan`; writes nothing (no processing state is made or taken over, no cache file is rebuilt); 422 for an unknown mode, 404 for an unknown scan |
+| `POST /api/projects/{pid}/scans/{sid}/keep` | `{mode, confirm?: bool}` | `ScanKeepResult`; 409 with the plan's refusal, 409 "removing this scan's recording cannot be undone" without `confirm` when the plan says `confirm`, 409 "N files could not be removed ... the scan still opens" when some files were held open |
+| `GET /api/projects/{pid}/keep?mode=` | | `ProjectKeepPlan` |
+| `POST /api/projects/{pid}/keep` | `{mode, confirm?: bool, scans?: string[]}` | `ProjectKeepResult`: every scan that can move moves; the others are listed with the reason; 409 without `confirm` when one would lose its recording |
+
+### Rules
+
+- **Busy:** a scan that is recording, processing (its status), or named by any queued or running job (its processing, an align, a merge, a comparison) is refused ("this scan is busy: ..."), and its cache is not touched.
+- **Only lighter:** `full` is never a target ("what was removed to free space cannot be brought back"); `standard` to `engineering` is refused; the same mode again is allowed when something came back (a mesh made again, new undo steps). A net of zero or less is refused: "nothing to free". `engineering` needs a recording (a merged scan: "no recording of its own", choose the result only); `standard` needs a mesh.
+- **Order:** the base is kept (`state.json`), the mode goes into `project.json`, then the recording (`frames.csv` first), the undo files, the stage folders. A file held open is retried for a second, then left: the answer is a 409 with what was freed, the scan opens, and freeing again removes the rest. Links and junctions are neither followed nor counted.
+- **After freeing:** edits, undo of new edits, fits, the Check answer, sections, the comparison, the laser map, the report and the downloads work as before; the deviation map starts again from the kept mesh; `process/trajectory.json` reads `result/trajectory.csv` when the track stage's is gone (its `raw` is then the result's path, `straightened` null). Refusals, in plain words: a stage on its own (Straighten, Fuse, Refine with lasers, Refine from the images) without its stage files: 409 "the stage files this needs were removed to free space" (`engineering`: "make the mesh again ... to rebuild them"); everything that reads the frames (Make mesh, Track, Straighten, Fuse, Refine from the images, a recipe with scope `all`) without the recording: 409 "this scan's recording was removed to free space ..."; Merge: 409 "... has no recording: it was removed to free space"; undo past the kept mesh: 409 "nothing to undo: the earlier steps were removed to free space". Align still works (from the meshes; without a recording, a markerless scan's tags are not looked for).
+- **Made again:** a scan freed to `engineering` and then processed has stage folders and undo history again. `keep` still says what was removed and `freed` when; what is on disk now is `GET .../disk` and `has_recording`.
+- **"Refine with lasers"** needs no recording: only the base stage's mesh and laser points (a merged scan can be refined).

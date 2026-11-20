@@ -51,6 +51,10 @@ class AlignManager:
             raise ApiError(409, f"the {what} scan \"{name}\" has no mesh yet", "make its mesh on the project page first")
         rec = self.st.projects.recording_dir(pid, sid)
         if need_recording:  # a merge fuses the frames again: it needs them and their poses
+            if entry.get("keep") == "standard" and not (rec / "frames.csv").is_file():  # FEATURE_PLAN R2
+                raise ApiError(409, f"the {what} scan \"{name}\" has no recording: it was removed to free space (the scan "
+                                    "keeps its result only)", "merge scans that still have their recordings; this one can "
+                                                              "still be aligned, edited, measured and exported")
             if entry.get("merged_from") or not (rec / "frames.csv").is_file():
                 raise ApiError(409, f"the {what} scan \"{name}\" has no recording (a merged scan, or its recording was removed)",
                                "merge scans that still have their recordings")

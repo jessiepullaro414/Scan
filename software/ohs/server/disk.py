@@ -29,7 +29,7 @@ from typing import Any
 
 from ohs.server.projects import ProjectStore
 
-__all__ = ["folder_bytes", "project_disk_use", "scan_disk_use"]
+__all__ = ["folder_bytes", "folder_use", "project_disk_use", "scan_disk_use"]
 
 UNDO_DIRS = ("cache", "selections")
 
@@ -69,6 +69,11 @@ def _walk(path: Path) -> tuple[int, int]:
 def folder_bytes(path: str | Path) -> int:
     """Bytes of every file under ``path`` (0 when it does not exist)."""
     return _walk(Path(path))[0]
+
+
+def folder_use(path: str | Path) -> tuple[int, int]:
+    """``(bytes, files)`` under ``path``, counted as :func:`folder_bytes` counts them (for R2's plans)."""
+    return _walk(Path(path))
 
 
 def scan_disk_use(scan_dir: str | Path) -> dict[str, Any]:

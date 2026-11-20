@@ -1,4 +1,5 @@
 import {
+  Archive,
   ArrowLeft,
   Box,
   CircleExclamationPoint,
@@ -27,6 +28,8 @@ import { HEALTH_ICON, HEALTH_TEXT } from "../components/CalibHealth";
 import { hasMesh, hasRecording, mergedFromText } from "../lib/align";
 import { scanHealthLine, scanHealthOf } from "../lib/calibHealth";
 import { projectDiskText, scanDiskTitle, trashText } from "../lib/diskUse";
+import { canRemake, keepLabel, keepTitle } from "../lib/keepMode";
+import { FreeSpaceDialog } from "../components/FreeSpaceDialog";
 import { downloadFile } from "../lib/download";
 import { fileStem, fmtBytes, fmtDateTime, fmtDuration, fmtInt, fmtRelative } from "../lib/format";
 import { href, navigate, paths } from "../lib/router";
@@ -56,7 +59,7 @@ function resultUrls(project: Project, scan: Scan) {
  */
 function useDiskUse(pid: string, project: Project | undefined): ProjectDiskUse | null {
   const [disk, setDisk] = useState<ProjectDiskUse | null>(null);
-  const key = project ? project.scans.map((s) => `${s.id}:${s.status}`).join(",") || "-" : "";
+  const key = project ? project.scans.map((s) => `${s.id}:${s.status}:${s.keep ?? ""}:${s.freed?.length ?? 0}`).join(",") || "-" : "";
   useEffect(() => {
     if (!key) return;
     let live = true;
@@ -71,7 +74,7 @@ function useDiskUse(pid: string, project: Project | undefined): ProjectDiskUse |
   return disk && disk.project_id === pid ? disk : null;
 }
 
-function ScanRow({ project, scan, disk }: { project: Project; scan: Scan; disk?: ScanDiskUse }) {
+function ScanRow({ project, scan, disk, onFreeSpace }: { project: Project; scan: Scan; disk?: ScanDiskUse; onFreeSpace: (scan: Scan) => void }) {
   const job = useScanJob(scan.id);
   const active = isActive(job);
   const processing = active || scan.status === "processing";
@@ -80,6 +83,9 @@ function ScanRow({ project, scan, disk }: { project: Project; scan: Scan; disk?:
   const stem = fileStem(project.name, scan.name);
   // A merged scan (M4) has no recording of its own: nothing that makes its mesh from the frames again.
   const recorded = hasRecording(scan);
+  // R2: a scan that keeps its result only has no frames to make its mesh from again
+  const remakable = canRemake(scan);
+  const kept = keepLabel(scan.keep);
   const mergedFrom = mergedFromText(scan);
   const own = hasResult ? scanHealthOf(scan.result?.report) : null;
   const health = scanHealthLine(own);
@@ -126,10 +132,22 @@ function ScanRow({ project, scan, disk }: { project: Project; scan: Scan; disk?:
             <HealthIcon size={12} aria-hidden /> {health.text}
           </span>
         ) : null}
-        {disk && disk.bytes > 0 ? (
-          <span className="inline-flex cursor-help items-center gap-1 tnum" title={scanDiskTitle(disk)}>
-            <HardDrive size={12} aria-hidden /> {fmtBytes(disk.bytes)}
+        {kept ? (
+          // R2: what the user chose to keep (the words say it; the hover says what was removed, and what is back since)
+          <span className="inline-flex cursor-help items-center gap-1" title={keepTitle(scan, disk, fmtDateTime)}>
+            <Archive size={12} aria-hidden /> {kept}
           </span>
+        ) : null}
+        {disk && disk.bytes > 0 ? (
+          <button
+            type="button"
+            className="inline-flex items-center gap-1 rounded tnum hover:text-fg hover:underline"
+            title={`${scanDiskTitle(disk)}\n\nClick to free space.`}
+            onClick={() => onFreeSpace(scan)}
+            disabled={processing || scan.status === "recording"}
+          >
+            <HardDrive size={12} aria-hidden /> {fmtBytes(disk.bytes)}
+          </button>
         ) : null}
       </div>
       <div className="flex min-w-0 items-center justify-end gap-2">
@@ -172,7 +190,7 @@ function ScanRow({ project, scan, disk }: { project: Project; scan: Scan; disk?:
                     </Button>
                   )}
                 />
-                {recorded ? <MakeMeshButton projectId={project.id} scan={scan} label="Remake" variant="ghost" /> : null}
+                {remakable ? <MakeMeshButton projectId={project.id} scan={scan} label="Remake" variant="ghost" /> : null}
               </>
             ) : !recorded ? (
               <ProcessButton projectId={project.id} scan={scan} label="Process" />
@@ -202,6 +220,8 @@ export function ProjectPage({ pid }: { pid: string }) {
   const link = useConnection((s) => s.link);
   const [renaming, setRenaming] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  /** R2: the scan whose space is being freed, or null for the whole project; undefined while closed. */
+  const [freeing, setFreeing] = useState<Scan | null | undefined>(undefined);
   useTicker(30_000);
   const disk = useDiskUse(pid, project);
   const trash = disk ? trashText(disk) : null;
@@ -341,7 +361,7 @@ export function ProjectPage({ pid }: { pid: string }) {
         ) : (
           <ul className="divide-y divide-line">
             {scans.map((s) => (
-              <ScanRow key={s.id} project={project!} scan={s} disk={disk?.scans.find((d) => d.id === s.id)} />
+              <ScanRow key={s.id} project={project!} scan={s} disk={disk?.scans.find((d) => d.id === s.id)} onFreeSpace={setFreeing} />
             ))}
           </ul>
         )}
@@ -351,9 +371,17 @@ export function ProjectPage({ pid }: { pid: string }) {
           <HardDrive size={13} className="mt-px shrink-0" aria-hidden />
           <span>
             <span className="tnum">This project takes {projectDiskText(disk)}.</span>
-            {trash ? <span className="tnum"> {trash}</span> : null} Point at a scan's size for its parts.
+            {trash ? <span className="tnum"> {trash}</span> : null} Point at a scan's size for its parts; click it to free space.
           </span>
+          {project.scans.length ? (
+            <Button size="xs" variant="ghost" icon={HardDrive} className="-mt-0.5 ml-1" onClick={() => setFreeing(null)}>
+              Free space…
+            </Button>
+          ) : null}
         </p>
+      ) : null}
+      {project && freeing !== undefined ? (
+        <FreeSpaceDialog open onClose={() => setFreeing(undefined)} project={project} scan={freeing} onDone={() => void fetchProject(pid)} />
       ) : null}
       {project ? (
         <p className="mt-2 text-xs text-subtle">

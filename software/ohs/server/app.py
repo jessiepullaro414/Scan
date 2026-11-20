@@ -57,6 +57,7 @@ from ohs.server.cad import CadExport
 from ohs.server.disk import project_disk_use
 from ohs.server.features import FeatureManager
 from ohs.server.flush import FlushManager
+from ohs.server.keep import KeepManager
 from ohs.server.protocol import PROTOCOL_VERSION, ApiError, dumps, jsonable
 from ohs.server.reference import ReferenceManager
 from ohs.server.report import ReportManager
@@ -293,6 +294,12 @@ class ReportBody(BaseModel):
 
 class CheckBody(BaseModel):
     tolerance_mm: float = Field(gt=0.0, le=100.0)
+
+
+class KeepBody(BaseModel):  # FEATURE_PLAN R2: what a scan keeps (the mode is checked by ohs.server.keep, in plain words)
+    mode: Optional[str] = None
+    confirm: bool = False  # Standard removes the recording for good: the user said yes twice
+    scans: Optional[list[str]] = None  # the project route: only these scans (default: every scan that can move)
 
 
 class ReferenceRenameBody(BaseModel):
@@ -584,6 +591,25 @@ def create_app(config: Any = None, *, projects_dir: Any = None, static_dir: Any 
     @app.get("/api/projects/{pid}/disk")
     def projects_disk(pid: str) -> JSONResponse:  # walks the folder: a plain function, so it runs in the thread pool
         return _json(project_disk_use(st.projects, pid))
+
+    # FEATURE_PLAN R2: what a scan keeps on disk; plain functions (they walk and remove files: the thread pool)
+    keep = KeepManager(st)
+
+    @app.get("/api/projects/{pid}/keep")
+    def projects_keep_plan(pid: str, mode: Optional[str] = None) -> JSONResponse:
+        return _json(keep.project_plan(pid, mode))
+
+    @app.post("/api/projects/{pid}/keep")
+    def projects_keep(pid: str, body: KeepBody) -> JSONResponse:
+        return _json(keep.project_apply(pid, body.mode, body.confirm, body.scans))
+
+    @app.get("/api/projects/{pid}/scans/{sid}/keep")
+    def scan_keep_plan(pid: str, sid: str, mode: Optional[str] = None) -> JSONResponse:
+        return _json(keep.plan(pid, sid, mode))
+
+    @app.post("/api/projects/{pid}/scans/{sid}/keep")
+    def scan_keep(pid: str, sid: str, body: KeepBody) -> JSONResponse:
+        return _json(keep.apply(pid, sid, body.mode, body.confirm))
 
     @app.patch("/api/projects/{pid}")
     def projects_rename(pid: str, body: NameBody) -> JSONResponse:

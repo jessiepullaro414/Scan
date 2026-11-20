@@ -63,6 +63,16 @@ use: its result becomes the ``track`` stage and the base.
 time to write the result files). A step outside the cache is rebuilt from the nearest cached
 one by replaying the edits (selections from ``selections/``), in the request.
 
+**Freed space** (FEATURE_PLAN R2, :mod:`ohs.server.keep`). When the user frees a scan's space, the
+current step becomes the base (:meth:`ProcessManager.keep_current_only`: ``base.in_result``, it is read
+from ``result/mesh.ply``, which holds it bit for bit, and gets its cache file again only when a new
+edit is about to change the result; ``base.key`` names the step's cache file instead when the result
+differs from it; ``base.applied`` lists the edits that made it) and the cache files, the selections and
+the stage folders go. Edits, fits and checks work as before; undo stops at that mesh; a step that needs
+a removed stage folder answers 409 in plain words (:meth:`ProcessManager._removed`), and without a
+recording so does everything that reads the frames. "Refine with lasers" needs no recording, only
+the base stage's mesh and laser points (a merged scan can be refined).
+
 **Locking.** ``Studio._lock`` is held while a request checks the 409 rules and submits its job
 (the same lock as ``start_scan``), so two jobs never run on one scan. Each :class:`ScanProcess`
 has its own lock around its state; a job does the heavy work without it and takes it to commit.
@@ -477,6 +487,12 @@ def _write_json(path: Path, data: Any) -> None:
     _retry(lambda: os.replace(tmp, path), f"replacing {path}")
 
 
+def json_file_size(data: Any) -> int:
+    """The bytes :func:`_write_json` writes for ``data`` (a text file: each line end is ``os.linesep``)."""
+    text = json.dumps(jsonable(data), indent=1)
+    return len(text.encode("utf-8")) + text.count("\n") * (len(os.linesep) - 1)
+
+
 def _set_straighten(report: dict, rep: dict | None) -> bool:
     """Write what Straighten corrected (``rep``: its ``straighten.json``) into a stage report's
     calibration health block (FEATURE_PLAN H1). False when the report has no block to write into."""
@@ -523,6 +539,22 @@ def _load_npz(path: Path, normals: bool = False) -> tuple[np.ndarray, np.ndarray
         S = z["S"].astype(np.float32) if "S" in z.files else None
         Fl = z["filled"].astype(bool) if "filled" in z.files else None
         return z["V"].astype(np.float64), z["F"].astype(np.int64), N, S, Fl
+
+
+def _load_result_mesh(path: Path, normals: bool = False) -> tuple[np.ndarray, np.ndarray, np.ndarray | None,
+                                                                  np.ndarray | None, np.ndarray | None]:
+    """``(V, F, N, S, filled)`` of ``result/mesh.ply`` as :func:`_load_npz` gives a cached step: the PLY
+    stores the vertices, normals and sigmas as float32 and the filled flags as uchar, so a step written by
+    :meth:`ProcessManager._write_result` reads back bit for bit (no compaction, no face dropped)."""
+    from ohs.track.export import load_ply
+
+    d = load_ply(path)
+    V = np.asarray(d["vertices"], dtype=np.float64)
+    F = np.zeros((0, 3), dtype=np.int64) if d["faces"] is None else np.asarray(d["faces"], dtype=np.int64).reshape(-1, 3)
+    N = np.asarray(d["normals"], dtype=np.float32) if normals and d.get("normals") is not None else None
+    S = None if d.get("quality") is None else np.asarray(d["quality"], dtype=np.float32)
+    Fl = None if d.get("filled") is None else np.asarray(d["filled"], dtype=bool)
+    return V, F, N, S, Fl
 
 
 def _rmtree(path: Path) -> None:
@@ -644,7 +676,11 @@ class ScanProcess:
 
     # ------------------------------------------------------------------ steps and cache
     def step_key(self, k: int) -> str:
-        return "base" if k == 0 else str(self.state["edits"][k - 1]["id"])
+        """The cache file name of step ``k``: ``base``, or the edit's id. A base kept when the scan's
+        space was freed (FEATURE_PLAN R2, :meth:`ProcessManager.keep_current_only`) keeps its step's file."""
+        if k == 0:
+            return str((self.state["base"] or {}).get("key") or "base")
+        return str(self.state["edits"][k - 1]["id"])
 
     def cache_path(self, k: int) -> Path:
         return self.dir / "cache" / f"{self.step_key(k)}.npz"
@@ -660,7 +696,7 @@ class ScanProcess:
     def prune_cache(self) -> None:
         """Keep the base and the steps within :data:`CACHE_STEPS` of the cursor."""
         cur = self.state["cursor"]
-        keep = {"base"} | {self.step_key(k) for k in range(max(1, cur - CACHE_STEPS),
+        keep = {self.step_key(0)} | {self.step_key(k) for k in range(max(1, cur - CACHE_STEPS),
                                                            min(len(self.state["edits"]), cur + CACHE_STEPS) + 1)}
         d = self.dir / "cache"
         if d.is_dir():
@@ -753,6 +789,20 @@ class ProcessManager:
                 if not sp.load():
                     safe_call("taking over the earlier result", lambda: self._adopt_result(sp))
         return sp
+
+    def peek(self, pid: str, sid: str) -> ScanProcess | None:
+        """The scan's :class:`ScanProcess` when it is loaded; else one read from ``state.json`` and not kept
+        (never taken over from an earlier result); None when the scan has no processing state. Writes
+        nothing (FEATURE_PLAN R2: a plan changes nothing on disk)."""
+        with self._lock:
+            sp = self._scans.get((pid, sid))
+        if sp is not None:
+            return sp
+        sd = self.st.projects.scan_dir(pid, sid)
+        if not (sd / "process" / "state.json").is_file():
+            return None
+        sp = ScanProcess(pid, sid, sd)
+        return sp if sp.load() else None
 
     def _adopt_result(self, sp: ScanProcess) -> None:
         """A scan processed before M3 (``result/mesh.ply``, no state): its result becomes the
@@ -883,13 +933,53 @@ class ProcessManager:
     def _need_recording(self, pid: str, sid: str) -> Path:
         rec = self.st.projects.recording_dir(pid, sid)
         if not (rec / "frames.csv").is_file():
+            entry = self.st.projects.scan_entry(pid, sid)
+            if entry.get("keep") == "standard":  # FEATURE_PLAN R2: removed on purpose, by the user
+                raise ApiError(409, "this scan's recording was removed to free space (it keeps its result only), so its "
+                                    "mesh cannot be made again from the frames",
+                               "the mesh can still be edited, measured and exported; to make it again, scan the part again")
+            if entry.get("merged_from"):
+                raise ApiError(409, "this scan has no recording of its own (it was merged from other scans)",
+                               "it can be edited, measured and exported; to make it again, merge the scans it was made from again")
             raise ApiError(409, "this scan has no recording", "record the scan again")
         return rec
 
-    @staticmethod
-    def _need_track(sp: ScanProcess) -> None:
-        if sp.state["stages"]["track"]["state"] != "done" or not (sp.dir / "track" / "trajectory.csv").is_file():
+    def _removed(self, pid: str, sid: str) -> ApiError:
+        """The refusal of a step whose stage files were removed to free space (FEATURE_PLAN R2)."""
+        entry = self.st.projects.scan_entry(pid, sid)
+        rec = self.st.projects.recording_dir(pid, sid)
+        if entry.get("keep") == "standard" or not (rec / "frames.csv").is_file():
+            return ApiError(409, "the stage files this needs were removed to free space (this scan keeps its result only)",
+                            "the mesh can still be edited, measured and exported; the stage files can only be made "
+                            "again from a recording, which this scan no longer has")
+        return ApiError(409, "the stage files this needs were removed to free space (this scan keeps its recording and "
+                             "its result)", "make the mesh again (Make mesh, or Track first) to rebuild them from the recording")
+
+    def _freed(self, sp: ScanProcess) -> bool:
+        """True when the scan's space was freed (FEATURE_PLAN R2): stage files may be missing on purpose."""
+        return self.st.projects.scan_entry(sp.pid, sp.sid).get("keep") in ("engineering", "standard")
+
+    def _need_track(self, sp: ScanProcess) -> None:
+        done = sp.state["stages"]["track"]["state"] == "done"
+        if done and not (sp.dir / "track" / "trajectory.csv").is_file() and self._freed(sp):
+            raise self._removed(sp.pid, sp.sid)
+        if not done or not (sp.dir / "track" / "trajectory.csv").is_file():
             raise ApiError(409, "this needs a finished Track stage", "run Track (or Make mesh) first")
+
+    def _need_refine_source(self, sp: ScanProcess) -> None:
+        """"Refine with lasers" reads only the base stage's mesh and laser points (no recording, no
+        trajectory), so a merged scan can be refined too."""
+        st = sp.state
+        if st["stages"]["track"]["state"] != "done" or st["base"] is None:
+            raise ApiError(409, "this needs a finished Track stage", "run Track (or Make mesh) first")
+        src = st["base"].get("stage")
+        if src == "refine":
+            src = st["stages"]["refine"].get("source") or "track"
+        if not (sp.dir / str(src) / "mesh.ply").is_file():
+            if self._freed(sp):
+                raise self._removed(sp.pid, sp.sid)
+            raise ApiError(409, f"the {src} stage's mesh is missing from the process folder",
+                           "run Track (or Make mesh) again")
 
     @staticmethod
     def _need_base(sp: ScanProcess) -> None:
@@ -907,17 +997,18 @@ class ProcessManager:
         from ohs.mesh import carry_filled, carry_sigma
 
         with sp.lock:
-            path = sp.cache_path(k)
-            if path.is_file():
-                V, F, _, S, Fl = _load_npz(path)
+            got = self._cached(sp, k)
+            if got is not None:
+                V, F, _, S, Fl = got
                 return V, F, S, Fl
             j = k - 1
             while j > 0 and not sp.cache_path(j).is_file():
                 j -= 1
-            if not sp.cache_path(j).is_file():
+            got = self._cached(sp, j)
+            if got is None:
                 raise ApiError(500, "the base mesh of this scan is missing from the process folder",
                                "run the last stage again (Track, Straighten or Fuse)")
-            V, F, _, S, Fl = _load_npz(sp.cache_path(j))
+            V, F, _, S, Fl = got
             edits = sp.state["edits"]
             log.info("scan %s/%s: rebuilding step %d from step %d (%d edits)", sp.pid, sp.sid, k, j, k - j)
             for i in range(j, k):
@@ -949,6 +1040,82 @@ class ProcessManager:
                 V, F, S, Fl = self._load_step(sp, int(sp.state["cursor"]))
                 cached = sp._fit_mesh = (v, V, F, S, Fl)
         return cached
+
+    def _cached(self, sp: ScanProcess, k: int, normals: bool = False) -> tuple | None:
+        """``(V, F, N, S, filled)`` of step ``k`` from its cache file; for a base kept in ``result/``
+        (FEATURE_PLAN R2: ``base.in_result``, no cache file) from ``result/mesh.ply``, which holds it bit
+        for bit; None when neither is there."""
+        p = sp.cache_path(k)
+        if p.is_file():
+            return _load_npz(p, normals=normals)
+        res = sp.result_dir / "mesh.ply"
+        if k == 0 and (sp.state["base"] or {}).get("in_result") and res.is_file():
+            return _load_result_mesh(res, normals=normals)
+        return None
+
+    def kept_step(self, sp: ScanProcess) -> tuple[Path | None, bool] | None:
+        """R2, read-only: how the current step stays once the undo history goes. ``(None, True)``:
+        ``result/mesh.ply`` holds it (vertices, faces, sigmas and filled flags equal to its cache file's,
+        or no cache file: the result is always written from the current step), so no cache file needs
+        to stay; ``(cache file, False)``: the result differs (a scan taken over from before the studio
+        has a compacted base), so that file stays. None: no mesh, or neither file is there. Writes
+        nothing. Call under the scan lock."""
+        if sp.state["base"] is None:
+            return None
+        k = int(sp.state["cursor"])
+        res = sp.result_dir / "mesh.ply"
+        p = sp.cache_path(k)
+        if not p.is_file():
+            if k == 0 and (sp.state["base"] or {}).get("in_result") and res.is_file():
+                return None, True
+            return (None, True) if res.is_file() else None
+        if not res.is_file():
+            return p, False
+        a, b = _load_npz(p), _load_result_mesh(res)
+        same = all((x is None and y is None) or (x is not None and y is not None and x.shape == y.shape and
+                                                   np.array_equal(x, y)) for i, (x, y) in enumerate(zip(a, b)) if i != 2)
+        return (None, True) if same else (p, False)
+
+    def keep_current_only(self, sp: ScanProcess, in_result: bool) -> None:
+        """FEATURE_PLAN R2: the current step becomes the base, so that the undo history (the cache files,
+        the selections) can be removed and edits still work. The mesh, its version, its sigmas and its
+        filled flags do not change (kept features stay current); the edits that made it are kept by
+        name in ``base.applied`` (for "save as recipe"); undo stops here. ``in_result``: the base is read
+        from ``result/mesh.ply`` (no cache file stays; the first new edit writes the base's cache file
+        before the result changes), else from the current step's cache file. Writes ``state.json``
+        only, before anything is removed, so the scan is whole at every moment. Call under the scan lock."""
+        new = self.collapsed_state(sp, in_result)
+        if new is not None:
+            sp.state.clear()
+            sp.state.update(new)
+            sp._offset = None  # the deviation map starts again from this mesh
+            sp.save()
+
+    @staticmethod
+    def collapsed_state(sp: ScanProcess, in_result: bool) -> dict | None:
+        """The ``state.json`` :meth:`keep_current_only` writes (a new dict), or None when it would change
+        nothing. Call under the scan lock."""
+        st = sp.state
+        if st["base"] is None:
+            return None
+        k = int(st["cursor"])
+        base = st["base"]
+        if k == 0 and not st["edits"] and (not in_result or base.get("in_result")):
+            return None  # the base already is the current step, and stays where it is
+        stats = (sp.stats_at(k) or base.get("stats") or {}) if k else base.get("stats") or {}
+        applied = list(base.get("applied") or []) + [{"op": e["op"], "params": e["params"], "label": e.get("label")}
+                                                     for e in st["edits"][:k]]
+        out = copy.deepcopy(st)
+        nb = {"triangles": int(stats.get("triangles", base["triangles"] if k == 0 else 0)),
+              "vertices": int(stats.get("vertices", base["vertices"] if k == 0 else 0)),
+              "stage": base["stage"], "stats": copy.deepcopy(stats), "applied": applied}
+        if in_result:
+            nb["in_result"] = True
+        else:
+            nb["key"] = sp.step_key(k)
+        out["base"] = nb
+        out["edits"], out["cursor"] = [], 0
+        return out
 
     def _formats(self) -> tuple[str, ...]:
         fmts = ["ply", "stl"]
@@ -987,10 +1154,16 @@ class ProcessManager:
         """Make step ``k`` the current mesh: result files, version + 1, save (under the scan lock).
 
         Undo / redo pass no mesh: the cached step (with its normals, sigmas and flags) is loaded."""
+        base = sp.state["base"] or {}
+        if base.get("in_result") and k != 0 and not sp.cache_path(0).is_file() and int(sp.state["cursor"]) == 0:
+            # R2: the base lives in result/mesh.ply only; it gets its cache file before the result changes
+            got = self._cached(sp, 0, normals=True)
+            if got is not None:
+                _save_npz(sp.cache_path(0), *got)
         if V is None:
-            path = sp.cache_path(k)
-            if path.is_file():
-                V, F, N, S, filled = _load_npz(path, normals=True)
+            got = self._cached(sp, k, normals=True)
+            if got is not None:
+                V, F, N, S, filled = got
             else:
                 V, F, S, filled = self._load_step(sp, k)
         sp.state["cursor"] = k
@@ -1269,6 +1442,9 @@ class ProcessManager:
         try:  # the files are written under the scan lock only (a scan start or connect never waits)
             k = sp.state["cursor"] + step
             if k < 0:
+                if (sp.state["base"] or {}).get("applied"):  # FEATURE_PLAN R2: the history was removed on purpose
+                    raise ApiError(409, "nothing to undo: the earlier steps were removed to free space",
+                                   "undo stops at the mesh as it was when the space was freed; new edits can be undone")
                 raise ApiError(409, "nothing to undo", "the mesh is the stage's result already")
             if k > len(sp.state["edits"]):
                 raise ApiError(409, "nothing to redo", "redo only works after an undo")
@@ -1737,13 +1913,17 @@ class ProcessManager:
             raise
 
     def _stage_job(self, pid: str, sid: str, kind: str, body: Callable[[Any, ScanProcess, _Prog], str],
-                   *, need_track: bool, message: str, meta: dict | None = None) -> Any:
+                   *, need_track: bool, message: str, meta: dict | None = None, need_recording: bool = True,
+                   check: Callable[[ScanProcess], None] | None = None) -> Any:
         with self.st._lock:
             self._check_free(pid, sid)
-            self._need_recording(pid, sid)
+            if need_recording:
+                self._need_recording(pid, sid)
             sp = self.scan(pid, sid)
             if need_track:
                 self._need_track(sp)
+            if check is not None:
+                check(sp)
             had_result = (sp.result_dir / "mesh.ply").is_file()
             self.st.projects.update_scan(pid, sid, status="processing")
 
@@ -1795,8 +1975,10 @@ class ProcessManager:
                                need_track=True, message="Straightening")
 
     def submit_refine(self, pid: str, sid: str) -> Any:
+        # it reads only the base stage's mesh and laser points: no recording needed (a merged scan too)
         return self._stage_job(pid, sid, "process_refine", lambda ctx, sp, prog: self._do_refine(ctx, sp, prog),
-                               need_track=True, message="Refining with the laser lines")
+                               need_track=False, need_recording=False, check=self._need_refine_source,
+                               message="Refining with the laser lines")
 
     def submit_spacetime(self, pid: str, sid: str) -> Any:
         return self._stage_job(pid, sid, "process_spacetime", lambda ctx, sp, prog: self._do_spacetime(ctx, sp, prog),
@@ -1944,8 +2126,9 @@ class ProcessManager:
                             "straighten": "auto" if st["stages"]["straighten"]["state"] in ("done", "skipped") else "off",
                             "refine": "auto" if st["stages"]["refine"]["state"] in ("done", "skipped") else "off",
                             "voxel_mm": voxel}
-                ops = [{"op": e["op"], "params": e["params"]} for e in st["edits"][: st["cursor"]]
-                       if e["op"] in RECIPE_OPS]
+                # the edits before the space was freed (FEATURE_PLAN R2: kept by name in the base), then the rest
+                ops = [{"op": e["op"], "params": e["params"]} for e in
+                       list(st["base"].get("applied") or []) + st["edits"][: st["cursor"]] if e["op"] in RECIPE_OPS]
         elif settings is None or ops is None:
             raise ApiError(422, "send either from_scan or both settings and ops",
                            "for example {name, from_scan: {project_id, scan_id}}")
@@ -2096,6 +2279,8 @@ class ProcessManager:
     def trajectory(self, pid: str, sid: str) -> dict:
         sp = self.scan(pid, sid)
         path = sp.dir / "track" / "trajectory.csv"
+        if not path.is_file():  # the track stage's files were removed to free space (R2): the result's path
+            path = sp.result_dir / "trajectory.csv"
         if not path.is_file():
             raise ApiError(404, "this scan has no trajectory yet", "run Track (or Make mesh) first")
         rows = [(i, T) for i, _, ok, T in read_trajectory(path) if ok]

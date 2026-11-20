@@ -13,7 +13,9 @@
 as the contract says, plus ``format_version``, ``ohs_version`` (the engine that wrote it) and per
 scan ``n_frames``, ``duration_s``, ``quality`` (of the last processing), ``error`` (of a failed
 processing) and ``report`` (a compact summary of ``result/report.json``, :func:`report_summary`; since H4 with
-the scan's own calibration status in short, ``health_status: {state, part, reason}``). It is written
+the scan's own calibration status in short, ``health_status: {state, part, reason}``); since R2 ``keep``
+(``engineering`` or ``standard`` once the user freed the scan's space; absent means ``full``) and ``freed``
+(``[{when, keep, bytes}]``, each time it was freed). It is written
 atomically (temporary file + rename), so a crash never leaves half a file.
 
 Ids are filesystem-safe: projects ``<slug of the name>-<4 hex>``, scans ``scan-<local time>``.
@@ -42,12 +44,14 @@ from typing import Any
 from ohs import __version__
 from ohs.server.protocol import ApiError, jsonable, now_iso, quality_or_none
 
-__all__ = ["ProjectStore", "RESULT_FILES", "SCAN_STATUSES", "report_summary"]
+__all__ = ["KEEP_MODES", "ProjectStore", "RESULT_FILES", "SCAN_STATUSES", "report_summary"]
 
 log = logging.getLogger(__name__)
 
 FORMAT_VERSION = 1
 SCAN_STATUSES = ("recording", "recorded", "processing", "processed", "failed")
+#: what a scan keeps on disk (FEATURE_PLAN R2, :mod:`ohs.server.keep`), lightest last; absent = "full"
+KEEP_MODES = ("full", "engineering", "standard")
 _SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$")
 #: files served by GET .../files/{name}: name -> (folder inside the scan, media type)
 RESULT_FILES: dict[str, tuple[str, str]] = {
@@ -212,6 +216,12 @@ class ProjectStore:
             out["quality"] = quality_or_none(entry["quality"]) or entry["quality"]
         if entry.get("merged_from"):  # a scan merged from others (it has no recording of its own)
             out["merged_from"] = entry["merged_from"]
+        # what the scan keeps on disk (FEATURE_PLAN R2): the mode says what the user removed; has_recording is the
+        # truth on disk now
+        out["keep"] = entry.get("keep") if entry.get("keep") in KEEP_MODES else "full"
+        if entry.get("freed"):
+            out["freed"] = entry["freed"]
+        out["has_recording"] = (self.root / pid / "scans" / sid / "recording" / "frames.csv").is_file()
         thumb = self.root / pid / "scans" / sid / "thumbnail.jpg"
         out["thumbnail_url"] = f"{base}/thumbnail.jpg" if thumb.is_file() else None
         return out
