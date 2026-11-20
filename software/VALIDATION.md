@@ -3527,6 +3527,98 @@ filling (MAINTENANCE_PLAN F15: not the thinning).
 
 Limits: two simulated scenes, 2 s each; real 60 frames a second recordings may differ.
 
+## Projects larger than memory (FEATURE_PLAN R5, 2026-11-20)
+
+**Method.** A copy of the project "My first scan", served by its own server on its own data folder.
+Each job and page ran one at a time; Make mesh, Straighten, Fuse, Align and Merge each on a fresh
+server. The server process was sampled twice a second with `tools/memory_peaks.py`, which reads
+Windows' own counters: working set and commit, now and at the process's peak (so a peak between two
+samples is not missed), the process's graphics memory, and the system's available memory. The PC:
+Ryzen 7 7735U, Radeon 680M (its shared graphics memory is ordinary RAM), 19.8 GB, Windows 11.
+Another agent's test suite (about 2.2 GB), its server (about 1.4 GB), Claude (about 5 GB) and
+Defender ran at the same time; 9 to 12 GB were available before each job. Allowance for the
+server: 19.8 GB less about 4 GB for Windows and about 1.5 GB for the browser tab, so about 14 GB.
+Measured by an Opus agent.
+
+**The project.** Eight scans at Best, 355 to 761 frames at 30 frames a second: seven at 1280x800
+(about 0.81 million triangles each), one at 640x400 (0.36 million). One was then fused at 0.5 mm:
+3,341,378 triangles. A scan recorded through the Scan page for 120 s as a looped replay: 2,459
+frames (the recorder kept about 20 frames a second on the busy PC), 1.52 million triangles, about
+3.0 GB of recording. Two merges: 7 scans (3,983 frames) and 8 scans with the long one (6,440
+frames). A real large project by the sizes of "What a scan takes on disk": 8 x 3,600 frames x
+1.2 MB = 35 GB of recordings.
+
+**Peaks** (the server process; share of 19.8 GB; before the crossing fix unless marked):
+
+| Job or page (server side) | Peak working set | Peak commit | Share | Time |
+|---|---|---|---|---|
+| Make mesh Best, 0.81M triangles, 355 to 761 frames (7 scans) | 7.63 to 8.44 GB | 10.8 to 11.4 GB | 39 to 43 % | 129 to 415 s |
+| Make mesh Best, one of them, after the fix (GPU / CPU path) | 1.42 / 1.39 GB | 4.92 / 2.94 GB | 7 % | 111 / 228 s |
+| Make mesh Best, 640x400, 525 frames | 1.05 GB | 3.15 GB | 5 % | 105 s |
+| Make mesh Best, 2,459 frames | 2.95 GB | 6.01 GB | 15 % | 765 s |
+| Straighten alone | 7.61 GB | 9.20 GB | 38 % | 174 s |
+| Fuse at 1.0 / 0.7 / 0.5 mm (0.81M / 1.66M / 3.34M triangles) | 1.00 / 1.81 / 7.04 GB (plus 2.2 GB graphics) | 3.64 / 5.29 / 9.38 GB | 5 / 9 / 36 % (47 % with graphics) | 104 / 115 / 149 s |
+| Edits at 0.81M: fill holes / smooth / simplify / remove table / floaters | 0.54 / 0.65 / 0.94 / 0.34 / 0.23 GB | 2.07 GB at most | under 5 % | 0.6 to 50 s |
+| The same edits at 3.35M | 1.53 / 2.00 / 3.14 / 0.70 / 0.24 GB | 4.28 GB at most | 16 % at most | 0.5 to 102 s |
+| Undo and redo from the cache, 0.81M / 3.35M | 0.44 / 1.09 GB at most | 2.25 GB at most | under 6 % | 0.1 to 3 s |
+| Fit, keep a feature, the features, 0.81M / 3.34M | 0.36 / 0.75 GB | 1.9 GB | under 4 % | 4 to 9 s |
+| Report (HTML), 0.81M / 3.34M | 0.43 / 1.06 GB | 2.2 GB | 5 % | 0.7 to 2.2 s |
+| Check, then its reasons, 9 scans one after another on one server | 2.48 GB at the end | 3.68 GB | 13 % | 0.4 to 11 s each |
+| Every scan's viewer routes, 9 scans, twice | 1.41 GB | 2.51 GB | 7 % | 1 to 17 s each |
+| Align 8 scans (28 pairs) | 0.82 / 0.86 GB | 1.99 GB | 4 % | 307 / 145 s |
+| Merge 7 scans, 3,983 frames | 1.07 GB | 3.71 GB | 5 % | 513 s |
+| Merge 8 scans, 6,440 frames | 2.54 GB | 5.49 GB | 13 % | 797 s |
+| Scanning live, 2 min | 0.53 GB | 2.23 GB | 3 % | 121 s |
+| Disk report; free-space plans; moves to "recording and result" and "result only" | 0.68 GB at most | 1.76 GB | 3 % | 0.1 to 1.7 s |
+
+- An idle server takes 0.22 GB (1.32 GB commit). Once the GPU has been used, commit stays near 3 GB
+  (the OpenCL driver's reserve).
+- During four Make mesh runs before the fix, available memory touched 0 GB; once that fell on the
+  8 GB peak and pages were read back in. So this PC did swap that night, with the other load.
+- After every job memory comes back (0.2 to 0.8 GB working set). On one server each opened scan
+  keeps its Check arrays and ray-casting scene until the server restarts: 0.26 GB to 1.67 GB over
+  9 scans, about 0.1 GB per million triangles a scan. The viewer's routes keep about 0.04 GB for a
+  0.8M scan; opening them all a second time added nothing.
+
+**Trends.**
+- Make mesh at Best: 1 to 1.4 GB besides Straighten's crossings, almost whatever the frames.
+- Fuse: 1.0 / 1.8 / 7.0 GB at 0.8 / 1.66 / 3.34 million triangles; faster than the triangles below
+  0.7 mm.
+- Edits: about 0.24 GB plus 0.9 GB per million triangles (simplify, the most).
+- Check and reasons: about 0.25 GB plus 0.7 GB per million triangles.
+- Merging N scans of F frames: about 0.3 GB while fusing (frames add about 20 MB per 1,000), plus
+  about 1.5 GB per million triangles of the merged model at the end; about 0.12 s a frame. Eight
+  3,600-frame scans: about an hour and a few GB.
+- So memory does not limit a scan's length or the number of scans. What did was the crossings (a
+  scanner held still or moved slowly), now mended, and very fine fusing (0.5 mm and below).
+
+**The laser crossings** (`ohs/track/curve_ba.py`, `find_crossings`). The candidates are the pairs
+of laser points within 3 mm among the curves of the 200 frames it samples. Before: about 157 bytes
+a candidate (146 / 155 / 156 / 158 at 4.3 / 13.2 / 22.2 / 45.8 million). Now the candidates are
+filtered 2^19 at a time, in order: 16 bytes a candidate (the pairs themselves) plus one piece.
+
+| Scan (200 sampled frames, 1280x800) | Candidates | Before | After |
+|---|---|---|---|
+| The example scans (a looped short replay) | 46 million | 7.57 GB for Make mesh | 1.42 GB for Make mesh |
+| The 2,459-frame scan | 13.6 million | 2.95 GB for Make mesh | not measured again |
+| A slow scan, 2° a second (simulated) | 61 million | about 10.6 GB by the law, not run | 2.28 GB for the crossings (36 s) |
+| Nearly still (simulated) | 84 million | about 14.2 GB by the law (17 GB commit), not run | 2.28 GB for the crossings (46 s) |
+
+The same after the fix: Make mesh at Best on one example scan, before and after, on the GPU path
+and the CPU path, gives the same camera path and laser points (bytes), the same Straighten report
+but for its timings (967 crossings on the GPU path, 975 on the CPU path), and the same mesh (every
+vertex's values with its sigma and looks, every face named by its vertices' values). Guard:
+`tests/test_track_curve_ba_memory.py`, which keeps a copy of the old function and compares every
+array bit for bit, also on a made-up scan held still (4.4 million candidates: 608 MB before, 87 MB
+now, against a bound of 201 MB).
+
+**The browser side** (the bytes the pages ask for, and `plyParse.ts` under Node; the tab itself was
+not measured). The viewer asks for 28.8 MB for a 0.81M scan and 115.6 MB at 3.34M. The Align page
+with eight scans asks for 254.6 MB of meshes: it downloads up to eight full meshes at once. A
+parsed mesh is 26 to 27 bytes a triangle (21.9 MB at 0.81M, 87.4 MB at 3.34M), twice that while
+parsing. Eight meshes kept: 229 MB of arrays; the tab adds its graphics copies and search trees,
+roughly two to three times that.
+
 ## Presets: which settings matter, measured (FEATURE_PLAN P1, 2026-11-20)
 
 `tools/preset_study.py` varies one setting at a time around today's Make mesh (the app's

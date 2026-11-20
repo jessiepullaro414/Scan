@@ -1138,7 +1138,41 @@ Stronger lossless compression, or a lossy one for the frames between key frames,
 real recordings (question 9). PNG's level is 1 today; the trade of size against saving speed is
 measured in R1.
 
-### R5. Projects larger than memory (L, measure first)
+### [x] R5. Projects larger than memory (L, measure first)
+- **Measured 2026-11-20; the stop rule is met, and one fix was made** (the task as written
+  follows below; an Opus agent; `VALIDATION.md`, "Projects larger than memory").
+  - **The project:** a copy of "My first scan" on a server of its own: eight scans at Best (0.36
+    to 0.81 million triangles, one fused at 0.5 mm to 3.34 million), a 2,459-frame scan recorded
+    through the Scan page, and merges of 7 scans (3,983 frames) and 8 scans (6,440 frames).
+  - **Everything fits this PC** (19.8 GB; about 14 GB allowed for the server). The merge of
+    eight scans, expected to be the heaviest job, peaks at 2.54 GB: fusing takes 0.3 GB whatever
+    the number of frames, the rest is the final mesh.
+  - **The largest peak was Make mesh, 8.44 GB,** all of it one step of Straighten: the laser
+    crossings (`ohs/track/curve_ba.py`, `find_crossings`), at about 157 bytes for every pair of
+    laser points within 3 mm among the 200 frames it samples. That number depends on how much
+    the laser lines overlap, not on the scan's length: 46 million pairs on the example scans, 84
+    million on a simulated scan held nearly still, which by that law needs about 14 GB.
+  - **Fixed:** the pairs are filtered a piece at a time, in order. The crossings come out bit for
+    bit the same, and so do the camera path, the laser points and the mesh of Make mesh on both
+    paths (the agent's run on one scan). Make mesh went from 7.57 GB to 1.42 GB there, and the
+    slow and nearly still simulated scans run their crossings at 2.28 GB.
+  - **Memory comes back** after every job. On one server each opened scan keeps its Check arrays
+    and its ray-casting scene until the server restarts: about 0.1 GB per million triangles a
+    scan, 1.4 GB over this project.
+  - **Not a problem, measured:** the cache files and `load_ply` read whole, undo and redo (at
+    most 1.1 GB at 3.3 million triangles), the edits (0.24 GB plus 0.9 GB per million triangles
+    at most), aligning eight scans (under 0.9 GB).
+  - Guard: `tests/test_track_curve_ba_memory.py` (4: the same crossings as the old code bit for
+    bit, and under 24 bytes a pair where the old code took 139), `tests/test_tools_memory_peaks.py`
+    (3). Tool: `tools/memory_peaks.py` (Windows' own counters, no new dependency).
+  - *In review:* one test of the tool failed when run after a test that had used more memory
+    (Windows' peak counter is for a process's whole life); it now watches a process of its own.
+  - **Left:** fusing at 0.5 mm takes 7.0 GB plus 2.2 GB of shared graphics memory at 3.34
+    million triangles, the nearest thing to the limit now; the pairs themselves stay (16 bytes
+    each, 1.3 GB at 84 million); the browser tab's own memory with eight meshes on the Align
+    page was not measured (the meshes are 26 to 27 bytes a triangle once parsed; the page
+    downloads up to eight full meshes, 255 MB here); a real 3,600-frame recording; the freeing
+    dialog called a recording that holds 20 frames a second "30 frames a second".
 - **What:** build a large project (eight scans at Best quality, the most the Align page takes at
   once) and record the peak memory of each page and job. Only what fails or swaps gets fixed. The likely places: the
   cache files are read whole (`_load_npz`, no memory mapping), `load_ply` reads the whole file,

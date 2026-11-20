@@ -184,9 +184,40 @@ def _stack(T: dict[int, np.ndarray], frames: np.ndarray) -> np.ndarray:
     return S[[pos[int(f)] for f in frames]]
 
 
+#: candidate pairs filtered at a time by :func:`find_crossings` (about 70 MB of temporaries)
+_CANDIDATE_PIECE = 1 << 19
+
+
+def _local_crossings(pairs: np.ndarray, Xw_: np.ndarray, Tw_: np.ndarray, Fr_: np.ndarray, sin_min: float,
+                     local_mm: float) -> tuple[np.ndarray, ...]:
+    """``(i, j, sa, sb, dist)`` of the candidate ``pairs`` (rows ``i, j``) from different frames whose
+    tangents differ enough and whose local lines' closest points lie within ``local_mm`` of both samples."""
+    i, j = pairs[:, 0], pairs[:, 1]
+    keep = Fr_[i] != Fr_[j]
+    i, j = i[keep], j[keep]
+    keep = np.linalg.norm(np.cross(Tw_[i], Tw_[j]), axis=1) > sin_min
+    i, j = i[keep], j[keep]
+    a, b, ta, tb = Xw_[i], Xw_[j], Tw_[i], Tw_[j]
+    w0 = a - b
+    A_ = np.einsum("ij,ij->i", ta, ta)
+    B_ = np.einsum("ij,ij->i", ta, tb)
+    C_ = np.einsum("ij,ij->i", tb, tb)
+    D_ = np.einsum("ij,ij->i", ta, w0)
+    E_ = np.einsum("ij,ij->i", tb, w0)
+    den = np.maximum(A_ * C_ - B_ * B_, 1e-12)
+    sa = (B_ * E_ - C_ * D_) / den
+    sb = (A_ * E_ - B_ * D_) / den
+    dist = np.linalg.norm((a + sa[:, None] * ta) - (b + sb[:, None] * tb), axis=1)
+    local = (np.abs(sa) < local_mm) & (np.abs(sb) < local_mm)
+    return i[local], j[local], sa[local], sb[local], dist[local]
+
+
 def find_crossings(curves: dict[int, list[Curve]], T: dict[int, np.ndarray],
                    params: CurveParams | None = None) -> Crossings:
-    """The crossings of curves from different frames at poses ``T`` (module docstring, step 2)."""
+    """The crossings of curves from different frames at poses ``T`` (module docstring, step 2).
+
+    The candidates (point pairs within ``radius_mm``) are filtered :data:`_CANDIDATE_PIECE` at a time:
+    with the scanner held nearly still they reach tens of millions."""
     from scipy.spatial import cKDTree  # noqa: PLC0415
 
     p = params or CurveParams()
@@ -213,24 +244,16 @@ def find_crossings(curves: dict[int, list[Curve]], T: dict[int, np.ndarray],
     pairs = cKDTree(Xw_).query_pairs(float(p.radius_mm), output_type="ndarray")
     if len(pairs) == 0:
         return empty
-    i, j = pairs[:, 0], pairs[:, 1]
-    keep = Fr_[i] != Fr_[j]
-    i, j = i[keep], j[keep]
-    keep = np.linalg.norm(np.cross(Tw_[i], Tw_[j]), axis=1) > math.sin(math.radians(p.min_angle_deg))
-    i, j = i[keep], j[keep]
-    a, b, ta, tb = Xw_[i], Xw_[j], Tw_[i], Tw_[j]
-    w0 = a - b
-    A_ = np.einsum("ij,ij->i", ta, ta)
-    B_ = np.einsum("ij,ij->i", ta, tb)
-    C_ = np.einsum("ij,ij->i", tb, tb)
-    D_ = np.einsum("ij,ij->i", ta, w0)
-    E_ = np.einsum("ij,ij->i", tb, w0)
-    den = np.maximum(A_ * C_ - B_ * B_, 1e-12)
-    sa = (B_ * E_ - C_ * D_) / den
-    sb = (A_ * E_ - B_ * D_) / den
-    dist = np.linalg.norm((a + sa[:, None] * ta) - (b + sb[:, None] * tb), axis=1)
-    local = (np.abs(sa) < p.local_mm) & (np.abs(sb) < p.local_mm)
-    i, j, sa, sb, dist = i[local], j[local], sa[local], sb[local], dist[local]
+    # the candidates are filtered a piece at a time, in order (each test is per pair, so the survivors
+    # and their order are those of filtering all at once): memory ~16 bytes a candidate (the pairs) plus
+    # one piece, not ~140 bytes a candidate (FEATURE_PLAN R5: tens of millions with the scanner held still)
+    sin_min = math.sin(math.radians(p.min_angle_deg))
+    kept: list[tuple[np.ndarray, ...]] = []
+    for s in range(0, len(pairs), _CANDIDATE_PIECE):
+        kept.append(_local_crossings(pairs[s:s + _CANDIDATE_PIECE], Xw_, Tw_, Fr_, sin_min, float(p.local_mm)))
+    del pairs
+    i, j, sa, sb, dist = (np.concatenate([k[n] for k in kept]) for n in range(5))
+    del kept
     if len(i) == 0:
         return empty
     lo, hi = np.minimum(Cid_[i], Cid_[j]), np.maximum(Cid_[i], Cid_[j])
