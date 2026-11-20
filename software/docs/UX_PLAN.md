@@ -11,6 +11,12 @@ Each finding is a **defect** (plainly wrong, or against the project's own rules:
 **choice** (the owner decides; the reviewer's pick is given). Sizes: S, M, L. The numbering is
 U1 to U50, by how much it hurts.
 
+**Decided by the owner (2026-11-20): fix all of them.** Every finding marked "choice" goes ahead
+with the reviewer's pick as written here. The defects are mended first; then the choices, in
+three waves: the names and words (U2, U3, U4, U17, U37, U47 and the table "One name for each
+thing"), the structure of the pages (U11, U12, U15, U25, U26, U44, U45, U49), and what needs
+new work in the server too (U5, U7 with U50, U14, U21, U34).
+
 ## The ten that matter most
 
 1. **U1:** an open calibration result silently blocks the first scan.

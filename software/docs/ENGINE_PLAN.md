@@ -16,9 +16,14 @@ Section names are `VALIDATION.md`'s unless marked MP (`MAINTENANCE_PLAN.md`) or 
 The rules of `FEATURE_PLAN.md` and `MAINTENANCE_PLAN.md` hold. In short:
 
 - One task, one commit. Guard test first, seen failing. Never loosen a test. Both compute paths.
-- **Anything that changes what a scan on the GPU path produces, or what a mesh edit produces,
-  is built as an option that is off.** How such an option gets switched on is the owner's
-  call (asked 2026-11-20; see "Decisions").
+- **A change to what a scan produces is adopted when it is better** (the owner, 2026-11-20,
+  E-D1): it meets its stop rule, it is better on every test scene of the scorecard or the same
+  within that scene's spread, nothing thin gets worse, and the report says what was switched
+  on, with the numbers. It stays a setting that can be turned off. A change that misses its
+  stop rule on any scene is recorded as measured and stays off; a near miss goes to the owner
+  with the numbers, as F14's did.
+- **A change to what a mesh edit produces** is still built as an option that is off
+  (`FEATURE_PLAN.md`, the standing rule; `MAINTENANCE_PLAN.md` F15 is the example).
 - Thin parts matter: every rule with a size in mm is tested on a thin plate and its limit
   stated; nothing thin is removed or thickened silently.
 - A stop rule is written before the experiment. A result that misses it is recorded as
@@ -35,6 +40,9 @@ The rules of `FEATURE_PLAN.md` and `MAINTENANCE_PLAN.md` hold. In short:
 | # | Question | Suggestion |
 |---|---|---|
 | E-D1 | An engine change that alters GPU-path scan results and meets its stop rule: switch it on, or keep it off until the owner has looked? Asked 2026-11-20. | The rule the owner gave for the CPU path: adopt when better on every test scene, with a report of what was switched on. |
+
+**Decided by the owner (2026-11-20):**
+- **E-D1:** adopt a change when it is better (see the rules above).
 
 ## The error budget today
 
