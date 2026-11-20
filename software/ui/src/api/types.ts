@@ -83,6 +83,8 @@ export type Scan = {
   thinned?: ThinnedRecording & { when: string };
   /** P2: the scan's preset and the values changed by hand for it; absent on a scan made before presets (General). */
   preset?: ScanPresetKept;
+  /** N2: present on a second pass: the scan it belongs to, what was asked for, and its steps after Stop. */
+  continues?: PassLink;
 };
 
 /** R3: what a recording thinned to the frames Standard quality uses holds, and held before. */
@@ -185,6 +187,8 @@ export type SessionState = {
   mode: ScanMode;
   elapsed_s: number;
   frames: number;
+  /** N2: while a second pass records, the scan it belongs to (absent for a scan that continues nothing). */
+  continues?: { scan_id: string; scan_name: string };
 };
 
 export type JobState = "queued" | "running" | "done" | "failed" | "cancelled";
@@ -211,7 +215,7 @@ export type Settings = Record<string, unknown>;
 // ------------------------------------------------------------------ request bodies
 export type ConnectBody = { source: ConnectSource; recording?: string; loop?: boolean };
 /** `preset` / `preset_values` (P2): the preset chosen on the Scan page and the values changed by hand there. */
-export type StartBody = { project_id: string; mode?: ScanMode; name?: string; preset?: string; preset_values?: PresetValues };
+export type StartBody = { project_id: string; mode?: ScanMode; name?: string; preset?: string; preset_values?: PresetValues; continues?: PassStart };
 /** The level of the final mesh: "standard" (default, 30 frames a second of scanning), "best" (every frame), "preview".
  * Older engines send "full", the old name of "standard": read it with `normalizeQuality` (lib/quality.ts). */
 export type ProcessQuality = "standard" | "best" | "preview";
@@ -1518,6 +1522,90 @@ export type CheckWhy = {
     frames_cap: number | null;
   };
   ms: number;
+};
+
+// ------------------------------------------------------------------ N2: a second pass that joins the first
+// APP_API.md "A second pass". "Scan these areas" in the Check panel starts a scan with `continues`; after
+// Stop the pass is made into a mesh, aligned to the first scan and merged with it, as jobs.
+
+/** A place to scan from, as the Check panel gave it: the pose and its sentence. */
+export type PassPose = { area: number | null; kind: string; text: string | null; pose: Partial<CheckPose> & Pick<CheckPose, "target_mm" | "look_dir"> };
+/** What `POST /api/scan/start` takes as `continues`. */
+export type PassStart = {
+  scan_id: string;
+  tolerance_mm: number;
+  version?: number; // the first mesh's version the Check answer was made on (409 when it changed)
+  areas: number[]; // places in that Check answer, from 0
+  poses?: { area: number | null; kind: string; text: string | null; pose: CheckPose }[];
+  same_setup?: boolean; // false: the part was moved since the first scan
+};
+export type PassChainState = "waiting" | "processing" | "aligning" | "merging" | "merged" | "not_aligned" | "not_merged" | "failed" | "cancelled";
+export type PassStep = "process" | "align" | "merge";
+export type PassChain = {
+  state: PassChainState;
+  step: PassStep | null;
+  jobs: Partial<Record<PassStep, string>>;
+  message: string;
+  merged_scan_id?: string | null;
+  align?: { accepted: boolean; verdict: string; overlap?: number | null; rms_mm?: number | null } | null;
+};
+export type PassArea = { index: number; kind: CheckKind; area_mm2: number; center: [number, number, number]; n_faces: number };
+/** The link a pass's scan entry keeps (`Scan.continues`). */
+export type PassLink = {
+  scan_id: string;
+  scan_name: string;
+  tolerance_mm: number;
+  version: number;
+  areas: PassArea[];
+  poses: PassPose[];
+  same_setup: boolean;
+  /** `same_setup` in words, as the engine got it ("The part was not moved since the first scan: ..."); older passes lack it. */
+  setup_words?: string;
+  /** Why the pass could be aligned but not merged (the first scan's recording is gone...); null when it can be. */
+  merge_problem: string | null;
+  preset_from_first: boolean;
+  preset: string; // the preset's name, as the pass got it
+  chain: PassChain;
+};
+/** `GET /api/projects/{pid}/scans/{sid}/pass`. */
+export type PassView = Omit<PassLink, "chain"> & {
+  pass_id: string;
+  pass_name: string;
+  chain: PassChain;
+  job: Job | null; // the step's job (running or last)
+  steps: PassStep[];
+  note: string; // a merge adds coverage, not accuracy
+  first: { id: string; name: string; mesh_url: string | null; has_mesh: boolean };
+  /** The asked areas' faces on the first mesh (base64 uint32, one per area), while that mesh is the version they were asked on. */
+  areas_faces: string[] | null;
+  areas_faces_why_not: string | null;
+};
+export type PassShares = {
+  id: string;
+  name: string;
+  share_ok: number | null;
+  share_uncertain: number | null;
+  share_not_measured: number | null;
+  n_areas: number;
+  area_mm2: number;
+  has_sigma: boolean;
+};
+export type PassAreaState = "passes" | "partly" | "weak" | "not_found" | "unknown";
+/** `POST /api/projects/{pid}/scans/{sid}/pass/compare`: before and after at the same tolerance. */
+export type PassCompare = {
+  tolerance_mm: number;
+  note: string;
+  rule: { match_mm: number; match_angle_deg: number; passes_share: number };
+  first: PassShares;
+  merged: PassShares;
+  areas: (PassArea & { share_ok: number | null; found_share: number; state: PassAreaState })[];
+  areas_note: string | null;
+  /** On the surface both meshes hold (the first scan's surface found on the merged one): the share that passes before and after. */
+  common?: { found_share: number; before_ok: number | null; after_ok: number | null };
+  /** The first scan's surface that is not in the merged scan, and why when it is known. */
+  missing?: { share: number; area_mm2: number; why: string | null };
+  /** What `first` and `merged` are: each whole mesh, as its own Check says it. */
+  whole_note?: string;
 };
 
 // ------------------------------------------------------------------ M4 first slice: align two scans and merge them

@@ -18,6 +18,7 @@ points of the source's mesh into the target's.
 from __future__ import annotations
 
 import dataclasses
+import json
 import logging
 import shutil
 from typing import Any
@@ -30,6 +31,7 @@ __all__ = ["AlignManager"]
 
 log = logging.getLogger(__name__)
 
+MESHING_KEYS = ("voxel_mm", "thin_walls")  # the preset values that act on how a merge makes its model
 MIN_PAIRS = 3
 MAX_SCANS = 8  # scans aligned or merged at once (every pair is aligned: 28 pairs at 8)
 TAG_FRAMES = 120  # frames of a scan looked at for tags (an even pick of those with a pose; about 2 s at 640x400)
@@ -213,6 +215,30 @@ class AlignManager:
                                        meta={"project_id": pid, "scans": list(scans)})
 
     # ------------------------------------------------------------------ merge
+    def _meshing(self, pid: str, sid: str) -> dict:
+        """The scan's preset values that act on meshing (FEATURE_PLAN P2); {} for General and before presets."""
+        presets = getattr(self.st, "presets", None)
+        act = presets.acting(pid, sid) if presets is not None else {}
+        return {k: act[k] for k in MESHING_KEYS if act.get(k) is not None}
+
+    def merge_params(self, pid: str, sid: str, width: int, quality: str) -> tuple[Any, dict]:
+        """The merge's ``ProcessParams`` with the preset of ``sid`` (the scan that stays in place) applied to
+        meshing as a processing stage applies it (:func:`ohs.server.processing.preset_meshing`), and those
+        values. General: exactly the parameters a merge had before presets."""
+        from ohs.server.processing import preset_meshing
+        from ohs.server.studio import process_params
+
+        used = self._meshing(pid, sid)
+        params = dataclasses.replace(process_params(self.st.cfg, "markerless", quality, width), poisson=False)
+        return preset_meshing(params, width, used.get("voxel_mm"), used.get("thin_walls")), used
+
+    @staticmethod
+    def _meshing_words(v: dict) -> str:
+        parts = [f"mesh detail {float(v['voxel_mm']):g} mm" if "voxel_mm" in v else "the app's mesh detail"]
+        if "thin_walls" in v:
+            parts.append(f"thin walls {v['thin_walls']}")
+        return " and ".join(parts)
+
     @staticmethod
     def _rigid(T: Any) -> np.ndarray:
         try:
@@ -255,7 +281,6 @@ class AlignManager:
                 from ohs.io.recording import RecordingReader
                 from ohs.server.projects import report_summary
                 from ohs.server.protocol import quality_or_none
-                from ohs.server.studio import process_params
 
                 supports: list[Any] = [None] * len(items)
                 notes: list[list[str]] = [[] for _ in items]
@@ -268,7 +293,15 @@ class AlignManager:
                 reader = RecordingReader(first["recording"])
                 width = int((reader.meta.get("image_size") or list(reader.frame(0).image_size))[0])
                 quality = quality_or_none(first["entry"].get("quality")) or "standard"
-                params = dataclasses.replace(process_params(self.st.cfg, "markerless", quality, width), poisson=False)
+                # FEATURE_PLAN P2: the first scan's preset acts on meshing as in its own processing (General: as before)
+                params, used = self.merge_params(pid, first["id"], width, quality)
+                others = []
+                for it in items[1:]:
+                    theirs = self._meshing(pid, it["id"])
+                    if theirs != used:
+                        others.append(f"\"{it['name']}\" was made with {self._meshing_words(theirs)}; the merged scan is "
+                                      f"made with {self._meshing_words(used)}, as \"{first['name']}\" (the scan that stays "
+                                      "in place) was.")
                 out = work / ctx.job.id
                 shutil.rmtree(out, ignore_errors=True)
 
@@ -281,6 +314,14 @@ class AlignManager:
                                        for it, T, sup, note in zip(items, poses, supports, notes)], out, params, progress)
                     if rep["mesh"]["empty"]:
                         raise ApiError(409, "the merged model is empty", "check that the scans have a mesh, and align them again")
+                    if used or others:  # which preset made the model, and what differed (General alone: nothing added)
+                        presets = getattr(self.st, "presets", None)
+                        if used and presets is not None:
+                            rep["preset"] = {**presets.report_block(pid, first["id"], {
+                                "mode": "markerless", "quality": quality, "voxel_mm": rep["mesh"].get("voxel_mm"),
+                                "thin_walls": params.pipeline.thin_walls}), "from_scan": first["id"]}
+                        rep["warnings"] = list(rep.get("warnings") or []) + others
+                        (out / "report.json").write_text(json.dumps(jsonable(rep), indent=1), encoding="utf-8")
                     ctx.progress(0.95, "Adding the merged scan to the project", force=True)
                     scan, _ = self.st.projects.add_scan(pid, title, "markerless")
                     sid = scan["id"]
@@ -290,7 +331,9 @@ class AlignManager:
                         pid, sid, status="processed", n_frames=int(rep["frames"]["fused"]), quality=quality,
                         duration_s=float(sum(float(it["entry"].get("duration_s", 0.0) or 0.0) for it in items)),
                         report=report_summary({**rep, "quality": quality}),
-                        merged_from=[{"id": it["id"], "name": it["name"]} for it in items])
+                        merged_from=[{"id": it["id"], "name": it["name"]} for it in items],
+                        **({"preset": dict(first["entry"]["preset"])} if used and isinstance(first["entry"].get("preset"), dict)
+                           else {}))
                 finally:
                     shutil.rmtree(out, ignore_errors=True)
                     if work.is_dir() and not any(work.iterdir()):

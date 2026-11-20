@@ -69,6 +69,7 @@ import { RecipesPanel } from "./process/RecipesPanel";
 import { StagesPanel } from "./process/StagesPanel";
 import { DownloadPanel, StatsPanel } from "./process/StatsPanel";
 import { CHECK_ICON, CheckPanel } from "./viewer/CheckPanel";
+import { usePass } from "../store/pass";
 import { ConfidenceLegend } from "./viewer/ConfidenceLegend";
 import { DeviationLegend } from "./viewer/DeviationLegend";
 import { LasersLegend } from "./viewer/LasersLegend";
@@ -514,6 +515,7 @@ export default function ProcessPage({ pid, sid }: { pid: string; sid: string }) 
           <CheckPanel
             check={check}
             ready={!!mesh}
+            onScanAreas={scan?.result && check.result ? (pick) => usePass.getState().scanAreas({ projectId: pid, scan, result: check.result!, why: check.why.why, ...pick }) : undefined}
             hasSigma={hasSigma}
             remake={
               scan ? (

@@ -898,7 +898,54 @@ finished scan cannot be continued; a second scan can be aligned and merged with 
   suggested poses; let the simulator scan from them; merge. The share of the surface that meets
   the tolerance must rise, and by more than with the same number of random poses.
 
-### N2. A second pass that joins the first (M)
+### [x] N2. A second pass that joins the first (M)
+- **Done 2026-11-20** (the task as written follows below; an Opus agent, two rounds).
+  - **Start:** "Scan these areas" and "Scan from these places" in the Check panel open the Scan
+    page for a pass that continues the scan (`continues` on `POST /api/scan/start`: the scan, the
+    tolerance, the mesh version, the areas, the places, and whether the part was moved, said back
+    in words). Places not worked out yet are fetched ("still being worked out") and filled in.
+  - **The first scan is shown beside the live view, not laid over it:** a reference picture,
+    faint, with the areas lit and the scanner at each place. Each scan tracks in its own frame
+    until the two are aligned; aligning the live model every few seconds would cost 4.5 to 8 s a
+    try and is mostly refused early in a pass, so an overlay would come and go or be wrong.
+  - **After Stop:** the pass is made into a mesh (the first scan's preset unless another is
+    picked), aligned to the first scan (the Align page's rule) and, only when the alignment is
+    accepted, merged into a new scan: three ordinary jobs that can be followed, cancelled and
+    continued (`ohs/server/passes.py`). Not accepted: nothing is merged, the pass stays as its own
+    scan, and the app says so and offers the Align page. The first scan is never changed.
+  - **Before and after** at the same tolerance, told on the surface both scans hold
+    (`ohs/guide/passes.py`, `common_surface`: within 2.5 mm, normals within 60°, the nearest
+    plane; tested on a 0.3 mm plate on its table), with what of the first scan is not in the
+    merged scan said apart and why (the tables, when the part was moved). The whole meshes'
+    shares are shown as what they are. The sentence that a merge adds coverage and does not yet
+    make well-seen surface more accurate is on the Scan page and the card.
+  - **A merge now follows the first scan's preset,** here and on the Align page: its voxel size
+    and thin walls, a scan made with other values named in the merge's warnings, the merged
+    scan's entry and report saying which preset. With General a merge is exactly as before (the
+    same mesh on both paths).
+  - **The test:** two simulated passes of the bracket through the routes at 1280x800, the part
+    not moved, General, GPU path. Check share at 1 mm, first to merged: 0.916 to 0.928, 0.910 to
+    0.923, 0.911 to 0.924 (on the shared surface 0.911 to 0.920); the asked area passes on 15 to
+    33 % of its surface afterwards, where it passed nowhere. **The gain is small:** one short
+    pass adds about one point. On the CPU path the chain and the shared-surface comparison run;
+    there is no sigma there, so no shares.
+  - *Found in review, in the real app with the simulator:* the Scan page sent "the part was
+    moved" inverted, so an unmoved part was merged as a moved one and its table left out; the
+    merge ignored the preset (two 0.5 mm scans merged at 1 mm); the card then said the share
+    "fell by 35 points" (65 % to 30 %) with 47 lines "not in the merged scan", though nothing had
+    got worse; and a pass set up before the reasons arrived was told no place had been worked
+    out. All four mended. Checked again in the app: the setup is said back ("The part was not
+    moved ..."), six places are listed, the merge is at 0.5 mm with both tables kept, and the
+    card reads "On the surface both scans hold (over 99.9 % of the first scan's), the share that
+    meets ± 0.3 mm stayed about the same: 65 % before, 65 % after" (a 12 s pass of the ball on
+    its table, which adds little).
+  - Guard: `tests/test_server_second_pass.py` (3), `test_server_merge_preset.py` (3),
+    `test_guide_passes.py` (9), `ui/src/lib/pass.test.ts`, `ui/src/api/mock/pass.test.ts`.
+  - **Left:** the comparison took 187 s on a 3.4-million-triangle merge on a busy PC (the card
+    says "Comparing before and after…" meanwhile); the before and after is shown on the Scan
+    page after Stop only, with no way to open it again later; a merge drops the first scan's
+    edits (it fuses the frames again, as on the Align page); N1's plan can put a table-rim area
+    first; at 640x400 tracked passes are refused by the aligner, rightly.
 - **What:** "Scan these areas" from the Check panel starts a new scan that knows which scan it
   belongs to, with the first model shown faintly and the areas lit. After Stop the two are
   aligned and merged (the engine of the Align page), and the Check answer is shown before and

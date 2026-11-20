@@ -11,6 +11,7 @@ import { useLive } from "../../store/live";
 import { processKey, useProcess } from "../../store/process";
 import { useProjects } from "../../store/projects";
 import { useSession } from "../../store/session";
+import { PassChainCard } from "./PassPanel";
 
 export function PostScanCard() {
   const last = useSession((s) => s.lastStopped);
@@ -94,7 +95,8 @@ export function ControlBar({ ready, reason, onStart }: { ready: boolean; reason:
   const stop = useSession((s) => s.stop);
   const rewind = useSession((s) => s.rewind);
 
-  if (phase === "idle" && last) return <PostScanCard />;
+  // a second pass (N2): its steps after Stop, in place of the "Make mesh" card
+  if (phase === "idle" && last) return last.scan.continues ? <PassChainCard projectId={last.projectId} scan={last.scan} /> : <PostScanCard />;
 
   if (phase === "idle") {
     return (

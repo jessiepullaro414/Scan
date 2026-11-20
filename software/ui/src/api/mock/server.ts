@@ -57,6 +57,7 @@ import type {
   Tracking,
 } from "../types";
 import { MockAlign } from "./align";
+import { MockPasses } from "./pass";
 import { MockCalib } from "./calib";
 import { HttpError, json, nowIso, uid, type MockHost, type MockSettings, type TimedJobSpec, type WorkJobSpec, type WorkStep } from "./host";
 import { normalizeQuality } from "../../lib/quality";
@@ -249,6 +250,7 @@ class MockBackend {
   private presets = new MockPresets(); // P2/P3: the presets and each scan's preset
   private references = new MockReferences();
   private aligning: MockAlign;
+  private passes: MockPasses; // N2: a second pass that joins the first
   private previewSeqs: Record<string, number> = {};
   private session: SessionState = { state: "idle", project_id: null, scan_id: null, mode: "markerless", elapsed_s: 0, frames: 0 };
   private sim: ScanSim | null = null;
@@ -321,6 +323,17 @@ class MockBackend {
       },
       wrongAlignPose(this.T_ws),
     );
+    this.passes = new MockPasses({
+      makeMesh: (p, s) => {
+        const act = this.presets.acting(s);
+        return this.studio.makeMesh(p, s, act.quality ?? "standard", act.voxel_mm ?? null);
+      },
+      align: (p, body) => this.aligning.align(p, body),
+      merge: (p, body) => this.aligning.merge(p, body),
+      check: (p, s, tolerance) => this.studio.check(p, s, { tolerance_mm: tolerance }),
+      job: (jid) => this.jobs.get(jid),
+      log: host.log,
+    });
     setInterval(() => this.tick(), 66);
   }
 
@@ -576,6 +589,10 @@ class MockBackend {
         }
         if (e === "check" && is("POST", 5)) return json(200, this.studio.check(p, s, body)); // M5 areas that need another pass
         if (e === "check" && f === "why" && is("POST", 6)) return json(200, this.studio.checkWhy(p, s, body)); // N1 why, and where to scan from
+        // N2: a second pass, its steps after Stop, and before and after (pass.ts)
+        if (e === "pass" && is("GET", 5)) return json(200, this.passes.view(p, s));
+        if (e === "pass" && f === "run" && is("POST", 6)) return json(200, this.passes.run(p, s));
+        if (e === "pass" && f === "compare" && is("POST", 6)) return json(200, this.passes.compare(p, s, body));
         if (e === "files" && f && (is("GET", 6) || is("HEAD", 6))) return this.file(p, s, f, method === "HEAD");
       }
     }
@@ -763,8 +780,16 @@ class MockBackend {
     if (!p) throw new HttpError(404, "Project not found", "Choose another project, or create one.");
     const mode: ScanMode = body.mode === "markers" ? "markers" : "markerless";
     const name = typeof body.name === "string" && body.name.trim() ? body.name.trim() : `Scan ${p.scans.length + 1}`;
-    const preset = this.presets.forStart(body, mode); // P2: 404 / 422 before the scan is made
-    const scan: Scan = { id: uid("s-"), name, created: nowIso(), mode, n_frames: 0, duration_s: 0, status: "recording", result: null, preset };
+    // N2: the scan this one is a second pass of (refused before anything is made); its preset unless another is given
+    const pass = body.continues !== undefined && body.continues !== null ? this.passes.link(p, body.continues) : null;
+    const firstPreset = pass && body.preset === undefined && body.preset_values === undefined ? p.scans.find((x) => x.id === pass.link.scan_id)?.preset : undefined;
+    const preset = this.presets.forStart(firstPreset ? { preset: firstPreset.id, preset_values: firstPreset.hand } : body, mode); // P2: 404 / 422 before the scan is made
+    if (pass) {
+      pass.link.preset_from_first = !!firstPreset || (body.preset === undefined && body.preset_values === undefined);
+      pass.link.preset = preset.name;
+    }
+    const scan: Scan = { id: uid("s-"), name, created: nowIso(), mode, n_frames: 0, duration_s: 0, status: "recording", result: null, preset, ...(pass ? { continues: pass.link } : {}) };
+    if (pass) this.passes.started(scan, pass.faces);
     p.scans.push(scan);
     p.modified = nowIso();
     this.sim = {
@@ -791,7 +816,15 @@ class MockBackend {
       this.device = { ...this.device, pico: this.device.pico ? { ...this.device.pico, emitters: { ...this.emitters } } : null };
       this.send({ type: "device", ...this.device });
     }
-    this.session = { state: "scanning", project_id: p.id, scan_id: scan.id, mode, elapsed_s: 0, frames: 0 };
+    this.session = {
+      state: "scanning",
+      project_id: p.id,
+      scan_id: scan.id,
+      mode,
+      elapsed_s: 0,
+      frames: 0,
+      ...(pass ? { continues: { scan_id: pass.link.scan_id, scan_name: pass.link.scan_name } } : {}),
+    };
     this.send({ type: "session", ...this.session });
     return this.session;
   }
@@ -836,6 +869,7 @@ class MockBackend {
       this.device = { ...this.device, pico: this.device.pico ? { ...this.device.pico, emitters: { ...this.emitters } } : null };
       this.send({ type: "device", ...this.device });
     }
+    if (p && s.scan.continues) this.passes.afterStop(p, s.scan); // N2: the pass is made into a mesh, aligned, merged
     return { scan: { ...s.scan } };
   }
 
@@ -1034,6 +1068,7 @@ class MockBackend {
     const jobBroadcast = this.jobAcc >= 0.2;
     if (jobBroadcast) this.jobAcc = 0;
     this.stepJobs(dt, jobBroadcast);
+    this.passes.tick(this.projects.values()); // N2: a second pass's steps, one after the other
 
     const s = this.sim;
     if (s && this.session.state === "scanning") this.stepScan(s, dt * this.timeScale);

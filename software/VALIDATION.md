@@ -3263,6 +3263,45 @@ Guards: `tests/test_mesh_looks.py`, `test_mesh_check_reasons.py`, `test_mesh_che
 same answer whatever the order of the vertices and faces), `test_mesh_carry_looks.py`,
 `test_guide_views.py`, `test_guide_loop.py` (slow), `test_server_check_why.py`.
 
+## A second pass that joins the first (FEATURE_PLAN N2, 2026-11-20)
+
+The simulated bracket replayed as the device through the real server, 1280x800, GPU path, the
+"General" preset, the part not moved. Measured by an Opus agent. The first scan is one 90-frame
+side sweep after a 2 s hold: a replay loses its first frames before the scan starts, and without
+the hold 48 to 54 frames of the sweep were recorded, so the scan and the area asked for changed
+from run to run (in one run the pass's alignment was refused, rightly, as "not sure which way it
+goes"). The pass is 60 frames round N1's pose for the largest area on the part that has a place to
+scan from: the same "not seen" area at the part's foot in every run, 4,760 to 4,950 mm².
+
+| Run | Check share at 1.0 mm, first to merged (whole meshes) | Areas, first to merged | Asked area that passes afterwards |
+|---|---|---|---|
+| a | 0.916 to 0.928 | 159 to 176 | 33 % of 4,759 mm² |
+| b | 0.910 to 0.923 | 92 to 142 | 15 % of 4,919 mm² |
+| c | 0.911 to 0.924 | 90 to 131 | 32 % of 4,951 mm² |
+
+- Alignment accepted every time: 70 to 81 % of the part within 1 mm, about 0.3 mm RMS.
+- On the surface both scans hold (run c: all of the first scan's surface is found on the merged
+  mesh, 5 mm² missing): 0.911 to 0.920. The merged scan lists more areas than the first because it
+  holds more surface; that is why the app tells the change on the shared surface.
+- **The gain is small and real:** the pass adds what the first scan saw badly; the asked area
+  passed nowhere before. Where both scans saw a place the merge averages it, so the well-seen
+  surface is no more accurate than before (as "Aligning and merging two scans" found).
+- Before the hold, with 48 to 54 frames: 0.928 to 0.934, 0.930 to 0.937, 0.932 to 0.939 (30 to 37 %
+  of the asked area).
+- At 640x400 the tracked pass was refused (residual spread 0.72 mm against the 0.7 mm limit; it was
+  2.9 mm off): the refusal was right.
+- CPU path: the chain runs and merges; the meshes have no sigma there, so only the extent of the
+  shared surface is told.
+- **A merge follows the first scan's preset:** two bracket scans with "Thin sheet metal and small
+  parts" merge at 0.5 mm (1,966,197 vertices on the GPU path; before the fix at the default); with
+  General the merged mesh is the same as before on both paths (106,426 and 146,477 vertices).
+- Frame time with and without a link to a first scan, 3 interleaved pairs on a busy PC: ratios
+  1.17, 0.95, 0.85. Nothing of this runs per frame.
+- In the app with the simulator (the ball on its table, first scan at 0.5 mm voxels, a 12 s pass,
+  part not moved): alignment accepted from the tags, merged at 0.5 mm with both tables kept
+  (3.4 million triangles); the whole meshes read 64.8 % and 64.7 % at 0.3 mm, and on the shared
+  surface "stayed about the same". The comparison took 187 s there on a busy PC.
+
 ## Hints while scanning (FEATURE_PLAN N3, 2026-11-20)
 
 An experiment with a stop rule: kept only if scans that follow the hints end with a clearly higher

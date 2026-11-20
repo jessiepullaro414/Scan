@@ -100,6 +100,8 @@ import type {
   SessionState,
   Settings,
   SetupState,
+  PassCompare,
+  PassView,
   StartBody,
   TablePreview,
   TrajectoryView,
@@ -603,6 +605,11 @@ export const api = {
   /** FEATURE_PLAN N1: why each area of that answer is weak, the pose to scan it from (or why there is none) and a
    * plan of up to 3 poses, for the same tolerance and mesh version (409 when the version changed). A few seconds
    * the first time on a mesh version, then kept; ask after `check`, so the areas show first. */
+  /** N2: a second pass: its link, its steps after Stop, and before and after once merged. */
+  pass: (pid: string, sid: string) => get<PassView>(`${scanPath(pid, sid)}/pass`),
+  passRun: (pid: string, sid: string) => post<PassView>(`${scanPath(pid, sid)}/pass/run`),
+  passCompare: (pid: string, sid: string, tolerance_mm?: number) =>
+    post<PassCompare>(`${scanPath(pid, sid)}/pass/compare`, tolerance_mm === undefined ? {} : { tolerance_mm }),
   checkWhy: (pid: string, sid: string, tolerance_mm: number, version: number | null) =>
     post<CheckWhy>(`${scanPath(pid, sid)}/check/why`, version === null ? { tolerance_mm } : { tolerance_mm, version }),
 

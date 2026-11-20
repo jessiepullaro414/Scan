@@ -220,6 +220,8 @@ class ProjectStore:
             out["preset"] = entry["preset"]
         if entry.get("merged_from"):  # a scan merged from others (it has no recording of its own)
             out["merged_from"] = entry["merged_from"]
+        if isinstance(entry.get("continues"), dict):  # FEATURE_PLAN N2: a second pass of another scan, and its steps
+            out["continues"] = entry["continues"]
         # what the scan keeps on disk (FEATURE_PLAN R2): the mode says what the user removed; has_recording is the
         # truth on disk now
         out["keep"] = entry.get("keep") if entry.get("keep") in KEEP_MODES else "full"

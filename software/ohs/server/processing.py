@@ -507,6 +507,21 @@ def _set_straighten(report: dict, rep: dict | None) -> bool:
     return True
 
 
+def preset_meshing(p: Any, width: int, voxel_mm: float | None, thin_walls: str | None) -> Any:
+    """``ProcessParams`` ``p`` with a preset's meshing values (FEATURE_PLAN P2): the voxel size and the thin
+    walls setting; ``None`` leaves a value as ``p`` has it (General: ``p`` itself). A processing stage and a merge
+    (``ohs.server.aligning``) take them this one way."""
+    from ohs.app.pipeline import default_fusion_params, effective_scale
+
+    if voxel_mm is not None:
+        fusion = p.pipeline.fusion or default_fusion_params(effective_scale(int(round(width * p.pipeline.scale))))
+        p = dataclasses.replace(p, pipeline=dataclasses.replace(p.pipeline, fusion=dataclasses.replace(
+            fusion, voxel_mm=float(voxel_mm))))
+    if thin_walls is not None:  # the scan's preset names it; else [process] thin_walls
+        p = dataclasses.replace(p, pipeline=dataclasses.replace(p.pipeline, thin_walls=str(thin_walls)))
+    return p
+
+
 def _read_json(path: Path) -> dict | None:
     try:
         d = json.loads(path.read_text(encoding="utf-8"))
@@ -1511,16 +1526,9 @@ class ProcessManager:
 
     def _stage_params(self, mode: str, quality: str, voxel_mm: float | None, width: int,
                       thin_walls: str | None = None) -> Any:
-        from ohs.app.pipeline import default_fusion_params, effective_scale
         from ohs.server.studio import process_params
 
-        p = process_params(self.st.cfg, mode, quality, width)
-        if voxel_mm is not None:
-            fusion = p.pipeline.fusion or default_fusion_params(effective_scale(int(round(width * p.pipeline.scale))))
-            p = dataclasses.replace(p, pipeline=dataclasses.replace(p.pipeline, fusion=dataclasses.replace(
-                fusion, voxel_mm=float(voxel_mm))))
-        if thin_walls is not None:  # the scan's preset names it (FEATURE_PLAN P2); else [process] thin_walls
-            p = dataclasses.replace(p, pipeline=dataclasses.replace(p.pipeline, thin_walls=str(thin_walls)))
+        p = preset_meshing(process_params(self.st.cfg, mode, quality, width), width, voxel_mm, thin_walls)
         # the base keeps every piece: removing floaters is an edit you can see and undo
         return dataclasses.replace(p, clean_min_component=0.0, export=("ply",))
 

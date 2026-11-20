@@ -2,14 +2,22 @@
  * The live scan screen: a big 3D view of the growing model with the scanner at its current
  * pose, the tracking badge, distance gauge and recording chip on top, camera previews and
  * stats on the right, and the scan controls at the bottom (keyboard: Space, R, Esc, F, ?).
+ *
+ * A second pass (FEATURE_PLAN N2, `continues` in the address, set by the Check panel's "Scan these areas"):
+ * the side panel says which scan the pass belongs to and shows that scan for reference with the areas lit
+ * (pages/scan/PassPanel.tsx); Start sends the link; after Stop the engine's steps take the "Make mesh" card's place.
  */
 import { useEffect, useRef, useState } from "react";
 import { CalibHealthCallout } from "../components/CalibHealth";
 import { PresetPicker } from "../components/PresetPicker";
+import { Callout } from "../components/ui/Layout";
+import { passPresetFields, passStartBody } from "../lib/pass";
 import { ErrorBoundary } from "../components/shell/ErrorBoundary";
 import { navigate, paths } from "../lib/router";
 import { useHotkeys } from "../lib/util";
 import { useDevice } from "../store/device";
+import { usePass } from "../store/pass";
+import { usePresets } from "../store/presets";
 import { useProjects } from "../store/projects";
 import { isLive, useSession } from "../store/session";
 import { useUi } from "../store/ui";
@@ -27,9 +35,10 @@ import {
   ViewToolbar,
   WarnChips,
 } from "./scan/Overlays";
+import { PassSetup } from "./scan/PassPanel";
 import { CameraPreviews, EmittersPanel, LiveStats, ScanSetup } from "./scan/SidePanel";
 
-export default function ScanPage({ projectParam, first = false }: { projectParam: string | null; first?: boolean }) {
+export default function ScanPage({ projectParam, first = false, continues = null }: { projectParam: string | null; first?: boolean; continues?: string | null }) {
   const list = useProjects((s) => s.list);
   const fetchList = useProjects((s) => s.fetchList);
   const fetchProject = useProjects((s) => s.fetchProject);
@@ -43,6 +52,10 @@ export default function ScanPage({ projectParam, first = false }: { projectParam
   const phase = useSession((s) => s.session?.state ?? "idle");
   const lastStopped = useSession((s) => s.lastStopped);
   const device = useDevice((s) => s.device);
+  // N2: the pass "Scan these areas" set up, while it is for this project; while scanning, the session says which
+  const pending = usePass((s) => s.pending);
+  const sessionLink = useSession((s) => s.session?.continues?.scan_id ?? null);
+  const presetName = usePresets((s) => s.list?.find((p) => p.id === s.chosen)?.name ?? "General");
 
   const [projectId, setProjectId] = useState<string | null>(projectParam ?? current);
   const [name, setName] = useState("");
@@ -81,6 +94,15 @@ export default function ScanPage({ projectParam, first = false }: { projectParam
   }, []);
 
   const live = phase === "scanning" || phase === "paused";
+  const passPending = pending && continues && pending.firstId === continues && pending.projectId === projectId ? pending : null;
+  const pass = live ? (pending && sessionLink === pending.firstId ? pending : null) : passPending;
+  const firstScan = useProjects((s) => (pass ? s.details[pass.projectId]?.scans.find((x) => x.id === pass.firstId) : undefined));
+  // the pass scans as the first scan was scanned, unless the user changes it; the card of an earlier scan makes way
+  useEffect(() => {
+    if (passPending && firstScan && firstScan.mode !== useUi.getState().scanMode) setMode(firstScan.mode);
+    const last = useSession.getState().lastStopped;
+    if (passPending && last && !last.scan.continues) useSession.getState().clearLastStopped();
+  }, [passPending?.firstId, firstScan?.id]); // eslint-disable-line react-hooks/exhaustive-deps
   const connected = !!device?.connected;
   const calibrated = !!device?.calibration?.loaded;
   const reason = !device
@@ -96,7 +118,10 @@ export default function ScanPage({ projectParam, first = false }: { projectParam
 
   const start = async () => {
     if (!ready || !projectId) return;
-    const ok = await useSession.getState().start({ projectId, mode, name });
+    const link = passPending
+      ? { continues: passStartBody(passPending, usePass.getState().moved), presetFields: passPresetFields(usePresets.getState().startFields(), passPending.preset) }
+      : {};
+    const ok = await useSession.getState().start({ projectId, mode, name, ...link });
     if (ok) setName("");
   };
 
@@ -171,6 +196,14 @@ export default function ScanPage({ projectParam, first = false }: { projectParam
         aria-label="Scan panel"
       >
         <CameraPreviews />
+        {pass ? <PassSetup pending={pass} live={live} firstScan={firstScan} presetName={presetName} /> : null}
+        {!pass && continues && !live && !lastStopped ? (
+          <div className="border-b border-line p-3">
+            <Callout tone="neutral" title="Nothing to scan again yet">
+              A second pass starts from the first scan's Check panel: open the scan, press Check, then Scan these areas. Start now makes an ordinary scan.
+            </Callout>
+          </div>
+        ) : null}
         {live ? (
           <>
             <LiveStats />

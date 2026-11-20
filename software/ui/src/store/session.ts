@@ -1,9 +1,10 @@
 /** The scan session: state machine, the 10 Hz status, and the scan controls. */
 import { create } from "zustand";
 import { api } from "../api/http";
-import type { Scan, ScanMode, SessionState, StatusMsg } from "../api/types";
+import type { PassStart, PresetValues, Scan, ScanMode, SessionState, StatusMsg } from "../api/types";
 import { useJobs } from "./jobs";
 import { useLive } from "./live";
+import { usePass } from "./pass";
 import { usePresets } from "./presets";
 import { useProjects } from "./projects";
 import { sameSession } from "./sameSession";
@@ -23,7 +24,8 @@ type SessionStore = {
   apply: (s: SessionState) => void;
   applyStatus: (m: StatusMsg) => void;
   fetch: () => Promise<void>;
-  start: (args: { projectId: string; mode: ScanMode; name?: string }) => Promise<boolean>;
+  /** `continues` (N2): the scan this one is a second pass of; `presetFields`: in place of the picker's (a pass sends none when they are the first scan's). */
+  start: (args: { projectId: string; mode: ScanMode; name?: string; continues?: PassStart; presetFields?: { preset?: string; preset_values?: PresetValues } }) => Promise<boolean>;
   pause: () => Promise<void>;
   resume: () => Promise<void>;
   rewind: (seconds?: number) => Promise<void>;
@@ -79,11 +81,18 @@ export const useSession = create<SessionStore>((set, get) => {
       }
     },
 
-    start: async ({ projectId, mode, name }) => {
+    start: async ({ projectId, mode, name, continues, presetFields }) => {
       const s = await run(
         "start",
-        // P2: the preset picked on the Scan page and the values changed by hand there
-        () => api.startScan({ project_id: projectId, mode, ...(name?.trim() ? { name: name.trim() } : {}), ...usePresets.getState().startFields() }),
+        // P2: the preset picked on the Scan page and the values changed by hand there; N2: the scan a pass belongs to
+        () =>
+          api.startScan({
+            project_id: projectId,
+            mode,
+            ...(name?.trim() ? { name: name.trim() } : {}),
+            ...(presetFields ?? usePresets.getState().startFields()),
+            ...(continues ? { continues } : {}),
+          }),
         "Couldn't start the scan",
       );
       if (!s) return false;
@@ -121,8 +130,13 @@ export const useSession = create<SessionStore>((set, get) => {
         session: { ...(get().session ?? IDLE), state: "idle" },
       });
       useLive.getState().setGhost(null);
+      // A second pass (N2): the engine makes its mesh, aligns it and merges it on its own (PassChainCard follows it)
+      if (r.scan.continues) {
+        usePass.getState().clear();
+        if (pid) void useProjects.getState().fetchProject(pid);
+      }
       // The wait after a scan starts at once: Make mesh (standard), as the button would. Settings can turn it off.
-      if (pid && useUi.getState().autoMesh && r.scan.n_frames > 0)
+      else if (pid && useUi.getState().autoMesh && r.scan.n_frames > 0)
         void useJobs.getState().process(pid, r.scan.id, "standard", r.scan.name);
       else if (pid) void useProjects.getState().fetchProject(pid);
       void get().fetch();

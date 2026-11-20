@@ -101,6 +101,9 @@ class ScanStartBody(BaseModel):
     name: Optional[str] = None
     preset: Optional[str] = None  # FEATURE_PLAN P2: the preset's id (none: General)
     preset_values: Optional[Dict[str, Any]] = None  # values changed by hand on the Scan page (checked by ohs.app.presets)
+    # FEATURE_PLAN N2: the scan this one is a second pass of ({scan_id, tolerance_mm, version, areas, poses,
+    # same_setup}; checked by ohs.server.passes, in plain words)
+    continues: Optional[Dict[str, Any]] = None
 
 
 class RewindBody(BaseModel):
@@ -309,6 +312,10 @@ class ReportBody(BaseModel):
 
 class CheckBody(BaseModel):
     tolerance_mm: float = Field(gt=0.0, le=100.0)
+
+
+class PassCompareBody(BaseModel):  # FEATURE_PLAN N2: before and after (none: the tolerance the pass was asked at)
+    tolerance_mm: Optional[float] = Field(None, gt=0.0, le=100.0)
 
 
 class CheckWhyBody(CheckBody):  # FEATURE_PLAN N1: why each area is weak and where to scan it from
@@ -646,7 +653,7 @@ def create_app(config: Any = None, *, projects_dir: Any = None, static_dir: Any 
 
     @app.post("/api/scan/start")
     def scan_start(body: ScanStartBody) -> JSONResponse:
-        return _json(st.start_scan(body.project_id, body.mode, body.name, body.preset, body.preset_values))
+        return _json(st.start_scan(body.project_id, body.mode, body.name, body.preset, body.preset_values, body.continues))
 
     @app.post("/api/scan/pause")
     def scan_pause() -> JSONResponse:
@@ -753,6 +760,19 @@ def create_app(config: Any = None, *, projects_dir: Any = None, static_dir: Any 
     @app.post("/api/projects/{pid}/scans/{sid}/check/why")
     def scan_check_why(pid: str, sid: str, body: CheckWhyBody) -> JSONResponse:
         return _json(proc.check_why(pid, sid, body.tolerance_mm, body.version))
+
+    # FEATURE_PLAN N2: a second pass that joins the first (ohs.server.passes)
+    @app.get("/api/projects/{pid}/scans/{sid}/pass")
+    def pass_view(pid: str, sid: str) -> JSONResponse:
+        return _json(st.passes.view(pid, sid))
+
+    @app.post("/api/projects/{pid}/scans/{sid}/pass/run")
+    def pass_run(pid: str, sid: str) -> JSONResponse:
+        return _json(st.passes.run(pid, sid))
+
+    @app.post("/api/projects/{pid}/scans/{sid}/pass/compare")
+    def pass_compare(pid: str, sid: str, body: Optional[PassCompareBody] = None) -> JSONResponse:
+        return _json(st.passes.compare(pid, sid, body.tolerance_mm if body is not None else None))
 
     @app.post("/api/projects/{pid}/scans/{sid}/fit")
     def scan_fit(pid: str, sid: str, body: FitBody) -> JSONResponse:

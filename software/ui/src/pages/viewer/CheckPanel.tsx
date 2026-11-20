@@ -9,8 +9,12 @@
  * a small side view of where to hold the scanner, or why there is no such place; "Show where to hold the
  * scanner" draws the scanner there in the 3D view (CheckMark.tsx). Under the list, a short plan: a few
  * places that between them see the largest areas.
+ *
+ * FEATURE_PLAN N2: "Scan these areas" (under the list) and "Scan from these places" (under the plan) start a
+ * second pass that joins this scan: the Scan page shows this scan with the areas lit, and after Stop the
+ * pass is aligned and merged with it (store/pass.ts, pages/scan/PassPanel.tsx).
  */
-import { CircleDashed, CircleExclamationPoint, RefreshCw, ScanLine, SearchCheck, Target, TriangleExclamationPoint } from "lucide-react";
+import { CircleDashed, CircleExclamationPoint, Layers, RefreshCw, ScanLine, SearchCheck, Target, TriangleExclamationPoint } from "lucide-react";
 import { useEffect, useId, useState, type ReactNode } from "react";
 import { describeError } from "../../api/http";
 import type { CheckArea, CheckPlanPose, CheckResult, CheckView, CheckWhy, CheckWhyArea } from "../../api/types";
@@ -165,7 +169,7 @@ function WhyBlock({ w, workingMm, onShow }: { w: CheckWhyArea; workingMm: number
 }
 
 /** The short plan: a few places to hold the scanner that between them see the largest areas. */
-function PlanBlock({ plan, onPick }: { plan: CheckPlanPose[]; onPick: (p: CheckPlanPose) => void }) {
+function PlanBlock({ plan, onPick, onScan }: { plan: CheckPlanPose[]; onPick: (p: CheckPlanPose) => void; onScan?: () => void }) {
   if (!plan.length) return null;
   return (
     <div className="mt-3 rounded-lg border border-line bg-surface-2/60 px-3 py-2">
@@ -186,8 +190,23 @@ function PlanBlock({ plan, onPick }: { plan: CheckPlanPose[]; onPick: (p: CheckP
         ))}
       </ol>
       <div className="mt-1 text-[11px] leading-4 text-subtle">A pass from each, at the distance shown, then Check again.</div>
+      {onScan ? (
+        <Button size="xs" variant="secondary" icon={Layers} className="mt-1.5" onClick={onScan}>
+          Scan from these places
+        </Button>
+      ) : null}
     </div>
   );
+}
+
+/** The areas a plan's places are for, and those each place sees most of, in the list's order. */
+function planAreas(plan: CheckPlanPose[]): number[] {
+  const out = new Set<number>();
+  for (const p of plan) {
+    out.add(p.area);
+    for (const s of p.also_sees) if (s.share >= 0.5) out.add(s.area);
+  }
+  return [...out].sort((a, b) => a - b);
 }
 
 /** What the reasons rest on, when part of it is missing or was cut down. */
@@ -284,6 +303,7 @@ export function CheckPanel({
   hasSigma,
   remake,
   holes,
+  onScanAreas,
 }: {
   check: CheckState;
   /** A mesh is on screen. */
@@ -294,6 +314,8 @@ export function CheckPanel({
   remake?: ReactNode;
   /** The mesh's open holes, when known: how many, and a way to see them. */
   holes?: { count: number; action?: ReactNode } | null;
+  /** N2: start a second pass of these areas (default every listed one) from these places (default the plan's). */
+  onScanAreas?: (pick: { only?: number[]; plan?: CheckPlanPose[] }) => void;
 }) {
   const id = useId();
   const [all, setAll] = useState(false);
@@ -416,7 +438,24 @@ export function CheckPanel({
                 </Button>
               ) : null}
               <div className="mt-2 text-[11.5px] leading-4 text-subtle">Click an area to see it on the mesh.</div>
-              {why ? <PlanBlock plan={why.plan} onPick={(p) => check.select(p.area, { pose: p.pose, showPose: true })} /> : null}
+              {onScanAreas ? (
+                <div className="mt-2.5 rounded-lg border border-line bg-surface-2/60 px-3 py-2">
+                  <Button size="sm" variant="primary" icon={Layers} onClick={() => onScanAreas({})}>
+                    Scan these areas
+                  </Button>
+                  <div className="mt-1 text-[11.5px] leading-4 text-muted">
+                    A second pass that joins this scan: the Scan page shows this scan with the areas lit
+                    {why ? " and the places to scan from" : ""}. After Stop the pass is aligned and merged with it into a new scan; this scan is not changed.
+                  </div>
+                </div>
+              ) : null}
+              {why ? (
+                <PlanBlock
+                  plan={why.plan}
+                  onPick={(p) => check.select(p.area, { pose: p.pose, showPose: true })}
+                  onScan={onScanAreas && why.plan.length ? () => onScanAreas({ only: planAreas(why.plan), plan: why.plan }) : undefined}
+                />
+              ) : null}
               {why
                 ? whyNotes(why).map((t) => (
                     <div key={t} className="mt-1.5 text-[11.5px] leading-4 text-subtle">

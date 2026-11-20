@@ -73,6 +73,7 @@ import { disposeMeshGeometry, plyGeometry, readPly } from "../three/ply";
 import { viewBus } from "../three/viewBus";
 import { CadDownload } from "./viewer/CadDownload";
 import { CHECK_ICON, CheckPanel } from "./viewer/CheckPanel";
+import { usePass } from "../store/pass";
 import { ConfidenceLegend } from "./viewer/ConfidenceLegend";
 import { DeviationLegend } from "./viewer/DeviationLegend";
 import { LasersLegend } from "./viewer/LasersLegend";
@@ -1297,6 +1298,9 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
             <CheckPanel
               check={check}
               ready={!!geometry}
+              onScanAreas={
+                project && scan?.result && check.result ? (pick) => usePass.getState().scanAreas({ projectId: project.id, scan, result: check.result!, why: check.why.why, ...pick }) : undefined
+              }
               hasSigma={hasSigma}
               remake={
                 project && scan ? (

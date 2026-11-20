@@ -24,7 +24,7 @@ import { CHECK_COLOR, type CheckLit } from "./useCheck";
 const flown = new WeakSet<CheckLit>();
 
 /** The scanner at its pose, in the mesh's frame (this sits inside the view's mesh group). */
-function ScannerAt({ pose }: { pose: CheckPose }) {
+export function ScannerAt({ pose, label = true }: { pose: CheckPose; label?: boolean }) {
   const parts = useMemo(() => {
     const l = scannerLines(pose);
     const make = (a: Float32Array, dashed: boolean) => {
@@ -54,12 +54,14 @@ function ScannerAt({ pose }: { pose: CheckPose }) {
       {parts.map((p, i) => (
         <primitive key={i} object={p} />
       ))}
-      <Html position={pose.position_mm} center zIndexRange={[30, 0]} className="html-label" style={{ pointerEvents: "none" }}>
-        <div className="whitespace-nowrap rounded-full border bg-[rgb(17_20_25/0.9)] px-2.5 py-1 text-[12px] font-semibold text-white shadow-lg" style={{ borderColor: CHECK_COLOR }}>
-          Hold the scanner here
-          <span className="font-normal text-white/75"> · {poseShort(pose)}</span>
-        </div>
-      </Html>
+      {label ? (
+        <Html position={pose.position_mm} center zIndexRange={[30, 0]} className="html-label" style={{ pointerEvents: "none" }}>
+          <div className="whitespace-nowrap rounded-full border bg-[rgb(17_20_25/0.9)] px-2.5 py-1 text-[12px] font-semibold text-white shadow-lg" style={{ borderColor: CHECK_COLOR }}>
+            Hold the scanner here
+            <span className="font-normal text-white/75"> · {poseShort(pose)}</span>
+          </div>
+        </Html>
+      ) : null}
     </group>
   );
 }

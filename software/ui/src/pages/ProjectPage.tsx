@@ -26,6 +26,7 @@ import { Code, Page, PageHeader } from "../components/ui/Layout";
 import { Menu } from "../components/ui/Popover";
 import { HEALTH_ICON, HEALTH_TEXT } from "../components/CalibHealth";
 import { hasMesh, hasRecording, mergedFromText } from "../lib/align";
+import { passOfText } from "../lib/pass";
 import { scanHealthLine, scanHealthOf } from "../lib/calibHealth";
 import { projectDiskText, scanDiskTitle, trashText } from "../lib/diskUse";
 import { canRemake, keepLabel, keepTitle } from "../lib/keepMode";
@@ -86,7 +87,7 @@ function ScanRow({ project, scan, disk, onFreeSpace }: { project: Project; scan:
   // R2: a scan that keeps its result only has no frames to make its mesh from again
   const remakable = canRemake(scan);
   const kept = keepLabel(scan.keep, scan.thinned); // R3: and at what rate its recording is kept
-  const mergedFrom = mergedFromText(scan);
+  const mergedFrom = mergedFromText(scan) ?? passOfText(scan); // N2: or the scan a second pass belongs to
   const own = hasResult ? scanHealthOf(scan.result?.report) : null;
   const health = scanHealthLine(own);
   const HealthIcon = health && own ? HEALTH_ICON[own.state] : null;

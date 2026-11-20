@@ -61,6 +61,7 @@ from ohs.server.hub import Hub
 from ohs.server.jobs import JobRunner
 from ohs.server.printables import MASK_DPI
 from ohs.server.aligning import AlignManager
+from ohs.server.passes import PassManager
 from ohs.server.presets import PresetManager
 from ohs.server.processing import ProcessManager
 from ohs.server.projects import ProjectStore
@@ -143,6 +144,7 @@ class Studio:
         self.processing = ProcessManager(self)
         self.presets = PresetManager(self)  # FEATURE_PLAN P2: the presets and each scan's preset
         self.aligning = AlignManager(self)
+        self.passes = PassManager(self)  # FEATURE_PLAN N2: a second pass that joins the first
         self.session: ScanSession | None = None
         self.last_session: ScanSession | None = None
         self.last_project: str | None = None
@@ -205,11 +207,18 @@ class Studio:
         processing = getattr(self, "processing", None)
         if processing is not None:
             processing.on_job(job)
+        passes = getattr(self, "passes", None)
+        if passes is not None:  # a second pass's chain moves on when one of its jobs ends
+            passes.on_job(job)
 
     def session_state(self) -> dict:
         s = self.session
         if s is not None and s.active:
-            return s.state_dict()
+            out = s.state_dict()
+            link = s.meta.get("continues")
+            if link:  # FEATURE_PLAN N2: the scan this pass belongs to (absent for a scan that continues nothing)
+                out["continues"] = {"scan_id": link["scan_id"], "scan_name": link["scan_name"]}
+            return out
         return {"state": "idle", "project_id": None, "scan_id": None, "mode": "markerless", "elapsed_s": 0.0, "frames": 0}
 
     def status_message(self) -> dict:
@@ -377,12 +386,25 @@ class Studio:
         return self.devices.frame_size
 
     def start_scan(self, project_id: str, mode: str = "markerless", name: str | None = None,
-                   preset: str | None = None, preset_values: dict | None = None) -> dict:
+                   preset: str | None = None, preset_values: dict | None = None, continues: dict | None = None) -> dict:
         """``preset`` (None: General) and ``preset_values`` (values changed by hand on the Scan page): the
-        scan's preset (FEATURE_PLAN P2), written into the recording's ``meta.json`` and the scan entry."""
+        scan's preset (FEATURE_PLAN P2), written into the recording's ``meta.json`` and the scan entry.
+        ``continues`` (FEATURE_PLAN N2, :class:`~ohs.server.passes.PassManager`): the scan this one is a second
+        pass of, and the areas asked for; then ``preset`` None means the first scan's preset. After Stop the
+        pass is processed, aligned to it and merged with it."""
         if mode not in MODES:
             raise ApiError(400, f"unknown mode {mode!r}", "use markerless or markers")
+        link = samples = None
+        if continues is not None:
+            self.projects.get(project_id)  # 404 if missing
+            link, samples = self.passes.link(project_id, continues)  # 404 / 409 / 422 before anything is made
+            first_preset = None
+            if preset is None and preset_values is None:  # the first scan's preset, unless another is given
+                preset, preset_values, first_preset = self.passes.preset_of(project_id, link["scan_id"])
+            link["preset_from_first"] = first_preset is not None
         preset_record = self.presets.for_start(preset, preset_values, mode)  # 404 / 422 before anything is made
+        if link is not None:
+            link["preset"] = first_preset or preset_record["name"]
         with self._lock:
             if self.session is not None and self.session.active:
                 raise ApiError(409, "a scan is already running", "stop it first (Stop, or POST /api/scan/stop)")
@@ -410,6 +432,9 @@ class Studio:
                                "set camera.width / camera.height to the calibrated mode, or calibrate this mode")
             scan, rec_dir = self.projects.add_scan(project_id, name, mode)
             self.projects.update_scan(project_id, scan["id"], preset=self.presets.stored(preset_record))
+            if link is not None:
+                self.projects.update_scan(project_id, scan["id"], continues=link)
+                self.passes.save_areas(project_id, scan["id"], samples)
             use_imu = calib.imu is not None and dev.imu_available()
             meta = {"purpose": "scan", "ohs_version": __version__, "mode": mode, "live_scale": float(self.cfg.live.scale),
                     "app": "OpenHandScan Studio", "calibration_source": dev.calib_path, "device": dev.source,
@@ -418,6 +443,9 @@ class Studio:
                     "scan_name": scan["name"], "preset": preset_record}
             if dev.source in ("replay", "sim"):
                 meta["replay_of"] = str((dev.state().get("replay") or {}).get("path"))
+            if link is not None:  # FEATURE_PLAN N2: which scan this pass belongs to, and what was asked for
+                meta["continues"] = {k: link[k] for k in ("scan_id", "scan_name", "tolerance_mm", "version", "areas", "poses",
+                                                          "same_setup")}
             session = ScanSession(calib=calib, mode=mode, rec_dir=rec_dir, project_id=project_id, scan_id=scan["id"],
                                   scan_name=scan["name"], cfg=self.cfg, hub=self.hub, use_imu=use_imu,
                                   use_lasers=bool(calib.lasers), source_name=dev.source_name(), meta=meta,
@@ -442,7 +470,10 @@ class Studio:
             self.notify("info", f"Scanning '{scan['name']}' ({mode})" + (f"; note: {', '.join(notes)}" if notes else ""))
         self.publish_session()
         self.publish_device()
-        return session.state_dict()
+        out = session.state_dict()
+        if link is not None:  # FEATURE_PLAN N2: as session_state says it
+            out["continues"] = {"scan_id": link["scan_id"], "scan_name": link["scan_name"]}
+        return out
 
     def _session_or_409(self) -> ScanSession:
         s = self.session
@@ -506,6 +537,9 @@ class Studio:
         self.publish_device()
         msg = f"Scan saved: {fields['n_frames']} frames, {fields['duration_s']:.1f} s"
         self.notify("info", msg + (f" ({reason})" if reason else ""))
+        if s.meta.get("continues"):  # FEATURE_PLAN N2: the pass is processed, aligned and merged, as jobs
+            safe_call("starting the second pass's steps", lambda: self.passes.after_stop(s.project_id, s.scan_id))
+            scan = safe_call("reading the scan", lambda: self.projects.get_scan(s.project_id, s.scan_id)) or scan
         return {"scan": scan}
 
     # ------------------------------------------------------------------ projects / processing

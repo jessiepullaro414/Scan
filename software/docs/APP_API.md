@@ -55,7 +55,7 @@ type Job = { id: string; kind: string; state: "queued" | "running" | "done" | "f
 | `PATCH /api/projects/{pid}` | `{name}` | `Project` |
 | `DELETE /api/projects/{pid}` | | `204`. The folder moves to `<projects>/.trash/` and is never hard-deleted. |
 | `GET /api/scan` | | `SessionState` |
-| `POST /api/scan/start` | `{project_id, mode?, name?, preset?, preset_values?}` | `SessionState`. `409` if no device is connected, no calibration is loaded, or a scan is already running. `preset` / `preset_values`: see "Presets" (404 for an unknown preset, 422 for a value the app does not take; nothing is made then). |
+| `POST /api/scan/start` | `{project_id, mode?, name?, preset?, preset_values?, continues?}` | `SessionState`. `409` if no device is connected, no calibration is loaded, or a scan is already running. `preset` / `preset_values`: see "Presets" (404 for an unknown preset, 422 for a value the app does not take; nothing is made then). `continues`: the scan this one is a second pass of, see "A second pass that joins the first". |
 | `POST /api/scan/pause` / `resume` | | `SessionState` |
 | `POST /api/scan/rewind` | `{seconds: 2.0}` | `SessionState`. Drops the last N s from the live model and records a `cut` event, which offline processing skips. |
 | `POST /api/scan/stop` | | `{scan: Scan}` (the recording is finalised) |
@@ -2140,6 +2140,117 @@ Rules:
   scene, the open border, the curvature term) are kept for the next tolerance. On a scan of 0.8 million
   triangles and 355 frames at 0.1 mm: see `VALIDATION.md`.
 
+## A second pass that joins the first (FEATURE_PLAN N2)
+
+"Scan these areas" in the Check panel starts a scan that continues the scan the Check was made on: the new scan
+knows which scan it belongs to and which areas were asked for, and after Stop it is made into a mesh, aligned to
+that scan and merged with it, as a chain of ordinary jobs (`ohs/server/passes.py`; the engine of the Align page,
+its acceptance rule and its merge). The first scan is never changed; the merge is a new scan (`merged_from`).
+A merge adds coverage; it does not yet make the surface the first scan saw well more accurate (`VALIDATION.md`,
+"Aligning and merging two scans").
+
+```ts
+type PassStart = {                       // POST /api/scan/start: continues
+  scan_id: string;                       // the first scan (it must have a mesh)
+  tolerance_mm: number;                  // the Check's tolerance
+  version?: number;                      // the first mesh's version the Check answer was made on (409 when it changed)
+  areas?: number[];                      // places in that Check answer, from 0
+  poses?: { area: number | null; kind: string; text: string | null; pose: CheckPose }[];  // at most 12, as the Check panel gave them
+  same_setup?: boolean;                  // default true; false: the part was moved since the first scan
+};
+type PassChain = {
+  state: "waiting" | "processing" | "aligning" | "merging" | "merged" | "not_aligned" | "not_merged" | "failed" | "cancelled";
+  step: "process" | "align" | "merge" | null;
+  jobs: { process?: string; align?: string; merge?: string };   // the steps' job ids (the last of each)
+  message: string;                       // what happened, in words
+  merged_scan_id?: string | null;
+  align?: { accepted: boolean; verdict: string; overlap: number | null; agree: number | null; rms_mm: number | null;
+            sure: boolean | null; doubt: string | null; start: string | null; T: number[][] | null } | null;
+};
+type PassLink = {                        // Scan.continues (the pass's scan entry), and meta.json "continues" without chain
+  scan_id: string; scan_name: string; tolerance_mm: number; version: number;
+  areas: { index: number; kind: "uncertain" | "not_measured"; area_mm2: number; center: number[]; n_faces: number }[];
+  poses: PassStart["poses"]; same_setup: boolean;
+  setup_words: string;                   // same_setup in words: "The part was not moved since the first scan: ..." / "The part was moved ..."
+  merge_problem: string | null;          // why the pass could be aligned but not merged (the first scan's recording is gone ...)
+  preset_from_first: boolean; preset: string;   // the pass took the first scan's preset (none was sent); its name
+  chain: PassChain;
+};
+type PassView = Omit<PassLink, "chain"> & {
+  pass_id: string; pass_name: string; chain: PassChain; job: Job | null;   // the step's job
+  steps: ["process", "align", "merge"]; note: string;                         // note: what a merge does and does not do
+  first: { id: string; name: string; mesh_url: string | null; has_mesh: boolean };
+  areas_faces: string[] | null;          // per asked area, base64 uint32 face indices on the first mesh (while it is that version)
+  areas_faces_why_not: string | null;
+};
+type PassCompare = {
+  tolerance_mm: number; note: string;
+  rule: { match_mm: number; match_angle_deg: number; passes_share: number };
+  first: PassShares; merged: PassShares;  // {id, name, share_ok, share_uncertain, share_not_measured, n_areas, area_mm2, has_sigma}
+  areas: (PassLink["areas"][number] & { share_ok: number | null; found_share: number;
+           state: "passes" | "partly" | "weak" | "not_found" | "unknown" })[];
+  areas_note: string | null;             // when judged at another tolerance than asked
+  common: { found_share: number; before_ok: number | null; after_ok: number | null };  // on the surface both hold
+  missing: { share: number; area_mm2: number; why: string | null };  // of the first scan's surface, not in the merge
+  whole_note: string;                    // first / merged are each whole mesh, as its own Check says it
+};
+```
+
+| Method and path | Body | Returns |
+|---|---|---|
+| `POST /api/scan/start` | `{..., continues: PassStart}` | `SessionState` with `continues: {scan_id, scan_name}` |
+| `GET /api/projects/{pid}/scans/{sid}/pass` | | `PassView` (`sid`: the pass) |
+| `POST /api/projects/{pid}/scans/{sid}/pass/run` | | `PassView`: runs what is left of the chain |
+| `POST /api/projects/{pid}/scans/{sid}/pass/compare` | `{tolerance_mm?}` (default the pass's) | `PassCompare` |
+
+Rules:
+- **Start.** `continues` is checked before anything is made (404 unknown scan; 409 the first scan is recording or
+  processing, "has no mesh yet, so there is nothing to join a pass to", or its mesh "changed since its Check was
+  shown"; 422 a bad tolerance, an area "not in the Check answer", an area asked for twice, a pose without three
+  numbers, `same_setup` not true or false). The areas are taken from the first scan's Check answer at that
+  tolerance (`ohs.mesh.check.weak_areas`, as `POST .../check` gives it), and their faces' centres, normals and
+  areas are kept next to the pass (`scans/<pass>/pass_areas.npz`), so an edit of the first scan later does not
+  change what was asked for. The pass's entry gets `continues` (`PassLink`), its recording's `meta.json`
+  `continues` (the link without `chain`); while it records, `GET /api/scan`, the status messages and the start's
+  answer carry `continues: {scan_id, scan_name}`. **No `preset` and no `preset_values`: the first scan's preset**
+  (with its hand values; General when it has none or its preset is gone), said in `preset_from_first` and `preset`.
+  A scan without `continues` starts exactly as before: none of these fields anywhere.
+- **After Stop** the chain runs by itself: `process_scan` (the pass's preset's quality), then `align` (target the
+  first scan, source the pass, `same_setup`, tags as the Align page uses them), then, only when the alignment is
+  accepted, `merge` into a new scan "<first> + <pass>". Each is an ordinary job (`GET /api/jobs`, the `job`
+  messages) and can be cancelled: the chain then stops (`cancelled`), the pass is kept as its own scan, and
+  `.../pass/run` goes on (the mesh again if it has none, else the alignment). An alignment that is not accepted
+  merges nothing: `not_aligned`, with the aligner's verdict, "Nothing was merged: the pass is kept as its own scan"
+  and the Align page (where matching points can be picked); a log message says the same. `not_merged`: aligned,
+  but the merge cannot be made (`merge_problem`: the first scan's recording was removed to free space, a scan it
+  was merged from is gone or its camera path changed, more than 8 scans). A pass of a merged scan merges again
+  from the scans that one was made from, each at its place in its report (`scans[i].T`), with the pass at the
+  aligned pose: one merge of all of them.
+- **Run** (`.../pass/run`): 409 "is not a second pass" for a scan without `continues`, "running already" while a
+  step runs, "merged already" once merged, the first scan's refusals as at Start.
+- **Compare** (`.../pass/compare`, read-only): 409 until the chain is `merged`. The Check answer of the first scan
+  and of the merged scan at the same tolerance (`share_ok`, `n_areas`, ... of each), and each asked area judged on
+  the merged mesh (`ohs.guide.passes.area_progress`): each of its faces is found on the merged mesh as the face
+  whose centre lies within `match_mm` (2.5 mm), whose normal is within `match_angle_deg` (60°), and whose plane
+  passes nearest; it passes as the Check decides (measured, not filled, 2 sigma within the tolerance). `share_ok`
+  is the share of the area that passes now (it passed nowhere before: it was listed), `found_share` the share
+  found at all; `state` `passes` from `passes_share` (0.9) up, `partly`, `weak`, `not_found` (not in the merged
+  scan), `unknown` (no sigma). A plate 0.3 mm thick on its table, or seen from both sides, is judged by the side
+  asked for (`tests/test_guide_passes.py`); where the merged surface does not reach as far as the first one did, the
+  surface under it can stand for it up to 2.5 mm from its rim.
+- **The same surface before and after** (since review, 2026-11-20): `first` and `merged` are each scan's whole mesh,
+  and they need not hold the same surface (a part that was moved: each scan's table is left out of the merge). So
+  the change is said on the surface both hold: every face of the first mesh is looked for on the merged one by the
+  rule above (`ohs.guide.passes.common_surface`); `common.found_share` is the share of the first scan's surface found,
+  `before_ok` / `after_ok` the share of that surface that passes on each. `missing` is the rest, with `why` when
+  it is known (the merged scan's report lists the tables it left out: "the part was moved, so each scan's table was
+  left out of the merge"). The app never calls a difference of the whole meshes a fall.
+- **The setup in words:** `setup_words` says what `same_setup` the pass was started with, on the Scan page while it
+  records and on the card after Stop, so a switch sent the wrong way round shows.
+- **The live view is not the first scan's.** Each scan starts its own tracking; until the pass is aligned after
+  Stop, nothing places it in the first scan's frame, so the app shows the first scan beside the live view as a
+  reference picture (faint, the asked areas lit, the places to scan from drawn), never laid over it.
+
 ## M4 first slice: align two scans and merge them
 
 Two processed scans of one part, in one project, are aligned to each other and merged into a new scan (`ohs/server/aligning.py`; the engine: `ohs.align`, measured in `VALIDATION.md`, "Aligning and merging two scans"). The *target* scan keeps its place; the *source* scan is moved onto it. A scan's mesh is in the scan's own world (see Coordinates), so points picked on a mesh are in that scan's frame, in mm.
@@ -2250,7 +2361,7 @@ type MergeTable = {
 - **Picked points:** each pair is one spot on the part, clicked on both meshes. Three pairs that span a triangle are enough; a millimetre or two of clicking error is fine, the alignment refines it. With pairs the result's `start` is `"given"` and no second guess has to confirm it, so check `pairs_rms_mm` (above about 5 mm two pairs probably do not match).
 - **Tags** (since 2026-11-16; `ohs.align.tags`): without picked points, the job looks for AprilTags (`[markers]` dictionary and `tag_mm`) in both scans: a marker-mode scan's own map (`result/marker_map.json`), or in its recording at the poses of its mesh (up to 120 frames, about 1 s per 60 frames at 640x400). When the two share tags that agree, the alignment starts from them (`start: "tags"`, verdict "... from the tags both scans saw.") and keeps that start along the directions the shape pins only weakly: a sphere, a cylinder or a plate is then turned as the tags say. If that start is not accepted, the shape's own guesses are tried as without tags (`tags.start` says why). Tags on the table help only when the part was not moved on it (same setup); for a part that was moved, only tags on the part. A merged scan has no recording, so no tags of its own.
 - **Same setup or not:** with `same_setup: true` the table both scans share pins height and tilt. If the two tables turn out more than 5° or 5 mm apart after the part's fit, they are not used (`used_support: false`). With `false` only the part counts, and a merge leaves each scan's table out, and nothing else (since 2026-11-17; before, everything up to 2 mm in front of each table went, with the bottom 2 mm of the part and any part thinner than that lying flat). The job ("Finding what the part lay on") finds each scan's table on its own mesh as "Remove the table" does (`ohs.mesh.support`, module docstring, 4.), and turns it into a map on the table's plane: where the table is bare, a frame's depth and laser points are left out up to 2 mm above it; where the part, a thin part lying flat, or a raised area that may be one stands, nothing above the table is left out. What the frames leave of the table (a ring at the part's foot about 2 mm wide, crumbs) is then taken out of the merged mesh by the single-scan edit's rule (faces facing the table's way within 1 mm of it, where that scan found its table, not on a thin part; loose crumbs within that height), and laser points within 1 mm of it where the part does not stand. Raised areas the single-scan edit only warns about are **kept** in a merge (a patch of table left is better than a part lost) and said; where the table is uneven itself (near a scan's border) its raised areas go with it, said once; a part thinner than the scan's own limit (about 0.2 mm on the simulated tables) cannot be told from the table and goes with it, which the scan's `limit` says. A scan whose table cannot be found on its mesh is clipped as before by the alignment's support plane (2 mm, with the part's bottom edge), or not at all when there is none, and a warning names it. `MergeResult.tables` and `warnings` say all this per scan; the merged scan's `report.json` has it in full (`scans[i].table`: `rule`, `plane`, `flatness_mm`, `table_area_mm2`, `stands_mm2`, `thin_parts` with `verdict` and `in_merge`, `uneven`, `thin_limit_mm`, `limit`, `left_in_mesh` {`faces`, `area_mm2`, `pieces`}, `laser_points_removed`, `summary`, `warnings`; top-level `warnings`; `mesh.n_faces_table_removed`, `lasers.n_points_table_removed`). With `same_setup: true` the merge is unchanged: a plain fusion of the frames, its mesh bit for bit as before, `tables` and `warnings` empty.
-- **Merge** fuses the raw frames of both recordings again at the given pose, with the target scan's quality, and takes about as long as processing both scans. The job reports "Merging: frame k of n" and can be cancelled; nothing is added to the project then. On success a new scan appears (`status: "processed"`, `mode: "markerless"`, `n_frames` = frames fused, `merged_from`), with `mesh.ply`, `mesh.stl`, `laser_points.ply` and `report.json` in its result, and a notification "Merged scan ready: <name>". The two scans are unchanged.
+- **Merge** fuses the raw frames of both recordings again at the given pose, with the target scan's quality, and takes about as long as processing both scans. **Presets** (since 2026-11-20): the merge makes its model with the first (target) scan's preset values that act on meshing, `voxel_mm` and `thin_walls`, as a processing stage takes them (`ohs.server.processing.preset_meshing`); the merged scan's entry gets that scan's `preset`, its `report.json` a `preset` block (`used`: the values the model was made with; `from_scan`), and a scan of the merge whose preset acts with other values is named in `warnings` ("\"Side\" was made with the app's mesh detail; the merged scan is made with mesh detail 0.5 mm, as \"Top\" (the scan that stays in place) was."). With General everywhere nothing is added and the merge is exactly as before (`tests/test_server_merge_preset.py`). The job reports "Merging: frame k of n" and can be cancelled; nothing is added to the project then. On success a new scan appears (`status: "processed"`, `mode: "markerless"`, `n_frames` = frames fused, `merged_from`), with `mesh.ply`, `mesh.stl`, `laser_points.ply` and `report.json` in its result, and a notification "Merged scan ready: <name>". The two scans are unchanged.
 - **Scans of different calibrations merge too** (since 2026-11-16: a session after a recalibration, another camera mode or another scanner): each scan's frames are processed with its own recording's calibration and fused into one model, whose grid is the finest of the scans' own unless `[process] voxel_mm` sets it. The merged scan's `report.json` says which calibration each scan had (`scans[i].calibration`, `calibrations`).
 - **A merged scan has no recording.** It can be viewed, edited, measured and exported, and another scan can be aligned to it; it cannot be tracked or merged again (409 "has no recording").
 - **Errors** (`{detail, hint}`): 404 unknown project or scan; 409 the two ids are the same, a scan is recording or processing, a scan has no mesh yet, and for a merge a scan without recording or without the camera path of its mesh; 422 fewer than three pairs, pairs that lie in one line or on one spot, a `T` that is not a 4x4 rigid motion.
