@@ -61,6 +61,10 @@ other, so any of them can be taken first.
 | D4 | Retention: which mode is the default? | Keep everything, as today, until real recordings show the sizes. The roadmap's three names stay (Standard / Engineering / Full); the default is the owner's choice. |
 | D5 | Presets: which ones, and what are they called? | Decided after P1's measurements. "General" is today's behaviour, unchanged. |
 | D6 | May `mesh.ply` carry one more value per vertex (how many independent looks it had)? | Needed by N1 to say *why* an area is weak. It adds a property and changes no existing one. |
+| D7 | The CPU path: switch on the depth fix, the velocity guard and the stricter ray-cast threshold together (`MAINTENANCE_PLAN.md` F14, "Cw8")? Open since 2026-11-20. | Yes. It is better on every scene in position and rotation (dark brackets 167 to 42 mm and 249 to 0.9 mm, thin plates 36 and 50 to 5.7 mm), tracks every frame, and lets the calibration status judge the lasers and the IMU on that path. It misses the rule on one number: the car panel's tracker against the gyro, 0.0087° a frame instead of 0.0081°. The GPU path stays bit for bit. |
+| D8 | Guidance at half resolution (N1): at 640x400 the guided passes show no gain on either path, and the loop's test is skipped on the CPU path for that reason. Does that matter? Open since 2026-11-20. | No for now: the scanner's cameras are 1280x800, where guided passes beat random ones on 4 of 5 seeds. Keep the skip, and look again when poses for the sides a scan never saw are built. |
+| D9 | Hole filling can triangulate the same hole differently from run to run (`MAINTENANCE_PLAN.md` F15). Make it repeatable? Open since 2026-11-20. | Yes, as an option first: it changes which triangles an edit makes (not what was measured), so by the standing rule it is built off and switched on after a look. |
+| D10 | The calibration status's limits (a board check older than 14 days, 2 of the last 3 scans, 0.3 px at launch) are provisional. | Leave them until the real scanner has been measured (H5). |
 
 **Decided by the owner (2026-11-19):**
 - **D5:** the presets and their names are chosen from P1's measurements; "General" stays

@@ -2129,3 +2129,13 @@ One thing to watch: a full run on the CPU path earlier on 2026-11-10 showed
 at db7b328 on the CPU path it passes. It is not established whether that full run was at this
 commit or just before it. The first full CPU run under this plan settles it; if the test fails
 there, it is a flaky test to fix, not to loosen.
+
+**Full suites, 2026-11-20, at the code of 42b0f60** (after N1 to N3, R3, R5, P1 to P3, F10 and
+F14's options; nothing else of ours running on the PC, AMD's RadeonSoftware using one core as it
+had for ten days): GPU path 1711 passed, 6 skipped, 55 minutes (the skips: no camera, no Pico, and
+four "one layout is enough"); CPU path 1645 passed, 72 skipped, 36 minutes. No failure, no crash,
+no hang. The two wall-clock tests that failed under load during the night
+(`test_sim_board_camera.py::test_realtime_pacing`,
+`test_server_rewind.py::test_rebuild_of_a_two_minute_scan_fits_the_budget`) pass on the quiet PC.
+UI: typecheck clean, 54 test files pass, build done. For comparison, at 1ce04d3 (2026-11-19): GPU
+1576 passed, 6 skipped, 41 minutes; CPU 1515 passed, 67 skipped, 29 minutes.
