@@ -3014,6 +3014,69 @@ aligned at the first frame.
   off the mesh with a right calibration, which is why the calibration status judges only the
   cameras on this path. That is what is left of F13.
 
+## The CPU matcher's depth in detail mode (2026-11-19)
+
+`MAINTENANCE_PLAN.md` F13. After the ray cast fix above the CPU path repeated its results, which
+made its remaining error measurable: on the 90-frame bracket at 1280x800 it ended 9.4 mm and 3.6°
+from the truth where the GPU path ends 0.61 mm and 0.17°.
+
+**Which half carries it.** The CPU path changes the depth matcher and the tracker's model at once.
+Taken apart (true calibration; "turn" is the tracker's turn per frame against the scanner's true
+turn, minus meaning it turned less):
+
+| Depth + model | Position error, median / last frame | Rotation, last frame | Tracker against the gyro, a frame | Turn |
+|---|---:|---:|---:|---:|
+| GPU + GPU (the default) | 0.37 / 0.61 mm | 0.17° | 0.0051° | -0.3 % |
+| GPU + Open3D | 0.76 / 0.43 mm | 0.45° | 0.0075° | -0.9 % |
+| CPU + GPU | 3.91 / 5.73 mm | 2.31° | 0.0265° | -3.6 % |
+| CPU + Open3D (no GPU at all) | 7.78 / 9.42 mm | 3.65° | 0.0429° | -6.5 % |
+
+The depth carries most of it. The Open3D model itself checked out against an exact surface (a
+noise-free sphere on a plane, integrated at known poses and cast at a known pose: point-to-plane
+error -0.001 mm on both models).
+
+**What is wrong in the depth.** The bracket is a detailed part, so the tracker gets the filtered
+depth plus the raw depth where the filter dropped a pixel ("Large and detailed parts"). Raw depth
+against the simulator's true depth, by distance to the nearest pixel without depth:
+
+| Matcher | 1 px | 2 px | 3–6 px | beyond 15 px |
+|---|---:|---:|---:|---:|
+| CPU (SGBM) | +0.49 mm | +0.30 mm | +0.25 mm | +0.19 mm |
+| GPU | +0.37 mm | +0.16 mm | about 0 | about 0 |
+
+The holes lie where the projected dots leave gaps, so they move with the scanner: an error fixed
+to the camera, which holds every frame near the previous pose.
+
+**The rule and its size.** With the CPU matcher, detail mode leaves its raw depth out within a
+few pixels of a hole (`without_hole_borders` in `ohs/app/pipeline.py`):
+
+| Left out within | Median | Last frame | Rotation, last frame |
+|---|---:|---:|---:|
+| 0 px (before) | 7.78 mm | 9.42 mm | 3.65° |
+| 3 px | 2.5 mm | 4.9 mm | 1.30° |
+| **6 px (kept)** | **0.88 mm** | **0.95 mm** | **0.58°** |
+| 10 px | 1.84 mm | 0.40 mm | 0.34° |
+
+**With the rule, CPU path** (the first two rows re-measured in review, two runs identical; the
+hard scenes are the study's numbers):
+
+| Scene | Before: last frame, rotation | After |
+|---|---|---|
+| Bracket, true calibration | 9.42 mm, 3.65° | 0.95 mm, 0.58° (90 of 90 tracked) |
+| Bracket, calibration pitched 0.03° | 359 mm, 2.59° (88 of 90) | 1.18 mm, 0.56° (90 of 90) |
+| Dark bracket | 245 mm, 0.77° | 167 mm, 0.13° |
+| Speckled bracket | 33 mm, 0.94° | 23 mm, 0.13° |
+| 0.5 mm plate | 85 mm, 0.42° | 36 mm, 0.12° |
+| Sphere, car panel, the 8-frame recording | 0.31 mm, 0.60 mm, 0.04 mm | the same (never in detail mode) |
+
+- The GPU path is untouched: the same poses and the same mesh vertices on the bracket, bit for
+  bit, before and after.
+- The rotation is right on every scene now; the hard scenes still slide (dark, speckled, plate),
+  which is a separate fault of the CPU path (`MAINTENANCE_PLAN.md` F14).
+- The laser lines still read 0.12 mm off the mesh on this path with a right calibration (the CPU
+  matcher reads about 0.08 px too far over the whole image), so the calibration status still
+  judges only the cameras there.
+
 ## What a scan takes on disk (data retention, 2026-11-19)
 
 Measured with `GET /api/projects/{pid}/disk` (`ohs/server/disk.py`, FEATURE_PLAN R1) on the

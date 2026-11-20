@@ -69,6 +69,15 @@ is there but are biased (``VALIDATION.md``, "Large and detailed parts"). Smooth 
 the car panel, the door trim) never switch. A scan that starts on a smooth part and only later
 reaches a detailed one stays on the filtered depth.
 
+From the CPU matcher (SGBM) the raw depth added this way leaves out every pixel within
+``DETAIL_HOLE_PX_1280`` = 6 px (at 1280 px width, scaled with the width) of a pixel without depth
+(:func:`without_hole_borders`). SGBM's depth next to its holes is biased (on the simulated bracket
++0.3 to +0.5 mm within 6 px, +0.19 mm farther in), and its holes lie where the projected dots leave
+gaps, which move with the scanner: a camera-fixed error that pulled each frame towards the previous
+pose. The tracker turned 6.5 % less than the scanner every frame and the 90-frame bracket ended
+3.6 deg and 9.4 mm off; with the rule 0.58 deg and 0.95 mm (``MAINTENANCE_PLAN.md`` F13). The GPU
+matcher's depth has no such bias (its depth is used as it is). The mesh model fuses the whole depth.
+
 **Model backends.** The tracking model may live on the GPU
 (:class:`~ohs.track.volume_gpu.GpuTsdfVolume`, a rolling cube): it takes
 ``fusion.model_backend`` (default ``"auto"``: the GPU when :func:`ohs.compute.get_device` finds
@@ -194,6 +203,9 @@ DETAIL_PROBE_FRAMES = 10  # frames at the start of a scan that also track on wit
 # once the model has grown, but a young model flatters them (the carburetor's first frames: 3e-4,
 # 2e-4, then 1e-4 and falling), so the threshold sits between
 DETAIL_PROBE_STRENGTH = 5e-4
+# detail mode on the CPU matcher's depth: its raw depth within this many px (at 1280 px width, scaled with the
+# width) of a pixel without depth is left out (module docstring, "Detailed parts"; MAINTENANCE_PLAN.md F13)
+DETAIL_HOLE_PX_1280 = 6.0
 
 
 def effective_scale(image_width: int) -> float:
@@ -294,6 +306,19 @@ def with_raw_depth(filtered: np.ndarray, raw: np.ndarray) -> np.ndarray:
     out = f.copy()
     out[m] = r[m]
     return out
+
+
+def without_hole_borders(depth: np.ndarray, radius_px: int) -> np.ndarray:
+    """``depth`` without its pixels within ``radius_px`` (in x and in y: a square) of a pixel without depth
+    (0 or not finite); the image border is no hole. The CPU matcher's raw depth for detail mode (module
+    docstring, "Detailed parts"). ``radius_px <= 0`` returns the input itself."""
+    d = np.asarray(depth, dtype=np.float32)
+    r = int(radius_px)
+    if r <= 0:
+        return d
+    valid = (np.isfinite(d) & (d > 0)).astype(np.uint8)
+    keep = cv2.erode(valid, np.ones((2 * r + 1, 2 * r + 1), np.uint8))  # outside the image counts as depth
+    return np.where(keep > 0, d, np.float32(0.0)).astype(np.float32)
 
 
 def _tracking_depth_small(d: np.ndarray, gx: np.ndarray, gy: np.ndarray, slope: float, sigma_px: float,
@@ -525,6 +550,8 @@ class FramePipeline:
         # the start of a scan tracks a second time on with_raw_depth (module docstring, "Detailed parts")
         self._probe: MarkerlessTracker | None = None
         self._probe_left = DETAIL_PROBE_FRAMES
+        #: detail mode on the CPU matcher's depth leaves its raw depth out this close (px) to a hole ("Detailed parts")
+        self.detail_hole_px = int(round(DETAIL_HOLE_PX_1280 * self.image_size[0] / NOMINAL_WIDTH))
         #: laser points dropped because they disagree with the frame's dense depth, per line
         self.laser_rejected: dict[str, int] = {}
         #: when a dict (set by the caller; None: not measured), each frame appends per line the signed
@@ -892,7 +919,8 @@ class FramePipeline:
             if self._probe_left > 0:
                 res = self._probe_track(d_track, depth, t, R_prior)
             else:
-                res = self.tracker.track(d_track, None, t, R_prior, alt_depth=lambda: with_raw_depth(d_track, depth))
+                res = self.tracker.track(d_track, None, t, R_prior,
+                                         alt_depth=lambda: with_raw_depth(d_track, self._detail_raw(depth)))
             if res.ok:
                 self._fuse(depth, res.T_wc, t, tim, sigma)
         for k, v in res.info.get("timings_ms", {}).items():
@@ -909,7 +937,7 @@ class FramePipeline:
         if self._probe is None:
             self._probe = MarkerlessTracker(self.K, self.image_size, self.track_fusion_params)
         res = self.tracker.track(d_track, None, t, R_prior)
-        res_p = self._probe.track(with_raw_depth(d_track, depth), None, t, R_prior)
+        res_p = self._probe.track(with_raw_depth(d_track, self._detail_raw(depth)), None, t, R_prior)
         self._probe_left -= 1
         weak = not res.info.get("first_frame") and (
             (not res.ok and res_p.ok)
@@ -925,6 +953,15 @@ class FramePipeline:
         if self._probe_left <= 0:
             self._end_probe()
         return res
+
+    def _detail_raw(self, depth: np.ndarray) -> np.ndarray:
+        """The raw depth detail mode adds where the filter dropped a pixel: ``depth`` itself from the GPU
+        matcher, without its hole borders (:func:`without_hole_borders`, :attr:`detail_hole_px`) from the
+        CPU matcher (module docstring, "Detailed parts")."""
+        est = self.depth_estimator
+        if est is None or est.backend != "cpu":
+            return depth
+        return without_hole_borders(depth, self.detail_hole_px)
 
     def _end_probe(self) -> None:
         if self._probe is not None:

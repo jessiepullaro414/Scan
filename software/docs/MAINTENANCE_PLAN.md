@@ -1794,7 +1794,7 @@ Every task here: the type check, `npm test`, and for bundle tasks the chunk size
   7 times slower than the rendering or more: the app then starts the lasers' turn after the
   hold has ended.
 
-### [ ] F13. The CPU path's tracking does not repeat from run to run
+### [x] F13. The CPU path's tracking does not repeat from run to run ✔
 - **Reported 2026-11-18** by the agent that built the calibration health block
   (`FEATURE_PLAN.md`, H1), while testing "the same with and without the block". Not checked
   again in review, and no cause looked for.
@@ -1832,6 +1832,60 @@ Every task here: the type check, `npm test`, and for bundle tasks the chunk size
   short half-resolution recording's 37–219 mm is gone with F6's fix; and where the steady
   turn comes from (the model view's pixel convention at half size, the +0.5 px of the
   integration, or the plain ICP against Open3D's coarser normals).
+- **The accuracy, found and mended (2026-11-19;** an Opus agent's study, re-measured in
+  review**).** Split 2 x 2 on the 90-frame bracket (median / last frame, rotation at the last
+  frame): GPU depth + GPU model 0.37 / 0.61 mm, 0.17°; GPU depth + Open3D model 0.76 / 0.43 mm,
+  0.45°; CPU depth + GPU model 3.9 / 5.7 mm, 2.3°; both on the CPU 7.8 / 9.4 mm, 3.6°. So
+  the depth carries most of it, not the model. The error is a turn too small in every frame
+  (the tracker turned 6.5 % less than the scanner), the mark of an error that is fixed to
+  the camera and holds each frame near the last pose.
+  - *The cause:* detail mode. The bracket is a detailed part, so it is tracked on the
+    filtered depth plus the raw depth where the filter dropped a pixel. The CPU matcher's
+    (SGBM) raw depth next to its holes is too far (+0.5 mm at 1 px, +0.25 mm within 6 px,
+    +0.19 mm farther in; the GPU matcher's is unbiased past 2 px), and its holes lie where
+    the projected dots leave gaps, which move with the scanner. With detail mode off the CPU
+    path turns right (0.018° at the last frame) but slides 10 mm, which is why detail mode
+    exists.
+  - *Ruled out:* everything in the Open3D model itself. A noise-free sphere on a plane
+    integrated at known poses and cast at a known pose: point-to-plane error -0.001 mm on
+    both models, no offset, no tilt (the half-size cast's pixel convention, the +0.5 px of
+    the integration, the Newton step and the normals are all in order).
+  - **Mended:** with the CPU matcher, detail mode leaves its raw depth out within 6 px (at
+    1280 px, scaled with the width) of a pixel without depth (`ohs/app/pipeline.py`,
+    `without_hole_borders`, `DETAIL_HOLE_PX_1280`; 3 px gave 4.9 mm, 10 px 0.40 mm at the
+    last frame but 1.84 mm median, so 6). The 90-frame bracket on the CPU path: **0.88 /
+    0.95 mm and 0.58°** (was 7.8 / 9.4 mm, 3.6°), gyro 0.0086° a frame (was 0.043°), the
+    same on a second run; with the calibration pitched 0.03°: 90 of 90 tracked, 1.18 mm
+    (was 359 mm). Sphere, panel and the 8-frame recording are unchanged (they never enter
+    detail mode). The GPU matcher's depth is used as it was: the GPU path's poses and mesh
+    are the same bit for bit (checked in review on the case).
+  - Guard: `tests/test_cpu_detail_depth.py` (the 12-frame bracket with the CPU matcher
+    forced, so it runs on both paths: the turn error per frame above -2 % and the last
+    frame under 0.15°; before: -2.7 % and -3.7 %).
+  - The 8-frame half-resolution recording's 37–219 mm is gone since F6's fix (8 of 8
+    tracked, 0.10 mm median).
+  - **What is left is F14.**
+
+### [ ] F14. The CPU path on hard surfaces, and its matcher's small depth bias
+Found 2026-11-19 by the study for F13 (the agent's numbers, not re-measured in review).
+- **Hard scenes slide.** With the true calibration on the CPU path, the last frame's position
+  error after F13's fix: dark bracket 167 mm (GPU path 1.1–3.8 mm on these scenes), speckled
+  bracket 23 mm, 0.5 mm plate 36 mm; the rotation is right everywhere (0.12–0.13°). On the
+  dark bracket it slides about 200 mm in the first 8 frames. Nobody saw it before because
+  the hard-scene tests of the calibration status skip on the CPU path.
+- **The CPU matcher reads about 0.08 px too far** over the whole image (the filtered depth
+  +0.10 to +0.14 mm). It does not hurt tracking, but it puts the laser lines 0.06–0.12 mm
+  off the mesh with a right calibration, which is why the calibration status cannot judge
+  the lasers on this path. A correction of +0.078 px brought them to 0.01 / 0.06 mm in a
+  trial (`ohs/vision/depth.py`; not built).
+- **The Open3D model's ray-cast weight threshold** is 3, the GPU model's 8. With 8 the
+  bracket is better still (0.35 / 0.52 mm with F13's fix) but the speckled bracket lost 22
+  frames; it changes every CPU-path scan and needs a wider measurement.
+- **The IMU sign could be judged on the CPU path now:** with a right calibration it reads
+  0.003–0.009° a frame on seven scenes (limit 0.015°), and H2's IMU fault reads 0.034°. Not
+  switched on: one fault tried, and the margin is smaller than on the GPU path.
+- **To do:** measure first. The sliding on dark and plain surfaces is the one that matters
+  to a user without a GPU.
 
 ## Reviewed and fine: leave alone
 
