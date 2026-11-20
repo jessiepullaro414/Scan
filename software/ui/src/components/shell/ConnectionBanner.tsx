@@ -36,7 +36,7 @@ export function ConnectionBanner() {
       <CloudOff size={15} className="text-warn" aria-hidden />
       <span className="font-medium">Lost the live connection to the engine.</span>
       <span className="text-muted">
-        {link === "connecting" ? "Reconnecting…" : countdown !== null ? `Retrying in ${countdown} s.` : "Retrying…"} Your
+        {link === "connecting" ? "Reconnecting…" : countdown !== null ? `Retrying in ${countdown}\u202fs.` : "Retrying…"} Your
         recording keeps running on the engine.
       </span>
       <div className="flex-1" />

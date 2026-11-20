@@ -47,8 +47,8 @@ function cube() {
     len += Math.hypot(x1 - x0, y1 - y0);
     area += 0.5 * (x0 * y1 - x1 * y0);
   }
-  check(Math.abs(len - 40) < 1e-6, "its length is the square's: 40 mm");
-  check(Math.abs(area - 100) < 1e-6, "its area 100 mm², positive: counter-clockwise seen from the normal's side");
+  check(Math.abs(len - 40) < 1e-6, "its length is the square's: 40\u202fmm");
+  check(Math.abs(area - 100) < 1e-6, "its area 100\u202fmm², positive: counter-clockwise seen from the normal's side");
   const xs = L.points.map((p) => p[0]),
     ys = L.points.map((p) => p[1]);
   check(near([Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)], [0, 0, 10, 10], 1e-6), "the square's place in the drawing (x, y)");
@@ -62,7 +62,7 @@ function cube() {
       [x1, y1] = below.points[(i + 1) % below.points.length];
     a2 += 0.5 * (x0 * y1 - x1 * y0);
   }
-  check(Math.abs(a2 - 100) < 1e-6, "seen from the other side: still +100 mm²");
+  check(Math.abs(a2 - 100) < 1e-6, "seen from the other side: still +100\u202fmm²");
   // upright, tilted: a closed loop whose length is the cube's outline in that plane
   const up = cutMesh(m, planeFromPointNormal([5, 5, 5], [1, 0, 0], null));
   check(up.length === 1 && up[0].closed && Math.abs(up[0].points.length - 8) <= 4, "an upright cut: one closed loop");
@@ -107,12 +107,12 @@ async function routes(): Promise<void> {
   check((await call("POST", "section", [], body)).status === 409, "409 before there is a mesh");
   version = 1;
   const r = await call<SectionAnswer>("POST", "section", [], body);
-  check(r.status === 200 && r.data.lines.length === 1, "a kept plane moved 5 mm down cuts the cube");
+  check(r.status === 200 && r.data.lines.length === 1, "a kept plane moved 5\u202fmm down cuts the cube");
   const a = r.data;
   const ln = a.lines[0] as SectionLineCompact;
   check(a.compact && ln.points.length === 2 * ln.n_points && ln.closed && Math.abs(a.length_mm - 40) < 1e-6, "the compact answer: flat 2D points, the length");
   check(Math.abs((ln.area_mm2 ?? 0) - 100) < 1e-3 && a.n_closed === 1 && a.n_lines === 1, "the area and the counts");
-  check(a.definition.kind === "fit" && a.definition.fit_name === "Top" && a.plane.description === "Section on Top, moved -5 mm along its normal", "the definition and the engine's description");
+  check(a.definition.kind === "fit" && a.definition.fit_name === "Top" && a.plane.description === "Section on Top, moved -5\u202fmm along its normal", "the definition and the engine's description");
   check(ln.stretches.length === 1 && ln.stretches[0][2] === false, "all measured (the demo has no filled faces)");
   check(a.filenames.dxf.endsWith(".dxf") && a.filenames.dxf.includes("Scan_1"), "the download names from the scan");
   check(!a.stale_fit && a.warnings.length === 0 && a.kept === null, "nothing to warn about");

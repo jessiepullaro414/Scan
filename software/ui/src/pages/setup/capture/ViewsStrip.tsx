@@ -1,4 +1,4 @@
-/** The captured views: thumbnails with their numbers, delete on hover, and errors after a solve. */
+/** The captured views: thumbnails with their numbers, a visible × to delete each (U20), and errors after a solve. */
 import { Hand, ImageOff, Sparkles, TriangleExclamationPoint, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { CalibKind, CalibView } from "../../../api/types";
@@ -17,8 +17,8 @@ function Thumb({ v, kind, editable, fresh, names }: { v: CalibView; kind: CalibK
   const busy = useCalib((s) => s.action === "delete");
   const [failed, setFailed] = useState(false);
   const tone = errTone(v);
-  const label = `View ${v.index + 1}${v.auto ? ", auto" : ", by hand"}${v.distance_mm !== null ? `, ${Math.round(v.distance_mm)} mm` : ""}${
-    v.error_px !== null ? `, error ${v.error_px.toFixed(2)} px${v.bad ? ", flagged bad" : ""}` : ""
+  const label = `View ${v.index + 1}${v.auto ? ", auto" : ", by hand"}${v.distance_mm !== null ? `, ${Math.round(v.distance_mm)}\u202fmm` : ""}${
+    v.error_px !== null ? `, error ${v.error_px.toFixed(2)}\u202fpx${v.bad ? ", flagged bad" : ""}` : ""
   }`;
   const laser = viewLaserSummary(v, names);
   return (
@@ -42,7 +42,7 @@ function Thumb({ v, kind, editable, fresh, names }: { v: CalibView; kind: CalibK
         )}
         {tone === "bad" ? <div className="absolute inset-0 bg-danger/25" aria-hidden /> : null}
         <span className="absolute left-1 top-1 rounded bg-black/65 px-1 font-mono text-[10.5px] font-semibold text-white tnum">#{v.index + 1}</span>
-        <span className="absolute right-1 top-1 grid h-4 w-4 place-items-center rounded bg-black/65 text-white/85" title={v.auto ? "Auto-captured" : "Captured by hand"}>
+        <span className={cn("absolute top-1 grid h-4 w-4 place-items-center rounded bg-black/65 text-white/85", editable ? "left-9" : "right-1")} title={v.auto ? "Auto-captured" : "Captured by hand"}>
           {v.auto ? <Sparkles size={10} aria-hidden /> : <Hand size={10} aria-hidden />}
         </span>
         {v.warnings.length && tone !== "bad" ? (
@@ -57,7 +57,7 @@ function Thumb({ v, kind, editable, fresh, names }: { v: CalibView; kind: CalibK
               tone === "bad" ? "bg-danger text-white" : tone === "warn" ? "bg-warn text-black" : "bg-ok text-white",
             )}
           >
-            {v.error_px.toFixed(2)} px{v.bad ? " · bad" : ""}
+            {v.error_px.toFixed(2)}&#8239;px{v.bad ? " · bad" : ""}
           </span>
         ) : null}
         {editable ? (
@@ -66,7 +66,8 @@ function Thumb({ v, kind, editable, fresh, names }: { v: CalibView; kind: CalibK
             onClick={() => void del(v.index)}
             disabled={busy}
             aria-label={`Delete view ${v.index + 1}`}
-            className="absolute right-1 top-1 grid h-5 w-5 place-items-center rounded bg-danger text-white opacity-0 shadow transition-opacity focus-visible:opacity-100 group-hover:opacity-100 disabled:opacity-40"
+            title={`Delete view ${v.index + 1}`}
+            className="absolute right-1 top-1 grid h-5 w-5 place-items-center rounded bg-black/70 text-white shadow ring-1 ring-white/30 transition-colors hover:bg-danger focus-visible:bg-danger disabled:opacity-40"
           >
             <X size={12} strokeWidth={2.6} aria-hidden />
           </button>
@@ -85,7 +86,7 @@ function Thumb({ v, kind, editable, fresh, names }: { v: CalibView; kind: CalibK
           <span>{v.corners_left} pts</span>
         )}
         <span className="flex-1" />
-        <span>{v.distance_mm !== null ? `${Math.round(v.distance_mm)} mm` : "–"}</span>
+        <span>{v.distance_mm !== null ? `${Math.round(v.distance_mm)}\u202fmm` : "–"}</span>
       </div>
     </li>
   );
@@ -115,11 +116,11 @@ export function ViewsStrip({ kind, editable, className }: { kind: CalibKind; edi
   return (
     <div className={cn("border-t border-line bg-panel", className)}>
       <div className="flex items-center gap-2 px-4 pt-2.5 text-[11px] text-subtle">
-        <span className="font-semibold uppercase tracking-wider">Captured {kind === "lasers" ? "poses" : "views"}</span>
+        <span className="font-semibold uppercase tracking-wider">Captured views</span>
         <span className="tnum">{views.length}</span>
         {bad ? <span className="font-medium text-danger">· {bad} flagged bad</span> : null}
         <span className="flex-1" />
-        {editable && views.length ? <span>Hover a view to delete it</span> : null}
+        {editable && views.length ? <span>Press × on a view to delete it</span> : null}
       </div>
       <ul ref={listRef} className="flex gap-2 overflow-x-auto px-4 pb-3 pt-2" aria-label="Captured views">
         {views.map((v) => (

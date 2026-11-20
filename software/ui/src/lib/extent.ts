@@ -25,14 +25,14 @@ function size(mm: number, like = mm): string {
 /** "1,234 mm²", "56.2 mm²", "0.84 mm²". */
 export function fmtArea(mm2: number): string {
   const a = Math.abs(mm2);
-  if (a >= 1000) return `${Math.round(mm2).toLocaleString("en-US")} mm²`;
-  return `${mm2.toFixed(a >= 10 ? 1 : 2)} mm²`;
+  if (a >= 1000) return `${Math.round(mm2).toLocaleString("en-US")}\u202fmm²`;
+  return `${mm2.toFixed(a >= 10 ? 1 : 2)}\u202fmm²`;
 }
 
 /** A plane's size as the rectangle's two sides, longer first, both to the longer one's decimals: "120.0 × 80.0 mm". */
 export function planeSize(e: PlaneExtent): string {
   const [a, b] = e.rectangle.half_sizes_mm;
-  return `${size(2 * a)} × ${size(2 * b, 2 * a)} mm`;
+  return `${size(2 * a)} × ${size(2 * b, 2 * a)}\u202fmm`;
 }
 
 /** The arc a cylinder's region covers: "all round", "182° of the round". */
@@ -55,7 +55,7 @@ export function extentRows(e: FitExtent | null | undefined): ExtentRow[] {
   }
   if (e.kind === "cylinder")
     return [
-      ["Length", `${size(e.length_mm)} mm`, `How far the region runs along the axis. ${MESH_NOTE}`],
+      ["Length", `${size(e.length_mm)}\u202fmm`, `How far the region runs along the axis. ${MESH_NOTE}`],
       ["Arc", arcText(e), `How much of the round the region covers: all of it but the widest gap between its points. ${MESH_NOTE}`],
     ];
   return [];

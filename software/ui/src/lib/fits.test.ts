@@ -142,12 +142,12 @@ const circle = (center: number[], normal: number[], d = 25.01, sd = 0.05): Circl
   center_sigma_mm: 0.04,
 });
 {
-  check(fitLabel("plane", plane([0, 0, 0], [0, 0, 1])) === "Plane · RMS 0.01 mm", "label: plane (its RMS, not the flatness)");
-  check(fitLabel("cylinder", cylinder([0, 0, 0], [0, 0, 1])) === "Cylinder Ø 14.02 ± 0.03 mm", "label: cylinder");
-  check(fitLabel("hole", circle([0, 0, 0], [0, 0, 1])) === "Hole Ø 25.01 ± 0.05 mm", "label: hole");
-  check(fitLabel("hole", circle([0, 0, 0], [0, 0, 1], 8.0213, 0.0042)) === "Hole Ø 8.021 ± 0.004 mm", "label: a small ± gets three decimals");
-  check(fitLabel("plane", { ...plane([0, 0, 0], [0, 0, 1]), rms_mm: 0.0042 }) === "Plane · RMS 0.004 mm", "label: a very flat plane");
-  check(fitLabel("cylinder", cylinder([0, 0, 0], [0, 0, 1], 20.00012, 0.0003)) === "Cylinder Ø 20.0001 ± 0.0003 mm", "label: a tiny ± is never 0.000");
+  check(fitLabel("plane", plane([0, 0, 0], [0, 0, 1])) === "Plane · flat to 0.01\u202fmm (typical)", "label: plane (its RMS as the typical flatness, U8)");
+  check(fitLabel("cylinder", cylinder([0, 0, 0], [0, 0, 1])) === "Cylinder Ø 14.02 ± 0.03\u202fmm", "label: cylinder");
+  check(fitLabel("hole", circle([0, 0, 0], [0, 0, 1])) === "Hole Ø 25.01 ± 0.05\u202fmm", "label: hole");
+  check(fitLabel("hole", circle([0, 0, 0], [0, 0, 1], 8.0213, 0.0042)) === "Hole Ø 8.021 ± 0.004\u202fmm", "label: a small ± gets three decimals");
+  check(fitLabel("plane", { ...plane([0, 0, 0], [0, 0, 1]), rms_mm: 0.0042 }) === "Plane · flat to 0.004\u202fmm (typical)", "label: a very flat plane");
+  check(fitLabel("cylinder", cylinder([0, 0, 0], [0, 0, 1], 20.00012, 0.0003)) === "Cylinder Ø 20.0001 ± 0.0003\u202fmm", "label: a tiny ± is never 0.000");
   check(fmtSmall(0.035) === "0.035" && fmtSmall(0.0042) === "0.0042" && fmtSmall(0.00013) === "0.00013" && fmtSmall(0.5) === "0.50", "small 1σ: two significant digits");
 }
 
@@ -161,13 +161,13 @@ const circle = (center: number[], normal: number[], d = 25.01, sd = 0.05): Circl
   const tiny = 1e-7; // rad: acos would lose it
   check(near(lineAngleDeg([1, 0, 0], [Math.cos(tiny), Math.sin(tiny), 0]), (tiny * 180) / Math.PI, 1e-12), "angle: exact near 0");
 
-  check(near(planePlaneDistance([0, 0, 0], [0, 0, 1], [30, -12, 5], [0, 0, 1]), 5), "planes: 5 mm apart, points offset sideways");
+  check(near(planePlaneDistance([0, 0, 0], [0, 0, 1], [30, -12, 5], [0, 0, 1]), 5), "planes: 5\u202fmm apart, points offset sideways");
   check(near(planePlaneDistance([0, 0, 0], [0, 0, 1], [30, -12, 5], [0, 0, -1]), 5), "planes: opposite normals");
   check(near(planePlaneDistance([1, 2, 3], [0, 2, 0], [1, -4, 3], [0, -1, 0]), 6), "planes: normals not unit");
 
-  check(near(parallelLineDistance([0, 0, 0], [0, 0, 1], [3, 4, 50], [0, 0, -1]), 5), "axes: parallel, 5 mm apart");
-  check(near(lineLineDistance([0, 0, 0], [1, 0, 0], [5, 9, 7], [0, 1, 0]), 7), "axes: skew, 7 mm apart");
-  check(near(lineLineDistance([0, 0, 0], [1, 0, 0], [5, 0, 0], [0, 1, 1]), 0), "axes: crossing, 0 mm");
+  check(near(parallelLineDistance([0, 0, 0], [0, 0, 1], [3, 4, 50], [0, 0, -1]), 5), "axes: parallel, 5\u202fmm apart");
+  check(near(lineLineDistance([0, 0, 0], [1, 0, 0], [5, 9, 7], [0, 1, 0]), 7), "axes: skew, 7\u202fmm apart");
+  check(near(lineLineDistance([0, 0, 0], [1, 0, 0], [5, 0, 0], [0, 1, 1]), 0), "axes: crossing, 0\u202fmm");
   check(near(lineLineDistance([0, 0, 0], [0, 0, 1], [3, 4, 0], [0, 0, 1]), 5), "axes: parallel through the skew formula");
   check(near(pointPlaneDistance([2, 3, -8], [0, 0, 1], [0, 0, 2]), 9), "point to plane");
   check(near(rss(0.03, 0.04), 0.05), "root-sum-square");
@@ -180,7 +180,7 @@ const circle = (center: number[], normal: number[], d = 25.01, sd = 0.05): Circl
   const r = relate(a, b);
   const dist = r.rows.find((x) => x.label === "Distance");
   check(!!dist && near(dist.x, 12.5) && dist.sigma !== null && near(dist.sigma, 0.05), "parallel planes: distance 12.5 with ± = RSS of the offsets");
-  check(!!dist && dist.value === "12.50 ± 0.05 mm" && /ignores their tilt/.test(dist.tip), "parallel planes: '12.50 ± 0.05 mm', the tip says it ignores tilt");
+  check(!!dist && dist.value === "12.50 ± 0.05\u202fmm" && /ignores their tilt/.test(dist.tip), "parallel planes: '12.50 ± 0.05\u202fmm', the tip says it ignores tilt");
   check(r.rows[0].sigma === null && near(r.rows[0].x, 0), "parallel planes: the angle has no ±");
 
   const t = 1.5 * (Math.PI / 180);
@@ -194,7 +194,7 @@ const circle = (center: number[], normal: number[], d = 25.01, sd = 0.05): Circl
   const hole = { kind: "hole" as const, shape: circle([5, 5, 7], [0, 0, 1]) };
   const r4 = relate(a, hole);
   const c2p = r4.rows.find((x) => x.label === "Hole centre to plane");
-  check(!!c2p && near(c2p.x, 7) && c2p.sigma === null, "hole centre to plane: 7 mm, no ±");
+  check(!!c2p && near(c2p.x, 7) && c2p.sigma === null, "hole centre to plane: 7\u202fmm, no ±");
   check(near(r4.rows[0].x, 90) && /hole's axis/.test(r4.rows[0].label), "a hole square to the plane: 90°");
   check(near(relate(hole, a).rows[1].x, 7), "hole and plane in either order");
 
@@ -202,17 +202,17 @@ const circle = (center: number[], normal: number[], d = 25.01, sd = 0.05): Circl
   const c2 = { kind: "cylinder" as const, shape: cylinder([30, 40, 9], [0, 0, -1]) };
   const r5 = relate(c1, c2);
   const ax = r5.rows.find((x) => x.label === "Distance between the axes");
-  check(!!ax && near(ax.x, 50) && ax.sigma === null, "parallel axes: 50 mm, no ±");
+  check(!!ax && near(ax.x, 50) && ax.sigma === null, "parallel axes: 50\u202fmm, no ±");
   const r6 = relate(c1, { kind: "cylinder", shape: cylinder([0, 0, 0], [1, 0, 0]) });
   check(near(r6.rows[0].x, 90) && r6.rows.some((x) => x.label === "Closest distance of the axes" && near(x.x, 0)), "crossing axes: 90°, closest distance 0");
 
   const h2 = { kind: "hole" as const, shape: circle([35, 5, 7], [0, 0, -1]) };
   const r7 = relate(hole, h2);
-  check(r7.rows.some((x) => x.label === "Centre to centre" && near(x.x, 30)), "two holes: centre to centre 30 mm");
+  check(r7.rows.some((x) => x.label === "Centre to centre" && near(x.x, 30)), "two holes: centre to centre 30\u202fmm");
 
   // a cylinder lying along a plane: the axis to plane distance
   const r8 = relate(a, { kind: "cylinder", shape: cylinder([0, 0, 8], [1, 0, 0]) });
-  check(r8.rows.some((x) => x.label === "Axis to plane" && near(x.x, 8)) && near(r8.rows[0].x, 0), "an axis along a plane: 0°, 8 mm above it");
+  check(r8.rows.some((x) => x.label === "Axis to plane" && near(x.x, 8)) && near(r8.rows[0].x, 0), "an axis along a plane: 0°, 8\u202fmm above it");
   const r9 = relate(a, c1);
   check(near(r9.rows[0].x, 90) && r9.notes.length === 1 && !r9.rows.some((x) => x.label === "Axis to plane"), "an axis square to a plane: no distance");
   check([r4, r5, r6, r7, r8, r9].every((x) => x.rows.every((row) => row.sigma === null && /No ±/.test(row.tip))), "no ± where it can't be derived, and the tip says so");

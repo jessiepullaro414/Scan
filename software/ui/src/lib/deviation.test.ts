@@ -91,13 +91,13 @@ for (const theme of ["light", "dark"] as const) {
 }
 
 // the readout
-check(deviationReadout(0.034) === "+0.034 mm (outward)", "outward");
-check(deviationReadout(-0.12) === "−0.12 mm (inward)", "inward");
-check(deviationReadout(0.25) === "+0.25 mm (outward)", "two digits from 0.1 mm");
-check(deviationReadout(0) === "0.000 mm (unchanged)", "zero");
-check(deviationReadout(-0.00001) === "0.000 mm (unchanged)", "a hair is unchanged, with no minus sign");
+check(deviationReadout(0.034) === "+0.034\u202fmm (outward)", "outward");
+check(deviationReadout(-0.12) === "−0.12\u202fmm (inward)", "inward");
+check(deviationReadout(0.25) === "+0.25\u202fmm (outward)", "two digits from 0.1\u202fmm");
+check(deviationReadout(0) === "0.000\u202fmm (unchanged)", "zero");
+check(deviationReadout(-0.00001) === "0.000\u202fmm (unchanged)", "a hair is unchanged, with no minus sign");
 check(deviationReadout(NaN) === "new surface" && deviationReadout(null) === "new surface", "no value");
-check(fmtMove(0.0342) === "0.034 mm" && fmtMove(0.5) === "0.50 mm" && fmtMove(null) === "–", "fmtMove");
+check(fmtMove(0.0342) === "0.034\u202fmm" && fmtMove(0.5) === "0.50\u202fmm" && fmtMove(null) === "–", "fmtMove");
 check(fmtLimit(0.05) === "0.05" && fmtLimit(1) === "1" && fmtLimit(0.1) === "0.1", "fmtLimit");
 
 // interpolation under the cursor

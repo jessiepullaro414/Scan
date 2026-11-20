@@ -20,13 +20,14 @@ import {
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { ConnectSource } from "../api/types";
 import { EmitterSliders } from "../components/EmitterSliders";
-import { CalibHealthCallout } from "../components/CalibHealth";
+import { CalibHealthCallout, useDeviceHealth } from "../components/CalibHealth";
+import { healthView, loadedLine } from "../lib/calibHealth";
 import { Badge } from "../components/ui/Badge";
 import { Button } from "../components/ui/Button";
 import { ProgressBar, Skeleton, Spinner } from "../components/ui/Feedback";
 import { Field, Switch, TextInput } from "../components/ui/Form";
 import { Callout, Code, KeyValue, Page, PageHeader, Section } from "../components/ui/Layout";
-import { fmtFixed, humanize } from "../lib/format";
+import { fmtFixed, fmtSize, humanize } from "../lib/format";
 import { laserLabel } from "../lib/laserSet";
 import { navigate, paths } from "../lib/router";
 import { cn, storage } from "../lib/util";
@@ -62,19 +63,27 @@ const SOURCES: SourceCard[] = [
 
 const REPLAY_KEY = "ohs.replayPath";
 
-function StatusLine({ ok, label, detail }: { ok: boolean | null; label: string; detail?: ReactNode }) {
+function StatusLine({ ok, label, detail }: { ok: boolean | null | "warn"; label: string; detail?: ReactNode }) {
   return (
     <div className="flex items-start gap-2.5">
       <span
         className={cn(
           "mt-0.5 grid h-5 w-5 shrink-0 place-items-center rounded-full",
-          ok === null ? "bg-surface-3 text-subtle" : ok ? "bg-ok-soft text-ok" : "bg-warn-soft text-warn",
+          ok === null ? "bg-surface-3 text-subtle" : ok === "warn" ? "bg-warn-soft text-warn" : ok ? "bg-ok-soft text-ok" : "bg-warn-soft text-warn",
         )}
       >
-        {ok === null ? <span className="h-1.5 w-1.5 rounded-full bg-current" /> : ok ? <Check size={12} strokeWidth={3} /> : <X size={12} strokeWidth={3} />}
+        {ok === null ? (
+          <span className="h-1.5 w-1.5 rounded-full bg-current" />
+        ) : ok === "warn" ? (
+          <TriangleExclamationPoint size={12} strokeWidth={2.5} />
+        ) : ok ? (
+          <Check size={12} strokeWidth={3} />
+        ) : (
+          <X size={12} strokeWidth={3} />
+        )}
       </span>
       <div className="min-w-0">
-        <div className="text-sm text-fg">{label}</div>
+        <div className={cn("text-sm", ok === "warn" ? "font-medium text-warn" : "text-fg")}>{label}</div>
         {detail ? <div className="text-xs text-subtle">{detail}</div> : null}
       </div>
     </div>
@@ -127,6 +136,7 @@ export function DevicePage() {
   const busy = device?.busy ?? (simJobId ? "Generating simulator demo…" : null);
   const isCurrent = connected && device?.source === choice;
   const calib = device?.calibration;
+  const loaded = loadedLine(healthView(useDeviceHealth()));
 
   const doConnect = async () => {
     if (choice === "replay") storage.set(REPLAY_KEY, path.trim());
@@ -157,7 +167,7 @@ export function DevicePage() {
                 icon={Unplug}
                 loading={pending === "disconnect"}
                 disabled={scanning}
-                title={scanning ? "Stop the scan before disconnecting" : "Disconnect and switch the emitters off"}
+                title={scanning ? "Stop the scan before disconnecting" : "Disconnect and switch the lasers and dots off"}
                 onClick={() => void disconnect()}
               >
                 Disconnect
@@ -302,7 +312,7 @@ export function DevicePage() {
                             : ""
                           : "The first start builds the demo recording: about a minute, once."
                         : choice === "camera"
-                          ? "Emitters stay off until a scan starts or you turn them on below."
+                          ? "The lasers and dots stay off until a scan starts or you turn them on below."
                           : connected
                             ? "The current device disconnects first."
                             : ""}
@@ -361,7 +371,7 @@ export function DevicePage() {
                     ? device.pico.firmware
                       ? `Firmware ${device.pico.firmware}`
                       : "Firmware version unknown"
-                    : "Emitters, trigger and IMU are unavailable. Check the cable, or flash the firmware (Setup, Connect step)."
+                    : "The lasers and dots, the trigger and the motion sensor (IMU) are unavailable. Check the cable, or flash the firmware (Setup, Connect step)."
                 }
               />
               <ImuTemp c={device.imu_temp_c} inset />
@@ -391,14 +401,15 @@ export function DevicePage() {
             </div>
           ) : calib?.loaded ? (
             <div className="space-y-4">
-              <StatusLine ok label="Calibration loaded" detail="Scanning and meshing use this calibration." />
+              {/* U46: not a plain "loaded" right under "Recalibration required": it says which, in amber */}
+              <StatusLine ok={loaded.warn ? "warn" : true} label={loaded.text} detail="Scanning and meshing use this calibration." />
               <KeyValue
                 rows={[
                   ["File", <span className="break-all font-mono text-xs" title={calib.path ?? undefined}>{calib.path ?? "from the recording"}</span>],
-                  ["Image size", calib.image_size ? `${calib.image_size[0]} × ${calib.image_size[1]} px` : "–"],
-                  ["Baseline", calib.baseline_mm !== null ? `${fmtFixed(calib.baseline_mm, 2)} mm` : "–"],
+                  ["Image size", calib.image_size ? fmtSize(calib.image_size[0], calib.image_size[1], "px") : "–"],
+                  ["Baseline", calib.baseline_mm !== null ? `${fmtFixed(calib.baseline_mm, 2)}\u202fmm` : "–"],
                   [
-                    "Laser planes",
+                    "Laser lines",
                     calib.lasers.length ? (
                       <span className="flex flex-wrap gap-1.5">
                         {calib.lasers.map((l) => (
@@ -411,7 +422,7 @@ export function DevicePage() {
                       <span className="text-warn">None: no laser points</span>
                     ),
                   ],
-                  ["IMU", calib.imu ? <span className="text-ok">Calibrated</span> : <span className="text-warn">Not calibrated: no gyro prior</span>],
+                  ["Motion sensor (IMU)", calib.imu ? <span className="text-ok">Calibrated</span> : <span className="text-warn">Not calibrated: tracking runs without the motion sensor</span>],
                 ]}
               />
             </div>
@@ -436,7 +447,7 @@ export function DevicePage() {
         </Section>
 
         <Section
-          title="Emitters"
+          title="Lasers and dots"
           icon={SlidersHorizontal}
           className="lg:col-span-2"
           description="Camera only. Replays and the simulator carry their own emitter settings."

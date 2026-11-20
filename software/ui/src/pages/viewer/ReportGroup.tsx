@@ -14,6 +14,7 @@ import { Button, IconButton } from "../../components/ui/Button";
 import { Select, Switch, TextInput } from "../../components/ui/Form";
 import { Tooltip } from "../../components/ui/Popover";
 import { saveBlob } from "../../lib/download";
+import { fmtSize } from "../../lib/format";
 import { addView, LIMITS_TEXT, MAX_VIEWS, removeView, reportRequest, type ReportView } from "../../lib/report";
 import { toast } from "../../store/toasts";
 import { captureView } from "./ViewCapture";
@@ -114,13 +115,13 @@ export function ReportGroup({
 
       <div className="flex items-center gap-1.5">
         <div className="min-w-0 flex-1">
-          <Switch checked={withCheck} onChange={setWithCheck} label="Check answer at ±" />
+          <Switch checked={withCheck} onChange={setWithCheck} label="Tolerance for the report's Scan check, ± mm" />
         </div>
         <div className="relative w-[84px] shrink-0">
           <TextInput
             mono
             inputMode="decimal"
-            aria-label="Tolerance for the Check answer in the report"
+            aria-label="Tolerance for the report's Scan check, ± mm"
             value={tolerance}
             disabled={!withCheck}
             onChange={(e) => {
@@ -158,7 +159,7 @@ export function ReportGroup({
         {views.length ? (
           <ul className="mb-2 grid grid-cols-3 gap-1.5">
             {views.map((v) => (
-              <li key={v.id} className="group relative overflow-hidden rounded-md border border-line bg-surface-2/60" title={`${v.title}: ${v.width} × ${v.height} px, ${(v.bytes / 2 ** 20).toFixed(1)} MB`}>
+              <li key={v.id} className="group relative overflow-hidden rounded-md border border-line bg-surface-2/60" title={`${v.title}: ${fmtSize(v.width, v.height, "px")}, ${(v.bytes / 2 ** 20).toFixed(1)}\u202fMB`}>
                 <img src={`data:image/png;base64,${v.data}`} alt={v.title} className="block aspect-[4/3] w-full object-cover" />
                 <div className="truncate px-1 py-0.5 text-[10px] text-subtle">{v.title}</div>
                 <IconButton icon={X} size="xs" label={`Remove ${v.title} from the report`} className="absolute right-0.5 top-0.5 bg-panel/80 opacity-70 group-hover:opacity-100" onClick={() => onViews(removeView(views, v.id))} />

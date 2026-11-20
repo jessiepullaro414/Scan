@@ -42,11 +42,11 @@ function fmtCount(n: number): string {
 /** A share: "12 %", "0.4 %", "99.6 %"; never "100 %" or "0 %" for a share that isn't (as lib/check.ts `fmtShare`). */
 export function fmtLaserShare(x: number | null | undefined): string {
   if (x === null || x === undefined || !Number.isFinite(x)) return "–";
-  if (x <= 0) return "0 %";
-  if (x >= 1) return "100 %";
-  if (x < 0.001) return "under 0.1 %";
-  if (x > 0.999) return "over 99.9 %";
-  return x < 0.1 || x > 0.99 ? `${(x * 100).toFixed(1).replace(/\.0$/, "")} %` : `${Math.round(x * 100)} %`;
+  if (x <= 0) return "0\u202f%";
+  if (x >= 1) return "100\u202f%";
+  if (x < 0.001) return "under 0.1\u202f%";
+  if (x > 0.999) return "over 99.9\u202f%";
+  return x < 0.1 || x > 0.99 ? `${(x * 100).toFixed(1).replace(/\.0$/, "")}\u202f%` : `${Math.round(x * 100)}\u202f%`;
 }
 
 /** A distance for the sentences, without its sign: "0.04 mm", "0.1 mm", "0.004 mm", "1.5 mm". */
@@ -54,7 +54,7 @@ export function fmtLaserMm(mm: number | null | undefined): string {
   if (mm === null || mm === undefined || !Number.isFinite(mm)) return "–";
   const a = Math.abs(mm);
   const two = Number(a.toFixed(a < 10 ? 2 : 1));
-  return `${two > 0 || a === 0 ? two : Number(a.toFixed(3)) || "under 0.001"} mm`;
+  return `${two > 0 || a === 0 ? two : Number(a.toFixed(3)) || "under 0.001"}\u202fmm`;
 }
 
 /** From this mean difference (mm) on, the lasers sit to one side of the mesh as a whole, and the legend says so. */
@@ -87,10 +87,10 @@ export function laserSentences(info: LaserInfo): string[] {
     const w3 = s.within_0_3 ?? 0;
     const agree =
       w1 >= 1
-        ? "There the mesh and the lasers agree within 0.1 mm everywhere"
+        ? "There the mesh and the lasers agree within 0.1\u202fmm everywhere"
         : w3 >= 1
-          ? `There the mesh and the lasers agree within 0.1 mm for ${fmtLaserShare(w1)} and within 0.3 mm everywhere`
-          : `There the mesh and the lasers agree within 0.1 mm for ${fmtLaserShare(w1)} and within 0.3 mm for ${fmtLaserShare(w3)}`;
+          ? `There the mesh and the lasers agree within 0.1\u202fmm for ${fmtLaserShare(w1)} and within 0.3\u202fmm everywhere`
+          : `There the mesh and the lasers agree within 0.1\u202fmm for ${fmtLaserShare(w1)} and within 0.3\u202fmm for ${fmtLaserShare(w3)}`;
     out.push(`The laser lines cover ${fmtLaserShare(s.covered)} of the surface. ${agree}; typical difference ${fmtLaserMm(s.p50_mm)}.`);
     if (s.mean_mm !== null && Math.abs(s.mean_mm) >= LASER_OFFSET_MM)
       out.push(`On average the lasers see the surface ${fmtLaserMm(s.mean_mm)} further ${s.mean_mm > 0 ? "out" : "in"} than the mesh.`);
@@ -122,8 +122,8 @@ export function laserReadout(v: number | null | undefined): string | null {
   const a = Math.abs(v);
   const digits = a < 0.1 ? 3 : a < 10 ? 2 : 1;
   const text = a.toFixed(digits);
-  if (Number(text) === 0) return `${(0).toFixed(digits)} mm (they agree)`;
-  return v > 0 ? `+${text} mm (lasers further out)` : `${MINUS}${text} mm (lasers further in)`;
+  if (Number(text) === 0) return `${(0).toFixed(digits)}\u202fmm (they agree)`;
+  return v > 0 ? `+${text}\u202fmm (lasers further out)` : `${MINUS}${text}\u202fmm (lasers further in)`;
 }
 
 /**

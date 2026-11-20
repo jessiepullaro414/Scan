@@ -221,7 +221,7 @@ function GetStarted({ onCreate }: { onCreate: () => void }) {
     {
       icon: ScanLine,
       title: "Scan the part",
-      text: "Sweep slowly 200–350 mm from the surface. The model grows live; the raw stream is always recorded.",
+      text: "Sweep slowly 200–350\u202fmm from the surface. The model grows live; the raw stream is always recorded.",
     },
     {
       icon: Ruler,
@@ -488,7 +488,9 @@ export function HomePage() {
         onConfirm={async () => {
           if (!deleting) return;
           const name = deleting.name;
-          if (await remove(deleting.id)) toast.success(`Moved “${name}” to the trash`, "Its folder is in .trash inside your projects folder.");
+          const ok = await remove(deleting.id);
+          if (ok) toast.success(`Moved “${name}” to the trash`, "Its folder is in .trash inside your projects folder.");
+          return ok; // U6: a failed move keeps the dialog open
         }}
       >
         {deleting && deleting.n_scans > 0

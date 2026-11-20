@@ -1,4 +1,5 @@
-import { lazy, Suspense, useEffect } from "react";
+import { lazy, Suspense, useEffect, useRef } from "react";
+import { closesOnLeave } from "./lib/calibOpen";
 import { ConnectionBanner, EngineUnreachable } from "./components/shell/ConnectionBanner";
 import { ErrorBoundary } from "./components/shell/ErrorBoundary";
 import { Sidebar } from "./components/shell/Sidebar";
@@ -137,6 +138,16 @@ export function App() {
     }, 1500);
     return () => clearInterval(id);
   }, [link]);
+
+  // U1: leaving the page of a calibration result that cannot be saved (a check, a failed solve) closes it,
+  // whichever way the user leaves (sidebar, step rail, "Scan your first object"), so it never blocks a scan unseen.
+  const prevRoute = useRef<Route>(route);
+  useEffect(() => {
+    const from = prevRoute.current;
+    prevRoute.current = route;
+    const calib = useCalib.getState();
+    if (closesOnLeave(calib.session, from, route)) void calib.cancel();
+  }, [route]);
 
   const unreachable = !health && !everOpen && !!healthError?.unreachable;
   // A crash on one wizard step clears when you go to another step.

@@ -185,7 +185,7 @@ export function Model({
 
 /** A sigma in words: "±0.042 mm" (more digits for the small ones). */
 export function fmtSigma(s: number): string {
-  return `±${s < 0.1 ? s.toFixed(3) : s < 1 ? s.toFixed(2) : s.toFixed(1)} mm`;
+  return `±${s < 0.1 ? s.toFixed(3) : s < 1 ? s.toFixed(2) : s.toFixed(1)}\u202fmm`;
 }
 
 /**
@@ -376,7 +376,7 @@ const MeasurementMark = memo(function MeasurementMark({ m, color, r }: { m: Meas
       ))}
       <Html position={mid} center zIndexRange={[30, 0]} className="html-label">
         <div className="rounded-full border border-white/15 bg-[rgb(17_20_25/0.9)] px-2.5 py-1 font-mono text-[12.5px] font-semibold text-white shadow-lg tnum">
-          {d.toFixed(2)} mm
+          {d.toFixed(2)}&#8239;mm
         </div>
       </Html>
     </group>
@@ -418,7 +418,7 @@ function MeasureTool({
           {hover ? (
             <Html position={tuple(new Vector3(...pending).add(new Vector3(...hover)).multiplyScalar(0.5))} center className="html-label">
               <div className="rounded-full bg-[rgb(17_20_25/0.75)] px-2 py-0.5 font-mono text-[11.5px] text-white/90 tnum">
-                {new Vector3(...pending).distanceTo(new Vector3(...hover)).toFixed(2)} mm
+                {new Vector3(...pending).distanceTo(new Vector3(...hover)).toFixed(2)}&#8239;mm
               </div>
             </Html>
           ) : null}

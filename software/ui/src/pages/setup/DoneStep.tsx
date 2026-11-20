@@ -32,7 +32,7 @@ function MugArt() {
         <circle cx="10" cy="0" r="4" fill="var(--c-bg)" stroke="var(--c-accent)" strokeWidth="1.5" />
       </g>
       <path d="M60 50 L100 82" stroke="#ff5a4f" strokeWidth="1.5" opacity="0.8" />
-      <text x="70" y="160" fontSize="10" fill="var(--c-fg-subtle)">about 25 cm</text>
+      <text x="70" y="160" fontSize="10" fill="var(--c-fg-subtle)">about 250&#8239;mm</text>
     </svg>
   );
 }
@@ -79,7 +79,7 @@ export function DoneStep() {
               </div>
               <h2 className="font-display text-2xl font-semibold text-fg">Scan your first object</h2>
               <p className="mt-1.5 text-sm text-muted">
-                A mug or a coffee can is perfect: point the scanner at it from about 25 cm, press the trigger (or Start), and move slowly all the way
+                A mug or a coffee can is perfect: point the scanner at it from about 250&#8239;mm, press the trigger (or Start), and move slowly all the way
                 around.
               </p>
               <div className="mt-4 flex flex-wrap gap-2">

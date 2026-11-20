@@ -21,10 +21,10 @@ export function standingOf(r: Pick<AlignResult, "accepted" | "doubt" | "poses">)
   return r.doubt && NOT_SURE_DOUBTS.includes(r.doubt) && (r.poses?.length ?? 0) > 0 ? "not_sure" : "failed";
 }
 
-/** The label above the verdict, as plainly as "Accepted". */
+/** The label above the verdict, as plainly as "Aligned" (U36). */
 export function standingLabel(r: Pick<AlignResult, "accepted" | "doubt" | "poses">): string {
   const s = standingOf(r);
-  return s === "sure" ? "Accepted" : s === "not_sure" ? (r.doubt === "points" ? "Not sure: check your points" : "Not sure") : "Not aligned";
+  return s === "sure" ? "Aligned" : s === "not_sure" ? (r.doubt === "points" ? "Not sure: check your points" : "Not sure") : "Not aligned";
 }
 
 /** One pose to look at, in the page's words. */
@@ -40,8 +40,8 @@ export function poseChoices(r: Pick<AlignResult, "poses">): PoseChoice[] {
     return {
       index,
       T: p.T,
-      title: index === 0 ? "Pose 1: the engine's best" : `Pose ${index + 1}: ${p.apart_mm.toFixed(0)} mm from pose 1`,
-      detail: index === 0 ? starts : `Fits ${share} % as well as pose 1 · ${starts}`,
+      title: index === 0 ? "Pose 1: the engine's best" : `Pose ${index + 1}: ${p.apart_mm.toFixed(0)}\u202fmm from pose 1`,
+      detail: index === 0 ? starts : `Fits ${share}\u202f% as well as pose 1 · ${starts}`,
     };
   });
 }

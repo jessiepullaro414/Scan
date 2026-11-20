@@ -115,7 +115,7 @@ function FrameSummary({ frame, fits }: { frame: PartFrameView; fits: FitItem[] }
         <dt className="text-subtle" title="1σ of where the origin lies (RMS of its 3D displacement), carried over from the fits' ±.">
           Origin
         </dt>
-        <dd className="text-right font-mono text-fg tnum">{sig(s.origin_mm, " mm")}</dd>
+        <dd className="text-right font-mono text-fg tnum">{sig(s.origin_mm, "\u202fmm")}</dd>
       </dl>
       <div className="mt-1.5 text-[11px] leading-4 text-subtle">± (1σ) from the fits' own ±: the spread from scan to scan, not the calibration's scale or a bias the whole scan shares.</div>
       {frame.warnings.length ? (

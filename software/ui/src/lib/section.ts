@@ -61,7 +61,7 @@ export function makePlane(point: ArrayLike<number>, normal: ArrayLike<number>, f
 export function planeFromPointNormal(point: ArrayLike<number>, normal: ArrayLike<number>, frame: PartFrameView | null): SectionPlane {
   const p = vec(Array.from(point), "point"),
     n = vec(Array.from(normal), "normal");
-  return makePlane(p, n, frame, `Section through ${fmt(p)} mm, normal ${fmt(n, 4)}`);
+  return makePlane(p, n, frame, `Section through ${fmt(p)}\u202fmm, normal ${fmt(n, 4)}`);
 }
 
 /** A kept plane moved `offset` mm along its normal (the normal keeps the fit's sign). */
@@ -73,7 +73,7 @@ export function planeFromFit(shape: { point: ArrayLike<number>; normal: ArrayLik
   const n = n0.map((x) => x / ln);
   const p0 = vec(Array.from(shape.point), "plane's point");
   const p = p0.map((x, i) => x + offset * n[i]);
-  return makePlane(p, n, frame, `Section on ${name || "the fitted plane"}${offset ? `, moved ${offset > 0 ? "+" : ""}${g(offset)} mm along its normal` : ""}`);
+  return makePlane(p, n, frame, `Section on ${name || "the fitted plane"}${offset ? `, moved ${offset > 0 ? "+" : ""}${g(offset)}\u202fmm along its normal` : ""}`);
 }
 
 /** The plane `axis = value` of the part's frame, seen from the axis's + side ("-Y": from the other side). */
@@ -87,7 +87,7 @@ export function planeFromFrame(frame: PartFrameView, axis: string, value: number
   const { R, O } = frameAxes(frame);
   const e = R[i];
   const p = [O[0] + value * e[0], O[1] + value * e[1], O[2] + value * e[2]];
-  return makePlane(p, e.map((x) => sign * x), frame, `Section at ${a} = ${g(value)} mm in the part's frame${sign < 0 ? `, seen from -${a}` : ""}`);
+  return makePlane(p, e.map((x) => sign * x), frame, `Section at ${a} = ${g(value)}\u202fmm in the part's frame${sign < 0 ? `, seen from -${a}` : ""}`);
 }
 
 /** The plane through three points; its normal by the right-hand rule, (p2 − p1) x (p3 − p1). */
@@ -101,7 +101,7 @@ export function planeFromPoints(p1: ArrayLike<number>, p2: ArrayLike<number>, p3
   const size = norm(ab) * norm(ac);
   if (size === 0 || norm(n) <= 1e-9 * size) throw new Error("the three points lie on one line (or two are the same), so they do not make a plane");
   const centre = [0, 1, 2].map((k) => (a[k] + b[k] + c[k]) / 3);
-  return makePlane(centre, n, frame, `Section through three points ${fmt(a)}, ${fmt(b)}, ${fmt(c)} mm`);
+  return makePlane(centre, n, frame, `Section through three points ${fmt(a)}, ${fmt(b)}, ${fmt(c)}\u202fmm`);
 }
 
 /** A kept fit as the plane functions need it. */
@@ -230,7 +230,7 @@ export function scaleBar(v: View, widthPx: number): { mm: number; px: number; la
   const p = 10 ** Math.floor(Math.log10(target));
   let mm = p;
   for (const m of [1, 2, 5]) if (m * p <= target * (1 + 1e-12)) mm = Number((m * p).toPrecision(12));
-  return { mm, px: mm * v.scale, label: `${g(mm)} mm` };
+  return { mm, px: mm * v.scale, label: `${g(mm)}\u202fmm` };
 }
 
 /** The names of the drawing's axes: the frame's axis a direction lies along ("X", or "−X" the other way; the part's in

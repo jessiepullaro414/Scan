@@ -35,7 +35,7 @@ check(m.kind === "measuring" && m.text === "Working out the time left…", "the 
 
 // steady: by time, or by share (a short scan)
 const a = jobEstimate(job(fr(20, 920, 6, 3.2)));
-check(a.kind === "left" && Math.abs(a.seconds - 150) < 1e-9 && a.text === "About 3 min left for tracking", `900 frames at 6 fps: ${JSON.stringify(a)}`);
+check(a.kind === "left" && Math.abs(a.seconds - 150) < 1e-9 && a.text === "About 3\u202fmin left for tracking", `900 frames at 6\u202ffps: ${JSON.stringify(a)}`);
 const b = jobEstimate(job(fr(8, 40, 10, 0.7)));
 check(b.kind === "left" && Math.abs(b.seconds - 3.2) < 1e-9 && b.text === "A few seconds left for tracking", `a short pass, steady by share: ${JSON.stringify(b)}`);
 
@@ -43,13 +43,13 @@ check(b.kind === "left" && Math.abs(b.seconds - 3.2) < 1e-9 && b.text === "A few
 const slow = jobEstimate(job(fr(100, 1000, 5, 20)));
 const fast = jobEstimate(job(fr(100, 1000, 15, 20)));
 check(slow.kind === "left" && fast.kind === "left" && Math.abs(slow.seconds - 180) < 1e-9 && Math.abs(fast.seconds - 60) < 1e-9, "the rate changes");
-check(slow.kind === "left" && slow.text === "About 3 min left for tracking" && fast.kind === "left" && fast.text === "About 1 min left for tracking", "the words follow");
+check(slow.kind === "left" && slow.text === "About 3\u202fmin left for tracking" && fast.kind === "left" && fast.text === "About 1\u202fmin left for tracking", "the words follow");
 
 // the other passes
 const s = jobEstimate(job(fr(300, 900, 10, 30, "straighten")));
-check(s.kind === "left" && s.text === "About 1 min left for fusing", "a straighten pass fuses");
+check(s.kind === "left" && s.text === "About 1\u202fmin left for fusing", "a straighten pass fuses");
 const u = jobEstimate(job(fr(300, 900, 10, 30, "something")));
-check(u.kind === "left" && u.text === "About 1 min left", "an unknown stage: no suffix");
+check(u.kind === "left" && u.text === "About 1\u202fmin left", "an unknown stage: no suffix");
 
 // the tail: all frames done, no "0 s left"
 check(jobEstimate(job(fr(900, 900, 6, 150))).kind === "tail", "the last frame is done");
@@ -61,16 +61,16 @@ const words: [number, string][] = [
   [14.9, "A few seconds left"],
   [15, "Less than a minute left"],
   [49, "Less than a minute left"],
-  [50, "About 1 min left"],
-  [89, "About 1 min left"],
-  [90, "About 2 min left"],
-  [149, "About 2 min left"],
-  [151, "About 3 min left"],
-  [59 * 60, "About 59 min left"],
-  [60 * 60, "About 1 h left"],
-  [83 * 60, "About 1 h 25 min left"],
-  [119 * 60, "About 2 h left"],
+  [50, "About 1\u202fmin left"],
+  [89, "About 1\u202fmin left"],
+  [90, "About 2\u202fmin left"],
+  [149, "About 2\u202fmin left"],
+  [151, "About 3\u202fmin left"],
+  [59 * 60, "About 59\u202fmin left"],
+  [60 * 60, "About 1\u202fh left"],
+  [83 * 60, "About 1\u202fh 25\u202fmin left"],
+  [119 * 60, "About 2\u202fh left"],
 ];
-for (const [sec, text] of words) check(fmtLeft(sec) === text, `${sec} s -> "${fmtLeft(sec)}", expected "${text}"`);
+for (const [sec, text] of words) check(fmtLeft(sec) === text, `${sec}\u202fs -> "${fmtLeft(sec)}", expected "${text}"`);
 
 console.log(`estimate.test: ${checks} checks passed`);

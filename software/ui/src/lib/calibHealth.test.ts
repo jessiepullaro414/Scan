@@ -7,6 +7,7 @@ import {
   deviceHealth,
   headerHealthButton,
   healthView,
+  loadedLine,
   overviewStep,
   PROVISIONAL,
   scanHealthDetail,
@@ -79,7 +80,12 @@ const AGE: CalibHealth = {
 const v = healthView(VALID)!;
 check(v.state === "valid" && v.tone === "neutral", "valid is nothing loud");
 check(v.title === "Calibration valid", `valid title: ${v.title}`);
-check(v.short === "Calibrated", `valid chip word: ${v.short}`);
+check(v.short === "Calibration valid", `valid chip word, the state's one name (U48): ${v.short}`);
+// U46 / U48: "Calibration loaded" says a file is in use; beside a warning it says which, in amber
+check(loadedLine(null).text === "Calibration loaded" && loadedLine(null).warn === false, "loaded, no status");
+check(loadedLine(v).text === "Calibration loaded" && !loadedLine(v).warn, "loaded and valid");
+check(loadedLine({ ...v, state: "recalibrate", title: "Recalibration required for the cameras" }).text === "Calibration loaded (recalibration required for the cameras)", "loaded, recalibration required (U46)");
+check(loadedLine({ ...v, state: "check", title: "Check recommended" }).warn, "loaded, check recommended: amber");
 check(v.reason === VALID.reason, "the engine's own sentence");
 check(v.action === null && v.then === null, "valid has no button");
 // never says a part is fine when it was not judged
@@ -158,7 +164,7 @@ check(scanHealthLine({ state: "check", part: null, reason: null })!.title === "C
 // the scan's report (the viewer's processing report panel)
 check(scanHealthDetail({ mode: "markerless" }) === null, "no status in the report: nothing");
 const dv = scanHealthDetail({ health_status: { ...VALID, source: "scan", reason: "This scan shows nothing off for the cameras.", note: "This scan is short (40 frames), so only the cameras could be judged." } })!;
-check(dv.tone === "neutral" && dv.headline === "Valid" && dv.reason === "This scan shows nothing off for the cameras.", `valid detail: ${dv.headline}`);
+check(dv.tone === "neutral" && dv.headline === "Calibration valid" && dv.reason === "This scan shows nothing off for the cameras.", `valid detail: ${dv.headline}`);
 check(dv.lines.length === 2 && dv.lines[0].startsWith("This scan is short") && dv.lines[1] === PROVISIONAL, `valid detail lines: ${dv.lines.join(" | ")}`);
 const dn = scanHealthDetail({ health_status: { ...VALID, source: "scan", reason: "This scan shows nothing off for the cameras." } })!;
 check(dn.lines[0] === "Not judged in this scan: the lasers and the IMU.", `scan not judged: ${dn.lines[0]}`);

@@ -96,7 +96,7 @@ export function useVersionedMesh(url: string | null, version: number | null) {
                 const t0 = performance.now();
                 const mesh = makeLoadedMesh(readPly(buf), version, buf.byteLength);
                 if (import.meta.env.DEV)
-                  console.debug(`ohs process: mesh v${version} (${mesh.selection.faces.toLocaleString()} triangles) read in ${(performance.now() - t0).toFixed(0)} ms`);
+                  console.debug(`ohs process: mesh v${version} (${mesh.selection.faces.toLocaleString()} triangles) read in ${(performance.now() - t0).toFixed(0)}\u202fms`);
                 const old = currentRef.current;
                 currentRef.current = mesh;
                 setCurrent(mesh);

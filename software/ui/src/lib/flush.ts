@@ -172,13 +172,13 @@ export function flushWords(rec: Pick<FlushRecord, "stations" | "flush">): FlushW
   const f = rec.flush;
   const sg = typicalSigma(rec);
   const d = flushDecimals(sg);
-  const at = (mm: number | null) => (mm === null ? null : `at ${signed(Math.round(mm), 0) || "0"} mm along the seam`);
+  const at = (mm: number | null) => (mm === null ? null : `at ${signed(Math.round(mm), 0) || "0"}\u202fmm along the seam`);
   let proud: string | null = null;
   if (f.mean !== null) {
     const m = Math.abs(f.mean).toFixed(d);
-    if (Math.abs(f.mean) < LEVEL_MM) proud = `The two panels are level: on average within ${LEVEL_MM} mm of each other.`;
-    else if (f.mean > 0) proud = `Panel B (your second click) stands proud of panel A by ${m} mm on average.`;
-    else proud = `Panel A (your first click) stands proud of panel B by ${m} mm on average.`;
+    if (Math.abs(f.mean) < LEVEL_MM) proud = `The two panels are level: on average within ${LEVEL_MM}\u202fmm of each other.`;
+    else if (f.mean > 0) proud = `Panel B (your second click) stands proud of panel A by ${m}\u202fmm on average.`;
+    else proud = `Panel A (your first click) stands proud of panel B by ${m}\u202fmm on average.`;
   }
   return {
     mean: f.mean === null ? null : signed(f.mean, d),

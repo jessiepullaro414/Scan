@@ -17,7 +17,7 @@ import { Spinner } from "../../components/ui/Feedback";
 import { Switch } from "../../components/ui/Form";
 import { Callout, KeyValue, Section } from "../../components/ui/Layout";
 import { overviewStep } from "../../lib/calibHealth";
-import { fmtDateTime, fmtFixed, fmtRelative } from "../../lib/format";
+import { fmtDateTime, fmtFixed, fmtRelative, fmtSize } from "../../lib/format";
 import { navigate, paths } from "../../lib/router";
 import { firstUnfinished, minutesLeft, setupProgress, STATE_LABEL, STEP_META, STEP_ORDER } from "../../lib/setup";
 import { cn, useTicker } from "../../lib/util";
@@ -94,10 +94,10 @@ function StepCard({ step, index }: { step: SetupStep; index: number }) {
 const CLI: { text: string; cmd: string }[] = [
   { text: "Find the camera and the Pico", cmd: "ohs devices" },
   { text: "Check the hardware", cmd: "ohs selftest" },
-  { text: "Make the board, the tags and the projector mask (print at 100 %)", cmd: "ohs printables print/" },
-  { text: "Stereo: 15–25 views, 200–500 mm, tilted 20–45°", cmd: "ohs calibrate stereo" },
-  { text: "Lasers: 6–10 poses, every laser line on the white margin", cmd: "ohs calibrate lasers" },
-  { text: "IMU: hold still 2 s, then rotate for 20–60 s", cmd: "ohs calibrate imu" },
+  { text: "Make the board, the tags and the projector mask (print at 100\u202f%)", cmd: "ohs printables print/" },
+  { text: "Stereo: 15–25 views, 200–500\u202fmm, tilted 20–45°", cmd: "ohs calibrate stereo" },
+  { text: "Lasers: 6–10 views, every laser line on the white margin", cmd: "ohs calibrate lasers" },
+  { text: "IMU: hold still 2\u202fs, then rotate for 20–60\u202fs", cmd: "ohs calibrate imu" },
   { text: "Check: 3–5 views, reports and never writes", cmd: "ohs calibrate check" },
 ];
 
@@ -133,7 +133,7 @@ export function Overview() {
           <div className="min-w-[260px] flex-1">
             <div className="font-display text-xl font-semibold text-fg">
               {allDone ? "Everything is set up" : `${prog.total - prog.done} step${prog.total - prog.done === 1 ? "" : "s"} to go`}
-              {!allDone && mins ? <span className="font-normal text-muted"> · about {mins} min</span> : null}
+              {!allDone && mins ? <span className="font-normal text-muted"> · about {mins}&#8239;min</span> : null}
             </div>
             <p className="mt-1 text-sm text-muted">
               {allDone ? (
@@ -194,8 +194,8 @@ export function Overview() {
               <>
                 <Gauge size={15} className="text-ok" aria-hidden />
                 <span className="text-muted">
-                  Launch check: the calibration holds
-                  {launch.dv_px !== null ? ` (rows match to ${fmtFixed(launch.dv_px, 2)} px)` : ""}, {fmtRelative(launch.when)}.
+                  Launch check: calibration valid
+                  {launch.dv_px !== null ? ` (rows match to ${fmtFixed(launch.dv_px, 2)}\u202fpx)` : ""}, {fmtRelative(launch.when)}.
                 </span>
               </>
             ) : (
@@ -243,15 +243,15 @@ export function Overview() {
                     const p = cal.parts[k];
                     return (
                       <Badge key={k} tone={p ? "ok" : "neutral"} dot title={p ? `${p.summary}, ${fmtDateTime(p.when)}` : "Not calibrated"}>
-                        {k === "imu" ? "IMU" : k.charAt(0).toUpperCase() + k.slice(1)}
+                        {STEP_META[k].title}
                       </Badge>
                     );
                   })}
                 </span>,
               ],
-              cal.image_size ? ["Image size", `${cal.image_size[0]} × ${cal.image_size[1]} px`] : null,
-              cal.baseline_mm !== null ? ["Baseline", `${fmtFixed(cal.baseline_mm, 2)} mm`] : null,
-              ["Board", <span className="text-xs">{setup.board.describe}{setup.board.scale !== 1 ? `, measured scale ${fmtFixed(setup.board.scale * 100, 2)} %` : ""}</span>],
+              cal.image_size ? ["Image size", fmtSize(cal.image_size[0], cal.image_size[1], "px")] : null,
+              cal.baseline_mm !== null ? ["Baseline", `${fmtFixed(cal.baseline_mm, 2)}\u202fmm`] : null,
+              ["Board", <span className="text-xs">{setup.board.describe}{setup.board.scale !== 1 ? `, measured scale ${fmtFixed(setup.board.scale * 100, 2)}\u202f%` : ""}</span>],
             ]}
           />
         </Section>

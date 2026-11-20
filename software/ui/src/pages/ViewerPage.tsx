@@ -55,7 +55,7 @@ import { KeyValue } from "../components/ui/Layout";
 import { scanHealthDetail, scanHealthOf } from "../lib/calibHealth";
 import { downloadFile } from "../lib/download";
 import { decodeFaces, fitLabel, fitName, regionTriangles, summarizeRegion, type RegionSummary } from "../lib/fits";
-import { fileStem, fmtBytes, fmtCompact, fmtDateTime, fmtDuration, fmtFixed, fmtInt, fmtPct } from "../lib/format";
+import { fileStem, fmtBytes, fmtCompact, fmtDateTime, fmtDuration, fmtFixed, fmtInt, fmtMm, fmtPct, keyRanges } from "../lib/format";
 import { remakeBlock } from "../lib/keepMode";
 import { hasLaserValues } from "../lib/lasers";
 import { axisOrder, deltaOf, fmtVec, pointToPart, readFrame } from "../lib/partFrame";
@@ -72,6 +72,7 @@ import { sigmaOf } from "../three/confidence";
 import { disposeMeshGeometry, plyGeometry, readPly } from "../three/ply";
 import { viewBus } from "../three/viewBus";
 import { CadDownload } from "./viewer/CadDownload";
+import { MeshDownloadButtons } from "../components/MeshDownloads";
 import { CHECK_ICON, CheckPanel } from "./viewer/CheckPanel";
 import { usePass } from "../store/pass";
 import { ConfidenceLegend } from "./viewer/ConfidenceLegend";
@@ -183,13 +184,14 @@ function ReportSummary({ report }: { report: Rec }) {
               ]
             : null,
           typeof report.mode === "string" ? ["Mode", report.mode === "markers" ? "Markers" : "Markerless"] : null,
-          mesh && typeof mesh.method === "string" ? ["Meshing", `${mesh.method.toUpperCase()}${num(mesh.voxel_mm) !== null ? ` · ${fmtFixed(num(mesh.voxel_mm), 2)} mm voxels` : ""}`] : null,
+          // U8: "Mesh detail 1.0 mm", not "TSDF · 1.00 mm voxels"
+          mesh && num(mesh.voxel_mm) !== null ? ["Mesh detail", fmtMm(num(mesh.voxel_mm), 1)] : null,
           sigma && num(sigma.median) !== null
             ? [
                 "Uncertainty",
                 <span className="tnum" title="Each point's 1σ, as fused (before any edits)">
                   median {fmtSigma(num(sigma.median)!)}
-                  {num(sigma.within_0_1) !== null ? <span className="text-muted"> · {fmtPct(num(sigma.within_0_1))} within 0.1 mm</span> : null}
+                  {num(sigma.within_0_1) !== null ? <span className="text-muted"> · {fmtPct(num(sigma.within_0_1))} within 0.1&#8239;mm</span> : null}
                 </span>,
               ]
             : null,
@@ -204,8 +206,8 @@ function ReportSummary({ report }: { report: Rec }) {
           <KeyValue
             dense
             rows={[
-              num(gt.rms_trans_mm) !== null ? ["Position RMS", <span className="font-mono text-xs tnum">{fmtFixed(num(gt.rms_trans_mm), 2)} mm</span>] : null,
-              gtTrans && num(gtTrans.max) !== null ? ["Position max", <span className="font-mono text-xs tnum">{fmtFixed(num(gtTrans.max), 2)} mm</span>] : null,
+              num(gt.rms_trans_mm) !== null ? ["Position RMS", <span className="font-mono text-xs tnum">{fmtFixed(num(gt.rms_trans_mm), 2)}&#8239;mm</span>] : null,
+              gtTrans && num(gtTrans.max) !== null ? ["Position max", <span className="font-mono text-xs tnum">{fmtFixed(num(gtTrans.max), 2)}&#8239;mm</span>] : null,
               gtRot && num(gtRot.max) !== null ? ["Rotation max", <span className="font-mono text-xs tnum">{fmtFixed(num(gtRot.max), 2)}°</span>] : null,
             ]}
           />
@@ -734,7 +736,7 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
         const [dx, dy, dz] = deltaOf(m.a, m.b, shownFrame);
         const where = shownFrame ? `in the part's frame (${axisOrder(shownFrame).join(" ")})` : "in the scan's frame";
         const at = (p: Vec3) => fmtVec(shownFrame ? pointToPart(shownFrame, p) : p);
-        const tip = `From (${at(m.a)}) to (${at(m.b)}) mm, ${where}.`;
+        const tip = `From (${at(m.a)}) to (${at(m.b)}) mm, ${where}.`;
         return { m, i, d: Math.hypot(dx, dy, dz), dx, dy, dz, tip };
       }),
     [keptMeasurements, shownFrame],
@@ -883,9 +885,9 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
                 value={devOn ? "deviation" : shading === "lasers" || shading === "reference" ? shading : shown}
                 onChange={setShading}
                 options={[
-                  { value: "clay", label: "Clay", icon: Brush, title: "Matcap clay (1)" },
+                  { value: "clay", label: "Grey", icon: Brush, title: "Plain grey (1)" },
                   { value: "studio", label: "Studio", icon: Sparkles, title: "Studio lighting (2)" },
-                  { value: "normals", label: "Normals", icon: Orbit, title: "Normal shading (3)" },
+                  { value: "normals", label: "Direction", icon: Orbit, title: "Colour by direction (3)" },
                   {
                     value: "confidence",
                     label: "Confidence",
@@ -1120,13 +1122,13 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
                 dense
                 className="mt-3"
                 rows={[
-                  ["Diagonal", <span className="font-mono text-xs tnum">{fmtFixed(Math.hypot(size.x, size.y, size.z), 1)} mm</span>],
+                  ["Diagonal", <span className="font-mono text-xs tnum">{fmtFixed(Math.hypot(size.x, size.y, size.z), 1)}&#8239;mm</span>],
                   ["Triangles", <span className="font-mono text-xs tnum">{fmtInt(tris)}</span>],
                   ["Vertices", <span className="font-mono text-xs tnum">{fmtInt(verts)}</span>],
                   load.phase === "ready" ? ["PLY size", <span className="font-mono text-xs tnum">{fmtBytes(load.bytes)}</span>] : null,
                 ]}
               />
-              <div className="mt-2 text-[11px] text-subtle">Bounding box along the scan's axes (the first camera frame).</div>
+              <div className="mt-2 text-[11px] text-subtle">Size along the scan's own directions.</div>
             </>
           ) : hasResult && load.phase !== "error" ? (
             <div className="grid grid-cols-3 gap-2" aria-busy="true">
@@ -1170,7 +1172,7 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
                   <div className="flex items-center gap-2">
                     <span className="grid h-5 w-5 shrink-0 place-items-center rounded-full bg-accent-soft text-[10.5px] font-bold text-accent">{i + 1}</span>
                     <NameEdit value={m.name} what="measurement" onRename={(n) => renameKept(m.id, n)} className="min-w-0 max-w-[45%] text-xs font-semibold text-fg" />
-                    <span className="flex-1 text-right font-mono text-[15px] font-semibold text-fg tnum">{d.toFixed(2)} mm</span>
+                    <span className="flex-1 text-right font-mono text-[15px] font-semibold text-fg tnum">{d.toFixed(2)}&#8239;mm</span>
                     <IconButton
                       icon={X}
                       size="xs"
@@ -1349,21 +1351,13 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
 
         <Panel title="Download" icon={Download}>
           {hasResult && urls ? (
-            <div className="grid grid-cols-2 gap-2">
-              <Button size="sm" icon={Download} onClick={() => void downloadFile(urls.stl, `${stem}.stl`)}>
-                STL
-              </Button>
-              <Button size="sm" icon={Download} onClick={() => void downloadFile(urls.mesh, `${stem}.ply`)}>
-                PLY
-              </Button>
-              {urls.laser ? (
-                <Button size="sm" icon={Download} onClick={() => void downloadFile(urls.laser!, `${stem}-laser.ply`)}>
-                  Laser points
-                </Button>
-              ) : null}
+            <>
+            {/* U42: the one download list (STL, PLY, OBJ, laser points), as on the project and Process pages */}
+            <MeshDownloadButtons urls={{ stl: urls.stl, ply: urls.mesh, obj: api.fileUrl(pid, sid, "mesh.obj"), laser: urls.laser }} stem={stem} />
+            <div className="mt-2 grid grid-cols-2 gap-2">
               <Button
                 size="sm"
-                className={urls.laser ? undefined : "col-span-2"}
+                className="col-span-2"
                 icon={FileText}
                 onClick={() => void downloadFile(urls.report, `${stem}-processing-report.json`)}
                 title="How the engine made the mesh (frames, tracking, timings), as JSON: not the scan's report below"
@@ -1381,6 +1375,7 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
                 </>
               ) : null}
             </div>
+            </>
           ) : (
             <div className="text-sm text-muted">Make the mesh first.</div>
           )}
@@ -1439,24 +1434,18 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
               <Kbd>L</Kbd> laser points
             </span>
             <span>
-              {devEnabled && hasSigma ? (
-                <>
-                  <Kbd>1</Kbd>–<Kbd>6</Kbd>
-                </>
-              ) : devEnabled ? (
-                <>
-                  <Kbd>1</Kbd>–<Kbd>3</Kbd>, <Kbd>5</Kbd>, <Kbd>6</Kbd>
-                </>
-              ) : (
-                <>
-                  <Kbd>1</Kbd>–<Kbd>{hasSigma ? 4 : 3}</Kbd>, <Kbd>6</Kbd>
-                </>
-              )}
-              {refEnabled ? (
-                <>
-                  , <Kbd>7</Kbd>
-                </>
-              ) : null}{" "}
+              {/* U25: the keys that work now, as ranges ("1–7" with every mode on) */}
+              {keyRanges([1, 2, 3, ...(hasSigma ? [4] : []), ...(devEnabled ? [5] : []), 6, ...(refEnabled ? [7] : [])]).map((r, i) => (
+                <span key={r}>
+                  {i ? ", " : ""}
+                  {r.split("–").map((k, j) => (
+                    <span key={k}>
+                      {j ? "–" : ""}
+                      <Kbd>{k}</Kbd>
+                    </span>
+                  ))}
+                </span>
+              ))}{" "}
               shading
             </span>
           </div>

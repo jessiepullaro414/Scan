@@ -70,72 +70,72 @@ eq(fmtTolerance(1), "1", "1");
 eq(fmtTolerance(0.1 + 0.2), "0.3", "no float dust");
 
 // shares
-eq(fmtShare(0.92), "92 %", "a plain share");
-eq(fmtShare(0.996), "99.6 %", "nearly all keeps a decimal");
-eq(fmtShare(0.9996), "over 99.9 %", "not quite all is never 100 %");
-eq(fmtShare(1), "100 %", "all");
-eq(fmtShare(0.004), "0.4 %", "a small share keeps a decimal");
-eq(fmtShare(0.02), "2 %", "but no empty one");
-eq(fmtShare(0.0002), "under 0.1 %", "a tiny share is never 0 %");
-eq(fmtShare(0), "0 %", "none");
+eq(fmtShare(0.92), "92\u202f%", "a plain share");
+eq(fmtShare(0.996), "99.6\u202f%", "nearly all keeps a decimal");
+eq(fmtShare(0.9996), "over 99.9\u202f%", "not quite all is never 100\u202f%");
+eq(fmtShare(1), "100\u202f%", "all");
+eq(fmtShare(0.004), "0.4\u202f%", "a small share keeps a decimal");
+eq(fmtShare(0.02), "2\u202f%", "but no empty one");
+eq(fmtShare(0.0002), "under 0.1\u202f%", "a tiny share is never 0\u202f%");
+eq(fmtShare(0), "0\u202f%", "none");
 eq(fmtShare(null), "–", "no value");
 
 // sizes
-eq(fmtAreaSize(3.24), "3.2 mm²", "a few mm²");
-eq(fmtAreaSize(42.4), "42 mm²", "tens of mm²");
-eq(fmtAreaSize(140), "1.4 cm²", "cm² from 100 mm²");
-eq(fmtAreaSize(12500), "125 cm²", "many cm²");
-eq(fmtExtent(4.52), "4.5 mm", "a short reach");
-eq(fmtExtent(23.4), "23 mm", "a long reach");
+eq(fmtAreaSize(3.24), "3.2\u202fmm²", "a few mm²");
+eq(fmtAreaSize(42.4), "42\u202fmm²", "tens of mm²");
+eq(fmtAreaSize(140), "140\u202fmm²", "one area unit: still mm² from 100\u202fmm² (U22)");
+eq(fmtAreaSize(12500), "12,500\u202fmm²", "many mm², grouped (U22)");
+eq(fmtExtent(4.52), "4.5\u202fmm", "a short reach");
+eq(fmtExtent(23.4), "23\u202fmm", "a long reach");
 
 // the kinds
 eq(kindName("uncertain"), "Uncertain", "uncertain");
 eq(kindName("not_measured"), "Not measured", "not measured");
-check(kindMeaning("uncertain", 0.1).includes("2σ") && kindMeaning("uncertain", 0.1).includes("± 0.1 mm"), "uncertain: 2σ against the tolerance");
+check(kindMeaning("uncertain", 0.1).includes("2σ") && kindMeaning("uncertain", 0.1).includes("± 0.1\u202fmm"), "uncertain: 2σ against the tolerance");
 check(kindMeaning("not_measured", 0.1).includes("Hole filling"), "not measured: hole filling");
 for (const text of [kindMeaning("uncertain", 0.1), kindMeaning("not_measured", 0.1)]) check(!text.includes("—"), "no em dash");
 
 // the answer in one sentence
-eq(checkSentence(result({})), "92 % of the surface meets ± 0.1 mm; 3 areas need another pass.", "the plan's example");
-eq(checkSentence(result({ n_areas: 1, areas: [area(0.08)] })), "92 % of the surface meets ± 0.1 mm; 1 area needs another pass.", "one area");
+eq(checkSentence(result({})), "92\u202f% of the surface meets ± 0.1\u202fmm; 3 areas need another pass.", "the plan's example");
+eq(checkSentence(result({ n_areas: 1, areas: [area(0.08)] })), "92\u202f% of the surface meets ± 0.1\u202fmm; 1 area needs another pass.", "one area");
 eq(
   checkSentence(result({ tolerance_mm: 0.3, share_ok: 1, share_uncertain: 0, n_areas: 0, areas: [] })),
-  "All of the surface meets ± 0.3 mm; no area needs another pass.",
+  "All of the surface meets ± 0.3\u202fmm; no area needs another pass.",
   "all of it",
 );
 eq(
   checkSentence(result({ tolerance_mm: 0.3, share_ok: 0.998, share_uncertain: 0.002, n_areas: 0, areas: [] })),
-  "99.8 % of the surface meets ± 0.3 mm; no area is large enough to list.",
+  "99.8\u202f% of the surface meets ± 0.3\u202fmm; no area is large enough to list.",
   "only specks",
 );
 eq(
   checkSentence(result({ tolerance_mm: 0.05, share_ok: 0, share_uncertain: 1, n_areas: 1, areas: [area(1)] })),
-  "None of the surface meets ± 0.05 mm; 1 area needs another pass.",
+  "None of the surface meets ± 0.05\u202fmm; 1 area needs another pass.",
   "none of it",
 );
 eq(checkSentence(result({ n_areas: 120 })).includes("120 areas need"), true, "the count is of all areas, not of the list");
 
 // what is not in the list
 check(Math.abs((unlistedShare(result({})) as number) - 0) < 1e-12, "everything listed: nothing left");
-check(Math.abs((unlistedShare(result({ share_ok: 0.9, share_uncertain: 0.1 })) as number) - 0.02) < 1e-9, "the rest is 2 %");
+check(Math.abs((unlistedShare(result({ share_ok: 0.9, share_uncertain: 0.1 })) as number) - 0.02) < 1e-9, "the rest is 2\u202f%");
 eq(unlistedShare(result({ has_sigma: false, share_ok: null, share_uncertain: null })), null, "no answer, no rest");
 eq(unlistedShare(result({ share_ok: 0.9200000000001 })), 0, "rounding dust is nothing");
 eq(checkNotes(result({})).length, 0, "nothing to add when all is listed and measured");
 {
   const notes = checkNotes(result({ share_ok: 0.9, share_uncertain: 0.1 }));
   eq(notes.length, 1, "one note");
-  eq(notes[0], "2 % of the surface also misses it, in spots under 5.0 mm²: too small to list, but counted.", "the specks");
+  eq(notes[0], "2\u202f% of the surface also misses it, in spots under 5.0\u202fmm²: too small to list, but counted.", "the specks");
   const tiny = checkNotes(result({ share_ok: 0.9196, share_uncertain: 0.0804 }));
-  eq(tiny[0], "Under 0.1 % of the surface also misses it, in spots under 5.0 mm²: too small to list, but counted.", "a tiny rest reads as a sentence");
+  eq(tiny[0], "Under 0.1\u202f% of the surface also misses it, in spots under 5.0\u202fmm²: too small to list, but counted.", "a tiny rest reads as a sentence");
 }
 {
   const notes = checkNotes(result({ share_ok: 0.5, share_uncertain: 0.5, n_areas: 80 }));
   check(notes.includes("The 3 largest of 80 areas are listed."), "the list is cut");
-  check(notes.some((n) => n.startsWith("42 % of the surface also misses it, in the areas not listed and in spots under")), "the rest, cut list");
+  check(notes.some((n) => n.startsWith("42\u202f% of the surface also misses it, in the areas not listed and in spots under")), "the rest, cut list");
 }
 {
   const notes = checkNotes(result({ share_ok: 0.9, share_uncertain: 0.07, share_not_measured: 0.03, areas: [area(0.07), area(0.03, "not_measured")], n_areas: 2 }));
-  eq(notes[0], "Of the rest, 7 % of the surface is uncertain and 3 % was not measured (filled holes).", "the split");
+  eq(notes[0], "Of the rest, 7\u202f% of the surface is uncertain and 3\u202f% was not measured (filled holes).", "the split");
   const only = checkNotes(result({ share_ok: 0.97, share_uncertain: 0, share_not_measured: 0.03, areas: [area(0.03, "not_measured")], n_areas: 1 }));
   eq(only[0], "All of the rest was not measured (filled holes).", "only filled holes");
 }

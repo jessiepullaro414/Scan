@@ -11,7 +11,9 @@ import { useEffect, useRef, useState } from "react";
 import { CalibHealthCallout } from "../components/CalibHealth";
 import { PresetPicker } from "../components/PresetPicker";
 import { Callout } from "../components/ui/Layout";
+import { calibOpen } from "../lib/calibOpen";
 import { passPresetFields, passStartBody } from "../lib/pass";
+import { useCalib } from "../store/calib";
 import { ErrorBoundary } from "../components/shell/ErrorBoundary";
 import { navigate, paths } from "../lib/router";
 import { useHotkeys } from "../lib/util";
@@ -55,6 +57,7 @@ export default function ScanPage({ projectParam, first = false, continues = null
   // N2: the pass "Scan these areas" set up, while it is for this project; while scanning, the session says which
   const pending = usePass((s) => s.pending);
   const sessionLink = useSession((s) => s.session?.continues?.scan_id ?? null);
+  const calibBusy = useCalib((s) => s.action === "cancel");
   const presetName = usePresets((s) => s.list?.find((p) => p.id === s.chosen)?.name ?? "General");
 
   const [projectId, setProjectId] = useState<string | null>(projectParam ?? current);
@@ -105,15 +108,31 @@ export default function ScanPage({ projectParam, first = false, continues = null
   }, [passPending?.firstId, firstScan?.id]); // eslint-disable-line react-hooks/exhaustive-deps
   const connected = !!device?.connected;
   const calibrated = !!device?.calibration?.loaded;
+  // U1: an open calibration session blocks a scan (the engine refuses it): say so, with a way out
+  const calibSession = useCalib((s) => s.session);
+  const open = calibOpen(calibSession);
   const reason = !device
     ? "Checking the device…"
     : !connected
       ? "Connect a device to start"
       : !calibrated
         ? "No calibration yet: calibrate the scanner in Setup"
-        : !projectId
-          ? "Choose a project to start"
-          : null;
+        : open
+          ? open.reason
+          : !projectId
+            ? "Choose a project to start"
+            : null;
+  const reasonAction =
+    connected && calibrated && open
+      ? {
+          label: open.label,
+          busy: calibBusy,
+          onClick: () => {
+            if (open.action === "close") void useCalib.getState().cancel();
+            else navigate(paths.setup(open.step));
+          },
+        }
+      : null;
   const ready = !reason && phase === "idle";
 
   const start = async () => {
@@ -185,7 +204,7 @@ export default function ScanPage({ projectParam, first = false, continues = null
           <div className="absolute bottom-5 left-1/2 flex -translate-x-1/2 flex-col items-center gap-3">
             <LostBanner />
             <div className="pointer-events-auto">
-              <ControlBar ready={ready} reason={reason} onStart={() => void start()} />
+              <ControlBar ready={ready} reason={reason} reasonAction={reasonAction} onStart={() => void start()} />
             </div>
           </div>
         </div>
@@ -200,7 +219,7 @@ export default function ScanPage({ projectParam, first = false, continues = null
         {!pass && continues && !live && !lastStopped ? (
           <div className="border-b border-line p-3">
             <Callout tone="neutral" title="Nothing to scan again yet">
-              A second pass starts from the first scan's Check panel: open the scan, press Check, then Scan these areas. Start now makes an ordinary scan.
+              A second pass starts from the first scan's Check panel: open the scan, press Check, then Scan these areas again. Start now makes an ordinary scan.
             </Callout>
           </div>
         ) : null}

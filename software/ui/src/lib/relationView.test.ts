@@ -27,7 +27,7 @@ function check(ok: boolean, what: string): void {
   };
   const rows = relationRows(r);
   check(rows.map((x) => x.label).join() === "Angle (parallel),Distance", "the engine's labels, in its order");
-  check(rows[0].value === "0.03 ± 0.02°" && rows[1].value === "20.004 ± 0.006 mm", `values ${rows.map((x) => x.value)}`);
+  check(rows[0].value === "0.03 ± 0.02°" && rows[1].value === "20.004 ± 0.006\u202fmm", `values ${rows.map((x) => x.value)}`);
   check(rows[0].x === 0.0312 && rows[1].sigma === 0.0063, "the numbers as the engine gave them");
   check(rows.every((x) => x.tip.includes(RELATION_SIGMA_NOTE)), "each ± says what it covers");
   check(relationFooter(r).join() === RELATION_SIGMA_NOTE, "footer: what the ± are");
@@ -46,7 +46,7 @@ function check(ok: boolean, what: string): void {
   const rows = relationRows(r);
   check(rows[0].value === "89.98°" && !rows[0].value.includes("±") && rows[0].sigma === null, `no ± of its own: ${rows[0].value}`);
   check(rows[0].tip.includes(RELATION_NO_SIGMA) && rows[0].tip.startsWith("90° square to the plane"), "the hover says why");
-  check(rows[1].value === "0.120 ± 0.004 mm", `a distance with its ±: ${rows[1].value}`);
+  check(rows[1].value === "0.120 ± 0.004\u202fmm", `a distance with its ±: ${rows[1].value}`);
   check(relationFooter(r).length === 2 && relationFooter(r)[1] === RELATION_NO_SIGMA, "footer: both lines");
 }
 {
@@ -54,7 +54,7 @@ function check(ok: boolean, what: string): void {
   const r: RelationRecord = { kinds: ["plane", "plane"], parallel: false, values: [{ name: "angle", label: "Angle", value: 30, sigma: null, unit: "deg" }], notes: [] };
   check(relationFooter(r).join() === RELATION_NO_SIGMA_DEMO && relationRows(r)[0].tip.endsWith(RELATION_NO_SIGMA_DEMO), "no hole: the demo's words");
 }
-check(fmtValue({ value: 14.0234, sigma: null, unit: "mm" }) === "14.02 mm" && fmtValue({ value: 45, sigma: 1.4, unit: "deg" }) === "45.00 ± 1.40°", "formats");
+check(fmtValue({ value: 14.0234, sigma: null, unit: "mm" }) === "14.02\u202fmm" && fmtValue({ value: 45, sigma: 1.4, unit: "deg" }) === "45.00 ± 1.40°", "formats");
 
 // ------------------------------------------------------------------ the demo backend's record
 {

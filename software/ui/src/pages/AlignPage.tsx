@@ -309,7 +309,7 @@ function Verdict({ ok, verdict, okLabel, notLabel, figures }: { ok: boolean; ver
 }
 
 const TwoVerdict = ({ result }: { result: AlignResult }) => (
-  <Verdict ok={result.accepted} verdict={result.verdict} okLabel="Accepted" notLabel={standingLabel(result)} figures={alignFigures(result)} />
+  <Verdict ok={result.accepted} verdict={result.verdict} okLabel="Aligned" notLabel={standingLabel(result)} figures={alignFigures(result)} />
 );
 
 /**
@@ -392,7 +392,7 @@ function MultiVerdict({ result, list, nameOf, colorOf }: { result: AlignAllResul
                   <li key={other} className={cn("leading-5", pair.accepted ? "text-muted" : "text-subtle")} title={sentence(pair.verdict)}>
                     {pairLine(pair, nameOf(other))}
                     {pairsDisagree({ pairs_rms_mm: pair.pairs_rms_mm ?? null }) ? (
-                      <span className="text-warn"> · your points disagree by {pair.pairs_rms_mm?.toFixed(1)} mm</span>
+                      <span className="text-warn"> · your points disagree by {pair.pairs_rms_mm?.toFixed(1)}&#8239;mm</span>
                     ) : null}
                   </li>
                 ))}
@@ -617,7 +617,7 @@ export default function AlignPage({
   const together = view === "together" && !!items;
   const togetherWaiting = view === "together" && !items && waiting.length > 0;
   const frameKey = items ? items.map((it) => `${it.geometry.uuid}:${it.pose?.join(",") ?? ""}`).join("/") : "";
-  const title = several ? "Align several scans" : "Align two scans";
+  const title = "Align and merge scans";
 
   return (
     <div className="flex h-full">
@@ -895,7 +895,7 @@ export default function AlignPage({
               ) : null}
               {pairsDisagree(result) ? (
                 <Callout tone="warn" icon={TriangleExclamationPoint} title="Two of your points probably do not match" className="mt-3">
-                  The picked points disagree by {result.pairs_rms_mm?.toFixed(1)} mm. Compare the numbers on the two scans, remove the point that is off, and align from the
+                  The picked points disagree by {result.pairs_rms_mm?.toFixed(1)}&#8239;mm. Compare the numbers on the two scans, remove the point that is off, and align from the
                   points again.
                 </Callout>
               ) : null}
@@ -1102,8 +1102,8 @@ export default function AlignPage({
               </Field>
               <p className="mt-2 text-xs leading-5 text-subtle">
                 {several
-                  ? "All the recordings are fused again into one new scan, which takes about as long as making all their meshes. The scans stay as they are."
-                  : "Both recordings are fused again into one new scan, which takes about as long as making both meshes. The two scans stay as they are."}
+                  ? "All the recordings are rebuilt together into one new scan, which takes about as long as making all their meshes. The scans stay as they are."
+                  : "Both recordings are rebuilt together into one new scan, which takes about as long as making both meshes. The two scans stay as they are."}
               </p>
               {result && choiceText(result, chosenPose) ? (
                 <p className="mt-2 flex items-start gap-1.5 text-xs leading-5 text-ok">
@@ -1127,7 +1127,7 @@ export default function AlignPage({
                 </p>
               ) : multi && needsALook(multi) ? (
                 <p className="mt-2 flex items-start gap-1.5 text-xs leading-5 text-warn">
-                  <TriangleExclamationPoint size={13} className="mt-1 shrink-0" aria-hidden />A pair disagrees by {multi.worst_link_mm.toFixed(2)} mm with where the scans
+                  <TriangleExclamationPoint size={13} className="mt-1 shrink-0" aria-hidden />A pair disagrees by {multi.worst_link_mm.toFixed(2)}&#8239;mm with where the scans
                   were placed, so a scan may be off. Look at them together first. Merging asks you to confirm.
                 </p>
               ) : null}
@@ -1170,7 +1170,7 @@ export default function AlignPage({
         >
           {multi && !multi.accepted
             ? "Not every scan was placed, so the merge may leave a scan out or put it in the wrong place."
-            : `A pair disagrees by ${multi?.worst_link_mm.toFixed(2) ?? "–"} mm with where the scans were placed, so a scan may be off.`}{" "}
+            : `A pair disagrees by ${multi?.worst_link_mm.toFixed(2) ?? "–"}\u202fmm with where the scans were placed, so a scan may be off.`}{" "}
           The merged scan would then show parts twice, or smeared. Look at the scans together first: if one does not sit on the others, pick matching points between it and
           another scan and align again instead.
         </ConfirmDialog>

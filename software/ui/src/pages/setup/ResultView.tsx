@@ -1,7 +1,7 @@
 /**
  * The result of a solve, in plain words: a verdict card per grade, the metric rows with what
  * each means, the advice with buttons, the simulator's comparison with the truth, and Save.
- * After saving: where it went, the notes ("the laser planes were dropped…") and the next step.
+ * After saving: where it went, the notes ("the laser lines were dropped…") and the next step.
  */
 import {
   ArrowRight,
@@ -30,6 +30,7 @@ import { ConfirmDialog } from "../../components/ui/Dialog";
 import { Callout, Code, Section } from "../../components/ui/Layout";
 import { Tooltip } from "../../components/ui/Popover";
 import { sentence } from "../../api/http";
+import { emptyAdviceText, resultBadge } from "../../lib/calibWords";
 import { downloadFile } from "../../lib/download";
 import { laserColor } from "../../lib/laserSet";
 import { navigate, paths } from "../../lib/router";
@@ -108,7 +109,7 @@ function MetricRow({ m }: { m: CalibMetric }) {
 function PlanesList({ planes }: { planes: CalibPlaneRow[] }) {
   const names = planes.map((p) => p.name);
   return (
-    <Section title="Laser planes" icon={Zap} description="One plane per line laser">
+    <Section title="Laser lines" icon={Zap} description="One row per line laser">
       <ul className="space-y-2">
         {planes.map((p) => (
           <li key={p.name} className="flex items-center gap-2.5">
@@ -118,7 +119,7 @@ function PlanesList({ planes }: { planes: CalibPlaneRow[] }) {
             </span>
             {p.calibrated ? (
               <span className="font-mono text-xs text-muted tnum">
-                {p.median_mm !== null ? `${p.median_mm.toFixed(3)} mm` : "–"}
+                {p.median_mm !== null ? `${p.median_mm.toFixed(3)}\u202fmm` : "–"}
                 {p.views !== null ? ` · ${p.views} views` : ""}
               </span>
             ) : null}
@@ -147,6 +148,9 @@ export function ResultView({ kind }: { kind: CalibKind }) {
   const tone = GRADE_TONE[grade];
   const Icon = GRADE_ICON[grade];
   const hasViews = kind !== "imu" && session.views.length > 0;
+  // U41 / U48: the badge and "Nothing to do" are not said twice
+  const badge = r ? resultBadge(grade, kind, r.ok, sentence(r.headline)) : null;
+  const emptyAdvice = r ? emptyAdviceText(kind, !!saved, r.verdict) : null;
 
   const onSave = () => {
     if (!r) return;
@@ -176,7 +180,7 @@ export function ResultView({ kind }: { kind: CalibKind }) {
           </span>
           <div className="min-w-[260px] flex-1">
             <div className="mb-1 flex flex-wrap items-center gap-2">
-              <Badge tone={tone}>{isCheck ? (r.ok ? "Still holds" : "Drifted") : GRADE_LABEL[grade]}</Badge>
+              {badge ? <Badge tone={tone}>{badge}</Badge> : null}
               {saved ? (
                 <Badge tone="ok" icon={FileCheck}>
                   Saved
@@ -262,11 +266,11 @@ export function ResultView({ kind }: { kind: CalibKind }) {
               <Section title={r.ok ? "To make it even better" : "What to do"} icon={Lightbulb}>
                 <AdviceList advice={r.advice} kind={kind} />
               </Section>
-            ) : (
+            ) : emptyAdvice ? (
               <Section title="Advice" icon={Lightbulb}>
-                <p className="text-sm text-muted">{isCheck ? "Nothing to do: scan away." : saved ? "Nothing to improve." : "Nothing to improve. Save it."}</p>
+                <p className="text-sm text-muted">{emptyAdvice}</p>
               </Section>
-            )}
+            ) : null}
             {r.sim_truth?.length ? (
               <Section title="Against the true calibration" icon={FlaskConical} description="Only the simulator knows the truth">
                 <ul className="divide-y divide-line">

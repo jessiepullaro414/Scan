@@ -46,10 +46,10 @@ const mv: CadMove = {
   check_again: false,
   reason: null,
   warnings: [],
-  sentence: "Bottom turned 0.0500 deg about its own point and slid 0.0000 mm, to suit Top",
+  sentence: "Bottom turned 0.0500 deg about its own point and slid 0.0000\u202fmm, to suit Top",
 };
 const lines = cadMoveLines({ ...none, moves: [mv, { ...mv, id: "r-2", name: "Bottom to mid", applied: false, reason: "Bottom is already moved by \"Top to bottom\"" }] });
-check(lines.length === 2 && lines[0] === "Top to bottom: Bottom turned 0.05° about its own point and slid 0.000 mm, to suit Top.", `applied: ${lines[0]}`);
+check(lines.length === 2 && lines[0] === "Top to bottom: Bottom turned 0.05° about its own point and slid 0.000\u202fmm, to suit Top.", `applied: ${lines[0]}`);
 check(lines[1] === "Bottom to mid: not applied (Bottom is already moved by \"Top to bottom\"), listed only.", `refused: ${lines[1]}`);
 check(cadMoveLines(undefined).length === 0 && cadMoveLines(none).length === 0, "nothing moved, or an older server");
 

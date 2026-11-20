@@ -10,6 +10,7 @@ import {
   Moon,
   Palette,
   RefreshCw,
+  ScanLine,
   Settings as SettingsIcon,
   Sun,
   Tag,
@@ -62,13 +63,13 @@ const SECTION_HELP: Record<string, string> = {
 
 function unitFor(key: string): string {
   const k = key.toLowerCase();
-  if (k.endsWith("_mm")) return " mm";
-  if (k.endsWith("_s") || k.endsWith("_seconds")) return " s";
-  if (k.endsWith("_hz")) return " Hz";
-  if (k.endsWith("_px")) return " px";
+  if (k.endsWith("_mm")) return "\u202fmm";
+  if (k.endsWith("_s") || k.endsWith("_seconds")) return "\u202fs";
+  if (k.endsWith("_hz")) return "\u202fHz";
+  if (k.endsWith("_px")) return "\u202fpx";
   if (k.endsWith("_deg")) return "°";
-  if (k === "fps") return " fps";
-  if (k.endsWith("_level")) return " %";
+  if (k === "fps") return "\u202ffps";
+  if (k.endsWith("_level")) return "\u202f%";
   return "";
 }
 
@@ -84,7 +85,7 @@ const SPECIAL: Record<string, string> = {
   square_mm: "Square size",
   marker_mm: "Marker size",
   tag_mm: "Tag size",
-  voxel_mm: "Voxel size",
+  voxel_mm: "Mesh detail",
   thin_walls: "Thin walls and edges",
   markers_dot_level: "Dots in markers mode",
   squares_x: "Squares across",
@@ -167,7 +168,7 @@ function ComputeLabel({ c }: { c: unknown }) {
   const v = c && typeof c === "object" ? (c as ComputeInfo) : null;
   if (!v) return <span className="text-subtle">–</span>;
   if (v.backend === "gpu" && v.device?.name) {
-    const gb = v.device.memory_mb ? `, ${(v.device.memory_mb / 1024).toFixed(1)} GB` : "";
+    const gb = v.device.memory_mb ? `, ${(v.device.memory_mb / 1024).toFixed(1)}\u202fGB` : "";
     return (
       <Badge tone="ok" dot>
         {`GPU: ${v.device.name} (${v.device.kind ?? "gpu"}${gb})`}
@@ -400,6 +401,8 @@ export function SettingsPage() {
   const setTheme = useUi((s) => s.setTheme);
   const autoMesh = useUi((s) => s.autoMesh);
   const setAutoMesh = useUi((s) => s.setAutoMesh);
+  const trackingNumbers = useUi((s) => s.trackingNumbers);
+  const setTrackingNumbers = useUi((s) => s.setTrackingNumbers);
   const health = useConnection((s) => s.health);
   const link = useConnection((s) => s.link);
   const serverVersion = useConnection((s) => s.serverVersion);
@@ -464,6 +467,14 @@ export function SettingsPage() {
             description="Standard quality, as the Make mesh button. Turn it off to choose the quality yourself each time; the job can always be cancelled."
             checked={autoMesh}
             onChange={setAutoMesh}
+          />
+        </Section>
+        <Section title="While scanning" icon={ScanLine}>
+          <Switch
+            label="Show the tracking numbers"
+            description="How well each frame matched the model, and how far apart the surfaces were, beside the tracking status. For finding out why tracking is weak; the words say the same for everyday scans."
+            checked={trackingNumbers}
+            onChange={setTrackingNumbers}
           />
         </Section>
         {settings ? <MeshingSection settings={settings} onSaved={setSettings} /> : null}

@@ -41,7 +41,7 @@ export function ConfidenceLegend({ geometry, className }: { geometry: BufferGeom
       </div>
       {stats ? (
         <div className="mt-1.5 text-fg">
-          <span className="tnum">{fmtPct(stats.within_0_1)}</span> of the surface within 0.1 mm, <span className="tnum">{fmtPct(stats.within_0_3)}</span> within 0.3 mm
+          <span className="tnum">{fmtPct(stats.within_0_1)}</span> of the surface within 0.1&#8239;mm, <span className="tnum">{fmtPct(stats.within_0_3)}</span> within 0.3&#8239;mm
           {stats.not_measured >= 0.0005 ? (
             <>
               , <span className="tnum">{fmtPct(stats.not_measured, stats.not_measured < 0.01 ? 1 : 0)}</span> not measured
@@ -49,7 +49,7 @@ export function ConfidenceLegend({ geometry, className }: { geometry: BufferGeom
           ) : null}
         </div>
       ) : null}
-      <span className="sr-only">Light blue: under 0.02 mm. Dark blue: 1 mm or more.</span>
+      <span className="sr-only">Light blue: under 0.02&#8239;mm. Dark blue: 1&#8239;mm or more.</span>
     </div>
   );
 }

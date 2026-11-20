@@ -39,7 +39,7 @@ export function nominalText(value: NominalValueName, nominal: number, word: stri
   if (value === "diameter") return `Ø ${fmtNominal(nominal)}`;
   if (value === "radius") return `R ${fmtNominal(nominal)}`;
   if (value === "angle") return `${fmtNominal(nominal)}°`;
-  return `${fmtNominal(nominal)} mm`;
+  return `${fmtNominal(nominal)}\u202fmm`;
 }
 
 /** The chip of an offer: "Ø 14?", "parallel?". */
@@ -51,7 +51,7 @@ export function chipText(value: NominalValueName, s: Pick<NominalSuggestion, "no
  * measured value as an approval shows it. */
 export function measuredText(x: number | null, sigma: number | null, unit: "mm" | "deg"): string {
   if (x === null) return "not measured now";
-  const u = unit === "deg" ? "°" : " mm";
+  const u = unit === "deg" ? "°" : "\u202fmm";
   const s = sigma === null ? 0.01 : Math.abs(sigma);
   const d = s >= 0.01 || s === 0 ? 2 : s >= 0.001 ? 3 : 4;
   return `${x.toFixed(d)}${sigma === null ? "" : ` ± ${sigma.toFixed(d)}`}${u}`;
@@ -76,7 +76,7 @@ export function parseNominal(text: string, value: NominalValueName): Parsed {
   const x = Number(t);
   if (!Number.isFinite(x)) return { ok: false, error: `“${text.trim()}” is not a number.` };
   const [lo, hi, open] = NOMINAL_LIMITS[value];
-  const unit = value === "angle" ? "°" : " mm";
+  const unit = value === "angle" ? "°" : "\u202fmm";
   if (x > hi || x < lo || (open && x <= lo)) {
     const span = open ? `more than ${fmtNominal(lo)}` : `at least ${fmtNominal(lo)}`;
     return { ok: false, error: `A ${value.replace("_", " ")} must be ${span} and at most ${fmtNominal(hi)}${unit}.` };
@@ -118,7 +118,7 @@ export function approvedTip(n: ApprovedNominal): string {
 // ------------------------------------------------------------------ offers a known bias alone allows (off unless asked)
 /** The hover card of the switch "Offers a known bias allows" (a viewer preference, store/ui.ts). */
 export const BIAS_SWITCH_HELP =
-  "A known bias: on the simulator some features read consistently small or large, the same on every scan (small bosses about 0.3 mm small in diameter, some holes larger or smaller). The ± does not show it. These numbers are not yet measured on the real scanner. Off (the default): a value is offered only where the ± alone allows it, so a Ø 14.3 boss stays Ø 14.3. Turned on: values that only a known bias allows are offered too, in the warning colour, each saying which bias. An approval keeps the rule it was made under.";
+  "A known bias: on the simulator some features read consistently small or large, the same on every scan (small bosses about 0.3\u202fmm small in diameter, some holes larger or smaller). The ± does not show it. These numbers are not yet measured on the real scanner. Off (the default): a value is offered only where the ± alone allows it, so a Ø 14.3 boss stays Ø 14.3. Turned on: values that only a known bias allows are offered too, in the warning colour, each saying which bias. An approval keeps the rule it was made under.";
 
 /** "Ø 14.5", "0° or 1°": the values a known bias alone would allow, as the card names them. */
 function heldBack(offer: NominalOffer): string {

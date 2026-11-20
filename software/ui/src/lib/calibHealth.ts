@@ -12,12 +12,12 @@ import type { CalibHealth, DeviceState, HealthAction, HealthPart, HealthState, S
 import type { RouteName, SetupPage } from "./router";
 
 export const STATES: HealthState[] = ["valid", "check", "recalibrate"];
-export const STATE_WORDS: Record<HealthState, string> = { valid: "Valid", check: "Check recommended", recalibrate: "Recalibration required" };
+export const STATE_WORDS: Record<HealthState, string> = { valid: "Calibration valid", check: "Check recommended", recalibrate: "Recalibration required" };
 /** Amber for a check, red for a recalibration, nothing loud for valid. */
 export type HealthTone = "neutral" | "warn" | "danger";
 export const STATE_TONE: Record<HealthState, HealthTone> = { valid: "neutral", check: "warn", recalibrate: "danger" };
 /** The device chip's word. */
-const SHORT: Record<HealthState, string> = { valid: "Calibrated", check: "Check recommended", recalibrate: "Recalibrate" };
+const SHORT: Record<HealthState, string> = { valid: "Calibration valid", check: "Check recommended", recalibrate: "Recalibrate" };
 /** The button for each wizard step an action names (the action's own words go in its hover text). */
 export const STEP_BUTTON: Record<HealthAction["step"], string> = {
   check: "Run the 2-minute check",
@@ -48,7 +48,7 @@ export type HealthView = {
   tone: HealthTone;
   /** "Calibration valid", "Check recommended for the lasers", "Recalibration required" (the calibration as a whole). */
   title: string;
-  /** The device chip's word: "Calibrated", "Check recommended", "Recalibrate". */
+  /** The device chip's word: "Calibration valid", "Check recommended", "Recalibrate" (U48: one name for the state). */
   short: string;
   /** The engine's one sentence. */
   reason: string;
@@ -73,6 +73,15 @@ function judgedLine(h: CalibHealth): string | null {
   if (!parts.length) return null;
   if (h.source === "scan") return `Not judged in this scan: ${partsWords(parts)}.`;
   return `Not judged yet: ${partsWords(parts)}. A scan made with this calibration judges ${parts.length === 1 ? "it" : "them"}.`;
+}
+
+/**
+ * "Calibration loaded": a calibration file is in use (U48: never the state's name). Beside a status that is not valid
+ * it says which, and is shown in amber (U46): "Calibration loaded (recalibration required for the cameras)".
+ */
+export function loadedLine(hv: Pick<HealthView, "state" | "title"> | null): { text: string; warn: boolean } {
+  if (!hv || hv.state === "valid") return { text: "Calibration loaded", warn: false };
+  return { text: `Calibration loaded (${hv.title.charAt(0).toLowerCase()}${hv.title.slice(1)})`, warn: true };
 }
 
 /** The status made ready to show; null without one (no calibration, an older engine) or for one it cannot read. */

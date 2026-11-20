@@ -48,7 +48,7 @@ function throws(fn: () => unknown, needle: string): boolean {
   check(near(p.point, [5, 0, 0]), "the 2D origin: the scan's origin on the plane");
   check(p.description === "Section on Side" && !p.in_part_frame, "the description names the fit");
   const q = planeFromFit({ point: [5, 2, 3], normal: [1, 0, 0] }, -1.5, "Side", null);
-  check(near(q.point, [3.5, 0, 0]) && q.description === "Section on Side, moved -1.5 mm along its normal", "moved along the normal");
+  check(near(q.point, [3.5, 0, 0]) && q.description === "Section on Side, moved -1.5\u202fmm along its normal", "moved along the normal");
   // a level plane (within 45° of horizontal): "up" is Y
   const lv = planeFromFit({ point: [0, 0, 10], normal: [0, 0.3, 1] }, 0, "Top", null);
   const yIn = [0, 1, 0].map((x, i) => x - dot([0, 1, 0], lv.normal) * lv.normal[i]);
@@ -91,7 +91,7 @@ const frame = {
   const z = planeFromFrame(frame, "Z", 12);
   check(near(z.normal, [0, 0, 1]) && near(z.u, R[0]) && near(z.v, R[1]), "Z = 12 is drawn in the part's X and Y");
   check(near(z.point, [2, -1, 17]) && z.in_part_frame, "its 2D origin is the part's origin on the plane");
-  check(z.description === "Section at Z = 12 mm in the part's frame", "the engine's description");
+  check(z.description === "Section at Z = 12\u202fmm in the part's frame", "the engine's description");
   const front = planeFromFrame(frame, "-y", 2);
   check(near(front.normal, [1, 0, 0]) && near(front.u, R[0]) && near(front.v, R[2]), "Y = c seen from -Y: the front view in X and Z");
   check(front.description.endsWith("seen from -Y"), "said in its description");
@@ -196,9 +196,9 @@ const answer = (lines: SectionLineCompact[]): SectionAnswer => ({
 {
   const v = fitView([0, 0, 100, 10], 420, 200, 10); // 4 px per mm
   const bar = scaleBar(v, 420);
-  check(bar.mm === 20 && bar.px === 80 && bar.label === "20 mm", "a round length, about a quarter of the width");
+  check(bar.mm === 20 && bar.px === 80 && bar.label === "20\u202fmm", "a round length, about a quarter of the width");
   const fine = scaleBar({ cx: 0, cy: 0, scale: 400 }, 420);
-  check(fine.mm === 0.2 && fine.label === "0.2 mm", "below a millimetre");
+  check(fine.mm === 0.2 && fine.label === "0.2\u202fmm", "below a millimetre");
 }
 
 console.log(`section.test: ${checks} checks passed`);

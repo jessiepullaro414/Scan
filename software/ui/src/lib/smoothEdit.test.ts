@@ -16,22 +16,22 @@ const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b)
 check(SMOOTH_DEFAULTS.withinSigma === false, "within 2σ is off by default");
 let e = smoothEdit(SMOOTH_DEFAULTS, true);
 check(same(e.body, { op: "smooth", params: { method: "taubin", strength: 0.5, keep_edges: true } }), `the default request has no within_sigma: ${JSON.stringify(e.body)}`);
-check(e.label === "Smooth (Taubin, 50 %)" && e.invalid === null, `the default label: ${e.label}`);
+check(e.label === "Smooth (Taubin, 50\u202f%)" && e.invalid === null, `the default label: ${e.label}`);
 check(same(smoothEdit(SMOOTH_DEFAULTS, false).body, e.body), "the same without sigmas");
 
 // turned on by the person: sent only when the mesh has sigmas
 e = smoothEdit({ ...SMOOTH_DEFAULTS, withinSigma: true }, true);
-check(e.body.params.within_sigma === true && e.label === "Smooth (Taubin, 50 %, within 2σ)", `turned on: ${e.label}`);
+check(e.body.params.within_sigma === true && e.label === "Smooth (Taubin, 50\u202f%, within 2σ)", `turned on: ${e.label}`);
 e = smoothEdit({ ...SMOOTH_DEFAULTS, withinSigma: true }, false);
-check(!("within_sigma" in e.body.params) && e.label === "Smooth (Taubin, 50 %)", "turned on, but the mesh has no sigmas: not sent");
+check(!("within_sigma" in e.body.params) && e.label === "Smooth (Taubin, 50\u202f%)", "turned on, but the mesh has no sigmas: not sent");
 
 // where to smooth, the method, and a strength of 0
 e = smoothEdit({ ...SMOOTH_DEFAULTS, where: "edges" }, true);
-check(e.body.params.away_from_edges === true && !("flat_only" in e.body.params) && e.label === "Smooth (Taubin, 50 %, away from edges)", `off edges: ${e.label}`);
+check(e.body.params.away_from_edges === true && !("flat_only" in e.body.params) && e.label === "Smooth (Taubin, 50\u202f%, away from edges)", `off edges: ${e.label}`);
 e = smoothEdit({ ...SMOOTH_DEFAULTS, where: "flat", withinSigma: true }, true);
-check(e.body.params.flat_only === true && !("away_from_edges" in e.body.params) && e.label === "Smooth (Taubin, 50 %, flat areas only, within 2σ)", `flat only: ${e.label}`);
+check(e.body.params.flat_only === true && !("away_from_edges" in e.body.params) && e.label === "Smooth (Taubin, 50\u202f%, flat areas only, within 2σ)", `flat only: ${e.label}`);
 e = smoothEdit({ ...SMOOTH_DEFAULTS, method: "bilateral", strength: 0.3, keepEdges: false }, true);
-check(e.body.params.keep_edges === true && e.label === "Smooth, keep edges (30 %)", `bilateral always keeps edges: ${e.label}`);
+check(e.body.params.keep_edges === true && e.label === "Smooth, keep edges (30\u202f%)", `bilateral always keeps edges: ${e.label}`);
 e = smoothEdit({ ...SMOOTH_DEFAULTS, keepEdges: false }, true);
 check(e.body.params.keep_edges === false, "Taubin with the edge switch off");
 check(smoothEdit({ ...SMOOTH_DEFAULTS, strength: 0 }, true).invalid === "Choose a strength above 0", "a strength of 0 is refused");

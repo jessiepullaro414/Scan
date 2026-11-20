@@ -14,7 +14,7 @@ type Vec3 = [number, number, number];
 /** A reason's name, for the list. */
 export const REASON_TITLE: Record<CheckReason, string> = {
   not_seen: "Not seen",
-  steep: "Seen only at a steep angle",
+  steep: "Seen only at a slant",
   far: "Seen from too far",
   few_looks: "Seen too few times",
   edge: "On an edge or a tight curve",
@@ -24,7 +24,7 @@ export const REASON_TITLE: Record<CheckReason, string> = {
 /** A reason in a few words, for "also": "seen too few times". */
 const REASON_SHORT: Record<CheckReason, string> = {
   not_seen: "next to surface that was not seen",
-  steep: "seen only at a steep angle",
+  steep: "seen only at a slant",
   far: "seen from too far",
   few_looks: "seen too few times",
   edge: "on an edge or a tight curve",
@@ -32,7 +32,8 @@ const REASON_SHORT: Record<CheckReason, string> = {
 };
 
 const deg = (x: number | null) => `${Math.round(x ?? 0)}°`;
-const mm = (x: number | null) => `${Math.round(x ?? 0)} mm`;
+/** A distance in a sentence: rounded to 10 mm ("about 250 mm"); the engine's number stays as it is (U22). */
+const about = (x: number | null) => `about ${Math.round((x ?? 0) / 10) * 10}\u202fmm`;
 const count = (x: number | null) => String(Math.round(x ?? 0));
 
 /** Why the area is weak, in plain words, with what to do about it. `workingMm`: the scanner's working distance. */
@@ -44,9 +45,9 @@ export function reasonWords(a: Pick<CheckWhyArea, "reason" | "kind" | "evidence"
         ? "Nothing measured this surface: there was a hole or a shadow here, and hole filling made it up. Scan it from where it can be seen."
         : "It lies next to surface the scan never saw (a shadow, or where the scan ended). Come round to where the surface goes on.";
     case "steep":
-      return `Every look at it was at a steep angle: even the squarest was ${deg(e.view_angle_deg)} off square on. Hold the scanner more square on to it.`;
+      return `Seen only at a slant (the best look was ${deg(e.view_angle_deg)} from straight on). Hold the scanner straighter to it.`;
     case "far":
-      return `It was seen only from too far: the nearest look was ${mm(e.distance_mm)} away. Hold the scanner about ${mm(workingMm ?? 250)} from it.`;
+      return `It was seen only from too far: the nearest look was ${about(e.distance_mm)} away. Hold the scanner ${about(workingMm ?? 250)} from it.`;
     case "few_looks":
       return `It was seen too few times: ${count(e.looks)} separate looks, where the surface that passes had ${count(e.looks_passing)}. Go over it again, more slowly.`;
     case "edge":
@@ -93,9 +94,24 @@ export function unknownWords(a: Pick<CheckWhyArea, "unknown_because">): string[]
   return out;
 }
 
-/** The pose in a few words: "254 mm away, square on" / "254 mm away, 20° off square". */
+/** The pose in a few words: "about 250 mm away, straight on" / "about 250 mm away, 20° from straight on". */
 export function poseShort(p: Pick<CheckPose, "distance_mm" | "tilt_deg">): string {
-  return `${Math.round(p.distance_mm)} mm away, ${p.tilt_deg < 0.5 ? "square on" : `${Math.round(p.tilt_deg)}° off square`}`;
+  return `${about(p.distance_mm)} away, ${p.tilt_deg < 0.5 ? "straight on" : `${Math.round(p.tilt_deg)}° from straight on`}`;
+}
+
+/** A place to scan from is lettered (A, B, C), so it is never mixed up with the areas' numbers (U23). */
+export function placeLetter(i: number): string {
+  return i >= 0 && i < 26 ? String.fromCharCode(65 + i) : String(i + 1);
+}
+
+/**
+ * An area's own place to scan from, in the one form every place list uses (U23): "About 250 mm away,
+ * straight on. It sees 95 % of it."
+ */
+export function viewWords(pose: Pick<CheckPose, "distance_mm" | "tilt_deg">, shareSeen: number | null): string {
+  const where = poseShort(pose);
+  const head = `${where.charAt(0).toUpperCase()}${where.slice(1)}.`;
+  return shareSeen === null ? head : `${head} It sees ${fmtShare(shareSeen)} of it.`;
 }
 
 /** "3 places to scan from" (the plan's title). */
@@ -106,7 +122,7 @@ export function planTitle(n: number): string {
 /** The other areas a place of the plan names before it counts the rest ("areas 5, 7, 22, 26 and 6 more"). */
 export const PLAN_NAMED = 4;
 
-/** One place of the plan: "For area 2, 254 mm away, square on: it sees 95 % of it, and most of areas 3 and 5." */
+/** One place of the plan: "Area 2: about 250 mm away, straight on. It sees 95 % of it, and most of areas 3 and 5." */
 export function planWords(p: CheckPlanPose): string {
   const most = p.also_sees.filter((s) => s.share >= 0.5).map((s) => s.area + 1);
   // a pose over a large area sees dozens of small ones: name the first few, count the rest
@@ -117,8 +133,8 @@ export function planWords(p: CheckPlanPose): string {
         ? `${most.slice(0, -1).join(", ")} and ${most[most.length - 1]}`
         : `${most[0]}`;
   const also = most.length ? `, and most of area${most.length > 1 ? "s" : ""} ${list}` : "";
-  const lead = p.kind === "more" ? `For area ${p.area + 1} again, from another side` : `For area ${p.area + 1}`;
-  return `${lead}, ${poseShort(p.pose)}: it sees ${fmtShare(p.share_seen)} of it${also}.`;
+  const lead = p.kind === "more" ? `Area ${p.area + 1} again, from another side` : `Area ${p.area + 1}`;
+  return `${lead}: ${poseShort(p.pose)}. It sees ${fmtShare(p.share_seen)} of it${also}.`;
 }
 
 /** The reasons answer is for this Check answer: the same mesh version, tolerance and areas. */

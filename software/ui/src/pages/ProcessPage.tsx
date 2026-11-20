@@ -736,9 +736,9 @@ export default function ProcessPage({ pid, sid }: { pid: string; sid: string }) 
                   value={devOn ? "deviation" : shading === "lasers" ? "lasers" : shownShading}
                   onChange={setShading}
                   options={[
-                    { value: "clay", label: "Clay", icon: Brush, title: "Matcap clay (1)" },
+                    { value: "clay", label: "Grey", icon: Brush, title: "Plain grey (1)" },
                     { value: "studio", label: "Studio", icon: Sparkles, title: "Studio lighting (2)" },
-                    { value: "normals", label: "Normals", icon: Orbit, title: "Normal shading (3)" },
+                    { value: "normals", label: "Direction", icon: Orbit, title: "Colour by direction (3)" },
                     {
                       value: "confidence",
                       label: "Confidence",

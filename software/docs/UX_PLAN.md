@@ -17,6 +17,29 @@ three waves: the names and words (U2, U3, U4, U17, U37, U47 and the table "One n
 thing"), the structure of the pages (U11, U12, U15, U25, U26, U44, U45, U49), and what needs
 new work in the server too (U5, U7 with U50, U14, U21, U34).
 
+**Done so far (2026-11-20), the defects in the pages.** Ticked below: U1, U6, U16, U18, U19, U20,
+U22, U23, U24, U27, U28, U29, U30, U32, U33, U35, U36, U38, U40, U41, U42, U43, U46. Each was
+looked at in the demo except where it says otherwise here. Checked in the code and by its test
+only, because the demo does not reach the state: the laser warning before a real scanner's
+self-test (U18), the amber "Calibration loaded" under "Recalibration required" (U46), the focus
+on Cancel in danger dialogs (U6), "Making the mesh" after Stop (U30), "1–7" with a CAD model
+loaded (U25). Not ticked yet, with what is left:
+
+- **U8, U10, U13, U48:** the pages' half is done (the words on the pages, the demo's verdict
+  sentences through `lib/calibWords.ts`, the chips "Holes up to 5 mm around (Ø 1.6)", "Calibration
+  valid"). The server's half (its own words, which the demo copies in places: "floaters",
+  "voxels", "RMS", "Your calibration still holds") comes with U9.
+- **U25:** the key ranges are right ("1–7" from the modes that work); the shortcut sheet is the
+  choice half.
+- **U31:** the recipes and the stereo and laser verdict sentences are now compared with the
+  server's by a test (`api/mock/recipes.test.ts`, `lib/calibWords.test.ts`); the check headline
+  and the motion sensor's sentence follow once the server has its new words.
+- **U39:** the folder paths are gone and the size is a visible link ("1.15 GB · Free space…");
+  "Open the project folder" needs a route in the server (today only the printables folder opens),
+  so it goes with the third wave.
+- **U32** is complete for every number the pages write; texts that come whole from the server
+  still have a plain space before the unit (with U9).
+
 ## The ten that matter most
 
 1. **U1:** an open calibration result silently blocks the first scan.
@@ -35,7 +58,7 @@ new work in the server too (U5, U7 with U50, U14, U21, U34).
 
 ## Findings
 
-### [ ] U1. An open calibration result blocks scanning, and the Scan page does not say why (defect, S to M)
+### [x] U1. An open calibration result blocks scanning, and the Scan page does not say why (defect, S to M)
 - **Where:** Setup, Check, "Finish & check", then leave by the step rail, the sidebar or "Scan
   your first object"; Scan page, Start scan. `ui/src/pages/setup/actions.ts` (`startFirstScan`
   does not close the session), `ui/src/pages/ScanPage.tsx` (`reason` ignores the calibration),
@@ -74,7 +97,7 @@ new work in the server too (U5, U7 with U50, U14, U21, U34).
   card" only; "make it again" only where it would help. (Since D7 and the status change of
   2026-11-20 the list of what is missing without one is shorter: check it first.)
 
-### [ ] U6. Danger confirms open with the destructive button focused (defect, S)
+### [x] U6. Danger confirms open with the destructive button focused (defect, S)
 - `ui/src/components/ui/Dialog.tsx`: `data-autofocus` on the confirm button whatever the tone.
 - **Mend:** with tone "danger" the focus starts on Cancel. Also keep the dialog open when its
   action failed.
@@ -177,7 +200,7 @@ new work in the server too (U5, U7 with U50, U14, U21, U34).
 - **Pick:** no default: "Did you move or turn the part between the two scans? Yes / No" must be
   answered before aligning, and before a pass starts.
 
-### [ ] U16. The project table at narrow widths loses the scan names (defect, S)
+### [x] U16. The project table at narrow widths loses the scan names (defect, S)
 - At 800 px the name column is 43 px; at 1024 px the details wrap into a tall cell
   (`ProjectPage.tsx`, the actions column's `minmax(370px,400px)`).
 - **Mend:** under about 1100 px the secondary actions go into a menu; under about 860 px the
@@ -189,17 +212,17 @@ new work in the server too (U5, U7 with U50, U14, U21, U34).
 - **Pick:** two verbs: "Make mesh" (and "Make mesh again") and "Edit mesh…" for the Process
   page; the stages inside it "Follow the camera / Straighten / Build the surface".
 
-### [ ] U18. Self-test: the laser warning comes too late, and texts contradict (defect, S)
+### [x] U18. Self-test: the laser warning comes too late, and texts contradict (defect, S)
 - "The Pico, the emitters and the trigger are skipped" then "Checking the simulated emitters…";
   the Class 3R warning only while the test runs; "Run it again after any fix" after a pass.
 - **Mend:** the warning before "Run self-test" on the real scanner; "Skipping the lasers
   (simulator)"; "Every check passed".
 
-### [ ] U19. cm and mm for the same distances (defect, S)
+### [x] U19. cm and mm for the same distances (defect, S)
 - "20–50 cm" against "200–500 mm"; "about 25 cm" against the gauge's "200–350 mm".
 - **Mend:** mm everywhere.
 
-### [ ] U20. "Views" or "poses"; deleting a view needs a mouse (defect, S)
+### [x] U20. "Views" or "poses"; deleting a view needs a mouse (defect, S)
 - **Mend:** "views" everywhere; each thumbnail gets a visible × button labelled "Delete view
   7", reachable by keyboard.
 
@@ -209,19 +232,19 @@ new work in the server too (U5, U7 with U50, U14, U21, U34).
 - **Mend:** "Demo calibration" when the demo's own is in use; check which file a simulator
   scan uses (V2).
 
-### [ ] U22. Check's area cards are long and repeat themselves (defect, S to M)
+### [x] U22. Check's area cards are long and repeat themselves (defect, S to M)
 - Each card repeats "Uncertain / The scan's own 2σ here is larger than ± 0.3 mm."; "even the
   squarest was 64° off square on"; "about 254 mm"; cm² beside mm².
 - **Mend:** say the shared sentence once above the list; "Seen only at a slant (the best look
   was 64° from straight on). Hold the scanner straighter to it."; "about 250 mm"; one area
   unit; one button, "Scan these areas again…", the places shown on the Scan page.
 
-### [ ] U23. The places list mixes two sentence forms and two numberings (defect, S)
+### [x] U23. The places list mixes two sentence forms and two numberings (defect, S)
 - Places 1 to 3 in one form (`lib/checkWhy.ts`), 4 to 6 in another (`lib/pass.ts`); places
   numbered 1 to 6 for areas 1, 2, 3, 5, 6, 7.
 - **Mend:** one form; places lettered A, B, C.
 
-### [ ] U24. A button called "Not a pass" (defect, S)
+### [x] U24. A button called "Not a pass" (defect, S)
 - **Mend:** "Make an ordinary scan instead".
 
 ### [ ] U25. Shortcuts (defect and choice, S)
@@ -235,16 +258,16 @@ new work in the server too (U5, U7 with U50, U14, U21, U34).
   once)" and the lower card has no buttons; "the control board (Pico or ESP32)"; "Try the
   simulator" as the one name.
 
-### [ ] U27. "6/7" beside "All set" (defect, S)
+### [x] U27. "6/7" beside "All set" (defect, S)
 - The optional Print step counts in the total. **Mend:** count the required steps.
 
-### [ ] U28. A toast covers the wizard's Next button (defect, S)
+### [x] U28. A toast covers the wizard's Next button (defect, S)
 - **Mend:** toasts at the top right or above the footer; "The simulator is connected." (not
   "Start a scan!").
 
-### [ ] U29. Connect: "Selected" twice, and real cameras listed while the simulator is on (defect, S)
+### [x] U29. Connect: "Selected" twice, and real cameras listed while the simulator is on (defect, S)
 
-### [ ] U30. After Stop, and small wording (defect, S)
+### [x] U30. After Stop, and small wording (defect, S)
 - The distance gauge keeps saying "Move closer" when nothing records; the lost-tracking banner
   is cut off at narrow widths; "keep scanned area in view" → "keep the scanned area in view";
   after Stop: "Making the mesh. You can turn the model while you wait, or leave this page: the
@@ -254,12 +277,12 @@ new work in the server too (U5, U7 with U50, U14, U21, U34).
 - The calibration verdicts (U10) and the recipes (U13). **Mend:** the demo uses the server's
   words, or a test compares them.
 
-### [ ] U32. Number formatting (defect, S)
+### [x] U32. Number formatting (defect, S)
 - "29.7fps", "7,754tris", "453mm"; "1280×800" against "2560 × 800"; "1289 mm" against "1,568";
   a hyphen for minus beside a true minus. **Mend:** one formatter with a narrow space before
   the unit.
 
-### [ ] U33. Small grey text is under the contrast it needs (defect, S)
+### [x] U33. Small grey text is under the contrast it needs (defect, S)
 - `text-subtle` on the panel is 3.85 to 1 at 10 to 11 px (help lines, hints, the gauge's
   scale); 4.5 to 1 is the usual floor. **Mend:** lighten it to about 5 to 1.
 
@@ -267,10 +290,10 @@ new work in the server too (U5, U7 with U50, U14, U21, U34).
 - Every hint says to run `ohs -v app`. **Pick:** Settings, About: "Open the log folder" and
   "Save a log for a bug report…".
 
-### [ ] U35. "Align two scans" for a page that takes two to eight (defect, S)
+### [x] U35. "Align two scans" for a page that takes two to eight (defect, S)
 - **Mend:** "Align and merge scans" everywhere.
 
-### [ ] U36. The Align verdict's words (defect, S)
+### [x] U36. The Align verdict's words (defect, S)
 - "ACCEPTED", "0.25 mm RMS where the two overlap", "8 of 9 agree each one starts from a
   different rough fit" (label and help run together). **Mend:** "Aligned"; "Typically 0.25 mm
   apart where they overlap"; "8 of 9 starting guesses agree (each starts from a different
@@ -282,7 +305,7 @@ new work in the server too (U5, U7 with U50, U14, U21, U34).
   "Keep half the frames and the result"; drop "events"; "You can no longer re-run single
   steps on the Process page until you make the mesh again." Keep the two-step confirm.
 
-### [ ] U38. Why a scan failed is hidden in a hover (defect, S)
+### [x] U38. Why a scan failed is hidden in a hover (defect, S)
 - **Mend:** the first line under the status: "Failed: too few frames tracked. Make mesh again,
   or at Preview quality."
 
@@ -290,18 +313,18 @@ new work in the server too (U5, U7 with U50, U14, U21, U34).
 - "Raw recordings stay in scans/<id>/recording…" → a button "Open the project folder"; the
   size as a visible link "1.15 GB · Free space…" instead of a hover.
 
-### [ ] U40. Two Start buttons on the IMU step, and a garbled sentence (defect, S)
+### [x] U40. Two Start buttons on the IMU step, and a garbled sentence (defect, S)
 - **Mend:** one Start; "The motion sensor keeps tracking steady on fast sweeps and plain
   surfaces."
 
-### [ ] U41. Verdicts said twice (defect, S)
+### [x] U41. Verdicts said twice (defect, S)
 - The badge "Excellent" and the headline "Excellent stereo calibration"; "Nothing to do: scan
   away." twice.
 
-### [ ] U42. Downloads differ from page to page (defect, S)
+### [x] U42. Downloads differ from page to page (defect, S)
 - **Mend:** one list everywhere, OBJ included.
 
-### [ ] U43. "Check answer at ± mm" (defect, S)
+### [x] U43. "Check answer at ± mm" (defect, S)
 - **Mend:** "Tolerance for the report's Scan check, ± mm".
 
 ### [ ] U44. "New scan" on Home silently picks the first project (choice, S)
@@ -311,7 +334,7 @@ new work in the server too (U5, U7 with U50, U14, U21, U34).
 ### [ ] U45. Esc stops a scan (choice, S)
 - Esc is also "dismiss". **Pick:** Esc twice within a second, with "Press Esc again to stop".
 
-### [ ] U46. "Calibration loaded" right under "Recalibration required" (defect, S)
+### [x] U46. "Calibration loaded" right under "Recalibration required" (defect, S)
 - **Mend:** "Calibration loaded (recalibration required for the cameras)", in amber.
 
 ### [ ] U47. Presets: General shows nothing; the help card is a wall of numbers (choice, S)

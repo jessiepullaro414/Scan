@@ -84,7 +84,7 @@ const bore: CylinderShape = { kind: "cylinder", point: [2, 3, 0], axis: [0, 1, 0
   check(near(d0, [3, 4, 0]) && near(d1, [4, -3, 0]), "Δx / Δy / Δz in each frame");
   check(Math.abs(Math.hypot(...d0) - Math.hypot(...d1)) < 1e-12, "the distance doesn't change");
 }
-check(fmtVec([1.234, -0.001, 12]) === "1.23, 0.00, 12.00" && fmtVec([0.5, -0.25, 1], 3) === "0.500, -0.250, 1.000", "numbers as the panels show them");
+check(fmtVec([1.234, -0.001, 12]) === "1.23, 0.00, 12.00" && fmtVec([0.5, -0.25, 1], 3) === "0.500, −0.250, 1.000", "numbers as the panels show them, with a true minus (U32)");
 
 // ------------------------------------------------------------------ build again
 {

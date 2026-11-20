@@ -37,13 +37,13 @@ function doing(stage: string): string {
 export function fmtLeft(seconds: number, suffix = ""): string {
   if (seconds < 15) return `A few seconds left${suffix}`;
   if (seconds < 50) return `Less than a minute left${suffix}`;
-  if (seconds < 90) return `About 1 min left${suffix}`;
+  if (seconds < 90) return `About 1\u202fmin left${suffix}`;
   const min = Math.round(seconds / 60);
-  if (min < 60) return `About ${min} min left${suffix}`;
+  if (min < 60) return `About ${min}\u202fmin left${suffix}`;
   const five = Math.round(min / 5) * 5;
   const h = Math.floor(five / 60);
   const m = five % 60;
-  return m ? `About ${h} h ${m} min left${suffix}` : `About ${h} h left${suffix}`;
+  return m ? `About ${h}\u202fh ${m}\u202fmin left${suffix}` : `About ${h}\u202fh left${suffix}`;
 }
 
 export function jobEstimate(job: Pick<Job, "state" | "frames"> | null | undefined): Estimate {

@@ -115,6 +115,19 @@ export function Dialog({
   );
 }
 
+/**
+ * Did a confirm action fail? `false` or `null` (what the stores return when they could not do it,
+ * after their own toast), or a thrown error: then the dialog stays open, to try again or cancel.
+ */
+export function confirmFailed(result: unknown): boolean {
+  return result === false || result === null;
+}
+
+/**
+ * Ask before an action. With tone "danger" the focus starts on Cancel, so Enter never destroys
+ * by accident (UX_PLAN U6); with tone "primary" on the action. `onConfirm` returns false (or null)
+ * when it failed: the dialog then stays open.
+ */
 export function ConfirmDialog({
   open,
   onClose,
@@ -133,6 +146,7 @@ export function ConfirmDialog({
   onConfirm: () => Promise<unknown> | unknown;
 }) {
   const [busy, setBusy] = useState(false);
+  const danger = tone === "danger";
   return (
     <Dialog
       open={open}
@@ -141,21 +155,24 @@ export function ConfirmDialog({
       description={children}
       footer={
         <>
-          <Button variant="ghost" onClick={onClose} disabled={busy}>
+          <Button data-autofocus={danger || undefined} variant={danger ? "secondary" : "ghost"} onClick={onClose} disabled={busy}>
             Cancel
           </Button>
           <Button
-            data-autofocus
-            variant={tone === "danger" ? "danger" : "primary"}
+            data-autofocus={danger ? undefined : true}
+            variant={danger ? "danger" : "primary"}
             loading={busy}
             onClick={async () => {
               setBusy(true);
+              let failed = false;
               try {
-                await onConfirm();
+                failed = confirmFailed(await onConfirm());
+              } catch {
+                failed = true; // the action says why (its toast); the dialog stays, to try again
               } finally {
                 setBusy(false);
               }
-              onClose();
+              if (!failed) onClose();
             }}
           >
             {confirmLabel}

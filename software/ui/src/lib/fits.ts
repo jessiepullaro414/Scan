@@ -180,12 +180,12 @@ export function fmtSmall(x: number): string {
 }
 /** A length in mm: "0.040 mm", "14.02 mm" (three decimals below 0.1 mm). */
 export function fmtLength(x: number): string {
-  return `${x.toFixed(Math.abs(x) < 0.1 ? 3 : 2)} mm`;
+  return `${x.toFixed(Math.abs(x) < 0.1 ? 3 : 2)}\u202fmm`;
 }
 /** A length and its 1σ, both to the σ's decimals: "14.02 ± 0.03 mm". */
 export function fmtPm(x: number, sigma: number): string {
   const d = decimals(sigma);
-  return `${x.toFixed(d)} ± ${sigma.toFixed(d)} mm`;
+  return `${x.toFixed(d)} ± ${sigma.toFixed(d)}\u202fmm`;
 }
 export function fmtAngle(deg: number): string {
   return `${deg.toFixed(2)}°`;
@@ -204,13 +204,14 @@ export function fitName(kind: FitKind): string {
  */
 export function fitValue(shape: FitShape): string {
   if (shape.kind === "plane") {
+    // U8: "flat to 0.04 mm (typical)": the RMS, said in words ("typical", not a largest-minus-smallest)
     const f = shape.rms_mm;
-    return `RMS ${f.toFixed(f < 0.01 ? 3 : f < 10 ? 2 : 1)} mm`;
+    return `flat to ${f.toFixed(f < 0.01 ? 3 : f < 10 ? 2 : 1)} mm (typical)`;
   }
   return `Ø ${fmtPm(shape.diameter_mm, shape.diameter_sigma_mm)}`;
 }
 
-/** The label on the mesh: "Plane · RMS 0.04 mm", "Cylinder Ø 14.02 ± 0.03 mm", "Hole Ø 25.01 ± 0.05 mm". */
+/** The label on the mesh: "Plane · flat to 0.04 mm (typical)", "Cylinder Ø 14.02 ± 0.03 mm", "Hole Ø 25.01 ± 0.05 mm". */
 export function fitLabel(kind: FitKind, shape: FitShape): string {
   return shape.kind === "plane" ? `${fitName(kind)} · ${fitValue(shape)}` : `${fitName(kind)} ${fitValue(shape)}`;
 }

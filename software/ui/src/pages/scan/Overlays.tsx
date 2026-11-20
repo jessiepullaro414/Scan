@@ -18,7 +18,7 @@ import {
 import { useRef, useState } from "react";
 import { IconButton, Button } from "../../components/ui/Button";
 import { Kbd } from "../../components/ui/Feedback";
-import { fmtClock, fmtInt } from "../../lib/format";
+import { fmtClock, fmtFixed, fmtInt, fmtMm, withUnit } from "../../lib/format";
 import { navigate, paths } from "../../lib/router";
 import {
   describeTracking,
@@ -41,6 +41,7 @@ import { viewBus } from "../../three/viewBus";
 export function TrackingBadge() {
   const tracking = useSession((s) => s.status?.tracking ?? null);
   const phase = useSession((s) => s.session?.state ?? "idle");
+  const numbers = useUi((s) => s.trackingNumbers);
   const live = phase === "scanning" || phase === "paused";
   if (!live) return null;
   const state = tracking?.state ?? "idle";
@@ -63,11 +64,12 @@ export function TrackingBadge() {
         {tone.icon}
         <span className={cn("text-sm font-semibold", tone.text)}>{phase === "paused" && state === "idle" ? "Paused" : info.label}</span>
         <span className="flex-1" />
-        {tracking && (tracking.fitness !== null || tracking.rmse_mm !== null) ? (
-          <span className="font-mono text-[11px] text-muted tnum" title="ICP fitness · inlier RMSE">
-            {tracking.fitness !== null ? tracking.fitness.toFixed(2) : "–"}
+        {numbers && tracking && (tracking.fitness !== null || tracking.rmse_mm !== null) ? (
+          // U8: only when asked for in Settings ("Show the tracking numbers")
+          <span className="font-mono text-[11px] text-muted tnum" title="How well the frame matched the model · how far apart the surfaces were">
+            {tracking.fitness !== null ? fmtFixed(tracking.fitness, 2) : "–"}
             {" · "}
-            {tracking.rmse_mm !== null ? `${tracking.rmse_mm.toFixed(2)} mm` : "–"}
+            {tracking.rmse_mm !== null ? fmtMm(tracking.rmse_mm, 2) : "–"}
           </span>
         ) : null}
       </div>
@@ -154,10 +156,11 @@ export function LostBanner() {
   return (
     <div
       role="alert"
-      className="pointer-events-none flex max-w-[min(520px,calc(100vw-2rem))] animate-pop-in items-center gap-2 rounded-full border border-danger/50 bg-[rgb(120_24_20/0.78)] px-4 py-1.5 text-sm text-white shadow-lg backdrop-blur"
+      className="pointer-events-none flex max-w-[min(520px,calc(100vw-27rem))] animate-pop-in items-center gap-2 rounded-2xl border border-danger/50 bg-[rgb(120_24_20/0.78)] px-4 py-1.5 text-sm text-white shadow-lg backdrop-blur"
     >
       <RotateCcw size={15} className="shrink-0" aria-hidden />
-      <span className="truncate">
+      {/* U30: wraps at narrow widths instead of being cut off */}
+      <span className="min-w-0">
         <b>Return to the dashed scanner</b>: tracking resumes on its own.
       </span>
     </div>
@@ -174,15 +177,20 @@ const ZONE_STYLE: Record<DistanceZone, { text: string; bg: string }> = {
   "too-far": { text: "text-danger", bg: "bg-danger" },
 };
 
+/** What the gauge says while nothing records (before Start, paused, after Stop). */
+const IDLE_TEXT = "While scanning";
+
 const span = DIST_MAX - DIST_MIN;
 const frac = (d: number) => (clamp(d, DIST_MIN, DIST_MAX) - DIST_MIN) / span;
 
 /** Vertical 150–450 mm bar, far at the top; the sweet spot 200–350 mm is highlighted. */
 export function DistanceGauge() {
-  const d = useSession((s) => s.status?.distance_mm ?? null);
+  // U30: only while recording; afterwards the last reading would keep saying "Move closer"
+  const recording = useSession((s) => s.session?.state === "scanning");
+  const d = useSession((s) => (recording ? (s.status?.distance_mm ?? null) : null));
   const connected = useDevice((s) => !!s.device?.connected);
   if (!connected) return null;
-  const zone = distanceZone(d);
+  const zone = recording ? distanceZone(d) : "none";
   const st = ZONE_STYLE[zone];
   const has = zone !== "none" && d !== null;
   const f = has ? frac(d) : 0.5;
@@ -195,7 +203,7 @@ export function DistanceGauge() {
       aria-valuemin={DIST_MIN}
       aria-valuemax={DIST_MAX}
       aria-valuenow={has ? Math.round(d) : undefined}
-      aria-valuetext={has ? `${Math.round(d)} mm, ${ZONE_TEXT[zone]}` : ZONE_TEXT.none}
+      aria-valuetext={has ? `${withUnit(String(Math.round(d)), "mm")}, ${ZONE_TEXT[zone]}` : recording ? ZONE_TEXT.none : IDLE_TEXT}
     >
       <div className="text-[10px] font-semibold uppercase tracking-wider text-subtle">Distance</div>
       <div className={cn("mt-0.5 font-mono text-lg font-semibold leading-6 tnum", st.text)}>{has ? Math.round(d) : "–"}</div>
@@ -240,7 +248,7 @@ export function DistanceGauge() {
       <div className={cn("mt-2 flex h-8 items-center justify-center gap-1 text-center text-[10.5px] font-medium leading-tight", st.text)}>
         {zone === "too-far" || zone === "far" ? <ArrowDown size={11} className="shrink-0" aria-hidden /> : null}
         {zone === "too-close" || zone === "close" ? <ArrowUp size={11} className="shrink-0" aria-hidden /> : null}
-        <span>{ZONE_TEXT[zone]}</span>
+        <span>{recording ? ZONE_TEXT[zone] : IDLE_TEXT}</span>
       </div>
     </div>
   );
@@ -269,7 +277,7 @@ export function ViewToolbar({
 
 const SHORTCUTS: [string, string][] = [
   ["Space", "Start · pause · resume"],
-  ["R", "Rewind 2 s"],
+  ["R", "Rewind 2\u202fs"],
   ["Esc", "Stop and save"],
   ["F", "Frame the model"],
   ["?", "Show / hide this help"],
@@ -324,7 +332,7 @@ export function FirstScanCoach({ onDismiss }: { onDismiss: () => void }) {
   const autoMesh = useUi((s) => s.autoMesh);
   const steps = [
     <>
-      Point the scanner at a <b className="font-medium text-fg">mug</b>, about <b className="font-medium text-fg">25 cm</b> away.
+      Point the scanner at a <b className="font-medium text-fg">mug</b>, about <b className="font-medium text-fg">{withUnit("250", "mm")}</b> away.
     </>,
     <>
       Press the <b className="font-medium text-fg">trigger</b>, or <b className="font-medium text-fg">Start scan</b> below.

@@ -182,8 +182,8 @@ export const jobKindLabel = (kind: string): string => {
     if (k.includes("recipe")) return "Apply recipe";
     return "Mesh edit";
   }
-  if (k === "align") return "Align two scans";
-  if (k === "align_all") return "Align several scans";
+  if (k === "align") return "Align and merge scans";
+  if (k === "align_all") return "Align and merge scans";
   if (k === "merge") return "Merge scans";
   if (k === "reference_align") return "Align with the reference";
   if (k.includes("process") || k.includes("mesh")) return "Make mesh";

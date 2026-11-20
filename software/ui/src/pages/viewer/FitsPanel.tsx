@@ -43,15 +43,15 @@ export const FIT_ICON: Record<FitKind, typeof Square> = { plane: Square, cylinde
 // Measured on simulated scans (VALIDATION.md, "The fits' ± on today's engine"): a plane's and a cylinder's ±
 // count that neighbouring points err together, and cover the spread from scan to scan; the scan's biases come on top.
 const SIGMA_NOTE =
-  "± (1σ) is how far the fit could move with the scan's scatter, counting that neighbouring points err together. It is not the accuracy: on simulated scans it covered the spread from one scan to the next, but the shapes were also off the same way on every scan (small bosses 0.15–0.25 mm small in radius).";
+  "± (1σ) is how far the fit could move with the scan's scatter, counting that neighbouring points err together. It is not the accuracy: on simulated scans it covered the spread from one scan to the next, but the shapes were also off the same way on every scan (small bosses 0.15–0.25\u202fmm small in radius).";
 const HOLE_NOTE =
-  "± is how well the edge points agree with the circle (1σ). It is not the accuracy: on simulated scans a hole's edge read about 1 mm small in diameter, several times its ±.";
+  "± is how well the edge points agree with the circle (1σ). It is not the accuracy: on simulated scans a hole's edge read about 1\u202fmm small in diameter, several times its ±.";
 const FORM_TIP = {
   boss: "A boss: the surface faces away from the axis, with material inside (a shaft, a pin). Read by the engine from the region's faces. Bosses and bores read off in size differently on scans.",
   bore: "A bore: the surface faces the axis, the wall of a hole. Read by the engine from the region's faces. Bosses and bores read off in size differently on scans.",
 } as const;
 const degSigma =(x: number) => `±${fmtSmall(x)}°`;
-const mmSigma = (x: number) => `±${fmtSmall(x)} mm`;
+const mmSigma = (x: number) => `±${fmtSmall(x)}\u202fmm`;
 
 type Row = [label: string, value: string, tip?: string, extra?: ReactNode];
 

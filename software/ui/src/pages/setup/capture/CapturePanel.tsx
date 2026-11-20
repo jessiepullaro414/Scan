@@ -38,7 +38,7 @@ export function ViewsCounter({ kind }: { kind: CalibKind }) {
   const unit = KIND_META[kind].minLabel;
   const state = n >= hi && hi > 0 ? "Plenty" : n >= lo && lo > 0 ? "Enough" : n >= min && min > 0 ? "Usable" : "";
   return (
-    <Block title={kind === "lasers" ? "Poses" : "Views"} icon={Camera} aside={state ? <span className={cn("text-[11px] font-medium", n >= lo ? "text-ok" : "text-warn")}>{state}</span> : null}>
+    <Block title="Views" icon={Camera} aside={state ? <span className={cn("text-[11px] font-medium", n >= lo ? "text-ok" : "text-warn")}>{state}</span> : null}>
       <div className="flex items-baseline gap-2">
         <span className="font-display text-3xl font-semibold leading-none text-fg tnum" aria-live="polite">
           {n}
@@ -83,7 +83,7 @@ export function CoverageStat({ kind }: { kind: CalibKind }) {
     <div className="min-w-0 flex-1">
       <div className="mb-1 flex items-baseline justify-between gap-1">
         <span className="text-xs text-muted">{label}</span>
-        <span className={cn("font-mono text-sm font-semibold tnum", pct >= goal ? "text-ok" : "text-fg")}>{Math.round(pct)} %</span>
+        <span className={cn("font-mono text-sm font-semibold tnum", pct >= goal ? "text-ok" : "text-fg")}>{Math.round(pct)}&#8239;%</span>
       </div>
       <MiniGrid cells={cells} cols={cols} />
     </div>
@@ -95,7 +95,7 @@ export function CoverageStat({ kind }: { kind: CalibKind }) {
       aside={
         <Tooltip content="The share of each image that had board corners in at least one view. The lens edges distort the most, so they need views too.">
           <span tabIndex={0} className="cursor-help text-[11px] text-subtle underline decoration-dotted underline-offset-2">
-            want &gt; {goal} %
+            want &gt; {goal}&#8239;%
           </span>
         </Tooltip>
       }
@@ -202,7 +202,7 @@ export function BoardStat({ kind }: { kind: CalibKind }) {
       </div>
       <div className="mt-1 flex justify-between font-mono text-[10px] text-subtle tnum">
         <span>{lo}</span>
-        <span>aim {lo}–{hi} mm</span>
+        <span>aim {lo}–{hi}&#8239;mm</span>
         <span>{hi}</span>
       </div>
     </Block>
@@ -242,7 +242,7 @@ export function LaserStat() {
       ) : null}
       {meet.map(([fam, mm]) => (
         <p key={fam} className="mt-1 text-[11px] text-muted">
-          The two {fam} lines run into each other about <span className="font-mono tnum">{Math.round(mm)}</span> mm away. If one goes
+          The two {fam} lines run into each other about <span className="font-mono tnum">{Math.round(mm)}</span>&#8239;mm away. If one goes
           missing there, hold the board a little nearer or farther.
         </p>
       ))}

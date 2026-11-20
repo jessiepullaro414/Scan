@@ -58,9 +58,9 @@ function PosePill({ kind }: { kind: CalibKind }) {
         "absolute bottom-2 right-2 rounded-md px-1.5 py-0.5 font-mono text-[11px] tnum backdrop-blur-sm",
         ok ? "bg-black/60 text-white/90" : "bg-warn/90 font-semibold text-black",
       )}
-      title={ok ? "Board distance and tilt" : `Aim for ${lo}–${hi} mm`}
+      title={ok ? "Board distance and tilt" : `Aim for ${lo}–${hi}\u202fmm`}
     >
-      {d} mm{tilt !== null ? ` · ${tilt}°` : ""}
+      {d}&#8239;mm{tilt !== null ? ` · ${tilt}°` : ""}
     </span>
   );
 }
@@ -237,7 +237,7 @@ export function Stage({ kind, heatmap }: { kind: CalibKind; heatmap: boolean }) 
       <div className="absolute inset-0 flex flex-col items-center justify-center">
         {box.w > 40 ? (
           <div className="flex gap-3">
-            <CalibImage camera="calib_left" kind={kind} label={stereo ? "Left camera" : "Left camera, rectified"} primary size={box} heatmap={heatmap} />
+            <CalibImage camera="calib_left" kind={kind} label="Left camera" primary size={box} heatmap={heatmap} />
             {stereo ? <CalibImage camera="calib_right" kind={kind} label="Right camera" primary={false} size={box} heatmap={heatmap} /> : null}
           </div>
         ) : null}

@@ -5,7 +5,7 @@
  */
 import { BookmarkPlus, ChevronDown, Play, RefreshCw, ScrollText, Trash } from "lucide-react";
 import { useId, useState } from "react";
-import type { ProcessState, Recipe, RecipeOp, RecipeScope, Scan } from "../../api/types";
+import type { ProcessState, Recipe, RecipeScope, Scan } from "../../api/types";
 import { Badge } from "../../components/ui/Badge";
 import { Button, IconButton } from "../../components/ui/Button";
 import { ConfirmDialog, Dialog } from "../../components/ui/Dialog";
@@ -13,50 +13,17 @@ import { Skeleton } from "../../components/ui/Feedback";
 import { TextInput } from "../../components/ui/Form";
 import { Callout } from "../../components/ui/Layout";
 import { Menu } from "../../components/ui/Popover";
-import { fmtFixed, fmtInt } from "../../lib/format";
+import { fmtInt, fmtMm } from "../../lib/format";
+import { historyLabel, opChip, settingsChips } from "../../lib/recipes";
 import { stageBlock } from "../../lib/keepMode";
-import { QUALITY_TEXT, normalizeQuality, qualityName } from "../../lib/quality";
+import { qualityName } from "../../lib/quality";
 import { cn } from "../../lib/util";
 import { useProcess } from "../../store/process";
 import { useRecipes } from "../../store/recipes";
 import { toast } from "../../store/toasts";
 import { Help, Panel } from "./bits";
 
-const n = (v: unknown): number | null => (typeof v === "number" && Number.isFinite(v) ? v : null);
-
-/** One short chip per recipe step: "Floaters < 5 mm", "Holes ≤ 10 mm", "Smooth 50 %". */
-export function opChip(o: RecipeOp): string {
-  const p = o.params ?? {};
-  switch (o.op) {
-    case "remove_floaters":
-      if (p.keep_largest_only) return "Largest piece only";
-      if (n(p.min_size_mm) !== null) return `Floaters < ${fmtFixed(n(p.min_size_mm), 0)} mm`;
-      if (n(p.min_triangles) !== null) return `Floaters < ${fmtInt(n(p.min_triangles))} tri`;
-      return "Remove floaters";
-    case "fill_holes":
-      return n(p.max_hole_mm) !== null ? `Holes ≤ ${fmtFixed(n(p.max_hole_mm), 0)} mm` : "Fill holes";
-    case "smooth":
-      return `${p.method === "bilateral" ? "Smooth, keep edges" : "Smooth"}${n(p.strength) !== null ? ` ${Math.round(n(p.strength)! * 100)} %` : ""}`;
-    case "decimate":
-      if (n(p.ratio) !== null) return `Simplify ${Math.round(n(p.ratio)! * 100)} %`;
-      if (n(p.target_triangles) !== null) return `Simplify ${fmtInt(n(p.target_triangles))} tri`;
-      return "Simplify";
-    case "remove_table":
-      return n(p.margin_mm) !== null ? `No table (${fmtFixed(n(p.margin_mm), n(p.margin_mm)! % 1 ? 1 : 0)} mm margin)` : "No table";
-    default:
-      return String(o.op);
-  }
-}
-
-function settingsChips(r: Recipe): string[] {
-  const s = r.settings;
-  return [
-    QUALITY_TEXT[normalizeQuality(s.quality) ?? "standard"].label,
-    s.straighten === "off" ? "No straighten" : "Straighten",
-    s.refine === "off" ? "No laser refine" : "Laser refine",
-    s.voxel_mm !== null ? `${fmtFixed(s.voxel_mm, s.voxel_mm < 1 ? 1 : 0)} mm voxels` : "Auto voxels",
-  ];
-}
+// U8 / U13: the chips' words live in lib/recipes.ts (tested)
 
 function RecipeRow({
   recipe,
@@ -221,9 +188,9 @@ function SaveRecipeDialog({ open, onClose, pid, sid, state }: { open: boolean; o
               Stages: {qualityName(state.stages.track.quality) ?? "standard quality"},{" "}
               {state.stages.straighten.state === "skipped" ? "no straightening" : "straighten"},{" "}
               {state.stages.refine.state === "done" || state.stages.refine.state === "skipped" ? "refine with lasers" : "no laser refine"}
-              {state.stages.fuse.voxel_mm !== null ? `, ${fmtFixed(state.stages.fuse.voxel_mm, 1)} mm voxels` : ""}
+              {state.stages.fuse.voxel_mm !== null ? `, mesh detail ${fmtMm(state.stages.fuse.voxel_mm, 1)}` : ""}
             </li>
-            <li>{kept.length ? `${kept.length} edit${kept.length === 1 ? "" : "s"}: ${kept.map((e) => e.label).join(", ")}` : "No edits"}</li>
+            <li>{kept.length ? `${kept.length} edit${kept.length === 1 ? "" : "s"}: ${kept.map((e) => historyLabel(e.label)).join(", ")}` : "No edits"}</li>
           </ul>
           {dropped ? (
             <p className="mt-1.5 text-subtle">
@@ -316,7 +283,10 @@ export function RecipesPanel({
         confirmLabel="Delete recipe"
         tone="danger"
         onConfirm={async () => {
-          if (deleting && (await remove(deleting))) toast.success(`Deleted “${deleting.name}”`);
+          if (!deleting) return;
+          const ok = await remove(deleting);
+          if (ok) toast.success(`Deleted “${deleting.name}”`);
+          return ok; // U6: a failed delete keeps the dialog open
         }}
       >
         Scans you already processed with it keep their meshes and history.
@@ -327,7 +297,7 @@ export function RecipesPanel({
         title={confirm ? (confirm.scope === "all" ? `Re-run everything with “${confirm.recipe.name}”?` : `Replace the edits with “${confirm.recipe.name}”?`) : ""}
         confirmLabel={confirm?.scope === "all" ? "Re-run everything" : "Replace the edits"}
         onConfirm={async () => {
-          if (confirm) await applyRecipe(pid, sid, confirm.recipe, confirm.scope);
+          if (confirm) return applyRecipe(pid, sid, confirm.recipe, confirm.scope);
         }}
       >
         {confirm?.scope === "all"

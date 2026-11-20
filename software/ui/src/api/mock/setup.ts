@@ -405,7 +405,7 @@ export class MockSetup {
       ? [
           [0.18, "Opening the simulated stereo camera…"],
           [0.62, "Hold the scanner still for 2 s while the IMU is measured"],
-          [0.9, "Checking the simulated emitters…"],
+          [0.9, "Skipping the lasers (simulator)"],
           [1, "Writing the results…"],
         ]
       : [
@@ -414,7 +414,7 @@ export class MockSetup {
           [0.4, "Hold the scanner still for 3 s while the frame rate and the IMU are measured"],
           ...(pico
             ? ([
-                [0.47, "Point the scanner at a wall 20–40 cm away. The lasers are Class 3R: never look into them"],
+                [0.47, "Point the scanner at a wall 200–400 mm away. The lasers are Class 3R: never look into them"],
                 [0.55, "Vertical line laser on for 1 s: look for the line on the wall"],
                 [0.63, "Horizontal line laser on for 1 s: look for the line on the wall"],
                 [0.71, "Dot projector on for 1 s: look for the dots on the wall"],
@@ -451,7 +451,7 @@ export class MockSetup {
       checks = [
         C("camera", "PASS", "Simulated stereo camera: 2 × 1280×800 at 30 fps"),
         C("camera image", "PASS", "Rendered board scene, left and right differ"),
-        C("pico", "SKIP", "The simulator has no Pico: emitters and trigger are simulated"),
+        C("pico", "SKIP", "The simulator has no control board (Pico): the lasers and the trigger are simulated"),
         C("imu values", "PASS", "Synthesized IMU: 9.81 m/s² at rest, 416 Hz"),
         C("emitters", "SKIP", "Simulated lasers and dots are always available"),
         C("trigger", "SKIP", "The simulator has no trigger: use Space instead"),
@@ -664,7 +664,7 @@ export class MockSetup {
     const notes: string[] = [];
     const info = (summary: string): PartInfo => ({ when, summary, session });
     if (kind === "stereo") {
-      const dropped = [d.parts.lasers ? "laser planes" : "", d.parts.imu ? "IMU calibration" : ""].filter(Boolean);
+      const dropped = [d.parts.lasers ? "laser lines" : "", d.parts.imu ? "IMU calibration" : ""].filter(Boolean);
       if (dropped.length)
         notes.push(
           `A new stereo calibration invalidates the ${dropped.join(" and the ")}: ${dropped.length > 1 ? "they were" : "it was"} dropped. Redo the ${[

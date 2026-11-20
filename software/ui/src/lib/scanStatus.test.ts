@@ -1,0 +1,18 @@
+/** Checks for why a scan failed, said on the project page (UX_PLAN U38, `npm test`). */
+import { failedLine } from "./scanStatus.ts";
+
+let checks = 0;
+function check(ok: boolean, what: string): void {
+  checks++;
+  if (!ok) throw new Error(`check failed: ${what}`);
+}
+
+check(failedLine("Too few frames tracked.", true) === "Failed: too few frames tracked. Make mesh again, or at Preview quality.", "the reason, then what to do");
+check(failedLine("too few frames tracked", false) === "Failed: too few frames tracked.", "no recording to make it from: no advice");
+// found in review: a reason that starts with an abbreviation keeps its capitals ("iMU" was shown)
+check(failedLine("IMU data is missing.", false) === "Failed: IMU data is missing.", failedLine("IMU data is missing.", false));
+check(failedLine("A frame could not be read", false) === "Failed: a frame could not be read.", "a one-letter first word is lowered");
+check(failedLine(null, true) === "Meshing failed. Make mesh again, or at Preview quality.", "no reason given");
+check(failedLine("  ", false) === "Meshing failed.", "an empty reason");
+
+console.log(`scanStatus.test: ${checks} checks passed`);

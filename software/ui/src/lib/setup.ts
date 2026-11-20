@@ -40,49 +40,49 @@ export const STEP_META: Record<SetupPage, StepMeta> = {
     title: "Connect",
     why: "Studio needs to see the stereo camera and the Pico before anything else.",
     icon: Usb,
-    time: "1 min",
+    time: "1\u202fmin",
     minutes: 1,
   },
   selftest: {
     title: "Self-test",
     why: "A one-minute hardware check catches wiring and camera problems before they spoil a calibration.",
     icon: ListChecks,
-    time: "1 min",
+    time: "1\u202fmin",
     minutes: 1,
   },
   print: {
     title: "Print targets",
     why: "Calibration measures against the printed board, so the print must be exactly the right size.",
     icon: Printer,
-    time: "5 min",
+    time: "5\u202fmin",
     minutes: 5,
   },
   stereo: {
     title: "Stereo",
-    why: "Lens and baseline calibration: the base of every millimetre the scanner measures.",
+    why: "Calibrates the two cameras: the base of every millimetre the scanner measures.",
     icon: Aperture,
-    time: "5 min",
+    time: "5\u202fmin",
     minutes: 5,
   },
   lasers: {
     title: "Lasers",
-    why: "The laser planes give precise reference points, even on black and glossy paint.",
+    why: "The laser lines give precise reference points, even on black and glossy paint.",
     icon: Zap,
-    time: "3 min",
+    time: "3\u202fmin",
     minutes: 3,
   },
   imu: {
-    title: "IMU",
-    why: "The gyro keeps tracking steady on fast sweeps and plain, featureless surfaces.",
+    title: "Motion sensor (IMU)", // U8
+    why: "The motion sensor keeps tracking steady on fast sweeps and plain surfaces.",
     icon: Orbit,
-    time: "1 min",
+    time: "1\u202fmin",
     minutes: 1,
   },
   check: {
     title: "Check",
-    why: "A two-minute check that the saved calibration still holds after a knock or a hot day in the car.",
+    why: "A two-minute check that the saved calibration is still valid after a knock or a hot day in the car.",
     icon: ClipboardCheck,
-    time: "2 min",
+    time: "2\u202fmin",
     minutes: 2,
   },
   done: {
@@ -134,11 +134,15 @@ export function firstUnfinished(setup: SetupState | null | undefined): SetupPage
   return "done";
 }
 
+/**
+ * How far setup is: `done` of `total`, counting the steps that count (U27: an optional step that was
+ * skipped, the Print step, is in neither, so "All set" never stands beside "6/7").
+ */
 export function setupProgress(setup: SetupState | null | undefined): { done: number; total: number; required: number } {
   if (!setup) return { done: 0, total: STEP_ORDER.length, required: STEP_ORDER.length };
-  const done = setup.steps.filter((s) => s.state === "done").length;
-  const required = setup.steps.filter((s) => s.state !== "optional").length;
-  return { done, total: setup.steps.length, required };
+  const counted = setup.steps.filter((s) => s.state !== "optional");
+  const done = counted.filter((s) => s.state === "done").length;
+  return { done, total: counted.length, required: counted.length };
 }
 
 /** Minutes left for the steps still to do, for "about N minutes". */
@@ -162,7 +166,7 @@ export const KIND_META: Record<CalibKind, KindMeta> = {
   stereo: {
     title: "Stereo calibration",
     how: "Hold the glued board in front of the scanner and move it around: every corner and edge of the image, tilted left, right, up and down, near and far.",
-    needs: "The printed board, glued flat to glass. The emitters stay off.",
+    needs: "The printed board, glued flat to glass. The lasers and dots stay off.",
     minLabel: "views",
     distance: [200, 500],
   },
@@ -170,12 +174,12 @@ export const KIND_META: Record<CalibKind, KindMeta> = {
     title: "Laser calibration",
     how: "Hold the board so every laser line crosses its white margin. Change the distance and the tilt between views.",
     needs: "The board and the stereo calibration. The line lasers switch on.",
-    minLabel: "poses",
+    minLabel: "views",
     distance: [150, 450],
   },
   imu: {
     title: "IMU calibration",
-    how: "Put the board where the camera sees it. Hold the scanner still for 2 s, then rotate it slowly about all three axes.",
+    how: "Put the board where the camera sees it. Hold the scanner still for 2\u202fs, then rotate it slowly about all three axes.",
     needs: "The board in view and the stereo calibration.",
     minLabel: "recording",
     distance: [150, 600],

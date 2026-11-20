@@ -58,8 +58,8 @@ export function fmtDev(mm: number | null | undefined, signed = true): string {
   if (mm === null || mm === undefined || !Number.isFinite(mm)) return "–";
   const a = Math.abs(mm);
   const text = a < 0.1 ? a.toFixed(3) : a < 10 ? a.toFixed(2) : a.toFixed(1);
-  if (!signed || Number(text) === 0) return `${text} mm`;
-  return `${mm > 0 ? "+" : MINUS}${text} mm`;
+  if (!signed || Number(text) === 0) return `${text}\u202fmm`;
+  return `${mm > 0 ? "+" : MINUS}${text}\u202fmm`;
 }
 
 /** What the cursor is over: "+0.12 mm (outside)", "−0.30 mm (inside)", "not on the reference", "not measured". */
@@ -82,8 +82,8 @@ export function stateAt(states: ArrayLike<number>, a: number, b: number, c: numb
 /** "155 mm", "3,937 mm", "0.42 mm": a size across. */
 export function fmtSize(mm: number | null | undefined): string {
   if (mm === null || mm === undefined || !Number.isFinite(mm)) return "–";
-  if (mm >= 100) return `${Math.round(mm).toLocaleString("en-US")} mm`;
-  return `${mm >= 10 ? mm.toFixed(1) : mm >= 1 ? mm.toFixed(2) : mm.toPrecision(2)} mm`;
+  if (mm >= 100) return `${Math.round(mm).toLocaleString("en-US")}\u202fmm`;
+  return `${mm >= 10 ? mm.toFixed(1) : mm >= 1 ? mm.toFixed(2) : mm.toPrecision(2)}\u202fmm`;
 }
 
 export type UnitsChoice = {
@@ -138,7 +138,7 @@ export const ALIGN_METHODS: { value: AlignMethod; label: string; help: string }[
     label: "On the part's axes",
     help:
       "No fit at all: the scan's coordinate system (built from three kept fits) is put onto the reference's own axes, so the reference must be modelled in the part's " +
-      "axes. An overall error then shows where it is: a part 0.5 mm too long reads 0.5 mm at the far end. Needs a current coordinate system.",
+      "axes. An overall error then shows where it is: a part 0.5\u202fmm too long reads 0.5\u202fmm at the far end. Needs a current coordinate system.",
   },
   {
     value: "points",
@@ -162,8 +162,8 @@ export function alignmentLines(al: ReferenceAlignment): { title: string; verdict
 /** "87 % within ± 0.3 mm (8.2 % above, 5.2 % below)", from the shares (the engine's sentence says the same). */
 export function toleranceSentence(a: { share_within: number | null; share_above: number | null; share_below: number | null; tolerance_mm: number }): string {
   if (a.share_within === null) return "Nothing of the scan could be compared with the reference.";
-  const pct = (x: number, d: number) => `${(x * 100).toFixed(d)} %`;
-  let s = `${pct(a.share_within, 0)} within ± ${fmtTolerance(a.tolerance_mm)} mm`;
+  const pct = (x: number, d: number) => `${(x * 100).toFixed(d)}\u202f%`;
+  let s = `${pct(a.share_within, 0)} within ± ${fmtTolerance(a.tolerance_mm)}\u202fmm`;
   if (a.share_above || a.share_below) s += ` (${pct(a.share_above ?? 0, 1)} above, ${pct(a.share_below ?? 0, 1)} below)`;
   return s;
 }
@@ -176,7 +176,7 @@ export function coverageLines(c: ComparisonCoverage, nearMm = 3): string[] {
   const out: string[] = [];
   const off = c.off_reference_share ?? 0;
   const nm = c.not_measured_share ?? 0;
-  if (off > 0) out.push(`${fmtShare(off)} of the scan is not on the reference (a table, a clamp, or surface more than ${nearMm} mm from it): grey, and in no share.`);
+  if (off > 0) out.push(`${fmtShare(off)} of the scan is not on the reference (a table, a clamp, or surface more than ${nearMm}\u202fmm from it): grey, and in no share.`);
   if (nm > 0) out.push(`${fmtShare(nm)} of the scan was not measured (filled holes, or no usable uncertainty): striped, and in no share.`);
   if (c.uncovered_share !== null && c.uncovered_share > 0)
     out.push(`${fmtShare(c.uncovered_share)} of the reference's surface was not scanned: nothing is said about it.`);

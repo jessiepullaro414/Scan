@@ -91,7 +91,9 @@ export function pendingFromCheck(args: {
     for (const i of idx) {
       const w = why.areas[i];
       if (poses.length >= MAX_PLACES) break;
-      if (w?.view.ok && w.view.pose && !seen.has(i)) poses.push({ area: i, kind: "area", text: `For area ${i + 1}: ${w.view.text}`, pose: w.view.pose });
+      // U23: the same sentence form as the plan's places ("Area 2: about 250 mm away, straight on. It sees 95 % of it.")
+      if (w?.view.ok && w.view.pose && !seen.has(i))
+        poses.push({ area: i, kind: "area", text: `Area ${i + 1}: ${poseShort(w.view.pose)}.${typeof w.view.share_seen === "number" ? ` It sees ${fmtShare(w.view.share_seen)} of it.` : ""}`, pose: w.view.pose });
     }
   return {
     projectId,
@@ -137,8 +139,8 @@ function sameValues(a: PresetValues, b: PresetValues): boolean {
 /** "2 areas, 1.4 cm² in all, at ± 0.3 mm". */
 export function areasWords(areas: readonly Pick<PendingArea, "area_mm2">[], tolerance: number): string {
   const tot = areas.reduce((s, a) => s + a.area_mm2, 0);
-  if (!areas.length) return `No area picked: the pass adds whatever it sees (checked at ± ${fmtTolerance(tolerance)} mm).`;
-  return `${areas.length === 1 ? "1 area" : `${areas.length} areas`}, ${fmtAreaSize(tot)} in all, at ± ${fmtTolerance(tolerance)} mm.`;
+  if (!areas.length) return `No area picked: the pass adds whatever it sees (checked at ± ${fmtTolerance(tolerance)}\u202fmm).`;
+  return `${areas.length === 1 ? "1 area" : `${areas.length} areas`}, ${fmtAreaSize(tot)} in all, at ± ${fmtTolerance(tolerance)}\u202fmm.`;
 }
 
 /** A place to scan from in words: its own sentence, else the distance and angle. */
@@ -247,7 +249,7 @@ const change = (a: number, b: number): string => {
  * surface.
  */
 export function compareSentence(c: PassCompare): string {
-  const tol = `± ${fmtTolerance(c.tolerance_mm)} mm`;
+  const tol = `± ${fmtTolerance(c.tolerance_mm)}\u202fmm`;
   if (c.common) {
     const { before_ok: a, after_ok: b, found_share: f } = c.common;
     if (a === null || b === null) return `The scans carry no confidence, so the share that meets ${tol} can't be told.`;

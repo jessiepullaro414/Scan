@@ -32,7 +32,7 @@ function station(position: number, flush: number | null, sigma: number | null, t
     bridged: false,
     gap_trusted: false,
     flush_trusted: trusted && flush !== null,
-    notes: trusted ? [] : ["The flush differs from its neighbours' by +0.90 mm."],
+    notes: trusted ? [] : ["The flush differs from its neighbours' by +0.90\u202fmm."],
     gap_by_rule: {},
     n_points_a: 20,
     n_points_b: 20,
@@ -132,8 +132,8 @@ const box = { width: 300, height: 120, left: 34, right: 8, top: 8, bottom: 18 };
   const w = flushWords(record(st));
   check(w.mean === "+0.84", `the mean first, to the ±'s decimals: ${w.mean}`);
   check(w.sigma === "0.03", `the typical ±: ${w.sigma}`);
-  check(w.lowest === "+0.78" && w.lowestAt === "at +27 mm along the seam", `the lowest and where: ${w.lowest} ${w.lowestAt}`);
-  check(w.highest === "+0.90" && w.highestAt === "at 0 mm along the seam", `the highest and where: ${w.highest} ${w.highestAt}`);
+  check(w.lowest === "+0.78" && w.lowestAt === "at +27\u202fmm along the seam", `the lowest and where: ${w.lowest} ${w.lowestAt}`);
+  check(w.highest === "+0.90" && w.highestAt === "at 0\u202fmm along the seam", `the highest and where: ${w.highest} ${w.highestAt}`);
   check(!!w.proud && w.proud.startsWith("Panel B") && w.proud.includes("0.84"), `B stands proud: ${w.proud}`);
   check(w.trusted === "4 of 4 stations trusted", w.trusted);
   check(typicalSigma(record(st)) === 0.03, "the median ±");

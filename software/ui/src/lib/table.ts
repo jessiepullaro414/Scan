@@ -22,11 +22,11 @@ export const TABLE_HELP: { title: string; lines: { label: string; text: string }
     },
     {
       label: "What it keeps",
-      text: "Every face turned more than 45° from the table, at any height: the part's walls stay right down to the table. A thin part lying flat (a shim, a gasket, a sheet) stays when it stands at a steady height clearly above the table round it, flat and parallel to it, 20 mm across or more. Loose bits that are not the table stay for Remove floaters.",
+      text: "Every face turned more than 45° from the table, at any height: the part's walls stay right down to the table. A thin part lying flat (a shim, a gasket, a sheet) stays when it stands at a steady height clearly above the table round it, flat and parallel to it, 20\u202fmm across or more. Loose bits that are not the table stay for Remove loose bits.",
     },
     {
       label: "What it costs",
-      text: "Where the part meets the table the scan's surface is rounded: its lower half goes with the table (on the simulated bracket about 0.1 mm² per mm of the part's edge, all within 1 mm of the table). A thin part kept loses at most about 0.3 mm of its rim. A surface that meets the table at less than 45° (a low dome, a chamfer) loses its bottom margin.",
+      text: "Where the part meets the table the scan's surface is rounded: its lower half goes with the table (on the simulated bracket about 0.1\u202fmm² per mm of the part's edge, all within 1\u202fmm of the table). A thin part kept loses at most about 0.3\u202fmm of its rim. A surface that meets the table at less than 45° (a low dome, a chamfer) loses its bottom margin.",
     },
     {
       label: "Its limit",
@@ -40,7 +40,7 @@ export const TABLE_HELP: { title: string; lines: { label: string; text: string }
 };
 
 export const TABLE_MARGIN_HELP =
-  "How far above the table a face that faces the table's way still counts as the table. 1 mm keeps the most of the part on the simulated scans; more takes more of a sloped part's foot.";
+  "How far above the table a face that faces the table's way still counts as the table. 1\u202fmm keeps the most of the part on the simulated scans; more takes more of a sloped part's foot.";
 
 /** The edit's label as the engine writes it in the history. */
 export function tableEditLabel(faces: number): string {
@@ -50,7 +50,7 @@ export function tableEditLabel(faces: number): string {
 /** 2404.3 cm² → "2,404 cm²", 3.2 → "3.2 cm²". */
 export function fmtArea(mm2: number): string {
   const cm2 = mm2 / 100;
-  return `${cm2 >= 100 ? fmtInt(Math.round(cm2)) : cm2 >= 10 ? cm2.toFixed(0) : cm2.toFixed(1)} cm²`;
+  return `${cm2 >= 100 ? fmtInt(Math.round(cm2)) : cm2 >= 10 ? cm2.toFixed(0) : cm2.toFixed(1)}\u202fcm²`;
 }
 
 /** What the preview found, in one or two short sentences for the panel. */
@@ -61,13 +61,13 @@ export function tableFacts(p: TablePreview): { head: string; detail: string } {
       ? "Nothing of the scan would be left."
       : p.lowest_mm <= p.band_mm
         ? "The part is kept right down to the table."
-        : `The part is kept from ${p.lowest_mm.toFixed(1)} mm above the table.`;
+        : `The part is kept from ${p.lowest_mm.toFixed(1)}\u202fmm above the table.`;
   const pct = p.triangles > 0 ? Math.round((p.n_faces / p.triangles) * 100) : 0;
   const thin = (p.raised ?? []).filter((r) => r.kept).length;
   const thinText = thin ? ` ${thin === 1 ? "A thin part lying flat stays" : `${thin} thin parts lying flat stay`}.` : "";
   return {
-    head: `${fmtInt(p.n_faces)} faces (${fmtArea(p.area_mm2)}, ${pct} % of the mesh) are the table.`,
-    detail: `The table holds ${share} % of the scan and is flat to ${p.flatness_mm.toFixed(2)} mm. ${kept}${thinText}`,
+    head: `${fmtInt(p.n_faces)} faces (${fmtArea(p.area_mm2)}, ${pct}\u202f% of the mesh) are the table.`,
+    detail: `The table holds ${share}\u202f% of the scan and is flat to ${p.flatness_mm.toFixed(2)}\u202fmm. ${kept}${thinText}`,
   };
 }
 
@@ -77,7 +77,7 @@ export function validMargin(v: number): number | null {
 }
 /** A raised area in words: "30 mm across, 0.21 mm high, at (12, -7, 300) mm". */
 export function areaText(r: TableRaised): string {
-  return `${Math.round(r.size_mm)} mm across, ${r.height_mm.toFixed(2)} mm high, at (${r.centre.map((x) => Math.round(x)).join(", ")}) mm`;
+  return `${Math.round(r.size_mm)}\u202fmm across, ${r.height_mm.toFixed(2)}\u202fmm high, at (${r.centre.map((x) => String(Math.round(x) || 0).replace(/^-/, "−")).join(", ")}) mm`;
 }
 
 /** A raised area the preview draws on the model: kept (a thin part, or kept by the user) or warned (goes unless kept). */

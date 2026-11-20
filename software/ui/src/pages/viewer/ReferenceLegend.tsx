@@ -65,9 +65,9 @@ export function ReferenceLegend({ state, tolerance, answer, note, className }: {
             Not measured: not compared
           </div>
           {answer ? <div className="mt-1.5 font-medium text-fg">{toleranceSentence(answer)}</div> : null}
-          <div className="mt-1 text-subtle">The strongest colours are at the tolerance (± {lim} mm): set it in the Compare panel.</div>
+          <div className="mt-1 text-subtle">The strongest colours are at the tolerance (± {lim}&#8239;mm): set it in the Compare panel.</div>
           <span className="sr-only">
-            Blue: inside the reference by up to {lim} mm. Light grey: on it. Red: outside it by up to {lim} mm. Dark grey: not on the reference. Striped: not measured.
+            Blue: inside the reference by up to {lim}&#8239;mm. Light grey: on it. Red: outside it by up to {lim}&#8239;mm. Dark grey: not on the reference. Striped: not measured.
           </span>
         </>
       ) : (

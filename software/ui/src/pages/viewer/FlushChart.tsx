@@ -76,8 +76,8 @@ export function FlushChart({ record }: { record: FlushRecord }) {
       {h ? (
         <div className="pointer-events-none absolute left-10 top-1 max-w-[250px] rounded-md border border-line bg-panel/95 px-2 py-1 text-[11px] leading-4 text-fg shadow-md">
           <div className="font-mono tnum">
-            {Math.round(h.position_mm)} mm:{" "}
-            {h.flush_mm === null ? "no reading" : `${h.flush_mm > 0 ? "+" : h.flush_mm < 0 ? "−" : ""}${Math.abs(h.flush_mm).toFixed(d)}${h.flush_sigma_mm !== null ? ` ± ${h.flush_sigma_mm.toFixed(d)}` : ""} mm`}
+            {Math.round(h.position_mm)}&#8239;mm:{" "}
+            {h.flush_mm === null ? "no reading" : `${h.flush_mm > 0 ? "+" : h.flush_mm < 0 ? "−" : ""}${Math.abs(h.flush_mm).toFixed(d)}${h.flush_sigma_mm !== null ? ` ± ${h.flush_sigma_mm.toFixed(d)}` : ""}\u202fmm`}
           </div>
           {!h.flush_trusted ? <div className="text-warn">Not trusted{h.notes.length ? `: ${h.notes.join(" ")}` : ""}</div> : null}
         </div>

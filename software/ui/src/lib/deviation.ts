@@ -132,7 +132,7 @@ export function fmtLimit(mm: number): string {
 export function fmtMove(mm: number | null | undefined): string {
   if (mm === null || mm === undefined || !Number.isFinite(mm)) return "–";
   const a = Math.abs(mm);
-  return `${a < 0.1 ? a.toFixed(3) : a < 10 ? a.toFixed(2) : a.toFixed(1)} mm`;
+  return `${a < 0.1 ? a.toFixed(3) : a < 10 ? a.toFixed(2) : a.toFixed(1)}\u202fmm`;
 }
 
 const MINUS = "−";
@@ -147,8 +147,8 @@ export function deviationReadout(v: number | null | undefined): string {
   const a = Math.abs(v);
   const digits = a < 0.1 ? 3 : a < 10 ? 2 : 1;
   const text = a.toFixed(digits);
-  if (Number(text) === 0) return `${(0).toFixed(digits)} mm (unchanged)`;
-  return v > 0 ? `+${text} mm (outward)` : `${MINUS}${text} mm (inward)`;
+  if (Number(text) === 0) return `${(0).toFixed(digits)}\u202fmm (unchanged)`;
+  return v > 0 ? `+${text}\u202fmm (outward)` : `${MINUS}${text}\u202fmm (inward)`;
 }
 
 /**

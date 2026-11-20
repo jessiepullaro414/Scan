@@ -298,7 +298,7 @@ export function isMergeResult(r: unknown): r is MergeResult {
 export const SETUP_TEXT = {
   same: "The table the scans share helps to line them up, and it stays in the merged scan.",
   moved:
-    "Only the part itself is matched. Each scan's table is found on its own mesh and left out of the merged scan; the part is kept right down to the table, and thin parts lying flat on it are kept. A part thinner than the scan can tell from its table (about 0.2 mm) goes with the table; the merge says what it left out.",
+    "Only the part itself is matched. Each scan's table is found on its own mesh and left out of the merged scan; the part is kept right down to the table, and thin parts lying flat on it are kept. A part thinner than the scan can tell from its table (about 0.2\u202fmm) goes with the table; the merge says what it left out.",
 } as const;
 
 /** What a merge left out of each scan's table, and what to look at: one line per scan ("“Top”: …"), and the warnings. */
@@ -314,7 +314,7 @@ export const pairsDisagree = (r: Pick<AlignResult, "pairs_rms_mm">): boolean => 
 
 export type Figure = { label: string; value: string; note?: string; warn?: boolean };
 
-const mm = (v: number, digits = 2) => `${v.toFixed(digits)} mm`;
+const mm = (v: number, digits = 2) => `${v.toFixed(digits)} mm`;
 
 /** Which tags a start from tags used, e.g. "tags 2, 4 and 5 seen by both scans; tag 3 left out (moved?)". */
 export function tagsNote(t: TagStart | null | undefined): string | undefined {
@@ -327,13 +327,14 @@ export function tagsNote(t: TagStart | null | undefined): string | undefined {
 /** An alignment's figures for the small list under its verdict. */
 export function alignFigures(r: AlignResult): Figure[] {
   const out: Figure[] = [
-    { label: "Overlap", value: `${Math.round(100 * r.overlap)} %`, note: "of the smaller scan lies within 1 mm of the other" },
-    { label: "Distance apart", value: typeof r.rmse_mm === "number" ? `${mm(r.rmse_mm)} RMS` : "–", note: "where the two overlap" },
+    { label: "Overlap", value: `${Math.round(100 * r.overlap)}\u202f%`, note: "of the smaller scan lies within 1\u202fmm of the other" },
+    // U36: "typically 0.25 mm where they overlap"; the help in brackets, apart from the count
+    { label: "Distance apart", value: typeof r.rmse_mm === "number" ? `typically ${mm(r.rmse_mm)}` : "–", note: "where they overlap" },
     r.start === "given"
       ? { label: "Start", value: "From your points" }
       : r.start === "tags"
         ? { label: "Start", value: "From the tags", note: tagsNote(r.tags) }
-        : { label: "Starting guesses", value: `${r.agree} of ${r.candidates} agree`, note: "each one starts from a different rough fit" },
+        : { label: "Starting guesses", value: `${r.agree} of ${r.candidates} agree`, note: "(each starts from a different rough fit)" },
   ];
   if (typeof r.pairs_rms_mm === "number") out.push({ label: "Your points", value: `agree to ${mm(r.pairs_rms_mm, 1)}`, warn: pairsDisagree(r) });
   if (r.same_setup) out.push({ label: "Shared table", value: r.used_support ? "Used for height and tilt" : "Not used: the two scans' tables did not line up" });
@@ -376,8 +377,8 @@ export function pairUseText(used: PairUse): string {
 
 /** One pair in a short line: “with “Top”: accepted, 76 % overlap, in the chain”. `other`: the other scan's name. */
 export function pairLine(p: AlignAllPair, other: string): string {
-  const parts = [`with “${other}”: ${p.accepted ? "accepted" : "not accepted"}`, `${Math.round(100 * p.overlap)} % overlap`, pairUseText(p.used)];
-  if (typeof p.disagree_mm === "number" && (p.used === "loop" || p.used === "left out")) parts.push(`disagrees by ${p.disagree_mm.toFixed(2)} mm`);
+  const parts = [`with “${other}”: ${p.accepted ? "accepted" : "not accepted"}`, `${Math.round(100 * p.overlap)}\u202f% overlap`, pairUseText(p.used)];
+  if (typeof p.disagree_mm === "number" && (p.used === "loop" || p.used === "left out")) parts.push(`disagrees by ${p.disagree_mm.toFixed(2)}\u202fmm`);
   return parts.join(", ");
 }
 
@@ -411,7 +412,7 @@ export function alignAllFigures(r: AlignAllResult): Figure[] {
   const out: Figure[] = [{ label: "Placed", value: `${r.placed.length} of ${n} scans`, warn: r.unplaced.length > 0 }];
   const checked = r.pairs.filter((p) => typeof p.disagree_mm === "number" && p.used !== "");
   if (r.loops > 0 && checked.length) // a chain alone agrees with itself: nothing to show
-    out.push({ label: "Worst disagreement", value: `${r.worst_link_mm.toFixed(2)} mm`, note: "between a pair and where the scans were placed", warn: needsALook(r) });
+    out.push({ label: "Worst disagreement", value: `${r.worst_link_mm.toFixed(2)}\u202fmm`, note: "between a pair and where the scans were placed", warn: needsALook(r) });
   const leftOut = r.pairs.filter((p) => p.used === "left out").length;
   if (leftOut) out.push({ label: "Left out", value: `${leftOut} pair${leftOut === 1 ? "" : "s"}`, note: "that did not fit the others" });
   if (r.same_setup) {

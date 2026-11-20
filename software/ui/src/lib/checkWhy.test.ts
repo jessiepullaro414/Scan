@@ -4,7 +4,7 @@
  * TypeScript that Node runs as it is (type stripping), no test framework: a failed check throws.
  */
 import type { CheckPlanPose, CheckPose, CheckResult, CheckWhy, CheckWhyArea } from "../api/types";
-import { alsoWords, planTitle, planWords, poseAxes, poseFrame, poseShort, reasonWords, scannerLines, sideSketch, unknownWords, whyFits } from "./checkWhy.ts";
+import { alsoWords, placeLetter, planTitle, planWords, poseAxes, poseFrame, poseShort, REASON_TITLE, reasonWords, scannerLines, sideSketch, unknownWords, viewWords, whyFits } from "./checkWhy.ts";
 
 let checks = 0;
 function check(ok: boolean, what: string): void {
@@ -27,9 +27,9 @@ const ev = (o: Partial<CheckWhyArea["evidence"]> = {}): CheckWhyArea["evidence"]
 
 // ---------------------------------------------------------------- the words
 const steep = reasonWords({ reason: "steep", kind: "uncertain", evidence: ev({ view_angle_deg: 68.4 }) }, 254);
-check(steep.includes("68°") && steep.includes("square on"), "steep: the angle and what to do");
+check(steep === "Seen only at a slant (the best look was 68° from straight on). Hold the scanner straighter to it.", `steep: the angle and what to do (U22): ${steep}`);
 const far = reasonWords({ reason: "far", kind: "uncertain", evidence: ev({ distance_mm: 402.3 }) }, 254);
-check(far.includes("402 mm") && far.includes("about 254 mm"), "far: the distance and the working distance");
+check(far.includes("about 400\u202fmm away") && far.includes("about 250\u202fmm from it"), `far: the distance and the working distance, rounded to 10 mm (U22): ${far}`);
 const few = reasonWords({ reason: "few_looks", kind: "uncertain", evidence: ev({ looks: 4, looks_passing: 12 }) }, 254);
 check(few.includes("4 separate looks") && few.includes("had 12"), "few looks: the counts");
 const edge = reasonWords({ reason: "edge", kind: "uncertain", evidence: ev() }, 254);
@@ -70,10 +70,14 @@ const pose: CheckPose = {
   tilt_deg: 0,
   azimuth_deg: 0,
 };
-check(poseShort(pose) === "254 mm away, square on" && poseShort({ distance_mm: 254, tilt_deg: 19.6 }) === "254 mm away, 20° off square", "pose in words");
+check(poseShort(pose) === "about 250\u202fmm away, straight on" && poseShort({ distance_mm: 254, tilt_deg: 19.6 }) === "about 250\u202fmm away, 20° from straight on", `pose in words (U22): ${poseShort(pose)}`);
 const plan: CheckPlanPose = { area: 1, kind: "area", pose, share_seen: 0.95, border_seen: null, also_sees: [{ area: 2, share: 0.7 }, { area: 4, share: 0.2 }, { area: 5, share: 0.9 }] };
-check(planWords(plan) === "For area 2, 254 mm away, square on: it sees 95 % of it, and most of areas 3 and 6.", `plan: ${planWords(plan)}`);
-check(planWords({ ...plan, kind: "more", also_sees: [] }).startsWith("For area 2 again, from another side"), "plan: another side");
+check(planWords(plan) === "Area 2: about 250\u202fmm away, straight on. It sees 95\u202f% of it, and most of areas 3 and 6.", `plan, one sentence form (U23): ${planWords(plan)}`);
+check(viewWords(pose, 0.95) === "About 250\u202fmm away, straight on. It sees 95\u202f% of it.", `an area's own place, the same form (U23): ${viewWords(pose, 0.95)}`);
+check(viewWords(pose, null) === "About 250\u202fmm away, straight on.", "an area's own place, share unknown");
+check(placeLetter(0) === "A" && placeLetter(2) === "C" && placeLetter(5) === "F", "places lettered A, B, C (U23)");
+check(REASON_TITLE.steep === "Seen only at a slant", "the reason's title (U22)");
+check(planWords({ ...plan, kind: "more", also_sees: [] }).startsWith("Area 2 again, from another side: about"), `plan: another side: ${planWords({ ...plan, kind: "more", also_sees: [] })}`);
 // many other areas: the first four by name, the rest counted (seen in review: one place listed 29 areas)
 const many = { ...plan, also_sees: [4, 6, 21, 25, 29, 30, 31, 41, 42, 49].map((area) => ({ area, share: 0.8 })) };
 check(planWords(many).endsWith("and most of areas 5, 7, 22, 26 and 6 more."), `plan, many areas: ${planWords(many)}`);

@@ -1,4 +1,4 @@
-/** Step 2, Self-test: one job checks the camera, the Pico and IMU, the emitters and the trigger. */
+/** Step 2, Self-test: one job checks the camera, the Pico and IMU, the lasers and dots and the trigger. */
 import {
   CircleCheck,
   CircleX,
@@ -121,7 +121,8 @@ function Running({ job }: { job: Job }) {
   const msg = job.message || "Starting…";
   const instruction = isInstruction(msg);
   const trigger = /trigger/i.test(msg);
-  const laser = /laser|projector|emitter/i.test(msg);
+  // "Skipping the lasers (simulator)" turns nothing on: no laser warning for it
+  const laser = /laser|projector|emitter/i.test(msg) && !/skipping|simulat/i.test(msg);
   return (
     <div className="space-y-4" role="status" aria-live="assertive">
       <div
@@ -151,7 +152,7 @@ function Running({ job }: { job: Job }) {
       </div>
       {laser ? (
         <Callout tone="warn" icon={Zap} title="Class 3R lasers">
-          Point the scanner at a wall 20–40 cm away and never look into the beams.
+          Point the scanner at a wall 200–400&#8239;mm away and never look into the beams.
         </Callout>
       ) : null}
     </div>
@@ -195,6 +196,12 @@ export function SelfTestStep() {
         </Callout>
       ) : null}
 
+      {/* U18: the laser warning comes before the test starts, on the real scanner */}
+      {connected && !sim && !replay && !running ? (
+        <Callout tone="warn" icon={Zap} title="Class 3R lasers" className="mb-5">
+          The test turns each laser on. Point the scanner at a wall 200–400&#8239;mm away and never look into the beams.
+        </Callout>
+      ) : null}
       {running && job ? (
         <div className="mb-5">
           <Running job={job} />
@@ -208,12 +215,12 @@ export function SelfTestStep() {
         <div className="mb-5 flex flex-wrap items-center gap-4 rounded-xl border border-line bg-surface p-5 shadow-sm">
           <div className="min-w-[260px] flex-1">
             <div className="text-sm font-semibold text-fg">
-              {last ? "Run it again after any fix" : sim ? "A few seconds on the simulator" : "About a minute, with two prompts"}
+              {last ? (last.overall === "PASS" ? "Every check passed" : "Run it again after any fix") : sim ? "A few seconds on the simulator" : "About a minute, with two prompts"}
             </div>
             <p className="mt-0.5 text-sm text-muted">
               {sim
-                ? "It checks the simulated camera stream and the IMU. The Pico, the emitters and the trigger are skipped: the simulator has none."
-                : "Point the scanner at a wall 20–40 cm away. Each laser and the dot projector turns on for a second (watch the wall), then it asks you to press the trigger."}
+                ? "It checks the simulated camera stream and the motion sensor (IMU). Skipping the lasers (simulator): it has no lasers, control board or trigger to test."
+                : "Point the scanner at a wall 200–400\u202fmm away. Each laser and the dot projector turns on for a second (watch the wall), then it asks you to press the trigger."}
             </p>
           </div>
           <Button

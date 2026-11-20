@@ -18,7 +18,7 @@ import { CircleDashed, CircleExclamationPoint, Layers, RefreshCw, ScanLine, Sear
 import { useEffect, useId, useState, type ReactNode } from "react";
 import { describeError } from "../../api/http";
 import type { CheckArea, CheckPlanPose, CheckResult, CheckView, CheckWhy, CheckWhyArea } from "../../api/types";
-import { alsoWords, planTitle, planWords, REASON_TITLE, reasonWords, sideSketch, unknownWords } from "../../lib/checkWhy";
+import { alsoWords, placeLetter, planTitle, planWords, poseShort, REASON_TITLE, reasonWords, sideSketch, unknownWords, viewWords } from "../../lib/checkWhy";
 import { Button } from "../../components/ui/Button";
 import { Spinner } from "../../components/ui/Feedback";
 import { Callout } from "../../components/ui/Layout";
@@ -50,7 +50,7 @@ const STEP_MM = 0.05;
 const RESTS_ON =
   "This rests on the scan's own sigma: how much its measurements of each point scatter, and how close the point is to an edge, a gap or the border of the scan. " +
   "It knows nothing of a calibration or scale error, or of a tracking error that shifts a whole area, so the real error can be larger. " +
-  "It has been checked on simulated scans only, not on real parts. There, over 99 % of what it passed was good, and much of what it listed was fine too.";
+  "It has been checked on simulated scans only, not on real parts. There, over 99\u202f% of what it passed was good, and much of what it listed was fine too.";
 
 /** The tolerance field: type freely; Enter, the arrow keys or leaving the field set it. */
 function ToleranceField({ id, value, onChange, disabled }: { id: string; value: number; onChange: (mm: number) => void; disabled?: boolean }) {
@@ -117,7 +117,7 @@ function SideView({ view }: { view: CheckView }) {
   const pose = view.pose;
   if (!pose) return null;
   const s = sideSketch(pose.tilt_deg);
-  const tip = `Seen from the side: the scanner ${Math.round(pose.distance_mm)} mm from the area, ${pose.tilt_deg < 0.5 ? "square on to it" : `${Math.round(pose.tilt_deg)}° off square`}. The 3D view shows it in place.`;
+  const tip = `Seen from the side: the scanner ${poseShort(pose)} from the area. The 3D view shows it in place.`;
   return (
     <svg viewBox="0 0 120 76" width={120} height={76} role="img" aria-label={tip} className="shrink-0 rounded-md border border-line bg-surface-3/40">
       <title>{tip}</title>
@@ -131,7 +131,7 @@ function SideView({ view }: { view: CheckView }) {
         <circle cx={7} cy={3} r={1.6} fill={CHECK_COLOR} />
       </g>
       <text x={s.label.x} y={s.label.y} fontSize={9} fill="currentColor" fillOpacity={0.7}>
-        {pose.tilt_deg < 0.5 ? "square" : `${Math.round(pose.tilt_deg)}°`}
+        {pose.tilt_deg < 0.5 ? "straight" : `${Math.round(pose.tilt_deg)}°`}
       </text>
     </svg>
   );
@@ -141,10 +141,14 @@ function SideView({ view }: { view: CheckView }) {
 function WhyBlock({ w, workingMm, onShow }: { w: CheckWhyArea; workingMm: number | null; onShow: () => void }) {
   const also = alsoWords(w);
   const unknown = w.reason === "unknown" ? unknownWords(w) : [];
+  const words = reasonWords(w, workingMm);
+  const title = REASON_TITLE[w.reason];
+  // U22: a sentence that starts with its own title says it once ("Seen only at a slant (the best look was 64°…)")
+  const titled = words.startsWith(title);
   return (
     <div className="mt-1.5 pl-7 text-[11.5px] leading-4">
-      <div className="font-semibold text-fg">{REASON_TITLE[w.reason]}</div>
-      <div className="text-muted">{reasonWords(w, workingMm)}</div>
+      {titled ? null : <div className="font-semibold text-fg">{title}</div>}
+      <div className={titled ? "text-fg" : "text-muted"}>{words}</div>
       {also ? <div className="mt-0.5 text-subtle">{also}</div> : null}
       {unknown.map((u) => (
         <div key={u} className="mt-0.5 text-subtle">
@@ -155,7 +159,7 @@ function WhyBlock({ w, workingMm, onShow }: { w: CheckWhyArea; workingMm: number
         <div className="mt-1.5 flex items-start gap-2">
           <SideView view={w.view} />
           <div className="min-w-0">
-            <div className="text-muted">{w.view.text}</div>
+            <div className="text-muted">{viewWords(w.view.pose, w.view.share_seen)}</div>
             <Button size="xs" variant="ghost" icon={ScanLine} className="mt-1" onClick={onShow}>
               Show where to hold the scanner
             </Button>
@@ -169,7 +173,7 @@ function WhyBlock({ w, workingMm, onShow }: { w: CheckWhyArea; workingMm: number
 }
 
 /** The short plan: a few places to hold the scanner that between them see the largest areas. */
-function PlanBlock({ plan, onPick, onScan }: { plan: CheckPlanPose[]; onPick: (p: CheckPlanPose) => void; onScan?: () => void }) {
+function PlanBlock({ plan, onPick }: { plan: CheckPlanPose[]; onPick: (p: CheckPlanPose) => void }) {
   if (!plan.length) return null;
   return (
     <div className="mt-3 rounded-lg border border-line bg-surface-2/60 px-3 py-2">
@@ -183,30 +187,23 @@ function PlanBlock({ plan, onPick, onScan }: { plan: CheckPlanPose[]; onPick: (p
               title="Show this place in the 3D view"
               className="flex w-full items-start gap-2 rounded-md px-1 py-0.5 text-left text-[11.5px] leading-4 text-muted transition-colors duration-150 hover:bg-surface-3 hover:text-fg focus-visible:outline-2 focus-visible:outline-accent"
             >
-              <span className="grid h-4 min-w-4 place-items-center rounded-full bg-surface-3 px-1 text-[10px] font-bold text-fg">{i + 1}</span>
+              <span className="grid h-4 min-w-4 place-items-center rounded-full bg-surface-3 px-1 text-[10px] font-bold text-fg" aria-label={`Place ${placeLetter(i)}`}>
+                {placeLetter(i)}
+              </span>
               <span>{planWords(p)}</span>
             </button>
           </li>
         ))}
       </ol>
       <div className="mt-1 text-[11px] leading-4 text-subtle">A pass from each, at the distance shown, then Check again.</div>
-      {onScan ? (
-        <Button size="xs" variant="secondary" icon={Layers} className="mt-1.5" onClick={onScan}>
-          Scan from these places
-        </Button>
-      ) : null}
     </div>
   );
 }
 
-/** The areas a plan's places are for, and those each place sees most of, in the list's order. */
-function planAreas(plan: CheckPlanPose[]): number[] {
-  const out = new Set<number>();
-  for (const p of plan) {
-    out.add(p.area);
-    for (const s of p.also_sees) if (s.share >= 0.5) out.add(s.area);
-  }
-  return [...out].sort((a, b) => a - b);
+/** The kinds of area the list holds, in a fixed order (their meaning is said once above it). */
+function kindsIn(result: CheckResult): CheckArea["kind"][] {
+  const kinds = new Set(result.areas.map((a) => a.kind));
+  return (["uncertain", "not_measured"] as const).filter((k) => kinds.has(k));
 }
 
 /** What the reasons rest on, when part of it is missing or was cut down. */
@@ -223,7 +220,6 @@ function AreaRow({
   area,
   n,
   on,
-  result,
   onSelect,
   why,
   whyLoading,
@@ -241,7 +237,6 @@ function AreaRow({
   onShowPose: () => void;
 }) {
   const Icon = area.kind === "not_measured" ? CircleDashed : Target;
-  const meaning = kindMeaning(area.kind, result.tolerance_mm, result.k);
   const rows: [string, string, string][] = [["Share of the surface", fmtShare(area.share), "How much of the whole surface this area is."]];
   if (area.sigma_median_mm !== null)
     rows.push(["Median sigma", fmtSigma(area.sigma_median_mm), "Half of the measured points of this area are surer than this (1σ, from the scan itself)."]);
@@ -278,7 +273,6 @@ function AreaRow({
             </span>
           </span>
         </span>
-        <span className="mt-1 block pl-7 text-[11.5px] leading-4 text-muted">{meaning}</span>
         <span className="mt-1.5 grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 pl-7 text-[11.5px]">
           {rows.map(([k, v, tip]) => (
             <span key={k} className="contents" title={tip}>
@@ -336,7 +330,7 @@ export function CheckPanel({
   const shown = result ? (all ? result.areas : result.areas.slice(0, FIRST)) : [];
   const why = check.why.why;
   const notes = result ? checkNotes(result) : [];
-  const waitingFor = `± ${fmtTolerance(check.tolerance)} mm`;
+  const waitingFor = `± ${fmtTolerance(check.tolerance)}\u202fmm`;
   return (
     <>
       <form
@@ -358,7 +352,7 @@ export function CheckPanel({
       </form>
       <div id={`${id}-help`} className="mt-1.5 text-[11.5px] leading-4 text-subtle">
         {check.on
-          ? `From ${fmtTolerance(TOLERANCE_MIN_MM)} to ${fmtTolerance(TOLERANCE_MAX_MM)} mm. A new tolerance checks again by itself.`
+          ? `From ${fmtTolerance(TOLERANCE_MIN_MM)} to ${fmtTolerance(TOLERANCE_MAX_MM)}\u202fmm. A new tolerance checks again by itself.`
           : "How far off the part may be, for example 0.3 for a part that has to fit. Check then tells how much of the scan is good enough, and which areas to scan again."}
       </div>
 
@@ -416,7 +410,15 @@ export function CheckPanel({
           ))}
           {result.areas.length ? (
             <>
-              <ol className="mt-3 space-y-2" aria-label="Areas that need another pass, largest first">
+              {/* U22: what each kind means, said once above the list (not on every card) */}
+              <ul className="mt-3 space-y-0.5 text-[11.5px] leading-4 text-muted" aria-label="What the areas mean">
+                {kindsIn(result).map((k) => (
+                  <li key={k}>
+                    <span className="font-semibold text-fg">{kindName(k)}:</span> {kindMeaning(k, result.tolerance_mm, result.k)}
+                  </li>
+                ))}
+              </ul>
+              <ol className="mt-2 space-y-2" aria-label="Areas that need another pass, largest first">
                 {shown.map((a, i) => (
                   <AreaRow
                     key={i}
@@ -440,21 +442,18 @@ export function CheckPanel({
               <div className="mt-2 text-[11.5px] leading-4 text-subtle">Click an area to see it on the mesh.</div>
               {onScanAreas ? (
                 <div className="mt-2.5 rounded-lg border border-line bg-surface-2/60 px-3 py-2">
+                  {/* U22: one button; the places to scan from are shown on the Scan page */}
                   <Button size="sm" variant="primary" icon={Layers} onClick={() => onScanAreas({})}>
-                    Scan these areas
+                    Scan these areas again…
                   </Button>
                   <div className="mt-1 text-[11.5px] leading-4 text-muted">
                     A second pass that joins this scan: the Scan page shows this scan with the areas lit
-                    {why ? " and the places to scan from" : ""}. After Stop the pass is aligned and merged with it into a new scan; this scan is not changed.
+                    {why?.plan.length ? " and the places to scan from" : ""}. After Stop the pass is aligned and merged with it into a new scan; this scan is not changed.
                   </div>
                 </div>
               ) : null}
               {why ? (
-                <PlanBlock
-                  plan={why.plan}
-                  onPick={(p) => check.select(p.area, { pose: p.pose, showPose: true })}
-                  onScan={onScanAreas && why.plan.length ? () => onScanAreas({ only: planAreas(why.plan), plan: why.plan }) : undefined}
-                />
+                <PlanBlock plan={why.plan} onPick={(p) => check.select(p.area, { pose: p.pose, showPose: true })} />
               ) : null}
               {why
                 ? whyNotes(why).map((t) => (

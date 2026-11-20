@@ -65,6 +65,7 @@ import { rng } from "./geom";
 import { HttpError, json, nowIso, uid, type MockHost } from "./host";
 import type { MockSetup } from "./setup";
 import { TWO_LASERS, laserFamilies, laserWords, type LaserFamily } from "../../lib/laserSet";
+import { CALIB_VERDICT, CHECK_STATE } from "../../lib/calibWords"; // U10 / U31: the server's words
 
 const FAMS = ["vertical", "horizontal"] as const;
 /**
@@ -87,7 +88,7 @@ const MIN_VIEWS: Record<CalibKind, number> = { stereo: 4, lasers: 3, imu: 1, che
 const RANGE: Record<CalibKind, [number, number]> = { stereo: [200, 500], lasers: [150, 450], imu: [150, 600], check: [150, 450] };
 const GUIDANCE: Record<CalibKind, string> = {
   stereo: "15–25 views, 200–500 mm away, tilt the board 20–45° in different directions, cover the image corners and edges",
-  lasers: "6–10 poses, 150–450 mm away, tilt up to ±30°, both laser lines crossing the white page margin",
+  lasers: "6–10 views, 150–450 mm away, tilt up to ±30°, both laser lines crossing the white page margin",
   imu: "Hold still 2 s, then rotate about all three axes for 20–60 s, keeping the board in view",
   check: "3–5 views at different distances, both laser lines on the white margin",
 };
@@ -428,7 +429,7 @@ export class MockCalib {
     if (kind === "check") return `3–5 views at different distances, all ${n} laser lines on the white margin`;
     const pairs = MEETS.filter((f) => laserFamilies(names)[f].length > 1);
     return (
-      `6–10 poses, 150–450 mm away, tilt up to ±30°, all ${n} laser lines crossing the white page margin` +
+      `6–10 views, 150–450 mm away, tilt up to ±30°, all ${n} laser lines crossing the white page margin` +
       (pairs.length ? `. If the two ${pairs.join(" and the two ")} lines run into each other on the board, hold it a little nearer or farther away` : "")
     );
   }
@@ -643,7 +644,7 @@ export class MockCalib {
     if (div.far === 0) return plan("Move the board farther away: over 330 mm", { distance: "farther", bin: "far" });
     if (div.mid === 0) return plan("Hold the board at a middle distance: about 280 mm", { bin: "mid" });
     if (kind === "lasers") for (const dir of TILT_DIRS) if (div[`tilt_${dir}` as const] === 0) return plan(`Tilt the board ${dir}, up to 30°`, { tilt: dir });
-    if (n < tmin) return plan(`Good: ${tmin - n} more pose${tmin - n === 1 ? "" : "s"} at other distances or tilts`);
+    if (n < tmin) return plan(`Good: ${tmin - n} more view${tmin - n === 1 ? "" : "s"} at other distances or tilts`);
     return plan(kind === "check" ? "That's enough: press Enter to run the check" : "That's enough: press Enter to calibrate");
   }
 
@@ -1033,23 +1034,23 @@ export class MockCalib {
             [0.45, "Calibrating the left lens…"],
             [0.65, "Calibrating the right lens…"],
             [0.85, "Solving the stereo pair…"],
-            [1, "Checking the rectification…"],
+            [1, "Checking that left and right rows line up…"],
           ]
         : kind === "lasers"
           ? [
-              [0.3, `Finding the laser lines in ${this.recs.length} poses…`],
-              [0.7, "Fitting the two laser planes…"],
+              [0.3, `Finding the laser lines in ${this.recs.length} views…`],
+              [0.7, "Fitting the two laser lines…"],
               [1, "Checking the fit against the board…"],
             ]
           : kind === "imu"
             ? [
-                [0.25, "Reading the gyro samples…"],
-                [0.6, "Estimating the gyro bias and the camera–IMU rotation…"],
+                [0.25, "Reading the motion sensor…"],
+                [0.6, "Working out how the motion sensor sits in the scanner…"],
                 [1, "Estimating the clock offset…"],
               ]
             : [
-                [0.4, "Measuring the rectified row error…"],
-                [0.8, "Checking the laser planes against the board…"],
+                [0.4, "Measuring how well left and right rows match…"],
+                [0.8, "Checking the laser lines against the board…"],
                 [1, "Writing the verdict…"],
               ];
     const seq = ++this.autoSolveSeq;
@@ -1172,7 +1173,7 @@ export class MockCalib {
         label: "Rectified row error",
         value: `${rowErr.toFixed(2)} px (want < 0.3 px)`,
         ok: rowErr < 0.3,
-        help: "After rectification a point must sit on the same image row in both cameras, or stereo matching gets worse. This is what the launch check watches.",
+        help: "A point must sit on the same image row in both cameras, or stereo matching gets worse. This is what the launch check watches.",
       },
     ];
     const advice: CalibAdvice[] = [];
@@ -1190,8 +1191,8 @@ export class MockCalib {
     if (!this.sim() && !this.setup.state().print_check?.ok)
       advice.push({ text: "The print scale check isn't done: a print that is slightly off-size scales every measurement.", action: "reprint" });
     const verdicts: Record<CalibGrade, string> = {
-      excellent: `${rms.toFixed(2)} px average error over ${n} views, with ${covMin} % of each image covered. Depth will be accurate to about 0.1 mm at 250 mm.`,
-      good: `${rms.toFixed(2)} px average error over ${n} views. Scans will be accurate; more views in the corners would make it excellent.`,
+      excellent: `${rms.toFixed(2)} px average error over ${n} views, with ${covMin} % of each image covered. ${CALIB_VERDICT.stereoExcellent}`,
+      good: `${rms.toFixed(2)} px average error over ${n} views. ${CALIB_VERDICT.stereoGood} More views in the corners would make it excellent.`,
       usable: `${rms.toFixed(2)} px average error. It works, but scans near the image edges will be less accurate. Follow the advice, then calibrate again.`,
       poor: `${rms.toFixed(2)} px average error is high: scans would be visibly distorted. Follow the advice below, then calibrate again.`,
       failed: "",
@@ -1209,7 +1210,7 @@ export class MockCalib {
             { label: "Focal length", value: `${(722.4 * (1 + (r() - 0.5) * 0.004 * rms)).toFixed(2)} px (true 722.40)`, ok: true, help: "The estimated focal length of the left lens against the virtual scanner's true one." },
             { label: "Principal point", value: `${(0.2 + rms * 1.1).toFixed(1)} px from the truth`, ok: rms * 1.1 < 1.5, help: "Where the optical axis meets the image. Under 1.5 px off is fine." },
             { label: "Baseline", value: `${baseline.toFixed(3)} mm (true 60.040)`, ok: Math.abs(baseline - 60.04) < 0.1, help: "The estimated lens spacing against the true 60.04 mm." },
-            { label: "Distortion k1", value: `${(-0.061 + (r() - 0.5) * 0.004).toFixed(4)} (true −0.0610)`, ok: true, help: "The main radial distortion term of the left lens." },
+            { label: "Distortion k1", value: `${(-0.061 + (r() - 0.5) * 0.004).toFixed(4).replace(/^-/, "−")} (true −0.0610)`, ok: true, help: "The main radial distortion term of the left lens." },
           ]
         : null,
       can_save: true,
@@ -1237,7 +1238,7 @@ export class MockCalib {
       views: ok ? views : null,
       points: ok ? 40 * views : null,
       where: ok ? "margin" : null,
-      reason: ok ? null : "Too few poses with this line on the white margin",
+      reason: ok ? null : "Too few views with this line on the white margin",
     }));
   }
 
@@ -1257,9 +1258,9 @@ export class MockCalib {
         ok: false,
         grade: "failed",
         headline: "Laser calibration failed",
-        verdict: `Only ${all} of ${n} poses had all ${names.length} laser lines on the white margin; each plane needs at least 3. Your poses are kept: add poses where every line crosses the paper around the squares.`,
-        metrics: [{ label: "Poses with every line", value: `${all} of ${n}`, ok: false, help: "Lines on the black-and-white squares are biased, so only the white margin counts." }],
-        advice: [{ text: `Add poses with all ${names.length} laser lines crossing the white margin.`, action: "add_views" }],
+        verdict: `Only ${all} of ${n} views had all ${names.length} laser lines on the white margin; each line needs at least 3. Your views are kept: add views where every line crosses the paper around the squares.`,
+        metrics: [{ label: "Views with every line", value: `${all} of ${n}`, ok: false, help: "Lines on the black-and-white squares are biased, so only the white margin counts." }],
+        advice: [{ text: `Add views with all ${names.length} laser lines crossing the white margin.`, action: "add_views" }],
         per_view: [],
         sim_truth: null,
         can_save: false,
@@ -1270,7 +1271,7 @@ export class MockCalib {
     // the grade follows the spread of distances; views on both sides of where two lines meet are not needed
     const grade: CalibGrade = spread >= 150 && n >= 6 ? "excellent" : spread >= 90 ? "good" : spread >= 50 ? "usable" : "poor";
     const advice: CalibAdvice[] = [];
-    if (grade === "poor") advice.push({ text: "All poses are at a similar distance: start over and spread them from 150 to 450 mm.", action: "start_over" });
+    if (grade === "poor") advice.push({ text: "All views are at a similar distance: start over and spread them from 150 to 450 mm.", action: "start_over" });
     const fits = names.map(() => 0.028 + 0.09 / n + r() * 0.012);
     return {
       ok: grade !== "poor",
@@ -1278,18 +1279,18 @@ export class MockCalib {
       headline: `${grade === "excellent" ? "Excellent" : grade === "good" ? "Good" : grade === "usable" ? "Usable" : "Poor"} laser calibration`,
       verdict:
         grade === "poor"
-          ? `The poses span only ${spread} mm of distance, so the plane angles are uncertain.`
-          : `All ${names.length} laser planes fit the board within ${Math.max(...fits).toFixed(3)} mm over ${n} poses from ${lo} to ${hi} mm.`,
+          ? `The views span only ${spread} mm of distance, so the angles of the laser lines are uncertain.`
+          : `${CALIB_VERDICT.lasersGoodAny(names.length)} Their points fit the board within ${Math.max(...fits).toFixed(3)} mm over ${n} views from ${lo} to ${hi} mm.`,
       metrics: [
         ...names.map((m, k) => ({
           label: `${word(m)} laser: fit`,
           value: `${fits[k].toFixed(3)} mm median (want < 0.15 mm)`,
           ok: fits[k] < 0.15,
-          help: "How far the laser points lie from the fitted plane.",
+          help: "How far the laser points lie from where the calibration puts them.",
         })),
-        { label: "Poses", value: `${n} (aim for 6–10)`, ok: n >= 6 ? true : null, help: "Each pose adds line segments on the margin." },
-        { label: "Distance spread", value: `${lo}–${hi} mm (want 150 mm or more)`, ok: spread >= 150 ? true : spread >= 90 ? null : false, help: "Poses near and far pin down the angle of each plane." },
-        { label: "Every line on the margin", value: `${all} of ${n} poses`, ok: all === n ? true : null, help: "Poses where a line missed the margin only help the other planes." },
+        { label: "Views", value: `${n} (aim for 6–10)`, ok: n >= 6 ? true : null, help: "Each view adds line segments on the margin." },
+        { label: "Distance spread", value: `${lo}–${hi} mm (want 150 mm or more)`, ok: spread >= 150 ? true : spread >= 90 ? null : false, help: "Views near and far pin down the angle of each laser line." },
+        { label: "Every line on the margin", value: `${all} of ${n} views`, ok: all === n ? true : null, help: "Views where a line missed the margin only help the other lines." },
       ],
       advice,
       per_view: this.recs.map((rec) => ({ index: rec.view.index, error_px: r2(0.18 + r() * 0.2), bad: false })),
@@ -1316,10 +1317,10 @@ export class MockCalib {
       return {
         ok: false,
         grade: "failed",
-        headline: "Not yet: too few poses with both lines on the margin",
-        verdict: `Only ${both} of ${n} poses had both laser lines on the white margin; the planes need at least 3. Your poses are kept: add poses where both lines cross the paper around the squares.`,
-        metrics: [{ label: "Poses with both lines", value: `${both} of ${n}`, ok: false, help: "Lines on the black-and-white squares are biased, so only the white margin counts." }],
-        advice: [{ text: "Add poses with both laser lines crossing the white margin.", action: "add_views" }],
+        headline: "Not yet: too few views with both lines on the margin",
+        verdict: `Only ${both} of ${n} views had both laser lines on the white margin; the lines need at least 3. Your views are kept: add views where both lines cross the paper around the squares.`,
+        metrics: [{ label: "Views with both lines", value: `${both} of ${n}`, ok: false, help: "Lines on the black-and-white squares are biased, so only the white margin counts." }],
+        advice: [{ text: "Add views with both laser lines crossing the white margin.", action: "add_views" }],
         per_view: [],
         sim_truth: null,
         can_save: false,
@@ -1330,23 +1331,23 @@ export class MockCalib {
       rmsH = 0.033 + 0.09 / n + r() * 0.01;
     const grade: CalibGrade = spread >= 150 && n >= 6 ? "excellent" : spread >= 90 ? "good" : spread >= 50 ? "usable" : "poor";
     const advice: CalibAdvice[] = [];
-    if (div.near === 0) advice.push({ text: "Add a pose closer than 220 mm: near and far poses pin down the plane angles.", action: "add_views" });
-    if (div.far === 0) advice.push({ text: "Add a pose farther than 330 mm.", action: "add_views" });
-    if (grade === "poor") advice.push({ text: "All poses are at a similar distance: start over and spread them from 150 to 450 mm.", action: "start_over" });
+    if (div.near === 0) advice.push({ text: "Add a view closer than 220 mm: near and far views pin down the angles of the laser lines.", action: "add_views" });
+    if (div.far === 0) advice.push({ text: "Add a view farther than 330 mm.", action: "add_views" });
+    if (grade === "poor") advice.push({ text: "All views are at a similar distance: start over and spread them from 150 to 450 mm.", action: "start_over" });
     return {
       ok: grade !== "poor",
       grade,
       headline: `${grade === "excellent" ? "Excellent" : grade === "good" ? "Good" : grade === "usable" ? "Usable" : "Poor"} laser calibration`,
       verdict:
         grade === "poor"
-          ? `The poses span only ${spread} mm of distance, so the plane angles are uncertain. Laser points far from that range would be off.`
-          : `Both laser planes fit the board within ${Math.max(rmsV, rmsH).toFixed(3)} mm over ${n} poses from ${lo} to ${hi} mm. Laser points will be accurate across the scanning range.`,
+          ? `The views span only ${spread} mm of distance, so the angles of the laser lines are uncertain. Laser points far from that range would be off.`
+          : `${CALIB_VERDICT.lasersGood} Their points fit the board within ${Math.max(rmsV, rmsH).toFixed(3)} mm over ${n} views from ${lo} to ${hi} mm.`,
       metrics: [
-        { label: "Vertical plane fit", value: `${rmsV.toFixed(3)} mm RMS (want < 0.1 mm)`, ok: rmsV < 0.1, help: "How far the vertical line's points are from the fitted plane, on average." },
-        { label: "Horizontal plane fit", value: `${rmsH.toFixed(3)} mm RMS (want < 0.1 mm)`, ok: rmsH < 0.1, help: "How far the horizontal line's points are from the fitted plane, on average." },
-        { label: "Poses", value: `${n} (aim for 6–10)`, ok: n >= 6 ? true : null, help: "Each pose adds two line segments on the margin." },
-        { label: "Distance spread", value: `${lo}–${hi} mm (want 150 mm or more)`, ok: spread >= 150 ? true : spread >= 90 ? null : false, help: "Poses near and far pin down the angle of each plane." },
-        { label: "Both lines on the margin", value: `${both} of ${n} poses`, ok: both === n ? true : null, help: "Poses where a line missed the margin only help the other plane." },
+        { label: "Vertical laser line fit", value: `${rmsV.toFixed(3)} mm typical (want < 0.1 mm)`, ok: rmsV < 0.1, help: "How far the vertical line's points are from where the calibration puts them, typically." },
+        { label: "Horizontal laser line fit", value: `${rmsH.toFixed(3)} mm typical (want < 0.1 mm)`, ok: rmsH < 0.1, help: "How far the horizontal line's points are from where the calibration puts them, typically." },
+        { label: "Views", value: `${n} (aim for 6–10)`, ok: n >= 6 ? true : null, help: "Each view adds two line segments on the margin." },
+        { label: "Distance spread", value: `${lo}–${hi} mm (want 150 mm or more)`, ok: spread >= 150 ? true : spread >= 90 ? null : false, help: "Views near and far pin down the angle of each laser line." },
+        { label: "Both lines on the margin", value: `${both} of ${n} views`, ok: both === n ? true : null, help: "Views where a line missed the margin only help the other line." },
       ],
       advice,
       per_view: this.recs.map((rec) => ({ index: rec.view.index, error_px: r2(0.18 + r() * 0.2), bad: false })),
@@ -1393,13 +1394,13 @@ export class MockCalib {
       verdict:
         grade === "poor"
           ? `The board was in view in only ${seen} % of the frames, so the camera–IMU rotation is uncertain.`
-          : `${Math.round(rot)} s of rotation with the board in view ${seen} % of the time. The gyro will steady tracking on fast sweeps and plain surfaces.`,
+          : `${Math.round(rot)} s of rotation with the board in view ${seen} % of the time. ${CALIB_VERDICT.imuGood}`,
       metrics: [
-        { label: "Gyro bias", value: `${(0.18 + r() * 0.08).toFixed(2)} °/s`, ok: true, help: "The gyro's reading at rest. It is subtracted from every sample." },
-        { label: "Camera–IMU rotation", value: `fit residual ${residual.toFixed(2)}° (want < 0.5°)`, ok: residual < 0.5, help: "How well the gyro's rotations match the camera's, after the fit. It tells tracking how the IMU sits in the scanner." },
+        { label: "Motion sensor at rest", value: `${(0.18 + r() * 0.08).toFixed(2)} °/s`, ok: true, help: "What the motion sensor reads while the scanner is still. It is subtracted from every reading." },
+        { label: "Camera–IMU rotation", value: `${residual.toFixed(2)}° (want < 0.5°)`, ok: residual < 0.5, help: "How well the motion sensor's turns match the camera's. It tells tracking how the motion sensor sits in the scanner." },
         { label: "Clock offset", value: `+${(3.6 + r() * 1.4).toFixed(1)} ms`, ok: null, help: "The delay between the camera and the IMU timestamps, measured and corrected." },
         { label: "Rotation recorded", value: `${Math.round(rot)} s (want ${min}–60 s)`, ok: rot >= min, help: "Rotation about all three axes is what the fit uses." },
-        { label: "Board seen", value: `${seen} % of frames (want > 80 %)`, ok: seen >= 80, help: "The board's pose gives the camera's rotation to compare the gyro with." },
+        { label: "Board seen", value: `${seen} % of frames (want > 80 %)`, ok: seen >= 80, help: "The app compares the motion sensor with the board's movement, so the board must stay in view." },
       ],
       advice,
       per_view: [],
@@ -1426,16 +1427,16 @@ export class MockCalib {
     return {
       ok,
       grade,
-      headline: ok ? "Your calibration still holds" : "Your calibration has drifted",
+      headline: ok ? CHECK_STATE.ok : "Your calibration has drifted",
       verdict: ok
-        ? `Left and right rows match to ${dv.toFixed(2)} px${lasers ? ` and the laser planes fit the board within ${dl.toFixed(2)} mm` : ""}. Nothing to do: scan away.`
+        ? `Left and right rows match to ${dv.toFixed(2)} px${lasers ? ` and the laser lines fit the board within ${dl.toFixed(2)} mm` : ""}. Nothing to do: scan away.`
         : `Left and right rows differ by ${dv.toFixed(1)} px: something moved, a knock or heat. Redo the stereo calibration, then the lasers and the IMU.`,
       metrics: [
         { label: "Row error after rectification", value: `${dv.toFixed(2)} px (want < 0.6 px)`, ok, help: "A point must sit on the same image row in both cameras. Drift shows up here first." },
         { label: "Reprojection error", value: `${(0.22 + r() * 0.08 + (drift ? 0.5 : 0)).toFixed(2)} px`, ok: !drift, help: "How well the saved lens model explains the board corners in these views." },
         lasers
-          ? { label: "Laser planes", value: `${dl.toFixed(2)} mm from the board (want < 0.2 mm)`, ok: dl < 0.2, help: "How far the laser points on the margin are from where the saved planes put them." }
-          : { label: "Laser planes", value: "not calibrated", ok: null, help: "Run the Lasers step to check them too." },
+          ? { label: "Laser lines", value: `${dl.toFixed(2)} mm from the board (want < 0.2 mm)`, ok: dl < 0.2, help: "How far the laser points on the margin are from where the saved calibration puts them." }
+          : { label: "Laser lines", value: "not calibrated", ok: null, help: "Run the Lasers step to check them too." },
         { label: "Views", value: `${n} (aim for 3–5)`, ok: n >= 3 ? true : null, help: "Views at different distances make the check more reliable." },
       ],
       advice: ok ? [] : [{ text: "Redo the stereo calibration (about 5 minutes), then the lasers and the IMU.", action: "recalibrate_stereo" }],

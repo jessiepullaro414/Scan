@@ -181,7 +181,7 @@ const accepted: AlignResult = {
   target: "a",
   source: "b",
   accepted: true,
-  verdict: "Aligned: 76 % of the smaller scan's part lies within 1 mm of the other scan, 0.25 mm RMS; 8 of 9 starting guesses agree.",
+  verdict: "Aligned: 76\u202f% of the smaller scan's part lies within 1\u202fmm of the other scan, 0.25\u202fmm RMS; 8 of 9 starting guesses agree.",
   reason: null,
   T,
   start: "features",
@@ -205,22 +205,22 @@ check(!isAlignResult(null) && !isAlignResult({}) && !isAlignResult({ ...accepted
 check(isMergeResult({ project_id: "p", scan_id: "s" }) && !isMergeResult({ project_id: "p" }) && !isMergeResult(null), "a merge's result names the new scan");
 
 let f = alignFigures(accepted);
-check(f[0].label === "Overlap" && f[0].value === "76 %", "the share that overlaps, as a percentage");
-check(f[1].value === "0.25 mm RMS", "the RMS in mm");
-check(f[2].value === "8 of 9 agree", "how many starting guesses agree");
+check(f[0].label === "Overlap" && f[0].value === "76\u202f%", "the share that overlaps, as a percentage");
+check(f[1].value === "typically 0.25\u202fmm" && f[1].note === "where they overlap", "the RMS in mm, said as typical (U36)");
+check(f[2].value === "8 of 9 agree" && f[2].note === "(each starts from a different rough fit)", "how many starting guesses agree, the help apart from it (U36)");
 check(f.length === 4 && f[3].label === "Shared table" && /^Used/.test(f[3].value), "same setup: the table was used");
 check(!f.some((x) => x.warn), "nothing to warn about");
 
 f = alignFigures({ ...accepted, start: "given", candidates: 1, agree: 1, pairs_rms_mm: 1.84, same_setup: false, used_support: false });
 check(f[2].value === "From your points", "from picked points: no starting guesses to count");
-check(f[3].label === "Your points" && f[3].value === "agree to 1.8 mm" && !f[3].warn, "how well the picked points agree");
+check(f[3].label === "Your points" && f[3].value === "agree to 1.8\u202fmm" && !f[3].warn, "how well the picked points agree");
 check(f.length === 4, "the part was moved: no table row");
 
 f = alignFigures({ ...accepted, start: "given", pairs_rms_mm: 7.2, rmse_mm: null, used_support: false });
 check(f[1].value === "–", "no RMS: a dash");
-check(f[3].warn === true, "points that disagree by more than 5 mm are marked");
+check(f[3].warn === true, "points that disagree by more than 5\u202fmm are marked");
 check(/^Not used/.test(f[4].value), "same setup, but the tables did not line up");
-check(!pairsDisagree({ pairs_rms_mm: null }) && !pairsDisagree({ pairs_rms_mm: 5 }) && pairsDisagree({ pairs_rms_mm: 5.1 }), "the warning starts above 5 mm");
+check(!pairsDisagree({ pairs_rms_mm: null }) && !pairsDisagree({ pairs_rms_mm: 5 }) && pairsDisagree({ pairs_rms_mm: 5.1 }), "the warning starts above 5\u202fmm");
 
 const tags = { shared: [2, 3, 4, 5], used: [2, 4, 5], left_out: [3], rms_mm: 0.41, start: "accepted" };
 f = alignFigures({ ...accepted, start: "tags", candidates: 1, agree: 1, tags });
@@ -304,16 +304,16 @@ const all: AlignAllResult = {
   support: { a: true, b: true, c: false },
   same_setup: true,
   ms: 9000,
-  verdict: "All 3 scans placed through 2 links; 1 more link checked the chain, the worst disagrees by 0.27 mm.",
+  verdict: "All 3 scans placed through 2 links; 1 more link checked the chain, the worst disagrees by 0.27\u202fmm.",
   message: "",
 };
 check(isAlignAllResult(all) && !isAlignResult(all), "a result of several scans, not of two");
 check(!isAlignAllResult(accepted) && !isAlignAllResult(null) && !isAlignAllResult({ ...all, T: [] }), "a result of two is not one");
 check(same(poseOf(all, "b"), flat) && poseOf({ ...all, placed: ["a", "c"] }, "b") === null, "a placed scan's pose; none for one not placed");
 check(pairUseText("chain") === "in the chain" && pairUseText("loop") === "checks the chain" && pairUseText("left out") === "left out" && pairUseText("") === "not used", "how a pair was used, in words");
-check(pairLine(all.pairs[0], "Top") === "with “Top”: accepted, 76 % overlap, in the chain", "a pair in the chain");
-check(pairLine(all.pairs[2], "Side") === "with “Side”: accepted, 76 % overlap, checks the chain, disagrees by 0.27 mm", "a pair that checks the chain");
-check(pairLine(pr("a", "b", ""), "Top") === "with “Top”: not accepted, 43 % overlap, not used", "a pair not accepted");
+check(pairLine(all.pairs[0], "Top") === "with “Top”: accepted, 76\u202f% overlap, in the chain", "a pair in the chain");
+check(pairLine(all.pairs[2], "Side") === "with “Side”: accepted, 76\u202f% overlap, checks the chain, disagrees by 0.27\u202fmm", "a pair that checks the chain");
+check(pairLine(pr("a", "b", ""), "Top") === "with “Top”: not accepted, 43\u202f% overlap, not used", "a pair not accepted");
 const rowsOf = scanPlacements(all, ["a", "b", "c"]);
 check(rowsOf.length === 3 && rowsOf[0].pairs.length === 0 && rowsOf[1].pairs.length === 1 && rowsOf[2].pairs.length === 2, "each pair once, under its later scan");
 check(rowsOf[2].pairs[0].other === "a" && rowsOf[2].pairs[1].other === "b", "in the list's order");
@@ -334,10 +334,10 @@ check(same(suggestPickPair(lost, ["a", "b", "c"]), ["a", "b"]) && suggestPickPai
 check(same(suggestPickPair({ placed: ["c", "a"], unplaced: ["b"] }, ["c", "b", "a"]), ["c", "b"]), "in the list's order");
 check(mergeScansOf(lost, ["a", "b", "c"]) === null, "a scan not placed: nothing to merge");
 check(same(mergeScansOf(all, ["a", "b", "c"]), [{ id: "a", T: I4 }, { id: "b", T }, { id: "c", T: I4 }]), "the merge's scans form: every scan at its pose, in order");
-check(!mergeNeedsConfirm(all) && mergeNeedsConfirm(lost) && mergeNeedsConfirm({ ...all, worst_link_mm: 2.4 }) && !mergeNeedsConfirm({ ...all, worst_link_mm: 2 }), "confirm when not all placed or a pair disagrees by more than 2 mm");
+check(!mergeNeedsConfirm(all) && mergeNeedsConfirm(lost) && mergeNeedsConfirm({ ...all, worst_link_mm: 2.4 }) && !mergeNeedsConfirm({ ...all, worst_link_mm: 2 }), "confirm when not all placed or a pair disagrees by more than 2\u202fmm");
 let ff = alignAllFigures(all);
 check(ff[0].label === "Placed" && ff[0].value === "3 of 3 scans" && !ff[0].warn, "how many were placed");
-check(ff[1].label === "Worst disagreement" && ff[1].value === "0.27 mm" && !ff[1].warn, "the worst disagreement");
+check(ff[1].label === "Worst disagreement" && ff[1].value === "0.27\u202fmm" && !ff[1].warn, "the worst disagreement");
 check(ff[ff.length - 1].label === "Shared table" && ff[ff.length - 1].value === "Found in 2 of 3 scans", "the shared table");
 ff = alignAllFigures({ ...lost, same_setup: false });
 check(ff.length === 1 && ff[0].value === "2 of 3 scans" && ff[0].warn === true, "not all placed is marked; no checks, no table");
@@ -350,33 +350,33 @@ check(ff[1].warn === true && ff.some((f) => f.label === "Left out" && f.value ==
   const moved: MergeResult = {
     ...base,
     tables: [
-      { id: "a", name: "Top", rule: "map", summary: "Its table is left out (2,404 cm²); the part is kept down to the table.", warnings: [] },
+      { id: "a", name: "Top", rule: "map", summary: "Its table is left out (2,404\u202fcm²); the part is kept down to the table.", warnings: [] },
       {
         id: "b",
         name: "Side",
         rule: "slab",
-        summary: "Its table is left out as everything within 2 mm of its plane, and with it about 2 mm of the part's bottom edge.",
+        summary: "Its table is left out as everything within 2\u202fmm of its plane, and with it about 2\u202fmm of the part's bottom edge.",
         warnings: ['No table could be told apart on "Side": the largest flat surface has nothing standing on it.'],
       },
     ],
     warnings: ['No table could be told apart on "Side": the largest flat surface has nothing standing on it.'],
   };
   const lo = mergeLeftOut(moved);
-  check(lo.lines.length === 2 && lo.lines[0] === "“Top”: Its table is left out (2,404 cm²); the part is kept down to the table.", `one line per scan: ${lo.lines[0]}`);
-  check(lo.lines[1].startsWith("“Side”: ") && lo.lines[1].includes("2 mm"), "the scan left out the old way says so");
+  check(lo.lines.length === 2 && lo.lines[0] === "“Top”: Its table is left out (2,404\u202fcm²); the part is kept down to the table.", `one line per scan: ${lo.lines[0]}`);
+  check(lo.lines[1].startsWith("“Side”: ") && lo.lines[1].includes("2\u202fmm"), "the scan left out the old way says so");
   check(same(lo.warnings, moved.warnings) && lo.warn, "the warnings, as the engine gave them, and a reason to look");
   const clean = mergeLeftOut({ ...moved, tables: [moved.tables![0]], warnings: [] });
   check(clean.lines.length === 1 && clean.warnings.length === 0 && !clean.warn, "nothing to warn about");
   const stayed = mergeLeftOut({ ...base, tables: [], warnings: [] });
   check(stayed.lines.length === 0 && stayed.warnings.length === 0 && !stayed.warn, "the part stayed: nothing was left out");
-  const cleaned = mergeLeftOut({ ...moved, cleaning: "1 small loose piece (3 mm²) was left out as too small (under 1 % of the triangles each); 1 small piece over a thin part was kept." });
-  check(cleaned.lines.length === 3 && cleaned.lines[2] === "The merged scan: 1 small loose piece (3 mm²) was left out as too small (under 1 % of the triangles each); 1 small piece over a thin part was kept.", `the cleaning, said: ${cleaned.lines[2]}`);
+  const cleaned = mergeLeftOut({ ...moved, cleaning: "1 small loose piece (3\u202fmm²) was left out as too small (under 1\u202f% of the triangles each); 1 small piece over a thin part was kept." });
+  check(cleaned.lines.length === 3 && cleaned.lines[2] === "The merged scan: 1 small loose piece (3\u202fmm²) was left out as too small (under 1\u202f% of the triangles each); 1 small piece over a thin part was kept.", `the cleaning, said: ${cleaned.lines[2]}`);
   check(mergeLeftOut({ ...base, tables: [], warnings: [], cleaning: "x" }).lines.length === 0, "no cleaning line when nothing was left out of a table");
   const older = mergeLeftOut(base);
   check(older.lines.length === 0 && older.warnings.length === 0, "an older server says nothing of it");
   // the choice before merging says plainly what goes and what stays
   const movedText = SETUP_TEXT.moved;
-  check(!/2 mm of the part's bottom edge/.test(movedText), "no longer: 2 mm of the part's bottom edge");
+  check(!/2 mm of the part's bottom edge/.test(movedText), "no longer: 2\u202fmm of the part's bottom edge");
   check(/table/.test(movedText) && /thin part/.test(movedText) && /down to the table/.test(movedText), `what goes and what stays: ${movedText}`);
 }
 

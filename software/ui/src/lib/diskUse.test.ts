@@ -48,7 +48,7 @@ const parts = diskParts(full);
 check(parts.map((p) => p.key).join(",") === "recording,stages,undo,result,other", "parts in order");
 check(parts.reduce((a, p) => a + p.bytes, 0) === full.bytes, "parts add up to the scan");
 check(parts[0].label === "Recording" && parts[1].label === "Processing stages" && parts[2].label === "Undo history", "labels");
-check(parts[1].detail === "track 23.0 MB, straighten 97.0 MB", `stage detail: ${parts[1].detail}`);
+check(parts[1].detail === "track 23.0\u202fMB, straighten 97.0\u202fMB", `stage detail: ${parts[1].detail}`);
 check(parts[0].detail === "734 frames", `recording detail: ${parts[0].detail}`);
 
 // empty parts are left out; a scan with nothing on disk has no parts
@@ -58,12 +58,12 @@ check(diskParts(scan()).length === 0, "nothing on disk");
 // the hover text: one line per part, plain words
 const title = scanDiskTitle(full);
 const lines = title.split("\n");
-check(lines[0] === "1.51 GB on disk", `first line: ${lines[0]}`);
-check(lines[1] === "Recording: 1.25 GB (734 frames)", `recording line: ${lines[1]}`);
-check(lines[2] === "Processing stages: 120.0 MB (track 23.0 MB, straighten 97.0 MB)", `stages line: ${lines[2]}`);
-check(lines[3] === "Undo history: 76.0 MB", `undo line: ${lines[3]}`);
-check(lines[4] === "Result: 65.0 MB", `result line: ${lines[4]}`);
-check(lines[5] === "Other files: 3.0 MB", `other line: ${lines[5]}`);
+check(lines[0] === "1.51\u202fGB on disk", `first line: ${lines[0]}`);
+check(lines[1] === "Recording: 1.25\u202fGB (734 frames)", `recording line: ${lines[1]}`);
+check(lines[2] === "Processing stages: 120.0\u202fMB (track 23.0\u202fMB, straighten 97.0\u202fMB)", `stages line: ${lines[2]}`);
+check(lines[3] === "Undo history: 76.0\u202fMB", `undo line: ${lines[3]}`);
+check(lines[4] === "Result: 65.0\u202fMB", `result line: ${lines[4]}`);
+check(lines[5] === "Other files: 3.0\u202fMB", `other line: ${lines[5]}`);
 check(scanDiskTitle(scan()) === "Nothing on disk yet", "empty scan title");
 check(scanDiskTitle(scan({ bytes: 1, recording: 1, n_frame_files: 1 })).includes("(1 frame)"), "one frame, singular");
 
@@ -79,12 +79,12 @@ const project: ProjectDiskUse = {
   seconds: 0.05,
 };
 const text = projectDiskText(project);
-check(text === "1.51 GB on disk: recordings 1.25 GB, processing stages 120.0 MB, undo history 76.0 MB, results 65.0 MB, reference models 4.0 MB", `project text: ${text}`);
+check(text === "1.51\u202fGB on disk: recordings 1.25\u202fGB, processing stages 120.0\u202fMB, undo history 76.0\u202fMB, results 65.0\u202fMB, reference models 4.0\u202fMB", `project text: ${text}`);
 check(projectDiskText({ ...project, bytes: 0, parts: { recording: 0, stages: 0, undo: 0, result: 0 }, references: 0, other: 0 }) === "Nothing on disk yet", "empty project");
 
 // the trash, only when it holds something
 check(trashText(project) === null, "an empty trash says nothing");
-check(trashText({ ...project, trash: { bytes: 2 * GB, projects: 1 } }) === "1 deleted project in the .trash folder takes 2.00 GB. The app never empties it.", "one project in the trash");
+check(trashText({ ...project, trash: { bytes: 2 * GB, projects: 1 } }) === "1 deleted project in the .trash folder takes 2.00\u202fGB. The app never empties it.", "one project in the trash");
 check(trashText({ ...project, trash: { bytes: 512 * MB, projects: 3 } })!.startsWith("3 deleted projects"), "plural");
 
 console.log(`diskUse.test: ${checks} checks passed`);

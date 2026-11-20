@@ -58,38 +58,38 @@ check([...LASER_LIMITS].every((l, i, a) => i === 0 || l > a[i - 1]), "the limits
 }
 
 // shares and distances as text
-check(fmtLaserShare(0.12) === "12 %" && fmtLaserShare(0.81) === "81 %" && fmtLaserShare(0.97) === "97 %", "whole per cent in the middle");
-check(fmtLaserShare(0.004) === "0.4 %" && fmtLaserShare(0.05) === "5 %" && fmtLaserShare(0.996) === "99.6 %", "a decimal at the ends");
-check(fmtLaserShare(0.0004) === "under 0.1 %" && fmtLaserShare(0.9996) === "over 99.9 %", "never 0 % or 100 % for a share that isn't");
-check(fmtLaserShare(0) === "0 %" && fmtLaserShare(1) === "100 %" && fmtLaserShare(null) === "–" && fmtLaserShare(NaN) === "–", "the ends and no value");
-check(fmtLaserMm(0.04) === "0.04 mm" && fmtLaserMm(0.1) === "0.1 mm" && fmtLaserMm(0.256) === "0.26 mm" && fmtLaserMm(3) === "3 mm", "two decimals at most, no trailing zeros");
-check(fmtLaserMm(0.004) === "0.004 mm" && fmtLaserMm(0.0001) === "under 0.001 mm" && fmtLaserMm(0) === "0 mm", "small distances keep a digit");
-check(fmtLaserMm(-0.08) === "0.08 mm" && fmtLaserMm(12.34) === "12.3 mm" && fmtLaserMm(null) === "–", "no sign, one decimal from 10 mm, no value");
+check(fmtLaserShare(0.12) === "12\u202f%" && fmtLaserShare(0.81) === "81\u202f%" && fmtLaserShare(0.97) === "97\u202f%", "whole per cent in the middle");
+check(fmtLaserShare(0.004) === "0.4\u202f%" && fmtLaserShare(0.05) === "5\u202f%" && fmtLaserShare(0.996) === "99.6\u202f%", "a decimal at the ends");
+check(fmtLaserShare(0.0004) === "under 0.1\u202f%" && fmtLaserShare(0.9996) === "over 99.9\u202f%", "never 0\u202f% or 100\u202f% for a share that isn't");
+check(fmtLaserShare(0) === "0\u202f%" && fmtLaserShare(1) === "100\u202f%" && fmtLaserShare(null) === "–" && fmtLaserShare(NaN) === "–", "the ends and no value");
+check(fmtLaserMm(0.04) === "0.04\u202fmm" && fmtLaserMm(0.1) === "0.1\u202fmm" && fmtLaserMm(0.256) === "0.26\u202fmm" && fmtLaserMm(3) === "3\u202fmm", "two decimals at most, no trailing zeros");
+check(fmtLaserMm(0.004) === "0.004\u202fmm" && fmtLaserMm(0.0001) === "under 0.001\u202fmm" && fmtLaserMm(0) === "0\u202fmm", "small distances keep a digit");
+check(fmtLaserMm(-0.08) === "0.08\u202fmm" && fmtLaserMm(12.34) === "12.3\u202fmm" && fmtLaserMm(null) === "–", "no sign, one decimal from 10\u202fmm, no value");
 
 // the numbers in sentences
 {
   const s = laserSentences(info());
   check(s.length === 1, "no stray points, no offset: one sentence block");
   check(
-    s[0] === "The laser lines cover 12 % of the surface. There the mesh and the lasers agree within 0.1 mm for 81 % and within 0.3 mm for 97 %; typical difference 0.04 mm.",
+    s[0] === "The laser lines cover 12\u202f% of the surface. There the mesh and the lasers agree within 0.1\u202fmm for 81\u202f% and within 0.3\u202fmm for 97\u202f%; typical difference 0.04\u202fmm.",
     `the main sentence: ${s[0]}`,
   );
 }
 {
   const s = laserSentences(info({ points: { stray: 230, used: 39640 } }));
-  check(s.length === 2 && s[1] === "230 laser points were more than 3 mm off and are left out.", `stray points: ${s[1]}`);
-  check(laserSentences(info({ points: { stray: 1 } }))[1] === "1 laser point was more than 3 mm off and is left out.", "one stray point");
-  check(laserSentences(info({ points: { stray: 1200 }, gate_mm: 2.5 }))[1] === "1,200 laser points were more than 2.5 mm off and are left out.", "the gate and the count as they are");
+  check(s.length === 2 && s[1] === "230 laser points were more than 3\u202fmm off and are left out.", `stray points: ${s[1]}`);
+  check(laserSentences(info({ points: { stray: 1 } }))[1] === "1 laser point was more than 3\u202fmm off and is left out.", "one stray point");
+  check(laserSentences(info({ points: { stray: 1200 }, gate_mm: 2.5 }))[1] === "1,200 laser points were more than 2.5\u202fmm off and are left out.", "the gate and the count as they are");
 }
 {
-  check(laserSentences(info({ stats: { within_0_1: 1, within_0_3: 1 } }))[0].includes("agree within 0.1 mm everywhere; typical difference 0.04 mm."), "all within 0.1 mm");
-  check(laserSentences(info({ stats: { within_0_3: 1 } }))[0].includes("within 0.1 mm for 81 % and within 0.3 mm everywhere;"), "all within 0.3 mm");
-  check(laserSentences(info({ stats: { within_0_1: 0.9996, within_0_3: 0.99999 } }))[0].includes("for over 99.9 % and within 0.3 mm for over 99.9 %"), "nearly all is not all");
+  check(laserSentences(info({ stats: { within_0_1: 1, within_0_3: 1 } }))[0].includes("agree within 0.1\u202fmm everywhere; typical difference 0.04\u202fmm."), "all within 0.1\u202fmm");
+  check(laserSentences(info({ stats: { within_0_3: 1 } }))[0].includes("within 0.1\u202fmm for 81\u202f% and within 0.3\u202fmm everywhere;"), "all within 0.3\u202fmm");
+  check(laserSentences(info({ stats: { within_0_1: 0.9996, within_0_3: 0.99999 } }))[0].includes("for over 99.9\u202f% and within 0.3\u202fmm for over 99.9\u202f%"), "nearly all is not all");
 }
 {
   const out = laserSentences(info({ stats: { mean_mm: 0.08 } }));
-  check(out.length === 2 && out[1] === "On average the lasers see the surface 0.08 mm further out than the mesh.", `an offset outward: ${out[1]}`);
-  check(laserSentences(info({ stats: { mean_mm: -0.12 } }))[1] === "On average the lasers see the surface 0.12 mm further in than the mesh.", "an offset inward");
+  check(out.length === 2 && out[1] === "On average the lasers see the surface 0.08\u202fmm further out than the mesh.", `an offset outward: ${out[1]}`);
+  check(laserSentences(info({ stats: { mean_mm: -0.12 } }))[1] === "On average the lasers see the surface 0.12\u202fmm further in than the mesh.", "an offset inward");
   check(laserSentences(info({ stats: { mean_mm: 0.03 } })).length === 1, "a small mean is not mentioned");
   const both = laserSentences(info({ stats: { mean_mm: 0.08 }, points: { stray: 5 } }));
   check(both.length === 3 && /On average/.test(both[1]) && /left out/.test(both[2]), "the offset, then the stray points");
@@ -100,7 +100,7 @@ check(fmtLaserMm(-0.08) === "0.08 mm" && fmtLaserMm(12.34) === "12.3 mm" && fmtL
   check(!hasLaserValues(none) && hasLaserValues(info()), "hasLaserValues");
   check(laserSentences(none)[0] === "None of this scan's 41,250 laser points lies close enough to this mesh to compare.", "none near the mesh");
   const stray = laserSentences(info({ stats: NO_STATS, points: { on_surface: 300, used: 0, stray: 300 } }));
-  check(stray.length === 2 && /300 laser points were more than 3 mm off/.test(stray[1]), "none used, all stray: both are said");
+  check(stray.length === 2 && /300 laser points were more than 3\u202fmm off/.test(stray[1]), "none used, all stray: both are said");
   check(/gave no points/.test(laserSentences(info({ stats: NO_STATS, points: { total: 0, on_surface: 0, used: 0 } }))[0]), "no points at all");
 }
 // a scan without laser points
@@ -115,9 +115,9 @@ for (const text of [LASER_NONE, LASER_NONE_HINT, LASER_MEANING, ...laserSentence
 check(/Refine with lasers/.test(LASER_MEANING) && /scan that area again/.test(LASER_MEANING), "what to do where they differ");
 
 // the readout
-check(laserReadout(0.034) === "+0.034 mm (lasers further out)", "further out");
-check(laserReadout(-0.12) === "−0.12 mm (lasers further in)", "further in, with a true minus");
-check(laserReadout(0) === "0.000 mm (they agree)" && laserReadout(-0.00001) === "0.000 mm (they agree)", "zero and a hair, with no sign");
+check(laserReadout(0.034) === "+0.034\u202fmm (lasers further out)", "further out");
+check(laserReadout(-0.12) === "−0.12\u202fmm (lasers further in)", "further in, with a true minus");
+check(laserReadout(0) === "0.000\u202fmm (they agree)" && laserReadout(-0.00001) === "0.000\u202fmm (they agree)", "zero and a hair, with no sign");
 check(laserReadout(NaN) === null && laserReadout(null) === null && laserReadout(undefined) === null, "no laser line there: nothing to show");
 
 // a failed read

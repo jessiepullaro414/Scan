@@ -3,7 +3,8 @@ import { MOCK } from "../../api/backend";
 import { healthView } from "../../lib/calibHealth";
 import { href, paths, type Route } from "../../lib/router";
 import { cn } from "../../lib/util";
-import { isSessionActive, useCalib } from "../../store/calib";
+import { calibOpen } from "../../lib/calibOpen";
+import { useCalib } from "../../store/calib";
 import { useConnection } from "../../store/connection";
 import { useDevice } from "../../store/device";
 import { isLive, useSession } from "../../store/session";
@@ -25,7 +26,8 @@ export function Sidebar({ route }: { route: Route }) {
   const paused = useSession((s) => s.session?.state === "paused");
   const calibMissing = useDevice((s) => !!s.device?.connected && !s.device.calibration?.loaded);
   const drift = useDevice((s) => s.device?.launch_check?.state === "drift");
-  const calibrating = useCalib((s) => isSessionActive(s.session));
+  // U1: the same words as the Scan page ("a calibration result is still open" once the result is in)
+  const calibrating = useCalib((s) => calibOpen(s.session)?.sidebar ?? null);
   const deviceBusy = useDevice((s) => !!s.device?.busy || !!s.simJobId);
   const version = useConnection((s) => s.health?.version ?? s.serverVersion);
   // H4: the calibration's status when it is not Valid (it includes the launch check's drift)
@@ -39,7 +41,7 @@ export function Sidebar({ route }: { route: Route }) {
     : calibMissing
       ? "Setup: no calibration yet"
       : calibrating
-        ? "Setup: a calibration is in progress"
+        ? calibrating
         : "Setup";
 
   return (

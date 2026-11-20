@@ -36,6 +36,7 @@ import {
   setupWords,
   type PendingPass,
 } from "../../lib/pass";
+import { placeLetter } from "../../lib/checkWhy";
 import { navigate, paths } from "../../lib/router";
 import { cn } from "../../lib/util";
 import { useJobs } from "../../store/jobs";
@@ -73,13 +74,12 @@ export function PassSetup({ pending, live, firstScan, presetName }: { pending: P
             size="xs"
             variant="ghost"
             icon={X}
-            title="Start an ordinary scan instead"
             onClick={() => {
               clear();
               navigate(paths.scan(pending.projectId), { replace: true });
             }}
           >
-            Not a pass
+            Make an ordinary scan instead
           </Button>
         ) : null}
       </div>
@@ -97,7 +97,9 @@ export function PassSetup({ pending, live, firstScan, presetName }: { pending: P
         <ol className="mt-2 space-y-1 text-[11.5px] leading-4 text-muted" aria-label="Places to scan from">
           {pending.poses.map((p, i) => (
             <li key={i} className="flex gap-2">
-              <span className="grid h-4 min-w-4 place-items-center rounded-full bg-surface-3 px-1 text-[10px] font-bold text-fg">{i + 1}</span>
+              <span className="grid h-4 min-w-4 place-items-center rounded-full bg-surface-3 px-1 text-[10px] font-bold text-fg" aria-label={`Place ${placeLetter(i)}`}>
+                {placeLetter(i)}
+              </span>
               <span>{poseWords(p)}</span>
             </li>
           ))}
@@ -149,7 +151,7 @@ export function PassBeforeAfter({ cmp }: { cmp: PassCompare }) {
   const rows = compareRows(cmp);
   return (
     <div className="mt-3 rounded-lg border border-line bg-surface-2/60 px-3 py-2">
-      <div className="text-xs font-semibold text-fg">Before and after, at ± {cmp.tolerance_mm} mm</div>
+      <div className="text-xs font-semibold text-fg">Before and after, at ± {cmp.tolerance_mm}&#8239;mm</div>
       <table className="mt-1.5 w-full text-[11.5px]">
         <thead>
           <tr className="text-left text-subtle">

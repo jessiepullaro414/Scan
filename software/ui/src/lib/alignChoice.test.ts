@@ -42,7 +42,7 @@ const old: R = { accepted: false, doubt: undefined, poses: undefined, start: "fe
 const points: R = { accepted: false, doubt: "points", poses: [pose(HALF, 0.2, 0, true, ["your points"], 1), pose(I, 0.7, 80, false, ["the first guesses"], 6)], start: "given", T: HALF };
 
 // ------------------------------------------------------------------ sure or not
-check(standingOf(sure) === "sure" && standingLabel(sure) === "Accepted", "accepted is sure");
+check(standingOf(sure) === "sure" && standingLabel(sure) === "Aligned", "accepted is sure, said as Aligned (U36)");
 check(standingOf(turned) === "not_sure" && standingLabel(turned) === "Not sure", "a pose turned round fits as well: not sure");
 check(standingOf(points) === "not_sure" && standingLabel(points) === "Not sure: check your points", "the points and the shapes disagree");
 check(standingOf(none) === "failed" && standingLabel(none) === "Not aligned", "no usable pose");
@@ -50,8 +50,8 @@ check(standingOf(old) === "failed", "an older server's refusal: no poses to offe
 
 // ------------------------------------------------------------------ the poses
 const c = poseChoices(turned);
-check(c.length === 2 && c[0].title === "Pose 1: the engine's best" && c[1].title === "Pose 2: 61 mm from pose 1", "the poses, the engine's first");
-check(c[1].detail === "Fits 99 % as well as pose 1 · 2 starts ended here (turned round)", "how well the other fits, and how it was found");
+check(c.length === 2 && c[0].title === "Pose 1: the engine's best" && c[1].title === "Pose 2: 61\u202fmm from pose 1", "the poses, the engine's first");
+check(c[1].detail === "Fits 99\u202f% as well as pose 1 · 2 starts ended here (turned round)", "how well the other fits, and how it was found");
 check(c[0].detail === "8 starts ended here (the first guesses)", "the first: how often it was found");
 check(poseChoices(old).length === 0, "none from an older server");
 check(poseInUse(turned, null) === HALF && poseInUse(turned, 1) === I && poseInUse(turned, 5) === HALF, "the pose in use: the chosen one, else the engine's");

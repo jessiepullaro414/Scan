@@ -22,8 +22,10 @@ import { EmitterSliders } from "../../components/EmitterSliders";
 import { Button } from "../../components/ui/Button";
 import { PromptDialog } from "../../components/ui/Dialog";
 import { Field, Segmented, Select, TextInput } from "../../components/ui/Form";
-import { fmtClock, fmtCompact, fmtFixed, fmtInt } from "../../lib/format";
+import { fmtClock, fmtCompact, fmtFixed, fmtInt, fmtMm, fmtSize, NNBSP, withUnit } from "../../lib/format";
 import { describeTracking } from "../../lib/tracking";
+import { healthView, loadedLine } from "../../lib/calibHealth";
+import { useDeviceHealth } from "../../components/CalibHealth";
 import { navigate, paths } from "../../lib/router";
 import { cn, useTicker } from "../../lib/util";
 import { SOURCE_LABEL, useDevice } from "../../store/device";
@@ -99,11 +101,11 @@ export function CameraPreviews() {
       collapsible
       open={open}
       onToggle={() => setOpen(!open)}
-      aside={main ? <span className="font-mono text-[10.5px] text-subtle tnum">{`${main.w}×${main.h}`}</span> : null}
+      aside={main ? <span className="font-mono text-[10.5px] text-subtle tnum">{fmtSize(main.w, main.h)}</span> : null}
     >
       <div className="relative aspect-[16/10] w-full overflow-hidden rounded-lg border border-line bg-black">
         {main ? (
-          <img src={main.url} alt={swap ? "Colourised depth map" : "Rectified left camera with the laser overlay"} className="absolute inset-0 h-full w-full object-contain" draggable={false} />
+          <img src={main.url} alt={swap ? "Colourised depth map" : "Left camera with the laser overlay"} className="absolute inset-0 h-full w-full object-contain" draggable={false} />
         ) : (
           <div className="absolute inset-0 grid place-items-center text-center">
             <div className="flex flex-col items-center gap-1.5 px-6 text-xs text-white/50">
@@ -179,6 +181,7 @@ export function ScanSetup({
   const [creating, setCreating] = useState(false);
   const connected = !!device?.connected;
   const calibrated = !!device?.calibration?.loaded;
+  const loaded = loadedLine(healthView(useDeviceHealth())); // U46
   const nameId = useId();
   const projId = useId();
 
@@ -210,8 +213,8 @@ export function ScanSetup({
           )}
         </Check1>
         <Check1
-          ok={connected && calibrated}
-          warn={connected && !calibrated}
+          ok={connected && calibrated && !loaded.warn}
+          warn={connected && (!calibrated || loaded.warn)}
           action={
             connected && !calibrated ? (
               <Button size="xs" variant="primary" icon={Crosshair} onClick={() => navigate(paths.setup("stereo"))}>
@@ -223,7 +226,7 @@ export function ScanSetup({
           {!connected ? (
             <span className="text-muted">Calibration</span>
           ) : calibrated ? (
-            "Calibration loaded"
+            loaded.text
           ) : (
             <>
               No calibration yet
@@ -292,7 +295,7 @@ export function ScanSetup({
         <div className="flex gap-2 rounded-lg border border-line bg-surface-2/60 px-3 py-2.5 text-xs text-muted">
           <Lightbulb size={14} className="mt-px shrink-0 text-warn" aria-hidden />
           <span>
-            Hold the scanner <b className="text-fg">200–350 mm</b> from the surface and sweep slowly, overlapping what you already
+            Hold the scanner <b className="text-fg">200–350&#8239;mm</b> from the surface and sweep slowly, overlapping what you already
             scanned. The trigger button starts and pauses too.
           </span>
         </div>
@@ -324,7 +327,7 @@ function Stat({ label, value, unit, tone }: { label: string; value: string; unit
       <div className="text-[10.5px] font-medium uppercase tracking-wider text-subtle">{label}</div>
       <div className={cn("mt-0.5 truncate font-mono text-[15px] font-semibold text-fg tnum", tone)}>
         {value}
-        {unit ? <span className="ml-1 text-[11px] font-normal text-subtle">{unit}</span> : null}
+        {unit ? <span className="text-[11px] font-normal text-subtle">{`${NNBSP}${unit}`}</span> : null}
       </div>
     </div>
   );
@@ -339,6 +342,7 @@ export function LiveStats() {
   const tracking = status?.tracking;
   const info = tracking ? describeTracking(tracking.state, tracking.reason) : null;
   const fpsLow = !!status && status.fps.pipeline > 0 && status.fps.pipeline < 8;
+  const numbers = useUi((s) => s.trackingNumbers);
 
   return (
     <PanelSection title={live ? "Live" : "Status"} icon={ScanLine}>
@@ -354,9 +358,9 @@ export function LiveStats() {
         <Stat label="Elapsed" value={fmtClock(session?.elapsed_s ?? 0)} />
         <Stat label="Frames" value={fmtInt(session?.frames ?? 0)} />
         <Stat label="Camera" value={status ? fmtFixed(status.fps.camera, 1) : "–"} unit="fps" />
-        <Stat label="Pipeline" value={status ? fmtFixed(status.fps.pipeline, 1) : "–"} unit="fps" tone={fpsLow ? "text-warn" : undefined} />
+        <Stat label="Live model" value={status ? fmtFixed(status.fps.pipeline, 1) : "–"} unit="fps" tone={fpsLow ? "text-warn" : undefined} />
         <Stat label="Laser points" value={status ? fmtCompact(status.laser_points) : "–"} />
-        <Stat label="Model" value={status ? fmtCompact(status.model.triangles) : "–"} unit="tris" />
+        <Stat label="Triangles" value={status ? fmtCompact(status.model.triangles) : "–"} />
       </div>
       {live && info ? (
         <div className="mt-3 rounded-lg border border-line bg-surface-2/60 px-3 py-2 text-xs">
@@ -371,20 +375,22 @@ export function LiveStats() {
               {info.label}
             </span>
           </div>
-          <div className="mt-1 flex items-center justify-between text-muted">
-            <span>Fitness / RMSE</span>
-            <span className="font-mono tnum">
-              {tracking?.fitness !== null && tracking?.fitness !== undefined ? tracking.fitness.toFixed(2) : "–"} /{" "}
-              {tracking?.rmse_mm !== null && tracking?.rmse_mm !== undefined ? `${tracking.rmse_mm.toFixed(2)} mm` : "–"}
-            </span>
-          </div>
+          {numbers ? (
+            // U8: only when asked for in Settings ("Show the tracking numbers")
+            <div className="mt-1 flex items-center justify-between text-muted">
+              <span>Match / surfaces apart</span>
+              <span className="font-mono tnum">
+                {fmtFixed(tracking?.fitness, 2)} / {fmtMm(tracking?.rmse_mm, 2)}
+              </span>
+            </div>
+          ) : null}
         </div>
       ) : null}
       {status?.emitters && device?.source === "camera" ? (
         <div className="mt-3 flex items-center justify-between rounded-lg border border-line bg-surface-2/60 px-3 py-2 text-xs text-muted">
-          <span>Emitters V / H / dots</span>
+          <span>Lasers V / H, dots</span>
           <span className="font-mono text-fg tnum">
-            {Math.round(status.emitters.vertical)} / {Math.round(status.emitters.horizontal)} / {Math.round(status.emitters.dots)} %
+            {Math.round(status.emitters.vertical)} / {Math.round(status.emitters.horizontal)} / {withUnit(String(Math.round(status.emitters.dots)), "%")}
           </span>
         </div>
       ) : null}
@@ -403,7 +409,7 @@ export function EmittersPanel() {
   const [open, setOpen] = useState(false);
   if (!device || device.source !== "camera" || !device.pico?.connected) return null;
   return (
-    <PanelSection title="Emitters" icon={SlidersHorizontal} collapsible open={open} onToggle={() => setOpen(!open)}>
+    <PanelSection title="Lasers and dots" icon={SlidersHorizontal} collapsible open={open} onToggle={() => setOpen(!open)}>
       <EmitterSliders device={device} compact />
     </PanelSection>
   );

@@ -16,14 +16,14 @@ function eq<T>(a: T, b: T, what: string): void {
 
 eq(mm(0.5), "0.5", "half a mm");
 eq(mm(1), "1", "a whole mm");
-eq(valueText("voxel_mm", 0.5), "0.5 mm", "the voxel in mm");
-eq(valueText("check_tolerance_mm", 0.3), "± 0.3 mm", "the tolerance with ±");
+eq(valueText("voxel_mm", 0.5), "0.5\u202fmm", "the voxel in mm");
+eq(valueText("check_tolerance_mm", 0.3), "± 0.3\u202fmm", "the tolerance with ±");
 eq(valueText("quality", "best"), "Best", "a quality in words");
 eq(valueText("recipe", "bracket", (id) => (id === "bracket" ? "Bracket / mechanical" : undefined)), "Bracket / mechanical", "a recipe by its name");
 eq(valueText("voxel_mm", null), "–", "no value");
 
 eq(presetSummary({ values: {} }), "Every setting as it is", "General names nothing");
-eq(presetSummary({ values: { voxel_mm: 0.5 } }), "Mesh detail 0.5 mm", "the thin preset");
+eq(presetSummary({ values: { voxel_mm: 0.5 } }), "Mesh detail 0.5\u202fmm", "the thin preset");
 
 eq(cleanHand({ voxel_mm: 0.5 }, { voxel_mm: 0.5 }), {}, "the preset's own value is no change");
 eq(cleanHand({ voxel_mm: 0.5 }, { voxel_mm: 0.75, thin_walls: "on" }), { voxel_mm: 0.75, thin_walls: "on" }, "changes are kept");
@@ -38,12 +38,12 @@ const view = {
 } as unknown as ScanPreset;
 eq(valueOrigin(view, "voxel_mm"), "changed", "a hand change");
 eq(valueOrigin(view, "quality"), "general", "a value the preset does not name");
-eq(originText(view, "voxel_mm"), "Changed by hand from 0.5 mm", "changed from the preset's value");
+eq(originText(view, "voxel_mm"), "Changed by hand from 0.5\u202fmm", "changed from the preset's value");
 eq(originText(view, "thin_walls"), "As in General", "General's");
 eq(effectiveValue(view, "voxel_mm"), 0.75, "the hand value acts");
 eq(effectiveValue(view, "quality"), "standard", "General's quality");
 const general = { ...view, changed: ["voxel_mm"], preset_values: {} } as unknown as ScanPreset;
-eq(originText(general, "voxel_mm"), "Changed by hand (General: 1 mm)", "changed from General's");
+eq(originText(general, "voxel_mm"), "Changed by hand (General: 1\u202fmm)", "changed from General's");
 const thin = { ...view, changed: [], values: { ...view.values, voxel_mm: 0.5 } } as unknown as ScanPreset;
 eq(originText(thin, "voxel_mm"), "From the preset", "the preset's value");
 

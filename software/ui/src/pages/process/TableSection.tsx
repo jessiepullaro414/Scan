@@ -286,7 +286,7 @@ export function TableSection({
           aria-expanded={advanced}
           onClick={() => setAdvanced((v) => !v)}
         >
-          {advanced ? "Hide the margin" : `Margin: ${margin} mm`}
+          {advanced ? "Hide the margin" : `Margin: ${margin}\u202fmm`}
         </button>
         {advanced ? (
           <div className="mt-1.5 space-y-1.5">

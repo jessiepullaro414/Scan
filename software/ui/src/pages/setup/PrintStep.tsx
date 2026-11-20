@@ -70,7 +70,7 @@ function Rules() {
   const rules = [
     {
       icon: Printer,
-      title: "Print at 100 %, “actual size”",
+      title: "Print at 100\u202f%, “actual size”",
       text: "Never “fit to page” or “shrink to fit”: a scaled print makes every measurement wrong by the same amount.",
     },
     {
@@ -111,7 +111,7 @@ function CalipersArt() {
         <rect key={i} x={30 + i * 20 - 0.6} y={i % 5 === 0 ? 50 : 54} width="1.2" height={i % 5 === 0 ? 12 : 8} fill="var(--c-fg)" />
       ))}
       <text x="130" y="80" textAnchor="middle" fontSize="10" fill="var(--c-fg-muted)">
-        100 mm
+        100&#8239;mm
       </text>
       <g fill="var(--c-accent)" opacity="0.9">
         <rect x="18" y="14" width="224" height="10" rx="2" opacity="0.35" />
@@ -143,12 +143,12 @@ function ScaleCheck({ onReprint }: { onReprint: () => void }) {
     if (!invalid) void check(num);
   };
   return (
-    <Section title="Check the print with calipers" icon={Ruler} description="The 100 mm scale bar under the board">
+    <Section title="Check the print with calipers" icon={Ruler} description="The 100&#8239;mm scale bar under the board">
       <div className="grid items-start gap-6 md:grid-cols-[280px_1fr]">
         <CalipersArt />
         <div>
           <p className="text-sm text-muted">
-            Measure the bar between its end marks, as exactly as you can. Within ±0.3 % (99.7–100.3 mm) the print is fine.
+            Measure the bar between its end marks, as exactly as you can. Within ±0.3&#8239;% (99.7–100.3&#8239;mm) the print is fine.
             {sim ? " It's optional here: the simulator's board is virtual and exact." : ""}
           </p>
           <form
@@ -194,7 +194,7 @@ function ScaleCheck({ onReprint }: { onReprint: () => void }) {
                     ? scale !== 1
                       ? "Using your measurement"
                       : "The print is the right size"
-                    : `${pc.error_pct > 0 ? "+" : "−"}${Math.abs(pc.error_pct).toFixed(1)} % off`
+                    : `${pc.error_pct > 0 ? "+" : "−"}${Math.abs(pc.error_pct).toFixed(1)}\u202f% off`
                 }
                 actions={
                   !pc.ok ? (
@@ -205,7 +205,7 @@ function ScaleCheck({ onReprint }: { onReprint: () => void }) {
                         </Button>
                       ) : null}
                       <Button size="sm" icon={Printer} onClick={onReprint}>
-                        Reprint at 100 %
+                        Reprint at 100&#8239;%
                       </Button>
                     </>
                   ) : undefined
@@ -214,13 +214,13 @@ function ScaleCheck({ onReprint }: { onReprint: () => void }) {
                 <span className="text-sm text-fg">{sentence(pc.verdict)}</span>
                 {pc.can_apply ? (
                   <span className="mt-1 block text-xs text-muted">
-                    “Use my measurement” scales the board for calibration only; printing stays as it is. Reprinting at 100 % is the cleaner fix.
+                    “Use my measurement” scales the board for calibration only; printing stays as it is. Reprinting at 100&#8239;% is the cleaner fix.
                   </span>
                 ) : null}
               </Callout>
             </div>
           ) : scale !== 1 ? (
-            <p className="mt-1 text-xs text-muted">Calibration uses your measured scale: {(scale * 100).toFixed(2)} % of the nominal board.</p>
+            <p className="mt-1 text-xs text-muted">Calibration uses your measured scale: {(scale * 100).toFixed(2)}&#8239;% of the nominal board.</p>
           ) : null}
         </div>
       </div>
@@ -281,7 +281,7 @@ export function PrintStep() {
           disabled={running}
           options={[
             { value: "letter", label: "Letter", title: "8.5 × 11 in" },
-            { value: "a4", label: "A4", title: "210 × 297 mm" },
+            { value: "a4", label: "A4", title: "210 × 297\u202fmm" },
           ]}
         />
         <Button variant="primary" size="lg" icon={Printer} loading={starting} disabled={running} onClick={() => void generate(paper)}>
@@ -351,7 +351,7 @@ export function PrintStep() {
         <ScaleCheck
           onReprint={() => {
             filesRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
-            toast.info("Print the board again at 100 %", "In the print dialog choose “Actual size” and turn off “Fit to page”, then measure the bar again.");
+            toast.info("Print the board again at 100\u202f%", "In the print dialog choose “Actual size” and turn off “Fit to page”, then measure the bar again.");
           }}
         />
       </div>

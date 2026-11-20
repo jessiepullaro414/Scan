@@ -340,7 +340,7 @@ function HoleHover({ holes, label, onHover }: { holes: HoleOutline[]; label: Ref
         if (i === null) box.style.display = "none";
         else {
           const h = holes[i];
-          box.textContent = `Hole: ${h.perimeter_mm.toFixed(1)} mm around · ${h.n_edges} edges`;
+          box.textContent = `Hole: ${h.perimeter_mm.toFixed(1)}\u202fmm around · ${h.n_edges} edges`;
           box.style.display = "block";
           // beside the pointer, flipped to stay inside the view
           const pw = box.parentElement?.clientWidth ?? Infinity;
@@ -561,8 +561,8 @@ function SelectionController({
         cache.current = map;
         if (import.meta.env.DEV)
           console.debug(
-            `ohs selection: ${sel.vertices.toLocaleString()} vertices / ${sel.faces.toLocaleString()} faces projected in ${(performance.now() - t1).toFixed(1)} ms` +
-              (depth ? ` (+ depth read-back ${(t1 - t0).toFixed(1)} ms)` : " (through)"),
+            `ohs selection: ${sel.vertices.toLocaleString()} vertices / ${sel.faces.toLocaleString()} faces projected in ${(performance.now() - t1).toFixed(1)}\u202fms` +
+              (depth ? ` (+ depth read-back ${(t1 - t0).toFixed(1)}\u202fms)` : " (through)"),
           );
       }
       if (grid && !map.grid) map.grid = buildGrid(map);
@@ -690,7 +690,7 @@ function SelectionController({
         sel.selectConnected(f, cur.mode);
       }
       if (import.meta.env.DEV && cur.kind !== "brush")
-        console.debug(`ohs selection: ${cur.kind} → ${sel.count.toLocaleString()} faces in ${(performance.now() - t0).toFixed(1)} ms`);
+        console.debug(`ohs selection: ${cur.kind} → ${sel.count.toLocaleString()} faces in ${(performance.now() - t0).toFixed(1)}\u202fms`);
       commitRef.current(sel.count);
     };
     const onUp = (e: PointerEvent) => {

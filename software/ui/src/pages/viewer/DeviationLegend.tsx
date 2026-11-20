@@ -65,7 +65,7 @@ export function DeviationLegend({ state, note, className }: { state: DeviationSt
               size="sm"
               value={fmtLimit(limit)}
               onChange={(v) => setLimit(Number(v))}
-              options={DEVIATION_LIMITS.map((l) => ({ value: fmtLimit(l), label: fmtLimit(l), title: `Strongest colour at ${MINUS}${fmtLimit(l)} and +${fmtLimit(l)} mm` }))}
+              options={DEVIATION_LIMITS.map((l) => ({ value: fmtLimit(l), label: fmtLimit(l), title: `Strongest colour at ${MINUS}${fmtLimit(l)} and +${fmtLimit(l)}\u202fmm` }))}
             />
           </div>
           {data.info.stats.new > 0 ? (
@@ -83,13 +83,13 @@ export function DeviationLegend({ state, note, className }: { state: DeviationSt
               "Nothing to compare yet."
             ) : (
               <>
-                <span className="tnum">{fmtPct(within, within > 0.995 && within < 1 ? 1 : 0)}</span> of the surface within ±{lim} mm
+                <span className="tnum">{fmtPct(within, within > 0.995 && within < 1 ? 1 : 0)}</span> of the surface within ±{lim}&#8239;mm
               </>
             )}
           </div>
           {data.info.stats.n > 0 ? (
             <div className="text-fg">
-              Largest move <span className="tnum">{fmtMove(data.info.stats.max_mm)}</span>, 95 % within <span className="tnum">{fmtMove(data.info.stats.p95_mm)}</span>
+              Largest move <span className="tnum">{fmtMove(data.info.stats.max_mm)}</span>, 95&#8239;% within <span className="tnum">{fmtMove(data.info.stats.p95_mm)}</span>
             </div>
           ) : null}
           {data.info.stats.new > 0 ? (
@@ -98,7 +98,7 @@ export function DeviationLegend({ state, note, className }: { state: DeviationSt
             </div>
           ) : null}
           <div className="mt-1.5 text-subtle">Against the mesh as measured, before the edits.</div>
-          <span className="sr-only">Blue: moved inward by up to {lim} mm. Grey: unchanged. Red: moved outward by up to {lim} mm. Striped: new surface.</span>
+          <span className="sr-only">Blue: moved inward by up to {lim}&#8239;mm. Grey: unchanged. Red: moved outward by up to {lim}&#8239;mm. Striped: new surface.</span>
         </>
       ) : null}
     </div>
@@ -107,5 +107,5 @@ export function DeviationLegend({ state, note, className }: { state: DeviationSt
 
 /** A share of new surface: "0.4 %" for the small ones, "<0.1 %" for the tiniest. */
 function fmtNew(x: number): string {
-  return x < 0.0005 ? "<0.1 %" : fmtPct(x, x < 0.01 ? 1 : 0);
+  return x < 0.0005 ? "<0.1\u202f%" : fmtPct(x, x < 0.01 ? 1 : 0);
 }

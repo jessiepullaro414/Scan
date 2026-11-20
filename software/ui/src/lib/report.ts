@@ -29,7 +29,7 @@ export type ReportView = {
 };
 
 /** The limits in words, for the panel. */
-export const LIMITS_TEXT = `Up to ${MAX_VIEWS} views, each at most ${MAX_VIEW_BYTES / 2 ** 20} MB (made at most ${MAX_SIDE_PX} pixels across).`;
+export const LIMITS_TEXT = `Up to ${MAX_VIEWS} views, each at most ${MAX_VIEW_BYTES / 2 ** 20}\u202fMB (made at most ${MAX_SIDE_PX} pixels across).`;
 
 /** How many bytes a base64 text holds. */
 export function base64Bytes(b64: string): number {
@@ -55,9 +55,9 @@ export function viewSize(width: number, height: number, max = MAX_SIDE_PX): { wi
 /** Why one more view of `bytes` cannot be added to `views` (null: it can). */
 export function cannotAdd(views: ReportView[], bytes: number): string | null {
   if (views.length >= MAX_VIEWS) return `A report takes at most ${MAX_VIEWS} views: remove one first.`;
-  if (bytes > MAX_VIEW_BYTES) return `This view is ${(bytes / 2 ** 20).toFixed(1)} MB, more than the ${MAX_VIEW_BYTES / 2 ** 20} MB a view may be.`;
+  if (bytes > MAX_VIEW_BYTES) return `This view is ${(bytes / 2 ** 20).toFixed(1)}\u202fMB, more than the ${MAX_VIEW_BYTES / 2 ** 20}\u202fMB a view may be.`;
   const total = views.reduce((s, v) => s + v.bytes, 0) + bytes;
-  if (total > MAX_TOTAL_BYTES) return `The views would come to ${(total / 2 ** 20).toFixed(1)} MB, more than the ${MAX_TOTAL_BYTES / 2 ** 20} MB a report takes: remove one first.`;
+  if (total > MAX_TOTAL_BYTES) return `The views would come to ${(total / 2 ** 20).toFixed(1)}\u202fMB, more than the ${MAX_TOTAL_BYTES / 2 ** 20}\u202fMB a report takes: remove one first.`;
   return null;
 }
 

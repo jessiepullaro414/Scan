@@ -45,17 +45,17 @@ const preview = (over: Partial<TablePreview> = {}): TablePreview => ({
 check(tableEditLabel(699380) === "Remove the table (699,380 faces)", tableEditLabel(699380));
 
 // areas in cm²
-check(fmtArea(240430) === "2,404 cm²", fmtArea(240430));
-check(fmtArea(1234) === "12 cm²", fmtArea(1234));
-check(fmtArea(320) === "3.2 cm²", fmtArea(320));
+check(fmtArea(240430) === "2,404\u202fcm²", fmtArea(240430));
+check(fmtArea(1234) === "12\u202fcm²", fmtArea(1234));
+check(fmtArea(320) === "3.2\u202fcm²", fmtArea(320));
 
 // what the panel says
 {
   const f = tableFacts(preview());
-  check(f.head === "699,380 faces (2,404 cm², 98 % of the mesh) are the table.", f.head);
-  check(f.detail === "The table holds 97 % of the scan and is flat to 0.09 mm. The part is kept right down to the table.", f.detail);
+  check(f.head === "699,380 faces (2,404\u202fcm², 98\u202f% of the mesh) are the table.", f.head);
+  check(f.detail === "The table holds 97\u202f% of the scan and is flat to 0.09\u202fmm. The part is kept right down to the table.", f.detail);
   const up = tableFacts(preview({ lowest_mm: 2.04 }));
-  check(up.detail.endsWith("The part is kept from 2.0 mm above the table."), up.detail);
+  check(up.detail.endsWith("The part is kept from 2.0\u202fmm above the table."), up.detail);
   const none = tableFacts(preview({ lowest_mm: null }));
   check(none.detail.endsWith("Nothing of the scan would be left."), none.detail);
   // a thin part kept is said; one the rule is unsure of is in the engine's warnings, not here
@@ -67,8 +67,8 @@ check(fmtArea(320) === "3.2 cm²", fmtArea(320));
 }
 
 // the margin the engine takes
-check(TABLE_MARGIN_MM === 1, "the default margin is the engine's 1 mm");
-check(validMargin(0) === 0 && validMargin(1.5) === 1.5 && validMargin(20) === 20, "0 to 20 mm are margins");
+check(TABLE_MARGIN_MM === 1, "the default margin is the engine's 1\u202fmm");
+check(validMargin(0) === 0 && validMargin(1.5) === 1.5 && validMargin(20) === 20, "0 to 20\u202fmm are margins");
 check(validMargin(-0.1) === null && validMargin(20.5) === null && validMargin(Number.NaN) === null, "the rest are not");
 
 // the hover card says what it does, keeps and costs, and when it refuses
@@ -91,7 +91,7 @@ check(validMargin(-0.1) === null && validMargin(20.5) === null && validMargin(Nu
   check(d.length === 3 && d.map((x) => x.verdict).join() === "warned,kept,kept" && d[0].index === 0 && d[2].index === 3, JSON.stringify(d.map((x) => [x.verdict, x.index])));
   check(Array.from(d[0].faces).join() === "3,1,2" && d[2].byUser && !d[1].byUser, "faces and who kept it");
   check(d[0].radius > 15 && d[0].radius < 20, `a view round it (${d[0].radius})`);
-  check(areaText(p.raised[0]) === "30 mm across, 0.21 mm high, at (12, -7, 300) mm", areaText(p.raised[0]));
+  check(areaText(p.raised[0]) === "30\u202fmm across, 0.21\u202fmm high, at (12, \u22127, 300)\u202fmm", areaText(p.raised[0]));
   // "Keep this" adds a point on the area (its centre, to 0.01 mm); again takes it back
   const k1 = toggleKeep([], p.raised[0]);
   check(JSON.stringify(k1) === "[[12.35,-6.79,300.11]]", JSON.stringify(k1));

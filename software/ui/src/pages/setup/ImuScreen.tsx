@@ -84,7 +84,7 @@ function GyroGauge({ dps, phase }: { dps: number; phase: string }) {
   const nx = cx + (r - 14) * Math.cos(ang),
     ny = cy - (r - 14) * Math.sin(ang);
   return (
-    <div className="text-center" role="meter" aria-label="Gyro rate" aria-valuemin={0} aria-valuemax={max} aria-valuenow={Math.round(dps)} aria-valuetext={`${Math.round(dps)} degrees per second`}>
+    <div className="text-center" role="meter" aria-label="Turn rate" aria-valuemin={0} aria-valuemax={max} aria-valuenow={Math.round(dps)} aria-valuetext={`${Math.round(dps)} degrees per second`}>
       <svg viewBox={`0 0 ${W} ${H}`} className="mx-auto h-auto w-full max-w-[240px]" aria-hidden>
         <path d={arc(0, max)} stroke="var(--c-surface-3)" strokeWidth="14" fill="none" strokeLinecap="round" />
         {still ? (
@@ -296,7 +296,7 @@ export function ImuScreen() {
                   <div className="min-w-[240px] flex-1">
                     <div className="text-xs font-semibold uppercase tracking-wider text-warn">Recording</div>
                     <h2 className="mt-1 font-display text-4xl font-semibold text-fg">Hold still</h2>
-                    <p className="mt-1.5 text-sm text-muted">The gyro measures its bias while the scanner doesn't move.</p>
+                    <p className="mt-1.5 text-sm text-muted">The motion sensor measures its own offset while the scanner doesn't move.</p>
                   </div>
                 </div>
               ) : p === "rotate" ? (
@@ -304,7 +304,7 @@ export function ImuScreen() {
                   <Ring value={rot / Math.max(1, maxS)} size={150} stroke={12} color={rot >= minS ? "var(--c-ok)" : "var(--c-accent)"} marker={minS / Math.max(1, maxS)}>
                     <div>
                       <div className="font-display text-5xl font-semibold text-fg tnum">{Math.floor(rot)}</div>
-                      <div className="text-xs text-muted">of {minS}–{maxS} s</div>
+                      <div className="text-xs text-muted">of {minS}–{maxS}&#8239;s</div>
                     </div>
                   </Ring>
                   <div className="min-w-[240px] flex-1">
@@ -312,8 +312,8 @@ export function ImuScreen() {
                     <h2 className="mt-1 font-display text-3xl font-semibold text-fg">Rotate slowly about all three axes, ±20–40°</h2>
                     <p className="mt-1.5 text-sm text-muted">
                       {rot < minS
-                        ? `Keep going: Stop unlocks at ${minS} s. Keep the board in view.`
-                        : `Good: stop whenever you like. It stops by itself at ${maxS} s.`}
+                        ? `Keep going: Stop unlocks at ${minS}\u202fs. Keep the board in view.`
+                        : `Good: stop whenever you like. It stops by itself at ${maxS}\u202fs.`}
                     </p>
                     <div className="mt-4 flex flex-wrap items-center gap-3">
                       <Button
@@ -325,7 +325,7 @@ export function ImuScreen() {
                         loading={action === "imu_stop"}
                         onClick={() => void imuStop()}
                       >
-                        {canStop ? "Stop" : `Stop (at ${minS} s)`}
+                        {canStop ? "Stop" : `Stop (at ${minS}\u202fs)`}
                       </Button>
                       <ProgressBar className="max-w-[240px]" value={rot / Math.max(1, maxS)} tone={rot >= minS ? "ok" : "accent"} label="Rotation time" />
                     </div>
@@ -337,7 +337,7 @@ export function ImuScreen() {
                   <div className="min-w-[240px] flex-1">
                     <div className="text-xs font-semibold uppercase tracking-wider text-subtle">Recording done</div>
                     <h2 className="mt-1 font-display text-2xl font-semibold text-fg">Calibrating the IMU…</h2>
-                    <p className="mt-1 text-sm text-muted">{job?.message || "Fitting the gyro to the camera's motion"}</p>
+                    <p className="mt-1 text-sm text-muted">{job?.message || "Matching the motion sensor to the camera's movement"}</p>
                     <ProgressBar className="mt-3 max-w-md" value={job && job.state !== "queued" ? job.progress : null} label="Calibration progress" />
                   </div>
                 </div>
@@ -346,7 +346,7 @@ export function ImuScreen() {
                   <CircleCheck size={44} className="text-ok" aria-hidden />
                   <div className="min-w-[240px] flex-1">
                     <div className="text-xs font-semibold uppercase tracking-wider text-subtle">Recording done</div>
-                    <h2 className="mt-1 font-display text-2xl font-semibold text-fg">{rot > 0 ? `${Math.round(rot)} s of rotation recorded` : "Recording saved"}</h2>
+                    <h2 className="mt-1 font-display text-2xl font-semibold text-fg">{rot > 0 ? `${Math.round(rot)}\u202fs of rotation recorded` : "Recording saved"}</h2>
                     <p className="mt-1 text-sm text-muted">Calibrate it now, or record again.</p>
                   </div>
                   <div className="flex gap-2">
@@ -376,16 +376,16 @@ export function ImuScreen() {
               <div className="mb-1 flex items-baseline justify-between">
                 <span className="text-[11px] font-semibold uppercase tracking-wider text-subtle">Board seen</span>
                 <span className={cn("font-mono text-lg font-semibold tnum", board !== null && board < 80 ? "text-warn" : "text-fg")}>
-                  {board === null || (!recording && !recorded) ? "–" : `${Math.round(board)} %`}
+                  {board === null || (!recording && !recorded) ? "–" : `${Math.round(board)}\u202f%`}
                 </span>
               </div>
               <ProgressBar value={board === null ? 0 : board / 100} tone={board !== null && board < 80 ? "warn" : "ok"} label="Share of frames with the board in view" />
               <p className={cn("mt-1.5 text-xs", board !== null && board < 80 && recording ? "text-warn" : "text-subtle")}>
-                {board !== null && board < 80 && recording ? "Keep the board in view: smaller, slower turns." : "Keep it above 80 %: the board's pose is what the gyro is compared with."}
+                {board !== null && board < 80 && recording ? "Keep the board in view: smaller, slower turns." : "Keep it above 80\u202f%: the app compares the motion sensor with it."}
               </p>
             </div>
             <div className="rounded-xl border border-line bg-panel p-4">
-              <div className="mb-1 text-[11px] font-semibold uppercase tracking-wider text-subtle">Gyro rate</div>
+              <div className="mb-1 text-[11px] font-semibold uppercase tracking-wider text-subtle">Turn rate</div>
               <GyroGauge dps={gyro} phase={p} />
             </div>
           </aside>

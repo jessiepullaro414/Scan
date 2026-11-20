@@ -48,7 +48,7 @@ export function DeviceChip() {
       {busy ? (
         <div className="text-muted">
           {busy}
-          {simJob ? ` ${Math.round(simJob.progress * 100)} %` : ""}
+          {simJob ? ` ${Math.round(simJob.progress * 100)}\u202f%` : ""}
         </div>
       ) : null}
       {connected ? (
@@ -86,7 +86,8 @@ export function DeviceChip() {
 
   const warned = connected && hv && hv.state !== "valid" ? hv : null;
   const HealthIcon = warned ? HEALTH_ICON[warned.state] : null;
-  const calibWords = warned ? warned.short : calibrated ? "Calibrated" : "No calibration";
+  // U48: the state's one name ("Calibration valid") when the engine judged it; "Calibration loaded" only says a file is in use
+  const calibWords = warned ? warned.short : hv && calibrated ? hv.short : calibrated ? "Calibration loaded" : "No calibration";
 
   return (
     <span className="inline-flex items-center gap-1.5">
@@ -94,7 +95,7 @@ export function DeviceChip() {
       <button
         type="button"
         onClick={() => navigate(paths.device())}
-        aria-label={`Device: ${connected ? SOURCE_LABEL[source] : "none"}, ${statusText}${connected ? (warned ? `, calibration: ${warned.title}` : calibrated ? ", calibrated" : ", no calibration") : ""}. Open the Device page.`}
+        aria-label={`Device: ${connected ? SOURCE_LABEL[source] : "none"}, ${statusText}${connected ? (warned ? `, calibration: ${warned.title}` : calibrated ? `, ${calibWords.toLowerCase()}` : ", no calibration") : ""}. Open the Device page.`}
         className="flex h-8 items-center gap-2 rounded-lg border border-line bg-surface-2 pl-2.5 pr-2 text-xs transition-colors hover:border-line-strong hover:bg-surface-3"
       >
         <span className="relative">

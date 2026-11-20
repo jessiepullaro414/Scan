@@ -38,7 +38,7 @@ const scan = { id: "s1", name: "Top", preset: { id: "thin-sheet-small-parts", na
 // ---------------------------------------------------------------- Scan these areas, and Start
 const p = pendingFromCheck({ projectId: "p1", scan, result, why });
 check(p.areas.length === 3 && p.areas[0].index === 0 && p.areas[0].faces === "AAAA", "every listed area, with its faces to light");
-check(p.poses.length === 2 && p.poses[0].text!.startsWith("For area 1") && p.poses[1].area === 2 && p.poses[1].text === "For area 3: Hold it 20° off square.", "the plan's places, then an area's own place the plan leaves out");
+check(p.poses.length === 2 && p.poses[0].text!.startsWith("Area 1: about") && p.poses[1].area === 2 && p.poses[1].text === "Area 3: about 250\u202fmm away, 20° from straight on.", "the plan's places, then an area's own place the plan leaves out");
 // the plan's place for area 1 also sees most of area 2: area 2 needs no place of its own (it has none here anyway)
 const many = pendingFromCheck({ projectId: "p1", scan, result: { ...result, areas: Array.from({ length: 12 }, () => area(10)) } as CheckResult, why: { ...why, areas: Array.from({ length: 12 }, (_, i) => ({ index: i, view: { ok: true, pose: pose(), text: "Here." } })) } as unknown as CheckWhy });
 check(many.poses.length === 6 && !many.poses.some((q) => q.area === 1), "a few places in all, none for an area the plan sees");
@@ -60,7 +60,7 @@ check(passStartBody(p, true).same_setup === false, "the part was moved: not the 
 check(Object.keys(passPresetFields({ preset: "thin-sheet-small-parts", preset_values: { quality: "best" } }, p.preset)).length === 0, "the first scan's preset: not sent");
 check(passPresetFields({ preset: "general" }, p.preset).preset === "general", "another preset: sent");
 check(Object.keys(passPresetFields({ preset: "general" }, null)).length === 0, "a first scan made before presets: General, not sent");
-check(areasWords(p.areas, 0.3) === "3 areas, 2.2 cm² in all, at ± 0.3 mm.", areasWords(p.areas, 0.3));
+check(areasWords(p.areas, 0.3) === "3 areas, 220\u202fmm² in all, at ± 0.3\u202fmm.", areasWords(p.areas, 0.3));
 
 // ---------------------------------------------------------------- the steps after Stop
 const rows = (state: string, step: string | null) => chainRows({ state: state as never, step: step as never }).map((r) => r.state).join(" ");
@@ -85,11 +85,11 @@ const cmp = {
   ],
   areas_note: null,
 } as PassCompare;
-check(compareSentence(cmp) === "The share of the surface that meets ± 1 mm rose by 9 points: 72 % before, 81 % after.", compareSentence(cmp));
+check(compareSentence(cmp) === "The share of the surface that meets ± 1\u202fmm rose by 9 points: 72\u202f% before, 81\u202f% after.", compareSentence(cmp));
 const r = compareRows(cmp);
-check(r[0].share === "72 %" && r[0].areas === "12 areas" && r[1].areas === "1 area" && r[1].name === "Top + Pass", "the two rows");
-check(areaAfterWords(cmp.areas[0]) === "Area 2 (1.4 cm²): passes now (96 % of it).", areaAfterWords(cmp.areas[0]));
-check(areaAfterWords(cmp.areas[1]) === "Area 5 (30 mm²): not in the merged scan.", areaAfterWords(cmp.areas[1]));
+check(r[0].share === "72\u202f%" && r[0].areas === "12 areas" && r[1].areas === "1 area" && r[1].name === "Top + Pass", "the two rows");
+check(areaAfterWords(cmp.areas[0]) === "Area 2 (140\u202fmm²): passes now (96\u202f% of it).", areaAfterWords(cmp.areas[0]));
+check(areaAfterWords(cmp.areas[1]) === "Area 5 (30\u202fmm²): not in the merged scan.", areaAfterWords(cmp.areas[1]));
 check(compareSentence({ ...cmp, merged: { ...cmp.merged, share_ok: null } }).includes("can't be told"), "no confidence");
 
 // found in review: the merge left the tables out (the part was moved), so the whole merged mesh holds far less surface
@@ -105,8 +105,8 @@ const moved = {
   areas: Array.from({ length: 47 }, (_, i) => ({ index: i, kind: "uncertain" as const, area_mm2: 10, center: [0, 0, 0] as [number, number, number], n_faces: 1, share_ok: 0, found_share: 0, state: "not_found" as const })),
 } as PassCompare;
 const ms = compareSentence(moved);
-check(!ms.includes("fell") && ms.includes("surface both scans hold") && ms.includes("rose by 11 points") && ms.includes("12 %"), ms);
-check(missingSentence(moved) === "88 % of the first scan's surface (520 cm²) is not in the merged scan: the part was moved, so each scan's table was left out of the merge.", missingSentence(moved) ?? "null");
+check(!ms.includes("fell") && ms.includes("surface both scans hold") && ms.includes("rose by 11 points") && ms.includes("12\u202f%"), ms);
+check(missingSentence(moved) === "88\u202f% of the first scan's surface (52,000\u202fmm²) is not in the merged scan: the part was moved, so each scan's table was left out of the merge.", missingSentence(moved) ?? "null");
 check(missingSentence({ ...moved, missing: { share: 0.001, area_mm2: 3, why: null } }) === null, "a sliver missing is not worth a line");
 check(missingSentence({ ...moved, missing: { share: 0.2, area_mm2: 900, why: null } })!.endsWith("is not in the merged scan."), "no reason known: none made up");
 const lines = areaLines(moved.areas);

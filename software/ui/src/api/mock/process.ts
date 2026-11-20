@@ -49,6 +49,7 @@ import type { FeatureEngine } from "./features";
 import { mockFit } from "./fit";
 import { apply, stlMesh } from "./geom";
 import { MOCK_SCAN_VALID } from "./health";
+import { BUILTINS } from "./recipes";
 import { HttpError, json, nowIso, uid, type MockHost, type WorkStep } from "./host";
 import { mockLasers, type LaserPatch } from "./lasers";
 import {
@@ -99,54 +100,7 @@ type JobWork = Generator<WorkStep, Commit, void>;
 
 const SNAP_BUDGET = 200 * 1024 * 1024; // bytes of meshes kept for instant undo / redo
 
-const BUILTINS: Recipe[] = [
-  {
-    id: "default",
-    name: "Default",
-    description: "What “Make mesh” runs: standard quality, straightened, loose bits removed and small holes filled.",
-    builtin: true,
-    settings: { quality: "standard", straighten: "auto", voxel_mm: null },
-    ops: [
-      { op: "remove_floaters", params: { min_size_mm: 10 } },
-      { op: "fill_holes", params: { max_hole_mm: 10 } },
-    ],
-  },
-  {
-    id: "body-panel",
-    name: "Body panel",
-    description: "For large curved panels: smoother, keeps only the main piece and fills larger holes.",
-    builtin: true,
-    settings: { quality: "standard", straighten: "auto", voxel_mm: 1 },
-    ops: [
-      { op: "remove_floaters", params: { keep_largest_only: true } },
-      { op: "fill_holes", params: { max_hole_mm: 40 } },
-      { op: "smooth", params: { method: "taubin", strength: 0.6, keep_edges: false } },
-    ],
-  },
-  {
-    id: "bracket",
-    name: "Bracket / mechanical",
-    description: "Keeps sharp edges and flat faces: light, edge-aware smoothing, only small holes filled.",
-    builtin: true,
-    settings: { quality: "standard", straighten: "auto", voxel_mm: 1 },
-    ops: [
-      { op: "remove_floaters", params: { min_size_mm: 5 } },
-      { op: "fill_holes", params: { max_hole_mm: 8 } },
-      { op: "smooth", params: { method: "bilateral", strength: 0.3, keep_edges: true } },
-    ],
-  },
-  {
-    id: "quick-preview",
-    name: "Quick preview",
-    description: "Fast and light: preview quality, no straightening, simplified to half.",
-    builtin: true,
-    settings: { quality: "preview", straighten: "off", voxel_mm: 2 },
-    ops: [
-      { op: "remove_floaters", params: { keep_largest_only: true } },
-      { op: "decimate", params: { ratio: 0.5 } },
-    ],
-  },
-];
+
 
 const OPS: MeshOp[] = ["remove_floaters", "fill_holes", "smooth", "decimate", "delete_faces", "keep_faces", "remove_table"];
 const BUSY: Record<MeshOp, string> = {
@@ -933,16 +887,16 @@ export class MockProcess {
     b: number,
   ): Generator<WorkStep, { loops: number; mm: number; deg: number; mesh: TriMesh | null }, void> {
     const span = b - a;
-    yield* tick(a, a + span * 0.15, 4, () => "Picking keyframes along the trajectory");
+    yield* tick(a, a + span * 0.15, 4, () => "Picking frames along the camera path");
     const t = mockTrajectory(s.duration_s, seedOf(s.id));
-    yield* tick(a + span * 0.15, a + span * 0.4, 8, (k) => `Checking revisits with ICP (${Math.min(k, 8)} of 8)`);
-    yield* tick(a + span * 0.4, a + span * 0.5, 3, () => "Optimising the pose graph");
+    yield* tick(a + span * 0.15, a + span * 0.4, 8, (k) => `Checking the places the scan came back to (${Math.min(k, 8)} of 8)`);
+    yield* tick(a + span * 0.4, a + span * 0.5, 3, () => "Straightening the camera path");
     const r = { loops: t.loops.length, mm: t.correction_mm, deg: t.correction_deg };
     if (!t.loops.length || !withMesh) {
-      yield* tick(a + span * 0.5, b, 2, () => (t.loops.length ? "Poses corrected" : "No loops: nothing to correct"));
+      yield* tick(a + span * 0.5, b, 2, () => (t.loops.length ? "Camera path straightened" : "The scan never came back to a place: nothing to straighten"));
       return { ...r, mesh: null };
     }
-    const mesh = yield* run(scanMesh({ voxel, noise: noiseFor(quality, true), seed: seedOf(s.id) }), a + span * 0.5, b, "Fusing again at the corrected poses");
+    const mesh = yield* run(scanMesh({ voxel, noise: noiseFor(quality, true), seed: seedOf(s.id) }), a + span * 0.5, b, "Building the surface again along the straightened path");
     return { ...r, mesh };
   }
 
@@ -951,7 +905,7 @@ export class MockProcess {
     const ok = Math.round((n * pct) / 100);
     st.stages.track = {
       state: "done",
-      summary: `Tracked ${int(ok)} of ${int(n)} frames; ${int(n - ok)} were skipped (fast motion or too few features).`,
+      summary: `Tracked ${int(ok)} of ${int(n)} frames; ${int(n - ok)} were skipped (fast motion or too little shape to follow).`,
       when,
       job_id: null,
       quality,
@@ -963,7 +917,7 @@ export class MockProcess {
     st.stages.straighten = {
       state: "done",
       summary: r.loops
-        ? `Checked ${r.loops + 3} revisits with ICP and kept ${r.loops}; the pose graph spread the correction along the whole scan.`
+        ? `Found ${r.loops + 3} places the scan came back to and used ${r.loops} to straighten it.`
         : "No loops found: the scan never came back to a place it had already seen, so there was nothing to correct and the mesh is unchanged.",
       when,
       job_id: null,

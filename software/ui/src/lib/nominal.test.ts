@@ -37,16 +37,16 @@ function check(ok: boolean, what: string): void {
 // the words
 check(fmtNominal(14) === "14" && fmtNominal(14.5) === "14.5" && fmtNominal(10.25) === "10.25" && fmtNominal(100) === "100" && fmtNominal(0) === "0", "numbers as written");
 check(nominalText("diameter", 14) === "Ø 14" && nominalText("radius", 7) === "R 7", "sizes");
-check(nominalText("angle", 90) === "90°" && nominalText("angle", 0, "parallel") === "parallel" && nominalText("distance", 10) === "10 mm", "relation values");
+check(nominalText("angle", 90) === "90°" && nominalText("angle", 0, "parallel") === "parallel" && nominalText("distance", 10) === "10\u202fmm", "relation values");
 check(chipText("diameter", { nominal: 14, word: null }) === "Ø 14?", "the chip");
 check(chipText("angle", { nominal: 0, word: "parallel" }) === "parallel?", "a word's chip");
-check(measuredText(14.0213, 0.0312, "mm") === "14.02 ± 0.03 mm" && measuredText(0.3, null, "deg") === "0.30°", "measured");
+check(measuredText(14.0213, 0.0312, "mm") === "14.02 ± 0.03\u202fmm" && measuredText(0.3, null, "deg") === "0.30°", "measured");
 check(measuredText(null, null, "mm") === "not measured now", "no measurement now");
-check(measuredText(24.9763, 0.0012, "mm") === "24.976 ± 0.001 mm", `a small ±: ${measuredText(24.9763, 0.0012, "mm")}`);
+check(measuredText(24.9763, 0.0012, "mm") === "24.976 ± 0.001\u202fmm", `a small ±: ${measuredText(24.9763, 0.0012, "mm")}`);
 
 // an offer's hover text: the engine's sentence; a bias offer says so and that it is a simulator number
-const two: NominalSuggestion = { nominal: 14, difference: -0.02, step: 1, allowed_by: "2 sigma", bias: null, word: null, directions: null, sentence: "Ø 14.02 ± 0.03 mm: Ø 14 mm? It is 0.02 mm away." };
-const bias: NominalSuggestion = { ...two, nominal: 14.5, allowed_by: "bias", sentence: "Ø 14.30 ± 0.03 mm: Ø 14.5 mm? … offered only because of a known bias …" };
+const two: NominalSuggestion = { nominal: 14, difference: -0.02, step: 1, allowed_by: "2 sigma", bias: null, word: null, directions: null, sentence: "Ø 14.02 ± 0.03\u202fmm: Ø 14\u202fmm? It is 0.02\u202fmm away." };
+const bias: NominalSuggestion = { ...two, nominal: 14.5, allowed_by: "bias", sentence: "Ø 14.30 ± 0.03\u202fmm: Ø 14.5\u202fmm? … offered only because of a known bias …" };
 const tip2 = suggestionTip(two, { poses: "tracked", poses_reason: "the processing report says the poses were tracked" });
 check(tip2[0] === two.sentence && tip2.some((l) => l.includes("with tracking")) && tip2.some((l) => l.includes("simulator")), `2σ tip: ${tip2.join(" | ")}`);
 check(!tip2.some((l) => l.startsWith("Offered only because")), "a 2σ offer does not claim a bias");
@@ -76,12 +76,12 @@ const appr: ApprovedNominal = {
   measured_now: 10.4,
   sigma_now: 0.03,
   check_again: true,
-  check_reason: "check again: it was approved against 10.04 ± 0.03 mm, and it now measures 10.40 ± 0.03 mm.",
+  check_reason: "check again: it was approved against 10.04 ± 0.03\u202fmm, and it now measures 10.40 ± 0.03\u202fmm.",
 };
 check(approvedText(appr) === "nominal Ø 10", "the approval's words");
 check(approvedText({ value: "angle", nominal: 0, word: "parallel" }) === "nominal parallel", "a word approved");
 const at = approvedTip(appr);
-check(at.includes("Accepted as offered") && at.includes("10.40 ± 0.03 mm") && at.includes("Check again"), `the approval's tip: ${at}`);
+check(at.includes("Accepted as offered") && at.includes("10.40 ± 0.03\u202fmm") && at.includes("Check again"), `the approval's tip: ${at}`);
 check(sizeApproval([appr]) === appr && sizeApproval([{ ...appr, value: "radius" }])?.value === "radius" && sizeApproval([]) === null, "a fit's size");
 check(valueApproval([{ ...appr, value: "angle" }], "angle")?.value === "angle" && valueApproval(undefined, "angle") === null, "a relation's value");
 

@@ -32,7 +32,7 @@ import { AdviceList, ResultView } from "./ResultView";
 
 const HOW: Record<CalibKind, string[]> = {
   stereo: [
-    "Hold the glued board 20–50 cm in front of the scanner, facing it.",
+    "Hold the glued board 200–500\u202fmm in front of the scanner, facing it.",
     "Follow the blue box: it shows where to put the board next. Tilt it when asked.",
     "Hold still: the ring fills and the view is taken by itself (or press Space).",
     "At 15–25 views, press Enter. You get a grade and plain advice.",
@@ -40,14 +40,14 @@ const HOW: Record<CalibKind, string[]> = {
   lasers: [
     "The line lasers switch on. Never look into them.",
     "Hold the board so every laser line crosses the white paper around the squares.",
-    "Change the distance (15–45 cm) and the tilt between poses.",
-    "At 6–10 poses, press Enter.",
+    "Change the distance (150–450\u202fmm) and the tilt between views.",
+    "At 6–10 views, press Enter.",
   ],
   imu: [
     "Put the board where the camera sees it: propped on a table is fine.",
-    "Press Start, then hold the scanner still for 2 seconds.",
+    "Press Get ready, then Start, and hold the scanner still for 2 seconds.",
     "Rotate it slowly about all three axes, ±20–40°, for 20–60 seconds, keeping the board in view.",
-    "Press Stop, or wait: it stops by itself at 60 s.",
+    "Press Stop, or wait: it stops by itself at 60\u202fs.",
   ],
   check: [
     "The line lasers switch on. Never look into them.",
@@ -141,7 +141,8 @@ function OtherSession({ other, kind }: { other: CalibSession; kind: CalibKind })
       ? `Your ${name} result isn't saved yet`
       : `The ${name} calibration is in progress`;
   const switchOver = async () => {
-    if (await cancel()) await start(kind);
+    if (!(await cancel())) return false; // U6: the dialog stays open when the session could not end
+    await start(kind); // a refused start shows on the step itself
   };
   return (
     <Callout
@@ -287,7 +288,8 @@ function Intro({ kind, other }: { kind: CalibKind; other: CalibSession | null })
             void start(kind);
           }}
         >
-          {done ? (kind === "check" ? "Run the check again" : `Calibrate ${lcFirst(STEP_META[kind].title)} again`) : `Start ${lcFirst(meta.title)}`}
+          {/* U40: the IMU step has one Start, on the recording screen; this one gets it ready */}
+          {done ? (kind === "check" ? "Run the check again" : `Calibrate ${lcFirst(STEP_META[kind].title)} again`) : kind === "imu" ? "Get ready" : `Start ${lcFirst(meta.title)}`}
         </Button>
         <span className="text-sm text-muted">
           {done

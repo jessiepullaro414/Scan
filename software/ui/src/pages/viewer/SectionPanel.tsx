@@ -72,9 +72,9 @@ function named(s: KeptSection, fits: FitItem[]): string {
   if (d.kind === "fit") {
     const now = fits.find((f) => f.fid === d.fit);
     const off = d.offset_mm ?? 0;
-    return `on ${now?.name ?? d.fit_name ?? "a kept plane"}${off ? `, ${off > 0 ? "+" : ""}${off} mm` : ""}${now ? "" : " (fit deleted)"}`;
+    return `on ${now?.name ?? d.fit_name ?? "a kept plane"}${off ? `, ${off > 0 ? "+" : ""}${off}\u202fmm` : ""}${now ? "" : " (fit deleted)"}`;
   }
-  if (d.kind === "frame") return `${d.axis.replace("-", "")} = ${d.value_mm} mm${d.axis.startsWith("-") ? ", from −" + d.axis.slice(1) : ""}`;
+  if (d.kind === "frame") return `${d.axis.replace("-", "")} = ${d.value_mm}\u202fmm${d.axis.startsWith("-") ? ", from −" + d.axis.slice(1) : ""}`;
   if (d.kind === "points") return "through three points";
   return "through a point";
 }

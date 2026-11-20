@@ -2,17 +2,13 @@
  * What the current mesh is, in plain words (every `MeshStats` field), and its downloads
  * (STL / PLY / OBJ through the scan's files).
  */
-import { Box, Download, FileBox } from "lucide-react";
-import { useState } from "react";
-import { MOCK } from "../../api/backend";
+import { Box, Download } from "lucide-react";
 import { api } from "../../api/http";
 import type { MeshStats } from "../../api/types";
-import { Button } from "../../components/ui/Button";
+import { MeshDownloadButtons } from "../../components/MeshDownloads";
 import { Skeleton } from "../../components/ui/Feedback";
 import { KeyValue } from "../../components/ui/Layout";
-import { downloadFile } from "../../lib/download";
 import { fmtFixed, fmtInt } from "../../lib/format";
-import { toast } from "../../store/toasts";
 import { Help, Panel } from "./bits";
 
 const num = (n: number | null | undefined, digits: number) => <span className="font-mono text-xs tnum">{fmtFixed(n, digits)}</span>;
@@ -53,11 +49,11 @@ export function StatsPanel({ stats, loading }: { stats: MeshStats | null; loadin
                   "None"
                 ) : (
                   <span>
-                    <span className="font-mono text-xs tnum">{fmtInt(stats.holes)}</span>, the largest {num(stats.largest_hole_mm, 1)} mm around
+                    <span className="font-mono text-xs tnum">{fmtInt(stats.holes)}</span>, the largest {num(stats.largest_hole_mm, 1)}&#8239;mm around
                   </span>
                 ),
               ],
-              ["Outer edge", stats.border_mm === null ? "None: the surface is closed" : <span>{num(stats.border_mm, 0)} mm around</span>],
+              ["Outer edge", stats.border_mm === null ? "None: the surface is closed" : <span>{num(stats.border_mm, 0)}&#8239;mm around</span>],
               [
                 "Watertight",
                 stats.watertight ? (
@@ -81,30 +77,30 @@ export function StatsPanel({ stats, loading }: { stats: MeshStats | null; loadin
                     </span>,
                   ]
                 : null,
-              ["Area", <span>{num(stats.area_cm2, 1)} cm²</span>],
+              ["Area", <span>{num(stats.area_cm2, 1)}&#8239;cm²</span>],
               stats.filled_cm2
                 ? [
                     "Filled",
                     <span title="Made by hole filling: not measured, so measuring skips it (striped grey in the view)">
-                      {num(stats.filled_cm2, stats.filled_cm2 < 1 ? 2 : 1)} cm² <span className="text-muted">not measured</span>
+                      {num(stats.filled_cm2, stats.filled_cm2 < 1 ? 2 : 1)}&#8239;cm² <span className="text-muted">not measured</span>
                     </span>,
                   ]
                 : null,
               stats.sigma_mm
                 ? [
                     "Confidence",
-                    <span title="Share of the surface whose 1σ uncertainty is at most 0.1 mm">
-                      {Math.round(stats.sigma_mm.within_0_1 * 100)} % within 0.1 mm <span className="text-muted">(median ±{num(stats.sigma_mm.median, 2)} mm)</span>
+                    <span title="Share of the surface whose 1σ uncertainty is at most 0.1&#8239;mm">
+                      {Math.round(stats.sigma_mm.within_0_1 * 100)}&#8239;% within 0.1&#8239;mm <span className="text-muted">(median ±{num(stats.sigma_mm.median, 2)}&#8239;mm)</span>
                     </span>,
                   ]
                 : null,
               [
                 "Volume",
-                stats.volume_cm3 !== null ? <span>{num(stats.volume_cm3, 1)} cm³</span> : <span className="text-muted">Only for a watertight mesh</span>,
+                stats.volume_cm3 !== null ? <span>{num(stats.volume_cm3, 1)}&#8239;cm³</span> : <span className="text-muted">Only for a watertight mesh</span>,
               ],
             ]}
           />
-          <Help className="mt-2">Size is the bounding box along the scan's axes (the first camera frame).</Help>
+          <Help className="mt-2">Size along the scan's own directions.</Help>
         </>
       ) : loading ? (
         <div className="space-y-2" aria-busy="true">
@@ -124,38 +120,13 @@ export function StatsPanel({ stats, loading }: { stats: MeshStats | null; loadin
 
 /** STL / PLY / OBJ of the current mesh. OBJ is written only when the engine's config exports it. */
 export function DownloadPanel({ pid, sid, stem, ready }: { pid: string; sid: string; stem: string; ready: boolean }) {
-  const [checking, setChecking] = useState(false);
   const url = (name: string) => api.fileUrl(pid, sid, name);
-  const obj = async () => {
-    if (!MOCK) {
-      setChecking(true);
-      const there = await api.exists(url("mesh.obj"));
-      setChecking(false);
-      if (!there) {
-        toast.error("No OBJ for this scan", {
-          detail: "The engine writes mesh.obj only when OBJ export is turned on.",
-          hint: "Turn on OBJ export in the engine's config, then make any change to the mesh. STL and PLY are always there.",
-        });
-        return;
-      }
-    }
-    await downloadFile(url("mesh.obj"), `${stem}.obj`);
-  };
   return (
     <Panel title="Download" icon={Download}>
       {ready ? (
         <>
-          <div className="grid grid-cols-3 gap-2">
-            <Button size="sm" icon={Download} onClick={() => void downloadFile(url("mesh.stl"), `${stem}.stl`)} title="For CAD and slicers">
-              STL
-            </Button>
-            <Button size="sm" icon={Download} onClick={() => void downloadFile(url("mesh.ply"), `${stem}.ply`)} title="With normals">
-              PLY
-            </Button>
-            <Button size="sm" icon={FileBox} loading={checking} onClick={() => void obj()} title="For Blender and most 3D apps">
-              OBJ
-            </Button>
-          </div>
+          {/* U42: the one download list; the current mesh has no laser points of its own here */}
+          <MeshDownloadButtons urls={{ stl: url("mesh.stl"), ply: url("mesh.ply"), obj: url("mesh.obj"), laser: null }} stem={stem} />
           <Help className="mt-2">The current version, with every active edit. Units: mm.</Help>
         </>
       ) : (

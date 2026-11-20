@@ -25,6 +25,9 @@ type UiState = {
   laserLimit: number;
   /** Nominal offers: also show the values a known bias alone allows (off: only where the ± alone allows one). */
   nominalWithBias: boolean;
+  /** U8: the tracking's match and distance numbers on the Scan page (off: the words only). */
+  trackingNumbers: boolean;
+  setTrackingNumbers: (on: boolean) => void;
   setTheme: (t: Theme) => void;
   setCurrentProject: (pid: string | null) => void;
   setScanMode: (m: ScanMode) => void;
@@ -48,6 +51,7 @@ const K = {
   deviationLimit: "ohs.deviationLimit",
   laserLimit: "ohs.laserLimit",
   nominalWithBias: "ohs.nominalWithBias",
+  trackingNumbers: "ohs.trackingNumbers",
 };
 
 function readTheme(): Theme {
@@ -75,6 +79,11 @@ export const useUi = create<UiState>((set) => ({
   deviationLimit: validLimit(storage.get<unknown>(K.deviationLimit, null)),
   laserLimit: validLaserLimit(storage.get<unknown>(K.laserLimit, null)),
   nominalWithBias: storage.get<unknown>(K.nominalWithBias, false) === true,
+  trackingNumbers: storage.get<unknown>(K.trackingNumbers, false) === true,
+  setTrackingNumbers: (on) => {
+    storage.set(K.trackingNumbers, on);
+    set({ trackingNumbers: on });
+  },
   setTheme: (theme) => {
     try {
       localStorage.setItem(K.theme, theme);

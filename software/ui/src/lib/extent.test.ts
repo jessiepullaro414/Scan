@@ -28,16 +28,16 @@ const plane: PlaneExtent = {
 
 // ------------------------------------------------------------------ the card
 {
-  check(planeSize(plane) === "120.0 × 80.0 mm", `plane size ${planeSize(plane)}`);
-  check(planeSize({ ...plane, rectangle: { ...plane.rectangle, half_sizes_mm: [4.2, 0.35] } }) === "8.40 × 0.70 mm", "small plane: the longer side's decimals");
-  check(fmtArea(9123.4) === "9,123 mm²" && fmtArea(56.24) === "56.2 mm²" && fmtArea(0.844) === "0.84 mm²", "areas");
+  check(planeSize(plane) === "120.0 × 80.0\u202fmm", `plane size ${planeSize(plane)}`);
+  check(planeSize({ ...plane, rectangle: { ...plane.rectangle, half_sizes_mm: [4.2, 0.35] } }) === "8.40 × 0.70\u202fmm", "small plane: the longer side's decimals");
+  check(fmtArea(9123.4) === "9,123\u202fmm²" && fmtArea(56.24) === "56.2\u202fmm²" && fmtArea(0.844) === "0.84\u202fmm²", "areas");
   const rows = extentRows(plane);
   check(rows.map((r) => r[0]).join() === "Size,Area", "a plane: size and area");
-  check(rows[0][1] === "120.0 × 80.0 mm" && rows[1][1] === "9,123 mm²", "a plane's values");
+  check(rows[0][1] === "120.0 × 80.0\u202fmm" && rows[1][1] === "9,123\u202fmm²", "a plane's values");
   check(rows[1][2].includes("3 holes") && rows.every((r) => r[2].length > 20), "hover texts say what it is");
   const cyl: CylinderExtent = { kind: "cylinder", along_mm: [-2, 10.5], length_mm: 12.5, zero: [1, 0, 0], start_deg: 30, arc_deg: 182.4 };
   const cr = extentRows(cyl);
-  check(cr.map((r) => r[0]).join() === "Length,Arc" && cr[0][1] === "12.50 mm" && cr[1][1] === "182° of the round", `a cylinder: ${cr.map((r) => r[1])}`);
+  check(cr.map((r) => r[0]).join() === "Length,Arc" && cr[0][1] === "12.50\u202fmm" && cr[1][1] === "182° of the round", `a cylinder: ${cr.map((r) => r[1])}`);
   check(arcText({ ...cyl, start_deg: 0, arc_deg: 360 }) === "all round", "a whole round");
   check(extentRows({ kind: "hole", n_edge: 40, edge: null }).length === 0, "a hole: nothing new");
   check(extentRows(null).length === 0 && extentRows(undefined).length === 0, "no extent: nothing");

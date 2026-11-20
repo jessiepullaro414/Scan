@@ -44,7 +44,7 @@ export function mm(v: number): string {
 /** A value in the app's words: "0.5 mm", "Standard", "Auto"; a recipe by its name when `recipeName` knows it. */
 export function valueText(key: PresetKey, value: unknown, recipeName?: (id: string) => string | undefined): string {
   if (value === null || value === undefined) return "–";
-  if ((key === "voxel_mm" || key === "check_tolerance_mm") && typeof value === "number") return `${key === "check_tolerance_mm" ? "± " : ""}${mm(value)} mm`;
+  if ((key === "voxel_mm" || key === "check_tolerance_mm") && typeof value === "number") return `${key === "check_tolerance_mm" ? "± " : ""}${mm(value)}\u202fmm`;
   if (key === "recipe" && typeof value === "string") return recipeName?.(value) ?? value;
   return WORDS[String(value)] ?? String(value);
 }

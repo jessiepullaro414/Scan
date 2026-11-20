@@ -26,7 +26,7 @@ export const SMOOTH_DEFAULTS: SmoothChoice = { method: "taubin", strength: 0.5, 
 export function smoothEdit(c: SmoothChoice, hasSigma: boolean): { body: EditBody; label: string; invalid: string | null } {
   const within = c.withinSigma && hasSigma;
   const whereText = c.where === "flat" ? ", flat areas only" : c.where === "edges" ? ", away from edges" : "";
-  const pctText = `${Math.round(c.strength * 100)} %${whereText}${within ? ", within 2σ" : ""}`;
+  const pctText = `${Math.round(c.strength * 100)}\u202f%${whereText}${within ? ", within 2σ" : ""}`;
   return {
     body: {
       op: "smooth",

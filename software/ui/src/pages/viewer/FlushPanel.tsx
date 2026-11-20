@@ -27,7 +27,7 @@ export const FLUSH_ICON = SeparatorVertical;
 
 const HELP = {
   clicks:
-    "Click once on each panel, a few millimetres from the seam. The first click's panel is panel A, the second's panel B. The engine follows the seam both ways and reads a section across it every 3 mm.",
+    "Click once on each panel, a few millimetres from the seam. The first click's panel is panel A, the second's panel B. The engine follows the seam both ways and reads a section across it every 3\u202fmm.",
   mean: "The mean over the stations whose flush is trusted: the number to trust. + means panel B stands above panel A (square to panel A), − below.",
   pm: "A ± is the spread from scan to scan (1σ), worked out from the scan's own points: not the accuracy. Errors of the calibration and of the scale come on top.",
   trusted: "A station is not trusted when a panel has no surface there, or its reading is far from its neighbours'. Those are left out of the lowest, mean and highest.",
@@ -137,18 +137,18 @@ export function FlushPanel({
               <div className="rounded-lg border border-line bg-surface-2/60 px-3 py-2">
                 <div className="flex items-baseline gap-2">
                   <span className="text-xs text-muted">Mean flush</span>
-                  <span className="flex-1 text-right font-mono text-[17px] font-semibold text-fg tnum">{w.mean !== null ? `${w.mean} mm` : "—"}</span>
+                  <span className="flex-1 text-right font-mono text-[17px] font-semibold text-fg tnum">{w.mean !== null ? `${w.mean}\u202fmm` : "—"}</span>
                   <Help text={HELP.mean} label="Mean flush" />
                 </div>
                 {w.sigma !== null ? (
                   <div className="flex items-center justify-end gap-1 text-[11px] text-subtle">
-                    each station ± about {w.sigma} mm
+                    each station ± about {w.sigma}&#8239;mm
                     <Help text={HELP.pm} label="What the ± means" />
                   </div>
                 ) : null}
               </div>
-              <Row label="Lowest" value={w.lowest !== null ? `${w.lowest} mm ${w.lowestAt}` : "—"} />
-              <Row label="Highest" value={w.highest !== null ? `${w.highest} mm ${w.highestAt}` : "—"} />
+              <Row label="Lowest" value={w.lowest !== null ? `${w.lowest}\u202fmm ${w.lowestAt}` : "—"} />
+              <Row label="Highest" value={w.highest !== null ? `${w.highest}\u202fmm ${w.highestAt}` : "—"} />
               <Row label="Stations" value={<span className="font-sans">{w.trusted}</span>} help={{ text: HELP.trusted, label: "Stations not trusted" }} />
               {w.proud ? <p className="text-xs text-fg">{w.proud}</p> : null}
               <FlushChart record={a} />

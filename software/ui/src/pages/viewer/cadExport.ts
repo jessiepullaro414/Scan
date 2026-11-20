@@ -8,7 +8,7 @@ import { fmtBytes, fmtInt } from "../../lib/format.ts";
 
 /** What the outline switch does, for its hover card. */
 export const CAD_OUTLINE_HELP =
-  "Off: each plane is its measured rectangle, four clean edges. On: each plane follows its real outline, its largest outer loop and the real holes in it, simplified to about 0.5 mm. Small holes are left out as pits of the scan, and a plane whose outline can't make a valid face stays a rectangle (the notes say so).";
+  "Off: each plane is its measured rectangle, four clean edges. On: each plane follows its real outline, its largest outer loop and the real holes in it, simplified to about 0.5\u202fmm. Small holes are left out as pits of the scan, and a plane whose outline can't make a valid face stays a rectangle (the notes say so).";
 
 const plural = (n: number, one: string) => `${fmtInt(n)} ${one}${n === 1 ? "" : "s"}`;
 
@@ -76,7 +76,7 @@ export function cadNominalLine(n: CadSummary["nominal"]): string | null {
 export function cadMoveLines(n: CadSummary["nominal"]): string[] {
   return (n?.moves ?? []).map((m) =>
     m.applied
-      ? `${m.name}: ${m.moved} turned ${m.turn_deg.toFixed(2)}° about its own point and slid ${m.slide_mm.toFixed(3)} mm, to suit ${m.to_suit}.`
+      ? `${m.name}: ${m.moved} turned ${m.turn_deg.toFixed(2)}° about its own point and slid ${m.slide_mm.toFixed(3)}\u202fmm, to suit ${m.to_suit}.`
       : `${m.name}: not applied (${m.reason ?? "no reason given"}), listed only.`,
   );
 }

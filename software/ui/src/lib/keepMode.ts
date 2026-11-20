@@ -227,8 +227,8 @@ export function writeLines(plan: Pick<ScanKeepPlan, "writes" | "kept_step_bytes"
  */
 export const BEST_LOSS =
   "Best quality from every recorded frame: it then works from the frames that stay and gives the same mesh as Standard. " +
-  "On the simulated test scans that meant 3.6 to 4.9 % less surface within 0.5 mm of the true shape and half the laser " +
-  "points; the median error was 0.019 mm larger on the car panel and 0.011 mm smaller on the bracket.";
+  "On the simulated test scans that meant 3.6 to 4.9\u202f% less surface within 0.5\u202fmm of the true shape and half the laser " +
+  "points; the median error was 0.019\u202fmm larger on the car panel and 0.011\u202fmm smaller on the bracket.";
 
 const LOSS: Record<KeepLoss, string> = {
   undo: "Undo the edits made so far. The mesh stays as it is now, and new edits can be undone.",

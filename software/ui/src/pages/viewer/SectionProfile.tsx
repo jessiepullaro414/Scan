@@ -26,7 +26,7 @@ const HELP =
   "The cut in the plane's own axes, seen from the side its normal points to, at the engine's numbers. Solid: measured surface; dashed red: surface that hole filling made up. Click two points of the profile to measure between them (a click snaps to the nearest point of the profile). Drag to pan, the wheel zooms, a double click fits the profile again.";
 
 const mm = (x: number, d = 2) => `${(Math.abs(x) < 0.5 * 10 ** -d ? 0 : x).toFixed(d)}`;
-const area = (x: number) => `${Math.abs(x) >= 1000 ? fmtInt(Math.round(x)) : x.toFixed(1)} mm²`;
+const area = (x: number) => `${Math.abs(x) >= 1000 ? fmtInt(Math.round(x)) : x.toFixed(1)}\u202fmm²`;
 
 /** The profile's paths in the drawing's own mm (y up): the measured stretches and the not-measured ones. */
 function pathsOf(answer: SectionAnswer): { measured: string; filled: string } {
@@ -162,7 +162,7 @@ export function SectionProfile({ answer, frame, busy, onClose }: { answer: Secti
         onPointerLeave={() => setHover(null)}
         onDoubleClick={fit}
         role="img"
-        aria-label={`The section's profile: ${nums.lines} lines, ${mm(nums.length, 1)} mm long`}
+        aria-label={`The section's profile: ${nums.lines} lines, ${mm(nums.length, 1)}\u202fmm long`}
       >
         {/* the drawing's origin (where the frame's origin falls on the plane) */}
         {ox > -20 && ox < w + 20 && oy > -20 && oy < h + 20 ? (
@@ -215,7 +215,7 @@ export function SectionProfile({ answer, frame, busy, onClose }: { answer: Secti
         <div className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5 font-mono text-fg tnum" aria-label="Distance">
           {dist ? (
             <>
-              <span className="font-semibold">{mm(dist.d, 3)} mm</span>
+              <span className="font-semibold">{mm(dist.d, 3)}&#8239;mm</span>
               <span className="text-subtle">
                 Δ{names.u} {mm(dist.dx, 3)}
               </span>
@@ -234,14 +234,14 @@ export function SectionProfile({ answer, frame, busy, onClose }: { answer: Secti
           <span>
             {fmtInt(nums.lines)} {nums.lines === 1 ? "line" : "lines"}, {fmtInt(nums.closed)} closed
           </span>
-          <span>{mm(nums.length, 1)} mm long</span>
+          <span>{mm(nums.length, 1)}&#8239;mm long</span>
           {nums.loops.slice(0, 3).map((l) => (
             <span key={l.line} title={l.kind === "outline" ? "A closed outline (counter-clockwise)" : "A hole inside an outline (clockwise)"}>
               {l.kind === "outline" ? "Outline" : "Hole"} {area(Math.abs(l.area))}
             </span>
           ))}
           {nums.loops.length > 1 ? <span title="The closed loops' areas together: outlines less holes">Net {area(nums.net)}</span> : null}
-          {firstSigma !== null ? <span title="Mean 1σ of the longest line's measured points">σ {firstSigma.toFixed(3)} mm</span> : null}
+          {firstSigma !== null ? <span title="Mean 1σ of the longest line's measured points">σ {firstSigma.toFixed(3)}&#8239;mm</span> : null}
         </div>
         {answer.truncated ? (
           <div className="text-subtle">

@@ -116,7 +116,7 @@ export const useSession = create<SessionStore>((set, get) => {
       const s = await run("rewind", () => api.rewindScan(seconds), "Couldn't rewind");
       if (s) {
         get().apply(s);
-        toast.info(`Rewound ${seconds} s`, "The last stretch is cut from the model. The raw recording keeps it, marked as cut.");
+        toast.info(`Rewound ${seconds}\u202fs`, "The last stretch is cut from the model. The raw recording keeps it, marked as cut.");
       }
     },
 

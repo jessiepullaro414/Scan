@@ -113,7 +113,7 @@ export const useDevice = create<DeviceStore>((set, get) => ({
       const device = await api.setEmitters(e);
       set({ device });
     } catch (err) {
-      toast.error("Couldn't set the emitters", err);
+      toast.error("Couldn't set the lasers and dots", err);
       void get().fetch();
     }
   },
@@ -137,7 +137,7 @@ useJobs.subscribe((s, prev) => {
   if (!job || job === before || isActive(job)) return;
   useDevice.setState({ simJobId: null });
   void useDevice.getState().fetch();
-  if (job.state === "done") toast.success("Simulator demo ready", "The simulated scanner is connected. Start a scan!");
+  if (job.state === "done") toast.success("Simulator demo ready", "The simulator is connected.");
   else if (job.state === "failed")
     toast.error("Couldn't build the simulator demo", { detail: job.error || job.message || "The job failed.", hint: "Check the engine log, then try again." });
 });

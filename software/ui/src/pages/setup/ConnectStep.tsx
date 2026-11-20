@@ -24,6 +24,7 @@ import { ProgressBar, Skeleton, Spinner } from "../../components/ui/Feedback";
 import { Switch } from "../../components/ui/Form";
 import { Callout, Code, Section } from "../../components/ui/Layout";
 import { sentence } from "../../api/http";
+import { fmtSize } from "../../lib/format";
 import { cn } from "../../lib/util";
 import { SOURCE_LABEL, useDevice, useSimDemoReady } from "../../store/device";
 import { useJobs } from "../../store/jobs";
@@ -71,7 +72,7 @@ function imuStatus(d: DeviceState | null): { ok: boolean | null; detail: string 
   if (!d.pico?.connected) return { ok: false, detail: "Needs the Pico." };
   const imu = d.pico.imu;
   if (imu && /none/i.test(imu)) return { ok: false, detail: "The firmware finds no IMU: check the wiring (SDA GP4, SCL GP5, 3V3, GND)." };
-  if (d.imu_stream === false) return { ok: false, detail: "The IMU didn't start streaming: tracking runs without the gyro." };
+  if (d.imu_stream === false) return { ok: false, detail: "The motion sensor (IMU) didn't start: tracking runs without it." };
   return { ok: true, detail: imu ? `${imu}, streaming` : "Streaming" };
 }
 
@@ -87,7 +88,7 @@ function ScannerStatus() {
   const camOn = connected && device?.source === "camera";
   const info = (device?.camera?.info ?? {}) as Record<string, unknown>;
   const camText = camOn
-    ? [info.name, info.width && info.height ? `${String(info.width)}×${String(info.height)}` : null, info.fps ? `${String(info.fps)} fps` : null].filter(Boolean).join(" · ")
+    ? [info.name, info.width && info.height ? fmtSize(Number(info.width), Number(info.height)) : null, info.fps ? `${String(info.fps)}\u202ffps` : null].filter(Boolean).join(" · ")
     : connected
       ? `${SOURCE_LABEL[device!.source]} connected`
       : "Not connected";
@@ -125,7 +126,7 @@ function ScannerStatus() {
               detail={camWarn ? sentence(camWarn) : camText}
             />
             <Row ok={device.source === "sim" && connected ? null : pico.ok} icon={Microchip} label={pico.label} detail={device.source === "sim" && connected ? "The simulator needs no Pico." : pico.detail} />
-            <Row ok={imu.ok} icon={Orbit} label="IMU" detail={imu.detail} />
+            <Row ok={imu.ok} icon={Orbit} label="Motion sensor (IMU)" detail={imu.detail} />
           </ul>
           {changed && camOn ? (
             <Callout
@@ -187,18 +188,15 @@ function CameraRow({ cam, best }: { cam: CameraProbe; best: boolean }) {
             {cam.name ? <span className="font-normal text-muted"> · {cam.name}</span> : null}
           </span>
           {cam.stereo_like ? <Badge tone="accent">Looks like the stereo camera</Badge> : null}
+          {/* U29: "Selected" is said once, at the row's end */}
           {cam.in_use ? (
             <Badge tone="ok" dot>
               In use
             </Badge>
-          ) : cam.configured ? (
-            <Badge tone="neutral" dot>
-              Selected
-            </Badge>
           ) : null}
         </div>
         <div className="mt-0.5 font-mono text-xs text-subtle tnum">
-          {cam.width} × {cam.height} · {cam.fps} fps · {cam.fourcc}
+          {fmtSize(cam.width, cam.height)} · {cam.fps}&#8239;fps · {cam.fourcc}
         </div>
       </div>
       {!cam.configured ? (
@@ -223,12 +221,18 @@ function Cameras() {
   const setCamera = useSetup((s) => s.setCamera);
   const pending = useSetup((s) => s.cameraPending);
   const configuredStereo = !!devices?.cameras.find((c) => c.configured)?.stereo_like;
+  // U29: with the simulator on, the real cameras are listed for later, and the page says so
+  const simOn = useDevice((s) => !!s.device?.connected && s.device.source === "sim");
 
   return (
     <Section
       title="Cameras found"
       icon={Camera}
-      description="The stereo camera shows one wide side-by-side image (2560 × 800)"
+      description={
+        simOn
+          ? "The simulator is connected: these cameras are not used until you connect the scanner."
+          : "The stereo camera shows one wide side-by-side image (2560\u202f×\u202f800)"
+      }
       actions={
         <Button size="sm" variant="ghost" icon={RefreshCw} loading={loading} onClick={() => void probe()}>
           Refresh
@@ -262,7 +266,7 @@ function Cameras() {
           disabled={pending === "swap" || !camera}
           onChange={(v) => void setCamera({ swap_lr: v })}
           label="Swap left and right"
-          description="Turn on if the stereo calibration says the cameras look swapped (a baseline with the wrong sign). It takes effect on the next connect."
+          description="Turn on if the calibration says left and right are swapped. It takes effect on the next connect."
         />
       </div>
     </Section>

@@ -27,23 +27,22 @@ export function fmtTolerance(mm: number): string {
 /** A share of the surface: "92 %", "99.6 %", "0.4 %", "2 %"; never "100 %" or "0 %" for a share that isn't. */
 export function fmtShare(x: number | null | undefined): string {
   if (x === null || x === undefined || !Number.isFinite(x)) return "–";
-  if (x <= 0) return "0 %";
-  if (x >= 1) return "100 %";
-  if (x < 0.001) return "under 0.1 %";
-  if (x > 0.999) return "over 99.9 %";
-  return x < 0.1 || x > 0.99 ? `${(x * 100).toFixed(1).replace(/.0$/, "")} %` : `${Math.round(x * 100)} %`;
+  if (x <= 0) return "0\u202f%";
+  if (x >= 1) return "100\u202f%";
+  if (x < 0.001) return "under 0.1\u202f%";
+  if (x > 0.999) return "over 99.9\u202f%";
+  return x < 0.1 || x > 0.99 ? `${(x * 100).toFixed(1).replace(/.0$/, "")}\u202f%` : `${Math.round(x * 100)}\u202f%`;
 }
 
-/** An area: "3.2 mm²", "42 mm²", "1.4 cm²", "125 cm²". */
+/** An area, always in mm² (U22: one area unit): "3.2 mm²", "42 mm²", "140 mm²", "12,500 mm²". */
 export function fmtAreaSize(mm2: number): string {
-  if (mm2 < 100) return `${mm2 < 10 ? mm2.toFixed(1) : Math.round(mm2)} mm²`;
-  const cm2 = mm2 / 100;
-  return `${cm2 < 10 ? cm2.toFixed(1) : Math.round(cm2)} cm²`;
+  if (mm2 < 10) return `${mm2.toFixed(1)}\u202fmm²`;
+  return `${Math.round(mm2).toLocaleString("en-US")}\u202fmm²`;
 }
 
 /** How far an area reaches: "4.5 mm", "23 mm". */
 export function fmtExtent(mm: number): string {
-  return `${mm < 10 ? mm.toFixed(1) : Math.round(mm)} mm`;
+  return `${mm < 10 ? mm.toFixed(1) : Math.round(mm)}\u202fmm`;
 }
 
 export function kindName(kind: CheckKind): string {
@@ -55,7 +54,7 @@ export function kindMeaning(kind: CheckKind, toleranceMm: number, k = 2): string
   const band = `${fmtTolerance(k)}σ`;
   return kind === "not_measured"
     ? "Hole filling made this surface up: nothing was measured here."
-    : `The scan's own ${band} here is larger than ± ${fmtTolerance(toleranceMm)} mm.`;
+    : `The scan's own ${band} here is larger than ± ${fmtTolerance(toleranceMm)}\u202fmm.`;
 }
 
 /**
@@ -77,7 +76,7 @@ export function hasAnswer(r: CheckResult): boolean {
 
 /** The answer in one sentence: "92 % of the surface meets ± 0.1 mm; 3 areas need another pass." */
 export function checkSentence(r: CheckResult): string {
-  const tol = `± ${fmtTolerance(r.tolerance_mm)} mm`;
+  const tol = `± ${fmtTolerance(r.tolerance_mm)}\u202fmm`;
   const ok = r.share_ok ?? 0;
   const n = r.n_areas;
   if (n === 0) {

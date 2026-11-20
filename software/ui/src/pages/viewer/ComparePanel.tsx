@@ -251,7 +251,7 @@ export function ComparePanel({
       )}
       <input ref={fileRef} type="file" accept={ACCEPT} className="hidden" onChange={(e) => void add(e.target.files?.[0]).finally(() => (e.target.value = ""))} />
       <div className="flex items-center gap-2">
-        <Button size="sm" icon={Upload} loading={tool.uploading} onClick={() => fileRef.current?.click()} title="An STL, OBJ or PLY of the part as it should be (up to 100 MB)">
+        <Button size="sm" icon={Upload} loading={tool.uploading} onClick={() => fileRef.current?.click()} title="An STL, OBJ or PLY of the part as it should be (up to 100&#8239;MB)">
           Add a file…
         </Button>
         <span className="text-[11px] text-subtle">or drop it here</span>
@@ -456,7 +456,7 @@ export function ComparePanel({
               </div>
             ) : tool.answerLoading ? (
               <div className="flex items-center gap-2 text-sm text-fg" role="status">
-                <Spinner size={14} className="text-accent" /> Comparing at ± {fmtTolerance(tool.tolerance)} mm…
+                <Spinner size={14} className="text-accent" /> Comparing at ± {fmtTolerance(tool.tolerance)}&#8239;mm…
               </div>
             ) : null}
           </div>

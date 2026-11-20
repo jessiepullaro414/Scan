@@ -107,7 +107,7 @@ export function LasersLegend({
               size="sm"
               value={fmtLimit(limit)}
               onChange={(v) => setLimit(Number(v))}
-              options={LASER_LIMITS.map((l) => ({ value: fmtLimit(l), label: fmtLimit(l), title: `Strongest colour at ${MINUS}${fmtLimit(l)} and +${fmtLimit(l)} mm` }))}
+              options={LASER_LIMITS.map((l) => ({ value: fmtLimit(l), label: fmtLimit(l), title: `Strongest colour at ${MINUS}${fmtLimit(l)} and +${fmtLimit(l)}\u202fmm` }))}
             />
           </div>
           <div className="mt-1.5 flex items-center gap-1.5">
@@ -121,7 +121,7 @@ export function LasersLegend({
           ))}
           <div className="mt-1.5 text-subtle">{LASER_MEANING}</div>
           <span className="sr-only">
-            Blue: the lasers see the surface further in than the mesh, by up to {lim} mm. Light grey: they agree. Red: the lasers see it further out, by up to {lim} mm. Darker grey: no laser
+            Blue: the lasers see the surface further in than the mesh, by up to {lim}&#8239;mm. Light grey: they agree. Red: the lasers see it further out, by up to {lim}&#8239;mm. Darker grey: no laser
             line crossed there.
           </span>
         </>

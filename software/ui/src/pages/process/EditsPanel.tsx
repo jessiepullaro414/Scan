@@ -12,7 +12,8 @@ import type { EditBody, HoleOutline, MeshStats, SmoothMethod } from "../../api/t
 import { Button } from "../../components/ui/Button";
 import { Segmented, Slider, Switch } from "../../components/ui/Form";
 import { Tooltip } from "../../components/ui/Popover";
-import { fmtFixed, fmtInt } from "../../lib/format";
+import { fmtFixed, fmtInt, withUnit } from "../../lib/format";
+import { holeSize } from "../../lib/recipes";
 import { SMOOTH_DEFAULTS, smoothEdit, type SmoothWhere } from "../../lib/smoothEdit";
 import { cn } from "../../lib/util";
 import { processKey, useProcess } from "../../store/process";
@@ -24,7 +25,7 @@ import { TableSection } from "./TableSection";
 export type EditTab = "floaters" | "holes" | "smooth" | "simplify";
 
 const TABS: { id: EditTab; label: string; icon: LucideIcon }[] = [
-  { id: "floaters", label: "Floaters", icon: Eraser },
+  { id: "floaters", label: "Loose bits", icon: Eraser },
   { id: "holes", label: "Holes", icon: PaintBucket },
   { id: "smooth", label: "Smooth", icon: WavesHorizontal },
   { id: "simplify", label: "Simplify", icon: Shrink },
@@ -37,17 +38,17 @@ const WHERE_HELP: { value: SmoothWhere; label: string; text: string }[] = [
   {
     value: "all",
     label: "Everywhere",
-    text: "Evens out the noise on the whole part. It also rounds sharp edges: on simulated scans 17–46 % of the edge points moved by more than 0.05 mm.",
+    text: "Evens out the noise on the whole part. It also rounds sharp edges: on simulated scans 17–46\u202f% of the edge points moved by more than 0.05\u202fmm.",
   },
   {
     value: "edges",
     label: "Off edges",
-    text: "Leaves 1.5 mm on each side of a sharp edge as scanned and smooths everything else, round features like shafts and bosses too. 1–8 % of the edge points moved.",
+    text: "Leaves 1.5\u202fmm on each side of a sharp edge as scanned and smooths everything else, round features like shafts and bosses too. 1–8\u202f% of the edge points moved.",
   },
   {
     value: "flat",
     label: "Flat only",
-    text: "Smooths only where the surface is flat. Edges, corners and small round features stay as scanned: 0–4 % of the edge points moved, and a small shaft keeps a few microns of noise.",
+    text: "Smooths only where the surface is flat. Edges, corners and small round features stay as scanned: 0–4\u202f% of the edge points moved, and a small shaft keeps a few microns of noise.",
   },
 ];
 
@@ -139,28 +140,28 @@ export function EditsPanel({
     switch (tab) {
       case "floaters":
         if (floaterMode === "largest")
-          return { body: { op: "remove_floaters", params: { keep_largest_only: true } }, label: "Keep the largest piece", button: "Remove floaters", invalid: null };
+          return { body: { op: "remove_floaters", params: { keep_largest_only: true } }, label: "Keep the largest piece", button: "Remove loose bits", invalid: null };
         if (floaterMode === "triangles")
           return {
             body: { op: "remove_floaters", params: { min_triangles: minTris } },
-            label: `Remove floaters under ${fmtInt(minTris)} triangles`,
-            button: "Remove floaters",
+            label: `Remove loose bits under ${fmtInt(minTris)} triangles`,
+            button: "Remove loose bits",
             invalid: null,
           };
-        return { body: { op: "remove_floaters", params: { min_size_mm: minSize } }, label: `Remove floaters smaller than ${mmText(minSize)} mm`, button: "Remove floaters", invalid: null };
+        return { body: { op: "remove_floaters", params: { min_size_mm: minSize } }, label: `Remove loose bits smaller than ${withUnit(mmText(minSize), "mm")}`, button: "Remove loose bits", invalid: null };
       case "holes":
         if (watertight) {
           const borderFits = stats?.border_mm != null && stats.border_mm <= fillMm;
           return {
             body: { op: "fill_holes", params: { max_hole_mm: fillMm, watertight: true } },
-            label: `Make watertight: close every opening up to ${mmText(fillMm)} mm`,
+            label: `Make watertight: close every opening up to ${holeSize(fillMm)}`,
             button: "Make watertight",
             invalid: stats?.watertight ? "The mesh is already watertight" : stats && !borderFits && fillCount === 0 ? "No opening is that small" : null,
           };
         }
         return {
           body: { op: "fill_holes", params: { max_hole_mm: fillMm } },
-          label: `Fill holes up to ${mmText(fillMm)} mm`,
+          label: `Fill holes up to ${holeSize(fillMm)}`,
           button: "Fill holes",
           invalid: stats && stats.holes === 0 ? "No holes to fill" : fillCount === 0 ? "No hole is that small" : null,
         };
@@ -170,7 +171,7 @@ export function EditsPanel({
         if (simplifyMode === "accuracy")
           return {
             body: { op: "decimate", params: { max_error_mm: tol } },
-            label: `Simplify to within ${tol} mm`,
+            label: `Simplify to within ${withUnit(String(tol), "mm")}`,
             button: "Simplify",
             invalid: !(tol > 0) ? "Choose an accuracy above 0" : null,
           };
@@ -181,7 +182,7 @@ export function EditsPanel({
             button: "Simplify",
             invalid: tris && target >= tris ? `The mesh already has ${fmtInt(tris)} triangles` : null,
           };
-        return { body: { op: "decimate", params: { ratio: pct / 100 } }, label: `Simplify to ${pct} %`, button: "Simplify", invalid: null };
+        return { body: { op: "decimate", params: { ratio: pct / 100 } }, label: `Simplify to ${withUnit(String(pct), "%")}`, button: "Simplify", invalid: null };
     }
   })();
 
@@ -276,7 +277,7 @@ export function EditsPanel({
               label="Make it watertight"
               description={
                 stats?.border_mm != null
-                  ? `Closes the outer edge too (${fmtFixed(stats.border_mm, 0)} mm around), for a part scanned all round: ready to 3D print.`
+                  ? `Closes the outer edge too (${fmtFixed(stats.border_mm, 0)}\u202fmm around), for a part scanned all round: ready to 3D print.`
                   : "Closes the outer edge too, for a part scanned all round: ready to 3D print."
               }
               checked={watertight}
@@ -299,14 +300,14 @@ export function EditsPanel({
                 </>
               ) : stats ? (
                 <>
-                  {fmtInt(stats.holes)} hole{stats.holes === 1 ? "" : "s"}, the largest {fmtFixed(stats.largest_hole_mm, 1)} mm around.
+                  {fmtInt(stats.holes)} hole{stats.holes === 1 ? "" : "s"}, the largest {fmtFixed(stats.largest_hole_mm, 1)}&#8239;mm around.
                 </>
               ) : null}
             </p>
             <div className="flex flex-wrap gap-1.5">
               {[5, 10, 25].map((v) => (
                 <Button key={v} size="xs" variant={fillMm === v ? "primary" : "secondary"} onClick={() => setFillMm(v)}>
-                  {v} mm
+                  {v}&#8239;mm
                 </Button>
               ))}
               {stats?.largest_hole_mm ? (
@@ -315,7 +316,7 @@ export function EditsPanel({
                 </Button>
               ) : null}
             </div>
-            <Help>Size is the distance around a hole's edge: a 10 mm hole is about 3 mm wide.</Help>
+            <Help>Size is the distance around a hole's edge. This fills holes up to {holeSize(fillMm)}.</Help>
           </>
         ) : tab === "smooth" ? (
           <>
@@ -341,7 +342,7 @@ export function EditsPanel({
             <div>
               <div className="mb-1 flex items-center justify-between text-xs">
                 <span className="text-muted">Strength</span>
-                <span className="font-mono text-fg tnum">{Math.round(strength * 100)} %</span>
+                <span className="font-mono text-fg tnum">{Math.round(strength * 100)}&#8239;%</span>
               </div>
               <Slider label="Smoothing strength" value={strength} onChange={setStrength} min={0} max={1} step={0.05} />
               <div className="mt-0.5 flex justify-between text-[10.5px] text-subtle">
@@ -407,7 +408,7 @@ export function EditsPanel({
                   <span className="mr-1 text-xs text-muted">Within</span>
                   {TOLERANCES.map((v) => (
                     <Button key={v} size="xs" variant={tol === v ? "primary" : "secondary"} onClick={() => setTol(v)}>
-                      {v} mm
+                      {v}&#8239;mm
                     </Button>
                   ))}
                   <NumberField label="Tolerance, mm" value={tol} onChange={setTol} min={0.001} max={10} step={0.005} unit="mm" className="w-24" />
@@ -418,7 +419,7 @@ export function EditsPanel({
               <div>
                 <div className="mb-1 flex items-center justify-between text-xs">
                   <span className="text-muted">Keep</span>
-                  <span className="font-mono text-fg tnum">{pct} %</span>
+                  <span className="font-mono text-fg tnum">{pct}&#8239;%</span>
                 </div>
                 <Slider label="Percent of the triangles to keep" value={pct} onChange={setPct} min={5} max={95} step={5} />
               </div>

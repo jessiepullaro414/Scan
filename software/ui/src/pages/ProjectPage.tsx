@@ -5,14 +5,17 @@ import {
   CircleExclamationPoint,
   Combine,
   Download,
+  Ellipsis,
   Eye,
   FolderOpen,
   HardDrive,
   Pencil,
   RefreshCw,
   ScanLine,
+  SlidersHorizontal,
   Tag,
   Trash,
+  Wand,
   Waypoints,
 } from "lucide-react";
 import { useEffect, useState } from "react";
@@ -31,28 +34,22 @@ import { scanHealthLine, scanHealthOf } from "../lib/calibHealth";
 import { projectDiskText, scanDiskTitle, trashText } from "../lib/diskUse";
 import { canRemake, keepLabel, keepTitle } from "../lib/keepMode";
 import { FreeSpaceDialog } from "../components/FreeSpaceDialog";
-import { downloadFile } from "../lib/download";
+import { failedLine } from "../lib/scanStatus";
+import { meshDownloadItems, meshUrls } from "../components/MeshDownloads";
 import { fileStem, fmtBytes, fmtDateTime, fmtDuration, fmtInt, fmtRelative } from "../lib/format";
 import { href, navigate, paths } from "../lib/router";
 import { cn, useTicker } from "../lib/util";
 import { useConnection } from "../store/connection";
-import { isActive, useScanJob } from "../store/jobs";
+import { isActive, useJobs, useScanJob } from "../store/jobs";
 import { useProjects } from "../store/projects";
 import { isLive, useSession } from "../store/session";
 import { toast } from "../store/toasts";
 import { useUi } from "../store/ui";
 
-/** The scan table's columns (the header and every row): scan, status, details, actions. */
-const ROW_GRID = "grid grid-cols-[minmax(0,1.5fr)_112px_minmax(0,1fr)_minmax(370px,400px)] gap-4";
+/** The scan table's columns (the header and every row): scan, status, details, actions (index.css `.scan-row`, U16). */
+const ROW_GRID = "scan-row";
 
-function resultUrls(project: Project, scan: Scan) {
-  const r = scan.result;
-  return {
-    mesh: r?.mesh_url || api.fileUrl(project.id, scan.id, "mesh.ply"),
-    stl: r?.stl_url || api.fileUrl(project.id, scan.id, "mesh.stl"),
-    laser: r?.laser_points_url ?? null,
-  };
-}
+
 
 /**
  * R1: what the project takes on disk. Asked for after the page has painted (the engine walks the
@@ -75,13 +72,33 @@ function useDiskUse(pid: string, project: Project | undefined): ProjectDiskUse |
   return disk && disk.project_id === pid ? disk : null;
 }
 
+/** U16: under about 1100 px the row's secondary actions are in this menu (index.css `.sr-more`). */
+function MoreMenu({ name, items }: { name: string; items: Parameters<typeof Menu>[0]["items"] }) {
+  return (
+    <span className="sr-more">
+      <Menu
+        label={`More for ${name}`}
+        width={260}
+        items={items}
+        renderTrigger={(t) => (
+          <Button ref={t.ref} onClick={t.onClick} aria-haspopup={t["aria-haspopup"]} aria-expanded={t["aria-expanded"]} size="sm" icon={Ellipsis} aria-label={`More for ${name}`}>
+            More
+          </Button>
+        )}
+      />
+    </span>
+  );
+}
+
 function ScanRow({ project, scan, disk, onFreeSpace }: { project: Project; scan: Scan; disk?: ScanDiskUse; onFreeSpace: (scan: Scan) => void }) {
   const job = useScanJob(scan.id);
   const active = isActive(job);
   const processing = active || scan.status === "processing";
   const hasResult = scan.status === "processed" && !!scan.result;
-  const urls = resultUrls(project, scan);
+  const urls = meshUrls(project.id, scan.id, scan.result);
   const stem = fileStem(project.name, scan.name);
+  const downloads = meshDownloadItems(urls, stem); // U42: the one list, OBJ included
+  const makeMesh = useJobs((s) => s.process);
   // A merged scan (M4) has no recording of its own: nothing that makes its mesh from the frames again.
   const recorded = hasRecording(scan);
   // R2: a scan that keeps its result only has no frames to make its mesh from again
@@ -94,7 +111,7 @@ function ScanRow({ project, scan, disk, onFreeSpace }: { project: Project; scan:
 
   return (
     <li className={cn(ROW_GRID, "min-h-[64px] items-center px-4 py-2.5 transition-colors hover:bg-surface-2/60")}>
-      <div className="flex min-w-0 items-center gap-3">
+      <div className="sr-name flex min-w-0 items-center gap-3">
         <div className="grid h-9 w-9 shrink-0 place-items-center rounded-lg border border-line bg-surface-2 text-muted">
           {hasResult ? <Box size={16} aria-hidden /> : <Waypoints size={16} aria-hidden />}
         </div>
@@ -112,10 +129,10 @@ function ScanRow({ project, scan, disk, onFreeSpace }: { project: Project; scan:
           </div>
         </div>
       </div>
-      <div title={scan.status === "failed" ? (job?.error ?? "Meshing failed. Try again, or try preview quality.") : undefined}>
+      <div className="sr-status">
         <ScanStatusBadge scan={scan} job={job} />
       </div>
-      <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted">
+      <div className="sr-details flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted">
         <span className="inline-flex items-center gap-1" title="Tracking mode">
           <Tag size={12} aria-hidden /> {scan.mode === "markers" ? "Markers" : "Markerless"}
         </span>
@@ -140,18 +157,19 @@ function ScanRow({ project, scan, disk, onFreeSpace }: { project: Project; scan:
           </span>
         ) : null}
         {disk && disk.bytes > 0 ? (
+          // U39: the size and the way to free space, visible (the parts on hover)
           <button
             type="button"
-            className="inline-flex items-center gap-1 rounded tnum hover:text-fg hover:underline"
-            title={`${scanDiskTitle(disk)}\n\nClick to free space.`}
+            className="inline-flex items-center gap-1 rounded tnum text-accent underline-offset-2 hover:underline disabled:text-muted disabled:no-underline"
+            title={scanDiskTitle(disk)}
             onClick={() => onFreeSpace(scan)}
             disabled={processing || scan.status === "recording"}
           >
-            <HardDrive size={12} aria-hidden /> {fmtBytes(disk.bytes)}
+            <HardDrive size={12} aria-hidden /> {fmtBytes(disk.bytes)} · Free space…
           </button>
         ) : null}
       </div>
-      <div className="flex min-w-0 items-center justify-end gap-2">
+      <div className="sr-actions flex min-w-0 items-center justify-end gap-2">
         {processing && job ? (
           <JobProgress job={job} className="w-full max-w-[300px]" />
         ) : processing ? (
@@ -167,17 +185,12 @@ function ScanRow({ project, scan, disk, onFreeSpace }: { project: Project; scan:
                 <Button size="sm" variant="primary" icon={Eye} onClick={() => navigate(paths.viewer(project.id, scan.id))}>
                   Open
                 </Button>
+                <span className="sr-secondary">
                 <ProcessButton projectId={project.id} scan={scan} label="Process" />
                 <Menu
                   label="Download"
-                  width={230}
-                  items={[
-                    { label: "Mesh (STL)", icon: Download, hint: "for CAD / slicers", onSelect: () => void downloadFile(urls.stl, `${stem}.stl`) },
-                    { label: "Mesh (PLY)", icon: Download, hint: "with normals", onSelect: () => void downloadFile(urls.mesh, `${stem}.ply`) },
-                    ...(urls.laser
-                      ? [{ label: "Laser points (PLY)", icon: Download, onSelect: () => void downloadFile(urls.laser!, `${stem}-laser.ply`) }]
-                      : []),
-                  ]}
+                  width={260}
+                  items={downloads}
                   renderTrigger={(t) => (
                     <Button
                       ref={t.ref}
@@ -192,18 +205,36 @@ function ScanRow({ project, scan, disk, onFreeSpace }: { project: Project; scan:
                   )}
                 />
                 {remakable ? <MakeMeshButton projectId={project.id} scan={scan} label="Remake" variant="ghost" /> : null}
+                </span>
+                <MoreMenu
+                  name={scan.name}
+                  items={[
+                    { label: "Process", icon: SlidersHorizontal, onSelect: () => navigate(paths.process(project.id, scan.id)) },
+                    ...downloads,
+                    ...(remakable ? [{ label: "Remake", icon: Wand, hint: "standard quality", onSelect: () => void makeMesh(project.id, scan.id, "standard", scan.name) }] : []),
+                  ]}
+                />
               </>
             ) : !recorded ? (
               <ProcessButton projectId={project.id} scan={scan} label="Process" />
             ) : (
               <>
                 <MakeMeshButton projectId={project.id} scan={scan} variant={scan.status === "failed" ? "secondary" : "primary"} />
-                <ProcessButton projectId={project.id} scan={scan} label="Process" variant="ghost" />
+                <span className="sr-secondary">
+                  <ProcessButton projectId={project.id} scan={scan} label="Process" variant="ghost" />
+                </span>
+                <MoreMenu name={scan.name} items={[{ label: "Process", icon: SlidersHorizontal, onSelect: () => navigate(paths.process(project.id, scan.id)) }]} />
               </>
             )}
           </>
         )}
       </div>
+      {scan.status === "failed" && !processing ? (
+        <div className="sr-fail flex items-start gap-1.5 pl-12 text-xs text-danger" role="note">
+          <CircleExclamationPoint size={13} className="mt-px shrink-0" aria-hidden />
+          <span>{failedLine(job?.error, remakable && recorded)}</span>
+        </div>
+      ) : null}
     </li>
   );
 }
@@ -301,8 +332,8 @@ export function ProjectPage({ pid }: { pid: string }) {
             <IconButton icon={Pencil} label="Rename project" variant="secondary" onClick={() => setRenaming(true)} disabled={!project} />
             <IconButton icon={Trash} label="Move project to trash" variant="secondary" onClick={() => setDeleting(true)} disabled={!project} />
             {canAlign ? (
-              <Button icon={Combine} onClick={() => navigate(paths.align(pid))} title="Line up two scans of the same part and merge them into one">
-                Align two scans
+              <Button icon={Combine} onClick={() => navigate(paths.align(pid))} title="Line up two to eight scans of the same part and merge them into one">
+                Align and merge scans
               </Button>
             ) : null}
             <Button
@@ -320,11 +351,11 @@ export function ProjectPage({ pid }: { pid: string }) {
       />
 
       <section aria-label="Scans" className="overflow-hidden rounded-xl border border-line bg-surface shadow-sm">
-        <div className={cn(ROW_GRID, "border-b border-line bg-surface-2/50 px-4 py-2 text-[11px] font-semibold uppercase tracking-wide text-subtle")}>
-          <div>Scan</div>
-          <div>Status</div>
-          <div>Details</div>
-          <div className="text-right">Actions</div>
+        <div className={cn(ROW_GRID, "scan-head border-b border-line bg-surface-2/50 px-4 py-2 text-[11px] font-semibold uppercase tracking-wide text-subtle")}>
+          <div className="sr-name">Scan</div>
+          <div className="sr-status">Status</div>
+          <div className="sr-details">Details</div>
+          <div className="sr-actions text-right">Actions</div>
         </div>
         {scans === null ? (
           <ul aria-busy="true">
@@ -372,7 +403,7 @@ export function ProjectPage({ pid }: { pid: string }) {
           <HardDrive size={13} className="mt-px shrink-0" aria-hidden />
           <span>
             <span className="tnum">This project takes {projectDiskText(disk)}.</span>
-            {trash ? <span className="tnum"> {trash}</span> : null} Point at a scan's size for its parts; click it to free space.
+            {trash ? <span className="tnum"> {trash}</span> : null} Point at a scan's size for what it holds.
           </span>
           {project.scans.length ? (
             <Button size="xs" variant="ghost" icon={HardDrive} className="-mt-0.5 ml-1" onClick={() => setFreeing(null)}>
@@ -385,10 +416,8 @@ export function ProjectPage({ pid }: { pid: string }) {
         <FreeSpaceDialog open onClose={() => setFreeing(undefined)} project={project} scan={freeing} onDone={() => void fetchProject(pid)} />
       ) : null}
       {project ? (
-        <p className="mt-2 text-xs text-subtle">
-          Raw recordings stay in <Code>scans/&lt;id&gt;/recording</Code>; meshes in <Code>scans/&lt;id&gt;/result</Code> inside
-          the project folder.
-        </p>
+        // U39: no folder paths for the user to decode; the folder itself opens from a button once the engine offers it
+        <p className="mt-2 text-xs text-subtle">Every scan keeps its recording, so its mesh can be made again with other settings.</p>
       ) : null}
 
       <PromptDialog
@@ -407,10 +436,9 @@ export function ProjectPage({ pid }: { pid: string }) {
         confirmLabel="Move to trash"
         tone="danger"
         onConfirm={async () => {
-          if (await remove(pid)) {
-            toast.success(`Moved “${name}” to the trash`, "Its folder is in .trash inside your projects folder.");
-            navigate(paths.home());
-          }
+          if (!(await remove(pid))) return false; // U6: a failed move keeps the dialog open
+          toast.success(`Moved “${name}” to the trash`, "Its folder is in .trash inside your projects folder.");
+          navigate(paths.home());
         }}
       >
         The project folder and all its scans move to the <Code>.trash</Code> folder inside your projects folder. Nothing is

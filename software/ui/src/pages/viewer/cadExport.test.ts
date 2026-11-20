@@ -45,7 +45,7 @@ check(cadLine({ ...base, n_fits: 0, counts: { plane: 0, cylinder: 0, hole: 0, po
 // the outline's cost: the sizes of both, the points, the holes kept and left out
 const outline: CadSummary = { ...base, boundary: "outline", step_bytes: 2_100_000, macro_bytes: 1_400_000, outline: { planes: 1, points: 2039, holes_kept: 48, holes_left_out: 636 } };
 const cost = outlineCost(base, outline);
-check(cost.some((l) => l.includes("12 KB") && l.includes("2.0 MB")), `sizes: ${cost.join(" | ")}`);
+check(cost.some((l) => l.includes("12\u202fKB") && l.includes("2.0\u202fMB")), `sizes: ${cost.join(" | ")}`);
 check(cost.some((l) => l.includes("2,039") || l.includes("2039")), "points");
 check(cost.some((l) => l.includes("48 holes kept") && l.includes("636 left out")), "holes");
 check(outlineCost(base, null).length === 0, "nothing known yet: nothing said");

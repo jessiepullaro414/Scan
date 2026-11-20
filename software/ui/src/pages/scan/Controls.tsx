@@ -54,8 +54,8 @@ export function PostScanCard() {
                 ? `${onScreen} and the raw recording is kept: make the mesh again any time.`
                 : active
                   ? tracked
-                    ? `${fmtInt(scan.n_frames)} frames · ${fmtDuration(scan.duration_s)}. Tracking is done and the tracked mesh is on screen. The last steps clean it up: the finished mesh takes its place here.`
-                    : `${fmtInt(scan.n_frames)} frames · ${fmtDuration(scan.duration_s)}. Turn the live model while you wait: the tracked mesh takes its place as soon as tracking is done, then the finished mesh.`
+                    ? `${fmtInt(scan.n_frames)} frames · ${fmtDuration(scan.duration_s)}. Tracking is done and the tracked mesh is on screen; the finished mesh takes its place here. You can leave this page: the job keeps running (see Jobs).`
+                    : `${fmtInt(scan.n_frames)} frames · ${fmtDuration(scan.duration_s)}. Making the mesh. You can turn the model while you wait, or leave this page: the job keeps running (see Jobs).`
                   : done
                     ? `${fmtInt(scan.n_frames)} frames · ${fmtDuration(scan.duration_s)}. The finished mesh is on screen.`
                     : `${fmtInt(scan.n_frames)} frames · ${fmtDuration(scan.duration_s)} · raw recording saved. The live model is a preview; the mesh is rebuilt from the recording at full resolution.`}
@@ -86,7 +86,20 @@ export function PostScanCard() {
   );
 }
 
-export function ControlBar({ ready, reason, onStart }: { ready: boolean; reason: string | null; onStart: () => void }) {
+export type ReasonAction = { label: string; busy?: boolean; onClick: () => void };
+
+export function ControlBar({
+  ready,
+  reason,
+  reasonAction = null,
+  onStart,
+}: {
+  ready: boolean;
+  reason: string | null;
+  /** A way out of the reason, e.g. "Close it" for an open calibration result (U1). */
+  reasonAction?: ReasonAction | null;
+  onStart: () => void;
+}) {
   const phase = useSession((s) => s.session?.state ?? "idle");
   const action = useSession((s) => s.action);
   const last = useSession((s) => s.lastStopped);
@@ -102,7 +115,14 @@ export function ControlBar({ ready, reason, onStart }: { ready: boolean; reason:
     return (
       <div className="flex flex-col items-center gap-2">
         {!ready && reason ? (
-          <div className="glass rounded-full border border-line-strong px-3 py-1 text-xs text-muted shadow-md">{reason}</div>
+          <div role="status" className="glass flex items-center gap-2 rounded-full border border-line-strong px-3 py-1 text-xs text-muted shadow-md">
+            <span>{reason}</span>
+            {reasonAction ? (
+              <Button size="xs" variant="secondary" loading={reasonAction.busy} onClick={reasonAction.onClick}>
+                {reasonAction.label}
+              </Button>
+            ) : null}
+          </div>
         ) : null}
         <Button
           size="xl"
@@ -132,7 +152,7 @@ export function ControlBar({ ready, reason, onStart }: { ready: boolean; reason:
   return (
     <div className="glass flex items-center gap-2 rounded-2xl border border-line-strong p-2 shadow-lg" role="toolbar" aria-label="Scan controls">
       <Button size="lg" icon={Undo2} kbd="R" loading={action === "rewind"} onClick={() => void rewind(2)} title="Cut the last 2 seconds from the model">
-        Rewind 2 s
+        Rewind 2&#8239;s
       </Button>
       {paused ? (
         <Button size="lg" variant="primary" icon={Play} kbd="Space" loading={action === "resume"} onClick={() => void resume()} className="min-w-[140px]">

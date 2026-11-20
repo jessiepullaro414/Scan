@@ -32,7 +32,7 @@ const STAGES: Record<StageId, { label: string; icon: LucideIcon; what: string }>
     icon: Spline,
     what: "Finds where the scan came back to a place it had seen and closes those loops, then lines the scan up where the laser lines of different frames cross.",
   },
-  fuse: { label: "Fuse", icon: Layers, what: "Builds the mesh again from the camera poses, at the detail you choose." },
+  fuse: { label: "Fuse", icon: Layers, what: "Builds the mesh again from the camera path, at the detail you choose." },
   spacetime: {
     label: "Refine from the images",
     icon: Images,
@@ -41,7 +41,7 @@ const STAGES: Record<StageId, { label: string; icon: LucideIcon; what: string }>
   refine: {
     label: "Refine with lasers",
     icon: Crosshair,
-    what: "Pulls the surface onto the laser lines where they disagree, with a smooth correction. The lines are measured on their own and are more accurate.",
+    what: "Pulls the surface onto the laser lines where they disagree, with a smooth correction. The lines are measured on their own, so they correct the surface.",
   },
 };
 
@@ -158,7 +158,7 @@ export function StagesPanel({ pid, sid, state, busy, scan }: { pid: string; sid:
           {straighten.correction_mm !== null ? (
             <>
               {" "}
-              · moved the scan by <b className="font-semibold tnum">{fmtFixed(straighten.correction_mm, 1)} mm</b>
+              · moved the scan by <b className="font-semibold tnum">{fmtFixed(straighten.correction_mm, 1)}&#8239;mm</b>
               {straighten.correction_deg !== null ? <span className="tnum"> and {fmtFixed(straighten.correction_deg, 2)}°</span> : null}
             </>
           ) : null}
@@ -189,7 +189,7 @@ export function StagesPanel({ pid, sid, state, busy, scan }: { pid: string; sid:
               <p className="text-xs text-fg">
                 {track.tracked_pct !== null ? (
                   <>
-                    <b className="font-semibold tnum">{fmtFixed(track.tracked_pct, 0)} %</b> of the frames tracked
+                    <b className="font-semibold tnum">{fmtFixed(track.tracked_pct, 0)}&#8239;%</b> of the frames tracked
                   </>
                 ) : null}
                 {qualityName(track.quality) ? <span className="text-muted">{track.tracked_pct !== null ? " · " : ""}{qualityName(track.quality)}</span> : null}
@@ -229,7 +229,7 @@ export function StagesPanel({ pid, sid, state, busy, scan }: { pid: string; sid:
           details={
             fuse.state === "done" && fuse.voxel_mm !== null && !fuse.summary ? (
               <p className="text-xs text-fg">
-                Voxel size <b className="font-semibold tnum">{fmtFixed(fuse.voxel_mm, 1)} mm</b>
+                Voxel size <b className="font-semibold tnum">{fmtFixed(fuse.voxel_mm, 1)}&#8239;mm</b>
               </p>
             ) : null
           }
@@ -240,9 +240,9 @@ export function StagesPanel({ pid, sid, state, busy, scan }: { pid: string; sid:
             value={String(voxel)}
             onChange={(v) => setVoxel(Number(v))}
             disabled={busy || !tracked || !!gone("fuse")}
-            options={VOXELS.map((v) => ({ value: String(v), label: `${v} mm`, title: v === 0.5 ? "Finest detail, about 4× the triangles of 1 mm" : v === 1 ? "The usual detail" : "Coarse and light" }))}
+            options={VOXELS.map((v) => ({ value: String(v), label: `${v}\u202fmm`, title: v === 0.5 ? "Finest detail, about 4× the triangles of 1\u202fmm" : v === 1 ? "The usual detail" : "Coarse and light" }))}
           />
-          <Help>Smaller voxels keep finer detail; each halving makes about 4× the triangles.</Help>
+          <Help>Finer mesh detail keeps smaller features; each halving makes about 4× the triangles.</Help>
         </StageCard>
 
         {spacetime ? (
@@ -280,7 +280,7 @@ export function StagesPanel({ pid, sid, state, busy, scan }: { pid: string; sid:
 
       {state.base ? (
         <p className="mt-3 text-[11.5px] text-subtle">
-          Base mesh: <span className="font-mono text-muted tnum">{fmtInt(state.base.triangles)}</span> triangles, from {STAGES[state.base.stage]?.label ?? state.base.stage}.
+          Starting mesh: <span className="font-mono text-muted tnum">{fmtInt(state.base.triangles)}</span> triangles, from {STAGES[state.base.stage]?.label ?? state.base.stage}.
           {edits ? ` Edits apply on top of it.` : ""}
         </p>
       ) : null}
@@ -290,9 +290,7 @@ export function StagesPanel({ pid, sid, state, busy, scan }: { pid: string; sid:
         onClose={() => setConfirm(null)}
         title={confirm ? `Re-run ${STAGES[confirm.stage].label}?` : ""}
         confirmLabel={confirm ? `Re-run ${STAGES[confirm.stage].label}` : "Re-run"}
-        onConfirm={async () => {
-          await confirm?.run();
-        }}
+        onConfirm={() => confirm?.run()} // U6: a run that could not start keeps the dialog open
       >
         This starts the edits over: {edits === 1 ? "your edit is" : `your ${fmtInt(edits)} edits are`} cleared, because the faces of a new mesh don't
         match them. The raw recording is kept, and you can save the steps as a recipe first.

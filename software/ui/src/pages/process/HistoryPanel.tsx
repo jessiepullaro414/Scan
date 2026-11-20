@@ -1,5 +1,5 @@
 /**
- * The edit history: the base mesh, then every edit with its triangles after and how long it
+ * The edit history: the starting mesh, then every edit with its triangles after and how long it
  * took. Clicking a step undoes (or redoes) to it; steps after the cursor are greyed until a
  * new edit drops them. Undo / redo buttons (Ctrl+Z, Ctrl+Shift+Z or Ctrl+Y) sit on top.
  */
@@ -7,7 +7,8 @@ import { ListClock, Redo2, Undo2 } from "lucide-react";
 import type { ProcessState } from "../../api/types";
 import { IconButton } from "../../components/ui/Button";
 import { Spinner } from "../../components/ui/Feedback";
-import { fmtDateTime, fmtInt, fmtRelative } from "../../lib/format";
+import { fmtDateTime, fmtInt, fmtRelative, withUnit } from "../../lib/format";
+import { historyLabel } from "../../lib/recipes";
 import { cn } from "../../lib/util";
 import { processKey, useProcess } from "../../store/process";
 import { Help, Panel } from "./bits";
@@ -16,8 +17,8 @@ const STAGE_LABEL = { track: "Track", straighten: "Straighten", fuse: "Fuse", sp
 
 function fmtMs(ms: number): string {
   if (!Number.isFinite(ms)) return "";
-  if (ms < 1000) return `${Math.max(1, Math.round(ms))} ms`;
-  return `${(ms / 1000).toFixed(ms < 10_000 ? 1 : 0)} s`;
+  if (ms < 1000) return withUnit(String(Math.max(1, Math.round(ms))), "ms");
+  return withUnit((ms / 1000).toFixed(ms < 10_000 ? 1 : 0), "s");
 }
 
 export function HistoryPanel({ pid, sid, state, busy }: { pid: string; sid: string; state: ProcessState; busy: boolean }) {
@@ -40,14 +41,14 @@ export function HistoryPanel({ pid, sid, state, busy }: { pid: string; sid: stri
           <IconButton
             icon={Undo2}
             size="xs"
-            label={prev ? `Undo “${prev.label}” (Ctrl+Z)` : "Nothing to undo"}
+            label={prev ? `Undo “${historyLabel(prev.label)}” (Ctrl+Z)` : "Nothing to undo"}
             disabled={busy || !state.can_undo}
             onClick={() => void undo(pid, sid)}
           />
           <IconButton
             icon={Redo2}
             size="xs"
-            label={next ? `Redo “${next.label}” (Ctrl+Shift+Z)` : "Nothing to redo"}
+            label={next ? `Redo “${historyLabel(next.label)}” (Ctrl+Shift+Z)` : "Nothing to redo"}
             disabled={busy || !state.can_redo}
             onClick={() => void redo(pid, sid)}
           />
@@ -62,7 +63,7 @@ export function HistoryPanel({ pid, sid, state, busy }: { pid: string; sid: stri
               disabled={busy || cursor === 0}
               aria-current={cursor === 0 ? "step" : undefined}
               onClick={() => void jumpTo(pid, sid, 0)}
-              title={cursor === 0 ? "You're at the base mesh" : "Undo every edit"}
+              title={cursor === 0 ? "You're at the starting mesh" : "Undo every edit"}
               className={cn(
                 "flex w-full items-center gap-2.5 rounded-lg border px-2.5 py-1.5 text-left transition-colors disabled:cursor-default",
                 cursor === 0 ? "border-accent-line bg-accent-soft" : "border-transparent hover:bg-surface-2",
@@ -72,7 +73,7 @@ export function HistoryPanel({ pid, sid, state, busy }: { pid: string; sid: stri
                 0
               </span>
               <span className="min-w-0 flex-1">
-                <span className="block truncate text-xs font-medium text-fg">Base mesh</span>
+                <span className="block truncate text-xs font-medium text-fg">Starting mesh</span>
                 <span className="block text-[11px] text-subtle">
                   from {STAGE_LABEL[state.base.stage] ?? state.base.stage} · <span className="tnum">{fmtInt(state.base.triangles)}</span> triangles
                 </span>
@@ -105,7 +106,7 @@ export function HistoryPanel({ pid, sid, state, busy }: { pid: string; sid: stri
                     {i + 1}
                   </span>
                   <span className="min-w-0 flex-1">
-                    <span className={cn("block truncate text-xs font-medium text-fg", !applied && "line-through decoration-subtle")}>{e.label}</span>
+                    <span className={cn("block truncate text-xs font-medium text-fg", !applied && "line-through decoration-subtle")}>{historyLabel(e.label)}</span>
                     <span className="block text-[11px] text-subtle">
                       <span className="tnum">{fmtInt(e.triangles_after)}</span> triangles · {fmtMs(e.ms)}
                       {!applied ? " · undone" : ""}

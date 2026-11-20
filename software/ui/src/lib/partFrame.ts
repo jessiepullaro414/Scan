@@ -102,7 +102,8 @@ export function deltaOf(a: ArrayLike<number>, b: ArrayLike<number>, frame: PartF
 
 /** "12.30, -4.10, 0.00" (no "-0.00"). */
 export function fmtVec(v: ArrayLike<number>, digits = 2): string {
-  return [v[0], v[1], v[2]].map((x) => (Math.abs(x) < 0.5 * 10 ** -digits ? 0 : x).toFixed(digits)).join(", ");
+  // U32: a true minus, as every other number on screen
+  return [v[0], v[1], v[2]].map((x) => (Math.abs(x) < 0.5 * 10 ** -digits ? 0 : x).toFixed(digits).replace(/^-/, "−")).join(", ");
 }
 
 /** The body that builds this frame again: the same fits (a point origin as it was) and the same options. Null

@@ -48,7 +48,7 @@ const view = (id: string, bytes = 1000, title?: string): Omit<ReportView, "bytes
   check(t.height === MAX_SIDE_PX && t.width === 720, `a tall view: ${JSON.stringify(t)}`);
   const u = viewSize(800, 600);
   check(u.width === 800 && u.height === 600, "a small view stays as it is");
-  check(LIMITS_TEXT.includes(String(MAX_VIEWS)) && LIMITS_TEXT.includes("3 MB"), LIMITS_TEXT);
+  check(LIMITS_TEXT.includes(String(MAX_VIEWS)) && LIMITS_TEXT.includes("3\u202fMB"), LIMITS_TEXT);
 }
 
 // ---------------------------------------------------------------- the list and its limits
@@ -72,11 +72,11 @@ const view = (id: string, bytes = 1000, title?: string): Omit<ReportView, "bytes
   check(named.views[named.views.length - 1].title === "Front, from the left", "a title given is kept, trimmed");
   // one too large, and too much in all
   const big = cannotAdd([], MAX_VIEW_BYTES + 1);
-  check(!!big && big.includes("3 MB"), `a view over 3 MB: ${big}`);
-  check(cannotAdd([], MAX_VIEW_BYTES) === null, "a view of exactly 3 MB");
+  check(!!big && big.includes("3\u202fMB"), `a view over 3\u202fMB: ${big}`);
+  check(cannotAdd([], MAX_VIEW_BYTES) === null, "a view of exactly 3\u202fMB");
   const heavy: ReportView[] = [0, 1, 2, 3].map((i) => ({ ...(view(`h${i}`) as ReportView), title: `View ${i + 1}`, bytes: MAX_VIEW_BYTES }));
   const all = cannotAdd(heavy, 1);
-  check(!!all && all.includes(`${MAX_TOTAL_BYTES / 2 ** 20} MB`), `more than 12 MB in all: ${all}`);
+  check(!!all && all.includes(`${MAX_TOTAL_BYTES / 2 ** 20}\u202fMB`), `more than 12\u202fMB in all: ${all}`);
 }
 
 // ---------------------------------------------------------------- the request
