@@ -657,7 +657,8 @@ def process_recording(
 
                 report["health_status"] = calib_health.scan_status(
                     report["health"], tracking_model=report["params"]["compute"]["tracking_model"],
-                    lines=calib_health.lines_of_report(report), frames=report["frames"]["processed"])
+                    lines=calib_health.lines_of_report(report), frames=report["frames"]["processed"],
+                    cpu_path=calib_health.cpu_path_case(report))
             except Exception as exc:  # noqa: BLE001 - a status must not cost the scan
                 log.warning("the calibration status of the scan failed: %s", exc, exc_info=True)
         report["per_frame"] = rows

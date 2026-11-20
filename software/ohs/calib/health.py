@@ -50,14 +50,22 @@ horizontal line's gap as well (0.13 mm at 0.02 deg). **A roll is not told apart:
 vertical line's gap alone (0.16-0.23 mm where it costs 0.1 mm) while the row error is still under
 its check limit, so it reads as a vertical laser fault.
 
-**The GPU path only** (the default where there is a GPU). On the CPU path (``OHS_COMPUTE=cpu``, or a
-machine without a GPU; ``report["params"]["compute"]["tracking_model"]`` is not ``"gpu"``) the tracking
-is less accurate and does not repeat from run to run (``MAINTENANCE_PLAN.md``, F13): on the bracket
-the true calibration's mesh was 0.67 mm (median) from the true shape against 0.32 mm on the GPU, its
-tracker turned 0.036 deg a frame away from the gyro (over "recalibrate" here) and the horizontal
-line's gap read 0.08 and 0.13 mm (two scans). The row error does not depend on the path (it is
-measured on the rectified images: the same 0.062 px on both) and still caught the pitch. So on the
-CPU path only :data:`CPU_PATH` holds; the other limits would call a good calibration stale there.
+**The GPU path, and the CPU path with its 2026-11-20 settings.** Every kept sign holds on a scan
+processed on the GPU path (``report["params"]["compute"]["tracking_model"]`` is ``"gpu"``). On the CPU
+path (``OHS_COMPUTE=cpu``, or a machine without a GPU) they hold only when the scan's own report shows
+the CPU path's defaults of 2026-11-20 at full resolution (``MAINTENANCE_PLAN.md`` F14, the owner's
+decision D7 and the decision to judge the lasers and the IMU there, both 2026-11-20;
+:func:`cpu_path_case`): ``params.depth.flip_average`` true,
+``params.fusion.raycast_weight_threshold`` 8, ``params.fusion.velocity_max_accel`` above 0, and the
+processed image at least :data:`CPU_PATH_MIN_WIDTH` px wide. With them, a right calibration read at most
+0.013 mm on each laser line and 0.0093 deg a frame against the gyro on ten simulated scenes (the hard
+ones too; row error up to 0.129 px), the 0.2 mm laser fault 0.357 mm and the 3 deg IMU fault 0.0335 deg.
+Without them the CPU path's tracking is less accurate (before F13/F14: on the bracket the tracker
+turned 0.036 deg a frame away from the gyro, over "recalibrate", and the horizontal line read 0.08 and
+0.13 mm off with a right calibration), so such a scan (an older one, a half-resolution one, or one with
+an option turned off) is judged by :data:`CPU_PATH` only: the row error, which does not depend on the
+path (measured on the rectified images: the same 0.062 px on both). The rule reads what the scan
+recorded, never what this computer would do now: a scan kept from before keeps being read as it was.
 
 **Dropped from the status** (:data:`DROPPED`; they stay in the report). **Not judged here:** the
 temperature (the simulator has no warm-up, knocks or loose screws: H5, real hardware) and
@@ -79,7 +87,7 @@ never blocks a scan. The rules, in the order they are applied:
    cameras as what to try next (a camera roll reads exactly as a vertical-laser fault). One line
    without usable points while another has them is a laser sign of its own ("check" level); all
    lines without points means the scan had no laser data, which says nothing. The IMU is read on
-   its own. On the CPU path (:data:`CPU_PATH`), and on a scan shorter than :data:`MIN_FRAMES`
+   its own. On a CPU-path scan without the settings above (:data:`CPU_PATH`), and on a scan shorter than :data:`MIN_FRAMES`
    processed frames (the limits were measured on 90-120-frame scans; short pieces of a speckled part
    read past the laser limits with a right calibration), only the row error is read: the lasers and
    the IMU are "not judged", neither stale nor fine.
@@ -117,7 +125,8 @@ from typing import Any, Sequence
 __all__ = ["PARTS", "Limit", "LIMITS", "CPU_PATH", "DROPPED", "laser_family", "values",
            "STATES", "STATE_LABELS", "STEPS", "BOARD_CHECK_MAX_AGE_DAYS", "SCANS_WINDOW", "SCANS_AGREE",
            "BOTH_LINES_RATIO", "LAUNCH_CHECK_PX", "MIN_FRAMES", "STATUS_VERSION", "read_scan", "scan_status", "status",
-           "scan_item", "trim_block", "calibration_key", "lines_of_report"]
+           "scan_item", "trim_block", "calibration_key", "lines_of_report", "cpu_path_case", "CPU_PATH_MIN_WIDTH",
+           "CPU_PATH_WEIGHT_THRESHOLD", "CPU_CASES"]
 
 PARTS = ("cameras", "lasers", "imu")
 
@@ -144,8 +153,13 @@ LIMITS: dict[str, Limit] = {
     "gyro_jump": Limit("imu", ("tracking", "gyro_jump_deg", "median"), check=0.015, recalibrate=0.03, unit="deg"),
 }
 
-#: the limits that also hold for a scan processed on the CPU path (module docstring, "The GPU path only")
+#: the limits that hold for a scan processed on the CPU path without its 2026-11-20 settings at full resolution
+#: (module docstring, "The GPU path, and the CPU path with its 2026-11-20 settings"); with them, all of them hold
 CPU_PATH: tuple[str, ...] = ("row_error",)
+#: what a CPU-path scan's report must show for every kept sign to hold (:func:`cpu_path_case`)
+CPU_PATH_MIN_WIDTH = 960  # px processed: ohs.app.pipeline.CPU_DEFAULTS_MIN_SCALE (0.75) of 1280
+CPU_PATH_WEIGHT_THRESHOLD = 8.0  # ohs.app.pipeline.CPU_RAYCAST_WEIGHT_THRESHOLD
+CPU_CASES = ("full", "older", "half", "off")
 
 #: the signs of the health block that are not used for the status, and why (measured, H2)
 DROPPED: dict[str, str] = {
@@ -267,12 +281,34 @@ def _num(x: Any) -> float | None:
 
 
 # --------------------------------------------------------------------------- one scan
+def cpu_path_case(report: dict | None) -> str | None:
+    """How a processed scan ran, as far as the laser and IMU signs are concerned (module docstring, "The GPU
+    path, and the CPU path with its 2026-11-20 settings"), read from its own ``report.json``: None on the
+    GPU path; on the CPU path ``"full"`` (the 2026-11-20 settings at full resolution: every sign holds),
+    ``"older"`` (its report does not carry the settings: made before them), ``"half"`` (processed under
+    :data:`CPU_PATH_MIN_WIDTH` px wide) or ``"off"`` (one of the settings was off)."""
+    if _at(report, ("params", "compute", "tracking_model")) == "gpu":
+        return None
+    depth, fusion = _at(report, ("params", "depth")), _at(report, ("params", "fusion"))
+    if not isinstance(depth, dict) or not isinstance(fusion, dict) or "flip_average" not in depth \
+            or "velocity_max_accel" not in fusion:
+        return "older"
+    size = _at(report, ("image_size",))
+    width = _num(size[0]) if isinstance(size, (list, tuple)) and size else None
+    if width is None or width < CPU_PATH_MIN_WIDTH:
+        return "half"
+    va, wt = _num(fusion.get("velocity_max_accel")), _num(fusion.get("raycast_weight_threshold"))
+    on = depth.get("flip_average") is True and wt == CPU_PATH_WEIGHT_THRESHOLD and va is not None and va > 0
+    return "full" if on else "off"
+
+
 def read_scan(block: dict | None, *, tracking_model: str | None = None, lines: Sequence[str] | None = None,
-              frames: int | None = None) -> dict:
+              frames: int | None = None, cpu_path: str | None = None) -> dict:
     """What one scan's health block says, part by part (module docstring, rule 1).
 
     ``tracking_model``: ``report["params"]["compute"]["tracking_model"]`` (``"gpu"``: every kept sign
-    holds; anything else: the row error only). ``lines``: the laser lines the scan should have
+    holds). ``cpu_path``: :func:`cpu_path_case` of the scan's report (on the CPU path: ``"full"``, every
+    kept sign holds; anything else, None included, the row error only). ``lines``: the laser lines the scan should have
     (default: those in its ``laser_mesh.per_line``). ``frames``: the frames it processed
     (``report["frames"]["processed"]``); under :data:`MIN_FRAMES` the lasers and the IMU are not
     judged (None: not known, judged). Returns ``{"gpu", "short", "frames", "signs", "parts"}``: ``signs``
@@ -282,8 +318,9 @@ def read_scan(block: dict | None, *, tracking_model: str | None = None, lines: S
     ``"both_lines"`` (cameras), ``"line"``, ``"lines"`` or ``"line_missing"`` (lasers), ``"gyro"`` (IMU)."""
     block = block if isinstance(block, dict) else {}
     gpu = tracking_model == "gpu"
+    cpu_path = None if gpu else (cpu_path if cpu_path in CPU_CASES else "older")
     short = frames is not None and int(frames) < MIN_FRAMES
-    full = gpu and not short  # the laser and IMU signs hold
+    full = (gpu or cpu_path == "full") and not short  # the laser and IMU signs hold
     signs: dict[str, dict] = {}
     parts: dict[str, dict | None] = {p: None for p in PARTS}
 
@@ -335,8 +372,8 @@ def read_scan(block: dict | None, *, tracking_model: str | None = None, lines: S
         gyro_lv = _level(gyro, gyro_lim)
         if gyro_lv is not None:
             parts["imu"] = {"level": gyro_lv, "kind": "gyro", "value": gyro}
-    return {"gpu": gpu, "short": short, "frames": frames, "tracking_model": tracking_model, "signs": signs,
-            "parts": parts}
+    return {"gpu": gpu, "cpu_path": cpu_path, "short": short, "frames": frames, "tracking_model": tracking_model,
+            "signs": signs, "parts": parts}
 
 
 def _subject(k: int, n: int) -> tuple[str, str]:
@@ -551,16 +588,37 @@ def _the_list(names: Sequence[str]) -> str:
     return words[0] if len(words) == 1 else ", ".join(words[:-1]) + " and " + words[-1]
 
 
+#: why a scan processed without a GPU could judge the cameras only, by :func:`cpu_path_case` (words a user reads)
+_CPU_WHY = {
+    "older": ("by an earlier version of the software",
+              "processing it again judges the lasers and the IMU too"),
+    "half": ("at half resolution",
+             "the lasers and the IMU are judged only in scans processed at full resolution"),
+    "off": ("with some of the settings for computers without a graphics card turned off",
+            "the lasers and the IMU are judged when those settings are left as they come"),
+}
+
+
+def _judges_all(r: dict) -> bool:
+    """The scan's path lets its laser and IMU signs hold (module docstring)."""
+    return bool(r["gpu"] or r.get("cpu_path") == "full")
+
+
 def _cpu_note(readings: list[dict]) -> str | None:
-    """Why the lasers and the IMU were not judged, when no scan could judge them: processed on the CPU
-    path (``CPU_PATH``), or too short (:data:`MIN_FRAMES`). Not judged is neither stale nor fine."""
-    if not readings or any(r["gpu"] and not r["short"] for r in readings):
+    """Why the lasers and the IMU were not judged, when no scan could judge them: processed without a GPU
+    and without the CPU path's settings at full resolution (:func:`cpu_path_case`; :data:`CPU_PATH`), or too
+    short (:data:`MIN_FRAMES`). Not judged is neither stale nor fine."""
+    if not readings or any(_judges_all(r) and not r["short"] for r in readings):
         return None
     one = len(readings) == 1
-    if not any(r["gpu"] for r in readings):
+    if not any(_judges_all(r) for r in readings):
         what = "This scan was" if one else "These scans were"
-        return (f"{what} processed without a GPU, so only the cameras could be judged: the lasers and the IMU cannot "
-                "be judged on this computer.")
+        cases = {r.get("cpu_path") or "older" for r in readings}
+        if len(cases) == 1:
+            how, then = _CPU_WHY[cases.pop()]
+            return f"{what} processed without a graphics card {how}, so only the cameras could be judged: {then}."
+        return (f"{what} processed without a graphics card in ways that let only the cameras be judged (by an earlier "
+                "version of the software, at half resolution, or with some of its settings turned off).")
     if one:
         what = f"This scan is short ({readings[0]['frames']} frames)"
     else:
@@ -570,11 +628,12 @@ def _cpu_note(readings: list[dict]) -> str | None:
 
 
 def scan_status(block: dict | None, *, tracking_model: str | None = None, lines: Sequence[str] | None = None,
-                frames: int | None = None) -> dict:
+                frames: int | None = None, cpu_path: str | None = None) -> dict:
     """The status of one scan, from its own health block alone (written into its ``report.json`` as
     ``health_status``): what this scan saw, with no launch check, board check or other scan, so one
-    scan is enough here. The same shape as :func:`status`, plus ``signs`` (what each kept sign read)."""
-    r = read_scan(block, tracking_model=tracking_model, lines=lines, frames=frames)
+    scan is enough here. The same shape as :func:`status`, plus ``signs`` (what each kept sign read).
+    ``cpu_path``: :func:`cpu_path_case` of the scan's report (:func:`read_scan`)."""
+    r = read_scan(block, tracking_model=tracking_model, lines=lines, frames=frames, cpu_path=cpu_path)
     findings, levels, _ = _from_scans([({}, r)], 1, 1)
     judged = [PART_LABELS[p] if p == "imu" else PART_LABELS[p].lower() for p in PARTS if levels[p] is not None]
     if judged:
@@ -594,7 +653,8 @@ def status(*, saved: Any = None, launch_check: dict | None = None, last_check: d
     from before it judged another calibration and do not count. ``launch_check``: the setup state's
     (``{state, dv_px, matches, message, when}``). ``last_check``: the last 2-minute check
     (``{when, ok, verdict, parts?}``). ``scans``: the scans made with this calibration, each
-    ``{"health": block, "tracking_model", "lines", "when", "scan"}`` (:func:`scan_item`), in any
+    ``{"health": block, "tracking_model", "cpu_path", "lines", "when", "scan"}`` (:func:`scan_item`; an item
+    kept before ``cpu_path`` existed has none, and a CPU-path one is then read as made before it), in any
     order (sorted here by ``when``, newest first). ``now``: the time to measure ages against.
 
     Returns ``{version, state ("valid" | "check" | "recalibrate"), label, part ("cameras" | "lasers"
@@ -612,7 +672,7 @@ def status(*, saved: Any = None, launch_check: dict | None = None, last_check: d
     readings = []
     for it in items:
         r = read_scan(it.get("health"), tracking_model=it.get("tracking_model"), lines=it.get("lines"),
-                      frames=it.get("frames"))
+                      frames=it.get("frames"), cpu_path=it.get("cpu_path"))
         readings.append((it, _answered(r, _time(it.get("when")), rows_ok)))
     scan_f, levels, used = _from_scans(readings, window, agree)
     findings = board + scan_f + ([launch] if launch else [])
@@ -672,7 +732,7 @@ def scan_item(report: dict, *, when: str | None = None, scan: dict | None = None
     if block is None:
         return None
     return {"health": block, "tracking_model": _at(report, ("params", "compute", "tracking_model")),
-            "lines": lines_of_report(report), "frames": _at(report, ("frames", "processed")), "when": when,
+            "cpu_path": cpu_path_case(report), "lines": lines_of_report(report), "frames": _at(report, ("frames", "processed")), "when": when,
             "scan": scan, "calibration": calibration}
 
 

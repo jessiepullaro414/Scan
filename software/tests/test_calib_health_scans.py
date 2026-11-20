@@ -5,18 +5,18 @@ wrong calibrations, and the status they give.
   perturbed calibrations (``tools/calib_health_study.py``) on a 90-frame full-resolution bracket
   scan it names the right part; with the true calibration it stays Valid on the bracket and on the
   hard scenes of H2 (a dark part, a speckled one standing in for a shiny one, a 0.5 mm plate, 90
-  frames each), and so does the joined status over them. On the CPU path only the cameras are
-  judged; on a short scan (12 frames) too.
+  frames each), and so does the joined status over them. On the CPU path the same, with its settings of
+  2026-11-20 (MAINTENANCE_PLAN.md F14: they are its defaults at full resolution); a short scan (12 frames)
+  judges the cameras only.
 * Through the server: the Track stage keeps each scan's signs in ``setup.json`` and the setup
   state's ``calibration_health`` counts the scans made with its calibration.
 
 Run on the GPU path and with ``OHS_COMPUTE=cpu``. Each processing runs in a child process with a
 hard time limit (:data:`PROCESS_TIMEOUT_S`): while this was built the CPU path's tracking crashed
 natively now and then and once spun for hours (``MAINTENANCE_PLAN.md``, F6, mended 2026-11-19), and
-anything like it must fail one test with a message, not end or hang the whole run. On the CPU path
-only the cameras are
-judged (by the row error, measured on the rectified images: the same on both paths, H2), so there
-the tests process only what that path can judge.
+anything like it must fail one test with a message, not end or hang the whole run. A CPU-path scan
+without those settings (an older one, a half-resolution one, one with a setting off) judges the cameras
+only; ``test_calib_health_cpu_path.py`` checks that rule on hand-made reports.
 """
 from __future__ import annotations
 
@@ -109,15 +109,11 @@ def test_the_status_names_the_part_of_each_perturbed_calibration(bracket, bracke
     gpu = base["params"]["compute"]["tracking_model"] == "gpu"
     s = base["health_status"]
     assert s["source"] == "scan" and s["state"] == "valid", (s["reason"], s["signs"])
-    if gpu:
-        assert s["parts"] == {"cameras": "valid", "lasers": "valid", "imu": "valid"} and s["note"] is None
-    else:  # the CPU path: the lasers and the IMU are not judged, neither stale nor fine
-        assert s["parts"] == {"cameras": "valid", "lasers": None, "imu": None}
-        assert "cannot be judged on this computer" in s["note"]
+    # the GPU path, or the CPU path with its 2026-11-20 settings (its defaults at full resolution): all judged
+    assert gpu or health.cpu_path_case(base) == "full", base["params"]
+    assert s["parts"] == {"cameras": "valid", "lasers": "valid", "imu": "valid"} and s["note"] is None
     faults = [("camera_pitch", 0.03, "cameras"), ("laser_offset:vertical", 0.2, "lasers"), ("imu_rotation", 3.0, "imu")]
     for fault, size, part in faults:
-        if not gpu and part != "cameras":
-            continue  # not judged on the CPU path (test_calib_health_status.py checks that rule on H2's CPU runs)
         rep = _process(bracket, tmp_path / fault.replace(":", "-"), study.perturb(true, fault, size))
         s = rep["health_status"]
         joined = health.status(scans=[_item(rep, 2), _item(rep, 1), _item(base, 0)])
@@ -138,10 +134,8 @@ def test_a_short_scan_judges_the_cameras_only(short_scan, tmp_path):
 @pytest.mark.parametrize("name", ["bracket-dark", "bracket-speckle", "plate-0.5mm"])
 def test_the_true_calibration_stays_valid_on_the_hard_scenes(name, bracket_true, tmp_path_factory):
     """H2's hard scenes as H2 rendered them (90 frames): the scan's own status and the joined status
-    (this scene's scan with two of the bracket) stay Valid. GPU path only: on the CPU path only the
-    row error is judged, which does not depend on the path (H2: 0.062 px on both)."""
-    if CPU:
-        pytest.skip("the CPU path judges the row error only, the same on both paths (H2); see the module docstring")
+    (this scene's scan with two of the bracket) stay Valid, on both paths (the CPU path with its 2026-11-20
+    settings, its defaults at full resolution)."""
     rec = _recording(tmp_path_factory, name)
     out = tmp_path_factory.mktemp("h3out")
     rep = _process(rec, out / "scan", RecordingReader(rec).calibration())

@@ -4,8 +4,8 @@
  *
  * The URL picks a status that the demo cannot reach by itself: `health=check` (2 of the last 3 scans found the vertical
  * laser off: Check recommended, lasers), `health=recalibrate` (they found the cameras' rows off: Recalibration
- * required, cameras), `health=cpu` (scans processed without a GPU: Valid, with the lasers and the IMU not judged and
- * the note why), `health=old` (the last 2-minute check is 20 days old: Check recommended for the calibration as a
+ * required, cameras), `health=cpu` (scans processed without a GPU by an earlier version, which judges only the cameras
+ * there: Valid, with the lasers and the IMU not judged and the note why), `health=old` (the last 2-minute check is 20 days old: Check recommended for the calibration as a
  * whole), `health=failed` (a 2-minute check that did not pass two days ago, mock/setup.ts: Recalibration required, until a
  * check is run in the demo). Without it the status follows the mock: `drift=1` (the launch check's drift), a failed
  * 2-minute check, else Valid for what was looked at.
@@ -101,7 +101,7 @@ export function mockSetupHealth(opts: {
       reason: "The last 2-minute check was 20 days ago; a check every 14 days or so catches a slow drift early.", action: act("check"), then: null });
   if (opts.option === "cpu") {
     scans.used = 3;
-    note = "These scans were processed without a GPU, so only the cameras could be judged: the lasers and the IMU cannot be judged on this computer.";
+    note = "These scans were processed without a graphics card by an earlier version of the software, so only the cameras could be judged: processing it again judges the lasers and the IMU too.";
   }
   const rank = { recalibrate: 0, check: 1 } as const;
   const partRank = (p: HealthPart | null) => (p === "cameras" ? 0 : p === "lasers" ? 1 : p === "imu" ? 2 : 3);

@@ -108,8 +108,8 @@ check(healthView({ ...CHECK_LASERS, part: "imu", action: { step: "imu", text: "R
 check(healthView({ ...CHECK_LASERS, part: "imu", action: { step: "imu", text: "Redo the IMU calibration" } })!.action!.label === "Redo the IMU", "IMU button");
 
 // the engine's note says why something could not be judged: it replaces the generic line
-const cpu = healthView({ ...VALID, note: "These scans were processed without a GPU, so only the cameras could be judged: the lasers and the IMU cannot be judged on this computer." })!;
-check(cpu.judged!.startsWith("These scans were processed without a GPU"), `note: ${cpu.judged}`);
+const cpu = healthView({ ...VALID, note: "These scans were processed without a graphics card at half resolution, so only the cameras could be judged: the lasers and the IMU are judged only in scans processed at full resolution." })!;
+check(cpu.judged!.startsWith("These scans were processed without a graphics card at half resolution"), `note: ${cpu.judged}`);
 check(healthView({ ...VALID, not_judged: ["imu"] })!.judged === "Not judged yet: the IMU. A scan made with this calibration judges it.", "one part, singular");
 check(healthView({ ...VALID, not_judged: ["cameras", "lasers", "imu"] })!.judged!.includes("the cameras, the lasers and the IMU"), "three parts");
 check(healthView({ ...VALID, provisional: false })!.provisional === null, "not provisional: no line");

@@ -199,7 +199,7 @@ type CalibHealth = {
   reasons: HealthReason[];        // every finding that is not valid, worst first (the first is the one above)
   parts: { cameras: HealthState | null; lasers: HealthState | null; imu: HealthState | null };   // null: not judged
   not_judged: HealthPart[];
-  note: string | null;            // e.g. scans processed without a GPU: the lasers and the IMU cannot be judged there
+  note: string | null;            // why a part could not be judged: a short scan, or one processed without a graphics card by an earlier version, at half resolution or with one of that path's settings turned off
   provisional: true;              // the limits come from the simulator (H2) until the real scanner is measured (H5)
   source: "setup" | "scan";
   scans?: { used: number; window: number; agree: number };   // setup only: scans looked at, the window (3), how many must agree (2)

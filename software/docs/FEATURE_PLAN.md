@@ -730,6 +730,12 @@ rotation the tracker finds against the gyro's (`jump_deg`) is not saved.
     dark bracket's yaw crossing, the temperature (H5), Straighten's correction.
 
 ### [x] H3. The status (M)
+- **Without a GPU (2026-11-20, the owner's decision).** The lasers and the IMU are judged on a
+  scan processed without a graphics card when its report shows that path's defaults of D7 at
+  full resolution; any other scan of that path is judged for the cameras only, with a note that
+  says why (an earlier version, half resolution, or a setting turned off) and what would judge
+  the rest. The setup state keeps each scan's case, and a scan kept from before counts as an
+  earlier version (`MAINTENANCE_PLAN.md`, F14).
 - **What:** `ohs/calib/health.py` joins the launch check, the age of the last board check and the
   last scans' health blocks into **Valid**, **Check recommended** or **Recalibration required**,
   with the part concerned (cameras, lasers, IMU) and the reason in words. It is part of the

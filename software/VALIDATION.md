@@ -2976,6 +2976,14 @@ processing with the study's wrong calibrations; each processing runs in a child 
 15-minute limit, because the CPU path can crash natively, `docs/MAINTENANCE_PLAN.md`, F6).
 Not verified: anything on real hardware; the four-laser build; two faults at once.
 
+**Without a GPU (since 2026-11-20).** With the CPU path's defaults at full resolution the true
+calibration stayed Valid for all three parts on the bracket and on the dark, speckled and 0.5 mm
+plate scenes (lines 0.013 mm at most, gyro 0.0093° a frame at most, the speckled bracket's row
+error 0.129 px against 0.15 px); the 0.2 mm laser fault read Recalibration required for the lasers
+(-0.357 mm) and the 3° IMU fault for the IMU (0.0335°): the same limits as with a GPU. A scan of
+that path without those settings (an older one, half resolution, or a setting off) is judged for
+the cameras only, and its note says which.
+
 ## The CPU path's ray cast: a crash, a hang and runs that differed (2026-11-19)
 
 `MAINTENANCE_PLAN.md` F6 and F13. On a computer without a usable GPU the tracker's model is

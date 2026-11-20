@@ -170,7 +170,9 @@ def test_a_line_without_points_is_a_sign():
 
 
 def test_the_cpu_path_judges_the_cameras_only():
-    """On the CPU path the lasers and the IMU are not judged: neither stale nor fine."""
+    """On the CPU path without its 2026-11-20 settings (here: nothing says it had them, as in a scan from
+    before) the lasers and the IMU are not judged: neither stale nor fine. With them they are
+    (``test_calib_health_cpu_path.py``)."""
     true_cpu = (0.0618, -0.0189, 0.0801, 0.0362)  # H2, CPU path, true calibration: gyro over "recalibrate"
     for signs in (true_cpu, (0.0618, -0.1764, 0.0827, 0.0354)):  # ... and the vertical laser 0.1 mm off
         r = health.read_scan(block(*signs), tracking_model="open3d", lines=LINES)
@@ -179,11 +181,11 @@ def test_the_cpu_path_judges_the_cameras_only():
         s = health.scan_status(block(*signs), tracking_model="open3d", lines=LINES)
         assert s["state"] == "valid" and s["parts"] == {"cameras": "valid", "lasers": None, "imu": None}
         assert s["not_judged"] == ["lasers", "imu"]
-        assert "cannot be judged on this computer" in s["note"] and "lasers and the IMU" in s["note"]
+        assert "by an earlier version of the software" in s["note"] and "lasers and the IMU" in s["note"]
         assert "cameras" in s["reason"] and "lasers" not in s["reason"]
     st = run(*(item(true_cpu, d, model="open3d") for d in (3, 2, 1)))
     assert st["state"] == "valid" and st["parts"]["lasers"] is None and st["parts"]["imu"] is None
-    assert "cannot be judged on this computer" in st["note"]
+    assert "by an earlier version of the software" in st["note"]
     assert st["reason"].startswith("Nothing looks off for the cameras:"), st["reason"]
     # the row error still holds there: a pitch is caught
     st = run(*(item((0.2525, 0.0686, 0.2232, 0.0374), d, model="open3d") for d in (3, 2, 1)))

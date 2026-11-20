@@ -2042,10 +2042,19 @@ Found 2026-11-19 by the study for F13 (the agent's numbers, not re-measured in r
   - Guard: `tests/test_cpu_path_defaults.py` (on where nothing is set, each can be turned off,
     everywhere else as before, and a 12-frame dark bracket that ends 1.5 mm off where it ended
     307 mm off).
-  - **Left for the owner:** the calibration status still judges only the cameras on this path.
-    With the defaults it could judge the lasers and the IMU too: right calibrations read at most
-    0.013 mm (limit 0.05) and 0.0093° a frame (limit 0.015); the 0.2 mm laser fault reads
-    0.357 mm and the 3° IMU fault 0.0335°. Prepared, not switched on.
+  - **The calibration status on this path (2026-11-20, the owner's decision):** a scan processed
+    without a GPU now has its lasers and its IMU judged too, when its own report shows the three
+    settings at full resolution (`ohs.calib.health.cpu_path_case`: the depth fix on, the ray
+    cast's threshold 8, the velocity guard set, at least 960 px wide). Any other scan of this
+    path (one from before, a half-resolution one, one with a setting turned off) is judged for
+    the cameras only, as before, and its note says which and what would judge the rest. The
+    limits are unchanged (0.05 mm, 0.015° a frame, 0.15 px). A scan kept from before is read by
+    what it recorded, so recomputing the status never judges it by a rule it did not run under,
+    and one new scan among two old ones does not judge the lasers alone (2 of the last 3).
+    With the settings a right calibration read at most 0.013 mm a line and 0.0093° a frame on
+    ten scenes; the 0.2 mm laser fault reads 0.357 mm and the 3° IMU fault 0.0335°. Guards:
+    `tests/test_calib_health_cpu_path.py` (9); `tests/test_calib_health_scans.py` now runs the
+    faults and the three hard scenes on this path too, with the limits as they were.
 
 ### [x] F15. Hole filling triangulates by vertex number, so two runs can fill a hole differently ✔
 - **Found 2026-11-20** in the review of R3 (`FEATURE_PLAN.md`). A scan made twice from the same
