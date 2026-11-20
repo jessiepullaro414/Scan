@@ -3402,6 +3402,93 @@ filling (MAINTENANCE_PLAN F15: not the thinning).
 
 Limits: two simulated scenes, 2 s each; real 60 frames a second recordings may differ.
 
+## Presets: which settings matter, measured (FEATURE_PLAN P1, 2026-11-20)
+
+`tools/preset_study.py` varies one setting at a time around today's Make mesh (the app's
+`process_params` with the default config, then the Default recipe) on simulated scans, 1280x800,
+GPU path, and judges each against the true shape: the object's mesh error (median / p95, mm, after
+placing the whole scan on the truth), coverage (the share of the object's surface seen by the
+processed frames that the mesh reaches within 1 mm), the scene's fits, and the time. A setting
+counts only when it moves a result by more than the range over three recordings of the scene
+(other seeds: other noise and another hand path; for the door and the carburettor, other stretches
+of their one long recording). Measured by an Opus agent; times were taken on a very busy PC, so
+only rough ratios are given. The full tables come from `python tools/preset_study.py table <work>`.
+
+**The spread from scan to scan (today's settings):**
+
+| Scene | Error, median (mm) | Error, p95 (mm) | Coverage | Fit | Range over the three |
+|---|---|---|---|---|---|
+| Sphere (36 frames) | 0.077 / 0.063 / 0.080 | 0.28 / 0.27 / 0.38 | 0.864 / 0.901 / 0.867 | radius -0.09 / -0.11 / -0.18 | 0.017 / 0.11 / 0.037 / radius 0.09 |
+| Car panel (60) | 0.035 / 0.037 / 0.026 | 0.16 / 0.20 / 0.16 | 0.985 / 0.992 / 0.997 | Ø 25 hole +1.07 / +0.54 / -0.23 | 0.011 / 0.044 / 0.013 / hole 1.30 |
+| Bracket (90) | 0.170 / 0.488 / 0.694 | 0.74 / 1.09 / 1.00 | 0.924 / 0.823 / 0.818 | base height +0.006 / +0.036 / +0.018 | 0.52 / 0.36 / 0.11 / base 0.031 |
+| Plate 0.5 mm, lying flat (60) | 0.032 / 0.031 / 0.034 | 0.16 / 0.14 / 0.14 | 1.000 each | thickness 0.493 / 0.492 / 0.504 | 0.002 / 0.023 / 0 / thickness 0.011 |
+| Walls 0.5 / 1 / 2 mm, standing (120) | 0.123 / 0.144 / 0.114 | 0.88 / 1.11 / 1.28 | 0.950 / 0.909 / 0.922 | walls read 1.71·1.81·2.66 / 1.70·1.71·2.58 / 1.70·1.90·2.53 | 0.030 / 0.40 / 0.042 / walls 0.02·0.19·0.13 |
+| Door, 141-frame stretches | 0.052 / 0.039 / 0.042 | 0.38 / 0.43 / 0.35 | 0.989 / 0.925 / 0.966 | | 0.013 / 0.077 / 0.064 |
+| Carburettor, 135-frame stretches | 0.230 / 0.157 / 0.175 | 1.00 / 0.69 / 1.04 | 0.701 / 0.696 / 0.679 | | 0.073 / 0.35 / 0.022 |
+
+The bracket's spread is wide because the scan is placed on the truth over the whole scene, where
+the table rules, so where tracking left the part on the table rules its error.
+
+**Voxel size** (seed 0; median / p95 / coverage / fit; `*` = beyond the spread; time against today's):
+
+| Scene | 0.5 mm | 0.75 mm | 1.0 mm (today) | 1.5 mm | 2.0 mm |
+|---|---|---|---|---|---|
+| Sphere | 0.075 / 0.29 / 0.871 / r -0.09 (2.4x) | 0.076 / 0.28 / 0.868 / -0.07 | 0.077 / 0.28 / 0.864 / -0.09 | 0.077 / 0.28 / 0.856 / -0.11 | 0.083 / 0.33 / 0.850 / -0.25* (0.9x) |
+| Car panel | 0.039 / 0.16 / 0.987 / hole +0.3 (2.2x) | 0.035 / 0.15 / 0.986 / +0.6 | 0.035 / 0.16 / 0.985 / +1.1 | 0.035 / 0.22* / 0.982 / +1.9 | 0.034 / 0.75* / 0.979 / +2.8* (0.9x) |
+| Bracket | 0.157 / 0.58 / 0.936 (1.6x) | 0.165 / 0.65 / 0.933 | 0.170 / 0.74 / 0.924 | 0.184 / 1.12* / 0.909 | 0.207 / 1.76* / 0.883 (0.5x) |
+| Plate | 0.035 / 0.16 / 1.000 / t 0.49 (1.7x) | t 0.49 | 0.032 / 0.16 / 1.000 / t 0.49 | t 0.49 | 0.031 / 0.16 / 1.000 / t 0.49 |
+| Walls 0.5·1·2 | 1.06*·1.44*·2.43* (1.4x) | 1.41*·1.61*·2.50* | 1.71·1.81·2.66 | 2.11*·2.31*·3.30* | 2.19*·2.51*·3.88* (0.4x) |
+| Door | 0.060 / 0.41 / 0.989 (1.3x) | 0.053 / 0.38 / 0.989 | 0.052 / 0.38 / 0.989 | 0.051 / 0.41 / 0.987 (0.6x) | 0.051 / 0.45 / 0.985 (0.6x) |
+| Carburettor | 0.187 / 0.67 / 0.724* (1.8x) | 0.207 / 0.75 / 0.717 | 0.230 / 1.00 / 0.701 | 0.285 / 1.89* / 0.664* | 0.338* / 3.14* / 0.622* (0.7x) |
+
+- **Only the voxel passes the stop rule, and only on thin standing walls.** Paired on all three
+  scans, 0.5 mm voxels read the 0.5 / 1 / 2 mm walls 0.62 to 0.67 / 0.37 to 0.45 / 0.23 to 0.35 mm
+  closer to the truth, and the 0.5 mm wall's coverage rises by 0.13 to 0.36. It also helps the
+  carburettor (p95 -0.11 to -0.38 mm, coverage +0.01 to +0.02) and the bracket, inside their
+  spreads; it makes the panel's Ø 25 hole read 0.6 to 0.8 mm smaller, inside its 1.3 mm spread; it
+  does nothing for the door.
+- **Coarser voxels (1.5 to 2 mm)** take 0.6 times the time on the door with no measured loss, but
+  open the panel's hole by 1.4 to 2.4 mm and thicken thin walls by 0.4 to 1.2 mm.
+- **The gap guard trades holes against thin walls** (8 px today): 4 px reads the 0.5 mm wall 0.4
+  to 0.5 mm closer and lifts the carburettor's coverage by 0.09 to 0.14, but closes the Ø 25 hole
+  by 2.8 to 3.7 mm; 12 px opens it by 2.9 to 3.5 mm and drops the carburettor's coverage to 0.43;
+  0 px deletes one face of the 0.5 mm wall on all three scans.
+- **Quality:** Preview is worse on every scene (the hole -3 mm, p95 several times as large, one
+  face of the 0.5 mm wall gone on two of three scans). Best at 60 frames a second gave no gain on
+  the one bracket recording tried (0.303 against 0.223 mm median, 2.5 times the time).
+- **Thin walls off** thickens the walls by 0.3 to 0.75 mm; "on" equals "auto" in a scan without
+  markers.
+- **Depth range:** 200 to 350 mm loses tracking on four scenes (the table lies beyond 350 mm);
+  150 to 600 mm changes nothing; 100 to 600 mm does not run on the Radeon 680M's GPU matcher (368
+  disparities, 256 work items a group) and falls back to the CPU.
+- **Edits after meshing:** a fill size of 0 to 80 mm changes nothing measurable (the Hole tool's
+  diameter included). Smoothing off edges gains 0.005 to 0.013 mm in the median and makes 0.2 to
+  5 % of the edge vertices worse; smoothing everywhere makes 12 to 35 % of them worse. All inside
+  the spread except on the plate.
+
+**Thin parts.** The 0.5 mm plate lying flat reads 0.489 to 0.504 mm with every voxel from 0.5 to
+2 mm, every gap guard from 0 to 12 px, thin walls off and every recipe, with 98 to 100 % of its top
+kept; Preview reads 0.47 mm (its tracking failed on two scans); thinner plates were not measured.
+Standing walls, seen from both sides:
+
+| Setting | 0.5 mm wall reads | 1 mm wall | 2 mm wall |
+|---|---|---|---|
+| Today (1 mm voxels) | 1.70–1.71 | 1.71–1.90 | 2.53–2.66 |
+| 0.5 mm voxels | 1.03–1.08 | 1.32–1.45 | 2.18–2.43 |
+| 1.5 to 2 mm voxels | 2.09–2.19 | 2.31–2.52 | 3.3–3.9 |
+| Thin walls off | 2.20–2.34 | 2.17–2.65 | 2.96–3.29 |
+
+So at today's 1 mm voxels nothing thinner than about 1.7 mm reads true, and at 0.5 mm the floor is
+about 1.0 to 1.1 mm.
+
+**The presets this supports:** "General" (today) and "Thin sheet metal and small parts" (voxel
+0.5 mm). A detailed casting wants the same value. A coarser voxel for large panels gains time, not
+accuracy, and harms holes.
+
+Limits: simulation only; one setting at a time; the same recording judged twice gave the same
+camera path and faces and a median error 0.004 mm apart (0.1702 and 0.1742 mm: the study's own
+placement on the truth; fits within 0.0004 mm).
+
 ## What the metrics mean
 
 - **Stereo errors** compare the estimated raw intrinsics/extrinsics (`K1`, `K2`, `R`, `T`) with

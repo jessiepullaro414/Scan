@@ -1049,7 +1049,35 @@ built-in recipes for the edits after meshing ("Default", "Body panel", "Bracket 
 "Quick preview"; `BUILTIN_RECIPES`, `ohs/server/processing.py:137`). There is no object type and
 no object size anywhere in the engine or the app.
 
-### P1. Which settings matter for which object (M)
+### [x] P1. Which settings matter for which object (M)
+- **Done 2026-11-20** (the task as written follows below; `tools/preset_study.py`,
+  `VALIDATION.md`, "Presets: which settings matter, measured"). Seven scenes, three recordings
+  each for the spread, one setting varied at a time around today's values.
+  - **Only the voxel size passes the stop rule, and only for thin standing walls.** At 0.5 mm
+    voxels, walls 0.5 / 1 / 2 mm thick read 1.03–1.08 / 1.32–1.45 / 2.18–2.43 mm instead of
+    1.70 / 1.71–1.90 / 2.53–2.66 mm, on all three scans (their spread from scan to scan: 0.02 /
+    0.19 / 0.13 mm). It costs 1.2 to 2.4 times the time.
+  - **Everything else stays as it is:** quality, thin walls, the gap guard, the depth range,
+    the fill size and the smoothing either change nothing beyond the spread or only make
+    something worse (the gap guard trades the size of holes against thin walls; Preview is worse
+    everywhere; a coarser voxel saves time on a door but opens a panel's hole by 1.4 to 2.4 mm).
+  - **So, for D5: two presets.** "General" (today, the default) and one more, **"Thin sheet
+    metal and small parts"**: voxel 0.5 mm, nothing else. A detailed casting wants the same
+    value, so it is the same preset. No preset for large panels: the numbers give it no gain in
+    accuracy.
+  - **Thin parts:** a 0.5 mm plate lying flat reads 0.49 to 0.50 mm with every setting and
+    recipe and is never removed. Standing walls read at least about 1.7 mm at 1 mm voxels and
+    about 1.05 mm at 0.5 mm. A gap guard of 0 and Preview quality each delete one face of a
+    0.5 mm standing wall: neither goes into a preset.
+  - **Found on the way:** a depth range of 100 to 600 mm cannot run on this PC's GPU matcher
+    (368 disparities against 256 work items a group) and falls back to the CPU; walls standing
+    on a bare table could not be tracked (they slid 11 to 19 mm) until they stood on an 8 mm
+    base; the same recording judged twice gave the same camera path and faces but a median
+    error 0.004 mm apart (the study's own placement on the truth, most likely the vertex order
+    again: `MAINTENANCE_PLAN.md`, F15).
+  - **Not measured:** real scans; pairs of settings; Best quality on more than one recording;
+    plates thinner than 0.5 mm; the CPU path; times on a quiet PC (the ratios are rough).
+  - Guard: `tests/test_tools_preset_study.py` (5).
 - **What:** on the simulated scenes (the car panel, the bracket, the sphere, and the large and
   detailed parts of `VALIDATION.md`, "Large and detailed parts") vary the handful of settings a preset could hold: voxel size, quality, thin walls, the gap
   guard, the depth range, the recipe (fill size, smoothing strength and where). For each: error,
