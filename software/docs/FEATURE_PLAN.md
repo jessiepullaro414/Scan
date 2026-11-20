@@ -66,6 +66,16 @@ other, so any of them can be taken first.
 | D9 | Hole filling can triangulate the same hole differently from run to run (`MAINTENANCE_PLAN.md` F15). Make it repeatable? Open since 2026-11-20. | Yes, as an option first: it changes which triangles an edit makes (not what was measured), so by the standing rule it is built off and switched on after a look. |
 | D10 | The calibration status's limits (a board check older than 14 days, 2 of the last 3 scans, 0.3 px at launch) are provisional. | Leave them until the real scanner has been measured (H5). |
 
+**Decided by the owner (2026-11-20):**
+- **D7:** yes. The CPU path's improvements (the depth fix, the velocity guard and the stricter
+  ray-cast threshold, `MAINTENANCE_PLAN.md` F14) are switched on for that path, with the one
+  number that is worse (the car panel's tracker against the gyro) accepted.
+- **D8:** no, guidance at half resolution does not matter for now; the loop's test stays skipped
+  on the CPU path.
+- **D9:** yes. Hole filling is made repeatable from run to run, built as an option that is off
+  first (`MAINTENANCE_PLAN.md` F15).
+- **D10:** the calibration status's limits wait for the real scanner; no problem.
+
 **Decided by the owner (2026-11-19):**
 - **D5:** the presets and their names are chosen from P1's measurements; "General" stays
   exactly today's behaviour and stays the default.
