@@ -803,7 +803,7 @@ class FeatureManager:
         """``GET .../features/frame/mesh.ply`` (or ``mesh.stl``): the scan's current result mesh
         (``result/mesh.ply``) with its vertices and normals turned into the part's frame
         (:meth:`PartFrame.mesh_to_part <ohs.measure.frame.PartFrame.mesh_to_part>`); the PLY keeps
-        each vertex's sigma and each face's filled flag. Made on request in a temporary folder: the
+        each vertex's sigma and count of looks and each face's filled flag. Made on request in a temporary folder: the
         scan's own files are not touched. Returns the file's bytes, its download name and the mesh
         version read before it (the file is that version or a newer one). 404 without a frame or a
         mesh, 409 for a frame this version cannot read. An out-of-date frame is used as it is (the
@@ -832,7 +832,7 @@ class FeatureManager:
             if name == "mesh.stl":
                 write_stl(out, V, F)
             else:
-                save_mesh(out, V, F, N, quality=m["quality"], filled=m["filled"])
+                save_mesh(out, V, F, N, quality=m["quality"], filled=m["filled"], looks=m.get("looks"))
             data = out.read_bytes()
         return data, f"mesh-part-frame.{name.rsplit('.', 1)[1]}", version
 

@@ -1443,6 +1443,80 @@ export type CheckResult = {
   areas: CheckArea[]; // largest first, at most 50
 };
 
+// FEATURE_PLAN N1: why each area is weak, and where to scan it from (APP_API.md "POST .../check/why").
+// The first that holds: not seen at all, steep, far, too few looks, on an edge; else unknown (and why it can't be told).
+export type CheckReason = "not_seen" | "steep" | "far" | "few_looks" | "edge" | "unknown";
+/** Where to hold the scanner: camera C of the scanner (the left camera), in the mesh's frame (mm). */
+export type CheckPose = {
+  T_wc: number[][]; // 4x4, camera C (x right, y down, z forward)
+  position_mm: [number, number, number]; // the scanner's centre (between its two cameras)
+  camera_position_mm: [number, number, number];
+  look_dir: [number, number, number]; // unit, from the scanner to the area
+  up: [number, number, number]; // the scanner's up (its images' up)
+  target_mm: [number, number, number]; // the area's centre
+  distance_mm: number; // the working distance
+  tilt_deg: number; // from the area's normal (0: square on)
+  azimuth_deg: number;
+};
+export type CheckView = {
+  ok: boolean; // false: no pose, `reason` says why in words
+  pose: CheckPose | null;
+  share_seen: number | null; // of the area, from the pose
+  border_seen: number | null; // of the unseen edge beside it, looked past
+  candidates: number;
+  missed: { blocked: number; facing_away: number; steep: number; outside: number } | null;
+  reason: string | null;
+  text: string; // one sentence for the user
+};
+export type CheckWhyArea = {
+  index: number; // its place in the Check answer's list, from 0
+  kind: CheckKind;
+  area_mm2: number;
+  n_faces: number;
+  center: [number, number, number];
+  normal: [number, number, number]; // the mean of its vertices' normals (0 0 0: it faces every way)
+  reason: CheckReason;
+  reasons: CheckReason[]; // every one that holds, in that order
+  reason_text: string;
+  evidence: {
+    looks: number | null;
+    looks_passing: number | null;
+    view_angle_deg: number | null;
+    distance_mm: number | null;
+    in_view_share: number | null;
+    edge_share: number | null;
+    border_share: number;
+    outward: [number, number, number] | null;
+  };
+  unknown_because: string[]; // "steep, far: ...", "few_looks: ...", "edge: ...": what was missing to tell
+  view: CheckView;
+};
+export type CheckPlanPose = {
+  area: number; // the area it is for (index)
+  kind: "area" | "more"; // the area's own pose, or another direction for a large area
+  pose: CheckPose;
+  share_seen: number;
+  border_seen: number | null;
+  also_sees: { area: number; share: number }[];
+};
+export type CheckWhy = {
+  version: number;
+  tolerance_mm: number;
+  n_areas: number;
+  areas: CheckWhyArea[]; // the Check answer's areas, in its order
+  plan: CheckPlanPose[]; // at most 3
+  given: { looks: boolean; views: boolean; edges: boolean; working_mm: number | null; steep_deg: number; far_mm: number | null; [k: string]: unknown };
+  camera_path: {
+    available: boolean;
+    why: string | null; // why there is none, in words
+    scans: { name: string; frames: number; trajectory: string }[];
+    frames_total: number;
+    frames_used: number; // at most frames_cap, evenly spread
+    frames_cap: number | null;
+  };
+  ms: number;
+};
+
 // ------------------------------------------------------------------ M4 first slice: align two scans and merge them
 // APP_API.md "M4 first slice: align two scans and merge them". The target scan keeps its place; the
 // source scan is moved onto it. Points picked on a mesh are in that scan's own frame, in mm.

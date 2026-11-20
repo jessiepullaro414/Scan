@@ -515,7 +515,14 @@ export default function ProcessPage({ pid, sid }: { pid: string; sid: string }) 
             check={check}
             ready={!!mesh}
             hasSigma={hasSigma}
-            remake={scan ? <MakeMeshButton projectId={pid} scan={scan} label="Make the mesh again" /> : undefined}
+            remake={
+              scan ? (
+                <span className="inline-flex flex-col items-start gap-1">
+                  <MakeMeshButton projectId={pid} scan={scan} label="Make the mesh again" blocked={remakeBlock(scan)} />
+                  {remakeBlock(scan) ? <span className="text-[11.5px] leading-4 text-subtle">{remakeBlock(scan)}</span> : null}
+                </span>
+              ) : undefined
+            }
             holes={
               stats?.holes
                 ? {

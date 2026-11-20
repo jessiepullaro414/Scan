@@ -3195,9 +3195,17 @@ found in review:
   scanned. That is why `edge` is tried after the reasons a second pass can act on. In the first
   version it was tried before them, and the largest area (158,656 mm², seen 62° off from 377 mm)
   was told "no pose"; 15 of 50 areas had one.
-- Time: the plain Check takes 1.3 s (0.1 mm) and 0.5 s (0.3 mm), as before: the route asks for no
-  reasons yet (`why=False`). With the reasons 13.5 s, the poses 3 to 4 s, the short plan 2.5 s. The
-  route work has to bring that down before the panel shows it.
+- Time, first version: the plain Check takes 1.3 s (0.1 mm) and 0.5 s (0.3 mm); with the reasons
+  13.5 s, the poses 3 to 4 s, the short plan 2.5 s, about 20 s in all.
+- Time, since the route (2026-11-20): the plain Check is unchanged (its route asks for no reasons);
+  reasons, poses and plan come from a second route. Back to back on a loaded PC they took 33 to
+  56 s before and 11 to 16 s after (2.1 to 3.6 times faster; the plain Check took 4 to 9 s in the
+  same rounds). In the app, PC still busy: 8.3 s for the first call at 0.1 mm, 2.7 s at 0.3 mm on
+  the same mesh, 0.02 s when asked again. Not yet timed on a quiet PC; the target is under 5 s.
+  What changed: the rays of all of an area's directions are cast in one call, the mesh's parts
+  (ray scene, open border, curvature) are made once per mesh version and side by side, and at
+  most 120 frames of the camera path are looked at, evenly in time (no reason and no pose changed
+  on this scan with the cap: 19 steep, 5 far, 21 edge, 5 unknown; 29 poses).
 
 **The pose.** 25 directions (0, 20, 40 and 55° off the area's normal, 8 round each ring), the
 scanner at the working distance with the cameras' centre line through the area's centre. From each,
@@ -3218,7 +3226,8 @@ record is the old bytes plus 4, the face bytes are the same. On the 90-frame ben
 path, full and preview quality) vertices, faces, normals, sigma, poses and laser points are the same
 before and after. File size +7.4 % (27.60 to 29.65 MB); reading it costs 2.2 ms per 530,000
 vertices; frame time is untouched. Read by `load_ply`, the server's edits, STL export and the
-app's TypeScript reader, each tested with and without it. Edits in the app do not carry it yet.
+app's TypeScript reader, each tested with and without it. Since 2026-11-20 it follows every edit in
+the app as the sigma does (surface that hole filling makes has 0, read as "no looks here").
 
 **The whole loop.** The bracket scanned from one side, then 3 short passes (20 frames each), merged
 at true poses; 1280x800, GPU path, tolerance 1.0 mm. Guided: the engine's plan for the part's
@@ -3227,28 +3236,32 @@ share of the *first scan's surface* that meets the tolerance:
 
 | Seed | Guided | Random |
 |---|---|---|
-| 0 | +7.9 | +5.0 |
-| 1 | +17.7 | +11.1 |
-| 2 | +11.9 | +0.6 |
+| 0 | +15.3 | +5.0 |
+| 1 | +12.0 | +11.1 |
+| 2 | +14.4 | +0.6 |
 | 3 | +15.2 | +12.5 |
-| 4 | +13.3 | +12.8 |
-| Mean (range) | +13.2 (7.9 to 17.7) | +8.4 (0.6 to 12.8) |
+| 4 | +9.2 | +12.8 |
+| Mean (range) | +13.2 (9.2 to 15.3) | +8.4 (0.6 to 12.8) |
 
-- **Not the same from run to run.** A second run of the same code gave +15.3 for seed 0 and +10.4
-  for seed 1 (which then loses to random's +11.1). The first scan's mesh has the same content each
-  time, but the GPU path lists its vertices in a different order, and the areas' samples are picked
-  by index, so a threshold falls on one side or the other. To be mended with the route work
-  (samples picked by position); the table is then measured again.
-- **On the whole part's surface** (new surface counts too) guided is no better: +23.4 points (10.8
-  to 31.6) against random's +23.1 (5.4 to 36.5). Random passes from other sides find surface the
-  first scan never saw, which no weak area points to.
-- At 640x400, seed 0, guided lost (+4.5 against +5.5); the loop's test runs at 1280x800. On the CPU
-  path (numpy twin, no looks, 640x400) the test asserts only that the share rises (+3.1; random
-  +2.7).
+- **Guided is better on 4 of 5 seeds;** seed 4 loses (+9.2 against +12.8).
+- **The same from run to run since 2026-11-20:** two runs of all five seeds gave the same plan and
+  the same numbers. Before, the areas' samples were picked by vertex number, and the GPU path
+  lists the same vertices in a different order each run: seed 0 gave +7.9 in one run and +15.3 in
+  another, seed 1 +17.7 and +10.4. Samples are now picked by position (the table above).
+- **On the whole part's surface** (new surface counts too) guided is about the same as random:
+  +24.8 points (19.5 to 31.1) against +23.1 (5.4 to 36.5), though never as bad as random's worst.
+  Random passes from other sides find surface the first scan never saw, which no weak area points
+  to.
+- **At 640x400 the guided passes show no gain.** GPU path, seed 0, with the first sampling: +4.5
+  against random's +5.5. CPU path (numpy twin, no looks), seed 0: +3.1 with the first sampling,
+  which was luck; +0.1 and -0.1 in two runs with samples picked by position (random +2.7). The
+  loop's test runs at 1280x800 on the GPU path and is skipped on the CPU path (the numpy model is
+  far too slow at 1280x800); its assertions are unchanged. Open for the owner.
 - Limits: simulator, one part, true poses, 3 passes.
 
-Guards: `tests/test_mesh_looks.py` (9), `test_mesh_check_reasons.py` (12), `test_guide_views.py`
-(10), `test_guide_loop.py` (5, slow).
+Guards: `tests/test_mesh_looks.py`, `test_mesh_check_reasons.py`, `test_mesh_check_context.py` (the
+same answer whatever the order of the vertices and faces), `test_mesh_carry_looks.py`,
+`test_guide_views.py`, `test_guide_loop.py` (slow), `test_server_check_why.py`.
 
 ## SGBM's paths from above, and the CPU path's slides (2026-11-20)
 

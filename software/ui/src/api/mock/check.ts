@@ -13,7 +13,7 @@
  * The demo meshes carry no measured sigma, so {@link madeUpSigma} makes one up from where each vertex
  * lies. Imports nothing at run time, so `npm test` checks it with plain node.
  */
-import type { CheckKind } from "../types";
+import type { CheckKind, CheckPlanPose, CheckPose, CheckReason, CheckView, CheckWhy, CheckWhyArea } from "../types";
 
 /** A vertex sigma of 50 mm (and above) means "nothing measured it" (the engine's `SIGMA_NONE_MM`). */
 export const SIGMA_NONE_MM = 50;
@@ -282,6 +282,199 @@ export function weakAreas(
     };
   });
   return answer(okShare, uncShare, nmShare, nAreas, areas);
+}
+
+// ------------------------------------------------------------------ made-up reasons and poses (FEATURE_PLAN N1)
+/** The demo scanner's working distance (mm): where the nominal scanner's laser sheets cross. */
+export const MOCK_WORKING_MM = 254;
+/** The demo's camera path: as many frames as a short scan, all of them looked at. */
+const MOCK_FRAMES = 96;
+
+type V3 = [number, number, number];
+const norm3 = (a: V3): V3 => {
+  const l = Math.hypot(a[0], a[1], a[2]) || 1;
+  return [a[0] / l, a[1] / l, a[2] / l];
+};
+const cross3 = (a: V3, b: V3): V3 => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+
+/** An area's normal: the mean of its corners' normals, weighted by each face's area (0 0 0 when it faces every way). */
+function areaNormal(P: ArrayLike<number>, N: ArrayLike<number> | null, I: ArrayLike<number>, faces: ArrayLike<number>): V3 {
+  let x = 0,
+    y = 0,
+    z = 0,
+    total = 0;
+  for (let n = 0; n < faces.length; n++) {
+    const o = faces[n] * 3;
+    const a = I[o] * 3,
+      b = I[o + 1] * 3,
+      c = I[o + 2] * 3;
+    const ux = P[b] - P[a],
+      uy = P[b + 1] - P[a + 1],
+      uz = P[b + 2] - P[a + 2];
+    const vx = P[c] - P[a],
+      vy = P[c + 1] - P[a + 1],
+      vz = P[c + 2] - P[a + 2];
+    const cx = uy * vz - uz * vy,
+      cy = uz * vx - ux * vz,
+      cz = ux * vy - uy * vx;
+    const w = Math.hypot(cx, cy, cz) / 2;
+    total += w;
+    if (N) {
+      x += (w * (N[a] + N[b] + N[c])) / 3;
+      y += (w * (N[a + 1] + N[b + 1] + N[c + 1])) / 3;
+      z += (w * (N[a + 2] + N[b + 2] + N[c + 2])) / 3;
+    } else {
+      x += cx / 2;
+      y += cy / 2;
+      z += cz / 2;
+    }
+  }
+  const l = Math.hypot(x, y, z);
+  return total > 0 && l > 0.3 * total ? [x / l, y / l, z / l] : [0, 0, 0];
+}
+
+/** The pose `tiltDeg` off the normal `n` (towards `side`) at the working distance, its cameras' centre line on `target`. */
+function mockPose(target: V3, n: V3, side: V3, tiltDeg: number, azimuthDeg: number): CheckPose {
+  const t = (tiltDeg * Math.PI) / 180;
+  const d = norm3([Math.cos(t) * n[0] + Math.sin(t) * side[0], Math.cos(t) * n[1] + Math.sin(t) * side[1], Math.cos(t) * n[2] + Math.sin(t) * side[2]]);
+  const fwd: V3 = [-d[0], -d[1], -d[2]];
+  // image up as close to the part's up as the view allows (the demo meshes are OpenCV's: up is -y)
+  let up: V3 = [0, -1, 0];
+  const k = up[0] * fwd[0] + up[1] * fwd[1] + up[2] * fwd[2];
+  up = Math.abs(k) > 0.95 ? norm3(cross3(fwd, [1, 0, 0])) : norm3([up[0] - k * fwd[0], up[1] - k * fwd[1], up[2] - k * fwd[2]]);
+  const right = norm3(cross3(fwd, up));
+  const centre: V3 = [target[0] + MOCK_WORKING_MM * d[0], target[1] + MOCK_WORKING_MM * d[1], target[2] + MOCK_WORKING_MM * d[2]];
+  const cam: V3 = [centre[0] - 30 * right[0], centre[1] - 30 * right[1], centre[2] - 30 * right[2]];
+  return {
+    T_wc: [
+      [right[0], -up[0], fwd[0], cam[0]],
+      [right[1], -up[1], fwd[1], cam[1]],
+      [right[2], -up[2], fwd[2], cam[2]],
+      [0, 0, 0, 1],
+    ],
+    position_mm: centre,
+    camera_position_mm: cam,
+    look_dir: fwd,
+    up,
+    target_mm: target,
+    distance_mm: MOCK_WORKING_MM,
+    tilt_deg: tiltDeg,
+    azimuth_deg: azimuthDeg,
+  };
+}
+
+const NO_EDGE_POSE = "no pose: on an edge or a tight curve another pass alone does not lower the uncertainty";
+
+/**
+ * The demo engine's `POST .../check/why`: a reason for each area of `r` and a pose to scan it from, made up
+ * from where it lies (the demo has no camera path): a filled hole is "not seen", a small area "on an edge",
+ * the others in turn seen only at a steep angle, too few times or from too far. Each pose stands at the
+ * working distance, square on, or 20 degrees off for a steep one; the plan takes the largest areas' poses,
+ * an area another pose already sees for the most part getting none of its own.
+ */
+export function madeUpWhy(
+  positions: ArrayLike<number>,
+  normals: ArrayLike<number> | null,
+  indices: ArrayLike<number>,
+  r: WeakAreas,
+  version: number,
+): CheckWhy {
+  const ev = (o: Partial<CheckWhyArea["evidence"]>): CheckWhyArea["evidence"] => ({
+    looks: 11,
+    looks_passing: 12,
+    view_angle_deg: 24,
+    distance_mm: 248,
+    in_view_share: 1,
+    edge_share: 0.1,
+    border_share: 0,
+    outward: null,
+    ...o,
+  });
+  let turn = 0;
+  const areas = r.areas.map((a, i): CheckWhyArea => {
+    const normal = areaNormal(positions, normals, indices, a.faces);
+    const faces = normal[0] === 0 && normal[1] === 0 && normal[2] === 0;
+    let reason: CheckReason;
+    let evidence: CheckWhyArea["evidence"];
+    if (a.kind === "not_measured") {
+      reason = "not_seen";
+      evidence = ev({ looks: null, view_angle_deg: null, distance_mm: null, in_view_share: 0.2, edge_share: null });
+    } else if (a.extent_mm < 6 || faces) {
+      reason = "edge";
+      evidence = ev({ edge_share: 0.8 });
+    } else {
+      reason = (["steep", "few_looks", "far"] as const)[turn++ % 3];
+      evidence =
+        reason === "steep"
+          ? ev({ view_angle_deg: 64 + (i % 5) * 2 })
+          : reason === "few_looks"
+            ? ev({ looks: 4 + (i % 2), looks_passing: 12 })
+            : ev({ distance_mm: 385 + (i % 4) * 8 });
+    }
+    const text = {
+      not_seen: "Not seen at all: nothing measured this surface (a hole or a shadow).",
+      steep: `Seen only at a steep angle: even the squarest look was ${evidence.view_angle_deg}° off the surface's normal.`,
+      far: `Seen from too far: the nearest look was ${evidence.distance_mm} mm away (hold the scanner at about ${MOCK_WORKING_MM} mm).`,
+      few_looks: `Seen too few times: ${evidence.looks} independent looks, where the surface that passes had 12 (go over it again, more slowly).`,
+      edge: "On an edge, a tight curve or an uneven surface: the mesh's own uncertainty there is above the tolerance, and another pass alone does not lower it.",
+      unknown: "No reason the data can tell.",
+    }[reason];
+    let view: CheckView;
+    if (reason === "edge") {
+      view = { ok: false, pose: null, share_seen: null, border_seen: null, candidates: 0, missed: null, reason: NO_EDGE_POSE, text: "No pose: on an edge or a tight curve another pass alone does not lower the uncertainty." };
+    } else {
+      const n: V3 = faces ? [0, -1, 0] : normal;
+      const side = norm3(cross3(n, Math.abs(n[0]) < 0.9 ? [1, 0, 0] : [0, 1, 0]));
+      const tilt = reason === "steep" ? 20 : 0;
+      const pose = mockPose(a.center, n, side, tilt, 0);
+      const share = 0.9 + 0.08 * Math.abs(Math.sin(i + 1));
+      view = {
+        ok: true,
+        pose,
+        share_seen: share,
+        border_seen: null,
+        candidates: 25,
+        missed: { blocked: 0, facing_away: 0, steep: 0, outside: 1 - share },
+        reason: null,
+        text: `Hold the scanner about ${MOCK_WORKING_MM} mm from the area${tilt ? `, ${tilt}° off square` : ", square on to it"}: it would see ${Math.round(100 * share)} % of it.`,
+      };
+    }
+    return {
+      index: i,
+      kind: a.kind,
+      area_mm2: a.area_mm2,
+      n_faces: a.n_faces,
+      center: a.center,
+      normal,
+      reason,
+      reasons: reason === "steep" && i % 2 ? ["steep", "few_looks"] : [reason],
+      reason_text: text,
+      evidence,
+      unknown_because: [],
+      view,
+    };
+  });
+  // the plan: the largest areas' poses, skipping an area within reach of a pose already chosen
+  const plan: CheckPlanPose[] = [];
+  for (const a of areas) {
+    if (plan.length >= 3) break;
+    if (!a.view.ok || !a.view.pose) continue;
+    const near = (p: CheckPlanPose, b: CheckWhyArea) => Math.hypot(...([0, 1, 2].map((k) => b.center[k] - p.pose.target_mm[k]) as V3)) < 25;
+    if (plan.some((p) => near(p, a))) continue;
+    const entry: CheckPlanPose = { area: a.index, kind: "area", pose: a.view.pose, share_seen: a.view.share_seen ?? 0, border_seen: null, also_sees: [] };
+    entry.also_sees = areas.filter((b) => b.index !== a.index && near(entry, b)).map((b) => ({ area: b.index, share: 0.7 }));
+    plan.push(entry);
+  }
+  return {
+    version,
+    tolerance_mm: r.tolerance_mm,
+    n_areas: r.n_areas,
+    areas,
+    plan,
+    given: { looks: true, views: true, edges: true, working_mm: MOCK_WORKING_MM, steep_deg: 59.6, far_mm: Math.round(MOCK_WORKING_MM * Math.SQRT2) },
+    camera_path: { available: true, why: null, scans: [{ name: "Demo scan", frames: MOCK_FRAMES, trajectory: "result/trajectory.csv" }], frames_total: MOCK_FRAMES, frames_used: MOCK_FRAMES, frames_cap: 120 },
+    ms: 0,
+  };
 }
 
 // ------------------------------------------------------------------ a made-up sigma for the demo meshes

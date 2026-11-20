@@ -18,6 +18,7 @@
  */
 import type {
   CheckResult,
+  CheckWhy,
   DeviationInfo,
   EditEntry,
   FitResult,
@@ -42,7 +43,7 @@ import type {
 } from "../types";
 import { encodeFaces } from "../../lib/fits";
 import { normalizeQuality } from "../../lib/quality";
-import { weakAreas } from "./check";
+import { madeUpWhy, weakAreas } from "./check";
 import { mockExtent, mockForm } from "./extent";
 import type { FeatureEngine } from "./features";
 import { mockFit } from "./fit";
@@ -488,6 +489,21 @@ export class MockProcess {
       this.bad("tolerance_mm: must be above 0 and at most 100", "Give the tolerance in mm, for example 0.1.");
     const r = weakAreas(m.positions, m.indices, this.sigma(st), null, tol);
     return { ...r, areas: r.areas.map((a) => ({ ...a, faces: encodeFaces(a.faces) })), version: st.version };
+  }
+
+  /** FEATURE_PLAN N1 `POST .../check/why`: why each area of that answer is weak and where to scan it from,
+   * made up from where it lies (check.ts `madeUpWhy`); 409 for another mesh version, as the engine. */
+  checkWhy(p: Project, s: Scan, body: Record<string, unknown>): CheckWhy {
+    const st = this.ensure(p, s);
+    const m = st.current;
+    if (!m) throw new HttpError(409, "This scan has no mesh yet", "Run Track (or Make mesh) first.");
+    const tol = body.tolerance_mm;
+    if (typeof tol !== "number" || !Number.isFinite(tol) || tol <= 0 || tol > 100)
+      this.bad("tolerance_mm: must be above 0 and at most 100", "Give the tolerance in mm, for example 0.1.");
+    if (typeof body.version === "number" && body.version !== st.version)
+      throw new HttpError(409, "The mesh changed since the page checked it", "Reload the mesh and check again.");
+    const r = weakAreas(m.positions, m.indices, this.sigma(st), null, tol);
+    return madeUpWhy(m.positions, m.normals ?? null, m.indices, r, st.version);
   }
 
   /**

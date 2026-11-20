@@ -13,7 +13,7 @@ operation returns a new ``(V, F)`` and leaves its inputs alone; the slow ones ta
 * :func:`mesh_stats` (:mod:`ohs.mesh.stats`) and the topology helpers in
   :mod:`ohs.mesh.topology` (edges, boundary loops, outer borders, pieces);
 * each vertex's confidence (:mod:`ohs.mesh.confidence`): :func:`sigma_stats`, and
-  :func:`carry_sigma` through the operations above;
+  :func:`carry_sigma` (and :func:`carry_looks`, each vertex's count of looks) through the operations above;
 * :func:`anchor_to_points` (:mod:`ohs.mesh.anchor`): pull the surface onto the laser points
   with a smooth correction ("Refine with lasers");
 * :func:`surface_offset`, :func:`offset_stats` (:mod:`ohs.mesh.offset`): how far an edited mesh
@@ -32,7 +32,7 @@ from __future__ import annotations
 from ohs.mesh.anchor import AnchorParams, anchor_to_points, laser_agreement
 from ohs.mesh.check import weak_areas
 from ohs.mesh.clean import delete_faces, keep_faces, remove_floaters
-from ohs.mesh.confidence import SIGMA_NONE_MM, carry_filled, carry_sigma, filled_area, sigma_stats
+from ohs.mesh.confidence import SIGMA_NONE_MM, carry_filled, carry_looks, carry_sigma, filled_area, sigma_stats
 from ohs.mesh.holes import fill_holes, hole_outlines
 from ohs.mesh.offset import offset_stats, surface_offset
 from ohs.mesh.simplify import decimate, deviation
@@ -42,6 +42,6 @@ from ohs.mesh.support import SupportFinding, SupportParams, SupportRefused, find
 from ohs.mesh.topology import vertex_normals
 
 __all__ = ["remove_floaters", "fill_holes", "smooth", "decimate", "delete_faces", "keep_faces", "mesh_stats",
-           "hole_outlines", "vertex_normals", "sigma_stats", "carry_sigma", "SIGMA_NONE_MM", "AnchorParams",
+           "hole_outlines", "vertex_normals", "sigma_stats", "carry_sigma", "carry_looks", "SIGMA_NONE_MM", "AnchorParams",
            "anchor_to_points", "laser_agreement", "carry_filled", "filled_area", "deviation", "surface_offset", "offset_stats", "weak_areas",
            "find_support", "remove_support", "SupportParams", "SupportFinding", "SupportRefused"]

@@ -35,6 +35,10 @@ least :data:`PLAN_APART_DEG` from those chosen.
 The pose is camera C's (the rectified left camera, the frame the scan's trajectory uses) in the
 scan's frame, plus the numbers a page can draw: the scanner's centre, the direction it looks, the
 distance and the share of the area it would see. Nothing here moves a scan's result.
+
+Speed: the shadow rays of all the directions tried for an area are cast at once, and so are those of
+all areas a plan's pose is tested on; ``context`` (:class:`ohs.mesh.check.CheckMesh`) shares the
+normals, the ray-casting scene and the open border with the check that found the areas.
 """
 from __future__ import annotations
 
@@ -43,7 +47,8 @@ from typing import Any, Sequence
 
 import numpy as np
 
-from ohs.mesh.check import STEEP_COS, ScanViews, _border_mm, _open_border, _ray_scene, _unblocked, pinhole_mm
+from ohs.mesh.check import (STEEP_COS, CheckMesh, ScanViews, _border_mm, _open_border, _ray_scene, _unblocked,
+                            even_sample, pinhole_mm)
 from ohs.mesh.topology import as_mesh, face_areas, rows, sorted_unique, vertex_normals
 
 __all__ = ["suggest_view", "suggest_views", "plan_views", "TILTS_DEG", "AZIMUTHS", "VIEW_SAMPLES", "VIEW_MIN_SHARE",
@@ -106,32 +111,63 @@ def _directions(normal: np.ndarray) -> list[tuple[float, float, np.ndarray]]:
     return out
 
 
+def _cast(scene: Any, rays: list[tuple[np.ndarray, np.ndarray, np.ndarray]]) -> list[np.ndarray]:
+    """:func:`~ohs.mesh.check._unblocked` of several ``(P, normals, camera)`` at once (one cast of all
+    their rays: the same answer per ray as one cast each)."""
+    sizes = [len(p) for p, _, _ in rays]
+    if not sum(sizes):
+        return [np.zeros(0, dtype=bool) for _ in rays]
+    P = np.concatenate([p for p, _, _ in rays])
+    N = np.concatenate([n for _, n, _ in rays])
+    C = np.concatenate([np.broadcast_to(np.asarray(c, dtype=np.float64), (len(p), 3)) for p, _, c in rays])
+    ok = _unblocked(scene, P, N, C)
+    cut = np.cumsum([0] + sizes)
+    return [ok[cut[i]:cut[i + 1]] for i in range(len(rays))]
+
+
 def _judge(T: np.ndarray, P: np.ndarray, Nrm: np.ndarray, views: ScanViews, scene: Any) -> dict[str, np.ndarray]:
     """Per vertex from the pose ``T`` (camera C): ``outside``, ``away``, ``steep``, ``blocked``, ``seen``."""
-    R, t = T[:3, :3], T[:3, 3]
-    right = t + float(views.baseline_mm) * R[:, 0]
-    Pc = (P - t) @ R
-    z = Pc[:, 2]
+    return _judge_many([T], P, Nrm, views, scene)[0]
+
+
+def _judge_many(Ts: Sequence[np.ndarray], P: np.ndarray, Nrm: np.ndarray, views: ScanViews,
+                scene: Any) -> list[dict[str, np.ndarray]]:
+    """:func:`_judge` from each pose of ``Ts``, the shadow rays of all of them cast at once."""
     w, h = views.image_size
     K = views.K
-    with np.errstate(divide="ignore", invalid="ignore"):
-        u = K[0, 0] * Pc[:, 0] / z + K[0, 1] * Pc[:, 1] / z + K[0, 2]
-        v = K[1, 1] * Pc[:, 1] / z + K[1, 2]
-    outside = ~((z >= views.near_mm) & (z <= views.far_mm) & (u >= -0.5) & (u < w - 0.5) & (v >= -0.5) & (v < h - 0.5))
-    cos = []
-    for c in (t, right):
-        r = c[None] - P
-        cos.append(np.einsum("ij,ij->i", Nrm, r) / np.maximum(np.linalg.norm(r, axis=1), 1e-12))
-    away = (cos[0] <= 0) | (cos[1] <= 0)
-    steep = ~away & (cos[0] < STEEP_COS)
-    blocked = np.zeros(len(P), dtype=bool)
-    test = np.flatnonzero(~outside & ~away)
-    if len(test):
-        ok = _unblocked(scene, P[test], Nrm[test], t) & _unblocked(scene, P[test], Nrm[test], right)
-        blocked[test] = ~ok
-    outside &= ~away
-    seen = ~outside & ~away & ~steep & ~blocked
-    return {"outside": outside, "away": away, "steep": steep & ~blocked & ~outside, "blocked": blocked, "seen": seen}
+    pend = []
+    for T in Ts:
+        R, t = T[:3, :3], T[:3, 3]
+        right = t + float(views.baseline_mm) * R[:, 0]
+        Pc = (P - t) @ R
+        z = Pc[:, 2]
+        with np.errstate(divide="ignore", invalid="ignore"):
+            u = K[0, 0] * Pc[:, 0] / z + K[0, 1] * Pc[:, 1] / z + K[0, 2]
+            v = K[1, 1] * Pc[:, 1] / z + K[1, 2]
+        outside = ~((z >= views.near_mm) & (z <= views.far_mm) & (u >= -0.5) & (u < w - 0.5) & (v >= -0.5)
+                    & (v < h - 0.5))
+        cos = []
+        for c in (t, right):
+            r = c[None] - P
+            cos.append(np.einsum("ij,ij->i", Nrm, r) / np.maximum(np.linalg.norm(r, axis=1), 1e-12))
+        away = (cos[0] <= 0) | (cos[1] <= 0)
+        steep = ~away & (cos[0] < STEEP_COS)
+        test = np.flatnonzero(~outside & ~away)
+        pend.append((outside, away, steep, test, t, right))
+    rays = []
+    for _, _, _, test, t, right in pend:
+        rays += [(P[test], Nrm[test], t), (P[test], Nrm[test], right)]
+    hits = _cast(scene, rays)
+    out = []
+    for i, (outside, away, steep, test, _, _) in enumerate(pend):
+        blocked = np.zeros(len(P), dtype=bool)
+        if len(test):
+            blocked[test] = ~(hits[2 * i] & hits[2 * i + 1])
+        outside = outside & ~away
+        seen = ~outside & ~away & ~steep & ~blocked
+        out.append({"outside": outside, "away": away, "steep": steep & ~blocked & ~outside, "blocked": blocked,
+                    "seen": seen})
+    return out
 
 
 def _missed(j: dict[str, np.ndarray], w: np.ndarray) -> dict[str, float]:
@@ -147,15 +183,24 @@ _MISS_WORDS = {"blocked": "the part itself is in the way", "facing_away": "it fa
 class _Mesh:
     """What every area's pose search of one mesh shares: normals, ray-casting scene, open border."""
 
-    def __init__(self, V: np.ndarray, F: np.ndarray, normals: np.ndarray | None, scene: Any, border_mm: float) -> None:
+    def __init__(self, V: np.ndarray, F: np.ndarray, normals: np.ndarray | None, scene: Any, border_mm: float,
+                 context: CheckMesh | None = None) -> None:
+        self.border_near = 2.0 * float(border_mm)
+        # both lengths scale with the voxel size alike (ohs.mesh.check.pinhole_mm, _border_mm)
+        min_loop = pinhole_mm(None) * float(border_mm) / _border_mm(None)
+        if context is not None:  # shared with the check that found the areas
+            if not context.fits(*as_mesh(V, F)):
+                raise ValueError("the context is of another mesh")
+            self.V, self.F, self.N = context.V, context.F, context.N
+            self.scene = context.scene() if scene is None else scene
+            self.bv, self.bout, self.btree = context.border(min_loop)
+            return
         self.V, self.F = as_mesh(V, F)
         N = vertex_normals(self.V, self.F) if normals is None else np.asarray(normals, dtype=np.float64).reshape(-1, 3)
         ln = np.linalg.norm(N, axis=1, keepdims=True)
         self.N = np.where(ln > 1e-12, N / np.maximum(ln, 1e-12), 0.0)
         self.scene = _ray_scene(self.V, self.F) if scene is None else scene
-        self.border_near = 2.0 * float(border_mm)
-        # both lengths scale with the voxel size alike (ohs.mesh.check.pinhole_mm, _border_mm)
-        self.bv, self.bout = _open_border(self.V, self.F, pinhole_mm(None) * float(border_mm) / _border_mm(None))
+        self.bv, self.bout = _open_border(self.V, self.F, min_loop)
         self.btree = None
         if len(self.bv):
             from scipy.spatial import cKDTree  # noqa: PLC0415
@@ -170,38 +215,51 @@ class _Mesh:
         verts = sorted_unique(Fa)
         # each vertex weighs a third of the area's faces at it
         wv = np.bincount(Fa.ravel(), weights=np.repeat(face_areas(self.V, Fa) / 3.0, 3), minlength=len(self.V))[verts]
-        if len(verts) > VIEW_SAMPLES:
-            pick = np.linspace(0, len(verts) - 1, VIEW_SAMPLES).astype(np.int64)
-            verts, wv = verts[pick], wv[pick]
+        # samples evenly in the order of where the vertices lie, not of their numbers (ohs.mesh.check.even_sample)
+        pick = even_sample(verts, rows(self.V, verts), VIEW_SAMPLES)
+        verts, wv = verts[pick], wv[pick]
         P, Nv = rows(self.V, verts), rows(self.N, verts)
         B, Bo = np.zeros((0, 3)), np.zeros((0, 3))
         if self.btree is not None:
+            # the border near the sampled vertices, sampled the same way
             d, j = self.btree.query(P, distance_upper_bound=self.border_near)
-            jj = np.unique(j[np.isfinite(d)])
-            if len(jj) > VIEW_SAMPLES:
-                jj = jj[np.linspace(0, len(jj) - 1, VIEW_SAMPLES).astype(np.int64)]
+            jj = sorted_unique(j[np.isfinite(d)])
+            jj = jj[even_sample(jj, rows(self.V, self.bv[jj]), VIEW_SAMPLES)]
             B, Bo = rows(self.V, self.bv[jj]), self.bout[jj]
         return P, Nv, np.maximum(wv, 1e-12), B, Bo
 
 
 def _looked_past(T: np.ndarray, B: np.ndarray, Bo: np.ndarray, views: ScanViews, scene: Any) -> np.ndarray:
     """Per border vertex: seen from the pose ``T`` from the side the mesh does not go on to (module docstring)."""
+    return _looked_past_many([T], B, Bo, views, scene)[0]
+
+
+def _looked_past_many(Ts: Sequence[np.ndarray], B: np.ndarray, Bo: np.ndarray, views: ScanViews,
+                      scene: Any) -> list[np.ndarray]:
+    """:func:`_looked_past` from each pose of ``Ts``, the shadow rays of all of them cast at once."""
     if len(B) == 0:
-        return np.zeros(0, dtype=bool)
-    R, t = T[:3, :3], T[:3, 3]
-    Pc = (B - t) @ R
-    z = Pc[:, 2]
+        return [np.zeros(0, dtype=bool) for _ in Ts]
     w, h = views.image_size
     K = views.K
-    with np.errstate(divide="ignore", invalid="ignore"):
-        u = K[0, 0] * Pc[:, 0] / z + K[0, 1] * Pc[:, 1] / z + K[0, 2]
-        v = K[1, 1] * Pc[:, 1] / z + K[1, 2]
-    ok = (z >= views.near_mm) & (z <= views.far_mm) & (u >= -0.5) & (u < w - 0.5) & (v >= -0.5) & (v < h - 0.5)
-    ok &= np.einsum("ij,ij->i", Bo, t[None] - B) > 0
-    j = np.flatnonzero(ok)
-    if len(j):
-        ok[j] = _unblocked(scene, B[j], Bo[j], t)
-    return ok
+    oks, js, rays = [], [], []
+    for T in Ts:
+        R, t = T[:3, :3], T[:3, 3]
+        Pc = (B - t) @ R
+        z = Pc[:, 2]
+        with np.errstate(divide="ignore", invalid="ignore"):
+            u = K[0, 0] * Pc[:, 0] / z + K[0, 1] * Pc[:, 1] / z + K[0, 2]
+            v = K[1, 1] * Pc[:, 1] / z + K[1, 2]
+        ok = (z >= views.near_mm) & (z <= views.far_mm) & (u >= -0.5) & (u < w - 0.5) & (v >= -0.5) & (v < h - 0.5)
+        ok &= np.einsum("ij,ij->i", Bo, t[None] - B) > 0
+        j = np.flatnonzero(ok)
+        oks.append(ok)
+        js.append(j)
+        rays.append((B[j], Bo[j], t))
+    hits = _cast(scene, rays)
+    for ok, j, hit in zip(oks, js, hits):
+        if len(j):
+            ok[j] = hit
+    return oks
 
 
 def suggest_view(V: np.ndarray, F: np.ndarray, area: dict, views: ScanViews, *, normals: np.ndarray | None = None,
@@ -222,8 +280,8 @@ def suggest_view(V: np.ndarray, F: np.ndarray, area: dict, views: ScanViews, *, 
     if area.get("reason") == "edge":
         return {"ok": False, "pose": None, "share_seen": None, "border_seen": None, "candidates": 0, "missed": None,
                 "alternatives": [],
-                "reason": "no pose: on an edge or a tight curve another pass does not lower the uncertainty",
-                "text": "No pose: on an edge or a tight curve another pass does not lower the uncertainty."}
+                "reason": "no pose: on an edge or a tight curve another pass alone does not lower the uncertainty",
+                "text": "No pose: on an edge or a tight curve another pass alone does not lower the uncertainty."}
     m = _mesh or _Mesh(V, F, normals, scene, _border_mm(None) if border_mm is None else border_mm)
     P, Nv, w, B, Bo = m.points(area)
     normal = np.asarray(area.get("normal") or Nv.sum(axis=0), dtype=np.float64)
@@ -235,11 +293,12 @@ def suggest_view(V: np.ndarray, F: np.ndarray, area: dict, views: ScanViews, *, 
     tried = _directions(normal)
     worst_miss = {"blocked": 0.0, "facing_away": 0.0, "steep": 0.0, "outside": 0.0}
     results = []
-    for tilt, az, d in tried:
-        T = scanner_pose(target, d, views)
-        j = _judge(T, P, Nv, views, m.scene)
+    Ts = [scanner_pose(target, d, views) for _, _, d in tried]
+    judged = _judge_many(Ts, P, Nv, views, m.scene)  # every direction's rays at once
+    pasts = _looked_past_many(Ts, B, Bo, views, m.scene) if len(B) else [None] * len(Ts)
+    for (tilt, az, d), T, j, lp in zip(tried, Ts, judged, pasts):
         share = float(w[j["seen"]].sum() / w.sum())
-        past = float(_looked_past(T, B, Bo, views, m.scene).mean()) if len(B) else None
+        past = float(lp.mean()) if len(B) else None
         miss = _missed(j, w)
         for kk, vv in miss.items():
             worst_miss[kk] += vv / len(tried)
@@ -261,7 +320,7 @@ def suggest_view(V: np.ndarray, F: np.ndarray, area: dict, views: ScanViews, *, 
         return {**out, "ok": False, "pose": None, "reason": why, "text": why[0].upper() + why[1:] + "."}
     pose = _pose_dict(target, d, T, tilt, az, views)
     text = (f"Hold the scanner about {views.working_mm:.0f} mm from the area"
-            + (" square on to it" if tilt == 0 else f", {tilt:.0f}° off square") + f": it would see {100 * share:.0f} % of it"
+            + (", square on to it" if tilt == 0 else f", {tilt:.0f}° off square") + f": it would see {100 * share:.0f} % of it"
             + ("." if not past else f" and look past {100 * past:.0f} % of the unseen edge beside it."))
     return {**out, "ok": True, "pose": pose, "reason": None, "text": text}
 
@@ -288,42 +347,48 @@ def _border_of(areas: dict | Sequence[dict]) -> float | None:
 
 
 def suggest_views(V: np.ndarray, F: np.ndarray, areas: dict | Sequence[dict], views: ScanViews, *,
-                  normals: np.ndarray | None = None) -> list[dict]:
+                  normals: np.ndarray | None = None, context: CheckMesh | None = None) -> list[dict]:
     """:func:`suggest_view` for every area (a :func:`~ohs.mesh.check.weak_areas` result or its
-    ``areas`` list), in the same order; the ray-casting scene and the open border are made once."""
+    ``areas`` list), in the same order; the ray-casting scene and the open border are made once (or
+    taken from ``context``, the :class:`~ohs.mesh.check.CheckMesh` of this mesh)."""
     lst = areas["areas"] if isinstance(areas, dict) else list(areas)
     if not lst:
         return []
     bm = _border_of(areas)
-    m = _Mesh(V, F, normals, None, _border_mm(None) if bm is None else bm)
+    m = _Mesh(V, F, normals, None, _border_mm(None) if bm is None else bm, context)
     return [suggest_view(m.V, m.F, a, views, _mesh=m) for a in lst]
 
 
 def plan_views(V: np.ndarray, F: np.ndarray, areas: dict | Sequence[dict], views: ScanViews, k: int = 3, *,
                normals: np.ndarray | None = None, select: Sequence[int] | None = None,
-               suggestions: Sequence[dict] | None = None) -> list[dict]:
+               suggestions: Sequence[dict] | None = None, context: CheckMesh | None = None) -> list[dict]:
     """Up to ``k`` poses for the areas (a :func:`~ohs.mesh.check.weak_areas` result or its list;
     ``select``: the indices of the areas to plan for, default all), largest area first (module
     docstring). Each: ``{"area"`` (index), ``"pose"``, ``"share_seen"`` (of that area),
     ``"border_seen"``, ``"also_sees"`` ({area index: share} of the other selected areas),
     ``"kind"`` ("area": the area's own pose; "more": a next-best direction of a large area)``}``.
-    ``suggestions``: :func:`suggest_views` of the same areas, when already made."""
+    ``suggestions``: :func:`suggest_views` of the same areas, when already made; ``context``: as for
+    :func:`suggest_views`."""
     lst = areas["areas"] if isinstance(areas, dict) else list(areas)
     idx = list(range(len(lst))) if select is None else [int(i) for i in select]
     if not idx or k <= 0:
         return []
     bm = _border_of(areas)
-    m = _Mesh(V, F, normals, None, _border_mm(None) if bm is None else bm)
+    m = _Mesh(V, F, normals, None, _border_mm(None) if bm is None else bm, context)
     sugg = list(suggestions) if suggestions is not None else [suggest_view(m.V, m.F, a, views, _mesh=m) for a in lst]
     pts = {i: m.points(lst[i]) for i in idx}
+    # every selected area's points in one array: a pose is judged on all of them at once
+    allP = np.concatenate([pts[i][0] for i in idx])
+    allN = np.concatenate([pts[i][1] for i in idx])
+    cut = np.cumsum([0] + [len(pts[i][0]) for i in idx])
     chosen: list[dict] = []
 
     def sees(T: np.ndarray) -> dict[int, float]:
+        seen = _judge(T, allP, allN, views, m.scene)["seen"]
         out = {}
-        for i in idx:
-            P, Nv, w, _, _ = pts[i]
-            j = _judge(T, P, Nv, views, m.scene)
-            out[i] = float(w[j["seen"]].sum() / w.sum())
+        for n, i in enumerate(idx):
+            w = pts[i][2]
+            out[i] = float(w[seen[cut[n]:cut[n + 1]]].sum() / w.sum())
         return out
 
     seen_by: list[dict[int, float]] = []

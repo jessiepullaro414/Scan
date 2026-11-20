@@ -7,8 +7,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { BufferGeometry } from "three";
 import { api } from "../../api/http";
-import type { CheckArea, CheckKind, CheckResult } from "../../api/types";
+import type { CheckArea, CheckKind, CheckPose, CheckResult, CheckWhy } from "../../api/types";
 import { meanNormal, viewDirection } from "../../lib/check";
+import { poseFrame, whyFits } from "../../lib/checkWhy";
 import { decodeFaces, regionTriangles } from "../../lib/fits";
 import { useCheckPrefs } from "../../store/check";
 import type { FrameSphere } from "../../three/viewBus";
@@ -30,6 +31,16 @@ export type CheckLit = {
   areaMm2: number;
   /** Where the camera goes to look at it, in the 3D view's axes; no direction: the view keeps its own. */
   view: { sphere: FrameSphere; direction?: [number, number, number] };
+  /** Where to hold the scanner to scan it again (drawn in the 3D view), when there is a pose. */
+  pose: CheckPose | null;
+};
+
+/** The reasons and poses of the answer on screen (FEATURE_PLAN N1), asked for after it. */
+export type CheckWhyState = {
+  why: CheckWhy | null;
+  loading: boolean;
+  /** They could not be had: the panel shows the areas without them. */
+  failed: boolean;
 };
 
 /**
@@ -59,8 +70,14 @@ export type CheckState = {
   result: CheckResult | null;
   error: CheckError | null;
   lit: CheckLit | null;
-  /** Light an area of the list (the 3D view then flies the camera to it); the lit one again turns it off. */
-  select: (index: number) => void;
+  /**
+   * Light an area of the list (the 3D view then flies the camera to it); the lit one again turns it off.
+   * `pose`: draw this pose instead of the area's own (a place of the plan); `showPose`: fly to show the
+   * scanner beside the area rather than the area alone (and keep it lit).
+   */
+  select: (index: number, opts?: { pose?: CheckPose | null; showPose?: boolean }) => void;
+  /** Why each area is weak and where to scan it from (FEATURE_PLAN N1). */
+  why: CheckWhyState;
   /** Read the mesh again (after `changed`). */
   reload: () => void;
 };
@@ -128,16 +145,41 @@ export function useCheck(pid: string, sid: string, geometry: BufferGeometry | nu
   const result = answer && answer.meshId === meshId ? answer.result : null;
   const shownLit = lit && lit.meshId === meshId ? lit : null;
 
+  // the reasons and poses of the answer on screen: asked once it is there, so the areas show first
+  const [whyAnswer, setWhyAnswer] = useState<{ result: CheckResult; why: CheckWhy | null; failed: boolean } | null>(null);
+  useEffect(() => {
+    if (!result || !hasAreas(result)) return;
+    let cancelled = false;
+    api.checkWhy(pid, sid, result.tolerance_mm, result.version).then(
+      (w) => {
+        if (!cancelled) setWhyAnswer({ result, why: whyFits(w, result) ? w : null, failed: !whyFits(w, result) });
+      },
+      () => {
+        if (!cancelled) setWhyAnswer({ result, why: null, failed: true });
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [pid, sid, result]);
+  const whyNow = whyAnswer && whyAnswer.result === result ? whyAnswer : null;
+  const why = useMemo<CheckWhyState>(
+    () => ({ why: whyNow?.why ?? null, loading: !!result && hasAreas(result) && !whyNow, failed: !!whyNow?.failed }),
+    [whyNow, result],
+  );
+
   const run = useCallback(() => {
     setOn(true);
     setAgain((n) => n + 1);
   }, []);
 
   const select = useCallback(
-    (index: number) => {
+    (index: number, opts: { pose?: CheckPose | null; showPose?: boolean } = {}) => {
       const area = result?.areas[index];
       if (!geometry || !area) return;
-      if (shownLit?.index === index) {
+      const ownPose = why.why?.areas[index]?.view.pose ?? null;
+      const pose = opts.pose !== undefined ? opts.pose : ownPose;
+      if (shownLit?.index === index && !opts.showPose && opts.pose === undefined) {
         setLit(null);
         return;
       }
@@ -169,18 +211,27 @@ export function useCheck(pid: string, sid: string, geometry: BufferGeometry | nu
         tris,
         center: c,
         areaMm2: area.area_mm2,
-        view: {
-          sphere: { center: [c[0], -c[1], -c[2]], radius: Math.max(area.radius_mm, 6) }, // the view's axes: y up
-          // an area that faces every way has no direction: the view keeps its own
-          direction: normal ? viewDirection(normal, scanSideOf(geometry)) : undefined,
-        },
+        view:
+          opts.showPose && pose
+            ? poseFrame(pose, normal, area.radius_mm) // the scanner beside its area
+            : {
+                sphere: { center: [c[0], -c[1], -c[2]], radius: Math.max(area.radius_mm, 6) }, // the view's axes: y up
+                // an area that faces every way has no direction: the view keeps its own
+                direction: normal ? viewDirection(normal, scanSideOf(geometry)) : undefined,
+              },
+        pose,
       });
     },
-    [geometry, result, shownLit],
+    [geometry, result, shownLit, why],
   );
 
   return useMemo(
-    () => ({ tolerance, setTolerance, on, run, loading, result, error, lit: shownLit, select, reload }),
-    [tolerance, setTolerance, on, run, loading, result, error, shownLit, select, reload],
+    () => ({ tolerance, setTolerance, on, run, loading, result, error, lit: shownLit, select, reload, why }),
+    [tolerance, setTolerance, on, run, loading, result, error, shownLit, select, reload, why],
   );
+}
+
+/** An answer worth asking the reasons of: it lists areas. */
+function hasAreas(r: CheckResult): boolean {
+  return r.has_sigma && r.areas.length > 0;
 }

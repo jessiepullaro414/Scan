@@ -825,7 +825,7 @@ out a direction to *look* at an area, not one to *scan* it from. While scanning,
 is coloured by how many frames saw each 8 mm cell (`CoverageGrid`, `ohs/server/meshing.py`). A
 finished scan cannot be continued; a second scan can be aligned and merged with the first.
 
-### N1. Why an area is weak, and where to scan it from (L) **(D6)**
+### [x] N1. Why an area is weak, and where to scan it from (L) **(D6)**
 - **What:** each area gets a reason and a suggested pose.
   - *Reason:* not seen at all (a hole or a shadow); seen only at a steep angle; seen too few
     times; seen from too far. For "too few times" the mesh must carry each vertex's count of
@@ -858,6 +858,42 @@ finished scan cannot be continued; a second scan can be aligned and merged with 
     looks through the app's edits.
   - Guard: `tests/test_mesh_looks.py` (9), `test_mesh_check_reasons.py` (12), `test_guide_views.py`
     (10), `test_guide_loop.py` (5).
+- **[route and panel] Done 2026-11-20.** `POST .../check/why` (`ProcessManager.check_why`)
+  explains the areas of `POST .../check` for the same tolerance and mesh version: the reason, the
+  numbers behind it, the pose to scan each area from or why there is none, and a plan of up to 3
+  poses. The plain Check answers as before and as fast; the panel shows the areas at once and the
+  reasons a few seconds later.
+  - **The camera path** is the base stage's trajectory with the recording's calibration and the
+    report's depth range. A merged scan uses each scan it was made from (its place from the
+    merge's report); when one is gone or has changed since the merge, none is used and the answer
+    names that scan (part of a camera path would make the rest look steep or far). At most 120
+    frames are looked at, evenly in time, and the answer says so.
+  - **Speed:** about 20 s on a real-size scan before; in the app now 8.3 s for the first call at
+    0.1 mm on a busy PC, 2.7 s for another tolerance, at once when asked again (`VALIDATION.md`).
+  - **The same mesh, the same answer:** samples are picked by position, not by vertex number
+    (`tests/test_mesh_check_context.py` shuffles the mesh and expects the same reasons, poses and
+    plan). The loop's five seeds now repeat exactly: guided +13.2 points against random's +8.4,
+    better on 4 of 5 seeds.
+  - **`looks` follows every edit** (`carry_looks`): smoothing keeps it, deleting keeps the rest
+    in order, simplifying takes the nearest old vertex's, hole filling adds 0 ("no looks here").
+    Undo, redo and a rebuilt step carry it; a cache file from before loads without it.
+  - **The Check panel:** per area the reason in plain words, a small side view of the pose with
+    the engine's sentence, and "Show where to hold the scanner", which draws the scanner, its view
+    and a line to the area in 3D; below the list "3 places to scan from". "Make the mesh again"
+    is now disabled with its sentence on a scan whose stages were freed (a leftover of R2).
+  - *Checked in the app* on the 355-frame scan: at 0.3 mm 20 areas steep, 1 far, 29 without a
+    reason the data can tell, 50 of 50 with a pose; the scanner and the plan are drawn. Found
+    there: one plan line named 29 areas; it now names four and counts the rest.
+  - Guard: `tests/test_server_check_why.py`, `test_mesh_check_context.py`,
+    `test_mesh_carry_looks.py`, `ui/src/lib/checkWhy.test.ts`.
+  - **The test's bar, as it stands:** met on the first scan's own surface (4 of 5 seeds), not on
+    the whole part (+24.8 against +23.1: about the same), and at half resolution the guided
+    passes show no gain on either path. The loop's test is skipped on the CPU path for that
+    reason, its assertions unchanged: **for the owner to decide** whether guidance at half
+    resolution matters.
+  - **Left:** poses for the sides a scan never saw (nothing points to them today); the time on a
+    quiet PC; a merged scan's poses use the first scan's camera; each open scan keeps its ray
+    scene in memory for its current mesh version.
 - **Test first, on the whole loop:** scan the simulated bracket from one side only; take the
   suggested poses; let the simulator scan from them; merge. The share of the surface that meets
   the tolerance must rise, and by more than with the same number of random poses.

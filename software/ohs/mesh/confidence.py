@@ -4,7 +4,8 @@ carries it (``S``, float32 (N,), one per vertex of ``V``).
 
 * :data:`SIGMA_NONE_MM` (50 mm) marks a vertex nothing measured (a filled hole) and caps the rest.
 * :func:`sigma_stats` sums a mesh's confidence up for the stats panel and the report.
-* :func:`carry_sigma` follows the vertices through a mesh edit (:mod:`ohs.mesh`).
+* :func:`carry_sigma` follows the vertices through a mesh edit (:mod:`ohs.mesh`); :func:`carry_looks`
+  does the same for each vertex's count of looks (the PLY ``looks``; 0 for what hole filling adds).
 * :func:`carry_filled` follows each face's *filled* flag (made by hole filling, not measured:
   measuring tools skip such faces) through the same edits; :func:`filled_area` sums it up.
 """
@@ -14,7 +15,7 @@ import numpy as np
 
 from ohs.mesh.topology import as_mesh, rows
 
-__all__ = ["SIGMA_NONE_MM", "sigma_stats", "carry_sigma", "carry_filled", "filled_area"]
+__all__ = ["SIGMA_NONE_MM", "sigma_stats", "carry_sigma", "carry_looks", "carry_filled", "filled_area"]
 
 _FACE_OPS = ("delete_faces", "keep_faces", "remove_floaters")  # edits that leave a subset of the faces, in order
 
@@ -93,6 +94,22 @@ def carry_sigma(op: str, V: np.ndarray, F: np.ndarray, S: np.ndarray | None, V2:
 
     _, idx = cKDTree(np.asarray(V, dtype=np.float64)).query(np.asarray(V2, dtype=np.float64), workers=-1)
     return S[idx]
+
+
+def carry_looks(op: str, V: np.ndarray, F: np.ndarray, L: np.ndarray | None, V2: np.ndarray,
+                faces: np.ndarray | None = None) -> np.ndarray | None:
+    """Each vertex's count of independent looks (the PLY ``looks``, float32) after the :mod:`ohs.mesh`
+    operation ``op``, by the rules of :func:`carry_sigma`, except that the vertices ``fill_holes`` adds
+    get 0: no look measured them (:func:`ohs.mesh.check.weak_areas` reads 0 as "no looks here").
+    None without looks (or when ``L`` doesn't fit ``V``)."""
+    if L is None:
+        return None
+    L = np.asarray(L, dtype=np.float32).reshape(-1)
+    if len(L) != len(V):
+        return None
+    if op == "fill_holes" and len(V2) >= len(V):
+        return np.concatenate([L, np.zeros(len(V2) - len(V), np.float32)])
+    return carry_sigma(op, V, F, L, V2, faces)
 
 
 def carry_filled(op: str, V: np.ndarray, F: np.ndarray, filled: np.ndarray | None, V2: np.ndarray,

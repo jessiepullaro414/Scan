@@ -132,6 +132,8 @@ MIN_LASER_POINTS = 200  # fewer laser points than this can't anchor anything
 REFINE_MIN_SHARE = 0.01
 SPACETIME_MIN_PATCHES = 50  # fewer kept patches than this: "Refine from the images" changes nothing
 CACHE_STEPS = 10
+#: the reasons route's short plan: this many poses at most (FEATURE_PLAN N1, "3 places to scan from")
+PLAN_POSES = 3
 MAX_TRAJ_POINTS = 2000
 MAX_HOLE_OUTLINES = 500
 VOXEL_RANGE = (0.25, 10.0)
@@ -514,9 +516,10 @@ def _read_json(path: Path) -> dict | None:
 
 
 def _save_npz(path: Path, V: np.ndarray, F: np.ndarray, N: np.ndarray | None = None,
-              S: np.ndarray | None = None, filled: np.ndarray | None = None) -> None:
+              S: np.ndarray | None = None, filled: np.ndarray | None = None, L: np.ndarray | None = None) -> None:
     """A cached step: V float32, F int32 and, when given, the vertex normals (float16), sigmas
-    (float32, mm) and the faces' filled flags (bool)."""
+    (float32, mm), the faces' filled flags (bool) and the vertices' counts of looks (``L``, float32:
+    FEATURE_PLAN N1; a file from before has none, and reads as a step without looks)."""
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(f".{path.stem}.tmp-{uuid.uuid4().hex[:8]}.npz")
     arrays = {"V": np.asarray(V, dtype=np.float32), "F": np.asarray(F, dtype=np.int32)}
@@ -526,26 +529,36 @@ def _save_npz(path: Path, V: np.ndarray, F: np.ndarray, N: np.ndarray | None = N
         arrays["S"] = np.asarray(S, dtype=np.float32)
     if filled is not None:
         arrays["filled"] = np.asarray(filled, dtype=bool)
+    if L is not None:
+        arrays["L"] = np.asarray(L, dtype=np.float32)
     with open(tmp, "wb") as fh:
         np.savez(fh, **arrays)
     _retry(lambda: os.replace(tmp, path), f"replacing {path}")
 
 
 def _load_npz(path: Path, normals: bool = False) -> tuple[np.ndarray, np.ndarray, np.ndarray | None, np.ndarray | None,
-                                                          np.ndarray | None]:
-    """``(V, F, N, S, filled)`` of a cached step; ``N`` only when asked for; None when not stored."""
+                                                          np.ndarray | None, np.ndarray | None]:
+    """``(V, F, N, S, filled, L)`` of a cached step; ``N`` only when asked for; None when not stored."""
     with np.load(path) as z:
         N = z["N"].astype(np.float32) if normals and "N" in z.files else None
         S = z["S"].astype(np.float32) if "S" in z.files else None
         Fl = z["filled"].astype(bool) if "filled" in z.files else None
-        return z["V"].astype(np.float64), z["F"].astype(np.int64), N, S, Fl
+        L = z["L"].astype(np.float32) if "L" in z.files else None
+        return z["V"].astype(np.float64), z["F"].astype(np.int64), N, S, Fl, L
+
+
+def _load_npz_looks(path: Path) -> np.ndarray | None:
+    """Only the counts of looks of a cached step (the other arrays of the file are not read)."""
+    with np.load(path) as z:
+        return z["L"].astype(np.float32) if "L" in z.files else None
 
 
 def _load_result_mesh(path: Path, normals: bool = False) -> tuple[np.ndarray, np.ndarray, np.ndarray | None,
-                                                                  np.ndarray | None, np.ndarray | None]:
-    """``(V, F, N, S, filled)`` of ``result/mesh.ply`` as :func:`_load_npz` gives a cached step: the PLY
-    stores the vertices, normals and sigmas as float32 and the filled flags as uchar, so a step written by
-    :meth:`ProcessManager._write_result` reads back bit for bit (no compaction, no face dropped)."""
+                                                                  np.ndarray | None, np.ndarray | None,
+                                                                  np.ndarray | None]:
+    """``(V, F, N, S, filled, L)`` of ``result/mesh.ply`` as :func:`_load_npz` gives a cached step: the PLY
+    stores the vertices, normals, sigmas and looks as float32 and the filled flags as uchar, so a step
+    written by :meth:`ProcessManager._write_result` reads back bit for bit (no compaction, no face dropped)."""
     from ohs.track.export import load_ply
 
     d = load_ply(path)
@@ -554,7 +567,8 @@ def _load_result_mesh(path: Path, normals: bool = False) -> tuple[np.ndarray, np
     N = np.asarray(d["normals"], dtype=np.float32) if normals and d.get("normals") is not None else None
     S = None if d.get("quality") is None else np.asarray(d["quality"], dtype=np.float32)
     Fl = None if d.get("filled") is None else np.asarray(d["filled"], dtype=bool)
-    return V, F, N, S, Fl
+    L = None if d.get("looks") is None else np.asarray(d["looks"], dtype=np.float32)
+    return V, F, N, S, Fl, L
 
 
 def _rmtree(path: Path) -> None:
@@ -578,9 +592,10 @@ def _move_dir(src: Path, dst: Path) -> None:
         _rmtree(old)
 
 
-def _read_stage_mesh(path: Path) -> tuple[np.ndarray, np.ndarray, np.ndarray | None]:
+def _read_stage_mesh(path: Path, with_looks: bool = False) -> tuple:
     """A stage's ``mesh.ply`` as ``(V, F, S)``: degenerate faces and unused vertices dropped; ``S``
-    (each vertex's sigma, the PLY ``quality``) is None when the file has none."""
+    (each vertex's sigma, the PLY ``quality``) is None when the file has none. ``with_looks``: also
+    ``L``, each vertex's count of looks (the PLY ``looks``; None the same way)."""
     from ohs.mesh.topology import compact
     from ohs.track.export import load_ply
 
@@ -591,7 +606,11 @@ def _read_stage_mesh(path: Path) -> tuple[np.ndarray, np.ndarray, np.ndarray | N
     V2, F2, idx = compact(V, F)
     S = d.get("quality")
     S = np.asarray(S, dtype=np.float32)[idx] if S is not None and len(S) == len(V) else None
-    return V2, F2, S
+    if not with_looks:
+        return V2, F2, S
+    L = d.get("looks")
+    L = np.asarray(L, dtype=np.float32)[idx] if L is not None and len(L) == len(V) else None
+    return V2, F2, S, L
 
 
 def _stats(V: np.ndarray, F: np.ndarray, S: np.ndarray | None, filled: np.ndarray | None = None) -> dict:
@@ -640,6 +659,13 @@ class ScanProcess:
         # (version, margin, faces, finding) of the last "Remove the table" preview: the edit on the
         # same version and margin removes those faces without looking again
         self._table: tuple[int, float, np.ndarray, dict] | None = None
+        # FEATURE_PLAN N1: (version, tolerance, answer without the faces' base64) of the last Check, the
+        # areas the reasons route explains; (version, CheckMesh, looks) of the current step; (version,
+        # tolerance, answer) of the last reasons; the lock that makes them once
+        self._check: tuple[int, float, dict] | None = None
+        self._why_mesh: tuple[int, Any, np.ndarray | None] | None = None
+        self._why: tuple[int, float, dict] | None = None
+        self._why_lock = threading.Lock()
 
     # ------------------------------------------------------------------ persistence
     @property
@@ -817,7 +843,7 @@ class ProcessManager:
         for name in ("mesh.ply", "trajectory.csv", "report.json", "laser_points.ply", "marker_map.json"):
             if (res / name).is_file():
                 shutil.copy2(res / name, track / name)
-        V, F, S = _read_stage_mesh(res / "mesh.ply")
+        V, F, S, L = _read_stage_mesh(res / "mesh.ply", with_looks=True)
         report = {}
         try:
             report = json.loads((res / "report.json").read_text(encoding="utf-8"))
@@ -835,7 +861,7 @@ class ProcessManager:
         stats = _stats(V, F, S)
         st["base"] = {"triangles": int(len(F)), "vertices": int(len(V)), "stage": "track", "stats": stats}
         st["edits"], st["cursor"], st["version"] = [], 0, 1
-        _save_npz(sp.cache_path(0), V, F, vertex_normals(V, F), S)
+        _save_npz(sp.cache_path(0), V, F, vertex_normals(V, F), S, L=L)
         sp.save()
         log.info("scan %s/%s: the earlier result is now the track stage of the processing studio", sp.pid, sp.sid)
 
@@ -991,16 +1017,17 @@ class ProcessManager:
         """The mesh after ``k`` edits: from the cache, else replayed from the nearest cached step."""
         return self._load_step(sp, k)[:2]
 
-    def _load_step(self, sp: ScanProcess, k: int) -> tuple[np.ndarray, np.ndarray, np.ndarray | None,
-                                                            np.ndarray | None]:
-        """:meth:`load_step` with each vertex's sigma and each face's filled flag (None without)."""
-        from ohs.mesh import carry_filled, carry_sigma
+    def _load_step(self, sp: ScanProcess, k: int, looks: bool = False) -> tuple:
+        """:meth:`load_step` with each vertex's sigma and each face's filled flag (None without):
+        ``(V, F, S, filled)``; with ``looks`` also each vertex's count of looks (``L``, None without:
+        FEATURE_PLAN N1), which a replayed edit carries as it carries the sigma."""
+        from ohs.mesh import carry_filled, carry_looks, carry_sigma
 
         with sp.lock:
             got = self._cached(sp, k)
             if got is not None:
-                V, F, _, S, Fl = got
-                return V, F, S, Fl
+                V, F, _, S, Fl, L = got
+                return (V, F, S, Fl, L) if looks else (V, F, S, Fl)
             j = k - 1
             while j > 0 and not sp.cache_path(j).is_file():
                 j -= 1
@@ -1008,7 +1035,7 @@ class ProcessManager:
             if got is None:
                 raise ApiError(500, "the base mesh of this scan is missing from the process folder",
                                "run the last stage again (Track, Straighten or Fuse)")
-            V, F, _, S, Fl = got
+            V, F, _, S, Fl, L = got
             edits = sp.state["edits"]
             log.info("scan %s/%s: rebuilding step %d from step %d (%d edits)", sp.pid, sp.sid, k, j, k - j)
             for i in range(j, k):
@@ -1016,11 +1043,21 @@ class ProcessManager:
                 faces = np.load(sp.selection_path(str(e["id"]))) if e["op"] in _SELECTION_OPS else None
                 V2, F2, by = self._apply(sp, e["op"], e["params"], V, F, edit_id=e["id"], faces=faces, S=S)
                 S = carry_sigma(_carry_op(e["op"]), V, F, S, V2, by)
+                L = carry_looks(_carry_op(e["op"]), V, F, L, V2, by)
                 Fl = carry_filled(_carry_op(e["op"]), V, F, Fl, V2, F2, by)
                 V, F = V2, F2
                 if i + 1 >= k - CACHE_STEPS:
-                    _save_npz(sp.cache_path(i + 1), V, F, S=S, filled=Fl)
-            return V, F, S, Fl
+                    _save_npz(sp.cache_path(i + 1), V, F, S=S, filled=Fl, L=L)
+            return (V, F, S, Fl, L) if looks else (V, F, S, Fl)
+
+    def step_looks(self, sp: ScanProcess, k: int) -> np.ndarray | None:
+        """Each vertex's count of looks at step ``k`` (None without): read alone from its cache file when
+        there is one, else with the step."""
+        with sp.lock:
+            p = sp.cache_path(k)
+            if p.is_file():
+                return _load_npz_looks(p)
+            return self._load_step(sp, k, looks=True)[4]
 
     def current_mesh(self, sp: ScanProcess) -> tuple[np.ndarray, np.ndarray]:
         self._need_base(sp)
@@ -1042,7 +1079,7 @@ class ProcessManager:
         return cached
 
     def _cached(self, sp: ScanProcess, k: int, normals: bool = False) -> tuple | None:
-        """``(V, F, N, S, filled)`` of step ``k`` from its cache file; for a base kept in ``result/``
+        """``(V, F, N, S, filled, L)`` of step ``k`` from its cache file; for a base kept in ``result/``
         (FEATURE_PLAN R2: ``base.in_result``, no cache file) from ``result/mesh.ply``, which holds it bit
         for bit; None when neither is there."""
         p = sp.cache_path(k)
@@ -1124,9 +1161,9 @@ class ProcessManager:
         return tuple(fmts)
 
     def _write_result(self, sp: ScanProcess, V: np.ndarray, F: np.ndarray, N: np.ndarray | None = None,
-                      S: np.ndarray | None = None, filled: np.ndarray | None = None) -> None:
-        """The result files of a step; the PLY carries each vertex's sigma (``quality``) and each
-        face's filled flag (``filled``) when known."""
+                      S: np.ndarray | None = None, filled: np.ndarray | None = None, L: np.ndarray | None = None) -> None:
+        """The result files of a step; the PLY carries each vertex's sigma (``quality``), its count of
+        looks (``looks``) and each face's filled flag (``filled``) when known."""
         from ohs.mesh import vertex_normals
         from ohs.track.export import save_mesh, write_stl
 
@@ -1135,6 +1172,8 @@ class ProcessManager:
             N = vertex_normals(V, F)
         if S is not None and len(S) != len(V):
             S = None
+        if L is not None and len(L) != len(V):
+            L = None
         if filled is not None and len(filled) != len(F):
             filled = None
         for ext in self._formats():
@@ -1142,7 +1181,8 @@ class ProcessManager:
             if ext == "stl":
                 write_stl(tmp, V, F)
             else:
-                save_mesh(tmp, V, F, N, quality=S if ext == "ply" else None, filled=filled if ext == "ply" else None)
+                save_mesh(tmp, V, F, N, quality=S if ext == "ply" else None, filled=filled if ext == "ply" else None,
+                          looks=L if ext == "ply" else None)
             dst = sp.result_dir / f"mesh.{ext}"
             _retry(lambda t=tmp, d=dst: os.replace(t, d), f"replacing {dst}")
         stale = sp.result_dir / "mesh.obj"
@@ -1150,10 +1190,11 @@ class ProcessManager:
             safe_call("removing an old mesh.obj", stale.unlink)
 
     def _show_step(self, sp: ScanProcess, k: int, V: np.ndarray | None = None, F: np.ndarray | None = None,
-                   N: np.ndarray | None = None, S: np.ndarray | None = None, filled: np.ndarray | None = None) -> None:
+                   N: np.ndarray | None = None, S: np.ndarray | None = None, filled: np.ndarray | None = None,
+                   L: np.ndarray | None = None) -> None:
         """Make step ``k`` the current mesh: result files, version + 1, save (under the scan lock).
 
-        Undo / redo pass no mesh: the cached step (with its normals, sigmas and flags) is loaded."""
+        Undo / redo pass no mesh: the cached step (with its normals, sigmas, looks and flags) is loaded."""
         base = sp.state["base"] or {}
         if base.get("in_result") and k != 0 and not sp.cache_path(0).is_file() and int(sp.state["cursor"]) == 0:
             # R2: the base lives in result/mesh.ply only; it gets its cache file before the result changes
@@ -1163,11 +1204,11 @@ class ProcessManager:
         if V is None:
             got = self._cached(sp, k, normals=True)
             if got is not None:
-                V, F, N, S, filled = got
+                V, F, N, S, filled, L = got
             else:
-                V, F, S, filled = self._load_step(sp, k)
+                V, F, S, filled, L = self._load_step(sp, k, looks=True)
         sp.state["cursor"] = k
-        self._write_result(sp, V, F, N, S, filled)
+        self._write_result(sp, V, F, N, S, filled, L)
         sp.state["version"] = int(sp.state["version"]) + 1
         sp.prune_cache()
         sp.save()
@@ -1255,7 +1296,8 @@ class ProcessManager:
 
     def _commit_edit(self, sp: ScanProcess, op: str, params: dict, label: str, V: np.ndarray, F: np.ndarray,
                      ms: float, summary: str, job_id: str | None, faces: np.ndarray | None = None,
-                     stats: dict | None = None, S: np.ndarray | None = None, filled: np.ndarray | None = None) -> dict:
+                     stats: dict | None = None, S: np.ndarray | None = None, filled: np.ndarray | None = None,
+                     L: np.ndarray | None = None) -> dict:
         """Append an edit after the cursor (the redo steps are dropped) and show it."""
         from ohs.mesh import vertex_normals
 
@@ -1273,8 +1315,8 @@ class ProcessManager:
                 sp.selection_path(eid).parent.mkdir(parents=True, exist_ok=True)
                 np.save(sp.selection_path(eid), faces.astype(np.int64))
             sp.state["edits"].append(entry)
-            _save_npz(sp.cache_path(k + 1), V, F, N, S, filled)
-            self._show_step(sp, k + 1, V, F, N, S, filled)
+            _save_npz(sp.cache_path(k + 1), V, F, N, S, filled, L)
+            self._show_step(sp, k + 1, V, F, N, S, filled, L)
             return {key: v for key, v in entry.items() if key != "stats"}
 
     @staticmethod
@@ -1310,7 +1352,7 @@ class ProcessManager:
 
     def _run_edit(self, ctx: Any, sp: ScanProcess, op: str, params: dict, label: str, prog: _Prog,
                   faces: np.ndarray | None = None) -> dict:
-        from ohs.mesh import carry_filled, carry_sigma
+        from ohs.mesh import carry_filled, carry_looks, carry_sigma
 
         with sp.lock:
             k = sp.state["cursor"]
@@ -1318,7 +1360,7 @@ class ProcessManager:
             before = sp.stats_at(k)
             table = sp._table
         prog(0.02, f"{label}: loading the mesh", force=True)
-        V, F, S, Fl = self._load_step(sp, k)
+        V, F, S, Fl, L = self._load_step(sp, k, looks=True)
         t0 = time.perf_counter()
         info = None
         if op == "remove_table":  # the faces of the preview on this very mesh, else found now
@@ -1337,11 +1379,12 @@ class ProcessManager:
         ctx.check()
         prog(0.88, f"{label}: measuring the result", force=True)
         S2 = carry_sigma(_carry_op(op), V, F, S, V2, by)
+        L2 = carry_looks(_carry_op(op), V, F, L, V2, by)  # each vertex's count of looks, as its sigma
         Fl2 = carry_filled(_carry_op(op), V, F, Fl, V2, F2, by)
         stats = _stats(V2, F2, S2, Fl2)
         summary = self._table_summary(info) if info is not None else self._summary(op, params, V, F, V2, F2, before, stats)
         prog(0.94, f"{label}: saving", force=True)
-        return self._commit_edit(sp, op, params, label, V2, F2, ms, summary, ctx.job.id, faces, stats, S2, Fl2)
+        return self._commit_edit(sp, op, params, label, V2, F2, ms, summary, ctx.job.id, faces, stats, S2, Fl2, L2)
 
     def table_preview(self, pid: str, sid: str, margin_mm: float | None = None, version: int | None = None,
                       keep: list | None = None) -> dict:
@@ -1513,7 +1556,7 @@ class ProcessManager:
         """The stage's mesh becomes the base; the edits are cleared and the result files updated."""
         from ohs.mesh import vertex_normals
 
-        V, F, S = _read_stage_mesh(stage_dir / "mesh.ply")
+        V, F, S, L = _read_stage_mesh(stage_dir / "mesh.ply", with_looks=True)
         stats = _stats(V, F, S)
         N = vertex_normals(V, F)
         with sp.lock:
@@ -1522,7 +1565,7 @@ class ProcessManager:
                 safe_call(f"removing {f}", f.unlink)
             sp.state["base"] = {"triangles": int(len(F)), "vertices": int(len(V)), "stage": stage, "stats": stats}
             sp.state["edits"], sp.state["cursor"] = [], 0
-            _save_npz(sp.cache_path(0), V, F, N, S)
+            _save_npz(sp.cache_path(0), V, F, N, S, L=L)
             sp.result_dir.mkdir(parents=True, exist_ok=True)
             for name in ("report.json", "trajectory.csv", "laser_points.ply", "marker_map.json"):
                 src = stage_dir / name
@@ -1530,7 +1573,7 @@ class ProcessManager:
                     tmp = sp.result_dir / f".{name}.tmp-{uuid.uuid4().hex[:8]}"
                     shutil.copy2(src, tmp)
                     _retry(lambda t=tmp, d=sp.result_dir / name: os.replace(t, d), f"replacing {name}")
-            self._show_step(sp, 0, V, F, N, S)
+            self._show_step(sp, 0, V, F, N, S, L=L)
         summary = report_summary(report)
         if quality:
             summary["quality"] = quality
@@ -1791,7 +1834,7 @@ class ProcessManager:
                 self._stage_end(sp, "refine", state="skipped", summary=msg, source=src, points=int(len(P)), outliers=None,
                                 moved_pct=0.0, moved_mm=None, residual_before_mm=None, residual_after_mm=None)
                 return msg
-            V, F, S = _read_stage_mesh(src_dir / "mesh.ply")
+            V, F, S, L = _read_stage_mesh(src_dir / "mesh.ply", with_looks=True)
             V2, _, rep = anchor_to_points(V, F, P, progress=lambda f, m: prog(0.05 + 0.85 * f, f"Refining: {m}"))
             ctx.check()
             r0, r1 = rep["residual_before"]["median"], rep["residual_after"]["median"]
@@ -1809,7 +1852,9 @@ class ProcessManager:
             _rmtree(tmp)
             tmp.mkdir(parents=True)
             try:
-                save_mesh(tmp / "mesh.ply", V2, F, vertex_normals(V2, F), quality=S)
+                # the vertices move: each keeps its sigma and its count of looks
+                save_mesh(tmp / "mesh.ply", V2, F, vertex_normals(V2, F), quality=S,
+                          looks=L if L is not None and len(L) == len(V2) else None)
                 for name in ("trajectory.csv", "laser_points.ply", "marker_map.json"):
                     if (src_dir / name).is_file():
                         shutil.copy2(src_dir / name, tmp / name)
@@ -1864,7 +1909,7 @@ class ProcessManager:
                 str(sp.recording_dir), calib, poses, params.max_frames, cancelled=lambda: ctx.cancelled,
                 progress=lambda f, m: prog(0.12 * f, f"Reading the frames: {m}"))
             ctx.check()
-            V, F, S = _read_stage_mesh(src_dir / "mesh.ply")
+            V, F, S, L = _read_stage_mesh(src_dir / "mesh.ply", with_looks=True)
             V2, _, rep = refine_from_images(V, F, left, right, T, K, B, params, cancelled=lambda: ctx.cancelled,
                                             progress=lambda f, m: prog(0.12 + 0.8 * f, f"Refining: {m}"))
             del left, right
@@ -1883,7 +1928,8 @@ class ProcessManager:
             _rmtree(tmp)
             tmp.mkdir(parents=True)
             try:
-                save_mesh(tmp / "mesh.ply", V2, F, vertex_normals(V2, F), quality=S)  # each vertex keeps its sigma
+                save_mesh(tmp / "mesh.ply", V2, F, vertex_normals(V2, F), quality=S,  # each vertex keeps its sigma
+                          looks=L if L is not None and len(L) == len(V2) else None)  # and its count of looks
                 for name in ("trajectory.csv", "laser_points.ply", "marker_map.json"):
                     if (src_dir / name).is_file():
                         shutil.copy2(src_dir / name, tmp / name)
@@ -2272,12 +2318,202 @@ class ProcessManager:
             r.pop("reasons", None)
         except ValueError as e:
             raise ApiError(422, str(e), "give the tolerance in mm, for example 0.1") from None
+        # kept (the areas with their faces as arrays) for the reasons route, which explains these areas
+        sp._check = (v, float(tolerance_mm), {**r, "areas": [dict(a) for a in r["areas"]]})
         for a in r["areas"]:
             faces = np.asarray(a["faces"], dtype="<u4")
             a["faces"] = base64.b64encode(faces.tobytes()).decode("ascii")
             a["center"] = [float(x) for x in a["center"]]
         r["version"] = v
         return r
+
+    def check_why(self, pid: str, sid: str, tolerance_mm: float, version: int | None = None) -> dict:
+        """``POST .../check/why`` (FEATURE_PLAN N1): why each area of the Check answer at ``tolerance_mm``
+        is weak (:func:`ohs.mesh.check.add_reasons`), the pose to scan it from or why there is none
+        (:func:`ohs.guide.views.suggest_views`) and a short plan of up to :data:`PLAN_POSES` poses
+        (:func:`ohs.guide.views.plan_views`). The areas are those ``POST .../check`` gives for the same
+        tolerance and mesh version, in the same order. Read-only. The camera path is the scan's
+        (:meth:`_scan_views`); what is not there makes the reasons that need it "unknown", in words.
+        Made once per mesh version and tolerance; the parts every check of a mesh version shares (the
+        ray-casting scene, the open border, the curvature term) are kept for the next tolerance.
+        ``version``: the mesh version of the answer on screen (409 when it changed)."""
+        from ohs.guide.views import plan_views, suggest_views
+        from ohs.mesh.check import CheckMesh, add_reasons, weak_areas
+
+        t0 = time.perf_counter()
+        tol = float(tolerance_mm)
+        if not math.isfinite(tol) or tol <= 0:
+            raise ApiError(422, f"the tolerance must be above 0 mm, got {tolerance_mm}", "give the tolerance in mm, "
+                                                                                         "for example 0.1")
+        sp = self.scan(pid, sid)
+        self._need_base(sp)
+        v, V, F, S, Fl = self.mesh_arrays(pid, sid)
+        if version is not None and int(version) != v:
+            raise ApiError(409, "the mesh changed since the page checked it", "reload the mesh and check again")
+        Fl = Fl if Fl is not None and len(Fl) == len(F) else None
+        with sp._why_lock:  # a second request waits for the first one's answer
+            got = sp._why
+            if got is not None and got[0] == v and got[1] == tol:
+                return got[2]
+            wm = sp._why_mesh
+            if wm is None or wm[0] != v:
+                with sp.lock:
+                    k = int(sp.state["cursor"])
+                    same = int(sp.state["version"]) == v
+                L = self.step_looks(sp, k) if same else None
+                if L is not None and len(L) != len(V):
+                    L = None
+                wm = sp._why_mesh = (v, CheckMesh(V, F), L)
+            _, ctx, L = wm
+            views, cam = self._scan_views(sp)
+            voxel = self._voxel_mm(sp)
+            try:
+                ctx.prepare(voxel, scene=views is not None)  # the shared parts, side by side
+                kept = sp._check
+                base = (kept[2] if kept is not None and kept[0] == v and kept[1] == tol
+                        else weak_areas(V, F, S, Fl, tolerance_mm=tol, why=False))
+                r = add_reasons(V, F, S, Fl, base, looks=L, views=views, voxel_mm=voxel, context=ctx)
+                sugg = suggest_views(V, F, r, views[0], context=ctx) if views else None
+                plan = plan_views(V, F, r, views[0], PLAN_POSES, suggestions=sugg, context=ctx) if views else []
+            except ValueError as e:
+                raise ApiError(422, str(e), "give the tolerance in mm, for example 0.1") from None
+            answer = self._why_answer(r, sugg, plan, cam, v, tol)
+            answer["ms"] = int(round(1e3 * (time.perf_counter() - t0)))
+            answer = jsonable(answer)
+            with sp.lock:
+                if int(sp.state["version"]) == v:  # not changed meanwhile
+                    sp._why = (v, tol, answer)
+            return answer
+
+    @staticmethod
+    def _why_answer(r: dict, sugg: list[dict] | None, plan: list[dict], cam: dict, v: int, tol: float) -> dict:
+        """The reasons route's answer from the engine's (module docstring of :mod:`ohs.mesh.check`)."""
+        no_path = "steep, far: the scan's camera path is not given"
+        areas = []
+        for i, a in enumerate(r["areas"]):
+            unknown = [f"steep, far: {cam['why']}" if u == no_path and cam.get("why") else u for u in a["unknown_because"]]
+            if sugg is not None:
+                s = sugg[i]
+                view = {key: s.get(key) for key in ("ok", "pose", "share_seen", "border_seen", "candidates", "missed",
+                                                    "reason", "text")}
+            else:
+                why = cam.get("why") or "the scan's camera path is not here"
+                view = {"ok": False, "pose": None, "share_seen": None, "border_seen": None, "candidates": 0,
+                        "missed": None, "reason": f"no pose: {why}", "text": f"No pose: {why}."}
+            areas.append({"index": i, "kind": a["kind"], "area_mm2": a["area_mm2"], "n_faces": a["n_faces"],
+                          "center": [float(x) for x in a["center"]], "normal": a["normal"], "reason": a["reason"],
+                          "reasons": a["reasons"], "reason_text": a["reason_text"], "evidence": a["evidence"],
+                          "unknown_because": unknown, "view": view})
+        given = dict(r.get("reasons") or {})
+        cam = {**cam, "frames_total": given.pop("frames_total", 0), "frames_used": given.pop("frames_used", 0),
+               "frames_cap": given.pop("frames_cap", None)}
+        return {"version": v, "tolerance_mm": tol, "n_areas": int(r["n_areas"]), "areas": areas,
+                "plan": [{"area": int(p["area"]), "kind": p["kind"], "pose": p["pose"], "share_seen": p["share_seen"],
+                          "border_seen": p["border_seen"],
+                          "also_sees": [{"area": int(a), "share": float(s)} for a, s in sorted(p["also_sees"].items())]}
+                         for p in plan],
+                "given": given, "camera_path": cam}
+
+    def _voxel_mm(self, sp: ScanProcess) -> float | None:
+        """The voxel size the current base mesh was made at (its ``report.json``, ``mesh.voxel_mm``)."""
+        rep = _read_json(sp.result_dir / "report.json") or {}
+        vox = (rep.get("mesh") or {}).get("voxel_mm")
+        return float(vox) if isinstance(vox, (int, float)) and vox > 0 else None
+
+    def _scan_views(self, sp: ScanProcess) -> tuple[list | None, dict]:
+        """Where the scan's frames looked from (:class:`ohs.mesh.check.ScanViews`, one per scan of a merge)
+        and what that rests on: ``(views or None, {"available", "why", "scans": [{name, frames, trajectory}]})``.
+        A scan: the trajectory of its base stage (``process/<stage>/trajectory.csv``, else the copy in
+        ``result/``, else the track stage's), the calibration in its recording and the depth range in its
+        report. A merge: each scan it was made from, by the merged scan's report (its ``T``) and that
+        scan's own files; when one of them is missing or has changed since the merge, none is used
+        (part of the camera path would make the rest look steep or far)."""
+        from ohs.mesh.check import ScanViews
+        from ohs.types import ScannerCalibration
+
+        entry = self.st.projects.scan_entry(sp.pid, sp.sid)
+        rep = _read_json(sp.result_dir / "report.json") or {}
+
+        def none(why: str) -> tuple[None, dict]:
+            return None, {"available": False, "why": why, "scans": []}
+
+        def depth_range(report: dict) -> tuple[float, float] | None:
+            d = (report.get("params") or {}).get("depth") or {}
+            lo, hi = d.get("min_depth_mm"), d.get("max_depth_mm")
+            if isinstance(lo, (int, float)) and isinstance(hi, (int, float)) and 0 < lo < hi:
+                return float(lo), float(hi)
+            return None
+
+        def calibration(path: Path) -> Any:
+            try:
+                return ScannerCalibration.load(path) if path.is_file() else None
+            except (OSError, ValueError, KeyError, TypeError) as e:
+                log.warning("calibration %s unreadable: %s", path, e)
+                return None
+
+        def frames(rows: list) -> int:
+            return sum(1 for r in rows if r[2] and np.all(np.isfinite(np.asarray(r[3], dtype=np.float64))))
+
+        merged = entry.get("merged_from") or ([] if not rep.get("merged") else None)
+        if merged is not None and (merged or rep.get("merged")):
+            inputs = rep.get("scans") or []
+            if not merged or len(inputs) != len(merged):
+                return none("the merged scan's report does not say which scans it was made from")
+            views, scans = [], []
+            for src, inp in zip(merged, inputs):
+                name = str(src.get("name") or inp.get("name") or src.get("id"))
+                try:
+                    sd = self.st.projects.scan_dir(sp.pid, str(src["id"]))
+                except (ApiError, KeyError):
+                    sd = None
+                if sd is None or not sd.is_dir():
+                    return none(f"the scan \"{name}\" it was made from is no longer in the project")
+                traj = sd / "result" / "trajectory.csv"
+                if not traj.is_file():
+                    return none(f"the camera path of \"{name}\", one of the scans it was made from, is not here")
+                cal = calibration(sd / "recording" / "calibration.json")
+                if cal is None and inp.get("recording"):
+                    cal = calibration(Path(str(inp["recording"])) / "calibration.json")
+                if cal is None:
+                    return none(f"the calibration of \"{name}\" went with its recording")
+                rng = depth_range(_read_json(sd / "result" / "report.json") or {})
+                if rng is None:
+                    return none(f"the report of \"{name}\" does not say the depth range it measured")
+                try:
+                    rows = read_trajectory(traj)
+                except (OSError, ValueError) as e:
+                    return none(f"the camera path of \"{name}\" cannot be read ({e})")
+                n = frames(rows)
+                if isinstance(inp.get("frames"), int) and n != int(inp["frames"]):
+                    return none(f"the camera path of \"{name}\" changed since the merge ({n:,} frames now, "
+                                f"{int(inp['frames']):,} then)")
+                T = np.asarray(inp.get("T", np.eye(4)), dtype=np.float64).reshape(4, 4)
+                views.append(ScanViews.from_calibration(rows, cal, rng, T=T))
+                scans.append({"name": name, "frames": n, "trajectory": str(traj)})
+            return views, {"available": True, "why": None, "scans": scans}
+        if rep.get("calibration") not in (None, "recording"):
+            return none("the scan was made with another calibration than its recording's")
+        cal = calibration(sp.recording_dir / "calibration.json")
+        if cal is None:
+            return none("the scanner's calibration is not here (it goes with the recording, which was removed)")
+        rng = depth_range(rep)
+        if rng is None:
+            return none("the scan's report does not say the depth range it measured")
+        with sp.lock:
+            stage = str((sp.state.get("base") or {}).get("stage") or "track")
+        traj = next((p for p in (sp.dir / stage / "trajectory.csv", sp.result_dir / "trajectory.csv",
+                                 sp.dir / "track" / "trajectory.csv") if p.is_file()), None)
+        if traj is None:
+            return none("the scan's camera path (its trajectory) is not here")
+        try:
+            rows = read_trajectory(traj)
+        except (OSError, ValueError) as e:
+            return none(f"the scan's camera path cannot be read ({e})")
+        if not frames(rows):
+            return none("no frame of the scan's camera path has a pose")
+        return [ScanViews.from_calibration(rows, cal, rng)], {
+            "available": True, "why": None, "scans": [{"name": str(entry.get("name") or sp.sid), "frames": frames(rows),
+                                                      "trajectory": str(traj)}]}
 
     def trajectory(self, pid: str, sid: str) -> dict:
         sp = self.scan(pid, sid)

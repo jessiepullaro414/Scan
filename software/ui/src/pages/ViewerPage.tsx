@@ -1298,7 +1298,14 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
               check={check}
               ready={!!geometry}
               hasSigma={hasSigma}
-              remake={project && scan ? <MakeMeshButton projectId={project.id} scan={scan} label="Make the mesh again" /> : undefined}
+              remake={
+                project && scan ? (
+                  <span className="inline-flex flex-col items-start gap-1">
+                    <MakeMeshButton projectId={project.id} scan={scan} label="Make the mesh again" blocked={remakeBlock(scan)} />
+                    {remakeBlock(scan) ? <span className="text-[11.5px] leading-4 text-subtle">{remakeBlock(scan)}</span> : null}
+                  </span>
+                ) : undefined
+              }
               holes={
                 openHoles
                   ? {

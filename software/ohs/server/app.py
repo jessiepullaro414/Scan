@@ -296,6 +296,10 @@ class CheckBody(BaseModel):
     tolerance_mm: float = Field(gt=0.0, le=100.0)
 
 
+class CheckWhyBody(CheckBody):  # FEATURE_PLAN N1: why each area is weak and where to scan it from
+    version: Optional[int] = None  # the mesh version of the Check answer on screen (409 when it changed)
+
+
 class KeepBody(BaseModel):  # FEATURE_PLAN R2: what a scan keeps (the mode is checked by ohs.server.keep, in plain words)
     mode: Optional[str] = None
     confirm: bool = False  # Standard removes the recording for good: the user said yes twice
@@ -730,6 +734,10 @@ def create_app(config: Any = None, *, projects_dir: Any = None, static_dir: Any 
     @app.post("/api/projects/{pid}/scans/{sid}/check")
     def scan_check(pid: str, sid: str, body: CheckBody) -> JSONResponse:
         return _json(proc.check(pid, sid, body.tolerance_mm))
+
+    @app.post("/api/projects/{pid}/scans/{sid}/check/why")
+    def scan_check_why(pid: str, sid: str, body: CheckWhyBody) -> JSONResponse:
+        return _json(proc.check_why(pid, sid, body.tolerance_mm, body.version))
 
     @app.post("/api/projects/{pid}/scans/{sid}/fit")
     def scan_fit(pid: str, sid: str, body: FitBody) -> JSONResponse:

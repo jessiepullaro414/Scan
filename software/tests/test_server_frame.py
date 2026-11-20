@@ -284,7 +284,7 @@ def test_the_mesh_in_the_parts_frame(box, tmp_path):
     assert np.array_equal(part["faces"], scan["faces"])
     assert np.allclose(part["vertices"], scan["vertices"] @ R.T + t, rtol=0, atol=1e-4)
     assert np.allclose(part["normals"], scan["normals"] @ R.T, rtol=0, atol=1e-6)
-    for key in ("quality", "filled"):  # each vertex's sigma and each face's filled flag go along
+    for key in ("quality", "filled", "looks"):  # each vertex's sigma and looks and each face's filled flag go along
         assert (part[key] is None) == (scan[key] is None)
         if scan[key] is not None:
             assert np.array_equal(part[key], scan[key])

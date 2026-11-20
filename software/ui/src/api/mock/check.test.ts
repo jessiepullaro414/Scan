@@ -4,7 +4,7 @@
  * of the demo meshes. Plain TypeScript that Node runs as it is (type stripping), no test framework: a
  * failed check throws.
  */
-import { madeUpSigma, MAX_AREAS, SIGMA_NONE_MM, weakAreas, type SigmaScene } from "./check.ts";
+import { madeUpSigma, madeUpWhy, MAX_AREAS, MOCK_WORKING_MM, SIGMA_NONE_MM, weakAreas, type SigmaScene } from "./check.ts";
 
 let checks = 0;
 function check(ok: boolean, what: string): void {
@@ -271,6 +271,25 @@ const same = (a: ArrayLike<number>, b: ArrayLike<number>) => a.length === b.leng
   check((tight.share_ok as number) < (r.share_ok as number) && (tight.share_ok as number) < 0.2, "0.05 mm: hardly anything passes");
   const sum = (r.share_ok as number) + (r.share_uncertain as number) + (r.share_not_measured as number);
   check(near(sum, 1, 1e-9), "the three shares add up to 1");
+  // N1: a reason and a pose (or why there is none) for each of those areas, in their order, and a short plan
+  const w = madeUpWhy(P, null, I, r, 7);
+  check(w.version === 7 && w.tolerance_mm === 0.3 && w.areas.length === r.areas.length, "why: one entry per area");
+  check(w.areas.every((a, i) => a.index === i && a.n_faces === r.areas[i].n_faces && a.kind === r.areas[i].kind), "why: the same areas, in order");
+  check(w.areas.every((a) => (a.kind === "not_measured") === (a.reason === "not_seen")), "why: a filled hole is not seen");
+  for (const a of w.areas) {
+    if (a.reason === "edge") check(!a.view.ok && a.view.pose === null && a.view.text.includes("alone"), "why: an edge gets no pose, and says why");
+    else {
+      const p = a.view.pose;
+      check(a.view.ok && p !== null, "why: a pose for the others");
+      if (!p) continue;
+      const d = Math.hypot(p.position_mm[0] - a.center[0], p.position_mm[1] - a.center[1], p.position_mm[2] - a.center[2]);
+      check(near(d, MOCK_WORKING_MM, 1e-6) && near(p.distance_mm, MOCK_WORKING_MM, 0), "why: at the working distance");
+      const toArea = [(a.center[0] - p.position_mm[0]) / d, (a.center[1] - p.position_mm[1]) / d, (a.center[2] - p.position_mm[2]) / d];
+      check(near(toArea[0], p.look_dir[0], 1e-9) && near(toArea[1], p.look_dir[1], 1e-9) && near(toArea[2], p.look_dir[2], 1e-9), "why: looking at the area");
+      check(Math.abs(p.look_dir[0] * p.up[0] + p.look_dir[1] * p.up[1] + p.look_dir[2] * p.up[2]) < 1e-9, "why: up across the view");
+    }
+  }
+  check(w.plan.length >= 1 && w.plan.length <= 3 && w.plan.every((p) => w.areas[p.area].view.ok), "why: a plan of up to 3 places with a pose");
 }
 
 console.log(`check.test (mock): ${checks} checks passed`);

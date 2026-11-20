@@ -565,6 +565,7 @@ class MockBackend {
           if (r) return r;
         }
         if (e === "check" && is("POST", 5)) return json(200, this.studio.check(p, s, body)); // M5 areas that need another pass
+        if (e === "check" && f === "why" && is("POST", 6)) return json(200, this.studio.checkWhy(p, s, body)); // N1 why, and where to scan from
         if (e === "files" && f && (is("GET", 6) || is("HEAD", 6))) return this.file(p, s, f, method === "HEAD");
       }
     }

@@ -2071,6 +2071,75 @@ Rules: 409 before the scan has a mesh; 422 for a bad tolerance. Read-only and qu
 2M-triangle mesh). The answer rests on each vertex's sigma: statistical, and so far checked on
 simulated scans only (`VALIDATION.md`).
 
+### Why an area is weak, and where to scan it from (FEATURE_PLAN N1)
+A second route, asked after `POST .../check` for the same tolerance: the plain answer stays as fast as it was
+and shows first; this one explains its areas in a few seconds (`ohs.mesh.check.add_reasons`,
+`ohs.guide.views`).
+
+```ts
+type CheckReason = "not_seen" | "steep" | "far" | "few_looks" | "edge" | "unknown";   // the first that holds
+type CheckPose = {
+  T_wc: number[][];                     // 4x4: camera C (the left camera; x right, y down, z forward) in the mesh's frame
+  position_mm: [number, number, number];        // the scanner's centre (between its cameras)
+  camera_position_mm: [number, number, number];
+  look_dir: [number, number, number];   // unit, from the scanner to the area
+  up: [number, number, number];         // the scanner's up (its images' up)
+  target_mm: [number, number, number];  // the area's centre
+  distance_mm: number;                  // the working distance (where the calibrated laser sheets cross)
+  tilt_deg: number; azimuth_deg: number; // from the area's normal (0: square on)
+};
+type CheckView = {                      // where to scan the area from
+  ok: boolean; pose: CheckPose | null;  // false: no pose, reason says why ("cannot be seen from outside the part: ...",
+  share_seen: number | null;            //   "no pose: on an edge ...", "no pose: <why there is no camera path>")
+  border_seen: number | null;           // share of the unseen edge beside it the pose looks past
+  candidates: number; missed: {blocked: number; facing_away: number; steep: number; outside: number} | null;
+  reason: string | null; text: string;  // text: one sentence for the user
+};
+type CheckWhyArea = {
+  index: number;                        // its place in CheckResult.areas (the same areas, in the same order)
+  kind: "uncertain" | "not_measured"; area_mm2: number; n_faces: number; center: [number, number, number];
+  normal: [number, number, number];     // mean of its vertices' normals
+  reason: CheckReason; reasons: CheckReason[]; reason_text: string;
+  evidence: { looks: number | null; looks_passing: number | null; view_angle_deg: number | null; distance_mm: number | null;
+              in_view_share: number | null; edge_share: number | null; border_share: number; outward: number[] | null };
+  unknown_because: string[];            // "steep, far: ...", "few_looks: ...", "edge: ...": what was missing to tell
+  view: CheckView;
+};
+type CheckWhy = {
+  version: number; tolerance_mm: number; n_areas: number;
+  areas: CheckWhyArea[];
+  plan: { area: number; kind: "area" | "more"; pose: CheckPose; share_seen: number; border_seen: number | null;
+          also_sees: { area: number; share: number }[] }[];        // at most 3 places to scan from
+  given: { looks: boolean; views: boolean; edges: boolean; working_mm: number | null; steep_deg: number; far_mm: number | null; ... };
+  camera_path: { available: boolean; why: string | null;           // why: in words, when there is none
+                 scans: { name: string; frames: number; trajectory: string }[];
+                 frames_total: number; frames_used: number; frames_cap: number | null };
+  ms: number;
+};
+```
+
+| Method and path | Body | Returns |
+|---|---|---|
+| `POST /api/projects/{pid}/scans/{sid}/check/why` | `{tolerance_mm, version?}` | `CheckWhy` |
+
+Rules:
+- The areas are those `POST .../check` gives for the same tolerance and mesh version (the server keeps that
+  answer and explains it without finding the areas again); `version`: the mesh version of the answer on screen,
+  409 when it changed. 409 before the scan has a mesh, 422 for a bad tolerance. Read-only.
+- What it rests on: each vertex's count of looks (`mesh.ply` `looks`, carried through every edit; none on the CPU
+  path or in older files), the voxel size (`report.json` `mesh.voxel_mm`), and the camera path. A scan's camera path
+  is the trajectory of its base stage (`process/<stage>/trajectory.csv`, else `result/trajectory.csv`, else the
+  track stage's), the calibration in its recording and the depth range in its report (`params.depth`). A merged
+  scan uses each scan it was made from (`merged_from`, with the `T` its report lists) and that scan's own files;
+  when one of them is gone or its camera path changed since the merge (another number of frames), none is used and
+  `camera_path.why` names it. What is missing makes the reasons that need it `unknown`, with `unknown_because`
+  in words, and there is then no pose: nothing is guessed.
+- The camera path's rules look at `frames_cap` (120) frames at most, evenly spread over the scan (a merge: each
+  scan its share), so the time does not grow with the length of the scan; `frames_used` says how many.
+- Made once per mesh version and tolerance; the parts every check of a mesh version shares (the ray-casting
+  scene, the open border, the curvature term) are kept for the next tolerance. On a scan of 0.8 million
+  triangles and 355 frames at 0.1 mm: see `VALIDATION.md`.
+
 ## M4 first slice: align two scans and merge them
 
 Two processed scans of one part, in one project, are aligned to each other and merged into a new scan (`ohs/server/aligning.py`; the engine: `ohs.align`, measured in `VALIDATION.md`, "Aligning and merging two scans"). The *target* scan keeps its place; the *source* scan is moved onto it. A scan's mesh is in the scan's own world (see Coordinates), so points picked on a mesh are in that scan's frame, in mm.

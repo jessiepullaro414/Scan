@@ -18,6 +18,7 @@ import type {
   ProcessSettingsBody,
   LaserSettingsBody,
   CheckResult,
+  CheckWhy,
   Comparison,
   ComparisonAlignAnswer,
   ComparisonAlignRequest,
@@ -595,6 +596,11 @@ export const api = {
    * values, so there is nothing to check against. Each area's `faces` stays base64: decode the ones that
    * are shown with `decodeFaces` (lib/fits.ts). */
   check: (pid: string, sid: string, tolerance_mm: number) => post<CheckResult>(`${scanPath(pid, sid)}/check`, { tolerance_mm }),
+  /** FEATURE_PLAN N1: why each area of that answer is weak, the pose to scan it from (or why there is none) and a
+   * plan of up to 3 poses, for the same tolerance and mesh version (409 when the version changed). A few seconds
+   * the first time on a mesh version, then kept; ask after `check`, so the areas show first. */
+  checkWhy: (pid: string, sid: string, tolerance_mm: number, version: number | null) =>
+    post<CheckWhy>(`${scanPath(pid, sid)}/check/why`, version === null ? { tolerance_mm } : { tolerance_mm, version }),
 
   // ---------------------------------------------------------------- M4: align two scans and merge them
   /** Job (kind `align`, result `AlignResult`): the source scan aligned to the target scan, from their meshes.
