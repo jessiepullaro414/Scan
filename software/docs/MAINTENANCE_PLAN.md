@@ -1611,7 +1611,7 @@ Every task here: the type check, `npm test`, and for bundle tasks the chunk size
   `docs/APP_API.md`. Left as it is for now: the hint asks for more views than needed, and does
   no harm.
 
-### [ ] F8. On the Radeon PC, work on the processor runs 4 to 7 times slower while the matcher runs
+### [x] F8. On the Radeon PC, work on the processor runs 4 to 7 times slower while the matcher runs ✔
 - **Found 2026-11-15** while speeding up the four-laser extraction (E8). The laser lines are
   extracted in two threads while the GPU computes the depth, so that the frame does not wait
   for them. On this PC (Ryzen 7 7735U with its integrated Radeon 680M, Windows power plan
@@ -1652,6 +1652,31 @@ Every task here: the type check, `npm test`, and for bundle tasks the chunk size
   compiling the linking loop (a new dependency: ask first; not done). E9's result points to
   Python's lock, so what is left is less Python work in the extraction or work outside the
   lock.
+- **Measured again 2026-11-20, power plan "High performance", nothing else of ours running**
+  (`python tools/frame_timing.py`, one run; GPU driver 32.0.21045.16010 of 2026-10-15, OpenCL
+  AMD-APP 3652.0). **The power plan does not change it:**
+
+  | 1280x800 | Alone | Beside the matcher | In a second process, beside the matcher |
+  |---|---|---|---|
+  | One extraction, two lasers | 13.6 ms | 73.6 ms | 12.6 to 74.8 ms |
+  | One extraction, four lasers | 18.0 ms | 79.5 ms | 16.9 to 110.7 ms |
+  | The matcher | 69.0 ms | 68.9 to 71.4 ms | |
+
+  At 640x400: 4.0 to 19.9 ms and 6.9 to 21.0 ms beside a matcher of 16.8 ms. So still 5 to 6.5
+  times slower, and the matcher keeps its time. A frame in the pipeline: 134 to 136 ms with two
+  lasers and 148 to 156 ms with four at 1280x800 (56 and 70 ms at 640x400).
+  - *Read the numbers this way:* an extraction beside the matcher takes about as long as the
+    matcher itself (73.6 against 68.9 ms; 19.9 against 18.4 ms). Processor work gets about an
+    eighth done while the GPU computes, then finishes. That fits one chip sharing its power or
+    clock between processor and graphics; it is the machine, not the code.
+  - **Found on this PC the same day:** AMD's background program `RadeonSoftware.exe` had used
+    98 % of one processor core without a pause since 2026-11-10 (809,397 s of processor time in
+    826,573 s). It was left running: it is the owner's system. Every timing taken on this PC
+    since then had that beside it, this run too.
+  - **Closed as far as the code goes.** Nothing in the app causes it and nothing in the app can
+    mend it; speed figures from this PC say little about a PC with a separate graphics card
+    (the RTX laptop does not show it). **For the owner:** close or restart AMD Software and run
+    `python tools/frame_timing.py` once more; if the numbers move, that program was part of it.
 
 ### [x] F9. Preview on the RTX laptop's bench reads slower than in tuning round 2 ✔
 - **Seen 2026-11-15**, one run of `ohs bench --device gpu` at d4af63a with the laptop's usual
