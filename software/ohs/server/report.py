@@ -63,7 +63,7 @@ MAX_PICTURE_BYTES = 3 * 2**20  # one picture, decoded
 MAX_TOTAL_BYTES = 12 * 2**20  # all of them
 #: the processing report's keys the report shows (ohs.report.data, "process"); the rest (per-frame rows) stay out
 PROCESS_KEYS = ("mode", "quality", "source", "scene", "frames", "failures", "imu", "markers", "poses", "mesh", "lasers",
-                "wall_time_s")
+                "wall_time_s", "preset")  # "preset": FEATURE_PLAN P2, the scan's preset and the values it resolved to
 #: the scan's own calibration status (``report.json``'s ``health_status``, H3): its states and the keys the report shows
 HEALTH_STATES = ("valid", "check", "recalibrate")
 HEALTH_KEYS = ("state", "label", "part", "part_label", "reason", "not_judged", "note", "provisional", "source")

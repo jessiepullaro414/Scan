@@ -89,6 +89,20 @@ export type CheckState = {
 export function useCheck(pid: string, sid: string, geometry: BufferGeometry | null, version: number | null, reload: () => void): CheckState {
   const tolerance = useCheckPrefs((s) => s.tolerance);
   const setTolerance = useCheckPrefs((s) => s.setTolerance);
+  // P2: a scan whose preset names a Check tolerance starts with it (an engine without presets: nothing changes)
+  useEffect(() => {
+    let off = false;
+    api.scanPreset(pid, sid).then(
+      (v) => {
+        const t = v.values.check_tolerance_mm;
+        if (!off && typeof t === "number") setTolerance(t);
+      },
+      () => undefined,
+    );
+    return () => {
+      off = true;
+    };
+  }, [pid, sid, setTolerance]);
   const [on, setOn] = useState(false);
   const [again, setAgain] = useState(0);
   const [answer, setAnswer] = useState<{ meshId: string; result: CheckResult } | null>(null);

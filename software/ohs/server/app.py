@@ -99,6 +99,8 @@ class ScanStartBody(BaseModel):
     project_id: str
     mode: Literal["markerless", "markers"] = "markerless"
     name: Optional[str] = None
+    preset: Optional[str] = None  # FEATURE_PLAN P2: the preset's id (none: General)
+    preset_values: Optional[Dict[str, Any]] = None  # values changed by hand on the Scan page (checked by ohs.app.presets)
 
 
 class RewindBody(BaseModel):
@@ -106,7 +108,8 @@ class RewindBody(BaseModel):
 
 
 class ProcessBody(BaseModel):
-    quality: Literal["standard", "best", "preview", "full"] = "standard"  # "full": the old name of "standard"
+    # "full": the old name of "standard"; none: the scan's preset's quality, else standard (FEATURE_PLAN P2)
+    quality: Optional[Literal["standard", "best", "preview", "full"]] = None
 
 
 class DismissBody(BaseModel):
@@ -150,7 +153,19 @@ class SaveBody(BaseModel):
 
 
 class TrackBody(BaseModel):
-    quality: Literal["standard", "best", "preview", "full"] = "standard"  # "full": the old name of "standard"
+    # "full": the old name of "standard"; none: the scan's preset's quality, else standard (FEATURE_PLAN P2)
+    quality: Optional[Literal["standard", "best", "preview", "full"]] = None
+
+
+class PresetCreateBody(BaseModel):  # FEATURE_PLAN P2: a user's preset (values checked by ohs.app.presets)
+    name: str
+    description: Optional[str] = None
+    values: Dict[str, Any] = Field(default_factory=dict)
+
+
+class ScanPresetBody(BaseModel):  # FEATURE_PLAN P2: the scan's preset and / or values changed by hand (null: the preset's)
+    preset_id: Optional[str] = None
+    values: Optional[Dict[str, Any]] = None
 
 
 class FuseBody(BaseModel):
@@ -631,7 +646,7 @@ def create_app(config: Any = None, *, projects_dir: Any = None, static_dir: Any 
 
     @app.post("/api/scan/start")
     def scan_start(body: ScanStartBody) -> JSONResponse:
-        return _json(st.start_scan(body.project_id, body.mode, body.name))
+        return _json(st.start_scan(body.project_id, body.mode, body.name, body.preset, body.preset_values))
 
     @app.post("/api/scan/pause")
     def scan_pause() -> JSONResponse:
@@ -651,7 +666,7 @@ def create_app(config: Any = None, *, projects_dir: Any = None, static_dir: Any 
 
     @app.post("/api/projects/{pid}/scans/{sid}/process")
     def scan_process(pid: str, sid: str, body: Optional[ProcessBody] = None) -> JSONResponse:
-        job = st.process_scan(pid, sid, body.quality if body is not None else "standard")
+        job = st.process_scan(pid, sid, body.quality if body is not None else None)  # None: the preset's, else standard
         return _json(job.to_dict())
 
     @app.get("/api/projects/{pid}/scans/{sid}/files/{name}")
@@ -668,7 +683,7 @@ def create_app(config: Any = None, *, projects_dir: Any = None, static_dir: Any 
 
     @app.post("/api/projects/{pid}/scans/{sid}/process/track")
     def process_track(pid: str, sid: str, body: Optional[TrackBody] = None) -> JSONResponse:
-        return _json(proc.submit_track(pid, sid, body.quality if body is not None else "standard").to_dict())
+        return _json(proc.submit_track(pid, sid, body.quality if body is not None else None).to_dict())
 
     @app.post("/api/projects/{pid}/scans/{sid}/process/straighten")
     def process_straighten(pid: str, sid: str) -> JSONResponse:
@@ -1024,6 +1039,28 @@ def create_app(config: Any = None, *, projects_dir: Any = None, static_dir: Any 
     def recipes_delete(rid: str) -> Response:
         proc.recipes.delete(rid)
         return Response(status_code=204)
+
+    # ------------------------------------------------------------------ FEATURE_PLAN P2: presets by object type
+    @app.get("/api/presets")
+    def presets_list() -> JSONResponse:
+        return _json(st.presets.list())
+
+    @app.post("/api/presets")
+    def presets_create(body: PresetCreateBody) -> JSONResponse:
+        return _json(st.presets.create(body.name, body.description, body.values))
+
+    @app.delete("/api/presets/{preset_id}")
+    def presets_delete(preset_id: str) -> Response:
+        st.presets.delete(preset_id)
+        return Response(status_code=204)
+
+    @app.get("/api/projects/{pid}/scans/{sid}/preset")
+    def scan_preset(pid: str, sid: str) -> JSONResponse:
+        return _json(st.presets.view(pid, sid))
+
+    @app.put("/api/projects/{pid}/scans/{sid}/preset")
+    def scan_preset_set(pid: str, sid: str, body: ScanPresetBody) -> JSONResponse:
+        return _json(st.presets.set_scan(pid, sid, body.preset_id, body.values))
 
     # ------------------------------------------------------------------ M4: align and merge two scans
     @app.post("/api/projects/{pid}/align")

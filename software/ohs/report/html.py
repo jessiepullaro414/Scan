@@ -220,6 +220,31 @@ def _meaning() -> str:
     return _part("meaning", ["<div class=\"meaning\">"] + [f"<p>{esc(p)}</p>" for p in MEANING] + ["</div>"])
 
 
+_PRESET_WORDS = {"mode": "tracking mode", "quality": "quality", "voxel_mm": "mesh detail", "thin_walls": "thin walls",
+                 "recipe": "recipe", "check_tolerance_mm": "check tolerance"}
+
+
+def _preset_value(k: str, v) -> str:
+    if k in ("voxel_mm", "check_tolerance_mm") and _num(v):
+        return f"{N.nominal(v)} mm"
+    return str(v)
+
+
+def _preset_text(pr: dict) -> str:
+    """"Thin sheet metal and small parts (mesh detail 0.5 mm); changed by hand: mesh detail 0.75 mm"."""
+    text = str(pr.get("name") or pr.get("id") or "General")
+    named = pr.get("preset_values") if isinstance(pr.get("preset_values"), dict) else {}
+    if named:
+        text += " (" + ", ".join(f"{_PRESET_WORDS.get(k, k)} {_preset_value(k, v)}" for k, v in named.items()) + ")"
+    hand = pr.get("hand") if isinstance(pr.get("hand"), dict) else {}
+    changed = [k for k in (pr.get("changed") or []) if k in hand]
+    if changed:
+        text += "; changed by hand: " + ", ".join(f"{_PRESET_WORDS.get(k, k)} {_preset_value(k, hand[k])}" for k in changed)
+    if pr.get("note"):
+        text += ". " + str(pr["note"])
+    return text
+
+
 def _made(p: dict) -> str | None:
     rows: list[tuple[str, str]] = []
     if p.get("source") == "sim" or p.get("scene"):
@@ -230,6 +255,8 @@ def _made(p: dict) -> str | None:
                                            "markers": "With markers"}.get(str(mode), str(mode)))))
     if p.get("quality"):
         rows.append(("Quality", esc(str(p["quality"]).capitalize())))
+    if isinstance(p.get("preset"), dict):  # FEATURE_PLAN P2; a scan processed before presets has none
+        rows.append(("Preset", esc(_preset_text(p["preset"]))))
     fr = p.get("frames") if isinstance(p.get("frames"), dict) else {}
     if _num(fr.get("processed")):
         text = f"{N.whole(fr['processed'])} frames used"

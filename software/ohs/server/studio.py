@@ -61,6 +61,7 @@ from ohs.server.hub import Hub
 from ohs.server.jobs import JobRunner
 from ohs.server.printables import MASK_DPI
 from ohs.server.aligning import AlignManager
+from ohs.server.presets import PresetManager
 from ohs.server.processing import ProcessManager
 from ohs.server.projects import ProjectStore
 from ohs.server.protocol import PROTOCOL_VERSION, QUALITIES, ApiError, jsonable, log_message, normalize_quality
@@ -140,6 +141,7 @@ class Studio:
         self.setup = SetupManager(self)
         self.calibration = CalibrationManager(self)
         self.processing = ProcessManager(self)
+        self.presets = PresetManager(self)  # FEATURE_PLAN P2: the presets and each scan's preset
         self.aligning = AlignManager(self)
         self.session: ScanSession | None = None
         self.last_session: ScanSession | None = None
@@ -374,9 +376,13 @@ class Studio:
             time.sleep(0.02)
         return self.devices.frame_size
 
-    def start_scan(self, project_id: str, mode: str = "markerless", name: str | None = None) -> dict:
+    def start_scan(self, project_id: str, mode: str = "markerless", name: str | None = None,
+                   preset: str | None = None, preset_values: dict | None = None) -> dict:
+        """``preset`` (None: General) and ``preset_values`` (values changed by hand on the Scan page): the
+        scan's preset (FEATURE_PLAN P2), written into the recording's ``meta.json`` and the scan entry."""
         if mode not in MODES:
             raise ApiError(400, f"unknown mode {mode!r}", "use markerless or markers")
+        preset_record = self.presets.for_start(preset, preset_values, mode)  # 404 / 422 before anything is made
         with self._lock:
             if self.session is not None and self.session.active:
                 raise ApiError(409, "a scan is already running", "stop it first (Stop, or POST /api/scan/stop)")
@@ -403,12 +409,13 @@ class Studio:
                                     f"for {want[0]}x{want[1]}",
                                "set camera.width / camera.height to the calibrated mode, or calibrate this mode")
             scan, rec_dir = self.projects.add_scan(project_id, name, mode)
+            self.projects.update_scan(project_id, scan["id"], preset=self.presets.stored(preset_record))
             use_imu = calib.imu is not None and dev.imu_available()
             meta = {"purpose": "scan", "ohs_version": __version__, "mode": mode, "live_scale": float(self.cfg.live.scale),
                     "app": "OpenHandScan Studio", "calibration_source": dev.calib_path, "device": dev.source,
                     "camera": jsonable((dev.state().get("camera") or {}).get("info", {})),
                     "pico": (dev.state().get("pico") or None), "project_id": project_id, "scan_id": scan["id"],
-                    "scan_name": scan["name"]}
+                    "scan_name": scan["name"], "preset": preset_record}
             if dev.source in ("replay", "sim"):
                 meta["replay_of"] = str((dev.state().get("replay") or {}).get("path"))
             session = ScanSession(calib=calib, mode=mode, rec_dir=rec_dir, project_id=project_id, scan_id=scan["id"],
@@ -514,10 +521,13 @@ class Studio:
             self.projects.delete(pid)
             self.processing.forget(pid)
 
-    def process_scan(self, pid: str, sid: str, quality: str = "standard") -> Any:
+    def process_scan(self, pid: str, sid: str, quality: str | None = "standard") -> Any:
         """"Make mesh" (M1 ``POST .../process``): the processing studio's Default recipe at
         ``quality`` (standard, best or preview; "full" = standard): track, straighten ``auto``, then its
-        edits. Job kind ``process_scan``."""
+        edits. Job kind ``process_scan``. ``quality`` None: the scan's preset's, else standard; the
+        preset's recipe in place of Default when it names one (FEATURE_PLAN P2)."""
+        if quality is None:
+            quality = self.presets.acting(pid, sid).get("quality", "standard")
         try:
             quality = normalize_quality(quality)
         except ValueError:

@@ -18,6 +18,7 @@ import { cn } from "../../lib/util";
 import { isActive, useJobs } from "../../store/jobs";
 import { useProcess } from "../../store/process";
 import { Help, Panel, StageBadge } from "./bits";
+import { PresetPanel } from "./PresetPanel";
 
 export const VOXELS = [0.5, 1, 2] as const;
 
@@ -136,7 +137,8 @@ export function StagesPanel({ pid, sid, state, busy, scan }: { pid: string; sid:
   const gone = (a: StageAction) => (scan ? stageBlock(scan, state, a) : null);
   const { track, straighten, fuse, spacetime, refine } = state.stages;
   const [quality, setQuality] = useState<ProcessQuality>(normalizeQuality(track.quality) ?? "standard");
-  const [voxel, setVoxel] = useState<number>(fuse.voxel_mm ?? 1);
+  // P2: a track made at a preset's mesh detail (track.voxel_mm) starts Fuse at that detail; else 1 mm as before
+  const [voxel, setVoxel] = useState<number>(fuse.voxel_mm ?? track.voxel_mm ?? 1);
   const [confirm, setConfirm] = useState<{ stage: StageId; run: () => Promise<unknown> } | null>(null);
   const edits = state.edits.length;
   const tracked = track.state === "done";
@@ -172,6 +174,7 @@ export function StagesPanel({ pid, sid, state, busy, scan }: { pid: string; sid:
 
   return (
     <Panel title="Stages" icon={Waypoints}>
+      <PresetPanel pid={pid} sid={sid} busy={busy} />
       <ol className="space-y-2.5" aria-label="Processing stages">
         <StageCard
           id="track"

@@ -4,6 +4,7 @@ import { api } from "../api/http";
 import type { Scan, ScanMode, SessionState, StatusMsg } from "../api/types";
 import { useJobs } from "./jobs";
 import { useLive } from "./live";
+import { usePresets } from "./presets";
 import { useProjects } from "./projects";
 import { sameSession } from "./sameSession";
 import { toast } from "./toasts";
@@ -81,7 +82,8 @@ export const useSession = create<SessionStore>((set, get) => {
     start: async ({ projectId, mode, name }) => {
       const s = await run(
         "start",
-        () => api.startScan({ project_id: projectId, mode, ...(name?.trim() ? { name: name.trim() } : {}) }),
+        // P2: the preset picked on the Scan page and the values changed by hand there
+        () => api.startScan({ project_id: projectId, mode, ...(name?.trim() ? { name: name.trim() } : {}), ...usePresets.getState().startFields() }),
         "Couldn't start the scan",
       );
       if (!s) return false;

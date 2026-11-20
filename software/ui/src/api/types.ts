@@ -81,6 +81,8 @@ export type Scan = {
   has_recording?: boolean;
   /** R3: present once the recording holds only the frames Standard quality uses (`fps` of them a second). */
   thinned?: ThinnedRecording & { when: string };
+  /** P2: the scan's preset and the values changed by hand for it; absent on a scan made before presets (General). */
+  preset?: ScanPresetKept;
 };
 
 /** R3: what a recording thinned to the frames Standard quality uses holds, and held before. */
@@ -208,7 +210,8 @@ export type Settings = Record<string, unknown>;
 
 // ------------------------------------------------------------------ request bodies
 export type ConnectBody = { source: ConnectSource; recording?: string; loop?: boolean };
-export type StartBody = { project_id: string; mode?: ScanMode; name?: string };
+/** `preset` / `preset_values` (P2): the preset chosen on the Scan page and the values changed by hand there. */
+export type StartBody = { project_id: string; mode?: ScanMode; name?: string; preset?: string; preset_values?: PresetValues };
 /** The level of the final mesh: "standard" (default, 30 frames a second of scanning), "best" (every frame), "preview".
  * Older engines send "full", the old name of "standard": read it with `normalizeQuality` (lib/quality.ts). */
 export type ProcessQuality = "standard" | "best" | "preview";
@@ -742,7 +745,7 @@ export type EditEntry = {
 };
 
 export type StageInfo = { state: StageState; summary: string | null; when: string | null; job_id: string | null };
-export type TrackStage = StageInfo & { quality: ProcessQuality | null; tracked_pct: number | null };
+export type TrackStage = StageInfo & { quality: ProcessQuality | null; tracked_pct: number | null; voxel_mm?: number | null };
 export type StraightenStage = StageInfo & {
   loops: number | null;
   correction_mm: number | null;
@@ -1881,3 +1884,49 @@ export type ToleranceAnswer = {
   method: string;
   coverage: ComparisonCoverage;
 };
+
+// ================================================================== P2: presets by object type
+/** The values a preset can name (APP_API.md "Presets"); a value it does not name is General's. */
+export type PresetKey = "mode" | "quality" | "voxel_mm" | "thin_walls" | "recipe" | "check_tolerance_mm";
+export type PresetValues = {
+  mode?: ScanMode;
+  quality?: ProcessQuality;
+  voxel_mm?: number;
+  thin_walls?: ThinWalls;
+  recipe?: string;
+  check_tolerance_mm?: number;
+};
+/** The hover card of a built-in preset: what it changes, why (measured), what it costs (null: nothing). */
+export type PresetCard = { changes: string; why: string; costs: string | null };
+export type Preset = {
+  id: string;
+  name: string;
+  builtin: boolean;
+  description: string;
+  card: PresetCard | null;
+  values: PresetValues;
+  created?: string | null;
+};
+export type NewPresetBody = { name: string; description?: string; values: PresetValues };
+/** What the scan entry keeps: the preset and the values changed by hand for this scan. */
+export type ScanPresetKept = { id: string; name: string; hand: PresetValues };
+/** `GET .../preset`: the scan's preset now. `values`: every value it resolves to (null = General's, see `general`). */
+export type ScanPreset = {
+  id: string;
+  name: string;
+  preset_values: PresetValues;
+  hand: PresetValues;
+  /** Values changed by hand that differ from the preset's. */
+  changed: PresetKey[];
+  values: { [K in PresetKey]: PresetValues[K] | null };
+  /** Why the scan is made as General (made before presets, or its preset is gone), else null. */
+  note: string | null;
+  before_presets: boolean;
+  missing: boolean;
+  /** General's value of each key for this scan. */
+  general: Required<PresetValues>;
+  labels: Record<PresetKey, string>;
+  keys: PresetKey[];
+};
+/** `PUT .../preset`: another preset (the hand changes start over) and / or values changed by hand (null: the preset's). */
+export type ScanPresetBody = { preset_id?: string; values?: { [K in PresetKey]?: PresetValues[K] | null } };

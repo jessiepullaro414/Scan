@@ -5,6 +5,7 @@
  */
 import { useEffect, useRef, useState } from "react";
 import { CalibHealthCallout } from "../components/CalibHealth";
+import { PresetPicker } from "../components/PresetPicker";
 import { ErrorBoundary } from "../components/shell/ErrorBoundary";
 import { navigate, paths } from "../lib/router";
 import { useHotkeys } from "../lib/util";
@@ -178,6 +179,7 @@ export default function ScanPage({ projectParam, first = false }: { projectParam
         ) : (
           <>
             <ScanSetup projectId={projectId} setProjectId={setProjectId} name={name} setName={setName} mode={mode} setMode={setMode} />
+            <PresetPicker mode={mode} setMode={setMode} />
             {connected ? <EmittersPanel /> : null}
           </>
         )}

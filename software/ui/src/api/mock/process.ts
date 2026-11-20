@@ -358,7 +358,7 @@ export class MockProcess {
   }
 
   /** M1 "Make mesh": the Default recipe at the requested quality (job kind "process", as before). */
-  makeMesh(p: Project, s: Scan, quality: ProcessQuality): Job {
+  makeMesh(p: Project, s: Scan, quality: ProcessQuality, voxel: number | null = null): Job {
     const st = this.ensure(p, s);
     this.guard(st, s, "This scan is already being processed");
     this.needRecording(s);
@@ -366,7 +366,9 @@ export class MockProcess {
     const prev = s.status;
     s.status = "processing";
     p.modified = nowIso();
-    return this.allJob(st, p, s, "process", { ...recipe.settings, quality }, recipe.ops, "Making the mesh…", prev, secondsFor(quality), () => ({
+    // P2: the scan's preset's mesh detail (presets.ts), when it names one
+    const settings = { ...recipe.settings, quality, ...(voxel !== null ? { voxel_mm: voxel } : {}) };
+    return this.allJob(st, p, s, "process", settings, recipe.ops, "Making the mesh…", prev, secondsFor(quality), () => ({
       project_id: p.id,
       scan_id: s.id,
       quality,

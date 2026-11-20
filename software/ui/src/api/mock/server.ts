@@ -69,6 +69,7 @@ import { mockScanStatus, SEEDED_SCAN_HEALTH } from "./health";
 import { scanHealthOf } from "../../lib/calibHealth";
 import { MockReferences } from "./reference";
 import { MockProcess, mockStep } from "./process";
+import { MockPresets } from "./presets";
 import { cameraByIndex, MockSetup } from "./setup";
 import {
   apply,
@@ -245,6 +246,7 @@ class MockBackend {
   private flush = new MockFlush();
   private reports = new MockReport();
   private keep = new MockKeep(); // R1's disk use and R2's "what a scan keeps"
+  private presets = new MockPresets(); // P2/P3: the presets and each scan's preset
   private references = new MockReferences();
   private aligning: MockAlign;
   private previewSeqs: Record<string, number> = {};
@@ -495,7 +497,15 @@ class MockBackend {
           if (seg.length === 5 || sub === "track") this.keep.remade(p, s); // the stage files come back
         }
         // M1 "Make mesh" (now the Default recipe), then the M3 processing studio
-        if (e === "process" && is("POST", 5)) return json(200, this.studio.makeMesh(p, s, normalizeQuality(body.quality) ?? "standard"));
+        if (e === "process" && is("POST", 5)) {
+          // P2: no quality asked for: the preset's, else standard; the preset's mesh detail when it names one
+          const act = this.presets.acting(s);
+          return json(200, this.studio.makeMesh(p, s, normalizeQuality(body.quality) ?? act.quality ?? "standard", act.voxel_mm ?? null));
+        }
+        if (e === "preset" && seg.length === 5) {
+          const r = this.presets.routeScan(method, s, body); // P2/P3: the scan's preset
+          if (r) return r;
+        }
         if (e === "process") {
           const r = this.studio.route(method, p, s, seg.slice(5), body);
           if (r) return r;
@@ -572,6 +582,8 @@ class MockBackend {
 
     const m3 = this.studio.routeRecipes(method, seg, body);
     if (m3) return m3;
+    const presets = this.presets.route(method, seg, body); // P2: /api/presets
+    if (presets) return presets;
 
     if (a === "scan") {
       if (is("GET", 1)) return json(200, this.session);
@@ -751,7 +763,8 @@ class MockBackend {
     if (!p) throw new HttpError(404, "Project not found", "Choose another project, or create one.");
     const mode: ScanMode = body.mode === "markers" ? "markers" : "markerless";
     const name = typeof body.name === "string" && body.name.trim() ? body.name.trim() : `Scan ${p.scans.length + 1}`;
-    const scan: Scan = { id: uid("s-"), name, created: nowIso(), mode, n_frames: 0, duration_s: 0, status: "recording", result: null };
+    const preset = this.presets.forStart(body, mode); // P2: 404 / 422 before the scan is made
+    const scan: Scan = { id: uid("s-"), name, created: nowIso(), mode, n_frames: 0, duration_s: 0, status: "recording", result: null, preset };
     p.scans.push(scan);
     p.modified = nowIso();
     this.sim = {
@@ -1234,6 +1247,7 @@ class MockBackend {
           duration_s: x.duration_s ?? 18,
           status: x.status ?? "recorded",
           result: null,
+          ...(x.preset ? { preset: x.preset } : {}), // P2: a demo scan that carries a preset
         };
         if (s.status === "processed") {
           const base = `/api/projects/${encodeURIComponent(p.id)}/scans/${encodeURIComponent(s.id)}/files`;
@@ -1249,7 +1263,8 @@ class MockBackend {
       { name: "Bracket top", status: "processed", n_frames: 864, duration_s: 28.8 },
       { name: "Bracket underside", status: "processed", n_frames: 612, duration_s: 20.4 }, // with "Bracket top": two scans to align (M4)
       { name: "Bracket side", status: "processed", n_frames: 900, duration_s: 15 }, // and a third: several at once (M4 second slice); 60 frames a second (R3)
-      { name: "Bracket end", status: "recorded", n_frames: 390, duration_s: 13 }, // recorded only: shows "Make mesh"
+      // recorded only: shows "Make mesh"; scanned with "Thin sheet metal and small parts" (P3: the Process page shows it)
+      { name: "Bracket end", status: "recorded", n_frames: 390, duration_s: 13, preset: { id: "thin-sheet-small-parts", name: "Thin sheet metal and small parts", hand: {} } },
       { name: "Quick test (fail)", status: "failed", n_frames: 96, duration_s: 3.2 },
     ]);
     mk("Fender flare, left", 27, [{ name: "Wheel arch", status: "processed", quality: "preview", mode: "markers", n_frames: 1530, duration_s: 51 }]);

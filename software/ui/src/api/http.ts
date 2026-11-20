@@ -76,6 +76,10 @@ import type {
   LaserMap,
   MergeRequest,
   NewRecipeBody,
+  NewPresetBody,
+  Preset,
+  ScanPreset,
+  ScanPresetBody,
   OpenFolderReply,
   Paper,
   Printables,
@@ -624,6 +628,18 @@ export const api = {
   createRecipe: (body: NewRecipeBody) => post<Recipe>("/api/recipes", body),
   /** User recipes only (409 for a built-in). */
   deleteRecipe: (id: string) => del(`/api/recipes/${enc(id)}`),
+
+  // ---------------------------------------------------------------- P2: presets by object type
+  /** Built-ins first (General, then "Thin sheet metal and small parts"), then the user's own. */
+  presets: () => get<Preset[]>("/api/presets"),
+  /** A user's preset; 422 for a value the app does not take, 409 for a built-in's name. */
+  createPreset: (body: NewPresetBody) => post<Preset>("/api/presets", body),
+  /** User presets only (409 for a built-in). */
+  deletePreset: (id: string) => del(`/api/presets/${enc(id)}`),
+  /** The scan's preset now (General, with a note, for a scan made before presets or whose preset is gone). */
+  scanPreset: (pid: string, sid: string) => get<ScanPreset>(`${scanPath(pid, sid)}/preset`),
+  /** Another preset and / or values changed by hand; the next mesh uses them (409 while the scan is busy). */
+  setScanPreset: (pid: string, sid: string, body: ScanPresetBody) => put<ScanPreset>(`${scanPath(pid, sid)}/preset`, body),
 
   /** URL of a result file (`mesh.ply`, `mesh.stl`, `mesh.obj`, `laser_points.ply`, `report.json`). */
   fileUrl: (pid: string, sid: string, name: string) => `${scanPath(pid, sid)}/files/${enc(name)}`,

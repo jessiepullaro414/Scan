@@ -1509,7 +1509,8 @@ class ProcessManager:
         size = reader.meta.get("image_size") or list(reader.frame(0).image_size)
         return sp.recording_dir, mode, int(size[0])
 
-    def _stage_params(self, mode: str, quality: str, voxel_mm: float | None, width: int) -> Any:
+    def _stage_params(self, mode: str, quality: str, voxel_mm: float | None, width: int,
+                      thin_walls: str | None = None) -> Any:
         from ohs.app.pipeline import default_fusion_params, effective_scale
         from ohs.server.studio import process_params
 
@@ -1518,8 +1519,42 @@ class ProcessManager:
             fusion = p.pipeline.fusion or default_fusion_params(effective_scale(int(round(width * p.pipeline.scale))))
             p = dataclasses.replace(p, pipeline=dataclasses.replace(p.pipeline, fusion=dataclasses.replace(
                 fusion, voxel_mm=float(voxel_mm))))
+        if thin_walls is not None:  # the scan's preset names it (FEATURE_PLAN P2); else [process] thin_walls
+            p = dataclasses.replace(p, pipeline=dataclasses.replace(p.pipeline, thin_walls=str(thin_walls)))
         # the base keeps every piece: removing floaters is an edit you can see and undo
         return dataclasses.replace(p, clean_min_component=0.0, export=("ply",))
+
+    # ------------------------------------------------------------------ presets (FEATURE_PLAN P2)
+    def _preset_acting(self, sp: ScanProcess) -> dict:
+        """The values the scan's preset sets (with the hand changes); {} for General, a scan made before
+        presets and one whose preset is gone: then every stage runs as it did before presets."""
+        presets = getattr(self.st, "presets", None)
+        return {} if presets is None else presets.acting(sp.pid, sp.sid)
+
+    def _preset_report(self, sp: ScanProcess, quality: str, report: dict, params: Any) -> dict | None:
+        """The scan's preset for a stage's ``report.json``, with the values this mesh was made with."""
+        from ohs.app.presets import GENERAL_TOLERANCE_MM
+
+        presets = getattr(self.st, "presets", None)
+        if presets is None:
+            return None
+        act = presets.acting(sp.pid, sp.sid)
+        used = {"mode": params.pipeline.mode, "quality": quality,
+                "voxel_mm": (report.get("mesh") or {}).get("voxel_mm"), "thin_walls": params.pipeline.thin_walls,
+                "recipe": act.get("recipe", "default"), "check_tolerance_mm": act.get("check_tolerance_mm", GENERAL_TOLERANCE_MM)}
+        return presets.report_block(sp.pid, sp.sid, used)
+
+    def _preset_recipe(self, pid: str, sid: str) -> dict:
+        """The recipe Make mesh runs: the preset's when it names one (and it still exists), else Default."""
+        presets = getattr(self.st, "presets", None)
+        rid = (presets.acting(pid, sid) if presets is not None else {}).get("recipe")
+        if rid and rid != "default":
+            try:
+                return self.recipes.get(rid)
+            except ApiError:
+                self.st.notify("warn", f"The preset's recipe {rid!r} is no longer in the app; Make mesh uses the "
+                                       "Default recipe")
+        return self.recipes.get("default")
 
     @staticmethod
     def _track_summary(report: dict, quality: str | None) -> str:
@@ -1589,7 +1624,8 @@ class ProcessManager:
         from ohs.app.process import process_recording
 
         rec, mode, width = self._scan_params(sp)
-        params = self._stage_params(mode, quality, voxel_mm, width)
+        params = self._stage_params(mode, quality, voxel_mm, width,
+                                    thin_walls=self._preset_acting(sp).get("thin_walls"))  # P2: None for General
         tmp = sp.dir / f"{name}.tmp-{ctx.job.id}"
         _rmtree(tmp)
         dev = compute.get_device()
@@ -1618,6 +1654,9 @@ class ProcessManager:
             report = process_recording(rec, tmp, params=params, progress=progress, poses=poses)
             ctx.check()
             report["quality"] = quality
+            preset = self._preset_report(sp, quality, report, params)  # P2: the preset and what it resolved to
+            if preset is not None:
+                report["preset"] = preset
             if name != "track":  # a later stage: what Straighten corrected so far (calibration health)
                 st_rep = _read_json(sp.dir / "straighten.json")
                 if st_rep is not None:
@@ -1630,6 +1669,8 @@ class ProcessManager:
         return report
 
     def _do_track(self, ctx: Any, sp: ScanProcess, prog: _Prog, quality: str, voxel_mm: float | None = None) -> None:
+        if voxel_mm is None:  # P2: the scan's preset's voxel when it names one (None for General: as before)
+            voxel_mm = self._preset_acting(sp).get("voxel_mm")
         before = self._stage_start(sp, "track", ctx.job.id)
         try:
             prog(0.0, "Loading the recording", force=True)
@@ -2006,7 +2047,10 @@ class ProcessManager:
         except ValueError:
             raise ApiError(400, f"unknown quality {quality!r}", "use standard, best or preview") from None
 
-    def submit_track(self, pid: str, sid: str, quality: str) -> Any:
+    def submit_track(self, pid: str, sid: str, quality: str | None) -> Any:
+        if quality is None:  # P2: the scan's preset's quality, else standard
+            presets = getattr(self.st, "presets", None)
+            quality = (presets.acting(pid, sid) if presets is not None else {}).get("quality", "standard")
         quality = self._quality_arg(quality)
 
         def body(ctx: Any, sp: ScanProcess, prog: _Prog) -> str:
@@ -2123,7 +2167,7 @@ class ProcessManager:
     def make_mesh(self, pid: str, sid: str, quality: str) -> Any:
         """``POST .../process`` (M1 "Make mesh"): the Default recipe, all stages, at ``quality``."""
         quality = self._quality_arg(quality)
-        recipe = self.recipes.get("default")
+        recipe = self._preset_recipe(pid, sid)  # P2: the preset's recipe when it names one, else Default
         with self.st._lock:
             entry = self._check_free(pid, sid, make_mesh=True)
             self._need_recording(pid, sid)

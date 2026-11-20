@@ -55,11 +55,11 @@ type Job = { id: string; kind: string; state: "queued" | "running" | "done" | "f
 | `PATCH /api/projects/{pid}` | `{name}` | `Project` |
 | `DELETE /api/projects/{pid}` | | `204`. The folder moves to `<projects>/.trash/` and is never hard-deleted. |
 | `GET /api/scan` | | `SessionState` |
-| `POST /api/scan/start` | `{project_id, mode?, name?}` | `SessionState`. `409` if no device is connected, no calibration is loaded, or a scan is already running. |
+| `POST /api/scan/start` | `{project_id, mode?, name?, preset?, preset_values?}` | `SessionState`. `409` if no device is connected, no calibration is loaded, or a scan is already running. `preset` / `preset_values`: see "Presets" (404 for an unknown preset, 422 for a value the app does not take; nothing is made then). |
 | `POST /api/scan/pause` / `resume` | | `SessionState` |
 | `POST /api/scan/rewind` | `{seconds: 2.0}` | `SessionState`. Drops the last N s from the live model and records a `cut` event, which offline processing skips. |
 | `POST /api/scan/stop` | | `{scan: Scan}` (the recording is finalised) |
-| `POST /api/projects/{pid}/scans/{sid}/process` | `{quality:"standard"\|"best"\|"preview"}` (default `"standard"`; `"full"` = `"standard"`) | `Job` |
+| `POST /api/projects/{pid}/scans/{sid}/process` | `{quality:"standard"\|"best"\|"preview"}` (default: the scan's preset's quality, else `"standard"`; `"full"` = `"standard"`) | `Job` |
 | `GET /api/jobs` / `GET /api/jobs/{jid}` | | `Job[]` / `Job` |
 | `POST /api/jobs/{jid}/cancel` | | `Job` |
 | `GET /api/projects/{pid}/scans/{sid}/files/{name}` | | result files: `mesh.ply`, `mesh.stl`, `laser_points.ply`, `report.json` |
@@ -2433,3 +2433,55 @@ type ProjectKeepResult = { project_id: string; to: KeepMode; freed_bytes: number
 // ProjectKeepPlan and ProjectKeepResult gain: thin: boolean.
 // Scan gains: thinned?: { when, fps, fps_before, step, frames, frames_before }; freed[].thin?: true.
 ```
+
+## Presets
+
+FEATURE_PLAN P2 and P3. A preset is a named bundle of values the app already lets the user set; "What are you scanning?" on the Scan page picks one. **A value a preset does not name is General's, and General names none**: a scan with General, a scan made before presets and a scan whose preset is gone all run exactly as before presets (`ohs.app.presets`, `ohs.server.presets`).
+
+Built in (from P1's measurements, `VALIDATION.md` "Presets: which settings matter, measured"): `general` ("General", the default) and `thin-sheet-small-parts` ("Thin sheet metal and small parts": `voxel_mm: 0.5`, nothing else). The user's own are JSON files in `<data_dir>/presets/`, kept like recipes.
+
+### Types
+
+```ts
+type PresetKey = "mode" | "quality" | "voxel_mm" | "thin_walls" | "recipe" | "check_tolerance_mm";
+type PresetValues = {            // each optional; checked as the app checks it elsewhere
+  mode?: "markerless" | "markers";            // the Scan page's tracking mode
+  quality?: "standard" | "best" | "preview";   // Make mesh / Track when the request names none ("full" = standard)
+  voxel_mm?: number;                           // 0.25 to 10: the mesh detail of Track (and the stages after it)
+  thin_walls?: "auto" | "on" | "off";          // in place of [process] thin_walls, for this scan
+  recipe?: string;                             // a recipe's id: Make mesh runs it in place of Default
+  check_tolerance_mm?: number;                 // above 0, at most 100: what the Check panel starts with
+};
+type Preset = { id: string; name: string; builtin: boolean; description: string;
+                card: { changes: string; why: string; costs: string | null } | null;   // built-ins: the hover card
+                values: PresetValues; created?: string | null };
+type ScanPresetKept = { id: string; name: string; hand: PresetValues };   // Scan.preset (absent: made before presets)
+type ScanPreset = {               // GET .../preset
+  id: string; name: string;
+  preset_values: PresetValues;    // what the preset names (empty for General and for a preset that is gone)
+  hand: PresetValues;             // values changed by hand for this scan
+  changed: PresetKey[];           // hand values that differ from the preset's
+  values: Record<PresetKey, value | null>;   // every value it resolves to; null = General's (see `general`)
+  note: string | null;            // why the scan is made as General: made before presets, or its preset is gone
+  before_presets: boolean; missing: boolean;
+  general: Required<PresetValues>;           // General's value of each key for this scan
+  labels: Record<PresetKey, string>; keys: PresetKey[];
+};
+```
+
+### REST
+
+| Route | Body | Reply |
+|---|---|---|
+| `GET /api/presets` | | `Preset[]` (built-ins first, then the user's by name) |
+| `POST /api/presets` | `{name, description?, values}` | `Preset`. `422` for a value the app does not take (an unknown key, the depth range or the gap guard, a value out of range, an unknown recipe), in plain words; `409` for a built-in's name; `400` for an empty or too long name. |
+| `DELETE /api/presets/{id}` | | `204` (user presets only; `409` for a built-in, `404` when unknown). Scans that carry it are made as General from then on, and say so. |
+| `GET /api/projects/{pid}/scans/{sid}/preset` | | `ScanPreset` |
+| `PUT /api/projects/{pid}/scans/{sid}/preset` | `{preset_id?, values?}` | `ScanPreset`. Another preset (its own values; the hand changes start over) and / or values changed by hand (`null`: back to the preset's; the preset's own value is no change). The next Make mesh and Track use them. `409` while the scan records or is being processed; `422` for `mode` (it cannot change after scanning) and for a value the app does not take; `404` for an unknown preset or scan. |
+
+### Rules
+
+- **Start** (`POST /api/scan/start`): `preset` (default `general`) and `preset_values` (the values changed by hand on the Scan page). A start `mode` other than the preset's `mode` is a hand change. The recording's `meta.json` gets `preset: {id, name, preset_values, hand, changed, values, note}` (every value it resolved to; `null` = General's, decided when the mesh is made); the scan entry gets `preset: {id, name, hand}`.
+- **Processing:** the values that act are the preset's named values with the hand changes on top, looked up again when each stage runs. `voxel_mm` acts on Track when the request names none (Straighten and Fuse follow the track's voxel, as before; Fuse with a `voxel_mm` still wins); `thin_walls` on every stage that fuses; `quality` when the Make mesh or Track request names none; `recipe` on Make mesh (a recipe that is gone: Default, with a warning). A value a request names is a choice by hand and wins.
+- **Report:** every stage's `report.json` (and so `result/report.json`) gets `preset: {id, name, preset_values, hand, changed, values, note, used}`; `used` holds the values this mesh was made with (`mode`, `quality`, `voxel_mm` from the mesh, `thin_walls`, and the `recipe` and `check_tolerance_mm` Make mesh and the Check panel take for this scan). The HTML report shows it as "Preset" under how the scan was made.
+- The depth range is not a preset value: the app does not let the user set it.

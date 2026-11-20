@@ -216,6 +216,8 @@ class ProjectStore:
             out["error"] = entry["error"]
         if entry.get("quality"):
             out["quality"] = quality_or_none(entry["quality"]) or entry["quality"]
+        if isinstance(entry.get("preset"), dict):  # FEATURE_PLAN P2: the scan's preset (none: made before presets)
+            out["preset"] = entry["preset"]
         if entry.get("merged_from"):  # a scan merged from others (it has no recording of its own)
             out["merged_from"] = entry["merged_from"]
         # what the scan keeps on disk (FEATURE_PLAN R2): the mode says what the user removed; has_recording is the

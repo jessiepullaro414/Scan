@@ -1146,7 +1146,33 @@ no object size anywhere in the engine or the app.
   from scan to scan. If two object types end with the same values, they are one preset.
 - **Result:** a table in `VALIDATION.md` and the list of presets for the owner (D5).
 
-### P2. A preset is a named bundle, and "General" is today (M)
+### [x] P2. A preset is a named bundle, and "General" is today (M)
+- **Done 2026-11-20** (the task as written follows below). `ohs/app/presets.py` (the built-in
+  presets, the user's own in `<data_dir>/presets/`, the checks) and `ohs/server/presets.py`; the
+  routes are in `APP_API.md`, "Presets".
+  - **Two built-in presets, from P1:** "General", which names nothing, and "Thin sheet metal and
+    small parts", which names one value: voxel 0.5 mm.
+  - **What a preset can name:** the tracking mode, the quality, the voxel size, thin walls, a
+    recipe and the Check tolerance. A value it does not name is General's. The depth range is not
+    one: the app does not let the user set it.
+  - **Traced:** the scan's preset and every value it resolved to are in the recording's
+    `meta.json`, in the scan's entry, and in every stage's `report.json` (with the values the
+    mesh was really made with); the HTML report has a "Preset" row.
+  - **A value set by hand wins** and is recorded as changed from the preset; so does a value
+    named in a request (the quality buttons, Fuse with its own voxel).
+  - **A scan made before presets, and one whose preset was deleted, act as General** and say so.
+  - **"General" is today, bit for bit:** Make mesh before and after the change gives the same
+    track mesh and the same result mesh, compared as content, on the GPU and the CPU path (the
+    agent's proof on a 12-frame recording); a guard test compares a General scan, a scan made
+    before presets and the engine run directly with today's settings.
+  - **Changed on the way:** `POST .../process` and `.../track` without a quality now mean "the
+    preset's, else Standard" (the same for General); `report.json` carries a `preset` key.
+  - Guard: `tests/test_presets.py` (4), `tests/test_server_presets.py` (6), both paths.
+  - *Checked in the app:* a simulator scan started with "Thin sheet metal and small parts" was
+    meshed at 0.5 mm voxels (334 of 334 frames tracked); its report says so, with the preset and
+    what was used (Standard, thin walls auto, the Default recipe, tolerance 0.3 mm).
+  - **Left:** no page for making a preset of one's own (the routes are there); the Track
+    stage's quality picker does not start from a preset's quality.
 - **What:** `ohs/app/presets.py`: a preset names values for the scan (mode, depth range), for
   Make mesh (quality, voxel, thin walls), a recipe, and a tolerance for the Check answer. Kept
   like recipes: built-in ones in the code, the user's own in `<data_dir>/presets/`. The scan
@@ -1155,7 +1181,19 @@ no object size anywhere in the engine or the app.
 - **Test first:** with "General" the mesh is bit-identical to today's; a preset's values reach
   the pipeline; a value changed by hand wins over the preset and is recorded as changed.
 
-### P3. In the app (M)
+### [x] P3. In the app (M)
+- **Done 2026-11-20** (the task as written follows below). "What are you scanning?" on the Scan
+  page (`ui/src/components/PresetPicker.tsx`): one choice per preset, with a card on hover that
+  says what it changes, why (P1's numbers) and what it costs. The values it sets are shown and
+  can be changed; a change reads "Changed by hand from 0.5 mm", with a link back to the preset's
+  value. On the Process page a "Preset" box at the top of the stages
+  (`ui/src/pages/process/PresetPanel.tsx`) shows the scan's preset, lets it be changed, and shows
+  its values (mesh detail and thin walls always), each marked as from the preset, as in General
+  or changed by hand. The Check panel starts with a preset's tolerance. No existing control was
+  removed. The demo does all of it.
+  - Guard: `ui/src/lib/presets.test.ts` (21 checks).
+  - *Checked in the app:* the picker with its card on the Scan page; the Preset box on the
+    Process page of the scan made with it.
 - **What:** "What are you scanning?" in the Scan page's setup, with a card on hover for each
   preset that says what it changes and why (as for "Where to smooth"). Every value it sets stays
   visible and can be changed (roadmap, principle 2).
