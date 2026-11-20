@@ -1574,6 +1574,9 @@ Every task here: the type check, `npm test`, and for bundle tasks the chunk size
     the same mesh vertices bit for bit (in another order in the file). With the calibration
     pitched 0.03°, the case that crashed and hung: 6 of 6 runs clean and identical (it still
     loses the part there: 359 mm, where the GPU path is 0.9 mm off; before the fix 274 mm).
+  - *Full suites with the fix* (code of 1ce04d3, 1,582 tests): CPU path 1,515 passed, 67
+    skipped, none failed, in 29 min, with no crash and no hang; GPU path 1,576 passed, 6
+    skipped, in 41 min (from a clean copy, while other jobs ran on the PC).
   - **This changes CPU-path results**, for the better and by a lot: every cast used to leave
     blocks out of its range map. The GPU path does not use Open3D for its model and is
     untouched.
