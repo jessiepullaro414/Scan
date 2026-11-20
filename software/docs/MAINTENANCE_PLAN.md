@@ -1886,6 +1886,9 @@ Found 2026-11-19 by the study for F13 (the agent's numbers, not re-measured in r
   switched on: one fault tried, and the margin is smaller than on the GPU path.
 - **To do:** measure first. The sliding on dark and plain surfaces is the one that matters
   to a user without a GPU.
+- **The owner's rule for this item (2026-11-19):** a fix that changes the CPU path's results
+  is adopted when it measures better on every test scene and leaves the GPU path bit for
+  bit unchanged. Investigating and iterating is welcome.
 
 ## Reviewed and fine: leave alone
 

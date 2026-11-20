@@ -62,6 +62,20 @@ other, so any of them can be taken first.
 | D5 | Presets: which ones, and what are they called? | Decided after P1's measurements. "General" is today's behaviour, unchanged. |
 | D6 | May `mesh.ply` carry one more value per vertex (how many independent looks it had)? | Needed by N1 to say *why* an area is weak. It adds a property and changes no existing one. |
 
+**Decided by the owner (2026-11-19):**
+- **D5:** the presets and their names are chosen from P1's measurements; "General" stays
+  exactly today's behaviour and stays the default.
+- **D6:** yes. `mesh.ply` may carry each vertex's count of independent looks, with every
+  existing value unchanged.
+- **D4** is not changed: new scans are kept in full; a scan is moved to a lighter mode by
+  hand (R2).
+- **The CPU path** (`MAINTENANCE_PLAN.md` F14): a fix that changes what that path produces
+  is adopted when it measures better on every test scene and leaves the GPU path bit for
+  bit unchanged; investigating and iterating there is welcome.
+- **Standing rule for work done unattended:** anything that would change GPU-path scan
+  results or the output of a mesh edit is built as an option that is off; the switch waits
+  for the owner.
+
 **Decided by the owner (2026-11-17):**
 - **D1:** go ahead with Inspection; the report is a self-contained HTML page that prints to PDF.
 - **D2:** our own small STEP writer. **D3:** FreeCAD is on this PC for the round-trip check (a
