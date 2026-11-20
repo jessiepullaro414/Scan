@@ -3,6 +3,7 @@
  * the device, timed jobs and the settings. Errors thrown as `HttpError` become the API's
  * `{detail, hint}` replies.
  */
+import type { MockHealth } from "../backend";
 import type { DeviceState, Job } from "../types";
 
 export class HttpError extends Error {
@@ -58,6 +59,8 @@ export interface MockHost {
   readonly fast: boolean;
   /** `?drift=1`: the launch check after a connect finds drift. */
   readonly drift: boolean;
+  /** `?health=…`: the calibration's status the demo shows (mock/health.ts); null: it follows the demo. */
+  readonly health: MockHealth;
   send(msg: Record<string, unknown>): void;
   /** A binary preview frame, to the clients that subscribed to previews. */
   sendPreview(camera: string, jpeg: Uint8Array, w: number, h: number): void;

@@ -23,7 +23,9 @@ import { ConfirmDialog, PromptDialog } from "../components/ui/Dialog";
 import { EmptyState, Skeleton } from "../components/ui/Feedback";
 import { Code, Page, PageHeader } from "../components/ui/Layout";
 import { Menu } from "../components/ui/Popover";
+import { HEALTH_ICON, HEALTH_TEXT } from "../components/CalibHealth";
 import { hasMesh, hasRecording, mergedFromText } from "../lib/align";
+import { scanHealthLine, scanHealthOf } from "../lib/calibHealth";
 import { projectDiskText, scanDiskTitle, trashText } from "../lib/diskUse";
 import { downloadFile } from "../lib/download";
 import { fileStem, fmtBytes, fmtDateTime, fmtDuration, fmtInt, fmtRelative } from "../lib/format";
@@ -79,6 +81,9 @@ function ScanRow({ project, scan, disk }: { project: Project; scan: Scan; disk?:
   // A merged scan (M4) has no recording of its own: nothing that makes its mesh from the frames again.
   const recorded = hasRecording(scan);
   const mergedFrom = mergedFromText(scan);
+  const own = hasResult ? scanHealthOf(scan.result?.report) : null;
+  const health = scanHealthLine(own);
+  const HealthIcon = health && own ? HEALTH_ICON[own.state] : null;
 
   return (
     <li className={cn(ROW_GRID, "min-h-[64px] items-center px-4 py-2.5 transition-colors hover:bg-surface-2/60")}>
@@ -115,6 +120,12 @@ function ScanRow({ project, scan, disk }: { project: Project; scan: Scan; disk?:
             <Combine size={12} aria-hidden /> Merged
           </span>
         )}
+        {health && HealthIcon ? (
+          // H4: this scan's own calibration status, when it was not Valid (the reason on hover)
+          <span className={cn("inline-flex cursor-help items-center gap-1", HEALTH_TEXT[health.tone])} title={health.title}>
+            <HealthIcon size={12} aria-hidden /> {health.text}
+          </span>
+        ) : null}
         {disk && disk.bytes > 0 ? (
           <span className="inline-flex cursor-help items-center gap-1 tnum" title={scanDiskTitle(disk)}>
             <HardDrive size={12} aria-hidden /> {fmtBytes(disk.bytes)}

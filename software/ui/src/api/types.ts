@@ -289,8 +289,46 @@ export type SetupState = {
   print_check: PrintCheck | null; // null for the sim target (its board is virtual and exact)
   board: BoardInfo;
   launch_check: LaunchCheck | null;
-  last_check: { when: string; ok: boolean; verdict: string } | null;
+  last_check: { when: string; ok: boolean; verdict: string; parts?: HealthPart[] } | null;
+  /** H3: the calibration's status (null without a calibration; absent from an older engine). It warns, never blocks. */
+  calibration_health?: CalibHealth | null;
 };
+
+// ------------------------------------------------------------------ calibration health (H3, H4)
+export type HealthState = "valid" | "check" | "recalibrate";
+export type HealthPart = "cameras" | "lasers" | "imu";
+/** What to do next; `step` is a SetupStep id (a wizard page). */
+export type HealthAction = { step: "check" | "stereo" | "lasers" | "imu"; text: string };
+export type HealthReason = {
+  state: HealthState;
+  source: "scans" | "launch_check" | "board_check" | "board_check_age" | "scan";
+  part: HealthPart | null;
+  reason: string;
+  action: HealthAction | null;
+  then: HealthAction | null;
+  kind: string;
+  value: number | string[] | null;
+};
+export type CalibHealth = {
+  version: number;
+  state: HealthState;
+  label: string; // "Valid" | "Check recommended" | "Recalibration required"
+  part: HealthPart | null; // null: the calibration as a whole (its age), or nothing (valid)
+  part_label: string | null;
+  reason: string; // one plain sentence
+  action: HealthAction | null;
+  then: HealthAction | null; // what to try if that does not mend it
+  reasons: HealthReason[]; // every finding that is not valid, worst first
+  parts: Record<HealthPart, HealthState | null>; // null: not judged
+  not_judged: HealthPart[];
+  note: string | null; // why something could not be judged
+  provisional: boolean; // the limits come from the simulator until the real scanner is measured (H5)
+  source: "setup" | "scan";
+  scans?: { used: number; window: number; agree: number };
+  signs?: Record<string, { value: number | null; unit: string; check: number; recalibrate: number; state: HealthState | null; missing?: boolean }>;
+};
+/** H4: a scan's own status in short, as the scan list keeps it (`Scan.result.report.health_status`). */
+export type ScanHealthSummary = { state: HealthState; part: HealthPart | null; reason: string | null };
 
 export type CheckStatus = "PASS" | "WARN" | "FAIL" | "SKIP" | "INFO";
 export type SelfTestCheck = { name: string; status: CheckStatus; detail: string; fix: string | null }; // fix: plain words

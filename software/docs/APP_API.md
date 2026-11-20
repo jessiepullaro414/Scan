@@ -800,6 +800,7 @@ Everything in the M3 phase 2 section is implemented as written, with these clari
   - `ms`: what the block cost the processing (its share on the processing thread).
   - Should the block fail, the scan is still processed and `health` is `{version, error}`.
 - **The scan's calibration status** (*extra*, since H3): every stage's `report.json` with a `health` block (not a failed one) also has `health_status`, a `CalibHealth` (`source: "scan"`, with `signs`) of what this scan alone saw (`ohs.calib.health.scan_status`): Valid, Check recommended or Recalibration required, the part, one sentence and the step to redo. One scan is enough here; the setup state's status waits for 2 of the last 3. A scan processed without a GPU judges the cameras only (`note`). At given poses (the straighten and fuse stages) nothing is tracked, so the IMU is not judged there. It warns only: the scan is processed as before.
+  - *Since H4* the scan's summary in `project.json` (`Scan.result.report`, which the project page's scan list reads) keeps it in short: `health_status: {state: HealthState, part: HealthPart | null, reason: string}`, written with the rest of the summary when a stage gives the scan a new base. A scan whose summary was written before H4 has none (nothing is shown for it); the full status stays in `result/report.json`.
 - **Scan status:** stage jobs and recipe `all` jobs set the scan to `processing`. Afterwards it is `processed` when it has a mesh, else `failed` (with `error`) or `recorded`. Edit jobs leave the status alone.
 - **Make mesh** (`POST .../process`) is the Default recipe with scope `all` at the requested quality. Its job kind (`process_scan`), result `{project_id, scan_id, scan, message: "Mesh ready"}` and statuses are M1's.
   - Second Make mesh on the same scan: 409 "this scan is already being processed".
@@ -1861,7 +1862,9 @@ Rules:
 - **Collected, only what exists** (a part the scan does not have is left out of the page, never shown
   empty): the project's and the scan's names, the date (read once per request), the app's version; how the
   scan was made (`result/report.json`, its known keys); the calibration (the setup state's calibration part
-  and last board check; its health is "not assessed" until H3); the Check answer at `tolerance_mm`
+  and last board check; its health, *since H4*, is the scan's own status, `result/report.json`'s
+  `health_status`: state, part, reason, what was not judged, the note and that the limits are provisional; a
+  scan processed before H3 has none and its health reads "Not assessed"); the Check answer at `tolerance_mm`
   (`POST .../check`'s, before there is a mesh left out); the kept features **as `GET .../features` shows
   them** (stale marks, relations with the engine's record, approvals with "check again" and its reason, the
   frame's state) and the CAD export's moves when a relation has one; every kept section cut again on the

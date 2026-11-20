@@ -753,11 +753,43 @@ rotation the tracker finds against the gyro's (`jump_deg`) is not saved.
     mesh, gyro 0.003° a frame). It was recorded with an older simulator calibration, so the
     setup state rightly did not count it (`scans.used` 0).
 
-### H4. In the app (S–M)
+### [x] H4. In the app (S–M)
 - **What:** the state on the device chip and the setup overview; a line on the Scan page when it
   is not Valid; on a scan's card and in its report, "scanned with a calibration that needed a
   check". The button goes to the one step to redo (the wizard already has "Redo" per step and
   the `recalibrate_stereo` action). Scanning is never blocked.
+- **Done 2026-11-19.** The words are in `ui/src/lib/calibHealth.ts` (54 checks), the pieces in
+  `ui/src/components/CalibHealth.tsx`. Amber with a triangle for "check", red with an octagon
+  for "recalibrate", nothing loud for Valid; a part that was not judged is named as not
+  judged, never as fine; "The limits are provisional until the real scanner has been
+  measured." is said once where the detail is.
+  - **The device chip:** "Calibrated", "Check recommended" or "Recalibrate", with a button
+    beside it to the one wizard step ("Run the 2-minute check", "Redo the cameras", "Redo
+    the lasers", "Redo the IMU"). The sidebar's Setup dot lights for it too.
+  - **The setup overview:** a strip with the headline ("Check recommended for the lasers"),
+    the engine's sentence, what to try next, what was not judged, and the button. It takes
+    the place of the launch check's own line, which said the same.
+  - **The Scan and Device pages:** one line with the button when the status is not Valid, in
+    place of the drift callout. Start scan stays enabled; no dialog.
+  - **A scan's row and its report:** "Scanned with a calibration that needed a check" (or
+    "... that needed recalibrating"), the reason on hover; the same in the viewer's
+    processing report. The row reads `Scan.result.report.health_status = {state, part,
+    reason}`, kept by `report_summary` (`ohs/server/projects.py`).
+  - **The HTML inspection report:** its Health row is the scan's own `health_status`; "Not
+    assessed" stays for a scan processed before the status existed, and says why.
+  - The in-browser demo takes `?health=check|recalibrate|cpu|old` to show each state.
+  - Tests: `tests/test_server_report.py` (2 new), `tests/test_report_html.py` (new checks),
+    `ui/src/lib/calibHealth.test.ts`.
+  - *Checked in the app:* real engine with the simulator: the chip reads "Calibrated", the
+    strip "Calibration valid. Nothing looks off for the cameras: ..." with "Not judged yet:
+    the lasers and the IMU. A scan made with this calibration judges them."; the inspection
+    report of a tracked 355-frame scan reads "Valid: This scan shows nothing off for the
+    cameras, the lasers and the IMU." In the demo: "Recalibrate" on the chip, "Redo the
+    cameras" opens the Stereo step, the Scan page shows the line and Start scan stays
+    enabled, and a scan's row shows the amber line with its reason.
+  - **Left:** on the Scan page the button shows twice (header and line); the Setup step card
+    "Check" may repeat the launch check's drift beside the strip; scans processed between
+    H3 and H4 have no row line until they are processed again (their report shows it).
 
 ### H5. Limits from the real scanner **(hw)**
 The simulator has no warm-up, no knocks and no loose screws. The limits of H2 are provisional

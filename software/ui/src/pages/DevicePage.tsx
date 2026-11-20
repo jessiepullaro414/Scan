@@ -20,7 +20,7 @@ import {
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { ConnectSource } from "../api/types";
 import { EmitterSliders } from "../components/EmitterSliders";
-import { LaunchCheckCallout } from "../components/LaunchCheckCallout";
+import { CalibHealthCallout } from "../components/CalibHealth";
 import { Badge } from "../components/ui/Badge";
 import { Button } from "../components/ui/Button";
 import { ProgressBar, Skeleton, Spinner } from "../components/ui/Feedback";
@@ -171,7 +171,7 @@ export function DevicePage() {
         }
       />
 
-      <LaunchCheckCallout className="mb-5" />
+      <CalibHealthCallout className="mb-5" />
 
       <Section title="Source" icon={Plug} className="mb-5">
         <div role="radiogroup" aria-label="Device source" className="grid gap-3 md:grid-cols-3">

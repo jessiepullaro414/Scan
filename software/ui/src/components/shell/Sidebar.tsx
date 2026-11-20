@@ -1,11 +1,13 @@
 import { Cpu, Crosshair, House, ScanLine, Settings, type LucideIcon } from "lucide-react";
 import { MOCK } from "../../api/backend";
+import { healthView } from "../../lib/calibHealth";
 import { href, paths, type Route } from "../../lib/router";
 import { cn } from "../../lib/util";
 import { isSessionActive, useCalib } from "../../store/calib";
 import { useConnection } from "../../store/connection";
 import { useDevice } from "../../store/device";
 import { isLive, useSession } from "../../store/session";
+import { useDeviceHealth } from "../CalibHealth";
 import { LogoMark } from "./Logo";
 
 type Item = { key: string; label: string; icon: LucideIcon; to: string; match: Route["name"][] };
@@ -26,8 +28,13 @@ export function Sidebar({ route }: { route: Route }) {
   const calibrating = useCalib((s) => isSessionActive(s.session));
   const deviceBusy = useDevice((s) => !!s.device?.busy || !!s.simJobId);
   const version = useConnection((s) => s.health?.version ?? s.serverVersion);
-  const setupBadge = calibMissing || drift ? "warn" : calibrating ? "accent" : null;
-  const setupLabel = drift
+  // H4: the calibration's status when it is not Valid (it includes the launch check's drift)
+  const health = healthView(useDeviceHealth());
+  const stale = health && health.state !== "valid" ? health : null;
+  const setupBadge = calibMissing || drift || stale ? "warn" : calibrating ? "accent" : null;
+  const setupLabel = stale
+    ? `Setup: ${stale.title.charAt(0).toLowerCase()}${stale.title.slice(1)}`
+    : drift
     ? "Setup: the launch check found calibration drift"
     : calibMissing
       ? "Setup: no calibration yet"

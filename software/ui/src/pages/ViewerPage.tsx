@@ -45,12 +45,14 @@ import type { BufferGeometry } from "three";
 import { PLYLoader } from "three/examples/jsm/loaders/PLYLoader.js";
 import { ApiError, api } from "../api/http";
 import type { FitKind, KeptFeature, KeptFit, Project, Scan } from "../api/types";
+import { HEALTH_ICON, HEALTH_TEXT } from "../components/CalibHealth";
 import { JobProgress, MakeMeshButton, ProcessButton, ScanStatusBadge } from "../components/ScanBits";
 import { ErrorBoundary } from "../components/shell/ErrorBoundary";
 import { Button, IconButton } from "../components/ui/Button";
 import { EmptyState, Kbd, ProgressBar, Skeleton, Spinner } from "../components/ui/Feedback";
 import { Segmented } from "../components/ui/Form";
 import { KeyValue } from "../components/ui/Layout";
+import { scanHealthDetail, scanHealthOf } from "../lib/calibHealth";
 import { downloadFile } from "../lib/download";
 import { decodeFaces, fitLabel, fitName, regionTriangles, summarizeRegion, type RegionSummary } from "../lib/fits";
 import { fileStem, fmtBytes, fmtCompact, fmtDateTime, fmtDuration, fmtFixed, fmtInt, fmtPct } from "../lib/format";
@@ -141,8 +143,31 @@ function ReportSummary({ report }: { report: Rec }) {
   const gtRot = obj(gt?.rot_deg);
   const sigma = obj(mesh?.sigma_mm);
   const failureRows = failures ? Object.entries(failures).filter(([, v]) => num(v)) : [];
+  // H4: what this scan saw of its calibration (its own health_status); nothing for a scan processed before H3
+  const health = scanHealthDetail(report);
+  const HealthIcon = health ? HEALTH_ICON[scanHealthOf(report)!.state] : null;
   return (
     <div className="space-y-4">
+      {health && HealthIcon ? (
+        <div
+          className={cn(
+            "flex gap-2.5 rounded-lg border px-3 py-2.5 text-xs",
+            health.tone === "danger" ? "border-danger/30 bg-danger-soft" : health.tone === "warn" ? "border-warn/30 bg-warn-soft" : "border-line bg-surface-2/50",
+          )}
+          aria-label={`Calibration: ${health.headline}`}
+        >
+          <HealthIcon size={14} className={cn("mt-px shrink-0", HEALTH_TEXT[health.tone])} aria-hidden />
+          <div className="min-w-0 flex-1 space-y-0.5">
+            <div className="font-semibold text-fg">{health.tone === "neutral" ? `Calibration: ${health.headline}` : health.headline}</div>
+            {health.reason ? <div className="text-muted">{health.reason}</div> : null}
+            {health.lines.map((l) => (
+              <div key={l} className="text-subtle">
+                {l}
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null}
       <KeyValue
         dense
         rows={[

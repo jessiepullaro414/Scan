@@ -319,10 +319,19 @@ def _calibration(cal: dict) -> str:
         text = esc(label) + (esc(f" ({health['part']})") if health.get("part") else "")
         if health.get("reason"):
             text += esc(f": {health['reason']}")
+        # what could not be judged is said, never called fine (H4)
+        names = [{"imu": "the IMU"}.get(str(p), f"the {p}") for p in health.get("not_judged") or []]
+        if names:
+            text += "<br>" + f"<span class=\"muted\">{esc('Not judged: ' + ' and '.join(names) + '.')}</span>"
+        if health.get("note"):
+            text += "<br>" + f"<span class=\"muted\">{esc(str(health['note']))}</span>"
+        if health.get("provisional"):
+            src = "what this scan saw of its calibration" if health.get("source") == "scan" else "the calibration's checks"
+            text += "<br>" + (f"<span class=\"muted\">{esc(f'Judged from {src}. The limits are provisional until the real scanner has been measured.')}</span>")
         rows.append(("Health", (_badge("warning") + " " if state != "valid" else "") + text))
     else:
-        rows.append(("Health", "Not assessed: the check that judges whether a calibration is still good (valid, "
-                               "check recommended, recalibration required) is not built yet."))
+        rows.append(("Health", "Not assessed: this scan's processing did not judge its calibration (it was processed "
+                               "before the app did that). Processing it again judges it."))
     return _part("calibration", [_dl(rows)])
 
 

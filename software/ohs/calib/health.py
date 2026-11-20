@@ -545,6 +545,12 @@ def _join(findings: list[dict], levels: dict[str, int | None], valid_reason: str
     return out
 
 
+def _the_list(names: Sequence[str]) -> str:
+    """"the cameras", "the cameras and the lasers", "the cameras, the lasers and the IMU"."""
+    words = [f"the {n}" for n in names]
+    return words[0] if len(words) == 1 else ", ".join(words[:-1]) + " and " + words[-1]
+
+
 def _cpu_note(readings: list[dict]) -> str | None:
     """Why the lasers and the IMU were not judged, when no scan could judge them: processed on the CPU
     path (``CPU_PATH``), or too short (:data:`MIN_FRAMES`). Not judged is neither stale nor fine."""
@@ -572,7 +578,7 @@ def scan_status(block: dict | None, *, tracking_model: str | None = None, lines:
     findings, levels, _ = _from_scans([({}, r)], 1, 1)
     judged = [PART_LABELS[p] if p == "imu" else PART_LABELS[p].lower() for p in PARTS if levels[p] is not None]
     if judged:
-        valid = f"This scan shows nothing off for the {' and the '.join(judged)}."
+        valid = f"This scan shows nothing off for {_the_list(judged)}."
     else:
         valid = "This scan has too little to judge the calibration by."
     note = _cpu_note([r])
@@ -625,8 +631,8 @@ def status(*, saved: Any = None, launch_check: dict | None = None, last_check: d
         if len(judged) == len(PARTS) or not judged:
             valid = f"Nothing looks off: {joined} found the calibration in order."
         else:  # say which parts were looked at, never that the others are fine
-            names = " and the ".join("IMU" if p == "imu" else p for p in judged)
-            valid = f"Nothing looks off for the {names}: {joined} found nothing wrong."
+            names = _the_list(["IMU" if p == "imu" else p for p in judged])
+            valid = f"Nothing looks off for {names}: {joined} found nothing wrong."
     else:
         valid = "Nothing speaks against the calibration yet: no check or scan has looked at it since it was saved."
     note = _cpu_note([r for _, r in readings[:window]])

@@ -1,0 +1,141 @@
+/**
+ * The calibration's status in words (FEATURE_PLAN H4): Valid, Check recommended or Recalibration required, as the
+ * engine judges it (H3, `ohs/calib/health.py`): the setup state's `calibration_health` for the device chip, the setup
+ * overview and the Scan page, and each scan's own `health_status` for its card and its report. The app warns with it;
+ * it never blocks a scan. Plain functions, tested on their own (`calibHealth.test.ts`).
+ *
+ * Rules kept here: a part that was not judged is never called fine (it is named as not judged); the limits are
+ * provisional until the real scanner is measured (H5), said once where the detail is shown; colour is never the only
+ * signal (each tone comes with its words, and the pages add an icon).
+ */
+import type { CalibHealth, DeviceState, HealthAction, HealthPart, HealthState, ScanHealthSummary, SetupState } from "../api/types";
+import type { SetupPage } from "./router";
+
+export const STATES: HealthState[] = ["valid", "check", "recalibrate"];
+export const STATE_WORDS: Record<HealthState, string> = { valid: "Valid", check: "Check recommended", recalibrate: "Recalibration required" };
+/** Amber for a check, red for a recalibration, nothing loud for valid. */
+export type HealthTone = "neutral" | "warn" | "danger";
+export const STATE_TONE: Record<HealthState, HealthTone> = { valid: "neutral", check: "warn", recalibrate: "danger" };
+/** The device chip's word. */
+const SHORT: Record<HealthState, string> = { valid: "Calibrated", check: "Check recommended", recalibrate: "Recalibrate" };
+/** The button for each wizard step an action names (the action's own words go in its hover text). */
+export const STEP_BUTTON: Record<HealthAction["step"], string> = {
+  check: "Run the 2-minute check",
+  stereo: "Redo the cameras",
+  lasers: "Redo the lasers",
+  imu: "Redo the IMU",
+};
+export const PROVISIONAL = "The limits are provisional until the real scanner has been measured.";
+
+const PART_WORDS: Record<HealthPart, string> = { cameras: "the cameras", lasers: "the lasers", imu: "the IMU" };
+const PART_LABEL: Record<HealthPart, string> = { cameras: "Cameras", lasers: "Lasers", imu: "IMU" };
+
+const isState = (s: unknown): s is HealthState => typeof s === "string" && (STATES as string[]).includes(s);
+const isPart = (p: unknown): p is HealthPart => p === "cameras" || p === "lasers" || p === "imu";
+const asSentence = (s: string) => {
+  const t = s.trim();
+  return t && !/[.!?]$/.test(t) ? `${t}.` : t;
+};
+
+/** "the lasers", "the lasers and the IMU", "the cameras, the lasers and the IMU". */
+export function partsWords(parts: HealthPart[]): string {
+  const w = parts.filter(isPart).map((p) => PART_WORDS[p]);
+  return w.length <= 1 ? (w[0] ?? "") : `${w.slice(0, -1).join(", ")} and ${w[w.length - 1]}`;
+}
+
+export type HealthView = {
+  state: HealthState;
+  tone: HealthTone;
+  /** "Calibration valid", "Check recommended for the lasers", "Recalibration required" (the calibration as a whole). */
+  title: string;
+  /** The device chip's word: "Calibrated", "Check recommended", "Recalibrate". */
+  short: string;
+  /** The engine's one sentence. */
+  reason: string;
+  /** The button: the wizard page it opens, its label and the action's own words (hover). */
+  action: { page: SetupPage; label: string; hint: string } | null;
+  /** What to try if that does not mend it: the quieter second line. */
+  then: string | null;
+  /** Why something could not be judged (the engine's note), or which parts were not judged; null when all were. */
+  judged: string | null;
+  /** The quiet "provisional" line, or null. */
+  provisional: string | null;
+};
+
+function actionOf(a: HealthAction | null | undefined): HealthView["action"] {
+  if (!a || !(a.step in STEP_BUTTON)) return null;
+  return { page: a.step, label: STEP_BUTTON[a.step], hint: asSentence(a.text || STEP_BUTTON[a.step]).replace(/\.$/, "") };
+}
+
+function judgedLine(h: CalibHealth): string | null {
+  if (h.note) return asSentence(h.note);
+  const parts = (h.not_judged ?? []).filter(isPart);
+  if (!parts.length) return null;
+  if (h.source === "scan") return `Not judged in this scan: ${partsWords(parts)}.`;
+  return `Not judged yet: ${partsWords(parts)}. A scan made with this calibration judges ${parts.length === 1 ? "it" : "them"}.`;
+}
+
+/** The status made ready to show; null without one (no calibration, an older engine) or for one it cannot read. */
+export function healthView(h: CalibHealth | null | undefined): HealthView | null {
+  if (!h || !isState(h.state)) return null;
+  const part = isPart(h.part) ? h.part : null;
+  const title = h.state === "valid" ? "Calibration valid" : part ? `${STATE_WORDS[h.state]} for ${PART_WORDS[part]}` : STATE_WORDS[h.state];
+  return {
+    state: h.state,
+    tone: STATE_TONE[h.state],
+    title,
+    short: SHORT[h.state],
+    reason: h.reason ? asSentence(h.reason) : "",
+    action: h.state === "valid" ? null : actionOf(h.action),
+    then: h.state !== "valid" && h.then?.text ? asSentence(h.then.text) : null,
+    judged: judgedLine(h),
+    provisional: h.provisional ? PROVISIONAL : null,
+  };
+}
+
+/**
+ * The status of the calibration the connected device scans with: the setup state's, when it speaks for that device
+ * (the camera: the "device" target, the simulator: "sim"). A replay carries its own calibration, so nothing then.
+ */
+export function deviceHealth(device: DeviceState | null | undefined, setup: SetupState | null | undefined): CalibHealth | null {
+  if (!device?.connected || !device.calibration?.loaded || !setup) return null;
+  const target = device.source === "camera" ? "device" : device.source === "sim" ? "sim" : null;
+  if (!target || setup.target !== target) return null;
+  return setup.calibration_health ?? null;
+}
+
+// ------------------------------------------------------------------ a scan's own status
+/** A scan's own status from its report (`health_status`: the short form of the scan list, or report.json's full one). */
+export function scanHealthOf(report: unknown): ScanHealthSummary | null {
+  if (!report || typeof report !== "object") return null;
+  const hs = (report as { health_status?: unknown }).health_status;
+  if (!hs || typeof hs !== "object") return null;
+  const { state, part, reason } = hs as { state?: unknown; part?: unknown; reason?: unknown };
+  if (!isState(state)) return null;
+  return { state, part: isPart(part) ? part : null, reason: typeof reason === "string" && reason.trim() ? reason : null };
+}
+
+const SCANNED: Record<Exclude<HealthState, "valid">, string> = {
+  check: "Scanned with a calibration that needed a check",
+  recalibrate: "Scanned with a calibration that needed recalibrating",
+};
+
+/** The scan card's line when its own status was not Valid (the reason goes on hover); null otherwise. */
+export function scanHealthLine(s: ScanHealthSummary | null | undefined): { text: string; tone: HealthTone; title: string } | null {
+  if (!s || !isState(s.state) || s.state === "valid") return null;
+  const reason = s.reason ? asSentence(s.reason) : STATE_WORDS[s.state];
+  return { text: SCANNED[s.state], tone: STATE_TONE[s.state], title: s.part ? `${PART_LABEL[s.part]}: ${reason}` : reason };
+}
+
+/** The scan's status in its report (the viewer's processing report): the headline, the reason and the quiet lines. */
+export function scanHealthDetail(report: unknown): { tone: HealthTone; headline: string; reason: string | null; lines: string[] } | null {
+  const s = scanHealthOf(report);
+  if (!s) return null;
+  const full = (report as { health_status: Partial<CalibHealth> }).health_status;
+  const headline = s.state === "valid" ? STATE_WORDS.valid : `${SCANNED[s.state]}${s.part ? ` (${PART_WORDS[s.part].replace(/^the /, "")})` : ""}`;
+  const lines: string[] = [];
+  const judged = Array.isArray(full.not_judged) || full.note ? judgedLine({ ...(full as CalibHealth), source: "scan" }) : null;
+  if (judged) lines.push(judged);
+  lines.push(PROVISIONAL);
+  return { tone: STATE_TONE[s.state], headline, reason: s.reason ? asSentence(s.reason) : null, lines };
+}

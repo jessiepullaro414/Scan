@@ -34,7 +34,8 @@
  *   the centres together, the deviation to points spread over the reference, the answer for a tolerance.
  *
  * Options in the URL: `empty=1` (no projects), `fast=1` (short jobs), `drift=1` (the launch check
- * after a connect finds drift), `nopico=1` (the camera connects without the Pico).
+ * after a connect finds drift), `nopico=1` (the camera connects without the Pico), `health=check|recalibrate|cpu|old`
+ * (the calibration's status, H4: health.ts; the seeded scans carry their own status too).
  */
 import type { MockOptions } from "../backend";
 import { encodeBinary } from "../binary";
@@ -63,6 +64,8 @@ import { MockFeatures } from "./features";
 import { MockSections } from "./section";
 import { MockFlush } from "./flush";
 import { MockReport } from "./report";
+import { mockScanStatus, SEEDED_SCAN_HEALTH } from "./health";
+import { scanHealthOf } from "../../lib/calibHealth";
 import { MockReferences } from "./reference";
 import { MockProcess, mockStep } from "./process";
 import { cameraByIndex, MockSetup } from "./setup";
@@ -274,6 +277,7 @@ class MockBackend {
     const host: MockHost = {
       fast: opts.fast,
       drift: opts.drift,
+      health: opts.health,
       send: (m) => this.send(m),
       sendPreview: (camera, jpeg, w, h) => {
         const seq = (this.previewSeqs[camera] = (this.previewSeqs[camera] ?? 0) + 1);
@@ -957,7 +961,8 @@ class MockBackend {
 
   private reportSummary(s: Scan, quality: ProcessQuality): Record<string, unknown> {
     const n = Math.ceil(s.n_frames / mockStep(s, quality));
-    return { mode: s.mode, quality, frames: { processed: n, tracked: Math.round(n * 0.93) } };
+    const health = SEEDED_SCAN_HEALTH[s.name]; // its own calibration status, in short (H4); none: made before H3
+    return { mode: s.mode, quality, frames: { processed: n, tracked: Math.round(n * 0.93) }, ...(health ? { health_status: health } : {}) };
   }
 
   private report(p: Project, s: Scan, quality: ProcessQuality): Record<string, unknown> {
@@ -966,6 +971,7 @@ class MockBackend {
     const n = Math.max(1, Math.ceil(s.n_frames / step));
     const tracked = Math.round(n * 0.93);
     const full = quality !== "preview";
+    const own = scanHealthOf(s.result?.report); // the scan's own calibration status (H3), as its summary keeps it
     return {
       recording: `~/OpenHandScan/projects/${p.id}/scans/${s.id}/recording`,
       source: this.device.source === "camera" ? "camera" : "sim",
@@ -983,6 +989,7 @@ class MockBackend {
       lasers: { planes: ["horizontal", "vertical"], n_points_exported: 41250, voxel_mm: 0.2, frames_with_points: tracked },
       ground_truth: { n: tracked, rms_trans_mm: 0.41, final_trans_mm: 0.62, trans_mm: { mean: 0.36, median: 0.33, p95: 0.78, max: 1.12 }, rot_deg: { mean: 0.08, median: 0.07, p95: 0.17, max: 0.24 } },
       wall_time_s: quality === "best" ? 148.4 : quality === "standard" ? 74.2 : 21.8,
+      ...(own ? { health_status: mockScanStatus(own) } : {}),
     };
   }
 

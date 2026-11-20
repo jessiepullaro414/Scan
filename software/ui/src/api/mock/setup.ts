@@ -26,6 +26,7 @@ import type {
 import { boardSheet, maskSheet, previewDataUrl, sheetPdf, tagsSheet, type Sheet } from "./board";
 import { HttpError, json, nowIso, type MockHost } from "./host";
 import { mockLaserNames } from "./calib";
+import { mockSetupHealth } from "./health";
 import { laserFamily, laserWords } from "../../lib/laserSet";
 
 type TargetData = {
@@ -250,6 +251,14 @@ export class MockSetup {
       board: this.board(),
       launch_check: this.launch,
       last_check: d.lastCheck,
+      // H3: the launch check counts on the camera and the simulator, never on a replay (it is null then). The mock's
+      // simulator scans with its true calibration before its wizard was run, so its status shows from the start.
+      calibration_health: mockSetupHealth({
+        stereo: !!d.parts.stereo || (t === "sim" && this.host.device().calibration.loaded),
+        option: this.host.health,
+        launch: this.launch,
+        lastCheck: d.lastCheck,
+      }),
     };
   }
 

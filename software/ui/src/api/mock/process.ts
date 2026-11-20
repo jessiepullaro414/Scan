@@ -47,6 +47,7 @@ import { mockExtent, mockForm } from "./extent";
 import type { FeatureEngine } from "./features";
 import { mockFit } from "./fit";
 import { apply, stlMesh } from "./geom";
+import { MOCK_SCAN_VALID } from "./health";
 import { HttpError, json, nowIso, uid, type MockHost, type WorkStep } from "./host";
 import { mockLasers, type LaserPatch } from "./lasers";
 import {
@@ -1237,7 +1238,8 @@ export class MockProcess {
       mesh_url: `${base}/mesh.ply`,
       stl_url: `${base}/mesh.stl`,
       laser_points_url: `${base}/laser_points.ply`,
-      report: { mode: s.mode, quality, frames: { processed: s.n_frames, tracked: Math.round(s.n_frames * 0.93) } },
+      // its own calibration status in short (H4): the mock's processing finds nothing off
+      report: { mode: s.mode, quality, frames: { processed: s.n_frames, tracked: Math.round(s.n_frames * 0.93) }, health_status: MOCK_SCAN_VALID },
     };
     (s as Scan & { quality?: ProcessQuality }).quality = quality;
     p.modified = nowIso();

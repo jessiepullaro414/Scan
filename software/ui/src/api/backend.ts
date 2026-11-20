@@ -25,8 +25,11 @@ function detectMock(): boolean {
 
 export const MOCK = detectMock();
 
-/** `lasers`: the line lasers the demo starts with (`?lasers=4`: the 4-laser build; else the two standard ones). */
-export type MockOptions = { empty: boolean; fast: boolean; drift: boolean; nopico: boolean; lasers: 2 | 4 };
+/** `lasers`: the line lasers the demo starts with (`?lasers=4`: the 4-laser build; else the two standard ones).
+ * `health`: the calibration's status the demo shows (`?health=check|recalibrate|cpu|old`, mock/health.ts; else it follows the demo). */
+export type MockOptions = { empty: boolean; fast: boolean; drift: boolean; nopico: boolean; lasers: 2 | 4; health: MockHealth };
+export type MockHealth = "check" | "recalibrate" | "cpu" | "old" | null;
+const HEALTH_OPTIONS: MockHealth[] = ["check", "recalibrate", "cpu", "old"];
 
 let ready: Promise<void> | null = null;
 
@@ -42,6 +45,7 @@ export function initBackend(): Promise<void> {
       drift: queryFlag("drift") === "1",
       nopico: queryFlag("nopico") === "1",
       lasers: queryFlag("lasers") === "4" ? 4 : 2,
+      health: HEALTH_OPTIONS.find((h) => h === queryFlag("health")) ?? null,
     });
     setFetch(backend.fetch);
     setSocketFactory(backend.socket);

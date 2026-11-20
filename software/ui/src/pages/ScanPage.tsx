@@ -4,7 +4,7 @@
  * stats on the right, and the scan controls at the bottom (keyboard: Space, R, Esc, F, ?).
  */
 import { useEffect, useRef, useState } from "react";
-import { LaunchCheckCallout } from "../components/LaunchCheckCallout";
+import { CalibHealthCallout } from "../components/CalibHealth";
 import { ErrorBoundary } from "../components/shell/ErrorBoundary";
 import { navigate, paths } from "../lib/router";
 import { useHotkeys } from "../lib/util";
@@ -135,7 +135,7 @@ export default function ScanPage({ projectParam, first = false }: { projectParam
             </div>
             {!live ? (
               <div className="pointer-events-auto w-full">
-                <LaunchCheckCallout glass />
+                <CalibHealthCallout glass />
               </div>
             ) : null}
             {first && !live && connected ? (

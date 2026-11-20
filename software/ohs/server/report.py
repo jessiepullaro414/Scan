@@ -11,8 +11,10 @@ scan does not have is left out, never shown empty.
 * how the scan was made: the scan's processing report (``result/report.json``, the stage the current mesh was
   made by), its known keys only;
 * the calibration: the setup state's calibration part (:meth:`SetupManager.state
-  <ohs.server.setup.SetupManager.state>`, without the file's path), with the last board check beside it; the
-  health (task H3) does not exist yet, so the report says "not assessed";
+  <ohs.server.setup.SetupManager.state>`, without the file's path), with the last board check beside it; its
+  health is the scan's own calibration status (``result/report.json``'s ``health_status``, FEATURE_PLAN H3/H4:
+  what this scan saw, not today's setup state); a scan processed before H3 has none and the report says "not
+  assessed";
 * the Check answer at the tolerance the request gives (:meth:`ProcessManager.check
   <ohs.server.processing.ProcessManager.check>`); left out when the request gives none, and before there is a mesh;
 * the kept features **as the API shows them** (:meth:`FeatureManager.get <ohs.server.features.FeatureManager.get>`:
@@ -62,6 +64,9 @@ MAX_TOTAL_BYTES = 12 * 2**20  # all of them
 #: the processing report's keys the report shows (ohs.report.data, "process"); the rest (per-frame rows) stay out
 PROCESS_KEYS = ("mode", "quality", "source", "scene", "frames", "failures", "imu", "markers", "poses", "mesh", "lasers",
                 "wall_time_s")
+#: the scan's own calibration status (``report.json``'s ``health_status``, H3): its states and the keys the report shows
+HEALTH_STATES = ("valid", "check", "recalibrate")
+HEALTH_KEYS = ("state", "label", "part", "part_label", "reason", "not_judged", "note", "provisional", "source")
 #: the files, by their name in the route: (the download name's ending, the media type)
 FILES = {"report.html": ("-report.html", "text/html; charset=utf-8"),
          "features.csv": ("-features.csv", "text/csv; charset=utf-8"),
@@ -119,14 +124,18 @@ class ReportManager:
         return out
 
     # ------------------------------------------------------------------ the parts
-    def _process(self, pid: str, sid: str) -> dict | None:
-        """The scan's processing report (``result/report.json``), its known keys; None without one."""
+    def _result_report(self, pid: str, sid: str) -> dict | None:
+        """The scan's ``result/report.json``; None without one."""
         path = self.st.projects.scan_dir(pid, sid) / "result" / "report.json"
         try:
             rep = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             return None
-        if not isinstance(rep, dict):
+        return rep if isinstance(rep, dict) else None
+
+    def _process(self, rep: dict | None) -> dict | None:
+        """The scan's processing report, its known keys; None without one."""
+        if rep is None:
             return None
         out = {k: rep[k] for k in PROCESS_KEYS if k in rep}
         if out.get("quality"):  # stored with the old name "full": reads as "standard"
@@ -262,10 +271,15 @@ class ReportManager:
                 data["sections"] = sections
         if parts == "tables":
             return data
-        process = self._process(pid, sid) if version is not None else None
+        rep = self._result_report(pid, sid) if version is not None else None
+        process = self._process(rep)
         if process:
             data["process"] = process
         cal = self._calibration()
+        status = rep.get("health_status") if rep is not None else None
+        if isinstance(status, dict) and status.get("state") in HEALTH_STATES:
+            # the scan's own status (H3/H4): what the scan saw of its calibration, not today's setup state
+            cal = {**(cal or {}), "health": {k: status.get(k) for k in HEALTH_KEYS}}
         if cal:
             data["calibration"] = cal
         if tolerance_mm is not None and version is not None:

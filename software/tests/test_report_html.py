@@ -440,6 +440,16 @@ def test_each_part_alone_and_calibration_health_not_assessed():
                                                         "reason": "the left laser line reads 0.2 mm off the depth"}}}))
     t = given.text("calibration")
     assert "Not assessed" not in t and "Check recommended" in t and "0.2 mm off the depth" in given.text("warnings")
+    # FEATURE_PLAN H4: the scan's own status (health_status): what was not judged is said, never called fine, and the
+    # limits are provisional (said once)
+    own = Page(build_html({"calibration": {"health": {
+        "state": "valid", "part": None, "part_label": None, "provisional": True, "source": "scan",
+        "reason": "This scan shows nothing off for the cameras.", "not_judged": ["lasers", "imu"],
+        "note": "This scan was processed without a GPU, so only the cameras could be judged."}}}))
+    t = own.text("calibration")
+    assert "Valid" in t and "nothing off for the cameras" in t and "without a GPU" in t
+    assert "Not judged: the lasers and the IMU" in t and t.count("provisional") == 1
+    assert "nothing off for the cameras" not in own.text("warnings")  # a valid status is no warning
     # fits alone: features without relations, sections or a frame
     only = Page(build_html({"features": {**data["features"], "relations": [], "frame": None}}))
     assert "features" in only.order and "relations" not in only.order and "frame" not in only.order

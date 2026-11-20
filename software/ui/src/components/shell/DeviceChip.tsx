@@ -1,5 +1,7 @@
 import { Camera, Check, Film, FlaskConical, TriangleExclamationPoint, Unplug } from "lucide-react";
+import { healthView } from "../../lib/calibHealth";
 import { navigate, paths } from "../../lib/router";
+import { HEALTH_ICON, HEALTH_TEXT, useDeviceHealth } from "../CalibHealth";
 import { cn } from "../../lib/util";
 import { useConnection } from "../../store/connection";
 import { SOURCE_LABEL, useDevice } from "../../store/device";
@@ -25,6 +27,7 @@ export function DeviceChip() {
   const busy = device?.busy ?? (simJobId ? "Generating simulator demo…" : null);
   const calibrated = !!device?.calibration?.loaded;
   const Icon = SOURCE_ICON[source] ?? Unplug;
+  const hv = healthView(useDeviceHealth());
 
   const statusText = offline
     ? "Engine offline"
@@ -55,12 +58,24 @@ export function DeviceChip() {
               Pico: {device.pico.connected ? `connected${device.pico.firmware ? ` (${device.pico.firmware})` : ""}` : "not found"}
             </div>
           ) : null}
-          <div className={calibrated ? "text-ok" : "text-warn"}>
-            {calibrated ? "Calibration loaded" : "No calibration: calibrate in Setup"}
-          </div>
-          {device?.launch_check?.state === "drift" ? (
-            <div className="text-warn">The calibration may have drifted: run the 2-minute check in Setup</div>
-          ) : null}
+          {hv ? (
+            // H4: the calibration's status (it includes the launch check, so the drift line is folded into it)
+            <div className="space-y-0.5">
+              <div className={cn("font-medium", hv.state === "valid" ? "text-ok" : HEALTH_TEXT[hv.tone])}>{hv.title}</div>
+              <div className="text-muted">{hv.reason}</div>
+              {hv.then ? <div className="text-muted">{hv.then}</div> : null}
+              {hv.judged ? <div className="text-subtle">{hv.judged}</div> : null}
+            </div>
+          ) : (
+            <>
+              <div className={calibrated ? "text-ok" : "text-warn"}>
+                {calibrated ? "Calibration loaded" : "No calibration: calibrate in Setup"}
+              </div>
+              {device?.launch_check?.state === "drift" ? (
+                <div className="text-warn">The calibration may have drifted: run the 2-minute check in Setup</div>
+              ) : null}
+            </>
+          )}
         </>
       ) : (
         <div className="text-muted">Choose the camera, a recording or the simulator demo on the Device page.</div>
@@ -68,12 +83,17 @@ export function DeviceChip() {
     </div>
   );
 
+  const warned = connected && hv && hv.state !== "valid" ? hv : null;
+  const HealthIcon = warned ? HEALTH_ICON[warned.state] : null;
+  const calibWords = warned ? warned.short : calibrated ? "Calibrated" : "No calibration";
+
   return (
+    <span className="inline-flex items-center gap-1.5">
     <Tooltip content={tooltip}>
       <button
         type="button"
         onClick={() => navigate(paths.device())}
-        aria-label={`Device: ${connected ? SOURCE_LABEL[source] : "none"}, ${statusText}${connected ? (calibrated ? ", calibrated" : ", no calibration") : ""}. Open the Device page.`}
+        aria-label={`Device: ${connected ? SOURCE_LABEL[source] : "none"}, ${statusText}${connected ? (warned ? `, calibration: ${warned.title}` : calibrated ? ", calibrated" : ", no calibration") : ""}. Open the Device page.`}
         className="flex h-8 items-center gap-2 rounded-lg border border-line bg-surface-2 pl-2.5 pr-2 text-xs transition-colors hover:border-line-strong hover:bg-surface-3"
       >
         <span className="relative">
@@ -91,13 +111,36 @@ export function DeviceChip() {
         {connected ? (
           <>
             <span className="h-3.5 w-px bg-line-strong" aria-hidden />
-            <span className={cn("inline-flex items-center gap-1 font-medium", calibrated ? "text-ok" : "text-warn")}>
-              {calibrated ? <Check size={13} strokeWidth={2.5} aria-hidden /> : <TriangleExclamationPoint size={13} aria-hidden />}
-              <span className="hidden xl:inline">{calibrated ? "Calibrated" : "No calibration"}</span>
+            <span className={cn("inline-flex items-center gap-1 font-medium", warned ? HEALTH_TEXT[warned.tone] : calibrated ? "text-ok" : "text-warn")}>
+              {HealthIcon ? (
+                <HealthIcon size={13} aria-hidden />
+              ) : calibrated ? (
+                <Check size={13} strokeWidth={2.5} aria-hidden />
+              ) : (
+                <TriangleExclamationPoint size={13} aria-hidden />
+              )}
+              <span className="hidden xl:inline">{calibWords}</span>
             </span>
           </>
         ) : null}
       </button>
     </Tooltip>
+      {warned?.action ? (
+        // the one wizard step the status names (the chip itself opens the Device page)
+        <button
+          type="button"
+          onClick={() => navigate(paths.setup(warned.action!.page))}
+          title={`${warned.title}. ${warned.action.hint}.`}
+          aria-label={`${warned.title}. ${warned.action.label}.`}
+          className={cn(
+            "flex h-8 items-center gap-1.5 rounded-lg border px-2.5 text-xs font-medium transition-colors",
+            warned.tone === "danger" ? "border-danger/40 bg-danger-soft text-danger hover:border-danger/60" : "border-warn/40 bg-warn-soft text-warn hover:border-warn/60",
+          )}
+        >
+          {HealthIcon ? <HealthIcon size={13} aria-hidden /> : null}
+          <span className="hidden lg:inline">{warned.action.label}</span>
+        </button>
+      ) : null}
+    </span>
   );
 }

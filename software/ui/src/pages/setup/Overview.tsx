@@ -10,6 +10,7 @@ import {
   TriangleExclamationPoint,
 } from "lucide-react";
 import type { SetupStep } from "../../api/types";
+import { HealthStrip } from "../../components/CalibHealth";
 import { Badge } from "../../components/ui/Badge";
 import { Button } from "../../components/ui/Button";
 import { Spinner } from "../../components/ui/Feedback";
@@ -103,6 +104,7 @@ export function Overview() {
   const setup = useSetup((s) => s.setup)!;
   const dismiss = useSetup((s) => s.dismiss);
   const launch = useDevice((s) => s.device?.launch_check ?? null) ?? setup.launch_check;
+  const health = setup.calibration_health ?? null;
   useTicker(60_000);
   const prog = setupProgress(setup);
   const next = firstUnfinished(setup);
@@ -148,9 +150,12 @@ export function Overview() {
                 <Button variant="primary" size="lg" icon={ScanLine} onClick={() => navigate(paths.setup("done"))}>
                   Scan your first object
                 </Button>
-                <Button size="lg" icon={ClipboardCheck} onClick={() => navigate(paths.setup("check"))}>
-                  Run the check
-                </Button>
+                {health && health.state !== "valid" && health.action?.step === "check" ? null : (
+                  // the status's own button below says it when it asks for the check
+                  <Button size="lg" icon={ClipboardCheck} onClick={() => navigate(paths.setup("check"))}>
+                    Run the check
+                  </Button>
+                )}
               </>
             ) : (
               <Button variant="primary" size="xl" iconRight={ArrowRight} onClick={() => navigate(paths.setup(next))}>
@@ -159,7 +164,19 @@ export function Overview() {
             )}
           </div>
         </div>
-        {launch && launch.state !== "unknown" ? (
+        {health ? (
+          // H4: the calibration's status includes the launch check (and the 2-minute check), so it replaces the
+          // launch check's own line; only "comparing…" stays, while it runs
+          <>
+            {launch?.state === "running" ? (
+              <div className="flex flex-wrap items-center gap-2.5 border-t border-line bg-surface-2/50 px-6 py-3 text-sm" role="status">
+                <Spinner size={14} className="text-accent" />
+                <span className="text-muted">Launch check: comparing the left and right images…</span>
+              </div>
+            ) : null}
+            <HealthStrip health={health} />
+          </>
+        ) : launch && launch.state !== "unknown" ? (
           <div
             className={cn(
               "flex flex-wrap items-center gap-2.5 border-t px-6 py-3 text-sm",

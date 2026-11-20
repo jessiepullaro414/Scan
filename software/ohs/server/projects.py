@@ -12,7 +12,8 @@
 ``project.json`` holds ``{id, name, created, modified, scans: [{id, name, created, mode, status}]}``
 as the contract says, plus ``format_version``, ``ohs_version`` (the engine that wrote it) and per
 scan ``n_frames``, ``duration_s``, ``quality`` (of the last processing), ``error`` (of a failed
-processing) and ``report`` (a compact summary of ``result/report.json``). It is written
+processing) and ``report`` (a compact summary of ``result/report.json``, :func:`report_summary`; since H4 with
+the scan's own calibration status in short, ``health_status: {state, part, reason}``). It is written
 atomically (temporary file + rename), so a crash never leaves half a file.
 
 Ids are filesystem-safe: projects ``<slug of the name>-<4 hex>``, scans ``scan-<local time>``.
@@ -95,6 +96,9 @@ def report_summary(report: dict) -> dict:
     gt = report.get("ground_truth")
     if isinstance(gt, dict):
         out["ground_truth"] = {k: v for k, v in gt.items() if k != "per_frame"}
+    hs = report.get("health_status")  # the scan's own calibration status (H3), in short for its card (H4)
+    if isinstance(hs, dict) and hs.get("state") in ("valid", "check", "recalibrate"):
+        out["health_status"] = {"state": hs["state"], "part": hs.get("part"), "reason": hs.get("reason")}
     return jsonable(out)
 
 

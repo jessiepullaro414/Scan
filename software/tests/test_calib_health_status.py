@@ -397,7 +397,7 @@ def test_the_shape_a_page_can_show_without_logic():
     assert set(s["signs"]) == {"row_error", "laser:vertical", "laser:horizontal", "gyro_jump"}
     # a report's own words, examples: Valid, Check recommended, Recalibration required
     assert health.scan_status(block(), tracking_model="gpu", lines=LINES)["reason"] == (
-        "This scan shows nothing off for the cameras and the lasers and the IMU.")
+        "This scan shows nothing off for the cameras, the lasers and the IMU.")
     assert s["reason"] == ("This scan shows the two cameras slightly out of line: matching points sit 0.25 px apart "
                            "in height (want under 0.15 px).")
 

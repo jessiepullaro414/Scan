@@ -270,6 +270,54 @@ def test_pictures_are_embedded_and_bad_ones_refused_or_left_out(clean):
     err(report(e, "report.pdf"), 404)
 
 
+def test_the_scan_card_keeps_a_short_calibration_status():
+    """FEATURE_PLAN H4: the scan list (``project.json``) keeps the scan's own calibration status in short, for its card:
+    the state, the part and the reason; nothing for a scan without one (processed before H3) or with a broken one."""
+    from ohs.server.projects import report_summary
+
+    status = {"version": 1, "state": "check", "label": "Check recommended", "part": "lasers", "part_label": "Lasers",
+              "reason": "The vertical laser line sits 0.07 mm off the mesh.", "action": {"step": "lasers", "text": "Redo"},
+              "then": None, "reasons": [{"state": "check"}], "parts": {"cameras": "valid", "lasers": "check", "imu": None},
+              "not_judged": ["imu"], "note": None, "provisional": True, "source": "scan", "signs": {"row_error": {}}}
+    out = report_summary({"mode": "markerless", "health": {"version": 1, "row_error": {}}, "health_status": status})
+    assert out["health_status"] == {"state": "check", "part": "lasers", "reason": status["reason"]}
+    assert "health" not in out  # the signs stay in the report
+    assert "health_status" not in report_summary({"mode": "markerless"})
+    for bad in (None, "check", {"state": "fine"}, {"part": "lasers"}):
+        assert "health_status" not in report_summary({"health_status": bad}), bad
+
+
+def test_the_reports_health_is_the_scans_own_status(clean):
+    """FEATURE_PLAN H4: the report's "Health" is what the scan's own ``health_status`` says (state, part, reason), the
+    scan card has its short form, and "Not assessed" stays for a scan without one."""
+    e = clean
+    path = scan_dir(e) / "result" / "report.json"
+    original = path.read_bytes()
+    rep = json.loads(original)
+    s = rep.get("health_status")
+    assert isinstance(s, dict) and s["source"] == "scan", "the tracked scan has its own status (H3)"
+    # the scan card: the short form, where the server writes the processed scan's summary
+    scan = get(f"{e['url']}/api/projects/{e['pid']}").json()["scans"][0]
+    assert scan["result"]["report"]["health_status"] == {"state": s["state"], "part": s["part"], "reason": s["reason"]}
+    assert e["studio"].projects.scan_entry(e["pid"], e["sid"])["report"]["health_status"]["state"] == s["state"]
+    _, p = page(e)
+    cal = p.text("calibration")
+    assert "Not assessed" not in cal and s["label"] in cal and s["reason"] in cal
+    try:
+        given = {**s, "state": "recalibrate", "label": "Recalibration required", "part": "cameras", "part_label": "Cameras",
+                 "reason": "Its left and right images disagree by 0.41 px in height."}
+        path.write_text(json.dumps({**rep, "health_status": given}), encoding="utf-8")
+        _, p = page(e)
+        cal = p.text("calibration")
+        assert "Recalibration required" in cal and "0.41 px in height" in cal and "provisional" in cal
+        assert "0.41 px in height" in p.text("warnings")
+        path.write_text(json.dumps({k: v for k, v in rep.items() if k != "health_status"}), encoding="utf-8")
+        _, p = page(e)
+        assert "Not assessed" in p.text("calibration")
+    finally:
+        path.write_bytes(original)
+
+
 def test_the_features_as_csv_and_json(full):
     before = on_disk(project_dir(full))
     r = report(full, "features.csv")

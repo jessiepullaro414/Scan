@@ -20,8 +20,9 @@ missing, None or empty is left out of the report, not shown empty.
                              # ["calibration"]): "parts" {"stereo" | "lasers" | "imu": {"when", "summary"}
                              # or None}, "modified", "baseline_mm", "lasers_missing"; and beside it
                              # "last_check" ({"when", "ok", "verdict"}, the setup state's) and "health"
-                             # ({"state": "valid" | "check" | "recalibrate", "part", "reason"}: task H3,
-                             # which does not exist yet; without it the report says "Not assessed")
+                             # ({"state": "valid" | "check" | "recalibrate", "part", "reason", and optional
+                             # "not_judged", "note", "provisional", "source"}: the scan's own status,
+                             # report.json's health_status, H3/H4; without it the report says "Not assessed")
      "check": {...},         # ohs.mesh.check.weak_areas(...): the Check answer at one tolerance (the
                              # areas' "faces" are not used)
      "features": {...},      # the scan's kept features: features.json (ohs.measure.features) as kept, or
