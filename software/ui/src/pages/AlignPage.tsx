@@ -53,8 +53,8 @@ import {
   chooseList,
   completePairs,
   flattenPose,
+  cannotMerge,
   hasMesh,
-  hasRecording,
   MAX_SCANS,
   mergeLeftOut,
   mergeNameOf,
@@ -74,6 +74,7 @@ import {
   pickPairOf,
   picksFor,
   poseOf,
+  recordingMark,
   removeAt,
   sameList,
   scanColor,
@@ -537,8 +538,9 @@ export default function AlignPage({
   // ---------------------------------------------------------------- merging
   const defaultName = ready ? mergeNameOf(listScans.map((s) => s!.name)) : "";
   const mergeName = name ?? defaultName;
-  /** A merged scan has no recording: it can be aligned to, not merged again. */
-  const noRecording = listScans.find((s) => s && !hasRecording(s)) ?? null;
+  /** A merged scan, or one that keeps its result only (R2), has no recording: it can be aligned to, not merged. */
+  const noRecording = listScans.find((s) => s && cannotMerge(s, several)) ?? null;
+  const noMerge = noRecording ? cannotMerge(noRecording, several) : null;
   const unplacedNames = multi ? list.filter((id) => multi.unplaced.includes(id)).map(nameOf) : [];
   /** Two scans: whether a merge is offered at all (not on a pose the engine was not sure of, unless chosen or picked). */
   const offer = result ? mergeOffer(result, chosenPose) : null;
@@ -761,7 +763,7 @@ export default function AlignPage({
                         {scans.map((s) => (
                           <option key={s.id} value={s.id}>
                             {s.name}
-                            {hasRecording(s) ? "" : " (merged)"}
+                            {recordingMark(s)}
                           </option>
                         ))}
                       </Select>
@@ -778,7 +780,7 @@ export default function AlignPage({
                   {scans.map((s) => (
                     <option key={s.id} value={s.id}>
                       {s.name}
-                      {hasRecording(s) ? "" : " (merged)"}
+                      {recordingMark(s)}
                     </option>
                   ))}
                 </Select>
@@ -793,7 +795,7 @@ export default function AlignPage({
                   {scans.map((s) => (
                     <option key={s.id} value={s.id}>
                       {s.name}
-                      {hasRecording(s) ? "" : " (merged)"}
+                      {recordingMark(s)}
                     </option>
                   ))}
                 </Select>
@@ -1084,11 +1086,9 @@ export default function AlignPage({
                 ? "Align the scans first. The merge puts each scan where the alignment placed it."
                 : "Align the two scans first. The merge puts the second scan where the alignment found it."}
             </p>
-          ) : noRecording ? (
-            <Callout tone="neutral" icon={Combine} title={`“${noRecording.name}” cannot be merged again`}>
-              {several
-                ? "It is a merged scan and has no recording of its own. You can align to it and compare the scans here; to merge, remove it from the list or choose scans that were recorded."
-                : "It is a merged scan and has no recording of its own. You can align to it and compare the two here; to merge, choose two scans that were recorded."}
+          ) : noMerge ? (
+            <Callout tone="neutral" icon={Combine} title={noMerge.title}>
+              {noMerge.text}
             </Callout>
           ) : offer && !offer.offered ? (
             <p className="flex items-start gap-1.5 text-sm leading-5 text-muted">

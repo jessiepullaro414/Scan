@@ -245,6 +245,13 @@ export class MockAlign {
     const the = what ? `the ${what} scan` : "the scan";
     if (s.status === "recording" || s.status === "processing") this.host.fail(409, `${the} "${s.name}" is busy`, "wait until it has finished, then try again");
     if (s.status !== "processed" || !s.result) this.host.fail(409, `${the} "${s.name}" has no mesh yet`, "make its mesh on the project page first");
+    if (needRecording && s.keep === "standard" && s.has_recording === false)
+      // R2: removed to free space (the engine's words, ohs/server/aligning.py)
+      this.host.fail(
+        409,
+        `${the} "${s.name}" has no recording: it was removed to free space (the scan keeps its result only)`,
+        "merge scans that still have their recordings; this one can still be aligned, edited, measured and exported",
+      );
     if (needRecording && s.merged_from?.length)
       this.host.fail(409, `${the} "${s.name}" has no recording (a merged scan, or its recording was removed)`, "merge scans that still have their recordings");
     return s;

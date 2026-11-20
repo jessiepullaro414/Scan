@@ -212,16 +212,28 @@ export class MockSetup {
           ? step("imu", "optional", "Needs the Pico's IMU")
           : step("imu", "todo", ps ? "Not calibrated yet" : "Needs the stereo calibration first"),
     );
-    const lc = d.lastCheck;
-    const drift = this.launch?.state === "drift";
+    // the step's own state, as the engine gives it (ohs/server/setup.py): the last 2-minute check, never the launch
+    // check's drift, which the calibration's status says (H4)
+    const lc = this.lastCheckOf(d);
     out.push(
-      drift
-        ? step("check", "warn", "The launch check found drift: run the check", this.launch?.when ?? null)
-        : lc
-          ? step("check", lc.ok ? "done" : "warn", lc.verdict, lc.when)
-          : step("check", "optional", ps ? "Run it any time, e.g. before an important scan" : "Needs a calibration"),
+      lc
+        ? step("check", lc.ok ? "done" : "warn", lc.verdict, lc.when)
+        : step("check", "optional", ps ? "Run it any time, e.g. before an important scan" : "Needs a calibration"),
     );
     return out;
+  }
+
+  /** `?health=failed`: a 2-minute check that did not pass two days ago, until a check is run in the demo. */
+  private readonly failedCheck = {
+    when: new Date(Date.now() - 2 * 86_400_000).toISOString().replace(/\.\d+Z$/, "+00:00"),
+    ok: false,
+    verdict: "The cameras have moved: redo the camera calibration",
+  };
+
+  private lastCheckOf(d: TargetData) {
+    if (d.lastCheck || this.host.health !== "failed") return d.lastCheck;
+    // as the engine: a check from before the last save does not count
+    return d.modified && Date.parse(d.modified) > Date.parse(this.failedCheck.when) ? null : this.failedCheck;
   }
 
   state(): SetupState {
@@ -250,14 +262,14 @@ export class MockSetup {
       print_check: t === "sim" ? null : d.printCheck,
       board: this.board(),
       launch_check: this.launch,
-      last_check: d.lastCheck,
+      last_check: this.lastCheckOf(d),
       // H3: the launch check counts on the camera and the simulator, never on a replay (it is null then). The mock's
       // simulator scans with its true calibration before its wizard was run, so its status shows from the start.
       calibration_health: mockSetupHealth({
         stereo: !!d.parts.stereo || (t === "sim" && this.host.device().calibration.loaded),
         option: this.host.health,
         launch: this.launch,
-        lastCheck: d.lastCheck,
+        lastCheck: this.lastCheckOf(d),
       }),
     };
   }

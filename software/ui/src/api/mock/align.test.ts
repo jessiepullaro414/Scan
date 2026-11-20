@@ -301,6 +301,18 @@ check(
 r = refused(() => mock.merge(p, { target: "top", source: mergedId, T: IDENTITY }));
 check(r?.status === 409 && /^the second scan "Whole bracket" has no recording/.test(r.detail), "whichever of the two it is");
 check(refused(() => mock.align(p, { target: mergedId, source: "top" })) === null, "another scan can be aligned to a merged scan");
+// R2: a scan that keeps its result only can be aligned, not merged (the engine's words, ohs/server/aligning.py)
+const topScan = p.scans.find((x) => x.id === "top")!;
+topScan.keep = "standard";
+topScan.has_recording = false;
+r = refused(() => mock.merge(p, { target: "under", source: "top", T: IDENTITY }));
+check(
+  r?.status === 409 && r.detail === 'the second scan "Bracket top" has no recording: it was removed to free space (the scan keeps its result only)',
+  `a result-only scan is not merged: ${r?.detail}`,
+);
+check(refused(() => mock.align(p, { target: "under", source: "top" })) === null, "a result-only scan can still be aligned");
+topScan.keep = "full";
+topScan.has_recording = true;
 
 // a failed merge tells in the log that nothing changed
 logs.length = 0;

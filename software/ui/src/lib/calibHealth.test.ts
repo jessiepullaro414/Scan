@@ -2,10 +2,12 @@
  * Checks for the calibration's status in words (FEATURE_PLAN H4; `npm test`). Plain TypeScript that Node runs as it is
  * (type stripping), no test framework: a failed check throws.
  */
-import type { CalibHealth, DeviceState, SetupState } from "../api/types.ts";
+import type { CalibHealth, DeviceState, SetupState, SetupStep } from "../api/types.ts";
 import {
   deviceHealth,
+  headerHealthButton,
   healthView,
+  overviewStep,
   PROVISIONAL,
   scanHealthDetail,
   scanHealthLine,
@@ -163,5 +165,33 @@ check(dn.lines[0] === "Not judged in this scan: the lasers and the IMU.", `scan 
 const dc = scanHealthDetail({ health_status: { state: "recalibrate", part: "cameras", reason: "Its rows disagree by 0.41 px." } })!;
 check(dc.tone === "danger" && dc.headline === "Scanned with a calibration that needed recalibrating (cameras)", `recalibrate detail: ${dc.headline}`);
 check(dc.lines.length === 1 && dc.lines[0] === PROVISIONAL, "the short form: the provisional line only");
+
+// ---------------------------------------------------------------- one button, one fact
+// the header's button beside the device chip: not on a page that shows the line with its own button
+check(!headerHealthButton("scan") && !headerHealthButton("device"), "Scan and Device pages: the line's button only");
+for (const r of ["home", "project", "viewer", "process", "align", "setup", "settings", "calibrate", "notfound"] as const) check(headerHealthButton(r), `the header's button on ${r}`);
+
+// the setup overview's Check card: when the strip already says what the check found, the card says it no more
+const stepOf = (state: SetupStep["state"], summary: string): SetupStep => ({ id: "check", state, summary, when: "2026-11-17T10:00:00+00:00" });
+const FAILED: CalibHealth = {
+  ...RECAL_CAMERAS,
+  part: null,
+  reason: "The last 2-minute check did not pass (2 days ago): the cameras have moved.",
+  action: { step: "check", text: "Run the 2-minute check again and follow what it says" },
+  then: null,
+  reasons: [{ state: "recalibrate", source: "board_check", part: null, reason: "The last 2-minute check did not pass (2 days ago): the cameras have moved.", action: null, then: null, kind: "board_check_failed", value: null }],
+};
+const failedCard = stepOf("warn", "The last check failed (2 days ago): the cameras have moved");
+const fc = overviewStep(failedCard, FAILED);
+check(fc.summary === "" && fc.state === "warn" && fc.when === failedCard.when, `a failed check said by the strip: the card's own words: ${fc.summary}`);
+const DRIFT: CalibHealth = { ...RECAL_CAMERAS, reasons: [{ state: "recalibrate", source: "launch_check", part: "cameras", reason: RECAL_CAMERAS.reason, action: RECAL_CAMERAS.action, then: RECAL_CAMERAS.then, kind: "launch_drift", value: 1.38 }] };
+const driftCard = stepOf("warn", "The launch check found drift: run the check");
+check(overviewStep(driftCard, DRIFT).summary === "", "the launch check's drift said by the strip: not again on the card");
+check(overviewStep(failedCard, VALID) === failedCard, "a valid status says nothing of it: the card keeps its words");
+check(overviewStep(failedCard, null) === failedCard, "no status (an older engine): the card keeps its words");
+check(overviewStep(failedCard, CHECK_LASERS) === failedCard, "a status about something else: the card keeps its words");
+check(overviewStep(stepOf("done", "Calibration verified, 2 days ago"), DRIFT).summary === "Calibration verified, 2 days ago", "a passed check is its own fact");
+check(overviewStep({ ...failedCard, id: "stereo" }, FAILED).summary === failedCard.summary, "only the Check card");
+check(overviewStep(stepOf("warn", "The last check failed (2 days ago): x"), DRIFT).summary !== "", "a drift does not hide a failed check");
 
 console.log(`calibHealth.test: ${checks} checks passed`);

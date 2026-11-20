@@ -6,8 +6,9 @@
  * laser off: Check recommended, lasers), `health=recalibrate` (they found the cameras' rows off: Recalibration
  * required, cameras), `health=cpu` (scans processed without a GPU: Valid, with the lasers and the IMU not judged and
  * the note why), `health=old` (the last 2-minute check is 20 days old: Check recommended for the calibration as a
- * whole). Without it the status follows the mock: `drift=1` (the launch check's drift), a failed 2-minute check, else
- * Valid for what was looked at.
+ * whole), `health=failed` (a 2-minute check that did not pass two days ago, mock/setup.ts: Recalibration required, until a
+ * check is run in the demo). Without it the status follows the mock: `drift=1` (the launch check's drift), a failed
+ * 2-minute check, else Valid for what was looked at.
  */
 import type { MockHealth } from "../backend";
 import type { CalibHealth, HealthAction, HealthPart, HealthReason, HealthState, LaunchCheck, ScanHealthSummary } from "../types";

@@ -26,10 +26,10 @@ function detectMock(): boolean {
 export const MOCK = detectMock();
 
 /** `lasers`: the line lasers the demo starts with (`?lasers=4`: the 4-laser build; else the two standard ones).
- * `health`: the calibration's status the demo shows (`?health=check|recalibrate|cpu|old`, mock/health.ts; else it follows the demo). */
+ * `health`: the calibration's status the demo shows (`?health=check|recalibrate|cpu|old|failed`, mock/health.ts; else it follows the demo). */
 export type MockOptions = { empty: boolean; fast: boolean; drift: boolean; nopico: boolean; lasers: 2 | 4; health: MockHealth };
-export type MockHealth = "check" | "recalibrate" | "cpu" | "old" | null;
-const HEALTH_OPTIONS: MockHealth[] = ["check", "recalibrate", "cpu", "old"];
+export type MockHealth = "check" | "recalibrate" | "cpu" | "old" | "failed" | null;
+const HEALTH_OPTIONS: MockHealth[] = ["check", "recalibrate", "cpu", "old", "failed"];
 
 let ready: Promise<void> | null = null;
 

@@ -56,6 +56,7 @@ import { scanHealthDetail, scanHealthOf } from "../lib/calibHealth";
 import { downloadFile } from "../lib/download";
 import { decodeFaces, fitLabel, fitName, regionTriangles, summarizeRegion, type RegionSummary } from "../lib/fits";
 import { fileStem, fmtBytes, fmtCompact, fmtDateTime, fmtDuration, fmtFixed, fmtInt, fmtPct } from "../lib/format";
+import { remakeBlock } from "../lib/keepMode";
 import { hasLaserValues } from "../lib/lasers";
 import { axisOrder, deltaOf, fmtVec, pointToPart, readFrame } from "../lib/partFrame";
 import { href, navigate, paths } from "../lib/router";
@@ -785,7 +786,7 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
             <ProgressBar value={null} />
           ) : (
             <div className="flex flex-wrap items-center gap-2">
-              <MakeMeshButton projectId={pid} scan={scan} variant="primary" size="md" />
+              <MakeMeshButton projectId={pid} scan={scan} variant="primary" size="md" blocked={remakeBlock(scan)} />
               {scan.status !== "recording" ? <ProcessButton projectId={pid} scan={scan} variant="ghost" size="md" label="Step by step…" /> : null}
             </div>
           )}
@@ -804,7 +805,7 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
             <Button variant="primary" icon={RefreshCw} onClick={() => setReloadKey((k) => k + 1)}>
               Try again
             </Button>
-            <MakeMeshButton projectId={pid} scan={scan} label="Rebuild the mesh" />
+            <MakeMeshButton projectId={pid} scan={scan} label="Rebuild the mesh" blocked={remakeBlock(scan)} />
           </>
         }
       >
@@ -1382,9 +1383,11 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
                 Units: mm. STL for CAD and slicers.
                 {partFrame ? ` STL and PLY are in the scan's frame unless "in the part's frame".${partFrame.out_of_date ? " The coordinate system is out of date." : ""}` : ""}
               </span>
-              <MakeMeshButton projectId={project.id} scan={scan} label="Remake" variant="ghost" size="xs" />
+              {/* R2: a scan without its recording cannot be made again: the reason instead of the button (lib/keepMode.ts) */}
+              {remakeBlock(scan) ? null : <MakeMeshButton projectId={project.id} scan={scan} label="Remake" variant="ghost" size="xs" />}
             </div>
           ) : null}
+          {hasResult && scan && remakeBlock(scan) ? <p className="mt-2 text-xs text-subtle">{remakeBlock(scan)}</p> : null}
         </Panel>
 
         <Panel title="Processing report" icon={FileText}>

@@ -47,6 +47,7 @@ import { EmptyState, Kbd, ProgressBar, Skeleton, Spinner } from "../components/u
 import { Segmented, Slider } from "../components/ui/Form";
 import { Callout } from "../components/ui/Layout";
 import { fileStem, fmtBytes, fmtDateTime, fmtDuration, fmtInt } from "../lib/format";
+import { remakeBlock } from "../lib/keepMode";
 import { hasLaserValues } from "../lib/lasers";
 import { href, navigate, paths } from "../lib/router";
 import { cn, isModalOpen, isTypingTarget, useHotkeys } from "../lib/util";
@@ -459,7 +460,10 @@ export default function ProcessPage({ pid, sid }: { pid: string; sid: string }) 
           ) : working ? (
             <ProgressBar value={null} label="Processing progress" />
           ) : scan && scan.status !== "recording" ? (
-            <MakeMeshButton projectId={pid} scan={scan} variant="primary" size="md" />
+            <>
+              <MakeMeshButton projectId={pid} scan={scan} variant="primary" size="md" blocked={remakeBlock(scan)} />
+              {remakeBlock(scan) ? <p className="mt-2 text-xs text-subtle">{remakeBlock(scan)}</p> : null}
+            </>
           ) : null}
         </div>
       </div>
@@ -531,7 +535,7 @@ export default function ProcessPage({ pid, sid }: { pid: string; sid: string }) 
         </Panel>
       ) : null}
       <DownloadPanel pid={pid} sid={sid} stem={stem} ready={!!state?.current} />
-      {state ? <RecipesPanel pid={pid} sid={sid} state={state} busy={busy} /> : null}
+      {state ? <RecipesPanel pid={pid} sid={sid} state={state} busy={busy} scan={scan} /> : null}
       <div className="space-y-1.5 px-4 py-3 text-[11px] leading-5 text-subtle">
         <div>
           <Waypoints size={12} className="mr-1 inline" aria-hidden />
@@ -617,7 +621,7 @@ export default function ProcessPage({ pid, sid }: { pid: string; sid: string }) 
 
         {state ? (
           <>
-            <StagesPanel pid={pid} sid={sid} state={state} busy={busy} />
+            <StagesPanel pid={pid} sid={sid} state={state} busy={busy} scan={scan} />
             <EditsPanel
               pid={pid}
               sid={sid}

@@ -787,9 +787,12 @@ rotation the tracker finds against the gyro's (`jump_deg`) is not saved.
     cameras, the lasers and the IMU." In the demo: "Recalibrate" on the chip, "Redo the
     cameras" opens the Stereo step, the Scan page shows the line and Start scan stays
     enabled, and a scan's row shows the amber line with its reason.
-  - **Left:** on the Scan page the button shows twice (header and line); the Setup step card
-    "Check" may repeat the launch check's drift beside the strip; scans processed between
-    H3 and H4 have no row line until they are processed again (their report shows it).
+  - **Tidied the same day:** the button shows once (the Scan and Device pages keep their
+    line with its button, and the header drops its button there); the Setup overview's
+    Check card no longer repeats a failed 2-minute check or the launch check's drift beside
+    the strip (the drift wording had come from the demo only).
+  - **Left:** scans processed between H3 and H4 have no row line until they are processed
+    again (their report shows it).
 
 ### H5. Limits from the real scanner **(hw)**
 The simulator has no warm-up, no knocks and no loose screws. The limits of H2 are provisional
@@ -909,10 +912,16 @@ have not been measured (roadmap question 9).
     116,902,779 bytes, its row went from 167.1 MB to 55.7 MB, and afterwards an edit and its
     undo worked, the mesh downloaded, and Make mesh, Track and Refine were refused with the
     words above.
-  - **Left:** the Process page and the viewer still offer stage actions on a freed scan
-    (the server refuses them); the Align page does not mark a "result only" scan; the move
-    holds the app's main lock while it removes files (seconds for gigabytes); Refine with
-    lasers on a "result only" scan, from the kept laser points, would be a new behaviour.
+  - **Tidied the same day:** the Process page, its recipes and the viewer disable what a
+    freed or merged scan cannot run, with one sentence beside it saying why and what brings
+    it back (`ui/src/lib/keepMode.ts`, `stageBlock`); after "recording and result", Track or
+    Make mesh opens the other stages again (a stage counts as on disk when it finished
+    after the last freeing). The Align page marks a "result only" scan and says before a
+    merge why it cannot be merged.
+  - **Left:** the Check answer's "Make the mesh again" button is still offered on a freed
+    scan; the move holds the app's main lock while it removes files (seconds for
+    gigabytes); Refine with lasers on a "result only" scan, from the kept laser points,
+    would be a new behaviour; in the demo a freed scan's row keeps its old size.
 - **What:** the three modes, as what a scan keeps:
   - **Full:** everything, as today.
   - **Engineering:** the recording, and the result. Stage folders and the undo cache are removed

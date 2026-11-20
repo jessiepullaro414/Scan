@@ -8,8 +8,8 @@
  * provisional until the real scanner is measured (H5), said once where the detail is shown; colour is never the only
  * signal (each tone comes with its words, and the pages add an icon).
  */
-import type { CalibHealth, DeviceState, HealthAction, HealthPart, HealthState, ScanHealthSummary, SetupState } from "../api/types";
-import type { SetupPage } from "./router";
+import type { CalibHealth, DeviceState, HealthAction, HealthPart, HealthState, ScanHealthSummary, SetupState, SetupStep } from "../api/types";
+import type { RouteName, SetupPage } from "./router";
 
 export const STATES: HealthState[] = ["valid", "check", "recalibrate"];
 export const STATE_WORDS: Record<HealthState, string> = { valid: "Valid", check: "Check recommended", recalibrate: "Recalibration required" };
@@ -102,6 +102,33 @@ export function deviceHealth(device: DeviceState | null | undefined, setup: Setu
   const target = device.source === "camera" ? "device" : device.source === "sim" ? "sim" : null;
   if (!target || setup.target !== target) return null;
   return setup.calibration_health ?? null;
+}
+
+// ------------------------------------------------------------------ one button, one fact
+/** The pages that show the status's line with its own button (`CalibHealthCallout`): the Scan and Device pages. */
+const PAGES_WITH_LINE: RouteName[] = ["scan", "device"];
+
+/**
+ * Whether the header shows the status's button beside the device chip. Not on a page that shows the line: the line
+ * says why (the engine's sentence) and has the same button, so the header's would only repeat it. The chip keeps its
+ * word and icon everywhere.
+ */
+export function headerHealthButton(route: RouteName): boolean {
+  return !PAGES_WITH_LINE.includes(route);
+}
+
+/**
+ * The setup overview's step card as it is shown beside the status strip: when the strip already says what the
+ * 2-minute check found (a failed check) or the launch check's drift, the Check card does not say it again: its summary
+ * is left out and the card shows its own description, its state and its date. Everything else is shown as the engine
+ * gives it.
+ */
+export function overviewStep(step: SetupStep, health: CalibHealth | null | undefined): SetupStep {
+  if (step.id !== "check" || step.state !== "warn" || !health || health.state === "valid" || !isState(health.state)) return step;
+  const said = (health.reasons ?? []).some(
+    (r) => r.source === "board_check" || (r.source === "launch_check" && /launch check/i.test(step.summary)),
+  );
+  return said ? { ...step, summary: "" } : step;
 }
 
 // ------------------------------------------------------------------ a scan's own status

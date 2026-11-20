@@ -17,7 +17,12 @@ import {
   projectDoneLines,
   projectPlanLines,
   removeLines,
+  remakeBlock,
+  stageBlock,
   writeLines,
+  BLOCK,
+  type StageAction,
+  type StagesLite,
 } from "./keepMode.ts";
 
 let checks = 0;
@@ -150,5 +155,74 @@ const pd = projectDoneLines({
 });
 check(pd.text === "Freed 296.0 MB on 2 scans.", `project done: ${pd.text}`);
 check(pd.failed.length === 1 && pd.failed[0].startsWith("D: this scan is busy"), "only real refusals are listed");
+
+// ---------------------------------------------------------------- what a freed scan can still run (Process page, viewer)
+// The engine's rules (ohs/server/processing.py): Make mesh, Track and a recipe on "everything" read the frames;
+// Straighten, Fuse and Refine from the images read the frames and the Track stage's files; Refine with lasers reads
+// only the base stage's mesh. Freeing removes the stage files but leaves the stages "done" in the record, so a stage's
+// files are on disk again only when it finished after the last freeing.
+const ALL: StageAction[] = ["make_mesh", "track", "straighten", "fuse", "spacetime", "refine", "recipe_all"];
+const FREED_AT = "2026-11-19T10:00:00+00:00";
+const st = (when: Partial<Record<"track" | "straighten" | "fuse" | "spacetime" | "refine", string | null>>, base: "track" | "straighten" | "fuse" | "spacetime" | "refine" = "straighten", refineSource: "track" | "straighten" | "fuse" | "spacetime" | null = null): StagesLite => {
+  const s = (id: keyof typeof when) => ({ state: when[id] ? ("done" as const) : ("none" as const), when: when[id] ?? null });
+  return {
+    stages: { track: s("track"), straighten: s("straighten"), fuse: s("fuse"), spacetime: s("spacetime"), refine: { ...s("refine"), source: refineSource } },
+    base: { stage: base },
+  };
+};
+const before = "2026-11-18T09:00:00+00:00";
+const after = "2026-11-19T10:05:00+00:00";
+const madeBefore = st({ track: before, straighten: before });
+const full = { keep: "full" as const, has_recording: true };
+for (const a of ALL) check(stageBlock(full, madeBefore, a) === null, `a scan that keeps everything can run ${a}`);
+check(stageBlock({}, madeBefore, "fuse") === null, "an older engine (no keep fields): nothing is blocked");
+
+// recording and result: the stages are gone, the recording stays
+const eng = { keep: "engineering" as const, has_recording: true, freed: [{ when: FREED_AT, keep: "engineering" as const, bytes: 1 }] };
+for (const a of ["make_mesh", "track", "recipe_all"] as const) check(stageBlock(eng, madeBefore, a) === null, `recording and result: ${a} still runs`);
+for (const a of ["straighten", "fuse", "spacetime", "refine"] as const)
+  check(stageBlock(eng, madeBefore, a) === BLOCK.stagesGone, `recording and result: ${a} needs the stage files: ${stageBlock(eng, madeBefore, a)}`);
+check(BLOCK.stagesGone === "The stage files this needs were removed to free space. Make mesh, or Track, builds them again from the recording.", `stage files words: ${BLOCK.stagesGone}`);
+// Track (or Make mesh) after the freeing rebuilds the stage files: the other stages run again
+const retracked = st({ track: after, straighten: before }, "track");
+for (const a of ALL) check(stageBlock(eng, retracked, a) === null, `tracked again since: ${a} runs: ${stageBlock(eng, retracked, a)}`);
+// a refinement of a stage made again since is fine; of one from before the freeing it is not
+check(stageBlock(eng, st({ track: after, straighten: after }, "straighten"), "refine") === null, "refine: its source made again");
+check(stageBlock(eng, st({ track: after, refine: before, straighten: before }, "refine", "straighten"), "refine") === BLOCK.stagesGone, "refine: a refined base whose source is from before");
+check(stageBlock(eng, st({ track: after, refine: after }, "refine", "track"), "refine") === null, "refine: a refined base of a new track");
+// the latest freeing counts, and a freeing with no date blocks nothing (the engine then says it)
+const twice = { ...eng, freed: [{ when: "2026-11-01T10:00:00+00:00", keep: "engineering" as const, bytes: 1 }, { when: FREED_AT, keep: "engineering" as const, bytes: 1 }] };
+check(stageBlock(twice, st({ track: "2026-11-05T10:00:00+00:00" }, "track"), "fuse") === BLOCK.stagesGone, "tracked between two freeings: gone again");
+check(stageBlock({ ...eng, freed: [] }, madeBefore, "fuse") === null, "no date of the freeing: not blocked");
+check(stageBlock(eng, null, "fuse") === null && stageBlock(eng, null, "make_mesh") === null, "no process state yet: only the recording decides");
+// not tracked at all: the page's own "Run Track first" says it, not this
+check(stageBlock(eng, st({}), "straighten") === null, "never tracked: not this rule's to say");
+
+// result only: nothing that reads the frames, and the stage files never come back
+const resOnly = { keep: "standard" as const, has_recording: false, freed: [{ when: FREED_AT, keep: "standard" as const, bytes: 1 }] };
+for (const a of ["make_mesh", "track", "straighten", "fuse", "spacetime", "recipe_all"] as const)
+  check(stageBlock(resOnly, madeBefore, a) === BLOCK.resultOnly, `result only: ${a} needs the recording: ${stageBlock(resOnly, madeBefore, a)}`);
+check(stageBlock(resOnly, madeBefore, "refine") === BLOCK.resultOnlyStages, `result only: refine needs stage files: ${stageBlock(resOnly, madeBefore, "refine")}`);
+check(BLOCK.resultOnly === "This scan's recording was removed to free space (it keeps its result only). Only a new scan of the part can make the mesh again.", `result only words: ${BLOCK.resultOnly}`);
+check(BLOCK.resultOnlyStages === "The stage files this needs were removed to free space (this scan keeps its result only). Only a new scan of the part can bring them back.", `result only stage words: ${BLOCK.resultOnlyStages}`);
+check(stageBlock({ keep: "standard", freed: resOnly.freed }, madeBefore, "track") === BLOCK.resultOnly, "result only, has_recording not sent: still no recording");
+
+// a merged scan has no recording of its own (Refine with lasers needs none)
+const merged = { merged_from: [{ id: "a", name: "A" }], keep: "full" as const, has_recording: false };
+for (const a of ["make_mesh", "track", "straighten", "fuse", "spacetime", "recipe_all"] as const) check(stageBlock(merged, madeBefore, a) === BLOCK.merged, `merged: ${a}`);
+check(stageBlock(merged, madeBefore, "refine") === null, "merged: refine with lasers still runs");
+check(BLOCK.merged === "This scan was merged from other scans and has no recording of its own. Merge those scans again to make it again.", `merged words: ${BLOCK.merged}`);
+// the engine's order: "keeps its result only" first
+check(stageBlock({ ...merged, keep: "standard", freed: resOnly.freed }, madeBefore, "track") === BLOCK.resultOnly, "a merged scan freed to its result only");
+// a recording missing for another reason
+check(stageBlock({ keep: "full", has_recording: false }, madeBefore, "make_mesh") === BLOCK.noRecording, "no recording on disk");
+check(BLOCK.noRecording === "This scan has no recording. Record the part again to make a new mesh.", `no recording words: ${BLOCK.noRecording}`);
+// every sentence is plain: one or two short sentences, says why and what brings it back
+for (const [k, s] of Object.entries(BLOCK)) check(/^[A-Z].*\.$/.test(s) && s.split(". ").length <= 2 && !/retention|mode|409/i.test(s), `plain words: ${k}`);
+
+// the Make mesh / Remake buttons (project page, viewer, Process page): the same rule as make_mesh
+check(remakeBlock(full) === null && remakeBlock(eng) === null, "remake: a scan with its recording");
+check(remakeBlock(resOnly) === BLOCK.resultOnly && remakeBlock(merged) === BLOCK.merged, "remake: no recording");
+for (const s of [full, eng, resOnly, merged, {}]) check((remakeBlock(s) === null) === canRemake(s), "remakeBlock agrees with canRemake");
 
 console.log(`keepMode.test: ${checks} checks passed`);

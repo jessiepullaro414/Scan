@@ -26,6 +26,41 @@ export const hasMesh = (s: Pick<Scan, "status" | "result">): boolean => s.status
 /** A merged scan has no recording of its own: no new mesh from the frames, and no merging again. */
 export const hasRecording = (s: Pick<Scan, "merged_from">): boolean => !s.merged_from?.length;
 
+type RecordingFields = Pick<Scan, "merged_from" | "keep" | "has_recording">;
+
+/** Why the scan has no frames to merge, in the engine's order (`ohs/server/aligning.py`), or null when it has them. */
+function noRecordingKind(s: RecordingFields): "result_only" | "merged" | "missing" | null {
+  if (s.keep === "standard") return "result_only"; // R2: removed to free space
+  if (s.merged_from?.length) return "merged";
+  if (s.has_recording === false) return "missing";
+  return null;
+}
+
+const MARK = { result_only: " (result only)", merged: " (merged)", missing: " (no recording)" } as const;
+
+/** The mark after a scan's name in the Align page's lists: "" for a scan that can be merged. */
+export function recordingMark(s: RecordingFields): string {
+  const k = noRecordingKind(s);
+  return k ? MARK[k] : "";
+}
+
+/**
+ * Why the scan cannot be merged (it can still be aligned), said before a merge is started, or null. `several`: the
+ * page with three or more scans, where the scan can be taken off the list.
+ */
+export function cannotMerge(s: RecordingFields & { name?: string }, several: boolean): { title: string; text: string } | null {
+  const k = noRecordingKind(s);
+  if (!k) return null;
+  const name = s.name ?? "This scan";
+  const tail = several
+    ? "You can align to it and compare the scans here; to merge, remove it from the list or choose scans that"
+    : "You can align to it and compare the two here; to merge, choose two scans that";
+  if (k === "merged")
+    return { title: `“${name}” cannot be merged again`, text: `It is a merged scan and has no recording of its own. ${tail} were recorded.` };
+  const why = k === "result_only" ? "Its recording was removed to free space (the scan keeps its result only)." : "Its recording is not on disk.";
+  return { title: `“${name}” cannot be merged`, text: `${why} ${tail} still have their recordings.` };
+}
+
 /** "Merged from Bracket top + Bracket underside", or null for an ordinary scan. */
 export function mergedFromText(s: Pick<Scan, "merged_from">): string | null {
   const from = s.merged_from;

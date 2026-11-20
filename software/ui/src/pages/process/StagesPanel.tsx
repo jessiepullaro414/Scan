@@ -6,12 +6,13 @@
  */
 import { Crosshair, Images, Layers, Play, RotateCcw, Spline, Waypoints, type LucideIcon } from "lucide-react";
 import { useState, type ReactNode } from "react";
-import type { Job, ProcessQuality, ProcessState, StageId, StageInfo } from "../../api/types";
+import type { Job, ProcessQuality, ProcessState, Scan, StageId, StageInfo } from "../../api/types";
 import { JobProgress } from "../../components/ScanBits";
 import { Button } from "../../components/ui/Button";
 import { ConfirmDialog } from "../../components/ui/Dialog";
 import { Segmented } from "../../components/ui/Form";
 import { fmtDateTime, fmtFixed, fmtInt, fmtRelative } from "../../lib/format";
+import { stageBlock, type StageAction } from "../../lib/keepMode";
 import { QUALITIES, QUALITY_TEXT, normalizeQuality, qualityName } from "../../lib/quality";
 import { cn } from "../../lib/util";
 import { isActive, useJobs } from "../../store/jobs";
@@ -19,6 +20,9 @@ import { useProcess } from "../../store/process";
 import { Help, Panel, StageBadge } from "./bits";
 
 export const VOXELS = [0.5, 1, 2] as const;
+
+/** What the stages read of the scan: what it keeps on disk (R2) and whether it was merged. */
+type KeepFields = Pick<Scan, "keep" | "freed" | "has_recording" | "merged_from">;
 
 const STAGES: Record<StageId, { label: string; icon: LucideIcon; what: string }> = {
   track: { label: "Track", icon: Waypoints, what: "Follows the scanner through the recording and fuses the depth into a mesh." },
@@ -126,8 +130,10 @@ function StageCard({
   );
 }
 
-export function StagesPanel({ pid, sid, state, busy }: { pid: string; sid: string; state: ProcessState; busy: boolean }) {
+export function StagesPanel({ pid, sid, state, busy, scan }: { pid: string; sid: string; state: ProcessState; busy: boolean; scan?: KeepFields }) {
   const runStage = useProcess((s) => s.runStage);
+  // R2: what a freed (or merged) scan can no longer run, in the same words as the engine's refusals (lib/keepMode.ts)
+  const gone = (a: StageAction) => (scan ? stageBlock(scan, state, a) : null);
   const { track, straighten, fuse, spacetime, refine } = state.stages;
   const [quality, setQuality] = useState<ProcessQuality>(normalizeQuality(track.quality) ?? "standard");
   const [voxel, setVoxel] = useState<number>(fuse.voxel_mm ?? 1);
@@ -172,7 +178,7 @@ export function StagesPanel({ pid, sid, state, busy }: { pid: string; sid: strin
           stage={track}
           state={state}
           busy={busy}
-          blocked={null}
+          blocked={gone("track")}
           runLabel={track.state === "none" ? "Run Track" : "Re-run"}
           onRun={() => go("track", () => runStage(pid, sid, "track", { quality }))}
           details={
@@ -193,7 +199,7 @@ export function StagesPanel({ pid, sid, state, busy }: { pid: string; sid: strin
             size="sm"
             value={quality}
             onChange={setQuality}
-            disabled={busy}
+            disabled={busy || !!gone("track")}
             options={QUALITIES.map((q) => ({ value: q, label: QUALITY_TEXT[q].short, title: `${QUALITY_TEXT[q].label}: ${QUALITY_TEXT[q].help}` }))}
           />
         </StageCard>
@@ -203,7 +209,7 @@ export function StagesPanel({ pid, sid, state, busy }: { pid: string; sid: strin
           stage={straighten}
           state={state}
           busy={busy}
-          blocked={tracked ? null : "Run Track first"}
+          blocked={gone("straighten") ?? (tracked ? null : "Run Track first")}
           runLabel={straighten.state === "none" ? "Straighten" : "Re-run"}
           onRun={() => go("straighten", () => runStage(pid, sid, "straighten"))}
           details={straightenDetails}
@@ -214,7 +220,7 @@ export function StagesPanel({ pid, sid, state, busy }: { pid: string; sid: strin
           stage={fuse}
           state={state}
           busy={busy}
-          blocked={tracked ? null : "Run Track first"}
+          blocked={gone("fuse") ?? (tracked ? null : "Run Track first")}
           runLabel={fuse.state === "none" ? "Fuse" : "Re-run"}
           onRun={() => go("fuse", () => runStage(pid, sid, "fuse", { voxel_mm: voxel }))}
           details={
@@ -230,7 +236,7 @@ export function StagesPanel({ pid, sid, state, busy }: { pid: string; sid: strin
             size="sm"
             value={String(voxel)}
             onChange={(v) => setVoxel(Number(v))}
-            disabled={busy || !tracked}
+            disabled={busy || !tracked || !!gone("fuse")}
             options={VOXELS.map((v) => ({ value: String(v), label: `${v} mm`, title: v === 0.5 ? "Finest detail, about 4× the triangles of 1 mm" : v === 1 ? "The usual detail" : "Coarse and light" }))}
           />
           <Help>Smaller voxels keep finer detail; each halving makes about 4× the triangles.</Help>
@@ -242,7 +248,7 @@ export function StagesPanel({ pid, sid, state, busy }: { pid: string; sid: strin
             stage={spacetime}
             state={state}
             busy={busy}
-            blocked={tracked && state.base ? null : "Run Track first"}
+            blocked={gone("spacetime") ?? (tracked && state.base ? null : "Run Track first")}
             runLabel={spacetime.state === "none" ? "Refine" : "Re-run"}
             onRun={() => go("spacetime", () => runStage(pid, sid, "spacetime"))}
           >
@@ -255,7 +261,7 @@ export function StagesPanel({ pid, sid, state, busy }: { pid: string; sid: strin
           stage={refine}
           state={state}
           busy={busy}
-          blocked={tracked && state.base ? null : "Run Track first"}
+          blocked={gone("refine") ?? (tracked && state.base ? null : "Run Track first")}
           runLabel={refine.state === "none" ? "Refine" : "Re-run"}
           onRun={() => go("refine", () => runStage(pid, sid, "refine"))}
           details={

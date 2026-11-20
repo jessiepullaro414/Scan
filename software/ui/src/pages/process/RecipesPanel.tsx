@@ -5,7 +5,7 @@
  */
 import { BookmarkPlus, ChevronDown, Play, RefreshCw, ScrollText, Trash } from "lucide-react";
 import { useId, useState } from "react";
-import type { ProcessState, Recipe, RecipeOp, RecipeScope } from "../../api/types";
+import type { ProcessState, Recipe, RecipeOp, RecipeScope, Scan } from "../../api/types";
 import { Badge } from "../../components/ui/Badge";
 import { Button, IconButton } from "../../components/ui/Button";
 import { ConfirmDialog, Dialog } from "../../components/ui/Dialog";
@@ -14,6 +14,7 @@ import { TextInput } from "../../components/ui/Form";
 import { Callout } from "../../components/ui/Layout";
 import { Menu } from "../../components/ui/Popover";
 import { fmtFixed, fmtInt } from "../../lib/format";
+import { stageBlock } from "../../lib/keepMode";
 import { QUALITY_TEXT, normalizeQuality, qualityName } from "../../lib/quality";
 import { cn } from "../../lib/util";
 import { useProcess } from "../../store/process";
@@ -60,12 +61,15 @@ function settingsChips(r: Recipe): string[] {
 function RecipeRow({
   recipe,
   canEdits,
+  allBlocked,
   busy,
   onApply,
   onDelete,
 }: {
   recipe: Recipe;
   canEdits: boolean;
+  /** Why "Everything" cannot run on this scan (R2), or null. */
+  allBlocked: string | null;
   busy: boolean;
   onApply: (scope: RecipeScope) => void;
   onDelete: () => void;
@@ -103,7 +107,9 @@ function RecipeRow({
           width={286}
           items={[
             { label: "Just the edits", icon: Play, hint: "keeps the mesh", disabled: !canEdits, onSelect: () => onApply("edits") },
-            { label: "Everything", icon: RefreshCw, hint: "re-runs the stages", onSelect: () => onApply("all") },
+            allBlocked
+              ? { label: "Everything", icon: RefreshCw, hint: "not for this scan", disabled: true, description: allBlocked, onSelect: () => undefined }
+              : { label: "Everything", icon: RefreshCw, hint: "re-runs the stages", onSelect: () => onApply("all") },
           ]}
           renderTrigger={(t) => (
             <Button
@@ -230,7 +236,21 @@ function SaveRecipeDialog({ open, onClose, pid, sid, state }: { open: boolean; o
   );
 }
 
-export function RecipesPanel({ pid, sid, state, busy }: { pid: string; sid: string; state: ProcessState; busy: boolean }) {
+export function RecipesPanel({
+  pid,
+  sid,
+  state,
+  busy,
+  scan,
+}: {
+  pid: string;
+  sid: string;
+  state: ProcessState;
+  busy: boolean;
+  scan?: Pick<Scan, "keep" | "freed" | "has_recording" | "merged_from">;
+}) {
+  // R2: "Everything" reads the recording again (lib/keepMode.ts)
+  const allBlocked = scan ? stageBlock(scan, state, "recipe_all") : null;
   const list = useRecipes((s) => s.list);
   const error = useRecipes((s) => s.error);
   const loading = useRecipes((s) => s.loading);
@@ -281,11 +301,12 @@ export function RecipesPanel({ pid, sid, state, busy }: { pid: string; sid: stri
       ) : (
         <ul className="space-y-2" aria-label="Recipes">
           {list.map((r) => (
-            <RecipeRow key={r.id} recipe={r} canEdits={!!state.base} busy={busy} onApply={(scope) => apply(r, scope)} onDelete={() => setDeleting(r)} />
+            <RecipeRow key={r.id} recipe={r} canEdits={!!state.base} allBlocked={allBlocked} busy={busy} onApply={(scope) => apply(r, scope)} onDelete={() => setDeleting(r)} />
           ))}
         </ul>
       )}
       <Help className="mt-2.5">“Just the edits” keeps the mesh and replaces the edits. “Everything” re-runs Track, Straighten and Refine with lasers with the recipe's settings first.</Help>
+      {allBlocked ? <Help className="mt-1">“Everything”: {allBlocked}</Help> : null}
 
       <SaveRecipeDialog open={saving} onClose={() => setSaving(false)} pid={pid} sid={sid} state={state} />
       <ConfirmDialog

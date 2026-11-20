@@ -43,6 +43,7 @@ export function MakeMeshButton({
   label,
   onStarted,
   className,
+  blocked,
 }: {
   projectId: string;
   scan: Pick<Scan, "id" | "name">;
@@ -51,9 +52,17 @@ export function MakeMeshButton({
   label?: string;
   onStarted?: (job: Job) => void;
   className?: string;
+  /** Why the mesh cannot be made again (R2, `lib/keepMode.remakeBlock`): the button is disabled and says it on hover. */
+  blocked?: string | null;
 }) {
   const process = useJobs((s) => s.process);
   const [busy, setBusy] = useState(false);
+  if (blocked)
+    return (
+      <Button size={size} variant={variant} icon={Wand} disabled title={blocked} className={className}>
+        {label ?? "Make mesh"}
+      </Button>
+    );
   const run = async (q: ProcessQuality) => {
     setBusy(true);
     const job = await process(projectId, scan.id, q, scan.name);

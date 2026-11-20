@@ -34,7 +34,7 @@
  *   the centres together, the deviation to points spread over the reference, the answer for a tolerance.
  *
  * Options in the URL: `empty=1` (no projects), `fast=1` (short jobs), `drift=1` (the launch check
- * after a connect finds drift), `nopico=1` (the camera connects without the Pico), `health=check|recalibrate|cpu|old`
+ * after a connect finds drift), `nopico=1` (the camera connects without the Pico), `health=check|recalibrate|cpu|old|failed`
  * (the calibration's status, H4: health.ts; the seeded scans carry their own status too).
  */
 import type { MockOptions } from "../backend";

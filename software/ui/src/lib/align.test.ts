@@ -39,6 +39,8 @@ import {
   pairsDisagree,
   pairsOf,
   pairUseText,
+  cannotMerge,
+  recordingMark,
   pickedPoints,
   pickHint,
   pickPairOf,
@@ -77,6 +79,26 @@ check(hasMesh({ status: "processed", result }), "a processed scan with a result 
 check(!hasMesh({ status: "processed", result: null }) && !hasMesh({ status: "recorded", result: null }) && !hasMesh({ status: "processing", result }), "no mesh otherwise");
 check(hasRecording({}) && hasRecording({ merged_from: [] }), "an ordinary scan has its recording");
 check(!hasRecording({ merged_from: [{ id: "a", name: "A" }] }), "a merged scan has none");
+// R2: a scan that keeps its result only can be aligned, not merged; it is marked like a merged scan
+check(recordingMark({}) === "" && recordingMark({ keep: "engineering", has_recording: true }) === "", "a scan with its recording: no mark");
+check(recordingMark({ merged_from: [{ id: "a", name: "A" }] }) === " (merged)", "a merged scan's mark");
+check(recordingMark({ keep: "standard", has_recording: false }) === " (result only)", "a result-only scan's mark");
+check(recordingMark({ keep: "full", has_recording: false }) === " (no recording)", "a scan whose recording is missing");
+check(cannotMerge({}, false) === null && cannotMerge({ keep: "engineering", has_recording: true }, true) === null, "these can be merged");
+const ro = cannotMerge({ name: "B", keep: "standard", has_recording: false }, false)!;
+check(ro.title === "“B” cannot be merged", `result only title: ${ro.title}`);
+check(
+  ro.text === "Its recording was removed to free space (the scan keeps its result only). You can align to it and compare the two here; to merge, choose two scans that still have their recordings.",
+  `result only text: ${ro.text}`,
+);
+check(cannotMerge({ name: "B", keep: "standard" }, true)!.text.endsWith("to merge, remove it from the list or choose scans that still have their recordings."), "result only, several");
+const mg = cannotMerge({ name: "A + B", merged_from: [{ id: "a", name: "A" }] }, false)!;
+check(mg.title === "“A + B” cannot be merged again" && mg.text.startsWith("It is a merged scan and has no recording of its own."), `merged: ${mg.title}`);
+check(cannotMerge({ name: "A + B", merged_from: [{ id: "a", name: "A" }] }, true)!.text.includes("remove it from the list"), "merged, several");
+check(cannotMerge({ name: "C", keep: "full", has_recording: false }, false)!.text.startsWith("Its recording is not on disk."), "no recording on disk");
+// the engine's order (ohs/server/aligning.py): "keeps its result only" before "merged"
+check(cannotMerge({ name: "M", merged_from: [{ id: "a", name: "A" }], keep: "standard", has_recording: false }, false)!.title === "“M” cannot be merged", "merged and freed: result only first");
+check(recordingMark({ merged_from: [{ id: "a", name: "A" }], keep: "standard", has_recording: false }) === " (result only)", "merged and freed: its mark");
 check(mergedFromText({}) === null, "nothing to say for an ordinary scan");
 check(
   mergedFromText({ merged_from: [{ id: "a", name: "Bracket top" }, { id: "b", name: "Bracket underside" }] }) === "Merged from Bracket top + Bracket underside",

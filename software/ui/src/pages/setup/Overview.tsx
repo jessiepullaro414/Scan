@@ -16,6 +16,7 @@ import { Button } from "../../components/ui/Button";
 import { Spinner } from "../../components/ui/Feedback";
 import { Switch } from "../../components/ui/Form";
 import { Callout, KeyValue, Section } from "../../components/ui/Layout";
+import { overviewStep } from "../../lib/calibHealth";
 import { fmtDateTime, fmtFixed, fmtRelative } from "../../lib/format";
 import { navigate, paths } from "../../lib/router";
 import { firstUnfinished, minutesLeft, setupProgress, STATE_LABEL, STEP_META, STEP_ORDER } from "../../lib/setup";
@@ -217,7 +218,8 @@ export function Overview() {
       <ol className="mb-8 grid gap-3 lg:grid-cols-2">
         {STEP_ORDER.map((id, i) => {
           const st = setup.steps.find((s) => s.id === id) ?? { id, state: "todo" as const, summary: "", when: null };
-          return <StepCard key={id} step={st} index={i} />;
+          // H4: what the status strip already says (a failed check, the launch check's drift) is not said again here
+          return <StepCard key={id} step={overviewStep(st, health)} index={i} />;
         })}
       </ol>
 

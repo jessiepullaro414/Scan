@@ -1,6 +1,6 @@
 import { Camera, Check, Film, FlaskConical, TriangleExclamationPoint, Unplug } from "lucide-react";
-import { healthView } from "../../lib/calibHealth";
-import { navigate, paths } from "../../lib/router";
+import { headerHealthButton, healthView } from "../../lib/calibHealth";
+import { navigate, paths, useRoute } from "../../lib/router";
 import { HEALTH_ICON, HEALTH_TEXT, useDeviceHealth } from "../CalibHealth";
 import { cn } from "../../lib/util";
 import { useConnection } from "../../store/connection";
@@ -28,6 +28,7 @@ export function DeviceChip() {
   const calibrated = !!device?.calibration?.loaded;
   const Icon = SOURCE_ICON[source] ?? Unplug;
   const hv = healthView(useDeviceHealth());
+  const showButton = headerHealthButton(useRoute().name);
 
   const statusText = offline
     ? "Engine offline"
@@ -125,8 +126,9 @@ export function DeviceChip() {
         ) : null}
       </button>
     </Tooltip>
-      {warned?.action ? (
-        // the one wizard step the status names (the chip itself opens the Device page)
+      {warned?.action && showButton ? (
+        // the one wizard step the status names (the chip itself opens the Device page); not on the Scan and Device
+        // pages, whose own line says why and has the same button
         <button
           type="button"
           onClick={() => navigate(paths.setup(warned.action!.page))}

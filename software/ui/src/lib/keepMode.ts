@@ -3,7 +3,7 @@
  * `GET/POST /api/projects/{pid}/scans/{sid}/keep`, `/api/projects/{pid}/keep`). Pure functions: the
  * project page and its dialog only show what these return.
  */
-import type { KeepKept, KeepLoss, KeepMode, KeepPart, ProjectKeepPlan, ProjectKeepResult, Scan, ScanDiskUse, ScanKeepPlan } from "../api/types";
+import type { KeepKept, KeepLoss, KeepMode, KeepPart, ProjectKeepPlan, ProjectKeepResult, Scan, ScanDiskUse, ScanKeepPlan, StageId, StageState } from "../api/types";
 import { fmtBytes, fmtInt } from "./format.ts";
 
 /** The two lighter modes a user can choose, in the order the dialog shows them. */
@@ -54,6 +54,87 @@ export function keepTitle(scan: Pick<Scan, "keep" | "freed">, disk?: ScanDiskUse
 /** Whether the scan still has the frames its mesh is made from (a merged scan, or one that keeps its result only, has not). */
 export function canRemake(scan: Pick<Scan, "has_recording" | "merged_from" | "keep">): boolean {
   return scan.has_recording !== false && scan.keep !== "standard" && !scan.merged_from?.length;
+}
+
+// ---------------------------------------------------------------- what a freed scan can still run
+/** The stage actions of the Process page and the viewer's Make mesh / Remake. `recipe_all`: a recipe on "everything". */
+export type StageAction = "make_mesh" | "track" | "straighten" | "fuse" | "spacetime" | "refine" | "recipe_all";
+type StageLite = { state: StageState; when: string | null };
+/** What the rule reads of the process state (`ProcessState` fits it). */
+export type StagesLite = {
+  stages: Record<StageId, StageLite> & { refine: StageLite & { source: StageId | null } };
+  base: { stage: StageId } | null;
+};
+
+/** Why an action cannot run, one plain sentence each: why, and what would bring it back. */
+export const BLOCK = {
+  resultOnly: "This scan's recording was removed to free space (it keeps its result only). Only a new scan of the part can make the mesh again.",
+  resultOnlyStages:
+    "The stage files this needs were removed to free space (this scan keeps its result only). Only a new scan of the part can bring them back.",
+  stagesGone: "The stage files this needs were removed to free space. Make mesh, or Track, builds them again from the recording.",
+  merged: "This scan was merged from other scans and has no recording of its own. Merge those scans again to make it again.",
+  noRecording: "This scan has no recording. Record the part again to make a new mesh.",
+} as const;
+
+/** The actions that read the recording's frames (the engine's `_need_recording`). */
+const READS_FRAMES: StageAction[] = ["make_mesh", "track", "straighten", "fuse", "spacetime", "recipe_all"];
+
+/** Why the scan has no frames to read, in the engine's order, or null when it has them. */
+function noFrames(scan: Pick<Scan, "keep" | "has_recording" | "merged_from">): string | null {
+  if (scan.keep === "standard") return BLOCK.resultOnly;
+  if (scan.merged_from?.length) return BLOCK.merged;
+  if (scan.has_recording === false) return BLOCK.noRecording;
+  return null;
+}
+
+/** When the scan's space was last freed (ms), or null (never, or no date). */
+function lastFreed(scan: Pick<Scan, "keep" | "freed">): number | null {
+  if (scan.keep !== "engineering" && scan.keep !== "standard") return null;
+  const t = (scan.freed ?? []).map((f) => Date.parse(f.when)).filter((x) => Number.isFinite(x));
+  return t.length ? Math.max(...t) : null;
+}
+
+/**
+ * Whether a stage that ran is missing its files: freeing removes them but leaves the stage "done" in the record, so a
+ * stage's files are on disk only when it finished after the last freeing. A stage that never ran is not this rule's to say.
+ */
+function filesGone(stage: StageLite | undefined, freedAt: number): boolean {
+  if (!stage || stage.state !== "done") return false;
+  const t = stage.when ? Date.parse(stage.when) : NaN;
+  return !(Number.isFinite(t) && t > freedAt);
+}
+
+/**
+ * Why `action` cannot run on this scan now (one sentence: why, and what brings it back), or null when it can, as the
+ * engine decides it (`ohs/server/processing.py`): what reads the frames needs the recording; Straighten, Fuse and Refine
+ * from the images also need the Track stage's files; Refine with lasers needs only the base stage's mesh file. After
+ * "recording and result", Make mesh or Track rebuilds the stage files and the other stages run again. Without the
+ * process state (`state` null) only the recording decides.
+ */
+export function stageBlock(
+  scan: Pick<Scan, "keep" | "freed" | "has_recording" | "merged_from">,
+  state: StagesLite | null,
+  action: StageAction,
+): string | null {
+  if (READS_FRAMES.includes(action)) {
+    const why = noFrames(scan);
+    if (why) return why;
+  }
+  if (action === "make_mesh" || action === "track" || action === "recipe_all" || !state) return null;
+  const freedAt = lastFreed(scan);
+  if (freedAt === null) return null;
+  const gone = scan.keep === "standard" ? BLOCK.resultOnlyStages : BLOCK.stagesGone;
+  if (action === "refine") {
+    const b = state.base?.stage ?? "track";
+    const src = b === "refine" ? (state.stages.refine.source ?? "track") : b;
+    return filesGone(state.stages[src], freedAt) ? gone : null;
+  }
+  return filesGone(state.stages.track, freedAt) ? gone : null;
+}
+
+/** Why Make mesh (Remake, Rebuild) cannot run on this scan, or null: the same rule as `stageBlock(…, "make_mesh")`. */
+export function remakeBlock(scan: Pick<Scan, "keep" | "freed" | "has_recording" | "merged_from">): string | null {
+  return stageBlock(scan, null, "make_mesh");
 }
 
 const PART_LABEL: Record<KeepPart["part"], string> = {
