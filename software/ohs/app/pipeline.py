@@ -982,18 +982,21 @@ class FramePipeline:
             log.warning("mesh extraction failed (%s); returning an empty mesh", exc)
             return empty
 
-    def mesh_with_sigma(self) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray | None]:
+    def mesh_with_sigma(self, with_looks: bool = False) -> tuple:
         """:meth:`mesh` plus each vertex's standard deviation (mm, float32), or ``None`` when the
-        reconstruction is Open3D's (no confidence)."""
+        reconstruction is Open3D's (no confidence); with ``with_looks`` also each vertex's count of
+        independent looks (float32, :meth:`ConfidenceTsdf.extract_mesh`), ``None`` the same way."""
         if not self.has_confidence:
             V, F, N = self.mesh()
-            return V, F, N, None
+            return (V, F, N, None, None) if with_looks else (V, F, N, None)
         self._check_open()
         empty = (np.zeros((0, 3)), np.zeros((0, 3), dtype=np.int64), np.zeros((0, 3)), np.zeros(0, np.float32))
+        if with_looks:
+            empty += (np.zeros(0, np.float32),)
         if self.markerless.n_integrated == 0:
             return empty
         try:
-            return self.markerless.extract_mesh(with_sigma=True)
+            return self.markerless.extract_mesh(with_sigma=True, with_looks=with_looks)
         except RuntimeError as exc:
             log.warning("mesh extraction failed (%s); returning an empty mesh", exc)
             return empty

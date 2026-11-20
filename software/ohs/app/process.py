@@ -540,7 +540,8 @@ def process_recording(
         # mesh
         t0 = time.perf_counter()
         method = "tsdf"
-        V, F, N, S = pipe.mesh_with_sigma()  # S: each vertex's standard deviation (mm), confidence TSDF only
+        # S: each vertex's standard deviation (mm), L: its independent looks; confidence TSDF only
+        V, F, N, S, L = pipe.mesh_with_sigma(with_looks=True)
         if p.poisson:
             from ohs.track.export import poisson_mesh  # noqa: PLC0415 (open3d)
 
@@ -548,7 +549,7 @@ def process_recording(
             if len(P) >= 10:
                 V, F, N = poisson_mesh(P, Np, depth=int(p.poisson_depth))
                 method = "poisson"
-                S = None  # Poisson makes new vertices: no confidence for them
+                S = L = None  # Poisson makes new vertices: no confidence for them
             else:
                 log.warning("too few TSDF points for Poisson meshing; keeping the marching-cubes mesh")
         n_faces_raw = int(len(F))
@@ -558,6 +559,7 @@ def process_recording(
             V, F, idx = clean_mesh(V, F, min_component_fraction=float(p.clean_min_component), return_index=True)
             N = N[idx] if N is not None and len(N) else N
             S = S[idx] if S is not None and len(S) else S
+            L = L[idx] if L is not None and len(L) else L
         if S is not None:  # sigmas above 50 mm mean "no confidence" and are written as 50 mm
             S = np.minimum(S, np.float32(SIGMA_NONE_MM)).astype(np.float32)
         files: dict[str, str] = {}
@@ -566,7 +568,8 @@ def process_recording(
         for ext in export:
             path = out / f"mesh.{ext}"
             save_mesh(path, V, F, N if ext != "stl" and N is not None and len(N) == len(V) else None,
-                      quality=S if ext == "ply" and S is not None and len(S) == len(V) else None)
+                      quality=S if ext == "ply" and S is not None and len(S) == len(V) else None,
+                      looks=L if ext == "ply" and L is not None and len(L) == len(V) else None)
             files[f"mesh_{ext}"] = str(path)
         mesh_ms = 1e3 * (time.perf_counter() - t0)
         report["mesh"] = {

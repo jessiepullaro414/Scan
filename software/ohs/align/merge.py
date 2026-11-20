@@ -6,9 +6,9 @@ are then fused into one model, as one scan's frames are, and meshed once. Nothin
 from meshes, so there are no seams, overlaps are averaged by their weights, and the confidence
 map is one map. It costs about as much as processing every scan again.
 
-:func:`merge_scans` writes into ``out_dir``: ``mesh.ply`` (with each vertex's sigma when the
-confidence model made it) and the other formats asked for, ``laser_points.ply``, and
-``report.json`` with what went in (per scan: recording, pose, frames fused, and what of its table
+:func:`merge_scans` writes into ``out_dir``: ``mesh.ply`` (with each vertex's sigma and its count of
+independent looks when the confidence model made it) and the other formats asked for,
+``laser_points.ply``, and ``report.json`` with what went in (per scan: recording, pose, frames fused, and what of its table
 was left out and why: ``scans[i].table``), what came out, and ``warnings`` (each naming its scan).
 
 **A part that was moved** between the scans (turned over, set down elsewhere) lay on a table
@@ -391,7 +391,7 @@ def merge_scans(scans: Sequence[ScanInput], out_dir: str | Path, params: Process
                              "support_left_out": support is not None, "calibration": ci,
                              "image_size": list(pipe.image_size), "table": tables[len(per_scan)]})
             log.info("merged %s: %d frames", name, len(positions))
-        V, F, N, S = pipe.mesh_with_sigma()
+        V, F, N, S, L = pipe.mesh_with_sigma(with_looks=True)  # L: each vertex's independent looks
         n_faces_raw = int(len(F))
         # what the frames left of each moved scan's table (module docstring): its rule on the merged mesh
         gone = np.zeros(len(F), dtype=bool)
@@ -406,6 +406,7 @@ def merge_scans(scans: Sequence[ScanInput], out_dir: str | Path, params: Process
             V, F, idx = compact(V, F[~gone])
             N = N[idx] if N is not None and len(N) else N
             S = S[idx] if S is not None and len(S) else S
+            L = L[idx] if L is not None and len(L) else L
         n_faces_table = int(gone.sum())
         maps = [(support, T) for (_, _, _, _, T, support, _) in plan if isinstance(support, SupportMap)]
         cleaning = None
@@ -418,6 +419,7 @@ def merge_scans(scans: Sequence[ScanInput], out_dir: str | Path, params: Process
                 V, F, idx = clean_mesh(V, F, min_component_fraction=float(p.clean_min_component), return_index=True)
             N = N[idx] if N is not None and len(N) else N
             S = S[idx] if S is not None and len(S) else S
+            L = L[idx] if L is not None and len(L) else L
         for (_, _, _, _, T, support, _), entry in zip(plan, tables):
             if isinstance(support, SupportMap):  # what of its thin parts is in the result
                 settle_thin_parts(entry, support, V, F, T)
@@ -429,7 +431,8 @@ def merge_scans(scans: Sequence[ScanInput], out_dir: str | Path, params: Process
         for ext in export:
             path = out / f"mesh.{ext}"
             save_mesh(path, V, F, N if ext != "stl" and N is not None and len(N) == len(V) else None,
-                      quality=S if ext == "ply" and S is not None and len(S) == len(V) else None)
+                      quality=S if ext == "ply" and S is not None and len(S) == len(V) else None,
+                      looks=L if ext == "ply" and L is not None and len(L) == len(V) else None)
             files[f"mesh_{ext}"] = str(path)
         cloud = pipe.laser_cloud()
         laser_pts = cloud.points(float(p.laser_voxel_mm))

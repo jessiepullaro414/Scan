@@ -3147,6 +3147,109 @@ Tests: `tests/test_server_disk.py` (4: every number equals the files' sizes, the
 own, links not followed, unknown projects), `ui/src/lib/diskUse.test.ts`.
 Not verified: real camera frames; a recording at 60 frames a second.
 
+## Why an area is weak, and where to scan it from (2026-11-19)
+
+FEATURE_PLAN N1, the engine half. The Check answer's areas (`ohs/mesh/check.py`, `weak_areas`) get a
+reason each, and `ohs/guide/views.py` a pose to scan each from. `mesh.ply` carries each vertex's
+count of independent looks (`float looks`, decision D6). Simulator only; scratch scripts in the
+session's `n1\` and `n1rev\` folders.
+
+**The reasons, in the order they are tried.** A rule holds for an area when it holds for at least
+half of its vertices (at most 400 of them for the rules that need the camera path).
+
+| Reason | Holds when | Where the limit comes from |
+|---|---|---|
+| `not_seen` | the area is filled-in surface, or most of it lies within 3 mm (at 1 mm voxels) of a long open border of the mesh | twice the length over which the model's border term falls off; border loops of 15 mm or less (small holes) do not count |
+| `steep` | even the squarest look was more than 59.6° off the surface's normal | where the GPU matcher's sigma is twice its square-on value |
+| `far` | even the nearest look was farther than 1.41 times the working distance (359 mm at 254 mm) | stereo noise grows with the square of the depth: twice the noise |
+| `few_looks` | the area's median looks are under half those of the surface that passes | the noise part of sigma goes with 1/sqrt(looks) |
+| `edge` | the mesh's own curvature term alone is above the tolerance | another pass does not lower that term |
+| `unknown` | none holds, or the data are missing (the answer says which) | never a guess |
+
+The working distance is read from the calibration: where the laser sheets cross the cameras'
+centre line, 254 mm on the nominal scanner. What a frame "saw": the vertex is in its image and depth
+range, faces the camera, and the ray to the camera hits nothing of the mesh.
+
+**On simulated scans** (a thin plate on its table, 640x400, tolerance 1.0 mm):
+
+| How it was scanned | Result |
+|---|---|
+| from 24 to 30° above the table only | `steep` for 99.8 % of the listed area (squarest look 69° off) |
+| from 385 to 415 mm only | `far` for 98 % (nearest look 412 to 418 mm) |
+| square on at the working distance (control) | no `steep`, no `far` area |
+| a patch seen in one 12-frame pass, merged with a 60-frame scan | `few_looks` holds for at least 80 % of the area round it (2 looks against 11); on the patch's rim `not_seen` comes first |
+
+On the CPU path (the numpy twin of the model, no looks) `steep` and `far` come out the same. Open3D's
+model, the CPU path's default, has no sigma, so its Check lists nothing to guide.
+
+**On a real-size scan** (809,000 faces at 1 mm voxels, 355 frames, an older file without looks),
+found in review:
+
+| Tolerance | Share that passes | `steep` | `far` | `edge` | `unknown` | Areas with a pose |
+|---|---|---|---|---|---|---|
+| 0.1 mm | 35.5 % | 19 | 5 | 21 | 5 | 29 of 50 |
+| 0.3 mm | 76.1 % | 20 | 1 | 0 | 29 | 50 of 50 |
+
+- At 0.1 mm the mesh's curvature term alone is above the tolerance on 58.5 % of the vertices (its
+  median is 0.055 mm): a 1 mm-voxel mesh cannot meet 0.1 mm over most of a part, whatever is
+  scanned. That is why `edge` is tried after the reasons a second pass can act on. In the first
+  version it was tried before them, and the largest area (158,656 mm², seen 62° off from 377 mm)
+  was told "no pose"; 15 of 50 areas had one.
+- Time: the plain Check takes 1.3 s (0.1 mm) and 0.5 s (0.3 mm), as before: the route asks for no
+  reasons yet (`why=False`). With the reasons 13.5 s, the poses 3 to 4 s, the short plan 2.5 s. The
+  route work has to bring that down before the panel shows it.
+
+**The pose.** 25 directions (0, 20, 40 and 55° off the area's normal, 8 round each ring), the
+scanner at the working distance with the cameras' centre line through the area's centre. From each,
+up to 300 of the area's vertices are tested from both cameras: out of view, facing away, steep, or
+blocked by the mesh. The score is the share of the area seen plus the share of the open border
+beside it that is looked past from outside; the squarest direction within 0.02 of the best wins.
+Under 10 % seen there is no pose and the answer says why. An area whose only reason is `edge` gets
+none.
+
+**Thin parts.** Shadow rays start 0.05 mm off the surface. Measured: a sheet 0.06 mm over a point
+blocks it, one 0.04 mm over it does not; a sheet of any thickness farther away blocks. On a 0.5 mm
+plate the top face is seen from above and the bottom face faces away; the table 0.3 mm beside the
+plate is blocked from 55° on the far side; a 0.5 mm roof blocks as a 10 mm one does; a 1 mm fin
+shades exactly its geometric shadow.
+
+**The extra value changes nothing else.** With `looks` the PLY header gains two lines, each vertex
+record is the old bytes plus 4, the face bytes are the same. On the 90-frame bench recording (GPU
+path, full and preview quality) vertices, faces, normals, sigma, poses and laser points are the same
+before and after. File size +7.4 % (27.60 to 29.65 MB); reading it costs 2.2 ms per 530,000
+vertices; frame time is untouched. Read by `load_ply`, the server's edits, STL export and the
+app's TypeScript reader, each tested with and without it. Edits in the app do not carry it yet.
+
+**The whole loop.** The bracket scanned from one side, then 3 short passes (20 frames each), merged
+at true poses; 1280x800, GPU path, tolerance 1.0 mm. Guided: the engine's plan for the part's
+areas. Random: 3 directions aimed at the part at the working distance. The gain is in points of the
+share of the *first scan's surface* that meets the tolerance:
+
+| Seed | Guided | Random |
+|---|---|---|
+| 0 | +7.9 | +5.0 |
+| 1 | +17.7 | +11.1 |
+| 2 | +11.9 | +0.6 |
+| 3 | +15.2 | +12.5 |
+| 4 | +13.3 | +12.8 |
+| Mean (range) | +13.2 (7.9 to 17.7) | +8.4 (0.6 to 12.8) |
+
+- **Not the same from run to run.** A second run of the same code gave +15.3 for seed 0 and +10.4
+  for seed 1 (which then loses to random's +11.1). The first scan's mesh has the same content each
+  time, but the GPU path lists its vertices in a different order, and the areas' samples are picked
+  by index, so a threshold falls on one side or the other. To be mended with the route work
+  (samples picked by position); the table is then measured again.
+- **On the whole part's surface** (new surface counts too) guided is no better: +23.4 points (10.8
+  to 31.6) against random's +23.1 (5.4 to 36.5). Random passes from other sides find surface the
+  first scan never saw, which no weak area points to.
+- At 640x400, seed 0, guided lost (+4.5 against +5.5); the loop's test runs at 1280x800. On the CPU
+  path (numpy twin, no looks, 640x400) the test asserts only that the share rises (+3.1; random
+  +2.7).
+- Limits: simulator, one part, true poses, 3 passes.
+
+Guards: `tests/test_mesh_looks.py` (9), `test_mesh_check_reasons.py` (12), `test_guide_views.py`
+(10), `test_guide_loop.py` (5, slow).
+
 ## What the metrics mean
 
 - **Stereo errors** compare the estimated raw intrinsics/extrinsics (`K1`, `K2`, `R`, `T`) with

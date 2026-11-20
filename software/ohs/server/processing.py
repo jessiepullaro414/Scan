@@ -2266,7 +2266,10 @@ class ProcessManager:
                 cached = sp._fit_mesh = (v, V, F, S, Fl)
         _, V, F, S, Fl = cached
         try:
-            r = weak_areas(V, F, S, Fl if Fl is not None and len(Fl) == len(F) else None, tolerance_mm=float(tolerance_mm))
+            # why=False: the reasons and poses (FEATURE_PLAN N1) reach this route in their own step
+            r = weak_areas(V, F, S, Fl if Fl is not None and len(Fl) == len(F) else None, tolerance_mm=float(tolerance_mm),
+                           why=False)
+            r.pop("reasons", None)
         except ValueError as e:
             raise ApiError(422, str(e), "give the tolerance in mm, for example 0.1") from None
         for a in r["areas"]:

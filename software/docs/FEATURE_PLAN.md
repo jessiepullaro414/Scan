@@ -835,6 +835,29 @@ finished scan cannot be continued; a second scan can be aligned and merged with 
     the best one is kept, with how much of the area it would see.
 - **Where:** `ohs/mesh/check.py` (reason, normal) and new `ohs/guide/views.py` (the poses); the
   Check panel shows, per area, a small picture of where to hold the scanner.
+- **[engine] Done 2026-11-19; the route and the Check panel follow.** Each listed area has a
+  `normal`, a `reason` (`not_seen`, `steep`, `far`, `few_looks`, `edge` or `unknown`), every reason
+  that holds, the numbers behind them, and what was missing when the answer is `unknown`.
+  `mesh.ply` carries `float looks` per vertex (D6: added, every other value the same; absent on
+  Open3D's model and after an edit in the app). `ohs/guide/views.py` gives each area a pose at the
+  calibration's working distance (254 mm), tested against the mesh from both cameras, or says why
+  it cannot be seen from outside; `plan_views` gives a short list.
+  - **A fifth reason, `edge`,** was added by the agent: the mesh's own curvature term alone is above
+    the tolerance, which another pass does not lower. Kept, but in review moved behind the reasons
+    a second pass can act on: on a real-size scan at 0.1 mm the largest area was steep, far and on
+    that term, and was told "no pose" (15 of 50 areas had a pose; now 29).
+  - **The test's bar is met in part** (`VALIDATION.md`, "Why an area is weak, and where to scan it
+    from"). On the first scan's own surface the guided passes gain +13.2 points against +8.4 for
+    random ones (5 seeds, better on each in that run). On the whole part they do not (+23.4
+    against +23.1): random passes from other sides find surface the first scan never saw. And
+    the result moves from run to run (seed 0: +7.9 and +15.3; in a second run seed 1 lost to
+    random), because samples are picked by vertex number.
+  - **Left:** samples picked by position, so the same mesh always gives the same plan (with the
+    route work); poses for the sides a scan never saw (nothing points to them today); the Check
+    route does not ask for reasons yet (they take 13.5 s on a real-size scan against 1.3 s without);
+    looks through the app's edits.
+  - Guard: `tests/test_mesh_looks.py` (9), `test_mesh_check_reasons.py` (12), `test_guide_views.py`
+    (10), `test_guide_loop.py` (5).
 - **Test first, on the whole loop:** scan the simulated bracket from one side only; take the
   suggested poses; let the simulator scan from them; merge. The share of the surface that meets
   the tolerance must rise, and by more than with the same number of random poses.

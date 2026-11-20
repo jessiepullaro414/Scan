@@ -497,7 +497,8 @@ def voxel_sigma(wsum: np.ndarray, m2: np.ndarray, nobs: np.ndarray, nlook: np.nd
     return out
 
 
-def mesh_sigma_terms(V: np.ndarray, F: np.ndarray, N: np.ndarray, voxel_mm: float = 1.0) -> np.ndarray:
+def mesh_sigma_terms(V: np.ndarray, F: np.ndarray, N: np.ndarray, voxel_mm: float = 1.0,
+                     parts: bool = False) -> np.ndarray | tuple[np.ndarray, np.ndarray]:
     """Per vertex, the variance (mm^2) of the two bias terms that only the mesh shows, with ``k`` =
     :func:`bias_scale` of the voxel size the mesh was made at:
 
@@ -506,14 +507,15 @@ def mesh_sigma_terms(V: np.ndarray, F: np.ndarray, N: np.ndarray, voxel_mm: floa
     - the open border, ``(A_BORDER k exp(-d / (BORDER_MM k)))^2`` with ``d`` the distance (mm) to
       the nearest vertex of an edge that only one face uses.
 
-    0 for a vertex no face uses. About a second per million triangles."""
+    0 for a vertex no face uses. About a second per million triangles. With ``parts`` the two terms
+    apart, ``(curvature, border)``; their sum is the default answer."""
     import scipy.sparse as sp
     from scipy.spatial import cKDTree
 
     n = len(V)
     F = np.asarray(F, dtype=np.int64).reshape(-1, 3)
     if n == 0 or len(F) == 0:
-        return np.zeros(n)
+        return (np.zeros(n), np.zeros(n)) if parts else np.zeros(n)
     k = bias_scale(voxel_mm)
     a = np.concatenate([F[:, 0], F[:, 1], F[:, 2]])
     b = np.concatenate([F[:, 1], F[:, 2], F[:, 0]])
@@ -533,6 +535,9 @@ def mesh_sigma_terms(V: np.ndarray, F: np.ndarray, N: np.ndarray, voxel_mm: floa
     curv2 = np.zeros(n)
     curv2[has] = np.maximum.reduceat(curv[A2.indices], ptr[:-1][has])
     out = (A_CURV * k) ** 2 * np.clip(curv2, 0.0, None)
+    if parts:
+        curv_part = out.copy()
+        border_part = np.zeros(n)
     open_edge = E.data == 1
     if open_edge.any():
         rows = np.repeat(np.arange(n), np.diff(E.indptr))[open_edge]
@@ -542,7 +547,9 @@ def mesh_sigma_terms(V: np.ndarray, F: np.ndarray, N: np.ndarray, voxel_mm: floa
         border = A_BORDER * k * np.exp(-d / (BORDER_MM * k))
         border[~has] = 0.0
         out += border * border
-    return out
+        if parts:
+            border_part = border * border
+    return (curv_part, border_part) if parts else out
 
 
 def gap_guard_mask(depth: np.ndarray, radius_px: float) -> np.ndarray:
@@ -1251,24 +1258,35 @@ class ConfidenceTsdf:
         # as MarkerlessTracker: Open3D keeps voxels whose weight is strictly above the threshold
         return float(min(thr, max(self.n_integrated - 1, 0)))
 
-    def extract_mesh(self, weight_threshold: float | None = None, with_sigma: bool = False) -> tuple:
+    def extract_mesh(self, weight_threshold: float | None = None, with_sigma: bool = False,
+                     with_looks: bool = False) -> tuple:
         """Marching-cubes mesh ``(V (N,3) mm, F (M,3) int64, N (N,3))``, plus ``sigma`` (N,) mm per
-        vertex with ``with_sigma``: the voxels' sigma and the mesh's own terms (:func:`mesh_sigma_terms`)."""
+        vertex with ``with_sigma``: the voxels' sigma and the mesh's own terms (:func:`mesh_sigma_terms`),
+        plus ``looks`` (N,) float32 with ``with_looks``: each vertex's count of independent looks
+        (``nlook``, interpolated by marching cubes from the voxels as the sigma is; asking for it
+        changes nothing else)."""
         import open3d as o3d
         import open3d.core as o3c
 
         empty = (np.zeros((0, 3)), np.zeros((0, 3), dtype=np.int64), np.zeros((0, 3)))
+        extra = (np.zeros(0, np.float32),) * (int(with_sigma) + int(with_looks))
         vbg = self.to_open3d(o3d, o3c) if self.n_integrated else None
         mesh = None if vbg is None else vbg.extract_triangle_mesh(weight_threshold=self._threshold(weight_threshold))
         if mesh is None or len(mesh.vertex.positions) == 0:
-            return (*empty, np.zeros(0, np.float32)) if with_sigma else empty
+            return (*empty, *extra)
         V = mesh.vertex.positions.cpu().numpy().astype(np.float64)
         F = mesh.triangle.indices.cpu().numpy().astype(np.int64)
         N = mesh.vertex.normals.cpu().numpy().astype(np.float64)
-        if not with_sigma:
+        if not (with_sigma or with_looks):
             return V, F, N
-        s = (mesh.vertex.colors.cpu().numpy()[:, 0] * np.float32(255.0)).astype(np.float64)
-        return V, F, N, np.sqrt(s * s + mesh_sigma_terms(V, F, N, voxel_mm=self.voxel_mm)).astype(np.float32)
+        C = mesh.vertex.colors.cpu().numpy()
+        out: tuple = (V, F, N)
+        if with_sigma:
+            s = (C[:, 0] * np.float32(255.0)).astype(np.float64)
+            out += (np.sqrt(s * s + mesh_sigma_terms(V, F, N, voxel_mm=self.voxel_mm)).astype(np.float32),)
+        if with_looks:
+            out += ((C[:, 1] * np.float32(255.0)).astype(np.float32),)
+        return out
 
     def extract_points(self, weight_threshold: float | None = None, with_sigma: bool = False) -> tuple:
         """Zero-crossing points ``(P (N,3) mm, N (N,3))``, plus ``sigma`` (N,) mm with ``with_sigma``
