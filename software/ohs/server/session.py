@@ -200,7 +200,7 @@ class ScanSession:
                  hub: Any, use_imu: bool, use_lasers: bool, source_name: str = "camera", scan_name: str = "",
                  meta: dict | None = None, emitters_on: Callable[[], None] | None = None,
                  emitters_off: Callable[[], None] | None = None, notify: Callable[[str, str], None] | None = None,
-                 has_emitters: bool = False) -> None:
+                 has_emitters: bool = False, guide: bool = False) -> None:
         from ohs.app.live import LatestSlot, PipelineProcessor
 
         self.calib = calib
@@ -262,6 +262,16 @@ class ScanSession:
         self._rebuild_cost_s: float | None = None
         self._last_left: tuple[np.ndarray, Any] | None = None
         self._weak_hint = WeakHintFilter()
+        # hints while scanning (FEATURE_PLAN N3): an experiment that missed its stop rule, so an option
+        # nothing turns on (ohs.server.scan_hints); off, it costs one test per frame
+        self._guide = None
+        if guide:
+            from ohs.server.scan_hints import GuideHintFilter, ScanGuide
+
+            self._guide = ScanGuide(self._coverage.cell_mm)
+            self._guide_filter = GuideHintFilter()
+            self._guide_ring: list | None = None  # the ring the guide has read (mesh thread)
+            self._guide_done = 0
         self._t_view = 0.0
         self._errors = 0
         self._gpu_fallback: dict[str, str] | None = None  # stage -> reason, once a GPU stage failed in this scan
@@ -629,9 +639,10 @@ class ScanSession:
                 self._rebuild_cost_s = max(cost, 0.002)
         else:
             self.n_lost += 1
+        trk = self._weak_hint.apply(tracking_state(track, self.mode))
         latency = round(1e3 * (time.perf_counter() - t_recv), 1)
-        self._stats = {
-            "tracking": self._weak_hint.apply(tracking_state(track, self.mode)),
+        stats = {
+            "tracking": trk,
             "distance_mm": central_distance(res.depth),
             "laser_points": int(self._laser_total),
             "laser_points_frame": n_laser,
@@ -639,6 +650,9 @@ class ScanSession:
             "latency_ms": latency,
             "process_ms": round(float(res.timings_ms.get("total", 0.0)), 1),
         }
+        if self._guide is not None:  # one hint at a time: none while the tracking shows one
+            stats["guide"] = self._guide_filter.apply(self._guide.hint(T) if ok else None, trk)
+        self._stats = stats
         self.hub.publish_json(pose_message(T, ok))
         if not ok and self._last_good is not None:
             self.hub.publish_json(ghost_message(self._last_good))
@@ -691,18 +705,36 @@ class ScanSession:
         self._mesh_period = max(MESH_PERIOD_S, 5.0 * ex)
         self._mesh_seq += 1
         self._stats = {**self._stats, "model": {"vertices": int(len(V)), "triangles": int(len(F))}}
-        self._mesh_worker.submit((self._mesh_seq, V, F, N, self._coverage.snapshot()))
+        # the guide reads the kept frames on the mesh thread: the ring list as it is (appended to,
+        # replaced by a rewind) and how many of its frames this snapshot has
+        job = None if self._guide is None else (self._ring, len(self._ring), self._last_good)
+        self._mesh_worker.submit((self._mesh_seq, V, F, N, self._coverage.snapshot(), job))
 
     def _encode_mesh(self, item: tuple) -> None:
-        seq, V, F, N, snap = item
+        seq, V, F, N, snap, job = item
         n_raw = int(len(F))
         V2, F2, N2, _ = decimate(V, F, N, None, MAX_TRIANGLES)
         if N2 is None or len(N2) != len(V2):
             N2 = np.zeros_like(np.asarray(V2, dtype=np.float64))
         counts = dilate_on_mesh(CoverageGrid.lookup(V2, snap, self._coverage.cell_mm), F2)
-        data = mesh_message(seq, V2, N2, quality_colors(counts), F2, decimated=bool(len(F2) < n_raw))
+        colors = quality_colors(counts)
+        if job is not None and self._guide is not None:
+            colors = self._guide_snapshot(V2, N2, colors, *job)
+        data = mesh_message(seq, V2, N2, colors, F2, decimated=bool(len(F2) < n_raw))
         self.latest_mesh = data
         self.hub.publish_binary("mesh", data)
+
+    def _guide_snapshot(self, V: np.ndarray, N: np.ndarray, colors: np.ndarray, ring: list, n: int,
+                        T_now: np.ndarray | None) -> np.ndarray:
+        """The guide's update for one mesh snapshot (mesh thread): the frames the ring gained since
+        the last one (all of them after a rewind, which replaces the ring), the target, its light."""
+        from ohs.server.scan_hints import frames_of, lit_colors
+
+        rebuild = ring is not self._guide_ring
+        start = 0 if rebuild else min(self._guide_done, n)
+        self._guide.update(V, N, frames_of(ring[start:n]), T_now, rebuild=rebuild)
+        self._guide_ring, self._guide_done = ring, n
+        return lit_colors(colors, self._guide.lit(V))
 
     # ------------------------------------------------------------------ commands (processing thread)
     def _handle_commands(self, pipe: Any) -> None:

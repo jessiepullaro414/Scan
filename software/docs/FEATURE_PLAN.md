@@ -908,7 +908,31 @@ finished scan cannot be continued; a second scan can be aligned and merged with 
 - **Test first:** two simulated passes of the bracket through this route give one merged scan
   whose Check share is higher than the first pass's.
 
-### N3. Hints while scanning (L, an experiment)
+### [x] N3. Hints while scanning (L, an experiment)
+- **Measured 2026-11-20; the stop rule is not met, so it is not in the app** (the task as written
+  follows below; `VALIDATION.md`, "Hints while scanning").
+  - **What was built to measure it:** `ohs/server/scan_hints.py`. Per 8 mm cell of the live
+    model, on the thread that already builds it: how many frames saw it, how squarely (against
+    the live mesh's normal; steep beyond the Check's 59.6°) and from how near. One target patch
+    at a time, with hysteresis; one plain hint ("come round to the left", "move closer") through
+    the 4-of-6 rule the slide and turn hints use, silent while the tracking has a hint.
+  - **The experiment:** a simulated operator scans for 6 s in half-second stretches through the
+    real scan session and, after each stretch, does what the hint on screen says. Compared with
+    the same hand on its scripted path, and with the same hand making as many moves at random.
+  - **The result** (Check share at 1.0 mm, mean of 3 seeds, follow / scripted / random): bracket
+    0.781 / 0.714 / 0.792; car panel 0.543 / 0.560 / 0.596; bracket on the CPU path (2 seeds)
+    0.735 / 0.753 / 0.768. Following the hints beats the scripted path on the bracket, but not
+    random moves made as often: the gain is from moving more, not from where the hints point. On
+    the car panel and on the CPU path it loses to both.
+  - **Why, as far as seen:** at 8 mm the live cells cannot tell an unseen side of the part from
+    the table's rim at the edge of the view, so most hints chase the rim.
+  - **What is in the tree:** `ScanSession(guide=True)`, which nothing turns on. Off, it costs one
+    test per frame, and poses, depth, laser points and the live mesh are the same with it on or
+    off (hashes over 90 frames, 3 interleaved pairs). `tests/test_scan_hints.py` (14).
+  - **Thin parts:** a part thinner than a cell shares its cells with the table and is lit with
+    it, never hidden; the guide only reads.
+  - **Left, if it is tried again:** a hint that knows which sides the part has not shown yet
+    (the same gap as in N1); real scans.
 - **What:** during the scan, areas the model has seen too little or too steeply are lit, with one
   hint at a time ("come round to the left", "tilt down"), through the filter the slide and turn
   hints already use (`WeakHintFilter`, `ohs/server/session.py`).

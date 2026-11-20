@@ -3263,6 +3263,37 @@ Guards: `tests/test_mesh_looks.py`, `test_mesh_check_reasons.py`, `test_mesh_che
 same answer whatever the order of the vertices and faces), `test_mesh_carry_looks.py`,
 `test_guide_views.py`, `test_guide_loop.py` (slow), `test_server_check_why.py`.
 
+## Hints while scanning (FEATURE_PLAN N3, 2026-11-20)
+
+An experiment with a stop rule: kept only if scans that follow the hints end with a clearly higher
+Check share. Measured by an Opus agent with a simulated closed loop (scratch scripts in the
+session's `n3\` folder): 180 frames at 30 frames a second, 640x400, in stretches of 0.5 s; every
+3rd frame goes through the real scan session with live tracking, and the live model is rebuilt every
+1.5 s. Three operators with the same hand model: one does what the hint on screen says after each
+stretch (come round: orbit that way at 30° a second; higher or lower: 12°; closer: 40 mm; turn: aim
+30 mm towards the lit patch), one keeps to the scripted orbit, one makes as many moves as the
+follower did, at random. Each recording is then processed at its true poses.
+
+Check share at 1.0 mm, whole mesh (follow / scripted / random):
+
+| Scene, path | Seed 0 | Seed 1 | Seed 2 | Mean |
+|---|---|---|---|---|
+| Bracket, GPU | 0.805 / 0.695 / 0.765 | 0.783 / 0.720 / 0.747 | 0.755 / 0.728 / 0.864 | 0.781 / 0.714 / 0.792 |
+| Car panel, GPU | 0.534 / 0.533 / 0.543 | 0.607 / 0.570 / 0.622 | 0.487 / 0.576 / 0.622 | 0.543 / 0.560 / 0.596 |
+| Bracket, CPU | 0.748 / 0.757 / 0.777 | 0.723 / 0.750 / 0.759 | not run | 0.735 / 0.753 / 0.768 |
+
+- The scripted share's spread over seeds is 0.017 (bracket) and 0.023 (car panel).
+- Bracket: following the hints is +0.067 over the scripted path, more than the spread, but -0.011
+  against random moves made as often. Car panel: -0.017 and -0.053. The part alone, bracket:
+  0.298 / 0.268 / 0.291. At 0.5 mm the picture is the same.
+- **Not adopted:** the gain is from moving more, not from where the hints point.
+- Cost, measured back to back on a busy PC (ratios only): the per-frame part takes 0.09 to 0.14 ms,
+  about 0.04 % of a frame; rebuilding the live model takes about 2.5 times as long with it (66-83
+  ms to 175-227 ms, every 1.5 s or slower). Switched off it is one test per frame.
+- With it on or off, every frame's pose, depth and laser points and the live mesh's vertices are
+  the same (hashes over a 90-frame recording, 3 interleaved pairs).
+- Limits: simulation; 3 seeds (2 on the CPU path); 6 s scans; the operator's reactions are a model.
+
 ## SGBM's paths from above, and the CPU path's slides (2026-11-20)
 
 MAINTENANCE_PLAN F14, first round (an Opus agent; scratch in the session's `f14\` folder). CPU path
