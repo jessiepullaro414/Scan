@@ -402,6 +402,12 @@ class PassManager:
             return
         with self._lock:
             w = self._watch.pop(str(job.get("id")), None)
+            if w is not None:
+                # The chain is being moved on. Until the next step is submitted it still names the step that
+                # ended, with a job that no longer runs: a look at it in this moment (the page polls) must not
+                # take it for a chain the app was closed on (_settle_stale).
+                key = (w[0], w[1])
+                self._starting[key] = self._starting.get(key, 0) + 1
         if w is None:
             return
         pid, sid, step = w
@@ -415,6 +421,13 @@ class PassManager:
                                 message=f"Stopped after {STEP_DOING[step]}: {safe}. The pass is kept as its own scan.")
             except Exception:  # noqa: BLE001
                 log.exception("could not record the chain's state")
+        finally:
+            with self._lock:
+                n = self._starting.get(key, 1) - 1
+                if n > 0:
+                    self._starting[key] = n
+                else:
+                    self._starting.pop(key, None)
 
     def _finished(self, job: dict, pid: str, sid: str, step: str) -> None:
         state = job["state"]
