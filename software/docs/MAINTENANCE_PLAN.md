@@ -1690,7 +1690,7 @@ Every task here: the type check, `npm test`, and for bundle tasks the chunk size
   the module path, so from `software/` an "old" run loads the checkout's engine whatever
   `PYTHONPATH` says. Run such comparisons from another folder and print `ohs.__file__` first.
 
-### [ ] F10. The wizard test's stereo step came up two views short once, in a slow full run
+### [x] F10. The wizard test's stereo step came up two views short once, in a slow full run ✔
 - **Seen 2026-11-15**, once: `tests/test_server_calibration.py::test_wizard_end_to_end_on_the_simulator`
   with `OHS_COMPUTE=cpu`, in the full suite at bb5ca37: the stereo step had 8 views when no new
   view had come for 8 s, and the test wants 10 (`_views(url, 15, stall_s=8.0)`). The other 772
@@ -1709,6 +1709,41 @@ Every task here: the type check, `npm test`, and for bundle tasks the chunk size
   **To mend:** a simulated operator who holds each pose until the session reports the view
   taken, as F12 did for the lasers taking turns. It needs a hook from the session to
   `SimBoardCamera` (stereo gives the camera no signal). Not done yet.
+- **Mended 2026-11-20, in the simulation and the tests only** (an Opus agent, two rounds).
+  - *The operator holds the pose.* The tests' `SimBoardCamera` gets `view_hold_s` (10 s in the
+    tests' `SIM_KW`). The calibration session tells the camera what became of each frame it
+    processed (`on_view`: taken, refused, wait; ended at stop). When a dwell ends before the
+    view is taken or refused, the operator holds the pose (at most 10 s of frame time), renders
+    only while the app is at most 0.6 s of frame time behind, and moves on as soon as the view
+    is taken. `DeviceManager.view_listener()` passes the hook only to a camera that holds
+    views, so a real camera and the app's own simulator get none: nothing changes for them.
+  - *Made to fail on purpose first.* `OHS_TEST_STARVE=delay=<ms>|busy=<n>` runs the calibration
+    tests starved. New guard `test_stereo_views_are_not_lost_on_a_starved_pc` (each board
+    detection 600 ms slower): 0 views before, 15 of 15 after, on both paths. The wizard, the
+    device-target stereo test and both four-laser tests failed starved before and pass after.
+    The tests' own pass lines are unchanged.
+  - *Two more reasons these tests failed on a busy PC, both on the tests' side.*
+    `test_websocket_calibration_messages` stopped reading at the first `status` message; a
+    `status` can arrive before the seed's `calib_session`, an order that is promised nowhere
+    and that the app's page does not rely on. It now waits for the messages it checks. And a
+    `websockets` client stops reading its socket once 16 messages wait unread, so it never sees
+    the server's pong and closes the connection itself after about 40 s (1011, "keepalive ping
+    timeout"). The server was not stalled: its longest answer over a whole four-laser
+    calibration was 57 ms at 91 % load. The four tests that hold a socket open across long
+    phases now read it in the background (`LiveReader`, `ohs/server/testing.py`), with the
+    keepalive left on.
+  - *In review, PC at 80 to 100 % from other jobs:* the three test files (`test_sim_board_hold`,
+    `test_server_calibration`, `test_sim_board_camera`) 41 passed on each path (before the
+    second round: 3 failed on the GPU path, 2 on the CPU path).
+    `test_sim_board_camera.py::test_realtime_pacing` (a 0.6 s wall-clock limit) fails from load
+    alone: back to back, the old code failed 1 of 3 and the new code 0 of 3, and frames are
+    read at the same speed.
+  - **Limits:** when the whole process is starved (`busy=1`) the tests' wall-clock limits (the
+    90 s timeout, the 8 s stall) can still trip, at 14 of 15 views. Not timed on a quiet PC.
+  - **Left:** `test_server_live.py`, `test_server_basic.py`, `test_server_process_studio.py`
+    and `test_server_setup.py` also open sockets that a slow phase could leave unread for 40 s
+    (not seen failing); `APP_API.md`'s line on the `hello` message is stale (it lists neither
+    `calib_session` nor `setup`).
 
 ### [x] F11. The alignment from shape can accept a pose turned 180° when stray points are left ✔
 - **Found 2026-11-17** while building the comparison with a reference model

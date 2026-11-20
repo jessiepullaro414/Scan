@@ -2,7 +2,9 @@
 
 The simulator's live virtual scanner (:class:`ohs.sim.board_camera.SimBoardCamera`) is injected
 through ``sim_camera_factory`` with ``realtime=False`` (its virtual clock runs as fast as frames
-render, a few times real time; every capture rule works in frame time) and shorter dwells. A tiny
+render, a few times real time; every capture rule works in frame time) and shorter dwells, and its
+operator holds each pose until the app has taken or refused its view (``view_hold_s``; F10).
+``OHS_TEST_STARVE`` (``delay=<ms>``, ``busy=<n>``) runs these tests on a starved PC. A tiny
 scan demo (640x400) is pre-generated so ``connect sim`` is instant.
 
 * ``test_wizard_end_to_end_on_the_simulator`` (slow, ~80 s): stereo -> solve -> save, lasers, imu,
@@ -33,15 +35,17 @@ pytest.importorskip("fastapi")
 pytest.importorskip("open3d")
 requests = pytest.importorskip("requests")
 
-from websockets.sync.client import connect as ws_connect  # noqa: E402
 
 from ohs.app.config import Config  # noqa: E402
 from ohs.server.app import create_app  # noqa: E402
 from ohs.server.demo import DemoParams, demo_path, generate_demo  # noqa: E402
-from ohs.server.testing import ServerThread, recv_until  # noqa: E402
+from ohs.server.testing import LiveReader, ServerThread, recv_until  # noqa: E402
 
 T = 30  # HTTP timeout
-SIM_KW = {"realtime": False, "dwell_s": 1.0, "move_s": 0.4}
+# the simulated operator also holds each pose past its dwell until the app has taken or refused its
+# view, for at most 10 s of frame time (SimBoardCamera's view_hold_s): the virtual clock runs at
+# rendering speed, so a busy PC would otherwise lose views (MAINTENANCE_PLAN F10)
+SIM_KW = {"realtime": False, "dwell_s": 1.0, "move_s": 0.4, "view_hold_s": 10.0}
 
 
 def sim_factory(script, cfg):
@@ -50,6 +54,51 @@ def sim_factory(script, cfg):
 
     return SimBoardCamera(script, spec=cfg.board.spec(), paper=cfg.board.paper, fps=10.0 if script == "imu" else 5.0,
                           **SIM_KW)
+
+
+def _starve(spec: str, monkeypatch) -> list:
+    """Make the calibration's processing starve the way a busy PC does (MAINTENANCE_PLAN F10):
+    ``delay=<ms>`` adds that much to every board detection; ``busy=<n>`` runs n threads that keep
+    the interpreter busy for the whole test. Returns the busy threads' stop flags (empty for delay)."""
+    import threading
+
+    from ohs.server import calib_guide
+
+    stops = []
+    for part in filter(None, (p.strip() for p in spec.split(","))):
+        key, _, val = part.partition("=")
+        if key == "delay":
+            detect, extra = calib_guide.BoardDetector.detect, float(val) / 1000.0
+
+            def slow_detect(self, frame, _detect=detect, _extra=extra):
+                time.sleep(_extra)
+                return _detect(self, frame)
+
+            monkeypatch.setattr(calib_guide.BoardDetector, "detect", slow_detect)
+        elif key == "busy":
+            for _ in range(int(val)):
+                stop = threading.Event()
+
+                def spin(stop=stop):
+                    while not stop.is_set():
+                        sum(i * i for i in range(2000))
+
+                threading.Thread(target=spin, name="ohs-test-busy", daemon=True).start()
+                stops.append(stop)
+        else:
+            raise ValueError(f"OHS_TEST_STARVE: unknown part {part!r} (use delay=<ms>, busy=<n>)")
+    return stops
+
+
+@pytest.fixture(autouse=True)
+def starved(monkeypatch):
+    """``OHS_TEST_STARVE`` (e.g. ``delay=100`` or ``busy=2``): run these tests on a starved PC (:func:`_starve`)."""
+    import os
+
+    stops = _starve(os.environ.get("OHS_TEST_STARVE", ""), monkeypatch)
+    yield
+    for stop in stops:
+        stop.set()
 
 
 @pytest.fixture(scope="module")
@@ -283,6 +332,29 @@ def test_wizard_end_to_end_on_the_simulator(env):
                                     default=float))
 
 
+GUARD_DELAY_MS = 600  # F10 guard: each board detection this much slower than it is
+
+
+@pytest.mark.slow
+def test_stereo_views_are_not_lost_on_a_starved_pc(env, monkeypatch):
+    """The wizard's stereo step on a PC far too busy to keep up (MAINTENANCE_PLAN F10): each board
+    detection takes :data:`GUARD_DELAY_MS` longer, so the app processes only a few of the frames a
+    scripted pose gives it. The simulated operator holds each pose until the app has taken or
+    refused its view, so the step still gets the wizard test's views."""
+    _starve(f"delay={GUARD_DELAY_MS}", monkeypatch)
+    url = env["url"]
+    _connect_sim(url)
+    t0 = time.monotonic()
+    _ok(_post(url, "/api/calibration/start", {"kind": "stereo"}))
+    s = _views(url, 15, stall_s=8.0)
+    n = len(s["views"])
+    cam = env["studio"].devices.sim_camera()
+    print(f"F10_GUARD views={n} capture_s={time.monotonic() - t0:.1f} frames_held={cam.views_held} "
+          f"frames_skipped={cam.views_skipped}")
+    assert n >= 10, s["views"]  # as the wizard test
+    _ok(_post(url, "/api/calibration/cancel"))
+
+
 # --------------------------------------------------------------------------- rules
 @pytest.mark.slow
 def test_calibration_rules_on_the_simulator(env, monkeypatch):
@@ -398,9 +470,17 @@ def test_a_view_is_on_disk_before_the_session_shows_it(env, monkeypatch):
 def test_websocket_calibration_messages(env):
     url = env["url"]
     _connect_sim(url)
-    with ws_connect(env["srv"].ws_url, max_size=None, open_timeout=5) as ws:
-        msgs = recv_until(ws, lambda m, p, raw: m.get("type") == "status", timeout=10)
-        seeded = {m["type"]: m for m, _, _ in msgs}
+    with LiveReader(env["srv"].ws_url) as ws:
+        # the seed (hello, then device, session, calib_session, setup...). A `status` (10 Hz, to every
+        # client) may come in between: the order is not promised (APP_API.md) and the UI handles each type
+        # on its own, so wait for each seeded message rather than stopping at the first status
+        seeded: dict = {}
+
+        def seed(m, p, raw):
+            seeded.setdefault(m["type"], m)
+            return all(k in seeded for k in ("hello", "calib_session", "setup"))
+
+        recv_until(ws, seed, timeout=10)
         assert seeded["hello"]["version"] == "0.3.0"
         assert seeded["calib_session"]["state"] == "idle" and seeded["setup"]["target"] == "sim"
         ws.send(json.dumps({"type": "subscribe", "preview": True, "mesh": False, "max_preview_hz": 15}))
@@ -451,7 +531,7 @@ def test_calibration_with_the_camera(tmp_path, demo_dir):
     sp = SimPico()
     app = _app(tmp_path, demo_dir, camera_factory=lambda _c: cam, pico_factory=lambda _c: sp.pico())
     try:
-        with ServerThread(app) as srv, ws_connect(srv.ws_url, max_size=None, open_timeout=5) as ws:
+        with ServerThread(app) as srv, LiveReader(srv.ws_url) as ws:
             url = srv.url
             dev = _ok(_post(url, "/api/device/connect", {"source": "camera"}))
             assert dev["source"] == "camera" and dev["pico"]["connected"] and dev["sim_scene"] is None
@@ -510,7 +590,7 @@ def test_device_lost_cancels_the_calibration(tmp_path, demo_dir):
             return super().read(timeout)
 
     app = _app(tmp_path, demo_dir, camera_factory=lambda _c: Dying(size=(320, 200), fps=30.0), pico_factory=_no_pico)
-    with ServerThread(app) as srv, ws_connect(srv.ws_url, max_size=None, open_timeout=5) as ws:
+    with ServerThread(app) as srv, LiveReader(srv.ws_url) as ws:
         url = srv.url
         _ok(_post(url, "/api/device/connect", {"source": "camera"}))
         assert _ok(_post(url, "/api/calibration/start", {"kind": "stereo"}))["state"] == "capturing"
@@ -921,7 +1001,7 @@ def test_four_laser_calibration_on_the_simulator(tmp_path, demo_dir):
     sandbox = studio.sim_calib_path
     sandbox.parent.mkdir(parents=True, exist_ok=True)
     ScannerCalibration(true.stereo, {}, None).save(sandbox)  # the stereo step done
-    with ServerThread(app) as srv, ws_connect(srv.ws_url, max_size=None, open_timeout=5) as ws:
+    with ServerThread(app) as srv, LiveReader(srv.ws_url) as ws:
         url = srv.url
         _ok(_post(url, "/api/settings/lasers", {"lines": list(FOUR)}))
         studio.cfg.lasers.own_channels = False  # each pair on one channel: all lines at once (one at a time: below)
@@ -966,3 +1046,5 @@ def test_four_laser_calibration_on_the_simulator(tmp_path, demo_dir):
         assert set(live["lines"]["line_uv"]) <= set(FOUR) and live["lines"]["line_uv"]
         assert set(live["lines"]["meet_mm"]) == {"vertical"}  # the horizontal sheets meet beyond the range
         _ok(_post(url, "/api/calibration/cancel"))
+        # how long the server's event loop took to answer a ping, over the whole test (views, solve, save)
+        print(f"WS_RTT four_lasers max_ms={1000 * ws.max_rtt:.0f} pings={len(ws.rtts)} dropped={ws.dropped}")

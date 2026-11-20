@@ -297,7 +297,8 @@ class CalibrationSession:
                  source_name: str, meta: dict | None = None, emitters: str = "", truth: Any = None,
                  restart: Callable[[], None] | None = None, notify: Callable[[str, str], None] | None = None,
                  on_change: Callable[[], None] | None = None, sim: bool = False, lines: Any = None,
-                 light: Callable[[Any], None] | None = None, settle_frames: int = 3) -> None:
+                 light: Callable[[Any], None] | None = None, settle_frames: int = 3,
+                 on_view: Callable[[int | None, str], None] | None = None) -> None:
         if kind not in KINDS:
             raise ValueError(f"unknown calibration kind {kind!r}")
         from ohs.app.live import LatestSlot
@@ -365,6 +366,9 @@ class CalibrationSession:
         self._burst: dict | None = None
         self._seen_index = -1  # the newest frame index the device delivered
         self._next_lit = BURST_INDEX0
+        # told what became of each processed frame: (index, "taken" | "refused" | "wait"), and (None,
+        # "ended") at stop; only the tests' simulated operator listens (SimBoardCamera's view_hold_s)
+        self._on_view = on_view
 
     @property
     def one_at_a_time(self) -> bool:
@@ -410,6 +414,7 @@ class CalibrationSession:
         if burst is not None:  # a manual capture waiting for its frames: wake it, light nothing
             self._end_burst(burst, ApiError(409, "Not captured: the calibration ended", "start it again"))
         join_thread(self._thread, 10.0)
+        self._tell_view(None, "ended")
         if self._preview is not None:
             self._preview.close(timeout=3.0)
         if rec is not None:
@@ -502,6 +507,12 @@ class CalibrationSession:
             burst = self._burst
         if burst is not None:
             self._burst_step(burst, frame, d)
+            if self._on_view is not None:
+                done = burst["done"].is_set()
+                taken = done and isinstance(burst["result"], _View)
+                # a burst that failed while capturing is tried again: the operator holds on
+                self._tell_view(frame.index, "taken" if taken else "refused" if done and not self._capturing()
+                                else "wait")
             return
         if self._steady_reset:
             self._steady_reset = False
@@ -520,6 +531,7 @@ class CalibrationSession:
         unusable = guide.usable_reason(d)
         reason = None
         capture = False
+        outcome = "refused"  # for on_view: this pose gives no view (unless set otherwise below)
         if state == "capturing" and self.kind != "imu":
             new, close = guide.novelty(d, views) if unusable is None else (False, None)
             cooled = self._t_last_capture is None or d.t - self._t_last_capture >= guide.COOLDOWN_S
@@ -535,6 +547,8 @@ class CalibrationSession:
             elif not cooled:
                 reason = "Hold still"
             capture = auto and reason is None and frame.index != self._last_capture_frame
+            if auto and (reason == "Hold still" or (reason is None and not capture)):
+                outcome = "wait"
         elif state == "solving":
             reason = "Calibrating…"
         elif state == "result":
@@ -546,6 +560,7 @@ class CalibrationSession:
             self._begin_burst(frame, d, auto=True)  # the view is stored when every laser has had its frame
             capture = False
             reason = "Lighting the lasers one at a time: hold still"
+            outcome = "wait"
         if capture:
             try:
                 view = self._store(frame, d, auto=True)
@@ -553,12 +568,15 @@ class CalibrationSession:
                 views = list(self.views)
                 steady, ready = 0.0, False
                 reason = f"View {view.index + 1} captured: move the board to a new pose"
+                outcome = "taken"
                 safe_call("publishing the session", self._on_change)
             except ApiError:
-                pass
+                outcome = "wait"
             except Exception as e:
                 log.exception("auto-capture failed")
                 self._notify("error", f"The view could not be saved ({e}): check the free disk space")
+        if self._on_view is not None:
+            self._tell_view(frame.index, outcome)
         now = time.monotonic()
         if now - self._t_live >= 1.0 / LIVE_HZ - 0.004 or capture:
             self._t_live = now
@@ -581,6 +599,12 @@ class CalibrationSession:
             self._burst = burst
         self._switch(burst)
         return burst
+
+    def _tell_view(self, index: int | None, outcome: str) -> None:
+        """Tell ``on_view`` (if anyone listens) what became of frame ``index``; its errors are logged only."""
+        hook = self._on_view
+        if hook is not None:
+            safe_call("telling the simulated operator", lambda: hook(None if index is None else int(index), outcome))
 
     def _capturing(self) -> bool:
         with self._lock:
@@ -1124,7 +1148,9 @@ class CalibrationManager:
                     truth=getattr(cam, "true_calibration", None) if cam is not None else None,
                     restart=getattr(cam, "restart", None) if (cam is not None and kind == "imu") else None,
                     notify=st.notify, on_change=self.publish, sim=source == "sim", lines=lines,
-                    light=light, settle_frames=BURST_SETTLE_FRAMES["sim" if source == "sim" else "camera"])
+                    light=light, settle_frames=BURST_SETTLE_FRAMES["sim" if source == "sim" else "camera"],
+                    on_view=safe_call("looking for a simulated operator",
+                                      getattr(dev, "view_listener", lambda: None)))
                 s.start()
                 self._emitters_on(s)
                 dev.attach(s)

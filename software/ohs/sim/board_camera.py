@@ -55,6 +55,22 @@ view was taken depended on how many frames the app could process before the scri
 so a busy PC lost views. Nothing changes while every laser is lit, so the two-laser build and the
 deterministic :meth:`SimBoardCamera.frame_at` are as before.
 
+**Holding each pose until the view is taken** (``view_hold_s`` > 0; the tests' operator, off by
+default): the script clock runs faster or slower than the app can process frames (it runs at
+rendering speed, and the app's calibration takes only the newest frame), so a scripted dwell of a
+few frames could end before the app had judged the pose steady, and a busy PC lost views
+(MAINTENANCE_PLAN.md, F10). With ``view_hold_s`` the operator listens to the app
+(:meth:`SimBoardCamera.view_outcome`, called by the calibration session for each frame it
+processes): when a dwell ends before the app has taken or refused a view of that pose, the board
+stays there (the script clock stands still) until it has, for at most ``view_hold_s`` of frame
+time per pose; meanwhile a frame is rendered only while the app is at most :data:`VIEW_AHEAD_S`
+of frame time behind (waiting at most :data:`VIEW_WAIT_S` per frame), so held frames are not
+rendered for nothing and two processed frames can show the board steady. Once the app has taken
+the view the operator moves on at once, as a person does when told the view is captured: the
+rest of that dwell is skipped (the frames the app would only call "too close" to the view just
+taken). Nobody listening (the app's demo, a camera stand-in without the hook) or
+``view_hold_s=0``: nothing changes.
+
 **Frames:** board poses are ``T_cb`` in frame C, the rectified left camera of
 ``true_calibration``. The raw left camera is ``x_C = R1 x_rawL``; the raw right camera is
 ``x_rawR = R x_rawL + T`` (OpenCV ``stereoCalibrate`` convention).
@@ -102,6 +118,7 @@ __all__ = [
     "LASER_DN",
     "LASER_EXPOSURE",
     "LIT_HOLD_S",
+    "VIEW_OUTCOMES",
     "SimFeed",
     "SimBoardCamera",
 ]
@@ -113,6 +130,10 @@ SCRIPTS = ("stereo", "lasers", "imu", "check")
 DWELL_S = 1.6  # board tours: time at each pose
 MOVE_S = 0.7  # board tours: time to move to the next pose
 LIT_HOLD_S = 10.0  # the operator holds the board still this long at most while only some lasers are lit
+VIEW_WAIT_S = 0.5  # view_hold_s: while holding, wait at most this long (wall) for the app before the next frame
+VIEW_AHEAD_S = 0.6  # view_hold_s: while holding, render at most this much frame time ahead of the app (more
+#                     than its half-second hold-still check, so two processed frames can show the board steady)
+VIEW_OUTCOMES = ("taken", "refused", "wait", "ended")  # what view_outcome() is told
 TOUR_POSES = {"stereo": 16, "lasers": 8, "check": 4}
 CHECK_SEED_OFFSET = 1  # the check poses are laser_calib_board_poses(..., seed + 1)
 IMU_STILL_S = 2.5  # imu script: still, rotate, return, still
@@ -522,15 +543,18 @@ class SimBoardCamera:
     the scanner's line lasers, as in :func:`~ohs.sim.nominal.nominal_calibration` (default: the two
     standard ones). ``t0`` is the virtual host time of frame 0's exposure. ``lit_hold_s``: how long
     (frame time) the operator holds the board still at most while only some lasers are lit (module
-    docstring; 0: not at all). Thread-safe for one reader plus :meth:`restart`, :meth:`light`,
-    :meth:`phase`, :meth:`true_pose` and :meth:`close` from other threads.
+    docstring; 0: not at all). ``view_hold_s``: how long (frame time) the operator holds a pose at
+    most after its dwell until the app has taken or refused its view (module docstring; 0, the
+    default: the board keeps to the script). Thread-safe for one reader plus :meth:`restart`,
+    :meth:`light`, :meth:`view_outcome`, :meth:`phase`, :meth:`true_pose` and :meth:`close` from
+    other threads.
     """
 
     def __init__(self, script: str, *, image_size: tuple[int, int] = (1280, 800), fps: float = 10.0,
                  spec: CharucoSpec | None = None, paper: str = "letter", seed: int = 0, realtime: bool = True,
                  loop: bool = True, dwell_s: float | None = None, move_s: float | None = None,
                  t0: float = 100.0, lasers: int = 2, layout: str | None = None,
-                 lit_hold_s: float = LIT_HOLD_S) -> None:
+                 lit_hold_s: float = LIT_HOLD_S, view_hold_s: float = 0.0) -> None:
         if script not in SCRIPTS:
             raise ValueError(f"unknown script {script!r}; choose one of {SCRIPTS}")
         if not fps > 0:
@@ -552,6 +576,11 @@ class SimBoardCamera:
             raise ValueError("lit_hold_s must not be negative")
         self.lit_hold_s = float(lit_hold_s)
         self._hold_frames = int(math.ceil(self.lit_hold_s * self.fps - 1e-6))
+        if not view_hold_s >= 0:
+            raise ValueError("view_hold_s must not be negative")
+        self.view_hold_s = float(view_hold_s)
+        self._view_hold_frames = int(math.ceil(self.view_hold_s * self.fps - 1e-6))
+        self._view_ahead = max(2, int(math.ceil(VIEW_AHEAD_S * self.fps - 1e-6)))
         self.true_calibration = _true_calibration(self.image_size, lasers, layout)
         self._emitters = nominal_emitters(baseline=self.true_calibration.stereo.baseline, lasers=lasers, layout=layout)
         self.laser_names = tuple(_line_lasers(self._emitters))
@@ -578,6 +607,17 @@ class SimBoardCamera:
         self.feed = SimFeed(self._synthesize_imu(), self.period_s, self._time_offset, self.t0 + self._time_offset,
                             self.loop)
         self._lock = threading.Lock()
+        self._cond = threading.Condition(self._lock)  # view_outcome() wakes a reader waiting for the app
+        # holding each pose until the view is taken (view_hold_s): what the app said, and the current dwell
+        self._listening = False  # the app reports on its frames (view_outcome), and has not ended
+        self._reported = -1  # the newest frame index the app reported on
+        self._dwell: int | None = None  # the pose index of the latest frame's dwell (None: moving / imu)
+        self._dwell_k0 = 0  # the first frame index of that dwell
+        self._dwell_done = False  # the app took or refused a view of a frame of that dwell
+        self._dwell_taken = False  # it took one: the operator moves on at once (the rest of the dwell is skipped)
+        self._view_run = 0  # frames that pose was held past its dwell
+        self.views_held = 0  # frames held for views in all (for tests and logs)
+        self.views_skipped = 0  # dwell frames skipped because the view was taken already
         self._k = 0  # next frame index
         self._k_start = 0  # frame index at script time 0
         self._held = 0  # frames since then on which the operator held still for the lasers
@@ -603,7 +643,9 @@ class SimBoardCamera:
 
     def close(self) -> None:
         """Release the renderers. Idempotent; :meth:`open` again continues the virtual clock."""
-        self._open = False
+        with self._cond:
+            self._open = False
+            self._cond.notify_all()  # a reader waiting for the app (view_hold_s) stops waiting
         self._pace = None
         self._renderers = None
 
@@ -649,17 +691,25 @@ class SimBoardCamera:
             if now - due > RESYNC_S:
                 self._pace, due = (now, k), now
         with self._lock:
+            if self._view_run and self._listening:  # holding for a view: let the app catch up first
+                self._cond.wait_for(lambda: self._reported >= k - self._view_ahead or self._dwell_done
+                                    or not self._listening or not self._open, timeout=VIEW_WAIT_S)
             if self._restart_pending:
                 self._restart_pending = False
                 self._k_start = k
                 self._held = self._hold_run = 0
+                self._dwell, self._view_run = None, 0
                 self.feed._restart(self._t_exp(k) + self._time_offset)
+            lit_held = False
             if self._lit is None:
                 self._hold_run = 0
             elif self._hold_run < self._hold_frames and k > self._k_start:
                 self._held += 1  # only some lasers lit: the board stays where the last frame showed it
                 self._hold_run += 1
+                lit_held = True
             n = k - self._k_start - self._held
+            if self._view_hold_frames and self._poses:
+                n = self._hold_for_view(k, n, lit_held)
             if not self.loop and n >= self.frames_per_pass:
                 raise EOFError(f"end of the {self.script} script")
             s = (n / self.fps) % self.period_s if self.loop else n / self.fps
@@ -683,6 +733,32 @@ class SimBoardCamera:
                 raise ValueError(f"no laser {unknown} on this scanner (it has {list(self.laser_names)})")
         with self._lock:
             self._lit = names
+
+    @property
+    def holds_views(self) -> bool:
+        """Does the operator hold each pose until the app has taken or refused its view (``view_hold_s``)?"""
+        return self._view_hold_frames > 0 and bool(self._poses)
+
+    def view_outcome(self, index: int | None, outcome: str) -> None:
+        """What the app did with frame ``index`` (the calibration session calls this for each frame
+        it processes): ``"taken"`` (a view of it was stored), ``"refused"`` (this pose gives no view:
+        unusable, not new, enough views, not capturing), ``"wait"`` (not yet: hold still, the lasers
+        taking turns) or ``"ended"`` (the app stops listening; ``index`` None). Only used with
+        ``view_hold_s`` (module docstring); harmless otherwise."""
+        if outcome not in VIEW_OUTCOMES:
+            raise ValueError(f"unknown view outcome {outcome!r}; use one of {VIEW_OUTCOMES}")
+        with self._cond:
+            if outcome == "ended":
+                self._listening = False
+            else:
+                self._listening = True
+                if index is not None:
+                    i = int(index)
+                    self._reported = max(self._reported, i)
+                    if outcome != "wait" and self._dwell is not None and i >= self._dwell_k0:
+                        self._dwell_done = True
+                        self._dwell_taken = self._dwell_taken or outcome == "taken"
+            self._cond.notify_all()
 
     @property
     def lit(self) -> tuple[str, ...]:
@@ -743,6 +819,45 @@ class SimBoardCamera:
     # ------------------------------------------------------------------ internals
     def _t_exp(self, k: int) -> float:
         return self.t0 + k / self.fps
+
+    def _dwell_of(self, n: int) -> int | None:
+        """Index of the pose whose dwell script frame ``n`` is in (None: moving, or past the end)."""
+        s = (n / self.fps) % self.period_s if self.loop else n / self.fps
+        if s >= self.period_s:
+            return None
+        seg = self.dwell_s + self.move_s
+        i = min(int(s // seg), len(self._poses) - 1)
+        return i if (s - i * seg < self.dwell_s or self.move_s <= 0) else None
+
+    def _hold_for_view(self, k: int, n: int, lit_held: bool) -> int:
+        """(Under the lock.) The script frame of frame ``k`` (``n`` as scripted) with the view hold
+        applied: when the latest frame's dwell would end before the app has taken or refused a view
+        of it, the board stays at that frame; once the app has taken it, the operator moves on at
+        once, skipping the rest of the dwell (module docstring)."""
+        pose = self._dwell_of(n)
+        if lit_held or not self._listening or self._dwell is None:
+            pass
+        elif pose != self._dwell:
+            if not self._dwell_done and self._view_run < self._view_hold_frames and k > self._k_start:
+                self._held += 1
+                self._view_run += 1
+                self.views_held += 1
+                return n - 1  # the last frame of the dwell
+        elif self._dwell_taken:  # taken within the dwell: on to the move
+            skip = 0
+            while skip <= self.frames_per_pass and self._dwell_of(n + skip) == pose:
+                skip += 1
+            self._held -= skip
+            self.views_skipped += skip
+            n += skip
+            pose = self._dwell_of(n)
+        if pose != self._dwell:
+            if self._view_run:
+                log.debug("pose %s held %d frames for its view (%s)", self._dwell, self._view_run,
+                          "the app answered" if self._dwell_done else "gave up")
+            self._dwell, self._dwell_k0, self._view_run = pose, k, 0
+            self._dwell_done = self._dwell_taken = False
+        return n
 
     def _script_pose(self, s: float) -> tuple[np.ndarray, str]:
         """``(T_cb, phase)`` at script time ``s`` in ``[0, period_s)``."""

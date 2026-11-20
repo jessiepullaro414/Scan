@@ -356,6 +356,16 @@ class DeviceManager:
             return None
         return c.camera
 
+    def view_listener(self) -> Callable[[int | None, str], None] | None:
+        """The connected camera's ``view_outcome`` when it is a virtual scanner whose operator holds
+        each board pose until the calibration has taken its view (``SimBoardCamera`` with
+        ``view_hold_s``: the tests' operator), else None (a real camera, the replay, the app's simulator)."""
+        c = self._conn
+        cam = c.camera if c is not None else None
+        if cam is None or getattr(cam, "holds_views", False) is not True:
+            return None
+        return getattr(cam, "view_outcome", None)
+
     def camera_index(self) -> int | None:
         """OpenCV index of the connected camera (None unless the source is the camera)."""
         c = self._conn
