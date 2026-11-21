@@ -9,15 +9,32 @@
  * calibration's status judges the lasers and the motion sensor on that path too (D7), so that is not listed.
  */
 
-export type ComputeInfo = { backend?: string; status?: string; device?: { name?: string; kind?: string; memory_mb?: number } | null };
+export type ComputeInfo = {
+  backend?: string;
+  status?: string;
+  device?: { name?: string; kind?: string; memory_mb?: number } | null;
+  /** Who chose the compute path (UX_PLAN R20): this run's environment, the app's settings, or nobody. */
+  preference_from?: string;
+};
 
-/** Why there is no graphics card in use, in plain words, from the engine's status. */
-function why(status: string): string {
-  // R20: the engine says the same whether the settings or the environment turned it off, so the line names neither
-  if (/turned off/i.test(status)) return "the graphics card is turned off for this app (in its settings, or for this run)";
+/**
+ * Why there is no graphics card in use, in plain words, from the engine's status and who chose (`preference_from`,
+ * UX_PLAN R20): a setting of the app, a setting of this run made outside the app, or nobody (none was found).
+ */
+function why(status: string, from: string | undefined): string {
+  if (/turned off/i.test(status)) {
+    if (from === "settings") return "the graphics card is turned off in the app's settings";
+    if (from === "environment") return "the graphics card is turned off for this run, by a setting made outside the app";
+    // an engine from before R20 says the same either way
+    return "the graphics card is turned off for this app (in its settings, or for this run)";
+  }
   if (/PyOpenCL is not installed/i.test(status)) return "the app's support for graphics cards is not installed";
   if (/no OpenCL driver/i.test(status)) return "no driver for a graphics card was found";
-  if (/no GPU matches/i.test(status)) return "no graphics card found: none matches the one named in the settings";
+  if (/no GPU matches/i.test(status)) {
+    if (from === "settings") return "no graphics card found: none matches the one named in the app's settings";
+    if (from === "environment") return "no graphics card found: none matches the one named for this run, outside the app";
+    return "no graphics card found: none matches the one named in the settings";
+  }
   if (/passed the OpenCL check/i.test(status)) return "the graphics card found did not pass the app's check";
   return "no graphics card found";
 }
@@ -43,7 +60,7 @@ export function computerLine(c: unknown, opts: { name?: boolean } = {}): { tone:
   }
   const status = typeof v.status === "string" ? v.status : "";
   if (/not checked yet/i.test(status)) return { tone: "neutral", text: "This computer: looking for a graphics card…", missing: [] };
-  return { tone: "warn", text: `This computer: ${why(status)}. Scans still work, with these limits:`, missing: WITHOUT_GRAPHICS_CARD };
+  return { tone: "warn", text: `This computer: ${why(status, v.preference_from)}. Scans still work, with these limits:`, missing: WITHOUT_GRAPHICS_CARD };
 }
 
 /**

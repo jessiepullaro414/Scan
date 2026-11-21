@@ -10,7 +10,8 @@
  *
  * Pure (no React, no store), so `npm test` runs it with Node.
  */
-import type { Job } from "../api/types";
+import type { Job, StageId } from "../api/types";
+import { STAGE_TITLES } from "./stages.ts";
 
 export const MIN_FRAMES = 5;
 export const MIN_SECONDS = 3;
@@ -26,11 +27,13 @@ export type Estimate =
   /** All frames done: the mesh is being made from them. */
   | { kind: "tail" };
 
-/** What the pass is doing, for the words: "tracking", "fusing", or nothing for a stage it doesn't know. */
+/**
+ * Which stage the estimate is for, by the table's names (UX_PLAN R18: it covers that stage alone): " for Follow the
+ * camera", " for Straighten", or nothing for a stage it doesn't know.
+ */
 function doing(stage: string): string {
-  if (stage === "track") return " for tracking";
-  if (stage === "straighten" || stage === "fuse") return " for fusing";
-  return "";
+  const t = STAGE_TITLES[stage as StageId];
+  return t ? ` for ${t.label}` : "";
 }
 
 /** Seconds left in words, rounded so the text doesn't flicker: "About 4 min left". */

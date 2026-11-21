@@ -39,8 +39,11 @@ check(onlyMerge.path.length === 0 && onlyMerge.other.length === 1, "a merge's no
 const mixed = pathWarningChip({ warnings: [MERGE, ENGINE] });
 check(!!mixed && !mixed.title.includes("raised areas"), `the path chip's hover holds the path's sentence only: ${mixed?.title}`);
 const notes = notesChip({ warnings: [MERGE, ENGINE] }, true);
-check(!!notes && notes.text === "What the merge left out" && notes.title === MERGE, `the merge's chip: ${JSON.stringify(notes)}`);
-check(notesTitle(true) === "What the merge left out" && notesTitle(false) === "Notes on making the mesh", "the titles");
+// the merge's notes also say what it kept ("1 raised area that may be a thin part is kept too"), and the scan's
+// summary has them as one list without the server's grouping: a title that fits both (UX_PLAN, noticed with R1)
+check(!!notes && notes.text === "Notes from the merge" && notes.title === MERGE, `the merge's chip: ${JSON.stringify(notes)}`);
+check(notesTitle(true) === "Notes from the merge" && notesTitle(false) === "Notes on making the mesh", "the titles");
+check(!/left out/.test(notesTitle(true)), "not “What the merge left out” over a note that says something was kept");
 check(notesChip({ warnings: [ENGINE] }, true) === null && notesChip({ frames: {} }, false) === null, "no notes: no chip");
 // an older engine's sentence (with "GPU") is still the path's
 check(splitWarnings({ warnings: ["The camera path jumps by 9 mm near frame 2: tracking may have slid there. This scan was processed without a GPU."] }).path.length === 1, "older words");

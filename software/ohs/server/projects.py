@@ -103,6 +103,15 @@ def _same_name(a: Any, b: Any) -> bool:
     return " ".join(str(a or "").split()).casefold() == " ".join(str(b or "").split()).casefold()
 
 
+def refuse_taken_name(name: str, taken: list[str]) -> None:
+    """UX_PLAN R21: two scans of one project never share a name. A name one of ``taken`` has is refused in plain
+    words (409) with a ``suggestion``, the next free one; used by a rename and by a merge whose name was typed."""
+    if any(_same_name(name, o) for o in taken):
+        suggestion = free_name(name, taken)
+        raise ApiError(409, f"Another scan of this project is already called “{name}”.",
+                       f"Pick another name, for example “{suggestion}”.", extra={"suggestion": suggestion})
+
+
 def free_name(wanted: str, taken: list[str]) -> str:
     """``wanted``, or the first of "wanted (2)", "wanted (3)", ... that none of ``taken`` is (UX_PLAN R21: names compared
     without case and extra spaces)."""
@@ -443,10 +452,7 @@ class ProjectStore:
             data = self._load(pid)
             entry = self._scan_entry(data, sid)
             others = [str(e.get("name") or "") for e in data["scans"] if e.get("id") != sid]
-            if any(_same_name(n, o) for o in others):  # UX_PLAN R21: two scans of one project never share a name
-                suggestion = free_name(n, others)
-                raise ApiError(409, f"Another scan of this project is already called “{n}”.",
-                               f"Pick another name, for example “{suggestion}”.", extra={"suggestion": suggestion})
+            refuse_taken_name(n, others)
             entry["name"] = n
             self._touch(data)
             self._save(pid, data)

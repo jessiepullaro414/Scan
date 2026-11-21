@@ -125,14 +125,17 @@ export class ApiError extends Error {
   readonly detail: string;
   readonly hint: string | null;
   readonly path: string;
+  /** The answer's other fields beside detail and hint (UX_PLAN R21: a rename's `suggestion`). */
+  readonly extra: Record<string, unknown>;
 
-  constructor(status: number, detail: string, hint: string | null, path: string) {
+  constructor(status: number, detail: string, hint: string | null, path: string, extra: Record<string, unknown> = {}) {
     super(detail);
     this.name = "ApiError";
     this.status = status;
     this.detail = detail;
     this.hint = hint;
     this.path = path;
+    this.extra = extra;
   }
 
   /** The engine could not be reached at all (not running, or the dev proxy has no target). */
@@ -166,12 +169,17 @@ function detailText(detail: unknown): string | null {
 async function toApiError(res: Response, path: string): Promise<ApiError> {
   let detail: string | null = null;
   let hint: string | null = null;
+  let extra: Record<string, unknown> = {};
   const text = await res.text().catch(() => "");
   if (text) {
     try {
       const body = JSON.parse(text) as { detail?: unknown; hint?: unknown };
       detail = detailText(body.detail);
       hint = typeof body.hint === "string" ? body.hint : null;
+      if (body && typeof body === "object" && !Array.isArray(body)) {
+        const { detail: _d, hint: _h, ...rest } = body as Record<string, unknown>;
+        extra = rest;
+      }
     } catch {
       /* not JSON: a proxy or server error page */
     }
@@ -183,7 +191,7 @@ async function toApiError(res: Response, path: string): Promise<ApiError> {
     }
     detail = `${res.status} ${res.statusText || "error"} (${path})`;
   }
-  return new ApiError(res.status, detail, hint, path);
+  return new ApiError(res.status, detail, hint, path, extra);
 }
 
 export type RawResponse<T> = { status: number; data: T };
@@ -394,6 +402,8 @@ export const api = {
   processEdit: (pid: string, sid: string, body: EditBody) => post<Job>(`${scanPath(pid, sid)}/process/edits`, body),
   processUndo: (pid: string, sid: string) => post<ProcessState>(`${scanPath(pid, sid)}/process/undo`),
   processRedo: (pid: string, sid: string) => post<ProcessState>(`${scanPath(pid, sid)}/process/redo`),
+  /** UX_PLAN R23: the mesh an edit was applied to (`before`) or made (`after`), at any later time (binary PLY). */
+  editStepUrl: (pid: string, sid: string, editId: string, which: "before" | "after") => `${scanPath(pid, sid)}/process/edits/${enc(editId)}/${which}.ply`,
   processRecipe: (pid: string, sid: string, recipe_id: string, scope: RecipeScope) =>
     post<Job>(`${scanPath(pid, sid)}/process/recipe`, { recipe_id, scope }),
   processHoles: (pid: string, sid: string) => get<HoleOutline[]>(`${scanPath(pid, sid)}/process/holes.json`),

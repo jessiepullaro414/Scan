@@ -23,15 +23,28 @@ check(cpu!.missing.some((m) => /confidence/.test(m) && /Scan check/.test(m)), "n
 check(cpu!.missing.some((m) => /Thin walls and edges/.test(m)), "thin walls");
 check(cpu!.missing.some((m) => /tracking/i.test(m)), "tracking on plain parts");
 check(cpu!.missing.some((m) => /longer/.test(m)), "slower");
-const off = computerLine({ backend: "cpu", status: 'the GPU is turned off (compute.device = "cpu"): everything runs on the CPU' });
-// R20: the engine does not say whether the settings or the environment turned it off
-check(off!.text === "This computer: the graphics card is turned off for this app (in its settings, or for this run). Scans still work, with these limits:", off!.text);
+const OFF = 'the GPU is turned off (compute.device = "cpu"): everything runs on the CPU';
+// R20: who turned it off (`preference_from`), in plain words for each case
+const off = computerLine({ backend: "cpu", status: OFF, preference_from: "settings" });
+check(off!.text === "This computer: the graphics card is turned off in the app's settings. Scans still work, with these limits:", off!.text);
+const offEnv = computerLine({ backend: "cpu", status: OFF, preference_from: "environment" });
+check(offEnv!.text === "This computer: the graphics card is turned off for this run, by a setting made outside the app. Scans still work, with these limits:", offEnv!.text);
+// an engine from before (no `preference_from`): the old words, which name neither
+check(computerLine({ backend: "cpu", status: OFF })!.text.includes("turned off for this app (in its settings, or for this run)"), "an older engine");
+// nobody chose (auto) and no card in use: none was found, whatever the status says
+const auto = computerLine({ backend: "cpu", status: "no OpenCL GPU was found: everything runs on the CPU", preference_from: "auto" });
+check(auto!.text === "This computer: no graphics card found. Scans still work, with these limits:", auto!.text);
+// a setting (or this run) asked for a graphics card that was not there: the status says which case
+check(computerLine({ backend: "cpu", status: "no GPU matches compute.device = 'RTX': everything runs on the CPU", preference_from: "settings" })!.text.includes("none matches the one named in the app's settings"), "the settings name a card that is not there");
+check(computerLine({ backend: "cpu", status: "no GPU matches compute.device = 'RTX': everything runs on the CPU", preference_from: "environment" })!.text.includes("none matches the one named for this run, outside the app"), "this run names a card that is not there");
+// with a card in use the source does not matter
+check(computerLine({ backend: "gpu", status: "GPU: x", device: { name: "x" }, preference_from: "environment" })!.text === "This computer: graphics card found. Every feature works.", "a card in use");
 check(computerLine({ backend: "cpu", status: "PyOpenCL is not installed (pip install pyopencl): everything runs on the CPU" })!.text.includes("support for graphics cards is not installed"), "no PyOpenCL");
 check(computerLine({ backend: "cpu", status: "no OpenCL driver was found (x): everything runs on the CPU" })!.text.includes("no driver for a graphics card was found"), "no driver");
 check(computerLine({ backend: "cpu", status: "no GPU matches compute.device = 'RTX': everything runs on the CPU" })!.text.includes("none matches the one named in the settings"), "no match");
 check(computerLine({ backend: "cpu", status: "no GPU passed the OpenCL check (x): everything runs on the CPU" })!.text.includes("did not pass the app's check"), "failed probe");
 // the engine's own words never show: no "GPU", "OpenCL", "pip", "CPU", "compute.device"
-for (const c of [cpu, off]) for (const s of [c!.text, ...c!.missing]) check(!/GPU|OpenCL|pip |CPU|compute\./.test(s), s);
+for (const c of [cpu, off, offEnv, auto]) for (const s of [c!.text, ...c!.missing]) check(!/GPU|OpenCL|pip |CPU|compute\.|OHS_COMPUTE|environment/.test(s), s);
 check(computerLine({ backend: "cpu", status: "not checked yet" })!.text === "This computer: looking for a graphics card…", "still checking");
 check(computerLine(null) === null && computerLine("x") === null, "nothing known");
 

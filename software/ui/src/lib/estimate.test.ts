@@ -35,19 +35,22 @@ check(m.kind === "measuring" && m.text === "Working out the time left…", "the 
 
 // steady: by time, or by share (a short scan)
 const a = jobEstimate(job(fr(20, 920, 6, 3.2)));
-check(a.kind === "left" && Math.abs(a.seconds - 150) < 1e-9 && a.text === "About 3\u202fmin left for tracking", `900 frames at 6\u202ffps: ${JSON.stringify(a)}`);
+check(a.kind === "left" && Math.abs(a.seconds - 150) < 1e-9 && a.text === "About 3\u202fmin left for Follow the camera", `900 frames at 6\u202ffps: ${JSON.stringify(a)}`);
 const b = jobEstimate(job(fr(8, 40, 10, 0.7)));
-check(b.kind === "left" && Math.abs(b.seconds - 3.2) < 1e-9 && b.text === "A few seconds left for tracking", `a short pass, steady by share: ${JSON.stringify(b)}`);
+check(b.kind === "left" && Math.abs(b.seconds - 3.2) < 1e-9 && b.text === "A few seconds left for Follow the camera", `a short pass, steady by share: ${JSON.stringify(b)}`);
 
 // the rate changes: the estimate follows it
 const slow = jobEstimate(job(fr(100, 1000, 5, 20)));
 const fast = jobEstimate(job(fr(100, 1000, 15, 20)));
 check(slow.kind === "left" && fast.kind === "left" && Math.abs(slow.seconds - 180) < 1e-9 && Math.abs(fast.seconds - 60) < 1e-9, "the rate changes");
-check(slow.kind === "left" && slow.text === "About 3\u202fmin left for tracking" && fast.kind === "left" && fast.text === "About 1\u202fmin left for tracking", "the words follow");
+check(slow.kind === "left" && slow.text === "About 3\u202fmin left for Follow the camera" && fast.kind === "left" && fast.text === "About 1\u202fmin left for Follow the camera", "the words follow");
 
 // the other passes
 const s = jobEstimate(job(fr(300, 900, 10, 30, "straighten")));
-check(s.kind === "left" && s.text === "About 1\u202fmin left for fusing", "a straighten pass fuses");
+// UX_PLAN R18: the estimate names its stage by the table's name (it is for that stage alone)
+check(s.kind === "left" && s.text === "About 1\u202fmin left for Straighten", "a straighten pass: named by its stage");
+const fz = jobEstimate(job(fr(300, 900, 10, 30, "fuse")));
+check(fz.kind === "left" && fz.text === "About 1\u202fmin left for Build the surface", "a fuse pass");
 const u = jobEstimate(job(fr(300, 900, 10, 30, "something")));
 check(u.kind === "left" && u.text === "About 1\u202fmin left", "an unknown stage: no suffix");
 

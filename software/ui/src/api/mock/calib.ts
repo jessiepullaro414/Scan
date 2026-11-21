@@ -87,7 +87,8 @@ const TARGET: Record<CalibKind, [number, number]> = { stereo: [15, 25], lasers: 
 const MIN_VIEWS: Record<CalibKind, number> = { stereo: 4, lasers: 3, imu: 1, check: 1 };
 const RANGE: Record<CalibKind, [number, number]> = { stereo: [200, 500], lasers: [150, 450], imu: [150, 600], check: [150, 450] };
 const GUIDANCE: Record<CalibKind, string> = {
-  stereo: "15–25 views, 200–500 mm away, tilt the board 20–45° in different directions, cover the image corners and edges",
+  // the engine's words (ohs/server/calibration.py GUIDANCE; R20: "at each view", not "pose")
+  stereo: "Hold the board 200–500 mm from the scanner in 15–25 different views: cover the corners and edges of both pictures and tilt it 20–45° in different directions. Hold still for half a second at each view.",
   lasers: "6–10 views, 150–450 mm away, tilt up to ±30°, both laser lines crossing the white page margin",
   imu: "Hold still 2 s, then rotate about all three axes for 20–60 s, keeping the board in view",
   check: "3–5 views at different distances, both laser lines on the white margin",
@@ -1147,10 +1148,10 @@ export class MockCalib {
     const rowErr = rms * 0.42;
     const metrics: CalibMetric[] = [
       {
-        label: "Reprojection error",
+        label: "How well the corners fit", // R12: the engine's words (calib_results.py)
         value: `${rms.toFixed(2)} px (want < 0.5 px)`,
         ok: rms < 0.5,
-        help: "How far, on average, the detected corners are from where the calibration puts them. Under 0.5 px is good, under 0.3 px excellent.",
+        help: "How far the detected corners are from where the calibration puts them. Lower is better.",
       },
       {
         label: "Coverage",
@@ -1214,9 +1215,9 @@ export class MockCalib {
       per_view: perView,
       sim_truth: this.sim()
         ? [
-            { label: "Focal length", value: `${(722.4 * (1 + (r() - 0.5) * 0.004 * rms)).toFixed(2)} px (true 722.40)`, ok: true, help: "The estimated focal length of the left lens against the virtual scanner's true one." },
-            { label: "Principal point", value: `${(0.2 + rms * 1.1).toFixed(1)} px from the truth`, ok: rms * 1.1 < 1.5, help: "Where the optical axis meets the image. Under 1.5 px off is fine." },
-            { label: "Distance between the cameras", value: `${baseline.toFixed(3)} mm (true 60.040)`, ok: Math.abs(baseline - 60.04) < 0.1, help: "The estimated lens spacing against the true 60.04 mm." },
+            { label: "Focal length vs truth", value: `${(722.4 * (1 + (r() - 0.5) * 0.004 * rms)).toFixed(2)} px (true 722.40)`, ok: true, help: "The estimated focal length of the left lens against the virtual scanner's true one." },
+            { label: "Image centre vs truth", value: `${(0.2 + rms * 1.1).toFixed(2)} px`, ok: rms * 1.1 < 1.5, help: "Where the optical axis meets the image. Under 1.5 px off is fine." },
+            { label: "Camera distance vs truth", value: `${baseline - 60.04 >= 0 ? "+" : "−"}${Math.abs(baseline - 60.04).toFixed(3)} mm`, ok: Math.abs(baseline - 60.04) < 0.1, help: "The estimated lens spacing against the true 60.04 mm." },
             { label: "Distortion k1", value: `${(-0.061 + (r() - 0.5) * 0.004).toFixed(4).replace(/^-/, "−")} (true −0.0610)`, ok: true, help: "The main radial distortion term of the left lens." },
           ]
         : null,
@@ -1440,7 +1441,7 @@ export class MockCalib {
         : `Left and right differ in height by ${dv.toFixed(1)} px: something moved, a knock or heat. Redo the camera calibration, then the lasers and the motion sensor.`,
       metrics: [
         { label: "Left/right height mismatch", value: `${dv.toFixed(2)} px (want < 0.3 px)`, ok, help: "The same board corner must sit at the same height in the left and the right picture." },
-        { label: "Reprojection error", value: `${(0.22 + r() * 0.08 + (drift ? 0.5 : 0)).toFixed(2)} px`, ok: !drift, help: "How well the saved lens model explains the board corners in these views." },
+        { label: "How well the corners fit", value: `${(0.22 + r() * 0.08 + (drift ? 0.5 : 0)).toFixed(2)} px`, ok: !drift, help: "How well the saved lens model explains the board corners in these views." },
         lasers
           ? { label: "Laser lines", value: `${dl.toFixed(2)} mm from the board (want < 0.2 mm)`, ok: dl < 0.2, help: "How far the laser points on the margin are from where the saved calibration puts them." }
           : { label: "Laser lines", value: "not calibrated", ok: null, help: "Run the Lasers step to check them too." },

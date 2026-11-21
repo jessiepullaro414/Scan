@@ -166,6 +166,10 @@ def test_align_and_merge_say_what_is_missing(env):
     bad[0, 0] = 2.0
     err(post(env["base"] + "/merge", {"target": env["a"], "source": env["b"], "T": bad.tolist()}), 422, "would bend or stretch")
     err(post(env["base"] + "/merge", {"target": env["a"], "source": env["b"], "T": [[1.0, 0.0], [0.0, 1.0]]}), 422, "cannot be read")
+    # found in review (UX_PLAN R21): a typed name another scan of the project has is refused, as a rename is
+    r = post(env["base"] + "/merge", {"target": env["a"], "source": env["b"], "T": eye, "name": " side "})
+    err(r, 409, "already called")
+    assert r.json()["suggestion"] == "side (2)" and "“side (2)”" in r.json()["hint"]
 
 
 def test_merge_adds_a_scan_to_the_project(env):

@@ -301,10 +301,14 @@ export const SETUP_TEXT = {
     "Only the part itself is matched. Each scan's table is found on its own mesh and left out of the merged scan; the part is kept right down to the table, and thin parts lying flat on it are kept. A part thinner than the scan can tell from its table (about 0.2\u202fmm) goes with the table; the merge says what it left out.",
 } as const;
 
-/** What a merge left out of each scan's table, and what to look at: one line per scan ("“Top”: …"), and the warnings. */
+/**
+ * What a merge left out of each scan's table, and what to look at: one line per scan ("“Top”: …"), what its cleaning
+ * took (UX_PLAN R7: the engine says it also when the part was not moved; null only when it cleans nothing), and the
+ * warnings.
+ */
 export function mergeLeftOut(r: Pick<MergeResult, "scan_id" | "tables" | "warnings" | "cleaning">): { lines: string[]; warnings: string[]; warn: boolean } {
   const lines = (r.tables ?? []).map((t) => `“${t.name}”: ${t.summary}`);
-  if (lines.length && r.cleaning) lines.push(`The merged scan: ${r.cleaning}`);
+  if (r.cleaning) lines.push(`The merged scan: ${r.cleaning}`);
   const warnings = [...(r.warnings ?? [])];
   return { lines, warnings, warn: warnings.length > 0 };
 }

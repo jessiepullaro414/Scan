@@ -10,11 +10,14 @@ export class HttpError extends Error {
   status: number;
   detail: string;
   hint: string | null;
-  constructor(status: number, detail: string, hint: string | null = null) {
+  /** Fields of the answer beside detail and hint, as the engine's `ApiError(extra=…)` (a suggested name, UX_PLAN R21). */
+  extra: Record<string, unknown>;
+  constructor(status: number, detail: string, hint: string | null = null, extra: Record<string, unknown> = {}) {
     super(detail);
     this.status = status;
     this.detail = detail;
     this.hint = hint;
+    this.extra = extra;
   }
 }
 

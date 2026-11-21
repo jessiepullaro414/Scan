@@ -89,6 +89,8 @@ export type SettingSection = { key: string; title: string; help?: string; rows: 
 const isGroup = (v: unknown): v is Record<string, unknown> => v !== null && typeof v === "object" && !Array.isArray(v);
 /** What the engine adds for the pages (the file's path as read), not a section of the file. */
 const NOT_SHOWN = new Set(["effective"]);
+/** Values of a section not shown (UX_PLAN R12): the markers' dictionary is the program's name for them. */
+const NOT_SHOWN_IN: Record<string, Set<string>> = { board: new Set(["dictionary"]) };
 
 /** Every section of the settings file, the loose values first ("Folders and files"). */
 export function advancedSections(settings: Record<string, unknown>): SettingSection[] {
@@ -97,6 +99,6 @@ export function advancedSections(settings: Record<string, unknown>): SettingSect
   const loose = entries.filter(([, v]) => !isGroup(v));
   const out: SettingSection[] = [];
   if (loose.length) out.push({ key: "general", title: SECTIONS.general.title, rows: loose.map(row) });
-  for (const [k, v] of entries) if (isGroup(v)) out.push({ key: k, title: sectionTitle(k), ...(SECTIONS[k]?.help ? { help: SECTIONS[k].help } : {}), rows: Object.entries(v).map(row) });
+  for (const [k, v] of entries) if (isGroup(v)) out.push({ key: k, title: sectionTitle(k), ...(SECTIONS[k]?.help ? { help: SECTIONS[k].help } : {}), rows: Object.entries(v).filter(([r]) => !NOT_SHOWN_IN[k]?.has(r)).map(row) });
   return out;
 }

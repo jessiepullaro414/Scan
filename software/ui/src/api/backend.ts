@@ -26,8 +26,10 @@ function detectMock(): boolean {
 export const MOCK = detectMock();
 
 /** `lasers`: the line lasers the demo starts with (`?lasers=4`: the 4-laser build; else the two standard ones).
- * `health`: the calibration's status the demo shows (`?health=check|recalibrate|cpu|old|failed`, mock/health.ts; else it follows the demo). */
-export type MockOptions = { empty: boolean; fast: boolean; drift: boolean; nopico: boolean; lasers: 2 | 4; health: MockHealth };
+ * `health`: the calibration's status the demo shows (`?health=check|recalibrate|cpu|old|failed`, mock/health.ts; else it follows the demo).
+ * `computeOff`: the graphics card turned off (UX_PLAN R20): `?compute=settings` by the app's settings, `?compute=environment`
+ * for this run from outside the app (else as `health`: `?health=cpu` is a computer without one). */
+export type MockOptions = { empty: boolean; fast: boolean; drift: boolean; nopico: boolean; lasers: 2 | 4; health: MockHealth; computeOff?: "settings" | "environment" | null };
 export type MockHealth = "check" | "recalibrate" | "cpu" | "old" | "failed" | null;
 const HEALTH_OPTIONS: MockHealth[] = ["check", "recalibrate", "cpu", "old", "failed"];
 
@@ -46,6 +48,7 @@ export function initBackend(): Promise<void> {
       nopico: queryFlag("nopico") === "1",
       lasers: queryFlag("lasers") === "4" ? 4 : 2,
       health: HEALTH_OPTIONS.find((h) => h === queryFlag("health")) ?? null,
+      computeOff: queryFlag("compute") === "settings" ? "settings" : queryFlag("compute") === "environment" ? "environment" : null,
     });
     setFetch(backend.fetch);
     setSocketFactory(backend.socket);

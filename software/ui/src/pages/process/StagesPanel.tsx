@@ -6,9 +6,10 @@
  */
 import { Crosshair, Images, Layers, Play, RotateCcw, Spline, TriangleExclamationPoint, Waypoints, type LucideIcon } from "lucide-react";
 import { useState, type ReactNode } from "react";
-import type { Job, ProcessQuality, ProcessState, Scan, StageId, StageInfo } from "../../api/types";
+import type { Job, MakingState, ProcessQuality, ProcessState, Scan, StageId, StageInfo } from "../../api/types";
 import { JobProgress } from "../../components/ScanBits";
-import { Badge } from "../../components/ui/Badge";
+import { Badge, type BadgeTone } from "../../components/ui/Badge";
+import { makingRows, type MakingRowState } from "../../lib/making";
 import { Button } from "../../components/ui/Button";
 import { ConfirmDialog } from "../../components/ui/Dialog";
 import { Segmented } from "../../components/ui/Form";
@@ -99,9 +100,9 @@ function StageCard({
 }) {
   const meta = STAGES[id];
   const Icon = meta.icon;
-  // R22: "Running" only for the stage that runs (its own state, or the run being built says so); a finished stage
-  // whose job_id is the whole run's job is not
-  const running = stageRunning(stage.state, state.making?.stages?.[id] ?? null);
+  // R22: "Running" only from the stage's own state (a stage run alone); during Make mesh again the scan's stages stay
+  // as they are and the run is shown above them (MakingPanel), from `making`
+  const running = stageRunning(stage.state);
   const stageJob = useStageJob(stage, state);
   const job = running ? (stageJob ?? (state.job && isActive(state.job) ? state.job : null)) : null;
   return (
@@ -167,8 +168,48 @@ function StageCard({
   );
 }
 
+const ROW_BADGE: Record<MakingRowState, { label: string; tone: BadgeTone }> = {
+  done: { label: "Done", tone: "ok" },
+  running: { label: "Running", tone: "accent" },
+  waiting: { label: "To come", tone: "neutral" },
+  skipped: { label: "Skipped", tone: "neutral" },
+  failed: { label: "Failed", tone: "danger" },
+};
+
+/**
+ * UX_PLAN R15, R22: "Make mesh again" (or a recipe on everything) builds the new mesh beside this one (APP_API.md, R2):
+ * its stages, from `ProcessState.making`, one running at a time, with the job's progress, the time left for the whole
+ * job (R18) and Cancel. The stage cards below stay those of the mesh the scan has now.
+ */
+function MakingPanel({ making, job }: { making: MakingState; job: Job | null }) {
+  const progress = job?.progress ?? 0;
+  const rows = makingRows(making, progress);
+  return (
+    <section className="mb-3 rounded-xl border border-accent-line bg-accent-soft/40 p-3" aria-label="The new mesh being made">
+      <h3 className="text-sm font-semibold text-fg">The new mesh being made</h3>
+      <Help className="mt-0.5">It is built beside the mesh you have. The stages below stay as they are until it is ready, and stay so if you cancel it.</Help>
+      <ol className="mt-2.5 space-y-1.5" aria-label="Stages of the new mesh">
+        {rows.map((r) => (
+          <li key={r.id} className="flex items-start gap-2 text-xs" aria-current={r.state === "running" ? "step" : undefined}>
+            <span className="min-w-0 flex-1">
+              <span className={cn("block font-medium", r.state === "waiting" ? "text-muted" : "text-fg")}>{r.label}</span>
+              {r.summary && r.state !== "running" ? <span className="block leading-5 text-subtle">{r.summary}</span> : null}
+            </span>
+            <Badge tone={ROW_BADGE[r.state].tone} dot={r.state !== "running"} spinner={r.state === "running"}>
+              {ROW_BADGE[r.state].label}
+            </Badge>
+          </li>
+        ))}
+      </ol>
+      {job && isActive(job) ? <JobProgress job={job} className="mt-3" label="Making the new mesh" /> : null}
+    </section>
+  );
+}
+
 export function StagesPanel({ pid, sid, state, busy, scan }: { pid: string; sid: string; state: ProcessState; busy: boolean; scan?: KeepFields }) {
   const runStage = useProcess((s) => s.runStage);
+  // the job building the new mesh, live from the jobs store (its progress comes in `job` messages)
+  const runJob = useJobs((s) => (state.making && state.job ? (s.jobs[state.job.id] ?? state.job) : null));
   // R2: what a freed (or merged) scan can no longer run, in the same words as the engine's refusals (lib/keepMode.ts)
   const gone = (a: StageAction) => (scan ? stageBlock(scan, state, a) : null);
   const { track, straighten, fuse, spacetime, refine } = state.stages;
@@ -217,6 +258,7 @@ export function StagesPanel({ pid, sid, state, busy, scan }: { pid: string; sid:
 
   return (
     <Panel title="Stages" icon={Waypoints}>
+      {state.making ? <MakingPanel making={state.making} job={runJob} /> : null}
       <PresetPanel pid={pid} sid={sid} busy={busy} />
       <ol className="space-y-2.5" aria-label="Processing stages">
         <StageCard

@@ -9,7 +9,7 @@ import { Button, IconButton } from "../../components/ui/Button";
 import { Spinner } from "../../components/ui/Feedback";
 import { fmtDateTime, fmtInt, fmtRelative, withUnit } from "../../lib/format";
 import { historyLabel } from "../../lib/recipes";
-import { removedLine } from "../../lib/looseBits";
+import { historyRemovedLine } from "../../lib/looseBits";
 import { cn } from "../../lib/util";
 import { processKey, useProcess } from "../../store/process";
 import { Help, Panel } from "./bits";
@@ -27,16 +27,17 @@ export function HistoryPanel({
   sid,
   state,
   busy,
-  showRemovedFor = null,
+  showingRemoved = null,
   onShowRemoved,
 }: {
   pid: string;
   sid: string;
   state: ProcessState;
   busy: boolean;
-  /** U14: the edit whose removed loose bits the Compare ghost can show now (lib/looseBits.ts), or null. */
-  showRemovedFor?: string | null;
-  onShowRemoved?: () => void;
+  /** U14, R23: the edit whose removed loose bits are shown now, or null. */
+  showingRemoved?: string | null;
+  /** Show what an edit's "Remove loose bits" took, at any time (the mesh before it as a ghost beside the mesh after it). */
+  onShowRemoved?: (editId: string) => void;
 }) {
   const undo = useProcess((s) => s.undo);
   const redo = useProcess((s) => s.redo);
@@ -127,18 +128,27 @@ export function HistoryPanel({
                       <span className="tnum">{fmtInt(e.triangles_after)}</span> triangles · {fmtMs(e.ms)}
                       {!applied ? " · undone" : ""}
                     </span>
-                    {removedLine(e.removed) ? (
-                      // U14: what it took (a thin or small part can go with the noise)
-                      <span className="block text-[11px] text-muted tnum">{removedLine(e.removed)}</span>
+                    {historyRemovedLine(e) ? (
+                      // U14, R23: what it took, and the rule that took its largest piece (a thin or small part can go
+                      // with the noise)
+                      <span className="block text-[11px] leading-4 text-muted tnum">{historyRemovedLine(e)}</span>
                     ) : null}
                   </span>
                   <time className="shrink-0 text-[10.5px] text-subtle" dateTime={e.created} title={fmtDateTime(e.created)}>
                     {fmtRelative(e.created)}
                   </time>
                 </button>
-                {showRemovedFor === e.id && onShowRemoved ? (
+                {historyRemovedLine(e) && onShowRemoved ? (
+                  // R23: at any time, for every removal of the history (also an undone one)
                   <div className="pl-[38px] pt-0.5">
-                    <Button size="xs" variant="ghost" icon={Blend} onClick={onShowRemoved} title="The mesh before this step as an orange ghost: what was removed shows in orange">
+                    <Button
+                      size="xs"
+                      variant={showingRemoved === e.id ? "secondary" : "ghost"}
+                      icon={Blend}
+                      aria-pressed={showingRemoved === e.id}
+                      onClick={() => onShowRemoved(e.id)}
+                      title="The mesh before this step as an orange ghost beside the mesh after it: what was removed shows in orange"
+                    >
                       Show what was removed
                     </Button>
                   </div>

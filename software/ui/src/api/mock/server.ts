@@ -61,6 +61,7 @@ import { MockPasses } from "./pass";
 import { MockCalib } from "./calib";
 import { HttpError, json, nowIso, uid, type MockHost, type MockSettings, type TimedJobSpec, type WorkJobSpec, type WorkStep } from "./host";
 import { normalizeQuality } from "../../lib/quality";
+import { freeName, nameTaken } from "../../lib/names";
 import { MockFeatures } from "./features";
 import { MockSections } from "./section";
 import { MockFlush } from "./flush";
@@ -380,7 +381,7 @@ class MockBackend {
     try {
       return await this.route(method, url.pathname, body, raw);
     } catch (e) {
-      if (e instanceof HttpError) return json(e.status, e.hint ? { detail: e.detail, hint: e.hint } : { detail: e.detail });
+      if (e instanceof HttpError) return json(e.status, { ...e.extra, ...(e.hint ? { detail: e.detail, hint: e.hint } : { detail: e.detail }) });
       console.error("mock backend error", e);
       return json(500, { detail: `Mock engine error: ${(e as Error).message}`, hint: "This is a bug in the demo backend." });
     }
@@ -440,13 +441,17 @@ class MockBackend {
           // U5: what this computer can do (`ohs.compute.describe()`); ?health=cpu shows a computer without a graphics card
           compute:
             this.opts.health === "cpu"
-              ? { backend: "cpu", status: "no OpenCL GPU was found: everything runs on the CPU", device: null, preference: "auto" }
-              : {
-                  backend: "gpu",
-                  status: "GPU: AMD Radeon 680M (integrated, 4096 MB, AMD Accelerated Parallel Processing)",
-                  device: { name: "AMD Radeon 680M", vendor: "AMD", kind: "integrated", memory_mb: 4096 },
-                  preference: "auto",
-                },
+              ? { backend: "cpu", status: "no OpenCL GPU was found: everything runs on the CPU", device: null, preference: "auto", preference_from: "auto" }
+              : this.opts.computeOff
+                ? // R20: turned off by the app's settings, or for this run from outside the app (OHS_COMPUTE)
+                  { backend: "cpu", status: 'the GPU is turned off (compute.device = "cpu"): everything runs on the CPU', device: null, preference: "cpu", preference_from: this.opts.computeOff }
+                : {
+                    backend: "gpu",
+                    status: "GPU: AMD Radeon 680M (integrated, 4096 MB, AMD Accelerated Parallel Processing)",
+                    device: { name: "AMD Radeon 680M", vendor: "AMD", kind: "integrated", memory_mb: 4096 },
+                    preference: "auto",
+                    preference_from: "auto",
+                  },
         },
       });
     if (a === "settings" && is("GET", 1)) return json(200, SETTINGS);
@@ -547,6 +552,12 @@ class MockBackend {
         if (is("PATCH", 4)) {
           const name = String(body.name ?? "").split(/\s+/).filter(Boolean).join(" ");
           if (!name) throw new HttpError(400, "The scan name is empty.", "Type a name for the scan.");
+          // UX_PLAN R21: no two scans of a project share a name (the engine's refusal, with the first free one)
+          const others = p.scans.filter((x) => x.id !== s.id).map((x) => x.name);
+          if (nameTaken(name, others)) {
+            const suggestion = freeName(name, others);
+            throw new HttpError(409, `Another scan of this project is already called “${name}”.`, `Pick another name, for example “${suggestion}”.`, { suggestion });
+          }
           s.name = name;
           return json(200, s);
         }
@@ -748,7 +759,7 @@ class MockBackend {
       const warnings: string[] = [];
       if (!cam.stereo_like)
         warnings.push(
-          `Camera ${cam.index} sends ${cam.width}x${cam.height} pictures, not the scanner's side-by-side 2560x800: choose the scanner's cameras in Setup (the Connect step).`,
+          `Camera ${cam.index} sends ${cam.width.toLocaleString("en-US")} × ${cam.height.toLocaleString("en-US")} pictures, not the scanner's side-by-side 2,560 × 800: choose the scanner's cameras in Setup (the Connect step).`,
         );
       if (!pico) warnings.push("The scanner's control board (Pico or ESP32) was not found. You can still scan, but the lasers, the motion sensor and the trigger will not work. Check its USB cable (one that carries data) and its firmware, then press Connect again.");
       if (!this.setup.deviceCalibration().loaded) warnings.push(`no calibration at ~/.ohs/calibration.json: run the setup wizard (Setup)`);

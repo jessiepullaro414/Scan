@@ -12,13 +12,16 @@ import { create } from "zustand";
 import { ApiError, api } from "../api/http";
 import type { EditBody, Job, ProcessQuality, ProcessState, Recipe, RecipeScope, StageId } from "../api/types";
 import { navigate, paths } from "../lib/router";
+import { isWholeRun, meshKept } from "../lib/making";
+import { useConnection } from "./connection";
 import { isActive, isStudioJob, jobKindLabel, useJobs } from "./jobs";
 import { toast } from "./toasts";
 
 export type ProcessAction = StageId | "edit" | "recipe" | "undo" | "redo" | "jump";
 
-/** The last job of a scan that failed or was cancelled, in words. */
-export type ProcessFailure = { jobId: string; label: string; cancelled: boolean; detail: string };
+/** The last job of a scan that failed or was cancelled, in words. `wholeRun`: it made the whole mesh again (Make mesh, a
+ * recipe on everything); `kept`: the scan's earlier mesh stays as it was (`Job.mesh_kept`, UX_PLAN R2). */
+export type ProcessFailure = { jobId: string; label: string; cancelled: boolean; detail: string; wholeRun?: boolean; kept?: boolean };
 
 export type ProcessEntry = {
   pid: string;
@@ -255,13 +258,18 @@ useJobs.subscribe((s) => {
     // No toast on the scan's Process page (its panels show it), nor for "Make mesh" (the jobs store tells).
     const quiet = onPage(meta.pid, meta.sid) || !isStudioJob(job.kind);
     let failure = entry?.failure ?? null;
+    // R2: a run of the whole mesh leaves the scan's mesh as it was when it ends otherwise (`mesh_kept`)
+    const wholeRun = isWholeRun(job);
+    const kept = wholeRun ? meshKept(job, !!entry?.state?.current) : undefined;
     if (job.state === "failed") {
       const detail = job.error || job.message || "The job failed.";
-      failure = { jobId: jid, label: meta.label, cancelled: false, detail };
-      if (!quiet)
-        toast.error(`${meta.label} failed`, { detail, hint: null }, { label: "Open Edit mesh", run: () => navigate(paths.process(meta.pid, meta.sid)) });
+      failure = { jobId: jid, label: meta.label, cancelled: false, detail, wholeRun, kept };
+      // the engine says a failed run of the whole mesh in its own notice (UX_PLAN R14): no second toast
+      const told = wholeRun && useConnection.getState().link === "open";
+      if (!quiet && !told)
+        toast.error(`${meta.label} failed`, { detail: kept ? `${detail} The mesh stays as it was.` : detail, hint: null }, { label: "Open Edit mesh", run: () => navigate(paths.process(meta.pid, meta.sid)) });
     } else if (job.state === "cancelled") {
-      failure = { jobId: jid, label: meta.label, cancelled: true, detail: job.message && !/^cancel/i.test(job.message) ? job.message : "Stopped before it finished." };
+      failure = { jobId: jid, label: meta.label, cancelled: true, detail: job.message && !/^cancel/i.test(job.message) ? job.message : "Stopped before it finished.", wholeRun, kept };
     } else if (job.state === "done") {
       if (failure?.jobId === jid) failure = null;
       if (!quiet) toast.success(`${meta.label}: done`, undefined, { label: "Open Edit mesh", run: () => navigate(paths.process(meta.pid, meta.sid)) });

@@ -2,6 +2,7 @@
 import { Hand, ImageOff, Sparkles, TriangleExclamationPoint, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { CalibKind, CalibView } from "../../../api/types";
+import { focusAfterDelete } from "../../../lib/focusAfter";
 import { TWO_LASERS, viewLaserSummary } from "../../../lib/laserSet";
 import { cn } from "../../../lib/util";
 import { useCalib } from "../../../store/calib";
@@ -12,8 +13,21 @@ function errTone(v: CalibView) {
   return v.error_px < 0.5 ? "ok" : v.error_px < 1 ? "warn" : "bad";
 }
 
-function Thumb({ v, kind, editable, fresh, names }: { v: CalibView; kind: CalibKind; editable: boolean; fresh: boolean; names: readonly string[] }) {
-  const del = useCalib((s) => s.deleteView);
+function Thumb({
+  v,
+  kind,
+  editable,
+  fresh,
+  names,
+  onDelete,
+}: {
+  v: CalibView;
+  kind: CalibKind;
+  editable: boolean;
+  fresh: boolean;
+  names: readonly string[];
+  onDelete: (index: number, hadFocus: boolean) => void;
+}) {
   const busy = useCalib((s) => s.action === "delete");
   const [failed, setFailed] = useState(false);
   const tone = errTone(v);
@@ -63,8 +77,9 @@ function Thumb({ v, kind, editable, fresh, names }: { v: CalibView; kind: CalibK
         {editable ? (
           <button
             type="button"
-            onClick={() => void del(v.index)}
+            onClick={(e) => onDelete(v.index, document.activeElement === e.currentTarget)}
             disabled={busy}
+            data-delete-view={v.index}
             aria-label={`Delete view ${v.index + 1}`}
             title={`Delete view ${v.index + 1}`}
             className="absolute right-1 top-1 grid h-5 w-5 place-items-center rounded bg-black/70 text-white shadow ring-1 ring-white/30 transition-colors hover:bg-danger focus-visible:bg-danger disabled:opacity-40"
@@ -113,6 +128,24 @@ export function ViewsStrip({ kind, editable, className }: { kind: CalibKind; edi
   }, [views.length]);
   const placeholders = Math.max(0, Math.min(lo, 12) - views.length);
   const bad = views.filter((v) => v.bad).length;
+  const del = useCalib((s) => s.deleteView);
+  /** "Delete view N" keeps the keyboard's place (the leftover of UX_PLAN R3): the button is disabled while the
+   * request runs and then gone, so the focus goes to the delete button of the view now in its place, else the one
+   * before it, else the Capture button (lib/focusAfter.ts). */
+  const onDelete = async (index: number, hadFocus: boolean) => {
+    const before = views.map((v) => v.index);
+    await del(index);
+    if (!hadFocus) return;
+    requestAnimationFrame(() => {
+      const now = (useCalib.getState().session?.views ?? []).map((v) => v.index);
+      const at = focusAfterDelete(before, index, now);
+      const target =
+        at === null
+          ? document.querySelector<HTMLElement>("[data-calib-capture]")
+          : listRef.current?.querySelector<HTMLElement>(`[data-delete-view="${at}"]`);
+      target?.focus();
+    });
+  };
   return (
     <div className={cn("border-t border-line bg-panel", className)}>
       <div className="flex items-center gap-2 px-4 pt-2.5 text-[11px] text-subtle">
@@ -124,7 +157,7 @@ export function ViewsStrip({ kind, editable, className }: { kind: CalibKind; edi
       </div>
       <ul ref={listRef} className="flex gap-2 overflow-x-auto px-4 pb-3 pt-2" aria-label="Captured views">
         {views.map((v) => (
-          <Thumb key={v.index} v={v} kind={kind} editable={editable} fresh={v.index === freshIndex.current} names={names} />
+          <Thumb key={v.index} v={v} kind={kind} editable={editable} fresh={v.index === freshIndex.current} names={names} onDelete={(i, f) => void onDelete(i, f)} />
         ))}
         {Array.from({ length: placeholders }, (_, i) => (
           <li

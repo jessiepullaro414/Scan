@@ -30,6 +30,7 @@
  */
 import type { AlignAllPair, AlignAllResult, AlignPose, AlignResult, Job, MergeResult, MergeTable, PairUse, PointPair, ProcessQuality, Project, Scan } from "../types";
 import type { WorkJobSpec, WorkStep } from "./host";
+import { freeName } from "../../lib/names.ts";
 
 export type AlignHost = {
   startWorkJob(kind: string, spec: WorkJobSpec): Job;
@@ -518,7 +519,8 @@ export class MockAlign {
 
   /** The merge job of 2..8 checked scans (the first one's quality); `name` empty: their names joined by " + ". */
   private startMerge(p: Project, list: MockScan[], sameSetup: boolean, name: string, meta: Record<string, unknown>): Job {
-    const title = name || list.map((s) => s.name).join(" + ");
+    // UX_PLAN R21: a default name takes the next free one ("Top + Side (2)"), as the engine's
+    const title = name || freeName(list.map((s) => s.name).join(" + "), p.scans.map((s) => s.name));
     const quality: ProcessQuality = list[0].quality ?? "standard";
     const n = list.reduce((sum, s) => sum + fusedFrames(s, quality), 0);
     const unchanged = list.length > 2 ? "The scans are unchanged." : "The two scans are unchanged.";
@@ -528,7 +530,7 @@ export class MockAlign {
       const steps = Math.min(n, 80);
       for (let i = 1; i <= steps; i++) {
         const k = Math.max(1, Math.round((n * i) / steps));
-        yield { p: 0.05 + (0.85 * k) / n, message: `Merging: frame ${k} of ${n}` };
+        yield { p: 0.05 + (0.85 * k) / n, message: `Merging: frame ${k.toLocaleString("en-US")} of ${n.toLocaleString("en-US")}` };
       }
       yield { p: 0.95, message: "Adding the merged scan to the project" };
       return () => {
@@ -571,7 +573,7 @@ export class MockAlign {
                 id: s.id,
                 name: s.name,
                 rule: "map" as const,
-                summary: `Its table is left out (${area.toLocaleString("en-US")}.0 cm² of its mesh, flat to 0.08 mm); the part is kept right down to it${i === 0 ? "; 1 raised area that may be a thin part is kept too" : ""}. What the frames left of it next to the part, ${(812 + 97 * i).toLocaleString("en-US")} triangles (${35 + 4 * i} mm²), was taken out of the merged scan.`,
+                summary: `Its table is left out (${(area * 100).toLocaleString("en-US")} mm² of its mesh, flat to 0.08 mm); the part is kept right down to it${i === 0 ? "; 1 raised area that may be a thin part is kept too" : ""}. What the frames left of it next to the part, ${(812 + 97 * i).toLocaleString("en-US")} triangles (${35 + 4 * i} mm²), was taken out of the merged scan.`,
                 warnings,
               };
             });
@@ -586,7 +588,8 @@ export class MockAlign {
           message: `Merged into "${title}"`,
           tables,
           warnings: tables.flatMap((t) => t.warnings),
-          cleaning: sameSetup ? null : "2 small loose bits (14 mm²) were left out as too small (under 1 % of the triangles each); 1 small bit over a thin part was kept.",
+          // R7: a merge always says what its cleaning took, also when the part was not moved
+          cleaning: sameSetup ? "No loose bit was left out as too small (under 1 % of the triangles each)." : "2 small loose bits (14 mm²) were left out as too small (under 1 % of the triangles each); 1 small bit over a thin part was kept.",
         };
         return result;
       };

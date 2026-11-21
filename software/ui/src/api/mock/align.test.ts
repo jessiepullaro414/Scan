@@ -247,8 +247,10 @@ check(p.scans.length === count && logs.length === 0, "a cancelled merge adds not
 // ------------------------------------------------------------------ merge: done
 mock.merge(p, { target: "top", source: "under", T: IDENTITY });
 done = run(last());
-const frames = done.steps.map((s) => /^Merging: frame (\d+) of (\d+)$/.exec(s.message)).filter((m): m is RegExpExecArray => !!m);
+// UX_PLAN R19: the numbers with thousands grouped ("frame 1,212 of 1,476"); read without the commas
+const frames = done.steps.map((s) => /^Merging: frame (\d+) of (\d+)$/.exec(s.message.replace(/(\d),(\d)/g, "$1$2"))).filter((m): m is RegExpExecArray => !!m);
 check(frames.length >= 20, "the job reports “Merging: frame k of n”");
+check(done.steps.some((s) => / of 1,476$/.test(s.message)), "thousands grouped");
 const total = Number(frames[0][2]);
 check(total === 864 + 612, "n is the frames of both recordings");
 check(frames.every((m) => Number(m[2]) === total), "n stays the same");
@@ -468,7 +470,7 @@ job = mock.merge(p, { scans: at(THREE) });
 const meta3 = job as Job & { scans?: string[]; target?: string; source?: string };
 check(job.kind === "merge" && JSON.stringify(meta3.scans) === JSON.stringify(THREE) && meta3.target === undefined && meta3.source === undefined, "a merge job of three: the scans in its meta, no target or source");
 done = run(last());
-const frames3 = done.steps.map((s) => /^Merging: frame (\d+) of (\d+)$/.exec(s.message)).filter((x): x is RegExpExecArray => !!x);
+const frames3 = done.steps.map((s) => /^Merging: frame (\d+) of (\d+)$/.exec(s.message.replace(/(\d),(\d)/g, "$1$2"))).filter((x): x is RegExpExecArray => !!x);
 check(Number(frames3[0][2]) === 864 + 612 + 450, "n is the frames of all three recordings");
 m = done.result as MergeResult;
 made = p.scans[p.scans.length - 1];

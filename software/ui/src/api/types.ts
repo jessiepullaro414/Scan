@@ -224,7 +224,8 @@ export type Job = {
   /** Extra (F4): the pass over the recording's frames running now; absent between passes. */
   frames?: JobFrames | null;
   /** Extra (UX_PLAN R2; `process_scan`, and `process_recipe` with scope "all"): the scan's earlier mesh is still its
-   * own (while the job runs, and after a cancel or a failure). */
+   * own: true while the job is queued or running and after it ended cancelled or failed, when the scan had a mesh
+   * before; false once the job is done (the new mesh took its place) and when the scan had no mesh before. */
   mesh_kept?: boolean;
   /** Extra (recipes): "all" or "edits". */
   scope?: string | null;
@@ -234,6 +235,10 @@ export type Job = {
 export type JobFrames = { stage: string; done: number; total: number; fps: number | null; elapsed_s: number };
 
 export type Health = { app: string; version: string; engine: { opencv?: string; open3d?: string } & Record<string, unknown> };
+
+/** Who chose the compute path (`health.engine.compute.preference_from`, UX_PLAN R20): the environment of this run, the
+ * app's settings, or nobody (so without a graphics card none was found). */
+export type ComputePreferenceFrom = "environment" | "settings" | "auto";
 
 export type Settings = Record<string, unknown>;
 
@@ -773,11 +778,32 @@ export type EditEntry = {
   ms: number;
   /** What the edit did, in plain words (the engine's summary). */
   summary?: string | null;
-  /** U14: what "Remove loose bits" took (absent on other edits, and on one made before). */
-  removed?: { pieces: number; triangles: number; largest_mm: number };
+  /** U14: what "Remove loose bits" took (absent on other edits, and on one made before). R23: the rule that took the
+   * largest piece, and its triangles (absent on an edit made before). */
+  removed?: { pieces: number; triangles: number; largest_mm: number; largest_rule?: LooseBitsRule | null; largest_triangles?: number };
 };
 
-export type StageInfo = { state: StageState; summary: string | null; when: string | null; job_id: string | null };
+/** Which limit of "Remove loose bits" took its largest removed piece (UX_PLAN R23). */
+export type LooseBitsRule = "size" | "share" | "triangles" | "largest_only";
+
+/** `started`: when it last started (ISO 8601); `seconds`: how long it ran (null while it runs and before; R17, R18). */
+export type StageInfo = { state: StageState; summary: string | null; when: string | null; job_id: string | null; started?: string | null; seconds?: number | null };
+
+/** A part of a Make mesh and the span of the job's progress (0–1) it takes (UX_PLAN R18). */
+export type MakingPart = { stage: "track" | "straighten" | "refine" | "edits"; from: number; to: number };
+
+/** The run "Make mesh again" (or a recipe on everything) is building beside the scan's mesh (UX_PLAN R2, R18). */
+export type MakingState = {
+  stages: Partial<Record<StageId, { state: StageState; summary: string | null; started?: string | null; seconds?: number | null }>>;
+  plan?: MakingPart[] | null;
+  /** How long the whole job has run, s. */
+  elapsed_s?: number;
+  /** The time left for the whole job at this pace, s; null under 3 %. */
+  left_s?: number | null;
+};
+
+/** The Make mesh (or recipe on everything) that made the current base, with how long the whole job took (UX_PLAN R17). */
+export type MadeInfo = { job_id: string; kind: string; when: string; seconds: number; stages: Partial<Record<string, number>> };
 export type TrackStage = StageInfo & {
   quality: ProcessQuality | null;
   tracked_pct: number | null;
@@ -832,7 +858,10 @@ export type ProcessState = {
   job: Job | null; // the running job of this scan, if any
   /** Extra (UX_PLAN R2): the stages of the run "Make mesh again" is building, while it runs; `stages` above stay the
    * current mesh's until the run takes its place. Absent or null otherwise (and from an older engine). */
-  making?: { stages: Partial<Record<StageId, { state: StageState; summary: string | null }>> } | null;
+  making?: MakingState | null;
+  /** Extra (UX_PLAN R17): the Make mesh that made the current base; null for a scan made before, or once a single
+   * stage replaced that base. */
+  made?: MadeInfo | null;
 };
 
 export type RecipeSettings = { quality: ProcessQuality; straighten: "auto" | "off"; refine?: "auto" | "off"; voxel_mm: number | null };

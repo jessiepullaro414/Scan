@@ -1,13 +1,13 @@
 import { CircleCheck, CircleX, Layers, Ban } from "lucide-react";
 import { useMemo, useRef, useState } from "react";
 import type { Job } from "../../api/types";
-import { jobEstimate } from "../../lib/estimate";
 import { fmtRelative } from "../../lib/format";
+import { isWholeRun, makeMeshEnded, timeLeft } from "../../lib/making";
 import { normalizeQuality } from "../../lib/quality";
 import { navigate, paths } from "../../lib/router";
 import { cn } from "../../lib/util";
 import { isActive, isStudioJob, jobKindLabel, jobScanRef, useJobs } from "../../store/jobs";
-import { useProcess } from "../../store/process";
+import { processKey, useProcess } from "../../store/process";
 import { Button } from "../ui/Button";
 import { EmptyState, ProgressBar, Spinner } from "../ui/Feedback";
 import { Popover } from "../ui/Popover";
@@ -18,7 +18,12 @@ function JobRow({ job }: { job: Job }) {
   const cancel = useJobs((s) => s.cancel);
   const [cancelling, setCancelling] = useState(false);
   const active = isActive(job);
-  const est = jobEstimate(job);
+  // UX_PLAN R18: a Make mesh's time left is the whole job's (`making.left_s`); a stage alone says which it is for
+  const ref = isWholeRun(job) ? jobScanRef(job) : null;
+  const making = useProcess((s) => (ref ? (s.entries[processKey(ref.pid, ref.sid)]?.state?.making ?? null) : null));
+  const est = timeLeft(job, making);
+  // R2: a cancelled or failed Make mesh says whether the earlier mesh stays
+  const ended = makeMeshEnded(job);
   // A processing-studio job opens its scan's Process page.
   const studio = !link && isStudioJob(job.kind) ? (meta ? { pid: meta.pid, sid: meta.sid } : jobScanRef(job)) : null;
   // A finished merge (M4) opens the scan it made (named in its result).
@@ -44,10 +49,17 @@ function JobRow({ job }: { job: Job }) {
         </div>
         <span className="shrink-0 text-[11px] text-subtle">{fmtRelative(job.created)}</span>
       </div>
-      <div className="mt-1 truncate pl-[23px] text-xs text-muted" title={job.error || job.message}>
-        {job.state === "failed" ? job.error || job.message || "Failed" : job.message || job.state}
-      </div>
-      {est.kind === "left" ? <div className="mt-0.5 truncate pl-[23px] text-xs text-subtle">{est.text}</div> : null}
+      {ended ? (
+        <div className="mt-1 pl-[23px] text-xs text-muted">
+          {job.state === "cancelled" ? "Cancelled. " : ""}
+          {ended.detail}
+        </div>
+      ) : (
+        <div className="mt-1 truncate pl-[23px] text-xs text-muted" title={job.error || job.message}>
+          {job.state === "failed" ? job.error || job.message || "Failed" : job.message || job.state}
+        </div>
+      )}
+      {est?.kind === "left" ? <div className="mt-0.5 truncate pl-[23px] text-xs text-subtle" title={est.text}>{est.text}</div> : null}
       {active ? (
         <div className="mt-2 flex items-center gap-2 pl-[23px]">
           <ProgressBar value={job.state === "queued" ? null : job.progress} size="sm" label={`${jobKindLabel(job.kind)} progress`} />

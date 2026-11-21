@@ -140,10 +140,11 @@ export class MockSetup {
       squares_y: 8,
       square_mm: 20,
       marker_mm: 15,
-      dictionary: "DICT_5X5_100",
+      dictionary: "DICT_5X5_100", // kept in the data, never shown (UX_PLAN R12)
       paper,
       scale: this.scale,
-      describe: `ChArUco 11 × 8, 20 mm squares, 15 mm markers (DICT_5X5_100) on ${paper === "a4" ? "A4" : "Letter"}`,
+      // the engine's words without the markers' dictionary (ohs/server/setup.py board_info, R12)
+      describe: `11 x 8 squares of 20 mm (markers 15 mm), printed on ${paper === "a4" ? "A4" : "Letter"}`,
     };
   }
 
@@ -449,10 +450,10 @@ export class MockSetup {
     let checks: SelfTestCheck[];
     if (sim) {
       checks = [
-        C("camera", "PASS", "Simulated cameras: 2 × 1280×800 at 30 fps"),
+        C("camera", "PASS", "two pictures of 1,280 × 800 side by side, from the simulator"),
         C("camera image", "PASS", "Rendered board scene, left and right differ"),
         C("pico", "SKIP", "the simulator has no control board"),
-        C("imu values", "PASS", "Synthesized motion sensor: 9.81 m/s² at rest, 416 Hz"),
+        C("imu values", "PASS", "gravity reads 9.81 m/s²"),
         C("emitters", "SKIP", "Simulated lasers and dots are always available"),
         C("trigger", "SKIP", "The simulator has no trigger: use Space instead"),
       ];
@@ -463,24 +464,24 @@ export class MockSetup {
           ? C(
               "camera",
               "WARN",
-              `${cam.width}x${cam.height} frames from camera ${cam.index}; the config asks for 2560x800`,
-              "The camera runs another mode than the settings ask for: use the 2560x800 MJPG mode, or pick the scanner's cameras in step 1 (Connect).",
+              `two pictures of ${(cam.width / 2).toLocaleString("en-US")} × ${cam.height.toLocaleString("en-US")} side by side (${cam.width.toLocaleString("en-US")} × ${cam.height.toLocaleString("en-US")}), MJPG; the settings ask for 2,560 × 800 (is the format MJPG?)`,
+              "The camera runs another mode than the settings ask for: use the 2,560 × 800 MJPG mode, or pick the scanner's cameras in step 1 (Connect).",
             )
-          : C("camera", "PASS", "2560x800 MJPG at 60 fps (camera 1, dshow)"),
+          : C("camera", "PASS", "two pictures of 1,280 × 800 side by side (2,560 × 800), MJPG"),
         C("camera fps", "PASS", "59.8 fps measured (60 requested)"),
         run === 1
           ? C(
               "camera image",
               "WARN",
-              "7 % of the pixels are saturated: shorten the exposure",
+              "35 % of the pixels are too bright: shorten the exposure",
               "Move away from the bright lamp or window, or set a shorter camera.exposure in the settings file, then run the self-test again.",
             )
-          : C("camera image", "PASS", "mean 104 DN, 0.4 % saturated"),
+          : C("camera image", "PASS", "average brightness 104 of 255, 0.4 % too bright"),
         ...(pico
           ? [
               C("pico", "PASS", "firmware ohs-fw 1.0.0 on COM5, motion sensor (IMU): LSM6DSOX"),
               C("imu rate", "PASS", "415.8 Hz measured (416 requested)"),
-              C("imu values", "PASS", "|accel| 9.80 m/s^2"),
+              C("imu values", "PASS", "gravity reads 9.80 m/s², turning noise 0.08°/s, offset 0.21°/s"),
               C("clock sync", "PASS", "round trip 0.6 ms: timestamps good to better than 1 ms"),
               C("vertical line laser", "PASS", "on at 100% for 1 s (the camera saw 3.10% of the pixels light up)"),
               C("horizontal line laser", "PASS", "on at 100% for 1 s (the camera saw 2.84% of the pixels light up)"),

@@ -371,7 +371,10 @@ check(ff[1].warn === true && ff.some((f) => f.label === "Left out" && f.value ==
   check(stayed.lines.length === 0 && stayed.warnings.length === 0 && !stayed.warn, "the part stayed: nothing was left out");
   const cleaned = mergeLeftOut({ ...moved, cleaning: "1 small loose bit (3\u202fmm²) was left out as too small (under 1\u202f% of the triangles each); 1 small bit over a thin part was kept." });
   check(cleaned.lines.length === 3 && cleaned.lines[2] === "The merged scan: 1 small loose bit (3\u202fmm²) was left out as too small (under 1\u202f% of the triangles each); 1 small bit over a thin part was kept.", `the cleaning, said: ${cleaned.lines[2]}`);
-  check(mergeLeftOut({ ...base, tables: [], warnings: [], cleaning: "x" }).lines.length === 0, "no cleaning line when nothing was left out of a table");
+  // UX_PLAN R7: the merge always says what its cleaning took, also when the part was not moved (no tables)
+  const noTables = mergeLeftOut({ ...base, tables: [], warnings: [], cleaning: "No loose bit was left out as too small (under 1 % of the triangles each)." });
+  check(noTables.lines.length === 1 && noTables.lines[0] === "The merged scan: No loose bit was left out as too small (under 1 % of the triangles each).", `the cleaning, said without tables: ${noTables.lines.join("|")}`);
+  check(mergeLeftOut({ ...base, tables: [], warnings: [], cleaning: null }).lines.length === 0, "nothing cleaned (cleaning null): nothing to say");
   const older = mergeLeftOut(base);
   check(older.lines.length === 0 && older.warnings.length === 0, "an older server says nothing of it");
   // the choice before merging says plainly what goes and what stays

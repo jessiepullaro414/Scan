@@ -56,6 +56,7 @@ import { cn, isModalOpen, isTypingTarget, useHotkeys } from "../lib/util";
 import { useConnection } from "../store/connection";
 import { hasGraphicsCard, noConfidenceText } from "../lib/computer";
 import { canShowRemoved } from "../lib/looseBits";
+import { historyLabel } from "../lib/recipes";
 import { isActive, useScanJob } from "../store/jobs";
 import { processKey, useProcess, useProcessJob } from "../store/process";
 import { useProjects } from "../store/projects";
@@ -67,6 +68,7 @@ import { viewBus } from "../three/viewBus";
 import { Panel } from "./process/bits";
 import { EditsPanel, type EditTab } from "./process/EditsPanel";
 import { HistoryPanel } from "./process/HistoryPanel";
+import { useRemovedView } from "./process/useRemovedView";
 import { useVersionedMesh, type LoadedMesh } from "./process/mesh";
 import { ProcessCanvas, type CompareMode, type MarkedArea, type SelectTool } from "./process/ProcessCanvas";
 import { RecipesPanel } from "./process/RecipesPanel";
@@ -199,6 +201,10 @@ export default function ProcessPage({ pid, sid }: { pid: string; sid: string }) 
     [mesh, previous],
   );
 
+  // R23: "Show what was removed" for any removal of the history: right after it from the meshes on screen (Compare,
+  // "Both"); at any other time from the engine's meshes of that step, loaded when asked and freed when closed
+  const removedView = useRemovedView(pid, sid, state);
+
   // ---------------------------------------------------------------- view state
   const [shading, setShading] = useState<Shading>("clay");
   const [wireframe, setWireframe] = useState(false);
@@ -220,6 +226,16 @@ export default function ProcessPage({ pid, sid }: { pid: string; sid: string }) 
 
   const busy = !!job || !!state?.busy || !!entry?.action || isActive(makeJob);
   const comparing = compare === "before" && !!previous;
+  const showRemoved = (editId: string) => {
+    // a second press closes it; right after the removal the meshes on screen show it at once (Compare, "Both")
+    if (removedView.view?.editId === editId) return removedView.close();
+    if (removedFor === editId && previous) {
+      removedView.close();
+      return setCompare("overlay");
+    }
+    setCompare("now");
+    removedView.show(editId);
+  };
   const canSelect = !!mesh && !comparing;
   // the confidence map needs each point's sigma (meshes made with the confidence reconstruction)
   const hasSigma = !!sigmaOf(mesh?.geometry);
@@ -611,7 +627,19 @@ export default function ProcessPage({ pid, sid }: { pid: string; sid: string }) 
                 </Button>
               }
             >
-              {failure.detail} {failure.cancelled ? "" : state?.current ? "The mesh is as it was." : "The raw recording is kept."}
+              {failure.detail}{" "}
+              {failure.wholeRun
+                ? // UX_PLAN R2: a cancelled or failed Make mesh leaves the scan's mesh as it was (`mesh_kept`)
+                  failure.kept
+                  ? /kept as it was|stays as it was/i.test(failure.detail)
+                    ? ""
+                    : "The mesh stays as it was, and so does the recording."
+                  : "The recording is kept: you can make the mesh any time."
+                : failure.cancelled
+                  ? ""
+                  : state?.current
+                    ? "The mesh is as it was."
+                    : "The raw recording is kept."}
             </Callout>
           </div>
         ) : null}
@@ -644,8 +672,8 @@ export default function ProcessPage({ pid, sid }: { pid: string; sid: string }) 
               sid={sid}
               state={state}
               busy={busy}
-              showRemovedFor={removedFor}
-              onShowRemoved={() => setCompare("overlay")}
+              showingRemoved={removedView.view?.editId ?? (compare === "overlay" ? removedFor : null)}
+              onShowRemoved={showRemoved}
             />
             {!wide ? details : null}
           </>
@@ -666,6 +694,7 @@ export default function ProcessPage({ pid, sid }: { pid: string; sid: string }) 
               mesh={mesh}
               previous={previous}
               compare={previous ? compare : "now"}
+              removed={removedView.view?.phase === "ready" ? { ghost: removedView.view.ghost, after: removedView.view.after } : null}
               shading={shownShading}
               wireframe={wireframe}
               holes={holesWanted ? holes.data : null}
@@ -852,7 +881,34 @@ export default function ProcessPage({ pid, sid }: { pid: string; sid: string }) 
 
         {/* top right: the running job, a new version loading, or what "Before" shows */}
         <div className="pointer-events-none absolute right-4 top-4 flex w-[min(380px,calc(100%-2rem))] flex-col items-end gap-2">
-          {mesh && job ? (
+          {mesh && removedView.view ? (
+            // R23: what a removal of the history took, its summary naming the rule that took the largest piece
+            <Overlay className="w-full px-3.5 py-2.5">
+              <div className="flex items-start gap-2" role="status" aria-label="What was removed">
+                {removedView.view.phase === "loading" ? <Spinner size={13} className="mt-0.5 shrink-0 text-accent" /> : <Blend size={13} className="mt-0.5 shrink-0 text-[#ff9a3c]" aria-hidden />}
+                <div className="min-w-0 flex-1 text-xs">
+                  <div className="font-medium text-fg">
+                    {removedView.view.phase === "loading"
+                      ? "Loading the meshes before and after this step…"
+                      : removedView.view.phase === "ready"
+                        ? "In orange: what this step removed"
+                        : removedView.view.phase === "too-big"
+                          ? "Not shown: these meshes are too big"
+                          : "Couldn't show what was removed"}
+                  </div>
+                  <div className="mt-0.5 leading-5 text-muted">
+                    {removedView.view.phase === "error" || removedView.view.phase === "too-big" ? removedView.view.message : `${historyLabel(removedView.view.label)}: ${removedView.view.line}`}
+                  </div>
+                </div>
+                <Button size="xs" variant="ghost" onClick={removedView.close}>
+                  Close
+                </Button>
+              </div>
+            </Overlay>
+          ) : null}
+          {mesh && job && state?.making ? null : mesh && job ? (
+            // not while a whole new mesh is being made: "The new mesh being made" in the stages panel shows that
+            // job with its Cancel, and this card lay over the toolbar (found in review on the real engine)
             <Overlay className="w-full px-3.5 py-2.5">
               <div className="mb-1 truncate text-xs font-medium text-fg">{state?.busy ?? "Working…"}</div>
               <JobProgress job={job} label="Job progress" cancelTitle="Stop. The mesh stays as it was." />

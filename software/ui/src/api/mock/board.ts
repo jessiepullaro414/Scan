@@ -537,7 +537,7 @@ export function boardSheet(paper: "letter" | "a4", pxPerMm: number): Sheet {
   ctx.fillText("100 mm: measure with calipers. Print at 100 % (actual size), never “fit to page”.", w / 2, by + 5.5);
   ctx.font = "2.2px sans-serif";
   ctx.fillStyle = "#555";
-  ctx.fillText("OpenHandScan ChArUco 11 × 8 · 20 mm squares · 15 mm markers · DICT_5X5_100", w / 2, oy - 4);
+  ctx.fillText("OpenHandScan calibration board 11 × 8 · 20 mm squares · 15 mm markers", w / 2, oy - 4); // R12: no dictionary name
   return { canvas: c, wMm: w, hMm: h };
 }
 

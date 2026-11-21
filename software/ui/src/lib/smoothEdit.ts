@@ -25,20 +25,24 @@ export const SMOOTH_DEFAULTS: SmoothChoice = { method: "taubin", strength: 0.5, 
 /** The edit to send, its label for the history, and why it cannot be sent (or null). `hasSigma`: the mesh has its confidence. */
 export function smoothEdit(c: SmoothChoice, hasSigma: boolean): { body: EditBody; label: string; invalid: string | null } {
   const within = c.withinSigma && hasSigma;
-  const whereText = c.where === "flat" ? ", flat areas only" : c.where === "edges" ? ", away from edges" : "";
-  const pctText = `${Math.round(c.strength * 100)}\u202f%${whereText}${within ? ", within the scatter" : ""}`;
+  const keep = c.method === "bilateral" ? true : c.keepEdges;
+  // the engine's label in words (UX_PLAN R12; APP_API.md "Edits"): "Smooth 50 % (keeping the shape, sharp edges kept,
+  // off edges)", Taubin "evenly"; no method names
+  const whereText = c.where === "flat" ? ", flat areas only" : c.where === "edges" ? ", off edges" : "";
+  const how = c.method === "bilateral" ? "keeping the shape" : "evenly";
+  const label = `Smooth ${Math.round(c.strength * 100)}\u202f% (${how}${keep ? ", sharp edges kept" : ""}${whereText}${within ? ", within the scatter" : ""})`;
   return {
     body: {
       op: "smooth",
       params: {
         method: c.method,
         strength: c.strength,
-        keep_edges: c.method === "bilateral" ? true : c.keepEdges,
+        keep_edges: keep,
         ...(c.where === "flat" ? { flat_only: true } : c.where === "edges" ? { away_from_edges: true } : {}),
         ...(within ? { within_sigma: true } : {}),
       },
     },
-    label: c.method === "bilateral" ? `Smooth, keep edges (${pctText})` : `Smooth (Taubin, ${pctText})`,
+    label,
     invalid: c.strength <= 0 ? "Choose a strength above 0" : null,
   };
 }

@@ -9,6 +9,8 @@ import { create } from "zustand";
 import { api } from "../api/http";
 import type { Job, ProcessQuality } from "../api/types";
 import { QUALITY_TEXT, normalizeQuality } from "../lib/quality";
+import { isWholeRun, makeMeshEnded } from "../lib/making";
+import { useConnection } from "./connection";
 import { paths, navigate } from "../lib/router";
 import { storage } from "../lib/util";
 import { useProjects } from "./projects";
@@ -95,7 +97,14 @@ export const useJobs = create<JobsStore>((set, get) => ({
     set((s) => ({ jobs: { ...s.jobs, [job.id]: job } }));
     const finished = prev && isActive(prev) && !isActive(job);
     if (finished && /^merge$/i.test(job.kind)) return mergeFinished(job);
-    if (!finished || !link) return;
+    if (!finished) return;
+    if (!link) {
+      // a job this window did not start (another window, the API): nothing is said here, but the project it names is
+      // read again, so its scan does not stay "Making the mesh" on screen (found in review on the real engine)
+      const pid = (job as Job & { project_id?: unknown }).project_id;
+      if (typeof pid === "string") void useProjects.getState().fetchProject(pid);
+      return;
+    }
     // read before the project is fetched again: whether the scan had a mesh while this one was being made
     const hadMesh = !!useProjects.getState().details[link.pid]?.scans.find((s) => s.id === link.sid)?.result?.mesh_url;
     void useProjects.getState().fetchProject(link.pid);
@@ -106,13 +115,15 @@ export const useJobs = create<JobsStore>((set, get) => ({
         run: () => navigate(paths.viewer(link.pid, link.sid)),
       });
     } else if (job.state === "failed") {
-      toast.error(`Making the mesh failed for ${label}`, { detail: job.error || job.message || "The job failed.", hint: null });
+      // The engine says a failed Make mesh itself, in a notice that is its own toast (UX_PLAN R14), whether the earlier
+      // mesh stays included; a second toast would repeat it. Without the live link, the page says it.
+      if (useConnection.getState().link === "open" && isWholeRun(job)) return;
+      const ended = makeMeshEnded(job, hadMesh);
+      toast.error(`Making the mesh failed for ${label}`, { detail: ended?.detail ?? (job.error || job.message || "The job failed."), hint: null });
     } else if (job.state === "cancelled") {
-      // R12: the table's words; R15: making it again leaves the mesh the scan had
-      toast.info(
-        "Making the mesh was cancelled",
-        (job.mesh_kept ?? hadMesh) ? "The mesh stays as it was, and so does the recording." : "The recording is kept: you can make the mesh any time.",
-      );
+      // R12: the table's words; R2: the earlier mesh stays as it was (`mesh_kept`)
+      const ended = makeMeshEnded(job, hadMesh);
+      toast.info(`${ended?.title ?? "Making the mesh was cancelled"} for ${label}`, ended?.detail ?? "The recording is kept: you can make the mesh any time.");
     }
   },
 

@@ -754,10 +754,14 @@ export function ProcessCanvas({
   onLive,
   onCommit,
   frameKey,
+  removed = null,
 }: {
   mesh: LoadedMesh;
   previous: LoadedMesh | null;
   compare: CompareMode;
+  /** UX_PLAN R23: what an edit of the history removed: the mesh before it as a ghost, beside the mesh after it (null:
+   * the mesh on screen). Selecting is off while it shows. */
+  removed?: { ghost: BufferGeometry; after: BufferGeometry | null } | null;
   shading: Shading;
   wireframe: boolean;
   /** Hole outlines to draw (null hides them). */
@@ -781,9 +785,11 @@ export function ProcessCanvas({
 }) {
   const colors = useThemeColors();
   const [hoverHole, setHoverHole] = useState<number | null>(null);
-  const before = compare === "before" && previous ? previous : null;
+  const before = !removed && compare === "before" && previous ? previous : null;
   const shown = before ?? mesh;
-  const selecting = selectEnabled && !before && tool !== "navigate";
+  const selecting = selectEnabled && !before && !removed && tool !== "navigate";
+  // R23: the history's view of a removal: its own pair of meshes, no overlays of the mesh on screen
+  const plain = !!before || !!removed;
 
   const bounds = useMemo(() => {
     const g = mesh.geometry;
@@ -801,7 +807,7 @@ export function ProcessCanvas({
     if (moves || gaps) setBvh(true);
   }, [moves, gaps]);
   const meshRef = useRef<Mesh | null>(null);
-  const model = <Model geometry={shown.geometry} shading={shading} wireframe={wireframe} meshRef={meshRef} />;
+  const model = <Model geometry={removed?.after ?? shown.geometry} shading={shading} wireframe={wireframe} meshRef={meshRef} />;
 
   return (
     <div className="absolute inset-0" role="img" aria-label="3D view of the mesh being processed">
@@ -839,14 +845,14 @@ export function ProcessCanvas({
           )}
           {moves ? <DeviationProbe target={meshRef} values={moves} /> : null}
           {gaps ? <LaserProbe target={meshRef} values={gaps} /> : null}
-          {compare === "overlay" && previous ? <Ghost geometry={previous.geometry} /> : null}
-          {!before ? <Highlight mesh={mesh} color={colors.accent} /> : null}
-          {holes && !before ? <HoleLines holes={holes} fillUpTo={fillUpTo} hovered={hoverHole} /> : null}
+          {removed ? <Ghost geometry={removed.ghost} /> : compare === "overlay" && previous ? <Ghost geometry={previous.geometry} /> : null}
+          {!plain ? <Highlight mesh={mesh} color={colors.accent} /> : null}
+          {holes && !plain ? <HoleLines holes={holes} fillUpTo={fillUpTo} hovered={hoverHole} /> : null}
           {trajectory ? <Trajectory view={trajectory} accent={colors.accent} /> : null}
-          {checkLit && !before ? <CheckMark lit={checkLit} geometry={mesh.geometry} /> : null}
-          {!before ? areas?.map((a) => <AreaMark key={a.key} mesh={mesh} area={a} />) : null}
+          {checkLit && !plain ? <CheckMark lit={checkLit} geometry={mesh.geometry} /> : null}
+          {!plain ? areas?.map((a) => <AreaMark key={a.key} mesh={mesh} area={a} />) : null}
         </group>
-        {holes && holes.length && !before ? <HoleHover holes={holes} label={holeLabel} onHover={setHoverHole} /> : null}
+        {holes && holes.length && !plain ? <HoleHover holes={holes} label={holeLabel} onHover={setHoverHole} /> : null}
         <SelectionController
           mesh={mesh}
           tool={tool}

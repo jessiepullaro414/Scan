@@ -1,13 +1,14 @@
 /** Shared scan pieces: status chip, "Make mesh" button with quality choice, job progress, "Process…". */
 import { Box, ChevronDown, Gauge, SlidersHorizontal, Sparkles, Wand, type LucideIcon } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { Job, ProcessQuality, Scan } from "../api/types";
-import { jobEstimate } from "../lib/estimate";
-import { fmtFixed, fmtInt, fmtPct } from "../lib/format";
+import { fmtDuration, fmtFixed, fmtInt, fmtPct } from "../lib/format";
+import { isWholeRun, timeLeft } from "../lib/making";
 import { QUALITIES, QUALITY_TEXT } from "../lib/quality";
 import { navigate, paths } from "../lib/router";
 import { cn } from "../lib/util";
-import { isActive, useJobs } from "../store/jobs";
+import { isActive, jobScanRef, useJobs } from "../store/jobs";
+import { processKey, useProcess } from "../store/process";
 import { Badge, type BadgeTone } from "./ui/Badge";
 import { Button, type ButtonSize, type ButtonVariant } from "./ui/Button";
 import { ProgressBar } from "./ui/Feedback";
@@ -113,15 +114,16 @@ export function MakeMeshButton({
 }
 
 /**
- * Inline progress of a meshing job (or, with `label` / `cancelTitle`, any job) with a cancel button,
- * and, while it goes through the frames, the time left from its measured rate (lib/estimate.ts).
+ * Inline progress of a meshing job (or, with `label` / `cancelTitle`, any job) with a cancel button, and the time
+ * left (UX_PLAN R18, lib/making.ts): for Make mesh the whole job's, from the engine's `making.left_s` with the part
+ * running now; for a stage run alone its frame pass's, named for that stage.
  */
 export function JobProgress({
   job,
   compact,
   className,
   label = "Making the mesh",
-  cancelTitle = "Stop making the mesh. The recording is kept.",
+  cancelTitle,
   icon: Icon = Box,
 }: {
   job: Job;
@@ -134,8 +136,24 @@ export function JobProgress({
   const cancel = useJobs((s) => s.cancel);
   const [cancelling, setCancelling] = useState(false);
   const pct = Math.round(job.progress * 100);
-  const est = jobEstimate(job);
+  const whole = isWholeRun(job);
+  const ref = whole ? jobScanRef(job) : null;
+  // the run being built (ProcessState.making), kept fresh by the engine's `process` messages
+  const known = useProcess((s) => (ref ? s.entries[processKey(ref.pid, ref.sid)] !== undefined : true));
+  const making = useProcess((s) => (ref ? (s.entries[processKey(ref.pid, ref.sid)]?.state?.making ?? null) : null));
+  useEffect(() => {
+    if (ref && !known && isActive(job)) void useProcess.getState().fetch(ref.pid, ref.sid);
+  }, [ref?.pid, ref?.sid, known]); // eslint-disable-line react-hooks/exhaustive-deps
+  const est = timeLeft(job, making);
   const f = job.frames;
+  // R2: a Make mesh again leaves the scan's mesh as it is until the new one is ready, and after a cancel
+  const stopTitle = cancelTitle ?? (job.mesh_kept ? "Stop making the mesh. The current mesh stays as it is." : "Stop making the mesh. The recording is kept.");
+  const estTitle =
+    whole && making
+      ? `${typeof making.elapsed_s === "number" ? `Running for ${fmtDuration(making.elapsed_s)}. ` : ""}The time left is for every stage and edit still to come, at the pace so far.`
+      : f?.fps
+        ? `${fmtFixed(f.fps, 1)} frames a second so far (${fmtInt(f.done)} of ${fmtInt(f.total)})`
+        : undefined;
   return (
     <div className={cn("min-w-0", className)}>
       <div className="mb-1.5 flex items-center gap-2 text-xs">
@@ -157,18 +175,14 @@ export function JobProgress({
               await cancel(job.id);
               setCancelling(false);
             }}
-            title={cancelTitle}
+            title={stopTitle}
           >
             Cancel
           </Button>
         ) : null}
       </div>
-      {est.kind === "left" || est.kind === "measuring" ? (
-        <div
-          className="mt-1 text-xs text-subtle"
-          aria-live="polite"
-          title={f?.fps ? `${fmtFixed(f.fps, 1)} frames a second so far (${fmtInt(f.done)} of ${fmtInt(f.total)})` : undefined}
-        >
+      {est ? (
+        <div className="mt-1 text-xs text-subtle" aria-live="polite" title={estTitle}>
           {est.text}
         </div>
       ) : null}

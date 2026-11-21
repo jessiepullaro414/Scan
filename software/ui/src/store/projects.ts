@@ -2,8 +2,11 @@
 import { create } from "zustand";
 import { ApiError, api } from "../api/http";
 import type { Project, ProjectSummary } from "../api/types";
+import { renameRefusal } from "../lib/names";
 import { toast } from "./toasts";
 import { useUi } from "./ui";
+
+export type RenameRefusal = NonNullable<ReturnType<typeof renameRefusal>>;
 
 type ProjectsStore = {
   list: ProjectSummary[] | null;
@@ -18,7 +21,8 @@ type ProjectsStore = {
   rename: (pid: string, name: string) => Promise<boolean>;
   remove: (pid: string) => Promise<boolean>;
   /** U7, U50: rename a scan; false (with a toast) when the engine refused. */
-  renameScan: (pid: string, sid: string, name: string) => Promise<boolean>;
+  /** true when renamed; a refusal with a suggested name (UX_PLAN R21) to say in the dialog; false otherwise (a toast). */
+  renameScan: (pid: string, sid: string, name: string) => Promise<boolean | RenameRefusal>;
   /** U7: move a scan to the trash (`dependentsOk` once the user saw what depends on it); false when refused. */
   trashScan: (pid: string, sid: string, dependentsOk: boolean) => Promise<boolean>;
 };
@@ -132,6 +136,9 @@ export const useProjects = create<ProjectsStore>((set, get) => ({
       });
       return true;
     } catch (e) {
+      // UX_PLAN R21: another scan has the name: the refusal is said in the dialog, with the free name as a button
+      const refused = renameRefusal(e);
+      if (refused) return refused;
       toast.error("Couldn't rename the scan", e);
       return false;
     }

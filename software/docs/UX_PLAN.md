@@ -701,6 +701,35 @@ pages read the new fields.
 - The server's guard now also refuses program words in progress lines (a device's code name,
   "trajectory", "fusing", "DN") and frame counts without grouping.
 
+**The pages read the server's new fields (2026-11-21):** R17, R18, R20, R21 and R23 are done and
+ticked; with them every finding of the walk, R1 to R23. Seen on the real engine during a real
+"Make mesh again" of a 630-frame scan and its cancel.
+
+- **During a Make mesh again** the Edit mesh page shows "The new mesh being made" above the
+  stages: the run's parts with one of them Running, the job's progress and Cancel, and "About
+  4 min left for the whole mesh (now: Follow the camera)". The stages below keep the current
+  mesh's states. After a cancel: "Making the mesh: cancelled. Stopped before it finished. The
+  mesh stays as it was, and so does the recording." The same words in the toasts, the Jobs
+  menu, the project row and the Scan page.
+- **R17:** the viewer says "Making the mesh took …" for the whole run.
+- **R23:** every Remove loose bits line of the history has "Show what was removed", at any
+  time; the two meshes are loaded when asked and freed when closed (over 6,000,000 extra
+  triangles the page says they are too big to show together).
+- **R21:** a refused rename shows the server's sentence with a button "Use “Bracket (2)”"; on
+  Align and merge a typed name another scan has gets the same warning, and the server refuses
+  it too (found by the page pass: it took a typed name as given).
+- **R20:** the line about this computer says why no graphics card is in use: turned off in
+  the app's settings, turned off for this run by a setting made outside the app, or none found.
+- **R14:** an engine's notice is its own title; no "Engine error" above it.
+- The keyboard focus stays on a sensible control after "Delete view N" and after Pause.
+- Found in review on the real engine and mended: the job's card lay over Edit mesh's toolbar
+  while the new block already showed the same job; and a scan stayed "Making the mesh" on
+  screen after a cancel of a job this window had not started.
+
+Left, small: the page's own "Remove the table" text still says cm² beside the server's mm²
+(`lib/table.ts`); at 800 px a row that is making its mesh shortens the scan's name; an edit made
+before 2026-11-21 keeps its stored words ("Remove floaters", cm²).
+
 ### [x] R1. Every warning of a scan is titled "Tracking may have slid" (pages)
 A merged scan's notes about its table ("70 raised areas up to 0.59 mm high…") appear under that
 title on the row's chip and in the viewer. Only the camera path's own warning gets that title;
@@ -790,10 +819,10 @@ The old name, and a button that cannot help on this computer (the Confidence too
 knows). Also: the Confidence button's reason and "Thin walls and edges has no effect here"
 are on hover only or missing in the Edit mesh preset box; say them on the page.
 
-### [ ] R17. "Processing time" is not the time the mesh took (server)
+### [x] R17. "Processing time" is not the time the mesh took (server)
 7 min 27 s shown for about 26 minutes. Show the whole Make mesh, or name what it is.
 
-### [ ] R18. The time left misleads (pages, server)
+### [x] R18. The time left misleads (pages, server)
 "A few seconds left for tracking" at 68 % with 16 minutes to go, then nothing from 83 %; the
 percentage crawls from 80 to 83 % for nine minutes. Estimate the whole job, or say what comes
 after ("then about N min for the other stages"); give the late stages their true share.
@@ -803,7 +832,7 @@ cm² beside mm² in one paragraph of a merge and on Edit mesh; no thousands sepa
 of 1321", "5206 mm around", "Surface 278857 mm²"); "100% of the image"; "392mm" and "70common"
 in the board gauge; "0.50 mm" beside "0.5 mm".
 
-### [ ] R20. Small wording (server, pages)
+### [x] R20. Small wording (server, pages)
 "The check calibration needs the cameras calibrated first."; "at each pose" (view);
 "Calibration loaded" on the Scan page while the chip says "Demo calibration"; "goes back to the
 base" (starting mesh); the self-test's "it has no lasers" for the simulator; "Seven short
@@ -814,7 +843,7 @@ about this computer says the graphics card "is turned off in the settings" when 
 environment turned it off, and "Scans work; without one:" reads badly; advice to "Calibrate it
 in Setup" for a replay without a calibration, which Setup refuses to calibrate.
 
-### [ ] R21. Names that repeat (server, pages)
+### [x] R21. Names that repeat (server, pages)
 Rename accepts a name another scan has; a merge's default name repeats an earlier merge's
 ("Bracket from the front + Bracket from the side" three times); the trash then lists two
 alike. Warn on rename and offer " (2)"; a default name takes the next free one.
@@ -823,7 +852,7 @@ alike. Warn on rename and offer " (2)"; a default name takes the next free one.
 While a job ran, "Follow the camera" (done) and "Straighten" both said "Running"; on a scan
 made without a graphics card Straighten says "Skipped" above "Closed 48 loops".
 
-### [ ] R23. A big piece can go under "Remove loose bits smaller than 5 mm" (pages, server)
+### [x] R23. A big piece can go under "Remove loose bits smaller than 5 mm" (pages, server)
 "297 loose bits removed, the largest 40.8 mm across": the label's second half ("or under 1 % of
 the mesh") is what took it, and "Show what was removed" is no longer offered once the recipe's
 later steps have run. The line names the rule that took the largest piece, and the removed

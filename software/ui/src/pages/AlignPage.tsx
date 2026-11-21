@@ -87,6 +87,7 @@ import {
   type Vec3,
 } from "../lib/align";
 import { choiceText, mergeOffer, poseChoices, poseInUse, standingLabel, standingOf } from "../lib/alignChoice";
+import { freeName, nameTaken } from "../lib/names";
 import { fmtBytes } from "../lib/format";
 import { movedNeeded } from "../lib/moved";
 import { focusMovedQuestion, MovedQuestion } from "../components/MovedQuestion";
@@ -108,13 +109,16 @@ const roleOf = (index: number, several: boolean): string => (index === 0 ? ROLE.
 const MOVED_TEXT = { two: { moved: SETUP_TEXT.moved, same: "The table both scans share helps to line them up, and it stays in the merged scan." }, several: { moved: SETUP_TEXT.moved, same: SETUP_TEXT.same } };
 const ALIGN_MOVED_ID = "align-moved-question";
 
-/** What the merge left out of each scan's table (the part was moved), and what to look at. */
+/**
+ * What the merge left out of each scan's table (the part was moved), what its cleaning took (R7: always said), and what
+ * to look at. Its lines also say what it kept (a raised area that may be a thin part), so the title fits both.
+ */
 function LeftOut({ merged }: { merged: MergeResult }) {
   const { lines, warnings, warn } = mergeLeftOut(merged);
   if (!lines.length && !warnings.length) return null;
   return (
-    <Callout tone={warn ? "warn" : "neutral"} icon={warn ? TriangleExclamationPoint : Layers} title={warn ? "What was left out, and what to look at" : "What was left out"} className="mt-3">
-      <ul className="space-y-1.5" aria-label="What was left out of each scan">
+    <Callout tone={warn ? "warn" : "neutral"} icon={warn ? TriangleExclamationPoint : Layers} title={warn ? "Notes from the merge, and what to look at" : "Notes from the merge"} className="mt-3">
+      <ul className="space-y-1.5" aria-label="What the merge left out and kept">
         {lines.map((l) => (
           <li key={l} className="leading-5">
             {l}
@@ -529,8 +533,12 @@ export default function AlignPage({
   const pickNames = { target: leftScan?.name ?? "the first scan", source: rightScan?.name ?? "the second scan" };
 
   // ---------------------------------------------------------------- merging
-  const defaultName = ready ? mergeNameOf(listScans.map((s) => s!.name)) : "";
+  // UX_PLAN R21: no two scans of a project share a name: the default takes the next free one, as the engine's does,
+  // and a typed name another scan has is warned about with the free one as a button (the app warns, it does not block)
+  const takenNames = (project?.scans ?? []).map((s) => s.name);
+  const defaultName = ready ? freeName(mergeNameOf(listScans.map((s) => s!.name)), takenNames) : "";
   const mergeName = name ?? defaultName;
+  const nameClash = nameTaken(mergeName.trim(), takenNames) ? freeName(mergeName.trim(), takenNames) : null;
   /** A merged scan, or one that keeps its result only (R2), has no recording: it can be aligned to, not merged. */
   const noRecording = listScans.find((s) => s && cannotMerge(s, several)) ?? null;
   const noMerge = noRecording ? cannotMerge(noRecording, several) : null;
@@ -1085,8 +1093,30 @@ export default function AlignPage({
           ) : (
             <>
               <Field label="Name of the new scan" htmlFor="merge-name">
-                <TextInput id="merge-name" value={mergeName} maxLength={120} placeholder={defaultName} onChange={(e) => setName(e.target.value)} />
+                <TextInput
+                  id="merge-name"
+                  value={mergeName}
+                  maxLength={120}
+                  placeholder={defaultName}
+                  onChange={(e) => setName(e.target.value)}
+                  aria-describedby={nameClash ? "merge-name-taken" : undefined}
+                />
               </Field>
+              {nameClash ? (
+                <div id="merge-name-taken" className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-warn" role="status">
+                  <span>Another scan of this project is already called “{mergeName.trim()}”.</span>
+                  <Button
+                    size="xs"
+                    variant="secondary"
+                    onClick={() => {
+                      setName(nameClash);
+                      document.getElementById("merge-name")?.focus(); // the button goes away: the keyboard stays in the field
+                    }}
+                  >
+                    Use “{nameClash}”
+                  </Button>
+                </div>
+              ) : null}
               <p className="mt-2 text-xs leading-5 text-subtle">
                 {several
                   ? "All the recordings are rebuilt together into one new scan, which takes about as long as making all their meshes. The scans stay as they are."

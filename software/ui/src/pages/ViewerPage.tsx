@@ -47,7 +47,8 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import type { BufferGeometry } from "three";
 import { PLYLoader } from "three/examples/jsm/loaders/PLYLoader.js";
 import { ApiError, api } from "../api/http";
-import type { FitKind, KeptFeature, KeptFit, Project, Scan } from "../api/types";
+import type { FitKind, KeptFeature, KeptFit, MadeInfo, Project, Scan } from "../api/types";
+import { isWholeRun, processingTime } from "../lib/making";
 import { HEALTH_ICON, HEALTH_TEXT } from "../components/CalibHealth";
 import { JobProgress, MakeMeshButton, ProcessButton, ScanStatusBadge } from "../components/ScanBits";
 import { ErrorBoundary } from "../components/shell/ErrorBoundary";
@@ -145,7 +146,9 @@ type Rec = Record<string, unknown>;
 const obj = (v: unknown): Rec | null => (v && typeof v === "object" && !Array.isArray(v) ? (v as Rec) : null);
 const num = (v: unknown): number | null => (typeof v === "number" && Number.isFinite(v) ? v : null);
 
-function ReportSummary({ report, merged }: { report: Rec; merged: boolean }) {
+function ReportSummary({ report, merged, made }: { report: Rec; merged: boolean; made?: MadeInfo | null }) {
+  // UX_PLAN R17: the time the whole Make mesh took (`ProcessState.made`), else the last stage's, named as such
+  const took = processingTime(made, num(report.wall_time_s));
   const frames = obj(report.frames);
   const mesh = obj(report.mesh);
   const lasers = obj(report.lasers);
@@ -235,7 +238,7 @@ function ReportSummary({ report, merged }: { report: Rec; merged: boolean }) {
               ]
             : null,
           lasers && num(lasers.n_points_exported) !== null ? ["Laser points", <span className="tnum">{fmtInt(num(lasers.n_points_exported))}</span>] : null,
-          num(report.wall_time_s) !== null ? ["Processing time", fmtDuration(num(report.wall_time_s))] : null,
+          took ? [took.label, <span title={took.title}>{took.value}</span>] : null,
           typeof report.source === "string" ? ["Source", report.source === "sim" ? "Simulator" : report.source] : null,
         ]}
       />
@@ -364,7 +367,7 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
   // apart and takes its place when done): that mesh's downloads, report and tools stay, with the job's progress shown
   // (the engine since R2 may leave the scan's entry, its status too, as it was until the run takes its place: then the
   // scan's own whole-run job says it)
-  const wholeRun = !!job && isActive(job) && (job.kind === "process_scan" || job.kind === "process" || (job.kind === "process_recipe" && job.scope === "all"));
+  const wholeRun = !!job && isActive(job) && isWholeRun(job);
   const remaking = !!scan?.result?.mesh_url && (scan.status === "processing" || wholeRun);
   const hasResult = !!scan && !!scan.result && (scan.status === "processed" || remaking);
 
@@ -703,6 +706,8 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
   const refEnabled = !!cmp.comparison?.alignment && cmp.comparison.ready;
   // open holes: the count in the mesh's numbers, which this page reads with the mesh version
   const openHoles = useProcess((s) => s.entries[processKey(pid, sid)]?.state?.current?.stats.holes ?? null);
+  // R17: the Make mesh that made this mesh (its whole time)
+  const made = useProcess((s) => s.entries[processKey(pid, sid)]?.state?.made ?? null);
   const shown: Shading =
     shading === "deviation"
       ? devOn && dev.phase === "ready"
@@ -1305,7 +1310,7 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
           ) : null}
           <Panel title="Processing report" icon={FileText}>
             {report ? (
-              <ReportSummary report={report} merged={!!scan?.merged_from?.length} />
+              <ReportSummary report={report} merged={!!scan?.merged_from?.length} made={made} />
             ) : hasResult ? (
               <div className="text-sm text-muted">No processing report for this result.</div>
             ) : (

@@ -45,10 +45,14 @@ const settings = {
   paths: { calibration: "~/.ohs/calibration.json", scans_dir: "~/OpenHandScan/scans" },
   camera: { fourcc: "MJPG", index: 1 },
   pico: { baud: 115200 },
-  board: { dictionary: "DICT_5X5_100" },
+  board: { dictionary: "DICT_5X5_100", squares_x: 11 },
 };
 const adv = advancedSections(settings);
 check(adv.map((s) => s.key).join(",") === "general,paths,camera,pico,board", `the sections: ${adv.map((s) => s.key).join(",")}`);
+// UX_PLAN R12: the markers' dictionary is the program's name for them: not shown, also not here
+const board = adv.find((s) => s.key === "board")!;
+check(!board.rows.some((r) => r.key === "dictionary") && board.rows.some((r) => r.key === "squares_x"), `the board without its dictionary: ${board.rows.map((r) => r.key).join(",")}`);
+check(!JSON.stringify(adv).includes("DICT_"), "no dictionary name anywhere in Advanced");
 const paths = adv.find((s) => s.key === "paths")!;
 const scans = paths.rows.find((r) => r.key === "scans_dir")!;
 check(scans.label === "Recordings folder" && /calibration/i.test(scans.help ?? "") && /project/i.test(scans.help ?? ""), `the scans folder is explained: ${scans.help}`);

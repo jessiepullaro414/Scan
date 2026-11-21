@@ -200,6 +200,9 @@ export function ConfirmDialog({
 }
 
 /** Ask for a name (create / rename). `onSubmit` returns false to keep the dialog open. */
+/** A refusal the prompt says under its field: the engine's sentence, the name it suggests and the button's words. */
+export type PromptRefusal = { sentence: string; suggestion: string; button: string };
+
 export function PromptDialog({
   open,
   onClose,
@@ -220,12 +223,15 @@ export function PromptDialog({
   initial?: string;
   placeholder?: string;
   confirmLabel: string;
-  onSubmit: (value: string) => Promise<boolean | void> | boolean | void;
+  /** false keeps the dialog open; a refusal (UX_PLAN R21: a name another scan has) is said under the field, with a
+   * button that takes the suggested name. */
+  onSubmit: (value: string) => Promise<boolean | void | PromptRefusal> | boolean | void | PromptRefusal;
   maxLength?: number;
 }) {
   const [value, setValue] = useState(initial);
   const [busy, setBusy] = useState(false);
   const [touched, setTouched] = useState(false);
+  const [refusal, setRefusal] = useState<PromptRefusal | null>(null);
   const inputId = useId();
 
   useEffect(() => {
@@ -233,19 +239,21 @@ export function PromptDialog({
       setValue(initial);
       setTouched(false);
       setBusy(false);
+      setRefusal(null);
     }
   }, [open, initial]);
 
   const trimmed = value.trim();
   const error = !trimmed ? "Enter a name." : /[\\/:*?"<>|]/.test(trimmed) ? 'Avoid \\ / : * ? " < > |' : null;
 
-  const submit = async () => {
+  const submit = async (v = trimmed) => {
     setTouched(true);
-    if (error || busy) return;
+    if ((v === trimmed && error) || busy) return;
     setBusy(true);
     try {
-      const ok = await onSubmit(trimmed);
-      if (ok !== false) onClose();
+      const ok = await onSubmit(v);
+      if (ok && typeof ok === "object") setRefusal(ok);
+      else if (ok !== false) onClose();
     } finally {
       setBusy(false);
     }
@@ -262,7 +270,7 @@ export function PromptDialog({
           <Button variant="ghost" onClick={onClose} disabled={busy}>
             Cancel
           </Button>
-          <Button variant="primary" loading={busy} onClick={submit} disabled={touched && !!error}>
+          <Button variant="primary" loading={busy} onClick={() => void submit()} disabled={touched && !!error}>
             {confirmLabel}
           </Button>
         </>
@@ -283,15 +291,35 @@ export function PromptDialog({
           value={value}
           maxLength={maxLength}
           placeholder={placeholder}
-          onChange={(e) => setValue(e.target.value)}
+          onChange={(e) => {
+            setValue(e.target.value);
+            setRefusal(null);
+          }}
           onFocus={(e) => e.currentTarget.select()}
           invalid={touched && !!error}
           aria-invalid={touched && !!error}
-          aria-describedby={touched && error ? `${inputId}-err` : undefined}
+          aria-describedby={touched && error ? `${inputId}-err` : refusal ? `${inputId}-refused` : undefined}
         />
-        <div id={`${inputId}-err`} className={cn("mt-1.5 h-4 text-xs", touched && error ? "text-danger" : "text-transparent")}>
-          {touched && error ? error : "."}
-        </div>
+        {refusal ? (
+          <div id={`${inputId}-refused`} className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-warn" role="alert">
+            <span>{refusal.sentence}</span>
+            <Button
+              size="xs"
+              variant="secondary"
+              disabled={busy}
+              onClick={() => {
+                setValue(refusal.suggestion);
+                void submit(refusal.suggestion);
+              }}
+            >
+              {refusal.button}
+            </Button>
+          </div>
+        ) : (
+          <div id={`${inputId}-err`} className={cn("mt-1.5 h-4 text-xs", touched && error ? "text-danger" : "text-transparent")}>
+            {touched && error ? error : "."}
+          </div>
+        )}
       </form>
     </Dialog>
   );

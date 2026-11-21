@@ -449,7 +449,7 @@ export function analyse(m: TriMesh): Analysis {
 }
 
 // ------------------------------------------------------------------ edits
-export type FloaterParams = { min_triangles?: number; min_size_mm?: number; keep_largest_only?: boolean };
+export type FloaterParams = { min_triangles?: number; min_size_mm?: number; min_fraction?: number; keep_largest_only?: boolean };
 
 /** Drop the loose pieces: smaller than a size (bounding-box diagonal), with few triangles, or all but the largest. */
 export function* removeFloaters(m: TriMesh, p: FloaterParams): Work<TriMesh> {
@@ -482,6 +482,7 @@ export function* removeFloaters(m: TriMesh, p: FloaterParams): Work<TriMesh> {
     if (p.keep_largest_only) drop[c] = 1;
     if (p.min_triangles !== undefined && tris[c] < p.min_triangles) drop[c] = 1;
     if (p.min_size_mm !== undefined && diag < p.min_size_mm) drop[c] = 1;
+    if (p.min_fraction !== undefined && tris[c] < p.min_fraction * faceComp.length) drop[c] = 1; // however large
   }
   const keep = new Uint8Array(faceComp.length);
   for (let f = 0; f < keep.length; f++) keep[f] = drop[faceComp[f]] ? 0 : 1;
@@ -489,25 +490,24 @@ export function* removeFloaters(m: TriMesh, p: FloaterParams): Work<TriMesh> {
   // U14: what it took, as the engine says it (`EditEntry.removed`)
   let pieces = 0,
     triangles = 0,
-    biggest = 0;
+    biggest = 0,
+    biggestTris = 0;
   for (let c = 0; c < count; c++) {
     if (!drop[c]) continue;
     pieces++;
     triangles += tris[c];
-    biggest = Math.max(biggest, Math.hypot(box[c * 6 + 3] - box[c * 6], box[c * 6 + 4] - box[c * 6 + 1], box[c * 6 + 5] - box[c * 6 + 2]));
+    const d = Math.hypot(box[c * 6 + 3] - box[c * 6], box[c * 6 + 4] - box[c * 6 + 1], box[c * 6 + 5] - box[c * 6 + 2]);
+    if (d > biggest) {
+      biggest = d;
+      biggestTris = tris[c];
+    }
   }
-  if (pieces) floatersRemoved.set(out, { pieces, triangles, largest_mm: Math.round(biggest * 10) / 10 });
+  if (pieces) floatersRemoved.set(out, { pieces, triangles, largest_mm: Math.round(biggest * 10) / 10, largest_diag: biggest, largest_triangles: biggestTris, faces: faceComp.length });
   return out;
 }
 
-/** U14: what each Remove loose bits result took (the mesh it made → the pieces). */
-export const floatersRemoved = new WeakMap<TriMesh, { pieces: number; triangles: number; largest_mm: number }>();
-
-/** The engine's summary of a removal (`ohs/server/processing.py`). */
-export function floatersSummary(r: { pieces: number; triangles: number; largest_mm: number }): string {
-  const n = r.pieces;
-  return `Removed ${n} loose bit${n !== 1 ? "s" : ""}, ${n !== 1 ? "the largest " : ""}${r.largest_mm.toFixed(1)} mm across (${r.triangles.toLocaleString("en-US")} triangles)`;
-}
+/** U14, R23: what each Remove loose bits result took (the mesh it made → the pieces; the largest one's size). */
+export const floatersRemoved = new WeakMap<TriMesh, { pieces: number; triangles: number; largest_mm: number; largest_diag: number; largest_triangles: number; faces: number }>();
 
 /**
  * Close every hole up to `maxMm` around (the outer border never) with a domed patch: a ring

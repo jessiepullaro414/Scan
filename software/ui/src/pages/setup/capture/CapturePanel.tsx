@@ -314,6 +314,7 @@ export function CaptureControls({ kind, onFinish, onCancel }: { kind: CalibKind;
           className="w-full"
           icon={Camera}
           kbd="Space"
+          data-calib-capture=""
           loading={action === "capture"}
           onClick={() => {
             unlockAudio();

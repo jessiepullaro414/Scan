@@ -40,6 +40,7 @@ import { canRemake, keepLabel, keepTitle } from "../lib/keepMode";
 import { FreeSpaceDialog } from "../components/FreeSpaceDialog";
 import { OpenFolderButton } from "../components/FolderButtons";
 import { failedLine } from "../lib/scanStatus";
+import { makeMeshEnded } from "../lib/making";
 import { meshDownloadItems, meshUrls } from "../components/MeshDownloads";
 import { fileStem, fmtBytes, fmtDateTime, fmtDuration, fmtInt, fmtRelative } from "../lib/format";
 import { href, navigate, paths } from "../lib/router";
@@ -131,6 +132,11 @@ function ScanRow({
   const mid = useRowsUnder(1500); // "Make mesh again" is in the row's menu (found in review: the row did not hold it)
   const busyReason = scanBusyReason(scan, active); // U7: a busy scan cannot go to the trash (the engine refuses it too)
   const processing = active || scan.status === "processing";
+  // UX_PLAN R2, R15: "Make mesh again" builds beside the scan's mesh, which stays until the new one is ready: it can
+  // still be opened meanwhile; a run that was cancelled or failed says that the mesh stays as it was
+  const remaking = processing && !!scan.result?.mesh_url;
+  // (a scan without a mesh says its failure in its own line under the row: not twice)
+  const ended = !active && scan.result?.mesh_url && job?.mesh_kept !== false ? makeMeshEnded(job, true) : null;
   const hasResult = scan.status === "processed" && !!scan.result;
   const urls = meshUrls(project.id, scan.id, scan.result);
   const stem = fileStem(project.name, scan.name);
@@ -154,9 +160,12 @@ function ScanRow({
     !processing && scan.status !== "recording" && hasResult && remakable
       ? { label: "Make mesh again", icon: Wand, hint: "standard quality", onSelect: () => void makeMesh(project.id, scan.id, "standard", scan.name) }
       : null;
+  const openItem: MenuItem = { label: "Open", icon: Eye, description: "The mesh it has now, until the new one is ready", onSelect: () => navigate(paths.viewer(project.id, scan.id)) };
   const secondary: MenuItem[] =
     processing || scan.status === "recording"
-      ? []
+      ? remaking
+        ? [openItem] // R15: the mesh it has can be opened while the new one is made (in the menu on narrow rows)
+        : []
       : hasResult
         ? [editMesh, ...downloads, ...(remake ? [remake] : [])]
         : recorded
@@ -215,6 +224,11 @@ function ScanRow({
             <Info size={12} aria-hidden /> {notes.text}
           </span>
         ) : null}
+        {ended ? (
+          <span className={cn("inline-flex items-center gap-1", job?.state === "failed" ? "text-warn" : "")} role="note">
+            <Info size={12} aria-hidden /> {ended.title}. {ended.detail}
+          </span>
+        ) : null}
         {kept ? (
           // R2: what the user chose to keep (the words say it; the hover says what was removed, and what is back since)
           <span className="inline-flex cursor-help items-center gap-1" title={keepTitle(scan, disk, fmtDateTime)}>
@@ -236,7 +250,14 @@ function ScanRow({
       </div>
       <div className="sr-actions flex min-w-0 items-center justify-end gap-2">
         {processing && job ? (
-          <JobProgress job={job} className="w-full max-w-[300px]" />
+          <>
+            {remaking && !narrow ? (
+              <Button size="sm" variant="secondary" icon={Eye} onClick={() => navigate(paths.viewer(project.id, scan.id))} title="The mesh it has now, until the new one is ready">
+                Open
+              </Button>
+            ) : null}
+            <JobProgress job={job} className={cn("w-full", narrow ? "max-w-[220px]" : "max-w-[300px]")} />
+          </>
         ) : processing ? (
           <span className="text-xs text-muted">Making the mesh…</span>
         ) : scan.status === "recording" ? (

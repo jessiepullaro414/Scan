@@ -219,7 +219,7 @@ export function mockTable(positions: Float32Array, indices: Uint32Array, plane: 
         "The demo knows where its table is. A face is removed when it faces the table's way (within 45° of its normal) and lies at most " +
         `${margin} mm above it, or lies wholly behind it. Faces turned further away (the part's walls) stay at any height, and so do flat ` +
         `areas ${THIN_MM} mm or more above the table (a thin part lying flat); flat areas between ${FIND_MM} and ${THIN_MM} mm go, drawn and listed.`,
-      summary: `Found the table (${Math.round(share * 100)} % of the scan, flat to 0.10 mm (typical)): ${n.toLocaleString("en-US")} faces (${(removed / 100).toFixed(1)} cm²) are the table${low}`,
+      summary: `Found the table (${Math.round(share * 100)} % of the scan, flat to 0.10 mm (typical)): ${n.toLocaleString("en-US")} faces (${Math.round(removed).toLocaleString("en-US")} mm²) are the table${low}`, // R19: mm², as the engine
       ms: Math.round(performance.now() - t0),
     },
   };

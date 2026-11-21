@@ -17,7 +17,8 @@ import { useProcess } from "../store/process";
 import { useRecipes } from "../store/recipes";
 import { useSession } from "../store/session";
 import { useSetup } from "../store/setup";
-import { toast } from "../store/toasts";
+import { useToasts } from "../store/toasts";
+import { engineNoticeToast } from "../lib/notices";
 
 let socket: LiveSocket | null = null;
 
@@ -52,7 +53,11 @@ function onText(msg: ServerTextMsg): void {
     }
     case "log":
       useConnection.getState().addLog(msg.level, msg.message);
-      if (msg.level === "error") toast.error("Engine error", { detail: msg.message, hint: null });
+      {
+        // UX_PLAN R14: the notice's own sentence is the toast's title, with nothing above it
+        const t = engineNoticeToast(msg.level, msg.message);
+        if (t) useToasts.getState().push(t);
+      }
       break;
     case "calib":
       useCalib.getState().applyLive(msg);

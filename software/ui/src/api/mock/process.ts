@@ -25,6 +25,8 @@ import type {
   FuseStage,
   Job,
   LaserInfo,
+  MadeInfo,
+  MakingPart,
   MeshOp,
   ProcessQuality,
   ProcessState,
@@ -64,13 +66,13 @@ import {
   meshBytes,
   removeFloaters,
   floatersRemoved,
-  floatersSummary,
   runSync,
   smooth,
   type TriMesh,
   type Work,
 } from "./meshops";
 import { mockSigma, mockTrajectory, scanMesh, T_WS } from "./scanmesh";
+import { editLabel, floatersRule, floatersSummary, trackProgress } from "./engineWords";
 import { MOCK_MARGIN_MM, mockTable, tablePlane } from "./table";
 
 type Stages = { track: TrackStage; straighten: StraightenStage; fuse: FuseStage; spacetime: SpacetimeStage; refine: RefineStage };
@@ -96,9 +98,13 @@ type Studio = {
   jobId: string | null;
   files: { version: number; ply?: ArrayBuffer; stl?: ArrayBuffer; obj?: ArrayBuffer };
   /** The run Make mesh (or a recipe on everything) is building, as the engine since UX_PLAN R2: the scan's own stages
-   * stay as they are until the run takes their place. */
-  making?: { stages: Partial<Record<StageId, { state: StageState; summary: string | null }>> } | null;
+   * stay as they are until the run takes their place. `t0`: when it started (performance.now(), ms). */
+  making?: { stages: Partial<Record<StageId, MakingStage>>; plan: MakingPart[]; t0: number } | null;
+  /** The Make mesh that made the current base (R17), or null (a scan made before, or a single stage since). */
+  made?: MadeInfo | null;
 };
+
+type MakingStage = { state: StageState; summary: string | null; started: string | null; seconds: number | null; t: number };
 
 type Op = { op: MeshOp; params: Record<string, unknown> };
 type Commit = () => Record<string, unknown> | null;
@@ -108,10 +114,12 @@ const SNAP_BUDGET = 200 * 1024 * 1024; // bytes of meshes kept for instant undo 
 
 
 
-/** U14: `removed` and the summary of a Remove loose bits result (nothing for any other mesh). */
-function removedFields(m: TriMesh): { removed?: { pieces: number; triangles: number; largest_mm: number }; summary?: string } {
+/** U14, R23: `removed` and the summary of a Remove loose bits result, naming the rule that took its largest piece. */
+function removedFields(m: TriMesh, params: Record<string, unknown>): Pick<EditEntry, "removed" | "summary"> {
   const r = floatersRemoved.get(m);
-  return r ? { removed: r, summary: floatersSummary(r) } : {};
+  if (!r) return {};
+  const removed = { pieces: r.pieces, triangles: r.triangles, largest_mm: r.largest_mm, largest_rule: floatersRule(params, r.largest_diag, r.largest_triangles, r.faces), largest_triangles: r.largest_triangles };
+  return { removed, summary: floatersSummary(removed, params) };
 }
 
 const OPS: MeshOp[] = ["remove_floaters", "fill_holes", "smooth", "decimate", "delete_faces", "keep_faces", "remove_table"];
@@ -143,40 +151,37 @@ const voxelFor = (q: ProcessQuality) => (q === "preview" ? 2 : 1);
 /** Mock job length (s): Best processes every frame, about twice the wait of Standard. */
 const secondsFor = (q: ProcessQuality) => (q === "preview" ? 4.5 : q === "best" ? 18 : 9);
 
+/** A Make mesh's parts and their measured shares of its time (the engine's `processing.MAKE_MESH_SHARES`). */
+const MAKE_MESH_SHARES = { track: 0.47, straighten: 0.37, refine: 0.03, edits: 0.13 } as const;
+
+/** The plan of a Make mesh (APP_API.md `making.plan`): the parts that run, their shares scaled to the whole job. */
+export function mockPlan(straighten: boolean, refine: boolean, edits: boolean): MakingPart[] {
+  const on = (["track", "straighten", "refine", "edits"] as const).filter((k) => k === "track" || (k === "straighten" ? straighten : k === "refine" ? refine : edits));
+  const total = on.reduce((a, k) => a + MAKE_MESH_SHARES[k], 0);
+  let at = 0;
+  return on.map((k, i) => {
+    const from = at;
+    at = i === on.length - 1 ? 1 : at + MAKE_MESH_SHARES[k] / total;
+    return { stage: k, from: Math.round(from * 1e4) / 1e4, to: Math.round(at * 1e4) / 1e4 };
+  });
+}
+
 /** The step the engine would use: Standard processes 30 frames a second of scanning, the others every frame. */
 export function mockStep(s: Pick<Scan, "n_frames" | "duration_s">, q: ProcessQuality): number {
   const fps = s.duration_s > 0 ? s.n_frames / s.duration_s : 30;
   return q === "standard" ? Math.max(1, Math.round(fps / 30)) : 1;
 }
 
+/** An edit's label: the engine's words (engineWords.ts; R12: no method names), the table's with its faces. */
 function label(op: MeshOp, p: Record<string, unknown>, faces?: number): string {
   switch (op) {
     case "remove_floaters":
-      if (p.keep_largest_only) return "Keep the largest piece";
-      if (num(p.min_size_mm) !== undefined) return `Remove loose bits smaller than ${mm(num(p.min_size_mm)!)} mm`;
-      return `Remove loose bits under ${int(num(p.min_triangles) ?? 0)} triangles`;
     case "fill_holes":
-      return p.watertight === true
-        ? `Make watertight: close every opening up to ${mm(num(p.max_hole_mm) ?? 0)} mm`
-        : `Fill holes up to ${mm(num(p.max_hole_mm) ?? 0)} mm`;
-    case "smooth": {
-      const pct = `${Math.round((num(p.strength) ?? 0.5) * 100)} %${p.flat_only === true ? ", flat areas only" : p.away_from_edges === true ? ", away from edges" : ""}${p.within_sigma === true ? ", within the scatter" : ""}`;
-      return p.method === "bilateral" ? `Smooth, keep edges (${pct})` : `Smooth (Taubin, ${pct})`;
-    }
-    case "decimate": {
-      const e = num(p.max_error_mm);
-      const base =
-        num(p.ratio) !== undefined
-          ? `Simplify to ${Math.round(num(p.ratio)! * 100)} %`
-          : num(p.target_triangles) !== undefined
-            ? `Simplify to ${int(num(p.target_triangles)!)} triangles`
-            : "";
-      return e === undefined ? base : base ? `${base} (within ${e} mm)` : `Simplify to within ${e} mm`;
-    }
+    case "smooth":
+    case "decimate":
     case "delete_faces":
-      return `Delete ${int(faces ?? 0)} faces`;
     case "keep_faces":
-      return `Keep ${int(faces ?? 0)} faces`;
+      return editLabel(op, p, faces);
     case "remove_table":
       if (faces === undefined) return "Remove the table";
       {
@@ -279,6 +284,7 @@ export class MockProcess {
     if (a === "spacetime" && is("POST", 1)) return json(200, this.startSpacetime(p, s));
     if (a === "fuse" && is("POST", 1)) return json(200, this.startFuse(p, s, body.voxel_mm));
     if (a === "edits" && is("POST", 1)) return json(200, this.startEdit(p, s, body));
+    if (a === "edits" && is("GET", 3) && (rest[2] === "before.ply" || rest[2] === "after.ply")) return this.editStep(p, s, rest[1], rest[2] === "after.ply");
     if (a === "undo" && is("POST", 1)) return json(200, this.step(p, s, -1));
     if (a === "redo" && is("POST", 1)) return json(200, this.step(p, s, 1));
     if (a === "recipe" && is("POST", 1)) return json(200, this.startRecipe(p, s, body));
@@ -323,7 +329,7 @@ export class MockProcess {
     return undefined;
   }
 
-  /** M1 "Make mesh": the Default recipe at the requested quality (job kind "process", as before). */
+  /** M1 "Make mesh": the Default recipe at the requested quality (job kind "process_scan", as the engine). */
   makeMesh(p: Project, s: Scan, quality: ProcessQuality, voxel: number | null = null): Job {
     const st = this.ensure(p, s);
     this.guard(st, s, "This scan is already being processed");
@@ -334,7 +340,7 @@ export class MockProcess {
     p.modified = nowIso();
     // P2: the scan's preset's mesh detail (presets.ts), when it names one
     const settings = { ...recipe.settings, quality, ...(voxel !== null ? { voxel_mm: voxel } : {}) };
-    return this.allJob(st, p, s, "process", settings, recipe.ops, "Making the mesh…", prev, secondsFor(quality), () => ({
+    return this.allJob(st, p, s, "process_scan", settings, recipe.ops, "Making the mesh…", prev, secondsFor(quality), () => ({
       project_id: p.id,
       scan_id: s.id,
       quality,
@@ -625,8 +631,19 @@ export class MockProcess {
       current: st.current ? { version: st.version, mesh_url: this.meshUrl(st), stats: analyse(st.current).stats } : null,
       busy: st.busy,
       job: job ? { ...job } : null,
-      making: st.making ? { stages: { ...st.making.stages } } : null,
+      making: st.making ? this.makingView(st.making, job) : null,
+      made: st.made ?? null,
     };
+  }
+
+  /** The run being built, as the engine sends it (APP_API.md `ProcessState.making`): its stages, the plan, how long
+   * it has run and the time left for the whole job at this pace (null under 3 %). */
+  private makingView(mk: NonNullable<Studio["making"]>, job: Job | null): NonNullable<ProcessState["making"]> {
+    const stages: NonNullable<ProcessState["making"]>["stages"] = {};
+    for (const [k, v] of Object.entries(mk.stages)) if (v) stages[k as StageId] = { state: v.state, summary: v.summary, started: v.started, seconds: v.seconds };
+    const el = (performance.now() - mk.t0) / 1000;
+    const p = job ? job.progress : 0;
+    return { stages, plan: mk.plan.map((x) => ({ ...x })), elapsed_s: Math.round(el * 10) / 10, left_s: p >= 0.03 ? Math.round((el * (1 - p)) / p) : null };
   }
 
   private broadcast(st: Studio) {
@@ -693,7 +710,13 @@ export class MockProcess {
     const p = e.params;
     switch (e.op) {
       case "remove_floaters":
-        return removeFloaters(m, { min_size_mm: num(p.min_size_mm), min_triangles: num(p.min_triangles), keep_largest_only: p.keep_largest_only === true });
+      {
+        // `{}` means the engine's defaults (5 mm or under 1 % of the mesh), as the label says
+        const own = num(p.min_size_mm) !== undefined || num(p.min_triangles) !== undefined || num(p.min_fraction) !== undefined;
+        return removeFloaters(m, own
+          ? { min_size_mm: num(p.min_size_mm), min_triangles: num(p.min_triangles), min_fraction: num(p.min_fraction), keep_largest_only: p.keep_largest_only === true }
+          : { min_size_mm: 5, min_fraction: 0.01, keep_largest_only: p.keep_largest_only === true });
+      }
       case "fill_holes":
         return fillHoles(m, num(p.max_hole_mm) ?? 10);
       case "smooth":
@@ -733,10 +756,9 @@ export class MockProcess {
     switch (op) {
       case "remove_floaters": {
         const a = num(p.min_size_mm),
-          b = num(p.min_triangles);
-        if (p.keep_largest_only !== true && a === undefined && b === undefined)
-          this.bad("Remove loose bits: say which bits to remove.", "Reload the page and try again.");
-        if ((a !== undefined && a <= 0) || (b !== undefined && b < 1)) this.bad("The size must be above 0");
+          b = num(p.min_triangles),
+          f = num(p.min_fraction);
+        if ((a !== undefined && a <= 0) || (b !== undefined && b < 1) || (f !== undefined && (f <= 0 || f > 1))) this.bad("Remove loose bits: the limit must be above 0.", "Reload the page and try again.");
         return undefined;
       }
       case "fill_holes": {
@@ -840,7 +862,7 @@ export class MockProcess {
           created: nowIso(),
           triangles_after: out.indices.length / 3,
           ms: Math.round(performance.now() - t0),
-          ...removedFields(out), // U14
+          ...(op === "remove_floaters" ? removedFields(out, params) : {}), // U14, R23
         });
         st.cursor = st.edits.length;
         self.remember(st, st.cursor, out);
@@ -850,6 +872,24 @@ export class MockProcess {
     })();
     const minSeconds = op === "smooth" ? 2 : op === "fill_holes" ? 1.6 : op === "decimate" ? 1.8 : op === "remove_floaters" ? 1.2 : 0.9;
     return this.start(st, s, "mesh_edit", BUSY[op], minSeconds, work, null);
+  }
+
+  /**
+   * UX_PLAN R23 `GET .../process/edits/{id}/before.ply` (and `after.ply`): the mesh that edit was applied to (or made),
+   * vertices and triangles only, at any later time, also for an undone edit; it never moves the cursor. 404 for an id
+   * the history does not have (a new Make mesh, a stage or a recipe cleared it).
+   */
+  private editStep(p: Project, s: Scan, id: string, after: boolean): Response {
+    const st = this.ensure(p, s);
+    const k = st.edits.findIndex((e) => e.id === id);
+    if (k < 0 || !st.base) throw new HttpError(404, "This edit is no longer in the scan's history.", "Reload the page to see the history as it is now.");
+    const step = after ? k + 1 : k;
+    const m = this.meshAt(st, step);
+    const buf = encodePly(m, null); // no sigmas (the engine's has no normals either; the page makes its own)
+    return new Response(buf, {
+      status: 200,
+      headers: { "content-type": "application/octet-stream", "X-OHS-Step": String(step), "X-OHS-Mesh-Version": String(st.version), "Cache-Control": "no-cache" },
+    });
   }
 
   /** Undo (-1) or redo (+1): instant for the steps kept in memory. */
@@ -881,7 +921,7 @@ export class MockProcess {
       const done = Math.max(1, Math.round((n * k) / 40));
       yield {
         p: a + span * (0.05 + ((end - 0.05) * k) / 40),
-        message: done < n ? `Following the camera: frame ${done} of ${n}` : `Following the camera: all ${n} frames done, making the mesh`,
+        message: trackProgress(done, n), // R12, R19: thousands grouped, no device
         frames: { stage: "track", done, total: n },
       };
     }
@@ -901,7 +941,7 @@ export class MockProcess {
     b: number,
   ): Generator<WorkStep, { loops: number; mm: number; deg: number; mesh: TriMesh | null }, void> {
     const span = b - a;
-    yield* tick(a, a + span * 0.15, 4, () => "Picking frames along the camera path");
+    yield* tick(a, a + span * 0.15, 4, () => "Looking for loops in the camera path");
     const t = mockTrajectory(s.duration_s, seedOf(s.id));
     yield* tick(a + span * 0.15, a + span * 0.4, 8, (k) => `Checking the places the scan came back to (${Math.min(k, 8)} of 8)`);
     yield* tick(a + span * 0.4, a + span * 0.5, 3, () => "Straightening the camera path");
@@ -914,12 +954,33 @@ export class MockProcess {
     return { ...r, mesh };
   }
 
-  private trackDone(st: Studio, s: Scan, quality: ProcessQuality, pct: number, when: string) {
+  private trackSummary(s: Scan, pct: number): string {
     const n = Math.max(1, s.n_frames);
     const ok = Math.round((n * pct) / 100);
+    return `Tracked ${int(ok)} of ${int(n)} frames; ${int(n - ok)} were skipped (fast motion or too little shape to follow).`;
+  }
+
+  private straightenSummary(r: { loops: number }): string {
+    return r.loops
+      ? `Found ${r.loops + 3} places the scan came back to and used ${r.loops} to straighten it.`
+      : "No loops found: the scan never came back to a place it had already seen, so there was nothing to correct and the mesh is unchanged.";
+  }
+
+  /** "Refine with lasers" in the demo: its meshes have no laser cloud of their own, so they already agree. */
+  private refineSkipped(st: Studio, s: Scan, source: StageId): RefineStage {
+    const points = 18_000 + (seedOf(s.id) % 9000);
+    return {
+      ...st.stages.refine, state: "skipped", when: nowIso(), job_id: null, source,
+      summary: `The mesh already agrees with the laser lines (0.06 mm median difference over ${int(points)} points), so nothing was changed`,
+      points, outliers: 41, moved_pct: 0, moved_mm: null, residual_before_mm: 0.06, residual_after_mm: 0.06,
+    };
+  }
+
+  private trackDone(st: Studio, s: Scan, quality: ProcessQuality, pct: number, when: string) {
+    const n = Math.max(1, s.n_frames);
     st.stages.track = {
       state: "done",
-      summary: `Tracked ${int(ok)} of ${int(n)} frames; ${int(n - ok)} were skipped (fast motion or too little shape to follow).`,
+      summary: this.trackSummary(s, pct),
       when,
       job_id: null,
       quality,
@@ -931,10 +992,8 @@ export class MockProcess {
 
   private straightenDone(st: Studio, r: { loops: number; mm: number; deg: number }, when: string) {
     st.stages.straighten = {
-      state: "done",
-      summary: r.loops
-        ? `Found ${r.loops + 3} places the scan came back to and used ${r.loops} to straighten it.`
-        : "No loops found: the scan never came back to a place it had already seen, so there was nothing to correct and the mesh is unchanged.",
+      state: r.loops ? "done" : "skipped", // as the engine: no loop accepted, nothing straightened
+      summary: this.straightenSummary(r),
       when,
       job_id: null,
       loops: r.loops,
@@ -950,6 +1009,7 @@ export class MockProcess {
   /** A new base mesh: the edits start over. */
   private newBase(st: Studio, mesh: TriMesh, stageId: StageId) {
     st.base = { mesh, stage: stageId };
+    st.made = null; // R17: a single stage replaced the base the Make mesh made
     st.edits = [];
     st.cursor = 0;
     st.snaps.clear();
@@ -1010,16 +1070,13 @@ export class MockProcess {
     this.guard(st, s);
     this.needRecording(s);
     if (st.stages.track.state !== "done" || !st.base) throw new HttpError(409, "This step needs “Follow the camera” to have finished.", "Run “Follow the camera” first, or press Make mesh.");
+    const self = this;
     const work = (function* (): JobWork {
       yield* tick(0, 0.3, 2, () => "Reading the laser points");
-      yield* tick(0.3, 1, 4, () => "Refining: fitting the correction field");
+      yield* tick(0.3, 0.6, 2, () => "Refining: working out where the surface must move");
+      yield* tick(0.6, 1, 2, () => "Refining: fitting the surface to the laser lines");
       return () => {
-        const points = 18_000 + (seedOf(s.id) % 9000);
-        st.stages.refine = {
-          ...st.stages.refine, state: "skipped", when: nowIso(), job_id: null, source: st.base!.stage,
-          summary: `The mesh already agrees with the laser lines (0.06 mm median difference over ${points.toLocaleString("en-US")} points), so nothing was changed`,
-          points, outliers: 41, moved_pct: 0, moved_mm: null, residual_before_mm: 0.06, residual_after_mm: 0.06,
-        };
+        st.stages.refine = self.refineSkipped(st, s, st.base!.stage);
         return { project_id: p.id, scan_id: s.id, version: st.version };
       };
     })();
@@ -1044,7 +1101,7 @@ export class MockProcess {
         st.stages.spacetime = {
           ...st.stages.spacetime, state: "done", when: nowIso(), job_id: null, source, frames, patches: 41_000, kept: 16_500,
           covered_pct: covered, moved_mm: 0.11, device: "gpu",
-          summary: `Measured ${covered} % of the surface against ${frames} frames (16,500 patches, on the GPU); it moved by up to 0.11 mm (95 %)`,
+          summary: `Measured ${covered} % of the surface against ${frames} frames (16,500 patches, on the graphics card); it moved by up to 0.11 mm (95 %)`,
         };
         st.stages.refine = freshStages().refine;
         self.newBase(st, st.base!.mesh, "spacetime");
@@ -1086,7 +1143,12 @@ export class MockProcess {
     this.guard(st, s);
     const busy = `Applying “${recipe.name}”…`;
     if (scope === "all") this.needRecording(s);
-    if (scope === "all") return this.allJob(st, p, s, "process_recipe", recipe.settings, recipe.ops, busy, null, secondsFor(normalizeQuality(recipe.settings.quality) ?? "standard") + 1, null);
+    if (scope === "all") {
+      // as the engine: the scan is "processing" until the run is done, then as it was after a cancel or failure
+      const prev = s.status;
+      s.status = "processing";
+      return this.allJob(st, p, s, "process_recipe", recipe.settings, recipe.ops, busy, prev, secondsFor(normalizeQuality(recipe.settings.quality) ?? "standard") + 1, null);
+    }
     if (!st.base) throw new HttpError(409, "There's no mesh to edit yet", "Apply “Everything”, or run “Follow the camera” first.");
     const base = st.base.mesh;
     const self = this;
@@ -1098,7 +1160,7 @@ export class MockProcess {
         return { project_id: p.id, scan_id: s.id, version: st.version };
       };
     })();
-    return this.start(st, s, "process_recipe", busy, 1 + 0.8 * recipe.ops.length, work, null);
+    return this.start(st, s, "process_recipe", busy, 1 + 0.8 * recipe.ops.length, work, null, null, { scope: "edits", recipe_id: recipe.id, recipe_name: recipe.name });
   }
 
   private *opsWork(start: TriMesh, ops: RecipeOp[], a: number, b: number): Generator<WorkStep, { entries: EditEntry[]; meshes: TriMesh[] }, void> {
@@ -1128,7 +1190,7 @@ export class MockProcess {
         created: nowIso(),
         triangles_after: next.indices.length / 3,
         ms: Math.round(performance.now() - t0),
-        ...(o.op === "remove_floaters" ? removedFields(next) : {}), // U14
+        ...(o.op === "remove_floaters" ? removedFields(next, o.params) : {}), // U14, R23
       });
       meshes.push(next);
       m = next;
@@ -1151,31 +1213,52 @@ export class MockProcess {
    */
   private *pipeline(st: Studio, s: Scan, settings: RecipeSettings, ops: RecipeOp[], jobId: string | null): Generator<WorkStep, () => void, void> {
     const q = settings.quality;
+    const doStraighten = settings.straighten === "auto";
+    const doRefine = settings.refine !== "off";
+    // the parts' spans of the progress, as the engine's plan (UX_PLAN R18: their measured shares of a Make mesh's time,
+    // the parts that do not run left out and the rest scaled)
+    const plan = mockPlan(doStraighten, doRefine, ops.length > 0);
+    const part = (k: MakingPart["stage"]) => plan.find((x) => x.stage === k);
     // as the engine since UX_PLAN R2: the run is built beside the scan's stages (`making`), one stage running at a time;
     // the stages themselves change only when the run takes their place
+    if (jobId) st.making = { stages: {}, plan, t0: performance.now() };
     let last: StageId | null = null;
+    const finish = (state: StageState = "done", summary: string | null = null) => {
+      const mk = st.making;
+      if (!jobId || !mk || !last) return;
+      const cur = mk.stages[last];
+      mk.stages[last] = { state, summary, started: cur?.started ?? null, seconds: cur ? Math.round((performance.now() - cur.t) / 100) / 10 : null, t: cur?.t ?? 0 };
+      last = null;
+    };
     const mark = (id: StageId) => {
-      if (!jobId) return;
-      const stages = { ...(st.making?.stages ?? {}) };
-      if (last) stages[last] = { state: "done", summary: null };
-      stages[id] = { state: "running", summary: null };
+      const mk = st.making;
+      if (!jobId || !mk) return;
+      finish();
+      mk.stages[id] = { state: "running", summary: null, started: nowIso(), seconds: null, t: performance.now() };
       last = id;
-      st.making = { stages };
       this.broadcast(st);
     };
-    const willStraighten = settings.straighten === "auto" && mockTrajectory(s.duration_s, seedOf(s.id)).loops.length > 0;
+    const willStraighten = doStraighten && mockTrajectory(s.duration_s, seedOf(s.id)).loops.length > 0;
     let voxel = voxelFor(q);
     const willFuse = settings.voxel_mm !== null && settings.voxel_mm !== voxel;
+    const T = part("track")!;
+    const S = part("straighten");
+    const trackEnd = willFuse && !S ? T.from + 0.7 * (T.to - T.from) : T.to;
     mark("track");
-    const tr = yield* this.trackWork(s, q, !willStraighten && !willFuse, 0, 0.45);
+    const tr = yield* this.trackWork(s, q, !willStraighten && !willFuse, T.from, trackEnd);
     const trackWhen = nowIso();
+    finish("done", this.trackSummary(s, tr.tracked));
     let mesh = tr.mesh;
     let baseStage: StageId = "track";
     let str: { loops: number; mm: number; deg: number } | null = null;
-    if (settings.straighten === "auto") {
+    // Straighten fuses again inside its own share (a fuse at another mesh detail too)
+    const fuseFrom = S ? (willFuse ? S.from + 0.5 * (S.to - S.from) : S.to) : trackEnd;
+    const fuseTo = S ? S.to : T.to;
+    if (S) {
       mark("straighten");
-      const r = yield* this.straightenWork(s, voxel, q, !willFuse, 0.45, 0.62);
+      const r = yield* this.straightenWork(s, voxel, q, !willFuse, S.from, fuseFrom);
       str = r;
+      finish(r.loops ? "done" : "skipped", this.straightenSummary(r));
       if (r.mesh) {
         mesh = r.mesh;
         baseStage = "straighten";
@@ -1185,13 +1268,26 @@ export class MockProcess {
     if (willFuse) {
       mark("fuse");
       voxel = settings.voxel_mm!;
-      mesh = yield* run(scanMesh({ voxel, noise: noiseFor(q, straightened), seed: seedOf(s.id) }), 0.62, 0.8, `Building the surface at ${mm(voxel)} mm`);
+      mesh = yield* run(scanMesh({ voxel, noise: noiseFor(q, straightened), seed: seedOf(s.id) }), fuseFrom, fuseTo, `Building the surface at ${mm(voxel)} mm`);
+      finish("done", `Mesh detail ${mm(voxel)} mm: ${int(mesh.indices.length / 3)} triangles.`);
       baseStage = "fuse";
     }
+    const R = part("refine");
+    let refined: RefineStage | null = null;
+    if (R) {
+      // the demo's meshes have no laser cloud of their own: refining finds they already agree (as startRefine)
+      mark("refine");
+      yield* tick(R.from, R.from + 0.5 * (R.to - R.from), 2, () => "Refining: working out where the surface must move");
+      yield* tick(R.from + 0.5 * (R.to - R.from), R.to, 2, () => "Refining: fitting the surface to the laser lines");
+      refined = this.refineSkipped(st, s, baseStage);
+      finish("skipped", refined.summary);
+    }
     const base = mesh!;
-    const r = yield* this.opsWork(base, ops, 0.8, 0.97);
+    const E = part("edits");
+    const r = yield* this.opsWork(base, ops, E ? E.from : 0.97, 0.97);
     yield* tick(0.97, 1, 2, () => "Writing PLY and STL");
     return () => {
+      if (refined) st.stages.refine = { ...refined, when: nowIso() };
       const when = nowIso();
       st.quality = q;
       st.voxel = voxel;
@@ -1221,15 +1317,43 @@ export class MockProcess {
   ): Job {
     const holder: { id: string | null } = { id: null };
     const self = this;
+    // R2: built beside the scan's mesh, which stays its mesh until the new one is done (and after a cancel or failure)
+    const hadMesh = !!st.current;
     const work = (function* (): JobWork {
       const commit = yield* self.pipeline(st, s, settings, ops, holder.id);
       return () => {
+        const mk = st.making;
         commit();
+        // R17: how long the whole run took, every stage and edit
+        st.made = {
+          job_id: holder.id ?? "",
+          kind,
+          when: nowIso(),
+          seconds: mk ? Math.round((performance.now() - mk.t0) / 100) / 10 : 0,
+          stages: Object.fromEntries(Object.entries(mk?.stages ?? {}).flatMap(([k, v]) => (v && v.seconds !== null ? [[k, v.seconds]] : []))),
+        };
         self.markProcessed(p, s, settings.quality);
+        const j = holder.id ? self.host.job(holder.id) : undefined;
+        if (j) j.mesh_kept = false; // the new mesh took the earlier one's place
+        if (kind === "process_scan") self.host.log("info", `Mesh ready: “${s.name}”.`);
         return result ? result() : { project_id: p.id, scan_id: s.id, version: st.version };
       };
     })();
-    const job = this.start(st, s, kind, busy, minSeconds, work, null, prevStatus);
+    // the engine's notices when the run ends otherwise (ohs/server/processing.py, make_mesh and _stage_job)
+    const recipeName = kind === "process_recipe" ? busy.replace(/^Applying “|”…$/g, "") : "";
+    const ends = {
+      fail: (error: string) => {
+        const kept = hadMesh;
+        if (kind === "process_scan")
+          self.host.log("error", kept ? `Making the mesh again failed. ${error} The earlier mesh is kept as it was, with its edits; your recording is safe.` : `Making the mesh failed. ${error} Your recording is safe: try Make mesh again, or at Preview quality.`);
+        else self.host.log("error", `The recipe ${recipeName} failed. ${error}${kept ? " The earlier mesh is kept as it was." : ""}`);
+      },
+      cancel: () => {
+        if (kind === "process_scan") self.host.log("info", hadMesh ? "Making the mesh again was cancelled. The earlier mesh is kept as it was, with its edits." : "Making the mesh was cancelled. Your recording is safe.");
+      },
+    };
+    const extra = { mesh_kept: hadMesh, ...(kind === "process_recipe" ? { scope: "all", recipe_name: recipeName } : { quality: settings.quality }) };
+    const job = this.start(st, s, kind, busy, minSeconds, work, null, prevStatus, extra, ends);
     holder.id = job.id; // before the first tick runs the work
     return job;
   }
@@ -1258,7 +1382,18 @@ export class MockProcess {
 
   // ---------------------------------------------------------------- jobs
   /** Start a job of this scan: busy, the stage running, and on failure / cancel everything as it was. */
-  private start(st: Studio, s: Scan, kind: string, busy: string, minSeconds: number, work: JobWork, stageId: StageId | null, prevStatus: Scan["status"] | null = null): Job {
+  private start(
+    st: Studio,
+    s: Scan,
+    kind: string,
+    busy: string,
+    minSeconds: number,
+    work: JobWork,
+    stageId: StageId | null,
+    prevStatus: Scan["status"] | null = null,
+    extra: Record<string, unknown> = {},
+    ends: { fail?: (error: string) => void; cancel?: () => void } = {},
+  ): Job {
     const before: Stages = { track: { ...st.stages.track }, straighten: { ...st.stages.straighten }, fuse: { ...st.stages.fuse }, spacetime: { ...st.stages.spacetime }, refine: { ...st.stages.refine } };
     let restore = prevStatus;
     if (!st.current && s.status !== "processing") {
@@ -1274,32 +1409,47 @@ export class MockProcess {
     const job = this.host.startWorkJob(kind, {
       minSeconds,
       work: (function* (): JobWork {
-        const commit = yield* work;
-        return () => {
-          const r = commit();
-          end();
-          self.broadcast(st);
-          return r;
-        };
+        // while a run is built beside the mesh, its state goes out now and then (as the engine's `process` message
+        // with every job update), so the time left for the whole job (`making.left_s`) stays current
+        let sent = 0;
+        for (;;) {
+          const r = work.next();
+          if (r.done) {
+            const commit = r.value;
+            return () => {
+              const out = commit();
+              end();
+              self.broadcast(st);
+              return out;
+            };
+          }
+          if (st.making && performance.now() - sent > 400) {
+            sent = performance.now();
+            self.broadcast(st);
+          }
+          yield r.value;
+        }
       })(),
       onFail: (error) => {
         end();
         st.stages = before;
         const when = nowIso();
         if (stageId) patchStage(st, stageId, { state: "failed", summary: error, when, job_id: null });
-        if (!st.current && (kind === "process" || kind === "process_recipe" || stageId === "track")) {
+        if (!st.current && (kind === "process_scan" || kind === "process_recipe" || stageId === "track")) {
           patchStage(st, "track", { state: "failed", summary: error, when, job_id: null });
           s.status = "failed";
         } else if (restore) s.status = restore;
+        ends.fail?.(error);
         this.broadcast(st);
       },
       onCancel: () => {
         end();
         st.stages = before;
         if (restore) s.status = restore;
+        ends.cancel?.();
         this.broadcast(st);
       },
-      extra: { project_id: st.pid, scan_id: st.sid },
+      extra: { project_id: st.pid, scan_id: st.sid, ...extra },
     });
     st.busy = busy;
     st.jobId = job.id;

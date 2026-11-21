@@ -56,9 +56,12 @@ export function pathWarningChip(report: unknown): { text: string; title: string 
   return said.length ? { text: PATH_WARNING_TITLE, title: said.join(" ") } : null;
 }
 
-/** The title over the report's other notes: a merge's say what it left out. */
+/**
+ * The title over the report's other notes. A merge's notes say what it left out and what it kept (a raised area that
+ * may be a thin part); the scan's summary has them as one list, without the server's grouping, so the title fits both.
+ */
 export function notesTitle(merged: boolean): string {
-  return merged ? "What the merge left out" : "Notes on making the mesh";
+  return merged ? "Notes from the merge" : "Notes on making the mesh";
 }
 
 /** The scan row's chip for the report's other notes (a merged scan's: what the merge left out); null when none. */

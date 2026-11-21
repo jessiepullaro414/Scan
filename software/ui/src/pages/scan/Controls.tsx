@@ -4,6 +4,9 @@ import { JobProgress, MakeMeshButton, ProcessButton } from "../../components/Sca
 import { Button } from "../../components/ui/Button";
 import { Spinner } from "../../components/ui/Feedback";
 import { fmtDuration, fmtInt } from "../../lib/format";
+import { makeMeshEnded, meshKept } from "../../lib/making";
+import { shouldRefocus } from "../../lib/focusAfter";
+import { useEffect, useRef, type MouseEvent } from "react";
 import { navigate, paths } from "../../lib/router";
 import { scanMeshStage } from "../../lib/scanMesh";
 import { isActive, useScanJob } from "../../store/jobs";
@@ -27,8 +30,11 @@ export function PostScanCard() {
   const active = isActive(job);
   // a cancelled job may leave the tracked mesh behind (status "processed"): still "cancelled" here
   const cancelled = !active && job?.state === "cancelled";
-  const done = !active && !cancelled && (scan.status === "processed" || job?.state === "done");
+  const done = !active && !cancelled && job?.state !== "failed" && (scan.status === "processed" || job?.state === "done");
   const failed = !active && !done && !cancelled && (job?.state === "failed" || scan.status === "failed");
+  // UX_PLAN R2: a Make mesh again that was cancelled or failed leaves the scan's earlier mesh as it was
+  const kept = (cancelled || failed) && !!job && meshKept(job);
+  const ended = kept ? makeMeshEnded(job) : null;
   const newScan = () => {
     clear();
     useLive.getState().resetScan();
@@ -48,7 +54,9 @@ export function PostScanCard() {
             <span className="font-normal text-muted"> · {scan.name}</span>
           </div>
           <div className="mt-0.5 text-xs text-muted">
-            {failed
+            {ended
+              ? ended.detail
+              : failed
               ? `${job?.error || "Something went wrong."} ${onScreen} and the raw recording is kept: try again, or with preview quality.`
               : cancelled
                 ? `${onScreen} and the raw recording is kept: make the mesh again any time.`
@@ -107,6 +115,20 @@ export function ControlBar({
   const resume = useSession((s) => s.resume);
   const stop = useSession((s) => s.stop);
   const rewind = useSession((s) => s.rewind);
+  // Pause / Resume: the button is disabled while the request runs (so it drops the focus to the page), then the other
+  // takes its place; the focus goes back to the button now there (lib/focusAfter.ts)
+  const toggleRef = useRef<HTMLButtonElement>(null);
+  const refocus = useRef(false);
+  useEffect(() => {
+    if (action !== null || !refocus.current) return;
+    const el = document.activeElement;
+    if (shouldRefocus(true, !el || el === document.body ? "body" : "other")) toggleRef.current?.focus();
+    refocus.current = false;
+  }, [action, phase]);
+  const toggle = (e: MouseEvent<HTMLButtonElement>, run: () => Promise<unknown>) => {
+    refocus.current = document.activeElement === e.currentTarget;
+    void run();
+  };
 
   // a second pass (N2): its steps after Stop, in place of the "Make mesh" card
   if (phase === "idle" && last) return last.scan.continues ? <PassChainCard projectId={last.projectId} scan={last.scan} /> : <PostScanCard />;
@@ -155,11 +177,11 @@ export function ControlBar({
         Rewind 2&#8239;s
       </Button>
       {paused ? (
-        <Button size="lg" variant="primary" icon={Play} kbd="Space" loading={action === "resume"} onClick={() => void resume()} className="min-w-[140px]">
+        <Button ref={toggleRef} size="lg" variant="primary" icon={Play} kbd="Space" loading={action === "resume"} onClick={(e) => toggle(e, resume)} className="min-w-[140px]">
           Resume
         </Button>
       ) : (
-        <Button size="lg" icon={Pause} kbd="Space" loading={action === "pause"} onClick={() => void pause()} className="min-w-[140px]">
+        <Button ref={toggleRef} size="lg" icon={Pause} kbd="Space" loading={action === "pause"} onClick={(e) => toggle(e, pause)} className="min-w-[140px]">
           Pause
         </Button>
       )}

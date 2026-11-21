@@ -27,7 +27,7 @@ import numpy as np
 
 from ohs.server.jobs import failure_notice
 from ohs.server.protocol import ApiError, jsonable
-from ohs.server.projects import free_name
+from ohs.server.projects import free_name, refuse_taken_name
 
 __all__ = ["AlignManager"]
 
@@ -280,8 +280,12 @@ class AlignManager:
             items = [self._scan(pid, sid, "first" if k == 0 else ("second" if len(sids) == 2 else f"scan {k + 1}:"),
                                 need_recording=True) for k, sid in enumerate(sids)]
             # a default name takes the next free one (UX_PLAN R21): "A + B (2)" once "A + B" is taken
-            title = (name or "").strip() or free_name(" + ".join(it["name"] for it in items),
-                                                      [str(s.get("name") or "") for s in self.st.projects.get(pid)["scans"]])
+            taken = [str(s.get("name") or "") for s in self.st.projects.get(pid)["scans"]]
+            title = (name or "").strip()
+            if title:
+                refuse_taken_name(title, taken)  # a typed name another scan has: refused, as a rename is
+            else:
+                title = free_name(" + ".join(it["name"] for it in items), taken)
             work = self.st.projects.project_dir(pid) / ".merge"
             noun = "two scans" if len(items) == 2 else f"{len(items)} scans"
 

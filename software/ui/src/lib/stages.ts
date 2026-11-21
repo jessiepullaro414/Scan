@@ -6,12 +6,13 @@ import type { StageId, StageState } from "../api/types.ts";
 import { fmtInt } from "./format.ts";
 
 /**
- * Whether a stage card says "Running" (UX_PLAN R22): its own state says so, or the run "Make mesh again" is building
- * says so for it (`ProcessState.making`). A finished stage whose `job_id` is the whole run's job is not running: that
- * made "Follow the camera" (done) and "Straighten" both "Running" at once.
+ * Whether a stage card of the scan's own mesh says "Running" (UX_PLAN R22): from its own state only (a stage run
+ * alone), never from the job's kind or message. During "Make mesh again" the scan's stages stay as they are until the
+ * new mesh takes their place (APP_API.md, R2); the run being built is shown beside them from `ProcessState.making`
+ * (lib/making.ts `makingRows`), one stage running at a time.
  */
-export function stageRunning(state: StageState, making?: { state: StageState } | null): boolean {
-  return state === "running" || making?.state === "running";
+export function stageRunning(state: StageState): boolean {
+  return state === "running";
 }
 
 /**
