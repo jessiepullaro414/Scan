@@ -369,30 +369,38 @@ class Judge:
              depth_range: tuple[float, float] = (150.0, 450.0), n_max: int = 200_000) -> np.ndarray:
         """Points of the object's true surface that the processed frames saw (the left camera's rays
         from the true poses, every ``every``-th frame, every ``stride``-th pixel, within the depth range)."""
-        from ohs.io.recording import RecordingReader
+        return seen_points(self.sc, rec, start, stop, every, stride, depth_range, n_max)
 
-        reader = RecordingReader(rec)
-        st = reader.calibration().stereo
-        K = np.asarray(st.K_rect, dtype=np.float64)
-        w, h = st.image_size
-        gt = reader.ground_truth_poses()
-        idx = [i for i in sorted(gt) if i >= start and (stop is None or i < stop)][::every]
-        vs, us = np.mgrid[stride // 2:h:stride, stride // 2:w:stride]
-        d = np.stack([(us.ravel() - K[0, 2]) / K[0, 0], (vs.ravel() - K[1, 2]) / K[1, 1], np.ones(us.size)], axis=1)
-        d /= np.linalg.norm(d, axis=1, keepdims=True)
-        out = []
-        ground = {k for k, p in enumerate(self.sc.primitives) if p.name in ("table", "floor")}
-        for i in idx:
-            T = gt[i]
-            dw = d @ T[:3, :3].T
-            hit = self.sc.cast(T[:3, 3], dw, surface=False)
-            z = hit.t * d[:, 2]
-            ok = np.isfinite(hit.t) & (z >= depth_range[0]) & (z <= depth_range[1]) & ~np.isin(hit.obj, list(ground))
-            out.append(T[:3, 3] + hit.t[ok, None] * dw[ok])
-        P = np.concatenate(out) if out else np.zeros((0, 3))
-        if len(P) > n_max:
-            P = P[np.random.default_rng(0).choice(len(P), n_max, replace=False)]
-        return P
+
+def seen_points(sc, rec: Path, start: int = 0, stop: int | None = None, every: int = 12, stride: int = 8,
+                depth_range: tuple[float, float] = (150.0, 450.0), n_max: int = 200_000,
+                ground: tuple[str, ...] = ("table", "floor")) -> np.ndarray:
+    """Points of scene ``sc``'s true surface, other than the primitives named in ``ground``, that the
+    frames of recording ``rec`` saw (:meth:`Judge.seen`; also used by ``tools/scorecard.py``)."""
+    from ohs.io.recording import RecordingReader
+
+    reader = RecordingReader(rec)
+    st = reader.calibration().stereo
+    K = np.asarray(st.K_rect, dtype=np.float64)
+    w, h = st.image_size
+    gt = reader.ground_truth_poses()
+    idx = [i for i in sorted(gt) if i >= start and (stop is None or i < stop)][::every]
+    vs, us = np.mgrid[stride // 2:h:stride, stride // 2:w:stride]
+    d = np.stack([(us.ravel() - K[0, 2]) / K[0, 0], (vs.ravel() - K[1, 2]) / K[1, 1], np.ones(us.size)], axis=1)
+    d /= np.linalg.norm(d, axis=1, keepdims=True)
+    out = []
+    ground_ids = {k for k, p in enumerate(sc.primitives) if p.name in ground}
+    for i in idx:
+        T = gt[i]
+        dw = d @ T[:3, :3].T
+        hit = sc.cast(T[:3, 3], dw, surface=False)
+        z = hit.t * d[:, 2]
+        ok = np.isfinite(hit.t) & (z >= depth_range[0]) & (z <= depth_range[1]) & ~np.isin(hit.obj, list(ground_ids))
+        out.append(T[:3, 3] + hit.t[ok, None] * dw[ok])
+    P = np.concatenate(out) if out else np.zeros((0, 3))
+    if len(P) > n_max:
+        P = P[np.random.default_rng(0).choice(len(P), n_max, replace=False)]
+    return P
 
 
 def _panel_mesh(sc, step: float = 0.4) -> tuple[np.ndarray, np.ndarray]:

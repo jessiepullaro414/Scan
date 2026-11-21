@@ -3794,6 +3794,107 @@ Limits: simulation only; one setting at a time; the same recording judged twice 
 camera path and faces and a median error 0.004 mm apart (0.1702 and 0.1742 mm: the study's own
 placement on the truth; fits within 0.0004 mm).
 
+## The scorecard's baseline (ENGINE_PLAN X0, 2026-11-20)
+
+`tools/scorecard.py` (what it does and how it judges: `docs/ENGINE_PLAN.md`, X0). Standard
+quality, default settings, markerless, the Default recipe; the part placed alone by its own best
+fit. Seeds 0 to 4 for the bracket and the 200-frame car panel, 0 to 2 for the others; "a..b" is
+the range over seeds, and b - a is the scene's spread. Errors are distances to the simulator's
+true surface in mm; fits are the reading minus the truth. Timings were taken on a busy PC and are
+left out. The saved files: `tools/scorecard_baselines/2026-11-20-gpu-core.json` and
+`2026-11-20-cpu-quick.json`.
+
+**GPU path (Radeon 680M), set `core`, 36 recordings:**
+
+| scene (recordings) | poses | part median | p95 | share > 0.3 mm | coverage | path max | fits |
+|---|---|---|---|---|---|---|---|
+| sphere, end to end (1) | tracked / true | 0.059 / 0.055 | 0.248 / 0.242 | 0.027 / 0.028 | 0.870 / 0.865 | 0.15 | radius -0.089 / -0.084 |
+| car panel, end to end (1) | tracked / true | 0.038 / 0.039 | 0.168 / 0.208 | 0.036 / 0.044 | 0.965 / 0.966 | 0.29 | Ø25 +1.34 / +1.23 against 25.20 |
+| car panel, 200 frames (5) | tracked | 0.021..0.022 | 1.68..1.89 | 0.075..0.080 | 1.000 | 0.37..0.90 | Ø25 -0.97..-1.37; its centre 0.08..0.61 off |
+| | true | 0.022 | 1.87..2.33 | 0.080..0.092 | 1.000 | | Ø25 -1.09..-1.71 |
+| bracket, 240 frames (5) | tracked | 0.075..0.228 | 0.454..0.492 | 0.115..0.316 | 0.989..0.993 | 1.15..2.40 | boss radius -0.07..-0.27; shaft radius -0.07..+0.07; upright face -0.14 / +0.01 / +0.33 / -0.07 / +0.10 |
+| | true | 0.058..0.063 | 0.413..0.429 | 0.097..0.103 | 0.991..0.993 | | boss radius -0.22..-0.30; shaft radius -0.09..-0.17 |
+| sheet part (3) | tracked | 0.105..0.255 | 0.52..0.72 | 0.16..0.39 | 0.98 | 2.4..3.6 | flange +0.25..+0.60; 1 mm rib +0.66..+1.21; 3 mm rib +0.17..+0.72 |
+| | true | 0.058..0.073 | 0.50..0.57 | 0.11..0.14 | 0.985..0.988 | | flange +0.12..+0.18; 1 mm rib +0.23..+0.27; 3 mm rib +0.03..+0.04 |
+| standing walls (3) | tracked | 0.125..0.151 | 0.72..0.80 | 0.27..0.32 | 0.955..0.973 | 1.2..3.9 | the 0.5 / 1 / 2 mm walls read +1.18..1.26 / +0.70..0.91 / +0.54..0.66 thick |
+| | true | 0.056..0.065 | 0.64..0.73 | 0.15..0.17 | 0.96..0.975 | | +0.76..0.84 / +0.40..0.62 / +0.16..0.35 |
+| 0.5 mm plate (3) | tracked | 0.033..0.035 | 0.13..0.15 | at most 0.005 | 1.000 | 1.9..4.0 | thickness -0.008..+0.002; top kept 0.99..1.00 |
+| | true | 0.027..0.029 | 0.10..0.11 | 0 | 1.000 | | thickness -0.001..-0.006 |
+| hole plate, 10 mm up (3) | tracked | 0.073..0.084 | 1.55..1.79 | 0.21..0.24 | 0.997 | 2.0..2.3 | Ø25 +0.47 / -0.20 / +0.38; Ø10 +0.07 / -0.07 / -0.20; bore -0.40..-0.82; Ø6 refused |
+| | true | 0.053..0.056 | 1.23..1.95 | 0.17..0.18 | 0.998 | | Ø25 +0.58..+0.75; Ø10 +0.28..+0.60 |
+| hole plate, 120 mm up (3) | tracked | 0.035..0.071 | 1.69..1.99 | 0.21..0.24 | 0.991 | 3.9..16.3 | Ø25 -6.9 / -2.9 / -3.2 (seed 0 lost tracking); Ø10 and Ø6 refused |
+| | true | 0.034..0.040 | 1.24..1.31 | 0.16..0.17 | 0.994 | | Ø25 -1.40..-1.57; bore -0.03..+0.10 |
+| dark bracket (2) | tracked | 0.079..0.081 | 0.58..0.69 | 0.13 | 0.85..0.87 | 2.3..6.3 | last frame 0.70..3.79 |
+| speckled bracket (2) | tracked | 0.093..0.118 | 0.61..0.74 | 0.15..0.23 | 0.67..0.96 | 1.4..1.6 | last frame 0.92..1.13 |
+| 0.5 mm plate, hard (2) | tracked | 0.028..0.032 | 0.13 | at most 0.004 | 1.000 | 2.6 | last frame 0.47..1.38; thickness -0.005..-0.009 |
+| seams: taper / taper with flush / flush ramp (1 each) | tracked | 0.033 / 0.034 / 0.026 | 0.66 / 0.36 / 0.17 | | 1.000 | 1.2 / 3.6 / 1.3 | flush 0.010 / 0.015 / 0.003; gap +1.49 / +1.51 / +0.07 |
+
+Set `full` adds, on the same path: the door, median 0.045..0.055 tracked and 0.040..0.050 at true
+poses, p95 0.36..0.44 and 0.34..0.46, coverage 0.92..0.99; the carburettor, median 0.125..0.179
+and 0.118..0.162, p95 0.67..1.01 and 0.66..0.96, coverage 0.68..0.71.
+
+**No GPU, set `quick`:**
+
+| recording | poses | median | p95 | coverage | path max | fit |
+|---|---|---|---|---|---|---|
+| sphere, end to end | tracked | 0.053 | 0.215 | 0.751 | 0.20 | radius -0.200 |
+| | true | 0.061 | 0.304 | 0.785 | | radius +0.090 |
+| 0.5 mm plate, seed 0 | tracked | 0.037 | 0.186 | 1.000 | **39.1** (last frame 37.0) | thickness **-0.387** (it reads 0.11 mm); top kept **0.345** |
+| | true | 0.035 | 0.129 | 1.000 | | thickness -0.014; top kept 0.999 |
+
+Without a GPU, tracking on the 0.5 mm plate slides 39 mm, and the plate is then nearly gone from
+the mesh: thinned to 0.11 mm with two thirds of its top removed, without a word. The part's
+median error does not show it (what is left lies on the plate). ENGINE_PLAN X0a.
+
+**The Ø25 hole's two signs.** The sign follows the recording. It does not depend on where the
+click lands (1.5 or 3 mm out read the same), on the placement (part alone or whole scene), or on
+the tool's level (it reads the open edge at every level). The 60-frame pans read +1.07 / +0.54 /
+-0.23 against 25.0 tracked, exactly the "Presets" numbers; the 36-frame end-to-end pan +1.54. The
+200-frame orbit round the hole reads -0.77 to -1.17 tracked and -0.89 to -1.51 at true poses: the
+fused rim drops at a radius of 10.6 to 11.9 mm against the true 12.6 mm, fill reaching inwards
+from every side the orbit looked from. The other 0.2 mm between the two studies was the
+reference (25.0 and 25.20).
+
+**A paired replay, as an example: the gap guard at 4 px against today's 8 px** (hole plate 120 mm
+up and the 0.5 mm plate, seeds 0 to 2, fusing the cached matcher depth again; feeding the cached
+depth back reproduced the first run on all six). The plate: nothing moves but the vertical
+laser line against the mesh, +0.006 to +0.008 mm on all three (the spread is 0.006). The hole
+plate at true poses: p95 +0.32 to +0.54 mm, the share over 0.3 mm +0.018 to +0.027, the Ø25 hole
+closes by 3.7 to 4.1 mm on two seeds and the bore reads 0.59 to 0.88 mm larger on all three. The
+verdict's last line names both scenes as worse, so 4 px stays off, as "Presets" found (4 px
+closes Ø25 by 2.8 to 3.7 mm).
+
+**Repeating.** The same recording processed and scored twice gives the same number in every
+column but the timings, on both paths (quick set only).
+
+**Against earlier numbers.** The same within rounding: the bracket's share over 0.3 mm (11.5 to
+31.6 %, about 10 % at true poses), its bosses and upright face ("The fits' ± on today's engine"),
+the 200-frame and 60-frame panel holes, the walls and the sheet ("Presets", "Thin walls seen from
+opposite sides"), the 0.5 mm plate (0.492 to 0.502), the sphere, and the door ("Presets").
+Different:
+
+- **Car panel, end to end:** 0.038 / 0.17 mm against 0.083 / 0.39. The panel is now placed
+  alone, the fill past its edge is kept out of the placement, and it is not slid along itself.
+- **Car panel p95, 200 frames:** 1.7 to 2.3 mm. 7 to 9 % of the panel's vertices are fused fill
+  hanging up to 15 mm past its free edge, over a drop of 60 to 120 mm. This is the engine
+  (ENGINE_PLAN X0a); the scorecard also reports the share as `part_beyond_edge`.
+- **Bracket median:** 0.075 to 0.228 against "about 0.14": the part alone, not the whole scene.
+- **Carburettor:** median 0.125 to 0.179 against 0.157 to 0.230 in "Presets" (the part alone,
+  probably); p95 and coverage agree. The 0.80 / 2.7 of 2026-11-10 and the door's 0.07 / 0.79 of
+  the same day are superseded.
+- **Hole plate 120 mm up, Ø25 at true poses:** 23.4 to 23.6 against 24.38 to 24.54 in "Holes
+  filled in" (2026-11-12). The cause of the 0.9 mm is not known; the clicks, the recipe and the
+  recordings' seeds may differ. Tracked: 18.1 / 22.1 / 21.8 against 22.0 to 22.1; seed 0 lost
+  tracking (X0a).
+- **Hole plate 10 mm up, at true poses:** Ø25 +0.58 to +0.75 against +0.15 to +0.5.
+- **Dark and speckled scenes:** last frame 0.47 to 3.79 mm against 1.1 to 3.8; the two plates
+  now end at 0.47 and 1.38. Why is not known.
+
+Limits: simulation only; one recording each for the seams, the end-to-end scans and the no-GPU
+set, so those have no spread; a sheet's drift along itself is not scored; the bracket's fits on
+the 90-frame hard scenes mostly do not answer (faces never scanned), and a click more than 1 mm
+from the mesh counts as no answer.
+
 ## What the metrics mean
 
 - **Stereo errors** compare the estimated raw intrinsics/extrinsics (`K1`, `K2`, `R`, `T`) with

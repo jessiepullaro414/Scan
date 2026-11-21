@@ -89,7 +89,7 @@ Ranked by the gap between what a user needs and what the engine delivers.
 
 The first five are the ones to run first, after X0.
 
-### [ ] X0. The scorecard (M)
+### [x] X0. The scorecard (M; done 2026-11-20)
 One command that runs a fixed set of recordings and prints one table, with a difference against
 a saved baseline and a verdict for each row against its yardstick. Every experiment below is
 judged with it.
@@ -102,17 +102,77 @@ judged with it.
   face, wall and plate thickness, flush); laser against mesh for each line; open loops; frame
   time, wall time, peak memory; the range across seeds; a paired-replay mode for changes to
   fusing alone; the CPU path.
-- **What exists** (about two thirds): `tools/preset_study.py` (scenes, the judge, spread, the
-  hole, plate, wall and sphere fits, a cache), `tools/calib_health_study.py` (the truth and
-  the bracket's measures), `tools/snapshot.py`, `ohs bench`, `tools/frame_timing.py`,
-  `tools/memory_peaks.py`, the gap-and-flush and merge-table studies.
-- **Missing:** the part placed on its own (today's whole-scene placement gives the bracket a
-  0.52 mm spread, useless as a yardstick); the signed offset, the camera-path columns, the
-  boss and shaft fits; the hole plates, the sheet and the hard scenes; the CPU path; replay;
-  the baseline difference.
-- **With it, once:** run the stale numbers again (door, carburettor, the merge study,
-  flat-within, the Check shares), and settle why the Ø25 hole reads large in "Presets" (+1.07 /
-  +0.54 / -0.23 on 60-frame panels) and small in "Fits' ± on today's engine" (1.1 to 1.3 mm).
+
+**Done (2026-11-20): `tools/scorecard.py`**, run from `software/`. It renders a fixed set of
+simulated recordings once into a cache, processes each as the app's Make mesh (Standard, default
+settings, markerless) at tracked and at true poses, applies the Default recipe and scores
+against the simulator's truth. Numbers and tables: `VALIDATION.md`, "The scorecard's baseline".
+
+- **Commands:** `run`, `baseline --save NAME`, `compare NAME`, `table`, `render`;
+  `replay --set-param fusion.X=V` (a paired replay of a change to fusing alone, on the cached
+  matcher depth); `repeat` (the same recording twice: determinism); `selfcheck` (the placement on
+  the truth itself); `holes` (the Ø25 hole read every way); `rescore` (a change to the scoring
+  alone). Filters: `--set quick|core|full`, `--scenes`, `--seeds`, `--compute gpu|cpu`,
+  `--set-param SECTION.FIELD=V`, `--params FILE`, `--quiet-pc` (judge timings too),
+  `--render-lanes N`.
+- **Scene sets:** `quick` is the end-to-end sphere and the 0.5 mm plate, seed 0. `core`
+  (36 recordings, what an experiment is judged on) adds the end-to-end car panel, the car panel
+  at 200 frames (seeds 0 to 4), the bracket at 240 frames (seeds 0 to 4), the sheet part, the
+  standing walls and the 0.5 mm plate (seeds 0 to 2), the hole plates 10 and 120 mm above their
+  background (seeds 0 to 2), the six dark and speckled recordings and the three seams. `full`
+  adds the 60-frame panels and three stretches each of the door and the carburettor.
+- **The part alone:** the scan is placed by a best fit of the part's own points onto the part's
+  own surface, never the table's. The bracket's spread at true poses is 0.004 mm this way
+  (0.52 mm with the whole scene). Points past a sheet's free edge do not place it, and a
+  direction the part's shape does not fix (a flat or gently curved sheet, along itself) stays
+  where the first frame put it.
+- **The verdict:** each recording is paired with itself in the baseline; a scene's spread is its
+  range over seeds in the baseline. A row is better or worse when the mean change is beyond the
+  spread and every seed moved that way, and also worse when one recording alone is worse by more
+  than the spread. Thin parts and small features (plate and wall thickness, the holes, bosses,
+  the shaft) are shown first and judged for each recording: 0.05 mm thicker or further off, a
+  face lost or a click that no longer answers is an alarm and makes its scene worse. A scene
+  with one recording says "no spread to judge by". The last line is "Better or the same on
+  every scene", or the scenes that are worse.
+- **Restartable:** a recording counts only when complete (a marker written last, every planned
+  frame there and whole), results are written whole, and the same command carries on after a
+  kill. A baseline is saved only when every job finished.
+- **The baselines of 2026-11-20** are in `tools/scorecard_baselines/` (`compare` takes a file):
+  `2026-11-20-gpu-core.json` and `2026-11-20-cpu-quick.json`. The cache with the recordings
+  (12.7 GB) is not in the repository; rendering it again takes about 3 hours on this PC:
+  `python tools/scorecard.py baseline --set core --save NAME --render-lanes 3 --cache DIR`.
+- **Today's spread** (GPU, tracked): bracket median 0.153 mm (0.075 to 0.228; at true poses
+  0.004 mm); car panel median 0.001 mm and its Ø25 hole 0.40 mm; sheet flange 0.35 mm; the
+  walls 0.07 / 0.21 / 0.12 mm; plate thickness 0.010 mm. Both paths repeat exactly on the quick
+  set (the same recording processed twice gives the same numbers).
+- **The Ø25 hole's two signs, settled:** the sign follows the recording, not the click, the
+  placement or the tool. A 60-frame pan from one side leaves the rim wide (+1.07 / +0.54 / -0.23
+  against 25.0, as in "Presets"); a 200-frame orbit that looks into the hole from every side
+  fills it inwards (0.8 to 1.2 mm small tracked, 0.9 to 1.5 at true poses). A further 0.2 mm
+  was only the reference (25.0 in one study, 25.20 in the other).
+- **Limits:** simulation only. Timings are rough unless the PC is quiet. The seams, the
+  end-to-end scans and the CPU quick set have one recording each, the hard scenes two. A
+  sheet's drift along itself is not scored. At true poses the placement still moves 0.1 to
+  0.3 mm on the walls, the hole plates and the carburettor, and 0.8 mm on one seam. Replay is
+  for fusing settings only. Determinism was checked on the quick set only, and whether a
+  recording rendered again matches the cached one bit for bit was not checked.
+- **Still to run with it:** the merge study, flat-within and the Check shares (the door and the
+  carburettor are done: see `VALIDATION.md`).
+
+### [ ] X0a. What the first baseline found (do these first)
+Three things in the engine, none known before. Each is a defect to understand, not an
+experiment: measure, find the cause, mend, and judge the mend with the scorecard.
+- [ ] **No GPU, 0.5 mm plate (seed 0): tracking slides 39 mm, and the plate nearly vanishes.**
+  At true poses the plate reads 0.49 mm with 99.9 % of its top; tracked it reads 0.11 mm with
+  35 % of its top. A thin part thinned and partly removed without a word: against the
+  thin-parts rule. First question: is it the defaults switched on for the no-GPU path on
+  2026-11-20 (D7), or older?
+- [ ] **Fused surface hangs past a sheet's free edge,** up to 15 mm out, where the drop behind
+  the edge is 60 to 120 mm: 7 to 9 % of the 200-frame car panel's vertices, which is what puts
+  its p95 at 1.7 to 2.3 mm while its median is 0.02 mm. The scorecard reports it as
+  `part_beyond_edge`. Likely the same fill that closes holes (X1's subject).
+- [ ] **GPU, hole plate 120 mm up, seed 0: tracking is lost** (path max 16.3 mm; the Ø25 hole
+  then reads 6.9 mm small). Seeds 1 and 2 hold (3.9 mm).
 
 ### [ ] X1. A gap guard that goes by the matcher's own doubt (S to M)
 - **Idea:** drop fused depth whose matcher sigma says "fill" (above about 3 mm) within 12 to
