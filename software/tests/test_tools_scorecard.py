@@ -215,6 +215,12 @@ def test_thin_parts_raise_their_own_alarm():
     assert sc.thin_flag("wall0.5_err", [1.2, 1.21], [1.2, 1.3]) == "THICKER"
     assert sc.thin_flag("wall0.5_cover05", [0.9, 0.9], [0.9, 0.5]) == "FACE LOST?"
     assert sc.thin_flag("wall1_err", [0.7, 0.7], [0.71, 0.69]) == ""
+    # found on the no-GPU plates (X0a): a plate read 0.39 mm too thin, then 0.03 mm too thin, and the alarm said
+    # "THICKER". Thicker towards the truth is no alarm; thicker past the truth by more than the limit is
+    assert sc.thin_flag("plate_err", [-0.387, -0.228], [-0.031, -0.044]) == "LESS THIN"
+    assert "LESS THIN" not in sc.WORSE_FLAGS
+    assert sc.thin_flag("plate_err", [-0.03], [0.10]) == "THICKER"
+    assert sc.thin_flag("plate_err", [-0.03], [0.06]) == "LESS THIN"  # 0.03 mm further off: under the limit
     spec = [sc.SCENES["fins-s0"], sc.SCENES["fins-s1"]]
     base = {n: {"tracked": {"metrics": {"wall1_err": 0.7, "part_med": 0.1}}} for n in ("fins-s0", "fins-s1")}
     new = {n: {"tracked": {"metrics": {"wall1_err": 0.8, "part_med": 0.1}}} for n in ("fins-s0", "fins-s1")}

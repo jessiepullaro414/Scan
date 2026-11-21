@@ -81,6 +81,23 @@ so: ``info["velocity_guard_mm"]``, how much of its velocity (mm a frame) was not
 information was no guide: the frame that started the dark bracket's slide held its weakest translation
 at 5e-3, ten times the detail-mode threshold (``MAINTENANCE_PLAN.md`` F14).
 
+**The pull along a table** (ENGINE_PLAN X0a; Open3D model only, each off unless set). Without a GPU the camera
+path slid along the table on every simulated scene: started at the true pose of a frame, ICP against the Open3D
+model moved the camera 3.4 to 6.6 mm along it (the GPU model: 0.4 to 1.2 mm), even a frame against its own
+one-frame model 0.65 mm (GPU 0.05). Three settings act on it:
+
+* ``FusionParams.model_normals = "vertex_map"``: the model's normals from its refined vertex map (central
+  differences, none across a depth step over :data:`VERTEX_MAP_STEP_MM`) instead of the TSDF's gradients. At
+  2 mm voxels a 0.5 mm step fuses into a ramp several voxels wide whose gradient normals tilt the other way
+  than its vertices; on exact depth of a 0.5 mm plate a frame against its own model moved 8 mm with them and
+  0.5 mm with the vertex map's.
+* ``FusionParams.raycast_border_mm``: the GPU model's border rule (``ohs.track.volume_gpu``, rule (iv)) on the
+  Open3D ray cast, with nearest-voxel lookups: a hit is kept only when :data:`BORDER_PROBES` probes on a circle
+  of that radius around it, in its tangent plane, lie in fused voxels.
+* ``FusionParams.velocity_from_rest``: with the velocity guard, the first velocity after the start or a lost
+  frame is bounded from rest (``velocity_max_accel`` times the frame time, 2.2 mm a frame at 30 frames a
+  second) instead of by :data:`VELOCITY_MAX_SPEED`.
+
 Two stronger treatments from the literature made tracking worse on the simulator
 (VALIDATION.md, "Degeneracy-aware tracking"), so neither is used:
 - remapping the update so that ICP never moves along weak directions (Zhang, Kaess and Singh
@@ -148,6 +165,7 @@ __all__ = ["FusionParams", "MarkerlessTracker", "MODEL_BACKENDS"]
 log = logging.getLogger(__name__)
 
 MODEL_BACKENDS = ("auto", "open3d", "gpu")
+MODEL_NORMALS = (None, "gradient", "vertex_map")  # FusionParams.model_normals (module docstring, "The pull along a table")
 O3D_THREADS_ENV = "OHS_O3D_THREADS"  # see _limit_open3d_threads
 
 
@@ -214,6 +232,10 @@ RAYCAST_WEIGHT_THRESHOLD = 3.0  # the Open3D model's ray-cast weight threshold w
 # ... and the first velocity after the start or a lost frame (mm/s): the simulator's hand moves at most 119 mm/s
 # (4 mm a frame at 30 fps), times 2.5
 VELOCITY_MAX_SPEED = 300.0
+# FusionParams.model_normals = "vertex_map": no normal across a step in the vertex map's depth larger than this (mm);
+# a 0.5 mm plate's edge is no such step (its normals there follow the fused ramp)
+VERTEX_MAP_STEP_MM = 4.0
+BORDER_PROBES = 8  # FusionParams.raycast_border_mm: probes on the circle, as the GPU model's rule (iv)
 
 # trilinear cell corners in the order of Open3D's ray-cast "index"/"interp_ratio" outputs
 _CORNERS = np.array([[j & 1, (j >> 1) & 1, (j >> 2) & 1] for j in range(8)], dtype=np.float64)
@@ -258,6 +280,20 @@ class FusionParams:
     # (MAINTENANCE_PLAN F14, the owner's decision D7 of 2026-11-20). The GPU model uses gpu_weight_threshold.
     raycast_weight_threshold: float | None = None
     model_normal_window: int = 5  # box-average model normals over k x k ray-cast pixels (1 = off)
+    # The Open3D model's pull along a table (module docstring, "The pull along a table"; ENGINE_PLAN X0a). Open3D
+    # model only, the GPU model ignores all three; None: off (ohs.app.pipeline, "The CPU path's defaults", says
+    # where one is filled in).
+    # The model's normals: "gradient" (the TSDF's gradients, as before; also None) or "vertex_map" (from the
+    # refined vertex map's central differences); box-averaged over model_normal_window either way.
+    model_normals: str | None = None
+    # ... the box average of the vertex map's normals (k x k pixels, 1 = none); None: model_normal_window
+    vertex_map_window: int | None = None
+    # The GPU model's border rule (ohs.track.volume_gpu, rule (iv)) on Open3D's ray cast: a hit is kept only when
+    # 8 probes on a circle of this radius (mm) around it, in its tangent plane, lie in observed voxels. None, 0: off.
+    raycast_border_mm: float | None = None
+    # With the velocity guard (velocity_max_accel): the first velocity after the start or a lost frame is bounded
+    # from rest (velocity_max_accel times the frame time) instead of by VELOCITY_MAX_SPEED. None, False: off.
+    velocity_from_rest: bool | None = None
     extract_weight_threshold: float = 3.0
     # ICP
     icp_strides: tuple[int, ...] = (16, 8, 4)  # source subsampling per level (coarse -> fine), px
@@ -314,6 +350,12 @@ class FusionParams:
             raise ValueError(f"gpu_volume_voxels must be a multiple of 16, >= 64, got {self.gpu_volume_voxels!r}")
         if self.gpu_border_mm < 0 or self.gpu_weight_threshold < 0:
             raise ValueError("gpu_border_mm and gpu_weight_threshold must be >= 0")
+        if self.model_normals not in MODEL_NORMALS:
+            raise ValueError(f"model_normals must be one of {MODEL_NORMALS}, got {self.model_normals!r}")
+        if self.vertex_map_window is not None and int(self.vertex_map_window) < 1:
+            raise ValueError(f"vertex_map_window must be at least 1 (or None), got {self.vertex_map_window!r}")
+        if self.raycast_border_mm is not None and not self.raycast_border_mm >= 0:
+            raise ValueError(f"raycast_border_mm must be >= 0 (or None), got {self.raycast_border_mm!r}")
 
     @property
     def trunc_mm(self) -> float:
@@ -465,6 +507,29 @@ def _weak_directions(J: np.ndarray, Q: np.ndarray, ratio: float,
             if sv[0] >= thr:
                 weak.append({"kind": kind, "axis": [round(float(a), 3) for a in U[:, 0]]})
     return min_ratio, weak
+
+
+def _vertex_map_normals(V: np.ndarray, valid: np.ndarray, w: int, h: int) -> tuple[np.ndarray, np.ndarray]:
+    """``FusionParams.model_normals = "vertex_map"``: unit normals (towards the camera) of the camera-frame vertex
+    map ``V`` (h*w, 3) from central differences, and where they exist: a pixel needs its four neighbours valid
+    and within :data:`VERTEX_MAP_STEP_MM` of each other in depth (the image's outermost pixels have none)."""
+    Vg = V.reshape(h, w, 3)
+    m = valid.reshape(h, w)
+    N = np.zeros_like(Vg)
+    ok = np.zeros((h, w), dtype=bool)
+    dx = Vg[1:-1, 2:] - Vg[1:-1, :-2]
+    dy = Vg[2:, 1:-1] - Vg[:-2, 1:-1]
+    n = np.cross(dx, dy)
+    nn = np.linalg.norm(n, axis=-1)
+    okc = m[1:-1, 2:] & m[1:-1, :-2] & m[2:, 1:-1] & m[:-2, 1:-1] & m[1:-1, 1:-1] & (nn > 1e-9)
+    z = Vg[..., 2]
+    okc &= ((np.abs(z[1:-1, 2:] - z[1:-1, :-2]) < VERTEX_MAP_STEP_MM)
+            & (np.abs(z[2:, 1:-1] - z[:-2, 1:-1]) < VERTEX_MAP_STEP_MM))
+    n = n / np.maximum(nn, 1e-12)[..., None]
+    n *= -np.sign(np.einsum("ijk,ijk->ij", n, Vg[1:-1, 1:-1]))[..., None]  # face the camera
+    N[1:-1, 1:-1][okc] = n[okc]
+    ok[1:-1, 1:-1] = okc
+    return N.reshape(-1, 3), ok.reshape(-1)
 
 
 class MarkerlessTracker:
@@ -848,9 +913,59 @@ class MarkerlessTracker:
         V[sel] = self._rays_ray[sel] * (depth + step)[:, None]
         N = np.zeros((h * w, 3))
         N[sel] = -normal / nn[:, None]
-        if p.model_normal_window > 1:
-            N, valid = self._smooth_normals(N, valid, w, h, p.model_normal_window)
+        k = p.model_normal_window
+        if p.model_normals == "vertex_map":
+            N, valid = _vertex_map_normals(V, valid, w, h)
+            k = k if p.vertex_map_window is None else int(p.vertex_map_window)
+        if k > 1:
+            N, valid = self._smooth_normals(N, valid, w, h, k)
+        if p.raycast_border_mm:
+            valid = valid & self._inside_observed(V, N, valid, T_wc, float(p.raycast_border_mm))
         return _ModelView(T_wc.copy(), valid, self._K_ray, (w, h), dense=(V, N))
+
+    def _observed(self, X: np.ndarray) -> np.ndarray:
+        """(N,) bool: the voxel nearest to each world point (mm) ``X`` (N,3) has been fused (weight > 0)."""
+        o3c = self._o3c
+        p = self.params
+        r = int(p.block_resolution)
+        g = np.floor(X / float(p.voxel_mm) + 0.5).astype(np.int64)  # voxel i sits at i * voxel_mm
+        blk = np.floor_divide(g, r)
+        loc = g - blk * r
+        off = 1 << 20
+        code = ((blk[:, 0] + off) << 42) | ((blk[:, 1] + off) << 21) | (blk[:, 2] + off)
+        uc, inv = np.unique(code, return_inverse=True)
+        m21 = (1 << 21) - 1
+        ub = np.stack([(uc >> 42) - off, ((uc >> 21) & m21) - off, (uc & m21) - off], axis=1)
+        buf, found = self._vbg.hashmap().find(o3c.Tensor(ub.astype(np.int32)).to(self.device))
+        buf = buf.cpu().numpy().astype(np.int64).reshape(-1)[inv.reshape(-1)]
+        have = found.cpu().numpy().astype(bool).reshape(-1)[inv.reshape(-1)]
+        lin = buf * r ** 3 + (loc[:, 2] * r + loc[:, 1]) * r + loc[:, 0]  # Open3D's order within a block
+        out = np.zeros(len(X), dtype=bool)
+        if have.any():
+            _, wts = self._gather_voxels(lin[have])
+            out[have] = wts > 0
+        return out
+
+    def _inside_observed(self, V: np.ndarray, N: np.ndarray, valid: np.ndarray, T_wc: np.ndarray,
+                         radius_mm: float) -> np.ndarray:
+        """``FusionParams.raycast_border_mm``: which hits have observed voxels on a circle of ``radius_mm`` around
+        them in their tangent plane (:data:`BORDER_PROBES` probes; the GPU model's rule (iv), with nearest-voxel
+        lookups). ``V``/``N`` are the camera-frame maps at ``T_wc``."""
+        sel = np.flatnonzero(valid)
+        out = np.zeros(len(valid), dtype=bool)
+        if len(sel) == 0:
+            return out
+        R, t = T_wc[:3, :3], T_wc[:3, 3]
+        X = V[sel] @ R.T + t
+        n = N[sel] @ R.T
+        a = np.where(np.abs(n[:, :1]) < 0.9, np.array([[1.0, 0.0, 0.0]]), np.array([[0.0, 1.0, 0.0]]))
+        t1 = np.cross(n, a)
+        t1 /= np.linalg.norm(t1, axis=1, keepdims=True)
+        t2 = np.cross(n, t1)
+        ang = 2.0 * np.pi * np.arange(BORDER_PROBES) / BORDER_PROBES
+        Q = X[None] + radius_mm * (np.cos(ang)[:, None, None] * t1[None] + np.sin(ang)[:, None, None] * t2[None])
+        out[sel] = self._observed(Q.reshape(-1, 3)).reshape(BORDER_PROBES, -1).all(axis=0)
+        return out
 
     def _newton_step(self, vals: np.ndarray, wts: np.ndarray, mask: np.ndarray, ratio: np.ndarray,
                      rays_w: np.ndarray) -> np.ndarray:
@@ -1218,10 +1333,12 @@ class MarkerlessTracker:
         changed from the last one by at most ``velocity_max_accel * dt``. Sets :attr:`_guard_mm`."""
         R_last = self._T_last[:3, :3]
         v = R_last @ step / dt  # mm/s, world
+        accel_lim = float(self.params.velocity_max_accel) * 1000.0 * dt  # mm/s
         if self._v_w is None:  # the first velocity of a run of frames: the scanner's speed is not known, only bounded
-            ref, lim = np.zeros(3), VELOCITY_MAX_SPEED
+            # (from rest with FusionParams.velocity_from_rest)
+            ref, lim = np.zeros(3), accel_lim if self.params.velocity_from_rest else VELOCITY_MAX_SPEED
         else:
-            ref, lim = self._v_w, float(self.params.velocity_max_accel) * 1000.0 * dt  # mm/s
+            ref, lim = self._v_w, accel_lim
         dv = v - ref
         n = float(np.linalg.norm(dv))
         if n > lim:

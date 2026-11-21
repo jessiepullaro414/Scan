@@ -399,6 +399,13 @@ class PipelineParams:
     # markerless tracking model (see the module docstring); None -> defaults for this scale
     track_filter_px: float | None = None  # 0 -> track on the raw depth in the reconstruction TSDF
     track_voxel_mm: float | None = None
+    # the Open3D tracking model's truncation (voxels; ENGINE_PLAN X0a, the pull along a table); None: fusion.trunc_mult,
+    # as the mesh's model. The GPU tracking model has its own (FusionParams.gpu_trunc_mult) and ignores it.
+    track_trunc_mult: float | None = None
+    # detail mode on the CPU matcher's depth (module docstring, "Detailed parts"): the raw depth it adds leaves out
+    # this many px (at 1280 px wide) along the image's border, where that matcher reads 0.13 mm off (ENGINE_PLAN
+    # X0a); None or 0: off. The GPU matcher's raw depth is used as it is.
+    detail_border_px: float | None = None
     # reconstruction model (module docstring, "Reconstruction model"): "auto" = the confidence TSDF
     # on a GPU, else Open3D; "confidence" also without a GPU (numpy, slow); "open3d" = no confidence
     recon: str = "auto"
@@ -423,6 +430,10 @@ class PipelineParams:
             raise ValueError(f"gap_guard_px must be >= 0, got {self.gap_guard_px!r}")
         if self.thin_walls not in THIN_WALLS:
             raise ValueError(f"thin_walls must be one of {THIN_WALLS}, got {self.thin_walls!r}")
+        if self.track_trunc_mult is not None and not float(self.track_trunc_mult) >= 1.0:
+            raise ValueError(f"track_trunc_mult must be at least 1 (voxel), got {self.track_trunc_mult!r}")
+        if self.detail_border_px is not None and not float(self.detail_border_px) >= 0:
+            raise ValueError(f"detail_border_px must be >= 0, got {self.detail_border_px!r}")
 
 
 @dataclass
@@ -591,6 +602,8 @@ class FramePipeline:
         #: detail mode on the CPU matcher's depth leaves its raw depth out this close (px) to a hole ("Detailed parts")
         hole = DETAIL_HOLE_PX_FLIP_1280 if self.depth_params.flip_average else DETAIL_HOLE_PX_1280
         self.detail_hole_px = int(round(hole * self.image_size[0] / NOMINAL_WIDTH))
+        #: ... and this close (px) to the image border (PipelineParams.detail_border_px; 0: off)
+        self.detail_border_px = int(round(float(p.detail_border_px or 0.0) * self.image_size[0] / NOMINAL_WIDTH))
         #: laser points dropped because they disagree with the frame's dense depth, per line
         self.laser_rejected: dict[str, int] = {}
         #: when a dict (set by the caller; None: not measured), each frame appends per line the signed
@@ -1014,6 +1027,10 @@ class FramePipeline:
             if de is not None:
                 de.params = self.depth_params
         self.track_fusion_params = resolved(self.track_fusion_params, cpu)
+        ttm = self.params.track_trunc_mult  # the Open3D tracking model's own truncation (PipelineParams)
+        if ttm is not None and self.dual_model and getattr(self.tracker, "model_backend", None) == "open3d":
+            self.track_fusion_params = replace(self.track_fusion_params, trunc_mult=float(ttm))
+            self.tracker._trunc_mm = float(self.track_fusion_params.trunc_mm)  # what MarkerlessTracker.trunc_mm says
         self.fusion_params = resolved(self.fusion_params, cpu)
         if self.tracker is not None:
             self.tracker.params = self.track_fusion_params if self.dual_model else self.fusion_params
@@ -1027,7 +1044,12 @@ class FramePipeline:
         est = self.depth_estimator
         if est is None or est.backend != "cpu":
             return depth
-        return without_hole_borders(depth, self.detail_hole_px)
+        out = without_hole_borders(depth, self.detail_hole_px)
+        b = self.detail_border_px
+        if b > 0:
+            out = out.copy() if out is depth else out
+            out[:b], out[-b:], out[:, :b], out[:, -b:] = 0.0, 0.0, 0.0, 0.0
+        return out
 
     def _end_probe(self) -> None:
         if self._probe is not None:

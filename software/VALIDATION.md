@@ -3968,6 +3968,67 @@ tracked path max in mm): sphere 0.19; brackets 4.5 to 7.1 (part median 0.48 to 0
 whole camera path is weak, not only on plates. With the check built in, both paths' scorecards
 are the same in every row (no GPU: plates, walls and sphere compared; GPU: plates and sphere).
 
+## The no-GPU tracking model's pull: settings tried (ENGINE_PLAN X0a, 2026-11-21)
+
+Five settings for the tracking model the no-GPU path uses, all built and all off (what each is:
+`docs/ENGINE_PLAN.md`, X0a). Short names here: **vmap** = the model's normals from its vertex
+map; **border8** = no ray-cast hit within 8 mm of where the model's observations end (the GPU
+model's rule); **rest** = the first velocity bounded from rest. No GPU, tracked; no value was
+tuned on these recordings (8 mm is the GPU model's own, the others came from a synthetic plate).
+
+**First look: the five plates and one bracket.** Path max / last frame in mm, then the plate's
+thickness error in mm and the share of its top kept (the bracket: its median error in mm):
+
+| setting | plate seed 0 | seed 1 | seed 2 | 90-frame plate | 90-frame plate 2 | bracket seed 0 |
+|---|---|---|---|---|---|---|
+| today | 39.1 / 37.0, -0.387, 0.34 | 15.3 / 15.3, -0.228, 0.76 | 14.0 / 12.8, -0.228, 0.67 | 8.0 / 5.7, -0.074, 0.90 | 8.3 / 5.7, -0.143, 0.90 | 7.1 / 3.8, 0.644 |
+| vmap | 8.7 / 7.8, -0.126, 0.85 | 9.2 / 9.2, -0.106, 0.88 | 14.6 / 13.5, -0.206, 0.64 | 3.2 / 0.7, -0.007, 1.00 | 7.0 / 5.3, -0.106, 0.91 | 7.7 / 3.2, 0.556 |
+| rest | 11.3 / 10.5, -0.223, 0.77 | 16.4 / 16.4, -0.235, 0.76 | 13.3 / 11.6, -0.252, 0.67 | 6.4 / 2.4, -0.045, 0.94 | 7.9 / 5.9, -0.150, 0.89 | 7.1 / 3.8 (it does not act) |
+| border8 | 8.1 / 7.2, -0.114, 0.86 | 8.3 / 8.3, -0.073, 0.92 | 7.2 / 5.8, -0.098, 0.86 | 3.5 / 2.0, -0.013, 0.99 | 5.5 / 4.7, -0.060, 0.94 | 5.5 / 2.3, 0.576 |
+| vmap + border8 | 5.4 / 3.7, -0.031, 0.95 | 6.7 / 6.7, -0.044, 0.95 | 5.6 / 4.8, -0.059, 0.90 | 4.6 / 1.9, -0.008, 1.00 | 3.7 / 2.7, -0.015, 0.99 | 14.6 / 11.6, 0.548 |
+| vmap, normals not smoothed | 3.3 / 2.5, -0.004, 0.99 | 9.3 / 5.6, -0.076, 0.94 | 8.5 / 5.7, -0.050, 0.93 | 6.0 / 3.4, -0.049, 0.97 | 5.3 / 3.6, -0.038, 0.96 | **31.9 / 22.1, 6.82** |
+| tracking truncation 2 voxels | **509 / 509**, -0.408, 0.00 | | | | | |
+| probe without the image's border band (24 px) | 10.8 / 9.9, -0.206, 0.79 | 14.3 / 14.3, -0.201, 0.79 | 19.1 / 17.7, -0.310, 0.49 | 4.9 / 2.5, -0.021, 0.98 | 8.9 / 6.5, -0.181, 0.87 | 4.9 / 2.2, 0.603 |
+
+**The 21 recordings of the no-GPU baseline.** Path max in mm / the part's median error in mm:
+
+| recording | today | vmap | vmap + border8 | border8 |
+|---|---|---|---|---|
+| sphere, end to end | 0.2 / 0.053 | 0.2 / 0.052 | 0.2 / 0.052 | 0.2 / 0.052 |
+| bracket seed 0 | 7.1 / 0.644 | 7.7 / 0.556 | 14.6 / 0.548 | 5.5 / 0.576 |
+| bracket seed 1 | 4.5 / 0.692 | 3.8 / 0.643 | 6.3 / 0.620 | 7.0 / 0.594 |
+| bracket seed 2 | 6.3 / 0.476 | 3.9 / 0.732 | 6.3 / 0.785 | 3.4 / 0.427 |
+| bracket seed 3 | 6.3 / 0.483 | 5.1 / 0.583 | 5.0 / 0.410 | 5.9 / 0.305 |
+| bracket seed 4 | 4.8 / 0.583 | 3.1 / 0.511 | **44.3** / 0.423 | 10.2 / 0.344 |
+| sheet, seeds 0 / 1 / 2 (path max) | 9.4 / 6.4 / 6.1 | 5.6 / 4.5 / 7.3 | 14.6 / 5.2 / 6.2 | 10.7 / 5.7 / 6.1 |
+| walls, seeds 0 / 1 / 2 (path max) | 17.9 / 17.1 / 5.9 | 10.0 / 12.6 / 7.6 | 9.4 / 20.2 / 9.8 | 14.3 / 10.8 / 4.1 |
+| 0.5 mm plate, seeds 0 / 1 / 2 (path max) | 39.1 / 15.3 / 14.0 | 8.7 / 9.2 / 14.6 | 5.4 / 6.7 / 5.6 | 8.1 / 8.3 / 7.2 |
+| dark bracket 1 / 2 (path max) | 43.5 / 9.8 | **429.8 / 49.5** | **309.5 / 26.0** | **176.9 / 87.3** |
+| speckled bracket 1 / 2 (path max) | 8.3 / 11.6 | 5.7 / 2.4 | frames lost / 6.5 | 19.9 / 2.6 |
+| 90-frame plates 1 / 2 (path max) | 8.0 / 8.3 | 3.2 / 7.0 | 4.6 / 3.7 | 3.5 / 5.5 |
+
+Thin parts: no plate reads thinner and no plate keeps less of its top under any of the three
+(0.5 mm plates: today -0.387 / -0.228 / -0.228 mm with 0.34 / 0.76 / 0.67 of the top; vmap +
+border8 -0.031 / -0.044 / -0.059 with 0.95 / 0.95 / 0.90; border8 -0.114 / -0.073 / -0.098 with
+0.86 / 0.92 / 0.86). The walls and the sheet are mixed under all three: the 0.5 mm wall loses its
+face on one or two seeds, one wall recording reads 2.5 mm thick (13 mm with vmap), and the
+sheet's flange and ribs move by up to 3 mm on one seed.
+
+**Verdict.** Each of the three is worse on several scenes: the brackets (one seed slides, a boss
+answers one click fewer), the sheet, the walls, the dark bracket above all, the speckled bracket;
+so none is switched on. Judged again after the alarm below was mended, border8 is still worse on
+those scenes; the plates' thickness row then reads "better".
+
+The camera path's check warns on 12 of the 21 recordings today, on 9 with vmap, 7 with vmap +
+border8 and 7 with border8. With every setting off, both paths give what they gave before:
+processed afresh, the GPU path's plates, sphere and a bracket, and the no-GPU path's plate seed
+0, sphere and bracket seed 0, are identical to the saved baselines in every row.
+
+**The scorecard's "THICKER" alarm** fired on the plates because they read thicker, although they
+moved from 0.11 to 0.47 mm for a true 0.5 mm. It now alarms only when a thin part reads thicker
+and further from the truth by more than 0.05 mm; thicker towards the truth is "LESS THIN" and no
+alarm.
+
 ## What the metrics mean
 
 - **Stereo errors** compare the estimated raw intrinsics/extrinsics (`K1`, `K2`, `R`, `T`) with

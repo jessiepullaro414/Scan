@@ -1726,7 +1726,7 @@ SMALL_PREFIXES = ("hole25_", "h25_", "h10_", "h6_", "bore_", "br_boss_", "br_sha
 #: a thin part's or small feature's change on one recording that raises its alarm (mm): the stop
 #: rules' 0.05 mm ("no wall gets more than 0.05 mm thicker")
 ALARM_MM = 0.05
-#: the alarms that make a scene worse (THINNER alone is not: a wall read too thick is getting nearer)
+#: the alarms that make a scene worse (THINNER and LESS THIN alone are not: the reading is getting nearer the truth)
 WORSE_FLAGS = ("THICKER", "LOST", "FACE LOST?", "FURTHER", "FEWER ANSWERS")
 
 
@@ -1736,7 +1736,8 @@ def is_small(metric: str) -> bool:
 
 def thin_flag(metric: str, base: list[Any], new: list[Any], names: list[str] | None = None) -> str:
     """A thin part's or small feature's own alarm, per recording (never averaged): a wall or plate
-    more than 0.05 mm thicker ("THICKER"), or further from the truth on the thin side ("FURTHER"); a
+    more than 0.05 mm thicker and further from the truth ("THICKER"; "LESS THIN", no alarm, when a
+    part read too thin moves towards its true thickness), or further from the truth on the thin side ("FURTHER"); a
     face's coverage down by more than 0.2 ("FACE LOST?"); a hole, boss or shaft reading more than
     0.05 mm further off ("FURTHER") or answering fewer clicks ("FEWER ANSWERS"); a number that was
     measured and is no longer ("LOST"). With ``names``, each flag says on which recordings."""
@@ -1760,8 +1761,8 @@ def thin_flag(metric: str, base: list[Any], new: list[Any], names: list[str] | N
             if abs(n) - abs(b) > ALARM_MM:
                 add("FURTHER", who)
         elif metric.endswith("_err"):
-            if n - b > ALARM_MM:
-                add("THICKER", who)
+            if n - b > ALARM_MM:  # thicker: an alarm only when that is further from the truth
+                add("THICKER" if abs(n) - abs(b) > ALARM_MM else "LESS THIN", who)
             elif b - n > ALARM_MM:
                 add("FURTHER" if abs(n) - abs(b) > ALARM_MM else "THINNER", who)
         if ("cover05" in metric or "top_kept" in metric) and b - n > 0.2:

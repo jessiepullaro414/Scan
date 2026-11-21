@@ -193,7 +193,9 @@ experiment: measure, find the cause, mend, and judge the mend with the scorecard
     It does not see a slow drift at a steady wrong speed (the sheets, one bracket, and the two
     90-frame plates, which are thinned 0.07 and 0.14 mm without a warning). Both paths'
     scorecards are identical with it.
-  - **Not shown in the app yet:** the server and the pages do not read `warnings` (next).
+  - **Shown in the app since 2026-11-21:** a chip on the scan's row, the top of the viewer's
+    processing report, the "Follow the camera" stage and the HTML report. This item stays
+    open until the plates themselves come out right (the next item).
 - [ ] **No GPU: mend the tracking model's pull.** Without a GPU the whole camera path is
   weak, not only on plates: the bracket's median is 0.48 to 0.69 mm (GPU 0.08 to 0.23), the
   sheets' path is 6 to 9 mm off, the walls' 6 to 18 mm. Two leads, measured on the five plates
@@ -206,6 +208,36 @@ experiment: measure, find the cause, mend, and judge the mend with the scorecard
   baseline and no plate or wall reads thinner. Also worth one try: the GPU model's rule of
   dropping hits near where its observations end. A second way to catch what the warning
   misses: check the path against the accelerometer (the recordings carry it).
+
+  **Measured 2026-11-21: nothing adopted; the settings are built and off.** Numbers:
+  `VALIDATION.md`, "The no-GPU tracking model's pull: settings tried".
+  - **Built** (no-GPU tracking model only; the GPU's code path is untouched):
+    `FusionParams.model_normals = "vertex_map"` (with `vertex_map_window`),
+    `raycast_border_mm` (the GPU model's rule: no ray-cast hit within 8 mm of where the
+    model's observations end), `velocity_from_rest`; `PipelineParams.track_trunc_mult`,
+    `detail_border_px`.
+  - **Judged on the 21 recordings:** vertex-map normals, the border rule, and both. Each is
+    worse on several scenes, so by the stop rule none is on.
+  - **What they mend:** the plates. With both, the plates' path max is 3.7 to 6.7 mm
+    (today 8 to 39), their thickness 0.01 to 0.06 mm thin (today 0.07 to 0.39) and 90 to 100 %
+    of the top is kept (today 34 to 90 %). The border rule alone lowers the bracket's median
+    on all five seeds (0.31 to 0.59 mm, today 0.48 to 0.69).
+  - **What they break:** the dark bracket runs away (177 to 430 mm off, today 43.5), one
+    bracket seed slides 10 to 44 mm, the walls lose a face on one or two seeds, the sheet's
+    flange and ribs jump by up to 3 mm on one seed. Not a near miss.
+  - **Worse or no better on the plates and one bracket, not judged further:** a first
+    velocity from rest, vertex-map normals without smoothing (bracket 32 mm off), a 2-voxel
+    truncation for the tracking model (a plate 509 mm off), leaving the image's border band
+    out of the probe's raw depth.
+  - **Reading:** on this path the dark scenes are chaotic whatever the model does (as F14
+    found), so a change to the model trades plates against them. What could still work: a
+    tracking model as faithful as the GPU's on this path (X11's subject), a choice of the
+    rule by the scene (plain and flat against dark and detailed: the engine already probes
+    for detail at the start of a scan), or the accelerometer as a check. Until then the app
+    warns (12 of the 21 today).
+  - **Found on the way, mended:** the scorecard's "THICKER" alarm also fired when a plate
+    read too thin moved towards its true thickness. It now alarms only when thicker is
+    further from the truth ("LESS THIN" otherwise, no alarm).
 - [ ] **Fused surface hangs past a sheet's free edge,** up to 15 mm out, where the drop behind
   the edge is 60 to 120 mm: 7 to 9 % of the 200-frame car panel's vertices, which is what puts
   its p95 at 1.7 to 2.3 mm while its median is 0.02 mm. The scorecard reports it as
