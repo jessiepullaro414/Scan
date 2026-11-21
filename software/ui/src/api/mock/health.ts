@@ -159,5 +159,23 @@ export const SEEDED_SCAN_HEALTH: Record<string, ScanHealthSummary> = {
   },
 };
 
+/**
+ * The camera path's check (ENGINE_PLAN X0a) of the seeded scans, by name: one whose tracking slid, in the engine's
+ * words (`ohs/track/path_check.py`: "GPU", which the pages say as "graphics card"). Every other scan's path held.
+ */
+export const SEEDED_PATH_WARNING: Record<string, { path_check: Record<string, unknown>; warnings: string[] }> = {
+  "Bracket side": {
+    path_check: { version: 1, window_s: 0.8, limit_mm: 4.0, frames: 812, jump_mm: 9.4, frame: 412, state: "warn" },
+    warnings: [
+      "The camera path jumps by 9 mm near frame 412, more than a hand moves in 0.8 s: tracking may have slid there. A thin part (a sheet, or a plate lying flat) can then come out thinner or partly missing, and sizes across that part of the scan may be off. Scan it again more slowly, with more of the part's edges in view. This scan was processed without a GPU, where tracking holds flat, plain scenes less well.",
+    ],
+  },
+};
+
+/** A scan's camera path check in the mock: the seeded one, else a path that held. */
+export function mockPathCheck(name: string, frames: number): { path_check: Record<string, unknown>; warnings: string[] } {
+  return SEEDED_PATH_WARNING[name] ?? { path_check: { version: 1, window_s: 0.8, limit_mm: 4.0, frames, jump_mm: 1.6, frame: 3, state: "ok", warning: null }, warnings: [] };
+}
+
 /** A newly processed scan in the mock: nothing off. */
 export const MOCK_SCAN_VALID: ScanHealthSummary = SEEDED_SCAN_HEALTH["Bracket top"];

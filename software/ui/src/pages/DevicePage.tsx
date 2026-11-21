@@ -402,10 +402,28 @@ export function DevicePage() {
           ) : calib?.loaded ? (
             <div className="space-y-4">
               {/* U46: not a plain "loaded" right under "Recalibration required": it says which, in amber */}
-              <StatusLine ok={loaded.warn ? "warn" : true} label={loaded.text} detail="Scanning and meshing use this calibration." />
+              {calib.source === "demo" ? (
+                // U21: the demo's own true calibration, not the one Setup makes for the simulator
+                <StatusLine
+                  ok
+                  label="Demo calibration"
+                  detail="The simulator's demo scans with its own true calibration. Setup calibrates the simulator separately, as you would calibrate the real scanner."
+                />
+              ) : (
+                <StatusLine ok={loaded.warn ? "warn" : true} label={loaded.text} detail="Scanning and meshing use this calibration." />
+              )}
               <KeyValue
                 rows={[
-                  ["File", <span className="break-all font-mono text-xs" title={calib.path ?? undefined}>{calib.path ?? "from the recording"}</span>],
+                  [
+                    "File",
+                    calib.source === "demo" ? (
+                      "The demo's own, inside the simulator"
+                    ) : (
+                      <span className="break-all font-mono text-xs" title={calib.path ?? undefined}>
+                        {calib.path ?? "from the recording"}
+                      </span>
+                    ),
+                  ],
                   ["Image size", calib.image_size ? fmtSize(calib.image_size[0], calib.image_size[1], "px") : "–"],
                   ["Distance between the cameras", calib.baseline_mm !== null ? `${fmtFixed(calib.baseline_mm, 2)}\u202fmm` : "–"],
                   [

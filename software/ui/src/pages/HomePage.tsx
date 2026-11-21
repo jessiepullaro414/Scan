@@ -20,6 +20,8 @@ import { useEffect, useMemo, useState } from "react";
 import { api } from "../api/http";
 import type { ProjectSummary } from "../api/types";
 import { ProjectThumb } from "../components/ProjectThumb";
+import { TrashDialog } from "../components/TrashDialog";
+import { ComputerLine } from "../components/ComputerLine";
 import { Button, IconButton } from "../components/ui/Button";
 import { ConfirmDialog, PromptDialog } from "../components/ui/Dialog";
 import { EmptyState, Skeleton } from "../components/ui/Feedback";
@@ -83,6 +85,8 @@ function SetupCard() {
               );
             })}
           </ol>
+          {/* U5: what this computer can do, before something is missing */}
+          <ComputerLine className="mt-3" compact />
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <Button variant="primary" size="lg" iconRight={ArrowRight} onClick={() => navigate(paths.setup(prog.done === 0 ? null : next))}>
@@ -331,6 +335,7 @@ export function HomePage() {
   const setCurrent = useUi((s) => s.setCurrentProject);
   const projectsDir = useProjectsDir();
   const [creating, setCreating] = useState(false);
+  const [trashOpen, setTrashOpen] = useState(false); // U7: the trash, with Restore and Empty trash…
   const [renaming, setRenaming] = useState<ProjectSummary | null>(null);
   const [deleting, setDeleting] = useState<ProjectSummary | null>(null);
   const [query, setQuery] = useState("");
@@ -367,6 +372,9 @@ export function HomePage() {
                 className="w-56"
               />
             ) : null}
+            <Button variant="ghost" icon={Trash} onClick={() => setTrashOpen(true)} title="Deleted projects and scans: restore them, or empty the trash">
+              Trash
+            </Button>
             <Button icon={FolderPlus} onClick={() => setCreating(true)}>
               New project
             </Button>
@@ -436,8 +444,8 @@ export function HomePage() {
             </EmptyState>
           ) : null}
           <p className="mt-8 flex items-center gap-2 text-xs text-subtle">
-            <Box size={13} aria-hidden /> Projects live in <Code>{projectsDir}</Code>. Deleted projects go to its{" "}
-            <Code>.trash</Code> folder and can be restored from there.
+            <Box size={13} aria-hidden /> Projects live in <Code>{projectsDir}</Code>. Deleted projects and scans go to the
+            trash, where you can restore them.
           </p>
         </>
       )}
@@ -480,15 +488,16 @@ export function HomePage() {
           if (!deleting) return;
           const name = deleting.name;
           const ok = await remove(deleting.id);
-          if (ok) toast.success(`Moved “${name}” to the trash`, "Its folder is in .trash inside your projects folder.");
+          if (ok) toast.success(`Moved “${name}” to the trash`, "Restore it from the Trash at the top of this page.");
           return ok; // U6: a failed move keeps the dialog open
         }}
       >
         {deleting && deleting.n_scans > 0
           ? `The project folder and its ${deleting.n_scans} scan${deleting.n_scans === 1 ? "" : "s"} move to the `
           : "The project folder moves to the "}
-        <Code>.trash</Code> folder inside your projects folder. Nothing is permanently deleted: you can restore it from there.
+        trash. Nothing is deleted: you can restore it from the Trash at the top of this page.
       </ConfirmDialog>
+      <TrashDialog open={trashOpen} onClose={() => setTrashOpen(false)} />
     </Page>
   );
 }

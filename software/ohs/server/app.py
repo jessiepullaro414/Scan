@@ -40,6 +40,7 @@ import ipaddress
 import json
 import logging
 import mimetypes
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional, Union
 from urllib.parse import urlsplit
@@ -63,6 +64,8 @@ from ohs.server.reference import ReferenceManager
 from ohs.server.report import ReportManager
 from ohs.server.sections import SectionManager
 from ohs.server.studio import Studio
+from ohs.server.folders import FolderManager
+from ohs.server.trash import TrashManager
 
 __all__ = ["create_app", "CORS_ORIGINS", "LocalGuard"]
 
@@ -320,6 +323,16 @@ class PassCompareBody(BaseModel):  # FEATURE_PLAN N2: before and after (none: th
 
 class CheckWhyBody(CheckBody):  # FEATURE_PLAN N1: why each area is weak and where to scan it from
     version: Optional[int] = None  # the mesh version of the Check answer on screen (409 when it changed)
+
+
+class EmptyTrashBody(BaseModel):  # UX_PLAN U7: deletes for good, so the user said yes twice and the page lists the items
+    confirm: Any = None
+    items: Any = None
+
+
+class OpenFolderBody(BaseModel):  # U39, U12, U34: which folder the app owns, never a path (checked in plain words)
+    what: Any = None
+    project_id: Any = None
 
 
 class KeepBody(BaseModel):  # FEATURE_PLAN R2: what a scan keeps (the mode is checked by ohs.server.keep, in plain words)
@@ -658,6 +671,42 @@ def create_app(config: Any = None, *, projects_dir: Any = None, static_dir: Any 
     def projects_delete(pid: str) -> Response:
         st.delete_project(pid)
         return Response(status_code=204)
+
+    # UX_PLAN U7, U50: rename a scan, move it to the trash; the trash (plain functions: they move folders)
+    trash = TrashManager(st.projects)
+
+    @app.patch("/api/projects/{pid}/scans/{sid}")
+    def scans_rename(pid: str, sid: str, body: NameBody) -> JSONResponse:
+        return _json(st.projects.rename_scan(pid, sid, body.name))
+
+    @app.delete("/api/projects/{pid}/scans/{sid}")
+    def scans_delete(pid: str, sid: str, dependents_ok: bool = False) -> JSONResponse:
+        return _json(st.delete_scan(pid, sid, dependents_ok))
+
+    @app.get("/api/trash")
+    def trash_list() -> JSONResponse:
+        return _json(trash.list())
+
+    @app.post("/api/trash/empty")
+    def trash_empty(body: EmptyTrashBody) -> JSONResponse:
+        return _json(trash.empty(body.confirm, body.items))
+
+    @app.post("/api/trash/{item}/restore")
+    def trash_restore(item: str) -> JSONResponse:
+        return _json(trash.restore(item))
+
+    # U39, U12, U34: the app's own folders, and its log for a bug report (ohs.server.folders)
+    folders = FolderManager(st)
+
+    @app.post("/api/open-folder")
+    def open_folder(body: OpenFolderBody) -> JSONResponse:
+        return _json(folders.open(body.what, body.project_id))
+
+    @app.get("/api/log/file")
+    def log_file() -> Response:
+        name = f"openhandscan-log-{datetime.now().strftime('%Y%m%d-%H%M')}.txt"
+        return Response(st.app_log.report().encode("utf-8"), media_type="text/plain; charset=utf-8",
+                        headers={"Content-Disposition": f'attachment; filename="{name}"', "Cache-Control": "no-store"})
 
     @app.get("/api/scan")
     def scan_state() -> JSONResponse:

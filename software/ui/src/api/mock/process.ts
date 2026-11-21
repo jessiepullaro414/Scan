@@ -48,7 +48,7 @@ import { mockExtent, mockForm } from "./extent";
 import type { FeatureEngine } from "./features";
 import { mockFit } from "./fit";
 import { apply, stlMesh } from "./geom";
-import { MOCK_SCAN_VALID } from "./health";
+import { MOCK_SCAN_VALID, mockPathCheck } from "./health";
 import { BUILTINS } from "./recipes";
 import { HttpError, json, nowIso, uid, type MockHost, type WorkStep } from "./host";
 import { mockLasers, type LaserPatch } from "./lasers";
@@ -62,6 +62,8 @@ import {
   fillHoles,
   meshBytes,
   removeFloaters,
+  floatersRemoved,
+  floatersSummary,
   runSync,
   smooth,
   type TriMesh,
@@ -101,6 +103,12 @@ type JobWork = Generator<WorkStep, Commit, void>;
 const SNAP_BUDGET = 200 * 1024 * 1024; // bytes of meshes kept for instant undo / redo
 
 
+
+/** U14: `removed` and the summary of a Remove loose bits result (nothing for any other mesh). */
+function removedFields(m: TriMesh): { removed?: { pieces: number; triangles: number; largest_mm: number }; summary?: string } {
+  const r = floatersRemoved.get(m);
+  return r ? { removed: r, summary: floatersSummary(r) } : {};
+}
 
 const OPS: MeshOp[] = ["remove_floaters", "fill_holes", "smooth", "decimate", "delete_faces", "keep_faces", "remove_table"];
 const BUSY: Record<MeshOp, string> = {
@@ -827,6 +835,7 @@ export class MockProcess {
           created: nowIso(),
           triangles_after: out.indices.length / 3,
           ms: Math.round(performance.now() - t0),
+          ...removedFields(out), // U14
         });
         st.cursor = st.edits.length;
         self.remember(st, st.cursor, out);
@@ -910,6 +919,8 @@ export class MockProcess {
       job_id: null,
       quality,
       tracked_pct: pct,
+      // the camera path's warning (ENGINE_PLAN X0a), in the app's words as the server gives it
+      warnings: mockPathCheck(s.name, n).warnings.map((w) => w.replace(/without a GPU/g, "without a graphics card")),
     };
   }
 
@@ -1104,7 +1115,16 @@ export class MockProcess {
       }
       const next = yield* run(this.applyOp(m, o), a + ((b - a) * i) / ops.length, a + ((b - a) * (i + 1)) / ops.length, doing(o.op));
       if (!next.indices.length) throw new Error(`“${label(o.op, o.params)}” would leave no triangles, so nothing was changed.`);
-      entries.push({ id: uid("e-"), op: o.op, params, label: label(o.op, o.params, removed), created: nowIso(), triangles_after: next.indices.length / 3, ms: Math.round(performance.now() - t0) });
+      entries.push({
+        id: uid("e-"),
+        op: o.op,
+        params,
+        label: label(o.op, o.params, removed),
+        created: nowIso(),
+        triangles_after: next.indices.length / 3,
+        ms: Math.round(performance.now() - t0),
+        ...(o.op === "remove_floaters" ? removedFields(next) : {}), // U14
+      });
       meshes.push(next);
       m = next;
     }
@@ -1211,7 +1231,14 @@ export class MockProcess {
       stl_url: `${base}/mesh.stl`,
       laser_points_url: `${base}/laser_points.ply`,
       // its own calibration status in short (H4): the mock's processing finds nothing off
-      report: { mode: s.mode, quality, frames: { processed: s.n_frames, tracked: Math.round(s.n_frames * 0.93) }, health_status: MOCK_SCAN_VALID },
+      report: {
+        mode: s.mode,
+        quality,
+        frames: { processed: s.n_frames, tracked: Math.round(s.n_frames * 0.93) },
+        health_status: MOCK_SCAN_VALID,
+        warnings: mockPathCheck(s.name, s.n_frames).warnings.map((w) => w.replace(/without a GPU/g, "without a graphics card")),
+        path_check: { state: mockPathCheck(s.name, s.n_frames).path_check.state },
+      },
     };
     (s as Scan & { quality?: ProcessQuality }).quality = quality;
     p.modified = nowIso();

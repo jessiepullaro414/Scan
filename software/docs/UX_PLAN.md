@@ -138,6 +138,54 @@ Left from the second wave, for the third (they need the server):
   "Needs a GPU" in Settings and two tooltips (U5 says "graphics card"); "Planes you calibrated
   are kept" under Line lasers.
 
+**Done (2026-11-21), the third wave: what needed the server too.** U5, U7 with U50, U14, U21,
+U34, U39, the second wave's two leftovers, and one thing the engine brought: the camera path's
+warning. Routes and fields are in `APP_API.md` ("The camera path's warning", "Rename a scan,
+the trash", "Folders and the log"). Tried on the real engine: rename, move to the trash, the
+trash's list, restore, the refusals; the project page and Home at 1024, 1280 and 1600 px.
+
+- **The camera path's warning** (ENGINE_PLAN X0a): when tracking may have slid, the scan's row
+  on the project page has an amber chip "Tracking may have slid" (the sentences on hover), the
+  viewer's processing report opens with the warning, the "Follow the camera" stage on Edit mesh
+  carries it, and the HTML report has a "Camera path" row. Older scans and scans whose path
+  held show nothing.
+- **U7, U50:** each scan row has a "More" menu with "Rename…" and "Move to trash…". A scan
+  that is recording or busy is refused in a sentence; a scan that others were merged from or
+  continue is named before it goes. Home has "Trash": deleted projects and scans, each with
+  Restore (a taken name becomes "… (restored)", nothing is overwritten), and "Empty trash…",
+  which asks a second time and deletes only the items the page listed. A new scan's default
+  name takes the next free number.
+- **U39, U12, U34:** "Open the project folder", "Open the settings folder", "Open the log
+  folder" and "Save a log for a bug report…". The app now writes its log to a file
+  (`logs/studio.log` in its data folder, 2 MB, three older ones kept). The page never sends a
+  path: only the three folders the app owns open.
+- **U5:** one line in Settings and on Home's setup card says what this computer can do. With a
+  graphics card: "Every feature works." Without: no confidence map (so the Scan check cannot
+  test the mesh), "Thin walls and edges" has no effect, tracking holds flat, plain parts less
+  well, making the mesh takes longer. "GPU" is "graphics card" everywhere a user reads.
+- **U14:** "Removed 3 loose bits, the largest 4.2 mm across (1,234 triangles)", and "Show what
+  was removed" puts the mesh before the edit beside it as a ghost.
+- **U21:** checked on the real server first: with the simulator's demo connected, the scan
+  uses the demo's own true calibration, and Setup's own target has nothing yet; the chip said
+  "Calibration loaded". It now says "Demo calibration" and why (this also answers V2 below).
+- **U15's leftover:** nothing to change. The scanner's trigger always starts an ordinary scan,
+  never a second pass.
+
+Found in review and mended: on the project page the row's buttons ran over the details at
+1280 px once "More" was always shown. "Make mesh again" is now in the row's More menu under
+about 1500 px, and beside the others above it.
+
+Left, small:
+
+- "Show what was removed" (U14) is offered right after the edit, or after Undo then Redo;
+  from any other step of the history it would need a jump of two steps.
+- A trigger press while the Scan page is set up for a second pass starts an ordinary scan,
+  without a word about the pass.
+- One hint still shows a file's path when a project file cannot be read ("Restore … from a
+  backup"): `projects._load`.
+- A scan put back from the trash is listed last in its project, not in its old place.
+- Scan check: "Seen too few times" is said as a title and again as the sentence's start.
+
 ### [ ] U51. The old names in texts the engine itself makes (found in the first wave, S)
 The server and the pages are done; these sentences are made deeper in the engine and reach
 the user through them, and the demo mirrors them (so `api/mock` is outside the pages' guard).
@@ -207,7 +255,7 @@ Words only. U4 and U47 are ticked with this.
   ("Scans measure this more finely than the board check, so their limit is lower"). The limits
   themselves are provisional (FEATURE_PLAN D10).
 
-### [ ] U5. What the computer can do is invisible until something is missing (choice, M)
+### [x] U5. What the computer can do is invisible until something is missing (choice, M)
 - "This mesh has no confidence data: it was made without a GPU ... Make it again to get it."
   (which does not help on the same PC); "GPU" and "graphics card" used in turns.
 - **Pick:** one line in Settings, About and on the Home setup card: "This computer: graphics
@@ -220,7 +268,7 @@ Words only. U4 and U47 are ticked with this.
 - **Mend:** with tone "danger" the focus starts on Cancel. Also keep the dialog open when its
   action failed.
 
-### [ ] U7. A scan cannot be renamed or deleted; the trash cannot be opened (choice, M to L)
+### [x] U7. A scan cannot be renamed or deleted; the trash cannot be opened (choice, M to L)
 - **Pick:** a menu on each scan's row with "Rename…" and "Move to trash…" (the folder goes to
   `.trash` as a project does); a "Trash" link on Home with "Restore" and "Empty trash…".
   Rename first: cheapest and most wanted.
@@ -306,7 +354,7 @@ Words only. U4 and U47 are ticked with this.
   (10 / 10 / 40 mm, "Largest piece only") follow `BUILTIN_RECIPES` (5 / 5 / 15, no "largest
   only").
 
-### [ ] U14. Removing loose bits can take a small or thin part without saying what it took (choice, S to M)
+### [x] U14. Removing loose bits can take a small or thin part without saying what it took (choice, S to M)
 - The Default recipe removes pieces under 5 mm (and under 1 % of the triangles); the history
   gives a triangle count only.
 - **Pick:** "Removed 3 loose bits, the largest 4.2 mm across", and "Show what was removed".
@@ -344,7 +392,7 @@ Words only. U4 and U47 are ticked with this.
 - **Mend:** "views" everywhere; each thumbnail gets a visible × button labelled "Delete view
   7", reachable by keyboard.
 
-### [ ] U21. The chip says "Calibrated" before any calibration (defect, or check first, S)
+### [x] U21. The chip says "Calibrated" before any calibration (defect, or check first, S)
 - With the simulator the chip reads "Calibrated" while the rail says "Not calibrated yet", and
   the Device page names another calibration file than the wizard saved.
 - **Mend:** "Demo calibration" when the demo's own is in use; check which file a simulator
@@ -404,7 +452,7 @@ Words only. U4 and U47 are ticked with this.
 - `text-subtle` on the panel is 3.85 to 1 at 10 to 11 px (help lines, hints, the gauge's
   scale); 4.5 to 1 is the usual floor. **Mend:** lighten it to about 5 to 1.
 
-### [ ] U34. No log inside the app (choice, M)
+### [x] U34. No log inside the app (choice, M)
 - Every hint says to run `ohs -v app`. **Pick:** Settings, About: "Open the log folder" and
   "Save a log for a bug report…".
 
@@ -427,7 +475,7 @@ Words only. U4 and U47 are ticked with this.
 - **Mend:** the first line under the status: "Failed: too few frames tracked. Make mesh again,
   or at Preview quality."
 
-### [ ] U39. Developer text on the project page (defect, S)
+### [x] U39. Developer text on the project page (defect, S)
 - "Raw recordings stay in scans/<id>/recording…" → a button "Open the project folder"; the
   size as a visible link "1.15 GB · Free space…" instead of a hover.
 
@@ -471,7 +519,7 @@ Words only. U4 and U47 are ticked with this.
 - **Pick:** Preview, Standard, Best; one "Mesh detail" control in the Preset box, which Fuse
   uses; trial stages marked "Trial" in their title.
 
-### [ ] U50. Scans are called "Scan 1, Scan 2…" and can never be renamed (choice, S; with U7)
+### [x] U50. Scans are called "Scan 1, Scan 2…" and can never be renamed (choice, S; with U7)
 
 ## One name for each thing
 

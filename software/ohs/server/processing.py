@@ -107,7 +107,7 @@ from typing import Any, Callable
 import numpy as np
 
 from ohs.server.jobs import JobCancelled, failure_notice, failure_text
-from ohs.server.projects import report_summary
+from ohs.server.projects import report_summary, user_warnings
 from ohs.server.protocol import (QUALITY_NAMES, ApiError, jsonable, normalize_quality, now_iso, plain_reason,
                                  quality_or_none)
 from ohs.server.util import safe_call
@@ -556,6 +556,35 @@ def _set_straighten(report: dict, rep: dict | None) -> bool:
     return True
 
 
+def removed_pieces(V: np.ndarray, F: np.ndarray, kept: np.ndarray | None) -> dict | None:
+    """What "Remove loose bits" took (UX_PLAN U14): ``{pieces, triangles, largest_mm}`` of the pieces of ``(V, F)``
+    (faces joined through shared edges, as the engine counts them) that have no face among ``kept``; ``largest_mm``
+    is the largest bounding-box diagonal, the size the engine judges a piece by. None when nothing was removed."""
+    from ohs.mesh.clean import piece_sizes
+
+    if kept is None or len(kept) >= len(F):
+        return None
+    flab, tri, diag = piece_sizes(V, F)
+    gone = np.ones(len(tri), dtype=bool)
+    gone[np.unique(flab[np.asarray(kept, dtype=np.int64)])] = False
+    if not gone.any():
+        return None
+    return {"pieces": int(gone.sum()), "triangles": int(tri[gone].sum()), "largest_mm": round(float(diag[gone].max()), 1)}
+
+
+def _carry_path_check(report: dict, track_rep: dict | None) -> None:
+    """A stage fused at given poses (straighten, fuse) has no camera path of its own to check: its report takes the
+    track stage's ``path_check`` and ``warnings`` (ENGINE_PLAN X0a), since its poses come from that path. Nothing
+    when the track's report has no check (processed before it)."""
+    if not isinstance(track_rep, dict) or not isinstance(track_rep.get("path_check"), dict):
+        return
+    if report.get("path_check") is None:
+        report["path_check"] = track_rep["path_check"]
+    own = [w for w in report.get("warnings") or [] if isinstance(w, str)]
+    carried = [w for w in track_rep.get("warnings") or [] if isinstance(w, str) and w not in own]
+    report["warnings"] = carried + own
+
+
 def preset_meshing(p: Any, width: int, voxel_mm: float | None, thin_walls: str | None) -> Any:
     """``ProcessParams`` ``p`` with a preset's meshing values (FEATURE_PLAN P2): the voxel size and the thin
     walls setting; ``None`` leaves a value as ``p`` has it (General: ``p`` itself). A processing stage and a merge
@@ -690,7 +719,7 @@ def _stats(V: np.ndarray, F: np.ndarray, S: np.ndarray | None, filled: np.ndarra
 def _empty_state(pid: str, sid: str) -> dict:
     base = {"state": "none", "summary": None, "when": None, "job_id": None}
     return {"format": FORMAT, "project_id": pid, "scan_id": sid,
-            "stages": {"track": {**base, "quality": None, "tracked_pct": None, "voxel_mm": None},
+            "stages": {"track": {**base, "quality": None, "tracked_pct": None, "voxel_mm": None, "warnings": []},
                        "straighten": {**base, "loops": None, "correction_mm": None, "correction_deg": None,
                                       "crossings": None},
                        "fuse": {**base, "voxel_mm": None},
@@ -921,7 +950,7 @@ class ProcessManager:
         info.update(state="done", when=entry.get("created") or now_iso(),
                     quality=quality,
                     tracked_pct=round(100 * float(frac), 1) if isinstance(frac, (int, float)) else None,
-                    summary=self._track_summary(report, quality))
+                    summary=self._track_summary(report, quality), warnings=user_warnings(report))
         stats = _stats(V, F, S)
         st["base"] = {"triangles": int(len(F)), "vertices": int(len(V)), "stage": "track", "stats": stats}
         st["edits"], st["cursor"], st["version"] = [], 0, 1
@@ -934,6 +963,11 @@ class ProcessManager:
         with self._lock:
             for key in [k for k in self._scans if k[0] == pid]:
                 del self._scans[key]
+
+    def forget_scan(self, pid: str, sid: str) -> None:
+        """Drop the cached state of one scan (it was moved to the trash; a restore reads it again from disk)."""
+        with self._lock:
+            self._scans.pop((pid, sid), None)
 
     def wait_moves(self, pid: str) -> None:
         """Wait for an undo / redo still writing the files of one of the project's scans (it holds
@@ -1335,12 +1369,18 @@ class ProcessManager:
 
     @staticmethod
     def _summary(op: str, params: dict, V: np.ndarray, F: np.ndarray, V2: np.ndarray, F2: np.ndarray,
-                 before: dict | None, after: dict) -> str:
-        """What an edit did, in plain words (from the stats before and after)."""
+                 before: dict | None, after: dict, kept: np.ndarray | None = None) -> str:
+        """What an edit did, in plain words (from the stats before and after; ``kept``: the faces
+        ``remove_floaters`` kept, to say how large the largest removed piece was, U14)."""
         b = before or {}
         if op == "remove_floaters":
             if len(F2) == len(F):
                 return "No loose bits matched: nothing was removed"
+            gone = removed_pieces(V, F, kept)
+            if gone is not None:
+                n, size = gone["pieces"], f"{gone['largest_mm']:.1f} mm across"
+                return (f"Removed {n:,} loose bit{'s' if n != 1 else ''}, {'the largest ' if n != 1 else ''}{size} "
+                        f"({len(F) - len(F2):,} triangles)")
             n = int(b.get("components", 0)) - int(after["components"])
             return f"Removed {n:,} loose bit{'s' if n != 1 else ''} ({len(F) - len(F2):,} triangles)"
         if op == "fill_holes":
@@ -1372,8 +1412,9 @@ class ProcessManager:
     def _commit_edit(self, sp: ScanProcess, op: str, params: dict, label: str, V: np.ndarray, F: np.ndarray,
                      ms: float, summary: str, job_id: str | None, faces: np.ndarray | None = None,
                      stats: dict | None = None, S: np.ndarray | None = None, filled: np.ndarray | None = None,
-                     L: np.ndarray | None = None) -> dict:
-        """Append an edit after the cursor (the redo steps are dropped) and show it."""
+                     L: np.ndarray | None = None, extra: dict | None = None) -> dict:
+        """Append an edit after the cursor (the redo steps are dropped) and show it. ``extra``: more fields of the
+        entry (``removed`` of Remove loose bits, U14)."""
         from ohs.mesh import vertex_normals
 
         if stats is None:
@@ -1385,7 +1426,7 @@ class ProcessManager:
             eid = f"e-{uuid.uuid4().hex[:8]}"
             entry = {"id": eid, "op": op, "params": params, "label": label, "created": now_iso(),
                      "triangles_after": int(len(F)), "ms": int(round(ms)), "summary": summary, "job_id": job_id,
-                     "stats": stats}
+                     "stats": stats, **(extra or {})}
             if faces is not None:
                 sp.selection_path(eid).parent.mkdir(parents=True, exist_ok=True)
                 np.save(sp.selection_path(eid), faces.astype(np.int64))
@@ -1470,9 +1511,12 @@ class ProcessManager:
         L2 = carry_looks(_carry_op(op), V, F, L, V2, by, **bp)  # each vertex's count of looks, as its sigma
         Fl2 = carry_filled(_carry_op(op), V, F, Fl, V2, F2, by, **bp)
         stats = _stats(V2, F2, S2, Fl2)
-        summary = self._table_summary(info) if info is not None else self._summary(op, params, V, F, V2, F2, before, stats)
+        summary = (self._table_summary(info) if info is not None else
+                   self._summary(op, params, V, F, V2, F2, before, stats, kept=by if op == "remove_floaters" else None))
+        removed = removed_pieces(V, F, by) if op == "remove_floaters" else None  # U14: what it took, for the page
         prog(0.94, f"{label}: saving", force=True)
-        return self._commit_edit(sp, op, params, label, V2, F2, ms, summary, ctx.job.id, faces, stats, S2, Fl2, L2)
+        return self._commit_edit(sp, op, params, label, V2, F2, ms, summary, ctx.job.id, faces, stats, S2, Fl2, L2,
+                                 extra={"removed": removed} if removed is not None else None)
 
     def table_preview(self, pid: str, sid: str, margin_mm: float | None = None, version: int | None = None,
                       keep: list | None = None) -> dict:
@@ -1744,6 +1788,7 @@ class ProcessManager:
                 st_rep = _read_json(sp.dir / "straighten.json")
                 if st_rep is not None:
                     _set_straighten(report, st_rep)
+                _carry_path_check(report, _read_json(sp.dir / "track" / "report.json"))
             (tmp / "report.json").write_text(json.dumps(jsonable(report), indent=1), encoding="utf-8")
             _move_dir(tmp, sp.dir / name)
         finally:
@@ -1774,7 +1819,7 @@ class ProcessManager:
                       lambda: self.st.setup.record_scan_health(sp.pid, sp.sid, report, sp.recording_dir))
             self._stage_end(sp, "track", state="done", summary=self._track_summary(report, quality), quality=quality,
                             tracked_pct=round(100.0 * float(fr.get("tracked_fraction", 0.0)), 1), voxel_mm=voxel_mm,
-                            job_id=ctx.job.id)
+                            job_id=ctx.job.id, warnings=user_warnings(report))
         except (JobCancelled, InterruptedError):
             self._stage_restore(sp, "track", before)
             raise

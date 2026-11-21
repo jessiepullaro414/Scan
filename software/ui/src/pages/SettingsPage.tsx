@@ -17,9 +17,7 @@ import {
   Wand,
   Zap,
   CircleExclamationPoint,
-  Check,
   ChevronDown,
-  Copy,
   type LucideIcon,
 } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
@@ -37,7 +35,9 @@ import { FOUR_LASERS, TWO_LASERS, laserChoice, laserColor, laserLabel, type Lase
 import { useConnection } from "../store/connection";
 import { configPathOf } from "../store/setup";
 import { useUi } from "../store/ui";
-import { cn, copyText } from "../lib/util";
+import { cn } from "../lib/util";
+import { OpenFolderButton, SaveLogButton } from "../components/FolderButtons";
+import { ComputerLine } from "../components/ComputerLine";
 
 const SECTION_ICON: Record<string, LucideIcon> = {
   general: FolderOpen,
@@ -109,9 +109,7 @@ function Value({ k, v }: { k: string; v: unknown }): ReactNode {
  */
 function AdvancedSettings({ settings, loading, onReload }: { settings: Settings; loading: boolean; onReload: () => void }) {
   const [open, setOpen] = useState(false);
-  const [copied, setCopied] = useState(false);
   const file = configPathOf(settings) ?? (typeof settings.config_file === "string" ? settings.config_file : null) ?? "~/.ohs/config.toml";
-  const folder = file.replace(/[\\/][^\\/]*$/, "") || file;
   const bodyId = "settings-advanced";
   return (
     <section className="mt-5 rounded-xl border border-line bg-surface shadow-sm" aria-label={ADVANCED_TITLE}>
@@ -134,19 +132,7 @@ function AdvancedSettings({ settings, loading, onReload }: { settings: Settings;
           any other, edit the file and start the app again.
         </p>
         <div className="mt-3 flex flex-wrap items-center gap-2">
-          <Button
-            size="sm"
-            icon={copied ? Check : Copy}
-            onClick={async () => {
-              if (await copyText(folder)) {
-                setCopied(true);
-                setTimeout(() => setCopied(false), 1600);
-              }
-            }}
-            title={folder}
-          >
-            {copied ? "Copied" : "Copy the settings folder's path"}
-          </Button>
+          <OpenFolderButton what="settings" label="Open the settings folder" />
           <Button size="sm" variant="ghost" icon={RefreshCw} loading={loading} onClick={onReload}>
             Read the file again
           </Button>
@@ -181,7 +167,7 @@ type ComputeInfo = {
   device?: { name?: string; kind?: string; memory_mb?: number } | null;
 };
 
-/** Where the heavy processing runs (health.engine.compute, M3): the GPU's name, or the CPU and why. */
+/** Where the heavy processing runs (health.engine.compute, M3): the graphics card's name, or none (U5: the words). */
 function ComputeLabel({ c }: { c: unknown }) {
   const v = c && typeof c === "object" ? (c as ComputeInfo) : null;
   if (!v) return <span className="text-subtle">–</span>;
@@ -189,15 +175,11 @@ function ComputeLabel({ c }: { c: unknown }) {
     const gb = v.device.memory_mb ? `, ${(v.device.memory_mb / 1024).toFixed(1)}\u202fGB` : "";
     return (
       <Badge tone="ok" dot>
-        {`GPU: ${v.device.name} (${v.device.kind ?? "gpu"}${gb})`}
+        {`${v.device.name} (${v.device.kind === "discrete" ? "separate card" : v.device.kind === "integrated" ? "built in" : "graphics card"}${gb})`}
       </Badge>
     );
   }
-  return (
-    <span className="text-xs text-fg" title={v.status}>
-      CPU <span className="text-subtle">· {v.status ?? "no GPU in use"}</span>
-    </span>
-  );
+  return <span className="text-xs text-fg">None in use</span>;
 }
 
 const THIN_WALLS: ThinWalls[] = ["auto", "on", "off"];
@@ -234,7 +216,7 @@ function MeshingSection({ settings, onSaved }: { settings: Settings; onSaved: (s
           <div className="text-sm text-fg">Thin walls and edges</div>
           <div className="text-xs text-subtle">
             Keeps sheet metal, ribs and edges from coming out too thick. Automatic uses it for scans without markers. If a
-            mesh shows dents or many more pinholes, set it to Off and make the mesh again. Needs a GPU.
+            mesh shows dents or many more pinholes, set it to Off and make the mesh again. Needs a graphics card.
           </div>
         </div>
         <Segmented
@@ -498,11 +480,13 @@ export function SettingsPage() {
           ))
         )}
         <Section title="About" icon={Info}>
+          {/* U5: what this computer can do, before something is missing */}
+          <ComputerLine className="mb-3" />
           <KeyValue
             rows={[
               ["Studio UI", <span className="font-mono text-xs">0.3.0</span>],
               ["Engine", health ? <span className="font-mono text-xs">{`${health.app} ${health.version}`}</span> : serverVersion ?? "–"],
-              ["Processing", health ? <ComputeLabel c={(health.engine as { compute?: unknown }).compute} /> : "–"],
+              ["Graphics card", health ? <ComputeLabel c={(health.engine as { compute?: unknown }).compute} /> : "–"],
               [
                 "Engine libraries",
                 health ? (
@@ -525,6 +509,12 @@ export function SettingsPage() {
               MOCK ? ["Mode", <Badge tone="warn">Demo (in-browser mock engine)</Badge>] : null,
             ]}
           />
+          {/* U34: the app's log, inside the app: its folder, and a copy to attach to a bug report */}
+          <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-line pt-3">
+            <OpenFolderButton what="logs" label="Open the log folder" />
+            <SaveLogButton />
+          </div>
+          <p className="mt-1.5 text-xs text-subtle">If something goes wrong, save the log and attach it to your bug report.</p>
         </Section>
       </div>
 

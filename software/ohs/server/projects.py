@@ -7,6 +7,7 @@
                             scans/<scan_id>/thumbnail.jpg  left camera view at the end of the scan
                             references/                    reference models of the part (ohs.server.reference)
 <projects_dir>/.trash/<project_id>-<time>/                 deleted projects (never hard-deleted)
+<projects_dir>/.trash/<project_id>--<scan_id>-<time>/      deleted scans, with trashed-scan.json (ohs.server.trash)
 ```
 
 ``project.json`` holds ``{id, name, created, modified, scans: [{id, name, created, mode, status}]}``
@@ -44,9 +45,10 @@ from pathlib import Path
 from typing import Any
 
 from ohs import __version__
-from ohs.server.protocol import ApiError, jsonable, now_iso, quality_or_none
+from ohs.server.protocol import ApiError, jsonable, now_iso, quality_or_none, sentence
 
-__all__ = ["KEEP_MODES", "ProjectStore", "RESULT_FILES", "SCAN_STATUSES", "report_summary"]
+__all__ = ["KEEP_MODES", "ProjectStore", "RESULT_FILES", "SCAN_STATUSES", "path_check_short", "report_summary",
+           "user_warnings", "user_words"]
 
 log = logging.getLogger(__name__)
 
@@ -83,6 +85,20 @@ def _clean_name(name: Any, what: str) -> str:
     return n
 
 
+def _next_scan_name(scans: list[dict]) -> str:
+    """"Scan <n>" for a new scan: the count plus one as before, or the next number no scan of the project has (a scan
+    moved to the trash or renamed leaves a gap; U50: no two scans "Scan 3")."""
+    used = set()
+    for e in scans:
+        m = re.fullmatch(r"Scan (\d+)", str(e.get("name") or ""))
+        if m:
+            used.add(int(m.group(1)))
+    k = len(scans) + 1
+    while k in used:
+        k += 1
+    return f"Scan {k}"
+
+
 def check_id(value: str, what: str) -> str:
     if not isinstance(value, str) or not _SAFE_ID.match(value) or ".." in value:
         raise ApiError(404, f"There is no such {what}: it may have been deleted.", "Go back to the projects list.")
@@ -105,7 +121,44 @@ def report_summary(report: dict) -> dict:
     hs = report.get("health_status")  # the scan's own calibration status (H3), in short for its card (H4)
     if isinstance(hs, dict) and hs.get("state") in ("valid", "check", "recalibrate"):
         out["health_status"] = {"state": hs["state"], "part": hs.get("part"), "reason": hs.get("reason")}
+    # the camera path's check for a slide (ENGINE_PLAN X0a): absent for a scan processed before it
+    if "warnings" in report or "path_check" in report:
+        out["warnings"] = user_warnings(report)
+    pc = path_check_short(report)
+    if pc is not None:
+        out["path_check"] = pc
     return jsonable(out)
+
+
+#: the engine's words for a graphics card, and the app's (UX_PLAN U5: "graphics card" only)
+_GPU_WORDS = ((re.compile(r"\bwithout a GPU\b"), "without a graphics card"), (re.compile(r"\ba GPU\b"), "a graphics card"),
+              (re.compile(r"\bthe GPU\b"), "the graphics card"), (re.compile(r"\bGPU\b"), "graphics card"))
+
+
+def user_words(text: str) -> str:
+    """An engine sentence in the app's words: "graphics card" for "GPU" (UX_PLAN U5)."""
+    for rx, word in _GPU_WORDS:
+        text = rx.sub(word, text)
+    return sentence(text)
+
+
+def user_warnings(report: Any) -> list[str]:
+    """A processing report's ``warnings`` (sentences for the user, ENGINE_PLAN X0a) in the app's words; [] when
+    there are none or the report has none."""
+    ws = report.get("warnings") if isinstance(report, dict) else None
+    if not isinstance(ws, list):
+        return []
+    return [user_words(w) for w in ws if isinstance(w, str) and w.strip()]
+
+
+def path_check_short(report: Any) -> dict | None:
+    """The camera path's check in short, for the scan's card: ``{state, jump_mm, frame}``; None when the report has
+    no check (processed before it, or at given poses without the track's)."""
+    pc = report.get("path_check") if isinstance(report, dict) else None
+    if not isinstance(pc, dict):
+        return None
+    state = pc.get("state") if pc.get("state") in ("ok", "warn") else None
+    return {"state": state, "jump_mm": pc.get("jump_mm"), "frame": pc.get("frame")}
 
 
 class ProjectStore:
@@ -340,7 +393,7 @@ class ProjectStore:
         """Register a new scan (status ``recording``); returns ``(Scan, recording folder)`` (not created)."""
         with self._lock:
             data = self._load(pid)
-            n = _clean_name(name, "scan") if name else f"Scan {len(data['scans']) + 1}"
+            n = _clean_name(name, "scan") if name else _next_scan_name(data["scans"])
             stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
             sid, k = f"scan-{stamp}", 2
             ids = {e.get("id") for e in data["scans"]}
@@ -366,6 +419,66 @@ class ProjectStore:
             self._touch(data)
             self._save(pid, data)
             return self._scan_view(pid, entry)
+
+    def rename_scan(self, pid: str, sid: str, name: str) -> dict:
+        """``PATCH /api/projects/{pid}/scans/{sid}`` (UX_PLAN U7, U50): the scan's new name; its id and folder stay."""
+        n = _clean_name(name, "scan")
+        with self._lock:
+            data = self._load(pid)
+            entry = self._scan_entry(data, sid)
+            entry["name"] = n
+            self._touch(data)
+            self._save(pid, data)
+            return self._scan_view(pid, entry)
+
+    def scan_dependents(self, pid: str, sid: str) -> list[dict]:
+        """The scans of the project that depend on scan ``sid``: merged from it (``merged_from``) or a second pass that
+        continues it (``continues.scan_id``). ``[{id, name, how: "merged" | "continues"}]``."""
+        with self._lock:
+            data = self._load(pid)
+        out = []
+        for e in data["scans"]:
+            if e.get("id") == sid:
+                continue
+            if any(isinstance(m, dict) and m.get("id") == sid for m in e.get("merged_from") or []):
+                out.append({"id": e["id"], "name": e.get("name", e["id"]), "how": "merged"})
+            elif isinstance(e.get("continues"), dict) and e["continues"].get("scan_id") == sid:
+                out.append({"id": e["id"], "name": e.get("name", e["id"]), "how": "continues"})
+        return out
+
+    def trash_scan(self, pid: str, sid: str) -> str:
+        """Move the scan's folder to ``.trash/`` with where it came from (:mod:`ohs.server.trash`) and take it off the
+        project's list; returns the trash item's id. Nothing is deleted. The caller checks that the scan is not busy."""
+        from ohs.server.trash import SCAN_MARK, _move
+
+        with self._lock:
+            data = self._load(pid)
+            entry = dict(self._scan_entry(data, sid))
+            src = self.scan_dir(pid, sid)
+            trash = self.root / ".trash"
+            trash.mkdir(parents=True, exist_ok=True)
+            stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+            dst, k = trash / f"{pid}--{sid}-{stamp}", 2
+            while dst.exists():
+                dst, k = trash / f"{pid}--{sid}-{stamp}-{k}", k + 1
+            if src.is_dir():
+                _move(src, dst)
+            else:  # an entry without a folder: the mark alone keeps it
+                dst.mkdir()
+            mark = {"kind": "scan", "project_id": pid, "project_name": data.get("name"), "entry": entry,
+                    "deleted": now_iso(), "format_version": FORMAT_VERSION}
+            (dst / SCAN_MARK).write_text(json.dumps(jsonable(mark), indent=2), encoding="utf-8")
+            data["scans"] = [e for e in data["scans"] if e.get("id") != sid]
+            self._touch(data)
+            try:
+                self._save(pid, data)
+            except OSError:
+                (dst / SCAN_MARK).unlink(missing_ok=True)
+                if not src.exists():
+                    _move(dst, src)  # back, as it was
+                raise
+        log.info("moved scan %s/%s to %s", pid, sid, dst)
+        return dst.name
 
     def remove_scan(self, pid: str, sid: str) -> None:
         """Forget a scan that never recorded anything (a scan start that failed); its folder is removed."""

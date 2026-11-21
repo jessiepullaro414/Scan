@@ -66,9 +66,10 @@ import { MockSections } from "./section";
 import { MockFlush } from "./flush";
 import { MockReport } from "./report";
 import { keepModeArg, keepThinArg, MockKeep } from "./keep";
-import { mockScanStatus, SEEDED_SCAN_HEALTH } from "./health";
+import { mockPathCheck, mockScanStatus, SEEDED_SCAN_HEALTH } from "./health";
 import { scanHealthOf } from "../../lib/calibHealth";
 import { MockReferences } from "./reference";
+import { MockTrash, nextScanName } from "./trash";
 import { MockProcess, mockStep } from "./process";
 import { MockPresets } from "./presets";
 import { cameraByIndex, MockSetup } from "./setup";
@@ -237,6 +238,8 @@ class MockBackend {
   private simReady = false;
   private simJobId: string | null = null;
   private projects = new Map<string, Project>();
+  /** U7: deleted projects and scans (trash.ts). */
+  private trash = new MockTrash(this.projects);
   private jobs = new Map<string, Job>();
   private jobMeta = new Map<string, JobMeta>();
   private setup: MockSetup;
@@ -371,7 +374,8 @@ class MockBackend {
     if (b0 instanceof Blob) raw = await b0.arrayBuffer();
     else if (b0 instanceof ArrayBuffer) raw = b0;
     else if (ArrayBuffer.isView(b0)) raw = b0.buffer.slice(b0.byteOffset, b0.byteOffset + b0.byteLength) as ArrayBuffer;
-    if (method === "GET" || raw) for (const [k, v] of url.searchParams) body[k] = v; // a GET's query (features/relate?a=&b=), an upload's name
+    // a GET's query (features/relate?a=&b=), an upload's name, a DELETE's (dependents_ok)
+    if (method === "GET" || method === "DELETE" || raw) for (const [k, v] of url.searchParams) body[k] = v;
     if (!url.pathname.includes("/files/") && !this.opts.fast) await new Promise((r) => setTimeout(r, 70 + Math.random() * 120));
     try {
       return await this.route(method, url.pathname, body, raw);
@@ -425,7 +429,26 @@ class MockBackend {
     const is = (m: string, n: number) => method === m && seg.length === n;
 
     if (a === "health" && is("GET", 1))
-      return json(200, { app: "openhandscan", version: VERSION, api: VERSION, engine: { opencv: "5.0.0", open3d: "0.20.0", mode: "demo" } });
+      return json(200, {
+        app: "openhandscan",
+        version: VERSION,
+        api: VERSION,
+        engine: {
+          opencv: "5.0.0",
+          open3d: "0.20.0",
+          mode: "demo",
+          // U5: what this computer can do (`ohs.compute.describe()`); ?health=cpu shows a computer without a graphics card
+          compute:
+            this.opts.health === "cpu"
+              ? { backend: "cpu", status: "no OpenCL GPU was found: everything runs on the CPU", device: null, preference: "auto" }
+              : {
+                  backend: "gpu",
+                  status: "GPU: AMD Radeon 680M (integrated, 4096 MB, AMD Accelerated Parallel Processing)",
+                  device: { name: "AMD Radeon 680M", vendor: "AMD", kind: "integrated", memory_mb: 4096 },
+                  preference: "auto",
+                },
+        },
+      });
     if (a === "settings" && is("GET", 1)) return json(200, SETTINGS);
 
     if (a === "device") {
@@ -447,6 +470,28 @@ class MockBackend {
         }
         return json(200, this.device);
       }
+    }
+
+    if (a === "open-folder" && is("POST", 1)) {
+      // U39, U12, U34: the engine opens the folder in the file manager; the demo has none (the page says so)
+      const what = body.what;
+      if (what !== "settings" && what !== "logs" && what !== "project")
+        throw new HttpError(422, "The app does not know this folder.", "Open the settings folder, the log folder or a project's folder.");
+      if (what === "project" && !this.projects.has(String(body.project_id ?? "")))
+        throw new HttpError(404, "There is no such project: it may have been deleted.", "Pick a project from the projects list, or make a new one.");
+      return json(200, { opened: true, what });
+    }
+    if (a === "log" && b === "file" && is("GET", 2)) {
+      // U34: the app's log for a bug report (the demo's is short)
+      const text = `OpenHandScan Studio ${VERSION}: the app's log, saved ${nowIso()}\nComputer: the in-browser demo\n\n${nowIso()} INFO ohs.server.studio: the demo engine started\n`;
+      return new Response(text, { status: 200, headers: { "content-type": "text/plain; charset=utf-8" } });
+    }
+
+    if (a === "trash") {
+      // U7: the trash (trash.ts)
+      if (is("GET", 1)) return json(200, this.trash.list());
+      if (b === "empty" && is("POST", 2)) return json(200, this.trash.empty(body.confirm, body.items));
+      if (b && c === "restore" && is("POST", 3)) return json(200, this.trash.restore(b));
     }
 
     if (a === "projects") {
@@ -473,10 +518,11 @@ class MockBackend {
       if (p && is("DELETE", 2)) {
         if (this.sim?.projectId === p.id) throw new HttpError(409, "This project is being scanned", "Stop the scan first.");
         this.projects.delete(p.id);
+        this.trash.addProject(p);
         return json(204, null);
       }
       // R1: disk use; R2: what a scan keeps (keep.ts)
-      if (p && c === "disk" && is("GET", 3)) return json(200, this.keep.projectDisk(p));
+      if (p && c === "disk" && is("GET", 3)) return json(200, { ...this.keep.projectDisk(p), trash: this.trash.counts() });
       if (p && c === "keep" && is("GET", 3)) return json(200, this.keep.projectPlan(p, keepModeArg(body.mode), keepThinArg(body.thin, keepModeArg(body.mode))));
       if (p && c === "keep" && is("POST", 3)) return json(200, this.keep.projectApply(p, keepModeArg(body.mode), body.confirm === true, keepThinArg(body.thin, keepModeArg(body.mode))));
       // M4: align two scans or several, merge them into a new one
@@ -497,6 +543,25 @@ class MockBackend {
       if (p && c === "scans" && d) {
         const s = p.scans.find((x) => x.id === d);
         if (!s) throw new HttpError(404, "Scan not found");
+        // U7, U50: rename a scan, move it to the trash (the engine's refusals)
+        if (is("PATCH", 4)) {
+          const name = String(body.name ?? "").split(/\s+/).filter(Boolean).join(" ");
+          if (!name) throw new HttpError(400, "The scan name is empty.", "Type a name for the scan.");
+          s.name = name;
+          return json(200, s);
+        }
+        if (is("DELETE", 4)) {
+          const job = [...this.jobs.values()].find((j) => (j.state === "queued" || j.state === "running") && (j as { scan_id?: string }).scan_id === s.id);
+          if (s.status === "recording") throw new HttpError(409, "This scan is recording.", "Stop the scan first, then move it to the trash.");
+          if (job || s.status === "processing")
+            throw new HttpError(409, "This scan is busy: its mesh is being made, or it is being aligned or merged.", "Wait for it to finish (see Jobs), or cancel it, then move it to the trash.");
+          const deps = p.scans.filter((x) => x.id !== s.id && ((x.continues as { scan_id?: string } | undefined)?.scan_id === s.id || x.merged_from?.some((m) => m.id === s.id)));
+          if (deps.length && body.dependents_ok !== true && body.dependents_ok !== "true")
+            throw new HttpError(409, `Other scans depend on this one: ${deps.map((x) => `“${x.name}”`).join(", ")}.`, "They keep their own meshes, but they cannot be made again from this scan once it is in the trash. Move it to the trash anyway, or keep it.");
+          p.scans = p.scans.filter((x) => x.id !== s.id);
+          p.n_scans = p.scans.length;
+          return json(200, { item: this.trash.addScan(p, s) });
+        }
         if (e === "keep" && is("GET", 5)) return json(200, this.keep.plan(p, s, keepModeArg(body.mode), keepThinArg(body.thin, keepModeArg(body.mode))));
         if (e === "keep" && is("POST", 5)) return json(200, this.keep.apply(p, s, keepModeArg(body.mode), body.confirm === true, keepThinArg(body.thin, keepModeArg(body.mode))));
         // what was removed to free space (R2) cannot be used: the same refusals as the engine
@@ -722,7 +787,7 @@ class MockBackend {
         connected: true,
         camera: { connected: true, info: { width: 1280, height: 800, fps: 30, frames: 1800 } },
         pico: null,
-        calibration: { ...SIM_CALIB, path: `${path.replace(/[\\/]+$/, "")}/calibration.json` },
+        calibration: { ...SIM_CALIB, path: `${path.replace(/[\\/]+$/, "")}/calibration.json`, source: "recording" },
         replay: { path, loop: body?.loop ?? true },
       };
     } else {
@@ -732,7 +797,7 @@ class MockBackend {
         connected: true,
         camera: { connected: true, info: { width: 1280, height: 800, fps: 30, scene: "sphere_on_plane" } },
         pico: null,
-        calibration: { ...SIM_CALIB },
+        calibration: { ...SIM_CALIB, source: "demo" }, // U21: the demo's own true calibration
         replay: { path: "~/.ohs/studio/sim/demo", loop: true },
         sim_scene: "demo",
         imu_stream: true,
@@ -779,7 +844,7 @@ class MockBackend {
     const p = this.projects.get(pid);
     if (!p) throw new HttpError(404, "Project not found", "Choose another project, or create one.");
     const mode: ScanMode = body.mode === "markers" ? "markers" : "markerless";
-    const name = typeof body.name === "string" && body.name.trim() ? body.name.trim() : `Scan ${p.scans.length + 1}`;
+    const name = typeof body.name === "string" && body.name.trim() ? body.name.trim() : nextScanName(p.scans); // U50
     // N2: the scan this one is a second pass of (refused before anything is made); its preset unless another is given
     const pass = body.continues !== undefined && body.continues !== null ? this.passes.link(p, body.continues) : null;
     const firstPreset = pass && body.preset === undefined && body.preset_values === undefined ? p.scans.find((x) => x.id === pass.link.scan_id)?.preset : undefined;
@@ -1028,7 +1093,17 @@ class MockBackend {
   private reportSummary(s: Scan, quality: ProcessQuality): Record<string, unknown> {
     const n = Math.ceil(s.n_frames / mockStep(s, quality));
     const health = SEEDED_SCAN_HEALTH[s.name]; // its own calibration status, in short (H4); none: made before H3
-    return { mode: s.mode, quality, frames: { processed: n, tracked: Math.round(n * 0.93) }, ...(health ? { health_status: health } : {}) };
+    // the camera path's check in short (ENGINE_PLAN X0a); the server writes "graphics card" where the engine says "GPU"
+    const path = mockPathCheck(s.name, n);
+    const pc = path.path_check;
+    return {
+      mode: s.mode,
+      quality,
+      frames: { processed: n, tracked: Math.round(n * 0.93) },
+      ...(health ? { health_status: health } : {}),
+      warnings: path.warnings.map((w) => w.replace(/without a GPU/g, "without a graphics card")),
+      path_check: { state: pc.state, jump_mm: pc.jump_mm, frame: pc.frame },
+    };
   }
 
   private report(p: Project, s: Scan, quality: ProcessQuality): Record<string, unknown> {
@@ -1056,6 +1131,7 @@ class MockBackend {
       ground_truth: { n: tracked, rms_trans_mm: 0.41, final_trans_mm: 0.62, trans_mm: { mean: 0.36, median: 0.33, p95: 0.78, max: 1.12 }, rot_deg: { mean: 0.08, median: 0.07, p95: 0.17, max: 0.24 } },
       wall_time_s: quality === "best" ? 148.4 : quality === "standard" ? 74.2 : 21.8,
       ...(own ? { health_status: mockScanStatus(own) } : {}),
+      ...mockPathCheck(s.name, n), // the engine's own words (ENGINE_PLAN X0a)
     };
   }
 
@@ -1304,6 +1380,15 @@ class MockBackend {
     ]);
     mk("Fender flare, left", 27, [{ name: "Wheel arch", status: "processed", quality: "preview", mode: "markers", n_frames: 1530, duration_s: 51 }]);
     mk("Coffee can demo", 96, []);
+    // U7: the trash holds a scan of the bracket and an old project, so the demo shows it
+    const bracket = [...this.projects.values()].find((x) => x.name === "Intake manifold bracket");
+    if (bracket) {
+      const first: Scan = { id: uid("s-"), name: "Bracket top (first try)", created: nowIso(-30 * 3600), mode: "markerless", n_frames: 420, duration_s: 14, status: "recorded", result: null };
+      this.trash.addScan(bracket, first, 20 * 3600);
+    }
+    const old = mk("Throttle body (old)", 400, [{ name: "Scan 1", status: "recorded", n_frames: 300, duration_s: 10 }]);
+    this.projects.delete(old.id);
+    this.trash.addProject(old, 300 * 3600);
   }
 }
 

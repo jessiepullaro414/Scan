@@ -123,10 +123,16 @@ def project_disk_use(store: ProjectStore, pid: str) -> dict[str, Any]:
     parts = {"recording": sum(s["recording"] for s in scans), "stages": sum(s["stages_bytes"] for s in scans),
              "undo": sum(s["undo"] for s in scans), "result": sum(s["result"] for s in scans)}
     trash_dir = store.root / ".trash"
-    try:
-        n_trash = sum(1 for e in os.scandir(trash_dir) if e.is_dir(follow_symlinks=False))
+    n_trash = n_trash_scans = 0
+    try:  # the trash's projects and scans (ohs.server.trash): a scan's folder carries trashed-scan.json
+        for e in os.scandir(trash_dir):
+            if e.is_dir(follow_symlinks=False):
+                if os.path.isfile(os.path.join(e.path, "trashed-scan.json")):
+                    n_trash_scans += 1
+                else:
+                    n_trash += 1
     except OSError:
-        n_trash = 0
+        pass
     return {
         "project_id": pid,
         "bytes": total,
@@ -134,6 +140,6 @@ def project_disk_use(store: ProjectStore, pid: str) -> dict[str, Any]:
         "parts": parts,
         "references": references,
         "other": max(0, total - sum(s["bytes"] for s in scans) - references),
-        "trash": {"bytes": folder_bytes(trash_dir), "projects": n_trash},
+        "trash": {"bytes": folder_bytes(trash_dir), "projects": n_trash, "scans": n_trash_scans},
         "seconds": round(time.perf_counter() - t0, 4),
     }

@@ -88,6 +88,10 @@ import type {
   ProcessState,
   Project,
   ProjectDiskUse,
+  TrashEmptied,
+  TrashItem,
+  TrashList,
+  TrashRestored,
   ProjectKeepPlan,
   ProjectKeepResult,
   ProjectSummary,
@@ -291,6 +295,20 @@ export const api = {
   project: (pid: string) => get<Project>(`/api/projects/${enc(pid)}`),
   renameProject: (pid: string, name: string) => patch<Project>(`/api/projects/${enc(pid)}`, { name }),
   deleteProject: (pid: string) => del(`/api/projects/${enc(pid)}`),
+  /** U7, U50: rename a scan (its id and folder stay). */
+  renameScan: (pid: string, sid: string, name: string) => patch<Scan>(scanPath(pid, sid), { name }),
+  /** U7: the scan's folder moves to the trash; `dependentsOk` once the user saw what depends on it. */
+  trashScan: (pid: string, sid: string, dependentsOk = false) =>
+    delJson<{ item: TrashItem }>(`${scanPath(pid, sid)}${dependentsOk ? "?dependents_ok=true" : ""}`),
+  /** U39, U12, U34: open one of the app's own folders (by what it is, never a path). */
+  openFolder: (what: "settings" | "logs" | "project", projectId?: string) =>
+    post<{ opened: boolean; what: string }>("/api/open-folder", { what, ...(projectId ? { project_id: projectId } : {}) }),
+  /** U34: the app's log as a text file, for a bug report. */
+  logFileUrl: "/api/log/file",
+  /** U7: the trash (deleted projects and scans), restore, and deleting for good the items the page listed. */
+  trash: () => get<TrashList>("/api/trash"),
+  restoreFromTrash: (id: string) => post<TrashRestored>(`/api/trash/${enc(id)}/restore`),
+  emptyTrash: (items: string[]) => post<TrashEmptied>("/api/trash/empty", { confirm: true, items }),
   /** R1: what the project's folder takes on disk (walks the folder: ask after the page has painted). */
   projectDisk: (pid: string) => get<ProjectDiskUse>(`/api/projects/${enc(pid)}/disk`),
   /** R2: what moving a scan (or every scan of a project) to a lighter mode would free; changes nothing. */

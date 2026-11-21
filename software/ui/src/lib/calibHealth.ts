@@ -108,9 +108,29 @@ export function healthView(h: CalibHealth | null | undefined): HealthView | null
  */
 export function deviceHealth(device: DeviceState | null | undefined, setup: SetupState | null | undefined): CalibHealth | null {
   if (!device?.connected || !device.calibration?.loaded || !setup) return null;
+  // U21: the simulator's demo brings its own true calibration; Setup's status is about the simulator's own one
+  if (device.calibration.source === "demo") return null;
   const target = device.source === "camera" ? "device" : device.source === "sim" ? "sim" : null;
   if (!target || setup.target !== target) return null;
   return setup.calibration_health ?? null;
+}
+
+/**
+ * U21: which calibration the connected device scans with, in the chip's word and a line for its tooltip: the
+ * simulator's demo uses its own true calibration ("Demo calibration"), which is not the one Setup makes for the
+ * simulator; else a file is in use ("Calibration loaded"), or none. Null when nothing is connected.
+ */
+export function calibInUse(device: DeviceState | null | undefined): { short: string; line: string; demo: boolean } | null {
+  if (!device?.connected) return null;
+  const c = device.calibration;
+  if (!c?.loaded) return { short: "No calibration", line: "No calibration: calibrate in Setup", demo: false };
+  if (c.source === "demo")
+    return {
+      short: "Demo calibration",
+      line: "Demo calibration: the simulator's demo scans with its own true calibration. Setup calibrates the simulator separately.",
+      demo: true,
+    };
+  return { short: "Calibration loaded", line: "Calibration loaded", demo: false };
 }
 
 // ------------------------------------------------------------------ one button, one fact

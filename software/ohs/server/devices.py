@@ -233,12 +233,26 @@ class _Connection:
     temp_shown: float | None = None  # the temperature last published
 
 
-def _calib_summary(calib: Any, path: str | None) -> dict:
+def _calib_summary(calib: Any, path: str | None, source: str = "scanner") -> dict:
+    """``CalibrationInfo``; ``source`` (U21): which calibration it is (:func:`_calib_source`)."""
     if calib is None:
-        return {"loaded": False, "path": path, "image_size": None, "baseline_mm": None, "lasers": [], "imu": False}
+        return {"loaded": False, "path": path, "image_size": None, "baseline_mm": None, "lasers": [], "imu": False,
+                "source": source}
     st = calib.stereo
     return {"loaded": True, "path": path, "image_size": [int(st.image_size[0]), int(st.image_size[1])],
-            "baseline_mm": round(float(st.baseline), 3), "lasers": sorted(calib.lasers or {}), "imu": calib.imu is not None}
+            "baseline_mm": round(float(st.baseline), 3), "lasers": sorted(calib.lasers or {}), "imu": calib.imu is not None,
+            "source": source}
+
+
+def _calib_source(c: Any) -> str:
+    """Which calibration a connection uses (UX_PLAN U21): ``"demo"`` the simulator demo's own true calibration (its
+    recording's), ``"simulator"`` the simulator's own, made in Setup (``<data_dir>/sim``), ``"recording"`` a replayed
+    recording's own, ``"scanner"`` the scanner's calibration file (``paths.calibration``)."""
+    if c.source == "sim":
+        return "demo" if c.sim_scene == "demo" else "simulator"
+    if c.replay_path is not None and c.calib_path and Path(c.calib_path).parent == Path(c.replay_path):
+        return "recording"
+    return "scanner"
 
 
 class DeviceManager:
@@ -473,7 +487,7 @@ class DeviceManager:
         return {
             "source": c.source, "connected": True, "busy": self.busy,
             "camera": {"connected": True, "info": info}, "pico": pico,
-            "calibration": _calib_summary(c.calib, c.calib_path),
+            "calibration": _calib_summary(c.calib, c.calib_path, _calib_source(c)),
             "replay": replay,
             "error": self.last_error, "warnings": warnings, "imu_stream": self.imu_available(),
             "launch_check": None if c.launch_check is None else dict(c.launch_check),

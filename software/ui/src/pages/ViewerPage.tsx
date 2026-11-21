@@ -40,6 +40,7 @@ import {
   Shapes,
   SlidersHorizontal,
   Target,
+  TriangleExclamationPoint,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { BufferGeometry } from "three";
@@ -54,6 +55,9 @@ import { EmptyState, Kbd, ProgressBar, Skeleton, Spinner } from "../components/u
 import { Segmented } from "../components/ui/Form";
 import { KeyValue } from "../components/ui/Layout";
 import { scanHealthDetail, scanHealthOf } from "../lib/calibHealth";
+import { scanWarnings } from "../lib/pathWarning";
+import { hasGraphicsCard, noConfidenceText } from "../lib/computer";
+import { useConnection } from "../store/connection";
 import { downloadFile } from "../lib/download";
 import { decodeFaces, fitLabel, fitName, regionTriangles, summarizeRegion, type RegionSummary } from "../lib/fits";
 import { fileStem, fmtBytes, fmtCompact, fmtDateTime, fmtDuration, fmtFixed, fmtInt, fmtMm, fmtPct } from "../lib/format";
@@ -153,8 +157,23 @@ function ReportSummary({ report }: { report: Rec }) {
   // H4: what this scan saw of its calibration (its own health_status); nothing for a scan processed before H3
   const health = scanHealthDetail(report);
   const HealthIcon = health ? HEALTH_ICON[scanHealthOf(report)!.state] : null;
+  // ENGINE_PLAN X0a: the camera path's warning (nothing for a scan processed before the check, or when it held)
+  const pathWarnings = scanWarnings(report);
   return (
     <div className="space-y-4">
+      {pathWarnings.length ? (
+        <div className="flex gap-2.5 rounded-lg border border-warn/30 bg-warn-soft px-3 py-2.5 text-xs" role="note" aria-label="Camera path: tracking may have slid">
+          <TriangleExclamationPoint size={14} className="mt-px shrink-0 text-warn" aria-hidden />
+          <div className="min-w-0 flex-1 space-y-0.5">
+            <div className="font-semibold text-fg">Tracking may have slid</div>
+            {pathWarnings.map((w) => (
+              <div key={w} className="text-muted">
+                {w}
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null}
       {health && HealthIcon ? (
         <div
           className={cn(
@@ -644,6 +663,8 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
   const geometry = load.phase === "ready" ? load.geometry : null;
   // the confidence map needs each point's sigma (meshes made with the confidence reconstruction)
   const hasSigma = !!sigmaOf(geometry);
+  // U5: "make it again" only where it would help (this computer has a graphics card)
+  const hasCard = hasGraphicsCard((useConnection((s) => s.health)?.engine as { compute?: unknown } | undefined)?.compute);
   // the deviation map needs edits (the cursor of the scan's process state, which this page reads for the
   // mesh version); when that is not known, try and let the answer tell
   const cursor = useProcess((s) => s.entries[processKey(pid, sid)]?.state?.cursor ?? null);
@@ -978,7 +999,7 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
                     disabled: !hasSigma,
                     title: hasSigma
                       ? "How well each point was measured (4)"
-                      : "This mesh has no confidence data: it was made without a GPU or by an earlier version. Make it again to get it.",
+                      : noConfidenceText(hasCard, "viewer"),
                   },
                   {
                     value: "deviation",

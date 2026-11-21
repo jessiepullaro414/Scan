@@ -325,8 +325,8 @@ export function CheckPanel({
   if (!hasSigma || (result && !hasAnswer(result)))
     return (
       <Callout tone="neutral" icon={CircleExclamationPoint} title="Check can't be used on this mesh" actions={remake}>
-        Check compares your tolerance with how sure the scan is of each point (its confidence), and this mesh doesn't carry that: it was made without a graphics card
-        (GPU), or by an earlier version of the app. Make the mesh again on a computer with a graphics card, and Check works on it.
+        Check compares your tolerance with how sure the scan is of each point (its confidence), and this mesh doesn't carry that: it was made without a graphics card,
+        or by an earlier version of the app. Make the mesh again on a computer with a graphics card, and Check works on it.
       </Callout>
     );
 

@@ -58,6 +58,7 @@ from ohs import __version__
 from ohs.server.calibration import CalibrationManager
 from ohs.server.demo import default_demo_dir
 from ohs.server.devices import DeviceManager
+from ohs.server.folders import AppLog
 from ohs.server.hub import Hub
 from ohs.server.jobs import JobRunner
 from ohs.server.printables import MASK_DPI
@@ -88,6 +89,11 @@ _LASER_WORDS = (
     (re.compile(r"are not in lasers\.lines"), "A brightness is given for a laser that is not in the list of line lasers"),
     (re.compile(r"must be a percent in 0\.\.100"), "A laser's brightness must be from 0 to 100 %"),
 )
+
+
+def _and(names: list[str]) -> str:
+    """"A", "A and B", "A, B and C"."""
+    return names[0] if len(names) == 1 else ", ".join(names[:-1]) + " and " + names[-1]
 
 
 def _laser_words(problem: str) -> str:
@@ -150,6 +156,7 @@ class Studio:
         else:
             self.config_path = Path(cfg.source) if getattr(cfg, "source", None) else default_config_path()
         self.sim_dir = self.data_dir / "sim"
+        self.app_log = AppLog(self.data_dir / "logs")  # U34: the app's log file, while it runs (ohs.server.folders)
         self.sim_calib_path = self.sim_dir / "calibration.json"
         self.printables_mask_dpi = MASK_DPI  # tests lower it: the 1200 dpi mask sheet takes ~20 s
         self.hub = Hub()
@@ -181,6 +188,7 @@ class Studio:
         if self._started:
             return
         self._started = True
+        self.app_log.start()
         n = safe_call("checking for interrupted scans", self.projects.recover_stale) or 0
         if n:
             log.warning("%d scan(s) were interrupted when the app last stopped; their recordings are kept", n)
@@ -211,6 +219,7 @@ class Studio:
         self._stop.set()
         for th in self._threads:
             join_thread(th, 3.0)
+        self.app_log.stop()
 
     # ------------------------------------------------------------------ messages
     def notify(self, level: str, message: str) -> None:
@@ -585,6 +594,46 @@ class Studio:
             self.processing.wait_moves(pid)  # an undo / redo of one of its scans finishes writing first
             self.projects.delete(pid)
             self.processing.forget(pid)
+
+    def delete_scan(self, pid: str, sid: str, dependents_ok: bool = False) -> dict:
+        """``DELETE /api/projects/{pid}/scans/{sid}`` (UX_PLAN U7): the scan's folder goes to the trash, as a project's
+        does. Refused while it records, or a job makes its mesh, aligns or merges it; refused while other scans depend
+        on it (merged from it, or a second pass of it) unless ``dependents_ok``. Returns ``{item: TrashItem}``."""
+        from ohs.server.trash import TrashManager
+
+        with self._lock:
+            self.projects.scan_entry(pid, sid)  # 404 for an unknown scan or project
+            s = self.session
+            if s is not None and s.active and s.project_id == pid:
+                cont = (getattr(s, "meta", None) or {}).get("continues")
+                if s.scan_id == sid:
+                    raise ApiError(409, "This scan is recording.", "Stop the scan first, then move it to the trash.")
+                if isinstance(cont, dict) and cont.get("scan_id") == sid:
+                    raise ApiError(409, "A second pass of this scan is recording.",
+                                   "Stop the scan first, then move it to the trash.")
+            for job in self.jobs.active():
+                m = job.meta
+                if m.get("project_id") != pid:
+                    continue
+                if sid in {m.get("scan_id"), m.get("target"), m.get("source")} or sid in (m.get("scans") or []):
+                    raise ApiError(409, "This scan is busy: its mesh is being made, or it is being aligned or merged.",
+                                   "Wait for it to finish (see Jobs), or cancel it, then move it to the trash.")
+            deps = self.projects.scan_dependents(pid, sid)
+            if deps and not dependents_ok:
+                merged = [f"“{d['name']}”" for d in deps if d["how"] == "merged"]
+                passes = [f"“{d['name']}”" for d in deps if d["how"] == "continues"]
+                said = []
+                if merged:
+                    said.append(f"{_and(merged)} {'was' if len(merged) == 1 else 'were'} merged from this scan")
+                if passes:
+                    said.append(f"{_and(passes)} {'is a second pass' if len(passes) == 1 else 'are second passes'} of it")
+                raise ApiError(409, f"Other scans depend on this one: {'; '.join(said)}.",
+                               "They keep their own meshes, but they cannot be made again from this scan once it is in "
+                               "the trash. Move it to the trash anyway, or keep it.")
+            self.processing.wait_moves(pid)  # an undo / redo of one of the project's scans finishes writing first
+            item_id = self.projects.trash_scan(pid, sid)
+            self.processing.forget_scan(pid, sid)
+        return {"item": TrashManager(self.projects)._item(self.projects.root / ".trash" / item_id)}
 
     def process_scan(self, pid: str, sid: str, quality: str | None = "standard") -> Any:
         """"Make mesh" (M1 ``POST .../process``): the processing studio's Default recipe at

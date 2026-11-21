@@ -84,7 +84,10 @@ check(projectDiskText({ ...project, bytes: 0, parts: { recording: 0, stages: 0, 
 
 // the trash, only when it holds something
 check(trashText(project) === null, "an empty trash says nothing");
-check(trashText({ ...project, trash: { bytes: 2 * GB, projects: 1 } }) === "1 deleted project in the .trash folder takes 2.00\u202fGB. The app never empties it.", "one project in the trash");
+check(trashText({ ...project, trash: { bytes: 2 * GB, projects: 1 } }) === "1 deleted project in the trash takes 2.00\u202fGB. Nothing in it is deleted until you empty it (Trash, on Home).", "one project in the trash");
 check(trashText({ ...project, trash: { bytes: 512 * MB, projects: 3 } })!.startsWith("3 deleted projects"), "plural");
+// U7: deleted scans are in the trash too
+check(trashText({ ...project, trash: { bytes: 512 * MB, projects: 1, scans: 2 } })!.startsWith("1 deleted project and 2 deleted scans in the trash take 512.0\u202fMB."), "projects and scans");
+check(trashText({ ...project, trash: { bytes: 512 * MB, projects: 0, scans: 1 } })!.startsWith("1 deleted scan in the trash takes"), "one scan");
 
 console.log(`diskUse.test: ${checks} checks passed`);

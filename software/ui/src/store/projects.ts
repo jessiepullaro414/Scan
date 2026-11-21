@@ -17,6 +17,10 @@ type ProjectsStore = {
   create: (name: string) => Promise<Project | null>;
   rename: (pid: string, name: string) => Promise<boolean>;
   remove: (pid: string) => Promise<boolean>;
+  /** U7, U50: rename a scan; false (with a toast) when the engine refused. */
+  renameScan: (pid: string, sid: string, name: string) => Promise<boolean>;
+  /** U7: move a scan to the trash (`dependentsOk` once the user saw what depends on it); false when refused. */
+  trashScan: (pid: string, sid: string, dependentsOk: boolean) => Promise<boolean>;
 };
 
 const asApiError = (e: unknown, path: string) =>
@@ -114,7 +118,36 @@ export const useProjects = create<ProjectsStore>((set, get) => ({
       void get().fetchList();
       return true;
     } catch (e) {
-      toast.error("Couldn't delete the project", e);
+      toast.error("Couldn't move the project to the trash", e);
+      return false;
+    }
+  },
+
+  renameScan: async (pid, sid, name) => {
+    try {
+      const scan = await api.renameScan(pid, sid, name);
+      set((s) => {
+        const p = s.details[pid];
+        return p ? { details: { ...s.details, [pid]: { ...p, scans: p.scans.map((x) => (x.id === sid ? scan : x)) } } } : {};
+      });
+      return true;
+    } catch (e) {
+      toast.error("Couldn't rename the scan", e);
+      return false;
+    }
+  },
+
+  trashScan: async (pid, sid, dependentsOk) => {
+    try {
+      await api.trashScan(pid, sid, dependentsOk);
+      set((s) => {
+        const p = s.details[pid];
+        return p ? { details: { ...s.details, [pid]: { ...p, scans: p.scans.filter((x) => x.id !== sid) } } } : {};
+      });
+      void get().fetchProject(pid);
+      return true;
+    } catch (e) {
+      toast.error("Couldn't move the scan to the trash", e);
       return false;
     }
   },

@@ -380,7 +380,7 @@ export function EditsPanel({
               description={
                 hasSigma
                   ? "No point moves further from where it was measured than the scan's own scatter there. It holds back well-measured surface and does not protect edges: for edges, use “Where to smooth” above."
-                  : "Needs a mesh with confidence data (made with a GPU): this one has none."
+                  : "Needs a mesh with confidence data (made with a graphics card): this one has none."
               }
               checked={withinSigma && hasSigma}
               onChange={setWithinSigma}

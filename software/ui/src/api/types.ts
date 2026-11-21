@@ -17,6 +17,9 @@ export type CalibrationInfo = {
   baseline_mm: number | null;
   lasers: string[];
   imu: boolean;
+  /** U21: which calibration it is (absent from an older engine): the simulator demo's own true one, the simulator's
+   * own made in Setup, a replayed recording's own, or the scanner's file. */
+  source?: "demo" | "simulator" | "recording" | "scanner";
 };
 
 export type PicoState = {
@@ -175,9 +178,26 @@ export type ProjectDiskUse = {
   parts: { recording: number; stages: number; undo: number; result: number };
   references: number;
   other: number;
-  trash: { bytes: number; projects: number };
+  /** `scans`: deleted scans (since the scan trash, U7; absent from an older engine). */
+  trash: { bytes: number; projects: number; scans?: number };
   seconds: number;
 };
+
+/** U7: a deleted project or scan in the trash (APP_API.md "Rename a scan, the trash"). `id` is its only name. */
+export type TrashItem = {
+  id: string;
+  kind: "project" | "scan";
+  name: string;
+  deleted: string | null;
+  bytes: number;
+  n_scans: number | null;
+  project_id: string | null;
+  project_name: string | null;
+  project_exists: boolean | null;
+};
+export type TrashList = { items: TrashItem[]; bytes: number };
+export type TrashRestored = { kind: "project" | "scan"; project_id: string; scan_id: string | null; name: string; renamed: boolean };
+export type TrashEmptied = { removed: string[]; left: string[]; bytes: number };
 
 export type SessionPhase = "idle" | "scanning" | "paused" | "stopping";
 export type SessionState = {
@@ -746,10 +766,20 @@ export type EditEntry = {
   created: string;
   triangles_after: number;
   ms: number;
+  /** What the edit did, in plain words (the engine's summary). */
+  summary?: string | null;
+  /** U14: what "Remove loose bits" took (absent on other edits, and on one made before). */
+  removed?: { pieces: number; triangles: number; largest_mm: number };
 };
 
 export type StageInfo = { state: StageState; summary: string | null; when: string | null; job_id: string | null };
-export type TrackStage = StageInfo & { quality: ProcessQuality | null; tracked_pct: number | null; voxel_mm?: number | null };
+export type TrackStage = StageInfo & {
+  quality: ProcessQuality | null;
+  tracked_pct: number | null;
+  voxel_mm?: number | null;
+  /** The camera path's warning (ENGINE_PLAN X0a): sentences; absent or [] when there is nothing to say. */
+  warnings?: string[];
+};
 export type StraightenStage = StageInfo & {
   loops: number | null;
   correction_mm: number | null;

@@ -381,13 +381,14 @@ input[type="range"].slider:focus-visible::-webkit-slider-thumb {
 }
 
 /* ------------------------------------------------------------------ the project's scan table (U16)
-   Wide: scan, status, details, actions in one row. Under about 1100 px the secondary actions go into a
-   More menu; under about 860 px the details go under the name. A failed scan says why on its own line. */
+   Wide: scan, status, details, actions in one row. Under about 1500 px "Make mesh again" goes into the
+   row's More menu (the row would not hold it beside the others); under about 1100 px the other secondary
+   actions too; under about 860 px the details go under the name. A failed scan says why on its own line. */
 .scan-row {
   display: grid;
   column-gap: 1rem;
   row-gap: 0.25rem;
-  grid-template-columns: minmax(0, 1.5fr) 112px minmax(0, 1fr) minmax(370px, 400px);
+  grid-template-columns: minmax(0, 1.5fr) 112px minmax(0, 1fr) 560px;
   grid-template-areas: "name status details actions" "fail fail fail fail";
 }
 .scan-row > .sr-name { grid-area: name; }
@@ -396,11 +397,14 @@ input[type="range"].slider:focus-visible::-webkit-slider-thumb {
 .scan-row > .sr-actions { grid-area: actions; }
 .scan-row > .sr-fail { grid-area: fail; }
 .sr-secondary { display: contents; }
-.sr-more { display: none; }
+.sr-wide { display: contents; }
+@media (max-width: 1500px) {
+  .scan-row { grid-template-columns: minmax(0, 1.5fr) 112px minmax(0, 1fr) 400px; }
+  .sr-wide { display: none; }
+}
 @media (max-width: 1100px) {
   .scan-row { grid-template-columns: minmax(0, 1.5fr) 112px minmax(0, 1fr) auto; }
   .sr-secondary { display: none; }
-  .sr-more { display: inline-flex; }
 }
 @media (max-width: 860px) {
   .scan-row {

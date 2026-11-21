@@ -485,7 +485,28 @@ export function* removeFloaters(m: TriMesh, p: FloaterParams): Work<TriMesh> {
   }
   const keep = new Uint8Array(faceComp.length);
   for (let f = 0; f < keep.length; f++) keep[f] = drop[faceComp[f]] ? 0 : 1;
-  return compact(m, keep);
+  const out = compact(m, keep);
+  // U14: what it took, as the engine says it (`EditEntry.removed`)
+  let pieces = 0,
+    triangles = 0,
+    biggest = 0;
+  for (let c = 0; c < count; c++) {
+    if (!drop[c]) continue;
+    pieces++;
+    triangles += tris[c];
+    biggest = Math.max(biggest, Math.hypot(box[c * 6 + 3] - box[c * 6], box[c * 6 + 4] - box[c * 6 + 1], box[c * 6 + 5] - box[c * 6 + 2]));
+  }
+  if (pieces) floatersRemoved.set(out, { pieces, triangles, largest_mm: Math.round(biggest * 10) / 10 });
+  return out;
+}
+
+/** U14: what each Remove loose bits result took (the mesh it made → the pieces). */
+export const floatersRemoved = new WeakMap<TriMesh, { pieces: number; triangles: number; largest_mm: number }>();
+
+/** The engine's summary of a removal (`ohs/server/processing.py`). */
+export function floatersSummary(r: { pieces: number; triangles: number; largest_mm: number }): string {
+  const n = r.pieces;
+  return `Removed ${n} loose bit${n !== 1 ? "s" : ""}, ${n !== 1 ? "the largest " : ""}${r.largest_mm.toFixed(1)} mm across (${r.triangles.toLocaleString("en-US")} triangles)`;
 }
 
 /**

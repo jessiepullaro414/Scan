@@ -21,7 +21,12 @@ type DeviceState = {
   camera: { connected: boolean; info: Record<string, unknown> } | null;
   pico: { connected: boolean; firmware: string | null; emitters: Emitters } | null;
   calibration: { loaded: boolean; path: string | null; image_size: [number, number] | null;
-                 baseline_mm: number | null; lasers: string[]; imu: boolean };
+                 baseline_mm: number | null; lasers: string[]; imu: boolean;
+                 // *extra*, since 2026-11-20 (UX_PLAN U21): which calibration it is. "demo": the simulator demo's
+                 // own true calibration (its recording's); "simulator": the simulator's own, made in Setup
+                 // (<data_dir>/sim, used by the calibration board scenes); "recording": a replayed recording's own;
+                 // "scanner": the scanner's file (paths.calibration), and always when nothing is connected
+                 source: "demo" | "simulator" | "recording" | "scanner" };
   replay: { path: string; loop: boolean } | null;
 };
 type ScanStatus = "recording" | "recorded" | "processing" | "processed" | "failed";
@@ -44,7 +49,7 @@ type Job = { id: string; kind: string; state: "queued" | "running" | "done" | "f
 
 | Method and path | Body | Returns |
 |---|---|---|
-| `GET /api/health` | | `{app:"openhandscan", version, engine:{opencv, open3d}}` |
+| `GET /api/health` | | `{app:"openhandscan", version, engine:{opencv, open3d}}`. *extra*: `api`, and `engine.compute` = `ohs.compute.describe()`: `{backend: "gpu"\|"cpu", status, device: {name, vendor, platform, kind: "discrete"\|"integrated", memory_mb, max_alloc_mb, opencl} \| null, preference}`. The pages say from it what this computer can do (UX_PLAN U5), in their own words ("graphics card"); `status` is the engine's and is not shown. |
 | `GET /api/device` | | `DeviceState` |
 | `POST /api/device/connect` | `{source:"camera"\|"replay"\|"sim", recording?:string, loop?:bool}` | `DeviceState`. For `sim`, the first time a job builds the demo recording: returns **202** with `{job: Job}`, and the device connects itself when the job finishes. |
 | `POST /api/device/disconnect` | | `DeviceState` |
@@ -54,6 +59,13 @@ type Job = { id: string; kind: string; state: "queued" | "running" | "done" | "f
 | `GET /api/projects/{pid}` | | `Project` |
 | `PATCH /api/projects/{pid}` | `{name}` | `Project` |
 | `DELETE /api/projects/{pid}` | | `204`. The folder moves to `<projects>/.trash/` and is never hard-deleted. |
+| `PATCH /api/projects/{pid}/scans/{sid}` | `{name}` | `Scan` (*since 2026-11-20*, see "Rename a scan, the trash") |
+| `DELETE /api/projects/{pid}/scans/{sid}?dependents_ok=true` | | `{item: TrashItem}`. The scan's folder moves to `<projects>/.trash/` (see "Rename a scan, the trash") |
+| `POST /api/open-folder` | `{what: "settings"\|"logs"\|"project", project_id?}` | `{opened: true, what}` (*since 2026-11-20*, see "Folders and the log") |
+| `GET /api/log/file` | | the app's log as a text file to save (see "Folders and the log") |
+| `GET /api/trash` | | `{items: TrashItem[], bytes}` |
+| `POST /api/trash/{item}/restore` | | `{kind, project_id, scan_id, name, renamed}` |
+| `POST /api/trash/empty` | `{confirm: true, items: string[]}` | `{removed: string[], left: string[], bytes}` |
 | `GET /api/scan` | | `SessionState` |
 | `POST /api/scan/start` | `{project_id, mode?, name?, preset?, preset_values?, continues?}` | `SessionState`. `409` if no device is connected, no calibration is loaded, or a scan is already running. `preset` / `preset_values`: see "Presets" (404 for an unknown preset, 422 for a value the app does not take; nothing is made then). `continues`: the scan this one is a second pass of, see "A second pass that joins the first". |
 | `POST /api/scan/pause` / `resume` | | `SessionState` |
@@ -631,12 +643,15 @@ type SigmaStats = {                   // each vertex's sigma (1 standard deviati
 };
 type EditEntry = { id: string; op: MeshOp; params: Record<string, unknown>;
                    label: string;               // "Fill holes up to 12 mm around (about Ø 4 mm)"
-                   created: string; triangles_after: number; ms: number };
+                   created: string; triangles_after: number; ms: number;
+                   summary?: string;                         // what it did, in plain words
+                   removed?: { pieces: number; triangles: number; largest_mm: number } };  // remove_floaters (U14)
 type StageInfo = { state: StageState; summary: string | null; when: string | null; job_id: string | null };
 type ProcessState = {
   project_id: string; scan_id: string;
   stages: {
-    track: StageInfo & { quality: "standard" | "best" | "preview" | null; tracked_pct: number | null };
+    track: StageInfo & { quality: "standard" | "best" | "preview" | null; tracked_pct: number | null;
+                         warnings?: string[] };   // the camera path's warning (since 2026-11-20, below)
     straighten: StageInfo & { loops: number | null; correction_mm: number | null; correction_deg: number | null;
                               crossings?: number | null };   // laser crossings used (M3 phase 3)
     fuse: StageInfo & { voxel_mm: number | null };
@@ -801,6 +816,11 @@ Everything in the M3 phase 2 section is implemented as written, with these clari
   - Should the block fail, the scan is still processed and `health` is `{version, error}`.
 - **The scan's calibration status** (*extra*, since H3): every stage's `report.json` with a `health` block (not a failed one) also has `health_status`, a `CalibHealth` (`source: "scan"`, with `signs`) of what this scan alone saw (`ohs.calib.health.scan_status`): Valid, Check recommended or Recalibration required, the part, one sentence and the step to redo. One scan is enough here; the setup state's status waits for 2 of the last 3. A scan processed without a GPU judges the cameras only (`note`). At given poses (the straighten and fuse stages) nothing is tracked, so the IMU is not judged there. It warns only: the scan is processed as before.
   - *Since H4* the scan's summary in `project.json` (`Scan.result.report`, which the project page's scan list reads) keeps it in short: `health_status: {state: HealthState, part: HealthPart | null, reason: string}`, written with the rest of the summary when a stage gives the scan a new base. A scan whose summary was written before H4 has none (nothing is shown for it); the full status stays in `result/report.json`.
+- **The camera path's warning** (*extra*, since 2026-11-20, ENGINE_PLAN X0a): the track stage's `report.json` has `path_check`, the engine's check of the tracked camera path for a jump no hand makes (`ohs.track.path_check`): `{version, window_s, limit_mm, frames, jump_mm, frame, state: "ok" | "warn" | null, warning: string | null}` (`state` null: too short to judge), and `warnings`, a list of sentences for the user (empty when there is nothing to say; with `state: "warn"` it holds the check's sentence: tracking may have slid near that frame, so a thin part can come out thinner or partly missing). It warns only: the mesh is the same without it.
+  - A stage fused at given poses (straighten, fuse) takes the track stage's `path_check` and `warnings` into its own `report.json`, since its poses come from that path; the refinements keep those of the report they refine. So `result/report.json` always has the check of the path the current mesh was built from.
+  - The track stage's `ProcessState.stages.track.warnings` is that list, in the app's words ("graphics card" where the engine says "GPU"); `[]` when there is nothing to say.
+  - The scan's summary (`Scan.result.report`) keeps `warnings` (the same words) and `path_check: {state, jump_mm, frame}` in short. The report page shows them as the row "Camera path" of the calibration part, and the warnings again in its list at the top.
+  - A scan processed before the check has neither key (in its summary, its `report.json` and its stage) and nothing is shown for it.
 - **Scan status:** stage jobs and recipe `all` jobs set the scan to `processing`. Afterwards it is `processed` when it has a mesh, else `failed` (with `error`) or `recorded`. Edit jobs leave the status alone.
 - **Make mesh** (`POST .../process`) is the Default recipe with scope `all` at the requested quality. Its job kind (`process_scan`), result `{project_id, scan_id, scan, message: "Mesh ready"}` and statuses are M1's.
   - Second Make mesh on the same scan: 409 "This scan's mesh is already being made."
@@ -837,6 +857,7 @@ Everything in the M3 phase 2 section is implemented as written, with these clari
   - The given limits combine with "or".
   - `{}` means `{min_size_mm: 5}`, and `keep_largest_only` ignores the other limits.
   - The largest piece is never removed.
+  - *Since 2026-11-20* (UX_PLAN U14) the edit says what it took: its `summary` is "Removed 3 loose bits, the largest 4.2 mm across (1,234 triangles)" (one bit: "Removed 1 loose bit, 4.2 mm across (12 triangles)"), and the entry has `removed: {pieces, triangles, largest_mm}` (`largest_mm`: the largest removed piece's bounding-box diagonal, 0.1 mm), absent when nothing was removed and on an edit made before. A piece under 1 % of the triangles goes however large it is, so a large `largest_mm` is the sign to look: the page offers "Show what was removed" (the mesh before the edit as a ghost over the mesh after it).
 - `fill_holes`:
   - `max_hole_mm` is the hole's perimeter.
   - Outer borders are left open (see MeshStats), unless `watertight` (M3 phase 3): then every opening up to `max_hole_mm` is closed, the outer edge too ("Make watertight: close every opening up to 60 mm"). The summary says whether the mesh is now watertight, or how many openings are still larger than the limit.
@@ -1869,7 +1890,9 @@ Rules:
   scan was made (`result/report.json`, its known keys); the calibration (the setup state's calibration part
   and last board check; its health, *since H4*, is the scan's own status, `result/report.json`'s
   `health_status`: state, part, reason, what was not judged, the note and that the limits are provisional; a
-  scan processed before H3 has none and its health reads "Not assessed"); the Check answer at `tolerance_mm`
+  scan processed before H3 has none and its health reads "Not assessed"; beside it, *since 2026-11-20*, the
+  row "Camera path": the camera path's warnings, "No jump found" or "Not judged", from `result/report.json`'s
+  `path_check` and `warnings`, left out for a scan processed before the check); the Check answer at `tolerance_mm`
   (`POST .../check`'s, before there is a mesh left out); the kept features **as `GET .../features` shows
   them** (stale marks, relations with the engine's record, approvals with "check again" and its reason, the
   frame's state) and the CAD export's moves when a relation has one; every kept section cut again on the
@@ -2459,7 +2482,8 @@ type ProjectDiskUse = {
   parts: { recording: number; stages: number; undo: number; result: number };  // sums over the scans
   references: number;       // references/
   other: number;            // project.json and folders project.json does not list
-  trash: { bytes: number; projects: number };  // <projects>/.trash: all deleted projects, not part of this one
+  trash: { bytes: number; projects: number;    // <projects>/.trash: all deleted projects, not part of this one
+           scans: number };                    // and deleted scans (since 2026-11-20, "Rename a scan, the trash")
   seconds: number;          // how long the walk took
 };
 ```
@@ -2474,6 +2498,59 @@ type ProjectDiskUse = {
 
 - **Sizes** are the files' sizes in bytes (`st_size`), all integers, not the space the file system allocates. Links and junctions are not followed.
 - **Cost:** one walk of the project folder and the trash on every request, nothing cached (so never stale); about 50 to 150 ms for 4,700 files. A plain function, so it runs in the server's thread pool and never holds up the event loop. `GET /api/projects/{pid}` does not include it: the project page asks for it after it has painted.
+
+## Rename a scan, the trash
+
+Since 2026-11-20 (UX_PLAN U7 with U50; `ohs/server/projects.py`, `ohs/server/trash.py`). A scan can be renamed and moved to the trash as a project can; the trash lists both, restores them and, asked twice, deletes them for good.
+
+```ts
+type TrashItem = {
+  id: string;                   // the folder's name inside <projects>/.trash: the only way to name an item
+  kind: "project" | "scan";
+  name: string;                 // the project's or the scan's name
+  deleted: string | null;       // when it was moved to the trash (ISO 8601)
+  bytes: number;                // its folder's size
+  n_scans: number | null;       // a project: how many scans it holds
+  project_id: string | null;    // a scan: the project it was in, and that project's name then
+  project_name: string | null;
+  project_exists: boolean | null;  // a scan: whether that project is there (else restore the project first)
+};
+```
+
+### REST
+
+| Method and path | Body | Returns |
+|---|---|---|
+| `PATCH /api/projects/{pid}/scans/{sid}` | `{name}` | `Scan`. The id and the folder stay. An empty name is 400, one over 120 characters 400; 404 for an unknown scan. |
+| `DELETE /api/projects/{pid}/scans/{sid}` | | `{item: TrashItem}`. Query `dependents_ok=true`: see below. |
+| `GET /api/trash` | | `{items: TrashItem[], bytes}`, the newest first |
+| `POST /api/trash/{item}/restore` | | `{kind, project_id, scan_id (null for a project), name, renamed}` |
+| `POST /api/trash/empty` | `{confirm: true, items: [TrashItem.id, ...]}` | `{removed: [ids], left: [ids], bytes}` |
+
+### Rules
+
+- **Never deleted on the way:** a scan's folder moves to `<projects>/.trash/<project_id>--<scan_id>-<time>/` with `trashed-scan.json` beside its files (the project, the project's name, the scan's `project.json` entry, when), then it leaves the project's list. A project moves as before (`<project_id>-<time>`). Nothing is deleted until the trash is emptied.
+- **Refused, in a plain sentence (409), and nothing moves:** the scan is recording, or a second pass of it is recording; a job makes its mesh, edits it, aligns or merges it (any running job whose `project_id` is the project's and whose `scan_id`, `target`, `source` or `scans` names it).
+- **What depends on it:** a scan that other scans were merged from (`merged_from`) or that a second pass continues (`continues.scan_id`) is refused with 409 naming them ("Other scans depend on this one: “Top merged” was merged from this scan; “Top, second pass” is a second pass of it."), until the request says `dependents_ok=true` (the page asks the user first, naming them). They keep their own meshes; they cannot be made again from it while it is in the trash.
+- **Names (U50):** a new scan without a name is "Scan <n>": the count of the project's scans plus one, or the next number no scan of the project has (so no two scans "Scan 3" after one went to the trash).
+- **Restore** puts the folder back where it was and the scan back on its project's list (its entry as it was). Nothing is overwritten: an id that is taken gets a new one (a scan `<id>-r`, a project `<name>-<4 hex>`), a name that is taken gets " (restored)" (then " (restored 2)" ...), and `renamed` says so. A scan whose project is not there (in the trash too, or deleted) is 409: restore the project first.
+- **Empty the trash** deletes for good, so it needs `confirm: true` and `items`, the ids the page showed (400 otherwise): an item moved to the trash after the page listed it stays. An id that is not an item of the trash is left out. `left` lists items that could not be deleted completely (a file held open).
+- **Ids only:** `{item}` must be a folder name of the ids rule (letters, digits, `.`, `_`, `-`, no `..`), directly inside the trash, holding a project (`project.json`) or a scan (`trashed-scan.json`); anything else is 404, and a folder the user put into the trash is never listed, restored or deleted. No route takes a path.
+- The routes move or remove folders: plain functions, run in the server's thread pool.
+
+## Folders and the log
+
+Since 2026-11-20 (UX_PLAN U39, U12, U34; `ohs/server/folders.py`). The pages open the app's own folders by what they are, never by a path, and save the app's log for a bug report.
+
+| Method and path | Body | Returns |
+|---|---|---|
+| `POST /api/open-folder` | `{what, project_id?}` | `{opened: true, what}` |
+| `GET /api/log/file` | | `text/plain; charset=utf-8`, saved as `openhandscan-log-<YYYYMMDD-HHMM>.txt` |
+
+Rules:
+- `what`: `"settings"` is the folder of the settings file (`config_path`'s folder), `"logs"` the app's log folder (`<data_dir>/logs`), `"project"` the folder of the project `project_id` (the ids rule; 404 for a project that is not there, 422 without `project_id`). Anything else is 422. The folder is shown in the system file manager as the printables folder is (`POST /api/setup/printables/open`); a missing settings or log folder is created first. No field of the body is a path, and any other field is ignored.
+- A file manager that does not start is 409 "The folder could not be opened." (hint: try again).
+- **The log:** while the app runs, everything the engine logs at "info" and above also goes to `<data_dir>/logs/studio.log` (2 MB, then `studio.log.1` to `.3`). The terminal shows what it showed before (`ohs app -v`). `GET /api/log/file` is a header (the app's version, the computer, the compute device) and the newest 4 MB of the log files, oldest first; "Nothing was logged yet." when there is none. It is built on request; nothing is written.
 
 ## What a scan keeps
 

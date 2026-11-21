@@ -5,6 +5,7 @@
 import type { CalibHealth, DeviceState, SetupState, SetupStep } from "../api/types.ts";
 import {
   deviceHealth,
+  calibInUse,
   headerHealthButton,
   healthView,
   loadedLine,
@@ -199,5 +200,14 @@ check(overviewStep(failedCard, CHECK_LASERS) === failedCard, "a status about som
 check(overviewStep(stepOf("done", "Calibration verified, 2 days ago"), DRIFT).summary === "Calibration verified, 2 days ago", "a passed check is its own fact");
 check(overviewStep({ ...failedCard, id: "stereo" }, FAILED).summary === failedCard.summary, "only the Check card");
 check(overviewStep(stepOf("warn", "The last check failed (2 days ago): x"), DRIFT).summary !== "", "a drift does not hide a failed check");
+
+// ---------------------------------------------------------------- U21: the simulator demo's own calibration
+const demoCal = { loaded: true, path: null, image_size: null, baseline_mm: null, lasers: [], imu: true, source: "demo" as const };
+check(deviceHealth(dev({ source: "sim", calibration: demoCal }), setup("sim", CHECK_LASERS)) === null, "the demo's own calibration: Setup's status does not speak for it");
+check(calibInUse(dev({ source: "sim", calibration: demoCal }))!.short === "Demo calibration", "the chip says Demo calibration");
+check(calibInUse(dev({ source: "sim", calibration: demoCal }))!.line.includes("Setup calibrates the simulator separately"), "and why the rail differs");
+check(calibInUse(dev({}))!.short === "Calibration loaded", "a scanner's file: Calibration loaded");
+check(calibInUse(dev({ calibration: { ...demoCal, loaded: false, source: "scanner" } }))!.short === "No calibration", "none");
+check(calibInUse(dev({ connected: false })) === null && calibInUse(null) === null, "not connected: nothing");
 
 console.log(`calibHealth.test: ${checks} checks passed`);

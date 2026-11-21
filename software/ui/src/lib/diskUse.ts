@@ -51,6 +51,9 @@ export function projectDiskText(d: ProjectDiskUse): string {
 /** What the trash holds (it is not part of the project), or null when it is empty. */
 export function trashText(d: ProjectDiskUse): string | null {
   if (!d.trash.bytes) return null;
-  const n = d.trash.projects;
-  return `${n} deleted project${n === 1 ? "" : "s"} in the .trash folder take${n === 1 ? "s" : ""} ${fmtBytes(d.trash.bytes)}. The app never empties it.`;
+  const p = d.trash.projects;
+  const s = d.trash.scans ?? 0; // U7: deleted scans too
+  const parts = [p || !s ? `${p} deleted project${p === 1 ? "" : "s"}` : null, s ? `${s} deleted scan${s === 1 ? "" : "s"}` : null].filter(Boolean);
+  const one = p + s === 1;
+  return `${parts.join(" and ")} in the trash take${one ? "s" : ""} ${fmtBytes(d.trash.bytes)}. Nothing in it is deleted until you empty it (Trash, on Home).`;
 }

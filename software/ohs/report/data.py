@@ -22,7 +22,10 @@ missing, None or empty is left out of the report, not shown empty.
                              # "last_check" ({"when", "ok", "verdict"}, the setup state's) and "health"
                              # ({"state": "valid" | "check" | "recalibrate", "part", "reason", and optional
                              # "not_judged", "note", "provisional", "source"}: the scan's own status,
-                             # report.json's health_status, H3/H4; without it the report says "Not assessed")
+                             # report.json's health_status, H3/H4; without it the report says "Not assessed");
+                             # and "path" ({"state": "ok" | "warn" | None, "jump_mm", "frame", "warnings": [...]}:
+                             # the camera path's check for a slide, report.json's path_check and warnings,
+                             # ENGINE_PLAN X0a; without it nothing is said)
      "check": {...},         # ohs.mesh.check.weak_areas(...): the Check answer at one tolerance (the
                              # areas' "faces" are not used)
      "features": {...},      # the scan's kept features: features.json (ohs.measure.features) as kept, or
@@ -386,6 +389,10 @@ def _calibration_warnings(cal: dict, prep: Prepared) -> None:
             part = f" ({health['part']})" if health.get("part") else ""
             reason = f": {health['reason']}" if health.get("reason") else ""
             prep.warn("calibration", "Health", f"{label}{part}{reason}")
+    path = cal.get("path")
+    if isinstance(path, dict):
+        for w in _text_list(path.get("warnings")):
+            prep.warn("calibration", "Camera path", w)
 
 
 def _comparison_warnings(c: dict, prep: Prepared) -> None:

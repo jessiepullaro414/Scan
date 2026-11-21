@@ -54,6 +54,8 @@ import { hasLaserValues } from "../lib/lasers";
 import { href, navigate, paths } from "../lib/router";
 import { cn, isModalOpen, isTypingTarget, useHotkeys } from "../lib/util";
 import { useConnection } from "../store/connection";
+import { hasGraphicsCard, noConfidenceText } from "../lib/computer";
+import { canShowRemoved } from "../lib/looseBits";
 import { isActive, useScanJob } from "../store/jobs";
 import { processKey, useProcess, useProcessJob } from "../store/process";
 import { useProjects } from "../store/projects";
@@ -191,6 +193,12 @@ export default function ProcessPage({ pid, sid }: { pid: string; sid: string }) 
     [mesh, previous],
   );
 
+  // U14: the removed loose bits can be shown when the mesh before is the step before the removal
+  const removedFor = useMemo(
+    () => (mesh && previous ? canShowRemoved(versionStates.current.get(previous.version), versionStates.current.get(mesh.version)) : null),
+    [mesh, previous],
+  );
+
   // ---------------------------------------------------------------- view state
   const [shading, setShading] = useState<Shading>("clay");
   const [wireframe, setWireframe] = useState(false);
@@ -215,6 +223,8 @@ export default function ProcessPage({ pid, sid }: { pid: string; sid: string }) 
   const canSelect = !!mesh && !comparing;
   // the confidence map needs each point's sigma (meshes made with the confidence reconstruction)
   const hasSigma = !!sigmaOf(mesh?.geometry);
+  // U5: "run it again" only where it would help (this computer has a graphics card)
+  const hasCard = hasGraphicsCard((useConnection((s) => s.health)?.engine as { compute?: unknown } | undefined)?.compute);
   // the deviation map compares the current mesh with the base mesh, so it needs edits
   const devEnabled = (state?.cursor ?? 0) > 0;
   const devOn = shading === "deviation" && devEnabled;
@@ -628,7 +638,14 @@ export default function ProcessPage({ pid, sid }: { pid: string; sid: string }) 
                 onAreas: setTableAreas,
               }}
             />
-            <HistoryPanel pid={pid} sid={sid} state={state} busy={busy} />
+            <HistoryPanel
+              pid={pid}
+              sid={sid}
+              state={state}
+              busy={busy}
+              showRemovedFor={removedFor}
+              onShowRemoved={() => setCompare("overlay")}
+            />
             {!wide ? details : null}
           </>
         ) : entry?.error || (projectError && !project) || (project && !scan) ? null : (
@@ -723,7 +740,7 @@ export default function ProcessPage({ pid, sid }: { pid: string; sid: string }) 
                       disabled: !hasSigma,
                       title: hasSigma
                         ? "How well each point was measured (4)"
-                        : "This mesh has no confidence data: it was made without a GPU or by an earlier version. Run “Follow the camera” again to get it.",
+                        : noConfidenceText(hasCard, "process"),
                     },
                     {
                       value: "deviation",

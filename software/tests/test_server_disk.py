@@ -118,7 +118,7 @@ def test_sizes_equal_the_files(env):
     for key in ("recording", "stages", "undo", "result"):  # project totals of each part
         want = sum(s["stages_bytes"] if key == "stages" else s[key] for s in d["scans"])
         assert d["parts"][key] == want, key
-    assert d["trash"] == {"bytes": 0, "projects": 0}
+    assert d["trash"] == {"bytes": 0, "projects": 0, "scans": 0}
 
     # the project page still gets its data without walking any folder (the route is separate)
     assert "disk" not in requests.get(url + f"/api/projects/{pid}", timeout=TIMEOUT).json()
@@ -132,7 +132,7 @@ def test_trash_is_counted_on_its_own(env):
     assert requests.delete(url + f"/api/projects/{gone['id']}", timeout=TIMEOUT).status_code == 204
     d = requests.get(url + f"/api/projects/{keep['id']}/disk", timeout=TIMEOUT).json()
     trash = root / "projects" / ".trash"
-    assert d["trash"] == {"bytes": size_of(trash), "projects": len([q for q in trash.iterdir() if q.is_dir()])}
+    assert d["trash"] == {"bytes": size_of(trash), "projects": len([q for q in trash.iterdir() if q.is_dir()]), "scans": 0}
     assert d["trash"]["bytes"] >= 12345
     assert d["bytes"] == size_of(root / "projects" / keep["id"])  # the trash is not part of the project
 

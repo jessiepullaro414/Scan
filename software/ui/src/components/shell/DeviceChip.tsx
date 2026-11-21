@@ -1,5 +1,5 @@
 import { Camera, Check, Film, FlaskConical, TriangleExclamationPoint, Unplug } from "lucide-react";
-import { headerHealthButton, healthView } from "../../lib/calibHealth";
+import { calibInUse, headerHealthButton, healthView } from "../../lib/calibHealth";
 import { navigate, paths, useRoute } from "../../lib/router";
 import { HEALTH_ICON, HEALTH_TEXT, useDeviceHealth } from "../CalibHealth";
 import { cn } from "../../lib/util";
@@ -28,6 +28,7 @@ export function DeviceChip() {
   const calibrated = !!device?.calibration?.loaded;
   const Icon = SOURCE_ICON[source] ?? Unplug;
   const hv = healthView(useDeviceHealth());
+  const inUse = calibInUse(device);
   const showButton = headerHealthButton(useRoute().name);
 
   const statusText = offline
@@ -69,9 +70,7 @@ export function DeviceChip() {
             </div>
           ) : (
             <>
-              <div className={calibrated ? "text-ok" : "text-warn"}>
-                {calibrated ? "Calibration loaded" : "No calibration: calibrate in Setup"}
-              </div>
+              <div className={calibrated ? "text-ok" : "text-warn"}>{inUse?.line ?? (calibrated ? "Calibration loaded" : "No calibration: calibrate in Setup")}</div>
               {device?.launch_check?.state === "drift" ? (
                 <div className="text-warn">The calibration may have drifted: run the calibration check in Setup</div>
               ) : null}
@@ -87,7 +86,8 @@ export function DeviceChip() {
   const warned = connected && hv && hv.state !== "valid" ? hv : null;
   const HealthIcon = warned ? HEALTH_ICON[warned.state] : null;
   // U48: the state's one name ("Calibration valid") when the engine judged it; "Calibration loaded" only says a file is in use
-  const calibWords = warned ? warned.short : hv && calibrated ? hv.short : calibrated ? "Calibration loaded" : "No calibration";
+  // U21: the simulator demo's own calibration is "Demo calibration" (Setup's status does not speak for it)
+  const calibWords = warned ? warned.short : hv && calibrated ? hv.short : (inUse?.short ?? (calibrated ? "Calibration loaded" : "No calibration"));
 
   return (
     <span className="inline-flex items-center gap-1.5">

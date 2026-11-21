@@ -14,7 +14,8 @@ scan does not have is left out, never shown empty.
   <ohs.server.setup.SetupManager.state>`, without the file's path), with the last board check beside it; its
   health is the scan's own calibration status (``result/report.json``'s ``health_status``, FEATURE_PLAN H3/H4:
   what this scan saw, not today's setup state); a scan processed before H3 has none and the report says "not
-  assessed";
+  assessed"; beside it the camera path's check (``result/report.json``'s ``path_check`` and ``warnings``,
+  ENGINE_PLAN X0a: did tracking slide?), left out for a scan processed before the check;
 * the Check answer at the tolerance the request gives (:meth:`ProcessManager.check
   <ohs.server.processing.ProcessManager.check>`); left out when the request gives none, and before there is a mesh;
 * the kept features **as the API shows them** (:meth:`FeatureManager.get <ohs.server.features.FeatureManager.get>`:
@@ -54,6 +55,7 @@ import math
 from typing import Any, Mapping
 
 from ohs import __version__
+from ohs.server.projects import path_check_short, user_warnings
 from ohs.server.protocol import ApiError, quality_or_none
 
 __all__ = ["ReportManager", "MAX_PICTURES", "MAX_PICTURE_BYTES", "MAX_TOTAL_BYTES", "PROCESS_KEYS", "FILES"]
@@ -280,6 +282,9 @@ class ReportManager:
         if isinstance(status, dict) and status.get("state") in HEALTH_STATES:
             # the scan's own status (H3/H4): what the scan saw of its calibration, not today's setup state
             cal = {**(cal or {}), "health": {k: status.get(k) for k in HEALTH_KEYS}}
+        path = path_check_short(rep)
+        if path is not None:  # the camera path's check (ENGINE_PLAN X0a), beside the calibration's status
+            cal = {**(cal or {}), "path": {**path, "warnings": user_warnings(rep)}}
         if cal:
             data["calibration"] = cal
         if tolerance_mm is not None and version is not None:

@@ -15,6 +15,7 @@ import {
   SlidersHorizontal,
   Tag,
   Trash,
+  TriangleExclamationPoint,
   Wand,
   Waypoints,
 } from "lucide-react";
@@ -25,15 +26,18 @@ import { JobProgress, MakeMeshButton, ProcessButton, ScanStatusBadge } from "../
 import { Button, IconButton } from "../components/ui/Button";
 import { ConfirmDialog, PromptDialog } from "../components/ui/Dialog";
 import { EmptyState, Skeleton } from "../components/ui/Feedback";
-import { Code, Page, PageHeader } from "../components/ui/Layout";
-import { Menu } from "../components/ui/Popover";
+import { Page, PageHeader } from "../components/ui/Layout";
+import { Menu, type MenuItem } from "../components/ui/Popover";
 import { HEALTH_ICON, HEALTH_TEXT } from "../components/CalibHealth";
 import { hasMesh, hasRecording, mergedFromText } from "../lib/align";
 import { passOfText } from "../lib/pass";
 import { scanHealthLine, scanHealthOf } from "../lib/calibHealth";
+import { pathWarningChip } from "../lib/pathWarning";
+import { dependentsSentence, scanBusyReason, scanDependents } from "../lib/scanTrash";
 import { projectDiskText, scanDiskTitle, trashText } from "../lib/diskUse";
 import { canRemake, keepLabel, keepTitle } from "../lib/keepMode";
 import { FreeSpaceDialog } from "../components/FreeSpaceDialog";
+import { OpenFolderButton } from "../components/FolderButtons";
 import { failedLine } from "../lib/scanStatus";
 import { meshDownloadItems, meshUrls } from "../components/MeshDownloads";
 import { fileStem, fmtBytes, fmtDateTime, fmtDuration, fmtInt, fmtRelative } from "../lib/format";
@@ -72,10 +76,25 @@ function useDiskUse(pid: string, project: Project | undefined): ProjectDiskUse |
   return disk && disk.project_id === pid ? disk : null;
 }
 
-/** U16: under about 1100 px the row's secondary actions are in this menu (index.css `.sr-more`). */
+/** Under about 1100 px (U16, index.css `.sr-more`): the row's secondary actions go into its menu. */
+function useRowsUnder(px: number): boolean {
+  const query = `(max-width: ${px}px)`;
+  const [narrow, setNarrow] = useState(() => typeof window !== "undefined" && !!window.matchMedia?.(query).matches);
+  useEffect(() => {
+    const m = window.matchMedia?.(query);
+    if (!m) return;
+    const on = () => setNarrow(m.matches);
+    on();
+    m.addEventListener("change", on);
+    return () => m.removeEventListener("change", on);
+  }, [query]);
+  return narrow;
+}
+
+/** The row's menu (U7): Rename… and Move to trash…, and under about 1100 px the row's secondary actions (U16). */
 function MoreMenu({ name, items }: { name: string; items: Parameters<typeof Menu>[0]["items"] }) {
   return (
-    <span className="sr-more">
+    <span className="inline-flex">
       <Menu
         label={`More for ${name}`}
         width={260}
@@ -90,9 +109,26 @@ function MoreMenu({ name, items }: { name: string; items: Parameters<typeof Menu
   );
 }
 
-function ScanRow({ project, scan, disk, onFreeSpace }: { project: Project; scan: Scan; disk?: ScanDiskUse; onFreeSpace: (scan: Scan) => void }) {
+function ScanRow({
+  project,
+  scan,
+  disk,
+  onFreeSpace,
+  onRename,
+  onTrash,
+}: {
+  project: Project;
+  scan: Scan;
+  disk?: ScanDiskUse;
+  onFreeSpace: (scan: Scan) => void;
+  onRename: (scan: Scan) => void;
+  onTrash: (scan: Scan) => void;
+}) {
   const job = useScanJob(scan.id);
   const active = isActive(job);
+  const narrow = useRowsUnder(1100); // the secondary actions are in the row's menu
+  const mid = useRowsUnder(1500); // "Make mesh again" is in the row's menu (found in review: the row did not hold it)
+  const busyReason = scanBusyReason(scan, active); // U7: a busy scan cannot go to the trash (the engine refuses it too)
   const processing = active || scan.status === "processing";
   const hasResult = scan.status === "processed" && !!scan.result;
   const urls = meshUrls(project.id, scan.id, scan.result);
@@ -108,6 +144,21 @@ function ScanRow({ project, scan, disk, onFreeSpace }: { project: Project; scan:
   const own = hasResult ? scanHealthOf(scan.result?.report) : null;
   const health = scanHealthLine(own);
   const HealthIcon = health && own ? HEALTH_ICON[own.state] : null;
+  const pathWarn = hasResult ? pathWarningChip(scan.result?.report) : null;
+  // the secondary actions the menu holds under about 1100 px (U16), beside Rename… and Move to trash… (U7)
+  const editMesh = { label: "Edit mesh…", icon: SlidersHorizontal, onSelect: () => navigate(paths.process(project.id, scan.id)) };
+  const remake: MenuItem | null =
+    !processing && scan.status !== "recording" && hasResult && remakable
+      ? { label: "Make mesh again", icon: Wand, hint: "standard quality", onSelect: () => void makeMesh(project.id, scan.id, "standard", scan.name) }
+      : null;
+  const secondary: MenuItem[] =
+    processing || scan.status === "recording"
+      ? []
+      : hasResult
+        ? [editMesh, ...downloads, ...(remake ? [remake] : [])]
+        : recorded
+          ? [editMesh]
+          : [];
 
   return (
     <li className={cn(ROW_GRID, "min-h-[64px] items-center px-4 py-2.5 transition-colors hover:bg-surface-2/60")}>
@@ -148,6 +199,12 @@ function ScanRow({ project, scan, disk, onFreeSpace }: { project: Project; scan:
           // H4: this scan's own calibration status, when it was not Valid (the reason on hover)
           <span className={cn("inline-flex cursor-help items-center gap-1", HEALTH_TEXT[health.tone])} title={health.title}>
             <HealthIcon size={12} aria-hidden /> {health.text}
+          </span>
+        ) : null}
+        {pathWarn ? (
+          // ENGINE_PLAN X0a: the camera path jumped where no hand moves (the sentences on hover); it warns only
+          <span className="inline-flex cursor-help items-center gap-1 text-warn" title={pathWarn.title} role="note" aria-label={`${pathWarn.text}. ${pathWarn.title}`}>
+            <TriangleExclamationPoint size={12} aria-hidden /> {pathWarn.text}
           </span>
         ) : null}
         {kept ? (
@@ -204,16 +261,12 @@ function ScanRow({ project, scan, disk, onFreeSpace }: { project: Project; scan:
                     </Button>
                   )}
                 />
-                {remakable ? <MakeMeshButton projectId={project.id} scan={scan} label="Make mesh again" variant="ghost" /> : null}
+                {remakable ? (
+                  <span className="sr-wide">
+                    <MakeMeshButton projectId={project.id} scan={scan} label="Make mesh again" variant="ghost" />
+                  </span>
+                ) : null}
                 </span>
-                <MoreMenu
-                  name={scan.name}
-                  items={[
-                    { label: "Edit mesh…", icon: SlidersHorizontal, onSelect: () => navigate(paths.process(project.id, scan.id)) },
-                    ...downloads,
-                    ...(remakable ? [{ label: "Make mesh again", icon: Wand, hint: "standard quality", onSelect: () => void makeMesh(project.id, scan.id, "standard", scan.name) }] : []),
-                  ]}
-                />
               </>
             ) : !recorded ? (
               <ProcessButton projectId={project.id} scan={scan} label="Edit mesh…" />
@@ -223,11 +276,18 @@ function ScanRow({ project, scan, disk, onFreeSpace }: { project: Project; scan:
                 <span className="sr-secondary">
                   <ProcessButton projectId={project.id} scan={scan} label="Edit mesh…" variant="ghost" />
                 </span>
-                <MoreMenu name={scan.name} items={[{ label: "Edit mesh…", icon: SlidersHorizontal, onSelect: () => navigate(paths.process(project.id, scan.id)) }]} />
               </>
             )}
           </>
         )}
+        <MoreMenu
+          name={scan.name}
+          items={[
+            ...(narrow && secondary.length ? [...secondary, "separator" as const] : !narrow && mid && remake ? [remake, "separator" as const] : []),
+            { label: "Rename…", icon: Pencil, onSelect: () => onRename(scan) },
+            { label: "Move to trash…", icon: Trash, danger: true, disabled: !!busyReason, description: busyReason ?? undefined, onSelect: () => onTrash(scan) },
+          ]}
+        />
       </div>
       {scan.status === "failed" && !processing ? (
         <div className="sr-fail flex items-start gap-1.5 pl-12 text-xs text-danger" role="note">
@@ -252,6 +312,11 @@ export function ProjectPage({ pid }: { pid: string }) {
   const link = useConnection((s) => s.link);
   const [renaming, setRenaming] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const renameScan = useProjects((s) => s.renameScan);
+  const trashScan = useProjects((s) => s.trashScan);
+  const [renamingScan, setRenamingScan] = useState<Scan | null>(null);
+  const [trashingScan, setTrashingScan] = useState<Scan | null>(null);
+  const trashDeps = trashingScan && project ? scanDependents(project.scans, trashingScan.id) : [];
   /** R2: the scan whose space is being freed, or null for the whole project; undefined while closed. */
   const [freeing, setFreeing] = useState<Scan | null | undefined>(undefined);
   useTicker(30_000);
@@ -387,13 +452,21 @@ export function ProjectPage({ pid }: { pid: string }) {
               </Button>
             }
           >
-            Connect the scanner (or the simulator demo), then start a scan. Every scan records the raw camera stream, so you
-            can rebuild its mesh later with better settings.
+            Connect the scanner (or the simulator), then start a scan. Every scan records the raw camera stream, so you can
+            make its mesh again later with other settings.
           </EmptyState>
         ) : (
           <ul className="divide-y divide-line">
             {scans.map((s) => (
-              <ScanRow key={s.id} project={project!} scan={s} disk={disk?.scans.find((d) => d.id === s.id)} onFreeSpace={setFreeing} />
+              <ScanRow
+                key={s.id}
+                project={project!}
+                scan={s}
+                disk={disk?.scans.find((d) => d.id === s.id)}
+                onFreeSpace={setFreeing}
+                onRename={setRenamingScan}
+                onTrash={setTrashingScan}
+              />
             ))}
           </ul>
         )}
@@ -416,8 +489,11 @@ export function ProjectPage({ pid }: { pid: string }) {
         <FreeSpaceDialog open onClose={() => setFreeing(undefined)} project={project} scan={freeing} onDone={() => void fetchProject(pid)} />
       ) : null}
       {project ? (
-        // U39: no folder paths for the user to decode; the folder itself opens from a button once the engine offers it
-        <p className="mt-2 text-xs text-subtle">Every scan keeps its recording, so its mesh can be made again with other settings.</p>
+        // U39: no folder paths for the user to decode; the folder itself opens in the computer's file manager
+        <p className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-subtle">
+          <span>Every scan keeps its recording, so its mesh can be made again with other settings.</span>
+          <OpenFolderButton what="project" projectId={pid} label="Open the project folder" size="xs" variant="ghost" />
+        </p>
       ) : null}
 
       <PromptDialog
@@ -437,12 +513,45 @@ export function ProjectPage({ pid }: { pid: string }) {
         tone="danger"
         onConfirm={async () => {
           if (!(await remove(pid))) return false; // U6: a failed move keeps the dialog open
-          toast.success(`Moved “${name}” to the trash`, "Its folder is in .trash inside your projects folder.");
+          toast.success(`Moved “${name}” to the trash`, "Restore it from the Trash on Home.");
           navigate(paths.home());
         }}
       >
-        The project folder and all its scans move to the <Code>.trash</Code> folder inside your projects folder. Nothing is
-        permanently deleted.
+        The project folder and all its scans move to the trash. Nothing is deleted: you can restore it from the Trash on
+        Home.
+      </ConfirmDialog>
+      <PromptDialog
+        open={!!renamingScan}
+        onClose={() => setRenamingScan(null)}
+        title="Rename scan"
+        label="Scan name"
+        initial={renamingScan?.name ?? ""}
+        confirmLabel="Rename"
+        maxLength={120}
+        onSubmit={(v) => (renamingScan ? renameScan(pid, renamingScan.id, v) : false)}
+      />
+      <ConfirmDialog
+        open={!!trashingScan}
+        onClose={() => setTrashingScan(null)}
+        title={`Move “${trashingScan?.name ?? ""}” to the trash?`}
+        confirmLabel="Move to trash"
+        tone="danger"
+        onConfirm={async () => {
+          if (!trashingScan) return;
+          const n = trashingScan.name;
+          if (!(await trashScan(pid, trashingScan.id, trashDeps.length > 0))) return false; // U6: stays open
+          toast.success(`Moved “${n}” to the trash`, "Restore it from the Trash on Home.");
+        }}
+      >
+        <span className="block">The scan's folder (its recording, mesh and measurements) moves to the trash. Nothing is deleted: you can restore it from the Trash on Home.</span>
+        {trashDeps.length ? (
+          <span className="mt-2 flex gap-1.5 text-warn" role="note">
+            <TriangleExclamationPoint size={14} className="mt-0.5 shrink-0" aria-hidden />
+            <span>
+              {dependentsSentence(trashDeps)} They keep their own meshes, but cannot be made again from this scan while it is in the trash.
+            </span>
+          </span>
+        ) : null}
       </ConfirmDialog>
     </Page>
   );

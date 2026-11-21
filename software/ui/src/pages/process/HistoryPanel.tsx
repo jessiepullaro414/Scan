@@ -3,12 +3,13 @@
  * took. Clicking a step undoes (or redoes) to it; steps after the cursor are greyed until a
  * new edit drops them. Undo / redo buttons (Ctrl+Z, Ctrl+Shift+Z or Ctrl+Y) sit on top.
  */
-import { ListClock, Redo2, Undo2 } from "lucide-react";
+import { Blend, ListClock, Redo2, Undo2 } from "lucide-react";
 import type { ProcessState } from "../../api/types";
-import { IconButton } from "../../components/ui/Button";
+import { Button, IconButton } from "../../components/ui/Button";
 import { Spinner } from "../../components/ui/Feedback";
 import { fmtDateTime, fmtInt, fmtRelative, withUnit } from "../../lib/format";
 import { historyLabel } from "../../lib/recipes";
+import { removedLine } from "../../lib/looseBits";
 import { cn } from "../../lib/util";
 import { processKey, useProcess } from "../../store/process";
 import { Help, Panel } from "./bits";
@@ -21,7 +22,22 @@ function fmtMs(ms: number): string {
   return withUnit((ms / 1000).toFixed(ms < 10_000 ? 1 : 0), "s");
 }
 
-export function HistoryPanel({ pid, sid, state, busy }: { pid: string; sid: string; state: ProcessState; busy: boolean }) {
+export function HistoryPanel({
+  pid,
+  sid,
+  state,
+  busy,
+  showRemovedFor = null,
+  onShowRemoved,
+}: {
+  pid: string;
+  sid: string;
+  state: ProcessState;
+  busy: boolean;
+  /** U14: the edit whose removed loose bits the Compare ghost can show now (lib/looseBits.ts), or null. */
+  showRemovedFor?: string | null;
+  onShowRemoved?: () => void;
+}) {
   const undo = useProcess((s) => s.undo);
   const redo = useProcess((s) => s.redo);
   const jumpTo = useProcess((s) => s.jumpTo);
@@ -111,11 +127,22 @@ export function HistoryPanel({ pid, sid, state, busy }: { pid: string; sid: stri
                       <span className="tnum">{fmtInt(e.triangles_after)}</span> triangles · {fmtMs(e.ms)}
                       {!applied ? " · undone" : ""}
                     </span>
+                    {removedLine(e.removed) ? (
+                      // U14: what it took (a thin or small part can go with the noise)
+                      <span className="block text-[11px] text-muted tnum">{removedLine(e.removed)}</span>
+                    ) : null}
                   </span>
                   <time className="shrink-0 text-[10.5px] text-subtle" dateTime={e.created} title={fmtDateTime(e.created)}>
                     {fmtRelative(e.created)}
                   </time>
                 </button>
+                {showRemovedFor === e.id && onShowRemoved ? (
+                  <div className="pl-[38px] pt-0.5">
+                    <Button size="xs" variant="ghost" icon={Blend} onClick={onShowRemoved} title="The mesh before this step as an orange ghost: what was removed shows in orange">
+                      Show what was removed
+                    </Button>
+                  </div>
+                ) : null}
               </li>
             );
           })}

@@ -359,6 +359,16 @@ def _calibration(cal: dict) -> str:
     else:
         rows.append(("Health", "Not assessed: this scan's processing did not judge its calibration (it was processed "
                                "before the app did that). Processing it again judges it."))
+    path = cal.get("path")
+    if isinstance(path, dict):  # the camera path's check for a slide (ENGINE_PLAN X0a); it warns only
+        said = [str(w) for w in path.get("warnings") or [] if isinstance(w, str) and w.strip()]
+        if said:
+            rows.append(("Camera path", _badge("warning") + " " + "<br>".join(esc(w) for w in said)))
+        elif path.get("state") == "ok":
+            rows.append(("Camera path", esc("No jump found: the camera moved as a hand moves, so tracking did not "
+                                            "slide anywhere it could tell.")))
+        else:
+            rows.append(("Camera path", esc("Not judged: the scan is too short to judge whether tracking slid.")))
     return _part("calibration", [_dl(rows)])
 
 

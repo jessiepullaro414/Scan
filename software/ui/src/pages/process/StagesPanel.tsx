@@ -4,7 +4,7 @@
  * progress with Cancel, and Run / Re-run. Re-running asks first when there are edits: a new base
  * mesh starts them over.
  */
-import { Crosshair, Images, Layers, Play, RotateCcw, Spline, Waypoints, type LucideIcon } from "lucide-react";
+import { Crosshair, Images, Layers, Play, RotateCcw, Spline, TriangleExclamationPoint, Waypoints, type LucideIcon } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import type { Job, ProcessQuality, ProcessState, Scan, StageId, StageInfo } from "../../api/types";
 import { JobProgress } from "../../components/ScanBits";
@@ -17,6 +17,7 @@ import { stageBlock, type StageAction } from "../../lib/keepMode";
 import { effectiveValue } from "../../lib/presets";
 import { DEFAULT_QUALITY, QUALITIES, QUALITY_TEXT, normalizeQuality, qualityName } from "../../lib/quality";
 import { STAGE_TITLES } from "../../lib/stages";
+import { scanWarnings } from "../../lib/pathWarning";
 import { cn } from "../../lib/util";
 import { isActive, useJobs } from "../../store/jobs";
 import { presetKey, usePresets } from "../../store/presets";
@@ -177,6 +178,7 @@ export function StagesPanel({ pid, sid, state, busy, scan }: { pid: string; sid:
   const [confirm, setConfirm] = useState<{ stage: StageId; run: () => Promise<unknown> } | null>(null);
   const edits = state.edits.length;
   const tracked = track.state === "done";
+  const trackWarnings = scanWarnings(track); // ENGINE_PLAN X0a: the camera path's warning ([] for an older scan)
 
   /** Run now, or ask first when edits would be lost. */
   const go = (stage: StageId, run: () => Promise<unknown>) => {
@@ -220,15 +222,28 @@ export function StagesPanel({ pid, sid, state, busy, scan }: { pid: string; sid:
           runLabel={track.state === "none" ? "Run" : "Run again"}
           onRun={() => go("track", () => runStage(pid, sid, "track", { quality }))}
           details={
-            track.state === "done" && (track.tracked_pct !== null || track.quality) ? (
-              <p className="text-xs text-fg">
-                {track.tracked_pct !== null ? (
-                  <>
-                    <b className="font-semibold tnum">{fmtFixed(track.tracked_pct, 0)}&#8239;%</b> of the frames tracked
-                  </>
+            track.state === "done" && (track.tracked_pct !== null || track.quality || trackWarnings.length) ? (
+              <>
+                {track.tracked_pct !== null || track.quality ? (
+                  <p className="text-xs text-fg">
+                    {track.tracked_pct !== null ? (
+                      <>
+                        <b className="font-semibold tnum">{fmtFixed(track.tracked_pct, 0)}&#8239;%</b> of the frames tracked
+                      </>
+                    ) : null}
+                    {qualityName(track.quality) ? <span className="text-muted">{track.tracked_pct !== null ? " · " : ""}{qualityName(track.quality)}</span> : null}
+                  </p>
                 ) : null}
-                {qualityName(track.quality) ? <span className="text-muted">{track.tracked_pct !== null ? " · " : ""}{qualityName(track.quality)}</span> : null}
-              </p>
+                {trackWarnings.map((w) => (
+                  // ENGINE_PLAN X0a: the camera path jumped where no hand moves; it warns only
+                  <p key={w} className="flex gap-1.5 rounded-md border border-warn/30 bg-warn-soft px-2 py-1.5 text-xs leading-5 text-fg" role="note">
+                    <TriangleExclamationPoint size={13} className="mt-[3px] shrink-0 text-warn" aria-hidden />
+                    <span>
+                      <b className="font-semibold">Tracking may have slid.</b> {w}
+                    </span>
+                  </p>
+                ))}
+              </>
             ) : null
           }
         >
