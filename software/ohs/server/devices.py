@@ -1018,8 +1018,12 @@ class DeviceManager:
                 return
             except Exception as e:  # camera unplugged, unreadable frame file, ...
                 log.warning("camera: %s", e)
-                self._report_lost(conn, "error", "the camera stopped sending pictures. Check its USB cable, then "
-                                                 "press Connect again")
+                if conn.source in ("replay", "sim"):  # a recording read from disk: no cable to check (UX_PLAN R14)
+                    self._report_lost(conn, "error", "The recording could not be read any more (its folder was moved "
+                                                     "or deleted).")
+                else:
+                    self._report_lost(conn, "error", "the camera stopped sending pictures. Check its USB cable, then "
+                                                     "press Connect again")
                 return
             t_recv = time.perf_counter()
             conn.cam_rate.tick()

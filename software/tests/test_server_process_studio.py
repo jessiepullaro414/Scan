@@ -236,7 +236,7 @@ def test_track_edits_undo_redo_and_the_process_messages(env):
     v0 = cur["version"]
     plan = [("remove_floaters", {"min_size_mm": 5}, "Remove loose bits smaller than 5 mm"),
             ("fill_holes", {"max_hole_mm": 30}, "Fill holes up to 30 mm around (about Ø 10 mm)"),
-            ("smooth", {"method": "bilateral", "strength": 0.3}, "Smooth (bilateral, 30 %, edges kept)"),
+            ("smooth", {"method": "bilateral", "strength": 0.3}, "Smooth 30 % (keeping the shape, sharp edges kept)"),
             ("decimate", {"ratio": 0.5}, "Simplify to 50 % of the triangles")]
     tris = [s["base"]["triangles"]]
     for k, (op, params, label) in enumerate(plan):
@@ -854,12 +854,12 @@ def test_measurement_safe_edits(env):
     run_job(env, post(b + "/process/edits", {"op": "smooth", "params": {"method": "taubin", "strength": 0.3,
                                                                           "flat_only": True}}), "mesh_edit")
     s = get(b + "/process").json()
-    assert s["edits"][-1]["label"] == "Smooth (taubin, 30 %, edges kept, flat areas only)"
+    assert s["edits"][-1]["label"] == "Smooth 30 % (evenly, sharp edges kept, flat areas only)"
     assert s["edits"][-1]["params"]["flat_only"] is True and s["current"]["stats"]["filled_cm2"] > 0
     run_job(env, post(b + "/process/edits", {"op": "smooth", "params": {"method": "taubin", "strength": 0.3,
                                                                           "away_from_edges": True}}), "mesh_edit")
     s = get(b + "/process").json()
-    assert s["edits"][-1]["label"] == "Smooth (taubin, 30 %, edges kept, away from edges)"
+    assert s["edits"][-1]["label"] == "Smooth 30 % (evenly, sharp edges kept, off edges)"
     assert s["edits"][-1]["params"]["away_from_edges"] is True and "flat_only" not in s["edits"][-1]["params"]
     run_job(env, post(b + "/process/edits", {"op": "decimate", "params": {"max_error_mm": 0.05}}), "mesh_edit")
     s = get(b + "/process").json()
@@ -983,14 +983,16 @@ def test_straighten_closes_loops_and_fuses_again(env, orbit):
     track_csv = proc / "track" / "trajectory.csv"
     run_job(env, post(b + "/process/edits", {"op": "fill_holes", "params": {"max_hole_mm": 10}}), "mesh_edit")
     # 1. the true poses: loops close, but the passes already line up, so nothing changes (no new fuse,
-    # the edits stay) and the summary is the engine's verdict
+    # the edits stay) and the summary is the engine's verdict, saying there was nothing to straighten (UX_PLAN R22)
     write_trajectory(track_csv, [(i, float(times[k]), True, Tt[k]) for k, i in enumerate(idx)])
     before = get(b + "/process").json()
     j = run_job(env, post(b + "/process/straighten", {}), "process_straighten")
     s = get(b + "/process").json()
     stt = s["stages"]["straighten"]
     rep = json.loads((proc / "straighten.json").read_text(encoding="utf-8"))
-    assert rep["changed"] is False and stt["state"] == "skipped" and stt["summary"] == rep["verdict"], stt
+    said = rep["verdict"].replace(": the passes already line up", ", but there was nothing to straighten: the passes "
+                                                                   "already line up", 1)
+    assert rep["changed"] is False and stt["state"] == "skipped" and stt["summary"] == said != rep["verdict"], stt
     assert stt["summary"].startswith("Closed") and "unchanged" in stt["summary"] and stt["loops"] >= 1
     assert j["result"]["message"] == stt["summary"]
     assert s["base"] == before["base"] and s["edits"] == before["edits"] and s["cursor"] == 1

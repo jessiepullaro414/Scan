@@ -441,11 +441,12 @@ def _json(x: Any, status: int = 200) -> JSONResponse:
     return JSONResponse(jsonable(x), status_code=status)
 
 
-def _err(status: int, detail: str, hint: Optional[str] = None) -> JSONResponse:
+def _err(status: int, detail: str, hint: Optional[str] = None, extra: Optional[dict] = None) -> JSONResponse:
     body: dict = {"detail": sentence(detail)}
     if hint:
         body["hint"] = sentence(hint)
-    return JSONResponse(body, status_code=status)
+    body.update({k: v for k, v in (extra or {}).items() if k not in ("detail", "hint")})
+    return JSONResponse(jsonable(body), status_code=status)
 
 
 #: a request the page should never send (a bug, or an old page after an update): what the user reads
@@ -576,7 +577,7 @@ def create_app(config: Any = None, *, projects_dir: Any = None, static_dir: Any 
     # ------------------------------------------------------------------ errors
     @app.exception_handler(ApiError)
     async def _api_error(request: Any, exc: ApiError) -> JSONResponse:
-        return _err(exc.status, exc.detail, exc.hint)
+        return _err(exc.status, exc.detail, exc.hint, getattr(exc, "extra", None))
 
     @app.exception_handler(RequestValidationError)
     async def _validation_error(request: Any, exc: RequestValidationError) -> JSONResponse:
@@ -793,6 +794,14 @@ def create_app(config: Any = None, *, projects_dir: Any = None, static_dir: Any 
     @app.get("/api/projects/{pid}/scans/{sid}/process/holes.json")
     def process_holes(pid: str, sid: str) -> JSONResponse:
         return _json(proc.holes(pid, sid))
+
+    @app.get("/api/projects/{pid}/scans/{sid}/process/edits/{edit_id}/{which}.ply")
+    def process_mesh_before(pid: str, sid: str, edit_id: str, which: str) -> Response:
+        if which not in ("before", "after"):
+            raise ApiError(404, "A step of the history has no file of this name.", "Ask for before.ply or after.ply.")
+        data, step, version = proc.mesh_before(pid, sid, edit_id, after=which == "after")
+        return Response(data, media_type="application/octet-stream",
+                        headers={"Cache-Control": "no-cache", "X-OHS-Step": str(step), "X-OHS-Mesh-Version": str(version)})
 
     @app.get("/api/projects/{pid}/scans/{sid}/process/deviation.json")
     def process_deviation(pid: str, sid: str) -> JSONResponse:

@@ -160,10 +160,23 @@ def _count(n: int, one: str, many: str | None = None) -> str:
     return f"{n:,} {one if n == 1 else (many or one + 's')}"
 
 
+def _cleaning_summary(c: dict, fraction: float, moved: bool) -> str:
+    """One sentence on what the merge's small-piece cleaning took (``c``: :func:`clean_merged`'s info); ``moved``:
+    the part was moved (a piece over a thin part was kept whatever its size, and the sentence says how many)."""
+    n_gone = int(c["pieces_removed"])
+    rule = f"under {100 * fraction:g} % of the triangles each"
+    s = (f"{_count(n_gone, 'small loose bit')} ({c['area_removed_mm2']:,.0f} mm²) {'was' if n_gone == 1 else 'were'} "
+         f"left out as too small ({rule})" if n_gone else f"No loose bit was left out as too small ({rule})")
+    if moved:
+        k = int(c["thin_pieces_kept"])
+        s += f"; {_count(k, 'small bit')} over a thin part {'was' if k == 1 else 'were'} kept"
+    return s + "."
+
+
 def _map_summary(e: dict) -> str:
     """One sentence on what a scan's table map left out and kept, with what the merged mesh lost of it.
     A thin part counts as kept only when the merge found it in its result (:func:`settle_thin_parts`)."""
-    s = (f"Its table is left out ({(e.get('table_area_mm2') or 0.0) / 100.0:,.1f} cm² of its mesh, flat to "
+    s = (f"Its table is left out ({(e.get('table_area_mm2') or 0.0):,.0f} mm² of its mesh, flat to "
          f"{e.get('flatness_mm') or 0.0:.2f} mm); the part is kept right down to it")
     kept = [x for x in e["thin_parts"] if x["verdict"] == "kept" and x.get("in_merge", "kept") == "kept"]
     warned = [x for x in e["thin_parts"] if x["verdict"] == "warned" and x.get("in_merge", "kept") == "kept"]
@@ -416,6 +429,9 @@ def merge_scans(scans: Sequence[ScanInput], out_dir: str | Path, params: Process
             else:
                 from ohs.track.export import clean_mesh  # noqa: PLC0415
 
+                # what it takes, counted as clean_merged counts it (the same pieces: tests/test_merge_table.py), so
+                # that a merge of a part that was not moved says it too (UX_PLAN R7); the mesh is clean_mesh's, as before
+                cleaning = clean_merged(V, F, [], float(p.clean_min_component))[3]
                 V, F, idx = clean_mesh(V, F, min_component_fraction=float(p.clean_min_component), return_index=True)
             N = N[idx] if N is not None and len(N) else N
             S = S[idx] if S is not None and len(S) else S
@@ -470,15 +486,9 @@ def merge_scans(scans: Sequence[ScanInput], out_dir: str | Path, params: Process
         if any(isinstance(pl[5], SupportMap) for pl in plan):
             report["mesh"]["n_faces_table_removed"] = n_faces_table
             report["lasers"]["n_points_table_removed"] = int(on_table.sum())
-            if cleaning is not None:  # what the small-piece cleaning did besides: nothing goes unsaid
-                n_gone = cleaning["pieces_removed"]
-                report["mesh"]["cleaning"] = {
-                    **cleaning, "min_component_fraction": float(p.clean_min_component),
-                    "summary": (f"{_count(n_gone, 'small loose bit')} ({cleaning['area_removed_mm2']:,.0f} mm²) "
-                                f"{'was' if n_gone == 1 else 'were'} left out as too small (under "
-                                f"{100 * p.clean_min_component:g} % of the triangles each); "
-                                f"{_count(cleaning['thin_pieces_kept'], 'small bit')} over a thin part "
-                                f"{'was' if cleaning['thin_pieces_kept'] == 1 else 'were'} kept.")}
+        if cleaning is not None:  # what the small-piece cleaning did: nothing goes unsaid, moved part or not (R7)
+            report["mesh"]["cleaning"] = {**cleaning, "min_component_fraction": float(p.clean_min_component),
+                                          "summary": _cleaning_summary(cleaning, float(p.clean_min_component), bool(maps))}
         files["report"] = str(out / "report.json")
         report["wall_time_s"] = time.perf_counter() - wall0
         report = _jsonable(report)

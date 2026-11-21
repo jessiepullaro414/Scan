@@ -698,7 +698,7 @@ def _engine(device: str, fr: _Frames, K: np.ndarray, baseline: float) -> _GpuCos
     dev = get_device()
     if dev is None:
         if device == "gpu":
-            raise RuntimeError(f"no GPU for the spacetime cost: {status()}")
+            raise RuntimeError(f"no graphics card for the refinement from the images: {status()}")
         return None
     try:
         return _GpuCost(dev, fr, K, baseline)
@@ -755,7 +755,7 @@ def search_offsets(patches: Patches, left: Sequence[np.ndarray], right: Sequence
     for li, (r, s) in enumerate(p.levels):
         if cancelled is not None and cancelled():
             raise InterruptedError("cancelled")
-        slow = "" if eng.device == "gpu" else ", on the CPU: this takes minutes"
+        slow = "" if eng.device == "gpu" else ", without a graphics card: this takes minutes"
         say(0.1 + 0.9 * li / len(p.levels), f"searching along the normals ({li + 1} of {len(p.levels)}{slow})")
         offs = np.arange(-r, r + 0.5 * s, s)
         deltas = centre[:, None] + offs[None, :]
@@ -925,7 +925,7 @@ def frames_from_recording(recording: str, calib: object, poses: dict[int, np.nda
         if cancelled is not None and cancelled():
             raise InterruptedError("cancelled")
         if progress is not None:
-            progress(n_done / max(len(pos), 1), f"reading frame {n_done + 1} of {len(pos)}")
+            progress(n_done / max(len(pos), 1), f"reading frame {n_done + 1:,} of {len(pos):,}")
         fr = reader.frame(k)
         lr, rr = rect.rectify(fr.left, fr.right)
         left.append(lr)

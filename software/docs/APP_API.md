@@ -49,7 +49,7 @@ type Job = { id: string; kind: string; state: "queued" | "running" | "done" | "f
 
 | Method and path | Body | Returns |
 |---|---|---|
-| `GET /api/health` | | `{app:"openhandscan", version, engine:{opencv, open3d}}`. *extra*: `api`, and `engine.compute` = `ohs.compute.describe()`: `{backend: "gpu"\|"cpu", status, device: {name, vendor, platform, kind: "discrete"\|"integrated", memory_mb, max_alloc_mb, opencl} \| null, preference}`. The pages say from it what this computer can do (UX_PLAN U5), in their own words ("graphics card"); `status` is the engine's and is not shown. |
+| `GET /api/health` | | `{app:"openhandscan", version, engine:{opencv, open3d}}`. *extra*: `api`, and `engine.compute` = `ohs.compute.describe()`: `{backend: "gpu"\|"cpu", status, device: {name, vendor, platform, kind: "discrete"\|"integrated", memory_mb, max_alloc_mb, opencl} \| null, preference, preference_from: "environment" \| "settings" \| "auto"}` (*since 2026-11-21*, UX_PLAN R20: who chose: the `OHS_COMPUTE` environment variable, the settings' `[compute] device`, or nobody, so with `backend: "cpu"` no graphics card was found). The pages say from it what this computer can do (UX_PLAN U5), in their own words ("graphics card"); `status` is the engine's and is not shown. |
 | `GET /api/device` | | `DeviceState` |
 | `POST /api/device/connect` | `{source:"camera"\|"replay"\|"sim", recording?:string, loop?:bool}` | `DeviceState`. For `sim`, the first time a job builds the demo recording: returns **202** with `{job: Job}`, and the device connects itself when the job finishes. |
 | `POST /api/device/disconnect` | | `DeviceState` |
@@ -251,7 +251,7 @@ type CalibResult = {
   kind: CalibKind; ok: boolean; grade: "excellent" | "good" | "usable" | "poor" | "failed";
   headline: string;        // e.g. "Excellent camera calibration"
   verdict: string;         // one or two plain sentences: what happened and what it means
-  metrics: CalibMetric[];  // plain-language rows: "Reprojection error 0.21 px (want < 0.5 px)"
+  metrics: CalibMetric[];  // plain-language rows: "How well the corners fit 0.21 px (want < 0.5 px)" (before 2026-11-21: "Reprojection error")
   advice: CalibAdvice[];
   per_view: { index: number; error_px: number; bad: boolean }[];
   sim_truth: CalibMetric[] | null;   // simulator only: the estimate against the virtual scanner's true calibration
@@ -776,6 +776,8 @@ Everything in the M3 phase 2 section is implemented as written, with these clari
   - `fuse.voxel_mm` is the voxel size actually used.
   - A new track resets straighten, fuse and both refinements to `none`, a new straighten resets fuse and the refinements (they built on the old poses), a new fuse resets the refinements, and a new `spacetime` resets `refine`.
 - A cancelled stage returns to its previous state, and its files are untouched. A failed stage is `failed` with the reason as its `summary`; the base and the edits stay.
+- *Since 2026-11-21* (UX_PLAN R17, R18): every `StageInfo` has *extra* `started` (ISO 8601, when it last started; null before) and `seconds` (how long it ran, 0.1 s; null while it runs and before). `ProcessState` has *extra* `made: {job_id, kind, when, seconds, stages: {<stage>: seconds}} | null`: the Make mesh (or recipe on everything) that made the current base, with how long the whole job took, every stage and edit; null for a scan made before, and once a single stage on the scan replaced that base. The HTML report's "Processing time" reads it ("26 min 03 s for the whole Make mesh, every stage and edit"); without it the report says the time is the last stage's alone ("7 min 27 s for the last stage that made this mesh (the stages before it and the edits not counted)"); `Scan.result.report.wall_time_s` stays that last stage's time.
+- *Since 2026-11-21* (UX_PLAN R22): Straighten skipped after closing loops that changed nothing says so: "Closed 48 loops, but there was nothing to straighten: the passes already line up (within 0.12 mm), so the scan is unchanged." (the engine's "Closed 48 loops: the passes already line up …" before). The server never has two stages `running` at once: during a Make mesh the scan's own `stages` keep their states and the run's are in `making.stages`; the page shows a stage as running only from those states, never from the job's kind or message.
 
 **Stages**
 - **The base keeps every piece.** The M1 filter that dropped pieces under 1 % of the triangles is no longer part of tracking, so removing floaters is an edit you can see and undo. The Default recipe removes the same pieces (see Recipes).
@@ -814,7 +816,8 @@ Everything in the M3 phase 2 section is implemented as written, with these clari
   - `straighten`: what Straighten had to correct, from `straighten.json`: `{reason, changed, keyframes, loop_candidates, loops_accepted, correction_mm, correction_deg, residual_mm: {before_max, after_max} | null, drift_scale, laser_curves: {changed, reason, crossings, miss_mm, moved_mm, moved_deg} | null}`. Null in the track's report; the straighten and fuse stages' reports have it, and when Straighten is skipped (nothing to correct) `result/report.json` gets it.
   - `ms`: what the block cost the processing (its share on the processing thread).
   - Should the block fail, the scan is still processed and `health` is `{version, error}`.
-- **The scan's calibration status** (*extra*, since H3): every stage's `report.json` with a `health` block (not a failed one) also has `health_status`, a `CalibHealth` (`source: "scan"`, with `signs`) of what this scan alone saw (`ohs.calib.health.scan_status`): Valid, Check recommended or Recalibration required, the part, one sentence and the step to redo. One scan is enough here; the setup state's status waits for 2 of the last 3. A scan processed without a GPU judges the cameras only (`note`). At given poses (the straighten and fuse stages) nothing is tracked, so the IMU is not judged there. It warns only: the scan is processed as before.
+- **The scan's calibration status** (*extra*, since H3): every stage's `report.json` with a `health` block (not a failed one) also has `health_status`, a `CalibHealth` (`source: "scan"`, with `signs`) of what this scan alone saw (`ohs.calib.health.scan_status`): Valid, Check recommended or Recalibration required, the part, one sentence and the step to redo. One scan is enough here; the setup state's status waits for 2 of the last 3. A scan processed without a GPU judges the cameras only (`note`). At given poses (the straighten and fuse stages) nothing is tracked, so the IMU is not judged there.
+  - *Since 2026-11-21* (UX_PLAN R5) a stage at given poses reads its status on the path that made its poses: its `report.json` has *extra* `health_path: {tracking_model, cpu_path, from: "track"}` (the track stage's `params.compute.tracking_model` and `ohs.calib.health.cpu_path_case`), and its `health_status` is read on it. Before, such a stage's own `tracking_model` (null) made a scan processed on the graphics card say "processed without a graphics card". The refinements copy the report they refine, and so the path. A scan made without a graphics card at full resolution with the CPU path's settings has no note: its lasers and motion sensor are judged too (D7); at half resolution, from before those settings, or with one turned off, the note says why only the cameras were judged, in every stage alike. It warns only: the scan is processed as before.
   - *Since H4* the scan's summary in `project.json` (`Scan.result.report`, which the project page's scan list reads) keeps it in short: `health_status: {state: HealthState, part: HealthPart | null, reason: string}`, written with the rest of the summary when a stage gives the scan a new base. A scan whose summary was written before H4 has none (nothing is shown for it); the full status stays in `result/report.json`.
 - **The camera path's warning** (*extra*, since 2026-11-20, ENGINE_PLAN X0a): the track stage's `report.json` has `path_check`, the engine's check of the tracked camera path for a jump no hand makes (`ohs.track.path_check`): `{version, window_s, limit_mm, frames, jump_mm, frame, state: "ok" | "warn" | null, warning: string | null}` (`state` null: too short to judge), and `warnings`, a list of sentences for the user (empty when there is nothing to say; with `state: "warn"` it holds the check's sentence: tracking may have slid near that frame, so a thin part can come out thinner or partly missing). It warns only: the mesh is the same without it.
   - A stage fused at given poses (straighten, fuse) takes the track stage's `path_check` and `warnings` into its own `report.json`, since its poses come from that path; the refinements keep those of the report they refine. So `result/report.json` always has the check of the path the current mesh was built from.
@@ -823,6 +826,14 @@ Everything in the M3 phase 2 section is implemented as written, with these clari
   - A scan processed before the check has neither key (in its summary, its `report.json` and its stage) and nothing is shown for it.
 - **Scan status:** stage jobs and recipe `all` jobs set the scan to `processing`. Afterwards it is `processed` when it has a mesh, else `failed` (with `error`) or `recorded`. Edit jobs leave the status alone.
 - **Make mesh** (`POST .../process`) is the Default recipe with scope `all` at the requested quality. Its job kind (`process_scan`), result `{project_id, scan_id, scan, message: "Mesh ready"}` and statuses are M1's.
+  - **Built beside the result** (since 2026-11-21, UX_PLAN R2). Make mesh and a recipe with scope `all` build the new mesh in a folder of their own, `scans/<sid>/.remake-<job id>/` (its own `process/` and `result/`; the recording is the scan's), and put it in the place of the scan's `process/` and `result/` only once every stage and edit of the run has finished. Until then the scan's mesh, stages, edits and undo history, `report.json`, laser points, `ProcessState` and the scan entry in `project.json` are not touched: the viewer, the downloads and the report keep showing the earlier mesh. A cancelled or failed run removes its folder, and the scan is byte for byte as it was, its `status` and `error` too.
+    - *extra* job field `mesh_kept` (kinds `process_scan`, and `process_recipe` with scope `all`): `true` while the job is queued or running and after it ended `cancelled` or `failed`, when the scan had a mesh before: that earlier mesh is still the scan's, with its stages, edits, report and laser points. `false` once the job is `done` (the new mesh took its place) and when the scan had no mesh before. The page reads it for its words after a cancel or a failure ("The earlier mesh is kept as it was.").
+    - *extra* `ProcessState.making`: `{stages: {track | straighten | fuse | spacetime | refine: {state: StageState, summary: string | null, started: string | null, seconds: number | null}}, plan: {stage: "track" | "straighten" | "refine" | "edits", from: number, to: number}[] | null, elapsed_s?: number, left_s?: number | null}` of the run being built, while such a job runs; else `null`. **Time left** (*since 2026-11-21*, UX_PLAN R18): `plan` is the span of the job's `progress` (0–1) each part takes, in order: the parts get their measured shares of a Make mesh's time (Follow the camera 47 %, Straighten 37 %, Refine with lasers 3 %, the edits 13 %, from three simulated scans of 180 to 240 frames: `processing.MAKE_MESH_SHARES`; the parts that do not run are left out and the rest scaled; before, Follow the camera had 72 % and Straighten 12 %). Inside Straighten, a part that does not run (a fuse without loops) is passed over, so the percentage jumps ahead, never back. `elapsed_s` is how long the job has run; `left_s` is the time left for the whole job at this pace, `elapsed_s × (1 − progress) / progress`, rounded to 1 s, null under 3 %. The page says "About N min left" from `left_s` for the whole job (not the stage's), and names the running stage from `making.stages` (the one `running`). `ProcessState.stages`, `base`, `edits` and `current` stay those of the scan's current mesh until the run takes its place (then `current.version` is higher than before, and a `process` message goes out).
+    - The swap is three renames (the old `process/` and `result/` move into the run's folder, the new ones move in); a cancel arriving then is too late and the job ends `done`. Should a file of the scan be held open by another program longer than 30 s, the swap is undone and the job fails: "The new mesh could not take the place of the earlier one, because a file of this scan is open in another program. The earlier mesh is kept as it was." (hint "Close the program that has the file open, then press Make mesh again.").
+    - An app that stops during a run leaves the folder; at the next start a run that had not finished is removed (the scan was never touched), a swap that stopped half way is undone, and one whose new folders were all moved in is finished (its scan entry written).
+    - **Disk space:** while it runs, the scan holds two results, the earlier one and the one being built (about the size of `process/` and `result/` together). `GET .../disk` counts the run's folder in the scan's `other` until the old result goes.
+    - The notices: "Making the mesh again was cancelled. The earlier mesh is kept as it was, with its edits." and "Making the mesh again failed. … The earlier mesh is kept as it was, with its edits; your recording is safe."
+    - The single stages (`process/track`, `straighten`, `fuse`, `refine`, `spacetime`) still work on the scan itself, as before.
   - Second Make mesh on the same scan: 409 "This scan's mesh is already being made."
   - Any other processing job running on the scan: 409 "This scan is busy: …" (hint "Wait for it to finish, or press Cancel.").
 
@@ -833,11 +844,12 @@ Everything in the M3 phase 2 section is implemented as written, with these clari
   - `op` (edits);
   - `voxel_mm` (fuse);
   - `recipe_id`, `recipe_name`, `scope` (recipes).
+  - `mesh_kept` (Make mesh, and recipes with scope `all`; since 2026-11-21, UX_PLAN R2): whether the scan's earlier mesh is still its mesh (see Make mesh).
 - Results:
   - stage jobs and recipe `all`: `{project_id, scan_id, scan, message}`, where `message` is the stage's summary;
   - `mesh_edit`: `{project_id, scan_id, edit: EditEntry, message}`;
   - recipe `edits`: `{project_id, scan_id, recipe_id, message}`.
-- Progress messages read like "Tracking: frame 12 of 696 on the GPU (…)", "Fill holes up to 12 mm around (about Ø 4 mm): Filling hole 3 of 40" or "Simplify to 200,000 triangles: Simplifying: 412,000 triangles".
+- Progress messages read like "Following the camera: frame 1,212 of 1,321" (since 2026-11-21 with thousands separators and without the device: UX_PLAN R12), "Fill holes up to 12 mm around (about Ø 4 mm): Filling hole 3 of 40" or "Simplify to 200,000 triangles: Simplifying: 412,000 triangles".
 
 **Edits**
 - `params` in an `EditEntry` are normalised (defaults filled in). For `delete_faces` / `keep_faces` they are `{"count": n}`: the indices themselves are kept in `selections/`.
@@ -848,7 +860,7 @@ Everything in the M3 phase 2 section is implemented as written, with these clari
   - "Remove loose bits smaller than 5 mm or under 1 % of the mesh";
   - "Keep the largest piece only";
   - "Fill holes up to 12 mm around (about Ø 4 mm)" (the size is the length round the hole; the diameter is that over π, UX_PLAN U13);
-  - "Smooth (bilateral, 50 %, edges kept)";
+  - "Smooth 50 % (keeping the shape, sharp edges kept)" (bilateral; Taubin is "evenly"; since 2026-11-21, UX_PLAN R12, the methods' names are no longer in the label; before: "Smooth (bilateral, 50 %, edges kept)");
   - "Simplify to 200,000 triangles", "Simplify to 50 % of the triangles" or "Simplify to within 0.02 mm";
   - "Delete 1,234 triangles" or "Keep 1,234 triangles".
 - `remove_floaters`:
@@ -858,6 +870,8 @@ Everything in the M3 phase 2 section is implemented as written, with these clari
   - `{}` means `{min_size_mm: 5}`, and `keep_largest_only` ignores the other limits.
   - The largest piece is never removed.
   - *Since 2026-11-20* (UX_PLAN U14) the edit says what it took: its `summary` is "Removed 3 loose bits, the largest 4.2 mm across (1,234 triangles)" (one bit: "Removed 1 loose bit, 4.2 mm across (12 triangles)"), and the entry has `removed: {pieces, triangles, largest_mm}` (`largest_mm`: the largest removed piece's bounding-box diagonal, 0.1 mm), absent when nothing was removed and on an edit made before. A piece under 1 % of the triangles goes however large it is, so a large `largest_mm` is the sign to look: the page offers "Show what was removed" (the mesh before the edit as a ghost over the mesh after it).
+  - *Since 2026-11-21* (UX_PLAN R23) the summary names the rule that took the largest removed piece, after its size: "Removed 3 loose bits, the largest 4.2 mm across, smaller than 5 mm (1,234 triangles)" (the size limit), "Removed 297 loose bits, the largest 40.8 mm across but under 1 % of the mesh (12,345 triangles)" (the share), "… but under 100 triangles (…)" (`min_triangles`), and for Keep the largest piece only "Kept the largest piece only: removed 3 other pieces, the largest 40.8 mm across (1,234 triangles)". `removed` gets *extra* `largest_rule: "size" | "share" | "triangles" | "largest_only" | null` and `largest_triangles: number` (absent on an edit made before). The limits are tried in the label's order: size, triangles, share.
+  - **The mesh before any edit** (*since 2026-11-21*, UX_PLAN R23): `GET .../process/edits/{edit_id}/before.ply` answers the mesh that edit was applied to (the step before it: the starting mesh for the first edit), as a binary little-endian PLY of vertices (`float x, y, z`) and triangles (`list uchar int vertex_indices`) only: no normals, no ± and no filled flags. It works for every edit of `ProcessState.edits`, also the ones before the cursor's neighbour and the undone ones after the cursor, at any later time; it reads the undo cache or rebuilds the step from the nearest cached one as an undo does (the last 10 steps are instant; an older one takes as long as replaying its edits). Headers: `X-OHS-Step` (the step's number: the edit's index in `edits`, 0 = the starting mesh) and `X-OHS-Mesh-Version` (the current mesh's `version`), `Cache-Control: no-cache`. 404 "This edit is no longer in the scan's history." (hint "Reload the page to see the history as it is now.") for an id the history does not have: a new Make mesh, a stage, a recipe or Free space cleared the history. It never changes the mesh. `GET .../process/edits/{edit_id}/after.ply` is the same for the mesh that edit made (`X-OHS-Step` one more). For "Show what was removed" on any edit of the history, without moving the cursor: load `before.ply` of that edit as the ghost and `after.ply` of it as the mesh beside it (or the viewer's current mesh when the edit is the last active one, `k + 1 == cursor`); what the edit took is the part of the ghost the mesh after it does not cover. The page offers it for every "Remove loose bits" entry with `removed` (and may for any edit), not only right after the edit.
 - `fill_holes`:
   - `max_hole_mm` is the hole's perimeter.
   - Outer borders are left open (see MeshStats), unless `watertight` (M3 phase 3): then every opening up to `max_hole_mm` is closed, the outer edge too ("Make watertight: close every opening up to 60 mm"). The summary says whether the mesh is now watertight, or how many openings are still larger than the limit.
@@ -868,7 +882,7 @@ Everything in the M3 phase 2 section is implemented as written, with these clari
   - Strength sets the work: Taubin `1 + 49 s` iterations; bilateral `2 + 18 s` normal and `5 + 15 s` vertex iterations.
   - `within_sigma` (M3 phase 3; until 2026-11-17 the Process page sent it by default when the mesh has sigmas and the Body panel and Bracket recipes used it; since then, the owner's decision, the page's switch is off by default and the recipes send `away_from_edges` instead): no vertex moves more than twice its own sigma; a longer move is shortened. Without sigmas it does nothing.
   - `flat_only` (2026-11-16, default false; the Process page's "Where" choice "Flat only"; no recipe uses it yet): each vertex keeps its move only where the surface around it is flat (`ohs.mesh.smoothing`, "Flat surface only"), so edges, corners and small round features stay as scanned. The label says "flat areas only".
-  - `away_from_edges` (2026-11-17, default false; the "Where" choice "Off edges"; no recipe uses it): nothing within 1.5 mm of a sharp edge (over 25°) moves, and everything from 3 mm on is smoothed in full, round features too (`ohs.mesh.smoothing`, "Away from edges"). The label says "away from edges". Sent with `flat_only` it is a 422.
+  - `away_from_edges` (2026-11-17, default false; the "Where" choice "Off edges"; no recipe uses it): nothing within 1.5 mm of a sharp edge (over 25°) moves, and everything from 3 mm on is smoothed in full, round features too (`ohs.mesh.smoothing`, "Away from edges"). The label says "off edges" (before 2026-11-21: "away from edges"). Sent with `flat_only` it is a 422.
 - `decimate`:
   - Send at most one of `target_triangles` (at least 4) or `ratio` (above 0, at most 1), and / or `max_error_mm` (0.001–10). A target at or above the current count changes nothing.
   - `max_error_mm` (M3 phase 3) simplifies only while the surface stays within that tolerance, with the outer edge and folds held; with a target too, whichever stops first.
@@ -1887,8 +1901,8 @@ type ReportRequest = {                          // every key optional
 Rules:
 - **Collected, only what exists** (a part the scan does not have is left out of the page, never shown
   empty): the project's and the scan's names, the date (read once per request), the app's version; how the
-  scan was made (`result/report.json`, its known keys); the calibration (the setup state's calibration part
-  and last board check; its health, *since H4*, is the scan's own status, `result/report.json`'s
+  scan was made (`result/report.json`, its known keys); the calibration the scan was made with (below; until 2026-11-21 the setup state's calibration
+  part and last board check); its health, *since H4*, is the scan's own status, `result/report.json`'s
   `health_status`: state, part, reason, what was not judged, the note and that the limits are provisional; a
   scan processed before H3 has none and its health reads "Not assessed"; beside it, *since 2026-11-20*, the
   row "Camera path": the camera path's warnings, "No jump found" or "Not judged", from `result/report.json`'s
@@ -1902,6 +1916,8 @@ Rules:
   warnings); one kept seam's flush, measured on the current mesh; the pictures. Every part's warnings are
   shown in it and again in the list near the top. The CSV holds the features only; the JSON the features and
   the sections' numbers (not their drawings).
+- **The calibration it was made with** (*since 2026-11-21*, UX_PLAN R6): the Calibration part describes the copy of the calibration in the scan's own recording (`recording/calibration.json`, the file the scan was recorded and processed with), not Setup's current target. Its first row, "Made with", says which: "The simulator's own calibration, the one its demo recording was made with." (the recording's `meta.json` says `device: "sim"`, or without `device` `source: "sim"`), "The replayed recording's own calibration, the one it was recorded with." (`device: "replay"`) or "The scanner's calibration, as it was when this scan was recorded.". The rows Cameras, Laser lines ("Calibrated: the horizontal, vertical laser lines") and Motion sensor (IMU) come from that file and its `steps`; "Calibration file" says when it was saved and how far apart the cameras are. Only when it is still Setup's scanner calibration (the same `calibration_key`) do Setup's words for its steps, the row "Calibration check" (Setup's last calibration check: its verdict, or Passed / Not passed) and the laser lines this build has but the file lacks (in the Laser lines row and the warnings) come beside it. A recording without a calibration file says so. The rows "Missing" and "Last board check" and the word "baseline" are gone.
+- **A merged scan** (*since 2026-11-21*, UX_PLAN R8): "How the scan was made" opens with "Merged from" (the names of the scans, "aligned and merged into one mesh; it has no recording of its own") and "What the merge left out" (each scan's table, "<name>: its table is left out (…)", and what the merge's cleaning took, from its `report.json`'s `scans[].table.summary` and `mesh.cleaning.summary`); the merge's `warnings` are in the warnings list, under that part. Its Calibration part says that each scan it was merged from was made with its own calibration, and its Health "Not judged for the merged scan itself: a merge has no recording of its own, so there is nothing new to judge the calibration by. The reports of the scans it was merged from have it." (never "processed before the app did that").
 - **Pictures:** at most 6 (422 above), each at most 3 MB decoded and 12 MB in all (413, with the limit in
   words), base64 text (422 otherwise). A picture that is not a PNG, JPEG, GIF or WebP image is left out of the
   page with a note naming it. The viewer makes them from the 3D view, at most 1600 pixels across.
@@ -2351,7 +2367,7 @@ type MergeRequest = {
   target: string; source: string;
   T: number[][];             // the pose to merge at (an AlignResult's T)
   same_setup?: boolean;      // default true. false: each scan's table is left out of the merged model (Rules)
-  name?: string;             // default "<target name> + <source name>"
+  name?: string;             // default "<target name> + <source name>", or the next free "… (2)" (UX_PLAN R21)
 };
 
 // the `result` of a finished job of kind "merge"
@@ -2359,8 +2375,12 @@ type MergeResult = {
   project_id: string; scan_id: string; scan: Scan; merged_from: [string, string]; message: string;
   tables: MergeTable[];      // since 2026-11-17: one per scan when the part was moved (same_setup false), else []
   warnings: string[];        // since 2026-11-17: what to look at, each naming its scan; [] when the part stayed
-  cleaning: string | null;   // since 2026-11-17: the part was moved: in words, the small loose pieces the merge left out
-                             // and the small pieces over a thin part it kept (report.json: mesh.cleaning); null otherwise
+  cleaning: string | null;   // since 2026-11-17: in words, the small loose pieces the merge left out (and, the part moved,
+                             // the small pieces over a thin part it kept) (report.json: mesh.cleaning). Since 2026-11-21
+                             // (UX_PLAN R7) also when the part was not moved: "No loose bit was left out as too small (under
+                             // 1 % of the triangles each)." or "12 small loose bits (3,400 mm²) were left out as too small
+                             // (under 1 % of the triangles each)."; null only when the merge cleans nothing
+                             // ([process] clean_min_component 0)
 };
 // what a merge of a moved part left out of one scan (Rules, "Same setup or not")
 type MergeTable = {
@@ -2533,6 +2553,7 @@ type TrashItem = {
 - **Refused, in a plain sentence (409), and nothing moves:** the scan is recording, or a second pass of it is recording; a job makes its mesh, edits it, aligns or merges it (any running job whose `project_id` is the project's and whose `scan_id`, `target`, `source` or `scans` names it).
 - **What depends on it:** a scan that other scans were merged from (`merged_from`) or that a second pass continues (`continues.scan_id`) is refused with 409 naming them ("Other scans depend on this one: “Top merged” was merged from this scan; “Top, second pass” is a second pass of it."), until the request says `dependents_ok=true` (the page asks the user first, naming them). They keep their own meshes; they cannot be made again from it while it is in the trash.
 - **Names (U50):** a new scan without a name is "Scan <n>": the count of the project's scans plus one, or the next number no scan of the project has (so no two scans "Scan 3" after one went to the trash).
+- **No two scans of a project share a name** (*since 2026-11-21*, UX_PLAN R21): a rename to a name another scan of the project has (the same letters, case and extra spaces aside) is 409 "Another scan of this project is already called “Bracket”.", hint "Pick another name, for example “Bracket (2)”.", with *extra* `suggestion: string` in the error's body (the first free one of "<name> (2)", "<name> (3)", …): the page can offer it as a button. Renaming a scan to its own name is fine. A merge's default name (no `name` given) takes the next free one too: "Top + Side", then "Top + Side (2)", ….
 - **Restore** puts the folder back where it was and the scan back on its project's list (its entry as it was). Nothing is overwritten: an id that is taken gets a new one (a scan `<id>-r`, a project `<name>-<4 hex>`), a name that is taken gets " (restored)" (then " (restored 2)" ...), and `renamed` says so. A scan whose project is not there (in the trash too, or deleted) is 409: restore the project first.
 - **Empty the trash** deletes for good, so it needs `confirm: true` and `items`, the ids the page showed (400 otherwise): an item moved to the trash after the page listed it stays. An id that is not an item of the trash is left out. `left` lists items that could not be deleted completely (a file held open).
 - **Ids only:** `{item}` must be a folder name of the ids rule (letters, digits, `.`, `_`, `-`, no `..`), directly inside the trash, holding a project (`project.json`) or a scan (`trashed-scan.json`); anything else is 404, and a folder the user put into the trash is never listed, restored or deleted. No route takes a path.
@@ -2678,3 +2699,41 @@ type ScanPreset = {               // GET .../preset
 - **Processing:** the values that act are the preset's named values with the hand changes on top, looked up again when each stage runs. `voxel_mm` acts on Track when the request names none (Straighten and Fuse follow the track's voxel, as before; Fuse with a `voxel_mm` still wins); `thin_walls` on every stage that fuses; `quality` when the Make mesh or Track request names none; `recipe` on Make mesh (a recipe that is gone: Default, with a warning). A value a request names is a choice by hand and wins.
 - **Report:** every stage's `report.json` (and so `result/report.json`) gets `preset: {id, name, preset_values, hand, changed, values, note, used}`; `used` holds the values this mesh was made with (`mode`, `quality`, `voxel_mm` from the mesh, `thin_walls`, and the `recipe` and `check_tolerance_mm` Make mesh and the Check panel take for this scan). The HTML report shows it as "Preset" under how the scan was made.
 - The depth range is not a preset value: the app does not let the user set it.
+
+## Found on the real engine: the server's side (UX_PLAN R2 to R23, 2026-11-21)
+
+What the walk on the real engine changed in the API, item by item; each is written out where it belongs.
+
+- **R2, Make mesh again builds beside the result:** "API deviations (M3)", Make mesh: `.remake-<job id>/`, the job's *extra* `mesh_kept`, `ProcessState.making`. A job's `state` now reads `running` until its completion handler has run (the scan's status, the notices and `mesh_kept` are settled when a page sees it ended).
+- **R5, the graphics card's path in every stage:** "Calibration health", `health_path`.
+- **R6, R8, the report's calibration and a merged scan:** "The report", "The calibration it was made with" and "A merged scan".
+- **R7, a merge's cleaning always said:** `MergeResult.cleaning`.
+- **R9:** while a calibration result waits in Setup to be saved, every refusal that said "A calibration is running." (a scan start, a connect, the camera settings, the lasers' settings, the self-test) says "A calibration result is waiting in Setup: save it or close it first.", hint "Open Setup to review the result, then save it or close it.".
+- **R14:** a replayed recording (or the simulator's) that cannot be read any more ends the connection with the notice "The recording could not be read any more (its folder was moved or deleted). The scan was stopped and saved." (the last sentence when a scan ran). No notice is titled "Scanner problem:" any more; a camera that stops still says "The camera stopped sending pictures. Check its USB cable, then press Connect again.".
+- **R17, R18:** `StageInfo.started`, `StageInfo.seconds`, `ProcessState.made`, and the shares of a Make mesh (below).
+- **R20:** a scan started from a replay without a calibration is refused with "This recording has no calibration, so it cannot be scanned from.", hint "Replay a recording that was made with a calibration, or connect the scanner or the simulator." (not "Calibrate it in Setup").
+- **R21:** the rename refusal with `suggestion`, and a merge's default name ("Rename a scan, the trash").
+- **R22:** Straighten's wording when it closed loops and changed nothing; one running stage at a time.
+- **R23:** `EditEntry.removed.largest_rule`, the summary's rule, and `GET .../process/edits/{edit_id}/before.ply` and `after.ply` ("Edits", `remove_floaters`).
+- **R12, R19, R20, texts the server and the report make** (the pages' copies of them, in `api/mock`, follow):
+
+| Where | Before | Now |
+|---|---|---|
+| Progress of a stage | "Following the camera: frame 23 of 1321 on the GPU (gfx1035)" | "Following the camera: frame 23 of 1,321" |
+| Progress of a stage | "…: all 1321 frames done, making the mesh" | "…: all 1,321 frames done, making the mesh" |
+| Straighten's progress | "Looking for loops in the trajectory", "Straightening the trajectory" | "Looking for loops in the camera path", "Straightening the camera path" |
+| Refine with lasers' progress | "Refining: building the correction field", "Refining: fitting the correction field" | "Refining: working out where the surface must move", "Refining: fitting the surface to the laser lines" |
+| Refine from the images | "…, on the GPU); …", "(… of 5, on the CPU: this takes minutes)", "reading frame 3 of 120" | "…, on the graphics card); …", "(… of 5, without a graphics card: this takes minutes)", "reading frame 3 of 120" with separators |
+| Smooth's label | "Smooth (bilateral, 50 %, edges kept, away from edges)" | "Smooth 50 % (keeping the shape, sharp edges kept, off edges)"; Taubin: "evenly" |
+| Remove the table, a merge's table, the table found | "(12.3 cm², …)", "(123.4 cm² of its mesh, …)" | "(1,234 mm², …)", "(12,340 mm² of its mesh, …)" |
+| The cameras' result | "Reprojection error", "Baseline vs truth", "Principal point vs truth", "100% of the image" | "How well the corners fit", "Camera distance vs truth", "Image centre vs truth", "100 % of the image" |
+| The cameras' guide | "Hold still for half a second at each pose." | "… at each view." |
+| Self-test, camera | "2560x800 (2 x 1280x800) from the simulator" | "two pictures of 1,280 × 800 side by side, from the simulator" |
+| Self-test, picture | "mean 28 DN, 0.1% saturated", "35% of the pixels are saturated" | "average brightness 28 of 255, 0.1 % too bright", "35 % of the pixels are too bright" |
+| Self-test, motion sensor | "\|accel\| 9.79 m/s^2" (… "(expected about 9.81 m/s^2)") | "gravity reads 9.79 m/s²" (… "(about 9.81 m/s² at rest)") |
+| Setup's camera note | "(2560x800)" | "(2,560 × 800)" |
+| Report, calibration | "Missing: warning no calibration for …", "Last board check: passed: The check passed: …", "baseline 60.012 mm", "last changed …" | the Laser lines row's "Not calibrated: the … laser line of this scanner.", "Calibration check: The check passed: …", "the cameras 60.01 mm apart", "saved …" |
+| Report, how it was made | "Built from a given camera path (straightened, or rebuilt from the tracked path)" | "Built from the camera path that Follow the camera found (straightened, when Straighten corrected it)" |
+| Report, Scan check | "Not measured: less than 0.1 %: filled in, nothing measured it" | "less than 0.1 % (filled in: nothing measured it)"; "Measured too loosely" likewise |
+| Report, areas | "278857 mm²" | "278,857 mm²" |
+| Report, processing time | "Processing time 7 min 27 s" | "… for the whole Make mesh, every stage and edit" (or "… for the last stage that made this mesh (the stages before it and the edits not counted)") |

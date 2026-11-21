@@ -216,6 +216,14 @@ def test_a_merge_of_a_moved_part_says_what_it_left_out(env):
     # the part stayed: nothing is left out and nothing is said
     done = run_job(env, post(env["base"] + "/merge", {"target": env["a"], "source": env["b"], "T": T, "name": "Stayed"}), "merge")
     assert done["result"]["warnings"] == [] and done["result"]["tables"] == []
+    # ... but what its cleaning took is said all the same (UX_PLAN R7), in the result and in report.json
+    rep = json.loads((env["studio"].projects.scan_dir(env["pid"], done["result"]["scan_id"]) / "result" / "report.json")
+                     .read_text(encoding="utf-8"))
+    cl = rep["mesh"]["cleaning"]
+    assert done["result"]["cleaning"] == cl["summary"] and "left out as too small" in cl["summary"], done["result"]
+    assert cl["thin_pieces_kept"] == 0 and "thin part" not in cl["summary"]
+    gone = rep["mesh"]["n_faces_before_cleaning"] - rep["mesh"]["n_faces"]
+    assert (cl["pieces_removed"] == 0 or gone > 0) and cl["summary"].startswith("No loose bit") == (cl["pieces_removed"] == 0)
 
 
 def test_align_and_merge_several_scans(env):

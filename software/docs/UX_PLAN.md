@@ -666,12 +666,47 @@ can apply, and a merged scan's row says "What the merge left out".
   `firmware/README.md` in a hint; "What the merge left out" also stands over a note that says
   a raised area is kept.
 
+**Mended in the server (2026-11-21):** R2, R5, R6, R7, R8, R9, R12, R14, R19 and R22 are done
+and ticked. The server's half of R17, R18, R20, R21 and R23 is done; they are ticked when the
+pages read the new fields.
+
+- **R2, how a Make mesh again works now:** it builds in a folder of its own beside the scan's
+  result (`.remake-<job>` in the scan's folder) and takes the result's place only when it has
+  finished, by three renames. Until then nothing of the scan is touched: the mesh, the stages,
+  the edits and their history, the report, the laser points. A cancel or a failure removes the
+  half-made folder and puts the scan's status back. An app closed mid-run is put right at the
+  next start: an unfinished run is removed, a swap stopped half way is undone, a swap that had
+  moved everything in is finished. A folder that still holds a part of the earlier result is
+  never removed. While a run builds, the scan holds two results on disk; Free space counts the
+  second. Tried on the real engine: cancelled at 42 %, every one of the scan's 13 files was
+  byte for byte what it was, its entry too, and no folder was left behind. A single stage run
+  alone (Follow the camera, Straighten…) still works on the scan itself, as before.
+- **R5:** Straighten and Build the surface fuse at known camera positions, so their own report
+  did not say which path made the scan; they now carry the path of the stage that tracked it.
+  A scan made without a graphics card at full size with that path's own settings has no note,
+  rightly: its lasers and motion sensor are judged too.
+- **R6, R8:** the report describes the calibration kept inside the scan's own recording, with
+  a "Made with" row (the simulator's own, the replay's own, the scanner's as it was). A merged
+  scan's report says what it was merged from and what the merge left out.
+- **R7:** a merge always says what its cleaning took ("No loose bit was left out as too
+  small…" or "12 small loose bits (3,400 mm²) were left out…").
+- **R23, the server's half:** the line names the rule ("the largest 40.8 mm across but under
+  1 % of the mesh"), and the mesh before and after any edit of the history can be fetched, so
+  what an edit removed can be shown at any later time.
+- **R18, the server's half:** the stages' shares of the percentage were measured on three
+  scans (Follow the camera 42 to 57 % of the time, Straighten 29 to 42 %, the rest 11 to 19 %)
+  and set to 47 / 37 / 3 / 13 (they were 72 / 12); the job carries the time left for the whole.
+- **R21, the server's half:** a rename to a name another scan of the project has is refused
+  with a suggestion ("Bracket (2)"); a merge's default name takes the next free one.
+- The server's guard now also refuses program words in progress lines (a device's code name,
+  "trajectory", "fusing", "DN") and frame counts without grouping.
+
 ### [x] R1. Every warning of a scan is titled "Tracking may have slid" (pages)
 A merged scan's notes about its table ("70 raised areas up to 0.59 mm high…") appear under that
 title on the row's chip and in the viewer. Only the camera path's own warning gets that title;
 the merge's notes get their own ("What the merge left out").
 
-### [ ] R2. Cancel on "Make mesh again" replaces a finished mesh with a half-made one, without a word (server)
+### [x] R2. Cancel on "Make mesh again" replaces a finished mesh with a half-made one, without a word (server)
 Cancelled at 75 %: the scan went from 804,197 cleaned triangles with 193,001 laser points,
 Straighten and Refine with lasers done, to 807,184 triangles in 221 pieces with 82,089 laser
 points and those stages "Not run". The toast says only "Meshing cancelled / The raw recording
@@ -687,30 +722,30 @@ field has the focus (`useHotkeys`).
 Opened by keyboard, Tab walks the page behind it. Focus goes into the dialog when it opens (the
 first choice that can apply, else Cancel) and stays inside.
 
-### [ ] R5. A scan made with the graphics card says it was "processed without a graphics card" (server, engine)
+### [x] R5. A scan made with the graphics card says it was "processed without a graphics card" (server, engine)
 Once Straighten or Refine with lasers has written the scan's final report, the calibration
 status carries the no-graphics-card note ("…so only the cameras could be judged"), in the
 viewer and the report. And the scan really made without one has no such note. Each stage's
 reading must carry which path made it.
 
-### [ ] R6. The report's Calibration section describes the wrong file (server, report)
+### [x] R6. The report's Calibration section describes the wrong file (server, report)
 For a simulator scan it shows Setup's own target for the simulator ("Laser lines Not
 calibrated", and a top warning "No calibration for the vertical, horizontal laser lines this
 build has: calibrate the lasers again") although the scan used the demo's full calibration and
 has 193,001 laser points; without a graphics card it says "Cameras Not calibrated" beside
 "Calibration valid". The section describes the calibration the scan was made with.
 
-### [ ] R7. A merge with "No" (the part was not moved) removes triangles without saying so (engine, server)
+### [x] R7. A merge with "No" (the part was not moved) removes triangles without saying so (engine, server)
 1,110,025 triangles before cleaning, 1,108,916 after, and no line about it. The merge always
 says what its cleaning took, as it does for "Yes".
 
-### [ ] R8. A merged scan's report leaves out the merge (server, report)
+### [x] R8. A merged scan's report leaves out the merge (server, report)
 None of the merge's notes, not which scans it was made from, and its calibration status says
 "Not assessed … (it was processed before the app did that)", which is untrue for a merge made
 today. The report gets "Merged from …", the merge's notes, and a sentence of its own for the
 status.
 
-### [ ] R9. An unsaved calibration result: the Scan page says "No calibration yet" (pages, server)
+### [x] R9. An unsaved calibration result: the Scan page says "No calibration yet" (pages, server)
 U1's sentence ("A calibration result is still open in Setup.", Review it / Close it) is hidden
 because the page tests "no calibration" first; with the simulator an open session makes that
 true. The server's refusal says "A calibration is running." while it is waiting to be saved.
@@ -721,7 +756,7 @@ it or close it first."
 
 ### [x] R11. Free space dialog: doubled full stops, a choice preselected that cannot apply, and a footer that contradicts the choice's own line (pages)
 
-### [ ] R12. Program words on the screens (server, pages)
+### [x] R12. Program words on the screens (server, pages)
 "on the GPU (gfx1035)", "on the CPU", "graphics card found (gfx1035)"; "Straightening the
 trajectory", "left for fusing", "The rest keeps the fused surface"; "Smooth (bilateral, 50 %,
 edges kept, away from edges)"; "Refining: fitting the correction field"; "The live pipeline is
@@ -740,7 +775,7 @@ with what they missed.
 "This happens once; next time the simulator starts right away." while a camera connects (the
 Device page: "…the demo starts right away").
 
-### [ ] R14. A recording that vanishes mid-scan: "Engine error", and advice about a USB cable (server)
+### [x] R14. A recording that vanishes mid-scan: "Engine error", and advice about a USB cable (server)
 "The recording could not be read any more (its folder was moved or deleted). The scan was
 stopped and saved." And "Scanner problem" / "Engine error" as titles go.
 
@@ -763,7 +798,7 @@ are on hover only or missing in the Edit mesh preset box; say them on the page.
 percentage crawls from 80 to 83 % for nine minutes. Estimate the whole job, or say what comes
 after ("then about N min for the other stages"); give the late stages their true share.
 
-### [ ] R19. Units and numbers (server, pages)
+### [x] R19. Units and numbers (server, pages)
 cm² beside mm² in one paragraph of a merge and on Edit mesh; no thousands separators ("frame 23
 of 1321", "5206 mm around", "Surface 278857 mm²"); "100% of the image"; "392mm" and "70common"
 in the board gauge; "0.50 mm" beside "0.5 mm".
@@ -784,7 +819,7 @@ Rename accepts a name another scan has; a merge's default name repeats an earlie
 ("Bracket from the front + Bracket from the side" three times); the trash then lists two
 alike. Warn on rename and offer " (2)"; a default name takes the next free one.
 
-### [ ] R22. Edit mesh stage states (pages, server)
+### [x] R22. Edit mesh stage states (pages, server)
 While a job ran, "Follow the camera" (done) and "Straighten" both said "Running"; on a scan
 made without a graphics card Straighten says "Skipped" above "Closed 48 loops".
 

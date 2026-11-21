@@ -38,7 +38,7 @@ def test_the_summary_says_how_large_the_largest_removed_bit_was():
     assert info == {"pieces": 2, "triangles": 24, "largest_mm": 4.2}
     s = ProcessManager._summary("remove_floaters", {"min_size_mm": 5.0}, V, F, V2, F2, {"components": 3},
                                 {"components": 1}, kept=kept)
-    assert s == "Removed 2 loose bits, the largest 4.2 mm across (24 triangles)"
+    assert s == "Removed 2 loose bits, the largest 4.2 mm across, smaller than 5 mm (24 triangles)"
 
 
 def test_one_bit_and_none():
@@ -47,7 +47,7 @@ def test_one_bit_and_none():
     F = F[:24]  # the big box and the 4.2 mm one
     V2, F2, kept = M.remove_floaters(V, F, min_size_mm=5.0, return_kept=True)
     s = ProcessManager._summary("remove_floaters", {}, V, F, V2, F2, {"components": 2}, {"components": 1}, kept=kept)
-    assert s == "Removed 1 loose bit, 4.2 mm across (12 triangles)"
+    assert s == "Removed 1 loose bit, 4.2 mm across, smaller than 5 mm (12 triangles)"
     V3, F3, kept3 = M.remove_floaters(V2, F2, min_size_mm=5.0, return_kept=True)
     assert ProcessManager._summary("remove_floaters", {}, V2, F2, V3, F3, {"components": 1}, {"components": 1},
                                    kept=kept3) == "No loose bits matched: nothing was removed"
@@ -63,3 +63,27 @@ def test_a_large_piece_removed_for_its_few_triangles_is_named_by_its_size():
     V2, F2, kept = M.remove_floaters(V, F, min_fraction=0.3, return_kept=True)
     info = removed_pieces(V, F, kept)
     assert info["pieces"] == 3 and info["largest_mm"] == round(30.0 * np.sqrt(3), 1)
+
+
+def test_the_summary_names_the_rule_that_took_the_largest_bit():
+    """UX_PLAN R23: "297 loose bits removed, the largest 40.8 mm across" under a label that reads "smaller than 5 mm":
+    the label's other half (under 1 % of the mesh) took it, and the line says so; the entry says it too."""
+    V, F = _scene()
+    big = _box(300.0, 30.0)
+    V = np.vstack([V, big[0]])
+    F = np.vstack([F, big[1] + 24])
+    params = {"min_size_mm": 5.0, "min_fraction": 0.3}
+    V2, F2, kept = M.remove_floaters(V, F, **params, return_kept=True)
+    info = removed_pieces(V, F, kept, params)
+    assert info["largest_rule"] == "share" and info["largest_triangles"] == 12
+    s = ProcessManager._summary("remove_floaters", params, V, F, V2, F2, {"components": 4}, {"components": 1}, kept=kept)
+    assert s == "Removed 3 loose bits, the largest 52.0 mm across but under 30 % of the mesh (36 triangles)"
+    # the size took it: said as the size
+    V2, F2, kept = M.remove_floaters(V[:24], F[:36], **params, return_kept=True)
+    assert removed_pieces(V[:24], F[:36], kept, params)["largest_rule"] == "size"
+    # keep the largest piece only
+    V2, F2, kept = M.remove_floaters(V, F, keep_largest_only=True, return_kept=True)
+    s = ProcessManager._summary("remove_floaters", {"keep_largest_only": True}, V, F, V2, F2, {"components": 4},
+                                {"components": 1}, kept=kept)
+    assert s == "Kept the largest piece only: removed 3 other pieces, the largest 52.0 mm across (36 triangles)"
+    assert removed_pieces(V, F, kept, {"keep_largest_only": True})["largest_rule"] == "largest_only"

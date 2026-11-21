@@ -50,12 +50,12 @@ def image_check(stats: list, hints: dict[str, str] | None = None) -> tuple[str, 
     sat = float(np.mean([s[1] for s in stats])) if stats else 0.0
     diff = float(np.mean([s[2] for s in stats])) if stats else 0.0
     if mean < 3.0:
-        return "WARN", f"the image is black (mean {mean:.1f} DN)" + h.get("black", "")
+        return "WARN", f"the image is black (average brightness {mean:.1f} of 255)" + h.get("black", "")
     if sat > 0.2:
-        return "WARN", f"{sat:.0%} of the pixels are saturated" + h.get("saturated", "")
+        return "WARN", f"{100 * sat:.0f} % of the pixels are too bright" + h.get("saturated", "")
     if diff < 0.5:
         return "WARN", "left and right images are identical" + h.get("identical", "")
-    return "PASS", f"mean {mean:.0f} DN, {sat:.1%} saturated"
+    return "PASS", f"average brightness {mean:.0f} of 255, {100 * sat:.1f} % too bright"
 
 
 def gravity_ok(g: float) -> bool:
@@ -218,11 +218,11 @@ class _SelfTest:
             self.add("camera", "FAIL", "opened, but delivered fewer than 2 frames")
             return
         w, h = last.image_size
-        mode = f"{2 * w}x{h} (2 x {w}x{h}) {info.get('fourcc', '')} via {info.get('backend', '?')}"
+        mode = f"two pictures of {w:,} × {h:,} side by side ({2 * w:,} × {h:,}), {info.get('fourcc', '') or 'format unknown'}"
         if (2 * w, h) == (p.width, p.height):
             self.add("camera", "PASS", mode)
         else:
-            self.add("camera", "WARN", f"{mode}; the config asks for {p.width}x{p.height} (camera.width/height, fourcc MJPG?)")
+            self.add("camera", "WARN", f"{mode}; the settings ask for {p.width:,} × {p.height:,} (is the format MJPG?)")
         (i0, t0), (i1, t1) = frames[0], frames[-1]
         span = t1 - t0
         read_fps = (len(frames) - 1) / span if span > 0 else 0.0
@@ -251,11 +251,11 @@ class _SelfTest:
         g = float(np.linalg.norm(acc.mean(axis=0)))  # norm of the mean: see gravity_ok
         noise = float(np.degrees(gyr.std(axis=0).max()))
         bias = float(np.degrees(np.abs(gyr.mean(axis=0)).max()))
-        detail = f"|accel| {g:.2f} m/s^2, rotation noise {noise:.2f} deg/s, offset {bias:.2f} deg/s"
+        detail = f"gravity reads {g:.2f} m/s², turning noise {noise:.2f}°/s, offset {bias:.2f}°/s"
         if gravity_ok(g):
             self.add("imu values", "PASS", detail)
         else:
-            self.add("imu values", "WARN", detail + " (expected ~9.81 m/s^2 at rest: was the scanner moving?)")
+            self.add("imu values", "WARN", detail + " (about 9.81 m/s² at rest: was the scanner moving?)")
 
     def clock(self) -> None:
         if not self.pico_ok:

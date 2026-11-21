@@ -34,7 +34,7 @@ SERVER = Path(__file__).resolve().parents[1] / "ohs" / "server"
 #: calls whose arguments are words for the user
 TEXT_CALLS = {"ApiError", "_bad", "_err", "notify", "_notify", "progress", "prog", "_set_chain", "_stage_end",
               "_report_lost", "failure_notice", "failed_result", "_idle_tracking", "none", "metric", "advice",
-              "_check", "_stop_scan_locked"}
+              "_check", "_stop_scan_locked", "busy"}  # busy: the calibration's refusal (UX_PLAN R9)
 #: keywords of any call that hold words for the user
 TEXT_KEYWORDS = {"message", "summary", "reason", "verdict", "detail", "hint", "text", "error", "note"}
 #: module constants that hold words for the user
@@ -303,9 +303,10 @@ RETIRED_EXEMPT = {"imu rate", "imu values", "dot projector", "Connecting to the 
 RETIRED_SERVER_ONLY = [("σ", "scatter (the number) or confidence (the map)")]
 
 
-def _read_texts(source: str) -> list[tuple[int, str]]:
+def _read_texts(source: str, joined: bool = False) -> list[tuple[int, str]]:
     """Every string a person may read in a module: its string constants, without docstrings, log calls and
-    bare identifiers (a word without a space and not capitalised, like a key or a step id)."""
+    bare identifiers (a word without a space and not capitalised, like a key or a step id). ``joined``: also each
+    f-string whole, its values as ``{}`` (so a word next to a value, " DN, " after ``{mean}``, is seen in its text)."""
     tree = ast.parse(source)
     skip: set[int] = set()
     for n in ast.walk(tree):
@@ -324,9 +325,16 @@ def _read_texts(source: str) -> list[tuple[int, str]]:
             skip |= {id(s) for s in ast.walk(n)}
         if isinstance(n, ast.Call) and _call_name(n) in ("startswith", "endswith", "replace"):
             skip |= {id(s) for a in n.args[:1] for s in ast.walk(a)}  # the engine's words being matched
-    return [(n.lineno, n.value) for n in ast.walk(tree)
-            if isinstance(n, ast.Constant) and isinstance(n.value, str) and id(n) not in skip
-            and (" " in n.value.strip() or n.value[:1].isupper()) and n.value not in RETIRED_EXEMPT]
+    out = [(n.lineno, n.value) for n in ast.walk(tree)
+           if isinstance(n, ast.Constant) and isinstance(n.value, str) and id(n) not in skip
+           and (" " in n.value.strip() or n.value[:1].isupper()) and n.value not in RETIRED_EXEMPT]
+    if joined:
+        for n in ast.walk(tree):
+            if isinstance(n, ast.JoinedStr) and id(n) not in skip:
+                text = "".join(v.value if isinstance(v, ast.Constant) else "{}" for v in n.values)
+                if " " in text.strip() and text not in RETIRED_EXEMPT:
+                    out.append((n.lineno, text))
+    return out
 
 
 def retired_names(source: str, filename: str = "<source>", report: bool = False) -> list[str]:
@@ -449,3 +457,67 @@ def test_the_engine_guard_catches_the_old_sentences(src):
 ])
 def test_the_engine_guard_lets_new_words_through(src):
     assert not engine_retired_names(src, "new")
+
+
+# --------------------------------------------------------------------------- program words (UX_PLAN R12, R14, R19, R20)
+#: words of the program that reached the screens on the real engine (2026-11-21), with the words that took their place.
+#: Checked against every text of the server and the report, and the engine sentences they pass on (progress lines of
+#: Refine with lasers and Refine from the images, the self-test's details, the merge's and the table's notes).
+PROGRAM_WORDS = [
+    (r"\b(GPU|CPU)\b", "the graphics card / without a graphics card (the device's name: Settings' About only)"),
+    (r"(?i)\btrajector(y|ies)\b", "the camera path"),
+    (r"(?i)\bcorrection field\b", "where the surface must move"),
+    (r"\bDN\b", "brightness, of 255"),
+    (r"\|accel\||m/s\^2", "gravity reads … m/s²"),
+    (r"\b\d{3,}x\d{3,}\b", "1,280 × 800 (a size in words, thousands separated)"),
+    (r"(?i)last board check|\bboard check\b", "Calibration check"),
+    (r"(?i)\bbaseline\b", "the distance between the cameras"),
+    (r"(?i)given camera path", "the camera path that Follow the camera found"),
+    (r"cm²", "mm² (one unit for areas)"),
+    (r"(?i)reprojection|principal point", "how well the corners fit / image centre"),
+    (r"Scanner problem|Engine error", "no title: the sentence says what happened"),
+]
+PROGRAM_WORD_MODULES = ["app/selftest.py", "mesh/anchor.py", "align/merge.py", "mesh/support.py", "track/spacetime.py"]
+
+
+def program_words(source: str, filename: str = "<source>") -> list[str]:
+    """The texts of ``source`` with a program word (a regular expression's own text, with its word boundaries, is not
+    one)."""
+    return [f"{filename}:{line}: {text[:90]!r}: {why}" for line, text in _read_texts(source, joined=True)
+            for rx, why in PROGRAM_WORDS if "\\b" not in text and re.search(rx, text)]
+
+
+def test_no_program_word_in_what_the_user_reads():
+    found = [p for f in sorted(SERVER.glob("*.py")) for p in program_words(f.read_text(encoding="utf-8"), f.name)]
+    found += [p for f in sorted((SERVER.parent / "report").glob("*.py"))
+              for p in program_words(f.read_text(encoding="utf-8"), f"report/{f.name}")]
+    found += [p for rel in PROGRAM_WORD_MODULES for p in program_words((ENGINE / rel).read_text(encoding="utf-8-sig"), rel)]
+    assert not found, "program words (UX_PLAN R12, R19, R20):\n" + "\n".join(found)
+
+
+def test_counts_of_frames_are_written_with_thousands_separated():
+    """"frame 23 of 1321" (R19): the processing's frame counts take the separator."""
+    src = (SERVER / "processing.py").read_text(encoding="utf-8")
+    assert "frame {k + 1:,} of {n:,}" in src and "all {n:,} frames done" in src
+    assert not re.search(r"frame \{k \+ 1\} of \{n\}|all \{n\} frames", src)
+
+
+@pytest.mark.parametrize("src", [  # the texts the walk on the real engine found, verbatim or as the code made them
+    'where = f" on the GPU ({dev.name})"', 'x = " on the CPU"', 'prog(0, "Straightening the trajectory")',
+    'say(0.2, "fitting the correction field")', 'x = f"mean {mean:.0f} DN, {sat:.1%} saturated"',
+    'detail = f"|accel| {g:.2f} m/s^2"', 'x = f"2560x800 (2 x {w}x{h}) from {what}"',
+    'rows.append(("Last board check", text))', 'facts.append(f"baseline {b} mm")',
+    'x = "Built from a given camera path (straightened, or rebuilt from the tracked path)"',
+    'x = f"Its table is left out ({a:,.1f} cm² of its mesh"', 'metric("Reprojection error", v, ok, why)',
+    'metric("Principal point vs truth", v, ok, why)', 'notify("error", f"Scanner problem: {m}")',
+])
+def test_the_program_words_guard_catches_the_old_texts(src):
+    assert program_words(src)
+
+
+@pytest.mark.parametrize("src", [
+    'x = "Following the camera: frame 1,212 of 1,321"', 'x = "the graphics card"', 'x = "Calibration check"',
+    'x = "the cameras 60.00 mm apart"', 'x = r"\\bthe GPU\\b"', 'x = "12,000 mm² of its mesh"',
+])
+def test_the_program_words_guard_lets_plain_texts_through(src):
+    assert not program_words(src)

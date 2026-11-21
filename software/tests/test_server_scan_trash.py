@@ -75,6 +75,27 @@ def test_rename_a_scan(env):
     _plain(requests.patch(f"{env['url']}/api/projects/{pid}/scans/scan-nope", json={"name": "x"}, timeout=T), 404)
 
 
+def test_a_rename_to_a_name_another_scan_has_is_refused_with_a_suggestion(env):
+    """UX_PLAN R21: two scans of one project never share a name; the refusal offers the next free one."""
+    pid = _project(env)
+    a, b = _scan(env, pid, "Bracket"), _scan(env, pid, "Bracket (2)")
+    c = _scan(env, pid, "Other")
+    body = _plain(requests.patch(f"{env['url']}/api/projects/{pid}/scans/{c}", json={"name": " bracket "}, timeout=T), 409)
+    assert body["detail"] == "Another scan of this project is already called “bracket”."
+    assert body["suggestion"] == "bracket (3)" and "“bracket (3)”" in body["hint"]
+    assert [s["name"] for s in _scans(env, pid)] == ["Bracket", "Bracket (2)", "Other"]  # nothing changed
+    r = requests.patch(f"{env['url']}/api/projects/{pid}/scans/{a}", json={"name": "Bracket"}, timeout=T)
+    assert r.status_code == 200  # its own name
+    assert b
+
+
+def test_a_merges_default_name_takes_the_next_free_one():
+    from ohs.server.projects import free_name
+
+    assert free_name("Top + Side", ["Top", "Side"]) == "Top + Side"
+    assert free_name("Top + Side", ["Top + Side", "top + side (2)"]) == "Top + Side (3)"
+
+
 def test_a_new_scan_takes_the_next_free_number(env):
     """U50: after "Scan 2" went to the trash, the next scan is not a second "Scan 3"."""
     pid = _project(env)

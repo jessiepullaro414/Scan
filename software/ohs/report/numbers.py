@@ -96,8 +96,8 @@ def percent(share: float) -> str:
 
 
 def area(x: float) -> str:
-    """An area: "1121 mm²", "4.2 mm²"."""
-    return f"{fixed(x, 0 if abs(x) >= 100 else 1)} mm²"
+    """An area, thousands separated (UX_PLAN R19): "1,121 mm²", "278,857 mm²", "4.2 mm²"."""
+    return f"{float(x):,.0f} mm²" if abs(x) >= 100 else f"{fixed(x, 1)} mm²"
 
 
 def whole(n) -> str:

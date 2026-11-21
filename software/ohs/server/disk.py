@@ -9,7 +9,9 @@
   delete / keep edits, needed to replay them);
 * ``result``: ``result/``;
 * ``other``: everything else in the scan folder (``process/state.json``, the thumbnail, the kept
-  features, the comparison, ...). The parts add up to the scan's ``bytes``.
+  features, the comparison, ...). The parts add up to the scan's ``bytes``. While a Make mesh runs, the
+  result it is building (``.remake-<job id>/``, UX_PLAN R2: the old result stays until the new one is
+  done) is counted here too, until it takes the old one's place.
 
 Sizes are the files' sizes in bytes (``st_size``), not the space the file system allocates.
 Links and junctions are not followed. The trash (``<projects>/.trash``) is reported on its own and

@@ -277,8 +277,8 @@ class SetupManager:
         b = self.st.cfg.board
         scale = self.board_scale(target)
         paper = {"letter": "Letter", "a4": "A4"}.get(str(b.paper).lower(), str(b.paper))
-        text = (f"{b.squares_x} x {b.squares_y} squares of {b.square_mm:g} mm (markers {b.marker_mm:g} mm, "
-                f"{b.dictionary}), printed on {paper}")
+        # the markers' dictionary is the program's name for them, not shown (UX_PLAN R12): it stays in `dictionary`
+        text = f"{b.squares_x} x {b.squares_y} squares of {b.square_mm:g} mm (markers {b.marker_mm:g} mm), printed on {paper}"
         if abs(scale - 1.0) > 1e-9:
             text += (f"; calibrated with your measured print scale of {scale * 100:.1f} % "
                      f"(squares of {b.square_mm * scale:.2f} mm)")
@@ -584,7 +584,7 @@ class SetupManager:
             if st.session is not None and st.session.active:
                 raise ApiError(409, "A scan is running.", "Stop the scan before running the self-test.")
             if st.calibration.active:
-                raise ApiError(409, "A calibration is running.", "Finish or cancel the calibration first.")
+                raise st.calibration.busy("Finish or cancel the calibration first.")
             if st.jobs.active("selftest"):
                 raise ApiError(409, "The self-test is already running.", "Wait for it to finish.")
             if st.devices.busy:
@@ -745,7 +745,7 @@ class SetupManager:
             notes.append("No camera found: plug the scanner's USB cable into a USB 3 port on the PC and press Refresh. "
                          "No hardware yet? Connect the simulator.")
         elif not any(c["stereo_like"] for c in cams):
-            notes.append("None of the cameras looks like the scanner's side-by-side cameras (2560x800): check that the "
+            notes.append("None of the cameras looks like the scanner's side-by-side cameras (2,560 × 800): check that the "
                          "scanner is plugged in, then pick it by its index.")
         if port is None:
             notes.append("The control board (Pico or ESP32) was not found: connect its data USB cable (some cables only "

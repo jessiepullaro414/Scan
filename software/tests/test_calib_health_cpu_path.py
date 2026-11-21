@@ -121,3 +121,24 @@ def test_the_gpu_path_reads_as_before():
     s = status_of(gpu)
     assert s["parts"] == {"cameras": "valid", "lasers": "valid", "imu": "valid"} and s["note"] is None
     assert s == health.scan_status(gpu["health"], tracking_model="gpu", lines=list(LINES), frames=90)
+
+
+def test_a_stage_at_given_poses_reads_on_the_path_that_made_its_poses():
+    """UX_PLAN R5: Straighten and Build the surface fuse at given poses and track nothing (their own
+    ``tracking_model`` is None). Read on their own params, a scan made on the graphics card's path said "processed
+    without a graphics card"; with the track's path carried as ``health_path`` they read as the track does."""
+    gpu = report(TRUE_CPU, model="gpu", flip=False, weight=3.0)  # the GPU path's own settings
+    stage = copy.deepcopy(gpu)
+    stage["params"]["compute"]["tracking_model"] = None  # at given poses
+    assert "graphics card" in (health.report_status(stage)["note"] or "")  # the defect, without the path
+    stage["health_path"] = {**health.path_of(gpu), "from": "track"}
+    assert health.path_of(stage) == {"tracking_model": "gpu", "cpu_path": None}
+    assert health.report_status(stage) == status_of(gpu) and health.report_status(stage)["note"] is None
+    assert health.scan_item(stage)["tracking_model"] == "gpu"
+    # the CPU path the same way: a half-resolution track keeps its own note in the stage at given poses
+    half = report(TRUE_CPU, width=640)
+    stage = copy.deepcopy(half)
+    stage["params"]["compute"]["tracking_model"] = None
+    stage["health_path"] = {**health.path_of(half), "from": "track"}
+    assert health.report_status(stage)["note"] == status_of(half)["note"]
+    assert "graphics card at half resolution" in status_of(half)["note"]

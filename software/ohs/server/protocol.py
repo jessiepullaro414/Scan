@@ -124,17 +124,19 @@ class ApiError(Exception):
     """An error with an HTTP status, a message saying what happened and a hint saying what to do.
     Both are made full sentences (:func:`sentence`)."""
 
-    def __init__(self, status: int, detail: str, hint: str | None = None) -> None:
+    def __init__(self, status: int, detail: str, hint: str | None = None, *, extra: dict | None = None) -> None:
         detail = sentence(detail)
         super().__init__(detail)
         self.status = int(status)
         self.detail = detail
         self.hint = sentence(hint) or None
+        self.extra = dict(extra or {})  # fields of the answer beside detail and hint (a suggested name, UX_PLAN R21)
 
     def body(self) -> dict:
         out: dict[str, Any] = {"detail": self.detail}
         if self.hint:
             out["hint"] = self.hint
+        out.update({k: v for k, v in self.extra.items() if k not in ("detail", "hint")})
         return out
 
     def __str__(self) -> str:

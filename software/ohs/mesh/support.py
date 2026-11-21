@@ -275,7 +275,7 @@ class SupportFinding:
         low = ("" if not math.isfinite(self.lowest_mm) else "; the part is kept right down to it" if self.lowest_mm <= self.band_mm
                else f"; the part is kept from {self.lowest_mm:.2f} mm above it")
         return (f"Found the table ({100 * self.share:.0f} % of the scan, flat to {self.flatness_mm:.2f} mm (typical)): "
-                f"{self.n_faces:,} faces ({self.area_mm2 / 100.0:,.1f} cm²) are the table{low}")
+                f"{self.n_faces:,} faces ({self.area_mm2:,.0f} mm²) are the table{low}")
 
     def to_dict(self) -> dict:
         def f(x: float) -> float | None:

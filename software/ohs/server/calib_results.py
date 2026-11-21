@@ -181,11 +181,11 @@ def _stereo(value: Any, report: dict, view_ids: Sequence[int], truth: tuple | No
     cov = min(cov_l, cov_r)
     rect_ok = dv is not None and dv < 0.3 and (scale is None or abs(scale) < 0.5)
     metrics = [
-        metric("Reprojection error", f"{rms:.2f} px (want < 0.5 px)", rms < 0.5,
+        metric("How well the corners fit", f"{rms:.2f} px (want < 0.5 px)", rms < 0.5,
                "How far the detected corners are from where the calibration puts them. Lower is better."),
-        metric("Coverage, left camera", f"{cov_l:.0%} of the image (want > 60 %)", cov_l > 0.6,
+        metric("Coverage, left camera", f"{100 * cov_l:.0f} % of the image (want > 60 %)", cov_l > 0.6,
                "How much of the picture the board corners reached. The image corners and edges pin down the lens."),
-        metric("Coverage, right camera", f"{cov_r:.0%} of the image (want > 60 %)", cov_r > 0.6,
+        metric("Coverage, right camera", f"{100 * cov_r:.0f} % of the image (want > 60 %)", cov_r > 0.6,
                "The same for the right camera."),
         metric("Views used", f"{used} of {total} (aim for 15–25)", used >= 12,
                "Views where both cameras saw enough of the board."),
@@ -631,11 +631,11 @@ def sim_truth(kind: str, value: Any, target: Any, truth: Any) -> tuple[list, dic
             e = _stereo_errors(stereo, truth.stereo)
             nums["stereo"] = e
             rows += [
-                metric("Baseline vs truth", f"{e['baseline_err_mm']:+.3f} mm", abs(e["baseline_err_mm"]) < 0.3,
+                metric("Camera distance vs truth", f"{e['baseline_err_mm']:+.3f} mm", abs(e["baseline_err_mm"]) < 0.3,
                        "Estimated minus true distance between the cameras."),
                 metric("Focal length vs truth", f"{e['fx_err_px']:+.2f} px", abs(e["fx_err_px"]) < 3.0,
                        "Estimated minus true focal length of the left camera."),
-                metric("Principal point vs truth", f"{max(abs(e['cx_err_px']), abs(e['cy_err_px'])):.2f} px",
+                metric("Image centre vs truth", f"{max(abs(e['cx_err_px']), abs(e['cy_err_px'])):.2f} px",
                        max(abs(e["cx_err_px"]), abs(e["cy_err_px"])) < 3.0, "Where the optical axis meets the image."),
                 metric("Camera rotation vs truth", f"{e['rel_rotation_err_deg']:.3f}°", e["rel_rotation_err_deg"] < 0.1,
                        "Error of the rotation between the two cameras."),

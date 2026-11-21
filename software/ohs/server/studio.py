@@ -189,6 +189,8 @@ class Studio:
             return
         self._started = True
         self.app_log.start()
+        # a Make mesh the app stopped: the earlier result stays (or the new one, when it had taken its place)
+        safe_call("checking for interrupted meshing", self.processing.recover_remakes)
         n = safe_call("checking for interrupted scans", self.projects.recover_stale) or 0
         if n:
             log.warning("%d scan(s) were interrupted when the app last stopped; their recordings are kept", n)
@@ -348,7 +350,7 @@ class Studio:
             self.notify("info", "The replayed recording ended, so the scanner disconnected." + tail +
                         " Connect again (or replay it in a loop) to go on.")
         else:
-            self.notify("error", f"Scanner problem: {sentence(message)}{tail}")
+            self.notify("error", f"{sentence(message)}{tail}")  # no "Scanner problem:" title (UX_PLAN R14)
 
     def _handle_trigger(self, kind: str) -> None:
         if self.calibration.active:
@@ -381,8 +383,7 @@ class Studio:
             if self.session is not None and self.session.active:
                 raise ApiError(409, "A scan is running.", "Stop the scan before changing the scanner.")
             if self.calibration.active:
-                raise ApiError(409, "A calibration is running.", "Finish or cancel the calibration before changing the "
-                                                                 "scanner.")
+                raise self.calibration.busy("Finish or cancel the calibration before changing the scanner.")
             job = self.devices.connect(source, recording, loop)
         if job is not None:
             return 202, {"job": job.to_dict()}
@@ -446,7 +447,7 @@ class Studio:
             if self.session is not None and self.session.active:
                 raise ApiError(409, "A scan is already running.", "Press Stop first.")
             if self.calibration.active:
-                raise ApiError(409, "A calibration is running.", "Finish or cancel the calibration in Setup first.")
+                raise self.calibration.busy("Finish or cancel the calibration in Setup first.")
             dev = self.devices
             if dev.busy:
                 busy = str(dev.busy).strip().rstrip(".…")
@@ -456,6 +457,10 @@ class Studio:
                 raise ApiError(409, "No scanner is connected.",
                                "Connect the camera, a replay or the simulator in the scanner panel first.")
             calib = dev.calib
+            if calib is None and dev.source == "replay":  # Setup cannot calibrate a replay (UX_PLAN R20)
+                raise ApiError(409, "This recording has no calibration, so it cannot be scanned from.",
+                               "Replay a recording that was made with a calibration, or connect the scanner or the "
+                               "simulator.")
             if calib is None:
                 raise ApiError(409, "The scanner is not calibrated yet.",
                                "Calibrate it in Setup, or try the app with the simulator.")
@@ -658,10 +663,18 @@ class Studio:
             o3d_version = open3d.__version__
         except Exception:  # optional
             o3d_version = None
+        import os
+
         from ohs import compute
 
+        info = compute.describe()
+        # UX_PLAN R20: who chose the compute path, so the page says why there is no graphics card: the environment
+        # (OHS_COMPUTE), the settings ([compute] device), or nobody (auto: none was found)
+        want = str(getattr(getattr(self.cfg, "compute", None), "device", "auto") or "auto").strip().lower()
+        info["preference_from"] = ("environment" if os.environ.get(compute.ENV_VAR, "").strip() else
+                                   "settings" if want != "auto" else "auto")
         return {"app": "openhandscan", "version": __version__, "api": PROTOCOL_VERSION,
-                "engine": {"opencv": cv2.__version__, "open3d": o3d_version, "compute": compute.describe()}}
+                "engine": {"opencv": cv2.__version__, "open3d": o3d_version, "compute": info}}
 
     def settings(self) -> dict:
         cfg = self.cfg
@@ -698,7 +711,7 @@ class Studio:
             if self.session is not None and self.session.active:
                 raise ApiError(409, "A scan is running.", "Stop the scan before changing the camera settings.")
             if self.calibration.active:
-                raise ApiError(409, "A calibration is running.", "Finish or cancel it before changing the camera settings.")
+                raise self.calibration.busy("Finish or cancel it before changing the camera settings.")
             if updates:
                 try:
                     set_config_values({"camera": updates}, self.config_path, cfg=self.cfg)
@@ -770,7 +783,7 @@ class Studio:
             if wiring and self.session is not None and self.session.active:
                 raise ApiError(409, "A scan is running.", f"Stop the scan before changing {what}.")
             if self.calibration.active:
-                raise ApiError(409, "A calibration is running.", f"Finish or cancel it before changing {what}.")
+                raise self.calibration.busy(f"Finish or cancel it before changing {what}.")
             changes: dict[str, Any] = {}
             if new.lines != list(cur.lines):
                 changes["lines"] = new.lines

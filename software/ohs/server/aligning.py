@@ -27,6 +27,7 @@ import numpy as np
 
 from ohs.server.jobs import failure_notice
 from ohs.server.protocol import ApiError, jsonable
+from ohs.server.projects import free_name
 
 __all__ = ["AlignManager"]
 
@@ -278,7 +279,9 @@ class AlignManager:
         with self.st._lock:
             items = [self._scan(pid, sid, "first" if k == 0 else ("second" if len(sids) == 2 else f"scan {k + 1}:"),
                                 need_recording=True) for k, sid in enumerate(sids)]
-            title = (name or "").strip() or " + ".join(it["name"] for it in items)
+            # a default name takes the next free one (UX_PLAN R21): "A + B (2)" once "A + B" is taken
+            title = (name or "").strip() or free_name(" + ".join(it["name"] for it in items),
+                                                      [str(s.get("name") or "") for s in self.st.projects.get(pid)["scans"]])
             work = self.st.projects.project_dir(pid) / ".merge"
             noun = "two scans" if len(items) == 2 else f"{len(items)} scans"
 
@@ -348,7 +351,8 @@ class AlignManager:
                 # what each scan's table lost, and what to look at (only when the part was moved)
                 tables = [{"id": it["id"], "name": it["name"], "rule": s["table"]["rule"], "summary": s["table"]["summary"],
                            "warnings": list(s["table"]["warnings"])} for it, s in zip(items, rep["scans"]) if s.get("table")]
-                cleaning = (rep["mesh"].get("cleaning") or {}).get("summary") if tables else None
+                # what the cleaning took, moved part or not (UX_PLAN R7)
+                cleaning = (rep["mesh"].get("cleaning") or {}).get("summary")
                 return jsonable({"project_id": pid, "scan_id": sid, "scan": scan, "merged_from": sids,
                                  "message": f"Merged into \"{title}\"", "tables": tables, "warnings": list(rep.get("warnings", [])),
                                  "cleaning": cleaning})

@@ -15,11 +15,18 @@ missing, None or empty is left out of the report, not shown empty.
      "process": {...},       # the scan's processing report: result/report.json (ohs.app.process), or the
                              # summary the app keeps of it (ohs.server.projects.report_summary): mode,
                              # quality, source, scene, frames, failures, imu, markers, poses, mesh, lasers,
-                             # wall_time_s; other keys are ignored
-     "calibration": {...},   # the setup state's calibration part (ohs.server.setup, SetupManager.state()
-                             # ["calibration"]): "parts" {"stereo" | "lasers" | "imu": {"when", "summary"}
-                             # or None}, "modified", "baseline_mm", "lasers_missing"; and beside it
-                             # "last_check" ({"when", "ok", "verdict"}, the setup state's) and "health"
+                             # wall_time_s (the last stage's own time), make_mesh_s (the whole Make mesh
+                             # that made it, UX_PLAN R17: the server's processing state); other keys are ignored
+     "merge": {...},         # a merged scan (UX_PLAN R8): "from" (the names of the scans it was merged
+                             # from), "notes" (what the merge left out of each scan's table, what its
+                             # cleaning took: sentences) and "warnings" (each naming its scan)
+     "calibration": {...},   # the calibration the scan was made with (UX_PLAN R6; ohs.server.report): "made_with"
+                             # ("simulator" | "replay" | "scanner": its recording's own copy; "merge": a merged scan,
+                             # with "merged_from", the names, and nothing else), "missing" (true: the recording has
+                             # no calibration file), "parts" {"stereo" | "lasers" | "imu": {"when", "summary"}
+                             # or None}, "modified", "baseline_mm", "lasers_missing" (only while it is Setup's
+                             # scanner calibration still); and beside it "last_check" ({"when", "ok", "verdict"}:
+                             # Setup's last calibration check, only then too) and "health"
                              # ({"state": "valid" | "check" | "recalibrate", "part", "reason", and optional
                              # "not_judged", "note", "provisional", "source"}: the scan's own status,
                              # report.json's health_status, H3/H4; without it the report says "Not assessed");
@@ -380,7 +387,7 @@ def _calibration_warnings(cal: dict, prep: Prepared) -> None:
                   f"{'s' if len(missing) > 1 else ''} this build has: calibrate the lasers again.")
     last = cal.get("last_check")
     if isinstance(last, dict) and last.get("ok") is False:
-        prep.warn("calibration", "Board check", str(last.get("verdict") or "the last board check did not pass"))
+        prep.warn("calibration", "Calibration check", str(last.get("verdict") or "The last calibration check did not pass."))
     health = cal.get("health")
     if isinstance(health, dict):
         state = str(health.get("state") or "")
@@ -424,6 +431,10 @@ def prepare(data: dict) -> Prepared:
     if not isinstance(data, dict):
         raise ValueError("the report's data must be a dict (see ohs.report.data)")
     prep = Prepared(data=data)
+    merge = data.get("merge")
+    if isinstance(merge, dict):  # a merged scan's warnings (each names its scan), UX_PLAN R8
+        for w in _text_list(merge.get("warnings")):
+            prep.warn("made", "Merge", w)
     cal = data.get("calibration")
     if isinstance(cal, dict):
         _calibration_warnings(cal, prep)

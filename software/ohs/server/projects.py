@@ -47,7 +47,7 @@ from typing import Any
 from ohs import __version__
 from ohs.server.protocol import ApiError, jsonable, now_iso, quality_or_none, sentence
 
-__all__ = ["KEEP_MODES", "ProjectStore", "RESULT_FILES", "SCAN_STATUSES", "path_check_short", "report_summary",
+__all__ = ["KEEP_MODES", "ProjectStore", "RESULT_FILES", "SCAN_STATUSES", "free_name", "path_check_short", "report_summary",
            "user_warnings", "user_words"]
 
 log = logging.getLogger(__name__)
@@ -97,6 +97,21 @@ def _next_scan_name(scans: list[dict]) -> str:
     while k in used:
         k += 1
     return f"Scan {k}"
+
+
+def _same_name(a: Any, b: Any) -> bool:
+    return " ".join(str(a or "").split()).casefold() == " ".join(str(b or "").split()).casefold()
+
+
+def free_name(wanted: str, taken: list[str]) -> str:
+    """``wanted``, or the first of "wanted (2)", "wanted (3)", ... that none of ``taken`` is (UX_PLAN R21: names compared
+    without case and extra spaces)."""
+    if not any(_same_name(wanted, t) for t in taken):
+        return wanted
+    k = 2
+    while any(_same_name(f"{wanted} ({k})", t) for t in taken):
+        k += 1
+    return f"{wanted} ({k})"
 
 
 def check_id(value: str, what: str) -> str:
@@ -427,6 +442,11 @@ class ProjectStore:
         with self._lock:
             data = self._load(pid)
             entry = self._scan_entry(data, sid)
+            others = [str(e.get("name") or "") for e in data["scans"] if e.get("id") != sid]
+            if any(_same_name(n, o) for o in others):  # UX_PLAN R21: two scans of one project never share a name
+                suggestion = free_name(n, others)
+                raise ApiError(409, f"Another scan of this project is already called “{n}”.",
+                               f"Pick another name, for example “{suggestion}”.", extra={"suggestion": suggestion})
             entry["name"] = n
             self._touch(data)
             self._save(pid, data)

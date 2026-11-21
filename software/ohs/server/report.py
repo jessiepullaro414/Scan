@@ -10,9 +10,10 @@ scan does not have is left out, never shown empty.
   and passed as data), the app's version;
 * how the scan was made: the scan's processing report (``result/report.json``, the stage the current mesh was
   made by), its known keys only;
-* the calibration: the setup state's calibration part (:meth:`SetupManager.state
-  <ohs.server.setup.SetupManager.state>`, without the file's path), with the last board check beside it; its
-  health is the scan's own calibration status (``result/report.json``'s ``health_status``, FEATURE_PLAN H3/H4:
+* the calibration the scan was made with (UX_PLAN R6, :meth:`ReportManager._calibration`): its recording's own copy,
+  and which one that was (the simulator's, a replay's, the scanner's); Setup's words for its steps and Setup's last
+  calibration check only while it is Setup's scanner calibration still; a merged scan says it has none of its own
+  (R8, with "Merged from" and the merge's notes in ``merge``); its health is the scan's own calibration status (``result/report.json``'s ``health_status``, FEATURE_PLAN H3/H4:
   what this scan saw, not today's setup state); a scan processed before H3 has none and the report says "not
   assessed"; beside it the camera path's check (``result/report.json``'s ``path_check`` and ``warnings``,
   ENGINE_PLAN X0a: did tracking slide?), left out for a scan processed before the check;
@@ -145,15 +146,87 @@ class ReportManager:
             out["quality"] = quality_or_none(out["quality"]) or out["quality"]
         return out or None
 
-    def _calibration(self) -> dict | None:
-        """The setup state's calibration part (without where the file is), with the last board check."""
+    def _calibration(self, pid: str, sid: str, entry: dict) -> dict | None:
+        """The calibration the scan was made with (UX_PLAN R6), not Setup's current one: the copy in its recording
+        (``recording/calibration.json``, the file the scan was recorded and processed with), and which one that was
+        (``made_with``: ``"simulator"``, the simulator's own demo calibration; ``"replay"``, the replayed recording's
+        own; ``"scanner"``, the scanner's file as it was then; from the recording's ``meta.json``). Only when it is
+        Setup's scanner calibration still (the same calibration, :func:`ohs.calib.health.calibration_key`) do Setup's
+        words for its steps, its last calibration check and the laser lines this build has but the file lacks come
+        beside it. A merged scan has no recording of its own: ``made_with: "merge"`` and the scans it was made from.
+        None when the scan has no calibration to show."""
+        from ohs.calib import health
+        from ohs.types import ScannerCalibration
+
+        if entry.get("merged_from"):
+            return {"made_with": "merge", "merged_from": [str(m.get("name") or m.get("id")) for m in entry["merged_from"]
+                                                          if isinstance(m, dict)]}
+        rec = self.st.projects.recording_dir(pid, sid)
+        meta: dict = {}
         try:
-            s = self.st.setup.state()
-        except (OSError, ValueError, ApiError):
-            return None
-        cal = {k: v for k, v in (s.get("calibration") or {}).items() if k not in ("path", "backup")}
-        cal["last_check"] = s.get("last_check")
+            meta = json.loads((rec / "meta.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            pass
+        meta = meta if isinstance(meta, dict) else {}
+        device, source = meta.get("device"), meta.get("source")
+        kind = ("simulator" if device == "sim" or (device is None and source == "sim") else
+                "replay" if device == "replay" else "scanner")
+        try:
+            calib = ScannerCalibration.load(rec / "calibration.json") if (rec / "calibration.json").is_file() else None
+        except (OSError, ValueError, KeyError, TypeError):
+            calib = None
+        if calib is None:
+            return {"made_with": kind, "missing": True}
+        steps = calib.steps if isinstance(calib.steps, dict) else {}
+
+        def part(key: str, have: bool, summary: str) -> dict | None:
+            if not have:
+                return None
+            when = (steps.get(key) or {}).get("created") if isinstance(steps.get(key), dict) else None
+            return {"when": when or calib.created, "summary": summary}
+
+        lasers = sorted(calib.lasers or {})
+        cal: dict[str, Any] = {
+            "made_with": kind, "modified": calib.created, "baseline_mm": round(float(calib.stereo.baseline), 3),
+            "lasers": lasers,
+            "parts": {"stereo": part("stereo", True, "Calibrated"),
+                      "lasers": part("lasers", bool(lasers), "Calibrated: the " + ", ".join(lasers) + " laser line"
+                                     + ("s" if len(lasers) != 1 else "")),
+                      "imu": part("imu", calib.imu is not None, "Calibrated")}}
+        if kind == "scanner":
+            try:
+                same = health.calibration_key(calib) == health.calibration_key(self.st.setup.load_calibration("device"))
+                s = self.st.setup.state("device") if same else None
+            except (OSError, ValueError, KeyError, TypeError, ApiError):
+                s = None
+            if s is not None:  # still Setup's scanner calibration: its words for the steps, its check
+                sc = s.get("calibration") or {}
+                for k, info in (sc.get("parts") or {}).items():
+                    if isinstance(info, dict) and cal["parts"].get(k) is not None:
+                        cal["parts"][k] = {"when": info.get("when") or cal["parts"][k]["when"],
+                                           "summary": info.get("summary") or cal["parts"][k]["summary"]}
+                cal["lasers_missing"] = list(sc.get("lasers_missing") or [])
+                cal["last_check"] = s.get("last_check")
         return cal
+
+    @staticmethod
+    def _merge(entry: dict, rep: dict | None) -> dict | None:
+        """A merged scan (UX_PLAN R8): the scans it was merged from, the merge's notes (what it left out of each
+        scan's table, what its cleaning took) and its warnings, from its ``report.json``; None for any other scan."""
+        if not entry.get("merged_from"):
+            return None
+        names = [str(m.get("name") or m.get("id")) for m in entry["merged_from"] if isinstance(m, dict)]
+        rep = rep if isinstance(rep, dict) else {}
+        notes = []
+        for s in rep.get("scans") or []:
+            t = s.get("table") if isinstance(s, dict) else None
+            if isinstance(t, dict) and t.get("summary"):
+                text = str(t["summary"])
+                notes.append(f"{s.get('name') or 'A scan'}: {text[:1].lower() + text[1:]}")
+        cleaning = ((rep.get("mesh") or {}).get("cleaning") or {}).get("summary")
+        if cleaning:
+            notes.append(str(cleaning))
+        return {"from": names, "notes": notes, "warnings": [str(w) for w in rep.get("warnings") or [] if w]}
 
     def _check(self, pid: str, sid: str, tolerance_mm: float) -> dict:
         r = self.st.processing.check(pid, sid, float(tolerance_mm))
@@ -275,9 +348,16 @@ class ReportManager:
             return data
         rep = self._result_report(pid, sid) if version is not None else None
         process = self._process(rep)
+        sp = self.st.processing.peek(pid, sid) if process else None
+        made = (sp.state.get("made") or {}) if sp is not None else {}
+        if process and isinstance(made.get("seconds"), (int, float)):  # the whole Make mesh (UX_PLAN R17)
+            process["make_mesh_s"] = float(made["seconds"])
         if process:
             data["process"] = process
-        cal = self._calibration()
+        cal = self._calibration(pid, sid, scan)
+        merge = self._merge(scan, rep)
+        if merge:
+            data["merge"] = merge
         status = rep.get("health_status") if rep is not None else None
         if isinstance(status, dict) and status.get("state") in HEALTH_STATES:
             # the scan's own status (H3/H4): what the scan saw of its calibration, not today's setup state

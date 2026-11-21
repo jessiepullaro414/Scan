@@ -104,13 +104,16 @@ class Job:
     finished: threading.Event = field(default_factory=threading.Event, repr=False)
     t_last_update: float = 0.0
     on_done: Callable[["Job"], None] | None = field(default=None, repr=False)  # set by submit
+    committed: bool = False  # JobContext.commit: past the point of no return, a cancel no longer applies
 
     @property
     def active(self) -> bool:
         return self.state in ACTIVE_STATES
 
     def to_dict(self) -> dict:
-        d = {"id": self.id, "kind": self.kind, "state": self.state, "progress": round(float(self.progress), 4),
+        # an ended job reads "running" until its on_done has run: whoever sees it ended sees what on_done did too
+        state = self.state if self.state in ACTIVE_STATES or self.finished.is_set() else "running"
+        d = {"id": self.id, "kind": self.kind, "state": state, "progress": round(float(self.progress), 4),
              "message": self.message, "result": jsonable(self.result), "error": self.error, "created": self.created}
         d.update(jsonable(self.meta))
         if self.frames is not None:
@@ -135,6 +138,15 @@ class JobContext:
 
     def progress(self, fraction: float | None = None, message: str | None = None, force: bool = False) -> None:
         self._runner._progress(self.job, fraction, message, force)
+
+    def commit(self) -> None:
+        """The job's point of no return (a Make mesh about to put its new result in the old one's place): raises
+        :class:`JobCancelled` when a cancel came first; after it a cancel request is ignored and the job ends ``done``
+        (or ``failed``), never ``cancelled`` with its work half kept."""
+        with self._runner._lock:
+            if self.job.cancel_event.is_set():
+                raise JobCancelled()
+            self.job.committed = True
 
     def set_frames(self, frames: dict | None) -> None:
         """The frame pass running now, as the job's ``frames`` field (``{stage, done, total, fps,
@@ -190,9 +202,11 @@ class JobRunner:
         job = self.get(job_id)
         if not job.active:
             return job
-        job.cancel_event.set()
         was_queued = False
         with self._lock:
+            if job.committed:  # past its point of no return (JobContext.commit): it finishes
+                return job
+            job.cancel_event.set()
             if job.state == "queued":
                 job.state, job.message = "cancelled", "Cancelled before it started"
                 was_queued = True
@@ -254,7 +268,8 @@ class JobRunner:
         try:
             ctx.check()
             result = fn(ctx)
-            ctx.check()
+            if not job.committed:
+                ctx.check()
             job.result = jsonable(result) if result is not None else {}
             job.state, job.progress = "done", 1.0
             job.message = (job.result or {}).get("message", "Done") if isinstance(job.result, dict) else "Done"

@@ -56,6 +56,11 @@ are "not measured", 50 mm), the stats get ``sigma_mm`` and ``result/mesh.ply`` i
 
 A new base also copies the stage's ``report.json``, ``trajectory.csv``, ``laser_points.ply`` and
 ``marker_map.json`` into ``result/`` (the M1 files), so the viewer and downloads stay complete.
+
+**Make mesh again** (UX_PLAN R2): Make mesh and a recipe on everything build in ``scans/<sid>/.remake-<job id>/``
+(its own ``process/`` and ``result/``) and take the old ones' place only when they have finished
+(:meth:`ProcessManager._run_staged`, :func:`swap_in`); a cancelled or failed run leaves the scan as it was, and an
+app that stopped on the way is put right at the next start (:meth:`ProcessManager.recover_remakes`).
 A scan processed before M3 (``result/mesh.ply`` but no ``state.json``) is taken over on first
 use: its result becomes the ``track`` stage and the base.
 
@@ -158,6 +163,20 @@ MAX_HOLE_OUTLINES = 500
 VOXEL_RANGE = (0.25, 10.0)
 FORMAT = 1
 DEFAULT_FLOATERS = {"min_size_mm": 5.0}
+#: UX_PLAN R18: the share of a Make mesh's time each of its parts takes, so that its percentage moves with the time.
+#: Measured 2026-11-21 on simulated scans of 240 frames at Standard quality, the Default recipe, on this PC's graphics
+#: card (Radeon 680M, shared with other work): the sphere 257 s (Follow the camera 42 %, Straighten 38 %, Refine with
+#: lasers 4 %, the edits 15 %), the bracket 120 s (57 %, 29 %, 2 %, 10 %), the car panel (180 frames) 123 s (46 %, 42 %,
+#: 2 %, 9 %); in all three Straighten found no loop and its time was the laser crossings' (about 85 %) and the loop
+#: search's. A hand scan that closes loops fuses once more in Straighten (about as long again as the fuse in Follow the
+#: camera), so Straighten keeps the larger shares. Before, Follow the camera had 72 % and Straighten 12 %, and the percentage stood at 80 to 83 % while
+#: Straighten ran for minutes. The parts that do not run are left out and the rest scaled (:func:`make_mesh_plan`).
+MAKE_MESH_SHARES = {"track": 0.47, "straighten": 0.37, "refine": 0.03, "edits": 0.13}
+#: Straighten's own parts, of its share: the loop search, the fuse at the loops' poses (only with loops), the laser
+#: crossings, and the fuse at the crossings' poses (only when they changed the poses); a part that does not run is
+#: passed over (the percentage jumps ahead, never back: Straighten saves its mesh at 0.96; before, the first fuse
+#: started below the loop search's end)
+STRAIGHTEN_SPANS = {"loops": (0.0, 0.1), "fuse": (0.1, 0.45), "crossings": (0.45, 0.75), "fuse2": (0.75, 0.95)}
 
 #: what the busy line says while a job of each kind runs
 _BUSY = {"process_scan": "Making the mesh…", "process_track": "Following the camera…",
@@ -322,8 +341,10 @@ def normalize_op(op: str, params: dict | None) -> tuple[dict, str]:
             raise ApiError(422, "Smooth: away from edges is either on or off.", _RELOAD)
         if flat and away:
             raise ApiError(422, "Smooth: flat areas only, or away from edges, not both.", "Choose one of the two.")
-        where = ", flat areas only" if flat else ", away from edges" if away else ""
-        label = (f"Smooth ({method}, {round(100 * s)} %{', edges kept' if keep else ''}{where}"
+        # in words, not the methods' names (UX_PLAN R12): "Smooth 50 % (keeping the shape, sharp edges kept, off edges)"
+        where = ", flat areas only" if flat else ", off edges" if away else ""
+        how = "keeping the shape" if method == "bilateral" else "evenly"
+        label = (f"Smooth {round(100 * s)} % ({how}{', sharp edges kept' if keep else ''}{where}"
                  f"{', within the scatter' if within else ''})")
         out_s: dict[str, Any] = {"method": method, "strength": s, "keep_edges": keep}
         if flat:
@@ -556,10 +577,14 @@ def _set_straighten(report: dict, rep: dict | None) -> bool:
     return True
 
 
-def removed_pieces(V: np.ndarray, F: np.ndarray, kept: np.ndarray | None) -> dict | None:
+def removed_pieces(V: np.ndarray, F: np.ndarray, kept: np.ndarray | None, params: dict | None = None) -> dict | None:
     """What "Remove loose bits" took (UX_PLAN U14): ``{pieces, triangles, largest_mm}`` of the pieces of ``(V, F)``
     (faces joined through shared edges, as the engine counts them) that have no face among ``kept``; ``largest_mm``
-    is the largest bounding-box diagonal, the size the engine judges a piece by. None when nothing was removed."""
+    is the largest bounding-box diagonal, the size the engine judges a piece by. None when nothing was removed.
+    With the edit's ``params`` (UX_PLAN R23) also ``largest_rule``, the rule that took that largest piece:
+    ``"size"`` (smaller than ``min_size_mm``), ``"share"`` (under ``min_fraction`` of the triangles, however large),
+    ``"triangles"`` (under ``min_triangles``) or ``"largest_only"`` (Keep the largest piece only); and
+    ``largest_triangles``, its count of triangles."""
     from ohs.mesh.clean import piece_sizes
 
     if kept is None or len(kept) >= len(F):
@@ -569,7 +594,39 @@ def removed_pieces(V: np.ndarray, F: np.ndarray, kept: np.ndarray | None) -> dic
     gone[np.unique(flab[np.asarray(kept, dtype=np.int64)])] = False
     if not gone.any():
         return None
-    return {"pieces": int(gone.sum()), "triangles": int(tri[gone].sum()), "largest_mm": round(float(diag[gone].max()), 1)}
+    out = {"pieces": int(gone.sum()), "triangles": int(tri[gone].sum()), "largest_mm": round(float(diag[gone].max()), 1)}
+    if params is not None:
+        i = int(np.flatnonzero(gone)[np.argmax(diag[gone])])
+        out["largest_rule"] = _floater_rule(params, float(diag[i]), int(tri[i]), len(F))
+        out["largest_triangles"] = int(tri[i])
+    return out
+
+
+def _floater_rule(params: dict, diag_mm: float, triangles: int, n_faces: int) -> str | None:
+    """Which limit of a "Remove loose bits" edit took a piece of ``diag_mm`` across and ``triangles`` triangles of a
+    mesh of ``n_faces`` (the limits combine with "or": the first that holds, in the label's order)."""
+    if params.get("keep_largest_only"):
+        return "largest_only"
+    p = params if any(k in params for k in ("min_size_mm", "min_fraction", "min_triangles")) else DEFAULT_FLOATERS
+    if p.get("min_size_mm") is not None and diag_mm < float(p["min_size_mm"]):
+        return "size"
+    if p.get("min_triangles") is not None and triangles < int(p["min_triangles"]):
+        return "triangles"
+    if p.get("min_fraction") is not None and triangles < float(p["min_fraction"]) * n_faces:
+        return "share"
+    return None
+
+
+def _rule_words(rule: str | None, params: dict) -> str:
+    """The rule that took the largest removed piece, as the summary says it after its size (R23)."""
+    p = params if any(k in params for k in ("min_size_mm", "min_fraction", "min_triangles")) else DEFAULT_FLOATERS
+    if rule == "size":
+        return f", smaller than {_fmt(float(p['min_size_mm']))} mm"
+    if rule == "triangles":
+        return f" but under {int(p['min_triangles']):,} triangles"
+    if rule == "share":
+        return f" but under {_fmt(100 * float(p['min_fraction']))} % of the mesh"
+    return ""
 
 
 def _carry_path_check(report: dict, track_rep: dict | None) -> None:
@@ -583,6 +640,25 @@ def _carry_path_check(report: dict, track_rep: dict | None) -> None:
     own = [w for w in report.get("warnings") or [] if isinstance(w, str)]
     carried = [w for w in track_rep.get("warnings") or [] if isinstance(w, str) and w not in own]
     report["warnings"] = carried + own
+
+
+def _carry_health_path(report: dict, track_rep: dict | None) -> None:
+    """A stage fused at given poses (straighten, fuse) tracks nothing, so its report alone cannot say whether the scan
+    was made on the graphics card's path (UX_PLAN R5: its status said "processed without a graphics card" on a scan
+    made with one): it takes the track stage's path as ``health_path`` (:func:`ohs.calib.health.path_of`), and its
+    ``health_status`` is read again on that path. The refinements copy the report they refine, and so the path."""
+    from ohs.calib import health
+
+    if not isinstance(track_rep, dict) or not isinstance(report.get("health"), dict):
+        return
+    report["health_path"] = {**health.path_of(track_rep), "from": "track"}
+    try:
+        st = health.report_status(report)
+    except Exception:  # a status must not cost the stage
+        log.exception("the calibration status of a stage failed")
+        return
+    if st is not None:
+        report["health_status"] = st
 
 
 def preset_meshing(p: Any, width: int, voxel_mm: float | None, thin_walls: str | None) -> Any:
@@ -685,6 +761,101 @@ def _move_dir(src: Path, dst: Path) -> None:
         _rmtree(old)
 
 
+#: a Make mesh (or a recipe on everything) builds in ``<scan>/.remake-<job id>/`` beside the scan's result
+REMAKE_PREFIX = ".remake-"
+_SWAP_FILE = "swap.json"  # in the folder of a run whose result is whole: it is about to take the old one's place
+_SWAPPED = ("process", "result")
+SWAP_PATIENCE_S = 30.0  # a file held open (a download, Windows) is waited for this long before the swap gives up
+
+
+def _rename(src: Path, dst: Path) -> None:
+    """``src.rename(dst)``, retried while Windows says a file inside is held open (up to :data:`SWAP_PATIENCE_S`)."""
+    deadline = time.monotonic() + SWAP_PATIENCE_S
+    while True:
+        try:
+            src.rename(dst)
+            return
+        except PermissionError:
+            if time.monotonic() > deadline:
+                raise
+            time.sleep(0.1)
+
+
+def _roll_back_swap(scan_dir: Path, staging: Path) -> None:
+    """Undo a swap that did not finish (:func:`swap_in`): each folder of the new run that was moved in goes back into
+    ``staging``, and each folder of the old result moved aside (``staging/old/``) comes back. Nothing of the old is
+    removed on the way."""
+    for name in _SWAPPED:
+        here, new, was = scan_dir / name, staging / name, staging / "old" / name
+        if not new.exists() and here.exists():  # the new one was moved in: it goes back
+            _rename(here, new)
+        if was.exists() and not here.exists():  # the old one was moved aside: it comes back
+            _rename(was, here)
+
+
+def swap_in(scan_dir: Path, staging: Path, fields: dict) -> None:
+    """Put a finished run (``staging/process``, ``staging/result``) in the place of the scan's ``process/`` and
+    ``result/``. Steps, each one a rename, so that at every moment either the old result or the new one is whole on
+    disk: ``swap.json`` (with ``fields``, the scan entry's new values) is written; the old folders move to
+    ``staging/old/``; the new ones move in. A failure on
+    the way puts everything back (:func:`_roll_back_swap`) and raises; an app that stops on the way is put right at
+    the next start (:func:`recover_remake`). The caller removes ``staging`` afterwards."""
+    for name in _SWAPPED:
+        if not (staging / name).is_dir():
+            raise RuntimeError(f"the new run has no {name} folder")
+    _write_json(staging / _SWAP_FILE, {"fields": fields})
+    old = staging / "old"
+    old.mkdir(exist_ok=True)
+    try:
+        for name in _SWAPPED:
+            if (scan_dir / name).exists():
+                _rename(scan_dir / name, old / name)
+        for name in _SWAPPED:
+            _rename(staging / name, scan_dir / name)
+    except BaseException:
+        safe_call("putting the earlier result back", lambda: _roll_back_swap(scan_dir, staging))
+        if not _old_waiting(staging):  # all back: the swap is forgotten (else swap.json stays for the next start)
+            safe_call("forgetting the swap", lambda: (staging / _SWAP_FILE).unlink(missing_ok=True))
+        raise
+
+
+def _old_waiting(staging: Path) -> bool:
+    """True while a folder of the old result is in ``staging/old/`` and the new one has not wholly taken its place:
+    the run's folder must then stay (it holds the scan's result) for :func:`recover_remake` to put back."""
+    return (any((staging / "old" / name).exists() for name in _SWAPPED)
+            and any((staging / name).exists() for name in _SWAPPED))
+
+
+def recover_remake(scan_dir: Path, staging: Path) -> dict | None:
+    """Put right a run's folder left by an app that stopped (call at start, before the scan is used): a run that had
+    not finished (no ``swap.json``) is removed, and the scan's result was never touched; a swap that stopped half
+    way is undone (the old result comes back whole); a swap whose new folders were all moved in is finished. Returns
+    the scan entry's new values when the new result stays (to write into ``project.json``), else None."""
+    swap = _read_json(staging / _SWAP_FILE)
+    keep_new = swap is not None and not any((staging / name).exists() for name in _SWAPPED)
+    if swap is not None and not keep_new:
+        _roll_back_swap(scan_dir, staging)
+        if any((staging / "old" / name).exists() for name in _SWAPPED):
+            # the undo could not put an old folder back (its place is taken): the run's folder holds a part of
+            # the scan's earlier result, so it is never removed; it stays for a person to look at
+            log.error("scan %s: %s still holds a part of the earlier result and is left as it is", scan_dir, staging.name)
+            return None
+    _rmtree(staging)
+    return dict(swap.get("fields") or {}) if keep_new and swap is not None else None
+
+
+def _ply_bytes(V: np.ndarray, F: np.ndarray) -> bytes:
+    """A binary little-endian PLY of a mesh's vertices (float32) and triangles (int32), nothing else."""
+    V = np.ascontiguousarray(V, dtype="<f4").reshape(-1, 3)
+    F = np.asarray(F, dtype="<i4").reshape(-1, 3)
+    head = "\n".join(["ply", "format binary_little_endian 1.0", f"element vertex {len(V)}", "property float x",
+                      "property float y", "property float z", f"element face {len(F)}",
+                      "property list uchar int vertex_indices", "end_header", ""])
+    faces = np.empty(len(F), dtype=[("n", "u1"), ("v", "<i4", (3,))])
+    faces["n"], faces["v"] = 3, F
+    return head.encode("ascii") + V.tobytes() + faces.tobytes()
+
+
 def _read_stage_mesh(path: Path, with_looks: bool = False) -> tuple:
     """A stage's ``mesh.ply`` as ``(V, F, S)``: degenerate faces and unused vertices dropped; ``S``
     (each vertex's sigma, the PLY ``quality``) is None when the file has none. ``with_looks``: also
@@ -727,7 +898,7 @@ def _empty_state(pid: str, sid: str) -> dict:
                                      "covered_pct": None, "moved_mm": None, "device": None},
                        "refine": {**base, "source": None, "points": None, "outliers": None, "moved_pct": None,
                                   "moved_mm": None, "residual_before_mm": None, "residual_after_mm": None}},
-            "base": None, "edits": [], "cursor": 0, "version": 0}
+            "base": None, "edits": [], "cursor": 0, "version": 0, "made": None}
 
 
 class ScanProcess:
@@ -759,6 +930,20 @@ class ScanProcess:
         self._why_mesh: tuple[int, Any, np.ndarray | None] | None = None
         self._why: tuple[int, float, dict] | None = None
         self._why_lock = threading.Lock()
+        # UX_PLAN R2: a run building beside the result (ProcessManager._run_staged). On the run's own ScanProcess,
+        # `live` is the scan it will replace and `deferred` what it will write outside its folder once it takes the
+        # old one's place (the scan entry's fields, the calibration health); on the scan, `making` is that run
+        self.live: ScanProcess | None = None
+        self.making: ScanProcess | None = None
+        self.deferred: dict[str, Any] = {"fields": {}, "health": None}
+        self._t_stage: dict[str, float] = {}  # when each running stage started (time.monotonic), for its `seconds`
+        self.plan: list[dict] | None = None  # a Make mesh's parts and their spans of the percentage (R18)
+        self.t0: float | None = None  # when a run beside the result started (time.monotonic)
+
+    def reset_caches(self) -> None:
+        """Forget everything kept in memory about the mesh (its files were replaced)."""
+        self._holes = self._fit_mesh = self._offset = self._lasers = self._table = None
+        self._check = self._why_mesh = self._why = None
 
     # ------------------------------------------------------------------ persistence
     @property
@@ -860,6 +1045,25 @@ class _Prog:
         return _Prog(self.ctx, self.p0 + (self.p1 - self.p0) * a, self.p0 + (self.p1 - self.p0) * b)
 
 
+def _span(span: tuple[float, float], f: float) -> float:
+    return span[0] + (span[1] - span[0]) * min(1.0, max(0.0, float(f)))
+
+
+def make_mesh_plan(*, straighten: bool, refine: bool, edits: bool) -> dict[str, tuple[float, float]]:
+    """The span of the percentage each part of a Make mesh (or a recipe on everything) takes: ``{part: (from, to)}``
+    in order, from :data:`MAKE_MESH_SHARES` for the parts that run (UX_PLAN R18)."""
+    run = {"track": True, "straighten": straighten, "refine": refine, "edits": edits}
+    shares = {k: v for k, v in MAKE_MESH_SHARES.items() if run[k]}
+    total = sum(shares.values())
+    out, a = {}, 0.0
+    for k, v in shares.items():
+        b = a + v / total
+        out[k] = (a, b)
+        a = b
+    out[list(out)[-1]] = (out[list(out)[-1]][0], 1.0)
+    return out
+
+
 def _straighten_progress(prog: _Prog) -> Callable[..., None]:
     """Adapter for ``straighten_trajectory``'s progress callback, whatever its arguments are:
     ``(fraction, message)``, ``(k, n)`` or ``(k, n, message)``."""
@@ -875,7 +1079,7 @@ def _straighten_progress(prog: _Prog) -> Callable[..., None]:
             frac = float(nums[0]) / float(nums[1])
         elif nums:
             frac = float(nums[0])
-        prog(frac if frac is not None else 0.0, f"Straightening: {msg}" if msg else "Straightening the trajectory")
+        prog(frac if frac is not None else 0.0, f"Straightening: {msg}" if msg else "Straightening the camera path")
 
     return cb
 
@@ -1006,7 +1210,19 @@ class ProcessManager:
                    "edits": edits, "cursor": int(st["cursor"]),
                    "can_undo": base is not None and st["cursor"] > 0,
                    "can_redo": base is not None and st["cursor"] < len(st["edits"]),
-                   "current": current, "busy": None, "job": None}
+                   "current": current, "busy": None, "job": None, "making": None, "made": st.get("made")}
+            mk = sp.making
+        if mk is not None:  # UX_PLAN R2: the new run's stages; the scan's own stay as they are until it is done
+            with mk.lock:
+                out["making"] = {"stages": {name: {k: mk.state["stages"][name].get(k)
+                                                   for k in ("state", "summary", "started", "seconds")}
+                                            for name in STAGES},
+                                 "plan": copy.deepcopy(mk.plan)}
+            if mk.t0 is not None:  # R18: how long the whole job has run, and what is left at this pace
+                el = time.monotonic() - mk.t0
+                p = float(job.progress) if job is not None else 0.0
+                out["making"]["elapsed_s"] = round(el, 1)
+                out["making"]["left_s"] = round(el * (1.0 - p) / p, 0) if p >= 0.03 else None
         if job is not None:
             out["job"] = job.to_dict()
             op = job.meta.get("op")
@@ -1019,6 +1235,8 @@ class ProcessManager:
         return self.view(self.scan(pid, sid))
 
     def publish(self, sp: ScanProcess) -> None:
+        if sp.live is not None:  # a run building beside the result: the scan's own state goes out, with the run's
+            sp = sp.live
         self.st.hub.publish_json({"type": "process", **self.view(sp)}, key=f"process:{sp.pid}/{sp.sid}")
 
     def on_job(self, job: dict) -> None:
@@ -1155,6 +1373,26 @@ class ProcessManager:
                 if i + 1 >= k - CACHE_STEPS:
                     _save_npz(sp.cache_path(i + 1), V, F, S=S, filled=Fl, L=L)
             return (V, F, S, Fl, L) if looks else (V, F, S, Fl)
+
+    def mesh_before(self, pid: str, sid: str, edit_id: str, after: bool = False) -> tuple[bytes, int, int]:
+        """``GET .../process/edits/{edit_id}/before.ply`` (UX_PLAN R23): the mesh just before that edit of the scan's
+        history (the step the edit was applied to), for the page to show as a ghost beside the mesh after it: what a
+        "Remove loose bits" (or any edit) took stays visible at any later time, for any step of the history, also an
+        undone one. A binary PLY of the vertices and faces only. The step comes from the undo cache, or is rebuilt from
+        the nearest cached step as an undo does. ``after`` (``.../after.ply``): the mesh that edit made instead, at any
+        step of the history too. Returns ``(PLY bytes, the step's number, the current mesh version)``.
+        404 for an edit the history no longer has (another Make mesh, a recipe, or Free space removed it)."""
+        sp = self.scan(pid, sid)
+        self._need_base(sp)
+        with sp.lock:
+            ids = [str(e["id"]) for e in sp.state["edits"]]
+            if edit_id not in ids:
+                raise ApiError(404, "This edit is no longer in the scan's history.",
+                               "Reload the page to see the history as it is now.")
+            k = ids.index(edit_id) + (1 if after else 0)
+            V, F = self.load_step(sp, k)
+            version = int(sp.state["version"])
+        return _ply_bytes(V, F), k, version
 
     def step_looks(self, sp: ScanProcess, k: int) -> np.ndarray | None:
         """Each vertex's count of looks at step ``k`` (None without): read alone from its cache file when
@@ -1376,10 +1614,14 @@ class ProcessManager:
         if op == "remove_floaters":
             if len(F2) == len(F):
                 return "No loose bits matched: nothing was removed"
-            gone = removed_pieces(V, F, kept)
+            gone = removed_pieces(V, F, kept, params)
             if gone is not None:
                 n, size = gone["pieces"], f"{gone['largest_mm']:.1f} mm across"
-                return (f"Removed {n:,} loose bit{'s' if n != 1 else ''}, {'the largest ' if n != 1 else ''}{size} "
+                if gone["largest_rule"] == "largest_only":
+                    return (f"Kept the largest piece only: removed {n:,} other piece{'s' if n != 1 else ''}, "
+                            f"{'the largest ' if n != 1 else ''}{size} ({len(F) - len(F2):,} triangles)")
+                rule = _rule_words(gone["largest_rule"], params)  # R23: what took the largest one
+                return (f"Removed {n:,} loose bit{'s' if n != 1 else ''}, {'the largest ' if n != 1 else ''}{size}{rule} "
                         f"({len(F) - len(F2):,} triangles)")
             n = int(b.get("components", 0)) - int(after["components"])
             return f"Removed {n:,} loose bit{'s' if n != 1 else ''} ({len(F) - len(F2):,} triangles)"
@@ -1472,7 +1714,7 @@ class ProcessManager:
         low = info.get("lowest_mm")
         kept = ("" if low is None else "; the part is kept right down to it" if low <= info["band_mm"]
                 else f"; the part is kept from {low:.2f} mm above it")
-        out = (f"Removed the table: {info['n_faces']:,} triangles ({info['area_mm2'] / 100.0:,.1f} cm², "
+        out = (f"Removed the table: {info['n_faces']:,} triangles ({info['area_mm2']:,.0f} mm², "
                f"{100 * info['share']:.0f} % of the scan, flat to {info['flatness_mm']:.2f} mm){kept}")
         return " ".join([out + "."] + list(info.get("warnings") or []))
 
@@ -1513,7 +1755,7 @@ class ProcessManager:
         stats = _stats(V2, F2, S2, Fl2)
         summary = (self._table_summary(info) if info is not None else
                    self._summary(op, params, V, F, V2, F2, before, stats, kept=by if op == "remove_floaters" else None))
-        removed = removed_pieces(V, F, by) if op == "remove_floaters" else None  # U14: what it took, for the page
+        removed = removed_pieces(V, F, by, params) if op == "remove_floaters" else None  # U14: what it took, for the page
         prog(0.94, f"{label}: saving", force=True)
         return self._commit_edit(sp, op, params, label, V2, F2, ms, summary, ctx.job.id, faces, stats, S2, Fl2, L2,
                                  extra={"removed": removed} if removed is not None else None)
@@ -1694,16 +1936,22 @@ class ProcessManager:
         return "Tracked" + (f" at {q}" if q else "")
 
     def _stage_start(self, sp: ScanProcess, name: str, job_id: str) -> dict:
+        """The stage runs from now: ``running``, with ``started`` (UX_PLAN R18: the page says how long it has run)."""
         with sp.lock:
             before = dict(sp.state["stages"][name])
-            sp.state["stages"][name].update(state="running", job_id=job_id, summary=None)
+            sp.state["stages"][name].update(state="running", job_id=job_id, summary=None, started=now_iso(),
+                                            seconds=None)
+            sp._t_stage[name] = time.monotonic()
             sp.save()
         self.publish(sp)
         return before
 
     def _stage_end(self, sp: ScanProcess, name: str, **fields: Any) -> None:
+        """The stage ended (done, skipped or failed): ``when``, and ``seconds``, how long it ran (R17, R18)."""
         with sp.lock:
-            sp.state["stages"][name].update(when=now_iso(), **fields)
+            t0 = sp._t_stage.pop(name, None)
+            secs = round(time.monotonic() - t0, 1) if t0 is not None else None
+            sp.state["stages"][name].update(when=now_iso(), seconds=secs, **fields)
             sp.save()
         self.publish(sp)
 
@@ -1726,6 +1974,8 @@ class ProcessManager:
             for f in (sp.dir / "cache").glob("*.npz") if (sp.dir / "cache").is_dir() else []:
                 safe_call(f"removing {f}", f.unlink)
             sp.state["base"] = {"triangles": int(len(F)), "vertices": int(len(V)), "stage": stage, "stats": stats}
+            if sp.live is None:  # a stage on the scan itself: the time of the Make mesh that made the old base is no more
+                sp.state["made"] = None
             sp.state["edits"], sp.state["cursor"] = [], 0
             _save_npz(sp.cache_path(0), V, F, N, S, L=L)
             sp.result_dir.mkdir(parents=True, exist_ok=True)
@@ -1742,12 +1992,14 @@ class ProcessManager:
         fields: dict[str, Any] = {"status": "processed", "report": summary, "error": None}
         if quality:
             fields["quality"] = quality
+        if sp.live is not None:  # a run beside the result (R2): the scan entry changes when it takes the old one's place
+            sp.deferred["fields"].update(fields)
+            return
         safe_call("updating the scan", lambda: self.st.projects.update_scan(sp.pid, sp.sid, **fields))
 
     def _fuse_into(self, ctx: Any, sp: ScanProcess, name: str, prog: _Prog, *, quality: str, voxel_mm: float | None,
                    poses: dict[int, np.ndarray] | None) -> dict:
         """``process_recording`` into ``process/<name>/`` (tracked, or at ``poses``); returns the report."""
-        from ohs import compute
         from ohs.app.process import process_recording
 
         rec, mode, width = self._scan_params(sp)
@@ -1755,8 +2007,7 @@ class ProcessManager:
                                     thin_walls=self._preset_acting(sp).get("thin_walls"))  # P2: None for General
         tmp = sp.dir / f"{name}.tmp-{ctx.job.id}"
         _rmtree(tmp)
-        dev = compute.get_device()
-        where = f" on the GPU ({dev.name})" if dev is not None else " on the CPU"
+        # no device name in what the user reads (UX_PLAN R12): Settings' About names the graphics card
         verb = "Following the camera" if poses is None else "Building the surface"
         # the job's `frames` field (APP_API.md): this pass's count and its rate since the first frame
         # was done (the loading and the first frame's warm-up are not in the rate)
@@ -1772,10 +2023,10 @@ class ProcessManager:
             ctx.set_frames({"stage": name, "done": k + 1, "total": n, "fps": None if fps is None else round(fps, 2),
                             "elapsed_s": round(elapsed, 2)})
             if last:  # the tail: the mesh is made from the frames (no frame counter any more)
-                prog(1.0, f"{verb}: all {n} frames done, making the mesh", force=True)
+                prog(1.0, f"{verb}: all {n:,} frames done, making the mesh", force=True)
                 return
             lost = "" if res.track.ok else " (tracking lost)"
-            prog((k + 1) / max(n, 1), f"{verb}: frame {k + 1} of {n}{where}{lost}")
+            prog((k + 1) / max(n, 1), f"{verb}: frame {k + 1:,} of {n:,}{lost}")
 
         try:
             report = process_recording(rec, tmp, params=params, progress=progress, poses=poses)
@@ -1788,7 +2039,9 @@ class ProcessManager:
                 st_rep = _read_json(sp.dir / "straighten.json")
                 if st_rep is not None:
                     _set_straighten(report, st_rep)
-                _carry_path_check(report, _read_json(sp.dir / "track" / "report.json"))
+                track_rep = _read_json(sp.dir / "track" / "report.json")
+                _carry_path_check(report, track_rep)
+                _carry_health_path(report, track_rep)
             (tmp / "report.json").write_text(json.dumps(jsonable(report), indent=1), encoding="utf-8")
             _move_dir(tmp, sp.dir / name)
         finally:
@@ -1814,9 +2067,13 @@ class ProcessManager:
                 if p.exists():
                     safe_call("removing straighten.json", p.unlink)
             self._new_base(sp, "track", sp.dir / "track", report, quality)
-            # the tracked pass is the one with every sign (calibration health, FEATURE_PLAN H3)
-            safe_call("recording the calibration health",
-                      lambda: self.st.setup.record_scan_health(sp.pid, sp.sid, report, sp.recording_dir))
+            # the tracked pass is the one with every sign (calibration health, FEATURE_PLAN H3); a run beside the
+            # result (R2) records it once it has taken the old one's place
+            if sp.live is not None:
+                sp.deferred["health"] = report
+            else:
+                safe_call("recording the calibration health",
+                          lambda: self.st.setup.record_scan_health(sp.pid, sp.sid, report, sp.recording_dir))
             self._stage_end(sp, "track", state="done", summary=self._track_summary(report, quality), quality=quality,
                             tracked_pct=round(100.0 * float(fr.get("tracked_fraction", 0.0)), 1), voxel_mm=voxel_mm,
                             job_id=ctx.job.id, warnings=user_warnings(report))
@@ -1835,7 +2092,7 @@ class ProcessManager:
             with sp.lock:
                 track = dict(sp.state["stages"]["track"])
             traj = read_trajectory(sp.dir / "track" / "trajectory.csv")
-            prog(0.0, "Looking for loops in the trajectory", force=True)
+            prog(0.0, "Looking for loops in the camera path", force=True)
             try:
                 from ohs.track.posegraph import straighten_trajectory
             except ImportError:
@@ -1848,7 +2105,7 @@ class ProcessManager:
             calib = RecordingReader(sp.recording_dir).calibration()
             try:
                 poses, rep = straighten_trajectory(sp.recording_dir, calib, traj,
-                                                   progress=_straighten_progress(prog.sub(0.0, 0.4)),
+                                                   progress=_straighten_progress(prog.sub(*STRAIGHTEN_SPANS["loops"])),
                                                    cancelled=lambda: ctx.cancelled)
             except (JobCancelled, InterruptedError):
                 raise
@@ -1872,7 +2129,8 @@ class ProcessManager:
             quality, voxel = quality_or_none(track.get("quality")) or "standard", track.get("voxel_mm")
             report: dict = {}
             if looped:  # the loops' fuse is also the reference surface for the laser crossings
-                report = self._fuse_into(ctx, sp, "straighten", prog.sub(0.3, 0.6), quality=quality, voxel_mm=voxel,
+                report = self._fuse_into(ctx, sp, "straighten", prog.sub(*STRAIGHTEN_SPANS["fuse"]), quality=quality,
+                                         voxel_mm=voxel,
                                          poses=poses)
                 ref_dir, cur = sp.dir / "straighten", dict(poses)
             else:
@@ -1887,7 +2145,7 @@ class ProcessManager:
                 rows_cur = [(i, t, True, cur[i]) for i, t, ok, _ in traj if ok and i in cur]
                 new_poses, crep = laser_curve_adjustment(
                     sp.recording_dir, calib, rows_cur, reference=(Vr, Fr), cancelled=lambda: ctx.cancelled,
-                    progress=lambda f, m: prog(0.6 + 0.15 * f, f"Laser crossings: {m}"))
+                    progress=lambda f, m: prog(_span(STRAIGHTEN_SPANS["crossings"], f), f"Laser crossings: {m}"))
             except (JobCancelled, InterruptedError):
                 raise
             except Exception as e:
@@ -1904,6 +2162,9 @@ class ProcessManager:
                 # no loop (or loops that show the passes already line up) and nothing for the lasers to fix:
                 # the base (and its edits) stay
                 msg = verdict or "No loops found: nothing to straighten"
+                # loops closed and nothing moved: said as what "skipped" means (UX_PLAN R22)
+                msg = msg.replace(": the passes already line up", ", but there was nothing to straighten: the passes "
+                                                                  "already line up", 1)
                 with sp.lock:  # the base stays; its report says that Straighten found nothing to correct
                     res_rep = _read_json(sp.result_dir / "report.json")
                     if res_rep is not None and _set_straighten(res_rep, rep):
@@ -1912,7 +2173,8 @@ class ProcessManager:
                                 correction_mm=0.0, correction_deg=0.0, crossings=None)
                 return msg
             if adjusted:
-                report = self._fuse_into(ctx, sp, "straighten", prog.sub(0.75, 0.95), quality=quality, voxel_mm=voxel,
+                report = self._fuse_into(ctx, sp, "straighten", prog.sub(*STRAIGHTEN_SPANS["fuse2"]), quality=quality,
+                                         voxel_mm=voxel,
                                          poses=new_poses)
                 track_poses = {i: T for i, _, ok, T in traj if ok}
                 corr_mm = max((float(np.linalg.norm(new_poses[i][:3, 3] - track_poses[i][:3, 3]))
@@ -2117,7 +2379,7 @@ class ProcessManager:
                 sp.state["stages"]["refine"] = _empty_state(sp.pid, sp.sid)["stages"]["refine"]
                 _rmtree(sp.dir / "refine")
             self._new_base(sp, "spacetime", sp.dir / "spacetime", report, quality)
-            where = "on the GPU" if rep["device"] == "gpu" else "on the CPU"
+            where = "on the graphics card" if rep["device"] == "gpu" else "without a graphics card"
             summary = (f"Measured {covered:g} % of the surface against {rep['frames']:,} frames ({rep['kept']:,} patches, "
                        f"{where}); it moved by up to {rep['moved']['p95']:.2f} mm (95 %)")
             self._stage_end(sp, "spacetime", state="done", summary=summary, job_id=ctx.job.id, **fields)
@@ -2129,9 +2391,105 @@ class ProcessManager:
             self._stage_end(sp, "spacetime", state="failed", summary=_stage_failed("spacetime", e))
             raise
 
+    # ------------------------------------------------------------------ a run beside the result (UX_PLAN R2)
+    def _run_staged(self, ctx: Any, sp: ScanProcess, fn: Callable[[ScanProcess], str]) -> str:
+        """Run ``fn`` (every stage from the recording, then the recipe's edits) on a :class:`ScanProcess` of its own
+        in ``<scan>/.remake-<job id>/`` (its ``process/`` and ``result/``; the recording is the scan's), and put it in
+        the place of the scan's ``process/`` and ``result/`` only once it has finished (:func:`swap_in`). Until then
+        the scan's mesh, stages, edits and undo history, report, laser points and scan entry are not touched; a
+        cancelled or failed run removes its folder and leaves the scan exactly as it was.
+
+        **Disk space:** while it runs, the scan holds two results (the old one and the new one being built, about the
+        size of the old ``process/`` and ``result/`` together); the Free space numbers count the run's folder under the
+        scan's ``other`` until it takes the old one's place, when the old one goes. An app that stops on the way is
+        put right at the next start (:meth:`recover_remakes`)."""
+        scan_dir = sp.dir.parent
+        staging = scan_dir / f"{REMAKE_PREFIX}{ctx.job.id}"
+        _rmtree(staging)
+        staging.mkdir(parents=True)
+        new = ScanProcess(sp.pid, sp.sid, staging)
+        new.recording_dir = sp.recording_dir
+        new.live = sp
+        t0 = new.t0 = time.monotonic()
+        with sp.lock:
+            new.state["version"] = int(sp.state["version"])  # the new mesh's versions follow the old one's
+            sp.making = new
+        try:
+            msg = fn(new)
+            # how long the whole run took, every stage and edit (UX_PLAN R17: the report's time is the whole Make mesh)
+            new.state["made"] = {"job_id": ctx.job.id, "kind": ctx.job.kind, "when": now_iso(),
+                                 "seconds": round(time.monotonic() - t0, 1),
+                                 "stages": {n: new.state["stages"][n].get("seconds") for n in STAGES
+                                            if new.state["stages"][n].get("seconds") is not None}}
+            new.save()
+            self._take_place(ctx, sp, new)
+            return msg
+        finally:
+            with sp.lock:
+                sp.making = None
+            if _old_waiting(staging):  # a swap that could not be undone: once more now, else at the next start
+                safe_call("putting the earlier result back", lambda: recover_remake(scan_dir, staging))
+            if _old_waiting(staging):
+                log.error("scan %s/%s: the earlier result waits in %s; it is put back at the next start", sp.pid,
+                          sp.sid, staging)
+            else:
+                _rmtree(staging)
+
+    def _take_place(self, ctx: Any, sp: ScanProcess, new: ScanProcess) -> None:
+        """The finished run takes the old result's place (the job's point of no return), then the scan entry and the
+        calibration health are written as a run on the scan itself writes them."""
+        staging = new.dir.parent
+        if not (new.result_dir / "mesh.ply").is_file():
+            raise ApiError(500, "The new mesh was not made, so the earlier one is kept as it was.",
+                           "Press Make mesh again.")
+        fields = jsonable(dict(new.deferred["fields"]))
+        with sp.lock:
+            ctx.commit()  # a cancel from here on is too late: the new result goes in whole
+            try:
+                swap_in(sp.dir.parent, staging, fields)
+            except OSError:
+                log.exception("scan %s/%s: the new result could not take the old one's place", sp.pid, sp.sid)
+                raise ApiError(409, "The new mesh could not take the place of the earlier one, because a file of this "
+                                    "scan is open in another program. The earlier mesh is kept as it was.",
+                               "Close the program that has the file open, then press Make mesh again.") from None
+            sp.load()
+            sp.reset_caches()
+        if fields:
+            safe_call("updating the scan", lambda: self.st.projects.update_scan(sp.pid, sp.sid, **fields))
+        rep = new.deferred.get("health")
+        if isinstance(rep, dict):
+            safe_call("recording the calibration health",
+                      lambda: self.st.setup.record_scan_health(sp.pid, sp.sid, rep, sp.recording_dir))
+
+    def recover_remakes(self) -> int:
+        """At start: put right every run's folder (``.remake-*``) an app that stopped left in a scan
+        (:func:`recover_remake`); returns how many there were."""
+        root = Path(self.st.projects.root)
+        n = 0
+        if not root.is_dir():
+            return 0
+        for pdir in root.iterdir():
+            if not pdir.is_dir() or pdir.name.startswith(".") or not (pdir / "scans").is_dir():
+                continue
+            for sdir in (pdir / "scans").iterdir():
+                for staging in (sorted(sdir.glob(REMAKE_PREFIX + "*")) if sdir.is_dir() else []):
+                    n += 1
+                    try:
+                        fields = recover_remake(sdir, staging)
+                    except OSError:
+                        log.exception("scan %s: a run's folder %s could not be put right", sdir, staging.name)
+                        continue
+                    log.warning("scan %s/%s: a Make mesh stopped by the app was %s", pdir.name, sdir.name,
+                                "finished (its new result is whole)" if fields is not None else
+                                "undone (the earlier result is as it was)")
+                    if fields:
+                        safe_call("updating the scan",
+                                  lambda: self.st.projects.update_scan(pdir.name, sdir.name, **fields))
+        return n
+
     def _stage_job(self, pid: str, sid: str, kind: str, body: Callable[[Any, ScanProcess, _Prog], str],
                    *, need_track: bool, message: str, meta: dict | None = None, need_recording: bool = True,
-                   check: Callable[[ScanProcess], None] | None = None) -> Any:
+                   check: Callable[[ScanProcess], None] | None = None, staged: bool = False) -> Any:
         with self.st._lock:
             self._check_free(pid, sid)
             if need_recording:
@@ -2142,20 +2500,31 @@ class ProcessManager:
             if check is not None:
                 check(sp)
             had_result = (sp.result_dir / "mesh.ply").is_file()
+            before = self.st.projects.scan_entry(pid, sid)
             self.st.projects.update_scan(pid, sid, status="processing")
 
             def run(ctx: Any) -> dict:
-                msg = body(ctx, sp, _Prog(ctx, 0.0, 1.0))
+                if staged:  # every stage from the recording: built beside the result (R2)
+                    msg = self._run_staged(ctx, sp, lambda new: body(ctx, new, _Prog(ctx, 0.0, 1.0)))
+                    ctx.job.meta["mesh_kept"] = False  # the new mesh took the earlier one's place
+                else:
+                    msg = body(ctx, sp, _Prog(ctx, 0.0, 1.0))
                 return {"project_id": pid, "scan_id": sid, "scan": self.st.projects.get_scan(pid, sid), "message": msg}
 
             def done(job: Any) -> None:
-                self._settle_status(sp, job, had_result)
+                kept = staged and had_result and job.state != "done"
+                if kept:  # the scan is as it was, its status too
+                    self._restore_status(pid, sid, before)
+                else:
+                    self._settle_status(sp, job, had_result)
                 if job.state == "failed":
-                    self.st.notify("error", failure_notice(job, f"{message} failed."))
+                    self.st.notify("error", failure_notice(job, f"{message} failed.",
+                                                           "The earlier mesh is kept as it was." if kept else ""))
                 self.publish(sp)
 
             job = self.st.jobs.submit(kind, run, message=f"Queued: {message}",
-                                      meta={"project_id": pid, "scan_id": sid, **(meta or {})}, on_done=done)
+                                      meta={"project_id": pid, "scan_id": sid, **(meta or {}),
+                                            **({"mesh_kept": had_result} if staged else {})}, on_done=done)
         self.publish(sp)
         return job
 
@@ -2168,6 +2537,11 @@ class ProcessManager:
         else:
             fields = {"status": "processed" if has else "recorded"}
         safe_call("updating the scan", lambda: self.st.projects.update_scan(sp.pid, sp.sid, **fields))
+
+    def _restore_status(self, pid: str, sid: str, before: dict) -> None:
+        """The scan entry's status and error as they were before a run that left the scan as it was (R2)."""
+        safe_call("updating the scan", lambda: self.st.projects.update_scan(
+            pid, sid, status=before.get("status") or "processed", error=before.get("error")))
 
     @staticmethod
     def _quality_arg(quality: Any) -> str:
@@ -2247,15 +2621,16 @@ class ProcessManager:
             q = quality_or_none(quality or s.get("quality")) or "standard"
             straighten = s.get("straighten", "auto") == "auto"
             refine = s.get("refine", "auto") == "auto"
-            p_ops = 0.9 if refine else 0.88
-            p_track = (0.72 if straighten else 0.82) if refine else (0.75 if straighten else 0.85)
-            p_refine = 0.84 if straighten else p_track
-            self._do_track(ctx, sp, prog.sub(0.0, p_track), q, s.get("voxel_mm"))
+            # each part's share of the percentage (UX_PLAN R18: MAKE_MESH_SHARES), the parts that run only
+            spans = make_mesh_plan(straighten=straighten, refine=refine, edits=bool(ops))
+            sp.plan = [{"stage": k, "from": round(a, 4), "to": round(b, 4)} for k, (a, b) in spans.items()]
+            p_ops = spans["edits"][0] if "edits" in spans else 1.0
+            self._do_track(ctx, sp, prog.sub(*spans["track"]), q, s.get("voxel_mm"))
             if straighten:
-                self._do_straighten(ctx, sp, prog.sub(p_track, p_refine if refine else 0.88))
+                self._do_straighten(ctx, sp, prog.sub(*spans["straighten"]))
             if refine:
                 try:
-                    self._do_refine(ctx, sp, prog.sub(p_refine, p_ops))
+                    self._do_refine(ctx, sp, prog.sub(*spans["refine"]))
                 except (JobCancelled, InterruptedError):
                     raise
                 except Exception:  # the stage says it failed; the mesh stays as fused
@@ -2292,7 +2667,7 @@ class ProcessManager:
         return self._stage_job(pid, sid, "process_recipe",
                                lambda ctx, sp, prog: self._run_recipe(ctx, sp, recipe, "all", prog),
                                need_track=False, message=f"The recipe {recipe['name']}",
-                               meta={"recipe_id": recipe_id, "recipe_name": recipe["name"], "scope": scope})
+                               meta={"recipe_id": recipe_id, "recipe_name": recipe["name"], "scope": scope}, staged=True)
 
     def make_mesh(self, pid: str, sid: str, quality: str) -> Any:
         """``POST .../process`` (M1 "Make mesh"): the Default recipe, all stages, at ``quality``."""
@@ -2303,29 +2678,44 @@ class ProcessManager:
             self._need_recording(pid, sid)
             sp = self.scan(pid, sid)
             had_result = (sp.result_dir / "mesh.ply").is_file()
-            self.st.projects.update_scan(pid, sid, status="processing", error=None)
+            self.st.projects.update_scan(pid, sid, status="processing", **({} if had_result else {"error": None}))
 
             def run(ctx: Any) -> dict:
-                self._run_recipe(ctx, sp, recipe, "all", _Prog(ctx, 0.0, 1.0), quality=quality)
+                # built beside the scan's result, which it replaces only once it has finished (UX_PLAN R2)
+                self._run_staged(ctx, sp, lambda new: self._run_recipe(ctx, new, recipe, "all", _Prog(ctx, 0.0, 1.0),
+                                                                       quality=quality))
+                ctx.job.meta["mesh_kept"] = False  # the new mesh took the earlier one's place
                 scan = self.st.projects.get_scan(pid, sid)
                 return {"project_id": pid, "scan_id": sid, "scan": scan, "message": "Mesh ready"}
 
             def done(job: Any) -> None:
+                kept = had_result and job.state != "done"
+                if kept:
+                    self._restore_status(pid, sid, entry)
                 if job.state == "done":
                     self.st.notify("info", f"Mesh ready: \u201c{entry.get('name', sid)}\u201d.")
+                elif job.state == "failed" and kept:
+                    why = "" if job.error == failure_text(job.kind) else job.error or ""
+                    self.st.notify("error", " ".join(x for x in (
+                        "Making the mesh again failed.", why, "The earlier mesh is kept as it was, with its edits; your "
+                        "recording is safe.") if x))
                 elif job.state == "failed":  # as in M1: failed, with the reason
                     safe_call("updating the scan",
                               lambda: self.st.projects.update_scan(pid, sid, status="failed", error=job.error))
                     self.st.notify("error", failure_notice(job, "Making the mesh failed.",
                                                            "Your recording is safe: try Make mesh again, or at "
                                                            "Preview quality."))
+                elif kept:
+                    self.st.notify("info", "Making the mesh again was cancelled. The earlier mesh is kept as it was, "
+                                           "with its edits.")
                 else:
                     self._settle_status(sp, job, had_result)
                     self.st.notify("info", "Making the mesh was cancelled. Your recording is safe.")
                 self.publish(sp)
 
             job = self.st.jobs.submit("process_scan", run, message="Queued for processing",
-                                      meta={"project_id": pid, "scan_id": sid, "quality": quality}, on_done=done)
+                                      meta={"project_id": pid, "scan_id": sid, "quality": quality,
+                                            "mesh_kept": had_result}, on_done=done)
         self.publish(sp)
         return job
 

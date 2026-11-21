@@ -724,6 +724,28 @@ def trim_block(block: dict | None) -> dict | None:
     }
 
 
+def path_of(report: dict | None) -> dict:
+    """The compute path a processed scan's signs were made on: ``{tracking_model, cpu_path}`` (:func:`read_scan`'s
+    two arguments). A stage fused at given poses (the server's Straighten and Build the surface) tracks nothing, so
+    its own ``params.compute.tracking_model`` is None; its report then carries the path of the stage that made its
+    poses as ``health_path`` (UX_PLAN R5), which wins here. Else the report's own params."""
+    hp = report.get("health_path") if isinstance(report, dict) else None
+    if isinstance(hp, dict) and ("tracking_model" in hp or "cpu_path" in hp):
+        cp = hp.get("cpu_path")
+        return {"tracking_model": hp.get("tracking_model"), "cpu_path": cp if cp in CPU_CASES else None}
+    return {"tracking_model": _at(report, ("params", "compute", "tracking_model")), "cpu_path": cpu_path_case(report)}
+
+
+def report_status(report: dict) -> dict | None:
+    """:func:`scan_status` of a processed scan's report, on the path :func:`path_of` reads (None without a usable
+    health block)."""
+    block = report.get("health") if isinstance(report, dict) else None
+    if not isinstance(block, dict) or "error" in block:
+        return None
+    return scan_status(block, lines=lines_of_report(report), frames=_at(report, ("frames", "processed")),
+                       **path_of(report))
+
+
 def lines_of_report(report: dict) -> list[str]:
     """The laser lines a processed scan should have: the calibration's planes when its lasers were on."""
     if _at(report, ("params", "pipeline", "use_lasers")) is False:
@@ -739,9 +761,8 @@ def scan_item(report: dict, *, when: str | None = None, scan: dict | None = None
     block = trim_block(report.get("health") if isinstance(report, dict) else None)
     if block is None:
         return None
-    return {"health": block, "tracking_model": _at(report, ("params", "compute", "tracking_model")),
-            "cpu_path": cpu_path_case(report), "lines": lines_of_report(report), "frames": _at(report, ("frames", "processed")), "when": when,
-            "scan": scan, "calibration": calibration}
+    return {"health": block, **path_of(report), "lines": lines_of_report(report),
+            "frames": _at(report, ("frames", "processed")), "when": when, "scan": scan, "calibration": calibration}
 
 
 def _rounded(x: Any) -> Any:

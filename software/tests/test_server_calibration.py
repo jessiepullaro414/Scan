@@ -232,7 +232,7 @@ def test_wizard_end_to_end_on_the_simulator(env):
     assert s["state"] == "result" and r["kind"] == "stereo" and r["grade"] in ("excellent", "good"), r
     assert r["ok"] and r["can_save"] and r["headline"] and r["verdict"] and r["report_url"] == "/api/calibration/report.json"
     labels = [m["label"] for m in r["metrics"]]
-    assert "Reprojection error" in labels and "Left/right height mismatch" in labels and "Distance between the cameras" in labels
+    assert "How well the corners fit" in labels and "Left/right height mismatch" in labels and "Distance between the cameras" in labels
     assert {p["index"] for p in r["per_view"]} <= {v["index"] for v in s["views"]} and r["per_view"]
     e = truths["stereo"] = _truth(r, "stereo")
     truths["stereo_views"] = len(s["views"])

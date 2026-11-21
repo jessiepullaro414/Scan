@@ -114,7 +114,7 @@ def anchor_to_points(V: np.ndarray, F: np.ndarray, P: np.ndarray, params: Anchor
         return V.copy(), delta, report
 
     # 2. the region the field can reach, and the diffusion on it
-    say(0.2, "building the correction field")
+    say(0.2, "working out where the surface must move")
     reach, _ = cKDTree(P[ok]).query(V, distance_upper_bound=3.0 * p.smooth_mm, workers=-1)
     U = np.flatnonzero(np.isfinite(reach))
     pos = np.full(n, -1, dtype=np.int64)
@@ -138,7 +138,7 @@ def anchor_to_points(V: np.ndarray, F: np.ndarray, P: np.ndarray, params: Anchor
     w = (ok & (jU >= 0)).astype(np.float64)
     field = np.zeros(m)
     for it in range(max(1, int(p.iterations))):
-        say(0.25 + 0.65 * it / max(1, p.iterations), "fitting the correction field")
+        say(0.25 + 0.65 * it / max(1, p.iterations), "fitting the surface to the laser lines")
         sel = w > 0
         bw = blur(np.bincount(jU[sel], weights=w[sel], minlength=m))
         br = blur(np.bincount(jU[sel], weights=w[sel] * r[sel], minlength=m))

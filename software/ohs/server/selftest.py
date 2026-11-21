@@ -73,7 +73,7 @@ def fix_for(name: str, status: str, detail: str = "") -> str | None:
         if status == "FAIL":
             return ("Plug the scanner's USB cable straight into a USB 3 port, close other programs that use the camera, "
                     "and pick the scanner's cameras in step 1 (Connect).")
-        return ("The camera runs another mode than the settings ask for: use the 2560x800 MJPG mode, or pick the "
+        return ("The camera runs another mode than the settings ask for: use the 2,560 × 800 MJPG mode, or pick the "
                 "scanner's cameras in step 1 (Connect).")
     if name == "camera fps":
         if status == "FAIL":
@@ -83,7 +83,7 @@ def fix_for(name: str, status: str, detail: str = "") -> str | None:
     if name == "camera image":
         if "black" in d:
             return "Take off the lens caps and point the scanner at a lit scene; raise the exposure if it stays dark."
-        if "saturated" in d:
+        if "too bright" in d or "saturated" in d:
             return "Lower the exposure, or point the scanner away from bright lights and windows."
         if "identical" in d:
             return "This camera sends the same picture twice: pick the scanner's side-by-side cameras in step 1 (Connect)."
@@ -306,7 +306,7 @@ def run_stream_selftest(devices: Any, source: str, message: Callable[[str], None
         checks.append(_check("camera", "FAIL", f"{what} delivered fewer than 2 frames in {seconds:g} s"))
     else:
         w, h = size
-        checks.append(_check("camera", "PASS", f"{2 * w}x{h} (2 x {w}x{h}) from {what}"))
+        checks.append(_check("camera", "PASS", f"two pictures of {w:,} × {h:,} side by side, from {what}"))
         span = frames[-1][1] - frames[0][1]
         fps = (len(frames) - 1) / span if span > 0 else 0.0
         want = float(info.get("fps") or 0.0)
@@ -330,9 +330,9 @@ def run_stream_selftest(devices: Any, source: str, message: Callable[[str], None
         detail = f"{rate:.0f} Hz, {len(t)} samples, {gaps} gap{'s' if gaps != 1 else ''}"
         checks.append(_check("imu rate", "PASS" if rate >= 0.95 * nominal else "WARN", detail))
         g = float(np.linalg.norm(accel, axis=1).mean())  # mean of the norms: see gravity_ok
-        detail = f"|accel| {g:.2f} m/s^2"
+        detail = f"gravity reads {g:.2f} m/s²"
         checks.append(_check("imu values", "PASS" if gravity_ok(g) else "WARN",
-                             detail if gravity_ok(g) else detail + " (expected about 9.81 m/s^2)"))
+                             detail if gravity_ok(g) else detail + " (about 9.81 m/s² at rest)"))
     no_pico = ("the simulator has no control board" if source == "sim"
                else "a replayed recording has no control board")
     checks.append(_check("pico", "SKIP", no_pico))

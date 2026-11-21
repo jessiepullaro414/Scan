@@ -101,7 +101,7 @@ MAX_LINE_POINTS = 200  # per laser line in the live message
 IMU_FLOW_FRAMES = 600  # the IMU flow uses at most about this many frames (step)
 GUIDANCE = {
     "stereo": ("Hold the board 200–500 mm from the scanner in 15–25 different views: cover the corners and edges of "
-               "both pictures and tilt it 20–45° in different directions. Hold still for half a second at each pose."),
+               "both pictures and tilt it 20–45° in different directions. Hold still for half a second at each view."),
     "lasers": ("Hold the board 150–450 mm away in 6–10 views at different distances and tilts up to 30°, with both "
                "laser lines crossing the white margin around the pattern."),
     "imu": ("Put the board on the table. Press Start, hold the scanner still for 2 s, then rotate it slowly about all "
@@ -1042,6 +1042,16 @@ class CalibrationManager:
     def active(self) -> bool:
         s = self.session
         return s is not None and s.active
+
+    def busy(self, hint: str) -> ApiError:
+        """The refusal of what cannot be done while a calibration is open (UX_PLAN R9): one whose result waits to be
+        saved is not "running", and the sentence says what to do with it; else "A calibration is running." with
+        ``hint``."""
+        s = self.session
+        if s is not None and s.state == "result":
+            return ApiError(409, "A calibration result is waiting in Setup: save it or close it first.",
+                            "Open Setup to review the result, then save it or close it.")
+        return ApiError(409, "A calibration is running.", hint)
 
     def state(self) -> dict:
         s = self.session

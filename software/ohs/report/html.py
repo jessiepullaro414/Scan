@@ -245,8 +245,16 @@ def _preset_text(pr: dict) -> str:
     return text
 
 
-def _made(p: dict) -> str | None:
+def _made(p: dict, merge: dict | None = None) -> str | None:
     rows: list[tuple[str, str]] = []
+    if isinstance(merge, dict):  # a merged scan (UX_PLAN R8): what it was made from, and what the merge left out
+        names = [str(n) for n in merge.get("from") or [] if n]
+        if names:
+            rows.append(("Merged from", esc(", ".join(names) + ": aligned and merged into one mesh; it has no recording "
+                                                               "of its own")))
+        notes = [str(n) for n in merge.get("notes") or [] if n]
+        if notes:
+            rows.append(("What the merge left out", "<br>".join(esc(n) for n in notes)))
     if p.get("source") == "sim" or p.get("scene"):
         rows.append(("Made", "In the simulator" + (f" (scene “{esc(p['scene'])}”)" if p.get("scene") else "")))
     mode = p.get("mode")
@@ -268,7 +276,7 @@ def _made(p: dict) -> str | None:
             text += f"; {N.whole(fr['cut'])} left out where the recording was cut"
         rows.append(("Frames", esc(text)))
     if p.get("poses") == "given":
-        rows.append(("Tracking", "Built from a given camera path (straightened, or rebuilt from the tracked path)"))
+        rows.append(("Tracking", "Built from the camera path that Follow the camera found (straightened, when Straighten corrected it)"))
     elif _num(fr.get("tracked")) and _num(fr.get("processed")) and fr["processed"]:
         text = f"{N.whole(fr['tracked'])} of {N.whole(fr['processed'])} frames tracked ({N.percent(fr['tracked'] / fr['processed'])})"
         fails = p.get("failures") if isinstance(p.get("failures"), dict) else {}
@@ -302,43 +310,78 @@ def _made(p: dict) -> str | None:
         if _num(las.get("n_points_exported")):
             parts.append(f"{N.whole(las['n_points_exported'])} laser points kept")
         rows.append(("Lasers", esc("; ".join(parts))))
-    if _num(p.get("wall_time_s")):
-        s = int(round(p["wall_time_s"]))
-        rows.append(("Processing time", esc(f"{s // 60} min {s % 60:02d} s" if s >= 60 else f"{s} s")))
+    def _dur(x: float) -> str:
+        s = int(round(x))
+        return f"{s // 60} min {s % 60:02d} s" if s >= 60 else f"{s} s"
+
+    # UX_PLAN R17: the whole Make mesh when it is known, else said to be the last stage's time alone
+    if _num(p.get("make_mesh_s")):
+        rows.append(("Processing time", esc(f"{_dur(p['make_mesh_s'])} for the whole Make mesh, every stage and edit")))
+    elif _num(p.get("wall_time_s")):
+        rows.append(("Processing time", esc(f"{_dur(p['wall_time_s'])} for the last stage that made this mesh (the "
+                                            "stages before it and the edits not counted)")))
     return _part("made", [_dl(rows)]) if rows else None
 
 
+#: which calibration the scan was made with (ohs.server.report, "made_with"), in words
+MADE_WITH = {
+    "simulator": "The simulator's own calibration, the one its demo recording was made with.",
+    "replay": "The replayed recording's own calibration, the one it was recorded with.",
+    "scanner": "The scanner's calibration, as it was when this scan was recorded.",
+}
+
+
+def _merged_calibration(cal: dict) -> str:
+    """The calibration part of a merged scan (UX_PLAN R8): it has no recording, so no calibration of its own."""
+    names = [str(n) for n in cal.get("merged_from") or [] if n]
+    text = ("Each scan it was merged from" + (f" ({', '.join(names)})" if names else "")
+            + " was made with its own calibration; its report says how that calibration held.")
+    health = ("Not judged for the merged scan itself: a merge has no recording of its own, so there is nothing new "
+              "to judge the calibration by. The reports of the scans it was merged from have it.")
+    return _part("calibration", [_dl([("Made with", esc(text)), ("Health", esc(health))])])
+
+
 def _calibration(cal: dict) -> str:
+    if cal.get("made_with") == "merge":
+        return _merged_calibration(cal)
     rows: list[tuple[str, str]] = []
+    if cal.get("made_with") in MADE_WITH:
+        rows.append(("Made with", esc(MADE_WITH[cal["made_with"]])))
+    if cal.get("missing"):
+        rows.append(("Calibration file", _badge("warning") + " " + esc("The recording has no calibration file, so it is "
+                                                                       "not known what it was made with.")))
     parts = cal.get("parts") if isinstance(cal.get("parts"), dict) else None
+    missing = [str(x) for x in cal.get("lasers_missing") or []]
     if parts is not None:
         for key, label in (("stereo", "Cameras"), ("lasers", "Laser lines"), ("imu", "Motion sensor (IMU)")):
             info = parts.get(key)
             if isinstance(info, dict):
-                text = str(info.get("summary") or "Calibrated")
-                rows.append((label, esc(text) + (f" <span class=\"muted\">({esc(_when(info['when']))})</span>"
-                                                 if info.get("when") else "")))
+                text = esc(str(info.get("summary") or "Calibrated"))
+                text += f" <span class=\"muted\">({esc(_when(info['when']))})</span>" if info.get("when") else ""
             elif key in parts:
-                rows.append((label, "Not calibrated"))
-    missing = [str(x) for x in cal.get("lasers_missing") or []]
-    if missing:
-        rows.append(("Missing", _badge("warning") + " " + esc(f"no calibration for the {', '.join(missing)} laser line"
-                                                              f"{'s' if len(missing) > 1 else ''}")))
+                text = "Not calibrated"
+            else:
+                continue
+            if key == "lasers" and missing:  # the build has laser lines the file lacks
+                text += "<br>" + _badge("warning") + " " + esc(
+                    f"Not calibrated: the {', '.join(missing)} laser line{'s' if len(missing) > 1 else ''} of this scanner.")
+            rows.append((label, text))
     facts = []
     if cal.get("modified"):
-        facts.append(f"last changed {_when(cal['modified'])}")
+        facts.append(f"saved {_when(cal['modified'])}")
     if _num(cal.get("baseline_mm")):
-        facts.append(f"baseline {N.fixed(cal['baseline_mm'], 3)} mm")
+        facts.append(f"the cameras {N.length(cal['baseline_mm'])} apart")
     if facts:
         rows.append(("Calibration file", esc("; ".join(facts))))
     last = cal.get("last_check")
     if isinstance(last, dict):
         ok = last.get("ok")
-        word = "passed" if ok else "not passed" if ok is False else "done"
-        text = esc(f"{word}" + (f": {last['verdict']}" if last.get("verdict") else ""))
+        word = "Passed" if ok else "Not passed" if ok is False else "Done"
+        verdict = str(last.get("verdict") or "").strip()
+        text = esc(verdict or word)  # the verdict says whether it passed: never "passed: The check passed"
         if last.get("when"):
             text += f" <span class=\"muted\">({esc(_when(last['when']))})</span>"
-        rows.append(("Last board check", (_badge("warning") + " " if ok is False else "") + text))
+        rows.append(("Calibration check", (_badge("warning") + " " if ok is False else "") + text))
     health = cal.get("health")
     if isinstance(health, dict):
         state = str(health.get("state") or "")
@@ -389,8 +432,8 @@ def _check(c: dict) -> str | None:
         body.append(f"<p><strong>{esc(N.percent(ok))} of the surface was measured finely enough for {esc(t)}</strong>: "
                     f"there, the scan's own scatter ({N.nominal(k)} times its ±) is within the tolerance.</p>")
         rows = [("Measured finely enough", esc(N.percent(ok))),
-                ("Measured too loosely", esc(f"{N.percent(unc)}: the scan's scatter there is wider than {t}")),
-                ("Not measured", esc(f"{N.percent(nm)}: filled in, nothing measured it"))]
+                ("Measured too loosely", esc(f"{N.percent(unc)} (the scan's scatter there is wider than {t})")),
+                ("Not measured", esc(f"{N.percent(nm)} (filled in: nothing measured it)"))]
         if _num(c.get("area_mm2")):
             rows.append(("Surface", esc(N.area(c["area_mm2"]))))
         body.append(_dl(rows))
@@ -837,8 +880,8 @@ def build_html(data: dict) -> str:
         if html_text:
             parts.append((pid, html_text))
 
-    if isinstance(data.get("process"), dict):
-        add("made", _made(data["process"]))
+    if isinstance(data.get("process"), dict) or isinstance(data.get("merge"), dict):
+        add("made", _made(data.get("process") if isinstance(data.get("process"), dict) else {}, data.get("merge")))
     if isinstance(data.get("calibration"), dict):
         add("calibration", _calibration(data["calibration"]))
     if isinstance(data.get("check"), dict):
