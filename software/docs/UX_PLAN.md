@@ -596,26 +596,181 @@ engine at the end.
 
 ## To check on the real engine
 
-- [ ] **V1.** U1 on the real server: the exact toast, also with an unsaved stereo result.
+- [x] **V1.** U1 on the real server: the exact toast, also with an unsaved stereo result.
 - [x] **V2.** Which calibration file a simulator scan uses, against the chip and the Device page.
   Checked 2026-11-21 (U21): with the simulator's demo connected the scan uses the demo
   recording's own true calibration; Setup's own target for the simulator is a separate file
   with nothing in it yet. The chip and the Device page now say "Demo calibration".
-- [ ] **V3.** What this PC reports about its graphics card, and every message met with
+- [x] **V3.** What this PC reports about its graphics card, and every message met with
   `OHS_COMPUTE=cpu` (Check, Confidence, the health note, thin walls) since D7.
-- [ ] **V4.** The preset reaches the mesh and the viewer's report says 0.5 mm (checked once in
+- [x] **V4.** The preset reaches the mesh and the viewer's report says 0.5 mm (checked once in
   the app on 2026-11-20: it did; the demo showed "1.00 mm voxels").
-- [ ] **V5.** The default recipe on a scene with a small detached part or a thin tab: what goes,
+- [x] **V5.** The default recipe on a scene with a small detached part or a thin tab: what goes,
   and what the history says.
-- [ ] **V6.** "Body panel" (15 mm around) on a scan with Ø 6 to 12 mm holes: which close.
-- [ ] **V7.** Real failure texts: a second Make mesh on a busy scan, a replay folder gone
+- [x] **V6.** "Body panel" (15 mm around) on a scan with Ø 6 to 12 mm holes: which close.
+- [x] **V7.** Real failure texts: a second Make mesh on a busy scan, a replay folder gone
   mid-scan, a scan with no calibration, a pass while its first scan is busy.
-- [ ] **V8.** The HTML report as a document, printed to PDF: order, length, repeated ±
+- [x] **V8.** The HTML report as a document, printed to PDF: order, length, repeated ±
   explanations, page breaks.
-- [ ] **V9.** A long job: does the percentage move evenly, does "a few seconds left" hold, can
+- [x] **V9.** A long job: does the percentage move evenly, does "a few seconds left" hold, can
   the user leave and come back, does Cancel leave the scan usable.
-- [ ] **V10.** Keyboard only: deleting a calibration view, the Free space dialog, the Check list.
-- [ ] **V11.** The Connect step's message with no camera, and with the camera held by another
+- [x] **V10.** Keyboard only: deleting a calibration view, the Free space dialog, the Check list.
+- [x] **V11.** The Connect step's message with no camera, and with the camera held by another
   program.
-- [ ] **V12.** Align and merge with a part turned over, with each answer to the moved-part
+- [x] **V12.** Align and merge with a part turned over, with each answer to the moved-part
   question: the result, and whether the merge says what it left out.
+
+**Walked on 2026-11-21** on a clean copy of the app with its own folders (a simulator scan of
+630 frames, one of 1,321 frames with the thin-parts preset, one made without a graphics card,
+and a copy of the two-sided bracket project). V1 and V3 to V12 are ticked as walked; what they
+found is the list below. Not possible here: a camera held by another program (no camera on this
+PC), the report's page breaks on paper (no print view in the tool), and a part really turned
+over (the two bracket scans align either way).
+
+What held, and stays as it is: leaving a calibration check closes it; Esc once only says
+"Press Esc again to stop"; the trash from end to end (the scans that depend on one are named,
+restore, the second question before emptying); the busy refusals; the list of what a merge left
+out when the part was moved; the moved-part question without a default; the Scan check's "What
+this does not know" and its reasons; the line about this computer; "297 loose bits removed, the
+largest 40.8 mm across"; the log saved for a bug report; V4 (the preset reaches the mesh:
+"Mesh detail 0.5 mm") and V6 ("Body panel" closed every hole under 15 mm around and left the
+Ø 6 to 12 mm ones open, as "about Ø 5 mm" says).
+
+## Found on the real engine (2026-11-21)
+
+Defects first, by harm; each with its mend. "Pages" and "server" say where the mend is.
+
+### [ ] R1. Every warning of a scan is titled "Tracking may have slid" (pages)
+A merged scan's notes about its table ("70 raised areas up to 0.59 mm high…") appear under that
+title on the row's chip and in the viewer. Only the camera path's own warning gets that title;
+the merge's notes get their own ("What the merge left out").
+
+### [ ] R2. Cancel on "Make mesh again" replaces a finished mesh with a half-made one, without a word (server)
+Cancelled at 75 %: the scan went from 804,197 cleaned triangles with 193,001 laser points,
+Straighten and Refine with lasers done, to 807,184 triangles in 221 pieces with 82,089 laser
+points and those stages "Not run". The toast says only "Meshing cancelled / The raw recording
+is kept". The finished mesh, its stages and its edits must stay until the new run has
+finished; a cancelled or failed run leaves the scan exactly as it was.
+
+### [ ] R3. On the calibration screens the keyboard's Space, Enter and Backspace act even on a focused button (pages)
+Enter on "Delete view 5" finishes the calibration instead; Space on the Auto-capture switch
+takes a view. The page's shortcuts must not fire when a button, switch, link, menu item or
+field has the focus (`useHotkeys`).
+
+### [ ] R4. The Free space dialog does not take the focus (pages)
+Opened by keyboard, Tab walks the page behind it. Focus goes into the dialog when it opens (the
+first choice that can apply, else Cancel) and stays inside.
+
+### [ ] R5. A scan made with the graphics card says it was "processed without a graphics card" (server, engine)
+Once Straighten or Refine with lasers has written the scan's final report, the calibration
+status carries the no-graphics-card note ("…so only the cameras could be judged"), in the
+viewer and the report. And the scan really made without one has no such note. Each stage's
+reading must carry which path made it.
+
+### [ ] R6. The report's Calibration section describes the wrong file (server, report)
+For a simulator scan it shows Setup's own target for the simulator ("Laser lines Not
+calibrated", and a top warning "No calibration for the vertical, horizontal laser lines this
+build has: calibrate the lasers again") although the scan used the demo's full calibration and
+has 193,001 laser points; without a graphics card it says "Cameras Not calibrated" beside
+"Calibration valid". The section describes the calibration the scan was made with.
+
+### [ ] R7. A merge with "No" (the part was not moved) removes triangles without saying so (engine, server)
+1,110,025 triangles before cleaning, 1,108,916 after, and no line about it. The merge always
+says what its cleaning took, as it does for "Yes".
+
+### [ ] R8. A merged scan's report leaves out the merge (server, report)
+None of the merge's notes, not which scans it was made from, and its calibration status says
+"Not assessed … (it was processed before the app did that)", which is untrue for a merge made
+today. The report gets "Merged from …", the merge's notes, and a sentence of its own for the
+status.
+
+### [ ] R9. An unsaved calibration result: the Scan page says "No calibration yet" (pages, server)
+U1's sentence ("A calibration result is still open in Setup.", Review it / Close it) is hidden
+because the page tests "no calibration" first; with the simulator an open session makes that
+true. The server's refusal says "A calibration is running." while it is waiting to be saved.
+Test the open session first; the server says "A calibration result is waiting in Setup: save
+it or close it first."
+
+### [ ] R10. Scan check: "Show where to hold the scanner" is cut off at 1280 px (pages)
+
+### [ ] R11. Free space dialog: doubled full stops, a choice preselected that cannot apply, and a footer that contradicts the choice's own line (pages)
+
+### [ ] R12. Program words on the screens (server, pages)
+"on the GPU (gfx1035)", "on the CPU", "graphics card found (gfx1035)"; "Straightening the
+trajectory", "left for fusing", "The rest keeps the fused surface"; "Smooth (bilateral, 50 %,
+edges kept, away from edges)"; "Refining: fitting the correction field"; "The live pipeline is
+slow on this computer"; the self-test's "Mean 28 DN", "|accel| 9.79 m/s^2", "2560x800 (2 x
+1280x800)"; the Replay field's "e.g. one made by ohs record or ohs sim" and "meta.json and
+frames.csv"; "DICT_5X5_100" on Setup's board line; "Reprojection error", "Baseline vs truth",
+"Principal point vs truth" in the cameras' result; "The mesh model without the thin-wall band";
+"Planes you calibrated are kept."; "Meshing" and "Meshing cancelled" beside "Making the mesh";
+"base" in the recipe dialog; in the report "Last board check", "baseline", "Built from a given
+camera path (straightened, or rebuilt from the tracked path)", "Missing: warning no
+calibration…". Each in the table's names and plain words; the device's code name goes to
+Settings' About only. Extend the two guards (`words.test.ts`, `test_server_error_words.py`)
+with what they missed.
+
+### [ ] R13. Connecting a camera shows the simulator's text (pages or server)
+"This happens once; next time the simulator starts right away." while a camera connects (the
+Device page: "…the demo starts right away").
+
+### [ ] R14. A recording that vanishes mid-scan: "Engine error", and advice about a USB cable (server)
+"The recording could not be read any more (its folder was moved or deleted). The scan was
+stopped and saved." And "Scanner problem" / "Engine error" as titles go.
+
+### [ ] R15. The viewer during "Make mesh again" (pages)
+It shows the current mesh but says "Make the mesh first." under Export and "Shown after
+meshing." under the report, and has no progress or Cancel. The current mesh's downloads and
+report stay; the job's progress and Cancel show on the page. (With R2 the current mesh is safe
+until the new one is done.)
+
+### [ ] R16. Without a graphics card the Scan check panel says "Check can't be used…" and offers "Make the mesh again" (pages)
+The old name, and a button that cannot help on this computer (the Confidence tooltip already
+knows). Also: the Confidence button's reason and "Thin walls and edges has no effect here"
+are on hover only or missing in the Edit mesh preset box; say them on the page.
+
+### [ ] R17. "Processing time" is not the time the mesh took (server)
+7 min 27 s shown for about 26 minutes. Show the whole Make mesh, or name what it is.
+
+### [ ] R18. The time left misleads (pages, server)
+"A few seconds left for tracking" at 68 % with 16 minutes to go, then nothing from 83 %; the
+percentage crawls from 80 to 83 % for nine minutes. Estimate the whole job, or say what comes
+after ("then about N min for the other stages"); give the late stages their true share.
+
+### [ ] R19. Units and numbers (server, pages)
+cm² beside mm² in one paragraph of a merge and on Edit mesh; no thousands separators ("frame 23
+of 1321", "5206 mm around", "Surface 278857 mm²"); "100% of the image"; "392mm" and "70common"
+in the board gauge; "0.50 mm" beside "0.5 mm".
+
+### [ ] R20. Small wording (server, pages)
+"The check calibration needs the cameras calibrated first."; "at each pose" (view);
+"Calibration loaded" on the Scan page while the chip says "Demo calibration"; "goes back to the
+base" (starting mesh); the self-test's "it has no lasers" for the simulator; "Seven short
+steps" beside "of 6"; the motion sensor step's "1 min" beside "about 2 minutes"; setup "about
+18 minutes" on Home and "about 10 minutes" on Device and Scan; "Last board check: passed: The
+check passed: …"; "Not measured: less than 0.1 %: filled in, nothing measured it"; the line
+about this computer says the graphics card "is turned off in the settings" when the
+environment turned it off, and "Scans work; without one:" reads badly; advice to "Calibrate it
+in Setup" for a replay without a calibration, which Setup refuses to calibrate.
+
+### [ ] R21. Names that repeat (server, pages)
+Rename accepts a name another scan has; a merge's default name repeats an earlier merge's
+("Bracket from the front + Bracket from the side" three times); the trash then lists two
+alike. Warn on rename and offer " (2)"; a default name takes the next free one.
+
+### [ ] R22. Edit mesh stage states (pages, server)
+While a job ran, "Follow the camera" (done) and "Straighten" both said "Running"; on a scan
+made without a graphics card Straighten says "Skipped" above "Closed 48 loops".
+
+### [ ] R23. A big piece can go under "Remove loose bits smaller than 5 mm" (pages, server)
+"297 loose bits removed, the largest 40.8 mm across": the label's second half ("or under 1 % of
+the mesh") is what took it, and "Show what was removed" is no longer offered once the recipe's
+later steps have run. The line names the rule that took the largest piece, and the removed
+bits can be shown from the history at any later time (the thin-parts rule: nothing goes
+without the user being able to see what).
+
+Matters of taste, noted and not planned: the Align verdict's numbers said twice; "Too loose"
+twice on an area card; four "Apply" buttons with the same name for a screen reader on Recipes;
+the Replay field named only by its placeholder; "AprilTags" beside "markers"; Settings'
+Advanced shows the settings' raw names ("Data dir") beside words, the port from the file while
+the app runs on another, and jargon of the settings file itself ("ChArUco", "Poisson").
