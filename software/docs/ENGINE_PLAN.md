@@ -45,6 +45,16 @@ The rules of `FEATURE_PLAN.md` and `MAINTENANCE_PLAN.md` hold. In short:
 **Decided by the owner (2026-11-20):**
 - **E-D1:** adopt a change when it is better (see the rules above).
 
+**Decided by the owner (2026-11-21):**
+- **E-D2:** the test that holds out whole frames ("Stricter test"). Straighten's
+  laser-crossing adjustment acts only when the crossings between frames the fit did not see
+  meet clearly better. To do, as one change: `CurveParams.holdout` becomes `"frames"` by
+  default (the old test stays a setting); the app chain's baseline is made again with it
+  (three recordings move: the standing walls seeds 0 and 2 and one speckled bracket), saved
+  under a new name; the tests that pin the old default are updated; the report of what was
+  switched is written here and in `VALIDATION.md`. It waits until X4's runs are finished, so
+  that X4 is judged against one baseline and not against a default that changed under it.
+
 ## The error budget today
 
 GPU path, Standard quality, 1 mm voxels, tracked unless said.
