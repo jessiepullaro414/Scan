@@ -692,6 +692,44 @@ def test_process_recording_writes_everything(rec, tmp_path):
     with open(out / "trajectory.csv", newline="", encoding="utf-8") as fh:
         rows = list(csv.DictReader(fh))
     assert len(rows) == N and rows[0]["ok"] == "1" and float(rows[0]["T00"]) == pytest.approx(1.0)
+    # the path's check for a slide (ENGINE_PLAN X0a): 8 frames are too short to judge, and nothing is said
+    assert rep["warnings"] == []
+    assert rep["path_check"]["state"] is None and rep["path_check"]["frames"] == N
+
+
+def test_a_slid_camera_path_is_said_in_the_report(rec, tmp_path, monkeypatch):
+    """ENGINE_PLAN X0a: a slide like the no-GPU path's on the 0.5 mm plate (a wrong velocity for a few frames)
+    is a warning in the report; the same scan without it says nothing. The check's window is shortened to fit
+    this 8-frame recording."""
+    import ohs.track.markerless as ML
+    import ohs.track.path_check as PC
+    from ohs.track.posegraph import read_trajectory
+
+    monkeypatch.setattr(PC, "PATH_CHECK_WINDOW_S", 0.2)
+    clean = process_recording(rec, tmp_path / "clean", params=ProcessParams(health=False))
+    assert clean["path_check"]["state"] == "ok" and clean["warnings"] == []
+    track = ML.MarkerlessTracker.track
+    count: dict[int, int] = {}
+
+    def sliding(self, *a, **kw):  # frames 2 to 4 go 9 mm a frame too far sideways, then the path goes on
+        res = track(self, *a, **kw)
+        k = count[id(self)] = count.get(id(self), -1) + 1
+        res.T_wc = res.T_wc.copy()
+        res.T_wc[:3, 3] += [9.0 * min(max(k - 1, 0), 3), 0.0, 0.0]
+        return res
+
+    monkeypatch.setattr(ML.MarkerlessTracker, "track", sliding)
+    rep = process_recording(rec, tmp_path / "slid", params=ProcessParams(health=False))
+    pc = rep["path_check"]
+    assert pc["state"] == "warn" and pc["jump_mm"] > PC.PATH_CHECK_LIMIT_MM and 1 <= pc["frame"] <= 6, pc
+    assert rep["warnings"] == [pc["warning"]] and "slid" in pc["warning"]
+    saved = json.loads((tmp_path / "slid" / "report.json").read_text(encoding="utf-8"))
+    assert saved["warnings"] == rep["warnings"]
+    # with known poses nothing is tracked, so there is no check
+    poses = {i: T for i, _, ok, T in read_trajectory(tmp_path / "clean" / "trajectory.csv") if ok}
+    monkeypatch.setattr(ML.MarkerlessTracker, "track", track)
+    given = process_recording(rec, tmp_path / "given", params=ProcessParams(health=False), poses=poses)
+    assert given["path_check"] is None and given["warnings"] == []
 
 
 def test_process_recording_options(rec, tmp_path):

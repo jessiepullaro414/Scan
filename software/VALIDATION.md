@@ -3895,6 +3895,79 @@ set, so those have no spread; a sheet's drift along itself is not scored; the br
 the 90-frame hard scenes mostly do not answer (faces never scanned), and a click more than 1 mm
 from the mesh counts as no answer.
 
+## The no-GPU plate slide, and a check of the camera path (ENGINE_PLAN X0a, 2026-11-20)
+
+Without a GPU the 0.5 mm plates slide in their first frames. On plate seed 0 the tracker's steps
+were 3.7, 10.6, 9.4, 8.1, 4.5, 4.7, 4.9 mm where the hand moved 1.4 mm a frame; by frame 8 the
+path is 37 mm off and stays there with the right speed. All of the error lies along the table
+(0.00 to 0.05 mm across it, rotation right to 0.04°). While it slides the tracker's own numbers
+look healthy: fitness 0.61 to 0.73, RMSE 0.12 to 0.23 mm, 5,300 to 8,100 inliers.
+
+**Is it the no-GPU defaults switched on on 2026-11-20 (D7)? No: it is older, and they made it
+smaller.** Tracked, no GPU; each cell is path max / last frame in mm, the plate's thickness
+error in mm, and the share of its top kept:
+
+| recording | today (D7 on) | all three put back | flip average off | guard off | ray-cast threshold 3 |
+|---|---|---|---|---|---|
+| 0.5 mm plate, seed 0 | 39.1 / 37.0, -0.387, 0.345 | 33.8 / 29.1, -0.346, 0.470 | 22.8 / 21.0, -0.300, 0.601 | 29.3 / 28.6, -0.359, 0.460 | 41.3 / 38.8, -0.397, 0.329 |
+| seed 1 | 15.3 / 15.3, -0.228, 0.763 | 80.2 / 76.0, -0.414, 0.026 | 53.3 / 52.6, -0.373, 0.990 | 15.1 / 14.6, -0.235, 0.767 | 29.4 / 20.1, -0.318, 0.721 |
+| seed 2 | 14.0 / 12.8, -0.228, 0.668 | 71.7 / 63.1, -0.464, 0.000 | 72.0 / 67.6, -0.464, 0.000 | 13.6 / 12.2, -0.238, 0.674 | 17.0 / 16.2, -0.257, 0.623 |
+| 90-frame plate | 8.0 / 5.7, -0.074, 0.899 | 37.5 / 36.2, -0.289, 0.712 | 16.0 / 11.5, -0.230, 0.759 | 7.05 / 3.5, -0.066, 0.907 | 12.4 / 8.1, -0.145, 0.867 |
+| 90-frame plate 2 | 8.3 / 5.7, -0.143, 0.900 | 49.6 / 49.6, -0.298, 0.975 | 28.5 / 28.5, -0.246, 0.849 | 9.4 / 5.9, -0.155, 0.887 | 16.1 / 11.8, -0.266, 0.778 |
+
+So every plate is damaged without a GPU, not only seed 0: seeds 1 and 2 read 0.27 mm thick with
+67 to 76 % of the top, the 90-frame plates 0.07 and 0.14 mm thin with 90 %.
+
+**The cause is the tracking model.** ICP started at the true pose of frame 1, against the model
+made from frame 0; how far it moves the camera (the tracker on filtered depth / the probe on raw
+depth):
+
+| depth from | model | moves, mm |
+|---|---|---|
+| no-GPU matcher | Open3D's | 3.4 / 6.6 |
+| GPU matcher | Open3D's | 5.4 / 6.0 |
+| no-GPU matcher | the GPU's | 0.8 / 0.6 |
+| GPU matcher | the GPU's | 0.4 / 1.2 |
+
+Frame 0 against its own one-frame model moves 0.65 mm with Open3D's model and 0.05 mm with the
+GPU's. The pull comes from table pixels beside the model's holes and borders (for the probe,
+half of it from the raw depth within 24 px of the image border, where the no-GPU matcher is
+0.13 mm off); the plate's edges add almost nothing. The GPU's model drops hits within 8 mm of
+where its observations end. The first jump is then carried on: the probe's first step was
+6.9 mm from a prediction of zero, a first velocity of 206 mm/s, under the 300 mm/s that is let
+through, and the speed stays nearly constant, so the acceleration guard acts on three frames
+only.
+
+**Tried, not adopted** (path max in mm, the five plates in the table's order; today 39.1 / 15.3
+/ 14.0 / 8.0 / 8.3): the model's normals from its vertex map, not run / 9.2 / 14.6 / 3.2 / 7.0;
+a first velocity from zero, 11.6 / 15.3 / 12.1 / 6.0 / 8.9; both, 6.0 / 9.2 / 10.2 / 4.1 / 7.0.
+Both together are better on every plate and still 4 to 10 mm off; not judged on any other scene.
+
+**The check that warns** (`ohs/track/path_check.py`): for every 0.8 s of tracked frames a
+quadratic in time is fitted to the camera's position; the largest distance of a frame from its
+window's fit is the jump, and above 4 mm the scan's report carries a warning. It reads the
+tracked path only and changes no result.
+
+| path | recordings | their true path error | the jump it reads | warns |
+|---|---|---|---|---|
+| GPU | 46 of set `full` that held | within 6.3 mm | 0.3 to 3.1 mm | none |
+| GPU | hole plate 120 mm up, seeds 0 and 1 | 16 and 7 mm | 5.7 and 7.5 mm | both |
+| no GPU | 3 that held | within 4.8 mm | 0.8 to 3.8 mm | none |
+| no GPU | 18 that did not | 5.9 to 44 mm | 2.0 to 20 mm | 12 |
+
+The 12: the three 0.5 mm plates, the three wall recordings, brackets seeds 2 and 3, and the four
+dark or speckled ones. The 6 it misses drift slowly at a steady wrong speed: the three sheets
+(6.1 to 9.4 mm off, reading 2.1 to 3.9), bracket seed 0 (7.1 mm, reading 2.9) and the two
+90-frame plates (8.0 and 8.3 mm, reading 2.0 and 3.2), which are thinned without a warning. A
+real hand's jerk might read as a slide; the simulator's hand is smooth, so that is not measured.
+
+**The no-GPU baseline** (`tools/scorecard_baselines/2026-11-20-cpu-thin.json`, 21 recordings,
+tracked path max in mm): sphere 0.19; brackets 4.5 to 7.1 (part median 0.48 to 0.69 mm, against
+0.08 to 0.23 on the GPU path); sheets 6.1 to 9.4; walls 5.9 to 17.9; 0.5 mm plates 14.0 to 39.1;
+90-frame plates 8.0 and 8.3; dark bracket 43.5 and 9.8; speckled 8.3 and 11.6. Without a GPU the
+whole camera path is weak, not only on plates. With the check built in, both paths' scorecards
+are the same in every row (no GPU: plates, walls and sphere compared; GPU: plates and sphere).
+
 ## What the metrics mean
 
 - **Stereo errors** compare the estimated raw intrinsics/extrinsics (`K1`, `K2`, `R`, `T`) with

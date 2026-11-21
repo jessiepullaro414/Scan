@@ -60,6 +60,14 @@ ground truth at the first tracked frame: ``A = T_gt[f] @ inv(T_est[f])`` and per
 ``pose_error(inv(A) @ T_gt[i], T_est[i])``. In markerless mode ``T_est[f] = I``, so this is
 ``inv(T_gt0) @ T_gt_i`` versus ``T_est_i``.
 
+**The path's check for a slide** (ENGINE_PLAN X0a, :mod:`ohs.track.path_check`): a tracked scan's camera
+path is checked for a jump no hand makes (a frame more than 4 mm off a quadratic over 0.8 s of its
+neighbours). ``report["path_check"]`` has the numbers (``jump_mm``, near ``frame``) and ``state`` "ok",
+"warn" or None (too short to judge); with "warn", its sentence is also in ``report["warnings"]`` (a list of
+sentences for the user, empty when there is nothing to say) and in the log. It reads the tracked path only
+and changes nothing: the mesh, the poses and the laser points are the same without it; it warns, it never
+stops the scan. With known poses there is no check (``path_check`` None).
+
 **Known poses** (``poses={frame index: T_wc}``, the processing studio's straighten and fuse
 stages): no tracking at all. Only the frames that have a pose (and pass the frame selection and
 the cuts) are processed, each fused at its pose with :meth:`FramePipeline.process` ``(pose=T)``;
@@ -85,6 +93,7 @@ from ohs.calib.scan_health import HEALTH_VERSION, ScanHealth
 from ohs.geometry import integrate_gyro, invert_se3, pose_error
 from ohs.io.recording import RecordingReader, effective_frame_step, recorded_frame_rate
 from ohs.mesh.confidence import SIGMA_NONE_MM, sigma_stats
+from ohs.track.path_check import check_path
 from ohs.track.posegraph import write_trajectory
 from ohs.types import ScannerCalibration
 
@@ -615,6 +624,20 @@ def process_recording(
         tp = out / "trajectory.csv"
         write_trajectory(tp, traj_rows)
         files["trajectory"] = str(tp)
+
+        # the path's check for a slide (module docstring): it reads the tracked path only, and warns
+        report["warnings"] = []
+        report["path_check"] = None
+        if poses is None:
+            try:
+                cpu_path = (getattr(getattr(pipe, "depth_estimator", None), "backend", None) == "cpu"
+                            and getattr(pipe, "model_backend", None) == "open3d")
+                report["path_check"] = check_path(traj_rows, cpu_path=cpu_path)
+            except Exception as exc:  # noqa: BLE001 - a check must not cost the scan
+                log.warning("the camera path's check failed: %s", exc, exc_info=True)
+            if (report["path_check"] or {}).get("warning"):
+                report["warnings"].append(report["path_check"]["warning"])
+                log.warning("%s", report["path_check"]["warning"])
 
         gt = reader.ground_truth_poses()
         if gt:

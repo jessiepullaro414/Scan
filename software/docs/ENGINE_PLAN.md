@@ -167,6 +167,45 @@ experiment: measure, find the cause, mend, and judge the mend with the scorecard
   35 % of its top. A thin part thinned and partly removed without a word: against the
   thin-parts rule. First question: is it the defaults switched on for the no-GPU path on
   2026-11-20 (D7), or older?
+
+  **Found and warned about (2026-11-20); the mend itself is the next item.** Numbers:
+  `VALIDATION.md`, "The no-GPU plate slide, and a check of the camera path".
+  - **Older than D7, and D7 made it smaller.** Before D7 the five plate recordings slid 29 to
+    76 mm without a GPU; with D7 they slide 8 to 39 mm. Only seed 0 is a little worse with it
+    (37 against 29 mm at the last frame).
+  - **Every plate is damaged without a GPU, not only seed 0:** seeds 1 and 2 read 0.27 mm with
+    67 to 76 % of the top, the two 90-frame plates 0.07 and 0.14 mm thin with 90 %.
+  - **The cause is the tracking model the no-GPU path uses (Open3D's).** The whole slide
+    happens in the first 8 frames, all of it along the table. Started at the true pose of
+    frame 1, ICP against that model moves the camera 3.4 to 6.6 mm (against the GPU's model:
+    0.4 to 1.2 mm), whichever path made the depth; even frame 0 against its own model moves
+    0.65 mm (GPU 0.05). The pull comes from table pixels beside the model's holes and
+    borders; a 0.5 mm step at the model's 2 mm voxels holds almost nothing along the table,
+    and the constant-velocity prediction carries the first jump on (a first velocity of up to
+    300 mm/s is let through; the acceleration guard then sees a steady speed).
+  - **The warning (built, on, changes no result):** `ohs/track/path_check.py`. For every 0.8 s
+    of tracked frames a quadratic in time is fitted to the camera's position; a frame more
+    than 4 mm off it is a jump no hand makes. The scan's report gets `path_check` (`jump_mm`,
+    `frame`, `state`) and a sentence in `warnings`. Without a GPU it warns on 12 of the 18
+    recordings that went more than 5.9 mm off (all three 0.5 mm plates, the walls, two
+    brackets, the dark and speckled ones) and on none of the three that held; on the GPU path
+    on none of the 46 scans that held within 6.3 mm, and on two of the hole plates that slid.
+    It does not see a slow drift at a steady wrong speed (the sheets, one bracket, and the two
+    90-frame plates, which are thinned 0.07 and 0.14 mm without a warning). Both paths'
+    scorecards are identical with it.
+  - **Not shown in the app yet:** the server and the pages do not read `warnings` (next).
+- [ ] **No GPU: mend the tracking model's pull.** Without a GPU the whole camera path is
+  weak, not only on plates: the bracket's median is 0.48 to 0.69 mm (GPU 0.08 to 0.23), the
+  sheets' path is 6 to 9 mm off, the walls' 6 to 18 mm. Two leads, measured on the five plates
+  only (path max, mm; today 39.1 / 15.3 / 14.0 / 8.0 / 8.3): the model's normals taken from its
+  vertex map (- / 9.2 / 14.6 / 3.2 / 7.0), a first velocity that starts from zero (11.6 / 15.3
+  / 12.1 / 6.0 / 8.9), and both (6.0 / 9.2 / 10.2 / 4.1 / 7.0). Both together are better on
+  every plate and still 4 to 10 mm off. To do: build them as settings, judge on the no-GPU
+  baseline `2026-11-20-cpu-thin.json` (21 recordings: sphere, brackets, sheets, walls, plates,
+  dark and speckled). **Stop rule: adopted only if** better or the same on every scene of that
+  baseline and no plate or wall reads thinner. Also worth one try: the GPU model's rule of
+  dropping hits near where its observations end. A second way to catch what the warning
+  misses: check the path against the accelerometer (the recordings carry it).
 - [ ] **Fused surface hangs past a sheet's free edge,** up to 15 mm out, where the drop behind
   the edge is 60 to 120 mm: 7 to 9 % of the 200-frame car panel's vertices, which is what puts
   its p95 at 1.7 to 2.3 mm while its median is 0.02 mm. The scorecard reports it as
@@ -369,6 +408,9 @@ experiment: measure, find the cause, mend, and judge the mend with the scorecard
 - Shiny and dark surfaces: reflections, saturation, laser speckle on paint, exposure and
   emitter levels.
 - Motion: blur at hand speed, jerky motion, MJPEG, real 60 frames a second.
+- The camera path's check (X0a): its limit of 4 mm off a quadratic over 0.8 s was set on the
+  simulator's smooth hand. A real hand that stops or turns sharply may read as a slide and
+  warn for nothing; the limit is provisional until real scans are looked at.
 - The real IMU: bias, scale, time sync.
 - Real lasers: sheets that are not flat, how four lines separate, the line's width at a rim
   (this bounds X2).
