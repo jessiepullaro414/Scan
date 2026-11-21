@@ -1094,6 +1094,53 @@ def test_each_stage_report_says_what_straighten_corrected(env):
     assert json.loads((scan_dir / "result" / "report.json").read_text(encoding="utf-8"))["health"]["straighten"] == got
 
 
+def test_straighten_says_when_the_laser_crossings_moved_the_camera_path(env, monkeypatch):
+    """ENGINE_PLAN X0a: the laser crossings' held-out test can be fooled (thin standing walls), so when they change the
+    poses the scan says so: the engine's sentence (``report["warning"]`` of the adjustment) is in Straighten's summary,
+    in the base's report (``result/report.json``'s ``warnings``) and in the scan's summary. Stand-in crossings that
+    move every pose by 0.3 mm, so that the short test scan takes that path."""
+    import ohs.track.curve_ba as CB
+    from ohs import geometry as G
+
+    words = CB.acted_warning(0.3)
+
+    def shifted(rec_path, calib, trajectory, *, reference=None, params=None, progress=None, cancelled=None):
+        poses = {int(i): np.asarray(T, float) @ G.make_se3(np.eye(3), [0.3, 0.0, 0.0]) for i, _, ok, T in trajectory if ok}
+        return poses, {"changed": True, "reason": "adjusted", "crossings": 999, "frames": len(poses),
+                       "holdout": {"ratio": 0.5}, "miss_mm": {"before": 0.2, "after": 0.1}, "moved_mm": 0.3,
+                       "moved_deg": 0.0, "verdict": "moved", "warning": words}
+
+    monkeypatch.setattr(CB, "laser_curve_adjustment", shifted)
+    pid, sid = add_scan(env, "Crossings said", env["rec"])
+    b = base_url(env, pid, sid)
+    scan_dir = env["root"] / "projects" / pid / "scans" / sid
+    run_job(env, post(b + "/process/track", {"quality": "preview"}), "process_track")
+    run_job(env, post(b + "/process/straighten", {}), "process_straighten")
+    stt = get(b + "/process").json()["stages"]["straighten"]
+    assert stt["state"] == "done" and stt["crossings"] == 999, stt
+    assert stt["summary"].startswith("No loops found, but the laser lines cross") and stt["summary"].endswith(words)
+    assert "Straighten moved the camera path by up to 0.3 mm" in words and "thin walls" in words
+    for path in (scan_dir / "process" / "straighten" / "report.json", scan_dir / "result" / "report.json"):
+        assert json.loads(path.read_text(encoding="utf-8"))["warnings"].count(words) == 1, path
+    scan = [s for s in get(f"{env['url']}/api/projects/{pid}").json()["scans"] if s["id"] == sid][0]
+    assert words in scan["result"]["report"]["warnings"]
+
+
+def test_the_laser_crossings_say_nothing_when_they_change_nothing(env):
+    """No loop and the crossings refuse (or too few): Straighten is skipped and nothing new is said."""
+    pid, sid = add_scan(env, "Crossings quiet", env["rec"])
+    b = base_url(env, pid, sid)
+    scan_dir = env["root"] / "projects" / pid / "scans" / sid
+    run_job(env, post(b + "/process/track", {"quality": "preview"}), "process_track")
+    run_job(env, post(b + "/process/straighten", {}), "process_straighten")
+    stt = get(b + "/process").json()["stages"]["straighten"]
+    st_rep = json.loads((scan_dir / "process" / "straighten.json").read_text(encoding="utf-8"))
+    assert stt["state"] == "skipped" and (st_rep.get("laser_curves") or {}).get("changed") is not True
+    assert (st_rep.get("laser_curves") or {}).get("warning") is None
+    assert not any("laser lines meet" in w for w in json.loads((scan_dir / "result" / "report.json")
+                                                               .read_text(encoding="utf-8")).get("warnings") or [])
+
+
 @pytest.mark.slow
 def test_a_straightened_scan_reports_its_correction(env, orbit):
     pytest.importorskip("ohs.track.posegraph")

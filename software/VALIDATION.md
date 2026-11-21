@@ -4271,6 +4271,85 @@ walls (1.41 to 1.49) but also refuses the genuine drift case the tests keep (0.8
 
 Limits: simulated orbits, one run a recording, the GPU path only; timings rough.
 
+## Straighten's laser crossings on what Make mesh runs (ENGINE_PLAN X0a, 2026-11-21)
+
+**The scorecard's app chain.** Until now the scorecard ran the frame pass only. With
+`--chain app` it runs what the app's Make mesh runs at Standard quality with default settings:
+Follow the camera, Straighten (loop closures, then the laser-crossing adjustment, each acting
+only when its own test allows, with a new fuse when the poses moved), Refine with lasers (kept
+only when it changes enough), then the Default recipe. It calls the server's own functions with
+the server's own parameters. Checked against a real Make mesh through the server on a
+standing-walls recording: every engine call has the same arguments, the camera path and the
+laser points are byte for byte the same, and the meshes are the same up to the numbering of
+their vertices (the GPU hands out its voxel blocks in the order its threads finish, so two runs
+of the same code number them differently; the judge scores the mesh numbered by position). The
+frame pass is unchanged: six recordings processed afresh compare identical to the baseline of
+2026-11-20 in 265 rows. Baseline of the app chain, GPU, 36 recordings:
+`tools/scorecard_baselines/2026-11-21-gpu-core-app.json`.
+
+**The app chain against the frame pass.** Identical in every scored number on 29 of 36
+recordings and at every true-pose run: the sphere, the panels, all five brackets, all three
+sheets, all 0.5 mm plates, the hole plate 10 mm up, the dark bracket, two of three seams. On
+those Straighten and Refine with lasers change nothing. Where they act (frame pass → app chain):
+
+| recording | what acted | what changed |
+|---|---|---|
+| standing walls, seed 0 | crossings (ratio 0.839, path moved 1.22 mm) | walls 0.5 / 1 / 2 mm +1.229 / +0.808 / +0.660 → +1.543 / +1.236 / +1.124; the 0.5 mm wall's face 0.483 → 0.267 covered; median / p95 0.125 / 0.720 → 0.144 / 0.973; path median 0.53 → 0.76 |
+| standing walls, seed 2 | crossings (0.714, moved 1.94 mm) | walls +1.256 / +0.911 / +0.535 → +0.891 / +0.431 / -0.052 (the 2 mm wall reads 1.95 mm; at true poses it reads +0.156); median 0.145 → 0.106; path median 1.50 → 1.84 |
+| speckled bracket 1 | crossings (0.758, moved 0.93), Refine | path median 1.02 → 0.73; one boss further off |
+| speckled bracket 2 | crossings (0.625, moved 1.41) | path median / max 0.65 / 1.39 → 0.56 / 1.01; bosses 0.13 to 0.14 further off |
+| hole plate 120 mm up, seed 0 | loops moved the poses, Refine | median 0.071 → 0.085; p95 1.99 → 1.67; Ø25 -6.90 → -6.61; path median 1.11 → 1.80 |
+| hole plate 120 mm up, seed 2 | loops, Refine | p95 1.85 → 1.80; Ø25 -3.20 → -3.05; the bore -0.08 → -0.84 |
+| one seam | Refine | p95 0.358 → 0.349 |
+
+**The adjustment's own test** (the crossings a fit did not see must meet at 0.85 of their miss
+or better):
+
+| recordings | today: half the crossings held out | whole frames held out |
+|---|---|---|
+| standing walls, tracked, seeds 0 / 1 / 2 | 0.839 acts / 0.922 / 0.714 acts | 0.958 / 1.077 / 1.025: refused |
+| standing walls at TRUE poses | 0.74 / 0.74 / 0.81: would act | 0.92 to 0.93: refused |
+| a 640 px walls recording at true poses | 0.678: acts, and moves the true poses by up to 8.08 mm | 0.893: refused |
+| the engine tests' sphere orbit with drift | 0.498: acts, mends the path | 0.572 / 0.612: acts, mends the path |
+| the same orbit at true poses | refused | 1.22: refused |
+| speckled brackets 1 / 2 | 0.758 acts / 0.625 acts | 1.051 refused / 0.763 acts |
+| brackets, sheets, plates, panels, hole plates, seams | 0.97 to 1.27: refused | refused |
+
+"Whole frames held out": every second frame of those used is held out, each half in turn; the
+fit sees only crossings between two fitted frames, the test is the crossings between two
+held-out frames; the worse of the two ratios must pass. The form was chosen on these same wall
+recordings and the tests' drift case (every third frame acts at true poses, 0.73; blocks of ten
+frames refuse the real drift, 0.88), so the walls' result is not an independent check of it.
+What neither test catches: on the 640 px walls with drift added both pass (0.61), and the
+adjustment then makes the path worse (4.8 to 22.6 mm rms).
+
+**Against the app chain's baseline** (only these recordings differ; everything else identical):
+
+| recording, measure | today | adjustment off | frames held out |
+|---|---|---|---|
+| walls seed 0, 0.5 / 1 / 2 mm | +1.543 / +1.236 / +1.124 | +1.229 / +0.808 / +0.660 | the same as off |
+| walls seed 0, 0.5 mm face covered | 0.267 | 0.483 | 0.483 |
+| walls seed 0, median / p95 | 0.144 / 0.973 | 0.125 / 0.720 | the same as off |
+| walls seed 2, 0.5 / 1 / 2 mm | +0.891 / +0.431 / -0.052 | +1.256 / +0.911 / +0.535 | the same as off |
+| walls seed 2, 0.5 mm face covered | 0.654 | 0.447 | 0.447 |
+| walls seed 2, median; path median | 0.106; 1.84 | 0.145; 1.50 | the same as off |
+| speckled bracket 1, path median | 0.725 | 1.019 | 1.019 |
+| speckled bracket 2, path's last frame | 0.35 | 0.92 | 0.35 |
+
+For reference, at true poses the walls read +0.79 / +0.53 / +0.35 (seed 0) and +0.76 / +0.62 /
++0.16 (seed 2). Both compares end "Worse on" the walls (seed 2 thicker, its 0.5 mm face less
+covered) and the speckled bracket, so by the rule neither became the default; the choice is the
+owner's (ENGINE_PLAN E-D2). Both are settings (`CurveParams.enabled`, `CurveParams.holdout`).
+
+**What changed in the engine:** when the crossings change the poses, the adjustment's report
+carries a sentence, Straighten's summary ends with it and the scan's warnings list it:
+"Straighten moved the camera path by up to 1.2 mm to make the laser lines meet where they cross.
+On thin walls seen from both sides this can make a wall read thinner or thicker than it is (up
+to 0.6 mm in tests), so check the thickness of thin walls another way before you rely on it."
+
+Limits: simulated, one run a recording, the GPU path only; the frames form was chosen on the
+same wall recordings it is judged on.
+
 ## What the metrics mean
 
 - **Stereo errors** compare the estimated raw intrinsics/extrinsics (`K1`, `K2`, `R`, `T`) with

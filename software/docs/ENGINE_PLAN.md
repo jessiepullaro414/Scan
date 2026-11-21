@@ -40,6 +40,7 @@ The rules of `FEATURE_PLAN.md` and `MAINTENANCE_PLAN.md` hold. In short:
 | # | Question | Suggestion |
 |---|---|---|
 | E-D1 | An engine change that alters GPU-path scan results and meets its stop rule: switch it on, or keep it off until the owner has looked? Asked 2026-11-20. | The rule the owner gave for the CPU path: adopt when better on every test scene, with a report of what was switched on. |
+| E-D2 | Straighten's laser-crossing adjustment inside Make mesh: keep it as it is, use the test that holds out whole frames, or switch it off? Asked 2026-11-21. Neither change is better on every scene (X0a), so the rule does not decide. | The frames test. Today's test passes at true poses and then moves them, so what it does on thin walls is chance: one wall recording 0.3 to 0.5 mm thicker, another pulled past the truth. The frames test never acts on a wall, still mends real drift, and what it costs is known: one wall recording stays as thick as the frame pass reads it (the 2 mm wall +0.54 mm instead of -0.05), and one of two speckled brackets keeps a path 0.3 mm worse. |
 
 **Decided by the owner (2026-11-20):**
 - **E-D1:** adopt a change when it is better (see the rules above).
@@ -158,6 +159,18 @@ against the simulator's truth. Numbers and tables: `VALIDATION.md`, "The scoreca
   recording rendered again matches the cached one bit for bit was not checked.
 - **Still to run with it:** the merge study, flat-within and the Check shares (the door and the
   carburettor are done: see `VALIDATION.md`).
+- **Since 2026-11-21: `--chain app`** runs what the app's Make mesh runs (Follow the camera,
+  Straighten, Refine with lasers, then the recipe) with the server's own functions and
+  parameters, checked against a real Make mesh through the server: the same calls, the same
+  meshes up to the numbering of the vertices. The default stays the frame pass, and the
+  earlier baselines still compare identical. The app chain's baseline is
+  `tools/scorecard_baselines/2026-11-21-gpu-core-app.json`. It differs from the frame pass on
+  7 of 36 recordings (walls seeds 0 and 2, both speckled brackets, the hole plate 120 mm up
+  seeds 0 and 2, one seam); on the other 29, and at true poses, Straighten and Refine with
+  lasers change nothing. **An experiment that touches tracking or what follows it is judged on
+  the app chain from now on.**
+- **A scoring question left:** the "THINNER" alarm fires for a wall that read too thick and
+  moved towards the truth; only plates that read too thin have the exception so far.
 
 ### [ ] X0a. What the first baseline found (do these first)
 Three things in the engine, none known before. Each is a defect to understand, not an
@@ -268,6 +281,33 @@ experiment: measure, find the cause, mend, and judge the mend with the scorecard
   1.49, but also the genuine drift case the tests keep, 0.88 against 0.50). **Stop rule:** by
   the owner's rule, what is better or the same on every scene and thins no thin part becomes
   the default.
+
+  **Measured 2026-11-21: nothing switched by the rule; the engine now says when it acts; the
+  choice is with the owner (E-D2).** Numbers: `VALIDATION.md`, "Straighten's laser crossings on
+  what Make mesh runs".
+  - **The scorecard measures what the app makes** (`--chain app`, see X0). On its baseline the
+    adjustment acts on 4 of 36 recordings: the standing walls seeds 0 and 2 and both speckled
+    brackets.
+  - **Its test is unsound.** On a wall recording at the TRUE poses the test passes (0.68) and the
+    adjustment then moves the true poses by up to 8 mm.
+  - **Two candidates, both built as settings that are off:** the adjustment switched off
+    (`CurveParams.enabled = False`), and a test that holds out whole frames
+    (`CurveParams.holdout = "frames"`: every second frame, each half in turn, the test on the
+    crossings between two held-out frames). The frames test refuses every wall, tracked and at
+    true poses (0.89 to 1.08 against a limit of 0.85), and still mends the engine tests' real
+    drift (0.57 to 0.61).
+  - **Neither is better or the same on every scene.** Walls seed 0 gets better with either (the
+    walls 0.31 to 0.46 mm nearer the truth, the 0.5 mm wall's face 0.27 to 0.48 covered). Walls
+    seed 2 reads 0.37 / 0.48 / 0.59 mm thicker than with today's adjustment and its 0.5 mm face
+    is less covered; today's adjustment happens to pull that recording towards the truth, and
+    past it (its 2 mm wall reads 1.95 mm). One speckled bracket's path median goes from 0.73 to
+    1.02 mm. Every other recording is identical.
+  - **Built and on:** when the crossings change the poses, Straighten's summary and the scan's
+    warnings say so ("…On thin walls seen from both sides this can make a wall read thinner or
+    thicker than it is (up to 0.6 mm in tests)…"). So it is no longer silent.
+  - **Still open whatever is chosen:** no test yet tells thin walls from real drift when both
+    are present: on a wall recording with drift added every test passes and acting makes the
+    path five times worse.
 - [ ] **GPU, hole plate 120 mm up, seed 0: tracking is lost** (path max 16.3 mm; the Ø25 hole
   then reads 6.9 mm small). Seeds 1 and 2 hold (3.9 mm).
 

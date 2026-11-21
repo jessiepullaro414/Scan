@@ -743,7 +743,10 @@ straighten_trajectory(rec_path, calib, trajectory, *, params=None, depth_params=
 laser_curve_adjustment(rec_path, calib, trajectory, *, reference=None, params=None, progress=None,
                        cancelled=None) -> tuple[dict[int, np.ndarray], dict]
 #   report: {frames, crossings, miss_mm: {before, after}, holdout: {before_mm, after_mm, ratio}, moved_mm,
-#            moved_deg, changed, reason (adjusted | no_lasers | few_crossings | not_better), verdict, ...}
+#            moved_deg, changed, reason (adjusted | no_lasers | few_crossings | not_better | off), verdict,
+#            warning (since 2026-11-21: null, or when the poses changed a sentence for the user), ...}
+#   CurveParams (since 2026-11-21, ENGINE_PLAN X0a): holdout "crossings" (the default: half the crossings at random)
+#   | "frames" (every holdout_every-th frame held out; holdout gets by, every, fit, test, ratios), enabled (False: off)
 
 # ohs/app/process.py: process_recording(..., poses: dict[int, np.ndarray] | None = None)
 #   fuses at the given poses (no tracking) when poses are passed
@@ -789,6 +792,7 @@ Everything in the M3 phase 2 section is implemented as written, with these clari
 
   The `summary` is then the engine's verdict, e.g. "No loops found: to let Studio straighten a scan, pass over an earlier part again.". When straightening worked, the stage is `done` and its summary is the verdict, e.g. "Closed 4 loops: the end moved 1.8 mm into place.".
   - **Laser crossings** (M3 phase 3, research plan 7.3): after the loops, Straighten lines the poses up where the laser lines of different frames cross (`ohs.track.curve_ba.laser_curve_adjustment`, with the loops' fuse, or the track's mesh without loops, as the reference surface). It changes the poses only when, fitted on half the crossings, the other half meet clearly better; then it fuses again. So the stage can be `done` without loops: "No loops found, but the laser lines cross: lined the scan up on 597 laser crossings (median miss 0.10 -> 0.04 mm, the camera moved by up to 1.1 mm)". With loops, that part follows the loops' verdict after "; then". *extra*: `straighten.crossings`, the crossings used (null when they changed nothing). `straighten.json` gets a `laser_curves` section with the full numbers.
+    - *Since 2026-11-21* (ENGINE_PLAN X0a): the crossings' held-out test can be fooled on thin standing walls seen from both sides, so when they change the poses the stage's summary ends with the engine's sentence (`laser_curves.warning`: "Straighten moved the camera path by up to 1.2 mm to make the laser lines meet where they cross. On thin walls seen from both sides this can make a wall read thinner or thicker than it is (up to 0.6 mm in tests), so check the thickness of thin walls another way before you rely on it."), and the stage's `report.json` (so `result/report.json` and `Scan.result.report`) has it in `warnings`, after the camera path's. Nothing new is said when the crossings change nothing.
 - `POST .../process/fuse`:
   - `voxel_mm` must be 0.25–10 (else 422); null means the track's voxel size.
   - It fuses at the track stage's resolution (its quality), at the given poses, so exactly the frames the track processed.

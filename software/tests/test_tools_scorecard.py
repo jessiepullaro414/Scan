@@ -359,6 +359,53 @@ def test_the_baseline_carries_on_after_a_kill(tmp_path, monkeypatch):
     assert started == []  # all finished: nothing is run again
 
 
+def test_the_app_chain_carries_on_after_a_kill(tmp_path, monkeypatch):
+    """The app chain's runs (``--chain app``) are restartable as the frame pass's: after a kill (the PC shut down) a
+    job with a ``running`` marker of a process that is gone and a half-written result is run again, finished ones are
+    used again, and a frame pass's result of the same recording is never taken for the app chain's. The child is told
+    the chain, and a true-pose run is shared by settings of Straighten alone."""
+    import ohs.sim.datasets as DS
+
+    monkeypatch.setattr(DS, "make_scan_recording", lambda out_dir, n_frames=0, **kw: _fake_frames(Path(out_dir), n_frames))
+    started = []
+
+    class FakeJob:
+        def __init__(self, cmd, **kw):
+            out = Path(cmd[cmd.index("--out") + 1])
+            chain = cmd[cmd.index("--chain") + 1] if "--chain" in cmd else "frame"
+            started.append((cmd[cmd.index("--poses") + 1], chain, out.parent.parent.name))
+            sc.write_json(out / "result.json", {"metrics": {"part_med": 0.2 if chain == "app" else 0.1}, "info": {}})
+            self.returncode, self.pid = 0, 0
+
+        def wait(self, timeout=None):
+            return 0
+
+    monkeypatch.setattr(sc.subprocess, "Popen", FakeJob)
+    sc.run_set(tmp_path, [TINY], "gpu", {})  # the frame pass first: its folders must not answer for the app chain
+    assert started == [("tracked", "frame", "default"), ("true", "frame", "default")]
+    started.clear()
+    # the app chain was killed with the PC: one job finished, the other left its marker (a pid that is gone) and half
+    # a result
+    done = sc.run_dir(tmp_path, "gpu", {}, TINY, "tracked", "app")
+    done.mkdir(parents=True)
+    sc.write_json(done / "result.json", {"metrics": {"part_med": 0.3}, "info": {}})
+    cut = sc.run_dir(tmp_path, "gpu", {}, TINY, "true", "app")
+    (cut / "proc" / "stages" / "track").mkdir(parents=True)
+    (cut / "running").write_text("999999999", encoding="utf-8")
+    (cut / "result.json").write_text('{"metrics": {"part_m', encoding="utf-8")
+    res = sc.run_set(tmp_path, [TINY], "gpu", {}, chain="app")
+    assert started == [("true", "app", "app-default")]
+    assert res[TINY.name]["tracked"]["metrics"]["part_med"] == 0.3 and res[TINY.name]["true"]["metrics"]["part_med"] == 0.2
+    assert not (cut / "running").exists()
+    started.clear()
+    sc.run_set(tmp_path, [TINY], "gpu", {}, chain="app")
+    assert started == []  # all finished: nothing is run again
+    # a setting of Straighten: a tracked run of its own, the true-pose run shared
+    res = sc.run_set(tmp_path, [TINY], "gpu", {"curve.enabled": False}, chain="app")
+    assert [s[:2] for s in started] == [("tracked", "app")] and started[0][2].startswith("app-p-")
+    assert res[TINY.name]["true"]["metrics"]["part_med"] == 0.2
+
+
 def dataclasses_replace(spec, **kw):
     import dataclasses
 
@@ -408,6 +455,177 @@ def test_the_verdict_per_scene_with_made_up_results():
     rows = sc.compare_rows(good, good, [sc.SCENES[n] for n in br + ["e2e-sphere"]])
     assert {s["verdict"] for s in sc.scene_verdicts(rows)} == {"identical"}
     assert "\n".join(sc.compare_table(rows)).rstrip().splitlines()[-1] == "**Better or the same on every scene.**"
+
+
+def test_the_chain_is_part_of_the_key(tmp_path):
+    """ENGINE_PLAN X0a: the frame pass keeps the folders it always had (so every saved run and baseline is found
+    again); the app chain has its own; Straighten's settings are left out of a true-pose run's key (it is not
+    straightened), but not out of a tracked one's."""
+    p = {"fusion.voxel_mm": 0.5}
+    c = {"curve.holdout_max_ratio": 0.5}
+    assert sc.settings_key({}) == sc.settings_key({}, "frame", "tracked") == "default"
+    assert sc.settings_key(p) == sc.settings_key(p, "frame", "true") and sc.settings_key(p).startswith("p-")
+    assert sc.settings_key({}, "app", "tracked") == sc.settings_key({}, "app", "true") == "app-default"
+    assert sc.settings_key(p, "app") == "app-" + sc.settings_key(p)
+    assert sc.settings_key(c, "app", "true") == "app-default" != sc.settings_key(c, "app", "tracked")
+    assert sc.settings_key({**p, **c}, "app", "true") == sc.settings_key(p, "app", "tracked")
+    spec = sc.SCENES["fins-s0"]
+    assert sc.run_dir(Path("C"), "gpu", {}, spec, "tracked") == Path("C") / "runs" / "gpu" / "default" / "fins-s0" / "tracked"
+    assert sc.run_dir(Path("C"), "gpu", {}, spec, "true", "app") == Path("C") / "runs" / "gpu" / "app-default" / "fins-s0" / "true"
+    assert sc.parse_params(["curve.holdout_max_ratio=0.5"]) == c
+    assert sc.curve_params({}) is None and sc.curve_params(c).holdout_max_ratio == 0.5
+    with pytest.raises(ValueError):
+        sc.curve_params({"curve.no_such_field": 1})
+    with pytest.raises(SystemExit):  # a setting of Straighten means nothing to the frame pass
+        sc.main(["run", "--set", "quick", "--cache", str(tmp_path), "--set-param", "curve.holdout_max_ratio=0.5"])
+
+
+def test_the_app_chains_parameters_are_the_servers(tmp_path):
+    """The app chain fuses with the server's own stage parameters (every piece kept, PLY only), not the frame pass's
+    (which cleans small pieces before the recipe)."""
+    import dataclasses
+
+    from ohs.app.config import Config
+    from ohs.server.processing import stage_params
+
+    sys.path.insert(0, str(SOFTWARE / "tests"))
+    from recordings import scan_recording
+
+    rec = scan_recording(tmp_path / "rec", scene="sphere_on_plane", n_frames=3, image_size=(640, 400), realistic=True,
+                         depth_every=0, seed=2)
+    spec = sc.SCENES["e2e-sphere"]
+    app = sc.app_params(spec, {}, rec)
+    assert dataclasses.asdict(app) == dataclasses.asdict(stage_params(Config(), "markerless", "standard", 640))
+    assert app.clean_min_component == 0.0 and app.export == ("ply",)
+    assert sc.base_params(spec).clean_min_component > 0  # the frame pass, as it always ran
+    assert sc.app_params(spec, {"fusion.voxel_mm": 0.75}, rec).pipeline.fusion.voxel_mm == 0.75
+
+
+@pytest.mark.slow
+def test_the_app_chain_gives_the_meshes_of_a_make_mesh(tmp_path, monkeypatch):
+    """A real Make mesh through the server (Standard, the Default recipe) and the scorecard's app chain on the same
+    recording give every stage's mesh byte for byte, and take the same decisions. So that every stage acts on this
+    short scan, both get the same stand-ins: laser crossings that move every pose by 0.3 mm, and a Refine with lasers
+    that changes the mesh at any share."""
+    pytest.importorskip("fastapi")
+    pytest.importorskip("open3d")
+    requests = pytest.importorskip("requests")
+    import time as _time
+
+    import ohs.server.processing as SP
+    import ohs.track.curve_ba as CB
+    from ohs.app.config import Config
+    from ohs.io.recording import RecordingReader
+    from ohs.server.app import create_app
+    from ohs.server.testing import ServerThread
+
+    sys.path.insert(0, str(SOFTWARE / "tests"))
+    from recordings import scan_recording
+
+    rec = scan_recording(tmp_path / "rec", n_frames=10, image_size=(640, 400), seed=3, depth_every=0)
+    calls: list[tuple] = []
+
+    def shifted(rec_path, calib, trajectory, *, reference=None, params=None, progress=None, cancelled=None):
+        calls.append((len(trajectory), None if reference is None else len(reference[0]), params))
+        poses = {int(i): np.asarray(T, float) @ G.make_se3(np.eye(3), [0.3, 0.0, 0.0]) for i, _, ok, T in trajectory if ok}
+        return poses, {"changed": True, "reason": "adjusted", "crossings": 999, "frames": len(poses),
+                       "holdout": {"ratio": 0.5}, "miss_mm": {"before": 0.2, "after": 0.1}, "moved_mm": 0.3,
+                       "moved_deg": 0.0, "verdict": "moved"}
+
+    monkeypatch.setattr(CB, "laser_curve_adjustment", shifted)
+    monkeypatch.setattr(SP, "REFINE_MIN_SHARE", 0.0)
+    cfg = Config()
+    cfg.paths.calibration = str(tmp_path / "no-calibration.json")
+    app = create_app(cfg, projects_dir=tmp_path / "projects", demo_dir=tmp_path / "demo", static_dir=tmp_path / "static",
+                     data_dir=tmp_path / "data", config_path=tmp_path / "config.toml")
+    with ServerThread(app) as srv:
+        st = app.state.studio
+        pid = requests.post(srv.url + "/api/projects", json={"name": "Chain"}, timeout=30).json()["id"]
+        scan, rec_dir = st.projects.add_scan(pid, "Sphere", "markerless")
+        shutil.copytree(rec, rec_dir)
+        n = len(RecordingReader(rec_dir))
+        st.projects.update_scan(pid, scan["id"], status="recorded", n_frames=n, duration_s=n / 30.0)
+        jid = requests.post(f"{srv.url}/api/projects/{pid}/scans/{scan['id']}/process", json={"quality": "standard"},
+                            timeout=30).json()["id"]
+        end = _time.monotonic() + 600.0
+        while (j := requests.get(f"{srv.url}/api/jobs/{jid}", timeout=30).json())["state"] in ("queued", "running"):
+            assert _time.monotonic() < end, "Make mesh did not finish within 10 minutes"
+            _time.sleep(0.2)
+        assert j["state"] == "done", j
+        server = st.projects.scan_dir(pid, scan["id"]) / "process"
+        state = json_load(server / "state.json")
+    assert state["base"]["stage"] == "refine" and state["stages"]["straighten"]["state"] == "done"
+    proc = tmp_path / "chain"
+    rep, info = sc.app_chain(rec, proc, sc.SCENES["e2e-sphere"], {}, None)
+    assert info["base"] == "refine" and info["straighten"]["adjusted"] and info["refine"]["acted"]
+    assert info["straighten"]["looped"] is False and info["straighten"]["loops"] == state["stages"]["straighten"]["loops"]
+    assert len(calls) == 2 and calls[0] == calls[1]  # the crossings were called the same way (rows, reference, params)
+    for stage in ("track", "straighten", "refine"):
+        assert same_mesh(server / stage / "mesh.ply", proc / "stages" / stage / "mesh.ply"), f"{stage}: the meshes differ"
+        for name in ("trajectory.csv", "laser_points.ply"):
+            assert (server / stage / name).read_bytes() == (proc / "stages" / stage / name).read_bytes(), (stage, name)
+    assert (proc / "mesh.ply").read_bytes() == (proc / "stages" / "refine" / "mesh.ply").read_bytes()  # what the judge scores
+    assert rep["refine"]["source"] == "straighten"
+
+
+def same_mesh(a: Path, b: Path) -> bool:
+    """The same mesh, every vertex, face, sigma and count of looks bit for bit, up to the numbering of the vertices
+    (the graphics card's surface extraction numbers them in the order its threads finish: two runs of the same fuse
+    write the same mesh in another order; the scorecard scores it renumbered by position)."""
+    from ohs.mesh.order import canonical
+    from ohs.track.export import load_ply
+
+    A, B = load_ply(a), load_ply(b)
+    ca = canonical(np.asarray(A["vertices"], np.float64), np.asarray(A["faces"], np.int64))
+    cb = canonical(np.asarray(B["vertices"], np.float64), np.asarray(B["faces"], np.int64))
+    if not (np.array_equal(ca.V, cb.V) and np.array_equal(ca.F, cb.F)):
+        return False
+    return all((A.get(k) is None and B.get(k) is None) or np.array_equal(ca.vertex_values(A.get(k)), cb.vertex_values(B.get(k)))
+               for k in ("quality", "looks"))
+
+
+def test_the_true_pose_app_run_is_not_straightened(tmp_path, monkeypatch):
+    """At true poses the app chain fuses at them and refines; Straighten is not called."""
+    import ohs.track.posegraph as PG
+
+    sys.path.insert(0, str(SOFTWARE / "tests"))
+    from ohs.io.recording import RecordingReader
+    from recordings import scan_recording
+
+    rec = scan_recording(tmp_path / "rec", scene="sphere_on_plane", n_frames=3, image_size=(640, 400), realistic=True,
+                         depth_every=0, seed=2)
+
+    def boom(*a, **k):
+        raise AssertionError("Straighten ran at true poses")
+
+    monkeypatch.setattr(PG, "straighten_trajectory", boom)
+    _, info = sc.app_chain(rec, tmp_path / "p", sc.SCENES["e2e-sphere"], {}, RecordingReader(rec).ground_truth_poses())
+    assert info["straighten"]["ran"] is False and info["base"] in ("track", "refine")
+    assert "Straighten not run" in sc.stages_text(info)
+    assert (tmp_path / "p" / "mesh.ply").read_bytes() == (tmp_path / "p" / "stages" / info["base"] / "mesh.ply").read_bytes()
+
+
+def test_an_app_baseline_carries_what_the_stages_did(tmp_path):
+    spec = sc.SCENES["fins-s0"]
+    ch = {"chain": "app", "base": "straighten", "refine": {"acted": False, "moved_pct": 0.5},
+          "straighten": {"ran": True, "loops": 0, "looped": False, "adjusted": True,
+                         "crossings": {"crossings": 535, "holdout": {"ratio": 0.837}, "reason": "adjusted", "moved_mm": 1.2}}}
+    res = {"fins-s0": {"tracked": {"metrics": {"part_med": 0.1}, "info": {"chain": ch}}}}
+    p = sc.save_baseline(tmp_path, "b", "gpu", {}, res, [spec], "app")
+    body = json_load(p)
+    assert body["chain"] == "app" and body["results"]["fins-s0"]["tracked"]["stages"] == ch
+    q = sc.save_baseline(tmp_path, "f", "gpu", {}, res, [spec])  # the frame pass: the form it always had
+    assert "chain" not in json_load(q) and "stages" not in json_load(q)["results"]["fins-s0"]["tracked"]
+    with pytest.raises(SystemExit):  # never overwritten
+        sc.save_baseline(tmp_path, "b", "gpu", {}, res, [spec], "app")
+    text = "\n".join(sc.stages_table(res, [spec]))
+    assert "| fins-s0 | tracked | 0 (no) | 535 | 0.837 | yes (adjusted) | 1.20 | no (0.5) | straighten |" in text
+
+
+def json_load(p: Path) -> dict:
+    import json
+
+    return json.loads(Path(p).read_text(encoding="utf-8"))
 
 
 def test_paired_replay_on_a_tiny_cached_depth(tmp_path):

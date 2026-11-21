@@ -113,6 +113,91 @@ def test_drift_is_reduced(orbit, truth):
     assert rep["moved_mm"] > 0.5 and rep["verdict"].startswith("Lined the scan up on")
 
 
+def test_it_says_when_it_acted(orbit, truth):
+    """ENGINE_PLAN X0a: its held-out test can be fooled (thin standing walls), so when it changes the poses its report
+    has a sentence for the user (``warning``), with how far it moved the camera path; when it changes nothing, None."""
+    idx, T, times = truth
+    _, rep = laser_curve_adjustment(orbit, None, rows(idx, add_drift(T, 0.2, 0.6, 3), times))
+    assert rep["changed"] is True and isinstance(rep["warning"], str), rep
+    assert rep["warning"].startswith(f"Straighten moved the camera path by up to {rep['moved_mm']:.1f} mm")
+    assert "thin walls" in rep["warning"] and "GPU" not in rep["warning"] and "trajectory" not in rep["warning"]
+    _, rep = laser_curve_adjustment(orbit, None, rows(idx, T, times))
+    assert rep["changed"] is False and rep["warning"] is None
+    _, rep = laser_curve_adjustment(orbit, None, rows(idx, T, times), params=CurveParams(enabled=False))
+    assert rep["reason"] == "off" and rep["warning"] is None
+
+
+def _walls(out, seed: int, n_frames: int):
+    """Three thin walls (0.5, 1 and 2 mm) standing on a base, seen from both sides (the scorecard's standing walls,
+    ``tools/preset_study.py`` fins_scene) at 640x400."""
+    import sys
+    from pathlib import Path
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from ohs.sim.datasets import make_scan_recording
+    from tools.preset_study import fins_scene
+
+    make_scan_recording(out, scene=fins_scene(seed), n_frames=n_frames, fps=30.0, image_size=(640, 400), realistic=True,
+                        depth_every=0, seed=seed, overwrite=True)
+
+
+@pytest.mark.slow
+def test_the_standing_walls_true_poses_are_left_alone(tmp_path):
+    """ENGINE_PLAN X0a: on thin standing walls the crossings of one frame share that frame's errors, so half the
+    crossings at random "met better" when the other half was fitted even at the TRUE poses (ratio 0.68 here), and the
+    adjustment moved true poses by millimetres: a thin part thinned or thickened without a word. With whole frames held
+    out (``holdout="frames"``, a setting) the check is not fooled, and true poses stay as they are. The default still
+    is fooled here; it then says so (``warning``)."""
+    from recordings import cached_recording
+
+    rec = cached_recording(tmp_path / "walls", _walls, seed=0, n_frames=120)
+    reader = RecordingReader(rec)
+    gt = reader.ground_truth_poses()
+    idx = sorted(gt)
+    T = np.stack([invert_se3(gt[idx[0]]) @ gt[i] for i in idx])
+    poses, rep = laser_curve_adjustment(rec, None, rows(idx, T, reader.times()), params=CurveParams(holdout="frames"))
+    print("standing walls, true poses, frames held out:", rep["holdout"], rep["verdict"])
+    assert rep["crossings"] >= CurveParams().min_crossings  # enough crossings that the check decides
+    assert rep["reason"] == "not_better" and rep["changed"] is False, rep["verdict"]
+    assert rep["holdout"]["ratio"] > CurveParams().holdout_max_ratio and rep["warning"] is None
+    assert all(np.array_equal(poses[i], T[k]) for k, i in enumerate(idx))
+    _, rep = laser_curve_adjustment(rec, None, rows(idx, T, reader.times()))  # the default: half the crossings
+    print("standing walls, true poses, the default:", rep["holdout"], rep["verdict"])
+    assert rep["changed"] is False or "thin walls" in rep["warning"]
+
+
+def test_the_genuine_drift_is_still_mended_with_whole_frames_held_out(orbit, truth):
+    """ENGINE_PLAN X0a: with whole frames held out (``holdout="frames"``: every second frame, each half once) the
+    drift the adjustment is for still passes the test and is mended."""
+    idx, T, times = truth
+    D = add_drift(T, 0.2, 0.6, 3)
+    poses, rep = laser_curve_adjustment(orbit, None, rows(idx, D, times), params=CurveParams(holdout="frames"))
+    h = rep["holdout"]
+    assert h["by"] == "frames" and len(h["ratios"]) == 2 and h["ratio"] == max(h["ratios"]), h
+    assert rep["reason"] == "adjusted" and h["ratio"] < 0.7, rep["verdict"]
+    assert rep["ground_truth"]["after"]["rms_trans_mm"] < 0.8 * rep["ground_truth"]["before"]["rms_trans_mm"]
+
+
+def test_switched_off_changes_nothing(orbit, truth):
+    idx, T, times = truth
+    D = add_drift(T, 0.2, 0.6, 3)
+    poses, rep = laser_curve_adjustment(orbit, None, rows(idx, D, times), params=CurveParams(enabled=False))
+    assert rep["reason"] == "off" and rep["changed"] is False and "switched off" in rep["verdict"]
+    assert all(np.array_equal(poses[i], D[k]) for k, i in enumerate(idx))
+
+
+def test_the_crossings_split_is_still_the_default(orbit, truth):
+    """The test of before 2026-11-21 (half the crossings at random) is still the default, with its numbers."""
+    idx, T, times = truth
+    D = add_drift(T, 0.2, 0.6, 3)
+    assert CurveParams().holdout == "crossings" and CurveParams().enabled is True
+    _, rep = laser_curve_adjustment(orbit, None, rows(idx, D, times))
+    assert rep["reason"] == "adjusted" and set(rep["holdout"]) == {"before_mm", "after_mm", "ratio"}
+    assert rep["holdout"]["ratio"] == pytest.approx(0.498, abs=0.002)
+    with pytest.raises(ValueError):
+        laser_curve_adjustment(orbit, None, rows(idx, D, times), params=CurveParams(holdout="blocks"))
+
+
 def test_few_crossings_change_nothing(orbit, truth):
     idx, T, times = truth
     D = add_drift(T, 0.2, 0.6, 3)

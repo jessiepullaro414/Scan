@@ -642,6 +642,20 @@ def _carry_path_check(report: dict, track_rep: dict | None) -> None:
     report["warnings"] = carried + own
 
 
+def _carry_crossings_warning(report: dict, crep: dict | None) -> bool:
+    """Straighten's laser crossings changed the poses: their sentence for the user (``crep["warning"]``,
+    :func:`ohs.track.curve_ba.acted_warning`; ENGINE_PLAN X0a) goes into the stage's fused report's ``warnings``, so
+    the base's report (``result/report.json``) and the scan's summary carry it. Returns whether it was added."""
+    w = (crep or {}).get("warning")
+    if not isinstance(w, str) or not w.strip():
+        return False
+    ws = [x for x in report.get("warnings") or [] if isinstance(x, str)]
+    if w in ws:
+        return False
+    report["warnings"] = ws + [w]
+    return True
+
+
 def _carry_health_path(report: dict, track_rep: dict | None) -> None:
     """A stage fused at given poses (straighten, fuse) tracks nothing, so its report alone cannot say whether the scan
     was made on the graphics card's path (UX_PLAN R5: its status said "processed without a graphics card" on a scan
@@ -674,6 +688,42 @@ def preset_meshing(p: Any, width: int, voxel_mm: float | None, thin_walls: str |
     if thin_walls is not None:  # the scan's preset names it; else [process] thin_walls
         p = dataclasses.replace(p, pipeline=dataclasses.replace(p.pipeline, thin_walls=str(thin_walls)))
     return p
+
+
+def stage_params(cfg: Any, mode: str, quality: str, width: int, voxel_mm: float | None = None,
+                 thin_walls: str | None = None) -> Any:
+    """The ``ProcessParams`` every processing stage fuses with (Follow the camera, and the fuses of Straighten and
+    Build the surface): :func:`ohs.server.studio.process_params` at ``quality`` with a preset's meshing values
+    (:func:`preset_meshing`), every piece kept (removing floaters is an edit you can see and undo) and PLY only.
+    ``tools/scorecard.py --chain app`` calls it too, so that it runs Make mesh with the server's own values."""
+    from ohs.server.studio import process_params
+
+    p = preset_meshing(process_params(cfg, mode, quality, width), width, voxel_mm, thin_walls)
+    return dataclasses.replace(p, clean_min_component=0.0, export=("ply",))
+
+
+def straighten_looped(rep: dict | None, poses: dict | None) -> tuple[bool, int]:
+    """``(looped, loops)`` of a :func:`ohs.track.posegraph.straighten_trajectory` report: whether its loops changed the
+    poses (then Straighten fuses at them, and that mesh is the laser crossings' reference), and how many it closed."""
+    rep = rep or {}
+    loops = rep.get("loops_accepted")
+    if not isinstance(loops, int):
+        loops = len(rep.get("loops") or [])
+    return bool(loops and poses and rep.get("changed") is not False), loops
+
+
+def refine_changes(rep: dict) -> bool:
+    """Whether "Refine with lasers" changes the mesh, from :func:`ohs.mesh.anchor_to_points`' report: enough laser
+    points on the mesh (:data:`MIN_LASER_POINTS`) and at least :data:`REFINE_MIN_SHARE` of the surface moved."""
+    return not (rep["used"] < MIN_LASER_POINTS or rep["moved_share"] < REFINE_MIN_SHARE)
+
+
+def save_refined_mesh(path: Path, V: np.ndarray, F: np.ndarray, S: np.ndarray | None, L: np.ndarray | None) -> None:
+    """A refinement's mesh (``mesh.ply``): the vertices moved, each keeping its sigma and its count of looks."""
+    from ohs.mesh import vertex_normals
+    from ohs.track.export import save_mesh
+
+    save_mesh(path, V, F, vertex_normals(V, F), quality=S, looks=L if L is not None and len(L) == len(V) else None)
 
 
 def _read_json(path: Path) -> dict | None:
@@ -1887,11 +1937,7 @@ class ProcessManager:
 
     def _stage_params(self, mode: str, quality: str, voxel_mm: float | None, width: int,
                       thin_walls: str | None = None) -> Any:
-        from ohs.server.studio import process_params
-
-        p = preset_meshing(process_params(self.st.cfg, mode, quality, width), width, voxel_mm, thin_walls)
-        # the base keeps every piece: removing floaters is an edit you can see and undo
-        return dataclasses.replace(p, clean_min_component=0.0, export=("ply",))
+        return stage_params(self.st.cfg, mode, quality, width, voxel_mm, thin_walls)
 
     # ------------------------------------------------------------------ presets (FEATURE_PLAN P2)
     def _preset_acting(self, sp: ScanProcess) -> dict:
@@ -2120,12 +2166,9 @@ class ProcessManager:
             ctx.check()
             rep = dict(rep or {})
             _write_json(sp.dir / "straighten.json", rep)
-            loops = rep.get("loops_accepted")
-            if not isinstance(loops, int):
-                loops = len(rep.get("loops") or [])
+            looped, loops = straighten_looped(rep, poses)
             corr_mm, corr_deg = rep.get("correction_mm"), rep.get("correction_deg")
             verdict = rep.get("verdict") if isinstance(rep.get("verdict"), str) and rep.get("verdict") else None
-            looped = bool(loops and poses and rep.get("changed") is not False)
             quality, voxel = quality_or_none(track.get("quality")) or "standard", track.get("voxel_mm")
             report: dict = {}
             if looped:  # the loops' fuse is also the reference surface for the laser crossings
@@ -2181,7 +2224,8 @@ class ProcessManager:
                                for i in new_poses if i in track_poses), default=0.0)
                 corr_deg = max(float(corr_deg or 0.0), float(crep.get("moved_deg") or 0.0))
             (sp.dir / "straighten" / "straighten.json").write_text(json.dumps(jsonable(rep), indent=1), encoding="utf-8")
-            if _set_straighten(report, rep):  # with the laser crossings, which came after the first fuse
+            said = _carry_crossings_warning(report, crep) if adjusted else False
+            if _set_straighten(report, rep) or said:  # with the laser crossings, which came after the first fuse
                 _write_json(sp.dir / "straighten" / "report.json", report)
             prog(0.96, "Saving the mesh", force=True)
             with sp.lock:  # fuse and the refinements built on the old poses
@@ -2197,6 +2241,8 @@ class ProcessManager:
                           f"-> {crep['miss_mm']['after']:.2f} mm, the camera moved by up to {crep['moved_mm']:.1f} mm)")
                 verdict = (f"{verdict.rstrip('.')}; then {lasers}" if looped else
                            f"No loops found, but the laser lines cross: {lasers}")
+                if isinstance(crep.get("warning"), str) and crep["warning"]:  # ENGINE_PLAN X0a: it may be fooled
+                    verdict = f"{verdict.rstrip('.')}. {crep['warning']}"
             self._stage_end(sp, "straighten", state="done", summary=verdict, loops=int(loops or 0),
                             correction_mm=corr_mm, correction_deg=corr_deg, crossings=crossings, job_id=ctx.job.id)
             return verdict
@@ -2246,8 +2292,8 @@ class ProcessManager:
         """"Refine with lasers": pull the base stage's mesh onto its laser cloud
         (:func:`ohs.mesh.anchor_to_points`). Returns the summary; ``skipped`` (base and edits
         unchanged) when the scan has no laser points or the mesh already agrees with them."""
-        from ohs.mesh import anchor_to_points, vertex_normals
-        from ohs.track.export import load_ply, save_mesh
+        from ohs.mesh import anchor_to_points
+        from ohs.track.export import load_ply
 
         before = self._stage_start(sp, "refine", ctx.job.id)
         try:
@@ -2274,7 +2320,7 @@ class ProcessManager:
             fields = {"source": src, "points": rep["used"], "outliers": rep["outliers"],
                       "moved_pct": round(100.0 * rep["moved_share"], 1), "moved_mm": rep["moved"]["p95"],
                       "residual_before_mm": r0, "residual_after_mm": r1}
-            if rep["used"] < MIN_LASER_POINTS or rep["moved_share"] < REFINE_MIN_SHARE:
+            if not refine_changes(rep):
                 msg = (f"The mesh already agrees with the laser lines ({(r0 or 0.0):.2f} mm median difference over "
                        f"{rep['used']:,} points), so nothing was changed" if rep["used"] >= MIN_LASER_POINTS else
                        "Too few laser points lie on the mesh to refine it, so it was left as it is")
@@ -2285,9 +2331,7 @@ class ProcessManager:
             _rmtree(tmp)
             tmp.mkdir(parents=True)
             try:
-                # the vertices move: each keeps its sigma and its count of looks
-                save_mesh(tmp / "mesh.ply", V2, F, vertex_normals(V2, F), quality=S,
-                          looks=L if L is not None and len(L) == len(V2) else None)
+                save_refined_mesh(tmp / "mesh.ply", V2, F, S, L)  # the vertices move: each keeps its sigma and looks
                 for name in ("trajectory.csv", "laser_points.ply", "marker_map.json"):
                     if (src_dir / name).is_file():
                         shutil.copy2(src_dir / name, tmp / name)

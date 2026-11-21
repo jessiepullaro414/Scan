@@ -28,11 +28,21 @@ poses so that they do:
      from the part) turn freely, and the surfaces they see bend.
 
    It runs ``rounds`` times, finding the crossings again at the new poses.
-4. **Never worse:** the solve is first fitted on half the crossings. Only when the other half then
-   meet clearly better (their median miss at most ``holdout_max_ratio`` of before) are the poses
-   changed. Otherwise the crossings only show the lasers' own scatter, and fitting them would bend
-   good poses: on simulated scans without drift the fit moved the poses by 0.4 mm, and the held-out
-   half met worse.
+4. **Never worse:** the solve is first fitted on half the crossings (``holdout="crossings"``, the
+   default). Only when the other half then meet clearly better (their median miss at most
+   ``holdout_max_ratio`` of before) are the poses changed. Otherwise the crossings only show the
+   lasers' own scatter, and fitting them would bend good poses: on simulated scans without drift the
+   fit moved the poses by 0.4 mm, and the held-out half met worse.
+
+   **This test can be fooled** (ENGINE_PLAN X0a, ``VALIDATION.md``): a frame's crossings share that
+   frame's errors, so a random half is not an independent check, and on thin standing walls it
+   passed even at the true poses. Where it acts, the scan's report says so (``warning``,
+   :func:`acted_warning`). Measured and kept as settings, not the default: ``holdout="frames"``
+   (:func:`holdout_splits`: every ``holdout_every``-th frame held out, each split in turn, the test
+   the crossings between two held-out frames; it refuses the walls and still mends the tests' drift,
+   but it also refuses one of the two speckled brackets, where acting helped the camera path, and
+   one wall recording reads up to 0.59 mm thicker without the adjustment) and ``enabled=False``
+   (off): measured on the scorecard's app chain, neither is better or the same on every scene.
 5. **Corrections** go to every tracked frame by interpolation between the frames used
    (:func:`ohs.track.posegraph.interpolate_poses`).
 
@@ -56,7 +66,7 @@ import numpy as np
 from ohs.geometry import invert_se3, so3_exp, so3_log
 
 __all__ = ["CurveParams", "Crossings", "frame_curves", "find_crossings", "crossing_residuals", "adjust_poses",
-           "laser_curve_adjustment"]
+           "holdout_splits", "acted_warning", "laser_curve_adjustment"]
 
 log = logging.getLogger(__name__)
 
@@ -80,6 +90,13 @@ class CurveParams:
     iterations: int = 3
     rounds: int = 2
     holdout_max_ratio: float = 0.85
+    # the held-out test (module docstring, step 4): "crossings", half the crossings at random; "frames", whole frames
+    # held out (every ``holdout_every``-th frame of those used: the fit sees none of their crossings, the test is the
+    # crossings between two of them, which only the motion prior and the depth term move)
+    holdout: str = "crossings"
+    holdout_every: int = 2
+    holdout_min_test: int = 20  # "frames": fewer test crossings than this and the poses are unchanged
+    enabled: bool = True  # False: the adjustment is switched off (the poses unchanged, reason "off")
 
 
 # --------------------------------------------------------------------------- 1. curves
@@ -389,6 +406,41 @@ def adjust_poses(T: dict[int, np.ndarray], cr: Crossings, frames: Sequence[int],
     return T, info
 
 
+# --------------------------------------------------------------------------- the held-out test
+def holdout_splits(cr: Crossings, frames: Sequence[int], params: CurveParams | None = None) -> list[tuple[np.ndarray, np.ndarray]]:
+    """``[(fit, test)]``: the crossings the held-out test fits on and the ones it checks (module docstring, step 4).
+
+    ``holdout="crossings"``: one split, half the crossings at random and the other half. A crossing shares its two
+    frames' curve errors with the other crossings of those frames, so the two halves are not independent: fitting
+    one half also fits the frames' own errors, and the other half meets better even at the true poses (standing
+    walls, ``VALIDATION.md``, ENGINE_PLAN X0a).
+    ``"frames"``: ``holdout_every`` splits; in the ``j``-th, every ``holdout_every``-th frame of ``frames`` from the
+    ``j``-th on is held out. The fit takes the crossings between two fitted frames, the test the crossings between two
+    held-out frames, whose poses only the motion prior and the depth term move. A drift moves held-out frames with
+    their fitted neighbours, so their crossings meet better; a frame's own errors are not in the fit, so fitting
+    them helps no held-out frame. Every frame is held out once, and the test must pass in each split."""
+    p = params or CurveParams()
+    if p.holdout == "crossings":
+        half = np.random.default_rng(0).random(len(cr)) < 0.5
+        return [(half, ~half)]
+    k = max(2, int(p.holdout_every))
+    pos = {int(f): n for n, f in enumerate(frames)}
+    ra = np.array([pos.get(int(f), 0) % k for f in cr.fa], dtype=np.int64)
+    rb = np.array([pos.get(int(f), 0) % k for f in cr.fb], dtype=np.int64)
+    return [((ra != j) & (rb != j), (ra == j) & (rb == j)) for j in range(k)]
+
+
+def acted_warning(moved_mm: float) -> str:
+    """The sentence for the user when the adjustment changed the poses (``report["warning"]``; ENGINE_PLAN X0a).
+
+    Its held-out test can be fooled: on thin standing walls seen from both sides it passed even at the true poses,
+    and where it acted the walls read 0.3 to 0.5 mm thicker on one simulated scan and up to 0.6 mm thinner on
+    another (a 2 mm wall read 1.95 mm). Until a test tells those cases apart, the scan says that it acted."""
+    return (f"Straighten moved the camera path by up to {moved_mm:.1f} mm to make the laser lines meet where they "
+            "cross. On thin walls seen from both sides this can make a wall read thinner or thicker than it is (up to "
+            "0.6 mm in tests), so check the thickness of thin walls another way before you rely on it.")
+
+
 # --------------------------------------------------------------------------- the whole adjustment
 def laser_curve_adjustment(rec_path: str | Path, calib: Any, trajectory: Sequence[Sequence[Any]], *,
                            reference: tuple[np.ndarray, np.ndarray] | None = None,
@@ -402,7 +454,8 @@ def laser_curve_adjustment(rec_path: str | Path, calib: Any, trajectory: Sequenc
     ``crossings``, ``miss_mm`` (median before / after), ``holdout`` (median miss of the held-out
     half before / after, and their ratio), ``moved_mm`` / ``moved_deg`` (largest change of a
     camera), ``changed``, ``reason`` (``adjusted``, ``no_lasers``, ``few_crossings``,
-    ``not_better``), ``verdict``, ``timings_s`` and, with true poses in the recording,
+    ``not_better``, ``off``), ``verdict``, ``warning`` (None, or when the poses changed a sentence for
+    the user: :func:`acted_warning`), ``timings_s`` and, with true poses in the recording,
     ``ground_truth`` (before / after)."""
     from scipy.spatial import cKDTree  # noqa: PLC0415
 
@@ -423,8 +476,8 @@ def laser_curve_adjustment(rec_path: str | Path, calib: Any, trajectory: Sequenc
     poses_in = {i: T.copy() for i, _, _, T in tracked}
     timings: dict[str, float] = {}
     report: dict[str, Any] = {"frames": 0, "crossings": 0, "miss_mm": None, "holdout": None, "moved_mm": 0.0,
-                              "moved_deg": 0.0, "changed": False, "reason": "", "verdict": "", "timings_s": timings,
-                              "params": asdict(p)}
+                              "moved_deg": 0.0, "changed": False, "reason": "", "verdict": "", "warning": None,
+                              "timings_s": timings, "params": asdict(p)}
 
     def finish(poses: dict[int, np.ndarray], reason: str, verdict: str) -> tuple[dict[int, np.ndarray], dict]:
         report["reason"], report["verdict"] = reason, verdict
@@ -439,6 +492,11 @@ def laser_curve_adjustment(rec_path: str | Path, calib: Any, trajectory: Sequenc
         log.info("laser-curve adjustment %s: %s", rec_path, verdict)
         return poses, report
 
+    if not p.enabled:
+        return finish(dict(poses_in), "off", "Lining the scan up on the laser crossings is switched off, so the poses "
+                                             "are unchanged.")
+    if p.holdout not in ("crossings", "frames"):
+        raise ValueError(f"CurveParams.holdout must be 'crossings' or 'frames', not {p.holdout!r}")
     if not calib.lasers or len(tracked) < 3:
         return finish(dict(poses_in), "no_lasers", "No laser lines to line the scan up with, so the poses are unchanged.")
     sel = [r for r in tracked]
@@ -481,13 +539,27 @@ def laser_curve_adjustment(rec_path: str | Path, calib: Any, trajectory: Sequenc
     t0 = time.perf_counter()
     say(0.8, f"lining up {len(cr):,} laser crossings")
     miss0 = float(np.median(np.abs(crossing_residuals(T_sel, cr)[0])))
-    # never worse: fitted on half the crossings, the other half must meet clearly better
-    half = np.random.default_rng(0).random(len(cr)) < 0.5
-    T_half, _ = adjust_poses(T_sel, cr.subset(half), frames, p, dense, gaps)
-    hb = float(np.median(np.abs(crossing_residuals(T_sel, cr.subset(~half))[0])))
-    ha = float(np.median(np.abs(crossing_residuals(T_half, cr.subset(~half))[0])))
-    ratio = ha / max(hb, 1e-9)
+    # never worse: fitted on part of the crossings, the held-out ones must meet clearly better (in every split)
+    splits = holdout_splits(cr, frames, p)
+    n_test = min(int(t.sum()) for _, t in splits)
+    if p.holdout == "frames" and n_test < p.holdout_min_test:
+        timings["solve"] = round(time.perf_counter() - t0, 2)
+        report["holdout"] = {"by": "frames", "every": int(p.holdout_every), "test": n_test}
+        report["miss_mm"] = {"before": round(miss0, 4), "after": round(miss0, 4)}
+        return finish(dict(poses_in), "few_crossings",
+                      f"Too few laser crossings join the frames held out for the check ({n_test}) to line the scan up "
+                      "safely, so the poses are unchanged.")
+    tests = []
+    for fit, test in splits:
+        T_half, _ = adjust_poses(T_sel, cr.subset(fit), frames, p, dense, gaps)
+        hb = float(np.median(np.abs(crossing_residuals(T_sel, cr.subset(test))[0])))
+        ha = float(np.median(np.abs(crossing_residuals(T_half, cr.subset(test))[0])))
+        tests.append((ha / max(hb, 1e-9), hb, ha, int(fit.sum()), int(test.sum())))
+    ratio, hb, ha, n_fit, n_test = max(tests)  # the split that meets least better
     report["holdout"] = {"before_mm": round(hb, 4), "after_mm": round(ha, 4), "ratio": round(ratio, 3)}
+    if p.holdout == "frames":
+        report["holdout"].update(by="frames", every=int(p.holdout_every), fit=n_fit, test=n_test,
+                                 ratios=[round(r[0], 3) for r in tests])
     if ratio > p.holdout_max_ratio:
         timings["solve"] = round(time.perf_counter() - t0, 2)
         report["miss_mm"] = {"before": round(miss0, 4), "after": round(miss0, 4)}
@@ -515,6 +587,7 @@ def laser_curve_adjustment(rec_path: str | Path, calib: Any, trajectory: Sequenc
     turned = [float(np.degrees(np.linalg.norm(so3_log(poses[i][:3, :3] @ poses_in[i][:3, :3].T)))) for i in poses]
     report["moved_mm"] = round(max(moved), 3)
     report["moved_deg"] = round(max(turned), 3)
+    report["warning"] = acted_warning(max(moved))
     return finish(poses, "adjusted",
                   f"Lined the scan up on {len(cr):,} laser crossings: their median miss fell from {miss0:.2f} to "
                   f"{miss1:.2f} mm, and the camera moved by up to {max(moved):.2f} mm.")

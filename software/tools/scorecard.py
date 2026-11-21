@@ -12,6 +12,8 @@
     python tools/scorecard.py repeat [same filters]     # each recording processed and scored twice: determinism
     python tools/scorecard.py rescore [same filters]    # score finished jobs again from their kept meshes
 
+Every command but replay, holes and selfcheck also takes ``--chain frame|app`` (below, "Chains").
+
 Restartable: after a kill, run the same command again; it carries on where it stopped. E.g.
     python tools/scorecard.py baseline --set core --save today-gpu --render-lanes 3 --cache DIR
 
@@ -48,6 +50,21 @@ the mesh renumbered by position (``ohs.mesh.order``), and is scored:
 
 A number that could not be measured is ``None`` ("n/m" in a table), never 0. The range of a number
 over a scene's seeds is that scene's yardstick ("spread").
+
+**Chains** (``--chain``; ENGINE_PLAN X0a). ``frame`` (the default, and every baseline saved before
+2026-11-21) is the frame pass only: ``process_recording`` with the parameters above, then the recipe.
+``app`` (:func:`app_chain`) runs what the app's Make mesh runs before its recipe, calling the same
+engine functions with the server's own parameters and decisions (``ohs.server.processing``:
+``stage_params``, ``straighten_looped``, ``refine_changes``): Follow the camera (every piece kept,
+as the server's stage), Straighten (``ohs.track.posegraph.straighten_trajectory``, a fuse at the
+loops' poses when they change them, ``ohs.track.curve_ba.laser_curve_adjustment`` against that
+mesh, a fuse at its poses when it changes them), Refine with lasers (``ohs.mesh.anchor_to_points``)
+on the stage's mesh; then the same recipe and scoring. At true poses there is no tracked path to
+straighten: the fuse at the true poses and Refine with lasers. A result also says what each stage
+did (``info["chain"]``; the table's "What the app chain's stages did"), and so does an app
+baseline (``stages``). Its runs have their own folders (``app-default``, ``app-p-<hash>``);
+``curve.<CurveParams field>=V`` tries a setting of the laser crossings (app chain only; a
+true-pose run is the same with it and keeps one folder).
 
 **Compare** pairs each recording with itself in the baseline: the change, the scene's spread in
 the baseline, and a verdict per row: "better" or "worse" when the change of the scene's mean is
@@ -1164,7 +1181,12 @@ def scene_fits(spec: SceneSpec, sc, Vs, F, S, filled, seen, cover) -> dict:
 
 
 # =========================================================================== the settings to try
-SECTIONS = ("process", "pipeline", "fusion", "depth", "laser", "const")
+SECTIONS = ("process", "pipeline", "fusion", "depth", "laser", "const", "curve")
+#: settings that act in Straighten only (``curve.<CurveParams field>``: the laser crossings' adjustment); they need
+#: ``--chain app``, and a true-pose run, which is not straightened, ignores them
+STRAIGHTEN_ONLY = ("curve.",)
+#: what runs on each recording (module docstring, "Chains")
+CHAINS = ("frame", "app")
 
 
 def parse_params(items: list[str] | None, path: str | Path | None = None) -> dict[str, Any]:
@@ -1187,10 +1209,15 @@ def parse_params(items: list[str] | None, path: str | Path | None = None) -> dic
     return out
 
 
-def settings_key(params: dict) -> str:
-    if not params:
-        return "default"
-    return "p-" + hashlib.sha1(json.dumps(params, sort_keys=True).encode()).hexdigest()[:10]
+def settings_key(params: dict, chain: str = "frame", poses: str | None = None) -> str:
+    """The folder name of a run's settings. ``chain`` "frame" (the frame pass only) keeps the names it always had
+    (``default``, ``p-<hash>``), so every saved run is found again; ``app`` (:func:`app_chain`) is ``app-default`` /
+    ``app-p-<hash>``. At true poses the app chain does not straighten (:data:`STRAIGHTEN_ONLY`), so Straighten's
+    settings are left out of a true-pose run's key: it is the same run with and without them."""
+    if chain == "app" and poses == "true":
+        params = {k: v for k, v in params.items() if not k.startswith(STRAIGHTEN_ONLY)}
+    key = "default" if not params else "p-" + hashlib.sha1(json.dumps(params, sort_keys=True).encode()).hexdigest()[:10]
+    return key if chain == "frame" else f"{chain}-{key}"
 
 
 def base_params(spec: SceneSpec):
@@ -1231,7 +1258,176 @@ def apply_params(pp, params: dict):
             if not hasattr(m, const):
                 raise ValueError(f"{mod} has no {const}")
             setattr(m, const, v)
+        # "curve": Straighten's laser crossings (:func:`curve_params`), not the frame pass
     return dataclasses.replace(pp, pipeline=pipe, **top)
+
+
+def curve_params(params: dict):
+    """The laser crossings' ``CurveParams`` with the ``curve.<field>`` settings; None without any, so that Straighten
+    is called exactly as the server calls it (its own default)."""
+    from ohs.track.curve_ba import CurveParams
+
+    kw = {k.split(".", 1)[1]: v for k, v in params.items() if k.startswith("curve.")}
+    if not kw:
+        return None
+    bad = [k for k in kw if k not in {f.name for f in dataclasses.fields(CurveParams)}]
+    if bad:
+        raise ValueError(f"CurveParams has no {', '.join(bad)}")
+    return dataclasses.replace(CurveParams(), **{k: tuple(v) if isinstance(v, list) else v for k, v in kw.items()})
+
+
+def app_params(spec: SceneSpec, params: dict, rec: Path):
+    """What the server's Make mesh fuses with (:func:`ohs.server.processing.stage_params`: Standard quality, the default
+    ``Config()``, markerless, the recording's own width, no preset), the recording's stretch, and the settings tried."""
+    from ohs.app.config import Config
+    from ohs.io.recording import RecordingReader
+    from ohs.server.processing import stage_params
+
+    reader = RecordingReader(rec)
+    size = reader.meta.get("image_size") or list(reader.frame(0).image_size)
+    start, stop = stretch(spec)
+    pp = stage_params(Config(), "markerless", "standard", int(size[0]))
+    return apply_params(dataclasses.replace(pp, start=int(start), stop=stop), params)
+
+
+# =========================================================================== the app's Make mesh (--chain app)
+def app_chain(rec: Path, proc: Path, spec: SceneSpec, params: dict, poses: dict | None) -> tuple[dict, dict]:
+    """Run on ``rec`` what the app's Make mesh runs before its recipe (``ohs.server.processing``: ``_run_recipe`` on
+    everything with the Default recipe's settings, ``straighten`` and ``refine`` "auto"), with the server's own
+    parameters and decisions: Follow the camera (:func:`app_params`), Straighten (the loops, a fuse at their poses when
+    they change them, the laser crossings against that mesh, a fuse at their poses when they change them), Refine with
+    lasers on the stage's mesh. Each stage's files go to ``proc/stages/<stage>/`` as the server writes them under
+    ``process/``; the last one (the app's base mesh) is copied to ``proc/`` for :func:`judge`, which then applies the
+    recipe's edits as for the frame pass.
+
+    With given (true) ``poses`` there is no tracked camera path to straighten: Follow the camera fuses at them and
+    Refine with lasers runs. Returns ``(report of the base stage, what each stage did)``."""
+    from ohs.app.process import process_recording
+
+    pp = app_params(spec, params, rec)
+    st = proc / "stages"
+    st.mkdir(parents=True, exist_ok=True)
+    info: dict[str, Any] = {"chain": "app", "stage_s": {}}
+    t = time.perf_counter()
+    process_recording(rec, st / "track", params=pp, poses=poses)
+    info["stage_s"]["track"] = round(time.perf_counter() - t, 1)
+    base = st / "track"
+    if poses is None:
+        base = _app_straighten(rec, st, pp, params, info)
+    else:
+        info["straighten"] = {"ran": False, "why": "true poses: there is no tracked camera path to straighten"}
+    base = _app_refine(base, st, info)
+    for name in ("mesh.ply", "report.json", "trajectory.csv", "laser_points.ply"):
+        if (base / name).is_file():
+            shutil.copy2(base / name, proc / name)
+    info["base"] = base.name
+    return json.loads((base / "report.json").read_text(encoding="utf-8")), info
+
+
+def _app_fuse(rec: Path, out: Path, pp, poses: dict) -> None:
+    from ohs.app.process import process_recording
+
+    tmp = out.with_name(out.name + ".tmp")
+    shutil.rmtree(tmp, ignore_errors=True)
+    process_recording(rec, tmp, params=pp, poses=poses)
+    shutil.rmtree(out, ignore_errors=True)
+    tmp.rename(out)
+
+
+def _app_straighten(rec: Path, st: Path, pp, params: dict, info: dict) -> Path:
+    """Straighten as ``ProcessManager._do_straighten`` runs it; returns the stage folder of the base mesh after it."""
+    from ohs.io.recording import RecordingReader
+    from ohs.server import processing as SP
+    from ohs.track.curve_ba import laser_curve_adjustment
+    from ohs.track.posegraph import read_trajectory, straighten_trajectory
+
+    t = time.perf_counter()
+    traj = read_trajectory(st / "track" / "trajectory.csv")
+    calib = RecordingReader(rec).calibration()
+    s: dict[str, Any] = {"ran": True}
+    info["straighten"] = s
+    try:
+        poses, rep = straighten_trajectory(rec, calib, traj)
+    except Exception as e:  # noqa: BLE001 - the server's stage is skipped, the base stays
+        s.update(failed=f"{type(e).__name__}: {e}", looped=False, adjusted=False)
+        return st / "track"
+    rep = dict(rep or {})
+    looped, loops = SP.straighten_looped(rep, poses)
+    s.update(loops=int(loops or 0), looped=looped, loop_verdict=rep.get("verdict"),
+             loop_correction_mm=rep.get("correction_mm"), loops_s=round(time.perf_counter() - t, 1))
+    if looped:  # the loops' fuse is also the reference surface for the laser crossings
+        t1 = time.perf_counter()
+        _app_fuse(rec, st / "straighten", pp, poses)
+        s["fuse_loops_s"] = round(time.perf_counter() - t1, 1)
+        ref_dir, cur = st / "straighten", dict(poses)
+    else:
+        ref_dir, cur = st / "track", {i: T for i, _, ok, T in traj if ok}
+    t1 = time.perf_counter()
+    new_poses = cur
+    try:
+        Vr, Fr, _ = SP._read_stage_mesh(ref_dir / "mesh.ply")
+        rows_cur = [(i, tt, True, cur[i]) for i, tt, ok, _ in traj if ok and i in cur]
+        new_poses, crep = laser_curve_adjustment(rec, calib, rows_cur, reference=(Vr, Fr), params=curve_params(params))
+    except Exception as e:  # noqa: BLE001 - as the server: "could not finish", the poses stay
+        crep = {"changed": False, "reason": "failed", "verdict": f"failed: {type(e).__name__}: {e}"}
+    s["crossings_s"] = round(time.perf_counter() - t1, 1)
+    rep["laser_curves"] = crep
+    adjusted = bool(crep.get("changed"))
+    s["adjusted"] = adjusted
+    s["crossings"] = {k: crep.get(k) for k in ("reason", "changed", "frames", "crossings", "holdout", "miss_mm", "moved_mm",
+                                                "moved_deg", "verdict", "warning", "ground_truth")}
+    write_json(st / "straighten.json", _plain(rep))
+    if adjusted:
+        t1 = time.perf_counter()
+        _app_fuse(rec, st / "straighten", pp, new_poses)
+        s["fuse_crossings_s"] = round(time.perf_counter() - t1, 1)
+    info["stage_s"]["straighten"] = round(time.perf_counter() - t, 1)
+    return st / "straighten" if (looped or adjusted) else st / "track"
+
+
+def _app_refine(src: Path, st: Path, info: dict) -> Path:
+    """Refine with lasers as ``ProcessManager._do_refine`` runs it on the base stage's mesh; returns the stage folder
+    of the base mesh after it."""
+    from ohs.mesh import anchor_to_points
+    from ohs.server import processing as SP
+    from ohs.server.protocol import jsonable
+    from ohs.track.export import load_ply
+
+    t = time.perf_counter()
+    r: dict[str, Any] = {"source": src.name, "acted": False}
+    info["refine"] = r
+    try:
+        lp = src / "laser_points.ply"
+        P = load_ply(lp)["vertices"] if lp.is_file() else np.zeros((0, 3))
+        r["points"] = int(len(P))
+        if len(P) < SP.MIN_LASER_POINTS:
+            r["why"] = "no laser points"
+            return src
+        V, F, S, L = SP._read_stage_mesh(src / "mesh.ply", with_looks=True)
+        V2, _, rep = anchor_to_points(V, F, P)
+        r.update(used=rep["used"], outliers=rep["outliers"], moved_pct=round(100.0 * rep["moved_share"], 1),
+                 moved_mm_p95=rep["moved"]["p95"], residual_before_mm=rep["residual_before"]["median"],
+                 residual_after_mm=rep["residual_after"]["median"])
+        if not SP.refine_changes(rep):
+            r["why"] = "the mesh already agrees with the laser lines" if rep["used"] >= SP.MIN_LASER_POINTS else "too few points"
+            return src
+        out = st / "refine"
+        shutil.rmtree(out, ignore_errors=True)
+        out.mkdir(parents=True)
+        SP.save_refined_mesh(out / "mesh.ply", V2, F, S, L)
+        for name in ("trajectory.csv", "laser_points.ply", "marker_map.json"):
+            if (src / name).is_file():
+                shutil.copy2(src / name, out / name)
+        report = json.loads((src / "report.json").read_text(encoding="utf-8")) if (src / "report.json").is_file() else {}
+        report["refine"] = {**rep, "source": src.name}
+        (out / "report.json").write_text(json.dumps(jsonable(report), indent=1), encoding="utf-8")
+        r["acted"] = True
+        return out
+    except Exception as e:  # noqa: BLE001 - as the server: the stage says it failed, the mesh stays as fused
+        r["failed"] = f"{type(e).__name__}: {e}"
+        return src
+    finally:
+        info["stage_s"]["refine"] = round(time.perf_counter() - t, 1)
 
 
 # =========================================================================== one job (its own process)
@@ -1379,7 +1575,8 @@ def job_main(a: argparse.Namespace) -> int:
     params = json.loads(a.params) if a.params else {}
     if a.depth_hook:
         _install_depth_hook(a.depth_hook, Path(a.depth_dir))
-    pp = apply_params(base_params(spec), params)
+    chain = getattr(a, "chain", "frame") or "frame"
+    pp = apply_params(base_params(spec), params) if chain == "frame" else None
     poses = None
     start, stop = stretch(spec)
     if a.poses == "true":
@@ -1394,12 +1591,18 @@ def job_main(a: argparse.Namespace) -> int:
     t0 = time.perf_counter()
     # this process's own memory, sampled while it processes (a venv's python.exe is a launcher: its
     # child would not be the process the parent started), with Windows' own peak at each sample
+    stages = None
     with Sampler(os.getpid(), None, every=1.0, seconds=24 * 3600.0) as smp:
-        rep = process_recording(rec, proc, params=pp, poses=poses)
+        if chain == "app":
+            rep, stages = app_chain(rec, proc, spec, params, poses)
+        else:
+            rep = process_recording(rec, proc, params=pp, poses=poses)
     wall = time.perf_counter() - t0
     peaks = summarize(smp.rows).get("", {}) if smp.rows else {}
     t1 = time.perf_counter()
     res = judge(spec, rec, proc, rep, models)
+    if stages is not None:
+        res["info"]["chain"] = _plain(stages)
     res["metrics"]["peak_ws_gb"] = round(float(peaks["peak_ws"]) / 1e9, 2) if peaks.get("peak_ws") else None
     res["metrics"]["peak_gpu_shared_gb"] = round(float(peaks["gpu_shared"]) / 1e9, 2) if peaks.get("gpu_shared") else None
     res["info"]["judge_s"] = round(time.perf_counter() - t1, 1)
@@ -1411,6 +1614,7 @@ def job_main(a: argparse.Namespace) -> int:
     if a.keep_mesh == 0:
         for f in ("mesh.ply", "laser_points.ply"):
             (proc / f).unlink(missing_ok=True)
+        shutil.rmtree(proc / "stages", ignore_errors=True)
     write_json(out / "result.json", res)  # last, and whole: a result is there only when its run finished
     return 0
 
@@ -1433,11 +1637,12 @@ def engine_fingerprint() -> str:
 KEEP_FROM_RUN = ("peak_ws_gb", "peak_gpu_shared_gb")
 
 
-def rescore(cache: Path, spec: SceneSpec, compute: str, params: dict, poses: str, models: Path | None = None) -> dict | None:
+def rescore(cache: Path, spec: SceneSpec, compute: str, params: dict, poses: str, models: Path | None = None,
+            chain: str = "frame") -> dict | None:
     """Score a finished job again from its kept mesh and report (``proc/``), without processing
     again: for a change to the scoring alone. Keeps what only the run could measure (memory,
     times); returns the new result, or None when the mesh was not kept."""
-    out = run_dir(cache, compute, params, spec, poses)
+    out = run_dir(cache, compute, params, spec, poses, chain)
     old = read_result(out / "result.json")
     proc = out / "proc"
     if old is None or not (proc / "mesh.ply").is_file() or not (proc / "report.json").is_file():
@@ -1484,7 +1689,7 @@ def compute_name(compute: str | None) -> str:
 
 def run_job(cache: Path, spec: SceneSpec, poses: str, compute: str, params: dict, out: Path, *, models: Path | None = None,
             depth_hook: str | None = None, depth_dir: Path | None = None, trajectory: Path | None = None,
-            keep_mesh: bool = True, force: bool = False, deadline_s: float | None = None) -> dict:
+            keep_mesh: bool = True, force: bool = False, deadline_s: float | None = None, chain: str = "frame") -> dict:
     """Run one job in a child process (with a deadline) unless its result is there; returns the result
     (the job measures its own peak memory with ``tools/memory_peaks.py``).
 
@@ -1499,7 +1704,9 @@ def run_job(cache: Path, spec: SceneSpec, poses: str, compute: str, params: dict
         raise RuntimeError(f"{spec.name}: the recording at {rec} is not complete (cut off part way?): render it first")
     out.mkdir(parents=True, exist_ok=True)
     running = out / "running"
-    end = time.monotonic() + (deadline_s or (600.0 + spec.frames * (8.0 if compute == "cpu" else 4.0)))
+    # the app chain straightens and may fuse twice more: three times the frame pass's limit
+    limit = deadline_s or (600.0 + spec.frames * (8.0 if compute == "cpu" else 4.0)) * (3.0 if chain == "app" else 1.0)
+    end = time.monotonic() + limit
     while running.is_file() and _alive(running.read_text(encoding="utf-8").strip() or "0"):
         if time.monotonic() > end:
             raise TimeoutError(f"{spec.name} {poses}: another process runs this job and did not end in time")
@@ -1509,6 +1716,8 @@ def run_job(cache: Path, spec: SceneSpec, poses: str, compute: str, params: dict
     res_path.unlink(missing_ok=True)
     cmd = [sys.executable, str(Path(__file__).resolve()), "_job", "--cache", str(cache), "--rec", spec.name, "--poses", poses,
            "--out", str(out), "--params", json.dumps(params), "--keep-mesh", "1" if keep_mesh else "0"]
+    if chain != "frame":
+        cmd += ["--chain", chain]
     if models:
         cmd += ["--models", str(models)]
     if depth_hook:
@@ -1520,7 +1729,6 @@ def run_job(cache: Path, spec: SceneSpec, poses: str, compute: str, params: dict
     if compute == "cpu":
         env["OHS_COMPUTE"] = "cpu"
     env["PYTHONUNBUFFERED"] = "1"
-    limit = deadline_s or (600.0 + spec.frames * (8.0 if compute == "cpu" else 4.0))
     logf = out / "job.log"
     t0 = time.perf_counter()
     with open(logf, "w", encoding="utf-8") as fh:
@@ -1549,8 +1757,8 @@ def run_job(cache: Path, spec: SceneSpec, poses: str, compute: str, params: dict
     return res
 
 
-def run_dir(cache: Path, compute: str, params: dict, spec: SceneSpec, poses: str) -> Path:
-    return cache / "runs" / compute / settings_key(params) / spec.name / poses
+def run_dir(cache: Path, compute: str, params: dict, spec: SceneSpec, poses: str, chain: str = "frame") -> Path:
+    return cache / "runs" / compute / settings_key(params, chain, poses) / spec.name / poses
 
 
 def start_render_lanes(cache: Path, specs: list[SceneSpec], lanes: int, models: Path | None = None) -> list:
@@ -1574,17 +1782,20 @@ def start_render_lanes(cache: Path, specs: list[SceneSpec], lanes: int, models: 
 
 
 def run_set(cache: Path, specs: list[SceneSpec], compute: str, params: dict, *, models: Path | None = None,
-            poses: tuple[str, ...] = ("tracked", "true"), force: bool = False, render_lanes: int = 0) -> dict[str, dict[str, dict]]:
+            poses: tuple[str, ...] = ("tracked", "true"), force: bool = False, render_lanes: int = 0,
+            chain: str = "frame") -> dict[str, dict[str, dict]]:
     """Render (once) and run every recording at both pose sources; ``{rec: {poses: result}}``.
 
     Restartable: run it again after a kill and it carries on where it stopped (complete recordings
     and finished results are used again, a recording or job cut off part way is done again). With
     ``render_lanes`` the recordings still to render are rendered in that many background processes
     while the complete ones are processed, each as soon as it is complete."""
-    key = settings_key(params)
-    sdir = cache / "runs" / compute / key
-    sdir.mkdir(parents=True, exist_ok=True)
-    write_json(sdir / "settings.json", params)
+    key = settings_key(params, chain)
+    for ps_ in poses:
+        sdir = cache / "runs" / compute / settings_key(params, chain, ps_)
+        sdir.mkdir(parents=True, exist_ok=True)
+        write_json(sdir / "settings.json", {k: v for k, v in params.items()  # what the folder's key was made of
+                                            if chain == "frame" or ps_ != "true" or not k.startswith(STRAIGHTEN_ONLY)})
     out: dict[str, dict[str, dict]] = {}
     lanes = start_render_lanes(cache, specs, render_lanes, models)
     pending = list(specs)
@@ -1611,12 +1822,14 @@ def run_set(cache: Path, specs: list[SceneSpec], compute: str, params: dict, *, 
             continue
         for ps_ in poses:
             t = time.perf_counter()
-            r = run_job(cache, spec, ps_, compute, params, run_dir(cache, compute, params, spec, ps_), models=models, force=force)
+            r = run_job(cache, spec, ps_, compute, params, run_dir(cache, compute, params, spec, ps_, chain), models=models,
+                        force=force, chain=chain)
             out.setdefault(spec.name, {})[ps_] = r
             m = r.get("metrics", {})
+            did = f"; {stages_text((r.get('info') or {}).get('chain'))}" if chain == "app" else ""
             log(f"{spec.name} {ps_} ({compute}, {key}): {r.get('error') or ''} part {fmt(m.get('part_med'))}/"
                 f"{fmt(m.get('part_p95'))} mm, over 0.3 {fmt(m.get('part_over03'))}, cover {fmt(m.get('cover1'))}, "
-                f"path max {fmt(m.get('traj_max'))} mm ({time.perf_counter() - t:.0f} s)")
+                f"path max {fmt(m.get('traj_max'))} mm ({time.perf_counter() - t:.0f} s){did}")
     return out
 
 
@@ -1772,17 +1985,69 @@ def thin_flag(metric: str, base: list[Any], new: list[Any], names: list[str] | N
     return " ".join(f"{f} ({', '.join(w)})" for f, w in sorted(flags.items()))
 
 
-def load_results(cache: Path, compute: str, params: dict, specs: list[SceneSpec]) -> dict[str, dict[str, dict]]:
+def stages_text(ch: dict | None) -> str:
+    """What the app chain's stages did on one run, in a line: loops, the laser crossings' held-out ratio and
+    whether they acted, Refine with lasers."""
+    if not isinstance(ch, dict):
+        return NM
+    s, r = ch.get("straighten") or {}, ch.get("refine") or {}
+    if not s.get("ran"):
+        st = "Straighten not run"
+    elif s.get("failed"):
+        st = f"Straighten failed ({s['failed']})"
+    else:
+        c = s.get("crossings") or {}
+        ratio = (c.get("holdout") or {}).get("ratio")
+        st = (f"loops {s.get('loops', 0)}{' (moved)' if s.get('looped') else ''}; crossings {c.get('crossings')} "
+              f"ratio {fmt(ratio, 3)} {'ACTED' if s.get('adjusted') else 'no'} ({c.get('reason')}"
+              + (f", moved {fmt(c.get('moved_mm'), 2)} mm" if s.get("adjusted") else "") + ")")
+    rf = ("failed" if r.get("failed") else f"ACTED {fmt(r.get('moved_pct'), 1)} %" if r.get("acted")
+          else f"no ({fmt(r.get('moved_pct'), 1)} %)" if r.get("moved_pct") is not None else f"no ({r.get('why')})")
+    return f"{st}; Refine {rf}; base {ch.get('base')}"
+
+
+def stages_table(results: dict[str, dict[str, dict]], specs: list[SceneSpec]) -> list[str]:
+    """One row per app-chain run: what Straighten and Refine with lasers did (module docstring, "Chains")."""
+    lines = ["## What the app chain's stages did", "",
+             "| recording | poses | loops (moved the poses?) | crossings | held-out ratio | crossings acted | moved mm | "
+             "Refine acted (moved %) | base mesh |", "|---|---|---|---|---|---|---|---|---|"]
+    for spec in specs:
+        for ps_ in ("tracked", "true"):
+            ch = ((results.get(spec.name, {}).get(ps_) or {}).get("info") or {}).get("chain")
+            if not isinstance(ch, dict):
+                continue
+            s, r = ch.get("straighten") or {}, ch.get("refine") or {}
+            c = s.get("crossings") or {}
+            if s.get("ran"):
+                loops = f"{s.get('loops', 0)} ({'yes' if s.get('looped') else 'no'})"
+                cells = [loops, fmt(c.get("crossings")), fmt((c.get("holdout") or {}).get("ratio"), 3),
+                         ("yes" if s.get("adjusted") else "no") + f" ({c.get('reason')})",
+                         fmt(c.get("moved_mm"), 2) if s.get("adjusted") else "-"]
+            else:
+                cells = ["not run (true poses)", "-", "-", "-", "-"]
+            rf = "failed" if r.get("failed") else ("yes" if r.get("acted") else "no") + f" ({fmt(r.get('moved_pct'), 1)})"
+            lines.append(f"| {spec.name} | {ps_} | " + " | ".join(cells) + f" | {rf} | {ch.get('base')} |")
+    return lines + [""]
+
+
+def load_results(cache: Path, compute: str, params: dict, specs: list[SceneSpec],
+                 chain: str = "frame") -> dict[str, dict[str, dict]]:
     out: dict[str, dict[str, dict]] = {}
     for spec in specs:
         for ps_ in ("tracked", "true"):
-            r = read_result(run_dir(cache, compute, params, spec, ps_) / "result.json")
+            r = read_result(run_dir(cache, compute, params, spec, ps_, chain) / "result.json")
             if r is not None:
                 out.setdefault(spec.name, {})[ps_] = r
     return out
 
 
-def header(cache: Path, compute: str, params: dict, results: dict, quiet_pc: bool, title: str) -> list[str]:
+CHAIN_WORDS = {"frame": "the frame pass only (Follow the camera), then the Default recipe's edits",
+               "app": "what the app's Make mesh runs: Follow the camera, Straighten (loops and laser crossings, each when "
+                      "its own test allows; not at true poses), Refine with lasers, then the Default recipe's edits"}
+
+
+def header(cache: Path, compute: str, params: dict, results: dict, quiet_pc: bool, title: str,
+           chain: str = "frame") -> list[str]:
     """What was run: the facts the tool can know without git."""
     import ohs
 
@@ -1809,6 +2074,7 @@ def header(cache: Path, compute: str, params: dict, results: dict, quiet_pc: boo
                "full resolution)" if compute == "cpu" else ""),
             f"- date: {_dt.datetime.now().isoformat(timespec='minutes')}; cache: {cache}",
             f"- settings that differ from the defaults: {json.dumps(params, sort_keys=True) if params else 'none'}",
+            f"- chain: {chain}, {CHAIN_WORDS[chain]}",
             "- scoring: the part alone, placed by its own best fit (not the table); the Default recipe on the mesh "
             "renumbered by position; coverage within 1 / 0.5 mm of the part's seen surface",
             f"- timings and memory: {'measured on a quiet PC (--quiet-pc)' if quiet_pc else 'ROUGH (other work on the PC); not judged'}",
@@ -2010,15 +2276,28 @@ def summary_line(rows: list[dict]) -> str:
 
 
 # =========================================================================== baselines
-def save_baseline(cache: Path, name: str, compute: str, params: dict, results: dict, specs: list[SceneSpec]) -> Path:
+def save_baseline(cache: Path, name: str, compute: str, params: dict, results: dict, specs: list[SceneSpec],
+                  chain: str = "frame") -> Path:
+    """A baseline file. The frame pass's has the form it always had; the app chain's also says ``chain`` and, for each
+    run, ``stages`` (what Straighten and Refine with lasers did)."""
     import ohs
 
     p = cache / "baselines" / f"{name}.json"
+    if p.exists():
+        raise SystemExit(f"a baseline {name!r} is there already ({p}): saved baselines are never overwritten")
     p.parent.mkdir(parents=True, exist_ok=True)
+
+    def one(v: dict) -> dict:
+        d = {"metrics": v.get("metrics", {}), "error": v.get("error")}
+        if chain != "frame":
+            d["stages"] = (v.get("info") or {}).get("chain")
+        return d
+
     body = {"name": name, "saved": _dt.datetime.now().isoformat(timespec="seconds"), "version": ohs.__version__,
             "compute": compute, "params": params, "recordings": [s.name for s in specs],
-            "results": {r: {k: {"metrics": v.get("metrics", {}), "error": v.get("error")} for k, v in rr.items() if k != "skipped"}
-                        for r, rr in results.items()}}
+            "results": {r: {k: one(v) for k, v in rr.items() if k != "skipped"} for r, rr in results.items()}}
+    if chain != "frame":
+        body["chain"] = chain
     write_json(p, body)
     return p
 
@@ -2262,6 +2541,9 @@ def _filters(ap: argparse.ArgumentParser) -> None:
     ap.add_argument("--out", type=Path, default=None, help="also write the table to this file")
     ap.add_argument("--render-lanes", dest="render_lanes", type=int, default=0,
                     help="render the recordings still to render in this many background processes while the rest is processed")
+    ap.add_argument("--chain", choices=CHAINS, default="frame",
+                    help="frame (default): the frame pass only; app: what the app's Make mesh runs (Straighten, Refine "
+                         "with lasers)")
 
 
 def _emit(lines: list[str], out: Path | None, cache: Path, name: str) -> None:
@@ -2305,9 +2587,11 @@ def main(argv: list[str] | None = None) -> int:
     j.add_argument("--depth-dir", dest="depth_dir", default=None)
     j.add_argument("--trajectory", default=None)
     j.add_argument("--keep-mesh", dest="keep_mesh", type=int, default=1)
+    j.add_argument("--chain", choices=CHAINS, default="frame")
     a = ap.parse_args(argv)
     if a.cmd == "_job":
         return job_main(a)
+    chain = a.chain
     cache = a.cache
     cache.mkdir(parents=True, exist_ok=True)
     models = a.models
@@ -2318,6 +2602,10 @@ def main(argv: list[str] | None = None) -> int:
         raise SystemExit("no recording matches the filters")
     compute = compute_name(a.compute)
     params = parse_params(a.set_param, a.params)
+    if chain == "frame" and any(k.startswith(STRAIGHTEN_ONLY) for k in params):
+        raise SystemExit("curve.* settings act in Straighten, which only the app chain runs: add --chain app")
+    if chain != "frame" and a.cmd in ("replay", "holes", "selfcheck"):
+        raise SystemExit(f"{a.cmd} is for the frame pass only (leave out --chain)")
     t0 = time.perf_counter()
     if a.cmd == "render":
         failed = []
@@ -2339,8 +2627,8 @@ def main(argv: list[str] | None = None) -> int:
         lines = ["# Scored again from the kept meshes", "", "| recording | poses | metrics changed (timings left out) |", "|---|---|---|"]
         for s in specs:
             for ps_ in ("tracked", "true"):
-                old = read_result(run_dir(cache, compute, params, s, ps_) / "result.json")
-                new = rescore(cache, s, compute, params, ps_, models)
+                old = read_result(run_dir(cache, compute, params, s, ps_, chain) / "result.json")
+                new = rescore(cache, s, compute, params, ps_, models, chain)
                 if new is None:
                     continue
                 mo, mn = old["metrics"], new["metrics"]
@@ -2381,22 +2669,27 @@ def main(argv: list[str] | None = None) -> int:
                 continue
             render(cache, s, say=log)
             for ps_ in ("tracked", "true"):
-                x = run_job(cache, s, ps_, compute, params, run_dir(cache, compute, params, s, ps_), models=models)
-                y = run_job(cache, s, ps_, compute, params, run_dir(cache, compute, params, s, ps_ + "-repeat"), models=models,
-                            keep_mesh=False, force=True)
+                x = run_job(cache, s, ps_, compute, params, run_dir(cache, compute, params, s, ps_, chain), models=models,
+                            chain=chain)
+                y = run_job(cache, s, ps_, compute, params, run_dir(cache, compute, params, s, ps_ + "-repeat", chain),
+                            models=models, keep_mesh=False, force=True, chain=chain)
                 mx, my = x.get("metrics", {}), y.get("metrics", {})
                 diff = [k for k in sorted(set(mx) | set(my)) if k not in TIMING and mx.get(k) != my.get(k)]
                 text = ", ".join(f"{k}: {mx.get(k)} / {my.get(k)}" for k in diff) or "none: identical"
                 lines.append(f"| {s.name} | {ps_} | {text} |")
         _emit(lines, a.out, cache, "repeat")
         return 0
+    if a.cmd == "baseline":  # before hours of work: a saved baseline is never overwritten
+        bp = cache / "baselines" / f"{a.save}.json"
+        if bp.exists():
+            raise SystemExit(f"a baseline {a.save!r} is there already ({bp}): choose another name")
     if a.cmd == "table":
-        res = load_results(cache, compute, params, specs)
+        res = load_results(cache, compute, params, specs, chain)
     else:
-        res = run_set(cache, specs, compute, params, models=models, force=a.force, render_lanes=a.render_lanes)
+        res = run_set(cache, specs, compute, params, models=models, force=a.force, render_lanes=a.render_lanes, chain=chain)
     title ={"run": "Scorecard", "table": "Scorecard (from the cache)", "baseline": f"Scorecard, saved as baseline {getattr(a, 'save', '')}",
              "compare": f"Scorecard against baseline {getattr(a, 'name', '')}"}[a.cmd]
-    lines = header(cache, compute, params, res, a.quiet_pc, title)
+    lines = header(cache, compute, params, res, a.quiet_pc, title, chain)
     if a.cmd == "baseline":
         missing = [f"{s.name} {p_}" for s in specs if "skipped" not in res.get(s.name, {})
                    for p_ in ("tracked", "true") if (res.get(s.name, {}).get(p_) or {}).get("error") or p_ not in res.get(s.name, {})]
@@ -2404,7 +2697,7 @@ def main(argv: list[str] | None = None) -> int:
             lines.append(f"- baseline NOT saved: {len(missing)} job(s) did not finish ({', '.join(missing)}); "
                          "run the same command again to carry on\n")
         else:
-            p = save_baseline(cache, a.save, compute, params, res, specs)
+            p = save_baseline(cache, a.save, compute, params, res, specs, chain)
             lines.append(f"- baseline saved: {p}\n")
         fps = sorted({(r.get("info") or {}).get("engine_code") or "before fingerprints" for rr in res.values()
                       for k, r in rr.items() if k != "skipped" and isinstance(r, dict) and not r.get("error")})
@@ -2416,10 +2709,17 @@ def main(argv: list[str] | None = None) -> int:
                      f"settings {json.dumps(bl.get('params')) or 'none'})")
         if bl.get("compute") != compute:
             lines.append(f"- NOTE: the baseline ran on the {bl.get('compute')} path, this on the {compute} path")
+        if bl.get("chain", "frame") != chain:
+            lines.append(f"- NOTE: the baseline ran the {bl.get('chain', 'frame')} chain, this the {chain} chain: the "
+                         f"difference is what the chain adds")
         lines.append(f"- {len(specs)} recordings, {time.perf_counter() - t0:.0f} s")
         lines.append("")
+        if chain == "app":
+            lines += stages_table(res, specs)
         lines += compare_table(compare_rows(bl["results"], res, specs, a.quiet_pc))  # its last line: the verdict
     else:
+        if chain == "app":
+            lines += stages_table(res, specs)
         lines += table(res, specs)
         lines.append(f"\n{len(specs)} recordings, {time.perf_counter() - t0:.0f} s")
     _emit(lines, a.out, cache, a.cmd)
