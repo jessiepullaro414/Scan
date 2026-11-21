@@ -61,7 +61,7 @@ function throws(fn: () => unknown, needle: string): boolean {
   check(near(t.normal, [0, 0, 1]), "three points: (p2 - p1) x (p3 - p1)");
   check(throws(() => planeFromPoints([0, 0, 0], [1, 0, 0], [2, 0, 0], null), "lie on one line"), "three points on a line refused");
   check(throws(() => planeFromDef({ kind: "point_normal", point: [0, 0, 0], normal: [0, 0, 0] }, [], null), "zero"), "a zero normal refused");
-  check(throws(() => planeFromDef({ kind: "frame", axis: "Z", value_mm: 1 }, [], null), "no part's frame"), "a frame axis without a frame refused");
+  check(throws(() => planeFromDef({ kind: "frame", axis: "Z", value_mm: 1 }, [], null), "no part's axes"), "a frame axis without a frame refused");
 }
 
 // the part's frame: X is the scan's y, Y the scan's -x, Z the scan's z; the origin at (2, -1, 5)

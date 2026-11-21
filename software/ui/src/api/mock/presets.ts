@@ -49,7 +49,7 @@ function bad(detail: string, hint: string): never {
 /** The values, checked as the engine does (`ohs.app.presets.validate_values`); null / undefined dropped. */
 export function checkValues(values: unknown, recipeExists?: (id: string) => boolean): PresetValues {
   if (values === undefined || values === null) return {};
-  if (typeof values !== "object" || Array.isArray(values)) bad("The values must be an object of names and values", 'For example {"voxel_mm": 0.5}.');
+  if (typeof values !== "object" || Array.isArray(values)) bad("The page asked for something the app does not know.", "Reload the page and try again.");
   const out: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(values as Record<string, unknown>)) {
     if (k === "depth_range" || k === "min_depth_mm" || k === "max_depth_mm") bad(`A preset cannot set ${k}: the depth range is not a setting of the app`, `A preset can set ${PRESET_KEYS.join(", ")}.`);

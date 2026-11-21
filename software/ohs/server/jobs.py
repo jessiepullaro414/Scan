@@ -62,7 +62,7 @@ FAILURE_TEXT = {
     "reference_align": "Aligning the scan with the CAD model failed. The scan is unchanged. " + _RETRY,
     "calibrate": "The calibration could not be worked out. Your views are kept: try again, or add a few views "
                  "first.",
-    "generate_demo": "The simulator demo could not be made. Nothing else is affected. " + _RETRY,
+    "generate_demo": "The simulator could not be prepared. Nothing else is affected. " + _RETRY,
     "selftest": "The self-test could not finish. Nothing was changed. Check the connection, then run it again.",
     "printables": "The printables could not be made. Check the free disk space, then try again.",
 }

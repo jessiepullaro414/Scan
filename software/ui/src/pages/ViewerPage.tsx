@@ -188,8 +188,8 @@ function ReportSummary({ report }: { report: Rec }) {
           mesh && num(mesh.voxel_mm) !== null ? ["Mesh detail", fmtMm(num(mesh.voxel_mm), 1)] : null,
           sigma && num(sigma.median) !== null
             ? [
-                "Uncertainty",
-                <span className="tnum" title="Each point's 1σ, as fused (before any edits)">
+                "Confidence",
+                <span className="tnum" title="Each point's ±, as fused (before any edits)">
                   median {fmtSigma(num(sigma.median)!)}
                   {num(sigma.within_0_1) !== null ? <span className="text-muted"> · {fmtPct(num(sigma.within_0_1))} within 0.1&#8239;mm</span> : null}
                 </span>,
@@ -206,7 +206,7 @@ function ReportSummary({ report }: { report: Rec }) {
           <KeyValue
             dense
             rows={[
-              num(gt.rms_trans_mm) !== null ? ["Position RMS", <span className="font-mono text-xs tnum">{fmtFixed(num(gt.rms_trans_mm), 2)}&#8239;mm</span>] : null,
+              num(gt.rms_trans_mm) !== null ? ["Position, typical", <span className="font-mono text-xs tnum">{fmtFixed(num(gt.rms_trans_mm), 2)}&#8239;mm</span>] : null,
               gtTrans && num(gtTrans.max) !== null ? ["Position max", <span className="font-mono text-xs tnum">{fmtFixed(num(gtTrans.max), 2)}&#8239;mm</span>] : null,
               gtRot && num(gtRot.max) !== null ? ["Rotation max", <span className="font-mono text-xs tnum">{fmtFixed(num(gtRot.max), 2)}°</span>] : null,
             ]}
@@ -734,7 +734,7 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
     () =>
       keptMeasurements.map((m, i) => {
         const [dx, dy, dz] = deltaOf(m.a, m.b, shownFrame);
-        const where = shownFrame ? `in the part's frame (${axisOrder(shownFrame).join(" ")})` : "in the scan's frame";
+        const where = shownFrame ? `along the part's axes (${axisOrder(shownFrame).join(" ")})` : "along the scan's axes";
         const at = (p: Vec3) => fmtVec(shownFrame ? pointToPart(shownFrame, p) : p);
         const tip = `From (${at(m.a)}) to (${at(m.b)}) mm, ${where}.`;
         return { m, i, d: Math.hypot(dx, dy, dz), dx, dy, dz, tip };
@@ -790,7 +790,7 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
           ) : (
             <div className="flex flex-wrap items-center gap-2">
               <MakeMeshButton projectId={pid} scan={scan} variant="primary" size="md" blocked={remakeBlock(scan)} />
-              {scan.status !== "recording" ? <ProcessButton projectId={pid} scan={scan} variant="ghost" size="md" label="Step by step…" /> : null}
+              {scan.status !== "recording" ? <ProcessButton projectId={pid} scan={scan} variant="ghost" size="md" label="Edit mesh…" /> : null}
             </div>
           )}
         </div>
@@ -808,7 +808,7 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
             <Button variant="primary" icon={RefreshCw} onClick={() => setReloadKey((k) => k + 1)}>
               Try again
             </Button>
-            <MakeMeshButton projectId={pid} scan={scan} label="Rebuild the mesh" blocked={remakeBlock(scan)} />
+            <MakeMeshButton projectId={pid} scan={scan} label="Make mesh again" blocked={remakeBlock(scan)} />
           </>
         }
       >
@@ -907,10 +907,10 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
                   { value: "lasers", label: "Lasers", icon: ScanLine, title: "Where the laser lines and the mesh agree, and where they differ (6)" },
                   {
                     value: "reference",
-                    label: "Reference",
+                    label: "CAD model",
                     icon: COMPARE_ICON,
                     disabled: !refEnabled,
-                    title: refEnabled ? "How far the scan is from the reference model, against a tolerance (7)" : "Compare the scan with a reference model first (the Compare panel)",
+                    title: refEnabled ? "How far the scan is from the CAD model, against a tolerance (7)" : "Compare the scan with a CAD model first (the Compare panel)",
                   },
                 ]}
               />
@@ -982,7 +982,7 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
               <IconButton icon={Focus} size="sm" label="Frame the model (F)" onClick={() => viewBus.emit({ type: "frame", animate: true })} />
               <span className="mx-1 h-5 w-px bg-line-strong" aria-hidden />
               <Button size="sm" variant="ghost" icon={SlidersHorizontal} onClick={() => navigate(paths.process(pid, sid))} title="Clean up, fill holes, smooth or simplify, with undo">
-                Process…
+                Edit mesh…
               </Button>
             </div>
           ) : null}
@@ -1222,7 +1222,7 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
                 size="xs"
                 variant="ghost"
                 icon={Trash}
-                title="Remove all fits"
+                title="Remove all fitted shapes"
                 onClick={() => {
                   void useFeatures.getState().removeAll(
                     pid,
@@ -1260,7 +1260,7 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
           />
         </Panel>
 
-        <Panel title="Coordinate system" icon={FRAME_ICON}>
+        <Panel title="The part's axes" icon={FRAME_ICON}>
           <FramePanel
             raw={kept?.frame ?? null}
             fits={fits}
@@ -1296,7 +1296,7 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
         </Panel>
 
         {hasResult ? (
-          <Panel title="Check" icon={CHECK_ICON}>
+          <Panel title="Scan check" icon={CHECK_ICON}>
             <CheckPanel
               check={check}
               ready={!!geometry}
@@ -1318,7 +1318,7 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
                       count: openHoles,
                       action: (
                         <Button size="xs" icon={SlidersHorizontal} onClick={() => navigate(paths.process(pid, sid))}>
-                          See them in Process
+                          See them on the Edit mesh page
                         </Button>
                       ),
                     }
@@ -1329,7 +1329,7 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
         ) : null}
 
         {hasResult ? (
-          <Panel title="Compare with a reference" icon={COMPARE_ICON}>
+          <Panel title="Compare with the CAD model" icon={COMPARE_ICON}>
             <ComparePanel
               tool={cmp}
               ready={!!geometry}
@@ -1343,9 +1343,9 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
         ) : null}
 
         {hasResult && project && scan ? (
-          <Panel title="Fine-tune" icon={SlidersHorizontal}>
-            <p className="text-sm text-muted">Remove floating bits, fill holes, smooth or simplify, cut away what you don't need. Every step can be undone.</p>
-            <ProcessButton projectId={project.id} scan={scan} variant="primary" className="mt-3" label="Fine-tune in Process" />
+          <Panel title="Edit mesh" icon={SlidersHorizontal}>
+            <p className="text-sm text-muted">Remove loose bits, fill holes, smooth or simplify, cut away what you don't need. Every step can be undone.</p>
+            <ProcessButton projectId={project.id} scan={scan} variant="primary" className="mt-3" label="Edit mesh…" />
           </Panel>
         ) : null}
 
@@ -1366,11 +1366,11 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
               </Button>
               {partFrame ? (
                 <>
-                  <Button size="sm" className="col-span-2" icon={Download} onClick={() => void downloadFile(api.frameMeshUrl(pid, sid, "mesh.stl"), `${stem}-part-frame.stl`)} title="The mesh in the part's coordinate system">
-                    STL in the part's frame
+                  <Button size="sm" className="col-span-2" icon={Download} onClick={() => void downloadFile(api.frameMeshUrl(pid, sid, "mesh.stl"), `${stem}-part-frame.stl`)} title="The mesh along the part's axes">
+                    STL along the part's axes
                   </Button>
-                  <Button size="sm" className="col-span-2" icon={Download} onClick={() => void downloadFile(api.frameMeshUrl(pid, sid, "mesh.ply"), `${stem}-part-frame.ply`)} title="The mesh in the part's coordinate system">
-                    PLY in the part's frame
+                  <Button size="sm" className="col-span-2" icon={Download} onClick={() => void downloadFile(api.frameMeshUrl(pid, sid, "mesh.ply"), `${stem}-part-frame.ply`)} title="The mesh along the part's axes">
+                    PLY along the part's axes
                   </Button>
                 </>
               ) : null}
@@ -1387,10 +1387,10 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
             <div className="mt-3 flex items-center justify-between gap-2">
               <span className="text-xs text-subtle">
                 Units: mm. STL for CAD and slicers.
-                {partFrame ? ` STL and PLY are in the scan's frame unless "in the part's frame".${partFrame.out_of_date ? " The coordinate system is out of date." : ""}` : ""}
+                {partFrame ? ` STL and PLY are along the scan's axes unless “along the part's axes”.${partFrame.out_of_date ? " The part's axes are out of date." : ""}` : ""}
               </span>
               {/* R2: a scan without its recording cannot be made again: the reason instead of the button (lib/keepMode.ts) */}
-              {remakeBlock(scan) ? null : <MakeMeshButton projectId={project.id} scan={scan} label="Remake" variant="ghost" size="xs" />}
+              {remakeBlock(scan) ? null : <MakeMeshButton projectId={project.id} scan={scan} label="Make mesh again" variant="ghost" size="xs" />}
             </div>
           ) : null}
           {hasResult && scan && remakeBlock(scan) ? <p className="mt-2 text-xs text-subtle">{remakeBlock(scan)}</p> : null}

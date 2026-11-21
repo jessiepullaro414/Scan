@@ -65,7 +65,7 @@ import { rng } from "./geom";
 import { HttpError, json, nowIso, uid, type MockHost } from "./host";
 import type { MockSetup } from "./setup";
 import { TWO_LASERS, laserFamilies, laserWords, type LaserFamily } from "../../lib/laserSet";
-import { CALIB_VERDICT, CHECK_STATE } from "../../lib/calibWords"; // U10 / U31: the server's words
+import { CALIB_VERDICT, CHECK_HEADLINE_FAILED, CHECK_STATE } from "../../lib/calibWords"; // U10 / U31: the server's words
 
 const FAMS = ["vertical", "horizontal"] as const;
 /**
@@ -336,7 +336,7 @@ export class MockCalib {
     if (b === "imu" && c === "start" && is("POST", 3)) return json(200, this.imuStart());
     if (b === "imu" && c === "stop" && is("POST", 3)) {
       if (this.session.state !== "recording" || this.kind() !== "imu")
-        throw new HttpError(409, "The IMU recording isn't running", "Press Start first.");
+        throw new HttpError(409, "The motion sensor is not recording.", "Press Start first.");
       this.stopImu(false);
       return json(200, this.session);
     }
@@ -355,7 +355,7 @@ export class MockCalib {
   private start(kindIn: unknown): CalibSession {
     const kind = kindIn as CalibKind;
     if (!["stereo", "lasers", "imu", "check"].includes(kind))
-      throw new HttpError(422, `Unknown calibration kind “${String(kindIn)}”`, "Use stereo, lasers, imu or check.");
+      throw new HttpError(400, "The app does not know this calibration step.", "Pick Cameras, Lasers, Motion sensor (IMU) or the Calibration check in Setup.");
     const dev = this.host.device();
     if (!dev.connected) throw new HttpError(409, "No device is connected", "Connect the scanner or the simulator in the Connect step first.");
     if (dev.source === "replay")
@@ -369,20 +369,27 @@ export class MockCalib {
     if (dev.source === "camera") {
       const idx = this.setup.connectedIndex;
       if (idx === 0)
-        throw new HttpError(409, "This camera doesn't deliver side-by-side stereo images", "In the Connect step, choose the camera marked “looks like the stereo camera”, then reconnect.");
+        throw new HttpError(409, "This camera doesn't deliver side-by-side pictures.", "In the Connect step, choose the camera marked “Looks like the scanner's cameras”, then connect again.");
     }
     if (kind !== "stereo" && !this.setup.hasStereo(target))
-      throw new HttpError(409, `The ${kind === "check" ? "check" : kind === "imu" ? "IMU step" : "laser step"} needs the stereo calibration`, "Finish the Stereo step first, then come back.");
+      throw new HttpError(409, `The ${kind === "check" ? "check" : kind === "imu" ? "motion sensor (IMU)" : "laser"} calibration needs the cameras calibrated first.`, "Calibrate the cameras first (the Cameras step in Setup).");
     const pico = dev.source === "camera" && !!dev.pico?.connected;
     if (kind === "imu" && dev.source === "camera" && !pico)
-      throw new HttpError(409, "The IMU step needs the Pico's IMU", "Connect the Pico (see the Connect step), or skip this step: tracking works without it.");
-    let emitters = "Emitters off";
+      throw new HttpError(
+        409,
+        "The motion sensor calibration needs the motion sensor on the control board (Pico or ESP32), and it sends nothing.",
+        "Connect the control board with a USB cable that carries data, then connect the camera again.",
+      );
+    let emitters = dev.source === "sim" ? "Lasers and dots off: room light only (simulated)" : "Lasers and dots off: room light only";
     if (kind === "lasers" || kind === "check") {
-      if (dev.source === "sim") emitters = "Simulated line lasers on (the real ones are Class 3R: never look into the beams)";
+      if (dev.source === "sim") emitters = "Simulated line lasers on";
       else if (pico) emitters = "Line lasers on: Class 3R, never look into the beams";
       else {
-        emitters = "No Pico: the line lasers stay off";
-        this.host.log("warn", "No Pico: the line lasers can't be switched on for the laser calibration");
+        emitters = "No control board (Pico or ESP32): the line lasers stay off, so switch them on another way (Class 3R, never look into the beams)";
+        this.host.log(
+          "warn",
+          "No control board (Pico or ESP32): the line lasers cannot be switched on by the app. Switch them on another way, or connect the control board and start again. Class 3R lasers: never look into the beams.",
+        );
       }
     }
     if (pico) {
@@ -511,7 +518,7 @@ export class MockCalib {
   // ---------------------------------------------------------------- capture
   private manualCapture(): CalibView {
     if (this.session.state !== "capturing" || this.kind() === "imu")
-      throw new HttpError(409, "Not capturing right now", this.kind() === "imu" ? "The IMU step records continuously: use Start and Stop." : "Start the step first.");
+      throw new HttpError(409, "Not capturing right now", this.kind() === "imu" ? "The motion sensor step records all the time: use Start and Stop." : "Start the step first.");
     const f = this.frame;
     if (!f) throw new HttpError(409, "No camera image yet", "Wait a moment for the camera.");
     const rd = this.readiness(f);
@@ -800,7 +807,7 @@ export class MockCalib {
 
   private imuStart(): CalibSession {
     if (this.kind() !== "imu" || (this.session.state !== "armed" && this.session.state !== "capturing"))
-      throw new HttpError(409, "The IMU step isn't ready", "Start the IMU step first.");
+      throw new HttpError(409, "The motion sensor step isn't ready", "Start the motion sensor step first.");
     this.imu = { recording: true, done: false, elapsed: 0, gyro: this.imu.gyro, seen: 0, frames: 0, prevRc: this.imuRc() };
     this.setSession({ state: "recording", result: null });
     return this.session;
@@ -811,7 +818,7 @@ export class MockCalib {
     im.recording = false;
     im.done = true;
     const { still } = this.imuTimes();
-    if (auto) this.host.log("info", `IMU recording stopped by itself after ${Math.round(im.elapsed - still)} s of rotation`);
+    if (auto) this.host.log("info", `The motion sensor recording stopped after ${Math.round(im.elapsed - still)} s: press Finish & calibrate`);
     this.setSession({ state: "capturing" });
   }
 
@@ -1033,8 +1040,8 @@ export class MockCalib {
             [0.2, `Detecting corners in ${this.recs.length} views…`],
             [0.45, "Calibrating the left lens…"],
             [0.65, "Calibrating the right lens…"],
-            [0.85, "Solving the stereo pair…"],
-            [1, "Checking that left and right rows line up…"],
+            [0.85, "Solving the two cameras together…"],
+            [1, "Checking that left and right match in height…"],
           ]
         : kind === "lasers"
           ? [
@@ -1049,7 +1056,7 @@ export class MockCalib {
                 [1, "Estimating the clock offset…"],
               ]
             : [
-                [0.4, "Measuring how well left and right rows match…"],
+                [0.4, "Measuring how well left and right match in height…"],
                 [0.8, "Checking the laser lines against the board…"],
                 [1, "Writing the verdict…"],
               ];
@@ -1164,16 +1171,16 @@ export class MockCalib {
         help: "Tilted views pin down the focal length and the principal point. Without them the scale of depth can drift.",
       },
       {
-        label: "Baseline",
+        label: "Distance between the cameras",
         value: `${baseline.toFixed(2)} mm`,
         ok: null,
-        help: "The distance between the two lens centres, as measured. It sets the scale of every depth measurement. The design value is about 60 mm.",
+        help: "About 60 mm on the OpenHandScan head.",
       },
       {
-        label: "Rectified row error",
+        label: "Left/right height mismatch",
         value: `${rowErr.toFixed(2)} px (want < 0.3 px)`,
         ok: rowErr < 0.3,
-        help: "A point must sit on the same image row in both cameras, or stereo matching gets worse. This is what the launch check watches.",
+        help: "The same point must sit at the same height in the left and the right picture.",
       },
     ];
     const advice: CalibAdvice[] = [];
@@ -1200,7 +1207,7 @@ export class MockCalib {
     return {
       ok: grade !== "poor",
       grade,
-      headline: `${grade === "excellent" ? "Excellent" : grade === "good" ? "Good" : grade === "usable" ? "Usable" : "Poor"} stereo calibration`,
+      headline: `${grade === "excellent" ? "Excellent" : grade === "good" ? "Good" : grade === "usable" ? "Usable" : "Poor"} camera calibration`,
       verdict: verdicts[grade],
       metrics,
       advice,
@@ -1209,7 +1216,7 @@ export class MockCalib {
         ? [
             { label: "Focal length", value: `${(722.4 * (1 + (r() - 0.5) * 0.004 * rms)).toFixed(2)} px (true 722.40)`, ok: true, help: "The estimated focal length of the left lens against the virtual scanner's true one." },
             { label: "Principal point", value: `${(0.2 + rms * 1.1).toFixed(1)} px from the truth`, ok: rms * 1.1 < 1.5, help: "Where the optical axis meets the image. Under 1.5 px off is fine." },
-            { label: "Baseline", value: `${baseline.toFixed(3)} mm (true 60.040)`, ok: Math.abs(baseline - 60.04) < 0.1, help: "The estimated lens spacing against the true 60.04 mm." },
+            { label: "Distance between the cameras", value: `${baseline.toFixed(3)} mm (true 60.040)`, ok: Math.abs(baseline - 60.04) < 0.1, help: "The estimated lens spacing against the true 60.04 mm." },
             { label: "Distortion k1", value: `${(-0.061 + (r() - 0.5) * 0.004).toFixed(4).replace(/^-/, "−")} (true −0.0610)`, ok: true, help: "The main radial distortion term of the left lens." },
           ]
         : null,
@@ -1295,7 +1302,7 @@ export class MockCalib {
       advice,
       per_view: this.recs.map((rec) => ({ index: rec.view.index, error_px: r2(0.18 + r() * 0.2), bad: false })),
       sim_truth: this.sim()
-        ? names.map((m) => ({ label: `${word(m)} plane`, value: `${(0.02 + r() * 0.05).toFixed(2)}° and ${(0.01 + r() * 0.03).toFixed(2)} mm from the truth`, ok: true, help: "The fitted plane against the virtual laser's true plane." }))
+        ? names.map((m) => ({ label: `${word(m)} line`, value: `${(0.02 + r() * 0.05).toFixed(2)}° and ${(0.01 + r() * 0.03).toFixed(2)} mm from the truth`, ok: true, help: "The calibrated line against the virtual laser's true line." }))
         : null,
       can_save: true,
       report_url: report,
@@ -1353,8 +1360,8 @@ export class MockCalib {
       per_view: this.recs.map((rec) => ({ index: rec.view.index, error_px: r2(0.18 + r() * 0.2), bad: false })),
       sim_truth: this.sim()
         ? [
-            { label: "Vertical plane", value: `${(0.02 + r() * 0.04).toFixed(2)}° and ${(0.01 + r() * 0.03).toFixed(2)} mm from the truth`, ok: true, help: "The fitted plane against the virtual laser's true plane." },
-            { label: "Horizontal plane", value: `${(0.02 + r() * 0.05).toFixed(2)}° and ${(0.01 + r() * 0.03).toFixed(2)} mm from the truth`, ok: true, help: "The fitted plane against the virtual laser's true plane." },
+            { label: "Vertical line", value: `${(0.02 + r() * 0.04).toFixed(2)}° and ${(0.01 + r() * 0.03).toFixed(2)} mm from the truth`, ok: true, help: "The calibrated line against the virtual laser's true line." },
+            { label: "Horizontal line", value: `${(0.02 + r() * 0.05).toFixed(2)}° and ${(0.01 + r() * 0.03).toFixed(2)} mm from the truth`, ok: true, help: "The calibrated line against the virtual laser's true line." },
           ]
         : null,
       can_save: true,
@@ -1374,7 +1381,7 @@ export class MockCalib {
         ok: false,
         grade: "failed",
         headline: "Not yet: too little rotation",
-        verdict: `Only ${Math.round(rot)} s of rotation were recorded: the camera–IMU rotation needs at least ${min} s. Record again and keep rotating until the timer passes ${min} s.`,
+        verdict: `Only ${Math.round(rot)} s of rotation were recorded: the motion sensor's mounting needs at least ${min} s. Record again and keep rotating until the timer passes ${min} s.`,
         metrics: [{ label: "Rotation recorded", value: `${Math.round(rot)} s (want ${min}–60 s)`, ok: false, help: "Rotation about all three axes is what the fit uses." }],
         advice: [{ text: "Record again: hold still for 2 s, then rotate slowly about all three axes.", action: "start_over" }],
         per_view: [],
@@ -1390,15 +1397,15 @@ export class MockCalib {
     return {
       ok: grade !== "poor",
       grade,
-      headline: `${grade === "excellent" ? "Excellent" : grade === "good" ? "Good" : grade === "usable" ? "Usable" : "Poor"} IMU calibration`,
+      headline: `${grade === "excellent" ? "Excellent" : grade === "good" ? "Good" : grade === "usable" ? "Usable" : "Poor"} motion sensor calibration`,
       verdict:
         grade === "poor"
-          ? `The board was in view in only ${seen} % of the frames, so the camera–IMU rotation is uncertain.`
+          ? `The board was in view in only ${seen} % of the frames, so the motion sensor's mounting is uncertain.`
           : `${Math.round(rot)} s of rotation with the board in view ${seen} % of the time. ${CALIB_VERDICT.imuGood}`,
       metrics: [
-        { label: "Motion sensor at rest", value: `${(0.18 + r() * 0.08).toFixed(2)} °/s`, ok: true, help: "What the motion sensor reads while the scanner is still. It is subtracted from every reading." },
-        { label: "Camera–IMU rotation", value: `${residual.toFixed(2)}° (want < 0.5°)`, ok: residual < 0.5, help: "How well the motion sensor's turns match the camera's. It tells tracking how the motion sensor sits in the scanner." },
-        { label: "Clock offset", value: `+${(3.6 + r() * 1.4).toFixed(1)} ms`, ok: null, help: "The delay between the camera and the IMU timestamps, measured and corrected." },
+        { label: "Reading at rest", value: `${(0.18 + r() * 0.08).toFixed(2)} °/s`, ok: true, help: "What the motion sensor reads while it is still, taken off every sample." },
+        { label: "Motion sensor mounting", value: `${residual.toFixed(2)}° (want < 0.5°)`, ok: residual < 0.5, help: "How well the motion sensor's turns match the camera's. It tells tracking how the motion sensor sits in the scanner." },
+        { label: "Clock offset", value: `+${(3.6 + r() * 1.4).toFixed(1)} ms`, ok: null, help: "The delay between the camera's clock and the motion sensor's clock." },
         { label: "Rotation recorded", value: `${Math.round(rot)} s (want ${min}–60 s)`, ok: rot >= min, help: "Rotation about all three axes is what the fit uses." },
         { label: "Board seen", value: `${seen} % of frames (want > 80 %)`, ok: seen >= 80, help: "The app compares the motion sensor with the board's movement, so the board must stay in view." },
       ],
@@ -1406,7 +1413,7 @@ export class MockCalib {
       per_view: [],
       sim_truth: this.sim()
         ? [
-            { label: "Camera–IMU rotation", value: `${(0.06 + r() * 0.1).toFixed(2)}° from the truth`, ok: true, help: "Against the virtual scanner's true IMU mounting." },
+            { label: "Motion sensor mounting vs truth", value: `${(0.06 + r() * 0.1).toFixed(2)}° from the truth`, ok: true, help: "Against the virtual scanner's true motion sensor mounting." },
             { label: "Clock offset", value: `${(0.1 + r() * 0.4).toFixed(1)} ms from the truth`, ok: true, help: "Against the simulated timestamp delay." },
           ]
         : null,
@@ -1427,19 +1434,19 @@ export class MockCalib {
     return {
       ok,
       grade,
-      headline: ok ? CHECK_STATE.ok : "Your calibration has drifted",
+      headline: ok ? CHECK_STATE.ok : CHECK_HEADLINE_FAILED,
       verdict: ok
-        ? `Left and right rows match to ${dv.toFixed(2)} px${lasers ? ` and the laser lines fit the board within ${dl.toFixed(2)} mm` : ""}. Nothing to do: scan away.`
-        : `Left and right rows differ by ${dv.toFixed(1)} px: something moved, a knock or heat. Redo the stereo calibration, then the lasers and the IMU.`,
+        ? `The check passed: left and right match in height to ${dv.toFixed(2)} px${lasers ? ` and the laser points lie within ${dl.toFixed(2)} mm of their lines` : ""}. Nothing to do: scan away.`
+        : `Left and right differ in height by ${dv.toFixed(1)} px: something moved, a knock or heat. Redo the camera calibration, then the lasers and the motion sensor.`,
       metrics: [
-        { label: "Row error after rectification", value: `${dv.toFixed(2)} px (want < 0.6 px)`, ok, help: "A point must sit on the same image row in both cameras. Drift shows up here first." },
+        { label: "Left/right height mismatch", value: `${dv.toFixed(2)} px (want < 0.3 px)`, ok, help: "The same board corner must sit at the same height in the left and the right picture." },
         { label: "Reprojection error", value: `${(0.22 + r() * 0.08 + (drift ? 0.5 : 0)).toFixed(2)} px`, ok: !drift, help: "How well the saved lens model explains the board corners in these views." },
         lasers
           ? { label: "Laser lines", value: `${dl.toFixed(2)} mm from the board (want < 0.2 mm)`, ok: dl < 0.2, help: "How far the laser points on the margin are from where the saved calibration puts them." }
           : { label: "Laser lines", value: "not calibrated", ok: null, help: "Run the Lasers step to check them too." },
         { label: "Views", value: `${n} (aim for 3–5)`, ok: n >= 3 ? true : null, help: "Views at different distances make the check more reliable." },
       ],
-      advice: ok ? [] : [{ text: "Redo the stereo calibration (about 5 minutes), then the lasers and the IMU.", action: "recalibrate_stereo" }],
+      advice: ok ? [] : [{ text: "Recalibrate the cameras (step 4): they may have moved.", action: "recalibrate_stereo" }],
       per_view: this.recs.map((rec) => ({ index: rec.view.index, error_px: r2(dv * (0.8 + r() * 0.4)), bad: false })),
       sim_truth: null,
       can_save: false,

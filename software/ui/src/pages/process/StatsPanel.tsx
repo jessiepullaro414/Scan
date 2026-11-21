@@ -89,7 +89,7 @@ export function StatsPanel({ stats, loading }: { stats: MeshStats | null; loadin
               stats.sigma_mm
                 ? [
                     "Confidence",
-                    <span title="Share of the surface whose 1σ uncertainty is at most 0.1&#8239;mm">
+                    <span title="Share of the surface whose confidence (each point's ±) is at most 0.1&#8239;mm">
                       {Math.round(stats.sigma_mm.within_0_1 * 100)}&#8239;% within 0.1&#8239;mm <span className="text-muted">(median ±{num(stats.sigma_mm.median, 2)}&#8239;mm)</span>
                     </span>,
                   ]

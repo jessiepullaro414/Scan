@@ -244,9 +244,9 @@ def test_numbers_in_the_parts_frame_move_the_positions_not_the_sizes(clean):
     assert np.allclose(P_scan, hole["center"]) and not np.allclose(P_scan, P_part)
     assert np.linalg.norm(P_part) == pytest.approx(np.linalg.norm(np.asarray(hole["center"]) - c), abs=1e-6)
     _, p = page(e, numbers_in_part_frame=True)
-    assert "in the part's frame" in p.text("features") and "frame" in p.order
+    assert "along the part's axes" in p.text("features") and "frame" in p.order
     _, p = page(e)
-    assert "in the scan's own frame" in p.text("features")
+    assert "along the scan's own axes" in p.text("features")
 
 
 def test_pictures_are_embedded_and_bad_ones_refused_or_left_out(clean):

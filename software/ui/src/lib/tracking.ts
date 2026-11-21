@@ -10,12 +10,12 @@ type Reason = { text: string; hint: string };
 const REASONS: Record<string, Reason> = {
   // markerless (ICP + TSDF)
   no_depth: { text: "No depth on the surface", hint: "Hold the scanner 200–350 mm from the part." },
-  bad_depth: { text: "Unreliable depth", hint: "Avoid glare and turn the dot projector up." },
+  bad_depth: { text: "Unreliable depth", hint: "Avoid glare and turn the dots up." },
   model_not_visible: { text: "The model is out of view", hint: "Point back at an area you already scanned." },
   diverged: { text: "Tracking jumped", hint: "Move slower and keep overlap with the scanned area." },
   few_inliers: { text: "Too little shape to follow", hint: "Add tags or move closer." },
   low_fitness: { text: "Little overlap with the model", hint: "Slow down and keep the scanned area in view." },
-  high_rmse: { text: "Surface doesn't match the model", hint: "Hold steady; check the part hasn't moved." },
+  high_rmse: { text: "Surface doesn't match the live preview", hint: "Hold steady; check the part hasn't moved." },
   jump: { text: "Moved too fast", hint: "Slow down and return to the last good spot." },
   // markers (AprilTags)
   not_initialized: { text: "Waiting for tags", hint: "Show at least 2 AprilTags to start the map." },

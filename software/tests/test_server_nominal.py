@@ -187,7 +187,7 @@ def test_the_poses_come_from_the_processing_report(clean):
                                "rms_trans_mm": 0.0}
         report.write_text(json.dumps(rep), encoding="utf-8")
         ans = get(nominal_url(clean, "f-boss")).json()
-        assert ans["poses"] == "true" and "true poses" in ans["poses_reason"]
+        assert ans["poses"] == "true" and "true path" in ans["poses_reason"]
         assert ans["offers"] == [o.to_dict() for o in suggest_fit(boss, poses="true")]
         rep["ground_truth"]["trans_mm"]["max"] = 1.5  # given, but not the true poses: straightened tracked ones
         report.write_text(json.dumps(rep), encoding="utf-8")

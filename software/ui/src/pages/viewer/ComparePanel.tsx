@@ -45,10 +45,10 @@ function Help({ text, label }: { text: string; label: string }) {
 const HELP = {
   references:
     "The part as it should be: an STL, OBJ or PLY exported from CAD (or a scan of a good part), in mm. It is kept with the project, so every scan of it can be compared with it. A STEP file must be exported as STL first.",
-  ghost: "The reference drawn over the scan, faint, where the alignment puts it. Only the view.",
+  ghost: "The CAD model drawn over the scan, faint, where the alignment puts it. Only the view.",
   uncertainty:
-    "Each area says whether its deviation is larger than the scan's own uncertainty there (2σ, from the scan itself). One that is not could be the scan's error as much as the part's.",
-  tolerance: "How far the surface may be from the reference. The shares are of the compared area; the strongest colours of the shading are at ± this.",
+    "Each area says whether its deviation is larger than the scan's own scatter there. One that is not could be the scan's error as much as the part's.",
+  tolerance: "How far the surface may be from the CAD model. The shares are of the compared area; the strongest colours of the shading are at ± this.",
 } as const;
 
 /** The tolerance field: type freely; Enter, the arrow keys or leaving the field set it. */
@@ -214,8 +214,8 @@ export function ComparePanel({
   const picker = (
     <div {...dropZone} className={cn("space-y-2 rounded-lg transition-colors", drag && "bg-accent-soft/40 outline-2 outline-dashed outline-accent")}>
       <div className="flex items-center gap-1">
-        <span className="flex-1 text-[11px] font-semibold uppercase tracking-wider text-subtle">References of the project</span>
-        <Help text={HELP.references} label="References" />
+        <span className="flex-1 text-[11px] font-semibold uppercase tracking-wider text-subtle">CAD models of the project</span>
+        <Help text={HELP.references} label="CAD models" />
       </div>
       {tool.refs === null ? (
         tool.refsError ? (
@@ -297,7 +297,7 @@ export function ComparePanel({
       <FileBox size={14} className="mt-0.5 shrink-0 text-accent" aria-hidden />
       <div className="min-w-0 flex-1">
         <div className="truncate text-xs font-semibold text-fg" title={ref?.name}>
-          {ref?.name ?? "The reference is gone"}
+          {ref?.name ?? "The CAD model is gone"}
         </div>
         {ref ? (
           <div className="text-[11px] text-subtle tnum">
@@ -311,10 +311,10 @@ export function ComparePanel({
           </div>
         ))}
       </div>
-      <Button size="xs" variant="ghost" onClick={() => setChanging(true)} title="Pick another reference, or add one">
+      <Button size="xs" variant="ghost" onClick={() => setChanging(true)} title="Pick another CAD model, or add one">
         Change
       </Button>
-      <IconButton icon={Trash} size="xs" label="Remove this comparison (the reference stays with the project)" onClick={tool.remove} />
+      <IconButton icon={Trash} size="xs" label="Remove this comparison (the CAD model stays with the project)" onClick={tool.remove} />
     </div>
   );
 
@@ -343,10 +343,10 @@ export function ComparePanel({
 
   const alignBlock = (
     <div className="space-y-2">
-      <div role="radiogroup" aria-label="How to align the scan with the reference" className="space-y-1">
+      <div role="radiogroup" aria-label="How to align the scan with the CAD model" className="space-y-1">
         {ALIGN_METHODS.map((m) => {
           const off = m.value === "datums" && frame !== "current";
-          const why = frame === "none" ? "Build the coordinate system first (the Coordinate system panel)." : "The coordinate system is out of date: build it again first.";
+          const why = frame === "none" ? "Set the part's axes first (the panel “The part's axes”)." : "The part's axes are out of date: set them again first.";
           return (
             <div key={m.value} className="flex items-center gap-1">
               <label className={cn("flex flex-1 cursor-pointer items-center gap-2 rounded-md px-2 py-1 text-xs", method === m.value ? "bg-accent-soft text-fg" : "text-muted hover:bg-surface-2", off && "cursor-not-allowed opacity-50")} title={off ? why : undefined}>
@@ -359,9 +359,9 @@ export function ComparePanel({
         })}
       </div>
       {tool.job ? (
-        <JobProgress job={tool.job} label="Aligning with the reference" cancelTitle="Stop aligning. The alignment kept before stays." icon={GitCompareArrows} />
+        <JobProgress job={tool.job} label="Aligning with the CAD model" cancelTitle="Stop aligning. The alignment kept before stays." icon={GitCompareArrows} />
       ) : method === "points" ? (
-        <Button size="sm" icon={MousePointerClick} disabled={!tool.refGeometry || picking} onClick={onPickPoints} title={tool.refGeometry ? "Click matching points on the scan and on the reference" : "Reading the reference's mesh…"}>
+        <Button size="sm" icon={MousePointerClick} disabled={!tool.refGeometry || picking} onClick={onPickPoints} title={tool.refGeometry ? "Click matching points on the scan and on the CAD model" : "Reading the CAD model's mesh…"}>
           Pick points…
         </Button>
       ) : (
@@ -419,12 +419,12 @@ export function ComparePanel({
         <>
           <div className="flex items-start gap-1">
             <div className="min-w-0 flex-1">
-              <Switch checked={tool.ghost} onChange={tool.setGhost} label="Show the reference as a ghost" disabled={!tool.refGeometry} />
+              <Switch checked={tool.ghost} onChange={tool.setGhost} label="Show the CAD model as a ghost" disabled={!tool.refGeometry} />
             </div>
             <Help text={HELP.ghost} label="Ghost" />
           </div>
-          {tool.refMeshError ? <div className="text-[11px] text-danger">Couldn't read the reference's mesh: {tool.refMeshError}</div> : null}
-          <Button size="sm" variant={shadingOn ? "primary" : "secondary"} icon={Eye} className="w-full" aria-pressed={shadingOn} onClick={() => onShading(!shadingOn)} title="The scan coloured by its deviation from the reference (7)">
+          {tool.refMeshError ? <div className="text-[11px] text-danger">Couldn't read the CAD model's mesh: {tool.refMeshError}</div> : null}
+          <Button size="sm" variant={shadingOn ? "primary" : "secondary"} icon={Eye} className="w-full" aria-pressed={shadingOn} onClick={() => onShading(!shadingOn)} title="The scan coloured by its deviation from the CAD model (7)">
             {shadingOn ? "Shown on the scan" : "Show it on the scan"}
           </Button>
           <div>
@@ -464,7 +464,7 @@ export function ComparePanel({
             <div>
               <div className="mb-1.5 flex items-center gap-1">
                 <span className="flex-1 text-[11px] font-semibold uppercase tracking-wider text-subtle">Outside the tolerance</span>
-                <Help text={HELP.uncertainty} label="The scan's own uncertainty" />
+                <Help text={HELP.uncertainty} label="The scan's own scatter" />
               </div>
               <ol className="space-y-2" aria-label="Areas outside the tolerance, largest first">
                 {(all ? a.regions : a.regions.slice(0, FIRST)).map((r, i) => (

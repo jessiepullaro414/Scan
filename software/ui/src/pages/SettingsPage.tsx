@@ -51,9 +51,9 @@ const SECTION_ICON: Record<string, LucideIcon> = {
 
 const SECTION_HELP: Record<string, string> = {
   paths: "Where calibration and scans are stored",
-  camera: "Stereo camera mode and exposure",
-  pico: "Emitter / IMU controller on USB",
-  emitters: "Emitter levels per profile: vertical, horizontal, dots (%)",
+  camera: "Camera mode and exposure",
+  pico: "Control board (Pico or ESP32) on USB: lasers, dots, motion sensor",
+  emitters: "Laser and dot levels per profile: vertical, horizontal, dots (%)",
   live: "Preview-quality processing while scanning",
   process: "Meshing defaults (Standard and Best quality)",
   board: "ChArUco calibration board",

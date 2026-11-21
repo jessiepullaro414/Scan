@@ -26,13 +26,13 @@ export const VOXELS = [0.5, 1, 2] as const;
 type KeepFields = Pick<Scan, "keep" | "freed" | "has_recording" | "merged_from">;
 
 const STAGES: Record<StageId, { label: string; icon: LucideIcon; what: string }> = {
-  track: { label: "Track", icon: Waypoints, what: "Follows the scanner through the recording and fuses the depth into a mesh." },
+  track: { label: "Follow the camera", icon: Waypoints, what: "Follows the scanner through the recording and builds a first mesh from the depth." },
   straighten: {
     label: "Straighten",
     icon: Spline,
     what: "Finds where the scan came back to a place it had seen and closes those loops, then lines the scan up where the laser lines of different frames cross.",
   },
-  fuse: { label: "Fuse", icon: Layers, what: "Builds the mesh again from the camera path, at the detail you choose." },
+  fuse: { label: "Build the surface", icon: Layers, what: "Builds the mesh again from the camera path, at the detail you choose." },
   spacetime: {
     label: "Refine from the images",
     icon: Images,
@@ -166,7 +166,7 @@ export function StagesPanel({ pid, sid, state, busy, scan }: { pid: string; sid:
       ) : !straighten.summary ? (
         <p className="text-xs text-muted">
           {straighten.state === "skipped"
-            ? "Skipped: the poses from Track are used as they are."
+            ? "Skipped: the camera path from “Follow the camera” is used as it is."
             : "No loops found: the scan never came back to a place it had already seen, so there was nothing to correct and the mesh is unchanged."}
         </p>
       ) : null
@@ -182,7 +182,7 @@ export function StagesPanel({ pid, sid, state, busy, scan }: { pid: string; sid:
           state={state}
           busy={busy}
           blocked={gone("track")}
-          runLabel={track.state === "none" ? "Run Track" : "Re-run"}
+          runLabel={track.state === "none" ? "Run" : "Run again"}
           onRun={() => go("track", () => runStage(pid, sid, "track", { quality }))}
           details={
             track.state === "done" && (track.tracked_pct !== null || track.quality) ? (
@@ -198,7 +198,7 @@ export function StagesPanel({ pid, sid, state, busy, scan }: { pid: string; sid:
           }
         >
           <Segmented<ProcessQuality>
-            label="Track quality"
+            label="Quality"
             size="sm"
             value={quality}
             onChange={setQuality}
@@ -212,8 +212,8 @@ export function StagesPanel({ pid, sid, state, busy, scan }: { pid: string; sid:
           stage={straighten}
           state={state}
           busy={busy}
-          blocked={gone("straighten") ?? (tracked ? null : "Run Track first")}
-          runLabel={straighten.state === "none" ? "Straighten" : "Re-run"}
+          blocked={gone("straighten") ?? (tracked ? null : "Run “Follow the camera” first")}
+          runLabel={straighten.state === "none" ? "Straighten" : "Run again"}
           onRun={() => go("straighten", () => runStage(pid, sid, "straighten"))}
           details={straightenDetails}
         />
@@ -223,19 +223,19 @@ export function StagesPanel({ pid, sid, state, busy, scan }: { pid: string; sid:
           stage={fuse}
           state={state}
           busy={busy}
-          blocked={gone("fuse") ?? (tracked ? null : "Run Track first")}
-          runLabel={fuse.state === "none" ? "Fuse" : "Re-run"}
+          blocked={gone("fuse") ?? (tracked ? null : "Run “Follow the camera” first")}
+          runLabel={fuse.state === "none" ? "Build" : "Run again"}
           onRun={() => go("fuse", () => runStage(pid, sid, "fuse", { voxel_mm: voxel }))}
           details={
             fuse.state === "done" && fuse.voxel_mm !== null && !fuse.summary ? (
               <p className="text-xs text-fg">
-                Voxel size <b className="font-semibold tnum">{fmtFixed(fuse.voxel_mm, 1)}&#8239;mm</b>
+                Mesh detail <b className="font-semibold tnum">{fmtFixed(fuse.voxel_mm, 1)}&#8239;mm</b>
               </p>
             ) : null
           }
         >
           <Segmented<string>
-            label="Voxel size"
+            label="Mesh detail"
             size="sm"
             value={String(voxel)}
             onChange={(v) => setVoxel(Number(v))}
@@ -251,8 +251,8 @@ export function StagesPanel({ pid, sid, state, busy, scan }: { pid: string; sid:
             stage={spacetime}
             state={state}
             busy={busy}
-            blocked={gone("spacetime") ?? (tracked && state.base ? null : "Run Track first")}
-            runLabel={spacetime.state === "none" ? "Refine" : "Re-run"}
+            blocked={gone("spacetime") ?? (tracked && state.base ? null : "Run “Follow the camera” first")}
+            runLabel={spacetime.state === "none" ? "Refine" : "Run again"}
             onRun={() => go("spacetime", () => runStage(pid, sid, "spacetime"))}
           >
             <Help>The rest keeps the fused surface. Run it before Refine with lasers, which starts over after it.</Help>
@@ -264,8 +264,8 @@ export function StagesPanel({ pid, sid, state, busy, scan }: { pid: string; sid:
           stage={refine}
           state={state}
           busy={busy}
-          blocked={gone("refine") ?? (tracked && state.base ? null : "Run Track first")}
-          runLabel={refine.state === "none" ? "Refine" : "Re-run"}
+          blocked={gone("refine") ?? (tracked && state.base ? null : "Run “Follow the camera” first")}
+          runLabel={refine.state === "none" ? "Refine" : "Run again"}
           onRun={() => go("refine", () => runStage(pid, sid, "refine"))}
           details={
             (refine.state === "done" || refine.state === "skipped") && refine.outliers ? (
@@ -288,8 +288,8 @@ export function StagesPanel({ pid, sid, state, busy, scan }: { pid: string; sid:
       <ConfirmDialog
         open={!!confirm}
         onClose={() => setConfirm(null)}
-        title={confirm ? `Re-run ${STAGES[confirm.stage].label}?` : ""}
-        confirmLabel={confirm ? `Re-run ${STAGES[confirm.stage].label}` : "Re-run"}
+        title={confirm ? `Run “${STAGES[confirm.stage].label}” again?` : ""}
+        confirmLabel={confirm ? "Run it again" : "Run again"}
         onConfirm={() => confirm?.run()} // U6: a run that could not start keeps the dialog open
       >
         This starts the edits over: {edits === 1 ? "your edit is" : `your ${fmtInt(edits)} edits are`} cleared, because the faces of a new mesh don't

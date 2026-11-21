@@ -117,7 +117,7 @@ check(opts.map((o) => o.value).join() === "listed,a,b" && opts.map((o) => o.labe
 check(opts.every((o) => !!o.title), "each option says what it does");
 check(moveOptions("A very long name for a plane", "B")[1].label === "Move A very lo…", `a long name: ${moveOptions("A very long name for a plane", "B")[1].label}`);
 check(moveText("listed", "Top", "Bottom") === "Listed in the CAD file's notes only; no shape moves.", moveText("listed", "Top", "Bottom"));
-check(moveText("b", "Top", "Bottom") === "In the CAD file, a copy of Bottom is turned and slid to suit Top; the measured fits stay as they are.", moveText("b", "Top", "Bottom"));
+check(moveText("b", "Top", "Bottom") === "In the CAD file, a copy of Bottom is turned and slid to suit Top; the measured fitted shapes stay as they are.", moveText("b", "Top", "Bottom"));
 check(moveText("a", "Top", "Bottom").includes("a copy of Top") && moveText("a", "Top", "Bottom").includes("to suit Bottom"), "the first moves");
 check(MOVE_HELP.includes("smallest") && MOVE_HELP.includes("order"), `move help: ${MOVE_HELP}`);
 

@@ -92,7 +92,7 @@ export const useReferences = create<ReferencesStore>((set, get) => {
         patchList(pid, { refs: (get().lists[pid]?.refs ?? []).map((r) => (r.id === rid ? rec : r)) });
         return true;
       } catch (e) {
-        toast.error("Couldn't rename the reference", e);
+        toast.error("Couldn't rename the CAD model", e);
         return false;
       }
     },
@@ -102,7 +102,7 @@ export const useReferences = create<ReferencesStore>((set, get) => {
         await api.deleteReference(pid, rid);
       } catch (e) {
         if (!(e instanceof ApiError && e.status === 404)) {
-          toast.error("Couldn't remove the reference", e);
+          toast.error("Couldn't remove the CAD model", e);
           return false;
         }
       }
@@ -124,7 +124,7 @@ export const useReferences = create<ReferencesStore>((set, get) => {
       }
     },
 
-    start: (pid, sid, rid, tolerance) => change(pid, sid, "Couldn't compare with this reference", () => api.startComparison(pid, sid, rid, tolerance)),
+    start: (pid, sid, rid, tolerance) => change(pid, sid, "Couldn't compare with this CAD model", () => api.startComparison(pid, sid, rid, tolerance)),
 
     units: (pid, sid, action) => change(pid, sid, "Couldn't settle the units", () => api.comparisonUnits(pid, sid, action)),
 
@@ -142,7 +142,7 @@ export const useReferences = create<ReferencesStore>((set, get) => {
         return null;
       } catch (e) {
         patchCmp(pid, sid, { busy: false });
-        toast.error("Couldn't align the scan with the reference", e);
+        toast.error("Couldn't align the scan with the CAD model", e);
         return null;
       }
     },

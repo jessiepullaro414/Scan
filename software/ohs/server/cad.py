@@ -277,7 +277,7 @@ class CadExport:
         counts = {"plane": 0, "cylinder": 0, "hole": 0, "point": 0}
         out = {"boundary": boundary, "n_fits": len(r["features"]), "counts": counts,
                "frame": "part" if r["frame"] is not None else "scan",
-               "frame_label": "the part's frame" if r["frame"] is not None else "the scan's own frame",
+               "frame_label": "the part's axes" if r["frame"] is not None else "the scan's own axes",
                "notes": [], "warnings": r["warnings"], "stale": r["stale"], "outline": None, "step_bytes": None,
                "macro_bytes": None, "filenames": self._filenames(r["scan"]), "mesh_version": r["version"],
                "reason": None, "nominal": r["nominal"]}

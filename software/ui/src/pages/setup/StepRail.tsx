@@ -163,7 +163,7 @@ export function StepRail({
                       ) : it.state === "optional" ? (
                         <span className="text-[10.5px] font-medium text-subtle">Optional</span>
                       ) : it.state === "warn" ? (
-                        <span className="text-[10.5px] font-medium text-warn">Check</span>
+                        <span className="text-[10.5px] font-medium text-warn">Attention</span>
                       ) : null}
                     </span>
                     {it.summary ? <span className="mt-0.5 line-clamp-2 block text-xs leading-[1.35] text-subtle">{it.summary}</span> : null}

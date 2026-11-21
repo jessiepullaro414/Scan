@@ -26,10 +26,10 @@ export const SECTION_ICON = Slice;
 
 const HELP = {
   fit: "A kept plane, moved along its own normal by the offset (+ the way its normal points). Drag the slider: the cut follows.",
-  frame: "A plane of the part's coordinate system: X, Y or Z = the value, in mm from the part's origin. The drawing is in the part's axes.",
+  frame: "A plane of the part's axes: X, Y or Z = the value, in mm from the part's origin. The drawing is in the part's axes.",
   points: "Click three points on the surface: the plane goes through them. Their order sets the side the drawing is seen from (right-hand rule).",
   hide: "Hides the part of the model on the side the plane's normal points to: the side the profile is seen from. Only the view: the mesh is not changed.",
-  kept: "A kept section keeps its plane as numbers (the fit or the coordinate system it was named from can change or go: it stays). Its lines are not kept: opening it cuts the current mesh again.",
+  kept: "A kept section keeps its plane as numbers (the fitted shape or the part's axes it was named from can change or go: it stays). Its lines are not kept: opening it cuts the current mesh again.",
 } as const;
 
 function Help({ text, label }: { text: string; label: string }) {
@@ -149,7 +149,7 @@ export function SectionPanel({
             onChange={tool.setMode}
             options={[
               { value: "fit", label: "Kept plane", title: planes.length ? HELP.fit : "Fit a plane first (Fit, P)", disabled: !planes.length },
-              { value: "frame", label: "Part's frame", title: hasFrame ? HELP.frame : "Build the coordinate system first", disabled: !hasFrame },
+              { value: "frame", label: "Part's axes", title: hasFrame ? HELP.frame : "Set the part's axes first", disabled: !hasFrame },
               { value: "points", label: "3 points", title: HELP.points },
             ]}
           />
@@ -176,7 +176,7 @@ export function SectionPanel({
             <>
               {row(
                 "Axis",
-                { text: HELP.frame, label: "A plane of the part's frame" },
+                { text: HELP.frame, label: "A plane of the part's axes" },
                 <>
                   <Segmented<SectionAxis>
                     label="Axis"

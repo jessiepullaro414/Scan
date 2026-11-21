@@ -37,7 +37,7 @@ export function Sidebar({ route }: { route: Route }) {
   const setupLabel = stale
     ? `Setup: ${stale.title.charAt(0).toLowerCase()}${stale.title.slice(1)}`
     : drift
-    ? "Setup: the launch check found calibration drift"
+    ? "Setup: the start-up check found calibration drift"
     : calibMissing
       ? "Setup: no calibration yet"
       : calibrating

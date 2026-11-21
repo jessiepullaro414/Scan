@@ -89,7 +89,7 @@ check(loadedLine({ ...v, state: "check", title: "Check recommended" }).warn, "lo
 check(v.reason === VALID.reason, "the engine's own sentence");
 check(v.action === null && v.then === null, "valid has no button");
 // never says a part is fine when it was not judged
-check(v.judged === "Not judged yet: the lasers and the IMU. A scan made with this calibration judges them.", `not judged: ${v.judged}`);
+check(v.judged === "Not judged yet: the lasers and the motion sensor. A scan made with this calibration judges them.", `not judged: ${v.judged}`);
 check(!/lasers[^.]*(fine|valid|good)/i.test(`${v.title} ${v.reason} ${v.judged}`), "the lasers are never called fine");
 check(v.provisional === PROVISIONAL && PROVISIONAL === "The limits are provisional until the real scanner has been measured.", "provisional line");
 
@@ -103,21 +103,21 @@ check(c.judged === null, "everything judged: no line");
 const r = healthView(RECAL_CAMERAS)!;
 check(r.tone === "danger" && r.title === "Recalibration required for the cameras", `recalibrate title: ${r.title}`);
 check(r.short === "Recalibrate", `recalibrate chip word: ${r.short}`);
-check(r.action?.page === "check" && r.action.label === "Run the 2-minute check" && r.action.hint === "Run the 2-minute check to confirm", "confirm with the check first");
+check(r.action?.page === "check" && r.action.label === "Check the calibration" && r.action.hint === "Run the 2-minute check to confirm", "confirm with the check first");
 check(r.then === "If the check does not pass, redo the camera calibration.", "then for the cameras");
 
 const a = healthView(AGE)!;
 check(a.title === "Check recommended", `the calibration as a whole: ${a.title}`);
 
 check(healthView({ ...RECAL_CAMERAS, action: { step: "stereo", text: "Redo the camera calibration, then the lasers and the IMU (a new camera calibration needs them again)" } })!.action!.label === "Redo the cameras", "stereo button");
-check(healthView({ ...CHECK_LASERS, part: "imu", action: { step: "imu", text: "Redo the IMU calibration" } })!.title === "Check recommended for the IMU", "the IMU in capitals");
-check(healthView({ ...CHECK_LASERS, part: "imu", action: { step: "imu", text: "Redo the IMU calibration" } })!.action!.label === "Redo the IMU", "IMU button");
+check(healthView({ ...CHECK_LASERS, part: "imu", action: { step: "imu", text: "Redo the IMU calibration" } })!.title === "Check recommended for the motion sensor", "the motion sensor in words");
+check(healthView({ ...CHECK_LASERS, part: "imu", action: { step: "imu", text: "Redo the IMU calibration" } })!.action!.label === "Redo the motion sensor", "IMU button");
 
 // the engine's note says why something could not be judged: it replaces the generic line
 const cpu = healthView({ ...VALID, note: "These scans were processed without a graphics card at half resolution, so only the cameras could be judged: the lasers and the IMU are judged only in scans processed at full resolution." })!;
 check(cpu.judged!.startsWith("These scans were processed without a graphics card at half resolution"), `note: ${cpu.judged}`);
-check(healthView({ ...VALID, not_judged: ["imu"] })!.judged === "Not judged yet: the IMU. A scan made with this calibration judges it.", "one part, singular");
-check(healthView({ ...VALID, not_judged: ["cameras", "lasers", "imu"] })!.judged!.includes("the cameras, the lasers and the IMU"), "three parts");
+check(healthView({ ...VALID, not_judged: ["imu"] })!.judged === "Not judged yet: the motion sensor. A scan made with this calibration judges it.", "one part, singular");
+check(healthView({ ...VALID, not_judged: ["cameras", "lasers", "imu"] })!.judged!.includes("the cameras, the lasers and the motion sensor"), "three parts");
 check(healthView({ ...VALID, provisional: false })!.provisional === null, "not provisional: no line");
 check(healthView(null) === null && healthView(undefined) === null, "no calibration: nothing");
 check(healthView({ ...VALID, state: "nonsense" as never }) === null, "an unknown state shows nothing");
@@ -167,7 +167,7 @@ const dv = scanHealthDetail({ health_status: { ...VALID, source: "scan", reason:
 check(dv.tone === "neutral" && dv.headline === "Calibration valid" && dv.reason === "This scan shows nothing off for the cameras.", `valid detail: ${dv.headline}`);
 check(dv.lines.length === 2 && dv.lines[0].startsWith("This scan is short") && dv.lines[1] === PROVISIONAL, `valid detail lines: ${dv.lines.join(" | ")}`);
 const dn = scanHealthDetail({ health_status: { ...VALID, source: "scan", reason: "This scan shows nothing off for the cameras." } })!;
-check(dn.lines[0] === "Not judged in this scan: the lasers and the IMU.", `scan not judged: ${dn.lines[0]}`);
+check(dn.lines[0] === "Not judged in this scan: the lasers and the motion sensor.", `scan not judged: ${dn.lines[0]}`);
 const dc = scanHealthDetail({ health_status: { state: "recalibrate", part: "cameras", reason: "Its rows disagree by 0.41 px." } })!;
 check(dc.tone === "danger" && dc.headline === "Scanned with a calibration that needed recalibrating (cameras)", `recalibrate detail: ${dc.headline}`);
 check(dc.lines.length === 1 && dc.lines[0] === PROVISIONAL, "the short form: the provisional line only");

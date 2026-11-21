@@ -46,15 +46,23 @@ export function fmtExtent(mm: number): string {
 }
 
 export function kindName(kind: CheckKind): string {
-  return kind === "not_measured" ? "Not measured" : "Uncertain";
+  return kind === "not_measured" ? "Not measured" : "Too loose";
 }
 
-/** What a kind means, for the user: one sentence. `k` is the engine's factor (2: the 2σ band). */
-export function kindMeaning(kind: CheckKind, toleranceMm: number, k = 2): string {
-  const band = `${fmtTolerance(k)}σ`;
+/**
+ * What a kind means, for the user: one sentence (UX_PLAN U2: "Measured too loosely for ± 0.3 mm here."). `k` is the
+ * engine's factor (2: the scatter it compares with the tolerance is twice each point's ±); the words do not need it.
+ */
+export function kindMeaning(kind: CheckKind, toleranceMm: number, _k = 2): string {
   return kind === "not_measured"
     ? "Hole filling made this surface up: nothing was measured here."
-    : `The scan's own ${band} here is larger than ± ${fmtTolerance(toleranceMm)}\u202fmm.`;
+    : `Measured too loosely for ± ${fmtTolerance(toleranceMm)}\u202fmm here.`;
+}
+
+/** The scatter the check compares with the tolerance (U2: the same `k` times each point's ± the test uses). */
+export function fmtScatter(sigmaMm: number, k = 2): string {
+  const s = k * sigmaMm;
+  return `${s < 0.1 ? s.toFixed(3) : s < 1 ? s.toFixed(2) : s.toFixed(1)}\u202fmm`;
 }
 
 /**
@@ -74,17 +82,20 @@ export function hasAnswer(r: CheckResult): boolean {
   return r.has_sigma && r.share_ok !== null && !((r.share_not_measured ?? 0) > 0.9995);
 }
 
-/** The answer in one sentence: "92 % of the surface meets ± 0.1 mm; 3 areas need another pass." */
+/**
+ * The answer in one sentence (UX_PLAN U2): "92 % of the surface was measured finely enough for ± 0.1 mm; 3 areas need
+ * another pass." It says how finely the scan measured, not how accurate the part is.
+ */
 export function checkSentence(r: CheckResult): string {
   const tol = `± ${fmtTolerance(r.tolerance_mm)}\u202fmm`;
   const ok = r.share_ok ?? 0;
   const n = r.n_areas;
   if (n === 0) {
-    if (ok >= 1) return `All of the surface meets ${tol}; no area needs another pass.`;
-    return `${fmtShare(ok)} of the surface meets ${tol}; no area is large enough to list.`;
+    if (ok >= 1) return `All of the surface was measured finely enough for ${tol}; no area needs another pass.`;
+    return `${fmtShare(ok)} of the surface was measured finely enough for ${tol}; no area is large enough to list.`;
   }
   const lead = ok <= 0 ? "None" : fmtShare(ok);
-  return `${lead} of the surface meets ${tol}; ${n === 1 ? "1 area needs" : `${n} areas need`} another pass.`;
+  return `${lead} of the surface was measured finely enough for ${tol}; ${n === 1 ? "1 area needs" : `${n} areas need`} another pass.`;
 }
 
 /** What the sentence leaves out, each in a sentence: how the rest splits, the list's cut, the small spots. */
@@ -92,7 +103,7 @@ export function checkNotes(r: CheckResult): string[] {
   const out: string[] = [];
   const unc = r.share_uncertain ?? 0;
   const nm = r.share_not_measured ?? 0;
-  if (unc > 0 && nm > 0) out.push(`Of the rest, ${fmtShare(unc)} of the surface is uncertain and ${fmtShare(nm)} was not measured (filled holes).`);
+  if (unc > 0 && nm > 0) out.push(`Of the rest, ${fmtShare(unc)} of the surface was measured too loosely and ${fmtShare(nm)} was not measured (filled holes).`);
   else if (nm > 0) out.push("All of the rest was not measured (filled holes).");
   const cut = r.n_areas > r.areas.length;
   if (cut) out.push(`The ${r.areas.length} largest of ${r.n_areas} areas are listed.`);

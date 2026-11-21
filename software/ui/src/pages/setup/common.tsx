@@ -34,7 +34,7 @@ export function SimChip({ className }: { className?: string }) {
       side="bottom"
       content={
         <div className="space-y-1">
-          <div className="font-semibold">Simulator sandbox</div>
+          <div className="font-semibold">Simulator</div>
           <div className="text-muted">
             While the simulator is connected, the wizard calibrates the virtual scanner into its own file
             {path ? (
@@ -54,11 +54,11 @@ export function SimChip({ className }: { className?: string }) {
           "inline-flex h-7 shrink-0 items-center gap-1.5 rounded-full border border-accent-line/70 bg-accent-soft px-2.5 text-xs font-medium text-accent",
           className,
         )}
-        aria-label="Simulator sandbox: your real calibration is untouched"
+        aria-label="Simulator: your real calibration is untouched"
       >
         <FlaskConical size={13} aria-hidden />
         <span>
-          Simulator sandbox<span className="hidden xl:inline">: your real calibration is untouched</span>
+          Simulator<span className="hidden xl:inline">: your real calibration is untouched</span>
         </span>
       </span>
     </Tooltip>
@@ -199,7 +199,8 @@ function errorLinks(text: string, here?: SetupPage | null): { label: string; to:
     if (!out.some((o) => o.to === to)) out.push({ label, to });
   };
   if (/no (device|scanner)|not connected|connect (the|a)|replay|pico|control board|stereo camera|camera marked/i.test(text)) add("Go to Connect", paths.setup("connect"), "connect");
-  if (/stereo (step|calibration)|calibrate stereo|stereo first|cameras calibrated first|calibrate the cameras/i.test(text)) add("Go to Stereo", paths.setup("stereo"), "stereo");
+  if (/cameras step|camera calibration|stereo (step|calibration)|calibrate stereo|stereo first|cameras calibrated first|calibrate the cameras/i.test(text))
+    add("Go to Cameras", paths.setup("stereo"), "stereo");
   if (/scan is running|stop the scan/i.test(text)) add("Open the Scan page", paths.scan());
   if (/print|scale bar/i.test(text)) add("Go to Print targets", paths.setup("print"), "print");
   return out.slice(0, 2);

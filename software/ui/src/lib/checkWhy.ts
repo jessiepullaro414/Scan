@@ -51,7 +51,7 @@ export function reasonWords(a: Pick<CheckWhyArea, "reason" | "kind" | "evidence"
     case "few_looks":
       return `It was seen too few times: ${count(e.looks)} separate looks, where the surface that passes had ${count(e.looks_passing)}. Go over it again, more slowly.`;
     case "edge":
-      return "It is on an edge, a tight curve or an uneven surface. The mesh's own uncertainty there is above the tolerance, and another pass alone does not lower it.";
+      return "It is on an edge, a tight curve or an uneven surface. The scan's own scatter there is above the tolerance, and another pass alone does not lower it.";
     default:
       return "The scan's data do not tell why this area is weak.";
   }

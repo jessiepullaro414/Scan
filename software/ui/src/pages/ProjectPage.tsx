@@ -186,7 +186,7 @@ function ScanRow({ project, scan, disk, onFreeSpace }: { project: Project; scan:
                   Open
                 </Button>
                 <span className="sr-secondary">
-                <ProcessButton projectId={project.id} scan={scan} label="Process" />
+                <ProcessButton projectId={project.id} scan={scan} label="Edit mesh…" />
                 <Menu
                   label="Download"
                   width={260}
@@ -204,26 +204,26 @@ function ScanRow({ project, scan, disk, onFreeSpace }: { project: Project; scan:
                     </Button>
                   )}
                 />
-                {remakable ? <MakeMeshButton projectId={project.id} scan={scan} label="Remake" variant="ghost" /> : null}
+                {remakable ? <MakeMeshButton projectId={project.id} scan={scan} label="Make mesh again" variant="ghost" /> : null}
                 </span>
                 <MoreMenu
                   name={scan.name}
                   items={[
-                    { label: "Process", icon: SlidersHorizontal, onSelect: () => navigate(paths.process(project.id, scan.id)) },
+                    { label: "Edit mesh…", icon: SlidersHorizontal, onSelect: () => navigate(paths.process(project.id, scan.id)) },
                     ...downloads,
-                    ...(remakable ? [{ label: "Remake", icon: Wand, hint: "standard quality", onSelect: () => void makeMesh(project.id, scan.id, "standard", scan.name) }] : []),
+                    ...(remakable ? [{ label: "Make mesh again", icon: Wand, hint: "standard quality", onSelect: () => void makeMesh(project.id, scan.id, "standard", scan.name) }] : []),
                   ]}
                 />
               </>
             ) : !recorded ? (
-              <ProcessButton projectId={project.id} scan={scan} label="Process" />
+              <ProcessButton projectId={project.id} scan={scan} label="Edit mesh…" />
             ) : (
               <>
                 <MakeMeshButton projectId={project.id} scan={scan} variant={scan.status === "failed" ? "secondary" : "primary"} />
                 <span className="sr-secondary">
-                  <ProcessButton projectId={project.id} scan={scan} label="Process" variant="ghost" />
+                  <ProcessButton projectId={project.id} scan={scan} label="Edit mesh…" variant="ghost" />
                 </span>
-                <MoreMenu name={scan.name} items={[{ label: "Process", icon: SlidersHorizontal, onSelect: () => navigate(paths.process(project.id, scan.id)) }]} />
+                <MoreMenu name={scan.name} items={[{ label: "Edit mesh…", icon: SlidersHorizontal, onSelect: () => navigate(paths.process(project.id, scan.id)) }]} />
               </>
             )}
           </>

@@ -376,10 +376,10 @@ export function EditsPanel({
               />
             </div>
             <Switch
-              label="Stay within each point's uncertainty"
+              label="Stay within each point's scatter"
               description={
                 hasSigma
-                  ? "No point moves more than 2σ from where it was measured. It holds back well-measured surface and does not protect edges: for edges, use “Where to smooth” above."
+                  ? "No point moves further from where it was measured than the scan's own scatter there. It holds back well-measured surface and does not protect edges: for edges, use “Where to smooth” above."
                   : "Needs a mesh with confidence data (made with a GPU): this one has none."
               }
               checked={withinSigma && hasSigma}
@@ -444,7 +444,7 @@ export function EditsPanel({
           </Button>
         </div>
         {!hasMesh ? (
-          <Help>Edits need a mesh: run Track first.</Help>
+          <Help>Edits need a mesh: run “Follow the camera” first.</Help>
         ) : plan.invalid ? (
           <Help>{plan.invalid}.</Help>
         ) : busy ? (

@@ -209,10 +209,10 @@ function Intro({ kind, other }: { kind: CalibKind; other: CalibSession | null })
   if (!connected) blockers.push({ title: "Connect the scanner first", text: "Calibration needs the camera, or the simulator.", to: paths.setup("connect"), label: "Go to Connect" });
   else if (replay) blockers.push({ title: "A replay is connected", text: "Calibration needs the camera or the simulator.", to: paths.setup("connect"), label: "Go to Connect" });
   if (needsStereo)
-    blockers.push({ title: "Do the stereo step first", text: `The ${lcFirst(meta.title)} builds on the stereo calibration.`, to: paths.setup("stereo"), label: "Go to Stereo" });
+    blockers.push({ title: "Calibrate the cameras first", text: `The ${lcFirst(meta.title)} builds on the camera calibration.`, to: paths.setup("stereo"), label: "Go to Cameras" });
   if (scanning) blockers.push({ title: "A scan is running", text: "A scan and a calibration never run together: stop the scan first.", to: paths.scan(), label: "Open the Scan page" });
   if (kind === "imu" && connected && noPico)
-    blockers.push({ title: "The IMU step needs the Pico", text: "Its IMU is on the Pico. Tracking works without it: you can skip this step.", to: paths.setup("connect"), label: "Go to Connect" });
+    blockers.push({ title: "The motion sensor step needs the control board", text: "The motion sensor is on the control board (Pico or ESP32). Tracking works without it: you can skip this step.", to: paths.setup("connect"), label: "Go to Connect" });
 
   return (
     <StepPage wide>
@@ -269,8 +269,8 @@ function Intro({ kind, other }: { kind: CalibKind; other: CalibSession | null })
           </Callout>
         ) : null}
         {dropsOthers ? (
-          <Callout tone="neutral" icon={TriangleExclamationPoint} title="Saving a new stereo calibration resets the lasers and the IMU">
-            They're expressed in the stereo cameras' frame, so they're dropped when you save a new one: redo those two steps after (about 4 minutes).
+          <Callout tone="neutral" icon={TriangleExclamationPoint} title="Saving a new camera calibration resets the lasers and the motion sensor">
+            They're measured from the cameras, so they're dropped when you save a new one: redo those two steps after (about 4 minutes).
           </Callout>
         ) : null}
         {startError ? <ErrorCallout title={`Couldn't start the ${lcFirst(meta.title)}`} err={startError} here={kind} onRetry={() => void start(kind)} onDismiss={clearError} /> : null}
@@ -289,7 +289,7 @@ function Intro({ kind, other }: { kind: CalibKind; other: CalibSession | null })
           }}
         >
           {/* U40: the IMU step has one Start, on the recording screen; this one gets it ready */}
-          {done ? (kind === "check" ? "Run the check again" : `Calibrate ${lcFirst(STEP_META[kind].title)} again`) : kind === "imu" ? "Get ready" : `Start ${lcFirst(meta.title)}`}
+          {done ? (kind === "check" ? "Run the calibration check again" : `Calibrate ${lcFirst(STEP_META[kind].title)} again`) : kind === "imu" ? "Get ready" : `Start ${lcFirst(meta.title)}`}
         </Button>
         <span className="text-sm text-muted">
           {done
@@ -372,7 +372,7 @@ function useCaptureSound() {
 function SafetyNote() {
   const text = useCalib((s) => s.session?.emitters ?? "");
   const kind = useCalib((s) => s.session?.kind);
-  if ((kind !== "lasers" && kind !== "check") || !/laser/i.test(text) || /stay off|need/i.test(text)) return null;
+  if ((kind !== "lasers" && kind !== "check") || !/laser/i.test(text) || /stay off|need|\boff\b/i.test(text)) return null;
   return (
     <div className="flex items-center gap-2 border-b border-warn/30 bg-warn-soft px-4 py-1.5 text-xs text-fg" role="note">
       <Zap size={13} className="shrink-0 text-warn" aria-hidden />

@@ -76,7 +76,7 @@ function RecipeRow({
             { label: "Just the edits", icon: Play, hint: "keeps the mesh", disabled: !canEdits, onSelect: () => onApply("edits") },
             allBlocked
               ? { label: "Everything", icon: RefreshCw, hint: "not for this scan", disabled: true, description: allBlocked, onSelect: () => undefined }
-              : { label: "Everything", icon: RefreshCw, hint: "re-runs the stages", onSelect: () => onApply("all") },
+              : { label: "Everything", icon: RefreshCw, hint: "runs the stages again", onSelect: () => onApply("all") },
           ]}
           renderTrigger={(t) => (
             <Button
@@ -272,7 +272,7 @@ export function RecipesPanel({
           ))}
         </ul>
       )}
-      <Help className="mt-2.5">“Just the edits” keeps the mesh and replaces the edits. “Everything” re-runs Track, Straighten and Refine with lasers with the recipe's settings first.</Help>
+      <Help className="mt-2.5">“Just the edits” keeps the mesh and replaces the edits. “Everything” runs Follow the camera, Straighten and Refine with lasers again with the recipe's settings first.</Help>
       {allBlocked ? <Help className="mt-1">“Everything”: {allBlocked}</Help> : null}
 
       <SaveRecipeDialog open={saving} onClose={() => setSaving(false)} pid={pid} sid={sid} state={state} />
@@ -294,8 +294,8 @@ export function RecipesPanel({
       <ConfirmDialog
         open={!!confirm}
         onClose={() => setConfirm(null)}
-        title={confirm ? (confirm.scope === "all" ? `Re-run everything with “${confirm.recipe.name}”?` : `Replace the edits with “${confirm.recipe.name}”?`) : ""}
-        confirmLabel={confirm?.scope === "all" ? "Re-run everything" : "Replace the edits"}
+        title={confirm ? (confirm.scope === "all" ? `Run everything again with “${confirm.recipe.name}”?` : `Replace the edits with “${confirm.recipe.name}”?`) : ""}
+        confirmLabel={confirm?.scope === "all" ? "Run everything again" : "Replace the edits"}
         onConfirm={async () => {
           if (confirm) return applyRecipe(pid, sid, confirm.recipe, confirm.scope);
         }}

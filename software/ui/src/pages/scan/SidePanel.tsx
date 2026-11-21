@@ -110,7 +110,7 @@ export function CameraPreviews() {
           <div className="absolute inset-0 grid place-items-center text-center">
             <div className="flex flex-col items-center gap-1.5 px-6 text-xs text-white/50">
               <ImageOff size={20} aria-hidden />
-              {connected ? "Waiting for camera frames…" : "No camera: connect a device"}
+              {connected ? "Waiting for camera frames…" : "No camera: connect the scanner"}
             </div>
           </div>
         )}
@@ -174,7 +174,7 @@ export function ScanSetup({
   const device = useDevice((s) => s.device);
   const connect = useDevice((s) => s.connect);
   const pending = useDevice((s) => s.pending);
-  const busy = useDevice((s) => s.device?.busy ?? (s.simJobId ? "Generating simulator demo…" : null));
+  const busy = useDevice((s) => s.device?.busy ?? (s.simJobId ? "Preparing the simulator…" : null));
   const list = useProjects((s) => s.list);
   const create = useProjects((s) => s.create);
   const project = useProjects((s) => (projectId ? s.details[projectId] : undefined));
@@ -358,7 +358,7 @@ export function LiveStats() {
         <Stat label="Elapsed" value={fmtClock(session?.elapsed_s ?? 0)} />
         <Stat label="Frames" value={fmtInt(session?.frames ?? 0)} />
         <Stat label="Camera" value={status ? fmtFixed(status.fps.camera, 1) : "–"} unit="fps" />
-        <Stat label="Live model" value={status ? fmtFixed(status.fps.pipeline, 1) : "–"} unit="fps" tone={fpsLow ? "text-warn" : undefined} />
+        <Stat label="Live preview" value={status ? fmtFixed(status.fps.pipeline, 1) : "–"} unit="fps" tone={fpsLow ? "text-warn" : undefined} />
         <Stat label="Laser points" value={status ? fmtCompact(status.laser_points) : "–"} />
         <Stat label="Triangles" value={status ? fmtCompact(status.model.triangles) : "–"} />
       </div>

@@ -74,7 +74,7 @@ const finish = (jid: string | undefined, state: Job["state"] = "done") => {
 const err = (body: unknown) => refused(() => passes.link(project, body));
 check(err({ scan_id: "nope", tolerance_mm: 0.3 })?.status === 404, "an unknown scan");
 check(err({ scan_id: "s1", tolerance_mm: 0 })?.detail.includes("tolerance") === true, "a tolerance of 0");
-check(err({ scan_id: "s1", tolerance_mm: 0.3, areas: [5] })?.detail.includes("not in the Check answer") === true, "an area not in the answer");
+check(err({ scan_id: "s1", tolerance_mm: 0.3, areas: [5] })?.detail.includes("not in the Scan check") === true, "an area not in the answer");
 check(err({ scan_id: "s1", tolerance_mm: 0.3, areas: [0, 0] })?.detail.includes("twice") === true, "an area twice");
 check(err({ scan_id: "s1", tolerance_mm: 0.3, version: 9, areas: [0] })?.status === 409, "another mesh version");
 project.scans.push(scan("s0", "No mesh", { result: null, status: "recorded" }));

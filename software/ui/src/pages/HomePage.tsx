@@ -54,7 +54,7 @@ function SetupCard() {
           <Crosshair size={26} aria-hidden />
         </span>
         <div className="min-w-[260px] flex-1">
-          <div className="text-xs font-medium text-accent">{sim ? "Simulator sandbox" : "First run"}</div>
+          <div className="text-xs font-medium text-accent">{sim ? "Simulator" : "First run"}</div>
           <h2 className="font-display text-xl font-semibold text-fg">Set up your scanner</h2>
           <p className="mt-0.5 text-sm text-muted">
             {prog.done === 0
@@ -216,7 +216,7 @@ function GetStarted({ onCreate }: { onCreate: () => void }) {
     {
       icon: Cpu,
       title: "Connect the scanner",
-      text: "Plug in the stereo camera and the Pico, or pick the simulator demo: no hardware needed.",
+      text: "Plug in the scanner's cameras and its control board (Pico or ESP32), or try the simulator: no hardware needed.",
     },
     {
       icon: ScanLine,
@@ -270,7 +270,7 @@ function GetStarted({ onCreate }: { onCreate: () => void }) {
                 await connect({ source: "sim" });
               }}
             >
-              Try the simulator demo
+              Try the simulator
             </Button>
           </div>
         </div>

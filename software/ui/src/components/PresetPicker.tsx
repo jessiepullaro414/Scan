@@ -8,7 +8,7 @@
 import { Boxes, Check } from "lucide-react";
 import { useEffect, useId } from "react";
 import type { PresetKey, PresetValues, ScanMode } from "../api/types";
-import { GENERAL_ID, PRESET_KEYS, cleanHand, presetSummary, valueText } from "../lib/presets";
+import { GENERAL_ID, PRESET_KEYS, PRESET_LABELS, cleanHand, presetSummary, valueText } from "../lib/presets";
 import { cn } from "../lib/util";
 import { usePresets } from "../store/presets";
 import { PresetCardContent, PresetHelp, PresetValueRow } from "./PresetBits";
@@ -37,6 +37,8 @@ export function PresetPicker({ mode, setMode }: { mode: ScanMode; setMode: (m: S
 
   const named = preset.values;
   const shown = PRESET_KEYS.filter((k) => k !== "mode" && (named[k] !== undefined || hand[k] !== undefined));
+  // U47: what the other presets set, shown greyed for a preset that names none of it (General): those stay the app's own
+  const others = PRESET_KEYS.filter((k) => k !== "mode" && !shown.includes(k) && list.some((p) => p.values[k] !== undefined));
   const change = (k: PresetKey, v: PresetValues[PresetKey] | null) => {
     const next = { ...hand, [k]: v ?? undefined } as PresetValues;
     setHand(cleanHand(named, next));
@@ -103,13 +105,21 @@ export function PresetPicker({ mode, setMode }: { mode: ScanMode; setMode: (m: S
                   origin={isChanged ? (named_ !== undefined ? `Changed by hand from ${valueText(k, named_)}` : "Changed by hand") : "From the preset"}
                   onChange={(v) => change(k, v)}
                   onReset={isChanged ? () => change(k, null) : undefined}
-                  note={k === "voxel_mm" ? "Used when the mesh is made. The Process page shows it and can change it again." : undefined}
+                  note={k === "voxel_mm" ? "Used when the mesh is made. The Edit mesh page shows it and can change it again." : undefined}
                 />
               );
             })}
           </div>
         ) : (
-          <p className="text-[11px] text-subtle">Every setting stays as it is in the app.</p>
+          <div className="space-y-1 rounded-lg border border-line bg-surface-2/30 p-3" aria-label="What the preset leaves as it is">
+            {others.map((k) => (
+              <div key={k} className="flex items-baseline justify-between gap-3 text-xs text-subtle">
+                <span>{PRESET_LABELS[k]}</span>
+                <span>the app's own setting</span>
+              </div>
+            ))}
+            <p className="text-[11px] text-subtle">Every setting stays as it is in the app.</p>
+          </div>
         )}
       </div>
     </section>

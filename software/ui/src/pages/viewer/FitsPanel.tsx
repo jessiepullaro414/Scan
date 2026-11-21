@@ -43,7 +43,7 @@ export const FIT_ICON: Record<FitKind, typeof Square> = { plane: Square, cylinde
 // Measured on simulated scans (VALIDATION.md, "The fits' ± on today's engine"): a plane's and a cylinder's ±
 // count that neighbouring points err together, and cover the spread from scan to scan; the scan's biases come on top.
 const SIGMA_NOTE =
-  "± (1σ) is how far the fit could move with the scan's scatter, counting that neighbouring points err together. It is not the accuracy: on simulated scans it covered the spread from one scan to the next, but the shapes were also off the same way on every scan (small bosses 0.15–0.25\u202fmm small in radius).";
+  "± (1σ) is how far the fitted shape could move with the scan's scatter, counting that neighbouring points err together. It is not the accuracy: on simulated scans it covered the spread from one scan to the next, but the shapes were also off the same way on every scan (small bosses 0.15–0.25\u202fmm small in radius).";
 const HOLE_NOTE =
   "± is how well the edge points agree with the circle (1σ). It is not the accuracy: on simulated scans a hole's edge read about 1\u202fmm small in diameter, several times its ±.";
 const FORM_TIP = {
@@ -61,7 +61,7 @@ type SizeSlot = (value: "diameter" | "radius") => ReactNode;
 /** Where the fit is and which way it points: in the part's frame when `frame` is given, else in the scan's. */
 function placeRows(f: FitItem, frame: PartFrameView | null): Row[] {
   const p = placeOf(f.shape, frame);
-  const where = frame ? "in the part's frame" : "in the scan's frame";
+  const where = frame ? "along the part's axes" : "along the scan's axes";
   const sign = f.shape.kind === "plane" || f.shape.kind === "circle" ? " Which way a normal points is not measured: either sign is the same face." : " Which way an axis points is not measured.";
   return [
     [p.positionLabel, fmtVec(p.position), `${f.shape.kind === "plane" ? "The centre of the points the plane was fitted on" : f.shape.kind === "cylinder" ? "The point on the axis nearest the centre of its points" : "The hole's centre"}, mm, ${where}.`],
@@ -75,8 +75,8 @@ function rowsOf(f: FitItem, frame: PartFrameView | null, slot: SizeSlot = () => 
   if (s.kind === "plane") {
     rows.push(
       ["Flatness", fmtLength(s.flatness_mm), "The largest minus the smallest distance of the region's points from the plane. The region only takes points within its tolerance, so a face that is really out of flat reads flatter here than it is."],
-      ["Residual RMS", fmtLength(s.rms_mm), "How far the points lie from the plane, RMS."],
-      ["Normal", degSigma(s.normal_sigma_deg), `1σ of the normal's direction (RMS angle). ${SIGMA_NOTE}`],
+      ["Off the plane, typical", fmtLength(s.rms_mm), "How far the points typically lie from the plane."],
+      ["Normal", degSigma(s.normal_sigma_deg), `1σ of the normal's direction (a typical angle). ${SIGMA_NOTE}`],
       ["Offset", mmSigma(s.offset_sigma_mm), `1σ of the plane's position along its normal, at the region's centre. ${SIGMA_NOTE}`],
     );
   } else if (s.kind === "cylinder") {
@@ -88,15 +88,15 @@ function rowsOf(f: FitItem, frame: PartFrameView | null, slot: SizeSlot = () => 
       ],
       ["Diameter", fmtPm(s.diameter_mm, s.diameter_sigma_mm), SIGMA_NOTE, slot("diameter")],
       ["Radius", fmtPm(s.radius_mm, s.radius_sigma_mm), SIGMA_NOTE, slot("radius")],
-      ["Residual RMS", fmtLength(s.rms_mm), "How far the points lie from the cylinder, RMS."],
-      ["Axis", degSigma(s.axis_sigma_deg), `1σ of the axis direction (RMS angle). ${SIGMA_NOTE}`],
-      ["Axis position", mmSigma(s.point_sigma_mm), `1σ of the axis across itself (RMS distance). ${SIGMA_NOTE}`],
+      ["Off the cylinder, typical", fmtLength(s.rms_mm), "How far the points typically lie from the cylinder."],
+      ["Axis", degSigma(s.axis_sigma_deg), `1σ of the axis direction (a typical angle). ${SIGMA_NOTE}`],
+      ["Axis position", mmSigma(s.point_sigma_mm), `1σ of the axis across itself (a typical distance). ${SIGMA_NOTE}`],
     );
   } else {
     rows.push(
       ["Diameter", fmtPm(s.diameter_mm, s.diameter_sigma_mm), HOLE_NOTE, slot("diameter")],
-      ["Residual RMS", fmtLength(s.rms_mm), "How far the edge points lie from the circle, in its plane, RMS."],
-      ["Centre", mmSigma(s.center_sigma_mm), `1σ of the centre in the hole's plane (RMS distance). ${HOLE_NOTE}`],
+      ["Off the circle, typical", fmtLength(s.rms_mm), "How far the edge points typically lie from the circle, in its plane."],
+      ["Centre", mmSigma(s.center_sigma_mm), `1σ of the centre in the hole's plane (a typical distance). ${HOLE_NOTE}`],
     );
   }
   rows.push(...extentRows(f.extent));
@@ -107,7 +107,7 @@ function rowsOf(f: FitItem, frame: PartFrameView | null, slot: SizeSlot = () => 
       `≈ ${fmtInt(Math.max(1, Math.round(s.n / f.correlated)))}`,
       `Neighbouring points err together, in patches of about ${fmtInt(Math.round(f.correlated))} points, so the fit knows about as much as this many independent points would tell. Its ± are counted that way.`,
     ]);
-  if (f.meanSigma !== null) rows.push(["Mean sigma", fmtSigma(f.meanSigma), "The fitted points' own 1σ from the scan (the confidence map's values), averaged."]);
+  if (f.meanSigma !== null) rows.push(["Points' mean ±", fmtSigma(f.meanSigma), "The fitted points' own ± from the scan (the confidence map's values), averaged."]);
   if (f.tolerance !== null) rows.push(["Tolerance", fmtLength(f.tolerance), "How far from the shape a face could lie and still join the region."]);
   rows.push(...placeRows(f, frame));
   return rows;
@@ -162,7 +162,7 @@ function Relation({
   const rows = r ? relationRows(r) : [];
   const stale = a.stale || b.stale;
   return (
-    <div className="group mt-3 rounded-lg border bg-surface-2/60 px-3 py-2.5" style={{ borderColor: `${PICKED_COLOR}80` }} aria-label="Relation of the two picked fits">
+    <div className="group mt-3 rounded-lg border bg-surface-2/60 px-3 py-2.5" style={{ borderColor: `${PICKED_COLOR}80` }} aria-label="Relation of the two picked fitted shapes">
       <div className="mb-1.5 flex items-center gap-1.5 text-xs font-semibold text-fg">
         <Link2 size={13} className="shrink-0" style={{ color: PICKED_COLOR }} aria-hidden />
         {kept ? (
@@ -343,21 +343,21 @@ export function FitList({
   // kept before the engine measured where a fit's region lies: "Fit again" measures it (on its own mesh)
   const unmeasured = fits.filter((f) => !f.stale && !f.extent).length;
   let hint: ReactNode = null;
-  if (fits.length >= 2 && pickedFits.length === 0) hint = "Click two fits to see how they relate: the angle and the distance between them.";
+  if (fits.length >= 2 && pickedFits.length === 0) hint = "Click two fitted shapes to see how they relate: the angle and the distance between them.";
   else if (pickedFits.length === 1) hint = "Click one more fit to see how they relate.";
   return (
     <>
       {stale ? (
         <div className="mb-2 flex items-center gap-2 rounded-lg border border-line bg-surface-2/60 px-3 py-2 text-[11.5px] leading-4 text-warn">
           <TriangleExclamationPoint size={13} className="shrink-0" aria-hidden />
-          <span className="flex-1">{stale === 1 ? "One fit was" : `${stale} fits were`} fitted on an earlier mesh.</span>
+          <span className="flex-1">{stale === 1 ? "One fitted shape was" : `${stale} fitted shapes were`} fitted on an earlier mesh.</span>
           <Button size="xs" icon={RefreshCw} loading={refitting} disabled={!ready} onClick={onRefit} title="Fit them again on the current mesh, from the clicks they were made with">
             Fit again
           </Button>
         </div>
       ) : unmeasured ? (
         <div className="mb-2 flex items-center gap-2 rounded-lg border border-line bg-surface-2/60 px-3 py-2 text-[11.5px] leading-4 text-muted">
-          <span className="flex-1">{unmeasured === 1 ? "One fit was kept before its size was measured." : `${unmeasured} fits were kept before their size was measured.`}</span>
+          <span className="flex-1">{unmeasured === 1 ? "One fitted shape was saved before its size was measured." : `${unmeasured} fitted shapes were saved before their size was measured.`}</span>
           <Button size="xs" icon={RefreshCw} loading={refitting} disabled={!ready} onClick={onRefit} title="Fit them again from the clicks they were made with, on the same mesh: the shapes stay the same, and their size and outline are measured">
             Fit again
           </Button>

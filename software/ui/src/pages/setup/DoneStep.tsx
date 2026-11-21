@@ -100,7 +100,7 @@ export function DoneStep() {
               </div>
               {!canScan ? (
                 <p className="mt-2 text-xs text-warn">
-                  {device?.connected ? "Scanning needs the stereo calibration: finish the Stereo step first." : "Connect the scanner (or the simulator) first."}
+                  {device?.connected ? "Scanning needs the camera calibration: finish the Cameras step first." : "Connect the scanner (or the simulator) first."}
                 </p>
               ) : (
                 <p className="mt-2 text-xs text-subtle">Creates a project called “{FIRST_PROJECT}” and opens the Scan page with a short guide.</p>
@@ -113,7 +113,7 @@ export function DoneStep() {
           >
             <ClipboardCheck size={17} className="text-accent" aria-hidden />
             <span className="flex-1">
-              <b className="font-medium text-fg">Run a 2-minute check any time</b>
+              <b className="font-medium text-fg">Run the calibration check any time</b>
               <span className="text-muted"> before an important scan, or after a knock or a hot day in the car.</span>
             </span>
             <ArrowRight size={15} className="text-subtle" aria-hidden />

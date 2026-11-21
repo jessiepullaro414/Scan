@@ -70,7 +70,7 @@ const blank = (pid: string, sid: string): ProcessEntry => ({
   failure: null,
 });
 
-const STAGE_LABEL: Record<StageId, string> = { track: "Track", straighten: "Straighten", fuse: "Fuse", spacetime: "Refine from the images", refine: "Refine with lasers" };
+const STAGE_LABEL: Record<StageId, string> = { track: "Follow the camera", straighten: "Straighten", fuse: "Build the surface", spacetime: "Refine from the images", refine: "Refine with lasers" };
 
 /** "Filling holes…" → "Filling holes". */
 const fromBusy = (busy: string | null | undefined) => (busy ? busy.replace(/[.…\s]+$/, "") : null);
@@ -259,12 +259,12 @@ useJobs.subscribe((s) => {
       const detail = job.error || job.message || "The job failed.";
       failure = { jobId: jid, label: meta.label, cancelled: false, detail };
       if (!quiet)
-        toast.error(`${meta.label} failed`, { detail, hint: null }, { label: "Open Process", run: () => navigate(paths.process(meta.pid, meta.sid)) });
+        toast.error(`${meta.label} failed`, { detail, hint: null }, { label: "Open Edit mesh", run: () => navigate(paths.process(meta.pid, meta.sid)) });
     } else if (job.state === "cancelled") {
       failure = { jobId: jid, label: meta.label, cancelled: true, detail: job.message && !/^cancel/i.test(job.message) ? job.message : "Stopped before it finished." };
     } else if (job.state === "done") {
       if (failure?.jobId === jid) failure = null;
-      if (!quiet) toast.success(`${meta.label}: done`, undefined, { label: "Open Process", run: () => navigate(paths.process(meta.pid, meta.sid)) });
+      if (!quiet) toast.success(`${meta.label}: done`, undefined, { label: "Open Edit mesh", run: () => navigate(paths.process(meta.pid, meta.sid)) });
     }
     useProcess.setState((st) => ({
       entries: { ...st.entries, [meta.key]: { ...(st.entries[meta.key] ?? blank(meta.pid, meta.sid)), pending, failure } },

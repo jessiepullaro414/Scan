@@ -29,6 +29,7 @@ import {
   fmtExtent,
   fmtShare,
   fmtTolerance,
+  fmtScatter,
   hasAnswer,
   kindMeaning,
   kindName,
@@ -39,7 +40,7 @@ import {
 import { cn } from "../../lib/util";
 import { NOT_MEASURED } from "../../three/confidence";
 import { CHECK_COLOR, type CheckState } from "./useCheck";
-import { fmtSigma, useTheme } from "./ViewerCanvas";
+import { useTheme } from "./ViewerCanvas";
 
 export const CHECK_ICON = SearchCheck;
 
@@ -48,7 +49,7 @@ const FIRST = 6;
 const STEP_MM = 0.05;
 
 const RESTS_ON =
-  "This rests on the scan's own sigma: how much its measurements of each point scatter, and how close the point is to an edge, a gap or the border of the scan. " +
+  "This rests on the scan's own scatter: how much its measurements of each point scatter, and how close the point is to an edge, a gap or the border of the scan. " +
   "It knows nothing of a calibration or scale error, or of a tracking error that shifts a whole area, so the real error can be larger. " +
   "It has been checked on simulated scans only, not on real parts. There, over 99\u202f% of what it passed was good, and much of what it listed was fine too.";
 
@@ -223,6 +224,7 @@ function AreaRow({
   onSelect,
   why,
   whyLoading,
+  result,
   workingMm,
   onShowPose,
 }: {
@@ -238,10 +240,11 @@ function AreaRow({
 }) {
   const Icon = area.kind === "not_measured" ? CircleDashed : Target;
   const rows: [string, string, string][] = [["Share of the surface", fmtShare(area.share), "How much of the whole surface this area is."]];
+  // U2: the scatter is shown as the same measure the check compares with the tolerance
   if (area.sigma_median_mm !== null)
-    rows.push(["Median sigma", fmtSigma(area.sigma_median_mm), "Half of the measured points of this area are surer than this (1σ, from the scan itself)."]);
-  if (area.sigma_worst_mm !== null) rows.push(["Worst sigma", fmtSigma(area.sigma_worst_mm), "The least sure measured point of this area (1σ)."]);
-  if (area.sigma_median_mm === null && area.sigma_worst_mm === null) rows.push(["Sigma", "none", "No point of this area was measured."]);
+    rows.push(["Typical scatter", fmtScatter(area.sigma_median_mm, result.k), "Half of the measured points of this area scatter less than this. The check compares this with the tolerance."]);
+  if (area.sigma_worst_mm !== null) rows.push(["Largest scatter", fmtScatter(area.sigma_worst_mm, result.k), "The measured point of this area that scatters most."]);
+  if (area.sigma_median_mm === null && area.sigma_worst_mm === null) rows.push(["Scatter", "none", "No point of this area was measured."]);
   return (
     <li>
       <button
@@ -342,18 +345,18 @@ export function CheckPanel({
       >
         <div className="min-w-0 flex-1">
           <label htmlFor={id} className="mb-1.5 block text-xs font-medium text-muted">
-            Tolerance your part needs
+            Tolerance
           </label>
           <ToleranceField id={id} value={check.tolerance} onChange={check.setTolerance} />
         </div>
         <Button type="submit" size="sm" variant={check.on ? "secondary" : "primary"} icon={CHECK_ICON} className="h-8" loading={loading}>
-          {check.on ? "Check again" : "Check"}
+          {check.on ? "Check again" : "Check the scan"}
         </Button>
       </form>
       <div id={`${id}-help`} className="mt-1.5 text-[11.5px] leading-4 text-subtle">
         {check.on
           ? `From ${fmtTolerance(TOLERANCE_MIN_MM)} to ${fmtTolerance(TOLERANCE_MAX_MM)}\u202fmm. A new tolerance checks again by itself.`
-          : "How far off the part may be, for example 0.3 for a part that has to fit. Check then tells how much of the scan is good enough, and which areas to scan again."}
+          : "How far off the part may be, for example 0.3 for a part that has to fit. The Scan check then tells how much of the scan was measured finely enough, and which areas to scan again."}
       </div>
 
       {error ? (
@@ -403,6 +406,10 @@ export function CheckPanel({
       {result ? (
         <div className={cn("transition-opacity duration-150", loading && "opacity-50")}>
           <ShareBar result={result} />
+          {/* U2: what this does not know, directly under the verdict */}
+          <div className="mt-1.5 text-[11px] leading-4 text-subtle">
+            <span className="font-semibold text-muted">What this does not know:</span> {RESTS_ON}
+          </div>
           {notes.map((n) => (
             <div key={n} className="mt-1.5 text-[11.5px] leading-4 text-muted">
               {n}
@@ -474,7 +481,6 @@ export function CheckPanel({
               {holes.action ? <div className="mt-1.5">{holes.action}</div> : null}
             </div>
           ) : null}
-          <div className="mt-3 text-[11px] leading-4 text-subtle">{RESTS_ON}</div>
         </div>
       ) : null}
     </>

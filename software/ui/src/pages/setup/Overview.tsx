@@ -92,13 +92,13 @@ function StepCard({ step, index }: { step: SetupStep; index: number }) {
 }
 
 const CLI: { text: string; cmd: string }[] = [
-  { text: "Find the camera and the Pico", cmd: "ohs devices" },
+  { text: "Find the cameras and the control board", cmd: "ohs devices" },
   { text: "Check the hardware", cmd: "ohs selftest" },
   { text: "Make the board, the tags and the projector mask (print at 100\u202f%)", cmd: "ohs printables print/" },
-  { text: "Stereo: 15–25 views, 200–500\u202fmm, tilted 20–45°", cmd: "ohs calibrate stereo" },
+  { text: "Cameras: 15–25 views, 200–500\u202fmm, tilted 20–45°", cmd: "ohs calibrate stereo" },
   { text: "Lasers: 6–10 views, every laser line on the white margin", cmd: "ohs calibrate lasers" },
-  { text: "IMU: hold still 2\u202fs, then rotate for 20–60\u202fs", cmd: "ohs calibrate imu" },
-  { text: "Check: 3–5 views, reports and never writes", cmd: "ohs calibrate check" },
+  { text: "Motion sensor (IMU): hold still 2\u202fs, then rotate for 20–60\u202fs", cmd: "ohs calibrate imu" },
+  { text: "Calibration check: 3–5 views, reports and never writes", cmd: "ohs calibrate check" },
 ];
 
 export function Overview() {
@@ -137,7 +137,7 @@ export function Overview() {
             </div>
             <p className="mt-1 text-sm text-muted">
               {allDone ? (
-                "The scanner is calibrated. Run the 2-minute check before an important scan, or after a knock or a hot day in the car."
+                "The scanner is calibrated. Run the calibration check before an important scan, or after a knock or a hot day in the car."
               ) : (
                 <>
                   Next: <b className="font-medium text-fg">{STEP_META[next].title}</b>. {STEP_META[next].why}
@@ -172,7 +172,7 @@ export function Overview() {
             {launch?.state === "running" ? (
               <div className="flex flex-wrap items-center gap-2.5 border-t border-line bg-surface-2/50 px-6 py-3 text-sm" role="status">
                 <Spinner size={14} className="text-accent" />
-                <span className="text-muted">Launch check: comparing the left and right images…</span>
+                <span className="text-muted">Start-up check: comparing the left and right images…</span>
               </div>
             ) : null}
             <HealthStrip health={health} />
@@ -188,14 +188,14 @@ export function Overview() {
             {launch.state === "running" ? (
               <>
                 <Spinner size={14} className="text-accent" />
-                <span className="text-muted">Launch check: comparing the left and right images…</span>
+                <span className="text-muted">Start-up check: comparing the left and right images…</span>
               </>
             ) : launch.state === "ok" ? (
               <>
                 <Gauge size={15} className="text-ok" aria-hidden />
                 <span className="text-muted">
-                  Launch check: calibration valid
-                  {launch.dv_px !== null ? ` (rows match to ${fmtFixed(launch.dv_px, 2)}\u202fpx)` : ""}, {fmtRelative(launch.when)}.
+                  Start-up check: calibration valid
+                  {launch.dv_px !== null ? ` (left and right match in height to ${fmtFixed(launch.dv_px, 2)}\u202fpx)` : ""}, {fmtRelative(launch.when)}.
                 </span>
               </>
             ) : (
@@ -206,7 +206,7 @@ export function Overview() {
                   <span className="text-muted">{launch.message ?? "Left and right image rows disagree."}</span>
                 </span>
                 <Button size="sm" variant="primary" icon={ClipboardCheck} onClick={() => navigate(paths.setup("check"))}>
-                  Run the 2-minute check
+                  Check the calibration
                 </Button>
               </>
             )}
@@ -224,7 +224,7 @@ export function Overview() {
       </ol>
 
       <div className="grid gap-5 pb-12 lg:grid-cols-[1.2fr_1fr]">
-        <Section title="Calibration file" icon={FileCog} description={setup.target === "sim" ? "The simulator's sandbox" : "Used by the scanner"}>
+        <Section title="Calibration file" icon={FileCog} description={setup.target === "sim" ? "The simulator's own" : "Used by the scanner"}>
           <KeyValue
             rows={[
               [
@@ -250,7 +250,7 @@ export function Overview() {
                 </span>,
               ],
               cal.image_size ? ["Image size", fmtSize(cal.image_size[0], cal.image_size[1], "px")] : null,
-              cal.baseline_mm !== null ? ["Baseline", `${fmtFixed(cal.baseline_mm, 2)}\u202fmm`] : null,
+              cal.baseline_mm !== null ? ["Distance between the cameras", `${fmtFixed(cal.baseline_mm, 2)}\u202fmm`] : null,
               ["Board", <span className="text-xs">{setup.board.describe}{setup.board.scale !== 1 ? `, measured scale ${fmtFixed(setup.board.scale * 100, 2)}\u202f%` : ""}</span>],
             ]}
           />
@@ -262,7 +262,7 @@ export function Overview() {
               checked={!setup.dismissed}
               onChange={(v) => void dismiss(!v)}
               label="Show the setup card on Home"
-              description="Until the stereo calibration is done, Home shows a card that brings you back here."
+              description="Until the camera calibration is done, Home shows a card that brings you back here."
             />
           </Section>
           <Disclosure title="Advanced: the same steps from the command line" icon={Terminal}>

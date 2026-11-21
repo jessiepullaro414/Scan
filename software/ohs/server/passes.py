@@ -205,7 +205,7 @@ class PassManager:
         version = body.get("version")
         if version is not None and (not isinstance(version, int) or int(version) != int(v)):
             raise ApiError(409, f"The mesh of \"{name}\" changed since its Scan check was shown.",
-                           "Run the Scan check again, then press Scan these areas.")
+                           "Run the Scan check again, then press Scan these areas again.")
         samples = {"points": np.zeros((0, 3)), "normals": np.zeros((0, 3)), "weights": np.zeros(0),
                    "area": np.zeros(0, dtype=np.int32), "faces": np.zeros(0, dtype=np.int64)}
         listed: list[dict] = []
@@ -219,7 +219,7 @@ class PassManager:
             bad = [a for a in areas if not 0 <= a < n]
             if bad:
                 raise ApiError(422, f"Area {bad[0] + 1} is not in the Scan check of \"{name}\" at ± {tol:g} mm "
-                                    f"({n} areas).", "Run the Scan check again, then press Scan these areas.")
+                                    f"({n} areas).", "Run the Scan check again, then press Scan these areas again.")
             picked = [r["areas"][a] for a in areas]
             samples = area_samples(V, F, [np.asarray(a["faces"]) for a in picked])
             samples["faces"] = np.concatenate([np.asarray(a["faces"], dtype=np.int64) for a in picked])
@@ -574,7 +574,7 @@ class PassManager:
         if any(isinstance(t, dict) and t.get("table") for t in tables):
             why = "the part was moved, so each scan's table was left out of the merge"
         out["missing"] = {"share": com["missing_share"], "area_mm2": com["missing_mm2"], "why": why}
-        out["whole_note"] = ("Each scan's whole mesh, as its own Check says it: the shares are of different surfaces "
+        out["whole_note"] = ("Each scan's whole mesh, as its own Scan check says it: the shares are of different surfaces "
                              "when the merged scan holds less or more than the first.")
         out["areas_note"] = (None if tol == float(c["tolerance_mm"]) else
                              f"The areas were asked for at ± {float(c['tolerance_mm']):g} mm; here they are judged at ± {tol:g} mm.")

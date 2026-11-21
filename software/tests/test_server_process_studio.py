@@ -165,9 +165,9 @@ def test_a_fresh_scan_and_the_409_rules(env):
         set(s["stages"]["straighten"]) and "voxel_mm" in s["stages"]["fuse"]
     assert {"source", "points", "outliers", "moved_pct", "moved_mm", "residual_before_mm", "residual_after_mm"} <= \
         set(s["stages"]["refine"])
-    err(post(b + "/process/straighten", {}), 409, "track")
-    err(post(b + "/process/refine", {}), 409, "track")
-    err(post(b + "/process/fuse", {"voxel_mm": 2.0}), 409, "track")
+    err(post(b + "/process/straighten", {}), 409, "follow the camera")
+    err(post(b + "/process/refine", {}), 409, "follow the camera")
+    err(post(b + "/process/fuse", {"voxel_mm": 2.0}), 409, "follow the camera")
     err(post(b + "/process/edits", {"op": "fill_holes", "params": {"max_hole_mm": 5}}), 409, "no mesh")
     err(post(b + "/process/undo"), 409, "no mesh")
     err(post(b + "/process/redo"), 409, "no mesh")
@@ -177,7 +177,7 @@ def test_a_fresh_scan_and_the_409_rules(env):
     err(post(b + "/check", {"tolerance_mm": 0.1}), 409, "no mesh")
     err(get(b + "/process/deviation.json"), 409, "no mesh")
     err(get(b + "/process/deviation.bin"), 409, "no mesh")
-    err(get(b + "/process/trajectory.json"), 404, "trajectory")
+    err(get(b + "/process/trajectory.json"), 404, "camera path")
     err(post(b + "/process/track", {"quality": "draft"}), 422)
     err(post(b + "/process/fuse", {"voxel_mm": 0.01}), 422)
     err(post(b + "/process/edits", {"op": "explode"}), 422)
@@ -205,7 +205,7 @@ def test_track_edits_undo_redo_and_the_process_messages(env):
 
         recv_until(ws, done, timeout=180)
         running = [m for m in seen if m["stages"]["track"]["state"] == "running"]
-        assert running and running[0]["busy"] == "Tracking the scan…" and running[0]["job"]["id"] == job["id"]
+        assert running and running[0]["busy"] == "Following the camera…" and running[0]["job"]["id"] == job["id"]
         assert running[0]["stages"]["track"]["job_id"] == job["id"]
     assert wait_job(env, job["id"])["state"] == "done"
     s = get(b + "/process").json()
@@ -234,7 +234,7 @@ def test_track_edits_undo_redo_and_the_process_messages(env):
     assert {"mesh.ply", "mesh.stl", "report.json", "trajectory.csv", "laser_points.ply"} <= {p.name for p in res.iterdir()}
     # edits
     v0 = cur["version"]
-    plan = [("remove_floaters", {"min_size_mm": 5}, "Remove loose pieces smaller than 5 mm"),
+    plan = [("remove_floaters", {"min_size_mm": 5}, "Remove loose bits smaller than 5 mm"),
             ("fill_holes", {"max_hole_mm": 30}, "Fill holes up to 30 mm around (about Ø 10 mm)"),
             ("smooth", {"method": "bilateral", "strength": 0.3}, "Smooth (bilateral, 30 %, edges kept)"),
             ("decimate", {"ratio": 0.5}, "Simplify to 50 % of the triangles")]
@@ -646,7 +646,7 @@ def test_cancel_a_track_and_409_while_recording(env):
     err(post(b + "/process/undo"), 409, "busy")
     err(post(b + "/process/edits", {"op": "fill_holes", "params": {"max_hole_mm": 5}}), 409, "busy")
     st = get(b + "/process").json()
-    assert st["job"] is not None and st["job"]["id"] == job["id"] and st["busy"] == "Tracking the scan…"
+    assert st["job"] is not None and st["job"]["id"] == job["id"] and st["busy"] == "Following the camera…"
     requests.post(f"{env['url']}/api/jobs/{job['id']}/cancel", timeout=T)
     assert wait_job(env, job["id"])["state"] == "cancelled"
     after = get(b + "/process").json()
@@ -735,7 +735,7 @@ def test_refine_with_lasers(env):
 
     pid, sid = add_scan(env, "Refine", env["rec"])
     b = base_url(env, pid, sid)
-    err(post(b + "/process/refine"), 409, "track")
+    err(post(b + "/process/refine"), 409, "follow the camera")
     run_job(env, post(b + "/process/track", {"quality": "preview"}), "process_track")
     s = get(b + "/process").json()
     assert s["stages"]["refine"]["state"] == "none" and s["base"]["stage"] == "track"
@@ -782,7 +782,7 @@ def test_refine_from_the_images(env, monkeypatch):
 
     pid, sid = add_scan(env, "Spacetime", env["rec"])
     b = base_url(env, pid, sid)
-    err(post(b + "/process/spacetime"), 409, "track")
+    err(post(b + "/process/spacetime"), 409, "follow the camera")
     run_job(env, post(b + "/process/track", {"quality": "full"}), "process_track")
     # the 10 frames are fewer than a patch needs by default: nothing changes
     j = run_job(env, post(b + "/process/spacetime"), "process_spacetime")
@@ -850,7 +850,7 @@ def test_measurement_safe_edits(env):
     run_job(env, post(b + "/process/edits", {"op": "smooth", "params": {"method": "bilateral", "strength": 0.3,
                                                                           "within_sigma": True}}), "mesh_edit")
     s = get(b + "/process").json()
-    assert s["edits"][-1]["label"].endswith("within 2σ)") and s["current"]["stats"]["filled_cm2"] > 0
+    assert s["edits"][-1]["label"].endswith("within the scatter)") and s["current"]["stats"]["filled_cm2"] > 0
     run_job(env, post(b + "/process/edits", {"op": "smooth", "params": {"method": "taubin", "strength": 0.3,
                                                                           "flat_only": True}}), "mesh_edit")
     s = get(b + "/process").json()
@@ -1060,7 +1060,7 @@ def test_make_mesh_reports_its_frames_and_rate(env):
     dones = [m["frames"]["done"] for m in track]
     assert dones == sorted(dones) and dones[-1] == n  # the last frame always goes out (forced)
     last = track[-1]
-    assert last["frames"]["fps"] > 0 and last["message"] == f"Tracking: all {n} frames done, making the mesh"
+    assert last["frames"]["fps"] > 0 and last["message"] == f"Following the camera: all {n} frames done, making the mesh"
     # the pass is over: the next update has no frame counter
     after = msgs[msgs.index(last) + 1:]
     assert after and "frames" not in after[0] and get(f"{env['url']}/api/jobs/{jid}").json().get("frames") is None

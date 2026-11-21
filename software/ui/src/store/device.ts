@@ -137,7 +137,7 @@ useJobs.subscribe((s, prev) => {
   if (!job || job === before || isActive(job)) return;
   useDevice.setState({ simJobId: null });
   void useDevice.getState().fetch();
-  if (job.state === "done") toast.success("Simulator demo ready", "The simulator is connected.");
+  if (job.state === "done") toast.success("The simulator is ready", "The simulator is connected.");
   else if (job.state === "failed")
-    toast.error("Couldn't build the simulator demo", { detail: job.error || job.message || "The job failed.", hint: "Check the engine log, then try again." });
+    toast.error("Couldn't prepare the simulator", { detail: job.error || job.message || "The job failed.", hint: "Check the engine log, then try again." });
 });

@@ -100,15 +100,15 @@ THUMB_W = 240
 MAX_LINE_POINTS = 200  # per laser line in the live message
 IMU_FLOW_FRAMES = 600  # the IMU flow uses at most about this many frames (step)
 GUIDANCE = {
-    "stereo": ("Hold the board 200–500 mm from the scanner in 15–25 different poses: cover the corners and edges of "
+    "stereo": ("Hold the board 200–500 mm from the scanner in 15–25 different views: cover the corners and edges of "
                "both pictures and tilt it 20–45° in different directions. Hold still for half a second at each pose."),
-    "lasers": ("Hold the board 150–450 mm away in 6–10 poses at different distances and tilts up to 30°, with both "
+    "lasers": ("Hold the board 150–450 mm away in 6–10 views at different distances and tilts up to 30°, with both "
                "laser lines crossing the white margin around the pattern."),
     "imu": ("Put the board on the table. Press Start, hold the scanner still for 2 s, then rotate it slowly about all "
             "three axes (±20–40°) for 20–60 s, keeping the board in view."),
     "check": "Hold the board near, in the middle and far away (3–5 views), with both laser lines on the page.",
 }
-_KIND_TITLE = {"stereo": "Stereo calibration", "lasers": "Laser calibration", "imu": "IMU calibration",
+_KIND_TITLE = {"stereo": "Camera calibration", "lasers": "Laser calibration", "imu": "Motion sensor calibration",
                "check": "Calibration check"}
 _REASON_HINTS = (
     ("both cameras", "Hold the whole board in front of both cameras, 200–500 mm away."),
@@ -140,7 +140,7 @@ def _busy_words(busy: Any) -> str:
 
 
 def _reason_hint(reason: str) -> str:
-    return next((h for k, h in _REASON_HINTS if k in reason), "Move the board to a new pose and try again.")
+    return next((h for k, h in _REASON_HINTS if k in reason), "Move the board to a new place and try again.")
 
 
 def guidance(kind: str, names: Any = None) -> str:
@@ -152,7 +152,7 @@ def guidance(kind: str, names: Any = None) -> str:
     pairs = [fam for fam, members in guide.families(names).items() if len(members) > 1]
     if kind == "check":
         return f"Hold the board near, in the middle and far away (3–5 views), with all {n} laser lines on the page."
-    text = (f"Hold the board 150–450 mm away in 6–10 poses at different distances and tilts up to 30°, with all {n} "
+    text = (f"Hold the board 150–450 mm away in 6–10 views at different distances and tilts up to 30°, with all {n} "
             "laser lines crossing the white margin around the pattern.")
     if pairs:
         what = " and the two ".join(pairs)
@@ -589,7 +589,7 @@ class CalibrationSession:
                 self._steady.reset()
                 views = list(self.views)
                 steady, ready = 0.0, False
-                reason = f"View {view.index + 1} captured: move the board to a new pose"
+                reason = f"View {view.index + 1} captured: move the board to a new place"
                 outcome = "taken"
                 safe_call("publishing the session", self._on_change)
             except ApiError:
@@ -643,7 +643,7 @@ class CalibrationSession:
             log.warning("the %s laser could not be switched on alone: %s", name, e)
             self._end_burst(burst, ApiError(409, f"Not captured: the {guide.line_label(name)} laser could not be "
                                                  "switched on alone.", "Check the USB cable of the control board "
-                                                                       "(Pico), then capture again."))
+                                                                       "(Pico or ESP32), then capture again."))
             return
         with self._lock:
             burst["after"] = self._seen_index + self._settle
@@ -960,7 +960,7 @@ class CalibrationSession:
         s = rec.close(stopped="auto" if auto else "user", board_fraction=round(board / seen, 3) if seen else None)
         log.info("IMU recording stopped after %.1f s: %d frames", elapsed, s.get("n_frames", 0))
         if auto:
-            self._notify("info", f"The IMU recording stopped after {elapsed:.0f} s: press Finish & calibrate")
+            self._notify("info", f"The motion sensor recording stopped after {elapsed:.0f} s: press Finish & calibrate")
         safe_call("publishing the session", self._on_change)
 
     # ------------------------------------------------------------------ solving
@@ -1090,14 +1090,14 @@ class CalibrationManager:
         if not dev.has_pico:
             return None, None
         if not dev.pico_per_laser():
-            return None, ("The Pico's firmware switches each pair of lasers together, so the lasers are calibrated "
+            return None, ("The control board's firmware switches each pair of lasers together, so the lasers are calibrated "
                           "all at once. Update the firmware to 1.2.0 (firmware/main.py) to light them one at a time.")
         levels = self._levels(kind)
 
         def light(names: Any) -> None:
             only = None if names is None else tuple(lasers.channel_of(n) for n in names)
             if not dev.emitters_to(levels, only=only):
-                raise RuntimeError("the Pico did not take the new levels")
+                raise RuntimeError("the control board did not take the new levels")
 
         return light, None
 
@@ -1108,7 +1108,7 @@ class CalibrationManager:
         if not lines:
             return "Lasers and dots off: room light only"
         if not has_pico:
-            return ("No control board (Pico): the line lasers stay off, so switch them on another way (Class 3R, "
+            return ("No control board (Pico or ESP32): the line lasers stay off, so switch them on another way (Class 3R, "
                     "never look into the beams)")
         return "Line lasers on: Class 3R, never look into the beams"
 
@@ -1140,14 +1140,14 @@ class CalibrationManager:
             calib = st.setup.load_calibration(target)
             if kind != "stereo" and calib is None:
                 raise ApiError(409, f"The {_STEP_WORDS.get(kind, kind)} calibration needs the cameras calibrated "
-                                    "first.", "Calibrate the cameras first (the Stereo step in Setup).")
+                                    "first.", "Calibrate the cameras first (the Cameras step in Setup).")
             if kind == "imu" and source == "camera" and not dev.imu_available():
                 raise ApiError(409, "The motion sensor calibration needs the motion sensor on the control board "
-                                    "(Pico), and it sends nothing.",
+                                    "(Pico or ESP32), and it sends nothing.",
                                "Connect the control board with a USB cable that carries data, then connect the camera "
                                "again.")
             if source == "camera" and kind in ("lasers", "check") and not dev.has_pico:
-                warn = ("No control board (Pico): the line lasers cannot be switched on by the app. Switch them on "
+                warn = ("No control board (Pico or ESP32): the line lasers cannot be switched on by the app. Switch them on "
                         "another way, or connect the control board and start again. Class 3R lasers: never look into the beams.")
             if source == "sim":
                 dev.set_sim_scene(f"calib_{kind}")
@@ -1159,7 +1159,7 @@ class CalibrationManager:
                     if size is not None and tuple(size) != want:
                         raise ApiError(409, f"The camera sends {size[0]}×{size[1]} pictures, but the cameras were "
                                             f"calibrated at {want[0]}×{want[1]}.",
-                                       "Calibrate the cameras again at this picture size (the Stereo step in Setup).")
+                                       "Calibrate the cameras again at this picture size (the Cameras step in Setup).")
                 cam = dev.sim_camera() if source == "sim" else None
                 spec = st.setup.calib_spec(target)
                 lines = self.lines()
@@ -1245,7 +1245,7 @@ class CalibrationManager:
         if s is None or not s.active:
             return
         if kind == "pico" and s.kind != "imu":
-            self.st.notify("warn", "The control board (Pico) disconnected: the lasers are off. Connect it again before "
+            self.st.notify("warn", "The control board disconnected: the lasers are off. Connect it again before "
                                    "you capture more views.")
             return
         folder = s.recording
@@ -1440,7 +1440,7 @@ class CalibrationManager:
             r = s.result
             if s.kind == "check":
                 raise ApiError(409, "A calibration check is not saved: it only tells you whether the calibration "
-                                    "still holds.", "Its result is already in Setup. Calibrate again the parts it "
+                                    "is still valid.", "Its result is already in Setup. Calibrate again the parts it "
                                                     "flagged.")
             if r is None or s.state != "result":
                 raise ApiError(409, "There is no calibration result to save.", "Press Finish & calibrate first.")
@@ -1488,9 +1488,10 @@ class CalibrationManager:
     def _notes(kind: str, existing: Any, new: Any, value: Any, lines: Any = None) -> list[str]:
         notes: list[str] = []
         if kind == "stereo" and existing is not None:
-            gone = (["laser planes"] if existing.lasers else []) + (["IMU calibration"] if existing.imu is not None else [])
+            gone = (["laser calibration"] if existing.lasers else []) + (["motion sensor calibration"]
+                                                                         if existing.imu is not None else [])
             if gone:
-                notes.append(f"The new stereo calibration replaces the old one, so the {' and the '.join(gone)} "
+                notes.append(f"The new camera calibration replaces the old one, so the {' and the '.join(gone)} "
                              f"{'were' if len(gone) > 1 else 'was'} removed: calibrate "
                              f"{'them' if len(gone) > 1 else 'it'} again (steps 5 and 6).")
         if kind == "lasers":

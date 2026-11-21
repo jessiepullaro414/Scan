@@ -254,13 +254,13 @@ export function definitionOf(b: Record<string, unknown>): SectionPlaneDef {
   const kind = b.kind;
   if (typeof kind !== "string" || !KINDS.includes(kind)) return bad(`kind must be one of ${KINDS.join(", ")}, got ${String(kind)}`);
   if (kind === "fit") {
-    if (typeof b.fit !== "string" || !b.fit) return bad("a section on a kept plane needs the kept fit's id (fit)");
+    if (typeof b.fit !== "string" || !b.fit) return bad("A section on a saved plane needs that fitted shape.");
     return { kind, fit: b.fit, offset_mm: b.offset_mm === undefined || b.offset_mm === null ? 0 : num(b.offset_mm, "offset_mm") };
   }
   if (kind === "frame") {
     const a = typeof b.axis === "string" ? b.axis.trim().toUpperCase().replace(/^\+/, "") : "";
     if (!/^-?[XYZ]$/.test(a)) return bad(`axis must be X, Y or Z (with an optional '-'), got ${String(b.axis)}`);
-    if (b.value_mm === undefined || b.value_mm === null) return bad("a section of the part's frame needs value_mm");
+    if (b.value_mm === undefined || b.value_mm === null) return bad("A section along the part's axes needs its value in mm.");
     return { kind, axis: a, value_mm: num(b.value_mm, "value_mm") };
   }
   if (kind === "point_normal") {
@@ -308,7 +308,7 @@ export class MockSections {
     let stale = false;
     if (def.kind === "fit") {
       const f = features.find((x) => x.id === def.fit);
-      if (!f) throw new HttpError(404, `No kept fit “${def.fit}”`, "Read the list again.");
+      if (!f) throw new HttpError(404, `No fitted shape “${def.fit}”`, "Read the list again.");
       full.fit_name = f.name;
       full.fit_mesh_version = f.mesh_version;
       stale = f.mesh_version !== version;

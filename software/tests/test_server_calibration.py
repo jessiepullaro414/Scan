@@ -232,7 +232,7 @@ def test_wizard_end_to_end_on_the_simulator(env):
     assert s["state"] == "result" and r["kind"] == "stereo" and r["grade"] in ("excellent", "good"), r
     assert r["ok"] and r["can_save"] and r["headline"] and r["verdict"] and r["report_url"] == "/api/calibration/report.json"
     labels = [m["label"] for m in r["metrics"]]
-    assert "Reprojection error" in labels and "Row error after rectification" in labels and "Baseline" in labels
+    assert "Reprojection error" in labels and "Left/right height mismatch" in labels and "Distance between the cameras" in labels
     assert {p["index"] for p in r["per_view"]} <= {v["index"] for v in s["views"]} and r["per_view"]
     e = truths["stereo"] = _truth(r, "stereo")
     truths["stereo_views"] = len(s["views"])
@@ -643,7 +643,7 @@ def test_device_target_stereo_is_saved_and_the_camera_reloads_it(tmp_path, demo_
         saved = _ok(_post(url, "/api/calibration/save"))
         info = saved["session"]["saved"]
         assert info["path"] == str(path) and info["backup"] == str(path.with_name("calibration.json.bak"))
-        assert any("laser planes and the IMU calibration were removed" in n for n in info["notes"]), info["notes"]
+        assert any("laser calibration and the motion sensor calibration were removed" in n for n in info["notes"]), info["notes"]
         new = ScannerCalibration.load(path)
         assert not new.lasers and new.imu is None and new.stereo.baseline == pytest.approx(59.4, abs=0.3)
         assert ScannerCalibration.load(path.with_name("calibration.json.bak")).lasers  # the old one, kept
@@ -727,7 +727,7 @@ def test_results_in_plain_words():
            "baseline_mm": 60.0, "rectification_check": {"mean_abs_dv_px": 0.08, "scale_error_pct": 0.05},
            "frame_indices": [k * 2 for k in range(17)], "per_view_errors": errors}
     r = cr.build_result("stereo", good, rep, view_ids=[k * 2 for k in range(17)])
-    assert r["grade"] == "excellent" and r["ok"] and r["can_save"] and r["headline"] == "Excellent stereo calibration"
+    assert r["grade"] == "excellent" and r["ok"] and r["can_save"] and r["headline"] == "Excellent camera calibration"
     bad = {p["index"]: p for p in r["per_view"] if p["bad"]}
     assert set(bad) == {30, 32} and bad[32]["error_px"] is None and bad[30]["error_px"] == 0.9
     assert r["advice"][0]["action"] == "remove_bad_views" and "2 worst views" in r["advice"][0]["text"]
@@ -769,8 +769,8 @@ def test_results_in_plain_words():
                "lasers": {"ok": True, "lasers": {"vertical": {"ok": True, "median_abs_mm": 0.05}}},
                "imu": {"ok": False, "median_residual_deg": 2.0, "verdict": "recalibrate the IMU"}}
     r = cr.build_result("check", None, sim_chk, sim=True)
-    assert r["ok"] and r["grade"] == "excellent" and not any("IMU" in a["text"] for a in r["advice"])
-    assert any(m["label"] == "IMU" and m["value"] == "not checked" and "simulator" in m["help"] for m in r["metrics"])
+    assert r["ok"] and r["grade"] == "excellent" and not any("motion sensor" in a["text"] for a in r["advice"])
+    assert any(m["label"] == "Motion sensor" and m["value"] == "not checked" and "simulator" in m["help"] for m in r["metrics"])
     assert cr.build_result("check", None, sim_chk)["ok"] is False  # on the scanner it counts
     f = cr.failed_result("stereo", cr.plain_error(ValueError("only 3 stereo views with >= 8 common corners, need at least 4")))
     assert f["verdict"] == "Only 3 stereo views with at least 8 common corners, need at least 4." and f["grade"] == "failed"
@@ -913,7 +913,7 @@ def test_results_for_four_lasers():
                residuals={n: rep["residuals"][n] for n in FOUR[:2]}, region_used=dict.fromkeys(FOUR[:2], "margin"))
     r = cr.build_result("lasers", dict.fromkeys(FOUR[:2], object()), two, view_ids=range(7))
     assert r["verdict"] == ("Both laser lines are calibrated well. The laser points lie within vertical 0.03 mm, "
-                            "horizontal 0.04 mm of their planes (median).")
+                            "horizontal 0.04 mm of their lines (median).")
     assert [p["name"] for p in r["planes"]] == ["vertical", "horizontal"]
     assert cr.part_summary("lasers", two, dict.fromkeys(FOUR[:2], object())) == \
         "Both laser lines (vertical 0.03 mm, horizontal 0.04 mm)"

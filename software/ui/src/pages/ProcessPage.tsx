@@ -123,7 +123,7 @@ function describeChange(a: ProcessState | undefined, b: ProcessState | undefined
   if (!a || !b) return "the previous version";
   const baseChanged = a.base?.stage !== b.base?.stage || a.base?.triangles !== b.base?.triangles;
   if (baseChanged && b.cursor === 0)
-    return `before ${b.base ? { track: "Track", straighten: "Straighten", fuse: "Fuse", spacetime: "Refine from the images", refine: "Refine with lasers" }[b.base.stage] : "the stage"} ran again`;
+    return `before ${b.base ? { track: "Follow the camera", straighten: "Straighten", fuse: "Build the surface", spacetime: "Refine from the images", refine: "Refine with lasers" }[b.base.stage] : "the stage"} ran again`;
   if (b.cursor === a.cursor + 1 && b.edits[b.cursor - 1] && (a.edits[a.cursor]?.id !== b.edits[b.cursor - 1].id || a.edits.length < b.edits.length))
     return `before “${b.edits[b.cursor - 1].label}”`;
   if (b.cursor < a.cursor) return "before the undo";
@@ -416,7 +416,7 @@ export default function ProcessPage({ pid, sid }: { pid: string; sid: string }) 
       <EmptyState
         tone="danger"
         icon={CircleExclamationPoint}
-        title={old ? "This engine has no processing studio yet" : "Couldn't load the processing state"}
+        title={old ? "This engine has no Edit mesh page yet" : "Couldn't load the processing state"}
         actions={
           <>
             <Button variant="primary" icon={RefreshCw} loading={entry.loading} onClick={() => void useProcess.getState().fetch(pid, sid)}>
@@ -426,7 +426,7 @@ export default function ProcessPage({ pid, sid }: { pid: string; sid: string }) 
           </>
         }
       >
-        {old ? "The Process page needs OpenHandScan engine 0.3 or newer. “Make mesh” and the viewer still work." : e.detail}
+        {old ? "The Edit mesh page needs OpenHandScan engine 0.3 or newer. “Make mesh” and the viewer still work." : e.detail}
         {!old && e.hint ? <div className="mt-1 text-subtle">{e.hint}</div> : null}
       </EmptyState>
     );
@@ -453,7 +453,7 @@ export default function ProcessPage({ pid, sid }: { pid: string; sid: string }) 
               ? (t.summary ?? "Try again, or try preview quality. The raw recording is kept.")
               : scan?.status === "recording"
                 ? "This scan is still recording. Stop it first."
-                : "Make the mesh in one click (the Default recipe), or go step by step: run Track on the left, then edit."}
+                : "Make the mesh in one click (the Default recipe), or one stage at a time: run “Follow the camera” on the left, then edit."}
         </p>
         <div className="mt-4">
           {activeJob ? (
@@ -511,7 +511,7 @@ export default function ProcessPage({ pid, sid }: { pid: string; sid: string }) 
     <>
       <StatsPanel stats={stats} loading={(!state && !entry?.error && !projectError) || (!!state?.current && !stats)} />
       {state?.current ? (
-        <Panel title="Check" icon={CHECK_ICON}>
+        <Panel title="Scan check" icon={CHECK_ICON}>
           <CheckPanel
             check={check}
             ready={!!mesh}
@@ -725,7 +725,7 @@ export default function ProcessPage({ pid, sid }: { pid: string; sid: string }) 
             <span className="text-subtle" aria-hidden>
               /
             </span>
-            <span className="font-medium text-fg">Process</span>
+            <span className="font-medium text-fg">Edit mesh</span>
           </Overlay>
           {mesh ? (
             <Overlay className="flex flex-wrap items-center gap-1 p-1">
@@ -746,7 +746,7 @@ export default function ProcessPage({ pid, sid }: { pid: string; sid: string }) 
                       disabled: !hasSigma,
                       title: hasSigma
                         ? "How well each point was measured (4)"
-                        : "This mesh has no confidence data: it was made without a GPU or by an earlier version. Run Track again to get it.",
+                        : "This mesh has no confidence data: it was made without a GPU or by an earlier version. Run “Follow the camera” again to get it.",
                     },
                     {
                       value: "deviation",
@@ -771,7 +771,7 @@ export default function ProcessPage({ pid, sid }: { pid: string; sid: string }) 
                 <IconButton
                   icon={Route}
                   size="sm"
-                  label={st?.track.state === "done" ? "Scanner trajectory (T)" : "The trajectory needs a finished Track"}
+                  label={st?.track.state === "done" ? "Camera path (T)" : "The camera path needs “Follow the camera” first"}
                   active={showTraj}
                   loading={traj.loading}
                   disabled={st?.track.state !== "done"}

@@ -42,8 +42,8 @@ const SOURCES: SourceCard[] = [
     id: "camera",
     title: "Camera",
     icon: Camera,
-    text: "The handheld scanner: ELP stereo camera with the Pico for lasers, dot projector, trigger and IMU.",
-    needs: "Stereo camera + Pico on USB",
+    text: "The handheld scanner: its cameras, with the control board (Pico or ESP32) for the lasers and dots, the trigger and the motion sensor.",
+    needs: "Cameras and control board on USB",
   },
   {
     id: "replay",
@@ -54,7 +54,7 @@ const SOURCES: SourceCard[] = [
   },
   {
     id: "sim",
-    title: "Simulator demo",
+    title: "Simulator",
     icon: FlaskConical,
     text: "A simulated scanner over a sphere on a plane, with true calibration. Try the whole app with no hardware.",
     needs: "Nothing",
@@ -92,7 +92,7 @@ function StatusLine({ ok, label, detail }: { ok: boolean | null | "warn"; label:
 
 /** The IMU chip's temperature (firmware 1.1+, or as recorded), when the engine has one. Every
  * recording stores it, so drift with heat can be modelled later. */
-function ImuTemp({ c, label = "IMU temperature", inset = false }: { c: number | null | undefined; label?: string; inset?: boolean }) {
+function ImuTemp({ c, label = "Motion sensor temperature", inset = false }: { c: number | null | undefined; label?: string; inset?: boolean }) {
   if (c == null) return null;
   return (
     <KeyValue
@@ -133,7 +133,7 @@ export function DevicePage() {
   }, [device?.source]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const connected = !!device?.connected;
-  const busy = device?.busy ?? (simJobId ? "Generating simulator demo…" : null);
+  const busy = device?.busy ?? (simJobId ? "Preparing the simulator…" : null);
   const isCurrent = connected && device?.source === choice;
   const calib = device?.calibration;
   const loaded = loadedLine(healthView(useDeviceHealth()));
@@ -268,7 +268,7 @@ export function DevicePage() {
                 </div>
                 {simJob ? <span className="font-mono text-sm text-fg tnum">{Math.round(simJob.progress * 100)}%</span> : null}
               </div>
-              <ProgressBar className="mt-2.5" value={simJob ? simJob.progress : null} label="Simulator demo progress" />
+              <ProgressBar className="mt-2.5" value={simJob ? simJob.progress : null} label="Simulator progress" />
             </div>
           ) : (
           <div className="flex min-h-10 flex-wrap items-center gap-3">
@@ -340,12 +340,12 @@ export function DevicePage() {
                   title="Scanner not found?"
                   actions={
                     <Button size="sm" icon={Usb} onClick={() => navigate(paths.setup("connect"))}>
-                      Find the camera and the Pico
+                      Find the cameras and the control board
                     </Button>
                   }
                 >
-                  Plug the stereo camera into a USB 3 port and the Pico into any port, then connect. The Connect step in Setup lists the
-                  cameras it can see, picks the stereo one, and shows how to flash the Pico.
+                  Plug the cameras into a USB 3 port and the control board (Pico or ESP32) into any port, then connect. The Connect step in
+                  Setup lists the cameras it can see, picks the scanner's, and shows how to flash the control board.
                 </Callout>
               ) : null}
             </div>
@@ -353,7 +353,7 @@ export function DevicePage() {
             <div className="space-y-4">
               <StatusLine
                 ok={!!device.camera?.connected}
-                label={device.camera?.connected ? "Stereo camera connected" : "Stereo camera not found"}
+                label={device.camera?.connected ? "Cameras connected" : "Cameras not found"}
                 detail={device.camera?.connected ? null : "Check the USB 3 cable and that no other app uses the camera."}
               />
               {cameraInfo.length ? (
@@ -365,7 +365,7 @@ export function DevicePage() {
               ) : null}
               <StatusLine
                 ok={!!device.pico?.connected}
-                label={device.pico?.connected ? "Pico connected" : "Pico not found"}
+                label={device.pico?.connected ? "Control board connected" : "Control board not found"}
                 detail={
                   device.pico?.connected
                     ? device.pico.firmware
@@ -380,12 +380,12 @@ export function DevicePage() {
             <div className="space-y-3">
               <StatusLine ok label="Replaying a recording" detail={device.replay?.loop ? "Loops at the end" : "Plays once"} />
               <KeyValue rows={[["Folder", <span className="break-all font-mono text-xs">{device.replay?.path ?? "–"}</span>]]} />
-              <ImuTemp c={device.imu_temp_c} label="IMU temperature (recorded)" />
+              <ImuTemp c={device.imu_temp_c} label="Motion sensor temperature (recorded)" />
             </div>
           ) : (
             <div className="space-y-3">
-              <StatusLine ok label="Simulated scanner" detail="Rendered stereo frames, laser lines, dots and IMU, with true calibration." />
-              <ImuTemp c={device.imu_temp_c} label="IMU temperature (simulated)" />
+              <StatusLine ok label="Simulated scanner" detail="Rendered camera pictures, laser lines, dots and motion sensor, with true calibration." />
+              <ImuTemp c={device.imu_temp_c} label="Motion sensor temperature (simulated)" />
               <Callout icon={FlaskConical} title="Demo data">
                 Scans made with the simulator are real recordings: process, view and measure them like any other.
               </Callout>
@@ -407,7 +407,7 @@ export function DevicePage() {
                 rows={[
                   ["File", <span className="break-all font-mono text-xs" title={calib.path ?? undefined}>{calib.path ?? "from the recording"}</span>],
                   ["Image size", calib.image_size ? fmtSize(calib.image_size[0], calib.image_size[1], "px") : "–"],
-                  ["Baseline", calib.baseline_mm !== null ? `${fmtFixed(calib.baseline_mm, 2)}\u202fmm` : "–"],
+                  ["Distance between the cameras", calib.baseline_mm !== null ? `${fmtFixed(calib.baseline_mm, 2)}\u202fmm` : "–"],
                   [
                     "Laser lines",
                     calib.lasers.length ? (
@@ -439,7 +439,7 @@ export function DevicePage() {
                   </Button>
                 }
               >
-                The setup wizard walks you through it in about 10 minutes: stereo, then the lasers and the IMU. The new calibration loads
+                The setup wizard walks you through it in about 10 minutes: the cameras, then the lasers and the motion sensor. The new calibration loads
                 by itself when you save it.
               </Callout>
             </div>
@@ -450,7 +450,7 @@ export function DevicePage() {
           title="Lasers and dots"
           icon={SlidersHorizontal}
           className="lg:col-span-2"
-          description="Camera only. Replays and the simulator carry their own emitter settings."
+          description="Camera only. Replays and the simulator carry their own laser and dot settings."
           actions={
             device?.source === "camera" && device.pico?.connected ? (
               <span className="inline-flex items-center gap-1.5 text-xs text-warn">
@@ -465,7 +465,7 @@ export function DevicePage() {
                 <EmitterSliders device={device} />
               </div>
             ) : (
-              <Callout tone="warn" icon={TriangleExclamationPoint} title="Pico not found">
+              <Callout tone="warn" icon={TriangleExclamationPoint} title="Control board not found">
                 The emitters, the trigger and the IMU need the Pico. Check its USB cable and flash the firmware (see{" "}
                 <Code>firmware/README.md</Code>), then reconnect.
               </Callout>
@@ -473,8 +473,8 @@ export function DevicePage() {
           ) : (
             <div className="text-sm text-muted">
               {connected
-                ? `Emitter levels can't be changed for ${device?.source === "sim" ? "the simulator" : "a replay"}.`
-                : "Connect the camera to adjust the line lasers and the dot projector."}
+                ? `The lasers and dots can't be changed for ${device?.source === "sim" ? "the simulator" : "a replay"}.`
+                : "Connect the camera to adjust the line lasers and the dots."}
             </div>
           )}
         </Section>

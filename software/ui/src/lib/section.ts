@@ -111,13 +111,13 @@ export type PlaneFit = { id: string; name: string; kind: string; shape: FitShape
 export function planeFromDef(def: SectionPlaneDef, fits: PlaneFit[], frame: PartFrameView | null): SectionPlane {
   if (def.kind === "fit") {
     const f = fits.find((x) => x.id === def.fit);
-    if (!f) throw new Error(`no kept fit '${def.fit}'`);
+    if (!f) throw new Error(`No fitted shape '${def.fit}'`);
     const s = f.shape as { kind: string; point?: number[]; normal?: number[] };
     if (s.kind !== "plane" || !s.point || !s.normal) throw new Error(`a section is cut by a plane, and "${f.name}" is a ${f.kind}`);
     return planeFromFit({ point: s.point, normal: s.normal }, def.offset_mm ?? 0, f.name, frame);
   }
   if (def.kind === "frame") {
-    if (!frame) throw new Error("this scan has no part's frame to cut along");
+    if (!frame) throw new Error("this scan has no part's axes to cut along");
     return planeFromFrame(frame, def.axis, def.value_mm);
   }
   if (def.kind === "point_normal") return planeFromPointNormal(def.point, def.normal, frame);

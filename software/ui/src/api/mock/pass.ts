@@ -44,19 +44,19 @@ export class MockPasses {
     if (!first) throw new HttpError(404, `no scan ${JSON.stringify(c.scan_id)} in project ${JSON.stringify(p.id)}`, "pick a scan from the project's scan list");
     const tol = c.tolerance_mm;
     if (typeof tol !== "number" || !Number.isFinite(tol) || tol <= 0 || tol > 100)
-      throw new HttpError(422, "the tolerance must be a number of mm above 0 (at most 100)", "send the tolerance the Check panel used, for example 0.3");
+      throw new HttpError(422, "The tolerance must be a number of mm above 0 (at most 100).", "Give the tolerance the Scan check used, for example 0.3.");
     if (first.status === "recording" || first.status === "processing")
       throw new HttpError(409, `the scan "${first.name}" is busy`, "wait until it has finished, then scan its areas again");
     if (!first.result) throw new HttpError(409, `the scan "${first.name}" has no mesh yet, so there is nothing to join a pass to`, "make its mesh first; then Check shows which areas to scan again");
     const areas = Array.isArray(c.areas) ? (c.areas as unknown[]) : [];
-    if (!areas.every((a) => Number.isInteger(a))) throw new HttpError(422, "areas must be a list of area numbers", "send the areas' places in the Check answer, from 0");
+    if (!areas.every((a) => Number.isInteger(a))) throw new HttpError(422, "The areas to scan again that the page sent cannot be read.", "Open the Scan check of the first scan again, then press Scan these areas again.");
     if (new Set(areas).size !== areas.length) throw new HttpError(422, "an area is asked for twice", "send each area once");
     if (c.same_setup !== undefined && typeof c.same_setup !== "boolean") throw new HttpError(422, "same_setup must be true or false", "true when the part was not moved since the first scan");
     const r = this.host.check(p, first, tol);
     if (typeof c.version === "number" && c.version !== r.version)
-      throw new HttpError(409, `the mesh of "${first.name}" changed since its Check was shown`, "check it again, then press Scan these areas");
+      throw new HttpError(409, `The mesh of "${first.name}" changed since its Scan check was shown.`, "Run the Scan check again, then press Scan these areas again.");
     const bad = (areas as number[]).find((a) => a < 0 || a >= r.areas.length);
-    if (bad !== undefined) throw new HttpError(422, `area ${bad + 1} is not in the Check answer of "${first.name}" at ± ${tol} mm (${r.areas.length} areas)`, "check the scan again, then press Scan these areas");
+    if (bad !== undefined) throw new HttpError(422, `Area ${bad + 1} is not in the Scan check of "${first.name}" at ± ${tol} mm (${r.areas.length} areas).`, "Run the Scan check again, then press Scan these areas again.");
     const picked = (areas as number[]).map((i) => ({ i, a: r.areas[i] }));
     const poses = (Array.isArray(c.poses) ? (c.poses as PassLink["poses"]) : []).slice(0, 12);
     const noRec = first.merged_from?.length ? null : first.has_recording === false ? `the recording of "${first.name}" was removed to free space, and a merge fuses its frames again` : null;
@@ -85,7 +85,7 @@ export class MockPasses {
   }
 
   private chainOf(s: Scan): PassLink {
-    if (!s.continues) throw new HttpError(409, `"${s.name}" is not a second pass of another scan`, "start one from the Check panel of the first scan: Scan these areas");
+    if (!s.continues) throw new HttpError(409, `"${s.name}" is not a second pass of another scan.`, "Start one from the Scan check of the first scan: Scan these areas again.");
     return s.continues;
   }
 

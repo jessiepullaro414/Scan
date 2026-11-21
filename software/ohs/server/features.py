@@ -186,11 +186,11 @@ class FeatureManager:
         try:
             report = json.loads(path.read_text(encoding="utf-8"))
         except FileNotFoundError:
-            return "tracked", "no processing report: the poses are taken as tracked"
+            return "tracked", "no processing report: the camera path is taken as tracked"
         except (OSError, ValueError):
-            return "tracked", "the processing report cannot be read: the poses are taken as tracked"
+            return "tracked", "the processing report cannot be read: the camera path is taken as tracked"
         if not isinstance(report, dict) or report.get("poses") != "given":
-            return "tracked", "the processing report says the poses were tracked"
+            return "tracked", "the processing report says the camera path was tracked"
         gt = report.get("ground_truth") if isinstance(report.get("ground_truth"), dict) else {}
 
         def worst(key: str) -> float | None:
@@ -200,10 +200,11 @@ class FeatureManager:
 
         rot, trans = worst("rot_deg"), worst("trans_mm")
         if gt.get("n") and rot is not None and trans is not None and rot <= TRUE_POSES_DEG and trans <= TRUE_POSES_MM:
-            return "true", ("the processing report says the poses were given and equal the simulator's true poses "
-                            f"(within {TRUE_POSES_MM:g} mm and {TRUE_POSES_DEG:g}°): the biases at true poses apply")
-        return "tracked", ("the processing report says the poses were given (straightened or fused again from the "
-                           "tracked poses): the biases with tracking apply")
+            return "true", ("the processing report says the camera path was given and equals the simulator's true "
+                            f"path (within {TRUE_POSES_MM:g} mm and {TRUE_POSES_DEG:g}°): the biases at the true path "
+                            "apply")
+        return "tracked", ("the processing report says the camera path was given (straightened, or rebuilt from the "
+                           "tracked path): the biases with tracking apply")
 
     @staticmethod
     def _related(doc: dict, rel: dict) -> tuple[dict | None, list[str]]:

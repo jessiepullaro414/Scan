@@ -663,7 +663,7 @@ class MockBackend {
         this.jobs.set(job.id, job);
         this.jobMeta.set(job.id, { kind: "sim" });
         this.simJobId = job.id;
-        this.device = { ...this.device, busy: "Generating simulator demo…" };
+        this.device = { ...this.device, busy: "Preparing the simulator…" };
         this.send({ type: "device", ...this.device });
         this.send({ type: "job", ...job });
       }
@@ -683,9 +683,9 @@ class MockBackend {
       const warnings: string[] = [];
       if (!cam.stereo_like)
         warnings.push(
-          `camera ${cam.index} delivers ${cam.width}x${cam.height} images, not side-by-side stereo (2560x800): choose the stereo camera in Setup, Connect step`,
+          `Camera ${cam.index} sends ${cam.width}x${cam.height} pictures, not the scanner's side-by-side 2560x800: choose the scanner's cameras in Setup (the Connect step).`,
         );
-      if (!pico) warnings.push("no Pico found: the emitters, the trigger and the IMU are unavailable (flash the firmware? see Setup, Connect step)");
+      if (!pico) warnings.push("The scanner's control board (Pico or ESP32) was not found. You can still scan, but the lasers, the motion sensor and the trigger will not work. Check its USB cable (one that carries data) and its firmware, then press Connect again.");
       if (!this.setup.deviceCalibration().loaded) warnings.push(`no calibration at ~/.ohs/calibration.json: run the setup wizard (Setup)`);
       this.setup.connectedIndex = cam.index;
       this.device = {
@@ -707,7 +707,7 @@ class MockBackend {
         },
         pico: pico
           ? { connected: true, firmware: "ohs-fw 1.1.0", emitters: { ...this.emitters }, imu: "LSM6DSOX", port: "COM5" }
-          : { connected: false, firmware: null, emitters: { ...this.emitters }, imu: null, port: null, error: "no Pico found on any serial port" },
+          : { connected: false, firmware: null, emitters: { ...this.emitters }, imu: null, port: null, error: "The control board (Pico or ESP32) was not found." },
         calibration: this.setup.deviceCalibration(),
         replay: null,
         warnings,
@@ -771,7 +771,7 @@ class MockBackend {
   private start(body: Record<string, unknown>): SessionState {
     if (!this.device.connected) throw new HttpError(409, "No device is connected", "Connect the camera, a replay or the simulator on the Device page.");
     if (!this.device.calibration.loaded)
-      throw new HttpError(409, "No calibration is loaded", "Calibrate the scanner in Setup (the Stereo step), then start the scan again.");
+      throw new HttpError(409, "The scanner is not calibrated yet.", "Calibrate it in Setup, or try the app with the simulator.");
     if (this.sim) throw new HttpError(409, "A scan is already running", "Stop it first.");
     if (this.calib.active())
       throw new HttpError(409, "A calibration session is running", "Finish or cancel it in Setup first: a scan and a calibration never run together.");

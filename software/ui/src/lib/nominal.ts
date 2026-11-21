@@ -62,7 +62,7 @@ export function suggestionTip(s: NominalSuggestion, answer: Pick<NominalAnswer, 
   const lines = [s.sentence];
   if (s.allowed_by === "bias")
     lines.push("Offered only because of a known bias: the measured value alone, with its ±, would not allow it. The bias is a simulator number.");
-  if (answer) lines.push(`Biases ${answer.poses === "true" ? "at true poses" : "with tracking"}: ${answer.poses_reason}.`);
+  if (answer) lines.push(`Biases ${answer.poses === "true" ? "at the true camera path" : "with tracking"}: ${answer.poses_reason}.`);
   lines.push(NOMINAL_NOTE);
   return lines;
 }
@@ -135,7 +135,7 @@ export function biasOnlyHint(offer: NominalOffer | null, withBias: boolean): str
 // ------------------------------------------------------------------ a relation's move in the CAD file
 /** The hover card of a kept relation's "In the CAD file" choice. */
 export const MOVE_HELP =
-  "Listed only (the default): the approved values are named in the CAD file's notes and no shape moves. Move one of the two: the CAD file gets a copy of that fit turned about its own point and slid, the smallest change that makes the approved angle and distance hold; the other stays as measured. Moves are applied in the order they were chosen: a shape is moved by one relation only, and one that an earlier move was measured against stays where it is (the notes say when a move can't be applied, and why). The measured fits and the part's frame never change.";
+  "Listed only (the default): the approved values are named in the CAD file's notes and no shape moves. Move one of the two: the CAD file gets a copy of that fitted shape turned about its own point and slid, the smallest change that makes the approved angle and distance hold; the other stays as measured. Moves are applied in the order they were chosen: a shape is moved by one relation only, and one that an earlier move was measured against stays where it is (the notes say when a move can't be applied, and why). The measured fitted shapes and the part's axes never change.";
 
 /** What a kept relation's move is: "listed" when none is kept. */
 export function moveChoice(r: Pick<KeptRelation, "move">): MoveChoice {
@@ -161,7 +161,7 @@ export function moveOptions(aName: string, bName: string): { value: MoveChoice; 
 export function moveText(choice: MoveChoice, aName: string, bName: string): string {
   if (choice === "listed") return "Listed in the CAD file's notes only; no shape moves.";
   const [moved, fixed] = choice === "a" ? [aName, bName] : [bName, aName];
-  return `In the CAD file, a copy of ${moved} is turned and slid to suit ${fixed}; the measured fits stay as they are.`;
+  return `In the CAD file, a copy of ${moved} is turned and slid to suit ${fixed}; the measured fitted shapes stay as they are.`;
 }
 
 // ------------------------------------------------------------------ ignored offers (this browser only)

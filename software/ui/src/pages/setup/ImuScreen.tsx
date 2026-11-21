@@ -336,7 +336,7 @@ export function ImuScreen() {
                   <Spinner size={42} className="text-accent" />
                   <div className="min-w-[240px] flex-1">
                     <div className="text-xs font-semibold uppercase tracking-wider text-subtle">Recording done</div>
-                    <h2 className="mt-1 font-display text-2xl font-semibold text-fg">Calibrating the IMU…</h2>
+                    <h2 className="mt-1 font-display text-2xl font-semibold text-fg">Calibrating the motion sensor…</h2>
                     <p className="mt-1 text-sm text-muted">{job?.message || "Matching the motion sensor to the camera's movement"}</p>
                     <ProgressBar className="mt-3 max-w-md" value={job && job.state !== "queued" ? job.progress : null} label="Calibration progress" />
                   </div>
@@ -368,7 +368,7 @@ export function ImuScreen() {
             </div>
           </div>
 
-          <aside className="space-y-4" aria-label="IMU recording">
+          <aside className="space-y-4" aria-label="Motion sensor recording">
             <div className="rounded-xl border border-line bg-panel p-3">
               <SmallPreview />
             </div>
@@ -394,7 +394,7 @@ export function ImuScreen() {
       <ConfirmDialog
         open={confirm}
         onClose={() => setConfirm(false)}
-        title="Cancel the IMU calibration?"
+        title="Cancel the motion sensor calibration?"
         confirmLabel="Cancel calibration"
         tone="danger"
         onConfirm={() => cancel()}

@@ -85,18 +85,18 @@ function html(src: ReportSource, opts: Record<string, unknown>, pics: Picture[])
     '<section id="meaning"><h2>What the numbers mean</h2><p>Every ± is one standard deviation of the spread from scan to scan, not the accuracy. No accuracy figure is claimed.</p></section>',
   ];
   if (typeof opts.tolerance_mm === "number")
-    out.push(`<section id="check"><h2>Does the scan meet the tolerance?</h2><p class="note">The demo does not show the Check answer at ± ${esc(opts.tolerance_mm)} mm in its report.</p></section>`);
+    out.push(`<section id="check"><h2>Scan check: measured finely enough for the tolerance?</h2><p class="note">The demo does not show the Scan check at ± ${esc(opts.tolerance_mm)} mm in its report.</p></section>`);
   if (pics.length) {
     const shown = pics.filter((p) => isPng(p.data));
     const left = pics.filter((p) => !isPng(p.data));
-    out.push('<section id="pictures"><h2>Views of the model</h2>');
+    out.push('<section id="pictures"><h2>Views of the mesh</h2>');
     for (const p of shown) out.push(`<figure><img src="data:image/png;base64,${p.data}" alt="${esc(p.title)}"><figcaption><strong>${esc(p.title)}</strong>${p.caption ? `: ${esc(p.caption)}` : ""}</figcaption></figure>`);
     if (left.length) out.push(`<p class="note">Not shown (not a PNG image): ${esc(left.map((p) => p.title).join(", "))}.</p>`);
     out.push("</section>");
   }
   if (feats.length) {
     out.push(
-      `<section id="features"><h2>Measured features</h2><p class="note">${opts.numbers_in_part_frame ? "Asked for in the part's frame; the demo shows the scan's own frame." : "Positions in the scan's own frame."}</p><table><thead><tr><th>Name</th><th>Kind</th><th>Size</th></tr></thead><tbody>`,
+      `<section id="features"><h2>Fitted shapes and measurements</h2><p class="note">${opts.numbers_in_part_frame ? "Asked for along the part's axes; the demo shows the scan's own axes." : "Positions along the scan's own axes."}</p><table><thead><tr><th>Name</th><th>Kind</th><th>Size</th></tr></thead><tbody>`,
     );
     for (const f of feats) out.push(`<tr><td>${esc(f.name)}</td><td>${esc(f.kind)}</td><td>${esc(fitLabel(f.kind, f.shape))}</td></tr>`);
     out.push("</tbody></table></section>");

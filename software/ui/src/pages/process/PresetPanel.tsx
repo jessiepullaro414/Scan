@@ -89,7 +89,7 @@ export function PresetPanel({ pid, sid, busy }: { pid: string; sid: string; busy
           );
         })}
       </div>
-      <Help>The next Make mesh and Track use these values; Fuse uses the mesh detail unless you pick another below.</Help>
+      <Help>The next Make mesh and “Follow the camera” use these values; “Build the surface” uses the mesh detail unless you pick another below.</Help>
     </div>
   );
 }

@@ -146,7 +146,7 @@ export class MockFeatures {
     if (f) return { list: "features", item: f as { id: string; name: string; nominals?: StoredNominal[] } };
     const r = s.relations.find((x) => x.id === id);
     if (r) return { list: "relations", item: r as { id: string; name: string; nominals?: StoredNominal[] } };
-    throw new HttpError(404, `No kept fit or relation “${id}”`, "Read the list again.");
+    throw new HttpError(404, `No fitted shape or relation “${id}”`, "Read the list again.");
   }
 
   /** The values of a kept fit (its diameter or radius) or relation, measured now. */
@@ -329,7 +329,7 @@ export class MockFeatures {
     }
     if (a && b === "outline" && is("GET", 2)) {
       const f = s.features.find((x) => x.id === a);
-      if (!f) throw new HttpError(404, `No kept fit “${a}”`, "Read the list again.");
+      if (!f) throw new HttpError(404, `No fitted shape “${a}”`, "Read the list again.");
       const o = s.outlines.get(a);
       if (o) return json(200, outlineAnswer(a, f.mesh_version, o));
       if (f.extent?.kind === "hole" && f.extent.edge) return json(200, { id: a, mesh_version: f.mesh_version, kind: "hole", edge: f.extent.edge });
@@ -388,9 +388,9 @@ export class MockFeatures {
 
   private keepRelation(s: Stored, body: Record<string, unknown>): KeptRelation {
     const { a, b } = body;
-    if (typeof a !== "string" || typeof b !== "string") return bad("a, b: the ids of two kept fits");
-    for (const ref of [a, b]) if (!s.features.some((f) => f.id === ref)) bad(`No kept fit “${ref}” to relate`, "Keep both fits first, then relate them.");
-    if (a === b) bad("A fit can't be related to itself", "Pick two different fits.");
+    if (typeof a !== "string" || typeof b !== "string") return bad("The page asked for something the app does not know.");
+    for (const ref of [a, b]) if (!s.features.some((f) => f.id === ref)) bad(`No fitted shape “${ref}” to relate`, "Save both fitted shapes first, then relate them.");
+    if (a === b) bad("A fitted shape can't be related to itself.", "Pick two different fitted shapes.");
     const r: KeptRelation = { id: newId("r"), name: cleanName(body.name, nextName(s.relations, "Relation")), a, b, created: nowIso() };
     s.relations.push(r);
     return r;
@@ -399,16 +399,16 @@ export class MockFeatures {
   /** `GET .../features/relate?a=&b=`: two kept fits' relation, not kept. */
   private relate(s: Stored, body: Record<string, unknown>, engine: FeatureEngine): PairRelation {
     const { a, b } = body;
-    if (typeof a !== "string" || typeof b !== "string") return bad("a, b: the ids of two kept fits (?a=…&b=…)");
-    for (const ref of [a, b]) if (!s.features.some((f) => f.id === ref)) throw new HttpError(404, `No kept fit “${ref}”`, "Read the list again.");
-    if (a === b) bad("A fit can't be related to itself", "Pick two different fits.");
+    if (typeof a !== "string" || typeof b !== "string") return bad("The page asked for something the app does not know.");
+    for (const ref of [a, b]) if (!s.features.some((f) => f.id === ref)) throw new HttpError(404, `No fitted shape “${ref}”`, "Read the list again.");
+    if (a === b) bad("A fitted shape can't be related to itself.", "Pick two different fitted shapes.");
     const v = this.relationView(s, { a, b }, engine.version());
     return { a, b, stale: v.stale, relation: v.relation ?? null };
   }
 
   private buildFrame(s: Stored, body: Record<string, unknown>, engine: FeatureEngine) {
     const version = engine.version();
-    if (version === null) throw new HttpError(409, "This scan has no mesh yet", "Make the mesh, fit the features, then build the frame.");
+    if (version === null) throw new HttpError(409, "This scan has no mesh yet.", "Press Make mesh, fit the shapes, then set the part's axes.");
     const inputs = (["primary", "secondary", "origin"] as const).map((role): FrameInput => {
       const ref = body[role];
       if (role === "origin" && ref && typeof ref === "object" && !Array.isArray(ref)) {
@@ -418,11 +418,11 @@ export class MockFeatures {
         if (sg !== undefined && sg !== null && !(typeof sg === "number" && sg >= 0)) bad("origin.sigma_mm: must be 0 or more");
         return { point: [...(pt.point as [number, number, number])], sigma_mm: typeof sg === "number" ? sg : null };
       }
-      if (typeof ref !== "string") return bad(`${role}: the id of a kept fit`);
+      if (typeof ref !== "string") return bad(`${role}: the page did not say which fitted shape`);
       const f = s.features.find((x) => x.id === ref);
-      if (!f) return bad(`No kept fit “${ref}” for the ${role}`, "Pick one of the kept fits.");
+      if (!f) return bad(`No fitted shape “${ref}” for the ${role}`, "Pick one of the saved fitted shapes.");
       if (f.mesh_version !== version)
-        throw new HttpError(409, `The ${role} “${f.name}” was fitted on an earlier mesh (version ${f.mesh_version}, the mesh is now version ${version})`, "Fit it again first, then build the frame.");
+        throw new HttpError(409, `The ${role} “${f.name}” was fitted on an earlier mesh (version ${f.mesh_version}, the mesh is now version ${version})`, "Press Fit again on it first, then set the part's axes.");
       return { feature: f };
     }) as [FrameInput, FrameInput, FrameInput];
     for (const k of ["flip_primary", "flip_secondary", "secondary_zero"])
@@ -433,8 +433,8 @@ export class MockFeatures {
   }
 
   private frameMesh(s: Stored, name: string, engine: FeatureEngine): Response {
-    if (name !== "mesh.ply" && name !== "mesh.stl") throw new HttpError(404, `No file “${name}” in the part's frame`, "Available: mesh.ply, mesh.stl.");
-    if (!s.frame) throw new HttpError(404, "This scan has no part's frame", "Build one first.");
+    if (name !== "mesh.ply" && name !== "mesh.stl") throw new HttpError(404, `No file “${name}” along the part's axes`, "Available: mesh.ply, mesh.stl.");
+    if (!s.frame) throw new HttpError(404, "The part's axes are not set for this scan.", "Set them first.");
     const buf = engine.partMesh?.(s.frame.matrix, name) ?? null;
     if (!buf) throw new HttpError(404, `${name} isn't there yet`, "Make the mesh first.");
     return new Response(buf, {
@@ -447,7 +447,7 @@ export class MockFeatures {
     const ids = body.ids;
     if (ids !== undefined && ids !== null && !(Array.isArray(ids) && ids.every((x) => typeof x === "string"))) bad("ids: must be a list of ids");
     const wanted = Array.isArray(ids) ? (ids as string[]) : null;
-    for (const id of wanted ?? []) if (!s.features.some((f) => f.id === id)) throw new HttpError(404, `No kept fit “${id}”`, "Read the list again.");
+    for (const id of wanted ?? []) if (!s.features.some((f) => f.id === id)) throw new HttpError(404, `No fitted shape “${id}”`, "Read the list again.");
     const version = engine.version();
     if (version === null) throw new HttpError(409, "This scan has no mesh yet", "Make the mesh first.");
     const refitted: string[] = [];

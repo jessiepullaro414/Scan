@@ -132,14 +132,14 @@ TABLE_HINT = "If the part does stand on a table in this scan, select the table w
 #: an edit's and a parameter's names in words (what the user reads in a refusal; UX_PLAN U9)
 _OP_WORDS = {"remove_floaters": "Remove loose bits", "fill_holes": "Fill holes", "smooth": "Smooth",
              "decimate": "Simplify", "delete_faces": "Delete the selection", "keep_faces": "Keep the selection",
-             "remove_table": "Remove the table", "settings": "The recipe's settings", "fuse": "Fuse"}
+             "remove_table": "Remove the table", "settings": "The recipe's settings", "fuse": "Build the surface"}
 _PARAM_WORDS = {"min_triangles": "the smallest piece (in triangles)", "min_size_mm": "the size of a loose bit",
                 "min_fraction": "the share of the mesh", "max_hole_mm": "the hole size",
                 "strength": "the strength", "target_triangles": "the number of triangles",
                 "ratio": "the share of the triangles", "max_error_mm": "the largest change",
                 "margin_mm": "the margin", "voxel_mm": "the mesh detail"}
 #: a stage's work in words, for "... failed"
-_STAGE_WHAT = {"track": "Tracking", "straighten": "Straightening", "fuse": "Building the surface",
+_STAGE_WHAT = {"track": "Following the camera", "straighten": "Straightening", "fuse": "Building the surface",
                "refine": "Refining with the laser lines", "spacetime": "Refining from the images"}
 #: a request the page should never send (an old page, or a bug)
 _RELOAD = "Reload the page and try again."
@@ -160,11 +160,11 @@ FORMAT = 1
 DEFAULT_FLOATERS = {"min_size_mm": 5.0}
 
 #: what the busy line says while a job of each kind runs
-_BUSY = {"process_scan": "Making the mesh…", "process_track": "Tracking the scan…",
-         "process_straighten": "Straightening…", "process_fuse": "Fusing…",
+_BUSY = {"process_scan": "Making the mesh…", "process_track": "Following the camera…",
+         "process_straighten": "Straightening…", "process_fuse": "Building the surface…",
          "process_spacetime": "Refining from the images…", "process_refine": "Refining with the laser lines…",
          "process_recipe": "Applying the recipe…"}
-_BUSY_OPS = {"remove_floaters": "Removing floaters…", "fill_holes": "Filling holes…", "smooth": "Smoothing…",
+_BUSY_OPS = {"remove_floaters": "Removing loose bits…", "fill_holes": "Filling holes…", "smooth": "Smoothing…",
              "decimate": "Simplifying…", "delete_faces": "Deleting the selection…",
              "keep_faces": "Keeping the selection…", "remove_table": "Removing the table…"}
 
@@ -289,7 +289,7 @@ def normalize_op(op: str, params: dict | None) -> tuple[dict, str]:
             parts.append(f"under {out['min_triangles']:,} triangles")
         if "min_fraction" in out:
             parts.append(f"under {_fmt(100 * out['min_fraction'])} % of the mesh")
-        return out, "Remove loose pieces " + " or ".join(parts)
+        return out, "Remove loose bits " + " or ".join(parts)
     if op == "fill_holes":
         m = _num(params, "max_hole_mm", op, 0, 1e5, lo_open=True)
         if m is None:
@@ -323,7 +323,8 @@ def normalize_op(op: str, params: dict | None) -> tuple[dict, str]:
         if flat and away:
             raise ApiError(422, "Smooth: flat areas only, or away from edges, not both.", "Choose one of the two.")
         where = ", flat areas only" if flat else ", away from edges" if away else ""
-        label = f"Smooth ({method}, {round(100 * s)} %{', edges kept' if keep else ''}{where}{', within 2σ' if within else ''})"
+        label = (f"Smooth ({method}, {round(100 * s)} %{', edges kept' if keep else ''}{where}"
+                 f"{', within the scatter' if within else ''})")
         out_s: dict[str, Any] = {"method": method, "strength": s, "keep_edges": keep}
         if flat:
             out_s["flat_only"] = True
@@ -1043,8 +1044,8 @@ class ProcessManager:
                             "The mesh can still be edited, measured and exported. The stage files can only be made "
                             "again from a recording, which this scan no longer has.")
         return ApiError(409, "The stage files this needs were removed to free space (this scan keeps its recording and "
-                             "its result).", "Press Make mesh again (or run Track first) to make them again from the "
-                                             "recording.")
+                             "its result).", "Press Make mesh again (or run “Follow the camera” first) to make them "
+                                             "again from the recording.")
 
     def _freed(self, sp: ScanProcess) -> bool:
         """True when the scan's space was freed (FEATURE_PLAN R2): stage files may be missing on purpose."""
@@ -1055,14 +1056,16 @@ class ProcessManager:
         if done and not (sp.dir / "track" / "trajectory.csv").is_file() and self._freed(sp):
             raise self._removed(sp.pid, sp.sid)
         if not done or not (sp.dir / "track" / "trajectory.csv").is_file():
-            raise ApiError(409, "This step needs a finished Track stage.", "Run Track first, or press Make mesh.")
+            raise ApiError(409, "This step needs “Follow the camera” to have finished.",
+                           "Run “Follow the camera” first, or press Make mesh.")
 
     def _need_refine_source(self, sp: ScanProcess) -> None:
         """"Refine with lasers" reads only the base stage's mesh and laser points (no recording, no
         trajectory), so a merged scan can be refined too."""
         st = sp.state
         if st["stages"]["track"]["state"] != "done" or st["base"] is None:
-            raise ApiError(409, "This step needs a finished Track stage.", "Run Track first, or press Make mesh.")
+            raise ApiError(409, "This step needs “Follow the camera” to have finished.",
+                           "Run “Follow the camera” first, or press Make mesh.")
         src = st["base"].get("stage")
         if src == "refine":
             src = st["stages"]["refine"].get("source") or "track"
@@ -1071,12 +1074,12 @@ class ProcessManager:
                 raise self._removed(sp.pid, sp.sid)
             log.warning("scan %s/%s: the %s stage's mesh is missing", sp.pid, sp.sid, src)
             raise ApiError(409, f"The mesh of the {str(src).capitalize()} stage is missing.",
-                           "Run Track again, or press Make mesh.")
+                           "Run “Follow the camera” again, or press Make mesh.")
 
     @staticmethod
     def _need_base(sp: ScanProcess) -> None:
         if sp.state["base"] is None:
-            raise ApiError(409, "This scan has no mesh yet.", "Press Make mesh first (or run Track).")
+            raise ApiError(409, "This scan has no mesh yet.", "Press Make mesh first (or run “Follow the camera”).")
 
     # ------------------------------------------------------------------ mesh access
     def load_step(self, sp: ScanProcess, k: int) -> tuple[np.ndarray, np.ndarray]:
@@ -1101,7 +1104,8 @@ class ProcessManager:
             if got is None:
                 log.warning("scan %s/%s: no cached step before %d", sp.pid, sp.sid, k)
                 raise ApiError(500, "The starting mesh of this scan is missing.",
-                               "Run its last stage again (Track, Straighten or Fuse), or press Make mesh.")
+                               "Run its last stage again (Follow the camera, Straighten or Build the surface), or "
+                               "press Make mesh.")
             V, F, _, S, Fl, L = got
             edits = sp.state["edits"]
             log.info("scan %s/%s: rebuilding step %d from step %d (%d edits)", sp.pid, sp.sid, k, j, k - j)
@@ -1336,9 +1340,9 @@ class ProcessManager:
         b = before or {}
         if op == "remove_floaters":
             if len(F2) == len(F):
-                return "No loose pieces matched: nothing was removed"
+                return "No loose bits matched: nothing was removed"
             n = int(b.get("components", 0)) - int(after["components"])
-            return f"Removed {n:,} loose piece{'s' if n != 1 else ''} ({len(F) - len(F2):,} triangles)"
+            return f"Removed {n:,} loose bit{'s' if n != 1 else ''} ({len(F) - len(F2):,} triangles)"
         if op == "fill_holes":
             left = int(after["holes"]) + (after.get("border_mm") is not None)
             if params.get("watertight"):
@@ -1355,7 +1359,7 @@ class ProcessManager:
             return f"Filled {n:,} hole{'s' if n != 1 else ''} ({len(F2) - len(F):,} new triangles)"
         if op == "smooth" and len(V2) == len(V) and len(V):
             d = np.linalg.norm(V2 - V, axis=1)
-            within = ", each point within 2σ of where it was measured" if params.get("within_sigma") else ""
+            within = ", each point within its scatter of where it was measured" if params.get("within_sigma") else ""
             return f"Moved the surface by {float(np.mean(d)):.3f} mm on average and {float(np.max(d)):.2f} mm at most{within}"
         if op == "decimate" and len(F2) < len(F):
             from ohs.mesh import deviation
@@ -1709,7 +1713,7 @@ class ProcessManager:
         _rmtree(tmp)
         dev = compute.get_device()
         where = f" on the GPU ({dev.name})" if dev is not None else " on the CPU"
-        verb = "Tracking" if poses is None else "Fusing"
+        verb = "Following the camera" if poses is None else "Building the surface"
         # the job's `frames` field (APP_API.md): this pass's count and its rate since the first frame
         # was done (the loading and the first frame's warm-up are not in the rate)
         t_first: list[float] = []
@@ -1909,7 +1913,8 @@ class ProcessManager:
                 track = dict(sp.state["stages"]["track"])
             poses = self._current_poses(sp)
             if not poses:
-                raise ApiError(409, "The Track stage has no tracked frames to build the surface from.", "Run Track again.")
+                raise ApiError(409, "“Follow the camera” has no tracked frames to build the surface from.",
+                               "Run “Follow the camera” again.")
             report = self._fuse_into(ctx, sp, "fuse", prog.sub(0.0, 0.95), quality=quality_or_none(track.get("quality")) or "standard",
                                      voxel_mm=voxel_mm if voxel_mm is not None else track.get("voxel_mm"), poses=poses)
             prog(0.96, "Saving the mesh", force=True)
@@ -2024,7 +2029,7 @@ class ProcessManager:
             poses = self._current_poses(sp)
             calib = RecordingReader(sp.recording_dir).calibration()
             if calib is None or not poses:
-                raise ApiError(409, "This scan has no calibration or no tracked frames.", "Run Track again.")
+                raise ApiError(409, "This scan has no calibration or no tracked frames.", "Run “Follow the camera” again.")
             params = SpacetimeParams()
             left, right, T, K, B = frames_from_recording(
                 str(sp.recording_dir), calib, poses, params.max_frames, cancelled=lambda: ctx.cancelled,
@@ -2160,9 +2165,9 @@ class ProcessManager:
 
         def body(ctx: Any, sp: ScanProcess, prog: _Prog) -> str:
             self._do_fuse(ctx, sp, prog, voxel_mm)
-            return sp.state["stages"]["fuse"]["summary"] or "Fused"
+            return sp.state["stages"]["fuse"]["summary"] or "Surface built"
 
-        return self._stage_job(pid, sid, "process_fuse", body, need_track=True, message="Fusing",
+        return self._stage_job(pid, sid, "process_fuse", body, need_track=True, message="Building the surface",
                                meta={"voxel_mm": voxel_mm})
 
     # ------------------------------------------------------------------ recipes
@@ -2527,7 +2532,7 @@ class ProcessManager:
             else:
                 why = cam.get("why") or "the scan's camera path is not here"
                 view = {"ok": False, "pose": None, "share_seen": None, "border_seen": None, "candidates": 0,
-                        "missed": None, "reason": f"no pose: {why}", "text": f"No pose: {why}."}
+                        "missed": None, "reason": f"no place to scan from: {why}", "text": f"No place to scan from: {why}."}
             areas.append({"index": i, "kind": a["kind"], "area_mm2": a["area_mm2"], "n_faces": a["n_faces"],
                           "center": [float(x) for x in a["center"]], "normal": a["normal"], "reason": a["reason"],
                           "reasons": a["reasons"], "reason_text": a["reason_text"], "evidence": a["evidence"],
@@ -2651,7 +2656,7 @@ class ProcessManager:
         if not path.is_file():  # the track stage's files were removed to free space (R2): the result's path
             path = sp.result_dir / "trajectory.csv"
         if not path.is_file():
-            raise ApiError(404, "This scan has no camera path (trajectory) yet.", "Press Make mesh first (or run Track).")
+            raise ApiError(404, "This scan has no camera path yet.", "Press Make mesh first (or run “Follow the camera”).")
         rows = [(i, T) for i, _, ok, T in read_trajectory(path) if ok]
         step = max(1, math.ceil(len(rows) / MAX_TRAJ_POINTS))
         keep = rows[::step]

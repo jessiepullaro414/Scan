@@ -139,7 +139,7 @@ def test_step_in_the_scans_frame_equals_the_writer(clean):
     assert m.headers["content-disposition"].endswith('.FCMacro"')
     assert m.headers["content-disposition"] != cd  # the two cannot be mistaken for each other
     s = cad(clean).json()
-    assert s["frame"] == "scan" and "scan's own frame" in s["frame_label"]
+    assert s["frame"] == "scan" and "scan's own axes" in s["frame_label"]
     assert s["counts"] == {"plane": 2, "cylinder": 1, "hole": 1, "point": 0} and s["n_fits"] == 4
     assert s["notes"] == shapes.notes and s["warnings"] == [] and s["reason"] is None
     assert s["boundary"] == "rectangle"
@@ -159,7 +159,7 @@ def test_with_a_frame_the_files_are_in_the_parts_frame(clean):
     assert max(abs(float(c)) for c in circle["center"]) < 1e-9  # the hole is the origin
     assert "X axis" in read(r.text)["products"]
     summary = cad(clean).json()
-    assert summary["frame"] == "part" and "part's frame" in summary["frame_label"]
+    assert summary["frame"] == "part" and "part's axes" in summary["frame_label"]
     assert summary["warnings"] == []
     # an out-of-date frame is used as it is, and said so
     sd = scan_dir(clean)

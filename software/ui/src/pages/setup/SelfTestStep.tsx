@@ -122,7 +122,7 @@ function Running({ job }: { job: Job }) {
   const instruction = isInstruction(msg);
   const trigger = /trigger/i.test(msg);
   // "Skipping the lasers (simulator)" turns nothing on: no laser warning for it
-  const laser = /laser|projector|emitter/i.test(msg) && !/skipping|simulat/i.test(msg);
+  const laser = /laser|projector|emitter|\bdots?\b/i.test(msg) && !/skipping|simulat/i.test(msg);
   return (
     <div className="space-y-4" role="status" aria-live="assertive">
       <div
@@ -188,7 +188,7 @@ export function SelfTestStep() {
             </Button>
           }
         >
-          The self-test talks to the camera and the Pico, or to the simulator.
+          The self-test talks to the cameras and the control board, or to the simulator.
         </Callout>
       ) : replay ? (
         <Callout tone="warn" icon={TriangleExclamationPoint} title="A replay is connected" className="mb-5" actions={<Button size="sm" onClick={() => navigate(paths.setup("connect"))}>Go to Connect</Button>}>
@@ -219,8 +219,8 @@ export function SelfTestStep() {
             </div>
             <p className="mt-0.5 text-sm text-muted">
               {sim
-                ? "It checks the simulated camera stream and the motion sensor (IMU). Skipping the lasers (simulator): it has no lasers, control board or trigger to test."
-                : "Point the scanner at a wall 200–400\u202fmm away. Each laser and the dot projector turns on for a second (watch the wall), then it asks you to press the trigger."}
+                ? "It checks the simulated cameras and the motion sensor (IMU). Skipping the lasers (simulator): it has no lasers, control board or trigger to test."
+                : "Point the scanner at a wall 200–400\u202fmm away. Each laser and the dots turn on for a second (watch the wall), then it asks you to press the trigger."}
             </p>
           </div>
           <Button

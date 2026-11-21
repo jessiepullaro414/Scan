@@ -24,7 +24,7 @@ import type { MockOutline } from "./extent.ts";
 import { frameState } from "./frame.ts";
 import { HttpError } from "./host.ts";
 
-const NO_FITS = "this scan has no kept fits to export";
+const NO_FITS = "This scan has no fitted shapes to export yet.";
 const NO_FITS_HINT = "fit planes, cylinders or holes in the viewer first (each fit is kept with the scan), then download them for CAD";
 const MAX_POINTS = 5000;
 
@@ -56,7 +56,7 @@ const STEP_TEXT = [
 function macroText(counts: CadSummary["counts"]): string {
   return [
     "# OpenHandScan demo: the demo engine has no FreeCAD macro writer.",
-    `# With the real engine this macro builds the kept fits (${counts.plane} planes, ${counts.cylinder} cylinders, ${counts.hole} holes) as named objects.`,
+    `# With the real engine this macro builds the saved fitted shapes (${counts.plane} planes, ${counts.cylinder} cylinders, ${counts.hole} holes) as named objects.`,
     "import FreeCAD as App",
     "",
     'App.Console.PrintMessage("OpenHandScan demo macro: nothing to build.\\n")',
@@ -143,7 +143,7 @@ export function mockCadSummary(s: CadStored, boundary: CadBoundary, version: num
   if (s.frame) {
     part = true;
     const st = frameState(s.frame, s.features);
-    if (st.out_of_date) warnings.push(`the part's frame is out of date (${st.out_of_date_reasons.join("; ")}): used as it is; build it again for the fits as they are now`);
+    if (st.out_of_date) warnings.push(`the part's axes are out of date (${st.out_of_date_reasons.join("; ")}): used as they are; set them again for the fitted shapes as they are now`);
   }
   const notes = ["the demo engine has no STEP or FreeCAD writer: the files are small fixed texts"];
   for (const f of s.features)
@@ -169,7 +169,7 @@ export function mockCadSummary(s: CadStored, boundary: CadBoundary, version: num
     n_fits: s.features.length,
     counts,
     frame: part ? "part" : "scan",
-    frame_label: part ? "the part's frame" : "the scan's own frame",
+    frame_label: part ? "the part's axes" : "the scan's own axes",
     notes: empty ? [] : notes,
     warnings,
     stale: stale.map((f) => f.id),

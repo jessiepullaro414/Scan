@@ -80,7 +80,7 @@ log = logging.getLogger(__name__)
 _NO_CALIB = "The scanner is not calibrated yet. Calibrate it in Setup before you scan."
 _NO_IMU_CALIB = ("The motion sensor (IMU) is not calibrated, so scanning holds on less surely on fast sweeps and "
                  "plain surfaces. Calibrate it in Setup.")
-_LASERS_NOT_ON = "The lasers and dots could not be switched on. Check the USB cable of the control board (Pico)."
+_LASERS_NOT_ON = "The lasers and dots could not be switched on. Check the USB cable of the control board."
 
 
 def _lower(busy: Any) -> str:
@@ -466,7 +466,7 @@ class DeviceManager:
             if tuple(c.frame_size) != want:
                 warnings.append(f"The camera sends {c.frame_size[0]}×{c.frame_size[1]} pictures, but the scanner was "
                                 f"calibrated at {want[0]}×{want[1]}. Calibrate the cameras again at this size (the "
-                                "Stereo step in Setup).")
+                                "Cameras step in Setup).")
         replay = None
         if c.source == "replay" or (c.source == "sim" and c.replay_path is not None):
             replay = {"path": str(c.replay_path), "loop": bool(c.loop)}
@@ -646,8 +646,8 @@ class DeviceManager:
                 log.warning("no Pico: %s", e)
                 if pico is not None:
                     safe_call("closing the Pico", pico.close)
-                conn.pico_error = "The control board (Pico) was not found."
-                msg = ("The scanner's control board (Pico) was not found. You can still scan, but the lasers, the "
+                conn.pico_error = "The control board (Pico or ESP32) was not found."
+                msg = ("The scanner's control board (Pico or ESP32) was not found. You can still scan, but the lasers, the "
                        "motion sensor and the trigger will not work. Check its USB cable (one that carries data) and "
                        "its firmware, then press Connect again.")
                 conn.warnings.append(msg)
@@ -717,7 +717,7 @@ class DeviceManager:
         if conn.pico is not None:
             self._thread(conn, "ohs-pico", self._pico_loop)
         self._thread(conn, "ohs-preview", self._preview_loop)
-        sim_what = "simulator demo" if conn.sim_scene in (None, "demo") else f"simulator ({conn.sim_scene})"
+        sim_what = "the simulator" if conn.sim_scene in (None, "demo") else f"the simulator ({conn.sim_scene})"
         what = {"camera": "camera", "replay": "a replayed recording", "sim": sim_what}[conn.source]
         for w in conn.warnings:
             log.warning("%s", w)
@@ -787,7 +787,7 @@ class DeviceManager:
         def run(ctx: Any) -> dict:
             generate_demo(path, params, progress=lambda f, m: ctx.progress(f, m), cancelled=lambda: ctx.cancelled)
             return {"path": str(path), "frames": params.n_frames, "image_size": list(params.image_size),
-                    "message": "Simulator demo ready"}
+                    "message": "The simulator is ready"}
 
         def done(job: Any) -> None:
             self.busy = None
@@ -796,13 +796,13 @@ class DeviceManager:
                 try:
                     self.connect("sim")
                 except ApiError as e:
-                    self._notify("error", f"The simulator demo is ready but could not be connected. {e}")
+                    self._notify("error", f"The simulator is ready but could not be connected. {e}")
                 except Exception:  # report, never raise in the worker
                     log.exception("connecting the simulator demo failed")
-                    self._notify("error", "The simulator demo is ready but could not be connected. Press Connect "
+                    self._notify("error", "The simulator is ready but could not be connected. Press Connect "
                                           "again.")
             elif job.state == "failed":
-                self._notify("error", failure_notice(job, "The simulator demo could not be made.",
+                self._notify("error", failure_notice(job, "The simulator could not be prepared.",
                                                      "Check the free disk space, then try again."))
             self._on_change()
 
@@ -810,16 +810,16 @@ class DeviceManager:
             if self.busy:
                 raise ApiError(409, f"The scanner is busy: {_lower(self.busy)}.",
                                "Wait until it has finished (or cancel it in Jobs), then try again.")
-            self.busy = "Generating simulator demo…"
+            self.busy = "Preparing the simulator…"
         est = params.estimate_s()
         try:
-            job = self.jobs.submit("generate_demo", run, message=f"Generating the simulator demo (about {est:.0f} s)...",
+            job = self.jobs.submit("generate_demo", run, message=f"Preparing the simulator (about {est:.0f} s)...",
                                    on_done=done)
         except Exception:
             self.busy = None
             raise
         self.demo_job = job
-        self._notify("info", f"Generating the simulator demo once (about {est:.0f} s); it connects when ready.")
+        self._notify("info", f"Preparing the simulator once (about {est:.0f} s); it connects when ready.")
         self._on_change()
         return job
 
@@ -943,7 +943,7 @@ class DeviceManager:
             except Exception as e:
                 log.warning("the new laser brightness could not be applied: %s", e)
                 self._notify("warn", "The new laser brightness could not be set. Check the USB cable of the "
-                                     "control board (Pico).")
+                                     "control board.")
         self._on_change()
 
     def set_emitters(self, levels: dict, scanning: bool = False, apply: bool = True) -> None:
@@ -957,7 +957,7 @@ class DeviceManager:
             raise ApiError(409, "No scanner is connected.", "Connect the camera first.")
         if c.pico is None or not getattr(c.pico, "connected", False):
             if c.source == "camera":
-                self._notify("warn", "The control board (Pico) is not connected, so the lasers and dots cannot be "
+                self._notify("warn", "The control board is not connected, so the lasers and dots cannot be "
                                      "switched.")
             return
         base = c.scan_levels if (not apply and c.scan_levels is not None) else getattr(c.pico, "emitters", (0, 0, 0))
@@ -976,7 +976,7 @@ class DeviceManager:
                 c.pico.set_emitters(*new)
             except Exception as e:
                 log.warning("the Pico did not accept the emitter levels: %s", e)
-                raise ApiError(503, "The control board (Pico) did not take the new brightness.",
+                raise ApiError(503, "The control board did not take the new brightness.",
                                "Check its USB cable, then press Connect again.") from e
         if scanning:
             c.scan_levels = new  # type: ignore[assignment]
@@ -1045,7 +1045,7 @@ class DeviceManager:
                 self._on_event(e, control=True)
             if not getattr(pico, "connected", True):
                 log.warning("the Pico disconnected: %s", getattr(pico, "error", None) or "no reason given")
-                self._report_lost(conn, "pico", "The control board (Pico) disconnected, so the lasers are off. Check "
+                self._report_lost(conn, "pico", "The control board disconnected, so the lasers are off. Check "
                                                 "its USB cable, then press Connect again.")
                 return
             conn.stop.wait(0.005)
@@ -1185,9 +1185,10 @@ class DeviceManager:
         conn.launch_check = lc
         log.info("launch check: %s (rows %s px, %d matches)", state, dv, matches)
         if state == "drift":
-            rows = f" by {dv:.1f} px" if dv is not None else ""
-            msg = (f"The cameras may have moved since the calibration: matching points in the left and right images "
-                   f"disagree{rows} in height (want under 0.6 px). Run the 2-minute check in Setup.")
+            rows = f" {dv:.1f} px" if dv is not None else ""
+            msg = (f"The cameras may have moved since the calibration: left/right height mismatch{rows} (want under "
+                   "0.6 px: the start-up check looks at three pictures only, so its limit is wider than the "
+                   "calibration check's). Run the calibration check in Setup.")
             conn.warnings.append(msg)
             self._notify("warn", msg)
         safe_call("recording the launch check", lambda: self._on_launch_check(conn.source, dict(lc)))

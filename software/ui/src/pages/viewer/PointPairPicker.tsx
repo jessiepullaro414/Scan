@@ -73,7 +73,7 @@ export function PointPairPicker({
   const hint =
     scanPicks.length <= refPicks.length
       ? `Click point ${scanPicks.length + 1} on the scan (left)`
-      : `Click the same point, ${scanPicks.length}, on the reference (right)`;
+      : `Click the same point, ${scanPicks.length}, on the CAD model (right)`;
   const align = () => {
     const pairs: PickedPair[] = [];
     for (let i = 0; i < n; i++) pairs.push({ scan: scanPicks[i], reference: refPicks[i].map((x) => x * scale) as Vec3 });
@@ -81,7 +81,7 @@ export function PointPairPicker({
   };
 
   return (
-    <div className="absolute inset-0 z-[40] flex flex-col bg-panel" role="dialog" aria-label="Pick matching points on the scan and on the reference">
+    <div className="absolute inset-0 z-[40] flex flex-col bg-panel" role="dialog" aria-label="Pick matching points on the scan and on the CAD model">
       <div className="flex flex-wrap items-center gap-2 border-b border-line bg-panel px-4 py-2.5">
         <MousePointerClick size={15} className="text-accent" aria-hidden />
         <span className="text-sm font-medium text-fg">{hint}</span>
@@ -104,9 +104,9 @@ export function PointPairPicker({
           </div>
         </div>
         <div className="relative min-h-0 viewport-bg">
-          <PickView geometry={refView} picks={refPicks} color={SCAN_COLOR.source} label="The reference, for picking points" enabled={refPicks.length < scanPicks.length} onPick={(p) => setRefPicks((x) => [...x, p])} />
+          <PickView geometry={refView} picks={refPicks} color={SCAN_COLOR.source} label="The CAD model, for picking points" enabled={refPicks.length < scanPicks.length} onPick={(p) => setRefPicks((x) => [...x, p])} />
           <div className="pointer-events-none absolute left-3 top-3 rounded-full border border-line bg-panel/90 px-2.5 py-1 text-xs font-medium text-fg" style={{ borderColor: SCAN_COLOR.source }}>
-            The reference
+            The CAD model
           </div>
         </div>
       </div>

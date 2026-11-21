@@ -17,7 +17,7 @@ type Emitters = { vertical: number; horizontal: number; dots: number };         
 type DeviceState = {
   source: "none" | "camera" | "replay" | "sim";
   connected: boolean;
-  busy: string | null;                                   // e.g. "Generating simulator demo…"
+  busy: string | null;                                   // e.g. "Preparing the simulator…"
   camera: { connected: boolean; info: Record<string, unknown> } | null;
   pico: { connected: boolean; firmware: string | null; emitters: Emitters } | null;
   calibration: { loaded: boolean; path: string | null; image_size: [number, number] | null;
@@ -237,7 +237,7 @@ type CalibAdvice = { text: string;
                      action: "add_views" | "remove_bad_views" | "start_over" | "recalibrate_stereo" | "reprint" | "check_board" | null };
 type CalibResult = {
   kind: CalibKind; ok: boolean; grade: "excellent" | "good" | "usable" | "poor" | "failed";
-  headline: string;        // e.g. "Excellent stereo calibration"
+  headline: string;        // e.g. "Excellent camera calibration"
   verdict: string;         // one or two plain sentences: what happened and what it means
   metrics: CalibMetric[];  // plain-language rows: "Reprojection error 0.21 px (want < 0.5 px)"
   advice: CalibAdvice[];
@@ -427,7 +427,7 @@ Everything in the M2 section is implemented as written, with these clarification
 - `dv_px` is rounded to 0.001 px.
 - `"unknown"` also covers a camera image size that differs from the calibration.
 - The result is recorded for the target: `sim` for the simulator, else `device`.
-- The drift warning reads "The cameras may have moved since the calibration … Run the 2-minute check in Setup."
+- The drift warning reads "The cameras may have moved since the calibration: left/right height mismatch … (want under 0.6 px: the start-up check looks at three pictures only, so its limit is wider than the calibration check's). Run the calibration check in Setup."
 
 **Calibration session**
 - **Views:**
@@ -457,7 +457,7 @@ Everything in the M2 section is implemented as written, with these clarification
   - On the simulator, `imu/start` restarts the script and drops the one frame rendered before the restart.
 - **Emitters:**
   - The kind's profile is on while capturing. The emitters are off while solving and while the result is shown, on again after `continue` or a failed solve, and off after save, cancel or a lost device.
-  - `CalibSession.emitters` reads, for example, "Line lasers on: Class 3R, never look into the beams", "Lasers and dots off: room light only", "No control board (Pico): the line lasers stay off, …" or "Simulated line lasers on".
+  - `CalibSession.emitters` reads, for example, "Line lasers on: Class 3R, never look into the beams", "Lasers and dots off: room light only", "No control board (Pico or ESP32): the line lasers stay off, …" or "Simulated line lasers on".
 - **More 409 rules:**
   - lasers, imu and check also need the camera's image size to match the target's stereo calibration;
   - connect is refused during a calibration, and disconnect cancels it first (the views are kept);
@@ -752,7 +752,7 @@ Everything in the M3 phase 2 section is implemented as written, with these clari
 **ProcessState**
 - `current.mesh_url` is `/api/projects/{pid}/scans/{sid}/files/mesh.ply`, the M1 file. The files route sends `Cache-Control: no-cache` and ignores a query, so `?v=<version>` can be appended.
 - `current.version` starts at 1 with the first base. It goes up by 1 on every change of the current mesh: a new base, an edit, an undo, a redo, and the clearing of the edits by a recipe.
-- `busy` reads "Tracking the scan…", "Straightening…", "Fusing…", "Refining from the images…", "Refining with the laser lines…", "Making the mesh…", "Applying the recipe Body panel…", "Removing floaters…", "Filling holes…", "Smoothing…", "Simplifying…", "Deleting the selection…" or "Keeping the selection…".
+- `busy` reads "Following the camera…", "Straightening…", "Building the surface…", "Refining from the images…", "Refining with the laser lines…", "Making the mesh…", "Applying the recipe Body panel…", "Removing loose bits…", "Filling holes…", "Smoothing…", "Simplifying…", "Deleting the selection…" or "Keeping the selection…".
 - `job` is the scan's running processing job, or null. A `process` message is also sent with every update of that job (at most 5 per second), so its `job.progress` is current.
 - Stages:
   - `when` is when the stage last finished; `job_id` is the job that ran it (for a recipe or Make mesh, that job's id).
@@ -822,10 +822,10 @@ Everything in the M3 phase 2 section is implemented as written, with these clari
 **Edits**
 - `params` in an `EditEntry` are normalised (defaults filled in). For `delete_faces` / `keep_faces` they are `{"count": n}`: the indices themselves are kept in `selections/`.
 - *extra* `EditEntry` fields:
-  - `summary`: what the edit did, e.g. "Removed 12 loose pieces (3,410 triangles)", "Filled 3 holes (412 new triangles)", "Moved the surface by 0.012 mm on average and 0.08 mm at most", "1,204,311 -> 200,000 triangles";
+  - `summary`: what the edit did, e.g. "Removed 12 loose bits (3,410 triangles)", "Filled 3 holes (412 new triangles)", "Moved the surface by 0.012 mm on average and 0.08 mm at most", "1,204,311 -> 200,000 triangles";
   - `job_id`.
 - Labels:
-  - "Remove loose pieces smaller than 5 mm or under 1 % of the mesh";
+  - "Remove loose bits smaller than 5 mm or under 1 % of the mesh";
   - "Keep the largest piece only";
   - "Fill holes up to 12 mm around (about Ø 4 mm)" (the size is the length round the hole; the diameter is that over π, UX_PLAN U13);
   - "Smooth (bilateral, 50 %, edges kept)";
@@ -1372,7 +1372,7 @@ type CadSummary = {                             // GET .../features/cad: what th
   n_fits: number;                               // the kept fits exported (all of them)
   counts: { plane: number; cylinder: number; hole: number; point: number };
   frame: "part" | "scan";                       // the frame the files are in
-  frame_label: string;                          // "the part's frame" | "the scan's own frame"
+  frame_label: string;                          // "the part's axes" | "the scan's own axes"
   notes: string[];                              // the writer's (cad_shapes): a fit kept with no size, what an
                                                 // outline left out, "no part frame: ...", in plain words
   warnings: string[];                           // fits made on an earlier mesh, a frame out of date or not readable

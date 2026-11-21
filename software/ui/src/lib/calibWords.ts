@@ -32,6 +32,8 @@ const GRADE_WORD: Record<CalibGrade, string> = {
 
 /** The calibration check's state, as the status says it everywhere else (U48). */
 export const CHECK_STATE = { ok: "Calibration valid", drifted: "Drifted" };
+/** The headline of a calibration check that did not pass (the server's words, `ohs/server/calib_results.py`). */
+export const CHECK_HEADLINE_FAILED = "The calibration needs attention";
 
 /**
  * The badge above a result's headline, or null when the headline already says it (U41:

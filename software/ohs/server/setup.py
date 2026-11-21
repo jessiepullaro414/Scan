@@ -376,8 +376,8 @@ class SetupManager:
                 w = f"{len(warn)} warning{'s' if len(warn) != 1 else ''}"
                 out.append(step("selftest", "warn", f"{w}: {', '.join(warn[:3])} ({ago(when)})", when))
         else:
-            out.append(step("selftest", "todo", "Check the simulated camera and IMU" if sim else
-                            "Test the camera, the IMU, the emitters and the trigger (1 minute)"))
+            out.append(step("selftest", "todo", "Check the simulated cameras and motion sensor" if sim else
+                            "Test the cameras, the motion sensor, the lasers and dots and the trigger (1 minute)"))
         if sim:
             out.append(step("print", "optional", "Not needed: the simulator's board is virtual and exact"))
         else:
@@ -407,7 +407,7 @@ class SetupManager:
         if calib is None:
             out.append(step("stereo", "todo", "Calibrate the two cameras with the board (about 5 minutes)"))
             out.append(step("lasers", "todo", "Calibrate the cameras first, then the laser lines"))
-            out.append(step("imu", "todo", "Calibrate the cameras first, then the IMU"))
+            out.append(step("imu", "todo", "Calibrate the cameras first, then the motion sensor"))
         else:
             rms = calib.stereo.rms
             text = f"Calibrated ({rms:.2f} px)" if rms == rms else "Calibrated"
@@ -435,10 +435,10 @@ class SetupManager:
             else:
                 out.append(step("lasers", "todo", "Calibrate the laser lines with the board (about 3 minutes)"))
             if calib.imu is not None:
-                s, w = part_summary("imu", "IMU calibrated")
+                s, w = part_summary("imu", "Motion sensor calibrated")
                 out.append(step("imu", "done", s, w))
             else:
-                out.append(step("imu", "todo", "Calibrate the IMU: hold still, then rotate (about 2 minutes)"))
+                out.append(step("imu", "todo", "Calibrate the motion sensor: hold still, then rotate (about 2 minutes)"))
         last = sec.get("last_check")
         saved = None
         for k in PARTS:
@@ -456,7 +456,7 @@ class SetupManager:
                 out.append(step("check", "warn", f"The last check failed ({ago(last['when'])}): "
                                                  f"{last.get('verdict') or 'recalibrate'}", last["when"]))
         else:
-            out.append(step("check", "todo", "Run the 2-minute check of the calibration"))
+            out.append(step("check", "todo", "Run the calibration check (2 minutes)"))
         return out
 
     def publish(self) -> None:
@@ -484,9 +484,9 @@ class SetupManager:
             pico = dev.get("pico") or {}
             if pico.get("connected"):
                 fw = f" (firmware {pico['firmware']})" if pico.get("firmware") else ""
-                summary = f"Camera{size} and Pico{fw} connected"
+                summary = f"Cameras{size} and control board{fw} connected"
             else:
-                summary = f"Camera{size} connected, but no Pico"
+                summary = f"Cameras{size} connected, but no control board"
         self.store.update(target, connect={"when": now_iso(), "summary": summary})
         self.publish()
 
@@ -745,11 +745,11 @@ class SetupManager:
             notes.append("No camera found: plug the scanner's USB cable into a USB 3 port on the PC and press Refresh. "
                          "No hardware yet? Connect the simulator.")
         elif not any(c["stereo_like"] for c in cams):
-            notes.append("None of the cameras looks like the side-by-side stereo camera (2560x800): check that the "
+            notes.append("None of the cameras looks like the scanner's side-by-side cameras (2560x800): check that the "
                          "scanner is plugged in, then pick it by its index.")
         if port is None:
-            notes.append("The Pico was not found: connect its data USB cable (some cables only charge) and flash the "
-                         "firmware (firmware/README.md).")
+            notes.append("The control board (Pico or ESP32) was not found: connect its data USB cable (some cables only "
+                         "charge) and flash the firmware (firmware/README.md).")
         return {"cameras": cams, "pico_port": port, "configured_index": int(cfg.camera.index),
                 "note": " ".join(notes) or None}
 

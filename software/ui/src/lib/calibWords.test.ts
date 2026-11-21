@@ -2,7 +2,7 @@
  * Checks for the calibration result's words (UX_PLAN U10, U41, U48; `npm test`): no accuracy is
  * promised from a grade, the badge does not repeat the headline, "Nothing to do" is said once.
  */
-import { CALIB_VERDICT, emptyAdviceText, resultBadge } from "./calibWords.ts";
+import { CALIB_VERDICT, CHECK_HEADLINE_FAILED, CHECK_STATE, emptyAdviceText, resultBadge } from "./calibWords.ts";
 
 let checks = 0;
 function check(ok: boolean, what: string): void {
@@ -43,6 +43,15 @@ check(emptyAdviceText("stereo", true, "x") === "Nothing to improve.", "a saved r
   check(py.includes(CALIB_VERDICT.stereoExcellent), `the server says it too: ${CALIB_VERDICT.stereoExcellent}`);
   check(py.includes(CALIB_VERDICT.stereoGood), `the server says it too: ${CALIB_VERDICT.stereoGood}`);
   check(py.includes("laser lines are calibrated well."), "the server says it too: ... laser lines are calibrated well.");
+  // U31's remainder: the check's two headlines and the motion sensor's sentence (the demo's checkResult and imuResult
+  // use these constants)
+  check(py.includes(`headline = "${CHECK_STATE.ok}"`), `the server's check headline: ${CHECK_STATE.ok}`);
+  check(py.includes(`headline = "${CHECK_HEADLINE_FAILED}"`), `the server's failed check headline: ${CHECK_HEADLINE_FAILED}`);
+  check(py.includes(`"${CALIB_VERDICT.imuGood}"`), `the server says it too: ${CALIB_VERDICT.imuGood}`);
+  // and the demo uses them, not words of its own
+  const demo = fs.readFileSync(new URL("../api/mock/calib.ts", import.meta.url), "utf8");
+  check(demo.includes("headline: ok ? CHECK_STATE.ok : CHECK_HEADLINE_FAILED"), "the demo's check headline is the server's");
+  check(demo.includes("${CALIB_VERDICT.imuGood}"), "the demo's motion sensor sentence is the server's");
 }
 
 console.log(`calibWords.test: ${checks} checks passed`);

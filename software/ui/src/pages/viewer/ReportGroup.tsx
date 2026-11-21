@@ -21,10 +21,10 @@ import { captureView } from "./ViewCapture";
 
 const HELP = {
   report:
-    "One page with everything kept with this scan: how it was made, the calibration, the Check answer, the fits with their ±, relations, sections, the comparison with a reference, the flush along a seam, and every warning that was not resolved. Pictures and drawings are inside the page; it fetches nothing.",
+    "One page with everything saved with this scan: how it was made, the calibration, the Scan check, the fitted shapes with their ±, relations, sections, the comparison with the CAD model, the flush along a seam, and every warning that was not resolved. Pictures and drawings are inside the page; it fetches nothing.",
   pm: "Every ± in the report is the spread from scan to scan (1σ), not the accuracy. No accuracy figure is claimed until the scanner has been measured against reference parts.",
   pdf: "Open the page in any browser and print it: “Save as PDF” gives a PDF, page numbers included (Chrome and Edge).",
-  views: "A picture of the 3D view as it is now, with the fits' numbers and names marked. Turn and zoom the model first, then add the view.",
+  views: "A picture of the 3D view as it is now, with the fitted shapes' numbers and names marked. Turn and zoom the mesh first, then add the view.",
 } as const;
 
 function Help({ text, label }: { text: string; label: string }) {
@@ -134,7 +134,7 @@ export function ReportGroup({
           <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-[11px] text-subtle">mm</span>
         </div>
       </div>
-      {hasFrame ? <Switch checked={inPart} onChange={setInPart} label="Numbers in the part's frame" /> : null}
+      {hasFrame ? <Switch checked={inPart} onChange={setInPart} label="Numbers along the part's axes" /> : null}
       {seams.length > 1 ? (
         <div className="flex items-center gap-1.5">
           <span className="shrink-0 text-xs text-muted">Seam</span>
@@ -176,7 +176,7 @@ export function ReportGroup({
         Report (HTML)
       </Button>
       <div className="grid grid-cols-2 gap-2">
-        <Button size="sm" icon={FileSpreadsheet} loading={busy === "features.csv"} disabled={!!busy} onClick={() => void get("features.csv")} title="The kept fits and relations, one row each, values and ± in separate columns (opens in a spreadsheet)">
+        <Button size="sm" icon={FileSpreadsheet} loading={busy === "features.csv"} disabled={!!busy} onClick={() => void get("features.csv")} title="The saved fitted shapes and relations, one row each, values and ± in separate columns (opens in a spreadsheet)">
           Features (CSV)
         </Button>
         <Button size="sm" icon={FileJson} loading={busy === "features.json"} disabled={!!busy} onClick={() => void get("features.json")} title="The kept features as JSON, with what the report worked out beside them">

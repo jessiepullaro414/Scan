@@ -342,7 +342,7 @@ export class MockReferences {
 
   private find(pid: string, rid: string): StoredRef {
     const r = this.list(pid).find((x) => x.rec.id === rid);
-    if (!r) throw new HttpError(404, `no reference ${JSON.stringify(rid)} in this project`, "read the list again (GET .../references)");
+    if (!r) throw new HttpError(404, "This CAD model is no longer in the project.", "Read the list again.");
     return r;
   }
 
@@ -434,11 +434,11 @@ export class MockReferences {
       const ext = extOf(name);
       if (![".stl", ".obj", ".ply"].includes(ext)) {
         const hint = [".step", ".stp", ".iges", ".igs"].includes(ext) ? " (export a STEP or other CAD file as STL first)" : "";
-        bad(`a reference must be an STL, OBJ or PLY mesh; ${name} is ${ext || "without an extension"}${hint}`, "export the part from CAD as STL (binary), OBJ or PLY, and add that file");
+        bad(`A CAD model must be an STL, OBJ or PLY mesh; ${name} is ${ext || "without an extension"}${hint}.`, "Export the part from CAD as STL (binary), OBJ or PLY, and add that file.");
       }
       const bytes = raw?.byteLength ?? 0;
-      if (bytes > this.maxBytes) throw new HttpError(413, `the file is larger than ${this.maxBytes / 2 ** 20} MB, the most a reference may be`, "export it with coarser triangles, as binary STL rather than ASCII");
-      if (!bytes) bad("the file is empty", "send the file's bytes as the request body");
+      if (bytes > this.maxBytes) throw new HttpError(413, `The file is larger than ${this.maxBytes / 2 ** 20} MB, the most a CAD model may be.`, "Export it with coarser triangles, as binary STL rather than ASCII.");
+      if (!bytes) bad("The file is empty.", "Export the part from CAD as STL (binary), OBJ or PLY, and add that file.");
       let mesh: Mesh;
       try {
         mesh = readMeshFile(raw!, name);
@@ -501,12 +501,12 @@ export class MockReferences {
 
   private load(key: string): StoredCmp {
     const c = this.cmps.get(key);
-    if (!c) throw new HttpError(404, "this scan has no comparison with a reference", "start one: POST .../comparison with a reference of the project");
+    if (!c) throw new HttpError(404, "This scan is not compared with a CAD model yet.", "Pick a CAD model in the Compare panel.");
     return c;
   }
 
   private ready(c: StoredCmp): void {
-    if (c.units.status === "pending") throw new HttpError(409, `the reference's units are not settled: ${c.units.message}`, "apply the factor or keep the units first (POST .../comparison/units)");
+    if (c.units.status === "pending") throw new HttpError(409, `The CAD model's units are not settled yet. ${c.units.message}`, "Answer the question about its units first.");
   }
 
   private alignment(method: ReferenceAlignment["method"], T: M4, verdict: string, extra: Partial<ReferenceAlignment> = {}): ReferenceAlignment {
@@ -550,12 +550,12 @@ export class MockReferences {
       return json(200, { comparison: c ? this.view(pid, key, c, e.version()) : null, mesh_version: e.version() });
     }
     if (is("POST", 1)) {
-      if (typeof body.reference_id !== "string") bad("invalid request: reference_id: Field required", "check the request body against APP_API.md");
+      if (typeof body.reference_id !== "string") bad("The page asked for something the app does not know.", "Reload the page and try again.");
       const tol = body.tolerance_mm;
       if (tol !== undefined && tol !== null && !(typeof tol === "number" && tol > 0 && tol <= 100)) bad("invalid request: tolerance_mm: must be above 0 and at most 100", "check the request body against APP_API.md");
       const ref = this.find(pid, body.reference_id as string);
       const m = e.mesh();
-      if (!m) throw new HttpError(409, "this scan has no mesh yet", "run Track (or Make mesh) first");
+      if (!m) throw new HttpError(409, "This scan has no mesh yet.", "Press Make mesh first (or run “Follow the camera”).");
       const units = checkUnits(ref.rec.size_mm, diag(box(m.positions)));
       const now = nowIso();
       const c: StoredCmp = { reference_id: ref.rec.id, units, scale: 1, alignment: null, aligned_mesh_version: null, tolerance_mm: typeof tol === "number" ? tol : 0.3, k: 2, created: now, modified: now, aligning: null };
@@ -611,7 +611,7 @@ export class MockReferences {
     this.ready(c);
     const method = body.method;
     if (method !== "shape" && method !== "points" && method !== "datums") return bad(`invalid request: method: Input should be 'shape', 'points' or 'datums'`, "check the request body against APP_API.md");
-    if (c.aligning) throw new HttpError(409, "this scan is being aligned with the reference already", "wait for it, or cancel it");
+    if (c.aligning) throw new HttpError(409, "This scan is being aligned with the CAD model already.", "Wait for it, or cancel it.");
     const m = e.mesh();
     const version = e.version();
     if (!m || version === null) throw new HttpError(409, "this scan has no mesh yet", "make its mesh first");
@@ -627,8 +627,8 @@ export class MockReferences {
     };
     const fr = this.currentFrame(e);
     if (method === "datums") {
-      if (!fr.frame) bad("this scan has no part's frame (coordinate system) to align on", "build the coordinate system from three kept fits first, or align from the shape");
-      if (fr.outOfDate.length) throw new HttpError(409, `the part's frame is out of date (${fr.outOfDate.join("; ")})`, "build the coordinate system again for the fits as they are now");
+      if (!fr.frame) bad("The part's axes are not set for this scan, so there is nothing to align on.", "Set the part's axes from three fitted shapes first, or align from the shape.");
+      if (fr.outOfDate.length) throw new HttpError(409, `The part's axes are out of date (${fr.outOfDate.join("; ")}).`, "Set the part's axes again, or remove them.");
       keep(this.alignment("datums", fr.frame!.matrix, "Aligned on the datums: the scan's part frame put onto the reference's own axes; no best fit, so an overall error of the part shows where it is.", { frame: fr.frame as unknown as Record<string, unknown> }));
       return { job: null, comparison: this.view(pid, key, this.cmps.get(key)!, version) };
     }
@@ -636,7 +636,7 @@ export class MockReferences {
     let extra: Partial<ReferenceAlignment> = {};
     if (method === "points") {
       const pairs = Array.isArray(body.pairs) ? (body.pairs as { scan: Vec3; reference: Vec3 }[]) : [];
-      if (pairs.length < 3) bad(`${pairs.length} pair(s) of points are too few`, "pick at least three matching points on the scan and on the reference");
+      if (pairs.length < 3) bad(`${pairs.length} ${pairs.length === 1 ? "pair" : "pairs"} of matching points are too few.`, "Pick at least three matching points on the scan and on the CAD model.");
       const mean = (pts: Vec3[]) => [0, 1, 2].map((k) => pts.reduce((s, p) => s + p[k], 0) / pts.length) as Vec3;
       const ms = mean(pairs.map((p) => p.scan)),
         mr = mean(pairs.map((p) => p.reference));
@@ -674,7 +674,7 @@ export class MockReferences {
     const isShape = method === "shape";
     function* work(): Generator<WorkStep, () => Record<string, unknown> | null, void> {
       yield { p: 0.1, message: "Reading the scan" };
-      yield { p: 0.2, message: "Reading the reference" };
+      yield { p: 0.2, message: "Reading the CAD model" };
       for (let i = 0; i < 6; i++) yield { p: 0.3 + 0.1 * i, message: isShape ? "Aligning from the shapes (a best fit, a few seconds)" : "Aligning from the picked points, refined on the shapes" };
       yield { p: 0.95, message: "Keeping the alignment" };
       return () => {
@@ -709,7 +709,7 @@ export class MockReferences {
   private deviation(pid: string, key: string, e: CompareEngine): MockDeviation {
     const c = this.load(key);
     this.ready(c);
-    if (!c.alignment) throw new HttpError(409, "the scan is not aligned with the reference yet", "align it first: from the shape, on the datums or from picked points");
+    if (!c.alignment) throw new HttpError(409, "The scan is not aligned with the CAD model yet.", "Align it first: from the shape, on the part's axes or from picked points.");
     const m = e.mesh();
     const version = e.version();
     if (!m || version === null) throw new HttpError(409, "this scan has no mesh yet", "make its mesh first");
@@ -786,7 +786,7 @@ export class MockReferences {
       aligned_mesh_version: c.aligned_mesh_version,
       mesh_changed: changed,
       note: changed
-        ? `The mesh has changed since the scan was aligned (version ${c.aligned_mesh_version}, now ${version}): the pose is kept, since the scan's frame is the same, and the deviation is worked out again on the current mesh.`
+        ? "The mesh has changed since the scan was aligned with the CAD model. The alignment is kept (the scan's axes are the same) and the deviation is worked out again on the current mesh."
         : null,
       layout: "float32 per vertex (mm, NaN where not compared), then one state byte per vertex",
       states: ["compared", "not measured", "not on the reference"],

@@ -85,7 +85,7 @@ for (const c of KEEP_CHOICES) check(!/retention|mode/i.test(KEEP_CHOICE[c].title
 
 // the row's label and its hover text
 check(keepLabel(undefined) === "" && keepLabel("full") === "", "a scan that keeps everything says nothing");
-check(keepLabel("engineering") === "Keeps recording and result" && keepLabel("standard") === "Keeps result only", "labels");
+check(keepLabel("engineering") === "Keeps the recording and the result" && keepLabel("standard") === "Keeps the result only", "labels");
 const freed = { keep: "engineering" as const, freed: [{ when: "2026-11-19T10:00:00", keep: "engineering" as const, bytes: 196 * MB }] };
 const t = keepTitle(freed, null, () => "19 Nov");
 check(t.startsWith("To free space (19 Nov), its processing stages and undo history were removed: 196.0\u202fMB freed."), `title: ${t}`);
@@ -103,14 +103,14 @@ check(!canRemake({ has_recording: false }) && !canRemake({ keep: "standard" }) &
 // the dialog's lines
 check(removeLines(plan()).join("|") === "The undo history: 76.0\u202fMB|The processing stages: 120.0\u202fMB", `remove lines: ${removeLines(plan()).join("|")}`);
 check(
-  removeLines(plan({ remove: [{ part: "recording", bytes: 2 * GB, files: 900 }] }))[0] === "The recording (camera frames, motion sensor, events): 2.00\u202fGB",
+  removeLines(plan({ remove: [{ part: "recording", bytes: 2 * GB, files: 900 }] }))[0] === "The recording (camera frames and motion sensor): 2.00\u202fGB",
   "recording line",
 );
 const losses = lossLines(["undo", "stages", "remake", "merge", "refine", "frames"]);
 check(losses.length === 6 && losses.every((l) => /^[A-Z].*\.$/.test(l)), "one sentence per loss");
 check(losses[0].startsWith("Undo the edits made so far") && losses[3] === "Merge this scan with others. Aligning still works.", "loss words");
 check(keptLine(["recording", "result"]) === "It keeps the recording and the mesh with its confidence.", `kept two: ${keptLine(["recording", "result"])}`);
-check(keptLine(["result", "laser_points", "features"]) === "It keeps the mesh with its confidence, the laser points and the kept features.", "kept three");
+check(keptLine(["result", "laser_points", "features"]) === "It keeps the mesh with its confidence, the laser points and the saved fitted shapes.", "kept three");
 check(keptLine([]) === "", "nothing kept: no line");
 check(planLine(plan()) === "Frees 196.0\u202fMB.", `plan line: ${planLine(plan())}`);
 // what the move writes: one plain line each, and the parts less the writes are the "Frees" number
@@ -144,8 +144,8 @@ const c = confirmStandard({ name: "Bracket top" }, 4 * GB);
 check(c.title === "Delete the recording for good?" && c.button === "Delete the recording", "second question title and button");
 check(c.text.startsWith("The recording of “Bracket top” will be deleted from disk (4.00\u202fGB freed in all). This cannot be undone"), `second question: ${c.text}`);
 check(confirmStandard({ scans: 3 }, GB).text.startsWith("The recording of 3 scans"), "the project's second question");
-check(doneLine(196 * MB, "engineering", "Bracket top") === "Freed 196.0\u202fMB. “Bracket top” now keeps its recording and its result.", "done, engineering");
-check(doneLine(GB, "standard", "B") === "Freed 1.00\u202fGB. “B” now keeps its result only.", "done, standard");
+check(doneLine(196 * MB, "engineering", "Bracket top") === "Freed 196.0\u202fMB. “Bracket top” now keeps the recording and the result.", "done, engineering");
+check(doneLine(GB, "standard", "B") === "Freed 1.00\u202fGB. “B” now keeps the result only.", "done, standard");
 const pd = projectDoneLines({
   project_id: "p",
   to: "engineering",
@@ -198,7 +198,7 @@ const eng = { keep: "engineering" as const, has_recording: true, freed: [{ when:
 for (const a of ["make_mesh", "track", "recipe_all"] as const) check(stageBlock(eng, madeBefore, a) === null, `recording and result: ${a} still runs`);
 for (const a of ["straighten", "fuse", "spacetime", "refine"] as const)
   check(stageBlock(eng, madeBefore, a) === BLOCK.stagesGone, `recording and result: ${a} needs the stage files: ${stageBlock(eng, madeBefore, a)}`);
-check(BLOCK.stagesGone === "The stage files this needs were removed to free space. Make mesh, or Track, builds them again from the recording.", `stage files words: ${BLOCK.stagesGone}`);
+check(BLOCK.stagesGone === "The stage files this needs were removed to free space. Make mesh, or Follow the camera, builds them again from the recording.", `stage files words: ${BLOCK.stagesGone}`);
 // Track (or Make mesh) after the freeing rebuilds the stage files: the other stages run again
 const retracked = st({ track: after, straighten: before }, "track");
 for (const a of ALL) check(stageBlock(eng, retracked, a) === null, `tracked again since: ${a} runs: ${stageBlock(eng, retracked, a)}`);
@@ -245,22 +245,22 @@ for (const s of [full, eng, resOnly, merged, {}]) check((remakeBlock(s) === null
 // the choice is the engine's "recording and result" with thin: true, so every rule above for "engineering" holds
 check(JSON.stringify(choiceArgs("thinned")) === '{"mode":"engineering","thin":true}', "thinned: engineering with thin");
 check(JSON.stringify(choiceArgs("engineering")) === '{"mode":"engineering","thin":false}' && choiceArgs("standard").thin === false, "the others: no thinning");
-check(KEEP_CHOICE.thinned.title === "Keep the frames Standard quality uses, and the result", `thinned title: ${KEEP_CHOICE.thinned.title}`);
+check(KEEP_CHOICE.thinned.title === "Keep half the frames and the result", `thinned title: ${KEEP_CHOICE.thinned.title}`);
 check(KEEP_CHOICE.thinned.text.endsWith("This cannot be undone.") && KEEP_CHOICE.thinned.text.includes("gives the same mesh"), "thinned: same mesh, cannot be undone");
 check(!/—/.test(Object.values(KEEP_CHOICE).map((x) => x.title + x.text).join(" ")), "no em dashes");
 const thinned = { when: "2026-11-19T22:00:00", fps: 29.98, fps_before: 59.96, step: 2, frames: 1800, frames_before: 3600 };
 check(fpsText(29.98) === "30 frames a second" && fpsText(7.5) === "7.5 frames a second" && fpsText(1) === "1 frame a second", "frame rates in words");
-check(keepLabel("engineering", thinned) === "Keeps recording (30 frames a second) and result", `thinned label: ${keepLabel("engineering", thinned)}`);
-check(keepLabel("engineering", null) === "Keeps recording and result" && keepLabel("standard", thinned) === "Keeps result only", "labels without, or past, thinning");
+check(keepLabel("engineering", thinned) === "Keeps half the frames and the result", `thinned label: ${keepLabel("engineering", thinned)}`);
+check(keepLabel("engineering", null) === "Keeps the recording and the result" && keepLabel("standard", thinned) === "Keeps the result only", "labels without, or past, thinning");
 check(
-  thinnedLine(thinned) === "Its recording holds the frames Standard quality uses: 30 frames a second (1,800 of 3,600 frames, recorded at 60 frames a second).",
+  thinnedLine(thinned) === "Its recording holds half the frames: 30 frames a second (1,800 of 3,600 frames, recorded at 60 frames a second).",
   `thinned line: ${thinnedLine(thinned)}`,
 );
-check(thinnedLine(thinned, true).startsWith("Its recording will hold the frames") && thinnedLine(null) === "", "the plan's line, and none");
+check(thinnedLine(thinned, true).startsWith("Its recording will hold half the frames") && thinnedLine(null) === "", "the plan's line, and none");
 const tt = keepTitle({ keep: "engineering", thinned, freed: [{ when: "x", keep: "engineering", bytes: 3 * GB, thin: true }] }, null, () => "19 Nov");
-check(tt.startsWith("To free space (19 Nov), the camera frames Standard quality skips, its processing stages and undo history were removed: 3.00\u202fGB freed."), `thinned title: ${tt}`);
+check(tt.startsWith("To free space (19 Nov), half of the camera frames, its processing stages and undo history were removed: 3.00\u202fGB freed."), `thinned title: ${tt}`);
 check(tt.includes("1,800 of 3,600 frames") && tt.includes("at Standard quality it gives the same mesh as before"), `thinned hover: ${tt}`);
-check(removeLines(plan({ remove: [{ part: "frames", bytes: 2 * GB, files: 1800 }] }))[0] === "The camera frames Standard quality skips: 2.00\u202fGB", "frames line");
+check(removeLines(plan({ remove: [{ part: "frames", bytes: 2 * GB, files: 1800 }] }))[0] === "Half of the camera frames: 2.00\u202fGB", "frames line");
 const pt = plan({ writes: [{ what: "state", bytes: -2048 }, { what: "frames_list", bytes: -46800 }, { what: "meta", bytes: 160 }] });
 check(
   writeLines(pt).join("|") ===
@@ -272,10 +272,10 @@ const best = lossLines(["best"])[0];
 check(/^Best quality /.test(best) && /\d/.test(best) && best.endsWith(".") && !/TODO|—/.test(best), `best loss in numbers: ${best}`);
 check(best.includes("same mesh as Standard"), `best: what it gives then: ${best}`);
 const ct = confirmThin({ name: "Bracket top" }, 3 * GB);
-check(ct.title === "Delete the frames Standard quality skips?" && ct.button === "Delete the skipped frames", "thin: second question");
-check(ct.text.startsWith("The camera frames Standard quality skips of “Bracket top” will be deleted from disk (3.00\u202fGB freed in all). This cannot be undone."), `thin second question: ${ct.text}`);
+check(ct.title === "Delete half the frames?" && ct.button === "Delete half the frames", "thin: second question");
+check(ct.text.startsWith("Half of the camera frames of “Bracket top” (the ones Standard quality skips) will be deleted from disk (3.00\u202fGB freed in all). This cannot be undone."), `thin second question: ${ct.text}`);
 check(confirmThin({ scans: 2 }, GB).text.includes("of 2 scans"), "the project's second question");
-check(doneLine(3 * GB, "engineering", "B", true) === "Freed 3.00\u202fGB. “B” now keeps the frames Standard quality uses and its result.", "done, thinned");
+check(doneLine(3 * GB, "engineering", "B", true) === "Freed 3.00\u202fGB. “B” now keeps half the frames and the result.", "done, thinned");
 // a thinned scan is a scan that keeps its recording: Make mesh and the stages as for "recording and result"
 const engThin = { ...eng, thinned };
 check(canRemake(engThin) && remakeBlock(engThin) === null, "thinned: Make mesh runs");

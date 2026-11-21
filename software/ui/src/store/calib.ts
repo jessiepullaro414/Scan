@@ -218,12 +218,12 @@ export const useCalib = create<CalibStore>((set, get) => {
     },
 
     imuStart: async () => {
-      const s = await run("imu_start", api.calibImuStart, "Couldn't start the IMU recording");
+      const s = await run("imu_start", api.calibImuStart, "Couldn't start the motion sensor recording");
       if (s) get().applySession(s);
     },
 
     imuStop: async () => {
-      const s = await run("imu_stop", api.calibImuStop, "Couldn't stop the IMU recording");
+      const s = await run("imu_stop", api.calibImuStop, "Couldn't stop the motion sensor recording");
       if (s) get().applySession(s);
     },
 

@@ -58,20 +58,20 @@ function Row({ ok, icon: Icon, label, detail, action }: { ok: boolean | null; ic
 const firmwareOk = (fw: string | null | undefined) => !!fw && /ohs-fw/i.test(fw);
 
 function picoStatus(d: DeviceState | null): { ok: boolean | null; label: string; detail: string } {
-  if (!d?.connected || d.source !== "camera") return { ok: null, label: "Pico", detail: "Connect the scanner to check it." };
+  if (!d?.connected || d.source !== "camera") return { ok: null, label: "Control board", detail: "Connect the scanner to check it." };
   const p = d.pico;
-  if (!p?.connected) return { ok: false, label: "Pico not answering", detail: p?.error ? sentence(p.error) : "No reply on any serial port: flash the firmware, or try a data USB cable." };
+  if (!p?.connected) return { ok: false, label: "Control board not answering", detail: p?.error ? sentence(p.error) : "No reply on any serial port: flash the firmware, or try a data USB cable." };
   if (!firmwareOk(p.firmware)) return { ok: false, label: "Unexpected firmware", detail: `It answers as “${p.firmware ?? "unknown"}”: flash the OpenHandScan firmware below.` };
-  return { ok: true, label: "Pico firmware", detail: `${p.firmware}${p.port ? ` on ${p.port}` : ""}` };
+  return { ok: true, label: "Control board firmware", detail: `${p.firmware}${p.port ? ` on ${p.port}` : ""}` };
 }
 
 function imuStatus(d: DeviceState | null): { ok: boolean | null; detail: string } {
   if (!d?.connected) return { ok: null, detail: "Connect the scanner to check it." };
   if (d.source === "sim") return { ok: true, detail: "Synthesized by the simulator" };
-  if (d.source !== "camera") return { ok: null, detail: "Recordings carry their own IMU data." };
-  if (!d.pico?.connected) return { ok: false, detail: "Needs the Pico." };
+  if (d.source !== "camera") return { ok: null, detail: "Recordings carry their own motion sensor data." };
+  if (!d.pico?.connected) return { ok: false, detail: "Needs the control board." };
   const imu = d.pico.imu;
-  if (imu && /none/i.test(imu)) return { ok: false, detail: "The firmware finds no IMU: check the wiring (SDA GP4, SCL GP5, 3V3, GND)." };
+  if (imu && /none/i.test(imu)) return { ok: false, detail: "The firmware finds no motion sensor: check the wiring (on a Pico: SDA GP4, SCL GP5, 3V3, GND)." };
   if (d.imu_stream === false) return { ok: false, detail: "The motion sensor (IMU) didn't start: tracking runs without it." };
   return { ok: true, detail: imu ? `${imu}, streaming` : "Streaming" };
 }
@@ -122,10 +122,10 @@ function ScannerStatus() {
             <Row
               ok={camOn ? !camWarn : connected && device.source === "sim" ? true : null}
               icon={device.source === "sim" ? FlaskConical : Camera}
-              label={device.source === "sim" && connected ? "Simulated stereo camera" : "Stereo camera"}
+              label={device.source === "sim" && connected ? "Simulated cameras" : "Cameras"}
               detail={camWarn ? sentence(camWarn) : camText}
             />
-            <Row ok={device.source === "sim" && connected ? null : pico.ok} icon={Microchip} label={pico.label} detail={device.source === "sim" && connected ? "The simulator needs no Pico." : pico.detail} />
+            <Row ok={device.source === "sim" && connected ? null : pico.ok} icon={Microchip} label={pico.label} detail={device.source === "sim" && connected ? "The simulator needs no control board." : pico.detail} />
             <Row ok={imu.ok} icon={Orbit} label="Motion sensor (IMU)" detail={imu.detail} />
           </ul>
           {changed && camOn ? (
@@ -158,7 +158,7 @@ function ScannerStatus() {
                 ? "Stop the scan first to change the device."
                 : camOn
                   ? "Connected. If something above isn't right, fix it and reconnect."
-                  : "Plug the stereo camera into a USB 3 port and the Pico into any port."}
+                  : "Plug the cameras into a USB 3 port and the control board into any port."}
             </span>
           </div>
         </>
@@ -187,7 +187,7 @@ function CameraRow({ cam, best }: { cam: CameraProbe; best: boolean }) {
             Camera {cam.index}
             {cam.name ? <span className="font-normal text-muted"> · {cam.name}</span> : null}
           </span>
-          {cam.stereo_like ? <Badge tone="accent">Looks like the stereo camera</Badge> : null}
+          {cam.stereo_like ? <Badge tone="accent">Looks like the scanner's cameras</Badge> : null}
           {/* U29: "Selected" is said once, at the row's end */}
           {cam.in_use ? (
             <Badge tone="ok" dot>
@@ -231,7 +231,7 @@ function Cameras() {
       description={
         simOn
           ? "The simulator is connected: these cameras are not used until you connect the scanner."
-          : "The stereo camera shows one wide side-by-side image (2560\u202f×\u202f800)"
+          : "The scanner's cameras show one wide side-by-side image (2560\u202f×\u202f800)"
       }
       actions={
         <Button size="sm" variant="ghost" icon={RefreshCw} loading={loading} onClick={() => void probe()}>
@@ -321,7 +321,7 @@ function FlashSteps() {
       </li>
       <li className="rounded-lg border border-line bg-surface-2/60 p-3 text-xs text-muted">
         <b className="text-fg">Still no answer?</b> The firmware isn't running: <Code>mpremote connect COM5 repl</Code>, then Ctrl-D shows it start and
-        any error. <b className="text-fg">imu=NONE</b> means the IMU isn't found: check SDA on GP4 and SCL on GP5. The full guide is in{" "}
+        any error. <b className="text-fg">imu=NONE</b> means the motion sensor isn't found: check SDA on GP4 and SCL on GP5. The full guide is in{" "}
         <Code>firmware/README.md</Code>.
       </li>
     </ol>
@@ -337,11 +337,11 @@ function PicoSection() {
   // With the simulator there is no Pico to flash: keep the firmware steps folded away.
   const problem = !simOn && (camOn ? st.ok === false : !!devices && !devices.pico_port);
   return (
-    <Section title="Pico" icon={Cpu} description="Drives the lasers and the dot projector, reads the trigger, streams the IMU">
+    <Section title="Control board (Pico or ESP32)" icon={Cpu} description="Drives the lasers and the dots, reads the trigger, streams the motion sensor">
       <div className="mb-4 flex flex-wrap items-center gap-x-6 gap-y-2 text-sm">
         <div>
           <span className="text-xs text-subtle">Serial port</span>
-          <div className="font-mono text-fg">{devices ? (devices.pico_port ?? <span className="font-sans text-warn">No Pico found</span>) : "…"}</div>
+          <div className="font-mono text-fg">{devices ? (devices.pico_port ?? <span className="font-sans text-warn">No control board found</span>) : "…"}</div>
         </div>
         <div>
           <span className="text-xs text-subtle">Firmware</span>
@@ -370,7 +370,7 @@ function SimulatorCard() {
   const simJob = useJobs((s) => (simJobId ? s.jobs[simJobId] : undefined));
   const ready = useSimDemoReady();
   const scanning = useSession((s) => isLive(s.session));
-  const busy = device?.busy ?? (simJobId ? "Generating simulator demo…" : null);
+  const busy = device?.busy ?? (simJobId ? "Preparing the simulator…" : null);
   const simOn = !!device?.connected && device.source === "sim";
   return (
     <div className="overflow-hidden rounded-xl border border-dashed border-line-strong bg-surface-2/40 p-5">
@@ -381,7 +381,7 @@ function SimulatorCard() {
         <div className="min-w-[240px] flex-1">
           <div className="text-sm font-semibold text-fg">No hardware yet? Try the simulator.</div>
           <p className="mt-0.5 text-sm text-muted">
-            A virtual scanner with a slightly distorted lens runs the whole wizard. It calibrates into a sandbox file, so your real calibration is
+            A virtual scanner with a slightly distorted lens runs the whole wizard. It calibrates into a file of its own, so your real calibration is
             never touched.
           </p>
         </div>
@@ -410,7 +410,7 @@ function SimulatorCard() {
             <span className="min-w-0 flex-1 truncate text-xs text-muted">{simJob?.message || "This happens once; next time the simulator starts right away."}</span>
             {simJob ? <span className="font-mono text-sm text-fg tnum">{Math.round(simJob.progress * 100)}%</span> : null}
           </div>
-          <ProgressBar value={simJob ? simJob.progress : null} label="Simulator demo progress" />
+          <ProgressBar value={simJob ? simJob.progress : null} label="Simulator progress" />
         </div>
       ) : !simOn && !ready ? (
         <p className="mt-3 text-xs text-subtle">The first start builds the simulator's demo recording: about a minute, once.</p>

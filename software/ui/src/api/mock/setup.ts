@@ -157,9 +157,9 @@ export class MockSetup {
     if (sim) out.push(step("connect", "done", "The simulator is connected"));
     else if (dev.connected && dev.source === "camera") {
       const cam = cameraByIndex(this.connectedIndex ?? 1);
-      if (cam && !cam.stereo_like) out.push(step("connect", "warn", `Camera ${cam.index} isn't the stereo camera: pick another`));
-      else if (dev.pico?.connected) out.push(step("connect", "done", `Stereo camera and the Pico (${dev.pico.firmware ?? "firmware ?"}) on ${dev.pico.port ?? "USB"}`));
-      else out.push(step("connect", "warn", "Camera connected, but the Pico isn't answering"));
+      if (cam && !cam.stereo_like) out.push(step("connect", "warn", `Camera ${cam.index} isn't the scanner's cameras: pick another`));
+      else if (dev.pico?.connected) out.push(step("connect", "done", `Cameras and control board (${dev.pico.firmware ?? "firmware ?"}) on ${dev.pico.port ?? "USB"}`));
+      else out.push(step("connect", "warn", "Cameras connected, but no control board"));
     } else if (dev.connected && dev.source === "replay") out.push(step("connect", "todo", "A replay is connected: connect the scanner"));
     else out.push(step("connect", "todo", "Not connected yet"));
 
@@ -202,15 +202,15 @@ export class MockSetup {
           pl.when,
         ),
       );
-    else out.push(pl ? step("lasers", "done", pl.summary, pl.when) : step("lasers", "todo", ps ? "Not calibrated yet" : "Needs the stereo calibration first"));
+    else out.push(pl ? step("lasers", "done", pl.summary, pl.when) : step("lasers", "todo", ps ? "Not calibrated yet" : "Calibrate the cameras first"));
     const pi = part("imu");
     const noImu = !sim && dev.connected && dev.source === "camera" && !dev.pico?.connected;
     out.push(
       pi
         ? step("imu", "done", pi.summary, pi.when)
         : noImu
-          ? step("imu", "optional", "Needs the Pico's IMU")
-          : step("imu", "todo", ps ? "Not calibrated yet" : "Needs the stereo calibration first"),
+          ? step("imu", "optional", "Needs the control board's motion sensor")
+          : step("imu", "todo", ps ? "Not calibrated yet" : "Calibrate the cameras first"),
     );
     // the step's own state, as the engine gives it (ohs/server/setup.py): the last 2-minute check, never the launch
     // check's drift, which the calibration's status says (H4)
@@ -314,7 +314,7 @@ export class MockSetup {
       cameras: CAMERAS.map((c) => ({ ...c, configured: c.index === idx, in_use: c.index === inUse })),
       pico_port: this.noPico ? null : "COM5",
       configured_index: idx,
-      note: this.noPico ? "No Pico answered on any serial port. Use a data USB cable, and check that the firmware is flashed." : null,
+      note: this.noPico ? "The control board (Pico or ESP32) was not found: connect its data USB cable (some cables only charge) and flash the firmware (firmware/README.md)." : null,
     };
   }
 
@@ -403,21 +403,21 @@ export class MockSetup {
     const target = this.target();
     const phases: [number, string][] = sim
       ? [
-          [0.18, "Opening the simulated stereo camera…"],
-          [0.62, "Hold the scanner still for 2 s while the IMU is measured"],
+          [0.18, "Opening the simulated cameras…"],
+          [0.62, "Keep the scanner still for 2 s while the cameras and the motion sensor are measured"],
           [0.9, "Skipping the lasers (simulator)"],
           [1, "Writing the results…"],
         ]
       : [
           [0.07, `Opening camera ${this.connectedIndex ?? 1} (2560×800 MJPG at 60 fps)…`],
-          [0.12, pico ? "Connecting to the Pico on COM5…" : "Looking for the Pico…"],
-          [0.4, "Hold the scanner still for 3 s while the frame rate and the IMU are measured"],
+          [0.12, pico ? "Connecting to the control board…" : "Looking for the control board…"],
+          [0.4, "Keep the scanner still for 3 s while the cameras and the motion sensor are measured"],
           ...(pico
             ? ([
                 [0.47, "Point the scanner at a wall 200–400 mm away. The lasers are Class 3R: never look into them"],
                 [0.55, "Vertical line laser on for 1 s: look for the line on the wall"],
                 [0.63, "Horizontal line laser on for 1 s: look for the line on the wall"],
-                [0.71, "Dot projector on for 1 s: look for the dots on the wall"],
+                [0.71, "Dots on for 1 s: look for the dots on the wall"],
                 [0.94, "Press and release the trigger now"],
               ] as [number, string][])
             : []),
@@ -449,10 +449,10 @@ export class MockSetup {
     let checks: SelfTestCheck[];
     if (sim) {
       checks = [
-        C("camera", "PASS", "Simulated stereo camera: 2 × 1280×800 at 30 fps"),
+        C("camera", "PASS", "Simulated cameras: 2 × 1280×800 at 30 fps"),
         C("camera image", "PASS", "Rendered board scene, left and right differ"),
-        C("pico", "SKIP", "The simulator has no control board (Pico): the lasers and the trigger are simulated"),
-        C("imu values", "PASS", "Synthesized IMU: 9.81 m/s² at rest, 416 Hz"),
+        C("pico", "SKIP", "the simulator has no control board"),
+        C("imu values", "PASS", "Synthesized motion sensor: 9.81 m/s² at rest, 416 Hz"),
         C("emitters", "SKIP", "Simulated lasers and dots are always available"),
         C("trigger", "SKIP", "The simulator has no trigger: use Space instead"),
       ];
@@ -464,7 +464,7 @@ export class MockSetup {
               "camera",
               "WARN",
               `${cam.width}x${cam.height} frames from camera ${cam.index}; the config asks for 2560x800`,
-              "This is not the stereo camera. In the Connect step, choose the camera marked “looks like the stereo camera”, reconnect, and run the self-test again.",
+              "The camera runs another mode than the settings ask for: use the 2560x800 MJPG mode, or pick the scanner's cameras in step 1 (Connect).",
             )
           : C("camera", "PASS", "2560x800 MJPG at 60 fps (camera 1, dshow)"),
         C("camera fps", "PASS", "59.8 fps measured (60 requested)"),
@@ -480,7 +480,7 @@ export class MockSetup {
           ? [
               C("pico", "PASS", "HELLO ohs-fw 1.0.0 on COM5, imu=LSM6DSOX"),
               C("imu rate", "PASS", "415.8 Hz measured (416 requested)"),
-              C("imu values", "PASS", "|a| = 9.80 m/s² at rest, gyro bias 0.21 °/s"),
+              C("imu values", "PASS", "|accel| 9.80 m/s^2"),
               C("clock sync", "PASS", "round trip 0.6 ms: timestamps good to better than 1 ms"),
               C("vertical line laser", "PASS", "on at 100% for 1 s (the camera saw 3.10% of the pixels light up)"),
               C("horizontal line laser", "PASS", "on at 100% for 1 s (the camera saw 2.84% of the pixels light up)"),
@@ -489,7 +489,7 @@ export class MockSetup {
                     "dot projector",
                     "WARN",
                     "on at 100% for 1 s: confirm you saw it; the camera saw no change",
-                    "Check the laser kill toggle on the back cover, then the dot projector's wiring to GP6 (through its transistor). Run the self-test again and watch the wall.",
+                    "If you did not see it light up: check the laser key switch and the wiring, and aim at a light wall 200–400 mm away. Never look into the beams.",
                   )
                 : C("dot projector", "PASS", "on at 100% for 1 s (the camera saw 11.6% of the pixels light up)"),
               C("trigger", "PASS", "press and release seen"),
@@ -498,12 +498,12 @@ export class MockSetup {
               C(
                 "pico",
                 "FAIL",
-                "No Pico found (firmware flashed? port in pico.port)",
-                "Use a data USB cable (some are charge-only). If the Pico shows up as a drive or not at all, flash the firmware: see “Flash the firmware” in the Connect step.",
+                "the control board was not found",
+                "Connect the control board (Pico or ESP32) with a data USB cable (some cables only charge) and flash the OpenHandScan firmware (firmware/README.md); if it still is not found, set its serial port in the settings.",
               ),
-              C("imu", "SKIP", "needs the Pico"),
-              C("emitters", "SKIP", "needs the Pico"),
-              C("trigger", "SKIP", "needs the Pico"),
+              C("imu", "SKIP", "needs the control board"),
+              C("emitters", "SKIP", "needs the control board"),
+              C("trigger", "SKIP", "needs the control board"),
             ]),
       ];
     }
@@ -576,7 +576,7 @@ export class MockSetup {
           kind: "mask",
           title: "LED projector mask (option B)",
           description:
-            "For the LED + printed-mask dot projector, another option to the laser dot projector. Print at 100 % on laser transparency film (1200 dpi) and cut out the cleanest of the 48 copies.",
+            "Another option for the dots: the LED and a printed mask. Print at 100 % on laser transparency film (1200 dpi) and cut out the cleanest of the 48 copies.",
           url: url("projector_mask_sheet.pdf"),
           preview_url: previewDataUrl(maskSheet(paper, 2)),
           bytes: 2_412_090,
@@ -664,12 +664,12 @@ export class MockSetup {
     const notes: string[] = [];
     const info = (summary: string): PartInfo => ({ when, summary, session });
     if (kind === "stereo") {
-      const dropped = [d.parts.lasers ? "laser lines" : "", d.parts.imu ? "IMU calibration" : ""].filter(Boolean);
+      const dropped = [d.parts.lasers ? "laser calibration" : "", d.parts.imu ? "motion sensor calibration" : ""].filter(Boolean);
       if (dropped.length)
         notes.push(
-          `A new stereo calibration invalidates the ${dropped.join(" and the ")}: ${dropped.length > 1 ? "they were" : "it was"} dropped. Redo the ${[
+          `The new camera calibration replaces the old one, so the ${dropped.join(" and the ")} ${dropped.length > 1 ? "were" : "was"} removed. Redo the ${[
             d.parts.lasers ? "Lasers" : "",
-            d.parts.imu ? "IMU" : "",
+            d.parts.imu ? "Motion sensor (IMU)" : "",
           ]
             .filter(Boolean)
             .join(" and ")} step${dropped.length > 1 ? "s" : ""}.`,
@@ -732,9 +732,13 @@ export class MockSetup {
             when: nowIso(),
           }
         : { state: "ok", dv_px: 0.17, matches: 412, message: null, when: nowIso() };
-      const warnings = drift ? ["The calibration may have drifted (rows differ by 1.4 px): run the 2-minute check in Setup"] : [];
+      const warnings = drift
+        ? [
+            "The cameras may have moved since the calibration: left/right height mismatch 1.4 px (want under 0.6 px: the start-up check looks at three pictures only, so its limit is wider than the calibration check's). Run the calibration check in Setup.",
+          ]
+        : [];
       this.host.patchDevice({ launch_check: this.launch, warnings });
-      if (drift) this.host.log("warn", "Launch check: the calibration may have drifted (1.4 px row error). Run the 2-minute check in Setup.");
+      if (drift) this.host.log("warn", warnings[0]);
       this.broadcast();
     }, this.host.fast ? 300 : 1600);
   }

@@ -21,7 +21,7 @@ export type RelationRow = {
 
 /** What a ± from the engine is (ohs/measure/relate.py, "What the ± is"). */
 export const RELATION_SIGMA_NOTE =
-  "± is 1σ from both fits' own ± (taken as independent): how far the number could move with the scan's scatter. It is not the accuracy: calibration, scale and errors a whole region shares come on top.";
+  "± is 1σ from both fitted shapes' own ± (taken as independent): how far the number could move with the scan's scatter. It is not the accuracy: calibration, scale and errors a whole region shares come on top.";
 /** Why the engine gives no ± (ohs/measure/relate.py, "What it leaves out"): the only case is an angle with a hole's axis. */
 export const RELATION_NO_SIGMA =
   "No ±: a hole's axis direction has no ± (its circle is fitted in a plane taken as given), so an angle with it has none.";

@@ -78,6 +78,45 @@ Left from this, small:
   the engine (`ohs/measure`), not in the server.
 - "no pose: …" in a Scan check area's reason comes from the engine (`ohs/guide/views.py`).
 
+**Done (2026-11-20), the first wave of the choices: the names and the words.** U2, U3, U17, U37
+and the table "One name for each thing", in the pages, the demo, the server and the report
+together; with it the halves that were waiting: U8, U31, U48 and the demo's copies of server
+texts. What the status lines above call "left for the first wave" is done. Guards against the
+old names coming back: `tests/test_server_error_words.py` (the server's and the report's texts)
+and `ui/src/lib/words.test.ts` (the pages' texts).
+
+How the picks were read, where the plan left room:
+
+- **Scatter** is the 2σ the Scan check tests with ("Typical scatter", "Largest scatter"). A
+  single point's value on the confidence map stays 1σ and is written "±", as the report's
+  "Every ± is 1σ" says. No "σ" or "sigma" on a page; the report keeps "1σ" where it explains ±.
+- **"Check recommended"** stays the state's name (the table); the button is "Check the
+  calibration".
+- **"Live preview"** (the table) wins over U8's "Live model".
+- **"Strict 3-2-1"** stays: it names a measuring method and has its own help text.
+- **"close every opening"** stays in the watertight label: it closes the outer edge too.
+- The firmware flashing steps keep "Pico": they are about that board.
+
+### [ ] U51. The old names in texts the engine itself makes (found in the first wave, S)
+The server and the pages are done; these sentences are made deeper in the engine and reach
+the user through them, and the demo mirrors them (so `api/mock` is outside the pages' guard).
+Words only. U4 and U47 are ticked with this.
+
+- `ohs/calib/health.py`, `ohs/calib/drift.py`: "2-minute check", "launch check", "the IMU",
+  "the calibration still holds"; and U4's reason for the scans' limit ("Scans measure this more
+  finely than the board check, so their limit is lower") beside "want under 0.15 px".
+- `ohs/app/presets.py`: U47's card ("Finer mesh detail (0.5 mm instead of 1 mm): thin walls come
+  out closer to their real thickness. Takes about twice as long to make the mesh. No gain on
+  large panels."); the numbers move to a "Why" line.
+- `ohs/mesh/section.py`, `ohs/cad/*.py`: "the part's frame", "the scan's own frame".
+- `ohs/inspect/reference.py`: "the reference", "mm RMS"; `ohs/align/pairwise.py` "mm RMS";
+  `ohs/align/merge.py` "loose pieces"; `ohs/mesh/support.py` "floaters", "RMS";
+  `ohs/mesh/check.py` "the mesh's own uncertainty"; `ohs/guide/views.py` "no pose: …";
+  `ohs/inspect/gapflush.py` "the stereo depth"; `ohs/measure` "(RMS)" and the two messages for
+  the part's axes named above; the self-test's details ("imu=…").
+- The command line (`ohs/app/cli.py`, `capture.py`) says "still holds": a different audience;
+  leave unless it is one edit.
+
 ## The ten that matter most
 
 1. **U1:** an open calibration result silently blocks the first scan.
@@ -107,7 +146,7 @@ Left from this, small:
   result is still open in Setup." with "Close it" (a check) or "Review it" (a result that can
   be saved); the sidebar follows the same state.
 
-### [ ] U2. "±", "σ", "sigma" and "tolerance" are mixed, and Check's verdict reads like accuracy (choice, M)
+### [x] U2. "±", "σ", "sigma" and "tolerance" are mixed, and Check's verdict reads like accuracy (choice, M)
 - **Sees:** "97 % of the surface meets ± 0.3 mm"; per area "The scan's own 2σ here is larger
   than ± 0.3 mm", "Median sigma ±0.17 mm"; the report says every ± is 1σ.
 - **Pick:** verdict "97 % of the surface was measured finely enough for ± 0.3 mm; 13 areas need
@@ -115,7 +154,7 @@ Left from this, small:
   Largest scatter" shown as the same 2σ the test uses; ± only for tolerances and 1σ fit values,
   said once at the top; "What this does not know" directly under the verdict.
 
-### [ ] U3. "Check" names two unrelated things (choice, S)
+### [x] U3. "Check" names two unrelated things (choice, S)
 - Setup step 7 and the chip "Check recommended" against the viewer's "Check".
 - **Pick:** "Calibration check" in Setup (chip: "Check the calibration"); "Scan check" in the
   viewer (button: "Check the scan").
@@ -145,7 +184,7 @@ Left from this, small:
   `.trash` as a project does); a "Trash" link on Home with "Restore" and "Empty trash…".
   Rename first: cheapest and most wanted.
 
-### [ ] U8. Jargon on screens used every time (defect against the rules, M as many small edits)
+### [x] U8. Jargon on screens used every time (defect against the rules, M as many small edits)
 - **Scan:** the badge "0.90 · 0.55 mm" ("ICP fitness · inlier RMSE"), "Fitness / RMSE",
   "PIPELINE 15.4fps". Hide the numbers unless asked for in Settings; "Live model".
 - **Setup:** "Lens and baseline calibration" → "Calibrates the two cameras"; "a baseline with
@@ -244,7 +283,7 @@ Left from this, small:
 - **Mend:** under about 1100 px the secondary actions go into a menu; under about 860 px the
   details go under the name.
 
-### [ ] U17. One action has six names (choice, S)
+### [x] U17. One action has six names (choice, S)
 - "Process", "Remake", "Process…", "Fine-tune in Process", "Step by step…", "Rebuild the mesh",
   "Re-run"; the server says "process the scan", "run Track".
 - **Pick:** two verbs: "Make mesh" (and "Make mesh again") and "Edit mesh…" for the Process
@@ -311,7 +350,7 @@ Left from this, small:
   after Stop: "Making the mesh. You can turn the model while you wait, or leave this page: the
   job keeps running (see Jobs)."
 
-### [ ] U31. The demo says things the real engine does not (defect, S)
+### [x] U31. The demo says things the real engine does not (defect, S)
 - The calibration verdicts (U10) and the recipes (U13). **Mend:** the demo uses the server's
   words, or a test compares them.
 
@@ -337,7 +376,7 @@ Left from this, small:
   apart where they overlap"; "8 of 9 starting guesses agree (each starts from a different
   rough fit)".
 
-### [ ] U37. Free space: the names (choice, S)
+### [x] U37. Free space: the names (choice, S)
 - The three titles, a row label, and "full / engineering / standard" from the server;
   "Standard" is also a quality. **Pick:** the three titles as the only names; the middle one
   "Keep half the frames and the result"; drop "events"; "You can no longer re-run single
@@ -380,7 +419,7 @@ Left from this, small:
   1 mm): thin walls come out closer to their real thickness. Takes about twice as long to make
   the mesh. No gain on large panels."
 
-### [ ] U48. The calibration status has five wordings (defect, S)
+### [x] U48. The calibration status has five wordings (defect, S)
 - "Valid", "Calibrated", "Calibration valid", "still holds", "Calibration loaded" (a different
   fact). **Mend:** "Calibration valid" for the state; "Calibration loaded" only for "a file is
   in use".

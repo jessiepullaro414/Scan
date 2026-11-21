@@ -241,7 +241,7 @@ export function SectionProfile({ answer, frame, busy, onClose }: { answer: Secti
             </span>
           ))}
           {nums.loops.length > 1 ? <span title="The closed loops' areas together: outlines less holes">Net {area(nums.net)}</span> : null}
-          {firstSigma !== null ? <span title="Mean 1σ of the longest line's measured points">σ {firstSigma.toFixed(3)}&#8239;mm</span> : null}
+          {firstSigma !== null ? <span title="The mean ± of the longest line's measured points (one standard deviation)">± {firstSigma.toFixed(3)}&#8239;mm</span> : null}
         </div>
         {answer.truncated ? (
           <div className="text-subtle">

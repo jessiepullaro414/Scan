@@ -17,7 +17,7 @@ const PAGE_TITLE: Partial<Record<Route["name"], string>> = {
   calibrate: "Setup",
   settings: "Settings",
   viewer: "Result viewer",
-  process: "Process",
+  process: "Edit mesh",
   align: "Align and merge scans",
   project: "Project",
 };

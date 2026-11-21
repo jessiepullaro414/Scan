@@ -53,7 +53,7 @@ const ACTION_LABEL: Record<CalibAdviceAction, string> = {
   add_views: "Add more views",
   remove_bad_views: "Drop and recalibrate",
   start_over: "Start over",
-  recalibrate_stereo: "Redo the stereo step",
+  recalibrate_stereo: "Redo the cameras",
   reprint: "Go to Print targets",
   check_board: "Check the board",
 };
@@ -233,9 +233,9 @@ export function ResultView({ kind }: { kind: CalibKind }) {
                         <Button size="sm" onClick={() => navigate(paths.setup("lasers"))}>
                           Go to Lasers
                         </Button>
-                      ) : /imu/i.test(n) ? (
+                      ) : /imu|motion sensor/i.test(n) ? (
                         <Button size="sm" onClick={() => navigate(paths.setup("imu"))}>
-                          Go to IMU
+                          Go to Motion sensor (IMU)
                         </Button>
                       ) : undefined
                     }
@@ -300,7 +300,7 @@ export function ResultView({ kind }: { kind: CalibKind }) {
           {isCheck ? (
             <>
               <Button icon={RotateCcw} disabled={action !== null} onClick={() => void startOver()}>
-                Run the check again
+                Run the calibration check again
               </Button>
               {r ? (
                 <Button variant="ghost" icon={Download} onClick={() => void downloadFile(r.report_url, "calibration_check_report.json")}>

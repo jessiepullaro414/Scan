@@ -472,7 +472,7 @@ def test_devices_probe(env, monkeypatch):
     monkeypatch.setattr(pico_mod, "find_pico_port", lambda: None)
     p = _ok(_get(url, "/api/setup/devices"))
     assert p["cameras"] == [] and p["pico_port"] is None
-    assert "No camera found" in p["note"] and "simulator" in p["note"] and "Pico was not found" in p["note"]
+    assert "No camera found" in p["note"] and "simulator" in p["note"] and "control board (Pico or ESP32) was not found" in p["note"]
     # the camera in use is never opened again: its entry comes from the running camera
     cam = FakeCamera(size=(1280, 800), fps=30.0)
 
@@ -563,13 +563,13 @@ def test_selftest_with_the_camera_reconnects_it(tmp_path, demo_dir):
             assert res["overall"] == "WARN"
             assert seen["busy"] and "Press and release the trigger now" in seen["prompts"]
             assert any(m.startswith("Keep the scanner still for 2 s") for m in seen["prompts"])
-            assert any(m.startswith("Point the scanner at a light wall 20–40 cm away") for m in seen["prompts"])
+            assert any(m.startswith("Point the scanner at a light wall 200–400 mm away") for m in seen["prompts"])
             dev = _ok(_get(url, "/api/device"))
             assert dev["source"] == "camera" and dev["connected"] and dev["busy"] is None and dev["pico"]["connected"]
             assert sp.emits()[-1] == "EMIT 0 0 0"
             s = _ok(_get(url, "/api/setup"))
             assert _steps(s)["selftest"]["state"] == "warn" and "warning" in _steps(s)["selftest"]["summary"]
-            assert _steps(s)["connect"]["state"] == "done" and "Pico" in _steps(s)["connect"]["summary"]
+            assert _steps(s)["connect"]["state"] == "done" and "control board" in _steps(s)["connect"]["summary"]
     finally:
         sp.close()
 
@@ -589,7 +589,7 @@ def test_selftest_without_a_pico_says_what_to_do():
     checks = run_camera_selftest(cfg, lambda _c: FakeCamera(size=(160, 100), fps=60.0), no_pico, messages.append,
                                  lambda f: None, seconds=0.3)
     by = {c["id"]: c for c in checks}
-    assert by["pico"]["status"] == "FAIL" and "control board (Pico) was not found" in by["pico"]["detail"]
+    assert by["pico"]["status"] == "FAIL" and "control board was not found" in by["pico"]["detail"]
     assert "data USB cable" in by["pico"]["fix"] and by["camera"]["status"] == "PASS"
     assert "trigger" not in by and "Opening the camera…" in messages
     res = result_dict(checks, "camera")
@@ -618,7 +618,7 @@ def test_launch_check_flags_a_perturbed_calibration(tmp_path, demo_dir):
                     "the launch check")
         lc = dev["launch_check"]
         assert lc["state"] == "ok" and lc["dv_px"] < 0.6 and lc["matches"] >= 40 and lc["when"], lc
-        assert not any("2-minute check" in w for w in dev["warnings"])
+        assert not any("calibration check" in w for w in dev["warnings"])
         msgs = recv_until(ws, lambda m, p, raw: m["type"] == "setup" and m.get("launch_check"), timeout=10)
         assert not any(m["type"] == "log" and m["level"] == "warn" for m, _, _ in msgs)  # silent when fine
         _ok(_post(url, "/api/device/connect", {"source": "replay", "recording": str(bad), "loop": True}))
@@ -626,7 +626,7 @@ def test_launch_check_flags_a_perturbed_calibration(tmp_path, demo_dir):
                     "the launch check")
         lc = dev["launch_check"]
         assert lc["state"] == "drift" and lc["dv_px"] > 0.6 and lc["message"], lc
-        assert any("2-minute check" in w for w in dev["warnings"])
+        assert any("calibration check" in w for w in dev["warnings"])
         msgs = recv_until(ws, lambda m, p, raw: m["type"] == "log" and m["level"] == "warn", timeout=10)
         assert "may have moved" in msgs[-1][0]["message"]
         setup = _ok(_get(url, "/api/setup"))

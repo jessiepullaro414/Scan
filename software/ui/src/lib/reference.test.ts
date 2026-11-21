@@ -50,7 +50,7 @@ const hexRgb = (h: string) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 1
 check(referenceReadout(0.123, 0) === "+0.12\u202fmm (outside)", "outside");
 check(referenceReadout(-0.0345, 0) === "−0.035\u202fmm (inside)", "inside, with a true minus");
 check(referenceReadout(0.0001, 0) === "0.000\u202fmm (on it)", "on it");
-check(referenceReadout(NaN, 2) === "not on the reference" && referenceReadout(NaN, 1) === "not measured", "the two kinds of not compared");
+check(referenceReadout(NaN, 2) === "not on the CAD model" && referenceReadout(NaN, 1) === "not measured", "the two kinds of not compared");
 check(stateAt([0, 2, 1], 0, 1, 2, [0.1, 0.7, 0.2]) === 2, "the nearest corner's state");
 check(fmtDev(-1.234) === "−1.23\u202fmm" && fmtDev(0.5, false) === "0.50\u202fmm" && fmtDev(null) === "–", "deviations");
 
@@ -67,7 +67,7 @@ check(fmtDev(-1.234) === "−1.23\u202fmm" && fmtDev(0.5, false) === "0.50\u202f
     message: "…",
   };
   const c = unitsChoice(u)!;
-  check(c.question === "Is the reference in inches?", c.question);
+  check(c.question === "Is the CAD model in inches?", c.question);
   check(c.scaled!.factor === 25.4 && c.scaled!.size === "155\u202fmm" && c.asIs.size === "6.10\u202fmm" && c.scan === "154\u202fmm", JSON.stringify(c));
   const far = unitsChoice({ ...u, factor: null, unit: null, candidates: [] })!;
   check(far.scaled === null && /very different/.test(far.question), "no unit fits: keep it or pick another reference");
@@ -113,9 +113,9 @@ check(/Nothing/.test(toleranceSentence({ share_within: null, share_above: null, 
     reference_area_mm2: 10000,
   };
   const lines = coverageLines(c);
-  check(lines.length === 3 && /55\u202f% of the scan is not on the reference/.test(lines[0]) && /2\u202f% of the scan was not measured/.test(lines[1]), lines.join(" | "));
-  check(/74\u202f% of the reference's surface was not scanned/.test(lines[2]), lines[2]);
-  check(coverageLines({ ...c, off_reference_share: 0, not_measured_share: 0, uncovered_share: 0 }).join() === "The scan covers all of the reference.", "all covered");
+  check(lines.length === 3 && /55\u202f% of the scan is not on the CAD model/.test(lines[0]) && /2\u202f% of the scan was not measured/.test(lines[1]), lines.join(" | "));
+  check(/74\u202f% of the CAD model's surface was not scanned/.test(lines[2]), lines[2]);
+  check(coverageLines({ ...c, off_reference_share: 0, not_measured_share: 0, uncovered_share: 0 }).join() === "The scan covers all of the CAD model.", "all covered");
 }
 
 // an area: its words, and the scan's own uncertainty said plainly
@@ -124,7 +124,7 @@ check(/Nothing/.test(toleranceSentence({ share_within: null, share_above: null, 
   check(regionTitle(r).title === "Inside by 0.84\u202fmm on average" && regionTitle(r).worst === "worst −1.02\u202fmm", JSON.stringify(regionTitle(r)));
   check(regionTitle({ ...r, side: "above", mean_mm: 0.4 }).title === "Outside by 0.40\u202fmm on average", "above: outside");
   const u = regionUncertainty(r);
-  check(u.tone === "ok" && /real difference/.test(u.text) && /± 0\.10\u202fmm/.test(u.text), u.text);
+  check(u.tone === "ok" && /real difference/.test(u.text) && /scatter here \(0\.10\u202fmm\)/.test(u.text), u.text);
   const w = regionUncertainty({ ...r, exceeds_uncertainty: false });
   check(w.tone === "warn" && /no evidence of a real difference/.test(w.text), w.text);
   check(regionUncertainty({ ...r, exceeds_uncertainty: null, sigma_median_mm: null }).tone === "none", "no sigma");

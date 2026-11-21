@@ -174,7 +174,7 @@ export function useScanJob(sid: string | null | undefined): Job | undefined {
 export const jobKindLabel = (kind: string): string => {
   const k = kind.toLowerCase();
   if (isStudioJob(k)) {
-    if (k.includes("track")) return "Track";
+    if (k.includes("track")) return "Follow the camera";
     if (k.includes("straighten")) return "Straighten";
     if (k.includes("fuse")) return "Fuse";
     if (k.includes("spacetime")) return "Refine from the images";
@@ -185,9 +185,9 @@ export const jobKindLabel = (kind: string): string => {
   if (k === "align") return "Align and merge scans";
   if (k === "align_all") return "Align and merge scans";
   if (k === "merge") return "Merge scans";
-  if (k === "reference_align") return "Align with the reference";
+  if (k === "reference_align") return "Align with the CAD model";
   if (k.includes("process") || k.includes("mesh")) return "Make mesh";
-  if (k.includes("sim") || k.includes("demo")) return "Simulator demo";
+  if (k.includes("sim") || k.includes("demo")) return "Simulator";
   if (k.includes("selftest") || k.includes("self_test")) return "Self-test";
   if (k.includes("printable")) return "Print targets";
   if (k.includes("calib")) return "Calibration";

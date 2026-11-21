@@ -36,7 +36,7 @@ export function cadLine(s: CadSummary): string {
     const r = s.reason.trim().replace(/\.$/, "");
     return `${r[0].toUpperCase()}${r.slice(1)}.`;
   }
-  return `${plural(s.n_fits, "fit")} (${cadCounts(s.counts)}), in ${s.frame_label}.`;
+  return `${plural(s.n_fits, "fitted shape")} (${cadCounts(s.counts)}), along ${s.frame_label}.`;
 }
 
 /** What the real outline costs, in a few lines for the switch's hover card: both files' sizes either way, the

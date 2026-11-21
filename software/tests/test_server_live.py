@@ -315,7 +315,7 @@ def test_first_sim_connect_generates_the_demo(tmp_path):
         job = r.json()["job"]
         assert job["kind"] == "generate_demo" and job["state"] in ("queued", "running", "done")
         dev = requests.get(srv.url + "/api/device", timeout=T).json()
-        assert dev["busy"] == "Generating simulator demo…" or dev["connected"]
+        assert dev["busy"] == "Preparing the simulator…" or dev["connected"]
         seen = {"connected": False, "done": False}
 
         def both(m, p, raw):

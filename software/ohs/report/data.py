@@ -66,13 +66,13 @@ PARTS = (
     ("meaning", "What the numbers mean"),
     ("made", "How the scan was made"),
     ("calibration", "Calibration"),
-    ("check", "Does the scan meet the tolerance?"),
-    ("frame", "The part's coordinate system"),
-    ("pictures", "Views of the model"),
-    ("features", "Measured features"),
-    ("relations", "Relations between fits"),
+    ("check", "Scan check: measured finely enough for the tolerance?"),
+    ("frame", "The part's axes"),
+    ("pictures", "Views of the mesh"),
+    ("features", "Fitted shapes and measurements"),
+    ("relations", "Relations between fitted shapes"),
     ("sections", "Sections"),
-    ("comparison", "Compared with a reference model"),
+    ("comparison", "Compared with the CAD model"),
     ("flush", "Flush along a seam"),
 )
 HEADING = dict(PARTS)
@@ -314,7 +314,7 @@ def _frame(doc: dict, prep: Prepared) -> None:
             pf = PartFrame.from_dict(frame)
         except (ValueError, TypeError, KeyError) as e:
             state = {"readable": False, "out_of_date": True,
-                     "out_of_date_reasons": [f"this version cannot read the part's frame: {e}"]}
+                     "out_of_date_reasons": [f"this version cannot read the part's axes: {e}"]}
     prep.frame = {**frame, **state}
     prep.part_frame = pf
     for w in _text_list(frame.get("warnings")):
@@ -324,8 +324,8 @@ def _frame(doc: dict, prep: Prepared) -> None:
             prep.warn("frame", None, w)
     elif state.get("out_of_date"):
         reasons = "; ".join(_text_list(state.get("out_of_date_reasons")))
-        prep.warn("frame", None, "The part's frame is out of date" + (f": {reasons}" if reasons else "")
-                  + ". Build it again from the current fits.")
+        prep.warn("frame", None, "The part's axes are out of date" + (f": {reasons}" if reasons else "")
+                  + ". Set them again from the current fitted shapes.")
 
 
 def _features(data: dict, prep: Prepared) -> None:
@@ -392,10 +392,10 @@ def _comparison_warnings(c: dict, prep: Prepared) -> None:
     ref = c.get("reference") if isinstance(c.get("reference"), dict) else {}
     al = c.get("alignment") if isinstance(c.get("alignment"), dict) else {}
     for w in _text_list(ref.get("warnings")):
-        prep.warn("comparison", "Reference", w)
+        prep.warn("comparison", "CAD model", w)
     units = ref.get("units") if isinstance(ref.get("units"), dict) else None
     if units is not None and units.get("status") == "pending":
-        prep.warn("comparison", "Reference", f"Its units are not settled: {units.get('message') or ''}".rstrip(": "))
+        prep.warn("comparison", "CAD model", f"Its units are not settled: {units.get('message') or ''}".rstrip(": "))
     if al and al.get("accepted") is False:
         prep.warn("comparison", "Alignment", f"The alignment was not accepted: {al.get('verdict') or ''}".rstrip(": "))
     for w in _text_list(al.get("warnings")):

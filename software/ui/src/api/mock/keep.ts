@@ -82,7 +82,7 @@ export class MockKeep {
         `the stage files this needs were removed to free space (this scan keeps ${s.keep === "standard" ? "its result only" : "its recording and its result"})`,
         s.keep === "standard"
           ? "the mesh can still be edited, measured and exported; the stage files can only be made again from a recording, which this scan no longer has"
-          : "make the mesh again (Make mesh, or Track first) to rebuild them from the recording",
+          : "Press Make mesh again (or run “Follow the camera” first) to make them again from the recording.",
       );
     return null;
   }

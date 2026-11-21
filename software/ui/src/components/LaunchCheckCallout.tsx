@@ -23,12 +23,12 @@ export function LaunchCheckCallout({ glass, className }: { glass?: boolean; clas
       <div className="min-w-0 flex-1">
         <div className="text-sm font-semibold text-fg">The calibration may have drifted</div>
         <div className="mt-0.5 text-xs text-muted">
-          {lc.message ? sentence(lc.message) : `Left and right image rows differ${lc.dv_px !== null ? ` by ${fmtFixed(lc.dv_px, 1)}\u202fpx` : ""}.`} A 2-minute check tells
+          {lc.message ? sentence(lc.message) : `Left and right image rows differ${lc.dv_px !== null ? ` by ${fmtFixed(lc.dv_px, 1)}\u202fpx` : ""}.`} The calibration check tells
           you whether to recalibrate.
         </div>
       </div>
       <Button size="sm" variant="primary" icon={ClipboardCheck} onClick={() => navigate(paths.setup("check"))}>
-        Run the check
+        Run the calibration check
       </Button>
     </div>
   );

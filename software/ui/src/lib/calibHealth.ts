@@ -20,15 +20,15 @@ export const STATE_TONE: Record<HealthState, HealthTone> = { valid: "neutral", c
 const SHORT: Record<HealthState, string> = { valid: "Calibration valid", check: "Check recommended", recalibrate: "Recalibrate" };
 /** The button for each wizard step an action names (the action's own words go in its hover text). */
 export const STEP_BUTTON: Record<HealthAction["step"], string> = {
-  check: "Run the 2-minute check",
+  check: "Check the calibration",
   stereo: "Redo the cameras",
   lasers: "Redo the lasers",
-  imu: "Redo the IMU",
+  imu: "Redo the motion sensor",
 };
 export const PROVISIONAL = "The limits are provisional until the real scanner has been measured.";
 
-const PART_WORDS: Record<HealthPart, string> = { cameras: "the cameras", lasers: "the lasers", imu: "the IMU" };
-const PART_LABEL: Record<HealthPart, string> = { cameras: "Cameras", lasers: "Lasers", imu: "IMU" };
+const PART_WORDS: Record<HealthPart, string> = { cameras: "the cameras", lasers: "the lasers", imu: "the motion sensor" };
+const PART_LABEL: Record<HealthPart, string> = { cameras: "Cameras", lasers: "Lasers", imu: "Motion sensor" };
 
 const isState = (s: unknown): s is HealthState => typeof s === "string" && (STATES as string[]).includes(s);
 const isPart = (p: unknown): p is HealthPart => p === "cameras" || p === "lasers" || p === "imu";
@@ -37,7 +37,7 @@ const asSentence = (s: string) => {
   return t && !/[.!?]$/.test(t) ? `${t}.` : t;
 };
 
-/** "the lasers", "the lasers and the IMU", "the cameras, the lasers and the IMU". */
+/** "the lasers", "the lasers and the motion sensor", "the cameras, the lasers and the motion sensor". */
 export function partsWords(parts: HealthPart[]): string {
   const w = parts.filter(isPart).map((p) => PART_WORDS[p]);
   return w.length <= 1 ? (w[0] ?? "") : `${w.slice(0, -1).join(", ")} and ${w[w.length - 1]}`;
@@ -135,7 +135,7 @@ export function headerHealthButton(route: RouteName): boolean {
 export function overviewStep(step: SetupStep, health: CalibHealth | null | undefined): SetupStep {
   if (step.id !== "check" || step.state !== "warn" || !health || health.state === "valid" || !isState(health.state)) return step;
   const said = (health.reasons ?? []).some(
-    (r) => r.source === "board_check" || (r.source === "launch_check" && /launch check/i.test(step.summary)),
+    (r) => r.source === "board_check" || (r.source === "launch_check" && /start-up check|launch check/i.test(step.summary)),
   );
   return said ? { ...step, summary: "" } : step;
 }

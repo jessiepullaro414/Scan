@@ -451,7 +451,7 @@ function useFinishedMesh(): BufferGeometry | null {
       .catch((e: unknown) => {
         if ((e as { name?: string }).name === "AbortError") return;
         // what is on screen stays; the post-scan card's "Open result" still opens the mesh
-        toast.error(finished ? "Couldn't show the finished mesh here" : "Couldn't show the tracked mesh here", e);
+        toast.error(finished ? "Couldn't show the finished mesh here" : "Couldn't show the mesh so far here", e);
       });
     return () => ctrl.abort();
   }, [pid, sid, want, meshUrl]); // eslint-disable-line react-hooks/exhaustive-deps

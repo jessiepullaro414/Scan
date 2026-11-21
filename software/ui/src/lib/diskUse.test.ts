@@ -79,7 +79,7 @@ const project: ProjectDiskUse = {
   seconds: 0.05,
 };
 const text = projectDiskText(project);
-check(text === "1.51\u202fGB on disk: recordings 1.25\u202fGB, processing stages 120.0\u202fMB, undo history 76.0\u202fMB, results 65.0\u202fMB, reference models 4.0\u202fMB", `project text: ${text}`);
+check(text === "1.51\u202fGB on disk: recordings 1.25\u202fGB, processing stages 120.0\u202fMB, undo history 76.0\u202fMB, results 65.0\u202fMB, CAD models 4.0\u202fMB", `project text: ${text}`);
 check(projectDiskText({ ...project, bytes: 0, parts: { recording: 0, stages: 0, undo: 0, result: 0 }, references: 0, other: 0 }) === "Nothing on disk yet", "empty project");
 
 // the trash, only when it holds something

@@ -219,7 +219,7 @@ export default function ScanPage({ projectParam, first = false, continues = null
         {!pass && continues && !live && !lastStopped ? (
           <div className="border-b border-line p-3">
             <Callout tone="neutral" title="Nothing to scan again yet">
-              A second pass starts from the first scan's Check panel: open the scan, press Check, then Scan these areas again. Start now makes an ordinary scan.
+              A second pass starts from the first scan's Scan check: open the scan, press Check the scan, then Scan these areas again. Start now makes an ordinary scan.
             </Callout>
           </div>
         ) : null}

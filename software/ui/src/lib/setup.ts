@@ -38,7 +38,7 @@ export type StepMeta = {
 export const STEP_META: Record<SetupPage, StepMeta> = {
   connect: {
     title: "Connect",
-    why: "Studio needs to see the stereo camera and the Pico before anything else.",
+    why: "Studio needs to see the scanner's cameras and its control board (Pico or ESP32) before anything else.",
     icon: Usb,
     time: "1\u202fmin",
     minutes: 1,
@@ -58,7 +58,7 @@ export const STEP_META: Record<SetupPage, StepMeta> = {
     minutes: 5,
   },
   stereo: {
-    title: "Stereo",
+    title: "Cameras",
     why: "Calibrates the two cameras: the base of every millimetre the scanner measures.",
     icon: Aperture,
     time: "5\u202fmin",
@@ -66,7 +66,7 @@ export const STEP_META: Record<SetupPage, StepMeta> = {
   },
   lasers: {
     title: "Lasers",
-    why: "The laser lines give precise reference points, even on black and glossy paint.",
+    why: "The laser lines give precise extra points, even on black and glossy paint.",
     icon: Zap,
     time: "3\u202fmin",
     minutes: 3,
@@ -79,7 +79,7 @@ export const STEP_META: Record<SetupPage, StepMeta> = {
     minutes: 1,
   },
   check: {
-    title: "Check",
+    title: "Calibration check",
     why: "A two-minute check that the saved calibration is still valid after a knock or a hot day in the car.",
     icon: ClipboardCheck,
     time: "2\u202fmin",
@@ -164,7 +164,7 @@ export type KindMeta = {
 
 export const KIND_META: Record<CalibKind, KindMeta> = {
   stereo: {
-    title: "Stereo calibration",
+    title: "Camera calibration",
     how: "Hold the glued board in front of the scanner and move it around: every corner and edge of the image, tilted left, right, up and down, near and far.",
     needs: "The printed board, glued flat to glass. The lasers and dots stay off.",
     minLabel: "views",
@@ -173,14 +173,14 @@ export const KIND_META: Record<CalibKind, KindMeta> = {
   lasers: {
     title: "Laser calibration",
     how: "Hold the board so every laser line crosses its white margin. Change the distance and the tilt between views.",
-    needs: "The board and the stereo calibration. The line lasers switch on.",
+    needs: "The board and the camera calibration. The line lasers switch on.",
     minLabel: "views",
     distance: [150, 450],
   },
   imu: {
-    title: "IMU calibration",
+    title: "Motion sensor calibration",
     how: "Put the board where the camera sees it. Hold the scanner still for 2\u202fs, then rotate it slowly about all three axes.",
-    needs: "The board in view and the stereo calibration.",
+    needs: "The board in view and the camera calibration.",
     minLabel: "recording",
     distance: [150, 600],
   },
@@ -246,9 +246,9 @@ export function isInstruction(message: string | null | undefined): boolean {
 export type CheckGroup = { key: string; title: string; checks: SelfTestCheck[] };
 
 const GROUPS: { key: string; title: string; re: RegExp }[] = [
-  { key: "camera", title: "Camera", re: /camera|image|fps|frame/i },
-  { key: "pico", title: "Pico and IMU", re: /pico|firmware|imu|gyro|accel|clock|sync/i },
-  { key: "emitters", title: "Lasers and projector", re: /laser|projector|emitter|dot/i },
+  { key: "camera", title: "Cameras", re: /camera|image|fps|frame/i },
+  { key: "pico", title: "Control board and motion sensor", re: /pico|firmware|imu|gyro|accel|clock|sync/i },
+  { key: "emitters", title: "Lasers and dots", re: /laser|projector|emitter|dot/i },
   { key: "trigger", title: "Trigger", re: /trigger|button/i },
 ];
 
@@ -265,8 +265,24 @@ export function groupChecks(checks: SelfTestCheck[]): CheckGroup[] {
 
 export const STATUS_RANK: Record<CheckStatus, number> = { FAIL: 0, WARN: 1, INFO: 2, SKIP: 3, PASS: 4 };
 
-/** "camera fps" → "Camera fps", "imu values" → "IMU values". */
+/** The engine's check names in the app's words (the server's `selftest._LABELS`): "pico" → "Control board". */
+const CHECK_LABEL: Record<string, string> = {
+  camera: "Cameras",
+  "camera fps": "Camera frame rate",
+  pico: "Control board",
+  imu: "Motion sensor (IMU)",
+  "imu rate": "Motion sensor rate",
+  "imu values": "Motion sensor values",
+  "dot projector": "Dots",
+  emitters: "Lasers and dots",
+  "vertical line laser": "Vertical laser",
+  "horizontal line laser": "Horizontal laser",
+};
+
+/** "pico" → "Control board", "imu values" → "Motion sensor values", any other "camera image" → "Camera image". */
 export function checkLabel(name: string): string {
+  const known = CHECK_LABEL[name.trim().toLowerCase()];
+  if (known) return known;
   const s = name.replace(/[_-]+/g, " ").trim();
   const words = s.split(/\s+/).map((w) => (/^(imu|fps|led|usb|id)$/i.test(w) ? w.toUpperCase() : w));
   const t = words.join(" ");

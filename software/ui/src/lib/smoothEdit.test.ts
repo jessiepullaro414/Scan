@@ -21,7 +21,7 @@ check(same(smoothEdit(SMOOTH_DEFAULTS, false).body, e.body), "the same without s
 
 // turned on by the person: sent only when the mesh has sigmas
 e = smoothEdit({ ...SMOOTH_DEFAULTS, withinSigma: true }, true);
-check(e.body.params.within_sigma === true && e.label === "Smooth (Taubin, 50\u202f%, within 2σ)", `turned on: ${e.label}`);
+check(e.body.params.within_sigma === true && e.label === "Smooth (Taubin, 50\u202f%, within the scatter)", `turned on: ${e.label}`);
 e = smoothEdit({ ...SMOOTH_DEFAULTS, withinSigma: true }, false);
 check(!("within_sigma" in e.body.params) && e.label === "Smooth (Taubin, 50\u202f%)", "turned on, but the mesh has no sigmas: not sent");
 
@@ -29,7 +29,7 @@ check(!("within_sigma" in e.body.params) && e.label === "Smooth (Taubin, 50\u202
 e = smoothEdit({ ...SMOOTH_DEFAULTS, where: "edges" }, true);
 check(e.body.params.away_from_edges === true && !("flat_only" in e.body.params) && e.label === "Smooth (Taubin, 50\u202f%, away from edges)", `off edges: ${e.label}`);
 e = smoothEdit({ ...SMOOTH_DEFAULTS, where: "flat", withinSigma: true }, true);
-check(e.body.params.flat_only === true && !("away_from_edges" in e.body.params) && e.label === "Smooth (Taubin, 50\u202f%, flat areas only, within 2σ)", `flat only: ${e.label}`);
+check(e.body.params.flat_only === true && !("away_from_edges" in e.body.params) && e.label === "Smooth (Taubin, 50\u202f%, flat areas only, within the scatter)", `flat only: ${e.label}`);
 e = smoothEdit({ ...SMOOTH_DEFAULTS, method: "bilateral", strength: 0.3, keepEdges: false }, true);
 check(e.body.params.keep_edges === true && e.label === "Smooth, keep edges (30\u202f%)", `bilateral always keeps edges: ${e.label}`);
 e = smoothEdit({ ...SMOOTH_DEFAULTS, keepEdges: false }, true);

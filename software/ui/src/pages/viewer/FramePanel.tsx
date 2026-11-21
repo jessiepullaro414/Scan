@@ -38,7 +38,7 @@ const SLOT_HELP: Record<FrameRole, { title: string; text: string }> = {
 };
 const STRICT_HELP =
   "Off: the origin hole's centre is the origin, as measuring machines do it (level, turn, origin). On: the 3-2-1 count in the strict sense: a side face is also X = 0, and the origin hole only sets the coordinate left over (Y).";
-const FLIP_HELP = "Each axis points from its face into the part. Flip one to make it point out instead; the third axis turns with it, so the frame stays right-handed.";
+const FLIP_HELP = "Each axis points from its face into the part. Flip one to make it point out instead; the third axis turns with it, so the axes stay right-handed.";
 const AXES = ["ZX", "ZY", "XY", "XZ", "YZ", "YX"];
 const ROLE_NAME: Record<FrameRole, string> = { primary: "Primary", secondary: "Secondary", origin: "Origin" };
 
@@ -106,18 +106,18 @@ function FrameSummary({ frame, fits }: { frame: PartFrameView; fits: FitItem[] }
         })}
       </ul>
       <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-[11.5px]">
-        <dt className="text-subtle" title="1σ of the frame's whole rotation (RMS), and of its turn about the first axis. A turn error moves a point L mm from the origin by about L × the angle.">
+        <dt className="text-subtle" title="1σ of the axes' whole rotation (a typical angle), and of their turn about the first axis. A turn error moves a point L mm from the origin by about L × the angle.">
           Angle
         </dt>
         <dd className="text-right font-mono text-fg tnum">
           {sig(s.angle_deg, "°")} <span className="text-subtle">(turn {sig(s.turn_deg, "°")})</span>
         </dd>
-        <dt className="text-subtle" title="1σ of where the origin lies (RMS of its 3D displacement), carried over from the fits' ±.">
+        <dt className="text-subtle" title="1σ of where the origin lies (a typical 3D distance), carried over from the fitted shapes' ±.">
           Origin
         </dt>
         <dd className="text-right font-mono text-fg tnum">{sig(s.origin_mm, "\u202fmm")}</dd>
       </dl>
-      <div className="mt-1.5 text-[11px] leading-4 text-subtle">± (1σ) from the fits' own ±: the spread from scan to scan, not the calibration's scale or a bias the whole scan shares.</div>
+      <div className="mt-1.5 text-[11px] leading-4 text-subtle">± (1σ) from the fitted shapes' own ±: the spread from scan to scan, not the calibration's scale or a bias the whole scan shares.</div>
       {frame.warnings.length ? (
         <ul className="mt-1.5 space-y-0.5">
           {frame.warnings.map((w) => (
@@ -186,8 +186,8 @@ export function FramePanel({
           <div className="flex items-center gap-2">
             <TriangleExclamationPoint size={13} className="shrink-0" aria-hidden />
             <span className="flex-1 font-semibold">Out of date</span>
-            <Button size="xs" icon={RefreshCw} loading={framing} disabled={!again || !ready} onClick={() => again && void build(again)} title="Build it again from the same three fits and options">
-              Build again
+            <Button size="xs" icon={RefreshCw} loading={framing} disabled={!again || !ready} onClick={() => again && void build(again)} title="Set them again from the same three fitted shapes and options">
+              Set again
             </Button>
           </div>
           <ul className="mt-1 space-y-0.5 pl-[21px]">
@@ -195,7 +195,7 @@ export function FramePanel({
               <li key={r}>{sentence(r)}.</li>
             ))}
           </ul>
-          {!again ? <div className="mt-1 pl-[21px] text-subtle">A fit it was built from is gone: pick another below.</div> : null}
+          {!again ? <div className="mt-1 pl-[21px] text-subtle">A fitted shape they were set from is gone: pick another below.</div> : null}
         </div>
       ) : null}
       {problem ? (
@@ -209,15 +209,15 @@ export function FramePanel({
         checked={inPart && !!frame}
         onChange={onInPart}
         disabled={!frame}
-        label="Numbers in the part's frame"
+        label="Numbers along the part's axes"
         description={
           frame
-            ? "Points, centres, normals, axes and a distance's Δ in the Fits and Measurements panels. Sizes, distances, angles and ± stay the same; the 3D view stays in the scan's frame."
-            : "Build the coordinate system first."
+            ? "Points, centres, normals, axes and a distance's Δ in the Fitted shapes and Measurements panels. Sizes, distances, angles and ± stay the same; the 3D view stays along the scan's axes."
+            : "Set the part's axes first."
         }
       />
 
-      <div className="space-y-1.5" aria-label="The three fits of the coordinate system">
+      <div className="space-y-1.5" aria-label="The three fitted shapes that set the part's axes">
         {ROLES.map((role) => {
           const kinds = SLOT_KINDS[role];
           const usable = picked && kinds.includes(picked.kind) && !picked.stale;
@@ -227,7 +227,7 @@ export function FramePanel({
               <Help title={SLOT_HELP[role].title} label={`${SLOT_HELP[role].title}: ${SLOT_HELP[role].text}`}>
                 {SLOT_HELP[role].text}
               </Help>
-              <Select className="min-w-0 flex-1" value={form.slots[role]} aria-label={`${ROLE_NAME[role]} fit`} onChange={(e) => setSlot(role, e.target.value)} disabled={!fits.length}>
+              <Select className="min-w-0 flex-1" value={form.slots[role]} aria-label={`${ROLE_NAME[role]} fitted shape`} onChange={(e) => setSlot(role, e.target.value)} disabled={!fits.length}>
                 <option value="">{kinds.map((k) => fitName(k).toLowerCase()).join(", ").replace(/, ([^,]*)$/, " or $1")}…</option>
                 {fits
                   .filter((f) => kinds.includes(f.kind))
@@ -311,12 +311,12 @@ export function FramePanel({
               secondary_zero: form.secondary_zero,
             })
           }
-          title={complete ? "Build the part's coordinate system from these three fits and keep it with the scan" : "Pick a fit for each of the three slots"}
+          title={complete ? "Set the part's axes from these three fitted shapes and save them with the scan" : "Pick a fitted shape for each of the three slots"}
         >
-          {frame || problem ? "Build" : "Build the coordinate system"}
+          {frame || problem ? "Set" : "Set the part's axes"}
         </Button>
         {frame || problem ? (
-          <Button size="sm" variant="ghost" icon={Trash} disabled={framing} onClick={onRemove} title="Forget the coordinate system (the fits stay)">
+          <Button size="sm" variant="ghost" icon={Trash} disabled={framing} onClick={onRemove} title="Forget the part's axes (the fitted shapes stay)">
             Remove
           </Button>
         ) : null}

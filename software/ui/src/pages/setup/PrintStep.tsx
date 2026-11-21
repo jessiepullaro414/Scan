@@ -336,7 +336,7 @@ export function PrintStep() {
               ))}
             </ul>
             <p className="mt-3 text-xs text-subtle">
-              The mask is only for option B, the LED + printed-mask dot projector: another option to the laser dot projector, and the software treats
+              The mask is only for option B, the dots from an LED and a printed mask: another option to the laser dots, and the software treats
               both the same.
             </p>
           </>

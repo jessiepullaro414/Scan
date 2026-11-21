@@ -109,8 +109,8 @@ export const LASER_NONE_HINT = "To compare, scan the part again with the lasers 
 
 /** What the comparison is good for, in the legend. */
 export const LASER_MEANING =
-  "The lasers and the stereo depth are two independent measurements: where they agree, the surface can be trusted more. " +
-  "Where they differ by more than your part's tolerance, scan that area again or use “Refine with lasers” (Process page).";
+  "The lasers and the cameras' depth are two independent measurements: where they agree, the surface can be trusted more. " +
+  "Where they differ by more than your part's tolerance, scan that area again or use “Refine with lasers” (Edit mesh page).";
 
 /**
  * What the cursor is over, in words: "+0.034 mm (lasers further out)", "-0.12 mm (lasers further in)"

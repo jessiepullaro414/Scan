@@ -42,7 +42,7 @@ export function projectDiskText(d: ProjectDiskUse): string {
     ["processing stages", d.parts.stages],
     ["undo history", d.parts.undo],
     ["results", d.parts.result],
-    ["reference models", d.references],
+    ["CAD models", d.references],
   ] as const;
   const shown = parts.filter(([, b]) => b > 0).map(([label, b]) => `${label} ${fmtBytes(b)}`);
   return `${fmtBytes(d.bytes)} on disk${shown.length ? `: ${shown.join(", ")}` : ""}`;

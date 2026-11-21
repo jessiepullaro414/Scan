@@ -268,7 +268,7 @@ def _made(p: dict) -> str | None:
             text += f"; {N.whole(fr['cut'])} left out where the recording was cut"
         rows.append(("Frames", esc(text)))
     if p.get("poses") == "given":
-        rows.append(("Tracking", "Fused at given poses (straightened or fused again from the tracked poses)"))
+        rows.append(("Tracking", "Built from a given camera path (straightened, or rebuilt from the tracked path)"))
     elif _num(fr.get("tracked")) and _num(fr.get("processed")) and fr["processed"]:
         text = f"{N.whole(fr['tracked'])} of {N.whole(fr['processed'])} frames tracked ({N.percent(fr['tracked'] / fr['processed'])})"
         fails = p.get("failures") if isinstance(p.get("failures"), dict) else {}
@@ -277,7 +277,7 @@ def _made(p: dict) -> str | None:
         rows.append(("Tracking", esc(text)))
     imu = p.get("imu") if isinstance(p.get("imu"), dict) else {}
     if imu.get("gyro_prior") and _num(imu.get("frames_with_prior")):
-        rows.append(("Gyro", esc(f"helped the tracking on {N.whole(imu['frames_with_prior'])} frames")))
+        rows.append(("Motion sensor", esc(f"helped the tracking on {N.whole(imu['frames_with_prior'])} frames")))
     mk = p.get("markers") if isinstance(p.get("markers"), dict) else {}
     if _num(mk.get("map_size")):
         rows.append(("Markers", esc(f"{N.whole(mk['map_size'])} in the map")))
@@ -290,7 +290,7 @@ def _made(p: dict) -> str | None:
         if isinstance(bb, (list, tuple)) and len(bb) == 2 and _vec_ok(bb[0]) and _vec_ok(bb[1]):
             text += "; " + " × ".join(N.fixed(b - a, 1) for a, b in zip(bb[0], bb[1])) + " mm across"
         if _num(mesh.get("voxel_mm")):
-            text += f"; made at {N.nominal(mesh['voxel_mm'])} mm voxels"
+            text += f"; mesh detail {N.nominal(mesh['voxel_mm'])} mm"
         if mesh.get("method") == "poisson":
             text += " (Poisson surface: no ± per point)"
         rows.append(("Mesh", esc(text)))
@@ -312,7 +312,7 @@ def _calibration(cal: dict) -> str:
     rows: list[tuple[str, str]] = []
     parts = cal.get("parts") if isinstance(cal.get("parts"), dict) else None
     if parts is not None:
-        for key, label in (("stereo", "Cameras (stereo)"), ("lasers", "Laser lines"), ("imu", "IMU")):
+        for key, label in (("stereo", "Cameras"), ("lasers", "Laser lines"), ("imu", "Motion sensor (IMU)")):
             info = parts.get(key)
             if isinstance(info, dict):
                 text = str(info.get("summary") or "Calibrated")
@@ -347,7 +347,7 @@ def _calibration(cal: dict) -> str:
         if health.get("reason"):
             text += esc(f": {health['reason']}")
         # what could not be judged is said, never called fine (H4)
-        names = [{"imu": "the IMU"}.get(str(p), f"the {p}") for p in health.get("not_judged") or []]
+        names = [{"imu": "the motion sensor"}.get(str(p), f"the {p}") for p in health.get("not_judged") or []]
         if names:
             text += "<br>" + f"<span class=\"muted\">{esc('Not judged: ' + ' and '.join(names) + '.')}</span>"
         if health.get("note"):
@@ -376,10 +376,10 @@ def _check(c: dict) -> str | None:
         body.append(f"<p>This mesh has no ± per point, so only the filled-in areas can be told: {esc(N.percent(nm))} of "
                     f"the surface is not measured. Whether the rest meets {esc(t)} cannot be said.</p>")
     else:
-        body.append(f"<p><strong>{esc(N.percent(ok))} of the surface meets {esc(t)}</strong>: there, {N.nominal(k)} times "
-                    f"the scan's own ± (its {N.nominal(k)}σ band) is within the tolerance.</p>")
-        rows = [("Meets the tolerance", esc(N.percent(ok))),
-                ("Uncertain", esc(f"{N.percent(unc)}: the {N.nominal(k)}σ band is wider than {t}")),
+        body.append(f"<p><strong>{esc(N.percent(ok))} of the surface was measured finely enough for {esc(t)}</strong>: "
+                    f"there, the scan's own scatter ({N.nominal(k)} times its ±) is within the tolerance.</p>")
+        rows = [("Measured finely enough", esc(N.percent(ok))),
+                ("Measured too loosely", esc(f"{N.percent(unc)}: the scan's scatter there is wider than {t}")),
                 ("Not measured", esc(f"{N.percent(nm)}: filled in, nothing measured it"))]
         if _num(c.get("area_mm2")):
             rows.append(("Surface", esc(N.area(c["area_mm2"]))))
@@ -389,16 +389,16 @@ def _check(c: dict) -> str | None:
         body.append("<h3>The areas that do not meet it, largest first</h3>")
         rows = []
         for i, a in enumerate(areas, 1):
-            kind = "Not measured" if a.get("kind") == "not_measured" else "Uncertain"
+            kind = "Not measured" if a.get("kind") == "not_measured" else "Measured too loosely"
             sig = "—"
-            if _num(a.get("sigma_median_mm")):
-                sig = f"{N.small(a['sigma_median_mm'])} / {N.small(a['sigma_worst_mm'])} mm" if _num(
-                    a.get("sigma_worst_mm")) else f"{N.small(a['sigma_median_mm'])} mm"
+            if _num(a.get("sigma_median_mm")):  # the scatter is the same k σ the check uses
+                sig = f"{N.small(k * a['sigma_median_mm'])} / {N.small(k * a['sigma_worst_mm'])} mm" if _num(
+                    a.get("sigma_worst_mm")) else f"{N.small(k * a['sigma_median_mm'])} mm"
             rows.append([str(i), esc(kind), esc(N.area(a["area_mm2"])) if _num(a.get("area_mm2")) else "—",
                          esc(N.percent(a["share"])) if _num(a.get("share")) else "—",
                          esc(N.vector(a["center"], 1) + " mm") if _vec_ok(a.get("center")) else "—",
                          esc(N.length(a["extent_mm"])) if _num(a.get("extent_mm")) else "—", esc(sig)])
-        body.append(_table(["#", "Kind", "Area", "Share", "Centre (scan's frame)", "Across", "± median / worst"], rows,
+        body.append(_table(["#", "Kind", "Area", "Share", "Centre (scan's axes)", "Across", "Typical / largest scatter"], rows,
                            num=(0, 2, 3, 4, 5, 6)))
         n = c.get("n_areas")
         notes = []
@@ -425,7 +425,7 @@ def _frame(prep: Prepared) -> str | None:
         return _part("frame", body)
     if fr.get("out_of_date"):
         reasons = "; ".join(str(x) for x in fr.get("out_of_date_reasons") or [])
-        body.append(f"<p>{_badge('out of date')} {esc(reasons)}. The numbers below are those of the frame as it was built.</p>")
+        body.append(f"<p>{_badge('out of date')} {esc(reasons)}. The numbers below are those of the axes as they were set.</p>")
     rows = []
     for b in fr.get("built_from") or []:
         if isinstance(b, dict):
@@ -434,12 +434,12 @@ def _frame(prep: Prepared) -> str | None:
                          esc(SHAPE_WORDS.get(b.get("kind"), str(b.get("kind") or ""))), esc(b.get("sets") or "")])
     if rows:
         body.append("<h3>Built from</h3>")
-        body.append(_table(["Role", "Fit", "Kind", "What it sets"], rows))
+        body.append(_table(["Role", "Fitted shape", "Kind", "What it sets"], rows))
     facts = []
     axes = fr.get("axes") if isinstance(fr.get("axes"), dict) else {}
     if axes:
         facts.append(("Axes", esc(f"the primary gives {axes.get('primary')}, the secondary {axes.get('secondary')}; "
-                                  f"{axes.get('third')} completes a right-handed frame")))
+                                  f"{axes.get('third')} completes a right-handed set of axes")))
     choices = []
     if fr.get("flip_primary"):
         choices.append(f"{axes.get('primary', 'the first axis')} turned round")
@@ -461,9 +461,9 @@ def _frame(prep: Prepared) -> str | None:
         facts.append(("± of the origin", esc(text)))
     pf = prep.part_frame
     if pf is not None:
-        facts.append(("Origin, in the scan's frame", esc(N.vector(pf.origin, 3) + " mm")))
+        facts.append(("Origin, along the scan's axes", esc(N.vector(pf.origin, 3) + " mm")))
         for n, row in zip("XYZ", pf.rotation):
-            facts.append((f"{n} axis, in the scan's frame", esc(N.vector(row, 4))))
+            facts.append((f"{n} axis, along the scan's axes", esc(N.vector(row, 4))))
     body.append(_dl(facts))
     if sig:
         body.append("<p class=\"note\">A turn error moves a point L mm from the origin by about L times the turn (in "
@@ -509,7 +509,7 @@ def _size_html(v: dict) -> str:
     """A fit's size, and beside it each approved nominal value."""
     kind = v["shape"].get("kind")
     if kind == "plane":
-        text = esc(f"RMS {N.small(v['rms_mm'])} mm") if _num(v.get("rms_mm")) else "—"
+        text = esc(f"flat to {N.small(v['rms_mm'])} mm (typical)") if _num(v.get("rms_mm")) else "—"
     elif _num(v.get("diameter_mm")):
         text = esc("Ø " + N.pm(v["diameter_mm"], v.get("diameter_sigma_mm"), "mm"))
     else:
@@ -541,13 +541,13 @@ def _features(prep: Prepared) -> str | None:
         return None
     body = []
     if prep.in_part_frame:
-        where = "Positions and directions are in the part's frame (its coordinate system, below the warnings)."
+        where = "Positions and directions are along the part's axes (see “The part's axes”, below the warnings)."
         if prep.frame and prep.frame.get("out_of_date"):
-            where += " That frame is out of date."
+            where += " Those axes are out of date."
     elif prep.part_frame_unreadable:
-        where = "Positions and directions are in the scan's own frame: the part's frame cannot be read."
+        where = "Positions and directions are along the scan's own axes: the part's axes cannot be read."
     else:
-        where = "Positions and directions are in the scan's own frame."
+        where = "Positions and directions are along the scan's own axes."
     body.append(f"<p class=\"note\">{esc(where)} A plane's position is the centre of its points, with the ± of its "
                 "offset along its normal; a cylinder's a point on its axis and a hole's its centre, with the ± across "
                 "the axis.</p>")
@@ -578,7 +578,7 @@ def _features(prep: Prepared) -> str | None:
             rows.append([f"<strong>{esc(v['name'])}</strong><div class=\"muted\">{esc(kind)}</div>", _size_html(v), where,
                          esc(ext), _ul(v["notes"]) or "—"])
         body.append(_table(["Name", "Size", "Where", "Extent", "Warnings"], rows, num=(1, 2, 3)))
-        body.append("<p class=\"note\">A plane's size is how far its points lie from it (RMS). Extent: a plane's "
+        body.append("<p class=\"note\">A plane's size is how flat it is: how far its points typically lie from it. Extent: a plane's "
                     "smallest rectangle round its outline and its measured area; a cylinder's length along its axis "
                     "and how much of its round was scanned.</p>")
     if prep.measurements:
@@ -688,13 +688,13 @@ def _comparison(c: dict) -> str | None:
         body.append(f"<p><strong>{esc(tol['sentence'])}</strong></p>")
     rows = []
     if ref:
-        text = str(ref.get("name") or "the reference")
+        text = str(ref.get("name") or "the CAD model")
         extra = []
         if _num(ref.get("size_mm")):
             extra.append(f"{N.fixed(ref['size_mm'], 1)} mm across")
         if _num(ref.get("n_faces")):
             extra.append(f"{N.whole(ref['n_faces'])} triangles")
-        rows.append(("Reference", esc(text + (f" ({', '.join(extra)})" if extra else ""))))
+        rows.append(("CAD model", esc(text + (f" ({', '.join(extra)})" if extra else ""))))
         units = ref.get("units") if isinstance(ref.get("units"), dict) else None
         if units is not None and units.get("status") != "same" and units.get("message"):
             rows.append(("Its units", esc(units["message"])))
@@ -715,14 +715,14 @@ def _comparison(c: dict) -> str | None:
     if _num(tol.get("tolerance_mm")):
         t = N.nominal(tol["tolerance_mm"])
         parts = [f"within ± {t} mm: {N.percent(tol['share_within'])}" if _num(tol.get("share_within")) else None,
-                 f"above (+, material outside the reference): {N.percent(tol['share_above'])}"
+                 f"above (+, material outside the CAD model): {N.percent(tol['share_above'])}"
                  if _num(tol.get("share_above")) else None,
                  f"below (-, inside it): {N.percent(tol['share_below'])}" if _num(tol.get("share_below")) else None]
         rows.append(("Of the compared surface", esc("; ".join(p for p in parts if p))))
         if _num(tol.get("share_uncertain")):
             k = N.nominal(tol.get("k") or 2)
             rows.append(("Too uncertain to tell", esc(f"{N.percent(tol['share_uncertain'])} of the compared surface, where "
-                                                      f"the scan's own {k}σ is wider than ± {t} mm")))
+                                                      f"the scan's own scatter ({k} times its ±) is wider than ± {t} mm")))
         worst = []
         if _num(tol.get("worst_above_mm")):
             worst.append(f"{N.fixed(tol['worst_above_mm'], 2)} mm above")
@@ -737,12 +737,12 @@ def _comparison(c: dict) -> str | None:
                                        f"{N.fixed(st['p05_mm'], 3)} and {N.fixed(st['p95_mm'], 3)} mm")))
     gone = []
     if _num(dev.get("off_reference_share")):
-        gone.append(f"{N.percent(dev['off_reference_share'])} of the scan is not on the reference (a table, clamps, or "
+        gone.append(f"{N.percent(dev['off_reference_share'])} of the scan is not on the CAD model (a table, clamps, or "
                     f"surface more than {N.nominal(dev.get('near_mm') or 3)} mm off) and was not compared")
     if _num(dev.get("not_measured_share")):
         gone.append(f"{N.percent(dev['not_measured_share'])} of the scan was filled in, not measured, and was not compared")
     if _num(dev.get("uncovered_share")):
-        gone.append(f"{N.percent(dev['uncovered_share'])} of the reference was not scanned")
+        gone.append(f"{N.percent(dev['uncovered_share'])} of the CAD model was not scanned")
     if gone:
         rows.append(("Not compared", "<br>".join(esc(g[:1].upper() + g[1:] + ".") for g in gone)))
     if rows:
@@ -754,14 +754,14 @@ def _comparison(c: dict) -> str | None:
         for i, r in enumerate(regions, 1):
             side = "Above (+)" if r.get("side") == "above" else "Below (-)"
             ex = r.get("exceeds_uncertainty")
-            beyond = "yes" if ex is True else "no: within the scan's own ±" if ex is False else "not known"
+            beyond = "yes" if ex is True else "no: within the scan's scatter" if ex is False else "not known"
             rows.append([str(i), esc(side), esc(N.area(r["area_mm2"])) if _num(r.get("area_mm2")) else "—",
                          esc(N.percent(r["share"])) if _num(r.get("share")) else "—",
                          esc(N.fixed(r["mean_mm"], 3) + " mm") if _num(r.get("mean_mm")) else "—",
                          esc(N.fixed(r["worst_mm"], 3) + " mm") if _num(r.get("worst_mm")) else "—",
                          esc(N.vector(r["center"], 1) + " mm") if _vec_ok(r.get("center")) else "—", esc(beyond)])
-        body.append(_table(["#", "Side", "Area", "Share", "Mean", "Worst", "Centre (reference's frame)",
-                            "More than the scan's own 2σ"], rows, num=(0, 2, 3, 4, 5, 6)))
+        body.append(_table(["#", "Side", "Area", "Share", "Mean", "Worst", "Centre (CAD model's axes)",
+                            "More than the scan's scatter"], rows, num=(0, 2, 3, 4, 5, 6)))
         n = tol.get("n_regions")
         if isinstance(n, int) and n > len(regions):
             body.append(f"<p class=\"note\">The largest {len(regions)} of {n} areas are listed.</p>")

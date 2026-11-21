@@ -47,18 +47,18 @@ const summary = async (boundary?: string) => (await call("GET", ["cad"], boundar
 
 // no kept fits: a reason, and no file
 let s = await summary();
-check(s.n_fits === 0 && !!s.reason && s.reason.includes("no kept fits"), "the reason without kept fits");
+check(s.n_fits === 0 && !!s.reason && s.reason.includes("no fitted shapes"), "the reason without kept fits");
 check(s.step_bytes === null && s.notes.length === 0, "no sizes, no notes");
 for (const name of ["fits.step", "fits.FCMacro"]) {
   const r = call("GET", ["cad", name]);
-  check(r.status === 409 && ((await r.json()) as { detail: string }).detail.includes("no kept fits"), `409 for ${name}`);
+  check(r.status === 409 && ((await r.json()) as { detail: string }).detail.includes("no fitted shapes"), `409 for ${name}`);
 }
 
 // three kept fits, no frame: counts, the scan's frame, names after the scan
 for (const face of [1, 2, 3]) check(call("POST", [], { kind: face === 3 ? "hole" : "plane", face, point: [0, 0, 0] }).status === 200, `keep fit ${face}`);
 s = await summary();
 check(s.n_fits === 3 && s.counts.plane === 2 && s.counts.hole === 1 && s.counts.cylinder === 0, "the counts");
-check(s.frame === "scan" && s.frame_label === "the scan's own frame", "the scan's frame");
+check(s.frame === "scan" && s.frame_label === "the scan's own axes", "the scan's frame");
 check(s.notes.some((n) => n.includes("no part frame")) && s.notes.some((n) => n.includes("demo")), "the notes say so");
 check(s.warnings.length === 0 && s.reason === null && s.boundary === "rectangle", "nothing to warn about");
 check(s.filenames.step === "Top_left_2-fits.step" && s.filenames.macro === "Top_left_2-fits.FCMacro", `names: ${JSON.stringify(s.filenames)}`);

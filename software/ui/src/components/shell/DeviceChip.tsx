@@ -24,7 +24,7 @@ export function DeviceChip() {
 
   const source = device?.source ?? "none";
   const connected = !!device?.connected;
-  const busy = device?.busy ?? (simJobId ? "Generating simulator demo…" : null);
+  const busy = device?.busy ?? (simJobId ? "Preparing the simulator…" : null);
   const calibrated = !!device?.calibration?.loaded;
   const Icon = SOURCE_ICON[source] ?? Unplug;
   const hv = healthView(useDeviceHealth());
@@ -56,7 +56,7 @@ export function DeviceChip() {
           {device?.camera ? <div className="text-muted">Camera: {device.camera.connected ? "connected" : "not found"}</div> : null}
           {device?.pico ? (
             <div className="text-muted">
-              Pico: {device.pico.connected ? `connected${device.pico.firmware ? ` (${device.pico.firmware})` : ""}` : "not found"}
+              Control board: {device.pico.connected ? `connected${device.pico.firmware ? ` (${device.pico.firmware})` : ""}` : "not found"}
             </div>
           ) : null}
           {hv ? (
@@ -73,13 +73,13 @@ export function DeviceChip() {
                 {calibrated ? "Calibration loaded" : "No calibration: calibrate in Setup"}
               </div>
               {device?.launch_check?.state === "drift" ? (
-                <div className="text-warn">The calibration may have drifted: run the 2-minute check in Setup</div>
+                <div className="text-warn">The calibration may have drifted: run the calibration check in Setup</div>
               ) : null}
             </>
           )}
         </>
       ) : (
-        <div className="text-muted">Choose the camera, a recording or the simulator demo on the Device page.</div>
+        <div className="text-muted">Choose the camera, a recording or the simulator on the Device page.</div>
       )}
     </div>
   );

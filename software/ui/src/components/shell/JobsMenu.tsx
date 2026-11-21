@@ -82,7 +82,7 @@ function JobRow({ job }: { job: Job }) {
       ) : studio ? (
         <div className="mt-1.5 pl-[23px]">
           <Button size="xs" variant="secondary" onClick={() => navigate(paths.process(studio.pid, studio.sid))}>
-            Open in Process
+            Open in Edit mesh
           </Button>
         </div>
       ) : null}

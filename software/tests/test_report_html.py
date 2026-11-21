@@ -366,7 +366,7 @@ def test_every_name_and_number_is_where_it_belongs(full):
     assert "± 0.1 mm" in check and "not measured" in check.lower()
     comp = page.text("comparison")
     assert data["comparison"]["tolerance"]["sentence"] in comp
-    assert "bracket_v2.stl" in comp and "not on the reference" in comp
+    assert "bracket_v2.stl" in comp and "not on the CAD model" in comp
     from ohs.inspect.gapflush import GAP_NOTE
     assert GAP_NOTE in page.text("flush")
     assert "Door bracket" not in page.text("meaning")
@@ -448,7 +448,7 @@ def test_each_part_alone_and_calibration_health_not_assessed():
         "note": "This scan was processed without a GPU, so only the cameras could be judged."}}}))
     t = own.text("calibration")
     assert "Valid" in t and "nothing off for the cameras" in t and "without a GPU" in t
-    assert "Not judged: the lasers and the IMU" in t and t.count("provisional") == 1
+    assert "Not judged: the lasers and the motion sensor" in t and t.count("provisional") == 1
     assert "nothing off for the cameras" not in own.text("warnings")  # a valid status is no warning
     # fits alone: features without relations, sections or a frame
     only = Page(build_html({"features": {**data["features"], "relations": [], "frame": None}}))

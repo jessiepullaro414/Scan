@@ -198,7 +198,7 @@ class ReportManager:
             return None
         scale = float(view.get("scale") or 1.0)
         rec = view.get("reference") or {}
-        ref = {"name": rec.get("name") or "the reference (its file is no longer in the project)",
+        ref = {"name": rec.get("name") or "the CAD model (its file is no longer in the project)",
                "units": view.get("units"), "warnings": list(rec.get("warnings") or [])}
         if isinstance(rec.get("size_mm"), (int, float)):
             ref["size_mm"] = float(rec["size_mm"]) * scale

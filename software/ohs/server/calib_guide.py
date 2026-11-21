@@ -191,7 +191,7 @@ class BoardDetector:
     def __init__(self, kind: str, spec: Any, calib: Any = None, paper: str = "letter",
                  names: Sequence[str] | None = None) -> None:
         if kind != "stereo" and calib is None:
-            raise ValueError(f"the {kind} calibration needs the stereo calibration")
+            raise ValueError(f"the {kind} calibration needs the camera calibration")
         self.kind, self.spec, self.calib, self.paper = kind, spec, calib, paper
         self.names = tuple(names) if names else STANDARD_LINES
         self._fams = families(self.names)

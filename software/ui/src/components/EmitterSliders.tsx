@@ -8,14 +8,14 @@ import { Slider } from "./ui/Form";
 const EMITTERS: { key: EmitterName; label: string; short: string; help: string }[] = [
   { key: "vertical", label: "Vertical line laser", short: "Vertical laser", help: "Laser points on the near-vertical stripe" },
   { key: "horizontal", label: "Horizontal line laser", short: "Horizontal laser", help: "Laser points on the near-horizontal stripe" },
-  { key: "dots", label: "Dot projector", short: "Dot projector", help: "Texture for stereo depth on plain surfaces" },
+  { key: "dots", label: "Dots", short: "Dots", help: "Texture for the cameras' depth on plain surfaces" },
 ];
 
 const PRESETS: { label: string; levels: Emitters; title: string }[] = [
   { label: "Scan", levels: { vertical: 100, horizontal: 100, dots: 100 }, title: "Everything on: dots for depth, lines for laser points" },
   { label: "Lines only", levels: { vertical: 100, horizontal: 100, dots: 0 }, title: "Laser lines only" },
-  { label: "Dots only", levels: { vertical: 0, horizontal: 0, dots: 100 }, title: "Dot projector only" },
-  { label: "All off", levels: { vertical: 0, horizontal: 0, dots: 0 }, title: "Switch every emitter off" },
+  { label: "Dots only", levels: { vertical: 0, horizontal: 0, dots: 100 }, title: "The dots only" },
+  { label: "All off", levels: { vertical: 0, horizontal: 0, dots: 0 }, title: "Switch the lasers and dots off" },
 ];
 
 /** Emitter levels (camera + Pico only), throttled to ~8 updates per second while dragging. */

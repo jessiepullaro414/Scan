@@ -230,7 +230,7 @@ export const useFeatures = create<FeaturesStore>((set, get) => {
         return true;
       } catch (e) {
         patch(pid, sid, { framing: false });
-        toast.error("Couldn't remove the coordinate system", e);
+        toast.error("Couldn't remove the part's axes", e);
         return false;
       }
     },

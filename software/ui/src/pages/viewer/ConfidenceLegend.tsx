@@ -16,8 +16,8 @@ export function ConfidenceLegend({ geometry, className }: { geometry: BufferGeom
   return (
     <div className={cn("w-[250px] text-[11px] leading-4 text-muted", className)} role="group" aria-label="Confidence map legend">
       <div className="mb-1.5 flex items-baseline justify-between gap-2">
-        <span className="font-semibold text-fg">Uncertainty</span>
-        <span className="text-subtle">1σ of each point, mm</span>
+        <span className="font-semibold text-fg">Confidence</span>
+        <span className="text-subtle">each point's ±, mm</span>
       </div>
       <div className="h-2.5 rounded-full" style={{ background: rampCss(theme) }} aria-hidden />
       <div className="relative mt-1 h-3.5 font-mono text-[10.5px] text-subtle tnum" aria-hidden>

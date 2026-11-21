@@ -188,8 +188,8 @@ def _mode(mode: Any) -> str:
 def _thin_arg(mode: str, thin: Any) -> bool:
     thin = bool(thin)
     if thin and mode != "engineering":
-        raise ApiError(422, "Keeping only the frames Standard quality uses goes with keeping the recording and the "
-                            "result.", f"Pick {_THIN}.")
+        raise ApiError(422, "Keeping half the frames goes with keeping the recording and the result.",
+                       f"Pick {_THIN}.")
     return thin
 
 
@@ -213,7 +213,7 @@ def _write_bytes(path: Path, data: bytes) -> None:
 
 #: the Free space dialog's three choices, by their titles (the only names the app shows for them, UX_PLAN U37)
 _ENGINEERING = "\u201cKeep the recording and the result\u201d"
-_THIN = "\u201cKeep the frames Standard quality uses, and the result\u201d"
+_THIN = "\u201cKeep half the frames and the result\u201d"
 _STANDARD = "\u201cKeep the result only\u201d"
 
 #: what keeping only the frames Standard uses can not promise, and what to do instead
@@ -474,7 +474,7 @@ class KeepManager:
                 if plan["refusal"] is not None:
                     raise ApiError(409, plan["refusal"]["detail"], plan["refusal"]["hint"])
                 if plan["confirm"] and not confirm:
-                    what = "the frames Standard quality skips" if mode == "engineering" else "this scan's recording"
+                    what = "half the frames" if mode == "engineering" else "this scan's recording"
                     raise ApiError(409, f"Removing {what} cannot be undone.", "Confirm it once more to go ahead.")
                 if sp is not None:
                     self.st.processing.keep_current_only(sp, in_result)
@@ -531,7 +531,7 @@ class KeepManager:
         thin = _thin_arg(mode, thin)
         plan = self.project_plan(pid, mode, thin)
         if plan["confirm"] and not confirm:
-            what = "the frames Standard quality skips" if thin else "these scans' recordings"
+            what = "half the frames" if thin else "these scans' recordings"
             raise ApiError(409, f"Removing {what} cannot be undone.", "Confirm it once more to go ahead.")
         want = None if scans is None else set(scans)
         results, freed = [], 0

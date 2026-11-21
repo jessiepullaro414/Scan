@@ -66,7 +66,7 @@ def _describe(name: str, manifest: dict) -> tuple[str, str]:
                 f"The sticker sheet as a {BOARD_DPI} dpi image. Print at 100 % on matte removable label paper.")
     if name == "projector_mask_sheet.pdf":
         return ("LED projector mask, option B (PDF)",
-                "Another option for the dot projector: print at 100 % on laser transparency film "
+                "Another option for the dots: print at 100 % on laser transparency film "
                 f"({dpi} dpi), then cut out the cleanest of the copies.")
     if name == "projector_mask_sheet.png":
         return ("LED projector mask sheet (PNG image)",

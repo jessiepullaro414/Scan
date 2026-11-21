@@ -32,7 +32,7 @@ export type PicoState = {
 export type DeviceState = {
   source: Source;
   connected: boolean;
-  busy: string | null; // e.g. "Generating simulator demo…"
+  busy: string | null; // e.g. "Preparing the simulator…"
   camera: { connected: boolean; info: Record<string, unknown> } | null;
   pico: PicoState | null;
   calibration: CalibrationInfo;
@@ -1144,7 +1144,7 @@ export type CadSummary = {
   n_fits: number; // the kept fits exported (all of them)
   counts: { plane: number; cylinder: number; hole: number; point: number };
   frame: "part" | "scan"; // the frame the files are in
-  frame_label: string; // "the part's frame" | "the scan's own frame"
+  frame_label: string; // "the part's axes" | "the scan's own axes"
   notes: string[]; // the writer's, in plain words (a fit kept with no size, what an outline left out, ...)
   warnings: string[]; // fits made on an earlier mesh, a frame out of date or not readable
   stale: string[]; // ids of the fits made on an earlier mesh

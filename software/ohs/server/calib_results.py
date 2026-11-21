@@ -45,7 +45,7 @@ __all__ = ["build_result", "failed_result", "plain_error", "swapped", "sim_truth
 log = logging.getLogger(__name__)
 
 REPORT_URL = "/api/calibration/report.json"
-KIND_NAMES = {"stereo": "Stereo calibration", "lasers": "Laser calibration", "imu": "IMU calibration",
+KIND_NAMES = {"stereo": "Camera calibration", "lasers": "Laser calibration", "imu": "Motion sensor calibration",
               "check": "Calibration check"}
 _SAVEABLE = ("excellent", "good", "usable", "poor")
 STANDARD_LINES = ("vertical", "horizontal")  # the config's default [lasers] lines
@@ -193,14 +193,15 @@ def _stereo(value: Any, report: dict, view_ids: Sequence[int], truth: tuple | No
                "Views the solver dropped because they did not fit the others (blur, glare or a bent board)."),
         metric("Largest tilt", f"{tilt:.0f}° (want 20–45°)", tilt >= 20.0,
                "Tilted views fix the focal length; flat views alone cannot."),
-        metric("Baseline", f"{base:.2f} mm", None,
-               "The distance between the two cameras (about 60 mm on the OpenHandScan head)."),
-        metric("Row error after rectification", "not measured" if dv is None else f"{dv:.2f} px (want < 0.3 px)",
+        metric("Distance between the cameras", f"{base:.2f} mm", None,
+               "About 60 mm on the OpenHandScan head."),
+        metric("Left/right height mismatch", "not measured" if dv is None else f"{dv:.2f} px (want < 0.3 px)",
                None if dv is None else dv < 0.3,
-               "After rectification the same point must sit on the same row in both pictures."),
+               "The same point must sit at the same height in the left and the right picture."),
         metric("Scale error", "not measured" if scale is None else f"{scale:+.2f} % (want within ±0.5 %)",
                None if scale is None else abs(scale) < 0.5,
-               "The board size measured by stereo against its printed size: checks the baseline and the print."),
+               "The board size measured by the cameras against its printed size: checks the distance between the "
+               "cameras and the print."),
     ]
     adv: list[dict] = []
     if swapped(value):
@@ -208,7 +209,7 @@ def _stereo(value: Any, report: dict, view_ids: Sequence[int], truth: tuple | No
         headline = "Left and right cameras are swapped"
         verdict = ("The picture of the right camera arrives as the left one, so this calibration is unusable. Turn on "
                    "“swap left/right” in the camera settings, connect again and start over.")
-        adv.append(advice("Turn on “swap left/right” in the camera settings, connect again, then start the stereo "
+        adv.append(advice("Turn on “swap left/right” in the camera settings, connect again, then start the camera "
                           "calibration over.", "start_over"))
         return _result("stereo", grade, headline, verdict, metrics, adv, per_view, truth)
     if rms < 0.3 and cov > 0.6 and dv is not None and dv < 0.2 and (scale is None or abs(scale) < 0.3) \
@@ -235,19 +236,19 @@ def _stereo(value: Any, report: dict, view_ids: Sequence[int], truth: tuple | No
     if scale is not None and abs(scale) >= 0.5:
         adv.append(advice("The measured board size is off: check the printed 100 mm bar (print check).", "reprint"))
     if grade in ("excellent", "good"):
-        headline = f"{grade.capitalize()} stereo calibration"
+        headline = f"{grade.capitalize()} camera calibration"
         verdict = (f"The two cameras are calibrated to {rms:.2f} px from {used} views"
-                   + (f", and rows match to {dv:.2f} px after rectification" if dv is not None else "") + ". "
+                   + (f", and left and right match in height to {dv:.2f} px" if dv is not None else "") + ". "
                    + ("This calibration is as good as the board allows." if grade == "excellent" else
                       "Good: no step needs redoing."))  # no accuracy is promised until measured (UX_PLAN U10)
     elif grade == "usable":
-        headline = "Usable stereo calibration"
+        headline = "Usable camera calibration"
         verdict = (f"It works ({rms:.2f} px from {used} views), but scans will be less accurate than they could be. "
                    + (adv[0]["text"] if adv else "Add a few more varied views."))
     else:
-        headline = "Poor stereo calibration"
+        headline = "Poor camera calibration"
         verdict = (f"The error is {rms:.2f} px from {used} views"
-                   + (f" and rows differ by {dv:.2f} px" if dv is not None and dv >= 0.3 else "")
+                   + (f" and left and right differ in height by {dv:.2f} px" if dv is not None and dv >= 0.3 else "")
                    + ": scans would be inaccurate. " + (adv[0]["text"] if adv else "Start over with 15–25 views."))
     return _result("stereo", grade, headline, verdict, metrics, adv, per_view, truth)
 
@@ -315,14 +316,15 @@ def _lasers(planes: dict, report: dict, view_ids: Sequence[int], truth: tuple | 
         metrics.append(metric(f"{title} laser: fit", "n/a" if med is None else
                               f"{med:.3f} mm median, {p95 or 0:.2f} mm (95 %) (want < 0.15 mm)",
                               None if med is None else med < 0.15,
-                              "How far the laser points lie from the fitted plane."))
+                              "How far the laser points lie from where the calibration puts the line."))
         n_obs, n_in = int(e.get("n_observations", 0)), int(e.get("n_inliers", e.get("n_points", 0)))
         metrics.append(metric(f"{title} laser: points", f"{n_in} points from {n_obs} views (aim for 6–10 views)",
-                              n_obs >= 5, "Laser points used for the fit, and from how many board poses."))
+                              n_obs >= 5, "Laser points used for the fit, and from how many views."))
         std_deg, std_mm = _num(e.get("normal_std_deg")), _num(e.get("d_std_mm"))
         if std_deg is not None:
-            metrics.append(metric(f"{title} laser: uncertainty", f"±{std_deg:.3f}° and ±{(std_mm or 0):.3f} mm",
-                                  std_deg < 0.1, "The statistical uncertainty of the plane's angle and offset."))
+            metrics.append(metric(f"{title} laser: scatter", f"±{std_deg:.3f}° and ±{(std_mm or 0):.3f} mm",
+                                  std_deg < 0.1, "How far the line's angle and position could move with the scatter of "
+                                                 "its points (± is one standard deviation)."))
         on_margin = region.get(n) == "margin"
         metrics.append(metric(f"{title} laser: where", "white margin" if on_margin else
                               "margin and printed pattern (the margin alone had too few points)", on_margin,
@@ -330,7 +332,7 @@ def _lasers(planes: dict, report: dict, view_ids: Sequence[int], truth: tuple | 
     frames = int(report.get("frames", len(view_ids)))
     with_board = int(report.get("frames_with_board", 0))
     metrics.append(metric("Views with the board", f"{with_board} of {frames}", with_board >= frames,
-                          "Views where the board pose was found in the rectified picture."))
+                          "Views where the board was found."))
     per_view = _laser_per_view(report, view_ids)
     adv: list[dict] = []
     if not fitted:
@@ -371,16 +373,16 @@ def _lasers(planes: dict, report: dict, view_ids: Sequence[int], truth: tuple | 
         adv.append(advice(f"Drop the {bad} view{'s' if bad != 1 else ''} that did not fit and calibrate again.",
                           "remove_bad_views"))
     if worst >= 0.3 and worst != float("inf"):
-        adv.append(advice("If the fit stays poor, redo the stereo calibration first.", "recalibrate_stereo"))
+        adv.append(advice("If the fit stays poor, redo the camera calibration first.", "recalibrate_stereo"))
     fit = ", ".join(f"{_label(n)} {m:.2f} mm" for n, m in zip(fitted, meds) if m is not None)
     every = "Both" if two else f"All {len(names)}"
     if grade in ("excellent", "good"):
         headline = f"{grade.capitalize()} laser calibration"
-        verdict = (f"{every} laser lines are calibrated well. The laser points lie within {fit} of their planes "
+        verdict = (f"{every} laser lines are calibrated well. The laser points lie within {fit} of their lines "
                    "(median).")
     elif grade == "usable":
         headline = "Usable laser calibration"
-        verdict = (f"{'Both' if two else every} planes are calibrated ({fit} median), "
+        verdict = (f"{'Both' if two else every} lines are calibrated ({fit} median), "
                    + (f"but the {' and '.join(_label(n) for n in fallback)} line needed the printed pattern too, "
                       "which is less accurate." if fallback else "but the fit is looser than it should be."))
     else:
@@ -394,7 +396,7 @@ def _lasers(planes: dict, report: dict, view_ids: Sequence[int], truth: tuple | 
                 verdict = (f"Only {len(fitted)} of the {len(names)} laser lines could be calibrated; the {lost} "
                            f"line{'s were' if len(missing) > 1 else ' was'} not found often enough.")
         else:
-            verdict = f"The laser points scatter around the planes ({fit} median): the laser points would be inaccurate."
+            verdict = f"The laser points scatter around the lines ({fit} median): the laser points would be inaccurate."
     r = _result("lasers", grade, headline, verdict, metrics, adv, per_view, truth)
     r["planes"] = _planes_list(names, planes, report)
     return r
@@ -425,24 +427,26 @@ def _imu(value: Any, report: dict, truth: tuple | None) -> dict:
         return "" if v is None else " ±" + fmt.format(v)
 
     metrics = [
-        metric("Rotation fit", "n/a" if rms is None else f"{rms:.3f}° rms (want < 0.3°)",
+        metric("Rotation fit", "n/a" if rms is None else f"{rms:.3f}° typical (want < 0.3°)",
                None if rms is None else rms < 0.3,
-               "How well the gyro's rotations match the rotations seen on the board."),
+               "How well the motion sensor's rotations match the rotations seen on the board."),
         metric("Time offset", "n/a" if off is None else f"{off * 1e3:+.1f} ms{pm('time_offset_std_s', '{:.4f} s')}",
-               None if off is None else abs(off) < 0.19, "The delay between the camera clock and the IMU clock."),
-        metric("Gyro bias", f"{np.degrees(np.linalg.norm(bias)):.2f} °/s{pm('gyro_bias_std', '{:.4f} rad/s')}",
-               bool(np.degrees(np.linalg.norm(bias)) < 3.0), "The gyro's reading at rest, removed from every sample."),
-        metric("Camera–IMU rotation", f"{_num(report.get('R_ci_angle_deg')) or 0:.1f}° from the IMU's axes"
-               + pm("R_ci_std_deg", "{:.3f}°"), None, "How the IMU board is mounted relative to the camera."),
+               None if off is None else abs(off) < 0.19,
+               "The delay between the camera's clock and the motion sensor's clock."),
+        metric("Reading at rest", f"{np.degrees(np.linalg.norm(bias)):.2f} °/s{pm('gyro_bias_std', '{:.4f} rad/s')}",
+               bool(np.degrees(np.linalg.norm(bias)) < 3.0),
+               "What the motion sensor reads while it is still, taken off every sample."),
+        metric("Motion sensor mounting", f"{_num(report.get('R_ci_angle_deg')) or 0:.1f}° from the motion sensor's axes"
+               + pm("R_ci_std_deg", "{:.3f}°"), None, "How the motion sensor is mounted relative to the camera."),
         metric("Board seen", f"{board_pct:.0f} % of {frames} frames (want > 80 %)", board_pct >= 80.0,
-               "Frames where the board pose was found while you rotated."),
+               "Frames where the board was found while you rotated."),
     ]
     if len(exc) >= 2:
         metrics.append(metric("Rotation about all axes", f"weakest axis {exc[1]:.2f} rad/s", exc[1] >= MIN_EXCITATION,
                               "Rotating about all three axes is needed to find the mounting rotation."))
     if peak is not None:
-        metrics.append(metric("Camera–gyro agreement", f"{peak:.2f} (want > 0.6)", peak >= 0.6,
-                              "How strongly the camera and gyro motions correlate."))
+        metrics.append(metric("Camera and motion sensor agreement", f"{peak:.2f} (want > 0.6)", peak >= 0.6,
+                              "How closely the motion the camera sees follows the motion sensor's."))
     if rms is not None and ok_engine and rms < 0.1 and board_pct >= 90.0:
         grade = "excellent"
     elif ok_engine:
@@ -460,19 +464,20 @@ def _imu(value: Any, report: dict, truth: tuple | None) -> dict:
     if peak is not None and peak < 0.6:
         adv.append(advice("Rotate a bit faster and more, and record again.", "start_over"))
     if grade in ("excellent", "good"):
-        headline = f"{grade.capitalize()} IMU calibration"
-        verdict = (f"The IMU is aligned with the camera: the gyro and the board agree to {rms:.2f}°, and the clocks "
-                   f"to {abs(off or 0) * 1e3:.1f} ms of offset.")
+        headline = f"{grade.capitalize()} motion sensor calibration"
+        verdict = (f"The motion sensor is aligned with the camera: it and the board agree to {rms:.2f}°, and the "
+                   f"clocks to {abs(off or 0) * 1e3:.1f} ms of offset. "
+                   "The motion sensor keeps tracking steady on fast sweeps and plain surfaces.")
     else:
-        headline = f"{grade.capitalize()} IMU calibration"
-        verdict = ((f"The gyro and the board disagree by {rms:.2f}° rms. " if rms is not None else "")
+        headline = f"{grade.capitalize()} motion sensor calibration"
+        verdict = ((f"The motion sensor and the board disagree by {rms:.2f}° (typical). " if rms is not None else "")
                    + (adv[0]["text"] if adv else plain_error(report.get("verdict") or "Record again.")))
     return _result("imu", grade, headline, verdict, metrics, adv, [], truth)
 
 
 # --------------------------------------------------------------------------- check
 def check_failed_parts(report: dict, sim: bool = False) -> list[str]:
-    """The parts the 2-minute check found off (``"cameras"``, ``"lasers"``, ``"imu"``), from the
+    """The parts the calibration check found off (``"cameras"``, ``"lasers"``, ``"imu"``), from the
     engine's check report: kept with the last check for the calibration's status to name (H3). On
     the simulator the IMU part does not count (see :func:`_check`)."""
     st = report.get("stereo") or {}
@@ -502,10 +507,11 @@ def _check(report: dict, truth: tuple | None, sim: bool = False) -> dict:
             report["verdict"] = "good"
     dv, scale = _num(st.get("mean_abs_dv_px")), _num(st.get("scale_error_pct"))
     metrics = [
-        metric("Stereo: row error", "not measured" if dv is None else f"{dv:.2f} px (want < 0.3 px)",
-               None if dv is None else dv < 0.3, "Matching board corners must sit on the same row in both pictures."),
-        metric("Stereo: scale", "not measured" if scale is None else f"{scale:+.2f} % (want within ±0.5 %)",
-               None if scale is None else abs(scale) < 0.5, "The board size measured by stereo against its real size."),
+        metric("Left/right height mismatch", "not measured" if dv is None else f"{dv:.2f} px (want < 0.3 px)",
+               None if dv is None else dv < 0.3,
+               "The same board corner must sit at the same height in the left and the right picture."),
+        metric("Cameras: scale", "not measured" if scale is None else f"{scale:+.2f} % (want within ±0.5 %)",
+               None if scale is None else abs(scale) < 0.5, "The board size measured by the cameras against its real size."),
     ]
     adv = []
     meds = []
@@ -515,30 +521,31 @@ def _check(report: dict, truth: tuple | None, sim: bool = False) -> dict:
             if med is not None:
                 meds.append(med)
             metrics.append(metric(f"{_label(n).capitalize()} laser", "not seen" if med is None else
-                                  f"{med:.2f} mm from its plane (want < 0.5 mm)", None if med is None else bool(e.get("ok")),
-                                  "How far the laser points on the board lie from the calibrated plane."))
+                                  f"{med:.2f} mm from its line (want < 0.5 mm)", None if med is None else bool(e.get("ok")),
+                                  "How far the laser points on the board lie from where the calibration puts the line."))
             if e.get("ok") is False:
-                adv.append(advice(f"Recalibrate the lasers (step 5): the {_label(n)} plane no longer matches.", None))
+                adv.append(advice(f"Recalibrate the lasers (step 5): the {_label(n)} line no longer matches.", None))
     else:
-        metrics.append(metric("Lasers", "not checked", None, plain_error(la.get("verdict") or "no laser planes")))
+        metrics.append(metric("Lasers", "not checked", None, plain_error(la.get("verdict") or "no laser lines")))
     if imu.get("ok") is None:
-        metrics.append(metric("IMU", "not checked", None, plain_error(imu.get("verdict") or "no IMU data")))
+        metrics.append(metric("Motion sensor", "not checked", None,
+                              plain_error(imu.get("verdict") or "no motion sensor data")))
     else:
         med = _num(imu.get("median_residual_deg"))
-        metrics.append(metric("IMU", "n/a" if med is None else f"{med:.3f}° per frame (want < 0.15°)", bool(imu.get("ok")),
-                              "How well the gyro still matches the camera's motion."))
+        metrics.append(metric("Motion sensor", "n/a" if med is None else f"{med:.3f}° per frame (want < 0.15°)",
+                              bool(imu.get("ok")), "How well the motion sensor still matches the camera's motion."))
         if imu.get("ok") is False:
-            adv.append(advice("Recalibrate the IMU (step 6).", None))
+            adv.append(advice("Recalibrate the motion sensor (step 6).", None))
     if st.get("ok") is False:
-        adv.insert(0, advice("Recalibrate the stereo pair (step 4): the cameras may have moved.", "recalibrate_stereo"))
+        adv.insert(0, advice("Recalibrate the cameras (step 4): they may have moved.", "recalibrate_stereo"))
         if scale is not None and abs(scale) >= 0.5 and (dv is None or dv < 0.3):
             adv.append(advice("Check the printed 100 mm bar: the board size is off.", "check_board"))
     ok = bool(report.get("ok"))
     if ok:
         wide = (dv is None or dv < 0.15) and all(m < 0.2 for m in meds)
         grade = "excellent" if wide else "good"
-        headline = "Your calibration still holds"
-        verdict = ("The check passed" + (f": rows agree to {dv:.2f} px" if dv is not None else "")
+        headline = "Calibration valid"
+        verdict = ("The check passed" + (f": left and right match in height to {dv:.2f} px" if dv is not None else "")
                    + (f" and the laser points lie within {max(meds):.2f} mm of their planes" if meds else "") + ".")
     else:
         grade = "poor"
@@ -632,10 +639,10 @@ def sim_truth(kind: str, value: Any, target: Any, truth: Any) -> tuple[list, dic
                        max(abs(e["cx_err_px"]), abs(e["cy_err_px"])) < 3.0, "Where the optical axis meets the image."),
                 metric("Camera rotation vs truth", f"{e['rel_rotation_err_deg']:.3f}°", e["rel_rotation_err_deg"] < 0.1,
                        "Error of the rotation between the two cameras."),
-                metric("Row error on true points", f"{e['row_err_p95_px']:.3f} px (95 %)", e["row_err_p95_px"] < 0.3,
-                       "True 3D points through the estimated rectification: rows must match."),
+                metric("Height mismatch on true points", f"{e['row_err_p95_px']:.3f} px (95 %)", e["row_err_p95_px"] < 0.3,
+                       "True 3D points seen through this calibration: left and right must match in height."),
                 metric("Depth scale vs truth", f"{e['depth_scale_err_pct']:+.3f} %", abs(e["depth_scale_err_pct"]) < 0.3,
-                       "Median depth error of stereo triangulation with this calibration."),
+                       "Median depth error of the two cameras with this calibration."),
             ]
         planes = value if kind == "lasers" else (target.lasers if (kind == "check" and target is not None) else None)
         if planes and target is not None:
@@ -646,7 +653,7 @@ def sim_truth(kind: str, value: Any, target: Any, truth: Any) -> tuple[list, dic
                 title = _label(n).capitalize()
                 rows += [
                     metric(f"{title} plane angle vs truth", f"{x['angle_deg']:.3f}°", x["angle_deg"] < 0.2,
-                           "Angle between the estimated and the true laser plane (raw camera frame)."),
+                           "Angle between the estimated and the true laser line, as the left camera sees it."),
                     metric(f"{title} plane offset vs truth", f"{x['d_err_mm']:+.3f} mm", abs(x["d_err_mm"]) < 0.3,
                            "Estimated minus true distance of the plane from the camera."),
                     metric(f"{title} laser points vs truth",
@@ -658,12 +665,12 @@ def sim_truth(kind: str, value: Any, target: Any, truth: Any) -> tuple[list, dic
             e = _imu_errors(imu, truth.imu, target.stereo.R1, truth.stereo.R1)
             nums["imu"] = e
             rows += [
-                metric("Camera–IMU rotation vs truth", f"{e['R_ci_err_deg']:.3f}°", e["R_ci_err_deg"] < 0.5,
-                       "Error of the mounting rotation (raw camera frame)."),
+                metric("Motion sensor mounting vs truth", f"{e['R_ci_err_deg']:.3f}°", e["R_ci_err_deg"] < 0.5,
+                       "Error of the mounting rotation, as the left camera sees it."),
                 metric("Time offset vs truth", f"{e['time_offset_err_ms']:+.2f} ms", abs(e["time_offset_err_ms"]) < 2.0,
-                       "Error of the camera–IMU clock offset."),
-                metric("Gyro bias vs truth", f"{e['gyro_bias_err_mrad_s']:.2f} mrad/s", e["gyro_bias_err_mrad_s"] < 1.0,
-                       "Error of the gyro bias."),
+                       "Error of the offset between the camera's and the motion sensor's clocks."),
+                metric("Reading at rest vs truth", f"{e['gyro_bias_err_mrad_s']:.2f} mrad/s", e["gyro_bias_err_mrad_s"] < 1.0,
+                       "Error of the motion sensor's reading at rest."),
             ]
     except Exception:  # a comparison only
         log.exception("simulator truth comparison failed")
@@ -710,6 +717,6 @@ def part_summary(kind: str, report: dict, value: Any) -> str:
         return head + (f" ({', '.join(parts)})" if parts else "")
     if kind == "imu":
         rms, off = _num(report.get("residual_rms_deg")), _num(report.get("time_offset_s"))
-        return (f"{rms:.2f}° fit" if rms is not None else "IMU calibrated") + (
+        return (f"{rms:.2f}° fit" if rms is not None else "Motion sensor calibrated") + (
             f", offset {off * 1e3:.0f} ms" if off is not None else "")
     return "Calibration checked"

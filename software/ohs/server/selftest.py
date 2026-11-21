@@ -44,12 +44,13 @@ log = logging.getLogger(__name__)
 CAMERA_SECONDS = 8.0
 STREAM_SECONDS = 3.0
 _LABELS = {
-    "camera": "Camera", "camera fps": "Camera frame rate", "camera image": "Camera image", "pico": "Pico",
-    "imu": "IMU", "imu rate": "IMU rate", "imu values": "IMU values", "clock sync": "Clock sync",
+    "camera": "Cameras", "camera fps": "Camera frame rate", "camera image": "Camera image", "pico": "Control board",
+    "imu": "Motion sensor (IMU)", "imu rate": "Motion sensor rate", "imu values": "Motion sensor values",
+    "clock sync": "Clock sync",
     "vertical line laser": "Vertical laser", "horizontal line laser": "Horizontal laser",
     "vertical line laser (right)": "Vertical laser, right", "vertical line laser (left)": "Vertical laser, left",
     "horizontal line laser (top)": "Horizontal laser, top", "horizontal line laser (low)": "Horizontal laser, low",
-    "dot projector": "Dot projector", "emitters": "Emitters", "trigger": "Trigger",
+    "dot projector": "Dots", "emitters": "Lasers and dots", "trigger": "Trigger",
 }
 _RESULT_LINE = re.compile(r"^\s{2}(PASS|WARN|FAIL|SKIP|INFO)\s+([^:]+):\s?(.*)$")
 
@@ -71,9 +72,9 @@ def fix_for(name: str, status: str, detail: str = "") -> str | None:
     if name == "camera":
         if status == "FAIL":
             return ("Plug the scanner's USB cable straight into a USB 3 port, close other programs that use the camera, "
-                    "and pick the stereo camera in step 1 (Connect).")
+                    "and pick the scanner's cameras in step 1 (Connect).")
         return ("The camera runs another mode than the settings ask for: use the 2560x800 MJPG mode, or pick the "
-                "stereo camera in step 1 (Connect).")
+                "scanner's cameras in step 1 (Connect).")
     if name == "camera fps":
         if status == "FAIL":
             return "The camera stopped sending pictures: check the USB cable and run the self-test again."
@@ -85,28 +86,32 @@ def fix_for(name: str, status: str, detail: str = "") -> str | None:
         if "saturated" in d:
             return "Lower the exposure, or point the scanner away from bright lights and windows."
         if "identical" in d:
-            return "This camera sends the same picture twice: pick the side-by-side stereo camera in step 1 (Connect)."
+            return "This camera sends the same picture twice: pick the scanner's side-by-side cameras in step 1 (Connect)."
         return "Check the camera picture in the Scan page preview, then run the self-test again."
     if name == "pico":
         if status == "FAIL":
-            return ("Connect the Pico with a data USB cable (some cables only charge) and flash the OpenHandScan firmware "
-                    "(firmware/README.md); if it still is not found, set its serial port in the settings.")
-        return "Flash the OpenHandScan firmware onto the Pico (firmware/README.md)."
+            return ("Connect the control board (Pico or ESP32) with a data USB cable (some cables only charge) and flash "
+                    "the OpenHandScan firmware (firmware/README.md); if it still is not found, set its serial port in "
+                    "the settings.")
+        return "Flash the OpenHandScan firmware onto the control board (firmware/README.md)."
     if name == "imu":
         if "wiring" in d or "no imu" in d:
-            return "Check the IMU wiring to the Pico: SDA to GP4, SCL to GP5, plus 3V3 and GND."
-        return "Unplug the Pico, plug it in again and run the self-test again; check the IMU wiring if it keeps failing."
+            return ("Check the motion sensor's wiring to the control board (on a Pico: SDA to GP4, SCL to GP5, plus 3V3 "
+                    "and GND).")
+        return ("Unplug the control board, plug it in again and run the self-test again; check the motion sensor's "
+                "wiring if it keeps failing.")
     if name == "imu rate":
-        return "Plug the Pico straight into the PC (no hub) and close programs that keep the USB bus busy."
+        return "Plug the control board straight into the PC (no hub) and close programs that keep the USB bus busy."
     if name == "imu values":
         return "Keep the scanner still on the table while it measures, then run the self-test again."
     if name == "clock sync":
-        return "Plug the Pico straight into the PC (no hub) and close programs that keep the USB bus busy."
+        return "Plug the control board straight into the PC (no hub) and close programs that keep the USB bus busy."
     if name == "dot projector" or name.startswith(("vertical line laser", "horizontal line laser")):
         if status == "FAIL":
-            return "Check the Pico's USB cable and the emitter wiring (firmware/README.md), then run the self-test again."
+            return ("Check the control board's USB cable and the wiring of the lasers and dots (firmware/README.md), then "
+                    "run the self-test again.")
         return ("If you did not see it light up: check the laser key switch and the wiring, and aim at a light wall "
-                "20–40 cm away. Never look into the beams.")
+                "200–400 mm away. Never look into the beams.")
     if name == "trigger":
         return ("Run the self-test again and press the trigger when asked; if nothing registers, check the button "
                 "wiring (GP15 to GND).")
@@ -123,12 +128,12 @@ def plain_prompt(line: str) -> str | None:
     if s.startswith("Opening camera"):
         return "Opening the camera…"
     if s.startswith("Connecting to the Pico"):
-        return "Connecting to the Pico…"
+        return "Connecting to the control board…"
     m = re.match(r"Measuring for ([\d.]+) s", s)
     if m:
-        return f"Keep the scanner still for {float(m.group(1)):g} s while the camera and the IMU are measured"
+        return f"Keep the scanner still for {float(m.group(1)):g} s while the cameras and the motion sensor are measured"
     if s.startswith("Switching each emitter on"):
-        return ("Point the scanner at a light wall 20–40 cm away: each laser and the dot projector switch on for 1 s "
+        return ("Point the scanner at a light wall 200–400 mm away: each laser and the dots switch on for 1 s "
                 "in turn. Never look into the lasers.")
     if s.startswith("Press and release the trigger"):
         return "Press and release the trigger now"
@@ -240,7 +245,7 @@ def run_camera_selftest(cfg: Any, camera_factory: Callable[[Any], Any], pico_fac
         if c.name == "camera" and status == "SKIP" and cam_error is not None:
             status, detail = "FAIL", "the camera could not be set up" + (f": {cam_error}" if cam_error else "")
         elif c.name == "pico" and status == "SKIP" and pico_error is not None:
-            status, detail = "FAIL", "the control board (Pico) was not found" + (f": {pico_error}" if pico_error else "")
+            status, detail = "FAIL", "the control board was not found" + (f": {pico_error}" if pico_error else "")
         out.append(_check(c.name, status, detail))
     return out
 
@@ -312,9 +317,9 @@ def run_stream_selftest(devices: Any, source: str, message: Callable[[str], None
             checks.append(_check("camera fps", "PASS", detail))
         checks.append(_check("camera image", *image_check(stats)))
     if not devices.imu_available():
-        checks.append(_check("imu", "SKIP", f"{what} has no IMU data"))
+        checks.append(_check("imu", "SKIP", f"{what} has no motion sensor data"))
     elif len(t_dev) < 10:
-        checks.append(_check("imu", "FAIL", f"only {len(t_dev)} IMU samples in {seconds:g} s"))
+        checks.append(_check("imu", "FAIL", f"only {len(t_dev)} motion sensor samples in {seconds:g} s"))
     else:
         t = np.sort(t_dev)
         span = float(t[-1] - t[0])
@@ -328,8 +333,8 @@ def run_stream_selftest(devices: Any, source: str, message: Callable[[str], None
         detail = f"|accel| {g:.2f} m/s^2"
         checks.append(_check("imu values", "PASS" if gravity_ok(g) else "WARN",
                              detail if gravity_ok(g) else detail + " (expected about 9.81 m/s^2)"))
-    no_pico = ("the simulator has no control board (Pico)" if source == "sim"
-               else "a replayed recording has no control board (Pico)")
+    no_pico = ("the simulator has no control board" if source == "sim"
+               else "a replayed recording has no control board")
     checks.append(_check("pico", "SKIP", no_pico))
     checks.append(_check("clock sync", "SKIP", f"{no_pico}: there is no clock to synchronise"))
     checks.append(_check("emitters", "SKIP", "the simulator's lasers and dots are virtual" if source == "sim"

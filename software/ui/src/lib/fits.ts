@@ -276,7 +276,7 @@ export type Relation = { rows: RelationRow[]; notes: string[] };
 export type FitPart = { kind: FitKind; shape: FitShape };
 
 const NO_SIGMA =
-  "No ±: the fits' ± for a direction or for a position across one is the total over two directions, so its share in this number isn't known.";
+  "No ±: the fitted shapes' ± for a direction or for a position across one is the total over two directions, so its share in this number isn't known.";
 
 function angleRow(label: string, deg: number, what: string): RelationRow {
   return { label, value: fmtAngle(deg), tip: `${what} ${NO_SIGMA}`, x: deg, sigma: null };

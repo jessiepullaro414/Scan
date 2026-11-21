@@ -381,7 +381,7 @@ export function NoDeviceOverlay() {
   const device = useDevice((s) => s.device);
   const connect = useDevice((s) => s.connect);
   const pending = useDevice((s) => s.pending);
-  const busy = useDevice((s) => s.device?.busy ?? (s.simJobId ? "Generating simulator demo…" : null));
+  const busy = useDevice((s) => s.device?.busy ?? (s.simJobId ? "Preparing the simulator…" : null));
   if (!device || device.connected) return null;
   return (
     <div className="pointer-events-auto glass w-[400px] animate-pop-in rounded-2xl border border-line-strong p-6 text-center shadow-lg">
@@ -392,7 +392,7 @@ export function NoDeviceOverlay() {
       <p className="mt-1 text-sm text-muted">
         {busy
           ? "The simulator connects itself when the demo recording is ready."
-          : "Plug in the scanner, replay a recording, or try the simulator demo: no hardware needed."}
+          : "Plug in the scanner, replay a recording, or try the simulator: no hardware needed."}
       </p>
       <div className="mt-4 flex justify-center gap-2">
         <Button icon={Cpu} onClick={() => navigate(paths.device())}>

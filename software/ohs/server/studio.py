@@ -458,7 +458,7 @@ class Studio:
             if tuple(size) != want:
                 raise ApiError(409, f"The camera sends {size[0]}×{size[1]} pictures, but the scanner was calibrated "
                                     f"at {want[0]}×{want[1]}.",
-                               "Calibrate the cameras again at this picture size (the Stereo step in Setup).")
+                               "Calibrate the cameras again at this picture size (the Cameras step in Setup).")
             scan, rec_dir = self.projects.add_scan(project_id, name, mode)
             self.projects.update_scan(project_id, scan["id"], preset=self.presets.stored(preset_record))
             if link is not None:

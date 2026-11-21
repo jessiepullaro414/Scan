@@ -22,7 +22,7 @@ export function PostScanCard() {
   if (!last) return null;
   // the tracked mesh takes the live model's place as soon as this job has tracked the scan (LiveCanvas.tsx)
   const tracked = scanMeshStage(job, proc) === "tracked";
-  const onScreen = tracked ? "The tracked mesh stays on screen" : "The live model stays on screen";
+  const onScreen = tracked ? "The mesh so far stays on screen" : "The live preview stays on screen";
   const scan = fresh ?? last.scan;
   const active = isActive(job);
   // a cancelled job may leave the tracked mesh behind (status "processed"): still "cancelled" here
@@ -54,11 +54,11 @@ export function PostScanCard() {
                 ? `${onScreen} and the raw recording is kept: make the mesh again any time.`
                 : active
                   ? tracked
-                    ? `${fmtInt(scan.n_frames)} frames · ${fmtDuration(scan.duration_s)}. Tracking is done and the tracked mesh is on screen; the finished mesh takes its place here. You can leave this page: the job keeps running (see Jobs).`
+                    ? `${fmtInt(scan.n_frames)} frames · ${fmtDuration(scan.duration_s)}. The camera path is done and the mesh so far is on screen; the finished mesh takes its place here. You can leave this page: the job keeps running (see Jobs).`
                     : `${fmtInt(scan.n_frames)} frames · ${fmtDuration(scan.duration_s)}. Making the mesh. You can turn the model while you wait, or leave this page: the job keeps running (see Jobs).`
                   : done
                     ? `${fmtInt(scan.n_frames)} frames · ${fmtDuration(scan.duration_s)}. The finished mesh is on screen.`
-                    : `${fmtInt(scan.n_frames)} frames · ${fmtDuration(scan.duration_s)} · raw recording saved. The live model is a preview; the mesh is rebuilt from the recording at full resolution.`}
+                    : `${fmtInt(scan.n_frames)} frames · ${fmtDuration(scan.duration_s)} · raw recording saved. The live preview is rough; the mesh is made from the recording at full resolution.`}
           </div>
         </div>
       </div>
@@ -69,7 +69,7 @@ export function PostScanCard() {
             <Button variant="primary" icon={Eye} onClick={() => navigate(paths.viewer(last.projectId, scan.id))}>
               Open result
             </Button>
-            <ProcessButton projectId={last.projectId} scan={scan} size="md" label="Fine-tune in Process" />
+            <ProcessButton projectId={last.projectId} scan={scan} size="md" label="Edit mesh…" />
           </>
         ) : !active ? (
           <MakeMeshButton projectId={last.projectId} scan={scan} variant="primary" size="md" label={failed ? "Try again" : "Make mesh"} />

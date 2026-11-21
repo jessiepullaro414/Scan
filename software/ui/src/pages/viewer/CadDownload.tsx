@@ -72,10 +72,10 @@ export function CadDownload({ pid, sid, stem, kept, hasMesh }: { pid: string; si
     <div className="mt-3 border-t border-line pt-3" aria-label="For CAD">
       <div className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-subtle">For CAD</div>
       <div className="grid grid-cols-2 gap-2">
-        <Button size="sm" icon={Download} disabled={!!why} onClick={() => get("fits.step")} title={why ?? `The kept fits as a STEP file, in mm${where}`}>
+        <Button size="sm" icon={Download} disabled={!!why} onClick={() => get("fits.step")} title={why ?? `The saved fitted shapes as a STEP file, in mm${where}`}>
           STEP
         </Button>
-        <Button size="sm" icon={Download} disabled={!!why} onClick={() => get("fits.FCMacro")} title={why ?? `A FreeCAD macro that builds the kept fits as named objects${where}`}>
+        <Button size="sm" icon={Download} disabled={!!why} onClick={() => get("fits.FCMacro")} title={why ?? `A FreeCAD macro that builds the saved fitted shapes as named objects${where}`}>
           FreeCAD macro
         </Button>
       </div>
@@ -114,7 +114,7 @@ export function CadDownload({ pid, sid, stem, kept, hasMesh }: { pid: string; si
           </Tooltip>
         </div>
       ) : null}
-      <p className="mt-2 text-xs text-subtle">{why ?? error ?? (sum ? cadLine(sum) : "Reading the kept fits…")}</p>
+      <p className="mt-2 text-xs text-subtle">{why ?? error ?? (sum ? cadLine(sum) : "Reading the saved fitted shapes…")}</p>
       {!why && nominalLine ? <p className="mt-1 text-xs text-subtle" title={sum?.nominal?.relations_note ?? undefined}>{nominalLine}</p> : null}
       {!why && moveLines.length ? (
         <ul className="mt-1 space-y-0.5 text-[11.5px] leading-4 text-subtle" aria-label="Shapes moved in the CAD files">

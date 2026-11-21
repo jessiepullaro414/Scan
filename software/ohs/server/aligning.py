@@ -147,7 +147,7 @@ class AlignManager:
                            message=res.verdict)
                 return jsonable(out)
 
-            return self.st.jobs.submit("align", run, message="Queued: align two scans",
+            return self.st.jobs.submit("align", run, message="Queued: align and merge",
                                        meta={"project_id": pid, "target": target, "source": source})
 
     # ------------------------------------------------------------------ several scans

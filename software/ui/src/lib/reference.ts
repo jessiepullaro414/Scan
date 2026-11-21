@@ -62,9 +62,9 @@ export function fmtDev(mm: number | null | undefined, signed = true): string {
   return `${mm > 0 ? "+" : MINUS}${text}\u202fmm`;
 }
 
-/** What the cursor is over: "+0.12 mm (outside)", "−0.30 mm (inside)", "not on the reference", "not measured". */
+/** What the cursor is over: "+0.12 mm (outside)", "−0.30 mm (inside)", "not on the CAD model", "not measured". */
 export function referenceReadout(v: number | null, state: number): string {
-  if (state === STATE_OFF_REFERENCE) return "not on the reference";
+  if (state === STATE_OFF_REFERENCE) return "not on the CAD model";
   if (state === STATE_NOT_MEASURED || v === null || Number.isNaN(v)) return "not measured";
   const text = fmtDev(v);
   if (text.startsWith("+")) return `${text} (outside)`;
@@ -108,7 +108,7 @@ export function unitsChoice(u: UnitsFinding): UnitsChoice | null {
       ? { factor: u.factor, label: `It is in ${UNIT_WORDS[u.unit] ?? u.unit}: scale it by ${u.factor}`, size: fmtSize(ref === null ? null : ref * u.factor) }
       : null;
   return {
-    question: scaled ? `Is the reference in ${UNIT_WORDS[u.unit!] ?? u.unit}?` : "The reference and the scan are very different in size",
+    question: scaled ? `Is the CAD model in ${UNIT_WORDS[u.unit!] ?? u.unit}?` : "The CAD model and the scan are very different in size",
     scaled,
     asIs: { label: "Keep it as it is (mm)", size: fmtSize(ref) },
     scan: fmtSize(u.scan_size_mm),
@@ -130,21 +130,21 @@ export const ALIGN_METHODS: { value: AlignMethod; label: string; help: string }[
     value: "shape",
     label: "From the shape",
     help:
-      "A best fit: the scan is moved until its surface matches the reference as closely as it can overall. An overall error of the part (a little too long, bent, " +
+      "A best fit: the scan is moved until its surface matches the CAD model as closely as it can overall. An overall error of the part (a little too long, bent, " +
       "shifted) is spread over the whole part, so it shows as small deviations everywhere instead of where it is. Takes a few seconds.",
   },
   {
     value: "datums",
     label: "On the part's axes",
     help:
-      "No fit at all: the scan's coordinate system (built from three kept fits) is put onto the reference's own axes, so the reference must be modelled in the part's " +
-      "axes. An overall error then shows where it is: a part 0.5\u202fmm too long reads 0.5\u202fmm at the far end. Needs a current coordinate system.",
+      "No fit at all: the part's axes (set from three saved fitted shapes) are put onto the CAD model's own axes, so the CAD model must be modelled in the part's " +
+      "axes. An overall error then shows where it is: a part 0.5\u202fmm too long reads 0.5\u202fmm at the far end. Needs the part's axes, set and up to date.",
   },
   {
     value: "points",
     label: "From points",
     help:
-      "Click three or more matching points on the scan and on the reference, in the same order. For when the shape alone does not find the pose (a symmetric part, " +
+      "Click three or more matching points on the scan and on the CAD model, in the same order. For when the shape alone does not find where the scan goes (a symmetric part, " +
       "a scan of only a small part of it). The points are then refined on the shapes (a best fit), unless you turn that off.",
   },
 ];
@@ -161,7 +161,7 @@ export function alignmentLines(al: ReferenceAlignment): { title: string; verdict
 // ---------------------------------------------------------------- the answer
 /** "87 % within ± 0.3 mm (8.2 % above, 5.2 % below)", from the shares (the engine's sentence says the same). */
 export function toleranceSentence(a: { share_within: number | null; share_above: number | null; share_below: number | null; tolerance_mm: number }): string {
-  if (a.share_within === null) return "Nothing of the scan could be compared with the reference.";
+  if (a.share_within === null) return "Nothing of the scan could be compared with the CAD model.";
   const pct = (x: number, d: number) => `${(x * 100).toFixed(d)}\u202f%`;
   let s = `${pct(a.share_within, 0)} within ± ${fmtTolerance(a.tolerance_mm)}\u202fmm`;
   if (a.share_above || a.share_below) s += ` (${pct(a.share_above ?? 0, 1)} above, ${pct(a.share_below ?? 0, 1)} below)`;
@@ -176,11 +176,11 @@ export function coverageLines(c: ComparisonCoverage, nearMm = 3): string[] {
   const out: string[] = [];
   const off = c.off_reference_share ?? 0;
   const nm = c.not_measured_share ?? 0;
-  if (off > 0) out.push(`${fmtShare(off)} of the scan is not on the reference (a table, a clamp, or surface more than ${nearMm}\u202fmm from it): grey, and in no share.`);
-  if (nm > 0) out.push(`${fmtShare(nm)} of the scan was not measured (filled holes, or no usable uncertainty): striped, and in no share.`);
+  if (off > 0) out.push(`${fmtShare(off)} of the scan is not on the CAD model (a table, a clamp, or surface more than ${nearMm}\u202fmm from it): grey, and in no share.`);
+  if (nm > 0) out.push(`${fmtShare(nm)} of the scan was not measured (filled holes, or no usable confidence): striped, and in no share.`);
   if (c.uncovered_share !== null && c.uncovered_share > 0)
-    out.push(`${fmtShare(c.uncovered_share)} of the reference's surface was not scanned: nothing is said about it.`);
-  else if (c.uncovered_share === 0) out.push("The scan covers all of the reference.");
+    out.push(`${fmtShare(c.uncovered_share)} of the CAD model's surface was not scanned: nothing is said about it.`);
+  else if (c.uncovered_share === 0) out.push("The scan covers all of the CAD model.");
   return out;
 }
 
@@ -195,11 +195,11 @@ export function regionTitle(r: Pick<ToleranceRegion, "side" | "mean_mm" | "worst
  */
 export function regionUncertainty(r: Pick<ToleranceRegion, "exceeds_uncertainty" | "sigma_median_mm">, k = 2): { tone: "ok" | "warn" | "none"; text: string } {
   if (r.exceeds_uncertainty === null || r.sigma_median_mm === null)
-    return { tone: "none", text: "The scan carries no uncertainty here, so it cannot tell a real difference from its own error." };
-  const band = `${fmtTolerance(k)}σ = ± ${fmtDev(k * r.sigma_median_mm, false)}`;
+    return { tone: "none", text: "The scan carries no confidence here, so it cannot tell a real difference from its own error." };
+  const band = fmtDev(k * r.sigma_median_mm, false);
   return r.exceeds_uncertainty
-    ? { tone: "ok", text: `Beyond the scan's own uncertainty (${band}): a real difference.` }
-    : { tone: "warn", text: `Within the scan's own uncertainty (${band}): this alone is no evidence of a real difference. Scan it again more closely to tell.` };
+    ? { tone: "ok", text: `Beyond the scan's own scatter here (${band}): a real difference.` }
+    : { tone: "warn", text: `Within the scan's own scatter here (${band}): this alone is no evidence of a real difference. Scan it again more closely to tell.` };
 }
 
 /** Where the camera goes to look at an area: its centre in the 3D view's axes (y up) and a radius. */

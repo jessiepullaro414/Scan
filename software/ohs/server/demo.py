@@ -231,5 +231,5 @@ def generate_demo(
             time.sleep(0.1)
     log.info("simulator demo ready in %.1f s: %s", time.perf_counter() - t0, out)
     if progress is not None:
-        progress(1.0, "Simulator demo ready")
+        progress(1.0, "The simulator is ready")
     return out

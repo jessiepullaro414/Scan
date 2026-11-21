@@ -104,7 +104,7 @@ const SNAP_BUDGET = 200 * 1024 * 1024; // bytes of meshes kept for instant undo 
 
 const OPS: MeshOp[] = ["remove_floaters", "fill_holes", "smooth", "decimate", "delete_faces", "keep_faces", "remove_table"];
 const BUSY: Record<MeshOp, string> = {
-  remove_floaters: "Removing floaters…",
+  remove_floaters: "Removing loose bits…",
   fill_holes: "Filling holes…",
   smooth: "Smoothing…",
   decimate: "Simplifying…",
@@ -141,14 +141,14 @@ function label(op: MeshOp, p: Record<string, unknown>, faces?: number): string {
   switch (op) {
     case "remove_floaters":
       if (p.keep_largest_only) return "Keep the largest piece";
-      if (num(p.min_size_mm) !== undefined) return `Remove floaters smaller than ${mm(num(p.min_size_mm)!)} mm`;
-      return `Remove floaters under ${int(num(p.min_triangles) ?? 0)} triangles`;
+      if (num(p.min_size_mm) !== undefined) return `Remove loose bits smaller than ${mm(num(p.min_size_mm)!)} mm`;
+      return `Remove loose bits under ${int(num(p.min_triangles) ?? 0)} triangles`;
     case "fill_holes":
       return p.watertight === true
         ? `Make watertight: close every opening up to ${mm(num(p.max_hole_mm) ?? 0)} mm`
         : `Fill holes up to ${mm(num(p.max_hole_mm) ?? 0)} mm`;
     case "smooth": {
-      const pct = `${Math.round((num(p.strength) ?? 0.5) * 100)} %${p.flat_only === true ? ", flat areas only" : p.away_from_edges === true ? ", away from edges" : ""}${p.within_sigma === true ? ", within 2σ" : ""}`;
+      const pct = `${Math.round((num(p.strength) ?? 0.5) * 100)} %${p.flat_only === true ? ", flat areas only" : p.away_from_edges === true ? ", away from edges" : ""}${p.within_sigma === true ? ", within the scatter" : ""}`;
       return p.method === "bilateral" ? `Smooth, keep edges (${pct})` : `Smooth (Taubin, ${pct})`;
     }
     case "decimate": {
@@ -283,12 +283,12 @@ export class MockProcess {
     }
     if (a === "holes.json" && is("GET", 1)) {
       const st = this.ensure(p, s);
-      if (!st.current) throw new HttpError(404, "No mesh yet, so no holes", "Run Track first.");
+      if (!st.current) throw new HttpError(404, "No mesh yet, so no holes", "Press Make mesh first (or run “Follow the camera”).");
       return json(200, analyse(st.current).holes);
     }
     if (a === "trajectory.json" && is("GET", 1)) {
       const st = this.ensure(p, s);
-      if (st.stages.track.state !== "done") throw new HttpError(404, "No trajectory yet", "Run Track first: it follows the scanner through the recording.");
+      if (st.stages.track.state !== "done") throw new HttpError(404, "This scan has no camera path yet.", "Press Make mesh first (or run “Follow the camera”).");
       const t = mockTrajectory(s.duration_s, seedOf(s.id));
       return json(200, { raw: t.raw, straightened: st.straightened ? t.straightened : null, loops: st.stages.straighten.state === "done" ? t.loops : [] });
     }
@@ -439,7 +439,7 @@ export class MockProcess {
   check(p: Project, s: Scan, body: Record<string, unknown>): CheckResult {
     const st = this.ensure(p, s);
     const m = st.current;
-    if (!m) throw new HttpError(409, "This scan has no mesh yet", "Run Track (or Make mesh) first.");
+    if (!m) throw new HttpError(409, "This scan has no mesh yet.", "Press Make mesh first (or run “Follow the camera”).");
     const tol = body.tolerance_mm;
     if (typeof tol !== "number" || !Number.isFinite(tol) || tol <= 0 || tol > 100)
       this.bad("tolerance_mm: must be above 0 and at most 100", "Give the tolerance in mm, for example 0.1.");
@@ -452,7 +452,7 @@ export class MockProcess {
   checkWhy(p: Project, s: Scan, body: Record<string, unknown>): CheckWhy {
     const st = this.ensure(p, s);
     const m = st.current;
-    if (!m) throw new HttpError(409, "This scan has no mesh yet", "Run Track (or Make mesh) first.");
+    if (!m) throw new HttpError(409, "This scan has no mesh yet.", "Press Make mesh first (or run “Follow the camera”).");
     const tol = body.tolerance_mm;
     if (typeof tol !== "number" || !Number.isFinite(tol) || tol <= 0 || tol > 100)
       this.bad("tolerance_mm: must be above 0 and at most 100", "Give the tolerance in mm, for example 0.1.");
@@ -660,7 +660,7 @@ export class MockProcess {
 
   /** The mesh after n edits: kept, or replayed from the nearest kept step. */
   private meshAt(st: Studio, n: number): TriMesh {
-    if (!st.base) throw new HttpError(409, "No mesh yet", "Run Track first.");
+    if (!st.base) throw new HttpError(409, "This scan has no mesh yet.", "Press Make mesh first (or run “Follow the camera”).");
     if (n === 0) return st.base.mesh;
     const hit = st.snaps.get(n);
     if (hit) return hit;
@@ -722,7 +722,7 @@ export class MockProcess {
         const a = num(p.min_size_mm),
           b = num(p.min_triangles);
         if (p.keep_largest_only !== true && a === undefined && b === undefined)
-          this.bad("Say which floaters to remove", "Give min_size_mm, min_triangles or keep_largest_only.");
+          this.bad("Remove loose bits: say which bits to remove.", "Reload the page and try again.");
         if ((a !== undefined && a <= 0) || (b !== undefined && b < 1)) this.bad("The size must be above 0");
         return undefined;
       }
@@ -772,7 +772,7 @@ export class MockProcess {
   tablePreview(p: Project, s: Scan, body: Record<string, unknown>): TablePreview {
     const st = this.ensure(p, s);
     const m = st.current;
-    if (!m) throw new HttpError(409, "this scan has no mesh yet", "run Track (or Make mesh) first");
+    if (!m) throw new HttpError(409, "This scan has no mesh yet.", "Press Make mesh first (or run “Follow the camera”).");
     const v = body.version;
     if (typeof v === "number" && v !== st.version) throw new HttpError(409, "the mesh changed since the page loaded it", "reload the mesh and try again");
     const margin = tableMargin(body);
@@ -793,7 +793,7 @@ export class MockProcess {
     if (!OPS.includes(op)) this.bad(`Unknown edit “${String(body.op)}”`, `Edits: ${OPS.join(", ")}.`);
     const params = body.params && typeof body.params === "object" ? (body.params as Record<string, unknown>) : {};
     const start = st.current;
-    if (!start || !st.base) throw new HttpError(409, "Edits need a mesh", "Run Track first (or Make mesh).");
+    if (!start || !st.base) throw new HttpError(409, "This scan has no mesh yet.", "Press Make mesh first (or run “Follow the camera”).");
     const faces = this.validate(st, op, params);
     // "Remove the table": the faces are found now, as the engine finds them in the job; a refusal fails the job
     const table = op === "remove_table" ? mockTable(start.positions, start.indices, TABLE_PLANE, tableMargin(params) ?? MOCK_MARGIN_MM, tableKeep(params) ?? []) : null;
@@ -843,7 +843,7 @@ export class MockProcess {
     const st = this.ensure(p, s);
     this.guard(st, s, "A job of this scan is running");
     const to = st.cursor + dir;
-    if (to < 0) throw new HttpError(409, "Nothing to undo", "You're at the base mesh.");
+    if (to < 0) throw new HttpError(409, "Nothing to undo", "You're at the starting mesh.");
     if (to > st.edits.length) throw new HttpError(409, "Nothing to redo", "You're at the latest step.");
     const m = this.meshAt(st, to);
     st.cursor = to;
@@ -867,13 +867,13 @@ export class MockProcess {
       const done = Math.max(1, Math.round((n * k) / 40));
       yield {
         p: a + span * (0.05 + ((end - 0.05) * k) / 40),
-        message: done < n ? `Tracking: frame ${done} of ${n}` : `Tracking: all ${n} frames done, making the mesh`,
+        message: done < n ? `Following the camera: frame ${done} of ${n}` : `Following the camera: all ${n} frames done, making the mesh`,
         frames: { stage: "track", done, total: n },
       };
     }
     const tracked = quality !== "preview" ? (s.mode === "markers" ? 95 : 93) : 91;
     if (!withMesh) return { mesh: null, tracked };
-    const mesh = yield* run(scanMesh({ voxel: voxelFor(quality), noise: noiseFor(quality, false), seed: seedOf(s.id) }), a + span * 0.55, b, "Fusing depth (TSDF) and extracting the mesh");
+    const mesh = yield* run(scanMesh({ voxel: voxelFor(quality), noise: noiseFor(quality, false), seed: seedOf(s.id) }), a + span * 0.55, b, "Building the surface and making the mesh");
     return { mesh, tracked };
   }
 
@@ -928,7 +928,7 @@ export class MockProcess {
   }
 
   private fuseDone(st: Studio, voxel: number, mesh: TriMesh, when: string) {
-    st.stages.fuse = { state: "done", summary: `${mm(voxel)} mm voxels: ${int(mesh.indices.length / 3)} triangles.`, when, job_id: null, voxel_mm: voxel };
+    st.stages.fuse = { state: "done", summary: `Mesh detail ${mm(voxel)} mm: ${int(mesh.indices.length / 3)} triangles.`, when, job_id: null, voxel_mm: voxel };
   }
 
   /** A new base mesh: the edits start over. */
@@ -971,7 +971,7 @@ export class MockProcess {
     const st = this.ensure(p, s);
     this.guard(st, s);
     this.needRecording(s);
-    if (st.stages.track.state !== "done") throw new HttpError(409, "Straighten needs a finished Track", "Run Track first.");
+    if (st.stages.track.state !== "done") throw new HttpError(409, "This step needs “Follow the camera” to have finished.", "Run “Follow the camera” first, or press Make mesh.");
     const self = this;
     const work = (function* (): JobWork {
       const r = yield* self.straightenWork(s, st.voxel, st.quality, true, 0, 0.97);
@@ -993,7 +993,7 @@ export class MockProcess {
     const st = this.ensure(p, s);
     this.guard(st, s);
     this.needRecording(s);
-    if (st.stages.track.state !== "done" || !st.base) throw new HttpError(409, "Refine with lasers needs a finished Track", "Run Track first.");
+    if (st.stages.track.state !== "done" || !st.base) throw new HttpError(409, "This step needs “Follow the camera” to have finished.", "Run “Follow the camera” first, or press Make mesh.");
     const work = (function* (): JobWork {
       yield* tick(0, 0.3, 2, () => "Reading the laser points");
       yield* tick(0.3, 1, 4, () => "Refining: fitting the correction field");
@@ -1015,7 +1015,7 @@ export class MockProcess {
     const st = this.ensure(p, s);
     this.guard(st, s);
     this.needRecording(s);
-    if (st.stages.track.state !== "done" || !st.base) throw new HttpError(409, "Refine from the images needs a finished Track", "Run Track first.");
+    if (st.stages.track.state !== "done" || !st.base) throw new HttpError(409, "This step needs “Follow the camera” to have finished.", "Run “Follow the camera” first, or press Make mesh.");
     const self = this;
     const work = (function* (): JobWork {
       yield* tick(0, 0.15, 2, () => "Reading the frames");
@@ -1041,14 +1041,14 @@ export class MockProcess {
   private startFuse(p: Project, s: Scan, voxelIn: unknown): Job {
     const st = this.ensure(p, s);
     const voxel = num(voxelIn);
-    if (voxel === undefined || voxel < 0.25 || voxel > 10) return this.bad("The voxel size must be between 0.25 and 10 mm", "0.5, 1 or 2 mm are the usual sizes.");
+    if (voxel === undefined || voxel < 0.25 || voxel > 10) return this.bad("The mesh detail must be between 0.25 and 10 mm.", "0.5, 1 or 2 mm are the usual sizes.");
     this.guard(st, s);
     this.needRecording(s);
-    if (st.stages.track.state !== "done") throw new HttpError(409, "Fuse needs a finished Track", "Run Track first.");
+    if (st.stages.track.state !== "done") throw new HttpError(409, "This step needs “Follow the camera” to have finished.", "Run “Follow the camera” first, or press Make mesh.");
     const self = this;
     const work = (function* (): JobWork {
       yield* tick(0, 0.05, 2, () => "Loading the poses");
-      const mesh = yield* run(scanMesh({ voxel, noise: noiseFor(st.quality, st.straightened), seed: seedOf(s.id) }), 0.05, 0.96, `Fusing at ${mm(voxel)} mm and extracting the mesh`);
+      const mesh = yield* run(scanMesh({ voxel, noise: noiseFor(st.quality, st.straightened), seed: seedOf(s.id) }), 0.05, 0.96, `Building the surface at ${mm(voxel)} mm and making the mesh`);
       yield* tick(0.96, 1, 2, () => "Writing PLY and STL");
       return () => {
         st.voxel = voxel;
@@ -1057,7 +1057,7 @@ export class MockProcess {
         return { project_id: p.id, scan_id: s.id, version: st.version };
       };
     })();
-    return this.start(st, s, "process_fuse", "Fusing…", voxel <= 0.5 ? 5 : 3, work, "fuse");
+    return this.start(st, s, "process_fuse", "Building the surface…", voxel <= 0.5 ? 5 : 3, work, "fuse");
   }
 
   // ---------------------------------------------------------------- recipes
@@ -1071,7 +1071,7 @@ export class MockProcess {
     const busy = `Applying “${recipe.name}”…`;
     if (scope === "all") this.needRecording(s);
     if (scope === "all") return this.allJob(st, p, s, "process_recipe", recipe.settings, recipe.ops, busy, null, secondsFor(normalizeQuality(recipe.settings.quality) ?? "standard") + 1, null);
-    if (!st.base) throw new HttpError(409, "There's no mesh to edit yet", "Apply “Everything”, or run Track first.");
+    if (!st.base) throw new HttpError(409, "There's no mesh to edit yet", "Apply “Everything”, or run “Follow the camera” first.");
     const base = st.base.mesh;
     const self = this;
     const work = (function* (): JobWork {
@@ -1153,7 +1153,7 @@ export class MockProcess {
     if (willFuse) {
       mark("fuse");
       voxel = settings.voxel_mm!;
-      mesh = yield* run(scanMesh({ voxel, noise: noiseFor(q, straightened), seed: seedOf(s.id) }), 0.62, 0.8, `Fusing at ${mm(voxel)} mm`);
+      mesh = yield* run(scanMesh({ voxel, noise: noiseFor(q, straightened), seed: seedOf(s.id) }), 0.62, 0.8, `Building the surface at ${mm(voxel)} mm`);
       baseStage = "fuse";
     }
     const base = mesh!;
@@ -1166,7 +1166,7 @@ export class MockProcess {
       st.straightened = straightened;
       this.trackDone(st, s, q, tr.tracked, trackWhen);
       if (str) this.straightenDone(st, str, when);
-      else st.stages.straighten = { state: "skipped", summary: "Skipped by the recipe: the poses from Track are used as they are.", when, job_id: null, loops: null, correction_mm: null, correction_deg: null };
+      else st.stages.straighten = { state: "skipped", summary: "Skipped by the recipe: the camera path from “Follow the camera” is used as it is.", when, job_id: null, loops: null, correction_mm: null, correction_deg: null };
       if (willFuse) this.fuseDone(st, voxel, base, when);
       else st.stages.fuse = freshStages().fuse;
       st.stages.spacetime = freshStages().spacetime;

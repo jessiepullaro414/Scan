@@ -30,7 +30,7 @@ export const MERGE_NOTE =
 
 /** Why the reference picture is not lined up with the live model, in one sentence. */
 export const REFERENCE_NOTE =
-  "A picture of the first scan for reference, with the areas to scan lit. The live model is not lined up with it while you scan: each scan starts its own tracking, and the two are aligned after Stop.";
+  "A picture of the first scan to go by, with the areas to scan lit. The live preview is not lined up with it while you scan: each scan starts its own tracking, and the two are aligned after Stop.";
 
 /** The places to scan from a pass lists: the plan's, then a few areas' own. */
 export const MAX_PLACES = 6;
@@ -147,7 +147,7 @@ export function areasWords(areas: readonly Pick<PendingArea, "area_mm2">[], tole
 export function poseWords(p: PendingPose | PassLink["poses"][number]): string {
   if (p.text) return p.text;
   const q = p.pose as { distance_mm?: number; tilt_deg?: number };
-  return typeof q.distance_mm === "number" && typeof q.tilt_deg === "number" ? `Hold the scanner ${poseShort({ distance_mm: q.distance_mm, tilt_deg: q.tilt_deg })}.` : "A place the Check panel suggested.";
+  return typeof q.distance_mm === "number" && typeof q.tilt_deg === "number" ? `Hold the scanner ${poseShort({ distance_mm: q.distance_mm, tilt_deg: q.tilt_deg })}.` : "A place the Scan check suggested.";
 }
 
 // ---------------------------------------------------------------- the steps after Stop

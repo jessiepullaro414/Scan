@@ -89,28 +89,28 @@ eq(fmtExtent(4.52), "4.5\u202fmm", "a short reach");
 eq(fmtExtent(23.4), "23\u202fmm", "a long reach");
 
 // the kinds
-eq(kindName("uncertain"), "Uncertain", "uncertain");
+eq(kindName("uncertain"), "Too loose", "uncertain");
 eq(kindName("not_measured"), "Not measured", "not measured");
-check(kindMeaning("uncertain", 0.1).includes("2σ") && kindMeaning("uncertain", 0.1).includes("± 0.1\u202fmm"), "uncertain: 2σ against the tolerance");
+check(kindMeaning("uncertain", 0.1) === "Measured too loosely for ± 0.1\u202fmm here.", "uncertain: measured too loosely for the tolerance (U2)");
 check(kindMeaning("not_measured", 0.1).includes("Hole filling"), "not measured: hole filling");
 for (const text of [kindMeaning("uncertain", 0.1), kindMeaning("not_measured", 0.1)]) check(!text.includes("—"), "no em dash");
 
 // the answer in one sentence
-eq(checkSentence(result({})), "92\u202f% of the surface meets ± 0.1\u202fmm; 3 areas need another pass.", "the plan's example");
-eq(checkSentence(result({ n_areas: 1, areas: [area(0.08)] })), "92\u202f% of the surface meets ± 0.1\u202fmm; 1 area needs another pass.", "one area");
+eq(checkSentence(result({})), "92\u202f% of the surface was measured finely enough for ± 0.1\u202fmm; 3 areas need another pass.", "the plan's example");
+eq(checkSentence(result({ n_areas: 1, areas: [area(0.08)] })), "92\u202f% of the surface was measured finely enough for ± 0.1\u202fmm; 1 area needs another pass.", "one area");
 eq(
   checkSentence(result({ tolerance_mm: 0.3, share_ok: 1, share_uncertain: 0, n_areas: 0, areas: [] })),
-  "All of the surface meets ± 0.3\u202fmm; no area needs another pass.",
+  "All of the surface was measured finely enough for ± 0.3\u202fmm; no area needs another pass.",
   "all of it",
 );
 eq(
   checkSentence(result({ tolerance_mm: 0.3, share_ok: 0.998, share_uncertain: 0.002, n_areas: 0, areas: [] })),
-  "99.8\u202f% of the surface meets ± 0.3\u202fmm; no area is large enough to list.",
+  "99.8\u202f% of the surface was measured finely enough for ± 0.3\u202fmm; no area is large enough to list.",
   "only specks",
 );
 eq(
   checkSentence(result({ tolerance_mm: 0.05, share_ok: 0, share_uncertain: 1, n_areas: 1, areas: [area(1)] })),
-  "None of the surface meets ± 0.05\u202fmm; 1 area needs another pass.",
+  "None of the surface was measured finely enough for ± 0.05\u202fmm; 1 area needs another pass.",
   "none of it",
 );
 eq(checkSentence(result({ n_areas: 120 })).includes("120 areas need"), true, "the count is of all areas, not of the list");
@@ -135,7 +135,7 @@ eq(checkNotes(result({})).length, 0, "nothing to add when all is listed and meas
 }
 {
   const notes = checkNotes(result({ share_ok: 0.9, share_uncertain: 0.07, share_not_measured: 0.03, areas: [area(0.07), area(0.03, "not_measured")], n_areas: 2 }));
-  eq(notes[0], "Of the rest, 7\u202f% of the surface is uncertain and 3\u202f% was not measured (filled holes).", "the split");
+  eq(notes[0], "Of the rest, 7\u202f% of the surface was measured too loosely and 3\u202f% was not measured (filled holes).", "the split");
   const only = checkNotes(result({ share_ok: 0.97, share_uncertain: 0, share_not_measured: 0.03, areas: [area(0.03, "not_measured")], n_areas: 1 }));
   eq(only[0], "All of the rest was not measured (filled holes).", "only filled holes");
 }

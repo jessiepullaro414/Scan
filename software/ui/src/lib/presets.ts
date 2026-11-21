@@ -19,7 +19,7 @@ export const PRESET_LABELS: Record<PresetKey, string> = {
   voxel_mm: "Mesh detail",
   thin_walls: "Thin walls and edges",
   recipe: "Recipe after meshing",
-  check_tolerance_mm: "Check tolerance",
+  check_tolerance_mm: "Tolerance",
 };
 /** The mesh detail the app takes, mm (as the Fuse stage does). */
 export const VOXEL_MIN_MM = 0.25;

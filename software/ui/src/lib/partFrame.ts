@@ -47,7 +47,7 @@ export function frameProblem(raw: unknown): string | null {
   if (!raw || typeof raw !== "object") return null;
   if (readFrame(raw)) return null;
   const reasons = (raw as { out_of_date_reasons?: unknown }).out_of_date_reasons;
-  return Array.isArray(reasons) && typeof reasons[0] === "string" ? reasons[0] : "this version can't read the part's frame";
+  return Array.isArray(reasons) && typeof reasons[0] === "string" ? reasons[0] : "this version can't read the part's axes";
 }
 
 export function rotationOf(f: PartFrameView): number[][] {

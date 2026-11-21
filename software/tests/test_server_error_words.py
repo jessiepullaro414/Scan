@@ -269,3 +269,94 @@ def test_calibration_verdicts_promise_no_accuracy():
     for said in ("This calibration is as good as the board allows.", "Good: no step needs redoing.",
                  "laser lines are calibrated well."):
         assert said in src
+
+
+# --------------------------------------------------------------------------- one name for each thing (UX_PLAN)
+#: names the glossary ("One name for each thing") retired, with the name that took their place. Checked against
+#: every text of the server and of the report (``ohs/report``) that a person reads.
+RETIRED = [
+    (r"\b[Ss]tereo\b", "the cameras (the Cameras step, the camera calibration)"),
+    (r"(?i)still holds|2-minute check|launch check", "Calibration check / Calibration valid / start-up check"),
+    (r"(?i)\bsigma\b", "scatter (the number) or confidence (the map)"),
+    (r"(?i)loose pieces|floaters?\b", "loose bits"),
+    (r"(?i)\b(part's|scan's|scan's own|reference's) frame\b|\bcoordinate system\b|\b(first|raw) camera frame",
+     "the part's axes / the scan's axes"),
+    (r"(?i)\breference\b(?! parts)", "the CAD model"),
+    (r"(?<!on a )\bPico\b(?! or ESP32)", "the control board (Pico or ESP32)"),
+    (r"(?i)\bemitters?\b|\bdot projector\b", "the lasers and dots"),
+    (r"(?i)\blaser planes?\b", "laser lines"),
+    (r"(?i)\bvoxels?\b", "mesh detail"),
+    (r"(?i)\bremake\b|\brebuild the mesh\b|\bre-run\b|\bstep by step\b|\bfine-tune in process\b|\bprocess the scan\b"
+     r"|\brun track\b", "Make mesh / Make mesh again / Edit mesh"),
+    (r"(?i)\bbase mesh\b|\btracked mesh\b", "the starting mesh"),
+    (r"(?i)\bgyro\b|\bIMU\b(?!\))", "the motion sensor (IMU)"),
+    (r"\b(RMS|rms)\b", "typical / typically"),
+    (r"(?i)\balign two scans\b|\bfused again\b", "Align and merge"),
+    (r"(?i)\bsandbox\b|\bsimulator demo\b", "the simulator"),
+]
+#: texts with an old word that a person does not read: names the program matches (the engine's self-test
+#: check names and its echo lines) and values of the API that the pages compare against (the state names of a
+#: comparison with the CAD model)
+RETIRED_EXEMPT = {"imu rate", "imu values", "dot projector", "Connecting to the Pico", "Switching each emitter on",
+                  "not on the reference"}
+#: in the report, "1σ" says once what every ± means (kept, UX_PLAN "What is good"); on the server's texts no σ at all
+RETIRED_SERVER_ONLY = [("σ", "scatter (the number) or confidence (the map)")]
+
+
+def _read_texts(source: str) -> list[tuple[int, str]]:
+    """Every string a person may read in a module: its string constants, without docstrings, log calls and
+    bare identifiers (a word without a space and not capitalised, like a key or a step id)."""
+    tree = ast.parse(source)
+    skip: set[int] = set()
+    for n in ast.walk(tree):
+        if isinstance(n, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) and n.body:
+            b = n.body[0]
+            if isinstance(b, ast.Expr) and isinstance(b.value, ast.Constant):
+                skip.add(id(b.value))
+        if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) and isinstance(n.func.value, ast.Name) \
+                and n.func.value.id in ("log", "logger", "logging", "_log"):
+            skip |= {id(s) for s in ast.walk(n)}
+        if isinstance(n, ast.Call) and _call_name(n) == "safe_call" and n.args:  # its label goes to the log only
+            skip |= {id(s) for s in ast.walk(n.args[0])}
+        if isinstance(n, ast.Dict):  # a key is a name the program uses, its value is the text
+            skip |= {id(k) for k in n.keys if k is not None}
+        if isinstance(n, ast.Compare):  # name == "imu rate", "no imu" in detail: matched, not shown
+            skip |= {id(s) for s in ast.walk(n)}
+        if isinstance(n, ast.Call) and _call_name(n) in ("startswith", "endswith", "replace"):
+            skip |= {id(s) for a in n.args[:1] for s in ast.walk(a)}  # the engine's words being matched
+    return [(n.lineno, n.value) for n in ast.walk(tree)
+            if isinstance(n, ast.Constant) and isinstance(n.value, str) and id(n) not in skip
+            and (" " in n.value.strip() or n.value[:1].isupper()) and n.value not in RETIRED_EXEMPT]
+
+
+def retired_names(source: str, filename: str = "<source>", report: bool = False) -> list[str]:
+    rules = RETIRED + ([] if report else RETIRED_SERVER_ONLY)
+    return [f"{filename}:{line}: {text[:90]!r}: {why}" for line, text in _read_texts(source)
+            for rx, why in rules if re.search(rx, text)]
+
+
+def test_no_retired_name_in_what_the_user_reads():
+    """The glossary's retired names do not come back in the server's or the report's texts."""
+    found = [p for f in sorted(SERVER.glob("*.py")) for p in retired_names(f.read_text(encoding="utf-8"), f.name)]
+    found += [p for f in sorted((SERVER.parent / "report").glob("*.py"))
+              for p in retired_names(f.read_text(encoding="utf-8"), f"report/{f.name}", report=True)]
+    assert not found, "retired names (UX_PLAN, One name for each thing):\n" + "\n".join(found)
+
+
+@pytest.mark.parametrize("src", [
+    'metric("Stereo: row error", "x", True, "Matching corners.")', 'headline = "Your calibration still holds"',
+    'notify("info", "Removing floaters…")', 'x = {"label": "the part\'s frame"}', 'S = "No Pico (it is unplugged)"',
+    'progress(0.4, "Switching the emitters on")', 'x = "1 mm voxels"', 'ApiError(409, "Run Track first.")',
+    'x = "Within 2σ of where it was measured"', 'x = "Gyro bias"', 'x = "0.04 mm RMS"', 'x = "Aligned to the reference"',
+])
+def test_the_retired_names_guard_catches_old_words(src):
+    assert retired_names(src)
+
+
+@pytest.mark.parametrize("src", [
+    'x = "the control board (Pico or ESP32)"', 'x = "Motion sensor (IMU)"', 'x = {"stereo": 1}', 'k = "recalibrate_stereo"',
+    'log.info("launch check: %s", s)', '"""The 2-minute check, in a docstring."""', 'safe_call("closing the Pico", f)', 'x = "the part\'s axes"',
+    'x = "measured against independently measured reference parts"',
+])
+def test_the_retired_names_guard_lets_new_words_through(src):
+    assert not retired_names(src)

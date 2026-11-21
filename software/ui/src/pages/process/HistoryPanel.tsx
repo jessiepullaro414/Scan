@@ -13,7 +13,7 @@ import { cn } from "../../lib/util";
 import { processKey, useProcess } from "../../store/process";
 import { Help, Panel } from "./bits";
 
-const STAGE_LABEL = { track: "Track", straighten: "Straighten", fuse: "Fuse", spacetime: "Refine from the images", refine: "Refine with lasers" } as const;
+const STAGE_LABEL = { track: "Follow the camera", straighten: "Straighten", fuse: "Build the surface", spacetime: "Refine from the images", refine: "Refine with lasers" } as const;
 
 function fmtMs(ms: number): string {
   if (!Number.isFinite(ms)) return "";
@@ -126,7 +126,7 @@ export function HistoryPanel({ pid, sid, state, busy }: { pid: string; sid: stri
       {state.base && edits.length ? (
         <Help className="mt-2.5">Click a step to go back to it. Undone steps stay until you make a new edit.</Help>
       ) : state.base ? (
-        <Help className="mt-2.5">No edits yet: the mesh is the base from the last stage.</Help>
+        <Help className="mt-2.5">No edits yet: the mesh is the starting mesh from the last stage.</Help>
       ) : null}
     </Panel>
   );

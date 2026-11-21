@@ -21,9 +21,9 @@ export function ReferenceLegend({ state, tolerance, answer, note, className }: {
   const grey = NOT_MEASURED[theme];
   const lim = fmtTolerance(tolerance);
   return (
-    <div className={cn("w-[260px] text-[11px] leading-4 text-muted", className)} role="group" aria-label="Comparison with the reference: legend">
+    <div className={cn("w-[260px] text-[11px] leading-4 text-muted", className)} role="group" aria-label="Comparison with the CAD model: legend">
       <div className="mb-1.5 flex items-baseline justify-between gap-2">
-        <span className="font-semibold text-fg">Against the reference</span>
+        <span className="font-semibold text-fg">Against the CAD model</span>
         <span className="text-subtle">deviation, mm</span>
       </div>
       {note ? (
@@ -31,7 +31,7 @@ export function ReferenceLegend({ state, tolerance, answer, note, className }: {
       ) : state.phase === "loading" ? (
         <div className="flex items-center gap-2 text-fg" role="status">
           <Spinner size={13} />
-          Comparing the scan with the reference…
+          Comparing the scan with the CAD model…
         </div>
       ) : state.phase === "unavailable" ? (
         <div className="text-fg" role="status">
@@ -54,7 +54,7 @@ export function ReferenceLegend({ state, tolerance, answer, note, className }: {
           </div>
           <div className="mt-1.5 flex items-center gap-1.5">
             <span className="h-2.5 w-5 shrink-0 rounded-sm ring-1 ring-line" style={{ background: OFF_REFERENCE[theme] }} aria-hidden />
-            Not on the reference (a table, a clamp): not compared
+            Not on the CAD model (a table, a clamp): not compared
           </div>
           <div className="mt-1 flex items-center gap-1.5">
             <span
@@ -67,11 +67,11 @@ export function ReferenceLegend({ state, tolerance, answer, note, className }: {
           {answer ? <div className="mt-1.5 font-medium text-fg">{toleranceSentence(answer)}</div> : null}
           <div className="mt-1 text-subtle">The strongest colours are at the tolerance (± {lim}&#8239;mm): set it in the Compare panel.</div>
           <span className="sr-only">
-            Blue: inside the reference by up to {lim}&#8239;mm. Light grey: on it. Red: outside it by up to {lim}&#8239;mm. Dark grey: not on the reference. Striped: not measured.
+            Blue: inside the CAD model by up to {lim}&#8239;mm. Light grey: on it. Red: outside it by up to {lim}&#8239;mm. Dark grey: not on the CAD model. Striped: not measured.
           </span>
         </>
       ) : (
-        <div className="text-fg">Align the scan with a reference in the Compare panel first.</div>
+        <div className="text-fg">Align the scan with a CAD model in the Compare panel first.</div>
       )}
     </div>
   );

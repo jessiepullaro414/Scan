@@ -182,7 +182,7 @@ export function ProcessButton({
   scan,
   size = "sm",
   variant = "secondary",
-  label = "Process…",
+  label = "Edit mesh…",
   className,
 }: {
   projectId: string;
@@ -200,7 +200,7 @@ export function ProcessButton({
       icon={SlidersHorizontal}
       disabled={recording}
       className={className}
-      title={recording ? "Stop the scan first" : "Step-by-step processing: clean up, fill holes, smooth, simplify, with undo"}
+      title={recording ? "Stop the scan first" : "Edit the mesh: clean up, fill holes, smooth, simplify, with undo"}
       onClick={() => navigate(paths.process(projectId, scan.id))}
     >
       {label}

@@ -40,17 +40,17 @@ export const KEEP_CHOICE: Record<KeepChoice, { title: string; text: string }> = 
       "can still be checked and the mesh made again.",
   },
   thinned: {
-    title: "Keep the frames Standard quality uses, and the result",
+    title: "Keep half the frames and the result",
     text:
-      "As above, and the camera frames Standard quality skips are removed too (every 2nd frame of a recording made at 60 " +
-      "frames a second). Make mesh at Standard quality gives the same mesh as before, and the motion sensor, the events " +
-      "and the calibration stay. Best quality then works from the frames that stay. This cannot be undone.",
+      "As above, and half of the camera frames are removed too (every 2nd frame of a recording made at 60 frames a second: " +
+      "the ones Make mesh at Standard quality skips). Make mesh at Standard quality gives the same mesh as before, and the " +
+      "motion sensor and the calibration stay. Best quality then works from the frames that stay. This cannot be undone.",
   },
   standard: {
     title: "Keep the result only",
     text:
       "The recording, the processing stages and the undo history are removed. The mesh with its confidence, the laser " +
-      "points, the camera path, the report, the calibration and the kept features stay: the mesh can still be edited, " +
+      "points, the camera path, the report, the calibration and the saved fitted shapes stay: the mesh can still be edited, " +
       "measured and exported, but not made again, merged or refined. This cannot be undone.",
   },
 };
@@ -63,15 +63,15 @@ export function fpsText(fps: number): string {
 
 /** What the scan's row says it keeps ("" for a scan that keeps everything). */
 export function keepLabel(mode: KeepMode | undefined, thinned?: Scan["thinned"] | null): string {
-  if (mode === "engineering" && thinned) return `Keeps recording (${fpsText(thinned.fps)}) and result`;
-  return mode === "engineering" ? "Keeps recording and result" : mode === "standard" ? "Keeps result only" : "";
+  if (mode === "engineering" && thinned) return "Keeps half the frames and the result";
+  return mode === "engineering" ? "Keeps the recording and the result" : mode === "standard" ? "Keeps the result only" : "";
 }
 
 /** R3: what a thinned recording holds (or, with `future`, would hold), one line ("" when it is not thinned). */
 export function thinnedLine(thinned: Scan["thinned"] | ScanKeepPlan["thinned"] | null | undefined, future = false): string {
   if (!thinned) return "";
   return (
-    `Its recording ${future ? "will hold" : "holds"} the frames Standard quality uses: ${fpsText(thinned.fps)} ` +
+    `Its recording ${future ? "will hold" : "holds"} half the frames: ${fpsText(thinned.fps)} ` +
     `(${fmtInt(thinned.frames)} of ${fmtInt(thinned.frames_before)} frames, recorded at ${fpsText(thinned.fps_before)}).`
   );
 }
@@ -87,7 +87,7 @@ export function keepTitle(scan: Pick<Scan, "keep" | "freed" | "thinned">, disk?:
     mode === "standard"
       ? "its recording, processing stages and undo history were removed"
       : scan.thinned
-        ? "the camera frames Standard quality skips, its processing stages and undo history were removed"
+        ? "half of the camera frames, its processing stages and undo history were removed"
         : "its processing stages and undo history were removed";
   const lines = [`To free space${last && when ? ` (${when(last)})` : ""}, ${what}${total ? `: ${fmtBytes(total)} freed` : ""}.`];
   if (mode === "engineering" && scan.thinned) lines.push(thinnedLine(scan.thinned));
@@ -124,7 +124,7 @@ export const BLOCK = {
   resultOnly: "This scan's recording was removed to free space (it keeps its result only). Only a new scan of the part can make the mesh again.",
   resultOnlyStages:
     "The stage files this needs were removed to free space (this scan keeps its result only). Only a new scan of the part can bring them back.",
-  stagesGone: "The stage files this needs were removed to free space. Make mesh, or Track, builds them again from the recording.",
+  stagesGone: "The stage files this needs were removed to free space. Make mesh, or Follow the camera, builds them again from the recording.",
   merged: "This scan was merged from other scans and has no recording of its own. Merge those scans again to make it again.",
   noRecording: "This scan has no recording. Record the part again to make a new mesh.",
 } as const;
@@ -191,8 +191,8 @@ export function remakeBlock(scan: Pick<Scan, "keep" | "freed" | "has_recording" 
 }
 
 const PART_LABEL: Record<KeepPart["part"], string> = {
-  recording: "The recording (camera frames, motion sensor, events)",
-  frames: "The camera frames Standard quality skips",
+  recording: "The recording (camera frames and motion sensor)",
+  frames: "Half of the camera frames",
   stages: "The processing stages",
   undo: "The undo history",
 };
@@ -232,8 +232,8 @@ export const BEST_LOSS =
 
 const LOSS: Record<KeepLoss, string> = {
   undo: "Undo the edits made so far. The mesh stays as it is now, and new edits can be undone.",
-  stages: "Run Straighten, Fuse or a refinement on its own, until the mesh is made again (Make mesh rebuilds the stages).",
-  remake: "Make the mesh again: Make mesh, Track, Straighten and Fuse need the recording.",
+  stages: "You can no longer re-run single steps on the Edit mesh page until you make the mesh again.",
+  remake: "Make the mesh again: Make mesh, Follow the camera, Straighten and Build the surface need the recording.",
   merge: "Merge this scan with others. Aligning still works.",
   refine: "Refine with lasers, or from the images.",
   frames: "Go back to the camera frames to check a number.",
@@ -252,7 +252,7 @@ const KEPT: Record<KeepKept, string> = {
   trajectory: "the camera path",
   report: "the processing report",
   calibration: "the calibration",
-  features: "the kept features",
+  features: "the saved fitted shapes",
 };
 
 /** "It keeps the recording, the mesh with its confidence and the laser points." */
@@ -285,27 +285,27 @@ export function confirmStandard(what: { name?: string; scans?: number }, bytes: 
     title: "Delete the recording for good?",
     text:
       `The recording ${whose} will be deleted from disk (${fmtBytes(bytes)} freed in all). This cannot be undone: ` +
-      "the mesh can never be made again from it, merged or refined. The mesh, its measurements and the kept features stay.",
+      "the mesh can never be made again from it, merged or refined. The mesh, its measurements and the saved fitted shapes stay.",
     button: "Delete the recording",
   };
 }
 
-/** R3, the second question for "the frames Standard quality uses": the title and the words. */
+/** R3, the second question for "Keep half the frames and the result": the title and the words. */
 export function confirmThin(what: { name?: string; scans?: number }, bytes: number): { title: string; text: string; button: string } {
   const whose = what.name ? `of “${what.name}”` : `of ${what.scans ?? 0} scan${what.scans === 1 ? "" : "s"}`;
   return {
-    title: "Delete the frames Standard quality skips?",
+    title: "Delete half the frames?",
     text:
-      `The camera frames Standard quality skips ${whose} will be deleted from disk (${fmtBytes(bytes)} freed in all). This ` +
+      `Half of the camera frames ${whose} (the ones Standard quality skips) will be deleted from disk (${fmtBytes(bytes)} freed in all). This ` +
       "cannot be undone. Make mesh at Standard quality still gives the same mesh; Best quality will work from the frames " +
       "that stay, so it gives the Standard mesh too.",
-    button: "Delete the skipped frames",
+    button: "Delete half the frames",
   };
 }
 
 /** What the toast says once it is done. */
 export function doneLine(freed: number, mode: KeepMode, name?: string, thin = false): string {
-  const keeps = mode === "standard" ? "its result only" : thin ? "the frames Standard quality uses and its result" : "its recording and its result";
+  const keeps = mode === "standard" ? "the result only" : thin ? "half the frames and the result" : "the recording and the result";
   return name ? `Freed ${fmtBytes(freed)}. “${name}” now keeps ${keeps}.` : `Freed ${fmtBytes(freed)}.`;
 }
 

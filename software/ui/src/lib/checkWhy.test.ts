@@ -33,7 +33,7 @@ check(far.includes("about 400\u202fmm away") && far.includes("about 250\u202fmm 
 const few = reasonWords({ reason: "few_looks", kind: "uncertain", evidence: ev({ looks: 4, looks_passing: 12 }) }, 254);
 check(few.includes("4 separate looks") && few.includes("had 12"), "few looks: the counts");
 const edge = reasonWords({ reason: "edge", kind: "uncertain", evidence: ev() }, 254);
-check(edge.includes("another pass alone does not lower it") && edge.includes("own uncertainty"), "edge: worded honestly");
+check(edge.includes("another pass alone does not lower it") && edge.includes("own scatter"), "edge: worded honestly");
 check(reasonWords({ reason: "not_seen", kind: "not_measured", evidence: ev() }, null).includes("hole filling"), "not seen: a filled hole");
 check(reasonWords({ reason: "not_seen", kind: "uncertain", evidence: ev() }, null).includes("never saw"), "not seen: beside unseen surface");
 check(reasonWords({ reason: "unknown", kind: "uncertain", evidence: ev() }, null).includes("do not tell"), "unknown");
