@@ -248,6 +248,11 @@ experiment: measure, find the cause, mend, and judge the mend with the scorecard
   but at the cost of the standing walls, so it is off. What is needed is a cue for "the
   surface ends here" that does not take steep wall faces with it; the laser lines' ends (X2)
   are the next candidate.
+  The laser lines' ends were then measured (X2), not built: they almost never run past an
+  edge, but stop 0.3 to 1.7 mm inside it in the median and 1 to 4 mm inside it for 40 % of
+  them. Too loose for a hole's reading. As a bound on fill that hangs up to 15 mm past an edge
+  ("no surface further out than the furthest line end") it is untried, and would have to pass
+  the thin-wall tests first.
 - [ ] **GPU, hole plate 120 mm up, seed 0: tracking is lost** (path max 16.3 mm; the Ø25 hole
   then reads 6.9 mm small). Seeds 1 and 2 hold (3.9 mm).
 
@@ -300,7 +305,7 @@ experiment: measure, find the cause, mend, and judge the mend with the scorecard
 - **Not tried:** a gate on the sigma with the hole factor taken out (the matcher's doubt from
   the image alone). It is outside this experiment's grid.
 
-### [ ] X2. Hole rims and edges from the laser lines (S, then M)
+### [x] X2. Hole rims and edges from the laser lines (measured 2026-11-21: not built) (S, then M)
 - **Idea:** a laser line ends exactly where the surface ends. Collect the curves' end points
   at a rim over many frames and fit the circle (or the edge) in the face's plane. Keep laser
   points that the depth check drops only because the dense depth there is fill.
@@ -316,6 +321,23 @@ experiment: measure, find the cause, mend, and judge the mend with the scorecard
 - **Stop rule: offered only if** Ø is within 0.2 mm on at least 8 of 9 clicks a hole at both
   pose sources, the centre within 0.2 mm, with at least 40 rim points. A gap is offered only
   if its bias is equal within 0.2 mm across gap sizes.
+
+**Measured 2026-11-21: stopped at the first measurement; nothing built.** Numbers:
+`VALIDATION.md`, "Hole rims from the laser lines' ends".
+- **Today's ends are short.** The extraction trims 2 points off each end of a segment, so the
+  ends sit 0.4 to 0.5 mm inside the rim; 1 to 6 % are within 0.2 mm of it.
+- **Without the trim** 16 to 34 % are within 0.2 mm, but about 40 % stop 1 to 4 mm short: a
+  projector dot or one outlier row within a line's last 20 rows breaks it, and the piece
+  beyond is shorter than the shortest segment kept. Medians +0.3 to +1.5 mm.
+- **No circle fit to the ends** of a 200-frame scan reads the Ø25 hole nearer than 0.2 to
+  1.4 mm large, the Ø10 up to 3 mm: far from the stop rule's 0.2 mm on 8 of 9 clicks.
+- **Part two has nothing to win:** the depth check drops 0 to 0.06 % of the laser points, almost
+  all on the true surface and none at a rim or a free edge.
+- **What holds:** a line's end almost never runs past a rim (1 to 6 % by more than 0.5 mm). It
+  is a one-sided cue: "the surface reaches at least this far".
+- **What could still work:** an extraction that finds a line's end itself (where the
+  intensity along the line drops), without the trim and without losing short end pieces. It
+  needs the real line's width first ("Only the real scanner can settle").
 
 ### [ ] X3. Poses refined against the finished scan (M to L)
 - **Idea A:** after the first fuse, register every frame again with the tracker's ICP against
@@ -442,6 +464,8 @@ experiment: measure, find the cause, mend, and judge the mend with the scorecard
 
 - **The matcher's sigma as a gate on the gap guard** while that sigma carries the matcher's
   hole factor (X1): it is a wider distance guard in disguise, and thin standing walls pay.
+- **Hole rims from the laser cloud's ends with today's extraction** (X2): the trim and the
+  20-row shortest segment put the ends 0.4 to 4 mm short of the rim.
 - **Fusing weights:** 1/sigma² (+15 to 25 % median); flat up to a knee (no gain).
 - **Weak directions:** remapping them; geometrically stable sampling.
 - **A narrower disparity search:** one range a frame (2 to 7 % faster; the bar was 10 %).

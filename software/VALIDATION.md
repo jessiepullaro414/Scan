@@ -4086,6 +4086,81 @@ to the baseline, and the no-GPU quick set is identical even with the settings on
 model has no sigma). Frame time was not readable on the busy PC; the gate adds one comparison a
 pixel inside a kernel that already runs.
 
+## Hole rims from the laser lines' ends (ENGINE_PLAN X2, 2026-11-21): measured, not built
+
+The idea: a laser line ends where the surface ends, so the ends of the laser curves at a rim,
+collected over a scan, give the hole or the edge without the matcher's fill. Before building,
+the engine's own laser extraction, stereo check and depth check were run on the cached
+recordings (hole plates 10 and 120 mm up, seeds 0 to 2; the 200-frame car panel, seeds 0 to 4;
+the end-to-end panel) and put into the world at the true poses. Each run of kept points has two
+ends. A rim end lies within 1 mm of the face and 4 mm of a true rim or free edge, its line goes
+on into the material and crosses the rim at more than 60° from the tangent. Distances are in
+the face's plane, in mm: + means the end stops short of the rim, inside the material. One pixel
+along the line is about 0.4 mm.
+
+**Today's extraction** (it trims 2 points off each end of a segment):
+
+| recordings | feature | ends a scan | median | 10 % | 90 % | within ±0.2 mm |
+|---|---|---|---|---|---|---|
+| hole plate 120 mm up | Ø25 rim | 114 | +0.99 | +0.33 | +3.42 | 6 % |
+| | Ø10 / Ø6 rim | 141 / 39 | +1.70 / +1.05 | +0.54 / +0.30 | +3.60 / +3.38 | 1 % / 5 % |
+| | free edge | 479 | +0.93 | +0.40 | +3.20 | 2 % |
+| hole plate 10 mm up | Ø25 / Ø10 / Ø6 rim | 114 / 143 / 38 | +1.00 / +1.70 / +1.05 | +0.34 / +0.54 / +0.29 | +3.45 / +3.60 / +3.39 | 4 % / 1 % / 5 % |
+| | free edge | 482 | +0.97 | +0.43 | +3.19 | 2 % |
+| car panel, 200 frames | Ø25 rim | 383 | +1.25 | +0.57 | +3.37 | 1 % |
+| | free edge | 316 | +1.07 | +0.46 | +3.07 | 2 % |
+| end-to-end panel | free edge | 48 | +1.00 | +0.60 | +3.23 | 2 % |
+
+**Without the trim** (the best today's extraction can give):
+
+| recordings | feature | ends a scan | median | 10 % | 90 % | within ±0.2 mm | more than 0.5 mm past the rim |
+|---|---|---|---|---|---|---|---|
+| hole plate 120 mm up | Ø25 / Ø10 / Ø6 rim | 123 / 153 / 39 | +0.55 / +1.48 / +0.59 | -0.16 / -0.05 / -0.12 | +3.37 / +3.63 / +3.28 | 28 % / 16 % / 34 % | 1.1 % / 0 / 0 |
+| hole plate 10 mm up | Ø25 / Ø10 / Ø6 rim | 125 / 154 / 39 | +0.56 / +1.54 / +0.60 | -0.16 / -0.02 / -0.12 | +3.36 / +3.65 / +3.29 | 27 % / 17 % / 31 % | 0.8 % / 0 / 0 |
+| car panel, 200 frames | Ø25 rim | 437 | +0.67 | -0.03 | +3.33 | 22 % | 0.2 % |
+| every scene | free edges | 333 to 511 (end-to-end: 54) | +0.32..+0.37 | -0.26..-0.14 | +3.05..+3.28 | 28 to 32 % | 1.0 to 5.6 % |
+
+**Circles fitted to the untrimmed ends** (the diameter read, minus the truth):
+
+| fit | Ø25, six hole plates | Ø25, five car panels | Ø10 | Ø6 |
+|---|---|---|---|---|
+| least squares | +0.86..+1.15 | +1.10..+1.35 | +1.32..+1.80 | +0.79..+1.51 |
+| robust (Tukey) | +0.24..+0.97 | +0.79..+0.99 | +1.04..+1.78 | +0.12..+1.65 |
+| the densest band of ends | -0.14..+1.16 | +0.44..+0.49 | -0.16..+3.24 | -0.92..+1.37 |
+
+The stop rule asks for a diameter within 0.2 mm on 8 of 9 clicks; no fit comes near it on any
+hole, so nothing was built.
+
+What sets where a line ends:
+
+- The trim of 2 points puts every end 1.0 to 1.2 px (0.4 to 0.5 mm) inside the rim.
+- About 40 % of the ends stop 1 to 4 mm short: a dot of the projector merging with the line, or
+  one outlier row, breaks the line within its last 20 rows, and the piece beyond is shorter than
+  the shortest segment the extraction keeps (20 rows, about 8 mm). The line is there in the
+  image, 10 px past the reported end. The width check and the outlier rule account for part of
+  it (65 short ends of 200 become 56 without the width check, 44 with a looser outlier rule);
+  the rule of one candidate a row and the exclusion where two lines cross account for none.
+- The end points lie 0.13 to 0.24 mm off the face, against about 0.05 mm for laser points
+  elsewhere: the line's profile is cut there.
+- Ends almost never run past a rim: a line's end says "the surface reaches at least this far".
+
+**The depth check drops almost nothing**, so there are no laser points to win back from it (true
+poses, stereo-checked points, every second frame):
+
+| recording | dropped by the depth check / points | of those, on the true surface |
+|---|---|---|
+| the three seams | 5 / 21,993; 3 / 19,609; 0 / 21,650 | 4; 3; 0 |
+| end-to-end panel; car panel seeds 0 and 1 | 15 / 14,626; 6 / 79,610; 9 / 80,040 | 15; 6; 8 |
+| hole plates 120 and 10 mm up | 7 / 73,192; 7 / 92,345 | 7; 7 |
+| walls; 0.5 mm plate; sheet; bracket | 32 / 40,553; 15 / 28,044; 52 / 89,574; 50 / 85,561 | 32; 13; 50; 48 |
+
+None of the dropped panel points lies within 3 mm of the free edge, and no rim end was made by
+the depth check. So the seam's laser cloud stopping 1.5 to 2.6 mm short in "Gap and flush" is
+not the depth check, as that section guessed; it is the extraction's rules above.
+
+Limits: simulator only; the simulator's line has one width (sigma 0.4 mm), and a real line's
+width and speckle can only push the ends further out; true poses only.
+
 ## What the metrics mean
 
 - **Stereo errors** compare the estimated raw intrinsics/extrinsics (`K1`, `K2`, `R`, `T`) with
