@@ -190,6 +190,8 @@ def test_each_refusal_answers_422_with_the_engines_words(box, slots, opts):
     r = err(post(base_url(box) + "/features/frame", body(*slots, **opts)), 422)
     # the engine's own words when they read as a sentence for the user (UX_PLAN U9), else the server's fixed words
     assert r["detail"] == sentence(plain_reason(refused.value, "These shapes cannot set the part's axes."))
+    # every one of them is such a sentence, so the user reads why (UX_PLAN U51: the strict 3-2-1 and the axes ones too)
+    assert r["detail"] == sentence(str(refused.value)), r["detail"]
     assert kf.load(scan_dir(box))["frame"] is None  # nothing kept
 
 

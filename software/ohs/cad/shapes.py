@@ -817,6 +817,6 @@ def cad_shapes(features, outlines=None, frame=None, *, boundary: str = "rectangl
         length = float(axis_length_mm) if axis_length_mm is not None else _axes_length(out)
         axes = PartAxes(origin=np.zeros(3), axes=np.eye(3), length_mm=length)
     else:
-        notes.append("no part frame: the shapes are in the scan's own frame (wherever the scanner started), and no "
-                     "part axes are written")
+        notes.append("the part's axes are not set: the shapes are in the scan's own axes (wherever the scanner "
+                     "started), and no part axes are written")
     return CadShapes(shapes=out, axes=axes, in_part_frame=pf is not None, notes=notes)

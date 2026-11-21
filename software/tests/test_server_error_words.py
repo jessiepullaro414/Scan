@@ -360,3 +360,92 @@ def test_the_retired_names_guard_catches_old_words(src):
 ])
 def test_the_retired_names_guard_lets_new_words_through(src):
     assert not retired_names(src)
+
+
+# --------------------------------------------------------------------------- the engine's own sentences (UX_PLAN U51)
+ENGINE = SERVER.parent
+#: the engine's modules whose sentences reach a person through the server, the report or the pages (verdicts,
+#: warnings, reasons, notes, labels, help cards; a plain exception's words pass ``plain_reason`` too)
+ENGINE_MODULES = [
+    "calib/health.py", "calib/drift.py", "calib/stereo.py", "calib/imu.py", "calib/laser_planes.py",
+    "app/presets.py", "app/selftest.py", "app/calib_flow.py",
+    "mesh/section.py", "mesh/support.py", "mesh/check.py",
+    "cad/fcmacro.py", "cad/step.py", "cad/shapes.py", "cad/nominal.py",
+    "inspect/reference.py", "inspect/gapflush.py",
+    "align/pairwise.py", "align/merge.py",
+    "guide/views.py",
+    "measure/frame.py", "measure/region.py", "measure/fit.py", "measure/features.py",
+    "track/path_check.py",
+]
+#: in the engine's sentences "1σ" may say what a ± is (as the report does); any other σ is scatter or confidence. And two
+#: names the server's list does not hold: one loose piece, and the scan's uncertainty (the table: scatter)
+ENGINE_RULES = [(r"(?<!1)σ", "scatter (the number) or confidence (the map)"), (r"(?i)\bloose piece\b", "loose bits"),
+                (r"(?i)\buncertain(ty|ties)?\b", "scatter (the number) or confidence (the map)")]
+#: texts of those modules that keep an old word, each with why (a regex on the text, and the reason)
+ENGINE_EXEMPT = [
+    # a check of the program's own input that names its parameter (``sigma``: "3 sigma values for 4 vertices",
+    # "sigma must be positive and finite"); a person never causes it (the data the app hands on is checked before)
+    (r"^ sigma values for |^sigma must ", "a check of the program's input, named after its parameter"),
+    # the self-test's command line: its echo lines (the server turns each into the app's words, ohs/server/selftest.py
+    # plain_prompt) and what a flag of the command line skipped
+    (r"^Connecting to the Pico\.\.\.$|^Switching each emitter on for $", "an echo line of the command line, reworded by "
+                                                                          "the server"),
+    (r"^not tested \(--no-(pico|emitters|camera)\)$", "only the command line's flag skips it"),
+    # the name of a section of VALIDATION.md, cited as the source of a measured bias (it must match the heading)
+    (r"^The gap guard per voxel$", "a heading of VALIDATION.md, cited by name"),
+    # the STEP file's own syntax (ISO 10303-21), which CAD programs read
+    (r"REPRESENTATION_CONTEXT\(", "STEP syntax, read by CAD programs"),
+    # a value the program compares, not a word on a page (the way a nominal fits: "2 sigma" or "bias")
+    (r"^2 sigma$", "a kind the program compares"),
+    # why a sign of the health block is not used for the calibration status (``ohs.calib.health.DROPPED``): a record
+    # of the measurement for the plan, never shown
+    (r"^each line against the stereo depth before the drop", "why a sign is dropped from the status: a record for the "
+                                                              "plan, not shown"),
+]
+
+
+def engine_retired_names(source: str, filename: str) -> list[str]:
+    rules = RETIRED + ENGINE_RULES
+    return [f"{filename}:{line}: {text[:90]!r}: {why}" for line, text in _read_texts(source)
+            for rx, why in rules if re.search(rx, text) and not any(re.search(e, text) for e, _ in ENGINE_EXEMPT)]
+
+
+def test_no_retired_name_in_the_engines_sentences():
+    """UX_PLAN U51: the glossary's retired names do not come back in the sentences the engine itself makes."""
+    found = []
+    for rel in ENGINE_MODULES:
+        path = ENGINE / rel
+        assert path.is_file(), rel
+        found += engine_retired_names(path.read_text(encoding="utf-8-sig"), rel)
+    assert not found, "retired names in the engine's sentences (UX_PLAN U51):\n" + "\n".join(found)
+
+
+@pytest.mark.parametrize("src", [  # the engine's sentences before U51, verbatim
+    'x = "Run the 2-minute check"',
+    'out["message"] = f"Left and right rows agree to {_px(med)} px: the calibration still holds."',
+    'PART_LABELS = {"imu": "IMU"}',
+    'x = ("the lasers and the IMU are judged only in scans processed at full resolution")',
+    'description = f"Section at {a} = {value:g} mm in the part\'s frame"',
+    'where = "the part\'s frame" if shapes.in_part_frame else "the scan\'s own frame"',
+    'msg = f"The reference is {r:.3g} times the size of the scan\'s part"',
+    'x = f"of the other scan, {out.rmse_mm:.2f} mm RMS; {sure}.{loose}"',
+    'x = "{_count(n_gone, \'small loose piece\')} ({a} mm²)"',
+    'x = f"left ({a:,.0f} mm²): Remove floaters takes it."',
+    'x = "the mesh\'s own uncertainty there is above the tolerance"',
+    'x = "A finer mesh: 0.5 mm voxels instead of 1 mm. Nothing else."',
+    'x = "(the stereo depth runs on across it)"',
+    'x = f"the hole\'s edge is not round (RMS {r:.2f} mm): a slot or a damaged edge?"',
+    'x = f"HELLO {fw} {ver} on {port}, imu={imu}"',
+    'x = "the points scatter 2 times more than their sigma"',
+])
+def test_the_engine_guard_catches_the_old_sentences(src):
+    assert engine_retired_names(src, "old")
+
+
+@pytest.mark.parametrize("src", [
+    'x = "Run the calibration check"', 'x = "Motion sensor (IMU)"', 'x = "the datums\' own ± (1σ): 0.1°"',
+    'raise ValueError(f"{len(S)} sigma values for {len(V)} vertices")', 'x = "not tested (--no-pico)"',
+    'x = "the part\'s axes set on the CAD model"', 'x = "typically 0.25 mm"',
+])
+def test_the_engine_guard_lets_new_words_through(src):
+    assert not engine_retired_names(src, "new")

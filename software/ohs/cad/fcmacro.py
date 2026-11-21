@@ -203,7 +203,7 @@ def _plane(s: PlaneFace, label: str) -> str:
 def macro_text(shapes: CadShapes, *, title: str = "Fitted shapes") -> str:
     """The FreeCAD macro of ``shapes`` (from :func:`ohs.cad.shapes.cad_shapes`) as text (module
     docstring). ``title`` names the part: the document FreeCAD makes is labelled with it."""
-    where = "the part's frame" if shapes.in_part_frame else "the scan's own frame"
+    where = "the part's axes" if shapes.in_part_frame else "the scan's own axes"
     head = [
         f"{SYSTEM}: fitted shapes for FreeCAD, in mm, in {where}.",
         f"Part: {title}",

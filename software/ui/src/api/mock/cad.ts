@@ -148,7 +148,7 @@ export function mockCadSummary(s: CadStored, boundary: CadBoundary, version: num
   const notes = ["the demo engine has no STEP or FreeCAD writer: the files are small fixed texts"];
   for (const f of s.features)
     if (f.extent === null && f.kind !== "hole") notes.push(`${f.name}: kept with no measured size (before extents existed): written at a stated size; fit it again for its real size`);
-  if (!part) notes.push("no part frame: the shapes are in the scan's own frame (wherever the scanner started), and no part axes are written");
+  if (!part) notes.push("the part's axes are not set: the shapes are in the scan's own axes (wherever the scanner started), and no part axes are written");
   const nom = cadNominal(s, measuredOnly);
   notes.push(...nom.notes);
   let outline: CadSummary["outline"] = null;

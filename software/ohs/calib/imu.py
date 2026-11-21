@@ -254,7 +254,7 @@ def _xcorr_offset(
         ncc[i] = float(a @ b) / den if den > 0 else -np.inf
     i = int(np.argmax(ncc))
     if not np.isfinite(ncc[i]):
-        raise ValueError("camera and IMU data do not overlap in time")
+        raise ValueError("camera and motion sensor data do not overlap in time")
     frac = 0.0
     if 0 < i < len(lags) - 1 and np.isfinite(ncc[i - 1]) and np.isfinite(ncc[i + 1]):
         den = ncc[i - 1] - 2 * ncc[i] + ncc[i + 1]
@@ -299,7 +299,7 @@ def calibrate_imu_camera(
     keep = np.concatenate([[True], np.diff(imu_t) > 0])
     imu_t, gyro = imu_t[keep], gyro[keep]
     if len(cam_t) < 30 or len(imu_t) < 200:
-        raise ValueError(f"too little data: {len(cam_t)} camera poses, {len(imu_t)} gyro samples")
+        raise ValueError(f"too little data: {len(cam_t)} camera poses, {len(imu_t)} motion sensor samples")
     frame_dt = float(np.median(np.diff(cam_t)))
     bad_pose = _orientation_outliers(cam_t, R_wc, frame_dt)
     if bad_pose.any():
@@ -339,13 +339,13 @@ def calibrate_imu_camera(
     ta, tb = cam_t[:-1], cam_t[1:]
     use = ok_int & (ta - offset0 >= imu_t[0]) & (tb - offset0 <= imu_t[-1])
     if use.sum() < 20:
-        raise ValueError("fewer than 20 camera intervals are covered by IMU data")
+        raise ValueError("fewer than 20 camera intervals are covered by motion sensor data")
     dt = (tb - ta)[use]
     w_i = _log_batch(integ.relative(ta[use] - offset0, tb[use] - offset0, bias0)) / dt[:, None]
     w_c = w_cam[use]
     mag_ok = np.abs(np.linalg.norm(w_c, axis=1) - np.linalg.norm(w_i, axis=1)) < 0.15 + 0.15 * np.linalg.norm(w_i, axis=1)
     if mag_ok.sum() < 20:
-        raise ValueError("camera and gyro angular speeds disagree; check timestamps and board poses")
+        raise ValueError("camera and motion sensor angular speeds disagree; check timestamps and board poses")
     A, Bv = w_i[mag_ok], w_c[mag_ok]
     for _ in range(2):  # fit, drop vector outliers, refit
         if joint_bias:
@@ -373,7 +373,7 @@ def calibrate_imu_camera(
     sel = no_gap & (cam_t[a_idx] - hi >= imu_t[0]) & (cam_t[b_idx] - lo <= imu_t[-1])
     a_idx, b_idx = a_idx[sel], b_idx[sel]
     if len(a_idx) < 20:
-        raise ValueError("fewer than 20 refinement intervals are covered by IMU data")
+        raise ValueError("fewer than 20 refinement intervals are covered by motion sensor data")
     R_cam = np.swapaxes(R_wc[a_idx], -1, -2) @ R_wc[b_idx]
     t_a, t_b = cam_t[a_idx], cam_t[b_idx]
     lo, hi = min(lo, offset0 - 1e-6), max(hi, offset0 + 1e-6)
@@ -409,11 +409,12 @@ def calibrate_imu_camera(
     if at_edge or abs(offset) > max_offset_s - 1e-3:
         advice.append(f"the time offset hit the search limit of +-{max_offset_s} s: check the clock sync")
     if peak < 0.6:
-        advice.append(f"weak camera/gyro correlation ({peak:.2f}): rotate the scanner more vigorously in front of the board")
+        advice.append(f"weak correlation between the cameras and the motion sensor ({peak:.2f}): rotate the scanner more "
+                      "vigorously in front of the board")
     if excitation[1] < MIN_EXCITATION:
         advice.append("the rotation was mostly about one axis, so R_ci is poorly determined: rotate about all three axes")
     if rms_deg > 0.3:
-        advice.append(f"large rotation residuals ({rms_deg:.2f} deg rms): check board detection and timestamps")
+        advice.append(f"large rotation residuals (typically {rms_deg:.2f} deg): check board detection and timestamps")
     if outlier_frac > 0.1:
         advice.append(
             f"{outlier_frac:.0%} of the intervals are outliers: check board detection (blur, glare) and timestamps"

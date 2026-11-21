@@ -1,6 +1,6 @@
 /**
  * Presets (FEATURE_PLAN P3), the parts the Scan page and the Process page share: the hover card of a preset
- * (what it changes, why, what it costs; as "Where to smooth" does it) and one value's row, which shows the
+ * (what it changes, what it costs, then why, with the measured numbers; UX_PLAN U47) and one value's row, which shows the
  * value, where it comes from (the preset, General, or changed by hand) and lets the user change it.
  */
 import { CircleHelp, RotateCcw } from "lucide-react";
@@ -14,7 +14,7 @@ import { useRecipes } from "../store/recipes";
 import { Segmented, Select } from "./ui/Form";
 import { Tooltip } from "./ui/Popover";
 
-/** The card of one preset: its name, then what it changes, why, and what it costs. */
+/** The card of one preset: its name, then what it changes, what it costs, and why (the measured numbers, U47). */
 export function PresetCardContent({ preset }: { preset: Preset }) {
   const card = preset.card;
   return (
@@ -26,16 +26,16 @@ export function PresetCardContent({ preset }: { preset: Preset }) {
             <span className="font-medium text-fg">What it changes: </span>
             <span className="text-muted">{card.changes}</span>
           </div>
-          <div>
-            <span className="font-medium text-fg">Why: </span>
-            <span className="text-muted">{card.why}</span>
-          </div>
           {card.costs ? (
             <div>
               <span className="font-medium text-fg">What it costs: </span>
               <span className="text-muted">{card.costs}</span>
             </div>
           ) : null}
+          <div>
+            <span className="font-medium text-fg">Why: </span>
+            <span className="text-muted">{card.why}</span>
+          </div>
         </>
       ) : (
         <div className="text-muted">{preset.description || "Your own preset."}</div>
@@ -48,7 +48,7 @@ export function PresetCardContent({ preset }: { preset: Preset }) {
 export function presetCardText(p: Preset): string {
   const c = p.card;
   if (!c) return `${p.name}: ${p.description || "your own preset"}`;
-  return `${p.name}. What it changes: ${c.changes} Why: ${c.why}${c.costs ? ` What it costs: ${c.costs}` : ""}`;
+  return `${p.name}. What it changes: ${c.changes}${c.costs ? ` What it costs: ${c.costs}` : ""} Why: ${c.why}`;
 }
 
 /** A small "?" that shows the preset's card on hover or focus. */

@@ -70,7 +70,7 @@ function meet(planes: [V, V][]): V {
 export function mockPartFrame(inputs: [FrameInput, FrameInput, FrameInput], opts: { axes?: string; flip_primary?: boolean; flip_secondary?: boolean; secondary_zero?: boolean } = {}): PartFrameRecord {
   const axes = String(opts.axes ?? "ZX").toUpperCase();
   if (axes.length !== 2 || axes[0] === axes[1] || ![...axes].every((c) => "XYZ".includes(c)))
-    refuse(`axes must be two different letters of X, Y and Z (the primary's axis, then the secondary's, e.g. 'ZX'), got '${opts.axes}'`);
+    refuse(`The axes must be two different letters of X, Y and Z, the primary's axis first and then the secondary's (for example ZX), not ${opts.axes}`);
   const names = [axes[0], axes[1], "XYZ".split("").find((c) => !axes.includes(c))!] as [AxisName, AxisName, AxisName];
   const [Z, X] = names;
   const [f1, f2, f3] = inputs.map((x, i) => feat(x, (["primary", "secondary", "origin"] as const)[i]));
@@ -86,7 +86,7 @@ export function mockPartFrame(inputs: [FrameInput, FrameInput, FrameInput], opts
   } else mode = tilt < 45 ? "through" : "along";
   if (mode === "through" && f3.kind === "plane")
     refuse(`a ${NAMES[f2.kind]} across the primary face sets the turn only with a hole, a cylinder or a point as the origin (the ${X} axis runs from the origin to it): pick one as the origin, or a side face as the secondary`);
-  if (mode === "through" && opts.secondary_zero) refuse(`secondary_zero needs a plane, or a cylinder or a hole lying along the primary face, as the secondary; a ${NAMES[f2.kind]} across the face only sets the turn`);
+  if (mode === "through" && opts.secondary_zero) refuse(`Strict 3-2-1 needs a plane, or a cylinder or a hole lying along the primary face, as the secondary; a ${NAMES[f2.kind]} across the face only sets the turn`);
   const warnings: string[] = ["the demo engine does not work out the frame's ±"];
   // Z: from the primary plane towards the part
   let s1 = 0;

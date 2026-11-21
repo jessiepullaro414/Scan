@@ -283,7 +283,7 @@ def test_no_sigma_gives_none_with_the_reason():
 
 
 def test_a_warning_that_counts_gives_none_and_one_that_does_not_is_passed():
-    bad = hole(10.02, 0.05, warnings=["the hole's edge is not round (RMS 0.40 mm): a slot or a damaged edge?"])
+    bad = hole(10.02, 0.05, warnings=["the hole's edge is not round (typically 0.40 mm off a circle): a slot or a damaged edge?"])
     offer = only(suggest_fit(bad), "diameter")
     assert offer.suggestions == [] and offer.reason_code == "warning"
     assert "not round" in offer.reason
@@ -291,7 +291,7 @@ def test_a_warning_that_counts_gives_none_and_one_that_does_not_is_passed():
     assert nominals(only(suggest_fit(ok), "diameter")) == [10.0]
     # a relation whose fit carries such a warning
     rel = angle_relation(("plane", "plane"), 89.7, 0.2)
-    warn = "the points scatter 2.1 times more than their sigma (RMS 0.300 mm): a curved or rough surface?"
+    warn = "the points scatter 2.1 times more than the scan expects (typically 0.300 mm off the shape): a curved or rough surface?"
     offer = only(suggest_relation(rel, warnings=[warn]), "angle")
     assert offer.suggestions == [] and offer.reason_code == "warning"
 

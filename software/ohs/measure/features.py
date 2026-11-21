@@ -595,7 +595,7 @@ def frame_state(frame: Any, features: list[dict]) -> dict | None:
             raise ValueError("its built_from must be a list of objects")
     except (ValueError, TypeError, AttributeError, KeyError) as e:
         return {"readable": False, "out_of_date": True,
-                "out_of_date_reasons": [f"this version cannot read the part's frame: {e}"]}
+                "out_of_date_reasons": [f"this version cannot read the part's axes: {e}"]}
     by_id = {f.get("id"): f for f in features}
     reasons = []
     for slot in built_from:

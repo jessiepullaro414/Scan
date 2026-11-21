@@ -5,7 +5,8 @@
  * key or a step id). The server has the same guard (`tests/test_server_error_words.py`).
  *
  * The demo (`api/mock`) is left out: where it copies the engine's own sentences (the calibration's health, the
- * comparison's verdicts, the preset cards) it says what the engine says, old words and all, until the engine changes.
+ * comparison's verdicts, the preset cards) it says what the engine says (the engine's own guard since UX_PLAN U51:
+ * `tests/test_server_error_words.py`, ENGINE_MODULES), and the state names the pages compare against.
  * So are the API's types (`api/types.ts`): their strings are the JSON values the pages compare against.
  */
 const fs = (await import(["node", "fs"].join(":"))) as {
@@ -137,7 +138,6 @@ for (const n of NEW) check(retired(n, "new").length === 0, `the guard lets throu
 const ALLOWED: RegExp[] = [
   /MicroPython|BOOTSEL|\.uf2|RPI-RP2|lsm6dsox|plug the Pico into USB/, // the firmware steps, for the Pico board itself
   /\bohs calibrate stereo\b/, // the command line keeps its names
-  /^lib\/section\.ts:\d+: "Section at/, // the engine's own description of a section (ohs/mesh/section.py)
   /"You can no longer re-run single steps on the Edit mesh page/, // UX_PLAN U37's own words
 ];
 

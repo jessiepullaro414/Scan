@@ -280,8 +280,8 @@ def suggest_view(V: np.ndarray, F: np.ndarray, area: dict, views: ScanViews, *, 
     if area.get("reason") == "edge":
         return {"ok": False, "pose": None, "share_seen": None, "border_seen": None, "candidates": 0, "missed": None,
                 "alternatives": [],
-                "reason": "no pose: on an edge or a tight curve another pass alone does not lower the uncertainty",
-                "text": "No pose: on an edge or a tight curve another pass alone does not lower the uncertainty."}
+                "reason": "no place to scan from: on an edge or a tight curve another pass alone does not lower the scatter",
+                "text": "No place to scan from: on an edge or a tight curve another pass alone does not lower the scatter."}
     m = _mesh or _Mesh(V, F, normals, scene, _border_mm(None) if border_mm is None else border_mm)
     P, Nv, w, B, Bo = m.points(area)
     normal = np.asarray(area.get("normal") or Nv.sum(axis=0), dtype=np.float64)

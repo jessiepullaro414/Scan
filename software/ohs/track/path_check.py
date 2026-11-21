@@ -62,7 +62,7 @@ def _sentence(jump_mm: float, frame: int, cpu_path: bool) -> str:
          "can then come out thinner or partly missing, and sizes across that part of the scan may be off. "
          "Scan it again more slowly, with more of the part's edges in view.")
     if cpu_path:
-        s += " This scan was processed without a GPU, where tracking holds flat, plain scenes less well."
+        s += " This scan was processed without a graphics card, where tracking holds flat, plain scenes less well."
     return s
 
 

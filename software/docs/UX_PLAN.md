@@ -186,7 +186,7 @@ Left, small:
 - A scan put back from the trash is listed last in its project, not in its old place.
 - Scan check: "Seen too few times" is said as a title and again as the sentence's start.
 
-### [ ] U51. The old names in texts the engine itself makes (found in the first wave, S)
+### [x] U51. The old names in texts the engine itself makes (found in the first wave, S)
 The server and the pages are done; these sentences are made deeper in the engine and reach
 the user through them, and the demo mirrors them (so `api/mock` is outside the pages' guard).
 Words only. U4 and U47 are ticked with this.
@@ -205,6 +205,34 @@ Words only. U4 and U47 are ticked with this.
   the part's axes named above; the self-test's details ("imu=…").
 - The command line (`ohs/app/cli.py`, `capture.py`) says "still holds": a different audience;
   leave unless it is one edit.
+
+**Done (2026-11-21).** Words only: `tools/snapshot.py` before and after reads identical, so a
+scan's result is bit for bit what it was. With it every finding of this plan, U1 to U51, is
+ticked; what is left are the small items in the "Left" lists above and the checks on the real
+engine at the end.
+
+- Every sentence in the list above, and more that reach the user through the calibration's
+  results: the camera, laser and motion sensor calibration's errors and the calibration
+  check's verdicts (`ohs/calib/stereo.py`, `imu.py`, `laser_planes.py`, `ohs/app/calib_flow.py`).
+- U4: one name, "left/right height mismatch", in the scans' status, the start-up check and
+  the calibration check; each limit that differs says why ("scans measure this more finely
+  than the calibration check, so their limit is lower"; "the start-up check looks at three
+  pictures only, so its limit is wider").
+- U47: the thin-parts preset's card reads What it changes, What it costs, Why, with the
+  numbers on the last line.
+- The two refusals for the part's axes now reach the user in the engine's own words ("Strict
+  3-2-1 needs a plane, …"; "The axes must be two different letters of X, Y and Z, …").
+- The demo's calibration status is built from the engine's own sentences, and a test reads
+  `ohs/calib/health.py` and fails when the demo says something the engine does not
+  (`api/mock/health.test.ts`).
+- Guard: `tests/test_server_error_words.py` now also reads 25 engine modules that make
+  user-read sentences, with seven named exemptions (a parameter's own name, STEP syntax, and
+  the like).
+- Found in review and mended: the viewer said "Calibration: Calibration valid"; one sentence
+  under Compare still said "uncertainty (2σ)".
+- Left on purpose: texts for the command line and for developers (settings descriptions, the
+  bench, the Pico driver), and the rewording of "GPU" in an older scan's stored warning (its
+  report file still says it).
 
 ## The ten that matter most
 
@@ -248,7 +276,7 @@ Words only. U4 and U47 are ticked with this.
 - **Pick:** "Calibration check" in Setup (chip: "Check the calibration"); "Scan check" in the
   viewer (button: "Check the scan").
 
-### [ ] U4. Three limits and three names for the left/right row mismatch (choice, S)
+### [x] U4. Three limits and three names for the left/right row mismatch (choice, S)
 - "Rectified row error 0.11 px (want < 0.3 px)", "Row error after rectification 0.16 px (want
   < 0.6 px)", "disagreed by 0.34 px in height (want under 0.15 px)".
 - **Pick:** one name, "Left/right height mismatch"; where the limits must differ say why
@@ -503,7 +531,7 @@ Words only. U4 and U47 are ticked with this.
 ### [x] U46. "Calibration loaded" right under "Recalibration required" (defect, S)
 - **Mend:** "Calibration loaded (recalibration required for the cameras)", in amber.
 
-### [ ] U47. Presets: General shows nothing; the help card is a wall of numbers (choice, S)
+### [x] U47. Presets: General shows nothing; the help card is a wall of numbers (choice, S)
 - **Pick:** show General's values too, greyed; help: "Finer mesh detail (0.5 mm instead of
   1 mm): thin walls come out closer to their real thickness. Takes about twice as long to make
   the mesh. No gain on large panels."
@@ -569,7 +597,10 @@ Words only. U4 and U47 are ticked with this.
 ## To check on the real engine
 
 - [ ] **V1.** U1 on the real server: the exact toast, also with an unsaved stereo result.
-- [ ] **V2.** Which calibration file a simulator scan uses, against the chip and the Device page.
+- [x] **V2.** Which calibration file a simulator scan uses, against the chip and the Device page.
+  Checked 2026-11-21 (U21): with the simulator's demo connected the scan uses the demo
+  recording's own true calibration; Setup's own target for the simulator is a separate file
+  with nothing in it yet. The chip and the Device page now say "Demo calibration".
 - [ ] **V3.** What this PC reports about its graphics card, and every message met with
   `OHS_COMPUTE=cpu` (Check, Confidence, the health note, thin walls) since D7.
 - [ ] **V4.** The preset reaches the mesh and the viewer's report says 0.5 mm (checked once in

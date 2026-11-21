@@ -90,7 +90,7 @@ check(/spread/.test(ALIGN_METHODS[0].help) && /where it is/.test(ALIGN_METHODS[1
     verdict: "Aligned on the shapes (best fit): 97\u202f% ...",
     warnings: ["the scan's largest plane was kept"],
     fit: { robust_mm: 3, moved_mm: 0.02, taken: true, note: "made a least-squares fit: moved 0.020\u202fmm" },
-    vs_datums: { rms_mm: 0.3, max_mm: 0.5, shift_mm: 0.2, angle_deg: 0.1, note: "The best fit lies 0.30\u202fmm (RMS) from the alignment on the datums." },
+    vs_datums: { rms_mm: 0.3, max_mm: 0.5, shift_mm: 0.2, angle_deg: 0.1, note: "The best fit lies typically 0.30\u202fmm from the alignment on the datums." },
   } as unknown as ReferenceAlignment;
   const l = alignmentLines(al);
   check(l.title === "Aligned best fit on the shapes" && l.verdict.startsWith("Aligned on the shapes"), l.title);

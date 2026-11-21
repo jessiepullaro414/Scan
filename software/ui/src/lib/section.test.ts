@@ -91,7 +91,7 @@ const frame = {
   const z = planeFromFrame(frame, "Z", 12);
   check(near(z.normal, [0, 0, 1]) && near(z.u, R[0]) && near(z.v, R[1]), "Z = 12 is drawn in the part's X and Y");
   check(near(z.point, [2, -1, 17]) && z.in_part_frame, "its 2D origin is the part's origin on the plane");
-  check(z.description === "Section at Z = 12\u202fmm in the part's frame", "the engine's description");
+  check(z.description === "Section at Z = 12\u202fmm in the part's axes", "the engine's description");
   const front = planeFromFrame(frame, "-y", 2);
   check(near(front.normal, [1, 0, 0]) && near(front.u, R[0]) && near(front.v, R[2]), "Y = c seen from -Y: the front view in X and Z");
   check(front.description.endsWith("seen from -Y"), "said in its description");

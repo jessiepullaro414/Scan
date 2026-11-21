@@ -45,8 +45,8 @@ check(alsoWords({ reason: "steep", reasons: ["steep", "few_looks", "edge"] }) ==
 const unk = unknownWords({
   unknown_because: [
     "steep, far: the scanner's calibration is not here (it goes with the recording, which was removed)",
-    "few_looks: the mesh has no count of looks (made by Open3D's model, or an older file)",
-    "edge: the voxel size the mesh was made at is not known",
+    "few_looks: the mesh has no count of looks (made without a graphics card, or by an earlier version)",
+    "edge: the mesh detail it was made at is not known",
   ],
 });
 check(unk.length === 3 && unk[0].startsWith("The angle and distance it was seen from can't be told: the scanner's calibration"), "unknown: the camera path");

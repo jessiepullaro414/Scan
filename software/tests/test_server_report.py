@@ -305,12 +305,12 @@ def test_the_reports_health_is_the_scans_own_status(clean):
     assert "Not assessed" not in cal and s["label"] in cal and s["reason"] in cal
     try:
         given = {**s, "state": "recalibrate", "label": "Recalibration required", "part": "cameras", "part_label": "Cameras",
-                 "reason": "Its left and right images disagree by 0.41 px in height."}
+                 "reason": "This scan shows the two cameras out of line: left/right height mismatch 0.41 px."}
         path.write_text(json.dumps({**rep, "health_status": given}), encoding="utf-8")
         _, p = page(e)
         cal = p.text("calibration")
-        assert "Recalibration required" in cal and "0.41 px in height" in cal and "provisional" in cal
-        assert "0.41 px in height" in p.text("warnings")
+        assert "Recalibration required" in cal and "height mismatch 0.41 px" in cal and "provisional" in cal
+        assert "height mismatch 0.41 px" in p.text("warnings")
         path.write_text(json.dumps({k: v for k, v in rep.items() if k != "health_status"}), encoding="utf-8")
         _, p = page(e)
         assert "Not assessed" in p.text("calibration")

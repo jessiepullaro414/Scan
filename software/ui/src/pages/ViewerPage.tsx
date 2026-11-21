@@ -54,7 +54,7 @@ import { Button, IconButton } from "../components/ui/Button";
 import { EmptyState, Kbd, ProgressBar, Skeleton, Spinner } from "../components/ui/Feedback";
 import { Segmented } from "../components/ui/Form";
 import { KeyValue } from "../components/ui/Layout";
-import { scanHealthDetail, scanHealthOf } from "../lib/calibHealth";
+import { calibrationSays, scanHealthDetail, scanHealthOf } from "../lib/calibHealth";
 import { scanWarnings } from "../lib/pathWarning";
 import { hasGraphicsCard, noConfidenceText } from "../lib/computer";
 import { useConnection } from "../store/connection";
@@ -180,11 +180,11 @@ function ReportSummary({ report }: { report: Rec }) {
             "flex gap-2.5 rounded-lg border px-3 py-2.5 text-xs",
             health.tone === "danger" ? "border-danger/30 bg-danger-soft" : health.tone === "warn" ? "border-warn/30 bg-warn-soft" : "border-line bg-surface-2/50",
           )}
-          aria-label={`Calibration: ${health.headline}`}
+          aria-label={calibrationSays(health.headline)}
         >
           <HealthIcon size={14} className={cn("mt-px shrink-0", HEALTH_TEXT[health.tone])} aria-hidden />
           <div className="min-w-0 flex-1 space-y-0.5">
-            <div className="font-semibold text-fg">{health.tone === "neutral" ? `Calibration: ${health.headline}` : health.headline}</div>
+            <div className="font-semibold text-fg">{health.tone === "neutral" ? calibrationSays(health.headline) : health.headline}</div>
             {health.reason ? <div className="text-muted">{health.reason}</div> : null}
             {health.lines.map((l) => (
               <div key={l} className="text-subtle">

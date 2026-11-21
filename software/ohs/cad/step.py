@@ -341,7 +341,7 @@ def step_text(shapes: CadShapes, *, title: str = "Fitted shapes", timestamp: str
         for name, d in zip(ax.names, ax.axes):
             asm.part(name, None, edge=w.line_edge(ax.origin, ax.origin + ax.length_mm * d, name))
         asm.part(ax.origin_name, None, points=[w.point(ax.origin, ax.origin_name)])
-    where = "the part's frame" if shapes.in_part_frame else "the scan's frame"
+    where = "the part's axes" if shapes.in_part_frame else "the scan's own axes"
     description = [f"{SYSTEM} fitted shapes, mm, in {where}"] + list(shapes.notes)
     header = (
         "ISO-10303-21;\n"

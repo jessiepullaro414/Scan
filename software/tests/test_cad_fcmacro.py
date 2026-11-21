@@ -108,10 +108,10 @@ def test_same_shapes_give_the_same_bytes(tmp_path):
 def test_the_frame_is_said_at_the_top():
     box = step_samples.sample_set()["box_with_hole_and_boss.step"]
     head = fcmacro.macro_text(_shapes(box), title="Box").split("\nimport ")[0]
-    assert "in the part's frame" in head
+    assert "in the part's axes" in head
     cyl = step_samples.sample_set()["full_cylinder.step"]
     head = fcmacro.macro_text(_shapes(cyl), title="Tube").split("\nimport ")[0]
-    assert "in the scan's own frame" in head
+    assert "in the scan's own axes" in head
 
 
 def test_a_name_that_looks_like_code_stays_text():

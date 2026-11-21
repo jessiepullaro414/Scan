@@ -32,7 +32,7 @@ export type FlushEngine = {
 
 /** The engine's words (ohs.inspect.gapflush GAP_NOTE). */
 export const GAP_NOTE =
-  "Gap is not shown: the scan closes a narrow gap over a dark background (the stereo depth runs on across it), so the panels' edges are not measured. On simulated seams of 2 to 6 mm its reading was 1 to 2 mm off, and differently for each gap size. Flush is read from the two surfaces and is shown.";
+  "Gap is not shown: the scan closes a narrow gap over a dark background (the cameras' depth runs on across it), so the panels' edges are not measured. On simulated seams of 2 to 6 mm its reading was 1 to 2 mm off, and differently for each gap size. Flush is read from the two surfaces and is shown.";
 const STEP_MM = 3;
 const WINDOW_MM = 6; // across the seam, round each click's line
 const MIN_POINTS = 6;

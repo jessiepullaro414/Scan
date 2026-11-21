@@ -4,6 +4,7 @@
  */
 import type { CalibHealth, DeviceState, SetupState, SetupStep } from "../api/types.ts";
 import {
+  calibrationSays,
   deviceHealth,
   calibInUse,
   headerHealthButton,
@@ -26,10 +27,10 @@ function check(ok: boolean, what: string): void {
 const VALID: CalibHealth = {
   version: 1,
   state: "valid",
-  label: "Valid",
+  label: "Calibration valid",
   part: null,
   part_label: null,
-  reason: "Nothing looks off for the cameras: the launch check (today) and the 2-minute check (on 2026-11-09) found nothing wrong.",
+  reason: "Nothing looks off for the cameras: the start-up check (today) and the calibration check (on 2026-11-09) found nothing wrong.",
   action: null,
   then: null,
   reasons: [],
@@ -61,8 +62,8 @@ const RECAL_CAMERAS: CalibHealth = {
   label: "Recalibration required",
   part: "cameras",
   part_label: "Cameras",
-  reason: "When the scanner connected, its left and right images disagreed by 1.38 px in height (want under 0.6 px): the cameras may have moved.",
-  action: { step: "check", text: "Run the 2-minute check to confirm" },
+  reason: "When the scanner connected, the start-up check found a left/right height mismatch of 1.38 px (want under 0.6 px: the start-up check looks at three pictures only, so its limit is wider than the calibration check's): the cameras may have moved.",
+  action: { step: "check", text: "Run the calibration check to confirm" },
   then: { step: "stereo", text: "If the check does not pass, redo the camera calibration" },
   parts: { cameras: "recalibrate", lasers: null, imu: null },
 };
@@ -72,8 +73,8 @@ const AGE: CalibHealth = {
   state: "check",
   label: "Check recommended",
   part: null,
-  reason: "The last 2-minute check was 20 days ago; a check every 14 days or so catches a slow drift early.",
-  action: { step: "check", text: "Run the 2-minute check" },
+  reason: "The last calibration check was 20 days ago; a check every 14 days or so catches a slow drift early.",
+  action: { step: "check", text: "Run the calibration check" },
   parts: { cameras: "valid", lasers: null, imu: null },
 };
 
@@ -104,18 +105,18 @@ check(c.judged === null, "everything judged: no line");
 const r = healthView(RECAL_CAMERAS)!;
 check(r.tone === "danger" && r.title === "Recalibration required for the cameras", `recalibrate title: ${r.title}`);
 check(r.short === "Recalibrate", `recalibrate chip word: ${r.short}`);
-check(r.action?.page === "check" && r.action.label === "Check the calibration" && r.action.hint === "Run the 2-minute check to confirm", "confirm with the check first");
+check(r.action?.page === "check" && r.action.label === "Check the calibration" && r.action.hint === "Run the calibration check to confirm", "confirm with the check first");
 check(r.then === "If the check does not pass, redo the camera calibration.", "then for the cameras");
 
 const a = healthView(AGE)!;
 check(a.title === "Check recommended", `the calibration as a whole: ${a.title}`);
 
-check(healthView({ ...RECAL_CAMERAS, action: { step: "stereo", text: "Redo the camera calibration, then the lasers and the IMU (a new camera calibration needs them again)" } })!.action!.label === "Redo the cameras", "stereo button");
-check(healthView({ ...CHECK_LASERS, part: "imu", action: { step: "imu", text: "Redo the IMU calibration" } })!.title === "Check recommended for the motion sensor", "the motion sensor in words");
-check(healthView({ ...CHECK_LASERS, part: "imu", action: { step: "imu", text: "Redo the IMU calibration" } })!.action!.label === "Redo the motion sensor", "IMU button");
+check(healthView({ ...RECAL_CAMERAS, action: { step: "stereo", text: "Redo the camera calibration, then the lasers and the motion sensor (a new camera calibration needs them again)" } })!.action!.label === "Redo the cameras", "stereo button");
+check(healthView({ ...CHECK_LASERS, part: "imu", action: { step: "imu", text: "Redo the motion sensor calibration" } })!.title === "Check recommended for the motion sensor", "the motion sensor in words");
+check(healthView({ ...CHECK_LASERS, part: "imu", action: { step: "imu", text: "Redo the motion sensor calibration" } })!.action!.label === "Redo the motion sensor", "IMU button");
 
 // the engine's note says why something could not be judged: it replaces the generic line
-const cpu = healthView({ ...VALID, note: "These scans were processed without a graphics card at half resolution, so only the cameras could be judged: the lasers and the IMU are judged only in scans processed at full resolution." })!;
+const cpu = healthView({ ...VALID, note: "These scans were processed without a graphics card at half resolution, so only the cameras could be judged: the lasers and the motion sensor are judged only in scans processed at full resolution." })!;
 check(cpu.judged!.startsWith("These scans were processed without a graphics card at half resolution"), `note: ${cpu.judged}`);
 check(healthView({ ...VALID, not_judged: ["imu"] })!.judged === "Not judged yet: the motion sensor. A scan made with this calibration judges it.", "one part, singular");
 check(healthView({ ...VALID, not_judged: ["cameras", "lasers", "imu"] })!.judged!.includes("the cameras, the lasers and the motion sensor"), "three parts");
@@ -183,10 +184,10 @@ const stepOf = (state: SetupStep["state"], summary: string): SetupStep => ({ id:
 const FAILED: CalibHealth = {
   ...RECAL_CAMERAS,
   part: null,
-  reason: "The last 2-minute check did not pass (2 days ago): the cameras have moved.",
-  action: { step: "check", text: "Run the 2-minute check again and follow what it says" },
+  reason: "The last calibration check did not pass (2 days ago): the cameras have moved.",
+  action: { step: "check", text: "Run the calibration check again and follow what it says" },
   then: null,
-  reasons: [{ state: "recalibrate", source: "board_check", part: null, reason: "The last 2-minute check did not pass (2 days ago): the cameras have moved.", action: null, then: null, kind: "board_check_failed", value: null }],
+  reasons: [{ state: "recalibrate", source: "board_check", part: null, reason: "The last calibration check did not pass (2 days ago): the cameras have moved.", action: null, then: null, kind: "board_check_failed", value: null }],
 };
 const failedCard = stepOf("warn", "The last check failed (2 days ago): the cameras have moved");
 const fc = overviewStep(failedCard, FAILED);
@@ -209,5 +210,10 @@ check(calibInUse(dev({ source: "sim", calibration: demoCal }))!.line.includes("S
 check(calibInUse(dev({}))!.short === "Calibration loaded", "a scanner's file: Calibration loaded");
 check(calibInUse(dev({ calibration: { ...demoCal, loaded: false, source: "scanner" } }))!.short === "No calibration", "none");
 check(calibInUse(dev({ connected: false })) === null && calibInUse(null) === null, "not connected: nothing");
+
+// found in review: the viewer said "Calibration: Calibration valid" once the state's name carried the word itself
+check(calibrationSays("Calibration valid") === "Calibration valid", "a headline that names the calibration is not prefixed");
+check(calibrationSays("Check recommended") === "Calibration: Check recommended", "any other headline is");
+check(calibrationSays("calibration valid") === "calibration valid" && calibrationSays("") === "Calibration", "case, and nothing to say");
 
 console.log(`calibHealth.test: ${checks} checks passed`);

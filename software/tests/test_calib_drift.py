@@ -41,7 +41,7 @@ def test_true_calibration_is_ok(scan):
     # measured: 0.055 px over ~1600 matches
     assert res["state"] == "ok" and res["dv_px"] < 0.2 and res["p90_px"] < 0.5, res
     assert res["matches"] >= 200 and res["frames"] == 3
-    assert "still holds" in res["message"]
+    assert "the calibration is valid" in res["message"]
     t = time.perf_counter()
     drift_check(frames, st)
     assert time.perf_counter() - t < 0.5  # measured ~0.13 s
@@ -52,7 +52,7 @@ def test_pitch_between_cameras_is_drift(scan):
     res = drift_check(frames, rebuilt(st, R=so3_exp([np.radians(0.3), 0.0, 0.0]) @ st.R))
     # 0.3 deg about the baseline moves the right rows by about f * 0.3 deg = 3.8 px
     assert res["state"] == "drift" and 3.0 < res["dv_px"] < 4.6, res
-    assert "Run the 2-minute check" in res["message"]
+    assert "Run the calibration check" in res["message"]
 
 
 def test_shifted_principal_point_is_drift(scan):

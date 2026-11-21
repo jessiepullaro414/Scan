@@ -656,8 +656,8 @@ def _grow(m: _Surface, face: int, kind: str, tolerance_mm, angle_tol_deg) -> Reg
     if m.S is not None:
         ratio = fit.rms_mm * math.sqrt(float(np.mean(1.0 / m.S[verts] ** 2)))  # sqrt(reduced chi-square), about
         if ratio > SCATTER_WARNING:
-            warnings.append(f"the points scatter {ratio:.1f} times more than their sigma "
-                            f"(RMS {fit.rms_mm:.3f} mm): a curved or rough surface?")
+            warnings.append(f"the points scatter {ratio:.1f} times more than the scan expects "
+                            f"(typically {fit.rms_mm:.3f} mm off the shape): a curved or rough surface?")
     if still_growing:
         warnings.append(f"the region was still growing after {MAX_ROUNDS} rounds")
     if unclear:
@@ -878,7 +878,7 @@ def _edge_warnings(circle: CircleFit, P: np.ndarray, V: np.ndarray, F: np.ndarra
     if gap > EDGE_GAP_DEG:
         warnings.append(f"the hole's edge is incomplete: {gap:.0f}° of its round has no points")
     if circle.rms_mm > ROUND_RMS * circle.radius_mm:
-        warnings.append(f"the hole's edge is not round (RMS {circle.rms_mm:.2f} mm): a slot or a damaged edge?")
+        warnings.append(f"the hole's edge is not round (typically {circle.rms_mm:.2f} mm off a circle): a slot or a damaged edge?")
     if not measured.all():
         touched = np.zeros(len(V), dtype=bool)
         touched[F[~measured]] = True

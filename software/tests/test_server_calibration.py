@@ -411,7 +411,7 @@ def test_calibration_rules_on_the_simulator(env, monkeypatch):
     from ohs.app import capture
 
     def failing_flow(*a, **kw):
-        raise ValueError("only 3 stereo views with >= 8 common corners, need at least 4")
+        raise ValueError("only 3 views of both cameras with >= 8 common corners, need at least 4")
 
     monkeypatch.setattr(capture, "run_flow", failing_flow)
     n = len(_get(url, "/api/calibration").json()["views"])
@@ -758,22 +758,22 @@ def test_results_in_plain_words():
            "R_ci_angle_deg": 90.4}
     r = cr.build_result("imu", None, imu)
     assert r["grade"] == "excellent" and "30.0 ms" in r["verdict"] and r["per_view"] == []
-    chk = {"ok": False, "verdict": "stereo: vertical disparity 0.81 px is too large (want < 0.3 px)",
+    chk = {"ok": False, "verdict": "cameras: left/right height mismatch 0.81 px is too large (want < 0.3 px)",
            "stereo": {"ok": False, "mean_abs_dv_px": 0.81, "scale_error_pct": 0.1},
-           "lasers": {"ok": None, "verdict": "no laser planes in the calibration"}, "imu": {"ok": None, "verdict": "no IMU"}}
+           "lasers": {"ok": None, "verdict": "no laser lines in the calibration"}, "imu": {"ok": None, "verdict": "no motion sensor"}}
     r = cr.build_result("check", None, chk)
     assert r["grade"] == "poor" and r["can_save"] is False and r["advice"][0]["action"] == "recalibrate_stereo"
     # the simulator's check moves the board, so the engine's still-board IMU check must not decide it
-    sim_chk = {"ok": False, "verdict": "imu: gyro and board rotations disagree by 2.00 deg per frame",
+    sim_chk = {"ok": False, "verdict": "motion sensor: the motion sensor and the board rotations disagree by 2.00 deg per frame",
                "stereo": {"ok": True, "mean_abs_dv_px": 0.05, "scale_error_pct": 0.02},
                "lasers": {"ok": True, "lasers": {"vertical": {"ok": True, "median_abs_mm": 0.05}}},
-               "imu": {"ok": False, "median_residual_deg": 2.0, "verdict": "recalibrate the IMU"}}
+               "imu": {"ok": False, "median_residual_deg": 2.0, "verdict": "recalibrate the motion sensor"}}
     r = cr.build_result("check", None, sim_chk, sim=True)
     assert r["ok"] and r["grade"] == "excellent" and not any("motion sensor" in a["text"] for a in r["advice"])
     assert any(m["label"] == "Motion sensor" and m["value"] == "not checked" and "simulator" in m["help"] for m in r["metrics"])
     assert cr.build_result("check", None, sim_chk)["ok"] is False  # on the scanner it counts
-    f = cr.failed_result("stereo", cr.plain_error(ValueError("only 3 stereo views with >= 8 common corners, need at least 4")))
-    assert f["verdict"] == "Only 3 stereo views with at least 8 common corners, need at least 4." and f["grade"] == "failed"
+    f = cr.failed_result("stereo", cr.plain_error(ValueError("only 3 views of both cameras with >= 8 common corners, need at least 4")))
+    assert f["verdict"] == "Only 3 views of both cameras with at least 8 common corners, need at least 4." and f["grade"] == "failed"
 
 
 # --------------------------------------------------------------------------- four lasers

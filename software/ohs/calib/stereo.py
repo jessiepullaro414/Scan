@@ -133,7 +133,7 @@ def _calibrate_camera(
         round_corners = 0
         for v, r, e in zip(used, res, kept_rms):
             if e > view_limit:
-                reason = f"view rms {e:.2f} px > {view_limit:.2f} px"
+                reason = f"typically {e:.2f} px off, over the limit of {view_limit:.2f} px"
                 round_rejected.append({"pair": v.pair, "camera": name, "reason": reason})
                 continue
             keep = r <= corner_limit
@@ -192,7 +192,7 @@ def _verdict(rms: float, cov_l: float, cov_r: float, n_stereo: int, max_tilt: fl
                 "board near the image corners and edges"
             )
     if n_stereo < 12:
-        advice.append(f"only {n_stereo} stereo views were used: capture 15-25 views")
+        advice.append(f"only {n_stereo} views of both cameras were used: capture 15-25 views")
     if max_tilt < 20.0:
         advice.append("the board was nearly fronto-parallel in all views: tilt it 20-45 deg in different directions")
     return False, "; ".join(advice)
@@ -252,7 +252,7 @@ def calibrate_stereo(
         img2.append(vr.uv[ir].astype(np.float32).reshape(-1, 1, 2))
     if len(stereo_pairs) < MIN_VIEWS:
         raise ValueError(
-            f"only {len(stereo_pairs)} stereo views with >= {min_corners} common corners, need at least {MIN_VIEWS}"
+            f"only {len(stereo_pairs)} views of both cameras with >= {min_corners} common corners, need at least {MIN_VIEWS}"
         )
 
     K1, D1, K2, D2 = cam_l["K"], cam_l["D"], cam_r["K"], cam_r["D"]
@@ -271,7 +271,7 @@ def calibrate_stereo(
         joint_status = "applied"
     else:
         rms, per_view = rms_fixed, pv_fixed
-        joint_status = f"rejected (rms {rms_j:.3f} px vs {rms_fixed:.3f} px, focal change {focal_shift:.1%})"
+        joint_status = f"rejected (typically {rms_j:.3f} px against {rms_fixed:.3f} px, focal change {focal_shift:.1%})"
         log.warning("joint stereo refinement %s; keeping the fixed-intrinsics solution", joint_status)
     log.info("stereo: rms %.3f px, baseline %.3f mm, joint refinement %s", rms, float(np.linalg.norm(T)), joint_status)
 
@@ -368,10 +368,10 @@ def rectification_check(
     if ok:
         verdict = "good"
     elif mean_abs >= 0.3:
-        verdict = (f"vertical disparity {mean_abs:.2f} px is too large (want < 0.3 px): the cameras may have moved "
-                   "or the calibration belongs to another device/resolution; recalibrate")
+        verdict = (f"left/right height mismatch {mean_abs:.2f} px is too large (want < 0.3 px): the cameras may have moved "
+                   "or the calibration belongs to another scanner or resolution; recalibrate")
     else:
-        verdict = (f"stereo scale is off by {scale_err:.2f} %: check the printed square size (print at 100 %) "
+        verdict = (f"the cameras' scale is off by {scale_err:.2f} %: check the printed square size (print at 100 %) "
                    "and recalibrate")
     report = {
         "n_pairs": len(dv_all),

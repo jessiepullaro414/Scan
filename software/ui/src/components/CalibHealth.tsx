@@ -5,7 +5,7 @@
  */
 import { OctagonExclamationPoint, ShieldCheck, TriangleExclamationPoint, type LucideIcon } from "lucide-react";
 import type { CalibHealth, HealthState } from "../api/types";
-import { deviceHealth, healthView, type HealthTone, type HealthView } from "../lib/calibHealth";
+import { calibrationSays, deviceHealth, healthView, type HealthTone, type HealthView } from "../lib/calibHealth";
 import { navigate, paths } from "../lib/router";
 import { cn } from "../lib/util";
 import { useDevice } from "../store/device";
@@ -47,7 +47,7 @@ export function HealthStrip({ health }: { health: CalibHealth }) {
         v.tone === "danger" ? "border-danger/30 bg-danger-soft" : v.tone === "warn" ? "border-warn/30 bg-warn-soft" : "border-line bg-surface-2/50",
       )}
       role={v.state === "valid" ? "status" : "alert"}
-      aria-label={`Calibration: ${v.title}`}
+      aria-label={calibrationSays(v.title)}
     >
       <Icon size={15} className={cn("mt-0.5 shrink-0", HEALTH_TEXT[v.tone])} aria-hidden />
       <div className="min-w-0 flex-1">

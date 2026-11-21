@@ -213,8 +213,8 @@ def values(block: dict, limit: Limit) -> dict[str, float | None]:
 # =========================================================================== the status (H3)
 STATUS_VERSION = 1
 STATES = ("valid", "check", "recalibrate")  # index = level: 0, 1, 2
-STATE_LABELS = {"valid": "Valid", "check": "Check recommended", "recalibrate": "Recalibration required"}
-PART_LABELS = {"cameras": "Cameras", "lasers": "Lasers", "imu": "IMU"}
+STATE_LABELS = {"valid": "Calibration valid", "check": "Check recommended", "recalibrate": "Recalibration required"}
+PART_LABELS = {"cameras": "Cameras", "lasers": "Lasers", "imu": "Motion sensor (IMU)"}
 _PART_RANK = {"cameras": 0, "lasers": 1, "imu": 2, None: 3}
 _SOURCE_RANK = {"board_check": 0, "scans": 1, "launch_check": 2, "board_check_age": 3}
 
@@ -245,10 +245,11 @@ MIN_FRAMES = 90
 
 #: the wizard step of each action (``SetupState.steps`` ids) and its words
 STEPS: dict[str, str] = {
-    "check": "Run the 2-minute check",
-    "stereo": "Redo the camera calibration, then the lasers and the IMU (a new camera calibration needs them again)",
+    "check": "Run the calibration check",
+    "stereo": "Redo the camera calibration, then the lasers and the motion sensor (a new camera calibration needs them "
+              "again)",
     "lasers": "Redo the laser calibration",
-    "imu": "Redo the IMU calibration",
+    "imu": "Redo the motion sensor calibration",
 }
 _PART_STEP = {"cameras": "stereo", "lasers": "lasers", "imu": "imu"}
 
@@ -385,17 +386,21 @@ def _subject(k: int, n: int) -> tuple[str, str]:
     return f"{k} of the last {n} scans", ""
 
 
+#: why the scans' limit for the left/right height mismatch is lower than the calibration check's (UX_PLAN U4)
+_SCANS_FINER = "scans measure this more finely than the calibration check, so their limit is lower)."
+
+
 def _scan_words(part: str, f: dict, subj: str, s: str) -> tuple[str, dict | None, dict | None]:
     """``(sentence, action, then)`` of a scan finding at level 1 or 2."""
     lv = f["level"]
     if part == "cameras" and f["kind"] == "rows":
         lim = LIMITS["row_error"]
         if lv >= 2:
-            return (f"{subj} show{s} the two cameras out of line: matching points sit {f['value']:.2f} px apart in "
-                    f"height (want under {lim.check:.2f} px), enough to put measurements 0.1 mm off.",
+            return (f"{subj} show{s} the two cameras out of line, enough to put measurements 0.1 mm off: left/right "
+                    f"height mismatch {f['value']:.2f} px (want under {lim.check:.2f} px: {_SCANS_FINER}",
                     _action("stereo"), None)
-        return (f"{subj} show{s} the two cameras slightly out of line: matching points sit {f['value']:.2f} px apart "
-                f"in height (want under {lim.check:.2f} px).", _action("check"),
+        return (f"{subj} show{s} the two cameras slightly out of line: left/right height mismatch {f['value']:.2f} px "
+                f"(want under {lim.check:.2f} px: {_SCANS_FINER}", _action("check"),
                 _action("stereo", "If the check does not pass, redo the camera calibration"))
     if part == "cameras":  # both lines alike
         return (f"{subj} show{s} both laser lines about {abs(f['value']):.2f} mm off the surface in the same "
@@ -492,8 +497,10 @@ def _launch_finding(lc: dict | None, saved: datetime | None, passed: datetime | 
     answered = passed is not None and passed >= when  # a 2-minute check after it found the rows in order
     if state == "ok" and dv is not None and dv >= LAUNCH_CHECK_PX and not answered:
         return ({"source": "launch_check", "level": 1, "part": "cameras",
-                 "reason": (f"When the scanner connected, its left and right images disagreed by {dv:.2f} px in "
-                            f"height (want under {LAUNCH_CHECK_PX:.1f} px): the cameras may have moved a little."),
+                 "reason": (f"When the scanner connected, the start-up check found a left/right height mismatch of "
+                            f"{dv:.2f} px (want under {LAUNCH_CHECK_PX:.1f} px: the start-up check looks at three "
+                            "pictures only, so its limit is wider than the scans'): the cameras may have moved a "
+                            "little."),
                  "action": _action("check"),
                  "then": _action("stereo", "If the check does not pass, redo the camera calibration"),
                  "kind": "launch_rows", "value": dv}, False)
@@ -501,11 +508,12 @@ def _launch_finding(lc: dict | None, saved: datetime | None, passed: datetime | 
         return None, not (dv is not None and dv >= LAUNCH_CHECK_PX)
     if state != "drift" or answered:
         return None, False  # unknown, running, or answered by a 2-minute check after it
-    rows = f" by {dv:.2f} px" if dv is not None else ""
+    rows = f" of {dv:.2f} px" if dv is not None else ""
     return ({"source": "launch_check", "level": 2, "part": "cameras",
-             "reason": (f"When the scanner connected, its left and right images disagreed{rows} in height (want under "
-                        "0.6 px): the cameras may have moved."),
-             "action": _action("check", "Run the 2-minute check to confirm"),
+             "reason": (f"When the scanner connected, the start-up check found a left/right height mismatch{rows} "
+                        "(want under 0.6 px: the start-up check looks at three pictures only, so its limit is wider "
+                        "than the calibration check's): the cameras may have moved."),
+             "action": _action("check", "Run the calibration check to confirm"),
              "then": _action("stereo", "If the check does not pass, redo the camera calibration"),
              "kind": "launch_drift", "value": dv}, False)
 
@@ -527,16 +535,16 @@ def _board_findings(last: dict | None, saved: datetime | None, now: datetime,
         verdict = str(last.get("verdict") or "it found the calibration off").strip().rstrip(".")
         part = min(parts, key=lambda p: _PART_RANK[p]) if parts else None
         act = (_action(_PART_STEP[part]) if part else
-               _action("check", "Run the 2-minute check again and follow what it says"))
+               _action("check", "Run the calibration check again and follow what it says"))
         out.append({"source": "board_check", "level": 2, "part": part,
-                    "reason": f"The last 2-minute check did not pass ({_ago(when, now)}): {verdict}.",
+                    "reason": f"The last calibration check did not pass ({_ago(when, now)}): {verdict}.",
                     "action": act, "then": None, "kind": "board_check_failed", "value": parts or None})
     # its age: from the later of the last passed check and the last calibration step
     fresh = max([t for t in (passed, saved) if t is not None], default=None)
     if fresh is not None:
         days = (now - fresh).total_seconds() / 86400.0
         if days > max_age_days:
-            what = (f"The last 2-minute check was {int(days)} days ago" if passed is not None and fresh == passed
+            what = (f"The last calibration check was {int(days)} days ago" if passed is not None and fresh == passed
                     else f"The calibration has not been checked since it was saved {int(days)} days ago")
             out.append({"source": "board_check_age", "level": 1, "part": None,
                         "reason": f"{what}; a check every {max_age_days:g} days or so catches a slow drift early.",
@@ -591,11 +599,11 @@ def _the_list(names: Sequence[str]) -> str:
 #: why a scan processed without a GPU could judge the cameras only, by :func:`cpu_path_case` (words a user reads)
 _CPU_WHY = {
     "older": ("by an earlier version of the software",
-              "processing it again judges the lasers and the IMU too"),
+              "processing it again judges the lasers and the motion sensor too"),
     "half": ("at half resolution",
-             "the lasers and the IMU are judged only in scans processed at full resolution"),
+             "the lasers and the motion sensor are judged only in scans processed at full resolution"),
     "off": ("with some of the settings for computers without a graphics card turned off",
-            "the lasers and the IMU are judged when those settings are left as they come"),
+            "the lasers and the motion sensor are judged when those settings are left as they come"),
 }
 
 
@@ -623,7 +631,7 @@ def _cpu_note(readings: list[dict]) -> str | None:
         what = f"This scan is short ({readings[0]['frames']} frames)"
     else:
         what = "These scans are short"
-    return (f"{what}, so only the cameras could be judged: the lasers and the IMU need a scan of at least "
+    return (f"{what}, so only the cameras could be judged: the lasers and the motion sensor need a scan of at least "
             f"{MIN_FRAMES} processed frames.")
 
 
@@ -635,7 +643,7 @@ def scan_status(block: dict | None, *, tracking_model: str | None = None, lines:
     ``cpu_path``: :func:`cpu_path_case` of the scan's report (:func:`read_scan`)."""
     r = read_scan(block, tracking_model=tracking_model, lines=lines, frames=frames, cpu_path=cpu_path)
     findings, levels, _ = _from_scans([({}, r)], 1, 1)
-    judged = [PART_LABELS[p] if p == "imu" else PART_LABELS[p].lower() for p in PARTS if levels[p] is not None]
+    judged = ["motion sensor" if p == "imu" else PART_LABELS[p].lower() for p in PARTS if levels[p] is not None]
     if judged:
         valid = f"This scan shows nothing off for {_the_list(judged)}."
     else:
@@ -680,18 +688,18 @@ def status(*, saved: Any = None, launch_check: dict | None = None, last_check: d
         levels["cameras"] = 0
     evidence = []
     if launch_ok:
-        evidence.append(f"the launch check ({_ago(_time(launch_check.get('when')), now_t)})")
+        evidence.append(f"the start-up check ({_ago(_time(launch_check.get('when')), now_t)})")
     if used:
         evidence.append("the last scan" if used == 1 else f"the last {used} scans")
     if passed is not None:
-        evidence.append(f"the 2-minute check ({_ago(passed, now_t)})")
+        evidence.append(f"the calibration check ({_ago(passed, now_t)})")
     judged = [p for p in PARTS if levels[p] is not None or any(f["part"] == p for f in findings)]
     if evidence:
         joined = evidence[0] if len(evidence) == 1 else ", ".join(evidence[:-1]) + " and " + evidence[-1]
         if len(judged) == len(PARTS) or not judged:
             valid = f"Nothing looks off: {joined} found the calibration in order."
         else:  # say which parts were looked at, never that the others are fine
-            names = _the_list(["IMU" if p == "imu" else p for p in judged])
+            names = _the_list(["motion sensor" if p == "imu" else p for p in judged])
             valid = f"Nothing looks off for {names}: {joined} found nothing wrong."
     else:
         valid = "Nothing speaks against the calibration yet: no check or scan has looked at it since it was saved."

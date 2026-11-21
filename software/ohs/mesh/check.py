@@ -638,7 +638,7 @@ _TEXT = {
     "not_seen": "Not seen at all: nothing measured this surface (a hole or a shadow).",
     "beside_unseen": ("Next to surface that was not seen at all (a shadow, or where the scan ended): come round to "
                       "where it goes on."),
-    "edge": ("On an edge, a tight curve or an uneven surface: the mesh's own uncertainty there is above the "
+    "edge": ("On an edge, a tight curve or an uneven surface: the mesh's own scatter there is above the "
              "tolerance, and another pass alone does not lower it."),
     "steep": "Seen only at a steep angle: even the squarest look was {angle:.0f}° off the surface's normal.",
     "far": "Seen from too far: the nearest look was {dist:.0f} mm away (hold the scanner at about {work:.0f} mm).",
@@ -771,7 +771,7 @@ class _Reasons:
             ev["edge_share"] = e
             on_edge = measured and e >= REASON_MAJORITY
         else:
-            unknown.append("edge: the voxel size the mesh was made at is not known")
+            unknown.append("edge: the mesh detail it was made at is not known")
         if self.views is None or self.scene is None:
             unknown.append("steep, far: " + (self.no_scene or "the scan's camera path is not given"))
         else:
@@ -791,7 +791,7 @@ class _Reasons:
             elif measured:
                 unknown.append(f"steep, far: the camera path shows only {100 * seen.mean():.0f} % of it in view")
         if self.L is None:
-            unknown.append("few_looks: the mesh has no count of looks (made by Open3D's model, or an older file)")
+            unknown.append("few_looks: the mesh has no count of looks (made without a graphics card, or by an earlier version)")
         else:
             lv = self.L[verts][self.L_has[verts]]
             if not len(lv):

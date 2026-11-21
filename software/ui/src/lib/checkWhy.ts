@@ -68,7 +68,7 @@ export function alsoWords(a: Pick<CheckWhyArea, "reason" | "reasons">): string |
 /** What the engine's words for a missing piece of data mean for the user. */
 function plainMissing(rest: string): string {
   if (rest.includes("no count of looks")) return "this mesh has no count of looks (it was made without a graphics card, or by an earlier version of the app)";
-  if (rest.includes("voxel size")) return "the scan's report does not say how fine its mesh was made";
+  if (rest.includes("mesh detail") || rest.includes("voxel size")) return "the scan's report does not say how fine its mesh was made";
   if (rest.includes("hole filling made it")) return "hole filling made all of it, so nothing looked at it";
   if (rest.includes("no surface passes")) return "no surface meets the tolerance to compare with";
   return rest;

@@ -215,8 +215,8 @@ export function checkUnits(ref: number, scan: number): UnitsFinding {
   const fits = (f: number) => r / f >= 0.3 && r / f <= 1.5;
   const base = { ratio: r, reference_size_mm: ref, scan_size_mm: scan };
   if (fits(1)) {
-    let message = `The reference and the scan's part are of a size (${g3(ref)} and ${g3(scan)} mm across): both taken as mm.`;
-    if (r > 1 / 0.85) message += ` The scan is ${r.toPrecision(2)} times the reference's size: is there more than the part in it (a clamp, a second part)?`;
+    let message = `The CAD model and the scan's part are of a size (${g3(ref)} and ${g3(scan)} mm across): both taken as mm.`;
+    if (r > 1 / 0.85) message += ` The scan is ${r.toPrecision(2)} times the CAD model's size: is there more than the part in it (a clamp, a second part)?`;
     return { status: "same", factor: null, unit: null, candidates: [], message, ...base };
   }
   const cands = UNITS.filter(([, , f]) => fits(f)).map(([unit, , factor]) => ({ unit, factor }));
@@ -225,19 +225,19 @@ export function checkUnits(ref: number, scan: number): UnitsFinding {
     const words = Object.fromEntries(UNITS.map(([u, w]) => [u, w]));
     let message =
       r >= 1
-        ? `The scan's part is ${g3(r)} times the size of the reference: the reference looks to be in ${words[best.unit]}`
-        : `The reference is ${g3(1 / r)} times the size of the scan's part: the reference looks to be in ${words[best.unit]}`;
+        ? `The scan's part is ${g3(r)} times the size of the CAD model: the CAD model looks to be in ${words[best.unit]}`
+        : `The CAD model is ${g3(1 / r)} times the size of the scan's part: the CAD model looks to be in ${words[best.unit]}`;
     const others = cands.filter((c) => c !== best).map((c) => words[c.unit]);
     if (others.length) message += ` (or ${others.join(", ")}, if the scan covers less of the part)`;
     message += ` (1 ${best.unit} = ${best.factor} mm). Confirm to scale it by ${best.factor}, or keep it as it is${r < 1 ? " if the scan covers only a small part of it" : ""}.`;
     return { status: "pending", factor: best.factor, unit: best.unit, candidates: cands, message, ...base };
   }
   if (r > 4 || r < 0.25) {
-    const [big, small] = r > 1 ? ["scan's part", "reference"] : ["reference", "scan's part"];
-    const message = `The ${big} is ${g3(Math.max(r, 1 / r))} times the size of the ${small}, and no unit explains it: check that this is the right reference (or that the scan covers only a small part of it), then confirm to compare it as it is.`;
+    const [big, small] = r > 1 ? ["scan's part", "CAD model"] : ["CAD model", "scan's part"];
+    const message = `The ${big} is ${g3(Math.max(r, 1 / r))} times the size of the ${small}, and no unit explains it: check that this is the right CAD model (or that the scan covers only a small part of it), then confirm to compare it as it is.`;
     return { status: "pending", factor: null, unit: null, candidates: [], message, ...base };
   }
-  return { status: "same", factor: null, unit: null, candidates: [], message: `The reference and the scan's part are ${g3(ref)} and ${g3(scan)} mm across: taken as mm (the scan covers part of the reference, or holds more than the part).`, ...base };
+  return { status: "same", factor: null, unit: null, candidates: [], message: `The CAD model and the scan's part are ${g3(ref)} and ${g3(scan)} mm across: taken as mm (the scan covers part of the CAD model, or holds more than the part).`, ...base };
 }
 
 // ---------------------------------------------------------------- the deviation
@@ -528,7 +528,7 @@ export class MockReferences {
       n++;
     }
     const rms = Math.sqrt(s / Math.max(n, 1));
-    const note = `The best fit lies ${rms.toFixed(2)} mm (RMS; at most ${mx.toFixed(2)} mm) from the alignment on the datums. A best fit spreads an overall error (a part too long, bent or shifted) over the whole part; on the datums it shows where it is.`;
+    const note = `The best fit lies typically ${rms.toFixed(2)} mm (at most ${mx.toFixed(2)} mm) from the alignment on the datums. A best fit spreads an overall error (a part too long, bent or shifted) over the whole part; on the datums it shows where it is.`;
     return { rms_mm: rms, max_mm: mx, shift_mm: rms, angle_deg: 0, note };
   }
 
@@ -629,7 +629,7 @@ export class MockReferences {
     if (method === "datums") {
       if (!fr.frame) bad("The part's axes are not set for this scan, so there is nothing to align on.", "Set the part's axes from three fitted shapes first, or align from the shape.");
       if (fr.outOfDate.length) throw new HttpError(409, `The part's axes are out of date (${fr.outOfDate.join("; ")}).`, "Set the part's axes again, or remove them.");
-      keep(this.alignment("datums", fr.frame!.matrix, "Aligned on the datums: the scan's part frame put onto the reference's own axes; no best fit, so an overall error of the part shows where it is.", { frame: fr.frame as unknown as Record<string, unknown> }));
+      keep(this.alignment("datums", fr.frame!.matrix, "Aligned on the datums: the part's axes on the scan put onto the CAD model's own axes; no best fit, so an overall error of the part shows where it is.", { frame: fr.frame as unknown as Record<string, unknown> }));
       return { job: null, comparison: this.view(pid, key, this.cmps.get(key)!, version) };
     }
     let T: M4 = eye();
@@ -659,9 +659,9 @@ export class MockReferences {
         [0, 0, 0, 1],
       ];
       const rms = Math.sqrt(pairs.reduce((s, p) => s + [0, 1, 2].reduce((q, k) => q + (p.scan[k] + T[k][3] - p.reference[k]) ** 2, 0), 0) / pairs.length);
-      extra = { n_points: pairs.length, points_rms_mm: rms, warnings: rms > 2 ? [`the picked pairs agree only to ${rms.toFixed(1)} mm RMS: a pair may be wrong or in the wrong order`] : [] };
+      extra = { n_points: pairs.length, points_rms_mm: rms, warnings: rms > 2 ? [`the picked pairs typically agree only to ${rms.toFixed(1)} mm: a pair may be wrong or in the wrong order`] : [] };
       if (body.refine === false) {
-        keep(this.alignment("points", T, `Aligned from ${pairs.length} picked pairs: they agree to ${rms.toFixed(2)} mm RMS; not refined on the shapes, so the result is as good as the picks.`, extra));
+        keep(this.alignment("points", T, `Aligned from ${pairs.length} picked pairs: they typically agree to ${rms.toFixed(2)} mm; not refined on the shapes, so the result is as good as the picks.`, extra));
         return { job: null, comparison: this.view(pid, key, this.cmps.get(key)!, version) };
       }
     } else if (ref.fromScan !== key.split("/")[1]) {
@@ -679,7 +679,7 @@ export class MockReferences {
       yield { p: 0.95, message: "Keeping the alignment" };
       return () => {
         const verdict = isShape
-          ? "Aligned on the shapes (best fit): 98 % of the matched surface lies within 1 mm, 0.08 mm RMS (the demo engine moves the box centres together and does not turn the scan)."
+          ? "Aligned on the shapes (best fit): 98 % of the matched surface lies within 1 mm, typically 0.08 mm; the demo engine moves the box centres together and does not turn the scan."
           : `Aligned from ${extra.n_points} picked pairs, refined on the shapes: 98 % of the matched surface lies within 1 mm (the demo engine does not refine).`;
         const al = self.alignment(isShape ? "shape" : "points+shape", T, verdict, { ...extra, vs_datums: fr.frame && !fr.outOfDate.length ? self.vsDatums(T, fr.frame, m!.positions) : null });
         const cur = self.cmps.get(key);
@@ -810,7 +810,7 @@ export class MockReferences {
       normal_deg: 70,
       cover_mm: 2,
       has_sigma: !!sigma,
-      rule: `A measured scan vertex is compared when the reference's surface lies within ${NEAR_MM} mm of it, facing within 70° of the way it faces (the demo engine measures to the nearest of points spread over the reference's surface); any other measured vertex is not on the reference. A face is compared when its three vertices are.`,
+      rule: `A measured scan vertex is compared when the CAD model's surface lies within ${NEAR_MM} mm of it, facing within 70° of the way it faces (the demo engine measures to the nearest of points spread over the CAD model's surface); any other measured vertex is not on the CAD model. A face is compared when its three vertices are.`,
       notes: [],
     };
     const coverage: ComparisonCoverage = {
@@ -838,7 +838,7 @@ export class MockReferences {
     const total = a.reduce((x, y) => x + y, 0);
     const base = { format_version: 1, tolerance_mm: tol, k, version: d.version, mesh_changed: d.info.mesh_changed, aligned_mesh_version: c.aligned_mesh_version, method: c.alignment!.method, coverage: d.coverage };
     if (!(total > 0))
-      return { ...base, compared_area_mm2: 0, share_within: null, share_above: null, share_below: null, share_uncertain: null, worst_above_mm: null, worst_below_mm: null, stats: {}, min_area_mm2: 4, n_regions: 0, regions: [], sentence: "nothing of the scan could be compared with the reference" };
+      return { ...base, compared_area_mm2: 0, share_within: null, share_above: null, share_below: null, share_uncertain: null, worst_above_mm: null, worst_below_mm: null, stats: {}, min_area_mm2: 4, n_regions: 0, regions: [], sentence: "nothing of the scan could be compared with the CAD model" };
     let above = 0,
       below = 0,
       unc = 0,

@@ -522,7 +522,7 @@ def _fit_family(fam: str, names: Sequence[str], observations: Sequence[LaserBoar
     fam_rep: dict = {"names": list(names), "planes_found": len(sheets), "n_points": n_total}
     report["families"][fam] = fam_rep
     if len(sheets) < len(names):
-        why = (f"found {len(sheets)} of {len(names)} {fam} laser planes in the {n_total} points of the {fam} "
+        why = (f"found {len(sheets)} of {len(names)} {fam} laser lines in the {n_total} points of the {fam} "
                f"lines, so which laser is which cannot be told: every {fam} line ({', '.join(names)}) must "
                "cross the board in several views at different distances and tilts")
         return {name: (None, {"ok": False, "degenerate": False, "n_observations": 0, "n_points": 0, "reason": why})
@@ -588,7 +588,7 @@ def check_laser_planes(
             "ok": ok,
             "verdict": "good" if ok else (
                 f"median distance {med:.2f} mm to the calibrated {name} plane (want < {CHECK_OK_MEDIAN_MM} mm): "
-                "the laser may have moved; recalibrate the laser planes"
+                "the laser may have moved; recalibrate the laser lines"
             ),
         }
         log.info("laser check %r: median |d| %.3f mm over %d points (%s)", name, med, len(dd), "ok" if ok else "BAD")

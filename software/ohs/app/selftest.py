@@ -38,7 +38,7 @@ log = logging.getLogger(__name__)
 STATUSES = ("PASS", "WARN", "FAIL", "SKIP", "INFO")
 G_REST = (9.3, 10.3)  # |accel| that passes as gravity at rest (m/s^2)
 _IMAGE_HINTS = {"black": ": lens cap, or exposure too short?", "saturated": ": shorten the exposure",
-                "identical": ": is this the stereo camera?"}
+                "identical": ": is this the scanner's pair of cameras?"}
 
 
 def image_check(stats: list, hints: dict[str, str] | None = None) -> tuple[str, str]:
@@ -159,9 +159,10 @@ class _SelfTest:
         fw, ver, imu = hello.get("firmware", "?"), hello.get("version", "?"), str(hello.get("imu", "NONE"))
         self.has_imu = imu.upper() != "NONE"
         status = "PASS" if fw == "ohs-fw" else "WARN"
-        self.add("pico", status, f"HELLO {fw} {ver} on {hello.get('port')}, imu={imu}")
+        self.add("pico", status, f"firmware {fw} {ver} on {hello.get('port')}, motion sensor (IMU): {imu}")
         if not self.has_imu:
-            self.add("imu", "FAIL", "no IMU found by the firmware (check the LSM6DSOX wiring: SDA GP4, SCL GP5, 3V3, GND)")
+            self.add("imu", "FAIL", "no motion sensor (IMU) found by the firmware (check the LSM6DSOX wiring: SDA GP4, SCL GP5, "
+                                    "3V3, GND)")
 
     def measure(self) -> None:
         """Camera frames and the IMU stream, measured together for ``seconds``."""
@@ -172,7 +173,7 @@ class _SelfTest:
             try:
                 self.pico.start_imu()
             except Exception as e:
-                self.add("imu", "FAIL", f"could not start the IMU stream: {e}")
+                self.add("imu", "FAIL", f"could not start the motion sensor's stream: {e}")
                 self.has_imu = False
         if not self.cam_ok and not (self.pico_ok and self.has_imu):
             return
@@ -237,7 +238,7 @@ class _SelfTest:
     def _imu_checks(self, samples: list) -> None:
         rate = int(self.cfg.pico.imu_rate_hz)
         if len(samples) < 10:
-            self.add("imu", "FAIL", f"only {len(samples)} IMU samples in {self.seconds:g} s")
+            self.add("imu", "FAIL", f"only {len(samples)} motion sensor samples in {self.seconds:g} s")
             return
         td = np.array([s.t_device for s in samples])
         span = td[-1] - td[0]
@@ -250,7 +251,7 @@ class _SelfTest:
         g = float(np.linalg.norm(acc.mean(axis=0)))  # norm of the mean: see gravity_ok
         noise = float(np.degrees(gyr.std(axis=0).max()))
         bias = float(np.degrees(np.abs(gyr.mean(axis=0)).max()))
-        detail = f"|accel| {g:.2f} m/s^2, gyro noise {noise:.2f} deg/s, offset {bias:.2f} deg/s"
+        detail = f"|accel| {g:.2f} m/s^2, rotation noise {noise:.2f} deg/s, offset {bias:.2f} deg/s"
         if gravity_ok(g):
             self.add("imu values", "PASS", detail)
         else:

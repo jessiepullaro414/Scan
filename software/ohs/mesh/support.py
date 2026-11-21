@@ -258,8 +258,8 @@ class SupportFinding:
                 f"{self.margin_mm:g} mm above the plane (the margin{'' if top == self.margin_mm else f'; here the noise band, {top:.2g} mm'}) "
                 "and is joined through such faces to the plane's own surface, unless it is a thin part lying flat: a "
                 "raised area of steady height at least 4 times the table's scatter above it. Faces turned further away "
-                f"(the part's walls) stay at any height. Loose pieces left wholly within {top + self.band_mm:.2g} mm of the plane are "
-                "crumbs of table and go too; any other loose piece is left for Remove floaters.")
+                f"(the part's walls) stay at any height. Loose bits left wholly within {top + self.band_mm:.2g} mm of the plane are "
+                "crumbs of table and go too; any other loose bit is left for Remove loose bits.")
 
     @property
     def limit(self) -> str:
@@ -274,7 +274,7 @@ class SupportFinding:
     def summary(self) -> str:
         low = ("" if not math.isfinite(self.lowest_mm) else "; the part is kept right down to it" if self.lowest_mm <= self.band_mm
                else f"; the part is kept from {self.lowest_mm:.2f} mm above it")
-        return (f"Found the table ({100 * self.share:.0f} % of the scan, flat to {self.flatness_mm:.2f} mm RMS): "
+        return (f"Found the table ({100 * self.share:.0f} % of the scan, flat to {self.flatness_mm:.2f} mm (typical)): "
                 f"{self.n_faces:,} faces ({self.area_mm2 / 100.0:,.1f} cm²) are the table{low}")
 
     def to_dict(self) -> dict:
@@ -654,7 +654,7 @@ def find_support(V: np.ndarray, F: np.ndarray, *, normals: np.ndarray | None = N
             r = unsure[0]
             e = SupportRefused(str(e).replace(" Nothing was removed", (
                 f" A raised area on it, {r['size_mm']:.0f} mm across and {r['height_mm']:.2f} mm high at "
-                "({:.0f}, {:.0f}, {:.0f}) mm, may be a thin part too close to the table's own scatter ({:.2f} mm RMS) to "
+                "({:.0f}, {:.0f}, {:.0f}) mm, may be a thin part too close to the table's own scatter (typically {:.2f} mm) to "
                 "tell.").format(*r["centre"], rms) + " Nothing was removed", 1))
         raise e
     table &= ~thin
@@ -690,7 +690,7 @@ def find_support(V: np.ndarray, F: np.ndarray, *, normals: np.ndarray | None = N
         if r["kept"]:
             who = "kept, as you chose" if r["by_user"] else "kept"
             warnings.append(f"A thin part lying flat is {who}: {r['size_mm']:.0f} mm across, {r['height_mm']:.2f} mm above the "
-                            f"table, {at(r)}. It is a piece of its own now: Remove floaters may take it if it is small.")
+                            f"table, {at(r)}. It is a loose bit of its own now: Remove loose bits may take it if it is small.")
     warned = [r for r in raised if r["verdict"] == "warned"]
     for r in warned[:8]:
         warnings.append(f"A raised area {r['size_mm']:.0f} mm across, {r['height_mm']:.2f} mm above the table round it, {at(r)}, "
@@ -710,11 +710,11 @@ def find_support(V: np.ndarray, F: np.ndarray, *, normals: np.ndarray | None = N
         warnings.append(f"The largest flat surface ({100 * s0:.0f} % of the scan) was not taken for the table: it {why0}. "
                         f"The table is the next one ({100 * share:.0f} %).")
     if rms > 0.3:
-        warnings.append(f"The table is not flat to the scan's level ({rms:.2f} mm RMS about its plane): parts of it further "
+        warnings.append(f"The table is not flat to the scan's level (typically {rms:.2f} mm off its plane): parts of it further "
                         f"than {top:.2g} mm from the plane may be left.")
     if loose_left:
-        warnings.append(f"{loose_left} loose piece{'s' if loose_left != 1 else ''} besides the part {'are' if loose_left != 1 else 'is'} "
-                        f"left ({loose_left_mm2:,.0f} mm²): Remove floaters takes {'them' if loose_left != 1 else 'it'}.")
+        warnings.append(f"{loose_left} loose bit{'s' if loose_left != 1 else ''} besides the part {'are' if loose_left != 1 else 'is'} "
+                        f"left ({loose_left_mm2:,.0f} mm²): Remove loose bits takes {'them' if loose_left != 1 else 'it'}.")
     if not len(kept):
         warnings.append("Nothing would be left: the whole scan lies on the plane.")
     return SupportFinding(normal=np.asarray(n, dtype=np.float64), d=float(d), share=share, front_share=float(info["front"]),
@@ -949,7 +949,7 @@ def support_map(V: np.ndarray, F: np.ndarray, finding: SupportFinding, *, cell_m
                         "uneven itself (near the scan's border), go with the table: there a part lying flat that is thinner "
                         f"than about {math.ceil(10 * hi_mm) / 10:.1f} mm cannot be told from it.")
     if finding.flatness_mm > 0.3:
-        warnings.append(f"The table is not flat to the scan's level ({finding.flatness_mm:.2f} mm RMS about its plane): parts of "
+        warnings.append(f"The table is not flat to the scan's level (typically {finding.flatness_mm:.2f} mm off its plane): parts of "
                         f"it further than {max(finding.margin_mm, finding.band_mm):.2g} mm from the plane may be left in the merged scan.")
     limit = ""
     if math.isfinite(finding.thin_limit_mm):

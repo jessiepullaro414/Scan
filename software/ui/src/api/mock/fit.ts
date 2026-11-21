@@ -645,7 +645,7 @@ function fitHole(m: FitMesh, p: ArrayLike<number>, holes: Uint32Array[]): FitAns
   };
   const warnings: string[] = [];
   if (loop.length < 24) warnings.push(`small region: ${loop.length} points on the edge`);
-  if (fit.rms > 0.08 * fit.c.r) warnings.push(`the edge is not round: it strays ${fit.rms.toFixed(2)} mm from the circle (RMS)`);
+  if (fit.rms > 0.08 * fit.c.r) warnings.push(`the hole's edge is not round (typically ${fit.rms.toFixed(2)} mm off a circle): a slot or a damaged edge?`);
   return { ok: true, kind: "hole", shape, faces, tolerance: null, warnings };
 }
 

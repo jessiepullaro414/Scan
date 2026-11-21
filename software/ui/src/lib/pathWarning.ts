@@ -6,7 +6,10 @@
  * processed before the check has no `warnings` and nothing is shown.
  */
 
-/** The engine says "GPU"; the app says "graphics card" (UX_PLAN U5). */
+/**
+ * The app says "graphics card" (UX_PLAN U5). The engine says so too since 2026-11-21 (UX_PLAN U51), but the report of a
+ * scan processed before then keeps its "GPU": this turns those into the app's words.
+ */
 const GPU_WORDS: [RegExp, string][] = [
   [/\bwithout a GPU\b/g, "without a graphics card"],
   [/\ba GPU\b/g, "a graphics card"],

@@ -27,6 +27,13 @@ export const STEP_BUTTON: Record<HealthAction["step"], string> = {
 };
 export const PROVISIONAL = "The limits are provisional until the real scanner has been measured.";
 
+/** A headline with what it is about in front, unless it names the calibration itself ("Calibration valid"). */
+export function calibrationSays(headline: string): string {
+  const h = headline.trim();
+  if (!h) return "Calibration";
+  return /^calibration\b/i.test(h) ? h : `Calibration: ${h}`;
+}
+
 const PART_WORDS: Record<HealthPart, string> = { cameras: "the cameras", lasers: "the lasers", imu: "the motion sensor" };
 const PART_LABEL: Record<HealthPart, string> = { cameras: "Cameras", lasers: "Lasers", imu: "Motion sensor" };
 

@@ -59,7 +59,7 @@ for (const face of [1, 2, 3]) check(call("POST", [], { kind: face === 3 ? "hole"
 s = await summary();
 check(s.n_fits === 3 && s.counts.plane === 2 && s.counts.hole === 1 && s.counts.cylinder === 0, "the counts");
 check(s.frame === "scan" && s.frame_label === "the scan's own axes", "the scan's frame");
-check(s.notes.some((n) => n.includes("no part frame")) && s.notes.some((n) => n.includes("demo")), "the notes say so");
+check(s.notes.some((n) => n.includes("the part's axes are not set")) && s.notes.some((n) => n.includes("demo")), "the notes say so");
 check(s.warnings.length === 0 && s.reason === null && s.boundary === "rectangle", "nothing to warn about");
 check(s.filenames.step === "Top_left_2-fits.step" && s.filenames.macro === "Top_left_2-fits.FCMacro", `names: ${JSON.stringify(s.filenames)}`);
 check(cadFileStem("  ") === "scan" && cadFileStem("Ø14 boss") === "14_boss", "the stem as the engine makes it");

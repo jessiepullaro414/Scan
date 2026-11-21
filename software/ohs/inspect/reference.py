@@ -290,7 +290,7 @@ def _orient(V: np.ndarray, F: np.ndarray) -> tuple[np.ndarray, dict, np.ndarray,
     n_turned = int(turn.sum())
     notes = []
     if n_turned == m and m and closed.all():
-        notes.append(f"the reference was inside out (its faces wound inward): all {m} faces were turned round")
+        notes.append(f"the CAD model was inside out (its faces wound inward): all {m} faces were turned round")
     elif n_turned:
         notes.append(f"mixed winding: {n_turned} of {m} faces were turned to agree with their neighbours")
         if inside_out.any():
@@ -335,7 +335,7 @@ def check_units(reference_size_mm: float, scan_size_mm: float) -> UnitsFinding:
     own numbers) and a scan whose part is ``scan_size_mm`` across (module docstring, 1.)."""
     ref, scan = float(reference_size_mm), float(scan_size_mm)
     if not (ref > 0 and scan > 0 and math.isfinite(ref) and math.isfinite(scan)):
-        raise ValueError("the sizes of the reference and of the scan must be positive numbers")
+        raise ValueError("the sizes of the CAD model and of the scan must be positive numbers")
     r = scan / ref
     lo, hi = UNIT_MATCH
 
@@ -343,9 +343,9 @@ def check_units(reference_size_mm: float, scan_size_mm: float) -> UnitsFinding:
         return lo <= r / f <= hi
 
     if fits(1.0):
-        msg = f"The reference and the scan's part are of a size ({ref:.3g} and {scan:.3g} mm across): both taken as mm."
+        msg = f"The CAD model and the scan's part are of a size ({ref:.3g} and {scan:.3g} mm across): both taken as mm."
         if r > 1.0 / UNIT_LIKELY:
-            msg += (f" The scan is {r:.2g} times the reference's size: is there more than the part in it (a clamp, "
+            msg += (f" The scan is {r:.2g} times the CAD model's size: is there more than the part in it (a clamp, "
                     "a second part)?")
         return UnitsFinding("same", r, None, None, [], ref, scan, msg)
     cands = [{"unit": u, "factor": f} for u, _, f in UNITS if fits(f)]
@@ -354,9 +354,9 @@ def check_units(reference_size_mm: float, scan_size_mm: float) -> UnitsFinding:
         words = {u: w for u, w, _ in UNITS}
         f = best["factor"]
         if r >= 1.0:
-            msg = f"The scan's part is {r:.3g} times the size of the reference: the reference looks to be in {words[best['unit']]}"
+            msg = f"The scan's part is {r:.3g} times the size of the CAD model: the CAD model looks to be in {words[best['unit']]}"
         else:
-            msg = f"The reference is {1.0 / r:.3g} times the size of the scan's part: the reference looks to be in {words[best['unit']]}"
+            msg = f"The CAD model is {1.0 / r:.3g} times the size of the scan's part: the CAD model looks to be in {words[best['unit']]}"
         others = [words[c["unit"]] for c in cands if c is not best]
         if others:
             msg += f" (or {', '.join(others)}, if the scan covers less of the part)"
@@ -364,13 +364,13 @@ def check_units(reference_size_mm: float, scan_size_mm: float) -> UnitsFinding:
                 + (" if the scan covers only a small part of it" if r < 1.0 else "") + ".")
         return UnitsFinding("pending", r, f, best["unit"], cands, ref, scan, msg)
     if r > UNIT_FAR or r < 1.0 / UNIT_FAR:
-        big, small = ("scan's part", "reference") if r > 1 else ("reference", "scan's part")
+        big, small = ("scan's part", "CAD model") if r > 1 else ("CAD model", "scan's part")
         msg = (f"The {big} is {max(r, 1.0 / r):.3g} times the size of the {small}, and no unit explains it: check that "
-               "this is the right reference (or that the scan covers only a small part of it), then confirm to compare "
+               "this is the right CAD model (or that the scan covers only a small part of it), then confirm to compare "
                "it as it is.")
         return UnitsFinding("pending", r, None, None, [], ref, scan, msg)
-    msg = (f"The reference and the scan's part are {ref:.3g} and {scan:.3g} mm across: taken as mm (the scan covers part "
-           "of the reference, or holds more than the part).")
+    msg = (f"The CAD model and the scan's part are {ref:.3g} and {scan:.3g} mm across: taken as mm (the scan covers part "
+           "of the CAD model, or holds more than the part).")
     return UnitsFinding("same", r, None, None, [], ref, scan, msg)
 
 
@@ -635,9 +635,9 @@ def read_reference(path: str | Path, *, scan: ScanSurface | None = None, name: s
     ext = path.suffix.lower()
     if ext not in SUFFIXES:
         hint = " (export a STEP or other CAD file as STL first)" if ext in (".step", ".stp", ".iges", ".igs") else ""
-        raise ValueError(f"a reference must be an STL, OBJ or PLY mesh; {label} is {ext or 'without an extension'}{hint}")
+        raise ValueError(f"a CAD model must be an STL, OBJ or PLY mesh; {label} is {ext or 'without an extension'}{hint}")
     if not path.is_file():
-        raise ValueError(f"the reference file {label} was not found")
+        raise ValueError(f"the CAD model's file {label} was not found")
     try:
         V, F, _ = load_mesh(path)
     except Exception as e:  # noqa: BLE001 (a broken file can fail anywhere in a reader)
@@ -647,7 +647,7 @@ def read_reference(path: str | Path, *, scan: ScanSurface | None = None, name: s
 
 def _require_ready(ref: ReferenceModel) -> None:
     if not ref.ready:
-        raise ValueError(f"the reference's units are not settled: {ref.units.message}")
+        raise ValueError(f"the CAD model's units are not settled: {ref.units.message}")
 
 
 # --------------------------------------------------------------------------- aligning
@@ -715,7 +715,7 @@ def _versus(T: np.ndarray, T_datums: np.ndarray, P: np.ndarray) -> dict:
     angle = rotation_angle_deg(T[:3, :3] @ T_datums[:3, :3].T)
     return {"rms_mm": float(np.sqrt(np.mean(dist**2))), "max_mm": float(dist.max()), "shift_mm": shift,
             "angle_deg": float(angle),
-            "note": (f"The best fit lies {np.sqrt(np.mean(dist ** 2)):.2f} mm (RMS; at most {dist.max():.2f} mm) from the "
+            "note": (f"The best fit lies typically {np.sqrt(np.mean(dist ** 2)):.2f} mm (at most {dist.max():.2f} mm) from the "
                      f"alignment on the datums: {shift:.2f} mm at the scan's centre and {angle:.2f}° turned. A best fit "
                      "spreads an overall error (a part too long, bent or shifted) over the whole part; on the datums it "
                      "shows where it is.")}
@@ -740,7 +740,7 @@ def _pair(scan: ScanSurface, ref: ReferenceModel, p: AlignParams, seed: int, ini
         res2 = align_pair(src, dst2, p, **kw)
         if res2.accepted:
             res, dst = res2, dst2
-            notes.append("the reference's open surface was matched from its other side")
+            notes.append("the CAD model's open surface was matched from its other side")
     # what the engine's own check of the pose turned round found (MAINTENANCE_PLAN F11)
     found_turned = bool(res.poses) and res.poses[0]["from"] == ["turned round"]
     check = {"turned": int(res.turned), "reached": int(res.reached), "doubt": res.doubt, "poses": len(res.poses),
@@ -782,9 +782,9 @@ def _pair_verdict(res, sc, p: AlignParams, what: str, turned: bool = False) -> s
                 else "from the picked points")
         loose = "" if res.dof >= 6 else f" The surfaces leave {6 - res.dof} direction(s) of motion loose."
         return (f"Aligned {what}: {100 * res.overlap:.0f} % of the matched surface lies within {p.match_mm:g} mm, "
-                f"{res.rmse_mm:.2f} mm RMS; {sure}.{loose}{table}")
+                f"typically {res.rmse_mm:.2f} mm; {sure}.{loose}{table}")
     hint = ("" if res.start != "features" else
-            " Pick three or more matching points on the scan and on the reference, or cut away what is not the part "
+            " Pick three or more matching points on the scan and on the CAD model, or cut away what is not the part "
             "(a table, clamps) first.")
     return f"Not aligned {what}: {res.reason}.{table}{hint}"
 
@@ -824,10 +824,10 @@ def align_by_points(scan: ScanSurface, ref: ReferenceModel, scan_points, referen
     n = int(np.asarray(scan_points).reshape(-1, 3).shape[0])
     warnings = []
     if rms > 2.0:
-        warnings.append(f"the picked pairs agree only to {rms:.1f} mm RMS: a pair may be wrong or in the wrong order")
+        warnings.append(f"the picked pairs typically agree only to {rms:.1f} mm: a pair may be wrong or in the wrong order")
     if not refine:
         out = ReferenceAlignment(T=T0, method="points", accepted=True, n_points=n, points_rms_mm=rms, warnings=warnings,
-                                 verdict=(f"Aligned from {n} picked pairs: they agree to {rms:.2f} mm RMS; not refined on "
+                                 verdict=(f"Aligned from {n} picked pairs: they typically agree to {rms:.2f} mm; not refined on "
                                           "the shapes, so the result is as good as the picks."))
     else:
         res, src, dst, notes, _ = _pair(scan, ref, p, seed, init=T0)
@@ -854,8 +854,8 @@ def align_by_datums(datums, *, reference_frame=None) -> ReferenceAlignment:
     if sig.get("angle_deg") is not None and sig.get("origin_mm") is not None:
         warnings.append(f"the datums' own ± (1σ): {sig['angle_deg']:.3f}° and {sig['origin_mm']:.3f} mm at the origin; a "
                         f"point L mm from the origin moves about L x {math.radians(sig['angle_deg']):.2g} mm with the turn")
-    onto = "the reference's own part frame" if reference_frame is not None else "the reference's own axes"
-    verdict = (f"Aligned on the datums: the scan's part frame (from {', '.join(names)}) put onto {onto}; no best fit, "
+    onto = "the part's axes set on the CAD model" if reference_frame is not None else "the CAD model's own axes"
+    verdict = (f"Aligned on the datums: the part's axes on the scan (from {', '.join(names)}) put onto {onto}; no best fit, "
                "so an overall error of the part shows where it is.")
     return ReferenceAlignment(T=T, method="datums", accepted=True, verdict=verdict, frame=fr.to_dict(), warnings=warnings)
 
@@ -913,14 +913,14 @@ class Deviation:
 
     @property
     def rule(self) -> str:
-        return (f"A measured scan vertex (not on a filled face, its sigma under {SIGMA_NONE_MM:g} mm) is compared when it "
-                f"lies within {self.near_mm:g} mm of the reference surface, inside the reference's box grown by "
+        return (f"A measured scan vertex (not on a filled face, its ± under {SIGMA_NONE_MM:g} mm) is compared when it "
+                f"lies within {self.near_mm:g} mm of the CAD model's surface, inside the CAD model's box grown by "
                 f"{self.near_mm:g} mm, and, unless it is within {self.snap_mm:g} mm, faces within {self.normal_deg:g}° "
-                "of the way the reference faces there (or, in a concave corner, finds reference surface facing its way "
+                "of the way the CAD model faces there (or, in a concave corner, finds CAD model surface facing its way "
                 f"within {self.near_mm:g} mm along its own normal, measured there); any other measured vertex is not on "
-                "the reference (a table, a "
+                "the CAD model (a table, a "
                 f"clamp, or surface more than {self.near_mm:g} mm off). A face is compared when its three vertices are. "
-                f"Reference surface counts as scanned where a compared vertex lies within {self.near_mm:g} mm of it, at "
+                f"The CAD model's surface counts as scanned where a compared vertex lies within {self.near_mm:g} mm of it, at "
                 f"most {self.cover_mm:.2g} mm to the side, facing the same way.")
 
     def to_dict(self) -> dict:
@@ -985,7 +985,7 @@ def deviation_from_reference(scan: ScanSurface, ref: ReferenceModel, alignment: 
             t_faces = turn[ref.face_piece]
             Fr[t_faces] = Fr[t_faces][:, ::-1]
         n_open = int((~ref.piece_closed).sum())
-        notes.append(f"{n_open} open piece(s) of the reference: their outside is the side the scan sees them from"
+        notes.append(f"{n_open} open piece(s) of the CAD model: their outside is the side the scan sees them from"
                      + (f" ({int(turn.sum())} turned round for it)" if turn.any() else ""))
     ms["prepare"] = round(1e3 * (time.perf_counter() - t), 1)
     t = time.perf_counter()
@@ -1025,8 +1025,8 @@ def deviation_from_reference(scan: ScanSurface, ref: ReferenceModel, alignment: 
         ok[~ok] = found
     cand[pick] = ok
     if along.any():
-        notes.append(f"{int(along.sum())} vertices face away from the nearest reference face (a concave corner): "
-                     "measured along their own normal to the reference surface that faces their way")
+        notes.append(f"{int(along.sum())} vertices face away from the nearest face of the CAD model (a concave corner): "
+                     "measured along their own normal to the CAD model's surface that faces their way")
     state = np.where(cand, Deviation.COMPARED, np.where(measured_v, Deviation.OFF_REFERENCE, Deviation.NOT_MEASURED)).astype(np.int8)
     measured_f = ~filled & measured_v[F[:, 0]] & measured_v[F[:, 1]] & measured_v[F[:, 2]]
     compared_f = measured_f & cand[F[:, 0]] & cand[F[:, 1]] & cand[F[:, 2]]
@@ -1065,7 +1065,7 @@ def deviation_from_reference(scan: ScanSurface, ref: ReferenceModel, alignment: 
         uncovered = 1.0
     ms["coverage"] = round(1e3 * (time.perf_counter() - t), 1)
     if not compared_f.any():
-        notes.append("nothing of the scan lies on the reference: check the alignment")
+        notes.append("nothing of the scan lies on the CAD model: check the alignment")
     return Deviation(V=V, F=F, offset=offset, sigma=scan.sigma, state=state, along_normal=along, face_compared=compared_f,
                      face_off_reference=off_f, scan_area_mm2=float(area.sum()), compared_area_mm2=float(area[compared_f].sum()),
                      off_reference_area_mm2=float(area[off_f].sum()), not_measured_area_mm2=float(area[~measured_f].sum()),
@@ -1155,7 +1155,7 @@ def tolerance_summary(dev: Deviation, tolerance_mm: float, *, k: float = 2.0, mi
         min_area_mm2 = max(MIN_AREA_FLOOR_MM2, MIN_AREA_FACES * (float(np.median(a)) if len(a) else 0.0))
     if total <= 0:
         return ToleranceSummary(tol, float(k), 0.0, None, None, None, None, None, None, {}, float(min_area_mm2), 0, [],
-                                "nothing of the scan could be compared with the reference")
+                                "nothing of the scan could be compared with the CAD model")
     off = dev.offset.astype(np.float64)
     fd = (off[Fc[:, 0]] + off[Fc[:, 1]] + off[Fc[:, 2]]) / 3.0
     above, below = fd > tol, fd < -tol
@@ -1232,9 +1232,9 @@ class Comparison:
     def summary(self) -> str:
         dev = self.deviation
         out = f"{self.tolerance.sentence} ({self.alignment.describe()})"
-        out += f"; {100 * dev.off_reference_share:.0f} % of the scan is not on the reference"
+        out += f"; {100 * dev.off_reference_share:.0f} % of the scan is not on the CAD model"
         if dev.uncovered_share is not None:
-            out += f"; {100 * dev.uncovered_share:.0f} % of the reference was not scanned"
+            out += f"; {100 * dev.uncovered_share:.0f} % of the CAD model was not scanned"
         return out + "."
 
     def to_dict(self, with_faces: bool = False) -> dict:

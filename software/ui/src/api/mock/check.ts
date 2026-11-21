@@ -363,7 +363,7 @@ function mockPose(target: V3, n: V3, side: V3, tiltDeg: number, azimuthDeg: numb
   };
 }
 
-const NO_EDGE_POSE = "no pose: on an edge or a tight curve another pass alone does not lower the uncertainty";
+const NO_EDGE_POSE = "no place to scan from: on an edge or a tight curve another pass alone does not lower the scatter";
 
 /**
  * The demo engine's `POST .../check/why`: a reason for each area of `r` and a pose to scan it from, made up
@@ -416,12 +416,12 @@ export function madeUpWhy(
       steep: `Seen only at a steep angle: even the squarest look was ${evidence.view_angle_deg}° off the surface's normal.`,
       far: `Seen from too far: the nearest look was ${evidence.distance_mm} mm away (hold the scanner at about ${MOCK_WORKING_MM} mm).`,
       few_looks: `Seen too few times: ${evidence.looks} independent looks, where the surface that passes had 12 (go over it again, more slowly).`,
-      edge: "On an edge, a tight curve or an uneven surface: the mesh's own uncertainty there is above the tolerance, and another pass alone does not lower it.",
+      edge: "On an edge, a tight curve or an uneven surface: the mesh's own scatter there is above the tolerance, and another pass alone does not lower it.",
       unknown: "No reason the data can tell.",
     }[reason];
     let view: CheckView;
     if (reason === "edge") {
-      view = { ok: false, pose: null, share_seen: null, border_seen: null, candidates: 0, missed: null, reason: NO_EDGE_POSE, text: "No pose: on an edge or a tight curve another pass alone does not lower the uncertainty." };
+      view = { ok: false, pose: null, share_seen: null, border_seen: null, candidates: 0, missed: null, reason: NO_EDGE_POSE, text: "No place to scan from: on an edge or a tight curve another pass alone does not lower the scatter." };
     } else {
       const n: V3 = faces ? [0, -1, 0] : normal;
       const side = norm3(cross3(n, Math.abs(n[0]) < 0.9 ? [1, 0, 0] : [0, 1, 0]));

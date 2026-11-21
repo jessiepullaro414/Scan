@@ -130,7 +130,7 @@ def test_scan_frame_without_a_part_frame():
     features, outlines, _ = _box()
     shapes, _, r = _export(features, outlines, None)
     assert not shapes.in_part_frame and shapes.axes is None
-    assert any("scan's own frame" in n for n in shapes.notes)
+    assert any("scan's own axes" in n for n in shapes.notes)
     assert "X axis" not in r["products"]
     hole = _by_id(features, "f-hole")
     circle = _one(r["products"][hole["name"]], "circle")

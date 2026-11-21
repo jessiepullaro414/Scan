@@ -185,7 +185,7 @@ export function mockTable(positions: Float32Array, indices: Uint32Array, plane: 
   const at = (r: TableRaised) => `at (${r.centre.map((x) => x.toFixed(0)).join(", ")}) mm`;
   const warnings = raised.map((r) =>
     r.kept
-      ? `A thin part lying flat is ${r.by_user ? "kept, as you chose" : "kept"}: ${r.size_mm.toFixed(0)} mm across, ${r.height_mm.toFixed(2)} mm above the table, ${at(r)}. It is a piece of its own now: Remove floaters may take it if it is small.`
+      ? `A thin part lying flat is ${r.by_user ? "kept, as you chose" : "kept"}: ${r.size_mm.toFixed(0)} mm across, ${r.height_mm.toFixed(2)} mm above the table, ${at(r)}. It is a loose bit of its own now: Remove loose bits may take it if it is small.`
       : `A raised area ${r.size_mm.toFixed(0)} mm across, ${r.height_mm.toFixed(2)} mm above the table round it, ${at(r)}, goes with the table: it may be a thin part. To keep it, choose Keep this, or select it by hand.`,
   );
   return {
@@ -219,7 +219,7 @@ export function mockTable(positions: Float32Array, indices: Uint32Array, plane: 
         "The demo knows where its table is. A face is removed when it faces the table's way (within 45° of its normal) and lies at most " +
         `${margin} mm above it, or lies wholly behind it. Faces turned further away (the part's walls) stay at any height, and so do flat ` +
         `areas ${THIN_MM} mm or more above the table (a thin part lying flat); flat areas between ${FIND_MM} and ${THIN_MM} mm go, drawn and listed.`,
-      summary: `Found the table (${Math.round(share * 100)} % of the scan, flat to 0.10 mm RMS): ${n.toLocaleString("en-US")} faces (${(removed / 100).toFixed(1)} cm²) are the table${low}`,
+      summary: `Found the table (${Math.round(share * 100)} % of the scan, flat to 0.10 mm (typical)): ${n.toLocaleString("en-US")} faces (${(removed / 100).toFixed(1)} cm²) are the table${low}`,
       ms: Math.round(performance.now() - t0),
     },
   };

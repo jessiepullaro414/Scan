@@ -130,7 +130,8 @@ def report_summary(report: dict) -> dict:
     return jsonable(out)
 
 
-#: the engine's words for a graphics card, and the app's (UX_PLAN U5: "graphics card" only)
+#: the engine's words for a graphics card, and the app's (UX_PLAN U5: "graphics card" only). The engine says "graphics
+#: card" itself since UX_PLAN U51, but the report.json of a scan processed before keeps "GPU": these turn it round
 _GPU_WORDS = ((re.compile(r"\bwithout a GPU\b"), "without a graphics card"), (re.compile(r"\ba GPU\b"), "a graphics card"),
               (re.compile(r"\bthe GPU\b"), "the graphics card"), (re.compile(r"\bGPU\b"), "graphics card"))
 

@@ -478,7 +478,7 @@ export class MockSetup {
           : C("camera image", "PASS", "mean 104 DN, 0.4 % saturated"),
         ...(pico
           ? [
-              C("pico", "PASS", "HELLO ohs-fw 1.0.0 on COM5, imu=LSM6DSOX"),
+              C("pico", "PASS", "firmware ohs-fw 1.0.0 on COM5, motion sensor (IMU): LSM6DSOX"),
               C("imu rate", "PASS", "415.8 Hz measured (416 requested)"),
               C("imu values", "PASS", "|accel| 9.80 m/s^2"),
               C("clock sync", "PASS", "round trip 0.6 ms: timestamps good to better than 1 ms"),
@@ -728,10 +728,10 @@ export class MockSetup {
             state: "drift",
             dv_px: 1.38,
             matches: 287,
-            message: "Left and right image rows differ by 1.4 px (want under 0.6 px): the calibration may have drifted after a knock or heat.",
+            message: "Left/right height mismatch 1.4 px: the calibration may have drifted (a knock or a temperature change). Run the calibration check.",
             when: nowIso(),
           }
-        : { state: "ok", dv_px: 0.17, matches: 412, message: null, when: nowIso() };
+        : { state: "ok", dv_px: 0.17, matches: 412, message: "Left/right height mismatch 0.17 px: the calibration is valid.", when: nowIso() };
       const warnings = drift
         ? [
             "The cameras may have moved since the calibration: left/right height mismatch 1.4 px (want under 0.6 px: the start-up check looks at three pictures only, so its limit is wider than the calibration check's). Run the calibration check in Setup.",

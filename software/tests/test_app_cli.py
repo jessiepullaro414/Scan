@@ -534,7 +534,7 @@ def test_selftest_image_and_gravity_checks_keep_their_messages():
 
     cases = [((1.0, 0.0, 5.0), "the image is black (mean 1.0 DN)", ": lens cap, or exposure too short?"),
              ((120.0, 0.35, 5.0), "35% of the pixels are saturated", ": shorten the exposure"),
-             ((120.0, 0.01, 0.2), "left and right images are identical", ": is this the stereo camera?")]
+             ((120.0, 0.01, 0.2), "left and right images are identical", ": is this the scanner's pair of cameras?")]
     for s, text, hint in cases:
         assert image_check([s, s]) == ("WARN", text)
         assert image_check([s, s], _IMAGE_HINTS) == ("WARN", text + hint)

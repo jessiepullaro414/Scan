@@ -181,7 +181,7 @@ def test_the_cpu_path_judges_the_cameras_only():
         s = health.scan_status(block(*signs), tracking_model="open3d", lines=LINES)
         assert s["state"] == "valid" and s["parts"] == {"cameras": "valid", "lasers": None, "imu": None}
         assert s["not_judged"] == ["lasers", "imu"]
-        assert "by an earlier version of the software" in s["note"] and "lasers and the IMU" in s["note"]
+        assert "by an earlier version of the software" in s["note"] and "lasers and the motion sensor" in s["note"]
         assert "cameras" in s["reason"] and "lasers" not in s["reason"]
     st = run(*(item(true_cpu, d, model="open3d") for d in (3, 2, 1)))
     assert st["state"] == "valid" and st["parts"]["lasers"] is None and st["parts"]["imu"] is None
@@ -275,7 +275,7 @@ def test_a_launch_drift_after_the_last_save():
     # ok counts as evidence; unknown and running say nothing
     ok = dict(lc, state="ok", dv_px=0.09)
     st = run(launch_check=ok)
-    assert st["state"] == "valid" and "the launch check (today)" in st["reason"]
+    assert st["state"] == "valid" and "the start-up check (today)" in st["reason"]
     assert st["parts"]["cameras"] == "valid" and st["parts"]["lasers"] is None
     for state in ("unknown", "running"):
         st = run(launch_check=dict(lc, state=state, dv_px=None))
@@ -303,7 +303,7 @@ def test_a_failed_board_check_names_its_part():
     st = run(last_check={"when": when, "ok": False, "verdict": "The vertical laser is 0.8 mm off its plane.",
                          "parts": ["lasers"]})
     assert (st["state"], st["part"], st["action"]["step"]) == ("recalibrate", "lasers", "lasers")
-    assert st["reason"] == ("The last 2-minute check did not pass (today): The vertical laser is 0.8 mm off its "
+    assert st["reason"] == ("The last calibration check did not pass (today): The vertical laser is 0.8 mm off its "
                             "plane.")
     st = run(last_check={"when": when, "ok": False, "verdict": "x", "parts": ["imu", "cameras"]})
     assert (st["part"], st["action"]["step"]) == ("cameras", "stereo")
@@ -327,9 +327,9 @@ def test_the_age_of_the_last_board_check():
     saved = (NOW - timedelta(days=60)).isoformat()
     st = run(saved=saved, last_check={"when": (NOW - timedelta(days=days + 1)).isoformat(), "ok": True, "verdict": "ok"})
     assert (st["state"], st["part"], st["action"]["step"]) == ("check", None, "check")
-    assert st["reason"].startswith(f"The last 2-minute check was {days + 1} days ago")
+    assert st["reason"].startswith(f"The last calibration check was {days + 1} days ago")
     st = run(saved=saved, last_check={"when": (NOW - timedelta(days=days - 1)).isoformat(), "ok": True, "verdict": "ok"})
-    assert st["state"] == "valid" and "the 2-minute check" in st["reason"]
+    assert st["state"] == "valid" and "the calibration check" in st["reason"]
     # never checked: from the last calibration step
     st = run(saved=(NOW - timedelta(days=days + 5)).isoformat())
     assert st["state"] == "check" and "since it was saved" in st["reason"]
@@ -399,9 +399,10 @@ def test_the_shape_a_page_can_show_without_logic():
     assert set(s["signs"]) == {"row_error", "laser:vertical", "laser:horizontal", "gyro_jump"}
     # a report's own words, examples: Valid, Check recommended, Recalibration required
     assert health.scan_status(block(), tracking_model="gpu", lines=LINES)["reason"] == (
-        "This scan shows nothing off for the cameras, the lasers and the IMU.")
-    assert s["reason"] == ("This scan shows the two cameras slightly out of line: matching points sit 0.25 px apart "
-                           "in height (want under 0.15 px).")
+        "This scan shows nothing off for the cameras, the lasers and the motion sensor.")
+    assert s["reason"] == ("This scan shows the two cameras slightly out of line: left/right height mismatch 0.25 px "
+                           "(want under 0.15 px: scans measure this more finely than the calibration check, so "
+                           "their limit is lower).")
 
 
 def test_no_block_or_a_failed_one():

@@ -445,7 +445,7 @@ export function ComparePanel({
                 <ShareBar a={a} />
                 {a.share_uncertain ? (
                   <div className="mt-1.5 text-[11.5px] leading-4 text-muted">
-                    On {fmtShare(a.share_uncertain)} of the compared area the scan's own uncertainty (2σ) is wider than the tolerance: there it cannot tell within from outside.
+                    On {fmtShare(a.share_uncertain)} of the compared area the scan's own scatter is wider than the tolerance: there it cannot tell within from outside.
                   </div>
                 ) : null}
                 {coverageLines(a.coverage).map((l) => (

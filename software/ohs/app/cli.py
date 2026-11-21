@@ -389,7 +389,7 @@ def build_parser() -> argparse.ArgumentParser:
                         "  stereo  (emitters off)  " + GUIDE_STEREO + "\n"
                         "  lasers  (lines on)      " + GUIDE_LASERS + "\n"
                         "  imu     (emitters off)  " + GUIDE_IMU + "\n"
-                        "  check   (lines on)      3-5 views; reports whether the calibration still holds",
+                        "  check   (lines on)      3-5 views; reports whether the calibration is still valid",
             epilog="SPACE or the trigger captures a view (imu: starts/stops the recording); q finishes and calibrates;\n"
                    "ESC aborts. A new stereo calibration drops the laser planes and the IMU calibration unless --keep.")
     p.add_argument("kind", choices=CALIB_KINDS, help="what to calibrate")

@@ -447,7 +447,7 @@ def test_each_part_alone_and_calibration_health_not_assessed():
         "reason": "This scan shows nothing off for the cameras.", "not_judged": ["lasers", "imu"],
         "note": "This scan was processed without a GPU, so only the cameras could be judged."}}}))
     t = own.text("calibration")
-    assert "Valid" in t and "nothing off for the cameras" in t and "without a GPU" in t
+    assert "Calibration valid" in t and "nothing off for the cameras" in t and "without a GPU" in t
     assert "Not judged: the lasers and the motion sensor" in t and t.count("provisional") == 1
     assert "nothing off for the cameras" not in own.text("warnings")  # a valid status is no warning
     # fits alone: features without relations, sections or a frame

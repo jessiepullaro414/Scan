@@ -474,10 +474,10 @@ def merge_scans(scans: Sequence[ScanInput], out_dir: str | Path, params: Process
                 n_gone = cleaning["pieces_removed"]
                 report["mesh"]["cleaning"] = {
                     **cleaning, "min_component_fraction": float(p.clean_min_component),
-                    "summary": (f"{_count(n_gone, 'small loose piece')} ({cleaning['area_removed_mm2']:,.0f} mm²) "
+                    "summary": (f"{_count(n_gone, 'small loose bit')} ({cleaning['area_removed_mm2']:,.0f} mm²) "
                                 f"{'was' if n_gone == 1 else 'were'} left out as too small (under "
                                 f"{100 * p.clean_min_component:g} % of the triangles each); "
-                                f"{_count(cleaning['thin_pieces_kept'], 'small piece')} over a thin part "
+                                f"{_count(cleaning['thin_pieces_kept'], 'small bit')} over a thin part "
                                 f"{'was' if cleaning['thin_pieces_kept'] == 1 else 'were'} kept.")}
         files["report"] = str(out / "report.json")
         report["wall_time_s"] = time.perf_counter() - wall0

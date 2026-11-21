@@ -202,7 +202,7 @@ class PartFrame:
             return out
         if is_dataclass(fit) and hasattr(fit, "fit"):
             return replace(fit, fit=PartFrame._turn_fit(fit.fit, move, turn))
-        raise ValueError(f"cannot turn a {type(fit).__name__} into the part's frame: give a fit or its to_dict()")
+        raise ValueError(f"cannot turn a {type(fit).__name__} into the part's axes: give a fit or its to_dict()")
 
     # ----- storing
     def to_dict(self) -> dict:
@@ -226,18 +226,18 @@ class PartFrame:
         or a matrix that is not a rotation and a translation."""
         version = d.get("format_version")
         if version != FORMAT_VERSION:
-            raise ValueError(f"the part's frame has format_version {version!r}; this version reads {FORMAT_VERSION}")
+            raise ValueError(f"the part's axes have format_version {version!r}; this version reads {FORMAT_VERSION}")
         M = np.asarray(d.get("matrix"), dtype=np.float64)
         if M.shape != (4, 4) or not np.all(np.isfinite(M)):
-            raise ValueError("the part's frame needs a finite 4 x 4 matrix")
+            raise ValueError("the part's axes need a finite 4 x 4 matrix")
         R = M[:3, :3]
         if (np.abs(R @ R.T - np.eye(3)).max() > ROTATION_TOL or abs(np.linalg.det(R) - 1.0) > ROTATION_TOL
                 or np.any(M[3] != [0.0, 0.0, 0.0, 1.0])):
-            raise ValueError("the part's frame matrix is not a rotation and a translation")
+            raise ValueError("the matrix of the part's axes is not a rotation and a translation")
         a = d.get("axes") or {}
         axes = (a.get("primary"), a.get("secondary"), a.get("third"))
         if sorted(str(x) for x in axes) != ["X", "Y", "Z"]:
-            raise ValueError(f"the part's frame axes must name X, Y and Z once each, got {axes}")
+            raise ValueError(f"the part's axes must name X, Y and Z once each, got {axes}")
         return cls(matrix=M, axes=axes, built_from=_json(d.get("built_from", [])), sigma=_json(d.get("sigma", {})),
                    warnings=list(d.get("warnings", [])), flip_primary=bool(d.get("flip_primary", False)),
                    flip_secondary=bool(d.get("flip_secondary", False)),
@@ -426,8 +426,8 @@ def _build(plan: _Plan, geo) -> tuple[np.ndarray, np.ndarray]:
 def _parse_axes(axes) -> tuple[tuple[int, int, int], float, tuple[str, str, str]]:
     s = str(axes).upper()
     if len(s) != 2 or s[0] == s[1] or any(c not in "XYZ" for c in s):
-        raise ValueError(f"axes must be two different letters of X, Y and Z (the primary's axis, then the "
-                         f"secondary's, e.g. 'ZX'), got {axes!r}")
+        raise ValueError(f"The axes must be two different letters of X, Y and Z, the primary's axis first and then "
+                         f"the secondary's (for example ZX), not {axes}")
     third = next(c for c in "XYZ" if c not in s)
     order = ("XYZ".index(s[0]), "XYZ".index(s[1]), "XYZ".index(third))
     sign = 1.0 if order in ((0, 1, 2), (1, 2, 0), (2, 0, 1)) else -1.0  # an odd order would mirror the frame
@@ -461,7 +461,7 @@ def _plan(f1: _Feature, f2: _Feature, f3: _Feature, order, third_sign, names, fl
                              f"cylinder or a point as the origin (the {X} axis runs from the origin to it): pick one "
                              "as the origin, or a side face as the secondary")
         if zero:
-            raise ValueError(f"secondary_zero needs a plane, or a cylinder or a hole lying along the primary face, as "
+            raise ValueError(f"Strict 3-2-1 needs a plane, or a cylinder or a hole lying along the primary face, as "
                              f"the secondary; a {_NAMES[f2.kind]} across the face only sets the turn")
     # the origin
     if f3.kind == "cylinder" and 90.0 - _angle_to(f3.direction, n1) < CROSS_MIN_DEG:

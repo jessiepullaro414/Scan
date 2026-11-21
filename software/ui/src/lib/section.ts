@@ -87,7 +87,7 @@ export function planeFromFrame(frame: PartFrameView, axis: string, value: number
   const { R, O } = frameAxes(frame);
   const e = R[i];
   const p = [O[0] + value * e[0], O[1] + value * e[1], O[2] + value * e[2]];
-  return makePlane(p, e.map((x) => sign * x), frame, `Section at ${a} = ${g(value)}\u202fmm in the part's frame${sign < 0 ? `, seen from -${a}` : ""}`);
+  return makePlane(p, e.map((x) => sign * x), frame, `Section at ${a} = ${g(value)}\u202fmm in the part's axes${sign < 0 ? `, seen from -${a}` : ""}`);
 }
 
 /** The plane through three points; its normal by the right-hand rule, (p2 − p1) x (p3 − p1). */

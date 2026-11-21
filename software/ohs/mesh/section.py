@@ -202,7 +202,7 @@ def plane_from_frame(frame, axis: str, value_mm: float, *, description: str | No
     e = np.asarray(frame.rotation, dtype=np.float64)[["X", "Y", "Z"].index(a)]
     p = np.asarray(frame.origin, dtype=np.float64) + value * e
     if description is None:
-        description = f"Section at {a} = {value:g} mm in the part's frame" + (f", seen from -{a}" if sign < 0 else "")
+        description = f"Section at {a} = {value:g} mm in the part's axes" + (f", seen from -{a}" if sign < 0 else "")
     return _make_plane(p, sign * e, frame, description)
 
 

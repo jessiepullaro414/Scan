@@ -369,7 +369,7 @@ def _features(data: dict, prep: Prepared) -> None:
 
 
 # --------------------------------------------------------------------------- the other parts' warnings
-HEALTH_WORDS = {"valid": "Valid", "check": "Check recommended", "check_recommended": "Check recommended",
+HEALTH_WORDS = {"valid": "Calibration valid", "check": "Check recommended", "check_recommended": "Check recommended",
                 "recalibrate": "Recalibration required", "recalibration_required": "Recalibration required"}
 
 

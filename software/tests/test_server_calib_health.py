@@ -71,7 +71,7 @@ def test_the_setup_state_gains_the_status_and_keeps_its_keys(env):
     _calibrate(root)
     s = _setup(url)
     h = s["calibration_health"]
-    assert h["state"] == "valid" and h["label"] == "Valid" and h["part"] is None and h["action"] is None
+    assert h["state"] == "valid" and h["label"] == "Calibration valid" and h["part"] is None and h["action"] is None
     assert h["reason"].startswith("Nothing speaks against the calibration yet")
     assert h["scans"] == {"used": 0, "window": 3, "agree": 2}
     # the old keys mean what they meant
@@ -119,7 +119,7 @@ def test_the_launch_check_and_the_board_check_in_the_status(env):
     # it passes: the launch drift it was asked to confirm is answered
     st.setup.record_last_check("device", True, "The check passed.", parts=[])
     h = _setup(url)["calibration_health"]
-    assert h["state"] == "valid" and "the 2-minute check (today)" in h["reason"]
+    assert h["state"] == "valid" and "the calibration check (today)" in h["reason"]
     # without parts, the key is not written (as before H3)
     st.setup.record_last_check("device", True, "The check passed.")
     assert "parts" not in _setup(url)["last_check"]

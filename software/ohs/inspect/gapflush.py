@@ -119,7 +119,7 @@ CORR_MAX_LAG = 8  # N_c sums the residuals' correlation over at most this many n
 # edge is measured, and the readings of the valley move by 0.8 to 1.3 mm against the truth across
 # the gap sizes, against a rule of 0.2 mm. Flush reads within 0.04 mm on average.
 GAP_OFFERED = False
-GAP_NOTE = ("Gap is not shown: the scan closes a narrow gap over a dark background (the stereo depth runs on "
+GAP_NOTE = ("Gap is not shown: the scan closes a narrow gap over a dark background (the cameras' depth runs on "
             "across it), so the panels' edges are not measured. On simulated seams of 2 to 6 mm its reading was "
             "1 to 2 mm off, and differently for each gap size. Flush is read from the two surfaces and is shown.")
 

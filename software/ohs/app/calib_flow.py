@@ -408,7 +408,8 @@ def imu_from_recording(
     _check_size(reader, calib.stereo)
     imu = reader.imu_arrays()
     if len(imu["t_host"]) < 200:
-        raise ValueError(f"recording {reader.path} has only {len(imu['t_host'])} IMU samples; record with the IMU on")
+        raise ValueError(f"recording {reader.path} has only {len(imu['t_host'])} motion sensor samples; record with the "
+                         "motion sensor on")
     rect = Rectifier(calib.stereo, 1.0)
     positions = _positions(len(reader), step)
     cam_t, R_wc, idx = _board_orientations(reader, rect, spec, positions, progress)
@@ -425,7 +426,7 @@ def _imu_check(reader: RecordingReader, imu_calib: ImuCalibration, cam_t: np.nda
     """Rotation residuals between the board-derived camera motion and the calibrated gyro."""
     imu = reader.imu_arrays()
     if len(imu["t_host"]) < 50 or len(cam_t) < 3:
-        return {"ok": None, "verdict": "no IMU data or too few board poses"}
+        return {"ok": None, "verdict": "no motion sensor data or too few board poses"}
     order = np.argsort(imu["t_host"], kind="stable")
     t_i, g_i = imu["t_host"][order], imu["gyro"][order]
     gp = GyroPredictor(imu_calib)
@@ -446,15 +447,15 @@ def _imu_check(reader: RecordingReader, imu_calib: ImuCalibration, cam_t: np.nda
         res.append(rotation_angle_deg(R_cam.T @ R_gyr))
         motion.append(rotation_angle_deg(R_cam))
     if len(res) < 10:
-        return {"ok": None, "n_intervals": len(res), "verdict": "too few board poses covered by IMU data"}
+        return {"ok": None, "n_intervals": len(res), "verdict": "too few board poses covered by motion sensor data"}
     res_a, mot = np.asarray(res), np.asarray(motion)
     med = float(np.median(res_a))
     ok = med < IMU_CHECK_OK_DEG
     return {
         "n_intervals": len(res), "median_residual_deg": med, "p95_residual_deg": float(np.percentile(res_a, 95)),
         "median_motion_deg": float(np.median(mot)), "ok": bool(ok),
-        "verdict": "good" if ok else (f"gyro and board rotations disagree by {med:.2f} deg per frame (want < "
-                                      f"{IMU_CHECK_OK_DEG} deg): recalibrate the IMU"),
+        "verdict": "good" if ok else (f"the motion sensor and the board rotations disagree by {med:.2f} deg per frame "
+                                      f"(want < {IMU_CHECK_OK_DEG} deg): recalibrate the motion sensor"),
     }
 
 
@@ -493,7 +494,7 @@ def check_from_recording(
     st = rectification_check(calib.stereo, pairs, spec)
     report["stereo"] = {k: v for k, v in st.items() if k != "per_pair"}
     del pairs
-    verdicts = [] if st.get("ok") else [f"stereo: {st.get('verdict')}"]
+    verdicts = [] if st.get("ok") else [f"cameras: {st.get('verdict')}"]
 
     if calib.lasers:
         lines = _line_names(list(calib.lasers))
@@ -511,18 +512,18 @@ def check_from_recording(
                 bad = [f"{n}: {e.get('verdict')}" for n, e in lr["lasers"].items() if not e.get("ok")]
                 verdicts.append("lasers: " + "; ".join(bad))
     else:
-        report["lasers"] = {"ok": None, "verdict": "no laser planes in the calibration"}
+        report["lasers"] = {"ok": None, "verdict": "no laser lines in the calibration"}
 
     if calib.imu is not None and len(reader.imu_arrays()["t_host"]):
         rect = Rectifier(calib.stereo, 1.0)
         cam_t, R_wc, _ = _board_orientations(reader, rect, spec, _positions(len(reader), step, 600), progress)
         report["imu"] = _imu_check(reader, calib.imu, cam_t, R_wc)
         if report["imu"].get("ok") is False:
-            verdicts.append("imu: " + report["imu"]["verdict"])
+            verdicts.append("motion sensor: " + report["imu"]["verdict"])
     else:
-        report["imu"] = {"ok": None, "verdict": "no IMU calibration or no IMU samples"}
+        report["imu"] = {"ok": None, "verdict": "no motion sensor calibration or no motion sensor samples"}
 
     checks = [report["stereo"].get("ok"), report["lasers"].get("ok"), report["imu"].get("ok")]
     report["ok"] = bool(all(c is not False for c in checks) and report["stereo"].get("ok"))
-    report["verdict"] = "good" if report["ok"] else "; ".join(verdicts) or "stereo check failed"
+    report["verdict"] = "good" if report["ok"] else "; ".join(verdicts) or "the cameras' check failed"
     return report

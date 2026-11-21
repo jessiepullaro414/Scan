@@ -450,7 +450,7 @@ def test_a_table_is_not_on_the_reference_and_the_unseen_bottom_is_reported(refer
     assert abs(dev.uncovered_share - bottom_share) < 0.03, (dev.uncovered_share, bottom_share)
     assert dev.uncovered_area_mm2 == pytest.approx(dev.uncovered_share * reference.area_mm2)
     d = dev.to_dict()
-    assert "not on the reference" in d["rule"] and d["near_mm"] == dev.near_mm
+    assert "not on the CAD model" in d["rule"] and d["near_mm"] == dev.near_mm
 
 
 def test_shares_are_by_area_not_by_vertex_count():

@@ -48,9 +48,9 @@ log = logging.getLogger(__name__)
 #: the values a preset can name, in the order the app shows them
 KEYS = ("mode", "quality", "voxel_mm", "thin_walls", "recipe", "check_tolerance_mm")
 #: each value in the app's words
-LABELS = {"mode": "Tracking mode", "quality": "Quality", "voxel_mm": "Mesh detail (voxel size)",
+LABELS = {"mode": "Tracking mode", "quality": "Quality", "voxel_mm": "Mesh detail",
           "thin_walls": "Thin walls and edges", "recipe": "Recipe after meshing",
-          "check_tolerance_mm": "Check tolerance"}
+          "check_tolerance_mm": "Tolerance"}
 GENERAL_ID = "general"
 THIN_ID = "thin-sheet-small-parts"
 VOXEL_RANGE = (0.25, 10.0)  # mm, as the Fuse stage and recipes take it (ohs.server.processing.VOXEL_RANGE)
@@ -75,13 +75,15 @@ BUILTIN_PRESETS: list[dict] = [
               "costs": None},
      "values": {}},
     {"id": THIN_ID, "name": "Thin sheet metal and small parts", "builtin": True,
-     "description": "A finer mesh (0.5 mm instead of 1 mm), so thin walls read closer to their true thickness.",
-     "card": {"changes": "A finer mesh: 0.5 mm voxels instead of 1 mm. Nothing else.",
-              "why": "Thin standing walls read closer to their true thickness. On all three test scans, walls "
-                     "0.5, 1 and 2 mm thick read 1.03 to 1.08, 1.32 to 1.45 and 2.18 to 2.43 mm, instead of 1.70, "
-                     "1.71 to 1.90 and 2.53 to 2.66 mm. A detailed casting gains a little too.",
-              "costs": "Making the mesh takes about 1.2 to 2.4 times as long and needs more graphics memory. "
-                       "It gains nothing on a large panel or a door."},
+     "description": "Finer mesh detail (0.5 mm instead of 1 mm), so thin walls come out closer to their real "
+                    "thickness.",
+     "card": {"changes": "Finer mesh detail (0.5 mm instead of 1 mm): thin walls come out closer to their real "
+                         "thickness. Nothing else changes.",
+              "why": "Measured on three test scans: walls 0.5, 1 and 2 mm thick came out 1.03 to 1.08, 1.32 to 1.45 "
+                     "and 2.18 to 2.43 mm thick, instead of 1.70, 1.71 to 1.90 and 2.53 to 2.66 mm at 1 mm. Making "
+                     "the mesh took 1.2 to 2.4 times as long and needed more graphics memory. A detailed casting "
+                     "gains a little too; a large panel or a door gains nothing.",
+              "costs": "Takes about twice as long to make the mesh. No gain on large panels."},
      "values": {"voxel_mm": 0.5}},
 ]
 

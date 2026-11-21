@@ -177,11 +177,11 @@ def drift_check(frames: Sequence[StereoFrame], stereo: StereoCalibration, *, sca
     out.update(dv_px=med, p90_px=p90, dv_signed_px=float(np.median(dv)))
     if med > threshold_px:
         out["state"] = "drift"
-        out["message"] = (f"Left and right rows disagree by {_px(med)} px: the calibration may have drifted (a knock "
-                          "or a temperature change). Run the 2-minute check.")
+        out["message"] = (f"Left/right height mismatch {_px(med)} px: the calibration may have drifted (a knock "
+                          "or a temperature change). Run the calibration check.")
     else:
         out["state"] = "ok"
-        out["message"] = f"Left and right rows agree to {_px(med)} px: the calibration still holds."
+        out["message"] = f"Left/right height mismatch {_px(med)} px: the calibration is valid."
     log.info("drift check: %s, median |dv| %.3f px (p90 %.3f) over %d matches in %d frames", out["state"], med, p90,
              len(dv), n_frames)
     return out

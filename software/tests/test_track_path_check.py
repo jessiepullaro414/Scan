@@ -89,5 +89,5 @@ def test_a_path_without_times_is_not_judged():
 
 def test_the_warning_names_the_path_without_a_gpu():
     c = check_path(slid(hand_path()), cpu_path=True)
-    assert "without a GPU" in c["warning"]
-    assert "without a GPU" not in check_path(slid(hand_path()))["warning"]
+    assert "without a graphics card" in c["warning"]
+    assert "without a graphics card" not in check_path(slid(hand_path()))["warning"]

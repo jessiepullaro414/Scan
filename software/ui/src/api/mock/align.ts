@@ -116,7 +116,7 @@ const HALF_TURN: number[][] = [
 /** The engine's sentence for an accepted alignment (`align_pair`). */
 export function alignedVerdict(overlap: number, rmse_mm: number, start: "features" | "given", agree: number, candidates: number): string {
   const sure = start === "features" ? `${agree} of ${candidates} starting guesses agree` : "from the start you gave";
-  return `Aligned: ${(100 * overlap).toFixed(0)} % of the smaller scan's part lies within 1 mm of the other scan, ${rmse_mm.toFixed(2)} mm RMS; ${sure}.`;
+  return `Aligned: ${(100 * overlap).toFixed(0)} % of the smaller scan's part lies within 1 mm of the other scan, typically ${rmse_mm.toFixed(2)} mm; ${sure}.`;
 }
 
 type V3 = [number, number, number];
@@ -583,7 +583,7 @@ export class MockAlign {
           message: `Merged into "${title}"`,
           tables,
           warnings: tables.flatMap((t) => t.warnings),
-          cleaning: sameSetup ? null : "2 small loose pieces (14 mm²) were left out as too small (under 1 % of the triangles each); 1 small piece over a thin part was kept.",
+          cleaning: sameSetup ? null : "2 small loose bits (14 mm²) were left out as too small (under 1 % of the triangles each); 1 small bit over a thin part was kept.",
         };
         return result;
       };

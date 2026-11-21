@@ -180,7 +180,7 @@ check(JSON.stringify(p) === before, "align writes nothing");
 mock.align(p, { target: "top", source: "under" });
 a = run(last()).result as AlignResult;
 check(a.accepted && a.same_setup === true && a.used_support === true, "same setup (the default): accepted, the table used");
-check(a.verdict === "Aligned: 76 % of the smaller scan's part lies within 1 mm of the other scan, 0.25 mm RMS; 8 of 9 starting guesses agree.", "the engine's sentence");
+check(a.verdict === "Aligned: 76 % of the smaller scan's part lies within 1 mm of the other scan, typically 0.25 mm; 8 of 9 starting guesses agree.", "the engine's sentence");
 check(a.reason === null && a.start === "features" && a.agree === 8 && a.candidates === 9 && a.dof === 6, "its figures");
 check(a.overlap === 0.76 && a.rmse_mm === 0.25, "the sentence and the figures agree");
 check(JSON.stringify(a.T) === JSON.stringify(IDENTITY), "the demo's scans share a frame: the second stays where it is");
@@ -191,7 +191,7 @@ check((run(last()).result as AlignResult).accepted === false, "an empty list of 
 mock.align(p, { target: "top", source: "under", same_setup: false, pairs: TRIANGLE });
 a = run(last()).result as AlignResult;
 check(a.accepted && a.start === "given", "with three pairs: accepted, from the given points");
-check(/^Aligned: \d+ % of the smaller scan's part lies within 1 mm of the other scan, \d\.\d\d mm RMS; from the start you gave\.$/.test(a.verdict), "the engine's sentence for a given start");
+check(/^Aligned: \d+ % of the smaller scan's part lies within 1 mm of the other scan, typically \d\.\d\d mm; from the start you gave\.$/.test(a.verdict), "the engine's sentence for a given start");
 check(a.verdict === alignedVerdict(a.overlap, a.rmse_mm!, "given", a.agree, a.candidates), "made from the figures");
 check(typeof a.pairs_rms_mm === "number" && a.pairs_rms_mm >= 0 && a.pairs_rms_mm < 1, "well picked pairs agree to a fraction of a mm");
 check(a.same_setup === false && a.used_support === false && isRigid(a.T), "the part was moved: no table, a rigid pose");

@@ -532,7 +532,7 @@ def align_pair(src: ScanCloud, dst: ScanCloud, params: AlignParams | None = None
                     else "from the tags both scans saw" if out.start == "tags" else "from the start you gave")
             loose = "" if out.dof >= 6 else f" The overlap leaves {6 - out.dof} direction(s) of motion loose."
             out.verdict = (f"Aligned: {100 * out.overlap:.0f} % of the smaller scan's part lies within {p.match_mm:g} mm "
-                           f"of the other scan, {out.rmse_mm:.2f} mm RMS; {sure}.{loose}")
+                           f"of the other scan, typically {out.rmse_mm:.2f} mm; {sure}.{loose}")
             if out.start != "features" and len(out.poses) > 1 and out.poses[1]["pick"] >= p.rival_share * out.poses[0]["pick"]:
                 out.verdict += f" The shapes alone fit about as well another way: {given} decided."
         else:

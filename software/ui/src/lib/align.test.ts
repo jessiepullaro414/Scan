@@ -181,7 +181,7 @@ const accepted: AlignResult = {
   target: "a",
   source: "b",
   accepted: true,
-  verdict: "Aligned: 76\u202f% of the smaller scan's part lies within 1\u202fmm of the other scan, 0.25\u202fmm RMS; 8 of 9 starting guesses agree.",
+  verdict: "Aligned: 76\u202f% of the smaller scan's part lies within 1\u202fmm of the other scan, typically 0.25\u202fmm; 8 of 9 starting guesses agree.",
   reason: null,
   T,
   start: "features",
@@ -369,8 +369,8 @@ check(ff[1].warn === true && ff.some((f) => f.label === "Left out" && f.value ==
   check(clean.lines.length === 1 && clean.warnings.length === 0 && !clean.warn, "nothing to warn about");
   const stayed = mergeLeftOut({ ...base, tables: [], warnings: [] });
   check(stayed.lines.length === 0 && stayed.warnings.length === 0 && !stayed.warn, "the part stayed: nothing was left out");
-  const cleaned = mergeLeftOut({ ...moved, cleaning: "1 small loose piece (3\u202fmm²) was left out as too small (under 1\u202f% of the triangles each); 1 small piece over a thin part was kept." });
-  check(cleaned.lines.length === 3 && cleaned.lines[2] === "The merged scan: 1 small loose piece (3\u202fmm²) was left out as too small (under 1\u202f% of the triangles each); 1 small piece over a thin part was kept.", `the cleaning, said: ${cleaned.lines[2]}`);
+  const cleaned = mergeLeftOut({ ...moved, cleaning: "1 small loose bit (3\u202fmm²) was left out as too small (under 1\u202f% of the triangles each); 1 small bit over a thin part was kept." });
+  check(cleaned.lines.length === 3 && cleaned.lines[2] === "The merged scan: 1 small loose bit (3\u202fmm²) was left out as too small (under 1\u202f% of the triangles each); 1 small bit over a thin part was kept.", `the cleaning, said: ${cleaned.lines[2]}`);
   check(mergeLeftOut({ ...base, tables: [], warnings: [], cleaning: "x" }).lines.length === 0, "no cleaning line when nothing was left out of a table");
   const older = mergeLeftOut(base);
   check(older.lines.length === 0 && older.warnings.length === 0, "an older server says nothing of it");

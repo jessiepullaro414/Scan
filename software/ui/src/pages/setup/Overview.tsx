@@ -203,7 +203,7 @@ export function Overview() {
                 <TriangleExclamationPoint size={15} className="text-warn" aria-hidden />
                 <span className="flex-1 text-fg">
                   <b className="font-semibold">The calibration may have drifted.</b>{" "}
-                  <span className="text-muted">{launch.message ?? "Left and right image rows disagree."}</span>
+                  <span className="text-muted">{launch.message ?? "The left/right height mismatch is too large."}</span>
                 </span>
                 <Button size="sm" variant="primary" icon={ClipboardCheck} onClick={() => navigate(paths.setup("check"))}>
                   Check the calibration

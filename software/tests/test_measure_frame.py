@@ -347,7 +347,7 @@ def _refusals():
         ("a line along the third plane's normal", lambda: part_frame(f["top"], f["cross"], f["front"]),
          "does not fix the origin"),
         ("secondary_zero with a hole as the secondary",
-         lambda: part_frame(f["top"], f["hole2"], f["hole"], secondary_zero=True), "secondary_zero"),
+         lambda: part_frame(f["top"], f["hole2"], f["hole"], secondary_zero=True), "Strict 3-2-1"),
         ("one axis twice", lambda: part_frame(f["top"], f["side"], f["hole"], axes="ZZ"), "axes must be"),
         ("a bad axis", lambda: part_frame(f["top"], f["side"], f["hole"], axes="ZW"), "axes must be"),
         ("a NaN normal", lambda: part_frame(replace(f["top"], normal=np.array([np.nan, 0, 1])), f["side"], f["hole"]),

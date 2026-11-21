@@ -202,7 +202,7 @@ type HealthReason = { state: HealthState; source: "scans" | "launch_check" | "bo
 type CalibHealth = {
   version: 1;
   state: HealthState;
-  label: "Valid" | "Check recommended" | "Recalibration required";
+  label: "Calibration valid" | "Check recommended" | "Recalibration required";
   part: HealthPart | null;        // null: the calibration as a whole (its age), or nothing (valid)
   part_label: "Cameras" | "Lasers" | "IMU" | null;
   reason: string;                 // one plain sentence: what was seen and what it may mean
@@ -818,7 +818,7 @@ Everything in the M3 phase 2 section is implemented as written, with these clari
   - *Since H4* the scan's summary in `project.json` (`Scan.result.report`, which the project page's scan list reads) keeps it in short: `health_status: {state: HealthState, part: HealthPart | null, reason: string}`, written with the rest of the summary when a stage gives the scan a new base. A scan whose summary was written before H4 has none (nothing is shown for it); the full status stays in `result/report.json`.
 - **The camera path's warning** (*extra*, since 2026-11-20, ENGINE_PLAN X0a): the track stage's `report.json` has `path_check`, the engine's check of the tracked camera path for a jump no hand makes (`ohs.track.path_check`): `{version, window_s, limit_mm, frames, jump_mm, frame, state: "ok" | "warn" | null, warning: string | null}` (`state` null: too short to judge), and `warnings`, a list of sentences for the user (empty when there is nothing to say; with `state: "warn"` it holds the check's sentence: tracking may have slid near that frame, so a thin part can come out thinner or partly missing). It warns only: the mesh is the same without it.
   - A stage fused at given poses (straighten, fuse) takes the track stage's `path_check` and `warnings` into its own `report.json`, since its poses come from that path; the refinements keep those of the report they refine. So `result/report.json` always has the check of the path the current mesh was built from.
-  - The track stage's `ProcessState.stages.track.warnings` is that list, in the app's words ("graphics card" where the engine says "GPU"); `[]` when there is nothing to say.
+  - The track stage's `ProcessState.stages.track.warnings` is that list, in the app's words ("graphics card": the engine says so itself since UX_PLAN U51, and the "GPU" in the report of a scan processed before is turned into it); `[]` when there is nothing to say.
   - The scan's summary (`Scan.result.report`) keeps `warnings` (the same words) and `path_check: {state, jump_mm, frame}` in short. The report page shows them as the row "Camera path" of the calibration part, and the warnings again in its list at the top.
   - A scan processed before the check has neither key (in its summary, its `report.json` and its stage) and nothing is shown for it.
 - **Scan status:** stage jobs and recipe `all` jobs set the scan to `processing`. Afterwards it is `processed` when it has a mesh, else `failed` (with `error`) or `recorded`. Edit jobs leave the status alone.
@@ -2118,7 +2118,7 @@ type CheckPose = {
 };
 type CheckView = {                      // where to scan the area from
   ok: boolean; pose: CheckPose | null;  // false: no pose, reason says why ("cannot be seen from outside the part: ...",
-  share_seen: number | null;            //   "no pose: on an edge ...", "no pose: <why there is no camera path>")
+  share_seen: number | null;            //   "no place to scan from: on an edge ...", "no place to scan from: <why there is no camera path>")
   border_seen: number | null;           // share of the unseen edge beside it the pose looks past
   candidates: number; missed: {blocked: number; facing_away: number; steep: number; outside: number} | null;
   reason: string | null; text: string;  // text: one sentence for the user
