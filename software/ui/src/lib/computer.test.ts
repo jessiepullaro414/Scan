@@ -1,5 +1,5 @@
 /** Checks for what this computer can do, said before something is missing (UX_PLAN U5; `npm test`). */
-import { computerLine, noConfidenceText } from "./computer.ts";
+import { computerLine, noCheckCallout, noConfidenceText, thinWallsNote } from "./computer.ts";
 
 let checks = 0;
 function check(ok: boolean, what: string): void {
@@ -9,18 +9,23 @@ function check(ok: boolean, what: string): void {
 
 // with a graphics card: its name, and every feature works
 const gpu = computerLine({ backend: "gpu", status: "GPU: AMD Radeon 680M (integrated, 4096 MB, AMD Accelerated Parallel Processing)", device: { name: "AMD Radeon 680M", kind: "integrated" } });
-check(gpu !== null && gpu.text === "This computer: graphics card found (AMD Radeon 680M). Every feature works." && gpu.missing.length === 0 && gpu.tone === "ok", JSON.stringify(gpu));
+// R12: the card's own name (the engine's can be a code name, "gfx1035") only where asked for: Settings' About
+check(gpu !== null && gpu.text === "This computer: graphics card found. Every feature works." && gpu.missing.length === 0 && gpu.tone === "ok", JSON.stringify(gpu));
+const named = computerLine({ backend: "gpu", status: "GPU: gfx1035", device: { name: "gfx1035" } }, { name: true });
+check(named!.text === "This computer: graphics card found (gfx1035). Every feature works.", named!.text);
+check(!computerLine({ backend: "gpu", status: "GPU: gfx1035", device: { name: "gfx1035" } })!.text.includes("gfx1035"), "Home's line: no code name");
 
 // without: why, in plain words, and what is not available (checked against the engine since D7)
 const cpu = computerLine({ backend: "cpu", status: "no OpenCL GPU was found: everything runs on the CPU", device: null });
-check(cpu !== null && cpu.text === "This computer: no graphics card found. Scans work; without one:", JSON.stringify(cpu));
+check(cpu !== null && cpu.text === "This computer: no graphics card found. Scans still work, with these limits:", JSON.stringify(cpu));
 check(cpu!.missing.length === 4 && cpu!.tone === "warn", JSON.stringify(cpu!.missing));
 check(cpu!.missing.some((m) => /confidence/.test(m) && /Scan check/.test(m)), "no confidence, so no Scan check");
 check(cpu!.missing.some((m) => /Thin walls and edges/.test(m)), "thin walls");
 check(cpu!.missing.some((m) => /tracking/i.test(m)), "tracking on plain parts");
 check(cpu!.missing.some((m) => /longer/.test(m)), "slower");
 const off = computerLine({ backend: "cpu", status: 'the GPU is turned off (compute.device = "cpu"): everything runs on the CPU' });
-check(off!.text === "This computer: the graphics card is turned off in the settings. Scans work; without one:", off!.text);
+// R20: the engine does not say whether the settings or the environment turned it off
+check(off!.text === "This computer: the graphics card is turned off for this app (in its settings, or for this run). Scans still work, with these limits:", off!.text);
 check(computerLine({ backend: "cpu", status: "PyOpenCL is not installed (pip install pyopencl): everything runs on the CPU" })!.text.includes("support for graphics cards is not installed"), "no PyOpenCL");
 check(computerLine({ backend: "cpu", status: "no OpenCL driver was found (x): everything runs on the CPU" })!.text.includes("no driver for a graphics card was found"), "no driver");
 check(computerLine({ backend: "cpu", status: "no GPU matches compute.device = 'RTX': everything runs on the CPU" })!.text.includes("none matches the one named in the settings"), "no match");
@@ -36,6 +41,15 @@ check(noConfidenceText(false, "viewer") === "This mesh has no confidence data: i
 check(noConfidenceText(true, "process").endsWith("Run “Follow the camera” again to get it."), "Edit mesh's words");
 check(noConfidenceText(null, "viewer").endsWith("Make the mesh again on a computer with a graphics card to get it."), "unknown");
 
+// UX_PLAN R16: the Scan check panel without confidence: its name, the reason on the page, no button that cannot help
+const none = noCheckCallout(false);
+check(none.title === "Scan check can't be used on this mesh", none.title);
+check(!none.offerRemake && /does not add it/.test(none.text) && /Confidence shading/.test(none.text), none.text);
+check(noCheckCallout(true).offerRemake && noCheckCallout(null).offerRemake, "a computer with a card (or not known): the button stays");
+check(!/\bCheck can't\b/.test(none.title.replace(/^Scan check/, "")), "never the old name alone");
+check(thinWallsNote(false) === "“Thin walls and edges” has no effect on this computer: it needs a graphics card.", "thin walls, said");
+check(thinWallsNote(true) === null && thinWallsNote(null) === null, "with a card: nothing to say");
+
 console.log(`computer.test: ${checks} checks passed`);
 
 // U5: "graphics card" only, in what the pages say (the leftovers the second wave noted: Settings, two tooltips)
@@ -50,6 +64,13 @@ console.log(`computer.test: ${checks} checks passed`);
     const bad = said.filter((l) => /\bGPU\b/.test(l));
     check(bad.length === 0, `${page} says "GPU": ${bad.join(" | ")}`);
   }
+}
+
+// R16: the Scan check panel takes its words from noCheckCallout (no "Check can't be used" of its own)
+{
+  const fs = (await import(["node", "fs"].join(":"))) as { readFileSync: (u: URL, enc: "utf8") => string };
+  const panel = fs.readFileSync(new URL("../pages/viewer/CheckPanel.tsx", import.meta.url), "utf8");
+  check(!/Check can't be used/.test(panel) && /noCheckCallout\(/.test(panel), "CheckPanel says “Scan check can't be used…” from noCheckCallout");
 }
 
 console.log(`computer.test (pages): ${checks} checks passed`);

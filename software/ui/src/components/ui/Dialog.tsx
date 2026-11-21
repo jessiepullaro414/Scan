@@ -7,6 +7,13 @@ import { TextInput } from "./Form";
 
 const FOCUSABLE = 'a[href],button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])';
 
+/** Where the focus goes when a dialog opens: the first `data-autofocus` control that can take it, else the first control. */
+function initialFocus(p: HTMLElement): HTMLElement | null {
+  const usable = (el: HTMLElement) => el.matches(FOCUSABLE) && !el.hasAttribute("disabled") && el.getAttribute("aria-disabled") !== "true";
+  const marked = Array.from(p.querySelectorAll<HTMLElement>("[data-autofocus]")).find(usable);
+  return marked ?? p.querySelector<HTMLElement>(FOCUSABLE);
+}
+
 /** Accessible modal: focus trap, Esc / backdrop to close, focus restored on close. */
 export function Dialog({
   open,
@@ -39,7 +46,9 @@ export function Dialog({
     if (!open) return;
     const before = document.activeElement as HTMLElement | null;
     const p = panel.current;
-    const first = p?.querySelector<HTMLElement>("[data-autofocus]") ?? p?.querySelector<HTMLElement>(FOCUSABLE);
+    // UX_PLAN R4: a disabled "autofocus" button (an action waiting for its numbers) can't take the focus, which then
+    // stayed on the page behind; take the first one that can, else the first control, else the panel itself
+    const first = p ? initialFocus(p) : null;
     (first ?? p)?.focus();
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
@@ -48,10 +57,17 @@ export function Dialog({
         if (dismissRef.current) closeRef.current();
       } else if (e.key === "Tab" && p) {
         const items = Array.from(p.querySelectorAll<HTMLElement>(FOCUSABLE)).filter((el) => el.offsetParent !== null);
-        if (!items.length) return;
+        if (!items.length) {
+          e.preventDefault();
+          return;
+        }
         const firstEl = items[0];
         const lastEl = items[items.length - 1];
-        if (e.shiftKey && document.activeElement === firstEl) {
+        if (!p.contains(document.activeElement)) {
+          // the focus is outside (a control it was on went away): bring it back in, never to the page behind
+          e.preventDefault();
+          (e.shiftKey ? lastEl : firstEl).focus();
+        } else if (e.shiftKey && (document.activeElement === firstEl || document.activeElement === p)) {
           e.preventDefault();
           lastEl.focus();
         } else if (!e.shiftKey && document.activeElement === lastEl) {

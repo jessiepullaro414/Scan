@@ -1132,6 +1132,8 @@ class MockBackend {
       wall_time_s: quality === "best" ? 148.4 : quality === "standard" ? 74.2 : 21.8,
       ...(own ? { health_status: mockScanStatus(own) } : {}),
       ...mockPathCheck(s.name, n), // the engine's own words (ENGINE_PLAN X0a)
+      // a merged scan's report carries the merge's notes (UX_PLAN R1), as its summary does
+      ...(s.merged_from?.length && Array.isArray(s.result?.report?.warnings) ? { warnings: s.result.report.warnings, path_check: null } : {}),
     };
   }
 

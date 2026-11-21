@@ -265,7 +265,7 @@ export function keptLine(keeps: KeepKept[]): string {
 
 /** The plan in one line: how much it frees, or why it cannot. */
 export function planLine(plan: ScanKeepPlan): string {
-  if (!plan.ok) return plan.refusal ? `${capital(plan.refusal.detail)}.` : "This scan cannot be moved.";
+  if (!plan.ok) return plan.refusal ? endStop(capital(plan.refusal.detail)) : "This scan cannot be moved.";
   return plan.frees_bytes > 0 ? `Frees ${fmtBytes(plan.frees_bytes)}.` : "Frees nothing (nothing of this is on disk).";
 }
 
@@ -274,7 +274,7 @@ export function projectPlanLines(plan: ProjectKeepPlan): { text: string; skipped
   const n = plan.n_scans;
   const text =
     n > 0 ? `Frees ${fmtBytes(plan.frees_bytes)} on ${n} scan${n === 1 ? "" : "s"}.` : "Nothing to free: no scan of this project has any of this on disk.";
-  const skipped = plan.scans.filter((s) => !s.ok && s.refusal).map((s) => `${s.name}: ${s.refusal!.detail}.`);
+  const skipped = plan.scans.filter((s) => !s.ok && s.refusal).map((s) => `${s.name}: ${endStop(s.refusal!.detail)}`);
   return { text, skipped };
 }
 
@@ -314,11 +314,21 @@ export function projectDoneLines(r: ProjectKeepResult): { text: string; failed: 
   const moved = r.results.filter((x) => x.ok).length;
   // the engine's words: "There is nothing to free: …" (older engines: "nothing to free…"); not a failure, not listed
   const nothing = (detail: string) => /^(there is )?nothing to free/i.test(detail);
-  const stop = (s: string) => (/[.!?…]$/.test(s) ? s : `${s}.`);
-  const failed = r.results.filter((x) => !x.ok && x.error && !nothing(x.error.detail)).map((x) => `${x.name}: ${stop(x.error!.detail)}`);
+  const failed = r.results.filter((x) => !x.ok && x.error && !nothing(x.error.detail)).map((x) => `${x.name}: ${endStop(x.error!.detail)}`);
   return { text: `Freed ${fmtBytes(r.freed_bytes)} on ${fmtInt(moved)} scan${moved === 1 ? "" : "s"}.`, failed };
 }
 
 function capital(s: string): string {
   return s ? s[0].toUpperCase() + s.slice(1) : s;
+}
+
+/** A sentence with one full stop at its end (the server's sentences already have theirs: UX_PLAN R11). */
+export function endStop(s: string): string {
+  const t = s.trim();
+  return !t || /[.!?…]$/.test(t) ? t : `${t}.`;
+}
+
+/** The hint under a refused plan, as one sentence. */
+export function hintLine(hint: string | null | undefined): string {
+  return hint ? endStop(capital(hint)) : "";
 }

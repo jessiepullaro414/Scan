@@ -223,6 +223,11 @@ export type Job = {
   created: string;
   /** Extra (F4): the pass over the recording's frames running now; absent between passes. */
   frames?: JobFrames | null;
+  /** Extra (UX_PLAN R2; `process_scan`, and `process_recipe` with scope "all"): the scan's earlier mesh is still its
+   * own (while the job runs, and after a cancel or a failure). */
+  mesh_kept?: boolean;
+  /** Extra (recipes): "all" or "edits". */
+  scope?: string | null;
 };
 
 /** A job's frame pass: which stage, frames done of total, and its rate since the first frame (null until known). */
@@ -825,6 +830,9 @@ export type ProcessState = {
   } | null;
   busy: string | null; // e.g. "Filling holes…" while an edit or stage job runs
   job: Job | null; // the running job of this scan, if any
+  /** Extra (UX_PLAN R2): the stages of the run "Make mesh again" is building, while it runs; `stages` above stay the
+   * current mesh's until the run takes its place. Absent or null otherwise (and from an older engine). */
+  making?: { stages: Partial<Record<StageId, { state: StageState; summary: string | null }>> } | null;
 };
 
 export type RecipeSettings = { quality: ProcessQuality; straighten: "auto" | "off"; refine?: "auto" | "off"; voxel_mm: number | null };

@@ -12,7 +12,8 @@ check(failedLine("too few frames tracked", false) === "Failed: too few frames tr
 // found in review: a reason that starts with an abbreviation keeps its capitals ("iMU" was shown)
 check(failedLine("IMU data is missing.", false) === "Failed: IMU data is missing.", failedLine("IMU data is missing.", false));
 check(failedLine("A frame could not be read", false) === "Failed: a frame could not be read.", "a one-letter first word is lowered");
-check(failedLine(null, true) === "Meshing failed. Make mesh again, or at Preview quality.", "no reason given");
-check(failedLine("  ", false) === "Meshing failed.", "an empty reason");
+// UX_PLAN R12: "Making the mesh", not "Meshing" (expectations changed with the words)
+check(failedLine(null, true) === "Making the mesh failed. Make mesh again, or at Preview quality.", "no reason given");
+check(failedLine("  ", false) === "Making the mesh failed.", "an empty reason");
 
 console.log(`scanStatus.test: ${checks} checks passed`);

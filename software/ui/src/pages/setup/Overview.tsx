@@ -19,7 +19,7 @@ import { Callout, KeyValue, Section } from "../../components/ui/Layout";
 import { overviewStep } from "../../lib/calibHealth";
 import { fmtDateTime, fmtFixed, fmtRelative, fmtSize } from "../../lib/format";
 import { navigate, paths } from "../../lib/router";
-import { firstUnfinished, minutesLeft, setupProgress, STATE_LABEL, STEP_META, STEP_ORDER } from "../../lib/setup";
+import { boardLine, firstUnfinished, minutesLeft, setupProgress, STATE_LABEL, STEP_META, STEP_ORDER } from "../../lib/setup";
 import { cn, useTicker } from "../../lib/util";
 import { isSessionActive, useCalib } from "../../store/calib";
 import { useDevice } from "../../store/device";
@@ -120,7 +120,7 @@ export function Overview() {
           <div className="mb-1.5 text-xs font-medium text-subtle">Setup</div>
           <h1 className="font-display text-2xl font-semibold tracking-[-0.01em] text-fg">Set up your scanner</h1>
           <p className="mt-1 max-w-2xl text-sm text-muted">
-            Seven short steps turn the parts on your bench into a measuring tool. Every step says why it matters, and any one of them can be redone on
+            A few short steps turn the parts on your bench into a measuring tool. Every step says why it matters, and any one of them can be redone on
             its own.
           </p>
         </div>
@@ -251,7 +251,7 @@ export function Overview() {
               ],
               cal.image_size ? ["Image size", fmtSize(cal.image_size[0], cal.image_size[1], "px")] : null,
               cal.baseline_mm !== null ? ["Distance between the cameras", `${fmtFixed(cal.baseline_mm, 2)}\u202fmm`] : null,
-              ["Board", <span className="text-xs">{setup.board.describe}{setup.board.scale !== 1 ? `, measured scale ${fmtFixed(setup.board.scale * 100, 2)}\u202f%` : ""}</span>],
+              ["Board", <span className="text-xs">{boardLine(setup.board)}</span>],
             ]}
           />
         </Section>

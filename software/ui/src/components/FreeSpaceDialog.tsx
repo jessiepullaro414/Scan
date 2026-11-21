@@ -7,7 +7,7 @@
  * removed before the user confirms. The words come from `lib/keepMode.ts`.
  */
 import { HardDrive } from "lucide-react";
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { api, ApiError } from "../api/http";
 import type { Project, ProjectKeepPlan, Scan, ScanKeepPlan } from "../api/types";
 import { fmtBytes } from "../lib/format";
@@ -18,6 +18,7 @@ import {
   confirmStandard,
   confirmThin,
   doneLine,
+  hintLine,
   keptLine,
   lossLines,
   planLine,
@@ -44,11 +45,20 @@ function firstChoice(scan: Scan | null): Choice {
 
 const isProjectPlan = (p: ScanKeepPlan | ProjectKeepPlan): p is ProjectKeepPlan => "scans" in p;
 
-/** Whether the plan can be carried out, and what it frees. */
+/** Whether the plan can be carried out and frees something, and what it frees (0 when it can't: UX_PLAN R11, the
+ * footer must not offer "Free 196 MB" beside a choice whose own line says it cannot be done). */
 function planState(p: ScanKeepPlan | ProjectKeepPlan | ApiError | undefined): { ok: boolean; frees: number } {
   if (!p || p instanceof ApiError) return { ok: false, frees: 0 };
-  if (isProjectPlan(p)) return { ok: p.n_scans > 0, frees: p.frees_bytes };
-  return { ok: p.ok, frees: p.frees_bytes };
+  const ok = (isProjectPlan(p) ? p.n_scans > 0 : p.ok) && p.frees_bytes > 0;
+  return { ok, frees: ok ? p.frees_bytes : 0 };
+}
+
+/** The choice to start on once every plan is known (R4, R11): the preferred one if it can apply, else the next that
+ * can (lighter first, then heavier), else null (nothing applies: the focus goes to Cancel). */
+function usableChoice(preferred: Choice, plans: Plans): Choice | null {
+  const i = KEEP_CHOICES.indexOf(preferred);
+  const order = [...KEEP_CHOICES.slice(i), ...KEEP_CHOICES.slice(0, i).reverse()];
+  return order.find((c) => planState(plans[c]).ok) ?? null;
 }
 
 export function FreeSpaceDialog({
@@ -70,10 +80,34 @@ export function FreeSpaceDialog({
   const [asking, setAsking] = useState(false);
   const [busy, setBusy] = useState(false);
   const sid = scan?.id ?? null;
+  // R4, R11: once every plan is known, start on a choice that can apply (unless the user picked one already) and put
+  // the focus on it, or on Cancel when none can
+  const touched = useRef(false);
+  const settled = useRef(false);
+  const group = useRef<HTMLDivElement>(null);
+  const cancelBtn = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    if (!open || settled.current || !KEEP_CHOICES.every((c) => plans[c])) return;
+    settled.current = true;
+    if (touched.current) return; // the user picked a choice already: theirs stays, and so does the focus
+    const pick = usableChoice(mode, plans);
+    if (pick && pick !== mode) setMode(pick);
+    // only move a focus the user has not moved on: still on a choice, or nowhere in the dialog
+    const dialog = group.current?.closest('[role="dialog"]');
+    const focusNow = document.activeElement;
+    if (dialog && focusNow && dialog.contains(focusNow) && focusNow !== dialog && !group.current?.contains(focusNow)) return;
+    requestAnimationFrame(() => {
+      if (pick) group.current?.querySelector<HTMLElement>(`[data-choice="${pick}"]`)?.focus();
+      else cancelBtn.current?.focus();
+    });
+  }, [open, plans, mode]);
 
   useEffect(() => {
     if (!open) return;
     let live = true;
+    touched.current = false;
+    settled.current = false;
     setPlans({});
     setMode(firstChoice(scan));
     for (const m of KEEP_CHOICES) {
@@ -130,11 +164,10 @@ export function FreeSpaceDialog({
         width={560}
         footer={
           <>
-            <Button variant="ghost" onClick={onClose} disabled={busy}>
+            <Button ref={cancelBtn} variant="ghost" onClick={onClose} disabled={busy}>
               Cancel
             </Button>
             <Button
-              data-autofocus
               variant={needsSecondYes ? "danger" : "primary"}
               icon={HardDrive}
               loading={busy}
@@ -146,7 +179,7 @@ export function FreeSpaceDialog({
           </>
         }
       >
-        <div role="radiogroup" aria-label="What to keep" className="space-y-2">
+        <div ref={group} role="radiogroup" aria-label="What to keep" className="space-y-2">
           {KEEP_CHOICES.map((m) => {
             const p = plans[m];
             const line = !p ? "Working out what this frees…" : p instanceof ApiError ? p.detail : isProjectPlan(p) ? projectPlanLines(p).text : planLine(p);
@@ -156,8 +189,13 @@ export function FreeSpaceDialog({
                 key={m}
                 type="button"
                 role="radio"
+                data-choice={m}
+                data-autofocus={mode === m || undefined}
                 aria-checked={mode === m}
-                onClick={() => setMode(m)}
+                onClick={() => {
+                  touched.current = true;
+                  setMode(m);
+                }}
                 className={cn(
                   "block w-full rounded-lg border px-3 py-2.5 text-left transition-colors",
                   mode === m ? "border-accent bg-surface-2" : "border-line hover:bg-surface-2",
@@ -206,7 +244,7 @@ function PlanDetails({ plan }: { plan: ScanKeepPlan | ProjectKeepPlan }) {
     );
   }
   if (!plan.ok) {
-    return plan.refusal?.hint ? <p className="mt-4 text-sm text-muted">{plan.refusal.hint[0].toUpperCase() + plan.refusal.hint.slice(1)}.</p> : null;
+    return plan.refusal?.hint ? <p className="mt-4 text-sm text-muted">{hintLine(plan.refusal.hint)}</p> : null;
   }
   const kept = keptLine(plan.keeps);
   const thin = thinnedLine(plan.thinned, true);

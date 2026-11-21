@@ -12,7 +12,7 @@ import type { EditBody, HoleOutline, MeshStats, SmoothMethod } from "../../api/t
 import { Button } from "../../components/ui/Button";
 import { Segmented, Slider, Switch } from "../../components/ui/Form";
 import { Tooltip } from "../../components/ui/Popover";
-import { fmtFixed, fmtInt, withUnit } from "../../lib/format";
+import { fmtFixed, fmtInt, fmtNum, withUnit } from "../../lib/format";
 import { holeSize } from "../../lib/recipes";
 import { SMOOTH_DEFAULTS, smoothEdit, type SmoothWhere } from "../../lib/smoothEdit";
 import { cn } from "../../lib/util";
@@ -277,7 +277,7 @@ export function EditsPanel({
               label="Make it watertight"
               description={
                 stats?.border_mm != null
-                  ? `Closes the outer edge too (${fmtFixed(stats.border_mm, 0)}\u202fmm around), for a part scanned all round: ready to 3D print.`
+                  ? `Closes the outer edge too (${fmtNum(stats.border_mm, 0)}\u202fmm around), for a part scanned all round: ready to 3D print.`
                   : "Closes the outer edge too, for a part scanned all round: ready to 3D print."
               }
               checked={watertight}

@@ -65,7 +65,7 @@ export function DoneStep() {
             </Button>
           }
         >
-          You can scan already if the stereo step is done; the others make scans better.
+          You can scan already once the Cameras step is done; the others make scans better.
         </Callout>
       ) : null}
 

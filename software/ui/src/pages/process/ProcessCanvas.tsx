@@ -39,6 +39,7 @@ import { CheckMark } from "../viewer/CheckMark";
 import type { CheckLit } from "../viewer/useCheck";
 import { BVH_SPLIT_CENTER, DeviationProbe, LaserProbe, Model, VIEW_DIR, type Shading } from "../viewer/ViewerCanvas";
 import { regionTriangles } from "../../lib/fits";
+import { fmtInt, fmtNum } from "../../lib/format";
 import { highlightOf, type LoadedMesh } from "./mesh";
 import { buildGrid, buildScreenMap, polygonMask, type DepthImage, type ScreenMap, type SelectMode } from "./selection";
 
@@ -340,7 +341,7 @@ function HoleHover({ holes, label, onHover }: { holes: HoleOutline[]; label: Ref
         if (i === null) box.style.display = "none";
         else {
           const h = holes[i];
-          box.textContent = `Hole: ${h.perimeter_mm.toFixed(1)}\u202fmm around · ${h.n_edges} edges`;
+          box.textContent = `Hole: ${fmtNum(h.perimeter_mm, 1)}\u202fmm around · ${fmtInt(h.n_edges)} edges`;
           box.style.display = "block";
           // beside the pointer, flipped to stay inside the view
           const pw = box.parentElement?.clientWidth ?? Infinity;

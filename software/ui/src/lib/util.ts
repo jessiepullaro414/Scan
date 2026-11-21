@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { hotkeyAllowed, targetKind } from "./hotkeys.ts";
 
 /** Join class names, skipping falsy values. */
 export function cn(...parts: Array<string | false | null | undefined>): string {
@@ -59,8 +60,25 @@ export function keyName(e: KeyboardEvent): string {
 }
 
 /**
- * Global keyboard shortcuts. Ignored while typing in a field, while a modal dialog is
- * open, and with Ctrl/Alt/Meta held (those belong to the browser and the OS).
+ * Whether the focus came from a click (true) or from the keyboard (false). The browser's own `:focus-visible` can't
+ * tell: it turns on at the first key pressed after a click, before the page sees that key.
+ */
+let focusByPointer = false;
+if (typeof window !== "undefined") {
+  window.addEventListener("pointerdown", () => (focusByPointer = true), true);
+  window.addEventListener(
+    "keydown",
+    (e) => {
+      if (e.key === "Tab") focusByPointer = false;
+    },
+    true,
+  );
+}
+
+/**
+ * Global keyboard shortcuts. Ignored while a modal dialog is open, with Ctrl/Alt/Meta held (those belong to the
+ * browser and the OS), and where the focused control uses the key itself (UX_PLAN R3, `lib/hotkeys.ts`): a text
+ * field takes every key; a focused button, switch, link or menu item keeps Enter and Space (Esc and "?" still work).
  */
 export function useHotkeys(map: HotkeyMap, enabled = true): void {
   const ref = useRef(map);
@@ -69,9 +87,12 @@ export function useHotkeys(map: HotkeyMap, enabled = true): void {
     if (!enabled) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.defaultPrevented || e.ctrlKey || e.metaKey || e.altKey || e.repeat) return;
-      if (isTypingTarget(e.target) || isModalOpen()) return;
-      const fn = ref.current[keyName(e)];
+      if (isModalOpen()) return;
+      const key = keyName(e);
+      const fn = ref.current[key];
       if (!fn) return;
+      const target = e.target instanceof HTMLElement ? e.target : null;
+      if (!hotkeyAllowed(key, targetKind(target), !focusByPointer)) return;
       e.preventDefault();
       fn(e);
     };

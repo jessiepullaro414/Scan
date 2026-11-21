@@ -9,6 +9,7 @@ import type { CalibKind } from "../../../api/types";
 import { Button, IconButton } from "../../../components/ui/Button";
 import { Switch } from "../../../components/ui/Form";
 import { Tooltip } from "../../../components/ui/Popover";
+import { fmtInt, NNBSP } from "../../../lib/format";
 import { laserRows, TWO_LASERS } from "../../../lib/laserSet";
 import { asPercent, gridPercent, KIND_META } from "../../../lib/setup";
 import { unlockAudio } from "../../../lib/sound";
@@ -177,17 +178,18 @@ export function BoardStat({ kind }: { kind: CalibKind }) {
     <Block title="Board" icon={Ruler}>
       <div className="flex items-baseline gap-4">
         <div>
-          <span className={cn("font-mono text-lg font-semibold tnum", d === null ? "text-subtle" : inRange ? "text-fg" : "text-warn")}>{d ?? "–"}</span>
-          <span className="ml-1 text-xs text-subtle">mm</span>
+          {/* R19: a real narrow space before the unit (read as "392 mm", not "392mm") */}
+          <span className={cn("font-mono text-lg font-semibold tnum", d === null ? "text-subtle" : inRange ? "text-fg" : "text-warn")}>{d === null ? "–" : fmtInt(d)}</span>
+          <span className="text-xs text-subtle">{NNBSP}mm</span>
         </div>
         <div>
           <span className="font-mono text-lg font-semibold text-fg tnum">{tilt ?? "–"}</span>
-          <span className="ml-0.5 text-xs text-subtle">° tilt</span>
+          <span className="text-xs text-subtle">° tilt</span>
         </div>
         {common !== null ? (
-          <div className="ml-auto text-right">
-            <span className={cn("font-mono text-lg font-semibold tnum", common >= 8 ? "text-fg" : "text-warn")}>{common}</span>
-            <span className="ml-1 text-xs text-subtle">common</span>
+          <div className="ml-auto text-right" title="Board corners both cameras see">
+            <span className={cn("font-mono text-lg font-semibold tnum", common >= 8 ? "text-fg" : "text-warn")}>{fmtInt(common)}</span>
+            <span className="text-xs text-subtle"> corners in both</span>
           </div>
         ) : null}
       </div>
@@ -223,7 +225,7 @@ export function LaserStat() {
           <li key={r.key} className="flex items-center gap-2.5">
             <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ background: r.color }} aria-hidden />
             <span className="flex-1 text-sm text-fg">{r.label}</span>
-            <span className="font-mono text-xs text-muted tnum">{r.points} pts</span>
+            <span className="font-mono text-xs text-muted tnum">{fmtInt(r.points)} points</span>
             <span
               className={cn("inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[10.5px] font-semibold", r.ok ? "bg-ok-soft text-ok" : "bg-warn-soft text-warn")}
               aria-label={r.ok ? `${r.label}: on the white margin` : `${r.label}: misses the white margin`}

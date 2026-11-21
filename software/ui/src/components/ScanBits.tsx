@@ -3,7 +3,7 @@ import { Box, ChevronDown, Gauge, SlidersHorizontal, Sparkles, Wand, type Lucide
 import { useState } from "react";
 import type { Job, ProcessQuality, Scan } from "../api/types";
 import { jobEstimate } from "../lib/estimate";
-import { fmtFixed, fmtInt } from "../lib/format";
+import { fmtFixed, fmtInt, fmtPct } from "../lib/format";
 import { QUALITIES, QUALITY_TEXT } from "../lib/quality";
 import { navigate, paths } from "../lib/router";
 import { cn } from "../lib/util";
@@ -16,7 +16,7 @@ import { Menu } from "./ui/Popover";
 const STATUS: Record<Scan["status"], { label: string; tone: BadgeTone }> = {
   recording: { label: "Recording", tone: "rec" },
   recorded: { label: "Recorded", tone: "neutral" },
-  processing: { label: "Meshing", tone: "accent" },
+  processing: { label: "Making the mesh", tone: "accent" }, // R12: the table's words, not "Meshing"
   processed: { label: "Mesh ready", tone: "ok" },
   failed: { label: "Failed", tone: "danger" },
 };
@@ -120,8 +120,8 @@ export function JobProgress({
   job,
   compact,
   className,
-  label = "Meshing progress",
-  cancelTitle = "Stop meshing. The raw recording is kept.",
+  label = "Making the mesh",
+  cancelTitle = "Stop making the mesh. The recording is kept.",
   icon: Icon = Box,
 }: {
   job: Job;
@@ -143,7 +143,7 @@ export function JobProgress({
         <span className="min-w-0 flex-1 truncate text-muted" title={job.message}>
           {job.state === "queued" ? "Waiting to start…" : job.message || "Working…"}
         </span>
-        <span className="shrink-0 font-mono text-fg tnum">{job.state === "queued" ? "" : `${pct}%`}</span>
+        <span className="shrink-0 font-mono text-fg tnum">{job.state === "queued" ? "" : fmtPct(pct / 100)}</span>
       </div>
       <div className="flex items-center gap-2">
         <ProgressBar value={job.state === "queued" ? null : job.progress} label={label} />

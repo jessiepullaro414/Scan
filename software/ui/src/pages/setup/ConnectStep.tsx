@@ -24,7 +24,7 @@ import { ProgressBar, Skeleton, Spinner } from "../../components/ui/Feedback";
 import { Switch } from "../../components/ui/Form";
 import { Callout, Code, Section } from "../../components/ui/Layout";
 import { sentence } from "../../api/http";
-import { fmtSize } from "../../lib/format";
+import { fmtPct, fmtSize } from "../../lib/format";
 import { cn } from "../../lib/util";
 import { SOURCE_LABEL, useDevice, useSimDemoReady } from "../../store/device";
 import { useJobs } from "../../store/jobs";
@@ -248,7 +248,7 @@ function Cameras() {
         </div>
       ) : devices.cameras.length === 0 ? (
         <Callout tone="warn" icon={TriangleExclamationPoint} title="No camera found">
-          Plug the stereo camera into a USB 3 port (blue inside), close other apps that use a camera (Zoom, Teams, the Camera app), then Refresh.
+          Plug the scanner's camera cable into a USB 3 port (blue inside), close other apps that use a camera (Zoom, Teams, the Camera app), then Refresh.
         </Callout>
       ) : (
         <>
@@ -407,10 +407,11 @@ function SimulatorCard() {
           <div className="mb-1.5 flex items-center gap-2 text-sm">
             <Spinner size={14} className="text-accent" />
             <span className="font-medium text-fg">{busy}</span>
-            <span className="min-w-0 flex-1 truncate text-xs text-muted">{simJob?.message || "This happens once; next time the simulator starts right away."}</span>
-            {simJob ? <span className="font-mono text-sm text-fg tnum">{Math.round(simJob.progress * 100)}%</span> : null}
+            <span className="min-w-0 flex-1 truncate text-xs text-muted">{/* R13: the simulator's line only while the simulator is being prepared, not while a camera connects */}
+              {simJob?.message || (simJobId && device?.source !== "camera" && pendingSource !== "camera" ? "This happens once; next time the simulator starts right away." : "")}</span>
+            {simJob ? <span className="font-mono text-sm text-fg tnum">{fmtPct(simJob.progress)}</span> : null}
           </div>
-          <ProgressBar value={simJob ? simJob.progress : null} label="Simulator progress" />
+          <ProgressBar value={simJob ? simJob.progress : null} label={simJobId ? "Simulator progress" : "Connecting"} />
         </div>
       ) : !simOn && !ready ? (
         <p className="mt-3 text-xs text-subtle">The first start builds the simulator's demo recording: about a minute, once.</p>

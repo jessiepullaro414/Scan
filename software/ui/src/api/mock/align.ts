@@ -575,6 +575,9 @@ export class MockAlign {
                 warnings,
               };
             });
+        // the engine writes the merge's notes into the merged scan's report too (seen on the real engine, UX_PLAN R1)
+        const notes = tables.flatMap((t) => t.warnings);
+        if (notes.length && scan.result) scan.result.report = { ...scan.result.report, warnings: notes };
         const result: MergeResult = {
           project_id: p.id,
           scan_id: id,

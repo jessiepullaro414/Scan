@@ -55,6 +55,15 @@ export function fmtMm(n: number | null | undefined, digits = 0): string {
   return fmtUnit(n, "mm", digits);
 }
 
+/**
+ * A mesh detail, one way everywhere (UX_PLAN R19: "0.50 mm" stood beside "0.5 mm"): one decimal, two only when the
+ * value needs them: "1.0 mm", "0.5 mm", "0.25 mm".
+ */
+export function fmtDetailMm(n: number | null | undefined): string {
+  if (!finite(n)) return "–";
+  return fmtMm(n, Math.abs(Math.round(n * 10) - n * 10) > 1e-6 ? 2 : 1);
+}
+
 /** An image or sheet size: "1280 × 800" (with the unit when given: "210 × 297 mm"); sizes are not grouped. */
 export function fmtSize(w: number, h: number, unit = ""): string {
   const side = (n: number) => (Number.isFinite(n) ? String(Math.round(n)) : "–");

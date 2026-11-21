@@ -25,8 +25,12 @@ import { Field, Segmented, Select, TextInput } from "../../components/ui/Form";
 import { fmtClock, fmtCompact, fmtFixed, fmtInt, fmtMm, fmtSize, NNBSP, withUnit } from "../../lib/format";
 import { describeTracking } from "../../lib/tracking";
 import { CHOOSE_PROJECT_TEXT } from "../../lib/scanProject";
-import { healthView, loadedLine } from "../../lib/calibHealth";
+import { calibInUse, healthView, loadedLine } from "../../lib/calibHealth";
 import { useDeviceHealth } from "../../components/CalibHealth";
+import { calibOpen } from "../../lib/calibOpen";
+import { useCalib } from "../../store/calib";
+import { useSetup } from "../../store/setup";
+import { setupTimeText } from "../../lib/setup";
 import { navigate, paths } from "../../lib/router";
 import { cn, useTicker } from "../../lib/util";
 import { SOURCE_LABEL, useDevice } from "../../store/device";
@@ -188,7 +192,10 @@ export function ScanSetup({
   const [creating, setCreating] = useState(false);
   const connected = !!device?.connected;
   const calibrated = !!device?.calibration?.loaded;
+  const openSession = calibOpen(useCalib((s) => s.session));
+  const setupTime = setupTimeText(useSetup((s) => s.setup)); // R20: the same number as Home's
   const loaded = loadedLine(healthView(useDeviceHealth())); // U46
+  const inUse = calibInUse(device);
   const nameId = useId();
   const projId = useId();
   const pickRef = useRef<HTMLSelectElement>(null);
@@ -233,7 +240,7 @@ export function ScanSetup({
           ok={connected && calibrated && !loaded.warn}
           warn={connected && (!calibrated || loaded.warn)}
           action={
-            connected && !calibrated ? (
+            connected && !calibrated && !openSession ? (
               <Button size="xs" variant="primary" icon={Crosshair} onClick={() => navigate(paths.setup("stereo"))}>
                 Calibrate in Setup
               </Button>
@@ -242,12 +249,20 @@ export function ScanSetup({
         >
           {!connected ? (
             <span className="text-muted">Calibration</span>
+          ) : !calibrated && openSession ? (
+            // R9: with the simulator an open session unloads the calibration: say what is open, not "none yet"
+            openSession.reason
           ) : calibrated ? (
-            loaded.text
+            // R20: the simulator's demo scans with its own calibration: the same word as the device chip
+            inUse?.demo ? (
+              <span title={inUse.line}>{inUse.short}</span>
+            ) : (
+              loaded.text
+            )
           ) : (
             <>
               No calibration yet
-              <div className="text-xs text-muted">The setup wizard calibrates the scanner in about 10 minutes.</div>
+              <div className="text-xs text-muted">The setup wizard calibrates the scanner{setupTime ? ` in ${setupTime}` : ""}.</div>
             </>
           )}
         </Check1>
@@ -432,7 +447,7 @@ export function LiveStats() {
       {fpsLow && live ? (
         <div className="mt-3 flex gap-2 text-xs text-warn">
           <TriangleExclamationPoint size={13} className="mt-px shrink-0" aria-hidden />
-          The live pipeline is slow on this computer. Move slower; the recording still keeps every frame.
+          The live preview is slow on this computer. Move more slowly; the recording still keeps every frame.
         </div>
       ) : null}
     </PanelSection>

@@ -65,7 +65,7 @@ export function PresetHelp({ preset, side = "top" }: { preset: Preset; side?: "t
 const THIN_WALLS: { value: ThinWalls; label: string; title: string }[] = [
   { value: "auto", label: "Auto", title: "On for scans without markers, as the app's setting does" },
   { value: "on", label: "On", title: "Keeps thin walls and edges from swelling" },
-  { value: "off", label: "Off", title: "The mesh model without the thin-wall band" },
+  { value: "off", label: "Off", title: "Makes the mesh without it: thin walls and edges can come out thicker" },
 ];
 
 /** One value: its label, a control to change it, where it comes from, and a way back to the preset's value. */

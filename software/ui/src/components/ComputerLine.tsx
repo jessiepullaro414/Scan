@@ -7,9 +7,9 @@ import { computerLine } from "../lib/computer";
 import { cn } from "../lib/util";
 import { useConnection } from "../store/connection";
 
-export function ComputerLine({ className, compact = false }: { className?: string; compact?: boolean }) {
+export function ComputerLine({ className, compact = false, name = false }: { className?: string; compact?: boolean; name?: boolean }) {
   const health = useConnection((s) => s.health);
-  const line = computerLine((health?.engine as { compute?: unknown } | undefined)?.compute);
+  const line = computerLine((health?.engine as { compute?: unknown } | undefined)?.compute, { name });
   if (!line) return null;
   const Icon = line.tone === "ok" ? MonitorCheck : Cpu;
   return (

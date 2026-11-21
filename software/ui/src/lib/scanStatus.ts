@@ -8,6 +8,6 @@ export function failedLine(error: string | null | undefined, remakable: boolean)
   const why = (error ?? "").trim().replace(/[.\s]+$/, "");
   // the first word is lowered to follow "Failed:", unless it is an abbreviation ("IMU", "GPU", "STL")
   const keep = /^[A-Z][A-Z0-9]/.test(why);
-  const head = why ? `Failed: ${keep ? why : why.charAt(0).toLowerCase() + why.slice(1)}.` : "Meshing failed.";
+  const head = why ? `Failed: ${keep ? why : why.charAt(0).toLowerCase() + why.slice(1)}.` : "Making the mesh failed.";
   return remakable ? `${head} Make mesh again, or at Preview quality.` : head;
 }

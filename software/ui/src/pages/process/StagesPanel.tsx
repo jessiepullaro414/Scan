@@ -12,12 +12,12 @@ import { Badge } from "../../components/ui/Badge";
 import { Button } from "../../components/ui/Button";
 import { ConfirmDialog } from "../../components/ui/Dialog";
 import { Segmented } from "../../components/ui/Form";
-import { fmtDateTime, fmtFixed, fmtInt, fmtMm, fmtRelative } from "../../lib/format";
+import { fmtDateTime, fmtDetailMm, fmtFixed, fmtInt, fmtRelative } from "../../lib/format";
 import { stageBlock, type StageAction } from "../../lib/keepMode";
 import { effectiveValue } from "../../lib/presets";
 import { DEFAULT_QUALITY, QUALITIES, QUALITY_TEXT, normalizeQuality, qualityName } from "../../lib/quality";
-import { STAGE_TITLES } from "../../lib/stages";
-import { scanWarnings } from "../../lib/pathWarning";
+import { STAGE_TITLES, stageRunning, straightenSkippedLine } from "../../lib/stages";
+import { PATH_WARNING_TITLE, splitWarnings } from "../../lib/pathWarning";
 import { cn } from "../../lib/util";
 import { isActive, useJobs } from "../../store/jobs";
 import { presetKey, usePresets } from "../../store/presets";
@@ -99,8 +99,11 @@ function StageCard({
 }) {
   const meta = STAGES[id];
   const Icon = meta.icon;
-  const job = useStageJob(stage, state);
-  const running = stage.state === "running" || !!job;
+  // R22: "Running" only for the stage that runs (its own state, or the run being built says so); a finished stage
+  // whose job_id is the whole run's job is not
+  const running = stageRunning(stage.state, state.making?.stages?.[id] ?? null);
+  const stageJob = useStageJob(stage, state);
+  const job = running ? (stageJob ?? (state.job && isActive(state.job) ? state.job : null)) : null;
   return (
     <li className={cn("rounded-xl border bg-surface-2/50 p-3", running ? "border-accent-line" : "border-line")}>
       <div className="flex items-start gap-2.5">
@@ -178,7 +181,7 @@ export function StagesPanel({ pid, sid, state, busy, scan }: { pid: string; sid:
   const [confirm, setConfirm] = useState<{ stage: StageId; run: () => Promise<unknown> } | null>(null);
   const edits = state.edits.length;
   const tracked = track.state === "done";
-  const trackWarnings = scanWarnings(track); // ENGINE_PLAN X0a: the camera path's warning ([] for an older scan)
+  const trackWarnings = splitWarnings(track); // ENGINE_PLAN X0a: the camera path's warning (none for an older scan); R1
 
   /** Run now, or ask first when edits would be lost. */
   const go = (stage: StageId, run: () => Promise<unknown>) => {
@@ -187,9 +190,12 @@ export function StagesPanel({ pid, sid, state, busy, scan }: { pid: string; sid:
   };
 
   const loops = straighten.loops;
+  const skippedLine = straightenSkippedLine(straighten); // R22: not "Closed 48 loops" under "Skipped"
   const straightenDetails =
-    straighten.state === "done" || straighten.state === "skipped" ? (
-      loops && loops > 0 ? (
+    skippedLine ? (
+      <p className="text-xs text-muted">{skippedLine}</p>
+    ) : straighten.state === "done" || straighten.state === "skipped" ? (
+      loops && loops > 0 && straighten.state === "done" ? (
         <p className="text-xs text-fg">
           Closed <b className="font-semibold tnum">{fmtInt(loops)}</b> loop{loops === 1 ? "" : "s"}
           {straighten.correction_mm !== null ? (
@@ -222,7 +228,7 @@ export function StagesPanel({ pid, sid, state, busy, scan }: { pid: string; sid:
           runLabel={track.state === "none" ? "Run" : "Run again"}
           onRun={() => go("track", () => runStage(pid, sid, "track", { quality }))}
           details={
-            track.state === "done" && (track.tracked_pct !== null || track.quality || trackWarnings.length) ? (
+            track.state === "done" && (track.tracked_pct !== null || track.quality || trackWarnings.path.length || trackWarnings.other.length) ? (
               <>
                 {track.tracked_pct !== null || track.quality ? (
                   <p className="text-xs text-fg">
@@ -234,13 +240,19 @@ export function StagesPanel({ pid, sid, state, busy, scan }: { pid: string; sid:
                     {qualityName(track.quality) ? <span className="text-muted">{track.tracked_pct !== null ? " · " : ""}{qualityName(track.quality)}</span> : null}
                   </p>
                 ) : null}
-                {trackWarnings.map((w) => (
+                {trackWarnings.path.map((w) => (
                   // ENGINE_PLAN X0a: the camera path jumped where no hand moves; it warns only
                   <p key={w} className="flex gap-1.5 rounded-md border border-warn/30 bg-warn-soft px-2 py-1.5 text-xs leading-5 text-fg" role="note">
                     <TriangleExclamationPoint size={13} className="mt-[3px] shrink-0 text-warn" aria-hidden />
                     <span>
-                      <b className="font-semibold">Tracking may have slid.</b> {w}
+                      <b className="font-semibold">{PATH_WARNING_TITLE}.</b> {w}
                     </span>
+                  </p>
+                ))}
+                {trackWarnings.other.map((w) => (
+                  // UX_PLAN R1: any other note of the stage, without the path's title
+                  <p key={w} className="text-xs leading-5 text-muted" role="note">
+                    {w}
                   </p>
                 ))}
               </>
@@ -280,13 +292,13 @@ export function StagesPanel({ pid, sid, state, busy, scan }: { pid: string; sid:
           details={
             fuse.state === "done" && fuse.voxel_mm !== null && !fuse.summary ? (
               <p className="text-xs text-fg">
-                Built at mesh detail <b className="font-semibold tnum">{fmtFixed(fuse.voxel_mm, 1)}&#8239;mm</b>
+                Built at mesh detail <b className="font-semibold tnum">{fmtDetailMm(fuse.voxel_mm)}</b>
               </p>
             ) : null
           }
         >
           <Help>
-            At the mesh detail in the Preset box above: <b className="font-semibold text-fg tnum">{fmtMm(voxel, voxel < 1 ? 2 : 1)}</b>. Finer mesh detail keeps
+            At the mesh detail in the Preset box above: <b className="font-semibold text-fg tnum">{fmtDetailMm(voxel)}</b>. Finer mesh detail keeps
             smaller features; each halving makes about 4× the triangles.
           </Help>
         </StageCard>

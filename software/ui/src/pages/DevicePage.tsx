@@ -27,7 +27,9 @@ import { Button } from "../components/ui/Button";
 import { ProgressBar, Skeleton, Spinner } from "../components/ui/Feedback";
 import { Field, Switch, TextInput } from "../components/ui/Form";
 import { Callout, Code, KeyValue, Page, PageHeader, Section } from "../components/ui/Layout";
-import { fmtFixed, fmtSize, humanize } from "../lib/format";
+import { fmtFixed, fmtPct, fmtSize, humanize, withUnit } from "../lib/format";
+import { setupTimeText } from "../lib/setup";
+import { useSetup } from "../store/setup";
 import { laserLabel } from "../lib/laserSet";
 import { navigate, paths } from "../lib/router";
 import { cn, storage } from "../lib/util";
@@ -98,13 +100,14 @@ function ImuTemp({ c, label = "Motion sensor temperature", inset = false }: { c:
     <KeyValue
       dense
       className={inset ? "pl-7" : undefined}
-      rows={[[label, <span className="font-mono text-xs">{`${c.toFixed(1)} °C`}</span>]]}
+      rows={[[label, <span className="font-mono text-xs">{withUnit(fmtFixed(c, 1), "°C")}</span>]]}
     />
   );
 }
 
 export function DevicePage() {
   const device = useDevice((s) => s.device);
+  const setupTime = setupTimeText(useSetup((s) => s.setup)); // R20: the same number as Home's
   const pending = useDevice((s) => s.pending);
   const pendingSource = useDevice((s) => s.pendingSource);
   const connect = useDevice((s) => s.connect);
@@ -234,12 +237,7 @@ export function DevicePage() {
               <Field
                 label="Recording folder"
                 htmlFor="replay-path"
-                help={
-                  <>
-                    The folder with <Code>meta.json</Code> and <Code>frames.csv</Code>, e.g. one made by <Code>ohs record</Code> or{" "}
-                    <Code>ohs sim</Code>.
-                  </>
-                }
+                help="A folder the scanner recorded into: the “recording” folder of a scan in its project, or one the simulator made."
               >
                 <TextInput
                   id="replay-path"
@@ -263,12 +261,13 @@ export function DevicePage() {
                 <div className="min-w-0 flex-1">
                   <div className="text-sm font-medium text-fg">{busy}</div>
                   <div className="truncate text-xs text-muted">
-                    {simJob?.message || "This happens once. Next time the demo starts right away."}
+                    {/* R13: the simulator's line only while the simulator is being prepared, not while a camera connects */}
+                    {simJob?.message || (simJobId && pendingSource !== "camera" ? "This happens once; next time the simulator starts right away." : "")}
                   </div>
                 </div>
-                {simJob ? <span className="font-mono text-sm text-fg tnum">{Math.round(simJob.progress * 100)}%</span> : null}
+                {simJob ? <span className="font-mono text-sm text-fg tnum">{fmtPct(simJob.progress)}</span> : null}
               </div>
-              <ProgressBar className="mt-2.5" value={simJob ? simJob.progress : null} label="Simulator progress" />
+              <ProgressBar className="mt-2.5" value={simJob ? simJob.progress : null} label={simJobId ? "Simulator progress" : "Connecting"} />
             </div>
           ) : (
           <div className="flex min-h-10 flex-wrap items-center gap-3">
@@ -457,8 +456,8 @@ export function DevicePage() {
                   </Button>
                 }
               >
-                The setup wizard walks you through it in about 10 minutes: the cameras, then the lasers and the motion sensor. The new calibration loads
-                by itself when you save it.
+                The setup wizard walks you through it{setupTime ? ` in ${setupTime}` : ""}: the cameras, then the lasers and the motion sensor. The new
+                calibration loads by itself when you save it.
               </Callout>
             </div>
           )}

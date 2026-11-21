@@ -34,8 +34,35 @@ export function scanWarnings(report: unknown): string[] {
     .map((w) => asSentence(GPU_WORDS.reduce((t, [rx, word]) => t.replace(rx, word), w)));
 }
 
+/**
+ * The camera path's own sentence (`ohs/track/path_check.py`: "The camera path jumps by … tracking may have slid
+ * there."). Every other sentence of a report's `warnings` (a merge's notes about its table, for one) is not about the
+ * path (UX_PLAN R1).
+ */
+const PATH_SENTENCE = /tracking may have slid|^the camera path jumps/i;
+
+/** The report's warnings in two: the camera path's own (`path`), and the rest (`other`, for a merge its notes). */
+export function splitWarnings(report: unknown): { path: string[]; other: string[] } {
+  const said = scanWarnings(report);
+  return { path: said.filter((w) => PATH_SENTENCE.test(w)), other: said.filter((w) => !PATH_SENTENCE.test(w)) };
+}
+
+/** The camera path's warning title, on the row's chip, in the viewer and on Edit mesh. */
+export const PATH_WARNING_TITLE = "Tracking may have slid";
+
 /** The scan row's short note (the sentences on hover, as the calibration status note); null when there is none. */
 export function pathWarningChip(report: unknown): { text: string; title: string } | null {
-  const said = scanWarnings(report);
-  return said.length ? { text: "Tracking may have slid", title: said.join(" ") } : null;
+  const said = splitWarnings(report).path;
+  return said.length ? { text: PATH_WARNING_TITLE, title: said.join(" ") } : null;
+}
+
+/** The title over the report's other notes: a merge's say what it left out. */
+export function notesTitle(merged: boolean): string {
+  return merged ? "What the merge left out" : "Notes on making the mesh";
+}
+
+/** The scan row's chip for the report's other notes (a merged scan's: what the merge left out); null when none. */
+export function notesChip(report: unknown, merged: boolean): { text: string; title: string } | null {
+  const said = splitWarnings(report).other;
+  return said.length ? { text: notesTitle(merged), title: said.join(" ") } : null;
 }

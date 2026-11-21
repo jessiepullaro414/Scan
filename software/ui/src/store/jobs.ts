@@ -96,6 +96,8 @@ export const useJobs = create<JobsStore>((set, get) => ({
     const finished = prev && isActive(prev) && !isActive(job);
     if (finished && /^merge$/i.test(job.kind)) return mergeFinished(job);
     if (!finished || !link) return;
+    // read before the project is fetched again: whether the scan had a mesh while this one was being made
+    const hadMesh = !!useProjects.getState().details[link.pid]?.scans.find((s) => s.id === link.sid)?.result?.mesh_url;
     void useProjects.getState().fetchProject(link.pid);
     const label = link.name ? `"${link.name}"` : "the scan";
     if (job.state === "done") {
@@ -104,9 +106,13 @@ export const useJobs = create<JobsStore>((set, get) => ({
         run: () => navigate(paths.viewer(link.pid, link.sid)),
       });
     } else if (job.state === "failed") {
-      toast.error(`Meshing failed for ${label}`, { detail: job.error || job.message || "The job failed.", hint: null });
+      toast.error(`Making the mesh failed for ${label}`, { detail: job.error || job.message || "The job failed.", hint: null });
     } else if (job.state === "cancelled") {
-      toast.info("Meshing cancelled", "The raw recording is kept: you can make the mesh again any time.");
+      // R12: the table's words; R15: making it again leaves the mesh the scan had
+      toast.info(
+        "Making the mesh was cancelled",
+        (job.mesh_kept ?? hadMesh) ? "The mesh stays as it was, and so does the recording." : "The recording is kept: you can make the mesh any time.",
+      );
     }
   },
 

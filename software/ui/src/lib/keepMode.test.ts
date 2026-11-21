@@ -13,6 +13,8 @@ import {
   fpsText,
   thinnedLine,
   doneLine,
+  endStop,
+  hintLine,
   keepLabel,
   keepTitle,
   keptLine,
@@ -123,6 +125,11 @@ check(writeLines(plan({ writes: [], kept_step_bytes: 0 })).length === 0, "nothin
 check(planLine(plan({ frees_bytes: 0, remove: [] })) === "Frees nothing (nothing of this is on disk).", "frees nothing");
 const refused = plan({ ok: false, frees_bytes: 0, refusal: { detail: "this scan is busy: it is being processed", hint: "wait" } });
 check(planLine(refused) === "This scan is busy: it is being processed.", `refusal line: ${planLine(refused)}`);
+// UX_PLAN R11: the server's sentences end with a full stop already; the page adds none
+const refusedNow = plan({ ok: false, frees_bytes: 0, refusal: { detail: "This scan is busy: it is being processed.", hint: "Wait for it to finish." } });
+check(planLine(refusedNow) === "This scan is busy: it is being processed.", `no doubled full stop: ${planLine(refusedNow)}`);
+check(hintLine("Wait for it to finish.") === "Wait for it to finish." && hintLine("wait") === "Wait." && hintLine(null) === "", "the hint: one full stop");
+check(endStop("Done!") === "Done!" && endStop("Done") === "Done." && endStop("Done.") === "Done.", "endStop");
 
 // the whole project
 const pp: ProjectKeepPlan = {
@@ -138,6 +145,8 @@ check(pl.text === "Frees 296.0\u202fMB on 2 scans.", `project line: ${pl.text}`)
 check(pl.skipped.length === 1 && pl.skipped[0] === "Busy one: this scan is busy: it is being processed.", `skipped: ${pl.skipped.join("|")}`);
 check(projectPlanLines({ ...pp, n_scans: 0, frees_bytes: 0 }).text.startsWith("Nothing to free"), "nothing in the project");
 check(projectPlanLines({ ...pp, n_scans: 1 }).text.endsWith("on 1 scan."), "one scan, singular");
+const ppNow = projectPlanLines({ ...pp, scans: [{ ...refusedNow, scan_id: "scan-3", name: "Busy one" }] });
+check(ppNow.skipped[0] === "Busy one: This scan is busy: it is being processed.", `skipped, no doubled full stop: ${ppNow.skipped[0]}`);
 
 // the second question (Standard) and the toasts
 const c = confirmStandard({ name: "Bracket top" }, 4 * GB);

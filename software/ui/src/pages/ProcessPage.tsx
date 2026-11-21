@@ -460,7 +460,7 @@ export default function ProcessPage({ pid, sid }: { pid: string; sid: string }) 
         <div className="mb-3 grid h-11 w-11 place-items-center rounded-xl border border-line bg-surface-2 text-accent">
           {working ? <Spinner size={20} /> : <Box size={20} aria-hidden />}
         </div>
-        <div className="text-base font-semibold text-fg">{working ? "Building the mesh…" : t.state === "failed" ? "Tracking failed" : "No mesh yet"}</div>
+        <div className="text-base font-semibold text-fg">{working ? "Making the mesh…" : t.state === "failed" ? "“Follow the camera” failed" : "No mesh yet"}</div>
         <p className="mt-1 text-sm text-muted">
           {working
             ? "The engine is working through the raw recording. The mesh opens here when it's ready."
@@ -532,6 +532,7 @@ export default function ProcessPage({ pid, sid }: { pid: string; sid: string }) 
             ready={!!mesh}
             onScanAreas={scan?.result && check.result ? (pick) => usePass.getState().scanAreas({ projectId: pid, scan, result: check.result!, why: check.why.why, ...pick }) : undefined}
             hasSigma={hasSigma}
+            hasCard={hasCard}
             remake={
               scan ? (
                 <span className="inline-flex flex-col items-start gap-1">

@@ -210,7 +210,7 @@ function MeshingSection({ settings, onSaved }: { settings: Settings; onSaved: (s
     }
   };
   return (
-    <Section title="Meshing" icon={Layers}>
+    <Section title="Making the mesh" icon={Layers}>
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div className="min-w-0 flex-1 basis-64">
           <div className="text-sm text-fg">Thin walls and edges</div>
@@ -271,7 +271,7 @@ function LasersSection({ settings, onSaved }: { settings: Settings; onSaved: (s:
     { value: "two", label: "Two (standard)" },
     { value: "four", label: "Four" },
   ];
-  if (choice === "custom") options.push({ value: "custom", label: "Custom", disabled: true, title: "Set in the config file" });
+  if (choice === "custom") options.push({ value: "custom", label: "Custom", disabled: true, title: "Set in the settings file" });
   return (
     <Section title="Line lasers" icon={Zap}>
       <div className="flex flex-wrap items-center justify-between gap-4">
@@ -280,7 +280,7 @@ function LasersSection({ settings, onSaved }: { settings: Settings; onSaved: (s:
           <div className="text-xs text-subtle">
             How many line lasers your scanner has. The standard build has two; the 4-laser build adds a second vertical laser
             on the left and a second horizontal laser low on the right. After a change, calibrate the lasers again (setup step 5).
-            Planes you calibrated are kept.
+            The lasers you calibrated before keep their calibration.
           </div>
         </div>
         <Segmented label="Line lasers" value={choice} disabled={saving} onChange={(v) => void save(v)} options={options} />
@@ -357,7 +357,7 @@ function LaserBrightness({ settings, onSaved }: { settings: Settings; onSaved: (
       <div>
         <div className="text-sm text-fg">Brightness</div>
         <div className="text-xs text-subtle">
-          Each laser in percent of its family's level (the emitter sliders). Turn down a laser whose line looks brighter than the others.
+          Each laser in percent of its family's level (the lasers and dots sliders on the Device page). Turn down a laser whose line looks brighter than the others.
         </div>
       </div>
       <div className="space-y-3">

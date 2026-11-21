@@ -11,7 +11,9 @@ import type { PresetKey, PresetValues } from "../../api/types";
 import { PresetHelp, PresetValueRow } from "../../components/PresetBits";
 import { Select } from "../../components/ui/Form";
 import { GENERAL_ID, effectiveValue, originText, valueOrigin } from "../../lib/presets";
+import { hasGraphicsCard, thinWallsNote } from "../../lib/computer";
 import { useCheckPrefs } from "../../store/check";
+import { useConnection } from "../../store/connection";
 import { presetKey, usePresets } from "../../store/presets";
 import { useRecipes } from "../../store/recipes";
 import { Help } from "./bits";
@@ -28,6 +30,7 @@ export function PresetPanel({ pid, sid, busy }: { pid: string; sid: string; busy
   const recipes = useRecipes((s) => s.list);
   const setTolerance = useCheckPrefs((s) => s.setTolerance);
   const tolFor = useRef<string | null>(null);
+  const thinNote = thinWallsNote(hasGraphicsCard((useConnection((s) => s.health)?.engine as { compute?: unknown } | undefined)?.compute));
 
   useEffect(() => {
     void fetchScan(pid, sid);
@@ -77,15 +80,18 @@ export function PresetPanel({ pid, sid, busy }: { pid: string; sid: string; busy
         {keys.map((k) => {
           const changed = valueOrigin(view, k) === "changed";
           return (
-            <PresetValueRow
-              key={k}
-              k={k}
-              value={effectiveValue(view, k) as PresetValues[PresetKey]}
-              origin={originText(view, k, recipeName)}
-              onChange={(v) => change(k, v)}
-              onReset={changed ? () => change(k, null) : undefined}
-              disabled={busy}
-            />
+            <div key={k}>
+              <PresetValueRow
+                k={k}
+                value={effectiveValue(view, k) as PresetValues[PresetKey]}
+                origin={originText(view, k, recipeName)}
+                onChange={(v) => change(k, v)}
+                onReset={changed ? () => change(k, null) : undefined}
+                disabled={busy}
+              />
+              {/* R16: said on the page, not only on hover: without a graphics card thin walls do nothing here */}
+              {k === "thin_walls" && thinNote ? <p className="mt-1 text-[11.5px] leading-4 text-warn">{thinNote}</p> : null}
+            </div>
           );
         })}
       </div>

@@ -38,6 +38,7 @@ import {
   validTolerance,
 } from "../../lib/check";
 import { cn } from "../../lib/util";
+import { noCheckCallout } from "../../lib/computer";
 import { NOT_MEASURED } from "../../three/confidence";
 import { CHECK_COLOR, type CheckState } from "./useCheck";
 import { useTheme } from "./ViewerCanvas";
@@ -161,7 +162,8 @@ function WhyBlock({ w, workingMm, onShow }: { w: CheckWhyArea; workingMm: number
           <SideView view={w.view} />
           <div className="min-w-0">
             <div className="text-muted">{viewWords(w.view.pose, w.view.share_seen)}</div>
-            <Button size="xs" variant="ghost" icon={ScanLine} className="mt-1" onClick={onShow}>
+            {/* R10: the label wraps in a narrow panel instead of running out of it */}
+            <Button size="xs" variant="ghost" icon={ScanLine} className="mt-1 !h-auto min-h-6 max-w-full shrink !whitespace-normal py-1 text-left" onClick={onShow}>
               Show where to hold the scanner
             </Button>
           </div>
@@ -298,10 +300,13 @@ export function CheckPanel({
   check,
   ready,
   hasSigma,
+  hasCard,
   remake,
   holes,
   onScanAreas,
 }: {
+  /** This computer has a graphics card in use (null: not known); without one making the mesh again adds no confidence. */
+  hasCard?: boolean | null;
   check: CheckState;
   /** A mesh is on screen. */
   ready: boolean;
@@ -322,13 +327,15 @@ export function CheckPanel({
   if (!ready) return <div className="text-sm text-muted">Available once the mesh is loaded.</div>;
 
   // nothing to check against: say why, and what gets it
-  if (!hasSigma || (result && !hasAnswer(result)))
+  if (!hasSigma || (result && !hasAnswer(result))) {
+    // R16: the table's name, the Confidence shading's reason said here too, no button that cannot help on this computer
+    const said = noCheckCallout(hasCard ?? null);
     return (
-      <Callout tone="neutral" icon={CircleExclamationPoint} title="Check can't be used on this mesh" actions={remake}>
-        Check compares your tolerance with how sure the scan is of each point (its confidence), and this mesh doesn't carry that: it was made without a graphics card,
-        or by an earlier version of the app. Make the mesh again on a computer with a graphics card, and Check works on it.
+      <Callout tone="neutral" icon={CircleExclamationPoint} title={said.title} actions={said.offerRemake ? remake : undefined}>
+        {said.text}
       </Callout>
     );
+  }
 
   const shown = result ? (all ? result.areas : result.areas.slice(0, FIRST)) : [];
   const why = check.why.why;

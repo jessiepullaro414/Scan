@@ -13,7 +13,7 @@ import { Skeleton } from "../../components/ui/Feedback";
 import { TextInput } from "../../components/ui/Form";
 import { Callout } from "../../components/ui/Layout";
 import { Menu } from "../../components/ui/Popover";
-import { fmtInt, fmtMm } from "../../lib/format";
+import { fmtDetailMm, fmtInt } from "../../lib/format";
 import { historyLabel, opChip, settingsChips } from "../../lib/recipes";
 import { stageBlock } from "../../lib/keepMode";
 import { qualityName } from "../../lib/quality";
@@ -188,7 +188,7 @@ function SaveRecipeDialog({ open, onClose, pid, sid, state }: { open: boolean; o
               Stages: {qualityName(state.stages.track.quality) ?? "standard quality"},{" "}
               {state.stages.straighten.state === "skipped" ? "no straightening" : "straighten"},{" "}
               {state.stages.refine.state === "done" || state.stages.refine.state === "skipped" ? "refine with lasers" : "no laser refine"}
-              {state.stages.fuse.voxel_mm !== null ? `, mesh detail ${fmtMm(state.stages.fuse.voxel_mm, 1)}` : ""}
+              {state.stages.fuse.voxel_mm !== null ? `, mesh detail ${fmtDetailMm(state.stages.fuse.voxel_mm)}` : ""}
             </li>
             <li>{kept.length ? `${kept.length} edit${kept.length === 1 ? "" : "s"}: ${kept.map((e) => historyLabel(e.label)).join(", ")}` : "No edits"}</li>
           </ul>
@@ -302,7 +302,7 @@ export function RecipesPanel({
       >
         {confirm?.scope === "all"
           ? `This starts the edits over: ${edits === 1 ? "your edit is" : `your ${fmtInt(edits)} edits are`} cleared, then the stages run with the recipe's settings and its edits follow.`
-          : `The recipe's steps replace ${edits === 1 ? "your edit" : `your ${fmtInt(edits)} edits`}, including any deleted or kept selection. The mesh goes back to the base first.`}
+          : `The recipe's steps replace ${edits === 1 ? "your edit" : `your ${fmtInt(edits)} edits`}, including any deleted or kept selection. The mesh goes back to the starting mesh first.`}
       </ConfirmDialog>
     </Panel>
   );

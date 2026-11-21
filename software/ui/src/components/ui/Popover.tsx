@@ -192,6 +192,8 @@ export function Menu({
                 disabled={it.disabled}
                 onClick={() => {
                   setOpen(false);
+                  // back to the menu's button first, so a dialog the item opens gives the focus back there (R4)
+                  trigger.current?.focus();
                   it.onSelect();
                 }}
                 className={cn(

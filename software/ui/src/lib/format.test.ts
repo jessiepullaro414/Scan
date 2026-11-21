@@ -2,7 +2,7 @@
  * Checks for the one number formatter (UX_PLAN U32, `npm test`): a narrow no-break space before the
  * unit, thousands grouped the same way, a true minus, "1280 × 800", and the key ranges of U25.
  */
-import { fmtAboutMm, fmtBytes, fmtDuration, fmtInt, fmtMm, fmtNum, fmtPct, fmtSize, fmtUnit, keyRanges, MINUS, NNBSP } from "./format.ts";
+import { fmtAboutMm, fmtBytes, fmtDetailMm, fmtDuration, fmtInt, fmtMm, fmtNum, fmtPct, fmtSize, fmtUnit, keyRanges, MINUS, NNBSP } from "./format.ts";
 
 let checks = 0;
 function eq(a: unknown, b: unknown, what: string): void {
@@ -16,6 +16,11 @@ eq(fmtUnit(29.66, "fps", 1), `29.7${N}fps`, "fps with its unit (was 29.7fps)");
 eq(fmtUnit(7754, "triangles"), `7,754${N}triangles`, "grouped, with the space (was 7,754tris)");
 eq(fmtMm(453), `453${N}mm`, "mm (was 453mm)");
 eq(fmtMm(0.25, 2), `0.25${N}mm`, "decimals");
+// R19: a mesh detail one way everywhere ("0.5 mm", never "0.50 mm" beside it)
+eq(fmtDetailMm(0.5), `0.5${N}mm`, "detail 0.5");
+eq(fmtDetailMm(1), `1.0${N}mm`, "detail 1");
+eq(fmtDetailMm(0.25), `0.25${N}mm`, "detail 0.25 keeps its second decimal");
+eq(fmtDetailMm(null), "–", "detail unknown");
 eq(fmtNum(1289), "1,289", "the same grouping everywhere (was 1289 beside 1,568)");
 eq(fmtInt(1568), "1,568", "fmtInt groups the same way");
 eq(fmtMm(-0.12, 2), `${MINUS}0.12${N}mm`, "a true minus");

@@ -37,6 +37,7 @@ import type {
   SpacetimeStage,
   Scan,
   StageId,
+  StageState,
   StraightenStage,
   TablePreview,
   TrackStage,
@@ -94,6 +95,9 @@ type Studio = {
   busy: string | null;
   jobId: string | null;
   files: { version: number; ply?: ArrayBuffer; stl?: ArrayBuffer; obj?: ArrayBuffer };
+  /** The run Make mesh (or a recipe on everything) is building, as the engine since UX_PLAN R2: the scan's own stages
+   * stay as they are until the run takes their place. */
+  making?: { stages: Partial<Record<StageId, { state: StageState; summary: string | null }>> } | null;
 };
 
 type Op = { op: MeshOp; params: Record<string, unknown> };
@@ -621,6 +625,7 @@ export class MockProcess {
       current: st.current ? { version: st.version, mesh_url: this.meshUrl(st), stats: analyse(st.current).stats } : null,
       busy: st.busy,
       job: job ? { ...job } : null,
+      making: st.making ? { stages: { ...st.making.stages } } : null,
     };
   }
 
@@ -1146,9 +1151,16 @@ export class MockProcess {
    */
   private *pipeline(st: Studio, s: Scan, settings: RecipeSettings, ops: RecipeOp[], jobId: string | null): Generator<WorkStep, () => void, void> {
     const q = settings.quality;
+    // as the engine since UX_PLAN R2: the run is built beside the scan's stages (`making`), one stage running at a time;
+    // the stages themselves change only when the run takes their place
+    let last: StageId | null = null;
     const mark = (id: StageId) => {
       if (!jobId) return;
-      patchStage(st, id, { state: "running", job_id: jobId });
+      const stages = { ...(st.making?.stages ?? {}) };
+      if (last) stages[last] = { state: "done", summary: null };
+      stages[id] = { state: "running", summary: null };
+      last = id;
+      st.making = { stages };
       this.broadcast(st);
     };
     const willStraighten = settings.straighten === "auto" && mockTrajectory(s.duration_s, seedOf(s.id)).loops.length > 0;
@@ -1257,6 +1269,7 @@ export class MockProcess {
     const end = () => {
       st.busy = null;
       st.jobId = null;
+      st.making = null;
     };
     const job = this.host.startWorkJob(kind, {
       minSeconds,

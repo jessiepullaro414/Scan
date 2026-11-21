@@ -12,7 +12,9 @@ import {
   Zap,
   type LucideIcon,
 } from "lucide-react";
+import { fmtFixed, fmtMm, fmtSize, withUnit } from "./format.ts";
 import type {
+  BoardInfo,
   CalibGrade,
   CalibKind,
   CheckStatus,
@@ -75,8 +77,9 @@ export const STEP_META: Record<SetupPage, StepMeta> = {
     title: "Motion sensor (IMU)", // U8
     why: "The motion sensor keeps tracking steady on fast sweeps and plain surfaces.",
     icon: Orbit,
-    time: "1\u202fmin",
-    minutes: 1,
+    // R20: the step itself says "about 2 minutes" (hold still, rotate up to a minute, the solve)
+    time: "2\u202fmin",
+    minutes: 2,
   },
   check: {
     title: "Calibration check",
@@ -143,6 +146,23 @@ export function setupProgress(setup: SetupState | null | undefined): { done: num
   const counted = setup.steps.filter((s) => s.state !== "optional");
   const done = counted.filter((s) => s.state === "done").length;
   return { done, total: counted.length, required: counted.length };
+}
+
+/**
+ * The printed board in words, from its numbers (R12: the engine's own description names the marker dictionary,
+ * "DICT_5X5_100"): "11 × 8 squares of 20 mm, 15 mm markers, on Letter", and the measured print scale when not exact.
+ */
+export function boardLine(b: Pick<BoardInfo, "squares_x" | "squares_y" | "square_mm" | "marker_mm" | "paper" | "scale">): string {
+  const mm = (x: number) => fmtMm(x, Number.isInteger(x) ? 0 : 1);
+  const paper = b.paper === "a4" ? "A4" : b.paper === "letter" ? "Letter" : String(b.paper);
+  const scale = b.scale !== 1 ? `, measured scale ${withUnit(fmtFixed(b.scale * 100, 2), "%")}` : "";
+  return `${fmtSize(b.squares_x, b.squares_y)} squares of ${mm(b.square_mm)}, ${mm(b.marker_mm)} markers, on ${paper}${scale}`;
+}
+
+/** "about N minutes" of the setup still to do (R20: one number on Home, Device and Scan); "" when nothing is left. */
+export function setupTimeText(setup: SetupState | null | undefined): string {
+  const m = minutesLeft(setup);
+  return m > 0 ? `about ${m} minute${m === 1 ? "" : "s"}` : "";
 }
 
 /** Minutes left for the steps still to do, for "about N minutes". */

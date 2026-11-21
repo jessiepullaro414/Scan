@@ -3,7 +3,7 @@ import { MOCK } from "../../api/backend";
 import { healthView } from "../../lib/calibHealth";
 import { href, paths, type Route } from "../../lib/router";
 import { cn } from "../../lib/util";
-import { calibOpen } from "../../lib/calibOpen";
+import { calibOpen, setupLabel as setupLabelOf } from "../../lib/calibOpen";
 import { useCalib } from "../../store/calib";
 import { useConnection } from "../../store/connection";
 import { useDevice } from "../../store/device";
@@ -33,16 +33,9 @@ export function Sidebar({ route }: { route: Route }) {
   // H4: the calibration's status when it is not Valid (it includes the launch check's drift)
   const health = healthView(useDeviceHealth());
   const stale = health && health.state !== "valid" ? health : null;
-  const setupBadge = calibMissing || drift || stale ? "warn" : calibrating ? "accent" : null;
-  const setupLabel = stale
-    ? `Setup: ${stale.title.charAt(0).toLowerCase()}${stale.title.slice(1)}`
-    : drift
-    ? "Setup: the start-up check found calibration drift"
-    : calibMissing
-      ? "Setup: no calibration yet"
-      : calibrating
-        ? calibrating
-        : "Setup";
+  const setupBadge = drift || stale ? "warn" : calibrating ? "accent" : calibMissing ? "warn" : null;
+  // R9: an open session first, as the Scan page (with the simulator it unloads the calibration)
+  const setupLabel = setupLabelOf({ calibrating, stale: stale?.title ?? null, drift, calibMissing });
 
   return (
     <nav

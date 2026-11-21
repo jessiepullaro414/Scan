@@ -45,6 +45,37 @@ export function calibOpen(s: CalibSession | null | undefined): CalibOpen | null 
 }
 
 /**
+ * Why Start is not possible on the Scan page (null: it is), and whether the open session's button goes with it.
+ * UX_PLAN R9: an open session is tested before "no calibration": with the simulator an open session makes
+ * `calibration.loaded` false, and "No calibration yet" hid U1's sentence and its way out.
+ */
+export function scanReason(p: {
+  deviceKnown: boolean;
+  connected: boolean;
+  calibrated: boolean;
+  open: CalibOpen | null;
+  projectChosen: boolean;
+  /** What a second pass still waits for (U15), or null. */
+  passReason: string | null;
+}): { reason: string | null; openAction: boolean } {
+  if (!p.deviceKnown) return { reason: "Checking the device…", openAction: false };
+  if (!p.connected) return { reason: "Connect a device to start", openAction: false };
+  if (p.open) return { reason: p.open.reason, openAction: true };
+  if (!p.calibrated) return { reason: "No calibration yet: calibrate the scanner in Setup", openAction: false };
+  if (!p.projectChosen) return { reason: "Choose a project to start", openAction: false };
+  return { reason: p.passReason, openAction: false };
+}
+
+/** The sidebar's label for Setup: the same order as the Scan page (an open session first, R9). */
+export function setupLabel(p: { calibrating: string | null; stale: string | null; drift: boolean; calibMissing: boolean }): string {
+  if (p.calibrating) return p.calibrating;
+  if (p.stale) return `Setup: ${p.stale.charAt(0).toLowerCase()}${p.stale.slice(1)}`;
+  if (p.drift) return "Setup: the start-up check found calibration drift";
+  if (p.calibMissing) return "Setup: no calibration yet";
+  return "Setup";
+}
+
+/**
  * Leaving the page that shows a result that cannot be saved closes it (as the advice buttons do,
  * pages/setup/actions.ts `leaveTo`). A result that can be saved stays, to come back to.
  */

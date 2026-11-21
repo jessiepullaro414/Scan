@@ -8,10 +8,13 @@ import type { MeshStats } from "../../api/types";
 import { MeshDownloadButtons } from "../../components/MeshDownloads";
 import { Skeleton } from "../../components/ui/Feedback";
 import { KeyValue } from "../../components/ui/Layout";
-import { fmtFixed, fmtInt } from "../../lib/format";
+import { fmtFixed, fmtInt, fmtNum } from "../../lib/format";
+import { fmtArea } from "../../lib/extent";
 import { Help, Panel } from "./bits";
 
-const num = (n: number | null | undefined, digits: number) => <span className="font-mono text-xs tnum">{fmtFixed(n, digits)}</span>;
+// R19: thousands grouped ("5,206 mm around"), and one area unit, mm², as everywhere else (U22)
+const num = (n: number | null | undefined, digits: number) => <span className="font-mono text-xs tnum">{fmtNum(n, digits)}</span>;
+const mm2 = (cm2: number) => <span className="font-mono text-xs tnum">{fmtArea(cm2 * 100)}</span>;
 
 export function StatsPanel({ stats, loading }: { stats: MeshStats | null; loading: boolean }) {
   return (
@@ -77,12 +80,12 @@ export function StatsPanel({ stats, loading }: { stats: MeshStats | null; loadin
                     </span>,
                   ]
                 : null,
-              ["Area", <span>{num(stats.area_cm2, 1)}&#8239;cm²</span>],
+              ["Area", mm2(stats.area_cm2)],
               stats.filled_cm2
                 ? [
                     "Filled",
                     <span title="Made by hole filling: not measured, so measuring skips it (striped grey in the view)">
-                      {num(stats.filled_cm2, stats.filled_cm2 < 1 ? 2 : 1)}&#8239;cm² <span className="text-muted">not measured</span>
+                      {mm2(stats.filled_cm2)} <span className="text-muted">not measured</span>
                     </span>,
                   ]
                 : null,

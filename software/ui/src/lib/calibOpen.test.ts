@@ -3,7 +3,7 @@
  * page's sentence and button, the sidebar's label, and when leaving closes a result.
  */
 import type { CalibSession } from "../api/types.ts";
-import { calibOpen, closesOnLeave } from "./calibOpen.ts";
+import { calibOpen, closesOnLeave, scanReason, setupLabel } from "./calibOpen.ts";
 import type { Route } from "./router.tsx";
 
 let checks = 0;
@@ -39,5 +39,22 @@ check(!closesOnLeave(session("result", "stereo", true), { name: "setup", step: "
 check(!closesOnLeave(session("result", "check", false), home, scan), "not opened from its step: left alone");
 check(!closesOnLeave(session("capturing", "check", null), onCheck, scan), "views being captured are not closed");
 check(closesOnLeave(session("result", "stereo", false), { name: "setup", step: "stereo" }, home), "a failed solve is closed too");
+
+// UX_PLAN R9: the Scan page tests an open session before "no calibration". With the simulator an open session makes
+// `calibration.loaded` false; U1's sentence and its button must still show
+const ready = { deviceKnown: true, connected: true, calibrated: true, open: null, projectChosen: true, passReason: null };
+const simOpen = scanReason({ ...ready, calibrated: false, open: stereo });
+check(simOpen.reason === "A calibration result is still open in Setup." && simOpen.openAction, `the simulator's case: ${JSON.stringify(simOpen)}`);
+check(scanReason({ ...ready, calibrated: false, open: capturing }).reason === "A calibration is in progress in Setup.", "views being taken, no calibration loaded");
+check(scanReason({ ...ready, calibrated: false }).reason === "No calibration yet: calibrate the scanner in Setup", "nothing open, no calibration");
+check(scanReason({ ...ready, connected: false, open: stereo }).reason === "Connect a device to start", "not connected comes first");
+check(scanReason(ready).reason === null && !scanReason(ready).openAction, "ready");
+check(scanReason({ ...ready, projectChosen: false }).reason === "Choose a project to start", "no project");
+check(scanReason({ ...ready, passReason: "Answer the question" }).reason === "Answer the question", "a pass's reason last");
+// the sidebar says the same
+check(setupLabel({ calibrating: stereo!.sidebar, stale: null, drift: false, calibMissing: true }) === "Setup: a calibration result is still open", "the sidebar: the open session first");
+check(setupLabel({ calibrating: null, stale: null, drift: false, calibMissing: true }) === "Setup: no calibration yet", "the sidebar: no calibration");
+check(setupLabel({ calibrating: null, stale: "Check recommended", drift: false, calibMissing: false }) === "Setup: check recommended", "the sidebar: the status");
+check(setupLabel({ calibrating: null, stale: null, drift: false, calibMissing: false }) === "Setup", "the sidebar: nothing to say");
 
 console.log(`calibOpen.test: ${checks} checks passed`);

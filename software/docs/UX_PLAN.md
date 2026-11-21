@@ -640,7 +640,33 @@ largest 40.8 mm across"; the log saved for a bug report; V4 (the preset reaches 
 
 Defects first, by harm; each with its mend. "Pages" and "server" say where the mend is.
 
-### [ ] R1. Every warning of a scan is titled "Tracking may have slid" (pages)
+**Mended in the pages (2026-11-21):** R1, R3, R4, R10, R11, R13, R15, R16 are done and ticked;
+the pages' half of R9, R12, R19, R20 and R22 is done and they are ticked with the server's
+half. Seen on the real engine: the Free space dialog takes the focus on its first choice that
+can apply, and a merged scan's row says "What the merge left out".
+
+- **R3, how the keys behave now** (`lib/hotkeys.ts`): in a text field no shortcut fires. On a
+  button, switch, link or menu item reached with Tab only Esc and "?" fire, so Enter and Space
+  do what the control does. After a click on a button its own keys (Enter, Space, the arrows)
+  stay the control's, and letters still work as shortcuts (W after clicking Wireframe). With
+  nothing focused every shortcut fires. Walked by keyboard on the camera calibration, the Scan
+  page, the viewer and the motion sensor screen.
+- **R4:** the cause was the dialog focusing a button that was still disabled; every dialog
+  goes through the same code, and a menu item now hands the focus back to its menu's button.
+- **R1:** a scan's other notes have a title of their own: "What the merge left out" on a
+  merged scan, "Notes on making the mesh" otherwise.
+- **R15:** during "Make mesh again" the viewer keeps the mesh, its downloads and its report,
+  and shows the job with Cancel; this is true to what happens once R2 is in the server.
+- The pages' guard missed the old words because most were not on its list, and because it
+  skipped lines of text with an apostrophe or a semicolon and text after an expression; it
+  reads those now. It also read a trailing comment as text on a checkout with CRLF line
+  ends; mended.
+- Noticed, not mended: after "Delete view N" and after Pause the focus falls to the page (the
+  button is gone), so a keyboard user loses the place; the Device page shows the path
+  `firmware/README.md` in a hint; "What the merge left out" also stands over a note that says
+  a raised area is kept.
+
+### [x] R1. Every warning of a scan is titled "Tracking may have slid" (pages)
 A merged scan's notes about its table ("70 raised areas up to 0.59 mm high…") appear under that
 title on the row's chip and in the viewer. Only the camera path's own warning gets that title;
 the merge's notes get their own ("What the merge left out").
@@ -652,12 +678,12 @@ points and those stages "Not run". The toast says only "Meshing cancelled / The 
 is kept". The finished mesh, its stages and its edits must stay until the new run has
 finished; a cancelled or failed run leaves the scan exactly as it was.
 
-### [ ] R3. On the calibration screens the keyboard's Space, Enter and Backspace act even on a focused button (pages)
+### [x] R3. On the calibration screens the keyboard's Space, Enter and Backspace act even on a focused button (pages)
 Enter on "Delete view 5" finishes the calibration instead; Space on the Auto-capture switch
 takes a view. The page's shortcuts must not fire when a button, switch, link, menu item or
 field has the focus (`useHotkeys`).
 
-### [ ] R4. The Free space dialog does not take the focus (pages)
+### [x] R4. The Free space dialog does not take the focus (pages)
 Opened by keyboard, Tab walks the page behind it. Focus goes into the dialog when it opens (the
 first choice that can apply, else Cancel) and stays inside.
 
@@ -691,9 +717,9 @@ true. The server's refusal says "A calibration is running." while it is waiting 
 Test the open session first; the server says "A calibration result is waiting in Setup: save
 it or close it first."
 
-### [ ] R10. Scan check: "Show where to hold the scanner" is cut off at 1280 px (pages)
+### [x] R10. Scan check: "Show where to hold the scanner" is cut off at 1280 px (pages)
 
-### [ ] R11. Free space dialog: doubled full stops, a choice preselected that cannot apply, and a footer that contradicts the choice's own line (pages)
+### [x] R11. Free space dialog: doubled full stops, a choice preselected that cannot apply, and a footer that contradicts the choice's own line (pages)
 
 ### [ ] R12. Program words on the screens (server, pages)
 "on the GPU (gfx1035)", "on the CPU", "graphics card found (gfx1035)"; "Straightening the
@@ -710,7 +736,7 @@ calibration…". Each in the table's names and plain words; the device's code na
 Settings' About only. Extend the two guards (`words.test.ts`, `test_server_error_words.py`)
 with what they missed.
 
-### [ ] R13. Connecting a camera shows the simulator's text (pages or server)
+### [x] R13. Connecting a camera shows the simulator's text (pages or server)
 "This happens once; next time the simulator starts right away." while a camera connects (the
 Device page: "…the demo starts right away").
 
@@ -718,13 +744,13 @@ Device page: "…the demo starts right away").
 "The recording could not be read any more (its folder was moved or deleted). The scan was
 stopped and saved." And "Scanner problem" / "Engine error" as titles go.
 
-### [ ] R15. The viewer during "Make mesh again" (pages)
+### [x] R15. The viewer during "Make mesh again" (pages)
 It shows the current mesh but says "Make the mesh first." under Export and "Shown after
 meshing." under the report, and has no progress or Cancel. The current mesh's downloads and
 report stay; the job's progress and Cancel show on the page. (With R2 the current mesh is safe
 until the new one is done.)
 
-### [ ] R16. Without a graphics card the Scan check panel says "Check can't be used…" and offers "Make the mesh again" (pages)
+### [x] R16. Without a graphics card the Scan check panel says "Check can't be used…" and offers "Make the mesh again" (pages)
 The old name, and a button that cannot help on this computer (the Confidence tooltip already
 knows). Also: the Confidence button's reason and "Thin walls and edges has no effect here"
 are on hover only or missing in the Edit mesh preset box; say them on the page.

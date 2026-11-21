@@ -19,7 +19,7 @@ import { SHEETS } from "../lib/shortcuts";
 import { CalibHealthCallout } from "../components/CalibHealth";
 import { PresetPicker } from "../components/PresetPicker";
 import { Callout } from "../components/ui/Layout";
-import { calibOpen } from "../lib/calibOpen";
+import { calibOpen, scanReason } from "../lib/calibOpen";
 import { passPresetFields, passStartBody } from "../lib/pass";
 import { useCalib } from "../store/calib";
 import { ErrorBoundary } from "../components/shell/ErrorBoundary";
@@ -134,21 +134,17 @@ export default function ScanPage({
   // U1: an open calibration session blocks a scan (the engine refuses it): say so, with a way out
   const calibSession = useCalib((s) => s.session);
   const open = calibOpen(calibSession);
-  const reason = !device
-    ? "Checking the device…"
-    : !connected
-      ? "Connect a device to start"
-      : !calibrated
-        ? "No calibration yet: calibrate the scanner in Setup"
-        : open
-          ? open.reason
-          : !projectId
-            ? "Choose a project to start"
-            : passPending
-              ? movedNeeded(passMoved, "pass") // U15: a pass waits for the moved-part answer
-              : null;
+  // R9: an open session before "no calibration" (with the simulator an open session unloads its calibration)
+  const { reason, openAction } = scanReason({
+    deviceKnown: !!device,
+    connected,
+    calibrated,
+    open,
+    projectChosen: !!projectId,
+    passReason: passPending ? movedNeeded(passMoved, "pass") : null, // U15: a pass waits for the moved-part answer
+  });
   const reasonAction =
-    connected && calibrated && open
+    openAction && open
       ? {
           label: open.label,
           busy: calibBusy,

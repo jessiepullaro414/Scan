@@ -1,5 +1,5 @@
 /** Checks for the camera path's warning (ENGINE_PLAN X0a, APP_API.md "The camera path's warning"; `npm test`). */
-import { pathWarningChip, scanWarnings } from "./pathWarning.ts";
+import { notesChip, notesTitle, pathWarningChip, scanWarnings, splitWarnings } from "./pathWarning.ts";
 
 let checks = 0;
 function check(ok: boolean, what: string): void {
@@ -27,5 +27,22 @@ check(chip !== null && chip.text === "Tracking may have slid", JSON.stringify(ch
 check(!!chip && chip.title.includes("near frame 4") && chip.title.includes("graphics card"), "the sentence on hover");
 check(pathWarningChip({ frames: {} }) === null, "nothing for an older scan");
 check(pathWarningChip({ warnings: [] }) === null, "nothing when the path held");
+
+// UX_PLAN R1: only the camera path's own sentence is "Tracking may have slid"; a merge's notes have their own title
+const MERGE = "70 raised areas up to 0.59 mm high were left out where the two scans' tables met.";
+const both = splitWarnings({ warnings: [MERGE, ENGINE], path_check: { state: "warn", jump_mm: 37, frame: 4 } });
+check(both.path.length === 1 && both.path[0].startsWith("The camera path jumps"), `the path's sentence: ${both.path.join("|")}`);
+check(both.other.length === 1 && both.other[0] === MERGE, `the merge's note stays, apart: ${both.other.join("|")}`);
+check(pathWarningChip({ warnings: [MERGE] }) === null, "a merge's notes alone: no “Tracking may have slid” chip");
+const onlyMerge = splitWarnings({ warnings: [MERGE] });
+check(onlyMerge.path.length === 0 && onlyMerge.other.length === 1, "a merge's notes are not lost");
+const mixed = pathWarningChip({ warnings: [MERGE, ENGINE] });
+check(!!mixed && !mixed.title.includes("raised areas"), `the path chip's hover holds the path's sentence only: ${mixed?.title}`);
+const notes = notesChip({ warnings: [MERGE, ENGINE] }, true);
+check(!!notes && notes.text === "What the merge left out" && notes.title === MERGE, `the merge's chip: ${JSON.stringify(notes)}`);
+check(notesTitle(true) === "What the merge left out" && notesTitle(false) === "Notes on making the mesh", "the titles");
+check(notesChip({ warnings: [ENGINE] }, true) === null && notesChip({ frames: {} }, false) === null, "no notes: no chip");
+// an older engine's sentence (with "GPU") is still the path's
+check(splitWarnings({ warnings: ["The camera path jumps by 9 mm near frame 2: tracking may have slid there. This scan was processed without a GPU."] }).path.length === 1, "older words");
 
 console.log(`pathWarning.test: ${checks} checks passed`);

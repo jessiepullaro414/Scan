@@ -27,6 +27,7 @@ import {
   FileText,
   Focus,
   Grid2x2,
+  Info,
   Layers,
   RefreshCw,
   Ruler,
@@ -55,12 +56,12 @@ import { EmptyState, Kbd, ProgressBar, Skeleton, Spinner } from "../components/u
 import { Segmented } from "../components/ui/Form";
 import { KeyValue } from "../components/ui/Layout";
 import { calibrationSays, scanHealthDetail, scanHealthOf } from "../lib/calibHealth";
-import { scanWarnings } from "../lib/pathWarning";
+import { PATH_WARNING_TITLE, notesTitle, splitWarnings } from "../lib/pathWarning";
 import { hasGraphicsCard, noConfidenceText } from "../lib/computer";
 import { useConnection } from "../store/connection";
 import { downloadFile } from "../lib/download";
 import { decodeFaces, fitLabel, fitName, regionTriangles, summarizeRegion, type RegionSummary } from "../lib/fits";
-import { fileStem, fmtBytes, fmtCompact, fmtDateTime, fmtDuration, fmtFixed, fmtInt, fmtMm, fmtPct } from "../lib/format";
+import { fileStem, fmtBytes, fmtCompact, fmtDateTime, fmtDetailMm, fmtDuration, fmtFixed, fmtInt, fmtPct } from "../lib/format";
 import { viewerSheet } from "../lib/shortcuts";
 import { axesEntry, groupOfTool, initialOpen, openFor, type GroupsOpen, type ViewerGroupId, type ViewerTool } from "../lib/viewerGroups";
 import { ShortcutButton, ShortcutSheet } from "../components/ShortcutSheet";
@@ -144,7 +145,7 @@ type Rec = Record<string, unknown>;
 const obj = (v: unknown): Rec | null => (v && typeof v === "object" && !Array.isArray(v) ? (v as Rec) : null);
 const num = (v: unknown): number | null => (typeof v === "number" && Number.isFinite(v) ? v : null);
 
-function ReportSummary({ report }: { report: Rec }) {
+function ReportSummary({ report, merged }: { report: Rec; merged: boolean }) {
   const frames = obj(report.frames);
   const mesh = obj(report.mesh);
   const lasers = obj(report.lasers);
@@ -158,15 +159,30 @@ function ReportSummary({ report }: { report: Rec }) {
   const health = scanHealthDetail(report);
   const HealthIcon = health ? HEALTH_ICON[scanHealthOf(report)!.state] : null;
   // ENGINE_PLAN X0a: the camera path's warning (nothing for a scan processed before the check, or when it held)
-  const pathWarnings = scanWarnings(report);
+  // UX_PLAN R1: only the path's own sentence goes under that title; the report's other notes (a merge's: what it left
+  // out) under their own
+  const { path: pathWarnings, other: notes } = splitWarnings(report);
   return (
     <div className="space-y-4">
       {pathWarnings.length ? (
         <div className="flex gap-2.5 rounded-lg border border-warn/30 bg-warn-soft px-3 py-2.5 text-xs" role="note" aria-label="Camera path: tracking may have slid">
           <TriangleExclamationPoint size={14} className="mt-px shrink-0 text-warn" aria-hidden />
           <div className="min-w-0 flex-1 space-y-0.5">
-            <div className="font-semibold text-fg">Tracking may have slid</div>
+            <div className="font-semibold text-fg">{PATH_WARNING_TITLE}</div>
             {pathWarnings.map((w) => (
+              <div key={w} className="text-muted">
+                {w}
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null}
+      {notes.length ? (
+        <div className="flex gap-2.5 rounded-lg border border-line bg-surface-2/50 px-3 py-2.5 text-xs" role="note" aria-label={notesTitle(merged)}>
+          <Info size={14} className="mt-px shrink-0 text-muted" aria-hidden />
+          <div className="min-w-0 flex-1 space-y-0.5">
+            <div className="font-semibold text-fg">{notesTitle(merged)}</div>
+            {notes.map((w) => (
               <div key={w} className="text-muted">
                 {w}
               </div>
@@ -208,7 +224,7 @@ function ReportSummary({ report }: { report: Rec }) {
             : null,
           typeof report.mode === "string" ? ["Mode", report.mode === "markers" ? "Markers" : "Markerless"] : null,
           // U8: "Mesh detail 1.0 mm", not "TSDF · 1.00 mm voxels"
-          mesh && num(mesh.voxel_mm) !== null ? ["Mesh detail", fmtMm(num(mesh.voxel_mm), 1)] : null,
+          mesh && num(mesh.voxel_mm) !== null ? ["Mesh detail", fmtDetailMm(num(mesh.voxel_mm))] : null,
           sigma && num(sigma.median) !== null
             ? [
                 "Confidence",
@@ -344,7 +360,13 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
   const job = useScanJob(sid);
   const scan = project?.scans.find((s) => s.id === sid);
   const urls = project && scan ? urlsFor(project, scan) : null;
-  const hasResult = !!scan && scan.status === "processed" && !!scan.result;
+  // UX_PLAN R15: while "Make mesh again" runs the scan is "processing" but keeps its current mesh (the run is built
+  // apart and takes its place when done): that mesh's downloads, report and tools stay, with the job's progress shown
+  // (the engine since R2 may leave the scan's entry, its status too, as it was until the run takes its place: then the
+  // scan's own whole-run job says it)
+  const wholeRun = !!job && isActive(job) && (job.kind === "process_scan" || job.kind === "process" || (job.kind === "process_recipe" && job.scope === "all"));
+  const remaking = !!scan?.result?.mesh_url && (scan.status === "processing" || wholeRun);
+  const hasResult = !!scan && !!scan.result && (scan.status === "processed" || remaking);
 
   const [load, setLoad] = useState<Load>({ phase: "idle" });
   const [reloadKey, setReloadKey] = useState(0);
@@ -878,7 +900,7 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
         <div className="mb-3 grid h-11 w-11 place-items-center rounded-xl border border-line bg-surface-2 text-accent">
           {active ? <Spinner size={20} /> : <Box size={20} aria-hidden />}
         </div>
-        <div className="text-base font-semibold text-fg">{active ? "Making the mesh…" : scan.status === "failed" ? "Meshing failed" : "This scan has no mesh yet"}</div>
+        <div className="text-base font-semibold text-fg">{active ? "Making the mesh…" : scan.status === "failed" ? "Making the mesh failed" : "This scan has no mesh yet"}</div>
         <p className="mt-1 text-sm text-muted">
           {active
             ? "The engine is building the mesh from the raw recording. It opens here when it's done."
@@ -968,6 +990,20 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
         ) : (
           <div className="absolute inset-0 grid place-items-center p-6">{stage}</div>
         )}
+        {geometry && remaking ? (
+          // R15: the job's progress and Cancel on the page; the mesh on screen is the current one until the new one is in
+          <div className="pointer-events-none absolute inset-x-0 bottom-4 z-10 flex justify-center px-4">
+            <div className="glass pointer-events-auto w-full max-w-[440px] rounded-xl border border-line-strong px-4 py-3 shadow-lg" role="status" aria-label="Making the mesh">
+              <div className="text-sm font-semibold text-fg">Making the mesh</div>
+              <p className="mb-2 mt-0.5 text-xs text-muted">The mesh you see, its downloads and its report stay as they are until the new mesh is ready.</p>
+              {job && isActive(job) ? (
+                <JobProgress job={job} label="Making the mesh" cancelTitle="Stop making the mesh. The current mesh stays as it is." />
+              ) : (
+                <ProgressBar value={null} label="Making the mesh" />
+              )}
+            </div>
+          </div>
+        ) : null}
 
         {/* breadcrumb */}
         <div className="pointer-events-none absolute left-4 top-4 flex flex-col gap-2">
@@ -1243,6 +1279,7 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
                   project && scan?.result && check.result ? (pick) => usePass.getState().scanAreas({ projectId: project.id, scan, result: check.result!, why: check.why.why, ...pick }) : undefined
                 }
                 hasSigma={hasSigma}
+                hasCard={hasCard}
                 remake={
                   project && scan ? (
                     <span className="inline-flex flex-col items-start gap-1">
@@ -1268,7 +1305,7 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
           ) : null}
           <Panel title="Processing report" icon={FileText}>
             {report ? (
-              <ReportSummary report={report} />
+              <ReportSummary report={report} merged={!!scan?.merged_from?.length} />
             ) : hasResult ? (
               <div className="text-sm text-muted">No processing report for this result.</div>
             ) : (

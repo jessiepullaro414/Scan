@@ -44,7 +44,7 @@ export function PostScanCard() {
         </div>
         <div className="min-w-0 flex-1">
           <div className="text-sm font-semibold text-fg">
-            {done ? "Mesh ready" : failed ? "Meshing failed" : cancelled ? "Meshing cancelled" : active ? "Making the mesh…" : "Scan saved"}
+            {done ? "Mesh ready" : failed ? "Making the mesh failed" : cancelled ? "Making the mesh was cancelled" : active ? "Making the mesh…" : "Scan saved"}
             <span className="font-normal text-muted"> · {scan.name}</span>
           </div>
           <div className="mt-0.5 text-xs text-muted">

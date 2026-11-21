@@ -9,6 +9,7 @@ import {
   Eye,
   FolderOpen,
   HardDrive,
+  Info,
   Pencil,
   RefreshCw,
   ScanLine,
@@ -32,7 +33,7 @@ import { HEALTH_ICON, HEALTH_TEXT } from "../components/CalibHealth";
 import { hasMesh, hasRecording, mergedFromText } from "../lib/align";
 import { passOfText } from "../lib/pass";
 import { scanHealthLine, scanHealthOf } from "../lib/calibHealth";
-import { pathWarningChip } from "../lib/pathWarning";
+import { notesChip, pathWarningChip } from "../lib/pathWarning";
 import { dependentsSentence, scanBusyReason, scanDependents } from "../lib/scanTrash";
 import { projectDiskText, scanDiskTitle, trashText } from "../lib/diskUse";
 import { canRemake, keepLabel, keepTitle } from "../lib/keepMode";
@@ -145,6 +146,8 @@ function ScanRow({
   const health = scanHealthLine(own);
   const HealthIcon = health && own ? HEALTH_ICON[own.state] : null;
   const pathWarn = hasResult ? pathWarningChip(scan.result?.report) : null;
+  // UX_PLAN R1: the report's other notes (a merge's: what it left out) under their own title, not the path's
+  const notes = hasResult ? notesChip(scan.result?.report, !recorded) : null;
   // the secondary actions the menu holds under about 1100 px (U16), beside Rename… and Move to trash… (U7)
   const editMesh = { label: "Edit mesh…", icon: SlidersHorizontal, onSelect: () => navigate(paths.process(project.id, scan.id)) };
   const remake: MenuItem | null =
@@ -207,6 +210,11 @@ function ScanRow({
             <TriangleExclamationPoint size={12} aria-hidden /> {pathWarn.text}
           </span>
         ) : null}
+        {notes ? (
+          <span className="inline-flex cursor-help items-center gap-1" title={notes.title} role="note" aria-label={`${notes.text}. ${notes.title}`}>
+            <Info size={12} aria-hidden /> {notes.text}
+          </span>
+        ) : null}
         {kept ? (
           // R2: what the user chose to keep (the words say it; the hover says what was removed, and what is back since)
           <span className="inline-flex cursor-help items-center gap-1" title={keepTitle(scan, disk, fmtDateTime)}>
@@ -230,7 +238,7 @@ function ScanRow({
         {processing && job ? (
           <JobProgress job={job} className="w-full max-w-[300px]" />
         ) : processing ? (
-          <span className="text-xs text-muted">Meshing on the engine…</span>
+          <span className="text-xs text-muted">Making the mesh…</span>
         ) : scan.status === "recording" ? (
           <Button size="sm" variant="secondary" icon={ScanLine} onClick={() => navigate(paths.scan(project.id))}>
             Go to live scan

@@ -132,7 +132,7 @@ export function JobsMenu() {
           </ul>
         ) : (
           <EmptyState compact icon={Layers} title="No jobs yet">
-            Meshing and other long tasks show their progress here. They keep running if you switch pages.
+            Making the mesh and other long tasks show their progress here. They keep running if you switch pages.
           </EmptyState>
         )}
       </Popover>

@@ -41,6 +41,16 @@ export const RETIRED: [RegExp, string][] = [
   [/\balign two scans\b|\bfused again\b/i, "Align and merge"],
   [/\bsandbox\b|\bsimulator demo\b/i, "the simulator"],
   [/\bkept fits?\b|\bCheck answer\b|\bCheck panel\b/, "saved fitted shapes / the Scan check"],
+  // UX_PLAN R12, R20: program words and old names found on the real engine
+  [/\blive pipeline\b/i, "the live preview"],
+  [/\bMeshing\b/, "Making the mesh (Make mesh / Make mesh again)"],
+  [/\bohs (record|sim|replay)\b|\bmeta\.json\b|\bframes\.csv\b/, "a recording folder, in words (the command line's names stay in its own panel)"],
+  [/\bDICT_\w+/, "the board in words"],
+  [/\bthin-wall band\b|\bmesh model\b/i, "Thin walls and edges / the mesh"],
+  [/\bplanes you calibrated\b/i, "the lasers you calibrated"],
+  [/\b(back to|from|to) the base\b(?! of)/i, "the starting mesh"],
+  [/\bCheck can't\b/, "the Scan check"],
+  [/\bScans work; without one\b|\bturned off in the settings\b/, "the line about this computer (R20)"],
 ];
 
 /** `s` without its template placeholders (`${...}`, nested ones too). */
@@ -65,13 +75,25 @@ function unplaced(s: string): string {
  */
 export function texts(source: string): { line: number; text: string }[] {
   const out: { line: number; text: string }[] = [];
-  const re = /"(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*'|`(?:[^`\\]|\\.)*`|>([^<>{}\n]*[A-Za-z][^<>{}\n]*)</g;
+  // UX_PLAN R12: JSX text also between an expression and a tag (`{n}</span>, the largest {x} mm around`), not only
+  // between two tags: it starts after ">" or "}" and runs to "<" or "{"
+  // (an attribute between two expressions, `} what="x" onRename={`, has "=" and is not text)
+  const re = /"(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*'|`(?:[^`\\]|\\.)*`|[>}]([^<>{}\n="]*[A-Za-z][^<>{}\n="]*)(?=[<{])/g;
   source.split("\n").forEach((raw, i) => {
     const s = raw.trim();
     if (s.startsWith("//") || s.startsWith("*") || s.startsWith("/*") || s.startsWith("import ")) return;
     const code = raw.replace(/\s\/\/\s.*$/, "");
-    // a line of JSX text on its own, between tags on other lines
-    if (/^[A-Za-z][^<>{}=;()"'`]*$/.test(s) && /\s/.test(s) && !/^(return|export|const|let|type|case|else|import|from)\b/.test(s) && !/^\w+:\s/.test(s) && !/[,[]$/.test(s))
+    // a line of JSX text on its own, between tags on other lines. R12: prose with an apostrophe, a semicolon or a
+    // bracket counts too ("The live pipeline is slow on this computer. Move slower; …" was missed); a call
+    // (`name(`) or a statement keyword says it is code
+    if (
+      /^[A-Za-z][^<>{}="`]*$/.test(s) &&
+      /\s/.test(s) &&
+      !/\w\(/.test(s) &&
+      !/^(return|export|const|let|var|type|interface|case|else|import|from|if|for|while|switch|await|throw|break|continue|function|async|new|try|catch|do|void|default)\b/.test(s) &&
+      !/^\w+\??:\s/.test(s) &&
+      !/[,[]$/.test(s)
+    )
       out.push({ line: i + 1, text: s });
     // JSX text at the start of a line, before a tag on the same line
     const lead = /^([A-Za-z][^<>{}=;()"'`]*)</.exec(s);
@@ -117,6 +139,15 @@ const OLD = [
   'title="The kept fits as a STEP file"',
   "            Open in Process",
   '", within 2σ"',
+  // R12, R20: each was on a page until 2026-11-21, and the first two were missed by the reader itself
+  "          The live pipeline is slow on this computer. Move slower; the recording still keeps every frame.",
+  '<span className="font-mono text-xs tnum">{fmtInt(n)}</span>, back to the base mesh {x}&#8239;mm around',
+  "The folder with <Code>meta.json</Code> and <Code>frames.csv</Code>, e.g. one made by <Code>ohs record</Code> or",
+  '{ value: "off", label: "Off", title: "The mesh model without the thin-wall band" },',
+  "            Planes you calibrated are kept.",
+  'processing: { label: "Meshing", tone: "accent" },',
+  '`${hint} The mesh goes back to the base first.`',
+  'title="Check can\'t be used on this mesh"',
 ];
 for (const o of OLD) check(retired(o, "old").length > 0, `the guard finds: ${o}`);
 const NEW = [
@@ -130,13 +161,20 @@ const NEW = [
   'if (rest.includes("voxel size")) return "x";',
   'const L = { "dot projector": "Dots" };',
   'const t = `${sigma === null ? "" : ` ± ${s}`} mm`;',
+  // R12: code is still not prose
+  "  } catch (e) {",
+  "    void remake(pid, sid);",
+  "  remake?: ReactNode;",
+  '<ReportGroup a={b} what="reference" onRename={c} />',
+  'why: "Calibrates the two cameras: the base of every millimetre the scanner measures.",',
+  "            The live preview is slow on this computer. Move more slowly; the recording still keeps every frame.",
 ];
 for (const n of NEW) check(retired(n, "new").length === 0, `the guard lets through: ${n} (${retired(n, "new").join("; ")})`);
 
 // ---------------------------------------------------------------- the pages' sources
 /** Words that stay on purpose. */
 const ALLOWED: RegExp[] = [
-  /MicroPython|BOOTSEL|\.uf2|RPI-RP2|lsm6dsox|plug the Pico into USB/, // the firmware steps, for the Pico board itself
+  /MicroPython|BOOTSEL|\.uf2|RPI-RP2|lsm6dsox|plug the Pico into USB|Thonny and mpremote/, // the firmware steps, for the Pico board itself
   /\bohs calibrate stereo\b/, // the command line keeps its names
   /"You can no longer re-run single steps on the Edit mesh page/, // UX_PLAN U37's own words
 ];
@@ -151,7 +189,8 @@ function walk(dir: URL, rel = ""): string[] {
 }
 const files = walk(src);
 check(files.length > 100, `the pages' sources are found (${files.length})`);
-const found = files.flatMap((f) => retired(fs.readFileSync(new URL(f, src), "utf8"), f)).filter((p) => !ALLOWED.some((a) => a.test(p)));
+// line ends as LF whatever the checkout wrote (found in review: on a checkout with CRLF a trailing comment was read as text)
+const found = files.flatMap((f) => retired(fs.readFileSync(new URL(f, src), "utf8").replace(/\r\n/g, "\n"), f)).filter((p) => !ALLOWED.some((a) => a.test(p)));
 check(found.length === 0, `retired names on the pages (UX_PLAN, One name for each thing):\n${found.join("\n")}`);
 
 console.log(`words.test: ${checks} checks passed`);
