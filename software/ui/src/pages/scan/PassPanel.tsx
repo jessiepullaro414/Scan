@@ -17,7 +17,7 @@ import type { CheckPose, PassCompare, PassView, Scan } from "../../api/types";
 import { JobProgress } from "../../components/ScanBits";
 import { Button } from "../../components/ui/Button";
 import { Spinner } from "../../components/ui/Feedback";
-import { Switch } from "../../components/ui/Form";
+import { MovedQuestion } from "../../components/MovedQuestion";
 import { cannotMerge } from "../../lib/align";
 import {
   areasWords,
@@ -53,6 +53,9 @@ const asPose = (p: unknown): CheckPose | null => {
     ? (q as CheckPose)
     : null;
 };
+
+/** The id of the pass's moved-part question (the Scan page's "Answer it" focuses it). */
+export const PASS_MOVED_ID = "pass-moved-question";
 
 /** The pass's setup: the first scan for reference, the areas and places, the preset, the part moved or not. */
 export function PassSetup({ pending, live, firstScan, presetName }: { pending: PendingPass; live: boolean; firstScan: Scan | undefined; presetName: string }) {
@@ -107,19 +110,24 @@ export function PassSetup({ pending, live, firstScan, presetName }: { pending: P
       ) : (
         <div className="mt-2 text-[11.5px] leading-4 text-subtle">{placesWords(pending)}</div>
       )}
-      {live ? <div className="mt-2 text-[11.5px] leading-4 text-muted">{setupWords(!moved)}</div> : null}
+      {live && moved !== null ? <div className="mt-2 text-[11.5px] leading-4 text-muted">{setupWords(!moved)}</div> : null}
       {!live ? (
         <>
           <div className="mt-3 text-[11.5px] leading-4 text-muted">
             Preset: <span className="font-semibold text-fg">{presetName}</span>
             {pending.preset ? " (the first scan's; change it below if this pass needs another)" : " (as the first scan)"}.
           </div>
+          {/* U15: no default; Start waits for the answer */}
           <div className="mt-3">
-            <Switch
-              checked={moved}
+            <MovedQuestion
+              id={PASS_MOVED_ID}
+              value={moved}
               onChange={setMoved}
-              label="The part was moved since the first scan"
-              description="Then the table is not used to align the two scans, and each scan's table is left out of the merge."
+              question="Did you move or turn the part since the first scan?"
+              texts={{
+                moved: "The table is not used to align the two scans, and each scan's table is left out of the merge.",
+                same: "The table both scans share helps to align them, and it stays in the merge.",
+              }}
             />
           </div>
         </>

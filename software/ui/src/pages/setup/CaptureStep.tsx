@@ -17,6 +17,8 @@ import { navigate, paths } from "../../lib/router";
 import { KIND_META, lcFirst, STEP_META } from "../../lib/setup";
 import { playCaptureClick, unlockAudio } from "../../lib/sound";
 import { useHotkeys } from "../../lib/util";
+import { SHEETS } from "../../lib/shortcuts";
+import { ShortcutButton, ShortcutSheet } from "../../components/ShortcutSheet";
 import { isSessionActive, useCalib } from "../../store/calib";
 import { useDevice } from "../../store/device";
 import { isActive, useJobs } from "../../store/jobs";
@@ -392,6 +394,7 @@ function CaptureScreen({ kind }: { kind: CalibKind }) {
   const solve = useCalib((s) => s.solve);
   const cancel = useCalib((s) => s.cancel);
   const [confirm, setConfirm] = useState(false);
+  const [sheetOpen, setSheetOpen] = useState(false); // U25
   const [heatmap, setHeatmap] = useState(true);
   const capturing = state === "capturing";
   const lasers = kind === "lasers" || kind === "check";
@@ -410,6 +413,7 @@ function CaptureScreen({ kind }: { kind: CalibKind }) {
       enter: finish,
       backspace: () => void undo(),
       escape: () => setConfirm(true),
+      "?": () => setSheetOpen(true),
     },
     capturing,
   );
@@ -444,6 +448,9 @@ function CaptureScreen({ kind }: { kind: CalibKind }) {
           </div>
           <div className="border-t border-line">
             <CaptureControls kind={kind} onFinish={finish} onCancel={() => setConfirm(true)} />
+            <div className="px-4 pb-3">
+              <ShortcutButton onClick={() => setSheetOpen(true)} className="-ml-2" />
+            </div>
           </div>
         </aside>
       </div>
@@ -458,6 +465,7 @@ function CaptureScreen({ kind }: { kind: CalibKind }) {
       >
         {n ? `The ${n} captured view${n === 1 ? "" : "s"} stay on disk, but this session ends.` : "This session ends."} Your saved calibration doesn't change.
       </ConfirmDialog>
+      <ShortcutSheet open={sheetOpen} onClose={() => setSheetOpen(false)} sheet={SHEETS.capture} />
     </div>
   );
 }

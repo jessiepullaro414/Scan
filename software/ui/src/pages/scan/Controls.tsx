@@ -163,7 +163,7 @@ export function ControlBar({
           Pause
         </Button>
       )}
-      <Button size="lg" variant="danger" icon={Square} kbd="Esc" onClick={() => void stop()} title="Stop and save the recording">
+      <Button size="lg" variant="danger" icon={Square} kbd="Esc Esc" onClick={() => void stop()} title="Stop and save the recording (or press Esc twice)">
         Stop
       </Button>
     </div>

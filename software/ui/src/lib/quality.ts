@@ -3,10 +3,13 @@
  * Standard processes 30 frames per second of scanning (every 2nd frame of the 60 fps camera), Best every frame.
  * Older engines and stored links say "full", the old name of Standard.
  */
-import type { ProcessQuality } from "../api/types";
+import type { ProcessQuality } from "../api/types.ts";
 
-/** In the order the UI offers them: Standard is the default action, then Best, then Preview. */
-export const QUALITIES: ProcessQuality[] = ["standard", "best", "preview"];
+/** In the order the UI offers them, coarse to fine (UX_PLAN U49): Preview, Standard, Best. */
+export const QUALITIES: ProcessQuality[] = ["preview", "standard", "best"];
+
+/** The quality of the plain Make mesh button and of a new stage run. */
+export const DEFAULT_QUALITY: ProcessQuality = "standard";
 
 export const QUALITY_TEXT: Record<ProcessQuality, { label: string; short: string; help: string }> = {
   standard: { label: "Standard quality", short: "Standard", help: "Full resolution, 30 frames a second" },

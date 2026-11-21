@@ -88,6 +88,8 @@ import {
 } from "../lib/align";
 import { choiceText, mergeOffer, poseChoices, poseInUse, standingLabel, standingOf } from "../lib/alignChoice";
 import { fmtBytes } from "../lib/format";
+import { movedNeeded } from "../lib/moved";
+import { focusMovedQuestion, MovedQuestion } from "../components/MovedQuestion";
 import { href, navigate, paths } from "../lib/router";
 import { cn } from "../lib/util";
 import { useAlign, type Problem } from "../store/align";
@@ -102,20 +104,9 @@ type View = "pick" | "together";
 const ROLE: Record<Side, string> = { target: "Stays in place", source: "Is moved onto it" };
 const roleOf = (index: number, several: boolean): string => (index === 0 ? ROLE.target : several ? "Moved onto it" : ROLE.source);
 
-const SETUPS: { same: boolean; title: string; text: string; several: string }[] = [
-  {
-    same: true,
-    title: "The part stayed where it was",
-    text: "The table both scans share helps to line them up, and it stays in the merged scan.",
-    several: SETUP_TEXT.same,
-  },
-  {
-    same: false,
-    title: "The part was moved or turned over",
-    text: SETUP_TEXT.moved,
-    several: SETUP_TEXT.moved,
-  },
-];
+/** U15: what each answer to the moved-part question does (no answer is chosen first). */
+const MOVED_TEXT = { two: { moved: SETUP_TEXT.moved, same: "The table both scans share helps to line them up, and it stays in the merged scan." }, several: { moved: SETUP_TEXT.moved, same: SETUP_TEXT.same } };
+const ALIGN_MOVED_ID = "align-moved-question";
 
 /** What the merge left out of each scan's table (the part was moved), and what to look at. */
 function LeftOut({ merged }: { merged: MergeResult }) {
@@ -449,6 +440,8 @@ export default function AlignPage({
   /** The listed scans, each once and with a mesh (null where the list still names one it should not). */
   const listScans = useMemo(() => list.map((id, i) => (list.indexOf(id) === i ? (scans.find((s) => s.id === id) ?? null) : null)), [list, scans]);
   const ready = list.length >= 2 && listScans.every((s) => !!s);
+  // U15: aligning waits for the answer to the moved-part question
+  const movedWait = movedNeeded(st.sameSetup === null ? null : !st.sameSetup, "align");
   const nameOf = useCallback((id: string) => scans.find((s) => s.id === id)?.name ?? "a scan", [scans]);
   const colorOf = useCallback((id: string) => scanColor(Math.max(0, list.indexOf(id))), [list]);
 
@@ -823,28 +816,14 @@ export default function AlignPage({
         </Panel>
 
         <Panel title={several ? "Between the scans" : "Between the two scans"} icon={Move3d}>
-          <div role="radiogroup" aria-label={several ? "Was the part moved between the scans?" : "Was the part moved between the two scans?"} className="space-y-2">
-            {SETUPS.map((o) => {
-              const selected = st.sameSetup === o.same;
-              return (
-                <button
-                  key={String(o.same)}
-                  type="button"
-                  role="radio"
-                  aria-checked={selected}
-                  disabled={busy}
-                  onClick={() => st.setSameSetup(o.same)}
-                  className={cn(
-                    "flex w-full flex-col items-start gap-0.5 rounded-lg border px-3 py-2.5 text-left transition-[border-color,background-color,box-shadow] disabled:opacity-60",
-                    selected ? "border-accent bg-accent-soft shadow-[0_0_0_3px_var(--c-accent-soft)]" : "border-line bg-surface-2 hover:border-line-strong",
-                  )}
-                >
-                  <span className="text-sm font-medium text-fg">{o.title}</span>
-                  <span className="text-xs leading-5 text-muted">{several ? o.several : o.text}</span>
-                </button>
-              );
-            })}
-          </div>
+          <MovedQuestion
+            id={ALIGN_MOVED_ID}
+            value={st.sameSetup === null ? null : !st.sameSetup}
+            onChange={(moved) => st.setSameSetup(!moved)}
+            several={several}
+            disabled={busy}
+            texts={several ? MOVED_TEXT.several : MOVED_TEXT.two}
+          />
         </Panel>
 
         <Panel title="Align" icon={Wand}>
@@ -861,9 +840,17 @@ export default function AlignPage({
             </div>
           ) : (
             <>
-              <Button variant={hasAnswer ? "secondary" : "primary"} icon={Wand} className="w-full" disabled={!ready || merging} onClick={() => void st.align(false)}>
+              <Button variant={hasAnswer ? "secondary" : "primary"} icon={Wand} className="w-full" disabled={!ready || merging || !!movedWait} onClick={() => void st.align(false)}>
                 {hasAnswer ? "Align again from the shape alone" : several ? "Align the scans" : "Align the two scans"}
               </Button>
+              {movedWait ? (
+                <p className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs leading-5 text-warn" role="status">
+                  <span>{movedWait}</span>
+                  <Button size="xs" variant="secondary" onClick={() => focusMovedQuestion(ALIGN_MOVED_ID)}>
+                    Answer it
+                  </Button>
+                </p>
+              ) : null}
               {!hasAnswer ? (
                 <p className="mt-2 text-xs leading-5 text-subtle">
                   {several
@@ -1045,8 +1032,8 @@ export default function AlignPage({
             className="mt-3 w-full"
             variant={(result && !result.accepted && canAlignFromPoints) || (multi && !multi.accepted && canAlignFromPoints) ? "primary" : "secondary"}
             icon={MapPin}
-            disabled={!ready || busy || !canAlignFromPoints}
-            title={!canAlignFromPoints ? (several ? `Pick at least ${MIN_PAIRS} points on both scans of a pair first` : `Pick at least ${MIN_PAIRS} points on both scans first`) : undefined}
+            disabled={!ready || busy || !canAlignFromPoints || !!movedWait}
+            title={movedWait ?? (!canAlignFromPoints ? (several ? `Pick at least ${MIN_PAIRS} points on both scans of a pair first` : `Pick at least ${MIN_PAIRS} points on both scans first`) : undefined)}
             onClick={() => void st.align(true)}
           >
             Align from these points

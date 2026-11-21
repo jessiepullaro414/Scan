@@ -33,8 +33,9 @@ function save(p: PendingPass | null): void {
 
 type PassStore = {
   pending: PendingPass | null;
-  /** The part was moved since the first scan (the alignment then does not use the table). */
-  moved: boolean;
+  /** The part was moved or turned since the first scan (the alignment then does not use the table); null: not answered
+   *  yet. No default (UX_PLAN U15): the pass's Start waits for the answer. */
+  moved: boolean | null;
   setMoved: (v: boolean) => void;
   /** Keep what the Check panel picked and open the Scan page for the pass. */
   scanAreas: (args: { projectId: string; scan: Scan; result: CheckResult; why: CheckWhy | null; only?: number[]; plan?: CheckPlanPose[] }) => void;
@@ -43,12 +44,12 @@ type PassStore = {
 
 export const usePass = create<PassStore>((set, get) => ({
   pending: load(),
-  moved: false,
+  moved: null,
   setMoved: (v) => set({ moved: v }),
   scanAreas: (args) => {
     const p = pendingFromCheck(args);
     save(p);
-    set({ pending: p, moved: false });
+    set({ pending: p, moved: null });
     // the pass takes the first scan's preset unless the user picks another one (the picker shows it)
     const ps = usePresets.getState();
     ps.choose(p.preset?.id ?? GENERAL_ID);
@@ -78,6 +79,6 @@ export const usePass = create<PassStore>((set, get) => ({
   },
   clear: () => {
     save(null);
-    set({ pending: null, moved: false });
+    set({ pending: null, moved: null });
   },
 }));

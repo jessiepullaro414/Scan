@@ -75,7 +75,7 @@ function PageFor({ route }: { route: Route }) {
     case "scan":
       return (
         <Suspense fallback={<Loading3D />}>
-          <ScanPage projectParam={route.project} first={route.first} continues={route.continues} />
+          <ScanPage projectParam={route.project} first={route.first} continues={route.continues} choose={route.choose} />
         </Suspense>
       );
     case "device":

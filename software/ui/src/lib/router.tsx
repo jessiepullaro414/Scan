@@ -17,7 +17,8 @@ export type Route =
   /** M4: align scans of a project and merge them; the scans may be given in the address (`more`: the third and later). */
   | { name: "align"; pid: string; target: string | null; source: string | null; more: string[] }
   /** `continues`: the scan a second pass belongs to (FEATURE_PLAN N2), set by the Check panel's "Scan these areas". */
-  | { name: "scan"; project: string | null; first: boolean; continues: string | null }
+  /** `choose`: Home's "New scan": the project picker is focused, no project picked silently (UX_PLAN U44). */
+  | { name: "scan"; project: string | null; first: boolean; continues: string | null; choose: boolean }
   | { name: "device" }
   | { name: "setup"; step: SetupPage | null }
   /** The M1 address of the calibration page: redirects to the setup overview. */
@@ -62,7 +63,7 @@ export function parseRoute(hash: string): Route {
   if (a === "projects" && b && c === "scans" && d && e === "process" && parts.length === 5) return { name: "process", pid: b, sid: d };
   if (a === "scan" && parts.length === 1) {
     const first = query.get("first");
-    return { name: "scan", project: query.get("project"), first: first === "1" || first === "true", continues: query.get("continues") || null };
+    return { name: "scan", project: query.get("project"), first: first === "1" || first === "true", continues: query.get("continues") || null, choose: query.get("choose") === "1" };
   }
   if (a === "device" && parts.length === 1) return { name: "device" };
   if (a === "setup" && parts.length === 1) return { name: "setup", step: null };
@@ -88,11 +89,12 @@ export const paths = {
     const s = q.toString();
     return `/projects/${enc(pid)}/align${s ? `?${s}` : ""}`;
   },
-  scan: (project?: string | null, opts: { first?: boolean; continues?: string | null } = {}) => {
+  scan: (project?: string | null, opts: { first?: boolean; continues?: string | null; choose?: boolean } = {}) => {
     const q = new URLSearchParams();
     if (project) q.set("project", project);
     if (opts.first) q.set("first", "1");
     if (opts.continues) q.set("continues", opts.continues);
+    if (opts.choose) q.set("choose", "1");
     const s = q.toString();
     return s ? `/scan?${s}` : "/scan";
   },

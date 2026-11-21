@@ -17,6 +17,9 @@ import {
   Wand,
   Zap,
   CircleExclamationPoint,
+  Check,
+  ChevronDown,
+  Copy,
   type LucideIcon,
 } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
@@ -28,14 +31,16 @@ import { Button } from "../components/ui/Button";
 import { EmptyState, Skeleton } from "../components/ui/Feedback";
 import { Segmented, Slider, Switch } from "../components/ui/Form";
 import { Code, KeyValue, Page, PageHeader, Section } from "../components/ui/Layout";
-import { humanize } from "../lib/format";
+import { ADVANCED_TITLE, advancedSections, settingLabel } from "../lib/settingsWords";
 import { brightnessRows, laserSettingsOf } from "../lib/laserBrightness";
 import { FOUR_LASERS, TWO_LASERS, laserChoice, laserColor, laserLabel, type LaserChoice } from "../lib/laserSet";
 import { useConnection } from "../store/connection";
 import { configPathOf } from "../store/setup";
 import { useUi } from "../store/ui";
+import { cn, copyText } from "../lib/util";
 
 const SECTION_ICON: Record<string, LucideIcon> = {
+  general: FolderOpen,
   paths: FolderOpen,
   camera: Camera,
   pico: Cpu,
@@ -47,18 +52,6 @@ const SECTION_ICON: Record<string, LucideIcon> = {
   lasers: Zap,
   server: SettingsIcon,
   projects: FolderOpen,
-};
-
-const SECTION_HELP: Record<string, string> = {
-  paths: "Where calibration and scans are stored",
-  camera: "Camera mode and exposure",
-  pico: "Control board (Pico or ESP32) on USB: lasers, dots, motion sensor",
-  emitters: "Laser and dot levels per profile: vertical, horizontal, dots (%)",
-  live: "Preview-quality processing while scanning",
-  process: "Meshing defaults (Standard and Best quality)",
-  board: "ChArUco calibration board",
-  markers: "AprilTag stickers",
-  lasers: "The scanner's line lasers, for the laser calibration",
 };
 
 function unitFor(key: string): string {
@@ -74,33 +67,6 @@ function unitFor(key: string): string {
 }
 
 const PATHY = /[\\/]|^~/;
-
-const ACRONYMS = new Set(["imu", "fps", "id", "dpi", "tsdf", "ply", "stl", "obj", "ui", "api", "url", "lr", "gpu", "cpu"]);
-const SPECIAL: Record<string, string> = {
-  fourcc: "FourCC",
-  swap_lr: "Swap left / right",
-  config_file: "Config file",
-  projects_dir: "Projects folder",
-  scans_dir: "Scans folder",
-  square_mm: "Square size",
-  marker_mm: "Marker size",
-  tag_mm: "Tag size",
-  voxel_mm: "Mesh detail",
-  thin_walls: "Thin walls and edges",
-  markers_dot_level: "Dots in markers mode",
-  squares_x: "Squares across",
-  squares_y: "Squares down",
-};
-
-/** "imu_rate_hz" → "IMU rate": the unit is shown with the value instead. */
-function settingLabel(key: string): string {
-  if (SPECIAL[key]) return SPECIAL[key];
-  const base = key.replace(/_(mm|s|seconds|hz|px|deg|level)$/i, "");
-  const words = base.split(/[_-]+/).filter(Boolean);
-  return words
-    .map((w, i) => (ACRONYMS.has(w.toLowerCase()) ? w.toUpperCase() : i === 0 ? w.charAt(0).toUpperCase() + w.slice(1) : w))
-    .join(" ");
-}
 
 function Value({ k, v }: { k: string; v: unknown }): ReactNode {
   if (v === null || v === undefined) return <span className="text-subtle italic">auto</span>;
@@ -137,23 +103,75 @@ function Value({ k, v }: { k: string; v: unknown }): ReactNode {
   return String(v);
 }
 
-function SettingsSections({ settings }: { settings: Settings }) {
-  const entries = Object.entries(settings);
-  const scalars = entries.filter(([, v]) => v === null || typeof v !== "object" || Array.isArray(v));
-  const groups = entries.filter(([, v]) => v !== null && typeof v === "object" && !Array.isArray(v));
+/**
+ * U12: what the settings file says, read only, under a closed "Advanced" (lib/settingsWords.ts has the words): the
+ * settings changed on this page are saved there for you; any other is changed in the file.
+ */
+function AdvancedSettings({ settings, loading, onReload }: { settings: Settings; loading: boolean; onReload: () => void }) {
+  const [open, setOpen] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const file = configPathOf(settings) ?? (typeof settings.config_file === "string" ? settings.config_file : null) ?? "~/.ohs/config.toml";
+  const folder = file.replace(/[\\/][^\\/]*$/, "") || file;
+  const bodyId = "settings-advanced";
   return (
-    <div className="grid gap-5 lg:grid-cols-2">
-      {scalars.length ? (
-        <Section title="General" icon={SettingsIcon}>
-          <KeyValue rows={scalars.map(([k, v]) => [settingLabel(k), <Value k={k} v={v} />])} />
-        </Section>
-      ) : null}
-      {groups.map(([k, v]) => (
-        <Section key={k} title={humanize(k)} icon={SECTION_ICON[k] ?? FileCog} description={SECTION_HELP[k]}>
-          <KeyValue rows={Object.entries(v as Record<string, unknown>).map(([ck, cv]) => [settingLabel(ck), <Value k={ck} v={cv} />])} />
-        </Section>
-      ))}
-    </div>
+    <section className="mt-5 rounded-xl border border-line bg-surface shadow-sm" aria-label={ADVANCED_TITLE}>
+      <h2>
+        <button
+          type="button"
+          aria-expanded={open}
+          aria-controls={bodyId}
+          onClick={() => setOpen((v) => !v)}
+          className="flex w-full items-center gap-2 rounded-xl px-4 py-3 text-left hover:bg-surface-2/50"
+        >
+          <FileCog size={15} className="shrink-0 text-muted" aria-hidden />
+          <span className="flex-1 text-sm font-semibold text-fg">{ADVANCED_TITLE}</span>
+          <ChevronDown size={15} className={cn("shrink-0 text-subtle transition-transform", open ? "rotate-180" : "")} aria-hidden />
+        </button>
+      </h2>
+      <div id={bodyId} hidden={!open} className="border-t border-line p-4">
+        <p className="max-w-3xl text-sm text-muted">
+          Everything below comes from the settings file, <Code>{file}</Code>. The settings at the top of this page are saved there for you. To change
+          any other, edit the file and start the app again.
+        </p>
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <Button
+            size="sm"
+            icon={copied ? Check : Copy}
+            onClick={async () => {
+              if (await copyText(folder)) {
+                setCopied(true);
+                setTimeout(() => setCopied(false), 1600);
+              }
+            }}
+            title={folder}
+          >
+            {copied ? "Copied" : "Copy the settings folder's path"}
+          </Button>
+          <Button size="sm" variant="ghost" icon={RefreshCw} loading={loading} onClick={onReload}>
+            Read the file again
+          </Button>
+        </div>
+        <div className="mt-4 grid gap-5 lg:grid-cols-2">
+          {advancedSections(settings as Record<string, unknown>).map((sec) => (
+            <Section key={sec.key} title={sec.title} icon={SECTION_ICON[sec.key] ?? FileCog} description={sec.help}>
+              <KeyValue
+                rows={sec.rows.map((r) => [
+                  r.help ? (
+                    <span className="inline-flex max-w-[12rem] flex-col">
+                      <span>{r.label}</span>
+                      <span className="text-[11px] leading-4 text-subtle">{r.help}</span>
+                    </span>
+                  ) : (
+                    r.label
+                  ),
+                  <Value k={r.key} v={r.value} />,
+                ])}
+              />
+            </Section>
+          ))}
+        </div>
+      </div>
+    </section>
   );
 }
 
@@ -428,20 +446,8 @@ export function SettingsPage() {
 
   return (
     <Page wide>
-      <PageHeader
-        title="Settings"
-        subtitle={
-          <>
-            Edit <Code>{(settings && configPathOf(settings)) ?? "~/.ohs/config.toml"}</Code> (<Code>ohs config --init</Code> writes a
-            commented template), then restart the engine. Setup saves the camera choice and the paper size there for you.
-          </>
-        }
-        actions={
-          <Button icon={RefreshCw} loading={loading} onClick={() => void load()}>
-            Reload
-          </Button>
-        }
-      />
+      {/* U12: the settings a person changes on top; what the file says under a closed "Advanced" at the bottom */}
+      <PageHeader title="Settings" subtitle="How the app works on this computer. A change here is saved right away and used from the next scan or mesh on." />
 
       <div className="mb-5 grid gap-5 lg:grid-cols-2">
         <Section title="Appearance" icon={Palette}>
@@ -477,12 +483,24 @@ export function SettingsPage() {
             onChange={setTrackingNumbers}
           />
         </Section>
-        {settings ? <MeshingSection settings={settings} onSaved={setSettings} /> : null}
-        {settings ? <LasersSection settings={settings} onSaved={setSettings} /> : null}
+        {settings ? (
+          <>
+            <MeshingSection settings={settings} onSaved={setSettings} />
+            <LasersSection settings={settings} onSaved={setSettings} />
+          </>
+        ) : error ? null : (
+          [0, 1].map((i) => (
+            <div key={i} className="space-y-3 rounded-xl border border-line bg-surface p-4" aria-busy="true">
+              <Skeleton className="h-4 w-32" />
+              <Skeleton className="h-4 w-full" />
+              <Skeleton className="h-4 w-2/3" />
+            </div>
+          ))
+        )}
         <Section title="About" icon={Info}>
           <KeyValue
             rows={[
-              ["Studio UI", <span className="font-mono text-xs">0.3.0 (M3)</span>],
+              ["Studio UI", <span className="font-mono text-xs">0.3.0</span>],
               ["Engine", health ? <span className="font-mono text-xs">{`${health.app} ${health.version}`}</span> : serverVersion ?? "–"],
               ["Processing", health ? <ComputeLabel c={(health.engine as { compute?: unknown }).compute} /> : "–"],
               [
@@ -526,20 +544,9 @@ export function SettingsPage() {
             {error.hint ? <div className="mt-1 text-subtle">{error.hint}</div> : null}
           </EmptyState>
         </div>
-      ) : !settings ? (
-        <div className="grid gap-5 lg:grid-cols-2">
-          {Array.from({ length: 4 }, (_, i) => (
-            <div key={i} className="space-y-3 rounded-xl border border-line bg-surface p-4">
-              <Skeleton className="h-4 w-32" />
-              <Skeleton className="h-4 w-full" />
-              <Skeleton className="h-4 w-5/6" />
-              <Skeleton className="h-4 w-2/3" />
-            </div>
-          ))}
-        </div>
-      ) : (
-        <SettingsSections settings={settings} />
-      )}
+      ) : settings ? (
+        <AdvancedSettings settings={settings} loading={loading} onReload={() => void load()} />
+      ) : null}
     </Page>
   );
 }

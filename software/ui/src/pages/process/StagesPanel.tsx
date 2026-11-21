@@ -1,6 +1,6 @@
 /**
- * The stages of a scan's processing: Track (quality), Straighten (loop closure), Fuse (voxel
- * size), Refine from the images (a trial build) and Refine with lasers. Each shows its state, the engine's summary, its job's
+ * The stages of a scan's processing: Follow the camera (quality), Straighten (loop closure), Build the surface (at the
+ * Preset box's mesh detail, UX_PLAN U49), Refine from the images (a trial build, marked "Trial") and Refine with lasers. Each shows its state, the engine's summary, its job's
  * progress with Cancel, and Run / Re-run. Re-running asks first when there are edits: a new base
  * mesh starts them over.
  */
@@ -8,38 +8,54 @@ import { Crosshair, Images, Layers, Play, RotateCcw, Spline, Waypoints, type Luc
 import { useState, type ReactNode } from "react";
 import type { Job, ProcessQuality, ProcessState, Scan, StageId, StageInfo } from "../../api/types";
 import { JobProgress } from "../../components/ScanBits";
+import { Badge } from "../../components/ui/Badge";
 import { Button } from "../../components/ui/Button";
 import { ConfirmDialog } from "../../components/ui/Dialog";
 import { Segmented } from "../../components/ui/Form";
-import { fmtDateTime, fmtFixed, fmtInt, fmtRelative } from "../../lib/format";
+import { fmtDateTime, fmtFixed, fmtInt, fmtMm, fmtRelative } from "../../lib/format";
 import { stageBlock, type StageAction } from "../../lib/keepMode";
-import { QUALITIES, QUALITY_TEXT, normalizeQuality, qualityName } from "../../lib/quality";
+import { effectiveValue } from "../../lib/presets";
+import { DEFAULT_QUALITY, QUALITIES, QUALITY_TEXT, normalizeQuality, qualityName } from "../../lib/quality";
+import { STAGE_TITLES } from "../../lib/stages";
 import { cn } from "../../lib/util";
 import { isActive, useJobs } from "../../store/jobs";
+import { presetKey, usePresets } from "../../store/presets";
 import { useProcess } from "../../store/process";
 import { Help, Panel, StageBadge } from "./bits";
 import { PresetPanel } from "./PresetPanel";
 
-export const VOXELS = [0.5, 1, 2] as const;
-
 /** What the stages read of the scan: what it keeps on disk (R2) and whether it was merged. */
 type KeepFields = Pick<Scan, "keep" | "freed" | "has_recording" | "merged_from">;
 
-const STAGES: Record<StageId, { label: string; icon: LucideIcon; what: string }> = {
-  track: { label: "Follow the camera", icon: Waypoints, what: "Follows the scanner through the recording and builds a first mesh from the depth." },
+// U49: the names from lib/stages.ts; a trial build carries a "Trial" badge in its title
+const STAGES: Record<StageId, { label: string; icon: LucideIcon; what: string; trial: boolean }> = {
+  track: {
+    label: STAGE_TITLES.track.label,
+    trial: false,
+    icon: Waypoints,
+    what: "Follows the scanner through the recording and builds a first mesh from the depth, at the preset's mesh detail.",
+  },
   straighten: {
-    label: "Straighten",
+    label: STAGE_TITLES.straighten.label,
+    trial: false,
     icon: Spline,
     what: "Finds where the scan came back to a place it had seen and closes those loops, then lines the scan up where the laser lines of different frames cross.",
   },
-  fuse: { label: "Build the surface", icon: Layers, what: "Builds the mesh again from the camera path, at the detail you choose." },
+  fuse: {
+    label: STAGE_TITLES.fuse.label,
+    trial: false,
+    icon: Layers,
+    what: "Builds the mesh again from the camera path: after Straighten, or to change the mesh detail. “Follow the camera” already made a first mesh, so this one is optional.",
+  },
   spacetime: {
-    label: "Refine from the images",
+    label: STAGE_TITLES.spacetime.label,
+    trial: STAGE_TITLES.spacetime.trial,
     icon: Images,
-    what: "Measures the surface again against every frame: each frame lights it with a different arrangement of dots, so the small errors of single frames don't add up. Trial: it needs a GPU to be quick.",
+    what: "Measures the surface again against every frame: each frame lights it with a different arrangement of dots, so the small errors of single frames don't add up. A trial build: it needs a graphics card to be quick.",
   },
   refine: {
-    label: "Refine with lasers",
+    label: STAGE_TITLES.refine.label,
+    trial: false,
     icon: Crosshair,
     what: "Pulls the surface onto the laser lines where they disagree, with a smooth correction. The lines are measured on their own, so they correct the surface.",
   },
@@ -65,6 +81,7 @@ function StageCard({
   blocked,
   busy,
   onRun,
+  optional = false,
 }: {
   id: StageId;
   stage: StageInfo;
@@ -72,6 +89,8 @@ function StageCard({
   children?: ReactNode;
   details?: ReactNode;
   runLabel: string;
+  /** Not run, and not needed: "Optional" instead of "Not run" (Build the surface after "Follow the camera"). */
+  optional?: boolean;
   /** Why it can't run now (shown under the button), or null. */
   blocked: string | null;
   busy: boolean;
@@ -89,8 +108,21 @@ function StageCard({
         </div>
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
-            <h3 className="flex-1 text-sm font-semibold text-fg">{meta.label}</h3>
-            <StageBadge state={running ? "running" : stage.state} />
+            <h3 className="flex min-w-0 flex-1 flex-wrap items-center gap-x-1.5 text-sm font-semibold text-fg">
+              {meta.label}
+              {meta.trial ? (
+                <Badge tone="accent" title="A trial build: try it, and compare with the mesh before it">
+                  Trial
+                </Badge>
+              ) : null}
+            </h3>
+            {optional && stage.state === "none" && !running ? (
+              <Badge tone="neutral" dot>
+                Optional
+              </Badge>
+            ) : (
+              <StageBadge state={running ? "running" : stage.state} />
+            )}
           </div>
           <Help className="mt-0.5">{meta.what}</Help>
         </div>
@@ -136,9 +168,12 @@ export function StagesPanel({ pid, sid, state, busy, scan }: { pid: string; sid:
   // R2: what a freed (or merged) scan can no longer run, in the same words as the engine's refusals (lib/keepMode.ts)
   const gone = (a: StageAction) => (scan ? stageBlock(scan, state, a) : null);
   const { track, straighten, fuse, spacetime, refine } = state.stages;
-  const [quality, setQuality] = useState<ProcessQuality>(normalizeQuality(track.quality) ?? "standard");
-  // P2: a track made at a preset's mesh detail (track.voxel_mm) starts Fuse at that detail; else 1 mm as before
-  const [voxel, setVoxel] = useState<number>(fuse.voxel_mm ?? track.voxel_mm ?? 1);
+  const [quality, setQuality] = useState<ProcessQuality>(normalizeQuality(track.quality) ?? DEFAULT_QUALITY);
+  // U49: one "Mesh detail" control, the Preset box's; "Build the surface" uses it (before the preset is read: the
+  // detail of the last build, else of the track, else 1 mm as before)
+  const preset = usePresets((s) => s.scans[presetKey(pid, sid)]);
+  const presetVoxel = preset ? effectiveValue(preset, "voxel_mm") : null;
+  const voxel = typeof presetVoxel === "number" && presetVoxel > 0 ? presetVoxel : (fuse.voxel_mm ?? track.voxel_mm ?? 1);
   const [confirm, setConfirm] = useState<{ stage: StageId; run: () => Promise<unknown> } | null>(null);
   const edits = state.edits.length;
   const tracked = track.state === "done";
@@ -225,24 +260,20 @@ export function StagesPanel({ pid, sid, state, busy, scan }: { pid: string; sid:
           busy={busy}
           blocked={gone("fuse") ?? (tracked ? null : "Run “Follow the camera” first")}
           runLabel={fuse.state === "none" ? "Build" : "Run again"}
+          optional={tracked}
           onRun={() => go("fuse", () => runStage(pid, sid, "fuse", { voxel_mm: voxel }))}
           details={
             fuse.state === "done" && fuse.voxel_mm !== null && !fuse.summary ? (
               <p className="text-xs text-fg">
-                Mesh detail <b className="font-semibold tnum">{fmtFixed(fuse.voxel_mm, 1)}&#8239;mm</b>
+                Built at mesh detail <b className="font-semibold tnum">{fmtFixed(fuse.voxel_mm, 1)}&#8239;mm</b>
               </p>
             ) : null
           }
         >
-          <Segmented<string>
-            label="Mesh detail"
-            size="sm"
-            value={String(voxel)}
-            onChange={(v) => setVoxel(Number(v))}
-            disabled={busy || !tracked || !!gone("fuse")}
-            options={VOXELS.map((v) => ({ value: String(v), label: `${v}\u202fmm`, title: v === 0.5 ? "Finest detail, about 4× the triangles of 1\u202fmm" : v === 1 ? "The usual detail" : "Coarse and light" }))}
-          />
-          <Help>Finer mesh detail keeps smaller features; each halving makes about 4× the triangles.</Help>
+          <Help>
+            At the mesh detail in the Preset box above: <b className="font-semibold text-fg tnum">{fmtMm(voxel, voxel < 1 ? 2 : 1)}</b>. Finer mesh detail keeps
+            smaller features; each halving makes about 4× the triangles.
+          </Help>
         </StageCard>
 
         {spacetime ? (

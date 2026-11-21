@@ -28,6 +28,7 @@ import { Code, Page, PageHeader } from "../components/ui/Layout";
 import { Menu } from "../components/ui/Popover";
 import { fmtDateTime, fmtRelative } from "../lib/format";
 import { href, navigate, paths } from "../lib/router";
+import { getStarted } from "../lib/getStarted";
 import { firstUnfinished, minutesLeft, setupProgress, STATE_LABEL, STEP_META, STEP_ORDER } from "../lib/setup";
 import { cn, useTicker } from "../lib/util";
 import { useDevice } from "../store/device";
@@ -210,25 +211,17 @@ function ProjectCard({
   );
 }
 
+const STEP_ICON = { setup: Cpu, scan: ScanLine, mesh: Ruler } as const;
+
+/**
+ * No projects yet: the three steps. U26: while it is the first run the setup card above has the buttons, so this
+ * card has none and its step 1 is the setup itself, with its time (lib/getStarted.ts).
+ */
 function GetStarted({ onCreate }: { onCreate: () => void }) {
   const connect = useDevice((s) => s.connect);
-  const steps = [
-    {
-      icon: Cpu,
-      title: "Connect the scanner",
-      text: "Plug in the scanner's cameras and its control board (Pico or ESP32), or try the simulator: no hardware needed.",
-    },
-    {
-      icon: ScanLine,
-      title: "Scan the part",
-      text: "Sweep slowly 200–350\u202fmm from the surface. The model grows live; the raw stream is always recorded.",
-    },
-    {
-      icon: Ruler,
-      title: "Make the mesh and measure",
-      text: "One click builds the mesh at full resolution. Measure in mm, then export STL or PLY for CAD.",
-    },
-  ];
+  const setup = useSetup((s) => s.setup);
+  const { steps: words, buttons } = getStarted({ firstRun: !!setup?.first_run, minutes: minutesLeft(setup) });
+  const steps = words.map((w) => ({ ...w, icon: STEP_ICON[w.id] }));
   return (
     <div className="animate-fade-in overflow-hidden rounded-2xl border border-line bg-surface shadow-sm">
       <div className="grid gap-0 lg:grid-cols-[1.1fr_1fr]">
@@ -257,6 +250,7 @@ function GetStarted({ onCreate }: { onCreate: () => void }) {
               </li>
             ))}
           </ol>
+          {buttons ? (
           <div className="mt-7 flex flex-wrap gap-2">
             <Button variant="primary" size="lg" icon={Plus} onClick={onCreate}>
               Create your first project
@@ -273,6 +267,7 @@ function GetStarted({ onCreate }: { onCreate: () => void }) {
               Try the simulator
             </Button>
           </div>
+          ) : null}
         </div>
         <div className="relative hidden min-h-[320px] border-l border-line viewport-bg lg:block" aria-hidden>
           <HeroArt />
@@ -334,7 +329,6 @@ export function HomePage() {
   const rename = useProjects((s) => s.rename);
   const remove = useProjects((s) => s.remove);
   const setCurrent = useUi((s) => s.setCurrentProject);
-  const current = useUi((s) => s.currentProjectId);
   const projectsDir = useProjectsDir();
   const [creating, setCreating] = useState(false);
   const [renaming, setRenaming] = useState<ProjectSummary | null>(null);
@@ -351,11 +345,8 @@ export function HomePage() {
     return (list ?? []).filter((p) => !q || p.name.toLowerCase().includes(q));
   }, [list, query]);
 
-  const startScan = () => {
-    const target = current && list?.some((p) => p.id === current) ? current : list?.[0]?.id ?? null;
-    if (target) setCurrent(target);
-    navigate(paths.scan(target));
-  };
+  // U44: the Scan page opens with its project picker focused ("Choose the project for this scan"), not the first project picked silently
+  const startScan = () => navigate(paths.scan(null, { choose: true }));
 
   const empty = list !== null && list.length === 0;
 

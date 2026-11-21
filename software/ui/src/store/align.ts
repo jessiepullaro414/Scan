@@ -48,8 +48,9 @@ type AlignState = {
   pid: string | null;
   /** The scans, in order: the first stays in place, the others are moved onto it. */
   scans: string[];
-  /** The part was not moved on its table between the scans. */
-  sameSetup: boolean;
+  /** The part was not moved on its table between the scans; null: not answered yet. No default (UX_PLAN U15): aligning
+   *  waits for the answer. */
+  sameSetup: boolean | null;
   /** The points picked so far, per pair of scans. */
   picked: PickBook;
   /** The two scans shown side by side to pick on (null: the first two of the list). */
@@ -99,7 +100,7 @@ type AlignStore = AlignState & {
 const fresh = (): AlignState => ({
   pid: null,
   scans: [],
-  sameSetup: true,
+  sameSetup: null,
   picked: {},
   pickPair: null,
   alignStarting: false,
@@ -196,19 +197,19 @@ export const useAlign = create<AlignStore>((set, get) => ({
 
   align: async (fromPoints) => {
     const s = get();
-    const { pid, scans } = s;
-    if (!pid || scans.length < 2 || running(s)) return false;
+    const { pid, scans, sameSetup } = s;
+    if (!pid || scans.length < 2 || running(s) || sameSetup === null) return false; // U15: answered first
     let start: () => Promise<Job>;
     if (scans.length === 2) {
       const [target, source] = scans;
-      const body: AlignRequest = { target, source, same_setup: s.sameSetup };
+      const body: AlignRequest = { target, source, same_setup: sameSetup };
       if (fromPoints) {
         body.pairs = completePairs(picksFor(s.picked, target, source));
         if (body.pairs.length < MIN_PAIRS) return false;
       }
       start = () => api.alignScans(pid, body);
     } else {
-      const body: AlignAllRequest = { scans: [...scans], same_setup: s.sameSetup };
+      const body: AlignAllRequest = { scans: [...scans], same_setup: sameSetup };
       if (fromPoints) {
         body.picked = pickedPoints(s.picked, scans);
         if (!body.picked.length) return false;

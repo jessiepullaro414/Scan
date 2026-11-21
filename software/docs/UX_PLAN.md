@@ -97,6 +97,47 @@ How the picks were read, where the plan left room:
 - **"close every opening"** stays in the watertight label: it closes the outer edge too.
 - The firmware flashing steps keep "Pico": they are about that board.
 
+**Done (2026-11-20), the second wave: the structure of the pages.** U11, U12, U15, U25, U26,
+U44, U45, U49, in the pages alone. Looked at on the real engine too: the viewer's groups, the
+shortcut sheet, Settings, and the question on the Align page.
+
+- **U11, the viewer's side panel:** the scan's size stays on top; below it four folding groups,
+  only the first open: **Is it good?** (Scan check, processing report), **Measure**
+  (measurements, fitted shapes, the part's axes once a plane is saved, sections, flush),
+  **Compare with CAD**, **Export** (downloads, for CAD, report, Edit mesh, Make mesh again).
+  Turning on a tool opens its group; a folded group says what it holds ("1 fitted shape").
+- **U12, Settings:** Appearance, After a scan, While scanning, Meshing, Line lasers, About; then
+  a closed "Advanced: what the settings file says" with the file's path and every section read
+  only, in words a person reads. No command line at the top.
+- **U15:** "Did you move or turn the part between the two scans?" has no default: Yes and No
+  cards, each saying what the merge does with the table; Align (and a second pass's Start)
+  waits for the answer, with an "Answer it" button. "Make an ordinary scan instead" stays, so
+  nothing stops a scan.
+- **U25:** "?" opens a sheet of the page's shortcuts on the Scan page, the viewer, Edit mesh and
+  the two calibration screens; a test reads each page's key map and fails when a key is missing
+  from its sheet or listed twice. On Edit mesh the hole outlines moved from H to O.
+- **U26:** during the first run only the setup card has buttons; the three-steps card points
+  to it.
+- **U44:** "New scan" on Home opens the Scan page with the project picker focused and asked
+  for; the first project is no longer taken silently.
+- **U45:** Esc twice within a second stops a scan; one Esc shows "Press Esc again to stop".
+- **U49:** one "Mesh detail" control (the preset's); "Build the surface" says it is optional
+  and when it is needed; "Refine from the images" is marked a trial.
+
+Left from the second wave, for the third (they need the server):
+
+- "Open the settings folder" (U12): one route could serve it, U34's log folder and U39's
+  project folder, for example `POST /api/open-folder` with `{what: "settings" | "logs" |
+  "project", project_id?}`. Until then Settings has "Copy the settings folder's path".
+- A second pass started from the scanner's own trigger does not go through the page, so the
+  moved-part question (U15) cannot hold it. The engine should not start a pass whose answer is
+  missing: the page would send the answer ahead, and the trigger would be refused in a plain
+  sentence while there is none.
+- Seen on the way, not mended: at 800 px the shading toolbar of the viewer and of Edit mesh
+  is cut off on the right; the second pass panel's title is squeezed by its button at 1280;
+  "Needs a GPU" in Settings and two tooltips (U5 says "graphics card"); "Planes you calibrated
+  are kept" under Line lasers.
+
 ### [ ] U51. The old names in texts the engine itself makes (found in the first wave, S)
 The server and the pages are done; these sentences are made deeper in the engine and reach
 the user through them, and the demo mirrors them (so `api/mock` is outside the pages' guard).
@@ -241,7 +282,7 @@ Words only. U4 and U47 are ticked with this.
   "Both laser lines are calibrated well."; "...The lines are measured on their own, so they
   correct the surface." The demo says what the server says (U31).
 
-### [ ] U11. The viewer's side panel: order and grouping (choice, M)
+### [x] U11. The viewer's side panel: order and grouping (choice, M)
 - Today: Size; Measurements; Fitted shapes; Coordinate system (an empty form); Sections; Kept
   sections; Flush; Kept seams; Check; Compare; References; Fine-tune; Download; For CAD; Report;
   Remake; Processing report.
@@ -251,7 +292,7 @@ Words only. U4 and U47 are ticked with this.
   plane is kept, as "Set the part's axes…"; (3) "Compare with CAD"; (4) "Export": Download, For
   CAD, Report, Fine-tune, Remake.
 
-### [ ] U12. The Settings page is a dump of the settings file (choice, L; smallest step S)
+### [x] U12. The Settings page is a dump of the settings file (choice, L; smallest step S)
 - "Edit ~/.ohs/config.toml (ohs config --init ...), then restart the engine."; rows such as
   "FourCC MJPG", "Baud 115200", "Poisson Off", "Dictionary DICT_5X5_100"; two folders; "(M3)".
 - **Pick:** the four real settings on top (Theme, After a scan, Thin walls, Line lasers); the
@@ -271,7 +312,7 @@ Words only. U4 and U47 are ticked with this.
 - **Pick:** "Removed 3 loose bits, the largest 4.2 mm across", and "Show what was removed".
   Measure on the real engine whether a 0.5 mm tab cut off by noise is caught (V5).
 
-### [ ] U15. The moved-part question has a silent default (choice, S)
+### [x] U15. The moved-part question has a silent default (choice, S)
 - Align preselects "The part stayed where it was"; the pass leaves "The part was moved"
   unticked. Turning the part over is the usual reason for a second scan.
 - **Pick:** no default: "Did you move or turn the part between the two scans? Yes / No" must be
@@ -324,11 +365,11 @@ Words only. U4 and U47 are ticked with this.
 ### [x] U24. A button called "Not a pass" (defect, S)
 - **Mend:** "Make an ordinary scan instead".
 
-### [ ] U25. Shortcuts (defect and choice, S)
+### [x] U25. Shortcuts (defect and choice, S)
 - The viewer says "1–6 shading" for 7 modes. H, P, C mean other things on the Process page.
 - **Mend:** "1–7"; **pick:** a "?" sheet for each page, and "O" for openings on Process.
 
-### [ ] U26. Two first-run cards compete (choice, S to M)
+### [x] U26. Two first-run cards compete (choice, S to M)
 - The setup card above "From part to mesh in three steps", whose steps leave out calibration
   and name only the Pico.
 - **Pick:** while it is the first run, step 1 reads "Set up the scanner (about 16 minutes,
@@ -404,11 +445,11 @@ Words only. U4 and U47 are ticked with this.
 ### [x] U43. "Check answer at ± mm" (defect, S)
 - **Mend:** "Tolerance for the report's Scan check, ± mm".
 
-### [ ] U44. "New scan" on Home silently picks the first project (choice, S)
+### [x] U44. "New scan" on Home silently picks the first project (choice, S)
 - **Pick:** open the Scan page with the project picker focused: "Choose the project for this
   scan".
 
-### [ ] U45. Esc stops a scan (choice, S)
+### [x] U45. Esc stops a scan (choice, S)
 - Esc is also "dismiss". **Pick:** Esc twice within a second, with "Press Esc again to stop".
 
 ### [x] U46. "Calibration loaded" right under "Recalibration required" (defect, S)
@@ -424,7 +465,7 @@ Words only. U4 and U47 are ticked with this.
   fact). **Mend:** "Calibration valid" for the state; "Calibration loaded" only for "a file is
   in use".
 
-### [ ] U49. The Process page's stage list (choice, M)
+### [x] U49. The Process page's stage list (choice, M)
 - "Track ... fuses the depth into a mesh" then "Fuse: Not run"; qualities in the order
   Standard, Best, Preview; mesh detail in three places on one page.
 - **Pick:** Preview, Standard, Best; one "Mesh detail" control in the Preset box, which Fuse

@@ -16,7 +16,7 @@ import {
   Waypoints,
   TriangleExclamationPoint,
 } from "lucide-react";
-import { useId, useState, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import type { ScanMode } from "../../api/types";
 import { EmitterSliders } from "../../components/EmitterSliders";
 import { Button } from "../../components/ui/Button";
@@ -24,6 +24,7 @@ import { PromptDialog } from "../../components/ui/Dialog";
 import { Field, Segmented, Select, TextInput } from "../../components/ui/Form";
 import { fmtClock, fmtCompact, fmtFixed, fmtInt, fmtMm, fmtSize, NNBSP, withUnit } from "../../lib/format";
 import { describeTracking } from "../../lib/tracking";
+import { CHOOSE_PROJECT_TEXT } from "../../lib/scanProject";
 import { healthView, loadedLine } from "../../lib/calibHealth";
 import { useDeviceHealth } from "../../components/CalibHealth";
 import { navigate, paths } from "../../lib/router";
@@ -163,6 +164,8 @@ export function ScanSetup({
   setName,
   mode,
   setMode,
+  choose = false,
+  onChosen,
 }: {
   projectId: string | null;
   setProjectId: (id: string | null) => void;
@@ -170,6 +173,10 @@ export function ScanSetup({
   setName: (v: string) => void;
   mode: ScanMode;
   setMode: (m: ScanMode) => void;
+  /** U44: Home's "New scan": the picker is focused and asks "Choose the project for this scan" until one is picked. */
+  choose?: boolean;
+  /** A project was picked while asking: the page drops the question from its address. */
+  onChosen?: (id: string) => void;
 }) {
   const device = useDevice((s) => s.device);
   const connect = useDevice((s) => s.connect);
@@ -184,6 +191,16 @@ export function ScanSetup({
   const loaded = loadedLine(healthView(useDeviceHealth())); // U46
   const nameId = useId();
   const projId = useId();
+  const pickRef = useRef<HTMLSelectElement>(null);
+  const createRef = useRef<HTMLButtonElement>(null);
+  const [asking, setAsking] = useState(choose);
+  useEffect(() => setAsking(choose), [choose]);
+  // the picker (or "Create a project" when there is none) takes the focus once the list is known
+  const listKnown = list !== null;
+  useEffect(() => {
+    if (!asking || !listKnown) return;
+    (pickRef.current ?? createRef.current)?.focus();
+  }, [asking, listKnown]);
 
   return (
     <PanelSection title="Scan setup" icon={SlidersHorizontal}>
@@ -234,14 +251,14 @@ export function ScanSetup({
             </>
           )}
         </Check1>
-        <Check1 ok={!!projectId} warn={!projectId}>
-          {projectId ? (project?.name ?? list?.find((p) => p.id === projectId)?.name ?? "Project selected") : "Choose a project below"}
+        <Check1 ok={!!projectId && !asking} warn={!projectId || asking}>
+          {projectId && !asking ? (project?.name ?? list?.find((p) => p.id === projectId)?.name ?? "Project selected") : asking ? CHOOSE_PROJECT_TEXT : "Choose a project below"}
         </Check1>
       </ul>
 
       <div className="space-y-4">
         <Field
-          label="Project"
+          label={asking ? CHOOSE_PROJECT_TEXT : "Project"}
           htmlFor={projId}
           aside={
             <button type="button" className="inline-flex items-center gap-1 text-xs font-medium text-accent hover:underline" onClick={() => setCreating(true)}>
@@ -250,7 +267,25 @@ export function ScanSetup({
           }
         >
           {list && list.length ? (
-            <Select id={projId} value={projectId ?? ""} onChange={(e) => setProjectId(e.target.value || null)}>
+            <Select
+              ref={pickRef}
+              id={projId}
+              value={projectId ?? ""}
+              onChange={(e) => {
+                setProjectId(e.target.value || null);
+                if (e.target.value) {
+                  setAsking(false);
+                  onChosen?.(e.target.value);
+                }
+              }}
+              onBlur={() => {
+                if (projectId && asking) {
+                  setAsking(false);
+                  onChosen?.(projectId);
+                }
+              }}
+              className={asking ? "rounded-md ring-2 ring-accent/60" : undefined}
+            >
               {!projectId ? <option value="">Choose a project…</option> : null}
               {list.map((p) => (
                 <option key={p.id} value={p.id}>
@@ -259,7 +294,7 @@ export function ScanSetup({
               ))}
             </Select>
           ) : (
-            <Button className="w-full" icon={FolderPlus} onClick={() => setCreating(true)}>
+            <Button ref={createRef} className="w-full" icon={FolderPlus} onClick={() => setCreating(true)}>
               Create a project
             </Button>
           )}

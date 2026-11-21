@@ -18,6 +18,7 @@ import {
 import { useRef, useState } from "react";
 import { IconButton, Button } from "../../components/ui/Button";
 import { Kbd } from "../../components/ui/Feedback";
+import { KeyCaps } from "../../components/ShortcutSheet";
 import { fmtClock, fmtFixed, fmtInt, fmtMm, withUnit } from "../../lib/format";
 import { navigate, paths } from "../../lib/router";
 import {
@@ -278,13 +279,15 @@ export function ViewToolbar({
 const SHORTCUTS: [string, string][] = [
   ["Space", "Start · pause · resume"],
   ["R", "Rewind 2\u202fs"],
-  ["Esc", "Stop and save"],
+  ["Esc Esc", "Stop and save"],
   ["F", "Frame the model"],
-  ["?", "Show / hide this help"],
 ];
 
-/** Keyboard help. `compact` (narrow view, controls busy) shows just the button unless asked. */
-export function ShortcutHints({ compact = false }: { compact?: boolean }) {
+/**
+ * Keyboard help. `compact` (narrow view, controls busy) shows just the button unless asked. U25: the card lists the
+ * Scan sheet's main keys (lib/shortcuts.ts); "?" and its link open the whole sheet.
+ */
+export function ShortcutHints({ compact = false, onSheet }: { compact?: boolean; onSheet: () => void }) {
   const pref = useUi((s) => s.hintsOpen);
   const setPref = useUi((s) => s.setHintsOpen);
   const [peek, setPeek] = useState(false);
@@ -294,7 +297,7 @@ export function ShortcutHints({ compact = false }: { compact?: boolean }) {
     return (
       <IconButton
         icon={Keyboard}
-        label="Keyboard shortcuts (?)"
+        label="Show the keyboard shortcuts"
         variant="secondary"
         size="md"
         className="glass !border-line-strong shadow-md"
@@ -318,11 +321,16 @@ export function ShortcutHints({ compact = false }: { compact?: boolean }) {
       <ul className="space-y-1">
         {SHORTCUTS.map(([k, v]) => (
           <li key={k} className="flex items-center gap-2 text-xs text-muted">
-            <Kbd className="min-w-[38px]">{k}</Kbd>
+            <span className="min-w-[64px]">
+              <KeyCaps keys={k} />
+            </span>
             <span>{v}</span>
           </li>
         ))}
       </ul>
+      <button type="button" onClick={onSheet} className="mt-1.5 inline-flex items-center gap-1.5 text-[11.5px] font-medium text-accent hover:underline">
+        All shortcuts <Kbd>?</Kbd>
+      </button>
     </div>
   );
 }

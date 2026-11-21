@@ -19,6 +19,8 @@ import { sentence } from "../../api/http";
 import { asPercent, KIND_META } from "../../lib/setup";
 import { unlockAudio } from "../../lib/sound";
 import { cn, clamp, useHotkeys } from "../../lib/util";
+import { SHEETS } from "../../lib/shortcuts";
+import { ShortcutButton, ShortcutSheet } from "../../components/ShortcutSheet";
 import { useCalib } from "../../store/calib";
 import { useJobs } from "../../store/jobs";
 import { SoundToggle } from "./capture/CapturePanel";
@@ -184,6 +186,7 @@ export function ImuScreen() {
   const jobId = useCalib((s) => s.session?.job_id ?? null);
   const job = useJobs((s) => (jobId ? s.jobs[jobId] : undefined));
   const [confirm, setConfirm] = useState(false);
+  const [sheetOpen, setSheetOpen] = useState(false); // U25
 
   const recording = state === "recording";
   const armed = state === "armed";
@@ -225,6 +228,7 @@ export function ImuScreen() {
         if (recorded) void solve();
       },
       escape: () => setConfirm(true),
+      "?": () => setSheetOpen(true),
     },
     !solving,
   );
@@ -388,6 +392,7 @@ export function ImuScreen() {
               <div className="mb-1 text-[11px] font-semibold uppercase tracking-wider text-subtle">Turn rate</div>
               <GyroGauge dps={gyro} phase={p} />
             </div>
+            <ShortcutButton onClick={() => setSheetOpen(true)} className="-ml-2" />
           </aside>
         </div>
       </div>
@@ -401,6 +406,7 @@ export function ImuScreen() {
       >
         The recording stays on disk, but this session ends. Your saved calibration doesn't change.
       </ConfirmDialog>
+      <ShortcutSheet open={sheetOpen} onClose={() => setSheetOpen(false)} sheet={SHEETS.imu} />
     </div>
   );
 }

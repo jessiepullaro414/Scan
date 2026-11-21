@@ -30,7 +30,7 @@ check(capturing?.reason === "A calibration is in progress in Setup." && capturin
 check(capturing?.sidebar === "Setup: a calibration is in progress", "capturing: the sidebar's label");
 
 const onCheck: Route = { name: "setup", step: "check" };
-const scan: Route = { name: "scan", project: null, first: false, continues: null };
+const scan: Route = { name: "scan", project: null, first: false, continues: null, choose: false };
 const home: Route = { name: "home" };
 check(closesOnLeave(session("result", "check", false), onCheck, scan), "leaving a check result by the sidebar closes it");
 check(closesOnLeave(session("result", "check", false), onCheck, { name: "setup", step: "done" }), "leaving by the step rail closes it");

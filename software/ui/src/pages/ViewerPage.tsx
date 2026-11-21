@@ -20,6 +20,7 @@
 import {
   ArrowLeft,
   Box,
+  ChevronDown,
   CircleExclamationPoint,
   Download,
   Eye,
@@ -55,7 +56,10 @@ import { KeyValue } from "../components/ui/Layout";
 import { scanHealthDetail, scanHealthOf } from "../lib/calibHealth";
 import { downloadFile } from "../lib/download";
 import { decodeFaces, fitLabel, fitName, regionTriangles, summarizeRegion, type RegionSummary } from "../lib/fits";
-import { fileStem, fmtBytes, fmtCompact, fmtDateTime, fmtDuration, fmtFixed, fmtInt, fmtMm, fmtPct, keyRanges } from "../lib/format";
+import { fileStem, fmtBytes, fmtCompact, fmtDateTime, fmtDuration, fmtFixed, fmtInt, fmtMm, fmtPct } from "../lib/format";
+import { viewerSheet } from "../lib/shortcuts";
+import { axesEntry, groupOfTool, initialOpen, openFor, type GroupsOpen, type ViewerGroupId, type ViewerTool } from "../lib/viewerGroups";
+import { ShortcutButton, ShortcutSheet } from "../components/ShortcutSheet";
 import { remakeBlock } from "../lib/keepMode";
 import { hasLaserValues } from "../lib/lasers";
 import { axisOrder, deltaOf, fmtVec, pointToPart, readFrame } from "../lib/partFrame";
@@ -231,12 +235,67 @@ function ReportSummary({ report }: { report: Rec }) {
 }
 
 // ------------------------------------------------------------------ panel bits
+/** One of the side panel's four groups (U11): a heading that folds it, the count of what is saved inside when folded. */
+function Group({
+  id,
+  title,
+  icon: Icon,
+  open,
+  onToggle,
+  summary,
+  children,
+}: {
+  id: ViewerGroupId;
+  title: string;
+  icon: typeof Box;
+  open: boolean;
+  onToggle: (id: ViewerGroupId) => void;
+  summary?: string | null;
+  children: ReactNode;
+}) {
+  const bodyId = `viewer-group-${id}`;
+  return (
+    <section className="border-b border-line" aria-label={title}>
+      <h2>
+        <button
+          type="button"
+          aria-expanded={open}
+          aria-controls={bodyId}
+          onClick={() => onToggle(id)}
+          className="flex w-full items-center gap-2 px-4 py-3 text-left transition-colors hover:bg-surface-2/50 focus-visible:outline-offset-[-2px]"
+        >
+          <Icon size={15} className="shrink-0 text-muted" aria-hidden />
+          <span className="flex-1 text-sm font-semibold text-fg">{title}</span>
+          {!open && summary ? <span className="truncate text-[11px] text-subtle">{summary}</span> : null}
+          <ChevronDown size={15} className={cn("shrink-0 text-subtle transition-transform", open ? "rotate-180" : "")} aria-hidden />
+        </button>
+      </h2>
+      <div id={bodyId} hidden={!open}>
+        {children}
+      </div>
+    </section>
+  );
+}
+
+/** "2 measurements · 1 fitted shape" for a folded Measure group; null when nothing is saved. */
+function savedSummary(measurements: number, shapes: number, sections: number, seams: number): string | null {
+  const parts = [
+    [measurements, "measurement"],
+    [shapes, "fitted shape"],
+    [sections, "section"],
+    [seams, "seam"],
+  ]
+    .filter(([n]) => (n as number) > 0)
+    .map(([n, w]) => `${n} ${w}${n === 1 ? "" : "s"}`);
+  return parts.length ? parts.join(" · ") : null;
+}
+
 function Panel({ title, icon: Icon, children, aside }: { title: string; icon: typeof Box; children: ReactNode; aside?: ReactNode }) {
   return (
-    <section className="border-b border-line px-4 py-4" aria-label={title}>
+    <section className="border-t border-line/70 px-4 py-4" aria-label={title}>
       <div className="mb-3 flex items-center gap-2">
         <Icon size={14} className="text-muted" aria-hidden />
-        <h2 className="flex-1 text-xs font-semibold uppercase tracking-wider text-muted">{title}</h2>
+        <h3 className="flex-1 text-xs font-semibold uppercase tracking-wider text-muted">{title}</h3>
         {aside}
       </div>
       {children}
@@ -461,12 +520,34 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
     [pid, sid],
   );
 
+  /** U11: the side panel's four groups, the first open; a tool turned on opens the group its panel is in. */
+  const [groupsOpen, setGroupsOpen] = useState<GroupsOpen>(initialOpen);
+  const openGroupFor = (t: ViewerTool) => {
+    const g = groupOfTool(t);
+    if (groupsOpen[g]) return;
+    setGroupsOpen((o) => openFor(o, t));
+    // the group just opened is brought into the panel's view (it may be below the fold)
+    setTimeout(() => document.getElementById(`viewer-group-${g}`)?.parentElement?.scrollIntoView({ block: "start", behavior: "smooth" }), 50);
+  };
+  const toggleGroup = (id: ViewerGroupId) => setGroupsOpen((o) => ({ ...o, [id]: !o[id] }));
+  /** "Set the part's axes…" was pressed (the panel shows; it shows anyway once the scan has axes). */
+  const [axesAsked, setAxesAsked] = useState(false);
+  /** U25: the shortcut sheet. */
+  const [sheetOpen, setSheetOpen] = useState(false);
+  useEffect(() => {
+    if (shading === "reference") openGroupFor("reference");
+  }, [shading]);
+  useEffect(() => {
+    if (pickPairs) openGroupFor("pairs");
+  }, [pickPairs]);
+
   // Measure, Fit, Section and Flush are one tool at a time.
   const pickTool = (t: "measure" | "fit" | "section" | "flush" | null) => {
     setMeasure(t === "measure");
     setFitOn(t === "fit");
     setSectionOn(t === "section");
     setFlushOn(t === "flush");
+    if (t) openGroupFor(t);
   };
   const fitShape = (k: FitKind) => {
     setFitKind(k);
@@ -550,6 +631,7 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
     "5": () => devEnabled && setShading("deviation"),
     "6": () => setShading("lasers"),
     "7": () => refEnabled && setShading("reference"),
+    "?": () => setSheetOpen(true),
     escape: () => {
       if (pendingRef.current) setPendingPoint(null);
       else if (measure) setMeasure(false);
@@ -728,6 +810,7 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
     }),
     [cmp.ghost, cmp.refGeometry, cmp.matrix, cmp.lit, cmp.tolerance],
   );
+  const axes = axesEntry({ planes: planeFits.length, hasFrame: !!kept?.frame, asked: axesAsked });
   const frameState: "none" | "out_of_date" | "current" = partFrame ? (partFrame.out_of_date ? "out_of_date" : "current") : kept?.frame ? "out_of_date" : "none";
   const deltaNames = shownFrame ? ["ΔX", "ΔY", "ΔZ"] : ["Δx", "Δy", "Δz"];
   const measureRows = useMemo(
@@ -1104,20 +1187,73 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
               <Skeleton className="h-3 w-56" />
             </div>
           )}
-        </div>
-
-        <Panel title="Size" icon={Box}>
+          {/* U11: the size stays in view above the groups; its details are in the processing report */}
           {size ? (
-            <>
+            <div className="mt-3" aria-label="Size">
               <div className="grid grid-cols-3 gap-2">
                 {(["x", "y", "z"] as const).map((k) => (
-                  <div key={k} className="rounded-lg border border-line bg-surface-2/60 px-2.5 py-2">
+                  <div key={k} className="rounded-lg border border-line bg-surface-2/60 px-2.5 py-1.5">
                     <div className="text-[10.5px] font-semibold uppercase text-subtle">{k}</div>
-                    <div className="font-mono text-sm font-semibold text-fg tnum">{fmtFixed(size[k], 1)}</div>
-                    <div className="text-[10px] text-subtle">mm</div>
+                    <div className="font-mono text-sm font-semibold text-fg tnum">
+                      {fmtFixed(size[k], 1)}
+                      <span className="text-[10.5px] font-normal text-subtle">&#8239;mm</span>
+                    </div>
                   </div>
                 ))}
               </div>
+              <div className="mt-1.5 text-[11px] text-subtle">Size along the scan's own directions.</div>
+            </div>
+          ) : hasResult && load.phase !== "error" ? (
+            <div className="mt-3 grid grid-cols-3 gap-2" aria-busy="true">
+              {[0, 1, 2].map((i) => (
+                <Skeleton key={i} className="h-[46px]" />
+              ))}
+            </div>
+          ) : null}
+        </div>
+
+        <Group id="good" title="Is it good?" icon={CHECK_ICON} open={groupsOpen.good} onToggle={toggleGroup}>
+          {hasResult ? (
+            <Panel title="Scan check" icon={CHECK_ICON}>
+              <CheckPanel
+                check={check}
+                ready={!!geometry}
+                onScanAreas={
+                  project && scan?.result && check.result ? (pick) => usePass.getState().scanAreas({ projectId: project.id, scan, result: check.result!, why: check.why.why, ...pick }) : undefined
+                }
+                hasSigma={hasSigma}
+                remake={
+                  project && scan ? (
+                    <span className="inline-flex flex-col items-start gap-1">
+                      <MakeMeshButton projectId={project.id} scan={scan} label="Make the mesh again" blocked={remakeBlock(scan)} />
+                      {remakeBlock(scan) ? <span className="text-[11.5px] leading-4 text-subtle">{remakeBlock(scan)}</span> : null}
+                    </span>
+                  ) : undefined
+                }
+                holes={
+                  openHoles
+                    ? {
+                        count: openHoles,
+                        action: (
+                          <Button size="xs" icon={SlidersHorizontal} onClick={() => navigate(paths.process(pid, sid))}>
+                            See them on the Edit mesh page
+                          </Button>
+                        ),
+                      }
+                    : null
+                }
+              />
+            </Panel>
+          ) : null}
+          <Panel title="Processing report" icon={FileText}>
+            {report ? (
+              <ReportSummary report={report} />
+            ) : hasResult ? (
+              <div className="text-sm text-muted">No processing report for this result.</div>
+            ) : (
+              <div className="text-sm text-muted">Shown after meshing.</div>
+            )}
+            {size ? (
               <KeyValue
                 dense
                 className="mt-3"
@@ -1128,19 +1264,18 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
                   load.phase === "ready" ? ["PLY size", <span className="font-mono text-xs tnum">{fmtBytes(load.bytes)}</span>] : null,
                 ]}
               />
-              <div className="mt-2 text-[11px] text-subtle">Size along the scan's own directions.</div>
-            </>
-          ) : hasResult && load.phase !== "error" ? (
-            <div className="grid grid-cols-3 gap-2" aria-busy="true">
-              {[0, 1, 2].map((i) => (
-                <Skeleton key={i} className="h-[62px]" />
-              ))}
-            </div>
-          ) : (
-            <div className="text-sm text-muted">Shown once the mesh is made.</div>
-          )}
-        </Panel>
+            ) : null}
+          </Panel>
+        </Group>
 
+        <Group
+          id="measure"
+          title="Measure"
+          icon={Ruler}
+          open={groupsOpen.measure}
+          onToggle={toggleGroup}
+          summary={savedSummary(keptMeasurements.length, fits.length, keptSections?.length ?? 0, keptSeams?.length ?? 0)}
+        >
         <Panel
           title="Measurements"
           icon={Ruler}
@@ -1260,22 +1395,32 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
           />
         </Panel>
 
-        <Panel title="The part's axes" icon={FRAME_ICON}>
-          <FramePanel
-            raw={kept?.frame ?? null}
-            fits={fits}
-            selected={pickedFits.length ? pickedFits[pickedFits.length - 1] : null}
-            inPart={inPart}
-            onInPart={setInPart}
-            framing={framing}
-            onBuild={(body) => useFeatures.getState().buildFrame(pid, sid, body)}
-            onRemove={() => {
-              void useFeatures.getState().removeFrame(pid, sid);
-              setInPart(false);
-            }}
-            ready={!!geometry}
-          />
-        </Panel>
+        {/* U11: the part's axes only once a plane is saved, first as "Set the part's axes…" */}
+        {axes === "offer" ? (
+          <div className="border-t border-line/70 px-4 py-3">
+            <Button size="sm" icon={FRAME_ICON} onClick={() => setAxesAsked(true)}>
+              Set the part's axes…
+            </Button>
+            <p className="mt-1.5 text-[11.5px] leading-4 text-subtle">Level, turn and zero the scan on the part's own faces and holes, from the saved fitted shapes.</p>
+          </div>
+        ) : axes === "panel" ? (
+          <Panel title="The part's axes" icon={FRAME_ICON}>
+            <FramePanel
+              raw={kept?.frame ?? null}
+              fits={fits}
+              selected={pickedFits.length ? pickedFits[pickedFits.length - 1] : null}
+              inPart={inPart}
+              onInPart={setInPart}
+              framing={framing}
+              onBuild={(body) => useFeatures.getState().buildFrame(pid, sid, body)}
+              onRemove={() => {
+                void useFeatures.getState().removeFrame(pid, sid);
+                setInPart(false);
+              }}
+              ready={!!geometry}
+            />
+          </Panel>
+        ) : null}
 
         <Panel title="Sections" icon={SECTION_ICON}>
           <SectionPanel
@@ -1294,61 +1439,27 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
         <Panel title="Flush along a seam" icon={FLUSH_ICON}>
           <FlushPanel pid={pid} sid={sid} on={flushOn && !!geometry} onToggle={(on) => pickTool(on ? "flush" : null)} tool={flushTool} kept={keptSeams ?? []} ready={!!geometry} />
         </Panel>
+        </Group>
 
-        {hasResult ? (
-          <Panel title="Scan check" icon={CHECK_ICON}>
-            <CheckPanel
-              check={check}
-              ready={!!geometry}
-              onScanAreas={
-                project && scan?.result && check.result ? (pick) => usePass.getState().scanAreas({ projectId: project.id, scan, result: check.result!, why: check.why.why, ...pick }) : undefined
-              }
-              hasSigma={hasSigma}
-              remake={
-                project && scan ? (
-                  <span className="inline-flex flex-col items-start gap-1">
-                    <MakeMeshButton projectId={project.id} scan={scan} label="Make the mesh again" blocked={remakeBlock(scan)} />
-                    {remakeBlock(scan) ? <span className="text-[11.5px] leading-4 text-subtle">{remakeBlock(scan)}</span> : null}
-                  </span>
-                ) : undefined
-              }
-              holes={
-                openHoles
-                  ? {
-                      count: openHoles,
-                      action: (
-                        <Button size="xs" icon={SlidersHorizontal} onClick={() => navigate(paths.process(pid, sid))}>
-                          See them on the Edit mesh page
-                        </Button>
-                      ),
-                    }
-                  : null
-              }
-            />
-          </Panel>
-        ) : null}
+        <Group id="cad" title="Compare with CAD" icon={COMPARE_ICON} open={groupsOpen.cad} onToggle={toggleGroup} summary={refEnabled ? "Aligned with a CAD model" : null}>
+          {hasResult ? (
+            <Panel title="Compare with the CAD model" icon={COMPARE_ICON}>
+              <ComparePanel
+                tool={cmp}
+                ready={!!geometry}
+                frame={frameState}
+                shadingOn={shading === "reference"}
+                onShading={(on) => setShading(on ? "reference" : "clay")}
+                onPickPoints={() => setPickPairs(true)}
+                picking={pickPairs}
+              />
+            </Panel>
+          ) : (
+            <div className="px-4 pb-4 text-sm text-muted">Make the mesh first.</div>
+          )}
+        </Group>
 
-        {hasResult ? (
-          <Panel title="Compare with the CAD model" icon={COMPARE_ICON}>
-            <ComparePanel
-              tool={cmp}
-              ready={!!geometry}
-              frame={frameState}
-              shadingOn={shading === "reference"}
-              onShading={(on) => setShading(on ? "reference" : "clay")}
-              onPickPoints={() => setPickPairs(true)}
-              picking={pickPairs}
-            />
-          </Panel>
-        ) : null}
-
-        {hasResult && project && scan ? (
-          <Panel title="Edit mesh" icon={SlidersHorizontal}>
-            <p className="text-sm text-muted">Remove loose bits, fill holes, smooth or simplify, cut away what you don't need. Every step can be undone.</p>
-            <ProcessButton projectId={project.id} scan={scan} variant="primary" className="mt-3" label="Edit mesh…" />
-          </Panel>
-        ) : null}
-
+        <Group id="export" title="Export" icon={Download} open={groupsOpen.export} onToggle={toggleGroup}>
         <Panel title="Download" icon={Download}>
           {hasResult && urls ? (
             <>
@@ -1379,79 +1490,50 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
           ) : (
             <div className="text-sm text-muted">Make the mesh first.</div>
           )}
+          {hasResult && project && scan ? (
+            <p className="mt-2 text-xs text-subtle">
+              Units: mm. STL for CAD and slicers.
+              {partFrame ? ` STL and PLY are along the scan's axes unless “along the part's axes”.${partFrame.out_of_date ? " The part's axes are out of date." : ""}` : ""}
+            </p>
+          ) : null}
           {hasResult && urls ? <CadDownload pid={pid} sid={sid} stem={stem} kept={kept} hasMesh={hasResult} /> : null}
           {hasResult ? (
             <ReportGroup pid={pid} sid={sid} checkTolerance={check.tolerance} hasFrame={!!partFrame} seams={keptSeams ?? []} views={reportViews} onViews={setReportViews} ready={!!geometry} />
           ) : null}
-          {hasResult && project && scan ? (
-            <div className="mt-3 flex items-center justify-between gap-2">
-              <span className="text-xs text-subtle">
-                Units: mm. STL for CAD and slicers.
-                {partFrame ? ` STL and PLY are along the scan's axes unless “along the part's axes”.${partFrame.out_of_date ? " The part's axes are out of date." : ""}` : ""}
-              </span>
-              {/* R2: a scan without its recording cannot be made again: the reason instead of the button (lib/keepMode.ts) */}
-              {remakeBlock(scan) ? null : <MakeMeshButton projectId={project.id} scan={scan} label="Make mesh again" variant="ghost" size="xs" />}
-            </div>
-          ) : null}
-          {hasResult && scan && remakeBlock(scan) ? <p className="mt-2 text-xs text-subtle">{remakeBlock(scan)}</p> : null}
         </Panel>
 
-        <Panel title="Processing report" icon={FileText}>
-          {report ? (
-            <ReportSummary report={report} />
-          ) : hasResult ? (
-            <div className="text-sm text-muted">No processing report for this result.</div>
-          ) : (
-            <div className="text-sm text-muted">Shown after meshing.</div>
-          )}
-        </Panel>
+        {hasResult && project && scan ? (
+          <Panel title="Edit mesh" icon={SlidersHorizontal}>
+            <p className="text-sm text-muted">Remove loose bits, fill holes, smooth or simplify, cut away what you don't need. Every step can be undone.</p>
+            <ProcessButton projectId={project.id} scan={scan} variant="primary" className="mt-3" label="Edit mesh…" />
+          </Panel>
+        ) : null}
 
-        <div className={cn("space-y-1.5 px-4 py-3 text-[11px] leading-5 text-subtle")}>
+        {hasResult && project && scan ? (
+          <Panel title="Make mesh again" icon={RefreshCw}>
+            {/* R2: a scan without its recording cannot be made again: the reason instead of the button (lib/keepMode.ts) */}
+            {remakeBlock(scan) ? (
+              <p className="text-xs text-subtle">{remakeBlock(scan)}</p>
+            ) : (
+              <>
+                <p className="text-sm text-muted">From the raw recording, at the quality you choose. Saved measurements and fitted shapes stay; they are marked when the new mesh differs.</p>
+                <MakeMeshButton projectId={project.id} scan={scan} label="Make mesh again" className="mt-3" />
+              </>
+            )}
+          </Panel>
+        ) : null}
+        </Group>
+
+        <div className="space-y-1.5 px-4 py-3 text-[11px] leading-5 text-subtle">
           <div>
             <Eye size={12} className="mr-1 inline" aria-hidden />
             Left drag orbits, right drag pans, the wheel zooms towards the cursor.
           </div>
-          <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-            <span>
-              <Kbd>F</Kbd> frame
-            </span>
-            <span>
-              <Kbd>M</Kbd> measure
-            </span>
-            <span>
-              <Kbd>G</Kbd> fit (<Kbd>P</Kbd> <Kbd>C</Kbd> <Kbd>H</Kbd>)
-            </span>
-            <span>
-              <Kbd>S</Kbd> section
-            </span>
-            <span>
-              <Kbd>U</Kbd> flush
-            </span>
-            <span>
-              <Kbd>W</Kbd> wireframe
-            </span>
-            <span>
-              <Kbd>L</Kbd> laser points
-            </span>
-            <span>
-              {/* U25: the keys that work now, as ranges ("1–7" with every mode on) */}
-              {keyRanges([1, 2, 3, ...(hasSigma ? [4] : []), ...(devEnabled ? [5] : []), 6, ...(refEnabled ? [7] : [])]).map((r, i) => (
-                <span key={r}>
-                  {i ? ", " : ""}
-                  {r.split("–").map((k, j) => (
-                    <span key={k}>
-                      {j ? "–" : ""}
-                      <Kbd>{k}</Kbd>
-                    </span>
-                  ))}
-                </span>
-              ))}{" "}
-              shading
-            </span>
-          </div>
+          <ShortcutButton onClick={() => setSheetOpen(true)} className="-ml-2" />
           {tris > 0 ? <div className="sr-only">{fmtCompact(tris)} triangles</div> : null}
         </div>
       </aside>
+      <ShortcutSheet open={sheetOpen} onClose={() => setSheetOpen(false)} sheet={viewerSheet({ sigma: hasSigma, deviation: devEnabled, reference: refEnabled })} />
     </div>
   );
 }

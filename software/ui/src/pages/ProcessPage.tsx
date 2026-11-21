@@ -48,6 +48,8 @@ import { Segmented, Slider } from "../components/ui/Form";
 import { Callout } from "../components/ui/Layout";
 import { fileStem, fmtBytes, fmtDateTime, fmtDuration, fmtInt } from "../lib/format";
 import { remakeBlock } from "../lib/keepMode";
+import { SHEETS } from "../lib/shortcuts";
+import { ShortcutButton, ShortcutSheet } from "../components/ShortcutSheet";
 import { hasLaserValues } from "../lib/lasers";
 import { href, navigate, paths } from "../lib/router";
 import { cn, isModalOpen, isTypingTarget, useHotkeys } from "../lib/util";
@@ -201,6 +203,8 @@ export default function ProcessPage({ pid, sid }: { pid: string; sid: string }) 
   const [count, setCount] = useState(0);
   const [tab, setTab] = useState<EditTab>("floaters");
   const [fillMm, setFillMm] = useState(10);
+  /** U25: the shortcut sheet ("?"). */
+  const [sheetOpen, setSheetOpen] = useState(false);
   const [tableAreas, setTableAreas] = useState<MarkedArea[]>([]); // "Remove the table": its raised areas on the model
   const overlayRef = useRef<SVGSVGElement>(null);
   const holeLabelRef = useRef<HTMLDivElement>(null);
@@ -342,7 +346,7 @@ export default function ProcessPage({ pid, sid }: { pid: string; sid: string }) 
   useHotkeys({
     f: () => viewBus.emit({ type: "frame", animate: true }),
     w: () => setWireframe((v) => !v),
-    h: () => setShowHoles((v) => !v),
+    o: () => setShowHoles((v) => !v),
     t: () => setShowTraj((v) => !v),
     k: () => previous && setCompare((c) => (c === "now" ? "before" : c === "before" ? "overlay" : "now")),
     "1": () => setShading("clay"),
@@ -359,6 +363,7 @@ export default function ProcessPage({ pid, sid }: { pid: string; sid: string }) 
     "[": () => setBrush((r) => Math.max(4, Math.round(r / 1.25))),
     "]": () => setBrush((r) => Math.min(160, Math.round(r * 1.25))),
     escape: () => setTool("navigate"),
+    "?": () => setSheetOpen(true),
     delete: () => void selectionOp("delete_faces"),
     backspace: () => void selectionOp("delete_faces"),
   });
@@ -550,35 +555,7 @@ export default function ProcessPage({ pid, sid }: { pid: string; sid: string }) 
           <Waypoints size={12} className="mr-1 inline" aria-hidden />
           Orbit: left drag (right drag while selecting). Pan: right drag (middle while selecting). Zoom: the wheel.
         </div>
-        <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-          <span>
-            <Kbd>B</Kbd> <Kbd>L</Kbd> <Kbd>P</Kbd> <Kbd>C</Kbd> select
-          </span>
-          <span>
-            <Kbd>V</Kbd>/<Kbd>Esc</Kbd> orbit
-          </span>
-          <span>
-            <Kbd>Del</Kbd> delete
-          </span>
-          <span>
-            <Kbd>Ctrl</Kbd>+<Kbd>Z</Kbd> undo
-          </span>
-          <span>
-            <Kbd>Ctrl</Kbd>+<Kbd>Y</Kbd> redo
-          </span>
-          <span>
-            <Kbd>H</Kbd> holes
-          </span>
-          <span>
-            <Kbd>T</Kbd> trajectory
-          </span>
-          <span>
-            <Kbd>K</Kbd> before/after
-          </span>
-          <span>
-            <Kbd>F</Kbd> frame
-          </span>
-        </div>
+        <ShortcutButton onClick={() => setSheetOpen(true)} className="-ml-2" />
       </div>
     </>
   );
@@ -763,7 +740,7 @@ export default function ProcessPage({ pid, sid }: { pid: string; sid: string }) 
                 <IconButton
                   icon={CircleDashed}
                   size="sm"
-                  label={stats?.holes ? `Hole outlines: ${stats.holes} (H)` : "Hole outlines (H)"}
+                  label={stats?.holes ? `Hole outlines: ${stats.holes} (O)` : "Hole outlines (O)"}
                   active={showHoles || tab === "holes"}
                   loading={holes.loading}
                   onClick={() => setShowHoles((v) => !v)}
@@ -981,6 +958,7 @@ export default function ProcessPage({ pid, sid }: { pid: string; sid: string }) 
           {details}
         </aside>
       ) : null}
+      <ShortcutSheet open={sheetOpen} onClose={() => setSheetOpen(false)} sheet={SHEETS.process} />
     </div>
   );
 }
