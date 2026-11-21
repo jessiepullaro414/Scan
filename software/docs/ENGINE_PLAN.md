@@ -253,6 +253,21 @@ experiment: measure, find the cause, mend, and judge the mend with the scorecard
   them. Too loose for a hole's reading. As a bound on fill that hangs up to 15 mm past an edge
   ("no surface further out than the furthest line end") it is untried, and would have to pass
   the thin-wall tests first.
+- [ ] **Straighten's laser-crossing adjustment acts wrongly on standing walls, and the
+  scorecard does not see it** (found by X3, 2026-11-21). On two of three wall recordings the
+  adjustment passes its own held-out test (0.84, 0.72 against a limit of 0.85), but that test
+  also passes at the true poses (0.61, 0.47): the crossings of one frame share that frame's
+  errors, so a random split of crossings is not an independent check. Fused at its poses the
+  walls read 0.31 to 0.46 mm thicker on one recording and up to 0.58 mm thinner on the other,
+  whose 2 mm wall then reads 1.95 mm, 0.2 mm under its true-pose value: a thin part thinned
+  without a word, in the app today, since Make mesh runs Straighten. The scorecard runs the
+  frame pass only, so none of its numbers include Straighten. To do: (1) the scorecard gets a
+  mode that runs what the app's Make mesh runs (Follow the camera, Straighten, Refine with
+  lasers, the Default recipe), with a baseline of its own; (2) on it, judge the adjustment
+  off against on, and a test that holds out frames (blocks of 10 refuse the walls, 1.41 to
+  1.49, but also the genuine drift case the tests keep, 0.88 against 0.50). **Stop rule:** by
+  the owner's rule, what is better or the same on every scene and thins no thin part becomes
+  the default.
 - [ ] **GPU, hole plate 120 mm up, seed 0: tracking is lost** (path max 16.3 mm; the Ø25 hole
   then reads 6.9 mm small). Seeds 1 and 2 hold (3.9 mm).
 
@@ -339,7 +354,7 @@ experiment: measure, find the cause, mend, and judge the mend with the scorecard
   intensity along the line drops), without the trim and without losing short end pieces. It
   needs the real line's width first ("Only the real scanner can settle").
 
-### [ ] X3. Poses refined against the finished scan (M to L)
+### [x] X3. Poses refined against the finished scan (measured 2026-11-21: not adopted) (M to L)
 - **Idea A:** after the first fuse, register every frame again with the tracker's ICP against
   the finished 1 mm model (thin-wall rules on), the gyro holding the relative rotation and
   weak directions staying at the tracked pose; fuse again. One or two rounds.
@@ -359,6 +374,29 @@ experiment: measure, find the cause, mend, and judge the mend with the scorecard
   all three sheets and stay no more than 0.05 mm below their true-pose values; the bracket is
   no more than 1 point worse on any seed and better on the bad one; smooth scenes' camera
   paths are no more than 10 % worse; the time stays within +25 %.
+
+**Measured 2026-11-21: neither idea can work; nothing built.** Numbers: `VALIDATION.md`,
+"Poses refined against the finished scan".
+- **What the tracked error is.** Fused at true poses plus one part of the tracked error, the
+  slow part (over about 2 s) brings back 85 to 132 % of the mesh's extra error on all eleven
+  recordings (brackets, sheets, standing walls); the frame-to-frame jitter and the jumps mostly
+  under 30 %; the translation far more than the rotation. Most of the slow part is one
+  translation in the camera's own frame, shared by every frame: on every sheet and wall
+  recording the camera stands 0.19 to 0.25 mm out. With the truth's value of that offset taken
+  out, the 1 mm standing wall reads its true-pose thickness and the sheet's flange +0.21 mm
+  (today +0.60).
+- **The scan cannot find it.** It leaves the scan consistent with itself: the vertex sigma does
+  not move across it, and the laser crossings meet better with it than without it.
+- **Idea A** (frames registered again against the finished model; one to three rounds; raw or
+  filtered input; the model's borders in or out; weak directions held) misses the stop rule:
+  the flange and the walls get thicker each round, since the model carries its own thin-wall
+  excess; with the borders out the frames slide and a 0.5 mm wall loses a face; the car panel's
+  path is 60 to 100 % worse. Only the bad bracket seed improves. About +30 % time a round.
+- **Idea B:** the crossings already meet at the lasers' own scatter at the tracked poses (13 of
+  16 recordings), so the adjustment has nothing to do, and forced it worsens 12 of 15 paths.
+- **Next:** the offset is made in tracking, so X4 and the tracking model's handling of thin
+  features are where it can be mended. And see X0a: where Straighten's adjustment does act
+  today, on standing walls, it acts wrongly.
 
 ### [ ] X4. Tracking on dark, plain and thin parts, GPU path (S, S, M)
 - **Steps:** (a) diagnose by axis and frame on the six hard recordings: where the drift
@@ -466,6 +504,12 @@ experiment: measure, find the cause, mend, and judge the mend with the scorecard
   hole factor (X1): it is a wider distance guard in disguise, and thin standing walls pay.
 - **Hole rims from the laser cloud's ends with today's extraction** (X2): the trim and the
   20-row shortest segment put the ends 0.4 to 4 mm short of the rim.
+- **Poses refined against the scan itself** (X3): the error that matters is an offset of the
+  camera the scan cannot see (its sigma and its laser crossings do not move with it);
+  registering frames against the finished model adds the model's own thin-wall excess each
+  round, and leaving out its borders lets the frames slide.
+- **Letting the laser-crossing adjustment act more** (X3): the crossings already meet at the
+  tracked poses; where its test lets it act, the test is fooled.
 - **Fusing weights:** 1/sigma² (+15 to 25 % median); flat up to a knee (no gain).
 - **Weak directions:** remapping them; geometrically stable sampling.
 - **A narrower disparity search:** one range a frame (2 to 7 % faster; the bar was 10 %).

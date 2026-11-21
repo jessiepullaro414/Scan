@@ -4161,6 +4161,116 @@ not the depth check, as that section guessed; it is the extraction's rules above
 Limits: simulator only; the simulator's line has one width (sigma 0.4 mm), and a real line's
 width and speckle can only push the ends further out; true poses only.
 
+## Poses refined against the finished scan (ENGINE_PLAN X3, 2026-11-21): measured, not adopted, nothing built
+
+GPU path, the scorecard's recordings. The largest error the engine makes on this path is the gap
+between tracked and true poses (bracket median 0.075 to 0.228 mm against 0.058 to 0.063; the
+sheet's flange +0.25 to +0.60 against +0.12 to +0.18). Two ideas to close it after the scan were
+measured: register every frame again against the finished model (A), and let Straighten's
+laser-crossing adjustment act (B). Neither can work, and the reason is the finding.
+
+**What the tracked path's error is.** The placed tracked camera seen from the true camera (x
+right, y down, z towards the part; mm). "Slow" is a running mean over 21 frames (about 2 s),
+"fast" the rest; "out" is how far the camera stands back from the point it looks at.
+
+| recording | constant x / y / z | slow rms x / y / z | fast rms x / y / z | largest step | out |
+|---|---|---|---|---|---|
+| bracket seed 0 | +0.23 / -0.06 / +0.02 | 0.17 / 0.10 / 0.06 | 0.15 / 0.07 / 0.06 | 0.86 | -0.05 |
+| bracket seed 1 | +0.04 / +0.05 / -0.07 | 0.33 / 0.10 / 0.09 | 0.24 / 0.08 / 0.06 | 1.63 | +0.07 |
+| bracket seed 2 (the bad one) | +0.27 / +0.17 / -0.17 | 0.31 / 0.13 / 0.12 | 0.18 / 0.07 / 0.06 | 0.91 | +0.14 |
+| bracket seed 3 | +0.22 / -0.06 / +0.02 | 0.36 / 0.14 / 0.12 | 0.19 / 0.08 / 0.07 | 0.84 | -0.04 |
+| bracket seed 4 | +0.03 / +0.05 / -0.07 | 0.24 / 0.08 / 0.06 | 0.23 / 0.10 / 0.08 | 1.76 | +0.07 |
+| sheet seeds 0 / 1 / 2 | z -0.19 / -0.04 / -0.21 | x 0.21 / 0.49 / 0.34 | x 0.39 / 0.41 / 0.35 | 3.15 / 3.08 / 2.44 | +0.19 / +0.07 / +0.22 |
+| walls seeds 0 / 1 / 2 | z -0.25 / -0.25 / -0.25 | x 0.17 / 0.21 / 0.29 | x 0.23 / 0.30 / 0.26 | 1.20 / 2.56 / 1.38 | +0.25 / +0.25 / +0.24 |
+| sphere, end to end | +0.15 / -0.28 / -0.07 | at most 0.02 | at most 0.03 | 0.09 | +0.07 |
+| car panel, 200 frames | -0.03 / -0.05 / +0.01 | 0.09 / 0.08 / 0.02 | 0.09 / 0.10 / 0.04 | 0.51 | -0.01 |
+
+Most of the error is along the motion (x), half of it slow and half fast; on every sheet and wall
+recording the camera stands 0.19 to 0.25 mm out; rotation is small (under 0.05° slow). At true
+poses the scorecard's own placement already reads 0.1 to 0.25 mm along a sheet or a wall, so the
+constant column carries that much doubt there.
+
+**Which part of it costs the mesh.** The cached matcher depth was fused at the true poses plus
+one part of the tracked error, and scored by the scorecard's judge (the tracked poses fed back
+give the scorecard's tracked numbers exactly). The share is how much of the gap between true and
+tracked that part brings back:
+
+| recording, measure (tracked / true) | the constant translation | the slow part | the fast part |
+|---|---|---|---|
+| bracket seed 2, median (0.228 / 0.058) | 57 % | 98 % | 2 % |
+| bracket seed 2, upright face (+0.326 / -0.008) | 66 % | 103 % | 0 % |
+| bracket seeds 0 / 3, median | 37 / 76 % | 85 / 91 % | 22 / 44 % |
+| sheet seed 0, flange (+0.604 / +0.180) | 119 % | 108 % | 20 % |
+| sheet seed 0, 1 mm rib (+0.969 / +0.270) | 76 % | 106 % | 28 % |
+| sheet seeds 1 / 2, flange | 175 / 152 % | 132 / 106 % | 83 / 33 % |
+| walls seed 0, 0.5 / 1 / 2 mm | 79 / 101 / 74 % | 84 / 106 / 90 % | 58 / -6 / 16 % |
+| walls seed 1, 0.5 / 1 / 2 mm | 108 / 125 / 130 % | 107 / 111 / 99 % | 17 / 19 / 19 % |
+| walls seed 2, 0.5 / 1 / 2 mm | 81 / 94 / 118 % | 100 / 100 / 105 % | 6 / -15 / 31 % |
+
+The slow error explains all of it on all eleven recordings (85 to 132 %); the jitter and the jumps
+explain little. Most of the slow error is one translation in the camera's own frame, the same
+for every frame. Taken out of the tracked poses with the truth's value (their rotation, drift and
+jitter kept):
+
+| share of the offset taken out | sheet seed 0, flange / 1 mm rib | walls seed 0, 1 mm / 2 mm wall | bracket seed 2, median |
+|---|---|---|---|
+| 0 (tracked) | +0.604 / +0.969 | +0.808 / +0.660 | 0.228 |
+| 0.5 | +0.404 / +0.789 | +0.670 / +0.530 | 0.152 |
+| 1 | +0.214 / +0.628 | +0.534 / +0.394 | |
+| true poses | +0.180 / +0.270 | +0.534 / +0.354 | 0.058 |
+
+**The scan cannot see this offset.** Across those four fuses the scan's own vertex sigma does not
+move (the sheet's median 0.083 mm at every row, the walls 0.087 to 0.088, the bracket 0.087) and
+is even a little lower than at true poses. The laser crossings meet better with the offset than
+without it (sheet 0.092 against 0.115 mm, bracket 0.059 against 0.091), and a fit of a common
+offset to the crossings gives values unrelated to the truth. The offset leaves the scan
+consistent with itself, so nothing that refines against the scan can find it. It comes from
+tracking.
+
+**Idea A, tried as a prototype** (the tracker's own ICP against the finished 1 mm mesh, the gyro
+holding the rotation; tuned on walls seed 0, then checked on one sheet, the bad bracket and the
+car panel):
+
+| recording | today / true poses | what the refinement gives |
+|---|---|---|
+| walls seed 0, 1 mm wall | +0.808 / +0.534 | +0.893, +0.956, +1.000 after rounds 1, 2, 3: thicker each round |
+| the same, the model's borders left out | | +0.606, then +0.379 (below the true-pose value) and the 0.5 mm wall's face lost; the frames slide 0.7 to 0.8 mm |
+| the same, weak directions held | | +0.774: almost no move |
+| sheet seed 0, flange | +0.604 / +0.180 | +0.745, then +0.857 |
+| bracket seed 2, share over 0.3 mm | 0.316 / 0.102 | 0.265, then 0.227 |
+| car panel, 200 frames, path median / max | 0.138 / 0.366 | 0.220 / 0.613, then 0.277 / 0.710 |
+
+It misses its stop rule on every variant: the flange and the walls get thicker (the finished
+mesh still has its own thin-wall excess, so registering against it pushes the cameras further
+out each round), the smooth panel's path is 60 to 100 % worse, and only the bad bracket seed
+improves. One round would cost about 30 % of Make mesh.
+
+**Idea B: why the laser-crossing adjustment does not act, and where it acts wrongly.** Run as
+Straighten runs it, on 16 recordings:
+
+| recordings | crossings | their miss, tracked / true (mm) | held-out ratio (acts under 0.85) | at true poses |
+|---|---|---|---|---|
+| brackets, seeds 0 to 4 | 3,238 to 4,762 | 0.053..0.071 / 0.038..0.050 | 0.97..1.16: does not act | 1.33..1.76 |
+| sheets, seeds 0 to 2 | 2,558 to 2,725 | 0.092..0.123 / 0.085..0.119 | 1.01..1.09: does not act | 1.12..1.23 |
+| walls seed 0 | 535 | 0.101 / 0.106 | **0.84: acts** | 0.61 |
+| walls seed 1 | 1,005 | 0.068 / 0.067 | 0.92: does not act | 0.88 |
+| walls seed 2 | 414 | 0.197 / 0.208 | **0.72: acts** | 0.47 |
+| car panel, 0.5 mm plate, hole plate, end-to-end panel | 520 to 15,459 | at the truth's own | 1.03..1.04: does not act | 1.09..1.51 |
+
+On 13 of 16 the crossings already meet at the lasers' own scatter at the tracked poses, so there
+is nothing for it to do; forced, it makes the path worse on 12 of 15. On two of the three wall
+recordings it does act, and there its own test is fooled: the test also passes at the true poses,
+because the crossings of one frame share that frame's errors and a random split of crossings is
+not an independent check. Fused at its poses, walls seed 0 reads +1.543 / +1.236 / +1.124 (today
++1.229 / +0.808 / +0.660: thicker) and walls seed 2 +0.880 / +0.434 / -0.049 (today +1.256 /
++0.911 / +0.535): its 2 mm wall then reads 1.95 mm, 0.2 mm under its true-pose value. The path's
+median goes from 0.53 to 0.76 and from 1.50 to 1.84 mm. **This happens in the app today**
+(Straighten runs inside Make mesh), and the scorecard does not show it, because the scorecard
+runs the frame pass only. Holding out blocks of 10 frames instead of single crossings refuses the
+walls (1.41 to 1.49) but also refuses the genuine drift case the tests keep (0.88 against 0.50).
+
+Limits: simulated orbits, one run a recording, the GPU path only; timings rough.
+
 ## What the metrics mean
 
 - **Stereo errors** compare the estimated raw intrinsics/extrinsics (`K1`, `K2`, `R`, `T`) with
