@@ -242,10 +242,16 @@ experiment: measure, find the cause, mend, and judge the mend with the scorecard
   the edge is 60 to 120 mm: 7 to 9 % of the 200-frame car panel's vertices, which is what puts
   its p95 at 1.7 to 2.3 mm while its median is 0.02 mm. The scorecard reports it as
   `part_beyond_edge`. Likely the same fill that closes holes (X1's subject).
+
+  **2026-11-21, stays open.** X1's gate lowers the share past the edge from 7.0 / 7.9 % to
+  5.8 / 6.5 % (tracked / true poses) and the panel's p95 from 1.78 / 2.13 to 1.14 / 1.47 mm,
+  but at the cost of the standing walls, so it is off. What is needed is a cue for "the
+  surface ends here" that does not take steep wall faces with it; the laser lines' ends (X2)
+  are the next candidate.
 - [ ] **GPU, hole plate 120 mm up, seed 0: tracking is lost** (path max 16.3 mm; the Ø25 hole
   then reads 6.9 mm small). Seeds 1 and 2 hold (3.9 mm).
 
-### [ ] X1. A gap guard that goes by the matcher's own doubt (S to M)
+### [x] X1. A gap guard that goes by the matcher's own doubt (measured 2026-11-21: not adopted) (S to M)
 - **Idea:** drop fused depth whose matcher sigma says "fill" (above about 3 mm) within 12 to
   16 px of a patch without depth, instead of, or on top of, dropping everything within 8 px.
   Fill pixels have a median sigma of 34 mm; real surface 1 to 4 mm outside the edge has 0.48 mm.
@@ -267,6 +273,32 @@ experiment: measure, find the cause, mend, and judge the mend with the scorecard
   boss radius are no worse than +0.02 mm on any seed; coverage drops by at most 1 point (side
   walls at most 2); no wall gets more than 0.05 mm thicker and none loses a face; sphere and
   panel stay within their range across seeds.
+
+**Measured 2026-11-21: not adopted; the settings are built and off.** Numbers: `VALIDATION.md`,
+"The gap guard by the matcher's doubt".
+- **Built:** `PipelineParams.gap_guard_sigma_mm`, `gap_guard_sigma_px`, `gap_guard_sigma_angle`
+  (the GPU's surface model and its numpy twin; the model the no-GPU path uses fuses no sigma
+  and ignores them: its results are identical with them on).
+- **Tried:** paired replays at 2, 3 and 5 mm with 8, 10, 12 and 16 px, with and without the
+  matcher's steep-view factor, on top of today's 8 px or instead of it; then three full
+  compares on the 36 recordings (3 mm with 10, 12 and 16 px).
+- **What it mends:** the orbit's Ø25 hole opens by 0.7 to 1.2 mm (car panel -1.32 to -0.38 mm
+  at 12 px; hole plate 120 mm up at true poses -1.51 to -0.80), the car panel's p95 falls by
+  0.6 to 0.9 mm and the share of surface past its free edge from 7.0 to 5.8 %.
+- **What it breaks, at every setting:** the standing walls read 0.15 to 0.55 mm thicker and
+  the 2 mm wall loses a face from 12 px; the sheet's ribs read 0.05 to 0.10 mm thicker;
+  coverage falls 1 to 8 points on the walls, the brackets and the sphere (19 to 21 on one
+  speckled bracket); a boss answers one click fewer; the one-sided pan's Ø25, which reads
+  wide already, reads 0.4 to 0.5 mm wider. It misses its stop rule on four counts and the
+  owner's rule on eight scenes: a clear miss, on thin parts.
+- **Why:** within about 8 px of a patch without depth the matcher's own hole factor (up to 121
+  times) puts nearly every pixel's sigma above 3 mm. So the gate does not tell fill from
+  surface there: it acts as a wider distance guard, opening holes and eating the faces of
+  standing walls alike. With today's guard off, a 3 mm gate at 8 px gives today's result.
+- **Thin parts:** the 0.5 mm plate lying flat is untouched at every reach up to 48 px; the
+  standing walls get worse from 10 px, the first reach at which the gate does anything.
+- **Not tried:** a gate on the sigma with the hole factor taken out (the matcher's doubt from
+  the image alone). It is outside this experiment's grid.
 
 ### [ ] X2. Hole rims and edges from the laser lines (S, then M)
 - **Idea:** a laser line ends exactly where the surface ends. Collect the curves' end points
@@ -408,6 +440,8 @@ experiment: measure, find the cause, mend, and judge the mend with the scorecard
 
 ## Not worth trying again (measured)
 
+- **The matcher's sigma as a gate on the gap guard** while that sigma carries the matcher's
+  hole factor (X1): it is a wider distance guard in disguise, and thin standing walls pay.
 - **Fusing weights:** 1/sigma² (+15 to 25 % median); flat up to a knee (no gain).
 - **Weak directions:** remapping them; geometrically stable sampling.
 - **A narrower disparity search:** one range a frame (2 to 7 % faster; the bar was 10 %).

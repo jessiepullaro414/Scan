@@ -83,6 +83,19 @@ holes were judged worth it; ``gap_guard_px=0`` turns it off). For the sigma's co
 (``hnear``), what the guard drops counts as without depth: the count is about the depth that is
 fused. (The matcher's factor is taken out with the distance on the depth as the matcher made it.)
 
+**The guard by the matcher's own doubt** (``sigma_guard_mm``, ``sigma_guard_px``; off by default,
+ENGINE_PLAN X1). The matcher's fill has a sigma of its own: in a hole over a dark background its
+median ``sigma_z`` is 34 mm, while real surface 1-4 mm outside the edge has about 0.5 mm. So with
+``sigma_guard_mm`` set, depth within ``sigma_guard_px`` (16 px at 1280 px width unless given) of a
+patch without depth is also dropped when its sigma is above ``sigma_guard_mm``; nearer than
+``gap_guard_px`` everything goes as before, and beyond the reach nothing does, whatever its sigma
+(``gap_guard_px=0`` with the sigma guard on: the sigma guard instead of the distance one). A sigma
+that is not a number is no doubt. ``sigma_guard_angle=False`` first takes the matcher's factor for
+a steep view out of the sigma (:func:`sigma_without_incidence`, with the cosine of the depth map's
+own normal as the integration uses it), so that a steep side wall next to a gap is not taken for
+fill. It needs the sigma: a frame fused without one gets the distance guard alone. What it drops
+counts as without depth for the sigma's count, as the distance guard's does.
+
 **The band behind the surface** (``back_mm``; off by default here, the pipeline turns it on:
 :mod:`ohs.app.pipeline`, "Thin walls"). A TSDF marks the space behind every surface it sees as
 inside, as far as the truncation. Through a wall thinner than that, and past a convex edge, the
@@ -153,7 +166,7 @@ from typing import Any
 import numpy as np
 
 __all__ = ["ConfidenceTsdf", "BRICK", "RECON_BACKENDS", "voxel_sigma", "mesh_sigma_terms", "bias_scale", "pixel_weights",
-           "gap_guard_mask", "GUARD_PX_1280", "GUARD_SEED", "BACK_VOXELS", "BACK_WEIGHT", "OPPOSITE_VOXELS",
+           "gap_guard_mask", "sigma_without_incidence", "GUARD_PX_1280", "SIGMA_GUARD_PX_1280", "GUARD_SEED", "BACK_VOXELS", "BACK_WEIGHT", "OPPOSITE_VOXELS",
            "C_NOISE", "A_GAP", "A_SCATTER", "A_CURV", "A_BORDER", "GAP_NEAR_PX_1280", "BORDER_MM"]
 
 log = logging.getLogger(__name__)
@@ -175,6 +188,7 @@ BORDER_MM = 1.5
 # The gap guard (module docstring)
 GUARD_PX_1280 = 8.0  # depth within this many px of a patch without depth is not fused, at 1280 px width
 GUARD_SEED = 13  # a pixel without depth is part of a patch when this many of the 5x5 around it have none
+SIGMA_GUARD_PX_1280 = 16.0  # the guard by the matcher's doubt: its reach when not given, at 1280 px width (X1)
 # The band behind the surface (module docstring)
 BACK_VOXELS = 2.0  # the cut the pipeline asks for, in voxels: full weight down to this far behind a surface
 BACK_WEIGHT = 1e-3  # the weight of an observation that lies deeper behind its surface than the cut
@@ -346,9 +360,15 @@ __kernel void recon_gap_dist(__global const float *hx, __global float *gap2, con
 }
 
 // The gap guard's mark: the pixels within sqrt(guard2) px of a patch without depth, from the row
-// distances to the patches (hs, searched up to R px). It marks pixels without depth too.
+// distances to the patches (hs, searched up to R px). It marks pixels without depth too. With use_sigma
+// (the guard by the matcher's doubt), also the pixels with depth within sqrt(sguard2) px whose sigma is
+// above smm; with no_angle, the matcher's factor for a steep view taken out of the sigma first (the
+// cosine as recon_integrate's).
 __kernel void recon_guard_mark(__global const float *hs, __global uchar *mark, const int w, const int h, const int R,
-                               const float guard2)
+                               const float guard2, __global const float *depth, __global const float *sigma,
+                               const int use_sigma, const float sguard2, const float smm, const int no_angle,
+                               const float fx, const float fy, const float cx, const float cy,
+                               const float depth_min, const float depth_max, const float inc_amp, const float inc_cos2)
 {
     const int x = get_global_id(0), y = get_global_id(1);
     if (x >= w || y >= h) return;
@@ -359,7 +379,33 @@ __kernel void recon_guard_mark(__global const float *hs, __global uchar *mark, c
         const float d = hs[yy * w + x];
         s2 = fmin(s2, d * d + (float)(dy * dy));
     }
-    mark[y * w + x] = (uchar)(s2 <= guard2);
+    uchar m = (uchar)(s2 <= guard2);
+    if (!m && use_sigma && s2 <= sguard2) {
+        const int pix = y * w + x;
+        const float d = depth[pix];
+        if (d >= depth_min && d <= depth_max) {
+            float sg = sigma[pix];
+            if (no_angle) {
+                float cs = 1.0f;
+                if (x > 0 && x < w - 1 && y > 0 && y < h - 1) {
+                    const float dl = depth[pix - 1], dr = depth[pix + 1], dt = depth[pix - w], db = depth[pix + w];
+                    if (dl >= depth_min && dl <= depth_max && dr >= depth_min && dr <= depth_max &&
+                        dt >= depth_min && dt <= depth_max && db >= depth_min && db <= depth_max) {
+                        const float zu = 0.5f * (dr - dl), zv = 0.5f * (db - dt);
+                        const float pu = (float)x - cx, pv = (float)y - cy;
+                        const float n3 = pu * zu + pv * zv + d;
+                        const float gu = zu * fx, gv = zv * fy, ru = pu / fx, rv = pv / fy;
+                        const float nn = sqrt(gu * gu + gv * gv + n3 * n3);
+                        const float rr = sqrt(ru * ru + rv * rv + 1.0f);
+                        cs = clamp(d / fmax(nn * rr, 1e-6f), 0.05f, 1.0f);
+                    }
+                }
+                sg = sg / (1.0f + inc_amp * exp(-(cs * cs) / inc_cos2));
+            }
+            m = (uchar)(sg > smm);  // NaN compares false: no doubt
+        }
+    }
+    mark[y * w + x] = m;
 }
 
 // The gap guard's patches: a pixel without depth of which at least nseed of the 5x5 around it (the
@@ -455,7 +501,7 @@ _ARGS = ([None] * 12 + [_I] + [None, None] + [_I, _I, _I] + [None, None] + [_F] 
          + [None] * 3 + [_F] + [None] * 3)
 _GAP_ROW_ARGS = [None, None, _I, _I, _I, _F, _F, None, _I]
 _GAP_DIST_ARGS = [None, None, _I, _I, _I]
-_GUARD_MARK_ARGS = [None, None, _I, _I, _I, _F]
+_GUARD_MARK_ARGS = [None, None, _I, _I, _I, _F, None, None, _I, _F, _F, _I] + [_F] * 8
 _GUARD_SEED_ARGS = [None, None, _I, _I, _F, _F, _I]
 _GUARD_ROW_ARGS = [None, None, _I, _I, _I]
 _BRICK_ARGS = [None, _I, _I, _I, _I] + [_F] * 5 + [_F] * 12 + [_F] * 3 + [None, _I, None, None]
@@ -552,22 +598,51 @@ def mesh_sigma_terms(V: np.ndarray, F: np.ndarray, N: np.ndarray, voxel_mm: floa
     return (curv_part, border_part) if parts else out
 
 
-def gap_guard_mask(depth: np.ndarray, radius_px: float) -> np.ndarray:
+def _incidence_model() -> tuple[float, float]:
+    """``(inc_amp, inc_cos)`` of the matcher's factor for a steep view (the same for both matchers)."""
+    from ohs.vision.depth import SIGMA_MODELS
+
+    m = SIGMA_MODELS["gpu"]
+    return float(m.inc_amp), float(m.inc_cos)
+
+
+def sigma_without_incidence(sigma: np.ndarray, cos: np.ndarray) -> np.ndarray:
+    """The matcher's ``sigma`` with its factor for a steep view, ``1 + inc_amp exp(-(cos / inc_cos)^2)``
+    (``ohs.vision.depth.SigmaModel``), taken out; ``cos`` is the cosine of the ray with the depth map's
+    normal (1 where it has none). The guard by the matcher's doubt without the angle term (module
+    docstring)."""
+    amp, c0 = _incidence_model()
+    c = np.asarray(cos, dtype=np.float32)
+    f = np.float32(1.0) + np.float32(amp) * np.exp(-(c / np.float32(c0)) ** 2)
+    return (np.asarray(sigma, dtype=np.float32) / f).astype(np.float32)
+
+
+def gap_guard_mask(depth: np.ndarray, radius_px: float, sigma: np.ndarray | None = None,
+                   sigma_mm: float | None = None, sigma_px: float = 0.0) -> np.ndarray:
     """The gap guard (module docstring): True for the pixels with depth (``depth`` > 0) that lie within
     ``radius_px`` (Euclidean) of a patch without depth. A pixel without depth is part of a patch when
-    at least :data:`GUARD_SEED` of the 5x5 around it (the border repeated) have none. What the guard
-    kernels compute, in numpy."""
+    at least :data:`GUARD_SEED` of the 5x5 around it (the border repeated) have none. With ``sigma``,
+    ``sigma_mm`` > 0 and ``sigma_px`` > 0 (the guard by the matcher's doubt), also those within
+    ``sigma_px`` whose ``sigma`` is above ``sigma_mm`` (NaN is not). What the guard kernels compute,
+    in numpy."""
     import cv2
 
     gap = ~(np.asarray(depth, dtype=np.float32) > 0)
-    if radius_px <= 0:
+    use_sigma = sigma is not None and sigma_mm is not None and sigma_mm > 0 and sigma_px > 0
+    if radius_px <= 0 and not use_sigma:
         return np.zeros(gap.shape, dtype=bool)
     n = cv2.boxFilter(gap.astype(np.float32), -1, (5, 5), normalize=False, borderType=cv2.BORDER_REPLICATE)
     seed = gap & (n >= GUARD_SEED - 0.5)
     if not seed.any():
         return np.zeros(gap.shape, dtype=bool)
     d = cv2.distanceTransform((~seed).astype(np.uint8), cv2.DIST_L2, cv2.DIST_MASK_PRECISE)
-    return ~gap & (np.rint(d * d) <= float(radius_px) ** 2)
+    d2 = np.rint(d * d)
+    drop = d2 <= float(radius_px) ** 2 if radius_px > 0 else np.zeros(gap.shape, dtype=bool)
+    if use_sigma:
+        s = np.asarray(sigma, dtype=np.float32)
+        with np.errstate(invalid="ignore"):
+            drop |= (d2 <= float(sigma_px) ** 2) & (s > np.float32(sigma_mm))
+    return ~gap & drop
 
 
 def pixel_weights(depth: np.ndarray, sigma: np.ndarray | None, trunc_mm: float) -> tuple[np.ndarray, np.ndarray]:
@@ -604,6 +679,13 @@ class ConfidenceTsdf:
     gap_guard_px:
         The gap guard's radius (module docstring); ``None`` (the default): 8 px at 1280 px width,
         scaled with the width; 0: off.
+    sigma_guard_mm, sigma_guard_px, sigma_guard_angle:
+        The guard by the matcher's own doubt (module docstring): depth within ``sigma_guard_px``
+        of a patch without depth whose sigma is above ``sigma_guard_mm`` is not fused either.
+        ``sigma_guard_mm`` ``None`` or 0 (the default): off. ``sigma_guard_px`` ``None``: 16 px at
+        1280 px width, scaled with the width. ``sigma_guard_angle=False``: the matcher's factor
+        for a steep view is taken out of the sigma first. Frames fused without a sigma get the
+        distance guard alone.
     back_mm:
         The band behind the surface (module docstring): an observation counts in full down to
         this far (mm) behind its surface, at right angles to it, and with ``BACK_WEIGHT`` beyond.
@@ -621,7 +703,9 @@ class ConfidenceTsdf:
                  look_px: float | None = None, initial_bricks: int = 4096, max_bricks: int | None = None,
                  hole_factor: tuple[float, float] | None = None, gap_guard_px: float | None = None,
                  back_mm: float | None = None, opposite_mm: float | None = None,
-                 opposite_shares: tuple[float, float] = (OPPOSITE_FROM, OPPOSITE_FULL)) -> None:
+                 opposite_shares: tuple[float, float] = (OPPOSITE_FROM, OPPOSITE_FULL),
+                 sigma_guard_mm: float | None = None, sigma_guard_px: float | None = None,
+                 sigma_guard_angle: bool = True) -> None:
         self.voxel_mm, self.trunc_mm = float(voxel_mm), float(trunc_mm)
         self.depth_min_mm, self.depth_max_mm = float(depth_min_mm), float(depth_max_mm)
         if not (self.voxel_mm > 0 and self.trunc_mm > 0 and 0 <= self.depth_min_mm < self.depth_max_mm):
@@ -647,7 +731,11 @@ class ConfidenceTsdf:
             raise ValueError(f"opposite_shares must be (from, full) with 0 <= from < full, got {opposite_shares!r}")
         self.opposite_prior = OPPOSITE_PRIOR
         self._channels = _FLOAT_CHANNELS + (_OPP_CHANNELS if self.opposite_mm is not None else ())
-        self._set_camera(K, image_size, gap_guard_px)
+        self.sigma_guard_mm = None if sigma_guard_mm is None or float(sigma_guard_mm) == 0.0 else float(sigma_guard_mm)
+        if self.sigma_guard_mm is not None and not self.sigma_guard_mm > 0:
+            raise ValueError(f"sigma_guard_mm must be > 0 (or None / 0: off), got {sigma_guard_mm!r}")
+        self.sigma_guard_angle = bool(sigma_guard_angle)
+        self._set_camera(K, image_size, gap_guard_px, sigma_guard_px)
         self._initial = max(64, int(initial_bricks))
         self.dev: Any = None
         self.backend = "cpu"
@@ -674,16 +762,19 @@ class ConfidenceTsdf:
         log.info("confidence TSDF: %s, %.2f mm voxels, trunc %.1f mm, %.1f px per independent look",
                  self.device or "CPU (numpy)", self.voxel_mm, self.trunc_mm, self.look_px)
 
-    def set_camera(self, K: np.ndarray, image_size: tuple[int, int], gap_guard_px: float | None = None) -> None:
+    def set_camera(self, K: np.ndarray, image_size: tuple[int, int], gap_guard_px: float | None = None,
+                   sigma_guard_px: float | None = None) -> None:
         """Take the next depth maps from another camera (intrinsics ``K`` at ``(width, height)``),
         keeping what is fused: a merge fuses scans of different calibrations into one model this
-        way. ``gap_guard_px`` as for the constructor, for the new camera. (A voxel's independent
-        looks are counted by how far its pixel moved since the last one; across the change the two
-        cameras' pixels are compared as they are, as they are between two scans of one camera.)"""
+        way. ``gap_guard_px`` and ``sigma_guard_px`` as for the constructor, for the new camera. (A
+        voxel's independent looks are counted by how far its pixel moved since the last one; across
+        the change the two cameras' pixels are compared as they are, as they are between two scans
+        of one camera.)"""
         self._wait()
-        self._set_camera(K, image_size, gap_guard_px)
+        self._set_camera(K, image_size, gap_guard_px, sigma_guard_px)
 
-    def _set_camera(self, K: np.ndarray, image_size: tuple[int, int], gap_guard_px: float | None) -> None:
+    def _set_camera(self, K: np.ndarray, image_size: tuple[int, int], gap_guard_px: float | None,
+                    sigma_guard_px: float | None = None) -> None:
         """Everything that depends on the depth maps' camera."""
         self.K = np.asarray(K, dtype=np.float64).reshape(3, 3).copy()
         self.image_size = (int(image_size[0]), int(image_size[1]))
@@ -696,6 +787,10 @@ class ConfidenceTsdf:
         if not guard >= 0:
             raise ValueError(f"gap_guard_px must be >= 0, got {gap_guard_px!r}")
         self.gap_guard_px = guard
+        sg = SIGMA_GUARD_PX_1280 * w / 1280.0 if sigma_guard_px is None else float(sigma_guard_px)
+        if not sg >= 0:
+            raise ValueError(f"sigma_guard_px must be >= 0, got {sigma_guard_px!r}")
+        self.sigma_guard_px = sg
         # brick sampling: every 4th pixel at 1280 px and 1 mm voxels; the same share of a brick at other sizes
         # (2 mm voxels at 640 px: every 4th pixel too, a quarter of the samples of every 2nd)
         self._step = max(1, int(round(4.0 * w / 1280.0 * float(self.voxel_mm))))
@@ -946,7 +1041,7 @@ class ConfidenceTsdf:
                 raise ValueError(f"sigma has shape {sig.shape}, expected {depth.shape}")
             self._upload_images(depth, sig)
             bricks = self._frame_bricks_gpu(self._img_bufs[1], T, depth.shape)
-            self._queue_gaps(depth.shape, seen)  # after the search, whose result is waited for: these run meanwhile
+            self._queue_gaps(depth.shape, seen, has_sigma=sig is not None)  # after the search, whose result is waited for: these run meanwhile
             if bricks is None:
                 bricks = self._frame_bricks(depth, T)
             slots, keys = self._slots_for(bricks)
@@ -973,6 +1068,22 @@ class ConfidenceTsdf:
         cap = np.float32(self._gap_r + 1)
         d = np.minimum(cv2.distanceTransform((depth > 0).astype(np.uint8), cv2.DIST_L2, cv2.DIST_MASK_PRECISE), cap)
         return np.rint(d * d).astype(np.float32)
+
+    @property
+    def sigma_guard_on(self) -> bool:
+        """Whether the guard by the matcher's doubt acts on frames fused with a sigma."""
+        return self.sigma_guard_mm is not None and self.sigma_guard_px > 0
+
+    def _guard_mask(self, depth: np.ndarray, sigma: np.ndarray | None) -> np.ndarray:
+        """Both guards' drop in numpy (:func:`gap_guard_mask`) for ``depth`` (0 = none) and the
+        matcher's ``sigma`` (``None``: the distance guard alone); the angle term taken out of the
+        sigma first when ``sigma_guard_angle`` is off."""
+        if sigma is None or not self.sigma_guard_on:
+            return gap_guard_mask(depth, self.gap_guard_px)
+        s = np.asarray(sigma, dtype=np.float32)
+        if not self.sigma_guard_angle:
+            s = sigma_without_incidence(s, self._cos_map(depth))
+        return gap_guard_mask(depth, self.gap_guard_px, sigma=s, sigma_mm=self.sigma_guard_mm, sigma_px=self.sigma_guard_px)
 
     def _cos_map(self, depth: np.ndarray) -> np.ndarray:
         """Cosine of each pixel's ray with the depth map's normal (the kernel's rule: 1 where a
@@ -1022,7 +1133,7 @@ class ConfidenceTsdf:
         h, w = depth.shape
         gd = depth if seen is None else seen  # the gaps are those of the frame as the camera saw it (integrate)
         g2 = self._gap2(gd).ravel()
-        guard = gap_guard_mask(gd, self.gap_guard_px)
+        guard = self._guard_mask(gd, sigma_mm)
         # for the count of observations next to missing depth, what the guard drops is missing too
         gg = self._gap2(np.where(guard, np.float32(0.0), gd)).ravel() if guard.any() else g2
         guard = guard.ravel()
@@ -1121,12 +1232,14 @@ class ConfidenceTsdf:
         cl.wait_for_events(evs)
         return depth, sigma
 
-    def _queue_gaps(self, shape: tuple[int, int], seen: np.ndarray | None = None) -> None:
+    def _queue_gaps(self, shape: tuple[int, int], seen: np.ndarray | None = None, has_sigma: bool = False) -> None:
         """Queue the kernels that measure, from the uploaded depth, every pixel's squared distance to
         the nearest one without depth (into ``_img_bufs[4]``; see :meth:`_gap2`) and, with the gap
         guard, to the nearest one without depth or dropped by the guard (into ``_img_bufs[7]``: 0
-        at a pixel with depth says the guard dropped it, :func:`gap_guard_mask`). With ``seen`` (the
-        frame as the camera saw it, :meth:`integrate`) they measure that instead, uploaded first."""
+        at a pixel with depth says the guard dropped it, :meth:`_guard_mask`). With ``seen`` (the
+        frame as the camera saw it, :meth:`integrate`) they measure that instead, uploaded first.
+        ``has_sigma``: a sigma was uploaded, so the guard by the matcher's doubt acts (when on).
+        Sets ``_guarded``: whether ``_img_bufs[7]`` holds the guarded distance."""
         h, w = shape
         q = self.queue
         _, dbuf, _, hx, g2, mark, hs, gg = self._img_bufs
@@ -1142,11 +1255,18 @@ class ConfidenceTsdf:
         dmin, dmax, r = self.depth_min_mm, self.depth_max_mm, self._gap_r
         self._gkern[0](q, (w, h), None, dbuf, hx, w, h, r, dmin, dmax, mark, 0)
         self._gkern[1](q, (w, h), None, hx, g2, w, h, r)
-        if self.gap_guard_px > 0:
-            rg = int(np.ceil(self.gap_guard_px))
+        use_sigma = bool(has_sigma) and self.sigma_guard_on
+        self._guarded = self.gap_guard_px > 0 or use_sigma
+        if self._guarded:
+            rg = int(np.ceil(max(self.gap_guard_px, self.sigma_guard_px if use_sigma else 0.0)))
+            K = self.K
+            amp, c0 = _incidence_model()
             self._guard_kern[0](q, (w, h), None, dbuf, mark, w, h, dmin, dmax, GUARD_SEED)  # the patches
             self._guard_kern[1](q, (w, h), None, mark, hs, w, h, rg)
-            self._guard_kern[2](q, (w, h), None, hs, mark, w, h, rg, self.gap_guard_px ** 2)  # now the mark
+            self._guard_kern[2](q, (w, h), None, hs, mark, w, h, rg, self.gap_guard_px ** 2,  # now the mark
+                                dbuf, self._img_bufs[2], int(use_sigma), self.sigma_guard_px ** 2,
+                                self.sigma_guard_mm or 0.0, int(not self.sigma_guard_angle),
+                                K[0, 0], K[1, 1], K[0, 2], K[1, 2], dmin, dmax, amp, c0 * c0)
             self._gkern[0](q, (w, h), None, dbuf, hs, w, h, r, dmin, dmax, mark, 1)
             self._gkern[1](q, (w, h), None, hs, gg, w, h, r)
 
@@ -1160,7 +1280,7 @@ class ConfidenceTsdf:
         h, w = shape
         mf = cl.mem_flags
         _, dbuf, sbuf, _, gbuf, _, _, ggbuf = self._img_bufs
-        if not self.gap_guard_px > 0:
+        if not getattr(self, "_guarded", self.gap_guard_px > 0):
             ggbuf = gbuf  # no guard: the one distance serves both
         m = len(slots)
         if self._lists is not None:

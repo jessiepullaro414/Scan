@@ -192,7 +192,8 @@ from ohs.track.fusion import LaserCloud
 from ohs.track.imu_prior import GyroPredictor
 from ohs.track.markerless import RAYCAST_WEIGHT_THRESHOLD, VELOCITY_MAX_ACCEL, FusionParams, MarkerlessTracker
 from ohs.track.markers import MarkerParams, MarkerTracker
-from ohs.track.recon_tsdf import BACK_VOXELS, GUARD_PX_1280, OPPOSITE_VOXELS, ConfidenceTsdf, gap_guard_mask
+from ohs.track.recon_tsdf import (BACK_VOXELS, GUARD_PX_1280, OPPOSITE_VOXELS, SIGMA_GUARD_PX_1280, ConfidenceTsdf,
+                                  gap_guard_mask)
 from ohs.types import ImuSample, LaserPlane, ScannerCalibration, StereoFrame, TrackResult
 from ohs.vision.depth import SIGMA_MODELS, DepthEstimator, DepthParams
 from ohs.vision.laser import (LaserLines, LaserParams, compiled_link_rows, extract_laser_lines, is_line_name,
@@ -413,6 +414,15 @@ class PipelineParams:
     # many px of a patch without depth is not fused, which keeps holes open (VALIDATION.md, "The gap
     # guard in the engine"); None -> 8 px at 1280 px width (the default); 0 -> off
     gap_guard_px: float | None = None
+    # the guard by the matcher's own doubt (ohs.track.recon_tsdf, "The guard by the matcher's own doubt";
+    # ENGINE_PLAN X1): depth within gap_guard_sigma_px of a patch without depth whose matcher sigma is above
+    # gap_guard_sigma_mm is not fused either. None or 0: off. gap_guard_sigma_px None -> 16 px at 1280 px
+    # width; gap_guard_sigma_angle False: the matcher's factor for a steep view taken out of the sigma first.
+    # Only the confidence TSDF has the sigma: the Open3D reconstruction (the no-GPU path, or recon "open3d")
+    # ignores these three, and its results do not change with them.
+    gap_guard_sigma_mm: float | None = None
+    gap_guard_sigma_px: float | None = None
+    gap_guard_sigma_angle: bool = True
     # the mesh model's short band behind the surface (module docstring, "Thin walls"): "auto" = on
     # in a markerless scan and off in marker mode; "on" and "off" force it
     thin_walls: str = "auto"
@@ -428,6 +438,10 @@ class PipelineParams:
             raise ValueError(f"recon must be one of {RECON_MODELS}, got {self.recon!r}")
         if self.gap_guard_px is not None and not float(self.gap_guard_px) >= 0:
             raise ValueError(f"gap_guard_px must be >= 0, got {self.gap_guard_px!r}")
+        if self.gap_guard_sigma_mm is not None and not float(self.gap_guard_sigma_mm) >= 0:
+            raise ValueError(f"gap_guard_sigma_mm must be >= 0 (0 or None: off), got {self.gap_guard_sigma_mm!r}")
+        if self.gap_guard_sigma_px is not None and not float(self.gap_guard_sigma_px) >= 0:
+            raise ValueError(f"gap_guard_sigma_px must be >= 0, got {self.gap_guard_sigma_px!r}")
         if self.thin_walls not in THIN_WALLS:
             raise ValueError(f"thin_walls must be one of {THIN_WALLS}, got {self.thin_walls!r}")
         if self.track_trunc_mult is not None and not float(self.track_trunc_mult) >= 1.0:
@@ -545,6 +559,11 @@ class FramePipeline:
         # the gap guard of the reconstruction, in px of the processed image
         self.gap_guard_px = (GUARD_PX_1280 * self.image_size[0] / 1280.0 if p.gap_guard_px is None
                              else float(p.gap_guard_px))
+        # the guard by the matcher's doubt (the confidence TSDF only); None: off
+        self.gap_guard_sigma_mm = (float(p.gap_guard_sigma_mm) if p.gap_guard_sigma_mm is not None
+                                   and float(p.gap_guard_sigma_mm) > 0 else None)
+        self.gap_guard_sigma_px = (SIGMA_GUARD_PX_1280 * self.image_size[0] / 1280.0 if p.gap_guard_sigma_px is None
+                                   else float(p.gap_guard_sigma_px))
         self._guard_in_fuse = False  # True: the Open3D reconstruction, which gets its depth guarded here
         # how deep behind a surface the mesh model takes an observation in full (mm); None: the whole truncation
         self.thin_walls_mm: float | None = None
@@ -557,7 +576,8 @@ class FramePipeline:
             if model is None:
                 self.markerless = self._make_recon(p.recon, single_model=single)
             elif isinstance(model, ConfidenceTsdf):
-                model.set_camera(self.K, self.image_size, gap_guard_px=self.gap_guard_px)
+                model.set_camera(self.K, self.image_size, gap_guard_px=self.gap_guard_px,
+                                 sigma_guard_px=self.gap_guard_sigma_px)
                 self.markerless = model
             else:
                 model.set_camera(self.K, self.image_size)
@@ -569,6 +589,9 @@ class FramePipeline:
             self.has_confidence = isinstance(self.markerless, ConfidenceTsdf)
             self.thin_walls_mm = self.markerless.back_mm if self.has_confidence else None
             self.opposite_mm = self.markerless.opposite_mm if self.has_confidence else None
+            if self.gap_guard_sigma_mm is not None and not self.has_confidence:
+                log.info("gap_guard_sigma_mm is set, but this mesh is made by Open3D's model (no GPU, or recon "
+                         "\"open3d\"), which fuses no sigma: the guard by the matcher's doubt is not used")
             if p.thin_walls == "on" and self.thin_walls_mm is None:
                 log.warning("thin_walls is \"on\", but this mesh is made by Open3D's model (no GPU, or recon "
                             "\"open3d\"), which has no short band: the mesh is as with \"off\"")
@@ -914,6 +937,8 @@ class FramePipeline:
                                     depth_min_mm=fp.depth_min_mm, depth_max_mm=fp.depth_max_mm,
                                     backend="gpu" if want == "auto" else "auto",
                                     hole_factor=(sm.hole_amp, sm.hole_r_px), gap_guard_px=self.gap_guard_px,
+                                    sigma_guard_mm=self.gap_guard_sigma_mm, sigma_guard_px=self.gap_guard_sigma_px,
+                                    sigma_guard_angle=bool(self.params.gap_guard_sigma_angle),
                                     back_mm=BACK_VOXELS * fp.voxel_mm if short else None,
                                     opposite_mm=(THIN_WALLS_OPPOSITE_VOXELS * fp.voxel_mm
                                                  if short and THIN_WALLS_OPPOSITE_VOXELS else None))

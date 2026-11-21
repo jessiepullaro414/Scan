@@ -4029,6 +4029,63 @@ moved from 0.11 to 0.47 mm for a true 0.5 mm. It now alarms only when a thin par
 and further from the truth by more than 0.05 mm; thicker towards the truth is "LESS THIN" and no
 alarm.
 
+## The gap guard by the matcher's doubt (ENGINE_PLAN X1, 2026-11-21): measured, not adopted
+
+GPU path, Standard, the part placed alone. The idea: beside dropping all fused depth within 8 px
+of a patch without depth (today's guard), also drop depth within a wider reach whose matcher
+sigma is above a limit. Settings `PipelineParams.gap_guard_sigma_mm`, `gap_guard_sigma_px`,
+`gap_guard_sigma_angle`, all off.
+
+**Paired replays on the cached matcher depth** (tuned on the hole plates, the 200-frame car
+panel, the 0.5 mm plate and the standing walls; at true poses; the change against today, per
+seed):
+
+| setting, on top of today's 8 px | panel Ø25 (today -1.30..-1.71) | panel p95 (today 1.87..2.33) | hole plate 120 mm up, Ø25 (today -1.40..-1.57) | walls 0.5 / 2 mm | walls' coverage, points |
+|---|---|---|---|---|---|
+| 3 mm, 10 px | +0.66..+0.98 | -0.34..-0.45 | +0.71..+0.81 | 0.5 mm +0.19 on one seed; 2 mm -0.14 / +0.11 / +0.14 | -0.9..-2.8 |
+| 3 mm, 12 px | +0.67..+1.15 | -0.56..-0.75 | +0.65..+0.75 | 0.5 mm +0.15 / +0.35; 2 mm face lost on one seed | -1.8..-4.6 |
+| 3 mm, 16 px | +0.74..+1.22 | -0.78..-0.99 | +0.69..+0.77 | 0.5 mm +0.32 / +0.55; 2 mm face lost | -3.2..-8.0 |
+| 2 mm, 16 px | +1.21..+1.67 | -0.79..-1.02 | +1.24..+1.30 | 0.5 mm +0.24 / +0.65; 2 mm lost | -4.1..-10.1 |
+| 5 mm, 16 px | +0.32..+0.95 | -0.75..-0.96 | +0.39..+0.45 | 0.5 mm +0.33 / +0.47; 2 mm lost | -2.3..-6.5 |
+| 3 mm, 16 px, steep-view factor taken out | +0.63..+1.22 | -0.72..-0.95 | +0.66..+0.79 | 0.5 mm +0.25 / +0.23; 2 mm lost | -2.3..-6.2 |
+| today's guard off, 3 mm, 8 px | about 0 | about 0 | about 0 | within 0.006 mm | about 0 |
+
+The 0.5 mm plate lying flat does not change in any digit at any reach from 10 to 48 px. The
+Ø10 hole near the floor overshoots at 3 mm, 16 px (-0.71 / -1.60 / -0.37 against +0.60 / +0.42 /
++0.28 today). The last row is the finding: within about 8 px of a patch the matcher's hole
+factor puts nearly every sigma above 3 mm, so the gate is a wider distance guard.
+
+**Full compares against the baseline, 36 recordings, 3 mm** (the change, over seeds):
+
+| row | today | 10 px | 12 px | 16 px |
+|---|---|---|---|---|
+| car panel Ø25, tracked | -1.15 | +0.71..+0.84 | +0.83..+1.00 | +0.87..+1.15 |
+| car panel p95, tracked / true | 1.78 / 2.13 | -0.42 / -0.40 | -0.64 / -0.66 | -0.93 / -0.93 |
+| car panel, share past its free edge, tracked / true | 0.070 / 0.079 | -0.008 / -0.009 | -0.011 / -0.014 | -0.015 / -0.018 |
+| hole plate 120 mm up, Ø25, true | -1.51 | +0.71..+0.81 | +0.65..+0.75 | +0.69..+0.77 |
+| end-to-end panel Ø25 (a one-sided pan: reads wide), tracked / true | +1.34 / +1.23 | +0.36 / +0.45 further | +0.39 / +0.49 further | +0.39 / +0.49 further |
+| bracket median / p95, true | 0.061 / 0.420 | -0.001 / +0.002 | -0.003 / -0.002 | -0.006 / -0.019 |
+| bracket, right boss | answers | one click fewer | one seed 0.05 mm further | one seed worse |
+| 0.5 mm wall, true | +0.79 | +0.19 on one seed | +0.15 / +0.35 thicker | +0.32 / +0.55 thicker |
+| 2 mm wall, true | +0.26 | +0.11 / +0.14 thicker | a face lost on one seed | a face lost on one seed |
+| sheet, 1 mm rib / 3 mm rib, true | +0.25 / +0.04 | +0.06 on one seed / worse | +0.08 / +0.07 thicker | +0.11 / +0.10 thicker |
+| 0.5 mm plates | | identical | identical | identical |
+| coverage within 1 mm, points: bracket | | -0.1..-0.7 | -0.3..-1.4 | -0.7..-2.2 |
+| coverage: walls | | -1.0..-2.4 | -2.0..-4.2 | -3.3..-7.3 |
+| coverage: dark bracket | | -1.8..-3.0 | -2.6..-3.4 | -3.5..-3.8 |
+| coverage: speckled bracket | | -0.9 / -19.3 | -1.3 / -20.3 | -1.8 / -21.0 |
+| coverage: sphere | | -2.9 | -4.1 | -6.0 |
+
+Every compare ends "Worse on" the brackets, the walls, the dark and speckled brackets, both hole
+plates, the car panel and the sheet, with alarms on thin parts (thicker; a face lost) and small
+features. Holes and the panel's free edge improve; standing walls, ribs, bosses and coverage pay
+for it. Not adopted.
+
+With the settings off the results are what they were: the GPU path processed afresh is identical
+to the baseline, and the no-GPU quick set is identical even with the settings on (its surface
+model has no sigma). Frame time was not readable on the busy PC; the gate adds one comparison a
+pixel inside a kernel that already runs.
+
 ## What the metrics mean
 
 - **Stereo errors** compare the estimated raw intrinsics/extrinsics (`K1`, `K2`, `R`, `T`) with
