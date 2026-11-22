@@ -551,6 +551,20 @@ and thin parts".
   - Without a GPU the start took a test recording 108 mm off, so it is not used there.
   - **If taken up again:** the start only at full resolution (the live preview stays as it
     is), and a look at why the speckled brackets and bracket seed 1 get worse.
+- **Looked into, 2026-11-22 (`VALIDATION.md`, "Why some scenes got worse"): still not
+  adopted, no full compare spent.**
+  - Every registration of the start lands about 0.2 mm off the others in the same direction
+    (along the table); one after the other, that became a group offset from frame 0 (the
+    speckled bracket 0.45 mm). Built `PipelineParams.start_together` (off): a round registers
+    against the poses from before it. Speckled brackets' last frame 1.125 / 0.349 → 0.570 /
+    0.437 (one after the other 1.259 / 0.876); brackets 0, 3, 4 and the walls better too.
+  - Bracket seed 1's path max and the hole plate's loss are single frames slipping in
+    mid-scan, there with the start off; whether they slip tips with the start's poses
+    (together the hole plate is at 19.1 mm again; the "rescue" above was luck). That is X4c.
+  - The start only at full resolution changes no number (the scorecard runs that already).
+    The small hole, sheet and wall rows are single seeds' noise inside the baseline's spread.
+  - **Judge again after X4c** with `start_frames=10, start_predict=fit, start_first=true,
+    start_detail_only=true, start_together=true`.
 - **What X4 measured:** the first frame is registered against a model of one frame from a
   prediction of zero and lands 1 to 8 mm off; the dark bracket's whole 3.9 mm error is made in
   frames 1 and 2 and never mended; the hole plate's loss at frames 52 to 56 and the hard
@@ -567,6 +581,25 @@ and thin parts".
 - **Stop rule: adopted only if** the dark bracket's last frame is under 1.5 mm and the hole
   plate's seed 0 path max under 6 mm, no scene is worse beyond its spread, nothing thin moves
   away from the truth, and the smooth scenes' paths stay within 10 %.
+
+### [ ] X4c. A single frame that slips in mid-scan (found by X4 and X4b; M)
+- **Evidence:** the hole plate 120 mm up, seed 0, at frames 52 to 56 (16.3 mm) and bracket
+  seed 1 at frames 151 to 157 (1.8 to 3.7 mm): one frame lands a few mm off along the weakly
+  held direction while the tracker's own numbers look healthy, and the constant-velocity
+  prediction carries it. Whether it happens tips with tiny changes of the poses before it
+  (X4b: starts of 6 to 14 frames give 2.0 to 4.1 mm on the bracket). The weak-step rule
+  (`FusionParams.weak_step_*`, off) only halves the hole plate's and does nothing for the
+  bracket.
+- **Ideas, each a setting:** hold a frame whose step along the weak direction leaves the
+  prediction by more than the limit out of the tracking model, and register it again once
+  the next frames are in (a short window, as the start does); register it from two
+  predictions and keep the one the model agrees with; the motion sensor's accelerometer as a
+  check on the step (X4b's (d), never built).
+- **Judge on** the app chain's baseline; then judge X4b's start again with `start_together`.
+- **Stop rule: adopted only if** the hole plate's seed 0 path max is under 6 mm and bracket
+  seed 1's under today's 2.40 mm, the result does not tip when the start's length changes
+  (6 to 14 frames), no scene is worse beyond its spread, nothing thin moves away from the
+  truth, and the smooth scenes are identical.
 
 ### [ ] X5. Fine voxels where the part needs them (S to M, then L)
 - **Step 1:** after Make mesh, find thin walls (where the opposite-sides rule fired) and

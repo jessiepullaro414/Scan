@@ -4583,6 +4583,80 @@ baselines on both paths.
 Limits: simulated, one run a recording; the variant was tuned on the dark bracket; one full
 compare was spent, on the best variant.
 
+### Why some scenes got worse, and the start registered together (2026-11-22)
+
+A look at the rows that failed the compare, on a small set (the brackets, the dark and speckled
+brackets, two hole plates, the walls' seed 0, the end-to-end sphere). Two separate causes.
+
+**1. The start itself: a shared bias, turned into an offset.** Measured against the truth, every
+registration of a start frame against the model of the other nine lands about 0.2 mm off them in
+the same direction, along the table, where the translation is weakly held (speckled brackets
+0.22 and 0.21 mm, dark bracket 0.28 mm). The rounds registered the frames one after the other,
+each against the others' newest poses, so the later frames took the bias on top of the earlier
+ones' and frames 1 to 9 ended up off frame 0 as a group (speckled bracket about 0.45 mm, then
+held by the whole scan). This is also why 4 rounds were worse than 2.
+
+**Built (off): `PipelineParams.start_together`.** In a round every frame is registered against
+the others' poses from before the round, then all are moved together; a bias they share moves
+them alike and is gone when the world is put back at frame 0's camera. Off, the code runs as
+before.
+
+**2. Single frames that slip in mid-scan, with the start off too.** Bracket seed 1's path max
+is a slip at frames 151 to 157 (today 2.40 mm at frame 165 after 1.80 at 155); with starts of
+6 / 8 / 10 / 12 / 14 frames it is 3.38 / 1.98 / 3.70 / 2.61 / 4.13 mm, so its height tips with
+the start's poses and no start mends it. The hole plate 120 mm up, seed 0, is the same at
+frames 52 to 56: today 16.3 mm; every one-after-the-other start happened to avoid it (2.0 to
+2.8 mm); registered together it is 19.1 mm at 10 frames and 3.1 / 5.0 / 2.6 at 8 / 12 / 14. The
+"rescue" in the table above was therefore luck, not the start mending anything. The weak-step
+rule on top takes 19.1 to 8.3 mm and does nothing for the bracket.
+
+The second speckled bracket's last frame (0.349 → 0.876) was not made in the frame pass (0.92
+against 0.99): Straighten's crossings act today and did not with the candidate.
+
+**The small set**, what Make mesh runs, tracked; last frame / path max / path median (mm):
+
+| recording | today | start, one after the other | start, together |
+|---|---|---|---|
+| Speckled bracket 1 | 1.125 / 1.62 / 1.02 | 1.259 / 1.71 / 1.19 | 0.570 / 1.28 / 0.73 |
+| Speckled bracket 2 | 0.349 / 1.01 / 0.555 | 0.876 / 1.39 / 0.664 | 0.437 / 1.04 / 0.467 |
+| Bracket seed 0 | 0.417 / 1.15 / 0.489 | 0.519 / 1.32 / 0.526 | 0.343 / 1.20 / 0.413 |
+| Bracket seed 1 | 0.597 / 2.40 / 0.674 | 0.527 / 3.70 / 0.519 | 0.778 / 2.55 / 0.663 |
+| Bracket seed 2 | 0.554 / 1.47 / 0.699 | 0.555 / 1.42 / 0.679 | 0.700 / 1.46 / 0.726 |
+| Bracket seed 3 | 0.641 / 1.64 / 0.757 | 0.609 / 1.53 / 0.735 | 0.540 / 1.34 / 0.611 |
+| Bracket seed 4 | 0.768 / 2.02 / 0.763 | 0.705 / 1.36 / 0.597 | 0.389 / 1.58 / 0.461 |
+| Dark bracket 1 | 3.786 / 6.29 / 3.88 | 0.585 / 2.02 / 0.675 | 0.673 / 1.96 / 0.802 |
+| Dark bracket 2 | 0.696 / 2.28 / 1.03 | 0.542 / 1.77 / 0.709 | 0.483 / 1.85 / 0.570 |
+| Hole plate 120 mm up, seed 0 | 2.10 / 16.3 / 1.80 | 2.11 / 2.82 / 1.68 | 2.14 / 19.1 / 2.01 |
+| Hole plate 10 mm up, seed 1 | 0.723 / 2.26 / 1.01 | 0.629 / 1.83 / 0.922 | 0.692 / 2.30 / 1.03 |
+| Standing walls, seed 0 | 1.067 / 1.21 / 0.531 | 0.580 / 1.06 / 0.391 | 0.386 / 0.99 / 0.332 |
+| End-to-end sphere | | identical | identical |
+
+Readings with the start together: the hole plate 120 mm up seed 0's Ø 25 -6.61 → -11.46 (the
+slip); the walls' 0.5 / 1 / 2 mm 1.229 / 0.808 / 0.660 → 1.174 / 0.821 / 0.549 (all still too
+thick; nothing thinned) and the 0.5 mm wall's face covered 0.483 → 0.523; on the speckled
+brackets the boss and shaft clicks are 0.04 to 0.11 mm further off and one boss (known to be
+unreliable there) is not answered; bracket seed 3's left boss -0.074 → -0.133. Part medians
+within 0.004 mm.
+
+**The small readings that failed the first compare** (hole plate 10 mm up, sheet, walls) change
+with mixed signs across the seeds and inside the spread between the baseline's seeds (Ø 25
+spread 0.67 mm against +0.00 / +0.52 / +0.05; 0.5 mm wall spread 0.075 against -0.05 / +0.01 /
+-0.03): single seeds' noise, not a trend.
+
+**Only at full resolution** changes nothing in these numbers: the scorecard already runs Make
+mesh's frame pass at full resolution, and the live preview is never scored. It would only spare
+the live view the pause.
+
+**Verdict: still not adopted, and no full compare spent.** Registered together the start is
+better than one after the other on 9 of the 12 recordings that moved, and better than today on
+most; but the small set is not better or the same throughout (the hole plate's slip, bracket
+seeds 1 and 2's last frame, the clicks on the speckled brackets). What decides the largest rows
+is the slip in mid-scan, now ENGINE_PLAN X4c; the start is to be judged again once that holds.
+
+Limits: simulated; one run a recording; the bias was measured on brackets only; the full set was
+not run with `start_together`; why the starts one after the other avoid the hole plate's slip
+more often is not explained; the clicks on the bosses were not looked into.
+
 ## What the metrics mean
 
 - **Stereo errors** compare the estimated raw intrinsics/extrinsics (`K1`, `K2`, `R`, `T`) with

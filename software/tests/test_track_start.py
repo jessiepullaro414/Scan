@@ -189,6 +189,55 @@ def test_the_start_fit_predicts_from_the_others():
     assert np.allclose(T[:3, 3], Ps[1][:3, 3]) and np.allclose(T[:3, :3], np.eye(3))
 
 
+class _Consensus:
+    """Stands in for MarkerlessTracker in the start's sweeps: a frame registers where the model of the others puts it
+    (their mean error) plus a bias ``b`` that every registration shares, as measured on the speckled and the dark
+    brackets (about 0.2 mm, the same direction for every frame: ENGINE_PLAN X4b, "Why some scenes got worse")."""
+
+    def __init__(self, truth, b):
+        self.truth, self.b, self.model = truth, np.asarray(b, float), []
+
+    def rebuild(self, frames):
+        self.model = [(int(d), np.asarray(T, float)) for d, T in frames]  # the "depth" is the frame's number here
+
+    def register(self, depth, T_start, gyro=True):
+        j = int(depth)
+        off = np.mean([T[:3, 3] - self.truth[i][:3, 3] for i, T in self.model], axis=0)
+        T = np.asarray(T_start, float).copy()
+        T[:3, 3] = self.truth[j][:3, 3] + off + self.b
+        return T, {}
+
+
+def _swept(together, b=(0.0, -0.18, 0.12), first=True, sweeps=2, off=None):
+    from types import SimpleNamespace
+
+    t = [k * DT for k in range(10)]
+    truth = [G.make_se3(np.eye(3), np.array([80 * s, -10 * s, -100 * s * s])) for s in t]
+    pp = PipelineParams(start_frames=10, start_predict="fit", start_first=first, start_sweeps=sweeps,
+                        start_together=together)
+    tr = _Consensus(truth, b)
+    tracked = [T.copy() for T in truth]
+    for T in tracked[1:]:  # frames 1 to 9 tracked off frame 0 together (the dark bracket: about 4 mm)
+        T[:3, 3] += 0.0 if off is None else np.asarray(off, float)
+    out = FramePipeline._refine_start(SimpleNamespace(params=pp), tr, list(range(10)), tracked, t, [True] * 10)
+    return np.array([(G.invert_se3(out[0]) @ T)[:3, 3] - T_t[:3, 3] for T, T_t in zip(out, truth)])
+
+
+def test_the_start_registered_together_does_not_turn_a_shared_bias_into_an_offset():
+    """Each frame registered in turn against the others' newest poses (the default): a bias that every registration
+    shares moves the frames registered later further, and frames 1 to 9 end up off frame 0 (hard-speck: 0.45 mm, then
+    carried by the rest of the scan). With ``start_together`` every frame of a round is registered against the
+    others' poses from before the round, so a shared bias moves them all alike: the world goes back to frame 0's
+    camera (``start_first``) and the frames stay where they were relative to it."""
+    assert np.abs(_swept(True)).max() < 1e-9
+    assert np.abs(_swept(True, sweeps=4)).max() < 1e-9
+    # what the start is for still happens: frames tracked 4 mm off frame 0 come back to it (by 1/9 of what is left
+    # each round)
+    assert np.abs(_swept(True, off=(4.0, 0.0, -1.0))).max() < 4.2 / 81 + 1e-9
+    assert np.abs(_swept(False)).max() > 0.1  # one at a time, as before (unchanged): the shared bias becomes an offset
+    assert PipelineParams().start_together is False
+
+
 class _Fake:
     """Stands in for MarkerlessTracker in the start's detail decision: ok results with the given strengths."""
 

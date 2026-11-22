@@ -70,16 +70,22 @@ the car panel, the door trim) never switch. A scan that starts on a smooth part 
 reaches a detailed one stays on the filtered depth.
 
 **The scan's start** (``PipelineParams.start_frames``, ``start_sweeps``, ``start_predict``, ``start_first``,
-``start_detail``; ENGINE_PLAN X4b; off unless set). The first frame of a scan is registered against a model made
-of one frame from a prediction of zero motion, and on the simulator it landed 1 to 8 mm off on every scene with a
-table; the next frames are registered against a model that holds that error, and keep it (the dark bracket's
-whole 3.9 mm). With ``start_frames`` = k > 1 the first k frames are tracked as before (their poses are what a live
+``start_together``, ``start_detail``; ENGINE_PLAN X4b; off unless set). The first frame of a scan is registered
+against a model made of one frame from a prediction of zero motion, and on the simulator it landed 1 to 8 mm off
+on every scene with a table; the next frames are registered against a model that holds that error, and keep it (the
+dark bracket's whole 3.9 mm). With ``start_frames`` = k > 1 the first k frames are tracked as before (their poses are what a live
 view shows meanwhile) but held back: nothing of them is fused into the mesh's model and their laser points wait.
 After the k-th (or a frame that fails, or when the scan is read: :meth:`FramePipeline.finish_start`) each frame is
 registered again (:meth:`~ohs.track.markerless.MarkerlessTracker.register`) against a tracking model of all the
 others at their poses, in ``start_sweeps`` rounds, from its own pose or (``start_predict`` "fit") from a fit in
 time of the others' positions (a quadratic), its rotation held as the gyro's; with ``start_first`` the first frame
-too, the world then put back at its camera. The tracking model is then made again from the k frames at those poses
+too, the world then put back at its camera. In a round the frames are registered one after the other, each against
+the others' newest poses; with ``start_together`` all against the others' poses from before the round, and then
+moved together. Every registration on the simulator's brackets lands about 0.2 mm off the others in the same
+direction (along the table, where the translation is weakly held); one after the other, the frames registered later
+take that bias on top of the earlier ones' and frames 1 to k-1 end up off frame 0 (the speckled bracket 0.45 mm,
+then held by the rest of the scan); together, a bias all of them share moves them alike and is gone when the world
+is put back at frame 0's camera. The tracking model is then made again from the k frames at those poses
 (:meth:`~ohs.track.markerless.MarkerlessTracker.restart`, which also carries the last step into the next
 prediction), the frames are fused into the mesh's model and their laser points added, and
 :meth:`FramePipeline.trajectory` gives their new poses. With ``start_detail`` "window" the detail probe (above)
@@ -460,6 +466,9 @@ class PipelineParams:
     start_predict: str = "pose"
     # ... the first frame registered too in those rounds (against the others), the world then put back at its camera
     start_first: bool = False
+    # ... in a round every frame registered against the others' poses from before the round, then all moved together
+    # (False: one after the other, each against the others' newest poses, as before)
+    start_together: bool = False
     # ... only in a scan that tracks in detail mode (the filtered depth does not hold its translation); a smooth
     # part's start is then fused as it was tracked
     start_detail_only: bool = False
@@ -1241,14 +1250,16 @@ class FramePipeline:
                       times: list[float], gyro: list[bool]) -> list[np.ndarray]:
         """The start's frames registered again (module docstring, "The scan's start"): in each of ``start_sweeps``
         rounds every frame but the first (the world's frame) against a model of all the others at their poses, from
-        its own pose or (``start_predict`` "fit") from a fit in time of the others' positions."""
+        its own pose or (``start_predict`` "fit") from a fit in time of the others' positions; one after the other, or
+        with ``start_together`` all against the poses from before the round."""
         P = [T.copy() for T in poses]
         n = len(P)
         j0 = 0 if self.params.start_first else 1
         for _ in range(int(self.params.start_sweeps)):
+            Q = [T.copy() for T in P] if self.params.start_together else P  # what this round registers against
             for j in range(j0, n):
-                tr.rebuild([(inputs[i], P[i]) for i in range(n) if i != j])
-                start = P[j] if self.params.start_predict == "pose" else _fit_start(P, times, j)
+                tr.rebuild([(inputs[i], Q[i]) for i in range(n) if i != j])
+                start = Q[j] if self.params.start_predict == "pose" else _fit_start(Q, times, j)
                 T, _ = tr.register(inputs[j], start, gyro=gyro[j] if j else True)
                 if T is not None:
                     P[j] = T
