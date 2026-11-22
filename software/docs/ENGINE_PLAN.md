@@ -600,6 +600,28 @@ and thin parts".
   seed 1's under today's 2.40 mm, the result does not tip when the start's length changes
   (6 to 14 frames), no scene is worse beyond its spread, nothing thin moves away from the
   truth, and the smooth scenes are identical.
+- **Measured 2026-11-22 (`VALIDATION.md`, "A single frame that slips in mid-scan"): one cause
+  held, one open; not adopted, no compare spent.**
+  - **The two slips have different causes.** The hole plate's frame 52 slides 6.7 mm along
+    the weak direction into another fit, 5.1 mm off; from the truth and from every other
+    start it stays within 0.2 to 0.9 mm at a clearly lower cost, even against a model at
+    true poses. Bracket seed 1's frames land 1 to 1.6 mm off because the model, fused a few
+    tenths of a mm off, pulls them (0.1 mm against a model of the same frames at true poses).
+  - **Built, off:** `FusionParams.slip_check_mm`, `slip_starts`, `slip_margin`: a frame whose
+    step along its weakest translation leaves the prediction by more than the limit is
+    registered again from two other starts, and the result the model agrees with best is
+    kept. It holds the hole plate at every start (path max 2.3 to 3.1 mm after the start,
+    from 16.3 and up to 19.1) and never acts on the bracket, which still tips (1.81 to
+    3.30 mm).
+  - **The accelerometer** is no better than constant velocity with gravity and bias unknown
+    (median 0.6 mm); with both known it is good to 0.1 mm. An estimator while scanning is not
+    built.
+  - **Still open, the bracket's cause:** a tracking model that agrees better. Ideas: fuse a
+    frame into the tracking model only once the next frame confirms it; register a short
+    window of frames again together, as the start does; the accelerometer with gravity and
+    bias estimated while scanning. Then judge together: `fusion.slip_check_mm=3` and the
+    start (`start_frames=10, start_predict=fit, start_first=true, start_detail_only=true,
+    start_together=true`).
 
 ### [ ] X5. Fine voxels where the part needs them (S to M, then L)
 - **Step 1:** after Make mesh, find thin walls (where the opposite-sides rule fired) and

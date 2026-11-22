@@ -93,6 +93,26 @@ than ``weak_step_strength``, and whose step along that direction differs from th
 the next prediction ("undo"). Its pose is what ICP found; ``info["weak_step_mm"]`` says how far the carried step
 moved.
 
+**A frame that slides into another fit** (``FusionParams.slip_check_mm``, ``slip_starts``, ``slip_margin``; ENGINE_PLAN
+X4c; both models; off unless set). The hole plate's frame 52 above, measured against the truth before it was fused:
+its prediction was 1.6 mm off, and ICP slid 6.7 mm from it along the weakly held direction (along the table) and
+stopped 5.1 mm off. Started from the true pose the same ICP stays there (0.35 mm), and so does every other start
+tried (the last pose without the carried step, the prediction without the coarsest level: 0.2 to 0.9 mm). The
+model agrees better with the frame there: the truncated point-to-plane cost (:meth:`MarkerlessTracker._agreement`,
+which also counts the frame's points that find no model point) is 2.97 against 3.26 mm^2, where on the frames
+around it the results of those starts lie within 0.5 mm of each other and their costs within 0.03. ICP's own
+numbers did not show it (fitness 0.80 against 0.81, rmse as usual): its cost leaves out the points it loses, and the
+slide lost 2 % of them. With the setting, a frame whose step along its weakest translation (``info["trans_axis"]``)
+leaves the prediction by more than ``slip_check_mm`` is registered again from ``slip_starts`` ("rest": the last pose
+turned by the gyro, without the carried step; "fine": the prediction without the coarsest ICP level) and keeps the
+result with the lowest cost when it beats the first by more than ``slip_margin``; ``info["slip_check"]`` says what
+was compared and kept. The frames that did not slide that far are tracked exactly as without it. Measured on the
+frame pass (2026-11-22, ``slip_check_mm`` 3): the hole plate's slip is held with and without the scan's start, at
+every start length tried (path max after the start 2.3 to 3.1 mm, from 16.3 and up to 19.1). It does not mend
+bracket seed 1's frames 151 to 166 (never acts there): those land 1 to 1.6 mm off because the model, fused at
+poses a few tenths of a mm off, pulls them (against a model of the same frames at true poses they land 0.1 mm off),
+which no second start can mend. Not adopted (ENGINE_PLAN X4c).
+
 **The pull along a table** (ENGINE_PLAN X0a; Open3D model only, each off unless set). Without a GPU the camera
 path slid along the table on every simulated scene: started at the true pose of a frame, ICP against the Open3D
 model moved the camera 3.4 to 6.6 mm along it (the GPU model: 0.4 to 1.2 mm), even a frame against its own
@@ -179,6 +199,7 @@ log = logging.getLogger(__name__)
 MODEL_BACKENDS = ("auto", "open3d", "gpu")
 MODEL_NORMALS = (None, "gradient", "vertex_map")  # FusionParams.model_normals (module docstring, "The pull along a table")
 WEAK_STEP_MODES = ("hold", "undo")  # FusionParams.weak_step_mode (module docstring, "A weakly held step")
+SLIP_STARTS = ("rest", "fine")  # FusionParams.slip_starts (module docstring, "A frame that slides into another fit")
 O3D_THREADS_ENV = "OHS_O3D_THREADS"  # see _limit_open3d_threads
 
 
@@ -342,6 +363,15 @@ class FusionParams:
     weak_step_strength: float | None = None
     weak_step_mm: float = 0.0
     weak_step_mode: str = "hold"
+    # ENGINE_PLAN X4c, both models (module docstring, "A frame that slides into another fit"): a frame whose step
+    # along its weakest translation (info["trans_axis"]) leaves the prediction by more than slip_check_mm is
+    # registered again from slip_starts ("rest": the last pose turned by the gyro, no carried step; "fine": the
+    # prediction without the coarsest ICP level), and the result the model agrees with best (the truncated
+    # point-to-plane cost of the frame at each result, the frame's points without a model point counted at the cap)
+    # is kept when it beats the first one by more than slip_margin (mm^2). None: off.
+    slip_check_mm: float | None = None
+    slip_starts: tuple[str, ...] = ("rest", "fine")
+    slip_margin: float = 0.05
     # sanity gates
     min_points: int = 300  # valid source points at the finest ICP level, counted at stride 4 (scaled by the stride)
     min_model_px: int = 300  # valid model pixels in the ray cast
@@ -386,6 +416,14 @@ class FusionParams:
         if (self.weak_step_strength is not None and not self.weak_step_strength >= 0) or not self.weak_step_mm >= 0:
             raise ValueError("weak_step_strength (or None) and weak_step_mm must be >= 0, got "
                              f"{self.weak_step_strength!r}, {self.weak_step_mm!r}")
+        if (self.slip_check_mm is not None and not self.slip_check_mm > 0) or not self.slip_margin >= 0:
+            raise ValueError("slip_check_mm must be > 0 (or None) and slip_margin >= 0, got "
+                             f"{self.slip_check_mm!r}, {self.slip_margin!r}")
+        if isinstance(self.slip_starts, str):
+            self.slip_starts = (self.slip_starts,)
+        self.slip_starts = tuple(self.slip_starts)
+        if not self.slip_starts or any(s not in SLIP_STARTS for s in self.slip_starts):
+            raise ValueError(f"slip_starts must name one or more of {SLIP_STARTS}, got {self.slip_starts!r}")
 
     @property
     def trunc_mm(self) -> float:
@@ -1071,8 +1109,9 @@ class MarkerlessTracker:
 
     # ------------------------------------------------------------------ ICP
     def _icp(self, src: list[tuple[np.ndarray, np.ndarray]], view: _ModelView, widen: float,
-             rot_sigma_rad: float, extra_coarse: bool) -> _IcpOutput:
-        """Projective point-to-plane Gauss-Newton; returns the pose of the frame in the view frame."""
+             rot_sigma_rad: float, extra_coarse: bool, skip_coarse: int = 0) -> _IcpOutput:
+        """Projective point-to-plane Gauss-Newton; returns the pose of the frame in the view frame. ``skip_coarse``:
+        that many of the coarsest levels are left out (the slip check's "fine" start)."""
         p = self.params
         K = view.K
         w, h = view.size
@@ -1085,6 +1124,8 @@ class MarkerlessTracker:
         if extra_coarse:
             P0, N0 = src[0]
             levels = [(P0[::4], N0[::4], 2 * p.icp_iterations[0], p.icp_max_dist_mm[0] * 1.5)] + levels
+        if skip_coarse:
+            levels = levels[min(int(skip_coarse), len(levels) - 1):]
         total_it = 0
         out = _IcpOutput(np.eye(4))
 
@@ -1284,6 +1325,7 @@ class MarkerlessTracker:
         res = self._icp(src, view, widen, rot_sigma, extra_coarse=lost > 0)
         T_est = view.T_wc @ res.T_delta
         reason = self._gate(res, T_pred, T_est, widen)
+        src_res = src  # the points that registered the frame (the slip check registers them again)
         if alt_depth is not None and not used_alt and reason is not None:
             # the frame fails with its input: try the other depth map before losing it
             a = alt()
@@ -1293,6 +1335,7 @@ class MarkerlessTracker:
                 T2 = view.T_wc @ res2.T_delta
                 if self._gate(res2, T_pred, T2, widen) is None:
                     res, T_est, reason, depth, used_alt = res2, T2, None, a, True
+                    src_res = src2
             info["alt_tried"] = True
         elif alt_depth is not None and used_alt and self.detail_mode and reason is not None:
             # detail mode: if the frame fails with the part (a model that hasn't seen this part of
@@ -1304,7 +1347,14 @@ class MarkerlessTracker:
                 T_m = view.T_wc @ res_m.T_delta
                 if self._gate(res_m, T_pred, T_m, widen) is None:
                     res, T_est, reason = res_m, T_m, None
+                    src_res = src_m
             info["main_tried"] = True
+        if reason is None and lost == 0 and p.slip_check_mm is not None and res.trans_axis is not None:
+            # a step that slid along the weakly held direction: registered again from other starts (module docstring,
+            # "A frame that slides into another fit"; FusionParams.slip_check_mm)
+            res, T_est, view, slip = self._slip_check(src_res, view, res, T_est, T_pred, rot_sigma)
+            if slip is not None:
+                info["slip_check"] = slip
         timings["icp"] = 1e3 * (time.perf_counter() - tc)
         info["input"] = "alt" if used_alt else "main"
         D = invert_se3(T_pred) @ T_est
@@ -1402,6 +1452,73 @@ class MarkerlessTracker:
         if np.linalg.norm(D[:3, 3]) > p.max_jump_mm * widen or rotation_angle_deg(D[:3, :3]) > p.max_jump_deg * widen:
             return "jump"
         return None
+
+    def _slip_check(self, src: list[tuple[np.ndarray, np.ndarray]], view: _ModelView, res: _IcpOutput,
+                    T_est: np.ndarray, T_pred: np.ndarray,
+                    rot_sigma: float) -> tuple[_IcpOutput, np.ndarray, _ModelView, dict | None]:
+        """``FusionParams.slip_check_mm`` (module docstring, "A frame that slides into another fit"): when the frame's
+        step along its weakest translation leaves the prediction by more than the limit, the frame is registered again
+        from ``slip_starts`` and the result the model agrees with best (:meth:`_agreement`) is kept, if it beats the
+        first by more than ``slip_margin``. Returns ``(res, T_est, its view, what was done or None)``."""
+        p = self.params
+        axis_w = view.T_wc[:3, :3] @ res.trans_axis
+        along = float((T_est[:3, 3] - T_pred[:3, 3]) @ axis_w)
+        if not abs(along) > p.slip_check_mm:
+            return res, T_est, view, None
+        cands = [("first", res, T_est, view)]
+        for name in p.slip_starts:
+            if name == "rest":  # where the frame is without the carried step, turned by the gyro (as the prediction)
+                T_s = self._T_last.copy()
+                T_s[:3, :3] = T_pred[:3, :3]
+                skip = 0
+            else:  # "fine": the prediction, without the coarsest level (its wide gates are what slides)
+                T_s, skip = T_pred, 1
+            v = self._raycast(T_s)
+            if v is None or v.n_valid < p.min_model_px:
+                continue
+            r = self._icp(src, v, 1.0, rot_sigma, extra_coarse=False, skip_coarse=skip)
+            T = v.T_wc @ r.T_delta
+            if r.trans_axis is not None and self._gate(r, T_pred, T, 1.0) is None:
+                cands.append((name, r, T, v))
+        costs = [self._agreement(src[-1], T) for _, _, T, _ in cands]
+        best = int(np.argmin(costs))
+        keep = best if costs[best] < costs[0] - p.slip_margin else 0
+        name, r, T, v = cands[keep]
+        out = {"along_mm": round(along, 3), "kept": name,
+               "costs": {c[0]: round(float(x), 4) for c, x in zip(cands, costs)},
+               "moved_mm": round(float(np.linalg.norm(T[:3, 3] - T_est[:3, 3])), 3)}
+        if keep:
+            log.debug("markerless frame %d: slid %.1f mm along its weak direction; kept the %s start's result "
+                      "(%.2f mm away)", self._frame, along, name, out["moved_mm"])
+        return r, T, v, out
+
+    def _agreement(self, src_fine: tuple[np.ndarray, np.ndarray], T_wc: np.ndarray) -> float:
+        """How well the model agrees with the frame's finest-level points at ``T_wc`` (lower is better): the mean
+        point-to-plane residual squared, truncated at the finest correspondence distance, over all the points, a
+        point without a model point within that distance (or with a normal too different) counted at the cap. The
+        model is ray cast at ``T_wc`` itself, so results from different starts are judged alike."""
+        p = self.params
+        P, Ns = src_fine
+        cap2 = float(p.icp_max_dist_mm[-1]) ** 2
+        n = len(P)
+        v = self._raycast(T_wc)
+        if v is None or n == 0:
+            return float("inf")
+        K = v.K
+        w, h = v.size
+        z = P[:, 2]
+        zs = np.where(z > 1e-6, z, 1.0)
+        u = np.rint(K[0, 0] * P[:, 0] / zs + K[0, 1] * P[:, 1] / zs + K[0, 2]).astype(np.int64)
+        vv = np.rint(K[1, 1] * P[:, 1] / zs + K[1, 2]).astype(np.int64)
+        sel = np.flatnonzero((z > 1e-6) & (u >= 0) & (u < w) & (vv >= 0) & (vv < h))
+        pix = vv[sel] * w + u[sel]
+        ok = v.valid[pix]
+        sel, pix = sel[ok], pix[ok]
+        Vt, Nt = v.at(pix)
+        diff = P[sel] - Vt
+        good = (np.einsum("ij,ij->i", diff, diff) < cap2) & (np.einsum("ij,ij->i", Ns[sel], Nt) > p.normal_cos)
+        r = np.einsum("ij,ij->i", diff[good], Nt[good])
+        return float(np.minimum(r * r, cap2).sum() + (n - len(r)) * cap2) / n
 
     def _accept(self, T_wc: np.ndarray, t: float | None, consecutive: bool | None,
                 weak: tuple[float, np.ndarray] | None = None) -> None:

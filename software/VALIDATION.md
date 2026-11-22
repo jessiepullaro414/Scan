@@ -4657,6 +4657,85 @@ Limits: simulated; one run a recording; the bias was measured on brackets only; 
 not run with `start_together`; why the starts one after the other avoid the hole plate's slip
 more often is not explained; the clicks on the bosses were not looked into.
 
+## A single frame that slips in mid-scan (ENGINE_PLAN X4c, 2026-11-22): one cause held, one open, not adopted
+
+X4b left two slips: the hole plate 120 mm up, seed 0, at frames 52 to 56 (16.3 mm) and bracket
+seed 1 at frames 151 to 166 (2.40 mm). They have different causes. A rule for the first is
+built as a setting that is off; the second is open. No default changed, no compare spent.
+
+**The probe.** In the frame pass of what Make mesh runs, each frame was registered before it
+was fused from its prediction (what the engine does) and from the true motion since the last
+frame, and each end pose scored by a truncated point-to-plane cost against the model ray cast
+at that pose, a point of the frame without a model point counted at the cap.
+
+**The hole plate: the registration slides into another fit.**
+
+| frame | prediction off (mm) | result off | from the truth | cost, result / from the truth | step from the prediction |
+|---|---:|---:|---:|---|---:|
+| 50 | 0.95 | 2.28 | 1.73 | 3.153 / 3.125 | 2.98 |
+| 51 | 1.68 | 1.01 | 1.02 | 3.018 / 3.018 | 2.68 |
+| 52 | 1.62 | 5.08 | 0.35 | 3.256 / 2.968 | 6.68 |
+| 53 | 4.49 | 11.30 | 5.65 | (frame 52 is in the model) | 6.87 |
+
+At frame 52 the registration slides 6.7 mm along the weakly held direction (along the table)
+and stops 5.1 mm off. From the truth it stays (0.35 mm), and so does every other start tried
+(the last pose without the carried step, the prediction without the coarsest level, the
+prediction mirrored along the axis: 0.2 to 0.9 mm off, cost 2.95 to 2.97). Against a model of
+the last 30 frames at their true poses the prediction still slides to 5.3 mm, so the model is
+not the cause. What the engine can see without the truth: the step along the weak direction
+(6.7 mm; at most 2.9 in the 20 frames before) and the cost (0.29 mm² apart; within 0.03 on
+healthy frames). The registration's own numbers show nothing (fitness 0.80 against 0.81): its
+cost leaves out the points it loses, and the slide lost 2 % of them.
+
+**Bracket seed 1: the model pulls.** Frame 152 lands 1.63 mm off, and from the truth still
+1.24 mm: the truth is not a minimum for that model. Against a model of the same 30 frames at
+their true poses it lands 0.12 mm off (frame 158: 1.13 against 0.14). The frames before were
+fused 0.3 to 0.6 mm off, and the 2.40 mm is several such frames adding up. Nothing per frame
+looks unusual (fitness 0.96, rmse 0.37), and no second start can mend it.
+
+**The accelerometer** (in the recordings, not used by the engine): with gravity and its bias
+unknown (a running mean over 3 s) it predicts the next position no better than constant
+velocity (median 0.6 mm, 95th percentile 0.8 to 1.0). With both fitted over the whole true path
+the median is 0.06 to 0.07 mm and the maximum 0.19: enough to tell a 2 mm jump from motion, if
+both were estimated while scanning. Not built.
+
+**Built (off): `FusionParams.slip_check_mm`** (None is off), `slip_starts` ("rest", "fine"),
+`slip_margin` (0.05 mm²). A frame whose step along its weakest translation leaves the
+prediction by more than the limit is registered again from the last pose without the carried
+step ("rest") and from the prediction without the coarsest level ("fine"); the result the model
+agrees with best is kept when its cost beats the first by more than the margin.
+`info["slip_check"]` says what was compared. Frames within the limit are tracked exactly as
+before.
+
+**Does it hold, however the scan starts?** Frame pass, path max (mm); the start registered
+together (`start_predict=fit, start_first, start_detail_only, start_together`), the rule at
+3 mm:
+
+| start | hole plate, rule off | rule on | bracket seed 1, rule off | rule on |
+|---|---:|---:|---:|---:|
+| off | 16.30 | 8.00 (frame 1; 2.67 after frame 10) | 2.40 | 2.40 |
+| 6 frames | 2.71 | 2.71 | 1.90 | 1.90 |
+| 8 | 3.09 | 3.09 | 3.30 | 3.30 |
+| 10 | 19.1 | 2.75 | 2.55 | 2.55 |
+| 12 | 4.99 | 2.32 | 2.61 | 2.61 |
+| 14 | 2.64 | 2.64 | 1.81 | 1.81 |
+
+The 8.00 mm at frame 1 is today's error of the first frame (X4), until now hidden behind the
+slip; the start mends it. With the start off the rule looks at 7 frames of the hole plate and
+changes only frame 52 (by 5.5 mm). On the bracket it looks at frame 1 only and changes nothing.
+
+**Verdict: not adopted, no compare spent.** The hole plate's slip is held at every start (2.3
+to 3.1 mm after the start, from 16.3 and up to 19.1). The bracket's is untouched and still tips
+with the start's length (1.81 to 3.30 mm), which fails X4c's stop rule, so the small set and
+the feature readings were not run with the rule on.
+
+**With the settings off** the quick set on what Make mesh runs compares identical (GPU, fresh
+runs), and the tracking tests pass on both paths.
+
+Limits: simulated; one run a recording; the frame pass of two recordings only; the rule was not
+run on other scenes (the smooth ones included), nor after the frame pass, nor on the no-GPU
+path.
+
 ## What the metrics mean
 
 - **Stereo errors** compare the estimated raw intrinsics/extrinsics (`K1`, `K2`, `R`, `T`) with
