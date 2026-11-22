@@ -4465,6 +4465,111 @@ tracked and true.
 Limits: simulated, one run a recording; tuned on walls seeds 0 and 1, sheets 0 and 2, bracket 2,
 panel 0, plate 0; timings on a busy PC, not judged.
 
+## The scan's start, and a weakly held step (ENGINE_PLAN X4b, 2026-11-22): measured, not adopted
+
+X4 found that the first frame of a scan is registered against a model made of one frame, from a
+prediction of zero motion, and lands 1 to 8 mm off; the frames after it keep that error (the dark
+bracket's whole 3.9 mm). X4b built a start that holds the first frames back, and a rule for a
+weakly held step. Everything is a setting that is off; no default changed.
+
+**Built (off):**
+- `PipelineParams.start_frames` (k; 0 is off), `start_sweeps` (2), `start_predict` ("pose" or
+  "fit"), `start_first`, `start_detail_only`, `start_detail` ("frame" or "window"). The first k
+  frames are tracked as before but held back: nothing of them goes into the mesh's model and
+  their laser points wait. Then each is registered again against a tracking model of all the
+  other held frames, from its own pose or ("fit") from a quadratic in time fitted to the others'
+  positions, its rotation held as the gyro's; with `start_first` frame 0 too, the world then put
+  back at its camera. The tracking model is made again and the frames are fused at their new
+  poses. With `start_detail_only` this acts only on a scan that tracks in detail mode; a smooth
+  part's frames are fused exactly as tracked. `report["start"]` says what the start did.
+- `FusionParams.weak_step_strength`, `weak_step_mm`, `weak_step_mode` ("hold" or "undo"): a
+  frame whose translation is weakly held and whose step along its weak direction differs from
+  the last carried step by more than the limit does not carry that difference into the next
+  prediction.
+- The GPU tracking model only. On the no-GPU model the start took an 8-frame test recording
+  108 mm off, so there the setting is not used (a log line says so) and results are as before.
+
+**The start's variants on the dark bracket** (frame pass; last frame, today 3.79 mm; true poses
+for frames 1 and 2 would give 1.48, for frames 1 to 5 0.95):
+
+| variant | last frame (mm) |
+|---|---:|
+| k = 6, from its own pose | 3.24 |
+| k = 6, fit | 2.72 |
+| k = 6, own pose, frame 0 too | 2.23 |
+| k = 6, fit, frame 0 too | 1.28 |
+| k = 6, fit, frame 0 too, 4 sweeps | worse (path max 4.46) |
+| k = 4, fit | 3.12 |
+| k = 8, fit, frame 0 too | 1.82 |
+| **k = 10, fit, frame 0 too** | **0.585** |
+
+Frame 0 had to be registered too: frames 1 to 5 settled about 3 mm off frame 0 as a group.
+Without `start_detail_only` the end-to-end sphere's path got worse (median 0.105 → 0.127, max
+0.153 → 0.190 mm); with it the smooth scenes are identical.
+
+**The other ideas:**
+- Deciding for detail mode after 10 frames ("window"): the same decision as today on all 8
+  recordings tried (median strength 2.8e-5 to 1.6e-4). No effect.
+- The weak-step rule (strength 1e-3, 3 mm) alone: the lost hole plate's path max 16.3 → 8.0 mm
+  (the aim was under 6), a hard plate's last frame 1.38 → 1.79, the dark bracket unchanged.
+  Together with the start it adds nothing (hole plate seed 0 2.45 → 2.52).
+- The accelerometer as a check on a step: not built.
+
+**The judged candidate** (k = 10, fit, frame 0 too, detail mode only), on what Make mesh runs,
+against `tools/scorecard_baselines/2026-11-21-gpu-core-app-frames.json`, 36 recordings, tracked
+runs, before → after:
+
+| | before | after |
+|---|---|---|
+| Dark brackets, last frame (mm) | 3.786 / 0.696 | 0.585 / 0.542 |
+| Speckled brackets, last frame | 1.125 / 0.349 | 1.259 / 0.876 |
+| Hard 0.5 mm plates, last frame | 1.379 / 0.471 | 1.043 / 0.431 |
+| Hole plate 120 mm up, path max, seeds 0 / 1 / 2 | 16.30 / 7.09 / 3.89 | 2.82 / 3.96 / 2.71 |
+| ... its Ø 25 hole (mm, minus is small) | -6.61 / -2.91 / -3.05 | -2.97 / -2.77 / -3.07 |
+| Standing walls seed 0, 0.5 / 1 / 2 mm (too thick by) | 1.229 / 0.808 / 0.660 | 1.180 / 0.837 / 0.644 |
+| Standing walls seed 1 | 1.182 / 0.701 / 0.579 | 1.192 / 0.701 / 0.569 |
+| Standing walls seed 2 | 1.256 / 0.911 / 0.535 | 1.224 / 0.888 / 0.497 |
+| ... the 0.5 mm wall's face covered, seeds 0 / 1 / 2 | 0.483 / 0.568 / 0.447 | 0.505 / 0.584 / 0.508 |
+| Walls, last frame, mean | 1.358 | 0.548 |
+| Sheet seed 0, flange / 1 mm rib / 3 mm rib | 0.604 / 0.969 / 0.535 | 0.575 / 1.002 / 0.549 |
+| Sheet seed 1 | 0.254 / 0.658 / 0.171 | 0.247 / 0.628 / 0.117 |
+| Sheet seed 2 | 0.596 / 1.211 / 0.719 | 0.634 / 1.223 / 0.759 |
+| 0.5 mm plates, top kept, seeds 0 / 1 / 2 | 0.986 / 0.999 / 1.000 | 0.999 / 1.000 / 1.000 |
+| Brackets seeds 0 to 4, part median | 0.117 / 0.075 / 0.228 / 0.090 / 0.090 | 0.107 / 0.076 / 0.205 / 0.079 / 0.081 |
+| Brackets seeds 0 to 4, path max | 1.15 / 2.40 / 1.47 / 1.64 / 2.02 | 1.32 / 3.70 / 1.42 / 1.53 / 1.36 |
+
+The end-to-end sphere and panel, the five 200-frame car panels and the flush-ramp seam are
+identical in every number. Coverage is within 0.003 everywhere. The 0.5 mm plates' thickness
+stays within 0.004 mm.
+
+**The compare's verdict: worse on 7 scenes**, so not adopted (the owner's rule, E-D1):
+- bracket seed 1's path max +1.30 mm, and seed 4's shaft 0.06 mm further off;
+- the speckled brackets: last frame 0.349 → 0.876 on one, the right boss 3.0 mm further off on
+  the other (a click known to be unreliable there);
+- the hole plate 10 mm up: seed 1's Ø 25 0.51 mm and Ø 10 0.10 mm further off, seed 0's bore one
+  answer fewer, seed 2's Ø 25 0.05 further;
+- the hole plate 120 mm up: seeds 1 and 2 hole centres further off, seed 2's bore centre +0.30;
+- sheet and wall readings up to 0.04 mm further from the truth on single seeds (under the 0.05
+  alarm), beside others that come nearer;
+- hairlines: the dark bracket's rotation median +0.01°, hard plate 2's path max +0.14 mm, a
+  0.5 mm plate's median +0.002 mm.
+
+X4b's own targets are met (dark bracket's last frame under 1.5 mm, the lost hole plate's path
+max under 6 mm, smooth scenes unchanged); what fails is "no scene worse beyond its spread".
+
+**The camera path's check** on the kept paths: today it warns on 2 of 36 (hole plate 120 mm up
+seeds 0 and 1, jumps 7.46 and 5.65 mm); with the candidate on none (1.57 and 2.61).
+
+**Time:** the start takes 2.6 to 3.9 s on a detail-mode scan, about 0.4 s on a smooth one
+(rough, busy PC). In a live scan it would hold the first 10 frames (about 1 s) and then pause
+1 to 3 s; the setting is off, so the live scan is as before.
+
+**With the settings off** nothing moves: fresh runs at the defaults compare identical to the
+baselines on both paths.
+
+Limits: simulated, one run a recording; the variant was tuned on the dark bracket; one full
+compare was spent, on the best variant.
+
 ## What the metrics mean
 
 - **Stereo errors** compare the estimated raw intrinsics/extrinsics (`K1`, `K2`, `R`, `T`) with

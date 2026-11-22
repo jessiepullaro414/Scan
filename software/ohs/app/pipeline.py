@@ -69,6 +69,26 @@ is there but are biased (``VALIDATION.md``, "Large and detailed parts"). Smooth 
 the car panel, the door trim) never switch. A scan that starts on a smooth part and only later
 reaches a detailed one stays on the filtered depth.
 
+**The scan's start** (``PipelineParams.start_frames``, ``start_sweeps``, ``start_predict``, ``start_first``,
+``start_detail``; ENGINE_PLAN X4b; off unless set). The first frame of a scan is registered against a model made
+of one frame from a prediction of zero motion, and on the simulator it landed 1 to 8 mm off on every scene with a
+table; the next frames are registered against a model that holds that error, and keep it (the dark bracket's
+whole 3.9 mm). With ``start_frames`` = k > 1 the first k frames are tracked as before (their poses are what a live
+view shows meanwhile) but held back: nothing of them is fused into the mesh's model and their laser points wait.
+After the k-th (or a frame that fails, or when the scan is read: :meth:`FramePipeline.finish_start`) each frame is
+registered again (:meth:`~ohs.track.markerless.MarkerlessTracker.register`) against a tracking model of all the
+others at their poses, in ``start_sweeps`` rounds, from its own pose or (``start_predict`` "fit") from a fit in
+time of the others' positions (a quadratic), its rotation held as the gyro's; with ``start_first`` the first frame
+too, the world then put back at its camera. The tracking model is then made again from the k frames at those poses
+(:meth:`~ohs.track.markerless.MarkerlessTracker.restart`, which also carries the last step into the next
+prediction), the frames are fused into the mesh's model and their laser points added, and
+:meth:`FramePipeline.trajectory` gives their new poses. With ``start_detail`` "window" the detail probe (above)
+runs over the whole start and decides once at its end, on the median ``trans_strength`` of the filtered depth's
+frames (or a frame only the raw depth held), instead of at the first weak frame, which is usually the first one,
+judged on a model of one frame. :attr:`FramePipeline.start_report` says what the start did. The GPU tracking
+model only: on the Open3D model (no GPU) the same start ("fit", ``start_first``) took an 8-frame test recording
+108 mm off, so there the settings are not used and the results are as before.
+
 From the CPU matcher (SGBM) the raw depth added this way leaves out every pixel within
 ``DETAIL_HOLE_PX_1280`` = 6 px (at 1280 px width, scaled with the width) of a pixel without depth
 (:func:`without_hole_borders`). SGBM's depth next to its holes is biased (on the simulated bracket
@@ -219,6 +239,8 @@ log = logging.getLogger(__name__)
 MODES = ("markerless", "markers")
 RECON_MODELS = ("auto", "confidence", "open3d")
 THIN_WALLS = ("auto", "on", "off")  # PipelineParams.thin_walls
+START_PREDICT = ("pose", "fit")  # PipelineParams.start_predict (module docstring, "The scan's start")
+START_DETAIL = ("frame", "window")  # PipelineParams.start_detail
 NOMINAL_WIDTH = 1280  # px per camera of the ELP module; pixel-based defaults are tuned for it
 GYRO_SIGMA_DEG = 0.02  # gyro rotation prior per frame used by the default fusion parameters
 # truncation of the tracking model on the GPU, in voxels (4 mm at its 2 mm voxels; module docstring, "Model backends")
@@ -428,6 +450,22 @@ class PipelineParams:
     thin_walls: str = "auto"
     # False: every frame comes with its pose (process(frame, pose)), so no tracking model is built
     tracking: bool = True
+    # The scan's start (module docstring, "The scan's start"; ENGINE_PLAN X4b (a), (b)). start_frames > 1: the first
+    # that many frames are tracked as before but held back (not fused into the mesh's model, their laser points kept
+    # back), registered again against a model of the others in start_sweeps rounds (each from its pose, or with
+    # start_predict "fit" from a fit in time of the others' positions), the tracking model is made again from them,
+    # and only then are they fused. 0 or 1: off (every frame fused as it is tracked, as before).
+    start_frames: int = 0
+    start_sweeps: int = 2
+    start_predict: str = "pose"
+    # ... the first frame registered too in those rounds (against the others), the world then put back at its camera
+    start_first: bool = False
+    # ... only in a scan that tracks in detail mode (the filtered depth does not hold its translation); a smooth
+    # part's start is then fused as it was tracked
+    start_detail_only: bool = False
+    # when the tracker's detail mode is decided: "frame" (as before: at the first weak frame of the first
+    # DETAIL_PROBE_FRAMES) or "window" (once, at the end of the start_frames, on their median trans_strength)
+    start_detail: str = "frame"
 
     def __post_init__(self) -> None:
         if self.mode not in MODES:
@@ -448,6 +486,12 @@ class PipelineParams:
             raise ValueError(f"track_trunc_mult must be at least 1 (voxel), got {self.track_trunc_mult!r}")
         if self.detail_border_px is not None and not float(self.detail_border_px) >= 0:
             raise ValueError(f"detail_border_px must be >= 0, got {self.detail_border_px!r}")
+        if int(self.start_frames) < 0 or int(self.start_sweeps) < 0:
+            raise ValueError(f"start_frames and start_sweeps must be >= 0, got {self.start_frames!r}, {self.start_sweeps!r}")
+        if self.start_predict not in START_PREDICT:
+            raise ValueError(f"start_predict must be one of {START_PREDICT}, got {self.start_predict!r}")
+        if self.start_detail not in START_DETAIL:
+            raise ValueError(f"start_detail must be one of {START_DETAIL}, got {self.start_detail!r}")
 
 
 @dataclass
@@ -466,6 +510,39 @@ class FrameResult:
     lines_right: LaserLines | None = None
     extra: dict = field(default_factory=dict)
     sigma: np.ndarray | None = None  # the depth's standard deviation (mm, 0 = no depth), confidence TSDF only
+
+
+@dataclass
+class _Held:
+    """A frame of the scan's start, held back until the start is over (module docstring, "The scan's start")."""
+
+    pos: int  # its place in the pipeline's trajectory
+    t: float
+    d_track: np.ndarray  # the tracking model's input (filtered depth)
+    alt: np.ndarray  # ... with the raw depth where the filter dropped it (detail mode's input)
+    depth: np.ndarray  # what the mesh's model fuses
+    sigma: np.ndarray | None
+    gyro: bool  # it came with a gyro rotation
+    res: list = field(default_factory=list)  # [(tracker, its TrackResult)] for every tracker that tracked it
+    pts: dict[str, np.ndarray] = field(default_factory=dict)  # its laser points (camera frame)
+
+    def of(self, tracker: Any) -> TrackResult | None:
+        """The result of ``tracker`` for this frame (None: it did not track it)."""
+        return next((r for tr, r in self.res if tr is tracker), None)
+
+
+def _fit_start(P: list[np.ndarray], times: list[float], j: int) -> np.ndarray:
+    """``P[j]``'s rotation at the position a fit in time of the other poses' positions gives for ``times[j]``: a
+    quadratic with three or more others, else a line (``PipelineParams.start_predict`` "fit")."""
+    others = [i for i in range(len(P)) if i != j]
+    t = np.array([times[i] - times[j] for i in others], dtype=np.float64)
+    C = np.array([P[i][:3, 3] for i in others], dtype=np.float64)
+    deg = 2 if len(others) >= 3 else 1
+    A = np.vander(t, deg + 1, increasing=True)
+    coef = np.linalg.lstsq(A, C, rcond=None)[0]
+    T = np.asarray(P[j], dtype=np.float64).copy()
+    T[:3, 3] = coef[0]
+    return T
 
 
 def _timed(fn: Callable[..., Any], *args: Any) -> tuple[Any, float]:
@@ -622,6 +699,19 @@ class FramePipeline:
         # the start of a scan tracks a second time on with_raw_depth (module docstring, "Detailed parts")
         self._probe: MarkerlessTracker | None = None
         self._probe_left = DETAIL_PROBE_FRAMES
+        self._probe_res: TrackResult | None = None  # the detail probe's result for the frame just tracked
+        # the scan's start (module docstring, "The scan's start"): the frames held back, None once it is over
+        # (the GPU tracking model only: on the Open3D model the start (fit, first frame too) took an 8-frame test
+        # recording 108 mm off, so without a GPU the setting is not used and the results are as before)
+        self.start_frames = int(p.start_frames) if (p.mode == "markerless" and p.tracking and int(p.start_frames) > 1
+                                                    and self.dual_model and self.model_backend == "gpu") else 0
+        if int(p.start_frames) > 1 and not self.start_frames and self.dual_model:
+            log.info("start_frames is set, but the tracking model is Open3D's (no GPU): the scan's start is not used")
+        self._start: list[_Held] | None = [] if self.start_frames else None
+        self._start_due = False
+        self._held_now: _Held | None = None  # the frame being processed, when it is held back
+        #: what the scan's start did (None: it was off or has not ended yet)
+        self.start_report: dict | None = None
         #: detail mode on the CPU matcher's depth leaves its raw depth out this close (px) to a hole ("Detailed parts")
         hole = DETAIL_HOLE_PX_FLIP_1280 if self.depth_params.flip_average else DETAIL_HOLE_PX_1280
         self.detail_hole_px = int(round(hole * self.image_size[0] / NOMINAL_WIDTH))
@@ -793,6 +883,7 @@ class FramePipeline:
         extra: dict = {}
         n_fallbacks = len(self.gpu_fallbacks)
         t_start = time.perf_counter()
+        self._held_now = None
 
         t0 = time.perf_counter()
         left_r, right_r = self.rectifier.rectify(frame.left, frame.right)
@@ -875,7 +966,9 @@ class FramePipeline:
                     self.laser_depth_gaps.setdefault(name, []).append(np.concatenate(arrs))
             if clip_plane is not None:
                 pts = {name: self._clip_points(P, clip_plane) for name, P in pts.items()}
-            if track.ok:
+            if self._held_now is not None:  # the scan's start: added at the frame's pose when the start is over
+                self._held_now.pts = pts
+            elif track.ok:
                 for name, P in pts.items():
                     self.cloud.add(P, track.T_wc, name)
             wait = _ms(t0)
@@ -889,6 +982,9 @@ class FramePipeline:
         self._n_frames += 1
         self._n_ok += int(track.ok)
         self._trajectory.append((t, np.asarray(track.T_wc, dtype=np.float64).copy(), bool(track.ok)))
+        self._held_now = None
+        if self._start_due:
+            self.finish_start()
         return FrameResult(int(frame.index), t, left_r, right_r, depth, lines, pts, track, tim, lines_r, extra, sigma)
 
     def _clip_depth(self, depth: np.ndarray, plane: Any) -> np.ndarray:
@@ -993,12 +1089,14 @@ class FramePipeline:
             extra["track_valid_fraction"] = float(np.count_nonzero(d_track != 0)) / d_track.size
             # where the filtered depth can't hold the pose (a detailed part: the filter erodes it
             # away), the tracker uses it with the raw depth wherever the filter dropped a pixel
-            if self._probe_left > 0:
+            if self._start is not None:  # the scan's start: tracked, held back (module docstring)
+                res = self._start_track(d_track, depth, t, R_prior, sigma)
+            elif self._probe_left > 0:
                 res = self._probe_track(d_track, depth, t, R_prior)
             else:
                 res = self.tracker.track(d_track, None, t, R_prior,
                                          alt_depth=lambda: with_raw_depth(d_track, self._detail_raw(depth)))
-            if res.ok:
+            if res.ok and self._held_now is None:
                 self._fuse(depth, res.T_wc, t, tim, sigma)
         for k, v in res.info.get("timings_ms", {}).items():
             if k == "total":
@@ -1006,15 +1104,18 @@ class FramePipeline:
             tim["track_integrate" if (k == "integrate" and self.dual_model) else k] = float(v)
         return res
 
-    def _probe_track(self, d_track: np.ndarray, depth: np.ndarray, t: float, R_prior: np.ndarray | None) -> TrackResult:
+    def _probe_track(self, d_track: np.ndarray, depth: np.ndarray, t: float, R_prior: np.ndarray | None,
+                     alt: np.ndarray | None = None) -> TrackResult:
         """A frame at the start of a scan (module docstring, "Detailed parts"): tracked on the
-        filtered depth alone, and by a second tracker on :func:`with_raw_depth`. If the filtered
-        depth can't hold the pose (a detailed part), the second tracker, consistent from the first
+        filtered depth alone, and by a second tracker on :func:`with_raw_depth` (``alt``, made here when None). If
+        the filtered depth can't hold the pose (a detailed part), the second tracker, consistent from the first
         frame on, takes over for the whole scan; after ``DETAIL_PROBE_FRAMES`` it is dropped."""
         if self._probe is None:
             self._probe = MarkerlessTracker(self.K, self.image_size, self.track_fusion_params)
         res = self.tracker.track(d_track, None, t, R_prior)
-        res_p = self._probe.track(with_raw_depth(d_track, self._detail_raw(depth)), None, t, R_prior)
+        res_p = self._probe.track(with_raw_depth(d_track, self._detail_raw(depth)) if alt is None else alt,
+                                  None, t, R_prior)
+        self._probe_res = res_p
         self._probe_left -= 1
         weak = not res.info.get("first_frame") and (
             (not res.ok and res_p.ok)
@@ -1030,6 +1131,131 @@ class FramePipeline:
         if self._probe_left <= 0:
             self._end_probe()
         return res
+
+    # ------------------------------------------------------------------ the scan's start (module docstring)
+    def _start_track(self, d_track: np.ndarray, depth: np.ndarray, t: float, R_prior: np.ndarray | None,
+                     sigma: np.ndarray | None) -> TrackResult:
+        """A frame of the scan's start: tracked as without the start (by the scan's tracker and, while it runs, the
+        detail probe), then held back: :meth:`finish_start` fuses it."""
+        alt = with_raw_depth(d_track, self._detail_raw(depth))
+        held = self._start
+        main = self.tracker
+        probe = self._probe
+        self._probe_res = None
+        if self.params.start_detail == "window" and self._probe_left > 0:
+            if self._probe is None:
+                self._probe = probe = MarkerlessTracker(self.K, self.image_size, self.track_fusion_params)
+            res = self.tracker.track(d_track, None, t, R_prior)
+            self._probe_res = self._probe.track(alt, None, t, R_prior)
+            self._probe_left -= 1
+            if not res.ok and self._probe_res.ok:  # the pose shown; which tracker goes on is decided at the end
+                res = self._probe_res
+        elif self._probe_left > 0:
+            res = self._probe_track(d_track, depth, t, R_prior, alt)
+            probe = self._probe if self._probe is not None else self.tracker  # the probe, or it took over
+        else:
+            res = self.tracker.track(d_track, None, t, R_prior, alt_depth=alt)
+        if not held and not res.ok:  # nothing tracked yet: the start begins with the first frame that is
+            return res
+        e = _Held(len(self._trajectory), float(t), d_track, alt, depth, sigma, R_prior is not None)
+        e.res.append((main, main.last_result))
+        if self._probe_res is not None:
+            e.res.append((probe, self._probe_res))
+        held.append(e)
+        self._held_now = e
+        res.info["start_window"] = len(held)
+        if len(held) >= self.start_frames or not res.ok:
+            self._start_due = True  # at the end of this frame, when its laser points are in
+        return res
+
+    def finish_start(self) -> None:
+        """End the scan's start (module docstring, "The scan's start"): register its frames again, make the
+        tracking model again from them, fuse them and add their laser points. Does nothing when there is no start
+        or it is over; called by the pipeline after the start's last frame and by everything that reads the whole
+        scan (:meth:`mesh_with_sigma`, :meth:`points`, :meth:`laser_cloud`, :meth:`trajectory`)."""
+        held, self._start, self._start_due = self._start, None, False
+        if not held or self.tracker is None:
+            return
+        t0 = time.perf_counter()
+        p = self.params
+        rep: dict[str, Any] = {"frames": len(held), "detail": p.start_detail}
+        if p.start_detail == "window" and self._probe is not None:
+            main = [e.of(self.tracker) for e in held[1:]]
+            prb = [e.of(self._probe) for e in held[1:]]
+            ts = [float(r.info.get("trans_strength", 0.0)) for r in main if r is not None and r.ok]
+            lost = any((r is None or not r.ok) and q is not None and q.ok for r, q in zip(main, prb))
+            weak = lost or (bool(ts) and float(np.median(ts)) < DETAIL_PROBE_STRENGTH)
+            rep.update(median_strength=float(np.median(ts)) if ts else None, detail_mode=bool(weak))
+            if weak:
+                log.info("the filtered depth can't hold the pose over the scan's first %d frames (a detailed part): "
+                         "this scan tracks with the raw depth where the filter drops it", len(held))
+                self.tracker.close()
+                self.tracker, self._probe = self._probe, None
+                self.tracker.detail_mode, self.tracker.detail_frame = True, len(held) - 1
+            self._end_probe()
+        tr = self.tracker
+        if p.start_detail_only and not tr.detail_mode:
+            # a scan whose filtered depth holds its translation (a smooth part): the frames are fused at their poses,
+            # and the tracker goes on as it is
+            rep["registered"] = 0
+            for e in held:
+                r = e.of(tr)
+                if r is not None and r.ok:
+                    self._fuse(e.depth, r.T_wc, e.t, {}, e.sigma)
+                    for name, P in e.pts.items():
+                        self.cloud.add(P, r.T_wc, name)
+            rep["ms"] = round(_ms(t0), 1)
+            self.start_report = rep
+            return
+        rows = [(e, e.of(tr)) for e in held]
+        ok = [(e, r) for e, r in rows if r is not None and r.ok]
+        inputs = [e.alt if tr.detail_mode else e.d_track for e, _ in ok]
+        poses = [np.asarray(r.T_wc, dtype=np.float64).copy() for _, r in ok]
+        times = [e.t for e, _ in ok]
+        first = [T.copy() for T in poses]
+        if len(ok) > 2 and int(p.start_sweeps) > 0:
+            poses = self._refine_start(tr, inputs, poses, times, [e.gyro for e, _ in ok])
+        if ok:
+            n_lost, R_acc = tr._n_lost, tr._R_acc.copy()
+            tr.restart(list(zip(inputs, poses, times)))
+            if rows[-1][1] is None or not rows[-1][1].ok:  # the start ended at a frame that failed: still lost
+                tr._n_lost, tr._R_acc = max(n_lost, 1), R_acc
+        T_prev = np.eye(4)
+        done = {id(e): T for (e, _), T in zip(ok, poses)}
+        for e in held:
+            T = done.get(id(e))
+            if T is None:
+                self._trajectory[e.pos] = (e.t, T_prev.copy(), False)
+                continue
+            self._fuse(e.depth, T, e.t, {}, e.sigma)
+            for name, P in e.pts.items():
+                self.cloud.add(P, T, name)
+            self._trajectory[e.pos] = (e.t, T.copy(), True)
+            T_prev = T
+        self._n_ok = sum(1 for _, _, k in self._trajectory if k)
+        moved = [float(np.linalg.norm(a[:3, 3] - b[:3, 3])) for a, b in zip(first, poses)]
+        rep.update(registered=len(ok), moved_mm=[round(m, 3) for m in moved], ms=round(_ms(t0), 1))
+        self.start_report = rep
+
+    def _refine_start(self, tr: MarkerlessTracker, inputs: list[np.ndarray], poses: list[np.ndarray],
+                      times: list[float], gyro: list[bool]) -> list[np.ndarray]:
+        """The start's frames registered again (module docstring, "The scan's start"): in each of ``start_sweeps``
+        rounds every frame but the first (the world's frame) against a model of all the others at their poses, from
+        its own pose or (``start_predict`` "fit") from a fit in time of the others' positions."""
+        P = [T.copy() for T in poses]
+        n = len(P)
+        j0 = 0 if self.params.start_first else 1
+        for _ in range(int(self.params.start_sweeps)):
+            for j in range(j0, n):
+                tr.rebuild([(inputs[i], P[i]) for i in range(n) if i != j])
+                start = P[j] if self.params.start_predict == "pose" else _fit_start(P, times, j)
+                T, _ = tr.register(inputs[j], start, gyro=gyro[j] if j else True)
+                if T is not None:
+                    P[j] = T
+            if j0 == 0:  # the world stays the first frame's camera
+                A = np.linalg.inv(P[0])
+                P = [A @ T for T in P]
+        return P
 
     def _resolve_tracking_defaults(self) -> None:
         """The CPU path's defaults (module docstring): fill in ``DepthParams.flip_average`` and the tracking
@@ -1099,6 +1325,7 @@ class FramePipeline:
         """:meth:`mesh` plus each vertex's standard deviation (mm, float32), or ``None`` when the
         reconstruction is Open3D's (no confidence); with ``with_looks`` also each vertex's count of
         independent looks (float32, :meth:`ConfidenceTsdf.extract_mesh`), ``None`` the same way."""
+        self.finish_start()
         if not self.has_confidence:
             V, F, N = self.mesh()
             return (V, F, N, None, None) if with_looks else (V, F, N, None)
@@ -1117,6 +1344,7 @@ class FramePipeline:
     def points(self) -> tuple[np.ndarray, np.ndarray]:
         """TSDF zero-crossing points and normals ``(P, N)`` (world, mm), e.g. for Poisson meshing."""
         self._check_open()
+        self.finish_start()
         empty = (np.zeros((0, 3)), np.zeros((0, 3)))
         if self.markerless is None or self.markerless.n_integrated == 0:
             return empty
@@ -1128,19 +1356,25 @@ class FramePipeline:
 
     def laser_cloud(self) -> LaserCloud:
         """The accumulated laser points (world frame, mm)."""
+        if not self._closed:
+            self.finish_start()
         return self.cloud
 
     def release_model(self) -> MarkerlessTracker | ConfidenceTsdf | None:
         """Hand over the reconstruction model (for another pipeline's ``model``): this pipeline
         no longer has one, and :meth:`close` leaves it alone."""
         self._check_open()
+        self.finish_start()
         m, self.markerless = self.markerless, None
         if self.tracker is m:
             self.tracker = None
         return m
 
     def trajectory(self) -> list[tuple[float, np.ndarray, bool]]:
-        """``[(t, T_wc, ok), ...]`` for every processed frame (failed frames carry the last good pose)."""
+        """``[(t, T_wc, ok), ...]`` for every processed frame (failed frames carry the last good pose). The poses of
+        the scan's start are those it ended with (module docstring, "The scan's start")."""
+        if not self._closed:
+            self.finish_start()
         return [(t, T.copy(), ok) for t, T, ok in self._trajectory]
 
     def reset(self) -> None:
@@ -1155,6 +1389,10 @@ class FramePipeline:
             self.tracker.reset()
         self._end_probe()
         self._probe_left = DETAIL_PROBE_FRAMES
+        self._start = [] if self.start_frames else None
+        self._start_due = False
+        self._held_now = None
+        self.start_report = None
         if self.markers is not None:
             self.markers.reset()
         self.cloud.clear()
@@ -1169,6 +1407,7 @@ class FramePipeline:
     def close(self) -> None:
         """Release the voxel grids and trackers. The pipeline cannot be used afterwards."""
         self._closed = True
+        self._start = None  # frames still held back are dropped
         if self._laser_pool is not None:
             self._laser_pool.shutdown(wait=True)
             self._laser_pool = None

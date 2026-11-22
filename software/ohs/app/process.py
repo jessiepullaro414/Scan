@@ -508,6 +508,11 @@ def process_recording(
                 progress(k, n, res)
             if (k + 1) % 25 == 0:
                 log.info("  %d / %d frames, %d tracked", k + 1, n, pipe.n_tracked)
+        # the scan's start (ohs.app.pipeline, "The scan's start"; off by default): its frames were registered again
+        # when it ended, so their poses are taken from the pipeline
+        pipe.finish_start()
+        if pipe.start_report is not None:
+            traj_rows = [(i, t, ok, T) for (i, _, _, _), (t, T, ok) in zip(traj_rows, pipe.trajectory())]
 
         report: dict[str, Any] = {
             "recording": str(rec_path),
@@ -535,6 +540,8 @@ def process_recording(
         if poses is not None:
             report["poses"] = "given"
             report["frames"]["without_pose"] = n_unposed
+        if pipe.start_report is not None:
+            report["start"] = pipe.start_report
 
         # marker map refinement (offline only; nothing was tracked when the poses were given)
         if pipe.markers is not None and poses is None:

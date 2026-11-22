@@ -82,6 +82,17 @@ so: ``info["velocity_guard_mm"]``, how much of its velocity (mm a frame) was not
 information was no guide: the frame that started the dark bracket's slide held its weakest translation
 at 5e-3, ten times the detail-mode threshold (``MAINTENANCE_PLAN.md`` F14).
 
+**A weakly held step** (``FusionParams.weak_step_strength``, ``weak_step_mm``, ``weak_step_mode``; ENGINE_PLAN
+X4b (c); both models; off unless set). On the GPU path the hole plate 120 mm above its background lost tracking
+at frame 52: one frame landed 4.2 mm off its truth from a start 1.7 mm off while the tracker's own numbers looked
+healthy, and the constant-velocity prediction carried the jump on (8 and 23 mm off at the next two starts). Its
+translation was weakly held (``trans_strength`` 3.6e-4). With the setting, a frame that holds its weakest
+translation (``info["trans_axis"]``, the smallest eigenvector of the ICP information's translation block) less
+than ``weak_step_strength``, and whose step along that direction differs from the last carried step by more than
+``weak_step_mm``, carries that direction's last step instead ("hold") or also takes its own jump there back out of
+the next prediction ("undo"). Its pose is what ICP found; ``info["weak_step_mm"]`` says how far the carried step
+moved.
+
 **The pull along a table** (ENGINE_PLAN X0a; Open3D model only, each off unless set). Without a GPU the camera
 path slid along the table on every simulated scene: started at the true pose of a frame, ICP against the Open3D
 model moved the camera 3.4 to 6.6 mm along it (the GPU model: 0.4 to 1.2 mm), even a frame against its own
@@ -167,6 +178,7 @@ log = logging.getLogger(__name__)
 
 MODEL_BACKENDS = ("auto", "open3d", "gpu")
 MODEL_NORMALS = (None, "gradient", "vertex_map")  # FusionParams.model_normals (module docstring, "The pull along a table")
+WEAK_STEP_MODES = ("hold", "undo")  # FusionParams.weak_step_mode (module docstring, "A weakly held step")
 O3D_THREADS_ENV = "OHS_O3D_THREADS"  # see _limit_open3d_threads
 
 
@@ -322,6 +334,14 @@ class FusionParams:
     # velocity_max_accel, or VELOCITY_MAX_ACCEL where that is None (the GPU path leaves it None). Off: the GPU model
     # carries every step as it is, as before.
     gpu_velocity_guard: bool = False
+    # ENGINE_PLAN X4b (c), both models (module docstring, "A weakly held step"): a frame that holds its weakest
+    # translation less than weak_step_strength (info["trans_strength"]) and moved along it more than weak_step_mm
+    # (mm a frame) further than the step carried before does not carry that jump into the next prediction, along
+    # that direction only; its own pose is what ICP found. weak_step_mode: "hold" keeps the last carried step's
+    # component along it, "undo" also leaves the frame's own jump out of the next prediction there. None: off.
+    weak_step_strength: float | None = None
+    weak_step_mm: float = 0.0
+    weak_step_mode: str = "hold"
     # sanity gates
     min_points: int = 300  # valid source points at the finest ICP level, counted at stride 4 (scaled by the stride)
     min_model_px: int = 300  # valid model pixels in the ray cast
@@ -361,6 +381,11 @@ class FusionParams:
             raise ValueError(f"vertex_map_window must be at least 1 (or None), got {self.vertex_map_window!r}")
         if self.raycast_border_mm is not None and not self.raycast_border_mm >= 0:
             raise ValueError(f"raycast_border_mm must be >= 0 (or None), got {self.raycast_border_mm!r}")
+        if self.weak_step_mode not in WEAK_STEP_MODES:
+            raise ValueError(f"weak_step_mode must be one of {WEAK_STEP_MODES}, got {self.weak_step_mode!r}")
+        if (self.weak_step_strength is not None and not self.weak_step_strength >= 0) or not self.weak_step_mm >= 0:
+            raise ValueError("weak_step_strength (or None) and weak_step_mm must be >= 0, got "
+                             f"{self.weak_step_strength!r}, {self.weak_step_mm!r}")
 
     @property
     def trunc_mm(self) -> float:
@@ -430,6 +455,7 @@ class _IcpOutput:
     min_eig_ratio: float = 0.0
     weak: list = field(default_factory=list)  # [{"kind": "slide" | "turn", "axis": [x, y, z]}]
     trans_strength: float = 0.0  # _translation_strength of the final correspondences
+    trans_axis: np.ndarray | None = None  # ... and that weakest translation's direction (unit, model-view camera frame)
     ok_numeric: bool = True
 
 
@@ -706,6 +732,7 @@ class MarkerlessTracker:
         self._last_step: tuple[np.ndarray, np.ndarray, float | None] | None = None  # (R, t, dt)
         self._v_w: np.ndarray | None = None  # the velocity guard's last velocity (world, mm/s); None: at rest
         self._guard_mm = 0.0  # how far (mm a frame) the guard moved the last accepted frame's velocity
+        self._weak_mm = 0.0  # ... and the weak-step rule (FusionParams.weak_step_*) its carried step
         self._R_acc = np.eye(3)  # gyro rotation accumulated since the last good frame
         self._n_lost = 0
         self._frame = 0
@@ -1146,6 +1173,7 @@ class MarkerlessTracker:
             H = _scaled_information(J, Q)
             out.min_eig_ratio, out.weak = _weak_directions(J, Q, p.degenerate_eig_ratio, H)
             out.trans_strength = _translation_strength(J, Q, H)
+            out.trans_axis = np.linalg.eigh(H[3:, 3:])[1][:, 0]
         return out
 
     # ------------------------------------------------------------------ public API
@@ -1287,6 +1315,10 @@ class MarkerlessTracker:
             "min_eig_ratio": res.min_eig_ratio, "degenerate": res.min_eig_ratio < p.degenerate_eig_ratio,
             "weak": res.weak, "trans_strength": res.trans_strength,
         })
+        axis_w = None
+        if res.trans_axis is not None:
+            info["trans_axis"] = [round(float(a), 4) for a in res.trans_axis]
+            axis_w = view.T_wc[:3, :3] @ res.trans_axis
         if reason is not None:
             return self._fail(reason, t, info, t0, timings)
         ti = time.perf_counter()
@@ -1294,10 +1326,66 @@ class MarkerlessTracker:
         timings["integrate"] = 1e3 * (time.perf_counter() - ti)
         if lost:
             log.info("markerless: relocalised after %d lost frames (%s, fitness %.2f)", lost, name, res.fitness)
-        self._accept(T_est, t, consecutive=(lost == 0))
+        self._accept(T_est, t, consecutive=(lost == 0),
+                     weak=None if axis_w is None else (float(res.trans_strength), axis_w))
         if self._guard_mm > 0:  # the velocity guard changed what this frame carries into the next prediction
             info["velocity_guard_mm"] = self._guard_mm
+        if self._weak_mm > 0:  # a weakly held jump was not carried into the next prediction (FusionParams.weak_step_*)
+            info["weak_step_mm"] = self._weak_mm
         return self._finish(TrackResult(T_est.copy(), True, info), t, t0, timings)
+
+    def register(self, depth_mm: np.ndarray, T_start: np.ndarray, gyro: bool = True) -> tuple[np.ndarray | None, dict]:
+        """Register one depth map against the model from ``T_start`` (its rotation held as a gyro rotation when
+        ``gyro``), without fusing it or changing the tracker's state: ``(T_wc or None when a gate fails, info)``.
+        The scan's start uses it (``ohs.app.pipeline``, "The scan's start")."""
+        p = self.params
+        depth = self._clean_depth(depth_mm)
+        T_start = np.asarray(T_start, dtype=np.float64)
+        src = self._source_points(depth)
+        if len(src[-1][0]) < self._min_src:
+            return None, {"reason": "bad_depth"}
+        view = self._raycast(T_start)
+        if view is None or view.n_valid < p.min_model_px:
+            return None, {"reason": "model_not_visible"}
+        res = self._icp(src, view, 1.0, np.radians(p.gyro_sigma_deg if gyro else p.rot_sigma_deg), extra_coarse=False)
+        T_est = view.T_wc @ res.T_delta
+        reason = self._gate(res, T_start, T_est, 1.0)
+        info = {"fitness": res.fitness, "rmse_mm": res.rmse, "n_inliers": res.n_inliers,
+                "trans_strength": res.trans_strength, "reason": reason,
+                "jump_mm": float(np.linalg.norm((invert_se3(T_start) @ T_est)[:3, 3]))}
+        return (None if reason is not None else T_est), info
+
+    def rebuild(self, frames: list[tuple[np.ndarray, np.ndarray]]) -> None:
+        """Forget the model (not the trajectory) and fuse ``frames`` ``[(depth, T_wc), ...]`` into it again."""
+        if self._gpu is not None:
+            self._gpu.reset()
+        else:
+            o3d, o3c = self._o3d, self._o3c
+            p = self.params
+            self._vbg = o3d.t.geometry.VoxelBlockGrid(
+                attr_names=("tsdf", "weight"), attr_dtypes=(o3c.float32, o3c.float32), attr_channels=((1), (1)),
+                voxel_size=float(p.voxel_mm), block_resolution=int(p.block_resolution),
+                block_count=p.initial_block_count(), device=self.device)
+            self._frag_room = 0
+        self._n_integrated = 0
+        for depth, T in frames:
+            self._integrate_cleaned(self._clean_depth(depth), np.asarray(T, dtype=np.float64))
+
+    def restart(self, frames: list[tuple[np.ndarray, np.ndarray, float | None]]) -> None:
+        """The model and the state as if ``frames`` ``[(depth, T_wc, t), ...]`` (consecutive, the first the
+        world's frame) had just been tracked at those poses: the model rebuilt from them, the last pose and the
+        step to it carried into the next prediction, the trajectory those poses."""
+        self.rebuild([(d, T) for d, T, _ in frames])
+        self._initialized = bool(frames)
+        self.trajectory = [(float("nan") if t is None else float(t), np.asarray(T, dtype=np.float64).copy(), True)
+                           for _, T, t in frames]
+        self._frame = len(frames)
+        self._v_w = None
+        self._last_step = None
+        self._T_last = np.eye(4)
+        self._t_last = None
+        for k, (_, T, t) in enumerate(frames):
+            self._accept(np.asarray(T, dtype=np.float64), t, consecutive=None if k == 0 else True)
 
     def _gate(self, res: _IcpOutput, T_pred: np.ndarray, T_est: np.ndarray, widen: float) -> str | None:
         """Failure reason of an ICP result, or ``None`` if it is acceptable."""
@@ -1315,8 +1403,10 @@ class MarkerlessTracker:
             return "jump"
         return None
 
-    def _accept(self, T_wc: np.ndarray, t: float | None, consecutive: bool | None) -> None:
+    def _accept(self, T_wc: np.ndarray, t: float | None, consecutive: bool | None,
+                weak: tuple[float, np.ndarray] | None = None) -> None:
         self._guard_mm = 0.0
+        self._weak_mm = 0.0
         if consecutive:
             D = invert_se3(self._T_last) @ T_wc
             dt = None if (t is None or self._t_last is None) else float(t - self._t_last)
@@ -1324,6 +1414,8 @@ class MarkerlessTracker:
             accel = self._guard_accel()
             if accel and dt:
                 step = self._guard_velocity(step, dt, accel)
+            if weak is not None:
+                step = self._weak_step(step, dt, *weak)
             self._last_step = (D[:3, :3].copy(), step, dt)
         else:
             self._last_step = None
@@ -1363,6 +1455,31 @@ class MarkerlessTracker:
             step = R_last.T @ v * dt
         self._v_w = v
         return step
+
+    def _weak_step(self, step: np.ndarray, dt: float | None, strength: float, axis_w: np.ndarray) -> np.ndarray:
+        """``FusionParams.weak_step_*`` (module docstring, "A weakly held step"): the frame's translation ``step``
+        (mm, in the previous frame's camera frame, before :attr:`_T_last` moves on) as it is carried into the next
+        prediction. Where the frame held its weakest translation (``axis_w``, world) less than
+        ``weak_step_strength`` and its step along it differs from the last carried one (scaled to this frame's
+        time) by more than ``weak_step_mm``, that difference is not carried ("hold"), or is taken back from the
+        next prediction too ("undo"). Sets :attr:`_weak_mm` (how far the carried step moved)."""
+        p = self.params
+        if p.weak_step_strength is None or not strength < p.weak_step_strength or self._last_step is None:
+            return step
+        R_s, s_prev, dt_prev = self._last_step
+        R_last = self._T_last[:3, :3]
+        prev_w = (R_last @ R_s.T) @ s_prev  # the last carried step, in the world
+        if dt and dt_prev:
+            prev_w = prev_w * (float(dt) / float(dt_prev))
+        a = np.asarray(axis_w, dtype=np.float64)
+        a = a / max(float(np.linalg.norm(a)), 1e-12)
+        s_w = R_last @ step
+        d = float((s_w - prev_w) @ a)
+        if not abs(d) > p.weak_step_mm:
+            return step
+        f = 2.0 if p.weak_step_mode == "undo" else 1.0
+        self._weak_mm = abs(f * d)
+        return R_last.T @ (s_w - f * d * a)
 
     def _fail(self, reason: str, t: float | None, info: dict, t0: float, timings: dict) -> TrackResult:
         if self._initialized:

@@ -352,6 +352,10 @@ experiment: measure, find the cause, mend, and judge the mend with the scorecard
   translation is weakly held. Seeds 1 and 2 have step errors of about 2 mm that are not
   carried that far. The camera path's check warns on this recording.
 
+  **2026-11-22 (X4b):** with the scan's start (a setting, off) the lost seed holds: path max
+  16.3 → 2.8 mm, Ø25 -6.6 → -3.0, and the path check no longer warns. Not adopted (X4b), so
+  this stays open.
+
 ### [x] X1. A gap guard that goes by the matcher's own doubt (measured 2026-11-21: not adopted) (S to M)
 - **Idea:** drop fused depth whose matcher sigma says "fill" (above about 3 mm) within 12 to
   16 px of a patch without depth, instead of, or on top of, dropping everything within 8 px.
@@ -523,7 +527,30 @@ and thin parts".
   the voxel grid's alignment (about 43 % of one 0.5 mm wall's gap).
 - **Not tried:** step (c), laser points in the ICP. **Next:** X4b below.
 
-### [ ] X4b. The scan's start, and holding a weak translation (found by X4; S to M)
+### [x] X4b. The scan's start, and holding a weak translation (found by X4; S to M): not adopted
+- **Measured 2026-11-22: not adopted; the settings are built and off.** Built:
+  `PipelineParams.start_frames`, `start_sweeps`, `start_predict`, `start_first`,
+  `start_detail_only`, `start_detail` (the GPU tracking model only), and
+  `FusionParams.weak_step_strength / weak_step_mm / weak_step_mode`.
+  - **(a) the scan's start** (10 frames held back, each registered again against the other
+    nine from a quadratic fit in time, frame 0 too, only in detail mode) meets this item's own
+    targets: the dark bracket's last frame 3.79 → 0.59 mm (the second 0.70 → 0.54); hole plate
+    120 mm up, path max 16.3 / 7.1 / 3.9 → 2.8 / 4.0 / 2.7 and seed 0's Ø25 -6.6 → -3.0; the
+    walls' last frame 1.36 → 0.55 mm; the smooth scenes identical; the camera path's check
+    warns on none of 36 (today 2).
+  - **But on what Make mesh runs it ends worse on 7 scenes:** bracket seed 1's path max
+    +1.3 mm, the speckled brackets (last frame 0.35 → 0.88 on one), the 10 mm hole plate's
+    small features (Ø25 0.5 mm further off on one seed), hairline rows on the dark bracket and
+    the plates, and sheet and wall readings up to 0.04 mm further from the truth on single
+    seeds. A miss by E-D1; most rows are small, so the numbers are with the owner
+    (`VALIDATION.md`, "The scan's start, and a weakly held step").
+  - **(b)** deciding detail mode after 10 frames decides the same on every recording tried.
+  - **(c)** alone takes the lost hole plate to 8 mm only and makes a hard plate worse; with
+    (a) it adds nothing.
+  - **(d)** was not built.
+  - Without a GPU the start took a test recording 108 mm off, so it is not used there.
+  - **If taken up again:** the start only at full resolution (the live preview stays as it
+    is), and a look at why the speckled brackets and bracket seed 1 get worse.
 - **What X4 measured:** the first frame is registered against a model of one frame from a
   prediction of zero and lands 1 to 8 mm off; the dark bracket's whole 3.9 mm error is made in
   frames 1 and 2 and never mended; the hole plate's loss at frames 52 to 56 and the hard
