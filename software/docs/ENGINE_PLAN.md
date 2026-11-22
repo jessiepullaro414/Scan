@@ -582,7 +582,7 @@ and thin parts".
   plate's seed 0 path max under 6 mm, no scene is worse beyond its spread, nothing thin moves
   away from the truth, and the smooth scenes' paths stay within 10 %.
 
-### [ ] X4c. A single frame that slips in mid-scan (found by X4 and X4b; M)
+### [x] X4c. A single frame that slips in mid-scan (found by X4 and X4b; M): not adopted
 - **Evidence:** the hole plate 120 mm up, seed 0, at frames 52 to 56 (16.3 mm) and bracket
   seed 1 at frames 151 to 157 (1.8 to 3.7 mm): one frame lands a few mm off along the weakly
   held direction while the tracker's own numbers look healthy, and the constant-velocity
@@ -622,6 +622,31 @@ and thin parts".
     bias estimated while scanning. Then judge together: `fusion.slip_check_mm=3` and the
     start (`start_frames=10, start_predict=fit, start_first=true, start_detail_only=true,
     start_together=true`).
+- **Round 2, the model that pulls (2026-11-22; `VALIDATION.md`, "The newest frame held out of
+  the model"): not adopted, no full compare spent; the numbers are with the owner.**
+  - **Where the error comes from:** each frame lands off along its weakest translation only,
+    no shared bias, the sign alternating: 0.45 mm rms where the translation is held at 6e-4
+    to 9e-4 (bracket seed 0: 0.19 mm at 1.2e-3 to 1.7e-3). A model at true poses does not
+    make it smaller, a shorter memory makes it larger; the model without its newest frame
+    makes it 0.38 (largest 1.01 against 1.63): where new surface comes into view the next
+    frames take the newest frame's error.
+  - **The accelerometer with tracked poses** predicts no better than the registration itself
+    (0.22 / 0.80 against 0.22 / 0.71 mm). Not built.
+  - **Built, off:** `FusionParams.fuse_lag` (0) and `fuse_lag_detail_only` (True): a frame
+    goes into the tracking model only once the next has registered. With the slip check, at
+    every start (off, 6 to 14 frames): bracket seed 1 1.77 to 2.30 mm (today 2.40; 1.81 to
+    3.30 without the lag), the hole plate 2.4 to 3.2 after the start. Both targets met.
+  - **Small set, all three on** (start 10 together, slip check 3 mm, lag 1): the dark
+    brackets 3.79 / 0.70 → 0.74 / 0.44 last frame, the hard plates and brackets better,
+    hole plate seed 0 16.3 → 3.1, nothing thin away from the truth, smooth scenes identical.
+    But worse on the speckled brackets (last frame 1.125 / 0.349 → 1.456 / 0.749), hole
+    plate 120 mm up seed 2 (median 1.87 → 3.01), the sheet's path max (2.38 → 3.33) and the
+    hole plates' small features. A miss by E-D1.
+  - **What remains** is the frame's own scatter along the weak direction; every change rolls
+    again where it adds up. A cure needs something that holds that direction: the laser's
+    points in the registration, or a better accelerometer. To judge the three anyway:
+    `pipeline.start_frames=10, start_predict=fit, start_first=true, start_detail_only=true,
+    start_together=true, fusion.slip_check_mm=3, fusion.fuse_lag=1`.
 
 ### [ ] X5. Fine voxels where the part needs them (S to M, then L)
 - **Step 1:** after Make mesh, find thin walls (where the opposite-sides rule fired) and

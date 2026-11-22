@@ -4736,6 +4736,129 @@ Limits: simulated; one run a recording; the frame pass of two recordings only; t
 run on other scenes (the smooth ones included), nor after the frame pass, nor on the no-GPU
 path.
 
+### The newest frame held out of the model (2026-11-22)
+
+The second cause, the model that pulls (bracket seed 1).
+
+**The error.** Bracket seed 1, frames 100 to 200, each step measured before fusion against the
+truth: the error lies along the frame's weakest translation (across it mostly under 0.15 mm).
+Its mean is 0.007 mm and its sign alternates from frame to frame (lag-one correlation -0.3 to
+-0.5): no shared bias and no random walk, each frame scatters around the model. It is 0.45 mm
+rms over frames 120 to 170, where the translation is held at 6e-4 to 9e-4; on bracket seed 0
+0.19 mm, held at 1.2e-3 to 1.7e-3. It is largest after the weak direction turns (frame 139)
+and where the model's visible pixels fall from 246k to 189k (new surface coming in). Frame 152
+lands 1.63 mm off and the path stays about 1.3 mm off for the next 15 frames: they take its
+error.
+
+**Which memory.** Frames 110 to 172, each registered from its prediction against a model made
+again from its own frames (mm):
+
+| model | rms | largest |
+|---|---:|---:|
+| the real one (all frames) | 0.44 | 1.63 |
+| the last 5 / 10 / 30 / 60 tracked frames | 0.69 / 0.61 / 0.55 / 0.46 | 2.50 / 1.60 / 1.83 / 1.32 |
+| all but the newest / the newest two | 0.38 / 0.42 | 1.01 / 1.08 |
+| the last 30 / all, at true poses | 0.45 / 0.46 | 1.20 / 1.20 |
+
+A longer memory is better, and even a model at true poses does not make the scatter smaller:
+about 0.4 mm a frame is the frame's own depth noise along the weak direction. The model only
+adds the single events; leaving the newest frame out helps most.
+
+**The accelerometer, with tracked poses.** Gravity and bias fitted on the tracked path equal
+the truth's (9871 against 9870 mm/s², bias within 1.5). A filter on it, corrected by the
+tracked positions, predicts along the weak direction to 0.22 / 0.80 mm (median / 95th
+percentile) against the registration's own 0.22 / 0.71. At frame 152 it says -0.41 where the
+registration found +1.27, then follows the plateau. Fits over a sliding window are worse than
+constant velocity. Not built.
+
+**Built (off): `FusionParams.fuse_lag`** (frames; 0 is off) and `fuse_lag_detail_only` (True).
+A tracked frame is fused into the tracking model only once the next frames have registered;
+its pose is what the registration found, and the mesh's model and the path are as tracked. Held
+frames are fused when the model is read. Both tracking models; in detail mode only, so a smooth
+part is tracked exactly as before. Two frames were worse than one (bracket seed 1 3.11 mm).
+
+**Does it hold, however the scan starts?** Frame pass, path max (mm), `slip_check_mm=3`, the
+start registered together:
+
+| start | hole plate, lag off | lag 1 | bracket seed 1, lag off | lag 1 |
+|---|---:|---:|---:|---:|
+| off | 8.00 (frame 1; 2.67 after) | 8.00 (frame 1; 2.74 after) | 2.40 | 2.12 |
+| 6 frames | 2.71 | 3.21 | 1.90 | 2.30 |
+| 8 | 3.09 | 2.47 | 3.30 | 1.77 |
+| 10 | 2.75 | 2.36 | 2.55 | 2.27 |
+| 12 | 2.32 | 2.95 | 2.61 | 2.02 |
+| 14 | 2.64 | 2.57 | 1.81 | 2.02 |
+
+Both of X4c's targets hold at every start: the bracket under 2.40 mm (1.77 to 2.30, from 1.81
+to 3.30), the hole plate under 6 mm after the start.
+
+**The small set**, what Make mesh runs, tracked; last frame / path max / path median (mm). "All
+three": the start of 10 frames registered together, the slip check at 3 mm, the lag of 1.
+
+| recording | today | the start together alone | all three | lag and slip check, no start |
+|---|---|---|---|---|
+| Speckled bracket 1 | 1.125 / 1.62 / 1.02 | 0.570 / 1.28 / 0.73 | 1.456 / 1.90 / 1.32 | 0.908 / 1.70 / 0.85 |
+| Speckled bracket 2 | 0.349 / 1.01 / 0.555 | 0.437 / 1.04 / 0.467 | 0.749 / 1.08 / 0.559 | 0.457 / 0.92 / 0.480 |
+| Bracket seed 0 | 0.417 / 1.15 / 0.489 | 0.343 / 1.20 / 0.413 | 0.219 / 1.07 / 0.294 | 0.434 / 1.16 / 0.485 |
+| Bracket seed 1 | 0.597 / 2.40 / 0.674 | 0.778 / 2.55 / 0.663 | 0.517 / 2.27 / 0.474 | 0.513 / 2.12 / 0.617 |
+| Bracket seed 2 | 0.554 / 1.47 / 0.699 | 0.700 / 1.46 / 0.726 | 0.623 / 1.54 / 0.665 | 0.527 / 1.42 / 0.628 |
+| Bracket seed 3 | 0.641 / 1.64 / 0.757 | 0.540 / 1.34 / 0.611 | 0.441 / 1.42 / 0.659 | 0.556 / 1.82 / 0.724 |
+| Bracket seed 4 | 0.768 / 2.02 / 0.763 | 0.389 / 1.58 / 0.461 | 0.695 / 1.45 / 0.647 | 0.780 / 1.56 / 0.745 |
+| Dark bracket 1 | 3.786 / 6.29 / 3.88 | 0.673 / 1.96 / 0.802 | 0.737 / 1.76 / 0.792 | 3.191 / 7.18 / 3.27 |
+| Dark bracket 2 | 0.696 / 2.28 / 1.03 | 0.483 / 1.85 / 0.570 | 0.438 / 1.03 / 0.290 | 2.050 / 5.61 / 2.27 |
+| Hard 0.5 mm plate 1 | 1.379 / 2.56 / 1.53 | | 0.789 / 2.21 / 0.900 | 1.849 / 3.17 / 1.66 |
+| Hard 0.5 mm plate 2 | 0.471 / 2.58 / 0.852 | | 0.577 / 2.52 / 0.839 | 0.674 / 2.41 / 0.906 |
+| Hole plate 120 mm up, seed 0 | 2.10 / 16.3 / 1.80 | 2.14 / 19.1 / 2.01 | 2.32 / 3.08 / 1.68 | 2.61 / 8.00 / 1.94 |
+| Hole plate 120 mm up, seed 1 | 1.07 / 7.09 / 1.44 | | 1.16 / 4.15 / 1.39 | 0.98 / 5.78 / 1.39 |
+| Hole plate 120 mm up, seed 2 | 2.13 / 3.89 / 1.87 | | 3.53 / 4.63 / 3.01 | 2.22 / 3.89 / 2.14 |
+| Hole plate 10 mm up, seed 1 | 0.723 / 2.26 / 1.01 | 0.692 / 2.30 / 1.03 | 0.957 / 2.46 / 1.12 | 1.161 / 2.21 / 1.24 |
+| Standing walls, seed 0 | 1.067 / 1.21 / 0.531 | 0.386 / 0.99 / 0.332 | 0.656 / 0.83 / 0.384 | 0.532 / 1.21 / 0.443 |
+| Sheet, seed 0 | 0.866 / 2.38 / 1.10 | | 0.489 / 3.33 / 0.687 | 0.956 / 2.71 / 0.990 |
+| End-to-end sphere, a 200-frame car panel | | identical | identical | identical |
+
+Readings with all three on:
+- **Hole plate 120 mm up:** seed 0's Ø 25 -6.61 → -3.35 and its centre 3.46 → 1.14, its bore
+  -0.62 → -0.95 with one answer fewer; seed 1's bore -0.47 → -0.59; seed 2's bore centre 0.05 →
+  0.21.
+- **Hole plate 10 mm up, seed 1:** Ø 25 -0.20 → +0.39, Ø 10 -0.07 → -0.19.
+- **Speckled brackets:** the first's right boss 2.22 → 3.59 and left boss -0.29 → -0.38; the
+  second's left boss -0.32 → +0.13.
+- **Brackets:** part medians 0.005 to 0.009 mm better; clicks within 0.03 mm, but seed 4's shaft
+  -0.068 → -0.109.
+- **Thin: nothing moved away from the truth.** Walls 0.5 / 1 / 2 mm (too thick by) 1.229 /
+  0.808 / 0.660 → 1.132 / 0.787 / 0.588 and the 0.5 mm wall's face covered 0.483 → 0.523; the
+  sheet's flange / 1 mm rib / 3 mm rib 0.604 / 0.969 / 0.535 → 0.557 / 0.956 / 0.520; the
+  0.5 mm plates' thickness -0.010 / -0.005 → -0.008 / -0.004. (Lag and slip check without the
+  start: a hard plate 0.003 mm thinner.)
+
+**The compare on the small set, all three on: worse on** the hole plates 120 mm up (small
+features, seed 2's last frame and median), the hole plate 10 mm up (Ø 10, Ø 25), the dark
+brackets (hairline rows of the part's far points and the loops) and the speckled brackets (the
+bosses, and their last frame against today: 1.125 / 0.349 → 1.456 / 0.749); the brackets the
+same, the hard plates better, the sphere and panel identical. The lag and the slip check
+without the start are clearly worse (dark bracket 2's last frame 0.70 → 2.05).
+
+**Time:** the lag costs nothing measurable (bracket seed 1's frame pass 43.3 s without, 43.2 s
+with); the start 2.6 to 3.9 s once.
+
+**Verdict: not adopted, no full compare spent.** The three settings mend what was measured:
+the first frame's error, the frame that slides into another fit, the young model that takes
+its newest frame's error. Bracket seed 1 and the hole plate hold at every start, the dark
+brackets and the hard plates are much better, nothing thin moves away from the truth. What
+remains is the frame's own scatter along the weakly held direction (0.2 to 0.45 mm rms a
+frame): every change rolls again where it adds up, and other detail-mode recordings move both
+ways. That fails "no scene worse" (E-D1). A cure needs something that holds that direction: the
+laser's points in the registration, or an accelerometer better than a filter on the tracked
+path.
+
+**With the settings off** the quick set on what Make mesh runs compares identical (GPU, fresh
+runs), and the tracking and pipeline tests pass on both paths.
+
+Limits: simulated; one run a recording; the start sweep on the frame pass of two recordings;
+the full set was not run; each setting's share in each worse row is not separated (the slip
+check alone and the lag alone on top of the start were not run); on the no-GPU path only the
+tests ran with the lag.
+
 ## What the metrics mean
 
 - **Stereo errors** compare the estimated raw intrinsics/extrinsics (`K1`, `K2`, `R`, `T`) with

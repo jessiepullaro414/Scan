@@ -113,6 +113,24 @@ bracket seed 1's frames 151 to 166 (never acts there): those land 1 to 1.6 mm of
 poses a few tenths of a mm off, pulls them (against a model of the same frames at true poses they land 0.1 mm off),
 which no second start can mend. Not adopted (ENGINE_PLAN X4c).
 
+**The newest frame held out of the model** (``FusionParams.fuse_lag``, ``fuse_lag_detail_only``; ENGINE_PLAN X4c; both
+models; off unless set). Measured on bracket seed 1, frames 100 to 200, against the truth before fusion: each frame
+lands off along its weakest translation only (``info["trans_axis"]``), with no shared bias (mean 0.01 mm) and the sign
+alternating from frame to frame (lag-one correlation -0.3 to -0.5), 0.45 mm rms where the translation is held at 6e-4
+to 9e-4 and 0.19 mm on bracket seed 0 (1.2e-3 to 1.7e-3). A model of the same frames at their true poses does not
+make that smaller (0.46 against 0.44 mm rms over frames 110 to 172), a shorter memory makes it larger (the last 5 /
+10 / 30 / 60 frames: 0.69 / 0.61 / 0.55 / 0.46), but the same model without the newest frame makes it 0.38 (largest
+1.01 against 1.63): where new surface comes into view the model there is mostly that frame, so the next frame
+registers against its error and keeps it (frame 152 landed 1.63 mm off, and the path stayed about 1.3 mm off for the
+next 15 frames). With the setting a tracked frame is fused only once the next ``fuse_lag`` frames have been
+registered; its pose is what ICP found, and ``info["fuse_lag"]`` says how many frames are held. What is held is fused
+when the model is read out (:meth:`extract_mesh`, :meth:`extract_points`) or a pose is given (:meth:`integrate`),
+and :meth:`rebuild` forgets it. With ``fuse_lag_detail_only`` it acts only in detail mode, so a smooth part is
+tracked exactly as before. Measured 2026-11-22 (``fuse_lag`` 1, with ``slip_check_mm`` 3): bracket seed 1's path max
+stays at 1.77 to 2.30 mm for every start tried (2.40 today, 1.81 to 3.30 without it), the hole plate's at 2.4 to
+3.2 mm; but on the small set of what Make mesh runs, other detail-mode scenes move both ways (the speckled bracket,
+the hole plates' small features), so it is not adopted (ENGINE_PLAN X4c). Two frames (``fuse_lag`` 2) were worse.
+
 **The pull along a table** (ENGINE_PLAN X0a; Open3D model only, each off unless set). Without a GPU the camera
 path slid along the table on every simulated scene: started at the true pose of a frame, ICP against the Open3D
 model moved the camera 3.4 to 6.6 mm along it (the GPU model: 0.4 to 1.2 mm), even a frame against its own
@@ -372,6 +390,12 @@ class FusionParams:
     slip_check_mm: float | None = None
     slip_starts: tuple[str, ...] = ("rest", "fine")
     slip_margin: float = 0.05
+    # ENGINE_PLAN X4c, both models (module docstring, "The newest frame held out of the model"): a tracked frame is
+    # fused into the tracking model only once the next fuse_lag frames have been registered (against the model
+    # without it); its pose is what ICP found, and nothing else changes. With fuse_lag_detail_only only while the
+    # tracker is in detail mode (a smooth part is tracked as before). 0: off.
+    fuse_lag: int = 0
+    fuse_lag_detail_only: bool = True
     # sanity gates
     min_points: int = 300  # valid source points at the finest ICP level, counted at stride 4 (scaled by the stride)
     min_model_px: int = 300  # valid model pixels in the ray cast
@@ -424,6 +448,8 @@ class FusionParams:
         self.slip_starts = tuple(self.slip_starts)
         if not self.slip_starts or any(s not in SLIP_STARTS for s in self.slip_starts):
             raise ValueError(f"slip_starts must name one or more of {SLIP_STARTS}, got {self.slip_starts!r}")
+        if isinstance(self.fuse_lag, bool) or int(self.fuse_lag) != self.fuse_lag or int(self.fuse_lag) < 0:
+            raise ValueError(f"fuse_lag must be a whole number of frames >= 0, got {self.fuse_lag!r}")
 
     @property
     def trunc_mm(self) -> float:
@@ -763,6 +789,7 @@ class MarkerlessTracker:
             )
         self.trajectory: list[tuple[float, np.ndarray, bool]] = []
         self._n_integrated = 0
+        self._pending: list[tuple[np.ndarray, np.ndarray]] = []  # tracked frames not yet fused (FusionParams.fuse_lag)
         self._frag_room = 0  # entries the grid's fragment buffer is known to hold (_reserve_fragments)
         self._initialized = False
         self._T_last = np.eye(4)  # last good pose
@@ -1372,7 +1399,15 @@ class MarkerlessTracker:
         if reason is not None:
             return self._fail(reason, t, info, t0, timings)
         ti = time.perf_counter()
-        self._integrate_cleaned(depth, T_est)
+        lag = self._fuse_lag()
+        if lag or self._pending:
+            # the newest frames held out of the model (FusionParams.fuse_lag): fused once the next ones registered
+            self._pending.append((np.array(depth, dtype=np.float32, copy=True), T_est.copy()))
+            while len(self._pending) > lag:
+                self._integrate_cleaned(*self._pending.pop(0))
+            info["fuse_lag"] = len(self._pending)
+        else:
+            self._integrate_cleaned(depth, T_est)
         timings["integrate"] = 1e3 * (time.perf_counter() - ti)
         if lost:
             log.info("markerless: relocalised after %d lost frames (%s, fitness %.2f)", lost, name, res.fitness)
@@ -1407,6 +1442,7 @@ class MarkerlessTracker:
 
     def rebuild(self, frames: list[tuple[np.ndarray, np.ndarray]]) -> None:
         """Forget the model (not the trajectory) and fuse ``frames`` ``[(depth, T_wc), ...]`` into it again."""
+        self._pending = []
         if self._gpu is not None:
             self._gpu.reset()
         else:
@@ -1436,6 +1472,19 @@ class MarkerlessTracker:
         self._t_last = None
         for k, (_, T, t) in enumerate(frames):
             self._accept(np.asarray(T, dtype=np.float64), t, consecutive=None if k == 0 else True)
+
+    def _fuse_lag(self) -> int:
+        """How many of the newest tracked frames stay out of the model (``FusionParams.fuse_lag``; module docstring,
+        "The newest frame held out of the model"): 0 when off, or with ``fuse_lag_detail_only`` outside detail mode."""
+        p = self.params
+        if not p.fuse_lag or (p.fuse_lag_detail_only and not self.detail_mode):
+            return 0
+        return int(p.fuse_lag)
+
+    def flush_pending(self) -> None:
+        """Fuse the tracked frames still held out of the model (``FusionParams.fuse_lag``) now."""
+        while self._pending:
+            self._integrate_cleaned(*self._pending.pop(0))
 
     def _gate(self, res: _IcpOutput, T_pred: np.ndarray, T_est: np.ndarray, widen: float) -> str | None:
         """Failure reason of an ICP result, or ``None`` if it is acceptable."""
@@ -1623,6 +1672,7 @@ class MarkerlessTracker:
         """
         depth = self._clean_depth(depth_mm)
         T = np.asarray(T_wc, dtype=np.float64).reshape(4, 4)
+        self.flush_pending()
         self._integrate_cleaned(depth, T)
         self._initialized = True
         self._accept(T, t, consecutive=False)
@@ -1637,6 +1687,7 @@ class MarkerlessTracker:
 
     def _grid_for_extraction(self) -> Any:
         """The Open3D grid to mesh: the model itself, or a CPU copy of the GPU volume's observed bricks."""
+        self.flush_pending()
         if self._gpu is not None:
             return self._gpu.to_open3d(self._o3d, self._o3c) if self._n_integrated else None
         return self._vbg if self.n_blocks else None
