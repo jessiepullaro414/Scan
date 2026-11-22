@@ -4966,6 +4966,88 @@ patch counts are identical; the cause is on the processor side, not confirmed); 
 the fix are throttled ones; the other GPU kernels (the matcher, the fusion) were read, not
 measured: none loops over many frames in one launch, the whole-volume ones are those to watch.
 
+## The thin-parts hint (ENGINE_PLAN X5 step 1, 2026-11-22)
+
+After Make mesh the app looks at the finished mesh for what a finer mesh detail could help, and
+suggests the preset "Thin sheet metal and small parts" where a gain was measured. It only
+reads: no setting changes by itself and no result changes.
+
+**What it looks for** (`ohs/mesh/thin_parts.py`; every limit is a multiple of the mesh detail v
+the mesh was made at, 1 mm today):
+
+- **A thin wall seen from both sides:** a ray from a vertex into the part meets the far side,
+  facing back, within 2.7 v, over at least 100 v² of surface. Where 2.7 comes from: at 1 mm
+  walls 0.5 to 2 mm thick read 1.66 to 2.66 mm (the standing walls 1.68 to 2.66, the sheet's
+  1 mm rib 1.66 to 2.21, its 2 mm flange 2.25 to 2.61), and the sheet's 3 mm rib reads 3.03 to
+  3.72; walls of 2 mm or less are where 0.5 mm was measured to help ("Presets: which settings
+  matter"). Where 100 v² comes from: parts without a thin wall had at most 50 mm² of such
+  readings; the speckled brackets 228 and 240 mm², in pieces each under 100.
+- **Its thickness:** the median reading with its 10th to 90th percentile, and at 1 mm with the
+  thin-wall rule on "probably reading - 1.3 to reading - 0.1 mm in truth" (walls of 0.5 to 2 mm
+  read 0.1 to 1.3 mm too thick). At another mesh detail no estimate is given: none was measured.
+- **A thin plate lying flat:** what Remove the table leaves is a plateau: 99 % of its area at
+  most 2.7 v above the table, its top at least half of what is left and at least 400 v².
+- **A small round hole or bore whose wall was seen:** wall points facing back within 3 to 16 v
+  that lie round one axis on at least 60 % of a circle; a slot or a seam is rejected.
+- A mesh made with the thin preset, or at 0.5 mm or finer, is not looked at.
+
+**The rule: the preset is suggested only for thin walls**, the one case where 0.5 mm was
+measured to help (walls 0.23 to 0.67 mm nearer the truth on all three recordings). A thin plate
+or small holes alone are recorded in the scan's `report.json` and not suggested: a plate lying
+flat reads its thickness within 0.01 mm at every mesh detail, and small holes were not shown
+nearer the truth at 0.5 mm beyond the spread between scans. When walls are found together with
+a plate or holes, the hint names those too and says no gain was measured for them.
+
+**The hint's words** (the first sheet recording): "Thin walls found". "Thin walls: 7,013 mm² of
+the surface (1.3 %) lies on walls seen from both sides that read 2.49 mm thick (most of it 2 to
+2.64 mm), probably 1.19 to 2.39 mm in truth." "Walls seen from both sides read 0.23 to 0.67 mm
+nearer their true thickness at mesh detail 0.5 mm: simulated walls 0.5 to 2 mm thick read 1 to
+2.4 mm instead of 1.7 to 2.7 mm." The cost: 1.2 to 2.4 times the time (with this mesh's own
+time), about 4 times the triangles, and the memory one 0.5 mm scan took (7 GB, 2.2 GB of the
+graphics card's shared memory), "measured on simulated scans, on a mini PC with built-in
+graphics and 20 GB of memory". One button, "Make the mesh again with this preset" (it sets the
+scan's preset and runs Make mesh; the mesh you have stays until the new one is ready), and
+"Not for this scan", which puts the hint away for good.
+
+**On the scorecard's 36 recordings** (what Make mesh runs, tracked, the cached results; at true
+poses every answer is the same):
+
+| recordings | suggested | what is found |
+|---|---|---|
+| Standing walls, seeds 0 to 2 | yes | walls 1,794 / 3,679 / 4,109 mm² in 3 regions, reading 1.84 / 1.85 / 2.02 mm |
+| Sheet, seeds 0 to 2 | yes | walls 7,013 / 8,082 / 7,179 mm² (flange and 1 mm rib as one region; the 3 mm rib is not flagged), reading 2.49 / 2.16 / 2.52 mm |
+| 0.5 mm plates (3) and the hard 0.5 mm plates (2) | no: no measured gain | a plate 0.487 to 0.493 mm thick (truth 0.5), 72 to 80 mm across |
+| Hole plates 10 mm and 120 mm up (6) | no: no measured gain | holes or bores Ø 7.8 to 9.2 mm (the Ø 10 bore, and the Ø 10 hole where its wall shows) |
+| Sphere, panel, car panels (5), seams (3) | no | at most 13 mm² of wall readings, no hole walls |
+| Brackets (5), dark (2) and speckled (2) brackets | no | no thin wall (the speckled ones 228 / 240 mm² of readings in pieces under 100 mm²); no round cluster |
+
+**Measured limits** (synthetic, in the tests): walls of 0.5, 1, 2 and 2.6 mm are found and read
+within 0.05 mm, a 2.8 mm wall is not (at mesh detail 2 mm a 2.8 mm wall is thin, with no
+estimate); plates of 0.5 and 0.8 mm on a noisy table and a 2 mm plateau are found, their height
+within 0.1 to 0.15 mm, a 4 mm plateau is not; a Ø 10 bore is found, a Ø 25 hole and a slot are
+not.
+
+**With it in** the quick set on what Make mesh runs compares identical to the baseline, and
+the finder leaves the result mesh byte for byte as it was. The finding takes 2 to 8 s on the
+processor at the end of Make mesh (0.3 to 1.5 million triangles); a finder that fails is logged
+and costs the scan nothing.
+
+**In the app on the real engine** (a standing-walls recording replayed into a scan, General preset,
+Make mesh at Standard, on the GPU): with the whole recording (117 of 120 frames) the result page shows
+"Thin walls found" at the top of the processing report (1,584 mm² of walls reading 1.84 mm, 3 regions,
+82 bricks); "Not for this scan" puts it away and it stays away after a reload. With only the second
+half of the same recording (63 frames) nothing is found (83 mm² of wall readings): the walls were not
+seen from both sides, so there is no thin wall in that mesh to measure. The button that makes the mesh
+again with the preset was not pressed on this PC.
+
+Limits: simulated; bosses are not looked for (the bracket's Ø 14 bosses read right with true
+depth, so their error is the depth's, and 0.5 mm did not help the bracket beyond its spread);
+holes the cameras filled in are not found (over a far floor the Ø 6 and Ø 10 holes are 0.5 to
+0.8 mm dents); the thickness estimate only at 1 mm with the thin-wall rule on; without a
+graphics card walls read 0.3 to 0.75 mm thicker, so a 2 mm wall there may not be found; the
+sheet's flange and rib merge into one region, so its reading mixes a 1 mm and a 2 mm wall; the
+preset itself was not run on this PC for this item (the gain is P1's measurement).
+
 ## What the metrics mean
 
 - **Stereo errors** compare the estimated raw intrinsics/extrinsics (`K1`, `K2`, `R`, `T`) with

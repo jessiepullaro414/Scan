@@ -652,8 +652,30 @@ and thin parts".
 - **Step 1:** after Make mesh, find thin walls (where the opposite-sides rule fired) and
   small round features, and suggest the "Thin sheet metal and small parts" preset with its
   measured gain (FP P4). A hint only.
+  - **Step 1 done 2026-11-22: the hint, on; it changes no result** (`VALIDATION.md`, "The
+    thin-parts hint"). `ohs/mesh/thin_parts.py` looks at the mesh after Make mesh for thin
+    walls seen from both sides (a reading of at most 2.7 mesh detail over at least 100 square
+    mesh detail), a thin plate lying flat, and small round holes or bores whose wall was seen.
+  - **The preset is suggested only for thin walls**, the one case where 0.5 mm was measured to
+    help (0.23 to 0.67 mm nearer the truth, P1). A plate or small holes alone are recorded in
+    `report.json` and not suggested: a plate lying flat reads right at every mesh detail, and
+    small holes were not shown nearer the truth beyond the spread.
+  - The hint says what was found, what the preset changes as measured, and what it costs; one
+    button sets the preset and makes the mesh again; it can be put away for the scan.
+  - On the 36 cached recordings it suggests on the standing walls and the sheet (6 of 6),
+    records without suggesting on the 0.5 mm plates (5) and the hole plates (6), and is
+    silent on the rest. Bosses are not looked for (their error is the depth's); holes the
+    cameras filled in are not found.
 - **Step 2:** fuse at 0.5 mm only in the flagged bricks (replaying cached depth) and stitch
   them into the 1 mm mesh.
+  - **From step 1:** the finding carries the bricks (8 mesh detail on a side) holding the
+    flagged wall and hole-wall vertices: 92 to 169 on the walls and sheets, 4 to 15 on the
+    hole plates, well under 5 % of the volume. A wall's two faces sit 1.7 to 2.7 mm apart, so
+    a brick must take both (dilate by one); hole bricks hold the bore's wall, not its rim
+    (dilate too); on the sheet the flange and rib are one region, so stitch lines would run
+    along rib feet and flange edges; the finding runs on the edited mesh, a replay needs the
+    base stage's mesh. Before any 0.5 mm run on the Radeon PC: time the fusion's whole-volume
+    GPU launches ("Small things found").
 - **Evidence:** 0.5 mm is the only setting that passed P1's stop rule (walls 0.23 to 0.67 mm
   nearer), for 1.2 to 2.4 times the time and 7 GB at 3.3 million triangles (R5).
 - **Risk:** pinholes and cracks at the boundary, memory, holes reading smaller.

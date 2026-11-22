@@ -46,6 +46,7 @@ import type {
 } from "../types";
 import { encodeFaces } from "../../lib/fits";
 import { normalizeQuality } from "../../lib/quality";
+import { demoThinPartsHint } from "../../lib/thinParts";
 import { madeUpWhy, weakAreas } from "./check";
 import { mockExtent, mockForm } from "./extent";
 import type { FeatureEngine } from "./features";
@@ -263,6 +264,9 @@ export class MockProcess {
   /** The made-up sigma of each mesh that has one (made on first use). */
   private sigmas = new WeakMap<TriMesh, Float32Array>();
 
+  /** Scans whose thin-parts hint was put away (ENGINE_PLAN X5). */
+  private thinDismissed = new Set<string>();
+
   constructor(host: MockHost, find: ScanLookup) {
     this.host = host;
     this.find = find;
@@ -287,6 +291,13 @@ export class MockProcess {
     if (a === "edits" && is("GET", 3) && (rest[2] === "before.ply" || rest[2] === "after.ply")) return this.editStep(p, s, rest[1], rest[2] === "after.ply");
     if (a === "undo" && is("POST", 1)) return json(200, this.step(p, s, -1));
     if (a === "redo" && is("POST", 1)) return json(200, this.step(p, s, 1));
+    if (a === "hints" && rest[1] === "thin-parts" && rest[2] === "dismiss" && is("POST", 3)) {
+      // ENGINE_PLAN X5: put away for this scan, also after Make mesh again
+      const st = this.ensure(p, s);
+      this.thinDismissed.add(s.id);
+      if (st.made?.thin_parts) st.made.thin_parts.dismissed = true;
+      return json(200, this.state(st));
+    }
     if (a === "recipe" && is("POST", 1)) return json(200, this.startRecipe(p, s, body));
     if (a === "remove-table" && rest[1] === "preview" && is("POST", 2)) return json(200, this.tablePreview(p, s, body));
     if ((a === "deviation.json" || a === "deviation.bin") && is("GET", 1)) {
@@ -1332,6 +1343,10 @@ export class MockProcess {
           seconds: mk ? Math.round((performance.now() - mk.t0) / 100) / 10 : 0,
           stages: Object.fromEntries(Object.entries(mk?.stages ?? {}).flatMap(([k, v]) => (v && v.seconds !== null ? [[k, v.seconds]] : []))),
         };
+        // ENGINE_PLAN X5: the hint is for thin walls only; the demo's scans that would have them get it at 1 mm
+        const voxel = settings.voxel_mm ?? 1;
+        if (/sheet|thin|wall/i.test(s.name) && voxel > 0.5)
+          st.made.thin_parts = demoThinPartsHint(st.made.seconds, st.current ? st.current.indices.length / 3 : 250_000, voxel, self.thinDismissed.has(s.id));
         self.markProcessed(p, s, settings.quality);
         const j = holder.id ? self.host.job(holder.id) : undefined;
         if (j) j.mesh_kept = false; // the new mesh took the earlier one's place

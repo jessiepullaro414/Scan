@@ -402,6 +402,8 @@ export const api = {
   processEdit: (pid: string, sid: string, body: EditBody) => post<Job>(`${scanPath(pid, sid)}/process/edits`, body),
   processUndo: (pid: string, sid: string) => post<ProcessState>(`${scanPath(pid, sid)}/process/undo`),
   processRedo: (pid: string, sid: string) => post<ProcessState>(`${scanPath(pid, sid)}/process/redo`),
+  /** ENGINE_PLAN X5: put the thin-parts hint away for this scan (it stays away, also after Make mesh again). */
+  dismissThinParts: (pid: string, sid: string) => post<ProcessState>(`${scanPath(pid, sid)}/process/hints/thin-parts/dismiss`),
   /** UX_PLAN R23: the mesh an edit was applied to (`before`) or made (`after`), at any later time (binary PLY). */
   editStepUrl: (pid: string, sid: string, editId: string, which: "before" | "after") => `${scanPath(pid, sid)}/process/edits/${enc(editId)}/${which}.ply`,
   processRecipe: (pid: string, sid: string, recipe_id: string, scope: RecipeScope) =>

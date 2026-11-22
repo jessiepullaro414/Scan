@@ -433,7 +433,7 @@ ENGINE = SERVER.parent
 ENGINE_MODULES = [
     "calib/health.py", "calib/drift.py", "calib/stereo.py", "calib/imu.py", "calib/laser_planes.py",
     "app/presets.py", "app/selftest.py", "app/calib_flow.py",
-    "mesh/section.py", "mesh/support.py", "mesh/check.py",
+    "mesh/section.py", "mesh/support.py", "mesh/check.py", "mesh/thin_parts.py",
     "cad/fcmacro.py", "cad/step.py", "cad/shapes.py", "cad/nominal.py",
     "inspect/reference.py", "inspect/gapflush.py",
     "align/pairwise.py", "align/merge.py",

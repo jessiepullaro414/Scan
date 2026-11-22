@@ -787,6 +787,10 @@ def create_app(config: Any = None, *, projects_dir: Any = None, static_dir: Any 
     def process_redo(pid: str, sid: str) -> JSONResponse:
         return _json(proc.redo(pid, sid))
 
+    @app.post("/api/projects/{pid}/scans/{sid}/process/hints/thin-parts/dismiss")
+    def process_dismiss_thin_parts(pid: str, sid: str) -> JSONResponse:
+        return _json(proc.dismiss_thin_parts(pid, sid))  # ENGINE_PLAN X5: the hint is put away for this scan
+
     @app.post("/api/projects/{pid}/scans/{sid}/process/recipe")
     def process_recipe(pid: str, sid: str, body: RecipeApplyBody) -> JSONResponse:
         return _json(proc.submit_recipe(pid, sid, body.recipe_id, body.scope).to_dict())

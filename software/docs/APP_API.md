@@ -2746,3 +2746,40 @@ What the walk on the real engine changed in the API, item by item; each is writt
 | Report, Scan check | "Not measured: less than 0.1 %: filled in, nothing measured it" | "less than 0.1 % (filled in: nothing measured it)"; "Measured too loosely" likewise |
 | Report, areas | "278857 mm²" | "278,857 mm²" |
 | Report, processing time | "Processing time 7 min 27 s" | "… for the whole Make mesh, every stage and edit" (or "… for the last stage that made this mesh (the stages before it and the edits not counted)") |
+
+## The thin-parts hint (ENGINE_PLAN X5, since 2026-11-22)
+
+At the end of Make mesh (and of a recipe run on everything) the server looks at the finished
+mesh for thin walls seen from both sides, a thin plate lying flat, and small round holes
+(`ohs.mesh.thin_parts.find_thin_parts`). It only reads; a finder that fails is logged and
+leaves the field out.
+
+```ts
+type ThinPartsHint = {
+  suggest: boolean;            // true only when thin walls are found and the mesh was not already made fine
+  why_not: "made_fine" | "nothing_found" | "no_measured_gain" | "empty" | null;
+  found: ("walls" | "plates" | "holes")[];
+  voxel_mm: number; preset_id: string; dismissed: boolean;
+  words: { title: string; intro: string; found: string[]; gain: string[]; cost: string[]; measured: string;
+           action: string; preset_id: string; preset_name: string } | null;   // null when not suggested
+};
+// ProcessState.made.thin_parts?: ThinPartsHint | null
+```
+
+- **The rule:** the preset "Thin sheet metal and small parts" is suggested only for thin walls,
+  where a gain was measured. With only a plate or holes found: `suggest: false`,
+  `why_not: "no_measured_gain"`, `words: null`. With walls and a plate or holes, `words.title`
+  is "Thin walls found" and the plate's and holes' lines follow the walls'.
+- `result/report.json` gets `thin_parts`, the whole finding: `version, voxel_mm, preset, limits,
+  found, suggest, why_not, walls {found, area_mm2, share, reads_mm, reads_range_mm, estimate_mm,
+  n_regions, regions[], all_readings_mm2, rays}, plates {found, table, plates[{centre, size_mm,
+  area_mm2, height_mm, scatter_mm, share_of_part, table_limit_mm}], part_area_mm2, top_area_mm2,
+  h99_mm}, holes {found, count, smallest_mm, largest_mm, features[{centre, diameter_mm, pm_mm,
+  points}], wall_points}, bricks {size_mm, n, keys, complete}, ms`.
+
+| Route | Body | Returns |
+|---|---|---|
+| `POST /api/projects/{pid}/scans/{sid}/process/hints/thin-parts/dismiss` | none | `ProcessState`: the hint is put away for this scan; the scan's entry keeps `hints_dismissed: ["thin_parts"]`, so it stays away after Make mesh again. 404 for an unknown scan. |
+
+- The page's one action is `PUT .../preset {preset_id: "thin-sheet-small-parts"}` and then
+  `POST .../process` at the same quality. Nothing happens by itself.

@@ -162,6 +162,7 @@ MAX_TRAJ_POINTS = 2000
 MAX_HOLE_OUTLINES = 500
 VOXEL_RANGE = (0.25, 10.0)
 FORMAT = 1
+THIN_PARTS_HINT = "thin_parts"  # the scan entry's hints_dismissed holds it once the user put the hint away (X5)
 DEFAULT_FLOATERS = {"min_size_mm": 5.0}
 #: UX_PLAN R18: the share of a Make mesh's time each of its parts takes, so that its percentage moves with the time.
 #: Measured 2026-11-21 on simulated scans of 240 frames at Standard quality, the Default recipe, on this PC's graphics
@@ -2553,6 +2554,11 @@ class ProcessManager:
                                  "seconds": round(time.monotonic() - t0, 1),
                                  "stages": {n: new.state["stages"][n].get("seconds") for n in STAGES
                                             if new.state["stages"][n].get("seconds") is not None}}
+            # ENGINE_PLAN X5 step 1: thin walls, a thin plate, small holes? A hint only: it reads the mesh it found
+            ctx.progress(1.0, "Looking for thin walls and small holes", force=True)
+            hint = safe_call("looking for thin parts", lambda: self._thin_parts(new))
+            if hint is not None:
+                new.state["made"]["thin_parts"] = hint
             new.save()
             self._take_place(ctx, sp, new)
             return msg
@@ -2809,6 +2815,52 @@ class ProcessManager:
                                lambda ctx, sp, prog: self._run_recipe(ctx, sp, recipe, "all", prog),
                                need_track=False, message=f"The recipe {recipe['name']}",
                                meta={"recipe_id": recipe_id, "recipe_name": recipe["name"], "scope": scope}, staged=True)
+
+    # ------------------------------------------------------------------ the thin-parts hint (ENGINE_PLAN X5 step 1)
+    def _thin_parts(self, sp: ScanProcess) -> dict | None:
+        """At the end of Make mesh (or a recipe on everything): look for thin walls, a thin plate lying flat and small
+        holes in the mesh it made (:func:`ohs.mesh.thin_parts.find_thin_parts`, which only reads) and say whether the
+        preset "Thin sheet metal and small parts" is worth a try. The whole finding goes into ``result/report.json``
+        (``thin_parts``); the hint, in words, is returned for ``ProcessState.made.thin_parts``. Nothing is changed:
+        the user decides. None when the mesh's detail is not known."""
+        from ohs.mesh.thin_parts import find_thin_parts, hint_words
+
+        rep_path = sp.result_dir / "report.json"
+        rep = _read_json(rep_path) or {}
+        voxel = (rep.get("mesh") or {}).get("voxel_mm")
+        if not isinstance(voxel, (int, float)) or not voxel > 0:
+            return None
+        with sp.lock:
+            V, F, S, _ = self._load_step(sp, int(sp.state["cursor"]))
+        prm = rep.get("params") or {}
+        finding = find_thin_parts(V, F, voxel_mm=float(voxel), sigma=S, preset_id=(rep.get("preset") or {}).get("id"),
+                                  opposite_sides=(prm.get("reconstruction") or {}).get("opposite_mm") is not None)
+        rep["thin_parts"] = finding
+        _write_json(rep_path, rep)
+        made = sp.state.get("made") or {}
+        card = (prm.get("compute") or {}).get("depth") not in (None, "cpu")
+        words = hint_words(finding, seconds=made.get("seconds"), triangles=int(len(F)), graphics_card=card)
+        entry = self.st.projects.scan_entry(sp.pid, sp.sid)
+        kinds = [k for k in ("walls", "plates", "holes") if (finding.get(k) or {}).get("found")]
+        return {"suggest": bool(finding.get("suggest")), "why_not": finding.get("why_not"), "found": kinds,
+                "voxel_mm": float(voxel), "preset_id": finding.get("suggest_preset"),
+                "dismissed": THIN_PARTS_HINT in (entry.get("hints_dismissed") or []), "words": words}
+
+    def dismiss_thin_parts(self, pid: str, sid: str) -> dict:
+        """``POST .../process/hints/thin-parts/dismiss``: the user put the hint away. It stays away for this scan, also
+        after the mesh is made again (the scan's entry keeps ``hints_dismissed``). Changes nothing else."""
+        sp = self.scan(pid, sid)
+        entry = self.st.projects.scan_entry(pid, sid)
+        gone = [h for h in (entry.get("hints_dismissed") or []) if isinstance(h, str)]
+        if THIN_PARTS_HINT not in gone:
+            self.st.projects.update_scan(pid, sid, hints_dismissed=gone + [THIN_PARTS_HINT])
+        with sp.lock:
+            made = sp.state.get("made")
+            if isinstance(made, dict) and isinstance(made.get("thin_parts"), dict):
+                made["thin_parts"]["dismissed"] = True
+                sp.save()
+        self.publish(sp)
+        return self.view(sp)
 
     def make_mesh(self, pid: str, sid: str, quality: str) -> Any:
         """``POST .../process`` (M1 "Make mesh"): the Default recipe, all stages, at ``quality``."""

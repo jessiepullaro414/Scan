@@ -67,6 +67,8 @@ import { viewerSheet } from "../lib/shortcuts";
 import { axesEntry, groupOfTool, initialOpen, openFor, type GroupsOpen, type ViewerGroupId, type ViewerTool } from "../lib/viewerGroups";
 import { ShortcutButton, ShortcutSheet } from "../components/ShortcutSheet";
 import { remakeBlock } from "../lib/keepMode";
+import { thinPartsToShow } from "../lib/thinParts";
+import { ThinPartsHint } from "./viewer/ThinPartsHint";
 import { hasLaserValues } from "../lib/lasers";
 import { axisOrder, deltaOf, fmtVec, pointToPart, readFrame } from "../lib/partFrame";
 import { href, navigate, paths } from "../lib/router";
@@ -708,6 +710,7 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
   const openHoles = useProcess((s) => s.entries[processKey(pid, sid)]?.state?.current?.stats.holes ?? null);
   // R17: the Make mesh that made this mesh (its whole time)
   const made = useProcess((s) => s.entries[processKey(pid, sid)]?.state?.made ?? null);
+  const thinHint = thinPartsToShow(made); // ENGINE_PLAN X5
   const shown: Shading =
     shading === "deviation"
       ? devOn && dev.phase === "ready"
@@ -1311,6 +1314,12 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
             </Panel>
           ) : null}
           <Panel title="Processing report" icon={FileText}>
+            {/* ENGINE_PLAN X5: thin walls, a thin plate or small holes found; a suggestion with one action */}
+            {thinHint && project && scan ? (
+              <div className="mb-4">
+                <ThinPartsHint pid={pid} sid={sid} name={scan.name} hint={thinHint} quality={report?.quality} blocked={remakeBlock(scan)} />
+              </div>
+            ) : null}
             {report ? (
               <ReportSummary report={report} merged={!!scan?.merged_from?.length} made={made} />
             ) : hasResult ? (

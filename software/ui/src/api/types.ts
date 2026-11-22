@@ -803,7 +803,37 @@ export type MakingState = {
 };
 
 /** The Make mesh (or recipe on everything) that made the current base, with how long the whole job took (UX_PLAN R17). */
-export type MadeInfo = { job_id: string; kind: string; when: string; seconds: number; stages: Partial<Record<string, number>> };
+export type MadeInfo = {
+  job_id: string;
+  kind: string;
+  when: string;
+  seconds: number;
+  stages: Partial<Record<string, number>>;
+  /** ENGINE_PLAN X5: what Make mesh found that a finer mesh detail could help (absent from an older engine). */
+  thin_parts?: ThinPartsHint | null;
+};
+/** The thin-parts hint (ENGINE_PLAN X5 step 1, APP_API.md "The thin-parts hint"): a suggestion only. */
+export type ThinPartsHint = {
+  suggest: boolean;
+  /** no_measured_gain: only a thin plate or small holes were found, where 0.5 mm was not measured to help. */
+  why_not: "made_fine" | "nothing_found" | "no_measured_gain" | "empty" | null;
+  found: ("walls" | "plates" | "holes")[];
+  voxel_mm: number;
+  preset_id: string;
+  dismissed: boolean;
+  /** The engine's sentences (null when there is nothing to suggest). */
+  words: {
+    title: string;
+    intro: string;
+    found: string[];
+    gain: string[];
+    cost: string[];
+    measured: string;
+    action: string;
+    preset_id: string;
+    preset_name: string;
+  } | null;
+};
 export type TrackStage = StageInfo & {
   quality: ProcessQuality | null;
   tracked_pct: number | null;
