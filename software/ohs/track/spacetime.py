@@ -45,6 +45,7 @@ from typing import Callable, Iterator, Sequence
 
 import numpy as np
 
+from ohs.compute import launches
 from ohs.geometry import invert_se3
 
 __all__ = ["SpacetimeParams", "resolve_params", "Patches", "make_patches", "patch_views", "patch_costs",
@@ -651,6 +652,7 @@ class _GpuCost:
         dt = time.perf_counter() - t0
         self.launches.append({"kernel": name, "items": int(n_items), "work": float(work), "s": round(dt, 4)})
         log.debug("spacetime launch %s: %d items, %.3g samples, %.4f s", name, n_items, work, dt)
+        launches.timed("refine." + name, n_items, dt)  # the shared record (ohs.compute.launches), when it is on
         if dt > 0.005 and work > 0:  # too short to time well: keep the pace as it is
             r = work / dt
             old = self._rate.get(name)

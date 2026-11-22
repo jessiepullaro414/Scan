@@ -29,6 +29,8 @@ from typing import Any
 import cv2
 import numpy as np
 
+from ohs.compute import launches
+
 __all__ = ["TrackingFilterGpu"]
 
 _SRC = r"""
@@ -238,11 +240,13 @@ class TrackingFilterGpu:
             src, hold = self._in, (d, cl.enqueue_copy(q, self._in, d, is_blocking=False))
         dd, vf, nh, dh, res = self._work
         ws, w0s = (self.w, self.h), (self.w0, self.h0)
-        self._down(q, ws, None, src, self.w0, self.h0, self.f, self.w, self.h, self.slope, dd, vf)
-        self._bh(q, ws, None, dd, vf, self.w, self.h, self._g, self.r, nh, dh)
-        self._bv(q, ws, None, nh, dh, dd, vf, self.w, self.h, self._g, self.r, self._el, self.n_elem,
-                 self.max_change, res, self._keep)
-        self._up(q, w0s, None, res, self._keep, self.w, self.h, self.w0, self.h0, 1.0 / self.f, self._out)
+        go = launches.launch
+        go(q, self._down, "track_filter.down", ws, None, src, self.w0, self.h0, self.f, self.w, self.h, self.slope, dd, vf)
+        go(q, self._bh, "track_filter.blur_h", ws, None, dd, vf, self.w, self.h, self._g, self.r, nh, dh)
+        go(q, self._bv, "track_filter.blur_v", ws, None, nh, dh, dd, vf, self.w, self.h, self._g, self.r, self._el,
+           self.n_elem, self.max_change, res, self._keep)
+        go(q, self._up, "track_filter.up", w0s, None, res, self._keep, self.w, self.h, self.w0, self.h0, 1.0 / self.f,
+           self._out)
         out = np.empty((self.h0, self.w0), np.float32)
         ev = cl.enqueue_copy(q, out, self._out, is_blocking=False)
         q.flush()  # the device starts now

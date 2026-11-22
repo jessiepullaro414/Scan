@@ -26,6 +26,9 @@ each user its own command queue (:meth:`ComputeDevice.new_queue`). OpenCL kernel
 their arguments, so a kernel object must not be shared between threads: create kernels per user
 (``cl.Kernel(program, name)``) and keep them, rather than ``program.name`` attribute lookups, which
 create a new kernel every time.
+
+:mod:`ohs.compute.launches` records how long each launch takes (off unless ``OHS_GPU_TIMES`` is set):
+every launch must stay well under the 2 s after which Windows resets the display driver.
 """
 from __future__ import annotations
 
@@ -68,8 +71,11 @@ class ComputeDevice:
     _plock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
     def new_queue(self, profiling: bool = False) -> Any:
-        """A new in-order command queue on this device (one per user / thread)."""
-        props = self.cl.command_queue_properties.PROFILING_ENABLE if profiling else 0
+        """A new in-order command queue on this device (one per user / thread); with profiling when
+        asked, or while launch times are recorded (:mod:`ohs.compute.launches`)."""
+        from ohs.compute import launches  # noqa: PLC0415
+
+        props = self.cl.command_queue_properties.PROFILING_ENABLE if profiling or launches.recording() else 0
         return self.cl.CommandQueue(self.ctx, properties=props)
 
     def program(self, source: str, options: tuple[str, ...] | list[str] = ()) -> Any:

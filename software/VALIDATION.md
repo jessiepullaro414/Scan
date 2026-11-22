@@ -5003,9 +5003,10 @@ the surface (1.3 %) lies on walls seen from both sides that read 2.49 mm thick (
 2.64 mm), probably 1.19 to 2.39 mm in truth." "Walls seen from both sides read 0.23 to 0.67 mm
 nearer their true thickness at mesh detail 0.5 mm: simulated walls 0.5 to 2 mm thick read 1 to
 2.4 mm instead of 1.7 to 2.7 mm." The cost: 1.2 to 2.4 times the time (with this mesh's own
-time), about 4 times the triangles, and the memory one 0.5 mm scan took (7 GB, 2.2 GB of the
-graphics card's shared memory), "measured on simulated scans, on a mini PC with built-in
-graphics and 20 GB of memory". One button, "Make the mesh again with this preset" (it sets the
+time), about 4 times the triangles, and the memory 0.5 mm scans took (7 to 11.9 GB, 2.2 to
+3 GB of the graphics card's shared memory; the larger figures from "Launch times on the
+graphics card at 0.5 mm"), "measured on simulated scans, on a mini PC with built-in graphics
+and 20 GB of memory". One button, "Make the mesh again with this preset" (it sets the
 scan's preset and runs Make mesh; the mesh you have stays until the new one is ready), and
 "Not for this scan", which puts the hint away for good.
 
@@ -5047,6 +5048,72 @@ holes the cameras filled in are not found (over a far floor the Ø 6 and Ø 10 h
 graphics card walls read 0.3 to 0.75 mm thicker, so a 2 mm wall there may not be found; the
 sheet's flange and rib merge into one region, so its reading mixes a 1 mm and a 2 mm wall; the
 preset itself was not run on this PC for this item (the gain is P1's measurement).
+
+## Launch times on the graphics card at 0.5 mm (ENGINE_PLAN X5 step 2's groundwork, 2026-11-22)
+
+Windows resets a display driver whose command runs over 2 s, and on the mini PC the Radeon 680M
+also draws the desktop ("A driver timeout in Refine from the images, mended"). Before the first
+run at mesh detail 0.5 mm since the driver was reinstalled (AMD Software 26.11.2), every launch
+of the matcher, the filters and the fusion was listed, recorded and, where its work is not one
+frame's, bounded.
+
+**The record** (`ohs.compute.launches`; off by default, then nothing changes): with
+`OHS_GPU_TIMES=1` (or a file's path, which gets a JSON at the end) every launch's time is taken
+from the card's own events, so nothing waits because of it; a launch over 0.25 s is warned of.
+With the record on Make mesh's frame pass took +0 % (standing walls) and +2.3 % (bracket).
+
+**At 1 mm** (Make mesh's frame pass; standing walls seed 0 / bracket seed 0), the longest
+launches: the matcher's two aggregation passes 39 to 45 ms and its census 28 to 34 ms; the mesh
+model's fusion 22 to 25 ms (at most 7,523 bricks a frame); the tracking model's fusion 18 ms
+and ray cast 15 ms; everything else under 15 ms.
+
+**What grows at 0.5 mm is the mesh model only.** The tracking model's voxel is the larger of
+2 mm and the mesh detail, in a cube of at most 384 voxels a side, so its whole-volume launches
+(the reset 7 ms; weight scaling and brick flags do not run in Make mesh) stay as they are. The
+mesh model's fusion takes about 4 times the bricks a frame, and its pool's fill and copy (when
+it grows) and its download grow with all the bricks.
+
+**Bounded** (`ohs/track/recon_tsdf.py`): a frame's fusion is one launch as before unless it has
+more bricks than the card's measured pace does in 0.1 s (16,384 before a pace is known, never
+more than 32,768); then it goes in batches, each waited for. Each voxel is one work item
+written once a frame, so the model is the same bit for bit. The pool's fill, copy and download
+go in pieces of at most 64 MB. Without the bounds the largest pool the app allows on this card
+(187,088 bricks, 365 MB a channel, mesh detail down to 0.25 mm) would have had a download of
+about 220 ms in one command and a possible fusion launch of about 0.5 s; with them about 85 ms
+and 40 ms at most (an estimate; that case was not run).
+
+**A driver reset part way fails the job** instead of writing a mesh: each frame checks that the
+previous fusion launch ended without an error, and before the mesh is read back a small buffer
+filled with a pattern when the model was made must still hold it (a reset loses the card's
+memory). The stage then fails in the server's usual words. Not tried against a real reset.
+
+**Climbed in steps at 0.5 mm**, each its own run, the record of driver timeouts checked before
+and after:
+
+| step | longest launches (ms) | Make mesh | peak memory / the card's shared memory |
+|---|---|---|---|
+| synthetic, 12 frames | fusion 11.7 (1 mm: 7.6) | 0.73 s (0.36 s) | the pool 512 MB (128 MB) |
+| standing walls, first 20 frames | census 48, fusion 40, download 24, ray cast 22 | 16.3 s | not sampled |
+| standing walls, what Make mesh runs | fusion 70 (27,902 bricks), census 63, aggregation 57 | 76.8 s (1 mm: 40.5) | 9.88 GB (1.24) / 2.61 GB (0.05) |
+| bracket, 240 frames | fusion 65, census 62, aggregation 48, download 38 | 133.4 s (1 mm: 80.0) | 11.92 GB (1.78) / 3.01 GB (0.08) |
+
+No launch over 0.25 s, no error status, no driver timeout. **The memory is the finding:** 9.9
+and 11.9 GB of the PC's 19.8 GB, mostly the finer mesh (6.4 against 1.55 million triangles on
+the bracket) and its processing on the processor, not the card. The time grows in Follow the
+camera (walls 46 s against 24.5 s) and in Refine with lasers (14 s against 1.4 s; bracket 25.6
+against 2.4 s), which grows with the mesh. The thin-parts hint's memory line now gives 7 to
+11.9 GB.
+
+**At 1 mm nothing changed:** with the record off Make mesh's frame pass takes the same time
+(walls 23.89 / 23.72 s against 23.71 / 23.89 s before; bracket 44.72 / 44.65 against 44.93 /
+44.84 s), the meshes are identical as sets of vertices and triangles and the paths identical
+(the vertex order differs from run to run on the old code too), and the quick set on what Make
+mesh runs compares identical.
+
+Limits: one card (the pace adapts, only the 680M was measured); the largest pool is an
+estimate; the 1 mm times beside the 0.5 mm ones are the cached runs of an older engine; the
+self-check was not tried against a real reset; the tests of the batching were seen failing only
+in that their module did not exist before.
 
 ## What the metrics mean
 

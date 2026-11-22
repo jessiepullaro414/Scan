@@ -97,6 +97,7 @@ from typing import Any
 import cv2
 import numpy as np
 
+from ohs.compute import launches
 from ohs.vision.depth import (GPU_MIN_SIZE, LK_EPS2, LK_MIN_TEXTURE, SIGMA_MODELS, SIGMA_UNREFINED_PX, DepthParams,
                               lk_window_n_eff)
 
@@ -1165,7 +1166,7 @@ class GpuStereoMatcher:
             hold += [np.ascontiguousarray(lk_left), np.ascontiguousarray(lk_right)]
             copies += [cl.enqueue_copy(q, b["lkl"], hold[2], is_blocking=False),
                        cl.enqueue_copy(q, b["lkr"], hold[3], is_blocking=False)]
-        events = [(name, cl.enqueue_nd_range_kernel(q, kern, gs, ls)) for name, kern, gs, ls in self._calls]
+        events = [(name, launches.launch(q, kern, "matcher." + name, gs, ls)) for name, kern, gs, ls in self._calls]
         outs = [np.empty((h, w), np.float32) for _ in what]
         for i, (name, out) in enumerate(zip(what, outs)):
             copies.append(cl.enqueue_copy(q, out, b[name], is_blocking=i == len(what) - 1))

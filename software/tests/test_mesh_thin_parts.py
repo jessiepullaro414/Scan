@@ -237,7 +237,7 @@ def test_the_hint_says_what_was_found_what_it_changes_and_what_it_costs():
     assert "probably up to 0.9 mm in truth" in text
     assert "0.23 to 0.67 mm nearer" in text and "1.2 to 2.4 times" in text
     assert "3.2 min" in text and "3.8 min to 7.6 min" in text  # this mesh's time and the preset's
-    assert "4.9 million instead of 1.23 million" in text and "7 GB" in text and "simulated" in text
+    assert "4.9 million instead of 1.23 million" in text and "7 to 11.9 GB of memory" in text and "simulated" in text
     for word in ("GPU", "CPU", "voxel", "sigma", "uncertain"):
         assert word not in text
     nocard = hint_words(f, graphics_card=False)["measured"]

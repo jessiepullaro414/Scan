@@ -104,6 +104,8 @@ from typing import Any
 
 import numpy as np
 
+from ohs.compute import launches
+
 __all__ = ["GpuTsdfVolume", "PendingRaycast", "plan_edge", "BRICK", "EDGE_CHOICES"]
 
 log = logging.getLogger(__name__)
@@ -696,6 +698,7 @@ class GpuTsdfVolume:
         """Forget everything (all voxels unobserved); the next integration places the window."""
         cl = self.cl
         ev = cl.enqueue_fill_buffer(self.queue, self._vol, np.uint32(0), 0, self.n_vox * 4)
+        launches.note("tracking_model.reset_fill", ev, self.n_vox)
         self._note("reset", ev)
         self.ob = None
         self.n_shifts = 0
@@ -747,6 +750,7 @@ class GpuTsdfVolume:
         ev = self._k["ohs_tsdf_clear_moved"](
             self.queue, (self.nb ** 3 * self._wg1,), (self._wg1,), self._vol, self.nb,
             *(int(v) for v in old), *(int(v) for v in mold), *(int(v) for v in new), *(int(v) for v in mnew))
+        launches.note("tracking_model.clear_moved", ev, self.nb ** 3 * self._wg1)
         self._note("shift", ev)
         self.ob = new
         self.n_shifts += 1
@@ -796,6 +800,7 @@ class GpuTsdfVolume:
             Kd[0, 0], Kd[1, 1], Kd[0, 2], Kd[1, 2], Kd[0, 1], *A.ravel(), *b,
             self.trunc_mm, self.depth_max_mm, self.max_weight,
             _BACK_OFF if self.back_mm is None else self.back_mm, self.back_after)
+        launches.note("tracking_model.integrate", ev, int(nx) * int(ny) * int(nz))
         self._note("integrate", ev)
 
     def _frustum_box(self, K: np.ndarray, w: int, h: int, T_wc: np.ndarray,
@@ -852,12 +857,14 @@ class GpuTsdfVolume:
             *M.ravel(), *o, self.depth_min_mm, self.depth_max_mm, self.trunc_mm, self.voxel_mm,
             max(self.voxel_mm, 0.5 * self.trunc_mm), float(weight_threshold), 0.2 / self.trunc_mm,
             1e-4 * self.voxel_mm, self.border_mm / self.voxel_mm, raw)
+        launches.note("tracking_model.raycast", ev, w * h)
         self._note("raycast", ev)
         out = raw
         if int(normal_window) > 1:
             lb = self._wg_box
             ev = self._k["ohs_normal_box"](self.queue, (_round_up(w, lb[0]), _round_up(h, lb[1])), lb,
                                            raw, smooth, w, h, int(normal_window))
+            launches.note("tracking_model.normal_box", ev, w * h)
             self._note("normals", ev)
             out = smooth
         ev = cl.enqueue_copy(self.queue, self._stage, out, is_blocking=False)
@@ -875,6 +882,7 @@ class GpuTsdfVolume:
         n = self.n_vox
         ev = self._k["ohs_tsdf_scale_weights"](self.queue, (_round_up(n, self._wg1),), (self._wg1,), self._vol,
                                                 float(factor), self.max_weight, n)
+        launches.note("tracking_model.scale_weights", ev, n)
         self._note("scale_weights", ev)
 
     def brick_flags(self) -> np.ndarray:
@@ -883,7 +891,9 @@ class GpuTsdfVolume:
         nb3 = self.nb ** 3
         buf = cl.Buffer(self.dev.ctx, cl.mem_flags.WRITE_ONLY, size=nb3)
         try:
-            self._k["ohs_tsdf_brick_flags"](self.queue, (nb3 * self._wg1,), (self._wg1,), self._vol, buf)
+            launches.note("tracking_model.brick_flags",
+                          self._k["ohs_tsdf_brick_flags"](self.queue, (nb3 * self._wg1,), (self._wg1,), self._vol, buf),
+                          self.n_vox)
             flags = np.empty(nb3, dtype=np.uint8)
             cl.enqueue_copy(self.queue, flags, buf, is_blocking=True)
         finally:
@@ -919,7 +929,9 @@ class GpuTsdfVolume:
         sbuf = cl.Buffer(self.dev.ctx, mf.READ_ONLY | mf.COPY_HOST_PTR, hostbuf=slots)
         obuf = cl.Buffer(self.dev.ctx, mf.WRITE_ONLY, size=len(slots) * 4096 * 4)
         try:
-            self._k["ohs_tsdf_gather_bricks"](self.queue, (len(slots) * self._wg1,), (self._wg1,), self._vol, sbuf, obuf)
+            launches.note("tracking_model.gather_bricks",
+                          self._k["ohs_tsdf_gather_bricks"](self.queue, (len(slots) * self._wg1,), (self._wg1,), self._vol,
+                                                            sbuf, obuf), len(slots) * 4096)
             data = np.empty((len(slots), 4096), dtype=np.uint32)
             cl.enqueue_copy(self.queue, data, obuf, is_blocking=True)
         finally:

@@ -102,7 +102,7 @@ MAX_BRICKS = 20_000
 
 #: P1's measured numbers the words cite (VALIDATION.md "Presets: which settings matter, measured"; FEATURE_PLAN R5)
 P1 = {"walls_nearer_mm": (0.23, 0.67), "walls_at_1": (1.7, 2.7), "walls_at_05": (1.0, 2.4), "walls_true": (0.5, 2.0),
-      "time_x": (1.2, 2.4), "triangles_x": 4.0, "mem_gb": 7.0, "shared_gb": 2.2, "mem_at_mtri": 3.34,
+      "time_x": (1.2, 2.4), "triangles_x": 4.0, "mem_gb": (7.0, 11.9), "shared_gb": (2.2, 3.0), "mem_at_mtri": (3.34, 6.4),  # R5; X5 2026-11-22
       "pc": "a mini PC with built-in graphics and 20 GB of memory"}
 
 
@@ -465,8 +465,9 @@ def hint_words(finding: dict | None, *, seconds: float | None = None, triangles:
                     f"million instead of {triangles / 1e6:,.2f} million.")
     else:
         cost.append(f"Triangles: about {P1['triangles_x']:g} times as many.")
-    cost.append(f"Memory: one scan made at mesh detail 0.5 mm, {P1['mem_at_mtri']:g} million triangles, took "
-                f"{P1['mem_gb']:g} GB of memory and {P1['shared_gb']:g} GB of the graphics card's shared memory.")
+    cost.append(f"Memory: scans made at mesh detail 0.5 mm with {P1['mem_at_mtri'][0]:g} to {P1['mem_at_mtri'][1]:g} "
+                f"million triangles took {P1['mem_gb'][0]:g} to {P1['mem_gb'][1]:g} GB of memory and "
+                f"{P1['shared_gb'][0]:g} to {P1['shared_gb'][1]:g} GB of the graphics card's shared memory.")
     measured = (f"Measured on simulated scans, on {P1['pc']}."
                 + ("" if graphics_card else " This scan was made without a graphics card, where the finer detail "
                                            "was not measured."))

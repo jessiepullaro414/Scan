@@ -38,7 +38,7 @@ export function demoThinPartsHint(seconds: number, triangles: number, voxel: num
       cost: [
         `Time: 1.2 to 2.4 times as long. This mesh took ${t(seconds)}; with the preset about ${t(1.2 * seconds)} to ${t(2.4 * seconds)}.`,
         `Triangles: about 4 times as many, about ${((4 * triangles) / 1e6).toFixed(1)} million instead of ${(triangles / 1e6).toFixed(2)} million.`,
-        "Memory: one scan made at mesh detail 0.5 mm, 3.34 million triangles, took 7 GB of memory and 2.2 GB of the graphics card's shared memory.",
+        "Memory: scans made at mesh detail 0.5 mm with 3.34 to 6.4 million triangles took 7 to 11.9 GB of memory and 2.2 to 3 GB of the graphics card's shared memory.",
       ],
       measured: "Measured on simulated scans, on a mini PC with built-in graphics and 20 GB of memory.",
       action: "Make the mesh again with this preset",

@@ -154,6 +154,18 @@ apply :func:`pixel_weights`' rules themselves, on the raw depth and sigma. The n
 0.5 s per frame, so without a GPU the pipeline keeps Open3D (no confidence) unless asked for this model.
 The mesh's own sigma terms take about a second per million triangles, once, when the mesh is made.
 
+**Short launches** (ENGINE_PLAN X5; ``ohs.compute.launches`` records their times). Windows resets a display
+driver whose command runs over 2 s, and on a mini PC the same card draws the desktop. A frame's fusion is one
+launch, left running, as long as its bricks are fewer than the pace measured does in ``INTEGRATE_TARGET_S``
+(``INTEGRATE_FIRST_BRICKS`` before a pace is known, never more than ``INTEGRATE_MAX_BRICKS``); a frame with more
+goes in batches of bricks, each waited for. Every ``INTEGRATE_PACE_EVERY``-th frame (the first too) is waited for
+and timed: the pace. Every voxel is one work-item written once per frame, so batches give the same model bit for
+bit. The pool's fills and copies when it grows, and the download, go in pieces of at most ``CHUNK_BYTES``, with a
+wait between. **The self-check** (:meth:`ConfidenceTsdf.self_check`, before every download): the last fusion
+launch must have ended without an error, and a small buffer filled with a pattern when the model was made must
+still hold it; otherwise :class:`~ohs.compute.launches.GpuResetError` (a driver reset part way), so that the job
+fails instead of writing a wrong mesh.
+
 The interface mirrors :class:`ohs.track.markerless.MarkerlessTracker`'s model side (``integrate``,
 ``extract_mesh``, ``extract_points``, ``n_integrated``, ``reset``, ``close``), so the pipeline can use
 either. Not thread-safe.
@@ -161,9 +173,13 @@ either. Not thread-safe.
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any
 
 import numpy as np
+
+from ohs.compute import launches
+from ohs.compute.launches import GpuResetError
 
 __all__ = ["ConfidenceTsdf", "BRICK", "RECON_BACKENDS", "voxel_sigma", "mesh_sigma_terms", "bias_scale", "pixel_weights",
            "gap_guard_mask", "sigma_without_incidence", "GUARD_PX_1280", "SIGMA_GUARD_PX_1280", "GUARD_SEED", "BACK_VOXELS", "BACK_WEIGHT", "OPPOSITE_VOXELS",
@@ -198,6 +214,18 @@ OPPOSITE_VOXELS = 1.0  # the second mean's cut behind a surface, in voxels
 OPPOSITE_FROM, OPPOSITE_FULL = 0.05, 0.15  # the share of opposite pairs from which the second mean counts / counts alone
 OPPOSITE_PRIOR = 16.0  # observations added to a voxel's count for the shares: a voxel seen a few times is not judged
 _OPP_CHANNELS = ("w2", "t2", "npos", "dx", "dy", "dz")
+# Short launches (module docstring): a frame's fusion is one launch unless it has more bricks than the pace measured
+# does in INTEGRATE_TARGET_S (INTEGRATE_FIRST_BRICKS before any pace is known), never more than INTEGRATE_MAX_BRICKS;
+# every INTEGRATE_PACE_EVERY-th frame (the first one too) is waited for and timed. The pool's fills and copies and the
+# download go in pieces of at most CHUNK_BYTES. Measured on the Radeon 680M at 1 mm (2026-11-22): 1.6 to 4e8 voxels a
+# second, a frame of the bracket at most 7523 bricks (25 ms); so the cap, 16.8 million voxels, is about 0.1 s there.
+INTEGRATE_TARGET_S = 0.1
+INTEGRATE_FIRST_BRICKS = 16384
+INTEGRATE_MAX_BRICKS = 32768
+INTEGRATE_PACE_EVERY = 64
+CHUNK_BYTES = 64 << 20
+_CANARY = 0x5AC3E197  # the self-check's pattern (module docstring, "Short launches")
+_CANARY_WORDS = 4096
 
 _SRC = r"""
 // OpenCL C 1.2. Sparse confidence TSDF of ohs/track/recon_tsdf.py (see its docstring).
@@ -518,6 +546,14 @@ def _decode(e: np.ndarray) -> np.ndarray:
     return np.stack([(e >> 42) & 0x1FFFFF, (e >> 21) & 0x1FFFFF, e & 0x1FFFFF], axis=1) - _OFF
 
 
+def _chunks(nbytes: int, size: int | None = None) -> list[tuple[int, int, bool]]:
+    """``(offset, bytes, last)`` pieces of ``nbytes`` of at most ``size`` (:data:`CHUNK_BYTES`) bytes, each a whole
+    number of 4-byte words; one piece when it fits."""
+    size = max(4, int(CHUNK_BYTES if size is None else size) // 4 * 4)
+    out = [(o, min(size, nbytes - o), o + size >= nbytes) for o in range(0, nbytes, size)]
+    return out or [(0, 0, True)]
+
+
 def bias_scale(voxel_mm: float) -> float:
     """Factor on the model's bias constants that are lengths (``A_GAP``, ``A_CURV``, ``A_BORDER``,
     ``BORDER_MM``): the voxel size in mm, and never below the 1 mm they were fitted at."""
@@ -822,6 +858,13 @@ class ConfidenceTsdf:
         self._lists: Any = None  # (copy events, host arrays) of the last frame's brick lists, see _integrate_gpu
         self._bsearch: Any = None  # (n_max, table, out, count, shift) of the GPU brick search
         self._warned_range = False
+        # short launches (module docstring): a forced batch size and cap in bricks (tests), the pace (voxels a second)
+        self.batch_bricks: int | None = None
+        self.max_batch_bricks: int | None = None
+        self._pace: float | None = None
+        self._last_ev: Any = None  # the last fusion launch, whose end the self-check looks at
+        self._canary = cl.Buffer(dev.ctx, cl.mem_flags.READ_WRITE, size=_CANARY_WORDS * 4)
+        cl.enqueue_fill_buffer(self.queue, self._canary, np.uint32(_CANARY), 0, _CANARY_WORDS * 4)
         self.backend = "gpu"
 
     @property
@@ -882,9 +925,16 @@ class ConfidenceTsdf:
             new = {}
             for c in (*self._channels, "luv"):
                 b = cl.Buffer(self.dev.ctx, cl.mem_flags.READ_WRITE, size=cap * NVOX * 4)
-                cl.enqueue_fill_buffer(q, b, np.uint32(0), 0, cap * NVOX * 4)
+                for o, s, last in _chunks(cap * NVOX * 4):  # short commands (module docstring, "Short launches")
+                    launches.note("mesh_model.pool_fill", cl.enqueue_fill_buffer(q, b, np.uint32(0), o, s), s // 4)
+                    if not last:
+                        q.finish()
                 if n and c in self._bufs:
-                    cl.enqueue_copy(q, b, self._bufs[c], byte_count=n * NVOX * 4)
+                    for o, s, last in _chunks(n * NVOX * 4):
+                        launches.note("mesh_model.pool_copy", cl.enqueue_copy(q, b, self._bufs[c], byte_count=s,
+                                                                              src_offset=o, dst_offset=o), s // 4)
+                        if not last:
+                            q.finish()
                 new[c] = b
             q.finish()
             self._release_storage()
@@ -982,13 +1032,15 @@ class ConfidenceTsdf:
             self._bsearch = (n_max, cl.Buffer(ctx, mf.READ_WRITE, size=(1 << (32 - shift)) * 4),
                              cl.Buffer(ctx, mf.READ_WRITE, size=n_max * 4), cl.Buffer(ctx, mf.READ_WRITE, size=8), shift)
         _, table, out, count, shift = self._bsearch
-        cl.enqueue_fill_buffer(q, table, np.uint32(0xFFFFFFFF), 0, (1 << (32 - shift)) * 4)
+        launches.note("mesh_model.search_fill", cl.enqueue_fill_buffer(q, table, np.uint32(0xFFFFFFFF), 0,
+                                                                       (1 << (32 - shift)) * 4), 1 << (32 - shift))
         cl.enqueue_fill_buffer(q, count, np.int32(0), 0, 8)
         K = self.K
         R = T_wc[:3, :3] * inv
         t = T_wc[:3, 3] * inv - self._origin
-        self._bkern(q, (gw, gh), None, dbuf, w, s, gw, gh, K[0, 0], K[1, 1], K[0, 2], K[1, 2], K[0, 1],
-                    *R.ravel(), *t, self.trunc_mm, self.depth_min_mm, self.depth_max_mm, table, shift, out, count)
+        launches.launch(q, self._bkern, "mesh_model.brick_search", (gw, gh), None, dbuf, w, s, gw, gh,
+                        K[0, 0], K[1, 1], K[0, 2], K[1, 2], K[0, 1], *R.ravel(), *t, self.trunc_mm, self.depth_min_mm,
+                        self.depth_max_mm, table, shift, out, count)
         cnt = np.zeros(2, dtype=np.int32)
         cl.enqueue_copy(q, cnt, count, is_blocking=True)
         if cnt[1] > 0:
@@ -1010,6 +1062,45 @@ class ConfidenceTsdf:
             for bb in self._bsearch[1:4]:
                 bb.release()
         self._bsearch = None
+
+    # ------------------------------------------------------------------ short launches and the self-check
+    def _batch_bricks(self) -> int:
+        """The most bricks one fusion launch takes now (module docstring, "Short launches")."""
+        if self.batch_bricks is not None:
+            return max(1, int(self.batch_bricks))
+        cap = INTEGRATE_MAX_BRICKS if self.max_batch_bricks is None else int(self.max_batch_bricks)
+        want = INTEGRATE_FIRST_BRICKS if self._pace is None else self._pace * INTEGRATE_TARGET_S / NVOX
+        return int(max(1, min(want, cap)))
+
+    def _learn_pace(self, voxels: int, seconds: float) -> None:
+        if seconds > 0.003 and voxels > 0:  # shorter is too short to time well
+            r = voxels / seconds
+            self._pace = r if self._pace is None else 0.5 * (self._pace + r)
+
+    def _check_event(self) -> None:
+        """Raise :class:`~ohs.compute.launches.GpuResetError` when the last fusion launch ended in an error."""
+        ev = self._last_ev
+        if ev is None:
+            return
+        try:
+            bad = int(ev.command_execution_status) < 0
+        except Exception:  # the event cannot even be asked: the device is gone
+            bad = True
+        if bad:
+            raise GpuResetError(launches.GPU_RESET_TEXT)
+
+    def self_check(self) -> None:
+        """Raise :class:`~ohs.compute.launches.GpuResetError` when the graphics card's work cannot be trusted: the
+        last fusion launch ended in an error, or the small buffer filled with a pattern when the model was made no
+        longer holds it (a driver reset loses or changes the card's memory). Nothing on the CPU."""
+        if self.dev is None or getattr(self, "_canary", None) is None:
+            return
+        self.queue.finish()
+        self._check_event()
+        got = np.empty(_CANARY_WORDS, dtype=np.uint32)
+        self.cl.enqueue_copy(self.queue, got, self._canary, is_blocking=True)
+        if not (got == np.uint32(_CANARY)).all():
+            raise GpuResetError(launches.GPU_RESET_TEXT)
 
     # ------------------------------------------------------------------ integration
     def integrate(self, depth_mm: np.ndarray, sigma_mm: np.ndarray | None, T_wc: np.ndarray,
@@ -1253,22 +1344,24 @@ class ConfidenceTsdf:
             cl.enqueue_copy(q, self._seen_buf[1], seen, is_blocking=True)
             dbuf = self._seen_buf[1]
         dmin, dmax, r = self.depth_min_mm, self.depth_max_mm, self._gap_r
-        self._gkern[0](q, (w, h), None, dbuf, hx, w, h, r, dmin, dmax, mark, 0)
-        self._gkern[1](q, (w, h), None, hx, g2, w, h, r)
+        go = launches.launch
+        go(q, self._gkern[0], "mesh_model.gap_row", (w, h), None, dbuf, hx, w, h, r, dmin, dmax, mark, 0)
+        go(q, self._gkern[1], "mesh_model.gap_dist", (w, h), None, hx, g2, w, h, r)
         use_sigma = bool(has_sigma) and self.sigma_guard_on
         self._guarded = self.gap_guard_px > 0 or use_sigma
         if self._guarded:
             rg = int(np.ceil(max(self.gap_guard_px, self.sigma_guard_px if use_sigma else 0.0)))
             K = self.K
             amp, c0 = _incidence_model()
-            self._guard_kern[0](q, (w, h), None, dbuf, mark, w, h, dmin, dmax, GUARD_SEED)  # the patches
-            self._guard_kern[1](q, (w, h), None, mark, hs, w, h, rg)
-            self._guard_kern[2](q, (w, h), None, hs, mark, w, h, rg, self.gap_guard_px ** 2,  # now the mark
-                                dbuf, self._img_bufs[2], int(use_sigma), self.sigma_guard_px ** 2,
-                                self.sigma_guard_mm or 0.0, int(not self.sigma_guard_angle),
-                                K[0, 0], K[1, 1], K[0, 2], K[1, 2], dmin, dmax, amp, c0 * c0)
-            self._gkern[0](q, (w, h), None, dbuf, hs, w, h, r, dmin, dmax, mark, 1)
-            self._gkern[1](q, (w, h), None, hs, gg, w, h, r)
+            go(q, self._guard_kern[0], "mesh_model.guard_seed", (w, h), None, dbuf, mark, w, h, dmin, dmax,
+               GUARD_SEED)  # the patches
+            go(q, self._guard_kern[1], "mesh_model.guard_row", (w, h), None, mark, hs, w, h, rg)
+            go(q, self._guard_kern[2], "mesh_model.guard_mark", (w, h), None, hs, mark, w, h, rg,
+               self.gap_guard_px ** 2, dbuf, self._img_bufs[2], int(use_sigma), self.sigma_guard_px ** 2,  # now the mark
+               self.sigma_guard_mm or 0.0, int(not self.sigma_guard_angle),
+               K[0, 0], K[1, 1], K[0, 2], K[1, 2], dmin, dmax, amp, c0 * c0)
+            go(q, self._gkern[0], "mesh_model.gap_row", (w, h), None, dbuf, hs, w, h, r, dmin, dmax, mark, 1)
+            go(q, self._gkern[1], "mesh_model.gap_dist", (w, h), None, hs, gg, w, h, r)
 
     def _integrate_gpu(self, slots: np.ndarray, keys: np.ndarray, shape: tuple[int, int], has_sigma: bool,
                        R_cw: np.ndarray, t_cw: np.ndarray) -> None:
@@ -1286,6 +1379,7 @@ class ConfidenceTsdf:
         if self._lists is not None:
             cl.wait_for_events(self._lists[0])  # done long ago, as a rule (and the GIL is not held)
             self._lists = None
+        self._check_event()  # the last frame's fusion, ended as it should (it is done as a rule)
         if m > self._list_cap:
             self._wait()
             for bb in (self._slot_buf, self._key_buf):
@@ -1299,18 +1393,38 @@ class ConfidenceTsdf:
                cl.enqueue_copy(q, self._key_buf, hold[1], is_blocking=False)]
         K = self.K
         b = self._bufs
-        n = m * NVOX
-        gs = (n + self._wg - 1) // self._wg * self._wg
-        self._kern(q, (gs,), (self._wg,), b["tsdf"], b["wsum"], b["m2"], b["nobs"], b["nlook"], b["luv"],
-                   b["xc"], b["mxc"], b["hnear"], b["snh2"],
-                   self._slot_buf, self._key_buf, m, dbuf, sbuf, int(has_sigma), w, h, gbuf, ggbuf,
-                   K[0, 0], K[1, 1], K[0, 2], K[1, 2], K[0, 1], *R_cw.ravel(), *t_cw,
-                   self.voxel_mm, self.trunc_mm, self.depth_min_mm, self.depth_max_mm, self.look_px ** 2,
-                   self.gap_near_px ** 2, self.hole_amp, self.hole_r_px ** 2,
-                   _BACK_OFF if self.back_mm is None else self.back_mm, BACK_WEIGHT,
-                   *((b["w2"], b["t2"], b["npos"], self.opposite_mm, b["dx"], b["dy"], b["dz"]) if self.opposite_mm is not None
-                     else (b["tsdf"], b["tsdf"], b["tsdf"], 0.0, b["tsdf"], b["tsdf"], b["tsdf"])))  # off: the kernel does not touch them
-        q.flush()  # the device starts as soon as it is free
+        head = (b["tsdf"], b["wsum"], b["m2"], b["nobs"], b["nlook"], b["luv"], b["xc"], b["mxc"], b["hnear"], b["snh2"],
+                self._slot_buf, self._key_buf)
+        tail = (dbuf, sbuf, int(has_sigma), w, h, gbuf, ggbuf,
+                K[0, 0], K[1, 1], K[0, 2], K[1, 2], K[0, 1], *R_cw.ravel(), *t_cw,
+                self.voxel_mm, self.trunc_mm, self.depth_min_mm, self.depth_max_mm, self.look_px ** 2,
+                self.gap_near_px ** 2, self.hole_amp, self.hole_r_px ** 2,
+                _BACK_OFF if self.back_mm is None else self.back_mm, BACK_WEIGHT,
+                *((b["w2"], b["t2"], b["npos"], self.opposite_mm, b["dx"], b["dy"], b["dz"]) if self.opposite_mm is not None
+                  else (b["tsdf"], b["tsdf"], b["tsdf"], 0.0, b["tsdf"], b["tsdf"], b["tsdf"])))  # off: the kernel does not touch them
+
+        def run(b0: int, b1: int) -> Any:
+            # bricks b0 .. b1 of the lists: work-items b0 * 512 on (the kernel stops at brick b1); every voxel is its
+            # own work-item, written once a frame, so the order and the split change nothing
+            gs = ((b1 - b0) * NVOX + self._wg - 1) // self._wg * self._wg
+            return launches.launch(q, self._kern, "mesh_model.integrate", (gs,), (self._wg,), *head, b1, *tail,
+                                   offset=None if b0 == 0 else (b0 * NVOX,))
+
+        want = self._batch_bricks()
+        if m <= want and self.n_integrated % INTEGRATE_PACE_EVERY:
+            self._last_ev = run(0, m)  # one launch, left running (the common case: as it always was)
+            q.flush()  # the device starts as soon as it is free
+        else:  # batches with a wait between, each timed: the pace (and this frame's first launch alone)
+            q.finish()
+            b0 = 0
+            while b0 < m:
+                b1 = min(m, b0 + max(1, want))
+                t0 = time.perf_counter()
+                self._last_ev = run(b0, b1)
+                q.finish()
+                self._learn_pace((b1 - b0) * NVOX, time.perf_counter() - t0)
+                self._check_event()
+                b0, want = b1, self._batch_bricks()
         self._lists = (evs, hold)
 
     # ------------------------------------------------------------------ results
@@ -1318,6 +1432,7 @@ class ConfidenceTsdf:
         """``(keys (M,3) int32, {channel: (M, 8, 8, 8)})`` of the allocated bricks, indexed ``[z, y, x]``."""
         n = self.n_bricks
         self._wait()  # the last frame's fusion
+        self.self_check()  # a driver reset part way must not become a mesh
         out: dict[str, np.ndarray] = {}
         for c in (*self._channels, "luv"):
             if self.dev is None:
@@ -1325,7 +1440,9 @@ class ConfidenceTsdf:
             else:
                 a = np.empty(n * NVOX, dtype=np.uint32 if c == "luv" else np.float32)
                 if n:
-                    self.cl.enqueue_copy(self.queue, a, self._bufs[c], is_blocking=True)
+                    for o, s, _ in _chunks(n * NVOX * 4):  # short commands (module docstring, "Short launches")
+                        launches.note("mesh_model.download", self.cl.enqueue_copy(
+                            self.queue, a[o // 4:(o + s) // 4], self._bufs[c], src_offset=o, is_blocking=True), s // 4)
             out[c] = a.reshape(n, BRICK, BRICK, BRICK)
         return self._keys[:n].copy(), out
 
@@ -1441,3 +1558,6 @@ class ConfidenceTsdf:
                 bb.release()
         self._slot_buf = self._key_buf = None
         self._release_bsearch()
+        if getattr(self, "_canary", None) is not None:
+            self._canary.release()
+            self._canary = None

@@ -674,8 +674,16 @@ and thin parts".
     a brick must take both (dilate by one); hole bricks hold the bore's wall, not its rim
     (dilate too); on the sheet the flange and rib are one region, so stitch lines would run
     along rib feet and flange edges; the finding runs on the edited mesh, a replay needs the
-    base stage's mesh. Before any 0.5 mm run on the Radeon PC: time the fusion's whole-volume
-    GPU launches ("Small things found").
+    base stage's mesh.
+  - **Groundwork done 2026-11-22** (`VALIDATION.md`, "Launch times on the graphics card at
+    0.5 mm"): every launch timed at 0.5 mm on the Radeon 680M and the mesh model's bounded;
+    the longest 70 ms, no driver timeout. **The reference step 2 has to beat**, all at 0.5 mm,
+    what Make mesh runs, tracked: standing walls 76.8 s and 9.9 GB (1 mm: 40.5 s, 1.24 GB);
+    bracket 133.4 s and 11.9 GB (1 mm: 80.0 s, 1.78 GB; 6.4 against 1.55 million triangles).
+    Step 2's limits are therefore 50.6 s / 1.61 GB and 100 s / 2.31 GB. The memory is mostly
+    the finer mesh on the processor (the card's shared memory 2.6 to 3 GB), so the memory rule
+    is decided by how much 0.5 mm mesh step 2 builds and stitches; a finer model only in the
+    flagged bricks needs its own brick search limited to them.
 - **Evidence:** 0.5 mm is the only setting that passed P1's stop rule (walls 0.23 to 0.67 mm
   nearer), for 1.2 to 2.4 times the time and 7 GB at 3.3 million triangles (R5).
 - **Risk:** pinholes and cracks at the boundary, memory, holes reading smaller.
@@ -778,15 +786,24 @@ and thin parts".
 - [ ] `ohs/track/volume_gpu.py`'s docstring still says the mesh's model is Open3D's.
 - [ ] Every timing on the Radeon PC since 2026-11-10 ran beside `RadeonSoftware.exe` using a
   whole core (MP F8).
-- [ ] GPU launches that could run long (found by X6, 2026-11-22): the refine's are short now;
-  the matcher and the fusion launch per frame (about 0.1 to 0.16 s a frame), but the fusion's
-  whole-volume launches (fill, weight scaling, brick flags) grow with the volume. Measure them
-  on a large part on the Radeon 680M; Windows resets a driver whose launch runs over 2 s.
+- [x] GPU launches that could run long (found by X6, 2026-11-22). **Measured and bounded
+  2026-11-22** (`VALIDATION.md`, "Launch times on the graphics card at 0.5 mm"). The tracking
+  model's whole-volume launches do not grow with the mesh detail (its voxel is at least 2 mm,
+  its cube at most 384 a side: the reset 7 ms). What grows is the mesh model: its fusion a
+  frame (about 4 times the bricks at 0.5 mm) and its pool's fill, copy and download. These now
+  go in batches of at most 32,768 bricks (or what the measured pace does in 0.1 s) and pieces
+  of 64 MB, the model the same bit for bit. The longest launch of Make mesh at 0.5 mm is 70 ms
+  (1 mm: 45 ms, the matcher). `OHS_GPU_TIMES=1` records every launch
+  (`ohs.compute.launches`). A driver reset part way now fails the job instead of writing a
+  mesh.
 - [ ] `tests/test_track_spacetime.py::test_the_refined_mesh_is_closer_to_the_truth` failed once
   without a GPU (`OHS_COMPUTE=cpu`) on 2026-11-22, in a run of several test files, and passed in
-  the eight runs after it (alone, its file six times, the same set again). The failure's
-  words were not kept. If it shows again: keep them, and look at how near its limits (the
-  count of patches kept, the 0.75 ratio) the CPU run lies.
+  the eight runs after it (alone, its file six times, the same set again). **It failed again
+  the same day** in another run without a GPU, and this time its words were kept:
+  `assert rep["moved"]["p95"] < 0.3` with 0.3011. So without a GPU the refine's largest
+  moves sit right at the test's limit and the run varies a little from one time to the next.
+  Not loosened. To do: find what varies between two runs without a GPU (the scan the test
+  builds, or the refine's numpy twin), and whether it did before 2026-11-22.
 
 ## Not worth trying again (measured)
 
