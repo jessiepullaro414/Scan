@@ -1902,6 +1902,19 @@ The engine and the app packaged as a Windows program with PyInstaller (`software
   report gives `opposite_mm` 1.0 in both.
 - **Still not checked:** a real camera through the program, a PC without the development tools.
 
+**Built again (2026-11-22)** from main at 3aa0cc3, with everything since (the UX review's pages,
+the trash, the remake staging, the log, the engine's new settings, all off):
+- **Size:** 526 MB, 329 files; `ohs.exe --version` gives 0.3.0.
+- **The bench from the program** (GPU, full quality, 30 frames): 30 of 30 tracked, trajectory
+  0.09 mm median, depth 0.308 mm median, the same as in the earlier builds and from Python.
+- **The app from the program**, on a test data folder: the window "OpenHandScan Studio" opens;
+  the simulator connects; a live scan tracks ("Tracking OK", 713 frames in 24 s); Stop saves it
+  and Make mesh runs on the GPU to a finished mesh (713 of 713 frames tracked, calibration
+  valid); the scan moved to the trash and put back returns to its place in the project; the
+  log's file is served; the result viewer shows the mesh with the toolbar inside the 3D view.
+- **Still not checked:** a real camera through the program, a PC without the development tools,
+  an installer and signing (not made).
+
 ## The confidence model on the CPU path: measured, not adopted (2026-11-16)
 
 Without a GPU the mesh comes from Open3D's model, which has no short band behind the surface
