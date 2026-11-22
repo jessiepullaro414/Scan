@@ -56,8 +56,8 @@ calibration later.
 
 | Screw | Count | Where |
 |---|---|---|
-| M3 × 5.7 heat-set insert | 22 | Head 12, grip ledges 8, left grip half 2 |
-| M3 × 8 flat-head | 12 | Faceplate 6, back cover 6 |
+| M3 × 5.7 heat-set insert | 21 | Head 11, grip ledges 8, left grip half 2 |
+| M3 × 8 flat-head | 11 | Faceplate 6, back cover 5 |
 | M3 × 10 socket-head | 8 | Grip to head: 4 from above, 4 through the yoke |
 | M3 × 12 socket-head | 2 | One per line laser (pinch screw, cuts its own thread) |
 | M3 × 16 socket-head | 2 | Joins the grip halves at the bottom |
@@ -106,12 +106,12 @@ will not enter the yoke, sand the grip's top flanks, not the cheeks.
 
 ## 3. Press in the inserts
 
-22 inserts. Set the iron to about 240 °C for ASA, push each insert straight until it sits flush or
+21 inserts. Set the iron to about 240 °C for ASA, push each insert straight until it sits flush or
 a hair below the surface, and let it cool before loading it.
 
 | Part | Inserts | Where |
 |---|---|---|
-| Head | 6 + 6 | Front face (for the faceplate) and back face (for the back cover) |
+| Head | 6 + 5 | Front face (for the faceplate) and back face (for the back cover) |
 | Each grip half | 2 + 2 | Two in the top surface (screws come down from the head), two in the outer side near the top (screws come through the yoke) |
 | Left grip half | 2 | The two bosses at the bottom, from the split face |
 
@@ -247,6 +247,8 @@ through it.
 
 1. Pass the tails and the camera cable up through the slot in the head's underside, into the
    camera opening.
+   The slot is open to the head's back edge through a 6 mm slit: later, with the back cover off,
+   the wires slide out to the back one at a time and the head comes off with nothing desoldered.
 2. Slide the top of the grip up between the head's two cheeks until it stops against the head.
 3. From inside the camera opening, drop 4× M3 × 10 through the floor into the grip's top inserts.
    Tighten them evenly.
@@ -353,7 +355,7 @@ cross.
 
 1. Toggle off, unplug. Fold the wires into the head so none lies over the IMU or under the
    cover's edge.
-2. Seat the back cover on its two pins and fix it with 6× M3 × 8 flat-head.
+2. Seat the back cover on its two pins and fix it with 5× M3 × 8 flat-head.
 3. Calibrate: [software/README.md](../software/README.md), sections 5 and 6, or the **Setup**
    wizard in the desktop app. In short: print the calibration board, glue it flat to the glass of
    the picture frame, then calibrate the cameras, the lasers and the IMU, in that order. About ten

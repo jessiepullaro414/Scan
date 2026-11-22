@@ -112,6 +112,7 @@ brace_depth = 20;
 groove_w    = 5;
 groove_d    = 4;
 cable_slot  = [16, 10];
+cable_slit  = 6;           // slit from that slot to the back edge, so wires leave without desoldering (0 = none)
 
 /* [12 x 35 mm laser modules] */
 laser_d        = 12;
@@ -235,6 +236,8 @@ cart_screw_pos = [for (sx=[-1,1], sy=[-1,1]) [sx*12.6, sy*12.6]];
 // faceplate / back cover screw positions (world x, z)
 frame_screws = [for (sx=[-1,1], sz=[-1,1]) [sx*(bw/2 - 3.5), sz*(bh/2 - 4)],
                 [0, bh/2 - 4], [0, -(bh/2 - 4)]];
+// the back cover has no bottom-centre screw when the wire slit runs there
+cover_screws = [for (p = frame_screws) if (!(cable_slit > 0 && p[0] == 0 && p[1] < 0)) p];
 
 // ------------------------------- helpers -------------------------------
 module ycyl(d, h, center=false) rotate([-90,0,0]) cylinder(d=d, h=h, center=center);
@@ -360,16 +363,18 @@ module head() {
         // cable slot down into the grip
         translate([-cable_slot[0]/2, grip_cy - cable_slot[1]/2, head_bot - eps])
             cube([cable_slot[0], cable_slot[1], bh/2 - ph/2 + 2*eps]);
+        // ... and a slit from it to the back edge, between the two rear grip screws: with the back cover
+        // off, the wires slide out to the back one by one and the head comes away with nothing desoldered
+        if (cable_slit > 0) translate([-cable_slit/2, -head_d - eps, head_bot - eps])
+            cube([cable_slit, head_d + grip_cy + eps, bh/2 - ph/2 + 2*eps]);
         // grip screws: M3 x 12 dropped in from the opening, counterbored
         for (s = grip_screws) {
             translate([s[0], s[1], head_bot - eps]) cylinder(d=m3_clear, h=bh/2 - ph/2 + 2*eps);
             translate([s[0], s[1], -ph/2 - 3]) cylinder(d=m3_head_d, h=3 + eps);
         }
         // heat-set inserts: faceplate (front) and back cover (back)
-        for (p = frame_screws) {
-            translate([p[0], -ins_depth, p[1]]) ycyl(ins_d, ins_depth + eps);
-            translate([p[0], -head_d - eps, p[1]]) ycyl(ins_d, ins_depth + eps);
-        }
+        for (p = frame_screws) translate([p[0], -ins_depth, p[1]]) ycyl(ins_d, ins_depth + eps);
+        for (p = cover_screws) translate([p[0], -head_d - eps, p[1]]) ycyl(ins_d, ins_depth + eps);
         // alignment pin holes: faceplate pins (front), back cover pins (back, mirrored in z)
         for (i = [0:1]) {
             translate([pin_pos[i][0], 0, pin_pos[i][1]]) rotate([90, 0, 0]) pin_hole(pin_d, pin_h, i*0.8);
@@ -457,7 +462,7 @@ module back_cover() {
         // name, sunk into the outside (flipped here, like the part itself, so it reads from behind the scanner)
         translate([0, -14, -eps]) mirror([0, 1, 0]) linear_extrude(0.6)
             text(logo, size=5.5, font="Liberation Sans:style=Bold", halign="center", valign="center", spacing=1.05);
-        for (p = frame_screws) translate([p[0], -p[1], -eps]) screw_seat(cover_t, plain=true);
+        for (p = cover_screws) translate([p[0], -p[1], -eps]) screw_seat(cover_t, plain=true);
         translate([toggle_pos[0], -toggle_pos[1], -eps]) cylinder(d=toggle_d, h=cover_t + 2*eps);
         for (sx=[-1,1], sy=[-1,1])
             translate([imu_pos[0] + sx*imu_holes[0]/2, -imu_pos[1] + sy*imu_holes[1]/2, cover_t + 1])

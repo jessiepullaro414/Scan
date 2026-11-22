@@ -31,7 +31,7 @@ Laser-sheet geometry: both sheets cross on the centre axis 250 mm in front of th
 
 Summary:
 - **Optics/electronics:** ELP synced OV9281 stereo camera, 2 line lasers and 1 dot laser (650 nm 5 mW, Ø12 mm), Lasermate DOE-RD10K650, Raspberry Pi Pico, Adafruit LSM6DSOX IMU, 16 mm momentary button, MTS-102 toggle, 3× PN2222 + 3× 1 kΩ (the optional 4-laser variant needs 4 line lasers and two more PN2222 and 1 kΩ: see [4-laser variant](#4-laser-variant-optional)), silicone wire, heat-shrink, micro-USB data cable.
-- **Hardware:** 22× M3×5.7 heat-set inserts. **M3×8 flat-head (countersunk)** ×12 for the faceplate and back cover, so they sit flush. Socket-head screws: **M3×10** ×8 (grip→head: 4 from above, 4 through the yoke), **M3×12** ×3 (laser pinch; ×5 for the 4-laser variant), **M3×16** ×2 (grip halves). Also M2×6 ×4 (camera), M2×5 ×4 (Pico) and M2.5×5 ×4 (IMU).
+- **Hardware:** 21× M3×5.7 heat-set inserts. **M3×8 flat-head (countersunk)** ×11 for the faceplate and back cover, so they sit flush. Socket-head screws: **M3×10** ×8 (grip→head: 4 from above, 4 through the yoke), **M3×12** ×3 (laser pinch; ×5 for the 4-laser variant), **M3×16** ×2 (grip halves). Also M2×6 ×4 (camera), M2×5 ×4 (Pico) and M2.5×5 ×4 (IMU).
 - **Consumables:**
   - **ASA** filament (~350 g). A closed car reaches 70–80 °C; PLA warps and PETG is marginal.
   - **AESUB Blue** vanishing spray, for glossy paint, chrome and black trim.
@@ -113,6 +113,7 @@ IMU (LSM6DSOX): VIN ── 3V3 (pin 36)  GND ── GND  SDA ── GP4 (pin 6) 
   - The Pico's USB port then supplies ≈0.45 A in total.
 - Solder the transistor circuits on a small perfboard scrap, or dead-bug them with heat-shrink, and tuck it inside the grip. The 8.2 Ω resistor gets warm (~1 W), so give it air.
 - Wires from the head to the grip run through the slot under the camera: camera USB, 1× +5 V, 3× laser returns, 4× IMU.
+- A 6 mm slit joins that slot to the head's back edge. With the back cover off, the wires slide out to the back one at a time, so the head can be swapped for a reprinted one without desoldering anything. The back cover has no bottom-centre screw because the slit runs there. `cable_slit = 0` in `scanner.scad` closes it again.
 
 ---
 
@@ -120,7 +121,7 @@ IMU (LSM6DSOX): VIN ── 3V3 (pin 36)  GND ── GND  SDA ── GP4 (pin 6) 
 
 **The full step-by-step guide is [docs/BUILD.md](docs/BUILD.md):** tools, a screw table, what to test before you solder, the wiring order, first power-up, focusing and aiming. The steps below are the short version.
 
-1. **Inserts:** press M3 inserts into the head (6 front, 6 back), into each grip-half ledge (2 + 2 from above, 2 + 2 from the sides), and into the left grip half's bottom bosses (2).
+1. **Inserts:** press M3 inserts into the head (6 front, 5 back), into each grip-half ledge (2 + 2 from above, 2 + 2 from the sides), and into the left grip half's bottom bosses (2).
 2. **Grip:** screw the Pico onto the standoffs in the right half, with USB pointing down. The 16 mm trigger button sits in the split front hole. Spin its nut down to leave a ~2.5 mm gap under the bezel, then close the halves around it; the right half's two pins find the left half.
 3. **Grip → head:** join the halves at the bottom with M3×16 and slide the top of the grip up between the head's two cheeks (the yoke). With the head's camera opening still empty, drop M3×10 screws through the pocket floor into each half's ledge. Then put 4× M3×10 through the cheeks from the sides. These side screws are what stops the head rocking on the grip.
 4. **Line lasers:** slide them in from the back. Focus each one sharp at about 25 cm. Rotate the right laser until its line is exactly **vertical** and the top laser until its line is exactly **horizontal**. Snug the M3×12 pinch screws; don't over-tighten.
