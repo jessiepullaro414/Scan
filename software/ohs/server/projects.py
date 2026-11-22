@@ -238,9 +238,10 @@ class ProjectStore:
             raise ApiError(404, "There is no such project: it may have been deleted.",
                            "Pick a project from the projects list, or make a new one.") from None
         except (OSError, ValueError) as e:
-            log.warning("project %s cannot be read: %s", pid, e)
+            log.warning("project %s cannot be read (%s): %s", pid, p, e)  # the path goes to the log, not to the page
             raise ApiError(500, "The project's file cannot be read.",
-                           f"Restore {p} from a backup; the scans inside the project's folder are untouched.") from None
+                           "Restore the project's file (project.json in the project's folder) from a backup; the scans "
+                           "inside the project's folder are untouched.") from None
         data.setdefault("scans", [])
         data["id"] = pid
         return data

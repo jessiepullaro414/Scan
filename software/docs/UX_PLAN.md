@@ -179,12 +179,33 @@ Left, small:
 
 - "Show what was removed" (U14) is offered right after the edit, or after Undo then Redo;
   from any other step of the history it would need a jump of two steps.
-- A trigger press while the Scan page is set up for a second pass starts an ordinary scan,
-  without a word about the pass.
-- One hint still shows a file's path when a project file cannot be read ("Restore … from a
-  backup"): `projects._load`.
-- A scan put back from the trash is listed last in its project, not in its old place.
-- Scan check: "Seen too few times" is said as a title and again as the sentence's start.
+
+Mended 2026-11-21 (the small leftovers):
+
+- A trigger press while the Scan page is set up for a second pass still starts an ordinary
+  scan (the trigger never starts a pass), and the page now says so while it records: "An
+  ordinary scan was started, not the second pass of “…”: the pass is still waiting, and Start
+  on this page begins it once this scan is stopped." (`lib/pass.ts` `passWaitingNote`).
+- No hint shows a file's path any more: the project file's (`projects._load`), and three more
+  the guard found once it was taught to see a path in a text (a recipe's file, the list of CAD
+  models, a printable). The paths go to the log. Two are shown on purpose and named in the
+  guard: the saved calibration file, and the Replay folder the user typed.
+- A scan put back from the trash takes its old place, by its own creation time. (Two scans
+  made in the same second cannot be told apart: the time is stored to the second.)
+- Scan check: a reason's title is said once. Three sentences now start with their title
+  ("Seen too few times: …", "Seen from too far: …", "On an edge or a tight curve, …"); a test
+  holds every reason to it.
+- The second pass panel's "Make an ordinary scan instead" is under the title, which has the
+  whole width; the four recipe buttons are named "Apply “Default”" and so on; the Replay
+  field is named "Recording folder" on the field itself; the Simulator chip on the motion
+  sensor screen is no longer focusable (its whole text is read by a screen reader; the
+  tooltip's file path is reachable by mouse only); the Device page's "Control board not
+  found" names Setup's Connect step and has a button to it, not `firmware/README.md`.
+- The shading toolbar of the viewer and of Edit mesh wraps inside the 3D view at 800 px (it
+  was cut off under the side panel).
+
+Still left: Setup's Connect step itself says "The full guide is in `firmware/README.md`"
+inside the flashing steps.
 
 ### [x] U51. The old names in texts the engine itself makes (found in the first wave, S)
 The server and the pages are done; these sentences are made deeper in the engine and reach
@@ -726,9 +747,10 @@ ticked; with them every finding of the walk, R1 to R23. Seen on the real engine 
   while the new block already showed the same job; and a scan stayed "Making the mesh" on
   screen after a cancel of a job this window had not started.
 
-Left, small: the page's own "Remove the table" text still says cm² beside the server's mm²
-(`lib/table.ts`); at 800 px a row that is making its mesh shortens the scan's name; an edit made
-before 2026-11-21 keeps its stored words ("Remove floaters", cm²).
+Mended 2026-11-21: the page's own "Remove the table" text says mm² as the server does
+(`lib/format.ts` `fmtMm2`); at 800 px a row that is making its mesh puts the progress under the
+name, which keeps its width. Left: an edit made before 2026-11-21 keeps its stored words
+("Remove floaters", cm²).
 
 ### [x] R1. Every warning of a scan is titled "Tracking may have slid" (pages)
 A merged scan's notes about its table ("70 raised areas up to 0.59 mm high…") appear under that

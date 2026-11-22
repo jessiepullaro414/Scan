@@ -2,7 +2,7 @@
  * Checks for the one number formatter (UX_PLAN U32, `npm test`): a narrow no-break space before the
  * unit, thousands grouped the same way, a true minus, "1280 × 800", and the key ranges of U25.
  */
-import { fmtAboutMm, fmtBytes, fmtDetailMm, fmtDuration, fmtInt, fmtMm, fmtNum, fmtPct, fmtSize, fmtUnit, keyRanges, MINUS, NNBSP } from "./format.ts";
+import { fmtAboutMm, fmtBytes, fmtDetailMm, fmtDuration, fmtInt, fmtMm, fmtMm2, fmtNum, fmtPct, fmtSize, fmtUnit, keyRanges, MINUS, NNBSP } from "./format.ts";
 
 let checks = 0;
 function eq(a: unknown, b: unknown, what: string): void {
@@ -34,6 +34,11 @@ eq(fmtDuration(192), `3${N}min 12${N}s`, "minutes and seconds");
 eq(fmtBytes(1.15 * 1024 ** 3), `1.15${N}GB`, "bytes");
 eq(fmtAboutMm(254), `250${N}mm`, "a distance in a sentence, rounded to 10 mm (U22)");
 eq(fmtUnit(null, "mm"), "–", "no number: a dash");
+// one area unit, mm², grouped (U22, R19; the table's text said cm² beside the server's mm²)
+eq(fmtMm2(240430), `240,430${N}mm²`, "a table's area, grouped");
+eq(fmtMm2(1234.4), `1,234${N}mm²`, "rounded to whole mm² from 10");
+eq(fmtMm2(3.24), `3.2${N}mm²`, "one decimal under 10");
+eq(fmtMm2(null), "–", "no area: a dash");
 
 // U25: the shading keys, as one range when they run on
 eq(keyRanges([1, 2, 3, 4, 5, 6, 7]).join(", "), "1–7", "seven modes: 1–7 (was 1–6)");

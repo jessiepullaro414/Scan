@@ -1011,8 +1011,9 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
         ) : null}
 
         {/* breadcrumb */}
-        <div className="pointer-events-none absolute left-4 top-4 flex flex-col gap-2">
-          <div className="glass pointer-events-auto flex h-9 items-center gap-1.5 rounded-xl border border-line-strong pl-1.5 pr-3 text-sm shadow-md">
+        {/* bounded on the right too, so the toolbar wraps inside the 3D view instead of running under the side panel */}
+        <div className="pointer-events-none absolute left-4 right-4 top-4 flex flex-col items-start gap-2">
+          <div className="glass pointer-events-auto flex h-9 max-w-full items-center gap-1.5 rounded-xl border border-line-strong pl-1.5 pr-3 text-sm shadow-md">
             <IconButton icon={ArrowLeft} size="sm" label="Back to the project" onClick={() => navigate(paths.project(pid))} />
             <a href={href(paths.project(pid))} className="max-w-[220px] truncate text-muted hover:text-fg">
               {project?.name ?? "Project"}
@@ -1023,10 +1024,11 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
             <span className="max-w-[260px] truncate font-medium text-fg">{scan?.name ?? "Scan"}</span>
           </div>
           {geometry ? (
-            <div className="glass pointer-events-auto flex flex-wrap items-center gap-1 rounded-xl border border-line-strong p-1 shadow-md" role="toolbar" aria-label="View options">
+            <div className="glass pointer-events-auto flex max-w-full flex-wrap items-center gap-1 rounded-xl border border-line-strong p-1 shadow-md" role="toolbar" aria-label="View options">
               <Segmented<Shading>
                 label="Shading"
                 size="sm"
+                wrap
                 value={devOn ? "deviation" : shading === "lasers" || shading === "reference" ? shading : shown}
                 onChange={setShading}
                 options={[

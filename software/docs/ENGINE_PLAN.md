@@ -614,11 +614,12 @@ and thin parts".
 
 ## Small things found by the review
 
-- [ ] "Known limitations of the pipeline" in `VALIDATION.md` is out of date: it says the
-  lasers are not used in the mesh (Refine with lasers exists), bosses read 0.1 mm small (now
-  0.15 to 0.26), walls 0.4 to 0.7 mm too thick (the 1 mm rib is 0.7 to 1.2), 0.35 s a frame
-  without a GPU (now 0.6 to 0.73 s), the guard's cost 1 to 7 points (now 0.7 to 2.0), and the
-  mesh's p95 0.7 to 1.2 mm (now 0.39 to 0.51).
+- [x] "Known limitations of the pipeline" in `VALIDATION.md` was out of date: it said the
+  lasers are not used in the mesh (Refine with lasers exists), bosses read 0.1 mm small, walls
+  0.4 to 0.7 mm too thick, 0.35 s a frame without a GPU, the guard's cost 1 to 7 points, and
+  the mesh's p95 0.7 to 1.2 mm. **Rewritten 2026-11-21** from the sections that hold today's
+  numbers, each point naming its section; the p95 is given by part from the scorecard's
+  baseline (the "0.39 to 0.51" noted here matched no current table).
 - [ ] `tools/preset_study.py` places the bracket with the whole scene, so the table rules its
   error (0.17 / 0.49 / 0.69 mm median): not comparable with the part alone (0.14 mm).
 - [ ] `ohs/track/volume_gpu.py`'s docstring still says the mesh's model is Open3D's.

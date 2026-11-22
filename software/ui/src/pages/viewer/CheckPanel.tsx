@@ -18,7 +18,7 @@ import { CircleDashed, CircleExclamationPoint, Layers, RefreshCw, ScanLine, Sear
 import { useEffect, useId, useState, type ReactNode } from "react";
 import { describeError } from "../../api/http";
 import type { CheckArea, CheckPlanPose, CheckResult, CheckView, CheckWhy, CheckWhyArea } from "../../api/types";
-import { alsoWords, placeLetter, planTitle, planWords, poseShort, REASON_TITLE, reasonWords, sideSketch, unknownWords, viewWords } from "../../lib/checkWhy";
+import { alsoWords, placeLetter, planTitle, planWords, poseShort, sideSketch, unknownWords, viewWords, whyHead } from "../../lib/checkWhy";
 import { Button } from "../../components/ui/Button";
 import { Spinner } from "../../components/ui/Feedback";
 import { Callout } from "../../components/ui/Layout";
@@ -143,10 +143,9 @@ function SideView({ view }: { view: CheckView }) {
 function WhyBlock({ w, workingMm, onShow }: { w: CheckWhyArea; workingMm: number | null; onShow: () => void }) {
   const also = alsoWords(w);
   const unknown = w.reason === "unknown" ? unknownWords(w) : [];
-  const words = reasonWords(w, workingMm);
-  const title = REASON_TITLE[w.reason];
   // U22: a sentence that starts with its own title says it once ("Seen only at a slant (the best look was 64°…)")
-  const titled = words.startsWith(title);
+  const { title, words } = whyHead(w, workingMm);
+  const titled = title === null;
   return (
     <div className="mt-1.5 pl-7 text-[11.5px] leading-4">
       {titled ? null : <div className="font-semibold text-fg">{title}</div>}

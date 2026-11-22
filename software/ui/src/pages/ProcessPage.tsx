@@ -730,8 +730,9 @@ export default function ProcessPage({ pid, sid }: { pid: string; sid: string }) 
         />
 
         {/* top left: where we are, and the view options */}
-        <div className="pointer-events-none absolute left-4 top-4 flex flex-col items-start gap-2">
-          <Overlay className="flex h-9 items-center gap-1.5 pl-1.5 pr-3 text-sm">
+        {/* bounded on the right too, so the view options wrap inside the 3D view instead of being cut off */}
+        <div className="pointer-events-none absolute left-4 right-4 top-4 flex flex-col items-start gap-2">
+          <Overlay className="flex h-9 max-w-full items-center gap-1.5 pl-1.5 pr-3 text-sm">
             <IconButton icon={ArrowLeft} size="sm" label="Back to the project" onClick={() => navigate(paths.project(pid))} />
             <a href={href(paths.project(pid))} className="max-w-[180px] truncate text-muted hover:text-fg">
               {project?.name ?? "Project"}
@@ -752,11 +753,12 @@ export default function ProcessPage({ pid, sid }: { pid: string; sid: string }) 
             <span className="font-medium text-fg">Edit mesh</span>
           </Overlay>
           {mesh ? (
-            <Overlay className="flex flex-wrap items-center gap-1 p-1">
-              <div role="toolbar" aria-label="View options" className="flex flex-wrap items-center gap-1">
+            <Overlay className="flex max-w-full flex-wrap items-center gap-1 p-1">
+              <div role="toolbar" aria-label="View options" className="flex max-w-full flex-wrap items-center gap-1">
                 <Segmented<Shading>
                   label="Shading"
                   size="sm"
+                  wrap
                   value={devOn ? "deviation" : shading === "lasers" ? "lasers" : shownShading}
                   onChange={setShading}
                   options={[

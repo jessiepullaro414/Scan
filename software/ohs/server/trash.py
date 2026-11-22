@@ -217,7 +217,13 @@ class TrashManager:
         entry.update(id=new_sid, name=new_name)
         if entry.get("status") in ("recording", "processing"):  # it was not, when it went; be safe
             entry["status"] = "processed" if (dst / "result" / "mesh.ply").is_file() else "recorded"
-        data["scans"].append(entry)
+        # back in its old place, not last: the scans are listed by their own creation time (the project page's order),
+        # so it goes before the first one made after it; an entry without a time goes last, as before
+        created = entry.get("created")
+        at = len(data["scans"])
+        if isinstance(created, str) and created:
+            at = next((k for k, e in enumerate(data["scans"]) if isinstance(e.get("created"), str) and e["created"] > created), at)
+        data["scans"].insert(at, entry)
         st._touch(data)
         try:
             st._save(pid, data)

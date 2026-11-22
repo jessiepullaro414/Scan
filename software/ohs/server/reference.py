@@ -85,6 +85,9 @@ DISPLAY_MAX_TRIANGLES = 250_000  # the display copy: as many triangles as a smoo
 NAME_MAX = 120
 FOLDER = "references"
 INDEX = "index.json"
+#: the hint when that list cannot be read: where the file is, in words (its path goes to the log)
+_INDEX_RESTORE = ("Restore the list's file (index.json in the references folder of the project's folder) from a backup; "
+                  "the scans are untouched.")
 COMPARISON = "comparison.json"
 DEFAULT_TOLERANCE_MM = 0.3
 DEFAULT_K = 2.0
@@ -185,12 +188,11 @@ class ReferenceManager:
             return []
         except (OSError, ValueError) as e:
             log.warning("the project's list of references %s cannot be read: %s", p, e)
-            raise ApiError(500, "The project's list of CAD models cannot be read.",
-                           f"Restore {p} from a backup; the scans are untouched.") from None
+            raise ApiError(500, "The project's list of CAD models cannot be read.", _INDEX_RESTORE) from None
         refs = data.get("references") if isinstance(data, dict) else None
         if not isinstance(refs, list):
-            raise ApiError(500, "The project's list of CAD models cannot be read.",
-                           f"Restore {p} from a backup; the scans are untouched.")
+            log.warning("the project's list of references %s holds no list", p)  # the path goes to the log only
+            raise ApiError(500, "The project's list of CAD models cannot be read.", _INDEX_RESTORE)
         return [r for r in refs if isinstance(r, dict) and isinstance(r.get("id"), str)]
 
     @staticmethod

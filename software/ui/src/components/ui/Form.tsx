@@ -135,6 +135,7 @@ export function Segmented<T extends string>({
   label,
   disabled,
   size = "md",
+  wrap = false,
   className,
 }: {
   value: T;
@@ -143,13 +144,15 @@ export function Segmented<T extends string>({
   label: string;
   disabled?: boolean;
   size?: "sm" | "md";
+  /** The options go on a second line when the room runs out (a toolbar over a narrow 3D view), none hidden. */
+  wrap?: boolean;
   className?: string;
 }) {
   return (
     <div
       role="radiogroup"
       aria-label={label}
-      className={cn("inline-flex rounded-lg border border-line bg-surface-2 p-0.5", disabled && "opacity-50", className)}
+      className={cn("inline-flex rounded-lg border border-line bg-surface-2 p-0.5", wrap && "max-w-full flex-wrap", disabled && "opacity-50", className)}
       onKeyDown={(e) => {
         if (disabled) return;
         const step = e.key === "ArrowRight" || e.key === "ArrowDown" ? 1 : e.key === "ArrowLeft" || e.key === "ArrowUp" ? -1 : 0;

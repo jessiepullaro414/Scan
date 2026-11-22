@@ -6,7 +6,7 @@
  */
 import type { TablePreview, TableRaised } from "../api/types";
 import { decodeFaces } from "./fits.ts";
-import { fmtInt } from "./format.ts";
+import { fmtInt, fmtMm2 } from "./format.ts";
 
 /** The engine's default margin, mm (ohs.mesh.support.MARGIN_MM). */
 export const TABLE_MARGIN_MM = 1;
@@ -47,10 +47,9 @@ export function tableEditLabel(faces: number): string {
   return `Remove the table (${fmtInt(faces)} faces)`;
 }
 
-/** 2404.3 cm² → "2,404 cm²", 3.2 → "3.2 cm²". */
+/** In mm², the server's unit beside it (one area unit): 240430 → "240,430 mm²", 3.2 → "3.2 mm²". */
 export function fmtArea(mm2: number): string {
-  const cm2 = mm2 / 100;
-  return `${cm2 >= 100 ? fmtInt(Math.round(cm2)) : cm2 >= 10 ? cm2.toFixed(0) : cm2.toFixed(1)}\u202fcm²`;
+  return fmtMm2(mm2);
 }
 
 /** What the preview found, in one or two short sentences for the panel. */

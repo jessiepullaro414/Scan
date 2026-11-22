@@ -44,15 +44,15 @@ const preview = (over: Partial<TablePreview> = {}): TablePreview => ({
 // the label is the engine's
 check(tableEditLabel(699380) === "Remove the table (699,380 faces)", tableEditLabel(699380));
 
-// areas in cm²
-check(fmtArea(240430) === "2,404\u202fcm²", fmtArea(240430));
-check(fmtArea(1234) === "12\u202fcm²", fmtArea(1234));
-check(fmtArea(320) === "3.2\u202fcm²", fmtArea(320));
+// areas in mm², the one area unit beside the server's texts
+check(fmtArea(240430) === "240,430\u202fmm²", fmtArea(240430));
+check(fmtArea(1234) === "1,234\u202fmm²", fmtArea(1234));
+check(fmtArea(3.2) === "3.2\u202fmm²", fmtArea(3.2));
 
 // what the panel says
 {
   const f = tableFacts(preview());
-  check(f.head === "699,380 faces (2,404\u202fcm², 98\u202f% of the mesh) are the table.", f.head);
+  check(f.head === "699,380 faces (240,430\u202fmm², 98\u202f% of the mesh) are the table.", f.head);
   check(f.detail === "The table holds 97\u202f% of the scan and is flat to 0.09\u202fmm. The part is kept right down to the table.", f.detail);
   const up = tableFacts(preview({ lowest_mm: 2.04 }));
   check(up.detail.endsWith("The part is kept from 2.0\u202fmm above the table."), up.detail);

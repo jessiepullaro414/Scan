@@ -138,6 +138,25 @@ def test_move_a_scan_to_the_trash_and_restore_it(env):
     assert requests.get(env["url"] + "/api/trash", timeout=T).json()["items"] == []
 
 
+def test_a_restored_scan_goes_back_to_its_place_in_the_project(env):
+    """UX_PLAN "Left, small": a scan put back from the trash was listed last; it takes its old place again, by its own
+    creation time (the order the project page shows)."""
+    pid = _project(env)
+    a = _scan(env, pid, "First", created="2026-11-01T10:00:00+00:00")
+    b = _scan(env, pid, "Second", created="2026-11-02T10:00:00+00:00")
+    c = _scan(env, pid, "Third", created="2026-11-03T10:00:00+00:00")
+    item = requests.delete(f"{env['url']}/api/projects/{pid}/scans/{b}", timeout=T).json()["item"]
+    d = _scan(env, pid, "Fourth")  # made meanwhile (now): it stays the newest
+    assert [s["id"] for s in _scans(env, pid)] == [a, c, d]
+    r = requests.post(f"{env['url']}/api/trash/{item['id']}/restore", timeout=T)
+    assert r.status_code == 200, r.text
+    back = r.json()["scan_id"]  # its own id, or "...-r" when "Fourth" took that id in the same second
+    assert back in (b, f"{b}-r")
+    scans = _scans(env, pid)
+    assert [s["id"] for s in scans] == [a, back, c, d] and [s["name"] for s in scans] == ["First", "Second", "Third", "Fourth"]
+    assert scans[1]["created"] == "2026-11-02T10:00:00+00:00"  # its own time, kept
+
+
 def test_restore_with_a_name_clash_renames_and_never_overwrites(env):
     pid = _project(env)
     sid = _scan(env, pid, "Top")

@@ -173,7 +173,7 @@ function ScanRow({
           : [];
 
   return (
-    <li className={cn(ROW_GRID, "min-h-[64px] items-center px-4 py-2.5 transition-colors hover:bg-surface-2/60")}>
+    <li className={cn(ROW_GRID, processing && "sr-busy", "min-h-[64px] items-center px-4 py-2.5 transition-colors hover:bg-surface-2/60")}>
       <div className="sr-name flex min-w-0 items-center gap-3">
         <div className="grid h-9 w-9 shrink-0 place-items-center rounded-lg border border-line bg-surface-2 text-muted">
           {hasResult ? <Box size={16} aria-hidden /> : <Waypoints size={16} aria-hidden />}

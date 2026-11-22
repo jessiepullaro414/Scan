@@ -64,6 +64,15 @@ export function fmtDetailMm(n: number | null | undefined): string {
   return fmtMm(n, Math.abs(Math.round(n * 10) - n * 10) > 1e-6 ? 2 : 1);
 }
 
+/**
+ * An area, always in mm² as the server writes it (U22, R19: one area unit): one decimal under 10 mm², whole and
+ * grouped above ("3.2 mm²", "1,234 mm²", "240,430 mm²"); "–" when there is none.
+ */
+export function fmtMm2(n: number | null | undefined): string {
+  if (!finite(n)) return "–";
+  return withUnit(Math.abs(n) < 10 ? fmtNum(n, 1) : fmtNum(Math.round(n)), "mm²");
+}
+
 /** An image or sheet size: "1280 × 800" (with the unit when given: "210 × 297 mm"); sizes are not grouped. */
 export function fmtSize(w: number, h: number, unit = ""): string {
   const side = (n: number) => (Number.isFinite(n) ? String(Math.round(n)) : "–");

@@ -26,7 +26,7 @@ import { Badge } from "../components/ui/Badge";
 import { Button } from "../components/ui/Button";
 import { ProgressBar, Skeleton, Spinner } from "../components/ui/Feedback";
 import { Field, Switch, TextInput } from "../components/ui/Form";
-import { Callout, Code, KeyValue, Page, PageHeader, Section } from "../components/ui/Layout";
+import { Callout, KeyValue, Page, PageHeader, Section } from "../components/ui/Layout";
 import { fmtFixed, fmtPct, fmtSize, humanize, withUnit } from "../lib/format";
 import { setupTimeText } from "../lib/setup";
 import { useSetup } from "../store/setup";
@@ -241,6 +241,8 @@ export function DevicePage() {
               >
                 <TextInput
                   id="replay-path"
+                  // its name is the label's, said on the field itself too, never the example path in the placeholder
+                  aria-label="Recording folder"
                   mono
                   icon={FolderOpen}
                   placeholder="C:\Users\you\OpenHandScan\scans\scan-2026-11-08"
@@ -482,9 +484,18 @@ export function DevicePage() {
                 <EmitterSliders device={device} />
               </div>
             ) : (
-              <Callout tone="warn" icon={TriangleExclamationPoint} title="Control board not found">
-                The emitters, the trigger and the IMU need the Pico. Check its USB cable and flash the firmware (see{" "}
-                <Code>firmware/README.md</Code>), then reconnect.
+              <Callout
+                tone="warn"
+                icon={TriangleExclamationPoint}
+                title="Control board not found"
+                actions={
+                  <Button size="sm" icon={Usb} onClick={() => navigate(paths.setup("connect"))}>
+                    Show the firmware steps
+                  </Button>
+                }
+              >
+                The lasers and dots, the trigger and the motion sensor (IMU) need the control board (Pico or ESP32). Check its USB cable, or flash the
+                firmware: the steps are in Setup, on the Connect step. Then reconnect.
               </Callout>
             )
           ) : (

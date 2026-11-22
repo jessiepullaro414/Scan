@@ -47,14 +47,24 @@ export function reasonWords(a: Pick<CheckWhyArea, "reason" | "kind" | "evidence"
     case "steep":
       return `Seen only at a slant (the best look was ${deg(e.view_angle_deg)} from straight on). Hold the scanner straighter to it.`;
     case "far":
-      return `It was seen only from too far: the nearest look was ${about(e.distance_mm)} away. Hold the scanner ${about(workingMm ?? 250)} from it.`;
+      return `Seen from too far: the nearest look was ${about(e.distance_mm)} away. Hold the scanner ${about(workingMm ?? 250)} from it.`;
     case "few_looks":
-      return `It was seen too few times: ${count(e.looks)} separate looks, where the surface that passes had ${count(e.looks_passing)}. Go over it again, more slowly.`;
+      return `Seen too few times: ${count(e.looks)} separate looks, where the surface that passes had ${count(e.looks_passing)}. Go over it again, more slowly.`;
     case "edge":
-      return "It is on an edge, a tight curve or an uneven surface. The scan's own scatter there is above the tolerance, and another pass alone does not lower it.";
+      return "On an edge or a tight curve, or on an uneven surface. The scan's own scatter there is above the tolerance, and another pass alone does not lower it.";
     default:
       return "The scan's data do not tell why this area is weak.";
   }
+}
+
+/**
+ * The card's head: the reason's title and its sentence, the title said once (U22). A sentence that starts with its
+ * own title stands alone ("Seen too few times: 4 separate looks, …"); otherwise the title goes above it.
+ */
+export function whyHead(a: Pick<CheckWhyArea, "reason" | "kind" | "evidence">, workingMm: number | null): { title: string | null; words: string } {
+  const words = reasonWords(a, workingMm);
+  const title = REASON_TITLE[a.reason];
+  return { title: words.startsWith(title) ? null : title, words };
 }
 
 /** The other reasons that hold too, in one sentence ("Also seen too few times and on an edge."); null when none. */

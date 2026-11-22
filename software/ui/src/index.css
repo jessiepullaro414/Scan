@@ -413,6 +413,12 @@ input[type="range"].slider:focus-visible::-webkit-slider-thumb {
   }
   .scan-row.scan-head > .sr-details { display: none; }
   .scan-row > .sr-details { padding-left: 3rem; }
+  /* a row that is making its mesh: the progress goes under the name, so the name keeps its width */
+  .scan-row.sr-busy {
+    grid-template-columns: minmax(0, 1fr) 112px;
+    grid-template-areas: "name status" "actions actions" "details details" "fail fail";
+  }
+  .scan-row.sr-busy > .sr-actions { padding-left: 3rem; justify-content: flex-start; }
 }
 
 /* drei <Html> labels must not block orbiting unless they opt in. */

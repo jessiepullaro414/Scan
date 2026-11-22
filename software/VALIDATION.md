@@ -4583,48 +4583,80 @@ panel 0, plate 0; timings on a busy PC, not judged.
 
 ## Known limitations of the pipeline
 
-- **On the CPU path two runs of the same recording differ a little** (found 2026-11-10, cause
-  found 2026-11-13). Open3D's ray cast of its voxel grid (0.20, CPU) gives slightly different
-  answers for the same grid and pose when it runs on several threads: of 38 casts repeated in one
-  process, 14 differed, by 4 to 199 of some 25,000 surface pixels, with points up to 1.9 mm
-  apart. Depth, the laser points and the tracker's own maths are the same every time. The poses
-  then differ by up to 0.008 in a matrix entry and the mesh by a few vertices; the accuracy is
-  the same. Held to one thread (`OHS_O3D_THREADS=1`) two runs are the same bit for bit, at about
-  half the speed (128 → 290 ms a frame at 640 x 400: ray cast 43 → 106 ms, integration 9 → 55 ms),
-  so it is a switch for comparisons and `tools/snapshot.py` uses it on the CPU path; the default
-  is unchanged. The GPU path does not use these calls and repeats itself exactly.
-- Full-resolution processing takes about 0.35 s per frame on this CPU, so it is offline only. The
-  live half-resolution pipeline runs at about 90-100 ms per frame (about 10 fps), with two TSDFs
-  in memory.
+Rewritten 2026-11-21 from the sections named in each point; the numbers are today's.
+
+- **Without a GPU the camera path is weak** ("The no-GPU plate slide, and a check of the camera
+  path", 2026-11-20). Tracked path max over the 21 recordings of the no-GPU baseline: sphere 0.19
+  mm, brackets 4.5 to 7.1 (part median 0.48 to 0.69 mm, against 0.08 to 0.23 on the GPU path),
+  sheets 6.1 to 9.4, walls 5.9 to 17.9, 0.5 mm plates 14.0 to 39.1, dark and speckled brackets 8.3
+  to 43.5. The 0.5 mm plates slide in their first frames and come out thinned (to 0.11 mm on seed
+  0, with a third of the top kept; 0.27 mm with 67 to 76 % on seeds 1 and 2). The cause is the
+  tracking model this path uses (Open3D's): table pixels beside its holes and borders pull the
+  camera 3.4 to 6.6 mm against 0.4 to 1.2 mm with the GPU's model. Five settings against that
+  pull were tried and none is on: each is worse on several scenes ("The no-GPU tracking model's
+  pull: settings tried", 2026-11-21). The app warns when no GPU is used.
+- **The camera path's check misses slow drift** ("The no-GPU plate slide, and a check of the
+  camera path"). It warns above a 4 mm jump within 0.8 s: on the GPU path no false warning on 46
+  recordings that held and a warning on both that slid; without a GPU it warns on 12 of the 18
+  recordings that did not hold. The 6 it misses drift slowly at a steady wrong speed (the sheets
+  6.1 to 9.4 mm off, a bracket 7.1 mm, the two 90-frame plates 8.0 and 8.3 mm, thinned without a
+  warning). A real hand's jerk may read as a slide; the simulator's hand is smooth, so that is not
+  measured.
+- **Processing time.** Without a GPU a frame at full resolution takes 0.60 to 0.73 s on this CPU
+  (the bracket on a quiet PC; 0.45 to 0.53 s before the CPU defaults of 2026-11-20 doubled the
+  matcher's work), so it is offline only ("SGBM's paths from above, and the CPU path's slides").
+  On the Radeon 680M a frame takes 158 to 162 ms at full quality: 9.5 to 9.7 minutes of waiting
+  per minute of scanning (about 11 with reading the frames), against a target of 3; live scanning
+  runs at 15 fps ("The waits a user feels", 2026-11-10).
+- **Without a GPU the calibration status judges only the cameras** ("The CPU path's ray cast",
+  2026-11-19; "SGBM's paths from above"): the laser lines and the gyro would be judged rightly at
+  1280x800 since the defaults of 2026-11-20, but the status does not use them on this path yet.
 - Without an IMU, symmetric or featureless scenes drift: the yaw about a sphere's axis and sliding
   on a plane are unobservable. The tracker flags this as `degenerate` but cannot fix it.
 - The laser margin needs the board printed by `render_charuco_page` on the paper given to
   `lasers_from_recording(paper=...)`, with its margins intact. A trimmed page falls back to the
   board region, which is less accurate.
-- Mesh p95 is 0.7-1.2 mm, from TSDF artefacts at grazing angles, depth edges and the depth-range
-  cut-off. The laser cloud, at 0.07 mm median, is the more accurate surface sample. It is exported
-  separately and is not yet used to refine the mesh.
-- **Small holes are filled in** (found 2026-11-12, "Fitted shapes against the truth"): where the
-  background behind a hole is far away, the stereo depth carries the surface 1-3 mm into the
-  hole. Since 2026-11-13 the gap guard keeps that depth out of the mesh ("The gap guard in the
-  engine"): a Ø 25 mm hole, which fused to an opening of Ø 12-14 mm, now fits 1 to 1.6 mm small
-  at true poses and 0.9 to 3 mm small with tracking. Holes of Ø 6-10 mm over a far, dark
-  background stay closed, and a hole 10 mm above its background still fails to fit. The guard's
-  price: on a small part with many edges, with tracking, 1-7 points less coverage and worst
-  errors 0.1-0.2 mm larger.
-- **Convex features are fattened:** a Ø 16 mm shaft reads 0.2 mm large at true poses and 1.1 mm
-  large with tracking; a short boss's wall is wavy by ±0.3 mm. The cause, found on 2026-11-14
-  ("Where a tracked scan's shape errors come from"): the tracking model and the mesh both mark
-  the space behind a surface as inside the part, up to 8 mm and 4 mm deep, so edges and thin
-  features swell. With tracking a scan of a part with edges was about 0.3 mm too fat all over, and
-  a sheet thinner than 4 mm that is seen from both sides read 1 to 2.5 mm too thick. Since the
-  same day the GPU tracking model marks 4 mm instead of 8 mm: the part is 0.15 mm too fat (the
-  shaft's radius +0.17 mm instead of +0.47 mm) and such a sheet reads 0.9 to 1.9 mm too thick.
-  Without a GPU the tracking model is unchanged. The mesh's own band of 4 mm is, since the same
-  day, short behind the surface (2 mm) for scans without markers on the GPU path
-  (`thin_walls`): the part is 16 % instead of 20 % more than 0.3 mm off and such a sheet reads
-  0.3–0.4 mm less thick again (a 2 mm flange 3.0 mm). Small bosses read 0.1 mm small in radius
-  with it. Marker mode and the CPU path keep the whole band. The GPU tracking model also stops
-  writing through walls and past edges once it knows a place (the same day): the part is 13 %
-  more than 0.3 mm off, its mean offset +0.01 mm instead of +0.12 mm, and a 2 mm flange reads
-  2.7–3.0 mm. Walls under about 2 mm stay 0.4–0.7 mm too thick with tracking.
+- **The mesh's p95** ("The scorecard's baseline", 2026-11-20, GPU path, the part alone): 0.13 to
+  0.25 mm on smooth parts (the sphere, the 0.5 mm plate, the end-to-end panel), 0.45 to 0.49 mm on
+  the bracket tracked (0.41 to 0.43 at true poses), 0.36 to 0.44 mm on the door, 0.51 to 0.80 mm
+  on the sheet part and the standing walls, 1.2 to 2.0 mm on the hole plates. On the 200-frame car
+  panel it is 1.7 to 2.3 mm: 7 to 9 % of its vertices are fused fill hanging up to 15 mm past its
+  free edge. The laser lines are used in the mesh where they disagree with it ("Refine with
+  lasers", 2026-11-10): the stage moves the mesh only where at least 1 % of it would move, and
+  only within about 15 mm of where the lines swept.
+- **Small holes are filled in** ("Holes filled in", 2026-11-12; "The scorecard's baseline"). Where
+  the background behind a hole is far away, the stereo depth carries the surface into the hole;
+  the gap guard keeps most of it out. Today, GPU path: the Ø 25 hole 120 mm above its floor reads
+  1.40 to 1.57 mm small at true poses and 2.9 to 6.9 mm small tracked (seed 0 lost tracking), and
+  its Ø 10 and Ø 6 holes give no fit; 10 mm above the floor the Ø 25 reads -0.20 to +0.47 tracked,
+  the Ø 10 within 0.2 mm, the Ø 6 no fit; the 200-frame car panel's Ø 25 reads 0.97 to 1.37 mm
+  small tracked. The guard's price on a small part with many edges, tracked: 0.7 to 2.0 points of
+  coverage ("The gap guard in the engine", the note of 2026-11-16). Measured and not adopted: a
+  wider guard by the matcher's doubt (holes better, walls, ribs, bosses and coverage worse; "The
+  gap guard by the matcher's doubt", 2026-11-21) and hole rims from the laser lines' ends (no fit
+  within 0.2 mm; "Hole rims from the laser lines' ends", 2026-11-21).
+- **Thin parts read too thick, and bosses read small, with tracking** ("The scorecard's
+  baseline"; the walls as Make mesh runs them since 2026-11-21). Tracked, GPU path: the 0.5 / 1 /
+  2 mm standing walls read 1.18 to 1.26 / 0.70 to 0.91 / 0.53 to 0.66 mm too thick (at true poses
+  0.76 to 0.84 / 0.40 to 0.62 / 0.16 to 0.35); on the sheet part the 1 mm rib reads 0.66 to 1.21
+  mm too thick, the 3 mm rib 0.17 to 0.72, the flange 0.25 to 0.60; the bracket's bosses read 0.07
+  to 0.27 mm small in radius (0.22 to 0.30 at true poses) and its shaft within 0.07 mm. A 0.5 mm
+  plate lying flat reads within 0.01 mm. The cause of the tracked excess ("Poses refined against
+  the finished scan", 2026-11-21): one camera offset shared by every frame, 0.19 to 0.25 mm
+  outward on every sheet and wall recording, which leaves the scan consistent with itself, so
+  nothing that refines against the scan can find it. The tracking model's band behind the surface
+  sets where it settles; a shorter band moves every recording inward together and was not adopted
+  ("Tracking on dark, plain and thin parts", 2026-11-21).
+- **Straighten's laser-crossing adjustment can move the path wrongly on thin walls**
+  ("Straighten's laser crossings on what Make mesh runs", 2026-11-21). Since 2026-11-21 its test
+  holds out whole frames, which refuses the standing walls and keeps the real drift case; when it
+  does act the scan's warnings say so. Neither its old test nor the new one catches drift added to
+  a 640 px walls recording: both pass and the path gets worse (4.8 to 22.6 mm rms).
+- **Dark, speckled and hard scenes slip in their first frames** ("The scorecard's baseline";
+  "Tracking on dark, plain and thin parts"): last frame 0.35 to 3.79 mm off on the GPU path, made
+  at frames 1 and 2 against a model of one frame and then held. The hole plate 120 mm up loses
+  tracking on seed 0 at frames 52 to 56 (13.8 mm off at frame 53) while the tracker's own numbers
+  stay healthy.
+- On the CPU path two runs of the same recording were found to differ a little (2026-11-10); the
+  cause was found and mended ("The CPU path's ray cast: a crash, a hang and runs that differed",
+  2026-11-19).

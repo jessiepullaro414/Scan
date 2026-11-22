@@ -303,6 +303,16 @@ export function passOfText(s: Pick<Scan, "continues">): string | null {
   return `Second pass of “${c.scan_name}”${t ? `, ${t}` : ""}`;
 }
 
+/**
+ * While a scan records that is not the pass the Scan page has set up (the scanner's trigger always starts an
+ * ordinary scan, never a pass), one plain sentence that says so and that the pass still waits; null otherwise.
+ * `sessionLink`: the scan the recording session continues (`session.continues.scan_id`), null for an ordinary scan.
+ */
+export function passWaitingNote(pending: Pick<PendingPass, "firstId" | "firstName"> | null, live: boolean, sessionLink: string | null): string | null {
+  if (!pending || !live || sessionLink === pending.firstId) return null;
+  return `An ordinary scan was started, not the second pass of “${pending.firstName}”: the pass is still waiting, and Start on this page begins it once this scan is stopped.`;
+}
+
 /** The setup the pass is sent with, in words (as the engine says it back in `PassLink.setup_words`). */
 export function setupWords(sameSetup: boolean): string {
   return sameSetup

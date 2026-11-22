@@ -20,7 +20,7 @@ import { CalibHealthCallout } from "../components/CalibHealth";
 import { PresetPicker } from "../components/PresetPicker";
 import { Callout } from "../components/ui/Layout";
 import { calibOpen, scanReason } from "../lib/calibOpen";
-import { passPresetFields, passStartBody } from "../lib/pass";
+import { passPresetFields, passStartBody, passWaitingNote } from "../lib/pass";
 import { useCalib } from "../store/calib";
 import { ErrorBoundary } from "../components/shell/ErrorBoundary";
 import { navigate, paths } from "../lib/router";
@@ -122,6 +122,8 @@ export default function ScanPage({
   const live = phase === "scanning" || phase === "paused";
   const passPending = pending && continues && pending.firstId === continues && pending.projectId === projectId ? pending : null;
   const pass = live ? (pending && sessionLink === pending.firstId ? pending : null) : passPending;
+  // a scan that is not the pass set up here (the scanner's trigger never starts a pass): said, not silent
+  const passWaiting = passWaitingNote(passPending, live, sessionLink);
   const firstScan = useProjects((s) => (pass ? s.details[pass.projectId]?.scans.find((x) => x.id === pass.firstId) : undefined));
   // the pass scans as the first scan was scanned, unless the user changes it; the card of an earlier scan makes way
   useEffect(() => {
@@ -267,6 +269,12 @@ export default function ScanPage({
       >
         <CameraPreviews />
         {pass ? <PassSetup pending={pass} live={live} firstScan={firstScan} presetName={presetName} /> : null}
+        {passWaiting ? (
+          // the scanner's trigger starts an ordinary scan, never a pass: say so, and that the pass still waits
+          <div className="border-b border-line p-3" role="status">
+            <Callout tone="neutral" title={passWaiting} />
+          </div>
+        ) : null}
         {!pass && continues && !live && !lastStopped ? (
           <div className="border-b border-line p-3">
             <Callout tone="neutral" title="Nothing to scan again yet">

@@ -4,7 +4,7 @@
  * TypeScript that Node runs as it is (type stripping), no test framework: a failed check throws.
  */
 import type { CheckPlanPose, CheckPose, CheckResult, CheckWhy, CheckWhyArea } from "../api/types";
-import { alsoWords, placeLetter, planTitle, planWords, poseAxes, poseFrame, poseShort, REASON_TITLE, reasonWords, scannerLines, sideSketch, unknownWords, viewWords, whyFits } from "./checkWhy.ts";
+import { alsoWords, placeLetter, planTitle, planWords, poseAxes, poseFrame, poseShort, REASON_TITLE, reasonWords, scannerLines, sideSketch, unknownWords, viewWords, whyFits, whyHead } from "./checkWhy.ts";
 
 let checks = 0;
 function check(ok: boolean, what: string): void {
@@ -38,6 +38,23 @@ check(reasonWords({ reason: "not_seen", kind: "not_measured", evidence: ev() }, 
 check(reasonWords({ reason: "not_seen", kind: "uncertain", evidence: ev() }, null).includes("never saw"), "not seen: beside unseen surface");
 check(reasonWords({ reason: "unknown", kind: "uncertain", evidence: ev() }, null).includes("do not tell"), "unknown");
 for (const w of [steep, far, few, edge]) check(!w.includes("—") && !w.includes("–"), "no dashes in the words");
+check(few === "Seen too few times: 4 separate looks, where the surface that passes had 12. Go over it again, more slowly.", `few looks: says its title once: ${few}`);
+check(far.startsWith("Seen from too far: the nearest look was about 400 mm away."), `far: says its title once: ${far}`);
+// every reason's title against its sentence: the card says the title once, either above the sentence or as its start
+{
+  const reasons = Object.keys(REASON_TITLE) as (keyof typeof REASON_TITLE)[];
+  const looks = ev({ looks: 4, looks_passing: 12, view_angle_deg: 68.4, distance_mm: 402.3 });
+  for (const reason of reasons) {
+    for (const kind of ["uncertain", "not_measured"] as const) {
+      const h = whyHead({ reason, kind, evidence: looks }, 254);
+      const title = REASON_TITLE[reason];
+      check(h.words === reasonWords({ reason, kind, evidence: looks }, 254), `${reason}: the sentence is the reason's`);
+      if (h.title === null) check(h.words.startsWith(title), `${reason}: no title only when the sentence starts with it`);
+      else check(h.title === title && !h.words.toLowerCase().includes(title.toLowerCase()), `${reason} (${kind}): the title is said again in "${h.words}"`);
+    }
+  }
+  check(whyHead({ reason: "few_looks", kind: "uncertain", evidence: looks }, 254).title === null, "few looks: the title is the sentence's start, not a line above it");
+}
 
 check(alsoWords({ reason: "steep", reasons: ["steep"] }) === null, "also: nothing more");
 check(alsoWords({ reason: "steep", reasons: ["steep", "few_looks", "edge"] }) === "Also seen too few times and on an edge or a tight curve.", "also: two more");

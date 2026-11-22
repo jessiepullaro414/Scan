@@ -84,6 +84,8 @@ function RecipeRow({
               onClick={t.onClick}
               aria-haspopup={t["aria-haspopup"]}
               aria-expanded={t["aria-expanded"]}
+              // a screen reader hears which recipe it applies; the name starts with the visible word
+              aria-label={`Apply “${recipe.name}”`}
               size="xs"
               variant="secondary"
               iconRight={ChevronDown}

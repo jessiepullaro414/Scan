@@ -70,9 +70,31 @@ def _call_name(node: ast.Call) -> str:
     return f.id if isinstance(f, ast.Name) else f.attr if isinstance(f, ast.Attribute) else ""
 
 
-def _text_problems(expr: ast.AST, caught: set[str]) -> list[str]:
+#: a name that holds a file's or a folder's path (UX_PLAN "Left, small": "Restore {p} from a backup" showed one)
+PATHLIKE_NAME = re.compile(r"(?i)(^p$|path$|_dir$|^dir$|folder$|^dst$|^src$)")
+
+
+def _path_names(tree: ast.AST) -> set[str]:
+    """The names bound to a path in ``tree``: named like one (``path``, ``..._dir``, ``folder``), or given a
+    ``Path(...)``, a ``... / ...`` join or the result of a call named ``..._path`` or ``..._dir``."""
+    out: set[str] = set()
+    for n in ast.walk(tree):
+        if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store) and PATHLIKE_NAME.search(n.id):
+            out.add(n.id)
+        if isinstance(n, ast.Assign) and len(n.targets) == 1 and isinstance(n.targets[0], ast.Name):
+            v = n.value
+            made = (isinstance(v, ast.BinOp) and isinstance(v.op, ast.Div)) or (
+                isinstance(v, ast.Call) and re.search(r"(^Path$|_path$|_dir$)", _call_name(v)))
+            if made:
+                out.add(n.targets[0].id)
+    return out
+
+
+def _text_problems(expr: ast.AST, caught: set[str], paths: frozenset[str] = frozenset()) -> list[str]:
     out = []
     for sub in ast.walk(expr):
+        if isinstance(sub, ast.FormattedValue) and isinstance(sub.value, ast.Name) and sub.value.id in paths:
+            out.append(f"a file's or folder's path ({{{sub.value.id}}}): say where in words; the path goes to the log")
         if isinstance(sub, ast.Call) and _call_name(sub) == "plain_reason":
             continue
         if isinstance(sub, ast.Constant) and isinstance(sub.value, str):
@@ -97,13 +119,14 @@ def problems(source: str, filename: str = "<source>") -> list[str]:
     """Every text for the user in ``source`` that breaks the rule, as ``file:line: why``."""
     tree = ast.parse(source, filename)
     caught = _caught(tree)
+    paths = frozenset(_path_names(tree))
     found: list[str] = []
     records = {n.value for n in ast.walk(tree) if isinstance(n, ast.Assign) and isinstance(n.value, ast.Dict)
                and any((t.attr if isinstance(t, ast.Attribute) else getattr(t, "id", None)) in RECORDS for t in n.targets)}
 
     def check(expr: ast.AST, at: ast.AST) -> None:
         names = caught.get(at, set())
-        for why in dict.fromkeys(_text_problems(expr, names)):
+        for why in dict.fromkeys(_text_problems(expr, names, paths)):
             found.append(f"{filename}:{getattr(expr, 'lineno', getattr(at, 'lineno', 0))}: {why}")
 
     # the arguments are skipped inside other text calls' plain_reason (already filtered)
@@ -136,10 +159,18 @@ def problems(source: str, filename: str = "<source>") -> list[str]:
 
 
 # --------------------------------------------------------------------------- the rule on the server's source
+#: paths a text shows on purpose, each with why: (module, the name in the text)
+PATH_SHOWN_ON_PURPOSE = {
+    ("calibration.py", "path"): "the saved calibration file, shown on purpose (UX_PLAN: the saved file and its backup shown)",
+    ("devices.py", "path"): "the recording folder the user typed in the Replay field, said back to them",
+}
+
+
 def test_every_text_of_the_server_follows_the_rule():
     files = sorted(SERVER.glob("*.py"))
     assert len(files) > 25
-    found = [p for f in files for p in problems(f.read_text(encoding="utf-8"), f.name)]
+    found = [p for f in files for p in problems(f.read_text(encoding="utf-8"), f.name)
+             if not any(p.startswith(f"{m}:") and f"({{{n}}})" in p for m, n in PATH_SHOWN_ON_PURPOSE)]
     assert not found, "texts for the user that break UX_PLAN U9:\n" + "\n".join(found)
 
 
@@ -168,6 +199,11 @@ OLD = [
     ('X_HINT = "check the request body against APP_API.md \u2014 or GET /api/docs"', 3),
     ('except Exception as e:\n    crep = {"ok": False, "verdict": "failed", "summary": f"The check failed: {e}"}', 1),
     ('except Exception as e:\n    res = {"state": "fail", "detail": str(e)}', 1),
+    # the project file's path in a hint (projects._load, until 2026-11-21)
+    ('p = self._json_path(pid)\ntry:\n    pass\nexcept (OSError, ValueError) as e:\n'
+     '    raise ApiError(500, "The project\'s file cannot be read.",\n'
+     '                   f"Restore {p} from a backup; the scans inside the project\'s folder are untouched.") from None', 1),
+    ('folder = root / pid\nraise ApiError(409, f"Nothing could be written to {folder}.", "Check the disk.")', 1),
 ]
 #: texts that follow the rule (and look a little like those that do not)
 FINE = [
@@ -178,6 +214,9 @@ FINE = [
     'raise ApiError(409, f"The scan \\"{name}\\" is busy.", "Wait until it has finished (see Jobs).")',
     'notify("info", "Pipes, ohms and posts are words: Get it, post it.")',
     'except ValueError as e:\n    self.last_report = {"kind": kind, "error": str(e)}',
+    'p = self._json_path(pid)\nlog.warning("project %s cannot be read: %s", p, "x")\n'
+    'raise ApiError(500, "The project\'s file cannot be read.", "Restore the project\'s file from a backup.")',
+    'path = root / "x"\nraise ApiError(409, f"The scan \\"{name}\\" is busy.", "Wait.")',
 ]
 
 
@@ -195,6 +234,23 @@ def test_the_guard_catches_the_old_texts(src, n):
 @pytest.mark.parametrize("src", FINE)
 def test_the_guard_lets_plain_texts_through(src):
     assert problems(_in_try(src)) == []
+
+
+def test_a_project_file_that_cannot_be_read_is_said_without_its_path(tmp_path):
+    """UX_PLAN "Left, small": the hint named the file's full path; it says where in words, the path is in the log."""
+    from ohs.server.projects import ProjectStore
+    from ohs.server.protocol import ApiError
+
+    store = ProjectStore(tmp_path / "projects")
+    folder = tmp_path / "projects" / "door-bracket-1a2b"
+    folder.mkdir(parents=True)
+    (folder / "project.json").write_text("{ not json", encoding="utf-8")
+    with pytest.raises(ApiError) as err:
+        store.get("door-bracket-1a2b")
+    e = err.value
+    assert e.status == 500 and e.detail == "The project's file cannot be read."
+    assert str(tmp_path) not in e.hint and "door-bracket-1a2b" not in e.hint and "\\" not in e.hint, e.hint
+    assert e.hint.startswith("Restore the project's file") and e.hint.endswith("untouched."), e.hint
 
 
 # --------------------------------------------------------------------------- the helpers behind the rule

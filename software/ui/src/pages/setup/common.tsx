@@ -48,17 +48,16 @@ export function SimChip({ className }: { className?: string }) {
         </div>
       }
     >
+      {/* not focusable: it is not a control (a focused chip let the page's shortcuts take Space); a screen reader reads its whole text */}
       <span
-        tabIndex={0}
         className={cn(
           "inline-flex h-7 shrink-0 items-center gap-1.5 rounded-full border border-accent-line/70 bg-accent-soft px-2.5 text-xs font-medium text-accent",
           className,
         )}
-        aria-label="Simulator: your real calibration is untouched"
       >
         <FlaskConical size={13} aria-hidden />
         <span>
-          Simulator<span className="hidden xl:inline">: your real calibration is untouched</span>
+          Simulator<span className="sr-only xl:not-sr-only">: your real calibration is untouched</span>
         </span>
       </span>
     </Tooltip>

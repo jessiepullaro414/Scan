@@ -71,20 +71,22 @@ export function PassSetup({ pending, live, firstScan, presetName }: { pending: P
         <div className="min-w-0 flex-1">
           <h2 className="text-sm font-semibold text-fg">Second pass of “{pending.firstName}”</h2>
           <div className="text-[11.5px] leading-4 text-muted">{areasWords(pending.areas, pending.tolerance)}</div>
+          {/* under the title, not beside it: beside it the button squeezed the title into a narrow column */}
+          {!live ? (
+            <Button
+              size="xs"
+              variant="ghost"
+              icon={X}
+              className="-ml-2 mt-1"
+              onClick={() => {
+                clear();
+                navigate(paths.scan(pending.projectId), { replace: true });
+              }}
+            >
+              Make an ordinary scan instead
+            </Button>
+          ) : null}
         </div>
-        {!live ? (
-          <Button
-            size="xs"
-            variant="ghost"
-            icon={X}
-            onClick={() => {
-              clear();
-              navigate(paths.scan(pending.projectId), { replace: true });
-            }}
-          >
-            Make an ordinary scan instead
-          </Button>
-        ) : null}
       </div>
       <div className="mt-2">
         <PassReference

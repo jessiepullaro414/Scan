@@ -4,7 +4,7 @@
  * runs as it is (type stripping), no test framework: a failed check throws.
  */
 import type { CheckPlanPose, CheckPose, CheckResult, CheckWhy, PassCompare } from "../api/types";
-import { areaAfterWords, areaLines, missingSentence, passOfText, placesWords, areasWords, chainActive, chainCanContinue, chainRows, compareRows, compareSentence, passPresetFields, passStartBody, pendingFromCheck } from "./pass.ts";
+import { areaAfterWords, areaLines, missingSentence, passOfText, placesWords, areasWords, chainActive, chainCanContinue, chainRows, compareRows, compareSentence, passPresetFields, passStartBody, passWaitingNote, pendingFromCheck } from "./pass.ts";
 
 let checks = 0;
 function check(ok: boolean, what: string): void {
@@ -120,5 +120,17 @@ check(compareSentence({ ...moved, common: { found_share: 0.99, before_ok: 0.8, a
 
 check(passOfText({}) === null, "an ordinary scan");
 check(passOfText({ continues: { scan_name: "Top", chain: { state: "merged" } } as never }) === "Second pass of “Top”, merged", "a merged pass");
+
+// a scan that starts while the page has a pass set up, but is not that pass (the scanner's trigger starts an
+// ordinary scan, never a pass): said in one plain sentence, while it records
+{
+  const waiting = passWaitingNote(p, true, null);
+  check(waiting === "An ordinary scan was started, not the second pass of “Top”: the pass is still waiting, and Start on this page begins it once this scan is stopped.", `ordinary scan while a pass waits: ${waiting}`);
+  check(passWaitingNote(p, true, "s9") === waiting, "a pass of another scan is not this pass either");
+  check(passWaitingNote(p, true, "s1") === null, "the pass itself started: nothing to say");
+  check(passWaitingNote(p, false, null) === null, "nothing records: the pass panel says it");
+  check(passWaitingNote(null, true, null) === null, "no pass set up: an ordinary scan as asked");
+  check(!/[—–]/.test(waiting!) && (waiting!.match(/\. /g) ?? []).length === 0, "one sentence, no dashes");
+}
 
 console.log(`pass.test: ${checks} checks passed`);

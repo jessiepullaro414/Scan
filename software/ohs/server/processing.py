@@ -479,7 +479,7 @@ class RecipeStore:
         except (OSError, ValueError) as e:
             log.warning("recipe %s cannot be read: %s", p, e)
             raise ApiError(500, "This recipe's file cannot be read.",
-                           f"Delete the recipe, or restore {p} from a backup.") from None
+                           "Delete the recipe, or restore its file from a backup.") from None
 
     @staticmethod
     def validate(settings: dict, ops: list) -> tuple[dict, list[dict]]:

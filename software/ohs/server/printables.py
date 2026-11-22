@@ -186,7 +186,8 @@ def file_path(manifest: dict | None, name: str) -> tuple[Path, str]:
     except OSError:
         inside = False
     if not inside or not path.is_file():
-        raise ApiError(404, f"{name} is no longer in {folder}.", "Make the printables again.")
+        log.warning("printable %s is not in %s", name, folder)  # the path goes to the log, not to the page
+        raise ApiError(404, f"{name} is no longer in the printables folder.", "Make the printables again.")
     return path, MEDIA_TYPES[path.suffix.lower()]
 
 
