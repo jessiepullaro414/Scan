@@ -41,14 +41,14 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import dataclass, replace
-from typing import Callable, Sequence
+from typing import Callable, Iterator, Sequence
 
 import numpy as np
 
 from ohs.geometry import invert_se3
 
 __all__ = ["SpacetimeParams", "resolve_params", "Patches", "make_patches", "patch_views", "patch_costs",
-           "search_offsets", "project_onto_patches", "refine_from_images", "frames_from_recording"]
+           "search_offsets", "GpuResetError", "guard_patches", "project_onto_patches", "refine_from_images", "frames_from_recording"]
 
 log = logging.getLogger(__name__)
 
@@ -77,6 +77,22 @@ class SpacetimeParams:
     occlusion_mm: float = 1.0  # a ray hitting the mesh this much before the patch is blocked
     smooth_mm: float | None = None  # Gaussian scale of the patches' weights on a vertex; None: spacing_mm
     gate_mm: float = 1.0  # a vertex farther than this from a patch's surface ignores that patch
+    # The guard (ENGINE_PLAN X6; every part off by default, so the stage "Refine from the images" is as before; Make
+    # mesh's ``[process] refine_from_images`` turns it on, :func:`guard_patches`): kept patches are left out where the
+    # mesh is not smooth (within ``fit * half_mm`` of the centre a vertex normal turns more than ``guard_smooth_deg``
+    # from the patch's), near a free edge (a boundary vertex within ``guard_edge_mm``), on a thin wall (the mesh's other
+    # side, facing the other way, within ``guard_thin_mm`` behind the centre), or where the refined surface lies more
+    # than ``guard_move_mm`` from the fused one; and a vertex that would move more than ``guard_move_mm`` stays where
+    # it is. Leaving a vertex as it is never thins a part.
+    guard_smooth_deg: float | None = None
+    guard_edge_mm: float | None = None
+    guard_thin_mm: float | None = None
+    guard_move_mm: float | None = None
+
+    @property
+    def guarded(self) -> bool:
+        return any(x is not None for x in (self.guard_smooth_deg, self.guard_edge_mm, self.guard_thin_mm,
+                                            self.guard_move_mm))
 
 
 def resolve_params(params: SpacetimeParams | None, V: np.ndarray, T_wc: np.ndarray, K: np.ndarray,
@@ -356,16 +372,19 @@ inline int stats(__global const uchar *Lf, __global const uchar *Rf, const int W
 }
 
 /* One work item per (patch, candidate offset): the capped cost summed over the patch's views
-   (a view whose samples leave the image costs the cap, so every offset has the same count). */
+   (a view whose samples leave the image costs the cap, so every offset has the same count). A launch
+   does the NP patches from P0 on (a batch: short launches, the card also draws the desktop). */
 __kernel void wss_cost(__global const uchar *L, __global const uchar *R, const int W, const int H,
                        __global const float *pose, const float fx, const float fy, const float cx,
                        const float cy, const float fB, __global const float *geo,
                        __global const float *deltas, const int D, const int NP,
                        __global const int *voff, __global const int *vidx, const int ns,
-                       const float step, const float cap, __global float *C, __global float *Wt)
+                       const float step, const float cap, __global float *C, __global float *Wt,
+                       const int P0)
 {
-    const int gid = get_global_id(0);
-    if (gid >= NP * D) return;
+    const int lid = get_global_id(0);
+    if (lid >= NP * D) return;
+    const int gid = P0 * D + lid;
     const int p = gid / D;
     const float delta = deltas[gid];
     const size_t img = (size_t)W * (size_t)H;
@@ -382,15 +401,17 @@ __kernel void wss_cost(__global const uchar *L, __global const uchar *R, const i
     Wt[gid] += wt;
 }
 
-/* One work item per (patch, view): does the view hold texture in both images at the patch? */
+/* One work item per (patch, view): does the view hold texture in both images at the patch? A launch
+   does the NE (patch, view) pairs from E0 on. */
 __kernel void wss_texture(__global const uchar *L, __global const uchar *R, const int W, const int H,
                           __global const float *pose, const float fx, const float fy, const float cx,
                           const float cy, const float fB, __global const float *geo, const int NE,
                           __global const int *vpatch, __global const int *vidx, const int ns,
-                          const float step, const float tex2, __global uchar *flag)
+                          const float step, const float tex2, __global uchar *flag, const int E0)
 {
-    const int gid = get_global_id(0);
-    if (gid >= NE) return;
+    const int lid = get_global_id(0);
+    if (lid >= NE) return;
+    const int gid = E0 + lid;
     const int p = vpatch[gid], f = vidx[gid];
     const size_t img = (size_t)W * (size_t)H;
     float vl, vr, cv;
@@ -499,6 +520,25 @@ def _texture_cpu(geo: np.ndarray, fr: _Frames, K: np.ndarray, baseline: float, v
     return out
 
 
+#: the GPU search's launches (:meth:`_GpuCost._batches`), in samples (a sample: one point of a patch read in the left
+#: and the right image of one view at one offset), per kernel: the first launch's size, the time each later one aims at
+#: (from that kernel's pace measured so far) and the most any launch takes. Measured on the Radeon 680M (panel200-s0,
+#: 2026-11-22): the cost does about 2e9 samples a second, the texture test only about 1.2e8 (each item reads one view of
+#: one patch, scattered over the frames), so the caps are about 0.2 s of each. Before 2026-11-22 each was one launch
+#: of up to 3 s, over the 2 s after which Windows resets the driver.
+BATCH_FIRST_WORK = {"cost": 2.5e7, "texture": 3.0e6}
+BATCH_TARGET_S = 0.12
+BATCH_MAX_WORK = {"cost": 4.0e8, "texture": 2.5e7}
+GPU_RESET_TEXT = ("The graphics driver seems to have been reset during Refine from the images (its results changed "
+                  "when checked), so the mesh was left unchanged.")
+GPU_RESET_HINT = ("Run “Refine from the images” again. If it happens again, close other programs that use the "
+                  "graphics card.")
+
+
+class GpuResetError(RuntimeError):
+    """The GPU search's self-check failed (:meth:`_GpuCost.check`): the driver was reset part way."""
+
+
 class _GpuCost:
     """The kernels on one OpenCL device. The frames are uploaded in groups that fit its memory (one
     group stays resident); :meth:`set_patches` chooses the patches and their views."""
@@ -525,6 +565,13 @@ class _GpuCost:
         self._csr: list[dict] = []
         self.geo_buf = None
         self.n = 0
+        # short launches (:meth:`_batches`): a forced batch size in samples (tests), the cap, the pace learnt (samples
+        # a second), each launch's kernel, size, work and time, and the first cost launch for :meth:`check`
+        self.batch_work: float | None = None
+        self.max_work: float | None = None
+        self._rate: dict[str, float] = {}
+        self.launches: list[dict] = []
+        self._check: dict | None = None
 
     def _buf(self, a: np.ndarray, write: bool = False) -> object:
         mf = self.cl.mem_flags
@@ -573,6 +620,42 @@ class _GpuCost:
         return [Lb, Rb, np.int32(w), np.int32(h), pb, np.float32(K[0, 0]), np.float32(K[1, 1]), np.float32(K[0, 2]),
                 np.float32(K[1, 2]), np.float32(self.fB), self.geo_buf]
 
+    # ---- short launches: batches of patches sized by their work (samples taken), adapted to the device's pace
+    def _batches(self, work: np.ndarray, kernel: str) -> Iterator[tuple[int, int]]:
+        """``(start, stop)`` ranges over items of ``kernel`` whose work (samples each) is ``work``: the first batch
+        :data:`BATCH_FIRST_WORK` samples, then what that kernel's measured pace does in :data:`BATCH_TARGET_S`, never
+        more than :data:`BATCH_MAX_WORK` (or :attr:`max_work` when set; at least one item). Each batch is a launch followed by ``finish``, so no launch
+        runs long (the GPU also draws the desktop; Windows resets a driver whose launch runs over 2 s)."""
+        cum = np.concatenate([[0.0], np.cumsum(np.asarray(work, dtype=np.float64))])
+        a, n = 0, len(work)
+        while a < n:
+            rate = self._rate.get(kernel)
+            if self.batch_work is not None:
+                want = float(self.batch_work)
+            elif rate is None:
+                want = BATCH_FIRST_WORK[kernel]
+            else:
+                want = rate * BATCH_TARGET_S
+            cap = BATCH_MAX_WORK[kernel] if self.max_work is None else float(self.max_work)
+            want = max(1.0, min(want, cap))
+            b = int(np.searchsorted(cum, cum[a] + want, side="right")) - 1
+            b = min(n, max(a + 1, b))
+            yield a, b
+            a = b
+
+    def _launch(self, kernel: object, name: str, n_items: int, work: float) -> None:
+        """One launch of ``n_items`` work items, waited for; its time teaches the pace (:attr:`launches`)."""
+        t0 = time.perf_counter()
+        self.cl.enqueue_nd_range_kernel(self.queue, kernel, (((n_items + 63) // 64) * 64,), (64,))
+        self.queue.finish()
+        dt = time.perf_counter() - t0
+        self.launches.append({"kernel": name, "items": int(n_items), "work": float(work), "s": round(dt, 4)})
+        log.debug("spacetime launch %s: %d items, %.3g samples, %.4f s", name, n_items, work, dt)
+        if dt > 0.005 and work > 0:  # too short to time well: keep the pace as it is
+            r = work / dt
+            old = self._rate.get(name)
+            self._rate[name] = r if old is None else 0.5 * (old + r)
+
     def texture(self, ns: int, step: float, tex2: float) -> np.ndarray:
         out = np.zeros((self.n, len(self.fr)), dtype=bool)
         for gi in self._order():
@@ -582,9 +665,11 @@ class _GpuCost:
                 continue
             flag = np.zeros(ne, dtype=np.uint8)
             fb, pbuf, ibuf = self._buf(flag, write=True), self._buf(c["vpatch"]), self._buf(c["vidx"])
-            self.k_tex.set_args(*self._common(gi), np.int32(ne), pbuf, ibuf, np.int32(ns), np.float32(step),
-                                np.float32(tex2), fb)
-            self.cl.enqueue_nd_range_kernel(self.queue, self.k_tex, (((ne + 63) // 64) * 64,), (64,))
+            common = self._common(gi)
+            for e0, e1 in self._batches(np.full(ne, float(ns * ns)), "texture"):
+                self.k_tex.set_args(*common, np.int32(e1 - e0), pbuf, ibuf, np.int32(ns), np.float32(step),
+                                    np.float32(tex2), fb, np.int32(e0))
+                self._launch(self.k_tex, "texture", e1 - e0, float((e1 - e0) * ns * ns))
             self.cl.enqueue_copy(self.queue, flag, fb)
             self.queue.finish()
             for b in (fb, pbuf, ibuf):
@@ -593,30 +678,81 @@ class _GpuCost:
             out[c["vpatch"], fs[c["vidx"]]] = flag.astype(bool)
         return out
 
+    def _cost_run(self, gi: int, p0: int, p1: int, D: int, d_buf: object, c_buf: object, w_buf: object, ob: object,
+                  ib: object, ns: int, step: float, cap: float, work: float) -> None:
+        self.k_cost.set_args(*self._common(gi), d_buf, np.int32(D), np.int32(p1 - p0), ob, ib, np.int32(ns),
+                             np.float32(step), np.float32(cap), c_buf, w_buf, np.int32(p0))
+        self._launch(self.k_cost, "cost", (p1 - p0) * D, work)
+
     def cost(self, deltas: np.ndarray, ns: int, step: float, cap: float) -> tuple[np.ndarray, np.ndarray]:
         n, D = deltas.shape
+        deltas = np.ascontiguousarray(deltas, dtype=np.float32)
         C = np.zeros(n * D, dtype=np.float32)
         Wt = np.zeros(n * D, dtype=np.float32)
-        d_buf = self._buf(np.asarray(deltas, dtype=np.float32))
+        d_buf = self._buf(deltas)
         c_buf, w_buf = self._buf(C, write=True), self._buf(Wt, write=True)
-        gsz = ((n * D + 63) // 64) * 64
+        first = None
         for gi in self._order():
             c = self._csr[gi]
             if len(c["vidx"]) == 0:
                 continue
             ob, ib = self._buf(c["voff"]), self._buf(c["vidx"])
-            self.k_cost.set_args(*self._common(gi), d_buf, np.int32(D), np.int32(n), ob, ib, np.int32(ns),
-                                 np.float32(step), np.float32(cap), c_buf, w_buf)
-            self.cl.enqueue_nd_range_kernel(self.queue, self.k_cost, (gsz,), (64,))
-            self.queue.finish()
+            work = np.diff(c["voff"]).astype(np.float64) * D * ns * ns  # samples per patch: views x offsets x ns^2
+            for p0, p1 in self._batches(np.maximum(work, 1.0), "cost"):
+                self._cost_run(gi, p0, p1, D, d_buf, c_buf, w_buf, ob, ib, ns, step, cap, float(work[p0:p1].sum()))
+                if first is None and self._check is None:
+                    # the engine's first launch alone (nothing else has added to its part yet), for the self-check
+                    part_c, part_w = np.zeros((p1 - p0) * D, np.float32), np.zeros((p1 - p0) * D, np.float32)
+                    self.cl.enqueue_copy(self.queue, part_c, c_buf, src_offset=4 * p0 * D)
+                    self.cl.enqueue_copy(self.queue, part_w, w_buf, src_offset=4 * p0 * D)
+                    self.queue.finish()
+                    first = {"gi": gi, "p0": p0, "p1": p1, "deltas": deltas[p0:p1].copy(), "voff": c["voff"],
+                             "vidx": c["vidx"], "ns": ns, "step": step, "cap": cap, "C": part_c, "W": part_w,
+                             "work": float(work[p0:p1].sum())}
             ob.release()
             ib.release()
+        if first is not None:
+            self._check = first
         self.cl.enqueue_copy(self.queue, C, c_buf)
         self.cl.enqueue_copy(self.queue, Wt, w_buf)
         self.queue.finish()
         for b in (d_buf, c_buf, w_buf):
             b.release()
         return C.reshape(n, D).astype(np.float64), Wt.reshape(n, D).astype(np.float64)
+
+    def rerun_first(self) -> tuple[np.ndarray, np.ndarray] | None:
+        """The engine's first cost launch run again, alone: ``(C, W)`` of its patches, to compare with what it gave
+        the first time (:meth:`check`); None when no cost ran. The patches must be those of that launch (the last
+        :meth:`set_patches` of a search is the one its cost ran with)."""
+        f = self._check
+        if f is None:
+            return None
+        p0, p1 = f["p0"], f["p1"]
+        D = f["deltas"].shape[1]
+        full = np.zeros((self.n, D), dtype=np.float32)
+        full[p0:p1] = f["deltas"]
+        d_buf = self._buf(full)
+        c_buf = self._buf(np.zeros(self.n * D, np.float32), write=True)
+        w_buf = self._buf(np.zeros(self.n * D, np.float32), write=True)
+        ob, ib = self._buf(f["voff"]), self._buf(f["vidx"])
+        self._cost_run(f["gi"], p0, p1, D, d_buf, c_buf, w_buf, ob, ib, f["ns"], f["step"], f["cap"], f["work"])
+        C, W = np.zeros((p1 - p0) * D, np.float32), np.zeros((p1 - p0) * D, np.float32)
+        self.cl.enqueue_copy(self.queue, C, c_buf, src_offset=4 * p0 * D)
+        self.cl.enqueue_copy(self.queue, W, w_buf, src_offset=4 * p0 * D)
+        self.queue.finish()
+        for b in (d_buf, c_buf, w_buf, ob, ib):
+            b.release()
+        return C, W
+
+    def check(self) -> None:
+        """Raise :class:`GpuResetError` when the first cost launch, run again, does not give what it gave: the
+        driver was reset (or the device failed) part way, and the results cannot be trusted."""
+        if self._check is None:
+            return
+        f = self._check
+        again = self.rerun_first()
+        if again is None or not (np.array_equal(again[0], f["C"]) and np.array_equal(again[1], f["W"])):
+            raise GpuResetError(GPU_RESET_TEXT)
 
     def close(self) -> None:
         """Release the frames and patches on the device now (not when Python gets round to it)."""
@@ -667,6 +803,11 @@ class _Cost:
             return self.gpu.cost(deltas, self.ns, self.step, self.p.cap)
         return _cost_cpu(self.geo[self.sel], deltas, self.fr, self.K, self.baseline, self.vis, self.ns, self.step,
                          self.p.cap)
+
+    def check(self) -> None:
+        """The GPU's self-check (:meth:`_GpuCost.check`); nothing on the CPU."""
+        if self.gpu is not None:
+            self.gpu.check()
 
     def close(self) -> None:
         if self.gpu is not None:
@@ -723,7 +864,8 @@ def search_offsets(patches: Patches, left: Sequence[np.ndarray], right: Sequence
     Returns ``{"offset", "views", "cost", "curvature", "kept", "reason", "device"}``: per patch the
     offset (mm, from the fitted surface), textured views and mean cost at the minimum, the cost's
     curvature there (1/mm^2), whether it is kept, and why not (``"views"``, ``"edge"``, ``"flat"``,
-    ``"cost"``, or ``""``)."""
+    ``"cost"``, or ``""``). On the GPU also ``"launches"`` (each launch's kernel, items, work, seconds), and
+    :class:`GpuResetError` when the self-check finds the first launch changed (a driver reset part way)."""
     p = _need(params)
     say = progress or (lambda f, m: None)
     n = len(patches)
@@ -783,8 +925,70 @@ def search_offsets(patches: Patches, left: Sequence[np.ndarray], right: Sequence
     reason[textured < p.min_views] = "views"
     out["reason"] = reason
     out["kept"] = reason == ""
-    eng.close()
+    try:
+        eng.check()  # the first launch again: a driver reset part way would have changed it
+    finally:
+        if eng.gpu is not None:  # each launch's size and time (short launches, :meth:`_GpuCost._batches`)
+            out["launches"] = list(eng.gpu.launches)
+        eng.close()
     say(1.0, "searched")
+    return out
+
+
+# --------------------------------------------------------------------------- the guard (ENGINE_PLAN X6)
+def guard_patches(V: np.ndarray, F: np.ndarray, N: np.ndarray, patches: Patches, total: np.ndarray,
+                  params: SpacetimeParams) -> dict[str, np.ndarray]:
+    """Which patches the guard leaves out (:class:`SpacetimeParams`, ``guard_*``), by reason: ``{"rough", "edge",
+    "thin", "far"}`` -> (n,) bool, each False everywhere when its part is off. ``total``: each patch's refined offset
+    from the fused mesh along its normal (mm)."""
+    from scipy.spatial import cKDTree  # noqa: PLC0415
+
+    from ohs.mesh.topology import edge_table  # noqa: PLC0415
+
+    p = _need(params)
+    n = len(patches)
+    out = {k: np.zeros(n, dtype=bool) for k in ("rough", "edge", "thin", "far")}
+    if n == 0:
+        return out
+    V = np.asarray(V, dtype=np.float64)
+    F = np.asarray(F, dtype=np.int64)
+    g = patches.geo
+    if p.guard_move_mm is not None:
+        out["far"] = np.abs(np.asarray(total, dtype=np.float64)) > float(p.guard_move_mm)
+    if p.guard_smooth_deg is not None:
+        # the vertex nearest each of 8 points round the centre at the fit's reach, and the centre's own
+        used = np.zeros(len(V), dtype=bool)
+        used[F.ravel()] = True
+        idx = np.flatnonzero(used)
+        tree = cKDTree(V[idx])
+        r = float(p.fit) * float(p.half_mm)
+        cos_max = float(np.cos(np.radians(float(p.guard_smooth_deg))))
+        worst = np.ones(n)
+        for ang in np.linspace(0.0, 2.0 * np.pi, 8, endpoint=False):
+            for rr in (0.0, 0.5 * r, r) if ang == 0.0 else (0.5 * r, r):
+                Q = g[:, 0:3] + rr * (np.cos(ang) * g[:, 3:6] + np.sin(ang) * g[:, 6:9])
+                _, j = tree.query(Q, k=1, workers=-1)
+                worst = np.minimum(worst, np.einsum("ij,ij->i", N[idx[j]], g[:, 9:12]))
+        out["rough"] = worst < cos_max
+    if p.guard_edge_mm is not None and len(F):
+        et = edge_table(F, len(V))
+        b = et.counts == 1
+        bv = np.unique(np.concatenate([et.v0[b], et.v1[b]]))
+        if len(bv):
+            d, _ = cKDTree(V[bv]).query(g[:, 0:3], k=1, distance_upper_bound=float(p.guard_edge_mm), workers=-1)
+            out["edge"] = np.isfinite(d)
+    if p.guard_thin_mm is not None and len(F):
+        import open3d as o3d  # noqa: PLC0415
+
+        o = V.mean(axis=0)
+        scene = o3d.t.geometry.RaycastingScene()
+        scene.add_triangles(o3d.core.Tensor((V - o).astype(np.float32)), o3d.core.Tensor(F.astype(np.uint32)))
+        nrm = g[:, 9:12]
+        org = g[:, 0:3] - o - 0.02 * nrm  # just behind the fused surface, looking further behind it
+        ans = scene.cast_rays(o3d.core.Tensor(np.concatenate([org, -nrm], axis=1).astype(np.float32)))
+        th = ans["t_hit"].numpy().astype(np.float64)
+        pn = ans["primitive_normals"].numpy().astype(np.float64)
+        out["thin"] = (th <= float(p.guard_thin_mm)) & (np.einsum("ij,ij->i", pn, nrm) < 0.0)
     return out
 
 
@@ -803,7 +1007,10 @@ def refine_from_images(V: np.ndarray, F: np.ndarray, left: Sequence[np.ndarray],
     the mesh, ``mean`` signed), ``cost_median``, ``covered_share`` (vertices fully moved onto
     patches), ``moved_share`` / ``moved`` (vertices moved at least 0.005 mm; ``median`` / ``p95`` /
     ``max`` of the move), ``device``, ``half_mm`` / ``spacing_mm`` / ``samples``, ``ms`` (per step),
-    and ``patch_results`` (per patch arrays, for diagnostics: drop it before saving the report).
+    and ``patch_results`` (per patch arrays, for diagnostics: drop it before saving the report). With the guard on
+    (``params.guard_*``, :func:`guard_patches`) also ``guard``: the kept patches it left out by reason
+    (``patches_left``), the patches ``used``, the ``vertices_left`` as they were (``guard_move_mm``) and its ``limits``;
+    ``patch_results`` then has ``used``.
     """
     from ohs.mesh.topology import as_mesh, vertex_normals  # noqa: PLC0415
 
@@ -831,17 +1038,41 @@ def refine_from_images(V: np.ndarray, F: np.ndarray, left: Sequence[np.ndarray],
                     "rejected": {k: int(np.sum(res["reason"] == k)) for k in ("views", "edge", "flat", "cost")},
                     "frames": int(len(left)), "views_median": int(np.median(vis.sum(axis=1))) if len(patches) else 0,
                     "device": res["device"], "half_mm": p.half_mm, "spacing_mm": p.spacing_mm, "samples": p.samples}
+    if res.get("launches"):  # the GPU search's launches: how many, the longest and in all (seconds)
+        L = res["launches"]
+        report["launches"] = {"n": len(L), "longest_s": max(x["s"] for x in L), "total_s": round(sum(x["s"] for x in L), 3),
+                              "most_work": max(x["work"] for x in L)}
     total = patches.geo[:, 12] + res["offset"] if len(patches) else np.zeros(0)
     tk = total[kept]
     report["offset"] = ({"median": round(float(np.median(np.abs(tk))), 4),
                          "p95": round(float(np.percentile(np.abs(tk), 95)), 4),
                          "mean": round(float(np.mean(tk)), 4)} if len(tk) else {"median": None, "p95": None, "mean": None})
     report["cost_median"] = round(float(np.median(res["cost"][kept])), 4) if kept.any() else None
+    used = kept
+    if p.guarded:  # ENGINE_PLAN X6, off by default
+        t0 = time.perf_counter()
+        say(0.91, "checking where the surface may move")
+        why = guard_patches(V, F, N, patches, total, p)
+        out = np.zeros(len(patches), dtype=bool)
+        left_by: dict[str, int] = {}
+        for k in ("far", "thin", "edge", "rough"):  # each patch counted once, under the first reason
+            left_by[k] = int(np.sum(kept & why[k] & ~out))
+            out |= why[k]
+        used = kept & ~out
+        report["guard"] = {"patches_left": left_by, "used": int(used.sum()), "vertices_left": 0,
+                           "limits": {"smooth_deg": p.guard_smooth_deg, "edge_mm": p.guard_edge_mm,
+                                      "thin_mm": p.guard_thin_mm, "move_mm": p.guard_move_mm}}
+        ms["guard"] = round(1e3 * (time.perf_counter() - t0), 1)
     t0 = time.perf_counter()
     say(0.92, "moving the surface")
-    sub = Patches(patches.vid[kept], patches.geo[kept])
-    move, cover = project_onto_patches(V, N, sub, res["offset"][kept], p.half_mm, p.smooth_mm or p.spacing_mm,
+    sub = Patches(patches.vid[used], patches.geo[used])
+    move, cover = project_onto_patches(V, N, sub, res["offset"][used], p.half_mm, p.smooth_mm or p.spacing_mm,
                                        p.gate_mm)
+    if p.guarded and p.guard_move_mm is not None:  # a vertex that would move farther stays where it is
+        far = np.linalg.norm(move, axis=1) > float(p.guard_move_mm)
+        move[far] = 0.0
+        cover[far] = 0.0
+        report["guard"]["vertices_left"] = int(far.sum())
     V2 = V + move
     delta = np.einsum("ij,ij->i", move, N)
     ms["move"] = round(1e3 * (time.perf_counter() - t0), 1)
@@ -856,6 +1087,8 @@ def refine_from_images(V: np.ndarray, F: np.ndarray, left: Sequence[np.ndarray],
                                "curvature": res["curvature"], "kept": kept, "point": patches.point(res["offset"]),
                                "fitted": patches.point(np.zeros(len(patches))), "seen": vis.sum(axis=1),
                                "reason": res["reason"]}
+    if p.guarded:
+        report["patch_results"]["used"] = used
     return V2, delta, report
 
 

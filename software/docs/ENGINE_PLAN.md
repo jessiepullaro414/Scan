@@ -661,7 +661,31 @@ and thin parts".
   and the hole within that result's range; time at most 1.25 times the 1 mm run, memory at
   most 1.3 times, open loops at most 1.2 times; smooth scenes within their range.
 
-### [ ] X6. "Refine from the images" inside Make mesh (S)
+### [x] X6. "Refine from the images" inside Make mesh (S): not adopted, on time
+- **Measured 2026-11-22: not adopted; the setting is built and off** (`VALIDATION.md`, "Refine
+  from the images inside Make mesh, and a driver timeout"). Seven recordings, one seed each,
+  what Make mesh runs, tracked and true poses.
+  - `[process] refine_from_images` (off) runs the stage between Straighten and Refine with
+    lasers; on the GPU only, not at Preview quality.
+  - **Unguarded** it helps smooth surfaces (sphere median 0.060 → 0.016 mm, panels about
+    halved) and hurts edges and rims: bracket edges 0.15 → 0.24 mm and p95 +0.15; the Ø 10
+    hole 0.2 mm larger, the bore lost; a 1 mm wall 0.15 mm thinner at true poses.
+  - **A guard** (off in the mesh edit; Make mesh: 30°, 3 mm from a free edge, 2 mm thin wall,
+    0.3 mm move) removes every loss and keeps the median gains; it costs part of the sphere's
+    gain, and the 0.5 mm plate reads 0.023 mm thicker at true poses. Walls up to 1.9 mm are
+    left as they are.
+  - **The miss:** Make mesh +41 to +196 % (30 % allowed). The time is mostly on the processor
+    (placing patches 7 to 10 s, ray casts 11 to 19 s); the GPU search is 4 to 8 s.
+  - **Found on the way, mended:** the search ran each level as one GPU launch of up to about
+    3 s; the Radeon driver timed out, the PC reset four times, and once the search silently
+    returned nothing. The launches are now short (longest measured 0.22 s) and checked; on for
+    the mesh edit too.
+  - **If taken up again:** faster patch placing and ray casts (same results), then the other
+    seeds and the full set. If adopted the app needs: the mesh edit run after it starts from
+    the unrefined mesh without the guard (say so, or give it the guard); the history entry to
+    record the setting and limits; the setting's change to mark the mesh as made with other
+    settings; the toggle with "needs a graphics card, not at Preview"; the stage's share of
+    the progress bar (guessed 15 %, measured 25 to 50 %).
 - **Evidence:** sphere 0.081 / 0.276 to 0.044 / 0.129 mm; panel 0.043 / 0.148 to 0.023 /
   0.093. Never tried on the bracket's edges; round the panel's edge it was worse than a plain
   local fit.
@@ -732,6 +756,15 @@ and thin parts".
 - [ ] `ohs/track/volume_gpu.py`'s docstring still says the mesh's model is Open3D's.
 - [ ] Every timing on the Radeon PC since 2026-11-10 ran beside `RadeonSoftware.exe` using a
   whole core (MP F8).
+- [ ] GPU launches that could run long (found by X6, 2026-11-22): the refine's are short now;
+  the matcher and the fusion launch per frame (about 0.1 to 0.16 s a frame), but the fusion's
+  whole-volume launches (fill, weight scaling, brick flags) grow with the volume. Measure them
+  on a large part on the Radeon 680M; Windows resets a driver whose launch runs over 2 s.
+- [ ] `tests/test_track_spacetime.py::test_the_refined_mesh_is_closer_to_the_truth` failed once
+  without a GPU (`OHS_COMPUTE=cpu`) on 2026-11-22, in a run of several test files, and passed in
+  the eight runs after it (alone, its file six times, the same set again). The failure's
+  words were not kept. If it shows again: keep them, and look at how near its limits (the
+  count of patches kept, the 0.75 ratio) the CPU run lies.
 
 ## Not worth trying again (measured)
 

@@ -172,6 +172,9 @@ DEFAULT_FLOATERS = {"min_size_mm": 5.0}
 #: camera), so Straighten keeps the larger shares. Before, Follow the camera had 72 % and Straighten 12 %, and the percentage stood at 80 to 83 % while
 #: Straighten ran for minutes. The parts that do not run are left out and the rest scaled (:func:`make_mesh_plan`).
 MAKE_MESH_SHARES = {"track": 0.47, "straighten": 0.37, "refine": 0.03, "edits": 0.13}
+#: "Refine from the images" inside Make mesh (``[process] refine_from_images``, ENGINE_PLAN X6, off by default): its
+#: share against the parts above (they keep theirs and are scaled with it)
+SPACETIME_SHARE = 0.15
 #: Straighten's own parts, of its share: the loop search, the fuse at the loops' poses (only with loops), the laser
 #: crossings, and the fuse at the crossings' poses (only when they changed the poses); a part that does not run is
 #: passed over (the percentage jumps ahead, never back: Straighten saves its mesh at 0.96; before, the first fuse
@@ -726,6 +729,78 @@ def save_refined_mesh(path: Path, V: np.ndarray, F: np.ndarray, S: np.ndarray | 
     save_mesh(path, V, F, vertex_normals(V, F), quality=S, looks=L if L is not None and len(L) == len(V) else None)
 
 
+def spacetime_changes(rep: dict) -> bool:
+    """Whether "Refine from the images" changes the mesh, from :func:`ohs.track.spacetime.refine_from_images`' report:
+    at least :data:`SPACETIME_MIN_PATCHES` patches kept (with the guard, the patches it used) and
+    :data:`REFINE_MIN_SHARE` of the surface covered."""
+    used = (rep.get("guard") or {}).get("used", rep["kept"])
+    return not (used < SPACETIME_MIN_PATCHES or rep["covered_share"] < REFINE_MIN_SHARE)
+
+
+def images_on_gpu() -> bool:
+    """Whether "Refine from the images" runs on a graphics card here (:mod:`ohs.compute`). Make mesh runs it only then:
+    on the CPU its search takes about 20 minutes for a short scan (VALIDATION.md, "Refine from the images")."""
+    from ohs.compute import get_device
+
+    return get_device() is not None
+
+
+#: Make mesh's guard on "Refine from the images" (ENGINE_PLAN X6; ``SpacetimeParams.guard_*``): a patch is used only
+#: where the mesh within its fit turns by at most 30 degrees, no free edge lies within 3 mm and no other side of a wall
+#: within 2 mm behind it; a vertex that would move more than 0.3 mm stays as it is. Unguarded, the bracket's edges read
+#: 0.15 -> 0.24 mm (median) and the hole plate's 10 mm hole 0.2 mm larger; the stage "Refine from the images" itself
+#: runs unguarded, as before.
+MAKE_MESH_SPACETIME_GUARD = {"guard_smooth_deg": 30.0, "guard_edge_mm": 3.0, "guard_thin_mm": 2.0, "guard_move_mm": 0.3}
+
+
+def make_mesh_spacetime_params() -> Any:
+    """The ``SpacetimeParams`` Make mesh runs "Refine from the images" with (``[process] refine_from_images``,
+    ENGINE_PLAN X6): the stage's own, with :data:`MAKE_MESH_SPACETIME_GUARD`."""
+    from dataclasses import replace
+
+    from ohs.track.spacetime import SpacetimeParams
+
+    return replace(SpacetimeParams(), **MAKE_MESH_SPACETIME_GUARD)
+
+
+def spacetime_refine(recording: Path, calib: Any, src_dir: Path, poses: dict[int, np.ndarray], params: Any = None, *,
+                     cancelled: Callable[[], bool] | None = None,
+                     progress: Callable[[float, str], None] | None = None) -> tuple:
+    """"Refine from the images" on a stage's mesh (``src_dir/mesh.ply``): up to ``params.max_frames`` frames of
+    ``recording`` with a pose in ``poses`` (:func:`ohs.track.spacetime.frames_from_recording`), then
+    :func:`ohs.track.spacetime.refine_from_images`. The one computation behind the stage ("Refine from the images")
+    and Make mesh's ``[process] refine_from_images`` (ENGINE_PLAN X6). Returns ``(V2, F, S, L, report)``: the moved
+    vertices, the faces, each vertex's sigma and count of looks (kept as they were), and the engine's report (with its
+    ``patch_results``: drop them before saving)."""
+    from ohs.track.spacetime import SpacetimeParams, frames_from_recording, refine_from_images
+
+    say = progress or (lambda f, m: None)
+    params = params or SpacetimeParams()
+    left, right, T, K, B = frames_from_recording(str(recording), calib, poses, params.max_frames, cancelled=cancelled,
+                                                 progress=lambda f, m: say(0.12 * f, f"Reading the frames: {m}"))
+    V, F, S, L = _read_stage_mesh(Path(src_dir) / "mesh.ply", with_looks=True)
+    V2, _, rep = refine_from_images(V, F, left, right, T, K, B, params, cancelled=cancelled,
+                                    progress=lambda f, m: say(0.12 + 0.8 * f, f"Refining: {m}"))
+    return V2, F, S, L, rep
+
+
+def write_spacetime_stage(out: Path, src_dir: Path, src: str, V2: np.ndarray, F: np.ndarray, S: np.ndarray | None,
+                          L: np.ndarray | None, rep: dict) -> dict:
+    """A "Refine from the images" stage folder ``out`` (which must exist): the refined mesh, the source stage's other
+    files, and its ``report.json`` with ``"spacetime"`` (``rep`` without ``patch_results``, and ``source``). Returns
+    the report."""
+    save_refined_mesh(out / "mesh.ply", V2, F, S, L)  # each vertex keeps its sigma and its count of looks
+    for name in ("trajectory.csv", "laser_points.ply", "marker_map.json"):
+        if (src_dir / name).is_file():
+            shutil.copy2(src_dir / name, out / name)
+    report: dict = {}
+    if (src_dir / "report.json").is_file():
+        report = json.loads((src_dir / "report.json").read_text(encoding="utf-8"))
+    report["spacetime"] = {**{k: v for k, v in rep.items() if k != "patch_results"}, "source": src}
+    (out / "report.json").write_text(json.dumps(jsonable(report), indent=1), encoding="utf-8")
+    return report
+
+
 def _read_json(path: Path) -> dict | None:
     try:
         d = json.loads(path.read_text(encoding="utf-8"))
@@ -1099,11 +1174,14 @@ def _span(span: tuple[float, float], f: float) -> float:
     return span[0] + (span[1] - span[0]) * min(1.0, max(0.0, float(f)))
 
 
-def make_mesh_plan(*, straighten: bool, refine: bool, edits: bool) -> dict[str, tuple[float, float]]:
+def make_mesh_plan(*, straighten: bool, refine: bool, edits: bool, spacetime: bool = False) -> dict[str, tuple[float, float]]:
     """The span of the percentage each part of a Make mesh (or a recipe on everything) takes: ``{part: (from, to)}``
-    in order, from :data:`MAKE_MESH_SHARES` for the parts that run (UX_PLAN R18)."""
-    run = {"track": True, "straighten": straighten, "refine": refine, "edits": edits}
-    shares = {k: v for k, v in MAKE_MESH_SHARES.items() if run[k]}
+    in order, from :data:`MAKE_MESH_SHARES` for the parts that run (UX_PLAN R18). ``spacetime``: "Refine from the
+    images" between Straighten and Refine with lasers (``[process] refine_from_images``, off by default:
+    :data:`SPACETIME_SHARE`)."""
+    run = {"track": True, "straighten": straighten, "spacetime": spacetime, "refine": refine, "edits": edits}
+    table = {**MAKE_MESH_SHARES, "spacetime": SPACETIME_SHARE}
+    shares = {k: table[k] for k in ("track", "straighten", "spacetime", "refine", "edits") if run[k]}
     total = sum(shares.values())
     out, a = {}, 0.0
     for k, v in shares.items():
@@ -2356,20 +2434,19 @@ class ProcessManager:
             self._stage_end(sp, "refine", state="failed", summary=_stage_failed("refine", e))
             raise
 
-    def _do_spacetime(self, ctx: Any, sp: ScanProcess, prog: _Prog) -> str:
+    def _do_spacetime(self, ctx: Any, sp: ScanProcess, prog: _Prog, params: Any = None) -> str:
         """"Refine from the images" (a trial build): measure the base stage's mesh against the
-        recording's frames (:func:`ohs.track.spacetime.refine_from_images`). Returns the summary;
-        ``skipped`` (base and edits unchanged) when too few patches hold dot texture in enough
-        frames."""
+        recording's frames (:func:`spacetime_refine`; ``params``: its ``SpacetimeParams``, the
+        defaults when None). Returns the summary; ``skipped`` (base and edits unchanged) when too few
+        patches hold dot texture in enough frames."""
         from ohs.io.recording import RecordingReader
-        from ohs.mesh import vertex_normals
-        from ohs.track.export import save_mesh
-        from ohs.track.spacetime import SpacetimeParams, frames_from_recording, refine_from_images
+        from ohs.track.spacetime import GPU_RESET_HINT, GPU_RESET_TEXT, GpuResetError, SpacetimeParams
 
         before = self._stage_start(sp, "spacetime", ctx.job.id)
         try:
             self._need_base(sp)
             with sp.lock:
+                sp.state["stages"]["spacetime"].pop("guard", None)  # a guarded run's (Make mesh, ENGINE_PLAN X6) counts
                 src = (sp.state["base"] or {}).get("stage")
                 if src == "refine":  # the lasers refine last: start from the mesh they refined
                     src = sp.state["stages"]["refine"].get("source") or "track"
@@ -2381,21 +2458,19 @@ class ProcessManager:
             calib = RecordingReader(sp.recording_dir).calibration()
             if calib is None or not poses:
                 raise ApiError(409, "This scan has no calibration or no tracked frames.", "Run “Follow the camera” again.")
-            params = SpacetimeParams()
-            left, right, T, K, B = frames_from_recording(
-                str(sp.recording_dir), calib, poses, params.max_frames, cancelled=lambda: ctx.cancelled,
-                progress=lambda f, m: prog(0.12 * f, f"Reading the frames: {m}"))
-            ctx.check()
-            V, F, S, L = _read_stage_mesh(src_dir / "mesh.ply", with_looks=True)
-            V2, _, rep = refine_from_images(V, F, left, right, T, K, B, params, cancelled=lambda: ctx.cancelled,
-                                            progress=lambda f, m: prog(0.12 + 0.8 * f, f"Refining: {m}"))
-            del left, right
+            try:
+                V2, F, S, L, rep = spacetime_refine(sp.recording_dir, calib, src_dir, poses, params or SpacetimeParams(),
+                                                    cancelled=lambda: ctx.cancelled, progress=prog)
+            except GpuResetError as e:  # the search's self-check: nothing is written, the mesh stays as it was
+                raise ApiError(503, GPU_RESET_TEXT, GPU_RESET_HINT) from e
             ctx.check()
             rep.pop("patch_results", None)
             covered = round(100.0 * float(rep["covered_share"]), 1)
             fields = {"source": src, "frames": rep["frames"], "patches": rep["patches"], "kept": rep["kept"],
                       "covered_pct": covered, "moved_mm": rep["moved"]["p95"], "device": rep["device"]}
-            if rep["kept"] < SPACETIME_MIN_PATCHES or rep["covered_share"] < REFINE_MIN_SHARE:
+            if rep.get("guard"):  # Make mesh's guard (ENGINE_PLAN X6): what it refined and what it left
+                fields["guard"] = rep["guard"]
+            if not spacetime_changes(rep):
                 msg = (f"Too few parts of the surface hold dots in enough frames ({rep['kept']:,} of "
                        f"{rep['patches']:,} patches), so the mesh was left as it is")
                 self._stage_end(sp, "spacetime", state="skipped", summary=msg, **fields)
@@ -2405,16 +2480,7 @@ class ProcessManager:
             _rmtree(tmp)
             tmp.mkdir(parents=True)
             try:
-                save_mesh(tmp / "mesh.ply", V2, F, vertex_normals(V2, F), quality=S,  # each vertex keeps its sigma
-                          looks=L if L is not None and len(L) == len(V2) else None)  # and its count of looks
-                for name in ("trajectory.csv", "laser_points.ply", "marker_map.json"):
-                    if (src_dir / name).is_file():
-                        shutil.copy2(src_dir / name, tmp / name)
-                report: dict = {}
-                if (src_dir / "report.json").is_file():
-                    report = json.loads((src_dir / "report.json").read_text(encoding="utf-8"))
-                report["spacetime"] = {**rep, "source": src}
-                (tmp / "report.json").write_text(json.dumps(jsonable(report), indent=1), encoding="utf-8")
+                report = write_spacetime_stage(tmp, src_dir, str(src), V2, F, S, L, rep)
                 ctx.check()
                 _move_dir(tmp, sp.dir / "spacetime")
             finally:
@@ -2426,6 +2492,14 @@ class ProcessManager:
             where = "on the graphics card" if rep["device"] == "gpu" else "without a graphics card"
             summary = (f"Measured {covered:g} % of the surface against {rep['frames']:,} frames ({rep['kept']:,} patches, "
                        f"{where}); it moved by up to {rep['moved']['p95']:.2f} mm (95 %)")
+            if rep.get("guard"):
+                g = rep["guard"]
+                left = sum(g["patches_left"].values())
+                summary += (f"; {left:,} more patches were left as they were (at edges, rims, thin walls or where the "
+                            f"images disagree with the mesh)")
+                if g["limits"].get("move_mm") is not None:
+                    summary += (f", and {g['vertices_left']:,} points that would have moved more than "
+                                f"{g['limits']['move_mm']:g} mm")
             self._stage_end(sp, "spacetime", state="done", summary=summary, job_id=ctx.job.id, **fields)
             return summary
         except (JobCancelled, InterruptedError):
@@ -2434,6 +2508,20 @@ class ProcessManager:
         except Exception as e:
             self._stage_end(sp, "spacetime", state="failed", summary=_stage_failed("spacetime", e))
             raise
+
+    def _make_mesh_spacetime(self, ctx: Any, sp: ScanProcess, prog: _Prog) -> str:
+        """"Refine from the images" as a part of Make mesh (``[process] refine_from_images``, ENGINE_PLAN X6): the
+        stage itself (:meth:`_do_spacetime`) with :func:`make_mesh_spacetime_params`, on the graphics card only.
+        Without one (its search takes about 20 minutes for a short scan on the CPU) the stage is ``skipped``, the mesh
+        stays as it is, and the log says so."""
+        if not images_on_gpu():
+            msg =("Refine from the images needs a graphics card (without one it takes many minutes), so Make mesh "
+                   "left the mesh as it is")
+            log.info("make mesh: refine from the images skipped: no graphics card")
+            self._stage_start(sp, "spacetime", ctx.job.id)
+            self._stage_end(sp, "spacetime", state="skipped", summary=msg, device="cpu")
+            return msg
+        return self._do_spacetime(ctx, sp, prog, make_mesh_spacetime_params())
 
     # ------------------------------------------------------------------ a run beside the result (UX_PLAN R2)
     def _run_staged(self, ctx: Any, sp: ScanProcess, fn: Callable[[ScanProcess], str]) -> str:
@@ -2665,13 +2753,22 @@ class ProcessManager:
             q = quality_or_none(quality or s.get("quality")) or "standard"
             straighten = s.get("straighten", "auto") == "auto"
             refine = s.get("refine", "auto") == "auto"
+            # ENGINE_PLAN X6: "Refine from the images" too, when the app's setting asks for it (off by default)
+            spacetime = bool(getattr(self.st.cfg.process, "refine_from_images", False)) and q != "preview"
             # each part's share of the percentage (UX_PLAN R18: MAKE_MESH_SHARES), the parts that run only
-            spans = make_mesh_plan(straighten=straighten, refine=refine, edits=bool(ops))
+            spans = make_mesh_plan(straighten=straighten, refine=refine, edits=bool(ops), spacetime=spacetime)
             sp.plan = [{"stage": k, "from": round(a, 4), "to": round(b, 4)} for k, (a, b) in spans.items()]
             p_ops = spans["edits"][0] if "edits" in spans else 1.0
             self._do_track(ctx, sp, prog.sub(*spans["track"]), q, s.get("voxel_mm"))
             if straighten:
                 self._do_straighten(ctx, sp, prog.sub(*spans["straighten"]))
+            if spacetime:
+                try:
+                    self._make_mesh_spacetime(ctx, sp, prog.sub(*spans["spacetime"]))
+                except (JobCancelled, InterruptedError):
+                    raise
+                except Exception:  # the stage says it failed; the mesh stays as fused
+                    log.exception("refine from the images failed in a recipe")
             if refine:
                 try:
                     self._do_refine(ctx, sp, prog.sub(*spans["refine"]))

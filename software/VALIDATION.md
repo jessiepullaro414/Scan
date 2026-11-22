@@ -4859,6 +4859,113 @@ the full set was not run; each setting's share in each worse row is not separate
 check alone and the lag alone on top of the start were not run); on the no-GPU path only the
 tests ran with the lag.
 
+## Refine from the images inside Make mesh, and a driver timeout (ENGINE_PLAN X6, 2026-11-22): not adopted; the timeout mended
+
+X6 asked whether "Refine from the images" (the mesh edit) should run as part of Make mesh. It
+is built as a setting that is off, with a guard; it misses the stop rule on time. On the way
+its search on the graphics card turned out to run so long in one piece that the Radeon driver
+timed out and the PC reset; that is mended for the mesh edit too.
+
+**Setup.** `[process] refine_from_images` (off). What Make mesh runs, on the GPU (Radeon 680M),
+against `tools/scorecard_baselines/2026-11-21-gpu-core-app-frames.json`; seven recordings, one
+seed each (the end-to-end sphere and panel, a 200-frame car panel, bracket seed 0, the
+standing walls, a 0.5 mm plate, the hole plate 10 mm up), tracked and true poses. First
+unguarded (the mesh edit as it is), then with Make mesh's guard.
+
+**Unguarded** it helps smooth surfaces and hurts edges, rims and a thin wall:
+- sphere, part median / p95: 0.060 / 0.248 → 0.016 / 0.121 mm (radius error -0.089 → -0.042);
+  end-to-end panel 0.038 → 0.014; car panel 0.021 → 0.013; 0.5 mm plate 0.033 → 0.017;
+- bracket: its edges (where the normals turn by more than 30° within 2 mm) 0.15 → 0.24 mm, p95
+  +0.15 to +0.17 mm, the surface within 1 mm 3 % less, the upright's height +0.13 to +0.15 mm,
+  one boss answer lost;
+- hole plate: the Ø 10 hole +0.19 to +0.24 mm, the bore lost (tracked: -0.52 mm and one answer
+  fewer);
+- walls: the median 0.01 mm worse, and **the 1 mm wall reads 0.15 mm thinner at true poses**.
+- Moves above 0.2 mm were mostly wrong.
+
+**The guard** (`SpacetimeParams.guard_smooth_deg / guard_edge_mm / guard_thin_mm /
+guard_move_mm`, all off by default, so the mesh edit is unchanged; Make mesh uses 30°, 3 mm,
+2 mm, 0.3 mm): a patch is used only where the mesh within its fit turns by at most 30°, no free
+edge lies within 3 mm and no other side of a wall faces back within 2 mm; a patch whose
+measured surface is more than 0.3 mm from the fused one is left out, and no point moves more
+than 0.3 mm. The report says what was used and what was left, by reason. Measured limit on thin
+parts (two-sided plates): walls of 0.5, 1.0 and 1.9 mm are left as they are, a 3 mm wall is
+refined; a 0.5 mm plate whose images would pull its top 0.2 mm in keeps its thickness exactly.
+
+| | today | unguarded | guarded |
+|---|---|---|---|
+| Sphere, median / p95, tracked | 0.0595 / 0.248 | 0.0160 / 0.121 | 0.0186 / 0.206 |
+| Sphere, true poses | 0.0553 / 0.242 | 0.0138 / 0.101 | 0.0172 / 0.191 |
+| Sphere, radius error, tracked | -0.089 | -0.042 | -0.071 |
+| End-to-end panel, median, tracked / true | 0.038 / 0.039 | 0.014 / 0.014 | 0.013 / 0.013 |
+| Car panel, median, tracked / true | 0.021 / 0.022 | 0.013 / 0.012 | 0.012 / 0.011 |
+| Bracket, median, tracked / true | 0.117 / 0.062 | 0.094 / 0.052 | 0.086 / 0.035 |
+| ... its p95 | | +0.17 / +0.15 | +0.001 / +0.000 |
+| ... the upright's thickness, tracked / true | -0.295 / -0.059 | | -0.188 / -0.022 |
+| Walls, median, tracked / true | 0.125 / 0.065 | +0.011 / +0.015 | 0.109 / 0.054 |
+| ... the 1 mm wall, true poses | | -0.154 (thinner) | -0.001 |
+| 0.5 mm plate, median, tracked / true | 0.033 / 0.027 | 0.017 / 0.015 | about the same |
+| ... its thickness, true poses | -0.006 | +0.018 | +0.017 |
+| Hole plate, Ø 10, tracked / true | | +0.24 / +0.19, bore lost | +0.008 / within 0.01 |
+
+The guard removes every loss of the unguarded refine and keeps the median gains; it costs a
+third to two thirds of the sphere's gain. One thin reading still moves: the 0.5 mm plate at
+true poses reads 0.023 mm thicker (tracked +0.001).
+
+**Time: the stop rule's miss.** With the refine Make mesh takes 41 to 196 % longer (sphere +105
+to +200 %, car panel +45 to +110 %, bracket +49 to +66 %, hole plate +46 to +130 %), against
+the 30 % allowed. The stage takes 11 to 50 s, mostly on the processor: placing the patches 7 to
+10 s, finding the frames that see them 11 to 19 s, the search on the GPU 4 to 8 s, the guard
+about 2 s.
+
+**Verdict: not adopted; no full compare spent.** Beyond the time, only one seed a scene was
+measured, the guard's limits were chosen on three of these same recordings, and the plate's
+thickness moves at true poses. The setting stays, off. The way back would be faster patch
+placing and ray casts (same results), then the other seeds.
+
+### A driver timeout in Refine from the images, mended
+
+**What happened.** The search ran each of its levels as one launch on the graphics card: up to
+about 3 s on the hole plate (1.27 million work items, each sampling 15 x 15 points in two
+images for 16 to 40 views). Windows gives a graphics driver 2 s. On 2026-11-22 the Radeon
+driver (AMD Software 26.11.2, installed the day before) timed out during these runs; four
+times the PC then switched off hard (Kernel-Power 41, no crash record), once Windows recovered
+(LiveKernelEvent 141 at 15:18:21) and the search **silently returned nonsense**: of 127,497
+patches none was kept (74,592 "edge": the cost's minimum at the end of the range; the same
+recording normally keeps about 40,600), so the stage only said it skipped and the mesh stayed
+as fused. Holding the job to half the processor's cores did not prevent it.
+
+**The fix (on, no setting; the mesh edit too).** The texture test and the cost run in short
+launches sized by their work (samples taken), each followed by a wait for the card; the size
+follows the card's measured pace towards 0.12 s a launch, under a hard cap per kernel (the
+texture test is about 16 times slower per sample than the cost: 2.5e7 and 4e8 samples). The
+first cost launch is kept and run again at the end of the search; if its answer has changed,
+the stage stops with "The graphics driver seems to have been reset during Refine from the
+images (its results changed when checked), so the mesh was left unchanged..." and writes
+nothing (the mesh edit answers 503; Make mesh marks the stage failed and carries on). The
+report gets `launches` (count, longest, total).
+
+**How it was checked.**
+- The batched kernels equal the single launch bit for bit (a small synthetic scene, three
+  seeds), and two forced batch sizes give equal meshes at a scene's scale.
+- Car panel, walls (true poses) and the hole plate (true poses) searched as before the
+  timeout: 45 / 62 / 74 launches, the longest 0.216 / 0.140 / 0.197 s; the hole plate keeps
+  40,601 patches again, none "edge". No new timeout record and no reset during these runs, the
+  tests on both paths, or the fresh quick-set run.
+- The search takes about the same time as before (0.1 s less to 1 s more on a 30 to 50 s
+  stage).
+
+**With the settings off** the quick set on what Make mesh runs compares identical (87
+readings; GPU, fresh runs), and the mesh edit's own tests pass unchanged on both paths.
+
+Limits: simulated; one seed a scene; the self-check was not tried against a real driver reset
+and reruns only the first launch (a lost device normally makes the GPU library raise, which
+fails the stage anyway); runs since the fix were held to 8 of 16 cores, and against the earlier
+runs a fifth to two fifths of the vertices differ by one float32 step (up to 1.5e-5 mm; the
+patch counts are identical; the cause is on the processor side, not confirmed); timings since
+the fix are throttled ones; the other GPU kernels (the matcher, the fusion) were read, not
+measured: none loops over many frames in one launch, the whole-volume ones are those to watch.
+
 ## What the metrics mean
 
 - **Stereo errors** compare the estimated raw intrinsics/extrinsics (`K1`, `K2`, `R`, `T`) with

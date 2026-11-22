@@ -181,6 +181,7 @@ class ProcessConfig:
     poisson: bool = False
     export: list[str] = field(default_factory=lambda: ["ply", "stl"])
     repeatable_edits: bool = False  # MAINTENANCE_PLAN F15: the app's mesh edits break ties by position
+    refine_from_images: bool = False  # ENGINE_PLAN X6: Make mesh runs "Refine from the images" (GPU only); off: as before
 
 
 @dataclass
@@ -610,6 +611,12 @@ _KEY_DOCS = {
         "choices are equally good (which way to split a hole into triangles), the points' positions\n"
         "decide, not their numbers. Nothing measured changes. Each edit records the setting it ran\n"
         "with, so undo, redo and a step rebuilt later give the same triangles. Off: as before."
+    ),
+    "process.refine_from_images": (
+        "Make mesh also runs \"Refine from the images\" (a trial, ENGINE_PLAN X6), after Straighten and\n"
+        "before Refine with lasers: the surface is measured against up to 120 frames of the recording.\n"
+        "Needs a graphics card; without one Make mesh leaves the mesh as it is and says so. Not at\n"
+        "Preview quality. Off: as before."
     ),
     "board.squares_x": "Chessboard squares, square and marker size (mm) and ArUco dictionary of the board.",
     "board.paper": '"letter" or "a4" (used by `ohs printables`).',

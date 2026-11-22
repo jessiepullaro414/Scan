@@ -64,7 +64,10 @@ straighten: the fuse at the true poses and Refine with lasers. A result also say
 did (``info["chain"]``; the table's "What the app chain's stages did"), and so does an app
 baseline (``stages``). Its runs have their own folders (``app-default``, ``app-p-<hash>``);
 ``curve.<CurveParams field>=V`` tries a setting of the laser crossings (app chain only; a
-true-pose run is the same with it and keeps one folder).
+true-pose run is the same with it and keeps one folder). ``process.refine_from_images=true`` (the app's
+``[process] refine_from_images``, ENGINE_PLAN X6, off by default) runs "Refine from the images" between Straighten and
+Refine with lasers (``ohs.server.processing.spacetime_refine``, as Make mesh runs it), and ``spacetime.<SpacetimeParams
+field>=V`` tries one of its parameters (app chain only).
 
 **Compare** pairs each recording with itself in the baseline: the change, the scene's spread in
 the baseline, and a verdict per row: "better" or "worse" when the change of the scene's mean is
@@ -1181,10 +1184,14 @@ def scene_fits(spec: SceneSpec, sc, Vs, F, S, filled, seen, cover) -> dict:
 
 
 # =========================================================================== the settings to try
-SECTIONS = ("process", "pipeline", "fusion", "depth", "laser", "const", "curve")
+SECTIONS = ("process", "pipeline", "fusion", "depth", "laser", "const", "curve", "spacetime")
 #: settings that act in Straighten only (``curve.<CurveParams field>``: the laser crossings' adjustment); they need
 #: ``--chain app``, and a true-pose run, which is not straightened, ignores them
 STRAIGHTEN_ONLY = ("curve.",)
+#: settings of the app's Make mesh outside the frame pass (ENGINE_PLAN X6): ``process.refine_from_images=true`` (the
+#: app's ``[process] refine_from_images``: "Refine from the images" between Straighten and Refine with lasers) and
+#: ``spacetime.<SpacetimeParams field>`` (its parameters, over ``make_mesh_spacetime_params()``); ``--chain app`` only
+APP_ONLY = ("process.refine_from_images", "spacetime.")
 #: what runs on each recording (module docstring, "Chains")
 CHAINS = ("frame", "app")
 
@@ -1242,6 +1249,8 @@ def apply_params(pp, params: dict):
     s = effective_scale(IMAGE_SIZE[0])
     for key, v in params.items():
         sec, name = key.split(".", 1)
+        if key.startswith(APP_ONLY):  # the app chain's own steps (:func:`_app_spacetime`), not the frame pass
+            continue
         if sec == "process":
             top[name] = v
         elif sec == "pipeline":
@@ -1316,6 +1325,8 @@ def app_chain(rec: Path, proc: Path, spec: SceneSpec, params: dict, poses: dict 
         base = _app_straighten(rec, st, pp, params, info)
     else:
         info["straighten"] = {"ran": False, "why": "true poses: there is no tracked camera path to straighten"}
+    if params.get("process.refine_from_images"):  # ENGINE_PLAN X6, off unless asked for
+        base = _app_spacetime(rec, base, st, params, info)
     base = _app_refine(base, st, info)
     for name in ("mesh.ply", "report.json", "trajectory.csv", "laser_points.ply"):
         if (base / name).is_file():
@@ -1383,6 +1394,64 @@ def _app_straighten(rec: Path, st: Path, pp, params: dict, info: dict) -> Path:
         s["fuse_crossings_s"] = round(time.perf_counter() - t1, 1)
     info["stage_s"]["straighten"] = round(time.perf_counter() - t, 1)
     return st / "straighten" if (looped or adjusted) else st / "track"
+
+
+def spacetime_params(params: dict):
+    """Make mesh's ``SpacetimeParams`` (``ohs.server.processing.make_mesh_spacetime_params``) with the
+    ``spacetime.<field>`` settings."""
+    from ohs.server.processing import make_mesh_spacetime_params
+    from ohs.track.spacetime import SpacetimeParams
+
+    p = make_mesh_spacetime_params()
+    kw = {k.split(".", 1)[1]: v for k, v in params.items() if k.startswith("spacetime.")}
+    bad = [k for k in kw if k not in {f.name for f in dataclasses.fields(SpacetimeParams)}]
+    if bad:
+        raise ValueError(f"SpacetimeParams has no {', '.join(bad)}")
+    return dataclasses.replace(p, **{k: tuple(tuple(x) if isinstance(x, list) else x for x in v) if isinstance(v, list)
+                                     else v for k, v in kw.items()})
+
+
+def _app_spacetime(rec: Path, base: Path, st: Path, params: dict, info: dict) -> Path:
+    """"Refine from the images" as Make mesh runs it with ``[process] refine_from_images``
+    (``ProcessManager._make_mesh_spacetime``: the GPU only, ``spacetime_refine`` on the base stage's mesh at its poses,
+    ``spacetime_changes``, ``write_spacetime_stage``). Returns the stage folder of the base mesh after it. Keeps
+    ``stages/spacetime_moves.npz`` (each vertex's move and the patches' results) for a look."""
+    from ohs.compute import get_device
+    from ohs.io.recording import RecordingReader
+    from ohs.server import processing as SP
+    from ohs.track.posegraph import read_trajectory
+
+    t = time.perf_counter()
+    r: dict[str, Any] = {"source": base.name, "acted": False}
+    info["spacetime"] = r
+    try:
+        if get_device() is None:
+            r["why"] = "no graphics card: the mesh is left as it is"
+            return base
+        poses = {i: T for i, _, ok, T in read_trajectory(base / "trajectory.csv") if ok}
+        calib = RecordingReader(rec).calibration()
+        V2, F, S, L, rep = SP.spacetime_refine(rec, calib, base, poses, spacetime_params(params))
+        pr = rep.pop("patch_results", None) or {}
+        V0 = SP._read_stage_mesh(base / "mesh.ply")[0]
+        np.savez_compressed(st / "spacetime_moves.npz", move=np.asarray(V2 - V0, np.float32),
+                            **{f"patch_{k}": np.asarray(v) for k, v in pr.items() if k != "reason"},
+                            patch_reason=np.asarray(pr.get("reason", []), dtype=str))
+        r.update({k: rep.get(k) for k in ("patches", "kept", "rejected", "frames", "covered_share", "moved_share",
+                                          "moved", "device", "ms", "guard")})
+        if not SP.spacetime_changes(rep):
+            r["why"] = "too few patches hold dots in enough frames"
+            return base
+        out = st / "spacetime"
+        shutil.rmtree(out, ignore_errors=True)
+        out.mkdir(parents=True)
+        SP.write_spacetime_stage(out, base, base.name, V2, F, S, L, rep)
+        r["acted"] = True
+        return out
+    except Exception as e:  # noqa: BLE001 - as the server: the stage says it failed, the mesh stays as it was
+        r["failed"] = f"{type(e).__name__}: {e}"
+        return base
+    finally:
+        info["stage_s"]["spacetime"] = round(time.perf_counter() - t, 1)
 
 
 def _app_refine(src: Path, st: Path, info: dict) -> Path:
@@ -2003,7 +2072,12 @@ def stages_text(ch: dict | None) -> str:
               + (f", moved {fmt(c.get('moved_mm'), 2)} mm" if s.get("adjusted") else "") + ")")
     rf = ("failed" if r.get("failed") else f"ACTED {fmt(r.get('moved_pct'), 1)} %" if r.get("acted")
           else f"no ({fmt(r.get('moved_pct'), 1)} %)" if r.get("moved_pct") is not None else f"no ({r.get('why')})")
-    return f"{st}; Refine {rf}; base {ch.get('base')}"
+    sp = ch.get("spacetime")  # only with process.refine_from_images (ENGINE_PLAN X6)
+    sx = "" if not isinstance(sp, dict) else (
+        f"; images failed ({sp['failed']})" if sp.get("failed") else
+        f"; images ACTED {sp.get('kept')} of {sp.get('patches')} patches, covered {fmt(sp.get('covered_share'), 3)}"
+        if sp.get("acted") else f"; images no ({sp.get('why')})")
+    return f"{st}{sx}; Refine {rf}; base {ch.get('base')}"
 
 
 def stages_table(results: dict[str, dict[str, dict]], specs: list[SceneSpec]) -> list[str]:
@@ -2604,6 +2678,8 @@ def main(argv: list[str] | None = None) -> int:
     params = parse_params(a.set_param, a.params)
     if chain == "frame" and any(k.startswith(STRAIGHTEN_ONLY) for k in params):
         raise SystemExit("curve.* settings act in Straighten, which only the app chain runs: add --chain app")
+    if chain == "frame" and any(k.startswith(APP_ONLY) for k in params):
+        raise SystemExit("process.refine_from_images and spacetime.* act in the app's Make mesh: add --chain app")
     if chain != "frame" and a.cmd in ("replay", "holes", "selfcheck"):
         raise SystemExit(f"{a.cmd} is for the frame pass only (leave out --chain)")
     t0 = time.perf_counter()
