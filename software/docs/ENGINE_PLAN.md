@@ -179,8 +179,8 @@ against the simulator's truth. Numbers and tables: `VALIDATION.md`, "The scoreca
   seeds 0 and 2, one seam); on the other 29, and at true poses, Straighten and Refine with
   lasers change nothing. **An experiment that touches tracking or what follows it is judged on
   the app chain from now on.**
-- **A scoring question left:** the "THINNER" alarm fires for a wall that read too thick and
-  moved towards the truth; only plates that read too thin have the exception so far.
+- A wall that read too thick and moved towards the truth is flagged "THINNER" in the table;
+  that flag is a note, not an alarm, and does not make its scene worse.
 
 ### [ ] X0a. What the first baseline found (do these first)
 Three things in the engine, none known before. Each is a defect to understand, not an
@@ -321,6 +321,13 @@ experiment: measure, find the cause, mend, and judge the mend with the scorecard
 - [ ] **GPU, hole plate 120 mm up, seed 0: tracking is lost** (path max 16.3 mm; the Ø25 hole
   then reads 6.9 mm small). Seeds 1 and 2 hold (3.9 mm).
 
+  **Found 2026-11-21 (X4); stays open (X4b).** At frames 52 to 56 one frame lands 4.2 mm off
+  from a start 1.7 mm off, and the constant-velocity prediction carries it to 8 and 23 mm. The
+  tracker's own numbers stay healthy (fitness 0.78 to 0.82, RMSE 0.35 to 0.38 mm), and ICP
+  from the true pose against the same model moves at most 1.6 mm: the model is sound, the
+  translation is weakly held. Seeds 1 and 2 have step errors of about 2 mm that are not
+  carried that far. The camera path's check warns on this recording.
+
 ### [x] X1. A gap guard that goes by the matcher's own doubt (measured 2026-11-21: not adopted) (S to M)
 - **Idea:** drop fused depth whose matcher sigma says "fill" (above about 3 mm) within 12 to
   16 px of a patch without depth, instead of, or on top of, dropping everything within 8 px.
@@ -448,7 +455,7 @@ experiment: measure, find the cause, mend, and judge the mend with the scorecard
   features are where it can be mended. And see X0a: where Straighten's adjustment does act
   today, on standing walls, it acts wrongly.
 
-### [ ] X4. Tracking on dark, plain and thin parts, GPU path (S, S, M)
+### [x] X4. Tracking on dark, plain and thin parts, GPU path (measured 2026-11-21: not adopted) (S, S, M)
 - **Steps:** (a) diagnose by axis and frame on the six hard recordings: where the drift
   starts, how well the translation is held, detail mode, the carried velocity. (b) allow the
   velocity guard on the GPU model. (c) add laser points as ICP points with their own weight
@@ -463,6 +470,52 @@ experiment: measure, find the cause, mend, and judge the mend with the scorecard
   carburettor stretches.
 - **Stop rule: adopted only if** every hard scene improves by at least 30 % and ends under
   1 mm; no other scene gets worse beyond its range across seeds; no frame is lost.
+
+**Measured 2026-11-21: nothing adopted.** Numbers: `VALIDATION.md`, "Tracking on dark, plain
+and thin parts".
+- **Where the camera's offset is made (X3's finding).** Not by a model that is wrong at the
+  truth: from the true pose against a tracking model fused at the true poses, ICP pulls the
+  camera 0 to 0.08 mm in, not out. Not by the first frame: true poses for the first one or
+  five frames leave the offset as it is. It is where the tracking loop settles, and the
+  tracking model's band behind the surface (`gpu_back_voxels`) sets that; truncation and voxel
+  size act the same way; the border, the weight threshold, the normals and the tracking filter
+  barely move it. Band off: the sheet's camera +0.31 mm out; 1 voxel (today) +0.19; 0.75:
+  +0.07; 0.5: -0.15, and the sheet's 3 mm rib then reads 0.42 mm thin.
+- **Judged at 0.75 voxel on what Make mesh runs: a miss.** Walls 0.1 to 0.23 mm and the
+  sheet's walls 0.15 to 0.37 mm nearer the truth, the hole plate's lost seed 16.3 → 8.0 mm.
+  But bosses and the shaft read 0.03 to 0.14 mm smaller on every bracket, two brackets are
+  0.04 to 0.05 mm worse in the median, one sheet is thinned under its true size (flange 2.00,
+  3 mm rib 2.82), and a seam and the hard scenes get worse. A shorter band moves every
+  recording inward together: it trades the ones that stood out against the ones that stood in.
+- **Step (b), a velocity guard on the GPU model:** built (`FusionParams.gpu_velocity_guard`,
+  off). At 2 m/s² it never acts (frames are 0.1 s apart, so a step may change by 20 mm); at
+  0.6 m/s² the hard scenes get worse.
+- **The hard recordings:** the dark bracket's 3.9 mm are made at frames 1 and 2 and then held
+  by the model; the speckled ones start 1.3 to 1.7 mm off at frame 1; the hard plates slip
+  about 2 mm for single pairs of frames. None came under 1 mm with anything tried.
+- **Found on the way:** frame 1 is registered against a model made of one frame and lands 1 to
+  8 mm off on every scene with a table; 31 of 36 recordings decide for the tracker's detail
+  mode at frame 1 or 2, on that one-frame model. And the true-pose reference itself carries
+  the voxel grid's alignment (about 43 % of one 0.5 mm wall's gap).
+- **Not tried:** step (c), laser points in the ICP. **Next:** X4b below.
+
+### [ ] X4b. The scan's start, and holding a weak translation (found by X4; S to M)
+- **What X4 measured:** the first frame is registered against a model of one frame from a
+  prediction of zero and lands 1 to 8 mm off; the dark bracket's whole 3.9 mm error is made in
+  frames 1 and 2 and never mended; the hole plate's loss at frames 52 to 56 and the hard
+  plates' slips are single frames landing a few mm off while the tracker's own numbers look
+  healthy, then carried by the constant-velocity prediction.
+- **Ideas, each a setting:** (a) build the first model from several frames before trusting it
+  (hold the camera's first frames together with the motion sensor's rotation and a short
+  window of frames, or register frames 1 to k against each other and fuse once); (b) decide
+  for detail mode after k frames, not on one; (c) where the translation is weakly held
+  (`trans_strength` low), do not carry a jump into the prediction: fall back to the last
+  velocity that was confirmed by two frames; (d) the motion sensor's accelerometer as a check
+  on a step (the recordings carry it; the engine does not use it).
+- **Judge on** the app chain's baseline, the hard recordings and the hole plate 120 mm up.
+- **Stop rule: adopted only if** the dark bracket's last frame is under 1.5 mm and the hole
+  plate's seed 0 path max under 6 mm, no scene is worse beyond its spread, nothing thin moves
+  away from the truth, and the smooth scenes' paths stay within 10 %.
 
 ### [ ] X5. Fine voxels where the part needs them (S to M, then L)
 - **Step 1:** after Make mesh, find thin walls (where the opposite-sides rule fired) and
@@ -560,6 +613,12 @@ experiment: measure, find the cause, mend, and judge the mend with the scorecard
   round, and leaving out its borders lets the frames slide.
 - **Letting the laser-crossing adjustment act more** (X3): the crossings already meet at the
   tracked poses; where its test lets it act, the test is fooled.
+- **One shorter or longer band, truncation or voxel in the GPU tracking model for every scan**
+  (X4): it moves every recording's camera inward or outward together.
+- **Leaving raw depth out near holes, depth steps or where the matcher is unsure, in the
+  tracker's detail mode** (X4): the paths slide 5 to 20 mm.
+- **A guard on acceleration on the GPU model** at frames 0.1 s apart (X4): it never acts, or
+  with a tighter limit makes the hard scenes worse.
 - **Fusing weights:** 1/sigma² (+15 to 25 % median); flat up to a knee (no gain).
 - **Weak directions:** remapping them; geometrically stable sampling.
 - **A narrower disparity search:** one range a frame (2 to 7 % faster; the bar was 10 %).

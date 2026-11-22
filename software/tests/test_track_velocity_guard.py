@@ -54,6 +54,31 @@ def test_the_guard_bounds_the_velocity_carried_into_the_next_prediction():
     assert _steps(gpu, [18.7, 37.4]) == ([pytest.approx(18.7), pytest.approx(18.7)], [0.0, 0.0])
 
 
+def test_the_guard_can_be_asked_for_on_the_gpu_model():
+    """ENGINE_PLAN X4 (b): ``FusionParams.gpu_velocity_guard`` puts the same guard on the GPU model, with
+    ``VELOCITY_MAX_ACCEL`` where ``velocity_max_accel`` is left None (the GPU path leaves it None). On the hole plate
+    120 mm up (seed 0) one frame landed 4 mm off and the prediction carried it on: 8, 23 mm at the next two frames.
+    Off by default: the GPU model then carries every step as it is (the test above)."""
+    try:
+        gpu = MarkerlessTracker(K, (W, H), FusionParams(voxel_mm=2.0, model_backend="gpu", gpu_velocity_guard=True))
+    except RuntimeError:
+        pytest.skip("no GPU here")
+    steps, acted = _steps(gpu, [18.7, 37.4])
+    first = VELOCITY_MAX_SPEED * DT
+    assert steps[0] == pytest.approx(first) and acted[0] == pytest.approx(18.7 - first)
+    second = first + VELOCITY_MAX_ACCEL * 1000.0 * DT * DT
+    assert steps[1] == pytest.approx(second) and acted[1] == pytest.approx(18.7 - second)
+    # with velocity_from_rest the first velocity is bounded from rest, as on the Open3D model
+    rest = MarkerlessTracker(K, (W, H), FusionParams(voxel_mm=2.0, model_backend="gpu", gpu_velocity_guard=True,
+                                                     velocity_from_rest=True))
+    steps, _ = _steps(rest, [18.7])
+    assert steps[0] == pytest.approx(VELOCITY_MAX_ACCEL * 1000.0 * DT * DT)
+    # a hand-held motion is left alone
+    hand = MarkerlessTracker(K, (W, H), FusionParams(voxel_mm=2.0, model_backend="gpu", gpu_velocity_guard=True))
+    v = [4.0, 4.5, 4.0, 3.5, 4.0]
+    assert _steps(hand, list(np.cumsum(v))) == ([pytest.approx(x) for x in v], [0.0] * len(v))
+
+
 def test_the_guard_leaves_a_hand_held_motion_alone():
     """4 mm a frame from the start (the simulator's fastest), changing by 0.5 mm a frame (0.45 m/s^2)."""
     tr = MarkerlessTracker(K, (W, H), FusionParams(voxel_mm=2.0, model_backend="open3d",

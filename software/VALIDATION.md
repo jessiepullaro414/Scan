@@ -4350,6 +4350,103 @@ to 0.6 mm in tests), so check the thickness of thin walls another way before you
 Limits: simulated, one run a recording, the GPU path only; the frames form was chosen on the
 same wall recordings it is judged on.
 
+## Tracking on dark, plain and thin parts (ENGINE_PLAN X4, 2026-11-21): measured, nothing adopted
+
+GPU path; the matcher's depth fed from the cache; each run scored with the scorecard's judge (a
+run without changes gives the scorecard's tracked numbers exactly). "Out" is how far the placed
+camera stands back from where it really was, in mm. X3 found that this offset, shared by every
+frame, is most of what tracked scans lose on thin parts; this section is about where it is made.
+
+**Not by a model that is wrong at the truth.** With every tracker fusing at the true poses, each
+frame was first registered by ICP from its true pose against that model. Mean move in the
+camera's frame (x / y / z; "out" would be z about -0.2): walls -0.10 / -0.02 / +0.02; sheet
++0.28 / +0.03 / -0.03; the bad bracket seed +0.21 / -0.07 / +0.08. No outward pull.
+
+**Not by the first frame.** Frame 1 is registered against a model made of one frame and lands 1
+to 8 mm off on every scene with a table (walls 1.7, sheet 1.5, hole plates 3.9 to 8.0). But
+giving every tracker the true pose for frame 1, or for frames 1 to 5, leaves the offset: walls
++0.233 / +0.246 (today +0.254), sheet +0.175 / +0.177 (+0.191), bracket +0.142 / +0.139 (+0.136).
+
+**It is where the tracking loop settles, and the tracking model's band behind the surface sets
+that.** Frames are registered against a model fused at slightly-out poses; the band keeps the
+swollen surface; the error settles. One setting changed at a time; cells are out, then the
+thicknesses (walls 0.5 / 1 / 2 mm; sheet flange / 1 mm rib / 3 mm rib; bracket median / share
+over 0.3 mm):
+
+| tracking model | walls seed 0 | sheet seed 0 | bracket seed 2 |
+|---|---|---|---|
+| today (band 1 voxel = 2 mm) | +0.254; 1.229 / 0.808 / 0.660 | +0.191; 0.604 / 0.969 / 0.535 | +0.136; 0.228 / 0.316 |
+| at true poses, for reference | 0.786 / 0.534 / 0.354 | 0.180 / 0.270 / 0.030 | 0.058 / 0.102 |
+| band off (2 voxels) | +0.280; 1.322 / 0.963 / 0.734 | +0.313; 0.897 / 1.159 / 0.813 | +0.230; 0.284 / 0.463 |
+| band 0.75 voxel | +0.236; 1.132 / 0.742 / 0.579 | +0.068; 0.349 / 0.824 / 0.304 | +0.065; 0.176 / 0.177 |
+| band 0.6 | +0.215; 1.074 / 0.657 / 0.514 | -0.051; 0.152 / 0.605 / -0.001 | +0.019; 0.151 / 0.144 |
+| band 0.5 | +0.226; 1.029 / 0.689 / 0.545 | **-0.146; 0.075 / 0.364 / -0.421** | -0.025; 0.122 / 0.127 |
+| truncation 1.5 / 3 voxels | +0.250 / +0.299 | +0.092 / +0.341 | +0.105 / +0.180 |
+| tracking voxel 1.5 / 3 mm | +0.260 / +0.310 | +0.121 / +0.458 | +0.123 / +0.215 |
+| border 4 / 12 mm | +0.249 / +0.232 | +0.225 / +0.194 | +0.163 / +0.141 |
+| weight threshold 4 / 16 | +0.234 / +0.275 | +0.184 / +0.174 | +0.129 / +0.144 |
+| normal window 3 / 9 | +0.251 / +0.239 | +0.220 / +0.189 | +0.130 / +0.114 |
+| tracking filter 4 / 9 px | +0.246 / +0.246 | +0.189 / +0.147 | +0.146 / +0.107 |
+
+The band, the truncation and the voxel size move it, the rest barely. But a shorter band moves
+every recording inward together: the brackets that already sat in (seeds 0 and 3, out -0.05)
+get worse (median 0.117 → 0.155 and 0.090 → 0.141), and at 0.5 the sheet's 3 mm rib reads
+0.42 mm thin. On a wall with exact depth the band changes nothing (face offsets -0.14 / -0.07 /
++0.05 / +0.18 at 2 mm and at 1 mm), so it acts through noisy depth and poses that disagree.
+
+**Judged: the band at 0.75 voxel, 36 recordings, on what Make mesh runs** (the change, by seed):
+
+| rows | change | verdict |
+|---|---|---|
+| standing walls 0.5 / 1 / 2 mm | -0.05..-0.14 / -0.01..-0.20 / 0.00..-0.23 | nearer the truth |
+| sheet flange / 1 mm rib / 3 mm rib | -0.25..-0.29 / -0.15..-0.33 / -0.23..-0.37 | nearer; but on seed 1 the flange reads 2.00 mm and the 3 mm rib 2.82 mm, under the truth |
+| 0.5 mm plates | within 0.003 mm; top kept identical | same |
+| brackets: bosses / shaft radius | -0.03..-0.10 / -0.02..-0.14 | further off on every seed: the swelling had hidden that they read small |
+| bracket median, seeds 0 to 4 | +0.038 / +0.048 / -0.053 / +0.051 / -0.019 | mixed |
+| sheet path max | +0.67 / +2.71 / +1.61 | worse |
+| hole plate 120 mm up, seed 0 | path max 16.3 → 8.0; Ø25 3.5 mm nearer; one click fewer on the bore | mixed |
+| dark, speckled, hard plates (last frame) | 3.79 → 3.47, 0.70 → 0.81, 1.13 → 1.19, 0.92 → 1.00, 1.38 → 1.96, 0.47 → 0.45 | mostly worse |
+| one seam, path median | 0.32 → 0.99 | worse |
+| car panel, sphere: path | within 0.04 mm | same |
+
+Last line: worse on the brackets, the dark and speckled brackets, the hard plate, both hole
+plates and the sheet (on the frame pass: the same but one). It misses the experiment's own stop
+rule too (no hard scene 30 % better or under 1 mm). Off. Nothing changed by default.
+
+**The hole plate 120 mm up that loses tracking (seed 0).** At frames 52 to 56 one frame lands
+4.2 mm off from a start 1.7 mm off, and the constant-velocity prediction carries it on (8.2 and
+22.8 mm off at the next two starts; the path is 13.8 mm off at frame 53, back by frame 57). The
+tracker's own numbers stay healthy throughout (fitness 0.78 to 0.82, RMSE 0.35 to 0.38 mm, about
+5,700 inliers), and ICP from the true pose against the same model moves at most 1.6 mm: the
+model is sound, the translation is weakly held. Seeds 1 and 2 have step errors of about 2 mm
+that are not carried that far. Frames are 0.1 s apart, so a guard on acceleration at 2 m/s²
+allows a step to change by 20 mm and never acts.
+
+**The hard recordings, by frame.** Dark bracket 1: its 3.9 mm are made at frames 1 and 2 (1.2 mm
+off at frame 1 with fitness 0.53, then a jump of 5.2 mm) and held by the model to the end. Dark
+bracket 2: about 1 mm in frames 2 to 5. Speckled: 1.3 and 1.7 mm off at frame 1 (fitness 0.10
+and 0.20 against the one-frame model), then slowly along the motion. Hard 0.5 mm plates: single
+pairs of frames slip about 2 mm along the plate and come back.
+
+**Detail mode.** 31 of the 36 recordings switch to the tracker's detail mode at frame 1 or 2,
+judged on a model made of one frame. It is needed: without it the walls slide (path max
+15.9 mm), the bracket runs away (387 mm) and the sheet's 3 mm rib loses 2 mm. Leaving the raw
+depth out near holes, near depth steps or where the matcher is unsure wrecks the path on walls,
+sheet and bracket (5 to 20 mm).
+
+**A velocity guard on the GPU model** (built as `FusionParams.gpu_velocity_guard`, off): at
+2 m/s² it never acts on these recordings; at 0.6 m/s² the hard scenes get worse (dark last frame
+3.97, speckled 1.35, hard plate 1.92 against 1.38).
+
+**The true-pose reference carries its own error.** Fused at true poses in the tracker's world
+(the first camera's frame, as every tracked scan is), walls seed 0 reads 0.975 / 0.531 / 0.387;
+the scorecard's true-pose run, fused in the simulator's world, reads 0.786 / 0.534 / 0.354. The
+1 mm grid's alignment to the walls accounts for about 43 % of that 0.5 mm wall's gap between
+tracked and true.
+
+Limits: simulated, one run a recording; tuned on walls seeds 0 and 1, sheets 0 and 2, bracket 2,
+panel 0, plate 0; timings on a busy PC, not judged.
+
 ## What the metrics mean
 
 - **Stereo errors** compare the estimated raw intrinsics/extrinsics (`K1`, `K2`, `R`, `T`) with

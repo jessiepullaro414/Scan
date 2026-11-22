@@ -66,9 +66,10 @@ slid, the filter's leftover fragments of it then look well held but are biased, 
 trim it only made the worst frames worse. A frame that fails a gate still tries ``alt_depth``
 before it is lost (``VALIDATION.md``, "Large and detailed parts").
 
-**The velocity guard** (``FusionParams.velocity_max_accel``, Open3D model only; off in this class by
+**The velocity guard** (``FusionParams.velocity_max_accel``, Open3D model; off in this class by
 default, on in the processing pipeline's CPU path since 2026-11-20: :mod:`ohs.app.pipeline`, "The CPU
-path's defaults"). On a
+path's defaults"; on the GPU model only with ``FusionParams.gpu_velocity_guard``, off by default, ENGINE_PLAN
+X4). On a
 scene the depth barely holds sideways (a dark part a few percent of the image, the rest a bench), one
 frame can be pushed far off, and the constant-velocity prediction then carries the error on: the
 directions the data cannot hold stay at the prediction, so a wrong velocity repeats every frame. With the
@@ -317,6 +318,10 @@ class FusionParams:
     # velocity guard"). None or 0: no limit here; ohs.app.pipeline fills in VELOCITY_MAX_ACCEL (2) on the CPU
     # path since 2026-11-20 (MAINTENANCE_PLAN F14, D7), and 0 turns it off there
     velocity_max_accel: float | None = None
+    # ENGINE_PLAN X4 (b): the velocity guard on the GPU model too (module docstring, "The velocity guard"), with
+    # velocity_max_accel, or VELOCITY_MAX_ACCEL where that is None (the GPU path leaves it None). Off: the GPU model
+    # carries every step as it is, as before.
+    gpu_velocity_guard: bool = False
     # sanity gates
     min_points: int = 300  # valid source points at the finest ICP level, counted at stride 4 (scaled by the stride)
     min_model_px: int = 300  # valid model pixels in the ray cast
@@ -1316,8 +1321,9 @@ class MarkerlessTracker:
             D = invert_se3(self._T_last) @ T_wc
             dt = None if (t is None or self._t_last is None) else float(t - self._t_last)
             step = D[:3, 3].copy()
-            if self._gpu is None and self.params.velocity_max_accel and dt:
-                step = self._guard_velocity(step, dt)
+            accel = self._guard_accel()
+            if accel and dt:
+                step = self._guard_velocity(step, dt, accel)
             self._last_step = (D[:3, :3].copy(), step, dt)
         else:
             self._last_step = None
@@ -1327,13 +1333,23 @@ class MarkerlessTracker:
         self._R_acc = np.eye(3)
         self._n_lost = 0
 
-    def _guard_velocity(self, step: np.ndarray, dt: float) -> np.ndarray:
+    def _guard_accel(self) -> float | None:
+        """The velocity guard's acceleration (m/s^2), or None when it is off: ``velocity_max_accel`` on the Open3D
+        model; on the GPU model only with ``gpu_velocity_guard`` (then :data:`VELOCITY_MAX_ACCEL` where it is None)."""
+        p = self.params
+        if self._gpu is None:
+            return p.velocity_max_accel or None
+        if not p.gpu_velocity_guard:
+            return None
+        return float(p.velocity_max_accel) if p.velocity_max_accel else VELOCITY_MAX_ACCEL
+
+    def _guard_velocity(self, step: np.ndarray, dt: float, accel: float) -> np.ndarray:
         """The velocity guard (module docstring): the frame's translation ``step`` (mm, in the previous
         frame's camera frame, over ``dt`` s) as it is carried into the next prediction, its velocity
-        changed from the last one by at most ``velocity_max_accel * dt``. Sets :attr:`_guard_mm`."""
+        changed from the last one by at most ``accel * dt`` (``accel`` in m/s^2). Sets :attr:`_guard_mm`."""
         R_last = self._T_last[:3, :3]
         v = R_last @ step / dt  # mm/s, world
-        accel_lim = float(self.params.velocity_max_accel) * 1000.0 * dt  # mm/s
+        accel_lim = float(accel) * 1000.0 * dt  # mm/s
         if self._v_w is None:  # the first velocity of a run of frames: the scanner's speed is not known, only bounded
             # (from rest with FusionParams.velocity_from_rest)
             ref, lim = np.zeros(3), accel_lim if self.params.velocity_from_rest else VELOCITY_MAX_SPEED
