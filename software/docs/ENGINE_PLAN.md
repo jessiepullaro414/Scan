@@ -55,6 +55,25 @@ The rules of `FEATURE_PLAN.md` and `MAINTENANCE_PLAN.md` hold. In short:
   switched is written here and in `VALIDATION.md`. It waits until X4's runs are finished, so
   that X4 is judged against one baseline and not against a default that changed under it.
 
+  **Switched 2026-11-21.** `CurveParams.holdout` is `"frames"` by default; `"crossings"` stays
+  a setting. What moved, on what Make mesh runs, against the baseline before the switch: three
+  recordings of 36 and nothing else.
+  - Standing walls seed 0: the walls 0.5 / 1 / 2 mm read +1.543 / +1.236 / +1.124 before and
+    +1.229 / +0.808 / +0.660 now (0.31 to 0.46 mm nearer the truth); the 0.5 mm wall's face
+    0.27 → 0.48 covered; median / p95 0.144 / 0.973 → 0.125 / 0.720.
+  - Standing walls seed 2: +0.891 / +0.431 / -0.052 → +1.257 / +0.911 / +0.535, the thickness
+    the frame pass reads; its 2 mm wall is no longer pulled past the truth (it read 1.95 mm);
+    the 0.5 mm face 0.65 → 0.45 covered.
+  - Speckled bracket 1: the adjustment is now refused there; path median 0.73 → 1.02 mm.
+  - The other 69 of 72 runs are identical in every scored number, the second speckled bracket
+    among them, where the adjustment still acts. It acts on one recording of 36 now, on four
+    before.
+  - Without a GPU neither test acts on the recordings checked (a wall recording, a bracket, the
+    sphere), so nothing changes there.
+  - The sentence shown when it acts no longer says "up to 0.6 mm in tests": that bound was
+    measured with the old test.
+  - The baseline to judge against from now on: `tools/scorecard_baselines/2026-11-21-gpu-core-app-frames.json`.
+
 ## The error budget today
 
 GPU path, Standard quality, 1 mm voxels, tracked unless said.
@@ -178,7 +197,8 @@ against the simulator's truth. Numbers and tables: `VALIDATION.md`, "The scoreca
   7 of 36 recordings (walls seeds 0 and 2, both speckled brackets, the hole plate 120 mm up
   seeds 0 and 2, one seam); on the other 29, and at true poses, Straighten and Refine with
   lasers change nothing. **An experiment that touches tracking or what follows it is judged on
-  the app chain from now on.**
+  the app chain from now on**, against `2026-11-21-gpu-core-app-frames.json` (made after
+  Straighten's test was switched, E-D2; the file without "frames" is the state before).
 - A wall that read too thick and moved towards the truth is flagged "THINNER" in the table;
   that flag is a note, not an alarm, and does not make its scene worse.
 
@@ -300,7 +320,7 @@ experiment: measure, find the cause, mend, and judge the mend with the scorecard
     brackets.
   - **Its test is unsound.** On a wall recording at the TRUE poses the test passes (0.68) and the
     adjustment then moves the true poses by up to 8 mm.
-  - **Two candidates, both built as settings that are off:** the adjustment switched off
+  - **Two candidates, built as settings (both off when this was measured):** the adjustment switched off
     (`CurveParams.enabled = False`), and a test that holds out whole frames
     (`CurveParams.holdout = "frames"`: every second frame, each half in turn, the test on the
     crossings between two held-out frames). The frames test refuses every wall, tracked and at
@@ -314,7 +334,11 @@ experiment: measure, find the cause, mend, and judge the mend with the scorecard
     1.02 mm. Every other recording is identical.
   - **Built and on:** when the crossings change the poses, Straighten's summary and the scan's
     warnings say so ("…On thin walls seen from both sides this can make a wall read thinner or
-    thicker than it is (up to 0.6 mm in tests)…"). So it is no longer silent.
+    thicker than it is…"). So it is no longer silent.
+  - **Switched 2026-11-21 by the owner's choice (E-D2):** the frames test is the default. It
+    refuses every wall recording, tracked and at true poses, and still mends the tests' real
+    drift. See the report under the decisions at the top. The item stays open for the point
+    below.
   - **Still open whatever is chosen:** no test yet tells thin walls from real drift when both
     are present: on a wall recording with drift added every test passes and acting makes the
     path five times worse.

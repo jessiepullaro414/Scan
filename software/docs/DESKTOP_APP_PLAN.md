@@ -535,7 +535,7 @@ Phase 1 is done when full-quality processing is at least 3x faster on the RTX la
 
    **Status (2026-11-10): done, poses only.**
    - It runs after the loops, inside Straighten (and on scans without loops), with no new settings. It fuses again only when it changes the poses.
-   - Never worse: fitted on half the crossings, the other half must meet clearly better, else the poses stay.
+   - Never worse: fitted on half the crossings, the other half must meet clearly better, else the poses stay. (Since 2026-11-21 the test holds out whole frames, not single crossings: `docs/ENGINE_PLAN.md`, E-D2.)
    - On a full-resolution 400° sphere orbit with drift, after Straighten, the sphere's mesh error fell 0.17 → 0.12 mm and 0.97 → 0.48 mm (true poses: 0.09); without drift nothing changes. Short scans have too few crossings and are left alone (`VALIDATION.md`, "Laser-curve adjustment").
    - About 8 s for 60 frames at full resolution, plus the second fuse when it changes the poses.
    - Next: the laser planes and the time offset as unknowns (self-calibration), and the IMU.

@@ -96,7 +96,8 @@ def test_true_poses_are_left_alone(orbit, truth):
     idx, T, times = truth
     poses, rep = laser_curve_adjustment(orbit, None, rows(idx, T, times))
     assert rep["reason"] == "not_better" and rep["changed"] is False, rep["verdict"]
-    assert rep["holdout"]["ratio"] > CurveParams().holdout_max_ratio  # fitting the scatter: the other half meet worse
+    # fitting the scatter: the held-out frames' crossings meet worse (the default since 2026-11-21: whole frames)
+    assert rep["holdout"]["by"] == "frames" and rep["holdout"]["ratio"] > CurveParams().holdout_max_ratio
     assert all(np.array_equal(poses[i], T[k]) for k, i in enumerate(idx))
     assert "unchanged" in rep["verdict"]
 
@@ -143,11 +144,11 @@ def _walls(out, seed: int, n_frames: int):
 
 @pytest.mark.slow
 def test_the_standing_walls_true_poses_are_left_alone(tmp_path):
-    """ENGINE_PLAN X0a: on thin standing walls the crossings of one frame share that frame's errors, so half the
-    crossings at random "met better" when the other half was fitted even at the TRUE poses (ratio 0.68 here), and the
-    adjustment moved true poses by millimetres: a thin part thinned or thickened without a word. With whole frames held
-    out (``holdout="frames"``, a setting) the check is not fooled, and true poses stay as they are. The default still
-    is fooled here; it then says so (``warning``)."""
+    """ENGINE_PLAN X0a and E-D2: on thin standing walls the crossings of one frame share that frame's errors, so half
+    the crossings at random "met better" when the other half was fitted even at the TRUE poses (ratio 0.68 here), and
+    the adjustment moved true poses by millimetres: a thin part thinned or thickened. The default since 2026-11-21
+    holds out whole frames (``holdout="frames"``); it is not fooled, and true poses stay as they are. The old test,
+    still a setting (``holdout="crossings"``), is fooled here, and then says so (``warning``)."""
     from recordings import cached_recording
 
     rec = cached_recording(tmp_path / "walls", _walls, seed=0, n_frames=120)
@@ -155,27 +156,33 @@ def test_the_standing_walls_true_poses_are_left_alone(tmp_path):
     gt = reader.ground_truth_poses()
     idx = sorted(gt)
     T = np.stack([invert_se3(gt[idx[0]]) @ gt[i] for i in idx])
-    poses, rep = laser_curve_adjustment(rec, None, rows(idx, T, reader.times()), params=CurveParams(holdout="frames"))
-    print("standing walls, true poses, frames held out:", rep["holdout"], rep["verdict"])
+    poses, rep = laser_curve_adjustment(rec, None, rows(idx, T, reader.times()))  # the default: whole frames
+    print("standing walls, true poses, the default (frames held out):", rep["holdout"], rep["verdict"])
     assert rep["crossings"] >= CurveParams().min_crossings  # enough crossings that the check decides
+    assert rep["holdout"]["by"] == "frames" and len(rep["holdout"]["ratios"]) == 2, rep["holdout"]
     assert rep["reason"] == "not_better" and rep["changed"] is False, rep["verdict"]
     assert rep["holdout"]["ratio"] > CurveParams().holdout_max_ratio and rep["warning"] is None
     assert all(np.array_equal(poses[i], T[k]) for k, i in enumerate(idx))
-    _, rep = laser_curve_adjustment(rec, None, rows(idx, T, reader.times()))  # the default: half the crossings
-    print("standing walls, true poses, the default:", rep["holdout"], rep["verdict"])
-    assert rep["changed"] is False or "thin walls" in rep["warning"]
+    poses, rep = laser_curve_adjustment(rec, None, rows(idx, T, reader.times()), params=CurveParams(holdout="crossings"))
+    print("standing walls, true poses, half the crossings held out (the old test):", rep["holdout"], rep["verdict"])
+    assert rep["reason"] == "adjusted" and rep["holdout"]["ratio"] < CurveParams().holdout_max_ratio, rep["holdout"]
+    assert not all(np.array_equal(poses[i], T[k]) for k, i in enumerate(idx))  # it moves the true poses ...
+    assert isinstance(rep["warning"], str) and "thin walls" in rep["warning"]  # ... and says that it acted
 
 
-def test_the_genuine_drift_is_still_mended_with_whole_frames_held_out(orbit, truth):
-    """ENGINE_PLAN X0a: with whole frames held out (``holdout="frames"``: every second frame, each half once) the
-    drift the adjustment is for still passes the test and is mended."""
+def test_the_genuine_drift_is_mended_with_whole_frames_held_out(orbit, truth):
+    """ENGINE_PLAN X0a and E-D2: with whole frames held out (the default since 2026-11-21: every second frame, each
+    half once) the drift the adjustment is for still passes the test and is mended."""
     idx, T, times = truth
     D = add_drift(T, 0.2, 0.6, 3)
-    poses, rep = laser_curve_adjustment(orbit, None, rows(idx, D, times), params=CurveParams(holdout="frames"))
+    assert CurveParams().holdout == "frames" and CurveParams().holdout_every == 2 and CurveParams().enabled is True
+    poses, rep = laser_curve_adjustment(orbit, None, rows(idx, D, times))
     h = rep["holdout"]
     assert h["by"] == "frames" and len(h["ratios"]) == 2 and h["ratio"] == max(h["ratios"]), h
+    assert h["ratio"] == pytest.approx(0.612, abs=0.002) and min(h["ratios"]) == pytest.approx(0.572, abs=0.002), h
     assert rep["reason"] == "adjusted" and h["ratio"] < 0.7, rep["verdict"]
     assert rep["ground_truth"]["after"]["rms_trans_mm"] < 0.8 * rep["ground_truth"]["before"]["rms_trans_mm"]
+    assert isinstance(rep["warning"], str) and "thin walls" in rep["warning"]  # when it acts, the scan says so
 
 
 def test_switched_off_changes_nothing(orbit, truth):
@@ -186,14 +193,16 @@ def test_switched_off_changes_nothing(orbit, truth):
     assert all(np.array_equal(poses[i], D[k]) for k, i in enumerate(idx))
 
 
-def test_the_crossings_split_is_still_the_default(orbit, truth):
-    """The test of before 2026-11-21 (half the crossings at random) is still the default, with its numbers."""
+def test_the_crossings_split_still_works_as_a_setting(orbit, truth):
+    """The test of before 2026-11-21 (half the crossings at random, ``holdout="crossings"``) is a setting since the
+    owner's decision (ENGINE_PLAN E-D2), with its numbers; an unknown form is refused."""
     idx, T, times = truth
     D = add_drift(T, 0.2, 0.6, 3)
-    assert CurveParams().holdout == "crossings" and CurveParams().enabled is True
-    _, rep = laser_curve_adjustment(orbit, None, rows(idx, D, times))
+    _, rep = laser_curve_adjustment(orbit, None, rows(idx, D, times), params=CurveParams(holdout="crossings"))
     assert rep["reason"] == "adjusted" and set(rep["holdout"]) == {"before_mm", "after_mm", "ratio"}
     assert rep["holdout"]["ratio"] == pytest.approx(0.498, abs=0.002)
+    _, rep = laser_curve_adjustment(orbit, None, rows(idx, T, times), params=CurveParams(holdout="crossings"))
+    assert rep["reason"] == "not_better" and rep["changed"] is False  # true poses: refused here too
     with pytest.raises(ValueError):
         laser_curve_adjustment(orbit, None, rows(idx, D, times), params=CurveParams(holdout="blocks"))
 

@@ -643,6 +643,8 @@ Research plan 4.4.1. Three additions to Straighten (`ohs/track/posegraph.py`, "L
 
 ## Laser-curve adjustment (M3 phase 3, 2026-11-10)
 
+(The held-out test described here, half the crossings at random, was the default until 2026-11-21. Since then whole frames are held out: see "Straighten's laser crossings on what Make mesh runs".)
+
 Research plan 7.3, poses only (`ohs/track/curve_ba.py`, run by Straighten). Where the laser curves of different frames cross on the surface, they must meet. All poses are solved together with the tracked motion as a prior, plus a weak term of each frame's depth against the fused surface. The poses change only when, fitted on half the crossings, the other half meet clearly better.
 
 **Setup:** a 400° hand-held orbit around the sphere on the table, 60 frames at 1280x800, with drift added to the true poses, then Straighten (loops), then the adjustment, then a fuse. The mesh error is the median distance to the analytic surfaces, in mm.
@@ -4344,8 +4346,24 @@ owner's (ENGINE_PLAN E-D2). Both are settings (`CurveParams.enabled`, `CurvePara
 **What changed in the engine:** when the crossings change the poses, the adjustment's report
 carries a sentence, Straighten's summary ends with it and the scan's warnings list it:
 "Straighten moved the camera path by up to 1.2 mm to make the laser lines meet where they cross.
-On thin walls seen from both sides this can make a wall read thinner or thicker than it is (up
-to 0.6 mm in tests), so check the thickness of thin walls another way before you rely on it."
+On thin walls seen from both sides this can make a wall read thinner or thicker than it is, so
+check the thickness of thin walls another way before you rely on it." (Until the switch below
+it also said "up to 0.6 mm in tests", a bound measured with the old test.)
+
+**Switched (2026-11-21, the owner's choice, ENGINE_PLAN E-D2):** whole frames held out is the
+default; half the crossings at random stays a setting (`CurveParams.holdout = "crossings"`).
+The baseline of what Make mesh runs was made again, all 36 tracked runs computed afresh:
+`tools/scorecard_baselines/2026-11-21-gpu-core-app-frames.json`. Against the baseline before
+the switch only three recordings differ, as the "frames held out" column above says: walls
+seed 0 (the walls +1.229 / +0.808 / +0.660, the 0.5 mm face 0.483 covered, median / p95 0.125 /
+0.720, path median 0.531), walls seed 2 (+1.257 / +0.911 / +0.535, the 0.5 mm face 0.447,
+median 0.145, path median 1.496) and speckled bracket 1 (path median 1.019; its far-off right
+boss 4.85 → 2.22). The other 69 of 72 runs are identical in every scored number; the adjustment
+still acts on speckled bracket 2. The fresh runs agree with the earlier candidate in every
+scored number on 35 recordings; on speckled bracket 1 they differ by about 0.000001 mm, which a
+repeat of the same code also shows (the GPU from run to run). Without a GPU neither test acts
+on walls seed 0 (0.930 before, 1.172 now), bracket seed 0 (1.129, 1.263) or the sphere (too few
+crossings), so those results are identical.
 
 Limits: simulated, one run a recording, the GPU path only; the frames form was chosen on the
 same wall recordings it is judged on.

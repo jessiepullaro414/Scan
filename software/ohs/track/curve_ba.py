@@ -28,21 +28,31 @@ poses so that they do:
      from the part) turn freely, and the surfaces they see bend.
 
    It runs ``rounds`` times, finding the crossings again at the new poses.
-4. **Never worse:** the solve is first fitted on half the crossings (``holdout="crossings"``, the
-   default). Only when the other half then meet clearly better (their median miss at most
-   ``holdout_max_ratio`` of before) are the poses changed. Otherwise the crossings only show the
-   lasers' own scatter, and fitting them would bend good poses: on simulated scans without drift the
-   fit moved the poses by 0.4 mm, and the held-out half met worse.
+4. **Never worse:** the solve is first fitted on part of the crossings, and the poses are changed
+   only when the crossings it did not see then meet clearly better (their median miss at most
+   ``holdout_max_ratio`` of before). Otherwise the crossings only show the lasers' own scatter, and
+   fitting them would bend good poses: on simulated scans without drift the fit moved the poses by
+   0.4 mm, and the held-out crossings met worse.
 
-   **This test can be fooled** (ENGINE_PLAN X0a, ``VALIDATION.md``): a frame's crossings share that
-   frame's errors, so a random half is not an independent check, and on thin standing walls it
-   passed even at the true poses. Where it acts, the scan's report says so (``warning``,
-   :func:`acted_warning`). Measured and kept as settings, not the default: ``holdout="frames"``
-   (:func:`holdout_splits`: every ``holdout_every``-th frame held out, each split in turn, the test
-   the crossings between two held-out frames; it refuses the walls and still mends the tests' drift,
-   but it also refuses one of the two speckled brackets, where acting helped the camera path, and
-   one wall recording reads up to 0.59 mm thicker without the adjustment) and ``enabled=False``
-   (off): measured on the scorecard's app chain, neither is better or the same on every scene.
+   **The default since 2026-11-21 (the owner's decision, ENGINE_PLAN E-D2): whole frames held out**
+   (``holdout="frames"``, :func:`holdout_splits`): every ``holdout_every``-th frame of those used is
+   held out, each split in turn; the fit sees only the crossings between two fitted frames, the test
+   is the crossings between two held-out frames, and the worse split must pass. Measured on the
+   scorecard's app chain and the engine tests (``VALIDATION.md``, "Straighten's laser crossings on
+   what Make mesh runs"): it refuses every standing-walls recording, tracked (0.96 to 1.08 against
+   the limit of 0.85) and at the true poses (0.89 to 0.93), and still mends the tests' real drift
+   (0.57 / 0.61). What it costs against the old test: one walls recording stays as thick as the
+   frame pass reads it (its 2 mm wall +0.54 mm instead of -0.05, the 0.5 mm wall's face 0.45
+   covered instead of 0.65), and one of the two speckled brackets keeps a camera path 0.3 mm worse
+   (median 1.02 instead of 0.73 mm), since the frames test refuses it (1.05) where the old one
+   acted. It still acts on the other speckled bracket (0.76). What it does not catch: a walls
+   recording with drift added passes (0.61), and acting then makes the path worse. Where it acts,
+   the scan's report says so (``warning``, :func:`acted_warning`).
+
+   **The old test stays a setting:** ``holdout="crossings"`` (the default until 2026-11-21) fits half
+   the crossings at random and tests the other half. A frame's crossings share that frame's errors,
+   so a random half is not an independent check: on thin standing walls it passed even at the true
+   poses and then moved them by millimetres. ``enabled=False`` switches the adjustment off.
 5. **Corrections** go to every tracked frame by interpolation between the frames used
    (:func:`ohs.track.posegraph.interpolate_poses`).
 
@@ -90,10 +100,11 @@ class CurveParams:
     iterations: int = 3
     rounds: int = 2
     holdout_max_ratio: float = 0.85
-    # the held-out test (module docstring, step 4): "crossings", half the crossings at random; "frames", whole frames
-    # held out (every ``holdout_every``-th frame of those used: the fit sees none of their crossings, the test is the
-    # crossings between two of them, which only the motion prior and the depth term move)
-    holdout: str = "crossings"
+    # the held-out test (module docstring, step 4): "frames" (the default since 2026-11-21, ENGINE_PLAN E-D2), whole
+    # frames held out (every ``holdout_every``-th frame of those used: the fit sees none of their crossings, the test
+    # is the crossings between two of them, which only the motion prior and the depth term move); "crossings" (the
+    # default until 2026-11-21, a setting), half the crossings at random
+    holdout: str = "frames"
     holdout_every: int = 2
     holdout_min_test: int = 20  # "frames": fewer test crossings than this and the poses are unchanged
     enabled: bool = True  # False: the adjustment is switched off (the poses unchanged, reason "off")
@@ -410,11 +421,11 @@ def adjust_poses(T: dict[int, np.ndarray], cr: Crossings, frames: Sequence[int],
 def holdout_splits(cr: Crossings, frames: Sequence[int], params: CurveParams | None = None) -> list[tuple[np.ndarray, np.ndarray]]:
     """``[(fit, test)]``: the crossings the held-out test fits on and the ones it checks (module docstring, step 4).
 
-    ``holdout="crossings"``: one split, half the crossings at random and the other half. A crossing shares its two
-    frames' curve errors with the other crossings of those frames, so the two halves are not independent: fitting
-    one half also fits the frames' own errors, and the other half meets better even at the true poses (standing
-    walls, ``VALIDATION.md``, ENGINE_PLAN X0a).
-    ``"frames"``: ``holdout_every`` splits; in the ``j``-th, every ``holdout_every``-th frame of ``frames`` from the
+    ``holdout="crossings"`` (a setting; the default until 2026-11-21): one split, half the crossings at random and
+    the other half. A crossing shares its two frames' curve errors with the other crossings of those frames, so the
+    two halves are not independent: fitting one half also fits the frames' own errors, and the other half meets
+    better even at the true poses (standing walls, ``VALIDATION.md``, ENGINE_PLAN X0a).
+    ``"frames"`` (the default since 2026-11-21, ENGINE_PLAN E-D2): ``holdout_every`` splits; in the ``j``-th, every ``holdout_every``-th frame of ``frames`` from the
     ``j``-th on is held out. The fit takes the crossings between two fitted frames, the test the crossings between two
     held-out frames, whose poses only the motion prior and the depth term move. A drift moves held-out frames with
     their fitted neighbours, so their crossings meet better; a frame's own errors are not in the fit, so fitting
@@ -433,12 +444,16 @@ def holdout_splits(cr: Crossings, frames: Sequence[int], params: CurveParams | N
 def acted_warning(moved_mm: float) -> str:
     """The sentence for the user when the adjustment changed the poses (``report["warning"]``; ENGINE_PLAN X0a).
 
-    Its held-out test can be fooled: on thin standing walls seen from both sides it passed even at the true poses,
-    and where it acted the walls read 0.3 to 0.5 mm thicker on one simulated scan and up to 0.6 mm thinner on
-    another (a 2 mm wall read 1.95 mm). Until a test tells those cases apart, the scan says that it acted."""
+    No held-out test yet tells thin walls from real drift. With the old test (``holdout="crossings"``) it passed on
+    thin standing walls even at the true poses, and where it acted the walls read 0.3 to 0.5 mm thicker on one
+    simulated scan and up to 0.6 mm thinner on another (a 2 mm wall read 1.95 mm). The default test (whole frames
+    held out, since 2026-11-21) refuses those walls, but a walls recording with drift added still passes it and
+    acting then makes the camera path worse, by an amount not measured on the walls' thickness: so the sentence
+    names no bound. It acts on other scans too (one of the two speckled brackets). Until a test tells those cases
+    apart, the scan says that it acted."""
     return (f"Straighten moved the camera path by up to {moved_mm:.1f} mm to make the laser lines meet where they "
-            "cross. On thin walls seen from both sides this can make a wall read thinner or thicker than it is (up to "
-            "0.6 mm in tests), so check the thickness of thin walls another way before you rely on it.")
+            "cross. On thin walls seen from both sides this can make a wall read thinner or thicker than it is, so "
+            "check the thickness of thin walls another way before you rely on it.")
 
 
 # --------------------------------------------------------------------------- the whole adjustment
@@ -452,7 +467,8 @@ def laser_curve_adjustment(rec_path: str | Path, calib: Any, trajectory: Sequenc
     surface ``(V, F)`` these poses fused (the base mesh), for the dense term. Returns ``(poses,
     report)``: ``T_wc`` of every tracked frame (the input when nothing changes) and ``frames``,
     ``crossings``, ``miss_mm`` (median before / after), ``holdout`` (median miss of the held-out
-    half before / after, and their ratio), ``moved_mm`` / ``moved_deg`` (largest change of a
+    crossings before / after, and their ratio; with whole frames held out, the default, also ``by``,
+    ``every``, ``fit``, ``test`` and each split's ``ratios``, the worst of which is ``ratio``), ``moved_mm`` / ``moved_deg`` (largest change of a
     camera), ``changed``, ``reason`` (``adjusted``, ``no_lasers``, ``few_crossings``,
     ``not_better``, ``off``), ``verdict``, ``warning`` (None, or when the poses changed a sentence for
     the user: :func:`acted_warning`), ``timings_s`` and, with true poses in the recording,
