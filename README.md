@@ -3,6 +3,8 @@
 An open-source handheld scanner built from off-the-shelf parts and a 3D-printed housing.
 It's designed for automotive work: scanning parts, panels and interiors, and living in a car.
 
+**Using the app:** the illustrated [user guide](docs/guide/README.md) covers setup, scanning, making and cleaning a mesh, measuring, and putting scans together.
+
 ![front](renders/front_led.png)
 
 ## How it works
@@ -188,5 +190,6 @@ H2-laser black ── C  Q5 PN2222A  E ── GND     B ── 1kΩ ── GP1 (
 - `hardware/scanner.scad`: single parametric source for every part (all dimensions are at the top). `projector = "led"` (option B) is the default; set `projector = "laser"` for option A. `lasers = 4` makes the 4-laser variant (see above).
 - `stl/`: print-ready parts
 - `renders/`: previews
+- `docs/guide/`: the [user guide](docs/guide/README.md) of the desktop app, with pictures
 
 License: MIT (see [LICENSE](LICENSE)). It covers the hardware design, firmware, software and docs.

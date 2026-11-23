@@ -5,6 +5,9 @@ prints the calibration targets, calibrates the scanner, scans with live feedback
 recordings into meshes (STL/PLY, millimetres). You can try all of it without hardware on simulated
 data (section 9).
 
+**Looking for the desktop app?** The illustrated [user guide](../docs/guide/README.md) explains OpenHandScan
+Studio page by page, with pictures. This file covers installing the software and the command line.
+
 The hardware, parts list and assembly are in the [main README](../README.md). The design and
 conventions are in [ARCHITECTURE.md](ARCHITECTURE.md).
 
