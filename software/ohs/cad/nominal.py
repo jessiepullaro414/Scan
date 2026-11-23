@@ -153,7 +153,6 @@ _FITS_TODAY = "The fits' ± on today's engine"
 _THIN_WALLS = "Thin walls seen from opposite sides"
 _HOLES_FILLED = "Holes filled in: the cause, and fixes tried"
 _PER_VOXEL = "The gap guard per voxel"
-_KNOWN = "Known limitations of the pipeline"
 _HOLE_WALL = "The Hole tool on holes with a wall"
 
 _BOSS_TRUE = (Source(_FITS_TODAY, ("At true poses the bosses now read 0.23–0.26 mm small in radius, the same on every seed",)),
@@ -171,7 +170,6 @@ _EDGE_SOURCES = (
                         "| Car panel, Ø 25 hole (as fitted: 25.20) | tracked | Hole fit | fails 13 of 15 | 23.82–24.23 |")),
     Source(_FITS_TODAY, ("its diameter reads 1.1–1.3 mm small with ± 0.22 mm",)),
     Source(_THIN_WALLS, ("| Five car panels: hole diameter / centre / floor | −0.90 / 0.34 / 0.002 mm |",)),
-    Source(_KNOWN, ("now fits 1 to 1.6 mm small at true poses and 0.9 to 3 mm small with tracking",)),
 )
 _WALL_HOLE_HALF = Source(_HOLE_WALL, (
     "about 0.6 mm large in diameter at the true poses (Ø 25: +0.57 to +0.70 mm; Ø 10: +0.28 to +0.60 mm), and −0.3 "

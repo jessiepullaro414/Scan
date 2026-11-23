@@ -905,6 +905,19 @@ and thin parts".
   merge of two sheet scans is worse than the better one even at the true motion.
 - [ ] The merged model does not get Refine with lasers, a single scan does (found by X7).
   Measure whether it helps a merge.
+- [x] The whole test suite had not been run in one go since before X5; two checks outside the
+  per-task lists were broken meanwhile. **Run 2026-11-23** on 2d3031a: with the graphics card
+  2123 passed, 6 skipped, 1 failed (44 min); without it 2038 passed, 91 skipped, 1 failed
+  (43 min); no driver timeout. The one failure, on both: `ohs/cad/nominal.py` quoted a sentence
+  of "Known limitations of the pipeline" that the rewrite of 2026-11-21 removed. That source
+  is dropped (four others state the same numbers). The other was `tests/test_merge_guard.py`'s
+  stand-in (72407d0). To keep: run the whole suite after every engine item, not only the
+  task's files.
+- [ ] The known-bias table (`ohs/cad/nominal.py`, what Compare with CAD says about a hole)
+  holds "a Ø 25 hole over a far background reads 0.9 to 3 mm small with tracking" from the
+  studies of 2026-11-12 to 16. The scorecard's baseline reads the plate 120 mm up 2.9 to 6.9 mm
+  small tracked (seed 0 lost tracking) and the 200-frame car panel 0.97 to 1.37 mm small. To
+  decide: whether the table's range follows the baseline, and with which seeds.
 - [ ] Ø10 holes 14 mm above a table on the large plain panel come out closed or half-filled,
   even at true poses (found by X8, 2026-11-23: the Hole tool refuses most clicks and reads the
   rest as Ø4.5 to 5.6). The budget's "near a floor: Ø10 -0.3 to +0.6" is the plate seen from
