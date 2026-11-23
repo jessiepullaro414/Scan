@@ -5038,8 +5038,14 @@ Make mesh at Standard, on the GPU): with the whole recording (117 of 120 frames)
 "Thin walls found" at the top of the processing report (1,584 mm² of walls reading 1.84 mm, 3 regions,
 82 bricks); "Not for this scan" puts it away and it stays away after a reload. With only the second
 half of the same recording (63 frames) nothing is found (83 mm² of wall readings): the walls were not
-seen from both sides, so there is no thin wall in that mesh to measure. The button that makes the mesh
-again with the preset was not pressed on this PC.
+seen from both sides, so there is no thin wall in that mesh to measure.
+
+**The button, pressed later the same day** (after the graphics card's launches were bounded,
+"Launch times on the graphics card at 0.5 mm"): on a fresh scan of the whole recording "Make
+the mesh again with this preset" set the scan's preset to "Thin sheet metal and small parts"
+and made the mesh at 0.5 mm: 3,776,921 triangles (0.9 million before), the hint gone
+afterwards (`why_not: "made_fine"`), no driver timeout; the server's memory peaked at about
+5.9 GB, sampled every 3 s.
 
 Limits: simulated; bosses are not looked for (the bracket's Ø 14 bosses read right with true
 depth, so their error is the depth's, and 0.5 mm did not help the bracket beyond its spread);
@@ -5047,7 +5053,7 @@ holes the cameras filled in are not found (over a far floor the Ø 6 and Ø 10 h
 0.8 mm dents); the thickness estimate only at 1 mm with the thin-wall rule on; without a
 graphics card walls read 0.3 to 0.75 mm thicker, so a 2 mm wall there may not be found; the
 sheet's flange and rib merge into one region, so its reading mixes a 1 mm and a 2 mm wall; the
-preset itself was not run on this PC for this item (the gain is P1's measurement).
+gain the hint quotes is P1's measurement.
 
 ## Launch times on the graphics card at 0.5 mm (ENGINE_PLAN X5 step 2's groundwork, 2026-11-22)
 
@@ -5114,6 +5120,135 @@ Limits: one card (the pace adapts, only the 680M was measured); the largest pool
 estimate; the 1 mm times beside the 0.5 mm ones are the cached runs of an older engine; the
 self-check was not tried against a real reset; the tests of the batching were seen failing only
 in that their module did not exist before.
+
+## Fine mesh detail on thin walls only (ENGINE_PLAN X5 step 2, 2026-11-22): built, off, not adopted
+
+The whole scan at mesh detail 0.5 mm reads thin walls 0.23 to 0.67 mm nearer the truth, for
+about twice the time and 10 to 12 GB of memory ("Launch times on the graphics card at 0.5 mm").
+Step 2 makes only the thin walls finer. It is a setting, `ProcessParams.fine_walls`, off; the
+scorecard runs it with `--set-param process.fine_walls=true --chain app`. It is not in the
+app's Make mesh yet.
+
+**How it works** (`ohs/mesh/fine_walls.py`, `ohs/app/fine_walls.py`):
+
+- **The depth is kept.** Follow the camera writes each fused frame's depth and its sigma to
+  disk as it fuses them (about 7.8 MB a frame at 1280 x 800: 0.94 GB for 120 frames, 1.9 GB
+  for 240; removed after the step; not capped). The matcher does not run again. On the
+  graphics card's path only; without one nothing is kept and the report says so.
+- **The regions are known after the 1 mm mesh:** the thin-parts hint's own wall finding
+  (`find_thin_walls`, walls only) on the base mesh after Straighten; the flagged bricks of
+  8 mm grown by one brick all round (97 to 168 flagged, 448 to 640 with the growth).
+- **A second model at 0.5 mm, in those bricks only** (`ConfidenceTsdf.limit_bricks`), fed the
+  kept depth at the base stage's poses. In its bricks it holds what the whole scan at 0.5 mm
+  holds, bit for bit (a test compares every brick).
+- **The stitch moves the 1 mm mesh; no second mesh is cut in.** The triangles in the region
+  are split in four and their neighbours in two or three, so every split edge is split on
+  both sides. Each vertex then moves along its normal, at most 1 mm, onto the finer model's
+  nearest crossing from inside to outside in the direction it faces.
+- **Nothing thin can be lost by it:** a wall's other face crosses the other way, so no vertex
+  can jump onto it and no wall can close; a vertex without such a crossing keeps its 1 mm
+  place; a move that would turn a triangle over is undone; no surface is removed. Tested on
+  walls of 0.5, 1 and 2 mm, a 0.6 mm wall read from just inside its back face, and a 0.5 mm
+  plate lying flat.
+- A voxel of the finer model counts from 1 observation (marching cubes takes more than 3):
+  with "more than 3" a third of the walls' vertices found no place (walls 0.97 / 0.60 / 0.61
+  mm too thick against 0.77 / 0.52 / 0.47). A longer truncation (4 mm) was worse
+  (0.90 / 0.58 / 0.50).
+- It sits after Straighten and before Refine from the images and Refine with lasers.
+
+**Standing walls** (error of the 0.5 / 1 / 2 mm wall's thickness in mm, + is too thick; what
+Make mesh runs; the whole scan at 0.5 mm was run on seed 0 only):
+
+| recording | 1 mm | step 2 | all 0.5 mm | Make mesh, 1 mm → step 2 (all 0.5 mm) |
+|---|---|---|---|---|
+| seed 0, tracked | 1.229 / 0.808 / 0.660 | 0.768 / 0.516 / 0.466 | 0.484 / 0.457 / 0.427 | 40.5 → 47.9 s (76.8) |
+| seed 0, true poses | 0.786 / 0.534 / 0.354 | 0.530 / 0.248 / 0.010 | 0.293 / 0.032 / -0.094 | 22.6 → 26.7 s (49.9) |
+| seed 1, tracked | 1.182 / 0.701 / 0.579 | 0.661 / 0.339 / 0.280 | | 42.3 → 49.7 s |
+| seed 1, true poses | 0.835 / 0.400 / 0.272 | 0.537 / 0.110 / -0.064 | | 21.7 → 28.1 s |
+| seed 2, tracked | 1.256 / 0.911 / 0.535 | 0.754 / 0.531 / 0.178 | | 42.5 → 49.5 s |
+| seed 2, true poses | 0.758 / 0.621 / 0.156 | 0.542 / 0.290 / -0.112 | | 22.2 → 27.8 s |
+
+**Sheet part** (flange 2 mm / rib 1 mm / rib 3 mm):
+
+| recording | 1 mm | step 2 | all 0.5 mm | Make mesh, 1 mm → step 2 (all 0.5 mm) |
+|---|---|---|---|---|
+| seed 0, tracked | 0.604 / 0.969 / 0.535 | 0.377 / 0.631 / 0.367 | 0.349 / 0.617 / 0.455 | 76.1 → 89.7 s (134.9) |
+| seed 0, true poses | 0.180 / 0.270 / 0.030 | 0.006 / 0.047 / -0.089 | 0.037 / 0.039 / -0.238 | 38.6 → 47.9 s (84.9) |
+| seed 1, tracked | 0.254 / 0.658 / 0.171 | 0.004 / 0.343 / 0.120 | | 79.0 → 91.7 s |
+| seed 1, true poses | 0.158 / 0.244 / 0.043 | -0.005 / -0.013 / -0.069 | | 40.4 → 48.6 s |
+| seed 2, tracked | 0.596 / 1.211 / 0.719 | 0.349 / 0.914 / 0.699 | | 76.6 → 91.6 s |
+| seed 2, true poses | 0.123 / 0.231 / 0.035 | -0.080 / -0.013 / -0.048 | | 38.6 → 48.3 s |
+
+- **Memory:** 1.14 to 1.76 GB, the same as the 1 mm run on every recording (all 0.5 mm: 5.9
+  to 11.7 GB). The card's shared memory 0.04 to 0.09 GB (all 0.5 mm: 2.5 to 2.9 GB).
+- **The mesh:** 2.5 to 3.1 % of the surface is made finer, 7 to 11 % more triangles. Open
+  loops the same on every run (1,248 and 1,248 on seed 0 tracked; the whole scan at 0.5 mm
+  has 11,728).
+- **The seam** (standing walls seed 0 tracked, sheet seed 0 true poses, sheet seed 2
+  tracked; counted a second time by a separate script on the saved meshes): no edge with
+  more than two triangles, no triangle doubled or turned against its neighbour, the same
+  number of loops (1,248, 691, 1,573). Flat triangles only where the 1 mm mesh had them (the
+  sheet at true poses has 5, two of them in the region and split in four: 11 after). Where
+  the moved surface meets the one left alone the step is 0.05 to 0.09 mm at the 95th
+  percentile, 0.17 to 0.41 mm at most. The moved vertices lie on the all-0.5 mm surface
+  (median 0.000, 95th percentile 0.023 mm).
+- **The part's median error:** tracked, better on all six (walls 0.125 → 0.097, 0.151 →
+  0.107, 0.145 → 0.095; sheet 0.251 → 0.162, 0.105 → 0.068, 0.255 → 0.155). At true poses
+  the same on four (0.065 → 0.066, 0.058 → 0.059 twice, 0.073 → 0.058) and worse on the
+  standing walls seeds 1 and 2 (0.056 → 0.074, 0.064 → 0.074).
+- **Recordings without a thin wall** (0.5 mm plate, hole plate, bracket, sphere, car panel;
+  tracked and true poses): the mesh is the same in every vertex and triangle. The cost is the
+  finding (0.5 to 1.6 s) and keeping the depth: bracket 80.0 → 81.1 s, panel 68.6 → 71.1 s,
+  sphere 13.3 → 14.1 s, hole plate 72.3 → 77.1 s (timing scatter; its finding takes 1.0 s).
+- **The step's own time:** 5.8 to 6.8 s on the standing walls and 10.0 to 10.9 s on the sheet
+  (finding 0.9 to 1.5 s, fusing the kept depth 2.7 to 6.0 s at about 23 ms a frame, the
+  stitch 1.9 to 3.1 s).
+- **On the graphics card:** the longest launch in 29 runs 64 ms (the matcher's census), no
+  driver timeout.
+
+**Against X5's stop rule:**
+
+| the rule | result |
+|---|---|
+| walls within 0.05 mm of the all-0.5 mm result | **missed on the standing walls**: seed 0 tracked 0.28 / 0.06 / 0.04 mm away, true poses 0.24 / 0.22 / 0.10. The sheet is within 0.03 (tracked) and 0.03 / 0.01 (true poses; its 3 mm rib is nearer the truth than all 0.5 mm) |
+| the hole within its range | no hole is flagged: the hole plate's mesh is the 1 mm mesh |
+| time at most 1.25 times | tracked 1.16 to 1.20 times: met. True poses 1.18 to 1.29 times: missed on standing walls seed 1 (1.29), at the limit on seed 2 and sheet seed 2 (1.25) |
+| memory at most 1.3 times | met (1.00) |
+| open loops at most 1.2 times | met (1.00) |
+| smooth scenes within their range | identical |
+
+**Not adopted, and the full compare was not spent.** By E-D1 it also misses on its own
+against the 1 mm mesh: the part's median error is worse on two true-pose runs, and the sheet's
+3 mm rib, which sits in the grown region without being a thin wall, goes from 0.03 to 0.04 mm
+too thick to 0.05 to 0.09 mm too thin at true poses (tracked it is nearer on all three).
+
+**What it does give:** against the 1 mm mesh every wall of 0.5 to 2 mm reads nearer the truth
+on all twelve runs (the 0.5 mm wall by 0.22 to 0.52 mm, the 1 mm wall by 0.29 to 0.38, the
+2 mm wall by 0.04 to 0.36, the sheet's flange by 0.04 to 0.25 and its 1 mm rib by 0.22 to
+0.34), for 16 to 29 % more time on parts with thin walls, no more memory and no new open
+loops. Of the whole-scan 0.5 mm gain on seed 0 that is 62 / 83 / 83 % tracked and 52 / 57 %
+on the 0.5 and 1 mm walls at true poses.
+
+**Why the walls fall short of all 0.5 mm:** where the all-0.5 mm mesh has surface, step 2
+reads the same as it (0.586 against 0.583 mm, 0.461 against 0.452, under one placement of the
+mesh on the truth). The rest is each wall's less-seen side: there the 0.5 mm voxels have 1 to
+3 observations and the all-0.5 mm mesh has holes (hence its 11,728 loops); step 2 keeps the
+1 mm surface there, which reads thicker. The placement alone moves the 0.5 mm wall's reading
+by about 0.1 mm between runs.
+
+**With the setting off** the quick set on what Make mesh runs compares identical to the
+baseline, and a pass with the setting on writes the same mesh as one without (a test).
+
+Limits: simulated; the whole scan at 0.5 mm was run on three recordings (standing walls seed 0
+both ways, sheet seed 0 both ways), so the 0.05 mm rule is judged on those; the 1 mm times
+beside are the cached runs of an older engine; the spread between two runs of one recording
+was not measured, so "worse" on the two median errors is against one run each; the kept depth
+is not capped (7.8 MB a frame on disk); not in the server's Make mesh, so not seen in the
+app; without a graphics card the step does nothing; not run on the NVIDIA laptop.
+
+**If taken up again:** the time is in fusing every kept frame (only the frames that see a
+region are needed) and in writing the depth as 32-bit floats; the accuracy limit is the
+walls' less-seen side, not the stitch.
 
 ## What the metrics mean
 

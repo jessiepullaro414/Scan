@@ -1325,6 +1325,8 @@ def app_chain(rec: Path, proc: Path, spec: SceneSpec, params: dict, poses: dict 
         base = _app_straighten(rec, st, pp, params, info)
     else:
         info["straighten"] = {"ran": False, "why": "true poses: there is no tracked camera path to straighten"}
+    if params.get("process.fine_walls"):  # ENGINE_PLAN X5 step 2, off unless asked for
+        base = _app_fine_walls(base, st, info)
     if params.get("process.refine_from_images"):  # ENGINE_PLAN X6, off unless asked for
         base = _app_spacetime(rec, base, st, params, info)
     base = _app_refine(base, st, info)
@@ -1340,7 +1342,8 @@ def _app_fuse(rec: Path, out: Path, pp, poses: dict) -> None:
 
     tmp = out.with_name(out.name + ".tmp")
     shutil.rmtree(tmp, ignore_errors=True)
-    process_recording(rec, tmp, params=pp, poses=poses)
+    # Straighten's fuses keep no depth: the fine pass on thin walls (process.fine_walls) uses Follow the camera's
+    process_recording(rec, tmp, params=dataclasses.replace(pp, fine_walls=False), poses=poses)
     shutil.rmtree(out, ignore_errors=True)
     tmp.rename(out)
 
@@ -1394,6 +1397,38 @@ def _app_straighten(rec: Path, st: Path, pp, params: dict, info: dict) -> Path:
         s["fuse_crossings_s"] = round(time.perf_counter() - t1, 1)
     info["stage_s"]["straighten"] = round(time.perf_counter() - t, 1)
     return st / "straighten" if (looped or adjusted) else st / "track"
+
+
+def _app_fine_walls(base: Path, st: Path, info: dict) -> Path:
+    """Fine mesh detail on thin walls as Make mesh runs it with ``process.fine_walls`` (ENGINE_PLAN X5 step 2,
+    :func:`ohs.app.fine_walls.make_fine_walls`): the base stage's mesh refined at its poses with the depth Follow the
+    camera kept, into ``stages/fine`` when it changed. The kept depth is removed after. Returns the base stage folder."""
+    from ohs.app.fine_walls import SPOOL_DIR, make_fine_walls, spool_size_mb
+
+    t = time.perf_counter()
+    spool = st / "track" / SPOOL_DIR
+    r: dict[str, Any] = {"source": base.name, "kept_mb": round(spool_size_mb(spool), 1)}
+    info["fine_walls"] = r
+    out = st / "fine"
+    shutil.rmtree(out, ignore_errors=True)
+    try:
+        rep = make_fine_walls(base, spool, out_dir=out)
+        r.update(rep)
+        if not rep.get("acted"):
+            return base
+        for name in ("trajectory.csv", "laser_points.ply", "marker_map.json"):
+            if (base / name).is_file():
+                shutil.copy2(base / name, out / name)
+        report = json.loads((base / "report.json").read_text(encoding="utf-8")) if (base / "report.json").is_file() else {}
+        report["fine_walls"] = rep
+        write_json(out / "report.json", _plain(report))
+        return out
+    except Exception as e:  # noqa: BLE001 - the mesh stays as fused
+        r["failed"] = f"{type(e).__name__}: {e}"
+        return base
+    finally:
+        shutil.rmtree(spool, ignore_errors=True)
+        info["stage_s"]["fine_walls"] = round(time.perf_counter() - t, 1)
 
 
 def spacetime_params(params: dict):
@@ -2678,6 +2713,8 @@ def main(argv: list[str] | None = None) -> int:
     params = parse_params(a.set_param, a.params)
     if chain == "frame" and any(k.startswith(STRAIGHTEN_ONLY) for k in params):
         raise SystemExit("curve.* settings act in Straighten, which only the app chain runs: add --chain app")
+    if chain == "frame" and params.get("process.fine_walls"):
+        raise SystemExit("process.fine_walls acts in the app's Make mesh after Straighten: add --chain app")
     if chain == "frame" and any(k.startswith(APP_ONLY) for k in params):
         raise SystemExit("process.refine_from_images and spacetime.* act in the app's Make mesh: add --chain app")
     if chain != "frame" and a.cmd in ("replay", "holes", "selfcheck"):

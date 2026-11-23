@@ -655,6 +655,9 @@ class FramePipeline:
         self.thin_walls_mm: float | None = None
         # the mesh model's cut where a voxel is seen from opposite sides (mm); None: not used
         self.opposite_mm: float | None = None
+        # fine mesh detail on thin walls (ENGINE_PLAN X5 step 2, ohs.app.fine_walls): when set, every frame the
+        # confidence model fuses is also handed to it (its depth, sigma, pose), for a second, finer pass; None: off
+        self.fused_spool: Any = None
         if model is not None and not self._need_depth:
             raise ValueError("this pipeline fuses no depth (marker mode without integrate_depth): it takes no model")
         if self._need_depth:
@@ -1063,10 +1066,11 @@ class FramePipeline:
         return "Open3D TSDF (every frame weighs the same)"
 
     def _fuse(self, depth: np.ndarray | None, T_wc: np.ndarray, t: float, tim: dict[str, float],
-              sigma: np.ndarray | None = None, seen: np.ndarray | None = None) -> None:
+              sigma: np.ndarray | None = None, seen: np.ndarray | None = None, pos: int | None = None) -> None:
         """Integrate the raw depth (and its sigma, for the confidence TSDF) into the reconstruction TSDF at ``T_wc``.
         ``seen``: the depth before a ``clip_plane`` left some of it out (:meth:`process`): the gap guard is
-        worked out on it, since what the clip left out was measured, and is no patch without depth."""
+        worked out on it, since what the clip left out was measured, and is no patch without depth. ``pos``: the
+        frame's place in the trajectory (None: the frame being processed), for :attr:`fused_spool`."""
         if self.markerless is None or depth is None:
             return
         ti = time.perf_counter()
@@ -1082,6 +1086,10 @@ class FramePipeline:
         else:
             self.markerless.integrate(depth, sigma if self.has_confidence else None, T_wc, t=t)
         tim["integrate"] = _ms(ti)
+        if self.fused_spool is not None and self.has_confidence:
+            ts = time.perf_counter()
+            self.fused_spool.add(len(self._trajectory) if pos is None else int(pos), depth, sigma, seen, T_wc)
+            tim["keep_depth"] = _ms(ts)
 
     def _track_markerless(self, depth: np.ndarray, t: float, tim: dict[str, float], extra: dict,
                           sigma: np.ndarray | None = None) -> TrackResult:
@@ -1210,7 +1218,7 @@ class FramePipeline:
             for e in held:
                 r = e.of(tr)
                 if r is not None and r.ok:
-                    self._fuse(e.depth, r.T_wc, e.t, {}, e.sigma)
+                    self._fuse(e.depth, r.T_wc, e.t, {}, e.sigma, pos=e.pos)
                     for name, P in e.pts.items():
                         self.cloud.add(P, r.T_wc, name)
             rep["ms"] = round(_ms(t0), 1)
@@ -1236,7 +1244,7 @@ class FramePipeline:
             if T is None:
                 self._trajectory[e.pos] = (e.t, T_prev.copy(), False)
                 continue
-            self._fuse(e.depth, T, e.t, {}, e.sigma)
+            self._fuse(e.depth, T, e.t, {}, e.sigma, pos=e.pos)
             for name, P in e.pts.items():
                 self.cloud.add(P, T, name)
             self._trajectory[e.pos] = (e.t, T.copy(), True)

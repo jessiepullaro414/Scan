@@ -128,6 +128,11 @@ class ProcessParams:
     # write report["health"] (module docstring, "Calibration health"), the row error on every n-th processed frame
     health: bool = True
     row_error_every: int = 30
+    # fine mesh detail on thin walls (ENGINE_PLAN X5 step 2, ohs.app.fine_walls; off by default): the pass keeps each
+    # fused frame's depth in <out_dir>/fused_depth/ for ohs.app.fine_walls.make_fine_walls (the graphics card's path
+    # only). Make mesh asks it of Follow the camera alone, not of Straighten's fuses. The mesh this writes is the same
+    # with it as without.
+    fine_walls: bool = False
 
 
 # --------------------------------------------------------------------------- frame selection
@@ -415,6 +420,18 @@ def process_recording(
     out.mkdir(parents=True, exist_ok=True)
 
     pipe = FramePipeline(calib, p.pipeline)
+    spool = None
+    keep_depth: dict[str, Any] | None = None
+    if p.fine_walls:
+        m = pipe.markerless
+        if pipe.has_confidence and getattr(m, "dev", None) is not None:
+            from ohs.app.fine_walls import SPOOL_DIR, FusedDepthSpool  # noqa: PLC0415
+
+            spool = pipe.fused_spool = FusedDepthSpool(out / SPOOL_DIR, m)
+        else:
+            keep_depth = {"kept": False, "why": "no_graphics_card"}
+            log.info("fine mesh detail on thin walls needs a graphics card: no depth is kept, the mesh stays at its "
+                     "mesh detail")
     health = ScanHealth(pipe, int(p.row_error_every)) if p.health else None
     imu = reader.imu_arrays()
     order = np.argsort(imu["t_host"], kind="stable")
@@ -542,6 +559,11 @@ def process_recording(
             report["frames"]["without_pose"] = n_unposed
         if pipe.start_report is not None:
             report["start"] = pipe.start_report
+        if spool is not None:  # the depth kept for the fine pass on thin walls (ProcessParams.fine_walls)
+            pipe.fused_spool = None
+            keep_depth = spool.close([int(r[0]) for r in traj_rows])
+        if keep_depth is not None:
+            report["fine_walls_depth"] = keep_depth
 
         # marker map refinement (offline only; nothing was tracked when the poses were given)
         if pipe.markers is not None and poses is None:

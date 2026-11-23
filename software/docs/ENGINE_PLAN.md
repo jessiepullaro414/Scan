@@ -648,7 +648,7 @@ and thin parts".
     `pipeline.start_frames=10, start_predict=fit, start_first=true, start_detail_only=true,
     start_together=true, fusion.slip_check_mm=3, fusion.fuse_lag=1`.
 
-### [ ] X5. Fine voxels where the part needs them (S to M, then L)
+### [x] X5. Fine voxels where the part needs them (S to M, then L): the hint on; step 2 built, not adopted
 - **Step 1:** after Make mesh, find thin walls (where the opposite-sides rule fired) and
   small round features, and suggest the "Thin sheet metal and small parts" preset with its
   measured gain (FP P4). A hint only.
@@ -684,6 +684,31 @@ and thin parts".
     the finer mesh on the processor (the card's shared memory 2.6 to 3 GB), so the memory rule
     is decided by how much 0.5 mm mesh step 2 builds and stitches; a finer model only in the
     flagged bricks needs its own brick search limited to them.
+  - **Step 2 measured 2026-11-22: not adopted; the setting is built and off**
+    (`ProcessParams.fine_walls`; `VALIDATION.md`, "Fine mesh detail on thin walls only").
+    Follow the camera keeps each fused frame's depth on disk; after Straighten the kept depth
+    is fused at 0.5 mm only in the walls' bricks (grown by one), and the 1 mm mesh is split
+    there and moved onto that model (at most 1 mm, only onto the face a vertex faces, so no
+    wall can close; no surface is removed).
+  - **Against the stop rule** (12 runs with thin walls, 10 without): the standing walls stay
+    0.28 / 0.06 / 0.04 mm (tracked) and 0.24 / 0.22 / 0.10 mm (true poses) from the all-0.5 mm
+    result: missed. The sheet is within 0.03. Time 1.16 to 1.20 times tracked (met), 1.18 to
+    1.29 times at true poses (missed on one run). Memory 1.00 times, open loops 1.00 times,
+    recordings without thin walls identical. The part's median error is worse on two
+    true-pose runs. No full compare was spent.
+  - **What it gives against the 1 mm mesh:** every wall of 0.5 to 2 mm nearer the truth on all
+    twelve runs (by 0.04 to 0.52 mm), for 16 to 29 % more time, no more memory, no new open
+    loops: about 50 to 85 % of the whole-scan 0.5 mm gain at an eighth of its memory. The
+    numbers went to the owner 2026-11-22.
+  - **The miss** is each wall's less-seen side, where the 0.5 mm model has 1 to 3 observations
+    a voxel and the all-0.5 mm mesh has holes; the stitch itself is clean (no doubled or flat
+    triangle, the step at the seam 0.05 to 0.09 mm at the 95th percentile).
+  - **To take it up again:** fuse only the kept frames that see a region and keep the depth
+    smaller (time); the less-seen side (accuracy). **To put it in the app:** `[process]
+    fine_walls` in `ohs/app/config.py`; the server's Make mesh asks Follow the camera to keep
+    the depth, calls `make_fine_walls` on the base stage after Straighten and removes the kept
+    depth; a share of the progress bar (6 to 11 s); the stage report; the thin-parts hint must
+    not suggest the preset where the walls were already made finer; a cap on the kept depth.
 - **Evidence:** 0.5 mm is the only setting that passed P1's stop rule (walls 0.23 to 0.67 mm
   nearer), for 1.2 to 2.4 times the time and 7 GB at 3.3 million triangles (R5).
 - **Risk:** pinholes and cracks at the boundary, memory, holes reading smaller.

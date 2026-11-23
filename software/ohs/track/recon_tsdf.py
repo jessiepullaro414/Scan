@@ -794,6 +794,7 @@ class ConfidenceTsdf:
         L = np.stack(np.meshgrid(np.arange(BRICK), np.arange(BRICK), np.arange(BRICK), indexing="ij"), axis=-1)
         self._local = L[..., ::-1].reshape(NVOX, 3).astype(np.int64)  # (x, y, z) of voxel l = z * 64 + y * 8 + x
         self._warned_full = False
+        self._allowed: np.ndarray | None = None  # limit_bricks: the encoded bricks it may fuse into (None: all)
         self.reset()
         log.info("confidence TSDF: %s, %.2f mm voxels, trunc %.1f mm, %.1f px per independent look",
                  self.device or "CPU (numpy)", self.voxel_mm, self.trunc_mm, self.look_px)
@@ -1102,6 +1103,30 @@ class ConfidenceTsdf:
         if not (got == np.uint32(_CANARY)).all():
             raise GpuResetError(launches.GPU_RESET_TEXT)
 
+    # ------------------------------------------------------------------ a model on given bricks only
+    def limit_bricks(self, keys: np.ndarray | None) -> None:
+        """Fuse only into the bricks ``keys`` ((M,3) in this model's brick coordinates, ``floor(x / (8 voxel_mm))``):
+        no other brick is allocated, whatever a frame reaches; the frame's bricks are searched as always (on the GPU
+        when there is one) and those outside left out. ``None`` (the default): every brick a frame reaches. A second,
+        finer model on the thin walls alone is made this way (ENGINE_PLAN X5 step 2, :mod:`ohs.mesh.fine_walls`); the
+        bricks it does fuse get exactly what a model without the limit gives them."""
+        if keys is None:
+            self._allowed = None
+            return
+        k = np.asarray(keys, dtype=np.int64).reshape(-1, 3)
+        self._allowed = np.unique(_encode(k)) if len(k) else np.zeros(0, dtype=np.int64)
+
+    def _only_allowed(self, bricks: np.ndarray) -> np.ndarray:
+        """``bricks`` (M,3) less those :meth:`limit_bricks` leaves out (the order kept)."""
+        a = self._allowed
+        if a is None or len(bricks) == 0:
+            return bricks
+        if len(a) == 0:
+            return bricks[:0]
+        e = _encode(bricks)
+        pos = np.minimum(np.searchsorted(a, e), len(a) - 1)
+        return bricks[a[pos] == e]
+
     # ------------------------------------------------------------------ integration
     def integrate(self, depth_mm: np.ndarray, sigma_mm: np.ndarray | None, T_wc: np.ndarray,
                   t: float | None = None, seen: np.ndarray | None = None) -> None:
@@ -1135,7 +1160,7 @@ class ConfidenceTsdf:
             self._queue_gaps(depth.shape, seen, has_sigma=sig is not None)  # after the search, whose result is waited for: these run meanwhile
             if bricks is None:
                 bricks = self._frame_bricks(depth, T)
-            slots, keys = self._slots_for(bricks)
+            slots, keys = self._slots_for(self._only_allowed(bricks))
             if len(slots):
                 # the fusion is left running: the images are uploaded, and what reads the volume waits for it
                 self._integrate_gpu(slots, keys, depth.shape, sig is not None, R_cw, t_cw)
@@ -1146,7 +1171,7 @@ class ConfidenceTsdf:
                 seen = np.where(np.isfinite(seen) & (seen >= self.depth_min_mm) & (seen <= self.depth_max_mm),
                                 seen, np.float32(0.0)).astype(np.float32)
             wmap, vmap = pixel_weights(depth, sigma_mm, self.trunc_mm)
-            slots, keys = self._slots_for(self._frame_bricks(depth, T))
+            slots, keys = self._slots_for(self._only_allowed(self._frame_bricks(depth, T)))
             if len(slots):
                 self._integrate_cpu(slots, keys, depth, wmap, sigma_mm, R_cw, t_cw, seen)
         self.n_integrated += 1

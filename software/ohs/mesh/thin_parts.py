@@ -67,7 +67,7 @@ from ohs.mesh.confidence import SIGMA_NONE_MM
 from ohs.mesh.topology import as_mesh, face_areas, vertex_normals
 
 __all__ = ["THIN_PRESET_ID", "THIN_PRESET_VOXEL_MM", "WALL_READS_VOXELS", "WALL_MIN_AREA_VOXELS2", "PLATE_MAX_VOXELS",
-           "PLATE_MIN_SHARE", "ROUND_MAX_VOXELS", "find_thin_parts", "hint_words"]
+           "PLATE_MIN_SHARE", "ROUND_MAX_VOXELS", "find_thin_parts", "find_thin_walls", "hint_words"]
 
 VERSION = 1
 #: the built-in preset this suggests (``ohs.app.presets``) and the mesh detail it sets
@@ -343,6 +343,36 @@ def _caster(V: np.ndarray, F: np.ndarray):
 
 
 # --------------------------------------------------------------------------- the finding
+def _prepare(V: np.ndarray, F: np.ndarray, normals: np.ndarray | None, sigma: np.ndarray | None):
+    """What the walls and the holes look at: ``(N, S, measured, va, idx, step, cast)`` (:func:`find_thin_parts`)."""
+    N = _unit_rows(np.asarray(normals, dtype=np.float64)) if normals is not None and len(normals) == len(V) \
+        else vertex_normals(V, F)
+    S = np.asarray(sigma, dtype=np.float64) if sigma is not None and len(sigma) == len(V) else None
+    used = np.zeros(len(V), dtype=bool)
+    used[F.reshape(-1)] = True
+    measured = used & (S < SIGMA_NONE_MM if S is not None else True)
+    va = _vertex_areas(V, F)
+    idx = np.flatnonzero(measured & (np.linalg.norm(N, axis=1) > 0.5))
+    step = max(1, int(math.ceil(len(idx) / MAX_RAYS)))
+    idx = idx[::step]
+    return N, S, measured, va, idx, step, _caster(V, F)
+
+
+def find_thin_walls(V: np.ndarray, F: np.ndarray, *, voxel_mm: float, normals: np.ndarray | None = None,
+                    sigma: np.ndarray | None = None, opposite_sides: bool | None = None) -> tuple[dict, np.ndarray]:
+    """The thin walls alone, as :func:`find_thin_parts` finds them (the same rays, limits and numbers; no plates, no
+    holes): ``(walls, vertices)``, ``walls`` the finding's ``walls`` block and ``vertices`` the indices of the vertices
+    that read a thin wall (both faces). For fusing finer there (ENGINE_PLAN X5 step 2, :mod:`ohs.mesh.fine_walls`)."""
+    v = float(voxel_mm)
+    if not (math.isfinite(v) and v > 0):
+        raise ValueError(f"voxel_mm must be a positive number, got {voxel_mm!r}")
+    V, F = as_mesh(V, F)
+    if len(F) == 0:
+        return {"found": False, "area_mm2": 0.0, "n_regions": 0, "regions": []}, np.zeros(0, np.int64)
+    N, _, measured, va, idx, step, cast = _prepare(V, F, normals, sigma)
+    return _walls(cast, V, N, va, measured, idx, step, v, opposite_sides)
+
+
 def find_thin_parts(V: np.ndarray, F: np.ndarray, *, voxel_mm: float, normals: np.ndarray | None = None,
                     sigma: np.ndarray | None = None, preset_id: str | None = None,
                     opposite_sides: bool | None = None) -> dict[str, Any]:
@@ -368,17 +398,7 @@ def find_thin_parts(V: np.ndarray, F: np.ndarray, *, voxel_mm: float, normals: n
         out.update(found=False, suggest=False, why_not="empty", walls=None, plates=None, holes=None, bricks=None,
                    ms=_r(1e3 * (time.perf_counter() - t0), 0))
         return out
-    N = _unit_rows(np.asarray(normals, dtype=np.float64)) if normals is not None and len(normals) == len(V) \
-        else vertex_normals(V, F)
-    S = np.asarray(sigma, dtype=np.float64) if sigma is not None and len(sigma) == len(V) else None
-    used = np.zeros(len(V), dtype=bool)
-    used[F.reshape(-1)] = True
-    measured = used & (S < SIGMA_NONE_MM if S is not None else True)
-    va = _vertex_areas(V, F)
-    idx = np.flatnonzero(measured & (np.linalg.norm(N, axis=1) > 0.5))
-    step = max(1, int(math.ceil(len(idx) / MAX_RAYS)))
-    idx = idx[::step]
-    cast = _caster(V, F)
+    N, S, measured, va, idx, step, cast = _prepare(V, F, normals, sigma)
     walls, wall_v = _walls(cast, V, N, va, measured, idx, step, v, opposite_sides)
     holes, hole_v = _holes(cast, V, N, idx, v)
     plates = _plates(V, F, N, S, v)
