@@ -152,7 +152,14 @@ export class MockPasses {
     const r = (job.result ?? {}) as Record<string, unknown>;
     if (step === "process") this.start(p, s, "align");
     else if (step === "align") {
-      const align = { accepted: r.accepted === true, verdict: String(r.verdict ?? ""), overlap: (r.overlap as number) ?? null, rms_mm: (r.rmse_mm as number) ?? null };
+      const align = {
+        accepted: r.accepted === true,
+        verdict: String(r.verdict ?? ""),
+        overlap: (r.overlap as number) ?? null,
+        rms_mm: (r.rmse_mm as number) ?? null,
+        little_shared: (r.little_shared as boolean | undefined) ?? null,
+        caution: (r.caution as string | undefined) ?? null,
+      };
       if (!align.accepted) {
         this.set(s, {
           state: "not_aligned",
@@ -168,7 +175,9 @@ export class MockPasses {
       }
     } else {
       const merged = r.scan as Scan | undefined;
-      this.set(s, { state: "merged", merged_scan_id: String(r.scan_id), message: `Merged with "${link.scan_name}" into "${merged?.name ?? r.scan_id}". "${link.scan_name}" itself is unchanged.` });
+      // the merge's own check of how much the two share: said here too, as the engine's chain does
+      const caution = typeof r.caution === "string" && r.caution ? ` ${r.caution}` : "";
+      this.set(s, { state: "merged", merged_scan_id: String(r.scan_id), message: `Merged with "${link.scan_name}" into "${merged?.name ?? r.scan_id}". "${link.scan_name}" itself is unchanged.${caution}` });
       this.host.log("info", `Second pass merged with "${link.scan_name}"`);
     }
   }

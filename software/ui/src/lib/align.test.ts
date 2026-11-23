@@ -10,6 +10,8 @@ import {
   addPick,
   alignAllFigures,
   alignFigures,
+  allCautionOf,
+  cautionOf,
   applyPose,
   chooseAt,
   chooseList,
@@ -381,6 +383,46 @@ check(ff[1].warn === true && ff.some((f) => f.label === "Left out" && f.value ==
   const movedText = SETUP_TEXT.moved;
   check(!/2 mm of the part's bottom edge/.test(movedText), "no longer: 2\u202fmm of the part's bottom edge");
   check(/table/.test(movedText) && /thin part/.test(movedText) && /down to the table/.test(movedText), `what goes and what stays: ${movedText}`);
+}
+
+// ------------------------------------------------------------------ little shared (after ENGINE_PLAN X7): a caution, not an error
+{
+  const caution =
+    "Little is shared: 46 % of the smaller scan's part lies within 1 mm of the other. The two scans fit where they meet, but away from there the position can be a millimetre or more off, and a merge can then come out worse than either scan (a wall seen from both sides too thick or too thin). Merging is still possible. To make the position sure, scan one more pass that sees part of what each of them saw and align all three, or put tags on the part where both scans see them (a thin part scanned from both faces: one pass with it standing on edge sees both faces).";
+  const little: AlignResult = { ...accepted, start: "given", overlap: 0.46, little_shared: true, caution };
+  check(cautionOf(little) === caution, "an accepted alignment that shares little: its caution, as the engine wrote it");
+  check(cautionOf(accepted) === null && cautionOf({ ...accepted, little_shared: false, caution: null }) === null, "much shared, or an older server: none");
+  check(cautionOf({ ...little, accepted: false }) === null, "not accepted: the verdict says why, no caution");
+  check(cautionOf({ ...little, caution: "" }) === null, "no words: nothing shown");
+  const lf = alignFigures(little);
+  check(lf[0].label === "Overlap" && lf[0].value === "46 %" && lf[0].warn === true, "the overlap is marked when the scans share little");
+  check(!alignFigures(accepted)[0].warn, "and not otherwise");
+  // Merge stays possible: the caution does not ask to confirm a merge of several scans either
+  const allLittle: AlignAllResult = {
+    ...all,
+    pairs: [pr("a", "b", "chain", { overlap: 0.46, little_shared: true, caution }), pr("a", "c", "chain"), pr("b", "c", "loop", { disagree_mm: 0.27 })],
+    little_shared: [{ a: "a", b: "b" }],
+    caution: "Where two scans share little, …",
+    verdict: all.verdict + " Little is shared between “B” and “A” (46 %).",
+  };
+  check(allCautionOf(allLittle) === "Where two scans share little, …" && allCautionOf(all) === null, "several scans: the caution when a link shares little");
+  check(allCautionOf({ ...allLittle, little_shared: [] }) === null, "no link that shares little: none");
+  check(!mergeNeedsConfirm(allLittle), "sharing little does not stop or confirm the merge");
+  check(pairLine(allLittle.pairs[0], "Top") === "with “Top”: accepted, 46 % overlap, in the chain, shares little", `a link that shares little says so: ${pairLine(allLittle.pairs[0], "Top")}`);
+  check(pairLine(pr("a", "b", "", { overlap: 0.3, little_shared: false }), "Top") === "with “Top”: not accepted, 30 % overlap, not used", "a pair not accepted: nothing more");
+  // the merge's own warning is one of its warnings: shown with the others
+  const merged: MergeResult = {
+    project_id: "p",
+    scan_id: "m",
+    scan: { id: "m", name: "A + B", created: "", mode: "markerless", n_frames: 1, duration_s: 0, status: "processed", result: null },
+    merged_from: ["a", "b"],
+    message: "",
+    tables: [],
+    warnings: ['"A" and "B" share little where they were merged: 46 % of the smaller one\'s part lies within 1 mm of the other. …'],
+    caution: '"A" and "B" share little where they were merged: 46 % of the smaller one\'s part lies within 1 mm of the other. …',
+  };
+  const ml = mergeLeftOut(merged);
+  check(ml.warn && ml.warnings.length === 1 && ml.warnings[0].startsWith('"A" and "B" share little'), "the merge's caution is among its warnings, to look at");
 }
 
 console.log(`align.test: ${checks} checks passed`);

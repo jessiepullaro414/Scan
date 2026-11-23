@@ -1695,7 +1695,7 @@ export type PassChain = {
   jobs: Partial<Record<PassStep, string>>;
   message: string;
   merged_scan_id?: string | null;
-  align?: { accepted: boolean; verdict: string; overlap?: number | null; rms_mm?: number | null } | null;
+  align?: { accepted: boolean; verdict: string; overlap?: number | null; rms_mm?: number | null; little_shared?: boolean | null; caution?: string | null } | null;
 };
 export type PassArea = { index: number; kind: CheckKind; area_mm2: number; center: [number, number, number]; n_faces: number };
 /** The link a pass's scan entry keeps (`Scan.continues`). */
@@ -1811,6 +1811,10 @@ export type AlignResult = {
   poses?: AlignPose[]; // the chosen pose first, then the others that fit best (at most 4)
   turned?: number; // starts tried turned round
   reached?: number; // starts that reached the chosen pose independently (first guesses; turned starts only when they found it from elsewhere)
+  // Little shared (left out by older servers): accepted, but the two scans share little (overlap under the measured
+  // limit); `caution` says what that means and what helps. Nothing else about the alignment changes; Merge stays possible.
+  little_shared?: boolean;
+  caution?: string | null;
 };
 
 /**
@@ -1883,6 +1887,19 @@ export type MergeResult = {
   warnings?: string[];
   /** The part was moved: what the merge's small-piece cleaning left out, and the small thin parts it kept (null otherwise). */
   cleaning?: string | null;
+  /** How much the scans share at the poses they were merged at (the alignment's `overlap`, measured by the merge itself); null when it could not be measured. */
+  shared?: MergeShared | null;
+  /** The warnings of `shared` in one text (also in `warnings`), null when every link shares enough. */
+  caution?: string | null;
+};
+
+/** `MergeResult.shared`: every pair's overlap, the links of the chain that hold the scans together and share little, the limit, and the seconds it took. */
+export type MergeShared = {
+  pairs: { a: string; b: string; overlap: number }[];
+  little_shared: { a: string; b: string; overlap: number }[];
+  limit: number;
+  warnings: string[];
+  s: number;
 };
 
 // ------------------------------------------------------------------ M4 second slice: several scans at once
@@ -1934,6 +1951,10 @@ export type AlignAllResult = {
   ms: number;
   verdict: string;
   message: string; // = verdict
+  /** Links that place scans although the two share little (named in the verdict too); left out by older servers. */
+  little_shared?: { a: string; b: string }[];
+  /** What sharing little means and what helps (no names); null when every link used shares enough. */
+  caution?: string | null;
 };
 
 // ------------------------------------------------------------------ FEATURE_PLAN I2: a reference model and the comparison with it

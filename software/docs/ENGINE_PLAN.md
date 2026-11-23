@@ -844,12 +844,30 @@ and thin parts".
   (1 mm: 45 ms, the matcher). `OHS_GPU_TIMES=1` records every launch
   (`ohs.compute.launches`). A driver reset part way now fails the job instead of writing a
   mesh.
-- [ ] A merge of two scans that share little of the part (found by X7, 2026-11-22): from
+- [x] A merge of two scans that share little of the part (found by X7, 2026-11-22): from
   picked points the alignment accepts a pose about 1 mm off (bracket, opposite sides, 46 %
   shared) or 3 mm off (sheet, 40 % shared) and says "Aligned"; the merged part is then far
   worse than either scan (0.31 and 0.37 mm median against 0.10 and 0.16) and nothing tells the
-  user. To do: a warning before the merge when little is shared, and a check after it (the
-  merged walls against each scan's own); a surer pose for such pairs.
+  user. **The warning: done 2026-11-23** (`VALIDATION.md`, "Two scans that share little").
+  - An accepted alignment with overlap under 0.70 carries a caution (`little_shared`,
+    `caution`), shown under the verdict on the Align page; for several scans the verdict and
+    the pair lines name the links. A merge measures the overlap itself at the poses it gets
+    (2 to 3 s) and puts the caution in its warnings and the merged scan's report; a second
+    pass's message says it too. Nothing is refused.
+  - The limit was measured on 78 alignments of 39 pairs and 12 merges
+    (`tools/merge_overlap_sweep.py`): merges the pose ruined at 0.40 to 0.69, sound from 0.72.
+    The margin is thin on the sheet's side (one pair each side).
+  - A check after the merge (each scan's own surface against the merged mesh) was measured and
+    does not tell ruined from sound: not built.
+- [ ] A surer pose for two scans that share little (after the warning above): the position
+  itself is still 0.6 to 1.1 mm off on the bracket's opposite sides.
+- [ ] An alignment from the shape accepted a pose 506 mm off (found by the sweep, 2026-11-23:
+  sheet scans s1@140 and s2@0, overlap 0.649, 109 degrees apart): a miss of the "sure or not
+  sure" check (MAINTENANCE_PLAN F11). It now carries the caution, being under 0.70, but it is
+  accepted. To do: find why two different starts agreed on it.
+- [ ] Short scans of the sheet part can be poor by themselves (found by the sweep: two of its
+  90-frame scans 0.29 and 0.37 mm median off the part, 49 and 62 % more than 0.3 mm off), and a
+  merge of two sheet scans is worse than the better one even at the true motion.
 - [ ] The merged model does not get Refine with lasers, a single scan does (found by X7).
   Measure whether it helps a merge.
 - [ ] `tests/test_track_spacetime.py::test_the_refined_mesh_is_closer_to_the_truth` failed once

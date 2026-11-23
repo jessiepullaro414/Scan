@@ -25,7 +25,7 @@ from typing import Any
 
 import numpy as np
 
-from ohs.server.jobs import failure_notice
+from ohs.server.jobs import JobCancelled, failure_notice
 from ohs.server.protocol import ApiError, jsonable
 from ohs.server.projects import free_name, refuse_taken_name
 
@@ -215,6 +215,8 @@ class AlignManager:
                     "pairs": [{**{key: v for key, v in r.items() if key not in ("i", "j")}, "a": scans[r["i"]], "b": scans[r["j"]]}
                               for r in d["pairs"]],
                     "loops": d["loops"], "graph": d["graph"], "worst_link_mm": d["worst_link_mm"],
+                    # links that place scans although the two share little, and what that means (no names in it)
+                    "little_shared": [{"a": scans[i], "b": scans[j]} for i, j in d["little_shared"]], "caution": d["caution"],
                     "support": {sid: clouds[k].support is not None for k, sid in enumerate(scans)},
                     "tags": {sid: (sorted(tags[k].corners) if use_tags and tags[k] else []) for k, sid in enumerate(scans)},
                     "same_setup": bool(same_setup), "ms": d["ms"], "verdict": verdict, "message": verdict})
@@ -259,6 +261,34 @@ class AlignManager:
             raise ApiError(422, "The position of a scan the page sent would bend or stretch it, so nothing was merged.", "Align the scans again, then press Merge.")
         return T
 
+    @staticmethod
+    def _shared(ctx: Any, items: list[dict], poses: list[np.ndarray]) -> dict | None:
+        """How much the scans share at the poses the merge was given (:func:`ohs.align.shared_at_poses`, the
+        alignment's ``overlap`` on the scans' meshes), with a warning for each link of the chain that shares little:
+        the merge was given poses only, so it looks for itself. ``None`` when it cannot be measured (the merge goes
+        on: this only warns)."""
+        import time
+
+        from ohs.align import scan_cloud_from_mesh, shared_at_poses
+
+        ctx.progress(0.01, "Checking how much the scans share", force=True)
+        t0 = time.perf_counter()
+        try:
+            clouds = []
+            for it in items:
+                clouds.append(scan_cloud_from_mesh(it["mesh"]))
+                ctx.check()
+            sh = shared_at_poses(clouds, poses, names=[it["name"] for it in items])
+        except JobCancelled:
+            raise
+        except Exception as e:  # noqa: BLE001  (whatever goes wrong here must not fail the merge)
+            log.warning("how much the scans share could not be measured: %s", e)
+            return None
+        ids = [it["id"] for it in items]
+        return {"pairs": [{"a": ids[r["i"]], "b": ids[r["j"]], "overlap": r["overlap"]} for r in sh["pairs"]],
+                "little_shared": [{"a": ids[r["i"]], "b": ids[r["j"]], "overlap": r["overlap"]} for r in sh["little_shared"]],
+                "limit": sh["limit"], "warnings": sh["warnings"], "s": round(time.perf_counter() - t0, 2)}
+
     def merge(self, pid: str, target: str, source: str, T: Any, same_setup: bool, name: str | None) -> Any:
         """``POST /api/projects/{pid}/merge`` with two scans: the source moved by ``T`` onto the target."""
         if target == source:
@@ -298,6 +328,7 @@ class AlignManager:
 
                 supports: list[Any] = [None] * len(items)
                 notes: list[list[str]] = [[] for _ in items]
+                shared = self._shared(ctx, items, poses)
                 if not same_setup:  # the part was moved: each scan's table is elsewhere, and stays out (found on its own mesh)
                     ctx.progress(0.02, "Finding what the part lay on", force=True)
                     for k, it in enumerate(items):
@@ -328,13 +359,16 @@ class AlignManager:
                                        for it, T, sup, note in zip(items, poses, supports, notes)], out, params, progress)
                     if rep["mesh"]["empty"]:
                         raise ApiError(409, "The merged mesh came out empty.", "Check that the scans have a mesh, then align them again.")
-                    if used or others:  # which preset made the model, and what differed (General alone: nothing added)
+                    if used or others or shared:  # which preset made the model, what differed (General alone: nothing
+                        # added), and how much the scans share at the poses they were merged at
                         presets = getattr(self.st, "presets", None)
                         if used and presets is not None:
                             rep["preset"] = {**presets.report_block(pid, first["id"], {
                                 "mode": "markerless", "quality": quality, "voxel_mm": rep["mesh"].get("voxel_mm"),
                                 "thin_walls": params.pipeline.thin_walls}), "from_scan": first["id"]}
-                        rep["warnings"] = list(rep.get("warnings") or []) + others
+                        rep["warnings"] = list(rep.get("warnings") or []) + others + (shared or {}).get("warnings", [])
+                        if shared:
+                            rep["shared"] = shared
                         (out / "report.json").write_text(json.dumps(jsonable(rep), indent=1), encoding="utf-8")
                     ctx.progress(0.95, "Adding the merged scan to the project", force=True)
                     scan, _ = self.st.projects.add_scan(pid, title, "markerless")
@@ -359,7 +393,8 @@ class AlignManager:
                 cleaning = (rep["mesh"].get("cleaning") or {}).get("summary")
                 return jsonable({"project_id": pid, "scan_id": sid, "scan": scan, "merged_from": sids,
                                  "message": f"Merged into \"{title}\"", "tables": tables, "warnings": list(rep.get("warnings", [])),
-                                 "cleaning": cleaning})
+                                 "cleaning": cleaning, "shared": shared,
+                                 "caution": " ".join(shared["warnings"]) if shared and shared["warnings"] else None})
 
             def done(job: Any) -> None:
                 if job.state == "done":

@@ -217,9 +217,11 @@ def test_a_merge_of_a_moved_part_says_what_it_left_out(env):
     assert [s["table"]["rule"] for s in rep["scans"]] == ["map", "map"] and rep["warnings"] == res["warnings"]
     for s in rep["scans"]:
         assert s["table"]["table_area_mm2"] > 1e4 and s["table"]["left_in_mesh"]["faces"] >= 0
-    # the part stayed: nothing is left out and nothing is said
+    # the part stayed: nothing is left out and nothing is said (but that the two short test scans share little: since
+    # 2026-11-23 the merge says so, test_two_scans_that_share_little_are_aligned_and_merged_with_a_caution)
     done = run_job(env, post(env["base"] + "/merge", {"target": env["a"], "source": env["b"], "T": T, "name": "Stayed"}), "merge")
-    assert done["result"]["warnings"] == [] and done["result"]["tables"] == []
+    little = [w for w in done["result"]["warnings"] if " share little where they were merged" in w]
+    assert len(little) == 1 and [w for w in done["result"]["warnings"] if w not in little] == [] and done["result"]["tables"] == []
     # ... but what its cleaning took is said all the same (UX_PLAN R7), in the result and in report.json
     rep = json.loads((env["studio"].projects.scan_dir(env["pid"], done["result"]["scan_id"]) / "result" / "report.json")
                      .read_text(encoding="utf-8"))
@@ -228,6 +230,80 @@ def test_a_merge_of_a_moved_part_says_what_it_left_out(env):
     assert cl["thin_pieces_kept"] == 0 and "thin part" not in cl["summary"]
     gone = rep["mesh"]["n_faces_before_cleaning"] - rep["mesh"]["n_faces"]
     assert (cl["pieces_removed"] == 0 or gone > 0) and cl["summary"].startswith("No loose bit") == (cl["pieces_removed"] == 0)
+
+
+def test_two_scans_that_share_little_are_aligned_and_merged_with_a_caution(env):
+    """After ENGINE_PLAN X7: the top and the back of the bracket (180 degrees apart) share little. Aligned from
+    picked points the pose is accepted and carries a caution (the result's ``little_shared`` and ``caution``; the
+    verdict and everything else as before); merged, the merge measures the share at the pose it was given and puts
+    the same caution in its result's ``warnings`` (and ``caution``) and in the merged scan's report.json. Nothing is
+    refused: the merge is made."""
+    import json
+
+    from ohs.align.pairwise import CAUTION_OVERLAP
+
+    rng = np.random.default_rng(3)
+    T = env["T_back"]
+    Ti = G.invert_se3(T)
+    # points on the part both scans see (its top edges), in the top scan's world: found from the back scan's mesh
+    Vb, _, _ = load_mesh(env["studio"].projects.scan_dir(env["pid"], env["back"]) / "result" / "mesh.ply")
+    Va, _, _ = load_mesh(env["studio"].projects.scan_dir(env["pid"], env["a"]) / "result" / "mesh.ply")
+    from scipy.spatial import cKDTree
+
+    Vb_in_a = G.transform_points(T, Vb)
+    d, _ = cKDTree(Vb_in_a).query(Va, distance_upper_bound=1.0)
+    both = Va[np.isfinite(d)]
+    both = both[both[:, 2] > np.percentile(both[:, 2], 20)]  # off the table
+    pick = [both[0]]
+    for _ in range(3):
+        pick.append(both[int(np.argmax(np.min(np.linalg.norm(both[:, None] - np.asarray(pick)[None], axis=2), axis=1)))])
+    target = np.asarray(pick)
+    source = G.transform_points(Ti, target) + rng.normal(0.0, 0.8, target.shape)
+    pairs = [{"source": s.tolist(), "target": t.tolist()} for s, t in zip(source, target)]
+    done = run_job(env, post(env["base"] + "/align", {"target": env["a"], "source": env["back"], "pairs": pairs}), "align")
+    res = done["result"]
+    print(res["verdict"], "|", res.get("caution"))
+    assert res["accepted"] is True and res["verdict"].startswith("Aligned: ") and done["message"] == res["verdict"]
+    assert res["overlap"] < CAUTION_OVERLAP and res["little_shared"] is True
+    assert res["caution"].startswith("Little is shared: ") and "Merging is still possible" in res["caution"]
+    assert "Little" not in res["verdict"]
+    # the same two as "several scans": the pair row carries it, the verdict names the two, the caution says what it means
+    done = run_job(env, post(env["base"] + "/align_all", {"scans": [env["a"], env["back"]],
+                                                         "picked": [{"a": env["a"], "b": env["back"], "pairs": pairs}]}), "align_all")
+    al = done["result"]
+    assert al["accepted"] and al["pairs"][0]["little_shared"] is True and al["pairs"][0]["caution"].startswith("Little is shared")
+    assert al["little_shared"] == [{"a": env["a"], "b": env["back"]}] and "Merging is still possible" in al["caution"]
+    assert "Little is shared between \"Back\" and \"Top\" (" in al["verdict"], al["verdict"]
+    # the merge at that pose: made, with the same caution in its warnings and the merged scan's report
+    done = run_job(env, post(env["base"] + "/merge", {"target": env["a"], "source": env["back"], "T": res["T"],
+                                                     "name": "Top and back"}), "merge")
+    m = done["result"]
+    sh = m["shared"]
+    print(sh)
+    assert sh["limit"] == CAUTION_OVERLAP and sh["s"] >= 0 and [(q["a"], q["b"]) for q in sh["pairs"]] == [(env["a"], env["back"])]
+    assert abs(sh["pairs"][0]["overlap"] - res["overlap"]) < 0.02  # the same measure on the same meshes at the same pose
+    assert len(sh["little_shared"]) == 1 and len(sh["warnings"]) == 1
+    w = sh["warnings"][0]
+    assert w.startswith("\"Top\" and \"Back\" share little where they were merged") and "Compare it with them" in w
+    assert w in m["warnings"] and m["caution"] == w
+    rep = json.loads((env["studio"].projects.scan_dir(env["pid"], m["scan_id"]) / "result" / "report.json").read_text(encoding="utf-8"))
+    assert w in rep["warnings"] and rep["warnings"] == m["warnings"] and rep["shared"]["little_shared"] == sh["little_shared"]
+    # top and side, 90 degrees apart, share little too in these short (2 s) test scans: the same caution
+    T_side = env.get("T", env["T_true"].tolist())
+    m = run_job(env, post(env["base"] + "/merge", {"target": env["a"], "source": env["b"], "T": T_side, "name": "Top and side"}),
+                "merge")["result"]
+    print("top and side:", m["shared"]["pairs"])
+    assert m["shared"]["pairs"][0]["overlap"] < CAUTION_OVERLAP and m["caution"] and "\"Top\" and \"Side\"" in m["caution"]
+    # much shared: a second scan of the top (its copy) where the top is: nothing said
+    st, pid = env["studio"], env["pid"]
+    scan, rec_dir = st.projects.add_scan(pid, "Top again", "markerless")
+    shutil.copytree(st.projects.recording_dir(pid, env["a"]), rec_dir)
+    shutil.copytree(st.projects.scan_dir(pid, env["a"]) / "result", st.projects.scan_dir(pid, scan["id"]) / "result")
+    st.projects.update_scan(pid, scan["id"], status="processed", n_frames=N_FRAMES, duration_s=N_FRAMES / 30.0, quality="standard")
+    m = run_job(env, post(env["base"] + "/merge", {"target": env["a"], "source": scan["id"], "T": np.eye(4).tolist(),
+                                                  "name": "Top twice"}), "merge")["result"]
+    assert m["shared"]["pairs"][0]["overlap"] > 0.95 and m["shared"]["little_shared"] == [] and m["caution"] is None
+    assert not any(" share little" in w for w in m["warnings"])
 
 
 def test_align_and_merge_several_scans(env):

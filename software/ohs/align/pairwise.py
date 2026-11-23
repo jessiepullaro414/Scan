@@ -71,6 +71,13 @@ why, and which poses it had in mind, and is not accepted (MAINTENANCE_PLAN F11).
    planes are further apart than ``support_max_deg`` / ``support_max_mm`` after the part's fit,
    they are not the same surface and the step is left out. If the part was turned over or moved,
    the support is a different surface in each scan and must stay out (``False``).
+7. **Little shared.** An accepted pose whose ``overlap`` is under ``caution_overlap`` carries a
+   caution (``little_shared``, ``caution``: what it means and what helps). It changes nothing
+   else: the pose, ``accepted`` and the verdict are as without it. Where two scans share little,
+   the fit is good where they meet and can be off elsewhere: ENGINE_PLAN X7 found two such merges
+   far worse than either scan with nothing said (VALIDATION.md "Two scans that share little", where
+   the limit was measured). :func:`shared_overlap` is the same measure at any pose: a merge checks
+   the poses it is given with it (:func:`ohs.align.many.shared_at_poses`).
 
 The result says how much of the smaller scan's part overlaps (``overlap``) and how well: the RMS
 along the normals of what matches within ``match_mm`` (``rmse_mm``), and a robust spread of the
@@ -100,11 +107,24 @@ from ohs.geometry import fit_plane_ransac, invert_se3, kabsch, so3_exp
 from ohs.track import posegraph as pg
 
 __all__ = ["AlignParams", "ScanCloud", "PairAlignment", "scan_cloud", "scan_cloud_from_mesh", "align_pair",
-           "pose_from_point_pairs"]
+           "pose_from_point_pairs", "CAUTION_OVERLAP", "little_shared_caution", "little_shared_merge_warning",
+           "shared_overlap", "what_helps"]
 
 log = logging.getLogger(__name__)
 
 Level = tuple[bool, float, int]  # (coarse cloud?, correspondence distance mm, iterations)
+
+#: Below this ``overlap`` an accepted pose carries a caution (module docstring, 7.; VALIDATION.md "Two scans that
+#: share little"). Measured 2026-11-23 (tools/merge_overlap_sweep.py, 78 alignments of 39 pairs: bracket, sheet,
+#: plate with holes, car panel; 12 of them merged as the app merges, and at the true motion): merges the POSE ruined
+#: (worse by 20-35 points of the share more than 0.3 mm off than the better scan, while the same scans at the true
+#: motion were not) had overlap 0.397, 0.463, 0.492 and 0.689 (a sheet part with 1-3 mm walls); merges whose pose was
+#: sound had 0.717 (better than either scan), 0.861, 0.864, 0.894, 0.938, 0.944, 0.977 (and a sheet pair at 0.795 came
+#: out ruined at the true motion too: its two scans do not fit together, whatever the pose). On the bracket the pose was
+#: 0.63-1.06 mm off the truth at overlap 0.446-0.492 and 0.12-0.51 mm off at 0.717-0.969. The margin is thin on
+#: one side: 0.689 ruined, 0.717 sound (one sheet pair each). rmse_mm, fit_mm, the smaller of the two shares and how
+#: far the parts reach beyond what they share did not separate them (VALIDATION.md has their numbers).
+CAUTION_OVERLAP = 0.70
 
 
 @dataclass(frozen=True)
@@ -154,6 +174,8 @@ class AlignParams:
     # (a sphere's turn about the vertical changes how much of two partial views overlap: at 3e-3 the
     # fit drifted 13 mm from a 0.3 mm start on the simulated sphere, at 0.03 it stayed and fitted better)
     start_weak_rel: float = 0.03
+    # an accepted pose with less overlap than this carries a caution (module docstring, 7.); nothing else changes
+    caution_overlap: float = CAUTION_OVERLAP
 
     def __post_init__(self) -> None:
         for name in ("voxel_mm", "coarse_voxel_mm", "support_dist_mm", "match_mm", "agree_mm", "max_fit_mm"):
@@ -207,11 +229,13 @@ class PairAlignment:
     poses: list[dict] = field(default_factory=list)  # the poses it had in mind, the chosen one first (module docstring, 5.)
     turned: int = 0  # starts tried turned round
     reached: int = 0  # starts that ended at the chosen pose independently of it (module docstring, 5.)
+    little_shared: bool = False  # accepted, but the scans share little (module docstring, 7.)
+    caution: str | None = None  # what that means and what helps, in words (with little_shared)
 
     def as_dict(self) -> dict:
         d = {k: getattr(self, k) for k in ("accepted", "reason", "start", "overlap", "rmse_mm", "fit_mm", "n_matched", "candidates",
                                            "agree", "spread_mm", "dof", "same_setup", "used_support", "ms", "verdict", "sure",
-                                           "doubt", "turned", "reached")}
+                                           "doubt", "turned", "reached", "little_shared", "caution")}
         d["T"] = np.asarray(self.T).tolist()
         d["poses"] = [dict(p) for p in self.poses]
         return d
@@ -389,6 +413,41 @@ def pose_from_point_pairs(src: np.ndarray, dst: np.ndarray) -> tuple[np.ndarray,
     return T, rms
 
 
+# --------------------------------------------------------------------------- little shared (module docstring, 7.)
+#: what helps, the same words after an alignment and after a merge
+def what_helps(then: str) -> str:
+    """What makes the position of two scans that share little sure; ``then``: what to do with the new pass
+    ("align all three")."""
+    return (f"scan one more pass that sees part of what each of them saw and {then}, or put tags on the part where both "
+            "scans see them (a thin part scanned from both faces: one pass with it standing on edge sees both faces)")
+
+
+def little_shared_caution(overlap: float, match_mm: float = 1.0) -> str:
+    """The caution of an accepted pose with little shared (module docstring, 7.)."""
+    return (f"Little is shared: {100 * overlap:.0f} % of the smaller scan's part lies within {match_mm:g} mm of the other. "
+            "The two scans fit where they meet, but away from there the position can be a millimetre or more off, and a "
+            "merge can then come out worse than either scan (a wall seen from both sides too thick or too thin). Merging "
+            f"is still possible. To make the position sure, {what_helps('align all three')}.")
+
+
+def little_shared_merge_warning(a: str, b: str, overlap: float, match_mm: float = 1.0, then: str = "merge all three") -> str:
+    """The same caution after a merge, for the merged scan's warnings: the scans ``a`` and ``b`` share ``overlap``
+    at the positions they were merged at."""
+    return (f"\"{a}\" and \"{b}\" share little where they were merged: {100 * overlap:.0f} % of the smaller one's part lies "
+            f"within {match_mm:g} mm of the other. They fit where they meet, but away from there one can be a millimetre or "
+            "more off, so this merged scan can be worse than either of them (a wall seen from both sides too thick or too "
+            f"thin). Compare it with them. To make it sure, {what_helps(then)}.")
+
+
+def shared_overlap(src: ScanCloud, dst: ScanCloud, T: np.ndarray, params: AlignParams | None = None) -> float:
+    """The ``overlap`` of :func:`align_pair` (the share of the smaller scan's part within ``match_mm`` of the other,
+    normals agreeing) of two scans at the pose ``T`` (``src`` into ``dst``'s world); 0 when a scan has no part."""
+    p = params if params is not None else AlignParams()
+    if src.part is None or dst.part is None:
+        return 0.0
+    return float(_score(src.part, dst.part, np.asarray(T, dtype=np.float64), p.match_mm)[1])
+
+
 # --------------------------------------------------------------------------- scoring
 def _score(src: Any, dst: Any, T: np.ndarray, tol: float) -> tuple[float, float, float, float, int]:
     """``(pick, overlap, rmse, fit, matches)`` of two clouds at ``T``. A fine point matches when it
@@ -535,6 +594,8 @@ def align_pair(src: ScanCloud, dst: ScanCloud, params: AlignParams | None = None
                            f"of the other scan, typically {out.rmse_mm:.2f} mm; {sure}.{loose}")
             if out.start != "features" and len(out.poses) > 1 and out.poses[1]["pick"] >= p.rival_share * out.poses[0]["pick"]:
                 out.verdict += f" The shapes alone fit about as well another way: {given} decided."
+            out.little_shared = bool(out.overlap < p.caution_overlap)
+            out.caution = little_shared_caution(out.overlap, p.match_mm) if out.little_shared else None
         else:
             out.verdict = f"Not aligned: {reason}."
         return out

@@ -436,7 +436,7 @@ ENGINE_MODULES = [
     "mesh/section.py", "mesh/support.py", "mesh/check.py", "mesh/thin_parts.py",
     "cad/fcmacro.py", "cad/step.py", "cad/shapes.py", "cad/nominal.py",
     "inspect/reference.py", "inspect/gapflush.py",
-    "align/pairwise.py", "align/merge.py",
+    "align/pairwise.py", "align/merge.py", "align/many.py",
     "guide/views.py",
     "measure/frame.py", "measure/region.py", "measure/fit.py", "measure/features.py",
     "track/path_check.py",

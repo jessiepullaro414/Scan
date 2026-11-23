@@ -13,6 +13,9 @@
  *   plausible figures and the engine's sentence;
  * - `pairs_rms_mm` is real in spirit: how far the distances between the picked points differ on the two
  *   scans (a rigid motion keeps them), so a pair that does not match shows as a large value;
+ * - two scans of opposite sides (one turned over) aligned from picked points share little (46 %): accepted with
+ *   the engine's caution (after ENGINE_PLAN X7), and their merge says so in its warnings (the merge "measures" each
+ *   pair's overlap of its last alignment); the demo's other pairs share enough;
  * - a merge counts the frames of both recordings, can be cancelled (nothing is added then) and adds a
  *   new processed scan with `merged_from` to the project. A merged scan has no recording: it can be
  *   aligned to, not merged again.
@@ -28,7 +31,7 @@
  * No imports at run time (types only), so `npm test` runs it with Node: the mock engine hands in what it
  * needs (`AlignHost`).
  */
-import type { AlignAllPair, AlignAllResult, AlignPose, AlignResult, Job, MergeResult, MergeTable, PairUse, PointPair, ProcessQuality, Project, Scan } from "../types";
+import type { AlignAllPair, AlignAllResult, AlignPose, AlignResult, Job, MergeResult, MergeShared, MergeTable, PairUse, PointPair, ProcessQuality, Project, Scan } from "../types";
 import type { WorkJobSpec, WorkStep } from "./host";
 import { freeName } from "../../lib/names.ts";
 
@@ -113,6 +116,36 @@ const HALF_TURN: number[][] = [
   [0, 0, 1, 0],
   [0, 0, 0, 1],
 ];
+
+/** Below this overlap an accepted alignment carries a caution (`ohs.align.pairwise.CAUTION_OVERLAP`, measured). */
+export const CAUTION_OVERLAP = 0.7;
+/** The demo's share for two scans of opposite sides (one turned over) aligned from picked points: little, as such a pair is. */
+const OPPOSITE_OVERLAP = 0.46;
+
+/** What makes the position of two scans that share little sure (`ohs.align.pairwise.what_helps`). */
+const whatHelps = (then: string) =>
+  `scan one more pass that sees part of what each of them saw and ${then}, or put tags on the part where both scans see them (a thin part scanned from both faces: one pass with it standing on edge sees both faces)`;
+
+/** The engine's caution of an accepted alignment that shares little (`little_shared_caution`). */
+export function littleSharedCaution(overlap: number): string {
+  return (
+    `Little is shared: ${(100 * overlap).toFixed(0)} % of the smaller scan's part lies within 1 mm of the other. The two scans fit where they meet, but away from there the position can be a millimetre or more off, and a merge can then come out worse than either scan (a wall seen from both sides too thick or too thin). Merging is still possible. To make the position sure, ` +
+    `${whatHelps("align all three")}.`
+  );
+}
+
+/** The engine's caution of several scans (`align_many`). */
+export const MANY_CAUTION =
+  "Where two scans share little, they fit where they meet, but away from there the position can be a millimetre or more off, and a merge can then come out worse than either scan (a wall seen from both sides too thick or too thin). Merging is still possible. To make the positions sure, " +
+  `${whatHelps("align them all again")}.`;
+
+/** The merge's own warning when two scans it was given share little (`little_shared_merge_warning`). */
+export function littleSharedMergeWarning(a: string, b: string, overlap: number, then: string): string {
+  return (
+    `"${a}" and "${b}" share little where they were merged: ${(100 * overlap).toFixed(0)} % of the smaller one's part lies within 1 mm of the other. They fit where they meet, but away from there one can be a millimetre or more off, so this merged scan can be worse than either of them (a wall seen from both sides too thick or too thin). Compare it with them. To make it sure, ` +
+    `${whatHelps(then)}.`
+  );
+}
 
 /** The engine's sentence for an accepted alignment (`align_pair`). */
 export function alignedVerdict(overlap: number, rmse_mm: number, start: "features" | "given", agree: number, candidates: number): string {
@@ -231,11 +264,23 @@ const r3 = (x: number) => Math.round(x * 1000) / 1000;
 export class MockAlign {
   private host: AlignHost;
   private wrongPose: number[][];
+  /** The overlap of the last alignment of each pair (pair key): what the demo's merge "measures" at its poses. */
+  private shared = new Map<string, number>();
 
   /** `wrongPose`: the pose returned (for showing) by an alignment that is not accepted. */
   constructor(host: AlignHost, wrongPose: number[][] = HALF_TURN) {
     this.host = host;
     this.wrongPose = wrongPose;
+  }
+
+  private static key(x: string, y: string): string {
+    return x < y ? `${x}\n${y}` : `${y}\n${x}`;
+  }
+
+  /** The demo's overlap of an alignment: opposite sides (one turned over) from picked points share little. */
+  private static overlapOf(a: MockScan, b: MockScan, accepted: boolean, given: boolean, otherwise: number): number {
+    if (!accepted) return 0.43;
+    return given && (turnedOver(a) || turnedOver(b)) ? OPPOSITE_OVERLAP : otherwise;
   }
 
   // ---------------------------------------------------------------- checks
@@ -299,13 +344,16 @@ export class MockAlign {
     const accepted = given || fitsFromShape(a, b, sameSetup);
     const t0 = Date.now();
     const wrongPose = this.wrongPose;
+    const overlap = MockAlign.overlapOf(a, b, accepted, given, sameSetup ? 0.76 : 0.71);
+    const shared = this.shared;
     const work = (function* (): Generator<WorkStep, () => Record<string, unknown>, void> {
       yield { p: 0.05, message: `Reading "${a.name}"` };
       yield { p: 0.25, message: `Reading "${b.name}"` };
       yield { p: 0.45, message: "Aligning the two scans" };
       yield { p: 0.95, message: "Aligning the two scans" };
       return () => {
-        const overlap = accepted ? (sameSetup ? 0.76 : 0.71) : 0.43;
+        if (accepted) shared.set(MockAlign.key(a.id, b.id), overlap);
+        const little = accepted && overlap < CAUTION_OVERLAP;
         const rmse = accepted ? 0.25 : 0.41;
         const candidates = given ? 1 : 9;
         const agree = given ? 1 : accepted ? 8 : 4;
@@ -338,6 +386,8 @@ export class MockAlign {
           poses: accepted ? [] : notSurePoses(wrongPose, IDENTITY),
           turned: 8,
           reached: accepted ? agree : 4,
+          little_shared: little,
+          caution: little ? littleSharedCaution(overlap) : null,
         };
         return result;
       };
@@ -381,7 +431,11 @@ export class MockAlign {
         const pairsRms = picked.get(key(A.id, B.id)) ?? null;
         const given = pairsRms !== null;
         const accepted = given || fitsFromShape(A, B, sameSetup);
-        const overlap = accepted ? r3(Math.max(0.4, (sameSetup ? 0.76 : 0.71) - 0.03 * k)) : 0.43;
+        // the demo's pairs of several scans share enough (above the caution's limit): its sentences stay as they were;
+        // the caution of several scans is the engine's (align_many), shown by the page as for two (lib/align.test.ts)
+        const overlap = accepted ? r3(Math.max(CAUTION_OVERLAP + 0.02, (sameSetup ? 0.76 : 0.74) - 0.01 * k)) : 0.43;
+        const little = accepted && overlap < CAUTION_OVERLAP;
+        if (accepted) this.shared.set(MockAlign.key(A.id, B.id), overlap);
         const rmse = accepted ? 0.25 : 0.41;
         const candidates = given ? 1 : 9;
         const agree = given ? 1 : accepted ? 8 : 4;
@@ -411,6 +465,8 @@ export class MockAlign {
           n_matched: accepted ? 18240 : 10310,
           ms: 0,
           message: verdict,
+          little_shared: little,
+          caution: little ? littleSharedCaution(overlap) : null,
           rms: pairsRms,
         });
       }
@@ -458,7 +514,10 @@ export class MockAlign {
         const unplaced = ids.filter((id) => !placed.has(id));
         const T: Record<string, number[][] | null> = {};
         for (const id of ids) T[id] = placed.has(id) ? IDENTITY.map((r) => [...r]) : null;
-        const verdict = alignAllVerdict({ n: ids.length, chain: links.filter((l) => l.used === "chain").length, loops: checked, leftOut, worst, unplaced: unplaced.map(nameOf) });
+        // the links that place scans although the two share little: named in the verdict, with the caution
+        const little = links.filter((l) => (l.used === "chain" || l.used === "loop") && l.little_shared);
+        let verdict = alignAllVerdict({ n: ids.length, chain: links.filter((l) => l.used === "chain").length, loops: checked, leftOut, worst, unplaced: unplaced.map(nameOf) });
+        if (little.length) verdict += ` Little is shared between ${little.map((l) => `"${nameOf(l.b)}" and "${nameOf(l.a)}" (${(100 * l.overlap).toFixed(0)} %)`).join(", and between ")}.`;
         const result: AlignAllResult = {
           project_id: p.id,
           scans: [...ids],
@@ -475,6 +534,8 @@ export class MockAlign {
           ms: Date.now() - t0,
           verdict,
           message: verdict,
+          little_shared: little.map((l) => ({ a: l.a, b: l.b })),
+          caution: little.length ? MANY_CAUTION : null,
         };
         return result;
       };
@@ -517,6 +578,32 @@ export class MockAlign {
     return this.startMerge(p, list, sameSetup, name, list.length === 2 ? { target: list[0].id, source: list[1].id } : {});
   }
 
+  /**
+   * What the merge measures of how much the scans share at its poses (`AlignManager._shared`): the demo takes each pair's
+   * overlap from its last alignment (0.76 when it was not aligned), the chain of best-shared pairs from the first scan,
+   * and a warning for each of its links under `CAUTION_OVERLAP`.
+   */
+  private sharedAtPoses(list: MockScan[]): MergeShared {
+    const over = (x: MockScan, y: MockScan) => this.shared.get(MockAlign.key(x.id, y.id)) ?? 0.76;
+    const pairs: MergeShared["pairs"] = [];
+    for (let i = 0; i < list.length; i++) for (let j = i + 1; j < list.length; j++) pairs.push({ a: list[i].id, b: list[j].id, overlap: over(list[i], list[j]) });
+    const placed = new Set<number>([0]);
+    const little: MergeShared["little_shared"] = [];
+    const warnings: string[] = [];
+    while (placed.size < list.length) {
+      let best: [number, number, number] | null = null;
+      for (const i of placed) for (let j = 0; j < list.length; j++) if (!placed.has(j) && (!best || over(list[i], list[j]) > best[2])) best = [i, j, over(list[i], list[j])];
+      if (!best) break;
+      placed.add(best[1]);
+      const [i, j] = best[0] < best[1] ? [best[0], best[1]] : [best[1], best[0]];
+      if (best[2] < CAUTION_OVERLAP) {
+        little.push({ a: list[i].id, b: list[j].id, overlap: best[2] });
+        warnings.push(littleSharedMergeWarning(list[i].name, list[j].name, best[2], list.length === 2 ? "merge all three" : "merge them all again"));
+      }
+    }
+    return { pairs, little_shared: little, limit: CAUTION_OVERLAP, warnings, s: 0.8 * list.length };
+  }
+
   /** The merge job of 2..8 checked scans (the first one's quality); `name` empty: their names joined by " + ". */
   private startMerge(p: Project, list: MockScan[], sameSetup: boolean, name: string, meta: Record<string, unknown>): Job {
     // UX_PLAN R21: a default name takes the next free one ("Top + Side (2)"), as the engine's
@@ -525,6 +612,7 @@ export class MockAlign {
     const n = list.reduce((sum, s) => sum + fusedFrames(s, quality), 0);
     const unchanged = list.length > 2 ? "The scans are unchanged." : "The two scans are unchanged.";
     const host = this.host;
+    const shared = this.sharedAtPoses(list);
     const work = (function* (): Generator<WorkStep, () => Record<string, unknown>, void> {
       if (!sameSetup) yield { p: 0.02, message: "Finding what the part lay on" };
       const steps = Math.min(n, 80);
@@ -578,7 +666,7 @@ export class MockAlign {
               };
             });
         // the engine writes the merge's notes into the merged scan's report too (seen on the real engine, UX_PLAN R1)
-        const notes = tables.flatMap((t) => t.warnings);
+        const notes = [...tables.flatMap((t) => t.warnings), ...shared.warnings];
         if (notes.length && scan.result) scan.result.report = { ...scan.result.report, warnings: notes };
         const result: MergeResult = {
           project_id: p.id,
@@ -587,7 +675,9 @@ export class MockAlign {
           merged_from: list.map((x) => x.id),
           message: `Merged into "${title}"`,
           tables,
-          warnings: tables.flatMap((t) => t.warnings),
+          warnings: notes,
+          shared,
+          caution: shared.warnings.length ? shared.warnings.join(" ") : null,
           // R7: a merge always says what its cleaning took, also when the part was not moved
           cleaning: sameSetup ? "No loose bit was left out as too small (under 1 % of the triangles each)." : "2 small loose bits (14 mm²) were left out as too small (under 1 % of the triangles each); 1 small bit over a thin part was kept.",
         };

@@ -25,11 +25,12 @@ from typing import Any, Callable, Sequence
 
 import numpy as np
 
-from ohs.align.pairwise import AlignParams, ScanCloud, _apart_mm, align_pair, pose_from_point_pairs
+from ohs.align.pairwise import (AlignParams, ScanCloud, _apart_mm, align_pair, little_shared_merge_warning,
+                                pose_from_point_pairs, shared_overlap, what_helps)
 from ohs.align.tags import TagMap, align_with_tags
 from ohs.geometry import invert_se3
 
-__all__ = ["ManyAlignment", "align_many"]
+__all__ = ["ManyAlignment", "align_many", "shared_at_poses"]
 
 log = logging.getLogger(__name__)
 
@@ -51,6 +52,9 @@ class ManyAlignment:
     worst_link_mm: float = 0.0  # after solving, how far the worst kept link disagrees with the poses (RMS over its part)
     ms: float = 0.0
     verdict: str = ""
+    # links that place scans although the two share little (pairwise module docstring, 7.): (i, j) of the pairs
+    little_shared: list[tuple[int, int]] = field(default_factory=list)
+    caution: str | None = None  # what that means and what helps, in words
 
     @property
     def accepted(self) -> bool:
@@ -60,7 +64,7 @@ class ManyAlignment:
         return {"accepted": self.accepted, "T": [None if T is None else np.asarray(T).tolist() for T in self.T],
                 "pairs": self.pairs, "placed": self.placed, "unplaced": self.unplaced, "loops": self.loops,
                 "graph": self.graph, "worst_link_mm": round(float(self.worst_link_mm), 3), "ms": self.ms,
-                "verdict": self.verdict}
+                "verdict": self.verdict, "little_shared": [list(k) for k in self.little_shared], "caution": self.caution}
 
 
 def _spanning_tree(n: int, edges: dict[tuple[int, int], float]) -> list[tuple[int, int]]:
@@ -225,5 +229,43 @@ def align_many(clouds: Sequence[ScanCloud], params: AlignParams | None = None, *
         out.verdict = f"All {n} scans placed through {len(tree)} link{'s' if len(tree) > 1 else ''}{via}."
         if worst > LINK_CONFLICT_MM:
             out.verdict += " That is a lot: look at the scans together before merging."
+    # links that place a scan although the two share little: named in the verdict, the caution says what it means
+    out.little_shared = [key for key in pair_list if rows[key]["used"] in ("chain", "loop") and rows[key].get("little_shared")]
+    if out.little_shared:
+        out.verdict += (" Little is shared between " + ", and between ".join(
+            f"scan {j + 1} and scan {i + 1} ({100 * rows[(i, j)]['overlap']:.0f} %)" for i, j in out.little_shared) + ".")
+        out.caution = ("Where two scans share little, they fit where they meet, but away from there the position can be a "
+                       "millimetre or more off, and a merge can then come out worse than either scan (a wall seen from both "
+                       "sides too thick or too thin). Merging is still possible. To make the positions sure, "
+                       f"{what_helps('align them all again')}.")
     say(1.0, "done")
     return out
+
+
+def shared_at_poses(clouds: Sequence[ScanCloud], T: Sequence[np.ndarray], params: AlignParams | None = None,
+                    names: Sequence[str] | None = None) -> dict:
+    """How much scans share at the poses ``T`` (each scan's mesh into one world), as a merge is given them: every
+    pair's ``overlap`` (:func:`ohs.align.pairwise.shared_overlap`), the chain of best-shared pairs that holds all
+    the scans together (a maximum spanning tree by overlap, as :func:`align_many` places scans), and the pairs of
+    that chain that share less than ``caution_overlap``, with a warning in words for each (``names``: the scans'
+    names; "scan 1", ... without). Two scans that share little can each be well placed through a third, so only
+    the chain counts. ``{"pairs": [{i, j, overlap}], "chain": [[i, j]], "little_shared": [{i, j, overlap}],
+    "limit", "warnings"}``."""
+    p = params if params is not None else AlignParams()
+    n = len(clouds)
+    if len(T) != n:
+        raise ValueError(f"{len(T)} poses for {n} scans")
+    names = list(names) if names is not None else [f"scan {k + 1}" for k in range(n)]
+    over: dict[tuple[int, int], float] = {}
+    for i in range(n):
+        for j in range(i + 1, n):
+            Tij = invert_se3(np.asarray(T[i], dtype=np.float64)) @ np.asarray(T[j], dtype=np.float64)  # scan j into scan i
+            over[(i, j)] = shared_overlap(clouds[j], clouds[i], Tij, p)
+    chain = sorted((min(a, b), max(a, b)) for a, b in _spanning_tree(n, over))
+    weak = [key for key in chain if over[key] < p.caution_overlap]
+    then = "merge all three" if n == 2 else "merge them all again"
+    return {"pairs": [{"i": i, "j": j, "overlap": round(v, 4)} for (i, j), v in over.items()],
+            "chain": [list(k) for k in chain],
+            "little_shared": [{"i": i, "j": j, "overlap": round(over[(i, j)], 4)} for i, j in weak],
+            "limit": float(p.caution_overlap),
+            "warnings": [little_shared_merge_warning(names[i], names[j], over[(i, j)], p.match_mm, then) for i, j in weak]}

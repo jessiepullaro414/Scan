@@ -49,6 +49,8 @@ import { Callout, KeyValue } from "../components/ui/Layout";
 import {
   alignAllFigures,
   alignFigures,
+  allCautionOf,
+  cautionOf,
   chooseAt,
   chooseList,
   completePairs,
@@ -287,8 +289,11 @@ function Figures({ figures }: { figures: Figure[] }) {
   );
 }
 
-/** The verdict sentence, accepted or not, and the small list of figures. */
-function Verdict({ ok, verdict, okLabel, notLabel, figures }: { ok: boolean; verdict: string; okLabel: string; notLabel: string; figures: Figure[] }) {
+/**
+ * The verdict sentence, accepted or not, the caution when the scans share little (a caution, not an error: Merge
+ * stays possible), and the small list of figures.
+ */
+function Verdict({ ok, verdict, okLabel, notLabel, figures, caution }: { ok: boolean; verdict: string; okLabel: string; notLabel: string; figures: Figure[]; caution?: string | null }) {
   return (
     <div className="mt-3">
       <div className={cn("flex items-start gap-2.5 rounded-lg border px-3.5 py-3", ok ? "border-ok/30 bg-ok-soft/60" : "border-warn/30 bg-warn-soft/60")} role="status">
@@ -298,13 +303,18 @@ function Verdict({ ok, verdict, okLabel, notLabel, figures }: { ok: boolean; ver
           <p className="mt-0.5 text-sm font-medium leading-5 text-fg">{sentence(verdict)}</p>
         </div>
       </div>
+      {caution ? (
+        <Callout tone="warn" icon={TriangleExclamationPoint} title="The scans share little" className="mt-2">
+          <span className="leading-5">{caution}</span>
+        </Callout>
+      ) : null}
       <Figures figures={figures} />
     </div>
   );
 }
 
 const TwoVerdict = ({ result }: { result: AlignResult }) => (
-  <Verdict ok={result.accepted} verdict={result.verdict} okLabel="Aligned" notLabel={standingLabel(result)} figures={alignFigures(result)} />
+  <Verdict ok={result.accepted} verdict={result.verdict} okLabel="Aligned" notLabel={standingLabel(result)} figures={alignFigures(result)} caution={cautionOf(result)} />
 );
 
 /**
@@ -370,7 +380,7 @@ function MultiVerdict({ result, list, nameOf, colorOf }: { result: AlignAllResul
   const rows = scanPlacements(result, list);
   return (
     <>
-      <Verdict ok={result.accepted} verdict={result.verdict} okLabel="All placed" notLabel="Not all placed" figures={alignAllFigures(result)} />
+      <Verdict ok={result.accepted} verdict={result.verdict} okLabel="All placed" notLabel="Not all placed" figures={alignAllFigures(result)} caution={allCautionOf(result)} />
       <ul className="mt-3 space-y-1.5" aria-label="Where each scan was placed">
         {rows.map((r) => (
           <li key={r.id} className="rounded-lg border border-line bg-surface-2/50 px-2.5 py-2 text-xs">

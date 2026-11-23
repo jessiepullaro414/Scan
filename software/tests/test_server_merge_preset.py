@@ -32,6 +32,15 @@ from test_server_process_studio import T as TIMEOUT, post, run_job  # noqa: E402
 pytestmark = pytest.mark.slow
 
 THIN = {"id": "thin-sheet-small-parts", "name": "Thin sheet metal and small parts", "hand": {}}
+# the two short test scans (2 s each, 90 degrees apart) share 46 % of the smaller one's part: since 2026-11-23 every merge
+# of them carries the caution of two scans that share little (ohs.server.aligning AlignManager._shared), and nothing else
+LITTLE = " share little where they were merged"
+
+
+def _others(warnings):
+    """The warnings without that caution, which must be there once."""
+    assert sum(LITTLE in w for w in warnings) == 1, warnings
+    return [w for w in warnings if LITTLE not in w]
 
 
 @pytest.fixture(scope="module")
@@ -75,13 +84,13 @@ def test_two_thin_scans_merge_at_the_thin_presets_voxel(env):
     assert rep["mesh"]["voxel_mm"] == pytest.approx(0.5)
     assert entry["preset"]["id"] == THIN["id"] and rep["preset"]["id"] == THIN["id"]
     assert rep["preset"]["used"]["voxel_mm"] == pytest.approx(0.5) and rep["preset"]["from_scan"] == env["ids"]["thin_a"]
-    assert res["warnings"] == []
+    assert _others(res["warnings"]) == []
 
 
 def test_a_scan_with_other_meshing_values_is_named_in_the_warnings(env):
     res, rep, _ = _merge(env, "thin_a", "gen_b", "Thin and general")
     assert rep["mesh"]["voxel_mm"] == pytest.approx(0.5)  # the first scan's ("stays in place")
-    w = [x for x in res["warnings"] if "Side" in x]
+    w = [x for x in _others(res["warnings"]) if "Side" in x]
     assert len(w) == 1 and "0.5 mm" in w[0] and "Top thin" in w[0], res["warnings"]
     assert rep["warnings"] == res["warnings"]
 
@@ -93,7 +102,7 @@ def test_general_merges_exactly_as_before(env):
 
     st = env["studio"]
     res, rep, entry = _merge(env, "gen_a", "gen_b", "General")
-    assert res["warnings"] == [] and "preset" not in entry
+    assert _others(res["warnings"]) == [] and "preset" not in entry
     before = dataclasses.replace(process_params(st.cfg, "markerless", "standard", 640), poisson=False)
     assert st.aligning.merge_params(env["pid"], env["ids"]["gen_a"], 640, "standard")[0] == before
     sc = env["scans"]

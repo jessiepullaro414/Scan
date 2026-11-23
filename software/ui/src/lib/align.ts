@@ -328,10 +328,24 @@ export function tagsNote(t: TagStart | null | undefined): string | undefined {
   return t.left_out.length ? `${used}; tag${t.left_out.length > 1 ? "s" : ""} ${list(t.left_out)} left out (moved?)` : used;
 }
 
+/**
+ * The caution of an accepted alignment whose scans share little (ENGINE_PLAN, after X7): what it means and what helps,
+ * shown under the verdict as a caution, not an error (Merge stays possible). Null when there is none, when the
+ * alignment was not accepted (its verdict says why), or from an older server.
+ */
+export function cautionOf(r: Pick<AlignResult, "accepted" | "little_shared" | "caution">): string | null {
+  return r.accepted && r.little_shared && typeof r.caution === "string" && r.caution ? r.caution : null;
+}
+
+/** The same for several scans: the caution when a link that places scans shares little (the verdict names them). */
+export function allCautionOf(r: Pick<AlignAllResult, "caution" | "little_shared">): string | null {
+  return r.little_shared?.length && typeof r.caution === "string" && r.caution ? r.caution : null;
+}
+
 /** An alignment's figures for the small list under its verdict. */
 export function alignFigures(r: AlignResult): Figure[] {
   const out: Figure[] = [
-    { label: "Overlap", value: `${Math.round(100 * r.overlap)}\u202f%`, note: "of the smaller scan lies within 1\u202fmm of the other" },
+    { label: "Overlap", value: `${Math.round(100 * r.overlap)}\u202f%`, note: "of the smaller scan lies within 1\u202fmm of the other", warn: cautionOf(r) !== null },
     // U36: "typically 0.25 mm where they overlap"; the help in brackets, apart from the count
     { label: "Distance apart", value: typeof r.rmse_mm === "number" ? `typically ${mm(r.rmse_mm)}` : "–", note: "where they overlap" },
     r.start === "given"
@@ -383,6 +397,7 @@ export function pairUseText(used: PairUse): string {
 export function pairLine(p: AlignAllPair, other: string): string {
   const parts = [`with “${other}”: ${p.accepted ? "accepted" : "not accepted"}`, `${Math.round(100 * p.overlap)}\u202f% overlap`, pairUseText(p.used)];
   if (typeof p.disagree_mm === "number" && (p.used === "loop" || p.used === "left out")) parts.push(`disagrees by ${p.disagree_mm.toFixed(2)}\u202fmm`);
+  if (p.accepted && p.little_shared && (p.used === "chain" || p.used === "loop")) parts.push("shares little");
   return parts.join(", ");
 }
 

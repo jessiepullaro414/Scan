@@ -455,7 +455,8 @@ class PassManager:
         if step == "process":
             self._start_step(pid, sid, "align")
         elif step == "align":
-            info = {k: res.get(k) for k in ("accepted", "verdict", "overlap", "agree", "rms_mm", "sure", "doubt", "start")}
+            info = {k: res.get(k) for k in ("accepted", "verdict", "overlap", "agree", "rms_mm", "sure", "doubt", "start",
+                                            "little_shared", "caution")}
             info["T"] = res.get("T")
             if not res.get("accepted"):
                 msg = (f"{res.get('verdict') or 'Not aligned.'} Nothing was merged: the pass is kept as its own scan. "
@@ -474,9 +475,11 @@ class PassManager:
             self._start_step(pid, sid, "merge", T=res.get("T"))
         else:
             mid = res.get("scan_id")
+            # the merge's own check of how much the two share (ohs.server.aligning AlignManager._shared): said here too
+            caution = f" {res['caution']}" if res.get("caution") else ""
             self._set_chain(pid, sid, state="merged", step="merge", merged_scan_id=mid,
                             message=f"Merged with \"{first_name}\" into \"{(res.get('scan') or {}).get('name') or mid}\". "
-                                    f"\"{first_name}\" itself is unchanged.")
+                                    f"\"{first_name}\" itself is unchanged.{caution}")
             self.st.notify("info", f"Second pass merged with \"{first_name}\"")
 
     # ------------------------------------------------------------------ views

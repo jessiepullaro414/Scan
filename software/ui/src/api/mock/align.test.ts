@@ -12,6 +12,7 @@ import {
   fitsFromShape,
   isPose,
   isRigid,
+  littleSharedCaution,
   MockAlign,
   quotedNames,
   turnedOver,
@@ -195,6 +196,14 @@ check(/^Aligned: \d+ % of the smaller scan's part lies within 1 mm of the other 
 check(a.verdict === alignedVerdict(a.overlap, a.rmse_mm!, "given", a.agree, a.candidates), "made from the figures");
 check(typeof a.pairs_rms_mm === "number" && a.pairs_rms_mm >= 0 && a.pairs_rms_mm < 1, "well picked pairs agree to a fraction of a mm");
 check(a.same_setup === false && a.used_support === false && isRigid(a.T), "the part was moved: no table, a rigid pose");
+// the underside turned over, aligned from points: the two sides share little (after ENGINE_PLAN X7): accepted, with the caution
+check(a.overlap === 0.46 && a.little_shared === true && a.caution === littleSharedCaution(0.46), "opposite sides share little: the caution");
+check(a.caution!.startsWith("Little is shared: 46 % of the smaller scan's part") && a.caution!.includes("Merging is still possible"), `its words: ${a.caution}`);
+mock.align(p, { target: "top", source: "under" });
+const much = run(last()).result as AlignResult;
+check(much.overlap === 0.76 && much.little_shared === false && much.caution === null, "much shared: no caution");
+mock.align(p, { target: "top", source: "under", same_setup: false, pairs: TRIANGLE }); // as before, for the merge below
+run(last());
 
 const OFF = pairs([
   [[0, 0, 0], [0, 0, 0]],
@@ -259,7 +268,14 @@ check(Number(frames[0][1]) >= 1 && Number(frames[frames.length - 1][1]) === tota
 check(done.steps.every((s, i) => s.p >= 0 && s.p <= 1 && (i === 0 || s.p >= done.steps[i - 1].p)), "the progress only grows");
 check(done.steps[done.steps.length - 1].message === "Adding the merged scan to the project", "the last step adds the scan");
 check(!done.steps.some((s) => s.message === "Finding what the part lay on"), "same setup: the tables stay in");
-check(JSON.stringify((done.result as MergeResult).tables) === "[]" && JSON.stringify((done.result as MergeResult).warnings) === "[]", "same setup: nothing left out, nothing said");
+// ... but that top and underside, aligned from picked points above, share little (after ENGINE_PLAN X7): that caution, and nothing else
+{
+  const ws = (done.result as MergeResult).warnings ?? [];
+  const little = ws.filter((w) => w.includes(" share little where they were merged"));
+  check(JSON.stringify((done.result as MergeResult).tables) === "[]" && little.length === 1 && ws.length === 1, "same setup: nothing left out, nothing said but that the two share little");
+  check(little[0].startsWith('"Bracket top" and "Bracket underside" share little where they were merged: 46 % ') && (done.result as MergeResult).caution === little[0], `the merge's caution: ${little[0]}`);
+  check((done.result as MergeResult).shared?.little_shared.length === 1 && (done.result as MergeResult).shared?.limit === 0.7, "how much they share, as the engine says it");
+}
 
 let m = done.result as MergeResult;
 check(p.scans.length === count + 1 && p.n_scans === count + 1, "the project has one more scan");

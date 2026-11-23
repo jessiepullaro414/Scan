@@ -5417,6 +5417,94 @@ than a real one; the picked points are simulated (true matches moved 1.5 mm); th
 moved between the scans (the merge of a moved part, with the table maps, was not measured);
 the trial per place is a mesh of loose triangles, not a model.
 
+## Two scans that share little (ENGINE_PLAN small things, 2026-11-23): a caution at the alignment and in the merge
+
+X7 found two merges far worse than either scan while the alignment said only "Aligned": the bracket's opposite
+sides (46 % shared) and the sheet part (40 %). Where little is shared the scans fit where they meet and can be off
+elsewhere. Since 2026-11-23 an accepted alignment whose `overlap` (the share of the smaller scan's part within 1 mm
+of the other, normals agreeing) is under `CAUTION_OVERLAP` = 0.70 (`ohs.align.pairwise`) carries a caution, and a
+merge measures the same share itself at the poses it is given and says so in its warnings. Nothing is refused.
+
+**How it was measured** (`tools/merge_overlap_sweep.py`, `tools/merge_accuracy_study.py`; data and notes in
+`D:\OpenHandScan-work\scratch\mergewarn`). Scans: 90-frame stretches of the scorecard's orbit recordings, made as
+Make mesh makes them (graphics card). 39 pairs fixed beforehand: every two scans of one scene from different seeds
+(bracket 14, sheet 16, plate with holes 8, car panel 1), 3°-175° apart, each aligned from the shape and from four
+picked points (true matches, each 1.5 mm off): 78 alignments, about 3 s each. The pose was compared with two
+truths: the motion between the scans' camera paths fitted to the true poses, and the motion between the two meshes
+as each fits the true part best. Two sheet scans were bad by themselves (their own mesh 0.29 and 0.37 mm median off
+the part, 49 % and 62 % of it more than 0.3 mm off): every pair with them was 3-18 mm "off" whatever it shared.
+
+Accepted alignments (overlap: median pose error against the placed meshes):
+
+| scene | overlap of the accepted alignments | pose off the truth (median) |
+|---|---|---|
+| bracket, 146-174° apart | 0.446, 0.462, 0.467, 0.474, 0.492 | 0.63-1.06 mm |
+| bracket, 3-120° apart | 0.717, 0.829, 0.835, 0.847, 0.861, 0.944, 0.956, 0.963, 0.969 | 0.12-0.51 mm |
+| plate with holes, 15-172° | 0.908-0.971 | 0.18-0.58 mm |
+| car panel, 99° | 0.977 | 0.31 mm |
+| sheet (sound scans) | 0.424, 0.555, 0.660, 0.689, 0.795, 0.864, 0.894, 0.934 | 0.31-1.38 mm (fitted worlds); the placed truth does not hold for the sheet's bent scans |
+
+On the bracket the overlap has a wide gap (0.49 to 0.72); the sheet's pose errors could not be judged by either
+truth, so 12 merges (7 pairs) decided: the app's merge at the alignment's pose (a) and, for 5 of them, at the true
+motion (b2), judged as X7 judges (median distance / share more than 0.3 mm off the part):
+
+| merge | overlap | better single | merge at the pose | merge at the true motion | ruined by the pose |
+|---|---|---|---|---|---|
+| X7 P5 sheet 123° | 0.397 | 0.163 / 25.7 % | 0.371 / 57.9 % | 0.226 / 35.9 % | yes |
+| X7 P3 bracket 171° | 0.463 | 0.098 / 15.7 % | 0.308 / 51.2 % | 0.075 / 12.0 % | yes |
+| M1 bracket 174° | 0.492 | 0.088 / 14.8 % | 0.270 / 45.5 % | 0.076 / 12.0 % | yes |
+| M3 sheet 91° | 0.689 | 0.127 / 21.5 % | 0.286 / 46.4 % | 0.173 / 23.6 % | yes |
+| M2 bracket 64° | 0.717 | 0.085 / 14.7 % | 0.083 / 11.6 % | - | no (better than either) |
+| M6 sheet 76° | 0.795 | 0.123 / 15.1 % | 0.315 / 53.1 % | 0.275 / 44.2 % | no: ruined at the true motion too |
+| X7 P1 bracket 97° | 0.861 | 0.088 / 14.8 % | 0.085 / 14.0 % | 0.082 / 14.5 % | no |
+| M7 sheet 84° | 0.864 | 0.127 / 21.5 % | 0.178 / 24.7 % | 0.172 / 22.1 % | no |
+| M4 sheet 41° | 0.894 | 0.171 / 24.5 % | 0.220 / 32.5 % | 0.216 / 31.5 % | no (a sheet merge is worse by itself) |
+| M5 holes 107° | 0.938 | 0.063 / 19.4 % | 0.077 / 23.0 % | - | no |
+| X7 P2 bracket 56° | 0.944 | 0.096 / 13.9 % | 0.097 / 14.5 % | 0.097 / 14.5 % | no |
+| X7 P4 panel 99° | 0.977 | 0.028 / 4.5 % | 0.022 / 8.1 % | 0.022 / 8.0 % | no |
+
+**The limit: 0.70.** Merges the pose ruined had overlap 0.397-0.689; merges whose pose was sound 0.717 and up. The
+margin is thin on one side: 0.689 (M3, sheet, ruined) and 0.717 (M2, bracket, better than either), one pair each.
+On the bracket alone the gap is 0.49-0.72. Open3D's RANSAC varies between runs, but here the shape and the
+picked-point starts gave the same overlap to three decimals on every pair both accepted.
+
+**Other signals** (same merges): none separates. The smaller of the two shares: ruined up to 0.610 (M3), sound from
+0.590 (P1). `rmse_mm`: ruined from 0.221 (M3), sound up to 0.223 (P1). `fit_mm`: ruined from 0.175, sound up to 0.183.
+How far the parts reach beyond the shared region (95th percentile, mm) and that over the shared region's size:
+ruined from 5.3 mm / 0.18, sound up to 13.1 mm / 0.32. Over all 72 accepted alignments against either truth no
+signal separates (the bad sheet scans); overlap gets the fewest wrong (6 of 72 against the placed meshes).
+
+**A check after the merge** (each scan's own part, at its merge pose, against the merged mesh, along its normal; no
+truth): does not separate. Share more than 0.5 mm off, the worse of the two scans: ruined merges P3 0.034, M1 0.026,
+M3 0.028, P5 0.197; sound P1 0.030, P2 0.010, P4 0.005, M2 0.024, M5 0.018, M7 0.038, and at the true motion P3 0.064,
+P5 0.385. A merge at a pose that is off follows each scan where only that scan saw, so each scan's own surface is
+in it; what is wrong is where the two parts sit against each other, which needs the truth to see. Not built.
+
+**Cost:** the merge reads both meshes into clouds and scores the pair: 1.6-2.7 s for two 0.5-0.6 M-vertex scans
+(the scoring itself 0.01 s), against 27-51 s for the merge; it gives the alignment's own overlap to four decimals.
+
+**Found on the way:** an alignment from the shape ACCEPTED a pose 506 mm off (sheet s1@140 + s2@0, 0.649 overlap,
+109° apart: an F11 miss; it gets the caution, being under 0.70). Two of the sheet's 90-frame scans were bad by
+themselves (above). The sheet merges are worse than the better single even at the true motion (M4 +7 points, X7 P5
+b2 +10): averaging two bent scans of thin walls.
+
+**Thin parts:** a 4 mm plate scanned from above and turned over from below shares only its edges (25 % in the
+test): from picked points the engine says "not sure" (a turned pose fits better: its own words, as before); from
+tags it is accepted with the caution, whose words hold there (they fit at the edges; a wall seen from both sides can
+come out too thick or too thin; one pass with the part standing on edge sees both faces). Nothing is removed.
+
+**Also from the shape.** Two of the four merges the pose ruined were aligned from the shape alone, with 8 of 9
+starting guesses agreeing (M1, M3; X7's P3 and P5 were from picked points): the agreement of the guesses does not
+show it.
+
+**Shown:** on the Align page as "The scans share little" under the verdict (a caution; Merge stays possible, nothing
+more is asked); for several scans the verdict names the links and each pair's line ends "shares little"; a merged
+scan lists it under its warnings ("How the scan was made"); a second pass's message ends with it. Checked in the
+app's demo data in the browser (light and dark).
+
+Not verified: real recordings; pairs aligned from tags (the caution goes by the overlap alone there); scans longer
+than 9 s; the limit rests on one sheet pair each side of it.
+
 ## What the metrics mean
 
 - **Stereo errors** compare the estimated raw intrinsics/extrinsics (`K1`, `K2`, `R`, `T`) with
