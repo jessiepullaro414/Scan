@@ -269,6 +269,15 @@ def test_the_hint_offers_making_only_the_thin_walls_finer_first_with_its_measure
         assert word not in text
 
 
+def test_a_time_range_whose_ends_read_the_same_says_one_number():
+    """A short mesh: 1.2 and 1.3 times 3 s both read "4 s", so the line says "about 4 s", not "4 s to 4 s"."""
+    V, F = box(40.0, 1.0, 30.0)
+    f = find_thin_parts(V, F, voxel_mm=1.0, opposite_sides=True)
+    w = hint_words(f, seconds=3.0, triangles=900_000, fine={"frames": 117, "bytes_per_frame": 8_192_000})
+    text = " ".join(w["fine"]["cost"])
+    assert "This mesh took 3 s; with it about 4 s." in text and "4 s to 4 s" not in text
+
+
 def test_a_mesh_whose_walls_were_made_finer_is_not_suggested_again_nor_estimated():
     """After "Make only the thin walls finer" acted the walls are still recorded, but nothing is suggested
     (``walls_made_finer``) and the thickness estimate, calibrated on plain 1 mm meshes, is not given."""

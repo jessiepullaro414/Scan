@@ -8,11 +8,13 @@ import { navigate, paths } from "../../lib/router";
 import { cn } from "../../lib/util";
 import { isActive, isStudioJob, jobKindLabel, jobScanRef, useJobs } from "../../store/jobs";
 import { processKey, useProcess } from "../../store/process";
+import { useProjects } from "../../store/projects";
 import { Button } from "../ui/Button";
 import { EmptyState, ProgressBar, Spinner } from "../ui/Feedback";
 import { Popover } from "../ui/Popover";
 
-function JobRow({ job }: { job: Job }) {
+/** `onDone`: a button of the row opened a page, so the panel closes. */
+function JobRow({ job, onDone }: { job: Job; onDone: () => void }) {
   const link = useJobs((s) => s.links[job.id]);
   const meta = useProcess((s) => s.jobMeta[job.id]);
   const cancel = useJobs((s) => s.cancel);
@@ -28,6 +30,8 @@ function JobRow({ job }: { job: Job }) {
   const studio = !link && isStudioJob(job.kind) ? (meta ? { pid: meta.pid, sid: meta.sid } : jobScanRef(job)) : null;
   // A finished merge (M4) opens the scan it made (named in its result).
   const mergedScan = !link && job.kind === "merge" && job.state === "done" ? jobScanRef(job) : null;
+  // a stage's or an edit's job names its scan too, as a Make mesh does (from the project's details, when loaded)
+  const studioName = useProjects((s) => (studio ? s.details[studio.pid]?.scans.find((x) => x.id === studio.sid)?.name : undefined));
   return (
     <li className="px-3 py-2.5">
       <div className="flex items-center gap-2">
@@ -43,7 +47,7 @@ function JobRow({ job }: { job: Job }) {
         <div className="min-w-0 flex-1">
           <div className="truncate text-sm font-medium text-fg">
             {meta?.label ?? jobKindLabel(job.kind)}
-            {link?.name ? <span className="font-normal text-muted"> · {link.name}</span> : null}
+            {link?.name ? <span className="font-normal text-muted"> · {link.name}</span> : studioName ? <span className="font-normal text-muted"> · {studioName}</span> : null}
             {link ? <span className="font-normal text-subtle"> ({normalizeQuality(link.quality) ?? link.quality})</span> : null}
           </div>
         </div>
@@ -59,7 +63,7 @@ function JobRow({ job }: { job: Job }) {
           {job.state === "failed" ? job.error || job.message || "Failed" : job.message || job.state}
         </div>
       )}
-      {est?.kind === "left" ? <div className="mt-0.5 truncate pl-[23px] text-xs text-subtle" title={est.text}>{est.text}</div> : null}
+      {est?.kind === "left" ? <div className="mt-0.5 break-words pl-[23px] text-xs text-subtle">{est.text}</div> : null}
       {active ? (
         <div className="mt-2 flex items-center gap-2 pl-[23px]">
           <ProgressBar value={job.state === "queued" ? null : job.progress} size="sm" label={`${jobKindLabel(job.kind)} progress`} />
@@ -81,19 +85,40 @@ function JobRow({ job }: { job: Job }) {
         </div>
       ) : job.state === "done" && link ? (
         <div className="mt-1.5 pl-[23px]">
-          <Button size="xs" variant="secondary" onClick={() => navigate(paths.viewer(link.pid, link.sid))}>
+          <Button
+            size="xs"
+            variant="secondary"
+            onClick={() => {
+              onDone();
+              navigate(paths.viewer(link.pid, link.sid));
+            }}
+          >
             Open result
           </Button>
         </div>
       ) : mergedScan ? (
         <div className="mt-1.5 pl-[23px]">
-          <Button size="xs" variant="secondary" onClick={() => navigate(paths.viewer(mergedScan.pid, mergedScan.sid))}>
+          <Button
+            size="xs"
+            variant="secondary"
+            onClick={() => {
+              onDone();
+              navigate(paths.viewer(mergedScan.pid, mergedScan.sid));
+            }}
+          >
             Open the merged scan
           </Button>
         </div>
       ) : studio ? (
         <div className="mt-1.5 pl-[23px]">
-          <Button size="xs" variant="secondary" onClick={() => navigate(paths.process(studio.pid, studio.sid))}>
+          <Button
+            size="xs"
+            variant="secondary"
+            onClick={() => {
+              onDone();
+              navigate(paths.process(studio.pid, studio.sid));
+            }}
+          >
             Open in Edit mesh
           </Button>
         </div>
@@ -139,7 +164,7 @@ export function JobsMenu() {
         {list.length ? (
           <ul className="divide-y divide-line">
             {list.slice(0, 8).map((j) => (
-              <JobRow key={j.id} job={j} />
+              <JobRow key={j.id} job={j} onDone={() => setOpen(false)} />
             ))}
           </ul>
         ) : (

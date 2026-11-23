@@ -235,7 +235,7 @@ Open **Export**. The mesh files are under **Download**, then come **For CAD** an
 |---|---|---|
 | **STL** | Mesh (STL) | CAD and slicers. The usual choice. |
 | **PLY** | Mesh (PLY) | The mesh with normals; it also carries each point's ± when the mesh has it. |
-| **OBJ** | Mesh (OBJ) | Blender and most 3D apps. Only when OBJ export is turned on in the engine's settings (see [Settings](settings.md)). |
+| **OBJ** | Mesh (OBJ) | Blender and most 3D apps. Only when OBJ export is turned on: add `"obj"` to `export` under `[process]` in the settings file (see [Settings](settings.md)). |
 | **Laser points** | Laser points (PLY) | The laser lines' own points. Only when the scan has them. |
 | **Processing report (JSON)** | the processing report | How the engine made the mesh (frames, tracking, timings). Not the scan's report below. |
 | **STL along the part's axes**, **PLY along the part's axes** | the mesh, moved | Shown once the part's axes are set: the mesh in the part's own axes. |
@@ -265,7 +265,7 @@ The files are named after the project and the scan. The mesh files are the scan'
 | "This scan has no laser points: …" | The lasers were off or not calibrated when it was scanned. | Scan again with the lasers on and calibrated. |
 | "This version of the engine can't compare the mesh with the lasers yet." | The engine is older than the app. | Update OpenHandScan and start it again. |
 | **Tracking may have slid** | The camera path jumped somewhere. A thin part can come out thinner or partly missing. | Look at the scan closely; scan again if it matters. |
-| **No OBJ for this scan** | The engine writes OBJ only when OBJ export is on. | Turn on OBJ export in the engine's settings, then make the mesh again. STL and PLY are always there. |
+| **No OBJ for this scan** | The engine writes OBJ only when OBJ export is on. | Add `"obj"` to `export` under `[process]` in the settings file (`export = ["ply", "stl", "obj"]`), then make the mesh again. STL and PLY are always there. |
 | **No view to add** | There is no 3D view to take a picture of. | Open the mesh first. |
 | **Couldn't add the view** | The report is full (6 views) or the picture is too large. | Remove a view first. |
 | **Couldn't make the report** / **Couldn't make the features file** | The engine could not build the file. | Try again. See [Troubleshooting](troubleshooting.md). |

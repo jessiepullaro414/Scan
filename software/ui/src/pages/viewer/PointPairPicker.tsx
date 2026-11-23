@@ -15,6 +15,7 @@ import type { PickedPair } from "../../api/types";
 import { Button, IconButton } from "../../components/ui/Button";
 import { Kbd } from "../../components/ui/Feedback";
 import { Switch } from "../../components/ui/Form";
+import { addTurnPick, type Picks, type Side } from "../../lib/align";
 import { PickView, SCAN_COLOR } from "../align/AlignCanvas";
 
 type Vec3 = [number, number, number];
@@ -48,8 +49,12 @@ export function PointPairPicker({
 }) {
   const scanView = useMemo(() => sharing(scan), [scan]);
   const refView = useMemo(() => sharing(reference), [reference]);
-  const [scanPicks, setScanPicks] = useState<Vec3[]>([]);
-  const [refPicks, setRefPicks] = useState<Vec3[]>([]);
+  // one state for both meshes, the scan as `target`: a pick is taken only in its turn (lib/align.ts addTurnPick), seen
+  // on the latest picks, so quick clicks never put the pairs out of step
+  const [picks, setPicks] = useState<Picks>({ target: [], source: [] });
+  const scanPicks = picks.target;
+  const refPicks = picks.source;
+  const pick = (side: Side) => (p: Vec3) => setPicks((x) => addTurnPick(x, side, p));
   const [refine, setRefine] = useState(true);
   const n = Math.min(scanPicks.length, refPicks.length);
   useEffect(() => {
@@ -62,14 +67,14 @@ export function PointPairPicker({
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
   }, [onClose]);
-  const undo = () => {
-    if (scanPicks.length > refPicks.length) setScanPicks((p) => p.slice(0, -1));
-    else if (refPicks.length > scanPicks.length) setRefPicks((p) => p.slice(0, -1));
-    else {
-      setScanPicks((p) => p.slice(0, -1));
-      setRefPicks((p) => p.slice(0, -1));
-    }
-  };
+  const undo = () =>
+    setPicks((x) =>
+      x.target.length > x.source.length
+        ? { ...x, target: x.target.slice(0, -1) }
+        : x.source.length > x.target.length
+          ? { ...x, source: x.source.slice(0, -1) }
+          : { target: x.target.slice(0, -1), source: x.source.slice(0, -1) },
+    );
   const hint =
     scanPicks.length <= refPicks.length
       ? `Click point ${scanPicks.length + 1} on the scan (left)`
@@ -82,29 +87,33 @@ export function PointPairPicker({
 
   return (
     <div className="absolute inset-0 z-[40] flex flex-col bg-panel" role="dialog" aria-label="Pick matching points on the scan and on the CAD model">
-      <div className="flex flex-wrap items-center gap-2 border-b border-line bg-panel px-4 py-2.5">
-        <MousePointerClick size={15} className="text-accent" aria-hidden />
-        <span className="text-sm font-medium text-fg">{hint}</span>
-        <span className="text-xs text-muted">
-          · {n} pair{n === 1 ? "" : "s"}, three or more, spread over the part, in the same order on both
-        </span>
-        <span className="flex-1" />
-        <Switch checked={refine} onChange={setRefine} label="Refine on the shapes" />
-        <IconButton icon={Undo2} size="sm" label="Take the last point back" disabled={!scanPicks.length && !refPicks.length} onClick={undo} />
-        <Button size="sm" variant="primary" disabled={n < 3 || busy} loading={busy} onClick={align} title={refine ? "A best fit from these pairs (a few seconds)" : "The pose from these pairs as they are"}>
-          Align from {n} pairs
-        </Button>
-        <IconButton icon={X} size="sm" label="Close (Esc)" onClick={onClose} />
+      {/* two rows of fixed height, nothing wraps: the views below never move between turns, so a click lands where aimed */}
+      <div className="border-b border-line bg-panel px-4 py-2">
+        <div className="flex h-6 min-w-0 items-center gap-2">
+          <MousePointerClick size={15} className="shrink-0 text-accent" aria-hidden />
+          <span className="min-w-0 truncate text-sm font-medium text-fg" title={hint} aria-live="polite">{hint}</span>
+        </div>
+        <div className="mt-1 flex h-8 min-w-0 items-center gap-2">
+          <span className="min-w-0 flex-1 truncate text-xs text-muted" title="Three or more pairs, spread over the part, in the same order on both">
+            {n} pair{n === 1 ? "" : "s"}, three or more, spread over the part, in the same order on both
+          </span>
+          <Switch checked={refine} onChange={setRefine} label="Refine on the shapes" />
+          <IconButton icon={Undo2} size="sm" label="Take the last point back" disabled={!scanPicks.length && !refPicks.length} onClick={undo} />
+          <Button size="sm" variant="primary" className="shrink-0" disabled={n < 3 || busy} loading={busy} onClick={align} title={refine ? "A best fit from these pairs (a few seconds)" : "The pose from these pairs as they are"}>
+            Align from {n} pair{n === 1 ? "" : "s"}
+          </Button>
+          <IconButton icon={X} size="sm" label="Close (Esc)" onClick={onClose} />
+        </div>
       </div>
       <div className="grid min-h-0 flex-1 grid-cols-2 gap-px bg-line">
         <div className="relative min-h-0 viewport-bg">
-          <PickView geometry={scanView} picks={scanPicks} color={SCAN_COLOR.target} label="The scan, for picking points" enabled={scanPicks.length <= refPicks.length} onPick={(p) => setScanPicks((x) => [...x, p])} />
+          <PickView geometry={scanView} picks={scanPicks} color={SCAN_COLOR.target} label="The scan, for picking points" enabled={scanPicks.length <= refPicks.length} listen onPick={pick("target")} />
           <div className="pointer-events-none absolute left-3 top-3 rounded-full border border-line bg-panel/90 px-2.5 py-1 text-xs font-medium text-fg" style={{ borderColor: SCAN_COLOR.target }}>
             The scan
           </div>
         </div>
         <div className="relative min-h-0 viewport-bg">
-          <PickView geometry={refView} picks={refPicks} color={SCAN_COLOR.source} label="The CAD model, for picking points" enabled={refPicks.length < scanPicks.length} onPick={(p) => setRefPicks((x) => [...x, p])} />
+          <PickView geometry={refView} picks={refPicks} color={SCAN_COLOR.source} label="The CAD model, for picking points" enabled={refPicks.length < scanPicks.length} listen onPick={pick("source")} />
           <div className="pointer-events-none absolute left-3 top-3 rounded-full border border-line bg-panel/90 px-2.5 py-1 text-xs font-medium text-fg" style={{ borderColor: SCAN_COLOR.source }}>
             The CAD model
           </div>

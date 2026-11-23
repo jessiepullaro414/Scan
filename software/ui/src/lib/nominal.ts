@@ -118,7 +118,7 @@ export function approvedTip(n: ApprovedNominal): string {
 // ------------------------------------------------------------------ offers a known bias alone allows (off unless asked)
 /** The hover card of the switch "Offers a known bias allows" (a viewer preference, store/ui.ts). */
 export const BIAS_SWITCH_HELP =
-  "A known bias: on the simulator some features read consistently small or large, the same on every scan (small bosses about 0.3\u202fmm small in diameter, some holes larger or smaller). The ± does not show it. These numbers are not yet measured on the real scanner. Off (the default): a value is offered only where the ± alone allows it, so a Ø 14.3 boss stays Ø 14.3. Turned on: values that only a known bias allows are offered too, in the warning colour, each saying which bias. An approval keeps the rule it was made under.";
+  "A known bias: on the simulator some features read consistently small or large, the same on every scan (Ø 14 bosses 0.15–0.19\u202fmm small in radius as tracked, 0.23–0.28\u202fmm with the true camera path; some holes larger or smaller). The ± does not show it. These numbers are not yet measured on the real scanner. Off (the default): a value is offered only where the ± alone allows it, so a Ø 14.3 boss stays Ø 14.3. Turned on: values that only a known bias allows are offered too, in the warning colour, each saying which bias. An approval keeps the rule it was made under.";
 
 /** "Ø 14.5", "0° or 1°": the values a known bias alone would allow, as the card names them. */
 function heldBack(offer: NominalOffer): string {

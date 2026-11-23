@@ -48,4 +48,14 @@ check(removedGhost(hist(3), "b") === null && removedGhost(hist(3), "x") === null
 check(!ga!.tooBig && removedGhost({ ...hist(3), base: { ...base, triangles: GHOST_LIMIT_TRIANGLES } } as ProcessState, "a")!.tooBig, "too big to show both");
 check(ghostTooBigText(5_000_000) === "These meshes are too big to show both at once (5,000,000 triangles more): the history keeps what was removed, but this computer would run short of memory.", ghostTooBigText(5_000_000));
 
+// while "Show what was removed" is on the view shows two meshes and cannot select: the selection tools are
+// unavailable (none looks active, no "Drag a box" pill, no selection bar) and the canvas only navigates
+{
+  const fsm = (await import(["node", "fs"].join(":"))) as { readFileSync: (u: URL, enc: "utf8") => string };
+  const page = fsm.readFileSync(new URL("../pages/ProcessPage.tsx", import.meta.url), "utf8");
+  check(/const canSelect = !!mesh && !comparing && !removedView\.view;/.test(page), "no selecting while the removed view shows");
+  check(/const showSelBar = canSelect && /.test(page), "the selection bar and its pill follow");
+  check(/active=\{canSelect && tool === t\.id\}/.test(page) && /tool=\{canSelect \? tool : "navigate"\}/.test(page), "no tool looks active, the canvas navigates");
+}
+
 console.log(`looseBits.test: ${checks} checks passed`);

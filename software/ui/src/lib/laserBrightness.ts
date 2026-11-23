@@ -26,12 +26,11 @@ export function laserSettingsOf(settings: Record<string, unknown> | null | undef
   return out;
 }
 
-const PLACES: Record<LaserFamily, [string, string]> = { vertical: ["right", "left"], horizontal: ["top", "low"] };
 const FAMILY: Record<LaserFamily, string> = { vertical: "Vertical", horizontal: "Horizontal" };
 
 export type BrightnessRow = {
   name: string; // the laser whose brightness the slider sets
-  label: string; // "Vertical, right"; "Vertical lasers" for a pair on one wire
+  label: string; // the chips' name, "Vertical 2" (laserLabel); "Vertical lasers" for a pair on one wire
   value: number; // percent, 0..100
   pair: boolean; // the slider sets both lasers of a pair (one wire)
 };
@@ -53,9 +52,7 @@ export function brightnessRows(l: LaserSettings | null): BrightnessRow[] | null 
       rows.push({ name: members[0], label: `${FAMILY[f]} lasers`, value: level(members[0]), pair: true });
       continue;
     }
-    members.forEach((n, i) =>
-      rows.push({ name: n, label: members.length === 2 ? `${FAMILY[f]}, ${PLACES[f][i]}` : laserLabel(n), value: level(n), pair: false }),
-    );
+    for (const n of members) rows.push({ name: n, label: laserLabel(n), value: level(n), pair: false });
   }
   return rows;
 }

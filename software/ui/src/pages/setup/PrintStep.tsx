@@ -148,7 +148,7 @@ function ScaleCheck({ onReprint }: { onReprint: () => void }) {
         <CalipersArt />
         <div>
           <p className="text-sm text-muted">
-            Measure the bar between its end marks, as exactly as you can. Within ±0.3&#8239;% (99.7–100.3&#8239;mm) the print is fine.
+            Measure the bar between its outer edges, as exactly as you can. Within ±0.3&#8239;% (99.7–100.3&#8239;mm) the print is fine.
             {sim ? " It's optional here: the simulator's board is virtual and exact." : ""}
           </p>
           <form

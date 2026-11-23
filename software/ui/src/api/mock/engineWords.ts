@@ -97,3 +97,27 @@ export function floatersSummary(r: { pieces: number; triangles: number; largest_
 export function trackProgress(done: number, total: number): string {
   return done < total ? `Following the camera: frame ${int(done)} of ${int(total)}` : `Following the camera: all ${int(total)} frames done, making the mesh`;
 }
+
+/** Python's `f"{x:+.2f}"`: a sign always, a plain hyphen for minus. */
+const signed = (x: number, d: number) => `${x >= 0 ? "+" : "-"}${Math.abs(x).toFixed(d)}`;
+
+/** The print check's verdict for a bar measured `m` mm (`SetupManager.print_check`; within 0.3 % exact, up to 4 % a
+ * printer's scaling). `apply`: the measurement is used; `squareMm`: the board's square. */
+export function printCheckVerdict(m: number, apply: boolean, squareMm: number): string {
+  const err = m - 100; // % of the 100 mm bar
+  if (Math.abs(err) <= 0.3) return `Your print is accurate: the bar measures ${m.toFixed(2)} mm (${signed(err, 2)} %). The board is ready for calibration.`;
+  if (Math.abs(err) <= 4) {
+    const base = `Your printer scaled the page by ${signed(err, 1)} % (it printed at ${m.toFixed(1)} %: the 100 mm bar measures ${m.toFixed(2)} mm).`;
+    return apply
+      ? `${base} Using your measurement: the app calibrates with squares of ${((squareMm * m) / 100).toFixed(2)} mm. For the best result, reprint at 100 % / Actual size.`
+      : `${base} Reprint it at 100 % / Actual size (turn off “Fit to page”), or use your measurement and the app calibrates with the measured size.`;
+  }
+  return `The bar measures ${m.toFixed(2)} mm, ${Math.abs(err).toFixed(1)} % off: more than a printer scales a page. Measure again between the outer edges of the bar; if it really is that far off, reprint at 100 % / Actual size.`;
+}
+
+/** What a job of a kind says when it fails for a program error (`ohs/server/jobs.py` FAILURE_TEXT): the ones the
+ * demo uses. */
+export const FAILURE_TEXT = {
+  process_scan: "Making the mesh failed. Your recording is safe: try Make mesh again, or at Preview quality.",
+  process_track: "Following the camera path failed. Your recording is safe: try Follow the camera again, or Make mesh at Preview quality.",
+} as const;

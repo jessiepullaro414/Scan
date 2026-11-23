@@ -2,7 +2,7 @@
  * Checks for the Edit mesh stage cards' states (UX_PLAN R22, `npm test`): one stage "Running" at a time, and no
  * "Closed 48 loops" under "Skipped". Plain TypeScript run by Node, no framework.
  */
-import { stageRunning, straightenSkippedLine } from "./stages.ts";
+import { STAGE_TITLES, jobKindLabel, stageRunning, straightenSkippedLine } from "./stages.ts";
 
 const fs = (await import(["node", "fs"].join(":"))) as { readFileSync: (u: URL, enc: "utf8") => string };
 
@@ -30,5 +30,15 @@ const panel = fs.readFileSync(new URL("../pages/process/StagesPanel.tsx", import
 check(/stageRunning\(stage\.state\)/.test(panel) && !/const running = stage\.state === "running" \|\| !!job/.test(panel), "StagesPanel reads stageRunning on the card's own state");
 check(/makingRows\(/.test(panel) && /The new mesh being made/.test(panel), "StagesPanel shows the run being built beside the stages");
 check(/straightenSkippedLine\(/.test(panel), "StagesPanel says a skipped Straighten's loops in its own words");
+
+// the Jobs panel names a stage's job as its card does: "Build the surface", never the old "Fuse"
+for (const id of ["track", "straighten", "fuse", "spacetime", "refine"] as const)
+  check(jobKindLabel(`process_${id}`) === STAGE_TITLES[id].label, `process_${id}: ${jobKindLabel(`process_${id}`)}`);
+check(jobKindLabel("process_scan") === "Make mesh" && jobKindLabel("mesh_edit") === "Mesh edit", "a whole run and an edit");
+
+// the Jobs panel: the time left wraps, and a row's button that opens a page closes the panel
+const jobsMenu = fs.readFileSync(new URL("../components/shell/JobsMenu.tsx", import.meta.url), "utf8");
+check(!/est\?\.kind === "left" \? <div className="[^"]*truncate/.test(jobsMenu), "the time left is never cut off");
+check(/onDone=\{\(\) => setOpen\(false\)\}/.test(jobsMenu), "the panel closes when a row's button opens a page");
 
 console.log(`stages.test: ${checks} checks passed`);

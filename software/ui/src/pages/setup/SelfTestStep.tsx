@@ -215,7 +215,7 @@ export function SelfTestStep() {
         <div className="mb-5 flex flex-wrap items-center gap-4 rounded-xl border border-line bg-surface p-5 shadow-sm">
           <div className="min-w-[260px] flex-1">
             <div className="text-sm font-semibold text-fg">
-              {last ? (last.overall === "PASS" ? "Every check passed" : "Run it again after any fix") : sim ? "A few seconds on the simulator" : "About a minute, with two prompts"}
+              {last ? (last.overall === "PASS" ? "Every check passed" : "Run it again after any fix") : sim ? "A few seconds on the simulator" : "About 25\u202fs, with three prompts"}
             </div>
             <p className="mt-0.5 text-sm text-muted">
               {sim

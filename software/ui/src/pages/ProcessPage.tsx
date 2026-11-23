@@ -236,7 +236,8 @@ export default function ProcessPage({ pid, sid }: { pid: string; sid: string }) 
     setCompare("now");
     removedView.show(editId);
   };
-  const canSelect = !!mesh && !comparing;
+  // not while "Show what was removed" shows the two meshes: the view then only navigates
+  const canSelect = !!mesh && !comparing && !removedView.view;
   // the confidence map needs each point's sigma (meshes made with the confidence reconstruction)
   const hasSigma = !!sigmaOf(mesh?.geometry);
   // U5: "run it again" only where it would help (this computer has a graphics card)
@@ -275,7 +276,7 @@ export default function ProcessPage({ pid, sid }: { pid: string; sid: string }) 
       toast.info("Selection cleared", "The mesh changed, so select again.");
     setCount(mesh?.selection.count ?? 0);
   }, [mesh]);
-  const showSelBar = !!mesh && !comparing && (tool !== "navigate" || count > 0);
+  const showSelBar = canSelect && (tool !== "navigate" || count > 0);
   useEffect(() => {
     if (liveCountRef.current) liveCountRef.current.textContent = fmtInt(count);
   }, [count, showSelBar]);
@@ -702,7 +703,7 @@ export default function ProcessPage({ pid, sid }: { pid: string; sid: string }) 
               trajectory={showTraj ? traj.data : null}
               checkLit={check.lit}
               areas={tableAreas}
-              tool={tool}
+              tool={canSelect ? tool : "navigate"}
               through={through}
               brushRadius={brush}
               selectEnabled={canSelect}
@@ -863,7 +864,7 @@ export default function ProcessPage({ pid, sid }: { pid: string; sid: string }) 
                     icon={t.icon}
                     size="md"
                     label={`${t.label} (${t.key})`}
-                    active={tool === t.id}
+                    active={canSelect && tool === t.id}
                     disabled={t.id !== "navigate" && !canSelect}
                     onClick={() => pickTool(t.id)}
                   />
@@ -883,31 +884,6 @@ export default function ProcessPage({ pid, sid }: { pid: string; sid: string }) 
 
         {/* top right: the running job, a new version loading, or what "Before" shows */}
         <div className="pointer-events-none absolute right-4 top-4 flex w-[min(380px,calc(100%-2rem))] flex-col items-end gap-2">
-          {mesh && removedView.view ? (
-            // R23: what a removal of the history took, its summary naming the rule that took the largest piece
-            <Overlay className="w-full px-3.5 py-2.5">
-              <div className="flex items-start gap-2" role="status" aria-label="What was removed">
-                {removedView.view.phase === "loading" ? <Spinner size={13} className="mt-0.5 shrink-0 text-accent" /> : <Blend size={13} className="mt-0.5 shrink-0 text-[#ff9a3c]" aria-hidden />}
-                <div className="min-w-0 flex-1 text-xs">
-                  <div className="font-medium text-fg">
-                    {removedView.view.phase === "loading"
-                      ? "Loading the meshes before and after this step…"
-                      : removedView.view.phase === "ready"
-                        ? "In orange: what this step removed"
-                        : removedView.view.phase === "too-big"
-                          ? "Not shown: these meshes are too big"
-                          : "Couldn't show what was removed"}
-                  </div>
-                  <div className="mt-0.5 leading-5 text-muted">
-                    {removedView.view.phase === "error" || removedView.view.phase === "too-big" ? removedView.view.message : `${historyLabel(removedView.view.label)}: ${removedView.view.line}`}
-                  </div>
-                </div>
-                <Button size="xs" variant="ghost" onClick={removedView.close}>
-                  Close
-                </Button>
-              </div>
-            </Overlay>
-          ) : null}
           {mesh && job && state?.making ? null : mesh && job ? (
             // not while a whole new mesh is being made: "The new mesh being made" in the stages panel shows that
             // job with its Cancel, and this card lay over the toolbar (found in review on the real engine)
@@ -939,6 +915,35 @@ export default function ProcessPage({ pid, sid }: { pid: string; sid: string }) 
             </Overlay>
           ) : null}
         </div>
+
+        {/* bottom right: what a step of the history removed; at the top it lay over the breadcrumb and the view options */}
+        {mesh && removedView.view ? (
+          <div className={cn("pointer-events-none absolute right-4 w-[min(380px,calc(100%-2rem))] transition-[bottom] duration-200", showSelBar ? "bottom-28" : "bottom-4")}>
+            {/* R23: what a removal of the history took, its summary naming the rule that took the largest piece */}
+            <Overlay className="w-full px-3.5 py-2.5">
+              <div className="flex items-start gap-2" role="status" aria-label="What was removed">
+                {removedView.view.phase === "loading" ? <Spinner size={13} className="mt-0.5 shrink-0 text-accent" /> : <Blend size={13} className="mt-0.5 shrink-0 text-[#ff9a3c]" aria-hidden />}
+                <div className="min-w-0 flex-1 text-xs">
+                  <div className="font-medium text-fg">
+                    {removedView.view.phase === "loading"
+                      ? "Loading the meshes before and after this step…"
+                      : removedView.view.phase === "ready"
+                        ? "In orange: what this step removed"
+                        : removedView.view.phase === "too-big"
+                          ? "Not shown: these meshes are too big"
+                          : "Couldn't show what was removed"}
+                  </div>
+                  <div className="mt-0.5 leading-5 text-muted">
+                    {removedView.view.phase === "error" || removedView.view.phase === "too-big" ? removedView.view.message : `${historyLabel(removedView.view.label)}: ${removedView.view.line}`}
+                  </div>
+                </div>
+                <Button size="xs" variant="ghost" onClick={removedView.close}>
+                  Close
+                </Button>
+              </div>
+            </Overlay>
+          </div>
+        ) : null}
 
         {/* bottom left: the confidence map's legend, above the selection bar when that shows */}
         {shownShading === "confidence" && mesh ? (

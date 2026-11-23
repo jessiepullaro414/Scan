@@ -34,7 +34,7 @@ export async function saveMeshFile(d: MeshDownload): Promise<void> {
 
 /** The menu items of the list (the project page's Download menu, its More menu). */
 export function meshDownloadItems(urls: Parameters<typeof meshDownloads>[0], stem: string) {
-  return meshDownloads(urls, stem).map((d) => ({ label: d.label, icon: d.key === "obj" ? FileBox : Download, hint: d.hint, onSelect: () => void saveMeshFile(d) }));
+  return meshDownloads(urls, stem).map((d) => ({ label: d.label, icon: d.key === "obj" ? FileBox : Download, description: d.hint, onSelect: () => void saveMeshFile(d) })); // under the label: the label never wraps in a narrow menu
 }
 
 /** The list as buttons, two to a row. */

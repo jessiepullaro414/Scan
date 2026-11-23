@@ -49,7 +49,7 @@ export function describeTracking(state: TrackingState, reason: string | null | u
   return {
     label: LABELS[state] ?? "Tracking",
     text: r?.text ?? (state === "lost" ? "Tracking lost" : null),
-    hint: r?.hint || (state === "lost" ? "Return to the ghost scanner to recover." : null),
+    hint: r?.hint || (state === "lost" ? "Return to the dashed scanner: tracking resumes on its own." : null),
   };
 }
 

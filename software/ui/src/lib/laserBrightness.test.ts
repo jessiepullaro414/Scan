@@ -28,7 +28,7 @@ check(brightnessRows({ lines: FOUR }) === null, "an older engine: no sliders");
 
 // four lasers, each on its own wire
 const rows = brightnessRows({ lines: FOUR, own_channels: true, brightness: { vertical_2: 85, horizontal: 120 } })!;
-check(rows.map((r) => r.label).join("|") === "Vertical, right|Vertical, left|Horizontal, top|Horizontal, low", "labels in config order");
+check(rows.map((r) => r.label).join("|") === "Vertical|Vertical 2|Horizontal|Horizontal 2", "labels in config order, by the names the chips use");
 check(rows.map((r) => r.name).join("|") === "vertical|vertical_2|horizontal|horizontal_2", "names");
 check(rows.map((r) => r.value).join("|") === "100|85|100|100", "values: missing is 100, clamped to 100");
 check(rows.every((r) => !r.pair), "one slider per laser");
@@ -41,7 +41,7 @@ check(pairs[1].name === "horizontal" && pairs[1].value === 100, "horizontal pair
 
 // three lasers: the single one keeps its plain label
 const three = brightnessRows({ lines: ["vertical", "horizontal", "vertical_2"], own_channels: true })!;
-check(three.map((r) => r.label).join("|") === "Vertical, right|Vertical, left|Horizontal", "three lasers");
+check(three.map((r) => r.label).join("|") === "Vertical|Vertical 2|Horizontal", "three lasers");
 const threeShared = brightnessRows({ lines: ["vertical", "horizontal", "vertical_2"], own_channels: false })!;
 check(threeShared.map((r) => `${r.label}:${r.pair}`).join("|") === "Vertical lasers:true|Horizontal:false", "three lasers, one wire per pair");
 

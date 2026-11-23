@@ -357,7 +357,7 @@ function LaserBrightness({ settings, onSaved }: { settings: Settings; onSaved: (
       <div>
         <div className="text-sm text-fg">Brightness</div>
         <div className="text-xs text-subtle">
-          Each laser in percent of its family's level (the lasers and dots sliders on the Device page). Turn down a laser whose line looks brighter than the others.
+          Each laser in percent of its family's level (the lasers and dots sliders on the Device page, shown once the camera and the control board are connected). Turn down a laser whose line looks brighter than the others.
         </div>
       </div>
       <div className="space-y-3">
@@ -452,7 +452,7 @@ export function SettingsPage() {
         <Section title="After a scan" icon={Wand}>
           <Switch
             label="Make the mesh as soon as a scan stops"
-            description="Standard quality, as the Make mesh button. Turn it off to choose the quality yourself each time; the job can always be cancelled."
+            description="At Standard quality, the quality a press on Make mesh uses. Turn it off to choose the quality yourself each time; the job can always be cancelled."
             checked={autoMesh}
             onChange={setAutoMesh}
           />

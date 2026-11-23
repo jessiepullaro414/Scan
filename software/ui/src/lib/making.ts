@@ -39,7 +39,8 @@ export function makeMeshEnded(job: JobLike | null | undefined, hadMesh = false):
   // the engine's fixed words start with what failed: the title says it already
   const why = (job.error ?? "").replace(/^Making the mesh failed\.\s*/, "").trim();
   const said = /kept as it was|stays as it was/i.test(why);
-  const tail = kept ? (said ? "" : "The mesh stays as it was.") : "The recording is kept: try again, or at Preview quality.";
+  const safe = /recording is (safe|kept)/i.test(why);
+  const tail = kept ? (said ? "" : "The mesh stays as it was.") : safe ? "" : "The recording is kept: try again, or at Preview quality.";
   return { title: "Making the mesh failed", detail: [why, tail].filter(Boolean).join(" ") || KEPT };
 }
 

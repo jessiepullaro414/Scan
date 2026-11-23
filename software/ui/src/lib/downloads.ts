@@ -19,7 +19,7 @@ export const MESH_DOWNLOADS: { key: MeshFileKey; label: string; short: string; h
 export const OBJ_MISSING = {
   title: "No OBJ for this scan",
   detail: "The engine writes mesh.obj only when OBJ export is turned on.",
-  hint: "Turn on OBJ export in the engine's settings, then make the mesh again (or make any change to it). STL and PLY are always there.",
+  hint: 'To turn it on, add "obj" to export under [process] in the settings file (export = ["ply", "stl", "obj"]), then make the mesh again (or make any change to it). STL and PLY are always there.',
 };
 
 export type MeshDownload = (typeof MESH_DOWNLOADS)[number] & { url: string; file: string; check: boolean };

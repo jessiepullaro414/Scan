@@ -19,5 +19,7 @@ check(all[3].file === "Part-Scan_1-laser.ply", "laser points file name");
 const noLaser = meshDownloads({ stl: "/s", ply: "/p", obj: "/o", laser: null }, "x");
 check(noLaser.map((d) => d.key).join() === "stl,ply,obj", "no laser points: not listed");
 check(OBJ_MISSING.title === "No OBJ for this scan" && /only when OBJ export is turned on/.test(OBJ_MISSING.detail), "the honest answer when there is no OBJ");
+// no screen has the switch: the hint names the settings file's key (ohs/app/config.py, [process] export)
+check(OBJ_MISSING.hint.includes('add "obj" to export under [process] in the settings file'), OBJ_MISSING.hint);
 
 console.log(`downloads.test: ${checks} checks passed`);

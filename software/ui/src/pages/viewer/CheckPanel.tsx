@@ -284,6 +284,9 @@ function AreaRow({
               <span className="text-right font-mono text-fg tnum">{v}</span>
             </span>
           ))}
+          {area.sigma_median_mm !== null || area.sigma_worst_mm !== null ? (
+            <span className="col-span-2 text-subtle">The scatter is {result.k === 2 ? "twice" : `${result.k} times`} each point's ±.</span>
+          ) : null}
         </span>
       </button>
       {why ? (

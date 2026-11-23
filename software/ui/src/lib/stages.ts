@@ -39,3 +39,30 @@ export function stageTitle(id: StageId, o: { short?: boolean } = {}): string {
   if (!t) return String(id);
   return t.trial && !o.short ? `${t.label} (trial)` : t.label;
 }
+
+/** A job of the Edit mesh page: a stage alone, an edit or a recipe. */
+export const isStudioJob = (kind: string): boolean => /^process_(track|straighten|fuse|spacetime|refine)|mesh_edit|recipe|^edit/i.test(kind);
+
+/** A job's name in the Jobs panel: a stage's job by its card's name (`STAGE_TITLES`). */
+export const jobKindLabel = (kind: string): string => {
+  const k = kind.toLowerCase();
+  if (isStudioJob(k)) {
+    if (k.includes("track")) return STAGE_TITLES.track.label;
+    if (k.includes("straighten")) return STAGE_TITLES.straighten.label;
+    if (k.includes("fuse")) return STAGE_TITLES.fuse.label;
+    if (k.includes("spacetime")) return STAGE_TITLES.spacetime.label;
+    if (k.includes("refine")) return STAGE_TITLES.refine.label;
+    if (k.includes("recipe")) return "Apply recipe";
+    return "Mesh edit";
+  }
+  if (k === "align") return "Align and merge scans";
+  if (k === "align_all") return "Align and merge scans";
+  if (k === "merge") return "Merge scans";
+  if (k === "reference_align") return "Align with the CAD model";
+  if (k.includes("process") || k.includes("mesh")) return "Make mesh";
+  if (k.includes("sim") || k.includes("demo")) return "Simulator";
+  if (k.includes("selftest") || k.includes("self_test")) return "Self-test";
+  if (k.includes("printable")) return "Print targets";
+  if (k.includes("calib")) return "Calibration";
+  return kind.replace(/[_-]+/g, " ").replace(/^\w/, (c) => c.toUpperCase());
+};

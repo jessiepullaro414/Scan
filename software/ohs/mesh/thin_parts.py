@@ -443,6 +443,11 @@ def _minutes(s: float) -> str:
     return f"{s:.0f} s" if s < 90 else f"{s / 60:.0f} min" if s >= 600 else f"{s / 60:.1f} min"
 
 
+def _minutes_range(a: float, b: float) -> str:
+    """"54 s to 58 s"; one number when both ends read the same ("4 s")."""
+    return _minutes(a) if _minutes(a) == _minutes(b) else f"{_minutes(a)} to {_minutes(b)}"
+
+
 def _gb(mb: float) -> str:
     return f"{mb / 1024:.1f} GB" if mb >= 1024 * 0.95 or mb >= 100 else f"{mb:.0f} MB"
 
@@ -463,7 +468,7 @@ def fine_words(v: float, seconds: float | None, frames: int, bytes_per_frame: in
     cost = []
     if seconds and seconds > 0:
         cost.append(f"Time: about {t0:g} to {t1:g} times as long. This mesh took {_minutes(seconds)}; with it about "
-                    f"{_minutes(t0 * seconds)} to {_minutes(t1 * seconds)}.")
+                    f"{_minutes_range(t0 * seconds, t1 * seconds)}.")
     else:
         cost.append(f"Time: about {t0:g} to {t1:g} times as long.")
     cost.append(f"Memory: no more memory than this mesh took. Triangles: {p0} to {p1} % more, on the walls only.")
@@ -524,7 +529,7 @@ def hint_words(finding: dict | None, *, seconds: float | None = None, triangles:
     cost = []
     if seconds and seconds > 0:
         cost.append(f"Time: {t0:g} to {t1:g} times as long. This mesh took {_minutes(seconds)}; with the preset about "
-                    f"{_minutes(t0 * seconds)} to {_minutes(t1 * seconds)}.")
+                    f"{_minutes_range(t0 * seconds, t1 * seconds)}.")
     else:
         cost.append(f"Time: {t0:g} to {t1:g} times as long.")
     if triangles:

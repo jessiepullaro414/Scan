@@ -292,6 +292,9 @@ def test_a_failed_job_says_what_failed_in_plain_words():
         runner.shutdown()
     assert j1.state == "failed" and j1.error == FAILURE_TEXT["process_fuse"] and "secret" not in j1.error
     assert j1.error == "Building the surface failed. Try again, or Make mesh at Standard quality. Your recording is safe."
+    # the stage by the name its row in the stage table has (the app has no "Track" button)
+    assert FAILURE_TEXT["process_track"] == ("Following the camera path failed. Your recording is safe: try Follow "
+                                             "the camera again, or Make mesh at Preview quality.")
     assert j2.state == "failed" and j2.error == "The recording has no frames. Record the scan again."
     assert j3.error.startswith("The task failed.") and "secret" not in j3.error
     assert failure_notice(j1, "Merging failed.") == j1.error  # the fixed words stand alone

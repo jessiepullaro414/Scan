@@ -73,7 +73,7 @@ import {
   type Work,
 } from "./meshops";
 import { mockSigma, mockTrajectory, scanMesh, T_WS } from "./scanmesh";
-import { editLabel, floatersRule, floatersSummary, trackProgress } from "./engineWords";
+import { FAILURE_TEXT, editLabel, floatersRule, floatersSummary, trackProgress } from "./engineWords";
 import { MOCK_MARGIN_MM, mockTable, tablePlane } from "./table";
 
 type Stages = { track: TrackStage; straighten: StraightenStage; fuse: FuseStage; spacetime: SpacetimeStage; refine: RefineStage };
@@ -623,7 +623,7 @@ export class MockProcess {
     this.studios.set(k, st);
     if (s.status === "processed") this.seedProcessed(st, s);
     else if (s.status === "failed")
-      patchStage(st, "track", { state: "failed", summary: "Tracking failed on 83 % of the frames (low_fitness). Rescan with more overlap, or try markers mode.", when: s.created });
+      patchStage(st, "track", { state: "failed", summary: FAILURE_TEXT.process_track, when: s.created });
     return st;
   }
 
@@ -936,7 +936,7 @@ export class MockProcess {
     yield* tick(a, a + span * 0.05, 3, () => "Loading the recording");
     const fail = /fail/i.test(s.name) || s.n_frames < 5;
     for (let k = 0; k <= 40; k++) {
-      if (fail && k > 15) throw new Error("Tracking failed on 83 % of the frames (low_fitness). Rescan with more overlap, or try markers mode.");
+      if (fail && k > 15) throw new Error(FAILURE_TEXT.process_track); // a program error of the stage: the engine's fixed words
       const done = Math.max(1, Math.round((n * k) / 40));
       yield {
         p: a + span * (0.05 + ((end - 0.05) * k) / 40),
@@ -1386,8 +1386,10 @@ export class MockProcess {
     const ends = {
       fail: (error: string) => {
         const kept = hadMesh;
+        // the engine's fixed words say what failed and that the recording is safe: they stand alone (failure_notice)
+        const fixed = (Object.values(FAILURE_TEXT) as string[]).includes(error);
         if (kind === "process_scan")
-          self.host.log("error", kept ? `Making the mesh again failed. ${error} The earlier mesh is kept as it was, with its edits; your recording is safe.` : `Making the mesh failed. ${error} Your recording is safe: try Make mesh again, or at Preview quality.`);
+          self.host.log("error", kept ? `Making the mesh again failed. ${fixed ? "" : `${error} `}The earlier mesh is kept as it was, with its edits; your recording is safe.` : fixed ? error : `Making the mesh failed. ${error} Your recording is safe: try Make mesh again, or at Preview quality.`);
         else self.host.log("error", `The recipe ${recipeName} failed. ${error}${kept ? " The earlier mesh is kept as it was." : ""}`);
       },
       cancel: () => {

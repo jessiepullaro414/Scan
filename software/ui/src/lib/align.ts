@@ -234,6 +234,16 @@ export function completePairs(picks: Picks): PointPair[] {
 
 export const addPick = (picks: Picks, side: Side, p: Vec3): Picks => ({ ...picks, [side]: [...picks[side], p] });
 
+/**
+ * A pick where the two meshes take turns, `target` first (Compare's "From points": the scan, then the CAD model): a
+ * click out of turn returns `picks` itself. Used in a state update, it sees the latest picks, so two quick clicks on
+ * one mesh never make two points before the other mesh has its one.
+ */
+export function addTurnPick(picks: Picks, side: Side, p: Vec3): Picks {
+  const turn: Side = picks.target.length <= picks.source.length ? "target" : "source";
+  return side === turn ? addPick(picks, side, p) : picks;
+}
+
 /** Without row `index` (0-based): its point on each mesh that has one. The later points move up a number. */
 export function removePair(picks: Picks, index: number): Picks {
   const drop = (list: Vec3[]) => (index >= 0 && index < list.length ? [...list.slice(0, index), ...list.slice(index + 1)] : list);

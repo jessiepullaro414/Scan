@@ -63,4 +63,11 @@ check(shadingLine({ sigma: true, deviation: true, reference: true }).text === "S
 const few = shadingLine({ sigma: false, deviation: false, reference: false });
 check(few.keys === "1–3, 6" && few.text === "Shading: grey, studio, direction, lasers", `the line names only the shadings its keys reach: ${few.keys} ${few.text}`);
 
+// the trigger (ohs/server/studio.py _handle_trigger): a short press starts, pauses or resumes; a hold of 1 s stops.
+// The sheet and the Scan page's tip say the same sentence.
+const TRIGGER = "The scanner's trigger: press to start, pause or resume; hold it for 1 s to stop.";
+check(SHEETS.scan.note === TRIGGER, `the trigger note: ${SHEETS.scan.note}`);
+const side = fs.readFileSync(new URL("../pages/scan/SidePanel.tsx", import.meta.url), "utf8");
+check(side.includes("Trigger: press to start, pause or resume; hold it for 1&#8239;s to stop."), "the Scan page's tip says the same");
+
 console.log(`shortcuts.test: ${checks} checks passed`);

@@ -27,6 +27,7 @@ import { boardSheet, maskSheet, previewDataUrl, sheetPdf, tagsSheet, type Sheet 
 import { HttpError, json, nowIso, type MockHost } from "./host";
 import { mockLaserNames } from "./calib";
 import { mockSetupHealth } from "./health";
+import { printCheckVerdict } from "./engineWords";
 import { laserFamily, laserWords } from "../../lib/laserSet";
 
 type TargetData = {
@@ -59,6 +60,20 @@ const fresh = (path: string): TargetData => ({
 });
 
 export const DEVICE_CALIB_PATH = "~/.ohs/calibration.json";
+/** "today", "yesterday", "3 days ago" or "on 2026-10-01" (local dates), as the engine's `ago`. */
+function ago(when: string | null | undefined): string {
+  const t = when ? Date.parse(when) : NaN;
+  if (!Number.isFinite(t)) return "some time ago";
+  const day = (d: Date) => Date.UTC(d.getFullYear(), d.getMonth(), d.getDate());
+  const then = new Date(t);
+  const days = Math.round((day(new Date()) - day(then)) / 86_400_000);
+  if (days <= 0) return "today";
+  if (days === 1) return "yesterday";
+  if (days < 7) return `${days} days ago`;
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `on ${then.getFullYear()}-${p(then.getMonth() + 1)}-${p(then.getDate())}`;
+}
+
 const SIM_CALIB_PATH = "~/.ohs/studio/sim/calibration.json";
 const PRINT_DIR = "~/.ohs/studio/printables";
 
@@ -214,12 +229,15 @@ export class MockSetup {
           : step("imu", "todo", ps ? "Not calibrated yet" : "Calibrate the cameras first"),
     );
     // the step's own state, as the engine gives it (ohs/server/setup.py): the last 2-minute check, never the launch
-    // check's drift, which the calibration's status says (H4)
+    // check's drift, which the calibration's status says (H4); with no check yet it is to do, as in the engine (it
+    // counts in the steps and the time left)
     const lc = this.lastCheckOf(d);
     out.push(
       lc
-        ? step("check", lc.ok ? "done" : "warn", lc.verdict, lc.when)
-        : step("check", "optional", ps ? "Run it any time, e.g. before an important scan" : "Needs a calibration"),
+        ? lc.ok
+          ? step("check", "done", `Calibration verified, ${ago(lc.when)}`, lc.when)
+          : step("check", "warn", `The last check failed (${ago(lc.when)}): ${lc.verdict || "recalibrate"}`, lc.when)
+        : step("check", "todo", ps ? "Run the calibration check (2 minutes)" : "Check the calibration once it is done (2 minutes)"),
     );
     return out;
   }
@@ -479,7 +497,7 @@ export class MockSetup {
           : C("camera image", "PASS", "average brightness 104 of 255, 0.4 % too bright"),
         ...(pico
           ? [
-              C("pico", "PASS", "firmware ohs-fw 1.0.0 on COM5, motion sensor (IMU): LSM6DSOX"),
+              C("pico", "PASS", "firmware ohs-fw 1.2.0 on COM5, motion sensor (IMU): LSM6DSOX"),
               C("imu rate", "PASS", "415.8 Hz measured (416 requested)"),
               C("imu values", "PASS", "gravity reads 9.80 m/s², turning noise 0.08°/s, offset 0.21°/s"),
               C("clock sync", "PASS", "round trip 0.6 ms: timestamps good to better than 1 ms"),
@@ -616,14 +634,14 @@ export class MockSetup {
   private printCheck(body: Record<string, unknown>): PrintCheck {
     const m = Number(body.measured_mm);
     if (!Number.isFinite(m) || m < 50 || m > 150)
-      throw new HttpError(422, "Type the length you measured, in mm (for example 99.6)", "Measure the 100 mm bar under the board with calipers.");
+      throw new HttpError(422, "Type the length you measured, in mm (for example 99.6)", "Measure the bar between its outer edges with calipers and type the reading in mm.");
     const err = ((m - 100) / 100) * 100;
     const a = Math.abs(err);
-    const sign = err > 0 ? "+" : "−";
-    const pct = `${sign}${a.toFixed(1)} %`;
+    // the engine's verdicts (ohs/server/setup.py print_check), word for word
+    const verdict = printCheckVerdict(m, false, this.board().square_mm);
     let pc: PrintCheck;
     if (a <= 0.3)
-      pc = { measured_mm: m, error_pct: err, ok: true, scale: m / 100, can_apply: false, when: nowIso(), verdict: `Spot on: the bar measures ${m.toFixed(1)} mm, within ±0.3 %. The board is printed at the right size.` };
+      pc = { measured_mm: m, error_pct: err, ok: true, scale: m / 100, can_apply: false, when: nowIso(), verdict };
     else if (a <= 4)
       pc = {
         measured_mm: m,
@@ -632,7 +650,7 @@ export class MockSetup {
         scale: m / 100,
         can_apply: true,
         when: nowIso(),
-        verdict: `The bar measures ${m.toFixed(1)} mm (${pct}): your printer scaled the page. Reprint at 100 % (“actual size”, never “fit to page”), or use your measurement: Studio then scales the board for calibration only.`,
+        verdict,
       };
     else
       pc = {
@@ -642,12 +660,12 @@ export class MockSetup {
         scale: m / 100,
         can_apply: false,
         when: nowIso(),
-        verdict: `${m.toFixed(1)} mm is ${pct} off: more than a printer's scaling. Measure the bar again, then reprint at 100 % with “fit to page” off.`,
+        verdict,
       };
     if (body.apply === true) {
       if (!pc.can_apply) throw new HttpError(409, "This measurement can't be used", a <= 0.3 ? "The print is exact: there's nothing to correct." : "It's too far off: measure again and reprint.");
       this.scale = m / 100;
-      pc = { ...pc, ok: true, can_apply: false, verdict: `Using your measurement: the board counts as ${(this.scale * 100).toFixed(1)} % of its nominal size for calibration. Printing is unchanged.` };
+      pc = { ...pc, ok: true, can_apply: false, verdict: printCheckVerdict(m, true, this.board().square_mm) };
     } else if (pc.ok) this.scale = 1;
     if (this.target() === "device") this.targets.device.printCheck = pc;
     this.broadcast();

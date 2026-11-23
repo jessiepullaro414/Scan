@@ -254,7 +254,7 @@ The software has so far been tested on simulated scans. Measured there (software
 | **Mesh ready for "..."** | The mesh is made. | Click **Open result** to see it. |
 | **Making the mesh was cancelled** | You cancelled it. | Nothing is lost. Make the mesh again when you like. |
 | **Making the mesh failed** | The run stopped. The reason follows. | Read the reason; try again, or at Preview quality. |
-| **Failed: ... Make mesh again, or at Preview quality.** | The reason under a failed scan's row. | As it says. |
+| **Failed: ...**, or the engine's own sentence such as **Following the camera path failed. ...** | The reason under a failed scan's row, with what to do. | As it says. |
 | **Couldn't start meshing** | The engine refused to start, with the reason. | Read the reason. If the scan is busy, wait. |
 | **This scan's mesh is already being made.** | A second Make mesh on the same scan. | Wait for the first one, or cancel it. |
 | **This scan is busy: ...** | Another job is working on the scan. | Wait for it to finish, or press **Cancel**. |

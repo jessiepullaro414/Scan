@@ -98,6 +98,7 @@ function PickScene({
   color,
   radius,
   enabled,
+  listen = false,
   bvh,
   onPick,
 }: {
@@ -106,12 +107,14 @@ function PickScene({
   color: string;
   radius: number;
   enabled: boolean;
+  /** Take clicks while not `enabled` too (the page decides whose turn it is); the marker under the cursor stays off. */
+  listen?: boolean;
   /** Build the raycast tree (three-mesh-bvh, as the viewer does): a click then costs microseconds. */
   bvh: boolean;
   onPick: (p: Vec3) => void;
 }) {
   const meshRef = useRef<Mesh | null>(null);
-  const { hover, overFilled } = useSurfacePick(enabled, meshRef, (h) => onPick(h.p));
+  const { hover, overFilled } = useSurfacePick(enabled || listen, meshRef, (h) => onPick(h.p));
   const r = Math.max(0.6, radius * 0.009);
   const model = <Model geometry={geometry} shading="clay" wireframe={false} meshRef={meshRef} />;
   return (
@@ -151,6 +154,7 @@ export function PickView({
   color,
   label,
   enabled,
+  listen = false,
   onPick,
 }: {
   geometry: BufferGeometry;
@@ -159,13 +163,15 @@ export function PickView({
   /** What the view shows, for screen readers. */
   label: string;
   enabled: boolean;
+  /** Clicks are passed on while not `enabled` too: a click just after the turn changes is not lost. */
+  listen?: boolean;
   onPick: (p: Vec3) => void;
 }) {
   const b = useMemo(() => boundsOf(geometry), [geometry]);
   const [armed, setArmed] = useState(false);
   return (
     <Stage label={label} bounds={b.sphere} gridY={b.gridY} frameKey={geometry.uuid} onPointerEnter={armed ? undefined : () => setArmed(true)}>
-      <PickScene geometry={geometry} picks={picks} color={color} radius={b.sphere.radius} enabled={enabled} bvh={armed} onPick={onPick} />
+      <PickScene geometry={geometry} picks={picks} color={color} radius={b.sphere.radius} enabled={enabled} listen={listen} bvh={armed} onPick={onPick} />
     </Stage>
   );
 }

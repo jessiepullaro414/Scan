@@ -521,7 +521,8 @@ export function ViewerCanvas({
   const clip = section?.hideFront && section.plane ? section.plane : null;
   const model = <Model geometry={geometry} shading={shading} wireframe={wireframe} meshRef={meshRef} clip={clip} referenceLimit={reference?.limit} />;
   return (
-    <div className="absolute inset-0" role="img" aria-label="3D view of the scan result">
+    // `isolate`: the labels in the view (fits, measurements) stack inside it, under the toolbar and the panels on top
+    <div className="absolute inset-0 isolate" role="img" aria-label="3D view of the scan result">
       <Canvas
         frameloop="demand"
         dpr={[1, 2]}

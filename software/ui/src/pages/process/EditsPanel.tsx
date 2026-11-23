@@ -450,9 +450,7 @@ export function EditsPanel({
         ) : busy ? (
           <Help>Waiting for the running job to finish.</Help>
         ) : (
-          <Help>
-            Adds “{plan.label}” to the history. <span className="whitespace-nowrap">Ctrl+Z</span> undoes it.
-          </Help>
+          <Help>{`Adds “${plan.label}” to the history. Ctrl+Z undoes it.`}</Help>
         )}
         {tab === "floaters" && table && hasMesh ? (
           <TableSection

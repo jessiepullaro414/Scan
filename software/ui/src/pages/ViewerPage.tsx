@@ -1234,6 +1234,8 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
         ) : null}
       </div>
 
+      {/* no side panel for a project that is gone: its "Is it good?" and "Export" would have nothing to act on */}
+      {projectError && !project ? null : (
       <aside className="relative flex w-[330px] shrink-0 flex-col overflow-y-auto border-l border-line bg-panel 2xl:w-[360px]" aria-label="Result details">
         <div className="border-b border-line px-4 py-4">
           {scan ? (
@@ -1610,6 +1612,7 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
           {tris > 0 ? <div className="sr-only">{fmtCompact(tris)} triangles</div> : null}
         </div>
       </aside>
+      )}
       <ShortcutSheet open={sheetOpen} onClose={() => setSheetOpen(false)} sheet={viewerSheet({ sigma: hasSigma, deviation: devEnabled, reference: refEnabled })} />
     </div>
   );

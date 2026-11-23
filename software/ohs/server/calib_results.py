@@ -11,7 +11,7 @@ outliers). Grades:
   coverage > 60 % and a passing rectification check (< 0.3 px, < 0.5 %); usable = rms < 1 px,
   coverage > 40 %, row error < 0.5 px; else poor. A baseline with the wrong sign (OpenCV
   ``x_right = R x_left + T``: a left camera on the left has ``T_x < 0``) means left and right are
-  swapped: grade failed, with the advice to turn on "swap left/right".
+  swapped: grade failed, with the advice to turn on "Swap left and right" (Setup, Connect).
 * **lasers**: excellent = both planes from the white margin, median residual < 0.05 mm, >= 6
   views each; good = both, < 0.15 mm, margin only; usable = both, < 0.3 mm (or a plane that needed
   the printed pattern too); poor = one plane only, or worse residuals; failed = none. "Both" means
@@ -208,8 +208,8 @@ def _stereo(value: Any, report: dict, view_ids: Sequence[int], truth: tuple | No
         grade = "failed"
         headline = "Left and right cameras are swapped"
         verdict = ("The picture of the right camera arrives as the left one, so this calibration is unusable. Turn on "
-                   "“swap left/right” in the camera settings, connect again and start over.")
-        adv.append(advice("Turn on “swap left/right” in the camera settings, connect again, then start the camera "
+                   "“Swap left and right” in Setup, Connect, connect again and start over.")
+        adv.append(advice("Turn on “Swap left and right” in Setup, Connect, connect again, then start the camera "
                           "calibration over.", "start_over"))
         return _result("stereo", grade, headline, verdict, metrics, adv, per_view, truth)
     if rms < 0.3 and cov > 0.6 and dv is not None and dv < 0.2 and (scale is None or abs(scale) < 0.3) \

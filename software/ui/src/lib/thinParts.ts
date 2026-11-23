@@ -42,9 +42,15 @@ export function thinPartsToShow(made: MadeInfo | null | undefined): ThinPartsHin
   return h;
 }
 
+/** Python's `f"{x:.0f}"`: an exact half goes to the even number (58.5 reads 58). */
+const py0 = (x: number) => String(Math.abs(x % 1) === 0.5 ? 2 * Math.round(x / 2) : Math.round(x));
+/** The engine's `_minutes`: "45 s", "3.2 min", "12 min". */
+const t = (s: number) => (s < 90 ? `${py0(s)} s` : s >= 600 ? `${py0(s / 60)} min` : `${(s / 60).toFixed(1)} min`);
+/** The engine's `_minutes_range`: "54 s to 58 s", one number when both ends read the same ("11 s"). */
+const tRange = (a: number, b: number) => (t(a) === t(b) ? t(a) : `${t(a)} to ${t(b)}`);
+
 /** The demo's "Make only the thin walls finer", in the engine's words (`ohs/mesh/thin_parts.py fine_words`). */
 function demoFine(seconds: number, frames: number): FineWallsOffer {
-  const t = (s: number) => (s < 90 ? `${s.toFixed(0)} s` : `${(s / 60).toFixed(1)} min`);
   const mb = (frames * 8_192_000) / 2 ** 20;
   return {
     action: FINE_ACTION,
@@ -54,7 +60,7 @@ function demoFine(seconds: number, frames: number): FineWallsOffer {
       "Each wall's less-seen side keeps its surface as it is, so the walls still read thicker than with the preset.",
     ],
     cost: [
-      `Time: about 1.2 to 1.3 times as long. This mesh took ${t(seconds)}; with it about ${t(1.2 * seconds)} to ${t(1.3 * seconds)}.`,
+      `Time: about 1.2 to 1.3 times as long. This mesh took ${t(seconds)}; with it about ${tRange(1.2 * seconds, 1.3 * seconds)}.`,
       "Memory: no more memory than this mesh took. Triangles: 7 to 11 % more, on the walls only.",
       `Disk: about ${mb >= 100 ? `${(mb / 1024).toFixed(1)} GB` : `${mb.toFixed(0)} MB`} of free space while the mesh is made (7.8 MB for each of the ${frames.toLocaleString("en-US")} frames), removed when it is done.`,
     ],
@@ -65,7 +71,6 @@ function demoFine(seconds: number, frames: number): FineWallsOffer {
 /** The demo's hint, in the engine's words (`ohs/mesh/thin_parts.py hint_words`), for a scan of thin walls. `frames`:
  * the frames this mesh processed; with it, at mesh detail 1 mm, "Make only the thin walls finer" is offered first. */
 export function demoThinPartsHint(seconds: number, triangles: number, voxel: number, dismissed: boolean, frames?: number): ThinPartsHint {
-  const t = (s: number) => (s < 90 ? `${s.toFixed(0)} s` : `${(s / 60).toFixed(1)} min`);
   return {
     suggest: true,
     why_not: null,
@@ -83,7 +88,7 @@ export function demoThinPartsHint(seconds: number, triangles: number, voxel: num
         "Walls seen from both sides read 0.23 to 0.67 mm nearer their true thickness at mesh detail 0.5 mm: simulated walls 0.5 to 2 mm thick read 1 to 2.4 mm instead of 1.7 to 2.7 mm.",
       ],
       cost: [
-        `Time: 1.2 to 2.4 times as long. This mesh took ${t(seconds)}; with the preset about ${t(1.2 * seconds)} to ${t(2.4 * seconds)}.`,
+        `Time: 1.2 to 2.4 times as long. This mesh took ${t(seconds)}; with the preset about ${tRange(1.2 * seconds, 2.4 * seconds)}.`,
         `Triangles: about 4 times as many, about ${((4 * triangles) / 1e6).toFixed(1)} million instead of ${(triangles / 1e6).toFixed(2)} million.`,
         "Memory: scans made at mesh detail 0.5 mm with 3.34 to 6.4 million triangles took 7 to 11.9 GB of memory and 2.2 to 3 GB of the graphics card's shared memory.",
       ],

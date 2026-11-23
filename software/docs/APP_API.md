@@ -513,7 +513,7 @@ Everything in the M2 section is implemented as written, with these clarification
     - good: rms < 0.5 px, coverage > 60 % and a passing rectification check (< 0.3 px, < 0.5 %);
     - usable: rms < 1 px, coverage > 40 % and row error < 0.5 px;
     - else poor.
-    - A positive `T_x` (swapped cameras) is `failed`, with the advice to turn on swap left/right and start over.
+    - A positive `T_x` (swapped cameras) is `failed`, with the advice to turn on "Swap left and right" (Setup, Connect) and start over.
   - **lasers:**
     - excellent: both planes fitted on the margin, median residual < 0.05 mm, ≥ 6 views;
     - good: both on the margin, < 0.15 mm;
@@ -891,7 +891,7 @@ Everything in the M3 phase 2 section is implemented as written, with these clari
   - Strength sets the work: Taubin `1 + 49 s` iterations; bilateral `2 + 18 s` normal and `5 + 15 s` vertex iterations.
   - `within_sigma` (M3 phase 3; until 2026-11-17 the Process page sent it by default when the mesh has sigmas and the Body panel and Bracket recipes used it; since then, the owner's decision, the page's switch is off by default and the recipes send `away_from_edges` instead): no vertex moves more than twice its own sigma; a longer move is shortened. Without sigmas it does nothing.
   - `flat_only` (2026-11-16, default false; the Process page's "Where" choice "Flat only"; no recipe uses it yet): each vertex keeps its move only where the surface around it is flat (`ohs.mesh.smoothing`, "Flat surface only"), so edges, corners and small round features stay as scanned. The label says "flat areas only".
-  - `away_from_edges` (2026-11-17, default false; the "Where" choice "Off edges"; no recipe uses it): nothing within 1.5 mm of a sharp edge (over 25°) moves, and everything from 3 mm on is smoothed in full, round features too (`ohs.mesh.smoothing`, "Away from edges"). The label says "off edges" (before 2026-11-21: "away from edges"). Sent with `flat_only` it is a 422.
+  - `away_from_edges` (2026-11-17, default false; the "Where" choice "Off edges"; the Body panel and Bracket recipes use it): nothing within 1.5 mm of a sharp edge (over 25°) moves, and everything from 3 mm on is smoothed in full, round features too (`ohs.mesh.smoothing`, "Away from edges"). The label says "off edges" (before 2026-11-21: "away from edges"). Sent with `flat_only` it is a 422.
 - `decimate`:
   - Send at most one of `target_triangles` (at least 4) or `ratio` (above 0, at most 1), and / or `max_error_mm` (0.001–10). A target at or above the current count changes nothing.
   - `max_error_mm` (M3 phase 3) simplifies only while the surface stays within that tolerance, with the outer edge and folds held; with a target too, whichever stops first.
@@ -936,8 +936,8 @@ Everything in the M3 phase 2 section is implemented as written, with these clari
 **Recipes**
 - Built-ins, in this order:
   - `default`: standard quality, straighten `auto`, then remove loose pieces under 5 mm or 1 % of the mesh and fill holes up to 5 mm. No smoothing and no simplification.
-  - `body-panel`: the same, then holes up to 15 mm and bilateral smoothing at 0.5 with `keep_edges`.
-  - `bracket`: the same as `default`, then bilateral smoothing at 0.25 with `keep_edges`.
+  - `body-panel`: the same, then holes up to 15 mm and bilateral smoothing at 0.5 with `keep_edges` and `away_from_edges`.
+  - `bracket`: the same as `default`, then bilateral smoothing at 0.25 with `keep_edges` and `away_from_edges`.
   - `quick-preview`: preview quality, straighten `off`, remove loose pieces, simplify to 200,000 triangles.
 - User recipes are `<data_dir>/recipes/<id>.json`, where the id is a slug of the name plus 4 hex digits (*extra* `created` in the file). They are listed after the built-ins, sorted by name.
 - `POST /api/recipes`:
@@ -1472,7 +1472,8 @@ Rules:
   scan has one this version can read. `boundary` defaults to `rectangle`; another value is 422.
 - **Inside**, the files are named after the part (the project's name: the STEP file's root product, the
   macro's document) and each shape after its fit, a name taken twice getting " (2)". **Outside**,
-  `Content-Disposition` names them after the scan (`<scan>-fits.step`, `<scan>-fits.FCMacro`), so the two
+  `Content-Disposition` names them after the scan (`<scan>-fits.step`, `<scan>-fits.FCMacro`; the app saves them as
+  `<project>-<scan>-fits.step` and `<project>-<scan>-fits.FCMacro`), so the two
   files, and the files of two scans, cannot be mistaken for each other. `X-OHS-Mesh-Version` is the mesh
   version read with the fits.
 - **Kept as kept:** a fit made on an earlier mesh is exported as it was kept, and `warnings` says so by its

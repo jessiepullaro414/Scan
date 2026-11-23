@@ -39,6 +39,9 @@ const swap = makeMeshEnded(job({ state: "failed", mesh_kept: true, error: "The n
 check(swap!.detail.endsWith("The earlier mesh is kept as it was.") && !swap!.detail.includes("stays as it was"), `the engine said it already: ${swap!.detail}`);
 const failedNew = makeMeshEnded(job({ state: "failed", mesh_kept: false, error: "Tracking failed on 83 % of the frames." }));
 check(failedNew!.detail === "Tracking failed on 83 % of the frames. The recording is kept: try again, or at Preview quality.", failedNew!.detail);
+// the engine's fixed words say already that the recording is safe: not said twice
+const fixedNew = makeMeshEnded(job({ state: "failed", mesh_kept: false, error: "Making the mesh failed. Your recording is safe: try Make mesh again, or at Preview quality." }));
+check(fixedNew!.detail === "Your recording is safe: try Make mesh again, or at Preview quality.", `said once: ${fixedNew!.detail}`);
 check(makeMeshEnded(job({ state: "done", mesh_kept: false })) === null && makeMeshEnded(job()) === null, "done or running: nothing to say");
 check(makeMeshEnded(job({ kind: "process_track", state: "cancelled" })) === null, "a stage alone: its own words");
 check(makeMeshEnded(job({ kind: "process_recipe", scope: "all", state: "cancelled", mesh_kept: true }))!.detail === kept!.detail, "a recipe on everything says it too");

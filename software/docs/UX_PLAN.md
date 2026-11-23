@@ -886,3 +886,57 @@ twice on an area card; four "Apply" buttons with the same name for a screen read
 the Replay field named only by its placeholder; "AprilTags" beside "markers"; Settings'
 Advanced shows the settings' raw names ("Data dir") beside words, the port from the file while
 the app runs on another, and jargon of the settings file itself ("ChArUco", "Poisson").
+
+## Found while writing the user guide (2026-11-23)
+
+The guide (`docs/guide`) was written from the pages' source and then checked against the running
+demo. That turned up 45 small things in the app. From now on a change to a word, a button or a
+flow also changes the guide's page and picture.
+
+### [x] G1. Words that disagreed or were unclear (33 fixed, 2026-11-23)
+- One name for one thing: "dashed scanner" (never "ghost"), "Moved onto it", the four lasers'
+  names the same on chips and sliders, "Build the surface" in the Jobs panel (was "Fuse"),
+  "Follow the camera" in a failure's advice (was "Track"), "Swap left and right" in Setup,
+  Connect (the advice named a camera setting that does not exist).
+- True to what happens: the trigger (press to start, pause or resume; hold for 1 s to stop), the
+  self-test (about 25 s, three prompts), the print's scale bar (between its outer edges), the
+  boss figures (0.15 to 0.19 mm small in radius as tracked, 0.23 to 0.28 with the true camera
+  path), "Typical scatter" says it is twice each point's ±.
+- The demo says what the engine says: print verdicts, a failed scan's reason (no code word), the
+  firmware version, the setup's seven steps and 19 minutes, a finished job's line.
+- Small display: one number when a time range's ends read the same ("about 11 s"), the time left
+  wraps, the Download menu's hints sit under their labels, the Preset list has its own line, the
+  "what this step removed" box no longer covers the breadcrumb, fit labels stay under the toolbar
+  and the Section profile, the Jobs panel closes when a result is opened, a viewer whose project
+  is gone shows no side panel, a screen reader hears the Ctrl+Z again.
+- Compare, From points: quick clicks were dropped and the pairs went out of step (each view
+  listened only on its turn). One state now holds both sides and a click counts only on its turn.
+- Seen in the running demo and mended after: the picker's prompt wrapped at 1040 px, the two
+  views jumped between turns and quick clicks missed (its top bar is two fixed rows now); a
+  failed scan's row gave its advice twice; while "Show what was removed" is on, the selection
+  tools looked active but a drag turned the view (they show as unavailable now).
+- Left as they are: "Attention" in the narrow step list (the longer words do not fit), the
+  device status without its calibration words under 1280 px (by design).
+
+### [ ] G2. Proposals from the guide's writers (design questions, not decided)
+- One noun for what a scan is compared with: "the reference" ("Compare with a reference"), with
+  "a CAD model or a scan of a good part" said once.
+- Colour modes "Deviation" (moved by your edits) and "CAD model" (off the reference) are easy
+  to mix up: "Moved by edits" and "From the reference".
+- "Make mesh again" is on a scan's row only above 1500 px; below it hides in More.
+- "Make the mesh again" on Edit mesh shows only inside the Scan check panel for a mesh without
+  confidence: also in the Stages panel's heading, for every mesh.
+- "Align again from the shape alone" also shows after a points alignment: offer "Refine on the
+  shapes" there.
+- "Finish & calibrate" looks ready from 4 views while 15 to 25 are wanted: plain style until
+  15, with the count beside it.
+- "The simulator is ready" leaves no lasting sign on the Device page.
+- Free space with "Keep the recording and the result" loses the undo steps for good without a
+  second question.
+- The demo's live model is all green: one band of "few frames" would show the yellow.
+- After "Use my measurement" the engine keeps `ok: false`, so "Using your measurement" shows
+  only in the demo; on the engine the card still reads as off.
+- Small things seen and left: after Esc the Section button can stay highlighted (not found in
+  the code; perhaps keyboard focus); the "Mesh ready" notice sits on top of an open Jobs panel;
+  once a job's step line read "Building the surface" while its time-left line said "(now:
+  Straighten)".

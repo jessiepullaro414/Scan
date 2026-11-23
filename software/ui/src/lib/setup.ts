@@ -47,7 +47,7 @@ export const STEP_META: Record<SetupPage, StepMeta> = {
   },
   selftest: {
     title: "Self-test",
-    why: "A one-minute hardware check catches wiring and camera problems before they spoil a calibration.",
+    why: "A short hardware check catches wiring and camera problems before they spoil a calibration.",
     icon: ListChecks,
     time: "1\u202fmin",
     minutes: 1,

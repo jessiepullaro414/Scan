@@ -8,6 +8,7 @@ import type { AlignAllPair, AlignAllResult, AlignResult, MergeResult } from "../
 import { matrixFromRowMajor } from "../three/coords.ts";
 import {
   addPick,
+  addTurnPick,
   alignAllFigures,
   alignFigures,
   allCautionOf,
@@ -143,6 +144,28 @@ check(same(pairRows(picks)[2], { n: 3, target: p(3), source: null }), "the third
 check(completePairs(picks).length < MIN_PAIRS, "two pairs are not enough");
 picks = addPick(picks, "source", p(30));
 check(completePairs(picks).length === MIN_PAIRS, "three pairs are enough");
+
+// Compare's "From points" takes turns, the scan first (UX: the point picker dropped quick clicks): a click out of
+// turn, such as a quick second click on the scan before the page has switched to the CAD model, is not taken, so the
+// pairs never get out of step; the state given is not changed
+let turns: Picks = { target: [], source: [] };
+turns = addTurnPick(turns, "target", p(1));
+const early = addTurnPick(turns, "target", p(2));
+check(early === turns && turns.target.length === 1, "a second click on the scan before its CAD point: not taken");
+check(addTurnPick(turns, "source", p(10)).source.length === 1, "the CAD point is taken");
+turns = addTurnPick(addTurnPick(turns, "source", p(10)), "source", p(20));
+check(turns.source.length === 1 && turns.target.length === 1, "a second click on the CAD model: not taken");
+check(addTurnPick({ target: [], source: [] }, "source", p(1)).source.length === 0, "the CAD model before the scan: not taken");
+
+// the picker's top bar keeps its height on both turns (a prompt that wrapped moved both views ~36 px, and quick
+// clicks landed off the model): the prompt is one line, cut with "…" if need be, never wrapped
+{
+  const fsm = (await import(["node", "fs"].join(":"))) as { readFileSync: (u: URL, enc: "utf8") => string };
+  const picker = fsm.readFileSync(new URL("../pages/viewer/PointPairPicker.tsx", import.meta.url), "utf8");
+  check(!/flex-wrap/.test(picker), "the picker's bar never wraps");
+  check(/className="[^"]*\btruncate\b[^"]*"[^>]*>\{hint\}/.test(picker), "the prompt is one line");
+  check(/Align from \{n\} pair\{n === 1 \? "" : "s"\}/.test(picker), "one pair, two pairs");
+}
 
 const without = removePair(picks, 1);
 check(same(without.target, [p(1), p(3)]) && same(without.source, [p(10), p(30)]), "removing a pair takes its point from both scans, the later ones move up");

@@ -45,8 +45,8 @@ FAILURE_TEXT = {
     "process_scan": "Making the mesh failed. Your recording is safe: try Make mesh again, or at Preview quality.",
     "process_recipe": "The recipe stopped partway. Your recording is safe: try the recipe again, or Make mesh "
                       "at Standard quality.",
-    "process_track": "Following the camera path failed. Your recording is safe: try Track again, or Make mesh at "
-                     "Preview quality.",
+    "process_track": "Following the camera path failed. Your recording is safe: try Follow the camera again, or "
+                     "Make mesh at Preview quality.",
     "process_straighten": "Straightening the scan failed. Your recording is safe: try it again, or go on without "
                           "it.",
     "process_refine": "Refining with the laser lines failed. Your recording is safe: try it again, or go on "

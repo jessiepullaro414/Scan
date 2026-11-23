@@ -70,7 +70,7 @@ It is saved in the settings file as `[lasers] lines`.
 With two lasers in a family (the 4-laser build), two more settings appear:
 
 - **Each laser has its own wire (firmware 1.2.0 or later)**: lets each laser have its own brightness, and lets the laser calibration light them one at a time. The default is on. Turn it off if each pair of lasers shares one wire. Saved as `[lasers] own_channels`.
-- **Brightness**: one slider per laser (**Vertical, right**, **Vertical, left**, **Horizontal, top**, **Horizontal, low**), in percent of its family's level. The family's level is the lasers and dots slider on the Device page. Turn down a laser whose line looks brighter than the others. The default is 100 %. When each pair shares one wire, there is one slider per pair (**Vertical lasers**, **Horizontal lasers**). Saved as `[lasers] brightness`.
+- **Brightness**: one slider per laser (**Vertical**, **Vertical 2**, **Horizontal**, **Horizontal 2**), in percent of its family's level. The family's level is the lasers and dots slider on the Device page, shown once the camera and the control board are connected. Turn down a laser whose line looks brighter than the others. The default is 100 %. When each pair shares one wire, there is one slider per pair (**Vertical lasers**, **Horizontal lasers**). Saved as `[lasers] brightness`.
 
 ## About
 
@@ -111,7 +111,7 @@ The sections and their main values, with the defaults:
 | **Cameras** | `[camera]` | which camera (counted from 0), width and height (2560 × 800), **Camera format** (MJPG), exposure and gain (the camera's own), **Swap left and right** (off) |
 | **Control board (Pico or ESP32)** | `[pico]` | serial port (automatic), **Motion sensor (IMU) rate** (416 Hz) |
 | **Lasers and dots** | `[emitters]` | **Dots in markers mode** (25 %), and the levels of the vertical laser, horizontal laser and dots for each use |
-| **Live preview** | `[live]` | scale (0.5), **Nearest depth** (150 mm), **Farthest depth** (450 mm), **Mesh detail** (automatic: 2 mm) |
+| **Live preview** | `[live]` | scale (0.5), **Nearest depth** (150 mm), **Farthest depth** (450 mm), **Preview mesh detail** (automatic: 2 mm) |
 | **Making the mesh** | `[process]` | **Mesh detail** (automatic: 1 mm), **Thin walls and edges** (auto), **Watertight surface (Poisson)** (off), **Files written** (ply, stl) |
 | **Calibration board** | `[board]` | **Squares across** (11), **Squares down** (8), **Square size** (20 mm), **Marker size** (15 mm), paper (letter) |
 | **Markers** | `[markers]` | **Tag size** (20 mm): the side of the black square of the printed AprilTags |

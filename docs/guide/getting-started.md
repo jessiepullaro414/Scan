@@ -140,7 +140,7 @@ On first run, Home shows a card called **Set up your scanner**. It stays until t
 
 The card shows:
 
-- how much time setup takes (the steps add up to about 19 minutes when none is done), or how many steps are done and which one is next. The demo says about 17 minutes, because it counts the calibration check as optional until there is a calibration;
+- how much time setup takes (the steps add up to about 19 minutes when none is done), or how many steps are done and which one is next;
 - the seven steps as small labels: **Connect**, **Self-test**, **Print targets**, **Cameras**, **Lasers**, **Motion sensor (IMU)** and **Calibration check**. A done step has a tick. Click a label to open that step;
 - one line about what this computer can do (see [below](#what-this-computer-can-do)).
 

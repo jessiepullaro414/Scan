@@ -31,7 +31,7 @@ export const SHEETS: Record<SheetId, Sheet> = {
       },
       { title: "View", items: [{ keys: "F", text: "Frame the model", binds: ["f"] }, SHEET_KEY] },
     ],
-    note: "The scanner's trigger starts and stops a scan too.",
+    note: "The scanner's trigger: press to start, pause or resume; hold it for 1 s to stop.",
   },
   viewer: {
     title: "Keyboard shortcuts: the viewer",

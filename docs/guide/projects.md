@@ -190,7 +190,7 @@ On the project page, click **Download** on a scan's row (in a narrow window it i
 |---|---|---|
 | **Mesh (STL)** | `<project>-<scan>.stl` | CAD and slicers. |
 | **Mesh (PLY)** | `<project>-<scan>.ply` | The mesh with its normals. |
-| **Mesh (OBJ)** | `<project>-<scan>.obj` | Blender and most 3D apps. Only there when OBJ export is turned on in the engine's settings. |
+| **Mesh (OBJ)** | `<project>-<scan>.obj` | Blender and most 3D apps. Only there when OBJ export is turned on: add `"obj"` to `export` under `[process]` in the settings file. |
 | **Laser points (PLY)** | `<project>-<scan>-laser.ply` | The laser lines' own points. Only for scans that have them. |
 
 You always get the current mesh, with every edit you applied. **All units are millimetres**: set the import units to mm in your CAD or mesh program.
@@ -234,7 +234,7 @@ The **Jobs** button sits in the top bar. While jobs run, it says how many (for e
 
 *The Jobs panel: the newest jobs, with progress, time left and Cancel.*
 
-Each row shows what the job is, the scan, the quality, when it started and what it is doing now. A running job shows a progress bar, the time left and **Cancel**. A finished job offers a way to its result: **Open result**, **Open the merged scan** or **Open in Edit mesh**. The panel shows the eight newest jobs.
+Each row shows what the job is, the scan, the quality, when it started and what it is doing now. A running job shows a progress bar, the time left and **Cancel**. A finished job offers a way to its result: **Open result**, **Open the merged scan** or **Open in Edit mesh**, which opens the page and closes the panel. The panel shows the eight newest jobs.
 
 To cancel a job, click **Cancel** on its row (or on the scan's row on the project page). Cancelling Make mesh leaves the scan as it was: an earlier mesh stays, and so does the recording.
 
@@ -256,7 +256,7 @@ To cancel a job, click **Cancel** on its row (or on the scan's row on the projec
 | **Delete half the frames?** | The second question before **Keep half the frames and the result**. | Click **Delete half the frames** to go on. |
 | **Couldn't free all of the space** | A file was held open, or the engine refused. | Read the reason. Close other programs and try **Free space…** again. |
 | **There is nothing to free: ...** | Nothing of that choice is on disk for this scan. | Choose another option, or leave the scan as it is. |
-| **No OBJ for this scan** | OBJ export is off, so the engine wrote no OBJ file. | Download STL or PLY, or turn on OBJ export in the engine's settings and make the mesh again. |
-| **Failed: ...** (under a scan row), or **Making the mesh failed.** when no reason was saved | Making the mesh failed; the reason follows. | **Make mesh again, or at Preview quality.** See [make-mesh.md](make-mesh.md). |
+| **No OBJ for this scan** | OBJ export is off, so the engine wrote no OBJ file. | Download STL or PLY, or add `"obj"` to `export` under `[process]` in the settings file and make the mesh again. |
+| **Failed: ...** (under a scan row), or **Making the mesh failed. Make mesh again, or at Preview quality.** when no reason was saved | Making the mesh failed; the reason follows, with what to do. | Do what it says. See [make-mesh.md](make-mesh.md). |
 | **Making the mesh was cancelled** | You cancelled Make mesh. | Nothing is lost. Make the mesh again when you like. |
 | **In the demo, no folder opens** | You clicked **Open the project folder** in the demo. | With the app on your computer, the folder opens in your file manager. |

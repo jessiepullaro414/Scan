@@ -29,7 +29,7 @@ The wizard has seven steps. Open it with **Setup** in the sidebar.
 | Step | What it is for | About |
 |---|---|---|
 | **Connect** | Studio needs to see the scanner's cameras and its control board (Pico or ESP32) before anything else. | 1 min |
-| **Self-test** | A one-minute hardware check catches wiring and camera problems before they spoil a calibration. | 1 min |
+| **Self-test** | A short hardware check catches wiring and camera problems before they spoil a calibration. | 1 min |
 | **Print targets** | Calibration measures against the printed board, so the print must be exactly the right size. | 5 min |
 | **Cameras** | Calibrates the two cameras: the base of every millimetre the scanner measures. | 5 min |
 | **Lasers** | The laser lines give precise extra points, even on black and glossy paint. | 3 min |
@@ -46,7 +46,7 @@ You can run the whole wizard with the simulator first (see [getting-started.md](
 
 ![The Setup overview with the step list on the left, the progress ring and the seven step cards](images/setup-overview.png)
 
-*The Setup overview before any step is done. The demo counts the calibration check as optional until there is a calibration, so it shows 6 steps and about 17 minutes; the engine counts all 7.*
+*The Setup overview before any step is done: 0 of 7 steps, about 19 minutes.*
 
 On the left, a list of the steps stays in view on every Setup page, with the state of each step; click one to open it. The overview itself shows:
 
@@ -103,7 +103,7 @@ The self-test checks the cameras, the control board and motion sensor, the laser
 
 1. Connect the scanner (or the simulator) first.
 2. Point the scanner at a wall 200 to 400 mm away.
-3. Press **Run self-test**. It takes about a minute with the scanner, a few seconds with the simulator.
+3. Press **Run self-test**. It takes about 25 s with the scanner, a few seconds with the simulator.
 4. Watch the wall: each laser and the dots turn on for a second.
 5. When the panel says **Your turn**, do what it asks, for example press and release the trigger.
 
@@ -138,7 +138,7 @@ The calibration measures your scanner against a printed board, so the print must
    - **Print at 100 %, "actual size"**. Never "fit to page" or "shrink to fit".
    - **Matte paper**. Use matte label paper for the tags.
    - **Glue the board flat** to glass (a picture-frame glass) or a flat tile, with no bubbles.
-5. Measure the 100 mm bar under the board with calipers, between its end marks.
+5. Measure the 100 mm bar under the board with calipers, between its outer edges.
 6. Type the reading under **Your calipers read** and press **Check**.
 
 Within ±0.3 % (99.7 to 100.3 mm) the print is fine: the box says **The print is the right size**. If it is off, the box shows how far (for example **+1.2 % off**) and offers:

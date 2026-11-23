@@ -62,4 +62,11 @@ const all = adv.flatMap((s) => [s.title, s.help ?? "", ...s.rows.flatMap((r) => 
 check(all.every((t) => !/\(M\d\)|\bM\d\b/.test(t)), "no milestone names");
 check(all.every((t) => !/\s[-–—]\s/.test(t)), "no dash as punctuation");
 
+// the live preview's mesh detail and the mesh's are told apart (both are `voxel_mm`)
+const two = advancedSections({ live: { voxel_mm: 2 }, process: { voxel_mm: 1 } });
+const liveVoxel = two.find((s) => s.key === "live")!.rows[0];
+const meshVoxel = two.find((s) => s.key === "process")!.rows[0];
+check(meshVoxel.label === "Mesh detail" && liveVoxel.label === "Preview mesh detail", `${liveVoxel.label} / ${meshVoxel.label}`);
+check(/while scanning/.test(liveVoxel.help ?? ""), `the preview's detail says what it is for: ${liveVoxel.help}`);
+
 console.log(`settingsWords.test: ${checks} checks passed`);

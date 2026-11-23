@@ -10,6 +10,7 @@ import { api } from "../api/http";
 import type { Job, ProcessQuality } from "../api/types";
 import { QUALITY_TEXT, normalizeQuality } from "../lib/quality";
 import { isWholeRun, makeMeshEnded } from "../lib/making";
+import { isStudioJob } from "../lib/stages";
 import { useConnection } from "./connection";
 import { paths, navigate } from "../lib/router";
 import { storage } from "../lib/util";
@@ -38,7 +39,7 @@ export const isActive = (j: Job | undefined | null) => !!j && (j.state === "queu
  * edit (`mesh_edit`) or a recipe. The contract leaves the recipe job's kind open; anything
  * naming a recipe counts. These are followed by the process store, not as "Make mesh".
  */
-export const isStudioJob = (kind: string): boolean => /^process_(track|straighten|fuse|spacetime|refine)|mesh_edit|recipe|^edit/i.test(kind);
+export { isStudioJob };
 
 /**
  * Aligning two scans or several, or merging them into a new one (M4, kinds `align`, `align_all` and
@@ -189,28 +190,7 @@ export function useScanJob(sid: string | null | undefined): Job | undefined {
   return useJobs((s) => (sid ? selectScanJob(s, sid) : undefined));
 }
 
-export const jobKindLabel = (kind: string): string => {
-  const k = kind.toLowerCase();
-  if (isStudioJob(k)) {
-    if (k.includes("track")) return "Follow the camera";
-    if (k.includes("straighten")) return "Straighten";
-    if (k.includes("fuse")) return "Fuse";
-    if (k.includes("spacetime")) return "Refine from the images";
-    if (k.includes("refine")) return "Refine with lasers";
-    if (k.includes("recipe")) return "Apply recipe";
-    return "Mesh edit";
-  }
-  if (k === "align") return "Align and merge scans";
-  if (k === "align_all") return "Align and merge scans";
-  if (k === "merge") return "Merge scans";
-  if (k === "reference_align") return "Align with the CAD model";
-  if (k.includes("process") || k.includes("mesh")) return "Make mesh";
-  if (k.includes("sim") || k.includes("demo")) return "Simulator";
-  if (k.includes("selftest") || k.includes("self_test")) return "Self-test";
-  if (k.includes("printable")) return "Print targets";
-  if (k.includes("calib")) return "Calibration";
-  return kind.replace(/[_-]+/g, " ").replace(/^\w/, (c) => c.toUpperCase());
-};
+export { jobKindLabel } from "../lib/stages";
 
 /** A finished simulator-demo job exists (the demo recording is built). */
 export const isDemoJob = (j: Job) => /demo/i.test(j.kind) || /^sim/i.test(j.kind);

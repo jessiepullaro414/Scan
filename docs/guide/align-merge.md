@@ -35,7 +35,7 @@ The page needs two scans with a mesh; otherwise it says **Two scans with a mesh 
 
 *Two scans side by side before aligning, each named under its view with its colour.*
 
-- **The two scans**: **Stays in place** is the first scan; **Is moved onto it** is the second. Choose them from the lists. **Swap the two** changes which stays; the picked points are kept.
+- **The two scans**: **Stays in place** is the first scan; **Moved onto it** is the second. Choose them from the lists. **Swap the two** changes which stays; the picked points are kept.
 - The 3D view shows them **Side by side** (each in its own view, to pick points) or **Both together** (after aligning, the second moved onto the first).
 - A scan marked **(merged)**, **(result only)** or **(no recording)** in the lists can be aligned to but not merged (see [Merge into a new scan](#merge-into-a-new-scan)).
 

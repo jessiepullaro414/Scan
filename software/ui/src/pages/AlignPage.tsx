@@ -104,8 +104,8 @@ import { useScanMeshes, type MeshLoad } from "./align/useScanMeshes";
 type View = "pick" | "together";
 
 /** What each scan does, in the words of the page: two scans, and the list of several. */
-const ROLE: Record<Side, string> = { target: "Stays in place", source: "Is moved onto it" };
-const roleOf = (index: number, several: boolean): string => (index === 0 ? ROLE.target : several ? "Moved onto it" : ROLE.source);
+const ROLE: Record<Side, string> = { target: "Stays in place", source: "Moved onto it" };
+const roleOf = (index: number): string => (index === 0 ? ROLE.target : ROLE.source);
 
 /** U15: what each answer to the moved-part question does (no answer is chosen first). */
 const MOVED_TEXT = { two: { moved: SETUP_TEXT.moved, same: "The table both scans share helps to line them up, and it stays in the merged scan." }, several: { moved: SETUP_TEXT.moved, same: SETUP_TEXT.same } };
@@ -642,7 +642,7 @@ export default function AlignPage({
               <MeshPane
                 key={scan?.id ?? side}
                 side={side}
-                role={roleOf(scan ? list.indexOf(scan.id) : i, several)}
+                role={roleOf(scan ? list.indexOf(scan.id) : i)}
                 color={scan ? colorOf(scan.id) : scanColor(i)}
                 scan={scan}
                 load={scan ? loads[scan.id] : undefined}
@@ -768,7 +768,7 @@ export default function AlignPage({
             <ol className="space-y-2.5" aria-label="The scans, the first stays in place">
               {list.map((id, i) => (
                 <li key={`${i}-${id}`}>
-                  <Field label={roleOf(i, true)} htmlFor={`align-scan-${i}`} aside={<ColorDot color={colorOf(id)} />}>
+                  <Field label={roleOf(i)} htmlFor={`align-scan-${i}`} aside={<ColorDot color={colorOf(id)} />}>
                     <div className="flex items-center gap-1.5">
                       <Select id={`align-scan-${i}`} className="min-w-0 flex-1" value={id} disabled={busy} onChange={(e) => choose(i, e.target.value)}>
                         {scans.map((s) => (

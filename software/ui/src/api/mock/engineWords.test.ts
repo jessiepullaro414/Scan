@@ -3,7 +3,7 @@
  * real engine: the server's side"), `npm test`: the edit labels, the summary of Remove loose bits with the rule that
  * took its largest piece, and the progress lines, as `ohs/server/processing.py` writes them.
  */
-import { editLabel, floatersRule, floatersSummary, trackProgress } from "./engineWords.ts";
+import { FAILURE_TEXT, editLabel, floatersRule, floatersSummary, printCheckVerdict, trackProgress } from "./engineWords.ts";
 
 let checks = 0;
 function check(ok: boolean, what: string): void {
@@ -43,5 +43,17 @@ check(floatersSummary({ pieces: 2, triangles: 80, largest_mm: 9, largest_rule: "
 // progress lines: thousands grouped, no device
 check(trackProgress(23, 1321) === "Following the camera: frame 23 of 1,321", trackProgress(23, 1321));
 check(trackProgress(1321, 1321) === "Following the camera: all 1,321 frames done, making the mesh", trackProgress(1321, 1321));
+
+// the print check's verdicts (ohs/server/setup.py, print_check): the engine's words, its numbers
+check(printCheckVerdict(100.1, false, 20) === "Your print is accurate: the bar measures 100.10 mm (+0.10 %). The board is ready for calibration.", printCheckVerdict(100.1, false, 20));
+check(printCheckVerdict(99.9, false, 20) === "Your print is accurate: the bar measures 99.90 mm (-0.10 %). The board is ready for calibration.", printCheckVerdict(99.9, false, 20));
+check(printCheckVerdict(98.8, false, 20) === "Your printer scaled the page by -1.2 % (it printed at 98.8 %: the 100 mm bar measures 98.80 mm). Reprint it at 100 % / Actual size (turn off “Fit to page”), or use your measurement and the app calibrates with the measured size.", printCheckVerdict(98.8, false, 20));
+check(printCheckVerdict(98.8, true, 20) === "Your printer scaled the page by -1.2 % (it printed at 98.8 %: the 100 mm bar measures 98.80 mm). Using your measurement: the app calibrates with squares of 19.76 mm. For the best result, reprint at 100 % / Actual size.", printCheckVerdict(98.8, true, 20));
+check(printCheckVerdict(90, false, 20) === "The bar measures 90.00 mm, 10.0 % off: more than a printer scales a page. Measure again between the outer edges of the bar; if it really is that far off, reprint at 100 % / Actual size.", printCheckVerdict(90, false, 20));
+
+// a failed stage says what failed in the engine's fixed words (ohs/server/jobs.py FAILURE_TEXT), never a code word
+check(FAILURE_TEXT.process_track === "Following the camera path failed. Your recording is safe: try Follow the camera again, or Make mesh at Preview quality.", FAILURE_TEXT.process_track);
+check(FAILURE_TEXT.process_scan === "Making the mesh failed. Your recording is safe: try Make mesh again, or at Preview quality.", FAILURE_TEXT.process_scan);
+for (const t of Object.values(FAILURE_TEXT)) check(!/[a-z]+_[a-z]+/.test(t), `no code word: ${t}`);
 
 console.log(`engineWords.test: ${checks} checks passed`);

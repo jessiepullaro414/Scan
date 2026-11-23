@@ -89,6 +89,10 @@ export type SettingSection = { key: string; title: string; help?: string; rows: 
 const isGroup = (v: unknown): v is Record<string, unknown> => v !== null && typeof v === "object" && !Array.isArray(v);
 /** What the engine adds for the pages (the file's path as read), not a section of the file. */
 const NOT_SHOWN = new Set(["effective"]);
+/** A key whose words differ in one section: the live preview's mesh detail is not the mesh's. */
+const IN_SECTION: Record<string, Record<string, { label: string; help?: string }>> = {
+  live: { voxel_mm: { label: "Preview mesh detail", help: "The rough mesh shown while scanning only. The mesh you keep uses Mesh detail under Making the mesh." } },
+};
 /** Values of a section not shown (UX_PLAN R12): the markers' dictionary is the program's name for them. */
 const NOT_SHOWN_IN: Record<string, Set<string>> = { board: new Set(["dictionary"]) };
 
@@ -99,6 +103,10 @@ export function advancedSections(settings: Record<string, unknown>): SettingSect
   const loose = entries.filter(([, v]) => !isGroup(v));
   const out: SettingSection[] = [];
   if (loose.length) out.push({ key: "general", title: SECTIONS.general.title, rows: loose.map(row) });
-  for (const [k, v] of entries) if (isGroup(v)) out.push({ key: k, title: sectionTitle(k), ...(SECTIONS[k]?.help ? { help: SECTIONS[k].help } : {}), rows: Object.entries(v).filter(([r]) => !NOT_SHOWN_IN[k]?.has(r)).map(row) });
+  const rowIn = (sec: string) => (e: [string, unknown]): SettingRow => {
+    const own = IN_SECTION[sec]?.[e[0]];
+    return own ? { key: e[0], label: own.label, ...(own.help ? { help: own.help } : {}), value: e[1] } : row(e);
+  };
+  for (const [k, v] of entries) if (isGroup(v)) out.push({ key: k, title: sectionTitle(k), ...(SECTIONS[k]?.help ? { help: SECTIONS[k].help } : {}), rows: Object.entries(v).filter(([r]) => !NOT_SHOWN_IN[k]?.has(r)).map(rowIn(k)) });
   return out;
 }

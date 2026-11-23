@@ -802,7 +802,7 @@ class ScanSession:
         dt = time.perf_counter() - t_start
         self._stats = {**self._stats, "laser_points": int(self._laser_total),
                        "tracking": prev_tracking if self._last_good is None else
-                       {**_idle_tracking("Rewound: go back to the ghost to continue"), "state": "lost",
+                       {**_idle_tracking("Rewound: go back to the dashed scanner to go on"), "state": "lost",
                         "code": "rewound"}}
         out = {"t0": t0, "t1": t1, "seconds": seconds, "dropped_frames": len(drop), "kept_frames": len(keep),
                "rebuilt_keyframes": n_rebuilt, "rebuild_s": round(dt, 3)}

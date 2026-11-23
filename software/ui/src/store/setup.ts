@@ -192,7 +192,7 @@ export const useSetup = create<SetupStore>((set, get) => ({
       return true;
     } catch (e) {
       set({ cameraPending: null });
-      toast.error(body.index !== undefined ? "Couldn't choose that camera" : "Couldn't change swap left/right", e);
+      toast.error(body.index !== undefined ? "Couldn't choose that camera" : "Couldn't change Swap left and right", e);
       return false;
     }
   },

@@ -102,7 +102,7 @@ To remove a fit, click its cross; **Clear** removes them all.
 
 The ± after a value is **1σ** (one sigma): how far the number could move with the scan's own scatter. If you scanned the same part again, the value would typically land within that distance. **It is not the accuracy.** The app says so beside each kind of value:
 
-- **Planes and cylinders:** "how far the fitted shape could move with the scan's scatter, counting that neighbouring points err together. It is not the accuracy: on simulated scans it covered the spread from one scan to the next, but the shapes were also off the same way on every scan (small bosses 0.15–0.25 mm small in radius)."
+- **Planes and cylinders:** "how far the fitted shape could move with the scan's scatter, counting that neighbouring points err together. It is not the accuracy: on simulated scans it covered the spread from one scan to the next, but the shapes were also off the same way on every scan (Ø 14 bosses 0.15–0.19 mm small in radius as tracked, 0.23–0.28 mm with the true camera path)."
 - **Holes:** "how well the edge points agree with the circle (1σ). It is not the accuracy: on simulated scans a hole's edge read about 1 mm small in diameter, several times its ±."
 - **Relations of two fits:** "1σ from both fitted shapes' own ± (taken as independent) … calibration, scale and errors a whole region shares come on top." An angle with a hole's axis has no ±, because a hole's circle is fitted in a plane taken as given.
 - **The part's axes, flush, sections and the report:** the same idea, the spread from scan to scan, not the calibration's scale or a bias the whole scan shares.

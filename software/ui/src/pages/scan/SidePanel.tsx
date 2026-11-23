@@ -346,7 +346,7 @@ export function ScanSetup({
           <Lightbulb size={14} className="mt-px shrink-0 text-warn" aria-hidden />
           <span>
             Hold the scanner <b className="text-fg">200–350&#8239;mm</b> from the surface and sweep slowly, overlapping what you already
-            scanned. The trigger button starts and pauses too.
+            scanned. Trigger: press to start, pause or resume; hold it for 1&#8239;s to stop.
           </span>
         </div>
       </div>

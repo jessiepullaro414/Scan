@@ -784,7 +784,7 @@ class MockBackend {
           },
         },
         pico: pico
-          ? { connected: true, firmware: "ohs-fw 1.1.0", emitters: { ...this.emitters }, imu: "LSM6DSOX", port: "COM5" }
+          ? { connected: true, firmware: "ohs-fw 1.2.0", emitters: { ...this.emitters }, imu: "LSM6DSOX", port: "COM5" }
           : { connected: false, firmware: null, emitters: { ...this.emitters }, imu: null, port: null, error: "The control board (Pico or ESP32) was not found." },
         calibration: this.setup.deviceCalibration(),
         replay: null,
@@ -1060,6 +1060,10 @@ class MockBackend {
         j.result = m.commit ? m.commit() : null;
         j.state = "done";
         j.progress = 1;
+        // as the engine (ohs/server/jobs.py): a finished job's message is its result's, else "Done", never the last step
+        const said = (j.result as { message?: unknown } | null)?.message;
+        j.message = typeof said === "string" && said ? said : "Done";
+        m.message = j.message;
       } catch (e) {
         fail(e);
       }

@@ -735,7 +735,8 @@ def test_results_in_plain_words():
     swapped = StereoCalibration.build((1280, 800), K, np.zeros(5), K, np.zeros(5), np.eye(3), np.array([60.0, 0, 0]))
     r = cr.build_result("stereo", swapped, rep, view_ids=range(17))
     assert r["grade"] == "failed" and "swapped" in r["headline"] and r["can_save"] is False
-    assert "swap left/right" in r["verdict"] and r["advice"][0]["action"] == "start_over"
+    assert "Swap left and right" in r["verdict"] and "Setup, Connect" in r["verdict"]
+    assert "Swap left and right" in r["advice"][0]["text"] and r["advice"][0]["action"] == "start_over"
     poor = dict(rep, rms=1.4, coverage_left=0.3, views_used=6, max_tilt_deg=10.0, views_rejected=[])
     r = cr.build_result("stereo", good, poor, view_ids=range(17))
     assert r["grade"] == "poor" and not r["ok"] and r["can_save"]

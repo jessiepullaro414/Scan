@@ -52,4 +52,10 @@ const not = fineWallsNote(withFine({ chosen: true, acted: false, why: "no_thin_w
 check(!!not && !not.acted && not.action === null && not.line === "No thin walls were found.", "it did not act: why, in one line, no action");
 check(fineWallsNote(withFine({ chosen: true, acted: false, why: "disk", share: null, regions: null, seconds: null, kept_mb: null, line: "" })) === null, "no line: nothing to show");
 
+// a time range whose ends read the same says one number, as the engine (thin_parts._minutes_range)
+const short = demoThinPartsHint(8.8, 250_000, 1, false, 117).words!.fine!.cost[0];
+check(short.endsWith("This mesh took 9 s; with it about 11 s.") && !/11 s to 11 s/.test(short), short);
+check(demoThinPartsHint(45, 900_000, 1, false, 117).words!.fine!.cost[0].includes("with it about 54 s to 58 s"), "a real range keeps both ends");
+check(demoThinPartsHint(700, 900_000, 2, false).words!.cost[0].includes("This mesh took 12 min; with the preset about 14 min to 28 min"), "ten minutes and more: whole minutes, as the engine");
+
 console.log(`thinParts.test: ${checks} checks passed`);

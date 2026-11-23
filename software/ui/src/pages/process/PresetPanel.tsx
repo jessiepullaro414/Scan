@@ -55,11 +55,12 @@ export function PresetPanel({ pid, sid, busy }: { pid: string; sid: string; busy
 
   return (
     <div className="mb-3 space-y-2.5 rounded-xl border border-line bg-surface-2/50 p-3" aria-label="The scan's preset">
-      <div className="flex items-center gap-2">
+      {/* the list on its own line: a long name ("Thin sheet metal and small parts") is not cut in a narrow panel */}
+      <div className="flex flex-wrap items-center gap-2">
         <Boxes size={14} className="shrink-0 text-muted" aria-hidden />
         <span className="text-xs font-medium text-muted">Preset</span>
         {preset ? <PresetHelp preset={preset} side="bottom" /> : null}
-        <div className="min-w-0 flex-1">
+        <div className="min-w-0 basis-full">
           <Select
             aria-label="The scan's preset"
             value={view.missing ? "" : view.id}

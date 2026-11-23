@@ -547,7 +547,7 @@ class Studio:
             res = s.rewind(seconds)
         if res.get("t0") is not None:
             self.notify("info", f"Rewound {res['seconds']:g} s: the last {res['dropped_frames']} frames are out of the "
-                                f"live preview (rebuilt in {res['rebuild_s']:.1f} s). Go back to the ghost scanner to "
+                                f"live preview (rebuilt in {res['rebuild_s']:.1f} s). Go back to the dashed scanner to "
                                 "go on.")
         self.publish_session()
         out = s.state_dict()

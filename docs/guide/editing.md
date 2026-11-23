@@ -211,7 +211,7 @@ If you freed space on the scan (see [projects.md](projects.md#free-space)), the 
 
 ## See what was removed
 
-Each **Remove loose bits** entry in the history that removed something has **Show what was removed**. It shows the mesh before that step as an orange ghost beside the mesh after it: what was removed shows in orange. A box at the top right names the step and what it took. Click **Close**, or the button again, to hide it. It works at any time, also for an older or undone step.
+Each **Remove loose bits** entry in the history that removed something has **Show what was removed**. It shows the mesh before that step as an orange ghost beside the mesh after it: what was removed shows in orange. A box at the bottom right names the step and what it took. Click **Close**, or the button again, to hide it. It works at any time, also for an older or undone step.
 
 ![Show what was removed: the removed loose bits in orange](images/editing-history-removed.png)
 
