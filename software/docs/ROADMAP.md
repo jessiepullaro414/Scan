@@ -44,6 +44,8 @@ change what the hardware can physically measure.
 
 ## 2. Where we are (2026-11-12)
 
+**A snapshot of 2026-11-12, not kept up to date.** Much of what it lists as started or not yet is built since (measuring, fitted shapes to CAD, comparison, the report, data retention, presets, calibration status). For today's state see [`SCANNER_COMPARISON.md`](SCANNER_COMPARISON.md), section 2 (updated 2026-11-23), and the user guide in `docs/guide`.
+
 | Area | Status | What exists | What is missing |
 |---|---|---|---|
 | Raw evidence and reprocessing | **Built** | Every scan keeps its recording (frames, IMU, events, calibration). Make mesh can be rerun at another quality. Edits are stored as selections and replayed, with undo / redo. Recordings survive a crash mid-scan (B3, B14). | Retention modes (below). |
