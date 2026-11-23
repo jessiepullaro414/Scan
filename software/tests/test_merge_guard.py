@@ -162,7 +162,8 @@ def test_the_pipeline_fuses_a_clipped_frame_with_the_guard_on_what_was_seen(monk
             calls.append((depth_mm, seen))
 
     stub = SimpleNamespace(markerless=Model.__new__(Model), _guard_in_fuse=False, has_confidence=True,
-                           fusion_params=SimpleNamespace(depth_min_mm=120.0, depth_max_mm=500.0), gap_guard_px=GUARD_PX)
+                           fusion_params=SimpleNamespace(depth_min_mm=120.0, depth_max_mm=500.0), gap_guard_px=GUARD_PX,
+                           fused_spool=None)  # no fused depth is kept (ENGINE_PLAN X5 step 2): as a pipeline starts
     FramePipeline._fuse(stub, clipped, np.eye(4), 0.0, {}, None, seen=seen)
     FramePipeline._fuse(stub, seen, np.eye(4), 0.0, {}, None)
     assert calls[0][0] is clipped and calls[0][1] is seen
@@ -171,7 +172,7 @@ def test_the_pipeline_fuses_a_clipped_frame_with_the_guard_on_what_was_seen(monk
     got = []
     stub = SimpleNamespace(markerless=SimpleNamespace(integrate=lambda d, s, T, t=None: got.append(d)), _guard_in_fuse=True,
                            has_confidence=False, fusion_params=SimpleNamespace(depth_min_mm=120.0, depth_max_mm=500.0),
-                           gap_guard_px=GUARD_PX)
+                           gap_guard_px=GUARD_PX, fused_spool=None)
     FramePipeline._fuse(stub, clipped, np.eye(4), 0.0, {}, None, seen=seen)
     assert (got[0][island] > 0).all()
     FramePipeline._fuse(stub, clipped, np.eye(4), 0.0, {}, None)  # without what was seen: as before, the islands eaten
