@@ -5505,6 +5505,93 @@ app's demo data in the browser (light and dark).
 Not verified: real recordings; pairs aligned from tags (the caution goes by the overlap alone there); scans longer
 than 9 s; the limit rests on one sheet pair each side of it.
 
+## The overall size of a large part (ENGINE_PLAN X8 step 1, 2026-11-23): measured, fails
+
+Gap item 7: a large part's overall size within about 0.05 % (0.65 mm on 1.3 m). Never measured before.
+`tools/large_part_study.py`; the set-up and the rule below were fixed before any result (data and notes in
+`D:\OpenHandScan-work\scratch\x8`). A measurement: nothing in the engine or its defaults is changed.
+
+**Set-up.**
+- A plain painted panel, 1300 x 400 mm, one surface, gently doubly curved and convex up (radii 6 m along, 2 m
+  across), built from the simulator's existing pieces. It lies on a dark table on its four corners, 1 mm above it.
+  Two Ø10 holes on the centre line 30 mm from each end, 14 mm above the table. Paint and table as the car panel's.
+  Nothing along its length to hold on to but its ends.
+- One recording a seed (seeds 0, 1, 2): 3 passes along the panel (out, back, out), 130 mm apart, the door's hand
+  path settings (distance 240-290 mm, elevation 60-75°, the same hand noise), about 100 mm/s, 56.5 s, 565 frames at
+  10 fps, 1280 x 800, realistic. About 22 min to render a seed.
+- Processed as Make mesh does on the graphics card at Standard quality, 1 mm mesh detail, Default recipe
+  (`scorecard.app_chain`: Follow the camera, Straighten, Refine with lasers), tracked, and fused at the true poses
+  (the ceiling, and each reading's own error).
+- End to end is read three ways:
+  - **Hole tool:** the app's Hole tool on both holes (clicked 1.5 mm outside each rim at 0/120/240°), the distance
+    between the two centres in the mesh's own frame.
+  - **Edges:** the middles of the two short edges on the mesh, read against a local fit of the panel; judged against
+    the same seed's reading at true poses.
+  - **Path:** the camera path placed on the true one by the frames at one end (in position; the turn is the whole
+    path's), read at the other end. For finding the cause, not judged.
+- Bow: the mesh placed on the truth by its two ends; the middle's offset along the normal, and sideways from the long
+  edges.
+- Slide: at points two passes both saw (found from the truth), how far the two passes' tracked poses put the same
+  point apart.
+- **Fails:** over 0.05 % end to end on any seed, by the Hole tool where it answers or by the edges against true
+  poses.
+
+| | Seed 0 | Seed 1 | Seed 2 |
+|---|---|---|---|
+| Hole tool, tracked | both refused | A refused, B read as Ø4.1 | both refused |
+| Hole tool at true poses | both refused | one click of three answered at each, Ø4.9 and Ø4.5 | A read as Ø5.6, B refused |
+| Edges against true poses | -1.75 mm, -0.135 % | +6.53 mm, +0.502 % | +1.58 mm, +0.121 % |
+| Edges at true poses (the reading's own error) | +0.09 mm | +0.10 mm | +1.08 mm |
+| Camera path, end to end (after Straighten) | -5.5 mm, -0.49 % | +4.5 mm, +0.40 % | -1.3 mm, -0.11 % |
+| Path, pass 1 / 2 / 3 alone | -0.5 / -8.1 / -1.4 mm | -0.2 / +7.8 / -2.8 mm | +1.5 / -2.4 / -0.8 mm |
+| Passes slide along the panel, RMS (max) | 4.0-6.8 (7.9) mm | 4.8-9.5 (11.6) mm | 1.2-2.7 (4.7) mm |
+| Passes slide across, RMS | 0.9-2.0 mm | 1.0-3.5 mm | 1.9-4.1 mm |
+| Passes' gap along the normal, RMS | 0.01-0.03 mm | 0.06-0.12 mm | 0.04-0.06 mm |
+| Bow along the normal / sideways | -0.014 / -0.13 mm | +0.008 / +0.22 mm | -0.008 / -0.38 mm |
+| Mesh against the true panel, median / over 0.3 mm | 0.025 mm / 2.6 % | 0.032 mm / 4.2 % | 0.023 mm / 2.5 % |
+| Frames tracked; frames where the surface let the scanner slide | 565 of 565; 39 % | 565 of 565; 40 % | 565 of 565; 38 % |
+| Make mesh, memory peak (at true poses) | 142 s, 6.1 GB (83 s, 5.3 GB) | 210 s, 5.9 GB (83 s, 5.2 GB) | 139 s, 6.0 GB (84 s, 5.2 GB) |
+| Straighten's loops | 48 found, "not clearly better", unchanged | 48 closed, the end moved 4.0 mm | 48 closed, "already line up", unchanged |
+| Straighten's laser crossings | 2,988, unchanged | 3,056, unchanged | 3,139, unchanged |
+| The app's warnings | none (path check 1.3 mm, warns at 4) | none (1.3 mm) | none (1.1 mm) |
+
+- **It fails on every seed: 0.12 to 0.50 % end to end from the mesh's edges, 2.4 to 10 times the need.** Seeds 0
+  and 1 are clear. Seed 2's 1.58 mm is only 1.5 times that seed's own reading error (1.08 mm at true poses), but its
+  passes also sit 1.2 to 2.7 mm apart along the panel, 2 to 4 times the 0.65 mm the need allows.
+- **The cause is drift along the length within a pass**, most on the return pass (up to 8 mm over 1.1 m, a steady
+  ramp of about 0.7 % of its travel on seeds 0 and 1). The passes then sit 2 to 11 mm apart along the panel, and the
+  fused mesh averages them. On seed 1 Straighten's loops moved the end 4 mm and the slide between passes 1 and 3
+  went from 11.1 to 9.5 mm: not mended.
+- **No scale error.** At true poses the edges read within 0.1 mm on two seeds, and the sign of the tracked error
+  changes from seed to seed.
+- **No bow.** Along the normal it is under 0.015 mm; sideways it is within the reading's own scatter (-0.13 to
+  -0.27 mm at true poses).
+- **Straighten does not see it.** The passes' gap along the normal is only 0.01 to 0.12 mm: the passes slide along
+  the surface, which the loops and the laser crossings do not measure.
+- **The app says nothing after the scan.** The camera-path check reads 1.1 to 1.3 mm (it warns at 4), and the mesh
+  against the truth looks excellent (median 0.023 to 0.032 mm). Nothing tells the user the part can be 6.5 mm long.
+  The tracker does know while it runs: on 38 to 40 % of the frames it notes that the surface let the scanner slide
+  (the track report's `weak.slide`). No warning is built on that figure yet; whether it separates this panel from
+  the door is not measured.
+- **The Hole tool cannot measure these holes.** Ø10 holes 14 mm above a table on this panel come out closed or
+  half-filled, even at true poses: tracked, five of six refused ("no hole edge within 10 mm of the click", once
+  "the surface dips only 1.3 mm"); at true poses the few answers are Ø4.5 to 5.6 ("the surface rises from the flat
+  face at this edge" for the rest). "Near a floor: Ø10 -0.3 to +0.6" (the plate, seen from above) does not carry
+  over to this panel seen at 60-75°. Not compared with that plate on this exact scene.
+- **The 768 mm tracking cube** moves 40 or 41 times a scan, so a return pass meets a model that holds nothing of the
+  earlier pass beyond about 770 mm. But a 1536 mm cube (`fusion.gpu_volume_voxels=768`, seed 0 only, 20 moves) gave
+  the same result: pass 2 -7.85 mm (was -8.07), edges -1.57 mm against the truth (was -1.66), slide 3.9 to 6.9 mm.
+  So the cube is not the cause.
+- **The mesh model's brick pool** reached 48k of 65k bricks (the most it may take is 187k): not a limit.
+- **Time:** Make mesh took 2.5 to 3.7 times the scan's length here (Straighten 32 s, 103 s where it closed loops).
+
+**Limits of this study.** One scene, one hand-path pattern, three seeds, the simulator's hand. The edge reading has
+up to 1 mm of its own error at one end (seed 2 at true poses). The cube was tried on seed 0 only. No run was
+repeated. Not tried: other speeds or frame rates, four lasers, a part with features along its length, tags, the
+path without a GPU, the exe.
+
+**Next (not built):** the plan's step 2, tags as anchors in Straighten (`ENGINE_PLAN.md` X8).
+
 ## What the metrics mean
 
 - **Stereo errors** compare the estimated raw intrinsics/extrinsics (`K1`, `K2`, `R`, `T`) with

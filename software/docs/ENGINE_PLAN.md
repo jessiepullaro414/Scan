@@ -85,7 +85,7 @@ GPU path, Standard quality, 1 mm voxels, tracked unless said.
 | Thin sheet lying flat | A 0.5 mm plate reads 0.489 to 0.504 mm with every setting ["Presets"]. | not the limit | GPU path: 1.1 to 3.8 mm at the last frame (MP F14). | Remove table keeps 0.3 mm and up; 0.1 mm goes silently ["A thin part lying flat"]. | A merge with the plate turned over reads 1.0 mm as 1.42 and 0.5 mm as 1.28. |
 | Thin sheet standing, both sides seen | 2 mm flange 2.26 to 2.61, 1 mm rib 1.66 to 2.20 mm. Walls 0.5 / 1 / 2 mm read 1.70 / 1.71 to 1.90 / 2.53 to 2.66 at 1 mm voxels and 1.03 to 1.08 / 1.32 to 1.45 / 2.18 to 2.43 at 0.5 mm. | small | +0.3 to 0.6 mm (flange), +0.7 to 1.2 mm (1 mm rib) over true poses: 0.77 times how far out the cameras stand, r = 0.98. | Mesh's floor at true poses: 2.10 to 2.18 / 1.24 to 1.28 mm. | |
 | Holes | Ø25 over a far dark background: 1.1 mm small tracked, 1.3 at true poses. A plate 120 mm up: 22.0 to 22.1 tracked. Near a floor: Ø25 +0.15 to 0.5, Ø10 -0.3 to +0.6. Ø6 everywhere and Ø10 over a far floor: closed, refused. | All the fill is the matcher's: 1.3 mm median reach ["Holes filled in"]. | On the plate tracking takes another 1.7 to 3.1 mm. | The rim fuses as a shoulder: the reading goes 26.7 to 24.3 mm between 0.15 and 2 mm below the face. Coarser voxels close Ø25 by 1.4 to 2.4 mm. | The ± does not cover the bias. A gap of 2 to 6 mm is bridged, not offered. |
-| Large part (door, 946 mm) | Stale (2026-11-10): median 0.07, p95 0.79 mm. Today's 141-frame stretches: 0.039 to 0.052 / 0.35 to 0.43. | as the panel | Loops do not mend sliding (up to 98 mm) ["Straighten for large drift"]. Overall length over a metre: not measured. | The 768 mm tracking cube has never been shown to bind. | not measured |
+| Large part (door, 946 mm) | Stale (2026-11-10): median 0.07, p95 0.79 mm. Today's 141-frame stretches: 0.039 to 0.052 / 0.35 to 0.43. | as the panel | Loops do not mend sliding (up to 98 mm) ["Straighten for large drift"]. Overall length of a 1.3 m plain panel: 0.12 to 0.50 % off, the passes 2 to 11 mm apart along it ["The overall size of a large part"]. | The 768 mm tracking cube moves about 40 times on a 1.3 m scan; a cube twice the size gives the same result, so it is not what limits the length. | not measured |
 | Detailed casting (carburettor) | Stale (2026-11-10): mesh median 0.80, p95 2.7 mm. Today's stretches: 0.157 to 0.230 / 0.69 to 1.04, coverage 0.68 to 0.70. | Detail mode tracks raw depth, so the camera-fixed dot error comes back. | The largest of any scene. | 0.5 mm voxels: p95 -0.11 to -0.38. | not measured |
 | Dark or speckled surface | GPU path, last frame: 1.1 to 3.8 mm, against 0.61 mm on the plain bracket (MP F14). The mesh against the truth: not measured. | Dots about a fifth as bright. | ICP from the true pose against a one-frame model drifts 2.6 to 2.7 mm. | not measured | CPU path after D7: 42 mm and 0.9 mm (two seeds), plates 5.7 mm. |
 
@@ -107,7 +107,9 @@ Ranked by the gap between what a user needs and what the engine delivers.
    carburettor's p95 is 0.7 to 1.0 mm at 70 % coverage.
 6. **Flatness of a flange.** Needed: 0.05 to 0.1 mm. The label reads 0.14 to 0.48 mm on truly
    flat faces (stale).
-7. **Overall size of large parts.** Needed: about 0.05 %. Not measured.
+7. **Overall size of large parts.** Needed: about 0.05 %. Today 0.12 to 0.50 % on a 1.3 m
+   plain panel in three passes (1.6 to 6.5 mm), with no warning (X8 step 1, 2026-11-23). Short
+   by 2.4 to 10 times.
 8. **A merge** adds coverage; it adds accuracy only where the pose is right and the scans
    saw different sides (X7, measured 2026-11-22).
 9. **Waits.** After a scan, Standard takes about 4.8 times the scan's length on the Radeon PC
@@ -778,12 +780,45 @@ and thin parts".
   - The rule's "at least the union" is close to what no single surface can reach; if the
     item is taken up again the owner may want to restate it.
 
-### [ ] X8. Large parts: measure the overall size first (M)
+### [ ] X8. Large parts: measure the overall size first (M): step 1 measured 2026-11-23, fails; step 2 (anchors) open
 - A 1.2 to 1.5 m plain panel with Ø10 holes at both ends, scanned in passes: the end-to-end
   distance, the bow, the slide between passes. Only if it fails: tags on the table as anchors
   in Straighten (`ohs/align/tags.py` exists).
 - **Stop rule (anchors): adopted only if** under 0.05 % end to end on all 3 seeds with the
   door no worse than its spread.
+- **Step 1 measured 2026-11-23: fails** (`VALIDATION.md`, "The overall size of a large part";
+  `tools/large_part_study.py`; set-up and rule fixed beforehand).
+  - A 1.3 m plain panel, 3 passes, 3 seeds, Make mesh on the graphics card at Standard: end to
+    end -0.135 / +0.502 / +0.121 % from the mesh's edges (-1.75 / +6.53 / +1.58 mm; the need
+    is 0.65 mm). The camera path is 0.11 to 0.49 % off. Seed 2's edge reading has 1.08 mm of
+    its own error.
+  - Cause: drift along the plain length within a pass, most on the return pass (up to 8 mm
+    over 1.1 m); the passes then sit 2 to 11 mm apart along the panel and the mesh averages
+    them.
+  - Not the cause: scale (true poses read within 0.1 mm on two seeds), bow (under 0.015 mm
+    along the normal), the 768 mm tracking cube (it moves 40 times a scan, but a 1536 mm cube
+    gave the same on seed 0), the mesh model's brick pool (48k of 65k).
+  - Straighten finds 48 loops but no gap to close (0.01 to 0.12 mm along the normal), and the
+    laser crossings already meet. Nothing warns after the scan: the path check reads 1.1 to
+    1.3 mm, the mesh's median is 0.023 to 0.032 mm.
+  - The Hole tool cannot read the Ø10 holes 14 mm above the table, even at true poses (small
+    things below), so end to end is judged from the edges.
+- **Step 2 (not built): tags as anchors in Straighten.** A few AprilTags (20 to 30 mm) on the
+  table along the part, or on the part, at most about 300 mm apart so that one frame (about
+  470 mm along the panel) sees two neighbours.
+  - Each tag is a node in Straighten's pose graph; each keyframe that sees it adds an edge
+    from that one frame's own detection (`MarkerTracker`, the corner triangulation behind
+    `ohs/align/tags.py`'s `tag_map`, per frame: a median over the drifted world would bake the
+    drift in). The never-worse rule stays.
+  - Expected: the slide between passes from 2 to 11 mm to well under 1 mm (the same tag seen on
+    every pass), and the drift within a pass held by neighbours linked within single frames
+    (near 0.1 mm over 1.3 m if a 300 mm link is good to about 0.05 mm; not measured).
+  - It will not mend: the holes that come out closed, the edge reading's own error, a scan
+    without tags.
+  - A scan without tags is unchanged by construction; the door has none.
+  - Size M to L: tags in the scene from existing decals (S), observations per keyframe (S),
+    nodes, edges, weights, the never-worse checks and the report (M), the study on 3 seeds and
+    the door's spread (M).
 
 ### [ ] X9. The matcher for the next frame while this one is tracked (M to L)
 - Results identical; another 450 MB of graphics memory. Little gain expected on the Radeon PC
@@ -870,6 +905,17 @@ and thin parts".
   merge of two sheet scans is worse than the better one even at the true motion.
 - [ ] The merged model does not get Refine with lasers, a single scan does (found by X7).
   Measure whether it helps a merge.
+- [ ] Ø10 holes 14 mm above a table on the large plain panel come out closed or half-filled,
+  even at true poses (found by X8, 2026-11-23: the Hole tool refuses most clicks and reads the
+  rest as Ø4.5 to 5.6). The budget's "near a floor: Ø10 -0.3 to +0.6" is the plate seen from
+  above; this panel is seen at 60 to 75 degrees. To do: the same hole on this scene seen from
+  above, to tell the viewing angle from the scene.
+- [ ] Nothing warns after a scan whose length is not held (found by X8): the tracker notes on
+  38 to 40 % of the large panel's frames that the surface let the scanner slide (the track
+  report's `weak.slide`), while the path check and the mesh's scores look fine. To measure:
+  whether that share, with how far the scan travelled, separates the panel from the door and
+  the small parts; if it does, a caution after Make mesh ("the length along the part is not
+  sure: use tags").
 - [ ] `tests/test_track_spacetime.py::test_the_refined_mesh_is_closer_to_the_truth` failed once
   without a GPU (`OHS_COMPUTE=cpu`) on 2026-11-22, in a run of several test files, and passed in
   the eight runs after it (alone, its file six times, the same set again). **It failed again
