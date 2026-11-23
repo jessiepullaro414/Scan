@@ -85,6 +85,7 @@ import { disposeMeshGeometry, plyGeometry, readPly } from "../three/ply";
 import { viewBus } from "../three/viewBus";
 import { CadDownload } from "./viewer/CadDownload";
 import { MeshDownloadButtons } from "../components/MeshDownloads";
+import { PRINT_CLOSED_LINE, meshAxesLine } from "../lib/downloads";
 import { CHECK_ICON, CheckPanel } from "./viewer/CheckPanel";
 import { usePass } from "../store/pass";
 import { ConfidenceLegend } from "./viewer/ConfidenceLegend";
@@ -708,6 +709,8 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
   const refEnabled = !!cmp.comparison?.alignment && cmp.comparison.ready;
   // open holes: the count in the mesh's numbers, which this page reads with the mesh version
   const openHoles = useProcess((s) => s.entries[processKey(pid, sid)]?.state?.current?.stats.holes ?? null);
+  // the Export group's line for a 3D print: only when the mesh's numbers say it is not closed
+  const watertight = useProcess((s) => s.entries[processKey(pid, sid)]?.state?.current?.stats.watertight ?? null);
   // R17: the Make mesh that made this mesh (its whole time)
   const made = useProcess((s) => s.entries[processKey(pid, sid)]?.state?.made ?? null);
   const thinHint = thinPartsToShow(made); // ENGINE_PLAN X5
@@ -1570,10 +1573,19 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
             <div className="text-sm text-muted">Make the mesh first.</div>
           )}
           {hasResult && project && scan ? (
-            <p className="mt-2 text-xs text-subtle">
-              Units: mm. STL for CAD and slicers.
-              {partFrame ? ` STL and PLY are along the scan's axes unless “along the part's axes”.${partFrame.out_of_date ? " The part's axes are out of date." : ""}` : ""}
-            </p>
+            <>
+              <p className="mt-2 text-xs text-subtle">
+                Units: mm. STL for CAD and slicers. {meshAxesLine(partFrame ? "current" : axes, !!partFrame?.out_of_date)}
+              </p>
+              {watertight === false ? (
+                <p className="mt-1 text-xs text-subtle">
+                  {PRINT_CLOSED_LINE}{" "}
+                  <button type="button" className="text-accent underline-offset-2 hover:underline" onClick={() => navigate(paths.process(pid, sid))}>
+                    Open Edit mesh
+                  </button>
+                </p>
+              ) : null}
+            </>
           ) : null}
           {hasResult && urls ? <CadDownload pid={pid} sid={sid} stem={stem} kept={kept} hasMesh={hasResult} /> : null}
           {hasResult ? (

@@ -14,10 +14,10 @@ On this page:
 - [Step 5: Lasers](#step-5-lasers)
 - [Step 6: Motion sensor (IMU)](#step-6-motion-sensor-imu)
 - [Step 7: Calibration check](#step-7-calibration-check)
-- [Read a calibration result](#read-a-calibration-result)
+- [Read a calibration result](#read-a-calibration-result) and [go back to the previous calibration](#go-back-to-the-previous-calibration)
 - [Done: scan your first object](#done-scan-your-first-object)
 - [The calibration status after connecting](#the-calibration-status-after-connecting)
-- [The Device page](#the-device-page)
+- [The Device page](#the-device-page) and [replay a recording](#replay-a-recording)
 - [Messages on this page](#messages-on-this-page)
 
 ## What setup and calibration are
@@ -92,6 +92,8 @@ Under **Cameras found** the app lists every camera of the computer. The scanner'
 Studio saves the camera you pick and the swap setting to the settings file (`~/.ohs/config.toml` by default). After a change, a box says **Reconnect to use the new camera settings**.
 
 Under **Control board (Pico or ESP32)** you see the serial port and the firmware. If the board is missing or answers with the wrong firmware, open **Flash or update the firmware**. It explains how to install MicroPython, copy the two firmware files with `mpremote`, and connect again. The full guide is [firmware/README.md](../../firmware/README.md).
+
+**With an ESP32 board.** The flashing steps in the app are for a Raspberry Pi Pico only (the `.uf2` file, the BOOTSEL button, the `RPI-RP2` drive). For an ESP32 follow "ESP32 instead of a Pico" in [firmware/README.md](../../firmware/README.md): you flash MicroPython with `esptool` instead, then copy the same two firmware files with `mpremote`. The wiring uses the same physical pins as on a Pico, but the GPIO numbers differ, so the pin names in the app's messages (GP4, GP5 and so on) are the Pico's. The firmware README notes that the ESP32 has so far been tested only with a simulated board.
 
 **No hardware yet? Try the simulator.** The card at the bottom connects the simulator with **Use the simulator**.
 
@@ -294,6 +296,17 @@ If you save a result graded below the bar, the app asks **Save a calibration bel
 
 After saving, the page says where the file went (`~/.ohs/calibration.json` by default for the real scanner) and offers **Next step:** and **Calibrate again**. A new calibration loads by itself when you save it.
 
+### Go back to the previous calibration
+
+Each save first copies the file it replaces to `calibration.json.bak` beside it, and the page says **The previous version is kept as** with its path. There is one backup only: the next save replaces it. The app has no button to go back. To go back by hand:
+
+1. Stop any scan, and close any calibration that is open in Setup.
+2. In the folder of the calibration file (`~/.ohs/` by default; the Setup overview shows the path under **Calibration file**), copy `calibration.json` somewhere safe if you may want it again.
+3. Copy `calibration.json.bak` over `calibration.json`.
+4. Connect the scanner again (on the Connect step, **Reconnect**). The app reads the calibration when the device connects.
+
+Remember that a camera calibration and the lasers and motion sensor calibrated after it belong together: the backup holds the parts as they were before that one save. Run the [calibration check](#step-7-calibration-check) afterwards.
+
 ## Done: scan your first object
 
 The last page says **Your scanner is ready**, or **Almost there** with **Some steps are still open**. It lists what is set up.
@@ -338,6 +351,24 @@ Under **Source**, pick one card:
 | **Replay a recording** | Plays back a recorded scan as if it were live, to tune settings or demo without the scanner. Type the **Recording folder** and choose **Loop** to start over at the end. | **Start replay** |
 | **Simulator** | A simulated scanner over a sphere on a plane, with true calibration. | **Start simulator** |
 
+### Replay a recording
+
+A replay plays a recording back as if the scanner were sending it live. Use it to try settings on a scan you already made, or to show the app without the scanner.
+
+1. Choose **Replay a recording**.
+2. Under **Recording folder**, type the folder the scanner recorded into. That is the `recording` folder inside a scan's folder in its project (for example `…\OpenHandScan\projects\<project>\scans\<scan>\recording`; the project page's **Open the project folder** takes you there), a recording made with `ohs scan` in the recordings folder (`~/OpenHandScan/scans`), or one the simulator made.
+3. Turn **Loop** on to start over at the end. Without it, the replay plays once and then disconnects; a scan running at that moment is stopped and saved.
+4. Press **Start replay**, then **Go to scan**.
+
+What to know:
+
+- A scan you start during a replay is a new scan in the chosen project, made from the replayed frames. It uses the replayed recording's own calibration, the one it was recorded with. A recording without a calibration cannot be scanned from.
+- A replay has no lasers, dots or trigger to control: it carries its own levels. The motion sensor data comes from the recording.
+- The Setup wizard does not work with a replay: the self-test and the calibration steps need the scanner or the simulator.
+- If the recording's folder is moved or deleted while it plays, the connection ends with **The recording could not be read any more (its folder was moved or deleted).**
+
+### Switch and disconnect
+
 When another source is connected, the button says **Switch to …**; the current device disconnects first. Once connected, **Go to scan** opens the Scan page, and **Disconnect** at the top disconnects and switches the lasers and dots off. You cannot change the device while a scan records.
 
 The other boxes:
@@ -350,11 +381,18 @@ The other boxes:
 
 | Message | What it means | What to do |
 |---|---|---|
+| **This engine has no setup wizard yet** | The engine is older than the app's pages: the wizard needs OpenHandScan engine 0.2 or newer. | Update the engine and restart `ohs app` (see [getting-started.md](getting-started.md#update-the-app)). Meanwhile `ohs calibrate stereo` works from a terminal. |
+| **Couldn't load the setup** | The engine did not send the wizard's state. | Press **Try again**. The lines under the title say why. |
+| **Couldn't list the cameras** | Looking for cameras failed. | Press **Try again**, or **Refresh**. |
+| **Couldn't read the printables** | The list of printable files could not be read. | Read the reason, then press **Make the printables** again. |
+| **Couldn't read the calibration session** | The engine did not answer about the open calibration. | Press **Try again**. |
+| **Couldn't start the …** (a calibration step) | The engine refused to start the step. | Read the reason; the buttons under it lead to the step that fixes it. |
+| **Camera settings saved. Connect the camera again to use them.** | You changed the camera or the swap setting while the camera is connected. | Press **Reconnect**. |
 | **No camera found** | No camera is visible to the computer. | Plug the camera cable into a USB 3 port (blue inside), close other apps that use a camera, then **Refresh**. |
 | **Control board not answering** | No reply on any serial port. | Flash the firmware, or try a data USB cable. Open **Flash or update the firmware**. |
 | **Unexpected firmware** | Something answers, but not the OpenHandScan firmware. | Flash the OpenHandScan firmware. |
 | **No control board found** | No serial port looks like the control board. | Check the cable; flash the firmware. |
-| **The firmware finds no motion sensor: check the wiring** | The control board answers, but finds no IMU. | Check the IMU wiring (on a Pico: SDA GP4, SCL GP5, 3V3, GND). |
+| **The firmware finds no motion sensor: check the wiring** | The control board answers, but finds no IMU. | Check the IMU wiring (on a Pico: SDA GP4, SCL GP5, 3V3, GND). On an ESP32 the physical pins are the same but the GPIO numbers differ: see "ESP32 instead of a Pico" in [firmware/README.md](../../firmware/README.md). |
 | **The motion sensor (IMU) didn't start: tracking runs without it.** | The IMU stream did not start. | Reconnect; check the wiring. You can still scan. |
 | **Reconnect to use the new camera settings** | You changed the camera or the swap setting. | Press **Reconnect**. |
 | **Connect the scanner first** | The step needs a device. | Press **Go to Connect**. |
@@ -374,6 +412,9 @@ The other boxes:
 | **The calibration may have drifted.** | The start-up check found the cameras may have moved. | Run the calibration check. |
 | **Check recommended** / **Recalibration required** | The calibration status is not valid. | Press the button next to it. |
 | **Calibrate the scanner** (Device page) | No calibration is loaded. | Press **Open Setup**. |
+| **Enter the recording folder first.** (Device page) | **Replay a recording** is chosen with no folder. | Type the recording folder. |
+| **Couldn't start the replay** (Device page) | The engine refused the folder, for example because it is not a recording. | Check the folder: it must be a scan's `recording` folder or another recording. |
+| **The recording could not be read any more (its folder was moved or deleted).** | The replayed folder went away. A running scan was stopped and saved. | Put the folder back, or choose another one. |
 | **Control board not found** (Device page) | The lasers and dots, the trigger and the motion sensor are unavailable. | Check the cable, or flash the firmware: press **Show the firmware steps**. |
 
 Next: [start scanning](scanning.md). For problems not listed here, see [troubleshooting.md](troubleshooting.md).

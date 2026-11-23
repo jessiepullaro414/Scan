@@ -15,6 +15,7 @@ On this page:
 - [Free space](#free-space)
 - [Download a mesh](#download-a-mesh)
 - [Where a project lives on disk](#where-a-project-lives-on-disk)
+- [Move or back up your projects](#move-or-back-up-your-projects)
 - [The Jobs panel](#the-jobs-panel)
 - [Messages on this page](#messages-on-this-page)
 
@@ -154,6 +155,8 @@ Point at a scan's size in its row to see what it holds:
 | **Result** | The mesh files, laser points, camera path and report. |
 | **Other files** | Everything else: the processing record, the thumbnail, saved measurements and so on. |
 
+**Before you scan: how much space to expect.** Measured on simulated recordings at 1280 × 800 pixels for each camera and 30 frames a second, a recording took about 36 MB for each second of scanning, so about 2.1 GB a minute (1 GB counted as 1,024 MB, as the app shows it), and the recording was about 80 % of a scan's folder. The processing stages, the undo history and the result made up the rest (software/VALIDATION.md, "What a scan takes on disk"). A recording made at 60 frames a second holds twice as many frames; its size was not measured. When a mesh is made again, the scan holds two results for a while (see [make-mesh.md](make-mesh.md#make-the-mesh-again)).
+
 ## Free space
 
 Free space removes parts of a scan you may no longer need. You choose what to keep; the app shows what each choice frees and what you can no longer do afterwards. Nothing is removed until you confirm, and nothing is ever removed on its own. New scans keep everything.
@@ -172,7 +175,7 @@ To free space:
 
 | Choice | What goes | What you can still do | Can it be undone? |
 |---|---|---|---|
-| **Keep the recording and the result** | The processing stages and the undo history. | Everything: Make mesh rebuilds the stages from the recording. You can no longer undo the edits made so far, and you cannot re-run single stages on the Edit mesh page until you make the mesh again. | The stages come back when you make the mesh again. The old undo steps do not. |
+| **Keep the recording and the result** | The processing stages (the files of the steps that make the mesh, such as Follow the camera and Straighten: see [make-mesh.md](make-mesh.md#run-the-stages-one-at-a-time)) and the undo history. | Everything: Make mesh rebuilds the stages from the recording. You can no longer undo the edits made so far, and you cannot run a single stage again on the Edit mesh page until you make the mesh again. | The stages come back when you make the mesh again. The old undo steps do not. |
 | **Keep half the frames and the result** | As above, plus the camera frames Make mesh at Standard quality skips (every second frame of a recording made at 60 frames a second). | Make mesh at Standard quality gives the same mesh as before. Best quality then works from the frames that stay and gives the Standard mesh. | No. |
 | **Keep the result only** | The recording, the processing stages and the undo history. | The mesh can still be edited, measured and exported. It cannot be made again, merged or refined. | No. |
 
@@ -223,6 +226,33 @@ The files in a scan's `result/` folder:
 | `marker_map.json` | The map of the markers, for scans made in markers mode. |
 
 Deleted projects and scans go to a hidden `.trash` folder inside the projects folder.
+
+## Move or back up your projects
+
+Everything of a project is in its folder, so a copy of the folder is a full backup of it. Each recording also keeps its own copy of the calibration it was made with (`recording/calibration.json`), so its mesh can be made again from the copy.
+
+To back up a project:
+
+1. Close the app, so nothing writes to the folder while you copy it.
+2. Click **Open the project folder** on the project page (or go to the projects folder Home names) and copy the project's folder somewhere safe.
+
+To move all your projects to another folder or disk:
+
+1. Close the app.
+2. Move the whole projects folder (by default `~/OpenHandScan/projects`) to the new place. Its hidden `.trash` folder moves with it.
+3. In the settings file (by default `~/.ohs/config.toml`; **Open the settings folder** on the Settings page opens its folder), set the new place under `[paths]`, for example `projects_dir = "D:/OpenHandScan/projects"`. The Settings page shows this value read only; it cannot be changed there. See [settings.md](settings.md#where-files-are-kept).
+4. Start the app again. Home then names the new folder at the bottom of the page.
+
+Home lists every folder in the projects folder that holds a `project.json`, so a project folder you copy in from another computer shows up on Home.
+
+What a project folder does not hold:
+
+| Kept elsewhere | Default place | What happens without it |
+|---|---|---|
+| The trash | `.trash` inside the projects folder | A project copied on its own leaves its deleted scans behind. |
+| The scanner's calibration | `~/.ohs/calibration.json` | Needed for new scans on this computer. Scans already made keep their own copy. |
+| Your recipes and presets | The app's data folder (`~/.ohs/studio`), in `recipes` and `presets` | A scan whose preset is missing is made as General and says so; a missing recipe is replaced by Default, with a warning. |
+| The settings file | `~/.ohs/config.toml` | Copy it too if you want the same settings on another computer. |
 
 ## The Jobs panel
 

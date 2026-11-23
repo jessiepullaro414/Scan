@@ -32,3 +32,23 @@ export function meshDownloads(urls: { stl: string; ply: string; obj: string; las
     return url ? [{ ...d, url, file: name[d.key], check: d.key === "obj" }] : [];
   });
 }
+
+/** The viewer's "For CAD" line: what the STEP file and the FreeCAD macro hold (ohs/cad/step.py: no solids, no
+ * free-form surfaces), and where the surface is. */
+export const CAD_FILES_LINE =
+  "The shapes you fitted and saved (planes, cylinders, holes and their axes), as exact geometry to model against. Not the scanned surface: for that, use STL.";
+
+/** A 3D print needs a closed mesh: shown when the mesh is not watertight. */
+export const PRINT_CLOSED_LINE = "For a 3D print the mesh must be closed: use “Make it watertight” under Holes on the Edit mesh page.";
+
+/**
+ * Which axes STL and PLY are along, and what to do about it. `axes`: "current" (the part's axes are set: the
+ * "along the part's axes" buttons are there), "panel" (being set), "offer" ("Set the part's axes…" is shown) or
+ * "hidden" (no fitted plane saved yet). `outOfDate`: the part's axes were set on an earlier mesh.
+ */
+export function meshAxesLine(axes: "current" | "panel" | "offer" | "hidden", outOfDate: boolean): string {
+  if (axes === "current") return `STL and PLY are along the scan's axes unless “along the part's axes”.${outOfDate ? " The part's axes are out of date." : ""}`;
+  if (axes === "panel") return "STL and PLY are along the scan's axes until the part's axes are set, in “The part's axes” under Measure.";
+  const how = axes === "offer" ? "press “Set the part's axes…”" : "save a fitted plane, then press “Set the part's axes…”";
+  return `STL and PLY are along the scan's axes. For the part upright at its own origin, ${how} under Measure.`;
+}

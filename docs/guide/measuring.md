@@ -223,6 +223,8 @@ The panel shows:
 
 ## Export features for CAD
 
+> For the whole way from fitted shapes to a STEP file open in CAD, with the mesh beside it, see [From the mesh to STL and STEP](to-cad.md). This section is the short reference.
+
 The fitted shapes can go to CAD as real geometry, so you can model against them. Open **Export** and find **For CAD** under the download buttons.
 
 | Button | File | What is in it |

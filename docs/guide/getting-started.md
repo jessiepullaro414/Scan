@@ -6,13 +6,17 @@ On this page:
 
 - [What Studio is](#what-studio-is)
 - [Install the app](#install-the-app)
+- [The Windows program (ohs.exe)](#the-windows-program-ohsexe)
+- [Update the app](#update-the-app)
 - [Start the app](#start-the-app)
+- [Use a phone or tablet](#use-a-phone-or-tablet)
 - [If the app cannot reach the engine](#if-the-app-cannot-reach-the-engine)
 - [The window](#the-window)
 - [The Home page](#the-home-page)
 - [Set up your scanner](#set-up-your-scanner)
 - [Try the simulator](#try-the-simulator)
 - [What this computer can do](#what-this-computer-can-do)
+- [Disk space and memory](#disk-space-and-memory)
 - [Messages on this page](#messages-on-this-page)
 
 ## What Studio is
@@ -44,12 +48,50 @@ Before the first scan with real hardware you also need to:
 - flash the control board's firmware: see section 2 of [software/README.md](../../software/README.md) and [firmware/README.md](../../firmware/README.md);
 - plug in the stereo camera and the control board, and check the laser kill toggle on the back cover (section 3 of the software guide).
 
-A trial Windows build also exists: a folder with `ohs.exe` and everything it needs, so no Python installation is required. It is made with `software/packaging/build_exe.py`. It has no installer yet.
+## The Windows program (ohs.exe)
+
+There is also a trial Windows build: a folder with `ohs.exe` and everything it needs, so the computer that runs it needs no Python. It has no installer yet, and it is not signed.
+
+To build it (on a Windows computer with the source install above):
+
+1. Build the app's pages first: `npm run build` in `software/ui`.
+2. Install PyInstaller in the engine's environment: `pip install pyinstaller`.
+3. In `software`, run `python packaging/build_exe.py`. Add `--out DIR` to choose where it goes.
+4. The program is `packaging/out/ohs/ohs.exe` (or `DIR/ohs/ohs.exe`). Copy the whole `ohs` folder, not the exe alone.
+
+The folder is about 525 MB (526 MB in the build of 2026-11-22, [software/VALIDATION.md](../../software/VALIDATION.md), "A trial exe").
+
+`ohs.exe` works as the `ohs` command does: `ohs.exe app` starts Studio, and `ohs.exe process`, `ohs.exe bench` and the other commands work too. It uses the same settings file and the same folders as a source install (see [settings.md](settings.md#where-files-are-kept)), because they are in your home folder, not in the program's folder.
+
+## Update the app
+
+There is no update button in the app. When a message asks you to update the engine (for example **This engine has no setup wizard yet**), update both parts, the engine and the app's pages, together.
+
+From a source install:
+
+1. Close Studio.
+2. Get the new version of the repository, for example with `git pull` in the repository folder.
+3. Activate the virtual environment, and in `software` run `pip install -e .[fusion,app]` again. This installs any library the new version needs.
+4. In `software/ui` run `npm install`, then `npm run build`. This rebuilds the app's pages; the window shows the old pages until you do.
+5. Start the app again with `ohs app`.
+
+With the Windows program:
+
+1. Close Studio.
+2. Build a new `ohs` folder as described in [The Windows program](#the-windows-program-ohsexe), from the new version of the repository.
+3. Replace the old `ohs` folder with the new one.
+
+Your projects, settings and calibration are not in the program's folder, so an update keeps them.
+
+To see which version you have, look at the bottom of the sidebar (the engine's version), or at **About** on the [Settings](settings.md#about) page. `ohs --version` (or `ohs.exe --version`) prints it in a terminal.
 
 ## Start the app
 
 1. Activate the virtual environment.
-2. Run `ohs app`. Studio opens in its own window.
+2. Run `ohs app` (or `ohs.exe app`). Studio opens in its own window, titled **OpenHandScan Studio**. The terminal says where it runs, for example `OpenHandScan Studio is running at http://127.0.0.1:8765/`.
+3. To stop the app, close its window. The terminal then says `OpenHandScan Studio stopped.`
+
+If the window cannot open (for example when the window part is not installed), the app opens in your web browser instead and says so in the terminal. It then runs until you press Ctrl-C in the terminal.
 
 Useful options (all in [software/README.md](../../software/README.md), section 1, "Desktop app"):
 
@@ -57,7 +99,21 @@ Useful options (all in [software/README.md](../../software/README.md), section 1
 |---|---|
 | `ohs app --no-window --open-browser` | Uses your web browser instead of the app's window. |
 | `--port`, `--host` | Change where the engine listens. The default is `127.0.0.1:8765`. |
-| `--host 0.0.0.0` | Also serves phones and tablets on your network. There is no password, so only do this on a network you trust. |
+| `--host 0.0.0.0` | Also serves phones and tablets on your network. See [Use a phone or tablet](#use-a-phone-or-tablet). |
+
+Only one copy of the app can use a port. If another copy already runs, the new one stops with a message that the port is already in use, and asks whether Studio is already running. Open the running one, or start with `--port` and another number.
+
+## Use a phone or tablet
+
+The app's pages also work in a web browser, so a phone or tablet on your network can show them, for example as a display beside you while you scan.
+
+1. Start the app with `ohs app --host 0.0.0.0`. The terminal warns that the app can be reached from your network with no password.
+2. Find this computer's address on your network (its IP address, for example in your router or the computer's network settings).
+3. On the phone or tablet, open `http://` followed by that address and `:8765/`, for example `http://192.168.1.20:8765/` (use your own address and port). Use the number, not the computer's name: the engine accepts only `localhost` or an IP address.
+
+There is no password. Anyone on the same network can open the app and use it, so do this only on a network you trust. A file you download on the phone or tablet is saved by that device's browser.
+
+The app's design plan names this use (a phone or tablet as the scan display), but no document says how well each page works on a small screen.
 
 ## If the app cannot reach the engine
 
@@ -115,6 +171,10 @@ When the app runs in demo mode, a **Demo** badge appears at the bottom of the si
 The pictures in this guide are taken in demo mode, so they show the **Demo** badge.
 
 Demo mode is not the same as the simulator. The simulator is part of the real engine: it makes real recordings you can process. See [Try the simulator](#try-the-simulator).
+
+### Where downloaded files go
+
+Every **Download** button in the app (meshes, reports, section drawings, the calibration report, the log) saves the file as an ordinary download. In a web browser, the browser's own download setting decides where it goes, as for any other download. The app's own window is set up to allow downloads, but neither the code nor the documents say whether it asks where to save or which folder it uses; look for the file in your usual download folder, and if it is not there, use the app in a web browser (`ohs app --no-window --open-browser`) for downloads.
 
 ## The Home page
 
@@ -188,11 +248,30 @@ The setup card on Home and the **About** box on the [Settings](settings.md#about
   - Tracking holds flat, plain parts less well (the app warns when it may have slid).
   - Making the mesh takes longer.
 
+What those words mean:
+
+- The **confidence map** says, for each point of the mesh, how sure the scan is of it. The viewer can colour the mesh by it. See [viewer.md](viewer.md#confidence).
+- The **Scan check** tests a finished mesh against a tolerance you choose and shows the areas that miss it. See [viewer.md](viewer.md#is-it-good-the-scan-check).
+- **Thin walls and edges** is a setting that keeps sheet metal, ribs and edges from coming out too thick. See [settings.md](settings.md#making-the-mesh).
+
 ![The setup card on a computer without a graphics card, with the list of limits](images/getting-started-no-graphics-card.png)
 
 *The setup card on a computer without a graphics card.*
 
-On simulated scans, the camera path without a graphics card is clearly weaker, most of all on flat, thin and plain parts, and making the mesh is slow. Use a computer with a graphics card if you can. How to turn the graphics card off on purpose is in [settings.md](settings.md#where-files-are-kept).
+On simulated scans, the camera path without a graphics card is clearly weaker, most of all on flat, thin and plain parts, and making the mesh is slow. Use a computer with a graphics card if you can. How to turn the graphics card off on purpose is in [settings.md](settings.md#settings-on-other-pages).
+
+## Disk space and memory
+
+**Disk.** Scanning writes every camera frame to disk, so recordings are large. Measured on simulated recordings with 1280 × 800 pictures per camera at 30 frames a second ([software/VALIDATION.md](../../software/VALIDATION.md), "What a scan takes on disk"):
+
+- a recording takes about **36 MB for each second** of scanning, about 2.1 GB a minute;
+- the recording is about **80 %** of a scan's folder; the mesh, the stages and the undo history make up the rest.
+
+So 30 seconds of scanning make a recording of about 1.1 GB and a scan folder of about 1.3 GB. Recordings at another picture size or frame rate were not measured. The project page shows how much space each project takes, and how to free some: see [projects.md](projects.md).
+
+If the disk cannot keep up during a scan, the Scan page says **Saving is behind** (see [scanning.md](scanning.md#messages-on-this-page)).
+
+**Memory.** No minimum is stated. The one figure the app gives is in its thin-parts hint: scans made at a mesh detail of 0.5 mm, with 3.34 to 6.4 million triangles, took 7 to 11.9 GB of memory and 2.2 to 3 GB of the graphics card's shared memory. That was measured on simulated scans, on a mini PC with built-in graphics and 20 GB of memory. The memory a scan at the standard mesh detail (1 mm) needs is not stated. Making only the thin walls finer needs no more memory than the scan's mesh took, but about 7.8 MB of free disk for each frame while the mesh is made. See [make-mesh.md](make-mesh.md).
 
 ## Messages on this page
 
@@ -207,5 +286,10 @@ On simulated scans, the camera path without a graphics card is clearly weaker, m
 | **Couldn't start the simulator** | The simulator could not connect. | Read the reason in the message and try again from the Device page. |
 | **This computer: … Scans still work, with these limits:** | No graphics card is in use. | See [What this computer can do](#what-this-computer-can-do). |
 | **Setup: no calibration yet** (on the Setup item) | A device is connected but has no calibration. | Run the setup wizard. See [setup.md](setup.md). |
+| `port 8765 on 127.0.0.1 is already in use: is OpenHandScan Studio already running?` (terminal) | Another program, often another copy of Studio, uses the port. | Use the running copy at the address shown, or start with `--port` and another number. |
+| `the app window could not open (…): opening the app in your browser instead` (terminal) | The app's window could not start. | Use the app in the browser; press Ctrl-C in the terminal to stop it. |
+| **The backend is running, but the user interface has not been built yet.** (in the window) | The app's pages were never built. | In `software/ui` run `npm install` and `npm run build`, then reload the page. |
+| `warning: the app is reachable from your network (no password)` (terminal) | You started with `--host 0.0.0.0`. | Only do this on a network you trust. See [Use a phone or tablet](#use-a-phone-or-tablet). |
+| **This engine has no setup wizard yet** and other messages asking you to update | The engine is older than the app's pages. | See [Update the app](#update-the-app). |
 
 Next: [set up and calibrate the scanner](setup.md), or [start scanning](scanning.md) with the simulator. Words you do not know are in the [glossary](glossary.md).

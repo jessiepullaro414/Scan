@@ -225,11 +225,19 @@ The fitted shapes' numbers and names are drawn on the picture. A report takes up
 
 ## Download the scan
 
+> To get from a scan to a print, a mesh for CAD or a STEP file step by step (cleaning, closing, simplifying, the part's axes, which file to choose), see [From the mesh to STL and STEP](to-cad.md). This section is the short list of buttons.
+
 ![The Export group with the Download panel, For CAD and the Report](images/viewer-downloads.png)
 
 *Export: the mesh files, the files for CAD and the report.*
 
 Open **Export**. The mesh files are under **Download**, then come **For CAD** and **Report**. Units are always mm.
+
+Three lines in the group help you choose:
+
+- **For CAD** starts with: **The shapes you fitted and saved (planes, cylinders, holes and their axes), as exact geometry to model against. Not the scanned surface: for that, use STL.**
+- Under the mesh buttons, a line says that **STL** and **PLY** are along the scan's axes, and how to get the part upright at its own origin: **Set the part's axes…** under **Measure** (save a fitted plane first). See [Set the part's axes](measuring.md#set-the-parts-axes).
+- When the mesh is not closed, a line says: **For a 3D print the mesh must be closed: use “Make it watertight” under Holes on the Edit mesh page.**, with **Open Edit mesh**.
 
 | Button | File | Use it for |
 |---|---|---|

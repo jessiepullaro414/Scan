@@ -151,6 +151,28 @@ The values in the Preset box:
 | **Quality**, **Recipe after meshing**, **Tolerance** | Shown when the preset names them or you changed them. Tolerance is what the Scan check starts with (see [measuring.md](measuring.md)). |
 
 Each value says where it comes from: **From the preset**, **As in General**, or **Changed by hand from ...**. **Preset's value** puts a changed value back.
+
+### Your own presets
+
+The preset list can also show presets of your own, after the two built-in ones. Their card reads their description, or **Your own preset.** when they have none. No page of the app creates or deletes one: the app only lists them. They are JSON files in the `presets` folder of the app's data folder (by default `~/.ohs/studio/presets`; see [settings.md](settings.md#where-files-are-kept)). This is for people comfortable editing files.
+
+A preset file, as the engine reads it:
+
+| In the file | What it must be |
+|---|---|
+| File name | `<id>.json`. The id uses small letters, digits and hyphens, starts with a letter or digit, is at most 64 characters, and is not `general` or `thin-sheet-small-parts`. |
+| `"id"` | The same id as the file name. A file whose `"id"` differs is not listed. |
+| `"name"` | The name shown in the list. |
+| `"description"` | Optional: the line its card shows. |
+| `"values"` | Any of: `"mode"` (`"markerless"` or `"markers"`), `"quality"` (`"standard"`, `"best"` or `"preview"`), `"voxel_mm"` (the mesh detail, 0.25 to 10), `"thin_walls"` (`"auto"`, `"on"` or `"off"`), `"recipe"` (a recipe's id), `"check_tolerance_mm"` (above 0, at most 100). A value it does not name is General's. |
+
+For example, a file `fine-castings.json`:
+
+```json
+{ "id": "fine-castings", "name": "Fine castings", "description": "Mesh detail 0.75 mm.", "values": { "voxel_mm": 0.75 } }
+```
+
+If a value in the file is not one the app takes, the preset is still listed but acts as General. If you delete a preset's file, scans that carry it are made as General from then on, and the Preset box says **This scan's preset is no longer in the app, so the scan is made as General.**
 ## If thin walls are found
 
 After Make mesh the engine looks at the finished mesh for thin walls seen from both sides. When it finds them, the viewer's **Processing report** panel (in the **Is it good?** group) shows a hint titled **Thin walls found**. It says where the walls are, how thick they read and how thick they probably are, what a finer mesh would change, and what it would cost in time, triangles and memory, all as measured on simulated scans.

@@ -19,6 +19,7 @@ import { Button } from "../../components/ui/Button";
 import { Switch } from "../../components/ui/Form";
 import { Tooltip } from "../../components/ui/Popover";
 import { downloadFile } from "../../lib/download";
+import { CAD_FILES_LINE } from "../../lib/downloads";
 import { CAD_MEASURED_HELP, CAD_OUTLINE_HELP, cadDownloadName, cadLine, cadMoveLines, cadNominalLine, cadUnavailable, outlineCost } from "./cadExport";
 
 type Summaries = Record<CadBoundary, CadSummary | null>;
@@ -70,7 +71,8 @@ export function CadDownload({ pid, sid, stem, kept, hasMesh }: { pid: string; si
 
   return (
     <div className="mt-3 border-t border-line pt-3" aria-label="For CAD">
-      <div className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-subtle">For CAD</div>
+      <div className="mb-1 text-[11px] font-semibold uppercase tracking-wider text-subtle">For CAD</div>
+      <p className="mb-2 text-[11.5px] leading-4 text-subtle">{CAD_FILES_LINE}</p>
       <div className="grid grid-cols-2 gap-2">
         <Button size="sm" icon={Download} disabled={!!why} onClick={() => get("fits.step")} title={why ?? `The saved fitted shapes as a STEP file, in mm${where}`}>
           STEP

@@ -940,3 +940,21 @@ flow also changes the guide's page and picture.
   the code; perhaps keyboard focus); the "Mesh ready" notice sits on top of an open Jobs panel;
   once a job's step line read "Building the surface" while its time-left line said "(now:
   Straighten)".
+- From the page on STL and STEP (2026-11-23): there is no single way to close the outer edge
+  for a print ("All holes" leaves it out; one has to type a size at least the edge's length);
+  "Open Edit mesh" in the viewer's print line lands at the top of the page, not on Holes; with
+  the top face as Primary the part's Z points into the part, so the STL along the part's axes
+  comes in upside down (Flip Z exists); the demo's "Make it watertight" never closes the outer
+  edge, and its Simplify step does not say how far the surface moved.
+- Settings, Advanced: "Read the file again" does not read the file (the engine holds what it
+  read at start; a hand edit needs a restart): "Show the settings again", with that said. The
+  row "Source" is the raw key and shows "auto" without a file; "The app's engine" is a title
+  for a section the engine never sends.
+
+### [x] G3. The Export group says what its files are (2026-11-23)
+The owner missed the way from a mesh to STL and STEP in the guide; the app did not say it
+either. Three lines in the viewer's Export group: under "For CAD", that the files are the
+shapes fitted and saved, as exact geometry, and not the scanned surface (for that, STL); with
+the mesh downloads, that STL and PLY are along the scan's axes and how to get the part upright
+at its own origin; and, when the mesh is open, that a 3D print needs a closed mesh and where
+"Make it watertight" is. The guide has the page `docs/guide/to-cad.md`.

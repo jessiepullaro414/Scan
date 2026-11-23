@@ -17,7 +17,7 @@ On this page:
 - [After you stop](#after-you-stop)
 - [Hotkeys and the trigger](#hotkeys-and-the-trigger)
 - [The lasers and dots](#the-lasers-and-dots)
-- [A second pass](#a-second-pass)
+- [A second pass](#a-second-pass) and [if the pass stops part-way](#if-the-pass-stops-part-way)
 - [Tags for large plain parts](#tags-for-large-plain-parts)
 - [Laser safety](#laser-safety)
 - [Messages on this page](#messages-on-this-page)
@@ -39,6 +39,9 @@ The surface:
 
 - Glossy paint, dark plastic, chrome and glass reflect or swallow the dots and the laser lines. Spray them with a matte scanning spray, for example AESUB Blue, which evaporates within hours.
 - Avoid glare on the part.
+- If the camera pictures stay too bright or too dark, the camera's exposure and gain can be set in the settings file (`[camera] exposure` and `gain`; by default the camera sets them itself). The app shows them under **Advanced** on the Settings page but does not change them; see [settings.md](settings.md#advanced-what-the-settings-file-says) and section 10 of [software/README.md](../../software/README.md) for the units.
+
+The disk: a recording takes about 36 MB for each second of scanning (measured at 30 frames a second). Check you have room before a long scan: see [getting-started.md](getting-started.md#disk-space-and-memory).
 
 For a large, smooth area with little shape (a door, a hood, a roof), use tags. See [Tags for large plain parts](#tags-for-large-plain-parts).
 
@@ -57,7 +60,7 @@ Before a scan, the right panel has:
   - **Project**: the project the scan goes into. **New** creates one.
   - **Tracking mode**: **Markerless** tracks the shape itself, best for parts with curves and edges. **Markers** uses AprilTag stickers to keep big flat panels from drifting.
   - **Scan name**: optional, shown in the project's scan list.
-- **What are you scanning?**: a preset, a named set of settings for the kind of part. **General** keeps every setting as it is. **Thin sheet metal and small parts** makes the mesh detail finer (0.5 mm instead of 1 mm) so thin walls come out closer to their real thickness; making the mesh takes about twice as long. Hover over a preset to read what it changes. Presets are described in [make-mesh.md](make-mesh.md).
+- **What are you scanning?**: a preset, a named set of settings for the kind of part. **General** keeps every setting as it is. **Thin sheet metal and small parts** makes the mesh detail finer (0.5 mm instead of 1 mm; the **mesh detail** is the size of the smallest cell the surface is built from; smaller is finer; see [make-mesh.md](make-mesh.md#words-used-on-this-page)) so thin walls come out closer to their real thickness; making the mesh takes about twice as long. Hover over a preset to read what it changes. Presets are described in [make-mesh.md](make-mesh.md).
 - **Lasers and dots** (scanner only): see [The lasers and dots](#the-lasers-and-dots).
 
 When the calibration status is not valid, a line above the view says so with a button to the Setup step. It warns; it does not block the scan. See [setup.md](setup.md#the-calibration-status-after-connecting).
@@ -84,6 +87,17 @@ While scanning, the control bar at the bottom has three buttons:
 | **Rewind 2 s** | R | Cuts the last 2 seconds from the live model. Use it after a bad moment, for example a jump. The raw recording keeps those frames, marked as cut, and the mesh is made without them. |
 | **Pause** / **Resume** | Space | Pauses the scan. While paused, frames are not recorded and the lasers and dots are off. |
 | **Stop** | Esc twice | Stops and saves the recording. |
+
+### More about rewind
+
+- Each press cuts the 2 seconds before the newest recorded frame. Pressing again straight away, with no new frames since, cuts the same span again: it does not go back further. Pressing again after scanning on cuts the last 2 seconds of the new frames.
+- While paused, no frames are recorded, so a rewind cuts the 2 seconds before you paused. Time spent paused within those 2 seconds counts towards them.
+- While the live model is rebuilt, the badge says **Not tracking** for a moment. The rebuilt model is coarser until new frames fill it in.
+- Tracking then starts again from the last kept position, so move back near it. If tracking is lost, the dashed scanner shows where.
+- In marker mode the map of the tags is not rewound.
+- A message says **Rewound 2 s**. The cut frames stay in the recording, marked as cut; making the mesh skips them.
+
+### Stop with Esc
 
 Esc also closes things, so one press only shows **Press Esc again to stop**. A second press within a second stops. The **Stop** button stops at once.
 
@@ -225,7 +239,7 @@ Making the mesh is described in [make-mesh.md](make-mesh.md).
 | F | Frame the model. |
 | ? | Show all keyboard shortcuts. |
 
-The keyboard card at the bottom left lists the main keys; the keyboard button shows it again if you hid it. Keys do not work while you type in a text field.
+The keyboard card at the bottom left lists the main keys; the keyboard button shows it again if you hid it. Keys do not work while you type in a text field. Every key and mouse action of the app is listed in [keys.md](keys.md).
 
 The scanner's trigger:
 
@@ -271,7 +285,21 @@ After **Stop** the app runs three steps on its own: **Make the pass's mesh**, **
 
 A merge adds coverage: it fills in surface the first scan did not measure well enough. It does not make the surface the first scan already saw well more accurate: where both scans saw a place, the two are averaged.
 
-If the alignment is not accepted, the card says **Second pass not merged: the alignment was not accepted**. Press **Open the Align page** to align by hand (see [align-merge.md](align-merge.md)), or **Try aligning again**. To scan normally instead, press **Make an ordinary scan instead**.
+### If the pass stops part-way
+
+The card's title says where the pass is. Each step is an ordinary job, shown under **Jobs** too, and can be cancelled from the card's progress bar: that stops the pass's steps there, and the pass is kept as its own scan. Whatever happens, the first scan is not changed, and the pass stays in the project as a scan of its own.
+
+| Title on the card | What it means | What to do |
+|---|---|---|
+| **Second pass: waiting for Stop** | You are still scanning the pass. | Press **Stop** when it is done. |
+| **Second pass: making its mesh…** / **aligning it to the first scan…** / **merging the two…** | A step is running. | Wait, or cancel it. |
+| **Second pass merged** | Done: a new merged scan is in the project. | **Open the merged scan**. |
+| **Second pass not merged: the alignment was not accepted** | The pass could not be lined up with the first scan well enough. Nothing was merged. | **Open the Align page** to align by hand with matching points (see [align-merge.md](align-merge.md)), or **Try aligning again** (it aligns again from the shape, by the same rule). |
+| **Second pass aligned, not merged** | The pass was aligned, but the merge cannot be made, for example because the first scan's recording was removed to free space, a scan it was merged from is gone, or more than 8 scans would be merged. The card's line gives the reason. | **Continue** to try the merge again once the cause is gone, or **Open the Align page**. |
+| **Second pass stopped: a step failed** | A step failed. The card's line gives the engine's reason. | **Continue** runs the pass on from where it stopped. |
+| **Second pass stopped: cancelled** | You cancelled a step. | **Continue** runs the pass on from where it stopped: the mesh if the pass has none yet, else the alignment. |
+
+On a stopped card, **Open the pass** opens the pass's own scan in the viewer, and **New scan** clears the page for an ordinary scan. To scan the areas once more, start a new pass from the first scan's Scan check.
 
 ## Tags for large plain parts
 
@@ -318,5 +346,10 @@ The full rules are in [software/README.md](../../software/README.md), section 11
 | **Making the mesh failed** | The mesh job failed. The raw recording is kept. | Press **Try again**. |
 | **Making the mesh was cancelled** | The mesh job was cancelled. The raw recording is kept. | Press **Make mesh** any time. |
 | **Couldn't start the scan** / **Couldn't stop the scan** | The engine refused the request. | Read the reason in the message and try again. |
+| **This recording has no calibration, so it cannot be scanned from.** | You started a scan during a replay of a recording without a calibration. | Replay a recording made with a calibration, or connect the scanner or the simulator. |
+| **Couldn't rewind** | The rewind failed, for example **The live preview is not running, so there is nothing to rewind.** | Stop the scan: the recording is complete, and its mesh can be made. |
+| **Second pass stopped: …** / **Second pass aligned, not merged** / **Second pass not merged: …** | The pass's steps stopped part-way. | See [If the pass stops part-way](#if-the-pass-stops-part-way). |
+| **Couldn't continue the pass** | **Continue** or **Try aligning again** was refused. | Read the reason in the message. |
+| **Couldn't compare before and after** | The merged scan was made, but the comparison could not be read. | Open the merged scan; the merge itself is done. |
 
 Next: [make the mesh](make-mesh.md), then [view and measure it](viewer.md). For problems not listed here, see [troubleshooting.md](troubleshooting.md).

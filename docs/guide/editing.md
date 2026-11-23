@@ -27,7 +27,7 @@ To open it, click **Edit mesh…** on a scan's row on the project page (see [pro
 
 - **On the left**: the **Stages** that make the mesh (see [make-mesh.md](make-mesh.md#run-the-stages-one-at-a-time)), the **Edit the mesh** panel with its four tabs, and the **History**.
 - **In the middle**: the 3D view. At the top are the view options; on the left edge, the selection tools.
-- **On the right** (in a window at least 1280 pixels wide; under the history otherwise): the **Mesh** numbers, the **Scan check**, **Download** and **Recipes**.
+- **On the right** (in a window at least 1280 pixels wide; under the history otherwise): the **Mesh** numbers, the **Scan check** (see [below](#the-scan-check-on-this-page)), **Download** and **Recipes**.
 
 ![The Edit mesh page of a scan with a mesh, in a wide window](images/editing-page-overview.png)
 
@@ -48,6 +48,12 @@ The view options:
 | Compare: **Now**, **Before**, **Both** | K | After a change: the current mesh, the mesh before the last change, or the previous mesh as an orange ghost over the current one. |
 
 To move the view: orbit with a left drag (a right drag while selecting), pan with a right drag (the middle button while selecting), zoom with the wheel. Press **?** for the list of keyboard shortcuts.
+
+### The Scan check on this page
+
+The **Scan check** panel here is the same as the viewer's: it tells you how much of the surface was measured finely enough for your part's tolerance, and which areas to scan again (**Scan these areas again…**). How to read it is in [viewer.md](viewer.md#is-it-good-the-scan-check).
+
+On the Edit mesh page it checks the mesh on screen, with your edits. Once you have clicked **Check the scan**, it checks again by itself when the mesh changes (an edit, an undo or a redo) or when you change the tolerance. If the scan's preset names a tolerance, the panel starts with it (see [make-mesh.md](make-mesh.md#presets-and-mesh-detail)). When the mesh has open holes, the panel says so under its list (they are not in it) and offers **Show them on the mesh**.
 
 ## How edits work
 

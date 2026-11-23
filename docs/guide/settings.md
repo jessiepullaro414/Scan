@@ -12,6 +12,7 @@ On this page:
 - [Line lasers](#line-lasers)
 - [About](#about)
 - [Advanced: what the settings file says](#advanced-what-the-settings-file-says)
+- [Change the settings file](#change-the-settings-file)
 - [All settings at a glance](#all-settings-at-a-glance)
 - [Settings on other pages](#settings-on-other-pages)
 - [Where files are kept](#where-files-are-kept)
@@ -100,14 +101,32 @@ Open this box to see everything in the settings file, read only, with plain labe
 | Button | What it does |
 |---|---|
 | **Open the settings folder** | Opens the folder of the settings file. |
-| **Read the file again** | Reads the file again after you edited it. |
+| **Read the file again** | Asks the engine again for the settings it is using, and shows them. |
+
+### Change the settings file
+
+The engine reads the settings file once, when the app starts. The engine's code does not read it again while it runs, so **Read the file again** shows the settings the running engine holds, not your new edits:
+
+- A setting of the file that you change in the app (**Thin walls and edges** and **Line lasers** on this page, the camera and **Swap left and right** in Setup) is saved to the file and used by the running engine at once, from the next scan or mesh on. The camera choice and **Swap left and right** take effect when the camera connects again.
+- A setting you change by editing the file takes effect only after you restart the app: close its window (or press Ctrl-C in the terminal) and run `ohs app` again.
+
+To edit the file:
+
+1. Close Studio.
+2. Open the file (**Open the settings folder** shows where it is; by default `~/.ohs/config.toml`) in a text editor. If there is none yet, `ohs config --init` writes one with every setting in it, commented.
+3. Change the value and save the file.
+4. Start the app again.
+
+A key the engine does not know is ignored with a warning; a value of the wrong type stops it with an error that names the key (see section 4 of [software/README.md](../../software/README.md)). Under **Advanced**, the row **Warnings** lists what the engine found wrong in the file when it started.
+
+### The sections
 
 The sections and their main values, with the defaults:
 
 | Section in the app | In the file | Main values (default) |
 |---|---|---|
-| **Folders and files** | `[paths]`, and where the file is | **Projects folder** (`~/OpenHandScan/projects`), **Settings file** (`~/.ohs/config.toml`): the file these values are read from |
-| **Folders** | `[paths]` | **Calibration file** (`~/.ohs/calibration.json`), **Recordings folder** (`~/OpenHandScan/scans`): where calibration recordings and command-line scans go |
+| **Folders and files** | not a section of the file | **Source**: the settings file the engine read (when there is no file and every value is its default, it shows *auto*); **Warnings**: what the engine found wrong in it. (The demo shows **Projects folder** and **Settings file** here instead.) |
+| **Folders** | `[paths]` | **Calibration file** (`~/.ohs/calibration.json`), **Recordings folder** (`~/OpenHandScan/scans`): where calibration recordings and command-line scans go; with the real engine also **Projects folder** (`~/OpenHandScan/projects`), the data folder (`~/.ohs/studio`) and the printables folder (`~/OpenHandScan/printables`) |
 | **Cameras** | `[camera]` | which camera (counted from 0), width and height (2560 × 800), **Camera format** (MJPG), exposure and gain (the camera's own), **Swap left and right** (off) |
 | **Control board (Pico or ESP32)** | `[pico]` | serial port (automatic), **Motion sensor (IMU) rate** (416 Hz) |
 | **Lasers and dots** | `[emitters]` | **Dots in markers mode** (25 %), and the levels of the vertical laser, horizontal laser and dots for each use |
@@ -116,6 +135,10 @@ The sections and their main values, with the defaults:
 | **Calibration board** | `[board]` | **Squares across** (11), **Squares down** (8), **Square size** (20 mm), **Marker size** (15 mm), paper (letter) |
 | **Markers** | `[markers]` | **Tag size** (20 mm): the side of the black square of the printed AprilTags |
 | **Line lasers** | `[lasers]` | **Line lasers** (vertical, horizontal), **Each laser has its own wire** (on), brightness |
+| **App** | `[app]` | where the engine listens: host (`127.0.0.1`) and port (8765). See [getting-started.md](getting-started.md#start-the-app). |
+| **Compute** | `[compute]` | device (`auto`): `auto` uses a graphics card when there is one, `cpu` turns it off, part of a card's name picks one. See [Settings on other pages](#settings-on-other-pages). |
+
+The **App** and **Compute** sections come from the real engine; the demo does not show them.
 
 The full list of settings, with what each one does, is in [software/README.md](../../software/README.md), section 4, "Settings". `ohs config --init` writes a settings file with every setting in it, commented.
 
@@ -139,6 +162,12 @@ The full list of settings, with what each one does, is in [software/README.md](.
 | **Capture click** | Setup, calibration capture | Plays a click on each capture. | On |
 | **Tracking mode** | Scan page, Scan setup | **Markerless** or **Markers**. The page remembers your last choice. | Markerless |
 | **What are you scanning?** | Scan page | The preset for the scan. | General |
+| **Preset** | Edit mesh page, Preset box | Changes a scan's preset after scanning. | The preset it was scanned with |
+| **Mesh detail** | Edit mesh page, Preset box (per scan) | The size of the smallest cell the surface is built from. Set here only. | Automatic: 1 mm |
+| **Thin walls and edges** (per scan) | Edit mesh page, Preset box | This scan's own choice, in place of the Settings page's. | As on the Settings page |
+| **Quality** | Edit mesh page, Preset box (when the preset names it or you change it) | Standard, Best or Preview for the next Make mesh. | Standard |
+| **Recipe after meshing** | Edit mesh page, Preset box (when named or changed) | The recipe Make mesh runs after it. | Default |
+| **Tolerance** | Edit mesh page, Preset box (when named or changed) | What the Scan check starts with. | The Scan check's own |
 | **Lasers and dots** | Device page, Scan page | The levels of the vertical laser, horizontal laser and dots, on the scanner only. | |
 
 Some of these are described on their own pages: [setup.md](setup.md), [scanning.md](scanning.md).
@@ -148,6 +177,7 @@ Some of these are described on their own pages: [setup.md](setup.md), [scanning.
 - **Graphics card on or off.** The app uses a graphics card when it finds one. To turn it off, set `device = "cpu"` in the `[compute]` section of the settings file; part of a card's name (for example `"RTX"`) picks one of several. The `OHS_COMPUTE` environment variable overrides it for one run. The **About** box then says why no graphics card is in use. See [software/README.md](../../software/README.md), sections 4 and 8.
 - **Where the engine listens.** `[app]` `host` and `port` (default `127.0.0.1` and `8765`), or `ohs app --host` and `--port`. See [getting-started.md](getting-started.md#start-the-app).
 - **Folders.** `[paths]` `projects_dir`, `data_dir`, `printables_dir`, `scans_dir` and `calibration`. See the next section.
+- **Per scan: the Preset box.** Each scan carries its own values in the **Preset** box on the Edit mesh page: **Mesh detail** and **Thin walls and edges** always, and **Quality**, **Recipe after meshing** and **Tolerance** when the preset names them or you changed them. Each is marked as from the preset, as in General, or changed by hand. The next Make mesh, "Follow the camera" and "Build the surface" use them. Mesh detail is set there only, not on the Settings page. A value a preset does not name is General's, which is the app's own setting. See [make-mesh.md](make-mesh.md#presets-and-mesh-detail).
 
 ## Where files are kept
 
@@ -174,6 +204,11 @@ Some of these are described on their own pages: [setup.md](setup.md), [scanning.
 | **In the demo, no folder opens** | You are in demo mode. | With the app on your computer, the folder opens in your file manager. |
 | **This computer: … Scans still work, with these limits:** | No graphics card is in use. | See [getting-started.md](getting-started.md#what-this-computer-can-do). |
 | **Custom** (greyed out) under Line lasers | The settings file lists its own lasers. | Pick **Two (standard)** or **Four** to replace the list, or leave it. |
+| **Meshing settings saved: the next mesh uses them.** | **Thin walls and edges** was saved. | Nothing. |
+| **Line lasers saved: N lasers.** (with **Calibrate the lasers (the Lasers step in Setup) for the new ones.**) | The line lasers were saved; some have no calibration yet. | Run the Lasers step in Setup. |
+| **Laser wiring saved: …** / **Laser brightness saved.** | The wiring switch or a brightness was saved. | Nothing. |
+| **A scan is running.** (with **Stop the scan before changing the line lasers.**) | The line lasers or the camera cannot change during a scan. | Stop the scan, then change it. |
+| **The … could not be saved to the settings file …** | The engine could not write the settings file. | Check that no other program has the file open and that it is not read-only. |
 | **Live link: Offline** | The window has lost its live connection to the engine. | See [getting-started.md](getting-started.md#if-the-app-cannot-reach-the-engine). |
 
 For problems not listed here, see [troubleshooting.md](troubleshooting.md).

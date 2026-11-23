@@ -10,6 +10,7 @@ On this page:
 - [Making the mesh](#making-the-mesh)
 - [The mesh does not look right](#the-mesh-does-not-look-right)
 - [Measurements that read small, large or thick](#measurements-that-read-small-large-or-thick)
+- [Files for a printer or for CAD](#files-for-a-printer-or-for-cad)
 - [Long plain parts](#long-plain-parts)
 - [Aligning and merging](#aligning-and-merging)
 - [Files and disk space](#files-and-disk-space)
@@ -27,12 +28,17 @@ The app warns, it does not block: a warning tells you what may be wrong and lets
 | The top bar says **No device** | No scanner or simulator is connected. | [Step 1: Connect](setup.md#step-1-connect), or [Try the simulator](getting-started.md#try-the-simulator) |
 | The cameras are found but not the control board, or the other way round | A cable, the wrong camera chosen, or the control board's firmware. | [Step 1: Connect](setup.md#step-1-connect) and its messages |
 | The self-test reports a failed check | Wiring, a camera, a laser or the trigger. | [Step 2: Self-test](setup.md#step-2-self-test) |
+| **The 3D view couldn't start** | "WebGL is unavailable or the graphics driver reset." The 3D view needs the graphics driver. | Update the graphics driver, or close other 3D apps, then press **Try again**. |
+| **Something went wrong on this page** | A page of the app failed. "Your scans are safe on disk." | Press **Try again**, or **Reload Studio**. If it happens again, [report it](#report-a-problem) with the log. |
+| **This page doesn't exist** | The address is wrong, or it belongs to a project or scan that is gone. | Go back to Home with the sidebar. |
+| A page says it needs a newer engine (**This engine has no Edit mesh page yet**, or the wizard needs "engine 0.2 or newer") | The app's pages are newer than the engine that is running. | [Update the app](getting-started.md#update-the-app), then start it again. |
 | A feature is greyed out and names the graphics card | This computer has no graphics card the engine can use. Scans still work, with limits. | [What this computer can do](getting-started.md#what-this-computer-can-do), [Without a graphics card](make-mesh.md#without-a-graphics-card) |
 
 ## Calibration
 
 | What you see | What it usually means | What to do |
 |---|---|---|
+| A new calibration is worse than the one before | The app keeps one backup of the previous calibration file. | [Go back to the previous calibration](setup.md#go-back-to-the-previous-calibration) |
 | A calibration result that is not good | Too few views, views too alike, or a print of the wrong size. | [Read a calibration result](setup.md#read-a-calibration-result) |
 | The app says the calibration needs a check after you connect | The cameras seem to have moved since the calibration (a knock, heat). | [The calibration status after connecting](setup.md#the-calibration-status-after-connecting), then [Step 7: Calibration check](setup.md#step-7-calibration-check) |
 | **Show the board to the camera** stays on the capture screen | No board is found in the picture. | [The capture screen](setup.md#the-capture-screen) |
@@ -59,6 +65,7 @@ The app warns, it does not block: a warning tells you what may be wrong and lets
 | **Thin walls found** | The part has walls thinner than the mesh detail can show well. | [If thin walls are found](make-mesh.md#if-thin-walls-are-found) |
 | A stage says **Skipped** | Usually nothing was wrong: there was nothing for that stage to correct. | [Other notes after Make mesh](make-mesh.md#other-notes-after-make-mesh) |
 | Making the mesh takes very long | Best quality, a long scan, fine mesh detail, or no graphics card. | [How long it takes](make-mesh.md#how-long-it-takes), [Choose the quality](make-mesh.md#choose-the-quality) |
+| A second pass stopped before it was merged | A step failed or was cancelled. The pass is kept as its own scan, and the first scan is not changed. | [If the pass stops part-way](scanning.md#if-the-pass-stops-part-way) |
 | A job seems stuck | It may still be running. | [The Jobs panel](projects.md#the-jobs-panel): see its progress, or cancel it. |
 
 ## The mesh does not look right
@@ -86,6 +93,17 @@ The ± after a value is how much it scatters from scan to scan. It is not the ac
 
 When a size matters, check it another way (calipers, a gauge) before you rely on the scan.
 
+## Files for a printer or for CAD
+
+| What you see | What it usually means | What to do |
+|---|---|---|
+| The STEP file holds only a few faces, not the whole part | The app writes the shapes you fitted and kept, as exact geometry. It does not turn the scanned surface into a STEP solid. | [What the app does and does not do](to-cad.md#what-the-app-does-and-does-not-do): use the STL for the surface and the STEP file for the exact faces and axes. |
+| **STEP** and **FreeCAD macro** are greyed out | No fitted shape is kept yet. | [Make a STEP file of the fitted shapes](to-cad.md#make-a-step-file-of-the-fitted-shapes) |
+| The STL opens tilted, or far from the origin | The plain **STL** is along the scan's own axes. | Set the part's axes and use **STL along the part's axes**: [Make a good STL](to-cad.md#make-a-good-stl). |
+| The slicer says the mesh is open or not manifold | The mesh has holes or an open outer edge. | **Make it watertight** on the Edit mesh page: [Fill holes](editing.md#fill-holes). The closed-in surface is made up, not measured. |
+| The other program asks for the units, or the part comes in 25 times too big or too small | STL carries no units. The app's files are in millimetres. | Choose millimetres when the other program asks. |
+| The STL file is very large | The mesh has many triangles. | [Simplify](editing.md#simplify) before you download. |
+
 ## Long plain parts
 
 On a long part with nothing along its length to hold on to (a plain panel, a sill, a bumper), tracking can slide along the part without any sign of it.
@@ -109,8 +127,9 @@ On a long part with nothing along its length to hold on to (a plain panel, a sil
 |---|---|
 | The disk is filling up | [See how much space a project takes](projects.md#see-how-much-space-a-project-takes), [Free space](projects.md#free-space) |
 | A scan or a project was deleted by mistake | [Restore from the trash, or empty it](projects.md#restore-from-the-trash-or-empty-it) |
+| You cannot find a file you downloaded | Files are saved as ordinary downloads; where they land depends on the window or browser. | [Where downloaded files go](getting-started.md#where-downloaded-files-go) |
 | You cannot find a mesh file | [Download a mesh](projects.md#download-a-mesh), [Where a project lives on disk](projects.md#where-a-project-lives-on-disk) |
-| You want to move your projects to another folder or disk | [Where files are kept](settings.md#where-files-are-kept) |
+| You want to move your projects to another folder or disk, or back them up | [Move or back up your projects](projects.md#move-or-back-up-your-projects) |
 
 ## Where each message is explained
 
@@ -118,6 +137,7 @@ Every page of the guide ends with a table of the messages you can meet on that p
 
 | Messages about | Table |
 |---|---|
+| Keys that do nothing | [Keys and mouse](keys.md#when-keys-work) |
 | Starting the app, the engine, the simulator | [Getting started](getting-started.md#messages-on-this-page) |
 | Connecting, the self-test, printing, calibration | [Set up and calibrate the scanner](setup.md#messages-on-this-page) |
 | Scanning and tracking | [Scanning](scanning.md#messages-on-this-page) |
