@@ -224,7 +224,7 @@ function* run<T>(g: Work<T>, a: number, b: number, message: string): Generator<W
 
 const freshStages = (): Stages => ({
   track: { state: "none", summary: null, when: null, job_id: null, quality: null, tracked_pct: null },
-  straighten: { state: "none", summary: null, when: null, job_id: null, loops: null, correction_mm: null, correction_deg: null, crossings: null },
+  straighten: { state: "none", summary: null, when: null, job_id: null, loops: null, correction_mm: null, correction_deg: null, crossings: null, tags: null },
   fuse: { state: "none", summary: null, when: null, job_id: null, voxel_mm: null },
   spacetime: { state: "none", summary: null, when: null, job_id: null, source: null, frames: null, patches: null, kept: null, covered_pct: null, moved_mm: null, device: null },
   refine: {
@@ -1018,6 +1018,7 @@ export class MockProcess {
       loops: r.loops,
       correction_mm: r.loops ? r.mm : 0,
       correction_deg: r.loops ? r.deg : 0,
+      tags: null, // the demo has no AprilTags holding the scan (ENGINE_PLAN X8 step 2)
     };
   }
 
@@ -1313,7 +1314,7 @@ export class MockProcess {
       st.straightened = straightened;
       this.trackDone(st, s, q, tr.tracked, trackWhen);
       if (str) this.straightenDone(st, str, when);
-      else st.stages.straighten = { state: "skipped", summary: "Skipped by the recipe: the camera path from “Follow the camera” is used as it is.", when, job_id: null, loops: null, correction_mm: null, correction_deg: null };
+      else st.stages.straighten = { state: "skipped", summary: "Skipped by the recipe: the camera path from “Follow the camera” is used as it is.", when, job_id: null, loops: null, correction_mm: null, correction_deg: null, tags: null };
       if (willFuse) this.fuseDone(st, voxel, base, when);
       else st.stages.fuse = freshStages().fuse;
       st.stages.spacetime = freshStages().spacetime;

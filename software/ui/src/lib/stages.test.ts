@@ -2,7 +2,7 @@
  * Checks for the Edit mesh stage cards' states (UX_PLAN R22, `npm test`): one stage "Running" at a time, and no
  * "Closed 48 loops" under "Skipped". Plain TypeScript run by Node, no framework.
  */
-import { STAGE_TITLES, jobKindLabel, stageRunning, straightenSkippedLine } from "./stages.ts";
+import { STAGE_TITLES, jobKindLabel, stageRunning, straightenDoneLine, straightenSkippedLine } from "./stages.ts";
 
 const fs = (await import(["node", "fs"].join(":"))) as { readFileSync: (u: URL, enc: "utf8") => string };
 
@@ -30,6 +30,22 @@ const panel = fs.readFileSync(new URL("../pages/process/StagesPanel.tsx", import
 check(/stageRunning\(stage\.state\)/.test(panel) && !/const running = stage\.state === "running" \|\| !!job/.test(panel), "StagesPanel reads stageRunning on the card's own state");
 check(/makingRows\(/.test(panel) && /The new mesh being made/.test(panel), "StagesPanel shows the run being built beside the stages");
 check(/straightenSkippedLine\(/.test(panel), "StagesPanel says a skipped Straighten's loops in its own words");
+
+// a done Straighten's line (ENGINE_PLAN X8 step 2): when AprilTags held the scan (`tags`), the move is said to be
+// theirs and the loops' together; without tags exactly as before
+const NB = String.fromCharCode(0x202f);
+const sd = (loops: number | null, tags: number | null | undefined, mm: number | null = 2.4, deg: number | null = null) =>
+  straightenDoneLine({ state: "done", loops, tags, correction_mm: mm, correction_deg: deg });
+check(sd(48, null) === `Closed 48 loops · moved the scan by 2.4${NB}mm`, `no tags: as before (${sd(48, null)})`);
+check(sd(1, undefined, 2.4, 0.12) === `Closed 1 loop · moved the scan by 2.4${NB}mm and 0.12°`, "an older engine without the field: as before");
+check(sd(48, 5) === `Closed 48 loops · 5 tags held the scan · moved the scan by 2.4${NB}mm`, `${sd(48, 5)}`);
+check(sd(0, 5) === `5 tags held the scan · moved the scan by 2.4${NB}mm`, `no loops, tags: ${sd(0, 5)}`);
+check(sd(0, 1) === `1 tag held the scan · moved the scan by 2.4${NB}mm`, "one tag");
+check(sd(0, null) === null && sd(null, null) === null, "no loops and no tags: the card's other line");
+check(straightenDoneLine({ state: "skipped", loops: 48, tags: null, correction_mm: 1, correction_deg: null }) === null, "only a done stage");
+check(sd(3, null, null) === "Closed 3 loops", "no move given");
+const stagesPanel = fs.readFileSync(new URL("../pages/process/StagesPanel.tsx", import.meta.url), "utf8");
+check(/straightenDoneParts\(/.test(stagesPanel), "StagesPanel uses it");
 
 // the Jobs panel names a stage's job as its card does: "Build the surface", never the old "Fuse"
 for (const id of ["track", "straighten", "fuse", "spacetime", "refine"] as const)

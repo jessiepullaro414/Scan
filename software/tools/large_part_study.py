@@ -1,4 +1,12 @@
-"""The overall size of a large part: a 1.3 m plain panel scanned in passes (ENGINE_PLAN X8, step 1).
+"""The overall size of a large part: a 1.3 m plain panel scanned in passes (ENGINE_PLAN X8, steps 1 and 2).
+
+Step 2 (tags as anchors in Straighten, ``ohs.track.tag_anchors``): the same panel and sweep with AprilTags on the table
+(:data:`TAG_LAYOUTS`, ``render --tags tags``), each recording processed twice tracked, Straighten's tags off and on
+(``process REC tracked --anchors off|on``: folders ``tracked-anchors-off`` / ``-on``), and at true poses twice (``true``,
+and ``--world-yaw 20``: the same true poses in a world turned and moved a fraction of a voxel, which shows the edge
+reading's own precision). ``measure REC`` (seed 3 only) measures the two weights the tags' fit needs. Judged by the
+sliced edges (:func:`end_edge_slice`) against the same seed's true-pose reading, the camera path's end to end and the
+passes' slide (:func:`verdict2`, the owner's stop rule).
 
     python tools/large_part_study.py budget WORK [--frames 20]        # render 20 frames of seed 0, time them
     python tools/large_part_study.py render WORK SEED [--frames N]    # one recording -> WORK/recs/s<SEED>[-n<N>]
@@ -97,16 +105,57 @@ def height(x, y):
     return -x * x / (2 * RX) - y * y / (2 * RY), -x / RX, -y / RY
 
 
-def panel_scene(seed: int = 0):
-    """The scene (module docstring)."""
-    from ohs.sim.scene import HeightField, NoiseAlbedo, Scene, _table
+#: step 2's tags on the table (fixed before rendering, NOTES.md): 25 mm tag36h11 with a 6 mm white margin; ids in
+#: the order listed. "tags": both long sides, 300 mm apart, 30 mm off the panel's edge, and five across each short end
+#: (a pass sees the side tags only on its own side, the middle pass none: the ends are what every pass sees at its
+#: turns, and what joins the passes); "oneside": the near side only, and the ends; "spaced600": the sides 600 mm
+#: apart, and the ends; "panel": on the panel itself, along its centre line and its two long edges, 300 mm apart.
+TAG_MM = 25.0
+_SIDES = [(x, y) for y in (-230.0, 230.0) for x in (-600.0, -300.0, 0.0, 300.0, 600.0)]
+_ENDS = [(x, y) for x in (-700.0, 700.0) for y in (-120.0, -60.0, 0.0, 60.0, 120.0)]
+TAG_LAYOUTS: dict[str, list[tuple[float, float]]] = {
+    "tags": _SIDES + _ENDS,
+    "oneside": [q for q in _SIDES if q[1] < 0] + _ENDS,
+    "spaced600": [q for q in _SIDES if q[0] in (-600.0, 0.0, 600.0)] + _ENDS,
+    "panel": [(x, y) for y in (-150.0, 0.0, 150.0) for x in (-450.0, -150.0, 150.0, 450.0)],
+}
+
+
+def _tag_decals(layout: str, flip_y: bool) -> list:
+    from ohs.sim.scene import Decal, apriltag_texture
+
+    out = []
+    for m, (x, y) in enumerate(TAG_LAYOUTS[layout]):
+        # the table's own frame has y the other way round (it is seen from its local -z side)
+        cy = y if flip_y else -y
+        out.append(Decal(apriltag_texture(m, TAG_MM), 10, (x, cy), angle=0.3 * m, margin_mm=TAG_MM / 4, tag_id=m, flip_y=flip_y))
+    return out
+
+
+def panel_scene(seed: int = 0, tags: str | None = None):
+    """The scene (module docstring); ``tags``: a layout of :data:`TAG_LAYOUTS` (step 2), on the table or the panel."""
+    from ohs.sim.scene import DecalAlbedo, HeightField, NoiseAlbedo, Scene, _table, marker_corners_world
 
     T = G.make_se3(np.eye(3), [0.0, 0.0, H0])
     zmin = float(height(HALF_L, HALF_W)[0])
+    paint = NoiseAlbedo(mean=0.72, contrast=0.015, scale_mm=4.0, seed=seed)
+    floor = NoiseAlbedo(mean=0.3, contrast=0.08, scale_mm=5.0, seed=seed + 1)
+    on_panel = tags == "panel"
+    decals = _tag_decals(tags, on_panel) if tags else []
     panel = HeightField(T, height, (-HALF_L, HALF_L, -HALF_W, HALF_W), (zmin, 0.0), [(-HOLE_X, 0.0, HOLE_R), (HOLE_X, 0.0, HOLE_R)],
-                        NoiseAlbedo(mean=0.72, contrast=0.015, scale_mm=4.0, seed=seed), name="panel")
-    table = _table(0.0, TABLE_HALF, NoiseAlbedo(mean=0.3, contrast=0.08, scale_mm=5.0, seed=seed + 1), name="table")
-    return Scene([table, panel], name="panel1300", target=(0.0, 0.0, AIM_Z), radius=700.0, meta={"panel_T_wo": T.tolist()})
+                        DecalAlbedo(paint, decals) if on_panel else paint, name="panel")
+    table = _table(0.0, TABLE_HALF, DecalAlbedo(floor, decals) if decals and not on_panel else floor, name="table")
+    markers = {dc.tag_id: marker_corners_world(panel if on_panel else table, dc) for dc in decals}
+    return Scene([table, panel], name="panel1300", target=(0.0, 0.0, AIM_Z), radius=700.0, markers=markers,
+                 meta={"panel_T_wo": T.tolist(), "tags": tags})
+
+
+def scene_for(rec: Path):
+    """The scene a recording was rendered from (its seed, and its tags: ``tags.json``, step 2)."""
+    m = json.loads((rec / "meta.json").read_text(encoding="utf-8"))
+    tj = rec / "tags.json"
+    tags = json.loads(tj.read_text(encoding="utf-8")).get("layout") if tj.is_file() else None
+    return panel_scene(int(m["seed"]), tags)
 
 
 def sweep(seed: int):
@@ -132,18 +181,23 @@ def spec_for(rec: Path) -> SC.SceneSpec:
     return SC.SceneSpec(rec.name, "panel1300", "large_panel", int(m["seed"]), int(m["n_frames"]), {"maker": "large"})
 
 
-def render(work: Path, seed: int, frames: int | None = None, fps: float = FPS) -> Path:
+def render(work: Path, seed: int, frames: int | None = None, fps: float = FPS, tags: str | None = None) -> Path:
     from ohs.sim.datasets import make_scan_recording
 
     n = frames or n_frames(fps)
-    path = work / "recs" / (f"s{seed}" if frames is None else f"s{seed}-n{frames}")
+    name = f"s{seed}" + (f"-n{frames}" if frames is not None else "") + (f"-{tags}" if tags else "")
+    path = work / "recs" / name
     if (path / "done").is_file():
         return path
     shutil.rmtree(path, ignore_errors=True)
     path.parent.mkdir(parents=True, exist_ok=True)
     t = time.perf_counter()
-    make_scan_recording(path, scene=panel_scene(seed), n_frames=n, fps=fps, trajectory=sweep(seed), overwrite=True,
+    sc = panel_scene(seed, tags)
+    make_scan_recording(path, scene=sc, n_frames=n, fps=fps, trajectory=sweep(seed), overwrite=True,
                         image_size=SC.IMAGE_SIZE, realistic=True, depth_every=0, seed=seed)
+    if tags:
+        write_json(path / "tags.json", {"layout": tags, "tag_mm": TAG_MM,
+                                        "corners": {str(i): np.asarray(X).tolist() for i, X in sc.markers.items()}})
     secs = time.perf_counter() - t
     size = sum(f.stat().st_size for f in path.rglob("*") if f.is_file())
     write_json(path / "done", {"frames": n, "fps": fps, "render_s": round(secs, 1), "bytes": size})
@@ -212,21 +266,65 @@ def _watch_memory(stop: threading.Event, out: dict) -> None:
             os._exit(95)
 
 
-def process(work: Path, rec_name: str, poses: str, params: dict | None = None, tag: str = "") -> Path:
+def _straighten_with(anchors: bool | None, overrides: dict) -> None:
+    """Straighten in this process with the tags as anchors on or off (step 2; ``None``: the engine's default) and any
+    other ``StraightenParams`` field of ``overrides``: the scorecard's ``app_chain`` calls ``straighten_trajectory``
+    with its defaults, so the module's function is wrapped here (this process only)."""
+    import dataclasses
+
+    import ohs.track.posegraph as PG
+
+    orig = PG.straighten_trajectory
+    kw = dict(overrides)
+    if anchors is not None:
+        kw["tags"] = bool(anchors)
+
+    def wrapped(rec, calib, traj, **k):
+        if kw:
+            k["params"] = dataclasses.replace(k.get("params") or PG.StraightenParams(), **kw)
+        poses, rep = orig(rec, calib, traj, **k)
+        if _SAVE.get("path") is not None:  # the poses as Straighten's loops and tags left them (before the crossings)
+            rows = sorted((i, t, ok) for i, t, ok, _ in PG._as_rows(traj))
+            PG.write_trajectory(_SAVE["path"], [(i, t, ok and i in poses, poses.get(i, np.eye(4))) for i, t, ok in rows])
+        return poses, rep
+
+    PG.straighten_trajectory = wrapped
+
+
+_SAVE: dict[str, Any] = {"path": None}
+
+
+def world_turned(yaw_deg: float) -> np.ndarray:
+    """A world turned by ``yaw_deg`` about z and moved by a fraction of a voxel (step 2's check of the edge reading):
+    true poses fused in it give the same surface on another phase of the mesh model's grid."""
+    return G.make_se3(G.so3_exp(np.array([0.0, 0.0, math.radians(yaw_deg)])), [0.37, 0.61, 0.23])
+
+
+def process(work: Path, rec_name: str, poses: str, params: dict | None = None, tag: str = "", anchors: bool | None = None,
+            straighten: dict | None = None, world_yaw: float | None = None) -> Path:
     """``params`` (``scorecard.parse_params``: e.g. ``fusion.gpu_volume_voxels=768``) is for a diagnostic run only, in
-    its own folder ``<poses>-<tag>``; the study's runs use none."""
+    its own folder ``<poses>-<tag>``; the study's runs use none. ``anchors``: Straighten's tags on or off (step 2, folder
+    ``tracked-anchors-on`` / ``-off`` unless ``tag`` names it); ``straighten``: other ``StraightenParams`` fields."""
     from ohs.io.recording import RecordingReader
     from tools.memory_peaks import Sampler, summarize
 
     rec = work / "recs" / rec_name
+    if anchors is not None and not tag and poses == "tracked":
+        tag = "anchors-" + ("on" if anchors else "off")
     out = work / "runs" / rec_name / (poses + (f"-{tag}" if tag else ""))
     if (out / "done.json").is_file():
         return out
     shutil.rmtree(out, ignore_errors=True)
     out.mkdir(parents=True)
     spec = spec_for(rec)
+    if poses == "tracked":
+        _straighten_with(anchors, straighten or {})
+        _SAVE["path"] = out / "straighten_poses.csv"
     st = _instrument()
     given = dict(RecordingReader(rec).ground_truth_poses()) if poses == "true" else None
+    world = world_turned(world_yaw) if (given is not None and world_yaw is not None) else None
+    if world is not None:
+        given = {i: world @ T for i, T in given.items()}
     mem: dict[str, Any] = {}
     stop = threading.Event()
     th = threading.Thread(target=_watch_memory, args=(stop, mem), daemon=True)
@@ -245,7 +343,7 @@ def process(work: Path, rec_name: str, poses: str, params: dict | None = None, t
         shutil.copy2(stg / "straighten.json", out / "straighten.json")
     shutil.rmtree(stg, ignore_errors=True)
     tr = json.loads((out / "track_report.json").read_text(encoding="utf-8")) if (out / "track_report.json").is_file() else {}
-    done = {"poses": poses, "params": params or {}, "make_mesh_s": round(wall, 1), "chain": info,
+    done = {"poses": poses, "world": None if world is None else world.tolist(), "params": params or {}, "anchors": anchors, "straighten_params": straighten or {}, "make_mesh_s": round(wall, 1), "chain": info,
             "peak_ws_gb": round(float(peaks["peak_ws"]) / 1e9, 2) if peaks.get("peak_ws") else None,
             "peak_gpu_shared_gb": round(float(peaks["gpu_shared"]) / 1e9, 2) if peaks.get("gpu_shared") else None,
             "watch_max_ws_gb": round(mem.get("max_ws_gb", 0.0), 2),
@@ -489,6 +587,118 @@ def end_edge(L: np.ndarray, s: float) -> np.ndarray | None:
     return np.array([x, 0.0, float(_quad(c, x, 0.0))])
 
 
+EDGE_DROP_MM = 0.5  # step 2's reading: where the mesh falls this far below the panel's own surface
+
+
+def end_edge_slice(L: np.ndarray, F: np.ndarray, s: float, half_y: float = 150.0, step: float = 2.5) -> tuple[np.ndarray | None, dict]:
+    """The middle of the short end edge on side ``s`` (step 2's reading, "edges_slice"). The mesh is cut along lines
+    across the edge (``y`` = const every ``step`` mm, ``|y| < half_y``, where the edge stands at least 5 mm above the
+    table; the width, the spacing and the drop chosen on seed 3, the true poses fused twice agreeing within 0.01 mm): the cut's profile, interpolated along the triangles' edges, is followed outwards from the panel until it
+    falls :data:`EDGE_DROP_MM` below a local fit of the panel (20-150 mm in from the end); that crossing, interpolated,
+    is where the panel ends on that line. The median over the lines is the edge's middle. The same fill falls off both
+    ends, so the reading's own bias is the same at both (measured at true poses). Step 1's reading (:func:`end_edge`,
+    the outermost vertex within 0.5 mm) jumps by whole voxels where an end lies along the mesh model's grid."""
+    sx = s * L[:, 0]
+    near = np.abs(L[:, 2] - height(L[:, 0], L[:, 1])[0]) < 3.0
+    c = _quad_fit(L[near & (sx > HALF_L - 150) & (sx < HALF_L - 20) & (np.abs(L[:, 1]) < half_y + 10)])
+    if c is None:
+        return None, {}
+    sel_f = F[np.all(sx[F] > HALF_L - 60, axis=1) & np.all(sx[F] < HALF_L + 30, axis=1) & np.any(np.abs(L[F, 1]) < half_y + step, axis=1)]
+    P = L[sel_f]  # (M,3,3)
+    xe = []
+    for y0 in np.arange(-half_y + step / 2, half_y, step):
+        pts = []
+        for a, b in ((0, 1), (1, 2), (2, 0)):
+            ya, yb = P[:, a, 1] - y0, P[:, b, 1] - y0
+            cross = (ya * yb < 0)
+            t = ya[cross] / (ya[cross] - yb[cross])
+            pts.append(P[cross, a] + t[:, None] * (P[cross, b] - P[cross, a]))
+        Q = np.concatenate(pts)
+        if len(Q) < 10:
+            continue
+        x = s * Q[:, 0]
+        r = Q[:, 2] - _quad(c, Q[:, 0], np.full(len(Q), y0))
+        o = np.argsort(x)
+        x, r = x[o], r[o]
+        inside = (x < HALF_L - 20) & (r > -EDGE_DROP_MM)
+        if not inside.any():
+            continue
+        k0 = int(np.flatnonzero(inside)[-1])
+        below = np.flatnonzero((np.arange(len(x)) > k0) & (r <= -EDGE_DROP_MM))
+        # the first point beyond the panel's part that is below the drop; before it the last one above
+        above = np.flatnonzero(r > -EDGE_DROP_MM)
+        if not len(below):
+            continue
+        j = int(below[0])
+        i = int(above[above < j][-1]) if (above < j).any() else j
+        if i == j:
+            continue
+        xe.append(float(x[i] + (x[j] - x[i]) * (r[i] + EDGE_DROP_MM) / (r[i] - r[j])))
+    if len(xe) < 10:
+        return None, {"lines": len(xe)}
+    x = s * float(np.median(xe))
+    return np.array([x, 0.0, float(_quad(c, x, 0.0))]), {"lines": len(xe), "spread_mm": float(np.std(xe))}
+
+
+def hole_dip(L: np.ndarray, hx: float, hy: float = 0.0, r_in: float = 9.0, ring: tuple[float, float] = (14.0, 40.0)
+             ) -> tuple[np.ndarray | None, dict]:
+    """Where a Ø10 hole is on the mesh although the scan closed it (step 2's reading, "hole_dips"): the matcher fills a
+    small hole over a near floor, and the fill sags below the panel. The panel round it (a ring ``ring`` mm from the
+    hole's place) is fitted by a local quadric; the vertices within ``r_in`` of the place that lie below it weigh by how
+    far below, and their weighted centre (across and along the panel) is the hole's centre. ``(hx, hy)``: where the
+    hole is in the placed mesh's local frame, roughly (a few mm do not matter: the weights decide)."""
+    d = np.hypot(L[:, 0] - hx, L[:, 1] - hy)
+    near = np.abs(L[:, 2] - height(L[:, 0], L[:, 1])[0]) < 3.0
+    c = _quad_fit(L[near & (d > ring[0]) & (d < ring[1])])
+    if c is None:
+        return None, {}
+    for _ in range(2):  # once from the rough place, once from the first centre
+        d = np.hypot(L[:, 0] - hx, L[:, 1] - hy)
+        sel = d < r_in
+        w = np.maximum(0.0, -(L[sel, 2] - _quad(c, L[sel, 0], L[sel, 1])))
+        if w.sum() <= 0:
+            return None, {"dip_mm": 0.0}
+        hx, hy = float(np.sum(w * L[sel, 0]) / w.sum()), float(np.sum(w * L[sel, 1]) / w.sum())
+    return np.array([hx, hy, float(_quad(c, hx, hy))]), {"dip_mm": float(w.max()), "n": int(sel.sum())}
+
+
+def edge_length(sc, T: np.ndarray, V2: np.ndarray, reader) -> dict:
+    """The distance between the two short edges' middles (by ``reader``), put back into the mesh's own frame."""
+    L = to_local(sc, G.transform_points(T, V2))
+    true_len = float(np.linalg.norm(surface_local(HALF_L, 0.0) - surface_local(-HALF_L, 0.0)))
+    out: dict[str, Any] = {"true_mm": true_len}
+    got = [reader(L, s) for s in (-1.0, 1.0)]
+    ends = [g[0] if isinstance(g, tuple) else g for g in got]
+    if isinstance(got[0], tuple):
+        out["info"] = [g[1] for g in got]
+    if ends[0] is None or ends[1] is None:
+        return out
+    back = G.invert_se3(T)
+    pa, pb = (G.transform_points(back, to_world(sc, q))[0] for q in ends)
+    ln = float(np.linalg.norm(pa - pb))
+    out.update(mm=ln, err_mm=ln - true_len, err_pct=100.0 * (ln - true_len) / true_len, local_A=ends[0].tolist(),
+               local_B=ends[1].tolist())
+    return out
+
+
+def dips_length(sc, T: np.ndarray, V2: np.ndarray) -> dict:
+    """The distance between the two holes' centres read from the dips (:func:`hole_dip`) in the mesh's own frame,
+    against the true distance between the holes."""
+    L = to_local(sc, G.transform_points(T, V2))
+    true_mm = float(np.linalg.norm(true_hole(sc, 0)["centre"] - true_hole(sc, 1)["centre"]))
+    out: dict[str, Any] = {"true_mm": true_mm}
+    got = [hole_dip(L, -HOLE_X), hole_dip(L, HOLE_X)]
+    out["info"] = [g[1] for g in got]
+    if got[0][0] is None or got[1][0] is None:
+        return out
+    back = G.invert_se3(T)
+    pa, pb = (G.transform_points(back, to_world(sc, g[0]))[0] for g in got)
+    ln = float(np.linalg.norm(pa - pb))
+    out.update(mm=ln, err_mm=ln - true_mm, err_pct=100.0 * (ln - true_mm) / true_mm, local_A=got[0][0].tolist(),
+               local_B=got[1][0].tolist())
+    return out
+
+
 def long_edges(L: np.ndarray) -> dict:
     """The long edges' sideways positions per 25 mm station (local y), for the sideways bow."""
     out: dict[str, list] = {}
@@ -557,7 +767,9 @@ def hole_tool(sc, truth, V2, F2, S2, Fl2, T: np.ndarray) -> dict:
     return out
 
 
-def mesh_metrics(sc, truth, mesh: Path, T0: np.ndarray) -> dict:
+def load_placed(truth, mesh: Path, T0: np.ndarray):
+    """A mesh after the Default recipe (as the scorecard), placed on the truth by the part alone: ``(V2, F2, S2, Fl2, T,
+    placement info)``."""
     from ohs.mesh.order import canonical
     from ohs.track.export import load_ply
     from tools import preset_study as ps
@@ -567,6 +779,36 @@ def mesh_metrics(sc, truth, mesh: Path, T0: np.ndarray) -> dict:
     V, F, S = c.V, c.F, c.vertex_values(d["quality"])
     V2, F2, S2, Fl2, _ = ps.apply_ops(V, F, S, ps.RECIPES["general"])
     T, pinfo = SC.place_part(V2, T0, truth)
+    return V2, F2, S2, Fl2, T, pinfo
+
+
+def edge_check(work: Path, rec_name: str, folder: str) -> dict:
+    """The end-to-end readings of one saved mesh (step 1's edges, the sliced edges, the holes' dips) against the truth."""
+    rec = work / "recs" / rec_name
+    sc = scene_for(rec)
+    truth = truth_of(sc)
+    run = work / "runs" / rec_name / folder
+    done = json.loads((run / "done.json").read_text(encoding="utf-8"))
+    T0 = np.eye(4) if not done.get("world") else G.invert_se3(np.asarray(done["world"]))
+    if not folder.startswith("true"):
+        from ohs.io.recording import RecordingReader
+
+        gt = RecordingReader(rec).ground_truth_poses()
+        trk = path_rows(run / "trajectory.csv")
+        T0 = fit_world(trk, gt, sorted(i for i in trk if i in gt))
+    V2, F2, _, _, T, _ = load_placed(truth, run / "mesh.ply", T0)
+    out = {"edges": edge_length(sc, T, V2, end_edge), "edges_slice": edge_length(sc, T, V2, lambda L_, s: end_edge_slice(L_, F2, s))}
+    log(f"  slice: {_f(out['edges_slice'].get('err_mm'))} mm (A {out['edges_slice'].get('local_A')}, "
+        f"B {out['edges_slice'].get('local_B')}, {out['edges_slice'].get('info')})")
+    out["hole_dips"] = dips_length(sc, T, V2)
+    log(f"  hole dips: {_f(out['hole_dips'].get('err_mm'))} mm (A {out['hole_dips'].get('local_A')}, "
+        f"B {out['hole_dips'].get('local_B')}, {out['hole_dips'].get('info')})")
+    log(f"{rec_name} {folder}: step 1's edges {_f(out['edges'].get('err_mm'))} mm")
+    return out
+
+
+def mesh_metrics(sc, truth, mesh: Path, T0: np.ndarray) -> dict:
+    V2, F2, S2, Fl2, T, pinfo = load_placed(truth, mesh, T0)
     out: dict[str, Any] = {"vertices": int(len(V2)), "faces": int(len(F2)), "placement": pinfo}
     out.update(SC.part_scores(G.transform_points(T, V2), truth))
     t = time.perf_counter()
@@ -583,6 +825,8 @@ def mesh_metrics(sc, truth, mesh: Path, T0: np.ndarray) -> dict:
         ln = float(np.linalg.norm(pa - pb))
         e.update(mm=ln, err_mm=ln - true_len, err_pct=100.0 * (ln - true_len) / true_len, local_A=ea.tolist(), local_B=eb.tolist())
     out["edges"] = e
+    out["edges_slice"] = edge_length(sc, T, V2, lambda L_, s: end_edge_slice(L_, F2, s))  # step 2's reading
+    out["hole_dips"] = dips_length(sc, T, V2)
     # metric 4a: the bow, the mesh placed by its two ends
     ends = (np.abs(L[:, 0]) > END_X) & (np.abs(L[:, 1]) < HALF_W - 10)
     Tn, ninfo = SC.place_part(V2[ends], T, truth)
@@ -605,7 +849,7 @@ def judge(work: Path, rec_name: str) -> dict:
     rec = work / "recs" / rec_name
     meta = json.loads((rec / "meta.json").read_text(encoding="utf-8"))
     seed, fps = int(meta["seed"]), float(meta["fps"])
-    sc = panel_scene(seed)
+    sc = scene_for(rec)
     truth = truth_of(sc)
     reader = RecordingReader(rec)
     gt = reader.ground_truth_poses()
@@ -627,7 +871,7 @@ def judge(work: Path, rec_name: str) -> dict:
         r["stage_s"] = ch.get("stage_s")
         r["straighten"] = ch.get("straighten")
         r["refine"] = ch.get("refine")
-        T0 = np.eye(4)
+        T0 = np.eye(4) if not done.get("world") else G.invert_se3(np.asarray(done["world"]))
         if poses == "tracked":
             trk0, trk = path_rows(run / "track_trajectory.csv"), path_rows(run / "trajectory.csv")
             T0 = fit_world(trk, gt, sorted(i for i in trk if i in gt))
@@ -635,11 +879,16 @@ def judge(work: Path, rec_name: str) -> dict:
             r["path_final"] = path_metrics(sc, trk, gt, fps)
             r["revisits_track"] = revisits(sc, trk0, gt, K, size, fps)
             r["revisits_final"] = revisits(sc, trk, gt, K, size, fps)
+            if (run / "straighten_poses.csv").is_file():  # after the loops and the tags, before the laser crossings
+                trs = path_rows(run / "straighten_poses.csv")
+                r["path_straighten"] = path_metrics(sc, trs, gt, fps)
+                r["revisits_straighten"] = revisits(sc, trs, gt, K, size, fps)
             sj = run / "straighten.json"
             if sj.is_file():
                 s = json.loads(sj.read_text(encoding="utf-8"))
                 r["straighten_report"] = {k: s.get(k) for k in ("verdict", "reason", "loops_accepted", "loop_candidates", "keyframes",
-                                                                 "correction_mm", "correction_deg", "residual_mm", "ground_truth")}
+                                                                 "correction_mm", "correction_deg", "residual_mm", "ground_truth",
+                                                                 "tags", "timings_s")}
                 r["straighten_report"]["crossings"] = {k: (s.get("laser_curves") or {}).get(k) for k in ("verdict", "warning", "changed",
                                                                                                       "crossings", "moved_mm")}
         r["mesh"] = mesh_metrics(sc, truth, run / "mesh.ply", T0)
@@ -651,8 +900,139 @@ def judge(work: Path, rec_name: str) -> dict:
         a, b = tr["mesh"]["edges"].get("mm"), tp["mesh"]["edges"].get("mm")
         if a is not None and b is not None:
             res["edges_vs_true_poses"] = {"err_mm": a - b, "err_pct": 100.0 * (a - b) / tr["mesh"]["edges"]["true_mm"]}
+    if tp:  # step 2: the sliced edges of every tracked run against the same seed's true-pose reading
+        b = tp["mesh"].get("edges_slice", {}).get("mm")
+        res["slice_vs_true_poses"] = {}
+        for name, r in res.items():
+            if isinstance(r, dict) and "mesh" in r and not name.startswith("true") and b is not None:
+                a = r["mesh"].get("edges_slice", {}).get("mm")
+                if a is not None:
+                    res["slice_vs_true_poses"][name] = {"err_mm": a - b, "err_pct": 100.0 * (a - b) / r["mesh"]["edges_slice"]["true_mm"]}
+        yw = [r for name, r in res.items() if name.startswith("true-yaw") and isinstance(r, dict) and "mesh" in r]
+        if yw and b is not None and yw[0]["mesh"].get("edges_slice", {}).get("mm") is not None:
+            res["slice_true_twice_mm"] = yw[0]["mesh"]["edges_slice"]["mm"] - b  # the reading's own precision
     write_json(work / "runs" / rec_name / "judge.json", res)
     return res
+
+
+def verdict2(res: dict, run: str = "tracked-anchors-on") -> tuple[str, list[str]]:
+    """Step 2's stop rule (the owner's, fixed before any tagged result; part c, the no-tags test, is the test suite's):
+    (a) the sliced edges within 0.05 % of the same seed's true-pose reading, (b) the camera path end to end within 0.05 %
+    (after Straighten), (d) the passes' slide along the panel under 0.65 mm RMS for every pair of passes."""
+    r = res.get(run)
+    if not r:
+        return "not run", []
+    why = []
+    e = (res.get("slice_vs_true_poses") or {}).get(run) or {}
+    if e.get("err_pct") is None or abs(e["err_pct"]) > LIMIT_PCT:
+        why.append(f"(a) edges {_f(e.get('err_pct'))} %")
+    p = (r.get("path_final") or {}).get("end_to_end") or {}
+    if p.get("length_err_pct") is None or abs(p["length_err_pct"]) > LIMIT_PCT:
+        why.append(f"(b) path {_f(p.get('length_err_pct'))} %")
+    worst = max((v["along_rms"] for v in (r.get("revisits_final") or {}).values()), default=None)
+    if worst is None or worst >= 0.65:
+        why.append(f"(d) slide {_f(worst, 2)} mm RMS")
+    return ("misses" if why else "meets"), why
+
+
+def measure_tags(work: Path, rec_name: str, every: int = 2) -> dict:
+    """Step 2's two weights, measured (on seed 3 only, never on the judged seeds): (1) a single frame's tag corners
+    against the truth, every ``every``-th frame at its true pose: their scatter across the image and along the view, as
+    the corner's scatter in the image (``tag_sigma_px``: across, ``err * f / Z``; along, ``err * f * B / (sqrt 2 Z^2)``);
+    (2) how the tracked turn wanders (``tag_drift_deg_per_frame``): the tracked path's turn against the true one over
+    ``lag`` frames, its mean square growing as ``lag * s^2`` for a random walk of ``s`` a frame."""
+    from ohs.io.recording import RecordingReader
+    from ohs.track.posegraph import StraightenParams
+    from ohs.track.tag_anchors import detect_tag_views
+
+    rec = work / "recs" / rec_name
+    reader = RecordingReader(rec)
+    gt = reader.ground_truth_poses()
+    calib = reader.calibration()
+    tj = json.loads((rec / "tags.json").read_text(encoding="utf-8"))
+    truth = {int(i): np.asarray(X) for i, X in tj["corners"].items()}
+    frames = sorted(gt)[::every]
+    p = dataclasses_replace(StraightenParams(), tag_look_every=1)
+    det, info = detect_tag_views(reader, calib, frames, p)
+    f, B = info["K"]
+    ex, ey, ez, Zs, n_ids = [], [], [], [], {}
+    for fr, views in det.items():
+        Tc = G.invert_se3(gt[fr])
+        for m, X in views.items():
+            if m not in truth:
+                n_ids["wrong"] = n_ids.get("wrong", 0) + 1
+                continue
+            Xt = G.transform_points(Tc, truth[m])
+            e = X - Xt
+            ex += list(e[:, 0])
+            ey += list(e[:, 1])
+            ez += list(e[:, 2])
+            Zs += list(Xt[:, 2])
+    ex, ey, ez, Zs = map(np.asarray, (ex, ey, ez, Zs))
+    out: dict[str, Any] = {"frames_looked": len(frames), "frames_with_tag": len(det), "corners": int(len(ex)),
+                           "views_per_frame": float(np.mean([len(v) for v in det.values()])) if det else 0.0,
+                           "frames_two": int(sum(len(v) >= 2 for v in det.values())), "unknown_ids": n_ids.get("wrong", 0)}
+    if len(ex):
+        px_xy = np.sqrt(np.mean(np.concatenate([ex, ey]) ** 2 * np.concatenate([f / Zs, f / Zs]) ** 2))
+        px_z = np.sqrt(np.mean((ez * f * B / (math.sqrt(2.0) * Zs ** 2)) ** 2))
+        out.update(err_mm={"x_rms": float(np.sqrt(np.mean(ex ** 2))), "y_rms": float(np.sqrt(np.mean(ey ** 2))),
+                           "z_rms": float(np.sqrt(np.mean(ez ** 2))), "z_mean": float(np.mean(ez))},
+                   sigma_px={"across": float(px_xy), "along_view": float(px_z)})
+    run = work / "runs" / rec_name / "tracked-anchors-off"
+    trj = run / "track_trajectory.csv"
+    if trj.is_file():
+        trk = path_rows(trj)
+        idx = sorted(i for i in trk if i in gt)
+        have = set(idx)
+        rows = []
+        for lag in (4, 8, 16, 32, 64):  # the tracked turn over lag frames against the true one (the worlds cancel)
+            a = [G.rotation_angle_deg((gt[i][:3, :3].T @ gt[i + lag][:3, :3]).T @ (trk[i][:3, :3].T @ trk[i + lag][:3, :3]))
+                 for i in idx if i + lag in have]
+            rows.append([lag, float(np.mean(np.square(a)))])
+        lags = np.array([r[0] for r in rows], float)
+        ms = np.array([r[1] for r in rows])
+        out["turn"] = {"lag_mean_sq_deg2": rows, "deg_per_frame": float(math.sqrt(max(np.sum(lags * ms) / np.sum(lags * lags), 0.0)))}
+    write_json(work / "runs" / rec_name / "measured.json", out)
+    log(f"{rec_name}: {json.dumps(out)[:900]}")
+    return out
+
+
+def no_tags_check(work: Path, rec_name: str) -> dict:
+    """Straighten with the tags on, on a step 1 recording (no tags), against what step 1 saved with the code from before
+    step 2 (``straighten.json``; the poses: ``trajectory.csv``, written after the laser crossings, which changed nothing
+    on these recordings). Every field but the new ``tags``, the ``tag_*`` settings and the timings must be the same,
+    and the poses to the 6 decimals the file keeps."""
+    from ohs.io.recording import RecordingReader
+    from ohs.track.posegraph import StraightenParams, straighten_trajectory
+
+    rec = work / "recs" / rec_name
+    run = work / "runs" / rec_name / "tracked"
+    old = json.loads((run / "straighten.json").read_text(encoding="utf-8"))
+    rows = SC._traj(run / "track_trajectory.csv")
+    from ohs.track.posegraph import read_trajectory
+
+    traj = read_trajectory(run / "track_trajectory.csv")
+    poses, rep = straighten_trajectory(rec, RecordingReader(rec).calibration(), traj, params=StraightenParams(tags=True))
+    new = json.loads(json.dumps(SC._plain(rep)))
+
+    def strip(r: dict) -> dict:
+        r = {k: v for k, v in r.items() if k not in ("tags", "timings_s", "laser_curves")}
+        r["params"] = {k: v for k, v in r["params"].items() if not (k == "tags" or k.startswith("tag_"))}
+        return r
+
+    diff = sorted(k for k in set(strip(old)) | set(strip(new)) if strip(old).get(k) != strip(new).get(k))
+    saved = dict(SC._traj(run / "trajectory.csv"))
+    dmax = max(float(np.max(np.abs(poses[i] - saved[i]))) for i in saved)
+    out = {"fields_differing": diff, "pose_max_diff": dmax, "tags": new.get("tags"), "rows": len(rows)}
+    write_json(work / "runs" / rec_name / "no_tags_check.json", out)
+    log(f"{rec_name}: no-tags check: {out}")
+    return out
+
+
+def dataclasses_replace(obj: Any, **kw: Any) -> Any:
+    import dataclasses
+
+    return dataclasses.replace(obj, **kw)
 
 
 def _f(x: Any, nd: int = 3) -> str:
@@ -692,13 +1072,13 @@ def table(work: Path) -> None:
             print(f"          mesh median {_f(m.get('part_med'))} mm, over 0.3 mm {_f(m.get('part_over03'))}; Make mesh {r['make_mesh_s']} s; "
                   f"peak {r['peak_ws_gb']} GB; cube {r['cube']}")
             if poses == "tracked":
-                for k in ("path_track", "path_final"):
+                for k in [x for x in ("path_track", "path_straighten", "path_final") if x in r]:
                     p = r[k]
                     ee = p.get("end_to_end") or {}
                     print(f"          {k}: end to end {_f(ee.get('length_err_mm'))} mm, bow {p.get('bow')}, err fitted {p['error_fitted']}, "
                           f"first {p['error_first_frame']}")
                     print(f"            per pass {[_f((v or {}).get('length_err_mm')) for v in p['per_pass'].values()]}")
-                for k in ("revisits_track", "revisits_final"):
+                for k in [x for x in ("revisits_track", "revisits_straighten", "revisits_final") if x in r]:
                     print(f"          {k}: " + "; ".join(f"{pp} along {_f(v['along_rms'], 2)}/{_f(v['along_max'], 2)} across "
                                                        f"{_f(v['across_rms'], 2)} gap {_f(v['gap_rms'], 2)}" for pp, v in r[k].items()))
                 s = r.get("straighten_report") or {}
@@ -707,27 +1087,49 @@ def table(work: Path) -> None:
                 print(f"          warnings {r.get('warnings')} path_check {(r.get('path_check') or {}).get('state')}")
         if j.get("edges_vs_true_poses"):
             print(f"  edges tracked against true poses: {j['edges_vs_true_poses']}")
+        if j.get("slice_vs_true_poses") is not None:
+            print(f"  step 2: sliced edges against true poses {j['slice_vs_true_poses']}; true poses twice "
+                  f"{_f(j.get('slice_true_twice_mm'))} mm")
+            for run in [n for n in j if n.startswith("tracked")]:
+                v2, why2 = verdict2(j, run)
+                tg = ((j[run].get("straighten_report") or {}).get("tags") or {})
+                print(f"  [{run}] stop rule: {v2} {'; '.join(why2)}; tags {tg.get('reason')} used {len(tg.get('used') or [])} "
+                      f"left out {tg.get('left_out')} frames 1/2 tags {tg.get('frames_one')}/{tg.get('frames_two')}")
 
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    ap.add_argument("what", choices=("budget", "render", "process", "judge", "table"))
+    ap.add_argument("what", choices=("budget", "render", "process", "judge", "table", "edgecheck", "measure", "notagcheck"))
     ap.add_argument("work", type=Path)
     ap.add_argument("args", nargs="*")
     ap.add_argument("--frames", type=int, default=None)
     ap.add_argument("--fps", type=float, default=FPS)
     ap.add_argument("--set-param", action="append", default=None, help="process, a diagnostic run only: SECTION.FIELD=VALUE")
     ap.add_argument("--tag", default="", help="process with --set-param: the run's folder is <poses>-<tag>")
+    ap.add_argument("--tags", default=None, choices=sorted(TAG_LAYOUTS), help="render: the tags' layout (step 2)")
+    ap.add_argument("--anchors", default=None, choices=("on", "off"), help="process: Straighten's tags on or off (step 2)")
+    ap.add_argument("--straighten-param", action="append", default=None,
+                    help="process: another StraightenParams field FIELD=VALUE (tuning, seed 3 only; needs --tag)")
+    ap.add_argument("--world-yaw", type=float, default=None,
+                    help="process true: fuse the true poses in a world turned by this (deg) and moved a fraction of a voxel")
     a = ap.parse_args(argv)
-    if a.set_param and not a.tag:
-        ap.error("--set-param needs --tag (a diagnostic run never takes the study's own folder)")
+    if (a.set_param or a.straighten_param) and not a.tag:
+        ap.error("--set-param and --straighten-param need --tag (a diagnostic run never takes the study's own folder)")
     logging.basicConfig(level=logging.WARNING, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     if a.what == "budget":
         budget(a.work, a.frames or 20)
     elif a.what == "render":
-        render(a.work, int(a.args[0]), a.frames, a.fps)
+        render(a.work, int(a.args[0]), a.frames, a.fps, a.tags)
     elif a.what == "process":
-        process(a.work, a.args[0], a.args[1], SC.parse_params(a.set_param), a.tag)
+        sp = {k: json.loads(v) for k, v in (s.split("=", 1) for s in a.straighten_param or [])}
+        process(a.work, a.args[0], a.args[1], SC.parse_params(a.set_param), a.tag,
+                None if a.anchors is None else a.anchors == "on", sp, a.world_yaw)
+    elif a.what == "edgecheck":
+        edge_check(a.work, a.args[0], a.args[1])
+    elif a.what == "measure":
+        measure_tags(a.work, a.args[0])
+    elif a.what == "notagcheck":
+        no_tags_check(a.work, a.args[0])
     elif a.what == "judge":
         judge(a.work, a.args[0])
     else:

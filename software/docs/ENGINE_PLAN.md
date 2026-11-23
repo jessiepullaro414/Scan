@@ -89,6 +89,22 @@ The rules of `FEATURE_PLAN.md` and `MAINTENANCE_PLAN.md` hold. In short:
   E-D1 still holds for each: a change goes on by default only when it is better on every
   scorecard scene and nothing thin gets worse; a miss stays a setting; a near miss comes to
   the owner with numbers. New experiments for 1, 2 and 4 are being designed (X15 on).
+- **E-D4: what a good merge must do is restated** (asked and decided 2026-11-23, "Yes, restate
+  it"). X7's rule asked the merged part to beat the better single scan and to hold at least the
+  good surface of the two scans together. The second part takes, at every place, whichever scan
+  the truth says was right: no real method can (the best rule tried stays 1.2 to 1.3 points
+  under it on four of five pairs), and the first compares different surfaces. The rule from now
+  on, for every merge study:
+  1. On each scan's own seen surface the merge is no worse than that scan (median and the share
+     more than 0.3 mm off, within the spread across seeds).
+  2. Nothing thin or small gets worse, feature by feature (walls, ribs, bosses, holes).
+  3. The merge holds more of the part than the larger scan.
+  4. A pair that shares under 0.70 of the part is aligned from an outside reference (tags); a
+     merge of such a pair from the shape alone is not promised to be good, and the caution says
+     so.
+  The old "union" is still reported, as a ceiling, and is no gate. Given up: the promise for
+  every single place (it fails today on 2 to 7.5 % of the good surface) and the stronger
+  headline. Today's merge passes the new rule on 2 of X7's 5 pairs.
 
 ## The error budget today
 
@@ -126,7 +142,8 @@ Ranked by the gap between what a user needs and what the engine delivers.
    flat faces (stale).
 7. **Overall size of large parts.** Needed: about 0.05 %. Today 0.12 to 0.50 % on a 1.3 m
    plain panel in three passes (1.6 to 6.5 mm), with no warning (X8 step 1, 2026-11-23). Short
-   by 2.4 to 10 times.
+   by 2.4 to 10 times. With tags 300 mm apart along the part and the setting `straighten_tags`
+   on (off by default): 0.018 to 0.048 % (X8 step 2).
 8. **A merge** adds coverage; it adds accuracy only where the pose is right and the scans
    saw different sides (X7, measured 2026-11-22).
 9. **Waits.** After a scan, Standard takes about 4.8 times the scan's length on the Radeon PC
@@ -797,7 +814,7 @@ and thin parts".
   - The rule's "at least the union" is close to what no single surface can reach; if the
     item is taken up again the owner may want to restate it.
 
-### [ ] X8. Large parts: measure the overall size first (M): step 1 measured 2026-11-23, fails; step 2 (anchors) open
+### [ ] X8. Large parts: measure the overall size first (M): step 1 measured, fails; step 2 (anchors) built, a setting, off: a near miss
 - A 1.2 to 1.5 m plain panel with Ø10 holes at both ends, scanned in passes: the end-to-end
   distance, the bow, the slide between passes. Only if it fails: tags on the table as anchors
   in Straighten (`ohs/align/tags.py` exists).
@@ -820,7 +837,23 @@ and thin parts".
     1.3 mm, the mesh's median is 0.023 to 0.032 mm.
   - The Hole tool cannot read the Ø10 holes 14 mm above the table, even at true poses (small
     things below), so end to end is judged from the edges.
-- **Step 2 (not built): tags as anchors in Straighten.** A few AprilTags (20 to 30 mm) on the
+- **Step 2 built and measured 2026-11-23: a near miss, not adopted, a setting** (`[process]
+  straighten_tags`, off; `VALIDATION.md`, "Tags as anchors on a large part").
+  - With 20 tags on the table 300 mm apart: the mesh's length -0.042 / +0.048 / +0.018 %
+    (without: -0.164 / +0.197 / +0.054), the camera path -0.052 / +0.060 / +0.003 % (without:
+    0.18 to 0.45), the passes' slide 0.34 to 1.14 mm RMS (without: 1.4 to 11.4).
+  - The rule as put before the runs: mesh met on all three, the path misses on two by 0.002
+    and 0.010 %, the slide misses 0.65 mm RMS on two seeds (0.72; 0.77 and 1.14).
+  - What is left is the length between the ends: it is held only through frames that see two
+    tags spaced along the part (a third of the keyframes at 300 mm; none at 600 mm, where
+    0.2 % stays).
+  - A scan without tags is unchanged, bit for bit. Make mesh takes about 76 s longer when the
+    tags act.
+  - **Next (step 3):** the same three seeds with tags 150 mm apart along one side, so that two
+    are in view in most frames; judged by the same rule. With the owner: whether to switch the
+    setting on as it is (better on every scene that has tags, the same on every scene that has
+    none), before step 3.
+- **Step 2 as it was planned: tags as anchors in Straighten.** A few AprilTags (20 to 30 mm) on the
   table along the part, or on the part, at most about 300 mm apart so that one frame (about
   470 mm along the panel) sees two neighbours.
   - Each tag is a node in Straighten's pose graph; each keyframe that sees it adds an edge

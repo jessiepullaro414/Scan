@@ -459,6 +459,48 @@ def test_the_global_guess_finds_a_far_off_revisit(orbit, truth):
     assert math.sqrt(max(float(e @ L.J2 @ e), 0.0)) < 0.3  # on the truth along the measured directions
 
 
+def _without_new_fields(rep: dict) -> dict:
+    """A report as it was before the tags (ENGINE_PLAN X8 step 2): without ``tags``, the ``tag_*`` settings and the
+    timings (times are never the same twice)."""
+    import copy
+
+    r = copy.deepcopy(rep)
+    r.pop("tags", None)
+    r.pop("timings_s", None)
+    r["params"] = {k: v for k, v in r["params"].items() if not (k == "tags" or k.startswith("tag_"))}
+    return r
+
+
+@pytest.mark.parametrize("path", ["default", "cpu"])
+def test_a_scan_without_tags_comes_out_exactly_as_before(orbit, truth, path, monkeypatch):
+    """No tag in view (the bracket's table has none): the tags' step leaves the loops' poses and report bit for bit as
+    they were (new fields apart), on both compute paths. The loops run once; the tags' step then runs on a copy of
+    their result, as ``straighten_trajectory`` runs it, with the quick look for tags really looking."""
+    import copy
+
+    if path == "cpu":
+        monkeypatch.setenv(compute.ENV_VAR, "cpu")
+    compute.reset()
+    try:
+        idx, T, times = truth
+        rows = rows_from(add_drift(T, 0.05, 0.2, 1), idx, times)  # a scan the loops change
+        p = pg.StraightenParams(tags=True)
+        ctx: dict = {}
+        poses0, rep0 = pg._straighten_loops(orbit, None, rows, params=p, ctx=ctx)
+        assert rep0["changed"] is True
+        poses1, rep1 = pg._anchor_to_tags({i: P.copy() for i, P in poses0.items()}, copy.deepcopy(rep0), p, ctx, None)
+        assert set(poses1) == set(poses0) and all(np.array_equal(poses1[i], poses0[i]) for i in poses0)
+        assert _without_new_fields(rep1) == _without_new_fields(rep0)
+        assert rep1["tags"]["seen"] == 0 and rep1["tags"]["acted"] is False and rep1["tags"]["looked_at"] >= 3
+        assert rep1["tags"]["frames_read"] == 0 and rep1["verdict"] == rep0["verdict"]
+        # switched off, the step is not run at all
+        poses2, rep2 = pg.straighten_trajectory(orbit, None, rows[:3], params=pg.StraightenParams(tags=False))
+        assert rep2["tags"] == {"enabled": False, "seen": 0, "acted": False}
+    finally:
+        monkeypatch.delenv(compute.ENV_VAR, raising=False)
+        compute.reset()
+
+
 def test_cancel_stops_between_steps(orbit, truth):
     idx, T, times = truth
     rows = rows_from(add_drift(T, 0.05, 0.2, 1), idx, times)

@@ -110,7 +110,7 @@ On a long part with nothing along its length to hold on to (a plain panel, a sil
 
 - Measured on a simulated plain panel 1.3 m long, scanned in three passes without tags: the overall length came out 1.6 to 6.5 mm wrong (0.12 to 0.50 %).
 - The surface itself looked fine, and the app gave no warning. The passes lay on each other across the surface and were shifted along it.
-- What helps today: scan with tags in **Markers** mode ([Tags for large plain parts](scanning.md#tags-for-large-plain-parts)), keep the part's ends and edges in view, and check a long part's overall length with a tape measure. How much the tags mend the length has not been measured yet.
+- What helps today: scan with tags in **Markers** mode ([Tags for large plain parts](scanning.md#tags-for-large-plain-parts)), keep the part's ends and edges in view, and check a long part's overall length with a tape measure. On the same panel scanned with tags on the table, the mesh's length was 0.2 to 0.6 mm off with the setting `straighten_tags` on, and 0.7 to 2.6 mm off without it: see [Tags that hold a markerless scan](scanning.md#tags-that-hold-a-markerless-scan-a-setting-off). Where no frame sees two tags spaced along the part, the tags join the passes but do not hold the length.
 
 ## Aligning and merging
 

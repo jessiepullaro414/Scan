@@ -889,6 +889,9 @@ export type StraightenStage = StageInfo & {
   correction_deg: number | null;
   /** Laser crossings the poses were lined up on (null: not adjusted). */
   crossings?: number | null;
+  /** How many AprilTags held the scan (ENGINE_PLAN X8 step 2); null when the tags did not move it. An older engine
+   * does not send it: as null. */
+  tags?: number | null;
 };
 export type FuseStage = StageInfo & { voxel_mm: number | null };
 /** "Refine from the images" (a trial build): the base stage's mesh measured against the recording's frames. */

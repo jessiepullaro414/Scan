@@ -87,12 +87,19 @@ def straighten_summary(rep: dict | None) -> dict | None:
     """What Straighten had to correct, from its ``straighten.json`` (``ohs.track.posegraph``, with
     the laser crossings' ``laser_curves``): the reason and whether the poses changed, the loops,
     the largest change of a camera position / orientation, the loops' residual before and after,
-    the drift scale, and the crossings' miss and move. None for no report."""
+    the drift scale, the crossings' miss and move, and what the tags in view did (ENGINE_PLAN X8 step 2: ``reason``
+    is the loops' own outcome and ``changed`` means the poses changed, by the loops or the tags; ``tags``: acted,
+    reason, how many were used, how far they moved the scan; left out for a report from before the tags). None for no
+    report."""
     if not isinstance(rep, dict):
         return None
     res = rep.get("residual_mm") if isinstance(rep.get("residual_mm"), dict) else None
     lc = rep.get("laser_curves") if isinstance(rep.get("laser_curves"), dict) else None
+    tg = rep.get("tags") if isinstance(rep.get("tags"), dict) else None
+    tags = {} if tg is None else {"tags": {"acted": bool(tg.get("acted")), "reason": tg.get("reason"),
+                                           "used": len(tg.get("used") or []), "moved_mm": tg.get("moved_mm")}}
     return {
+        **tags,
         "reason": rep.get("reason"), "changed": rep.get("changed"),
         "keyframes": rep.get("keyframes"), "loop_candidates": rep.get("loop_candidates"),
         "loops_accepted": rep.get("loops_accepted"),

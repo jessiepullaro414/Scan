@@ -5592,6 +5592,88 @@ path without a GPU, the exe.
 
 **Next (not built):** the plan's step 2, tags as anchors in Straighten (`ENGINE_PLAN.md` X8).
 
+## Tags as anchors on a large part (ENGINE_PLAN X8 step 2, 2026-11-23): built, a setting, off
+
+Step 1 found a 1.3 m plain panel 0.12 to 0.50 % wrong in length: tracking drifts along the plain length within a
+pass and the passes then sit 2 to 11 mm apart along the panel, which Straighten's loops cannot see. Step 2 lets
+AprilTags hold the scan. Built in `ohs/track/tag_anchors.py` and Straighten (`ohs/track/posegraph.py`); setting
+`[process] straighten_tags` (`StraightenParams.tags`), **off**. `tools/large_part_study.py`; data and notes in
+`D:\OpenHandScan-work\scratch\x8`.
+
+**How it works.**
+- A quick look first: the left image of every fourth keyframe. With no tag there, nothing more is read and the scan
+  comes out bit for bit as before.
+- Each tag (tag36h11) is found in Straighten's keyframes and its corners are placed by the stereo pair, so the
+  printed size need not be known.
+- One fit over the keyframes' poses and the tags' poses: each detection adds its four corners in its own camera
+  (never a median over the drifted world), the tracked motion between keyframes and Straighten's verified loops stay
+  in as terms.
+- Weights are measured, on seed 3 only: a corner's scatter 0.39 px across the image and 0.11 px along the view, the
+  gyro's turn drift 0.008 degrees a frame. Nothing was tuned after seed 3.
+- A tag is left out, and named in the report and the verdict, when it was seen in fewer than 3 keyframes, when its
+  views do not agree with the fit (over 1.5 mm, more than a fifth of them), or when it alone bends the scan by more
+  than 1 mm with views that disagree with themselves.
+- Never worse: the tags act only if, on whole keyframes held out of the fit (every second one, both ways round),
+  the corners meet at 0.85 of the distance before or less, and the tracked motion is still believable.
+
+**Set-up, fixed before any tagged render.** The panel, the sweep (3 passes, 565 frames) and the seeds of step 1,
+with 20 tags of 25 mm on the table: five along each long side, 300 mm apart and 30 mm off the edge, five across
+each short end. The same recording with the setting off and on; fused at true poses twice (the simulator's world,
+and a world turned 20 degrees and moved a fraction of a voxel) to show how well the length reading repeats.
+Step 1's edge reading jumped by whole voxels at an end lying on the model's grid, so the length is read from the
+mesh cut every 2.5 mm across (`edges_slice`); it repeats within 0.12 mm on all three seeds.
+
+**The rule, fixed beforehand:** on all three seeds (a) the mesh's length within 0.05 % (0.65 mm) of the same seed's
+true-pose reading, (b) the camera path end to end within 0.05 %, (c) a scan without tags unchanged, (d) the passes'
+slide along the panel under 0.65 mm RMS for every pair of passes.
+
+| | Seed 0 off | Seed 0 on | Seed 1 off | Seed 1 on | Seed 2 off | Seed 2 on |
+|---|---|---|---|---|---|---|
+| (a) Mesh length against true poses | -2.13 mm, -0.164 % | -0.55 mm, -0.042 % | +2.56 mm, +0.197 % | +0.62 mm, +0.048 % | +0.70 mm, +0.054 % | +0.24 mm, +0.018 % |
+| The reading at true poses, twice | 0.10 mm apart | | 0.08 mm apart | | 0.12 mm apart | |
+| (b) Camera path, end to end | -4.94 mm, -0.439 % | **-0.58 mm, -0.052 %** | +5.08 mm, +0.453 % | **+0.67 mm, +0.060 %** | -1.97 mm, -0.175 % | +0.03 mm, +0.003 % |
+| Path, pass 1 / 2 / 3 alone, mm | -0.4 / -7.3 / -1.4 | -0.6 / -0.6 / -0.6 | -0.9 / +8.7 / -2.8 | +0.8 / +0.7 / +0.5 | +1.5 / -3.4 / -0.7 | 0.0 / +0.2 / -0.1 |
+| (d) Slide along, RMS, pairs 1-2 / 2-3 / 1-3, mm | 3.50 / 3.99 / 6.15 | **0.72** / 0.57 / 0.39 | 6.03 / 7.69 / 11.4 | 0.45 / 0.54 / 0.58 | 3.05 / 1.43 / 3.33 | **0.77 / 1.14** / 0.34 |
+| Slide along, largest, mm | 7.2 | 1.9 | 13.2 | 1.8 | 5.3 | 2.7 |
+| Gap along the normal, RMS, mm | 0.01-0.02 | 0.03-0.08 | 0.03-0.05 | 0.06-0.08 | 0.04-0.07 | 0.04-0.07 |
+| Path error after a fit, median / largest, mm | 3.17 / 5.46 | 0.42 / 1.87 | 5.37 / 7.60 | 0.46 / 1.75 | 2.48 / 4.95 | 0.34 / 1.52 |
+| Mesh against the true panel, median / over 0.3 mm | 0.024 mm / 2.5 % | 0.032 mm / 2.3 % | 0.035 mm / 3.5 % | 0.041 mm / 2.5 % | 0.023 mm / 2.6 % | 0.025 mm / 2.5 % |
+| Tags that held the scan / left out | | 17 / none | | 16 / one, seen in 2 keyframes | | 18 / none |
+| Keyframes that saw one tag / two | | 70 / 38 of 119 | | 71 / 38 of 117 | | 74 / 39 of 117 |
+| Straighten, s | 6.9 | 13.5 | 6.4 | 13.5 | 6.3 | 13.1 |
+| Make mesh, s; memory peak | 141; 5.9 GB | 217; 6.1 GB | 142; 6.2 GB | 218; 6.0 GB | 142; 6.1 GB | 217; 5.8 GB |
+
+- **The tags mend most of it: about a tenth of the error is left.** The passes' slide along the panel falls from
+  1.4-11.4 mm RMS to 0.34-1.14 mm, the camera path's end-to-end error from 0.18-0.45 % to 0.003-0.060 %, the mesh's
+  length error from 0.05-0.20 % to 0.018-0.048 %.
+- **The rule is missed, so the setting stays off.** (a) is met on all three seeds, seed 1 only just (0.048 %, with
+  a reading that repeats to 0.008 %). (b) misses on seeds 0 and 1 by 0.002 and 0.010 %. (d) misses on seeds 0 and 2
+  (0.72, and 0.77 and 1.14 mm RMS against 0.65). (c) holds: on step 1's recordings every field of Straighten's
+  report matched the code before and the poses agreed to 5e-6 mm (graphics card); without a graphics card the unit
+  test covers it.
+- **What is left is the length between the ends.** On seeds 0 and 1 every pass is off by the same 0.6 to 0.8 mm:
+  the passes are joined, and all of them are a little short or long together. A diagnostic on seed 0 shows why.
+  With the side tags 600 mm apart no frame ever sees two of them, and 0.2 % stays (-2.23 mm, every pass alike):
+  the tags join the passes, but the length is held only through frames that see two tags spaced along the part. At
+  300 mm that happens in a third of the keyframes.
+- **One side is enough.** Seed 0 with tags along the near side only (and the ends): path -0.02 mm, slide 0.35-0.63
+  mm RMS. Not judged; one seed.
+- **It costs** about 7 s in Straighten and about 76 s in Make mesh here (a second fusion at the new poses); memory
+  is the same.
+- **Straighten's words** when the tags act end with how many tags held the scan, how far the scan's end or middle
+  moved, and any tag left out with the reason.
+- **A tag that moves during the scan** by about 1 mm (2.5 times a view's scatter) is not recognised and can bend
+  the scan by up to 2 mm (synthetic views with the measured scatter). A larger move is recognised and the tag left
+  out.
+
+**Limits and not verified.** One scene, three seeds, the simulator's hand, 25 mm tags on the table (the app prints
+20 mm tags: the size itself does not matter, but a smaller tag is read from less far and pins less; not measured).
+Not run: tags on the part itself, a tag really moved in a render, a scan in Markers tracking mode (Straighten runs
+there too; the tags would act the same way), the path without a graphics card on these recordings, tags closer
+than 300 mm. The Hole tool is not judged (step 1: the holes close up). The diagnostics are one seed each.
+
+**Next:** tags close enough along the part that two are in view in most frames (ENGINE_PLAN X8).
+
 ## What the metrics mean
 
 - **Stereo errors** compare the estimated raw intrinsics/extrinsics (`K1`, `K2`, `R`, `T`) with

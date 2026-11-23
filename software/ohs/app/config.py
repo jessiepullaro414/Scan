@@ -184,6 +184,8 @@ class ProcessConfig:
     refine_from_images: bool = False  # ENGINE_PLAN X6: Make mesh runs "Refine from the images" (GPU only); off: as before
     # ENGINE_PLAN X5 step 2: Make mesh makes only the thin walls finer (GPU, 1 mm) for scans without a choice of their own
     fine_walls: bool = False
+    # ENGINE_PLAN X8 step 2: Straighten holds the scan to the AprilTags in view (ohs.track.posegraph.StraightenParams.tags)
+    straighten_tags: bool = False
 
 
 @dataclass
@@ -626,6 +628,12 @@ _KEY_DOCS = {
         "before Refine with lasers: the surface is measured against up to 120 frames of the recording.\n"
         "Needs a graphics card; without one Make mesh leaves the mesh as it is and says so. Not at\n"
         "Preview quality. Off: as before."
+    ),
+    "process.straighten_tags": (
+        "Straighten also holds the scan to the AprilTags it sees (ENGINE_PLAN X8 step 2): tags on the\n"
+        "table along a long part and across its ends keep the passes from sliding along it. Their printed\n"
+        "size need not be known. A tag the others do not confirm is left out and said; a scan without\n"
+        "tags comes out exactly as before. Off: as before."
     ),
     "board.squares_x": "Chessboard squares, square and marker size (mm) and ArUco dictionary of the board.",
     "board.paper": '"letter" or "a4" (used by `ohs printables`).',

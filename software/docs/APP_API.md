@@ -653,7 +653,9 @@ type ProcessState = {
     track: StageInfo & { quality: "standard" | "best" | "preview" | null; tracked_pct: number | null;
                          warnings?: string[] };   // the camera path's warning (since 2026-11-20, below)
     straighten: StageInfo & { loops: number | null; correction_mm: number | null; correction_deg: number | null;
-                              crossings?: number | null };   // laser crossings used (M3 phase 3)
+                              crossings?: number | null;     // laser crossings used (M3 phase 3)
+                              tags?: number | null };        // tags that held the scan (ENGINE_PLAN X8 step 2,
+                                                             // 2026-11-23); null when none did, missing before then
     fuse: StageInfo & { voxel_mm: number | null };
     spacetime: StageInfo & { source: "track" | "straighten" | "fuse" | null;   // the stage whose mesh was refined
                              frames: number | null; patches: number | null;   // frames read; patches on the surface
@@ -778,7 +780,8 @@ Everything in the M3 phase 2 section is implemented as written, with these clari
 - Stages:
   - `when` is when the stage last finished; `job_id` is the job that ran it (for a recipe or Make mesh, that job's id).
   - `track.tracked_pct` is 0–100. *extra*: `track.voxel_mm`, the voxel size a recipe asked for (null = the quality's default).
-  - `straighten.loops` is the engine's `loops_accepted`; `correction_mm` / `correction_deg` are its largest change of a camera position / orientation.
+  - `straighten.loops` is the engine's `loops_accepted`; `correction_mm` / `correction_deg` are its largest change of a camera position / orientation, by the loops and the tags together.
+  - **Tags as anchors** (since 2026-11-23; setting `[process] straighten_tags`, off; `VALIDATION.md`, "Tags as anchors on a large part"): with the setting on and AprilTags in view, Straighten also holds the scan to the tags. `straighten.tags` is then the number of tags that held it, the stage's `summary` ends with what they did ("17 tags held the scan: the end of the scan moved 7.9 mm into place.", any tag left out and why, or why they changed nothing), and the stage is fused again as after closed loops. `loops` can be 0 on a stage the tags changed. `straighten.json` gains `tags: {acted, reason, used, left_out, moved_mm, ...}`; its `reason` stays the loops' own outcome and `changed` means the poses changed, by the loops or the tags. A scan without tags in view, or with the setting off, is unchanged.
   - `fuse.voxel_mm` is the voxel size actually used.
   - A new track resets straighten, fuse and both refinements to `none`, a new straighten resets fuse and the refinements (they built on the old poses), a new fuse resets the refinements, and a new `spacetime` resets `refine`.
 - A cancelled stage returns to its previous state, and its files are untouched. A failed stage is `failed` with the reason as its `summary`; the base and the edits stay.
@@ -822,7 +825,7 @@ Everything in the M3 phase 2 section is implemented as written, with these clari
   - `laser_depth`: `sign` (in words) and `per_line` `{<laser>: {frames, points, with_depth, median_mm, abs_median_mm, p05_mm, p95_mm, rejected}}`: each laser point's depth minus the dense depth around it (the median of the depth check's five samples; + = the laser point is farther), for every point the depth check looks at, before it drops any; `with_depth` counts those with dense depth around them, `rejected` is `lasers.n_rejected_by_depth`.
   - `laser_mesh`: the laser cloud against the stage's mesh: `all` (as `LaserInfo`: `gate_mm`, `points`, `stats`) and `per_line` `{<laser>: {points, used, stray, median_mm, mean_mm, abs_p95_mm}}` (signed along the normal, + = the lasers see the surface further out).
   - `tracking`: `frames` (tracked), `rmse_mm` (the ICP residual of the tracked frames) and `gyro_jump_deg` (where the gyro gave the prior, the angle between the tracker's rotation and the gyro's; each frame's is also `per_frame[i].jump_deg`), each `{n, median, p95, max}` (`{n: 0}` when there is none, e.g. at given poses).
-  - `straighten`: what Straighten had to correct, from `straighten.json`: `{reason, changed, keyframes, loop_candidates, loops_accepted, correction_mm, correction_deg, residual_mm: {before_max, after_max} | null, drift_scale, laser_curves: {changed, reason, crossings, miss_mm, moved_mm, moved_deg} | null}`. Null in the track's report; the straighten and fuse stages' reports have it, and when Straighten is skipped (nothing to correct) `result/report.json` gets it.
+  - `straighten`: what Straighten had to correct, from `straighten.json`: `{reason, changed, keyframes, loop_candidates, loops_accepted, correction_mm, correction_deg, residual_mm: {before_max, after_max} | null, drift_scale, laser_curves: {changed, reason, crossings, miss_mm, moved_mm, moved_deg} | null}`, and `tags: {acted, reason, used, moved_mm}` when Straighten had a tags step (2026-11-23). Null in the track's report; the straighten and fuse stages' reports have it, and when Straighten is skipped (nothing to correct) `result/report.json` gets it.
   - `ms`: what the block cost the processing (its share on the processing thread).
   - Should the block fail, the scan is still processed and `health` is `{version, error}`.
 - **The scan's calibration status** (*extra*, since H3): every stage's `report.json` with a `health` block (not a failed one) also has `health_status`, a `CalibHealth` (`source: "scan"`, with `signs`) of what this scan alone saw (`ohs.calib.health.scan_status`): Valid, Check recommended or Recalibration required, the part, one sentence and the step to redo. One scan is enough here; the setup state's status waits for 2 of the last 3. A scan processed without a GPU judges the cameras only (`note`). At given poses (the straighten and fuse stages) nothing is tracked, so the IMU is not judged there.

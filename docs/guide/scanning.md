@@ -312,6 +312,19 @@ On large, smooth, featureless areas (a whole door, a hood, a roof) markerless tr
 
 In marker mode the dots run dimmed while you scan, so the tags can be read. The final processing at full resolution reads tags better than the live view does.
 
+### Tags that hold a markerless scan (a setting, off)
+
+Tags can also hold a scan made in **Markerless** mode. The Straighten stage then ties every pass to the tags it saw, so the passes no longer sit shifted along a plain part. On a simulated plain panel 1.3 m long, scanned in three passes with tags on the table, the mesh's length was 0.2 to 0.6 mm off with the setting on and 0.7 to 2.6 mm off without it; the passes sat up to 1.1 mm apart along the panel (RMS) instead of up to 11 mm.
+
+It is off by default: it narrowly missed the accuracy the project set for it, and it has not been tried in **Markers** mode or with tags on the part itself. To use it:
+
+1. Lay tags on the table along at least one long side of the part and across both ends. Two tags must often be in view at once along the part: that is what holds the length. In the test they were 300 mm apart; closer is better.
+2. Do not move the tags during the scan. A tag that moves by about a millimetre can bend the scan.
+3. Set `straighten_tags = true` under `[process]` in the settings file and start the app again (see [Change the settings file](settings.md#change-the-settings-file)).
+4. Scan and make the mesh as usual. Make mesh takes longer (about 76 seconds more in the test), because the surface is built again at the corrected positions.
+
+Afterwards the Straighten stage says what the tags did, for example **17 tags held the scan: the end of the scan moved 7.9 mm into place.**, names any tag it left out and why, or says why the tags changed nothing. The printed size of the tags does not need to be known. A scan with no tag in view comes out exactly as before.
+
 ## Laser safety
 
 The line lasers, and the dot laser of the laser projector option, are **Class 3R**. In short:

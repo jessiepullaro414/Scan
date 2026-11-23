@@ -3,7 +3,7 @@
  * Build the surface", and the two refinements; a trial build says so in its title. Pure; `quality.test.ts` checks it.
  */
 import type { StageId, StageState } from "../api/types.ts";
-import { fmtInt } from "./format.ts";
+import { fmtFixed, fmtInt } from "./format.ts";
 
 /**
  * Whether a stage card of the scan's own mesh says "Running" (UX_PLAN R22): from its own state only (a stage run
@@ -38,6 +38,35 @@ export function stageTitle(id: StageId, o: { short?: boolean } = {}): string {
   const t = STAGE_TITLES[id];
   if (!t) return String(id);
   return t.trial && !o.short ? `${t.label} (trial)` : t.label;
+}
+
+/** A piece of a stage card's line: `b`, a number shown in bold. */
+export type LinePart = { t: string; b?: boolean };
+
+/**
+ * A done Straighten's line: "Closed 48 loops · moved the scan by 2.4 mm". When AprilTags held the scan (`tags`,
+ * ENGINE_PLAN X8 step 2; missing from an older engine: as null) the move is the loops' and the tags' together, so the
+ * line says so: "Closed 48 loops · 5 tags held the scan · moved the scan by 2.4 mm", or without loops "5 tags held the
+ * scan · …". Null where the card shows its other lines (no loops and no tags, or not done).
+ */
+export function straightenDoneParts(s: { state: StageState; loops: number | null; tags?: number | null; correction_mm: number | null; correction_deg: number | null }): LinePart[] | null {
+  const loops = s.loops ?? 0;
+  const tags = typeof s.tags === "number" ? s.tags : null;
+  if (s.state !== "done" || (loops <= 0 && tags === null)) return null;
+  const out: LinePart[] = [];
+  if (loops > 0) out.push({ t: "Closed " }, { t: fmtInt(loops), b: true }, { t: ` loop${loops === 1 ? "" : "s"}` });
+  if (tags !== null) out.push({ t: out.length ? " · " : "" }, { t: fmtInt(tags), b: true }, { t: ` tag${tags === 1 ? "" : "s"} held the scan` });
+  if (s.correction_mm !== null) {
+    out.push({ t: " · moved the scan by " }, { t: `${fmtFixed(s.correction_mm, 1)}${String.fromCharCode(0x202f)}mm`, b: true });
+    if (s.correction_deg !== null) out.push({ t: ` and ${fmtFixed(s.correction_deg, 2)}°` });
+  }
+  return out.filter((p) => p.t);
+}
+
+/** The same line as text. */
+export function straightenDoneLine(s: Parameters<typeof straightenDoneParts>[0]): string | null {
+  const p = straightenDoneParts(s);
+  return p ? p.map((x) => x.t).join("") : null;
 }
 
 /** A job of the Edit mesh page: a stage alone, an edit or a recipe. */

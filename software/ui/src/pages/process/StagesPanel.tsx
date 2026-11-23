@@ -17,7 +17,7 @@ import { fmtDateTime, fmtDetailMm, fmtFixed, fmtInt, fmtRelative } from "../../l
 import { stageBlock, type StageAction } from "../../lib/keepMode";
 import { effectiveValue } from "../../lib/presets";
 import { DEFAULT_QUALITY, QUALITIES, QUALITY_TEXT, normalizeQuality, qualityName } from "../../lib/quality";
-import { STAGE_TITLES, stageRunning, straightenSkippedLine } from "../../lib/stages";
+import { STAGE_TITLES, stageRunning, straightenDoneParts, straightenSkippedLine } from "../../lib/stages";
 import { PATH_WARNING_TITLE, splitWarnings } from "../../lib/pathWarning";
 import { cn } from "../../lib/util";
 import { isActive, useJobs } from "../../store/jobs";
@@ -230,22 +230,16 @@ export function StagesPanel({ pid, sid, state, busy, scan }: { pid: string; sid:
     else void run();
   };
 
-  const loops = straighten.loops;
   const skippedLine = straightenSkippedLine(straighten); // R22: not "Closed 48 loops" under "Skipped"
+  // the loops closed and, when AprilTags held the scan (X8 step 2), the tags: the move is theirs together
+  const doneParts = straightenDoneParts(straighten);
   const straightenDetails =
     skippedLine ? (
       <p className="text-xs text-muted">{skippedLine}</p>
     ) : straighten.state === "done" || straighten.state === "skipped" ? (
-      loops && loops > 0 && straighten.state === "done" ? (
-        <p className="text-xs text-fg">
-          Closed <b className="font-semibold tnum">{fmtInt(loops)}</b> loop{loops === 1 ? "" : "s"}
-          {straighten.correction_mm !== null ? (
-            <>
-              {" "}
-              · moved the scan by <b className="font-semibold tnum">{fmtFixed(straighten.correction_mm, 1)}&#8239;mm</b>
-              {straighten.correction_deg !== null ? <span className="tnum"> and {fmtFixed(straighten.correction_deg, 2)}°</span> : null}
-            </>
-          ) : null}
+      doneParts ? (
+        <p className="text-xs text-fg tnum">
+          {doneParts.map((p, i) => (p.b ? <b key={i} className="font-semibold">{p.t}</b> : <span key={i}>{p.t}</span>))}
         </p>
       ) : !straighten.summary ? (
         <p className="text-xs text-muted">

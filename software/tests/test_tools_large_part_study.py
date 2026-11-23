@@ -34,6 +34,23 @@ def test_the_scene_is_the_one_fixed_beforehand():
     assert abs(corner[2] - L.CORNER_Z) < 1e-9
 
 
+def test_the_tags_lie_on_the_table_beside_the_panel_and_leave_the_untagged_scene_as_it_was():
+    plain = L.panel_scene(0)
+    assert not plain.markers and plain.meta["tags"] is None
+    assert type(plain.primitives[0].albedo).__name__ == "NoiseAlbedo"  # step 1's scene, as rendered then
+    sc = L.panel_scene(0, "tags")
+    assert sorted(sc.markers) == list(range(20))
+    for i, X in sc.markers.items():
+        x, y = L.TAG_LAYOUTS["tags"][i]
+        assert np.allclose(X[:, 2], 0.0) and np.allclose(X.mean(axis=0)[:2], [x, y], atol=1e-6)
+        side = np.linalg.norm(X - np.roll(X, -1, axis=0), axis=1)
+        assert np.allclose(side, L.TAG_MM, atol=0.2)
+        assert np.all((np.abs(X[:, 0]) > L.HALF_L + 5) | (np.abs(X[:, 1]) > L.HALF_W + 5))  # never under the panel
+    # the camera at a tag sees its face: the table's decal reads the right way up from above (not mirrored)
+    on_panel = L.panel_scene(0, "panel")
+    assert sorted(on_panel.markers) == list(range(12)) and all(X[:, 2].min() > 10 for X in on_panel.markers.values())
+
+
 def test_the_path_reads_a_stretch_along_the_length_and_nothing_at_the_truth():
     sc = L.panel_scene(0)
     gt = _poses()

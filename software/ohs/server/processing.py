@@ -724,13 +724,25 @@ def stage_params(cfg: Any, mode: str, quality: str, width: int, voxel_mm: float 
 
 
 def straighten_looped(rep: dict | None, poses: dict | None) -> tuple[bool, int]:
-    """``(looped, loops)`` of a :func:`ohs.track.posegraph.straighten_trajectory` report: whether its loops changed the
-    poses (then Straighten fuses at them, and that mesh is the laser crossings' reference), and how many it closed."""
+    """``(looped, loops)`` of a :func:`ohs.track.posegraph.straighten_trajectory` report: whether its loops or the tags
+    in view (ENGINE_PLAN X8) changed the poses (then Straighten fuses at them, and that mesh is the laser crossings'
+    reference), and how many loops it closed."""
     rep = rep or {}
     loops = rep.get("loops_accepted")
     if not isinstance(loops, int):
         loops = len(rep.get("loops") or [])
-    return bool(loops and poses and rep.get("changed") is not False), loops
+    tags = bool((rep.get("tags") or {}).get("acted"))
+    return bool((loops or tags) and poses and rep.get("changed") is not False), loops
+
+
+def straighten_tags_used(rep: dict | None) -> int | None:
+    """How many tags held the scan in a Straighten report (ENGINE_PLAN X8 step 2), for the stage's ``tags``: None
+    when the tags did not change the poses (or the report has no tags' step). With it the stage card can tell a move
+    by the tags from one by the loops: ``loops`` counts the loops closed, ``correction_mm`` is both together."""
+    tg = (rep or {}).get("tags")
+    if not isinstance(tg, dict) or not tg.get("acted"):
+        return None
+    return len(tg.get("used") or [])
 
 
 def refine_changes(rep: dict) -> bool:
@@ -1123,7 +1135,7 @@ def _empty_state(pid: str, sid: str) -> dict:
     return {"format": FORMAT, "project_id": pid, "scan_id": sid,
             "stages": {"track": {**base, "quality": None, "tracked_pct": None, "voxel_mm": None, "warnings": []},
                        "straighten": {**base, "loops": None, "correction_mm": None, "correction_deg": None,
-                                      "crossings": None},
+                                      "crossings": None, "tags": None},
                        "fuse": {**base, "voxel_mm": None},
                        "spacetime": {**base, "source": None, "frames": None, "patches": None, "kept": None,
                                      "covered_pct": None, "moved_mm": None, "device": None},
@@ -2341,17 +2353,19 @@ class ProcessManager:
             traj = read_trajectory(sp.dir / "track" / "trajectory.csv")
             prog(0.0, "Looking for loops in the camera path", force=True)
             try:
-                from ohs.track.posegraph import straighten_trajectory
+                from ohs.track.posegraph import StraightenParams, straighten_trajectory
             except ImportError:
                 msg = "Straightening is not available in this version of the engine, so the scan was left as it is"
                 self._stage_end(sp, "straighten", state="skipped", summary=msg, loops=None, correction_mm=None,
-                                correction_deg=None)
+                                correction_deg=None, tags=None)
                 return msg
             from ohs.io.recording import RecordingReader
 
             calib = RecordingReader(sp.recording_dir).calibration()
             try:
-                poses, rep = straighten_trajectory(sp.recording_dir, calib, traj,
+                sparams = StraightenParams(tags=bool(getattr(self.st.cfg.process, "straighten_tags",
+                                                             StraightenParams.tags)))  # ENGINE_PLAN X8 step 2
+                poses, rep = straighten_trajectory(sp.recording_dir, calib, traj, params=sparams,
                                                    progress=_straighten_progress(prog.sub(*STRAIGHTEN_SPANS["loops"])),
                                                    cancelled=lambda: ctx.cancelled)
             except (JobCancelled, InterruptedError):
@@ -2362,7 +2376,7 @@ class ProcessManager:
                 log.exception("straighten_trajectory failed")
                 msg = "Straightening could not finish, so the scan was left as it is"
                 self._stage_end(sp, "straighten", state="skipped", summary=msg, loops=None, correction_mm=None,
-                                correction_deg=None)
+                                correction_deg=None, tags=None)
                 return msg
             ctx.check()
             rep = dict(rep or {})
@@ -2414,7 +2428,7 @@ class ProcessManager:
                     if res_rep is not None and _set_straighten(res_rep, rep):
                         _write_json(sp.result_dir / "report.json", res_rep)
                 self._stage_end(sp, "straighten", state="skipped", summary=msg, loops=int(loops or 0),
-                                correction_mm=0.0, correction_deg=0.0, crossings=None)
+                                correction_mm=0.0, correction_deg=0.0, crossings=None, tags=None)
                 return msg
             if adjusted:
                 report = self._fuse_into(ctx, sp, "straighten", prog.sub(*STRAIGHTEN_SPANS["fuse2"]), quality=quality,
@@ -2445,7 +2459,8 @@ class ProcessManager:
                 if isinstance(crep.get("warning"), str) and crep["warning"]:  # ENGINE_PLAN X0a: it may be fooled
                     verdict = f"{verdict.rstrip('.')}. {crep['warning']}"
             self._stage_end(sp, "straighten", state="done", summary=verdict, loops=int(loops or 0),
-                            correction_mm=corr_mm, correction_deg=corr_deg, crossings=crossings, job_id=ctx.job.id)
+                            correction_mm=corr_mm, correction_deg=corr_deg, crossings=crossings, job_id=ctx.job.id,
+                            tags=straighten_tags_used(rep))  # ENGINE_PLAN X8 step 2: how many tags held the scan
             return verdict
         except (JobCancelled, InterruptedError):
             self._stage_restore(sp, "straighten", before)

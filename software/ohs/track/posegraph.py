@@ -96,6 +96,18 @@ Method
    two keyframes around it, and the two results are blended by time (rotation slerp, translation
    lerp). So every frame keeps its tracked pose relative to its neighbouring keyframes.
 
+8. **Tags as anchors** (``params.tags``, ENGINE_PLAN X8 step 2; :mod:`ohs.track.tag_anchors`). Loops cannot see
+   a slide along a plain surface; AprilTags in view (on the table along a long part and across its ends) can. A quick
+   look at every ``tag_look_every``-th keyframe; without a tag, the poses and the report are exactly the loops' (the
+   report gets ``tags``: looked at, none seen). With tags, the keyframes (as the loops left them), the tags, the
+   tracked motion and the verified loops are fitted together and held to the tags' never-worse test on whole
+   keyframes held out; the corrections are interpolated to every frame as in step 7. The verdict then goes on with
+   what the tags did (how many held the scan and how far it moved, or why they changed nothing; any tag left out and
+   why), and when the tags changed a scan the loops left alone, its loops' part says "so the loops changed nothing"
+   instead of "so the scan is unchanged" (:func:`_straighten_verdict`). ``tags`` has the numbers (``acted``,
+   ``reason``, ``used``, ``left_out``, ``holdout``, ``moved_mm``, ``end_moved_mm``, ``frames_one``, ``frames_two``,
+   ``verdict``: its own sentence, ...). Its time is ``timings_s["tags"]``.
+
 Frames and units
 ----------------
 Poses are ``T_wc`` (frame C -> world, mm), as in ``trajectory.csv``; the world is whatever the
@@ -110,9 +122,11 @@ Report
 ------
 ``keyframes``, ``loop_candidates``, ``loops_accepted``, ``loops`` (frame index pairs),
 ``correction_mm`` / ``correction_deg`` (the largest change of any tracked frame's camera position
-and orientation), ``verdict`` (plain words), ``changed`` (poses differ from the input),
-``reason`` (``straightened``, ``too_short``, ``no_candidates``, ``not_verified``, ``disagree``,
-``already_straight``, ``not_better``, ``bends_too_much``), ``candidates`` (per candidate: frames,
+and orientation, by the loops and the tags together), ``verdict`` (plain words), ``changed`` (the poses
+differ from the input: the poses changed, by the loops or the tags), ``reason`` (the loops' own outcome:
+``straightened``, ``too_short``, ``no_candidates``, ``not_verified``, ``disagree``,
+``already_straight``, ``not_better``, ``bends_too_much``; what the tags did is ``tags["acted"]`` and
+``tags["reason"]``, step 8), ``candidates`` (per candidate: frames,
 accepted, why not, ``large`` (checked against the large-drift bounds), ``via`` (``tracked`` or
 ``global``: where ICP started), fitness, overlap, RMS, how far ICP moved, measurable directions
 ``dof``, kept by the graph), ``drift_scale`` (step 4, large drift), ``residual_mm`` (loops
@@ -253,6 +267,27 @@ class StraightenParams:
     fgr_max_corr_mm: float = 6.0
     adaptive_drift: bool = True
     max_drift_scale: float = 30.0
+    # 8. tags as anchors (ENGINE_PLAN X8 step 2, :mod:`ohs.track.tag_anchors`): AprilTags in view hold the scan; a scan
+    # where the quick look finds none is returned exactly as the loops left it
+    tags: bool = False
+    tag_look_every: int = 4  # the quick look: the left image of every this-many-th keyframe
+    tag_min_views: int = 3  # a tag seen in fewer keyframes is left out (it cannot be checked)
+    tag_shape_tol: float = 0.06  # a detection's edges and diagonals / sqrt 2 agree with their mean within this share
+    # a single frame's tag corner scatter in the image (px), measured on the large-part study's seed 3 (VALIDATION.md X8
+    # step 2): across the image (0.15-0.2 mm at 250-300 mm) and as the disparity's share along the view (0.36 mm)
+    tag_sigma_px: float = 0.39
+    tag_sigma_view_px: float = 0.11
+    # the tracked turn between keyframes (deg a frame, a random walk): the gyro holds it far better than the loops'
+    # drift model says, and a looser one lets a frame that sees one tag swing about it
+    tag_drift_deg_per_frame: float = 0.008  # measured there too (the tracked turn against the true one)
+    tag_pre_gate_mm: float = 25.0  # a view this far from where the tracked poses put the tag's other views: misread
+    tag_gate_mm: float = 1.5  # after the fit, a view whose corners are farther than this (RMS) does not fit (3x measured)
+    tag_max_bad_share: float = 0.2  # a tag with more of its views not fitting disagrees (moved, or misread): left out
+    tag_influence_mm: float = 1.0  # without a tag the scan moves more than this (265 mm ahead): no other tag checks it
+    tag_holdout_every: int = 2  # the held-out test: every this-many-th keyframe that sees a tag, each split in turn
+    tag_holdout_max_ratio: float = 0.85  # held-out views must fit at least this much better (after / before)
+    tag_holdout_min_test: int = 10  # fewer held-out views than this in a split: the poses are unchanged
+    tag_min_residual_mm: float = 0.2  # held-out views already within this (median, before): the scan agrees
 
     def __post_init__(self) -> None:
         if self.information not in INFORMATION_KINDS:
@@ -260,7 +295,8 @@ class StraightenParams:
         if len(self.icp_iterations) != 3:
             raise ValueError("icp_iterations needs three levels (coarse, middle, fine)")
         for name in ("kf_travel_mm", "kf_rotation_deg", "kf_max_gap_s", "voxel_mm", "coarse_voxel_mm", "icp_fine_mm",
-                     "loop_sigma_mm", "drift_mm_per_frame", "drift_deg_per_frame", "loop_prune_mm"):
+                     "loop_sigma_mm", "drift_mm_per_frame", "drift_deg_per_frame", "loop_prune_mm", "tag_sigma_px",
+                     "tag_sigma_view_px", "tag_drift_deg_per_frame", "tag_gate_mm", "tag_pre_gate_mm"):
             if not float(getattr(self, name)) > 0:
                 raise ValueError(f"{name} must be positive")
 
@@ -1097,6 +1133,162 @@ def straighten_trajectory(
     progress: Callable[[int, int], None] | None = None,
     cancelled: Callable[[], bool] | None = None,
 ) -> tuple[dict[int, np.ndarray], dict]:
+    """Close loops in a tracked scan, then hold it to the tags in view (``params.tags``), and return corrected poses
+    (see the module docstring and :mod:`ohs.track.tag_anchors`).
+
+    ``trajectory``: ``[(frame_index, t_host, ok, T_wc 4x4)]`` as ``process_recording`` writes
+    ``trajectory.csv`` (or that file's path). ``calib`` defaults to the recording's
+    ``calibration.json``; ``depth_params`` to the pipeline's depth settings at the cloud resolution.
+    ``progress(k, n)`` is called after each step of the loops (the tags' step reports none); ``cancelled()`` is
+    polled between steps and ``InterruptedError`` raised when it returns true.
+
+    Returns ``(poses, report)``: the corrected ``T_wc`` of every tracked frame (the input poses when nothing is
+    changed) and the report described in the module docstring, with ``tags`` (what the tags did). Without tags in view
+    (or with ``params.tags`` off) the poses and the report are exactly the loops' (``tags`` apart).
+    """
+    p = params if params is not None else StraightenParams()
+    ctx: dict[str, Any] = {}
+    poses, report = _straighten_loops(rec_path, calib, trajectory, params=p, depth_params=depth_params, progress=progress,
+                                      cancelled=cancelled, ctx=ctx)
+    if not p.tags or "rows" not in ctx:
+        report["tags"] = {"enabled": bool(p.tags), "seen": 0, "acted": False}
+        return poses, report
+    return _anchor_to_tags(poses, report, p, ctx, cancelled)
+
+
+def tag_odometry_params(p: StraightenParams) -> StraightenParams:
+    """The drift model of the tags' step: the loops' translation, the turn as ``tag_drift_deg_per_frame``."""
+    return replace(p, drift_deg_per_frame=float(p.tag_drift_deg_per_frame))
+
+
+def _tags_sentence(fit: Any, n_seen: int, moved: float | None, where: str, loops_acted: bool = False) -> str:
+    """What the tags did, in plain words (the report's verdict gets it after the loops'). ``loops_acted``: the loops
+    moved the scan first, so the tags' move comes on top of theirs."""
+    used = len(fit.used)
+    held = (f"Then {_plural(used, 'tag')} held the scan: {where} moved a further {moved or 0.0:.1f} mm into place."
+            if loops_acted else f"{_plural(used, 'tag')} held the scan: {where} moved {moved or 0.0:.1f} mm into place.")
+    out = {"anchored": held,
+           "agree": f"{_plural(used, 'tag')} seen, and the scan already agrees with them, so they changed nothing.",
+           "not_better": f"{_plural(used, 'tag')} seen, but a check on frames set aside showed that holding the scan to "
+                         "them would not clearly help, so they changed nothing.",
+           "bends_too_much": f"{_plural(used, 'tag')} seen, but holding the scan to them would bend it more than the "
+                             "tracking can have drifted, so they changed nothing.",
+           "no_tags": "No tag was seen in enough frames to hold the scan, so they changed nothing.",
+           "too_few": f"{_plural(n_seen, 'tag')} seen, but too few of them in enough frames to hold the scan, so they "
+                      "changed nothing."}[fit.reason]
+    for m, why in sorted(fit.left_out.items()):
+        out += f" Tag {m} was left out: {why}."
+    if fit.dropped_views:
+        out += f" {_plural(fit.dropped_views, 'single view')} of a tag did not fit and {'was' if fit.dropped_views == 1 else 'were'} left out."
+    return out
+
+
+_LOOPS_UNCHANGED = ", so the scan is unchanged."
+_NO_LOOPS = "No loops found: to let Studio straighten a scan, pass over an earlier part again."
+
+
+def _straighten_verdict(loops_verdict: str, loops_reason: str, fit: Any, n_seen: int, moved: float | None,
+                        where: str) -> str:
+    """The whole verdict, the loops' part and the tags', true as one text. When the tags changed a scan the loops left
+    alone, the loops' part says the loops changed nothing (not that the scan is unchanged) and drops the advice to pass
+    over an earlier part again; when both acted, the tags' move is said to come on top. When the tags did not act,
+    the loops' part stays word for word (it is true)."""
+    loops_acted = loops_reason == "straightened"
+    tags_acted = fit.reason == "anchored"  # the tags' fit gives new poses exactly then
+    head = (loops_verdict or "").strip()
+    if tags_acted and not loops_acted:
+        if head == _NO_LOOPS:
+            head = "No loops found."
+        elif head.endswith(_LOOPS_UNCHANGED):
+            head = head[: -len(_LOOPS_UNCHANGED)] + ", so the loops changed nothing."
+    tail = _tags_sentence(fit, n_seen, moved, where, loops_acted and tags_acted)
+    return f"{head} {tail}".strip()
+
+
+def _anchor_to_tags(poses: dict[int, np.ndarray], report: dict, p: StraightenParams, ctx: dict,
+                    cancelled: Callable[[], bool] | None) -> tuple[dict[int, np.ndarray], dict]:
+    """Step 8: hold the scan (as the loops left it) to the tags in view (:mod:`ohs.track.tag_anchors`)."""
+    from ohs.app.process import trajectory_errors  # noqa: PLC0415
+    from ohs.track.tag_anchors import TagView, anchor_keyframes, detect_tag_views  # noqa: PLC0415
+
+    t0 = time.perf_counter()
+    rows = ctx["rows"]
+    tags: dict[str, Any] = {"enabled": True, "seen": 0, "acted": False}
+    report["tags"] = tags
+    timings = report["timings_s"]
+    if len([r for r in rows if r[2]]) < 2:
+        return poses, report
+    kf_pos = select_keyframes(rows, p.kf_travel_mm, p.kf_rotation_deg, p.kf_max_gap_s, p.max_keyframes)
+    kf_frames = [int(rows[k][0]) for k in kf_pos]
+    det, info = detect_tag_views(ctx["reader"], ctx["calib"], kf_frames, p, cancelled)
+    tags.update(looked_at=info["looked_at"], frames_read=info["read"])
+    if not det:
+        timings["tags"] = time.perf_counter() - t0
+        timings["total"] = time.perf_counter() - ctx["wall0"]
+        return poses, report
+    views = [TagView(k, m, X) for k, fr in enumerate(kf_frames) for m, X in sorted(det.get(fr, {}).items())]
+    per_frame = [len(det.get(fr, {})) for fr in kf_frames]
+    ids = sorted({v.tag for v in views})
+    tags.update(seen=len(ids), ids=ids, keyframes=len(kf_frames), frames_one=int(sum(n >= 1 for n in per_frame)),
+                frames_two=int(sum(n >= 2 for n in per_frame)), views=len(views))
+    T_kf = np.stack([poses[f] for f in kf_frames])
+    frames = np.diff(np.asarray(kf_pos))
+    lost = np.array([sum(1 for r in rows[kf_pos[k]:kf_pos[k + 1]] if not r[2]) for k in range(len(kf_pos) - 1)])
+    odometry = [(e.k, e.X, e.info) for e in odometry_edges(T_kf, frames, lost, tag_odometry_params(p))]
+    f, B = info["K"]
+    fit = anchor_keyframes(T_kf, views, odometry, p, f, B, loops=ctx.get("loops"))
+    tags["loops_used"] = len(ctx.get("loops") or [])
+    tags.update(reason=fit.reason, used=fit.used, left_out={str(m): w for m, w in sorted(fit.left_out.items())},
+                dropped_views=fit.dropped_views, holdout=fit.holdout, residual_mm=fit.residual_mm,
+                side_mm={str(m): round(s, 3) for m, s in sorted(fit.side_mm.items())},
+                influence_mm={str(m): d for m, d in sorted(fit.influence_mm.items())})
+    moved_max = None
+    if fit.T is not None:
+        tracked = [r for r in rows if r[2]]
+        idx = [int(r[0]) for r in tracked]
+        T_cur = np.stack([poses[i] for i in idx])
+        times = np.array([float(r[1]) for r in tracked])
+        kf_times = np.array([float(rows[k][1]) for k in kf_pos])
+        T_new = interpolate_poses(times, T_cur, kf_times, T_kf, fit.T)
+        moved = np.linalg.norm(T_new[:, :3, 3] - T_cur[:, :3, 3], axis=1)
+        m_max = int(np.argmax(moved))
+        moved_max = float(moved.max())
+        where = _where(idx[m_max], idx[0], idx[-1])
+        poses = {i: T_new[m] for m, i in enumerate(idx)}
+        pin = ctx["poses_in"]
+        T_in = np.stack([pin[i] for i in idx])
+        report["correction_mm"] = float(np.max(np.linalg.norm(T_new[:, :3, 3] - T_in[:, :3, 3], axis=1)))
+        report["correction_deg"] = float(max(rotation_angle_deg(T_in[m, :3, :3].T @ T_new[m, :3, :3]) for m in range(len(idx))))
+        report["changed"] = any(not np.array_equal(poses[i], pin[i]) for i in pin)
+        tags.update(acted=True, moved_mm=moved_max, end_moved_mm=float(moved[-1]))
+        gt = ctx["gt"]
+        if gt and "ground_truth" in report:
+            report["ground_truth"]["after"] = _gt_summary(trajectory_errors(gt, [(i, poses[i], True) for i in pin]))
+            pairs = [tuple(c["frames"]) for c in report["candidates"]]
+            if pairs:
+                report["ground_truth"]["revisits"]["after"] = _revisit_errors(gt, poses, pairs, p.view_distance_mm,
+                                                                              ctx["gaps"])
+    else:
+        where = "the scan"
+    tags["verdict"] = _tags_sentence(fit, len(ids), moved_max, where,
+                                     report.get("reason") == "straightened" and fit.reason == "anchored")
+    report["verdict"] = _straighten_verdict(report["verdict"], report.get("reason", ""), fit, len(ids), moved_max, where)
+    timings["tags"] = time.perf_counter() - t0
+    timings["total"] = time.perf_counter() - ctx["wall0"]
+    return poses, report
+
+
+def _straighten_loops(
+    rec_path: str | Path,
+    calib: Any,
+    trajectory: Sequence[Sequence[Any]] | str | Path,
+    *,
+    params: StraightenParams | None = None,
+    depth_params: Any = None,
+    progress: Callable[[int, int], None] | None = None,
+    cancelled: Callable[[], bool] | None = None,
+    ctx: dict | None = None,
+) -> tuple[dict[int, np.ndarray], dict]:
     """Close loops in a tracked scan and return corrected poses (see the module docstring).
 
     ``trajectory``: ``[(frame_index, t_host, ok, T_wc 4x4)]`` as ``process_recording`` writes
@@ -1140,6 +1332,8 @@ def straighten_trajectory(
     }
     gt = reader.ground_truth_poses()
     gaps: dict[tuple[int, int], np.ndarray] = {}  # verified loops (frame pairs): J^T J for the truth's surface gap
+    if ctx is not None:  # what the tags' step (straighten_trajectory) needs from here
+        ctx.update(rows=rows, reader=reader, calib=calib, gt=gt, gaps=gaps, poses_in=poses_in, wall0=wall0)
 
     def finish(poses: dict[int, np.ndarray], reason: str, verdict: str) -> tuple[dict[int, np.ndarray], dict]:
         if progress is not None and steps.k < steps.n:  # an early answer skips the remaining steps
@@ -1239,6 +1433,9 @@ def straighten_trajectory(
         if c.accepted:
             gaps[(int(kf_frames[c.a]), int(kf_frames[c.b]))] = c.J2_full
     loops = [c for c in checks if c.accepted]
+    if ctx is not None:  # the tags' step holds the passes' distance along the normals with them
+        ctx["loops"] = [(int(c.a), int(c.b), np.asarray(c.T_ba, dtype=np.float64), np.asarray(c.info, dtype=np.float64))
+                        for c in loops]
     if not loops:
         return finish(dict(poses_in), "not_verified",
                       f"Found {_plural(len(cands), 'place')} where the scan passes over an earlier part, but none "
