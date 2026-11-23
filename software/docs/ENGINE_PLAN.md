@@ -74,6 +74,22 @@ The rules of `FEATURE_PLAN.md` and `MAINTENANCE_PLAN.md` hold. In short:
     measured with the old test.
   - The baseline to judge against from now on: `tools/scorecard_baselines/2026-11-21-gpu-core-app-frames.json`.
 
+**Decided by the owner (2026-11-23):**
+- **E-D3: four results have to be fixed.** After reading the comparison with the market
+  (`SCANNER_COMPARISON.md`, updated 2026-11-23) the owner said: "I think we will have to fix"
+  that "a Ø25 hole over open space reads 1 to 7 mm small, thin standing walls read 0.5 to
+  1.3 mm too thick, and the 1.3 m panel came out 1.6 to 6.5 mm wrong in length. A merge beat
+  the better single scan on only 1 of 5 pairs". These four go ahead of X9 to X14:
+  1. Holes over open space (gap item 1). Tried and not adopted: X1 (the guard by the matcher's
+     doubt), X2 (rims from the laser lines' ends).
+  2. Thin standing walls (gap item 2). Tried: X3, X4, X4b, X4c (not adopted), X5 (fine walls,
+     a choice per scan).
+  3. The length of long plain parts (gap item 7): X8 step 2 (tags as anchors), running.
+  4. A merge that beats the better single scan (gap item 8): X7 measured it; nothing built.
+  E-D1 still holds for each: a change goes on by default only when it is better on every
+  scorecard scene and nothing thin gets worse; a miss stays a setting; a near miss comes to
+  the owner with numbers. New experiments for 1, 2 and 4 are being designed (X15 on).
+
 ## The error budget today
 
 GPU path, Standard quality, 1 mm voxels, tracked unless said.
