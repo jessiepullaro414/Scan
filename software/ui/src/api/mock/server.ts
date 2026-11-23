@@ -589,6 +589,8 @@ class MockBackend {
         if (e === "process" && is("POST", 5)) {
           // P2: no quality asked for: the preset's, else standard; the preset's mesh detail when it names one
           const act = this.presets.acting(s);
+          // ENGINE_PLAN X5 step 2: the scan's choice of "Make only the thin walls finer", stored when given
+          if (typeof body.fine_walls === "boolean") this.studio.setFineWalls(s, body.fine_walls);
           return json(200, this.studio.makeMesh(p, s, normalizeQuality(body.quality) ?? act.quality ?? "standard", act.voxel_mm ?? null));
         }
         if (e === "preset" && seg.length === 5) {

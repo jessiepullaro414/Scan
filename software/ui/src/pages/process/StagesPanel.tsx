@@ -380,7 +380,7 @@ export function StagesPanel({ pid, sid, state, busy, scan }: { pid: string; sid:
 
       {state.base ? (
         <p className="mt-3 text-[11.5px] text-subtle">
-          Starting mesh: <span className="font-mono text-muted tnum">{fmtInt(state.base.triangles)}</span> triangles, from {STAGES[state.base.stage]?.label ?? state.base.stage}.
+          Starting mesh: <span className="font-mono text-muted tnum">{fmtInt(state.base.triangles)}</span> triangles, from {state.base.stage === "fine_walls" ? "Make only the thin walls finer" : (STAGES[state.base.stage]?.label ?? state.base.stage)}.
           {edits ? ` Edits apply on top of it.` : ""}
         </p>
       ) : null}

@@ -124,6 +124,11 @@ __all__ = ["ProcessManager", "RecipeStore", "ScanProcess", "BUILTIN_RECIPES", "P
 log = logging.getLogger(__name__)
 
 STAGES = ("track", "straighten", "fuse", "spacetime", "refine")
+#: Make mesh's "Make only the thin walls finer" (ENGINE_PLAN X5 step 2, a choice per scan): a stage of its own, kept in
+#: ``state.json`` like the others but in the API's ``stages`` (and ``making.stages``) only once it ran, so that a scan
+#: nobody chose it for reads exactly as before
+FINE_WALLS = "fine_walls"
+ALL_STAGES = STAGES + (FINE_WALLS,)
 MESH_OPS = ("remove_floaters", "fill_holes", "smooth", "decimate", "delete_faces", "keep_faces", "remove_table")
 #: edits a recipe may hold (selections belong to one scan); "Remove the table" may be in a user's
 #: recipe, never in a built-in one
@@ -145,7 +150,8 @@ _PARAM_WORDS = {"min_triangles": "the smallest piece (in triangles)", "min_size_
                 "margin_mm": "the margin", "voxel_mm": "the mesh detail"}
 #: a stage's work in words, for "... failed"
 _STAGE_WHAT = {"track": "Following the camera", "straighten": "Straightening", "fuse": "Building the surface",
-               "refine": "Refining with the laser lines", "spacetime": "Refining from the images"}
+               "refine": "Refining with the laser lines", "spacetime": "Refining from the images",
+               FINE_WALLS: "Making the thin walls finer"}
 #: a request the page should never send (an old page, or a bug)
 _RELOAD = "Reload the page and try again."
 PROCESS_KINDS = ("process_scan", "process_track", "process_straighten", "process_fuse", "process_spacetime",
@@ -176,6 +182,17 @@ MAKE_MESH_SHARES = {"track": 0.47, "straighten": 0.37, "refine": 0.03, "edits": 
 #: "Refine from the images" inside Make mesh (``[process] refine_from_images``, ENGINE_PLAN X6, off by default): its
 #: share against the parts above (they keep theirs and are scaled with it)
 SPACETIME_SHARE = 0.15
+#: "Make only the thin walls finer" inside Make mesh (ENGINE_PLAN X5 step 2, a choice per scan): its share against the
+#: parts above, only when it runs. Measured 2026-11-22 (VALIDATION.md, "Fine mesh detail on thin walls only"), what Make
+#: mesh runs on this PC's graphics card: the step 5.8 to 6.8 s of 47.9 to 49.7 s on the standing walls and 10.0 to
+#: 10.9 s of 89.7 to 91.7 s on the sheet, tracked: 12 to 14 % of the whole, so 0.15 against the others' 1.0
+FINE_WALLS_SHARE = 0.15
+#: the step runs at the mesh detail it was measured at only (1 mm; any other: skipped, with the reason)
+FINE_WALLS_VOXEL_MM = 1.0
+#: the kept depth is written only when the scan's drive has room for it and this much more: the new mesh's own files
+#: (a run beside the result holds two results while it runs) and room for the system; else the step is skipped
+#: before Follow the camera, with the space it needs (the app warns, it does not block)
+FINE_WALLS_DISK_MARGIN_MB = 2048.0
 #: Straighten's own parts, of its share: the loop search, the fuse at the loops' poses (only with loops), the laser
 #: crossings, and the fuse at the crossings' poses (only when they changed the poses); a part that does not run is
 #: passed over (the percentage jumps ahead, never back: Straighten saves its mesh at 0.96; before, the first fuse
@@ -802,6 +819,94 @@ def write_spacetime_stage(out: Path, src_dir: Path, src: str, V2: np.ndarray, F:
     return report
 
 
+def remove_kept_depth(sp: Any) -> list[Path]:
+    """Remove the depth Follow the camera kept for "Make only the thin walls finer" (``track/fused_depth/``, and in a
+    pass's folder ``track.tmp-*/``) from the run's process folder and, for a run beside the result, from the scan's
+    own: a run stopped on the way (a power cut) leaves it, and it is never used again. Returns what was removed."""
+    from ohs.app.fine_walls import SPOOL_DIR
+
+    gone: list[Path] = []
+    for d in [sp.dir] + ([sp.live.dir] if getattr(sp, "live", None) is not None else []):
+        for f in [d / "track" / SPOOL_DIR, *(d.glob(f"track.tmp-*/{SPOOL_DIR}") if d.is_dir() else [])]:
+            if f.exists():
+                _rmtree(f)
+                gone.append(f)
+    if gone:
+        log.info("removed kept depth no longer used: %s", ", ".join(str(g) for g in gone))
+    return gone
+
+
+def free_disk_mb(path: Path) -> float:
+    """The free space (MB of 2^20 bytes) on the drive of ``path`` (its nearest folder that exists)."""
+    p = Path(path)
+    while not p.exists() and p.parent != p:
+        p = p.parent
+    return shutil.disk_usage(p).free / 2 ** 20
+
+
+def _mb_words(mb: float) -> str:
+    return f"{mb / 1024:.1f} GB" if mb >= 100 else f"{mb:.0f} MB"
+
+
+#: "Make only the thin walls finer" did not act on this mesh: why, in a line for the page and the stage
+_FINE_WHY = {
+    "preview": "It does not run at Preview quality, so the mesh was made without it.",
+    "no_graphics_card": "It needs a graphics card, so the mesh was made without it.",
+    "no_kept_depth": "The frames it needs were not kept, so the mesh was left as it is.",
+    "no_thin_walls": "No thin walls were found in the mesh, so it was left as it is.",
+    "no_finer_surface": "The finer mesh detail held no surface near the thin walls, so the mesh was left as it is.",
+    "failed": "It could not finish, so the mesh was left as it was made. Your recording is safe.",
+}
+FINE_WALLS_NOTE = "Make only the thin walls finer was on for this scan."
+
+
+def fine_walls_line(info: dict) -> str:
+    """The one line the page shows after a Make mesh with "Make only the thin walls finer" on (``made.fine_walls``):
+    what it did, or why it did not."""
+    if info.get("acted"):
+        regions = info.get("regions")
+        on = f" on {regions:,} wall{'s' if regions != 1 else ''}" if isinstance(regions, int) and regions > 0 else ""
+        secs = info.get("seconds")
+        took = f", in {float(secs):.0f} s" if isinstance(secs, (int, float)) else ""
+        return (f"The thin walls were made finer: {100.0 * float(info.get('share') or 0.0):.1f} % of the surface{on}, at "
+                f"mesh detail 0.5 mm{took}. The rest of the mesh is as Make mesh made it.")
+    why = info.get("why")
+    if why == "mesh_detail":
+        v = info.get("voxel_mm")
+        made = f" and this mesh is made at {_fmt(float(v))} mm" if isinstance(v, (int, float)) else ""
+        return (f"{FINE_WALLS_NOTE} It was measured at mesh detail {_fmt(FINE_WALLS_VOXEL_MM)} mm only{made}, so the mesh "
+                f"was made without it.")
+    if why == "disk":
+        return (f"{FINE_WALLS_NOTE} It needs about {_mb_words(float(info.get('need_mb') or 0.0))} of free disk space "
+                f"while the mesh is made, and {_mb_words(FINE_WALLS_DISK_MARGIN_MB)} more to spare; the drive has "
+                f"{_mb_words(float(info.get('free_mb') or 0.0))} free, so the mesh was made without it. Free some space, "
+                f"then make the mesh again.")
+    return f"{FINE_WALLS_NOTE} {_FINE_WHY.get(str(why), 'It did not change the mesh.')}"
+
+
+def fine_walls_offer(report: dict, track_report: dict | None = None) -> dict | None:
+    """Whether the thin-parts hint may offer "Make only the thin walls finer" for a mesh made with ``report`` (its
+    ``report.json``): made with the mesh model on the graphics card (the depth is kept only there), at the mesh detail
+    the step was measured at (:data:`FINE_WALLS_VOXEL_MM`), not at Preview quality. Then ``{frames, bytes_per_frame}``
+    for the disk space it needs (the frames Follow the camera processed, from ``track_report`` when given); else
+    None, and the hint offers the preset alone, as before."""
+    from ohs.app.fine_walls import KEPT_BYTES_PER_PIXEL
+
+    mesh = report.get("mesh") or {}
+    if "on the GPU" not in str(mesh.get("reconstruction") or ""):
+        return None
+    v = mesh.get("voxel_mm")
+    if not isinstance(v, (int, float)) or abs(float(v) - FINE_WALLS_VOXEL_MM) > 1e-6:
+        return None
+    if quality_or_none(report.get("quality")) == "preview":
+        return None
+    frames = ((track_report or {}).get("frames") or {}).get("processed") or (report.get("frames") or {}).get("processed")
+    size = report.get("image_size")
+    if not isinstance(frames, int) or frames <= 0 or not isinstance(size, list) or len(size) != 2:
+        return None
+    return {"frames": frames, "bytes_per_frame": KEPT_BYTES_PER_PIXEL * int(size[0]) * int(size[1])}
+
+
 def _read_json(path: Path) -> dict | None:
     try:
         d = json.loads(path.read_text(encoding="utf-8"))
@@ -1023,7 +1128,9 @@ def _empty_state(pid: str, sid: str) -> dict:
                        "spacetime": {**base, "source": None, "frames": None, "patches": None, "kept": None,
                                      "covered_pct": None, "moved_mm": None, "device": None},
                        "refine": {**base, "source": None, "points": None, "outliers": None, "moved_pct": None,
-                                  "moved_mm": None, "residual_before_mm": None, "residual_after_mm": None}},
+                                  "moved_mm": None, "residual_before_mm": None, "residual_after_mm": None},
+                       FINE_WALLS: {**base, "source": None, "why": None, "share_pct": None, "regions": None,
+                                    "kept_mb": None}},
             "base": None, "edits": [], "cursor": 0, "version": 0, "made": None}
 
 
@@ -1064,6 +1171,8 @@ class ScanProcess:
         self.deferred: dict[str, Any] = {"fields": {}, "health": None}
         self._t_stage: dict[str, float] = {}  # when each running stage started (time.monotonic), for its `seconds`
         self.plan: list[dict] | None = None  # a Make mesh's parts and their spans of the percentage (R18)
+        # what "Make only the thin walls finer" did in this run (ENGINE_PLAN X5 step 2), for made.fine_walls; None: off
+        self.fine_walls: dict | None = None
         self.t0: float | None = None  # when a run beside the result started (time.monotonic)
 
     def reset_caches(self) -> None:
@@ -1088,7 +1197,7 @@ class ScanProcess:
             return False
         st = _empty_state(self.pid, self.sid)
         st.update({k: v for k, v in data.items() if k in st})
-        for name in STAGES:
+        for name in ALL_STAGES:
             info = {**_empty_state(self.pid, self.sid)["stages"][name], **(data.get("stages", {}).get(name) or {})}
             if info["state"] == "running":
                 info.update(state="failed", summary="Interrupted: the app stopped while this ran. Run it again.")
@@ -1175,14 +1284,17 @@ def _span(span: tuple[float, float], f: float) -> float:
     return span[0] + (span[1] - span[0]) * min(1.0, max(0.0, float(f)))
 
 
-def make_mesh_plan(*, straighten: bool, refine: bool, edits: bool, spacetime: bool = False) -> dict[str, tuple[float, float]]:
+def make_mesh_plan(*, straighten: bool, refine: bool, edits: bool, spacetime: bool = False,
+                   fine_walls: bool = False) -> dict[str, tuple[float, float]]:
     """The span of the percentage each part of a Make mesh (or a recipe on everything) takes: ``{part: (from, to)}``
     in order, from :data:`MAKE_MESH_SHARES` for the parts that run (UX_PLAN R18). ``spacetime``: "Refine from the
     images" between Straighten and Refine with lasers (``[process] refine_from_images``, off by default:
-    :data:`SPACETIME_SHARE`)."""
-    run = {"track": True, "straighten": straighten, "spacetime": spacetime, "refine": refine, "edits": edits}
-    table = {**MAKE_MESH_SHARES, "spacetime": SPACETIME_SHARE}
-    shares = {k: table[k] for k in ("track", "straighten", "spacetime", "refine", "edits") if run[k]}
+    :data:`SPACETIME_SHARE`). ``fine_walls``: "Make only the thin walls finer" right after Straighten (a choice per
+    scan, ENGINE_PLAN X5 step 2: :data:`FINE_WALLS_SHARE`), only when it will run."""
+    run = {"track": True, "straighten": straighten, FINE_WALLS: fine_walls, "spacetime": spacetime, "refine": refine,
+           "edits": edits}
+    table = {**MAKE_MESH_SHARES, "spacetime": SPACETIME_SHARE, FINE_WALLS: FINE_WALLS_SHARE}
+    shares = {k: table[k] for k in ("track", "straighten", FINE_WALLS, "spacetime", "refine", "edits") if run[k]}
     total = sum(shares.values())
     out, a = {}, 0.0
     for k, v in shares.items():
@@ -1323,8 +1435,10 @@ class ProcessManager:
         with sp.lock:
             st = sp.state
             stages = {}
-            for name in STAGES:
+            for name in ALL_STAGES:
                 info = dict(st["stages"][name])
+                if name == FINE_WALLS and info.get("state") == "none":  # only once it ran (a choice per scan)
+                    continue
                 stages[name] = info
             edits = [{k: v for k, v in e.items() if k != "stats"} for e in st["edits"]]
             base = st["base"]
@@ -1345,7 +1459,8 @@ class ProcessManager:
             with mk.lock:
                 out["making"] = {"stages": {name: {k: mk.state["stages"][name].get(k)
                                                    for k in ("state", "summary", "started", "seconds")}
-                                            for name in STAGES},
+                                            for name in ALL_STAGES
+                                            if name != FINE_WALLS or mk.state["stages"][name].get("state") != "none"},
                                  "plan": copy.deepcopy(mk.plan)}
             if mk.t0 is not None:  # R18: how long the whole job has run, and what is left at this pace
                 el = time.monotonic() - mk.t0
@@ -2123,13 +2238,17 @@ class ProcessManager:
         safe_call("updating the scan", lambda: self.st.projects.update_scan(sp.pid, sp.sid, **fields))
 
     def _fuse_into(self, ctx: Any, sp: ScanProcess, name: str, prog: _Prog, *, quality: str, voxel_mm: float | None,
-                   poses: dict[int, np.ndarray] | None) -> dict:
-        """``process_recording`` into ``process/<name>/`` (tracked, or at ``poses``); returns the report."""
+                   poses: dict[int, np.ndarray] | None, keep_depth: bool = False) -> dict:
+        """``process_recording`` into ``process/<name>/`` (tracked, or at ``poses``); returns the report. ``keep_depth``:
+        the pass keeps each fused frame's depth in ``<name>/fused_depth/`` (``ProcessParams.fine_walls``, for "Make
+        only the thin walls finer"; Follow the camera in a Make mesh that runs it, never another fuse)."""
         from ohs.app.process import process_recording
 
         rec, mode, width = self._scan_params(sp)
         params = self._stage_params(mode, quality, voxel_mm, width,
                                     thin_walls=self._preset_acting(sp).get("thin_walls"))  # P2: None for General
+        if keep_depth:
+            params = dataclasses.replace(params, fine_walls=True)
         tmp = sp.dir / f"{name}.tmp-{ctx.job.id}"
         _rmtree(tmp)
         # no device name in what the user reads (UX_PLAN R12): Settings' About names the graphics card
@@ -2174,18 +2293,21 @@ class ProcessManager:
             ctx.set_frames(None)  # the pass is over
         return report
 
-    def _do_track(self, ctx: Any, sp: ScanProcess, prog: _Prog, quality: str, voxel_mm: float | None = None) -> None:
+    def _do_track(self, ctx: Any, sp: ScanProcess, prog: _Prog, quality: str, voxel_mm: float | None = None,
+                  keep_depth: bool = False) -> None:
         if voxel_mm is None:  # P2: the scan's preset's voxel when it names one (None for General: as before)
             voxel_mm = self._preset_acting(sp).get("voxel_mm")
+        # depth kept by a run that was stopped on the way (a power cut) goes now: it is never used again
+        remove_kept_depth(sp)
         before = self._stage_start(sp, "track", ctx.job.id)
         try:
             prog(0.0, "Loading the recording", force=True)
             report = self._fuse_into(ctx, sp, "track", prog.sub(0.0, 0.95), quality=quality, voxel_mm=voxel_mm,
-                                     poses=None)
+                                     poses=None, keep_depth=keep_depth)
             prog(0.96, "Saving the mesh", force=True)
             fr = report.get("frames") or {}
             with sp.lock:  # a new trajectory: straighten, fuse and refine start over
-                for name in ("straighten", "fuse", "spacetime", "refine"):
+                for name in ("straighten", "fuse", "spacetime", "refine", FINE_WALLS):
                     sp.state["stages"][name] = _empty_state(sp.pid, sp.sid)["stages"][name]
                     _rmtree(sp.dir / name)
                 p = sp.dir / "straighten.json"
@@ -2308,7 +2430,7 @@ class ProcessManager:
                 _write_json(sp.dir / "straighten" / "report.json", report)
             prog(0.96, "Saving the mesh", force=True)
             with sp.lock:  # fuse and the refinements built on the old poses
-                for name in ("fuse", "spacetime", "refine"):
+                for name in ("fuse", "spacetime", "refine", FINE_WALLS):
                     sp.state["stages"][name] = _empty_state(sp.pid, sp.sid)["stages"][name]
                     _rmtree(sp.dir / name)
             self._new_base(sp, "straighten", sp.dir / "straighten", report, track.get("quality"))
@@ -2351,7 +2473,7 @@ class ProcessManager:
                                      voxel_mm=voxel_mm if voxel_mm is not None else track.get("voxel_mm"), poses=poses)
             prog(0.96, "Saving the mesh", force=True)
             with sp.lock:  # the refinements built on the previous base
-                for name in ("spacetime", "refine"):
+                for name in ("spacetime", "refine", FINE_WALLS):
                     sp.state["stages"][name] = _empty_state(sp.pid, sp.sid)["stages"][name]
                     _rmtree(sp.dir / name)
             self._new_base(sp, "fuse", sp.dir / "fuse", report, track.get("quality"))
@@ -2524,6 +2646,148 @@ class ProcessManager:
             return msg
         return self._do_spacetime(ctx, sp, prog, make_mesh_spacetime_params())
 
+    # ------------------------------------------------------------------ "Make only the thin walls finer" (X5 step 2)
+    def fine_walls_chosen(self, pid: str, sid: str) -> bool:
+        """Whether Make mesh makes this scan's thin walls finer: the scan's own choice (``fine_walls`` in its entry, set
+        by ``POST .../process {fine_walls}``), else ``[process] fine_walls`` (off by default)."""
+        v = self.st.projects.scan_entry(pid, sid).get("fine_walls")
+        return v if isinstance(v, bool) else bool(getattr(self.st.cfg.process, "fine_walls", False))
+
+    def _fine_walls_plan(self, sp: ScanProcess, quality: str, voxel_mm: float | None) -> dict | None:
+        """Before Follow the camera: None when the scan did not choose "Make only the thin walls finer" (Make mesh runs
+        exactly as before); else ``{"keep": True, frames, need_mb, free_mb}`` (Follow the camera keeps the depth) or
+        ``{"keep": False, "why": ..., ...}``: not at Preview quality, only on the graphics card's path, only at the mesh
+        detail it was measured at (:data:`FINE_WALLS_VOXEL_MM`), only when the drive has the kept depth's estimate
+        (:func:`ohs.app.fine_walls.kept_depth_estimate`) and :data:`FINE_WALLS_DISK_MARGIN_MB` free. A plan that
+        fails is logged and Make mesh goes on without the step (``why`` "failed")."""
+        if not self.fine_walls_chosen(sp.pid, sp.sid):
+            return None
+        try:
+            return self._fine_walls_plan_on(sp, quality, voxel_mm)
+        except (JobCancelled, InterruptedError, ApiError):
+            raise
+        except Exception:  # it never costs the scan: Make mesh goes on without it
+            log.exception("make only the thin walls finer: could not be planned; the mesh is made without it")
+            return {"keep": False, "why": "failed"}
+
+    def _fine_walls_plan_on(self, sp: ScanProcess, quality: str, voxel_mm: float | None) -> dict:
+        """:meth:`_fine_walls_plan` for a scan that chose it."""
+        from ohs.app.fine_walls import kept_depth_estimate
+        from ohs.app.pipeline import default_fusion_params, effective_scale
+
+        if quality == "preview":
+            return {"keep": False, "why": "preview"}
+        if not images_on_gpu():
+            return {"keep": False, "why": "no_graphics_card"}
+        act = self._preset_acting(sp)
+        rec, mode, width = self._scan_params(sp)
+        params = self._stage_params(mode, quality, voxel_mm if voxel_mm is not None else act.get("voxel_mm"), width,
+                                    thin_walls=act.get("thin_walls"))
+        fusion = params.pipeline.fusion or default_fusion_params(effective_scale(int(round(width * params.pipeline.scale))))
+        v = float(fusion.voxel_mm)
+        if abs(v - FINE_WALLS_VOXEL_MM) > 1e-6:
+            return {"keep": False, "why": "mesh_detail", "voxel_mm": v}
+        est = kept_depth_estimate(rec, params)
+        need = est["bytes"] / 2 ** 20
+        free = free_disk_mb(sp.dir)
+        out = {"frames": est["frames"], "need_mb": round(need, 1), "free_mb": round(free, 1),
+               "margin_mb": FINE_WALLS_DISK_MARGIN_MB}
+        if free < need + FINE_WALLS_DISK_MARGIN_MB:
+            log.warning("make only the thin walls finer: skipped, %.0f MB free, %.0f MB needed + %.0f MB margin", free,
+                        need, FINE_WALLS_DISK_MARGIN_MB)
+            return {"keep": False, "why": "disk", **out}
+        return {"keep": True, **out}
+
+    def _make_mesh_fine_walls(self, ctx: Any, sp: ScanProcess, prog: _Prog, plan: dict) -> dict:
+        """"Make only the thin walls finer" in Make mesh (ENGINE_PLAN X5 step 2), after Straighten: the base stage's mesh
+        refined on its thin walls with the depth Follow the camera kept (:func:`ohs.app.fine_walls.make_fine_walls`).
+        When it acted its mesh becomes the base (stage ``fine_walls``) and Refine with lasers, the edits, the Check and
+        the report work on it; when it did not (or ``plan`` says it could not run) the stage is ``skipped`` with the
+        reason. It never costs the scan: a failure is logged, the stage says so, the mesh stays as fused. The kept depth
+        is removed in every case. Returns the page's block (``made.fine_walls``)."""
+        from ohs.app.fine_walls import SPOOL_DIR, make_fine_walls, spool_size_mb
+
+        info: dict[str, Any] = {"chosen": True, "acted": False, "why": plan.get("why"), "share": None, "regions": None,
+                                "seconds": None, "kept_mb": None,
+                                **{k: plan[k] for k in ("need_mb", "free_mb", "voxel_mm") if k in plan}}
+        spool = sp.dir / "track" / SPOOL_DIR
+        tmp = sp.dir / f"{FINE_WALLS}.tmp-{ctx.job.id}"
+        try:
+            if not plan.get("keep"):
+                info["line"] = fine_walls_line(info)
+                self._stage_start(sp, FINE_WALLS, ctx.job.id)
+                self._stage_end(sp, FINE_WALLS, state="skipped", summary=info["line"], why=info["why"])
+                return info
+            info["kept_mb"] = round(spool_size_mb(spool), 1)
+            before = self._stage_start(sp, FINE_WALLS, ctx.job.id)
+            t0 = time.monotonic()
+            try:
+                with sp.lock:
+                    src = str((sp.state["base"] or {}).get("stage") or "track")
+                    quality = sp.state["stages"]["track"].get("quality")
+                src_dir = sp.dir / src
+                prog(0.0, "Making the thin walls finer", force=True)
+                _rmtree(tmp)
+                rep = make_fine_walls(src_dir, spool, out_dir=tmp, cancelled=lambda: ctx.cancelled,
+                                      progress=lambda f, m: prog(0.95 * f, f"Making the thin walls finer: {m}"))
+                ctx.check()
+                rep["source"] = src
+                walls = rep.get("walls") or {}
+                info.update(regions=walls.get("n_regions"), share=rep.get("share"), report=rep,
+                            seconds=round(time.monotonic() - t0, 1))
+                if not rep.get("acted"):
+                    info["why"] = rep.get("why") or "no_thin_walls"
+                    info["line"] = fine_walls_line(info)
+                    self._stage_end(sp, FINE_WALLS, state="skipped", summary=info["line"], source=src, why=info["why"],
+                                    kept_mb=info["kept_mb"], regions=info["regions"])
+                    return info
+                for name in ("trajectory.csv", "laser_points.ply", "marker_map.json"):
+                    if (src_dir / name).is_file():
+                        shutil.copy2(src_dir / name, tmp / name)
+                report = _read_json(src_dir / "report.json") or {}
+                report["fine_walls"] = rep
+                _write_json(tmp / "report.json", jsonable(report))
+                ctx.check()
+                _move_dir(tmp, sp.dir / FINE_WALLS)
+                with sp.lock:  # the lasers refine the finer surface
+                    sp.state["stages"]["refine"] = _empty_state(sp.pid, sp.sid)["stages"]["refine"]
+                    _rmtree(sp.dir / "refine")
+                prog(0.96, "Saving the mesh", force=True)
+                self._new_base(sp, FINE_WALLS, sp.dir / FINE_WALLS, report, quality)
+                info.update(acted=True, why=None, seconds=round(time.monotonic() - t0, 1))
+                info["line"] = fine_walls_line(info)
+                info["action"] = "Make the mesh again without this"
+                self._stage_end(sp, FINE_WALLS, state="done", summary=info["line"], job_id=ctx.job.id, source=src,
+                                why=None, share_pct=round(100.0 * float(rep.get("share") or 0.0), 2),
+                                regions=info["regions"], kept_mb=info["kept_mb"])
+                return info
+            except (JobCancelled, InterruptedError):
+                self._stage_restore(sp, FINE_WALLS, before)
+                raise
+            except Exception:  # it never costs the scan: the mesh stays as fused
+                if ctx.cancelled:
+                    raise JobCancelled() from None
+                log.exception("make only the thin walls finer failed; the mesh stays as fused")
+                info.update(acted=False, why="failed", report=None)
+                info["line"] = fine_walls_line(info)
+                self._stage_end(sp, FINE_WALLS, state="failed", summary=info["line"], why="failed")
+                return info
+        finally:
+            _rmtree(tmp)
+            _rmtree(spool)  # the kept depth goes in every case: done, skipped, failed or cancelled
+
+    @staticmethod
+    def _record_fine_walls(sp: ScanProcess, made: dict, block: dict | None) -> None:
+        """``result/report.json``'s ``fine_walls``: the engine's block (the walls found, the regions, the frames, the
+        surface made finer, the moves, the seam, the times; :func:`ohs.app.fine_walls.make_fine_walls`) with what the
+        page reads (``made.fine_walls``), also when it did not act or could not run."""
+        path = sp.result_dir / "report.json"
+        rep = _read_json(path)
+        if rep is None:
+            return
+        rep["fine_walls"] = {**(block or {}), **{k: v for k, v in made.items() if k not in ("line", "action")}}
+        _write_json(path, jsonable(rep))
+
     # ------------------------------------------------------------------ a run beside the result (UX_PLAN R2)
     def _run_staged(self, ctx: Any, sp: ScanProcess, fn: Callable[[ScanProcess], str]) -> str:
         """Run ``fn`` (every stage from the recording, then the recipe's edits) on a :class:`ScanProcess` of its own
@@ -2552,8 +2816,13 @@ class ProcessManager:
             # how long the whole run took, every stage and edit (UX_PLAN R17: the report's time is the whole Make mesh)
             new.state["made"] = {"job_id": ctx.job.id, "kind": ctx.job.kind, "when": now_iso(),
                                  "seconds": round(time.monotonic() - t0, 1),
-                                 "stages": {n: new.state["stages"][n].get("seconds") for n in STAGES
+                                 "stages": {n: new.state["stages"][n].get("seconds") for n in ALL_STAGES
                                             if new.state["stages"][n].get("seconds") is not None}}
+            if new.fine_walls is not None:  # ENGINE_PLAN X5 step 2: what "Make only the thin walls finer" did
+                fw = dict(new.fine_walls)
+                block = fw.pop("report", None)
+                new.state["made"]["fine_walls"] = fw
+                safe_call("recording the thin walls made finer", lambda: self._record_fine_walls(new, fw, block))
             # ENGINE_PLAN X5 step 1: thin walls, a thin plate, small holes? A hint only: it reads the mesh it found
             ctx.progress(1.0, "Looking for thin walls and small holes", force=True)
             hint = safe_call("looking for thin parts", lambda: self._thin_parts(new))
@@ -2565,6 +2834,7 @@ class ProcessManager:
         finally:
             with sp.lock:
                 sp.making = None
+            safe_call("removing the kept depth", lambda: remove_kept_depth(new))  # never kept past the run
             if _old_waiting(staging):  # a swap that could not be undone: once more now, else at the next start
                 safe_call("putting the earlier result back", lambda: recover_remake(scan_dir, staging))
             if _old_waiting(staging):
@@ -2761,13 +3031,20 @@ class ProcessManager:
             refine = s.get("refine", "auto") == "auto"
             # ENGINE_PLAN X6: "Refine from the images" too, when the app's setting asks for it (off by default)
             spacetime = bool(getattr(self.st.cfg.process, "refine_from_images", False)) and q != "preview"
+            # ENGINE_PLAN X5 step 2: "Make only the thin walls finer", when the scan chose it (None: as before)
+            fine = self._fine_walls_plan(sp, q, s.get("voxel_mm"))
+            keep = bool(fine and fine.get("keep"))
             # each part's share of the percentage (UX_PLAN R18: MAKE_MESH_SHARES), the parts that run only
-            spans = make_mesh_plan(straighten=straighten, refine=refine, edits=bool(ops), spacetime=spacetime)
+            spans = make_mesh_plan(straighten=straighten, refine=refine, edits=bool(ops), spacetime=spacetime,
+                                   fine_walls=keep)
             sp.plan = [{"stage": k, "from": round(a, 4), "to": round(b, 4)} for k, (a, b) in spans.items()]
             p_ops = spans["edits"][0] if "edits" in spans else 1.0
-            self._do_track(ctx, sp, prog.sub(*spans["track"]), q, s.get("voxel_mm"))
+            self._do_track(ctx, sp, prog.sub(*spans["track"]), q, s.get("voxel_mm"), keep_depth=keep)
             if straighten:
                 self._do_straighten(ctx, sp, prog.sub(*spans["straighten"]))
+            if fine is not None:
+                part = prog.sub(*spans[FINE_WALLS]) if keep else prog.sub(spans["track"][1], spans["track"][1])
+                sp.fine_walls = self._make_mesh_fine_walls(ctx, sp, part, fine)
             if spacetime:
                 try:
                     self._make_mesh_spacetime(ctx, sp, prog.sub(*spans["spacetime"]))
@@ -2833,13 +3110,17 @@ class ProcessManager:
         with sp.lock:
             V, F, S, _ = self._load_step(sp, int(sp.state["cursor"]))
         prm = rep.get("params") or {}
+        made = sp.state.get("made") or {}
+        # ENGINE_PLAN X5 step 2: walls made finer in this mesh are not suggested again, nor estimated
+        finer = bool((made.get("fine_walls") or {}).get("acted"))
         finding = find_thin_parts(V, F, voxel_mm=float(voxel), sigma=S, preset_id=(rep.get("preset") or {}).get("id"),
-                                  opposite_sides=(prm.get("reconstruction") or {}).get("opposite_mm") is not None)
+                                  opposite_sides=(prm.get("reconstruction") or {}).get("opposite_mm") is not None,
+                                  walls_made_finer=finer)
         rep["thin_parts"] = finding
         _write_json(rep_path, rep)
-        made = sp.state.get("made") or {}
         card = (prm.get("compute") or {}).get("depth") not in (None, "cpu")
-        words = hint_words(finding, seconds=made.get("seconds"), triangles=int(len(F)), graphics_card=card)
+        words = hint_words(finding, seconds=made.get("seconds"), triangles=int(len(F)), graphics_card=card,
+                           fine=None if finer else fine_walls_offer(rep, _read_json(sp.dir / "track" / "report.json")))
         entry = self.st.projects.scan_entry(sp.pid, sp.sid)
         kinds = [k for k in ("walls", "plates", "holes") if (finding.get(k) or {}).get("found")]
         return {"suggest": bool(finding.get("suggest")), "why_not": finding.get("why_not"), "found": kinds,
@@ -2862,14 +3143,18 @@ class ProcessManager:
         self.publish(sp)
         return self.view(sp)
 
-    def make_mesh(self, pid: str, sid: str, quality: str) -> Any:
-        """``POST .../process`` (M1 "Make mesh"): the Default recipe, all stages, at ``quality``."""
+    def make_mesh(self, pid: str, sid: str, quality: str, fine_walls: bool | None = None) -> Any:
+        """``POST .../process`` (M1 "Make mesh"): the Default recipe, all stages, at ``quality``. ``fine_walls``
+        (ENGINE_PLAN X5 step 2): when given, the scan's choice of "Make only the thin walls finer", stored in its entry
+        for this and every later Make mesh (and recipe on everything); None: the stored choice stays."""
         quality = self._quality_arg(quality)
         recipe = self._preset_recipe(pid, sid)  # P2: the preset's recipe when it names one, else Default
         with self.st._lock:
             entry = self._check_free(pid, sid, make_mesh=True)
             self._need_recording(pid, sid)
             sp = self.scan(pid, sid)
+            if fine_walls is not None:  # stored only once the request is taken
+                self.st.projects.update_scan(pid, sid, fine_walls=bool(fine_walls))
             had_result = (sp.result_dir / "mesh.ply").is_file()
             self.st.projects.update_scan(pid, sid, status="processing", **({} if had_result else {"error": None}))
 
@@ -2923,7 +3208,7 @@ class ProcessManager:
                                    "Make its mesh and some edits first.")
                 track = st["stages"]["track"]
                 made_by = st["base"]["stage"]
-                for name in ("refine", "spacetime"):  # a refinement: the stage it refined
+                for name in ("refine", "spacetime", FINE_WALLS):  # a refinement: the stage it refined
                     if made_by == name:
                         made_by = st["stages"][name].get("source") or "track"
                 voxel = st["stages"]["fuse"].get("voxel_mm") if made_by == "fuse" else track.get("voxel_mm")

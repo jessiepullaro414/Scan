@@ -5126,8 +5126,9 @@ in that their module did not exist before.
 The whole scan at mesh detail 0.5 mm reads thin walls 0.23 to 0.67 mm nearer the truth, for
 about twice the time and 10 to 12 GB of memory ("Launch times on the graphics card at 0.5 mm").
 Step 2 makes only the thin walls finer. It is a setting, `ProcessParams.fine_walls`, off; the
-scorecard runs it with `--set-param process.fine_walls=true --chain app`. It is not in the
-app's Make mesh yet.
+scorecard runs it with `--set-param process.fine_walls=true --chain app`. Not adopted as a
+default; in the app it is a choice per scan ("Make only the thin walls finer" in the app,
+below).
 
 **How it works** (`ohs/mesh/fine_walls.py`, `ohs/app/fine_walls.py`):
 
@@ -5243,12 +5244,94 @@ Limits: simulated; the whole scan at 0.5 mm was run on three recordings (standin
 both ways, sheet seed 0 both ways), so the 0.05 mm rule is judged on those; the 1 mm times
 beside are the cached runs of an older engine; the spread between two runs of one recording
 was not measured, so "worse" on the two median errors is against one run each; the kept depth
-is not capped (7.8 MB a frame on disk); not in the server's Make mesh, so not seen in the
+is not capped in the engine (7.8 MB a frame on disk; the app checks the disk first); not in the server's Make mesh at the time of these runs, so not seen in the
 app; without a graphics card the step does nothing; not run on the NVIDIA laptop.
 
 **If taken up again:** the time is in fusing every kept frame (only the frames that see a
 region are needed) and in writing the depth as 32-bit floats; the accuracy limit is the
 walls' less-seen side, not the stitch.
+
+## "Make only the thin walls finer" in the app (ENGINE_PLAN X5 step 2, 2026-11-22): a choice per scan
+
+The owner's decision, with the numbers of "Fine mesh detail on thin walls only" in hand: the
+step goes into the app as a second, lighter choice in the thin-parts hint, chosen per scan. It
+is not a default: a scan nobody chose it for is made exactly as before.
+
+**What the app does:**
+
+- **The hint offers two choices** when thin walls are found: first "Make only the thin walls
+  finer", then the preset "Thin sheet metal and small parts" as before, and "Not for this
+  scan". The first makes the mesh again with the choice on for this scan
+  (`POST .../process {quality, fine_walls: true}`); the scan's entry keeps the choice for
+  every later Make mesh and recipe on everything. `[process] fine_walls` (off) is the default
+  for scans without a choice of their own.
+- **Its words** give the measured gain and cost: walls of 0.5 to 2 mm 0.04 to 0.52 mm nearer,
+  about half to four fifths of what the whole scan at 0.5 mm gains; that each wall's
+  less-seen side keeps its surface, so the walls still read thicker than with the preset;
+  1.2 to 1.3 times this mesh's time, in seconds; no more memory; 7 to 11 % more triangles;
+  the disk space while it runs, from this scan's frames.
+- **It is offered and runs only** with the mesh model on the graphics card, at mesh detail
+  exactly 1 mm (the one measured), not at Preview quality, and when the scan's drive has the
+  kept depth's estimate (the frames Follow the camera will process times 8 bytes a pixel:
+  7.8 MB a frame at 1280 x 800) and 2 GB more free. Otherwise Make mesh goes on without it and
+  the page says why in one line, with the space needed when it is the disk. Decided before
+  Follow the camera, so nothing is kept in vain.
+- **In Make mesh** only Follow the camera keeps the depth; the step runs after Straighten, on
+  the base stage's mesh; when it acted its mesh is the new base and Refine with lasers, the
+  edits, the Check and the report work on it. It has its own part of the progress bar (0.15
+  against the others' 1.0, only when it runs) and can be cancelled between two frames.
+- **It never costs the scan:** a failure is logged, the stage says so, the mesh stays as
+  fused. The kept depth is removed in every case (done, skipped, failed, cancelled), and what
+  a run stopped by a power cut left is removed at the next Follow the camera.
+- **After such a mesh** the hint does not suggest again (`why_not: "walls_made_finer"`) and
+  gives no thickness estimate (it was measured on plain 1 mm meshes); in its place a note
+  says what was done, with one action, "Make the mesh again without this" (`fine_walls:
+  false`).
+
+**In the real app** (the reviewer, in the browser, the server from a frozen copy; the first
+standing-walls recording replayed into a scan, 116 frames, General preset, Standard, on the
+Radeon 680M):
+
+| | Make mesh | triangles before the edits | the walls read |
+|---|---|---|---|
+| the choice off | 46.2 s | 1,005,624 | 1.83 mm (most of it 1.28 to 2.46), "probably 0.5 to 1.7 mm in truth" |
+| "Make only the thin walls finer" pressed | 55.9 s (1.21 times) | 1,089,638 | 1.54 mm (0.93 to 2.43), no estimate |
+| "Make the mesh again without this" pressed | 46.3 s | as off | 1.83 mm (1.28 to 2.46), the estimate back |
+
+- The hint before: both choices, the first with "This mesh took 46 s; with it about 55 s to
+  60 s" and "about 0.9 GB of free space while the mesh is made (7.8 MB for each of the 116
+  frames)".
+- The step: 6.8 s (finding 0.8, fusing the kept frames 1.9, the stitch 1.9 s); 2.6 % of the
+  surface on 3 walls; moves 0.36 mm at the 95th percentile, the seam 0.05 mm; 87 bricks
+  flagged, 505 with the growth.
+- The kept depth: 907 MB at its peak (sampled every 0.6 s), no `fused_depth` folder left
+  after any of the three runs.
+- After it: the hint gone, the note "The thin walls were made finer: 2.6 % of the surface on
+  3 walls, at mesh detail 0.5 mm, in 7 s. The rest of the mesh is as Make mesh made it." with
+  its button. After the button: the hint back with both choices, the stages and the plan as
+  before, `fine_walls: false` in the scan's entry.
+- No driver timeout in any run.
+- The agent's own run of the same on its server: 45.4 → 56.1 → 45.6 s, the walls 1.84 → 1.52
+  mm, 914 MB kept; and the sphere with the choice on: "No thin walls were found in the mesh,
+  so it was left as it is", the base unchanged, 258 MB kept while it ran and removed.
+
+**With the choice off nothing changed:** no pass keeps depth and the stages, the plan and
+`made` are as before (tests); the quick set on what Make mesh runs, run afresh (`--force`),
+compares identical to the baseline on 4 of 4 scenes.
+
+**Found on the way:** two Make mesh of one scan at mesh detail 1 mm give the same vertices
+but not always the same triangles, before this change too: Fill holes breaks ties by the
+order of the vertices, which differs from run to run on the graphics card. With `[process]
+repeatable_edits` on they are the same; the server tests of this item turn it on to compare
+exactly.
+
+Limits: simulated recordings; the gain and the cost in the hint's words are the engine
+section's ("Fine mesh detail on thin walls only"), with its limits (the part's median error
+worse on two true-pose runs, the sheet's 3 mm rib 0.05 to 0.09 mm too thin there); the disk
+check is tested by putting a free-space reading in its place, not on a full drive; only
+mesh detail 1 mm; the step's share of the progress bar is measured on two parts; not tried
+with a real scanner or on the NVIDIA laptop; fusing only the kept frames that see a region
+was not done (fusing is 2 to 3 s of the step on the standing walls).
 
 ## What the metrics mean
 

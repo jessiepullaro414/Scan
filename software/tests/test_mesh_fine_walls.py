@@ -315,6 +315,71 @@ def test_the_step_moves_a_wall_read_too_thick_onto_the_finer_model_of_the_kept_d
     assert not rep4["acted"] and rep4["why"] == "no_graphics_card" and (lone / "mesh.ply").read_bytes() == before
 
 
+@pytest.mark.parametrize("backend", ["cpu", "gpu"])
+def test_the_step_says_how_far_it_is_and_gives_the_same_mesh_with_a_progress_callback(tmp_path, backend):
+    """``make_fine_walls(progress=...)``: called with a fraction that only grows, ending at 1; the mesh it writes is
+    the one written without the callback, byte for byte."""
+    pytest.importorskip("open3d")
+    from ohs.app.fine_walls import FusedDepthSpool, make_fine_walls
+    from ohs.track.export import save_mesh
+    from ohs.track.posegraph import write_trajectory
+    from ohs.track.recon_tsdf import ConfidenceTsdf
+
+    if backend not in _backends():
+        pytest.skip("no GPU")
+    coarse = ConfidenceTsdf(K, (W, H), voxel_mm=1.0, trunc_mm=4.0, depth_min_mm=150.0, depth_max_mm=450.0,
+                            backend=backend, back_mm=2.0, opposite_mm=1.0)
+    stage = tmp_path / "stage"
+    spool = FusedDepthSpool(stage / "fused_depth", coarse)
+    rows = []
+    for k, (T, d) in enumerate(_views(1.0)):
+        spool.add(k, d, np.where(d > 0, 0.2, 0.0).astype(np.float32), None, T)
+        rows.append((100 + k, 0.1 * k, True, T))
+    spool.close([r[0] for r in rows])
+    coarse.close()
+    V, F = _wall_mesh(0.85)
+    save_mesh(stage / "mesh.ply", V, F, None, quality=np.full(len(V), 0.2, np.float32), looks=np.full(len(V), 3.0, np.float32))
+    (stage / "report.json").write_text(json.dumps({"mesh": {"voxel_mm": 1.0}, "params": {"reconstruction": {"opposite_mm": 1.0}}}))
+    write_trajectory(stage / "trajectory.csv", rows)
+    seen: list = []
+    a = make_fine_walls(stage, stage / "fused_depth", out_dir=tmp_path / "a", backend=backend,
+                        progress=lambda f, m: seen.append((float(f), m)))
+    b = make_fine_walls(stage, stage / "fused_depth", out_dir=tmp_path / "b", backend=backend)
+    assert a["acted"] and b["acted"]
+    assert (tmp_path / "a" / "mesh.ply").read_bytes() == (tmp_path / "b" / "mesh.ply").read_bytes()
+    fr = [f for f, _ in seen]
+    assert len(fr) >= 3 and fr == sorted(fr) and fr[-1] == 1.0 and all(isinstance(m, str) and m for _, m in seen)
+
+
+def test_the_kept_depth_is_estimated_before_the_pass_from_the_frames_it_will_process(tmp_path):
+    """``kept_depth_estimate``: the frames Follow the camera will process (the frame selection's step, the rate limit,
+    the start and stop; never fewer than it processes) times the bytes a kept frame takes (the depth and its sigma,
+    4 bytes each a pixel of the processed image): what the pass then keeps, on the graphics card's path."""
+    pytest.importorskip("open3d")
+    import dataclasses
+
+    from recordings import scan_recording
+
+    from ohs.app.fine_walls import SPOOL_DIR, kept_depth_estimate, spool_size_mb
+    from ohs.app.pipeline import PipelineParams
+    from ohs.app.process import ProcessParams, process_recording
+
+    rec = scan_recording(tmp_path / "rec", scene="bracket", n_frames=6, image_size=(640, 400), realistic=False, seed=0,
+                         depth_every=0)
+    base = ProcessParams(pipeline=PipelineParams(), export=("ply",), fine_walls=True)
+    est = kept_depth_estimate(rec, base)
+    assert est["bytes_per_frame"] == 640 * 400 * 4 * 2 and est["bytes"] == est["frames"] * est["bytes_per_frame"]
+    on = process_recording(rec, tmp_path / "on", params=base)
+    assert est["frames"] == on["frames"]["processed"] == 6
+    if on["fine_walls_depth"].get("kept"):
+        assert spool_size_mb(tmp_path / "on" / SPOOL_DIR) * 2 ** 20 == pytest.approx(est["bytes"])
+    # every 2nd frame, from the 2nd, at half the width: fewer frames, a quarter of the bytes a frame
+    half = dataclasses.replace(base, frame_step=2, start=1, pipeline=PipelineParams(scale=0.5))
+    e2 = kept_depth_estimate(rec, half)
+    assert e2["frames"] == 3 and e2["bytes_per_frame"] == 320 * 200 * 4 * 2
+    assert kept_depth_estimate(rec, dataclasses.replace(base, stop=2))["frames"] == 2
+
+
 def test_follow_the_camera_keeps_the_depth_on_the_graphics_card_only_and_its_mesh_is_the_same(tmp_path):
     """``ProcessParams.fine_walls``: on the graphics card's path every fused frame's depth is kept (as fused, with its
     pose) and the mesh is exactly the one made without it; without a graphics card nothing is kept and the report says

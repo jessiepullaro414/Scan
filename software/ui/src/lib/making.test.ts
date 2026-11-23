@@ -73,6 +73,21 @@ check(makingRows(two, 0.2).filter((r) => r.state === "running").length === 1, "n
 const noPlan: MakingState = { stages: { track: { state: "done", summary: null }, straighten: { state: "running", summary: null }, fuse: { state: "none", summary: null }, refine: { state: "none", summary: null } } };
 check(makingRows(noPlan, 0.5).map((r) => r.id).join(" ") === "track straighten refine", makingRows(noPlan, 0.5).map((r) => r.id).join(" "));
 
+// ENGINE_PLAN X5 step 2: "Make only the thin walls finer" as a part of its own, when the scan chose it
+const finer: MakingState = {
+  stages: { ...making.stages, straighten: { state: "done", summary: null }, fine_walls: { state: "running", summary: null } },
+  plan: [
+    { stage: "track", from: 0, to: 0.41 },
+    { stage: "straighten", from: 0.41, to: 0.73 },
+    { stage: "fine_walls", from: 0.73, to: 0.86 },
+    { stage: "refine", from: 0.86, to: 0.89 },
+    { stage: "edits", from: 0.89, to: 1 },
+  ],
+};
+const fr = makingRows(finer, 0.8);
+check(fr.map((r) => `${r.id}:${r.state}`).join(" ") === "track:done straighten:done fine_walls:running refine:waiting edits:waiting", fr.map((r) => `${r.id}:${r.state}`).join(" "));
+check(fr[2].label === "Make only the thin walls finer" && makingNow(finer, 0.8) === "Make only the thin walls finer", fr[2].label);
+
 check(makingNow(making, 0.55) === "Straighten", `now: ${makingNow(making, 0.55)}`);
 check(makingNow(late, 0.9) === "the edits", `now: ${makingNow(late, 0.9)}`);
 check(makingNow({ stages: {} }, 0.5) === null, "nothing known");

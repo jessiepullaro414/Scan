@@ -337,8 +337,10 @@ export const api = {
   rewindScan: (seconds: number) => post<SessionState>("/api/scan/rewind", { seconds }),
   stopScan: () => post<{ scan: Scan }>("/api/scan/stop"),
 
-  processScan: (pid: string, sid: string, quality: ProcessQuality) =>
-    post<Job>(`/api/projects/${enc(pid)}/scans/${enc(sid)}/process`, { quality }),
+  /** `fineWalls` (ENGINE_PLAN X5 step 2): the scan's choice of "Make only the thin walls finer", stored for later Make
+   * mesh; left out, the stored choice stays. */
+  processScan: (pid: string, sid: string, quality: ProcessQuality, fineWalls?: boolean) =>
+    post<Job>(`/api/projects/${enc(pid)}/scans/${enc(sid)}/process`, fineWalls === undefined ? { quality } : { quality, fine_walls: fineWalls }),
 
   jobs: () => get<Job[]>("/api/jobs"),
   job: (jid: string) => get<Job>(`/api/jobs/${enc(jid)}`),

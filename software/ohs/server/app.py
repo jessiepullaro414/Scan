@@ -116,6 +116,8 @@ class RewindBody(BaseModel):
 class ProcessBody(BaseModel):
     # "full": the old name of "standard"; none: the scan's preset's quality, else standard (FEATURE_PLAN P2)
     quality: Optional[Literal["standard", "best", "preview", "full"]] = None
+    # ENGINE_PLAN X5 step 2: "Make only the thin walls finer" for this scan, stored for later Make mesh; none: as stored
+    fine_walls: Optional[bool] = None
 
 
 class DismissBody(BaseModel):
@@ -735,7 +737,8 @@ def create_app(config: Any = None, *, projects_dir: Any = None, static_dir: Any 
 
     @app.post("/api/projects/{pid}/scans/{sid}/process")
     def scan_process(pid: str, sid: str, body: Optional[ProcessBody] = None) -> JSONResponse:
-        job = st.process_scan(pid, sid, body.quality if body is not None else None)  # None: the preset's, else standard
+        job = st.process_scan(pid, sid, body.quality if body is not None else None,  # None: the preset's, else standard
+                              fine_walls=body.fine_walls if body is not None else None)
         return _json(job.to_dict())
 
     @app.get("/api/projects/{pid}/scans/{sid}/files/{name}")

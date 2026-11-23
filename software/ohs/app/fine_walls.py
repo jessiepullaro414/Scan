@@ -101,6 +101,44 @@ class FusedDepthSpool:
                 "write_s": round(self.write_s, 2)}
 
 
+#: what a kept frame takes on disk, a pixel of the processed image: its depth and its sigma, 4 bytes each (the depth as
+#: seen before a clip plane comes on top only with one; Make mesh has none): 7.8 MB a frame at 1280 x 800
+KEPT_BYTES_PER_PIXEL = 8
+
+
+def kept_depth_estimate(rec_path: str | Path, params: Any) -> dict:
+    """What Follow the camera with ``params`` (``ProcessParams``, :func:`ohs.app.process.process_recording`) keeps on
+    disk with ``fine_walls``, estimated before it runs: ``{frames, bytes_per_frame, bytes}``. ``frames``: the frames it
+    will process (the step, the rate limit, the start and stop and the cut intervals as the pass picks them; frames
+    picked by motion can only be fewer), so never fewer than it keeps; ``bytes_per_frame``: :data:`KEPT_BYTES_PER_PIXEL`
+    times the processed image's pixels (the calibration's image size at the pipeline's scale)."""
+    from ohs.app.process import cut_intervals  # noqa: PLC0415
+    from ohs.io.recording import RecordingReader, effective_frame_step  # noqa: PLC0415
+
+    reader = RecordingReader(rec_path)
+    calib = reader.calibration()
+    scale = float(params.pipeline.scale)
+    if calib is not None:
+        size = calib.stereo.image_size if scale == 1.0 else calib.stereo.scaled(scale).image_size
+    else:
+        raw = reader.meta.get("image_size") or list(reader.frame(0).image_size)
+        size = (int(round(raw[0] * scale)), int(round(raw[1] * scale)))
+    w, h = int(size[0]), int(size[1])
+    stop = len(reader) if params.stop is None else min(int(params.stop), len(reader))
+    times = reader.times()
+    step, _ = effective_frame_step(times, int(params.frame_step), float(params.max_frame_rate))
+    positions = list(range(max(0, int(params.start)), stop, step))
+    cuts = cut_intervals(reader)
+    if cuts and positions:
+        t = times[np.asarray(positions, dtype=np.int64)]
+        inside = np.zeros(len(positions), dtype=bool)
+        for a, b in cuts:
+            inside |= (t >= a) & (t <= b)
+        positions = [p for p, c in zip(positions, inside) if not c]
+    bpf = KEPT_BYTES_PER_PIXEL * w * h
+    return {"frames": len(positions), "bytes_per_frame": int(bpf), "bytes": int(bpf * len(positions))}
+
+
 def spool_size_mb(folder: str | Path) -> float:
     p = Path(folder)
     return sum(f.stat().st_size for f in p.glob("*.bin")) / 2 ** 20 if p.is_dir() else 0.0
@@ -135,13 +173,17 @@ def _poses_of(stage_dir: Path) -> dict[int, np.ndarray]:
 
 
 def make_fine_walls(stage_dir: str | Path, spool_dir: str | Path, out_dir: str | Path | None = None,
-                    poses: dict[int, np.ndarray] | None = None, cancelled: Any = None, backend: str = "gpu") -> dict:
+                    poses: dict[int, np.ndarray] | None = None, cancelled: Any = None, backend: str = "gpu",
+                    progress: Any = None) -> dict:
     """Refine the stage's mesh (``<stage_dir>/mesh.ply``, made at its ``report.json``'s mesh detail) on its thin walls
     with the depth kept in ``spool_dir`` (module docstring), fused at ``poses`` (frame index -> ``T_wc``; None: the
     stage's ``trajectory.csv``). The refined mesh is written to ``<out_dir>/mesh.ply`` (``out_dir`` None: the stage's
     own) only when it changed; returns the report block (``report.json``'s ``fine_walls``): ``acted`` whether the mesh
     changed, ``why`` when not, the walls found, the regions, the frames, the surface made finer, the moves, the seam,
-    the triangles and open loops before and after, the times."""
+    the triangles and open loops before and after, the times. ``progress(fraction, message)``: how far it is (the
+    finding to 0.15, fusing the kept frames to 0.75, the stitch to 1); ``cancelled()``: True stops it
+    (``InterruptedError``) between two frames."""
+    say = progress or (lambda f, m: None)
     from ohs.mesh.thin_parts import BRICK_VOXELS, find_thin_walls  # noqa: PLC0415
     from ohs.track.export import load_ply, save_mesh  # noqa: PLC0415
 
@@ -168,6 +210,7 @@ def make_fine_walls(stage_dir: str | Path, spool_dir: str | Path, out_dir: str |
     F = np.zeros((0, 3), np.int64) if d["faces"] is None else np.asarray(d["faces"], dtype=np.int64).reshape(-1, 3)
     N, S, L = d.get("normals"), d.get("quality"), d.get("looks")
     t = time.perf_counter()
+    say(0.0, "Finding the thin walls")
     opposite = ((rep.get("params") or {}).get("reconstruction") or {}).get("opposite_mm") is not None
     walls, wv = find_thin_walls(V, F, voxel_mm=v, normals=N, sigma=S, opposite_sides=opposite)
     ms["find"] = round(1e3 * (time.perf_counter() - t), 0)
@@ -196,9 +239,13 @@ def make_fine_walls(stage_dir: str | Path, spool_dir: str | Path, out_dir: str |
         model.limit_bricks(allowed)
         w, h = head["model"]["image_size"]
         n_used = 0
+        n_all = max(len(head["entries"]), 1)
+        say(0.15, "Fusing the kept frames finer on the thin walls")
         for k, e in enumerate(head["entries"]):
             if cancelled is not None and cancelled():
                 raise InterruptedError("cancelled")
+            if k % 10 == 0:
+                say(0.15 + 0.6 * k / n_all, f"Fusing the kept frames finer on the thin walls: frame {k + 1:,} of {n_all:,}")
             i = e.get("index")
             T = poses.get(int(i)) if i is not None else None
             if T is None:
@@ -214,6 +261,9 @@ def make_fine_walls(stage_dir: str | Path, spool_dir: str | Path, out_dir: str |
     finally:
         model.close()
     out["frames"] = {"kept": len(head["entries"]), "fused": n_used}
+    if cancelled is not None and cancelled():
+        raise InterruptedError("cancelled")
+    say(0.75, "Moving the thin walls onto the finer surface")
     t = time.perf_counter()
     inside = in_bricks(V, R, brick)
     region = inside[F].all(axis=1) if len(F) else np.zeros(0, dtype=bool)
@@ -233,6 +283,7 @@ def make_fine_walls(stage_dir: str | Path, spool_dir: str | Path, out_dir: str |
         save_mesh(dst / "mesh.ply", V2, F2, None if N2 is None else N2, quality=S2, looks=L2)
         ms["save"] = round(1e3 * (time.perf_counter() - t), 0)
     ms["total"] = round(1e3 * (time.perf_counter() - t0), 0)
+    say(1.0, "The thin walls are done")
     log.info("fine mesh detail on thin walls: %s (%s)", "made finer" if out["acted"] else "unchanged",
              {k: out.get(k) for k in ("walls", "bricks", "frames", "faces_in", "triangles_after", "ms")})
     return out

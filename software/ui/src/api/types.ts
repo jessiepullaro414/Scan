@@ -654,6 +654,9 @@ export type SaveReply = { session: CalibSession; setup: SetupState };
 
 /** The stages of a scan's processing; each ends in a new base mesh. */
 export type StageId = "track" | "straighten" | "fuse" | "spacetime" | "refine";
+/** A stage a base mesh can come from: the five, and Make mesh's "Make only the thin walls finer" (ENGINE_PLAN X5 step 2,
+ * a choice per scan; in `ProcessState.stages` only once it ran). */
+export type BaseStageId = StageId | "fine_walls";
 export type StageState = "none" | "running" | "done" | "failed" | "skipped";
 
 export type MeshOp = "remove_floaters" | "fill_holes" | "smooth" | "decimate" | "delete_faces" | "keep_faces" | "remove_table";
@@ -790,11 +793,11 @@ export type LooseBitsRule = "size" | "share" | "triangles" | "largest_only";
 export type StageInfo = { state: StageState; summary: string | null; when: string | null; job_id: string | null; started?: string | null; seconds?: number | null };
 
 /** A part of a Make mesh and the span of the job's progress (0–1) it takes (UX_PLAN R18). */
-export type MakingPart = { stage: "track" | "straighten" | "refine" | "edits"; from: number; to: number };
+export type MakingPart = { stage: "track" | "straighten" | "fine_walls" | "spacetime" | "refine" | "edits"; from: number; to: number };
 
 /** The run "Make mesh again" (or a recipe on everything) is building beside the scan's mesh (UX_PLAN R2, R18). */
 export type MakingState = {
-  stages: Partial<Record<StageId, { state: StageState; summary: string | null; started?: string | null; seconds?: number | null }>>;
+  stages: Partial<Record<BaseStageId, { state: StageState; summary: string | null; started?: string | null; seconds?: number | null }>>;
   plan?: MakingPart[] | null;
   /** How long the whole job has run, s. */
   elapsed_s?: number;
@@ -811,12 +814,48 @@ export type MadeInfo = {
   stages: Partial<Record<string, number>>;
   /** ENGINE_PLAN X5: what Make mesh found that a finer mesh detail could help (absent from an older engine). */
   thin_parts?: ThinPartsHint | null;
+  /** ENGINE_PLAN X5 step 2: what "Make only the thin walls finer" did in this Make mesh; absent when the scan did not
+   * choose it (and from an older engine). */
+  fine_walls?: FineWallsMade | null;
 };
+/** Why "Make only the thin walls finer" did not act (`FineWallsMade.why`). */
+export type FineWallsWhy =
+  | "no_thin_walls"
+  | "no_kept_depth"
+  | "no_graphics_card"
+  | "no_finer_surface"
+  | "mesh_detail"
+  | "preview"
+  | "disk"
+  | "failed"
+  | "made_fine";
+/** "Make only the thin walls finer" in a Make mesh (ENGINE_PLAN X5 step 2, APP_API.md "The thin-parts hint"). */
+export type FineWallsMade = {
+  chosen: true;
+  acted: boolean;
+  why: FineWallsWhy | null;
+  /** The share of the surface made finer (0–1), the wall regions found, how long the step took (s), the kept depth's
+   * size on disk while it ran (MB); null when it did not run. */
+  share: number | null;
+  regions: number | null;
+  seconds: number | null;
+  kept_mb: number | null;
+  /** With `why` "disk": the space it needs and the drive's free space, MB. With "mesh_detail": this mesh's, mm. */
+  need_mb?: number;
+  free_mb?: number;
+  voxel_mm?: number;
+  /** The engine's line for the page: what it did, or why not. */
+  line: string;
+  /** Only when it acted: the action's words ("Make the mesh again without this"). */
+  action?: string;
+};
+/** The hint's first choice, "Make only the thin walls finer" (`ThinPartsHint.words.fine`). */
+export type FineWallsOffer = { action: string; intro: string; gain: string[]; cost: string[]; disk_mb: number };
 /** The thin-parts hint (ENGINE_PLAN X5 step 1, APP_API.md "The thin-parts hint"): a suggestion only. */
 export type ThinPartsHint = {
   suggest: boolean;
   /** no_measured_gain: only a thin plate or small holes were found, where 0.5 mm was not measured to help. */
-  why_not: "made_fine" | "nothing_found" | "no_measured_gain" | "empty" | null;
+  why_not: "made_fine" | "nothing_found" | "no_measured_gain" | "empty" | "walls_made_finer" | null;
   found: ("walls" | "plates" | "holes")[];
   voxel_mm: number;
   preset_id: string;
@@ -832,6 +871,9 @@ export type ThinPartsHint = {
     action: string;
     preset_id: string;
     preset_name: string;
+    /** ENGINE_PLAN X5 step 2: "Make only the thin walls finer", offered first where it can run (the graphics card's
+     * path, mesh detail 1 mm); null or absent: only the preset, as before. */
+    fine?: FineWallsOffer | null;
   } | null;
 };
 export type TrackStage = StageInfo & {
@@ -851,7 +893,7 @@ export type StraightenStage = StageInfo & {
 export type FuseStage = StageInfo & { voxel_mm: number | null };
 /** "Refine from the images" (a trial build): the base stage's mesh measured against the recording's frames. */
 export type SpacetimeStage = StageInfo & {
-  source: StageId | null; // the stage whose mesh was refined
+  source: BaseStageId | null; // the stage whose mesh was refined
   frames: number | null; // frames read
   patches: number | null; // patches on the surface
   kept: number | null; // patches with dots in enough frames, and a clear match
@@ -861,7 +903,7 @@ export type SpacetimeStage = StageInfo & {
 };
 /** "Refine with lasers": the base stage's mesh pulled onto its laser points. */
 export type RefineStage = StageInfo & {
-  source: StageId | null; // the stage whose mesh was refined
+  source: BaseStageId | null; // the stage whose mesh was refined
   points: number | null; // laser points used
   outliers: number | null; // laser points that disagreed with the surface (glints, reflections)
   moved_pct: number | null; // share of the surface moved, %
@@ -870,11 +912,20 @@ export type RefineStage = StageInfo & {
   residual_after_mm: number | null;
 };
 
+/** "Make only the thin walls finer" (ENGINE_PLAN X5 step 2): in `ProcessState.stages` only once a Make mesh ran it. */
+export type FineWallsStage = StageInfo & {
+  source: BaseStageId | null; // the stage whose mesh was made finer
+  why: FineWallsWhy | null;
+  share_pct: number | null; // share of the surface made finer, %
+  regions: number | null; // the wall regions found
+  kept_mb: number | null; // the kept depth on disk while it ran, MB
+};
+
 export type ProcessState = {
   project_id: string;
   scan_id: string;
-  stages: { track: TrackStage; straighten: StraightenStage; fuse: FuseStage; spacetime: SpacetimeStage; refine: RefineStage };
-  base: { triangles: number; vertices: number; stage: StageId } | null;
+  stages: { track: TrackStage; straighten: StraightenStage; fuse: FuseStage; spacetime: SpacetimeStage; refine: RefineStage; fine_walls?: FineWallsStage };
+  base: { triangles: number; vertices: number; stage: BaseStageId } | null;
   edits: EditEntry[];
   cursor: number; // edits[0:cursor] are applied
   can_undo: boolean;

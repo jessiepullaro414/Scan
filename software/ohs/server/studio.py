@@ -640,18 +640,19 @@ class Studio:
             self.processing.forget_scan(pid, sid)
         return {"item": TrashManager(self.projects)._item(self.projects.root / ".trash" / item_id)}
 
-    def process_scan(self, pid: str, sid: str, quality: str | None = "standard") -> Any:
+    def process_scan(self, pid: str, sid: str, quality: str | None = "standard", fine_walls: bool | None = None) -> Any:
         """"Make mesh" (M1 ``POST .../process``): the processing studio's Default recipe at
         ``quality`` (standard, best or preview; "full" = standard): track, straighten ``auto``, then its
         edits. Job kind ``process_scan``. ``quality`` None: the scan's preset's, else standard; the
-        preset's recipe in place of Default when it names one (FEATURE_PLAN P2)."""
+        preset's recipe in place of Default when it names one (FEATURE_PLAN P2). ``fine_walls``: the scan's
+        choice of "Make only the thin walls finer" (ENGINE_PLAN X5 step 2), stored; None keeps the stored one."""
         if quality is None:
             quality = self.presets.acting(pid, sid).get("quality", "standard")
         try:
             quality = normalize_quality(quality)
         except ValueError:
             raise ApiError(400, "The app does not know this quality.", "Pick Preview, Standard or Best.") from None
-        return self.processing.make_mesh(pid, sid, quality)
+        return self.processing.make_mesh(pid, sid, quality, fine_walls=fine_walls)
 
     # ------------------------------------------------------------------ info
     def health(self) -> dict:

@@ -182,6 +182,8 @@ class ProcessConfig:
     export: list[str] = field(default_factory=lambda: ["ply", "stl"])
     repeatable_edits: bool = False  # MAINTENANCE_PLAN F15: the app's mesh edits break ties by position
     refine_from_images: bool = False  # ENGINE_PLAN X6: Make mesh runs "Refine from the images" (GPU only); off: as before
+    # ENGINE_PLAN X5 step 2: Make mesh makes only the thin walls finer (GPU, 1 mm) for scans without a choice of their own
+    fine_walls: bool = False
 
 
 @dataclass
@@ -611,6 +613,13 @@ _KEY_DOCS = {
         "choices are equally good (which way to split a hole into triangles), the points' positions\n"
         "decide, not their numbers. Nothing measured changes. Each edit records the setting it ran\n"
         "with, so undo, redo and a step rebuilt later give the same triangles. Off: as before."
+    ),
+    "process.fine_walls": (
+        "Make mesh also makes only the thin walls finer (ENGINE_PLAN X5 step 2), for every scan that has\n"
+        "no choice of its own (the thin-parts hint sets one per scan): Follow the camera keeps each\n"
+        "frame's depth on disk (about 7.8 MB a frame, removed afterwards), and after Straighten the\n"
+        "thin walls found are made at mesh detail 0.5 mm. Needs a graphics card and mesh detail 1 mm;\n"
+        "else Make mesh goes on without it and says why. Not at Preview quality. Off: as before."
     ),
     "process.refine_from_images": (
         "Make mesh also runs \"Refine from the images\" (a trial, ENGINE_PLAN X6), after Straighten and\n"

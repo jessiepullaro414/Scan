@@ -104,6 +104,13 @@ MAX_BRICKS = 20_000
 P1 = {"walls_nearer_mm": (0.23, 0.67), "walls_at_1": (1.7, 2.7), "walls_at_05": (1.0, 2.4), "walls_true": (0.5, 2.0),
       "time_x": (1.2, 2.4), "triangles_x": 4.0, "mem_gb": (7.0, 11.9), "shared_gb": (2.2, 3.0), "mem_at_mtri": (3.34, 6.4),  # R5; X5 2026-11-22
       "pc": "a mini PC with built-in graphics and 20 GB of memory"}
+#: "Make only the thin walls finer" (ENGINE_PLAN X5 step 2; VALIDATION.md, "Fine mesh detail on thin walls only"), on
+#: the standing walls and the sheet, three recordings each, tracked and at true poses: every wall of 0.5 to 2 mm nearer
+#: the truth than the 1 mm mesh on all twelve runs, by 0.04 to 0.52 mm (52 to 83 % of the whole-scan 0.5 mm gain on
+#: seed 0); Make mesh 1.16 to 1.29 times as long; the memory the same (1.00 times); 7 to 11 % more triangles
+X5S2 = {"walls_nearer_mm": (0.04, 0.52), "walls_true": (0.5, 2.0), "time_x": (1.2, 1.3), "triangles_pct": (7, 11),
+        "share_words": "about half to four fifths"}
+FINE_ACTION = "Make only the thin walls finer"
 
 
 def _r(x: float, n: int = 2) -> float:
@@ -375,11 +382,14 @@ def find_thin_walls(V: np.ndarray, F: np.ndarray, *, voxel_mm: float, normals: n
 
 def find_thin_parts(V: np.ndarray, F: np.ndarray, *, voxel_mm: float, normals: np.ndarray | None = None,
                     sigma: np.ndarray | None = None, preset_id: str | None = None,
-                    opposite_sides: bool | None = None) -> dict[str, Any]:
+                    opposite_sides: bool | None = None, walls_made_finer: bool = False) -> dict[str, Any]:
     """What of the finished mesh ``(V, F)`` a finer mesh detail could help (module docstring). ``voxel_mm``: the
     mesh detail it was made at; ``sigma``: each vertex's confidence (made-up vertices, the fill of Fill holes, are
     left out); ``preset_id``: the scan's preset; ``opposite_sides``: the thin-wall rule was on (``report.json``'s
-    ``params.reconstruction.opposite_mm`` not None), for the thickness estimate. Reads only; returns plain data."""
+    ``params.reconstruction.opposite_mm`` not None), for the thickness estimate. ``walls_made_finer``: Make mesh made
+    this mesh's thin walls finer (ENGINE_PLAN X5 step 2, :mod:`ohs.app.fine_walls`): everything is still looked for
+    and recorded, but nothing is suggested (``why_not`` "walls_made_finer") and no thickness estimate is given (it was
+    measured on plain 1 mm meshes). Reads only; returns plain data."""
     t0 = time.perf_counter()
     v = float(voxel_mm)
     if not (math.isfinite(v) and v > 0):
@@ -399,15 +409,17 @@ def find_thin_parts(V: np.ndarray, F: np.ndarray, *, voxel_mm: float, normals: n
                    ms=_r(1e3 * (time.perf_counter() - t0), 0))
         return out
     N, S, measured, va, idx, step, cast = _prepare(V, F, normals, sigma)
-    walls, wall_v = _walls(cast, V, N, va, measured, idx, step, v, opposite_sides)
+    # the estimate was measured on plain 1 mm meshes: not for walls made finer
+    walls, wall_v = _walls(cast, V, N, va, measured, idx, step, v, False if walls_made_finer else opposite_sides)
     holes, hole_v = _holes(cast, V, N, idx, v)
     plates = _plates(V, F, N, S, v)
     found = bool(walls["found"] or plates["found"] or holes["found"])
     # suggested only where a gain was measured: thin walls seen from both sides (P1). A thin plate or small holes alone
     # are recorded but not suggested: a plate lying flat reads right at every mesh detail, small holes were not shown
-    # nearer the truth at 0.5 mm beyond the scan-to-scan spread
-    suggest = bool(walls["found"])
-    why_not = None if suggest else "no_measured_gain" if found else "nothing_found"
+    # nearer the truth at 0.5 mm beyond the scan-to-scan spread. Walls made finer already: not suggested again
+    suggest = bool(walls["found"]) and not walls_made_finer
+    why_not = (None if suggest else "walls_made_finer" if walls_made_finer else "no_measured_gain" if found
+               else "nothing_found")
     size = BRICK_VOXELS * v
     flagged = np.concatenate([wall_v, hole_v])
     keys = _bricks(V[flagged], size)
@@ -431,11 +443,46 @@ def _minutes(s: float) -> str:
     return f"{s:.0f} s" if s < 90 else f"{s / 60:.0f} min" if s >= 600 else f"{s / 60:.1f} min"
 
 
+def _gb(mb: float) -> str:
+    return f"{mb / 1024:.1f} GB" if mb >= 1024 * 0.95 or mb >= 100 else f"{mb:.0f} MB"
+
+
+def fine_words(v: float, seconds: float | None, frames: int, bytes_per_frame: int) -> dict:
+    """The first choice of the hint, "Make only the thin walls finer" (ENGINE_PLAN X5 step 2): what it does, its
+    measured gain and cost (:data:`X5S2`), with this mesh's time and the disk space this scan's frames need while it
+    runs. ``disk_mb``: that space (MB of 2^20 bytes)."""
+    disk_mb = float(frames) * float(bytes_per_frame) / 2 ** 20
+    a, b = X5S2["walls_nearer_mm"]
+    t0, t1 = X5S2["time_x"]
+    p0, p1 = X5S2["triangles_pct"]
+    gain = [f"Walls of {_range(*X5S2['walls_true'])} read {_range(a, b)} nearer their true thickness than in this mesh, "
+            f"{X5S2['share_words']} of what the whole scan at mesh detail {_mm(THIN_PRESET_VOXEL_MM)} mm gains; the "
+            f"rest of the mesh stays as it is.",
+            "Each wall's less-seen side keeps its surface as it is, so the walls still read thicker than with the "
+            "preset."]
+    cost = []
+    if seconds and seconds > 0:
+        cost.append(f"Time: about {t0:g} to {t1:g} times as long. This mesh took {_minutes(seconds)}; with it about "
+                    f"{_minutes(t0 * seconds)} to {_minutes(t1 * seconds)}.")
+    else:
+        cost.append(f"Time: about {t0:g} to {t1:g} times as long.")
+    cost.append(f"Memory: no more memory than this mesh took. Triangles: {p0} to {p1} % more, on the walls only.")
+    cost.append(f"Disk: about {_gb(disk_mb)} of free space while the mesh is made ({float(bytes_per_frame) / 2 ** 20:.1f} "
+                f"MB for each of the {int(frames):,} frames), removed when it is done.")
+    return {"action": FINE_ACTION,
+            "intro": f"Makes the mesh again at mesh detail {_mm(v)} mm, then makes only the thin walls finer, at "
+                     f"{_mm(THIN_PRESET_VOXEL_MM)} mm, from the same frames. Nothing else changes.",
+            "gain": gain, "cost": cost, "disk_mb": round(disk_mb, 1)}
+
+
 def hint_words(finding: dict | None, *, seconds: float | None = None, triangles: int | None = None,
-               graphics_card: bool | None = True) -> dict | None:
+               graphics_card: bool | None = True, fine: dict | None = None) -> dict | None:
     """The hint in the app's words, or None when there is nothing to suggest: ``{title, found: [...], gain: [...],
-    cost: [...], measured, action, preset_id, preset_name}``. ``seconds``: how long the Make mesh took;
-    ``triangles``: the mesh's; ``graphics_card``: the scan was made with one (the numbers were)."""
+    cost: [...], measured, action, preset_id, preset_name, fine}``. ``seconds``: how long the Make mesh took;
+    ``triangles``: the mesh's; ``graphics_card``: the scan was made with one (the numbers were). ``fine``
+    (``{frames, bytes_per_frame}``, the frames this mesh processed and what each one keeps on disk): "Make only the
+    thin walls finer" can run on this scan (the graphics card's path, at the mesh detail it was measured at), so it is
+    offered first (:func:`fine_words`, in ``fine``); None: ``fine`` is None and only the preset is offered, as before."""
     if not isinstance(finding, dict) or not finding.get("suggest"):
         return None
     v = float(finding.get("voxel_mm") or 1.0)
@@ -494,4 +541,5 @@ def hint_words(finding: dict | None, *, seconds: float | None = None, triangles:
     return {"title": title, "intro": f"The preset “{THIN_PRESET_NAME}” makes the mesh at mesh detail "
                                      f"{_mm(THIN_PRESET_VOXEL_MM)} mm instead of {_mm(v)} mm, and changes nothing else.",
             "found": found, "gain": gain, "cost": cost, "measured": measured,
-            "action": "Make the mesh again with this preset", "preset_id": THIN_PRESET_ID, "preset_name": THIN_PRESET_NAME}
+            "action": "Make the mesh again with this preset", "preset_id": THIN_PRESET_ID, "preset_name": THIN_PRESET_NAME,
+            "fine": None if fine is None else fine_words(v, seconds, int(fine["frames"]), int(fine["bytes_per_frame"]))}

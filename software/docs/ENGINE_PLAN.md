@@ -648,7 +648,7 @@ and thin parts".
     `pipeline.start_frames=10, start_predict=fit, start_first=true, start_detail_only=true,
     start_together=true, fusion.slip_check_mm=3, fusion.fuse_lag=1`.
 
-### [x] X5. Fine voxels where the part needs them (S to M, then L): the hint on; step 2 built, not adopted
+### [x] X5. Fine voxels where the part needs them (S to M, then L): the hint on; step 2 not a default, in the app as a choice per scan
 - **Step 1:** after Make mesh, find thin walls (where the opposite-sides rule fired) and
   small round features, and suggest the "Thin sheet metal and small parts" preset with its
   measured gain (FP P4). A hint only.
@@ -704,11 +704,19 @@ and thin parts".
     a voxel and the all-0.5 mm mesh has holes; the stitch itself is clean (no doubled or flat
     triangle, the step at the seam 0.05 to 0.09 mm at the 95th percentile).
   - **To take it up again:** fuse only the kept frames that see a region and keep the depth
-    smaller (time); the less-seen side (accuracy). **To put it in the app:** `[process]
-    fine_walls` in `ohs/app/config.py`; the server's Make mesh asks Follow the camera to keep
-    the depth, calls `make_fine_walls` on the base stage after Straighten and removes the kept
-    depth; a share of the progress bar (6 to 11 s); the stage report; the thin-parts hint must
-    not suggest the preset where the walls were already made finer; a cap on the kept depth.
+    smaller (time); the less-seen side (accuracy).
+  - **In the app 2026-11-22, a choice per scan, off unless chosen** (the owner's decision;
+    `VALIDATION.md`, the section on "Make only the thin walls finer" in the app). The hint offers
+    "Make only the thin walls finer" first and the preset second; the choice is kept in the
+    scan's entry (`POST .../process {fine_walls}`; `[process] fine_walls`, off, for scans
+    without one). It runs only on the graphics card, at mesh detail 1 mm, not at Preview, and
+    when the drive has the kept depth's size and 2 GB more free; else Make mesh goes on
+    without it and says why. A mesh made finer is not suggested again; a note in the hint's
+    place offers "Make the mesh again without this".
+  - In the real app on the standing walls: Make mesh 46.2 → 55.9 s, the walls read 1.83 →
+    1.54 mm, 907 MB kept while it runs and removed; without it again 46.3 s and the mesh as
+    before. With the choice off the quick set compares identical.
+  - Not done: fusing only the kept frames that see a region; a mesh detail other than 1 mm.
 - **Evidence:** 0.5 mm is the only setting that passed P1's stop rule (walls 0.23 to 0.67 mm
   nearer), for 1.2 to 2.4 times the time and 7 GB at 3.3 million triangles (R5).
 - **Risk:** pinholes and cracks at the boundary, memory, holes reading smaller.

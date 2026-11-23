@@ -67,8 +67,8 @@ import { viewerSheet } from "../lib/shortcuts";
 import { axesEntry, groupOfTool, initialOpen, openFor, type GroupsOpen, type ViewerGroupId, type ViewerTool } from "../lib/viewerGroups";
 import { ShortcutButton, ShortcutSheet } from "../components/ShortcutSheet";
 import { remakeBlock } from "../lib/keepMode";
-import { thinPartsToShow } from "../lib/thinParts";
-import { ThinPartsHint } from "./viewer/ThinPartsHint";
+import { fineWallsNote, thinPartsToShow } from "../lib/thinParts";
+import { FineWallsNote, ThinPartsHint } from "./viewer/ThinPartsHint";
 import { hasLaserValues } from "../lib/lasers";
 import { axisOrder, deltaOf, fmtVec, pointToPart, readFrame } from "../lib/partFrame";
 import { href, navigate, paths } from "../lib/router";
@@ -711,6 +711,7 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
   // R17: the Make mesh that made this mesh (its whole time)
   const made = useProcess((s) => s.entries[processKey(pid, sid)]?.state?.made ?? null);
   const thinHint = thinPartsToShow(made); // ENGINE_PLAN X5
+  const fineNote = fineWallsNote(made); // X5 step 2: what "Make only the thin walls finer" did, or why not
   const shown: Shading =
     shading === "deviation"
       ? devOn && dev.phase === "ready"
@@ -1314,10 +1315,12 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
             </Panel>
           ) : null}
           <Panel title="Processing report" icon={FileText}>
-            {/* ENGINE_PLAN X5: thin walls, a thin plate or small holes found; a suggestion with one action */}
-            {thinHint && project && scan ? (
-              <div className="mb-4">
-                <ThinPartsHint pid={pid} sid={sid} name={scan.name} hint={thinHint} quality={report?.quality} blocked={remakeBlock(scan)} />
+            {/* ENGINE_PLAN X5: thin walls, a thin plate or small holes found; a suggestion with its choices. After a
+                mesh made with "Make only the thin walls finer" on: what it did (or why not) in the hint's place */}
+            {(thinHint || fineNote) && project && scan ? (
+              <div className="mb-4 space-y-2">
+                {fineNote ? <FineWallsNote pid={pid} sid={sid} name={scan.name} made={made} quality={report?.quality} blocked={remakeBlock(scan)} /> : null}
+                {thinHint ? <ThinPartsHint pid={pid} sid={sid} name={scan.name} hint={thinHint} quality={report?.quality} blocked={remakeBlock(scan)} /> : null}
               </div>
             ) : null}
             {report ? (

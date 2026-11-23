@@ -13,6 +13,7 @@ import type {
   Scan,
   ScanDiskUse,
   ScanKeepPlan,
+  BaseStageId,
   StageId,
   StageState,
 } from "../api/types";
@@ -115,8 +116,9 @@ export type StageAction = "make_mesh" | "track" | "straighten" | "fuse" | "space
 type StageLite = { state: StageState; when: string | null };
 /** What the rule reads of the process state (`ProcessState` fits it). */
 export type StagesLite = {
-  stages: Record<StageId, StageLite> & { refine: StageLite & { source: StageId | null } };
-  base: { stage: StageId } | null;
+  /** `fine_walls`: Make mesh's "Make only the thin walls finer" (ENGINE_PLAN X5 step 2), once it ran. */
+  stages: Record<StageId, StageLite> & { refine: StageLite & { source: BaseStageId | null }; fine_walls?: StageLite };
+  base: { stage: BaseStageId } | null;
 };
 
 /** Why an action cannot run, one plain sentence each: why, and what would bring it back. */
@@ -180,7 +182,7 @@ export function stageBlock(
   if (action === "refine") {
     const b = state.base?.stage ?? "track";
     const src = b === "refine" ? (state.stages.refine.source ?? "track") : b;
-    return filesGone(state.stages[src], freedAt) ? gone : null;
+    return filesGone(src === "fine_walls" ? state.stages.fine_walls : state.stages[src], freedAt) ? gone : null;
   }
   return filesGone(state.stages.track, freedAt) ? gone : null;
 }

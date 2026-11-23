@@ -266,6 +266,14 @@ export class MockProcess {
 
   /** Scans whose thin-parts hint was put away (ENGINE_PLAN X5). */
   private thinDismissed = new Set<string>();
+  /** Each scan's choice of "Make only the thin walls finer" (ENGINE_PLAN X5 step 2; absent: off, as the engine's
+   * `[process] fine_walls` default). */
+  private fineWalls = new Map<string, boolean>();
+
+  /** `POST .../process {fine_walls}`: the scan's choice, kept for every later Make mesh. */
+  setFineWalls(s: Scan, on: boolean): void {
+    this.fineWalls.set(s.id, on);
+  }
 
   constructor(host: MockHost, find: ScanLookup) {
     this.host = host;
@@ -1345,8 +1353,27 @@ export class MockProcess {
         };
         // ENGINE_PLAN X5: the hint is for thin walls only; the demo's scans that would have them get it at 1 mm
         const voxel = settings.voxel_mm ?? 1;
-        if (/sheet|thin|wall/i.test(s.name) && voxel > 0.5)
-          st.made.thin_parts = demoThinPartsHint(st.made.seconds, st.current ? st.current.indices.length / 3 : 250_000, voxel, self.thinDismissed.has(s.id));
+        const walls = /sheet|thin|wall/i.test(s.name);
+        // X5 step 2: with the scan's choice on, at 1 mm and not at Preview, the demo's thin walls are made finer
+        const fine = self.fineWalls.get(s.id) === true;
+        const acted = fine && walls && voxel === 1 && settings.quality !== "preview";
+        if (fine) {
+          const secs = Math.max(1, Math.round(0.12 * st.made.seconds * 10) / 10);
+          st.made.fine_walls = acted
+            ? { chosen: true, acted: true, why: null, share: 0.028, regions: 3, seconds: secs, kept_mb: 914.1,
+                line: `The thin walls were made finer: 2.8 % of the surface on 3 walls, at mesh detail 0.5 mm, in ${secs.toFixed(0)} s. The rest of the mesh is as Make mesh made it.`,
+                action: "Make the mesh again without this" }
+            : { chosen: true, acted: false, why: settings.quality === "preview" ? "preview" : voxel !== 1 ? "mesh_detail" : "no_thin_walls", share: null, regions: null, seconds: null, kept_mb: null,
+                line: settings.quality === "preview"
+                  ? "Make only the thin walls finer was on for this scan. It does not run at Preview quality, so the mesh was made without it."
+                  : voxel !== 1
+                    ? `Make only the thin walls finer was on for this scan. It was measured at mesh detail 1 mm only and this mesh is made at ${voxel} mm, so the mesh was made without it.`
+                    : "Make only the thin walls finer was on for this scan. No thin walls were found in the mesh, so it was left as it is." };
+        }
+        if (walls && voxel > 0.5)
+          st.made.thin_parts = acted
+            ? { ...demoThinPartsHint(st.made.seconds, 250_000, voxel, self.thinDismissed.has(s.id)), suggest: false, why_not: "walls_made_finer", words: null }
+            : demoThinPartsHint(st.made.seconds, st.current ? st.current.indices.length / 3 : 250_000, voxel, self.thinDismissed.has(s.id), settings.quality === "preview" ? undefined : 117);
         self.markProcessed(p, s, settings.quality);
         const j = holder.id ? self.host.job(holder.id) : undefined;
         if (j) j.mesh_kept = false; // the new mesh took the earlier one's place

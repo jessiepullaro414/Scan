@@ -50,6 +50,7 @@ const PART_LABEL: Record<string, string> = {
   fuse: STAGE_TITLES.fuse.label,
   spacetime: STAGE_TITLES.spacetime.label,
   refine: STAGE_TITLES.refine.label,
+  fine_walls: "Make only the thin walls finer", // ENGINE_PLAN X5 step 2, when the scan chose it
   edits: "The edits",
 };
 

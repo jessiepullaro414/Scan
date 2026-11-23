@@ -24,7 +24,8 @@ type JobsStore = {
   loaded: boolean;
   upsert: (job: Job) => void;
   fetchAll: () => Promise<void>;
-  process: (pid: string, sid: string, quality: ProcessQuality, name?: string) => Promise<Job | null>;
+  /** `fineWalls`: the scan's choice of "Make only the thin walls finer" (ENGINE_PLAN X5 step 2); undefined keeps it. */
+  process: (pid: string, sid: string, quality: ProcessQuality, name?: string, fineWalls?: boolean) => Promise<Job | null>;
   cancel: (jid: string) => Promise<void>;
 };
 
@@ -137,9 +138,9 @@ export const useJobs = create<JobsStore>((set, get) => ({
     }
   },
 
-  process: async (pid, sid, quality, name) => {
+  process: async (pid, sid, quality, name, fineWalls) => {
     try {
-      const job = await api.processScan(pid, sid, quality);
+      const job = await api.processScan(pid, sid, quality, fineWalls);
       const links = { ...get().links, [job.id]: { pid, sid, quality, name } };
       // Keep the persisted map small.
       const ids = Object.keys(links);

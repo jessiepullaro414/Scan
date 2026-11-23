@@ -4,10 +4,36 @@
  * when it finds thin walls (the one case where a gain was measured; a plate or holes alone: `why_not`
  * "no_measured_gain", no hint). A suggestion only: the page shows it with one action (set that preset, then Make mesh again, the
  * way the Preset box does it) and a way to put it away. Nothing happens by itself.
+ *
+ * ENGINE_PLAN X5 step 2: where the engine can run it (`words.fine`) the hint's first choice is "Make only the thin walls
+ * finer" (Make mesh again with the scan's choice on); after such a mesh, `fineWallsNote` is the line in the hint's place.
  */
-import type { MadeInfo, ThinPartsHint } from "../api/types";
+import type { FineWallsOffer, MadeInfo, ThinPartsHint } from "../api/types";
 
 export const THIN_PRESET_ID = "thin-sheet-small-parts";
+export const FINE_ACTION = "Make only the thin walls finer";
+
+/** One choice of the hint: "Make only the thin walls finer" (`fine`, ENGINE_PLAN X5 step 2: Make mesh again with the
+ * scan's choice on) or the preset (`preset`, as before). The first is the primary button. */
+export type HintChoice = { kind: "fine" | "preset"; label: string; primary: boolean };
+
+/** The hint's choices in order: the finer walls first where the engine offers them (`words.fine`: the graphics card's
+ * path, mesh detail 1 mm), then the preset; without the offer the preset alone, as before. */
+export function hintChoices(h: ThinPartsHint): HintChoice[] {
+  const w = h.words;
+  if (!w) return [];
+  const preset: HintChoice = { kind: "preset", label: w.action, primary: !w.fine };
+  return w.fine ? [{ kind: "fine", label: w.fine.action, primary: true }, preset] : [preset];
+}
+
+/** After a Make mesh with "Make only the thin walls finer" on (`made.fine_walls`): the note the page shows in the
+ * hint's place, the engine's line and, only when it acted, its one action ("Make the mesh again without this":
+ * `POST .../process {fine_walls: false}`). Null when the scan did not choose it, or there is no line. */
+export function fineWallsNote(made: MadeInfo | null | undefined): { acted: boolean; line: string; action: string | null } | null {
+  const f = made?.fine_walls;
+  if (!f || !f.line) return null;
+  return { acted: !!f.acted, line: f.line, action: f.acted ? (f.action ?? "Make the mesh again without this") : null };
+}
 
 /** The hint to show, or null: nothing found, made fine already, put away, or an engine without it. */
 export function thinPartsToShow(made: MadeInfo | null | undefined): ThinPartsHint | null {
@@ -16,8 +42,29 @@ export function thinPartsToShow(made: MadeInfo | null | undefined): ThinPartsHin
   return h;
 }
 
-/** The demo's hint, in the engine's words (`ohs/mesh/thin_parts.py hint_words`), for a scan of thin walls. */
-export function demoThinPartsHint(seconds: number, triangles: number, voxel: number, dismissed: boolean): ThinPartsHint {
+/** The demo's "Make only the thin walls finer", in the engine's words (`ohs/mesh/thin_parts.py fine_words`). */
+function demoFine(seconds: number, frames: number): FineWallsOffer {
+  const t = (s: number) => (s < 90 ? `${s.toFixed(0)} s` : `${(s / 60).toFixed(1)} min`);
+  const mb = (frames * 8_192_000) / 2 ** 20;
+  return {
+    action: FINE_ACTION,
+    intro: "Makes the mesh again at mesh detail 1 mm, then makes only the thin walls finer, at 0.5 mm, from the same frames. Nothing else changes.",
+    gain: [
+      "Walls of 0.5 to 2 mm read 0.04 to 0.52 mm nearer their true thickness than in this mesh, about half to four fifths of what the whole scan at mesh detail 0.5 mm gains; the rest of the mesh stays as it is.",
+      "Each wall's less-seen side keeps its surface as it is, so the walls still read thicker than with the preset.",
+    ],
+    cost: [
+      `Time: about 1.2 to 1.3 times as long. This mesh took ${t(seconds)}; with it about ${t(1.2 * seconds)} to ${t(1.3 * seconds)}.`,
+      "Memory: no more memory than this mesh took. Triangles: 7 to 11 % more, on the walls only.",
+      `Disk: about ${mb >= 100 ? `${(mb / 1024).toFixed(1)} GB` : `${mb.toFixed(0)} MB`} of free space while the mesh is made (7.8 MB for each of the ${frames.toLocaleString("en-US")} frames), removed when it is done.`,
+    ],
+    disk_mb: Math.round(mb * 10) / 10,
+  };
+}
+
+/** The demo's hint, in the engine's words (`ohs/mesh/thin_parts.py hint_words`), for a scan of thin walls. `frames`:
+ * the frames this mesh processed; with it, at mesh detail 1 mm, "Make only the thin walls finer" is offered first. */
+export function demoThinPartsHint(seconds: number, triangles: number, voxel: number, dismissed: boolean, frames?: number): ThinPartsHint {
   const t = (s: number) => (s < 90 ? `${s.toFixed(0)} s` : `${(s / 60).toFixed(1)} min`);
   return {
     suggest: true,
@@ -44,6 +91,7 @@ export function demoThinPartsHint(seconds: number, triangles: number, voxel: num
       action: "Make the mesh again with this preset",
       preset_id: THIN_PRESET_ID,
       preset_name: "Thin sheet metal and small parts",
+      fine: frames && voxel === 1 ? demoFine(seconds, frames) : null,
     },
   };
 }

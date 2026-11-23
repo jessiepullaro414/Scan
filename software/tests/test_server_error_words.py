@@ -432,7 +432,7 @@ ENGINE = SERVER.parent
 #: warnings, reasons, notes, labels, help cards; a plain exception's words pass ``plain_reason`` too)
 ENGINE_MODULES = [
     "calib/health.py", "calib/drift.py", "calib/stereo.py", "calib/imu.py", "calib/laser_planes.py",
-    "app/presets.py", "app/selftest.py", "app/calib_flow.py",
+    "app/presets.py", "app/selftest.py", "app/calib_flow.py", "app/fine_walls.py",
     "mesh/section.py", "mesh/support.py", "mesh/check.py", "mesh/thin_parts.py",
     "cad/fcmacro.py", "cad/step.py", "cad/shapes.py", "cad/nominal.py",
     "inspect/reference.py", "inspect/gapflush.py",
@@ -533,7 +533,8 @@ PROGRAM_WORDS = [
     (r"(?i)reprojection|principal point", "how well the corners fit / image centre"),
     (r"Scanner problem|Engine error", "no title: the sentence says what happened"),
 ]
-PROGRAM_WORD_MODULES = ["app/selftest.py", "mesh/anchor.py", "align/merge.py", "mesh/support.py", "track/spacetime.py"]
+PROGRAM_WORD_MODULES = ["app/selftest.py", "mesh/anchor.py", "align/merge.py", "mesh/support.py", "track/spacetime.py",
+                        "app/fine_walls.py", "mesh/thin_parts.py"]
 
 
 def program_words(source: str, filename: str = "<source>") -> list[str]:

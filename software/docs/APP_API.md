@@ -71,7 +71,7 @@ type Job = { id: string; kind: string; state: "queued" | "running" | "done" | "f
 | `POST /api/scan/pause` / `resume` | | `SessionState` |
 | `POST /api/scan/rewind` | `{seconds: 2.0}` | `SessionState`. Drops the last N s from the live model and records a `cut` event, which offline processing skips. |
 | `POST /api/scan/stop` | | `{scan: Scan}` (the recording is finalised) |
-| `POST /api/projects/{pid}/scans/{sid}/process` | `{quality:"standard"\|"best"\|"preview"}` (default: the scan's preset's quality, else `"standard"`; `"full"` = `"standard"`) | `Job` |
+| `POST /api/projects/{pid}/scans/{sid}/process` | `{quality:"standard"\|"best"\|"preview", fine_walls?: boolean}` (default: the scan's preset's quality, else `"standard"`; `"full"` = `"standard"`; `fine_walls`: "The thin-parts hint", since 2026-11-22) | `Job` |
 | `GET /api/jobs` / `GET /api/jobs/{jid}` | | `Job[]` / `Job` |
 | `POST /api/jobs/{jid}/cancel` | | `Job` |
 | `GET /api/projects/{pid}/scans/{sid}/files/{name}` | | result files: `mesh.ply`, `mesh.stl`, `laser_points.ply`, `report.json` |
@@ -2781,5 +2781,37 @@ type ThinPartsHint = {
 |---|---|---|
 | `POST /api/projects/{pid}/scans/{sid}/process/hints/thin-parts/dismiss` | none | `ProcessState`: the hint is put away for this scan; the scan's entry keeps `hints_dismissed: ["thin_parts"]`, so it stays away after Make mesh again. 404 for an unknown scan. |
 
-- The page's one action is `PUT .../preset {preset_id: "thin-sheet-small-parts"}` and then
+- The preset's action is `PUT .../preset {preset_id: "thin-sheet-small-parts"}` and then
   `POST .../process` at the same quality. Nothing happens by itself.
+
+### "Make only the thin walls finer" (ENGINE_PLAN X5 step 2, a choice per scan, since 2026-11-22)
+
+- `POST /api/projects/{pid}/scans/{sid}/process` takes `fine_walls?: boolean`. When given it
+  is stored in the scan's entry (`fine_walls`) once the request is taken, and used by this and
+  every later Make mesh and recipe on everything; absent, the stored choice stays.
+  `[process] fine_walls` (bool, default false) is the default for scans without a stored
+  choice.
+- **When it runs:** only with the mesh model on the graphics card, at mesh detail exactly
+  1 mm, not at Preview, and when the scan's drive has the kept depth's estimate (the frames
+  Follow the camera will process x 8 bytes a pixel, about 7.8 MB a frame at 1280 x 800) and
+  2 GB more free. Otherwise it is skipped before Follow the camera, with the reason. It never
+  fails a Make mesh; the kept depth (`track/fused_depth/` in the run's folder) is removed in
+  every case.
+- The hint: `words.fine?: {action, intro, gain: string[], cost: string[], disk_mb: number} |
+  null` is the first choice ("Make only the thin walls finer"); null: the preset alone, as
+  before. The page's action for it is `POST .../process {quality, fine_walls: true}`.
+  `ThinPartsHint.why_not` gains `"walls_made_finer"`: such a mesh is not suggested again, and
+  its `walls.estimate_mm` is null.
+- `ProcessState.made.fine_walls?: {chosen: true, acted: boolean, why, share, regions, seconds,
+  kept_mb, need_mb?, free_mb?, voxel_mm?, line: string, action?: string}`, only when the scan
+  chose it. `why` (when it did not act): `"no_thin_walls" | "no_kept_depth" |
+  "no_graphics_card" | "no_finer_surface" | "mesh_detail" | "preview" | "disk" | "failed"`.
+  `line` is what the page shows in the hint's place; `action` ("Make the mesh again without
+  this", only when it acted) is `POST .../process {quality, fine_walls: false}`.
+- `ProcessState.stages.fine_walls?: StageInfo & {source, why, share_pct, regions, kept_mb}`
+  and `making.stages.fine_walls`, only once it ran; `making.plan` may hold a `fine_walls`
+  part; `base.stage` may be `"fine_walls"`, and so may the `source` of `refine` and
+  `spacetime`. `made.stages` holds its seconds.
+- `result/report.json` gets `fine_walls`: the engine's block (`walls, bricks, frames,
+  faces_in, share, triangles_before, triangles_after, vertices, moved_mm, seam_mm, ms`) with
+  the fields of `made.fine_walls` (without `line` and `action`).

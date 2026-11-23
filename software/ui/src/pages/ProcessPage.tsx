@@ -129,7 +129,7 @@ function describeChange(a: ProcessState | undefined, b: ProcessState | undefined
   if (!a || !b) return "the previous version";
   const baseChanged = a.base?.stage !== b.base?.stage || a.base?.triangles !== b.base?.triangles;
   if (baseChanged && b.cursor === 0)
-    return `before ${b.base ? { track: "Follow the camera", straighten: "Straighten", fuse: "Build the surface", spacetime: "Refine from the images", refine: "Refine with lasers" }[b.base.stage] : "the stage"} ran again`;
+    return `before ${b.base ? { track: "Follow the camera", straighten: "Straighten", fuse: "Build the surface", spacetime: "Refine from the images", refine: "Refine with lasers", fine_walls: "Make only the thin walls finer" }[b.base.stage] : "the stage"} ran again`;
   if (b.cursor === a.cursor + 1 && b.edits[b.cursor - 1] && (a.edits[a.cursor]?.id !== b.edits[b.cursor - 1].id || a.edits.length < b.edits.length))
     return `before “${b.edits[b.cursor - 1].label}”`;
   if (b.cursor < a.cursor) return "before the undo";

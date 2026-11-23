@@ -244,6 +244,44 @@ def test_the_hint_says_what_was_found_what_it_changes_and_what_it_costs():
     assert "without a graphics card" in nocard
 
 
+def test_the_hint_offers_making_only_the_thin_walls_finer_first_with_its_measured_numbers():
+    """ENGINE_PLAN X5 step 2 in the app: where it can run (``fine`` given: the graphics card's path at mesh detail 1 mm)
+    the hint offers it first, with the gain and the cost measured (VALIDATION.md, "Fine mesh detail on thin walls
+    only"), this mesh's own time and the disk space this scan's frames need; the preset stays the second choice, as it
+    was. Without ``fine`` the hint is as before and offers no such choice."""
+    V, F = box(40.0, 1.0, 30.0)
+    f = find_thin_parts(V, F, voxel_mm=1.0, opposite_sides=True)
+    plain = hint_words(f, seconds=45.0, triangles=900_000)
+    assert plain["fine"] is None and plain["action"] == "Make the mesh again with this preset"
+    w = hint_words(f, seconds=45.0, triangles=900_000, fine={"frames": 117, "bytes_per_frame": 8_192_000})
+    assert {k: w[k] for k in plain if k != "fine"} == {k: plain[k] for k in plain if k != "fine"}  # the preset: unchanged
+    fw = w["fine"]
+    assert fw["action"] == "Make only the thin walls finer"
+    text = " ".join([fw["intro"], *fw["gain"], *fw["cost"]])
+    assert "0.04 to 0.52 mm nearer their true thickness" in text and "walls of 0.5 to 2 mm" in text.lower()
+    assert "half to four fifths" in text and "0.5 mm" in fw["intro"]
+    assert "about 1.2 to 1.3 times" in text and "This mesh took 45 s; with it about 54 s to 58 s" in text
+    assert "no more memory" in text.lower()
+    assert "0.9 GB" in text and "117 frames" in text  # 117 x 7.8 MB, removed afterwards
+    assert "removed" in text and "less-seen side" in text
+    assert fw["disk_mb"] == pytest.approx(117 * 8_192_000 / 2 ** 20, abs=0.1)
+    for word in ("GPU", "CPU", "voxel", "sigma", "uncertain"):
+        assert word not in text
+
+
+def test_a_mesh_whose_walls_were_made_finer_is_not_suggested_again_nor_estimated():
+    """After "Make only the thin walls finer" acted the walls are still recorded, but nothing is suggested
+    (``walls_made_finer``) and the thickness estimate, calibrated on plain 1 mm meshes, is not given."""
+    V, F = box(40.0, 1.0, 30.0)
+    f = find_thin_parts(V, F, voxel_mm=1.0, opposite_sides=True, walls_made_finer=True)
+    assert f["suggest"] is False and f["why_not"] == "walls_made_finer"
+    assert f["walls"]["found"] and f["walls"]["estimate_mm"] is None
+    assert all(r["estimate_mm"] is None for r in f["walls"]["regions"])
+    assert hint_words(f) is None
+    g = find_thin_parts(V, F, voxel_mm=1.0, opposite_sides=True)
+    assert g["suggest"] and g["walls"]["estimate_mm"] is not None  # without it: as before
+
+
 def test_the_engines_words_pass_the_guards():
     from pathlib import Path
 
