@@ -906,6 +906,60 @@ and thin parts".
   down. Weaker than X2.
 - **Stop rule: adopted only if** within 0.2 mm on 8 of 9 clicks.
 
+### [ ] X21. Errors the whole scan shares: a slightly wrong calibration (M)
+Raised by an outside review on 2026-11-23 (below). Every number in `VALIDATION.md` is made with
+the true calibration, or with one the simulator's perfect board gives (baseline +0.005 mm, depth
+scale 0.001 %; `VALIDATION.md`, "Results (full runs)"). A real calibration is off by more, and
+its error is the same in every frame, so no averaging removes it and no surface score shows it.
+- The scale of every length rests on the baseline, and that on the printed board's scale. The
+  app checks the print with calipers on a 100 mm bar: 0.05 mm there is 0.05 %, the whole of the
+  long part's need (gap item 7), before tracking adds anything.
+- **To measure:** perturb the calibration once per trial and hold it for the whole scan
+  (baseline, focal length, principal point, the cameras' relative turn, the board's scale, the
+  laser planes), each within what the calibration's own spread and the print check allow, over
+  independent trials. Report what each does to the scorecard's dimensions (the panel's length,
+  hole diameters and positions, wall thickness, flatness), signed, as mm per unit of error, and
+  which the calibration status already catches (`VALIDATION.md`, "Which signs show a stale
+  calibration").
+- **What follows for X8:** tags as anchors place the tags with the stereo pair's own scale. They
+  hold the scan's shape, not its scale. For an absolute length a known length has to be in the
+  scene: tags of known pitch (a printed strip, checked like the board), or a scale bar. To
+  measure with the same perturbations: tag positions estimated in the scan against tag positions
+  known beforehand.
+- No stop rule yet: this is a measurement that sets what the other items can promise.
+
+### An outside review (2026-11-23)
+The owner asked another AI for a second opinion on the four results of E-D3, from a written
+summary (no code). Taken as an opinion and weighed against the measurements:
+- **Its main point, adopted:** a reconstruction can agree with its own observations very well
+  while a dimension stays weakly held (the panel's length is the example). Local surface
+  agreement is no evidence of a dimension; report signed dimension errors and tails beside the
+  medians. X21 above comes from it.
+- **Holes:** agrees with reading the rim from the images. Adopted for X15: say which diameter is
+  reported (the entrance rim); keep several candidate edges and choose with one model of
+  entrance, exit and wall and what each camera can see of them; ask for angular coverage; the ±
+  must not shrink with the frame count for what the frames share; try the rim with the dots
+  off. Its warning stands: 0.1 mm of diameter is 0.14 px of shared edge bias, so 0.1 to 0.2 mm
+  is a goal under good conditions, not a supported figure.
+- **Thin walls:** its first guess for the "always thicker" sign is ours (frames pulled outward
+  by a tracking map that swells on a thin wall). Adopted: ablations that separate the matcher,
+  the map and the feedback before building ties (exact depth with true poses; the matcher's
+  depth tracked against a fixed exact surface; exact depth tracked against the evolving map; the
+  order of the sides swapped). If they point at the map: a tracking map that keeps opposite
+  faces apart (a directional TSDF).
+- **Long parts:** known target geometry matters more than tag count (X21). Tags 100 to 150 mm
+  apart in staggered rows as a first layout agrees with X8 step 3. For a tag that moves: leave
+  one tag out, watch the geometry between tags seen together, look for a change in time.
+- **Merge:** weighting by the sigma is sound only if the sigma behaves like an uncertainty; ours
+  is a loose upper bound on the part. It advises putting the pose first and the sigma-weighted
+  combination last. Adopted as the order of work, subject to the first tests' table; to check:
+  the sigma's reliability by bins, the registration's objective round the true motion (a flat
+  valley or a second minimum), and the pose's observability as a better caution than overlap.
+- **Checked and fine:** the simulator's dots are projected from the moving scanner, not painted
+  on the part. The 19.5 mm parallax rule for small holes holds.
+- **Not possible yet:** its optical test of real holes with the projector on and off waits for
+  the hardware.
+
 ## Small things found by the review
 
 - [x] "Known limitations of the pipeline" in `VALIDATION.md` was out of date: it said the
