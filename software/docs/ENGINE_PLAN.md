@@ -108,7 +108,8 @@ Ranked by the gap between what a user needs and what the engine delivers.
 6. **Flatness of a flange.** Needed: 0.05 to 0.1 mm. The label reads 0.14 to 0.48 mm on truly
    flat faces (stale).
 7. **Overall size of large parts.** Needed: about 0.05 %. Not measured.
-8. **A merge** adds coverage, never accuracy.
+8. **A merge** adds coverage; it adds accuracy only where the pose is right and the scans
+   saw different sides (X7, measured 2026-11-22).
 9. **Waits.** After a scan, Standard takes about 4.8 times the scan's length on the Radeon PC
    (target 3) and 1.5 times on the RTX laptop (target 1). Live with four lasers: about 14
    frames a second at 640x400 on the Radeon PC.
@@ -756,12 +757,26 @@ and thin parts".
   seeds; edges, rims and walls get no more than 0.02 mm worse on any seed; Make mesh grows by
   at most 30 %.
 
-### [ ] X7. A merge that improves accuracy (S, then M)
+### [x] X7. A merge that improves accuracy (S, then M): measured, not adopted, nothing built
 - First measure the merge again on today's engine (the study predates the opposite-sides
   rule). Then register both scans' frames onto the merged model, the part only, table masked
   (X3 across scans).
 - **Stop rule: adopted only if** the merged part beats the better single scan on at least 4
   of 5 pairs, and its good surface is at least the union's.
+- **Measured 2026-11-22** (`VALIDATION.md`, "The merge on today's engine"; five pairs fixed
+  beforehand; `tools/merge_accuracy_study.py`): the app's merge beats the better single scan
+  on 1 of 5 pairs and reaches the two scans' good surface on 1 of 5; no pair does both.
+  - With both scans at their true poses the merge still misses the two scans' good surface on
+    4 of 5: a fused merge averages, and what it loses lies 0.5 to 1 mm off where only one scan
+    was good. So nothing that only mends poses can pass; registering the frames onto the
+    merged model was not built.
+  - Where a merge does add accuracy: opposite sides at the right pose (bracket 0.075 mm /
+    12.0 % against 0.098 / 15.7 % for the better scan), and thin walls seen from both faces.
+  - Where it loses most: pairs that share little of the part. The alignment accepted poses
+    about 1 mm (bracket, opposite sides, 46 % shared) and 3 mm (sheet, 40 % shared) off from
+    picked points, and those merges are far worse than either scan.
+  - The rule's "at least the union" is close to what no single surface can reach; if the
+    item is taken up again the owner may want to restate it.
 
 ### [ ] X8. Large parts: measure the overall size first (M)
 - A 1.2 to 1.5 m plain panel with Ø10 holes at both ends, scanned in passes: the end-to-end
@@ -829,6 +844,14 @@ and thin parts".
   (1 mm: 45 ms, the matcher). `OHS_GPU_TIMES=1` records every launch
   (`ohs.compute.launches`). A driver reset part way now fails the job instead of writing a
   mesh.
+- [ ] A merge of two scans that share little of the part (found by X7, 2026-11-22): from
+  picked points the alignment accepts a pose about 1 mm off (bracket, opposite sides, 46 %
+  shared) or 3 mm off (sheet, 40 % shared) and says "Aligned"; the merged part is then far
+  worse than either scan (0.31 and 0.37 mm median against 0.10 and 0.16) and nothing tells the
+  user. To do: a warning before the merge when little is shared, and a check after it (the
+  merged walls against each scan's own); a surer pose for such pairs.
+- [ ] The merged model does not get Refine with lasers, a single scan does (found by X7).
+  Measure whether it helps a merge.
 - [ ] `tests/test_track_spacetime.py::test_the_refined_mesh_is_closer_to_the_truth` failed once
   without a GPU (`OHS_COMPUTE=cpu`) on 2026-11-22, in a run of several test files, and passed in
   the eight runs after it (alone, its file six times, the same set again). **It failed again

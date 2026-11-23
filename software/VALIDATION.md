@@ -5333,6 +5333,90 @@ mesh detail 1 mm; the step's share of the progress bar is measured on two parts;
 with a real scanner or on the NVIDIA laptop; fusing only the kept frames that see a region
 was not done (fusing is 2 to 3 s of the step on the standing walls).
 
+## The merge on today's engine (ENGINE_PLAN X7, 2026-11-22): measured, not adopted, nothing built
+
+"Aligning and merging two scans" (2026-11-15) found that a merge adds surface and not accuracy.
+That was before the mesh model's weights by confidence and its rule for surfaces seen from
+opposite sides, so the merge was measured again, and the plan's idea (register both scans'
+frames onto the merged model) judged against it.
+
+**Fixed before any merge was scored** (the study's notes): five pairs, the metrics, what "beats"
+means, the stop rule.
+
+- **The scans:** stretches of 90 frames (9 s, a sweep of 140 to 160 degrees) of the scorecard's
+  400-degree orbits at 1280 x 800, the two scans of a pair from different seeds (another
+  texture, hand path and noise), the part not moved between them. Each as Make mesh makes it
+  (Follow the camera, Straighten, Refine with lasers), on the graphics card.
+- **The merges** as the app makes them (`ohs.align.merge_scans` with the server's settings,
+  same setup; the app's merge does not run Refine with lasers): at the pose the alignment
+  accepts, or, where it is not sure and the app asks for points, at the pose from four points
+  picked 1.5 mm off. Beside it the merge with the tracked scans at their true motion, and with
+  both scans at their true poses (the ceiling).
+- **Scored on the part only**, each mesh with the Default recipe and placed by the part alone:
+  the median error, the share more than 0.3 mm off, and "covered": the share of the true
+  surface either scan saw that the mesh holds within 0.5 mm. "Either scan" is that share for
+  the two single meshes together (a place counts when either has it within 0.5 mm).
+- **Beats** the better single scan (the one with the smaller share more than 0.3 mm off):
+  median and share both no worse than it beyond the spread, one of them better beyond it. Two
+  runs of the same job gave the same numbers to the last digit, so the spread is a floor of
+  0.003 mm and 0.5 points.
+
+| pair | the better single scan | the app's merge | covered: either scan / the merge | the merge at true poses |
+|---|---|---|---|---|
+| bracket, 97 degrees apart | 0.088 mm / 14.8 % | 0.085 mm / 14.0 %: beats | 0.933 / 0.920 | 0.075 mm / 13.5 %, covered 0.909 |
+| bracket, 56 degrees apart | 0.096 mm / 13.9 % | 0.097 mm / 14.5 % | 0.942 / 0.929 | 0.082 mm / 12.8 %, 0.920 |
+| bracket, opposite sides (171 degrees), from picked points | 0.098 mm / 15.7 % | 0.308 mm / 51.2 % | 0.944 / 0.880 | 0.062 mm / 10.5 %, 0.927 |
+| car panel, 99 degrees apart, from picked points | 0.028 mm / 4.5 % | 0.022 mm / 8.1 % | 1.000 / 1.000 | 0.022 mm / 9.2 %, 1.000 |
+| sheet part, 123 degrees apart, from picked points | 0.163 mm / 25.7 % | 0.371 mm / 57.9 % | 0.905 / 0.651 | 0.074 mm / 14.4 %, 0.886 |
+
+**Against the stop rule** (the merge beats the better single scan on at least 4 of 5 pairs, and
+its good surface is at least that of either scan together): it beats on 1 of 5 and reaches the
+covered share on 1 of 5 (the car panel); no pair does both. **Not adopted, nothing built.**
+
+**What explains it:**
+
+- **A fused merge averages.** Of the good surface the merge loses against either scan, 94 to
+  98 % lies where only one of the two scans had it within 0.5 mm: it is still there, 0.5 to
+  1 mm off, pulled towards the other scan's poorer view. Nothing thin went missing.
+- **Even true poses do not reach "either scan"** on 4 of 5 pairs (0.909 against 0.922, 0.920
+  against 0.933, 0.927 against 0.944, 0.886 against 0.915). So nothing that only mends poses
+  can pass the rule, which is why registering the frames onto the merged model was not built.
+  ("Poses refined against the finished scan" adds that a scan cannot correct the slow error
+  it shares with the model.)
+- **The pose decides a pair that shares little.** Opposite sides of the bracket share 46 % of
+  the part. From the picked points the alignment accepted a pose about 1 mm from the true
+  motion, and the merge is ruined (the upright reads 0.8 mm too thick, half the part more than
+  0.3 mm off). With the same two tracked scans at their true motion the merge is better than
+  either scan (0.075 mm / 12.0 %, covered 0.926).
+- **The sheet:** its two scans share 40 % and the accepted pose is about 3 mm off ("the shapes
+  alone fit about as well another way: your points decided"). Even at the true motion the
+  merge of the tracked scans is worse than scan A (0.226 mm / 35.9 % against 0.163 / 25.7 %):
+  each tracked sheet scan is bent by its own slow tracking error, so no one motion fits both.
+  At true poses the merge is far better than either (0.074 mm / 14.4 %).
+- **The car panel's larger share off** is fill past the panel's free edge (7.4 of the 8.1
+  points): the merge carries both scans' border fill. On the panel's face it is more accurate
+  (0.022 against 0.028 mm).
+- **A tracked scan's first frame can sit millimetres off the rest of its scan** (the bracket's
+  scan B: 4.5 mm). Merging at the motion between the first cameras gave 0.134 mm / 24.4 %
+  where the shape alignment's pose gave 0.085 / 14.0 %. The app uses the alignment.
+- **Thin walls:** only a merge sees both faces of the sheet's 2 mm flange (at true poses it
+  reads 0.11 mm too thick; a single scan sees one face and has no reading). The 1 mm rib
+  reads thicker merged (+1.16 mm at true poses) than in one scan (+0.81).
+- **Taking each place from one scan instead of averaging** (each 2 mm cell's triangles from
+  the scan with the lower sigma, or with the lower true error as an upper bound no rule can
+  reach; a trial outside the engine) covers 0.2 to 1 point more than the merge and still 0.6
+  to 2.1 points less than either scan, even with the truth's choice.
+
+**What would help, in this order:** a surer pose, or a warning, for pairs that share little of
+the part; each scan's own tracking (X3, X4, X4c); only then a choice per place.
+
+Repeat with `python tools/merge_accuracy_study.py` (its head gives the order of the steps).
+
+Limits: simulated; one pair per case; the graphics card's path only; scans of 9 s, shorter
+than a real one; the picked points are simulated (true matches moved 1.5 mm); the part was not
+moved between the scans (the merge of a moved part, with the table maps, was not measured);
+the trial per place is a mesh of loose triangles, not a model.
+
 ## What the metrics mean
 
 - **Stereo errors** compare the estimated raw intrinsics/extrinsics (`K1`, `K2`, `R`, `T`) with
