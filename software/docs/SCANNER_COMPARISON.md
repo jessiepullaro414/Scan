@@ -70,7 +70,7 @@ part.
    of the rim (ENGINE_PLAN X2, not built); the image-edge route is open.
 3. Hold the length of long plain parts: tags as anchors in Straighten (ENGINE_PLAN X8 step 2,
    open), and a warning when the surface lets the scanner slide.
-4. Thin walls: the cause is known (one camera offset of 0.19 to 0.25 mm made in tracking), two
+4. Thin walls: the cause is narrowed down (the frames of a wall's two sides are placed 0.3 to 1.0 mm apart by tracking; why is being tested (2026-11-23)), two
    fixes were measured and not adopted, and a per-scan choice "Make only the thin walls finer"
    brings walls 0.04 to 0.52 mm nearer (`VALIDATION.md`, "Fine mesh detail on thin walls only").
 5. Tell the user about errors the sigma cannot see: a whole region moved by tracking, and the
@@ -434,8 +434,7 @@ OpenHandScan a perfect board and matte surfaces, so it cannot show this kind of 
 same today as on 2026-11-14: the housing is printed, nothing is wired.
 
 **2. Holes, gaps and small round features.**
-- A Ø 25 mm hole over open space reads 1 to 1.6 mm small at true poses and up to 6.9 mm small
-  tracked; Ø 6 and Ø 10 there give no reading. Near a floor it is within 0.5 mm. This is worse
+- A Ø 25 mm hole over open space reads 1.1 to 1.7 mm small at true poses and up to 6.9 mm small tracked; Ø 6 and Ø 10 there give no reading. Near a floor it reads 0.2 to 0.75 mm off (+0.58 to +0.75 at true poses). This is worse
   than the "about 1 mm" of 2026-11-14 because the scorecard now includes a plate 120 mm above its
   floor (`VALIDATION.md`, "The scorecard's baseline").
 - A gap of 2 to 6 mm between two panels is bridged; gap is not offered (`VALIDATION.md`, "Gap and
@@ -448,7 +447,7 @@ same today as on 2026-11-14: the housing is printed, nothing is wired.
 
 **3. Thin walls with both sides seen.** Better than on 2026-11-14 and still short: standing walls
 of 0.5 to 2 mm read 0.5 to 1.3 mm too thick tracked, a 1 mm rib 0.7 to 1.2 mm. The cause is now
-known (one camera offset of 0.19 to 0.25 mm made in tracking, invisible to the scan); a shorter
+narrowed down (the frames of a wall's two sides are placed 0.3 to 1.0 mm apart by tracking; why is being tested (2026-11-23), and the scan does not see it); a shorter
 tracking band and poses refined against the scan were measured and not adopted (`VALIDATION.md`,
 "Poses refined against the finished scan", "Tracking on dark, plain and thin parts"). The
 per-scan choice "Make only the thin walls finer" takes 0.04 to 0.52 mm off, for 16 to 29 % more

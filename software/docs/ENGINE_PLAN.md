@@ -116,7 +116,7 @@ GPU path, Standard quality, 1 mm voxels, tracked unless said.
 | Bracket (edges, Ø14 bosses, Ø16 shaft) | Median about 0.14 mm; 11.6 to 31.3 % more than 0.3 mm off (median 12.6 %); mean offset +0.008 mm; covered 94.5 to 95.6 %. | True depth and true poses: 6.5 % over 0.3 mm. Matcher depth and true poses: about 10 %. So the depth is about 8 of the 12.6 points ["Where a tracked scan's shape errors come from"]. | Adds 2 to 3 points in the median and makes the bad seed (31 %). Best quality is worse than Standard here (0.100 against 0.089 mm). | The gap guard costs 0.7 to 2.0 points of coverage and removes bias. | Bosses read Ø 0.3 to 0.5 mm small on every seed; with true depth they are right (-0.02): the depth and the guard. Shaft right with tracking only because two errors cancel. Upright face at worst +0.33 mm. |
 | Thin sheet lying flat | A 0.5 mm plate reads 0.489 to 0.504 mm with every setting ["Presets"]. | not the limit | GPU path: 1.1 to 3.8 mm at the last frame (MP F14). | Remove table keeps 0.3 mm and up; 0.1 mm goes silently ["A thin part lying flat"]. | A merge with the plate turned over reads 1.0 mm as 1.42 and 0.5 mm as 1.28. |
 | Thin sheet standing, both sides seen | 2 mm flange 2.26 to 2.61, 1 mm rib 1.66 to 2.20 mm. Walls 0.5 / 1 / 2 mm read 1.70 / 1.71 to 1.90 / 2.53 to 2.66 at 1 mm voxels and 1.03 to 1.08 / 1.32 to 1.45 / 2.18 to 2.43 at 0.5 mm. | small | +0.3 to 0.6 mm (flange), +0.7 to 1.2 mm (1 mm rib) over true poses: 0.77 times how far out the cameras stand, r = 0.98. | Mesh's floor at true poses: 2.10 to 2.18 / 1.24 to 1.28 mm. | |
-| Holes | Ø25 over a far dark background: 1.1 mm small tracked, 1.3 at true poses. A plate 120 mm up: 22.0 to 22.1 tracked in the first study, 18.1 / 22.1 / 21.8 on the scorecard's three seeds (seed 0 lost tracking). Near a floor: Ø25 +0.15 to 0.5, Ø10 -0.3 to +0.6. Ø6 everywhere and Ø10 over a far floor: closed, refused. | All the fill is the matcher's: 1.3 mm median reach ["Holes filled in"]. | On the plate tracking takes another 1.7 to 3.1 mm. | The rim fuses as a shoulder: the reading goes 26.7 to 24.3 mm between 0.15 and 2 mm below the face. Coarser voxels close Ø25 by 1.4 to 2.4 mm. | The ± does not cover the bias. A gap of 2 to 6 mm is bridged, not offered. |
+| Holes | Ø25 over a far dark background: 1.1 mm small tracked, 1.3 at true poses. A plate 120 mm up: 22.0 to 22.1 tracked in the first study, 18.1 / 22.1 / 21.8 on the scorecard's three seeds (seed 0 lost tracking). Near a floor (the scorecard's baseline): Ø25 +0.58 to +0.75 at true poses and -0.20 to +0.47 tracked, Ø10 +0.28 to +0.60 at true poses and -0.20 to +0.07 tracked. Ø6 everywhere and Ø10 over a far floor: closed, refused. | All the fill is the matcher's: 1.3 mm median reach ["Holes filled in"]. | On the plate tracking takes another 1.7 to 3.1 mm. | The rim fuses as a shoulder: the reading goes 26.7 to 24.3 mm between 0.15 and 2 mm below the face. Coarser voxels close Ø25 by 1.4 to 2.4 mm. | The ± does not cover the bias. A gap of 2 to 6 mm is bridged, not offered. |
 | Large part (door, 946 mm) | Stale (2026-11-10): median 0.07, p95 0.79 mm. Today's 141-frame stretches: 0.039 to 0.052 / 0.35 to 0.43. | as the panel | Loops do not mend sliding (up to 98 mm) ["Straighten for large drift"]. Overall length of a 1.3 m plain panel: 0.12 to 0.50 % off, the passes 2 to 11 mm apart along it ["The overall size of a large part"]. | The 768 mm tracking cube moves about 40 times on a 1.3 m scan; a cube twice the size gives the same result, so it is not what limits the length. | not measured |
 | Detailed casting (carburettor) | Stale (2026-11-10): mesh median 0.80, p95 2.7 mm. Today's stretches: 0.157 to 0.230 / 0.69 to 1.04, coverage 0.68 to 0.70. | Detail mode tracks raw depth, so the camera-fixed dot error comes back. | The largest of any scene. | 0.5 mm voxels: p95 -0.11 to -0.38. | not measured |
 | Dark or speckled surface | GPU path, last frame: 1.1 to 3.8 mm, against 0.61 mm on the plain bracket (MP F14). The mesh against the truth: not measured. | Dots about a fifth as bright. | ICP from the true pose against a one-frame model drifts 2.6 to 2.7 mm. | not measured | CPU path after D7: 42 mm and 0.9 mm (two seeds), plates 5.7 mm. |
@@ -127,10 +127,9 @@ Ranked by the gap between what a user needs and what the engine delivers.
 
 1. **Mounting holes.** Needed: diameter and position within 0.1 to 0.2 mm. Today: 1.0 to 6.9 mm
    small over open space (the car panel 0.97 to 1.37; the plate 120 mm up 2.9 to 6.9 tracked,
-   one seed having lost tracking); +0.2 to 0.5 mm near a floor; Ø6 to 10 over open space not measurable;
+   one seed having lost tracking); +0.58 to +0.75 mm near a floor at true poses (-0.20 to +0.47 tracked); Ø6 to 10 over open space not measurable;
    gaps between panels not measurable. Short by 5 to 15 times.
-2. **Wall thickness with both sides seen.** Needed: 0.1 to 0.2 mm. Today +0.3 to 1.2 mm
-   tracked; a 0.5 mm wall reads 1.7 mm. Short by 3 to 10 times. Lying flat is fine.
+2. **Wall thickness with both sides seen.** Needed: 0.1 to 0.2 mm. Today walls read +0.54 to 1.26 mm too thick tracked (+0.27 to 0.50 over true poses; the sheet's 1 mm rib +0.66 to 1.21); a 0.5 mm wall reads 1.7 mm. Raw frame points read every wall within 0.07 mm at true poses (E-D3, 2026-11-23), so what remains is how tracking places the two sides' frames. Short by 3 to 10 times. Lying flat is fine.
 3. **Tracking on dark, plain and thin parts (GPU path).** Needed: under about 0.3 mm
    everywhere, because a whole region shifted is invisible to the sigma. Today 1.1 to 3.8 mm,
    and one bracket seed in five reads 2.5 times worse.
@@ -482,7 +481,7 @@ experiment: measure, find the cause, mend, and judge the mend with the scorecard
   weak directions staying at the tracked pose; fuse again. One or two rounds.
 - **Idea B:** find out why Straighten's laser-curve adjustment never acts on tracked scans (0
   of 11 times, MP P7), then let it act where its held-out test allows.
-- **Evidence:** tracked walls are too thick by 0.77 times how far out the cameras stand; one
+- **Evidence:** tracked walls are too thick by 0.77 times how far out the cameras stand (about twice the cosine of the faces' incidence: the geometry of the hand path, not a constant to calibrate; E-D3, 2026-11-23); one
   bracket seed reads 31 % against 12 %; Best is worse than Standard on the bracket. Laser
   crossings are 0.06 mm accurate and halved the sphere's error under drift. Against: an
   online refine on a young model overshot one sheet at +19 % a frame; offline the model is
@@ -504,7 +503,7 @@ experiment: measure, find the cause, mend, and judge the mend with the scorecard
   recordings (brackets, sheets, standing walls); the frame-to-frame jitter and the jumps mostly
   under 30 %; the translation far more than the rotation. Most of the slow part is one
   translation in the camera's own frame, shared by every frame: on every sheet and wall
-  recording the camera stands 0.19 to 0.25 mm out. With the truth's value of that offset taken
+  recording the camera stands 0.19 to 0.25 mm out. (In question since 2026-11-23: the offset depends on how the path is placed, 0.00 to 0.07 mm when placed by the camera centres, and sheet seed 1 has 0.07. What does not depend on that is the relative pose of the frames of a wall's two sides: the raw frames read every wall within 0.07 mm at true poses and 0.3 to 1.0 mm too thick tracked. Why tracking places the sides apart is being tested; `docs/ENGINE_PLAN.md`, "An outside review", third round.) With the truth's value of that offset taken
   out, the 1 mm standing wall reads its true-pose thickness and the sheet's flange +0.21 mm
   (today +0.60).
 - **The scan cannot find it.** It leaves the scan consistent with itself: the vertex sigma does
@@ -1074,7 +1073,7 @@ summary (no code). Taken as an opinion and weighed against the measurements:
 - [ ] Short scans of the sheet part can be poor by themselves (found by the sweep: two of its
   90-frame scans 0.29 and 0.37 mm median off the part, 49 and 62 % more than 0.3 mm off), and a
   merge of two sheet scans is worse than the better one even at the true motion.
-- [ ] The merged model does not get Refine with lasers, a single scan does (found by X7).
+- [ ] The merged model does not get Refine with lasers, a single scan does (found by X7), nor "Make only the thin walls finer" (no `fine_walls` in `ohs/align/merge.py` or `ohs/server/aligning.py`; read from the code 2026-11-23, not measured), though a merge is where both faces of a wall are seen.
   Measure whether it helps a merge.
 - [x] The whole test suite had not been run in one go since before X5; two checks outside the
   per-task lists were broken meanwhile. **Run 2026-11-23** on 2d3031a: with the graphics card

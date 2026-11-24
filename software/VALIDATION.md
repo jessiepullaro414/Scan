@@ -1971,7 +1971,7 @@ rib), Standard quality, GPU path, on a scratch copy of the engine (scratch scrip
   2.12 × out + 0.16 mm (0.96), 1 mm rib 1.27 × out + 0.29 mm (0.70). Today's engine stands
   +0.17 / +0.04 / +0.20 mm out on the three scans; the finer models mostly move that offset rather
   than shrink it. This is the pull along the direction of motion noted above.
-- **The 2 mm flange is the mesh model's limit:** 2.72–2.85 mm even at true poses, so no tracking
+- **The 2 mm flange was the mesh model's limit before the opposite-sides rule (the same day; since then 2.10 to 2.18 mm at true poses):** 2.72–2.85 mm even at true poses, so no tracking
   change brings it near 2.0. Only the 1 mm rib keeps a rest (about +0.3 mm with a correct path) that
   is not the path's scale; no variant removed it, and it is not explained.
 
@@ -3898,8 +3898,7 @@ Different:
   probably); p95 and coverage agree. The 0.80 / 2.7 of 2026-11-10 and the door's 0.07 / 0.79 of
   the same day are superseded.
 - **Hole plate 120 mm up, Ø25 at true poses:** 23.4 to 23.6 against 24.38 to 24.54 in "Holes
-  filled in" (2026-11-12). The cause of the 0.9 mm is not known; the clicks, the recipe and the
-  recordings' seeds may differ. Tracked: 18.1 / 22.1 / 21.8 against 22.0 to 22.1; seed 0 lost
+  filled in" (2026-11-12). That 24.38 to 24.54 is the car panel's row there; the plate's own row was 23.64 to 23.84, so the plate moved 0.1 to 0.3 mm. What is not explained is the car panel's: 24.38 to 24.54 in the prototype against 23.5 to 24.1 in the engine from 2026-11-13; the recordings may differ. (Corrected 2026-11-23.) Tracked: 18.1 / 22.1 / 21.8 against 22.0 to 22.1; seed 0 lost
   tracking (X0a).
 - **Hole plate 10 mm up, at true poses:** Ø25 +0.58 to +0.75 against +0.15 to +0.5.
 - **Dark and speckled scenes:** last frame 0.47 to 3.79 mm against 1.1 to 3.8; the two plates
@@ -4201,7 +4200,7 @@ right, y down, z towards the part; mm). "Slow" is a running mean over 21 frames 
 | car panel, 200 frames | -0.03 / -0.05 / +0.01 | 0.09 / 0.08 / 0.02 | 0.09 / 0.10 / 0.04 | 0.51 | -0.01 |
 
 Most of the error is along the motion (x), half of it slow and half fast; on every sheet and wall
-recording the camera stands 0.19 to 0.25 mm out; rotation is small (under 0.05° slow). At true
+recording the camera stands 0.19 to 0.25 mm out (In question since 2026-11-23: the offset depends on how the path is placed, 0.00 to 0.07 mm when placed by the camera centres, and sheet seed 1 has 0.07. What does not depend on that is the relative pose of the frames of a wall's two sides: the raw frames read every wall within 0.07 mm at true poses and 0.3 to 1.0 mm too thick tracked. Why tracking places the sides apart is being tested; `docs/ENGINE_PLAN.md`, "An outside review", third round.); rotation is small (under 0.05° slow). At true
 poses the scorecard's own placement already reads 0.1 to 0.25 mm along a sheet or a wall, so the
 constant column carries that much doubt there.
 
@@ -5358,8 +5357,7 @@ means, the stop rule.
   the two single meshes together (a place counts when either has it within 0.5 mm).
 - **Beats** the better single scan (the one with the smaller share more than 0.3 mm off):
   median and share both no worse than it beyond the spread, one of them better beyond it. Two
-  runs of the same job gave the same numbers to the last digit, so the spread is a floor of
-  0.003 mm and 0.5 points.
+  runs of the same job gave the same numbers to the last digit, so 0.003 mm and 0.5 points are floors, not a spread across seeds (one pair per case; corrected 2026-11-23).
 
 | pair | the better single scan | the app's merge | covered: either scan / the merge | the merge at true poses |
 |---|---|---|---|---|
@@ -5837,8 +5835,7 @@ Rewritten 2026-11-21 from the sections named in each point; the numbers are toda
   the background behind a hole is far away, the stereo depth carries the surface into the hole;
   the gap guard keeps most of it out. Today, GPU path: the Ø 25 hole 120 mm above its floor reads
   1.40 to 1.57 mm small at true poses and 2.9 to 6.9 mm small tracked (seed 0 lost tracking), and
-  its Ø 10 and Ø 6 holes give no fit; 10 mm above the floor the Ø 25 reads -0.20 to +0.47 tracked,
-  the Ø 10 within 0.2 mm, the Ø 6 no fit; the 200-frame car panel's Ø 25 reads 0.97 to 1.37 mm
+  its Ø 10 and Ø 6 holes give no fit; 10 mm above the floor the Ø 25 reads -0.20 to +0.47 tracked (+0.58 to +0.75 at true poses), the Ø 10 -0.20 to +0.07 tracked (+0.28 to +0.60 at true poses), the Ø 6 no fit; the 200-frame car panel's Ø 25 reads 0.97 to 1.37 mm
   small tracked. The guard's price on a small part with many edges, tracked: 0.7 to 2.0 points of
   coverage ("The gap guard in the engine", the note of 2026-11-16). Measured and not adopted: a
   wider guard by the matcher's doubt (holes better, walls, ribs, bosses and coverage worse; "The
@@ -5851,7 +5848,7 @@ Rewritten 2026-11-21 from the sections named in each point; the numbers are toda
   mm too thick, the 3 mm rib 0.17 to 0.72, the flange 0.25 to 0.60; the bracket's bosses read 0.07
   to 0.27 mm small in radius (0.22 to 0.30 at true poses) and its shaft within 0.07 mm. A 0.5 mm
   plate lying flat reads within 0.01 mm. The cause of the tracked excess ("Poses refined against
-  the finished scan", 2026-11-21): one camera offset shared by every frame, 0.19 to 0.25 mm
+  the finished scan", 2026-11-21): (this reading of the cause is in question since 2026-11-23: see "Poses refined against the finished scan") one camera offset shared by every frame, 0.19 to 0.25 mm
   outward on every sheet and wall recording, which leaves the scan consistent with itself, so
   nothing that refines against the scan can find it. The tracking model's band behind the surface
   sets where it settles; a shorter band moves every recording inward together and was not adopted
