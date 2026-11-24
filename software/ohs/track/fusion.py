@@ -12,7 +12,7 @@ than N times (isolated outliers).
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from pathlib import Path
 
 import numpy as np
@@ -50,6 +50,7 @@ class LaserCloud:
     def __init__(self) -> None:
         self._chunks: dict[str, list[np.ndarray]] = {}
         self._n_frames = 0
+        self._n_additions = 0
 
     def __len__(self) -> int:
         """Number of raw (not downsampled) points."""
@@ -61,25 +62,48 @@ class LaserCloud:
 
     @property
     def n_frames(self) -> int:
-        """Number of :meth:`add` calls that contributed points."""
+        """Number of frames that contributed points: each :meth:`add_frame` and each lone :meth:`add` call
+        that added any (a frame with several laser lines counts once; frames at the same pose count apart)."""
         return self._n_frames
+
+    @property
+    def n_additions(self) -> int:
+        """Number of point batches added (one per laser line of a frame, or per lone :meth:`add`)."""
+        return self._n_additions
 
     def clear(self) -> None:
         self._chunks.clear()
         self._n_frames = 0
+        self._n_additions = 0
 
     def add(self, pts_c: np.ndarray, T_wc: np.ndarray, name: str = "laser") -> int:
-        """Add camera-frame points ``pts_c`` (N,3) seen at pose ``T_wc``; NaN rows are skipped.
+        """Add camera-frame points ``pts_c`` (N,3) seen at pose ``T_wc`` as one frame; NaN rows are skipped.
+        A frame with several laser lines: :meth:`add_frame`.
 
         Returns the number of points added.
         """
+        n = self._add(pts_c, T_wc, name)
+        self._n_frames += int(n > 0)
+        return n
+
+    def add_frame(self, pts_c: Mapping[str, np.ndarray], T_wc: np.ndarray) -> int:
+        """Add one frame's camera-frame points per laser name (``{name: (N,3)}``) seen at pose ``T_wc``; NaN rows
+        are skipped. The frame counts once in :attr:`n_frames` when any line gave points.
+
+        Returns the number of points added.
+        """
+        n = sum(self._add(P, T_wc, name) for name, P in pts_c.items())
+        self._n_frames += int(n > 0)
+        return n
+
+    def _add(self, pts_c: np.ndarray, T_wc: np.ndarray, name: str) -> int:
         P = np.asarray(pts_c, dtype=np.float64).reshape(-1, 3)
         P = P[np.all(np.isfinite(P), axis=1)]
         if len(P) == 0:
             return 0
         T = np.asarray(T_wc, dtype=np.float64).reshape(4, 4)
         self._chunks.setdefault(name, []).append(transform_points(T, P))
-        self._n_frames += 1
+        self._n_additions += 1
         return int(len(P))
 
     def raw_counts(self) -> dict[str, int]:

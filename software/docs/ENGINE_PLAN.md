@@ -1420,8 +1420,8 @@ guard test seen failing first:
 - [ ] **R2-8 (F8): the live recorder's own queue has no bound** (known since MAINTENANCE_PLAN
   B4: the writer below it is bounded). Slow storage can use up memory. Needs a defined
   outcome: stop recording cleanly with a reason and keep what was written.
-- [ ] **R2-9 (F9): "frames with laser points" counts additions, not frames** (two lines a
-  frame count twice). Being mended.
+- [x] **R2-9 (F9): "frames with laser points" counts additions, not frames** (two lines a
+  frame count twice). Mended 2026-11-24 (`LaserCloud.add_frame`; the points are unchanged).
 - [x] **R2-10 (F10): the rotation logarithm is about 0.01 degrees off just below a half turn**
   (`ohs/geometry.py`, `so3_log`). Mended 2026-11-24: stable within 0.1 rad of a half turn
   (round trip under 1e-12), unchanged bit for bit elsewhere.

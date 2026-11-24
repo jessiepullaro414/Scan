@@ -981,8 +981,7 @@ class FramePipeline:
             if self._held_now is not None:  # the scan's start: added at the frame's pose when the start is over
                 self._held_now.pts = pts
             elif track.ok:
-                for name, P in pts.items():
-                    self.cloud.add(P, track.T_wc, name)
+                self.cloud.add_frame(pts, track.T_wc)  # all lines at once: the frame counts once
             wait = _ms(t0)
             tim["laser_extract"] = min(wait, max(0.0, 1e3 * (t_lines - t0)))
             tim["laser_triangulate"] = wait - tim["laser_extract"]
@@ -1219,8 +1218,7 @@ class FramePipeline:
                 r = e.of(tr)
                 if r is not None and r.ok:
                     self._fuse(e.depth, r.T_wc, e.t, {}, e.sigma, pos=e.pos)
-                    for name, P in e.pts.items():
-                        self.cloud.add(P, r.T_wc, name)
+                    self.cloud.add_frame(e.pts, r.T_wc)
             rep["ms"] = round(_ms(t0), 1)
             self.start_report = rep
             return
@@ -1245,8 +1243,7 @@ class FramePipeline:
                 self._trajectory[e.pos] = (e.t, T_prev.copy(), False)
                 continue
             self._fuse(e.depth, T, e.t, {}, e.sigma, pos=e.pos)
-            for name, P in e.pts.items():
-                self.cloud.add(P, T, name)
+            self.cloud.add_frame(e.pts, T)
             self._trajectory[e.pos] = (e.t, T.copy(), True)
             T_prev = T
         self._n_ok = sum(1 for _, _, k in self._trajectory if k)

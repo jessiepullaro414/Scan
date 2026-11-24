@@ -3939,6 +3939,13 @@ axes at fifteen angles up to and past pi (66 of 98 guard tests failed before). M
 turn the result is the same bit for bit (4,000 random rotations). Results that pass through a rotation
 within 0.1 rad of a half turn change in their last digits.
 
+**Frames with laser points (R2-9).** The report's `lasers.frames_with_points` counted each laser line as a
+frame: 16 for an 8-frame scan with two lasers. It now counts the frames that gave laser points (8); the
+per-line count is kept as `LaserCloud.n_additions`. The stored points are the same byte for byte. Nothing in
+the app or the UI read the number; only someone reading `report.json` sees it change. The two places that
+add laser points at the scan's start run on the graphics card's model only and were not exercised by the
+processor-path tests.
+
 ## The no-GPU plate slide, and a check of the camera path (ENGINE_PLAN X0a, 2026-11-20)
 
 Without a GPU the 0.5 mm plates slide in their first frames. On plate seed 0 the tracker's steps
