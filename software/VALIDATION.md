@@ -3998,6 +3998,18 @@ as an existing test requires. Open: `ohs process` reads the mode from the metada
 with damaged metadata would be processed markerless unless `--mode` is given; a half-written PNG is left on
 the disk, unlisted. Not tried: a real full disk.
 
+**Gyro cover across a gap (R2-4).** While tracking was lost, the tracker took the product of the frames' gyro
+rotations as the whole rotation since the last good pose, also when an interval in between had no IMU cover.
+On the box scene (depth lost on two frames, one interval without gyro) the recovery then started from a
+rotation that was too small, with the tight gyro sigma, and landed 2.38 degrees and 6.9 mm off; 0.61 degrees
+and 1.7 mm of that stayed to the end of the scan. Now, when any interval since the last good pose was not
+covered, the frame recovers as a frame without a gyro does (from the last good pose, with the wide rotation
+sigma), says `gyro_prior: false` and reports the gap (`gyro_gap`: intervals and seconds): 0.04 degrees and
+0.29 mm at the recovery. The cover is counted afresh after every accepted pose. Scans with full gyro cover
+track the same byte for byte, losses that are covered included (28 frames and a 16-frame sequence with two
+covered losses, processor path). Not run: the graphics card's tracker and its start, which restores the
+cover state; a whole recording with an IMU gap put into it.
+
 ## The no-GPU plate slide, and a check of the camera path (ENGINE_PLAN X0a, 2026-11-20)
 
 Without a GPU the 0.5 mm plates slide in their first frames. On plate seed 0 the tracker's steps

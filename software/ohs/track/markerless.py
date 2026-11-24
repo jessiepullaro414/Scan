@@ -799,6 +799,11 @@ class MarkerlessTracker:
         self._guard_mm = 0.0  # how far (mm a frame) the guard moved the last accepted frame's velocity
         self._weak_mm = 0.0  # ... and the weak-step rule (FusionParams.weak_step_*) its carried step
         self._R_acc = np.eye(3)  # gyro rotation accumulated since the last good frame
+        # intervals since the last good frame that came without a gyro rotation, and their seconds: with any, _R_acc
+        # misses a part of the rotation and is not a prior (ENGINE_PLAN R2-4)
+        self._uncovered = 0
+        self._uncovered_s = 0.0
+        self._t_call: float | None = None  # the previous call's frame time (the start of this call's interval)
         self._n_lost = 0
         self._frame = 0
         self.last_result: TrackResult | None = None
@@ -1303,6 +1308,10 @@ class MarkerlessTracker:
         if R_prior is not None:
             R_prior = np.asarray(R_prior, dtype=np.float64).reshape(3, 3)
             self._R_acc = self._R_acc @ R_prior
+        else:
+            self._uncovered += 1
+            if t is not None and self._t_call is not None:
+                self._uncovered_s += max(0.0, float(t) - self._t_call)
         if n_valid_px < p.min_points:
             return self._fail("no_depth", t, {"n_valid_px": n_valid_px}, t0, timings)
 
@@ -1310,6 +1319,13 @@ class MarkerlessTracker:
         lost = self._n_lost
         widen = float(min(1.0 + lost, p.max_widen))
         have_prior = R_prior is not None
+        gap = None
+        if have_prior and lost and self._uncovered:
+            # an interval since the last good pose had no gyro rotation: the product of the others is not the
+            # rotation since then, so the frame recovers as one without a gyro (the last good pose, rot_sigma_deg),
+            # as the frame without cover itself would have
+            have_prior = False
+            gap = {"intervals": self._uncovered, "s": round(self._uncovered_s, 6)}
         if lost == 0:
             name = "motion_model"
             R_rel, t_rel = np.eye(3), np.zeros(3)
@@ -1353,6 +1369,8 @@ class MarkerlessTracker:
         timings["raycast"] = 1e3 * (time.perf_counter() - tr + t_queue)  # GPU: queueing + waiting
         info: dict[str, Any] = {"candidate": name, "lost_frames": lost, "gyro_prior": have_prior,
                                 "n_valid_px": n_valid_px, "T_pred": T_pred}
+        if gap is not None:
+            info["gyro_gap"] = gap
         if view is None or view.n_valid < p.min_model_px:
             info["n_model_px"] = 0 if view is None else view.n_valid
             return self._fail("model_not_visible", t, info, t0, timings)
@@ -1597,6 +1615,7 @@ class MarkerlessTracker:
         self._T_last = np.asarray(T_wc, dtype=np.float64).copy()
         self._t_last = t
         self._R_acc = np.eye(3)
+        self._uncovered, self._uncovered_s = 0, 0.0
         self._n_lost = 0
 
     def _guard_accel(self) -> float | None:
@@ -1667,6 +1686,7 @@ class MarkerlessTracker:
     def _finish(self, res: TrackResult, t: float | None, t0: float, timings: dict) -> TrackResult:
         timings["total"] = 1e3 * (time.perf_counter() - t0)
         res.info["timings_ms"] = timings
+        self._t_call = None if t is None else float(t)
         self.trajectory.append((float("nan") if t is None else float(t), res.T_wc.copy(), bool(res.ok)))
         self.last_result = res
         return res

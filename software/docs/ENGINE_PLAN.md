@@ -1416,9 +1416,11 @@ guard test seen failing first:
   (`ohs/track/markerless.py`, `_icp`: the priors' precision times sigma squared and the data
   term divided by it). Hidden at the default of 1 mm; wrong for any other value. Mended
   2026-11-24: the closed-form answer at sigma 0.5 and 2.0; byte for byte the same at 1 mm.
-- [ ] **R2-4 (F4): after frames without gyro cover, one covered interval makes the whole gap
+- [x] **R2-4 (F4): after frames without gyro cover, one covered interval makes the whole gap
   count as covered** (`markerless.py`, `have_prior`; `pipeline.py`): recovery then trusts an
-  incomplete rotation.
+  incomplete rotation. Mended 2026-11-24: with any uncovered interval since the last good
+  pose the frame recovers as one without a gyro and says so (2.4 degrees and 6.9 mm off
+  before, 0.04 degrees and 0.3 mm now, on the box scene).
 - [ ] **R2-5 (F5): when the mesh model's brick pool is full, new surface is not fused and the
   saved result does not say so** (`recon_tsdf.py` logs once). The thin-parts rule's spirit:
   nothing may go missing in silence. To carry into the report, the viewer and a merge.

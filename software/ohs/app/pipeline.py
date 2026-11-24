@@ -1232,9 +1232,11 @@ class FramePipeline:
             poses = self._refine_start(tr, inputs, poses, times, [e.gyro for e, _ in ok])
         if ok:
             n_lost, R_acc = tr._n_lost, tr._R_acc.copy()
+            cover = getattr(tr, "_uncovered", 0), getattr(tr, "_uncovered_s", 0.0)  # (a stand-in may not have them)
             tr.restart(list(zip(inputs, poses, times)))
             if rows[-1][1] is None or not rows[-1][1].ok:  # the start ended at a frame that failed: still lost
                 tr._n_lost, tr._R_acc = max(n_lost, 1), R_acc
+                tr._uncovered, tr._uncovered_s = cover  # and the gyro cover since the last good pose (ENGINE_PLAN R2-4)
         T_prev = np.eye(4)
         done = {id(e): T for (e, _), T in zip(ok, poses)}
         for e in held:
