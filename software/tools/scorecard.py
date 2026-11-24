@@ -81,6 +81,16 @@ a click no longer answered on any one recording is an alarm. Then one verdict pe
 no spread to judge by / better / same / identical), and the last line: "better or the same on
 every scene", or the scenes that are worse and why.
 
+**Incomplete evidence** (:func:`completeness`): before any verdict the compare checks that every
+run the baseline has (each recording asked for, at each pose source the baseline has) is there and
+finished, and still gives every judged number the baseline measured. A run not there, a run with an
+error (here or in the baseline), or a reading lost makes the comparison incomplete: the table
+starts with "INCOMPLETE", the last line starts "Not judged: the comparison is incomplete." and
+names what is missing, and ``compare`` (and ``replay``) end with exit status 1; a complete
+comparison ends with 0, whatever its verdict. A recording this PC skips (the door's or
+carburettor's files are not here) is named under "Not compared", not counted as missing; if nothing
+at all was compared, the comparison is incomplete. ``compare_rows`` gives the same in its ``check``.
+
 **Surviving a kill**: a recording is used only when complete (:func:`recording_complete`: its
 marker, written last, every planned frame there and whole); one cut off is rendered again. A
 result is written whole and last (:func:`write_json`), so one that is there is a finished run's.
@@ -124,7 +134,7 @@ if str(SOFTWARE) not in sys.path:
 from ohs import geometry as G  # noqa: E402
 
 __all__ = ["SCENES", "SceneSpec", "scenes_for", "PartTruth", "SdfTruth", "MeshTruth", "truth_for", "place_part",
-           "part_scores", "verdict", "compare_rows", "fmt", "NM", "parse_params", "apply_params", "main"]
+           "part_scores", "verdict", "compare_rows", "completeness", "Comparison", "fmt", "NM", "parse_params", "apply_params", "main"]
 
 MODELS = Path.home() / ".ohs"
 DEFAULT_CACHE = Path(os.environ.get("OHS_SCORECARD", "") or Path(os.environ.get("TEMP", "/tmp")) / "ohs-scorecard")
@@ -2221,17 +2231,116 @@ def table(results: dict[str, dict[str, dict]], specs: list[SceneSpec]) -> list[s
     return lines
 
 
+class Comparison(list):
+    """What :func:`compare_rows` returns: its rows (a list, as always), and ``check``, what :func:`completeness`
+    found: whether every run the baseline has is there, finished and measured what the baseline measured."""
+
+    check: dict[str, Any]
+
+
+def _mandatory(metric: str, poses: str) -> bool:
+    """A reading the new run must still give when the baseline gave it: every judged number (not the timings and
+    memory, not what is only shown, e.g. the face count; not the camera path at true poses)."""
+    if metric.startswith("_") or metric in TIMING or goal(metric) == "info":
+        return False
+    return not (poses == "true" and metric.startswith(("traj_", "rot_")))
+
+
+def _error_text(r: dict) -> str:
+    lines = str(r.get("error")).strip().splitlines() or [""]
+    t = lines[0].strip()
+    return t if len(t) <= 100 else t[:97] + "..."
+
+
+def completeness(base: dict[str, dict[str, dict]], new: dict[str, dict[str, dict]],
+                 specs: list[SceneSpec]) -> dict[str, Any]:
+    """Before any verdict: is the evidence there? Expected is every run (recording and pose source) that the
+    baseline has, among the recordings asked for (``specs``). Each expected run is one of: compared (both
+    finished), ``missing`` (the new set has no such run), ``failed`` (the new run has an error),
+    ``baseline_failed`` (the baseline's run has an error), or ``skipped`` (this PC cannot have the recording,
+    e.g. the door's model files are not here: :func:`available`; named, not counted as missing). A compared run
+    whose new result no longer gives a number the baseline measured (:func:`_mandatory`) is in ``lost``; a lost
+    reading is never taken as 0. ``complete``: nothing missing, failed or lost, and at least one run compared.
+    ``not_in_baseline``: recordings asked for that the baseline does not have (not compared, not missing)."""
+    out: dict[str, Any] = {"complete": False, "expected": [], "compared": 0, "missing": [], "failed": [],
+                           "baseline_failed": [], "lost": [], "skipped": [], "not_in_baseline": []}
+    for s in specs:
+        b_all = base.get(s.name) or {}
+        n_all = new.get(s.name) or {}
+        pss = [p for p in ("tracked", "true") if p in b_all]
+        if not pss:
+            out["not_in_baseline"].append(s.name)
+            continue
+        if "skipped" in n_all and not any(p in n_all for p in pss):
+            out["expected"] += [{"rec": s.name, "poses": p} for p in pss]
+            out["skipped"].append({"rec": s.name, "why": str(n_all["skipped"])})
+            continue
+        for p in pss:
+            out["expected"].append({"rec": s.name, "poses": p})
+            br, nr = b_all[p] or {}, n_all.get(p)
+            if br.get("error"):
+                out["baseline_failed"].append({"rec": s.name, "poses": p, "error": _error_text(br)})
+            elif nr is None:
+                out["missing"].append({"rec": s.name, "poses": p})
+            elif nr.get("error"):
+                out["failed"].append({"rec": s.name, "poses": p, "error": _error_text(nr)})
+            else:
+                out["compared"] += 1
+                bm, nm = br.get("metrics") or {}, nr.get("metrics") or {}
+                lost = [m for m in metric_rows(list(bm)) if _mandatory(m, p) and _num(bm[m]) and not _num(nm.get(m))]
+                if lost:
+                    out["lost"].append({"rec": s.name, "poses": p, "metrics": lost})
+    out["complete"] = bool(out["compared"]) and not (out["missing"] or out["failed"] or out["baseline_failed"]
+                                                     or out["lost"])
+    return out
+
+
+def incomplete_text(check: dict[str, Any] | None) -> str:
+    """What is missing, in short sentences (the last line of an incomplete comparison says it)."""
+    if check is None:
+        return "Nothing was compared."
+    parts = []
+    if check["missing"]:
+        parts.append("Not run: " + ", ".join(f"{x['rec']} {x['poses']}" for x in check["missing"]) + ".")
+    if check["failed"]:
+        parts.append("Failed: " + ", ".join(f"{x['rec']} {x['poses']} ({x['error']})" for x in check["failed"]) + ".")
+    if check["baseline_failed"]:
+        parts.append("Failed in the baseline: "
+                     + ", ".join(f"{x['rec']} {x['poses']} ({x['error']})" for x in check["baseline_failed"]) + ".")
+    if check["lost"]:
+        parts.append("Not measured any more: "
+                     + "; ".join(f"{x['rec']} {x['poses']} ({', '.join(x['metrics'])})" for x in check["lost"]) + ".")
+    if not check["expected"]:
+        parts.append("The baseline has none of these recordings.")
+    if not check["compared"]:
+        parts.append("Nothing was compared.")
+    return " ".join(parts)
+
+
+def _incomplete(rows: list[dict]) -> bool:
+    """No rows, or a :class:`Comparison` whose evidence is not complete."""
+    check = getattr(rows, "check", None)
+    return not rows or (check is not None and not check["complete"])
+
+
 def compare_rows(base: dict[str, dict[str, dict]], new: dict[str, dict[str, dict]], specs: list[SceneSpec],
-                 quiet_pc: bool = False) -> list[dict]:
+                 quiet_pc: bool = False) -> Comparison:
     """Every (scene, poses, metric): the baseline's and the new mean, the change, the scene's spread in
-    the baseline, the verdict and the thin-part flag."""
-    rows = []
+    the baseline, the verdict and the thin-part flag. Only runs that finished on both sides are paired; what
+    is missing or failed is in the result's ``check`` (:func:`completeness`)."""
+    rows = Comparison()
+    rows.check = completeness(base, new, specs)
     groups: dict[str, list[SceneSpec]] = {}
     for s in specs:
         groups.setdefault(s.group, []).append(s)
+
+    def done(res: dict, name: str, ps_: str) -> bool:
+        r = (res.get(name) or {}).get(ps_)
+        return isinstance(r, dict) and not r.get("error")
+
     for gname, ss in groups.items():
         for ps_ in ("tracked", "true"):
-            names = [s.name for s in ss if ps_ in base.get(s.name, {}) and ps_ in new.get(s.name, {})]
+            names = [s.name for s in ss if done(base, s.name, ps_) and done(new, s.name, ps_)]
             if not names:
                 continue
             ms = sorted({k for n in names for k in list(base[n][ps_].get("metrics", {})) + list(new[n][ps_].get("metrics", {}))})
@@ -2291,6 +2400,8 @@ def scene_verdicts(rows: list[dict]) -> list[dict]:
         better = [r["metric"] for r in judged if r["verdict"] == "better"]
         if worse:
             v, why = "worse", worse
+        elif all(r["verdict"] == NM for r in judged):  # no judged reading measured on both sides: not "identical"
+            v, why = NM, ["no reading was measured on both sides"]
         elif nospread and len(recs) == 1:
             v, why = NO_SPREAD, [f"changed: {', '.join(nospread)}"]
         elif better:
@@ -2304,11 +2415,20 @@ def scene_verdicts(rows: list[dict]) -> list[dict]:
 
 
 def verdict_line(rows: list[dict]) -> str:
-    """The one last line: better or the same on every scene, or the scenes that are worse (and why)."""
+    """The one last line: better or the same on every scene, or the scenes that are worse (and why). When the
+    evidence is incomplete (:func:`completeness`; or there are no rows at all) it says so first and names
+    what is missing, and never says "better or the same"."""
     sv = scene_verdicts(rows)
     worse = [s for s in sv if s["verdict"] == "worse"]
+    worse_text = "Worse on: " + ", ".join(f"{s['scene']} ({s['poses']}: {s['why']})" for s in worse) + "."
+    if _incomplete(rows):
+        return " ".join(["**Not judged: the comparison is incomplete.**", incomplete_text(getattr(rows, "check", None))]
+                        + ([worse_text] if worse else []))
     if worse:
-        return "**Worse on: " + ", ".join(f"{s['scene']} ({s['poses']}: {s['why']})" for s in worse) + ".**"
+        return f"**{worse_text}**"
+    unmeasured = [f"{s['scene']} ({s['poses']})" for s in sv if s["verdict"] == NM]
+    if unmeasured:
+        return f"**Not judged: nothing was measured on: {', '.join(unmeasured)}.**"
     unjudged = [f"{s['scene']} ({s['poses']})" for s in sv if s["verdict"] == NO_SPREAD]
     if unjudged:
         return f"**Better or the same on every scene that has a spread** ({NO_SPREAD}: {', '.join(unjudged)})."
@@ -2341,7 +2461,24 @@ def compare_table(rows: list[dict]) -> list[str]:
     nospread = [r for r in rows if not watched(r) and r["verdict"] == NO_SPREAD and r["goal"] != "info"]
     rest = [r for r in rows if not watched(r) and r not in worse and r not in better and r not in nospread]
     thin_bad = [r for r in thin if _alarm(r) or r["verdict"] == "worse"]
-    out = [f"## THIN PARTS AND SMALL FEATURES (always shown, each recording judged on its own)"
+    out = []
+    check = getattr(rows, "check", None)
+    if _incomplete(rows):
+        out += ["## INCOMPLETE: not judged (runs or readings the baseline has are missing here)", ""]
+        if check is not None:
+            out += ["| recording | poses | what |", "|---|---|---|"]
+            out += [f"| {x['rec']} | {x['poses']} | not run |" for x in check["missing"]]
+            out += [f"| {x['rec']} | {x['poses']} | failed: {x['error']} |" for x in check["failed"]]
+            out += [f"| {x['rec']} | {x['poses']} | failed in the baseline: {x['error']} |" for x in check["baseline_failed"]]
+            out += [f"| {x['rec']} | {x['poses']} | not measured any more: {', '.join(x['metrics'])} |" for x in check["lost"]]
+        out += ["", incomplete_text(check), ""]
+    if check is not None and (check["skipped"] or check["not_in_baseline"]):
+        out += ["## Not compared", ""]
+        out += [f"- {x['rec']}: {x['why']}" for x in check["skipped"]]
+        if check["not_in_baseline"]:
+            out.append(f"- not in the baseline: {', '.join(check['not_in_baseline'])}")
+        out.append("")
+    out += [f"## THIN PARTS AND SMALL FEATURES (always shown, each recording judged on its own)"
            f"{': ' + str(len(thin_bad)) + ' ALARM(S)' if thin_bad else ''}", ""] + head
     out += [line(r) for r in thin] + [""]
     out += ["## Worse (worst first)", ""] + head + [line(r) for r in worse] + [""]
@@ -2362,16 +2499,23 @@ def compare_table(rows: list[dict]) -> list[str]:
 def summary_line(rows: list[dict]) -> str:
     """The owner's rule (ENGINE_PLAN, Decisions): better, or the same within its own spread, on every
     scene, and nothing thin worse. Says that plainly, or lists the scenes that are worse (and those
-    that cannot be judged). (The table's very last line is :func:`verdict_line`.)"""
+    that cannot be judged). An incomplete comparison (:func:`completeness`) or a scene with nothing measured
+    is never "better or the same". (The table's very last line is :func:`verdict_line`.)"""
     worse_scenes = sorted({f"{r['scene']} ({r['poses']})" for r in rows if r["verdict"] == "worse"})
     thin_scenes = sorted({f"{r['scene']} ({r['poses']}: {r['metric']} {r['flag'] or 'worse'})" for r in rows
                           if r["thin"] and (_alarm(r) or r["verdict"] == "worse")})
     small_scenes = sorted({f"{r['scene']} ({r['poses']}: {r['metric']} {r['flag'] or 'worse'})" for r in rows
                            if r.get("small") and not r["thin"] and (_alarm(r) or r["verdict"] == "worse")})
     unjudged = sorted({r["scene"] for r in rows if r["verdict"] == NO_SPREAD and r["goal"] != "info"})
+    unmeasured = [f"{s['scene']} ({s['poses']})" for s in scene_verdicts(rows) if s["verdict"] == NM]
     parts = []
+    if _incomplete(rows):
+        parts.append("**Not judged: the comparison is incomplete** (the last line names what is missing).")
+    elif unmeasured:
+        parts.append(f"**Not judged: nothing was measured on: {', '.join(unmeasured)}.**")
     if not worse_scenes and not thin_scenes and not small_scenes:
-        parts.append("**Better or the same on every scene" + (" that has a spread" if unjudged else "") + ".**")
+        if not parts:
+            parts.append("**Better or the same on every scene" + (" that has a spread" if unjudged else "") + ".**")
     else:
         if worse_scenes:
             parts.append("**Worse on: " + ", ".join(worse_scenes) + ".**")
@@ -2772,9 +2916,10 @@ def main(argv: list[str] | None = None) -> int:
         # the owner's rule on the same pairs: B against A, with A's range across seeds as the spread
         side = {lab: {n: {p: r[lab] for p, r in v.items()} for n, v in pairs.items()} for lab in ("A", "B")}
         lines += ["", "# The verdict: B against A (A's range across seeds as each scene's spread)", ""]
-        lines += compare_table(compare_rows(side["A"], side["B"], specs, a.quiet_pc))
+        cmp = compare_rows(side["A"], side["B"], specs, a.quiet_pc)
+        lines += compare_table(cmp)
         _emit(lines, a.out, cache, "replay")
-        return 0
+        return 0 if cmp.check["complete"] else 1  # 1: a run of A or B is missing or failed, or a reading lost
     if a.cmd == "repeat":
         lines = ["# The same recording scored twice", "", "| recording | poses | differing metrics (timings left out) |", "|---|---|---|"]
         for s in specs:
@@ -2829,12 +2974,14 @@ def main(argv: list[str] | None = None) -> int:
         lines.append("")
         if chain == "app":
             lines += stages_table(res, specs)
-        lines += compare_table(compare_rows(bl["results"], res, specs, a.quiet_pc))  # its last line: the verdict
-    else:
-        if chain == "app":
-            lines += stages_table(res, specs)
-        lines += table(res, specs)
-        lines.append(f"\n{len(specs)} recordings, {time.perf_counter() - t0:.0f} s")
+        cmp = compare_rows(bl["results"], res, specs, a.quiet_pc)
+        lines += compare_table(cmp)  # its last line: the verdict
+        _emit(lines, a.out, cache, a.cmd)
+        return 0 if cmp.check["complete"] else 1  # 1: the evidence is incomplete (module docstring, "Compare")
+    if chain == "app":
+        lines += stages_table(res, specs)
+    lines += table(res, specs)
+    lines.append(f"\n{len(specs)} recordings, {time.perf_counter() - t0:.0f} s")
     _emit(lines, a.out, cache, a.cmd)
     return 0
 

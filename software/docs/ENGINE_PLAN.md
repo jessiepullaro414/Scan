@@ -1393,10 +1393,12 @@ that. What it adds is ten concrete defects, each checked against today's code (a
 there as described at the level looked at) and each to be mended as its own task with a
 guard test seen failing first:
 
-- [ ] **R2-1 (its F1): the scorecard's comparison can say "Better or the same on every scene"
+- [x] **R2-1 (its F1): the scorecard's comparison can say "Better or the same on every scene"
   with failed, missing or empty runs.** `tools/scorecard.py`: a recording missing from one
   side drops out, a failed run compares as n/m, and no verdicts at all gives the success
-  sentence. This sentence decides adoptions (E-D1). Being mended.
+  sentence. This sentence decides adoptions (E-D1). Mended 2026-11-24: an
+  incomplete comparison says so, names what is missing and exits with status 1
+  (`VALIDATION.md`, "The comparison checks its evidence first").
 - [ ] **R2-2 (F2): a cached scorecard result can outlive an engine change.** `run_job` returns
   an existing `result.json` unchecked; the engine fingerprint leaves out `ohs/server`, which
   the app chain runs through; a saved baseline keeps no fingerprint. After R2-1.

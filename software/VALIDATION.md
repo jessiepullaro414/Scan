@@ -3909,6 +3909,21 @@ set, so those have no spread; a sheet's drift along itself is not scored; the br
 the 90-frame hard scenes mostly do not answer (faces never scanned), and a click more than 1 mm
 from the mesh counts as no answer.
 
+### The comparison checks its evidence first (2026-11-24, from the second outside review)
+
+A comparison could end with "Better or the same on every scene." when runs had failed, were missing, or the
+result set was empty: a recording missing on one side dropped out, a failed run compared as n/m, and no
+verdicts at all gave the success sentence. Guard tests showed it (19 of 20 failing before the change,
+`tests/test_tools_scorecard_incomplete.py`). Now every run the baseline has (recording and pose source) must be
+there, must have finished on both sides, and must still give every judged number the baseline measured.
+Otherwise the table starts with "INCOMPLETE", the last line reads "Not judged: the comparison is incomplete."
+and names what is missing ("Not run: ...", "Failed: ...", "Not measured any more: ..."), and `compare` and
+`replay` end with exit status 1. A scene where nothing was measured on both sides is "not judged", no longer
+"identical". A lost reading is never taken as 0. A recording this PC cannot have (the door's and the
+carburettor's model files) is named under "Not compared" and is not counted as missing. A complete comparison
+reads exactly as before. The saved baselines compared with one another came out complete (72 runs, nothing
+lost), so the check raises no false alarm on them. Not done: no scorecard run on recordings was made for this.
+
 ## The no-GPU plate slide, and a check of the camera path (ENGINE_PLAN X0a, 2026-11-20)
 
 Without a GPU the 0.5 mm plates slide in their first frames. On plate seed 0 the tracker's steps
