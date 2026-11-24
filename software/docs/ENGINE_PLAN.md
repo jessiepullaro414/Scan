@@ -1402,9 +1402,10 @@ guard test seen failing first:
 - [ ] **R2-2 (F2): a cached scorecard result can outlive an engine change.** `run_job` returns
   an existing `result.json` unchecked; the engine fingerprint leaves out `ohs/server`, which
   the app chain runs through; a saved baseline keeps no fingerprint. After R2-1.
-- [ ] **R2-3 (F3): the tracker's ICP weights its priors with the residual sigma twice**
+- [x] **R2-3 (F3): the tracker's ICP weights its priors with the residual sigma twice**
   (`ohs/track/markerless.py`, `_icp`: the priors' precision times sigma squared and the data
-  term divided by it). Hidden at the default of 1 mm; wrong for any other value. Being mended.
+  term divided by it). Hidden at the default of 1 mm; wrong for any other value. Mended
+  2026-11-24: the closed-form answer at sigma 0.5 and 2.0; byte for byte the same at 1 mm.
 - [ ] **R2-4 (F4): after frames without gyro cover, one covered interval makes the whole gap
   count as covered** (`markerless.py`, `have_prior`; `pipeline.py`): recovery then trusts an
   incomplete rotation.

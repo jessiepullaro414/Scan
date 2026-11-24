@@ -1138,12 +1138,20 @@ class MarkerlessTracker:
     def _icp(self, src: list[tuple[np.ndarray, np.ndarray]], view: _ModelView, widen: float,
              rot_sigma_rad: float, extra_coarse: bool, skip_coarse: int = 0) -> _IcpOutput:
         """Projective point-to-plane Gauss-Newton; returns the pose of the frame in the view frame. ``skip_coarse``:
-        that many of the coarsest levels are left out (the slip check's "fine" start)."""
+        that many of the coarsest levels are left out (the slip check's "fine" start).
+
+        Each step minimises, in mm^2 (the normalised objective times ``icp_sigma_mm^2``),
+
+            sum_i w_i r_i^2  +  icp_sigma^2 * (|log R|^2 / rot_sigma_rad^2  +  |t|^2 / trans_sigma_mm^2)
+
+        with ``r_i`` the point-to-plane residuals, ``w_i`` their Huber weights and the priors on the
+        pose relative to the prediction (``R = I, t = 0``). The data are not divided by ``icp_sigma^2``
+        as well: that weighed the priors by ``icp_sigma^4`` (ENGINE_PLAN R2-3; same result at the default 1 mm)."""
         p = self.params
         K = view.K
         w, h = view.size
         tvalid = view.valid
-        sig2 = p.icp_sigma_mm ** 2
+        sig2 = p.icp_sigma_mm ** 2  # priors' precisions in units of the data's: sigma^2 / prior sigma^2
         lam_r = sig2 / rot_sigma_rad ** 2
         lam_t = sig2 / p.trans_sigma_mm ** 2
         R, t = np.eye(3), np.zeros(3)
@@ -1195,8 +1203,8 @@ class MarkerlessTracker:
                 J[:, :3] = np.cross(Q, Nt)
                 J[:, 3:] = Nt
                 Jw = J * wgt[:, None]
-                H = Jw.T @ J / sig2
-                g = Jw.T @ r / sig2
+                H = Jw.T @ J
+                g = Jw.T @ r
                 # priors relative to the prediction (left-perturbation Jacobians)
                 rot_res = so3_log(R)
                 Jp = np.zeros((6, 6))

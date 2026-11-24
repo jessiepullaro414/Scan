@@ -3946,6 +3946,14 @@ the app or the UI read the number; only someone reading `report.json` sees it ch
 add laser points at the scan's start run on the graphics card's model only and were not exercised by the
 processor-path tests.
 
+**The tracker's ICP and its priors (R2-3).** `MarkerlessTracker._icp` multiplied the priors' precision by
+`icp_sigma_mm` squared and also divided the data term by it, so the priors were weighed against the data by
+the fourth power. With 121 points 1 mm behind a plane and a translation prior of 1 mm the step was -0.999484
+mm at sigma 0.5 and -0.883212 mm at sigma 2.0, where the closed form gives -0.997938 and -0.968000; it gives
+those now. At the default of 1.0 mm, the only value in use, nothing changes: the division was by 1.0, and 28
+tracked frames (processor path, with and without gyro priors) are the same byte for byte. The graphics
+card's path was not run for this fix on its own.
+
 ## The no-GPU plate slide, and a check of the camera path (ENGINE_PLAN X0a, 2026-11-20)
 
 Without a GPU the 0.5 mm plates slide in their first frames. On plate seed 0 the tracker's steps
