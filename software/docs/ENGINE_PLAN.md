@@ -928,6 +928,41 @@ its error is the same in every frame, so no averaging removes it and no surface 
   known beforehand.
 - No stop rule yet: this is a measurement that sets what the other items can promise.
 
+### [ ] X22. A known length in the scene, and the print's scale in both directions (S, then M)
+From the outside review's second round (2026-11-23), on what a home builder can use as a length
+reference. Nothing here is built.
+- **What the calipers can give.** 0.02 to 0.05 mm on the board's 100 mm bar is 0.02 to 0.05 % of
+  scale: 0.26 to 0.65 mm over 1.3 m, the whole long-part need. Repeating the measurement does
+  not remove the calipers' own error. So with today's check alone the 0.05 % need is at the
+  limit and 0.02 % is out of reach.
+- **The print check measures one direction.** The board's page has one 100 mm bar, the check
+  takes one number (`measured_mm`) and scales the board alike in both directions. Printers scale
+  the two directions differently. Step 1 (S): a second bar across the first, two numbers, a
+  board model with its own scale each way; the check says so when the two differ.
+- **A long reference.** The reviewer's choice for a home builder: a steel rule or flat steel
+  scale of 1 to 1.5 m, lying straight on a rigid support, with marks the cameras can find tied
+  to its graduations (tags beside chosen graduations, their real positions measured after they
+  are stuck on, never taken as nominal). A printed strip gives no length to rely on beyond the
+  span that was measured. Steel grows 0.075 mm over 1.3 m for 5 degrees, aluminium twice that:
+  the reference's temperature is noted.
+- **How a known length enters (step 2, M):** as an uncertain constraint in the tags' fit (the
+  distance between two tags, with its own ±, counted once however many frames see it), never as
+  an exact one: a wrong reference taken as exact bends the scan to fit it. One scale for the
+  stereo pair may be estimated too, but from a short, well-seen standing look at the reference,
+  not from a long scan, so that a drifting path is not mended by changing the scale. A scale
+  applied afterwards mends a uniform error only.
+- **Stop rule, to fix before step 2:** with a calibration off in scale by what X21 allows, the
+  long panel's length comes within 0.05 % with the reference in view, and a scan without one is
+  unchanged.
+- **For the real scanner** (see also "Only the real scanner can settle"): the two cameras sit on
+  one printed circuit board, so the distance between them follows the board, not the printed
+  housing (the review was told otherwise). What the housing can do is bend the board through its
+  four corner screws when it warms: 0.003 degrees of turn between the lenses is 0.02 % of depth
+  at 250 mm. To measure first, with one calibration left unchanged: a fixed object from cold
+  start to warm, at 150, 250 and 400 mm, with the scanner held and with the cable pulling, then
+  cooled again. The calibration already records its temperature. If the board bends: one fixed
+  screw and three that let it slide.
+
 ### An outside review (2026-11-23)
 The owner asked another AI for a second opinion on the four results of E-D3, from a written
 summary (no code). Taken as an opinion and weighed against the measurements:
@@ -959,6 +994,11 @@ summary (no code). Taken as an opinion and weighed against the measurements:
   on the part. The 19.5 mm parallax rule for small holes holds.
 - **Not possible yet:** its optical test of real holes with the projector on and off waits for
   the hardware.
+- **Second round, on a length reference** (X22): accepted in substance. One correction to what
+  it was told: the cameras share one circuit board, so its figure for the housing's expansion
+  (4 micrometres a degree on the 60 mm between the lenses) does not apply to the distance; its
+  point about the lenses' relative turn does. Its first hole look with dots on and off has since
+  been done in the simulator (X15's first test): the dots do disturb the rim.
 
 ## Small things found by the review
 
