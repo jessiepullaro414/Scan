@@ -6512,6 +6512,47 @@ with the part not moved and the tags on the table, 9 s scans. The spread used by
 cases. Printed-tag error, and the calibration error that tags and surface share, are not in the simulation. The
 Align page shows nothing of the hold, and the setting was not tried in the running app.
 
+### The part turned over, tags on the part (X19, 2026-11-24): a miss on one of three pairs; the setting stays off
+
+The case the owner asked for before the hold goes on by default (E-D5). The bracket cannot rest upside down, so
+it was propped level on a small block, as a user would; scan A upright, scan B turned, `same_setup` false, three
+seed pairs; tags found as the server finds them; data in `D:\OpenHandScan-work\scratch\ed3\x19run` (`RUN_T2.md`,
+`work\pairs`). The stop rule, fixed beforehand: with the hold on the merge passes E-D4 (1) and (3) on all three
+pairs; with the tags left on the table the hold does not act; with the tag map shifted as a whole it is never
+followed.
+
+**Where tags can go on a turned part.** A first go with tags on both faces of the upright stopped before any
+merge: only 2 tags were seen by both scans. A survey with the scene's own occlusion showed why: turned over, the
+upright's inner face lies under the base and is never seen; no other surface is seen both ways up; and the
+orbit sees the upright's outer face only at a slant, where a tag is found in about half the frames. The second
+go used five 20 mm tags in two rows on the outer face; 3 or 4 of them were shared in each pair.
+
+| pair | hold off | hold on |
+|---|---|---|
+| R1 | passes (1) and (3) | **held** (4 tags, sigma 0.13 mm), passes; the pose's error at the tags 1.21 to 0.49 mm |
+| R2 | passes | **held** (3 tags, sigma 0.15 mm), passes; 1.04 to 0.31 mm |
+| R3 | passes | **overruled, fails both**: the shapes' own search took a pose with the part turned round, 75.5 mm away ("3 of 9 starting guesses agree"), and the hold gave way to it |
+
+- **The miss is the overrule's.** To decide whether the tags are wrong as a whole, the hold compares them with a
+  search from the shapes alone. That search can accept the very pose tags exist to rule out (a part that fits
+  about as well turned round), and it then overrules a tag start that was right and accepted. With the setting
+  off the same pair passes: the hold made it worse.
+- **Tags left on the table, the part moved** (three pairs): the hold did not act; hold on and off give the same
+  result (two refused as "not sure which way it goes", one accepted at a wrong pose both ways, as today).
+- **The tag map of one scan shifted as a whole:** by 20 mm, refused with the hold on and off, never followed.
+  By 9 mm: the hold did not hold the shifted pose (the shapes moved it 8.7 mm, over the limit), and what came
+  back is the setting-off result, 4.4 mm RMS from the truth, but under the words "Aligned from the shapes",
+  which is not true of a refinement that started at the shifted tags.
+- Two rows of tags show no weakness about the rows' axis (the held pose turns -0.18 and -0.13 degrees about it,
+  as without the hold). The reference itself is good to about 0.4 degrees here, so smaller turns are not
+  resolved.
+
+**So the setting stays off.** Next: the tags are judged against the refinement that starts from them, not
+against a search from the shapes alone; then these alignments are run again.
+
+Limits: one seed pair a case, three pairs; 20 mm tags, found under the simulator's light and dots; the bracket
+only.
+
 ## What the metrics mean
 
 - **Stereo errors** compare the estimated raw intrinsics/extrinsics (`K1`, `K2`, `R`, `T`) with

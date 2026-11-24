@@ -1212,7 +1212,7 @@ def x19_render(root: Path, key: str) -> Path:
     return path
 
 
-def x19_tag_map(rec: Path, scan_dir: Path):
+def x19_tag_map(rec: Path, scan_dir: Path, tag_mm: float | None = None):
     """The tags a scan saw, as the server finds them (``tag_map`` at the scan's poses, 120 frames at most), cached."""
     from ohs.align.tags import TagMap, tag_map
     from ohs.track.markers import MarkerParams
@@ -1223,7 +1223,10 @@ def x19_tag_map(rec: Path, scan_dir: Path):
         return TagMap({int(k): np.asarray(v["corners"]) for k, v in d["tags"].items()},
                       {int(k): int(v["views"]) for k, v in d["tags"].items()},
                       {int(k): float(v["spread_mm"]) for k, v in d["tags"].items()})
-    m = tag_map(rec, scan_dir / "trajectory.csv", params=MarkerParams(tag_mm=X19_TAG_MM), max_frames=120)
+    if tag_mm is None:  # the printed size the recording's tags have (its tags.json), as a user types it in [markers]
+        tj = Path(rec) / "tags.json"
+        tag_mm = float(json.loads(tj.read_text())["tag_mm"]) if tj.is_file() else X19_TAG_MM
+    m = tag_map(rec, scan_dir / "trajectory.csv", params=MarkerParams(tag_mm=float(tag_mm)), max_frames=120)
     f.write_text(json.dumps(m.as_dict()), encoding="utf-8")
     return m
 
@@ -1318,6 +1321,389 @@ def x19_judge(root: Path, recs: Path, gpu1: Path, name: str) -> dict:
     return out
 
 
+# =========================================================================== X19: the bracket turned over, tags on the part
+#: (accepted by the coordinator 2026-11-24, ed3\gpu1\NOTES.md) scan A: the bracket as it stands, scan B: upside down, propped
+#: level on a block (named "floor": ground, neither part nor judge target); tags of 20 mm (2.5 mm white margin) stuck on
+#: the upright's two large faces, three on one and two on the other (the face both scans of an opposite-sides pair see is
+#: the same physical face once the part is turned over); B's table-tag variant keeps X19_TAGS on the table.
+X19T_TAG_MM = 20.0
+#: in the upright's local x' (along it) and y' (up it, from its middle): the shaft passes through the upright at x' 0,
+#: y' +8 (radius 8), so no tag there. First go (2026-11-24, x19run\old1): three tags on the outer face ("+", local +z',
+#: away from the base), two on the inner one; the inner face was never faced by a stretch's frames and the decals painted
+#: through to the other face (mirrored copies beside tag 2). Second go: the five places of 20 mm tags the outer face
+#: holds, two rows (not one line), each painted on its own face only (:class:`_FaceDecals`). 25 mm tags (3.1 mm margin)
+#: fit only two on that face (the face is 90 x 52 mm and the shaft's stub sits in the middle of the upper half).
+X19T_ROWS = {"+": [(-30.0, 13.0), (30.0, 13.0), (-30.0, -13.0), (0.0, -13.0), (30.0, -13.0)], "-": []}
+#: the prop of the turned part (scan B): a block 20 x 3 mm under the base's free edge (its local y +27 .. +30, x -10 ..
+#: +10, clear of the tab), from the table to the base. The first go put it under the edge the upright stands on, inside
+#: the upright, its face flush with the outer face: it fought that face in the renders.
+X19T_PROP = {"y": 28.5, "half_x": 10.0, "half_y": 1.5}
+
+
+class _FaceDecals:
+    """Decals on a box's local XY plane painted on one face only (``DecalAlbedo`` paints the same x, y on both faces):
+    ``faces[k]`` +1 paints decal k where local z > 0, -1 where z < 0."""
+
+    def __init__(self, base, decals, faces):
+        from ohs.sim.scene import DecalAlbedo
+
+        self.plus = DecalAlbedo(base, [d for d, f in zip(decals, faces) if f > 0])
+        self.minus = DecalAlbedo(base, [d for d, f in zip(decals, faces) if f < 0])
+        self.decals = list(decals)
+
+    def __call__(self, p, n, footprint):
+        a = self.plus(p, n, footprint)
+        m = p[:, 2] < 0
+        if np.any(m):
+            a[m] = self.minus(p[m], n[m], footprint[m])
+        return a
+#: recordings: "bracket240tp-s<seed>" upright, tags on the part; "bracket240tpt-s<seed>" turned, tags on the part;
+#: "bracket240ttt-s<seed>" turned, tags on the table ("bracket240t-s<seed>": upright, tags on the table, as before)
+X19T_PAIRS = {
+    "R1": ("bracket240tp-s4@0", "bracket240tpt-s1@20"),   # A: the turned-over test, three seed pairs (as T3, T1, T3b)
+    "R2": ("bracket240tp-s0@0", "bracket240tpt-s1@20"),
+    "R3": ("bracket240tp-s0@0", "bracket240tpt-s3@10"),
+    "Q1": ("bracket240t-s4@0", "bracket240ttt-s1@20"),    # B: the same pairs, the tags left on the table
+    "Q2": ("bracket240t-s0@0", "bracket240ttt-s1@20"),
+    "Q3": ("bracket240t-s0@0", "bracket240ttt-s3@10"),
+}
+
+
+def x19t_pairs(root: Path) -> dict:
+    """The pairs: :data:`X19T_PAIRS`, with a scan B replaced where ``<root>/x19t_pairs.json`` says (an unsound turned scan
+    replaced by another seed, at most twice: the coordinator's rule)."""
+    f = Path(root) / "x19t_pairs.json"
+    out = dict(X19T_PAIRS)
+    if f.is_file():
+        out.update({k: tuple(v) for k, v in json.loads(f.read_text()).items()})
+    return out
+
+
+def x19t_kind(name: str) -> tuple[bool, str]:
+    """(turned over?, where the tags are: "part" | "table") of a recording name."""
+    stem = name.split("-s")[0]
+    return stem in ("bracket240tpt", "bracket240ttt"), ("part" if stem in ("bracket240tp", "bracket240tpt") else "table")
+
+
+def x19t_register(SC, names) -> None:
+    import dataclasses as dc
+
+    for name in names:
+        seed = name.split("-s")[1].split("@")[0]
+        if name not in SC.SCENES:
+            SC.SCENES[name] = dc.replace(SC.SCENES[f"bracket240-s{seed}"], name=name)
+
+
+def x19t_motion(sc0) -> np.ndarray:
+    """The part's motion from standing to upside down (world, 4x4): half a turn about the base's long axis through the
+    base's centre, then lifted so that the lowest point of the part touches the table."""
+    from ohs import geometry as G
+    from ohs.sim.scene import Box, Cylinder
+
+    base = next(p for p in sc0.primitives if p.name == "base")
+    u = base.R[:, 0]
+    R = G.so3_exp(np.pi * u / np.linalg.norm(u))
+    M = np.eye(4)
+    M[:3, :3] = R
+    M[:3, 3] = base.t - R @ base.t
+    pts = []
+    for p in sc0.primitives:
+        if p.name == "table":
+            continue
+        if isinstance(p, Box):
+            c = np.array([[sx, sy, sz] for sx in (-1, 1) for sy in (-1, 1) for sz in (-1, 1)]) * p.half
+        elif isinstance(p, Cylinder):
+            a = np.linspace(0, 2 * np.pi, 48, endpoint=False)
+            ring = np.c_[p.radius * np.cos(a), p.radius * np.sin(a)]
+            c = np.vstack([np.c_[ring, np.full(len(a), z)] for z in (-p.half_height, p.half_height)])
+        else:
+            continue
+        pts.append((c @ p.R.T + p.t) @ M[:3, :3].T + M[:3, 3])
+    M[2, 3] -= float(np.min(np.vstack(pts)[:, 2]))
+    return M
+
+
+def x19t_scene(name: str):
+    """The scene of a recording of the turned-over test (module comment above)."""
+    from ohs.sim.scene import Box, Cylinder, Decal, Scene, apriltag_texture
+    from tools import merge_accuracy_study as MS
+
+    SC = MS.SC
+    x19t_register(SC, [name])
+    turned, tags = x19t_kind(name)
+    seed = int(name.split("-s")[1].split("@")[0])
+    if tags == "table":  # the X19 table tags round the target (as the first rendered test)
+        sc0 = x19_scene(f"bracket240t-s{seed}")
+    else:
+        sc0 = SC.scene_of(SC.SCENES[f"bracket240-s{seed}"])
+    prims = list(sc0.primitives)
+    markers = dict(sc0.markers or {}) if tags == "table" else {}
+    if tags == "part":  # the upright re-framed (local z = its thin axis: its large faces are its local XY plane)
+        k = next(i for i, p in enumerate(prims) if p.name == "upright")
+        up = prims[k]
+        Q = np.eye(4)
+        Q[:3, :3] = np.array([[1.0, 0.0, 0.0], [0.0, 0.0, -1.0], [0.0, 1.0, 0.0]])  # columns: x, y' = z, z' = -y
+        T_new = up.T_wo @ Q
+        half = np.array([up.half[0], up.half[2], up.half[1]])
+        decals, faces, m = [], [], 0
+        for face, flip in (("+", True), ("-", False)):  # flip_y: reads from local +z (the face at z' = +half)
+            for x, y in X19T_ROWS[face]:
+                decals.append(Decal(apriltag_texture(m, X19T_TAG_MM), 10, (x, y), angle=0.0, margin_mm=X19T_TAG_MM / 8,
+                                    tag_id=m, flip_y=flip))
+                faces.append(1 if flip else -1)
+                m += 1
+        prims[k] = Box(T_new, half, _FaceDecals(up.albedo, decals, faces), name="upright")
+        for dc in decals:
+            xy = dc.corners_local()
+            z = half[2] if dc.flip_y else -half[2]
+            markers[dc.tag_id] = np.c_[xy, np.full(4, z)] @ T_new[:3, :3].T + T_new[:3, 3]
+    if turned:
+        M = x19t_motion(SC.scene_of(SC.SCENES[f"bracket240-s{seed}"]))
+        out = []
+        for p in prims:
+            if p.name == "table":
+                out.append(p)
+            elif isinstance(p, Cylinder):
+                out.append(Cylinder(M @ p.T_wo, p.radius, p.half_height, p.albedo, name=p.name, caps=getattr(p, "caps", True)))
+            elif isinstance(p, Box):
+                out.append(Box(M @ p.T_wo, p.half, p.albedo, name=p.name))
+            else:
+                raise ValueError(f"cannot turn {type(p).__name__}")
+        # the prop (X19T_PROP): under the base's free edge, clear of the tab and the bosses, up to the base
+        base = next(p for p in out if p.name == "base")
+        hz = float(base.t[2] - base.half[2]) / 2.0
+        c = base.t + base.R @ np.array([0.0, X19T_PROP["y"], 0.0])
+        Tb = np.eye(4)
+        Tb[:3, :3] = base.R
+        Tb[:3, 3] = [c[0], c[1], hz]
+        out.append(Box(Tb, (X19T_PROP["half_x"], X19T_PROP["half_y"], hz), 0.55, name="floor"))
+        prims = out
+        if tags == "part":
+            markers = {i: X @ M[:3, :3].T + M[:3, 3] for i, X in markers.items()}
+    return Scene(prims, name=sc0.name + ("_turned" if turned else "") + f"_tags_{tags}", target=sc0.target,
+                 radius=sc0.radius, markers=markers, meta=dict(sc0.meta, x19t={"turned": turned, "tags": tags}))
+
+
+def x19t_render(root: Path, key: str) -> Path:
+    """Render a recording of the turned-over test, frames 0 to the stretch's end, on the scorecard's orbit of the seed."""
+    import shutil
+
+    from ohs.sim.datasets import make_scan_recording
+    from tools import merge_accuracy_study as MS
+
+    SC = MS.SC
+    name = x19_rec_name(key)
+    x19t_register(SC, [name])
+    _, s, e = MS.scan_spec(key)
+    path = Path(root) / "recs" / name
+    if (path / "done").is_file() and int(json.loads((path / "done").read_text())["frames"]) >= e:
+        return path
+    shutil.rmtree(path, ignore_errors=True)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    sc = x19t_scene(name)
+    spec = SC.SCENES[name]
+    t0 = time.perf_counter()
+    make_scan_recording(path, scene=sc, n_frames=e, fps=10.0, trajectory=SC._orbit("bracket", spec.seed, spec.frames),
+                        overwrite=True, image_size=SC.IMAGE_SIZE, realistic=True, depth_every=0, seed=spec.seed)
+    _write(path / "tags.json", {"tag_mm": X19T_TAG_MM if "tp" in name else X19_TAG_MM,
+                                "corners": {str(i): np.asarray(X).tolist() for i, X in sc.markers.items()}})
+    _write(path / "done", {"frames": e, "render_s": round(time.perf_counter() - t0, 1)})
+    return path
+
+
+def x19t_visible(recs: Path, key: str, min_frames: int = 3) -> dict:
+    """Before rendering (processor): which tags a stretch's frames would see (in view, 150-450 mm, face turned to the
+    camera within 70 degrees, the part's shadow not counted), from the true poses of the scorecard's own recording of
+    that seed."""
+    from ohs.io.recording import RecordingReader
+    from tools import merge_accuracy_study as MS
+
+    name = x19_rec_name(key)
+    x19t_register(MS.SC, [name])
+    _, s, e = MS.scan_spec(key)
+    seed = name.split("-s")[1]
+    reader = RecordingReader(Path(recs) / f"bracket240-s{seed}")
+    gt = {i: T for i, T in reader.ground_truth_poses().items() if s <= i < e}
+    stc = reader.calibration().stereo
+    K, size = np.asarray(stc.K_rect, np.float64), tuple(stc.image_size)
+    sc = x19t_scene(name)
+    up = next(p for p in sc.primitives if p.name == "upright")
+    on_part = x19t_kind(name)[1] == "part"
+    seen = {}
+    for i, X in sc.markers.items():
+        # the side a tag reads from: up for table tags; on the upright, its face's outward normal (tags 0-2: local +z')
+        nrm = (up.R[:, 2] * (1.0 if int(i) < len(X19T_ROWS["+"]) else -1.0)) if on_part else np.array([0.0, 0.0, 1.0])
+        n = 0
+        for T in gt.values():
+            Xc = (X - T[:3, 3]) @ T[:3, :3]
+            if np.any(Xc[:, 2] < 150) or np.any(Xc[:, 2] > 450):
+                continue
+            uv = Xc[:, :2] / Xc[:, 2:3] * np.array([K[0, 0], K[1, 1]]) + np.array([K[0, 2], K[1, 2]])
+            if np.any(uv < 20) or np.any(uv[:, 0] > size[0] - 20) or np.any(uv[:, 1] > size[1] - 20):
+                continue
+            v = T[:3, 3] - X.mean(axis=0)
+            if float(v @ nrm) / np.linalg.norm(v) > np.cos(np.radians(70)):
+                n += 1
+        seen[int(i)] = n
+    return {"key": key, "frames": len(gt), "seen": seen, "tags_seen": sorted(k for k, n in seen.items() if n >= min_frames)}
+
+
+def x19t_part_motion(name_b: str) -> np.ndarray:
+    """The part's pose in scan B's scene relative to scan A's (identity when B is not turned)."""
+    from tools import merge_accuracy_study as MS
+
+    turned, _ = x19t_kind(name_b)
+    if not turned:
+        return np.eye(4)
+    seed = name_b.split("-s")[1].split("@")[0]
+    return x19t_motion(MS.SC.scene_of(MS.SC.SCENES[f"bracket240-s{seed}"]))
+
+
+def x19t_pair(root: Path, recs: Path, name: str, shift_mm: float | None = None) -> dict:
+    """As :func:`x19_pair` for a turned-over pair (the part moved: ``same_setup`` False): aligned through
+    ``align_with_tags`` with the hold off and on; merged at both poses and at the part's true motion, each scan's table
+    left out by its own map as the server's merge of a moved part does. ``shift_mm``: C,
+    the tag map found in scan B shifted as a whole along B's x by that much (alignments only, no merge)."""
+    from dataclasses import replace
+
+    from ohs.align import AlignParams, ScanInput, merge_scans, scan_cloud_from_mesh
+    from ohs.align.tags import TagMap, align_with_tags
+    from tools import merge_accuracy_study as MS
+
+    ka, kb = x19t_pairs(root)[name]
+    x19t_register(MS.SC, [x19_rec_name(ka), x19_rec_name(kb)])
+    MS.PAIRS[name] = (ka, kb, "tags", name)
+    work = Path(root) / "work"
+    pd = work / "pairs" / (name + ("" if shift_mm is None else f"_shift{shift_mm:g}"))
+    pd.mkdir(parents=True, exist_ok=True)
+    A, B = MS.scan_dir(work, ka, "tracked"), MS.scan_dir(work, kb, "tracked")
+    ra, rb = Path(recs) / x19_rec_name(ka), Path(recs) / x19_rec_name(kb)
+    ta, tb = x19_tag_map(ra, A), x19_tag_map(rb, B)
+    if shift_mm is not None:
+        tb = TagMap({k: np.asarray(X) + np.array([shift_mm, 0.0, 0.0]) for k, X in tb.corners.items()}, dict(tb.views),
+                    dict(tb.spread_mm))
+    dst, src = scan_cloud_from_mesh(A / "mesh.ply"), scan_cloud_from_mesh(B / "mesh.ply")
+    out = {"pair": name, "keys": [ka, kb], "shift_mm": shift_mm, "tags A": {str(k): v for k, v in ta.views.items()},
+           "tags B": {str(k): v for k, v in tb.views.items()},
+           "tag corners A": {str(k): np.asarray(X).tolist() for k, X in ta.corners.items()}}
+    poses = {}
+    for tag, p in (("off", AlignParams()), ("on", replace(AlignParams(), hold_tags=True))):
+        res, row = align_with_tags(src, dst, tb, ta, p, same_setup=False)
+        out[tag] = {"result": res.as_dict(), "tags": row}
+        poses[tag] = np.asarray(res.T)
+    W = MS.fitted_world
+    poses["b2"] = G_invert(W(ra, A / "trajectory.csv")) @ G_invert(x19t_part_motion(x19_rec_name(kb))) @ W(rb, B / "trajectory.csv")
+    out["b2_T"] = poses["b2"].tolist()
+    if shift_mm is None:
+        from ohs.align.merge import scan_support_from_mesh
+
+        params = MS.merge_params()
+        # the part was moved: each scan's table found on its own mesh and left out of the merge, as the server does
+        (supA, wA), (supB, wB) = scan_support_from_mesh(A / "mesh.ply", name="A"), scan_support_from_mesh(B / "mesh.ply", name="B")
+        out["supports"] = {"A": supA is not None, "B": supB is not None, "warnings": list(wA) + list(wB)}
+        for tag, T in poses.items():
+            mdir = pd / f"merge_{tag}"
+            if (mdir / "done.json").is_file():
+                continue
+            t0 = time.perf_counter()
+            r = merge_scans([ScanInput(ra, A / "trajectory.csv", np.eye(4), "A", support=supA, warnings=list(wA)),
+                             ScanInput(rb, B / "trajectory.csv", T, "B", support=supB, warnings=list(wB))], mdir, params)
+            _write(mdir / "done.json", {"s": round(time.perf_counter() - t0, 1), "T": [np.eye(4).tolist(), np.asarray(T).tolist()],
+                                        "vertices": r["mesh"]["n_vertices"]})
+    _write(pd / "align.json", out)
+    return out
+
+
+def x19t_judge(root: Path, recs: Path, gpu1: Path, name: str) -> dict:
+    """E-D4 for a turned-over pair: everything judged in scan A's frame and truth (the part as it stands); scan B's mesh,
+    its seen surface and its world brought there by the inverse of the part's motion; gpu1's P3 spread."""
+    from scipy.spatial import cKDTree
+
+    from tools import merge_accuracy_study as MS
+    from tools import preset_study as ps
+    from tools.calib_health_study import Truth
+
+    SC = MS.SC
+    ka, kb = x19t_pairs(root)[name]
+    na, nb = x19_rec_name(ka), x19_rec_name(kb)
+    x19t_register(SC, [na, nb])
+    work = Path(root) / "work"
+    st = Study(Path(root), Path(root), Path(recs))
+    st.x7 = st.mw = work
+    MW_PAIRS[name] = (ka, kb)
+    sp = json.loads((Path(gpu1) / "verdict.json").read_text())["cases"]["P3 b2"]["spread"]
+    spec, sa, ea = MS.scan_spec(ka)
+    _, sb, eb = MS.scan_spec(kb)
+    scA, scB = x19t_scene(na), x19t_scene(nb)
+    truth = SC.truth_for(SC.SCENES["bracket240-s" + na.split("-s")[1]], SC.scene_of(SC.SCENES["bracket240-s" + na.split("-s")[1]]))
+    Mi = G_invert(x19t_part_motion(nb))
+    ra, rb = Path(recs) / na, Path(recs) / nb
+    A, B = MS.scan_dir(work, ka, "tracked"), MS.scan_dir(work, kb, "tracked")
+    Wa = MS.fitted_world(ra, A / "trajectory.csv")
+    Wb = Mi @ MS.fitted_world(rb, B / "trajectory.csv")
+    SA = ps.seen_points(scA, ra, sa, ea, every=3, n_max=60000)
+    SB = ps.seen_points(scB, rb, sb, eb, every=3, n_max=60000) @ Mi[:3, :3].T + Mi[:3, 3]
+    X, Xn = truth.closest_part(np.vstack([SA, SB]))
+    inA = np.r_[np.ones(len(SA), bool), cKDTree(SA).query(SB)[0] < 0.7]
+    inB = np.r_[cKDTree(SB).query(SA)[0] < 0.7, np.ones(len(SB), bool)]
+    tr = Truth(scA)
+    order = {p.name: k for k, p in enumerate(scA.primitives)}
+    prim = np.array([order.get(tr.names[k], -1) for k in np.argmin(np.abs(tr.prim_sdf(X)), axis=1)])
+    stt = {"pair": name, "keys": (ka, kb), "spec": spec, "sc": scA, "truth": truth, "recs": (ra, rb), "dirs": (A, B),
+           "W": (Wa, Wb), "X": X, "Xn": Xn, "inA": inA, "inB": inB, "prim": prim, "walls": walls_of(scA),
+           "mA": recipe_mesh(A / "mesh.ply"), "mB": recipe_mesh(B / "mesh.ply")}
+    eA1, sA1, eB1, sB1 = st.single_readings(stt)
+    rows = {k: st.merge_reading(stt, k) for k in ("off", "on", "b2")}
+    j = judge_case(eA1, sA1, eB1, sB1, rows, inA, inB)
+    al = json.loads((work / "pairs" / name / "align.json").read_text())
+    from ohs.track.export import load_ply
+
+    VB = load_ply(B / "mesh.ply")["vertices"].astype(np.float64)[::7]
+    T_true = np.asarray(al["b2_T"])
+    out = {"pair": name, "spread": sp, "rows": {}, "align": al,
+           "singles": {k: {r: j["singles"][k][r] for r in ("S_A", "S_B", "S_A or S_B")} for k in ("A", "B")},
+           "union oracle": j["union oracle"],
+           "single scans' own placement moved (mm)": {"A": None, "B": None}}
+    for k, r in j["rows"].items():
+        ok = True
+        for s in ("A", "B"):
+            m, g = r[f"S_{s}"], j["singles"][s][f"S_{s}"]
+            ok &= (m["cover05"] >= g["cover05"] - sp["cover05"] and m["med"] <= g["med"] + sp["med"]
+                   and m["over03"] <= g["over03"] + sp["over03"])
+        out["rows"][k] = {"E-D4 (1)": bool(ok), "E-D4 (3)": r["E-D4 (3) more than the larger scan"],
+                          "X7": [r["X7 beats the better single"], r["X7 reaches the union"]], "all": r["S_A or S_B"],
+                          "S_A": r["S_A"], "S_B": r["S_B"], "2 sigma covers": r["2 sigma covers"],
+                          "off_true": pose_off(st.merge_pose(name, k), T_true, VB) if k != "b2" else [0.0, 0.0]}
+        if k != "b2" and al.get("tag corners A"):
+            out["rows"][k]["error split"] = x19t_error_split(np.asarray(st.merge_pose(name, k)), T_true, VB,
+                                                             al["tag corners A"])
+    _write(work / "pairs" / name / "judge.json", out)
+    return out
+
+
+def x19t_error_split(T: np.ndarray, T_true: np.ndarray, V: np.ndarray, corners_a: dict) -> dict:
+    """How a pose's error splits: the move of scan B's middle (mm), the turn (degrees) in all and about the tag rows'
+    direction (tags 0 -> 1 in scan A's tag map) and about the tags' face normal, and the move at the tags (mm)."""
+    from ohs import geometry as G
+
+    E = T @ G_invert(T_true)
+    w = np.degrees(G.so3_log(E[:3, :3]))
+    C = {int(k): np.asarray(v) for k, v in corners_a.items()}
+    P = np.vstack(list(C.values()))
+    out = {"move at B's middle mm": float(np.linalg.norm(E[:3, :3] @ V.mean(0) + E[:3, 3] - V.mean(0))),
+           "turn deg": float(np.linalg.norm(w)),
+           "move at the tags mm (rms)": float(np.sqrt(np.mean(np.sum((P @ E[:3, :3].T + E[:3, 3] - P) ** 2, axis=1))))}
+    if 0 in C and 1 in C:
+        u = C[1].mean(0) - C[0].mean(0)
+        u /= np.linalg.norm(u)
+        q = P - P.mean(0)
+        nrm = np.linalg.svd(q, full_matrices=False)[2][2]
+        out["turn about the rows deg"] = float(w @ u)
+        out["turn about the face normal deg"] = float(w @ nrm)
+        out["turn about the third axis deg"] = float(w @ np.cross(nrm, u))
+    return out
+
+
 # =========================================================================== output
 def _plain(x):
     if isinstance(x, dict):
@@ -1372,7 +1758,8 @@ def print_table(out: Path) -> None:
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("cmd", choices=("combine", "tags", "table", "plan", "single", "today", "perscan", "judge-exp", "verdict",
-                                    "tagmerge", "judge-tags", "x19-render", "x19-single", "x19-pair", "x19-judge"))
+                                    "tagmerge", "judge-tags", "x19-render", "x19-single", "x19-pair", "x19-judge",
+                                    "x19t-visible", "x19t-render", "x19t-single", "x19t-pair", "x19t-judge"))
     ap.add_argument("out", type=Path)
     ap.add_argument("--x7", type=Path)
     ap.add_argument("--mergewarn", type=Path)
@@ -1382,8 +1769,28 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--name", help="(single: a scan key; today / perscan / judge-exp: a pair of the plan)")
     ap.add_argument("--runs", nargs="*", help="(tagmerge: which tag runs, e.g. tag0; default all six)")
     ap.add_argument("--gpu1", type=Path, help="(x19-judge: the per-scan experiment's folder, for its spreads)")
+    ap.add_argument("--shift", type=float, help="(x19t-pair: C, scan B's found tag map shifted as a whole by this, mm)")
     a = ap.parse_args(argv)
     ap_runs = [r for r in TAG_RUNS if a.cmd != "tagmerge" or a.runs is None or tag_run_name(*r) in a.runs]
+    if a.cmd.startswith("x19t-"):  # X19, the bracket turned over (OUT: its folder; recordings in OUT/recs)
+        _watch_rss()
+        from tools import merge_accuracy_study as MS
+
+        recs = Path(a.recs) if a.recs else Path(a.out) / "recs"
+        if a.cmd == "x19t-visible":
+            print(json.dumps(_plain(x19t_visible(a.recs, a.name))), flush=True)
+        elif a.cmd == "x19t-render":
+            print(x19t_render(a.out, a.name), flush=True)
+        elif a.cmd == "x19t-single":
+            x19t_register(MS.SC, [x19_rec_name(a.name)])
+            MS.run_single(Path(a.out) / "work", recs, a.name, "tracked")
+        elif a.cmd == "x19t-pair":
+            r = x19t_pair(a.out, recs, a.name, a.shift)
+            print(json.dumps(_plain({k: {"accepted": v["result"]["accepted"], "held": v["result"].get("held_by_tags"),
+                                         "verdict": v["result"]["verdict"]} for k, v in r.items() if k in ("off", "on")}))[:3000])
+        else:
+            x19t_judge(a.out, recs, a.gpu1, a.name)
+        return 0
     if a.cmd.startswith("x19-"):  # X19's stop-rule test (OUT: its folder; recordings in OUT/recs)
         _watch_rss()
         from tools import merge_accuracy_study as MS

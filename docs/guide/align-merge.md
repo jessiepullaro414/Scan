@@ -124,6 +124,7 @@ With points, no second guess has to confirm the pose, so check **Your points**. 
 - Tags are looked for only when you have not picked points.
 - Tags keep the pose along directions the shape pins only weakly: a sphere, a cylinder or a plate is then turned as the tags say.
 - Tags on the table help only when the part was not moved on it (answer **No**). For a part that was moved, only tags on the part help.
+- On a part you turn over, stick the tags on a face the camera sees in both positions, three or more of them, not all in one line. A face that ends up underneath, or behind an overhang, is not seen: in a test on a bracket only one face of the upright was seen both ways up.
 - A merged scan has no recording, so no tags of its own.
 - If the start from the tags is not accepted, the engine tries the shape's own guesses instead.
 

@@ -202,3 +202,40 @@ def test_mesh_volume_puts_the_surface_where_the_values_cross():
 def test_the_tag_runs_follow_the_first_tests_order():
     assert mc.TAG_RUNS[:3] == ((0, False), (1, False), (2, False)) and mc.TAG_RUNS[3:] == ((0, True), (1, True), (2, True))
     assert [mc.tag_run_name(*r) for r in mc.TAG_RUNS] == ["tag0", "tag1", "tag2", "tag0c", "tag1c", "tag2c"]
+
+
+def test_face_decals_paint_one_face_only():
+    from ohs.sim.scene import Decal, apriltag_texture
+
+    up = Decal(apriltag_texture(0, 20.0), 10, (0.0, 0.0), margin_mm=2.5, tag_id=0, flip_y=True)
+    alb = mc._FaceDecals(0.7, [up], [1])
+    p = np.array([[0.0, 0.0, 4.0], [0.0, 0.0, -4.0], [30.0, 0.0, 4.0]])
+    a = alb(p, np.zeros_like(p), np.zeros(3))
+    assert a[1] == pytest.approx(0.7) and a[2] == pytest.approx(0.7)  # the other face and beside the tag: the base
+    p2 = np.array([[x, y, 4.0] for x in np.linspace(-9, 9, 7) for y in np.linspace(-9, 9, 7)])
+    assert np.any(np.abs(alb(p2, np.zeros_like(p2), np.zeros(len(p2))) - 0.7) > 0.1)  # on the tag: its pattern
+
+
+def test_the_error_split_of_a_turn_about_the_rows():
+    from ohs import geometry as G
+
+    corners = {0: np.array([[-40.0, 0, 0], [-20, 0, 0], [-20, 20, 0], [-40, 20, 0]]),
+               1: np.array([[20.0, 0, 0], [40, 0, 0], [40, 20, 0], [20, 20, 0]])}
+    T = np.eye(4)
+    T[:3, :3] = G.so3_exp(np.radians(0.5) * np.array([1.0, 0.0, 0.0]))
+    s = mc.x19t_error_split(T, np.eye(4), np.array([[0.0, 10.0, 0.0]]), corners)
+    assert s["turn deg"] == pytest.approx(0.5, abs=1e-6)
+    assert abs(s["turn about the rows deg"]) == pytest.approx(0.5, abs=1e-6)
+    assert abs(s["turn about the face normal deg"]) < 1e-6
+
+
+def test_the_turned_part_keeps_its_prop_clear_of_the_upright_and_the_tags_on_the_outer_face():
+    sc = mc.x19t_scene("bracket240tpt-s1")
+    base = next(p for p in sc.primitives if p.name == "base")
+    up = next(p for p in sc.primitives if p.name == "upright")
+    prop = next(p for p in sc.primitives if p.name == "floor")
+    y = lambda p: float((p.t - base.t) @ base.R[:, 1])  # noqa: E731
+    assert y(up) < -20 and y(prop) > 25  # the prop under the base's free edge, the upright at the other
+    assert len(sc.markers) == len(mc.X19T_ROWS["+"]) == 5
+    rows = {round(float(((X.mean(0) - up.t) @ up.R[:, 1]))) for X in sc.markers.values()}
+    assert rows == {-13, 13}  # two rows, not one line

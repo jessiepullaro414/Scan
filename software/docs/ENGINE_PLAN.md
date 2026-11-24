@@ -121,7 +121,8 @@ The rules of `FEATURE_PLAN.md` and `MAINTENANCE_PLAN.md` hold. In short:
      stopgap; a thin wall's true thickness from a scan (X17) stays a need.
   3. Merge (X19): `align_hold_tags` goes on by default after one more rendered case passes,
      a part turned over with tags on the part itself; with it the Align page's words, the
-     guide and a trial in the running app.
+     guide and a trial in the running app. The case missed on one of three pairs (the
+     overrule): the setting stays off until that is mended and the case passes.
   4. Holes (X15), decided the same day after round 6: the reading from the camera images is
      built into the app's hole tool, as a second answer beside the mesh's.
   5. Long parts (X8), decided the same day after the fresh seeds: `straighten_tags` goes on
@@ -1259,7 +1260,19 @@ E-D4 (4). Design in `D:\OpenHandScan-work\scratch\ed3\tag_hold_design.md`; first
   fails (1) on all three); the pair sharing 96 % is the same with the hold on and off; a
   tag moved 2 mm was left out and the pose held from the other seven. A sheet pair
   (reported) passes too.
-- **Decided 2026-11-24 (E-D5): on by default after the turned-over case passes** (running).
+- **Decided 2026-11-24 (E-D5): on by default after the turned-over case passes.** Run the same
+  day (`VALIDATION.md`, "The part turned over, tags on the part"): **a miss, the setting
+  stays off.** Two of three pairs are held and pass; on the third the overrule gave way to
+  the shapes' own search, which had taken the part turned round (75.5 mm away), where the
+  setting off passes. Table tags on a moved part never held. A tag map shifted 9 mm was not
+  held, but the result was worded "Aligned from the shapes" though it started at the tags.
+- **Next:** judge the tags against the refinement that starts from them, never against a
+  search from the shapes alone: hold when that refinement was accepted and moved no more
+  than the larger of 8 mm and 4 sigma; otherwise give today's result with words that say
+  the tags and the shapes disagree. Guard tests first (a part that fits turned round; a
+  map shifted 9 mm), then the three turned pairs, the table-tag pairs, the shifted maps
+  and the first test's six pairs again.
+- **For the guide (added):** on a part turned over, tags go on a face seen both ways up.
   By E-D1 it is better on every pair it acts on and the same on every pair it does not (no
   tags, or 0.70 shared or more). Open before that: a part turned over with tags on the part itself, rendered (made-up clouds only so
   far); more parts than one bracket and one sheet; the Align page's words for a held pose
