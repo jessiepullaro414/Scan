@@ -94,6 +94,13 @@ at all was compared, the comparison is incomplete. ``compare_rows`` gives the sa
 **Surviving a kill**: a recording is used only when complete (:func:`recording_complete`: its
 marker, written last, every planned frame there and whole); one cut off is rendered again. A
 result is written whole and last (:func:`write_json`), so one that is there is a finished run's.
+**A run's identity** (:func:`run_identity`, in every result and baseline since 2026-11-24): the engine's
+code (all of ``ohs``, the server's code included), the scorecard's own job code, the recording and its
+calibration, the settings, the chain, the pose source, the libraries and the compute device. A result
+that is there is used again only when its identity is today's; one made by other code or inputs, or
+with no identity, is run again (the old one moved into ``old/`` beside it, never deleted), or, with
+``--history``, used as it is and marked as an old result (then a compare is not judged and a baseline
+is not saved). A compare names both sides' identities.
 Running the same command again after a kill carries on where it stopped; ``--render-lanes N``
 renders what is missing in N background processes while the rest is processed. A baseline is saved
 only when every job of it finished.
@@ -117,6 +124,7 @@ import hashlib
 import json
 import math
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -134,7 +142,7 @@ if str(SOFTWARE) not in sys.path:
 from ohs import geometry as G  # noqa: E402
 
 __all__ = ["SCENES", "SceneSpec", "scenes_for", "PartTruth", "SdfTruth", "MeshTruth", "truth_for", "place_part",
-           "part_scores", "verdict", "compare_rows", "completeness", "Comparison", "fmt", "NM", "parse_params", "apply_params", "main"]
+           "part_scores", "verdict", "compare_rows", "completeness", "Comparison", "run_identity", "identity_mismatch", "fmt", "NM", "parse_params", "apply_params", "main"]
 
 MODELS = Path.home() / ".ohs"
 DEFAULT_CACHE = Path(os.environ.get("OHS_SCORECARD", "") or Path(os.environ.get("TEMP", "/tmp")) / "ohs-scorecard")
@@ -1725,6 +1733,10 @@ def job_main(a: argparse.Namespace) -> int:
     res["info"]["params"] = params
     res["info"]["started"] = _dt.datetime.now().isoformat(timespec="seconds")
     res["info"]["engine_code"] = engine_fingerprint()
+    try:  # the identity the parent made before it started this job (:func:`run_job`)
+        res["identity"] = json.loads((out / "identity.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        pass
     if a.keep_mesh == 0:
         for f in ("mesh.ply", "laser_points.ply"):
             (proc / f).unlink(missing_ok=True)
@@ -1733,19 +1745,168 @@ def job_main(a: argparse.Namespace) -> int:
     return 0
 
 
+def _text(f: Path) -> bytes:
+    return f.read_bytes().replace(b"\r\n", b"\n")
+
+
 def engine_fingerprint() -> str:
-    """A short hash of the engine's code (``ohs/**/*.py`` without the server's and the UI's folders,
-    whose edits are texts and screens): results with different fingerprints came from different
-    engines, and a baseline that mixes them says so."""
+    """A short hash of the engine's code: every ``ohs/**/*.py`` (line ends made the same), the server's
+    included. Both chains run server code (the frame pass takes its parameters from
+    ``ohs.server.studio.process_params``, the app chain also ``ohs.server.processing``), and importing
+    those loads most of ``ohs/server``, so no clean cut is made: an edit to any server file, a text
+    included, gives another fingerprint, and a cached result is run again (:func:`run_job`). The screens'
+    built files (``ohs/server/static``) are not Python and are left out. Results with different
+    fingerprints came from different engines, and a baseline that mixes them says so."""
     h = hashlib.sha1()
     root = SOFTWARE / "ohs"
     for f in sorted(root.rglob("*.py")):
         rel = f.relative_to(root).as_posix()
-        if rel.startswith(("server/", "ui/")) or "__pycache__" in rel:
+        if "__pycache__" in rel:
             continue
-        h.update(rel.encode())
-        h.update(f.read_bytes().replace(b"\r\n", b"\n"))
+        h.update(rel.encode() + b"\0")
+        h.update(_text(f) + b"\0")
     return h.hexdigest()[:12]
+
+
+# --------------------------------------------------------------------------- a run's identity
+#: the form of a run's identity (a result's ``identity``); a result without one was made before 2026-11-24
+IDENTITY_SCHEMA = 1
+#: the study tools a job imports (the scorecard's job code, above "running jobs", is hashed with them;
+#: ``tools/memory_peaks.py`` is left out: it measures memory, a rough number that is never judged)
+TOOL_FILES = ("tools/preset_study.py", "tools/calib_health_study.py", "tools/gapflush_study.py")
+#: the libraries that change numbers: (name in a table, the distributions that can provide it)
+LIBRARIES = (("numpy", ("numpy",)), ("scipy", ("scipy",)),
+             ("opencv", ("opencv-python", "opencv-contrib-python", "opencv-python-headless", "opencv-contrib-python-headless")),
+             ("open3d", ("open3d", "open3d-cpu")), ("pyopencl", ("pyopencl",)), ("numba", ("numba",)))
+#: what an identity holds, each checked on reuse, and its words in a table
+IDENTITY_WORDS = {"schema": "the identity's form", "engine_code": "the engine's code", "tool_code": "the scorecard's own code",
+                  "recording": "the recording", "calibration": "the calibration", "models": "the model files",
+                  "params": "the settings", "chain": "the chain", "poses": "the pose source",
+                  "pose_input": "the given camera path", "depth_input": "the cached depth", "libraries": "the libraries",
+                  "python": "the Python version", "device": "the compute device", "compute": "the compute path"}
+NO_IDENTITY = "no identity (made before 2026-11-24)"
+#: files of a recording folder that are not its content: the marker (it holds the time it was written) and
+#: the files a kill can leave
+_NOT_CONTENT = ("done",)
+
+
+def tool_fingerprint() -> str:
+    """A short hash of the scorecard's own code that a job runs: ``tools/scorecard.py`` above its "running
+    jobs" section (the scenes, the truth, the placement, the fits, the settings, the app chain, the job and
+    this identity) and :data:`TOOL_FILES`. An edit there gives another fingerprint and every cached result
+    is run again; an edit below it (running jobs, the tables, the compare, the baselines, the command line)
+    does not. A function that changes a result must stay above that line."""
+    h = hashlib.sha1()
+    f = SOFTWARE / "tools" / "scorecard.py"
+    text = _text(f) if f.is_file() else b"<none>"
+    m = re.search(rb"^# =+ running jobs$", text, re.M)
+    h.update(b"tools/scorecard.py\0" + (text[:m.start()] if m else text) + b"\0")
+    for rel in TOOL_FILES:
+        p = SOFTWARE / rel
+        h.update(rel.encode() + b"\0" + (_text(p) if p.is_file() else b"<none>") + b"\0")
+    return h.hexdigest()[:12]
+
+
+def folder_identity(path: Path, whole_up_to: int = 1 << 20, by_size: tuple[str, ...] = ("frames",)) -> str | None:
+    """A short hash of a folder's files: each file's name and size, and the content of each file of at most
+    ``whole_up_to`` bytes outside the ``by_size`` folders. So a recording's images (``frames/``) count by name
+    and size (reading 36 recordings' images would take minutes), its frame list, camera path, calibration
+    and meta by content. The marker ``done`` (it holds a time) and hidden files are left out. None when
+    there is no such folder."""
+    path = Path(path)
+    if not path.is_dir():
+        return None
+    h = hashlib.sha1()
+    for f in sorted(p for p in path.rglob("*") if p.is_file()):
+        rel = f.relative_to(path).as_posix()
+        if rel in _NOT_CONTENT or any(part.startswith(".") for part in rel.split("/")) or rel.endswith(".tmp"):
+            continue
+        size = f.stat().st_size
+        h.update(f"{rel}\0{size}\0".encode())
+        if rel.split("/")[0] not in by_size and size <= whole_up_to:
+            h.update(f.read_bytes())
+    return h.hexdigest()[:12]
+
+
+def file_identity(path: Path | None) -> str | None:
+    """A short hash of a file's content (line ends made the same); None when it is not there."""
+    if path is None or not Path(path).is_file():
+        return None
+    return hashlib.sha1(_text(Path(path))).hexdigest()[:12]
+
+
+def library_versions() -> dict[str, str | None]:
+    """The installed versions of :data:`LIBRARIES` (from the installed packages' records: nothing is imported)."""
+    from importlib import metadata
+
+    out: dict[str, str | None] = {}
+    for name, dists in LIBRARIES:
+        out[name] = None
+        for d in dists:
+            try:
+                out[name] = metadata.version(d)
+                break
+            except metadata.PackageNotFoundError:
+                continue
+    return out
+
+
+def device_name(compute: str) -> str:
+    """The compute device a job on ``compute`` uses, in one line: "cpu", or the GPU's name, kind and OpenCL
+    version (as ``tools.snapshot.device_description`` says it)."""
+    if compute == "cpu":
+        return "cpu"
+    try:
+        from ohs import compute as C
+
+        dev = C.describe().get("device")
+    except Exception as e:  # noqa: BLE001 - no device to name is a fact, not a failure
+        return f"not known ({type(e).__name__})"
+    return f"{dev.get('name')} ({dev.get('kind')}, {dev.get('opencl')})" if dev else "cpu"
+
+
+def run_identity(cache: Path, spec: SceneSpec, poses: str, compute: str, params: dict, chain: str = "frame", *,
+                 models: Path | None = None, depth_hook: str | None = None, depth_dir: Path | None = None,
+                 trajectory: Path | None = None) -> dict[str, Any]:
+    """What a run is made of (every key of :data:`IDENTITY_WORDS`): the engine's and the scorecard's code, the
+    recording (:func:`folder_identity`) and its calibration, the model files of a stretch, the settings asked
+    for (Straighten's left out of an app chain's true-pose run, as its folder), the chain, the pose source,
+    the given camera path or cached depth of a replay, the libraries, the Python version and the device.
+    No paths and no times: the same run in another cache folder has the same identity. The resolved
+    parameters are not listed: they follow from the code and the settings asked for."""
+    import platform
+
+    if chain == "app" and poses == "true":
+        params = {k: v for k, v in params.items() if not k.startswith(STRAIGHTEN_ONLY)}
+    rec = rec_path(cache, spec, models)
+    model = None
+    if spec.build.get("maker") == "stretch":
+        from tools import preset_study as ps
+
+        mp = (models or MODELS) / ps.RECORDINGS[spec.build["rec"]]["model"]
+        model = f"{mp.name} {mp.stat().st_size}" if mp.is_file() else None
+    return {"schema": IDENTITY_SCHEMA, "engine_code": engine_fingerprint(), "tool_code": tool_fingerprint(),
+            "recording": folder_identity(rec), "calibration": file_identity(rec / "calibration.json"), "models": model,
+            "params": _plain(dict(sorted(params.items()))), "chain": chain, "poses": poses,
+            "pose_input": file_identity(trajectory) if trajectory else None,
+            "depth_input": (folder_identity(depth_dir, whole_up_to=0) if depth_hook == "feed" else depth_hook),
+            "libraries": library_versions(), "python": platform.python_version(), "device": device_name(compute),
+            "compute": compute}
+
+
+def identity_mismatch(old: dict | None, new: dict) -> list[str]:
+    """What differs between a cached result's identity and today's, in words; empty when they match. A result
+    without an identity never matches."""
+    if not isinstance(old, dict) or not old:
+        return [NO_IDENTITY]
+    return [IDENTITY_WORDS.get(k, k) for k in IDENTITY_WORDS if old.get(k) != new.get(k)]
+
+
+def as_history(r: dict, why: list[str]) -> dict:
+    """A cached result that does not match today's identity, used as it is (``--history``): marked as old."""
+    out = dict(r)
+    out["history"] = {"why": list(why)}
+    return out
 
 
 KEEP_FROM_RUN = ("peak_ws_gb", "peak_gpu_shared_gb")
@@ -1771,6 +1932,8 @@ def rescore(cache: Path, spec: SceneSpec, compute: str, params: dict, poses: str
     info["judge_s"] = round(time.perf_counter() - t, 1)
     info["rescored"] = _dt.datetime.now().isoformat(timespec="seconds")
     new["info"] = info
+    if isinstance(old.get("identity"), dict):  # scored by today's scoring code; the mesh keeps the engine that made it
+        new["identity"] = dict(old["identity"], tool_code=tool_fingerprint())
     write_json(out / "result.json", new)
     return new
 
@@ -1803,16 +1966,35 @@ def compute_name(compute: str | None) -> str:
 
 def run_job(cache: Path, spec: SceneSpec, poses: str, compute: str, params: dict, out: Path, *, models: Path | None = None,
             depth_hook: str | None = None, depth_dir: Path | None = None, trajectory: Path | None = None,
-            keep_mesh: bool = True, force: bool = False, deadline_s: float | None = None, chain: str = "frame") -> dict:
+            keep_mesh: bool = True, force: bool = False, deadline_s: float | None = None, chain: str = "frame",
+            history: bool = False) -> dict:
     """Run one job in a child process (with a deadline) unless its result is there; returns the result
-    (the job measures its own peak memory with ``tools/memory_peaks.py``).
+    (the job measures its own peak memory with ``tools/memory_peaks.py``), with its ``identity``
+    (:func:`run_identity`, made before the job starts).
+
+    A result that is there is used again only when its identity is today's (:func:`identity_mismatch`):
+    one made by other code or inputs, or with no identity (made before 2026-11-24), is run again. With
+    ``history`` it is used as it is instead, marked ``history`` with what differs (:func:`as_history`);
+    an old result is never rewritten or deleted by that. ``force`` runs again whatever is there.
 
     Survives a kill: a result is used again only when it is a finished run's (:func:`read_result`);
     a job never runs on a recording cut off part way (``RuntimeError``); and a job still running in
     a process a killed parent left behind is waited for (its ``running`` marker), not started twice."""
     res_path = out / "result.json"
+    ident = run_identity(cache, spec, poses, compute, params, chain, models=models, depth_hook=depth_hook,
+                         depth_dir=depth_dir, trajectory=trajectory)
     if not force and (r := read_result(res_path)) is not None:
-        return r
+        why = identity_mismatch(r.get("identity"), ident)
+        if not why:
+            return r
+        if history:
+            return as_history(r, why)
+        rec = rec_path(cache, spec, models)
+        if not recording_complete(rec, spec):
+            raise RuntimeError(f"{spec.name}: the recording at {rec} is not complete (cut off part way?): render it first")
+        kept = keep_old_result(out)
+        log(f"{spec.name} {poses}: the result there was made by other code or inputs ({', '.join(why)}): run again "
+            f"(the old result kept in {kept})")
     rec = rec_path(cache, spec, models)
     if not recording_complete(rec, spec):
         raise RuntimeError(f"{spec.name}: the recording at {rec} is not complete (cut off part way?): render it first")
@@ -1825,9 +2007,10 @@ def run_job(cache: Path, spec: SceneSpec, poses: str, compute: str, params: dict
         if time.monotonic() > end:
             raise TimeoutError(f"{spec.name} {poses}: another process runs this job and did not end in time")
         time.sleep(15.0)
-        if not force and (r := read_result(res_path)) is not None:
-            return r  # the job a killed run left behind finished
+        if not force and (r := read_result(res_path)) is not None and not identity_mismatch(r.get("identity"), ident):
+            return r  # the job a killed run left behind finished, as today's code and inputs would run it
     res_path.unlink(missing_ok=True)
+    write_json(out / "identity.json", ident)  # the job puts it in its result
     cmd = [sys.executable, str(Path(__file__).resolve()), "_job", "--cache", str(cache), "--rec", spec.name, "--poses", poses,
            "--out", str(out), "--params", json.dumps(params), "--keep-mesh", "1" if keep_mesh else "0"]
     if chain != "frame":
@@ -1866,9 +2049,25 @@ def run_job(cache: Path, spec: SceneSpec, poses: str, compute: str, params: dict
         write_json(out / "error.json", res)
         return res
     (out / "error.json").unlink(missing_ok=True)
-    res["info"]["job_wall_s"] = round(wall, 1)
+    res.setdefault("info", {})["job_wall_s"] = round(wall, 1)
+    res["identity"] = ident  # what this parent started the job with
     write_json(res_path, res)
     return res
+
+
+def keep_old_result(out: Path) -> Path:
+    """Before a job runs again over a result made by other code or inputs: its ``result.json`` and kept
+    ``proc`` folder are moved (not copied, not deleted) into ``out/old/<time>/``, as history."""
+    keep = out / "old" / time.strftime("%Y%m%d-%H%M%S")
+    k = 1
+    while keep.exists():
+        keep = keep.with_name(f"{keep.name.split('.')[0]}.{k}")
+        k += 1
+    keep.mkdir(parents=True)
+    for name in ("result.json", "proc"):
+        if (out / name).exists():
+            os.replace(out / name, keep / name)
+    return keep
 
 
 def run_dir(cache: Path, compute: str, params: dict, spec: SceneSpec, poses: str, chain: str = "frame") -> Path:
@@ -1897,7 +2096,7 @@ def start_render_lanes(cache: Path, specs: list[SceneSpec], lanes: int, models: 
 
 def run_set(cache: Path, specs: list[SceneSpec], compute: str, params: dict, *, models: Path | None = None,
             poses: tuple[str, ...] = ("tracked", "true"), force: bool = False, render_lanes: int = 0,
-            chain: str = "frame") -> dict[str, dict[str, dict]]:
+            chain: str = "frame", history: bool = False) -> dict[str, dict[str, dict]]:
     """Render (once) and run every recording at both pose sources; ``{rec: {poses: result}}``.
 
     Restartable: run it again after a kill and it carries on where it stopped (complete recordings
@@ -1937,7 +2136,7 @@ def run_set(cache: Path, specs: list[SceneSpec], compute: str, params: dict, *, 
         for ps_ in poses:
             t = time.perf_counter()
             r = run_job(cache, spec, ps_, compute, params, run_dir(cache, compute, params, spec, ps_, chain), models=models,
-                        force=force, chain=chain)
+                        force=force, chain=chain, history=history)
             out.setdefault(spec.name, {})[ps_] = r
             m = r.get("metrics", {})
             did = f"; {stages_text((r.get('info') or {}).get('chain'))}" if chain == "app" else ""
@@ -2150,14 +2349,104 @@ def stages_table(results: dict[str, dict[str, dict]], specs: list[SceneSpec]) ->
 
 
 def load_results(cache: Path, compute: str, params: dict, specs: list[SceneSpec],
-                 chain: str = "frame") -> dict[str, dict[str, dict]]:
+                 chain: str = "frame", models: Path | None = None) -> dict[str, dict[str, dict]]:
+    """What is in the cache, nothing run; a result whose identity is not today's is marked ``history``."""
     out: dict[str, dict[str, dict]] = {}
     for spec in specs:
         for ps_ in ("tracked", "true"):
             r = read_result(run_dir(cache, compute, params, spec, ps_, chain) / "result.json")
             if r is not None:
-                out.setdefault(spec.name, {})[ps_] = r
+                why = identity_mismatch(r.get("identity"), run_identity(cache, spec, ps_, compute, params, chain,
+                                                                        models=models))
+                out.setdefault(spec.name, {})[ps_] = as_history(r, why) if why else r
     return out
+
+
+def history_lines(results: dict[str, dict[str, dict]]) -> list[str]:
+    """A line naming the results that are old (made by other code or inputs, used as they are), if any."""
+    old = [(n, p, r["history"]["why"]) for n, rr in results.items() for p, r in rr.items()
+           if p != "skipped" and isinstance(r, dict) and r.get("history")]
+    if not old:
+        return []
+    return [f"- HISTORY: {len(old)} result(s) were made by other code or inputs and were not run again; their "
+            f"numbers are old: " + "; ".join(f"{n} {p} ({', '.join(w)})" for n, p, w in old), ""]
+
+
+def _identity_summary(results: dict[str, dict[str, dict]]) -> tuple[dict[str, list[str]], int, int]:
+    """For each field shown (engine code, scorecard code, chain, device, libraries), the values the runs have;
+    and how many runs have an identity, of how many."""
+    vals: dict[str, set[str]] = {k: set() for k in ("engine_code", "tool_code", "chain", "device", "libraries")}
+    n = with_id = 0
+    for name, rr in results.items():
+        for p, r in rr.items():
+            if p == "skipped" or not isinstance(r, dict):
+                continue
+            n += 1
+            ident = r.get("identity")
+            if not isinstance(ident, dict):
+                continue
+            with_id += 1
+            for k in vals:
+                v = ident.get(k)
+                vals[k].add(", ".join(f"{a} {b}" for a, b in v.items()) if isinstance(v, dict) else str(v))
+    return {k: sorted(v) for k, v in vals.items()}, with_id, n
+
+
+def _identity_text(vals: dict[str, list[str]], with_id: int, n: int) -> str:
+    if not with_id:
+        return "without identity (saved before 2026-11-24)"
+
+    def one(k: str) -> str:
+        v = vals[k]
+        return v[0] if len(v) == 1 else f"{len(v)} kinds: " + " / ".join(v)
+
+    text = (f"engine code {one('engine_code')}, scorecard code {one('tool_code')}, chain {one('chain')}, "
+            f"device {one('device')}, {one('libraries')}")
+    return text + (f" ({n - with_id} of {n} runs without identity)" if with_id < n else "")
+
+
+def identity_notes(base: dict[str, dict[str, dict]], new: dict[str, dict[str, dict]], base_params: dict | None,
+                   params: dict) -> list[str]:
+    """The compare's lines on what made each side: both identities in brief, then the facts. Things that
+    should be the same (the scorecard's code, the device, the libraries, the Python version, each recording
+    and its calibration) are named when they differ; the engine's code is named either way; the same
+    engine code with the same settings is said as a fact (any difference is then run to run)."""
+    bv, bi, bn = _identity_summary(base)
+    nv, ni, nn = _identity_summary(new)
+    lines = [f"- baseline identity: {_identity_text(bv, bi, bn)}", f"- this run's identity: {_identity_text(nv, ni, nn)}"]
+    if not bi:
+        return lines + ["- NOTE: the baseline has no identity: whether its code, recordings and libraries are this run's "
+                        "cannot be checked."]
+    if not ni:
+        return lines
+    if bv["engine_code"] != nv["engine_code"]:
+        lines.append(f"- the engine's code differs from the baseline's: {' / '.join(bv['engine_code'])} there, "
+                     f"{' / '.join(nv['engine_code'])} here.")
+    elif (base_params or {}) == params:
+        lines.append("- NOTE: the same engine code and the same settings as the baseline.")
+    for k, word in (("tool_code", "the scorecard's own code differs"), ("device", "the compute device differs"),
+                    ("libraries", "the libraries differ")):
+        if bv[k] != nv[k]:
+            lines.append(f"- NOTE: {word} from the baseline's: {' / '.join(bv[k])} there, {' / '.join(nv[k])} here.")
+    pyb = {str((r.get("identity") or {}).get("python")) for rr in base.values() for p, r in rr.items()
+           if p != "skipped" and isinstance(r, dict) and r.get("identity")}
+    pyn = {str((r.get("identity") or {}).get("python")) for rr in new.values() for p, r in rr.items()
+           if p != "skipped" and isinstance(r, dict) and r.get("identity")}
+    if pyb != pyn:
+        lines.append(f"- NOTE: the Python version differs from the baseline's: {' / '.join(sorted(pyb))} there, "
+                     f"{' / '.join(sorted(pyn))} here.")
+    for k in ("recording", "calibration"):
+        diff = []
+        for name, rr in new.items():
+            for p, r in rr.items():
+                b = ((base.get(name) or {}).get(p) or {}).get("identity") if p != "skipped" else None
+                if isinstance(b, dict) and isinstance(r, dict) and isinstance(r.get("identity"), dict) \
+                        and b.get(k) != r["identity"].get(k):
+                    diff.append(f"{name} {p}")
+        if diff:
+            lines.append(f"- NOTE: {IDENTITY_WORDS[k]} differs from the baseline's on {len(diff)} recording(s): "
+                         f"{', '.join(sorted(diff))}.")
+    return lines
 
 
 CHAIN_WORDS = {"frame": "the frame pass only (Follow the camera), then the Default recipe's edits",
@@ -2263,7 +2552,7 @@ def completeness(base: dict[str, dict[str, dict]], new: dict[str, dict[str, dict
     reading is never taken as 0. ``complete``: nothing missing, failed or lost, and at least one run compared.
     ``not_in_baseline``: recordings asked for that the baseline does not have (not compared, not missing)."""
     out: dict[str, Any] = {"complete": False, "expected": [], "compared": 0, "missing": [], "failed": [],
-                           "baseline_failed": [], "lost": [], "skipped": [], "not_in_baseline": []}
+                           "baseline_failed": [], "lost": [], "history": [], "skipped": [], "not_in_baseline": []}
     for s in specs:
         b_all = base.get(s.name) or {}
         n_all = new.get(s.name) or {}
@@ -2286,12 +2575,14 @@ def completeness(base: dict[str, dict[str, dict]], new: dict[str, dict[str, dict
                 out["failed"].append({"rec": s.name, "poses": p, "error": _error_text(nr)})
             else:
                 out["compared"] += 1
+                if nr.get("history"):  # an old result, used as it is (--history): not today's evidence
+                    out["history"].append({"rec": s.name, "poses": p, "why": list(nr["history"].get("why") or [])})
                 bm, nm = br.get("metrics") or {}, nr.get("metrics") or {}
                 lost = [m for m in metric_rows(list(bm)) if _mandatory(m, p) and _num(bm[m]) and not _num(nm.get(m))]
                 if lost:
                     out["lost"].append({"rec": s.name, "poses": p, "metrics": lost})
     out["complete"] = bool(out["compared"]) and not (out["missing"] or out["failed"] or out["baseline_failed"]
-                                                     or out["lost"])
+                                                     or out["lost"] or out["history"])
     return out
 
 
@@ -2310,6 +2601,9 @@ def incomplete_text(check: dict[str, Any] | None) -> str:
     if check["lost"]:
         parts.append("Not measured any more: "
                      + "; ".join(f"{x['rec']} {x['poses']} ({', '.join(x['metrics'])})" for x in check["lost"]) + ".")
+    if check.get("history"):
+        parts.append("Old results (made by other code or inputs, used with --history): "
+                     + ", ".join(f"{x['rec']} {x['poses']}" for x in check["history"]) + ".")
     if not check["expected"]:
         parts.append("The baseline has none of these recordings.")
     if not check["compared"]:
@@ -2471,6 +2765,8 @@ def compare_table(rows: list[dict]) -> list[str]:
             out += [f"| {x['rec']} | {x['poses']} | failed: {x['error']} |" for x in check["failed"]]
             out += [f"| {x['rec']} | {x['poses']} | failed in the baseline: {x['error']} |" for x in check["baseline_failed"]]
             out += [f"| {x['rec']} | {x['poses']} | not measured any more: {', '.join(x['metrics'])} |" for x in check["lost"]]
+            out += [f"| {x['rec']} | {x['poses']} | old result (history); what differs: {', '.join(x['why'])} |"
+                    for x in check.get("history", [])]
         out += ["", incomplete_text(check), ""]
     if check is not None and (check["skipped"] or check["not_in_baseline"]):
         out += ["## Not compared", ""]
@@ -2531,23 +2827,29 @@ def summary_line(rows: list[dict]) -> str:
 # =========================================================================== baselines
 def save_baseline(cache: Path, name: str, compute: str, params: dict, results: dict, specs: list[SceneSpec],
                   chain: str = "frame") -> Path:
-    """A baseline file. The frame pass's has the form it always had; the app chain's also says ``chain`` and, for each
-    run, ``stages`` (what Straighten and Refine with lasers did)."""
+    """A baseline file. Each run keeps its metrics, its error and its ``identity`` (:func:`run_identity`; the
+    file says ``identity_schema``: a baseline without it was saved before 2026-11-24); the app chain's also
+    says ``chain`` and, for each run, ``stages`` (what Straighten and Refine with lasers did). Old results
+    (``history``) are never saved as a baseline."""
     import ohs
 
     p = cache / "baselines" / f"{name}.json"
     if p.exists():
         raise SystemExit(f"a baseline {name!r} is there already ({p}): saved baselines are never overwritten")
+    old = [f"{r} {k}" for r, rr in results.items() for k, v in rr.items() if k != "skipped" and (v or {}).get("history")]
+    if old:
+        raise SystemExit(f"a baseline is never saved from old results (history): {', '.join(old)}")
     p.parent.mkdir(parents=True, exist_ok=True)
 
     def one(v: dict) -> dict:
-        d = {"metrics": v.get("metrics", {}), "error": v.get("error")}
+        d = {"metrics": v.get("metrics", {}), "error": v.get("error"), "identity": v.get("identity")}
         if chain != "frame":
             d["stages"] = (v.get("info") or {}).get("chain")
         return d
 
     body = {"name": name, "saved": _dt.datetime.now().isoformat(timespec="seconds"), "version": ohs.__version__,
             "compute": compute, "params": params, "recordings": [s.name for s in specs],
+            "identity_schema": IDENTITY_SCHEMA,
             "results": {r: {k: one(v) for k, v in rr.items() if k != "skipped"} for r, rr in results.items()}}
     if chain != "frame":
         body["chain"] = chain
@@ -2791,6 +3093,9 @@ def _filters(ap: argparse.ArgumentParser) -> None:
     ap.add_argument("--models", type=Path, default=None, help=f"the door's and carburettor's files (default {MODELS})")
     ap.add_argument("--quiet-pc", action="store_true", help="the PC was quiet: judge timings and memory too")
     ap.add_argument("--force", action="store_true", help="run again even where a result is there")
+    ap.add_argument("--history", action="store_true",
+                    help="use results made by other code or inputs (or before 2026-11-24) as they are, marked as old, "
+                         "instead of running them again; a comparison with them is not judged, a baseline not saved")
     ap.add_argument("--out", type=Path, default=None, help="also write the table to this file")
     ap.add_argument("--render-lanes", dest="render_lanes", type=int, default=0,
                     help="render the recordings still to render in this many background processes while the rest is processed")
@@ -2942,22 +3247,30 @@ def main(argv: list[str] | None = None) -> int:
         if bp.exists():
             raise SystemExit(f"a baseline {a.save!r} is there already ({bp}): choose another name")
     if a.cmd == "table":
-        res = load_results(cache, compute, params, specs, chain)
+        res = load_results(cache, compute, params, specs, chain, models)
     else:
-        res = run_set(cache, specs, compute, params, models=models, force=a.force, render_lanes=a.render_lanes, chain=chain)
+        res = run_set(cache, specs, compute, params, models=models, force=a.force, render_lanes=a.render_lanes, chain=chain,
+                      history=a.history)
     title ={"run": "Scorecard", "table": "Scorecard (from the cache)", "baseline": f"Scorecard, saved as baseline {getattr(a, 'save', '')}",
              "compare": f"Scorecard against baseline {getattr(a, 'name', '')}"}[a.cmd]
     lines = header(cache, compute, params, res, a.quiet_pc, title, chain)
+    lines[-1:-1] = history_lines(res)[:1]  # before the header's closing empty line
     if a.cmd == "baseline":
         missing = [f"{s.name} {p_}" for s in specs if "skipped" not in res.get(s.name, {})
                    for p_ in ("tracked", "true") if (res.get(s.name, {}).get(p_) or {}).get("error") or p_ not in res.get(s.name, {})]
+        old = [f"{s.name} {p_}" for s in specs for p_ in ("tracked", "true")
+               if (res.get(s.name, {}).get(p_) or {}).get("history")]
         if missing:
             lines.append(f"- baseline NOT saved: {len(missing)} job(s) did not finish ({', '.join(missing)}); "
                          "run the same command again to carry on\n")
+        elif old:
+            lines.append(f"- baseline NOT saved: {len(old)} result(s) are old (made by other code or inputs: "
+                         f"{', '.join(old)}); run the same command again without --history\n")
         else:
             p = save_baseline(cache, a.save, compute, params, res, specs, chain)
             lines.append(f"- baseline saved: {p}\n")
-        fps = sorted({(r.get("info") or {}).get("engine_code") or "before fingerprints" for rr in res.values()
+        fps = sorted({(r.get("identity") or {}).get("engine_code") or (r.get("info") or {}).get("engine_code")
+                      or "before fingerprints" for rr in res.values()
                       for k, r in rr.items() if k != "skipped" and isinstance(r, dict) and not r.get("error")})
         if len(fps) > 1:
             lines.append(f"- NOTE: the results came from {len(fps)} versions of the engine's code: {', '.join(fps)}\n")
@@ -2970,6 +3283,8 @@ def main(argv: list[str] | None = None) -> int:
         if bl.get("chain", "frame") != chain:
             lines.append(f"- NOTE: the baseline ran the {bl.get('chain', 'frame')} chain, this the {chain} chain: the "
                          f"difference is what the chain adds")
+        lines += identity_notes({s.name: bl["results"][s.name] for s in specs if s.name in bl["results"]}, res,
+                                bl.get("params"), params)
         lines.append(f"- {len(specs)} recordings, {time.perf_counter() - t0:.0f} s")
         lines.append("")
         if chain == "app":

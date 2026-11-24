@@ -388,7 +388,9 @@ def test_the_app_chain_carries_on_after_a_kill(tmp_path, monkeypatch):
     # a result
     done = sc.run_dir(tmp_path, "gpu", {}, TINY, "tracked", "app")
     done.mkdir(parents=True)
-    sc.write_json(done / "result.json", {"metrics": {"part_med": 0.3}, "info": {}})
+    # a finished run's result carries its identity (ENGINE_PLAN R2-2): without one it would be run again
+    sc.write_json(done / "result.json", {"metrics": {"part_med": 0.3}, "info": {},
+                                         "identity": sc.run_identity(tmp_path, TINY, "tracked", "gpu", {}, "app")})
     cut = sc.run_dir(tmp_path, "gpu", {}, TINY, "true", "app")
     (cut / "proc" / "stages" / "track").mkdir(parents=True)
     (cut / "running").write_text("999999999", encoding="utf-8")

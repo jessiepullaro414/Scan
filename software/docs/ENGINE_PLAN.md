@@ -1399,9 +1399,11 @@ guard test seen failing first:
   sentence. This sentence decides adoptions (E-D1). Mended 2026-11-24: an
   incomplete comparison says so, names what is missing and exits with status 1
   (`VALIDATION.md`, "The comparison checks its evidence first").
-- [ ] **R2-2 (F2): a cached scorecard result can outlive an engine change.** `run_job` returns
+- [x] **R2-2 (F2): a cached scorecard result can outlive an engine change.** `run_job` returns
   an existing `result.json` unchecked; the engine fingerprint leaves out `ohs/server`, which
-  the app chain runs through; a saved baseline keeps no fingerprint. After R2-1.
+  the app chain runs through; a saved baseline keeps no fingerprint. Mended 2026-11-24:
+  every result and baseline carries its run's identity and a cached result is reused only
+  when it matches (`VALIDATION.md`). The first scorecard command after this reruns its jobs.
 - [x] **R2-3 (F3): the tracker's ICP weights its priors with the residual sigma twice**
   (`ohs/track/markerless.py`, `_icp`: the priors' precision times sigma squared and the data
   term divided by it). Hidden at the default of 1 mm; wrong for any other value. Mended

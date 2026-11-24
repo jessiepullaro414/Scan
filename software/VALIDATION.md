@@ -3924,6 +3924,25 @@ carburettor's model files) is named under "Not compared" and is not counted as m
 reads exactly as before. The saved baselines compared with one another came out complete (72 runs, nothing
 lost), so the check raises no false alarm on them. Not done: no scorecard run on recordings was made for this.
 
+### Every result carries the identity of the run that made it (2026-11-24, from the second outside review)
+
+A cached scorecard result was used again without a check that today's code and recording had made it; the
+engine's fingerprint left out `ohs/server`, through which both chains run; a saved baseline kept no
+fingerprint. Guard tests showed all three (16 of 17 failing before the change,
+`tests/test_tools_scorecard_identity.py`). Now every result and every baseline entry holds the run's identity:
+the engine's code (every Python file of `ohs`, the server's included), the scorecard's own job and scoring
+code, the recording (its files by name and size, the small ones by content), the calibration, the settings,
+the chain, the pose source, the libraries' versions and the device. A cached result is used again only when
+its identity is today's; otherwise the job runs again and the old result and mesh are moved into an `old`
+folder beside it, never deleted. With `--history` old results are shown as they are, marked as old: a
+comparison built on them is not judged and no baseline is saved from them. A comparison names both sides'
+identities and says where they differ. Results and baselines from before this date have no identity: the
+five saved baselines still load and compare, named "without identity (saved before 2026-11-24)"; the cache
+of earlier runs is rerun when a command reaches it, or used as history.
+The cost: any edit to a Python file of the engine or the server makes the next scorecard command run its jobs
+again. Not done: no real job has run with an identity yet (no recording was processed for this); the graphics
+card's name in the identity was not exercised.
+
 ## Small defects from the second outside review (2026-11-24)
 
 Each was checked against the code, shown by a guard test that failed first, and mended by itself
