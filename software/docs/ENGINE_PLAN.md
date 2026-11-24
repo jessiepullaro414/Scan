@@ -111,6 +111,17 @@ The rules of `FEATURE_PLAN.md` and `MAINTENANCE_PLAN.md` hold. In short:
   The old "union" is still reported, as a ceiling, and is no gate. Given up: the promise for
   every single place (it fails today on 2 to 7.5 % of the good surface) and the stronger
   headline. Today's merge passes the new rule on 2 of X7's 5 pairs.
+- **E-D5: three choices after the night of 2026-11-23** (asked and decided 2026-11-24; the
+  owner took the reviewer's recommendation on each).
+  1. Long parts (X8): the never-worse check's limit is tested on fresh seeds first (0.85
+     against 0.90, seeds 3 to 5), then the owner decides on switching `straighten_tags` on.
+  2. Thin walls (X16): the thickness read from the raw frames goes into the app now, worded
+     one-sided ("at most this thick; up to about 1 mm thinner cannot be ruled out"). The
+     owner: "We do need it to be correct but we can do your recommendations for now": a
+     stopgap; a thin wall's true thickness from a scan (X17) stays a need.
+  3. Merge (X19): `align_hold_tags` goes on by default after one more rendered case passes,
+     a part turned over with tags on the part itself; with it the Align page's words, the
+     guide and a trial in the running app.
 
 ## The error budget today
 
@@ -878,7 +889,8 @@ and thin parts".
     on three of the five scans where the tags act. (3) The fit given the tags' known spacing
     (a printed strip; X22): a distance term in `ohs/track/tag_anchors.py`, about 40 lines
     and tests; it would also give the scale an outside reference.
-  - **With the owner:** whether to switch the setting on as it is. On five of six tagged
+  - **Decided 2026-11-24 (E-D5): fresh seeds first** (3 to 5, the limit at 0.85 and at 0.90;
+    running), then the owner decides on switching the setting on. On five of six tagged
     scans it brings the path from 0.18 to 0.47 % down to 0.003 to 0.060 %, on the sixth it
     changes nothing, and a scan without tags is the same bit for bit; by the rule as
     written it is a miss.
@@ -1021,8 +1033,9 @@ E-D3 item 2. `tools/wall_thickness_study.py` (a study tool; nothing in the engin
   twice the ± covers the truth on 9 of 14 walls at true poses and on 1 of 15 tracked. So the
   reading cannot be shown as "t ± s"; honest wording is one-sided: "at most this thick; the
   scan cannot rule out up to about 1 mm thinner".
-- **With the owner:** whether this goes into the app's measuring as it is (a better number
-  with a one-sided statement), or waits for X17.
+- **Decided 2026-11-24 (E-D5): into the app's measuring now,** with the one-sided statement;
+  not offered for scans made in Markers mode (there the sides come out too close). Being
+  built.
 - **Stop rule for the app's version: adopted only if** on the scorecard's walls and sheet it
   is nearer the truth than the mesh's reading on every wall, refuses where one side is not
   seen, and never reads a wall thinner than the truth by more than 0.1 mm.
@@ -1209,9 +1222,9 @@ E-D4 (4). Design in `D:\OpenHandScan-work\scratch\ed3\tag_hold_design.md`; first
   fails (1) on all three); the pair sharing 96 % is the same with the hold on and off; a
   tag moved 2 mm was left out and the pose held from the other seven. A sheet pair
   (reported) passes too.
-- **With the owner: switch it on?** By E-D1 it is better on every pair it acts on and the
-  same on every pair it does not (no tags, or 0.70 shared or more). Open before or after
-  that: a part turned over with tags on the part itself, rendered (made-up clouds only so
+- **Decided 2026-11-24 (E-D5): on by default after the turned-over case passes** (running).
+  By E-D1 it is better on every pair it acts on and the same on every pair it does not (no
+  tags, or 0.70 shared or more). Open before that: a part turned over with tags on the part itself, rendered (made-up clouds only so
   far); more parts than one bracket and one sheet; the Align page's words for a held pose
   (UX_PLAN) and the guide; the setting tried in the running app.
 - **Stop rule: adopted only if**, with tags rendered into both scans (not emulated), the held
