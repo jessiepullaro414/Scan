@@ -255,3 +255,90 @@ def test_centres_far_apart_refuse_or_leave_the_position_unsure():
     rim = H.combine_model([fr(10.0 + 0.8 * x, 2.0 * x) for x in xs], [np.eye(4)] * 20, centre_rule=True)
     assert "refused" in rim and "diameter" in rim["refused"]
     assert "refused" not in H.combine_model([fr(10.0, 4.0 * x) for x in xs], [np.eye(4)] * 20)  # step 2 only warned
+
+
+# --------------------------------------------------------------------------- round 4: the gated reading's refusals
+def _plate_mesh_vertices(holes, half=40.0, step=0.5, z=0.0):
+    """Vertices of a flat face (the plane z) with round holes ``(x, y, r)`` cut out, as a fused mesh would have them."""
+    g = np.arange(-half, half + 1e-9, step)
+    X, Y = np.meshgrid(g, g)
+    keep = np.ones(X.shape, bool)
+    for hx, hy, r in holes:
+        keep &= (X - hx) ** 2 + (Y - hy) ** 2 > r * r
+    return np.column_stack([X[keep], Y[keep], np.full(keep.sum(), z)])
+
+
+def test_a_reading_of_another_hole_than_the_clicked_one_is_refused():
+    V = _plate_mesh_vertices([(0.0, 0.0, 3.0), (25.0, 0.0, 12.5)])
+    click = np.array([-4.5, 0.0, 0.0])  # 1.5 mm outside the Ø6's rim, on the side away from the Ø25
+    hole = H.mesh_hole_at(V, click)
+    assert not isinstance(hole, str), hole
+    assert np.linalg.norm(hole["centre"][:2]) < 1.0  # the mesh's hole at the click is the Ø6 (to a 1 mm cell)
+    assert H.mesh_check(np.array([0.05, 0.0, 0.0]), 3.0, click, hole) is None  # the Ø6 read: kept
+    why = H.mesh_check(np.array([25.0, 0.0, 0.0]), 12.5, click, hole)  # the Ø25 read from this click: refused
+    assert why is not None and ("another hole" in why or "not the one" in why)
+    # a Ø25 read right at the click's place but with its centre on the Ø6's side is not the scan's hole either
+    why = H.mesh_check(np.array([9.0, 0.0, 0.0]), 12.5, click, hole)
+    assert why is not None and "not the one" in why
+    assert "no hole" in H.mesh_hole_at(_plate_mesh_vertices([]), click)
+
+
+def test_a_near_background_refuses_the_dots_on_reading_and_a_far_one_does_not():
+    rng = np.random.default_rng(0)
+    face = np.column_stack([rng.uniform(-30, 30, 4000), rng.uniform(-30, 30, 4000), np.full(4000, 250.0)])
+    face = face[np.hypot(face[:, 0], face[:, 1]) > 5.0]
+    o, n = np.array([0.0, 0.0, 250.0]), np.array([0.0, 0.0, -1.0])  # the face's normal points at the camera
+    inside = np.column_stack([rng.uniform(-3.5, 3.5, 400), rng.uniform(-3.5, 3.5, 400), np.zeros(400)])
+    near = np.vstack([face, inside + [0.0, 0.0, 261.0]])  # a floor 10 mm under a 1 mm plate
+    far = np.vstack([face, inside + [0.0, 0.0, 250.4]])  # the matcher's fill at the face, nothing below
+    cnt, share = H.background_stats(near, o, n, o, 5.0)
+    assert cnt >= 30 and share > 0.9
+    cnt, share = H.background_stats(far, o, n, o, 5.0)
+    assert cnt >= 30 and share == 0.0
+
+    def fr(share, cnt=200):
+        m = H.ModelReading(True, "", np.zeros(3), 10.0, float("nan"), 330.0, 50, 0, 0.0, np.zeros(2))
+        m.bg_n, m.bg_near, m.bg_depth = cnt, share, 11.0
+        return m
+
+    assert "below the face" in H.background_refusal([fr(0.8)] * 10)
+    assert H.background_refusal([fr(0.0)] * 10) is None
+    assert "too little depth" in H.background_refusal([fr(0.0, cnt=5)] * 10)
+
+
+# --------------------------------------------------------------------------- round 5
+def _sparse_plate_mesh(holes, half=40.0, step=1.2, seed=0):
+    """A fused-looking mesh: vertices about ``step`` apart (jittered), triangulated, round holes ``(x, y, r)`` cut out."""
+    from scipy.spatial import Delaunay
+
+    rng = np.random.default_rng(seed)
+    g = np.arange(-half, half + 1e-9, step)
+    X, Y = np.meshgrid(g, g)
+    P = np.column_stack([X.ravel(), Y.ravel()]) + rng.uniform(-0.3 * step, 0.3 * step, (X.size, 2))
+    F = Delaunay(P).simplices
+    c = P[F].mean(axis=1)
+    keep = np.ones(len(F), bool)
+    for hx, hy, r in holes:
+        keep &= np.hypot(c[:, 0] - hx, c[:, 1] - hy) > r
+    return np.column_stack([P, np.zeros(len(P))]), F[keep]
+
+
+def test_the_mesh_finder_finds_a_hole_in_a_sparse_mesh_from_its_triangles():
+    V, F = _sparse_plate_mesh([(0.0, 0.0, 5.0), (25.0, 0.0, 3.0)])
+    click = np.array([-6.5, 0.0, 0.0])
+    hole = H.mesh_hole_at(V, click, F=F)
+    assert not isinstance(hole, str), hole
+    assert np.linalg.norm(hole["centre"][:2]) < 1.0
+    assert H.mesh_check(np.array([0.1, 0.0, 0.0]), 5.0, click, hole) is None
+
+
+def test_the_near_far_gate_counts_the_depth_the_plane_leaves_out():
+    K = np.array([[720.0, 0.0, 640.0], [0.0, 720.0, 400.0], [0.0, 0.0, 1.0]])
+    z = np.full((800, 1280), 250.0, np.float32)
+    s = np.full((800, 1280), 0.5, np.float32)
+    s[380:420, 620:660] = 40.0  # next to a gap the matcher's sigma is large: the plane's filter drops these
+    S_ = H.Source(None, K, {0: np.eye(4)}, None, lambda i: (z, s), [0], False, [], {})
+    near = np.array([0.0, 0.0, 250.0])
+    a = S_.points(0, near, np.eye(4))
+    b = S_.points(0, near, np.eye(4), all_valid=True)
+    assert len(b) - len(a) == 40 * 40

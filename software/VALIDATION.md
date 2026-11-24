@@ -6148,6 +6148,49 @@ square to the face only; a bright background is refused, never read; the reading
 processor. Dots-off frames need hardware the scanner does not have: the board switches the projector by a
 serial command, not in step with the cameras.
 
+### Rounds 4 and 5: a check against the mesh and a gate for near backgrounds (2026-11-24): neither holds yet
+
+Two guards were added so that the dots-on reading could be offered where it is good: a check that the rim read
+is the mesh's own hole or dent at the click, and a gate that answers with the dots on only when nothing lies
+close below the face inside the hole. Rules as before, and two more, fixed beforehand: no answer anywhere that is
+a hole other than the clicked one; and, so that a guard refusing everything cannot pass, at least 90 % of the
+Ø25 and Ø10 holes over a far background answered at true poses ("useful"). The click is now made where the scan's
+own poses put the rim, on the mesh, as a user's is. Rows and summaries: `holes_looks\summary4_cpu.txt`,
+`summary5_cpu.txt`, `summary5_gpu.txt`, `table5.txt`.
+
+**The wrong-hole answer of round 3, traced** (`trace_wrong_hole.txt`): that scan's tracking on the processor's
+path had slid by 95 mm in the median; from frame 92 to 172 the Ø6's true position, put into each frame with the
+tracked pose, landed 82 to 87 mm away, on the Ø25's rim (the holes are 75 mm apart), and those frames read the
+Ø25 cleanly and agreed. The study had clicked at the true position on a scan that was elsewhere; a user clicks
+on the mesh.
+
+| | round 4 | round 5 (the mesh's triangles drawn into the finder's cells; every depth point counted in the gate) |
+|---|---|---|
+| dots on, gated: verdict | alive, not useful | **dropped**: two Ø10 holes 10 mm above a floor pass the gate and read +0.35 and +0.32 mm |
+| dots on: far-background Ø25 and Ø10 answered at true poses | 10 of 23 | the panel answers now; 34 holes answered in all, 31 within 0.2 mm |
+| dots off with the mesh check: verdict | alive, not useful | alive, not useful |
+| dots off: far-background Ø25 and Ø10 answered at true poses | 19 of 23 | 19 of 23 |
+| dots off: holes answered at true poses, all within 0.2 mm | 44 (43 within 0.1) | 43 (42 within 0.1) |
+| a hole other than the clicked one named | none | none |
+
+- **Every answer the dots-off arm gives is right,** and twice the ± covers every answered click in both arms.
+- **The mesh check refuses what it should pass.** Round 5, dots off, the processor's part: 102 refusals, none of
+  a reading that was wrong. A small hole that the mesh closed is only a shallow dent in it (Ø6 on a true-pose
+  mesh: 0.5 mm deep at the centre), which the finder does not take for a hole. On the round-3 kind of click it
+  refuses all three wrong-hole readings.
+- **The gate does not keep the near floors out.** Where it refused (36 times in round 5) the reading would have
+  been within 0.3 mm every time, and the two readings that drop the arm passed it.
+- **The two readings that drop the arm carry a wide ± of their own** (0.26 to 0.27 mm and 0.21 mm), as round 3's
+  did (0.41 and 0.50), where the good readings carry 0.10 to 0.18. Not a rule yet: seen on the rows, to be tested
+  on scans not looked at.
+- **Study plates tracked on the graphics card** (15 scans, the app's chain): the plates 10 mm above the floor
+  track within 0.46 to 0.67 mm in the median; the plates 120 mm up and over the bright floor mostly lose
+  tracking (1.1 to 636 mm), as one of the scorecard's did. Both arms alive there, few holes answered: dots off 18
+  (all within 0.2 mm), dots on 9 (all within 0.2).
+
+Not built or run: a scene with a second hole a few millimetres beside the clicked one, the case the check
+against the mesh exists for; a rule on the reading's own ±; the blurred-step edge model.
+
 ## What the metrics mean
 
 - **Stereo errors** compare the estimated raw intrinsics/extrinsics (`K1`, `K2`, `R`, `T`) with

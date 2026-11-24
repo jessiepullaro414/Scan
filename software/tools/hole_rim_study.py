@@ -762,6 +762,9 @@ class ModelReading:
     n_exit: int = 0
     cams_mm: float = float("nan")  # the two cameras' top-rim radii apart
     centre_xy: np.ndarray | None = None  # in the plane
+    bg_n: int = 0  # round 4: the frame's depth points inside the read circle ...
+    bg_near: float = float("nan")  # ... the share of them 6 to 50 mm below the face ...
+    bg_depth: float = float("nan")  # ... and their median depth below it (mm)
 
 
 def _fit_from(xy, cam, Cip, h, c0, R0, t_start, t_known, top_ok):
@@ -914,7 +917,8 @@ def read_frame_model(imgs, cams, X: np.ndarray, click_C: np.ndarray, t_known: fl
     return read_frame_models(imgs, cams, X, click_C, [t_known], cfg)[0]
 
 
-def read_frame_models(imgs, cams, X: np.ndarray, click_C: np.ndarray, t_list: list, cfg: Step3 = STEP2) -> list:
+def read_frame_models(imgs, cams, X: np.ndarray, click_C: np.ndarray, t_list: list, cfg: Step3 = STEP2,
+                      X_bg: np.ndarray | None = None) -> list:
     """One frame read with the model of the hole for each ``t`` of ``t_list`` (``None``: left free): plane and seed
     (:func:`frame_plane_seed`), the hidden-half circle as the start, both cameras' candidate steps, then
     :func:`fit_hole_model` once for each. The image work is done once."""
@@ -944,6 +948,8 @@ def read_frame_models(imgs, cams, X: np.ndarray, click_C: np.ndarray, t_list: li
             out.append(ModelReading(False, m))
             continue
         m.centre_C = pl.world(m.centre_xy[None])[0]
+        m.bg_n, m.bg_near, m.bg_depth = background_stats(X if X_bg is None else X_bg, pl.o, pl.n, m.centre_C,
+                                                         m.d / 2.0, depth=True)
         out.append(m)
     return out
 
@@ -1199,10 +1205,12 @@ class Source:
             return interp_pose(self.poses[i - 1], self.poses[i + 1])
         return None
 
-    def points(self, i: int, near_C: np.ndarray, T_i: np.ndarray) -> np.ndarray:
+    def points(self, i: int, near_C: np.ndarray, T_i: np.ndarray, all_valid: bool = False) -> np.ndarray:
+        """Depth points round ``near_C`` (frame C of frame ``i``); with ``all_valid`` (round 5's near-or-far gate)
+        every valid depth pixel, without the plane's sigma filter."""
         if not self.off:
             z, s = self._depth(i)
-            return depth_points(z, s, self.K_rect, near_C) if z is not None else np.zeros((0, 3))
+            return depth_points(z, None if all_valid else s, self.K_rect, near_C) if z is not None else np.zeros((0, 3))
         out = []
         for j in (i - 1, i + 1):
             Tj = self.poses.get(j)
@@ -1211,12 +1219,19 @@ class Source:
                 continue
             M = np.linalg.solve(T_i, Tj)  # frame C_j -> frame C_i
             near_j = np.linalg.solve(Tj, T_i @ np.r_[near_C, 1.0])[:3]
-            X = depth_points(z, s, self.K_rect, near_j)
+            X = depth_points(z, None if all_valid else s, self.K_rect, near_j)
             out.append(X @ M[:3, :3].T + M[:3, 3])
         return np.vstack(out) if out else np.zeros((0, 3))
 
     def images(self, i: int):
         return self._images(i)
+
+    def release(self) -> None:
+        """Drop the frames and depth kept in memory (round 5: round 4 kept every source's at once, 12.8 GB)."""
+        fr = getattr(self, "frames", None)
+        if fr is not None:
+            fr._img.clear()
+            fr._dep.clear()
 
 
 def _png_pair(path: Path):
@@ -1245,8 +1260,10 @@ def scorecard_source(cache: Path, name: str, src: str, settings: str, off: bool,
         except FileNotFoundError:
             return None, None
 
-    return Source(stereo_cameras(cal), np.asarray(cal["P1"], float)[:3, :3], poses, imgs, depth, reads, off,
-                  holes_of(rec), info)
+    S_ = Source(stereo_cameras(cal), np.asarray(cal["P1"], float)[:3, :3], poses, imgs, depth, reads, off,
+                holes_of(rec), info)
+    S_.frames = fr
+    return S_
 
 
 def study_source(d: Path, off: bool) -> Source:
@@ -1323,15 +1340,17 @@ def umeyama_rigid(A: np.ndarray, B: np.ndarray) -> np.ndarray:
     return T
 
 
-def tracked_in_world(traj_csv: Path, gt: dict[int, np.ndarray]) -> dict[int, np.ndarray]:
+def tracked_in_world(traj_csv: Path, gt: dict[int, np.ndarray], with_motion: bool = False):
     """A trajectory from ``process_recording`` (in its first camera's frame) put into the world by the rigid motion
-    that best fits its camera positions to the true ones (the path's own error stays in it)."""
+    that best fits its camera positions to the true ones (the path's own error stays in it); with ``with_motion``
+    also that motion (the scan's mesh moves with it)."""
     from ohs.track.posegraph import read_trajectory
 
     tr = {int(i): np.asarray(T, float) for i, _, ok, T in read_trajectory(traj_csv) if ok}
     common = [i for i in tr if i in gt]
     M = umeyama_rigid(np.array([tr[i][:3, 3] for i in common]), np.array([gt[i][:3, 3] for i in common]))
-    return {i: M @ T for i, T in tr.items()}
+    out = {i: M @ T for i, T in tr.items()}
+    return (out, M) if with_motion else out
 
 
 def path_errors(poses: dict[int, np.ndarray], gt: dict[int, np.ndarray]) -> dict:
@@ -1501,6 +1520,363 @@ def run3(sources: list[tuple[str, str, str, Source]], out: Path, hold: Path | No
 HP_T_DEFAULT = 3.0  # the scorecard's hole plates are 3 mm thick
 
 
+# =========================================================================== round 4: "dots on, gated"
+MESH_DISK_MM = 30.0  # the mesh's hole is looked for among the vertices within this of the click ...
+MESH_CELL_MM = 1.0  # ... on cells this size in the face's plane ...
+MESH_FACE_MM = 0.3  # ... a cell is face when a vertex lies this close to the face's surface ...
+MESH_REACH_MM = 10.0  # ... and the hole must come this close to the click (the Hole tool's reach)
+RIM_CLICK_MM = 5.0  # the read rim must pass this close to the click
+CENTRE_MATCH_MM = 2.0  # the read centre must lie within max(this, CENTRE_MATCH_R x R) of the mesh hole's centre
+CENTRE_MATCH_R = 0.3
+BG_BELOW_MM = (6.0, 50.0)  # a near background: depth points this far below the face inside the hole ...
+BG_RADIUS = 0.8  # ... within this share of the read radius of its axis ...
+BG_NEAR_SHARE = 0.15  # ... making up at least this share of the points inside (median over frames)
+BG_MIN_POINTS = 30  # fewer depth points inside the hole than this (median over frames): unknown
+
+
+def background_stats(X: np.ndarray, o: np.ndarray, n: np.ndarray, centre: np.ndarray, R: float, depth: bool = False):
+    """Depth points ``X`` (frame C) inside a read hole (within :data:`BG_RADIUS` R of the axis through ``centre``
+    along the face's normal ``n``, which points at the camera): ``(count, share 6 to 50 mm below the face)``, and
+    with ``depth`` the median depth below the face of that share (NaN when none). ``o`` is a point of the face."""
+    if not len(X):
+        return (0, float("nan"), float("nan")) if depth else (0, float("nan"))
+    d = X - centre
+    radial = np.linalg.norm(d - np.outer(d @ n, n), axis=1)
+    inside = radial < BG_RADIUS * R
+    below = (o - X[inside]) @ n
+    near = (below >= BG_BELOW_MM[0]) & (below <= BG_BELOW_MM[1])
+    cnt = int(inside.sum())
+    share = float(near.mean()) if cnt else float("nan")
+    if depth:
+        return cnt, share, float(np.median(below[near])) if near.any() else float("nan")
+    return cnt, share
+
+
+def background_refusal(frames: list) -> str | None:
+    """The near-or-far gate of the dots-on reading over its answered frames (NOTES.md, round 4): ``None`` when the
+    background is far, else the refusal's words."""
+    ok = [f for f in frames if f.ok]
+    if not ok:
+        return None
+    if float(np.median([f.bg_n for f in ok])) < BG_MIN_POINTS:
+        return "too little depth through this hole to tell what lies behind it"
+    share = float(np.nanmedian([f.bg_near for f in ok])) if any(np.isfinite(f.bg_near) for f in ok) else 0.0
+    if share >= BG_NEAR_SHARE:
+        dd = [f.bg_depth for f in ok if np.isfinite(f.bg_depth)]
+        return (f"a surface lies about {np.median(dd) if dd else BG_BELOW_MM[0]:.0f} mm below the face inside this hole: "
+                "with the projector's dots on, its dots and their shadows can look like the rim")
+    return None
+
+
+def _quadric_surface(P: np.ndarray):
+    """A trimmed plane through ``P`` and a trimmed quadric height over it: ``(c, u, v, n, height(xy))``."""
+    fit = _trimmed_plane(P)
+    if fit is None:
+        return None
+    c, n = fit
+    u = np.cross(n, [0.0, 1.0, 0.0] if abs(n[1]) < 0.9 else [1.0, 0.0, 0.0])
+    u /= np.linalg.norm(u)
+    v = np.cross(n, u)
+    d = P - c
+    x, y, z = d @ u, d @ v, d @ n
+
+    def basis(x, y):
+        return np.column_stack([np.ones_like(x), x, y, x * x, x * y, y * y])
+
+    keep = np.abs(z) < 2.0
+    coef = np.zeros(6)
+    for _ in range(4):
+        if keep.sum() < 30:
+            return None
+        coef, *_ = np.linalg.lstsq(basis(x[keep], y[keep]), z[keep], rcond=None)
+        r = z - basis(x, y) @ coef
+        mad = 1.4826 * float(np.median(np.abs(r[keep] - np.median(r[keep]))))
+        keep = np.abs(r) < max(3.0 * mad, 0.1)
+    return c, u, v, n, (lambda xx, yy: basis(xx, yy) @ coef)
+
+
+def mesh_hole_at(V: np.ndarray, click: np.ndarray, tree=None, F: np.ndarray | None = None) -> dict | str:
+    """The scan's own hole at a click, from the mesh's vertices ``V`` alone (NOTES.md, round 4): the face round the
+    click as a trimmed quadric surface, cells of :data:`MESH_CELL_MM` that hold no face (empty, or every vertex
+    :data:`MESH_FACE_MM` or more below the face), and of their closed patches the one nearest the click within
+    :data:`MESH_REACH_MM`. ``{"centre", "n", "radius", "reach"}`` (centre and normal in ``V``'s frame; the radius
+    from the patch's area), or the reason there is none.
+
+    With the triangles ``F`` (round 5) the cells are tested on the triangles drawn into them (10 points a triangle:
+    corners, thirds of the edges, centroid) instead of on the vertices alone: a fused mesh's vertices lie about a
+    voxel apart, so on 1 mm cells the face had empty cells, and specks of them joined a hole to the disk's edge."""
+    from scipy import ndimage
+    from scipy.spatial import cKDTree
+
+    tree = tree if tree is not None else cKDTree(V)
+    idx = tree.query_ball_point(click, MESH_DISK_MM)
+    P = V[np.asarray(idx, int)]
+    if len(P) < 100:
+        return "the scan shows no hole within 10 mm of the click (too little mesh round it)"
+    surf = _quadric_surface(P)
+    if surf is None:
+        return "the scan shows no hole within 10 mm of the click (no face round it)"
+    c, u, v, n, height = surf
+    if F is not None:
+        near = np.zeros(len(V), bool)
+        near[np.asarray(idx, int)] = True
+        T3 = V[F[near[F].any(axis=1)]]  # triangles with a corner within the disk
+        W = np.array([[1, 0, 0], [0, 1, 0], [0, 0, 1], [2, 1, 0], [1, 2, 0], [0, 2, 1], [0, 1, 2], [1, 0, 2],
+                      [2, 0, 1], [1, 1, 1]], float)
+        W /= W.sum(axis=1, keepdims=True)
+        P = np.einsum("kj,tjd->tkd", W, T3).reshape(-1, 3)
+    d = P - c
+    x, y = d @ u, d @ v
+    hgt = d @ n - height(x, y)
+    k = (click - c)
+    cx, cy = k @ u, k @ v
+    R = MESH_DISK_MM
+    nc = int(math.ceil(2 * R / MESH_CELL_MM))
+    ix = np.floor((x - (cx - R)) / MESH_CELL_MM).astype(int)
+    iy = np.floor((y - (cy - R)) / MESH_CELL_MM).astype(int)
+    ok = (ix >= 0) & (ix < nc) & (iy >= 0) & (iy < nc)
+    face = np.zeros((nc, nc), bool)
+    above = np.zeros((nc, nc), bool)
+    on = ok & (np.abs(hgt) <= MESH_FACE_MM)
+    face[iy[on], ix[on]] = True
+    up = ok & (hgt > MESH_FACE_MM)
+    above[iy[up], ix[up]] = True
+    face = ndimage.binary_dilation(face, iterations=1)
+    gx = cx - R + (np.arange(nc) + 0.5) * MESH_CELL_MM
+    GX, GY = np.meshgrid(gx, cy - R + (np.arange(nc) + 0.5) * MESH_CELL_MM)
+    rr = np.hypot(GX - cx, GY - cy)
+    disk = rr <= R - MESH_CELL_MM
+    hole = disk & ~face & ~above
+    lab, nl = ndimage.label(hole)
+    edge = disk & (rr > R - 2.5 * MESH_CELL_MM)
+    on_edge = set(np.unique(lab[edge & hole]).tolist())
+    best = None
+    for j in range(1, nl + 1):
+        m = lab == j
+        area = m.sum() * MESH_CELL_MM ** 2
+        if j in on_edge or area < math.pi * 1.0 ** 2:
+            continue
+        reach = float(rr[m].min())
+        if reach <= MESH_REACH_MM and (best is None or reach < best[0]):
+            best = (reach, m, area)
+    if best is None:
+        return "the scan shows no hole within 10 mm of the click"
+    m = best[1]
+    hx, hy = float(GX[m].mean()), float(GY[m].mean())
+    centre = c + hx * u + hy * v + float(height(np.array([hx]), np.array([hy]))[0]) * n
+    return {"centre": centre, "n": n, "radius": math.sqrt(best[2] / math.pi), "reach": best[0]}
+
+
+def mesh_check(centre: np.ndarray, R: float, click: np.ndarray, hole: dict | str) -> str | None:
+    """The read circle (``centre``, radius ``R``, in the mesh's frame) against the scan's own hole at the click
+    (:func:`mesh_hole_at`): ``None`` when it is that hole, else the refusal's words (NOTES.md, round 4)."""
+    if isinstance(hole, str):
+        return hole
+    n = hole["n"]
+
+    def flat(a):
+        return a - (a @ n) * n
+
+    rim = abs(float(np.linalg.norm(flat(click - centre))) - R)
+    if rim > RIM_CLICK_MM:
+        return f"the rim read in the images is {rim:.0f} mm from the click: it is another hole's"
+    off = float(np.linalg.norm(flat(centre - hole["centre"])))
+    if off > max(CENTRE_MATCH_MM, CENTRE_MATCH_R * R):
+        return (f"the hole read in the images is not the one the scan shows at the click "
+                f"(their centres are {off:.1f} mm apart)")
+    return None
+
+
+def load_mesh(path: Path, T: np.ndarray | None = None) -> tuple[np.ndarray, np.ndarray]:
+    """A mesh's vertices (moved by ``T``) and triangles."""
+    import open3d as o3d
+
+    m = o3d.io.read_triangle_mesh(str(path))
+    V = np.asarray(m.vertices, float)
+    return (V if T is None else V @ T[:3, :3].T + T[:3, 3]), np.asarray(m.triangles, np.int64)
+
+
+def load_vertices(path: Path, T: np.ndarray | None = None) -> np.ndarray:
+    import open3d as o3d
+
+    V = np.asarray(o3d.io.read_triangle_mesh(str(path)).vertices, float)
+    return V if T is None else V @ T[:3, :3].T + T[:3, 3]
+
+
+def mesh_click(S_: Source, click_true: np.ndarray, gt: dict, tree, V) -> np.ndarray:
+    """Where the scan's own poses put the true click (the median over the frames that see it of
+    T_scan_i · T_true_i^-1 · click), snapped to the nearest mesh vertex: where a user would click on this mesh."""
+    qs = []
+    for i in S_.reads:
+        T, Tt = S_.pose(i), gt.get(i)
+        if T is None or Tt is None:
+            continue
+        q = Tt[:3, :3].T @ (click_true - Tt[:3, 3])
+        uv, front = S_.cams[0].project(q[None])
+        if front[0] and 60 <= uv[0, 0] <= 1220 and 60 <= uv[0, 1] <= 740:
+            qs.append(T[:3, :3] @ q + T[:3, 3])
+    p = np.median(np.array(qs), axis=0) if qs else click_true
+    return V[tree.query(p)[1]]
+
+
+def read_click4(S_: Source, click: np.ndarray, cfg: Step3, gt: dict, holes: list[dict],
+                bg_all: bool = False) -> tuple[dict, list]:
+    """One click read for round 4 (t free): the combined reading (step 3's rules) and, for judging only, the true
+    hole each answered frame's circle names when placed with the TRUE pose."""
+    frames, Ts, names = [], [], []
+    for i in S_.reads:
+        T = S_.pose(i)
+        if T is None:
+            continue
+        cC = T[:3, :3].T @ (click - T[:3, 3])
+        uv, front = S_.cams[0].project(cC[None])
+        if not front[0] or not (60 <= uv[0, 0] <= 1220 and 60 <= uv[0, 1] <= 740):
+            continue
+        imgs = S_.images(i)
+        if imgs is None:
+            continue
+        X_bg = S_.points(i, cC, T, all_valid=True) if bg_all else None
+        m = read_frame_models(imgs, S_.cams, S_.points(i, cC, T), cC, [None], cfg, X_bg)[0]
+        frames.append(m)
+        Ts.append(T)
+        if m.ok and i in gt:
+            cw = gt[i][:3, :3] @ m.centre_C + gt[i][:3, 3]
+            h = min(holes, key=lambda h: np.linalg.norm(cw - np.asarray(h["centre_true"])))
+            names.append(h["hole"] if np.linalg.norm(cw - np.asarray(h["centre_true"])) < h["d_true"] / 2 else "none")
+    return combine_model(frames, Ts, cfg.centre_rule), frames, names
+
+
+def run4(sources: list[tuple], out: Path, hold: Path | None, tag: str, round5: bool = False) -> None:
+    """Round 4: each ``(name, poses, dots, Source, gt, mesh path, mesh motion, click kind)`` read at every hole's three
+    clicks with the gated reading (dots on: near-or-far gate and mesh check; dots off: mesh check). One row a click."""
+    from scipy.spatial import cKDTree
+
+    cfg = Step3(either=True, stereo=False, two_hyp=True, centre_rule=True)
+    for name, src, dots, S_, gt, mesh_path, M, click_kind in sources:
+        wait_hold(hold)
+        V, F = load_mesh(mesh_path, M)
+        F = F if round5 else None  # round 5: the mesh's triangles drawn into the cells
+        tree = cKDTree(V)
+        for h in S_.holes:
+            for k, click_t in enumerate(h["clicks"]):
+                t0 = time.perf_counter()
+                click_t = np.asarray(click_t, float)
+                click = mesh_click(S_, click_t, gt, tree, V) if click_kind == "mesh" else click_t
+                r, frames, names = read_click4(S_, click, cfg, gt, S_.holes, bg_all=round5)
+                checks = {}
+                if "d" in r:
+                    if dots == "on":
+                        checks["gate"] = background_refusal(frames)
+                    checks["mesh"] = mesh_check(np.asarray(r["centre"]), r["d"] / 2.0, click, mesh_hole_at(V, click, tree, F))
+                rule = r.get("refused")
+                final = rule or checks.get("gate") or checks.get("mesh")
+                named = max(set(names), key=names.count) if names else None
+                row = {"tag": tag, "rec": name, "poses": src, "dots": dots, "click_kind": click_kind, "hole": h["hole"],
+                       "click": k, "d_true": h["d_true"], "path_check": S_.info.get("path_check"),
+                       "today": S_.info.get("today"), "rule_refusal": rule, "gate_refusal": checks.get("gate"),
+                       "mesh_refusal": checks.get("mesh"), "named": named,
+                       "named_share": (names.count(named) / len(names)) if names else None,
+                       "click_moved": float(np.linalg.norm(click - click_t)), "s": round(time.perf_counter() - t0, 1),
+                       **{kk: vv for kk, vv in r.items() if kk != "refused"}}
+                if final:
+                    row["refused"] = final
+                if "d" in r:
+                    row["d_err"] = r["d"] - h["d_true"]
+                    row["centre_err"] = float(np.linalg.norm(np.asarray(r["centre"]) - np.asarray(h["centre_true"])))
+                    row["bg_near"] = float(np.nanmedian([f.bg_near for f in frames if f.ok])) if any(
+                        f.ok and np.isfinite(f.bg_near) for f in frames) else None
+                    row["bg_n"] = float(np.median([f.bg_n for f in frames if f.ok]))
+                with out.open("a", encoding="utf-8") as f:
+                    f.write(json.dumps(row) + "\n")
+                print(f"[{tag}] {name} {src} dots {dots} {h['hole']} click {k}: "
+                      + (f"d_err {row['d_err']:+.3f} named {named} " if "d_err" in row else "no d ")
+                      + (f"REFUSED: {final}" if final else "answered") + f" [{row['s']} s]", flush=True)
+        S_.release()
+        del V, F, tree
+
+
+def true_mesh(work: Path, keys: list[str], hold: Path | None) -> None:
+    """The study scenes' meshes at the true poses, fused on the processor from the whole recordings
+    (``work/truemesh/<key>/proc/mesh.ply``)."""
+    import dataclasses
+
+    from ohs.app.config import Config
+    from ohs.app.process import process_recording
+    from ohs.io.recording import RecordingReader
+    from ohs.server.studio import process_params
+
+    for key in keys:
+        wait_hold(hold)
+        out = work / "truemesh" / key
+        if (out / "proc" / "mesh.ply").is_file():
+            continue
+        rec = work / "tracked" / key / "rec"
+        gt = RecordingReader(rec).ground_truth_poses()
+        pp = dataclasses.replace(process_params(Config(), "markerless", "standard", 1280), export=("ply",))
+        t0 = time.perf_counter()
+        process_recording(rec, out / "proc", params=pp, poses=gt)
+        print(f"{key}: fused at true poses in {time.perf_counter() - t0:.0f} s", flush=True)
+
+
+def gpu_track(work: Path, keys: list[str]) -> None:
+    """The graphics-card phase's job for one or more study scenes: the whole recording tracked and meshed by what the
+    app's Make mesh runs (the scorecard's ``app_chain``, default settings) on the graphics card
+    (``work/gpu/<key>/proc``). Run each key through safe_run.py."""
+    for key in keys:
+        out = work / "gpu" / key
+        if (out / "proc" / "report.json").is_file():
+            continue
+        rec = work / "tracked" / key / "rec"
+        from ohs.io.recording import RecordingReader
+
+        gt = RecordingReader(rec).ground_truth_poses()
+        (out).mkdir(parents=True, exist_ok=True)
+        (out / "gt.json").write_text(json.dumps({int(i): T.tolist() for i, T in gt.items()}), encoding="utf-8")
+        from tools import scorecard as S
+
+        seed = int(key.rsplit("-s", 1)[1])
+        spec = S.SceneSpec(f"holes-high-s{seed}", "holes-high", "holes", seed, 200, {"maker": "holes", "gap": "high"})
+        t0 = time.perf_counter()
+        S.app_chain(rec, out / "proc", spec, {}, None)  # what the app's Make mesh runs: track, Straighten, Refine
+        print(f"{key}: tracked and meshed in {time.perf_counter() - t0:.0f} s", flush=True)
+
+
+def _study_sources4(work: Path, keys: list[str], kind: str, dots: str) -> list[tuple]:
+    """Round 4's study sources: ``kind`` "true" (true poses, the true-pose mesh), "cpu" (processor tracking) or "gpu"."""
+    out = []
+    for key in keys:
+        off = dots == "off"
+        S_ = study_source(work / "study" / key, off)
+        gt = dict(S_.poses)
+        if kind == "true":
+            out.append((key, "true", dots, S_, gt, work / "truemesh" / key / "proc" / "mesh.ply", None, "mesh"))
+            continue
+        run = work / ("tracked" if kind == "cpu" else "gpu") / key
+        gt_all = {int(k): np.asarray(v, float) for k, v in json.loads((run.parent.parent / "tracked" / key / "gt.json")
+                                                                       .read_text(encoding="utf-8")).items()}
+        poses, M = tracked_in_world(run / "proc" / "trajectory.csv", gt_all, with_motion=True)
+        S_.poses = poses
+        rep = json.loads((run / "proc" / "report.json").read_text(encoding="utf-8"))
+        S_.info = {"poses": "tracked", "path_check": (rep.get("path_check") or {}).get("state"),
+                   "path": path_errors(poses, gt_all)}
+        out.append((key, f"tracked-{kind}", dots, S_, gt_all, run / "proc" / "mesh.ply", M, "mesh"))
+    return out
+
+
+def _scorecard_sources4(cache: Path, work: Path, recs: list[str], poses: list[str], dots: str, settings: str) -> list:
+    out = []
+    for name in recs:
+        gt = scorecard_source(cache, name, "true", settings, dots == "off", work).poses
+        for src in poses:
+            S_ = scorecard_source(cache, name, src, settings, dots == "off", work)
+            run = cache / "runs" / "gpu" / settings / name / src
+            M = None
+            if src == "tracked":
+                M = np.asarray(json.loads((run / "result.json").read_text(encoding="utf-8"))["info"]["T"], float)
+            out.append((name, src, dots, S_, gt, run / "proc" / "mesh.ply", M, "mesh"))
+    return out
+
+
 def main(argv: list[str] | None = None) -> None:
     from tools.scorecard import DEFAULT_CACHE
 
@@ -1558,7 +1934,46 @@ def main(argv: list[str] | None = None) -> None:
     v.add_argument("--tag", default="step3")
     for flag in ("either", "stereo", "two-hyp", "centre-rule"):
         v.add_argument(f"--no-{flag}", action="store_true")
+    w = sub.add_parser("true-mesh", help="round 4: the study scenes' meshes at the true poses, on the processor")
+    w.add_argument("--keys", nargs="*", default=[f"{k}-s{s}" for s in range(3) for k in STUDY_SCENES])
+    w.add_argument("--work", type=Path, required=True)
+    w.add_argument("--hold", type=Path, default=None)
+    x = sub.add_parser("gpu-track", help="round 4: study scenes tracked and meshed by the app's frame pass (graphics card)")
+    x.add_argument("--keys", nargs="+", required=True)
+    x.add_argument("--work", type=Path, required=True)
+    y = sub.add_parser("run4", help="round 4: the gated reading (dots on) and the dots-off arm, with the mesh check")
+    y.add_argument("--cache", type=Path, default=DEFAULT_CACHE)
+    y.add_argument("--recs", nargs="*", default=RECS)
+    y.add_argument("--poses", nargs="*", default=["true", "tracked"])
+    y.add_argument("--dots", nargs="*", default=["on", "off"])
+    y.add_argument("--study-true", nargs="*", default=[])
+    y.add_argument("--study-cpu", nargs="*", default=[])
+    y.add_argument("--study-gpu", nargs="*", default=[])
+    y.add_argument("--true-click", nargs="*", default=[], help="processor-tracked study scenes read at the TRUE click")
+    y.add_argument("--settings", default="app-default")
+    y.add_argument("--work", type=Path, required=True)
+    y.add_argument("--out", type=Path, required=True)
+    y.add_argument("--hold", type=Path, default=None)
+    y.add_argument("--tag", default="round4")
+    y.add_argument("--round5", action="store_true", help="round 5: the mesh's triangles in the finder, all depth in the gate")
     a = ap.parse_args(argv)
+    if a.cmd == "true-mesh":
+        true_mesh(a.work, a.keys, a.hold)
+        return
+    if a.cmd == "gpu-track":
+        gpu_track(a.work, a.keys)
+        return
+    if a.cmd == "run4":
+        srcs = []
+        for dots in a.dots:
+            srcs += _scorecard_sources4(a.cache, a.work, a.recs, a.poses, dots, a.settings)
+            srcs += _study_sources4(a.work, a.study_true, "true", dots)
+            srcs += _study_sources4(a.work, a.study_cpu, "cpu", dots)
+            srcs += _study_sources4(a.work, a.study_gpu, "gpu", dots)
+            srcs += [(n, sp, d, S_, gt, mp, M, "true") for n, sp, d, S_, gt, mp, M, _ in
+                     _study_sources4(a.work, a.true_click, "cpu", dots)]
+        run4(srcs, a.out, a.hold, a.tag, a.round5)
+        return
     if a.cmd == "track-study":
         track_study(a.work, a.keys, a.hold)
         return

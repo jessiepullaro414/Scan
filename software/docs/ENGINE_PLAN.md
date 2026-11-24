@@ -977,12 +977,28 @@ from the camera images".
   tracking: no clear change on the processor's path (not run on the graphics card).
 - **Position:** 0.01 to 0.16 mm at true poses, 0.13 to 0.96 mm with the graphics card's
   tracking (it says "position unsure" when the frames put the centre more than 1 mm apart).
-- **Next (round 4, running on the processor):** the check against the mesh at the click; a
-  test for a near or far background from the depth seen through the hole, to gate the
-  dots-on reading; the two-camera pairing dropped. Rule fixed beforehand, as before, plus:
-  no answer on a hole other than the clicked one.
-- **Then, with the owner:** a first version in the app's hole tool, "from the images" beside
-  the mesh's reading, for holes over open space only, about 20 s a click on this processor.
+- **Rounds 4 and 5 (2026-11-24): two guards built, neither holds yet.** A check that the rim
+  read is the mesh's own hole or dent at the click, and a gate that answers with the dots on
+  only over a far background; judged by the rule above plus "no hole other than the clicked
+  one" and "at least 90 % of the far-background Ø25 and Ø10 answered".
+  - The wrong-hole answer is traced: the study clicked at the true position on a scan whose
+    path had slid 85 mm, so the click lay on the other hole's rim. With the click made on
+    the scan's own mesh, as a user's is, no reading names another hole.
+  - The check against the mesh refuses what it should pass (round 5, dots off: 102
+    refusals, none of a wrong reading): a small hole the mesh closed is a dent 0.5 mm deep.
+    Dots off stays right on every answer but answers 19 of 23 far-background holes.
+  - The gate does not keep near floors out: in round 5 two Ø10 holes 10 mm above a floor
+    pass it and read +0.35 and +0.32 mm, which drops the gated dots-on arm.
+  - Seen on the rows, not yet a rule: every reading that broke the rule carried a ± of its
+    own of 0.21 mm or more (0.21, 0.26, 0.41, 0.50); the good ones carry 0.10 to 0.18.
+- **Next (round 6):** the gate and the mesh finder dropped; the reading refuses on its own ±
+  (limit fixed from the rows of rounds 3 to 5) and on where the read circle lies against
+  the click; judged on seeds not looked at (3 to 5) of the near-floor and far plates, and
+  on a new plate with a second hole a few millimetres beside the clicked one.
+- **Then, with the owner, only if round 6 holds:** a first version in the app's hole tool,
+  "from the images" beside the mesh's reading, 10 to 20 s a click on this processor: a new
+  module `ohs/measure/rim.py` called after today's mesh answer, the answer gaining one
+  field `from_images` (a diameter with its ±, or the words of a refusal).
 - **Waits for hardware:** the dots-off reading. The board switches the projector by a serial
   command, not in step with the cameras; it needs frames without dots, a short exposure
   (under 0.5 ms; today automatic, about 7.8 ms) and perhaps a light.
