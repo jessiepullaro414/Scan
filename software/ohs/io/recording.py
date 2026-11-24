@@ -11,6 +11,14 @@ with the camera.
 ``temperature`` (the IMU chip in degC, about once a second, firmware 1.1+). When a recording has
 temperatures, :meth:`RecordingWriter.close` also writes their summary to ``meta.json``
 (``temperature_c``: ``first``, ``last``, ``min``, ``max``, ``n``).
+
+A frame whose file could not be written (a full disk) is not listed in ``frames.csv``: its row goes
+to ``frames_failed.csv`` (``index, t_host, file, error``) when the failure is found, and
+:meth:`RecordingWriter.close` adds ``incomplete: true`` and ``n_frames_failed`` to ``meta.json``
+(``n_frames`` stays the number of frames handed to the writer) before it raises the first failure.
+The other frames keep their indices and timestamps, so the gap shows. ``meta.json`` is replaced
+whole (temporary file, then a rename); :class:`RecordingReader` reads one that does not parse as
+empty and sets :attr:`RecordingReader.meta_damaged`.
 """
 from __future__ import annotations
 
@@ -116,6 +124,8 @@ class RecordingWriter:
         self._pending: deque[tuple[Future, list]] = deque()  # PNG writes in frame order, with their frames.csv row
         self._t_flush = time.monotonic()
         self.error: BaseException | None = None  # the first failed frame write
+        self._n_failed = 0
+        self._failed_fh = None  # frames_failed.csv, opened at the first failure
         self._lock = threading.Lock()
         self._frames = open(self.path / "frames.csv", "w", newline="", encoding="utf-8")
         self._imu = open(self.path / "imu.csv", "w", newline="", encoding="utf-8")
@@ -166,12 +176,24 @@ class RecordingWriter:
 
     def _write_done_rows(self) -> None:
         """Write the ``frames.csv`` rows of the PNG writes that have finished, in frame order (so a
-        row never points at a PNG that is not yet complete). Hold ``self._lock``."""
+        row never points at a PNG that is not yet complete). A failed write's row goes to
+        ``frames_failed.csv`` instead, with the error, flushed at once. Hold ``self._lock``."""
         while self._pending and self._pending[0][0].done():
             fut, row = self._pending.popleft()
-            if self.error is None and fut.exception() is not None:
-                self.error = fut.exception()
-            self._fw.writerow(row)
+            exc = fut.exception()
+            if exc is None:
+                self._fw.writerow(row)
+                continue
+            if self.error is None:
+                self.error = exc
+            self._n_failed += 1
+            log.error("frame %s not recorded: %s", row[0], exc)
+            if self._failed_fh is None:
+                self._failed_fh = open(self.path / "frames_failed.csv", "w", newline="", encoding="utf-8")
+                self._failed_w = csv.writer(self._failed_fh)
+                self._failed_w.writerow(["index", "t_host", "file", "error"])
+            self._failed_w.writerow([*row, str(exc)])
+            self._failed_fh.flush()
 
     def _flush_now_and_then(self) -> None:
         """Flush the CSV files about once a second (no fsync), so a crash loses little. Hold ``self._lock``."""
@@ -229,7 +251,20 @@ class RecordingWriter:
 
     # ------------------------------------------------------------------ closing
     def _write_meta(self) -> None:
-        (self.path / "meta.json").write_text(json.dumps(self.meta, indent=2, default=str), encoding="utf-8")
+        """Replace ``meta.json`` whole: a temporary file in the folder, flushed to disk, then renamed over it."""
+        tmp, dst = self.path / "meta.json.tmp", self.path / "meta.json"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            fh.write(json.dumps(self.meta, indent=2, default=str))
+            fh.flush()
+            os.fsync(fh.fileno())
+        for attempt in range(50):  # Windows: a reader (a virus scanner, the scan list) may hold the file a moment
+            try:
+                os.replace(tmp, dst)
+                return
+            except PermissionError:
+                if attempt == 49:
+                    raise
+                time.sleep(0.02)
 
     def close(self) -> None:
         if self._closed:
@@ -244,7 +279,12 @@ class RecordingWriter:
             fh.close()
         if self._gt_poses is not None:
             self._gt_file.close()
+        if self._failed_fh is not None:
+            self._failed_fh.close()
         self.meta["n_frames"] = self._n
+        if self._n_failed:
+            self.meta["incomplete"] = True
+            self.meta["n_frames_failed"] = self._n_failed
         if self._temps:
             t = self._temps
             self.meta["temperature_c"] = {"first": round(t[0], 2), "last": round(t[-1], 2), "min": round(min(t), 2),
@@ -267,8 +307,22 @@ class RecordingReader:
         self.path = Path(path)
         if not (self.path / "frames.csv").exists():
             raise FileNotFoundError(f"{self.path} is not a recording (frames.csv missing)")
+        self.meta: dict = {}
+        # True when meta.json is there but is not a JSON object (cut short, say): self.meta is then empty and the
+        # callers' fallbacks apply (the image size from the first frame, no source or temperatures)
+        self.meta_damaged = False
         meta_file = self.path / "meta.json"
-        self.meta: dict = json.loads(meta_file.read_text(encoding="utf-8")) if meta_file.exists() else {}
+        if meta_file.exists():
+            try:
+                meta = json.loads(meta_file.read_text(encoding="utf-8"))
+            except (UnicodeDecodeError, ValueError) as e:
+                meta = e
+            if isinstance(meta, dict):
+                self.meta = meta
+            else:
+                self.meta_damaged = True
+                log.warning("recording %s: meta.json is damaged (%s); its frames are read without it", self.path,
+                            meta if isinstance(meta, Exception) else f"a JSON {type(meta).__name__}, not an object")
         self.swap_lr = swap_lr
         rows = list(csv.DictReader(_complete_lines(self.path / "frames.csv")))
         self._index = np.array([int(r["index"]) for r in rows], dtype=np.int64)
@@ -278,6 +332,20 @@ class RecordingReader:
 
     def __len__(self) -> int:
         return len(self._files)
+
+    def failed_frames(self) -> list[dict]:
+        """The frames whose files could not be written (``frames_failed.csv``): ``[{"index", "t_host", "file",
+        "error"}]`` in recording order; empty for a complete recording. They are not among the frames read."""
+        f = self.path / "frames_failed.csv"
+        if not f.exists():
+            return []
+        return [{"index": int(r["index"]), "t_host": float(r["t_host"]), "file": r["file"], "error": r["error"]}
+                for r in csv.DictReader(_complete_lines(f))]
+
+    @property
+    def incomplete(self) -> bool:
+        """Some frames of the recording could not be written (:meth:`failed_frames`)."""
+        return bool(self.meta.get("incomplete")) or bool(self.failed_frames())
 
     @property
     def indices(self) -> np.ndarray:

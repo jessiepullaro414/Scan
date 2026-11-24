@@ -3985,6 +3985,19 @@ text is kept beside the stop's. 3,000 frames pushed at a healthy writer never tr
 record` end with the reason. In the app the reason shows only after Stop until the server passes it on (the
 next change). Not tried: a real camera, a real slow disk.
 
+**A recording after a failed frame write (R2-6).** A frame whose file could not be written still got its row
+in `frames.csv`: a recording of 8 frames with two failed writes listed 8 on reopening, and reading a listed
+frame raised. And `meta.json` was written over in place: cut short, it no longer parsed and the reader raised
+on opening. Now a failed frame is not listed; its index, time, file and error go into `frames_failed.csv` at
+once, and `meta.json` says `incomplete` with `n_frames_failed` at close. The other frames keep their indices
+and times, so the gap shows. `meta.json` is replaced whole (a temporary file, written through to the disk,
+then renamed); an interruption leaves the old file as it was. A reader that meets a `meta.json` that does not
+parse reads the frames anyway, logs it, and reports `meta_damaged`. A complete recording is written exactly as
+before (no new file, no new key). `n_frames` in the metadata stays the number of frames handed to the writer,
+as an existing test requires. Open: `ohs process` reads the mode from the metadata, so a markers recording
+with damaged metadata would be processed markerless unless `--mode` is given; a half-written PNG is left on
+the disk, unlisted. Not tried: a real full disk.
+
 ## The no-GPU plate slide, and a check of the camera path (ENGINE_PLAN X0a, 2026-11-20)
 
 Without a GPU the 0.5 mm plates slide in their first frames. On plate seed 0 the tracker's steps
