@@ -197,3 +197,8 @@ def test_mesh_volume_puts_the_surface_where_the_values_cross():
     assert len(F) > 0
     np.testing.assert_allclose(np.median(V[:, 2]), 0.3, atol=0.02)
     assert np.all(S >= 0.1 - 1e-6) and np.median(L) == pytest.approx(5.0, abs=0.01)
+
+
+def test_the_tag_runs_follow_the_first_tests_order():
+    assert mc.TAG_RUNS[:3] == ((0, False), (1, False), (2, False)) and mc.TAG_RUNS[3:] == ((0, True), (1, True), (2, True))
+    assert [mc.tag_run_name(*r) for r in mc.TAG_RUNS] == ["tag0", "tag1", "tag2", "tag0c", "tag1c", "tag2c"]

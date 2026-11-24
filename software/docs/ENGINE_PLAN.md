@@ -1024,7 +1024,7 @@ model per scan"; data in `D:\OpenHandScan-work\scratch\ed3` (`merge.md`, `merge_
   with lasers absent from both merges, as in the app; the fourth arm (one model with the
   opposite-sides rule off) left out.
 
-### [ ] X19. A pose from tags, held, where two scans share little (S to M): designed, not built
+### [ ] X19. A pose from tags, held, where two scans share little (S to M): the first real test passes (tags emulated); not built
 E-D4 (4). Design in `D:\OpenHandScan-work\scratch\ed3\tag_hold_design.md`; first test in
 `tools/merge_combine_study.py` (`tags`).
 - **What the pose is worth** (X18's experiment, real fusing): on the 12 pairs that share under
@@ -1035,18 +1035,34 @@ E-D4 (4). Design in `D:\OpenHandScan-work\scratch\ed3\tag_hold_design.md`; first
   (P3) and 0.30 to 0.46 mm (M1) from the true motion, against the app's 0.97 and 0.79 mm; on
   the sheet pair M3 it lies 0.48 to 0.69 mm off, no nearer than the app's 0.51. Refining a tag
   pose from the shapes, as the app does today, walks back to the shapes' own minimum every
-  time, the same pose as without tags. So a tag pose must be held, not refined. A merge at the
-  held tag pose passed E-D4 (1) on every run of P3, M1 and M3, but only in the surface
-  emulation, which X18 showed to be too kind: a real merge at a tag pose has not been run.
+  time, the same pose as without tags. So a tag pose must be held, not refined. A merge at the held tag pose passed E-D4 (1) on every run of P3, M1 and M3 in the surface
+  emulation, which X18 showed to be too kind; so it was run for real:
+- **Today's merge at the held tag pose, real fusing** (2026-11-24, 31 merges; the test fixed
+  beforehand: E-D4 (1) and (3) pass on every run of the pairs whose single scans are sound):
+  **passes.** P3 and M1, 6 runs each, and their spread pairs P3s1, P3s2, M1s2 all pass, where
+  the app's pose fails every one. The merged part is the true motion's: 0.952 to 0.957 within
+  0.5 mm, median 0.058 to 0.074 mm, 10.0 to 11.7 % more than 0.3 mm off (the app's pose: 0.846
+  to 0.936, 0.149 to 0.211 mm, 31 to 44 %). The tag poses lie 0.11 to 0.79 mm from the true
+  motion; that is near enough.
+  - Sheet pairs (reported, not gated): M3 passes on all 6 runs and M3s2 passes; M3s1 fails as
+    it does at the true motion. P5 and its spread pairs pass on all 8 runs, with 0.90 to 0.93
+    covered against 0.47 to 0.77 at the app's pose and 0.76 to 0.93 at the true motion: for two
+    scans bent differently by tracking the tags' pose is a better rigid pose than the fit to
+    all tracked frames (it lies 4.0 to 4.7 mm from that fit on P5 and P5s1).
+  - Thin walls at the tag pose read as at the true motion or nearer the truth (M3's flange
+    +0.37 mm against +0.64 at the app's pose).
 - **The rule designed:** an alignment that started from tags, with under 0.70 shared and at
   least 3 shared tags whose corners agree within 0.5 mm, keeps the tag pose; the shapes'
-  refinement is still run, as a check only. The shapes overrule the tags only when they move
-  the part by more than the larger of 3 mm and 4 sigma of the tag pose and fit clearly better
-  there (a tag map wrong as a whole). At 0.70 shared or more nothing changes, bit for bit. The
+  refinement is still run, as a check only. The shapes overrule the tags only when they move the part by more than the larger of 8 mm
+  and 4 sigma of the tag pose (a tag map wrong as a whole: a table moved with its tags moves
+  things by tens of millimetres). Changed 2026-11-24 from "3 mm and a clearly better fit": the
+  shapes' own minimum lies 0.4 to 1.2 mm from the tag pose on the bracket and 1.6 to 4.5 mm on
+  the bent sheet pairs, and the overlap is higher there on every pair (by 0.002 to 0.13), so a
+  better fit is no evidence against the tags; the old rule would have overruled P5's tags and
+  lost its best merge. At 0.70 shared or more nothing changes, bit for bit. The
   verdict says who decided and how well the tags agree ("the tags put it within about 0.2 mm").
-- **Open before the thresholds are fixed:** P5, where the held tag pose lies 4.6 mm from the
-  true motion and still gives the better merge (0.83 covered against 0.71), because the two
-  sheet scans are bent differently.
+- **Next:** build the hold as a setting, off (`ohs/align/pairwise.py`, `tags.py`, `many.py`, the
+  server's response), then the stop rule's test with tags rendered into both scans.
 - **Stop rule: adopted only if**, with tags rendered into both scans (not emulated), the held
   merge passes E-D4 (1) and (3) on every pair that shares under 0.70 and whose single scans are
   sound, on 3 seeds; pairs at 0.70 or more are unchanged bit for bit; a tag moved by 2 mm

@@ -1009,6 +1009,112 @@ def exp_verdict(ex: Experiment) -> dict:
     return out
 
 
+# =========================================================================== today's merge at a held tag pose (X19's test)
+TAG_RUNS = tuple((seed, corr) for corr in (False, True) for seed in (0, 1, 2))  # the C3 first test's order
+
+
+def tag_run_name(seed: int, corr: bool) -> str:
+    return f"tag{seed}{'c' if corr else ''}"
+
+
+def emulate_tag_poses(study: "Study", pair: str, keys: tuple[str, str], runs=TAG_RUNS) -> list[dict]:
+    """The C3 emulation's tag poses of B in A's world (:func:`run_tags`' maps, recomputed exactly: same tags, same
+    seeds, same order), each with its corner RMS and its distance from the true motion (merge b2's pose)."""
+    from ohs.align.tags import pose_from_tags
+    from ohs.io.recording import RecordingReader
+    from ohs.track.posegraph import read_trajectory
+    from ohs.track.export import load_ply
+
+    MS = study.MS
+    tags = table_tags()
+    maps_in = []
+    for key in keys:
+        _, s, e = MS.scan_spec(key)
+        rec = study.recs / key.split("@")[0]
+        d = MS.scan_dir(study.work(pair), key, "tracked")
+        reader = RecordingReader(rec)
+        gt = {i: T for i, T in reader.ground_truth_poses().items() if s <= i < e}
+        tr = {int(r[0]): np.asarray(r[3], np.float64).reshape(4, 4) for r in read_trajectory(d / "trajectory.csv") if r[2]}
+        stc = reader.calibration().stereo
+        maps_in.append((gt, tr, np.asarray(stc.K_rect, np.float64), tuple(stc.image_size)))
+    VB = load_ply(MS.scan_dir(study.work(pair), keys[1], "tracked") / "mesh.ply")["vertices"].astype(np.float64)[::7]
+    T_true = study.merge_pose(pair, "b2")
+    out = []
+    for seed, corr in runs:
+        rng = np.random.default_rng(seed)
+        maps = [emulated_tag_map(tags, gt, tr, K, size, rng=rng, run=CORRELATED_RUN if corr else 1)[0]
+                for gt, tr, K, size in maps_in]
+        tp = pose_from_tags(maps[1], maps[0])
+        out.append({"run": tag_run_name(seed, corr), "seed": seed, "correlated": corr,
+                    "T": None if tp is None else tp.T, "rms_mm": None if tp is None else tp.rms_mm,
+                    "off_true": None if tp is None else pose_off(tp.T, T_true, VB)})
+    return out
+
+
+def run_tag_merges(ex: "Experiment", name: str, runs=TAG_RUNS) -> list[dict]:
+    """Today's merge (``merge_scans``, the server's settings) with B at each emulated tag pose, held:
+    ``merge_tag{seed}[c]``."""
+    from ohs.align import ScanInput, merge_scans
+
+    MS = ex.MS
+    c = ex.plan["pairs"][name]
+    st = ex.study()
+    pd = ex.work / "pairs" / name
+    A, B = MS.scan_dir(ex.work, c["a"], "tracked"), MS.scan_dir(ex.work, c["b"], "tracked")
+    ra, rb = ex.recs / c["a"].split("@")[0], ex.recs / c["b"].split("@")[0]
+    params = MS.merge_params()
+    rows = []
+    for tp in emulate_tag_poses(st, name, (c["a"], c["b"]), runs):
+        mdir = pd / f"merge_{tp['run']}"
+        if tp["T"] is None or (mdir / "done.json").is_file():
+            rows.append({k: v for k, v in tp.items() if k != "T"})
+            continue
+        t0 = time.perf_counter()
+        r = merge_scans([ScanInput(ra, A / "trajectory.csv", np.eye(4), "A"), ScanInput(rb, B / "trajectory.csv", tp["T"], "B")],
+                        mdir, params)
+        _write(mdir / "done.json", {"s": round(time.perf_counter() - t0, 1), "T": [np.eye(4).tolist(), tp["T"].tolist()],
+                                    "vertices": r["mesh"]["n_vertices"], "tag rms mm": tp["rms_mm"], "off_true": tp["off_true"],
+                                    "seed": tp["seed"], "correlated": tp["correlated"]})
+        rows.append({k: v for k, v in tp.items() if k != "T"})
+    return rows
+
+
+def judge_tag_merges(ex: "Experiment", name: str) -> dict:
+    """E-D4 for today's merge at each held tag pose, beside today's at the app's pose and at the true motion, with the
+    case's spread from gpu1's verdict (the singles' own ranges)."""
+    st = ex.study()
+    c = ex.plan["pairs"][name]
+    pd = ex.work / "pairs" / name
+    verdict = json.loads((ex.root / "verdict.json").read_text())
+    sp = verdict["cases"][f"{c['case']} b2"]["spread"]
+    stt = st.setup_keys(name, (c["a"], c["b"]))
+    eA1, sA1, eB1, sB1 = st.single_readings(stt)
+    rows = {"app": st.merge_reading(stt, ex.app_variant(name)), "true motion": st.merge_reading(stt, "b2")}
+    info = {}
+    for d in sorted(pd.glob("merge_tag*")):
+        if (d / "mesh.ply").is_file():
+            run = d.name[len("merge_"):]
+            rows[run] = st.merge_reading(stt, run)
+            info[run] = json.loads((d / "done.json").read_text())
+    j = judge_case(eA1, sA1, eB1, sB1, rows, stt["inA"], stt["inB"])
+    walls = walls_table(stt, rows)
+    thin = [w["name"] for w in stt["walls"] if w["true_mm"] is not None and w["true_mm"] <= 2.0]
+    out = {"pair": name, "case": c["case"], "spread": sp, "rows": {}}
+    for k, r in j["rows"].items():
+        ok = True
+        for s in ("A", "B"):
+            m, g = r[f"S_{s}"], j["singles"][s][f"S_{s}"]
+            ok &= (m["cover05"] >= g["cover05"] - sp["cover05"] and m["med"] <= g["med"] + sp["med"]
+                   and m["over03"] <= g["over03"] + sp["over03"])
+        out["rows"][k] = {"E-D4 (1)": bool(ok), "E-D4 (3)": r["E-D4 (3) more than the larger scan"],
+                          "X7": [r["X7 beats the better single"], r["X7 reaches the union"]],
+                          "all": r["S_A or S_B"], "S_A": r["S_A"], "S_B": r["S_B"], "2 sigma covers": r["2 sigma covers"],
+                          "walls": {w: walls[k].get(w) for w in thin},
+                          "off_true": info.get(k, {}).get("off_true"), "tag rms mm": info.get(k, {}).get("tag rms mm")}
+    _write(pd / "judge_tags.json", out)
+    return out
+
+
 # =========================================================================== output
 def _plain(x):
     if isinstance(x, dict):
@@ -1062,7 +1168,8 @@ def print_table(out: Path) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("cmd", choices=("combine", "tags", "table", "plan", "single", "today", "perscan", "judge-exp", "verdict"))
+    ap.add_argument("cmd", choices=("combine", "tags", "table", "plan", "single", "today", "perscan", "judge-exp", "verdict",
+                                    "tagmerge", "judge-tags"))
     ap.add_argument("out", type=Path)
     ap.add_argument("--x7", type=Path)
     ap.add_argument("--mergewarn", type=Path)
@@ -1070,8 +1177,10 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--cases", nargs="*", help="PAIR:VARIANT (combine)")
     ap.add_argument("--pairs", nargs="*", default=["P3", "P5", "M1", "M3"], help="(tags)")
     ap.add_argument("--name", help="(single: a scan key; today / perscan / judge-exp: a pair of the plan)")
+    ap.add_argument("--runs", nargs="*", help="(tagmerge: which tag runs, e.g. tag0; default all six)")
     a = ap.parse_args(argv)
-    if a.cmd in ("plan", "single", "today", "perscan", "judge-exp", "verdict"):  # the experiment: OUT is its folder
+    ap_runs = [r for r in TAG_RUNS if a.cmd != "tagmerge" or a.runs is None or tag_run_name(*r) in a.runs]
+    if a.cmd in ("plan", "single", "today", "perscan", "judge-exp", "verdict", "tagmerge", "judge-tags"):  # OUT: its folder
         _watch_rss()
         if a.cmd == "plan":
             plan_experiment(a.x7, a.mergewarn, a.recs, a.out)
@@ -1085,6 +1194,10 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps(_plain(run_perscan(ex, a.name)))[:2000], flush=True)
         elif a.cmd == "judge-exp":
             run_judge_exp(ex, a.name)
+        elif a.cmd == "tagmerge":
+            print(json.dumps(_plain(run_tag_merges(ex, a.name, ap_runs)))[:2000], flush=True)
+        elif a.cmd == "judge-tags":
+            judge_tag_merges(ex, a.name)
         else:
             v = exp_verdict(ex)
             print("killed" if v["killed"] else "alive", json.dumps(_plain(v["kill"]))[:3000])

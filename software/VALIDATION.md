@@ -5845,7 +5845,7 @@ pairs. **Kill rule:** at either pose, the new merge fails E-D4 (1) on a sound pa
 **Not built.** What may be worth carrying on is keeping a wall's two faces apart where two scans saw opposite faces,
 inside today's one model (ENGINE_PLAN X18).
 
-### A pose from tags, where two scans share little (ENGINE_PLAN X19: designed, not built)
+### A pose from tags, where two scans share little (ENGINE_PLAN X19: the first real test passes; not built)
 
 Tag maps emulated for both scans (8 tags, the corner noise measured in "Tags as anchors on a large part", once
 independent and once shared between tags; 3 runs each):
@@ -5861,8 +5861,35 @@ independent and once shared between tags; 3 runs each):
   merge passes E-D4 (1) and (3) on none at the app's pose and on 10 at the true motion (the two misses are sheet
   pairs).
 - The refinement from the shapes walks a tag pose back to the shapes' own minimum every time, so a tag pose has to be
-  held. In the surface emulation a merge at the held tag pose passed E-D4 (1) on every run of P3, M1 and M3. The
-  emulation is too kind (above), so this is no result yet: a real merge at a tag pose has not been run.
+  held.
+- **Today's merge at the held tag pose, real fusing** (2026-11-24; `gpu1\tag_merges.txt`; 4 cases with 3
+  independent-noise and 3 shared-noise tag maps each, 7 spread pairs with one each; the test fixed beforehand: E-D4
+  (1) and (3) pass on every run of the pairs whose single scans are sound, the P3 and M1 families). **It passes.**
+
+  | pair | the tag pose from the true motion | E-D4 (1) and (3) at the tag pose | at the tag pose | at the app's pose | at the true motion |
+  |---|---|---|---|---|---|
+  | P3, 6 runs | 0.11 to 0.29 mm | all pass | 0.952 to 0.954 / 0.067 to 0.074 / 11.5 to 11.7 | 0.897 / 0.199 / 41.1, fails | 0.954 / 0.064 / 11.5 |
+  | M1, 6 runs | 0.30 to 0.46 mm | all pass | 0.952 to 0.953 / 0.063 to 0.066 / 11.0 to 11.2 | 0.910 / 0.166 / 37.0, fails | 0.953 / 0.063 / 11.0 |
+  | P3s1 | 0.51 mm | pass | 0.957 / 0.067 / 10.4 | 0.846 / 0.203 / 44.2, fails | 0.955 / 0.058 / 10.7 |
+  | P3s2 | 0.18 mm | pass | 0.953 / 0.058 / 10.0 | 0.936 / 0.149 / 31.2, fails | 0.953 / 0.056 / 10.0 |
+  | M1s2 | 0.79 mm | pass | 0.954 / 0.066 / 10.8 | 0.880 / 0.211 / 43.4, fails | 0.953 / 0.060 / 10.9 |
+  | M3 (sheet), 6 runs | 0.48 to 0.69 mm | all pass | 0.924 to 0.925 / 0.163 to 0.167 / 22.1 to 22.4 | 0.902 / 0.250 / 38.6, fails | 0.924 / 0.154 / 20.9 |
+  | M3s1 (sheet) | 1.42 mm | fails (1) | 0.920 / 0.217 / 30.2 | 0.675 / 0.382 / 58.0, fails | 0.925 / 0.177 / 23.1, fails (1) |
+  | M3s2 (sheet) | 0.49 mm | pass | 0.912 / 0.198 / 32.1 | 0.691 / 0.404 / 62.4, fails | 0.919 / 0.155 / 25.4 |
+  | P5 (sheet), 6 runs | 4.59 to 4.67 mm | all pass | 0.903 to 0.905 / 0.165 to 0.171 / 23.6 to 24.4 | 0.677 / 0.327 / 52.8, fails | 0.778 / 0.234 / 39.2 |
+  | P5s1 (sheet) | 3.97 mm | pass | 0.905 / 0.187 / 25.7 | 0.766 / 0.299 / 49.8, fails | 0.757 / 0.290 / 48.3, fails (1) |
+
+  (Columns 4 to 6: the share within 0.5 mm / the median in mm / the percentage more than 0.3 mm off, over all the
+  surface either scan saw. The sheet pairs are reported, not part of the test. P5s2 passes too.)
+- On the bracket a held tag pose gives the true motion's merge. On the bent sheet scans of P5 it gives a better one
+  than the true motion: the fit of all tracked frames to the truth is not the best rigid pose for two scans bent
+  differently, and the tags, seen where the part is, are a better compromise.
+- Twice the merged sigma covers 0.983 to 0.995 at the tag poses, as at the true motion (0.86 to 0.99 at the app's
+  pose).
+- **The overlap is no evidence against the tags:** at the shapes' own minimum the overlap is higher than at the tag
+  pose on every pair, by 0.002 to 0.13, and that minimum lies 0.4 to 1.2 mm from the tag pose on the bracket and M3
+  pairs and 1.6 to 4.5 mm on the P5 pairs. A rule that lets the shapes overrule the tags after a move of 3 mm with
+  a better fit would have overruled P5's tags.
 - P3's cause, read per region: at the true motion the two scans agree in the median everywhere (within 0.03 mm, no
   trend along the part) and disagree in the tails (0.4 to 0.7 mm at the 90th percentile, most on the upright, which
   one scan saw at 45 degrees). The 0.9 mm is a slide along the part's length, 0.02 to 0.09 mm of it along the
