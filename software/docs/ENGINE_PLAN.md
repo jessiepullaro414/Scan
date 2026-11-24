@@ -1382,6 +1382,54 @@ summary (no code). Taken as an opinion and weighed against the measurements:
     opposite faces kept apart) with a two-by-two at the same poses, and report case by case,
     signed, not only counts.
 
+### A second outside review (2026-11-24): ten defects to mend
+
+The owner had a second AI (Codex) review the software at commit 3053e1a and passed its report
+on with "feel free to take what you think might be needed". Weighed as before: an opinion,
+checked against the code, no instruction. Its view of the four E-D3 results agrees with the
+plan (image evidence for hole rims, a causal ladder for thin walls, a length from outside for
+long parts, pose evidence before weights for the merge); X15 to X19 have since done most of
+that. What it adds is ten concrete defects, each checked against today's code (all ten are
+there as described at the level looked at) and each to be mended as its own task with a
+guard test seen failing first:
+
+- [ ] **R2-1 (its F1): the scorecard's comparison can say "Better or the same on every scene"
+  with failed, missing or empty runs.** `tools/scorecard.py`: a recording missing from one
+  side drops out, a failed run compares as n/m, and no verdicts at all gives the success
+  sentence. This sentence decides adoptions (E-D1). Being mended.
+- [ ] **R2-2 (F2): a cached scorecard result can outlive an engine change.** `run_job` returns
+  an existing `result.json` unchecked; the engine fingerprint leaves out `ohs/server`, which
+  the app chain runs through; a saved baseline keeps no fingerprint. After R2-1.
+- [ ] **R2-3 (F3): the tracker's ICP weights its priors with the residual sigma twice**
+  (`ohs/track/markerless.py`, `_icp`: the priors' precision times sigma squared and the data
+  term divided by it). Hidden at the default of 1 mm; wrong for any other value. Being mended.
+- [ ] **R2-4 (F4): after frames without gyro cover, one covered interval makes the whole gap
+  count as covered** (`markerless.py`, `have_prior`; `pipeline.py`): recovery then trusts an
+  incomplete rotation.
+- [ ] **R2-5 (F5): when the mesh model's brick pool is full, new surface is not fused and the
+  saved result does not say so** (`recon_tsdf.py` logs once). The thin-parts rule's spirit:
+  nothing may go missing in silence. To carry into the report, the viewer and a merge.
+- [ ] **R2-6 (F6): a failed frame write still gets its row in the recording's index, and
+  `meta.json` is replaced in place** (`ohs/io/recording.py`): a recording reopened after a
+  failed write lists a frame it cannot read; a write cut short leaves metadata that does
+  not parse.
+- [ ] **R2-7 (F7): when the matcher falls back to the processor mid-scan the mesh model keeps
+  the graphics card's noise profile**, and the saved frame rows lose the event.
+- [ ] **R2-8 (F8): the live recorder's own queue has no bound** (known since MAINTENANCE_PLAN
+  B4: the writer below it is bounded). Slow storage can use up memory. Needs a defined
+  outcome: stop recording cleanly with a reason and keep what was written.
+- [ ] **R2-9 (F9): "frames with laser points" counts additions, not frames** (two lines a
+  frame count twice). Being mended.
+- [ ] **R2-10 (F10): the rotation logarithm is about 0.01 degrees off just below a half turn**
+  (`ohs/geometry.py`, `so3_log`). Being mended.
+
+Also taken from it, not started: signed per-recording differences and fixed practical limits
+printed beside the scorecard's verdict (a wide spread on one bad seed can hide a smaller
+regression); seeds kept aside for judging only (done by hand in X8 and X15; to be the rule);
+a pinned set of Python package versions for the Windows bundle; a permanent regression
+recording for the 506 mm wrong alignment that was accepted. Not taken now: splitting the
+large files, continuous integration (A5, parked by the owner).
+
 ## Small things found by the review
 
 - [x] "Known limitations of the pipeline" in `VALIDATION.md` was out of date: it said the
