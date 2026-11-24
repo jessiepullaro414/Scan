@@ -201,3 +201,12 @@ def test_the_walls_axis_comes_from_the_raw_faces_when_the_mesh_is_tilted():
     R = np.array([[1.0, 0, 0], [0, np.cos(a), -np.sin(a)], [0, np.sin(a), np.cos(a)]])
     r = ws.read_wall(_frames(0.5), V @ R.T, F, R @ np.array([0.0, 0.9, 0.0]), boot=50)
     assert not r["refused"] and abs(r["mm"] - 0.5) < 0.03 and r["tilt_deg"] < 1.0
+
+
+def test_the_sheet_with_tags_keeps_the_sheet_and_puts_the_tags_on_its_table():
+    from tools.scorecard import sheet_scene
+
+    base, sc = sheet_scene(0), ws.variant_scene("sheet-tags", 0)
+    assert len(sc.primitives) == len(base.primitives) and sorted(sc.markers) == list(range(len(ws.TAG_AT)))
+    for k, (x, y) in enumerate(ws.TAG_AT):
+        assert np.allclose(sc.markers[k][:, 2], 0.0) and np.allclose(sc.markers[k][:, :2].mean(axis=0), [x, y], atol=1e-6)

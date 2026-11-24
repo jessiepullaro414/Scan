@@ -1010,7 +1010,7 @@ E-D3 item 2. `tools/wall_thickness_study.py` (a study tool; nothing in the engin
   is nearer the truth than the mesh's reading on every wall, refuses where one side is not
   seen, and never reads a wall thinner than the truth by more than 0.1 mm.
 
-### [ ] X17. Thin walls: why tracking places the two sides apart (M): the cause located 2026-11-24, six remedies tried, none alive
+### [ ] X17. Thin walls: why tracking places the two sides apart (M): the cause located 2026-11-24, six remedies and Markers mode tried, none alive
 E-D3 item 2. Notes and every run in `D:\OpenHandScan-work\scratch\ed3\walls_looks`
 (`NOTES.md`, `ladder.txt`, `profile_fins-s0.md`, `candidate-D.md`); `VALIDATION.md`, "Thin
 walls: the raw reading, and where the error is made".
@@ -1070,8 +1070,22 @@ walls: the raw reading, and where the error is made".
   - The engine's hold of a weak step: +0.45 / +0.43 / +0.38.
 - **What this says:** the walls themselves cannot hold the pose across the turn, and nothing
   that only changes how frames enter the map makes them. What is left is a pose that does not
-  come from the walls. **Next:** the app's Markers tracking mode on the walls and the sheet
-  (tags on the table give each frame's pose), judged by a rule fixed beforehand. Running.
+  come from the walls.
+- **Markers mode measured 2026-11-24: not a remedy** (six 25 mm tags on the table, walls and
+  sheet, 3 seeds each; rule fixed beforehand: raw separation within 0.2 mm on every wall of
+  2 mm or less, no frame lost, the mesh no worse than at its true poses + 0.15 mm). All three
+  parts missed: frames lost on all six recordings (4 to 29); the two sides come out 0.10 to
+  0.47 mm too CLOSE on five of six (thinner than the truth, where markerless reads +0.25 to
+  +0.98); about 2 to 3 tags in view, their corners scattering 0.3 mm a frame, all in one
+  plane. And in Markers mode the mesh has no opposite-sides rule (small things below).
+- **Where this leaves thin standing walls:** no remedy alive in tracking. What works today:
+  the part laid flat (a 0.5 mm plate reads within 0.01 mm); the raw-frame reading (X16) as an
+  upper bound; "Make only the thin walls finer" (X5) for the mesh's share. **Open, each with
+  its own rule before it is run:** (1) the two sides tied through the part's own far ends in
+  a longer scan (round the part twice, Straighten's loops joining the rounds; the study
+  scans are 4 to 8 s); (2) tags on the part beside the wall, seen from both sides; (3) the
+  map's ray-cast bias taken out together with `start_together` (each moved the result;
+  never tried together); (4) Markers mode with `thin_walls` on and 12 or more tags.
 - Not verified: the exact scene as the tracking model (the harness failed); offsets other
   than disparity; the sweep and the profile on seeds 1 and 2; the path without a graphics
   card. One run slipped on each of two rungs. A box scene with three standing walls is near
@@ -1365,6 +1379,13 @@ summary (no code). Taken as an opinion and weighed against the measurements:
   whether that share, with how far the scan travelled, separates the panel from the door and
   the small parts; if it does, a caution after Make mesh ("the length along the part is not
   sure: use tags").
+- [ ] **In Markers mode the mesh keeps no thin-wall rule** (found by X17, 2026-11-24; `VALIDATION.md`,
+  "Thin walls in Markers mode"). `[process] thin_walls` "auto" means on for scans without markers and off
+  in marker mode, so the same wall at the same true poses reads +0.8 to +1.6 mm in a Markers scan against
+  +0.03 to +0.84 markerless. To do (S): measure Markers mode with `thin_walls` "on" on the walls and the
+  sheet with tags (recordings in `ed3/walls_looks/exp1/recs` on the work drive) and on the scorecard's
+  marker scenes; if nothing gets worse, "auto" means on in both modes (E-D1; the config's words and the
+  guide follow).
 - [ ] **Straighten's laser crossings can make a short scan worse and pass their own test** (found by X17,
   2026-11-23; `VALIDATION.md`, "Thin walls: the raw reading, and where the error is made"). On the standing
   walls with a ball in view (a 4 s scan, frames 1 degree apart) the frames test passed at 0.83 and 0.77 (limit

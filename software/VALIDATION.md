@@ -5841,6 +5841,82 @@ Limits: simulated; one scene (three standing walls in a box, near the worst case
 the matcher's depth on the two true-pose rungs are seed 0 only; offsets other than disparity not run; one run
 slipped on each of two rungs; the graphics card's path only.
 
+### Where the offset enters, and six remedies on the loop (X17, 2026-11-24)
+
+Each frame's pose error across the 1 mm wall, from the saved runs (`walls_looks\timecourse.txt`): with the
+matcher's depth the first side holds within about 0.1 mm (seeds 0 and 1); the frames over the walls' ends scatter
+by 0 to 1.1 mm from one frame to the next; the second side then settles 0.4 to 0.5 mm away. The second side is
+first seen by those weakly held frames, and later frames register to what they put into the map. The frames over
+the ends are weakly held on every rung of the ladder, right maps included (+0.4 to +0.85 mm); with a right map
+their error does not carry on. Seed 2 also drifts on its first side; with exact depth the offset is there from
+the first frames.
+
+Six remedies on the loop, the matcher's depth, the standing walls, seeds 0 to 2 (`walls_looks\round3.txt`). The
+rule, fixed beforehand: the 1 mm wall's separation at most 0.2 mm on all three seeds, the camera path no worse, no
+frame lost. Separation of the two sides, 0.5 / 1 / 2 mm walls; the path's error, median / largest in mm:
+
+| | seed 0 | seed 1 | seed 2 | path, seed 0 | seed 1 | seed 2 |
+|---|---|---|---|---|---|---|
+| today | +0.60 / +0.49 / +0.52 | +0.50 / +0.43 / +0.37 | +0.60 / +0.43 / +0.24 | 0.53 / 1.21 | 1.52 / 3.93 | 1.50 / 2.50 |
+| `start_together` (X4b) | +0.56 / +0.52 / +0.49 | +0.48 / +0.43 / +0.37 | +0.57 / +0.42 / +0.24 | 0.33 / 0.99 | 0.49 / 0.94 | 1.09 / 1.88 |
+| `slip_check_mm` (X4c) | as today: it never acts | | | | | |
+| `fuse_lag` (X4c) | +0.53 / +0.52 / +0.53 | +0.40 / +0.36 / +0.35 | +0.40 / +0.31 / +0.16 | 0.44 / 1.21 | 3.19 / 8.47 | 0.42 / 3.94 |
+| weakly held frames not fused | refused | refused | +1.00 / +0.89 / +0.87 | 7.4 / 128 (105 frames lost) | 53 / 167 (52 lost) | 1.19 / 2.50 |
+| the map's ray cast 0.15 mm deeper | +1.11 / +0.89 / +0.76 | -0.03 / -0.11 / -0.18 | +0.19 / +0.06 / -0.08 | 0.79 / 1.89 | 1.41 / 3.90 | 1.14 / 2.21 |
+| the engine's hold of a weak step | +0.57 / +0.45 / +0.49 | +0.49 / +0.43 / +0.38 | +0.58 / +0.38 / +0.19 | 0.54 / 1.21 | 1.91 / 3.93 | 1.55 / 2.53 |
+
+- **None alive.** `start_together` makes the path better on all three seeds and leaves the walls where they
+  were. `fuse_lag` helps two seeds a little and makes seed 1's path worse. Not fusing the weakly held frames
+  loses tracking: nearly every frame of this scene counts as weakly held. Taking the map's measured ray-cast
+  bias out is a strong lever whose effect follows the seed (worse on seed 0, cured on seeds 1 and 2).
+- The walls themselves cannot hold the pose across the turn, and nothing that only changes how frames enter the
+  map makes them. What is left is a pose that does not come from the walls.
+
+### Thin walls in Markers mode (X17, 2026-11-24): not a remedy
+
+The standing walls and the sheet part, each with six 25 mm tags on the table round the part, seeds 0 to 2,
+processed as Make mesh does with the scan's mode "markers" (`markers.tag_mm` 25) and markerless on the same
+recordings, each also at true poses (`walls_looks\summary4.md`). The rule, fixed beforehand: the frames' raw
+separation within 0.2 mm on every wall of 2 mm or less on all six recordings, no frame lost, the mesh's error no
+more than at its true poses + 0.15 mm. Raw: the frames' reading minus the truth; walls 0.5 / 1 / 2 mm, sheet
+flange 2 / rib 1 / rib 3 mm; the path's error median / largest in mm:
+
+| recording | run | raw | mesh | path | frames lost | tags in view (median, least) |
+|---|---|---|---|---|---|---|
+| walls, seed 0 | Markers | -0.26 / -0.23 / -0.13 | +1.08 / +0.80 / +0.81 | 0.39 / 8.68 | 8 of 120 | 2, 1 |
+| | markerless | +0.58 / +0.57 / +0.54 | +1.17 / +0.85 / +0.69 | 0.84 / 1.93 | 0 | |
+| | true poses, Markers' mesh and markerless mesh | -0.02 / 0.00 / -0.02 | +1.15 / +0.98 / +0.79 and +0.78 / +0.53 / +0.39 | | | |
+| walls, seed 1 | Markers | -0.47 / -0.26 / -0.11 | +1.01 / +0.95 / +1.24 | 0.91 / 3.71 | 4 | 2, 1 |
+| | markerless | +0.51 / +0.46 / +0.38 | +1.24 / +0.75 / +0.60 | 2.92 / 6.51 | 0 | |
+| | true poses, both meshes | 0.00 / -0.01 / -0.03 | +1.44 / +1.25 / +1.11 and +0.81 / +0.40 / +0.27 | | | |
+| walls, seed 2 | Markers | -0.14 / -0.17 / -0.25 | +1.16 / +0.82 / +1.11 | 1.51 / 13.91 | 29 | 2, 1 |
+| | markerless | +0.58 / +0.49 / +0.25 | +1.23 / +0.88 / +0.51 | 1.39 / 3.67 | 0 | |
+| | true poses, both meshes | -0.03 / +0.01 / -0.04 | +1.43 / +1.40 / +1.18 and +0.77 / +0.63 / +0.17 | | | |
+| sheet, seed 0 | Markers | +0.01 / 0.00 / +0.07 | +0.76 / +1.35 / +0.09 | 0.69 / 2.91 | 11 of 240 | 3, 1 |
+| | markerless | +0.41 / +0.63 / +0.52 | +0.62 / +0.94 / +0.52 | 1.16 / 2.31 | 0 | |
+| | true poses, both meshes | +0.01 / +0.02 / 0.00 | +0.54 / +1.33 / +0.19 and +0.20 / +0.27 / +0.03 | | | |
+| sheet, seed 1 | Markers | -0.12 / -0.04 / -0.03 | +0.45 / +1.58 / +0.18 | 0.79 / 2.07 | 4 | 3, 1 |
+| | markerless | 0.00 / +0.20 / +0.09 | +0.27 / +0.59 / +0.06 | 0.57 / 2.83 | 0 | |
+| | true poses, both meshes | 0.00 / +0.02 / -0.02 | +0.43 / +1.53 / +0.30 and +0.16 / +0.24 / +0.04 | | | |
+| sheet, seed 2 | Markers | -0.45 / -0.10 / -0.06 | +0.27 / +1.37 / +0.11 | 0.32 / 10.70 | 7 | 3, 1 |
+| | markerless | +0.34 / +0.98 / +0.80 | +0.58 / +1.24 / +0.70 | 0.67 / 3.51 | 0 | |
+| | true poses, both meshes | 0.00 / +0.05 / -0.01 | +0.41 / +1.45 / +0.22 and +0.13 / +0.23 / +0.03 | | | |
+
+- **All three parts of the rule are missed.** Frames are lost on all six recordings (4 to 29: no tags, too few
+  tags, a high residual). The raw separation is beyond 0.2 mm on five of six, and now inward: the walls read 0.10
+  to 0.47 mm thinner than the truth, which a reading must never do in silence. The mesh is thicker than
+  markerless on most walls.
+- **Why:** six tags on the table leave 2 in view on the walls and 3 on the sheet in the median, sometimes 1; a
+  frame's tag corners scatter 0.28 to 0.37 mm RMS and the path has spikes of 2.1 to 13.9 mm; the tags lie in one
+  plane. The inward sign on five of six suggests a bias of the tag pose, not scatter alone.
+- **Found on the way:** in Markers mode Make mesh keeps the opposite-sides rule off (`[process] thin_walls`
+  "auto" means on for scans without markers only), so a thin wall's mesh reads +0.8 to +1.6 mm at true poses
+  there, against +0.03 to +0.84 markerless (ENGINE_PLAN, small things).
+- What holds a thin part today is laying it flat: a 0.5 mm plate lying on the table reads within 0.01 mm.
+
+Not run: Markers mode with `thin_walls` "on"; more or larger tags; tags on the part; the path without a graphics
+card. The raw readings in Markers mode use that run's own depth over the region chosen from the truth.
+
 ## A merge from one model per scan (ENGINE_PLAN X18, 2026-11-23): measured, dropped
 
 X7 found that today's merge (every frame of both scans fused into one model) is often worse than the better single

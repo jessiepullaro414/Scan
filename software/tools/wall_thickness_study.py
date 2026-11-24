@@ -514,7 +514,24 @@ def fins_tags_scene(seed: int = 0, tag_mm: float = TAG_MM, at: tuple[tuple[float
                  meta=meta)
 
 
-VARIANTS = ("ball", "ball-behind", "balls2", "tags", "reversed")
+def sheet_tags_scene(seed: int = 0, tag_mm: float = TAG_MM, at: tuple[tuple[float, float], ...] = TAG_AT):
+    """The scorecard's sheet part (:func:`tools.scorecard.sheet_scene`) with the same six tags on its table as
+    :func:`fins_tags_scene` (clear of its foot, y -5 to 35, and its flange and ribs)."""
+    from ohs.sim.scene import Decal, DecalAlbedo, Scene, apriltag_texture, marker_corners_world  # noqa: PLC0415
+    from tools.scorecard import sheet_scene  # noqa: PLC0415
+
+    base = sheet_scene(seed)
+    table = base.primitives[0]
+    decals = [Decal(apriltag_texture(m, tag_mm), 10, (x, -y), angle=0.3 * m, margin_mm=tag_mm / 4, tag_id=m)
+              for m, (x, y) in enumerate(at)]
+    table.albedo = DecalAlbedo(table.albedo, decals)
+    markers = {dc.tag_id: marker_corners_world(table, dc) for dc in decals}
+    meta = dict(base.meta, tie={"kind": "tags", "at": [list(a) for a in at], "tag_mm": tag_mm})
+    return Scene(list(base.primitives), name="sheet_tags", target=base.target, radius=base.radius, markers=markers,
+                 meta=meta)
+
+
+VARIANTS = ("ball", "ball-behind", "balls2", "tags", "reversed", "sheet-tags")
 
 
 def variant_scene(variant: str, seed: int):
@@ -526,6 +543,8 @@ def variant_scene(variant: str, seed: int):
         return fins_ball_scene(seed, "both")
     if variant == "tags":
         return fins_tags_scene(seed)
+    if variant == "sheet-tags":
+        return sheet_tags_scene(seed)
     if variant == "reversed":  # experiment 0 d1: no tie, the sweep the other way round (the same seed's wander)
         from tools.preset_study import fins_scene  # noqa: PLC0415
 
@@ -543,18 +562,33 @@ def exp1_render(work: Path, variant: str, seed: int) -> Path:
     from ohs.sim.datasets import make_scan_recording  # noqa: PLC0415
     from tools.scorecard import IMAGE_SIZE, SCENES  # noqa: PLC0415
 
-    spec = SCENES[f"fins-s{seed}"]
     path = work / "recs" / f"{variant}-s{seed}"
     if (path / "done").is_file():
         return path
-    make_scan_recording(path, scene=variant_scene(variant, seed), n_frames=spec.frames, fps=float(spec.build["fps"]),
-                        image_size=IMAGE_SIZE, realistic=True, depth_every=0, seed=seed, overwrite=True)
+    if variant.startswith("sheet"):  # the scorecard's sheet maker: 240 frames at 10 fps, a 400 degree orbit
+        from ohs.sim.nominal import NOMINAL_TIME_OFFSET, nominal_calibration  # noqa: PLC0415
+        from ohs.sim.trajectory import HandheldTrajectory  # noqa: PLC0415
+        from tools.scorecard import SHEET_TARGET  # noqa: PLC0415
+
+        spec = SCENES[f"sheet-s{seed}"]
+        calib = nominal_calibration(IMAGE_SIZE, realistic=True)
+        dur = spec.frames / 10.0
+        traj = HandheldTrajectory(target=np.array(SHEET_TARGET), t0=100.0 + NOMINAL_TIME_OFFSET, duration=dur, seed=seed,
+                                  baseline=calib.stereo.baseline, distance=(200.0, 280.0), elevation_deg=(35.0, 65.0),
+                                  sweep_deg_s=400.0 / dur)
+        make_scan_recording(path, scene=variant_scene(variant, seed), n_frames=spec.frames, fps=10.0, trajectory=traj,
+                            image_size=IMAGE_SIZE, realistic=True, depth_every=0, seed=seed, overwrite=True)
+    else:
+        spec = SCENES[f"fins-s{seed}"]
+        make_scan_recording(path, scene=variant_scene(variant, seed), n_frames=spec.frames, fps=float(spec.build["fps"]),
+                            image_size=IMAGE_SIZE, realistic=True, depth_every=0, seed=seed, overwrite=True)
     (path / "variant.json").write_text(json.dumps({"variant": variant, "seed": seed}), encoding="utf-8")
     (path / "done").write_text("", encoding="utf-8")
     return path
 
 
-def exp1_process(rec: Path, out: Path, poses: str, tags: bool, straighten: dict | None = None) -> dict:
+def exp1_process(rec: Path, out: Path, poses: str, tags: bool, straighten: dict | None = None,
+                 mode: str = "markerless") -> dict:
     """What Make mesh runs (the scorecard's app chain) on an experiment-1 recording, with Straighten's tags as anchors
     on or off, the matcher's depth kept in ``out/depth`` (for the raw reading), judged by the scorecard's judge on the
     variant scene (a ball counts as part of the truth; tags change no shape). ``straighten``: other
@@ -565,8 +599,26 @@ def exp1_process(rec: Path, out: Path, poses: str, tags: bool, straighten: dict 
     from ohs.io.recording import RecordingReader  # noqa: PLC0415
 
     v = json.loads((rec / "variant.json").read_text(encoding="utf-8"))
-    spec = SC.SCENES[f"fins-s{int(v['seed'])}"]
+    kind = "sheet" if v["variant"].startswith("sheet") else "fins"
+    spec = SC.SCENES[f"{kind}-s{int(v['seed'])}"]
     sc = variant_scene(v["variant"], int(v["seed"]))
+    if mode != "markerless":  # the app's Markers mode, with the tags' printed size in the config (as a user sets it)
+        from ohs.app.config import Config  # noqa: PLC0415
+        from ohs.io.recording import RecordingReader as _RR  # noqa: PLC0415
+        from ohs.server.processing import stage_params  # noqa: PLC0415
+
+        cfg = Config()
+        cfg.markers.tag_mm = float((sc.meta.get("tie") or {}).get("tag_mm", TAG_MM))
+
+        def app_params(spec_, params, rec_):
+            import dataclasses  # noqa: PLC0415
+
+            size = _RR(rec_).meta.get("image_size") or [1280, 800]
+            start, stop = SC.stretch(spec_)
+            pp = stage_params(cfg, mode, "standard", int(size[0]))
+            return SC.apply_params(dataclasses.replace(pp, start=int(start), stop=stop), params)
+
+        SC.app_params = app_params
     SC.scene_of = lambda spec_, models=None: sc  # this process only: the judge scores the variant scene
     orig = PG.straighten_trajectory
 
@@ -588,6 +640,7 @@ def exp1_process(rec: Path, out: Path, poses: str, tags: bool, straighten: dict 
         res["info"]["chain"] = SC._plain(stages)
         res["info"]["process_s"] = round(time.perf_counter() - t0, 1)
         res["info"]["variant"], res["info"]["tags"], res["info"]["straighten_overrides"] = v, bool(tags), straighten or {}
+        res["info"]["mode"] = mode
     finally:
         restore()
         PG.straighten_trajectory = orig
@@ -654,6 +707,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--poses", choices=("tracked", "true"), default="tracked")
     p.add_argument("--tags", choices=("on", "off"), default="off")
     p.add_argument("--straighten", action="append", default=[], help="KEY=VALUE: a StraightenParams field (diagnostic)")
+    p.add_argument("--mode", choices=("markerless", "markers"), default="markerless", help="the scan's tracking mode")
     p.add_argument("--out", type=Path, required=True)
     a = ap.parse_args(argv)
     if a.cmd == "table":
@@ -664,8 +718,8 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if a.cmd == "exp1-process":
         over = {kv.split("=")[0]: json.loads(kv.split("=", 1)[1]) for kv in a.straighten}
-        res = exp1_process(a.rec_dir, a.out, a.poses, a.tags == "on", over)
-        print({k: v for k, v in res.get("metrics", {}).items() if k.startswith("wall")})
+        res = exp1_process(a.rec_dir, a.out, a.poses, a.tags == "on", over, a.mode)
+        print({k: v for k, v in res.get("metrics", {}).items() if k.startswith(("wall", "sheet_", "traj", "frames"))})
         return 0
     clicks = None
     if a.click:
