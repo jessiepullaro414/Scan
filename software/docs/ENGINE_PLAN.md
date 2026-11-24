@@ -126,7 +126,8 @@ The rules of `FEATURE_PLAN.md` and `MAINTENANCE_PLAN.md` hold. In short:
      built into the app's hole tool, as a second answer beside the mesh's.
   5. Long parts (X8), decided the same day after the fresh seeds: `straighten_tags` goes on
      by default at the limit of 0.85, after a check that short scans with tags in view are
-     not made worse by it.
+     not made worse by it. The check failed (a 0.5 mm wall lost on one scan): the
+     setting stays off.
 
 ## The error budget today
 
@@ -903,7 +904,14 @@ and thin parts".
     met on nine, path on six of eight, slide on two, the whole rule on one.
   - **Decided 2026-11-24 (E-D5): on by default at 0.85, after a check** that short scans
     with tags in view (the walls and sheet with table tags, the tag-hold test's bracket
-    scans) are not made worse by it (running). The length is right wherever the tags act
+    scans) are not made worse by it. **The check failed the same day: the setting stays
+    off** (`VALIDATION.md`, "Short scans with tags in view"). Of 13 scans the tags left 8
+    as they were and made 4 better or the same; on the standing walls, seed 2, they made
+    the path and the thicker walls better and the 0.5 mm wall all but disappear from the
+    mesh (coverage 49 % to 2.5 %), with no warning. **Open, first:** which step lost the
+    wall, the corrected poses (two sides placed too close for a 1 mm mesh) or the second
+    fusion Straighten makes whenever it acts, loops included; then a warning when a thin
+    wall found before Straighten's fusion is gone after it. The length is right wherever the tags act
     and nothing gets worse; the passes still sit 0.6 to 1.4 mm RMS
     apart along the part, which the rule's part (d) does not allow. Not measured: what
     that slide costs features along a part. On five of six tagged

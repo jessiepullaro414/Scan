@@ -5837,6 +5837,41 @@ within 0.65 mm RMS on two; the whole rule on one. A scan without tags is the sam
 Not measured: what a slide of 0.6 to 1.4 mm between passes costs the surface and features along the part (the
 panel is plain, and the length read from its edges is right); a fresh seed on which 0.85 refuses.
 
+### Short scans with tags in view, the setting off and on (X8, 2026-11-24): a thin wall is lost; the setting stays off
+
+Before `straighten_tags` could go on by default (decision E-D5), every short recording with tags in view was
+processed with the app's default chain with the setting off and on (limit 0.85), on the graphics card: the
+standing walls and the sheet with six table tags (seeds 0 to 2), one of each in Markers mode, and four 90-frame
+bracket and sheet stretches with eight table tags (`D:\OpenHandScan-work\scratch\x8\short`, `table.json`). The
+rule, fixed beforehand: on every scan the run with the setting on is no worse than the run with it off (path
+median within 0.05 mm and largest within 0.2 mm, mesh median within 0.01 mm and the share over 0.3 mm within 1
+point, no wall more than 0.05 mm further from the truth, no frame lost, nothing new warned). One scan processed
+twice with the setting off gave the same numbers and the same path, so no tolerance was widened.
+
+| | scans |
+|---|---|
+| the tags did not act (too few, not better, would bend the scan): every number and the path the same | 8 |
+| the tags acted, better or the same | 4 |
+| the tags acted, **worse** | 1 |
+
+- **The one worse scan loses a thin part.** The standing walls, seed 2, markerless: five tags held the scan and
+  nearly everything got better (path median 1.39 to 0.66 mm, mesh median 0.139 to 0.098 mm, the 1 mm wall's
+  error +0.88 to +0.30 mm, the 2 mm wall's +0.51 to -0.06 mm), but **the 0.5 mm wall all but disappeared from
+  the mesh** (its coverage from 49 % to 2.5 %, its thickness no longer readable; the share of the part within
+  0.5 mm from 0.902 to 0.874). Nothing warned. The wall is there with the setting off and at true poses (85 %).
+- Not separated: whether the corrected poses put the wall's two sides too close for a 1 mm mesh to keep it, or
+  the second fusion that Straighten makes when it acts removed it. (With the setting off the loops changed
+  nothing on that scan and nothing was fused again.) Straighten fuses again whenever its loops act, tags or no
+  tags, so the question is wider than the setting.
+- Where the tags acted and helped: the sheet, seed 0 (path median 1.16 to 0.21 mm; flange +0.62 to +0.27, 1 mm
+  rib +0.94 to +0.48, 3 mm rib +0.52 to -0.04 mm), the same in Markers mode (0.69 to 0.25 mm), and two bracket
+  stretches (0.70 to 0.16 and 0.98 to 0.18 mm; on one of them a tag moved 2 mm was not left out).
+- The setting reaches a Markers-mode scan too: Make mesh runs Straighten in either mode.
+- Make mesh takes 13 to 40 s longer when the tags act (a second fusion), nothing when they do not.
+
+**So the setting stays off**: a thin part must not go missing in silence. Not done: the run that tells the two
+causes apart; more than one seed in Markers mode; a second run of the scan that lost its wall.
+
 ## Thin walls: the raw reading, and where the error is made (ENGINE_PLAN X16 and X17, 2026-11-23)
 
 Thin standing walls read 0.5 to 1.3 mm too thick (decision E-D3, item 2). Two questions were measured: can a

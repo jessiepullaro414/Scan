@@ -316,7 +316,9 @@ In marker mode the dots run dimmed while you scan, so the tags can be read. The 
 
 Tags can also hold a scan made in **Markerless** mode. The Straighten stage then ties every pass to the tags it saw, so the passes no longer sit shifted along a plain part. On a simulated plain panel 1.3 m long, scanned in three passes with tags on the table, the mesh's length was 0.2 to 0.6 mm off with the setting on and 0.7 to 2.6 mm off without it; the passes sat up to 1.1 mm apart along the panel (RMS) instead of up to 11 mm.
 
-It is off by default: it narrowly missed the accuracy the project set for it, and it has not been tried in **Markers** mode or with tags on the part itself. To use it:
+It is off by default, for two reasons. It holds the length (where the tags acted, on eight of nine simulated long scans, the length came out within 0.05 %), but the passes still sit 0.6 to 1.4 mm apart along the part, more than the project allows. And in a test on a short scan of thin standing walls it made a 0.5 mm wall disappear from the mesh, with no warning, while the thicker walls got better.
+
+**Do not switch it on for a part with walls thinner than about 1 mm that you scan from both sides.** It has not been tried with tags on the part itself. To use it:
 
 1. Lay tags on the table along at least one long side of the part and across both ends. Two tags must often be in view at once along the part: that is what holds the length. In the test they were 300 mm apart; closer is better.
 2. Do not move the tags during the scan. A tag that moves by about a millimetre can bend the scan.
