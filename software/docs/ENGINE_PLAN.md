@@ -927,7 +927,7 @@ E-D3 item 2. `tools/wall_thickness_study.py` (a study tool; nothing in the engin
   is nearer the truth than the mesh's reading on every wall, refuses where one side is not
   seen, and never reads a wall thinner than the truth by more than 0.1 mm.
 
-### [ ] X17. Thin walls: why tracking places the two sides apart (M): the cause narrowed 2026-11-23, no remedy yet
+### [ ] X17. Thin walls: why tracking places the two sides apart (M): the cause located 2026-11-24, six remedies tried, none alive
 E-D3 item 2. Notes and every run in `D:\OpenHandScan-work\scratch\ed3\walls_looks`
 (`NOTES.md`, `ladder.txt`, `profile_fins-s0.md`, `candidate-D.md`); `VALIDATION.md`, "Thin
 walls: the raw reading, and where the error is made".
@@ -965,10 +965,30 @@ walls: the raw reading, and where the error is made".
   worse; tags on the table do nothing on a 4 s scan (too few keyframes see each tag).
 - **Not indicated:** a two-sided tracking map (candidate D, designed, L: 3 to 5 days). The
   ladder argues against it.
-- **Next:** where in the scan the offset enters (at the turn round a wall's edge, steadily,
-  or at the start), what X4b's and X4c's settings do on this scene, and up to three handles
-  on the feedback tested on the ladder (a frame's integration weighted by how well it was
-  held across the wall; the map's ray-cast bias; a newly seen side held back). Running.
+- **Where the offset enters** (2026-11-24, each frame's pose error across the 1 mm wall, from the
+  saved runs): with the matcher's depth the first side holds within about 0.1 mm (seeds 0 and
+  1); the frames over the walls' ends scatter by 0 to 1.1 mm from one frame to the next; the
+  second side then settles 0.4 to 0.5 mm away. It is first seen by those weakly held frames,
+  and later frames register to what they put into the map. The frames over the ends are
+  weakly held on every rung, right maps included (+0.4 to +0.85 mm); with a right map their
+  error does not carry on. (Seed 2 also drifts on its first side; with exact depth the
+  offset is there from the first frames.)
+- **Six remedies tried on the loop, matcher's depth, seeds 0 to 2; rule fixed beforehand (the
+  1 mm wall's separation at most 0.2 mm on all three, the path no worse, no frame lost):
+  none alive.** Today: +0.49 / +0.43 / +0.43 mm.
+  - `start_together` (X4b): +0.52 / +0.43 / +0.42; the camera path is better on all three
+    seeds (median 0.53 / 1.52 / 1.50 to 0.33 / 0.49 / 1.09 mm), the walls are not.
+  - `slip_check_mm` (X4c): never acts here. `fuse_lag` (X4c): +0.52 / +0.36 / +0.31, and seed
+    1's path gets worse (largest error 3.9 to 8.5 mm).
+  - Weakly held frames not fused: nearly every frame of this scene counts as weakly held;
+    tracking is lost on two seeds.
+  - The map's ray cast made 0.15 mm deeper (its measured bias taken out): +0.89 / -0.11 /
+    +0.06. A strong lever with the seed's sign, not a cure.
+  - The engine's hold of a weak step: +0.45 / +0.43 / +0.38.
+- **What this says:** the walls themselves cannot hold the pose across the turn, and nothing
+  that only changes how frames enter the map makes them. What is left is a pose that does not
+  come from the walls. **Next:** the app's Markers tracking mode on the walls and the sheet
+  (tags on the table give each frame's pose), judged by a rule fixed beforehand. Running.
 - Not verified: the exact scene as the tracking model (the harness failed); offsets other
   than disparity; the sweep and the profile on seeds 1 and 2; the path without a graphics
   card. One run slipped on each of two rungs. A box scene with three standing walls is near
