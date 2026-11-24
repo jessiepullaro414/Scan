@@ -827,7 +827,11 @@ def cmd_process(args: argparse.Namespace) -> int:
     from ohs.io.recording import RecordingReader
 
     rec = _recording(args.recording, "recording")
-    meta = RecordingReader(rec).meta
+    reader = RecordingReader(rec)
+    meta = reader.meta
+    if not args.mode and reader.meta_damaged:  # its mode is not known: never guess markerless for a markers scan
+        raise CliError("The recording's meta.json is damaged, so the scan's mode is not known. "
+                       "Give it with --mode markers or --mode markerless.")
     mode = args.mode or (meta.get("mode") if meta.get("mode") in MODES else "markerless")
     calib = None  # None: process_recording uses the recording's own calibration.json
     if getattr(args, "calib", None):

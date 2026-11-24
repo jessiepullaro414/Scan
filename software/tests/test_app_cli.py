@@ -280,6 +280,29 @@ def test_process_calls_process_recording(tmp_path, capsys):
     assert "4/4 100%" in cap.err and "lost: jump" in cap.err  # progress bar, zero-based k shown as k + 1
 
 
+def test_process_with_damaged_metadata_needs_the_mode(tmp_path, capsys):
+    """A markers recording whose meta.json does not parse: its mode is not known, so ``ohs process`` says so and
+    processes nothing, instead of taking it for markerless; with --mode it goes on. A recording without meta.json
+    (older ones) and one whose meta has no mode keep the markerless default."""
+    calls: list = []
+    rec = _tiny_recording(tmp_path / "rec", nominal_calibration((160, 100)), meta={"mode": "markers"})
+    (rec / "meta.json").write_text('{"mode": "markers", "n_fra', encoding="utf-8")  # cut short
+    assert RecordingReader(rec).meta_damaged
+    with stub_modules(pipeline=make_stub_pipeline(), process=_process_stub(calls)):
+        assert cli.main(["process", str(rec)]) == 1
+        err = capsys.readouterr().err
+        assert calls == []
+        assert ("The recording's meta.json is damaged, so the scan's mode is not known. "
+                "Give it with --mode markers or --mode markerless.") in err
+        assert cli.main(["process", str(rec), "--mode", "markers"]) == 0
+        assert calls[-1]["params"].pipeline.mode == "markers"
+        old = _tiny_recording(tmp_path / "old", nominal_calibration((160, 100)))
+        (old / "meta.json").unlink()
+        assert cli.main(["process", str(old)]) == 0 and calls[-1]["params"].pipeline.mode == "markerless"
+        plain = _tiny_recording(tmp_path / "plain", nominal_calibration((160, 100)))
+        assert cli.main(["process", str(plain)]) == 0 and calls[-1]["params"].pipeline.mode == "markerless"
+
+
 def test_process_frames_by_motion_options(tmp_path, capsys):
     a = cli.build_parser().parse_args(["process", "rec", "--motion", "0.5", "--max-gap", "6"])
     assert (a.motion, a.max_gap) == (0.5, 6)

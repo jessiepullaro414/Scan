@@ -1434,7 +1434,7 @@ guard test seen failing first:
   failed write lists a frame it cannot read; a write cut short leaves metadata that does
   not parse. Mended 2026-11-24: failed frames go to `frames_failed.csv`, the recording says
   it is incomplete, `meta.json` is replaced whole and a damaged one no longer stops the
-  reader. Open: `ohs process` and a markers recording with damaged metadata.
+  reader. `ohs process` asks for `--mode` when the metadata is damaged.
 - [ ] **R2-7 (F7): when the matcher falls back to the processor mid-scan the mesh model keeps
   the graphics card's noise profile**, and the saved frame rows lose the event.
 - [x] **R2-8 (F8): the live recorder's own queue has no bound** (known since MAINTENANCE_PLAN

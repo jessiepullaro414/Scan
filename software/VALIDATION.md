@@ -4034,6 +4034,12 @@ recorded. A normal scan is unchanged. Open: the IMU calibration step ignores its
 error alike (it would solve from the shorter recording without a word); a settings key for the budget. Not
 seen in the app's window; no real slow disk.
 
+**`ohs process` and damaged metadata (R2-6, follow-up).** The command took the scan's mode from the metadata
+and fell back to markerless, so a markers recording with a `meta.json` that does not parse was processed
+markerless in silence. It now stops with "The recording's meta.json is damaged, so the scan's mode is not
+known. Give it with --mode markers or --mode markerless." unless `--mode` is given. A recording without a
+`meta.json`, or without a mode in it, keeps the markerless default.
+
 ## The no-GPU plate slide, and a check of the camera path (ENGINE_PLAN X0a, 2026-11-20)
 
 Without a GPU the 0.5 mm plates slide in their first frames. On plate seed 0 the tracker's steps
