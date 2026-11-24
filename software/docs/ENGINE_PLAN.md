@@ -864,10 +864,16 @@ and thin parts".
   - Where the tags act the path is within 0.021 % (0.27 mm over 1.3 m), better than step 2's
     0.003 to 0.060 %. A row on one side still puts two spaced tags into only 28 to 30 % of
     the keyframes: only the near pass sees it.
-  - **Open, in this order:** (1) the never-worse check on a scan that starts nearly right: it
-    judges by the tags' own error on frames set aside, where a small gain is refused and the
-    length is not looked at; measure what a limit of 0.90 to 1.0 does on all six tagged
-    scans and on scans where the tags are wrong. (2) The slide of 0.7 to 1.1 mm RMS that stays
+  - **The check's limit, measured 2026-11-24** (the tag block alone, on the processor, the six
+    tagged scans; `VALIDATION.md`, "The never-worse check's limit"): from a limit of 0.90 the
+    tags act on seed 2 and its path comes from -0.126 % to -0.009 % (the slide to 1.37 mm
+    RMS, still a miss). Limits up to 1.00 were never worse than no tags on four emulated
+    harm cases (a tag moved 5 mm, three times the scatter, a slipped row, half the
+    detections); no check at all was. The check's ratio follows the slide mended (r = -0.96)
+    more than the length (r = -0.68). Not adopted: 0.90 was found on the scan it mends.
+  - **Open, in this order:** (1) the limit at 0.90 on fresh seeds (3 to 5) of both layouts,
+    judged by the same rule, with the harm cases rendered; a tag moved 5 mm is not always
+    left out (two scans kept it and lost most of the gain). (2) The slide of 0.7 to 1.1 mm RMS that stays
     on three of the five scans where the tags act. (3) The fit given the tags' known spacing
     (a printed strip; X22): a distance term in `ohs/track/tag_anchors.py`, about 40 lines
     and tests; it would also give the scale an outside reference.

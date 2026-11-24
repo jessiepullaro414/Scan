@@ -5705,6 +5705,44 @@ long side only, 150 mm apart, and step 2's five across each short end (every pas
 Not run: the fit given the known spacing of the tags (it needs a distance term in the engine's fit); rows on both
 sides 150 mm apart; tags on the panel; 20 mm tags; the check's limit on scans that start nearly right.
 
+### The never-worse check's limit on a scan that starts nearly right (X8 follow-up, 2026-11-24)
+
+On step 3's seed 2 the check refused the tags at 0.869 against 0.85. Measured: would the tags have helped, and
+can the limit move without letting harm in. Straighten's tag block was run again alone, on the processor, on the
+saved keyframes, detections and loops of the six tagged scans of steps 2 and 3 (`tools/large_part_study.py`,
+commands `limitprep`, `limit`, `limitverdict`; results in `D:\OpenHandScan-work\scratch\x8\limit`). No engine
+code and no default was changed. Camera path end to end in % / the passes' worst slide in mm RMS:
+
+| scan | without tags | limit 0.85 (today) | limit 0.90 to 1.00 | no check | the check's ratios |
+|---|---|---|---|---|---|
+| step 2, seed 0 | -0.439 / 6.15 | -0.051 / 0.72 | the same | the same | 0.54, 0.66 |
+| step 2, seed 1 | +0.422 / 10.11 | +0.066 / 0.59 | the same | the same | 0.20, 0.41 |
+| step 2, seed 2 | -0.189 / 3.77 | +0.004 / 1.15 | the same | the same | 0.80, 0.65 |
+| step 3, seed 0 | -0.489 / 7.48 | -0.018 / 0.58 | the same | the same | 0.67, 0.66 |
+| step 3, seed 1 | +0.403 / 9.40 | +0.008 / 0.89 | the same | the same | 0.56, 0.45 |
+| step 3, seed 2 | -0.126 / 2.35 | refused | **-0.009 / 1.37** | -0.009 / 1.37 | 0.87, 0.83 |
+
+- **The tags would have helped seed 2:** from a limit of 0.90 they act and the path comes from -0.126 % to
+  -0.009 %. The slide only falls from 2.35 to 1.37 mm RMS, so the rule's slide part is still missed.
+- **Four harm cases, emulated on the saved detections** (the most-seen tag moved 5 mm halfway through; three
+  times the detections' scatter; the side row slipped 3 mm halfway through; half the detections dropped). The
+  rule, fixed beforehand: a limit is safe if on every case and scan the result is no worse than without tags
+  (the path not more than 0.01 % further off, the slide not more than 0.1 mm RMS larger), or the tags are
+  refused, or the bad tag is left out. Limits of 0.85 to 1.00: safe on all 24. No check: not safe; with three
+  times the scatter step 3's seed 2 goes to -0.161 % against -0.126 % without tags.
+- **A tag moved 5 mm is not always left out.** It was left out on two scans and refused on one; on two it
+  stayed in (slide 3.23 mm against 1.15 unharmed, 3.13 against 0.58): still better than without tags, most of
+  the gain lost.
+- **What the ratio measures:** how much better the tag detections set aside fit after the fit. Across the six
+  scans it follows the slide mended (r = -0.96) more than the length mended (r = -0.68), and it cannot fall far
+  below 1 when the detections set aside start near the tags' own scatter (about 0.45 mm), though the length is
+  still off.
+
+Limits: the limit of 0.90 was found on the one scan it mends, so this is no test of it: fresh seeds are needed.
+Every harm case is emulated, one draw each. The camera path and the slide only; no mesh made. The processor's
+loops straightened four of the six scans where the graphics card's did not (by up to 2.6 mm), so those four
+start from other poses than the judged runs; step 3's seed 2 and step 2's seed 0 match them exactly.
+
 ## Thin walls: the raw reading, and where the error is made (ENGINE_PLAN X16 and X17, 2026-11-23)
 
 Thin standing walls read 0.5 to 1.3 mm too thick (decision E-D3, item 2). Two questions were measured: can a

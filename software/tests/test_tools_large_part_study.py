@@ -71,6 +71,51 @@ def test_the_share_of_frames_seeing_tags_spaced_along_the_part():
     assert (s["one"], s["two"], s["spaced"]) == (4, 3, 2) and abs(s["share_spaced"] - 2 / 6) < 1e-12
 
 
+def test_the_harm_cases_change_only_what_they_say():
+    from ohs.track.posegraph import StraightenParams
+    from ohs.track.tag_anchors import TagView
+
+    gt = {f: G.make_se3(G.so3_exp(np.array([0.3, 0.0, 0.0])), [0.0, 0.0, 0.0]) for f in range(10)}
+    X = np.array([[0.0, 0.0, 300.0], [25.0, 0.0, 300.0], [25.0, 25.0, 300.0], [0.0, 25.0, 300.0]])
+    views = ([TagView(k, 0, X.copy()) for k in range(10)] + [TagView(k, 12, X.copy()) for k in range(0, 10, 2)]
+             + [TagView(k, 3, X.copy()) for k in range(3, 9)])  # tag 0 the most seen; 0 and 3 on the row, 12 an end's
+    p, frames = StraightenParams(), list(range(10))
+    same, _ = L._harm("none", views, frames, gt, "row150", p, 720.0, 60.0)
+    assert len(same) == len(views)
+    mv, info = L._harm("moved5", views, frames, gt, "row150", p, 720.0, 60.0)
+    assert info["bad_tags"] == [0]
+    for a, b in zip(views, mv):
+        d = np.linalg.norm(b.X - a.X, axis=1)
+        assert np.allclose(d, 5.0 if (a.tag == 0 and a.k >= 5) else 0.0)
+    sl, info = L._harm("slip3", views, frames, gt, "row150", p, 720.0, 60.0)
+    assert info["bad_tags"] == list(range(9))  # the row's tags, not the ends'
+    assert all(np.allclose(np.linalg.norm(b.X - a.X, axis=1), 3.0 if (a.tag < 9 and a.k >= 5) else 0.0)
+               for a, b in zip(views, sl))
+    hf, _ = L._harm("half", views, frames, gt, "row150", p, 720.0, 60.0)
+    assert 0.25 * len(views) < len(hf) < 0.75 * len(views)
+    nz, _ = L._harm("noise3", views, frames, gt, "row150", p, 720.0, 60.0)
+    assert all(not np.allclose(a.X, b.X) for a, b in zip(views, nz))
+
+
+def test_a_limit_is_safe_only_when_no_harm_case_comes_out_worse(tmp_path):
+    def row(acted, e2e, slide, bad=False):
+        return {"acted": acted, "end_to_end_pct": e2e, "slide_worst_rms": slide, "bad_left_out": bad}
+
+    (tmp_path / "limit").mkdir()
+    for h in L.HARMS[1:]:
+        lim = {str(x): row(False, 0.1, 2.0) for x in L.LIMITS}
+        if h == "moved5":
+            lim["0.9"] = row(True, 0.3, 1.0)  # worse than without tags: unsafe
+            lim["1.0"] = row(True, 0.3, 1.0, bad=True)  # worse, but the moved tag was left out: safe
+        L.write_json(tmp_path / "limit" / f"s2-row150-{h}.json", {"no_tags": row(False, 0.1, 2.0), "limits": lim})
+    lim = {str(x): row(x != 0.85, 0.02 if x != 0.85 else 0.126, 1.4) for x in L.LIMITS}
+    L.write_json(tmp_path / "limit" / "s2-row150-none.json", {"no_tags": row(False, 0.126, 2.35), "limits": lim})
+    v = L.limit_verdicts(tmp_path, ["s2-row150"])
+    assert v["0.85"] == {"safe": True, "worth": False, "unsafe_cases": []}
+    assert v["0.9"]["safe"] is False and v["0.9"]["worth"] is True
+    assert v["1.0"]["safe"] is True and v["1.0"]["worth"] is True
+
+
 def test_the_path_reads_a_stretch_along_the_length_and_nothing_at_the_truth():
     sc = L.panel_scene(0)
     gt = _poses()

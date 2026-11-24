@@ -1070,6 +1070,210 @@ def tag_spacing(work: Path, rec_name: str, run: str = "tracked-anchors-on") -> d
     return out
 
 
+# --------------------------------------------------------------------------- the never-worse check's limit (X8 follow-up)
+#: the held-out check's limits tried (``StraightenParams.tag_holdout_max_ratio``; the engine's default 0.85), and
+#: "bypass": the check not applied (no limit on the ratio, no "already agrees" floor). Study only: no default changes.
+LIMITS: tuple[Any, ...] = (0.85, 0.90, 0.95, 1.00, "bypass")
+#: the harm cases (NOTES.md, fixed before running them), all emulated on the saved detections (no new render)
+HARMS = ("none", "moved5", "noise3", "slip3", "half")
+
+
+def _below_normal() -> None:
+    """This process at below-normal priority (another agent's long study shares the processor)."""
+    if sys.platform == "win32":
+        import ctypes
+
+        ctypes.windll.kernel32.SetPriorityClass(ctypes.windll.kernel32.GetCurrentProcess(), 0x4000)
+
+
+def limit_prep(work: Path, rec_name: str) -> Path:
+    """Straighten's loops on the processor, on the scan's tracked path (``tracked-anchors-off/track_trajectory.csv``,
+    the same path both of its tracked runs started from), and the tags each keyframe sees: everything the tags' block
+    takes, saved so :func:`limit_sweep` runs only the block. The loops here run on the processor path, not on the
+    graphics card as in the judged runs: their result is compared with the run's saved one (``loops_check``)."""
+    import pickle
+
+    from ohs.track.posegraph import StraightenParams, _straighten_loops, read_trajectory, select_keyframes
+    from ohs.track.tag_anchors import TagView, detect_tag_views
+
+    rec = work / "recs" / rec_name
+    run = work / "runs" / rec_name / "tracked-anchors-off"
+    out = work / "limit" / f"{rec_name}.pkl"
+    if out.is_file():
+        return out
+    out.parent.mkdir(parents=True, exist_ok=True)
+    p = StraightenParams(tags=True)
+    traj = read_trajectory(run / "track_trajectory.csv")
+    t0 = time.perf_counter()
+    ctx: dict = {}
+    poses, rep = _straighten_loops(rec, None, traj, params=p, ctx=ctx)
+    rows = ctx["rows"]
+    kf_pos = select_keyframes(rows, p.kf_travel_mm, p.kf_rotation_deg, p.kf_max_gap_s, p.max_keyframes)
+    kf_frames = [int(rows[k][0]) for k in kf_pos]
+    det, info = detect_tag_views(ctx["reader"], ctx["calib"], kf_frames, dataclasses_replace(p, tag_look_every=1))
+    views = [TagView(k, m, X) for k, fr in enumerate(kf_frames) for m, X in sorted(det.get(fr, {}).items())]
+    saved = path_rows(run / "straighten_poses.csv") if (run / "straighten_poses.csv").is_file() else {}
+    gpu = json.loads((run / "straighten.json").read_text(encoding="utf-8")) if (run / "straighten.json").is_file() else {}
+    diff = max((float(np.linalg.norm(poses[i][:3, 3] - saved[i][:3, 3])) for i in poses if i in saved), default=None)
+    check = {"cpu_reason": rep.get("reason"), "gpu_reason": gpu.get("reason"), "cpu_verdict": rep.get("verdict"),
+             "gpu_verdict": gpu.get("verdict"), "max_pose_diff_mm": diff, "seconds": round(time.perf_counter() - t0, 1)}
+    blob = {"rows": [(int(r[0]), float(r[1]), bool(r[2]), np.asarray(r[3])) for r in rows], "kf_pos": list(kf_pos),
+            "kf_frames": kf_frames, "poses": poses, "loops": ctx.get("loops") or [], "views": views, "K": info["K"],
+            "loops_reason": rep.get("reason"), "loops_check": check}
+    with out.open("wb") as f:
+        pickle.dump(blob, f)
+    log(f"{rec_name}: prepared, {len(views)} views in {len(kf_frames)} keyframes; loops {check}")
+    return out
+
+
+def _harm(name: str, views: list, kf_frames: list[int], gt: dict, layout: str, p: Any, f: float, B: float) -> tuple[list, dict]:
+    """A harm case applied to the saved detections (an emulation; NOTES.md): ``moved5``: the most-seen tag moved
+    5 mm along the panel from the scan's middle keyframe on; ``noise3``: every corner's scatter three times the
+    measured one (noise of sqrt(8) times it added); ``slip3``: the tags along the long sides (not the ends) moved
+    3 mm along the panel together from the middle keyframe on (a strip that slipped; a strip laid shifted from the
+    start changes nothing, the fit never knows where a tag lies); ``half``: half the detections dropped at random."""
+    from ohs.track.tag_anchors import TagView, _corner_weights
+
+    rng = np.random.default_rng(12345)
+    half_k = len(kf_frames) // 2
+    info: dict[str, Any] = {"harm": name}
+
+    def moved(v, d):
+        R = gt[kf_frames[v.k]][:3, :3]  # the true camera's turn: a move of the tag in the world, in its frame
+        return TagView(v.k, v.tag, v.X + R.T @ np.asarray(d))
+
+    if name == "none":
+        return list(views), info
+    if name == "moved5":
+        counts: dict[int, int] = {}
+        for v in views:
+            counts[v.tag] = counts.get(v.tag, 0) + 1
+        m = max(sorted(counts), key=lambda t: counts[t])
+        info["bad_tags"] = [m]
+        return [moved(v, [5.0, 0.0, 0.0]) if (v.tag == m and v.k >= half_k) else v for v in views], info
+    if name == "noise3":
+        out = []
+        for v in views:
+            w = _corner_weights(v.X, f, B, float(p.tag_sigma_px), float(p.tag_sigma_view_px))
+            out.append(TagView(v.k, v.tag, v.X + rng.normal(size=v.X.shape) * math.sqrt(8.0) / np.sqrt(w)))
+        return out, info
+    if name == "slip3":
+        side = [m for m, (x, _) in enumerate(TAG_LAYOUTS[layout]) if abs(x) <= HALF_L]
+        info["bad_tags"] = side
+        return [moved(v, [3.0, 0.0, 0.0]) if (v.tag in side and v.k >= half_k) else v for v in views], info
+    if name == "half":
+        keep = rng.random(len(views)) >= 0.5
+        return [v for v, k in zip(views, keep) if k], info
+    raise ValueError(name)
+
+
+def limit_sweep(work: Path, rec_name: str, harm: str = "none") -> dict:
+    """The tags' block alone (``ohs.track.tag_anchors.anchor_keyframes``, as ``posegraph._anchor_to_tags`` calls it)
+    on the prepared scan (:func:`limit_prep`), at each limit of :data:`LIMITS`, with ``harm`` applied; the camera path
+    against the truth after it, and without tags (the loops' poses). No graphics card, no mesh."""
+    import pickle
+
+    from ohs.io.recording import RecordingReader
+    from ohs.track.posegraph import StraightenParams, interpolate_poses, odometry_edges, tag_odometry_params
+    from ohs.track.tag_anchors import anchor_keyframes
+
+    rec = work / "recs" / rec_name
+    with (work / "limit" / f"{rec_name}.pkl").open("rb") as fh:
+        b = pickle.load(fh)
+    meta = json.loads((rec / "meta.json").read_text(encoding="utf-8"))
+    fps = float(meta["fps"])
+    sc = scene_for(rec)
+    reader = RecordingReader(rec)
+    gt = reader.ground_truth_poses()
+    stc = reader.calibration().stereo
+    K, size = np.asarray(stc.K_rect, np.float64), tuple(stc.image_size)
+    layout = json.loads((rec / "tags.json").read_text(encoding="utf-8"))["layout"]
+    rows, kf_pos, kf_frames, poses = b["rows"], b["kf_pos"], b["kf_frames"], b["poses"]
+    f, B = b["K"]
+    base = StraightenParams(tags=True)
+    views, hinfo = _harm(harm, b["views"], kf_frames, gt, layout, base, f, B)
+    T_kf = np.stack([poses[fr] for fr in kf_frames])
+    nfr = np.diff(np.asarray(kf_pos))
+    lost = np.array([sum(1 for r in rows[kf_pos[k]:kf_pos[k + 1]] if not r[2]) for k in range(len(kf_pos) - 1)])
+    odometry = [(e.k, e.X, e.info) for e in odometry_edges(T_kf, nfr, lost, tag_odometry_params(base))]
+    tracked = [r for r in rows if r[2]]
+    idx = [int(r[0]) for r in tracked]
+    T_cur = np.stack([poses[i] for i in idx])
+    times = np.array([float(r[1]) for r in tracked])
+    kf_times = np.array([float(rows[k][1]) for k in kf_pos])
+
+    def score(P: dict) -> dict:
+        pm = path_metrics(sc, P, gt, fps)
+        rv = revisits(sc, P, gt, K, size, fps)
+        e = pm["end_to_end"]
+        return {"end_to_end_pct": e.get("length_err_pct"), "end_to_end_mm": e.get("length_err_mm"),
+                "per_pass_mm": [(v or {}).get("length_err_mm") for v in pm["per_pass"].values()],
+                "slide_rms": {k: v["along_rms"] for k, v in rv.items()},
+                "slide_worst_rms": max((v["along_rms"] for v in rv.values()), default=None)}
+
+    res: dict[str, Any] = {"rec": rec_name, "harm": hinfo, "views": len(views), "loops_reason": b["loops_reason"],
+                           "loops_check": b["loops_check"], "no_tags": score(poses), "limits": {}}
+    for L in LIMITS:
+        p = (dataclasses_replace(base, tag_holdout_max_ratio=1e9, tag_min_residual_mm=0.0) if L == "bypass"
+             else dataclasses_replace(base, tag_holdout_max_ratio=float(L)))
+        t0 = time.perf_counter()
+        fit = anchor_keyframes(T_kf, views, odometry, p, f, B, loops=b["loops"])
+        r: dict[str, Any] = {"reason": fit.reason, "acted": fit.T is not None, "used": len(fit.used),
+                             "left_out": sorted(fit.left_out), "dropped_views": fit.dropped_views,
+                             "ratios": [s.get("ratio") for s in (fit.holdout or {}).get("splits", [])],
+                             "before_mm": [s.get("before_mm") for s in (fit.holdout or {}).get("splits", [])],
+                             "seconds": round(time.perf_counter() - t0, 1)}
+        bad = hinfo.get("bad_tags")
+        r["bad_left_out"] = bool(bad) and all(m in fit.left_out for m in bad)
+        if fit.T is not None:
+            T_new = interpolate_poses(times, T_cur, kf_times, T_kf, fit.T)
+            r.update(score({i: T_new[m] for m, i in enumerate(idx)}))
+        else:
+            r.update(res["no_tags"])
+        res["limits"][str(L)] = r
+    write_json(work / "limit" / f"{rec_name}-{harm}.json", res)
+    log(f"{rec_name} {harm}: no tags {res['no_tags']['end_to_end_pct']:.3f} % / {res['no_tags']['slide_worst_rms']:.2f} mm; "
+        + "; ".join(f"{L}: {v['reason']} {v['ratios']} -> {_f(v['end_to_end_pct'])} % / {_f(v['slide_worst_rms'], 2)} mm"
+                    for L, v in res["limits"].items()))
+    return res
+
+
+def limit_verdicts(work: Path, recs: list[str], tol_pct: float = 0.01, tol_mm: float = 0.1) -> dict:
+    """The rule of the follow-up (NOTES.md): a limit is safe to propose when on every harm case and scan the result
+    is no worse than without tags (end to end not larger by more than ``tol_pct`` % and the worst slide not larger by
+    more than ``tol_mm``), or the tags are refused, or the bad tag is left out; worth proposing when it makes the tags
+    act on step 3's seed 2 and that scan then has the path under 0.05 %."""
+    out: dict[str, Any] = {}
+    for L in LIMITS:
+        harms = []
+        for rec in recs:
+            for h in HARMS[1:]:
+                j = work / "limit" / f"{rec}-{h}.json"
+                if not j.is_file():
+                    harms.append({"rec": rec, "harm": h, "missing": True})
+                    continue
+                d = json.loads(j.read_text(encoding="utf-8"))
+                r, n = d["limits"][str(L)], d["no_tags"]
+                worse = (abs(r["end_to_end_pct"]) > abs(n["end_to_end_pct"]) + tol_pct
+                         or r["slide_worst_rms"] > n["slide_worst_rms"] + tol_mm)
+                ok = (not r["acted"]) or r["bad_left_out"] or not worse
+                harms.append({"rec": rec, "harm": h, "ok": ok, "acted": r["acted"], "worse": worse,
+                              "e2e": r["end_to_end_pct"], "e2e_no_tags": n["end_to_end_pct"],
+                              "slide": r["slide_worst_rms"], "slide_no_tags": n["slide_worst_rms"]})
+        s2 = work / "limit" / "s2-row150-none.json"
+        worth = None
+        if s2.is_file():
+            r = json.loads(s2.read_text(encoding="utf-8"))["limits"][str(L)]
+            worth = bool(r["acted"] and abs(r["end_to_end_pct"]) < LIMIT_PCT)
+        out[str(L)] = {"safe": all(x.get("ok") for x in harms) and not any(x.get("missing") for x in harms),
+                       "worth": worth, "unsafe_cases": [x for x in harms if not x.get("ok", False)]}
+    write_json(work / "limit" / "verdicts.json", out)
+    for L, v in out.items():
+        log(f"limit {L}: safe {v['safe']}, worth {v['worth']}; not safe on "
+            f"{[(x['rec'], x['harm']) for x in v['unsafe_cases']]}")
+    return out
+
+
 def dataclasses_replace(obj: Any, **kw: Any) -> Any:
     import dataclasses
 
@@ -1141,7 +1345,7 @@ def table(work: Path) -> None:
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("what", choices=("budget", "render", "process", "judge", "table", "edgecheck", "measure", "notagcheck",
-                                     "spacing"))
+                                     "spacing", "limitprep", "limit", "limitverdict"))
     ap.add_argument("work", type=Path)
     ap.add_argument("args", nargs="*")
     ap.add_argument("--frames", type=int, default=None)
@@ -1174,6 +1378,14 @@ def main(argv: list[str] | None = None) -> int:
         no_tags_check(a.work, a.args[0])
     elif a.what == "spacing":
         tag_spacing(a.work, a.args[0])
+    elif a.what == "limitprep":
+        _below_normal()
+        limit_prep(a.work, a.args[0])
+    elif a.what == "limit":
+        _below_normal()
+        limit_sweep(a.work, a.args[0], a.args[1] if len(a.args) > 1 else "none")
+    elif a.what == "limitverdict":
+        limit_verdicts(a.work, a.args)
     elif a.what == "judge":
         judge(a.work, a.args[0])
     else:
