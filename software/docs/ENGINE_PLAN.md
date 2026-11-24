@@ -122,6 +122,11 @@ The rules of `FEATURE_PLAN.md` and `MAINTENANCE_PLAN.md` hold. In short:
   3. Merge (X19): `align_hold_tags` goes on by default after one more rendered case passes,
      a part turned over with tags on the part itself; with it the Align page's words, the
      guide and a trial in the running app.
+  4. Holes (X15), decided the same day after round 6: the reading from the camera images is
+     built into the app's hole tool, as a second answer beside the mesh's.
+  5. Long parts (X8), decided the same day after the fresh seeds: `straighten_tags` goes on
+     by default at the limit of 0.85, after a check that short scans with tags in view are
+     not made worse by it.
 
 ## The error budget today
 
@@ -896,8 +901,10 @@ and thin parts".
     0.014 %, from 0.24 to 0.73 % off); the passes' slide misses on all three (0.77, 1.02,
     1.41 mm RMS against 0.65). Over the nine tagged scans: tags acted on eight, mesh length
     met on nine, path on six of eight, slide on two, the whole rule on one.
-  - **With the owner now (E-D5): switch the setting on at 0.85?** The length is right
-    wherever the tags act and nothing gets worse; the passes still sit 0.6 to 1.4 mm RMS
+  - **Decided 2026-11-24 (E-D5): on by default at 0.85, after a check** that short scans
+    with tags in view (the walls and sheet with table tags, the tag-hold test's bracket
+    scans) are not made worse by it (running). The length is right wherever the tags act
+    and nothing gets worse; the passes still sit 0.6 to 1.4 mm RMS
     apart along the part, which the rule's part (d) does not allow. Not measured: what
     that slide costs features along a part. On five of six tagged
     scans it brings the path from 0.18 to 0.47 % down to 0.003 to 0.060 %, on the sixth it
@@ -1027,7 +1034,10 @@ from the camera images".
     +0.00 mm, where today's tool reads 1.0 to 6.6 mm small.
   - Left: the fresh plates are at true poses only; the near-floor Ø10 with the dots on is
     answered by 3 to 7 clicks of 9; real images.
-- **With the owner now (round 6 holds):** a first version in the app's hole tool,
+- **Decided 2026-11-24 (E-D5): built into the app's hole tool.** Step 1, the engine module
+  (`ohs/measure/rim.py`, the study tool calling it), is being built; step 2 (the fit
+  route, the hole tool, the guide) follows the wall-thickness piece, which edits the same
+  files. A first version in the app's hole tool,
   "from the images" beside the mesh's reading, 10 to 20 s a click on this processor: a new
   module `ohs/measure/rim.py` called after today's mesh answer, the answer gaining one
   field `from_images` (a diameter with its ±, or the words of a refusal).
