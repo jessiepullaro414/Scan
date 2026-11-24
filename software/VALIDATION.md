@@ -5743,6 +5743,36 @@ Every harm case is emulated, one draw each. The camera path and the slide only; 
 loops straightened four of the six scans where the graphics card's did not (by up to 2.6 mm), so those four
 start from other poses than the judged runs; step 3's seed 2 and step 2's seed 0 match them exactly.
 
+### Fresh seeds for the limit (X8, 2026-11-24): the limit stays; the length holds, the slide does not
+
+Seeds 3, 4 and 5 of the same panel with step 3's layout (nine tags along the near side 150 mm apart, five across
+each end), not looked at before, each processed without tags, with the tags at the check's limit of 0.85 and at
+0.90 (`D:\OpenHandScan-work\scratch\x8\runs\s3-row150` to `s5-row150`). The rule, fixed beforehand: 0.90 is safe if
+its run is no worse than 0.85's and than no tags on every measure; worth it if the tags act at 0.90 where 0.85
+refused them and the path is then under 0.05 %.
+
+| | seed 3 | seed 4 | seed 5 |
+|---|---|---|---|
+| the mesh's length against true poses, with tags (without) | -0.001 % (-0.017) | -0.005 % (-0.551) | -0.003 % (-0.197) |
+| the camera path end to end, with tags (without) | +0.001 % (-0.243) | -0.014 % (-0.725) | -0.010 % (-0.456) |
+| the passes' slide, worst pair, RMS, with tags (without) | **0.77 mm** (5.95) | **1.02 mm** (10.21) | **1.41 mm** (7.85) |
+| the check's ratios (limit 0.85) | 0.62, 0.58 | 0.45, 0.53 | 0.72, 0.54 |
+| Make mesh, without and with tags | 149 and 229 s | 218 and 226 s | 146 and 225 s |
+| the true-pose reading repeated | +0.04 mm | +0.11 mm | +0.13 mm |
+
+- **0.85 refused the tags on none of the three, so 0.90 gave the same runs.** Safe, and neither supported nor
+  refuted: the limit stays at 0.85.
+- **The length is mended on every seed** (the path from 0.24 to 0.73 % off to within 0.014 %).
+- **The slide between passes misses on every seed** (0.77 to 1.41 mm RMS against 0.65), though it falls from 6 to
+  10 mm.
+
+**All nine tagged scans** (steps 2 and 3 and these): the tags acted on eight; the mesh's length is within 0.05 %
+on all nine; the path on six of the eight where they acted (the other two miss by 0.002 and 0.010 %); the slide
+within 0.65 mm RMS on two; the whole rule on one. A scan without tags is the same bit for bit.
+
+Not measured: what a slide of 0.6 to 1.4 mm between passes costs the surface and features along the part (the
+panel is plain, and the length read from its edges is right); a fresh seed on which 0.85 refuses.
+
 ## Thin walls: the raw reading, and where the error is made (ENGINE_PLAN X16 and X17, 2026-11-23)
 
 Thin standing walls read 0.5 to 1.3 mm too thick (decision E-D3, item 2). Two questions were measured: can a

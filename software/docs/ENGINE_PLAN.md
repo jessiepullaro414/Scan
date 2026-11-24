@@ -889,8 +889,17 @@ and thin parts".
     on three of the five scans where the tags act. (3) The fit given the tags' known spacing
     (a printed strip; X22): a distance term in `ohs/track/tag_anchors.py`, about 40 lines
     and tests; it would also give the scale an outside reference.
-  - **Decided 2026-11-24 (E-D5): fresh seeds first** (3 to 5, the limit at 0.85 and at 0.90;
-    running), then the owner decides on switching the setting on. On five of six tagged
+  - **Fresh seeds measured 2026-11-24** (3 to 5, step 3's layout, the limit at 0.85 and at
+    0.90; `VALIDATION.md`, "Fresh seeds for the limit"): 0.85 refused the tags on none, so
+    both limits gave the same runs: 0.90 is neither supported nor refuted and **the limit
+    stays 0.85**. The length is mended on all three (mesh within 0.005 %, path within
+    0.014 %, from 0.24 to 0.73 % off); the passes' slide misses on all three (0.77, 1.02,
+    1.41 mm RMS against 0.65). Over the nine tagged scans: tags acted on eight, mesh length
+    met on nine, path on six of eight, slide on two, the whole rule on one.
+  - **With the owner now (E-D5): switch the setting on at 0.85?** The length is right
+    wherever the tags act and nothing gets worse; the passes still sit 0.6 to 1.4 mm RMS
+    apart along the part, which the rule's part (d) does not allow. Not measured: what
+    that slide costs features along a part. On five of six tagged
     scans it brings the path from 0.18 to 0.47 % down to 0.003 to 0.060 %, on the sixth it
     changes nothing, and a scan without tags is the same bit for bit; by the rule as
     written it is a miss.
