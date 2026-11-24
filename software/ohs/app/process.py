@@ -354,6 +354,17 @@ def _frame_row(res: FrameResult) -> dict:
     return row
 
 
+def pool_full_warning(cap: dict) -> str:
+    """The sentence for the user when the mesh model's pool had no room for new surface (``report["mesh_capacity"]``,
+    :meth:`ohs.track.recon_tsdf.ConfidenceTsdf.capacity_status` with ``first_refused_frame``; ENGINE_PLAN R2-5)."""
+    at = cap.get("first_refused_frame")
+    when = f"after frame {at}" if at is not None else "while the frames of the scan's start were fused"
+    refused, held = int(cap["bricks_refused"]), int(cap["bricks"])
+    return (f"The mesh model ran out of room {when}: surface seen after that was not added ({refused:,} of "
+            f"{refused + held:,} blocks of surface left out; the model holds {held:,} blocks, {cap['mb']:.0f} MB). "
+            "The mesh is incomplete there. Scan a smaller area at a time, or make the mesh at a coarser mesh detail.")
+
+
 def _weak_summary(rows: list[dict]) -> dict:
     """Fraction of the tracked frames whose surface let the scanner slide, or turn (``info["weak"]``)."""
     ok = [r for r in rows if r.get("ok")]
@@ -503,6 +514,9 @@ def process_recording(
     timings: dict[str, list[float]] = {}
     reasons: Counter = Counter()
     n_prior = 0
+    # the mesh model's pool (ENGINE_PLAN R2-5): the frame at which it first had no room for new surface
+    pool_of = getattr(pipe.markerless, "capacity_status", None)
+    full_at: int | None = None
     frames = reader.iter_ahead(positions, READ_AHEAD_FRAMES)  # a thread reads the next frames meanwhile
     try:
         for k, frame in enumerate(frames):
@@ -518,6 +532,8 @@ def process_recording(
                 reasons[str(res.track.info.get("reason", "unknown"))] += 1
             n_prior += int(bool(res.track.info.get("gyro_prior", False)))
             rows.append(_frame_row(res))
+            if pool_of is not None and full_at is None and pipe.markerless.pool_full:
+                full_at = int(res.index)
             if health is not None:
                 health.frame(k, res)
             traj_rows.append((res.index, res.t, bool(res.track.ok), res.track.T_wc))
@@ -667,6 +683,14 @@ def process_recording(
             if (report["path_check"] or {}).get("warning"):
                 report["warnings"].append(report["path_check"]["warning"])
                 log.warning("%s", report["path_check"]["warning"])
+        # the mesh model's pool (ENGINE_PLAN R2-5): None for a model that keeps no such status (Open3D's)
+        report["mesh_capacity"] = None
+        if pool_of is not None:
+            cap = {**pool_of(), "first_refused_frame": full_at}
+            report["mesh_capacity"] = cap
+            if cap["full"]:
+                report["warnings"].append(pool_full_warning(cap))
+                log.warning("%s", report["warnings"][-1])
 
         gt = reader.ground_truth_poses()
         if gt:

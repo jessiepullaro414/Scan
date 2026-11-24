@@ -1423,7 +1423,12 @@ guard test seen failing first:
   before, 0.04 degrees and 0.3 mm now, on the box scene).
 - [ ] **R2-5 (F5): when the mesh model's brick pool is full, new surface is not fused and the
   saved result does not say so** (`recon_tsdf.py` logs once). The thin-parts rule's spirit:
-  nothing may go missing in silence. To carry into the report, the viewer and a merge.
+  nothing may go missing in silence. Partly mended 2026-11-24: the model counts what it
+  refused and the saved result says it (a block and a warning; shown after Follow the
+  camera). **Open:** Straighten's and Make mesh's stage results pass no warnings on
+  (`_stage_end` in `ohs/server/processing.py`), "Make only the thin walls finer" builds its
+  own model (`ohs/app/fine_walls.py`), and a merge has its own frame loop
+  (`ohs/align/merge.py`): each has to carry the status; `APP_API.md` gets the block then.
 - [x] **R2-6 (F6): a failed frame write still gets its row in the recording's index, and
   `meta.json` is replaced in place** (`ohs/io/recording.py`): a recording reopened after a
   failed write lists a frame it cannot read; a write cut short leaves metadata that does

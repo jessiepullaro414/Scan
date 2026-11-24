@@ -731,7 +731,8 @@ class ConfidenceTsdf:
         surface (mm), ``None`` (the default): no second mean, no extra channels; and the shares
         ``(from, full)`` between which a voxel's value goes from the first mean to the second.
     initial_bricks, max_bricks:
-        Pool size at the start, and its limit (bricks beyond it are dropped, with a warning).
+        Pool size at the start, and its limit (bricks beyond it are dropped, with a warning in the log, and
+        counted: :meth:`capacity_status`).
     """
 
     def __init__(self, K: np.ndarray, image_size: tuple[int, int], voxel_mm: float = 1.0, trunc_mm: float = 4.0,
@@ -793,7 +794,6 @@ class ConfidenceTsdf:
         self.max_bricks = int(max_bricks)
         L = np.stack(np.meshgrid(np.arange(BRICK), np.arange(BRICK), np.arange(BRICK), indexing="ij"), axis=-1)
         self._local = L[..., ::-1].reshape(NVOX, 3).astype(np.int64)  # (x, y, z) of voxel l = z * 64 + y * 8 + x
-        self._warned_full = False
         self._allowed: np.ndarray | None = None  # limit_bricks: the encoded bricks it may fuse into (None: all)
         self.reset()
         log.info("confidence TSDF: %s, %.2f mm voxels, trunc %.1f mm, %.1f px per independent look",
@@ -899,6 +899,12 @@ class ConfidenceTsdf:
         self.n_bricks = 0
         self.n_integrated = 0
         self.capacity = 0
+        # what a full pool refused since the reset (capacity_status; ENGINE_PLAN R2-5)
+        self._warned_full = False
+        self._refused_enc = np.zeros(0, dtype=np.int64)  # the encoded bricks that got no room (sorted, distinct)
+        self._n_refused_requests = 0
+        self._n_refused_calls = 0
+        self._first_refused_call: int | None = None
         self._release_storage()
         self._alloc(self._initial)
 
@@ -967,6 +973,11 @@ class ConfidenceTsdf:
                     log.warning("confidence TSDF: the pool is full (%d bricks, %.0f MB); new surface is not fused",
                                 self.capacity, self.memory_mb)
                     self._warned_full = True
+                self._refused_enc = np.union1d(self._refused_enc, enc[new[room:]])
+                self._n_refused_requests += len(new) - room
+                self._n_refused_calls += 1
+                if self._first_refused_call is None:
+                    self._first_refused_call = self.n_integrated
                 new = new[:room]
             s0 = self.n_bricks
             fresh = np.arange(s0, s0 + len(new), dtype=np.int64)
@@ -980,6 +991,25 @@ class ConfidenceTsdf:
             self._slot_sorted = np.insert(ss, at, fresh[order])
         keep = slots >= 0
         return slots[keep].astype(np.int32), np.asarray(keys)[keep].astype(np.int32)
+
+    @property
+    def pool_full(self) -> bool:
+        """Whether a frame since the last :meth:`reset` had surface the pool had no room for (it was not fused)."""
+        return self._first_refused_call is not None
+
+    def capacity_status(self) -> dict:
+        """The pool and what it refused since the last :meth:`reset` (ENGINE_PLAN R2-5): ``full`` (any surface refused),
+        ``bricks`` / ``mb`` (held now), ``max_bricks`` / ``max_mb`` (its limit: half the graphics card's memory, or
+        2^20 bricks on the CPU), ``bricks_refused`` (distinct bricks a frame reached that got no room: their surface
+        is missing), ``requests_refused`` (the same, counted per frame that asked), ``calls_refused`` (integrations
+        that lost surface), ``first_refused_call`` (0-based count of integrations before the first such one, or
+        None) and ``voxel_mm``. A brick is 8 voxels on a side."""
+        per_brick_mb = NVOX * 4 * (len(self._channels) + 1) / 2 ** 20
+        return {"full": self.pool_full, "bricks": int(self.n_bricks), "mb": round(self.memory_mb, 1),
+                "max_bricks": int(self.max_bricks), "max_mb": round(self.max_bricks * per_brick_mb, 1),
+                "bricks_refused": int(len(self._refused_enc)), "requests_refused": int(self._n_refused_requests),
+                "calls_refused": int(self._n_refused_calls), "first_refused_call": self._first_refused_call,
+                "voxel_mm": float(self.voxel_mm)}
 
     def _frame_bricks(self, depth: np.ndarray, T_wc: np.ndarray) -> np.ndarray:
         """Brick coordinates (M,3) int64 that the frame's depth band reaches (module docstring)."""

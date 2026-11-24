@@ -4010,6 +4010,20 @@ track the same byte for byte, losses that are covered included (28 frames and a 
 covered losses, processor path). Not run: the graphics card's tracker and its start, which restores the
 cover state; a whole recording with an IMU gap put into it.
 
+**A full mesh model (R2-5).** When the mesh model's pool of blocks is full, surface seen later is not fused. That
+was logged once and said nowhere in the saved result. The model now counts what it refused (distinct blocks,
+requests, integration calls, the first call), and the result holds a block `mesh_capacity` (blocks and
+megabytes held, the limit, blocks refused, the frame of the first refusal) and, when anything was refused, a
+warning: "The mesh model ran out of room after frame N: surface seen after that was not added (X of Y blocks
+of surface left out; the model holds Z blocks, M MB). The mesh is incomplete there. Scan a smaller area at a
+time, or make the mesh at a coarser mesh detail." The mesh and the recording are kept. Tested with the pool
+forced small on both of the model's backends in one class (the graphics card's test is written and was not
+run here). A scan that never fills the pool has the same mesh, laser points, path and report as before, plus
+the block saying it was not full; a scan made with Open3D's model has no such status. The warning reaches
+the user after Follow the camera today; Straighten's and Make mesh's stage cards, "Make only the thin walls
+finer" and a merge do not pass it on yet (open). Seen on the way and not looked into: the processor path's
+per-vertex sigmas differ between two runs of the same code on a handful of 80,000 vertices, by about 1e-6 mm.
+
 ## The no-GPU plate slide, and a check of the camera path (ENGINE_PLAN X0a, 2026-11-20)
 
 Without a GPU the 0.5 mm plates slide in their first frames. On plate seed 0 the tracker's steps
