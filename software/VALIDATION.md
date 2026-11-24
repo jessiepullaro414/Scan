@@ -3924,6 +3924,21 @@ carburettor's model files) is named under "Not compared" and is not counted as m
 reads exactly as before. The saved baselines compared with one another came out complete (72 runs, nothing
 lost), so the check raises no false alarm on them. Not done: no scorecard run on recordings was made for this.
 
+## Small defects from the second outside review (2026-11-24)
+
+Each was checked against the code, shown by a guard test that failed first, and mended by itself
+(ENGINE_PLAN, "A second outside review").
+
+**The rotation logarithm near a half turn (R2-10).** `so3_log` (`ohs/geometry.py`) read the axis of a rotation
+within 1e-4 rad of a half turn from a matrix it took for symmetric and forced the largest component positive:
+a rotation about -X by pi - 9e-5 came back about +X, 1.8e-4 off in the matrix (0.0103 degrees), and a mixed
+axis 0.0038 degrees off. The plain formula also lost accuracy before that limit (a round trip off by about
+1e-15 / (pi - angle)^2: 2e-8 at pi - 2e-4). Within 0.1 rad of a half turn the axis now comes from the symmetric
+part, its sign from the antisymmetric part and the angle from atan2: the round trip is under 1e-12 on six
+axes at fifteen angles up to and past pi (66 of 98 guard tests failed before). More than 0.1 rad from a half
+turn the result is the same bit for bit (4,000 random rotations). Results that pass through a rotation
+within 0.1 rad of a half turn change in their last digits.
+
 ## The no-GPU plate slide, and a check of the camera path (ENGINE_PLAN X0a, 2026-11-20)
 
 Without a GPU the 0.5 mm plates slide in their first frames. On plate seed 0 the tracker's steps

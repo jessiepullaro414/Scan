@@ -65,25 +65,46 @@ def so3_exp(w: np.ndarray) -> np.ndarray:
     return np.eye(3) + np.sin(th) / th * W + (1.0 - np.cos(th)) / th**2 * W @ W
 
 
+# so3_log: within this angle (rad) of a half turn the rotation vector is read by _so3_log_near_pi. The plain
+# formula th / (2 sin th) * v is ill-conditioned there (the angle from arccos is off by ~eps / sin th, and dividing
+# by sin th amplifies it): a round trip so3_exp(so3_log(R)) is off by ~1e-15 / (pi - th)^2, 7e-12 at 0.01 rad
+# from pi and 2e-8 at 2e-4 (ENGINE_PLAN R2-10). At 0.1 rad it is ~1e-13.
+_SO3_LOG_NEAR_PI = 0.1
+
+
 def so3_log(R: np.ndarray) -> np.ndarray:
-    """Rotation vector of a rotation matrix (inverse of :func:`so3_exp`)."""
+    """Rotation vector of a rotation matrix (inverse of :func:`so3_exp`), length in ``[0, pi]``.
+
+    Close to a half turn (within ``_SO3_LOG_NEAR_PI``) the axis comes from the symmetric part and its sign from the
+    antisymmetric part (:func:`_so3_log_near_pi`); at exactly pi either sign is the same rotation."""
     R = np.asarray(R, dtype=np.float64)
     cos_th = np.clip((np.trace(R) - 1.0) / 2.0, -1.0, 1.0)
     th = float(np.arccos(cos_th))
     if th < 1e-8:
         return 0.5 * np.array([R[2, 1] - R[1, 2], R[0, 2] - R[2, 0], R[1, 0] - R[0, 1]])
-    if np.pi - th < 1e-4:
-        # near 180 deg: axis from the symmetric part
-        B = (R + np.eye(3)) / 2.0
-        axis = np.sqrt(np.clip(np.diag(B), 0.0, None))
-        k = int(np.argmax(axis))
-        axis[k] = np.sqrt(B[k, k])
-        for j in range(3):
-            if j != k:
-                axis[j] = B[k, j] / axis[k]
-        axis /= np.linalg.norm(axis)
-        return axis * th
+    if np.pi - th < _SO3_LOG_NEAR_PI:
+        return _so3_log_near_pi(R)
     return th / (2.0 * np.sin(th)) * np.array([R[2, 1] - R[1, 2], R[0, 2] - R[2, 0], R[1, 0] - R[0, 1]])
+
+
+def _so3_log_near_pi(R: np.ndarray) -> np.ndarray:
+    """:func:`so3_log` of a rotation by more than ~90 deg, stable up to and at a half turn.
+
+    ``R = c I + s [a]x + (1 - c) a a^T`` (``c, s`` = cos, sin of the angle), so the symmetric part gives
+    ``a a^T = (S - c I) / (1 - c)`` (``1 - c >= 1`` here) and the antisymmetric part ``s a``: the axis is the row of
+    ``a a^T`` with the largest diagonal, normalised, signed by ``s a``, and the angle is ``atan2(s, c)``, accurate
+    to rounding at any angle (``arccos(c)`` is not near pi). With ``s a`` at rounding level (exactly pi) the sign
+    is arbitrary, and both signs are the same rotation."""
+    v = 0.5 * np.array([R[2, 1] - R[1, 2], R[0, 2] - R[2, 0], R[1, 0] - R[0, 1]])  # sin(th) * axis
+    c = (np.trace(R) - 1.0) / 2.0
+    th = float(np.arctan2(np.linalg.norm(v), c))
+    A = (0.5 * (R + R.T) - c * np.eye(3)) / (1.0 - c)  # axis axis^T
+    k = int(np.argmax(np.diag(A)))
+    axis = A[k] / np.sqrt(max(float(A[k, k]), 1e-300))
+    axis /= np.linalg.norm(axis)
+    if float(axis @ v) < 0.0:
+        axis = -axis
+    return axis * th
 
 
 def rotation_angle_deg(R: np.ndarray) -> float:

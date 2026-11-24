@@ -1422,8 +1422,9 @@ guard test seen failing first:
   outcome: stop recording cleanly with a reason and keep what was written.
 - [ ] **R2-9 (F9): "frames with laser points" counts additions, not frames** (two lines a
   frame count twice). Being mended.
-- [ ] **R2-10 (F10): the rotation logarithm is about 0.01 degrees off just below a half turn**
-  (`ohs/geometry.py`, `so3_log`). Being mended.
+- [x] **R2-10 (F10): the rotation logarithm is about 0.01 degrees off just below a half turn**
+  (`ohs/geometry.py`, `so3_log`). Mended 2026-11-24: stable within 0.1 rad of a half turn
+  (round trip under 1e-12), unchanged bit for bit elsewhere.
 
 Also taken from it, not started: signed per-recording differences and fixed practical limits
 printed beside the scorecard's verdict (a wide spread on one bad seed can hide a smaller

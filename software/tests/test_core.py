@@ -32,6 +32,73 @@ def test_so3_roundtrip():
     assert np.allclose(G.so3_exp(G.so3_log(R)), R, atol=1e-5)
 
 
+_HALF_TURN_AXES = {
+    "+x": [1.0, 0.0, 0.0],
+    "-x": [-1.0, 0.0, 0.0],
+    "+y": [0.0, 1.0, 0.0],
+    "-z": [0.0, 0.0, -1.0],
+    "mixed": [1.0, 2.0, 3.0],
+    "mixed-negative": [-0.3, 0.8, -0.52],
+}
+
+
+@pytest.mark.parametrize("off", [0.2, 0.11, 0.09, 1e-2, 1e-3, 2e-4, 1.01e-4, 9.9e-5, 9e-5, 1e-6, 1e-9, 0.0,
+                                 -1e-9, -1e-6, -9e-5])
+@pytest.mark.parametrize("axis", list(_HALF_TURN_AXES), ids=list(_HALF_TURN_AXES))
+def test_so3_log_round_trip_near_a_half_turn(axis, off):
+    """so3_exp(so3_log(R)) == R to 1e-12 near a half turn: on both sides of the old near-pi branch
+    (pi - 1e-4) and of the new one (pi - 0.1), at exactly pi and just past it (a vector of length
+    pi + 1e-6 is the half turn the other way). The axis's sign comes from the antisymmetric part
+    wherever it is there (REVIEW F10)."""
+    a = np.asarray(_HALF_TURN_AXES[axis])
+    a = a / np.linalg.norm(a)
+    th = np.pi - off
+    R = G.so3_exp(a * th)
+    w = G.so3_log(R)
+    assert np.abs(G.so3_exp(w) - R).max() < 1e-12, np.abs(G.so3_exp(w) - R).max()
+    assert np.linalg.norm(w) <= np.pi + 1e-12
+    if off > 0:  # not at pi: the rotation vector itself, sign included
+        assert np.abs(w - a * th).max() < 1e-9, w - a * th
+    elif off < 0:  # past pi: the same rotation about -a by 2 pi - th
+        assert np.abs(w + a * (2 * np.pi - th)).max() < 1e-9, w + a * (2 * np.pi - th)
+
+
+@pytest.mark.parametrize("axis", list(_HALF_TURN_AXES), ids=list(_HALF_TURN_AXES))
+def test_so3_log_of_an_exact_half_turn(axis):
+    """R = 2 a a^T - I (exactly symmetric, no antisymmetric part): either sign of the axis is the
+    same rotation, and that rotation is what comes back."""
+    a = np.asarray(_HALF_TURN_AXES[axis])
+    a = a / np.linalg.norm(a)
+    R = 2.0 * np.outer(a, a) - np.eye(3)
+    w = G.so3_log(R)
+    assert np.linalg.norm(w) == pytest.approx(np.pi, abs=1e-12)
+    assert np.abs(np.abs(w @ a) - np.pi) < 1e-9
+    assert np.abs(G.so3_exp(w) - R).max() < 1e-12, np.abs(G.so3_exp(w) - R).max()
+
+
+def _so3_log_before_f10(R):
+    """so3_log's two branches away from pi as they were before REVIEW F10 (the reference)."""
+    R = np.asarray(R, dtype=np.float64)
+    th = float(np.arccos(np.clip((np.trace(R) - 1.0) / 2.0, -1.0, 1.0)))
+    v = np.array([R[2, 1] - R[1, 2], R[0, 2] - R[2, 0], R[1, 0] - R[0, 1]])
+    if th < 1e-8:
+        return 0.5 * v
+    assert np.pi - th >= 0.1
+    return th / (2.0 * np.sin(th)) * v
+
+
+def test_so3_log_away_from_a_half_turn_is_unchanged():
+    """More than 0.1 rad from a half turn so3_log gives, bit for bit, what it gave before the
+    near-pi fix: thousands of random rotations (angles up to pi - 0.11, and tiny ones)."""
+    rng = np.random.default_rng(10)
+    for k in range(4000):
+        a = rng.normal(size=3)
+        a /= np.linalg.norm(a)
+        th = rng.uniform(0.0, np.pi - 0.11) if k % 8 else 10.0 ** rng.uniform(-12, -7)
+        R = G.so3_exp(a * th)
+        assert G.so3_log(R).tobytes() == _so3_log_before_f10(R).tobytes(), (k, th)
+
+
 def test_kabsch_recovers_transform():
     rng = np.random.default_rng(2)
     A = rng.normal(size=(30, 3)) * 50
