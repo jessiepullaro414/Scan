@@ -5672,6 +5672,104 @@ than 300 mm. The Hole tool is not judged (step 1: the holes close up). The diagn
 
 **Next:** tags close enough along the part that two are in view in most frames (ENGINE_PLAN X8).
 
+## Thin walls: the raw reading, and where the error is made (ENGINE_PLAN X16 and X17, 2026-11-23)
+
+Thin standing walls read 0.5 to 1.3 mm too thick (decision E-D3, item 2). Two questions were measured: can a
+wall's thickness be read without the mesh, and why does tracking place a wall's two sides apart.
+`tools/wall_thickness_study.py`; notes and every run in `D:\OpenHandScan-work\scratch\ed3\walls_looks`. Scenes:
+the scorecard's standing walls (0.5, 1 and 2 mm) and sheet part (a 1 mm rib and a 2 mm flange), 3 seeds each, on
+the graphics card.
+
+### The thickness read from the raw frames (X16)
+
+At a click, each face of the wall is a plane fitted to the raw depth points of the frames that see it (the faces
+told apart by their normals); the thickness is the distance between the planes. 15 walls (5 per seed).
+
+| poses | the raw reading minus the truth | the mesh's reading minus the truth | twice the reading's own ± covers the truth |
+|---|---|---|---|
+| true | -0.04 to +0.07 mm | +0.12 to +0.84 mm | 9 of 14 (one wall refused) |
+| tracked | +0.29 to +0.99 mm (one wall -0.01) | +0.25 to +1.26 mm | 1 of 15 |
+
+- The raw reading removes the mesh's share, 0.1 to 0.7 mm a wall. What tracking adds stays.
+- Its own ± (0.03 to 0.09 mm, from resampling the frames) holds the depth's and the frames' scatter. It cannot
+  hold an error that all frames of one side share against the other side's, so tracked it under-covers.
+- Where the wall is found from the mesh by a ray through it, the 3 mm rib is read too (the thin-walls finding
+  refuses it); the reading with the region taken from the mesh agrees with the one taken from the true part
+  within 0.08 mm.
+- Not in the app. A study tool only.
+
+### A tie seen from both sides: dropped
+
+A matte ball beside the walls, two balls, and AprilTags on the table as Straighten's anchors (the walls' scan
+is 4 s, 40 frames). Separation of the two sides (0.5 / 1 / 2 mm walls; today +0.57 / +0.55 / +0.51 on seed 0):
+
+| | seed 0 | seed 1 | seed 2 |
+|---|---|---|---|
+| today | +0.57 / +0.55 / +0.51 | +0.47 / +0.43 / +0.35 | +0.62 / +0.53 / +0.31 |
+| one ball | +0.23 / +0.26 / +0.33 | +0.45 / +0.31 / +0.19 | +0.22 / +0.08 / -0.17 |
+| two balls | +0.80 / +0.58 / +0.40 | | |
+| tags | +0.58 / +0.57 / +0.54 | | |
+
+- One ball about halves it on some walls and pulls the 2 mm wall 0.17 mm too thin on seed 2; the mesh barely
+  gains. Two balls are worse. The tags do not act: too few keyframes see each tag on so short a scan, and with
+  every frame looked at the held-out test refuses.
+- **A defect found on the way, in Straighten's laser crossings** (ENGINE_PLAN, small things): with a ball in view
+  on seed 0 the frames test let the adjustment act (ratios 0.83 with one ball, 0.77 with two, limit 0.85), the
+  crossings' median miss halved (0.127 to 0.061 mm), and against the truth the path got worse (median / largest
+  0.26 / 1.26 to 0.32 / 1.40 mm with one ball, 0.18 / 0.52 to 0.29 / 1.03 with two) and so did the walls
+  (two balls: +0.52 / +0.34 / +0.15 to +0.80 / +0.58 / +0.40). On so short a scan a held-out frame shares its
+  geometry and its errors with the fitted frames on either side of it.
+
+### Where the error is made: a ladder of references (X17)
+
+The same recording tracked against four models. "Exact depth": the simulator's true depth in place of the
+matcher's. Separation of the two sides, 0.5 / 1 / 2 mm walls:
+
+| what each frame is tracked against | exact depth, seed 0 | seed 1 | seed 2 | the matcher's depth, seed 0 | seed 1 | seed 2 |
+|---|---|---|---|---|---|---|
+| a frozen 2 mm map, filled from exact depth at the true poses | -0.06 / -0.03 / -0.00 | +0.14 / +0.11 / +0.09 | +0.00 / -0.03 / -0.06 | +0.47 / +0.36 / +0.18 | | |
+| the engine's evolving map, integrated at the true poses | -0.09 / -0.07 / -0.06 | +0.10 / +0.04 / +0.02 | -0.10 / -0.11 / -0.18 | +0.09 / +0.07 / +0.08 | | |
+| the loop, as the product runs | -0.72 / -0.67 / -0.58 | -0.10 / -0.12 / -0.11 (slipped, path 4.1 mm) | +0.62 / +0.61 / +0.58 | +0.60 / +0.49 / +0.52 | +0.50 / +0.43 / +0.37 | +0.60 / +0.43 / +0.24 |
+
+- **A right map holds the sides** within 0.14 mm (frozen) and 0.18 mm (evolving, at true poses) on every wall and
+  seed, with a one-sided 2 mm map. So the map's representation is not the cause.
+- **Only the loop separates them,** by about 0.6 mm: each tracked frame goes into the map the next frames are
+  tracked against. With exact depth the sign follows the seed (too close on seed 0, too far on seed 2); with the
+  matcher's depth it is too far, "too thick", on all three.
+- **The matcher's depth against a map made from exact depth** gives +0.36 mm (1 mm wall), against a map made from
+  its own depth at true poses +0.07: the depth and the map must carry the same edge errors.
+- **The exact scene as the model** (no TSDF) was not measured: that harness failed (the path ran 8 to 18 mm off).
+
+**A bias sweep:** a disparity offset added to exact depth (0.1 px is about 0.135 mm of depth at 240 mm), seed 0,
+the 1 mm wall:
+
+| offset, px | -0.10 | -0.05 | -0.02 | 0 | +0.02 | +0.05 | +0.10 |
+|---|---|---|---|---|---|---|---|
+| the loop | -0.59 | -0.65 | -0.65 | -0.67 | -0.71 | -0.70 | -0.76 |
+| the evolving map at true poses | -0.01 | +0.49 (slipped) | -0.04 | -0.07 | -0.07 | -0.06 | -0.07 |
+
+The loop's line has a slope of about -0.85 mm a pixel and does not pass through zero: -0.67 mm at no bias. It is
+not a shared bias multiplied by a weak hold. Without the feedback the offsets leave the separation where it was.
+
+**What the tracker sees.** Each map ray cast at the true poses against the exact depth (every third frame): a
+2 mm map puts its surface 0.10 to 0.17 mm in front of the true one in the median, also when it was filled from
+exact depth at true poses (p90 of the difference 0.29 to 0.46 mm). That bias is the map's own and every frame
+shares it.
+
+**A refinement on the raw frames would return its start.** Point to plane between the raw frames of the scan
+(seed 0: 40 frames, about 445,000 point pairs between 704 frame pairs, the first frame fixed, every other pose
+optimised again at each point), profiled along the separation. With the pairs found again at every point the
+cost is flat within its noise over ±0.8 mm and follows the number of pairs. With the pairs fixed at the start
+poses the minimum is at the start: at 0 from the true poses and at +0.04 mm from the tracked poses, where the
+truth lies at about -0.55 mm and costs more. The standard error of 0.035 to 0.07 mm given earlier for this
+relative pose was computed with pairs fixed at the truth and measured their stiffness (corrected 2026-11-23).
+
+**Not indicated by this:** a tracking map that keeps a wall's two faces apart (designed, 3 to 5 days; not built).
+
+Limits: simulated; one scene (three standing walls in a box, near the worst case); the sweep, the profile and
+the matcher's depth on the two true-pose rungs are seed 0 only; offsets other than disparity not run; one run
+slipped on each of two rungs; the graphics card's path only.
+
 ## A merge from one model per scan (ENGINE_PLAN X18, 2026-11-23): measured, dropped
 
 X7 found that today's merge (every frame of both scans fused into one model) is often worse than the better single

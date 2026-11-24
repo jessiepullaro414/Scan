@@ -1246,6 +1246,14 @@ summary (no code). Taken as an opinion and weighed against the measurements:
   whether that share, with how far the scan travelled, separates the panel from the door and
   the small parts; if it does, a caution after Make mesh ("the length along the part is not
   sure: use tags").
+- [ ] **Straighten's laser crossings can make a short scan worse and pass their own test** (found by X17,
+  2026-11-23; `VALIDATION.md`, "Thin walls: the raw reading, and where the error is made"). On the standing
+  walls with a ball in view (a 4 s scan, frames 1 degree apart) the frames test passed at 0.83 and 0.77 (limit
+  0.85), the crossings met twice as well, and against the truth the path and the walls got worse (the path's
+  largest error 1.26 to 1.40 mm and 0.52 to 1.03 mm; the walls up to 0.28 mm thicker). A held-out frame shares
+  its geometry and errors with its fitted neighbours, so it is no independent check there. To do (S): hold out
+  whole stretches of frames instead of alternate frames, or skip the adjustment when every held-out frame is a
+  near neighbour of a fitted one; guard test first, on that recording. Not seen on the scorecard's own scenes.
 - [ ] `tests/test_track_spacetime.py::test_the_refined_mesh_is_closer_to_the_truth` failed once
   without a GPU (`OHS_COMPUTE=cpu`) on 2026-11-22, in a run of several test files, and passed in
   the eight runs after it (alone, its file six times, the same set again). **It failed again
