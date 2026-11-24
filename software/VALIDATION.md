@@ -5904,6 +5904,103 @@ seed or a scan with their case, so those spreads are half independent; no part w
 walls and Refine with lasers are absent from both merges, as in the app; the tag maps are emulated, not rendered;
 one model with the opposite-sides rule off was not run (the rule is tied to the thin-walls setting).
 
+## A hole's rim read from the camera images (ENGINE_PLAN X15, 2026-11-23 and 24): alive; not in the app
+
+A Ø25 hole over open space reads 1 to 7 mm small, and Ø6 and Ø10 there cannot be read at all (decision E-D3,
+item 1). Measured: can a hole be read from the raw camera images, where its rim is a sharp step, without the mesh.
+`tools/hole_rim_study.py` (a study tool; nothing in the engine uses it); notes, rows and summaries in
+`D:\OpenHandScan-work\scratch\ed3\holes_looks` (`NOTES.md`, `summary3_main.txt`, `summary3_drop.txt`,
+`summary3_abl.txt`). Everything ran on the processor.
+
+**The reading.** At a click: about 20 recorded frames that saw the hole; in each, the face's plane from that
+frame's depth, the rim's step along radial lines in both raw cameras, and one model of the hole (the entrance
+circle and the exit circle a wall's height below it, the height free or given). The answer is the median over the
+frames that are not refused. The diameter is measured in each frame's own coordinates and needs no camera path;
+the position is taken to the world with the path. The ± (1 sigma) is the frames' scatter with 0.1 mm added that
+all frames share.
+
+**Scenes.** The scorecard's hole plates (3 mm, Ø25, Ø10, Ø6; 120 mm and 10 mm above the floor, 3 seeds each) and
+car panel (Ø25, 5 seeds), at true poses and with the app's tracking on the graphics card. Study plates without
+the block: 1 and 5 mm thick at 10 and 120 mm above a dark floor, and 3 mm at 120 mm above a bright textured
+floor, 3 seeds each, at true poses and with tracking on the processor's path. "Dots off": every fifth frame
+rendered with the projector off (the scanner cannot do this today). Three clicks a hole, the scorecard's own.
+
+**The rule, fixed beforehand.** Dropped if at true poses any Ø25 or Ø10 (the median of its answered clicks) is
+off by more than 0.3 mm, or tracked by more than 0.5 mm on a scan whose path check does not warn; a scan that
+lost tracking must warn or refuse. A refusal is no failure. Each arm (dots on, dots off) is judged by itself,
+with the thickness free.
+
+**Round 3** (rounds 1 and 2 below). Diameter error in mm, thickness free; R = refused:
+
+| scene | dots on, true poses | dots on, tracked | dots off, true poses | dots off, tracked | today's hole tool (Ø25) |
+|---|---|---|---|---|---|
+| plates 120 mm up, 3 seeds (one lost tracking) | -0.06 to +0.00 | -0.06 to -0.01 | -0.12 to -0.02 | -0.09 to -0.02 | -1.4 to -1.6 true, -2.9 to -6.6 tracked; nothing for Ø6, Ø10 |
+| plates 10 mm up, 3 seeds | Ø25 -0.04 to -0.01, Ø6 -0.08 to -0.01, Ø10 R | Ø25, Ø6 within 0.04, Ø10 R | -0.12 to -0.01 | -0.08 to -0.01 | +0.58 to +0.75 true, -0.20 to +0.47 tracked |
+| car panel, 5 seeds | -0.02 to +0.00 | -0.02 to +0.00 | -0.03 to -0.02 | -0.03 to -0.00 | -1.1 to -1.7 true, -1.0 to -1.4 tracked |
+| 1 mm plate, 10 mm up | Ø25 -0.11 to 0.00, **Ø10 R / R / +0.49**, Ø6 +0.05 / R / -0.07 | Ø25 within 0.07, Ø6 +0.05 / -0.09 / R, Ø10 R | -0.13 to -0.05 | -0.13 to -0.04, one R | |
+| 1 mm plate, 120 mm up | -0.13 to +0.01 | R; seed 2 Ø6 **+18.88** | -0.12 to -0.04 | R; seed 2 Ø6 **+18.93** | |
+| 5 mm plate, 10 mm up | within 0.07, seed 2 Ø10 +0.21, one R | within 0.10, five R | -0.08 to +0.00 | -0.06 to +0.01 | |
+| 5 mm plate, 120 mm up | -0.11 to +0.07, one R | seed 2 within 0.12, the rest R | -0.10 to -0.01 | seed 2 within 0.09, the rest R | |
+| 3 mm plate over a bright floor | R on all 9 holes | R | R on all 9 holes | R | |
+
+| | holes answered | within 0.2 mm | within 0.1 mm | twice the ± covers (clicks) |
+|---|---|---|---|---|
+| dots off, true poses | 59 of 68 | 59 | 53 | 177 of 177 |
+| dots off, tracked | 44 | 43 | 41 | 125 of 128 |
+| dots off, true poses, thickness given | 59 | 59 | 57 | 177 of 177 |
+| dots on, true poses | 51 | 49 | 44 | 145 of 145 |
+| dots on, tracked | 33 | 32 | 30 | 88 of 91 |
+| dots on, true poses, thickness given | 51 | 49 | 49 | 148 of 149 |
+
+- **Dots off: alive.** Every answered hole at true poses is within 0.2 mm, the bright floor is refused, and no
+  rule is broken.
+- **Dots on: dropped, by one case.** The 1 mm plate 10 mm above its floor, seed 2: Ø10 +0.49 mm on two answered
+  clicks (their own ± 0.41 and 0.50). Every other Ø25 and Ø10 it answers is within 0.21 mm.
+- **Dots on with a far background is E-D3's case and holds.** On the plates 120 mm up and the panel, every hole
+  answered is within 0.13 mm at true poses and within 0.06 mm with the graphics card's tracking, Ø6 and Ø10
+  included, where today's tool reads the Ø25 1.0 to 6.6 mm small.
+- **A wrong answer the rule does not count, in both arms.** The 1 mm plate 120 mm up, seed 2, tracked on the
+  processor's path (the path had slid; its check warns): the Ø6 click answers +18.9 mm on all three clicks, its
+  centre 8.6 mm off: it read the Ø25. It carried the path warning and "position unsure", nothing about the
+  diameter. That the slid path carried the click onto the Ø25 is inferred, not traced.
+- The processor's path slides on most study plates (jumps of 7 to 23 mm), so their tracked readings are mostly
+  refused. The study plates were not tracked on the graphics card.
+
+**Position** (the hole's centre): 0.01 to 0.16 mm at true poses; 0.13 to 0.96 mm with the graphics card's
+tracking; 0.2 to 1.7 mm with the processor's. The reading says "position unsure" when the frames put the centre
+more than 1 mm apart while their diameters agree.
+
+**The wall's height found** (dots off; true 3 / 1 / 5 mm): 2.8 to 3.1; 0.9 to 2.4, but 2.3 to 9 for the Ø10 near
+a floor; 4.3 to 5.1.
+
+**What each change of round 3 did** (the same frames, true poses):
+- A seed brighter or darker than the face: no effect by itself; the bright floor is refused either way.
+- The rule on the frames' centres (refuse above 3 mm apart, or above 1 mm apart when the diameters also scatter
+  by more than 0.3 mm): 21 refusals, all on scans tracked on the processor's path. Among them wrong readings of
+  +0.47, +0.48, -2.81 and +0.46, and some good ones (-0.04, -0.06). Round 2's quiet -4.65 on the bright floor is
+  now a refusal.
+- The two cameras held to agree on the top rim within 0.15 mm (dots on): mended nothing. The near-floor Ø10 that
+  drops the arm reads +0.33 without it and +0.49 with it; two readings of +0.08 and -0.14 are refused with it.
+- The thickness given: 57 of 59 within 0.1 mm instead of 53 (dots off); no help for the near-floor Ø10 with the
+  dots on (+0.46, +0.53).
+
+**Dots-off frames left out of tracking** (the processor's path): camera-path error, median / largest, with all
+frames and without the dots-off ones: 6.5 / 10.9 and 4.0 / 11.1 mm (plate 120 mm up, seed 2); 3.1 / 5.4 and
+4.3 / 7.0 mm (plate 10 mm up, seed 0). No clear change beside that path's own errors; the diameters agree within
+0.02 mm either way. Not run on the graphics card.
+
+**Rounds 1 and 2.** One edge per radial line (round 1): over open space every Ø25 and Ø10 within 0.2 mm, but the
+plate 10 mm above a lit floor read -0.57 to -0.63 in silence: dropped. A model of the hole per frame (round 2):
+dots on dropped by a near-floor Ø10 (+0.53); with dots-off frames every hole of the recordings and of the 1 and
+5 mm plates within 0.2 mm, dropped by one bright-floor click (-4.65). Motion blur of 0 / 0.3 / 1 / 3 px (dots
+off): Ø25 -0.03 to -0.05, Ø10 -0.04 to -0.07, Ø6 -0.07 to -0.14.
+
+Limits: simulated images (no gloss, chamfer, burr, MJPEG; the blur and the light are the simulator's); bores
+square to the face only; a bright background is refused, never read; the reading is not checked against the mesh
+(the wrong-hole case); near and far backgrounds are not told apart by the tool; about 20 s a click on this
+processor. Dots-off frames need hardware the scanner does not have: the board switches the projector by a
+serial command, not in step with the cameras.
+
 ## What the metrics mean
 
 - **Stereo errors** compare the estimated raw intrinsics/extrinsics (`K1`, `K2`, `R`, `T`) with

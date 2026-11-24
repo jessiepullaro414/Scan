@@ -81,7 +81,8 @@ The rules of `FEATURE_PLAN.md` and `MAINTENANCE_PLAN.md` hold. In short:
   1.3 mm too thick, and the 1.3 m panel came out 1.6 to 6.5 mm wrong in length. A merge beat
   the better single scan on only 1 of 5 pairs". These four go ahead of X9 to X14:
   1. Holes over open space (gap item 1). Tried and not adopted: X1 (the guard by the matcher's
-     doubt), X2 (rims from the laser lines' ends).
+     doubt), X2 (rims from the laser lines' ends). X15 (the rim read from the camera images)
+     reads them within 0.13 mm in simulation; not in the app.
   2. Thin standing walls (gap item 2). Tried: X3, X4, X4b, X4c (not adopted), X5 (fine walls,
      a choice per scan).
   3. The length of long plain parts (gap item 7): X8 step 2 (tags as anchors), running.
@@ -89,8 +90,8 @@ The rules of `FEATURE_PLAN.md` and `MAINTENANCE_PLAN.md` hold. In short:
      X18 (one model per scan) measured and dropped; X19 (a pose from tags, held) designed.
   E-D1 still holds for each: a change goes on by default only when it is better on every
   scorecard scene and nothing thin gets worse; a miss stays a setting; a near miss comes to
-  the owner with numbers. New experiments for 1, 2 and 4: X15 (holes, running), X16 and X17
-  (thin walls), X18 and X19 (merge).
+  the owner with numbers. New experiments for 1, 2 and 4: X15 (holes: the rim read from the
+  camera images, alive), X16 and X17 (thin walls), X18 and X19 (merge).
 - **E-D4: what a good merge must do is restated** (asked and decided 2026-11-23, "Yes, restate
   it"). X7's rule asked the merged part to beat the better single scan and to hold at least the
   good surface of the two scans together. The second part takes, at every place, whichever scan
@@ -906,6 +907,62 @@ and thin parts".
 - The reading depends on the level (26.7 to 24.3 mm); the truth is crossed 0.8 to 0.9 mm
   down. Weaker than X2.
 - **Stop rule: adopted only if** within 0.2 mm on 8 of 9 clicks.
+
+### [ ] X15. A hole's rim read from the camera images (M): measured 2026-11-23 and 24; alive with the dots off, and with the dots on where the background is far; not in the app
+E-D3 item 1. `tools/hole_rim_study.py` (a study tool; nothing in the engine uses it); notes and
+every run in `D:\OpenHandScan-work\scratch\ed3\holes_looks`; `VALIDATION.md`, "A hole's rim read
+from the camera images".
+- **Why the images:** depth cannot open a small hole over open space (the two cameras see
+  different things through it), and the mesh closes over what depth leaves. The rim itself is
+  a sharp step in both raw images.
+- **The reading:** at a click, in about 20 recorded frames that saw the hole: the face's
+  plane from that frame's depth, the rim's step along radial lines in both cameras, one model
+  of the hole per frame (the entrance circle, and the exit circle a wall's height below it),
+  the median over the frames. The diameter is measured in each frame's own coordinates, so
+  it does not need the camera path; the position does.
+- **Kill rule, fixed beforehand:** dropped if at true poses any Ø25 or Ø10 is off by more
+  than 0.3 mm, or tracked by more than 0.5 mm on a scan whose path check does not warn; a
+  scan that lost tracking must warn or refuse. A refusal is no failure, a quiet wrong answer
+  is. Scenes: the scorecard's hole plates and car panel (11 recordings), and study plates of
+  1 and 5 mm at 10 and 120 mm above the floor and one above a bright floor, 3 seeds each.
+- **Three rounds.** One edge per line: dropped (the plate near a lit floor read 0.6 mm
+  small). A model of the hole per frame: within 0.2 mm everywhere but one bright-floor click
+  (-4.65 in silence). Round 3 (a seed of either sign, a rule on the frames' centres, the
+  two cameras held to agree, the thickness free or given):
+  - **Dots off: alive.** At true poses 59 holes answered, all within 0.2 mm, 53 within
+    0.1 (57 with the thickness given); twice the ± covers 177 of 177 clicks. With the
+    graphics card's tracking every hole of the 11 recordings is within 0.13 mm. The bright
+    floor is refused on all 9 holes.
+  - **Dots on: dropped by one case,** the 1 mm plate 10 mm above its floor, seed 2: Ø10
+    +0.49 mm (its own ± said 0.4 to 0.5). Every other Ø25 and Ø10 it answers is within
+    0.21 mm; the Ø10 near a floor is mostly refused.
+  - **Dots on, the background far** (the plates 120 mm up, the panel): every hole answered
+    is within 0.13 mm at true poses and within 0.06 mm with the graphics card's tracking,
+    Ø6 and Ø10 included. Today's hole tool reads these Ø25 1.0 to 6.6 mm small and gives
+    nothing for Ø6 and Ø10. This is E-D3's case, and it needs no new hardware.
+- **One wrong answer outside the rule, in both arms:** on a study scan whose tracking (on the
+  processor) had slid by millimetres, the click for the Ø6 landed on the Ø25 and read it:
+  +18.9 mm, with the path warning and "position unsure" and nothing about the diameter. The
+  reading has to be checked against the mesh's own hole or dent at the click. Not built.
+- **What the changes did:** the centre rule turned the bright floor's quiet -4.65 into a
+  refusal and caught four more wrong readings on slid scans (it also refused a few good
+  ones). Holding the two cameras to agree mended nothing and cost answers. A given
+  thickness tightens the dots-off reading a little. Leaving the dots-off frames out of
+  tracking: no clear change on the processor's path (not run on the graphics card).
+- **Position:** 0.01 to 0.16 mm at true poses, 0.13 to 0.96 mm with the graphics card's
+  tracking (it says "position unsure" when the frames put the centre more than 1 mm apart).
+- **Next (round 4, running on the processor):** the check against the mesh at the click; a
+  test for a near or far background from the depth seen through the hole, to gate the
+  dots-on reading; the two-camera pairing dropped. Rule fixed beforehand, as before, plus:
+  no answer on a hole other than the clicked one.
+- **Then, with the owner:** a first version in the app's hole tool, "from the images" beside
+  the mesh's reading, for holes over open space only, about 20 s a click on this processor.
+- **Waits for hardware:** the dots-off reading. The board switches the projector by a serial
+  command, not in step with the cameras; it needs frames without dots, a short exposure
+  (under 0.5 ms; today automatic, about 7.8 ms) and perhaps a light.
+- Not verified: real images (gloss, chamfers, burrs, MJPEG, real blur and light); oblique
+  bores; a bright background that is read rather than refused; tracking of the study scenes
+  on the graphics card; the cause of the +18.9 case is inferred, not traced.
 
 ### [ ] X16. A thin wall's thickness read from the raw frames (S to M): measured 2026-11-23, alive; not in the app
 E-D3 item 2. `tools/wall_thickness_study.py` (a study tool; nothing in the engine uses it);
