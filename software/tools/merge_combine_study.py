@@ -1,0 +1,1109 @@
+"""A merge that weighs each scan by its own sigma, and a pose from tags where little is shared (ENGINE_PLAN E-D3
+item 4: the first tests of C1 and C3 in the design note ``D:\\OpenHandScan-work\\scratch\\ed3\\merge.md``).
+
+Nothing here fuses, tracks or renders: it reads the saved single-scan meshes and the app's merged meshes of the
+two merge studies (``tools/merge_accuracy_study.py``, X7: pairs P1-P5; ``tools/merge_overlap_sweep.py``'s merges
+M1-M7), on the processor.
+
+    python tools/merge_combine_study.py combine OUT --x7 DIR --mergewarn DIR --recs DIR [--cases P1:a ...]
+    python tools/merge_combine_study.py tags OUT --x7 DIR --mergewarn DIR --recs DIR [--pairs P3 P5 M1 M3]
+    python tools/merge_combine_study.py table OUT
+
+(run from ``software/``; ``--x7`` / ``--mergewarn``: the studies' folders holding ``work``; ``--recs``: the
+scorecard cache's ``recs``.)
+
+**combine (C1).** Each scan's mesh, its sigma and the app's merged mesh, all with the Default recipe. Each single
+is placed by the part alone, by itself (as a user sees it). The two singles together, B at the merge's own pose,
+are placed jointly (as a merged scan is). On the true surface the two scans saw (``seen_points``: every third
+frame's rays at the true poses; per scan, so that each scan's own surface ``S_i`` is known), each mesh is read
+along the true normal: the nearest vertex within :data:`RADIUS` whose normal agrees (:data:`MIN_DOT`; the two faces
+of a thin wall stay apart) gives a signed error and its sigma; none: no surface there. Where both singles have
+surface the two readings are combined (:func:`combine`) by a rule: ``equal`` (each scan alike: the emulation of
+today's fusion), ``ivw`` (1/sigma^2) and ``soft`` (the better view takes most of the weight where the two sigmas
+differ clearly: :data:`SOFT_RATIO`) and ``capped`` (1/sigma^2, no view more than :data:`CAP_RATIO` times another). The app's merge itself is the row ``merge``. Judged by two rules:
+
+* **E-D4** (the restated rule, decided 2026-11-23): (1) on each scan's own seen surface the merge is no worse than
+  that scan (share within 0.5 mm, median distance, share more than 0.3 mm; absent counts as :data:`CAP` mm);
+  (2) no thin wall reads thicker (by the two faces' errors along their normals: :func:`wall_errors`); (3) it holds
+  more of the seen surface than the larger scan. Part (4) (a pair that shares under 0.70 is aligned from tags) is
+  the ``tags`` command's.
+* **X7's rule** (the old one): "beats the better single scan" (median and share more than 0.3 mm over what the
+  mesh holds, against the better scan over what it holds; no worse beyond the floors, one better beyond them)
+  and "reaches the union" (the share within 0.5 mm of the pooled seen surface at least the union's, the union
+  being either single within 0.5 mm: an oracle, reported as a ceiling).
+
+The floors (:data:`FLOOR_MED`, :data:`FLOOR_SHARE`) are X7's: a determinism floor, not a spread across seeds.
+
+**The merged sigma.** For a combination, :func:`combine` gives two: the mixture's
+``sqrt(a sA^2 + (1-a) sB^2 + a (1-a) (eA - eB)^2)`` (``a``: A's share of the weight; no credit for two scans
+being independent, plus their disagreement, which needs no truth), and the naive inverse-variance
+``1 / sqrt(1/sA^2 + 1/sB^2)``. Each is checked as a scan's is: the share of what it holds with the true error
+within twice its sigma.
+
+**tags (C3).** Tags on the table round the part (:func:`table_tags`), seen by a frame when in view, 150-450 mm
+away and looked at from within 70 degrees of their normal (the part's shadow is not modelled). Each sighting's
+corners are the true corners in the true camera plus noise along the camera's x / y / z
+(:data:`TAG_NOISE_MM`, measured on single frames for a 25 mm tag: ``scratch\\x8\\NOTES.md``, seed 3), fitted to
+the printed square, and put into the scan's world by that frame's *tracked* pose, as :func:`ohs.align.tags.tag_map`
+does; a tag's corners are the median of its sightings. With ``correlated`` the noise is held for
+:data:`CORRELATED_RUN` frames at a time (frames 0.1 s apart see the same dots). The pose comes from
+:func:`ohs.align.tags.pose_from_tags`; then the app's refinement (``align_pair(init=..., init_from="tags")``) is run
+from it; the merge at each pose is stood in for by the ``equal`` and ``ivw`` combinations, judged as above.
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+import time
+from pathlib import Path
+
+import numpy as np
+
+SOFTWARE = Path(__file__).resolve().parents[1]
+if str(SOFTWARE) not in sys.path:
+    sys.path.insert(0, str(SOFTWARE))
+
+RADIUS = 1.5  # mm: how far from a true surface point a mesh's vertex may be read
+MIN_DOT = 0.5  # a vertex counts only when its normal agrees with the true one this well
+GOOD = 0.5  # mm: "covered"
+OVER = 0.3  # mm: the share more than this far off
+CAP = 5.0  # mm: the distance an absent surface counts as
+FLOOR_MED, FLOOR_SHARE = 0.003, 0.005  # X7's floors (a determinism floor, not a spread across seeds)
+SOFT_RATIO = 2.0  # soft winner: at this sigma ratio the better view has 0.5 + 0.45 tanh(1) = 84 % of the weight
+CAP_RATIO = 4.0  # capped: no view counts more than this many times the other (an outside review, 2026-11-23)
+RULES = ("equal", "ivw", "soft", "capped")
+THIN_MM = 3.0  # walls of this true thickness or less are the thin ones (E-D4 part 2; the kill rule)
+WALL_ALARM = 0.05  # mm: thicker than today's merge by this much is an alarm
+WALL_MIN_N = 40  # samples needed on each face for a wall reading
+TAG_MM = 25.0
+TAG_NOISE_MM = (0.20, 0.15, 0.36)  # a single frame's corner error, RMS along the camera's x / y / z
+CORRELATED_RUN = 10
+#: the app's pose variant per pair, and which pairs the pose ruined (fixed by the merge-warning study's table)
+APP_VARIANT = {"P1": "a", "P2": "a", "P3": "a", "P4": "p", "P5": "p"}
+RUINED = ("P3", "P5", "M1", "M3")
+#: the merge-warning study's merges (tools/merge_overlap_sweep.py's rows): scan A, scan B
+MW_PAIRS = {
+    "M1": ("bracket240-s0@0", "bracket240-s1@20"), "M2": ("bracket240-s2@140", "bracket240-s3@0"),
+    "M3": ("sheet-s0@30", "sheet-s1@40"), "M4": ("sheet-s0@110", "sheet-s2@0"),
+    "M5": ("holes-low-s1@10", "holes-low-s2@20"), "M6": ("sheet-s0@30", "sheet-s1@140"),
+    "M7": ("sheet-s1@40", "sheet-s2@0"),
+}
+
+
+# =========================================================================== the combining rule
+def weights(sA: np.ndarray, sB: np.ndarray, rule: str) -> tuple[np.ndarray, np.ndarray]:
+    """A's and B's weights (summing to 1) where both scans have surface. ``equal``: alike; ``ivw``: 1/sigma^2;
+    ``soft``: the lower sigma takes ``0.5 + 0.45 tanh(ln(ratio) / ln(SOFT_RATIO))``; ``capped``: 1/sigma^2 with
+    neither weight more than :data:`CAP_RATIO` times the other."""
+    sA = np.maximum(np.asarray(sA, np.float64), 1e-6)
+    sB = np.maximum(np.asarray(sB, np.float64), 1e-6)
+    if rule == "equal":
+        a = np.full(sA.shape, 0.5)
+    elif rule == "ivw":
+        a = sB ** 2 / (sA ** 2 + sB ** 2)
+    elif rule == "capped":
+        lo = 1.0 / (1.0 + CAP_RATIO)
+        a = np.clip(sB ** 2 / (sA ** 2 + sB ** 2), lo, 1.0 - lo)
+    elif rule == "soft":
+        a = 0.5 + 0.45 * np.tanh(np.log(sB / sA) / np.log(SOFT_RATIO))
+    else:
+        raise ValueError(f"unknown rule {rule!r}")
+    return a, 1.0 - a
+
+
+def combine(eA, sA, eB, sB, rule: str) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Two scans' readings of one place (signed error along the normal and sigma; NaN: no surface there) combined
+    by ``rule``: ``(error, mixture sigma, naive inverse-variance sigma)``. Where one scan alone has surface it is
+    taken as it is (nothing seen once is lost); where neither has, NaN."""
+    eA, sA, eB, sB = (np.asarray(x, np.float64) for x in (eA, sA, eB, sB))
+    hA, hB = np.isfinite(eA), np.isfinite(eB)
+    both = hA & hB
+    e = np.where(hA, eA, eB)
+    s = np.where(hA, sA, np.where(hB, sB, np.nan))
+    s_ivw = s.copy()
+    if both.any():
+        a, b = weights(sA[both], sB[both], rule)
+        x, y = eA[both], eB[both]
+        e[both] = a * x + b * y
+        s[both] = np.sqrt(a * sA[both] ** 2 + b * sB[both] ** 2 + a * b * (x - y) ** 2)
+        s_ivw[both] = 1.0 / np.sqrt(1.0 / np.maximum(sA[both], 1e-6) ** 2 + 1.0 / np.maximum(sB[both], 1e-6) ** 2)
+    return e, s, s_ivw
+
+
+# =========================================================================== reading a mesh, scoring
+def read_surface(P, N, S, X, Xn, radius: float = RADIUS, min_dot: float = MIN_DOT) -> tuple[np.ndarray, np.ndarray]:
+    """At each true point ``X`` (normal ``Xn``): the signed distance along ``Xn`` of the nearest of the mesh's
+    vertices ``P`` (normals ``N``, sigma ``S``) within ``radius`` whose normal agrees, and its sigma; NaN where none."""
+    from scipy.spatial import cKDTree
+
+    X = np.asarray(X, np.float64)
+    e = np.full(len(X), np.nan)
+    s = np.full(len(X), np.nan)
+    if not len(P) or not len(X):
+        return e, s
+    d, i = cKDTree(P).query(X, k=min(8, len(P)), distance_upper_bound=radius)
+    d, i = d.reshape(len(X), -1), i.reshape(len(X), -1)
+    ii = np.minimum(i, len(P) - 1)
+    ok = np.isfinite(d) & (np.einsum("ikj,ij->ik", np.asarray(N)[ii], Xn) > min_dot)
+    first = np.argmax(ok, axis=1)
+    rows = np.arange(len(X))
+    have = ok[rows, first]
+    j = ii[rows, first][have]
+    e[have] = np.einsum("ij,ij->i", np.asarray(P)[j] - X[have], Xn[have])
+    s[have] = np.asarray(S)[j]
+    return e, s
+
+
+def region_stats(e: np.ndarray) -> dict:
+    """Over a region's samples (absent: :data:`CAP`): share within :data:`GOOD`, median distance, share over
+    :data:`OVER`."""
+    d = np.where(np.isfinite(e), np.minimum(np.abs(e), CAP), CAP)
+    if not len(d):
+        return {"cover05": None, "med": None, "over03": None, "n": 0}
+    return {"cover05": float(np.mean(d < GOOD)), "med": float(np.median(d)), "over03": float(np.mean(d > OVER)),
+            "n": int(len(d))}
+
+
+def held_stats(e: np.ndarray) -> dict:
+    """Over what a mesh holds (X7's "median and share over the mesh's own surface", by samples)."""
+    x = np.abs(e[np.isfinite(e)])
+    return {"med": float(np.median(x)) if len(x) else None, "over03": float(np.mean(x > OVER)) if len(x) else None,
+            "n": int(len(x))}
+
+
+def no_worse(m: dict, s: dict, keys=("cover05", "med", "over03")) -> bool:
+    """``m`` no worse than ``s`` beyond the floors (higher cover05 is better, lower median and share)."""
+    ok = True
+    if "cover05" in keys:
+        ok &= m["cover05"] >= s["cover05"] - FLOOR_SHARE
+    if "med" in keys:
+        ok &= m["med"] <= s["med"] + FLOOR_MED
+    if "over03" in keys:
+        ok &= m["over03"] <= s["over03"] + FLOOR_SHARE
+    return bool(ok)
+
+
+def beats(m: dict, s: dict) -> bool:
+    """X7's "beats": median and share both no worse beyond the floors, one better beyond them."""
+    if m["med"] is None or s["med"] is None:
+        return False
+    return (no_worse(m, s, ("med", "over03"))
+            and (m["med"] < s["med"] - FLOOR_MED or m["over03"] < s["over03"] - FLOOR_SHARE))
+
+
+def two_sigma_cover(e: np.ndarray, s: np.ndarray) -> float | None:
+    """The share of what is held whose true error is within twice its sigma."""
+    h = np.isfinite(e) & np.isfinite(s)
+    return float(np.mean(np.abs(e[h]) <= 2.0 * s[h])) if h.any() else None
+
+
+def wall_errors(prim_idx: np.ndarray, Xn: np.ndarray, e: np.ndarray, walls: list[dict]) -> dict:
+    """Thickness error of each wall (a box: ``{"name", "axis" (unit, world), "true_mm"}``): the median error on
+    its face along ``+axis`` plus that on its face along ``-axis`` (each signed outwards, so + is thicker),
+    where both faces hold :data:`WALL_MIN_N` read samples; else None."""
+    out = {}
+    for k, w in enumerate(walls):
+        m = (prim_idx == k) & np.isfinite(e)
+        c = Xn @ np.asarray(w["axis"], np.float64)
+        up, dn = m & (c > 0.9), m & (c < -0.9)
+        out[w["name"]] = (float(np.median(e[up]) + np.median(e[dn]))
+                          if up.sum() >= WALL_MIN_N and dn.sum() >= WALL_MIN_N else None)
+    return out
+
+
+def judge_case(eA, sA, eB, sB, rows: dict[str, tuple[np.ndarray, np.ndarray]], inA, inB) -> dict:
+    """Both rules for every row (``name: (error, sigma)``, read at the same samples), against the singles
+    ``eA`` / ``eB`` (each placed by itself), on the regions ``inA`` / ``inB`` (each scan's seen surface)."""
+    U = inA | inB
+    dA = np.where(np.isfinite(eA), np.abs(eA), np.inf)
+    dB = np.where(np.isfinite(eB), np.abs(eB), np.inf)
+    union = np.where(np.isfinite(np.minimum(dA, dB)), np.minimum(dA, dB), np.nan)
+    sing = {"A": eA, "B": eB}
+    reg = {"S_A": inA, "S_B": inB, "S_A or S_B": U}
+    out = {"singles": {k: {r: region_stats(v[m]) for r, m in reg.items()} | {"held": held_stats(v[sing_m])}
+                       for (k, v), sing_m in zip(sing.items(), (inA, inB))},
+           "union oracle": region_stats(union[U]), "rows": {}}
+    better = "A" if (out["singles"]["A"]["held"]["over03"] or 1) <= (out["singles"]["B"]["held"]["over03"] or 1) else "B"
+    out["better single"] = better
+    for name, (e, s) in rows.items():
+        r = {k: region_stats(e[m]) for k, m in reg.items()}
+        r["held"] = held_stats(e[U])
+        r["E-D4 (1) on S_A"] = no_worse(r["S_A"], out["singles"]["A"]["S_A"])
+        r["E-D4 (1) on S_B"] = no_worse(r["S_B"], out["singles"]["B"]["S_B"])
+        larger = max(out["singles"]["A"]["S_A or S_B"]["cover05"], out["singles"]["B"]["S_A or S_B"]["cover05"])
+        r["E-D4 (3) more than the larger scan"] = bool(r["S_A or S_B"]["cover05"] > larger)
+        r["X7 beats the better single"] = beats(r["held"], out["singles"][better]["held"])
+        r["X7 reaches the union"] = bool(r["S_A or S_B"]["cover05"] >= out["union oracle"]["cover05"] - FLOOR_SHARE)
+        r["2 sigma covers"] = two_sigma_cover(e, s)
+        out["rows"][name] = r
+    for k, v in sing.items():
+        out["singles"][k]["2 sigma covers"] = two_sigma_cover(v, sA if k == "A" else sB)
+    return out
+
+
+# =========================================================================== meshes, the truth
+def vertex_normals(V: np.ndarray, F: np.ndarray) -> np.ndarray:
+    n = np.cross(V[F[:, 1]] - V[F[:, 0]], V[F[:, 2]] - V[F[:, 0]])
+    N = np.zeros_like(V)
+    for k in range(3):
+        np.add.at(N, F[:, k], n)
+    return N / np.maximum(np.linalg.norm(N, axis=1, keepdims=True), 1e-12)
+
+
+def recipe_mesh(path: Path):
+    """The mesh with the Default recipe as the scorecard applies it: ``(V, F, N, S)``, the normals turned as the
+    saved ones."""
+    from ohs.mesh.order import canonical
+    from ohs.track.export import load_ply
+    from scipy.spatial import cKDTree
+    from tools import preset_study as ps
+
+    d = load_ply(path)
+    c = canonical(np.asarray(d["vertices"], np.float64), np.asarray(d["faces"], np.int64))
+    V, F, S, _, _ = ps.apply_ops(c.V, c.F, c.vertex_values(d["quality"]), ps.RECIPES["general"])
+    N = vertex_normals(V, F)
+    N0 = np.asarray(c.vertex_values(d["normals"]), np.float64)
+    j = cKDTree(c.V).query(V)[1]
+    if np.median(np.einsum("ij,ij->i", N, N0[j])) < 0:
+        N = -N
+    return V, F, N, np.asarray(S, np.float64)
+
+
+def walls_of(sc) -> list[dict]:
+    """Each primitive as a wall across its thinnest axis (boxes; others get no axis and no reading)."""
+    out = []
+    for p in sc.primitives:
+        half = getattr(p, "half", None)
+        if half is None:
+            out.append({"name": p.name, "axis": [0.0, 0.0, 0.0], "true_mm": None})
+            continue
+        k = int(np.argmin(half))
+        out.append({"name": p.name, "axis": np.asarray(p.R)[:, k].tolist(), "true_mm": float(2 * half[k])})
+    return out
+
+
+class Study:
+    """Where the saved meshes are (X7's and the merge-warning study's work folders) and the recordings."""
+
+    def __init__(self, x7: Path, mergewarn: Path, recs: Path) -> None:
+        from tools import merge_accuracy_study as MS
+
+        self.MS, self.SC = MS, MS.SC
+        self.x7, self.mw, self.recs = Path(x7) / "work", Path(mergewarn) / "work", Path(recs)
+
+    def keys(self, pair: str) -> tuple[str, str]:
+        return MW_PAIRS[pair] if pair in MW_PAIRS else self.MS.PAIRS[pair][:2]
+
+    def work(self, pair: str) -> Path:
+        return self.mw if pair in MW_PAIRS else self.x7
+
+    def merge_dir(self, pair: str, v: str) -> Path:
+        return self.work(pair) / "pairs" / pair / f"merge_{v}"
+
+    def app_variant(self, pair: str) -> str:
+        return APP_VARIANT.get(pair, "a")
+
+    def setup_keys(self, pair: str, keys: tuple[str, str], poses: str = "tracked") -> dict:
+        """:meth:`setup` for a pair named here only (the experiment's spread pairs)."""
+        MW_PAIRS.setdefault(pair, tuple(keys))
+        return self.setup(pair, poses)
+
+    def setup(self, pair: str, poses: str) -> dict:
+        """The scene, its truth, the samples each scan saw, the singles (recipe applied) and their worlds."""
+        from tools import preset_study as ps
+        from tools.calib_health_study import Truth
+
+        MS, SC = self.MS, self.SC
+        ka, kb = self.keys(pair)
+        spec, sa, ea = MS.scan_spec(ka)
+        _, sb, eb = MS.scan_spec(kb)
+        sc = SC.scene_of(spec)
+        truth = SC.truth_for(spec, sc)
+        ra, rb = self.recs / ka.split("@")[0], self.recs / kb.split("@")[0]
+        A, B = MS.scan_dir(self.work(pair), ka, poses), MS.scan_dir(self.work(pair), kb, poses)
+        Wa = np.eye(4) if poses == "true" else MS.fitted_world(ra, A / "trajectory.csv")
+        Wb = np.eye(4) if poses == "true" else MS.fitted_world(rb, B / "trajectory.csv")
+        SA = ps.seen_points(sc, ra, sa, ea, every=3, n_max=60000)
+        SB = ps.seen_points(sc, rb, sb, eb, every=3, n_max=60000)
+        X0 = np.vstack([SA, SB])
+        X, Xn = truth.closest_part(X0)
+        from scipy.spatial import cKDTree
+
+        inA = np.r_[np.ones(len(SA), bool), cKDTree(SA).query(SB)[0] < 0.7]
+        inB = np.r_[cKDTree(SB).query(SA)[0] < 0.7, np.ones(len(SB), bool)]
+        try:
+            tr = Truth(sc)
+            prim = np.argmin(np.abs(tr.prim_sdf(X)), axis=1)
+            names = list(tr.names)
+            order = {p.name: k for k, p in enumerate(sc.primitives)}
+            prim = np.array([order.get(names[k], -1) for k in prim])
+        except Exception:  # noqa: BLE001  (a scene without primitives: no wall readings)
+            prim = np.full(len(X), -1)
+        mA, mB = recipe_mesh(A / "mesh.ply"), recipe_mesh(B / "mesh.ply")
+        return {"pair": pair, "keys": (ka, kb), "spec": spec, "sc": sc, "truth": truth, "recs": (ra, rb),
+                "dirs": (A, B), "W": (Wa, Wb), "X": X, "Xn": Xn, "inA": inA, "inB": inB, "prim": prim,
+                "walls": walls_of(sc), "mA": mA, "mB": mB}
+
+    def single_readings(self, st: dict) -> tuple:
+        from ohs import geometry as G
+
+        SC = self.SC
+        out = []
+        for (V, F, N, S), W in zip((st["mA"], st["mB"]), st["W"]):
+            T, _ = SC.place_part(V, W, st["truth"])
+            out.append(read_surface(G.transform_points(T, V), N @ T[:3, :3].T, S, st["X"], st["Xn"]))
+        return out[0][0], out[0][1], out[1][0], out[1][1]
+
+    def joint_readings(self, st: dict, T_b: np.ndarray) -> tuple:
+        """A in its world and B at the pose ``T_b`` (into A's world), placed together as one merged scan."""
+        from ohs import geometry as G
+
+        (Va, _, Na, Sa), (Vb, _, Nb, Sb) = st["mA"], st["mB"]
+        Vb2, Nb2 = G.transform_points(T_b, Vb), Nb @ np.asarray(T_b)[:3, :3].T
+        T, _ = self.SC.place_part(np.vstack([Va, Vb2]), st["W"][0], st["truth"])
+        R = T[:3, :3]
+        eA, sA = read_surface(G.transform_points(T, Va), Na @ R.T, Sa, st["X"], st["Xn"])
+        eB, sB = read_surface(G.transform_points(T, Vb2), Nb2 @ R.T, Sb, st["X"], st["Xn"])
+        return eA, sA, eB, sB
+
+    def merge_reading(self, st: dict, v: str) -> tuple:
+        from ohs import geometry as G
+
+        V, F, N, S = recipe_mesh(self.merge_dir(st["pair"], v) / "mesh.ply")
+        T, _ = self.SC.place_part(V, st["W"][0], st["truth"])
+        return read_surface(G.transform_points(T, V), N @ T[:3, :3].T, S, st["X"], st["Xn"])
+
+    def merge_pose(self, pair: str, v: str) -> np.ndarray:
+        return np.asarray(json.loads((self.merge_dir(pair, v) / "done.json").read_text())["T"][1], np.float64)
+
+
+def walls_table(st: dict, rows: dict) -> dict:
+    return {name: wall_errors(st["prim"], st["Xn"], e, st["walls"]) for name, (e, _) in rows.items()}
+
+
+def thin_walls(st: dict) -> list[str]:
+    return [w["name"] for w in st["walls"] if w["true_mm"] is not None and w["true_mm"] <= THIN_MM]
+
+
+def run_combine(study: Study, out: Path, pair: str, v: str) -> dict:
+    t0 = time.perf_counter()
+    poses = "true" if v == "c" else "tracked"
+    st = study.setup(pair, poses)
+    eA1, sA1, eB1, sB1 = study.single_readings(st)
+    eA, sA, eB, sB = study.joint_readings(st, study.merge_pose(pair, v))
+    eM, sM = study.merge_reading(st, v)
+    rows = {"merge (today)": (eM, sM)}
+    for rule in RULES:
+        e, s_mix, s_ivw = combine(eA, sA, eB, sB, rule)
+        rows[rule] = (e, s_mix)
+        rows[f"{rule} (naive sigma)"] = (e, s_ivw)
+    res = judge_case(eA1, sA1, eB1, sB1, rows, st["inA"], st["inB"])
+    res.update({"pair": pair, "variant": v, "ruined_by_pose": pair in RUINED, "keys": st["keys"],
+                "walls": walls_table(st, {"A": (eA1, sA1), "B": (eB1, sB1), **rows}), "thin": thin_walls(st),
+                "wall_true_mm": {w["name"]: w["true_mm"] for w in st["walls"]},
+                "seconds": round(time.perf_counter() - t0, 1)})
+    res["kill"] = kill_c1(res)
+    _write(out / f"combine_{pair}_{v}.json", res)
+    return res
+
+
+def kill_c1(res: dict) -> dict:
+    """C1's kill rule (fixed in the design note): dropped if inverse variance fails E-D4 (1) on a pair the pose
+    did not ruin, or reads a thin wall 0.05 mm or more thicker than today's merge."""
+    r = res["rows"]["ivw"]
+    fails = [] if res["ruined_by_pose"] else [k for k in ("E-D4 (1) on S_A", "E-D4 (1) on S_B") if not r[k]]
+    thick = []
+    for w in res["thin"]:
+        a, b = res["walls"]["ivw"].get(w), res["walls"]["merge (today)"].get(w)
+        if a is not None and b is not None and a - b >= WALL_ALARM:
+            thick.append(w)
+    return {"fails": fails, "thicker walls": thick, "killed": bool(fails or thick)}
+
+
+# =========================================================================== tags (C3)
+def table_tags(n: int = 8, radius_mm: float = 110.0, size_mm: float = TAG_MM) -> dict[int, np.ndarray]:
+    """``n`` tags flat on the table (z = 0, facing up) on a ring round the part: id -> corners (4, 3)."""
+    out = {}
+    h = size_mm / 2.0
+    for i in range(n):
+        a = 2 * np.pi * (i + 0.5) / n
+        c = radius_mm * np.array([np.cos(a), np.sin(a), 0.0])
+        u, w = np.array([np.cos(a), np.sin(a), 0.0]), np.array([-np.sin(a), np.cos(a), 0.0])
+        out[i] = np.array([c - h * u - h * w, c + h * u - h * w, c + h * u + h * w, c - h * u + h * w])
+    return out
+
+
+def sees(T_wc: np.ndarray, X: np.ndarray, K: np.ndarray, size: tuple[int, int], margin_px: float = 20.0,
+         depth: tuple[float, float] = (150.0, 450.0), max_deg: float = 70.0) -> bool:
+    """Whether a camera at ``T_wc`` sees the tag ``X`` (corners, world): all corners in the image and range, and
+    its face turned to the camera within ``max_deg`` (its normal: up)."""
+    Xc = (X - T_wc[:3, 3]) @ T_wc[:3, :3]
+    if np.any(Xc[:, 2] < depth[0]) or np.any(Xc[:, 2] > depth[1]):
+        return False
+    uv = Xc[:, :2] / Xc[:, 2:3] * np.array([K[0, 0], K[1, 1]]) + np.array([K[0, 2], K[1, 2]])
+    if np.any(uv < margin_px) or np.any(uv[:, 0] > size[0] - margin_px) or np.any(uv[:, 1] > size[1] - margin_px):
+        return False
+    to_cam = T_wc[:3, 3] - X.mean(axis=0)
+    return bool(to_cam[2] / np.linalg.norm(to_cam) > np.cos(np.radians(max_deg)))
+
+
+def emulated_tag_map(tags: dict[int, np.ndarray], true_poses: dict[int, np.ndarray], tracked: dict[int, np.ndarray],
+                     K: np.ndarray, size: tuple[int, int], noise_mm=TAG_NOISE_MM, rng=None, run: int = 1,
+                     min_views: int = 2, outlier_mm: float = 2.0):
+    """The tag map a scan would make (module docstring): ``(TagMap, sightings per tag)``."""
+    from ohs.align.tags import TagMap
+    from ohs.geometry import kabsch
+    from ohs.track.markers import tag_corners_local
+
+    rng = rng if rng is not None else np.random.default_rng(0)
+    square = tag_corners_local(TAG_MM)
+    obs: dict[int, list[np.ndarray]] = {}
+    held: dict[int, np.ndarray] = {}
+    frames = sorted(set(true_poses) & set(tracked))
+    for k, f in enumerate(frames):
+        Tt, Tk = true_poses[f], tracked[f]
+        for i, X in tags.items():
+            if not sees(Tt, X, K, size):
+                continue
+            if k % max(run, 1) == 0 or i not in held:
+                held[i] = rng.normal(0.0, 1.0, (4, 3)) * np.asarray(noise_mm)
+            Xc = (X - Tt[:3, 3]) @ Tt[:3, :3] + held[i]
+            R, t = kabsch(square, Xc)
+            Y = square @ R.T + t
+            obs.setdefault(i, []).append(Y @ Tk[:3, :3].T + Tk[:3, 3])
+    out = TagMap()
+    for i, Xs in sorted(obs.items()):
+        A = np.stack(Xs)
+        med = np.median(A, axis=0)
+        keep = np.linalg.norm(A - med, axis=2).max(axis=1) <= outlier_mm
+        if keep.sum() < min_views:
+            continue
+        out.corners[i] = np.median(A[keep], axis=0)
+        out.views[i] = int(keep.sum())
+    return out, {i: len(v) for i, v in obs.items()}
+
+
+def pose_off(T: np.ndarray, T_true: np.ndarray, P: np.ndarray) -> list[float]:
+    from ohs import geometry as G
+
+    d = np.linalg.norm(G.transform_points(T, P) - G.transform_points(T_true, P), axis=1)
+    return [float(np.median(d)), float(np.percentile(d, 95))]
+
+
+def run_tags(study: Study, out: Path, pair: str, seeds=(0, 1, 2), correlated=(False, True)) -> dict:
+    from ohs.align import scan_cloud_from_mesh
+    from ohs.align.pairwise import align_pair
+    from ohs.align.tags import pose_from_tags
+    from ohs.io.recording import RecordingReader
+    from ohs.track.posegraph import read_trajectory
+
+    t0 = time.perf_counter()
+    st = study.setup(pair, "tracked")
+    eA1, sA1, eB1, sB1 = study.single_readings(st)
+    T_true = study.merge_pose(pair, "b2")
+    T_app = study.merge_pose(pair, study.app_variant(pair))
+    tags = table_tags()
+    maps_in = []
+    for (key, d), rec in zip(zip(st["keys"], st["dirs"]), st["recs"]):
+        _, s, e = study.MS.scan_spec(key)
+        reader = RecordingReader(rec)
+        gt = {i: T for i, T in reader.ground_truth_poses().items() if s <= i < e}
+        tr = {int(r[0]): np.asarray(r[3], np.float64).reshape(4, 4) for r in read_trajectory(d / "trajectory.csv") if r[2]}
+        stc = reader.calibration().stereo
+        maps_in.append((gt, tr, np.asarray(stc.K_rect, np.float64), tuple(stc.image_size)))
+    VB = st["mB"][0]
+    clouds = [scan_cloud_from_mesh(d / "mesh.ply") for d in st["dirs"]]
+    res = {"pair": pair, "keys": st["keys"], "app pose off": pose_off(T_app, T_true, VB), "runs": [], "poses": {}}
+
+    def judge_at(T_b: np.ndarray) -> dict:
+        eA, sA, eB, sB = study.joint_readings(st, T_b)
+        rows = {}
+        for rule in ("equal", "ivw"):
+            e, s, _ = combine(eA, sA, eB, sB, rule)
+            rows[rule] = (e, s)
+        j = judge_case(eA1, sA1, eB1, sB1, rows, st["inA"], st["inB"])
+        j["walls"] = walls_table(st, rows)
+        return j
+
+    res["poses"]["true motion"] = judge_at(T_true)
+    res["poses"]["app"] = judge_at(T_app)
+    for corr in correlated:
+        for seed in seeds:
+            rng = np.random.default_rng(seed)
+            mapsAB, sight = [], []
+            for gt, tr, K, size in maps_in:
+                m, n = emulated_tag_map(tags, gt, tr, K, size, rng=rng, run=CORRELATED_RUN if corr else 1)
+                mapsAB.append(m)
+                sight.append(n)
+            tp = pose_from_tags(mapsAB[1], mapsAB[0])
+            row = {"seed": seed, "correlated": corr, "tags A": {str(k): v for k, v in mapsAB[0].views.items()},
+                   "tags B": {str(k): v for k, v in mapsAB[1].views.items()},
+                   "shared": sorted(set(mapsAB[0].corners) & set(mapsAB[1].corners))}
+            if tp is None:
+                row["tag pose"] = None
+                res["runs"].append(row)
+                continue
+            row.update({"tag rms mm": tp.rms_mm, "tags used": tp.ids, "tag pose off": pose_off(tp.T, T_true, VB)})
+            al = align_pair(clouds[1], clouds[0], init=tp.T, same_setup=True, init_from="tags")
+            row.update({"refined accepted": bool(al.accepted), "refined off": pose_off(al.T, T_true, VB),
+                        "refined overlap": float(al.overlap)})
+            tag_name, ref_name = f"tags held s{seed}{' corr' if corr else ''}", f"tags refined s{seed}{' corr' if corr else ''}"
+            res["poses"][tag_name] = judge_at(tp.T)
+            res["poses"][ref_name] = judge_at(np.asarray(al.T))
+            row["judged as"] = [tag_name, ref_name]
+            res["runs"].append(row)
+    res["seconds"] = round(time.perf_counter() - t0, 1)
+    res["held passes E-D4 (1)"] = {
+        k: {r: bool(p["rows"][r]["E-D4 (1) on S_A"] and p["rows"][r]["E-D4 (1) on S_B"]) for r in p["rows"]}
+        for k, p in res["poses"].items()}
+    _write(out / f"tags_{pair}.json", res)
+    return res
+
+
+# =========================================================================== per-scan fusion, then combine (C1 reframed)
+#: E-D3 item 4, the graphics-card experiment (fixed 2026-11-23 before any run; ``ed3\merge_looks\NOTES.md``)
+PS_MIN_OBS = 3.0  # a scan counts at a voxel only when it observed it more than this often (the meshing threshold)
+SPREAD_PAIRS = 2  # extra seed pairs per case, besides the case's own
+SPREAD_AZ_DEG = 12.0  # a spread pair's stretches look from within this of the case's own sides (centre azimuths)
+BASE_CASES = ("P1", "P2", "P3", "P4", "P5", "M1", "M2", "M3", "M4", "M5", "M6", "M7")
+SEEDS = {"bracket240": range(5), "panel200": range(5), "sheet": range(3), "holes-low": range(3)}
+RSS_LIMIT_GB = 12.0
+
+
+def keep_apart(tA, nA, sA, tB, nB, sB, gA, gB, min_obs: float = PS_MIN_OBS, keep_faces: bool = True):
+    """Two scans' fused volumes combined per voxel, each scan's faces kept apart, each scan weighing the same.
+
+    ``t*``: each scan's own fused value (mm; its own opposite-sides rule already applied inside it), ``n*`` its
+    count of observations, ``s*`` its voxel sigma (mm), ``g*`` its value's gradient (..., 3). A scan counts at a
+    voxel when ``n > min_obs``. Where both count:
+
+    * their gradients agree (dot >= 0): one surface seen by both: the mean of the two values;
+    * they point opposite ways (dot < 0): the two faces of a wall, each seen by one scan: the larger value (free
+      space seen by either scan wins), so each face's zero crossing stays where its own scan put it;
+
+    where one counts, its value; where neither, the observation-weighted mean (what one model would hold).
+    Returns ``(value, count, sigma, kept_apart)``: ``count`` = nA + nB; ``sigma`` of an averaged voxel
+    ``sqrt((sA^2 + sB^2) / 2 + (tA - tB)^2 / 4)`` (the mixture's), of a kept-apart voxel the winner's, of a voxel
+    one scan holds its own; ``kept_apart`` marks the voxels the second rule decided. ``keep_faces=False``: the plain
+    average wherever both count (the outside review's control: equal say per scan without keeping faces apart)."""
+    tA, nA, sA, tB, nB, sB = (np.asarray(x, np.float32) for x in (tA, nA, sA, tB, nB, sB))
+    cA, cB = nA > min_obs, nB > min_obs
+    both = cA & cB
+    opp = both & (np.einsum("...k,...k->...", np.asarray(gA, np.float32), np.asarray(gB, np.float32)) < 0)
+    if not keep_faces:
+        opp = np.zeros_like(opp)
+    avg = both & ~opp
+    wn = np.maximum(nA + nB, np.float32(1e-6))
+    t = np.where(cA & ~cB, tA, np.where(cB & ~cA, tB, (nA * tA + nB * tB) / wn))
+    s = np.where(cA & ~cB, sA, np.where(cB & ~cA, sB, np.sqrt((nA * sA ** 2 + nB * sB ** 2) / wn)))
+    t = np.where(avg, 0.5 * (tA + tB), t)
+    s = np.where(avg, np.sqrt(0.5 * (sA ** 2 + sB ** 2) + 0.25 * (tA - tB) ** 2), s)
+    win_a = tA >= tB
+    t = np.where(opp, np.where(win_a, tA, tB), t)
+    s = np.where(opp, np.where(win_a, sA, sB), s)
+    return t.astype(np.float32), (nA + nB).astype(np.float32), s.astype(np.float32), opp
+
+
+def brick_gradient(t: np.ndarray) -> np.ndarray:
+    """Per voxel the gradient of a value held in bricks (M, 8, 8, 8) indexed [z, y, x], within each brick
+    (one-sided at a brick's faces): (M, 8, 8, 8, 3) as (x, y, z)."""
+    gz, gy, gx = np.gradient(np.asarray(t, np.float32), axis=(1, 2, 3))
+    return np.stack([gx, gy, gz], axis=-1)
+
+
+def union_bricks(kA: np.ndarray, kB: np.ndarray):
+    """The union of two volumes' brick keys and, for each volume, where each union brick is in it (-1: absent)."""
+    kA, kB = np.asarray(kA, np.int64).reshape(-1, 3), np.asarray(kB, np.int64).reshape(-1, 3)
+    keys = np.unique(np.vstack([kA, kB]), axis=0)
+
+    def code(k):
+        return (k[:, 0] + 2 ** 19) * 2 ** 40 + (k[:, 1] + 2 ** 19) * 2 ** 20 + (k[:, 2] + 2 ** 19)  # 20 bits each
+
+    ck = code(keys)  # sorted, as np.unique sorts rows lexicographically and the code keeps that order
+
+    def where(k):
+        idx = np.full(len(keys), -1, np.int64)
+        if len(k):
+            idx[np.searchsorted(ck, code(k))] = np.arange(len(k))
+        return idx
+
+    return keys, where(kA), where(kB)
+
+
+def _watch_rss(limit_gb: float = RSS_LIMIT_GB) -> None:
+    """Stop this process (exit 96) when its resident memory passes ``limit_gb``."""
+    import os
+    import threading
+
+    try:
+        import psutil
+    except ImportError:  # no watch without psutil
+        return
+    me = psutil.Process()
+
+    def run() -> None:
+        while True:
+            if me.memory_info().rss > limit_gb * 2 ** 30:
+                print(f"resident memory past {limit_gb} GB: stopped", flush=True)
+                os._exit(96)
+            time.sleep(1.0)
+
+    threading.Thread(target=run, daemon=True).start()
+
+
+def fuse_alone(recording: Path, trajectory: Path, T: np.ndarray, params) -> dict:
+    """One scan's frames fused alone into a model of their own with the merge's settings (what
+    ``ohs.align.merge_scans`` does for one scan: the same pipeline, no clip since the part was not moved), downloaded:
+    ``{"keys", "t" (fused value, mm), "n", "s" (voxel sigma), "nlook", "wsum", "voxel_mm", "trunc_mm", "n_integrated",
+    "bricks", "model_mb", "s_fuse"}``."""
+    from dataclasses import replace
+
+    from ohs.app.pipeline import FramePipeline
+    from ohs.app.process import READ_AHEAD_FRAMES
+    from ohs.io.recording import RecordingReader
+    from ohs.track.posegraph import read_trajectory
+    from ohs.track.recon_tsdf import voxel_sigma
+
+    t0 = time.perf_counter()
+    p = replace(params, pipeline=replace(params.pipeline, tracking=False, use_imu=False))
+    reader = RecordingReader(recording)
+    cal = reader.calibration()
+    rows = read_trajectory(trajectory)
+    poses = {int(r[0]): np.asarray(r[3], np.float64).reshape(4, 4) for r in rows if r[2]}
+    poses = {i: Tf for i, Tf in poses.items() if np.all(np.isfinite(Tf))}
+    positions = [pos for pos, idx in enumerate(reader.indices) if int(idx) in poses]
+    pipe = FramePipeline(cal, p.pipeline)
+    try:
+        frames = reader.iter_ahead(positions, READ_AHEAD_FRAMES)
+        try:
+            for frame in frames:
+                pipe.process(frame, pose=np.asarray(T) @ poses[int(frame.index)], clip_plane=None)
+        finally:
+            frames.close()
+        model = pipe.release_model()
+    finally:
+        pipe.close()
+    try:
+        mb = getattr(model, "memory_mb", None)
+        mb = float(mb()) if callable(mb) else (float(mb) if mb is not None else None)
+        keys, ch = model.download()
+        out = {"keys": keys.astype(np.int64), "t": model.fused_tsdf(ch).astype(np.float32), "n": ch["nobs"].astype(np.float32),
+               "s": voxel_sigma(ch["wsum"], ch["m2"], ch["nobs"], ch["nlook"], ch["mxc"], ch["hnear"], ch["snh2"],
+                                voxel_mm=model.voxel_mm).astype(np.float32),
+               "nlook": ch["nlook"].astype(np.float32), "wsum": ch["wsum"].astype(np.float32),
+               "voxel_mm": float(model.voxel_mm), "trunc_mm": float(model.trunc_mm), "n_integrated": int(model.n_integrated),
+               "bricks": int(len(keys)), "model_mb": mb}
+        del ch
+    finally:
+        model.close()
+    out["s_fuse"] = round(time.perf_counter() - t0, 1)
+    return out
+
+
+def combine_volumes(A: dict, B: dict, keep_faces: bool = True) -> dict:
+    """:func:`keep_apart` over the union of two fused volumes' bricks."""
+    keys, ia, ib = union_bricks(A["keys"], B["keys"])
+    shape = (len(keys), 8, 8, 8)
+
+    def put(vol, idx, name, fill=0.0):
+        a = np.full(shape, np.float32(fill), np.float32)
+        m = idx >= 0
+        a[m] = vol[name][idx[m]]
+        return a
+
+    trunc = np.float32(A["trunc_mm"])
+    tA, tB = put(A, ia, "t", trunc), put(B, ib, "t", trunc)
+    nA, nB = put(A, ia, "n"), put(B, ib, "n")
+    sA, sB = put(A, ia, "s", 50.0), put(B, ib, "s", 50.0)
+    t, n, s, opp = keep_apart(tA, nA, sA, tB, nB, sB, brick_gradient(tA), brick_gradient(tB), keep_faces=keep_faces)
+    return {"keys": keys, "t": t, "n": n, "s": s, "nlook": put(A, ia, "nlook") + put(B, ib, "nlook"),
+            "wsum": put(A, ia, "wsum") + put(B, ib, "wsum"), "voxel_mm": A["voxel_mm"], "trunc_mm": A["trunc_mm"],
+            "n_integrated": A["n_integrated"] + B["n_integrated"], "kept_apart_voxels": int(opp.sum()),
+            "bricks": int(len(keys))}
+
+
+def mesh_volume(vol: dict, weight_threshold: float = 3.0):
+    """Marching cubes over a combined volume as ``ConfidenceTsdf.extract_mesh`` does: ``(V, F, N, sigma, looks)``."""
+    import open3d as o3d
+    import open3d.core as o3c
+
+    from ohs.track.recon_tsdf import BRICK, mesh_sigma_terms
+
+    keys = vol["keys"]
+    vbg = o3d.t.geometry.VoxelBlockGrid(
+        attr_names=("tsdf", "weight", "color"), attr_dtypes=(o3c.float32, o3c.float32, o3c.float32),
+        attr_channels=((1), (1), (3)), voxel_size=vol["voxel_mm"], block_resolution=BRICK,
+        block_count=int(len(keys) + 64), device=o3c.Device("CPU:0"))
+    buf, _ = vbg.hashmap().activate(o3c.Tensor(np.ascontiguousarray(keys, np.int32)))
+    idx = buf.cpu().numpy().astype(np.int64)
+    vbg.attribute("tsdf").numpy()[idx] = np.clip(vol["t"] / np.float32(vol["trunc_mm"]), -1.0, 1.0)[..., None]
+    vbg.attribute("weight").numpy()[idx] = vol["n"][..., None]
+    vbg.attribute("color").numpy()[idx] = np.stack([vol["s"], vol["nlook"], vol["wsum"]], axis=-1)
+    mesh = vbg.extract_triangle_mesh(weight_threshold=float(min(weight_threshold, max(vol["n_integrated"] - 1, 0))))
+    V = mesh.vertex.positions.cpu().numpy().astype(np.float64)
+    F = mesh.triangle.indices.cpu().numpy().astype(np.int64)
+    N = mesh.vertex.normals.cpu().numpy().astype(np.float64)
+    C = mesh.vertex.colors.cpu().numpy()
+    sg = (C[:, 0] * np.float32(255.0)).astype(np.float64)
+    S = np.sqrt(sg * sg + mesh_sigma_terms(V, F, N, voxel_mm=vol["voxel_mm"])).astype(np.float32)
+    return V, F, N, S, (C[:, 1] * np.float32(255.0)).astype(np.float32)
+
+
+class Experiment:
+    """The graphics-card experiment's folder: its plan (pairs, poses, spread pairs) and the jobs' results."""
+
+    def __init__(self, root: Path, recs: Path) -> None:
+        from tools import merge_accuracy_study as MS
+
+        self.MS, self.SC = MS, MS.SC
+        self.root, self.recs = Path(root), Path(recs)
+        self.work = self.root / "work"
+        self.plan_path = self.root / "plan.json"
+        self.plan = json.loads(self.plan_path.read_text()) if self.plan_path.is_file() else None
+        if self.plan:
+            for name, c in self.plan["pairs"].items():
+                MS.PAIRS[name] = (c["a"], c["b"], c["start"], name)
+                MW_PAIRS.setdefault(name, (c["a"], c["b"]))
+
+    def study(self) -> "Study":
+        st = Study(self.root, self.root, self.recs)
+        st.x7 = st.mw = self.work
+        return st
+
+    def app_variant(self, name: str) -> str:
+        f = self.work / "pairs" / name / "app_variant.txt"
+        return f.read_text().strip() if f.is_file() else self.plan["pairs"][name]["app"]
+
+
+def centre_azimuth(rec: Path, start: int, sc, gt=None) -> float:
+    """The circular mean azimuth (degrees, about the scene's target) of a 90-frame stretch's true cameras."""
+    from ohs.io.recording import RecordingReader
+
+    gt = gt if gt is not None else RecordingReader(rec).ground_truth_poses()
+    C = np.array([gt[i][:3, 3] for i in sorted(gt) if start <= i < start + 90])
+    tgt = np.asarray(sc.target, float)
+    a = np.arctan2(C[:, 1] - tgt[1], C[:, 0] - tgt[0])
+    return float(np.degrees(np.arctan2(np.sin(a).mean(), np.cos(a).mean())))
+
+
+def plan_experiment(x7: Path, mergewarn: Path, recs: Path, out: Path) -> dict:
+    """Fix the experiment before any run: the 12 cases, their poses, and :data:`SPREAD_PAIRS` more seed pairs per
+    case whose stretches look from the case's own two sides (centre azimuths within :data:`SPREAD_AZ_DEG`; starts on
+    a 10-frame grid; a seed pair other than the case's own), the closest first. Copies the cases' saved single
+    scans and alignments into ``out/work`` (the studies' folders are only read)."""
+    import shutil
+
+    from ohs.io.recording import RecordingReader
+    from tools import merge_accuracy_study as MS
+
+    SC = MS.SC
+    recs = Path(recs)
+    work = Path(out) / "work"
+    pairs: dict[str, dict] = {}
+    gts: dict[str, dict] = {}
+    for case in BASE_CASES:
+        ka, kb = MW_PAIRS[case] if case in MW_PAIRS else MS.PAIRS[case][:2]
+        start = "points" if case == "P3" else "shape"
+        pairs[case] = {"a": ka, "b": kb, "start": start, "app": APP_VARIANT.get(case, "a"), "case": case,
+                       "spread": False, "ruined_by_pose": case in RUINED}
+        scene = ka.split("@")[0].rsplit("-s", 1)[0]
+        spec, _, _ = MS.scan_spec(ka)
+        sc = SC.scene_of(spec)
+
+        def gt_of(name):
+            if name not in gts:
+                gts[name] = RecordingReader(recs / name).ground_truth_poses()
+            return gts[name]
+
+        want = [centre_azimuth(None, int(k.split("@")[1]), sc, gt_of(k.split("@")[0])) for k in (ka, kb)]
+        own = {int(k.split("@")[0].rsplit("-s", 1)[1]) for k in (ka, kb)}
+        cand = []
+        for i in SEEDS[scene]:
+            for j in SEEDS[scene]:
+                if i == j or {i, j} == own:
+                    continue
+                best = []
+                for seed, w in ((i, want[0]), (j, want[1])):
+                    g = gt_of(f"{scene}-s{seed}")
+                    n = max(g) + 1
+                    opts = [(abs((centre_azimuth(None, s0, sc, g) - w + 180) % 360 - 180), s0) for s0 in range(0, n - 89, 10)]
+                    best.append(min(opts))
+                if max(b[0] for b in best) <= SPREAD_AZ_DEG:
+                    shared = int(i in own) + int(j in own)  # scans of the case's own seeds: fewer first
+                    cand.append((shared, best[0][0] + best[1][0], f"{scene}-s{i}@{best[0][1]}", f"{scene}-s{j}@{best[1][1]}"))
+        cand = [c[1:] + (c[0],) for c in sorted(cand)]
+        for k, (_, a, b, _) in enumerate(cand[:SPREAD_PAIRS]):
+            pairs[f"{case}s{k + 1}"] = {"a": a, "b": b, "start": start, "app": "a", "case": case, "spread": True,
+                                        "ruined_by_pose": None}
+        print(case, "spread pairs", [(round(c[0], 1), c[1], c[2], f"shares {c[3]} seed(s)") for c in cand[:SPREAD_PAIRS]], flush=True)
+    for case in BASE_CASES:  # the cases' own singles and alignments, copied
+        src = (Path(mergewarn) if case in MW_PAIRS else Path(x7)) / "work"
+        c = pairs[case]
+        for key in (c["a"], c["b"]):
+            dst = MS.scan_dir(work, key, "tracked")
+            if not (dst / "done.json").is_file():
+                shutil.copytree(MS.scan_dir(src, key, "tracked"), dst, dirs_exist_ok=True)
+        pd = work / "pairs" / case
+        pd.mkdir(parents=True, exist_ok=True)
+        for f in ("align.json", "align_points.json"):
+            if (src / "pairs" / case / f).is_file():
+                shutil.copy2(src / "pairs" / case / f, pd / f)
+    singles = sorted({k for c in pairs.values() for k in (c["a"], c["b"])
+                      if not (MS.scan_dir(work, k, "tracked") / "done.json").is_file()})
+    plan = {"fixed": time.strftime("%Y-%m-%d %H:%M"), "pairs": pairs, "new_singles": singles, "poses": ["app", "b2"],
+            "min_obs": PS_MIN_OBS, "spread_az_deg": SPREAD_AZ_DEG}
+    _write(Path(out) / "plan.json", plan)
+    return plan
+
+
+def run_today(ex: Experiment, name: str) -> None:
+    """Today's merge at the app's pose (a spread pair is aligned first: from the shape, or from picked points when
+    the shape is not sure, as the app then asks) and at the true motion."""
+    MS = ex.MS
+    c = ex.plan["pairs"][name]
+    pd = ex.work / "pairs" / name
+    pd.mkdir(parents=True, exist_ok=True)
+    if c["spread"] and not (pd / "app_variant.txt").is_file():
+        MS.run_pair(ex.work, ex.recs, name, ["a"])
+        if json.loads((pd / "align.json").read_text())["accepted"]:
+            (pd / "app_variant.txt").write_text("a")
+        else:
+            MS.run_pair(ex.work, ex.recs, name, ["p"])
+            (pd / "app_variant.txt").write_text("p")
+    MS.run_pair(ex.work, ex.recs, name, [ex.app_variant(name), "b2"])
+
+
+def run_perscan(ex: Experiment, name: str) -> dict:
+    """Each scan fused alone, combined (:func:`combine_volumes`), meshed and cleaned as a merge is: ``merge_ps_{v}``
+    at the app's pose and the true motion, the poses of today's merges (read from their ``done.json``)."""
+    from ohs.mesh.confidence import SIGMA_NONE_MM
+    from ohs.track.export import clean_mesh, save_mesh
+
+    MS = ex.MS
+    c = ex.plan["pairs"][name]
+    params = MS.merge_params()
+    pd = ex.work / "pairs" / name
+    A, B = MS.scan_dir(ex.work, c["a"], "tracked"), MS.scan_dir(ex.work, c["b"], "tracked")
+    ra, rb = ex.recs / c["a"].split("@")[0], ex.recs / c["b"].split("@")[0]
+    info = {}
+    volA = None
+    for v in (ex.app_variant(name), "b2"):
+        todo = [(tag, kf) for tag, kf in (("ps", True), ("pb", False)) if not (pd / f"merge_{tag}_{v}" / "done.json").is_file()]
+        if not todo:
+            continue
+        T = np.asarray(json.loads((pd / f"merge_{v}" / "done.json").read_text())["T"][1])
+        if volA is None:
+            volA = fuse_alone(ra, A / "trajectory.csv", np.eye(4), params)
+        volB = fuse_alone(rb, B / "trajectory.csv", T, params)
+        for tag, kf in todo:
+            t0 = time.perf_counter()
+            out = pd / f"merge_{tag}_{v}"
+            vol = combine_volumes(volA, volB, keep_faces=kf)
+            V, F, N, S, L = mesh_volume(vol)
+            if params.clean_min_component > 0 and len(F):
+                V, F, idx = clean_mesh(V, F, min_component_fraction=float(params.clean_min_component), return_index=True)
+                N, S, L = N[idx], S[idx], L[idx]
+            S = np.minimum(S, np.float32(SIGMA_NONE_MM))
+            out.mkdir(parents=True, exist_ok=True)
+            save_mesh(out / "mesh.ply", V, F, N, quality=S, looks=L)
+            row = {"s_combine_mesh": round(time.perf_counter() - t0, 1), "T": [np.eye(4).tolist(), T.tolist()],
+                   "vertices": int(len(V)), "keep_faces": kf,
+                   "bricks": {"A": volA["bricks"], "B": volB["bricks"], "union": vol["bricks"]},
+                   "model_mb": {"A": volA["model_mb"], "B": volB["model_mb"]},
+                   "fuse_s": {"A": volA["s_fuse"], "B": volB["s_fuse"]}, "kept_apart_voxels": vol["kept_apart_voxels"]}
+            _write(out / "done.json", row)
+            info[f"{tag}_{v}"] = row
+            del vol
+        del volB
+    return info
+
+
+def run_judge_exp(ex: Experiment, name: str) -> dict:
+    """Both rules on today's merge and the per-scan one, at the app's pose and the true motion."""
+    st = ex.study()
+    c = ex.plan["pairs"][name]
+    res = {}
+    stt = st.setup_keys(name, (c["a"], c["b"]))
+    eA1, sA1, eB1, sB1 = st.single_readings(stt)
+    for v in (ex.app_variant(name), "b2"):
+        eA, sA, eB, sB = st.joint_readings(stt, st.merge_pose(name, v))
+        rows = {"today": st.merge_reading(stt, v), "per-scan": st.merge_reading(stt, f"ps_{v}")}
+        if (st.merge_dir(name, f"pb_{v}") / "mesh.ply").is_file():
+            rows["per-scan plain average"] = st.merge_reading(stt, f"pb_{v}")
+        e, s, _ = combine(eA, sA, eB, sB, "equal")
+        rows["surface emulation (equal)"] = (e, s)
+        j = judge_case(eA1, sA1, eB1, sB1, rows, stt["inA"], stt["inB"])
+        j["walls"] = walls_table(stt, {"A": (eA1, sA1), "B": (eB1, sB1), **rows})
+        j["thin"] = [w["name"] for w in stt["walls"] if w["true_mm"] is not None and w["true_mm"] <= 2.0]
+        al = ex.work / "pairs" / name / ("align_points.json" if v == "p" else "align.json")
+        j["overlap"] = json.loads(al.read_text())["result"]["overlap"] if v in ("a", "p") and al.is_file() else None
+        res[v] = j
+    _write(ex.work / "pairs" / name / "judge_exp.json", res)
+    return res
+
+
+def exp_verdict(ex: Experiment) -> dict:
+    """The spread and the kill rule (fixed before any run).
+
+    * The spread of a metric in a case (and pose): the range over the case's pairs of a single scan's own number on
+      its own surface, scan A's and scan B's taken apart, the larger of the two, at least the floors. E-D4 (1) holds when on S_A and on S_B
+      the merge is no worse than that scan by more than that spread.
+    * A pair is sound when the pose did not ruin it: the X7 / merge-warning label for a case's own pair; for a spread
+      pair, its alignment's overlap at least the caution's 0.70.
+    * Dropped if, at either pose: the per-scan merge fails E-D4 (1) on a sound pair where today's passes; or reads
+      a wall of 2 mm or less 0.05 mm or more thicker than today's; or holds less of the seen surface within 0.5 mm
+      than today's by more than the range of today's own over the case's pairs (at least the floor)."""
+    P = ex.plan["pairs"]
+    J = {n: json.loads((ex.work / "pairs" / n / "judge_exp.json").read_text()) for n in P
+         if (ex.work / "pairs" / n / "judge_exp.json").is_file()}
+    out: dict = {"cases": {}, "kill": []}
+    for case in BASE_CASES:
+        names = [n for n in P if P[n]["case"] == case and n in J]
+        for pose in ("app", "b2"):
+            def vj(n):
+                return J[n][ex.app_variant(n)] if pose == "app" else J[n]["b2"]
+
+            sp: dict = {}
+            for m, fl in (("cover05", FLOOR_SHARE), ("med", FLOOR_MED), ("over03", FLOOR_SHARE)):
+                rng = [np.ptp([vj(n)["singles"][k][f"S_{k}"][m] for n in names]) for k in ("A", "B")]
+                sp[m] = max(max(rng), fl) if len(names) > 1 else fl
+            tc = [vj(n)["rows"]["today"]["S_A or S_B"]["cover05"] for n in names]
+            sp["today cover05"] = max(max(tc) - min(tc), FLOOR_SHARE) if len(names) > 1 else FLOOR_SHARE
+            sp["pairs"] = len(names)
+            rows = []
+            for n in names:
+                j = vj(n)
+                sound = (not P[n]["ruined_by_pose"]) if not P[n]["spread"] else (j.get("overlap") or 1.0) >= 0.70
+                r: dict = {"pair": n, "sound": bool(sound), "overlap": j.get("overlap")}
+                for meth in [m for m in ("today", "per-scan", "per-scan plain average", "surface emulation (equal)") if m in j["rows"]]:
+                    ok = True
+                    for k in ("A", "B"):
+                        m, s = j["rows"][meth][f"S_{k}"], j["singles"][k][f"S_{k}"]
+                        ok &= (m["cover05"] >= s["cover05"] - sp["cover05"] and m["med"] <= s["med"] + sp["med"]
+                               and m["over03"] <= s["over03"] + sp["over03"])
+                    r[f"{meth} E-D4 (1)"] = bool(ok)
+                    r[f"{meth} E-D4 (3)"] = j["rows"][meth]["E-D4 (3) more than the larger scan"]
+                    r[f"{meth} X7"] = [j["rows"][meth]["X7 beats the better single"], j["rows"][meth]["X7 reaches the union"]]
+                    r[f"{meth} all"] = j["rows"][meth]["S_A or S_B"]
+                    r[f"{meth} 2s"] = j["rows"][meth]["2 sigma covers"]
+                r["singles 2s"] = [j["singles"]["A"]["2 sigma covers"], j["singles"]["B"]["2 sigma covers"]]
+                r["walls"] = {w: [j["walls"]["today"].get(w), j["walls"]["per-scan"].get(w)] for w in j["thin"]}
+                r["walls all"] = j["walls"]
+                why = []
+                if sound and r["today E-D4 (1)"] and not r["per-scan E-D4 (1)"]:
+                    why.append("fails E-D4 (1) where today passes")
+                for w, (a, b) in r["walls"].items():
+                    if a is not None and b is not None and b - a >= WALL_ALARM:
+                        why.append(f"{w} {b - a:+.2f} mm thicker")
+                d = r["per-scan all"]["cover05"] - r["today all"]["cover05"]
+                if d < -sp["today cover05"]:
+                    why.append(f"coverage {100 * d:+.1f} points")
+                r["kill"] = why
+                if why:
+                    out["kill"].append({"pair": n, "pose": pose, "why": why})
+                rows.append(r)
+            out["cases"][f"{case} {pose}"] = {"spread": sp, "pairs": rows}
+    out["killed"] = bool(out["kill"])
+    _write(ex.root / "verdict.json", out)
+    return out
+
+
+# =========================================================================== output
+def _plain(x):
+    if isinstance(x, dict):
+        return {str(k): _plain(v) for k, v in x.items()}
+    if isinstance(x, (list, tuple)):
+        return [_plain(v) for v in x]
+    if isinstance(x, (np.floating, float)):
+        return None if not np.isfinite(x) else round(float(x), 5)
+    if isinstance(x, (np.integer,)):
+        return int(x)
+    if isinstance(x, np.bool_):
+        return bool(x)
+    return x
+
+
+def _write(path: Path, obj) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(_plain(obj), indent=1), encoding="utf-8")
+
+
+def _f(s: dict) -> str:
+    return f"{s['cover05']:.3f}/{s['med']:.3f}/{100 * s['over03']:4.1f}"
+
+
+def print_table(out: Path) -> None:
+    for f in sorted(Path(out).glob("combine_*.json")):
+        j = json.loads(f.read_text())
+        S = j["singles"]
+        print(f"== {j['pair']} {j['variant']}{' (pose ruined)' if j['ruined_by_pose'] else ''}  A on S_A {_f(S['A']['S_A'])}"
+              f"  B on S_B {_f(S['B']['S_B'])}  union oracle {_f(j['union oracle'])}  better {j['better single']}"
+              f"  2s: A {S['A']['2 sigma covers']} B {S['B']['2 sigma covers']}  kill {j['kill']}")
+        for name, r in j["rows"].items():
+            w = {k: v for k, v in j["walls"][name].items() if k in j["thin"] and v is not None}
+            print(f"   {name:22s} S_A {_f(r['S_A'])} S_B {_f(r['S_B'])} all {_f(r['S_A or S_B'])}"
+                  f" | E-D4 {'y' if r['E-D4 (1) on S_A'] else 'n'}{'y' if r['E-D4 (1) on S_B'] else 'n'}"
+                  f"{'y' if r['E-D4 (3) more than the larger scan'] else 'n'}"
+                  f" | X7 {'y' if r['X7 beats the better single'] else 'n'}{'y' if r['X7 reaches the union'] else 'n'}"
+                  f" | 2s {r['2 sigma covers']} | walls {w}")
+    for f in sorted(Path(out).glob("tags_*.json")):
+        j = json.loads(f.read_text())
+        print(f"== tags {j['pair']}: app pose off {j['app pose off']}")
+        for r in j["runs"]:
+            print("   ", {k: r.get(k) for k in ("seed", "correlated", "shared", "tag rms mm", "tag pose off",
+                                                 "refined accepted", "refined off", "tags A", "tags B")})
+        for name, p in j["poses"].items():
+            for rule, r in p["rows"].items():
+                print(f"   {name:24s} {rule:6s} S_A {_f(r['S_A'])} S_B {_f(r['S_B'])}"
+                      f" E-D4 {'y' if r['E-D4 (1) on S_A'] else 'n'}{'y' if r['E-D4 (1) on S_B'] else 'n'}"
+                      f" X7 {'y' if r['X7 beats the better single'] else 'n'}{'y' if r['X7 reaches the union'] else 'n'}")
+
+
+def main(argv: list[str] | None = None) -> int:
+    ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    ap.add_argument("cmd", choices=("combine", "tags", "table", "plan", "single", "today", "perscan", "judge-exp", "verdict"))
+    ap.add_argument("out", type=Path)
+    ap.add_argument("--x7", type=Path)
+    ap.add_argument("--mergewarn", type=Path)
+    ap.add_argument("--recs", type=Path)
+    ap.add_argument("--cases", nargs="*", help="PAIR:VARIANT (combine)")
+    ap.add_argument("--pairs", nargs="*", default=["P3", "P5", "M1", "M3"], help="(tags)")
+    ap.add_argument("--name", help="(single: a scan key; today / perscan / judge-exp: a pair of the plan)")
+    a = ap.parse_args(argv)
+    if a.cmd in ("plan", "single", "today", "perscan", "judge-exp", "verdict"):  # the experiment: OUT is its folder
+        _watch_rss()
+        if a.cmd == "plan":
+            plan_experiment(a.x7, a.mergewarn, a.recs, a.out)
+            return 0
+        ex = Experiment(a.out, a.recs)
+        if a.cmd == "single":
+            ex.MS.run_single(ex.work, ex.recs, a.name, "tracked")
+        elif a.cmd == "today":
+            run_today(ex, a.name)
+        elif a.cmd == "perscan":
+            print(json.dumps(_plain(run_perscan(ex, a.name)))[:2000], flush=True)
+        elif a.cmd == "judge-exp":
+            run_judge_exp(ex, a.name)
+        else:
+            v = exp_verdict(ex)
+            print("killed" if v["killed"] else "alive", json.dumps(_plain(v["kill"]))[:3000])
+        return 0
+    if a.cmd == "table":
+        print_table(a.out)
+        return 0
+    study = Study(a.x7, a.mergewarn, a.recs)
+    if a.cmd == "combine":
+        for case in a.cases or []:
+            pair, v = case.split(":")
+            r = run_combine(study, a.out, pair, v)
+            print(pair, v, "kill", r["kill"], f"{r['seconds']} s", flush=True)
+    else:
+        for pair in a.pairs:
+            r = run_tags(study, a.out, pair)
+            print(pair, "tags", f"{r['seconds']} s", flush=True)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

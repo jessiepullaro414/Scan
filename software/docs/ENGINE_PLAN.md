@@ -86,6 +86,7 @@ The rules of `FEATURE_PLAN.md` and `MAINTENANCE_PLAN.md` hold. In short:
      a choice per scan).
   3. The length of long plain parts (gap item 7): X8 step 2 (tags as anchors), running.
   4. A merge that beats the better single scan (gap item 8): X7 measured it; nothing built.
+     X18 (one model per scan) measured and dropped; X19 (a pose from tags, held) designed.
   E-D1 still holds for each: a change goes on by default only when it is better on every
   scorecard scene and nothing thin gets worse; a miss stays a setting; a near miss comes to
   the owner with numbers. New experiments for 1, 2 and 4 are being designed (X15 on).
@@ -905,6 +906,84 @@ and thin parts".
   down. Weaker than X2.
 - **Stop rule: adopted only if** within 0.2 mm on 8 of 9 clicks.
 
+### [x] X18. A merge from one model per scan (S, then M): measured 2026-11-23, dropped
+E-D3 item 4, judged by E-D4. `tools/merge_combine_study.py`; `VALIDATION.md`, "A merge from one
+model per scan"; data in `D:\OpenHandScan-work\scratch\ed3` (`merge.md`, `merge_looks`, `gpu1`).
+- **The idea:** today's merge fuses every frame of both scans into one model, so a place seen
+  poorly by one scan drags the same place seen well by the other. Fuse each scan alone and
+  combine the two models, by each scan's sigma or with an equal say, keeping a wall's two faces
+  apart where the scans saw opposite faces.
+- **Weighting by the sigma: dropped** (first test, on the saved meshes, processor only). It
+  failed its own test on 7 of 27 cases. The sigma is a loose upper bound and a weak ranking:
+  where it says 0.3 to 0.5 mm the error's median is 0.08 to 0.09 mm, its rank correlation with
+  the true error is 0.29 to 0.46, and on a tracked sheet twice the sigma covers only 0.79 to
+  0.80 of the low-sigma vertices (tracking error is invisible to it).
+- **The surface emulation misled.** Reading the two meshes along the true normal and combining
+  the readings with an equal say passed E-D4 on 16 of 27 cases against today's 10. That reading
+  takes the nearest vertex within 1.5 mm whose normal agrees: it rejects outliers and picks a
+  face by its orientation, which a fused volume cannot.
+- **The real experiment** (graphics card, 35 pairs: the 12 cases and 2 spread pairs each, at the
+  app's pose and at the true motion; the kill rule fixed beforehand): **killed.** E-D4 passes on
+  sound pairs: today's merge 11 of 23 at the app's pose and 17 of 31 at the true motion; one
+  model per scan with faces kept apart 10 and 15; the plain average of the two models 10 and 14.
+  It fails E-D4 (1) where today passes (P1s1, M3s2), reads a 2 mm flange 0.10 to 0.13 mm thicker
+  than today on two sheet pairs, and covers less than today: 0.7 to 1.0 points on the bracket's
+  opposite sides, 6 to 9 points on sheet pairs, 22 points where one of the two scans is poor.
+- **Which half does what:** keeping the faces apart is the useful half (on sheets the plain
+  average loses 10 to 42 points of cover and kept apart recovers most; the 1 mm rib reads
+  nearer the truth on most sound sheet pairs, e.g. +1.38 to +1.11, +1.09 to +0.84, +0.58 to
+  +0.44 mm). An equal say per scan is the harmful half: a poor scan pulls the better one's
+  surface towards it, where today's single model gives it only its share of the observations.
+- **Not built, and not to be built as two models.** What is worth carrying on: keeping a wall's
+  two faces apart where two scans saw opposite faces, inside today's single model. Today that
+  rule is tied to the thin-walls setting (the band and the second mean together), so it needs
+  an engine change first; then the same 35 pairs and the same rule. Not started.
+- **Cost, for the record:** about 29 s a merge against today's 27 s, the same memory swing
+  (+4.6 GB of system memory).
+- **Also found:**
+  - The merged sigma of today's merge under-covers on the holes plate (twice the sigma covers
+    0.69 to 0.72, each scan's own 0.85 to 0.905) and on several sheet pairs (0.86 to 0.92).
+  - P3 (the bracket's opposite sides, 46 % shared): at the true motion the two scans agree in
+    the median everywhere (within 0.03 mm, no trend along the part); the tails disagree by 0.4
+    to 0.7 mm at the 90th percentile. The alignment's 0.9 mm error is a slide along the part's
+    length, only 0.02 to 0.09 mm of it along the normals: a weakly held direction pulled by
+    local disagreements at edges, not one offset between the scans. Its lower residual comes
+    from two biased surfaces, not from a better pose.
+  - Sheet scans are slid and bowed by tracking; two of them then disagree by more than any
+    pose can mend (P5: no pose passes, the true motion included).
+- Limits: simulated; scans of 9 s; the spread pairs of the sheet and the holes plate share one
+  seed or one scan with their case (half independent); no moved part; fine walls and Refine
+  with lasers absent from both merges, as in the app; the fourth arm (one model with the
+  opposite-sides rule off) left out.
+
+### [ ] X19. A pose from tags, held, where two scans share little (S to M): designed, not built
+E-D4 (4). Design in `D:\OpenHandScan-work\scratch\ed3\tag_hold_design.md`; first test in
+`tools/merge_combine_study.py` (`tags`).
+- **What the pose is worth** (X18's experiment, real fusing): on the 12 pairs that share under
+  0.70 (P3, M1, M3, P5 and their spread pairs) today's merge passes E-D4 (1) and (3) on none
+  at the app's pose and on 10 at the true motion (the two misses are sheet pairs).
+- **Found** (tag maps emulated with the corner noise measured in X8, independent and shared
+  between tags, 3 runs each): a pose taken from the tags both scans saw lies 0.11 to 0.29 mm
+  (P3) and 0.30 to 0.46 mm (M1) from the true motion, against the app's 0.97 and 0.79 mm; on
+  the sheet pair M3 it lies 0.48 to 0.69 mm off, no nearer than the app's 0.51. Refining a tag
+  pose from the shapes, as the app does today, walks back to the shapes' own minimum every
+  time, the same pose as without tags. So a tag pose must be held, not refined. A merge at the
+  held tag pose passed E-D4 (1) on every run of P3, M1 and M3, but only in the surface
+  emulation, which X18 showed to be too kind: a real merge at a tag pose has not been run.
+- **The rule designed:** an alignment that started from tags, with under 0.70 shared and at
+  least 3 shared tags whose corners agree within 0.5 mm, keeps the tag pose; the shapes'
+  refinement is still run, as a check only. The shapes overrule the tags only when they move
+  the part by more than the larger of 3 mm and 4 sigma of the tag pose and fit clearly better
+  there (a tag map wrong as a whole). At 0.70 shared or more nothing changes, bit for bit. The
+  verdict says who decided and how well the tags agree ("the tags put it within about 0.2 mm").
+- **Open before the thresholds are fixed:** P5, where the held tag pose lies 4.6 mm from the
+  true motion and still gives the better merge (0.83 covered against 0.71), because the two
+  sheet scans are bent differently.
+- **Stop rule: adopted only if**, with tags rendered into both scans (not emulated), the held
+  merge passes E-D4 (1) and (3) on every pair that shares under 0.70 and whose single scans are
+  sound, on 3 seeds; pairs at 0.70 or more are unchanged bit for bit; a tag moved by 2 mm
+  between the scans is left out or overruled, never followed.
+
 ### [ ] X21. Errors the whole scan shares: a slightly wrong calibration (M)
 Raised by an outside review on 2026-11-23 (below). Every number in `VALIDATION.md` is made with
 the true calibration, or with one the simulator's perfect board gives (baseline +0.005 mm, depth
@@ -1147,6 +1226,13 @@ summary (no code). Taken as an opinion and weighed against the measurements:
 - **Small engine items:** a constant correction for SGBM; a float32 laser cloud; a coarse
   reference fuse in Straighten.
 - **Alignment:** more first guesses.
+- **A merge weighted by the vertex sigma** (X18): the sigma ranks the true error weakly (0.29 to 0.46) and does
+  not see tracking's error.
+- **A merge from one model per scan with an equal say** (X18): a poor scan pulls the better one's surface
+  towards it; today's one model gives it only its share of the observations. And a gain read from meshes
+  along the normal is not a gain in a fused volume.
+- **Refining a pose that came from tags against the shapes** when the scans share little (X19): it walks back
+  to the shapes' own minimum, 0.5 to 1 mm from the truth.
 
 ## Only the real scanner can settle
 

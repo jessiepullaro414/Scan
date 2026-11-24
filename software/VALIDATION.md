@@ -5672,6 +5672,113 @@ than 300 mm. The Hole tool is not judged (step 1: the holes close up). The diagn
 
 **Next:** tags close enough along the part that two are in view in most frames (ENGINE_PLAN X8).
 
+## A merge from one model per scan (ENGINE_PLAN X18, 2026-11-23): measured, dropped
+
+X7 found that today's merge (every frame of both scans fused into one model) is often worse than the better single
+scan. Decision E-D4 restated what a good merge must do: (1) on each scan's own seen surface it is no worse than that
+scan, within the spread; (2) nothing thin or small gets worse; (3) it holds more of the part than the larger scan;
+(4) a pair that shares under 0.70 is aligned from tags. X18 asked whether fusing each scan alone and combining the two
+models does better. `tools/merge_combine_study.py`; data and notes in `D:\OpenHandScan-work\scratch\ed3`
+(`merge_looks`, `gpu1`).
+
+**The cases:** X7's five pairs (P1 to P5) and the seven merges of the overlap sweep (M1 to M7): bracket, panel, sheet
+and holes plate, scans of 90 frames (9 s) as in X7. Poses: the app's (from the shape, or from picked points where the
+shape is not sure), and the true motion (the rigid fit of each scan's tracked frames to the truth).
+
+### First tests, on the saved meshes (processor only)
+
+Each mesh is read along the true normal on the surface the two scans saw (the nearest vertex within 1.5 mm whose
+normal agrees), and the two readings are combined by a rule. 27 cases (pair and pose).
+
+| | E-D4 (1) and (3) pass, of 27 |
+|---|---|
+| today's merge | 10 |
+| the two readings with an equal say | 16 |
+| weighted by 1 / sigma squared | 17 |
+
+- **Weighting by the sigma was dropped by its own test:** it failed on 7 of the 27 (a thin rib thicker, or a scan's
+  own surface worse than that scan on a sound pair).
+- **What the sigma is worth as a weight** (per vertex, single scans): its rank correlation with the true error is
+  0.29 to 0.46. It is a loose upper bound: on the bracket, where it says 0.3 to 0.5 mm, the error's median is 0.08 to
+  0.09 mm. On the tracked sheet the low-sigma vertices are under-covered (twice the sigma covers 0.79 to 0.80 where
+  it says 0.05 to 0.2 mm), because an error made by tracking is invisible to it.
+
+### The experiment on the graphics card
+
+Fixed before any pair was judged (`gpu1\NOTES.md`): 35 pairs (the 12 cases and 2 spread pairs for each, looking from
+the case's own sides on other seeds; the holes plate has 1), each at both poses. For each: today's merge
+(`ohs.align.merge_scans`), one model per scan combined with the faces kept apart (the mean where both scans count and
+their gradients agree; the larger value where they point opposite ways, so each face stays where its own scan put
+it), and as a control the plain average of the same two models. The spread of a metric is its range over a case's
+pairs. **Kill rule:** at either pose, the new merge fails E-D4 (1) on a sound pair where today's passes, or a wall of
+2 mm or less reads 0.05 mm or more thicker than today's, or coverage falls below today's by more than the spread.
+
+**Killed.** E-D4 (1) and (3) both pass on:
+
+| pose | pairs | today's merge | one model per scan, faces kept apart | plain average | surface emulation |
+|---|---|---|---|---|---|
+| the app's pose, sound pairs | 23 | 11 | 10 | 10 | 20 |
+| the true motion, sound pairs | 31 | 17 | 15 | 14 | 30 |
+| pairs whose pose is ruined (both poses) | 16 | 4 | 2 | 2 | 6 |
+
+- **Fails E-D4 (1) where today passes:** P1s1 at both poses, M3s2 at the true motion.
+- **Thin walls thicker than today's:** the 2 mm flange +0.10 and +0.13 mm (M3s1, M3s2, true motion); the 1 mm rib
+  +0.06 mm (P5, picked points).
+- **Coverage below today's by more than the spread** (true motion): the bracket's opposite sides -0.7 to -1.0 points
+  (six pairs); sheet pairs -6.2 to -9.3 points (M3 and its spread pairs); -22.3 points on the two pairs that hold a
+  poor scan (sheet seed 2 from 50 degrees, 0.565 covered alone): with an equal say it pulls the better scan's surface
+  towards it.
+- **Elsewhere, kept apart against today,** on each scan's own surface: the panel unchanged; the bracket slightly worse
+  (cover -0.1 to -0.5 points, median +0.005 to +0.018 mm); the holes plate -0.1 points and +0.002 to +0.005 mm; sheets
+  from unchanged to clearly worse (M6: -1 to -5 points, +0.02 to +0.05 mm).
+- **Thin walls on sound sheet pairs** mostly read nearer the truth kept apart: the 1 mm rib +1.38 to +1.11 mm (M4),
+  +1.09 to +0.84 (M6; +0.77 to +0.38 at the true motion), +0.58 to +0.44 (M7); the 2 mm flange +0.71 to +0.52 (M6).
+- **The two halves of the change:** on the bracket the plain average and kept apart are about equal and both worse
+  than today's one model: an equal say per scan is what costs. On the sheets the plain average is far worse (10 to 42
+  points of cover lost) and keeping the faces apart recovers most of it. Neither beats today's merge.
+- **Twice the merged sigma** covers 0.98 to 1.00 of the surface kept apart (the holes plate 0.85 to 0.92, about the
+  single scans' own). Today's merged sigma under-covers on the holes plate (0.69 to 0.72 against the singles' 0.85 to
+  0.905) and on several sheet pairs (0.86 to 0.92).
+- **The emulation's gain did not survive fusing.** Its reading rejects outliers and picks a face by its orientation; a
+  fused volume cannot. Its 20 of 23 should not be quoted as a result.
+- **Time and memory:** about 29 s a merge (2 x 11.7 s to fuse each scan alone, 5.2 s to combine and mesh) against
+  today's 27.2 s; the same swing of system memory (+4.6 GB).
+
+**Not built.** What may be worth carrying on is keeping a wall's two faces apart where two scans saw opposite faces,
+inside today's one model (ENGINE_PLAN X18).
+
+### A pose from tags, where two scans share little (ENGINE_PLAN X19: designed, not built)
+
+Tag maps emulated for both scans (8 tags, the corner noise measured in "Tags as anchors on a large part", once
+independent and once shared between tags; 3 runs each):
+
+| pair | shared | the app's pose from the true motion | the tag pose from the true motion | refined from the tags |
+|---|---|---|---|---|
+| P3 (bracket, opposite sides) | 46 % | 0.97 mm | 0.11 to 0.29 mm | 0.97 mm |
+| M1 (bracket) | 49 % | 0.79 mm | 0.30 to 0.46 mm | 0.79 mm |
+| M3 (sheet) | 69 % | 0.51 mm | 0.48 to 0.69 mm | 0.51 mm |
+| P5 (sheet) | 40 % | 3.19 mm | 4.6 mm | 3.19 mm |
+
+- **What the pose is worth, with real fusing** (the experiment above): on the 12 pairs that share under 0.70 today's
+  merge passes E-D4 (1) and (3) on none at the app's pose and on 10 at the true motion (the two misses are sheet
+  pairs).
+- The refinement from the shapes walks a tag pose back to the shapes' own minimum every time, so a tag pose has to be
+  held. In the surface emulation a merge at the held tag pose passed E-D4 (1) on every run of P3, M1 and M3. The
+  emulation is too kind (above), so this is no result yet: a real merge at a tag pose has not been run.
+- P3's cause, read per region: at the true motion the two scans agree in the median everywhere (within 0.03 mm, no
+  trend along the part) and disagree in the tails (0.4 to 0.7 mm at the 90th percentile, most on the upright, which
+  one scan saw at 45 degrees). The 0.9 mm is a slide along the part's length, 0.02 to 0.09 mm of it along the
+  normals: a weakly held direction pulled by local disagreements at edges.
+- P5 fails at every pose, the true motion included: its two sheet scans are slid and bowed differently by tracking.
+  The held tag pose still covers more (0.83) than the app's (0.71).
+
+Repeat with `python tools/merge_combine_study.py` (its head gives the commands).
+
+Limits: simulated; scans of 9 s, shorter than a real one; the spread pairs of the sheet and the holes plate share a
+seed or a scan with their case, so those spreads are half independent; no part was moved between the scans; fine
+walls and Refine with lasers are absent from both merges, as in the app; the tag maps are emulated, not rendered;
+one model with the opposite-sides rule off was not run (the rule is tied to the thin-walls setting).
+
 ## What the metrics mean
 
 - **Stereo errors** compare the estimated raw intrinsics/extrinsics (`K1`, `K2`, `R`, `T`) with
