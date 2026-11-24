@@ -3973,6 +3973,18 @@ those now. At the default of 1.0 mm, the only value in use, nothing changes: the
 tracked frames (processor path, with and without gyro priors) are the same byte for byte. The graphics
 card's path was not run for this fix on its own.
 
+**The live recorder's queue (R2-8).** The recorder took every frame the camera gave it into a queue with no
+bound: with the disk held, 483 of 500 pushed frames were waiting in it (the guard test). It now holds at most
+1 GiB or 20 s of frames waiting for the disk (`RECORD_MAX_BYTES`, `RECORD_MAX_SECONDS` in `ohs/app/live.py`;
+1 GiB is 512 full grey stereo pairs, four times the backlog at which it already warns). Past that the
+recording stops: every frame taken before is written, the folder stays a valid recording, and `meta.json`
+(`recording_stopped`), `events.csv` and the recording's error say why with the numbers ("Recording stopped:
+the disk could not keep up (1.1 GB of frames were waiting to be written). The 812 frames recorded up to then
+are kept."). Later frames are refused and counted, never dropped in silence or renumbered; a write error's
+text is kept beside the stop's. 3,000 frames pushed at a healthy writer never trip it. `ohs scan` and `ohs
+record` end with the reason. In the app the reason shows only after Stop until the server passes it on (the
+next change). Not tried: a real camera, a real slow disk.
+
 ## The no-GPU plate slide, and a check of the camera path (ENGINE_PLAN X0a, 2026-11-20)
 
 Without a GPU the 0.5 mm plates slide in their first frames. On plate seed 0 the tracker's steps

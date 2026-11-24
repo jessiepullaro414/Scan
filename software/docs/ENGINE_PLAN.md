@@ -1429,8 +1429,10 @@ guard test seen failing first:
 - [ ] **R2-7 (F7): when the matcher falls back to the processor mid-scan the mesh model keeps
   the graphics card's noise profile**, and the saved frame rows lose the event.
 - [ ] **R2-8 (F8): the live recorder's own queue has no bound** (known since MAINTENANCE_PLAN
-  B4: the writer below it is bounded). Slow storage can use up memory. Needs a defined
-  outcome: stop recording cleanly with a reason and keep what was written.
+  B4: the writer below it is bounded). Slow storage can use up memory. Mended 2026-11-24
+  in the recorder (at most 1 GiB or 20 s waiting; then the recording stops with a reason and
+  keeps what was written). Open: the app passing the reason on while scanning (server), and
+  a settings key for the budget.
 - [x] **R2-9 (F9): "frames with laser points" counts additions, not frames** (two lines a
   frame count twice). Mended 2026-11-24 (`LaserCloud.add_frame`; the points are unchanged).
 - [x] **R2-10 (F10): the rotation logarithm is about 0.01 degrees off just below a half turn**

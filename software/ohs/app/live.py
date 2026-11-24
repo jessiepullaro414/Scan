@@ -332,18 +332,54 @@ class Window:
 
 
 # --------------------------------------------------------------------------- recorder
-class Recorder:
-    """Writes one recording folder from a queue in thread ``ohs-recorder``."""
+#: what a :class:`Recorder` may hold (frames accepted, not yet handed to the PNG writer) before the recording stops:
+#: 1 GiB is 512 full 1280 x 800 grey stereo pairs (2 MB each; about 8.5 s at 60 fps, 17 s at 30 fps), four times
+#: the backlog at which the recorder warns (``Recorder.BACKLOG_WARN``, 120 frames, which a healthy PC does not
+#: reach), and an eighth of an 8 GB PC's memory
+RECORD_MAX_BYTES = 1 << 30
+#: the same in seconds of frames (newest waiting frame's time minus the oldest's): it rules for smaller frames
+RECORD_MAX_SECONDS = 20.0
 
-    BACKLOG_WARN = 120  # frames waiting to be written before a warning (once): ~0.5 GB, ~2 s at 60 fps
+
+def _frame_bytes(frame: StereoFrame) -> int:
+    return int(getattr(frame.left, "nbytes", 0)) + int(getattr(frame.right, "nbytes", 0))
+
+
+def _size_text(n: float) -> str:
+    return f"{n / 1e9:.1f} GB" if n >= 1e9 else f"{n / 1e6:.1f} MB"
+
+
+class Recorder:
+    """Writes one recording folder from a queue in thread ``ohs-recorder``.
+
+    What it holds is bounded: frames accepted and not yet handed to the PNG writer may take at most
+    ``max_bytes`` (default :data:`RECORD_MAX_BYTES`) and span at most ``max_seconds`` of frame time (default
+    :data:`RECORD_MAX_SECONDS`); the writer's own PNGs in flight are bounded by it (twice its workers). A
+    frame that would go past the budget is not taken, and the recording **stops** there: :attr:`stopped`
+    says why in plain words, every frame taken before is written, and the folder stays a valid recording
+    (``meta.json`` ``recording_stopped`` with the numbers, an event ``recorder`` in ``events.csv``).
+    Later frames, IMU samples and events are refused and counted (``n_refused`` frames), never renumbered,
+    and :meth:`put_frame` never blocks the camera thread. The summary's ``error`` carries the stop's
+    sentence, after a write error's if there was one too."""
+
+    BACKLOG_WARN = 120  # frames waiting to be written before a warning (once): ~0.25 GB of grey pairs, ~2 s at 60 fps
 
     def __init__(self, path: str | Path, *, calib: ScannerCalibration | None = None, source: str = "camera",
-                 meta: dict | None = None) -> None:
+                 meta: dict | None = None, max_bytes: int | None = None, max_seconds: float | None = None) -> None:
         self.path = Path(path)
+        self.max_bytes = int(RECORD_MAX_BYTES if max_bytes is None else max_bytes)
+        self.max_seconds = float(RECORD_MAX_SECONDS if max_seconds is None else max_seconds)
         self.writer = RecordingWriter(self.path, source=source, **(meta or {}))
         if calib is not None:
             self.writer.write_calibration(calib)
-        self._q: queue.Queue = queue.Queue()
+        self._q: queue.Queue = queue.Queue()  # bounded by the budget below (frames), IMU and events are small
+        self._held: collections.deque[tuple[float, int]] = collections.deque()  # (t_host, bytes) of each frame held
+        self._held_bytes = 0
+        self.max_held_bytes = 0  # the most held at any time
+        self._held_lock = threading.Lock()
+        self.stopped: str | None = None  # why the recording stopped by itself (the budget), in plain words
+        self.stop_info: dict | None = None
+        self.n_refused = 0  # frames refused after the stop
         self.n_frames = 0
         self.n_imu = 0
         self.n_events = 0
@@ -358,27 +394,70 @@ class Recorder:
         self._thread = threading.Thread(target=self._run, name="ohs-recorder", daemon=True)
         self._thread.start()
 
-    def put_frame(self, frame: StereoFrame) -> None:
-        if not self._closed:
+    def put_frame(self, frame: StereoFrame) -> bool:
+        """Queue one frame; never blocks. False when it was not taken: the recorder is closed, or the
+        recording stopped (this frame would have gone past the budget, or an earlier one did)."""
+        if self._closed:
+            return False
+        nb = _frame_bytes(frame)
+        with self._held_lock:
+            if self.stopped is not None:
+                self.n_refused += 1
+                return False
+            span = max(0.0, float(frame.t_host) - self._held[0][0]) if self._held else 0.0
+            if self._held and (self._held_bytes + nb > self.max_bytes or span > self.max_seconds):
+                self._stop_locked(frame, "bytes" if self._held_bytes + nb > self.max_bytes else "seconds")
+                self.n_refused += 1
+                return False
+            self._held.append((float(frame.t_host), nb))
+            self._held_bytes += nb
+            self.max_held_bytes = max(self.max_held_bytes, self._held_bytes)
             self._n_put += 1
             self._q.put(("f", frame))
-            if not self._backlog_warned and self.backlog > self.BACKLOG_WARN:
-                self._backlog_warned = True
-                log.warning("recording %s: %d frames are waiting to be written (PNG encoding is behind the camera)",
-                            self.path, self.backlog)
+        if not self._backlog_warned and self.backlog > self.BACKLOG_WARN:
+            self._backlog_warned = True
+            log.warning("recording %s: %d frames are waiting to be written (PNG encoding is behind the camera)",
+                        self.path, self.backlog)
+        return True
+
+    def _stop_locked(self, frame: StereoFrame, limit: str) -> None:
+        """Stop the recording at the budget (hold ``_held_lock``): the reason, for the summary, the metadata
+        and the events (written by the recorder thread after every frame taken before)."""
+        held_s = max(0.0, float(frame.t_host) - self._held[0][0])
+        n = self._n_put
+        waiting = (f"{_size_text(self._held_bytes)} of frames were waiting to be written" if limit == "bytes"
+                   else f"{held_s:.1f} s of frames were waiting to be written")
+        self.stopped = f"Recording stopped: the disk could not keep up ({waiting}). The {n} frames recorded up to then are kept."
+        self.stop_info = {"reason": "disk behind", "limit": limit, "text": self.stopped, "frames_kept": n,
+                          "held_frames": len(self._held), "held_bytes": int(self._held_bytes),
+                          "held_seconds": round(held_s, 3), "limit_bytes": int(self.max_bytes),
+                          "limit_seconds": float(self.max_seconds), "t_host": float(frame.t_host)}
+        log.warning("recording %s: %s", self.path, self.stopped)
+        self._q.put(("s", dict(self.stop_info)))
 
     def put_imu(self, samples: list[ImuSample]) -> None:
-        if samples and not self._closed:
+        if samples and not self._closed and self.stopped is None:
             self._q.put(("i", list(samples)))
 
     def put_event(self, event: Event) -> None:
-        if not self._closed:
+        if not self._closed and self.stopped is None:
             self._q.put(("e", event))
 
     @property
     def backlog(self) -> int:
         """Frames put here and not written yet: in the queue, plus the writer's unwritten PNGs."""
         return max(0, self._n_put - self._n_taken) + self.writer.backlog
+
+    @property
+    def held_bytes(self) -> int:
+        """Bytes of the frames taken and not yet handed to the PNG writer (what the budget bounds)."""
+        return self._held_bytes
+
+    @property
+    def held_seconds(self) -> float:
+        """Frame time from the oldest held frame to the newest (0 with fewer than two)."""
+        with self._held_lock:
+            return (self._held[-1][0] - self._held[0][0]) if len(self._held) > 1 else 0.0
 
     def _run(self) -> None:
         while True:
@@ -392,9 +471,18 @@ class Recorder:
                         self.writer.write_frame(x)  # waits while the writer has too many frames in flight
                     finally:
                         self._n_taken += 1
+                        with self._held_lock:
+                            _, nb = self._held.popleft()
+                            self._held_bytes -= nb
                     self.n_frames += 1
                     self.t_first = x.t_host if self.t_first is None else self.t_first
                     self.t_last = x.t_host
+                elif kind == "s":  # the stop at the budget: every frame taken before is with the writer now
+                    self.writer.update_meta(recording_stopped=x)
+                    self.writer.write_event(Event(x["t_host"], "recorder",
+                                                  f"stopped: disk behind, {x['held_frames']} frames "
+                                                  f"({_size_text(x['held_bytes'])}, {x['held_seconds']:.1f} s) waiting"))
+                    self.n_events += 1
                 elif kind == "i":
                     self.writer.write_imu(x)
                     self.n_imu += len(x)
@@ -408,8 +496,11 @@ class Recorder:
 
     def summary(self) -> dict:
         dur = 0.0 if self.t_first is None or self.t_last is None else self.t_last - self.t_first
+        err = None if self.error is None else str(self.error)
+        if self.stopped is not None:  # after a write error's text, never instead of it
+            err = self.stopped if err is None else f"{err}; {self.stopped}"
         return {"path": self.path, "n_frames": self.n_frames, "n_imu": self.n_imu, "n_events": self.n_events,
-                "duration_s": dur, "error": None if self.error is None else str(self.error)}
+                "duration_s": dur, "error": err, "stopped": self.stopped, "n_refused": self.n_refused}
 
     def close(self, **meta: Any) -> dict:
         """Write everything still queued, update ``meta.json`` and close the folder."""
@@ -420,6 +511,8 @@ class Recorder:
         self._q.put(None)
         self._thread.join()
         s = self.summary()
+        if self.stop_info is not None:  # the frames refused after the stop are known now
+            self.writer.update_meta(recording_stopped={**self.stop_info, "frames_refused": self.n_refused})
         self.writer.update_meta(n_imu=s["n_imu"], n_events=s["n_events"], duration_s=round(s["duration_s"], 4), **meta)
         try:
             self.writer.close()
@@ -509,6 +602,7 @@ class LiveSession:
         self._actions: queue.Queue = queue.Queue()
         self._rec_lock = threading.Lock()
         self._rec: Recorder | None = None
+        self._rec_stop_posted: Recorder | None = None  # the recorder whose stop at its budget was told to the main thread
         self._continuous = False
         self._n_recorded = 0
         self._rec_t0: float | None = None
@@ -917,10 +1011,13 @@ class LiveSession:
             with self._rec_lock:
                 rec = self._rec if self._continuous else None
                 if rec is not None and (self.max_frames is None or self._n_recorded < self.max_frames):
-                    rec.put_frame(f)
-                    self._n_recorded += 1
-                    if self.max_frames is not None and self._n_recorded >= self.max_frames:
-                        self._post("limit", f"{self.max_frames} frames recorded")
+                    if rec.put_frame(f):
+                        self._n_recorded += 1
+                        if self.max_frames is not None and self._n_recorded >= self.max_frames:
+                            self._post("limit", f"{self.max_frames} frames recorded")
+                    elif rec.stopped is not None and rec is not self._rec_stop_posted:
+                        self._rec_stop_posted = rec  # the recording stopped at its budget: end the session, say why
+                        self._post("error", rec.stopped)
             if self._processor is not None:
                 self._proc_slot.put(f)
             self.n_frames_read += 1
