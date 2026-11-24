@@ -1448,8 +1448,9 @@ guard test seen failing first:
   not parse. Mended 2026-11-24: failed frames go to `frames_failed.csv`, the recording says
   it is incomplete, `meta.json` is replaced whole and a damaged one no longer stops the
   reader. `ohs process` asks for `--mode` when the metadata is damaged.
-- [ ] **R2-7 (F7): when the matcher falls back to the processor mid-scan the mesh model keeps
-  the graphics card's noise profile**, and the saved frame rows lose the event.
+- [x] **R2-7 (F7): when the matcher falls back to the processor mid-scan the mesh model keeps
+  the graphics card's noise profile**, and the saved frame rows lose the event. Mended 2026-11-24 (each frame fused with its
+  own matcher's profile; the switch saved and said). Open: a merge and the fine-walls step.
 - [x] **R2-8 (F8): the live recorder's own queue has no bound** (known since MAINTENANCE_PLAN
   B4: the writer below it is bounded). Slow storage can use up memory. Mended 2026-11-24
   in the recorder (at most 1 GiB or 20 s waiting; then the recording stops with a reason and

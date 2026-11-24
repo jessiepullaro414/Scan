@@ -351,7 +351,16 @@ def _frame_row(res: FrameResult) -> dict:
         row["raw_depth"] = True  # tracked with the raw depth where the filter dropped it (a detailed part)
     if res.laser_points:
         row["n_laser"] = {k: int(len(v)) for k, v in res.laser_points.items()}
+    if res.extra.get("gpu_fallback"):  # a GPU stage failed on this frame: from it on that stage ran on the CPU
+        row["gpu_fallback"] = dict(res.extra["gpu_fallback"])
     return row
+
+
+def matcher_fallback_warning(fb: dict) -> str:
+    """The sentence for the user when the depth matcher fell back from the graphics card to the processor during
+    the scan (an entry of ``report["params"]["compute"]["fallbacks"]`` with stage "depth"; REVIEW F7)."""
+    return (f"From frame {fb['frame']} the depth was computed on the processor: the graphics card's matcher failed "
+            f"({fb['reason']}). Uncertainty figures after that frame use the processor matcher's noise model.")
 
 
 def pool_full_warning(cap: dict) -> str:
@@ -722,10 +731,21 @@ def process_recording(
         }
         # where the work ran (M3): the GPU or the CPU, per stage
         de = getattr(pipe, "depth_estimator", None)
+        # ... and every GPU stage that failed during the scan, at the frame it failed on (REVIEW F7)
+        gpu_dev = getattr(de, "gpu_failed_device", None)
+        fallbacks = [{"frame": r["index"], "stage": stage,
+                      "from": f"graphics card ({gpu_dev})" if stage == "depth" and gpu_dev else "graphics card",
+                      "to": "processor", "reason": str(why)}
+                     for r in rows for stage, why in (r.get("gpu_fallback") or {}).items()]
         report["params"]["compute"] = {
             "depth": getattr(de, "backend", None), "depth_device": getattr(de, "device", None),
             "tracking_model": getattr(pipe, "model_backend", None), "tracking_device": getattr(pipe, "model_device", None),
+            "fallbacks": fallbacks,
         }
+        for fb in fallbacks:
+            if fb["stage"] == "depth":
+                report["warnings"].append(matcher_fallback_warning(fb))
+                log.warning("%s", report["warnings"][-1])
         if isinstance(report.get("health"), dict) and "error" not in report["health"]:
             # what this scan alone says of its calibration (FEATURE_PLAN H3): it warns, it never stops the scan
             try:

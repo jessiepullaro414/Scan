@@ -534,6 +534,7 @@ class _Held:
     gyro: bool  # it came with a gyro rotation
     res: list = field(default_factory=list)  # [(tracker, its TrackResult)] for every tracker that tracked it
     pts: dict[str, np.ndarray] = field(default_factory=dict)  # its laser points (camera frame)
+    hole: tuple[float, float] | None = None  # the hole factor of the matcher that made its sigma (REVIEW F7)
 
     def of(self, tracker: Any) -> TrackResult | None:
         """The result of ``tracker`` for this frame (None: it did not track it)."""
@@ -707,6 +708,7 @@ class FramePipeline:
         self._clip_rays: tuple[np.ndarray, np.ndarray] | None = None  # per-pixel ray grid of a clip plane, on first use
         self._track_filter_gpu: TrackingFilterGpu | None | bool = None  # None: not tried yet; False: CPU
         self.gpu_fallbacks: dict[str, str] = {}  # GPU stages that failed during the run (now on the CPU): stage -> reason
+        self._hole_now: tuple[float, float] | None = None  # the hole factor of the frame's matcher (None: the model's)
         self._filter_pending: tuple | None = None  # (depth, the filter started for it), see _start_tracking_input
         # the start of a scan tracks a second time on with_raw_depth (module docstring, "Detailed parts")
         self._probe: MarkerlessTracker | None = None
@@ -916,6 +918,11 @@ class FramePipeline:
             t0 = time.perf_counter()
             if self.has_confidence:
                 depth, sigma = self.depth_estimator.compute_with_sigma(left_r, right_r)
+                # the frame is fused with the hole factor of the matcher that made its sigma (REVIEW F7)
+                prof = self.depth_estimator.sigma_profile or "cpu"
+                extra["depth_profile"] = prof
+                sm = SIGMA_MODELS[prof]
+                self._hole_now = (sm.hole_amp, sm.hole_r_px)
             else:
                 depth = self.depth_estimator.compute(left_r, right_r)
             tim["depth"] = _ms(t0)
@@ -1065,7 +1072,8 @@ class FramePipeline:
         return "Open3D TSDF (every frame weighs the same)"
 
     def _fuse(self, depth: np.ndarray | None, T_wc: np.ndarray, t: float, tim: dict[str, float],
-              sigma: np.ndarray | None = None, seen: np.ndarray | None = None, pos: int | None = None) -> None:
+              sigma: np.ndarray | None = None, seen: np.ndarray | None = None, pos: int | None = None,
+              hole: tuple[float, float] | None = None) -> None:
         """Integrate the raw depth (and its sigma, for the confidence TSDF) into the reconstruction TSDF at ``T_wc``.
         ``seen``: the depth before a ``clip_plane`` left some of it out (:meth:`process`): the gap guard is
         worked out on it, since what the clip left out was measured, and is no patch without depth. ``pos``: the
@@ -1080,8 +1088,13 @@ class FramePipeline:
             drop = gap_guard_mask(np.where(ok, g, np.float32(0.0)), self.gap_guard_px)
             if drop.any():
                 depth = np.where(drop, np.float32(0.0), depth)
+        # the frame's own matcher's hole factor (REVIEW F7); none known (a stand-in pipeline): the model's, as before
+        hole = getattr(self, "_hole_now", None) if hole is None else hole
+        kw = {"hole_factor": hole} if hole is not None and self.has_confidence else {}
         if seen is not None and self.has_confidence:
-            self.markerless.integrate(depth, sigma, T_wc, t=t, seen=seen)
+            self.markerless.integrate(depth, sigma, T_wc, t=t, seen=seen, **kw)
+        elif self.has_confidence:
+            self.markerless.integrate(depth, sigma, T_wc, t=t, **kw)
         else:
             self.markerless.integrate(depth, sigma if self.has_confidence else None, T_wc, t=t)
         tim["integrate"] = _ms(ti)
@@ -1174,6 +1187,7 @@ class FramePipeline:
         if not held and not res.ok:  # nothing tracked yet: the start begins with the first frame that is
             return res
         e = _Held(len(self._trajectory), float(t), d_track, alt, depth, sigma, R_prior is not None)
+        e.hole = self._hole_now
         e.res.append((main, main.last_result))
         if self._probe_res is not None:
             e.res.append((probe, self._probe_res))
@@ -1217,7 +1231,7 @@ class FramePipeline:
             for e in held:
                 r = e.of(tr)
                 if r is not None and r.ok:
-                    self._fuse(e.depth, r.T_wc, e.t, {}, e.sigma, pos=e.pos)
+                    self._fuse(e.depth, r.T_wc, e.t, {}, e.sigma, pos=e.pos, hole=e.hole)
                     self.cloud.add_frame(e.pts, r.T_wc)
             rep["ms"] = round(_ms(t0), 1)
             self.start_report = rep
@@ -1244,7 +1258,7 @@ class FramePipeline:
             if T is None:
                 self._trajectory[e.pos] = (e.t, T_prev.copy(), False)
                 continue
-            self._fuse(e.depth, T, e.t, {}, e.sigma, pos=e.pos)
+            self._fuse(e.depth, T, e.t, {}, e.sigma, pos=e.pos, hole=e.hole)
             self.cloud.add_frame(e.pts, T)
             self._trajectory[e.pos] = (e.t, T.copy(), True)
             T_prev = T

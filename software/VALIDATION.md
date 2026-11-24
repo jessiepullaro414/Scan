@@ -4040,6 +4040,19 @@ markerless in silence. It now stops with "The recording's meta.json is damaged, 
 known. Give it with --mode markers or --mode markerless." unless `--mode` is given. A recording without a
 `meta.json`, or without a mode in it, keeps the markerless default.
 
+**The noise profile after a matcher fallback (R2-7).** When the depth matcher fell back from the graphics card
+to the processor mid-scan, the mesh model went on using the graphics card's noise profile (120, 5) for frames
+the processor matcher (60, 8) had made, and the saved frame rows lost the event. Each frame is now fused with
+the profile of the matcher that made its depth; what was fused before stays. The switch is saved in the frame
+row, in `params.compute.fallbacks` and as a warning ("From frame N the depth was computed on the processor:
+the graphics card's matcher failed (...). Uncertainty figures after that frame use the processor matcher's
+noise model."). Size of the old error on a small scan with the switch after frame 3 of 8: vertices the same,
+median sigma the same, the tail understated (95th percentile 0.94 mm instead of 1.07, 99th 2.18 instead of
+3.05), mostly near holes. Without a fallback nothing changes but an empty `fallbacks` list (tracker byte for
+byte; mesh, laser points and path identical; sigmas within the processor path's own run-to-run noise of
+about 2e-6 mm). Open: a merge saves no fallback history; the fine-walls step re-fuses with one profile. Not
+run: a real graphics-card fallback and the graphics card's model path.
+
 ## The no-GPU plate slide, and a check of the camera path (ENGINE_PLAN X0a, 2026-11-20)
 
 Without a GPU the 0.5 mm plates slide in their first frames. On plate seed 0 the tracker's steps

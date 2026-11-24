@@ -382,6 +382,9 @@ class DepthEstimator:
         self.device: str | None = None
         self.backend_note = "DepthParams.backend = \"cpu\""
         self.gpu_failure: str | None = None  # why the GPU matcher failed mid-run (not for small images)
+        self.gpu_failed_device: str | None = None  # ... and the device it ran on
+        # the matcher ("gpu" | "cpu") whose sigma model made the sigma compute_with_sigma last returned (SIGMA_MODELS)
+        self.sigma_profile: str | None = None
         self._gpu = None
         if p.backend != "cpu":
             self._gpu, self.backend_note = self._start_gpu()
@@ -422,11 +425,13 @@ class DepthEstimator:
     def _gpu_failed(self, exc: BaseException, quiet: bool = False) -> None:
         (log.debug if quiet else log.warning)("depth: the GPU matcher failed on %s (%s); continuing on the CPU",
                                               self.device, exc)
+        device = self.device
         self._gpu = None
         self.backend, self.device = "cpu", None
         self.backend_note = f"the GPU matcher failed ({exc})"
         if not quiet:
             self.gpu_failure = str(exc)
+            self.gpu_failed_device = None if device is None else str(device)
         self._init_cpu()
 
     def _drop_gpu_if_too_small(self, left_r: np.ndarray) -> None:
@@ -581,7 +586,8 @@ class DepthEstimator:
 
     def compute_with_sigma(self, left_r: np.ndarray, right_r: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         """Depth (mm, float32, 0 = invalid; the same as :meth:`compute`) and its standard deviation
-        ``sigma_z`` (mm, 0 where the depth is invalid), :class:`SigmaModel` of this backend."""
+        ``sigma_z`` (mm, 0 where the depth is invalid), :class:`SigmaModel` of this backend. Which backend's
+        model that was is :attr:`sigma_profile` until the next call (a fallback mid-call: the CPU's)."""
         self._drop_gpu_if_too_small(left_r)
         if self._gpu is not None:
             self._check_pair(left_r, right_r)
@@ -595,9 +601,11 @@ class DepthEstimator:
                 if disp is not None:  # no exact division (the matcher sent the disparity): as compute(), convert on the CPU
                     depth = self.depth_from_disparity(disp)
                     sigz = np.where(depth > 0, sigz, np.float32(0.0)).astype(np.float32)
+                self.sigma_profile = "gpu"
                 return depth, sigz
         disp, sig = self.disparity_with_sigma(left_r, right_r, sigma=True)
         depth = self.depth_from_disparity(disp)
+        self.sigma_profile = "gpu" if self.backend == "gpu" else "cpu"  # sigma_z's model
         return depth, self.sigma_z(depth, sig)
 
     def device_depth(self) -> tuple | None:

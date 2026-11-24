@@ -1158,15 +1158,31 @@ class ConfidenceTsdf:
         return bricks[a[pos] == e]
 
     # ------------------------------------------------------------------ integration
+    def set_hole_factor(self, amp: float, radius_px: float) -> None:
+        """Take the factor next to missing depth (``hole_factor`` of the constructor) out of the frames fused from
+        now on: the matcher changed (a fallback from the GPU's to the CPU's, REVIEW F7). What was fused before stays
+        as it is."""
+        amp, radius_px = float(amp), float(radius_px)
+        if not (amp >= 0 and radius_px > 0):
+            raise ValueError("hole_factor must be (amp >= 0, radius px > 0)")
+        if (amp, radius_px) == (self.hole_amp, self.hole_r_px):
+            return
+        self.hole_amp, self.hole_r_px = amp, radius_px
+        self._gap_r = int(max(np.ceil(3.0 * self.hole_r_px), np.ceil(self.gap_near_px)))
+
     def integrate(self, depth_mm: np.ndarray, sigma_mm: np.ndarray | None, T_wc: np.ndarray,
-                  t: float | None = None, seen: np.ndarray | None = None) -> None:
+                  t: float | None = None, seen: np.ndarray | None = None,
+                  hole_factor: tuple[float, float] | None = None) -> None:
         """Fuse a depth map (mm, 0 = invalid) with its standard deviation (mm; ``None``: unknown,
         taken as a third of the truncation) at pose ``T_wc``. ``t`` is accepted for the
         MarkerlessTracker interface and not used. ``seen``: the depth map as the camera saw it, when
         some of it was left out on purpose before (a merge leaves out a scan's bare table): the
         distance to missing depth and the gap guard are measured on it, since depth left out on
         purpose was measured and is no patch the matcher could not match; only ``depth_mm`` is fused.
-        ``None``: measured on ``depth_mm`` itself, as always."""
+        ``None``: measured on ``depth_mm`` itself, as always. ``hole_factor``: the factor of the matcher that made
+        this frame's sigma (:meth:`set_hole_factor`, kept for the frames after it); ``None``: the model's."""
+        if hole_factor is not None:
+            self.set_hole_factor(*hole_factor)
         depth = np.ascontiguousarray(depth_mm, dtype=np.float32)
         w, h = self.image_size
         if depth.shape != (h, w):
