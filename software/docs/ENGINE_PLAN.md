@@ -89,7 +89,8 @@ The rules of `FEATURE_PLAN.md` and `MAINTENANCE_PLAN.md` hold. In short:
      X18 (one model per scan) measured and dropped; X19 (a pose from tags, held) designed.
   E-D1 still holds for each: a change goes on by default only when it is better on every
   scorecard scene and nothing thin gets worse; a miss stays a setting; a near miss comes to
-  the owner with numbers. New experiments for 1, 2 and 4 are being designed (X15 on).
+  the owner with numbers. New experiments for 1, 2 and 4: X15 (holes, running), X16 and X17
+  (thin walls), X18 and X19 (merge).
 - **E-D4: what a good merge must do is restated** (asked and decided 2026-11-23, "Yes, restate
   it"). X7's rule asked the merged part to beat the better single scan and to hold at least the
   good surface of the two scans together. The second part takes, at every place, whichever scan
@@ -905,6 +906,73 @@ and thin parts".
 - The reading depends on the level (26.7 to 24.3 mm); the truth is crossed 0.8 to 0.9 mm
   down. Weaker than X2.
 - **Stop rule: adopted only if** within 0.2 mm on 8 of 9 clicks.
+
+### [ ] X16. A thin wall's thickness read from the raw frames (S to M): measured 2026-11-23, alive; not in the app
+E-D3 item 2. `tools/wall_thickness_study.py` (a study tool; nothing in the engine uses it);
+`VALIDATION.md`, "Thin walls: the raw reading, and where the error is made".
+- **The reading:** at a click on a wall seen from both sides, each face is a plane fitted to
+  the raw depth points of the frames that see it; the thickness is the distance between the
+  two planes. The faces are told apart by their normals, never by a cut at the middle.
+- **At true poses** it reads every wall of 0.5 to 2 mm within 0.07 mm (walls and sheet, 3
+  seeds each), where the 1 mm mesh reads +0.12 to +0.84 mm.
+- **Tracked** it reads +0.29 to +0.99 mm too thick (one wall -0.01), where the mesh reads
+  +0.25 to +1.26: the mesh's share (0.1 to 0.7 mm) goes, what tracking adds stays.
+- **Its own ±** (0.03 to 0.09 mm, from resampling the frames) does not hold tracking's error:
+  twice the ± covers the truth on 9 of 14 walls at true poses and on 1 of 15 tracked. So the
+  reading cannot be shown as "t ± s"; honest wording is one-sided: "at most this thick; the
+  scan cannot rule out up to about 1 mm thinner".
+- **With the owner:** whether this goes into the app's measuring as it is (a better number
+  with a one-sided statement), or waits for X17.
+- **Stop rule for the app's version: adopted only if** on the scorecard's walls and sheet it
+  is nearer the truth than the mesh's reading on every wall, refuses where one side is not
+  seen, and never reads a wall thinner than the truth by more than 0.1 mm.
+
+### [ ] X17. Thin walls: why tracking places the two sides apart (M): the cause narrowed 2026-11-23, no remedy yet
+E-D3 item 2. Notes and every run in `D:\OpenHandScan-work\scratch\ed3\walls_looks`
+(`NOTES.md`, `ladder.txt`, `profile_fins-s0.md`, `candidate-D.md`); `VALIDATION.md`, "Thin
+walls: the raw reading, and where the error is made".
+- **A ladder of references** (the standing walls, graphics card; "separation": how far apart
+  tracking places the frames of a wall's two sides, 1 mm wall, exact depth, seeds 0 / 1 / 2):
+  - tracked against a frozen 2 mm map filled from exact depth at the true poses: -0.03 /
+    +0.11 / -0.03 mm;
+  - tracked against the engine's own evolving map, integrated at the true poses: -0.07 /
+    +0.04 / -0.11 mm;
+  - the loop as the product runs it (each tracked frame goes into the map it is tracked
+    against): -0.67 / -0.12 (that run slipped) / +0.61 mm. With the matcher's depth: +0.49 /
+    +0.43 / +0.43 mm.
+- **So:** the map's representation is not the cause (a one-sided 2 mm map holds the sides
+  within about 0.1 mm when the poses that fill it are right), and neither is a lack of depth
+  accuracy. The error is made in the loop, where a frame's pose error goes into the map the
+  next frames are tracked against. With exact depth its sign follows the seed; with the
+  matcher's depth it is "too thick" every time.
+- **Not a shared bias times a weak gain:** a disparity offset of -0.10 to +0.10 px added to
+  exact depth moves the loop's separation from -0.59 to -0.76 mm (about -0.85 mm a pixel)
+  round an intercept of -0.67 at no bias; without the feedback the same offsets leave it at
+  about -0.07.
+- **The matcher's depth against a right map** separates the sides by +0.36 mm (frozen map
+  from exact depth), and by +0.07 against a map made from its own depth at true poses: depth
+  and map have to carry the same edge errors.
+- **Every 2 mm map ray-casts its surface 0.10 to 0.17 mm in front of the true one,** also
+  when filled from exact depth at true poses: a bias of the map's own, shared by all frames.
+- **A refinement on the raw frames after the scan would return its start.** Point to plane
+  between the raw frames (40 frames, 445,000 pairs), profiled along the separation: with the
+  pairs recomputed the cost is flat within its noise over ±0.8 mm; with the pairs fixed at
+  the start poses the minimum is at the start, from the truth and from the tracked poses
+  alike. The standard error of 0.035 to 0.07 mm reported earlier measured the pairing's
+  stiffness, not information about the truth (corrected 2026-11-23).
+- **Dropped:** a tie seen from both sides. A matte ball halves the separation on the nearest
+  wall and over-corrects another (a 2 mm wall 0.17 mm too thin on one seed); two balls are
+  worse; tags on the table do nothing on a 4 s scan (too few keyframes see each tag).
+- **Not indicated:** a two-sided tracking map (candidate D, designed, L: 3 to 5 days). The
+  ladder argues against it.
+- **Next:** where in the scan the offset enters (at the turn round a wall's edge, steadily,
+  or at the start), what X4b's and X4c's settings do on this scene, and up to three handles
+  on the feedback tested on the ladder (a frame's integration weighted by how well it was
+  held across the wall; the map's ray-cast bias; a newly seen side held back). Running.
+- Not verified: the exact scene as the tracking model (the harness failed); offsets other
+  than disparity; the sweep and the profile on seeds 1 and 2; the path without a graphics
+  card. One run slipped on each of two rungs. A box scene with three standing walls is near
+  the worst case for this.
 
 ### [x] X18. A merge from one model per scan (S, then M): measured 2026-11-23, dropped
 E-D3 item 4, judged by E-D4. `tools/merge_combine_study.py`; `VALIDATION.md`, "A merge from one
