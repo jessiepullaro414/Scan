@@ -46,6 +46,38 @@ def _too_few(n: int) -> str:
 class AlignManager:
     def __init__(self, studio: Any) -> None:
         self.st = studio
+        # links an alignment placed by holding the tags' pose (ENGINE_PLAN X19): (project, target, source) -> what held
+        # them, so that a merge at that pose records it; only filled with [process] align_hold_tags on
+        self._held: dict[tuple[str, str, str], dict] = {}
+
+    def _params(self) -> Any:
+        """The alignment's settings: the defaults, with the tag hold from ``[process] align_hold_tags``."""
+        from ohs.align import AlignParams
+
+        return AlignParams(hold_tags=bool(getattr(self.st.cfg.process, "align_hold_tags", False)))
+
+    def _remember_held(self, pid: str, target: str, source: str, d: dict) -> None:
+        if d.get("held_by_tags"):
+            self._held[(pid, target, source)] = {
+                "T": np.asarray(d["T"], dtype=np.float64), "tags_used": list(d.get("tags_used") or []),
+                "tag_rms_mm": d.get("tag_rms_mm"), "tag_pose_sigma_mm": d.get("tag_pose_sigma_mm"),
+                "shape_moves_mm": d.get("shape_moves_mm")}
+
+    def _held_links(self, pid: str, items: list[dict], poses: list[np.ndarray]) -> list[dict]:
+        """The pairs of a merge whose poses are an alignment's held tag pose (ENGINE_PLAN X19)."""
+        out = []
+        for i in range(len(items)):
+            for j in range(len(items)):
+                h = self._held.get((pid, items[i]["id"], items[j]["id"])) if i != j else None
+                if h is None:
+                    continue
+                rel = np.linalg.inv(poses[i]) @ poses[j]  # scan j into scan i, as the alignment gave it
+                if np.allclose(rel, h["T"], atol=1e-6):
+                    out.append({"a": items[i]["id"], "b": items[j]["id"], **{k: v for k, v in h.items() if k != "T"},
+                                "words": (f"\"{items[j]['name']}\" was placed on \"{items[i]['name']}\" by the "
+                                          f"{len(h['tags_used'])} tags both saw (held where the two share little; to about "
+                                          f"{float(h['tag_pose_sigma_mm'] or 0.0):.1f} mm).")})
+        return out
 
     # ------------------------------------------------------------------ checks
     def _scan(self, pid: str, sid: str, what: str, need_recording: bool = False) -> dict:
@@ -137,11 +169,14 @@ class AlignManager:
                     tb = self._tags(b) if ta else None
                     ctx.check()
                     ctx.progress(0.5, "Aligning the two scans", force=True)
-                    res, tags_row = align_with_tags(src, dst, tb, ta, same_setup=bool(same_setup))
+                    params = self._params()
+                    res, tags_row = align_with_tags(src, dst, tb, ta, params if params.hold_tags else None,
+                                                    same_setup=bool(same_setup))
                 else:
                     ctx.progress(0.45, "Aligning the two scans", force=True)
                     res = align_pair(src, dst, init=init, same_setup=bool(same_setup))
                 out = res.as_dict()
+                self._remember_held(pid, target, source, out)
                 out.update(project_id=pid, target=target, source=source, tags=tags_row,
                            pairs_rms_mm=None if pairs_rms is None else round(float(pairs_rms), 3),
                            support={"target": dst.support is not None, "source": src.support is not None},
@@ -202,9 +237,14 @@ class AlignManager:
                     ctx.check()
                     ctx.progress(0.3 + 0.7 * f, msg)
 
-                res = align_many(clouds, same_setup=bool(same_setup), picked=starts, tags=tags if use_tags else None,
-                                 progress=progress)
+                params = self._params()
+                res = align_many(clouds, params if params.hold_tags else None, same_setup=bool(same_setup), picked=starts,
+                                 tags=tags if use_tags else None, progress=progress)
                 d = res.as_dict()
+                for r in d["pairs"]:  # a held link, for a merge at these poses (ENGINE_PLAN X19)
+                    if r.get("held_by_tags") and res.T[r["i"]] is not None and res.T[r["j"]] is not None:
+                        rel = np.linalg.inv(np.asarray(res.T[r["i"]])) @ np.asarray(res.T[r["j"]])
+                        self._remember_held(pid, scans[r["i"]], scans[r["j"]], {**r, "T": rel})
                 verdict = res.verdict
                 for k, it in enumerate(items):  # the engine counts scans; the user knows them by name
                     verdict = verdict.replace(f"scan {k + 1} ", f"\"{it['name']}\" ").replace(f"scan {k + 1}.", f"\"{it['name']}\".")
@@ -329,6 +369,7 @@ class AlignManager:
                 supports: list[Any] = [None] * len(items)
                 notes: list[list[str]] = [[] for _ in items]
                 shared = self._shared(ctx, items, poses)
+                held = self._held_links(pid, items, poses)
                 if not same_setup:  # the part was moved: each scan's table is elsewhere, and stays out (found on its own mesh)
                     ctx.progress(0.02, "Finding what the part lay on", force=True)
                     for k, it in enumerate(items):
@@ -370,6 +411,9 @@ class AlignManager:
                         if shared:
                             rep["shared"] = shared
                         (out / "report.json").write_text(json.dumps(jsonable(rep), indent=1), encoding="utf-8")
+                    if held:  # placed by holding the tags' pose (ENGINE_PLAN X19): recorded (information, not a warning)
+                        rep["held_by_tags"] = held
+                        (out / "report.json").write_text(json.dumps(jsonable(rep), indent=1), encoding="utf-8")
                     ctx.progress(0.95, "Adding the merged scan to the project", force=True)
                     scan, _ = self.st.projects.add_scan(pid, title, "markerless")
                     sid = scan["id"]
@@ -393,7 +437,7 @@ class AlignManager:
                 cleaning = (rep["mesh"].get("cleaning") or {}).get("summary")
                 return jsonable({"project_id": pid, "scan_id": sid, "scan": scan, "merged_from": sids,
                                  "message": f"Merged into \"{title}\"", "tables": tables, "warnings": list(rep.get("warnings", [])),
-                                 "cleaning": cleaning, "shared": shared,
+                                 "cleaning": cleaning, "shared": shared, **({"held_by_tags": held} if held else {}),
                                  "caution": " ".join(shared["warnings"]) if shared and shared["warnings"] else None})
 
             def done(job: Any) -> None:

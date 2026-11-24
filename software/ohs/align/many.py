@@ -130,6 +130,21 @@ def _information(src: ScanCloud, dst: ScanCloud, Tij: np.ndarray, dist: float) -
     return np.asarray(reg.get_information_matrix_from_point_clouds(pc(dst.part), pc(src.part), dist, invert_se3(Tij)))
 
 
+def _tag_information(tags_src: TagMap, tags_dst: TagMap, ids: list[int], rms_mm: float, Tij: np.ndarray) -> np.ndarray:
+    """A held link's information (ENGINE_PLAN X19): Open3D's information of the used tags' corners, built as
+    :func:`_information` builds a shape link's (the target's points against the source's at the inverse of the link,
+    so both are in the same frame), each corner weighted by one over the square of the tags' RMS scatter (at least
+    0.05 mm), where a surface point counts one."""
+    import open3d as o3d  # noqa: PLC0415
+
+    S = np.concatenate([np.asarray(tags_src.corners[k], dtype=np.float64) for k in ids])
+    D = np.concatenate([np.asarray(tags_dst.corners[k], dtype=np.float64) for k in ids])
+    reg = o3d.pipelines.registration
+    pd, ps = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(D)), o3d.geometry.PointCloud(o3d.utility.Vector3dVector(S))
+    info = np.asarray(reg.get_information_matrix_from_point_clouds(pd, ps, 5.0 * max(rms_mm, 0.05) + 1.0, invert_se3(Tij)))
+    return info / max(rms_mm, 0.05) ** 2
+
+
 def align_many(clouds: Sequence[ScanCloud], params: AlignParams | None = None, *, same_setup: bool = True,
                picked: dict[tuple[int, int], tuple[Any, Any]] | None = None,
                tags: Sequence[TagMap | None] | None = None,
@@ -158,6 +173,7 @@ def align_many(clouds: Sequence[ScanCloud], params: AlignParams | None = None, *
     pair_list = [(i, j) for i in range(n) for j in range(i + 1, n)]
     links: dict[tuple[int, int], np.ndarray] = {}
     weight: dict[tuple[int, int], float] = {}
+    held: dict[tuple[int, int], tuple] = {}  # links the tags hold: (tags of j, tags of i, the tags used, their RMS)
     rows: dict[tuple[int, int], dict] = {}
     for k, (i, j) in enumerate(pair_list):
         say(0.85 * k / len(pair_list), f"Aligning scan {j + 1} to scan {i + 1}")
@@ -170,9 +186,16 @@ def align_many(clouds: Sequence[ScanCloud], params: AlignParams | None = None, *
         if tag_row is not None:
             row["tags"] = tag_row
         rows[(i, j)] = row
+        if p.hold_tags and res.tag_hold is not None:  # the tag pose held (pairwise module docstring, 8.; ENGINE_PLAN X19)
+            row["link_weight"] = "tags" if res.tag_hold["held_by_tags"] else "overlap"
         if res.accepted:
             links[(i, j)] = res.T
             weight[(i, j)] = float(res.overlap)
+            if p.hold_tags and res.tag_hold is not None and res.tag_hold["held_by_tags"]:
+                # a held link places its scan by the tags: first in the chain (above any overlap), and in a loop its
+                # information is the tags' corners at their own scatter (below), not the little the shapes share
+                weight[(i, j)] = 1.0 + 1.0 / (1.0 + float(res.tag_hold["tag_pose_sigma_mm"] or 0.0))
+                held[(i, j)] = (tags[j], tags[i], list(res.tag_hold["tags_used"]), float(res.tag_hold["tag_rms_mm"] or 0.0))
     # 2. the chain of best links from the reference
     tree = _spanning_tree(n, weight)
     T: list[np.ndarray | None] = [None] * n
@@ -192,7 +215,8 @@ def align_many(clouds: Sequence[ScanCloud], params: AlignParams | None = None, *
     # 3. loops: solve all links together, leave out what does not fit
     if extra:
         say(0.9, "Fitting all links together")
-        info = {key: _information(clouds[key[1]], clouds[key[0]], links[key], 2.0 * p.match_mm) for key in links}
+        info = {key: (_tag_information(*held[key], links[key]) if key in held else
+                      _information(clouds[key[1]], clouds[key[0]], links[key], 2.0 * p.match_mm)) for key in links}
         try:
             T2, kept = _pose_graph(T, links, info, tree_set)
             if all(X is None or np.all(np.isfinite(X)) for X in T2):

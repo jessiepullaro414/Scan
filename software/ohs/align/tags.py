@@ -36,7 +36,7 @@ import numpy as np
 from ohs.align.pairwise import pose_from_point_pairs
 from ohs.geometry import kabsch
 
-__all__ = ["TagMap", "TagPose", "tag_map", "load_tag_map", "pose_from_tags", "align_with_tags"]
+__all__ = ["TagMap", "TagPose", "tag_map", "load_tag_map", "pose_from_tags", "align_with_tags", "tag_pose_sigma_mm"]
 
 log = logging.getLogger(__name__)
 
@@ -149,22 +149,44 @@ def align_with_tags(src: Any, dst: Any, tags_src: TagMap | None, tags_dst: TagMa
     guesses. Returns ``(the alignment, what the tags did)``: ``None`` when the two share no tag,
     else ``{"shared", "used", "left_out", "rms_mm", "start"}`` (``start``: ``"accepted"``, or why
     the tags gave no accepted start)."""
-    from ohs.align.pairwise import align_pair  # noqa: PLC0415
+    from ohs.align.pairwise import AlignParams, align_pair  # noqa: PLC0415
 
+    p = params if params is not None else AlignParams()
     row = None
     if tags_src and tags_dst:
         shared = sorted(set(tags_src.corners) & set(tags_dst.corners))
         tp = pose_from_tags(tags_src, tags_dst)
         if tp is not None:
             res = align_pair(src, dst, params, init=tp.T, same_setup=same_setup, init_from="tags")
+            if p.hold_tags and res.overlap < p.caution_overlap:
+                # the tag pose held (ohs.align.pairwise, module docstring 8.), from the tags that agree closely when
+                # enough of them do; else from the same tags as without the hold (its sentence then says why)
+                th = pose_from_tags(tags_src, tags_dst, max_rms_mm=float(p.hold_max_rms_mm))
+                if th is not None and len(th.ids) >= int(p.hold_min_tags):
+                    tp = th
+                hold = {"ids": list(tp.ids), "rms_mm": float(tp.rms_mm), "sigma_mm": tag_pose_sigma_mm(tp),
+                        "dst_corners": np.concatenate([np.asarray(tags_dst.corners[i], dtype=np.float64) for i in tp.ids])}
+                res = align_pair(src, dst, params, init=tp.T, same_setup=same_setup, init_from="tags", tag_hold=hold)
             row = {"shared": shared, "used": tp.ids, "left_out": tp.left_out, "rms_mm": round(tp.rms_mm, 3),
                    "start": "accepted" if res.accepted else f"refused: {res.reason}"}
+            if res.tag_hold is not None:
+                row["start"] = ("held" if res.tag_hold["held_by_tags"] else "overruled" if res.tag_hold["overruled"]
+                                else row["start"])
             if res.accepted:
                 return res, row
         elif shared:
             row = {"shared": shared, "used": [], "left_out": [], "rms_mm": None,
                    "start": "the shared tags do not agree with each other"}
     return align_pair(src, dst, params, same_setup=same_setup), row
+
+
+def tag_pose_sigma_mm(tp: TagPose) -> float:
+    """The tag pose's own 1-sigma displacement (mm; ENGINE_PLAN X19): the corners' RMS residual spread over the
+    pose's six unknowns, ``rms * sqrt(6 / (4 n - 6))`` for ``n`` tags (four corners each), and for one tag its RMS. It
+    leaves out what the tags and the stereo pair share (the scanner's calibration, a scale error moves both alike), which
+    no residual shows."""
+    n = 4 * len(tp.ids)
+    return float(tp.rms_mm) if n <= 6 else float(tp.rms_mm) * float(np.sqrt(6.0 / (n - 6)))
 
 
 def pose_from_tags(src: TagMap, dst: TagMap, max_rms_mm: float = 2.0) -> TagPose | None:

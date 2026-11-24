@@ -89,7 +89,8 @@ The rules of `FEATURE_PLAN.md` and `MAINTENANCE_PLAN.md` hold. In short:
      length is held within 0.06 % where the tags act (five of six scans), the rule is missed;
      a setting, off.
   4. A merge that beats the better single scan (gap item 8): X7 measured it; nothing built.
-     X18 (one model per scan) measured and dropped; X19 (a pose from tags, held) designed.
+     X18 (one model per scan) measured and dropped; X19 (a pose from tags, held) built as a
+     setting, off, its stop rule passed.
   E-D1 still holds for each: a change goes on by default only when it is better on every
   scorecard scene and nothing thin gets worse; a miss stays a setting; a near miss comes to
   the owner with numbers. New experiments for 1, 2 and 4: X15 (holes: the rim read from the
@@ -1157,7 +1158,7 @@ model per scan"; data in `D:\OpenHandScan-work\scratch\ed3` (`merge.md`, `merge_
   with lasers absent from both merges, as in the app; the fourth arm (one model with the
   opposite-sides rule off) left out.
 
-### [ ] X19. A pose from tags, held, where two scans share little (S to M): the first real test passes (tags emulated); not built
+### [ ] X19. A pose from tags, held, where two scans share little (S to M): built 2026-11-24 as a setting, off; its stop rule passed; switching it on is with the owner
 E-D4 (4). Design in `D:\OpenHandScan-work\scratch\ed3\tag_hold_design.md`; first test in
 `tools/merge_combine_study.py` (`tags`).
 - **What the pose is worth** (X18's experiment, real fusing): on the 12 pairs that share under
@@ -1194,8 +1195,25 @@ E-D4 (4). Design in `D:\OpenHandScan-work\scratch\ed3\tag_hold_design.md`; first
   better fit is no evidence against the tags; the old rule would have overruled P5's tags and
   lost its best merge. At 0.70 shared or more nothing changes, bit for bit. The
   verdict says who decided and how well the tags agree ("the tags put it within about 0.2 mm").
-- **Next:** build the hold as a setting, off (`ohs/align/pairwise.py`, `tags.py`, `many.py`, the
-  server's response), then the stop rule's test with tags rendered into both scans.
+- **Built 2026-11-24 as a setting, off** (`[process] align_hold_tags`; `ohs/align/pairwise.py`,
+  `tags.py`, `many.py`, `ohs/server/aligning.py`; 12 tests; `APP_API.md`, Rules, "The tag pose
+  held"). With it off every alignment and merge is as before. Added in review: a refusal
+  never becomes an acceptance (the hold weighs only a pose the refinement from the tags
+  accepted); tags on the table do not hold a part that was moved between the scans; a held
+  link's weight among several scans is in the shape links' frame; a held merge is recorded
+  as information, not as a warning.
+- **The stop rule below, with tags rendered into both scans: passed** (`VALIDATION.md`, "The
+  tag pose held, built and tested"). On three bracket seed pairs that share under 0.70 the
+  held merge passes E-D4 (1) and (3) and is the true motion's merge (median over the seen
+  surface 0.062 / 0.064 / 0.057 mm against 0.188 / 0.155 / 0.132 without the hold, which
+  fails (1) on all three); the pair sharing 96 % is the same with the hold on and off; a
+  tag moved 2 mm was left out and the pose held from the other seven. A sheet pair
+  (reported) passes too.
+- **With the owner: switch it on?** By E-D1 it is better on every pair it acts on and the
+  same on every pair it does not (no tags, or 0.70 shared or more). Open before or after
+  that: a part turned over with tags on the part itself, rendered (made-up clouds only so
+  far); more parts than one bracket and one sheet; the Align page's words for a held pose
+  (UX_PLAN) and the guide; the setting tried in the running app.
 - **Stop rule: adopted only if**, with tags rendered into both scans (not emulated), the held
   merge passes E-D4 (1) and (3) on every pair that shares under 0.70 and whose single scans are
   sound, on 3 seeds; pairs at 0.70 or more are unchanged bit for bit; a tag moved by 2 mm

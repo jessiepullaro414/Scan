@@ -186,6 +186,8 @@ class ProcessConfig:
     fine_walls: bool = False
     # ENGINE_PLAN X8 step 2: Straighten holds the scan to the AprilTags in view (ohs.track.posegraph.StraightenParams.tags)
     straighten_tags: bool = False
+    # ENGINE_PLAN X19: an alignment from tags where two scans share little keeps the tags' pose (ohs.align.AlignParams.hold_tags)
+    align_hold_tags: bool = False
 
 
 @dataclass
@@ -628,6 +630,13 @@ _KEY_DOCS = {
         "before Refine with lasers: the surface is measured against up to 120 frames of the recording.\n"
         "Needs a graphics card; without one Make mesh leaves the mesh as it is and says so. Not at\n"
         "Preview quality. Off: as before."
+    ),
+    "process.align_hold_tags": (
+        "Aligning two scans that share little of the part (under 70 %) from the AprilTags both saw keeps\n"
+        "the tags' position instead of letting the shapes move it (ENGINE_PLAN X19): three or more tags that\n"
+        "agree within 0.5 mm decide, the shapes only check them and overrule them only when they disagree by\n"
+        "more than 8 mm (a table moved with its tags). Scans that share more are aligned exactly as before.\n"
+        "Off: as before."
     ),
     "process.straighten_tags": (
         "Straighten also holds the scan to the AprilTags it sees (ENGINE_PLAN X8 step 2): tags on the\n"

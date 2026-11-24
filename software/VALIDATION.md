@@ -6191,6 +6191,67 @@ on the mesh.
 Not built or run: a scene with a second hole a few millimetres beside the clicked one, the case the check
 against the mesh exists for; a rule on the reading's own ±; the blurred-step edge model.
 
+### The tag pose held, built and tested with tags rendered into both scans (ENGINE_PLAN X19, 2026-11-24): a setting, off; its stop rule passed
+
+`AlignParams.hold_tags`, set by `[process] align_hold_tags` (off). An alignment that started from tags and whose
+refined pose shares under 0.70 keeps the tags' pose when 3 or more shared tags agree within 0.5 mm; the shapes
+overrule it only beyond the larger of 8 mm and 4 sigma of the tag pose. Added in review: the hold weighs only a
+pose that the refinement from the tags accepted, so a refusal never becomes an acceptance; tags lying on the
+table (within 3 mm of the target scan's table plane) do not hold a part that was moved between the scans; a held
+link's weight among several scans is built in the same frame as a shape link's; a merge at a held pose records it
+as information, not among its warnings.
+
+**The test** (`tools/merge_combine_study.py`, commands `x19-render`, `x19-single`, `x19-pair`, `x19-judge`; data in
+`D:\OpenHandScan-work\scratch\ed3\x19run`). Each pair is two 90-frame stretches of the scorecard's own orbits,
+rendered with eight 25 mm tags on the table (the part shadows and hides them), meshed on the graphics card, the
+tags found as the server finds them, aligned through `align_with_tags` with the part not moved, and merged with
+`merge_scans`. The stop rule, fixed beforehand: the held merge passes E-D4 (1) and (3) on the three bracket pairs
+that share under 0.70 (three seed pairs); the pair that shares 96 % is the same with the hold on and off, bit for
+bit; where a tag was moved 2 mm between the scans it is left out or the hold overruled, never followed. **Passed.**
+
+Columns: how far the merge's pose lies from the true motion (median / 95th percentile, mm); then, over all the
+surface either scan saw, the share within 0.5 mm / the median in mm / the percentage more than 0.3 mm off.
+
+| pair | merge at | pose from the true motion | all seen surface | E-D4 (1) / (3) |
+|---|---|---|---|---|
+| T3, bracket, opposite sides (shares 0.45) | the pose without the hold | 0.81 / 1.29 | 0.930 / 0.188 / 35.8 | fails / passes |
+| | **the held tag pose** | 0.17 / 0.34 | 0.955 / 0.062 / 11.4 | **passes / passes** |
+| | the true motion | 0 | 0.955 / 0.063 / 11.4 | passes / passes |
+| T1, bracket, other seeds | without the hold | 0.87 / 1.42 | 0.940 / 0.155 / 28.0 | fails / passes |
+| | **held** | 0.43 / 0.72 | 0.953 / 0.064 / 11.1 | **passes / passes** |
+| | the true motion | 0 | 0.952 / 0.063 / 11.3 | passes / passes |
+| T3b, bracket, other seeds | without the hold | 0.72 / 1.00 | 0.945 / 0.132 / 20.4 | fails / passes |
+| | **held** | 0.19 / 0.37 | 0.952 / 0.057 / 10.3 | **passes / passes** |
+| | the true motion | 0 | 0.952 / 0.057 / 10.2 | passes / passes |
+| TS, sheet (reported, not in the rule) | without the hold | 0.86 / 1.41 | 0.914 / 0.229 / 33.4 | fails / passes |
+| | held | 0.41 / 0.63 | 0.925 / 0.163 / 21.8 | passes / passes |
+| | the true motion | 0 | 0.925 / 0.151 / 20.9 | passes / passes |
+| TM, T3 with tag 2 moved 2 mm in one scan | without the hold (all 8 tags, agreeing within 0.68 mm) | 0.79 / 1.10 | 0.928 / 0.191 / 37.0 | fails / passes |
+| | held from the other 7 tags | 0.18 / 0.36 | 0.954 / 0.061 / 11.3 | passes / passes |
+| TH, one side scanned twice (shares 0.96) | hold on and off: the same result | 0.29 / 0.47 | 0.855 / 0.087 / 19.5 | passes / passes |
+
+- **Without the hold the alignment already starts from the tags, and still ends 0.7 to 0.9 mm from the true
+  motion:** the refinement from the shapes walks there. Held, it stays 0.17 to 0.43 mm away and the merge is the
+  true motion's.
+- The tags' corners agree within 0.12 to 0.22 mm; the tag pose's own sigma is 0.06 to 0.12 mm. Twice the merged
+  sigma covers 0.985 to 0.996 at the held poses.
+- **The sheet's thin features** (mm too thick; single scans +0.39 and +0.64 on the 2 mm flange, +0.52 and +0.61
+  on the 1 mm rib): flange +0.56 without the hold, +0.36 held, +0.32 at the true motion; rib +0.75, +0.79, +0.76.
+  The rib is thicker in every merge than in either scan: the merge's known thickening, at the true motion too.
+  The bracket has no feature of 2 mm or less.
+- What a user would read, held: "Aligned from the 8 tags both scans saw (their corners agree within 0.21 mm). The
+  scans share little of the part (42 %), so the tags decide the position; the shapes alone would put it 0.8 mm
+  away."
+- Tests: 12 for the hold (the engine's 10 and the server's 2), among them a setting-off result identical to
+  before, a refusal that stays a refusal, a plate slid on its table whose table tags do not hold it, a tag map
+  9 mm wrong overruled.
+
+Not tested with rendered scans: a part turned over with tags on the part itself; a tag map wrong as a whole
+(made-up clouds only: refused at 20 mm, overruled at 9 mm). Three seed pairs of one part and one sheet pair, all
+with the part not moved and the tags on the table, 9 s scans. The spread used by E-D4 is taken from last night's
+cases. Printed-tag error, and the calibration error that tags and surface share, are not in the simulation. The
+Align page shows nothing of the hold, and the setting was not tried in the running app.
+
 ## What the metrics mean
 
 - **Stereo errors** compare the estimated raw intrinsics/extrinsics (`K1`, `K2`, `R`, `T`) with

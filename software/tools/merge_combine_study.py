@@ -1115,6 +1115,209 @@ def judge_tag_merges(ex: "Experiment", name: str) -> dict:
     return out
 
 
+# =========================================================================== X19's stop-rule test: tags rendered into both scans
+#: the tags on the table round the part (fixed before any run, ed3\gpu1\NOTES.md): 8 tag36h11 tags of 25 mm with a
+#: 6 mm white margin, on a ring of 110 mm round the scene's target, in the table's own frame (its y the other way
+#: round, as tools/large_part_study.py and tools/wall_thickness_study.py put them)
+X19_TAG_MM = 25.0
+X19_RING_MM = 110.0
+X19_TAGS = 8
+#: pair: (scan A, scan B); the recordings: "<scene>t-s<seed>" (tags), "<scene>tm-s<seed>" (tag 2 moved 2 mm along x)
+X19_PAIRS = {
+    "T3": ("bracket240t-s4@0", "bracket240t-s1@20"),   # as X7's P3: the bracket's opposite sides
+    "T1": ("bracket240t-s0@0", "bracket240t-s1@20"),   # as M1
+    "T3b": ("bracket240t-s0@0", "bracket240t-s3@10"),  # as P3s2
+    "TS": ("sheett-s0@30", "sheett-s1@40"),            # as M3 (the sheet: reported, not gated)
+    "TM": ("bracket240t-s4@0", "bracket240tm-s1@20"),  # T3 with tag 2 moved 2 mm between the scans
+    "TH": ("bracket240t-s0@0", "bracket240t-s4@0"),    # one side twice: shares 0.70 or more (bit for bit)
+}
+X19_GATED = ("T3", "T1", "T3b")
+
+
+def x19_rec_name(key: str) -> str:
+    return key.split("@")[0]
+
+
+def x19_register(SC, names) -> None:
+    """The tagged recordings as scorecard scenes (their geometry is the untagged scene's: the judge's truth)."""
+    import dataclasses as dc
+
+    for name in names:
+        base = name.replace("bracket240tm", "bracket240").replace("bracket240t", "bracket240").replace("sheett", "sheet")
+        if name not in SC.SCENES:
+            SC.SCENES[name] = dc.replace(SC.SCENES[base], name=name)
+
+
+def x19_scene(name: str, moved: dict | None = None):
+    """The scene of a tagged recording: the scorecard's scene of that seed with :data:`X19_TAGS` tags on its table
+    (``moved``: tag id -> (dx, dy) mm on the table)."""
+    from ohs.sim.scene import Decal, DecalAlbedo, Scene, apriltag_texture, marker_corners_world
+    from tools import merge_accuracy_study as MS
+
+    SC = MS.SC
+    x19_register(SC, [name])
+    sc0 = SC.scene_of(SC.SCENES[name])
+    table = next(p for p in sc0.primitives if p.name == "table")
+    tgt = np.asarray(sc0.target, np.float64)
+    decals = []
+    for m in range(X19_TAGS):
+        a = 2 * np.pi * (m + 0.5) / X19_TAGS
+        x, y = tgt[0] + X19_RING_MM * np.cos(a), tgt[1] + X19_RING_MM * np.sin(a)
+        dx, dy = (moved or {}).get(m, (0.0, 0.0))
+        decals.append(Decal(apriltag_texture(m, X19_TAG_MM), 10, (x + dx, -(y + dy)), angle=0.3 * m, margin_mm=X19_TAG_MM / 4,
+                            tag_id=m))
+    table.albedo = DecalAlbedo(table.albedo, decals)
+    markers = {dc.tag_id: marker_corners_world(table, dc) for dc in decals}
+    return Scene(list(sc0.primitives), name=sc0.name + "_tags", target=sc0.target, radius=sc0.radius, markers=markers,
+                 meta=dict(sc0.meta, tags={"mm": X19_TAG_MM, "ring_mm": X19_RING_MM, "moved": moved or {}}))
+
+
+def x19_render(root: Path, key: str) -> Path:
+    """Render a tagged recording, frames 0 to the stretch's end, on the scorecard's own orbit of that seed."""
+    import shutil
+
+    from ohs.sim.datasets import make_scan_recording
+    from ohs.sim.nominal import NOMINAL_TIME_OFFSET, nominal_calibration
+    from ohs.sim.trajectory import HandheldTrajectory
+    from tools import merge_accuracy_study as MS
+
+    SC = MS.SC
+    name = x19_rec_name(key)
+    path = Path(root) / "recs" / name
+    x19_register(SC, [name])
+    _, s, e = MS.scan_spec(key)
+    if (path / "done").is_file():
+        d = json.loads((path / "done").read_text())
+        if int(d["frames"]) >= e:
+            return path
+    shutil.rmtree(path, ignore_errors=True)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    moved = {2: (2.0, 0.0)} if "bracket240tm" in name else None
+    sc = x19_scene(name, moved)
+    spec = SC.SCENES[name]
+    common = {"image_size": SC.IMAGE_SIZE, "realistic": True, "depth_every": 0, "seed": spec.seed}
+    if spec.build["maker"] == "orbit":
+        traj = SC._orbit(spec.build["scene"], spec.seed, spec.frames)
+    else:  # the sheet, as the scorecard renders it
+        calib = nominal_calibration(SC.IMAGE_SIZE, realistic=True)
+        dur = spec.frames / 10.0
+        traj = HandheldTrajectory(target=np.array(SC.SHEET_TARGET), t0=100.0 + NOMINAL_TIME_OFFSET, duration=dur, seed=spec.seed,
+                                  baseline=calib.stereo.baseline, distance=(200.0, 280.0), elevation_deg=(35.0, 65.0),
+                                  sweep_deg_s=400.0 / dur)
+    t0 = time.perf_counter()
+    make_scan_recording(path, scene=sc, n_frames=e, fps=10.0, trajectory=traj, overwrite=True, **common)
+    _write(path / "tags.json", {"tag_mm": X19_TAG_MM, "moved": moved or {},
+                                "corners": {str(i): np.asarray(X).tolist() for i, X in sc.markers.items()}})
+    _write(path / "done", {"frames": e, "render_s": round(time.perf_counter() - t0, 1)})
+    return path
+
+
+def x19_tag_map(rec: Path, scan_dir: Path):
+    """The tags a scan saw, as the server finds them (``tag_map`` at the scan's poses, 120 frames at most), cached."""
+    from ohs.align.tags import TagMap, tag_map
+    from ohs.track.markers import MarkerParams
+
+    f = scan_dir / "tag_map.json"
+    if f.is_file():
+        d = json.loads(f.read_text())
+        return TagMap({int(k): np.asarray(v["corners"]) for k, v in d["tags"].items()},
+                      {int(k): int(v["views"]) for k, v in d["tags"].items()},
+                      {int(k): float(v["spread_mm"]) for k, v in d["tags"].items()})
+    m = tag_map(rec, scan_dir / "trajectory.csv", params=MarkerParams(tag_mm=X19_TAG_MM), max_frames=120)
+    f.write_text(json.dumps(m.as_dict()), encoding="utf-8")
+    return m
+
+
+def x19_pair(root: Path, recs: Path, name: str) -> dict:
+    """Align the pair as the app does from the tags (``align_with_tags``, same setup), the hold off and on; merge at both
+    poses and at the true motion (``merge_scans``, the server's settings)."""
+    from dataclasses import replace
+
+    from ohs.align import AlignParams, ScanInput, merge_scans, scan_cloud_from_mesh
+    from ohs.align.tags import align_with_tags
+    from tools import merge_accuracy_study as MS
+
+    ka, kb = X19_PAIRS[name]
+    MS.PAIRS[name] = (ka, kb, "tags", name)
+    work = Path(root) / "work"
+    pd = work / "pairs" / name
+    pd.mkdir(parents=True, exist_ok=True)
+    A, B = MS.scan_dir(work, ka, "tracked"), MS.scan_dir(work, kb, "tracked")
+    ra, rb = Path(recs) / x19_rec_name(ka), Path(recs) / x19_rec_name(kb)
+    ta, tb = x19_tag_map(ra, A), x19_tag_map(rb, B)
+    dst, src = scan_cloud_from_mesh(A / "mesh.ply"), scan_cloud_from_mesh(B / "mesh.ply")
+    out = {"pair": name, "keys": [ka, kb], "tags A": {str(k): v for k, v in ta.views.items()},
+           "tags B": {str(k): v for k, v in tb.views.items()}}
+    params = MS.merge_params()
+    poses = {}
+    for tag, p in (("off", AlignParams()), ("on", replace(AlignParams(), hold_tags=True))):
+        res, row = align_with_tags(src, dst, tb, ta, p, same_setup=True)
+        d = res.as_dict()
+        out[tag] = {"result": d, "tags": row}
+        poses[tag] = np.asarray(res.T)
+    W = MS.fitted_world
+    poses["b2"] = G_invert(W(ra, A / "trajectory.csv")) @ W(rb, B / "trajectory.csv")
+    for tag, T in poses.items():
+        mdir = pd / f"merge_{tag}"
+        if (mdir / "done.json").is_file():
+            continue
+        t0 = time.perf_counter()
+        r = merge_scans([ScanInput(ra, A / "trajectory.csv", np.eye(4), "A"), ScanInput(rb, B / "trajectory.csv", T, "B")], mdir, params)
+        _write(mdir / "done.json", {"s": round(time.perf_counter() - t0, 1), "T": [np.eye(4).tolist(), np.asarray(T).tolist()],
+                                    "vertices": r["mesh"]["n_vertices"]})
+    _write(pd / "align.json", out)
+    return out
+
+
+def G_invert(T: np.ndarray) -> np.ndarray:
+    from ohs import geometry as G
+
+    return G.invert_se3(np.asarray(T, np.float64))
+
+
+def x19_judge(root: Path, recs: Path, gpu1: Path, name: str) -> dict:
+    """E-D4 for the merges at the hold-off pose, the hold-on pose and the true motion, with gpu1's spread for the case it
+    stands for (the bracket's opposite sides: P3; the sheet: M3)."""
+    from tools import merge_accuracy_study as MS
+
+    ka, kb = X19_PAIRS[name]
+    x19_register(MS.SC, [x19_rec_name(ka), x19_rec_name(kb)])
+    st = Study(Path(root), Path(root), Path(recs))
+    st.x7 = st.mw = Path(root) / "work"
+    MW_PAIRS[name] = (ka, kb)
+    case = "M3" if name == "TS" else "P3"
+    sp = json.loads((Path(gpu1) / "verdict.json").read_text())["cases"][f"{case} b2"]["spread"]
+    stt = st.setup(name, "tracked")
+    eA1, sA1, eB1, sB1 = st.single_readings(stt)
+    rows = {k: st.merge_reading(stt, k) for k in ("off", "on", "b2")}
+    j = judge_case(eA1, sA1, eB1, sB1, rows, stt["inA"], stt["inB"])
+    walls = walls_table(stt, rows)
+    thin = [w["name"] for w in stt["walls"] if w["true_mm"] is not None and w["true_mm"] <= 2.0]
+    al = json.loads((Path(root) / "work" / "pairs" / name / "align.json").read_text())
+    from ohs.track.export import load_ply
+
+    VB = load_ply(MS.scan_dir(st.work(name), kb, "tracked") / "mesh.ply")["vertices"].astype(np.float64)[::7]
+    T_true = st.merge_pose(name, "b2")
+    out = {"pair": name, "case": case, "spread": sp, "rows": {}, "align": al,
+           "singles": {k: {r: j["singles"][k][r] for r in ("S_A", "S_B", "S_A or S_B")} for k in ("A", "B")},
+           "singles walls": {k: {w: walls_table(stt, {k: e})[k].get(w) for w in thin}
+                             for k, e in (("A", (eA1, sA1)), ("B", (eB1, sB1)))},
+           "union oracle": j["union oracle"]}
+    for k, r in j["rows"].items():
+        ok = True
+        for s in ("A", "B"):
+            m, g = r[f"S_{s}"], j["singles"][s][f"S_{s}"]
+            ok &= (m["cover05"] >= g["cover05"] - sp["cover05"] and m["med"] <= g["med"] + sp["med"]
+                   and m["over03"] <= g["over03"] + sp["over03"])
+        out["rows"][k] = {"E-D4 (1)": bool(ok), "E-D4 (3)": r["E-D4 (3) more than the larger scan"],
+                          "X7": [r["X7 beats the better single"], r["X7 reaches the union"]], "all": r["S_A or S_B"],
+                          "S_A": r["S_A"], "S_B": r["S_B"], "2 sigma covers": r["2 sigma covers"],
+                          "walls": {w: walls[k].get(w) for w in thin},
+                          "off_true": pose_off(st.merge_pose(name, k), T_true, VB) if k != "b2" else [0.0, 0.0]}
+    _write(Path(root) / "work" / "pairs" / name / "judge.json", out)
+    return out
+
+
 # =========================================================================== output
 def _plain(x):
     if isinstance(x, dict):
@@ -1169,7 +1372,7 @@ def print_table(out: Path) -> None:
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("cmd", choices=("combine", "tags", "table", "plan", "single", "today", "perscan", "judge-exp", "verdict",
-                                    "tagmerge", "judge-tags"))
+                                    "tagmerge", "judge-tags", "x19-render", "x19-single", "x19-pair", "x19-judge"))
     ap.add_argument("out", type=Path)
     ap.add_argument("--x7", type=Path)
     ap.add_argument("--mergewarn", type=Path)
@@ -1178,8 +1381,24 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--pairs", nargs="*", default=["P3", "P5", "M1", "M3"], help="(tags)")
     ap.add_argument("--name", help="(single: a scan key; today / perscan / judge-exp: a pair of the plan)")
     ap.add_argument("--runs", nargs="*", help="(tagmerge: which tag runs, e.g. tag0; default all six)")
+    ap.add_argument("--gpu1", type=Path, help="(x19-judge: the per-scan experiment's folder, for its spreads)")
     a = ap.parse_args(argv)
     ap_runs = [r for r in TAG_RUNS if a.cmd != "tagmerge" or a.runs is None or tag_run_name(*r) in a.runs]
+    if a.cmd.startswith("x19-"):  # X19's stop-rule test (OUT: its folder; recordings in OUT/recs)
+        _watch_rss()
+        from tools import merge_accuracy_study as MS
+
+        recs = Path(a.recs) if a.recs else Path(a.out) / "recs"
+        if a.cmd == "x19-render":
+            print(x19_render(a.out, a.name), flush=True)
+        elif a.cmd == "x19-single":
+            x19_register(MS.SC, [x19_rec_name(a.name)])
+            MS.run_single(Path(a.out) / "work", recs, a.name, "tracked")
+        elif a.cmd == "x19-pair":
+            print(json.dumps(_plain({k: v for k, v in x19_pair(a.out, recs, a.name).items() if k in ("off", "on")}))[:3000])
+        else:
+            x19_judge(a.out, recs, a.gpu1, a.name)
+        return 0
     if a.cmd in ("plan", "single", "today", "perscan", "judge-exp", "verdict", "tagmerge", "judge-tags"):  # OUT: its folder
         _watch_rss()
         if a.cmd == "plan":
