@@ -81,8 +81,8 @@ The rules of `FEATURE_PLAN.md` and `MAINTENANCE_PLAN.md` hold. In short:
   1.3 mm too thick, and the 1.3 m panel came out 1.6 to 6.5 mm wrong in length. A merge beat
   the better single scan on only 1 of 5 pairs". These four go ahead of X9 to X14:
   1. Holes over open space (gap item 1). Tried and not adopted: X1 (the guard by the matcher's
-     doubt), X2 (rims from the laser lines' ends). X15 (the rim read from the camera images)
-     reads them within 0.13 mm in simulation; not in the app.
+     doubt), X2 (rims from the laser lines' ends). X15 (the rim read from the camera images) reads them within 0.14 mm in simulation, on
+     scans not looked at before too; not in the app yet.
   2. Thin standing walls (gap item 2). Tried: X3, X4, X4b, X4c (not adopted), X5 (fine walls,
      a choice per scan).
   3. The length of long plain parts (gap item 7): X8 steps 2 and 3 (tags as anchors): the
@@ -947,7 +947,7 @@ and thin parts".
   down. Weaker than X2.
 - **Stop rule: adopted only if** within 0.2 mm on 8 of 9 clicks.
 
-### [ ] X15. A hole's rim read from the camera images (M): measured 2026-11-23 and 24; alive with the dots off, and with the dots on where the background is far; not in the app
+### [ ] X15. A hole's rim read from the camera images (M): measured 2026-11-23 and 24; round 6 passes on fresh scans with the dots on and off; not in the app
 E-D3 item 1. `tools/hole_rim_study.py` (a study tool; nothing in the engine uses it); notes and
 every run in `D:\OpenHandScan-work\scratch\ed3\holes_looks`; `VALIDATION.md`, "A hole's rim read
 from the camera images".
@@ -1004,11 +1004,21 @@ from the camera images".
     pass it and read +0.35 and +0.32 mm, which drops the gated dots-on arm.
   - Seen on the rows, not yet a rule: every reading that broke the rule carried a ± of its
     own of 0.21 mm or more (0.21, 0.26, 0.41, 0.50); the good ones carry 0.10 to 0.18.
-- **Next (round 6):** the gate and the mesh finder dropped; the reading refuses on its own ±
-  (limit fixed from the rows of rounds 3 to 5) and on where the read circle lies against
-  the click; judged on seeds not looked at (3 to 5) of the near-floor and far plates, and
-  on a new plate with a second hole a few millimetres beside the clicked one.
-- **Then, with the owner, only if round 6 holds:** a first version in the app's hole tool,
+- **Round 6 (2026-11-24): passes, with the dots on too.** The gate and the mesh finder are
+  out. The reading refuses when its own ± is above 0.20 mm (the limit fixed beforehand from
+  1,774 readings of rounds 3 to 5) and when the click lies more than 3 mm outside the read
+  circle. Judged on scans not looked at before (seeds 3 to 5 of plates near and far from
+  the floor, and a new plate with a second hole 3 mm beside the clicked one):
+  - dots on: every far-background Ø25 and Ø10 answered (21 of 21), 36 of 39 near-floor
+    holes answered and none more than 0.3 mm off, every answered click within 0.14 mm,
+    twice the ± covering all 173; dots off: 69 of 69 holes, all within 0.2 mm;
+  - beside a neighbour no click read the other hole;
+  - the 11 scorecard recordings (they informed the limit): dots on 21 of 23 holes at true
+    and at tracked poses, all within 0.2 mm; the open-space plates and the panel -0.08 to
+    +0.00 mm, where today's tool reads 1.0 to 6.6 mm small.
+  - Left: the fresh plates are at true poses only; the near-floor Ø10 with the dots on is
+    answered by 3 to 7 clicks of 9; real images.
+- **With the owner now (round 6 holds):** a first version in the app's hole tool,
   "from the images" beside the mesh's reading, 10 to 20 s a click on this processor: a new
   module `ohs/measure/rim.py` called after today's mesh answer, the answer gaining one
   field `from_images` (a diameter with its ±, or the words of a refusal).

@@ -342,3 +342,47 @@ def test_the_near_far_gate_counts_the_depth_the_plane_leaves_out():
     a = S_.points(0, near, np.eye(4))
     b = S_.points(0, near, np.eye(4), all_valid=True)
     assert len(b) - len(a) == 40 * 40
+
+
+# --------------------------------------------------------------------------- round 6
+def test_the_neighbour_plate_has_its_holes_3_mm_apart_and_its_clicks_where_they_should_be():
+    from ohs import geometry as G
+
+    sc, holes = H.plate_scene(3.0, 120.0, "dark", 3, layout="neighbours")
+    by = {h["hole"]: h for h in holes}
+    assert sorted(by) == ["n10a", "n10b", "n25b", "n6a"]
+    for a, b in (("n10a", "n6a"), ("n25b", "n10b")):
+        ca, cb = np.asarray(by[a]["centre_true"]), np.asarray(by[b]["centre_true"])
+        rim_to_rim = np.linalg.norm(ca - cb) - by[a]["d_true"] / 2 - by[b]["d_true"] / 2
+        assert abs(rim_to_rim - 3.0) < 1e-9
+    for h in holes:
+        c, r = np.asarray(h["centre_true"]), h["d_true"] / 2
+        for p, kind, allowed in zip(h["clicks"], h["click_kinds"], h["allowed"]):
+            dist = np.linalg.norm(np.asarray(p) - c) - r
+            assert {"facing": 0.75, "far": 1.5, "bridge": 1.5}[kind] == pytest_approx(dist)
+            assert h["hole"] in allowed and (len(allowed) == 2) == (kind == "bridge")
+    # a ray straight down hits the plate's top on a bridge and goes through the middle of every hole
+    T = np.asarray(sc.meta["plate_T"])
+    down = np.array([[0.0, 0.0, -1.0]])
+    for h in holes:
+        for p, kind in zip(h["clicks"], h["click_kinds"]):
+            if kind == "bridge":
+                hit = sc.cast(np.asarray(p)[None] + [0.0, 0.0, 5.0], down)
+                assert sc.primitives[int(hit.obj[0])].name == "plate_top"
+        hit = sc.cast(np.asarray(h["centre_true"])[None] + [0.0, 0.0, 5.0], down)
+        assert sc.primitives[int(hit.obj[0])].name == "floor"
+    assert np.allclose(G.transform_points(T, np.zeros((1, 3)))[0][2], 120.0)
+
+
+def pytest_approx(x):
+    import pytest
+
+    return pytest.approx(x, abs=1e-9)
+
+
+def test_round_6_refuses_on_its_own_plus_minus_and_on_a_click_far_from_the_read_rim():
+    r = {"d": 10.0, "pm": 0.12, "centre": [0.0, 0.0, 0.0], "normal": [0.0, 0.0, 1.0]}
+    assert H.round6_refusal(r, np.array([6.5, 0.0, 0.0])) is None  # 1.5 mm outside the rim
+    assert H.round6_refusal(r, np.array([1.0, 0.0, 0.3])) is None  # inside the circle
+    assert "another hole" in H.round6_refusal(r, np.array([9.0, 0.0, 0.0]))  # 4 mm outside
+    assert "do not agree well enough" in H.round6_refusal(dict(r, pm=0.21), np.array([6.5, 0.0, 0.0]))

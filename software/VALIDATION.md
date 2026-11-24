@@ -6191,7 +6191,71 @@ on the mesh.
 Not built or run: a scene with a second hole a few millimetres beside the clicked one, the case the check
 against the mesh exists for; a rule on the reading's own ±; the blurred-step edge model.
 
-### The tag pose held, built and tested with tags rendered into both scans (ENGINE_PLAN X19, 2026-11-24): a setting, off; its stop rule passed
+### Round 6: the reading refuses on its own ± (2026-11-24): passes on scans not looked at before
+
+The gate and the mesh finder are out of the judged reading. In their place, fixed before any round-6 result:
+
+- **A refusal on the reading's own ±, above 0.20 mm.** The limit comes from every reading of rounds 3 to 5 that
+  the earlier rules answered (1,774 readings; `holes_looks\NOTES.md` has both distributions): of the 1,758 right
+  ones 1,733 carry 0.20 mm or less; of the 16 wrong ones 10 carry more, and the other 6 are the wrong-hole
+  readings of the slid scan, which the next test is for.
+- **The read circle against the click:** the click must lie inside the read circle or within 3.0 mm of its rim.
+- The seed takes the dark or bright patch nearest the click, not the largest within reach (decided from geometry:
+  beside a larger neighbour the largest would be the wrong hole).
+
+**Fresh data, judged by the same rules** (true poses, seeds 3 to 5, none looked at before; only the frames that
+are read were rendered): plates of 1, 3 and 5 mm at 10 mm above the floor, plates of 1 and 5 mm at 120 mm, and
+a new plate with neighbours (a Ø10 with a Ø6 beside it and a Ø25 with a Ø10 beside it, 3 mm rim to rim) at both
+heights, clicked on the side facing the neighbour, on the far side and on the bridge between the two.
+
+| | dots on | dots off |
+|---|---|---|
+| verdict | **alive and useful** | **alive and useful** |
+| far-background Ø25 and Ø10 answered | 21 of 21 | 21 of 21 |
+| holes near a floor answered, none more than 0.3 mm off | 36 of 39 | 39 of 39 |
+| all holes answered / within 0.2 mm / within 0.1 mm | 66 of 69 / 66 / 63 | 69 of 69 / 69 / 68 |
+| twice the ± covers the error (answered clicks) | 173 of 173 | 195 of 195 |
+| a hole other than the clicked one read | none | none |
+
+Median diameter error in mm per family, over the answered clicks (in brackets, clicks answered of 9 where not
+all):
+
+| family | dots on: Ø25 / Ø10 / Ø6 | dots off: Ø25 / Ø10 / Ø6 |
+|---|---|---|
+| 1 mm plate, 10 mm up | -0.07 / -0.04 (4) / -0.03 (7) | -0.08 / -0.07 / -0.08 |
+| 1 mm plate, 120 mm up | -0.07 / -0.07 / -0.05 | -0.08 / -0.06 / -0.09 |
+| 3 mm plate, 10 mm up | -0.02 / +0.02 (3) / -0.02 | -0.03 / -0.02 / -0.05 |
+| 5 mm plate, 10 mm up | -0.01 / +0.00 (7) / -0.03 (7) | -0.01 / -0.01 / -0.05 |
+| 5 mm plate, 120 mm up | -0.02 / -0.02 / -0.03 | -0.01 / -0.04 / -0.06 |
+| neighbours, 120 mm up (Ø25 / its Ø10 / Ø10 / its Ø6) | -0.02 / -0.07 / -0.05 / -0.05 | -0.03 / -0.06 / -0.04 / -0.06 |
+| neighbours, 10 mm up | -0.04 / -0.04 (7 of 9) / -0.08 / +0.05 (3 of 6) | -0.03 / -0.06 / -0.05 / -0.04 |
+
+- **Every answered click is within 0.14 mm** (the worst: -0.136, -0.133, +0.121).
+- **Beside a neighbour 3 mm away every answered click read its own hole** (dots off 60 of 60 clicks; dots on 55,
+  5 refused); the test of the circle against the click never had to act.
+- **Near a floor with the dots on the Ø10 is answered by fewer clicks** (3 to 7 of 9): the refusals are where
+  rounds 3 and 5 gave their wrong answers.
+- Refusals on the fresh data, dots on: the ± rule 5 (1 of a reading more than 0.3 mm off, 4 of readings that
+  were right), the earlier rules 17 (6 and 11). Dots off: none.
+
+**The 11 scorecard recordings again** (reported apart: they informed the limit; clicks on the scan's mesh):
+
+| | dots on, true poses | dots on, tracked | dots off, true poses | dots off, tracked |
+|---|---|---|---|---|
+| holes answered of 23 | 21 | 21 | 23 | 23 |
+| within 0.2 mm / within 0.1 mm | 21 / 21 | 21 / 20 | 23 / 23 | 23 / 23 |
+
+The two refused with the dots on are near-floor Ø10 holes. The plates 120 mm up and the car panel read -0.08 to
++0.00 mm at true and at tracked poses alike, the scan that lost tracking included (its position is marked
+unsure).
+
+Limits: simulated images throughout; no real hole has been measured (gloss, chamfers, burrs, MJPEG, real light
+and blur). The fresh plates are at true poses only; tracked poses are tested on the recordings, which informed
+the limit. A scan that lost its path still loses the hole's position. A bright background is refused, never
+read. Holes closer than 3 mm rim to rim, and bores not square to the face, were not tried. About 12 s a click on
+this processor.
+
+## The tag pose held, built and tested with tags rendered into both scans (ENGINE_PLAN X19, 2026-11-24): a setting, off; its stop rule passed
 
 `AlignParams.hold_tags`, set by `[process] align_hold_tags` (off). An alignment that started from tags and whose
 refined pose shares under 0.70 keeps the tags' pose when 3 or more shared tags agree within 0.5 mm; the shapes

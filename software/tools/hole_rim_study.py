@@ -239,12 +239,13 @@ def _otsu(x: np.ndarray) -> float:
 
 
 def find_seed(img: np.ndarray, cam: Camera, plane: Plane, click_xy: np.ndarray,
-              either: bool = False) -> tuple[np.ndarray, float] | str:
+              either: bool = False, nearest: bool = False) -> tuple[np.ndarray, float] | str:
     """``(centre (2,) in the plane, radius)`` of the dark patch nearest the click, or the reason there is none.
 
     With ``either`` (step 3) a patch brighter than the face counts too (a lit background seen through the hole),
     found the same way above the face's median, and of the closed patches of either kind within reach of the click
-    the largest is taken."""
+    the largest is taken. With ``nearest`` too (round 6) the patch whose nearest point is closest to the click is
+    taken, the larger only on a tie within 0.5 mm (holes side by side: the clicked one, not the biggest one)."""
     from scipy import ndimage
 
     R = SEED_DISK_MM
@@ -266,6 +267,7 @@ def find_seed(img: np.ndarray, cam: Camera, plane: Plane, click_xy: np.ndarray,
     edge = (gx ** 2 + gy ** 2) > (R - 1.0) ** 2
     d_click = np.hypot(gx, gy)
     best = None
+    cands = []
     for mask in masks:
         lab, n = ndimage.label(mask)
         on_edge = set(np.unique(lab[edge & mask]).tolist())
@@ -277,9 +279,14 @@ def find_seed(img: np.ndarray, cam: Camera, plane: Plane, click_xy: np.ndarray,
             dmin = float(d_click[m].min())
             if dmin > SEED_REACH_MM:
                 continue
+            cands.append((dmin, area, m))
             key = -area if either else dmin
             if best is None or key < best[0]:
                 best = (key, m, area)
+    if either and nearest and cands:
+        d0 = min(c[0] for c in cands)
+        dm, area, m = max((c for c in cands if c[0] <= d0 + 0.5), key=lambda c: c[1])
+        best = (dm, m, area)
     if best is None:
         return "no closed " + ("patch" if either else "dark patch") + " within reach of the click"
     m = best[1]
@@ -762,6 +769,7 @@ class ModelReading:
     n_exit: int = 0
     cams_mm: float = float("nan")  # the two cameras' top-rim radii apart
     centre_xy: np.ndarray | None = None  # in the plane
+    normal_C: np.ndarray | None = None  # round 6: the face's normal, frame C
     bg_n: int = 0  # round 4: the frame's depth points inside the read circle ...
     bg_near: float = float("nan")  # ... the share of them 6 to 50 mm below the face ...
     bg_depth: float = float("nan")  # ... and their median depth below it (mm)
@@ -874,7 +882,7 @@ def stereo_paired(cand: np.ndarray, tol: float = PAIR_MM) -> np.ndarray:
     return ok
 
 
-def frame_plane_seed(img0, cam0, X: np.ndarray, click_C: np.ndarray, either: bool = False):
+def frame_plane_seed(img0, cam0, X: np.ndarray, click_C: np.ndarray, either: bool = False, nearest: bool = False):
     """The face's plane and the hole's seed in one frame from depth points ``X`` (frame C) round the click:
     ``(plane with its origin at the seed's centre, seed radius)``, or the reason there is none."""
     p1 = plane_from_points(X, click_C, lambda Y: np.linalg.norm(Y - click_C, axis=1) < PLANE_DISK_MM)
@@ -882,7 +890,7 @@ def frame_plane_seed(img0, cam0, X: np.ndarray, click_C: np.ndarray, either: boo
         return "no plane in the depth round the click"
     if p1.n @ (-p1.o) / np.linalg.norm(p1.o) < 0.3:
         return "the face is seen too steeply"
-    seed = find_seed(img0, cam0, p1, np.zeros(2), either=either)
+    seed = find_seed(img0, cam0, p1, np.zeros(2), either=either, nearest=nearest)
     if isinstance(seed, str):
         return seed
     c_s, r_s = seed
@@ -906,6 +914,7 @@ class Step3:
     stereo: bool = True  # the top rim only from steps both cameras put on the face's plane
     two_hyp: bool = True  # refuse a frame where two readings of the rim fit with diameters 0.2 mm apart
     centre_rule: bool = True  # refusals by the centres' scatter (combine_model)
+    seed_nearest: bool = False  # round 6: the patch nearest the click, not the largest
 
 
 STEP2 = Step3(False, False, False, False)
@@ -922,7 +931,7 @@ def read_frame_models(imgs, cams, X: np.ndarray, click_C: np.ndarray, t_list: li
     """One frame read with the model of the hole for each ``t`` of ``t_list`` (``None``: left free): plane and seed
     (:func:`frame_plane_seed`), the hidden-half circle as the start, both cameras' candidate steps, then
     :func:`fit_hole_model` once for each. The image work is done once."""
-    ps = frame_plane_seed(imgs[0], cams[0], X, click_C, either=cfg.either)
+    ps = frame_plane_seed(imgs[0], cams[0], X, click_C, either=cfg.either, nearest=cfg.seed_nearest)
     if isinstance(ps, str):
         return [ModelReading(False, ps) for _ in t_list]
     pl, r_s = ps
@@ -948,6 +957,7 @@ def read_frame_models(imgs, cams, X: np.ndarray, click_C: np.ndarray, t_list: li
             out.append(ModelReading(False, m))
             continue
         m.centre_C = pl.world(m.centre_xy[None])[0]
+        m.normal_C = pl.n
         m.bg_n, m.bg_near, m.bg_depth = background_stats(X if X_bg is None else X_bg, pl.o, pl.n, m.centre_C,
                                                          m.d / 2.0, depth=True)
         out.append(m)
@@ -992,6 +1002,10 @@ def combine_model(frames: list[ModelReading], T_wc: list[np.ndarray], centre_rul
     Cw = np.array([T[:3, :3] @ f.centre_C + T[:3, 3] for f, T in ok])
     c = np.median(Cw, axis=0)
     out["centre"] = c.tolist()
+    nw = [T[:3, :3] @ f.normal_C for f, T in ok if f.normal_C is not None]
+    if nw:
+        nn = np.median(np.array(nw), axis=0)
+        out["normal"] = (nn / np.linalg.norm(nn)).tolist()
     cs = 1.4826 * float(np.median(np.linalg.norm(Cw - c, axis=1)))
     out["centre_scatter"] = cs
     if cover < COVER_MIN_DEG:
@@ -1043,10 +1057,20 @@ def cal_dict(stereo) -> dict:
     return {k: np.asarray(getattr(stereo, k)).tolist() for k in ("K1", "D1", "K2", "D2", "R", "T", "R1", "R2", "P1", "P2")}
 
 
-def plate_scene(thickness: float, gap: float, floor: str = "dark", seed: int = 0):
+NEIGHBOUR_HOLES = {"n10a": (-40.0, 0.0, 5.0), "n6a": (-29.0, 0.0, 3.0), "n25b": (25.0, 0.0, 12.5), "n10b": (45.5, 0.0, 5.0)}
+NEIGHBOUR_PAIRS = (("n10a", "n6a"), ("n25b", "n10b"))  # each pair 3 mm rim to rim
+
+
+def plate_scene(thickness: float, gap: float, floor: str = "dark", seed: int = 0, layout: str = "plate"):
     """A study plate like the scorecard's hole plate (160 x 90 mm, holes Ø25, Ø10, Ø6, turned 15°), ``thickness``
     thick, ``gap`` above the floor, without the block. ``floor``: ``"dark"`` (the scorecard's, albedo 0.3) or
-    ``"bright"`` (albedo 0.85 with a coarse texture of contrast 0.3, brighter than the plate)."""
+    ``"bright"`` (albedo 0.85 with a coarse texture of contrast 0.3, brighter than the plate).
+
+    ``layout="neighbours"`` (round 6): holes in pairs 3 mm rim to rim (:data:`NEIGHBOUR_HOLES`): a Ø10 with a Ø6
+    beside it, a Ø25 with a Ø10 beside it. Each hole is clicked on its side facing its neighbour 0.75 mm outside its
+    rim (so 2.25 mm from the neighbour's), on its far side 1.5 mm outside, and each pair once midway on the bridge
+    (1.5 mm from both rims; that click may answer either hole: ``allowed``). Each hole's entry carries
+    ``click_kinds`` and ``allowed`` beside ``clicks``."""
     from ohs import geometry as G
     from ohs.sim.scene import Cylinder, HeightField, NoiseAlbedo, Rect, Scene, _table
     from tools import scorecard as S
@@ -1063,11 +1087,12 @@ def plate_scene(thickness: float, gap: float, floor: str = "dark", seed: int = 0
 
     t = float(thickness)
     px, py = S.HP_PX, S.HP_PY
-    holes = list(S.HP_HOLES.values())
+    hole_map = NEIGHBOUR_HOLES if layout == "neighbours" else S.HP_HOLES
+    holes = list(hole_map.values())
     prims = [_table(0.0, 800.0, fl, name="floor"),
              HeightField(T, flat(t), (-px, px, -py, py), (t, t), holes, alb, name="plate_top"),
              HeightField(T, flat(0.0), (-px, px, -py, py), (0.0, 0.0), holes, alb, name="plate_bottom")]
-    for k, (hx, hy, r) in S.HP_HOLES.items():
+    for k, (hx, hy, r) in hole_map.items():
         prims.append(Cylinder(T @ G.make_se3(np.eye(3), [hx, hy, t / 2]), r, t / 2, alb, name=f"wall_{k}", caps=False))
     Rx = np.column_stack([[0, 1.0, 0], [0, 0, 1.0], [1.0, 0, 0]])
     Ry = np.column_stack([[1.0, 0, 0], [0, 0, 1.0], [0, -1.0, 0]])
@@ -1075,17 +1100,38 @@ def plate_scene(thickness: float, gap: float, floor: str = "dark", seed: int = 0
     prims += [Rect(T @ G.make_se3(Ry, [0, y, 0]), (-px, px, 0, t), alb, name=f"side_y{y:+.0f}") for y in (py, -py)]
     target = (T @ np.array([-10.0, 0.0, t, 1.0]))[:3]
     holes_w = []
-    for k, (hx, hy, r) in S.HP_HOLES.items():
-        clicks = [(T @ np.array([hx + (r + 1.5) * math.cos(math.radians(a) + 0.3),
-                                 hy + (r + 1.5) * math.sin(math.radians(a) + 0.3), t, 1.0]))[:3].tolist()
-                  for a in (0.0, 120.0, 240.0)]
-        holes_w.append({"hole": k, "d_true": 2 * r, "centre_true": (T @ np.array([hx, hy, t, 1.0]))[:3].tolist(),
-                        "clicks": clicks, "t_true": t})
-    return Scene(prims, name=f"plate_t{t:g}_g{gap:g}_{floor}", target=target, radius=100.0), holes_w
+
+    def world(x, y):
+        return (T @ np.array([x, y, t, 1.0]))[:3].tolist()
+
+    if layout == "neighbours":
+        for a, b in NEIGHBOUR_PAIRS:
+            for k, other in ((a, b), (b, a)):
+                hx, hy, r = hole_map[k]
+                ox = hole_map[other][0]
+                sgn = 1.0 if ox > hx else -1.0
+                clicks = [world(hx + sgn * (r + 0.75), hy), world(hx - sgn * (r + 1.5), hy)]
+                kinds, allowed = ["facing", "far"], [[k], [k]]
+                if k == a:  # the pair's bridge click, kept with its first hole
+                    clicks.append(world(hx + sgn * (r + 1.5), hy))
+                    kinds.append("bridge")
+                    allowed.append([a, b])
+                holes_w.append({"hole": k, "d_true": 2 * r, "centre_true": world(hx, hy), "clicks": clicks,
+                                "click_kinds": kinds, "allowed": allowed, "t_true": t})
+    else:
+        for k, (hx, hy, r) in hole_map.items():
+            clicks = [world(hx + (r + 1.5) * math.cos(math.radians(a) + 0.3), hy + (r + 1.5) * math.sin(math.radians(a) + 0.3))
+                      for a in (0.0, 120.0, 240.0)]
+            holes_w.append({"hole": k, "d_true": 2 * r, "centre_true": world(hx, hy), "clicks": clicks, "t_true": t})
+    name = f"plate_t{t:g}_g{gap:g}_{floor}" + ("_neighbours" if layout == "neighbours" else "")
+    return Scene(prims, name=name, target=target, radius=100.0, meta={"plate_T": T.tolist()}), holes_w
 
 
 STUDY_SCENES = {"t1-g10": (1.0, 10.0, "dark"), "t1-g120": (1.0, 120.0, "dark"), "t5-g10": (5.0, 10.0, "dark"),
                 "t5-g120": (5.0, 120.0, "dark"), "t3-g120-bright": (3.0, 120.0, "bright")}
+# round 6's fresh scenes (seeds 3 to 5): a 3 mm plate near a floor, and the plate with neighbouring holes
+STUDY_SCENES6 = {"t3-g10": (3.0, 10.0, "dark", "plate"), "nb-g120": (3.0, 120.0, "dark", "neighbours"),
+                 "nb-g10": (3.0, 10.0, "dark", "neighbours")}
 
 
 def _renderer(scene, rp_meta: dict, dots: bool, seed: int):
@@ -1144,11 +1190,12 @@ def make_study_scene(key: str, seed: int, out: Path, rp_meta: dict) -> Path:
     from ohs.vision.rectify import Rectifier
     from ohs.app.pipeline import default_depth_params
 
-    t, gap, floor = STUDY_SCENES[key]
+    spec = STUDY_SCENES[key] if key in STUDY_SCENES else STUDY_SCENES6[key]
+    t, gap, floor = spec[:3]
     d = out / f"{key}-s{seed}"
     if (d / "done.json").is_file():
         return d
-    sc, holes = plate_scene(t, gap, floor, seed)
+    sc, holes = plate_scene(t, gap, floor, seed, spec[3] if len(spec) > 3 else "plate")
     calib = nominal_calibration((1280, 800), realistic=True)
     n, fps = 200, 10.0
     traj = HandheldTrajectory(target=sc.target, t0=100.0 + NOMINAL_TIME_OFFSET, duration=n / fps, seed=seed,
@@ -1877,6 +1924,72 @@ def _scorecard_sources4(cache: Path, work: Path, recs: list[str], poses: list[st
     return out
 
 
+# =========================================================================== round 6: the reading as it would ship
+PM_LIMIT_MM = 0.20  # refused above this ± (1 sigma; fixed from rounds 3 to 5's rows, NOTES.md round 6)
+CLICK_RIM_MM = 3.0  # the click must lie inside the read circle or within this of its rim
+ROUND6 = Step3(either=True, stereo=False, two_hyp=True, centre_rule=True, seed_nearest=True)
+
+
+def round6_refusal(r: dict, click: np.ndarray) -> str | None:
+    """Round 6's two refusals on a combined reading ``r`` (with ``d``, ``pm``, ``centre``, ``normal``) at the click
+    (both in the world): its own ± above :data:`PM_LIMIT_MM`, and the click outside the read circle by more than
+    :data:`CLICK_RIM_MM`. ``None`` when it stands."""
+    if r["pm"] > PM_LIMIT_MM:
+        return f"the frames do not agree well enough on this rim: ± {r['pm']:.2f} mm"
+    n = np.asarray(r.get("normal", [0.0, 0.0, 1.0]), float)
+    v = np.asarray(click, float) - np.asarray(r["centre"], float)
+    v -= (v @ n) * n
+    out = float(np.linalg.norm(v)) - r["d"] / 2.0
+    if out > CLICK_RIM_MM:
+        return f"the rim read in the images is {out:.0f} mm from the click: it is another hole's"
+    return None
+
+
+def run6(sources: list[tuple], out: Path, hold: Path | None, tag: str = "round6") -> None:
+    """Round 6: each ``(name, poses, dots, Source, gt, mesh path or None, mesh motion, kind)`` read at every click of
+    every hole with :data:`ROUND6`, its ± limit and its click test; with a mesh, the click is the mesh click (round
+    4), else the true one. One row a click, with the true hole each answered frame names (for judging only)."""
+    from scipy.spatial import cKDTree
+
+    for name, src, dots, S_, gt, mesh_path, M, _ in sources:
+        wait_hold(hold)
+        V = tree = None
+        if mesh_path is not None:
+            V = load_vertices(mesh_path, M)
+            tree = cKDTree(V)
+        for h in S_.holes:
+            kinds = h.get("click_kinds") or ["round"] * len(h["clicks"])
+            allowed = h.get("allowed") or [[h["hole"]]] * len(h["clicks"])
+            for k, click_t in enumerate(h["clicks"]):
+                t0 = time.perf_counter()
+                click_t = np.asarray(click_t, float)
+                click = mesh_click(S_, click_t, gt, tree, V) if V is not None else click_t
+                r, frames, names = read_click4(S_, click, ROUND6, gt, S_.holes)
+                rule = r.get("refused")
+                own = round6_refusal(r, click) if "d" in r and not rule else None
+                named = max(set(names), key=names.count) if names else None
+                row = {"tag": tag, "rec": name, "poses": src, "dots": dots, "hole": h["hole"], "click": k,
+                       "click_kind": kinds[k], "allowed": allowed[k], "d_true": h["d_true"],
+                       "path_check": S_.info.get("path_check"), "rule_refusal": rule, "round6_refusal": own,
+                       "named": named, "named_share": (names.count(named) / len(names)) if names else None,
+                       "s": round(time.perf_counter() - t0, 1), **{kk: vv for kk, vv in r.items() if kk != "refused"}}
+                if rule or own:
+                    row["refused"] = rule or own
+                if "d" in r:
+                    # the diameter is judged against the hole the frames read (a bridge click may read either)
+                    tru = next((x for x in S_.holes if x["hole"] == named), h)
+                    row["d_err"] = r["d"] - tru["d_true"]
+                    row["d_err_clicked"] = r["d"] - h["d_true"]
+                    row["centre_err"] = float(np.linalg.norm(np.asarray(r["centre"]) - np.asarray(tru["centre_true"])))
+                with out.open("a", encoding="utf-8") as f:
+                    f.write(json.dumps(row) + "\n")
+                print(f"[{tag}] {name} {src} dots {dots} {h['hole']} {kinds[k]}: "
+                      + (f"d_err {row['d_err']:+.3f} ±{r['pm']:.3f} named {named} " if "d_err" in row else "no d ")
+                      + (f"REFUSED: {row['refused']}" if "refused" in row else "answered") + f" [{row['s']} s]", flush=True)
+        S_.release()
+        del V, tree
+
+
 def main(argv: list[str] | None = None) -> None:
     from tools.scorecard import DEFAULT_CACHE
 
@@ -1956,7 +2069,26 @@ def main(argv: list[str] | None = None) -> None:
     y.add_argument("--hold", type=Path, default=None)
     y.add_argument("--tag", default="round4")
     y.add_argument("--round5", action="store_true", help="round 5: the mesh's triangles in the finder, all depth in the gate")
+    z = sub.add_parser("run6", help="round 6: the reading as it would ship (± limit, click test)")
+    z.add_argument("--cache", type=Path, default=DEFAULT_CACHE)
+    z.add_argument("--recs", nargs="*", default=RECS)
+    z.add_argument("--poses", nargs="*", default=["true", "tracked"])
+    z.add_argument("--dots", nargs="*", default=["on", "off"])
+    z.add_argument("--study", nargs="*", default=[], help="study scenes at true poses, read at the true click")
+    z.add_argument("--settings", default="app-default")
+    z.add_argument("--work", type=Path, required=True)
+    z.add_argument("--out", type=Path, required=True)
+    z.add_argument("--hold", type=Path, default=None)
     a = ap.parse_args(argv)
+    if a.cmd == "run6":
+        srcs = []
+        for dots in a.dots:
+            srcs += _scorecard_sources4(a.cache, a.work, a.recs, a.poses, dots, a.settings)
+            for key in a.study:
+                S_ = study_source(a.work / "study" / key, dots == "off")
+                srcs.append((key, "true", dots, S_, dict(S_.poses), None, None, "true"))
+        run6(srcs, a.out, a.hold)
+        return
     if a.cmd == "true-mesh":
         true_mesh(a.work, a.keys, a.hold)
         return
