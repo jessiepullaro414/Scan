@@ -85,7 +85,9 @@ The rules of `FEATURE_PLAN.md` and `MAINTENANCE_PLAN.md` hold. In short:
      reads them within 0.13 mm in simulation; not in the app.
   2. Thin standing walls (gap item 2). Tried: X3, X4, X4b, X4c (not adopted), X5 (fine walls,
      a choice per scan).
-  3. The length of long plain parts (gap item 7): X8 step 2 (tags as anchors), running.
+  3. The length of long plain parts (gap item 7): X8 steps 2 and 3 (tags as anchors): the
+     length is held within 0.06 % where the tags act (five of six scans), the rule is missed;
+     a setting, off.
   4. A merge that beats the better single scan (gap item 8): X7 measured it; nothing built.
      X18 (one model per scan) measured and dropped; X19 (a pose from tags, held) designed.
   E-D1 still holds for each: a change goes on by default only when it is better on every
@@ -816,7 +818,7 @@ and thin parts".
   - The rule's "at least the union" is close to what no single surface can reach; if the
     item is taken up again the owner may want to restate it.
 
-### [ ] X8. Large parts: measure the overall size first (M): step 1 measured, fails; step 2 (anchors) built, a setting, off: a near miss
+### [ ] X8. Large parts: measure the overall size first (M): step 1 measured, fails; step 2 (anchors) built, a setting, off: a near miss; step 3 (tags closer) fails
 - A 1.2 to 1.5 m plain panel with Ø10 holes at both ends, scanned in passes: the end-to-end
   distance, the bow, the slide between passes. Only if it fails: tags on the table as anchors
   in Straighten (`ohs/align/tags.py` exists).
@@ -851,10 +853,28 @@ and thin parts".
     0.2 % stays).
   - A scan without tags is unchanged, bit for bit. Make mesh takes about 76 s longer when the
     tags act.
-  - **Next (step 3):** the same three seeds with tags 150 mm apart along one side, so that two
-    are in view in most frames; judged by the same rule. With the owner: whether to switch the
-    setting on as it is (better on every scene that has tags, the same on every scene that has
-    none), before step 3.
+  - **Step 3 measured 2026-11-24: fails the rule; the setting stays off** (`VALIDATION.md`, "Tags
+  150 mm apart along one side"). Nine tags along the near side 150 mm apart and five across
+  each end, 19 in all; the same seeds and rule; nothing tuned.
+  - Seed 0 meets it (mesh -0.014 %, path -0.021 %, slide 0.59 mm RMS). Seed 1 misses on the
+    slide alone (+0.007 %, +0.007 %, 0.88 mm against 0.65).
+  - On seed 2 the never-worse check refused the tags (0.869 on one split against the limit
+    of 0.85), so the scan stayed as tracked: path -0.126 %, slide 2.35 mm. That scan started
+    nearly right, and the tags could not show a clear enough gain on the frames set aside.
+  - Where the tags act the path is within 0.021 % (0.27 mm over 1.3 m), better than step 2's
+    0.003 to 0.060 %. A row on one side still puts two spaced tags into only 28 to 30 % of
+    the keyframes: only the near pass sees it.
+  - **Open, in this order:** (1) the never-worse check on a scan that starts nearly right: it
+    judges by the tags' own error on frames set aside, where a small gain is refused and the
+    length is not looked at; measure what a limit of 0.90 to 1.0 does on all six tagged
+    scans and on scans where the tags are wrong. (2) The slide of 0.7 to 1.1 mm RMS that stays
+    on three of the five scans where the tags act. (3) The fit given the tags' known spacing
+    (a printed strip; X22): a distance term in `ohs/track/tag_anchors.py`, about 40 lines
+    and tests; it would also give the scale an outside reference.
+  - **With the owner:** whether to switch the setting on as it is. On five of six tagged
+    scans it brings the path from 0.18 to 0.47 % down to 0.003 to 0.060 %, on the sixth it
+    changes nothing, and a scan without tags is the same bit for bit; by the rule as
+    written it is a miss.
 - **Step 2 as it was planned: tags as anchors in Straighten.** A few AprilTags (20 to 30 mm) on the
   table along the part, or on the part, at most about 300 mm apart so that one frame (about
   470 mm along the panel) sees two neighbours.

@@ -51,6 +51,26 @@ def test_the_tags_lie_on_the_table_beside_the_panel_and_leave_the_untagged_scene
     assert sorted(on_panel.markers) == list(range(12)) and all(X[:, 2].min() > 10 for X in on_panel.markers.values())
 
 
+def test_step_3s_row_lies_along_the_near_side_150_mm_apart_and_keeps_the_ends():
+    sc = L.panel_scene(0, "row150")
+    places = L.TAG_LAYOUTS["row150"]
+    assert sorted(sc.markers) == list(range(19))
+    side = [q for q in places if abs(q[0]) <= L.HALF_L]
+    assert len(side) == 9 and all(y == -230.0 for _, y in side)  # one long side only: the near one
+    assert np.allclose(np.diff([x for x, _ in side]), 150.0) and side[0][0] == -600.0 and side[-1][0] == 600.0
+    assert places[9:] == L.TAG_LAYOUTS["tags"][10:]  # the same ends as step 2
+    for X in sc.markers.values():
+        assert np.allclose(X[:, 2], 0.0) and np.all((np.abs(X[:, 0]) > L.HALF_L + 5) | (np.abs(X[:, 1]) > L.HALF_W + 5))
+
+
+def test_the_share_of_frames_seeing_tags_spaced_along_the_part():
+    places = L.TAG_LAYOUTS["row150"]
+    det = {1: {0: None, 1: None}, 2: {0: None}, 3: {9: None, 10: None}, 4: {}, 6: {2: None, 3: None, 4: None}}
+    s = L.spaced_share(det, [1, 2, 3, 4, 5, 6], places)
+    # frame 3 sees two tags of one end: two tags, but not spaced along the panel
+    assert (s["one"], s["two"], s["spaced"]) == (4, 3, 2) and abs(s["share_spaced"] - 2 / 6) < 1e-12
+
+
 def test_the_path_reads_a_stretch_along_the_length_and_nothing_at_the_truth():
     sc = L.panel_scene(0)
     gt = _poses()

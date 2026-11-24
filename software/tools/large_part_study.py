@@ -118,6 +118,9 @@ TAG_LAYOUTS: dict[str, list[tuple[float, float]]] = {
     "oneside": [q for q in _SIDES if q[1] < 0] + _ENDS,
     "spaced600": [q for q in _SIDES if q[0] in (-600.0, 0.0, 600.0)] + _ENDS,
     "panel": [(x, y) for y in (-150.0, 0.0, 150.0) for x in (-450.0, -150.0, 150.0, 450.0)],
+    # step 3 (NOTES.md, fixed before rendering): the near long side only, 150 mm apart (two or three in view where that
+    # side is in view, so frames see tags spaced along the length), and the same ends as "tags"
+    "row150": [(x, -230.0) for x in np.arange(-600.0, 600.1, 150.0).tolist()] + _ENDS,
 }
 
 
@@ -1029,6 +1032,44 @@ def no_tags_check(work: Path, rec_name: str) -> dict:
     return out
 
 
+def spaced_share(det: dict[int, dict[int, Any]], frames: list[int], places: list[tuple[float, float]],
+                 min_dx: float = 100.0) -> dict:
+    """Of ``frames``, how many saw a tag, two or more tags, and two tags at least ``min_dx`` apart along the panel
+    (their layout x): only such a frame measures a length along the part between tags."""
+    one = two = spaced = 0
+    for fr in frames:
+        ids = [m for m in (det.get(fr) or {}) if 0 <= m < len(places)]
+        one += bool(ids)
+        two += len(ids) >= 2
+        xs = [places[m][0] for m in ids]
+        spaced += bool(xs) and (max(xs) - min(xs)) >= min_dx
+    n = max(len(frames), 1)
+    return {"keyframes": len(frames), "one": one, "two": two, "spaced": spaced, "min_dx_mm": min_dx,
+            "share_two": two / n, "share_spaced": spaced / n}
+
+
+def tag_spacing(work: Path, rec_name: str, run: str = "tracked-anchors-on") -> dict:
+    """Step 3: the tags each of Straighten's keyframes detects (the keyframes chosen from the run's tracked path, as
+    Straighten chooses them), and the share that see two tags spaced along the panel (:func:`spaced_share`). Light: it
+    reads the keyframes' images only."""
+    from ohs.io.recording import RecordingReader
+    from ohs.track.posegraph import StraightenParams, _as_rows, select_keyframes
+    from ohs.track.tag_anchors import detect_tag_views
+
+    rec = work / "recs" / rec_name
+    reader = RecordingReader(rec)
+    layout = json.loads((rec / "tags.json").read_text(encoding="utf-8"))["layout"]
+    rows = _as_rows(work / "runs" / rec_name / run / "track_trajectory.csv")  # as Straighten reads it
+    p = StraightenParams()
+    kf = [int(rows[k][0]) for k in select_keyframes(rows, p.kf_travel_mm, p.kf_rotation_deg, p.kf_max_gap_s, p.max_keyframes)]
+    det, _ = detect_tag_views(reader, reader.calibration(), kf, dataclasses_replace(p, tag_look_every=1))
+    out = spaced_share(det, kf, TAG_LAYOUTS[layout])
+    out["layout"] = layout
+    write_json(work / "runs" / rec_name / "spacing.json", out)
+    log(f"{rec_name}: {out}")
+    return out
+
+
 def dataclasses_replace(obj: Any, **kw: Any) -> Any:
     import dataclasses
 
@@ -1099,7 +1140,8 @@ def table(work: Path) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    ap.add_argument("what", choices=("budget", "render", "process", "judge", "table", "edgecheck", "measure", "notagcheck"))
+    ap.add_argument("what", choices=("budget", "render", "process", "judge", "table", "edgecheck", "measure", "notagcheck",
+                                     "spacing"))
     ap.add_argument("work", type=Path)
     ap.add_argument("args", nargs="*")
     ap.add_argument("--frames", type=int, default=None)
@@ -1130,6 +1172,8 @@ def main(argv: list[str] | None = None) -> int:
         measure_tags(a.work, a.args[0])
     elif a.what == "notagcheck":
         no_tags_check(a.work, a.args[0])
+    elif a.what == "spacing":
+        tag_spacing(a.work, a.args[0])
     elif a.what == "judge":
         judge(a.work, a.args[0])
     else:

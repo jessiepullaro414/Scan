@@ -5672,6 +5672,39 @@ than 300 mm. The Hole tool is not judged (step 1: the holes close up). The diagn
 
 **Next:** tags close enough along the part that two are in view in most frames (ENGINE_PLAN X8).
 
+### Tags 150 mm apart along one side (X8 step 3, 2026-11-24): fails the rule
+
+The same panel, sweep, seeds and rule as step 2. Layout, fixed before any render: nine 25 mm tags along the near
+long side only, 150 mm apart, and step 2's five across each short end (every pass sees the ends at its turns),
+19 in all; none on the far side. Runs in `D:\OpenHandScan-work\scratch\x8\runs\s0-row150` to `s2-row150`
+(`judge.json`, `spacing.json`). Nothing was tuned.
+
+| | seed 0 | seed 1 | seed 2 |
+|---|---|---|---|
+| the tags | acted, 18 of 19 used | acted, 18 of 19 used | **refused by the never-worse check** |
+| the mesh's length against true poses, with tags (without) | -0.014 % (-0.198) | +0.007 % (+0.309) | +0.006 % (+0.006) |
+| the camera path end to end, with tags (without) | -0.021 % (-0.472) | +0.007 % (+0.398) | **-0.126 %** (the same) |
+| the passes' slide, worst pair, RMS, with tags (without) | 0.59 mm (7.09) | **0.88 mm** (9.18) | **2.35 mm** (the same) |
+| the slide of pairs 1-2 / 2-3 / 1-3, with tags | 0.53 / 0.59 / 0.34 | 0.64 / 0.88 / 0.47 | 2.35 / 1.33 / 1.88 |
+| keyframes that see two tags at least 100 mm apart along the part | 35 of 118 | 33 of 117 | 35 of 117 |
+| the check on frames set aside, after / before (limit 0.85) | 0.70, 0.67 | 0.57, 0.44 | 0.869, 0.826 |
+| Make mesh, without and with tags | 166 and 249 s | 227 and 231 s | 164 and 168 s |
+| the true-pose reading repeated | -0.10 mm | +0.07 mm | +0.12 mm |
+
+- **Seed 0 meets the rule.** Seed 1 misses on the slide alone: 0.88 mm RMS against 0.65. **Seed 2 fails:** the
+  check on frames set aside came out 0.869 on one of its two splits, above the limit of 0.85, so the tags changed
+  nothing and the scan stayed as tracked. That scan started nearly right (the tags' own error on the frames set
+  aside 0.51 to 0.56 mm before), so the tags could not show a clear enough gain; its path is still 0.126 % short
+  and its passes 2.35 mm apart.
+- **Where the tags act, the length holds:** the path within 0.021 % (0.27 mm over 1.3 m) on both seeds, against
+  0.003 to 0.060 % with step 2's tags 300 mm apart on both sides.
+- A row on one side does not put two spaced tags into most frames: 28 to 30 % of the keyframes, as in step 2,
+  because only the near pass sees the row.
+- The setting `[process] straighten_tags` stays off. Without tags nothing changes (Straighten's code is step 2's).
+
+Not run: the fit given the known spacing of the tags (it needs a distance term in the engine's fit); rows on both
+sides 150 mm apart; tags on the panel; 20 mm tags; the check's limit on scans that start nearly right.
+
 ## Thin walls: the raw reading, and where the error is made (ENGINE_PLAN X16 and X17, 2026-11-23)
 
 Thin standing walls read 0.5 to 1.3 mm too thick (decision E-D3, item 2). Two questions were measured: can a
