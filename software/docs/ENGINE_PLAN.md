@@ -1000,6 +1000,33 @@ summary (no code). Taken as an opinion and weighed against the measurements:
   point about the lenses' relative turn does. Its first hole look with dots on and off has since
   been done in the simulator (X15's first test): the dots do disturb the rim.
 
+- **Third round, on the first results** (the same evening). Weighed, and it changes the order of
+  work on thin walls:
+  - **Thin walls: the cause is not yet shown.** Our reading was that the loop between tracking
+    and its evolving map amplifies a small depth bias (exact depth: the sides 0.6 mm too close;
+    the matcher's depth: 0.55 mm too far). The reviewer's simpler account fits the same numbers
+    with no feedback: a shared bias of a few hundredths of a millimetre divided by a weak hold
+    on the across-wall direction. The standard error measured for that direction (0.035 to
+    0.07 mm) is no bound on it. So before any work on the tracking map: (1) a ladder of
+    references to track against (the exact scene; a frozen TSDF built at true poses; the
+    incremental TSDF integrated at true poses; today's loop), first looking at what the tracker
+    sees of each; (2) paired biases put into the depth, separation against bias, slope and
+    intercept on each rung; (3) the frames' poses refined together on the raw points, with no
+    TSDF, after profiling that objective round the truth. X3 refined against the finished mesh,
+    which already holds the error; this does not. A two-sided tracking map comes after these,
+    and must keep each observation's side from the first one on.
+  - **Holes:** with the dots on, score candidate edges by where they lie in depth in both
+    cameras (plate and floor differ by 6.6 px of disparity at 10 mm), not by strength; try a
+    median over frames in the face's plane; an edge model with blur and the pixel's area. For
+    frames without dots on the real scanner: a diffuse light switched with the cameras and a
+    short burst when the user asks for a hole, 3 to 5 good pairs; at 100 mm/s and 30 degrees a
+    second, smear under 0.3 px needs an exposure or pulse of about 0.45 ms. A hardware point,
+    to weigh when the scanner exists. A hole's diameter does not depend on the frame's pose, so
+    reading well on a scan that lost tracking says nothing about the hole's position.
+  - **Merge:** separate the two things the per-scan merge changes (each scan the same say;
+    opposite faces kept apart) with a two-by-two at the same poses, and report case by case,
+    signed, not only counts.
+
 ## Small things found by the review
 
 - [x] "Known limitations of the pipeline" in `VALIDATION.md` was out of date: it said the
