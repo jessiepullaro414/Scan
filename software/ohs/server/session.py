@@ -200,7 +200,8 @@ class ScanSession:
                  hub: Any, use_imu: bool, use_lasers: bool, source_name: str = "camera", scan_name: str = "",
                  meta: dict | None = None, emitters_on: Callable[[], None] | None = None,
                  emitters_off: Callable[[], None] | None = None, notify: Callable[[str, str], None] | None = None,
-                 has_emitters: bool = False, guide: bool = False) -> None:
+                 has_emitters: bool = False, guide: bool = False,
+                 on_record_stopped: Callable[[str, str], None] | None = None) -> None:
         from ohs.app.live import LatestSlot, PipelineProcessor
 
         self.calib = calib
@@ -219,6 +220,10 @@ class ScanSession:
         self._emitters_on = emitters_on or (lambda: None)
         self._emitters_off = emitters_off or (lambda: None)
         self._notify = notify or (lambda level, msg: None)
+        # called once (scan id, the recorder's sentence) when the recorder stops at its budget; it must only post
+        # the request (it runs in a device thread): the studio stops the scan in its own thread
+        self._on_record_stopped = on_record_stopped
+        self._record_stop_told = False
         self._has_emitters = bool(has_emitters)
         self.params = PipelineProcessor(calib, cfg, mode, use_imu=self.use_imu, use_lasers=self.use_lasers).params()
         self.depth_range = (float(cfg.live.depth_min_mm), float(cfg.live.depth_max_mm))
@@ -496,15 +501,23 @@ class ScanSession:
 
     # ------------------------------------------------------------------ inputs (device threads)
     def on_frame(self, frame: Any, t_recv: float) -> None:
+        tell = None
         with self._lock:
             self._t_last_frame = float(frame.t_host)
             recorded = self._state == "scanning" and self._recorder is not None
+            if recorded and not self._recorder.put_frame(frame):  # not taken: the recorder stopped at its budget
+                recorded = False
+                why = getattr(self._recorder, "stopped", None)
+                if why and not self._record_stop_told:
+                    self._record_stop_told = True
+                    tell = why
             if recorded:
-                self._recorder.put_frame(frame)
                 self.n_recorded += 1
                 if self._t_first_rec is None:
                     self._t_first_rec = float(frame.t_host)
                 self._t_last_rec = float(frame.t_host)
+        if tell is not None and self._on_record_stopped is not None:
+            safe_call("asking to stop the scan", lambda: self._on_record_stopped(self.scan_id, tell))
         if self._state in ("starting", "scanning", "paused"):
             self._slot.put((frame, float(t_recv), recorded))
 

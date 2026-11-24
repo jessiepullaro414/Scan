@@ -4024,6 +4024,16 @@ the user after Follow the camera today; Straighten's and Make mesh's stage cards
 finer" and a merge do not pass it on yet (open). Seen on the way and not looked into: the processor path's
 per-vertex sigmas differ between two runs of the same code on a handful of 80,000 vertices, by about 1e-6 mm.
 
+**The recorder's stop in the app (R2-8, second part).** The server ignored the recorder's refusal: with the
+budget set to 4 frames and a slow disk the scan went on "scanning" and counted 903 frames as recorded when 21
+had been kept (the guard test). Now a scan whose recorder stops at its budget stops by itself: the user gets
+the recorder's sentence at once as a notice (sent as an error, the only level the app shows as a toast while
+scanning), the status message carries `record_stopped`, and the scan is saved through the normal stop with
+the frames written and that sentence as its error. Frames refused after the stop are no longer counted as
+recorded. A normal scan is unchanged. Open: the IMU calibration step ignores its recorder's stop and a write
+error alike (it would solve from the shorter recording without a word); a settings key for the budget. Not
+seen in the app's window; no real slow disk.
+
 ## The no-GPU plate slide, and a check of the camera path (ENGINE_PLAN X0a, 2026-11-20)
 
 Without a GPU the 0.5 mm plates slide in their first frames. On plate seed 0 the tracker's steps

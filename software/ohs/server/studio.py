@@ -267,6 +267,8 @@ class Studio:
                    "extra": {"laser_points_frame": st.get("laser_points_frame", 0), "latency_ms": st.get("latency_ms"),
                              "process_ms": st.get("process_ms"), "dropped_frames": st.get("dropped_frames", 0),
                              "record_backlog": int(rec.backlog) if rec is not None else 0,
+                             # the recorder stopped at its budget (its sentence), until the scan has stopped
+                             "record_stopped": getattr(rec, "stopped", None) if rec is not None else None,
                              "gpu_fallback": st.get("gpu_fallback")}}
         else:
             reason = "Not scanning" if dev.connected else ("Connecting..." if dev.busy else "No device connected")
@@ -275,7 +277,8 @@ class Studio:
             last = self.last_session
             model = last.live_stats().get("model") if last is not None else None
             out = {"distance_mm": idle.get("distance_mm"), "pipeline": 0.0, "laser_points": 0,
-                   "model": model or {"vertices": 0, "triangles": 0}, "extra": {"record_backlog": 0, "gpu_fallback": None}}
+                   "model": model or {"vertices": 0, "triangles": 0},
+                   "extra": {"record_backlog": 0, "record_stopped": None, "gpu_fallback": None}}
         msg = {"type": "status", "t": round(time.time(), 3), "session": self.session_state(), "tracking": tracking,
                "distance_mm": out["distance_mm"], "fps": {"camera": dev.camera_fps(), "pipeline": out["pipeline"]},
                "laser_points": out["laser_points"], "model": out["model"], "emitters": dev.emitter_levels()}
@@ -330,6 +333,8 @@ class Studio:
                     self._handle_lost(kind, msg)
                 elif ev == "trigger":
                     self._handle_trigger(kind)
+                elif ev == "record_stopped":
+                    self._handle_record_stopped(kind, msg)
             except ApiError as e:
                 self.notify("warn", str(e))  # its detail and its hint
             except Exception:  # never let the event thread die
@@ -351,6 +356,19 @@ class Studio:
                         " Connect again (or replay it in a loop) to go on.")
         else:
             self.notify("error", f"{sentence(message)}{tail}")  # no "Scanner problem:" title (UX_PLAN R14)
+
+    def _handle_record_stopped(self, scan_id: str, why: str) -> None:
+        """The scan's recorder stopped at its budget (the disk could not keep up; ``ohs.app.live.Recorder``):
+        the user is told at once, in the recorder's own sentence (level error: the app shows errors as a
+        toast), the status says it once more (``record_stopped``), and the scan stops through the normal
+        stop path, saved with the frames that were written. Nothing happens if that scan has already ended."""
+        with self._lock:
+            s = self.session
+            if s is None or not s.active or s.scan_id != scan_id:
+                return
+            self.notify("error", why)
+            safe_call("publishing the status", lambda: self.hub.publish_json(self.status_message()))
+            self._stop_scan_locked(None)
 
     def _handle_trigger(self, kind: str) -> None:
         if self.calibration.active:
@@ -493,7 +511,8 @@ class Studio:
                                   scan_name=scan["name"], cfg=self.cfg, hub=self.hub, use_imu=use_imu,
                                   use_lasers=bool(calib.lasers), source_name=dev.source_name(), meta=meta,
                                   emitters_on=lambda: dev.scan_emitters_on(mode), emitters_off=dev.emitters_off,
-                                  notify=self.notify, has_emitters=dev.has_pico)
+                                  notify=self.notify, has_emitters=dev.has_pico,
+                                  on_record_stopped=lambda sid, why: self._events.put(("record_stopped", sid, why)))
             try:
                 session.start()
             except BaseException:
