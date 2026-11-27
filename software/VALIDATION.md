@@ -4095,6 +4095,15 @@ Settings page's Advanced part lists "Most memory waiting for the disk 1024 MB" a
 the disk 20 s" under Live preview. Not done: no scan was recorded with a changed budget in the app (the
 server test starts one on the simulator and reads its recorder's limits); no real slow disk.
 
+**The whole suite and the exe after both (commit ca5a97e, 2026-11-27).** The whole test suite on a frozen copy
+of ca5a97e, which holds both changes above: 2496 passed, 7 skipped with the graphics card (43 min) and 2411
+passed, 92 skipped on the processor (40 min); no failure, no driver timeout (the count of the driver's fault
+reports was 5 before and after). The exe rebuilt from the same commit is 527 MB, starts in 2 s and serves the
+page; it aligns the two simulated bracket scans as before (99 % of the smaller scan within 1 mm, typically
+0.12 mm, 9 of 9 starting guesses agree); its wall-thickness readings are the same as Python's on 4 of 4
+clicks and its hole readings on 12 of 12 (nine read, three refused, as in Python). Not done in the exe: a
+recording with a changed budget, a matcher fallback, Straighten with the tags on.
+
 **A full mesh model in a merge and in the fine-walls step (R2-5, second part).** A merge now saves its model's
 `mesh_capacity` and warns once, naming the scan and the frame ("The mesh model ran out of room after frame 3
 of "Front": surface seen after that was not added ..."); the warning reaches the merge's result and the
