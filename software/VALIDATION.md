@@ -6887,8 +6887,17 @@ Follow the camera said so on the Process page; Straighten and Build the surface,
   after frame 7: ... (1,200 of 6,200 blocks of surface left out; the model holds 5,000 blocks, 60 MB). ..." under it.
   Found there and mended: the result page said that sentence a second time under "Notes on making the mesh"; it says
   it once.
-- **Not done:** no real pool was filled (in the tests and in the app the status is replaced); the whole suite was not
-  run on this change and the exe was not rebuilt; while a mesh is being made again the progress panel shows the
+- **Whole suite on the commit (b709d03, a frozen copy, 2026-11-27):** 2459 passed, 7 skipped with the graphics card
+  (51 min 50 s); 2374 passed, 92 skipped on the processor (47 min 55 s): the 10 new tests on each path, nothing else
+  changed in the counts. No graphics driver timeout.
+- **The exe, rebuilt from b709d03 (527 MB):** it starts in 2 s and serves the page; the alignment of the two bracket
+  scans is as before (99 % within 1 mm, typically 0.12 mm, 9 of 9 guesses agree; the hold block is there); the
+  process state of a scan saved before reads `warnings: []` under Follow the camera, Straighten and Build the
+  surface; the wall-thickness route gives the same four readings as Python and the hole-images route the same
+  twelve (nine read, three refused with the same words). No stage warning was raised in the exe: nothing there
+  fills a pool.
+- **Not done:** no real pool was filled (in the tests and in the app the status is replaced); while a mesh is being
+  made again the progress panel shows the
   stages' summaries, not their warnings; when Straighten fuses twice (loops, then crossings) only the second fuse's
   warnings are shown, since its mesh replaces the first; a skipped or failed run still keeps other fields of the run
   before (only `warnings` is cleared at the start).
