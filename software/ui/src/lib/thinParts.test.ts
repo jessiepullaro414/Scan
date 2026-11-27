@@ -51,6 +51,13 @@ check(!!did && did.acted && did.line.startsWith("The thin walls were made finer"
 const not = fineWallsNote(withFine({ chosen: true, acted: false, why: "no_thin_walls", share: null, regions: null, seconds: 1.2, kept_mb: 914, line: "No thin walls were found." }));
 check(!!not && !not.acted && not.action === null && not.line === "No thin walls were found.", "it did not act: why, in one line, no action");
 check(fineWallsNote(withFine({ chosen: true, acted: false, why: "disk", share: null, regions: null, seconds: null, kept_mb: null, line: "" })) === null, "no line: nothing to show");
+// ENGINE_PLAN R2-5: the finer model ran out of room: said under the line; none (or an older server): nothing more
+check(did!.warnings.length === 0 && not!.warnings.length === 0, "no warnings from an older server: none shown");
+const room = "The finer model for the thin walls ran out of room after frame 7: finer surface seen after that was not added";
+const full = fineWallsNote(
+  withFine({ chosen: true, acted: true, why: null, share: 0.028, regions: 3, seconds: 6.1, kept_mb: 914, line: "The thin walls were made finer.", action: "Make the mesh again without this", warnings: [room, "", "a GPU fell back"] }),
+);
+check(!!full && full.warnings.length === 2 && full.warnings[0] === `${room}.` && full.warnings[1] === "A graphics card fell back.", "its warnings, as sentences in the app's words");
 
 // a time range whose ends read the same says one number, as the engine (thin_parts._minutes_range)
 const short = demoThinPartsHint(8.8, 250_000, 1, false, 117).words!.fine!.cost[0];

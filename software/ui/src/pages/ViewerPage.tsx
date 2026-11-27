@@ -152,7 +152,7 @@ type Rec = Record<string, unknown>;
 const obj = (v: unknown): Rec | null => (v && typeof v === "object" && !Array.isArray(v) ? (v as Rec) : null);
 const num = (v: unknown): number | null => (typeof v === "number" && Number.isFinite(v) ? v : null);
 
-function ReportSummary({ report, merged, made }: { report: Rec; merged: boolean; made?: MadeInfo | null }) {
+function ReportSummary({ report, merged, made, said }: { report: Rec; merged: boolean; made?: MadeInfo | null; said?: string[] }) {
   // UX_PLAN R17: the time the whole Make mesh took (`ProcessState.made`), else the last stage's, named as such
   const took = processingTime(made, num(report.wall_time_s));
   const frames = obj(report.frames);
@@ -170,7 +170,9 @@ function ReportSummary({ report, merged, made }: { report: Rec; merged: boolean;
   // ENGINE_PLAN X0a: the camera path's warning (nothing for a scan processed before the check, or when it held)
   // UX_PLAN R1: only the path's own sentence goes under that title; the report's other notes (a merge's: what it left
   // out) under their own
-  const { path: pathWarnings, other: notes } = splitWarnings(report);
+  // ENGINE_PLAN R2-5: a sentence the panel says already above (`said`: the thin walls' note's own) is not said twice
+  const { path: pathWarnings, other } = splitWarnings(report);
+  const notes = said?.length ? other.filter((w) => !said.includes(w)) : other;
   return (
     <div className="space-y-4">
       {pathWarnings.length ? (
@@ -1510,7 +1512,7 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
               </div>
             ) : null}
             {report ? (
-              <ReportSummary report={report} merged={!!scan?.merged_from?.length} made={made} />
+              <ReportSummary report={report} merged={!!scan?.merged_from?.length} made={made} said={fineNote?.warnings} />
             ) : hasResult ? (
               <div className="text-sm text-muted">No processing report for this result.</div>
             ) : (

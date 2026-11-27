@@ -1487,14 +1487,17 @@ guard test seen failing first:
   incomplete rotation. Mended 2026-11-24: with any uncovered interval since the last good
   pose the frame recovers as one without a gyro and says so (2.4 degrees and 6.9 mm off
   before, 0.04 degrees and 0.3 mm now, on the box scene).
-- [ ] **R2-5 (F5): when the mesh model's brick pool is full, new surface is not fused and the
+- [x] **R2-5 (F5): when the mesh model's brick pool is full, new surface is not fused and the
   saved result does not say so** (`recon_tsdf.py` logs once). The thin-parts rule's spirit:
   nothing may go missing in silence. Partly mended 2026-11-24: the model counts what it
   refused and the saved result says it (a block and a warning; shown after Follow the
   camera). A merge says it too, and the fine-walls model returns its
-  status (2026-11-26). **Open:** Straighten's and Make mesh's stage results pass no
-  warnings on (`_stage_end` in `ohs/server/processing.py`), and the fine-walls stage does
-  not turn its model's status into a warning yet; `APP_API.md` gets the block then.
+  status (2026-11-26). Closed 2026-11-27: Straighten, Build the surface and the
+  thin-walls step show their own warnings (`stages.*.warnings`); the thin walls' finer
+  model has a sentence of its own, carried into the base's report and the scan's summary;
+  a stage's own warnings are told by where they came from, not by their words;
+  `APP_API.md` has the block (`VALIDATION.md`, "Every stage says what its own mesh model
+  left out"). Not done: no real pool was filled (its status is replaced in the tests).
 - [x] **R2-6 (F6): a failed frame write still gets its row in the recording's index, and
   `meta.json` is replaced in place** (`ohs/io/recording.py`): a recording reopened after a
   failed write lists a frame it cannot read; a write cut short leaves metadata that does

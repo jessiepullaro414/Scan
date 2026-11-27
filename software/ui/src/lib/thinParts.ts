@@ -9,6 +9,7 @@
  * finer" (Make mesh again with the scan's choice on); after such a mesh, `fineWallsNote` is the line in the hint's place.
  */
 import type { FineWallsOffer, MadeInfo, ThinPartsHint } from "../api/types";
+import { scanWarnings } from "./pathWarning.ts";
 
 export const THIN_PRESET_ID = "thin-sheet-small-parts";
 export const FINE_ACTION = "Make only the thin walls finer";
@@ -28,11 +29,19 @@ export function hintChoices(h: ThinPartsHint): HintChoice[] {
 
 /** After a Make mesh with "Make only the thin walls finer" on (`made.fine_walls`): the note the page shows in the
  * hint's place, the engine's line and, only when it acted, its one action ("Make the mesh again without this":
- * `POST .../process {fine_walls: false}`). Null when the scan did not choose it, or there is no line. */
-export function fineWallsNote(made: MadeInfo | null | undefined): { acted: boolean; line: string; action: string | null } | null {
+ * `POST .../process {fine_walls: false}`), and its warnings (ENGINE_PLAN R2-5: its finer model ran out of room; [] from
+ * an older server). Null when the scan did not choose it, or there is no line. */
+export function fineWallsNote(
+  made: MadeInfo | null | undefined,
+): { acted: boolean; line: string; action: string | null; warnings: string[] } | null {
   const f = made?.fine_walls;
   if (!f || !f.line) return null;
-  return { acted: !!f.acted, line: f.line, action: f.acted ? (f.action ?? "Make the mesh again without this") : null };
+  return {
+    acted: !!f.acted,
+    line: f.line,
+    action: f.acted ? (f.action ?? "Make the mesh again without this") : null,
+    warnings: scanWarnings(f),
+  };
 }
 
 /** The hint to show, or null: nothing found, made fine already, put away, or an engine without it. */

@@ -848,6 +848,9 @@ export type FineWallsMade = {
   line: string;
   /** Only when it acted: the action's words ("Make the mesh again without this"). */
   action?: string;
+  /** ENGINE_PLAN R2-5: the finer model for the thin walls ran out of room (in the app's words); absent from an older
+   * server: as []. */
+  warnings?: string[];
 };
 /** The hint's first choice, "Make only the thin walls finer" (`ThinPartsHint.words.fine`). */
 export type FineWallsOffer = { action: string; intro: string; gain: string[]; cost: string[]; disk_mb: number };
@@ -892,8 +895,15 @@ export type StraightenStage = StageInfo & {
   /** How many AprilTags held the scan (ENGINE_PLAN X8 step 2); null when the tags did not move it. An older engine
    * does not send it: as null. */
   tags?: number | null;
+  /** What its own fuse warned (ENGINE_PLAN R2-5: the mesh model ran out of room...), not the camera path's warning
+   * (under "Follow the camera") nor the laser crossings' (in `summary`); absent from an older server: as []. */
+  warnings?: string[];
 };
-export type FuseStage = StageInfo & { voxel_mm: number | null };
+export type FuseStage = StageInfo & {
+  voxel_mm: number | null;
+  /** What its own fuse warned (ENGINE_PLAN R2-5), not the camera path's warning; absent from an older server: as []. */
+  warnings?: string[];
+};
 /** "Refine from the images" (a trial build): the base stage's mesh measured against the recording's frames. */
 export type SpacetimeStage = StageInfo & {
   source: BaseStageId | null; // the stage whose mesh was refined
@@ -922,6 +932,8 @@ export type FineWallsStage = StageInfo & {
   share_pct: number | null; // share of the surface made finer, %
   regions: number | null; // the wall regions found
   kept_mb: number | null; // the kept depth on disk while it ran, MB
+  /** ENGINE_PLAN R2-5: the finer model for the thin walls ran out of room; absent from an older server: as []. */
+  warnings?: string[];
 };
 
 export type ProcessState = {

@@ -6852,6 +6852,47 @@ field, a block of words and two buttons.
   scans with the hold were tried in the demo and one server test (two scans through `align_all`), not with three real
   scans; simulated scans only.
 
+## Every stage says what its own mesh model left out (ENGINE_PLAN R2-5, 2026-11-27)
+
+The last open part of "nothing goes missing in silence": when a mesh model's pool is full, new surface is not added.
+Follow the camera said so on the Process page; Straighten and Build the surface, which fuse again, did not, and
+"Make only the thin walls finer" ignored its finer model's status. No scan result changes: this adds words.
+
+- **What it does.** `stages.straighten.warnings`, `stages.fuse.warnings` and `stages.fine_walls.warnings` (and
+  `made.fine_walls.warnings`) hold the stage's own sentences; `[]` when there are none, and a run starts with `[]`. The
+  Process page shows them under the stage, in the quiet style the pool's sentence already has under Follow the
+  camera. The thin walls' step has a sentence of its own ("The finer model for the thin walls ran out of room after
+  frame N: ... The thin walls it did not reach keep the surface Make mesh made, at the mesh's own detail; nothing was
+  removed."), shown in its note on the result page and carried into the base's report and the scan's summary,
+  whether or not its mesh became the base.
+- **Own, by where it came from.** The camera path's warning, which every later stage's report carries, shows under
+  Follow the camera only; Straighten's laser-crossings sentence stays at the end of its summary. The first version
+  told a stage's own warnings from the track's by their words, which hid a fuse's warning when its pool filled
+  exactly as the track's had (the same frame and counts: Build the surface at the same poses and mesh detail). They
+  are now read from the fuse's report before the track's are carried in.
+- **Tests:** 10 in `tests/test_server_stage_warnings.py`, through the real server with the pool's status, the path's
+  check, the laser crossings and the thin walls' step replaced by ones that warn (a small recording cannot fill a
+  pool). 8 were seen failing against the code before the change (`KeyError: 'warnings'`); the one for the identical
+  sentence was seen failing against the first version; the sentence test passes either way (the mesh model's
+  sentence is unchanged, word for word). With the neighbouring files (fine walls, path warning, pool full, merge
+  capacity, straighten tags, the stages, Make mesh from the images, presets): 83 passed, 1 skipped with the graphics
+  card; 179 passed, 5 skipped on the processor (with the error-words file, 100 tests). No graphics driver timeout.
+  Lint clean. UI: typecheck, the 87 tests, build.
+- **Seen in the running app (2026-11-27, the working tree's server on the processor path, the same replacements as
+  the tests):** scan "Stage warnings": under Follow the camera the path's warning and "The mesh model ran out of room
+  after frame 6: surface seen after that was not added (40 of 1,040 blocks of surface left out; the model holds 1,000
+  blocks, 12 MB). The mesh is incomplete there. ..."; under Straighten that sentence once, then its summary ending
+  with the crossings' sentence; under Build the surface that sentence. Scan "Thin walls full": the note "The thin
+  walls were made finer: 3.0 % of the surface on 2 walls ..." with "The finer model for the thin walls ran out of room
+  after frame 7: ... (1,200 of 6,200 blocks of surface left out; the model holds 5,000 blocks, 60 MB). ..." under it.
+  Found there and mended: the result page said that sentence a second time under "Notes on making the mesh"; it says
+  it once.
+- **Not done:** no real pool was filled (in the tests and in the app the status is replaced); the whole suite was not
+  run on this change and the exe was not rebuilt; while a mesh is being made again the progress panel shows the
+  stages' summaries, not their warnings; when Straighten fuses twice (loops, then crossings) only the second fuse's
+  warnings are shown, since its mesh replaces the first; a skipped or failed run still keeps other fields of the run
+  before (only `warnings` is cleared at the start).
+
 ## What the metrics mean
 
 - **Stereo errors** compare the estimated raw intrinsics/extrinsics (`K1`, `K2`, `R`, `T`) with

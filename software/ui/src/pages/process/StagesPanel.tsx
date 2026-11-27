@@ -168,6 +168,32 @@ function StageCard({
   );
 }
 
+/**
+ * A stage's warnings (`stage.warnings`, through `splitWarnings`): the camera path's in the warning style with its title
+ * (ENGINE_PLAN X0a: the path jumped where no hand moves), every other note quietly, without a title (UX_PLAN R1; the
+ * mesh model that ran out of room, ENGINE_PLAN R2-5). Each stage sends its own only: the path's comes with "Follow the
+ * camera", not again under the stages built on that path. It warns only.
+ */
+function StageNotes({ said }: { said: { path: string[]; other: string[] } }) {
+  return (
+    <>
+      {said.path.map((w) => (
+        <p key={w} className="flex gap-1.5 rounded-md border border-warn/30 bg-warn-soft px-2 py-1.5 text-xs leading-5 text-fg" role="note">
+          <TriangleExclamationPoint size={13} className="mt-[3px] shrink-0 text-warn" aria-hidden />
+          <span>
+            <b className="font-semibold">{PATH_WARNING_TITLE}.</b> {w}
+          </span>
+        </p>
+      ))}
+      {said.other.map((w) => (
+        <p key={w} className="text-xs leading-5 text-muted" role="note">
+          {w}
+        </p>
+      ))}
+    </>
+  );
+}
+
 const ROW_BADGE: Record<MakingRowState, { label: string; tone: BadgeTone }> = {
   done: { label: "Done", tone: "ok" },
   running: { label: "Running", tone: "accent" },
@@ -223,6 +249,13 @@ export function StagesPanel({ pid, sid, state, busy, scan }: { pid: string; sid:
   const edits = state.edits.length;
   const tracked = track.state === "done";
   const trackWarnings = splitWarnings(track); // ENGINE_PLAN X0a: the camera path's warning (none for an older scan); R1
+  // ENGINE_PLAN R2-5: what Straighten's and Build the surface's own fuse warned (none from an older server)
+  const notesOf = (stage: StageInfo) => {
+    const said = splitWarnings(stage);
+    return said.path.length || said.other.length ? <StageNotes said={said} /> : null;
+  };
+  const straightenNotes = notesOf(straighten);
+  const fuseNotes = notesOf(fuse);
 
   /** Run now, or ask first when edits would be lost. */
   const go = (stage: StageId, run: () => Promise<unknown>) => {
@@ -276,21 +309,7 @@ export function StagesPanel({ pid, sid, state, busy, scan }: { pid: string; sid:
                     {qualityName(track.quality) ? <span className="text-muted">{track.tracked_pct !== null ? " · " : ""}{qualityName(track.quality)}</span> : null}
                   </p>
                 ) : null}
-                {trackWarnings.path.map((w) => (
-                  // ENGINE_PLAN X0a: the camera path jumped where no hand moves; it warns only
-                  <p key={w} className="flex gap-1.5 rounded-md border border-warn/30 bg-warn-soft px-2 py-1.5 text-xs leading-5 text-fg" role="note">
-                    <TriangleExclamationPoint size={13} className="mt-[3px] shrink-0 text-warn" aria-hidden />
-                    <span>
-                      <b className="font-semibold">{PATH_WARNING_TITLE}.</b> {w}
-                    </span>
-                  </p>
-                ))}
-                {trackWarnings.other.map((w) => (
-                  // UX_PLAN R1: any other note of the stage, without the path's title
-                  <p key={w} className="text-xs leading-5 text-muted" role="note">
-                    {w}
-                  </p>
-                ))}
+                <StageNotes said={trackWarnings} />
               </>
             ) : null
           }
@@ -313,7 +332,14 @@ export function StagesPanel({ pid, sid, state, busy, scan }: { pid: string; sid:
           blocked={gone("straighten") ?? (tracked ? null : "Run “Follow the camera” first")}
           runLabel={straighten.state === "none" ? "Straighten" : "Run again"}
           onRun={() => go("straighten", () => runStage(pid, sid, "straighten"))}
-          details={straightenDetails}
+          details={
+            straightenDetails || straightenNotes ? (
+              <>
+                {straightenDetails}
+                {straightenNotes}
+              </>
+            ) : null
+          }
         />
 
         <StageCard
@@ -326,10 +352,15 @@ export function StagesPanel({ pid, sid, state, busy, scan }: { pid: string; sid:
           optional={tracked}
           onRun={() => go("fuse", () => runStage(pid, sid, "fuse", { voxel_mm: voxel }))}
           details={
-            fuse.state === "done" && fuse.voxel_mm !== null && !fuse.summary ? (
-              <p className="text-xs text-fg">
-                Built at mesh detail <b className="font-semibold tnum">{fmtDetailMm(fuse.voxel_mm)}</b>
-              </p>
+            (fuse.state === "done" && fuse.voxel_mm !== null && !fuse.summary) || fuseNotes ? (
+              <>
+                {fuse.state === "done" && fuse.voxel_mm !== null && !fuse.summary ? (
+                  <p className="text-xs text-fg">
+                    Built at mesh detail <b className="font-semibold tnum">{fmtDetailMm(fuse.voxel_mm)}</b>
+                  </p>
+                ) : null}
+                {fuseNotes}
+              </>
             ) : null
           }
         >

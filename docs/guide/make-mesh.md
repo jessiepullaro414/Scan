@@ -236,6 +236,8 @@ The stage summaries and the report can say more. The most common:
 | **Skipped** on Straighten, with "No loops found: ..." | The scan never came back to a place it had seen, so there was nothing to correct. To let Studio straighten a scan, pass over an earlier part again. |
 | **Skipped** on Straighten after closing loops | The loops showed the passes already line up, so the scan was left as it is. |
 | **Skipped** on Refine with lasers | The scan has no laser points (the lasers were off or not calibrated), or the mesh already agrees with the laser lines. The mesh was left as it is. |
+| A quiet line under Follow the camera, Straighten or Build the surface that starts "The mesh model ran out of room" | That stage's mesh had no room for more surface: what was seen after the frame it names was not added, so the mesh is incomplete there. Each stage says it only for the mesh it made. Scan a smaller area at a time, or make the mesh at a coarser mesh detail. |
+| A line under the **Make only the thin walls finer** note that starts "The finer model for the thin walls ran out of room" | Some thin walls were not made finer: they keep the surface Make mesh made. Nothing was removed. |
 | **Notes on making the mesh** on the project page | Other sentences of the report. Point at it to read them. |
 | **Scanned with a calibration that needed a check** (or **...recalibrating**) | What this scan saw of the calibration. See [setup.md](setup.md). |
 

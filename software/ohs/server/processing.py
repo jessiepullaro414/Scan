@@ -663,6 +663,15 @@ def _carry_path_check(report: dict, track_rep: dict | None) -> None:
     report["warnings"] = carried + own
 
 
+def _own_warnings(report: dict | None) -> list[str]:
+    """A fuse's own warnings (a full pool, a matcher that fell back), in the app's words, for its stage's entry
+    (``stages.<name>.warnings``, ENGINE_PLAN R2-5): its report's ``warnings`` as ``process_recording`` returned them,
+    read before the track's are carried in (:func:`_carry_path_check`: the page shows those under "Follow the camera")
+    and before Straighten's laser-crossings sentence is added (its summary ends with it). Told by where a warning came
+    from, not by its words: a fuse that fills its pool exactly as the track's did says so under its own stage too."""
+    return user_warnings(report)
+
+
 def _carry_crossings_warning(report: dict, crep: dict | None) -> bool:
     """Straighten's laser crossings changed the poses: their sentence for the user (``crep["warning"]``,
     :func:`ohs.track.curve_ba.acted_warning`; ENGINE_PLAN X0a) goes into the stage's fused report's ``warnings``, so
@@ -1167,15 +1176,16 @@ def _empty_state(pid: str, sid: str) -> dict:
     base = {"state": "none", "summary": None, "when": None, "job_id": None}
     return {"format": FORMAT, "project_id": pid, "scan_id": sid,
             "stages": {"track": {**base, "quality": None, "tracked_pct": None, "voxel_mm": None, "warnings": []},
+                       # warnings: the stage's own (ENGINE_PLAN R2-5); a state saved before reads [] (load)
                        "straighten": {**base, "loops": None, "correction_mm": None, "correction_deg": None,
-                                      "crossings": None, "tags": None},
-                       "fuse": {**base, "voxel_mm": None},
+                                      "crossings": None, "tags": None, "warnings": []},
+                       "fuse": {**base, "voxel_mm": None, "warnings": []},
                        "spacetime": {**base, "source": None, "frames": None, "patches": None, "kept": None,
                                      "covered_pct": None, "moved_mm": None, "device": None},
                        "refine": {**base, "source": None, "points": None, "outliers": None, "moved_pct": None,
                                   "moved_mm": None, "residual_before_mm": None, "residual_after_mm": None},
                        FINE_WALLS: {**base, "source": None, "why": None, "share_pct": None, "regions": None,
-                                    "kept_mb": None}},
+                                    "kept_mb": None, "warnings": []}},
             "base": None, "edits": [], "cursor": 0, "version": 0, "made": None}
 
 
@@ -1215,6 +1225,7 @@ class ScanProcess:
         self.making: ScanProcess | None = None
         self.deferred: dict[str, Any] = {"fields": {}, "health": None}
         self._t_stage: dict[str, float] = {}  # when each running stage started (time.monotonic), for its `seconds`
+        self._own_warnings: dict[str, list[str]] = {}  # each stage's last fuse's own warnings (_fuse_into; R2-5)
         self.plan: list[dict] | None = None  # a Make mesh's parts and their spans of the percentage (R18)
         # what "Make only the thin walls finer" did in this run (ENGINE_PLAN X5 step 2), for made.fine_walls; None: off
         self.fine_walls: dict | None = None
@@ -2230,6 +2241,8 @@ class ProcessManager:
             before = dict(sp.state["stages"][name])
             sp.state["stages"][name].update(state="running", job_id=job_id, summary=None, started=now_iso(),
                                             seconds=None)
+            if "warnings" in sp.state["stages"][name]:  # an earlier run's: not this run's (R2-5)
+                sp.state["stages"][name]["warnings"] = []
             sp._t_stage[name] = time.monotonic()
             sp.save()
         self.publish(sp)
@@ -2325,6 +2338,7 @@ class ProcessManager:
             report = process_recording(rec, tmp, params=params, progress=progress, poses=poses)
             ctx.check()
             report["quality"] = quality
+            sp._own_warnings[name] = _own_warnings(report)  # R2-5: this fuse's own, before the track's are carried in
             preset = self._preset_report(sp, quality, report, params)  # P2: the preset and what it resolved to
             if preset is not None:
                 report["preset"] = preset
@@ -2495,9 +2509,12 @@ class ProcessManager:
                            f"No loops found, but the laser lines cross: {lasers}")
                 if isinstance(crep.get("warning"), str) and crep["warning"]:  # ENGINE_PLAN X0a: it may be fooled
                     verdict = f"{verdict.rstrip('.')}. {crep['warning']}"
+            # R2-5: what its own (last) fuse warned (a full pool...): not the track's, nor the crossings' (in the summary)
+            own = sp._own_warnings.pop("straighten", [])
             self._stage_end(sp, "straighten", state="done", summary=verdict, loops=int(loops or 0),
                             correction_mm=corr_mm, correction_deg=corr_deg, crossings=crossings, job_id=ctx.job.id,
-                            tags=straighten_tags_used(rep))  # ENGINE_PLAN X8 step 2: how many tags held the scan
+                            tags=straighten_tags_used(rep),  # ENGINE_PLAN X8 step 2: how many tags held the scan
+                            warnings=own)
             return verdict
         except (JobCancelled, InterruptedError):
             self._stage_restore(sp, "straighten", before)
@@ -2533,7 +2550,9 @@ class ProcessManager:
             n = (report.get("frames") or {}).get("processed")
             self._stage_end(sp, "fuse", state="done", voxel_mm=used, job_id=ctx.job.id,
                             summary=f"Built the surface from {n:,} frames at a mesh detail of {_fmt(float(used))} mm"
-                            if used and n else "Built the surface")
+                            if used and n else "Built the surface",
+                            # R2-5: what its own fuse warned (a full pool...), not the track's (shown under it)
+                            warnings=sp._own_warnings.pop("fuse", []))
         except (JobCancelled, InterruptedError):
             self._stage_restore(sp, "fuse", before)
             raise
@@ -2758,9 +2777,10 @@ class ProcessManager:
         reason. It never costs the scan: a failure is logged, the stage says so, the mesh stays as fused. The kept depth
         is removed in every case. Returns the page's block (``made.fine_walls``)."""
         from ohs.app.fine_walls import SPOOL_DIR, make_fine_walls, spool_size_mb
+        from ohs.app.process import fine_walls_pool_warning
 
         info: dict[str, Any] = {"chosen": True, "acted": False, "why": plan.get("why"), "share": None, "regions": None,
-                                "seconds": None, "kept_mb": None,
+                                "seconds": None, "kept_mb": None, "warnings": [],
                                 **{k: plan[k] for k in ("need_mb", "free_mb", "voxel_mm") if k in plan}}
         spool = sp.dir / "track" / SPOOL_DIR
         tmp = sp.dir / f"{FINE_WALLS}.tmp-{ctx.job.id}"
@@ -2784,20 +2804,26 @@ class ProcessManager:
                                       progress=lambda f, m: prog(0.95 * f, f"Making the thin walls finer: {m}"))
                 ctx.check()
                 rep["source"] = src
+                # R2-5: the finer model's pool had no room for some surface: said, never in silence
+                cap = rep.get("mesh_capacity")
+                rep["warnings"] = [fine_walls_pool_warning(cap)] if isinstance(cap, dict) and cap.get("full") else []
                 walls = rep.get("walls") or {}
                 info.update(regions=walls.get("n_regions"), share=rep.get("share"), report=rep,
-                            seconds=round(time.monotonic() - t0, 1))
-                if not rep.get("acted"):
+                            seconds=round(time.monotonic() - t0, 1), warnings=user_warnings(rep))
+                if not rep.get("acted"):  # the base's report takes the warning at the end (_record_fine_walls)
                     info["why"] = rep.get("why") or "no_thin_walls"
                     info["line"] = fine_walls_line(info)
                     self._stage_end(sp, FINE_WALLS, state="skipped", summary=info["line"], source=src, why=info["why"],
-                                    kept_mb=info["kept_mb"], regions=info["regions"])
+                                    kept_mb=info["kept_mb"], regions=info["regions"], warnings=info["warnings"])
                     return info
                 for name in ("trajectory.csv", "laser_points.ply", "marker_map.json"):
                     if (src_dir / name).is_file():
                         shutil.copy2(src_dir / name, tmp / name)
                 report = _read_json(src_dir / "report.json") or {}
                 report["fine_walls"] = rep
+                if rep["warnings"]:  # with the base's (the camera path's...): the base's report and the summary say it
+                    ws = [w for w in report.get("warnings") or [] if isinstance(w, str)]
+                    report["warnings"] = ws + [w for w in rep["warnings"] if w not in ws]
                 _write_json(tmp / "report.json", jsonable(report))
                 ctx.check()
                 _move_dir(tmp, sp.dir / FINE_WALLS)
@@ -2811,7 +2837,7 @@ class ProcessManager:
                 info["action"] = "Make the mesh again without this"
                 self._stage_end(sp, FINE_WALLS, state="done", summary=info["line"], job_id=ctx.job.id, source=src,
                                 why=None, share_pct=round(100.0 * float(rep.get("share") or 0.0), 2),
-                                regions=info["regions"], kept_mb=info["kept_mb"])
+                                regions=info["regions"], kept_mb=info["kept_mb"], warnings=info["warnings"])
                 return info
             except (JobCancelled, InterruptedError):
                 self._stage_restore(sp, FINE_WALLS, before)
@@ -2820,7 +2846,7 @@ class ProcessManager:
                 if ctx.cancelled:
                     raise JobCancelled() from None
                 log.exception("make only the thin walls finer failed; the mesh stays as fused")
-                info.update(acted=False, why="failed", report=None)
+                info.update(acted=False, why="failed", report=None, warnings=[])  # the mesh stays as fused
                 info["line"] = fine_walls_line(info)
                 self._stage_end(sp, FINE_WALLS, state="failed", summary=info["line"], why="failed")
                 return info
@@ -2838,6 +2864,15 @@ class ProcessManager:
         if rep is None:
             return
         rep["fine_walls"] = {**(block or {}), **{k: v for k, v in made.items() if k not in ("line", "action")}}
+        # R2-5: its warning in the base's report and the scan's summary also when its mesh did not become the base
+        said = [w for w in (block or {}).get("warnings") or [] if isinstance(w, str)]
+        ws = [w for w in rep.get("warnings") or [] if isinstance(w, str)]
+        new = [w for w in said if w not in ws]
+        if new:
+            rep["warnings"] = ws + new
+            summary = sp.deferred["fields"].get("report")
+            if isinstance(summary, dict):
+                summary["warnings"] = user_warnings(rep)
         _write_json(path, jsonable(rep))
 
     # ------------------------------------------------------------------ a run beside the result (UX_PLAN R2)

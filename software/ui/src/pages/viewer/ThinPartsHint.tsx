@@ -180,6 +180,12 @@ export function FineWallsNote({
         <Layers size={14} className="mt-px shrink-0 text-accent" aria-hidden />
         <div className="min-w-0 flex-1 space-y-1.5">
           <p className="text-fg">{note.line}</p>
+          {note.warnings.map((w) => (
+            // ENGINE_PLAN R2-5: the finer model ran out of room; quiet, as the stages' other notes (it warns only)
+            <p key={w} className="text-muted" role="note">
+              {w}
+            </p>
+          ))}
           {note.action ? (
             <Button size="xs" variant="secondary" icon={Undo2} loading={busy} disabled={busy || !!blocked} title={blocked ?? undefined} onClick={() => void undo()}>
               {note.action}

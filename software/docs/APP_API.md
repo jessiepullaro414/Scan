@@ -834,8 +834,10 @@ Everything in the M3 phase 2 section is implemented as written, with these clari
 - **The camera path's warning** (*extra*, since 2026-11-20, ENGINE_PLAN X0a): the track stage's `report.json` has `path_check`, the engine's check of the tracked camera path for a jump no hand makes (`ohs.track.path_check`): `{version, window_s, limit_mm, frames, jump_mm, frame, state: "ok" | "warn" | null, warning: string | null}` (`state` null: too short to judge), and `warnings`, a list of sentences for the user (empty when there is nothing to say; with `state: "warn"` it holds the check's sentence: tracking may have slid near that frame, so a thin part can come out thinner or partly missing). It warns only: the mesh is the same without it.
   - A stage fused at given poses (straighten, fuse) takes the track stage's `path_check` and `warnings` into its own `report.json`, since its poses come from that path; the refinements keep those of the report they refine. So `result/report.json` always has the check of the path the current mesh was built from.
   - The track stage's `ProcessState.stages.track.warnings` is that list, in the app's words ("graphics card": the engine says so itself since UX_PLAN U51, and the "GPU" in the report of a scan processed before is turned into it); `[]` when there is nothing to say.
+  - **The later stages' own warnings** (since 2026-11-27, ENGINE_PLAN R2-5): `ProcessState.stages.straighten.warnings`, `stages.fuse.warnings` and `stages.fine_walls.warnings` are lists of sentences in the app's words: what that stage's own run warned (its fuse's mesh model ran out of room, the depth matcher fell back to the processor; for the thin walls, the finer model ran out of room). `[]` when there is nothing to say and while the stage runs (a run starts with `[]`, so a skipped or failed run never shows the run before's; this holds for `stages.track.warnings` too). A state saved before reads `[]`. They are told by where they came from, not by their words: the track's warnings, which the stage's `report.json` carries, are not repeated (the camera path's warning shows under Follow the camera only), and Straighten's laser-crossings sentence stays at the end of its `summary`; but a fuse whose model fills exactly as the track's did says so under its own stage too. The stage's `report.json`, `result/report.json` and `Scan.result.report.warnings` keep all of them, the track's first.
   - The scan's summary (`Scan.result.report`) keeps `warnings` (the same words) and `path_check: {state, jump_mm, frame}` in short. The report page shows them as the row "Camera path" of the calibration part, and the warnings again in its list at the top.
   - A scan processed before the check has neither key (in its summary, its `report.json` and its stage) and nothing is shown for it.
+- **The mesh model's room** (*extra*, ENGINE_PLAN R2-5): a stage's `report.json` has `mesh_capacity`, the mesh model's pool at the end of its fuse: `{full, bricks, mb, max_bricks, max_mb, bricks_refused, requests_refused, calls_refused, first_refused_call, voxel_mm, first_refused_frame}` (`full`: some surface got no room; `bricks_refused`: blocks of surface left out, a block being 8 voxels on a side; `first_refused_frame`: the recording frame at which it first had no room, or null), or null for a model that keeps no such status (Open3D's, on the processor path). When `full`, `warnings` holds the sentence ("The mesh model ran out of room after frame N: ...") and the stage shows it. A merge's report has the same block with `first_refused_scan`. "Make only the thin walls finer" has its own (`report.fine_walls.mesh_capacity`, below). It warns only: nothing is removed, and the mesh is what the model held.
 - **Scan status:** stage jobs and recipe `all` jobs set the scan to `processing`. Afterwards it is `processed` when it has a mesh, else `failed` (with `error`) or `recorded`. Edit jobs leave the status alone.
 - **Make mesh** (`POST .../process`) is the Default recipe with scope `all` at the requested quality. Its job kind (`process_scan`), result `{project_id, scan_id, scan, message: "Mesh ready"}` and statuses are M1's.
   - **Built beside the result** (since 2026-11-21, UX_PLAN R2). Make mesh and a recipe with scope `all` build the new mesh in a folder of their own, `scans/<sid>/.remake-<job id>/` (its own `process/` and `result/`; the recording is the scan's), and put it in the place of the scan's `process/` and `result/` only once every stage and edit of the run has finished. Until then the scan's mesh, stages, edits and undo history, `report.json`, laser points, `ProcessState` and the scan entry in `project.json` are not touched: the viewer, the downloads and the report keep showing the earlier mesh. A cancelled or failed run removes its folder, and the scan is byte for byte as it was, its `status` and `error` too.
@@ -2905,15 +2907,25 @@ type ThinPartsHint = {
   `ThinPartsHint.why_not` gains `"walls_made_finer"`: such a mesh is not suggested again, and
   its `walls.estimate_mm` is null.
 - `ProcessState.made.fine_walls?: {chosen: true, acted: boolean, why, share, regions, seconds,
-  kept_mb, need_mb?, free_mb?, voxel_mm?, line: string, action?: string}`, only when the scan
+  kept_mb, need_mb?, free_mb?, voxel_mm?, warnings: string[], line: string,
+  action?: string}`, only when the scan
   chose it. `why` (when it did not act): `"no_thin_walls" | "no_kept_depth" |
   "no_graphics_card" | "no_finer_surface" | "mesh_detail" | "preview" | "disk" | "failed"`.
   `line` is what the page shows in the hint's place; `action` ("Make the mesh again without
   this", only when it acted) is `POST .../process {quality, fine_walls: false}`.
-- `ProcessState.stages.fine_walls?: StageInfo & {source, why, share_pct, regions, kept_mb}`
+- `ProcessState.stages.fine_walls?: StageInfo & {source, why, share_pct, regions, kept_mb,
+  warnings}`
   and `making.stages.fine_walls`, only once it ran; `making.plan` may hold a `fine_walls`
   part; `base.stage` may be `"fine_walls"`, and so may the `source` of `refine` and
   `spacetime`. `made.stages` holds its seconds.
 - `result/report.json` gets `fine_walls`: the engine's block (`walls, bricks, frames,
   faces_in, share, triangles_before, triangles_after, vertices, moved_mm, seam_mm, ms`) with
   the fields of `made.fine_walls` (without `line` and `action`).
+- Since 2026-11-27 (ENGINE_PLAN R2-5) that block also has `mesh_capacity`, the finer model's
+  pool (as a stage report's `mesh_capacity`, with `first_refused_frame`; null for a model
+  without such status), and `warnings`. When the pool is `full`, `report.fine_walls.warnings`,
+  `made.fine_walls.warnings` and `stages.fine_walls.warnings` hold the sentence ("The finer
+  model for the thin walls ran out of room after frame N: ..."), and `result/report.json`'s
+  `warnings` and `Scan.result.report.warnings` carry it too, whether or not the step's mesh
+  became the base. Nothing is removed: the thin walls it did not reach keep the surface
+  Make mesh made. The result page says the sentence once, in the thin walls' note.

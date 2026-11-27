@@ -363,15 +363,32 @@ def matcher_fallback_warning(fb: dict) -> str:
             f"({fb['reason']}). Uncertainty figures after that frame use the processor matcher's noise model.")
 
 
+def _pool_words(cap: dict, start: str) -> tuple[str, str]:
+    """When a model's pool first had no room (``start`` when no frame is known) and what it left out, in words: the
+    parts the pool sentences share (:func:`pool_full_warning`, :func:`fine_walls_pool_warning`)."""
+    at = cap.get("first_refused_frame")
+    when = f"after frame {at}" if at is not None else start
+    refused, held = int(cap["bricks_refused"]), int(cap["bricks"])
+    return when, (f"{refused:,} of {refused + held:,} blocks of surface left out; the model holds {held:,} blocks, "
+                  f"{cap['mb']:.0f} MB")
+
+
 def pool_full_warning(cap: dict) -> str:
     """The sentence for the user when the mesh model's pool had no room for new surface (``report["mesh_capacity"]``,
     :meth:`ohs.track.recon_tsdf.ConfidenceTsdf.capacity_status` with ``first_refused_frame``; ENGINE_PLAN R2-5)."""
-    at = cap.get("first_refused_frame")
-    when = f"after frame {at}" if at is not None else "while the frames of the scan's start were fused"
-    refused, held = int(cap["bricks_refused"]), int(cap["bricks"])
-    return (f"The mesh model ran out of room {when}: surface seen after that was not added ({refused:,} of "
-            f"{refused + held:,} blocks of surface left out; the model holds {held:,} blocks, {cap['mb']:.0f} MB). "
+    when, counts = _pool_words(cap, "while the frames of the scan's start were fused")
+    return (f"The mesh model ran out of room {when}: surface seen after that was not added ({counts}). "
             "The mesh is incomplete there. Scan a smaller area at a time, or make the mesh at a coarser mesh detail.")
+
+
+def fine_walls_pool_warning(cap: dict) -> str:
+    """The sentence for the user when the finer model of "Make only the thin walls finer" had no room for new surface
+    (its ``mesh_capacity``, :func:`ohs.app.fine_walls.make_fine_walls`; ENGINE_PLAN R2-5). Only the finer surface is
+    missing: the thin walls it did not reach keep the mesh's own surface, and nothing is removed."""
+    when, counts = _pool_words(cap, "while the first kept frames were fused")
+    return (f"The finer model for the thin walls ran out of room {when}: finer surface seen after that was not added "
+            f"({counts}). The thin walls it did not reach keep the surface Make mesh made, at the mesh's own detail; "
+            "nothing was removed. Scan a smaller area at a time to make them all finer.")
 
 
 def _weak_summary(rows: list[dict]) -> dict:
