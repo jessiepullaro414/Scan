@@ -371,6 +371,9 @@ def merge_scans(scans: Sequence[ScanInput], out_dir: str | Path, params: Process
     planes: set[str] = set()
     per_scan = []
     k = 0
+    # the mesh model's pool (ENGINE_PLAN R2-5): the scan and frame at which it first had no room for new surface; one
+    # model for the whole merge, so it is checked across the pipelines of every calibration
+    full_at: dict | None = None
     try:
         for name, reader, poses, positions, T, support, ci in plan:
             if ci != cur:  # another calibration: its own pipeline, fusing into the same model
@@ -395,6 +398,8 @@ def merge_scans(scans: Sequence[ScanInput], out_dir: str | Path, params: Process
                     elif support is not None:  # the support plane in this frame's camera, moved into the part by the margin
                         clip = (Tf[:3, :3].T @ support[0], float(support[0] @ Tf[:3, 3]) + support[1] - float(support_margin_mm))
                     pipe.process(frame, pose=T @ Tf, clip_plane=clip)
+                    if full_at is None and getattr(pipe.markerless, "pool_full", False):
+                        full_at = {"scan": name, "frame": int(frame.index)}
                     if progress is not None:
                         progress(k, n)
                     k += 1
@@ -486,6 +491,19 @@ def merge_scans(scans: Sequence[ScanInput], out_dir: str | Path, params: Process
         if any(isinstance(pl[5], SupportMap) for pl in plan):
             report["mesh"]["n_faces_table_removed"] = n_faces_table
             report["lasers"]["n_points_table_removed"] = int(on_table.sum())
+        # the mesh model's pool (ENGINE_PLAN R2-5), as process_recording says it: None for a model that keeps no
+        # such status (Open3D's)
+        pool_of = getattr(pipe.markerless, "capacity_status", None)
+        report["mesh_capacity"] = None
+        if pool_of is not None:
+            cap = {**pool_of(), "first_refused_frame": None if full_at is None else full_at["frame"],
+                   "first_refused_scan": None if full_at is None else full_at["scan"]}
+            report["mesh_capacity"] = cap
+            if cap["full"]:
+                from ohs.app.process import pool_full_warning  # noqa: PLC0415
+                where = None if full_at is None else f"{full_at['frame']} of \"{full_at['scan']}\""
+                warnings.append(pool_full_warning({**cap, "first_refused_frame": where}))
+                log.warning("%s", warnings[-1])
         if cleaning is not None:  # what the small-piece cleaning did: nothing goes unsaid, moved part or not (R7)
             report["mesh"]["cleaning"] = {**cleaning, "min_component_fraction": float(p.clean_min_component),
                                           "summary": _cleaning_summary(cleaning, float(p.clean_min_component), bool(maps))}

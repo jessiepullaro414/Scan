@@ -235,6 +235,7 @@ def make_fine_walls(stage_dir: str | Path, spool_dir: str | Path, out_dir: str |
         out["why"] = "no_graphics_card"
         log.info("fine mesh detail on thin walls: no graphics card now: the mesh stays at %.2g mm", v)
         return out
+    full_at: int | None = None  # the kept frame's index at which the finer model's pool first had no room (R2-5)
     try:
         model.limit_bricks(allowed)
         w, h = head["model"]["image_size"]
@@ -253,11 +254,16 @@ def make_fine_walls(stage_dir: str | Path, spool_dir: str | Path, out_dir: str |
             depth, sigma, seen = _frame(spool_dir, k, e, (int(h), int(w)))
             model.integrate(depth, sigma, T, seen=seen)
             n_used += 1
+            if full_at is None and getattr(model, "pool_full", False):
+                full_at = int(i)
         ms["fuse"] = round(1e3 * (time.perf_counter() - t), 0)
         t = time.perf_counter()
         field = FineField.from_model(model)
         out["fine_model"] = {"bricks": int(field.n_bricks), "mb": round(model.memory_mb, 1), "device": model.device}
         ms["download"] = round(1e3 * (time.perf_counter() - t), 0)
+        # the finer model's pool (ENGINE_PLAN R2-5), as process_recording's mesh_capacity: the server warns with it
+        pool_of = getattr(model, "capacity_status", None)
+        out["mesh_capacity"] = None if pool_of is None else {**pool_of(), "first_refused_frame": full_at}
     finally:
         model.close()
     out["frames"] = {"kept": len(head["entries"]), "fused": n_used}

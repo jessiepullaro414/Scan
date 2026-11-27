@@ -4062,6 +4062,13 @@ cut one is worked out and the result's first advice says what happened. Each ref
 space or use a faster disk, record the step again). Tested with the calibration tests' fake camera; not seen
 on the Setup page; no real slow disk.
 
+**A full mesh model in a merge and in the fine-walls step (R2-5, second part).** A merge now saves its model's
+`mesh_capacity` and warns once, naming the scan and the frame ("The mesh model ran out of room after frame 3
+of "Front": surface seen after that was not added ..."); the warning reaches the merge's result and the
+merged scan's report. "Make only the thin walls finer" returns its finer model's `mesh_capacity`; the server
+does not turn that into the stage's warning yet (open, with Straighten's and Make mesh's stage results).
+Tested with the pool forced small on the processor path; the graphics card's path not run.
+
 ## The no-GPU plate slide, and a check of the camera path (ENGINE_PLAN X0a, 2026-11-20)
 
 Without a GPU the 0.5 mm plates slide in their first frames. On plate seed 0 the tracker's steps
