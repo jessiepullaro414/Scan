@@ -7124,6 +7124,82 @@ frame: not built. (3) The adjustment without a reference mesh. (4) Not measured:
 lasers", which uses the same laser points. Work files: `x8\crossedge.py`, `crossbias.py`, `crossdump.py`,
 `crossdump2.py`, `crossrobust.py`, `crosstry.py`, `walldrift.py`, `lowline.py`, `biasfixed.py`, `nodots.py`.
 
+## Dot frames and laser frames in turn, measured in the simulator (ENGINE_PLAN X8, 2026-11-27)
+
+The section above found that the projector's dots pull the laser lines. The scanner as built cannot take its
+lasers in frames without the dots (ENGINE_PLAN X8, "Laser frames without the dots"). This measures what it would
+gain and cost if it could: every second frame dots only, the frames between lasers only. Nothing was changed in
+the engine and nothing was tried on hardware.
+
+**Setup.** Three of the scorecard's recordings (standing walls seeds 2 and 0, 120 frames at 30 a second; speckled
+bracket 2, 90 frames), 1280 px, each rendered twice more with the same scene, hand path and seed: lasers only and
+dots only. The laser side at the TRUE poses on the processor; the dot side through the scorecard's frame pass
+with the graphics card. A laser frame has no depth of its own, so its pose is taken from the dot frames beside it:
+straight between the two neighbours, or a cubic through four. Those neighbours' poses are the true ones here.
+
+**The lasers.** Distance of the laser samples from the true surface (median / nine in ten within / share over
+0.25 mm):
+
+| laser samples | walls seed 2 | walls seed 0 | speckled bracket 2 |
+|---|---|---|---|
+| today: dots and lasers in every frame | 0.047 / 0.186 mm / 4.5 % | 0.040 / 0.163 mm / 2.6 % | 0.077 / 0.242 mm / 9.3 % |
+| lasers only, the frame's own pose | 0.027 / 0.079 mm / 0.4 % | 0.023 / 0.068 mm / 0.3 % | 0.069 / 0.192 mm / 4.4 % |
+| lasers only, placed between two dot frames (30 a second) | 0.039 / 0.104 mm / 0.5 % | 0.046 / 0.116 mm / 0.4 % | 0.085 / 0.222 mm / 6.8 % |
+
+On the walls nine in ten samples lie within 0.07 to 0.08 mm without the dots, against 0.16 to 0.19 mm today. On
+the speckled bracket the gain is small: its own speckle is the larger error there.
+
+**What placing a laser frame costs.** The error of a pose taken from its neighbours, on each scan's own hand path
+(70 to 95 mm/s), by frame rate (position median; turn median):
+
+| frames a second | straight between two | cubic through four |
+|---|---|---|
+| 30 (these recordings) | 0.071 to 0.084 mm; 0.022 to 0.028 deg | 0.053 to 0.073 mm; 0.025 to 0.027 deg |
+| 50 (the camera on Windows: 46 to 55) | 0.029 to 0.031 mm; 0.010 to 0.012 deg | 0.015 to 0.018 mm; 0.008 deg |
+| 60 | 0.021 to 0.022 mm; 0.008 deg | 0.009 to 0.010 mm; 0.005 deg |
+
+The third row of the first table carries the 30-a-second error; at the camera's real rate it is under half of that.
+
+**The crossings and the adjustment at the true poses** (fitted line; crossings, median miss, share over 0.25 mm;
+then the held-out ratio, which must stay above 0.85 for true poses to be left alone; with the two neighbours in
+brackets):
+
+| | walls seed 2 | walls seed 0 | speckled bracket 2 |
+|---|---|---|---|
+| today, every frame | 120, 0.135 mm, 29 %; 1.408 (0.870) | 189, 0.112 mm, 10 %; 0.852 (0.909) | 101, 0.090 mm, 6 %; 1.044 (1.091) |
+| lasers only, every frame | 565, 0.030 mm, 4 %; 1.390 (1.312) | 854, 0.027 mm, 11 %; 1.646 (1.828) | 1371, 0.048 mm, 5 %; 1.511 (1.446) |
+| in turn: lasers in every second frame, placed | 125, 0.041 mm, 2 %; 1.784 (1.254) | 198, 0.067 mm, 15 %; 1.322 (1.783) | 329, 0.083 mm, 7 %; 1.692 (1.767) |
+
+With half the frames there are as many usable crossings as today with all of them, and at the true poses the
+adjustment's check is nowhere near its limit (lowest 1.13 over all the laser-only rows; today 0.852 and 0.870).
+
+**The dot side: Follow the camera on the same number of frames, and on half** (tracked poses; path median, part
+median, part covered within 0.5 mm, the 0.5 / 1 / 2 mm walls' faces covered):
+
+| | today | dots only, the same frames | today, every second frame | dots only, every second frame |
+|---|---|---|---|---|
+| walls seed 2 | 1.50 mm, 0.145, 0.899, 0.45 / 0.60 / 0.96 | 1.20, 0.122, 0.900, 0.59 / 0.59 / 0.96 | 0.50, 0.126, 0.893, 0.54 / 0.58 / 0.92 | 0.45, 0.112, 0.887, 0.55 / 0.49 / 0.90 |
+| walls seed 0 | 0.53 mm, 0.125, 0.884, 0.48 / 0.60 / 0.68 | 0.59, 0.117, 0.874, 0.50 / 0.46 / 0.69 | 0.67, 0.110, 0.847, 0.30 / 0.39 / 0.41 | 0.59, 0.100, 0.837, 0.33 / 0.26 / 0.41 |
+| speckled bracket 2 | 0.65 mm, 0.093, 0.896 | 0.63, 0.091, 0.890 | 0.48, 0.100, 0.887 | 0.36, 0.097, 0.881 |
+
+- Pictures without the laser lines track and mesh about as well as today's on the same frames (part median 0.091
+  to 0.122 mm against 0.093 to 0.145; covered within 0.01). One number goes the other way: the 1 mm wall's face is
+  covered less on walls seed 0 (0.46 against 0.60; at the true poses 0.55 against 0.68), not explained.
+- Half the frames costs coverage on thin walls: on walls seed 0 the three faces fall to 0.30 to 0.41 from 0.48 to
+  0.68, at the true poses too, so it is the number of looks, not the tracking. Half of these recordings is 15
+  frames a second.
+- **What that means for the scanner:** Standard quality already uses every second frame of a camera at 45 frames
+  a second or more (30 a second asked, `effective_frame_step`), and the camera gives 46 to 55 on Windows. The dot
+  frames would be the frames Standard uses today, and the laser frames the ones it skips: no fewer frames for
+  depth or for lasers. Best quality, which uses every frame, would have half.
+
+**Not measured.** Placing from TRACKED poses (here the neighbours' true poses) and with the motion sensor; "Refine
+with lasers" with the cleaner points; a whole Make mesh with frames in turn (the engine expects dots and lasers in
+every frame); the live view at half the rate; anything on the real camera and Pico. A hand path rougher than the
+simulator's would raise the placing error. Work files: `D:\OpenHandScan-work\scratch\alt` (`render.py`,
+`lasergain.py`, `lasergain_*.json`, `framepass.json`, the scorecard tables `table_*.md`); no graphics driver
+timeout in the four runs.
+
 ## What the metrics mean
 
 - **Stereo errors** compare the estimated raw intrinsics/extrinsics (`K1`, `K2`, `R`, `T`) with

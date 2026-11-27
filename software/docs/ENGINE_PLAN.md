@@ -908,9 +908,23 @@ and thin parts".
        along the baseline), and that is the line the dots pull most.
     What alternating costs either way: half the frames give depth and tracking, half give
     laser points (about 25 each a second), and a laser frame has no depth of its own, so
-    its camera position must come from the frames beside it. Whether that error eats the
-    gain can be measured in the simulator before any hardware is touched (render
-    alternating frames: `make_scan_recording` already has `dots` and `lines`): not done.
+    its camera position must come from the frames beside it.
+  - **Frames in turn, measured in the simulator 2026-11-27** (`VALIDATION.md`, "Dot frames and
+    laser frames in turn"; nothing built). Gain: on the walls nine in ten laser samples lie
+    within 0.07 to 0.08 mm of the true surface without the dots (0.16 to 0.19 today); the
+    speckled bracket gains little. With lasers in every second frame only there are as many
+    usable crossings as today, and at the true poses the adjustment's check stays far from
+    its limit (lowest 1.13; today 0.852 and 0.870 against 0.85). Cost: a laser frame placed
+    between two dot frames is off by 0.07 to 0.08 mm at 30 frames a second and 0.03 mm at
+    the camera's 50; with that the walls' laser samples are still better than today's (nine
+    in ten within 0.10 to 0.12 mm at 30 a second). Dot-only pictures track and mesh as
+    today's do. Standard quality already uses every second frame of the real camera, so
+    the laser frames would be the ones it skips; Best quality would have half its frames,
+    which costs coverage on thin walls (faces covered 0.30 to 0.41 from 0.48 to 0.68 on
+    one walls scan at 15 frames a second). Not measured: tracked poses for the placing,
+    Refine with lasers, a whole Make mesh, the real camera. Next is the hardware question
+    (a sync pad on the camera board, or the route without a wire), which waits for the
+    owner and the real scanner.
   - With 20 tags on the table 300 mm apart: the mesh's length -0.042 / +0.048 / +0.018 %
     (without: -0.164 / +0.197 / +0.054), the camera path -0.052 / +0.060 / +0.003 % (without:
     0.18 to 0.45), the passes' slide 0.34 to 1.14 mm RMS (without: 1.4 to 11.4).
