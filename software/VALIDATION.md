@@ -6671,6 +6671,70 @@ a moved part, and a shifted tag map is never the held pose where it was tried.
 
 Not run: the app with the mended hold; more parts than the bracket and the sheet.
 
+## The tag hold: a guard on overlap measured and not built; the limit lowered from 8 to 2 mm (ENGINE_PLAN X19, 2026-11-26)
+
+The one known weakness of the hold (a tag map wrong by 9 mm held, because the refinement from it moved the scan
+only 7.9 mm) was to be closed by a guard: do not hold when the overlap at the tags' pose is small against the
+overlap where the refinement from them ended. Before building it, 153 alignments were run again on the processor
+from saved scans with the hold on and off (`D:\OpenHandScan-work\scratch\ed3\x19guard`, `table_step1.json`): the
+three turned-over pairs, the three table-tag pairs with the part moved, the first test's six pairs, the 31
+emulated-tag merges, and tag maps shifted as a whole by 3 to 15 mm along and across the tags' face on five
+rendered pairs and on made-up parts. In 122 of them the hold was weighed. The rule for the guard's limit was fixed
+beforehand: the lowest ratio of a right map and the highest of a map wrong by more than 8 mm must lie a factor 1.3
+apart.
+
+**The overlap ratio does not separate; no guard was built.** Right maps: 0.64 (the bent sheet scans) to 1.00. Maps
+wrong by 9 to 15 mm, slid along the face the tags lie on: 1.00, held at the full shift. The setting off is as
+wrong there, within 0.01 mm: the faces the two scans share do not pin a slide along them, so the refinement
+keeps the tags' start whatever the setting. No test on the shapes can see such a slide.
+
+**What the numbers did show: the limit of 8 mm was far too wide.**
+
+| the limit | right maps held (of 45) | wrong maps (shifted 3 mm or more) held worse than the setting off (of 77) | the worst of them |
+|---|---|---|---|
+| 8 mm (until now) | 45 | 33 | 6.4 mm worse |
+| 3 mm | 45 | 3 | 2.4 mm worse |
+| **2 mm (now)** | 45 | 0 | none |
+| 1.5 mm | 38 (the bent sheets lose the hold) | 0 | none |
+| 1 mm | 35 | 0 | none |
+
+The refinement from right tags moved a scan 1.76 mm at most (the bent sheets; 0.8 mm at most on the rendered
+pairs); every hold that came out worse than the setting off had moved it 2.25 mm or more. Those two lie a factor
+1.28 apart, a hair under the 1.3 that had been fixed for the overlap guard; the limit was lowered all the same,
+to the side where a mistake is harmless: a right map that is not held gets exactly today's answer. With 8 mm, tags on the
+table and the part nudged 3 to 7 mm along the table were held at 3.0 to 7.1 mm where the setting off gives 0.7 to
+0.8 mm. `AlignParams.overrule_mm` is 2.0 now; not held is still exactly the setting-off answer, in the words "The
+tags did not hold this position ...". The test that was expected to fail passes (its one line that named the old
+limit names the limit); a new test holds 3, 5 and 7 mm. The three turned-over pairs (moved 0.67 to 0.80 mm) and
+every pair held before stay held at the same poses. An alignment with the hold on costs what it costs off
+(240 s against 238 s over 117 alignments).
+
+**What stays, measured with the 2 mm limit on maps wrong by 1 to 2.5 mm** (`small_shifts.json`, 68 alignments):
+
+- **A tag map wrong by less than about 2.5 mm is held at its error.** Tags on the table, the map shifted along
+  the table: held at 1.0 / 1.5 / 2.0 / 2.5 mm where the setting off gives 0.78 (T3); 1.1 / 1.6 / 2.1 mm against
+  0.66, and not held at 2.5 mm (T1). Shifted across the face: not held from 1.5 or 2 mm on. The cause is plain in
+  the rows: on pairs that share little the shapes' own minimum lies 0.7 to 1.2 mm from the truth (that is why the
+  hold exists), the move is the distance from the tags' pose to that minimum, and so a right map (moved 0.76 mm)
+  and one wrong by 1.5 mm the other way (moved 0.75 mm) look alike. No limit on the move can do better than about
+  the limit plus that distance.
+- **A map slid along a direction the shared faces do not pin is held at any shift**, and the setting off is
+  equally wrong (the turned-over pairs, tags on the part's one shared face: 3 to 15 mm). For tags on the part this
+  is not a case a user can produce (the tags move with the part); it would take every tag stuck on again
+  elsewhere.
+- **The gain the hold is for, on right maps:** the pose 0.06 to 0.11 mm RMS from the truth against 0.38 to 0.79
+  with the setting off (the first test's five pairs), 0.3 to 0.4 against 0.9 to 1.1 on two turned-over
+  pairs, 0.88 against 0.68 on the third (the reference there is good to about 0.4 degrees).
+
+So the trade for the default is now known: with the hold on, a pair that shares little comes out 0.3 to 0.7 mm
+nearer when nothing moved, and up to about 2 mm worse than today when the part was nudged by 1 to 2.5 mm against
+tags on the table without the user saying so. The setting stays off; the choice is the owner's.
+
+Limits: the processor path only (the alignment is the same code on both); simulated scans; the bent sheets'
+"truth" is the fit to all tracked frames, itself 2.5 to 2.7 mm from the tags' pose; the direction "along" for
+table tags is the tag ring's first principal axis; shifts stand in for a nudged part or a moved table, turns of
+the tag map were not tried.
+
 ## What the metrics mean
 
 - **Stereo errors** compare the estimated raw intrinsics/extrinsics (`K1`, `K2`, `R`, `T`) with

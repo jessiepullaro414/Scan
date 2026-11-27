@@ -110,10 +110,10 @@ def test_a_tag_moved_2_mm_is_left_out_not_followed(pair):
     assert _moves(src, res.T) < 1e-6
 
 
-@pytest.mark.xfail(strict=True, reason="ENGINE_PLAN X19, open: judged by the refinement from the tags, a map 9 mm wrong "
-                   "along x is held (the refinement moved the scan 7.9 mm, under the 8 mm limit; 24 % overlap at the tags "
-                   "against 58 % at the refinement); the search from the shapes alone, removed, overruled it")
 def test_a_tag_map_wrong_as_a_whole_is_overruled_in_words():
+    # expected to fail from 2026-11-24 to 26: the refinement from these wrong tags moved the scan 7.9 mm, under the
+    # 8 mm limit of then, and the map was held. The limit is 2 mm now (the guard study, ENGINE_PLAN X19), so the
+    # one line that named the old limit names the limit
     # a pair the shapes alone place for sure (78 % shared), judged with the caution's limit raised to 0.80 so that the
     # hold is weighed. Until 2026-11-24 it asserted the old overrule's mechanics (the shapes' own pose, "Aligned from
     # the shapes"); now: not held, and the answer without the hold in true words
@@ -123,7 +123,7 @@ def test_a_tag_map_wrong_as_a_whole_is_overruled_in_words():
     off, _ = align_with_tags(src, dst, ts, td, replace(AlignParams(), caution_overlap=0.80))
     res, row = align_with_tags(src, dst, ts, td, on)
     d = res.as_dict()
-    assert d["held_by_tags"] is False and d["overruled"] and d["shape_moves_mm"] > 8.0, res.verdict
+    assert d["held_by_tags"] is False and d["overruled"] and d["shape_moves_mm"] > on.overrule_mm, res.verdict
     assert "from the shapes" not in res.verdict and "The tags did not hold this position" in res.verdict
     assert np.array_equal(res.T, off.T) and res.accepted == off.accepted  # the answer without the hold
     assert res.caution.startswith("Little is shared") and row["start"] == "overruled"
@@ -274,3 +274,22 @@ def test_a_held_links_information_is_in_the_same_frame_as_a_shape_links():
     tag_info = _tag_information(ts, td, [0, 1, 2, 3], 1.0, T)
     shape_info = _information(cloud(S), cloud(D), T, 6.0)
     np.testing.assert_allclose(tag_info, shape_info, rtol=1e-9, atol=1e-6)
+
+
+def test_the_limit_is_2_mm_and_a_map_3_mm_wrong_where_the_shapes_can_tell_is_not_held():
+    """ENGINE_PLAN X19, the guard study of 2026-11-26 (147 alignments): the refinement from right tags never moved a
+    scan more than 1.76 mm, and every hold that was worse than the setting off had moved it 2.25 mm or more. With the
+    limit at 8 mm a tag map 3 to 7 mm wrong along a direction the shapes pin was held at its full error (3.0 to 7.1 mm
+    where the setting off gives 0.7 to 0.8). At 2 mm it is not held: the answer without the hold."""
+    assert AlignParams().overrule_mm == 2.0
+    src, dst = _scans("xyZX", "XYZx")
+    on = replace(ON, caution_overlap=0.80)  # 78 % shared: the limit raised so that the hold is weighed
+    for shift in (3.0, 5.0, 7.0):
+        ts, td = _tags(moved={i: (shift, 0.0, 0.0) for i in range(4)})
+        off, _ = align_with_tags(src, dst, ts, td, replace(AlignParams(), caution_overlap=0.80))
+        res, row = align_with_tags(src, dst, ts, td, on)
+        d = res.as_dict()
+        assert d["held_by_tags"] is False and d["overruled"] and d["shape_moves_mm"] > 2.0, (shift, res.verdict)
+        assert np.array_equal(res.T, off.T) and row["start"] == "overruled"
+        assert _moves(src, res.T) < shift - 0.5  # nearer the truth than the wrong tags would have held it
+        assert "The tags did not hold this position" in res.verdict and "(more than 2.0 mm)" in res.verdict

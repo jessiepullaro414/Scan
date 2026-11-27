@@ -643,8 +643,9 @@ _KEY_DOCS = {
     "process.align_hold_tags": (
         "Aligning two scans that share little of the part (under 70 %) from the AprilTags both saw keeps\n"
         "the tags' position instead of letting the shapes move it (ENGINE_PLAN X19): three or more tags that\n"
-        "agree within 0.5 mm decide, the shapes only check them and overrule them only when they disagree by\n"
-        "more than 8 mm (a table moved with its tags). Scans that share more are aligned exactly as before.\n"
+        "agree within 0.5 mm decide, the shapes only check them: when the shapes, starting at the tags, move\n"
+        "the scan more than 2 mm, the tags are not held (a tag map wrong as a whole, as when the part was\n"
+        "nudged against tags on the table). Scans that share more are aligned exactly as before.\n"
         "Off: as before."
     ),
     "process.straighten_tags": (

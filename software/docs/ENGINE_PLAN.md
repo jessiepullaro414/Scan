@@ -1282,13 +1282,21 @@ E-D4 (4). Design in `D:\OpenHandScan-work\scratch\ed3\tag_hold_design.md`; first
   true. The third turned pair is held now and its merge passes E-D4 (1) and (3); every
   earlier held pair keeps its pose; an alignment with the hold on costs what it costs off.
   So the turned-over case passes. The setting is still off.
-- **Before the default goes on (E-D5):** (1) the known weakness: a tag map wrong as a whole
-  by a little more than the limit is held when the refinement walks back less than 8 mm
-  (a made-up case, kept as a test expected to fail). To try: do not hold when the overlap
-  at the tags' pose is under about 0.6 of the overlap where the refinement ended (0.94 to
-  0.99 on every held pair of the rendered tests, 0.41 and 0.002 on the wrong maps; to be
-  checked on the 31 emulated-tag merges, where bent sheet scans gained up to 0.13 of
-  overlap at the shapes' minimum). (2) The Align page's words for a held pose, the guide
+- **The weakness measured 2026-11-26** (`VALIDATION.md`, "The tag hold: a guard on overlap
+  measured and not built"): 153 alignments. The overlap ratio does not separate (right maps
+  0.64 to 1.00, maps slid 9 to 15 mm along the tags' face 1.00), so that guard was not
+  built. The limit of 8 mm was far too wide: 33 of 77 wrong maps were held worse than the
+  setting off, by up to 6.4 mm. **`overrule_mm` is 2.0 now:** all 45 right maps stay held
+  (they moved 1.76 mm at most), none of the 77 is held worse than off, the test expected
+  to fail passes. What stays: a tag map wrong by less than about 2.5 mm is held at its
+  error (tags on the table and the part nudged 1 to 2.5 mm: 1.0 to 2.5 mm where off gives
+  0.7 to 0.8), because on pairs that share little the shapes' own minimum is 0.7 to 1.2 mm
+  off and no limit on the move can tell the two apart; and a slide along a direction the
+  shared faces do not pin is held, where off is equally wrong.
+- **Before the default goes on (E-D5):** (1) the owner's choice on that trade (asked
+  2026-11-26): on right maps the hold is 0.3 to 0.7 mm nearer, on a part nudged 1 to
+  2.5 mm against table tags up to about 2 mm worse than today. (2) The Align page's words
+  for a held pose, with a caution when the shapes would move it more than 1 mm, the guide
   and a trial in the running app.
 - **For the guide (added):** on a part turned over, tags go on a face seen both ways up.
   By E-D1 it is better on every pair it acts on and the same on every pair it does not (no

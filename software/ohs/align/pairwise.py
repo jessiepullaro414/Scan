@@ -202,7 +202,10 @@ class AlignParams:
     hold_tags: bool = False
     hold_min_tags: int = 3  # shared tags that agree, at least
     hold_max_rms_mm: float = 0.5  # the shared tags' corners agree within this RMS (tags farther out are left out)
-    overrule_mm: float = 8.0  # the shapes overrule the tags only beyond the larger of this and ...
+    # the tags are not held when the refinement from them moved the scan beyond the larger of this and ...
+    # (2.0 since 2026-11-26, 8.0 before: over 147 alignments the refinement from right tags moved a scan 1.76 mm at
+    # most, and every hold that came out worse than the setting off had moved it 2.25 mm or more; ENGINE_PLAN X19)
+    overrule_mm: float = 2.0
     overrule_sigmas: float = 4.0  # ... this many times the tag pose's own sigma
 
     def __post_init__(self) -> None:
