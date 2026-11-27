@@ -36,7 +36,7 @@ One tool is on at a time. Turn a tool on with its toolbar button or key; press t
 | **G** | **Fit** | Fits a shape where you click. |
 | **P** | **Fit**, **Plane** | A flat face. |
 | **C** | **Fit**, **Cylinder** | A shaft, a boss or the wall of a bore. |
-| **H** | **Fit**, **Hole** | A hole's round edge. |
+| **H** | **Fit**, **Hole** | A hole's round edge; when the scan offers it, also read from the camera images (see [A hole's second answer, from the camera images](#a-holes-second-answer-from-the-camera-images)). |
 | **T** | **Fit**, **Wall** | A thin wall's thickness read from the camera frames, when the scan offers it (see [Read a thin wall's thickness](#read-a-thin-walls-thickness)). |
 | **S** | **Section** | Cuts the scan with a plane: its 2D profile, a distance on it, DXF and SVG. |
 | **U** | **Flush** | The flush between two panels along their seam. |
@@ -99,6 +99,40 @@ Warnings appear in orange under a fit, for example a small region, scattered poi
 
 To remove a fit, click its cross; **Clear** removes them all.
 
+### A hole's second answer, from the camera images
+
+Over open space the mesh reads a hole too small (a Ø 25 hole 1 to 7 mm small on simulated scans), and a small hole (Ø 6, Ø 10) often gives no circle at all: see [Known biases](#known-biases). The camera images show the hole's edge plainly, so after a **Hole** click the app also reads the edge there, in the scan's own camera images. A card under the view shows the mesh's answer first ("Ø 23.81 mm ± 0.05 from the mesh", or "The mesh gives no circle here"), then a second block, **From the camera images**:
+
+1. While it reads: "Reading the rim from the camera frames…". It takes 5 to 15 seconds (on simulated scans with a graphics card, 5 to 13 s): the app reads up to 20 camera frames that see the click. You can go on working; a new click drops the answer that was on its way.
+2. Then, for example:
+   - "Ø 25.02 mm ± 0.11 from the camera images (the rim where the face ends, read in 18 frames)."
+   - "This is the hole's edge in the clicked face, where the face ends: not the bore further down, not the outer edge of a chamfer or countersink, not the smallest gap through the hole."
+
+**Click on the flat face right beside the hole**, within a few millimetres of its edge (as for the mesh's Hole fit). The hole must have been seen from above, its whole edge in view, in at least 5 camera frames.
+
+**Which diameter it is:** the hole's entrance in the face you clicked, where that face ends. A bore that narrows further down, the outer edge of a chamfer or a countersink, a burr or a nick are not what it reports.
+
+**How good it is:** on simulated scans every answered hole of Ø 6, Ø 10 and Ø 25 read within about 0.15 mm, over open space and near a floor (within 0.09 mm through the app, on scans tracked as Make mesh tracks them, where the mesh read the same Ø 25 holes up to 6.6 mm small). Near a floor the app often gives no answer for a Ø 10, and a blind bore is not read. A real part's gloss, chamfers and burrs are not yet measured: until they are, check a size that matters with calipers or a pin gauge. The ± is how far the frames' readings spread (1σ), with a part they all share.
+
+**The position may be off, the diameter not:** the diameter comes from each camera frame on its own, so it does not depend on the camera path. Where the hole is placed does. When the scan's camera path check warns, or the frames place the hole's centre apart, the card says "The hole's position may be off …; its diameter does not depend on the camera path."
+
+When the camera images give no answer, the block says why in the engine's words, with no number, and what to do; the mesh's answer still stands (see the table below).
+
+The second answer is offered only for a scan the app can read it on: the setting is on, the scan is not a merged scan, it was made in **Markerless** mode at **Standard** or **Best** quality, its recording (1280 × 800 pixels) and calibration are still there, and the PC has a graphics card the app uses. Otherwise the card shows the mesh's answer alone, as before. To switch it off, set `hole_from_images = false` under `[process]` in the settings file (see [Change the settings file](settings.md#change-the-settings-file)). Nothing in the scan changes, and the reading is not kept with the scan: write it down, or click again later.
+
+![The Hole card on a plate over open space: the mesh reads the hole 18.39 mm across, the camera images 24.99 mm; the hole is 25 mm](images/measuring-hole-images.png)
+
+| Message in the block | What to do |
+|---|---|
+| Only … frames show the rim (at least 5 needed) | Click on the flat face right beside the hole. If you did, the hole was not seen from above often enough: scan it again looking down into it from several sides. |
+| The top rim is found on only … degrees of the round | Only part of the edge shows in the frames: scan it again looking down into it from several sides. |
+| The rim read in the images is … mm from the click: it is another hole's | Click on the face right beside the hole you mean. |
+| The frames put the hole's centre … mm apart: this is not one hole's rim | Click right beside the hole you mean, not between two holes. |
+| The frames disagree on the diameter by … mm, the frames do not agree well enough on this rim, or the rim is not read the same in every frame | The frames read this edge differently (a shiny, worn or chamfered edge, or something close behind the hole). Measure it with calipers or a pin gauge. |
+| Not offered for a scan made at Preview quality | Make the mesh at Standard quality. |
+| Not offered for a merged scan | Read the hole on one of the scans it was made from. |
+| Not offered for a scan tracked by its markers, or without a graphics card | It has not been checked there yet. The mesh's answer stands. |
+
 ## Read a thin wall's thickness
 
 The mesh holds a thin wall (sheet metal, a flange, a rib) too thick: see [Known biases](#known-biases). The **Wall** choice of the Fit tool reads the wall's thickness from the scan's camera frames instead: each side of the wall a plane fitted to the depth measured by the frames that see it.
@@ -139,6 +173,7 @@ The ± after a value is **1σ** (one sigma): how far the number could move with 
 
 - **Planes and cylinders:** "how far the fitted shape could move with the scan's scatter, counting that neighbouring points err together. It is not the accuracy: on simulated scans it covered the spread from one scan to the next, but the shapes were also off the same way on every scan (Ø 14 bosses 0.15–0.19 mm small in radius as tracked, 0.23–0.28 mm with the true camera path)."
 - **Holes:** "how well the edge points agree with the circle (1σ). It is not the accuracy: on simulated scans a hole's edge read about 1 mm small in diameter, several times its ±."
+- **A hole from the camera images:** how far the frames' readings of the edge spread (1σ), with a part all frames share. On simulated scans every answered hole read within about 0.15 mm; a real part is not yet measured. See [A hole's second answer, from the camera images](#a-holes-second-answer-from-the-camera-images).
 - **Relations of two fits:** "1σ from both fitted shapes' own ± (taken as independent) … calibration, scale and errors a whole region shares come on top." An angle with a hole's axis has no ±, because a hole's circle is fitted in a plane taken as given.
 - **The part's axes, flush, sections and the report:** the same idea, the spread from scan to scan, not the calibration's scale or a bias the whole scan shares.
 
@@ -152,7 +187,7 @@ A **bias** is an error that is the same on every scan, so the ± does not show i
 |---|---|
 | Ø 14 bosses | read 0.23–0.28 mm small in radius at true poses; 0.15–0.19 mm small with tracking |
 | Ø 16 shaft | reads 0.13 mm small in radius at true poses; 0.02 mm large with tracking |
-| Ø 25 hole over a far background (open edge) | reads 1.0–1.7 mm small in diameter at true poses; 0.9–3 mm small with tracking |
+| Ø 25 hole over a far background (open edge) | reads 1.0–1.7 mm small in diameter at true poses; 0.9–3 mm small with tracking (the Hole tool's [second answer, from the camera images](#a-holes-second-answer-from-the-camera-images), reads the edge itself) |
 | Ø 25 and Ø 10 holes with a wall, read 0.5 mm below the face | read 0.57–0.70 mm (Ø 25) and 0.28–0.60 mm (Ø 10) large at true poses; −0.3 to +0.51 mm and −0.34 to +0.5 mm off with tracking |
 | Thin walls (1, 2 and 3 mm) | read too thick: a 1 mm rib 1.24–1.28 mm at true poses and 1.66–2.20 mm with tracking; a 2 mm flange 2.10–2.18 and 2.26–2.61 mm; a 3 mm rib 3.04–3.06 and 3.17–3.71 mm |
 
@@ -303,7 +338,8 @@ When you edit the mesh or make it again, what you measured stays, marked:
 
 | Message | What it means | What to do |
 |---|---|---|
-| **Couldn't fit a plane here** (or a cylinder, a hole), with the engine's reason | No such shape was found where you clicked. | Follow the hint; for a bore wall, use **Cylinder**. |
+| **Couldn't fit a plane here** (or a cylinder, a hole), with the engine's reason | No such shape was found where you clicked. | Follow the hint; for a bore wall, use **Cylinder**. For a hole, when the scan offers the camera images' reading, the card says "The mesh gives no circle here" instead and the camera images are read all the same. |
+| "No diameter from the camera images: …" (in the Hole card) | The camera images gave no answer at this click; the mesh's answer stands. | See the table in [A hole's second answer, from the camera images](#a-holes-second-answer-from-the-camera-images). |
 | **The mesh changed since it was loaded** | The mesh changed between loading and your click. | The viewer reloads it. Click again once it shows. |
 | **The mesh changed since the viewer opened it** | The engine fitted a newer mesh than the one shown. The fit is kept. | Wait for the mesh to reload. |
 | **The fit's region doesn't match the mesh on screen** | The region could not be drawn on this mesh. | Click **Reload the mesh**. |

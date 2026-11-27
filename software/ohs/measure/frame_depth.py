@@ -16,18 +16,28 @@ graphics card when there is one (``ohs.vision.depth.DepthEstimator`` decides), a
     D = fd.depth(index)                       # (h, w) float32 mm, 0 = no depth; index = the recording's frame index
     P, N = fd.points(index, T_wc, near=(p, r))  # world points and normals (facing the camera) within r of p
     fd.K, fd.image_size                       # the rectified left camera's intrinsics and (w, h)
+    L, R = fd.images(index)                   # the raw left and right images, grey, as recorded (the hole's rim)
+    D, S = fd.depth_and_sigma(index)          # the same depth and the matcher's sigma of it (mm)
+
+The wall reading uses :meth:`FrameDepth.depth` (made each time); the hole reading (ENGINE_PLAN X15) uses
+:meth:`FrameDepth.images` and :meth:`FrameDepth.depth_and_sigma`, the last :data:`KEEP_FRAMES` of each kept, since each
+click on a hole reads the same frames again.
 
 Not thread-safe: one reading at a time (the server holds a lock around it).
 """
 from __future__ import annotations
 
 import dataclasses
+from collections import OrderedDict
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 
-__all__ = ["FrameDepth", "frame_points", "visible_from"]
+__all__ = ["FrameDepth", "frame_points", "visible_from", "KEEP_FRAMES"]
+
+#: the hole reading's frames kept for the next click (images and depth with sigma: about 10 MB a frame at 1280 x 800)
+KEEP_FRAMES = 24
 
 
 def frame_points(depth: np.ndarray, K: np.ndarray, T_wc: np.ndarray, near: tuple[np.ndarray, float] | None = None,
@@ -90,6 +100,8 @@ class FrameDepth:
         self._pos = {int(ix): p for p, ix in enumerate(self._reader.indices)}
         self.K = np.asarray(self._rect.K, dtype=np.float64)
         self.image_size = (int(w), int(h))
+        self._images: OrderedDict[int, tuple[np.ndarray, np.ndarray]] = OrderedDict()
+        self._sigma: OrderedDict[int, tuple[np.ndarray, np.ndarray]] = OrderedDict()
 
     @property
     def backend(self) -> str:
@@ -109,3 +121,36 @@ class FrameDepth:
                step: int = 2) -> tuple[np.ndarray, np.ndarray]:
         """The frame's depth as world points and normals at its pose ``T_wc`` (:func:`frame_points`)."""
         return frame_points(self.depth(index), self.K, T_wc, near=near, step=step)
+
+    # ------------------------------------------------------------------ for the hole's rim (ENGINE_PLAN X15)
+    def _kept(self, store: "OrderedDict[int, Any]", index: int, make) -> Any:
+        """``make()`` for ``index``, kept for the next click (the last :data:`KEEP_FRAMES`; the frames of one hole
+        are read again by each click on it)."""
+        index = int(index)
+        if index in store:
+            store.move_to_end(index)
+            return store[index]
+        out = store[index] = make()
+        while len(store) > KEEP_FRAMES:
+            store.popitem(last=False)
+        return out
+
+    def images(self, index: int) -> tuple[np.ndarray, np.ndarray]:
+        """The frame's raw left and right images, grey, as recorded (not rectified; the recording's left and right,
+        its ``swap_lr`` applied): what :func:`ohs.measure.rim.read_hole` reads the rim on."""
+        def make():
+            fr = self._reader.frame(self._pos[int(index)])
+            return np.ascontiguousarray(fr.left), np.ascontiguousarray(fr.right)
+
+        return self._kept(self._images, index, make)
+
+    def depth_and_sigma(self, index: int) -> tuple[np.ndarray, np.ndarray]:
+        """The frame's depth (mm, float32, 0 = none; the same map as :meth:`depth`) and the matcher's sigma of it (mm,
+        0 where there is no depth), on the rectified left camera
+        (:meth:`ohs.vision.depth.DepthEstimator.compute_with_sigma`)."""
+        def make():
+            left, right = self._rect.rectify(*self.images(index))
+            d, s = self._est.compute_with_sigma(left, right)
+            return np.asarray(d, dtype=np.float32), np.asarray(s, dtype=np.float32)
+
+        return self._kept(self._sigma, index, make)

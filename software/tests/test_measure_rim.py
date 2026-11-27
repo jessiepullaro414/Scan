@@ -132,3 +132,30 @@ def test_the_diameter_does_not_follow_the_pose():
     b = _read([(83.13, -42.07, 5.0)], [89.63, -42.07, Z0], shift=T)
     assert b.diameter_mm == a.diameter_mm
     assert np.allclose(b.centre, T[:3, :3] @ a.centre + T[:3, 3])
+
+
+# --------------------------------------------------------------------------- in words (what the app shows)
+def test_an_answer_in_words_says_which_diameter_and_never_that_the_path_moves_it():
+    res = rim.RimReading(None, diameter_mm=10.0412, pm_mm=0.1049, centre=np.zeros(3), frames_used=17, frames=20)
+    w = rim.reading_words(res)
+    assert w[0] == "Ø 10.04 mm ± 0.10 from the camera images (the rim where the face ends, read in 17 frames)."
+    assert w[1] == rim.WHICH_DIAMETER and "not the bore" in w[1] and "chamfer" in w[1]
+    assert len(w) == 2
+    res.position_unsure, res.centre_scatter = True, 1.64
+    res.warnings = ["the frames put the hole's centre 1.6 mm apart: ...", rim.PATH_WARNS]
+    w = rim.reading_words(res)
+    assert len(w) == 3 and w[2] == ("The hole's position may be off (the scan's camera path check warns and the "
+                                    "camera frames place its centre 1.6 mm apart); its diameter does not depend on "
+                                    "the camera path.")
+
+
+def test_every_refusal_has_a_hint_that_says_what_to_do():
+    assert "beside the hole" in rim.refusal_hint("only 2 frames show the rim (at least 5 needed)")
+    assert "several sides" in rim.refusal_hint("the top rim is found on only 80 degrees of the round")
+    assert "hole you mean" in rim.refusal_hint("the rim read in the images is 9 mm from the click: it is another hole's")
+    assert "not between two holes" in rim.refusal_hint(
+        "the frames put the hole's centre 4.1 mm apart: this is not one hole's rim")
+    for r in ("the frames disagree on the diameter by 1.3 mm", "the frames do not agree well enough on this rim: ± 0.31 mm",
+              "the frames put the hole's centre 1.4 mm apart and its diameter 0.41 mm apart: the rim is not read the "
+              "same in every frame"):
+        assert rim.refusal_hint(r) == rim.HINT_DEFAULT and "calipers" in rim.HINT_DEFAULT

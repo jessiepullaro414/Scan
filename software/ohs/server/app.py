@@ -211,6 +211,12 @@ class WallBody(BaseModel):  # ENGINE_PLAN X16: a wall's thickness from the camer
     version: Optional[int] = None  # the mesh version the click was made on
 
 
+class HoleImagesBody(BaseModel):  # ENGINE_PLAN X15 step 2: a hole's rim from the camera images at a click beside it
+    face: int = Field(ge=0)
+    point: list[float] = Field(min_length=3, max_length=3)
+    version: Optional[int] = None  # the mesh version the click was made on
+
+
 class FeatureFitBody(FitBody):
     name: Optional[str] = Field(None, max_length=80)  # default "Fit N"
 
@@ -869,6 +875,15 @@ def create_app(config: Any = None, *, projects_dir: Any = None, static_dir: Any 
     @app.post("/api/projects/{pid}/scans/{sid}/wall")
     def scan_wall(pid: str, sid: str, body: WallBody) -> JSONResponse:
         return _json(proc.wall(pid, sid, body.face, body.point, body.version))
+
+    # ENGINE_PLAN X15 step 2: the Hole tool's second answer, the hole's entrance rim read from the camera images
+    @app.get("/api/projects/{pid}/scans/{sid}/hole-images")
+    def scan_hole_images_available(pid: str, sid: str) -> JSONResponse:
+        return _json(proc.hole_images_available(pid, sid))
+
+    @app.post("/api/projects/{pid}/scans/{sid}/hole-images")
+    def scan_hole_images(pid: str, sid: str, body: HoleImagesBody) -> JSONResponse:
+        return _json(proc.hole_images(pid, sid, body.face, body.point, body.version))
 
     # ------------------------------------------------------------------ kept features (FEATURE_PLAN K1)
     feats = FeatureManager(st)

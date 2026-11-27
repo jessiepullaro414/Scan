@@ -48,7 +48,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import type { BufferGeometry } from "three";
 import { PLYLoader } from "three/examples/jsm/loaders/PLYLoader.js";
 import { ApiError, api } from "../api/http";
-import type { FitKind, KeptFeature, KeptFit, MadeInfo, Project, Scan, WallOffer, WallReading } from "../api/types";
+import type { FitKind, HoleImagesOffer, KeptFeature, KeptFit, MadeInfo, Project, Scan, WallOffer, WallReading } from "../api/types";
 import { isWholeRun, processingTime } from "../lib/making";
 import { HEALTH_ICON, HEALTH_TEXT } from "../components/CalibHealth";
 import { JobProgress, MakeMeshButton, ProcessButton, ScanStatusBadge } from "../components/ScanBits";
@@ -64,6 +64,7 @@ import { useConnection } from "../store/connection";
 import { downloadFile } from "../lib/download";
 import { decodeFaces, fitLabel, fitName, regionTriangles, summarizeRegion, type RegionSummary } from "../lib/fits";
 import { WALL_HINT, wallCard, wallOfferTitle } from "../lib/wall";
+import { holeImagesAnswer, holeImagesOffered, holeImagesRefused, holeImagesWaiting, meshHoleBlock, type HoleImagesBlock, type MeshHoleBlock } from "../lib/holeImages";
 import { fileStem, fmtBytes, fmtCompact, fmtDateTime, fmtDetailMm, fmtDuration, fmtFixed, fmtInt, fmtPct } from "../lib/format";
 import { viewerSheet } from "../lib/shortcuts";
 import { axesEntry, groupOfTool, initialOpen, openFor, type GroupsOpen, type ViewerGroupId, type ViewerTool } from "../lib/viewerGroups";
@@ -396,6 +397,12 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
   /** The last reading, shown under the view until the next click or the tool goes off. */
   const [wallReading, setWallReading] = useState<WallReading | null>(null);
   const [wallBusy, setWallBusy] = useState(false);
+  /** ENGINE_PLAN X15 step 2: whether the scan offers the hole reading from the camera images (and why not). */
+  const [holeOffer, setHoleOffer] = useState<HoleImagesOffer | null>(null);
+  /** The last Hole click's card: the mesh's answer, then the camera images' (null until asked, or not offered). */
+  const [holeCard, setHoleCard] = useState<{ mesh: MeshHoleBlock; images: HoleImagesBlock } | null>(null);
+  /** The last Hole click: an older click's image reading that answers late is dropped. */
+  const holeSeq = useRef(0);
   /** The Section tool is on (FEATURE_PLAN I1). */
   const [sectionOn, setSectionOn] = useState(false);
   /** Matching points are being picked on the scan and the reference (FEATURE_PLAN I2). */
@@ -658,10 +665,49 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
       .catch(() => {
         if (live) setWallOffer({ available: false, why: "The engine did not say whether it can read a wall here." });
       });
+    api
+      .holeImagesOffer(pid, sid)
+      .then((o) => {
+        if (live) setHoleOffer(o);
+      })
+      .catch(() => {
+        if (live) setHoleOffer({ available: false, why: "The engine did not say whether it can read a hole from the camera images here." });
+      });
     return () => {
       live = false;
     };
   }, [fitOn, pid, sid]);
+
+  // The Hole card goes with the Hole choice: another shape, the Wall choice or the tool off drop it (and a late answer).
+  useEffect(() => {
+    if (!fitOn || wallPick || fitKind !== "hole") {
+      holeSeq.current++;
+      setHoleCard(null);
+    }
+  }, [fitOn, wallPick, fitKind]);
+
+  /** ENGINE_PLAN X15 step 2: after a Hole click (the mesh answered or gave no circle), the hole's rim read from the
+   * camera images at the same click; one at a time, a newer click drops this one's answer. */
+  const askHoleImages = useCallback(
+    (seq: number, p: Vec3, face: number, version: number | undefined, mesh: MeshHoleBlock, g: BufferGeometry) => {
+      setHoleCard({ mesh, images: holeImagesWaiting() });
+      api
+        .holeImages(pid, sid, version === undefined ? { face, point: p } : { face, point: p, version })
+        .then((r) => {
+          if (holeSeq.current === seq) setHoleCard({ mesh, images: holeImagesAnswer(r) });
+        })
+        .catch((e: unknown) => {
+          if (holeSeq.current !== seq) return;
+          if (e instanceof ApiError && e.status === 409 && version !== undefined) {
+            setHoleCard(null);
+            toast.warn("The mesh changed since it was loaded", "The viewer is reloading it.", "Click again once it shows.");
+            if (geomRef.current === g) reloadInPlace();
+          } else if (e instanceof ApiError) setHoleCard({ mesh, images: holeImagesRefused(e.detail, e.hint, e.extra) });
+          else setHoleCard({ mesh, images: holeImagesRefused("the reading did not finish.", "Click again; if it keeps failing, the mesh's answer stands.") });
+        });
+    },
+    [pid, sid, reloadInPlace],
+  );
 
   /** ENGINE_PLAN X16: one click with the Wall choice: the engine reads the wall's thickness from the camera frames. */
   const onWallPick = useCallback(
@@ -702,15 +748,25 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
       const kind = fitKind;
       // the version of the mesh on screen, when known: the engine refuses the click (409) if it changed since
       const version = typeof g.userData.meshVersion === "number" ? (g.userData.meshVersion as number) : undefined;
+      // ENGINE_PLAN X15 step 2: a Hole click also asks for the camera images' reading, when the scan offers it
+      const images = kind === "hole" && holeImagesOffered(holeOffer);
+      const seq = ++holeSeq.current;
+      if (kind === "hole") setHoleCard(null);
       setFitBusy({ p, kind });
       useFeatures
         .getState()
         .keepFit(pid, sid, version === undefined ? { kind, face, point: p } : { kind, face, point: p, version })
-        .then((r) => addFit(r, g))
+        .then((r) => {
+          addFit(r, g);
+          if (images && holeSeq.current === seq) askHoleImages(seq, p, face, version, meshHoleBlock(r.shape.kind === "circle" ? r.shape : null, null), g);
+        })
         .catch((e: unknown) => {
           if (e instanceof ApiError && e.status === 409 && version !== undefined) {
             toast.warn("The mesh changed since it was loaded", "The viewer is reloading it.", "Click again once it shows.");
             if (geomRef.current === g) reloadInPlace();
+          } else if (images && e instanceof ApiError && e.status === 422) {
+            // small holes over open space give no circle on the mesh: the camera images may still read the rim
+            if (holeSeq.current === seq) askHoleImages(seq, p, face, version, meshHoleBlock(null, e.detail), g);
           } else toast.error(`Couldn't fit a ${fitName(kind).toLowerCase()} here`, e);
         })
         .finally(() => {
@@ -718,7 +774,7 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
           setFitBusy(null);
         });
     },
-    [pid, sid, fitKind, addFit, reloadInPlace, wallPick, onWallPick],
+    [pid, sid, fitKind, addFit, reloadInPlace, wallPick, onWallPick, holeOffer, askHoleImages],
   );
   const removeFit = (id: string) => {
     void useFeatures.getState().remove(pid, sid, id);
@@ -1302,6 +1358,32 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
                   <li key={l}>{l}</li>
                 ))}
               </ul>
+            </div>
+          </div>
+        ) : null}
+
+        {fitOn && !wallPick && fitKind === "hole" && holeCard ? (
+          <div className="absolute bottom-16 left-1/2 w-[min(36rem,90%)] -translate-x-1/2">
+            <div className="glass animate-pop-in rounded-xl border border-line px-4 py-3 text-sm text-fg shadow-lg" role="status" aria-label="Hole">
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-base font-semibold">{holeCard.mesh.headline}</span>
+                <IconButton icon={X} size="sm" label="Close" onClick={() => setHoleCard(null)} />
+              </div>
+              {holeCard.mesh.line ? <p className="mt-0.5 text-muted">{holeCard.mesh.line}</p> : null}
+              <div className="mt-2 border-t border-line pt-2" aria-label={holeCard.images.title}>
+                <div className="flex items-center justify-between gap-3">
+                  <span className="font-medium">{holeCard.images.title}</span>
+                  {holeCard.images.state === "waiting" ? <Spinner size={14} className="text-accent" /> : holeCard.images.meta ? <span className="text-xs text-muted">{holeCard.images.meta}</span> : null}
+                </div>
+                <ul className="mt-1 space-y-1 text-muted">
+                  {holeCard.images.lines.map((l, i) => (
+                    // the engine's first sentence of an answer carries the diameter: shown as the mesh's headline is
+                    <li key={l} className={holeCard.images.state === "answer" && i === 0 ? "text-base font-semibold text-fg" : undefined}>
+                      {l}
+                    </li>
+                  ))}
+                </ul>
+              </div>
             </div>
           </div>
         ) : null}

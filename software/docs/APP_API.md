@@ -1040,6 +1040,8 @@ Paths are relative to `/api/projects/{pid}/scans/{sid}`.
 | `POST .../fit` | `FitRequest` | `FitResult` |
 | `GET .../wall` | none | `{available: boolean, why: string \| null}`: whether the wall-thickness reading is offered for the scan (since 2026-11-26, ENGINE_PLAN X16) |
 | `POST .../wall` | `{face: number, point: [x, y, z], version?: number}` | `WallReading` (below); 409 when the mesh changed; 422 with a plain `detail` and a `hint` when not offered or refused |
+| `GET .../hole-images` | none | `{available: boolean, why: string \| null}`: whether the hole reading from the camera images is offered for the scan (since 2026-11-26, ENGINE_PLAN X15 step 2) |
+| `POST .../hole-images` | `{face: number, point: [x, y, z], version?: number}` | `HoleImagesReading` (below); 409 when the mesh changed; 422 with a plain `detail` and a `hint` when not offered or refused |
 
 Rules:
 - 409 before the scan has a mesh (as `holes.json`).
@@ -1166,6 +1168,20 @@ Paths are relative to `/api/projects/{pid}/scans/{sid}`.
 
 Rules:
 - `GET` reads only: a scan without kept features answers an empty set (and writes nothing).
+- **The hole from the camera images** (since 2026-11-26; `[process] hole_from_images`, on; `VALIDATION.md`, "Holes
+  from the camera images in the app"): the diameter of a hole's entrance rim in the clicked face's plane (not the
+  bore below, not a chamfer's outer edge), read from up to 20 of the scan's camera frames at a click on the face
+  beside the hole (`ohs.measure.rim.read_hole`). `HoleImagesReading` is `{available: true, diameter_mm, pm_mm
+  (1 sigma), centre, normal, frames_used, frames_tried, cover_deg, warnings: string[], words: string[], seconds,
+  version}`. Show `words` as they come. The diameter does not depend on the camera path; the centre does, and the
+  words say so when the path check warns or the frames place the centre apart. It is read-only and takes 5 to
+  15 s; one reading runs at a time, sharing the wall reading's lock and frame provider, and the frames are kept
+  for the next click. A refusal is a 422 whose `detail` is the engine's words and whose `hint` says what to do,
+  with `refused: true, frames_used, frames_tried, seconds` and never a diameter. Not offered (`available: false`
+  with `why`; a POST then answers 422): the setting off, a merged scan, a scan tracked by markers, no graphics
+  card, a scan made at Preview quality, a recording under 1280 px wide, or the recording, the calibration, the
+  depth range or the camera path gone. The viewer asks for it after every Hole click, also when the mesh's own
+  fit answered 422.
 - **The wall-thickness reading** (since 2026-11-26; `[process] wall_reading`, on; `VALIDATION.md`, "The
   wall-thickness reading in the app"): a thin wall's thickness read from the scan's camera frames at a click on
   one of its faces. `WallReading` is `{available: true, at_most_mm, reading_mm, pm_mm, mesh_mm, frames: [a, b],

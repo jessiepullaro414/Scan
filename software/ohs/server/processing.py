@@ -114,7 +114,7 @@ import numpy as np
 from ohs.server.jobs import JobCancelled, failure_notice, failure_text
 from ohs.server.projects import report_summary, user_warnings
 from ohs.server.protocol import (QUALITY_NAMES, ApiError, jsonable, normalize_quality, now_iso, plain_reason,
-                                 quality_or_none)
+                                 quality_or_none, sentence)
 from ohs.server.util import safe_call
 from ohs.track.posegraph import read_trajectory  # the one reader of trajectory.csv (also in __all__ here)
 
@@ -773,6 +773,39 @@ def images_on_gpu() -> bool:
     from ohs.compute import get_device
 
     return get_device() is not None
+
+
+#: The hole reading from the camera images (ENGINE_PLAN X15 step 2) is offered on recordings at least this wide: it
+#: was checked only on 1280 x 800 recordings.
+HOLE_IMAGES_MIN_WIDTH = 1280
+#: ... and without a graphics card only when this is True. Measured 2026-11-26 (VALIDATION.md, "Holes from the camera
+#: images in the app"): with the matcher on the processor the stop rule is met on scans tracked by the graphics card,
+#: but a scan tracked and meshed on the processor was not run, so it stays off.
+HOLE_IMAGES_ON_CPU = False
+
+
+def face_normal_at(V: np.ndarray, F: np.ndarray, face: int, point: np.ndarray, radius_mm: float = 2.0) -> np.ndarray:
+    """The mesh's unit normal at a click on ``face``: the area-weighted mean normal of the faces whose centres lie
+    within ``radius_mm`` of ``point`` and that face the clicked face's way within about 37 degrees (a rim's or a bore's
+    faces nearby are left out); the clicked face's own normal when nothing else is near."""
+    tri = np.asarray(V, dtype=np.float64)[np.asarray(F)[int(face)]]
+    n0 = np.cross(tri[1] - tri[0], tri[2] - tri[0])
+    if not np.linalg.norm(n0) > 0:
+        return np.array([0.0, 0.0, 1.0])
+    n0 = n0 / np.linalg.norm(n0)
+    Vd = np.asarray(V, dtype=np.float64)
+    Fi = np.asarray(F)
+    near = np.flatnonzero(np.linalg.norm(Vd[Fi].mean(axis=1) - np.asarray(point, dtype=np.float64), axis=1) <= radius_mm)
+    if len(near):
+        T = Vd[Fi[near]]
+        N = np.cross(T[:, 1] - T[:, 0], T[:, 2] - T[:, 0])  # area-weighted (twice the area)
+        a = np.linalg.norm(N, axis=1)
+        keep = a > 0
+        cos = (N[keep] @ n0) / a[keep]
+        m = N[keep][cos > 0.8].sum(axis=0)
+        if np.linalg.norm(m) > 0:
+            return m / np.linalg.norm(m)
+    return n0
 
 
 #: Make mesh's guard on "Refine from the images" (ENGINE_PLAN X6; ``SpacetimeParams.guard_*``): a patch is used only
@@ -3303,7 +3336,6 @@ class ProcessManager:
         ``inputs`` = ``{calib, depth_range, trajectory}``; the setting, the scan's tracking mode, a merge, the
         recording's calibration, the depth range in the report and the base stage's camera path."""
         from ohs.measure.wall import MARKERS_WORDS
-        from ohs.types import ScannerCalibration
 
         if not bool(getattr(self.st.cfg.process, "wall_reading", False)):
             return None, ("The wall-thickness reading is off in the settings ([process] wall_reading): it is a "
@@ -3317,6 +3349,14 @@ class ProcessManager:
         rep = _read_json(sp.result_dir / "report.json") or {}
         if entry.get("merged_from") or rep.get("merged"):
             return None, "Not offered for a merged scan: read the wall on one of the scans it was made from."
+        return self._frames_inputs(sp, rep)
+
+    def _frames_inputs(self, sp: ScanProcess, rep: dict) -> tuple[dict | None, str | None]:
+        """What a reading from the scan's camera frames needs (the wall's, the hole's): ``({calib, depth_range,
+        trajectory}, None)``, or ``(None, why)``: the recording's calibration, the depth range in the report and the
+        base stage's camera path."""
+        from ohs.types import ScannerCalibration
+
         if rep.get("calibration") not in (None, "recording"):
             return None, "Not offered: the scan was made with another calibration than its recording's."
         cal_path = sp.recording_dir / "calibration.json"
@@ -3350,7 +3390,6 @@ class ProcessManager:
         (:func:`ohs.measure.wall.read_wall_thickness`): one-sided ("at most"), with the mesh's own reading beside it.
         Read-only. The matcher runs again on the 6 to 30 frames that see the clicked wall (on the graphics card
         when there is one); one reading at a time."""
-        from ohs.measure.frame_depth import FrameDepth
         from ohs.measure.wall import WallRefused, read_wall_thickness
 
         sp = self.scan(pid, sid)
@@ -3359,6 +3398,23 @@ class ProcessManager:
         if inputs is None:
             raise ApiError(422, f"The wall-thickness reading is not offered for this scan. {why}",
                            "Measure the wall with calipers, or lay the part flat and scan it from above.")
+        v, V, F = self._click_mesh(sp, face, version)
+        poses = self._frames_poses(inputs)
+        with self._wall_lock:  # one reading at a time: the matcher is shared
+            fd = self._frames_provider(sp, inputs)
+            try:
+                r = read_wall_thickness(V, F, point, poses=poses, K=fd.K, image_size=fd.image_size,
+                                        depth_range=inputs["depth_range"], depth_of=fd.depth)
+            except WallRefused as e:
+                raise ApiError(422, plain_reason(e, "No wall thickness could be read where you clicked."),
+                               e.hint or "Click on one face of a thin wall whose both sides were scanned.") from None
+        out = r.to_dict()
+        out.update(version=v, available=True)
+        return out
+
+    def _click_mesh(self, sp: ScanProcess, face: int, version: int | None) -> tuple[int, np.ndarray, np.ndarray]:
+        """``(version, V, F)`` of the current mesh a click was made on: 409 when it changed since, 422 for a face
+        outside it (the fit's arrays, loaded once per version)."""
         with sp.lock:
             v = int(sp.state["version"])
             if version is not None and int(version) != v:
@@ -3370,26 +3426,112 @@ class ProcessManager:
         _, V, F, _, _ = cached
         if not 0 <= int(face) < len(F):
             raise ApiError(422, "The click is not on the current mesh.", "Reload the mesh and click again.")
+        return v, V, F
+
+    @staticmethod
+    def _frames_poses(inputs: dict) -> dict[int, np.ndarray]:
+        """The scan's final camera path (frame index -> ``T_wc`` of the rectified left camera), the tracked frames."""
         try:
             rows = read_trajectory(inputs["trajectory"])
         except (OSError, ValueError):
             raise ApiError(422, "The scan's camera path cannot be read.", "Make the mesh again.") from None
-        poses = {int(i): np.asarray(T, dtype=np.float64) for i, _, ok, T in rows
-                 if ok and np.all(np.isfinite(np.asarray(T, dtype=np.float64)))}
-        with self._wall_lock:  # one reading at a time: the matcher is shared
-            key = (str(sp.recording_dir), inputs["depth_range"])
-            if self._frame_depth is None or self._frame_depth[0] != key:
-                self._frame_depth = (key, FrameDepth(sp.recording_dir, inputs["calib"], inputs["depth_range"]))
-            fd = self._frame_depth[1]
-            try:
-                r = read_wall_thickness(V, F, point, poses=poses, K=fd.K, image_size=fd.image_size,
-                                        depth_range=inputs["depth_range"], depth_of=fd.depth)
-            except WallRefused as e:
-                raise ApiError(422, plain_reason(e, "No wall thickness could be read where you clicked."),
-                               e.hint or "Click on one face of a thin wall whose both sides were scanned.") from None
-        out = r.to_dict()
-        out.update(version=v, available=True)
-        return out
+        return {int(i): np.asarray(T, dtype=np.float64) for i, _, ok, T in rows
+                if ok and np.all(np.isfinite(np.asarray(T, dtype=np.float64)))}
+
+    def _frames_provider(self, sp: ScanProcess, inputs: dict) -> Any:
+        """The recording's :class:`~ohs.measure.frame_depth.FrameDepth`, one kept (the last recording read). Call
+        with ``_wall_lock`` held: the matcher is shared."""
+        from ohs.measure.frame_depth import FrameDepth
+
+        key = (str(sp.recording_dir), inputs["depth_range"])
+        if self._frame_depth is None or self._frame_depth[0] != key:
+            self._frame_depth = (key, FrameDepth(sp.recording_dir, inputs["calib"], inputs["depth_range"]))
+        return self._frame_depth[1]
+
+    # ------------------------------------------------------------------ the hole from the camera images (X15 step 2)
+    def _hole_inputs(self, sp: ScanProcess) -> tuple[dict | None, str | None]:
+        """What the hole reading from the camera images needs for this scan, or why it is not offered: ``(inputs,
+        why)``, ``inputs`` as :meth:`_frames_inputs` gives them plus ``path_warns``; the setting, a merge, the scan's
+        tracking mode, a graphics card (:data:`HOLE_IMAGES_ON_CPU`), the quality it was made at, the recording's
+        calibration and size (:data:`HOLE_IMAGES_MIN_WIDTH`), the depth range in the report, the camera path."""
+        from ohs.server.projects import path_check_short
+
+        if not bool(getattr(self.st.cfg.process, "hole_from_images", False)):
+            return None, "The hole reading from the camera images is off in the settings ([process] hole_from_images)."
+        entry = self.st.projects.scan_entry(sp.pid, sp.sid)
+        rep = _read_json(sp.result_dir / "report.json") or {}
+        if entry.get("merged_from") or rep.get("merged"):
+            return None, "Not offered for a merged scan: read the hole on one of the scans it was made from."
+        if entry.get("mode") == "markers":
+            return None, ("Not offered for a scan tracked by its markers: the reading has not been checked on such "
+                          "scans yet.")
+        if not HOLE_IMAGES_ON_CPU and not images_on_gpu():
+            return None, ("Not offered without a graphics card: the reading from the camera images has not been "
+                          "checked without one yet.")
+        with sp.lock:
+            quality = quality_or_none(((sp.state.get("stages") or {}).get("track") or {}).get("quality")
+                                      or rep.get("quality"))
+        if quality == "preview":
+            return None, ("Not offered for a scan made at Preview quality: the reading was checked on scans made at "
+                          "Standard quality. Make the mesh at Standard quality to use it.")
+        inputs, why = self._frames_inputs(sp, rep)
+        if inputs is None:
+            return None, why
+        w = int(inputs["calib"].stereo.image_size[0])
+        if w < HOLE_IMAGES_MIN_WIDTH:
+            return None, (f"Not offered for this recording's {w} pixel wide images: the reading was checked only on "
+                          f"recordings {HOLE_IMAGES_MIN_WIDTH} pixels wide.")
+        inputs["path_warns"] = (path_check_short(rep) or {}).get("state") == "warn"
+        return inputs, None
+
+    def hole_images_available(self, pid: str, sid: str) -> dict:
+        """``GET .../hole-images``: whether the hole reading from the camera images is offered for this scan, and why
+        not."""
+        sp = self.scan(pid, sid)
+        self._need_base(sp)
+        _, why = self._hole_inputs(sp)
+        return {"available": why is None, "why": why}
+
+    def hole_images(self, pid: str, sid: str, face: int, point: Any, version: int | None = None) -> dict:
+        """``POST .../hole-images``: the diameter of a hole's entrance rim read from the scan's camera images at a
+        click on the face beside it (:func:`ohs.measure.rim.read_hole`), beside the mesh's own Hole answer. Read-only;
+        5 to 15 s (the matcher runs again on up to 20 frames, kept for the next click); one reading at a time. A
+        refusal is a 422 with the engine's words as the detail, what to do as the hint, no diameter."""
+        from ohs.measure import rim as RIM
+
+        sp = self.scan(pid, sid)
+        self._need_base(sp)
+        inputs, why = self._hole_inputs(sp)
+        if inputs is None:
+            raise ApiError(422, f"The hole reading from the camera images is not offered for this scan. {why}",
+                           "The mesh's own answer stands; for the hole's true size use calipers or a pin gauge.")
+        v, V, F = self._click_mesh(sp, face, version)
+        click = np.asarray(point, dtype=np.float64).reshape(3)
+        if not np.all(np.isfinite(click)):
+            raise ApiError(422, "The click is not on the current mesh.", "Reload the mesh and click again.")
+        normal = face_normal_at(V, F, int(face), click)
+        poses = self._frames_poses(inputs)
+        t0 = time.perf_counter()
+        with self._wall_lock:  # one reading at a time: the matcher is shared with the wall reading
+            fd = self._frames_provider(sp, inputs)
+            res = RIM.read_hole(click, normal, poses=poses, calib=inputs["calib"],
+                                images=lambda i: fd.images(i) if fd.has(i) else None,
+                                depth=lambda i: fd.depth_and_sigma(i) if fd.has(i) else None,
+                                path_warns=bool(inputs["path_warns"]))
+        seconds = round(time.perf_counter() - t0, 1)
+        if res.refused or res.diameter_mm is None or res.pm_mm is None or res.centre is None:
+            refused = res.refused or "no diameter could be read from the camera images here"
+            raise ApiError(422, plain_reason(refused, "No diameter could be read from the camera images here."),
+                           RIM.refusal_hint(refused),
+                           extra={"refused": True, "frames_used": int(res.frames_used),
+                                  "frames_tried": int(res.frames), "seconds": seconds})
+        return {"available": True, "diameter_mm": float(res.diameter_mm), "pm_mm": float(res.pm_mm),
+                "centre": [float(x) for x in res.centre],
+                "normal": [float(x) for x in (res.normal if res.normal is not None else normal)],
+                "frames_used": int(res.frames_used), "frames_tried": int(res.frames),
+                "cover_deg": None if res.covered_deg is None else float(res.covered_deg),
+                "warnings": [sentence(w) for w in res.warnings], "words": RIM.reading_words(res),
+                "seconds": seconds, "version": v}
 
     def deviation(self, pid: str, sid: str) -> tuple[dict, np.ndarray]:
         """The deviation map of the current mesh: how far each vertex lies from the scan's base mesh

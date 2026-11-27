@@ -972,7 +972,7 @@ and thin parts".
   down. Weaker than X2.
 - **Stop rule: adopted only if** within 0.2 mm on 8 of 9 clicks.
 
-### [ ] X15. A hole's rim read from the camera images (M): measured 2026-11-23 and 24; round 6 passes on fresh scans with the dots on and off; not in the app
+### [x] X15. A hole's rim read from the camera images (M): in the app's Hole tool since 2026-11-26, as a second answer (simulation only; real images open)
 E-D3 item 1. `tools/hole_rim_study.py` (a study tool; nothing in the engine uses it); notes and
 every run in `D:\OpenHandScan-work\scratch\ed3\holes_looks`; `VALIDATION.md`, "A hole's rim read
 from the camera images".
@@ -1049,11 +1049,20 @@ from the camera images".
   clicks of round 6 run again through the module are identical to the study's in every
   field (diameter, ±, refusal, hole named, frames used); its tests pass on both paths. About
   0.6 s a frame on this processor, 12 s for 20 frames. Step 2 (the fit route, the hole
-  tool, the guide) is next; the shared depth provider (`ohs/measure/frame_depth.py`) needs
-  the two raw images and the matcher's sigma for it. A first version in the app's hole tool,
-  "from the images" beside the mesh's reading, 10 to 20 s a click on this processor: a new
-  module `ohs/measure/rim.py` called after today's mesh answer, the answer gaining one
-  field `from_images` (a diameter with its ±, or the words of a refusal).
+  tool, the guide) followed.
+- **Step 2 done 2026-11-26** (`VALIDATION.md`, "Holes from the camera images in the app"):
+  the Hole tool's second answer "From the camera images", through a route of its own
+  (`GET` and `POST .../hole-images`; a fit answers in under a second, this takes 5 to
+  15 s), `[process] hole_from_images` on. The stop rule is met through the route on 81
+  clicks of nine app-made scans: every answer names its own hole and is within 0.08 mm; 27
+  of 27 far-background Ø 25 and Ø 10 clicks answered, where the mesh reads the Ø 25 1.1 to
+  6.6 mm small and gives nothing for Ø 10 and Ø 6; near the floor the Ø 10 is refused (the
+  mesh is right there); the blind bore is refused. Offered only with a graphics card (the
+  processor's matcher passes on the same scans, but a scan made wholly on the processor
+  was not run), not for merged scans, Markers mode or Preview quality (not measured).
+- **Left:** real images (gloss, chamfers, burrs); scans made wholly on the processor;
+  Markers mode; Preview quality; the reading is not kept with the scan as a fitted shape
+  is; the known-bias table of Compare with CAD still speaks of the mesh's hole only.
 - **Waits for hardware:** the dots-off reading. The board switches the projector by a serial
   command, not in step with the cameras; it needs frames without dots, a short exposure
   (under 0.5 ms; today automatic, about 7.8 ms) and perhaps a light.

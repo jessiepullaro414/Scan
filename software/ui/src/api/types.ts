@@ -1046,6 +1046,32 @@ export type WallReading = {
   timings_s: Record<string, number>;
   version: number;
 };
+// ENGINE_PLAN X15 step 2: the Hole tool's second answer, the hole's entrance rim read from the scan's camera images
+export type HoleImagesOffer = {
+  available: boolean;
+  why: string | null; // why it is not offered (the setting, a merge, markers, Preview quality, no graphics card, files gone)
+};
+export type HoleImagesRequest = {
+  face: number; // the clicked face of result/mesh.ply (on the face beside the hole)
+  point: [number, number, number]; // the clicked point on it (mm, the mesh's frame)
+  version?: number; // the mesh version the click was made on: 409 when it is no longer current
+};
+export type HoleImagesReading = {
+  available: true;
+  diameter_mm: number; // the entrance rim in the face's plane (not the bore below, not a chamfer's outer edge)
+  pm_mm: number; // 1σ: the frames' scatter and a part they share
+  centre: [number, number, number]; // mm, the mesh's frame (depends on the camera path; the diameter does not)
+  normal: [number, number, number];
+  frames_used: number;
+  frames_tried: number;
+  cover_deg: number | null; // how much of the rim's round was found (median over frames)
+  warnings: string[];
+  words: string[]; // the engine's sentences, shown as they come
+  seconds: number;
+  version: number;
+};
+/** A refusal's 422 body: the engine's words as `detail`, what to do as `hint`, no diameter. */
+export type HoleImagesRefusal = { detail: string; hint?: string; refused?: boolean; frames_used?: number; frames_tried?: number; seconds?: number };
 
 export type FitResult = {
   kind: FitKind; // as asked; a hole's shape is a circle

@@ -605,6 +605,9 @@ class MockBackend {
         // ENGINE_PLAN X16: the demo engine has no camera frames to read a wall's thickness from
         if (e === "wall" && is("GET", 5)) return json(200, { available: false, why: MOCK_WALL_WHY });
         if (e === "wall" && is("POST", 5)) throw new HttpError(422, `The wall-thickness reading is not offered for this scan. ${MOCK_WALL_WHY}`, "Measure the wall with calipers.");
+        // ENGINE_PLAN X15 step 2: nor a hole's rim
+        if (e === "hole-images" && is("GET", 5)) return json(200, { available: false, why: MOCK_HOLE_WHY });
+        if (e === "hole-images" && is("POST", 5)) throw new HttpError(422, `The hole reading from the camera images is not offered for this scan. ${MOCK_HOLE_WHY}`, "The mesh's own answer stands.");
         if (e === "features") {
           // kept fits, measurements and relations (features.ts)
           const r = this.features.route(method, `${p.id}/${s.id}`, seg.slice(5), body, this.studio.featureEngine(p, s));
@@ -1433,6 +1436,8 @@ const SETTINGS = {
 
 /** Why the demo engine does not offer the wall-thickness reading (ENGINE_PLAN X16). */
 const MOCK_WALL_WHY = "The demo has no camera frames to read a wall's thickness from.";
+/** ... nor a hole's rim (ENGINE_PLAN X15 step 2). */
+const MOCK_HOLE_WHY = "The demo has no camera images to read a hole's edge from.";
 
 export function createMockBackend(opts: MockOptions): { fetch: FetchLike; socket: SocketFactory } {
   const b = new MockBackend(opts);

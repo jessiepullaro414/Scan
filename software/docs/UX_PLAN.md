@@ -966,3 +966,11 @@ with the engine's one-sided sentences ("At most X mm thick here…", never a ±)
 with the engine's words. Checked in the running app. Open: whether the reading should be keepable
 with the scan as a fitted shape is.
 
+### [x] G4. The Hole tool's second answer, "From the camera images" (done 2026-11-26)
+After a Hole click a card under the view shows the mesh's answer, then a block "From the camera
+images" with the engine's words (ENGINE_PLAN X15). It waits with "Reading the rim from the camera
+frames…" and drops an answer that comes after a newer click. A refusal shows quietly in the block,
+not as a toast: the mesh's answer still stands. When the mesh gives no circle (small holes over
+open space) the card says "The mesh gives no circle here" and still reads the images. No new key.
+Open: the reading is not kept with the scan as the fitted circle is.
+

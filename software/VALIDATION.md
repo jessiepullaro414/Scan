@@ -6735,6 +6735,76 @@ Limits: the processor path only (the alignment is the same code on both); simula
 table tags is the tag ring's first principal axis; shifts stand in for a nudged part or a moved table, turns of
 the tag map were not tried.
 
+## Holes from the camera images in the app (ENGINE_PLAN X15 step 2, 2026-11-26): in the Hole tool, as a second answer
+
+The owner's decision E-D5: the hole reading from the camera images goes into the app's Hole tool beside the mesh's
+answer. `ohs/measure/rim.py` (the reading, step 1) through `GET` and `POST .../scans/{sid}/hole-images`; the shared
+frame provider (`ohs/measure/frame_depth.py`) gained the raw images and the matcher's depth with its sigma; the
+viewer's Hole card shows the mesh's answer, then "From the camera images". The stop rule, fixed beforehand: through
+the server's route, on the scorecard's hole recordings made into app projects with the app's default Make mesh
+(Standard, tracked, graphics card), three clicks a hole on the face beside it: (a) no answer names a wrong hole;
+(b) every answered Ø 25 and Ø 10 within 0.3 mm of the truth, 0.5 mm when the path check warns; (c) at least 90 % of
+the far-background Ø 25 and Ø 10 answered; (d) near the floor refused or within 0.3 mm; (e) every answer nearer the
+truth than the mesh's own hole fit, or the mesh gives none. **Met**: 81 clicks, 50 answered, the worst answer
+0.08 mm off. Data: `D:\OpenHandScan-work\scratch\ed3\holes_app` (`rows_gpu.jsonl`, `rows_cpu.jsonl`).
+
+The three clicks of each hole, in mm (the mesh's hole fit / the camera images with their ± / clicks refused):
+
+| recording | hole | truth | the mesh | the camera images | refused | a click takes |
+|---|---|---|---|---|---|---|
+| holes-high-s0 (120 mm above the floor) | Ø 25 | 25.00 | 18.39 | 24.99 ± 0.10 | 0 of 3 | 8.3 s |
+| | Ø 10 | 10.00 | none | 10.00 to 10.01 ± 0.10 | 0 of 3 | 7.8 s |
+| | Ø 6 | 6.00 | none | 5.97 to 5.98 ± 0.11 | 0 of 3 | 6.8 s |
+| | blind bore Ø 10 | 10.00 | 9.67, none, none | refused | 3 of 3 | 5.9 s |
+| holes-high-s1 | Ø 25 | 25.00 | 22.09 | 24.96 ± 0.10 | 0 of 3 | 8.0 s |
+| | Ø 10 | 10.00 | none | 9.94 to 9.96 | 0 of 3 | 8.1 s |
+| | Ø 6 | 6.00 | none | 5.92 to 5.95 | 0 of 3 | 7.0 s |
+| | blind bore | 10.00 | 9.71, none, 9.64 | refused | 3 of 3 | 5.0 s |
+| holes-high-s2 | Ø 25 | 25.00 | 21.95 | 24.95 to 24.96 | 0 of 3 | 8.2 s |
+| | Ø 10 | 10.00 | none | 9.98 to 10.03 | 0 of 3 | 8.0 s |
+| | Ø 6 | 6.00 | none | 5.93 to 5.98 | 0 of 3 | 6.8 s |
+| | blind bore | 10.00 | none, 9.10, 9.23 | refused | 3 of 3 | 5.6 s |
+| holes-low-s0 (10 mm above the floor) | Ø 25 | 25.00 | 25.32 to 25.47 | 24.98 to 25.01 | 0 of 3 | 8.0 s |
+| | Ø 10 | 10.00 | 10.07 | refused | 3 of 3 | 7.7 s |
+| | Ø 6 | 6.00 | none | refused, 5.94, 5.94 | 1 of 3 | 6.9 s |
+| | blind bore | 10.00 | 9.52 to 9.68 | refused | 3 of 3 | 5.9 s |
+| holes-low-s1 | Ø 25 | 25.00 | 24.52 to 25.33 | 24.92 to 24.94 ± 0.11 | 0 of 3 | 7.9 s |
+| | Ø 10 | 10.00 | 9.93 | refused | 3 of 3 | 7.0 s |
+| | Ø 6 | 6.00 | none | refused | 3 of 3 | 7.0 s |
+| | blind bore | 10.00 | 9.21 to 9.57 | refused | 3 of 3 | 5.4 s |
+| holes-low-s2 | Ø 25 | 25.00 | 24.90 to 25.38 | 24.95 to 24.96 ± 0.11 | 0 of 3 | 7.9 s |
+| | Ø 10 | 10.00 | 9.80 | refused | 3 of 3 | 7.8 s |
+| | Ø 6 | 6.00 | none | 6.01 to 6.07 ± 0.11 to 0.13 | 0 of 3 | 6.7 s |
+| | blind bore | 10.00 | 8.77 to 9.59 | refused | 3 of 3 | 5.7 s |
+| panel200-s0 (the car panel) | Ø 25 | 25.20 | 24.10 | 25.18 to 25.19 ± 0.10 | 0 of 3 | 8.2 s |
+| panel200-s1 | Ø 25 | 25.20 | 24.10 | 25.18 to 25.19 | 0 of 3 | 7.9 s |
+| panel200-s2 | Ø 25 | 25.20 | 23.97 | 25.15 to 25.17 | 0 of 3 | 8.3 s |
+
+- **(a)** all 50 answers name the clicked hole. **(b)** every answered Ø 25 and Ø 10 is within 0.08 mm. **(c)** the
+  far-background Ø 25 and Ø 10 are answered on 27 of 27 clicks, where the mesh reads the Ø 25 1.1 to 6.6 mm small and
+  gives no circle for the Ø 10. **(d)** near the floor every answer is within 0.08 mm; the three Ø 10 there are refused
+  on all nine clicks (where the mesh's own fit is within 0.2 mm: near a floor the mesh is the answer). **(e)** no
+  answer is further from the truth than the mesh's fit; the mesh gave none on 31 of the 81 clicks.
+- Twice the ± covers the error on all 50 answers; the worst ± is 0.13 mm; the worst centre is 0.42 mm from the truth.
+- **The blind bore is refused on every click** (too few frames see its rim, or the frames disagree by 1.3 to 6 mm):
+  never a wrong number. The study did not read it either.
+- A click takes 4.6 to 10.5 s here; the frames are kept, so a second click on the same hole is quicker.
+- **With the processor's matcher on the same meshes and paths the rule is met too** (52 of 81 answered, the worst
+  0.09 mm). It is still **not offered without a graphics card**, because a scan tracked and meshed wholly on the
+  processor was not run. **Not offered** either, in words, for a merged scan, a scan tracked by markers, a scan made
+  at Preview quality, a recording under 1280 pixels wide (each not measured), or when the recording, the
+  calibration or the camera path is gone.
+- What the user reads: "Ø 24.99 mm ± 0.10 from the camera images (the rim where the face ends, read in 18 frames)."
+  "This is the hole's edge in the clicked face, where the face ends: not the bore further down, not the outer edge
+  of a chamfer or countersink, not the smallest gap through the hole." And, when the path check warns or the frames
+  place the centre apart: "The hole's position may be off (...); its diameter does not depend on the camera path."
+  A refusal shows no number: "No diameter from the camera images: the frames disagree on the diameter by 1.9 mm."
+  with what to do.
+- Seen in the running app (2026-11-26, the working tree's server on these projects, holes-high-s0): a click beside the Ø 25 hole gave "Ø 18.39 mm ± 0.22 from the mesh" and, 7.8 s later, "Ø 24.99 mm ± 0.10 from the camera images (... read in 19 frames)"; a click right beside the Ø 6 hole gave "The mesh gives no circle here" and "Ø 5.95 mm ± 0.10 from the camera images"; a click several millimetres out from that hole's edge was refused quietly ("No diameter from the camera images: the frames disagree on the diameter by 2.0 mm."). The card can cover the hole that was clicked.
+
+Limits: simulated scans (no gloss, chamfer, burr, MJPEG artefacts or real light); the projector's dots on; clicks
+1.5 mm outside the rim; one part per scene. The reading is not kept with the scan.
+
 ## What the metrics mean
 
 - **Stereo errors** compare the estimated raw intrinsics/extrinsics (`K1`, `K2`, `R`, `T`) with

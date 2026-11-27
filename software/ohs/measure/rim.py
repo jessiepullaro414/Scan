@@ -50,6 +50,9 @@ sigma may be ``None``: then every depth pixel counts for the plane). A caller wi
 
 **Speed:** about 0.6 s a frame on this mini PC's processor (Ryzen 7 7735U): 12 s for 20 frames, most of it the
 images sampled along the radial lines (twice: the start and the model) and the change-point search of each sector.
+
+**In words** (what the app's Hole tool shows, ``POST .../hole-images``): :func:`reading_words` for an answer (the
+diameter, which diameter it is, and when the position may be off), :func:`refusal_hint` for what to do after a refusal.
 """
 from __future__ import annotations
 
@@ -61,7 +64,7 @@ from typing import Any, Callable, Sequence
 import numpy as np
 
 __all__ = ["RimReading", "FrameReading", "read_hole", "combine_frames", "stereo_cameras", "Camera", "Plane",
-           "PM_LIMIT_MM", "CLICK_RIM_MM", "MAX_FRAMES"]
+           "PM_LIMIT_MM", "CLICK_RIM_MM", "MAX_FRAMES", "reading_words", "refusal_hint", "WHICH_DIAMETER"]
 
 MAX_FRAMES = 20  # frames read at most, spread over the scan
 BORDER_PX = 60  # the click must fall this far inside the left image
@@ -774,6 +777,48 @@ def read_hole(click: Sequence[float], normal: Sequence[float] | None, *, poses: 
         used.append(i)
     res = combine_frames(readings, Ts, click, used)
     if path_warns:
-        res.warnings.append("the scan's camera path check warns")
+        res.warnings.append(PATH_WARNS)
     res.seconds = time.perf_counter() - t0
     return res
+
+
+# --------------------------------------------------------------------------- the reading in words (the app shows them)
+PATH_WARNS = "the scan's camera path check warns"
+WHICH_DIAMETER = ("This is the hole's edge in the clicked face, where the face ends: not the bore further down, not "
+                  "the outer edge of a chamfer or countersink, not the smallest gap through the hole.")
+#: what to do after a refusal, by the refusal's words (the first that matches); else :data:`HINT_DEFAULT`
+REFUSAL_HINTS = (
+    ("frames show the rim", "Click on the flat face right beside the hole, within a few millimetres of its edge. The "
+                            "hole must be seen from above, its whole edge in view, in at least 5 camera frames: if it "
+                            "was not, scan it again looking down into it from several sides."),
+    ("top rim is found on only", "Only part of the hole's edge shows in the camera frames: scan it again looking down "
+                                 "into it from several sides, then make the mesh again."),
+    ("another hole's", "Click on the face right beside the hole you mean, within a few millimetres of its edge."),
+    ("not one hole's rim", "Click on the face right beside the hole you mean, not between two holes."),
+)
+HINT_DEFAULT = ("The camera frames do not read this edge the same way (a shiny, worn or chamfered edge, or something "
+                "close behind the hole): measure it with calipers or a pin gauge.")
+
+
+def refusal_hint(refused: str) -> str:
+    """What to do after the refusal ``refused`` (:attr:`RimReading.refused`), in plain words."""
+    return next((h for needle, h in REFUSAL_HINTS if needle in refused), HINT_DEFAULT)
+
+
+def reading_words(res: RimReading) -> list[str]:
+    """An answered reading's sentences, in the order shown: the diameter with its ± and the frames, which diameter it
+    is, and, when the camera path check warns or the frames place the centre apart, that the position may be off
+    while the diameter does not depend on the path."""
+    out = [f"Ø {res.diameter_mm:.2f} mm ± {res.pm_mm:.2f} from the camera images (the rim where the face ends, read "
+           f"in {res.frames_used} frames).", WHICH_DIAMETER]
+    why = []
+    if PATH_WARNS in res.warnings:
+        why.append("the scan's camera path check warns")
+    if res.position_unsure and res.centre_scatter is not None:
+        why.append(f"the camera frames place its centre {res.centre_scatter:.1f} mm apart")
+    elif res.position_unsure:
+        why.append("the camera frames place its centre apart")
+    if why:
+        out.append(f"The hole's position may be off ({' and '.join(why)}); its diameter does not depend on the "
+                   "camera path.")
+    return out

@@ -190,6 +190,8 @@ class ProcessConfig:
     align_hold_tags: bool = False
     # ENGINE_PLAN X16: the viewer's wall-thickness reading from the camera frames (ohs.measure.wall)
     wall_reading: bool = True
+    # ENGINE_PLAN X15 step 2: the Hole tool's second answer, the hole's edge read from the camera images (ohs.measure.rim)
+    hole_from_images: bool = True
 
 
 @dataclass
@@ -639,6 +641,13 @@ _KEY_DOCS = {
         "\"at most\": scans place a thin wall's two sides slightly too far apart, so the wall may be up to\n"
         "about 1 mm thinner. Needs a graphics card; not for scans tracked by markers. Nothing in the scan\n"
         "changes. Off: not offered."
+    ),
+    "process.hole_from_images": (
+        "The viewer's Hole tool also reads the hole's edge from the scan's camera images at the click\n"
+        "(ENGINE_PLAN X15): the diameter of the hole's entrance in the clicked face, read in up to 20\n"
+        "frames, in 5 to 15 seconds, beside the mesh's own answer (which reads holes over open space\n"
+        "too small, or not at all). Needs a graphics card; not for merged scans, scans tracked by\n"
+        "markers or made at Preview quality. Nothing in the scan changes. Off: not offered."
     ),
     "process.align_hold_tags": (
         "Aligning two scans that share little of the part (under 70 %) from the AprilTags both saw keeps\n"

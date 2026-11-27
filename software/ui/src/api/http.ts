@@ -108,7 +108,7 @@ import type {
   PassView,
   StartBody,
   TablePreview,
-  TrajectoryView, WallOffer, WallReading, WallRequest } from "./types";
+  TrajectoryView, WallOffer, WallReading, WallRequest, HoleImagesOffer, HoleImagesReading, HoleImagesRequest } from "./types";
 
 export type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
 
@@ -455,6 +455,12 @@ export const api = {
    * mesh changed since the click; 422 with the reason in words (not offered, no wall seen from both sides here, one
    * side not seen, too few frames, the sides not parallel, too thick for this reading). */
   wall: (pid: string, sid: string, body: WallRequest) => post<WallReading>(`${scanPath(pid, sid)}/wall`, body),
+  /** ENGINE_PLAN X15 step 2: whether the hole reading from the camera images is offered for this scan, and why not. */
+  holeImagesOffer: (pid: string, sid: string) => get<HoleImagesOffer>(`${scanPath(pid, sid)}/hole-images`),
+  /** The Hole tool's second answer: the diameter of the hole's entrance rim read from the scan's camera images at a
+   * click on the face beside it. Takes 5 to 15 s. 409 when the mesh changed since the click; 422 when not offered,
+   * or refused in the engine's words (the detail; the hint says what to do; no diameter). */
+  holeImages: (pid: string, sid: string, body: HoleImagesRequest) => post<HoleImagesReading>(`${scanPath(pid, sid)}/hole-images`, body),
 
   // ---------------------------------------------------------------- kept features (fits, measurements, relations)
   /** The scan's kept set; each fit and measurement made on another mesh version is marked `stale`. */
