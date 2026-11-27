@@ -9,7 +9,10 @@ map is one map. It costs about as much as processing every scan again.
 :func:`merge_scans` writes into ``out_dir``: ``mesh.ply`` (with each vertex's sigma and its count of
 independent looks when the confidence model made it) and the other formats asked for,
 ``laser_points.ply``, and ``report.json`` with what went in (per scan: recording, pose, frames fused, and what of its table
-was left out and why: ``scans[i].table``), what came out, and ``warnings`` (each naming its scan).
+was left out and why: ``scans[i].table``), what came out, and ``warnings`` (each naming its scan). When a GPU stage
+failed during the merge (the depth matcher falling back to the processor's: each frame is still fused with the factor
+of the matcher that made its depth), ``compute.fallbacks`` lists it (scan, frame, stage, from, to, reason) and a
+warning says it; without one there is no ``compute`` block.
 
 **A part that was moved** between the scans (turned over, set down elsewhere) lay on a table
 that is in a different place, relative to the part, in each scan, and each scan's table must stay
@@ -374,6 +377,10 @@ def merge_scans(scans: Sequence[ScanInput], out_dir: str | Path, params: Process
     # the mesh model's pool (ENGINE_PLAN R2-5): the scan and frame at which it first had no room for new surface; one
     # model for the whole merge, so it is checked across the pipelines of every calibration
     full_at: dict | None = None
+    # every GPU stage that failed during the merge, at its scan and frame (ENGINE_PLAN R2-7), as process_recording
+    # saves them for a scan (ohs.app.process.fallback_entries)
+    fallbacks: list[dict] = []
+    from ohs.app.process import fallback_entries  # noqa: PLC0415
     try:
         for name, reader, poses, positions, T, support, ci in plan:
             if ci != cur:  # another calibration: its own pipeline, fusing into the same model
@@ -397,7 +404,12 @@ def merge_scans(scans: Sequence[ScanInput], out_dir: str | Path, params: Process
                         clip = support.in_camera(Tf)
                     elif support is not None:  # the support plane in this frame's camera, moved into the part by the margin
                         clip = (Tf[:3, :3].T @ support[0], float(support[0] @ Tf[:3, 3]) + support[1] - float(support_margin_mm))
-                    pipe.process(frame, pose=T @ Tf, clip_plane=clip)
+                    res = pipe.process(frame, pose=T @ Tf, clip_plane=clip)
+                    gfb = (getattr(res, "extra", None) or {}).get("gpu_fallback")
+                    if gfb:  # a GPU stage failed on this frame (the frame is fused with its own matcher's factor)
+                        de = getattr(pipe, "depth_estimator", None)
+                        fallbacks += [{"scan": name, **fb} for fb in
+                                      fallback_entries(gfb, int(frame.index), getattr(de, "gpu_failed_device", None))]
                     if full_at is None and getattr(pipe.markerless, "pool_full", False):
                         full_at = {"scan": name, "frame": int(frame.index)}
                     if progress is not None:
@@ -504,6 +516,14 @@ def merge_scans(scans: Sequence[ScanInput], out_dir: str | Path, params: Process
                 where = None if full_at is None else f"{full_at['frame']} of \"{full_at['scan']}\""
                 warnings.append(pool_full_warning({**cap, "first_refused_frame": where}))
                 log.warning("%s", warnings[-1])
+        if fallbacks:  # only then: a merge without one saves what it always did
+            from ohs.app.process import matcher_fallback_warning  # noqa: PLC0415
+
+            report["compute"] = {"fallbacks": fallbacks}
+            for fb in fallbacks:
+                if fb["stage"] == "depth":
+                    warnings.append(matcher_fallback_warning({**fb, "frame": f"{fb['frame']} of \"{fb['scan']}\""}))
+                    log.warning("%s", warnings[-1])
         if cleaning is not None:  # what the small-piece cleaning did: nothing goes unsaid, moved part or not (R7)
             report["mesh"]["cleaning"] = {**cleaning, "min_component_fraction": float(p.clean_min_component),
                                           "summary": _cleaning_summary(cleaning, float(p.clean_min_component), bool(maps))}

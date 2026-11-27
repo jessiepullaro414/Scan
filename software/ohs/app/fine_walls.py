@@ -78,7 +78,12 @@ class FusedDepthSpool:
         self.bytes = 0
         self.write_s = 0.0
 
-    def add(self, pos: int, depth: np.ndarray, sigma: np.ndarray | None, seen: np.ndarray | None, T_wc: np.ndarray) -> None:
+    def add(self, pos: int, depth: np.ndarray, sigma: np.ndarray | None, seen: np.ndarray | None, T_wc: np.ndarray,
+            hole: tuple[float, float] | None = None) -> None:
+        """``hole``: the factor of the matcher that made this frame's sigma (``hole_factor`` of
+        :meth:`~ohs.track.recon_tsdf.ConfidenceTsdf.integrate`; ENGINE_PLAN R2-7). Kept in the frame's entry only
+        when it is not the model's own (a fallback from the graphics card's matcher to the processor's): without
+        a fallback the index is what it was."""
         t0 = time.perf_counter()
         k = len(self.entries)
         with open(self.folder / f"{k:06d}.bin", "wb") as f:
@@ -87,8 +92,11 @@ class FusedDepthSpool:
                     b = np.ascontiguousarray(a, dtype=np.float32)
                     b.tofile(f)
                     self.bytes += b.nbytes
-        self.entries.append({"pos": int(pos), "sigma": sigma is not None, "seen": seen is not None,
-                             "T": np.asarray(T_wc, dtype=np.float64).reshape(4, 4).tolist()})
+        e = {"pos": int(pos), "sigma": sigma is not None, "seen": seen is not None,
+             "T": np.asarray(T_wc, dtype=np.float64).reshape(4, 4).tolist()}
+        if hole is not None and [float(hole[0]), float(hole[1])] != self.kwargs["hole_factor"]:
+            e["hole_factor"] = [float(hole[0]), float(hole[1])]
+        self.entries.append(e)
         self.write_s += time.perf_counter() - t0
 
     def close(self, frame_index_of_pos: list[int]) -> dict:
@@ -242,6 +250,9 @@ def make_fine_walls(stage_dir: str | Path, spool_dir: str | Path, out_dir: str |
         n_used = 0
         n_all = max(len(head["entries"]), 1)
         say(0.15, "Fusing the kept frames finer on the thin walls")
+        # each kept frame with the factor of the matcher that made its sigma (ENGINE_PLAN R2-7): its entry's when it
+        # has one (made after a fallback), else the model's own; a spool without the field fuses as it always did
+        own = tuple(float(x) for x in head["model"]["hole_factor"])
         for k, e in enumerate(head["entries"]):
             if cancelled is not None and cancelled():
                 raise InterruptedError("cancelled")
@@ -252,7 +263,8 @@ def make_fine_walls(stage_dir: str | Path, spool_dir: str | Path, out_dir: str |
             if T is None:
                 continue
             depth, sigma, seen = _frame(spool_dir, k, e, (int(h), int(w)))
-            model.integrate(depth, sigma, T, seen=seen)
+            hf = e.get("hole_factor")
+            model.integrate(depth, sigma, T, seen=seen, hole_factor=own if hf is None else (float(hf[0]), float(hf[1])))
             n_used += 1
             if full_at is None and getattr(model, "pool_full", False):
                 full_at = int(i)

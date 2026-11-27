@@ -1100,7 +1100,9 @@ class FramePipeline:
         tim["integrate"] = _ms(ti)
         if self.fused_spool is not None and self.has_confidence:
             ts = time.perf_counter()
-            self.fused_spool.add(len(self._trajectory) if pos is None else int(pos), depth, sigma, seen, T_wc)
+            # with the frame's own matcher's factor, which the finer model on thin walls fuses it with (R2-7)
+            self.fused_spool.add(len(self._trajectory) if pos is None else int(pos), depth, sigma, seen, T_wc,
+                                 hole=kw.get("hole_factor"))
             tim["keep_depth"] = _ms(ts)
 
     def _track_markerless(self, depth: np.ndarray, t: float, tim: dict[str, float], extra: dict,

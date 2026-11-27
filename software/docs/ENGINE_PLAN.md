@@ -1517,7 +1517,10 @@ guard test seen failing first:
   reader. `ohs process` asks for `--mode` when the metadata is damaged.
 - [x] **R2-7 (F7): when the matcher falls back to the processor mid-scan the mesh model keeps
   the graphics card's noise profile**, and the saved frame rows lose the event. Mended 2026-11-24 (each frame fused with its
-  own matcher's profile; the switch saved and said). Open: a merge and the fine-walls step.
+  own matcher's profile; the switch saved and said). A merge and the thin walls' step since
+  2026-11-27: a merge already fused each frame rightly and now saves and says the switch,
+  naming the scan; the thin walls' step fuses a frame kept after the switch with its own
+  matcher's profile.
 - [x] **R2-8 (F8): the live recorder's own queue has no bound** (known since MAINTENANCE_PLAN
   B4: the writer below it is bounded). Slow storage can use up memory. Mended 2026-11-24
   in the recorder (at most 1 GiB or 20 s waiting; then the recording stops with a reason and

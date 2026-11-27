@@ -356,6 +356,16 @@ def _frame_row(res: FrameResult) -> dict:
     return row
 
 
+def fallback_entries(gpu_fallback: dict | None, frame: Any, gpu_dev: str | None) -> list[dict]:
+    """The entries of ``report["params"]["compute"]["fallbacks"]`` for one frame: each GPU stage that failed on it
+    (``FrameResult.extra["gpu_fallback"]``, stage -> reason; REVIEW F7), ``gpu_dev`` the depth matcher's lost device
+    (``DepthEstimator.gpu_failed_device``). A merge (:func:`ohs.align.merge.merge_scans`) saves the same, with its scan."""
+    return [{"frame": frame, "stage": stage,
+             "from": f"graphics card ({gpu_dev})" if stage == "depth" and gpu_dev else "graphics card",
+             "to": "processor", "reason": str(why)}
+            for stage, why in (gpu_fallback or {}).items()]
+
+
 def matcher_fallback_warning(fb: dict) -> str:
     """The sentence for the user when the depth matcher fell back from the graphics card to the processor during
     the scan (an entry of ``report["params"]["compute"]["fallbacks"]`` with stage "depth"; REVIEW F7)."""
@@ -753,10 +763,7 @@ def process_recording(
         de = getattr(pipe, "depth_estimator", None)
         # ... and every GPU stage that failed during the scan, at the frame it failed on (REVIEW F7)
         gpu_dev = getattr(de, "gpu_failed_device", None)
-        fallbacks = [{"frame": r["index"], "stage": stage,
-                      "from": f"graphics card ({gpu_dev})" if stage == "depth" and gpu_dev else "graphics card",
-                      "to": "processor", "reason": str(why)}
-                     for r in rows for stage, why in (r.get("gpu_fallback") or {}).items()]
+        fallbacks = [fb for r in rows for fb in fallback_entries(r.get("gpu_fallback"), r["index"], gpu_dev)]
         report["params"]["compute"] = {
             "depth": getattr(de, "backend", None), "depth_device": getattr(de, "device", None),
             "tracking_model": getattr(pipe, "model_backend", None), "tracking_device": getattr(pipe, "model_device", None),

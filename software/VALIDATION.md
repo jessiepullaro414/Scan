@@ -4053,6 +4053,26 @@ byte; mesh, laser points and path identical; sigmas within the processor path's 
 about 2e-6 mm). Open: a merge saves no fallback history; the fine-walls step re-fuses with one profile. Not
 run: a real graphics-card fallback and the graphics card's model path.
 
+**The same in a merge and in the thin walls' step (R2-7, the open part, 2026-11-27).** Read from the code first:
+a merge computes every frame's depth again through the same pipeline as a scan, so each frame was already fused
+with its own matcher's profile; what it lacked was the record. It now saves the fallback in its report
+(`compute.fallbacks`: scan, frame, stage, from, to, reason) and warns, naming the scan ("From frame 3 of
+"Front" the depth was computed on the processor: ..."); the warning reaches the merged scan's report as a
+merge's other warnings do. "Make only the thin walls finer" does not run the matcher: it fuses the depth
+Follow the camera kept, and fused all of it with the profile the model had when the scan began, so frames
+kept after a fallback got the graphics card's profile. A kept frame made after a fallback now carries its
+matcher's profile in the kept depth's index, and the finer model fuses it with that. Without a fallback
+nothing changes: a merge's report has no `compute` block, the kept depth's index has no new field (byte for
+byte the same file), and the finer model is given the profile it already holds; a kept depth written before
+loads and fuses as it did. Checked before and after the change by the agent: the merge's report and the thin
+walls' index, finer mesh and report the same; the merged mesh file is not the same byte for byte between two
+runs of the SAME code on the processor path (the same vertices within 6e-7 mm), so a file comparison cannot
+show it there. Tests: 5 in `tests/test_matcher_fallback_merge_walls.py` with the stand-in matcher that fails
+at a chosen frame (4 failed before the change); with the merge, thin-walls and stage files around it 70 passed, 5 skipped
+on the processor and 75 passed with the graphics card, no driver timeout, lint clean. Not done: a real
+graphics-card failure; a whole Make mesh with the thin walls' step on and a fallback (the depth is kept only
+when the model is on the graphics card, and the stand-in matcher is the processor's); not seen in the app.
+
 **The motion sensor calibration step and its recorder (R2-8, third part).** The step ignored its recorder: a
 recording that stopped because the disk could not keep up, or one with a frame that could not be written, was
 worked out without a word. Now the step stops as soon as its recorder stops and says so at once. A recording
