@@ -62,6 +62,7 @@ The app warns, it does not block: a warning tells you what may be wrong and lets
 |---|---|---|
 | A scan shows **Failed** | Making the mesh stopped. The recording is kept, and so is an earlier mesh. | [If making the mesh fails or you cancel it](make-mesh.md#if-making-the-mesh-fails-or-you-cancel-it) |
 | **Tracking may have slid** | The camera path has a jump no hand makes. Thin parts and sizes across that part of the scan may be off. | [If tracking may have slid](make-mesh.md#if-tracking-may-have-slid) |
+| **The mesh is incomplete** | The mesh model ran out of room: surface seen after the frame it names was not added. Scan a smaller area at a time, or make the mesh at a coarser mesh detail. | [Other notes after Make mesh](make-mesh.md#other-notes-after-make-mesh) |
 | **Thin walls found** | The part has walls thinner than the mesh detail can show well. | [If thin walls are found](make-mesh.md#if-thin-walls-are-found) |
 | A stage says **Skipped** | Usually nothing was wrong: there was nothing for that stage to correct. | [Other notes after Make mesh](make-mesh.md#other-notes-after-make-mesh) |
 | Making the mesh takes very long | Best quality, a long scan, fine mesh detail, or no graphics card. | [How long it takes](make-mesh.md#how-long-it-takes), [Choose the quality](make-mesh.md#choose-the-quality) |

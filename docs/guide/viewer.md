@@ -190,6 +190,7 @@ The Check needs each point's ±. On a mesh without it the panel says **Scan chec
 - **Frames not tracked**, with the reason for each.
 - The calibration the scan was made with and its state.
 - **Tracking may have slid**: when the camera path jumps in a way no hand makes. A thin part can then come out thinner or partly missing.
+- **The mesh is incomplete**: when the mesh model ran out of room, so surface seen after the frame it names was not added.
 - **Notes on making the mesh**, or for a merged scan **Notes from the merge** (see [Aligning and merging scans](align-merge.md)).
 
 For a scan of the simulator, **Accuracy vs ground truth (simulator)** compares the camera path with the true one.
@@ -273,6 +274,7 @@ The files are named after the project and the scan. The mesh files are the scan'
 | "This scan has no laser points: …" | The lasers were off or not calibrated when it was scanned. | Scan again with the lasers on and calibrated. |
 | "This version of the engine can't compare the mesh with the lasers yet." | The engine is older than the app. | Update OpenHandScan and start it again. |
 | **Tracking may have slid** | The camera path jumped somewhere. A thin part can come out thinner or partly missing. | Look at the scan closely; scan again if it matters. |
+| **The mesh is incomplete** | The mesh model ran out of room, so surface seen late in the scan is missing. | Scan a smaller area at a time, or make the mesh at a coarser mesh detail. |
 | **No OBJ for this scan** | The engine writes OBJ only when OBJ export is on. | Add `"obj"` to `export` under `[process]` in the settings file (`export = ["ply", "stl", "obj"]`), then make the mesh again. STL and PLY are always there. |
 | **No view to add** | There is no 3D view to take a picture of. | Open the mesh first. |
 | **Couldn't add the view** | The report is full (6 views) or the picture is too large. | Remove a view first. |

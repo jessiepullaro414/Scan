@@ -68,6 +68,7 @@ The **Details** column of a scan can show:
 | **Merged** | The scan was made by merging other scans and has no recording of its own. |
 | **Scanned with a calibration that needed a check**, or **...that needed recalibrating** | The scan's own calibration status was not Valid. Point at it for the reason. See [setup.md](setup.md). |
 | **Tracking may have slid** | The camera path has a jump no hand makes. Point at it for the full sentence. See [make-mesh.md](make-mesh.md#if-tracking-may-have-slid). |
+| **The mesh is incomplete** | The mesh model ran out of room, so surface seen late in the scan was not added. Point at it for the full sentence. See [make-mesh.md](make-mesh.md#other-notes-after-make-mesh). |
 | **Notes on making the mesh** (or **Notes from the merge**) | Other notes from the processing report. Point at it to read them. |
 | **Keeps the recording and the result**, **Keeps half the frames and the result** or **Keeps the result only** | You freed space on this scan (see [Free space](#free-space)). Point at it for what was removed and when. |
 | Size and **Free space…** | What the scan takes on disk. Point at it for the parts; click it to free space. |

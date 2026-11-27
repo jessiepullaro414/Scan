@@ -18,7 +18,7 @@ import { stageBlock, type StageAction } from "../../lib/keepMode";
 import { effectiveValue } from "../../lib/presets";
 import { DEFAULT_QUALITY, QUALITIES, QUALITY_TEXT, normalizeQuality, qualityName } from "../../lib/quality";
 import { STAGE_TITLES, stageRunning, straightenDoneParts, straightenSkippedLine } from "../../lib/stages";
-import { PATH_WARNING_TITLE, splitWarnings } from "../../lib/pathWarning";
+import { INCOMPLETE_TITLE, PATH_WARNING_TITLE, splitWarnings } from "../../lib/pathWarning";
 import { cn } from "../../lib/util";
 import { isActive, useJobs } from "../../store/jobs";
 import { presetKey, usePresets } from "../../store/presets";
@@ -170,21 +170,24 @@ function StageCard({
 
 /**
  * A stage's warnings (`stage.warnings`, through `splitWarnings`): the camera path's in the warning style with its title
- * (ENGINE_PLAN X0a: the path jumped where no hand moves), every other note quietly, without a title (UX_PLAN R1; the
- * mesh model that ran out of room, ENGINE_PLAN R2-5). Each stage sends its own only: the path's comes with "Follow the
- * camera", not again under the stages built on that path. It warns only.
+ * (ENGINE_PLAN X0a: the path jumped where no hand moves), the mesh model's that ran out of room in the same style
+ * with its own title (ENGINE_PLAN R2-5: surface is missing from that stage's mesh), every other note quietly, without
+ * a title (UX_PLAN R1). Each stage sends its own only: the path's comes with "Follow the camera", not again under the
+ * stages built on that path. It warns only.
  */
-function StageNotes({ said }: { said: { path: string[]; other: string[] } }) {
+function StageNotes({ said }: { said: { path: string[]; incomplete: string[]; other: string[] } }) {
+  const warned = (title: string, w: string) => (
+    <p key={w} className="flex gap-1.5 rounded-md border border-warn/30 bg-warn-soft px-2 py-1.5 text-xs leading-5 text-fg" role="note">
+      <TriangleExclamationPoint size={13} className="mt-[3px] shrink-0 text-warn" aria-hidden />
+      <span>
+        <b className="font-semibold">{title}.</b> {w}
+      </span>
+    </p>
+  );
   return (
     <>
-      {said.path.map((w) => (
-        <p key={w} className="flex gap-1.5 rounded-md border border-warn/30 bg-warn-soft px-2 py-1.5 text-xs leading-5 text-fg" role="note">
-          <TriangleExclamationPoint size={13} className="mt-[3px] shrink-0 text-warn" aria-hidden />
-          <span>
-            <b className="font-semibold">{PATH_WARNING_TITLE}.</b> {w}
-          </span>
-        </p>
-      ))}
+      {said.path.map((w) => warned(PATH_WARNING_TITLE, w))}
+      {said.incomplete.map((w) => warned(INCOMPLETE_TITLE, w))}
       {said.other.map((w) => (
         <p key={w} className="text-xs leading-5 text-muted" role="note">
           {w}
@@ -252,7 +255,7 @@ export function StagesPanel({ pid, sid, state, busy, scan }: { pid: string; sid:
   // ENGINE_PLAN R2-5: what Straighten's and Build the surface's own fuse warned (none from an older server)
   const notesOf = (stage: StageInfo) => {
     const said = splitWarnings(stage);
-    return said.path.length || said.other.length ? <StageNotes said={said} /> : null;
+    return said.path.length || said.incomplete.length || said.other.length ? <StageNotes said={said} /> : null;
   };
   const straightenNotes = notesOf(straighten);
   const fuseNotes = notesOf(fuse);
@@ -297,7 +300,7 @@ export function StagesPanel({ pid, sid, state, busy, scan }: { pid: string; sid:
           runLabel={track.state === "none" ? "Run" : "Run again"}
           onRun={() => go("track", () => runStage(pid, sid, "track", { quality }))}
           details={
-            track.state === "done" && (track.tracked_pct !== null || track.quality || trackWarnings.path.length || trackWarnings.other.length) ? (
+            track.state === "done" && (track.tracked_pct !== null || track.quality || trackWarnings.path.length || trackWarnings.incomplete.length || trackWarnings.other.length) ? (
               <>
                 {track.tracked_pct !== null || track.quality ? (
                   <p className="text-xs text-fg">

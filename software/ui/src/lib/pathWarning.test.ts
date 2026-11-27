@@ -1,5 +1,5 @@
 /** Checks for the camera path's warning (ENGINE_PLAN X0a, APP_API.md "The camera path's warning"; `npm test`). */
-import { notesChip, notesTitle, pathWarningChip, scanWarnings, splitWarnings } from "./pathWarning.ts";
+import { INCOMPLETE_TITLE, incompleteChip, notesChip, notesTitle, pathWarningChip, scanWarnings, splitWarnings } from "./pathWarning.ts";
 
 let checks = 0;
 function check(ok: boolean, what: string): void {
@@ -47,5 +47,25 @@ check(!/left out/.test(notesTitle(true)), "not “What the merge left out” ove
 check(notesChip({ warnings: [ENGINE] }, true) === null && notesChip({ frames: {} }, false) === null, "no notes: no chip");
 // an older engine's sentence (with "GPU") is still the path's
 check(splitWarnings({ warnings: ["The camera path jumps by 9 mm near frame 2: tracking may have slid there. This scan was processed without a GPU."] }).path.length === 1, "older words");
+
+// ENGINE_PLAN R2-5: the mesh model that ran out of room left surface out of the mesh: a warning with its own title, on
+// the row, in the viewer and under its stage; not a quiet note. The engine's words, as `pool_full_warning` writes them.
+const FULL =
+  "The mesh model ran out of room after frame 6: surface seen after that was not added (40 of 1,040 blocks of surface left out; the model holds 1,000 blocks, 12 MB). The mesh is incomplete there. Scan a smaller area at a time, or make the mesh at a coarser mesh detail.";
+const FULL_MERGE = FULL.replace("after frame 6", 'after frame 6 of "Bracket from the side"');
+const FINE =
+  "The finer model for the thin walls ran out of room after frame 7: finer surface seen after that was not added (1,200 of 6,200 blocks of surface left out; the model holds 5,000 blocks, 60 MB). The thin walls it did not reach keep the surface Make mesh made, at the mesh's own detail; nothing was removed. Scan a smaller area at a time to make them all finer.";
+const three = splitWarnings({ warnings: [ENGINE, FULL, MERGE, FINE] });
+check(three.path.length === 1 && three.incomplete.length === 1 && three.incomplete[0] === FULL, `the mesh model's sentence, apart: ${three.incomplete.join("|")}`);
+check(three.other.length === 2 && three.other[0] === MERGE && three.other[1] === FINE, `the thin walls' sentence stays a quiet note: ${three.other.join("|")}`);
+check(three.path.length + three.incomplete.length + three.other.length === 4, "no sentence is lost or said twice");
+check(splitWarnings({ warnings: [FULL_MERGE] }).incomplete.length === 1, "a merge's, with the scan's name");
+const full = incompleteChip({ warnings: [MERGE, FULL] });
+check(!!full && full.text === "The mesh is incomplete" && full.title === FULL, `the row's warning: ${JSON.stringify(full)}`);
+check(incompleteChip({ warnings: [MERGE, FINE, ENGINE] }) === null && incompleteChip({ frames: {} }) === null, "nothing when the model had room");
+const rest = notesChip({ warnings: [FULL, MERGE] }, true);
+check(!!rest && rest.title === MERGE, `the notes chip holds the other notes only: ${rest?.title}`);
+check(notesChip({ warnings: [FULL] }, false) === null, "the mesh model's sentence alone: no notes chip beside its warning");
+check(INCOMPLETE_TITLE === "The mesh is incomplete", "the title");
 
 console.log(`pathWarning.test: ${checks} checks passed`);

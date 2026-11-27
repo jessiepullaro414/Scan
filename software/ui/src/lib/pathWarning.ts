@@ -41,14 +41,37 @@ export function scanWarnings(report: unknown): string[] {
  */
 const PATH_SENTENCE = /tracking may have slid|^the camera path jumps/i;
 
-/** The report's warnings in two: the camera path's own (`path`), and the rest (`other`, for a merge its notes). */
-export function splitWarnings(report: unknown): { path: string[]; other: string[] } {
+/**
+ * The mesh model's own sentence when it had no room for new surface (`pool_full_warning` in `ohs/app/process.py`: "The
+ * mesh model ran out of room after frame N: … The mesh is incomplete there."; a merge says it with the scan's name).
+ * Surface is missing from the mesh, so it is shown as a warning, not as a quiet note (ENGINE_PLAN R2-5). The thin
+ * walls' finer model has a sentence of its own ("The finer model for the thin walls ran out of room …"): there
+ * nothing is missing from the mesh, and it stays a quiet note.
+ */
+const INCOMPLETE_SENTENCE = /^the mesh model ran out of room/i;
+
+/**
+ * The report's warnings in three: the camera path's own (`path`), the mesh model's when it ran out of room
+ * (`incomplete`), and the rest (`other`, for a merge its notes). No sentence is in two lists, and none is left out.
+ */
+export function splitWarnings(report: unknown): { path: string[]; incomplete: string[]; other: string[] } {
   const said = scanWarnings(report);
-  return { path: said.filter((w) => PATH_SENTENCE.test(w)), other: said.filter((w) => !PATH_SENTENCE.test(w)) };
+  const path = said.filter((w) => PATH_SENTENCE.test(w));
+  const incomplete = said.filter((w) => !PATH_SENTENCE.test(w) && INCOMPLETE_SENTENCE.test(w));
+  return { path, incomplete, other: said.filter((w) => !PATH_SENTENCE.test(w) && !INCOMPLETE_SENTENCE.test(w)) };
 }
 
 /** The camera path's warning title, on the row's chip, in the viewer and on Edit mesh. */
 export const PATH_WARNING_TITLE = "Tracking may have slid";
+
+/** The title of the mesh model's warning when it ran out of room, in the same three places. */
+export const INCOMPLETE_TITLE = "The mesh is incomplete";
+
+/** The scan row's short warning when the mesh model ran out of room (the sentences on hover); null when it did not. */
+export function incompleteChip(report: unknown): { text: string; title: string } | null {
+  const said = splitWarnings(report).incomplete;
+  return said.length ? { text: INCOMPLETE_TITLE, title: said.join(" ") } : null;
+}
 
 /** The scan row's short note (the sentences on hover, as the calibration status note); null when there is none. */
 export function pathWarningChip(report: unknown): { text: string; title: string } | null {

@@ -33,7 +33,7 @@ import { HEALTH_ICON, HEALTH_TEXT } from "../components/CalibHealth";
 import { hasMesh, hasRecording, mergedFromText } from "../lib/align";
 import { passOfText } from "../lib/pass";
 import { scanHealthLine, scanHealthOf } from "../lib/calibHealth";
-import { notesChip, pathWarningChip } from "../lib/pathWarning";
+import { incompleteChip, notesChip, pathWarningChip } from "../lib/pathWarning";
 import { dependentsSentence, scanBusyReason, scanDependents } from "../lib/scanTrash";
 import { projectDiskText, scanDiskTitle, trashText } from "../lib/diskUse";
 import { canRemake, keepLabel, keepTitle } from "../lib/keepMode";
@@ -152,6 +152,7 @@ function ScanRow({
   const health = scanHealthLine(own);
   const HealthIcon = health && own ? HEALTH_ICON[own.state] : null;
   const pathWarn = hasResult ? pathWarningChip(scan.result?.report) : null;
+  const incomplete = hasResult ? incompleteChip(scan.result?.report) : null;
   // UX_PLAN R1: the report's other notes (a merge's: what it left out) under their own title, not the path's
   const notes = hasResult ? notesChip(scan.result?.report, !recorded) : null;
   // the secondary actions the menu holds under about 1100 px (U16), beside Rename… and Move to trash… (U7)
@@ -217,6 +218,12 @@ function ScanRow({
           // ENGINE_PLAN X0a: the camera path jumped where no hand moves (the sentences on hover); it warns only
           <span className="inline-flex cursor-help items-center gap-1 text-warn" title={pathWarn.title} role="note" aria-label={`${pathWarn.text}. ${pathWarn.title}`}>
             <TriangleExclamationPoint size={12} aria-hidden /> {pathWarn.text}
+          </span>
+        ) : null}
+        {incomplete ? (
+          // ENGINE_PLAN R2-5: the mesh model ran out of room, surface is missing (the sentence on hover); it warns only
+          <span className="inline-flex cursor-help items-center gap-1 text-warn" title={incomplete.title} role="note" aria-label={`${incomplete.text}. ${incomplete.title}`}>
+            <TriangleExclamationPoint size={12} aria-hidden /> {incomplete.text}
           </span>
         ) : null}
         {notes ? (

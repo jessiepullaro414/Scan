@@ -58,7 +58,7 @@ import { EmptyState, Kbd, ProgressBar, Skeleton, Spinner } from "../components/u
 import { Segmented } from "../components/ui/Form";
 import { KeyValue } from "../components/ui/Layout";
 import { calibrationSays, scanHealthDetail, scanHealthOf } from "../lib/calibHealth";
-import { PATH_WARNING_TITLE, notesTitle, splitWarnings } from "../lib/pathWarning";
+import { INCOMPLETE_TITLE, PATH_WARNING_TITLE, notesTitle, splitWarnings } from "../lib/pathWarning";
 import { hasGraphicsCard, noConfidenceText } from "../lib/computer";
 import { useConnection } from "../store/connection";
 import { downloadFile } from "../lib/download";
@@ -171,7 +171,8 @@ function ReportSummary({ report, merged, made, said }: { report: Rec; merged: bo
   // UX_PLAN R1: only the path's own sentence goes under that title; the report's other notes (a merge's: what it left
   // out) under their own
   // ENGINE_PLAN R2-5: a sentence the panel says already above (`said`: the thin walls' note's own) is not said twice
-  const { path: pathWarnings, other } = splitWarnings(report);
+  // ENGINE_PLAN R2-5: the mesh model that ran out of room left surface out of the mesh: a warning under its own title
+  const { path: pathWarnings, incomplete, other } = splitWarnings(report);
   const notes = said?.length ? other.filter((w) => !said.includes(w)) : other;
   return (
     <div className="space-y-4">
@@ -181,6 +182,19 @@ function ReportSummary({ report, merged, made, said }: { report: Rec; merged: bo
           <div className="min-w-0 flex-1 space-y-0.5">
             <div className="font-semibold text-fg">{PATH_WARNING_TITLE}</div>
             {pathWarnings.map((w) => (
+              <div key={w} className="text-muted">
+                {w}
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null}
+      {incomplete.length ? (
+        <div className="flex gap-2.5 rounded-lg border border-warn/30 bg-warn-soft px-3 py-2.5 text-xs" role="note" aria-label={INCOMPLETE_TITLE}>
+          <TriangleExclamationPoint size={14} className="mt-px shrink-0 text-warn" aria-hidden />
+          <div className="min-w-0 flex-1 space-y-0.5">
+            <div className="font-semibold text-fg">{INCOMPLETE_TITLE}</div>
+            {incomplete.map((w) => (
               <div key={w} className="text-muted">
                 {w}
               </div>

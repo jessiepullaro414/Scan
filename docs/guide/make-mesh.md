@@ -236,7 +236,7 @@ The stage summaries and the report can say more. The most common:
 | **Skipped** on Straighten, with "No loops found: ..." | The scan never came back to a place it had seen, so there was nothing to correct. To let Studio straighten a scan, pass over an earlier part again. |
 | **Skipped** on Straighten after closing loops | The loops showed the passes already line up, so the scan was left as it is. |
 | **Skipped** on Refine with lasers | The scan has no laser points (the lasers were off or not calibrated), or the mesh already agrees with the laser lines. The mesh was left as it is. |
-| A quiet line under Follow the camera, Straighten or Build the surface that starts "The mesh model ran out of room" | That stage's mesh had no room for more surface: what was seen after the frame it names was not added, so the mesh is incomplete there. Each stage says it only for the mesh it made. Scan a smaller area at a time, or make the mesh at a coarser mesh detail. |
+| **The mesh is incomplete**, in amber: under Follow the camera, Straighten or Build the surface, on the scan's row on the project page (point at it for the sentence) and in the viewer's report | That stage's mesh model ran out of room: what was seen after the frame it names was not added, so the mesh is incomplete there. Each stage says it only for the mesh it made. Scan a smaller area at a time, or make the mesh at a coarser mesh detail. |
 | A line under the **Make only the thin walls finer** note that starts "The finer model for the thin walls ran out of room" | Some thin walls were not made finer: they keep the surface Make mesh made. Nothing was removed. |
 | **Notes on making the mesh** on the project page | Other sentences of the report. Point at it to read them. |
 | **Scanned with a calibration that needed a check** (or **...recalibrating**) | What this scan saw of the calibration. See [setup.md](setup.md). |
@@ -286,6 +286,7 @@ The software has so far been tested on simulated scans. Measured there (software
 | **Run "Follow the camera" first** | The stage needs Follow the camera. | Run Follow the camera, or Make mesh. |
 | **"Follow the camera" failed** | Tracking failed. The summary says why. | Try again, or try Preview quality. The raw recording is kept. |
 | **Tracking may have slid** | The camera path jumped where no hand moves. | Scan again more slowly with the part's edges in view. Check thin parts another way. |
+| **The mesh is incomplete** | The stage's mesh model ran out of room; surface seen after the frame it names was not added. | Scan a smaller area at a time, or make the mesh at a coarser mesh detail. |
 | **Thin walls found** | The engine found thin walls a finer mesh would help. | Choose one of its buttons, or **Not for this scan**. |
 | **"Thin walls and edges" has no effect on this computer: it needs a graphics card.** | No graphics card is in use. | Use a computer with a graphics card for thin parts. |
 | **This mesh has no confidence data: ...** | The mesh was made without a graphics card or by an earlier version. | Make the mesh again on a computer with a graphics card. |

@@ -6896,6 +6896,15 @@ Follow the camera said so on the Process page; Straighten and Build the surface,
   surface; the wall-thickness route gives the same four readings as Python and the hole-images route the same
   twelve (nine read, three refused with the same words). No stage warning was raised in the exe: nothing there
   fills a pool.
+- **Shown as a warning (later on 2026-11-27).** The mesh model's sentence says surface is missing, so the page no
+  longer shows it as a quiet grey line: it has the amber warning style and the title "The mesh is incomplete"
+  under its stage, on the scan's row of the project page (the sentence on hover) and in the viewer's report, beside
+  "Tracking may have slid" and apart from "Notes on making the mesh". The thin walls' own sentence stays a quiet
+  note (nothing is missing from the mesh there). The page tells the sentence by its first words, as it does the
+  camera path's (`ui/src/lib/pathWarning.ts`); 9 checks added to `pathWarning.test.ts` (29), 87 UI tests,
+  typecheck, build. Seen in the running app (`warn-check`, the status replaced): the row's warning, the amber note
+  under each of the three stages, and the viewer's block with no "Notes on making the mesh" beside it. No engine or
+  server code changed (one docstring); the exe of b709d03 does not have it.
 - **Not done:** no real pool was filled (in the tests and in the app the status is replaced); while a mesh is being
   made again the progress panel shows the
   stages' summaries, not their warnings; when Straighten fuses twice (loops, then crossings) only the second fuse's

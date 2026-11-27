@@ -375,7 +375,10 @@ def _pool_words(cap: dict, start: str) -> tuple[str, str]:
 
 def pool_full_warning(cap: dict) -> str:
     """The sentence for the user when the mesh model's pool had no room for new surface (``report["mesh_capacity"]``,
-    :meth:`ohs.track.recon_tsdf.ConfidenceTsdf.capacity_status` with ``first_refused_frame``; ENGINE_PLAN R2-5)."""
+    :meth:`ohs.track.recon_tsdf.ConfidenceTsdf.capacity_status` with ``first_refused_frame``; ENGINE_PLAN R2-5).
+
+    The page shows this one as a warning ("The mesh is incomplete") and tells it by its first words
+    (``INCOMPLETE_SENTENCE`` in ``ui/src/lib/pathWarning.ts``): change the two together."""
     when, counts = _pool_words(cap, "while the frames of the scan's start were fused")
     return (f"The mesh model ran out of room {when}: surface seen after that was not added ({counts}). "
             "The mesh is incomplete there. Scan a smaller area at a time, or make the mesh at a coarser mesh detail.")
