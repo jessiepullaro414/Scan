@@ -4053,6 +4053,15 @@ byte; mesh, laser points and path identical; sigmas within the processor path's 
 about 2e-6 mm). Open: a merge saves no fallback history; the fine-walls step re-fuses with one profile. Not
 run: a real graphics-card fallback and the graphics card's model path.
 
+**The motion sensor calibration step and its recorder (R2-8, third part).** The step ignored its recorder: a
+recording that stopped because the disk could not keep up, or one with a frame that could not be written, was
+worked out without a word. Now the step stops as soon as its recorder stops and says so at once. A recording
+with a frame that could not be written is refused (the board's poses and the sensor's readings no longer pair
+up over the gap); one cut below 22 s is refused with the same minimum a Stop pressed too early gets; a longer
+cut one is worked out and the result's first advice says what happened. Each refusal says what to do (free
+space or use a faster disk, record the step again). Tested with the calibration tests' fake camera; not seen
+on the Setup page; no real slow disk.
+
 ## The no-GPU plate slide, and a check of the camera path (ENGINE_PLAN X0a, 2026-11-20)
 
 Without a GPU the 0.5 mm plates slide in their first frames. On plate seed 0 the tracker's steps

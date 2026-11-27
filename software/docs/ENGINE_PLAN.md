@@ -1455,8 +1455,9 @@ guard test seen failing first:
   B4: the writer below it is bounded). Slow storage can use up memory. Mended 2026-11-24
   in the recorder (at most 1 GiB or 20 s waiting; then the recording stops with a reason and
   keeps what was written). The app stops such a scan by itself and tells the user at
-  once (2026-11-24). Open: the IMU calibration step ignores its recorder's stop and write
-  errors; a settings key for the budget.
+  once (2026-11-24). The motion sensor calibration step stops with its recorder
+  and refuses a damaged or too short recording (2026-11-26). Open: a settings key for the
+  budget.
 - [x] **R2-9 (F9): "frames with laser points" counts additions, not frames** (two lines a
   frame count twice). Mended 2026-11-24 (`LaserCloud.add_frame`; the points are unchanged).
 - [x] **R2-10 (F10): the rotation logarithm is about 0.01 degrees off just below a half turn**

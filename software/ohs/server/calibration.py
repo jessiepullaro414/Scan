@@ -93,6 +93,9 @@ MIN_VIEWS = {"stereo": 4, "lasers": 3, "check": 1, "imu": 0}
 IMU_STILL_S = 2.0
 IMU_MIN_S = 22.0  # 2 s still + 20 s of rotation
 IMU_MAX_S = 62.0  # 2 s still + 60 s of rotation
+#: an IMU recording with a frame that could not be written has a gap: it is not worked out (see ``begin_solve``)
+IMU_WRITE_FAILED = "Some frames of the motion sensor recording could not be written to the disk, so it cannot be used."
+IMU_RECORD_AGAIN = "Free some disk space or use a faster disk, then record this step again."
 LIVE_HZ = 10.0
 PREVIEW_HZ = 9.0
 PREVIEW_W = 640
@@ -375,6 +378,9 @@ class CalibrationSession:
         self._imu_board = 0
         self._imu_done_s: float | None = None
         self._imu_skip = 0
+        # what went wrong with the last IMU recording (its recorder stopped at its budget, or a frame could not be
+        # written): {"stopped": the recorder's sentence or None, "write_error": bool}; None when nothing did
+        self._imu_problem: dict | None = None
         self._imu_finish = threading.Event()
         self._imu_hist: collections.deque = collections.deque(maxlen=4096)
         self._gyro: collections.deque = collections.deque(maxlen=512)  # (t_host, |gyro| deg/s)
@@ -466,8 +472,10 @@ class CalibrationSession:
                 if self._imu_t0 is None:
                     self._imu_t0 = t
                 if t - self._imu_t0 <= IMU_MAX_S:
-                    rec.put_frame(frame)
-                    self._imu_t_last = t
+                    if rec.put_frame(frame):
+                        self._imu_t_last = t
+                    elif getattr(rec, "stopped", None):  # the recorder stopped at its budget: stop the step now
+                        self._imu_finish.set()
                 else:
                     self._imu_finish.set()
         self._slot.put(frame)
@@ -935,6 +943,7 @@ class CalibrationSession:
             self._imu_t0 = self._imu_t_last = None
             self._imu_seen = self._imu_board = 0
             self._imu_done_s = None
+            self._imu_problem = None
             self._imu_skip = 1 if self._restart is not None else 0
             self.result = None
             self._imu_finish.clear()
@@ -959,7 +968,20 @@ class CalibrationSession:
             seen, board = self._imu_seen, self._imu_board
         s = rec.close(stopped="auto" if auto else "user", board_fraction=round(board / seen, 3) if seen else None)
         log.info("IMU recording stopped after %.1f s: %d frames", elapsed, s.get("n_frames", 0))
-        if auto:
+        why = getattr(rec, "stopped", None)  # the recorder's own sentence when it stopped at its budget
+        write_error = getattr(rec, "error", None) is not None
+        problem = {"stopped": why, "write_error": write_error} if (why or write_error) else None
+        with self._lock:
+            self._imu_problem = problem
+        if write_error:
+            log.warning("the IMU recording %s has frames that could not be written: %s", self.recording, rec.error)
+            self._notify("error", f"{IMU_WRITE_FAILED} {IMU_RECORD_AGAIN}")
+        elif why:
+            self._notify("error", f"The motion sensor recording stopped: {why}"
+                         + (f" Press Finish & calibrate to use the {elapsed:.0f} s recorded." if elapsed >= IMU_MIN_S
+                            else f" The {elapsed:.0f} s recorded are too short for the motion sensor calibration. "
+                                 f"{IMU_RECORD_AGAIN}"))
+        elif auto:
             self._notify("info", f"The motion sensor recording stopped after {elapsed:.0f} s: press Finish & calibrate")
         safe_call("publishing the session", self._on_change)
 
@@ -975,6 +997,12 @@ class CalibrationSession:
                 if self.recording is None or self._imu_done_s is None:
                     raise ApiError(409, "There is no motion sensor recording yet.",
                                    "Press Start, hold still for 2 s, turn the scanner for 20 to 60 s, then press Stop.")
+                p = self._imu_problem
+                if p and p["write_error"]:  # a gap in the frames: the board's poses and the sensor no longer pair up
+                    raise ApiError(409, IMU_WRITE_FAILED, IMU_RECORD_AGAIN)
+                if p and p["stopped"] and self._imu_done_s < IMU_MIN_S:
+                    raise ApiError(409, f"{p['stopped']} The {self._imu_done_s:.0f} s recorded are too short: the motion "
+                                        f"sensor calibration needs at least {IMU_MIN_S:.0f} s.", IMU_RECORD_AGAIN)
             else:
                 need, n = MIN_VIEWS[self.kind], len(self.views)
                 if n < need:
@@ -982,8 +1010,14 @@ class CalibrationSession:
                                    guidance(self.kind, self.lines))
             self.state = "solving"
             self.result = None
+            note = None
+            p = self._imu_problem if self.kind == "imu" else None
+            if p and p["stopped"]:  # long enough: worked out from what was recorded, and the result says so
+                note = (f"{p['stopped']} The motion sensor calibration used the {self._imu_done_s:.0f} s recorded before "
+                        "that. If the result is not good enough, free some disk space or use a faster disk, then record "
+                        "this step again.")
             return {"views": [v.index for v in self.views], "recording": self.recording,
-                    "n_frames": len(self.views)}
+                    "n_frames": len(self.views), "note": note}
 
     def finish_solve(self, result: dict, report: dict | None, value: Any) -> bool:
         with self._lock:
@@ -1387,6 +1421,8 @@ class CalibrationManager:
             except Exception as e:
                 reason = calib_results.plain_error(e)
                 res = calib_results.failed_result(kind, reason)
+                if snap.get("note"):  # the recording stopped early: said first
+                    res["advice"].insert(0, calib_results.advice(snap["note"], "start_over"))
                 self.last_report = {"kind": kind, "error": str(e), "recording": str(rec)}
                 s.finish_solve(res, self.last_report, None)
                 log.warning("%s calibration failed: %s", kind, e)
@@ -1395,6 +1431,8 @@ class CalibrationManager:
             res = calib_results.build_result(kind, value, report if isinstance(report, dict) else {"report": report},
                                              view_ids=snap["views"], target=s.calib, truth=s.truth, sim=s.sim,
                                              lines=s.lines)
+            if snap.get("note"):  # the recording stopped early (the recorder's budget): said first
+                res["advice"].insert(0, calib_results.advice(snap["note"], "start_over"))
             full = jsonable(report if isinstance(report, dict) else {"report": report})
             full = {**full, "studio": {"kind": kind, "session": s.id, "target": s.target, "grade": res["grade"],
                                        "views": snap["views"]}}
