@@ -97,13 +97,18 @@ def test_each_frame_is_fused_with_its_own_matchers_factor(rec, monkeypatch):
         m = pipe.markerless
         assert pipe.depth_estimator.backend == "gpu" and (m.hole_amp, m.hole_r_px) == GPU
         used = []
-        real = m._integrate_cpu
 
-        def spy(*a, **kw):
-            used.append((m.hole_amp, m.hole_r_px))
-            return real(*a, **kw)
+        def spy_on(name):
+            real = getattr(m, name)
 
-        monkeypatch.setattr(m, "_integrate_cpu", spy)
+            def spy(*a, **kw):
+                used.append((m.hole_amp, m.hole_r_px))
+                return real(*a, **kw)
+
+            monkeypatch.setattr(m, name, spy)
+
+        for name in ("_integrate_cpu", "_integrate_gpu"):  # the model fuses with one of them, by the compute path
+            spy_on(name)
         pipe.add_imu(reader.imu_samples())
         res = [pipe.process(reader.frame(i)) for i in range(N)]
         assert pipe.depth_estimator.backend == "cpu" and pipe.gpu_fallbacks == {"depth": "simulated device loss"}

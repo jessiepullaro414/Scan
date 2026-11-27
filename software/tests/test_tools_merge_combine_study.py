@@ -239,3 +239,16 @@ def test_the_turned_part_keeps_its_prop_clear_of_the_upright_and_the_tags_on_the
     assert len(sc.markers) == len(mc.X19T_ROWS["+"]) == 5
     rows = {round(float(((X.mean(0) - up.t) @ up.R[:, 1]))) for X in sc.markers.values()}
     assert rows == {-13, 13}  # two rows, not one line
+
+
+def test_the_studys_recordings_stay_out_of_the_scorecards_sets():
+    """A study's tagged recordings are registered as scenes so the judge finds their truth; they are in no set, so
+    a scorecard run in the same process (the whole test suite) never takes them for its own."""
+    from tools import scorecard as SC
+
+    before = {n: [s.name for s in SC.scenes_for(n)] for n in SC.SETS}
+    mc.x19_register(SC, ["bracket240t-s0", "bracket240tm-s1", "sheett-s2"])
+    mc.x19t_register(SC, ["bracket240tpt-s1", "bracket240tp-s4"])
+    assert SC.SCENES["bracket240tpt-s1"].group == "bracket240"  # the judge's truth is the untagged scene's
+    assert {n: [s.name for s in SC.scenes_for(n)] for n in SC.SETS} == before
+    assert [s.name for s in SC.scenes_for("core", ["bracket240"], [0, 1, 2])] == [f"bracket240-s{k}" for k in range(3)]

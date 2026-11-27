@@ -1145,7 +1145,7 @@ def x19_register(SC, names) -> None:
     for name in names:
         base = name.replace("bracket240tm", "bracket240").replace("bracket240t", "bracket240").replace("sheett", "sheet")
         if name not in SC.SCENES:
-            SC.SCENES[name] = dc.replace(SC.SCENES[base], name=name)
+            SC.SCENES[name] = dc.replace(SC.SCENES[base], name=name, sets=())  # in no scorecard set
 
 
 def x19_scene(name: str, moved: dict | None = None):
@@ -1391,7 +1391,7 @@ def x19t_register(SC, names) -> None:
     for name in names:
         seed = name.split("-s")[1].split("@")[0]
         if name not in SC.SCENES:
-            SC.SCENES[name] = dc.replace(SC.SCENES[f"bracket240-s{seed}"], name=name)
+            SC.SCENES[name] = dc.replace(SC.SCENES[f"bracket240-s{seed}"], name=name, sets=())  # in no set
 
 
 def x19t_motion(sc0) -> np.ndarray:

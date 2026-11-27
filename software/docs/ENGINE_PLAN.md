@@ -1542,6 +1542,18 @@ large files, continuous integration (A5, parked by the owner).
   is dropped (four others state the same numbers). The other was `tests/test_merge_guard.py`'s
   stand-in (72407d0). To keep: run the whole suite after every engine item, not only the
   task's files.
+- [x] **The whole suite after the second review's fixes, the wall reading and the mended tag
+  hold: run 2026-11-26** on 23a7939 (a frozen copy). With the graphics card 2405 passed, 7
+  skipped, 1 expected failure, 2 failed (68 min); without it 2321 passed, 92 skipped, 1
+  expected failure, 1 failed (46 min); no driver timeout. Both failures were the tests' own,
+  no engine defect: (1) on both paths `test_a_baseline_is_not_saved_from_old_results` got a
+  study's recording among the scorecard's scenes, because `tools/merge_combine_study.py`
+  registered its tagged recordings in the scorecard's sets when an earlier test had called
+  it in the same process; they are in no set now (guard test seen failing first). (2) With
+  the graphics card `test_each_frame_is_fused_with_its_own_matchers_factor` (R2-7) watched
+  only the processor's fusion, which that path does not call; it watches whichever the path
+  uses now and passes on both, so the per-frame noise profile is shown on the graphics
+  card's fusion too. The expected failure is the tag hold's known weakness (X19).
 - [ ] The known-bias table (`ohs/cad/nominal.py`, what Compare with CAD says about a hole)
   holds "a Ø 25 hole over a far background reads 0.9 to 3 mm small with tracking" from the
   studies of 2026-11-12 to 16. The scorecard's baseline reads the plate 120 mm up 2.9 to 6.9 mm
