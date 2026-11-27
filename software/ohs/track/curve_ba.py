@@ -11,7 +11,8 @@ poses so that they do:
 
 1. **Curves** (:func:`frame_curves`): the lines of up to ``max_frames`` tracked frames, spread over
    the scan, extracted at full resolution, triangulated, checked against the right image, with
-   unit tangents from their neighbours along each line.
+   unit tangents from their neighbours along each line (:func:`curve_tangents`; a line fitted over
+   a short stretch is a setting, ``tangent_fit_mm``, off by default).
 2. **Crossings** (:func:`find_crossings`): point pairs from curves of different frames within
    ``radius_mm`` whose tangents differ by at least ``min_angle_deg``; the closest points of the two
    local lines must lie within ``local_mm`` of the samples. One crossing per pair of curves. Its
@@ -75,7 +76,7 @@ import numpy as np
 
 from ohs.geometry import invert_se3, so3_exp, so3_log
 
-__all__ = ["CurveParams", "Crossings", "frame_curves", "find_crossings", "crossing_residuals", "adjust_poses",
+__all__ = ["CurveParams", "Crossings", "frame_curves", "curve_tangents", "find_crossings", "crossing_residuals", "adjust_poses",
            "holdout_splits", "acted_warning", "laser_curve_adjustment"]
 
 log = logging.getLogger(__name__)
@@ -90,6 +91,14 @@ class CurveParams:
     radius_mm: float = 3.0  # crossing candidates: point pairs this close
     local_mm: float = 1.5  # the crossing must lie this close to both samples
     min_angle_deg: float = 30.0  # the two curves' tangents differ by at least this
+    # a curve's direction (:func:`curve_tangents`). 0, the default: from each sample's two neighbours. More than 0
+    # (a setting, measured with 1.5): the line fitted to the samples within ``tangent_fit_mm``, used only where the
+    # unbroken curve reaches ``tangent_side_mm`` on both sides and lies within ``tangent_tol_mm`` of that line. It
+    # removes the false crossings at bends and stays off: the held-out test is then fooled more easily on thin
+    # standing walls (the docstring of :func:`curve_tangents`)
+    tangent_fit_mm: float = 0.0
+    tangent_side_mm: float = 0.75
+    tangent_tol_mm: float = 0.1
     min_crossings: int = 150
     sigma_mm: float = 0.25  # a crossing's miss (the lasers' own scatter, with margin)
     odo_mm: float = 0.2  # tracked motion between consecutive frames: random walk per frame
@@ -169,20 +178,104 @@ def frame_curves(reader: Any, calib: Any, frames: Sequence[int], params: CurvePa
                 P = P.copy()
                 P[i] = Q
                 ok[i] = good_r
-            n = len(P)
-            inner = np.zeros(n, dtype=bool)  # both neighbours on the same polyline and valid
-            if len(seg) == n:
-                inner[1:-1] = (seg[2:] == seg[1:-1]) & (seg[:-2] == seg[1:-1])
-            inner[1:-1] &= ok[2:] & ok[:-2]
-            tan = np.zeros((n, 3))
-            tan[1:-1] = P[2:] - P[:-2]
-            tl = np.linalg.norm(tan, axis=1)
-            good = ok & inner & (tl > 1e-6) & (tl < 3.0)
-            tan[good] /= tl[good, None]
+            tan, good = curve_tangents(P, ok, seg, params)
             if good.sum() >= 10:
                 curves.append((name, P[good], tan[good]))
         out[int(f)] = curves
     return out
+
+
+#: the distance between a laser line's samples that ``tangent_fit_mm`` and its two companions are meant for (one
+#: pixel at 250 mm in a 1280 px image is 0.35 mm)
+_FULL_STEP_MM = 0.4
+
+
+def curve_tangents(P: np.ndarray, ok: np.ndarray, seg: np.ndarray, params: CurveParams | None = None,
+                   ) -> tuple[np.ndarray, np.ndarray]:
+    """``(tangents, good)`` of one laser line's samples ``P`` (n, 3; in order along the line; ``ok`` the valid ones,
+    ``seg`` the polyline each belongs to): the unit tangent of every sample and which samples a crossing may use.
+
+    With ``tangent_fit_mm`` = 0 (the default): from the two neighbours, every sample that has both.
+
+    With ``tangent_fit_mm`` > 0 (a setting): the direction of the straight line fitted to the sample's unbroken
+    stretch of the curve within ``tangent_fit_mm`` of it (valid samples of one polyline, none more than 1 mm from the
+    next). A sample is used only where that stretch reaches ``tangent_side_mm`` on both sides and all of it lies
+    within ``tangent_tol_mm`` of the line.
+
+    Why the setting exists (ENGINE_PLAN X8, ``VALIDATION.md`` "Why the laser crossings miss at the true poses"):
+    where a laser line bends over an edge its samples cut the corner, and one sample off the surface tilts its
+    neighbours; a direction from two neighbours a third of a millimetre apart is then 30 degrees and more off, two
+    nearly parallel lines of neighbouring frames pass for a crossing, and their "miss" is the distance between the
+    lines, 1 to 3 mm at the true poses. The fitted line removes those (45 of 402 crossings on a walls recording, 67 of
+    280 on a speckled bracket; then 0 and 1).
+
+    Why it is off: the crossings that remain show the lasers' second error more clearly, the projector's dots pulling
+    a line's centre, the same way in neighbouring frames (correlation 0.8 one frame apart). The held-out test takes
+    that for drift: with the fitted line a walls recording at the TRUE poses passes it (640 px: ratio 0.57, the
+    poses moved by 2.9 mm; with the two neighbours 0.89, refused). Until the test can tell the two apart, the
+    cleaner crossings would move thin walls."""
+    p = params or CurveParams()
+    P = np.asarray(P, dtype=np.float64)
+    ok = np.asarray(ok, dtype=bool)
+    n = len(P)
+    tan = np.zeros((n, 3))
+    if n < 3:
+        return tan, np.zeros(n, dtype=bool)
+    inner = np.zeros(n, dtype=bool)  # both neighbours on the same polyline and valid
+    if len(seg) == n:
+        inner[1:-1] = (seg[2:] == seg[1:-1]) & (seg[:-2] == seg[1:-1])
+    inner[1:-1] &= ok[2:] & ok[:-2]
+    tan[1:-1] = P[2:] - P[:-2]
+    tl = np.linalg.norm(tan, axis=1)
+    good = ok & inner & (tl > 1e-6) & (tl < 3.0)
+    tan[good] /= tl[good, None]
+    w = float(p.tangent_fit_mm)
+    if w <= 0 or not good.any():
+        return tan, good
+    step = np.linalg.norm(P[1:] - P[:-1], axis=1)
+    link = ok[1:] & ok[:-1] & np.isfinite(step) & (step < 1.0)  # sample k and k + 1 on one unbroken stretch
+    if len(seg) == n:
+        link &= seg[1:] == seg[:-1]
+    typical = float(np.median(step[link])) if link.any() else 0.0
+    if typical <= 0:
+        return tan, np.zeros(n, dtype=bool)
+    # samples farther apart than at full resolution and 250 mm (a smaller image, a far or slanted surface) are also
+    # less exact, in proportion: the three lengths grow with them, so that the fit keeps its five to ten samples
+    grow = max(1.0, typical / _FULL_STEP_MM)
+    w, side, tol = w * grow, float(p.tangent_side_mm) * grow, float(p.tangent_tol_mm) * grow
+    K = int(min(48, math.ceil(w / typical) + 1))
+    idx = np.arange(n)
+    # the window of each sample: itself and up to K samples on either side, as far as the stretch is unbroken and
+    # within w of the sample
+    member = np.zeros((n, 2 * K + 1), dtype=bool)
+    member[:, K] = ok
+    reach = np.zeros((n, 2))
+    for side, sgn in ((0, -1), (1, 1)):
+        alive = ok.copy()
+        for d in range(1, K + 1):
+            j = idx + sgn * d
+            inside = (j >= 0) & (j < n)
+            jj = np.clip(j, 0, n - 1)
+            k = np.clip(np.minimum(jj, jj - sgn), 0, n - 2)  # the link between this sample and the one before it
+            dist = np.linalg.norm(P[jj] - P, axis=1)
+            alive = alive & inside & link[k] & (dist <= w)
+            member[:, K + sgn * d] = alive
+            reach[alive, side] = np.maximum(reach[alive, side], dist[alive])
+    cols = np.clip(idx[:, None] + np.arange(-K, K + 1)[None, :], 0, n - 1)
+    Q = np.where(member[:, :, None], P[cols], 0.0)
+    cnt = member.sum(axis=1)
+    mean = Q.sum(axis=1) / np.maximum(cnt, 1)[:, None]
+    Qc = np.where(member[:, :, None], Q - mean[:, None, :], 0.0)
+    cov = np.einsum("nki,nkj->nij", Qc, Qc)
+    cov[~np.all(np.isfinite(cov), axis=(1, 2))] = 0.0
+    t = np.linalg.eigh(cov)[1][:, :, 2]  # the direction of the largest spread
+    along = np.einsum("nki,ni->nk", Qc, t)
+    off = np.linalg.norm(Qc - along[:, :, None] * t[:, None, :], axis=2).max(axis=1)
+    fit = good & (cnt >= 5) & (reach.min(axis=1) >= side) & (off <= tol)
+    flip = np.einsum("ni,ni->n", t, tan) < 0
+    t[flip] *= -1.0
+    tan[fit] = t[fit]
+    return tan, fit
 
 
 # --------------------------------------------------------------------------- 2. crossings

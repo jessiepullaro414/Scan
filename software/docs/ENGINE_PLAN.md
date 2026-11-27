@@ -873,9 +873,22 @@ and thin parts".
     0.003, moved the path to 0.66 mm and pulled the wall's sides through each other. On
     scans the tags hold the crossings never helped (16 saved scans: refused on 15, worse on 1).
     Adopted: Straighten does not run the laser crossings on a scan the tags hold. Nothing
-    changes with the setting off. Open: the crossings miss at the true poses on standing
-    walls (a third by 0.25 mm and more) for a reason not found; they still act on walls
-    without tags when their check passes.
+    changes with the setting off. They still act on walls without tags when their check
+    passes.
+  - **Why the crossings miss at the true poses, found 2026-11-27** (`VALIDATION.md`, "Why the
+    laser crossings miss at the true poses: two causes"). (1) Crossings that are none: a
+    curve's direction comes from two neighbouring samples and tilts by 30 degrees and more
+    where a line bends over an edge, so nearly parallel lines of neighbouring frames pass for
+    a crossing that "misses" by the distance between them (45 of 402 on a walls recording).
+    A line fitted over a short stretch removes them (`CurveParams.tangent_fit_mm`). (2) The
+    projector's dots pull the laser line's centre, alike in neighbouring frames (correlation
+    0.8 one frame apart); rendered without dots the laser points are 2.5 times as exact
+    (0.086 against 0.212 mm) and the crossings meet (9 % miss by over 0.25 mm against 59 %).
+    The held-out test takes (2) for drift. The fitted line makes that worse, not better: with
+    it a walls recording at its TRUE poses is moved by 2.85 mm, so it is a setting and OFF;
+    nothing changes by default. Open: laser frames without the dots (hardware and firmware),
+    a held-out test that a repeated error cannot pass, the adjustment without a reference
+    mesh (it leaves drifted paths worse more often than better).
   - With 20 tags on the table 300 mm apart: the mesh's length -0.042 / +0.048 / +0.018 %
     (without: -0.164 / +0.197 / +0.054), the camera path -0.052 / +0.060 / +0.003 % (without:
     0.18 to 0.45), the passes' slide 0.34 to 1.14 mm RMS (without: 1.4 to 11.4).

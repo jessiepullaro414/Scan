@@ -7013,10 +7013,116 @@ tags' poses, or Straighten's second fuse? Neither: it was the laser crossings, w
 - **Not done:** one scan shows the loss and its cure; the other four short scans where the tags acted are unchanged
   by the fix (the crossings had refused there), and no new scan was rendered for it. The crossings still act on
   standing walls WITHOUT tags when their check passes (it refuses the scorecard's three walls scenes today; a walls
-  recording with drift added is known to pass), and what makes them miss at the true poses there is open.
+  recording with drift added is known to pass). What makes them miss at the true poses is the next section.
 - **Whole suite on the commit (947b41b, a frozen copy, 2026-11-27):** 2463 passed, 7 skipped with the graphics card
   (48 min); 2378 passed, 92 skipped on the processor (42 min): the 4 new tests on each path. No graphics driver
   timeout. The exe was not rebuilt from it.
+
+## Why the laser crossings miss at the true poses: two causes (ENGINE_PLAN X8, 2026-11-27)
+
+The question left open above: at the TRUE camera poses the laser lines of different frames should meet where they
+cross, yet on the standing walls 43 % of the crossings miss by more than 0.25 mm (speckled bracket 2: 27 %). Two
+causes, both measured against the true surface; the second is what fools the adjustment's own test on thin walls.
+
+**Setup.** The scorecard's recordings `fins-s2` (standing walls, 120 frames) and `hard-speck2` (speckled bracket,
+90 frames), 1280 px, true poses, the crossings as Straighten finds them (402 and 280); the 640 px walls of the
+engine tests for the last part. Processor only.
+
+**Where the misses are.** A crossing whose two points lie on the true surface (within 0.15 mm) hardly ever misses:
+
+| crossings at the true poses | walls: n, median miss, over 0.25 mm | bracket: n, median, over 0.25 mm |
+|---|---|---|
+| all | 402, 0.208 mm, 43.3 % | 280, 0.110 mm, 27.1 % |
+| both points on the true surface | 180, 0.074 mm, 2.8 % | 159, 0.056 mm, 6.9 % |
+| a point off the surface, one face | 208, 0.325 mm, 75.5 % | 111, 0.294 mm, 53.2 % |
+| the two points on different faces | 14, 1.467 mm, 85.7 % | 10, 0.363 mm, 60.0 % |
+| between frames under 10 apart | 45, 0.889 mm, 84 % | 67, 0.6 to 1.05 mm, 80 to 87 % |
+
+Ruled out again here: the frame's own other laser line (no crossing sample lies within 8 mm of it).
+
+**First cause: crossings that are none.** All 45 crossings between neighbouring frames on the walls join the SAME
+laser line of two frames. Their directions differ by 32 degrees at the median, just over the 30 the rule asks, and
+the normal of the two directions points 68 degrees off the level face they lie on. A curve's direction is taken
+from a sample's two neighbours, a third of a millimetre apart: where the line bends over an edge its samples cut
+the corner, and one sample 0.4 mm off tilts its neighbours by over 30 degrees. Two nearly parallel lines then pass
+for a crossing, and its "miss" is the distance between the lines (1 to 3 mm). With the direction taken from a
+straight line fitted over a short stretch, and a sample used only where its curve is straight on both sides (a
+setting, `CurveParams.tangent_fit_mm` = 1.5 mm, 0.75 mm each side, within 0.1 mm):
+
+| at the true poses | two neighbours (today) | fitted line |
+|---|---|---|
+| walls: crossings, between near frames, over 0.25 mm | 402, 45, 43.3 % | 120, 0, 29.2 % |
+| bracket: crossings, between near frames, over 0.25 mm | 280, 67, 27.1 % | 101, 1, 5.9 % |
+| 640 px walls: crossings, between near frames missing over 1 mm | 1821, 182 | 505, 4 |
+
+**Second cause: the projector's dots pull the laser line's centre.** With the fitted line every crossing left on the
+walls lies on the base's top (120 of 120), and 29 % still miss. There a laser line reads up to 0.36 mm low over
+a few millimetres, in the same place along the line frame after frame. The height error of the laser samples on
+level faces, taken by place along the line in the image and compared between frames (walls, 1280 px):
+
+| | scatter | alike 1 / 2 / 5 / 10 / 30 frames apart (correlation) |
+|---|---|---|
+| horizontal line | 0.132 mm | 0.80 / 0.76 / 0.63 / 0.38 / 0.07 |
+| vertical line | 0.069 mm | 0.64 / 0.43 / 0.08 / -0.06 / 0.04 |
+
+The dots and the laser lines are in the same image and both are fixed to the scanner, so a dot sits on the same
+piece of a line until the depth changes. The proof, the 640 px walls rendered twice, the same scene, path and seed:
+
+| 640 px walls at the true poses | with the dots | without the dots |
+|---|---|---|
+| laser samples' height error on level faces | 0.212 mm | 0.086 mm |
+| alike 1 / 2 / 5 / 10 frames apart | 0.86 / 0.82 / 0.73 / 0.60 | 0.47 / 0.29 / 0.15 / 0.20 |
+| crossings, fitted line: median miss, over 0.25 mm | 0.309 mm, 59 % | 0.054 mm, 9 % |
+| the adjustment, two neighbours (today) | refused (0.893; one half 0.704) | refused (0.917) |
+| the adjustment, fitted line | ACTS (0.574), moves the true poses 2.85 mm | refused (0.980) |
+
+An error shared by neighbouring frames is exactly what the test with whole frames held out cannot see through: a
+held-out frame carries the error of the fitted frames beside it, so fitting the error "helps" it, as drift would.
+
+**What the fitted line does to Straighten's decisions** (processor; the poses and the mesh each saved app-chain run
+fed the crossings; 34 tracked scans, the two whose loops moved the poses left out, and all 36 at the true poses
+with the true-pose mesh):
+
+- Tracked: today the crossings act on speckled bracket 2 alone (ratio 0.743; path median 0.652 to 0.51 mm, the
+  largest error 1.39 to 1.15 mm). With the fitted line it keeps 97 of its 295 crossings, too few for the check
+  (fewer than 20 join held-out frames, also when 60 crossings are asked instead of 150), so that gain is lost;
+  nothing acts. Every other scan is refused either way.
+- At the true poses nothing acts either way, but the walls come nearer the limit of 0.85: seed 0 at 0.852 with
+  the fitted line (0.909 today), refused by 0.002. Seed 2: 0.87 today; with the fitted line too few crossings
+  (120), or 1.408 when 60 are asked.
+- Without a reference mesh the 640 px walls of the engine tests pass at the true poses with the fitted line
+  (the table above: 0.574, moved 2.85 mm).
+- Tried and not kept: no fit when the crossings' median miss is at most 0.15 mm (with the fitted line it is 0.04
+  to 0.13 mm at the true poses on all 32 scans with enough crossings). It would not stop the 640 px walls
+  (0.31 mm).
+
+**Outcome.** The fitted line is in the engine as a setting and OFF: on its own it loses the one gain the
+crossings give today and brings the walls nearer to being moved, because the crossings it leaves show the dots'
+error more clearly to a test that takes it for drift. Nothing changes by
+default; the scorecard can try it (`curve.tangent_fit_mm=1.5`). Where samples are farther apart than 0.4 mm (a
+smaller image, a far or slanted surface) its three lengths grow in proportion.
+
+**Also seen, the adjustment without a reference mesh** (the app always gives one; the engine tests do not): drift
+added to the true poses of five recordings (three walls, speckled bracket 2, a 240-frame bracket), four drifts
+each. Today it acts on 16 of the 20 and leaves the camera path worse on 10, better on 5; at the true poses it
+moves 2 of the 5 (the walls, by 1.1 and 2.1 mm rms). With the fitted line (60 crossings asked): acts on 12, worse
+on 6, better on 4; moves 1 of 5 at the true poses (walls seed 0, 0.8 mm rms). The 240-frame bracket with 2,500 to
+4,000 crossings is among the ones made worse.
+
+**Tests.** 10 in `tests/test_track_curve_tangents.py` on made-up curves (the setting is off; a straight curve, a
+bend over an edge, one sample off the surface, a gap, the false crossing itself, a real crossing kept, coarser
+samples, the default rule, too short a curve); with the setting on by default 8 of the first 9 failed against the
+old rule and 1 held. The standing walls' test in `tests/test_track_curve_ba.py` now also holds both findings (182
+false crossings to 4; with the setting the true poses are moved, which is why it is off). With the files around
+it 87 passed on the processor and 87 with the graphics card; no graphics driver timeout; lint clean. The whole
+suite was not run (the default path gives the numbers the older tests pin).
+
+**Open.** (1) Laser frames without the dots: whether the scanner can switch the dot projector off for the frames
+its lasers are read from is a hardware and firmware question, not looked at. (2) A held-out test that an error
+repeated in neighbouring frames cannot pass, for instance holding out by place along the line instead of by
+frame: not built. (3) The adjustment without a reference mesh. (4) Not measured: what the dots cost "Refine with
+lasers", which uses the same laser points. Work files: `x8\crossedge.py`, `crossbias.py`, `crossdump.py`,
+`crossdump2.py`, `crossrobust.py`, `crosstry.py`, `walldrift.py`, `lowline.py`, `biasfixed.py`, `nodots.py`.
 
 ## What the metrics mean
 

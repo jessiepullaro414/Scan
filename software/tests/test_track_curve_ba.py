@@ -168,6 +168,27 @@ def test_the_standing_walls_true_poses_are_left_alone(tmp_path):
     assert rep["reason"] == "adjusted" and rep["holdout"]["ratio"] < CurveParams().holdout_max_ratio, rep["holdout"]
     assert not all(np.array_equal(poses[i], T[k]) for k, i in enumerate(idx))  # it moves the true poses ...
     assert isinstance(rep["warning"], str) and "thin walls" in rep["warning"]  # ... and says that it acted
+    # ENGINE_PLAN X8 (2026-11-27), why the crossings miss at the TRUE poses here. First cause: a direction from two
+    # neighbours tilts where a line bends over an edge, and nearly parallel lines of neighbouring frames pass for a
+    # crossing that "misses" by the distance between them. A line fitted over a short stretch (a setting,
+    # CurveParams.tangent_fit_mm) removes them ...
+    Tt = {f: T[k] for k, f in enumerate(idx)}
+    far_off = {}
+    for label, p in (("two neighbours", CurveParams()), ("fitted line", CurveParams(tangent_fit_mm=1.5))):
+        cr = find_crossings(frame_curves(reader, reader.calibration(), idx, p), Tt, p)
+        r = np.abs(crossing_residuals(Tt, cr)[0])
+        near = np.abs(cr.fa - cr.fb) < 10
+        far_off[label] = (int(len(cr)), int((near & (r > 1.0)).sum()), float(np.median(r)))
+    print("standing walls, true poses: crossings, of them between frames under 10 apart that miss by over 1 mm, "
+          "median miss:", far_off)
+    assert far_off["two neighbours"][1] >= 10 and far_off["fitted line"][1] <= far_off["two neighbours"][1] // 5
+    # ... but the setting stays OFF: the crossings left show the second cause more clearly, the projector's dots
+    # pulling a line's centre alike in neighbouring frames, and the held-out test takes that for drift. With the
+    # fitted line the TRUE poses pass it and are moved. When this stops being so, the default can be looked at again.
+    poses, rep = laser_curve_adjustment(rec, None, rows(idx, T, reader.times()), params=CurveParams(tangent_fit_mm=1.5))
+    print("standing walls, true poses, the fitted line (a setting, off):", rep["holdout"], rep["verdict"])
+    assert CurveParams().tangent_fit_mm == 0.0
+    assert rep["reason"] == "adjusted" and rep["moved_mm"] > 1.0, rep["verdict"]
 
 
 def test_the_genuine_drift_is_mended_with_whole_frames_held_out(orbit, truth):
