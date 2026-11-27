@@ -6841,6 +6841,13 @@ field, a block of words and two buttons.
   gave the first answer again, with the offer. About 25 s an alignment. Found there and mended: the Shared table row
   of a held result read "Not used: the two scans' tables did not line up"; it reads "Not used: the tags decide the
   position".
+- **Whole suite on the commit (0747663, 2026-11-27, from a frozen copy):** with the graphics card 2449 passed,
+  7 skipped (49 min); on the processor 2364 passed, 92 skipped (46 min). No graphics driver timeout.
+- **The exe, rebuilt from 0747663 (527 MB):** starts in 2 s and serves the page; aligning the two bracket scans
+  gives 99 % shared and 0.12 mm as before, and the answer carries the `hold` block (null: no tags there). The
+  wall-thickness readings (4 spots) and the hole readings from the images (12 clicks) are the same as the Python
+  run's, value for value. The hold itself was not pressed in the exe: it was tried in the working tree's server
+  (above).
 - **Not done:** not-held and the caution were seen in the demo and in tests, not on real projects in the app; several
   scans with the hold were tried in the demo and one server test (two scans through `align_all`), not with three real
   scans; simulated scans only.
