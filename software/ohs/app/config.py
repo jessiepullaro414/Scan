@@ -188,6 +188,8 @@ class ProcessConfig:
     straighten_tags: bool = False
     # ENGINE_PLAN X19: an alignment from tags where two scans share little keeps the tags' pose (ohs.align.AlignParams.hold_tags)
     align_hold_tags: bool = False
+    # ENGINE_PLAN X16: the viewer's wall-thickness reading from the camera frames (ohs.measure.wall)
+    wall_reading: bool = True
 
 
 @dataclass
@@ -630,6 +632,13 @@ _KEY_DOCS = {
         "before Refine with lasers: the surface is measured against up to 120 frames of the recording.\n"
         "Needs a graphics card; without one Make mesh leaves the mesh as it is and says so. Not at\n"
         "Preview quality. Off: as before."
+    ),
+    "process.wall_reading": (
+        "The viewer offers a wall's thickness read from the scan's camera frames at a click (ENGINE_PLAN\n"
+        "X16): each side of a thin wall a plane fitted to the depth of the frames that see it. It says\n"
+        "\"at most\": scans place a thin wall's two sides slightly too far apart, so the wall may be up to\n"
+        "about 1 mm thinner. Needs a graphics card; not for scans tracked by markers. Nothing in the scan\n"
+        "changes. Off: not offered."
     ),
     "process.align_hold_tags": (
         "Aligning two scans that share little of the part (under 70 %) from the AprilTags both saw keeps\n"

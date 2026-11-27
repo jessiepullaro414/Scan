@@ -62,6 +62,7 @@ Tools:
 | P | Fit a plane |
 | C | Fit a cylinder |
 | H | Fit a hole |
+| T | Read a thin wall's thickness from the camera frames (when the scan offers it) |
 | S | Section: cut the scan with a plane |
 | U | Flush along a seam |
 | Esc | Drop a half-made measurement, then turn the tool off |

@@ -6582,6 +6582,53 @@ against a search from the shapes alone; then these alignments are run again.
 Limits: one seed pair a case, three pairs; 20 mm tags, found under the simulator's light and dots; the bracket
 only.
 
+## The wall-thickness reading in the app (ENGINE_PLAN X16, 2026-11-24 and 26): in, with one-sided words
+
+The owner's decision E-D5: a thin wall's thickness read from the scan's camera frames goes into the app now,
+worded one-sided, as a stopgap. `ohs/measure/wall.py` (the reading) and `ohs/measure/frame_depth.py` (matcher depth
+near a click for a handful of recorded frames, which a hole reading can share); `GET` and `POST
+.../scans/{sid}/wall`; the viewer's Fit tool has a fourth choice, "Wall" (T). The stop rule, fixed in X16: through
+the server's route, on the scorecard's standing walls and sheet (3 seeds each, the app's default Make mesh,
+tracked), the reading is nearer the truth than the mesh's own thickness on every wall of 2 mm or less, refuses
+where one side is not seen, and never reads thinner than the truth by more than 0.1 mm. **Met on the graphics
+card's path.** Data: `D:\OpenHandScan-work\scratch\ed3\walls_app` (`readings_gpu.json`, `readings_cpu.json`).
+
+Error in mm (the value minus the truth), the mesh's thickness read at the same click:
+
+| scan | wall (truth) | the mesh | "at most" | the raw reading | a click takes |
+|---|---|---|---|---|---|
+| walls, seed 0 | 0.5 / 1 / 2 | +1.51 / +0.73 / +0.95 | +0.68 / +0.63 / +0.61 | +0.58 / +0.52 / +0.49 | 11.5 to 12.2 s |
+| walls, seed 1 | 0.5 / 1 / 2 | +1.34 / +0.78 / +0.54 | +0.58 / +0.54 / +0.42 | +0.50 / +0.47 / +0.33 | 12.8 to 15.9 s |
+| walls, seed 2 | 0.5 / 1 / 2 | +1.67 / +0.90 / +0.49 | +0.75 / +0.62 / +0.38 | +0.63 / +0.52 / +0.27 | 14.5 to 15.6 s |
+| sheet, seed 0 | flange 2 / rib 1 / rib 3 | +0.51 / +0.96 / +0.53 | +0.43 / +0.88 / +0.78 | +0.36 / +0.71 / +0.64 | 16.5 s |
+| sheet, seed 1 | flange 2 / rib 1 / rib 3 | +0.17 / +0.68 / +0.19 | +0.07 / +0.40 / +0.25 | -0.02 / +0.32 / +0.16 | 15.3 to 17.2 s |
+| sheet, seed 2 | flange 2 / rib 1 / rib 3 | +0.52 / +1.24 / +0.73 | +0.40 / +1.14 / +1.00 | +0.32 / +1.00 / +0.84 | 15.9 to 17.4 s |
+
+- **On all 15 walls of 2 mm or less the "at most" value is nearer the truth than the mesh** (+0.07 to +1.14 mm
+  against +0.17 to +1.67), and it is never under the truth (the raw reading at its lowest -0.02 mm; the shown value
+  adds twice the reading's own scatter, at least 0.05 mm).
+- **One side not seen: refused in words** on the sheet's foot on all three seeds ("No wall seen from both sides at
+  the click").
+- The 3 mm rib (outside the rule) reads worse than the mesh on all three seeds; the reading is made for walls up
+  to about 3 mm.
+- **Without a graphics card it is not offered:** with the processor's matcher on the same meshes the "at most"
+  value was no nearer than the mesh on 5 walls (0.01 to 0.05 mm above it).
+- **Not offered** either for a scan tracked by its markers (there the two sides came out 0.10 to 0.47 mm too
+  close, so "at most" would be false), for a merged scan, or when the recording, the calibration or the camera
+  path is gone.
+- What the user reads (the 1 mm wall of seed 0): "At most 1.63 mm thick here (read from 23 camera frames: 14 on
+  one side, 9 on the other)." "The scan cannot rule out that the wall is up to about 1 mm thinner: scans place a
+  thin wall's two sides slightly too far apart (on simulated walls by 0.3 to 1.0 mm)." "For the real thickness, lay
+  the part flat and scan it from above, or measure it with calipers." "The mesh reads 1.73 mm here; the mesh holds
+  thin walls thicker than the frames do." Never a ±.
+- A click takes 11.5 to 17.4 s, about 10 s of it the matcher on 18 to 26 frames. The matcher runs again on those
+  frames; keeping Make mesh's depth instead would cost 7.8 MB a frame for as long as the scan exists.
+- Seen in the running app (2026-11-26, the working tree's server on these projects): the Wall choice shows, a
+  click on the 2 mm wall of seed 0 gave "At most 2.64 mm" after 10.7 s, a click beside a wall was refused.
+
+Limits: simulated scans; the tracking error stays in the reading (X17), which is why it says "at most"; a scan made
+wholly without a graphics card was not tried; a one-sided refusal was seen on the sheet only.
+
 ## What the metrics mean
 
 - **Stereo errors** compare the estimated raw intrinsics/extrinsics (`K1`, `K2`, `R`, `T`) with

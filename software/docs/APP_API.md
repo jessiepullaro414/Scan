@@ -1038,6 +1038,8 @@ Paths are relative to `/api/projects/{pid}/scans/{sid}`.
 | Method and path | Body | Returns |
 |---|---|---|
 | `POST .../fit` | `FitRequest` | `FitResult` |
+| `GET .../wall` | none | `{available: boolean, why: string \| null}`: whether the wall-thickness reading is offered for the scan (since 2026-11-26, ENGINE_PLAN X16) |
+| `POST .../wall` | `{face: number, point: [x, y, z], version?: number}` | `WallReading` (below); 409 when the mesh changed; 422 with a plain `detail` and a `hint` when not offered or refused |
 
 Rules:
 - 409 before the scan has a mesh (as `holes.json`).
@@ -1164,6 +1166,17 @@ Paths are relative to `/api/projects/{pid}/scans/{sid}`.
 
 Rules:
 - `GET` reads only: a scan without kept features answers an empty set (and writes nothing).
+- **The wall-thickness reading** (since 2026-11-26; `[process] wall_reading`, on; `VALIDATION.md`, "The
+  wall-thickness reading in the app"): a thin wall's thickness read from the scan's camera frames at a click on
+  one of its faces. `WallReading` is `{available: true, at_most_mm, reading_mm, pm_mm, mesh_mm, frames: [a, b],
+  points: [a, b], tilt_deg, seconds, words: string[], timings_s, version}`. Show `words` and `at_most_mm`; they
+  are one-sided on purpose ("At most 1.63 mm thick here ...", "The scan cannot rule out that the wall is up to
+  about 1 mm thinner ..."). Never show `reading_mm ± pm_mm`: the reading's own scatter does not hold the camera
+  path's error. It is read-only, takes 10 to 20 s, and one reading runs at a time. Not offered (`available:
+  false` with `why`; a POST then answers 422): the setting off, no graphics card, a scan tracked by markers, a
+  merged scan, or the recording, the calibration, the depth range or the camera path gone. Refused at a click
+  (422): no wall seen from both sides, one side seen by too few frames or points, the two sides more than 5
+  degrees from parallel, a side's points scattering more than 0.7 mm, a wall thicker than about 3 mm.
 - `POST .../features` fits exactly as `POST .../fit` (the same 409 and 422 answers) and keeps the
   answer, the click, the mesh version and the extent in one step. `POST .../fit` itself answers as
   before, without the extent.

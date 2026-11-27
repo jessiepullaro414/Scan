@@ -44,6 +44,7 @@ export const SHEETS: Record<SheetId, Sheet> = {
           { keys: "P", text: "Fit a plane", binds: ["p"] },
           { keys: "C", text: "Fit a cylinder", binds: ["c"] },
           { keys: "H", text: "Fit a hole", binds: ["h"] },
+          { keys: "T", text: "Read a thin wall's thickness (when offered)", binds: ["t"] },
           { keys: "S", text: "Section: cut the scan with a plane", binds: ["s"] },
           { keys: "U", text: "Flush along a seam", binds: ["u"] },
           { keys: "Esc", text: "Drop a half-made measurement, then turn the tool off", binds: ["escape"] },

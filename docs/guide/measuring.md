@@ -37,6 +37,7 @@ One tool is on at a time. Turn a tool on with its toolbar button or key; press t
 | **P** | **Fit**, **Plane** | A flat face. |
 | **C** | **Fit**, **Cylinder** | A shaft, a boss or the wall of a bore. |
 | **H** | **Fit**, **Hole** | A hole's round edge. |
+| **T** | **Fit**, **Wall** | A thin wall's thickness read from the camera frames, when the scan offers it (see [Read a thin wall's thickness](#read-a-thin-walls-thickness)). |
 | **S** | **Section** | Cuts the scan with a plane: its 2D profile, a distance on it, DXF and SVG. |
 | **U** | **Flush** | The flush between two panels along their seam. |
 | **Esc** | | Drops a half-made measurement, then turns the tool off. |
@@ -97,6 +98,40 @@ Hover over a row's name for what it means. Some notes worth knowing:
 Warnings appear in orange under a fit, for example a small region, scattered points or an incomplete hole edge. A fit with a warning that makes its size unreliable gets no nominal offer (see [Nominal values](#nominal-values)).
 
 To remove a fit, click its cross; **Clear** removes them all.
+
+## Read a thin wall's thickness
+
+The mesh holds a thin wall (sheet metal, a flange, a rib) too thick: see [Known biases](#known-biases). The **Wall** choice of the Fit tool reads the wall's thickness from the scan's camera frames instead: each side of the wall a plane fitted to the depth measured by the frames that see it.
+
+**Wall** is shown next to **Plane**, **Cylinder** and **Hole** only for a scan the app can read it on: the PC has a graphics card the app uses, the scan was made in **Markerless** mode, it is not a merged scan, and its recording is still there. To switch the reading off, set `wall_reading = false` under `[process]` in the settings file (see [Change the settings file](settings.md#change-the-settings-file)).
+
+1. Click **Fit** in the toolbar, or press **G**.
+2. Choose **Wall** (or press **T**).
+3. Click one face of the wall: "Click one face of a thin wall whose both sides were scanned". The app reads the frames that see the wall, which takes a few seconds ("Reading the wall from the camera frames…").
+4. A card under the view shows the reading, for example:
+   - "At most 1.23 mm thick here (read from 17 camera frames: 8 on one side, 9 on the other)."
+   - "The scan cannot rule out that the wall is up to about 1 mm thinner: scans place a thin wall's two sides slightly too far apart (on simulated walls by 0.3 to 1.0 mm)."
+   - "For the real thickness, lay the part flat and scan it from above, or measure it with calipers."
+   - "The mesh reads 1.87 mm here; the mesh holds thin walls thicker than the frames do."
+
+![The Wall choice of the Fit tool on a scan of three thin standing walls, with the card that reads At most 2.64 mm](images/measuring-wall.png)
+
+The reading is one-sided on purpose: the wall is **at most** that thick. On simulated walls of 0.5 to 2 mm it read within 0.07 mm of the truth when the camera path was right, and 0.3 to 1.0 mm too thick with tracking, nearer the truth than the mesh. Nothing in the scan changes, and the reading is not kept with the scan: write it down, or click again later.
+
+**When there is no reading**, the app says why:
+
+| Message | What to do |
+|---|---|
+| No wall seen from both sides at the click | Click on one face of a thin wall whose both sides were scanned. |
+| Only one side of this wall was seen by the scan's camera frames here | Scan the other side of the wall too, then make the mesh again. |
+| One side of the wall was seen by too few camera frames here | Click where both sides were scanned from several directions. |
+| The two sides here are not parallel enough to be one wall | Click on a flat part of the wall. |
+| The camera frames' points on one side scatter too much here | Click on a flat part of the wall, away from its edges. |
+| The wall here is thicker than this reading is for | It is made for walls up to about 3 mm. Measure a thicker wall with two planes. |
+| Not offered for a scan tracked by its markers | On simulated thin walls that tracking placed the two sides up to 0.5 mm too close together, so "at most" could be wrong. Measure the wall with calipers. |
+| Not offered for a merged scan | Read the wall on one of the scans it was made from. |
+
+A thin part lying flat on the table reads its thickness well in the mesh itself (a 0.5 mm plate within 0.01 mm on simulated scans): for the real thickness of a sheet, that is the better scan.
 
 ## What the ± means
 

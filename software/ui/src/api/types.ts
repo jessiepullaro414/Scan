@@ -1022,6 +1022,31 @@ export type CircleShape = {
   center_sigma_mm: number;
 };
 export type FitShape = PlaneShape | CylinderShape | CircleShape;
+// ENGINE_PLAN X16: a thin wall's thickness read from the scan's camera frames at a click (one-sided: "at most")
+export type WallOffer = {
+  available: boolean;
+  why: string | null; // why it is not offered (the setting, a scan tracked by its markers, a merge, files gone)
+};
+export type WallRequest = {
+  face: number; // the clicked face of result/mesh.ply
+  point: [number, number, number]; // the clicked point on it (mm, the mesh's frame)
+  version?: number; // the mesh version the click was made on: 409 when it is no longer current
+};
+export type WallReading = {
+  available: true;
+  at_most_mm: number; // what the user is told: the wall is at most this thick here
+  reading_mm: number; // the frames' reading itself (for the record; not shown as "t ± s")
+  pm_mm: number; // its scatter over the frames (1 SD; not shown)
+  mesh_mm: number; // the mesh's own thickness there
+  frames: [number, number]; // camera frames read on each side
+  points: [number, number];
+  tilt_deg: number; // how far the two sides' planes are from parallel
+  seconds: number;
+  words: string[]; // the engine's sentences, shown as they come
+  timings_s: Record<string, number>;
+  version: number;
+};
+
 export type FitResult = {
   kind: FitKind; // as asked; a hole's shape is a circle
   shape: FitShape;

@@ -1346,6 +1346,10 @@ class ProcessManager:
         self.recipes = RecipeStore(Path(studio.data_dir) / "recipes")
         self._scans: dict[tuple[str, str], ScanProcess] = {}
         self._lock = threading.Lock()
+        # readings from the camera frames at a click (ENGINE_PLAN X16, the wall): one at a time, and the last
+        # recording's matcher kept (ohs.measure.frame_depth.FrameDepth)
+        self._wall_lock = threading.Lock()
+        self._frame_depth: tuple[tuple, object] | None = None
 
     # ------------------------------------------------------------------ access
     def scan(self, pid: str, sid: str) -> ScanProcess:
@@ -3291,6 +3295,100 @@ class ProcessManager:
             out["extent"] = r.extent
         if with_form:
             out["form"] = r.form
+        return out
+
+    # ------------------------------------------------------------------ wall thickness (ENGINE_PLAN X16)
+    def _wall_inputs(self, sp: ScanProcess) -> tuple[dict | None, str | None]:
+        """What the wall-thickness reading needs for this scan, or why it is not offered: ``(inputs, why)``,
+        ``inputs`` = ``{calib, depth_range, trajectory}``; the setting, the scan's tracking mode, a merge, the
+        recording's calibration, the depth range in the report and the base stage's camera path."""
+        from ohs.measure.wall import MARKERS_WORDS
+        from ohs.types import ScannerCalibration
+
+        if not bool(getattr(self.st.cfg.process, "wall_reading", False)):
+            return None, ("The wall-thickness reading is off in the settings ([process] wall_reading): it is a "
+                          "trial while scans place thin walls' sides slightly too far apart.")
+        entry = self.st.projects.scan_entry(sp.pid, sp.sid)
+        if entry.get("mode") == "markers":
+            return None, MARKERS_WORDS
+        if not images_on_gpu():
+            return None, ("Not offered without a graphics card: there the camera frames' depth is coarser, and on "
+                          "simulated walls the reading was no nearer the truth than the mesh.")
+        rep = _read_json(sp.result_dir / "report.json") or {}
+        if entry.get("merged_from") or rep.get("merged"):
+            return None, "Not offered for a merged scan: read the wall on one of the scans it was made from."
+        if rep.get("calibration") not in (None, "recording"):
+            return None, "Not offered: the scan was made with another calibration than its recording's."
+        cal_path = sp.recording_dir / "calibration.json"
+        try:
+            cal = ScannerCalibration.load(cal_path) if cal_path.is_file() else None
+        except (OSError, ValueError, KeyError, TypeError):
+            cal = None
+        if cal is None or not (sp.recording_dir / "frames").is_dir():
+            return None, "Not offered: the scan's recording or its calibration is no longer here."
+        d = (rep.get("params") or {}).get("depth") or {}
+        lo, hi = d.get("min_depth_mm"), d.get("max_depth_mm")
+        if not (isinstance(lo, (int, float)) and isinstance(hi, (int, float)) and 0 < lo < hi):
+            return None, "Not offered: the scan's report does not say the depth range it measured."
+        with sp.lock:
+            stage = str((sp.state.get("base") or {}).get("stage") or "track")
+        traj = next((q for q in (sp.dir / stage / "trajectory.csv", sp.result_dir / "trajectory.csv",
+                                 sp.dir / "track" / "trajectory.csv") if q.is_file()), None)
+        if traj is None:
+            return None, "Not offered: the scan's camera path is not here."
+        return {"calib": cal, "depth_range": (float(lo), float(hi)), "trajectory": traj}, None
+
+    def wall_available(self, pid: str, sid: str) -> dict:
+        """``GET .../wall``: whether the wall-thickness reading is offered for this scan, and why not."""
+        sp = self.scan(pid, sid)
+        self._need_base(sp)
+        _, why = self._wall_inputs(sp)
+        return {"available": why is None, "why": why}
+
+    def wall(self, pid: str, sid: str, face: int, point: Any, version: int | None = None) -> dict:
+        """``POST .../wall``: a thin wall's thickness read from the scan's camera frames at a click
+        (:func:`ohs.measure.wall.read_wall_thickness`): one-sided ("at most"), with the mesh's own reading beside it.
+        Read-only. The matcher runs again on the 6 to 30 frames that see the clicked wall (on the graphics card
+        when there is one); one reading at a time."""
+        from ohs.measure.frame_depth import FrameDepth
+        from ohs.measure.wall import WallRefused, read_wall_thickness
+
+        sp = self.scan(pid, sid)
+        self._need_base(sp)
+        inputs, why = self._wall_inputs(sp)
+        if inputs is None:
+            raise ApiError(422, f"The wall-thickness reading is not offered for this scan. {why}",
+                           "Measure the wall with calipers, or lay the part flat and scan it from above.")
+        with sp.lock:
+            v = int(sp.state["version"])
+            if version is not None and int(version) != v:
+                raise ApiError(409, "The mesh changed since this click.", "Reload the mesh and click again.")
+            cached = sp._fit_mesh
+            if cached is None or cached[0] != v:
+                V, F, S, Fl = self._load_step(sp, int(sp.state["cursor"]))
+                cached = sp._fit_mesh = (v, V, F, S, Fl)
+        _, V, F, _, _ = cached
+        if not 0 <= int(face) < len(F):
+            raise ApiError(422, "The click is not on the current mesh.", "Reload the mesh and click again.")
+        try:
+            rows = read_trajectory(inputs["trajectory"])
+        except (OSError, ValueError):
+            raise ApiError(422, "The scan's camera path cannot be read.", "Make the mesh again.") from None
+        poses = {int(i): np.asarray(T, dtype=np.float64) for i, _, ok, T in rows
+                 if ok and np.all(np.isfinite(np.asarray(T, dtype=np.float64)))}
+        with self._wall_lock:  # one reading at a time: the matcher is shared
+            key = (str(sp.recording_dir), inputs["depth_range"])
+            if self._frame_depth is None or self._frame_depth[0] != key:
+                self._frame_depth = (key, FrameDepth(sp.recording_dir, inputs["calib"], inputs["depth_range"]))
+            fd = self._frame_depth[1]
+            try:
+                r = read_wall_thickness(V, F, point, poses=poses, K=fd.K, image_size=fd.image_size,
+                                        depth_range=inputs["depth_range"], depth_of=fd.depth)
+            except WallRefused as e:
+                raise ApiError(422, plain_reason(e, "No wall thickness could be read where you clicked."),
+                               e.hint or "Click on one face of a thin wall whose both sides were scanned.") from None
+        out = r.to_dict()
+        out.update(version=v, available=True)
         return out
 
     def deviation(self, pid: str, sid: str) -> tuple[dict, np.ndarray]:

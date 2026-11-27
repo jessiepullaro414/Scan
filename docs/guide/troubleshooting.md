@@ -87,7 +87,7 @@ The ± after a value is how much it scatters from scan to scan. It is not the ac
 |---|---|---|
 | A hole reads small | A hole's open edge reads about 1 mm small in diameter, more with tracking. Small holes can close up altogether. | [Known biases](measuring.md#known-biases) |
 | A boss or a pin reads small | Small bosses read a few tenths of a millimetre small. | [Known biases](measuring.md#known-biases) |
-| A thin wall reads too thick | The thinner the wall, the more: a 1 mm rib can read 1.7 to 2.2 mm with tracking. | [Known biases](measuring.md#known-biases), [If thin walls are found](make-mesh.md#if-thin-walls-are-found) |
+| A thin wall reads too thick | The thinner the wall, the more: a 1 mm rib can read 1.7 to 2.2 mm with tracking. The Fit tool's **Wall** choice reads it nearer from the camera frames, as an upper bound ("at most"); it needs a graphics card. | [Known biases](measuring.md#known-biases), [Read a thin wall's thickness](measuring.md#read-a-thin-walls-thickness), [If thin walls are found](make-mesh.md#if-thin-walls-are-found) |
 | A fit tool refuses a click | The tool says why in its own words (for example no hole edge near the click). | [Fit a plane, a cylinder or a hole](measuring.md#fit-a-plane-a-cylinder-or-a-hole) and the messages on that page |
 | A comparison with CAD is off everywhere by the same amount | The alignment, or the reference's units. | [Align the scan with the reference](compare.md#align-the-scan-with-the-reference), [If the app asks about units](compare.md#if-the-app-asks-about-units) |
 

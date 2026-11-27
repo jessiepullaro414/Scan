@@ -958,3 +958,11 @@ shapes fitted and saved, as exact geometry, and not the scanned surface (for tha
 the mesh downloads, that STL and PLY are along the scan's axes and how to get the part upright
 at its own origin; and, when the mesh is open, that a 3D print needs a closed mesh and where
 "Make it watertight" is. The guide has the page `docs/guide/to-cad.md`.
+
+### [x] G3. The Fit tool's "Wall" choice (done 2026-11-26)
+A fourth choice in the Fit tool's shape picker, "Wall" (T), shown only when the scan offers the
+reading (ENGINE_PLAN X16). A click shows "Reading the wall from the camera frames…" and then a card
+with the engine's one-sided sentences ("At most X mm thick here…", never a ±); a refusal is a toast
+with the engine's words. Checked in the running app. Open: whether the reading should be keepable
+with the scan as a fitted shape is.
+

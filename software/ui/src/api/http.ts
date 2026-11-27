@@ -108,8 +108,7 @@ import type {
   PassView,
   StartBody,
   TablePreview,
-  TrajectoryView,
-} from "./types";
+  TrajectoryView, WallOffer, WallReading, WallRequest } from "./types";
 
 export type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
 
@@ -449,6 +448,13 @@ export const api = {
    * for a face outside the mesh or when no such shape is there (the detail says why, the hint what to
    * try). `faces` stays base64: decode it once with `decodeFaces` (lib/fits.ts). */
   fit: (pid: string, sid: string, body: FitRequest) => post<FitResult>(`${scanPath(pid, sid)}/fit`, body),
+  /** ENGINE_PLAN X16: whether the wall-thickness reading is offered for this scan, and why not. */
+  wallOffer: (pid: string, sid: string) => get<WallOffer>(`${scanPath(pid, sid)}/wall`),
+  /** A thin wall's thickness read from the scan's camera frames at a click: "at most" (one-sided), the mesh's own
+   * reading beside it. Takes a few seconds (the matcher runs again on the frames that see the wall). 409 when the
+   * mesh changed since the click; 422 with the reason in words (not offered, no wall seen from both sides here, one
+   * side not seen, too few frames, the sides not parallel, too thick for this reading). */
+  wall: (pid: string, sid: string, body: WallRequest) => post<WallReading>(`${scanPath(pid, sid)}/wall`, body),
 
   // ---------------------------------------------------------------- kept features (fits, measurements, relations)
   /** The scan's kept set; each fit and measurement made on another mesh version is marked `stale`. */

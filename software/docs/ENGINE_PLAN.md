@@ -1057,7 +1057,7 @@ from the camera images".
   bores; a bright background that is read rather than refused; tracking of the study scenes
   on the graphics card; the cause of the +18.9 case is inferred, not traced.
 
-### [ ] X16. A thin wall's thickness read from the raw frames (S to M): measured 2026-11-23, alive; not in the app
+### [x] X16. A thin wall's thickness read from the raw frames (S to M): in the app since 2026-11-26, with one-sided words
 E-D3 item 2. `tools/wall_thickness_study.py` (a study tool; nothing in the engine uses it);
 `VALIDATION.md`, "Thin walls: the raw reading, and where the error is made".
 - **The reading:** at a click on a wall seen from both sides, each face is a plane fitted to
@@ -1071,9 +1071,15 @@ E-D3 item 2. `tools/wall_thickness_study.py` (a study tool; nothing in the engin
   twice the ± covers the truth on 9 of 14 walls at true poses and on 1 of 15 tracked. So the
   reading cannot be shown as "t ± s"; honest wording is one-sided: "at most this thick; the
   scan cannot rule out up to about 1 mm thinner".
-- **Decided 2026-11-24 (E-D5): into the app's measuring now,** with the one-sided statement;
-  not offered for scans made in Markers mode (there the sides come out too close). Being
-  built.
+- **Decided 2026-11-24 (E-D5): into the app's measuring now,** with the one-sided statement.
+  **Done 2026-11-26** (`VALIDATION.md`, "The wall-thickness reading in the app"):
+  `ohs/measure/wall.py` and `ohs/measure/frame_depth.py` (matcher depth near a click, to be
+  shared with the hole reading of X15); `GET` and `POST .../wall`; the viewer's Fit tool has
+  "Wall" (T). `[process] wall_reading` is on. Offered only with a graphics card (the
+  processor's matcher was no nearer than the mesh on 5 walls), never for a scan tracked by
+  markers or a merged scan. The stop rule below is met on the graphics card's path: nearer
+  than the mesh on all 15 walls of 2 mm or less, never under the truth, one side unseen
+  refused. The tracking cause stays open in X17: the reading can only say "at most".
 - **Stop rule for the app's version: adopted only if** on the scorecard's walls and sheet it
   is nearer the truth than the mesh's reading on every wall, refuses where one side is not
   seen, and never reads a wall thinner than the truth by more than 0.1 mm.

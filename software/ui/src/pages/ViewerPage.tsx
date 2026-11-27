@@ -35,6 +35,7 @@ import {
   Trash,
   X,
   Brush,
+  BetweenVerticalStart,
   Diff,
   Orbit,
   ScanLine,
@@ -47,7 +48,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import type { BufferGeometry } from "three";
 import { PLYLoader } from "three/examples/jsm/loaders/PLYLoader.js";
 import { ApiError, api } from "../api/http";
-import type { FitKind, KeptFeature, KeptFit, MadeInfo, Project, Scan } from "../api/types";
+import type { FitKind, KeptFeature, KeptFit, MadeInfo, Project, Scan, WallOffer, WallReading } from "../api/types";
 import { isWholeRun, processingTime } from "../lib/making";
 import { HEALTH_ICON, HEALTH_TEXT } from "../components/CalibHealth";
 import { JobProgress, MakeMeshButton, ProcessButton, ScanStatusBadge } from "../components/ScanBits";
@@ -62,6 +63,7 @@ import { hasGraphicsCard, noConfidenceText } from "../lib/computer";
 import { useConnection } from "../store/connection";
 import { downloadFile } from "../lib/download";
 import { decodeFaces, fitLabel, fitName, regionTriangles, summarizeRegion, type RegionSummary } from "../lib/fits";
+import { WALL_HINT, wallCard, wallOfferTitle } from "../lib/wall";
 import { fileStem, fmtBytes, fmtCompact, fmtDateTime, fmtDetailMm, fmtDuration, fmtFixed, fmtInt, fmtPct } from "../lib/format";
 import { viewerSheet } from "../lib/shortcuts";
 import { axesEntry, groupOfTool, initialOpen, openFor, type GroupsOpen, type ViewerGroupId, type ViewerTool } from "../lib/viewerGroups";
@@ -387,6 +389,13 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
   const [pending, setPending] = useState<Vec3 | null>(null);
   const [fitOn, setFitOn] = useState(false);
   const [fitKind, setFitKind] = useState<FitKind>("plane");
+  /** ENGINE_PLAN X16: the Fit tool reads a thin wall's thickness from the camera frames instead of fitting a shape. */
+  const [wallPick, setWallPick] = useState(false);
+  /** Whether the scan offers that reading (and why not); null while not asked. */
+  const [wallOffer, setWallOffer] = useState<WallOffer | null>(null);
+  /** The last reading, shown under the view until the next click or the tool goes off. */
+  const [wallReading, setWallReading] = useState<WallReading | null>(null);
+  const [wallBusy, setWallBusy] = useState(false);
   /** The Section tool is on (FEATURE_PLAN I1). */
   const [sectionOn, setSectionOn] = useState(false);
   /** Matching points are being picked on the scan and the reference (FEATURE_PLAN I2). */
@@ -598,6 +607,15 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
   };
   const fitShape = (k: FitKind) => {
     setFitKind(k);
+    setWallPick(false);
+    pickTool("fit");
+  };
+  const wallShape = () => {
+    if (wallOffer && !wallOffer.available) {
+      toast.warn("The wall-thickness reading is not offered for this scan", wallOffer.why ?? "", "Measure the wall with calipers.");
+      return;
+    }
+    setWallPick(true);
     pickTool("fit");
   };
   /** Read the mesh again with the camera where it is (as when a job of this scan ends). */
@@ -626,9 +644,58 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
     [reloadInPlace],
   );
 
+  useEffect(() => {
+    if (!fitOn) {
+      setWallReading(null);
+      return;
+    }
+    let live = true;
+    api
+      .wallOffer(pid, sid)
+      .then((o) => {
+        if (live) setWallOffer(o);
+      })
+      .catch(() => {
+        if (live) setWallOffer({ available: false, why: "The engine did not say whether it can read a wall here." });
+      });
+    return () => {
+      live = false;
+    };
+  }, [fitOn, pid, sid]);
+
+  /** ENGINE_PLAN X16: one click with the Wall choice: the engine reads the wall's thickness from the camera frames. */
+  const onWallPick = useCallback(
+    (p: Vec3, face: number) => {
+      const g = geomRef.current;
+      if (fitRunning.current || !g) return;
+      fitRunning.current = true;
+      const version = typeof g.userData.meshVersion === "number" ? (g.userData.meshVersion as number) : undefined;
+      setWallBusy(true);
+      setWallReading(null);
+      api
+        .wall(pid, sid, version === undefined ? { face, point: p } : { face, point: p, version })
+        .then((r) => setWallReading(r))
+        .catch((e: unknown) => {
+          if (e instanceof ApiError && e.status === 409 && version !== undefined) {
+            toast.warn("The mesh changed since it was loaded", "The viewer is reloading it.", "Click again once it shows.");
+            if (geomRef.current === g) reloadInPlace();
+          } else toast.error("No wall thickness here", e);
+        })
+        .finally(() => {
+          fitRunning.current = false;
+          setWallBusy(false);
+        });
+    },
+    [pid, sid, reloadInPlace],
+  );
+
   /** One click with the Fit tool: ask the engine to fit and keep it (one at a time). */
   const onFitPick = useCallback(
     (p: Vec3, face: number) => {
+      if (wallPick) {
+        onWallPick(p, face);
+        return;
+      }
       const g = geomRef.current;
       if (fitRunning.current || !g) return;
       fitRunning.current = true;
@@ -651,7 +718,7 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
           setFitBusy(null);
         });
     },
-    [pid, sid, fitKind, addFit, reloadInPlace],
+    [pid, sid, fitKind, addFit, reloadInPlace, wallPick, onWallPick],
   );
   const removeFit = (id: string) => {
     void useFeatures.getState().remove(pid, sid, id);
@@ -667,6 +734,7 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
     p: () => fitShape("plane"),
     c: () => fitShape("cylinder"),
     h: () => fitShape("hole"),
+    t: () => wallShape(),
     s: () => pickTool(sectionOn ? null : "section"),
     u: () => pickTool(flushOn ? null : "flush"),
     w: () => setWireframe((v) => !v),
@@ -1121,15 +1189,17 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
                 Flush
               </Button>
               {fitOn ? (
-                <Segmented<FitKind>
+                <Segmented<FitKind | "wall">
                   label="Shape to fit"
                   size="sm"
-                  value={fitKind}
-                  onChange={setFitKind}
+                  value={wallPick ? "wall" : fitKind}
+                  onChange={(v) => (v === "wall" ? wallShape() : fitShape(v))}
                   options={[
                     { value: "plane", label: "Plane", icon: FIT_ICON.plane, title: "A flat face (P)" },
                     { value: "cylinder", label: "Cylinder", icon: FIT_ICON.cylinder, title: "A shaft, a boss or the wall of a bore (C)" },
                     { value: "hole", label: "Hole", icon: FIT_ICON.hole, title: "A hole's round edge (H)" },
+                    // ENGINE_PLAN X16: shown only when the scan offers it (the setting on, not a scan tracked by markers)
+                    ...(wallOffer?.available ? [{ value: "wall" as const, label: "Wall", icon: BetweenVerticalStart, title: wallOfferTitle(wallOffer) }] : []),
                   ]}
                 />
               ) : null}
@@ -1219,6 +1289,23 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
           </div>
         ) : null}
 
+        {fitOn && wallPick && wallReading ? (
+          <div className="absolute bottom-16 left-1/2 w-[min(36rem,90%)] -translate-x-1/2">
+            <div className="glass animate-pop-in rounded-xl border border-line px-4 py-3 text-sm text-fg shadow-lg" role="status" aria-label="Wall thickness">
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-base font-semibold">{wallCard(wallReading).headline}</span>
+                <span className="text-xs text-muted">{wallCard(wallReading).meta}</span>
+                <IconButton icon={X} size="sm" label="Close" onClick={() => setWallReading(null)} />
+              </div>
+              <ul className="mt-1 space-y-1 text-muted">
+                {wallCard(wallReading).lines.map((l) => (
+                  <li key={l}>{l}</li>
+                ))}
+              </ul>
+            </div>
+          </div>
+        ) : null}
+
         {sectionOn && geometry && section.answer ? (
           <SectionProfile answer={section.answer} frame={partFrame} busy={section.busy} onClose={() => setSectionOn(false)} />
         ) : null}
@@ -1226,8 +1313,20 @@ export default function ViewerPage({ pid, sid }: { pid: string; sid: string }) {
         {fitOn && geometry ? (
           <div className="pointer-events-none absolute bottom-5 left-1/2 -translate-x-1/2">
             <div className="glass flex animate-pop-in items-center gap-2 whitespace-nowrap rounded-full border border-accent-line px-4 py-2 text-sm text-fg shadow-lg" role="status">
-              {fitBusy ? <Spinner size={15} className="text-accent" /> : <FitKindIcon size={15} className="text-accent" aria-hidden />}
-              {fitBusy ? `Fitting a ${fitName(fitBusy.kind).toLowerCase()}…` : FIT_HINT[fitKind]}
+              {fitBusy || wallBusy ? (
+                <Spinner size={15} className="text-accent" />
+              ) : wallPick ? (
+                <BetweenVerticalStart size={15} className="text-accent" aria-hidden />
+              ) : (
+                <FitKindIcon size={15} className="text-accent" aria-hidden />
+              )}
+              {wallBusy
+                ? "Reading the wall from the camera frames…"
+                : fitBusy
+                  ? `Fitting a ${fitName(fitBusy.kind).toLowerCase()}…`
+                  : wallPick
+                    ? WALL_HINT
+                    : FIT_HINT[fitKind]}
               <span className="text-subtle">·</span>
               <span className="text-xs text-muted">
                 <Kbd>Esc</Kbd> done

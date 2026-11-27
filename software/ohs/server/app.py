@@ -205,6 +205,12 @@ class FitBody(BaseModel):
     version: Optional[int] = None  # the mesh version the click was made on
 
 
+class WallBody(BaseModel):  # ENGINE_PLAN X16: a wall's thickness from the camera frames at a click
+    face: int = Field(ge=0)
+    point: list[float] = Field(min_length=3, max_length=3)
+    version: Optional[int] = None  # the mesh version the click was made on
+
+
 class FeatureFitBody(FitBody):
     name: Optional[str] = Field(None, max_length=80)  # default "Fit N"
 
@@ -854,6 +860,15 @@ def create_app(config: Any = None, *, projects_dir: Any = None, static_dir: Any 
     @app.post("/api/projects/{pid}/scans/{sid}/fit")
     def scan_fit(pid: str, sid: str, body: FitBody) -> JSONResponse:
         return _json(proc.fit(pid, sid, body.kind, body.face, body.point, body.tolerance_mm, body.version))
+
+    # ENGINE_PLAN X16: a thin wall's thickness read from the scan's camera frames ("at most"), offered or not
+    @app.get("/api/projects/{pid}/scans/{sid}/wall")
+    def scan_wall_available(pid: str, sid: str) -> JSONResponse:
+        return _json(proc.wall_available(pid, sid))
+
+    @app.post("/api/projects/{pid}/scans/{sid}/wall")
+    def scan_wall(pid: str, sid: str, body: WallBody) -> JSONResponse:
+        return _json(proc.wall(pid, sid, body.face, body.point, body.version))
 
     # ------------------------------------------------------------------ kept features (FEATURE_PLAN K1)
     feats = FeatureManager(st)
