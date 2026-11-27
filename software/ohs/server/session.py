@@ -350,7 +350,7 @@ class ScanSession:
             raise
 
     def _start_recording(self) -> None:
-        from ohs.app.live import Recorder
+        from ohs.app.live import Recorder, recorder_budget
 
         self._preview_worker = LatestWorker("ohs-scan-preview", self._encode_preview)
         self._mesh_worker = LatestWorker("ohs-scan-mesh", self._encode_mesh)
@@ -358,7 +358,8 @@ class ScanSession:
         if self._has_emitters:
             time.sleep(0.08)  # let the exposure in flight finish before the first recorded frame
         try:
-            rec = Recorder(self.rec_dir, calib=self.calib, source=self.source_name, meta=self.meta)
+            rec = Recorder(self.rec_dir, calib=self.calib, source=self.source_name, meta=self.meta,
+                           **recorder_budget(self.cfg))
         except Exception as e:
             safe_call("switching the emitters off", self._emitters_off)
             self._abort_start()

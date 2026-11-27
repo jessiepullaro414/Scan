@@ -1523,8 +1523,9 @@ guard test seen failing first:
   in the recorder (at most 1 GiB or 20 s waiting; then the recording stops with a reason and
   keeps what was written). The app stops such a scan by itself and tells the user at
   once (2026-11-24). The motion sensor calibration step stops with its recorder
-  and refuses a damaged or too short recording (2026-11-26). Open: a settings key for the
-  budget.
+  and refuses a damaged or too short recording (2026-11-26). The budget is a setting since
+  2026-11-27: `[live] max_waiting_mb` (1024) and `max_waiting_seconds` (20), the defaults
+  exactly as before, at least 64 MB and 1 s.
 - [x] **R2-9 (F9): "frames with laser points" counts additions, not frames** (two lines a
   frame count twice). Mended 2026-11-24 (`LaserCloud.add_frame`; the points are unchanged).
 - [x] **R2-10 (F10): the rotation logarithm is about 0.01 degrees off just below a half turn**

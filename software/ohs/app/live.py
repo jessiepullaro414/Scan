@@ -38,6 +38,7 @@ from __future__ import annotations
 import collections
 import contextlib
 import logging
+import math
 import queue
 import signal
 import threading
@@ -339,6 +340,31 @@ class Window:
 RECORD_MAX_BYTES = 1 << 30
 #: the same in seconds of frames (newest waiting frame's time minus the oldest's): it rules for smaller frames
 RECORD_MAX_SECONDS = 20.0
+
+
+def recorder_budget(cfg: Any) -> dict:
+    """``max_bytes`` / ``max_seconds`` for a :class:`Recorder` from the settings (``[live] max_waiting_mb`` and
+    ``max_waiting_seconds``, ENGINE_PLAN R2-8). A value equal to the default gives None (the Recorder's own
+    :data:`RECORD_MAX_BYTES` / :data:`RECORD_MAX_SECONDS`, exactly as before the settings existed); a value that
+    is not a finite number gives None too, and one below the settings' minimum (64 MB, 1 s) is raised to it, so
+    a value set in code past :meth:`Config.validate` cannot make a recorder that refuses its first frames."""
+    from ohs.app.config import MIN_WAITING_MB, MIN_WAITING_SECONDS, LiveConfig
+
+    lv = getattr(cfg, "live", None)
+    default = LiveConfig()
+
+    def pick(name: str, low: float) -> float | None:
+        try:
+            v = float(getattr(lv, name, None))
+        except (TypeError, ValueError):
+            return None
+        if not math.isfinite(v) or v == float(getattr(default, name)):
+            return None
+        return max(float(low), v)
+
+    mb = pick("max_waiting_mb", MIN_WAITING_MB)
+    seconds = pick("max_waiting_seconds", MIN_WAITING_SECONDS)
+    return {"max_bytes": None if mb is None else int(mb * (1 << 20)), "max_seconds": seconds}
 
 
 def _frame_bytes(frame: StereoFrame) -> int:
@@ -766,7 +792,7 @@ class LiveSession:
                 time.sleep(0.08)  # let the exposure in flight finish before the first recorded frame
         meta = dict(meta)
         meta["emitters"] = list(self.levels)
-        rec = Recorder(path, calib=calib, source=self.source_name(), meta=meta)
+        rec = Recorder(path, calib=calib, source=self.source_name(), meta=meta, **recorder_budget(self.cfg))
         now = time.perf_counter()
         with self._rec_lock:
             self._rec = rec

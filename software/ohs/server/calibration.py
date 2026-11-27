@@ -320,7 +320,7 @@ class CalibrationSession:
                  restart: Callable[[], None] | None = None, notify: Callable[[str, str], None] | None = None,
                  on_change: Callable[[], None] | None = None, sim: bool = False, lines: Any = None,
                  light: Callable[[Any], None] | None = None, settle_frames: int = 3,
-                 on_view: Callable[[int | None, str], None] | None = None) -> None:
+                 on_view: Callable[[int | None, str], None] | None = None, budget: dict | None = None) -> None:
         if kind not in KINDS:
             raise ValueError(f"unknown calibration kind {kind!r}")
         from ohs.app.live import LatestSlot
@@ -331,6 +331,7 @@ class CalibrationSession:
         self.rec_base = Path(rec_base)
         self.source_name = source_name
         self.meta = dict(meta or {})
+        self.budget = dict(budget or {})  # the motion-sensor recording's Recorder budget (ohs.app.live.recorder_budget)
         self.emitters = emitters
         self.truth = truth
         self.sim = bool(sim)
@@ -928,7 +929,7 @@ class CalibrationSession:
             safe_call("restarting the virtual scanner", self._restart)
         path = new_recording_dir(self.rec_base, "imu")
         try:
-            rec = Recorder(path, calib=self.calib, source=self.source_name, meta=self.meta)
+            rec = Recorder(path, calib=self.calib, source=self.source_name, meta=self.meta, **self.budget)
         except Exception as e:
             log.warning("cannot create the recording folder %s: %s", path, e)
             raise ApiError(500, "The recording could not be started: its folder could not be made.",
@@ -1221,6 +1222,8 @@ class CalibrationManager:
                     warn = why_not
                 if light is not None:
                     meta["one_at_a_time"] = True
+                from ohs.app.live import recorder_budget
+
                 s = CalibrationSession(
                     kind=kind, target=target, spec=spec, calib=calib, paper=str(st.cfg.board.paper).lower(), hub=st.hub,
                     rec_base=base, source_name=dev.source_name(), meta=meta,
@@ -1230,7 +1233,8 @@ class CalibrationManager:
                     notify=st.notify, on_change=self.publish, sim=source == "sim", lines=lines,
                     light=light, settle_frames=BURST_SETTLE_FRAMES["sim" if source == "sim" else "camera"],
                     on_view=safe_call("looking for a simulated operator",
-                                      getattr(dev, "view_listener", lambda: None)))
+                                      getattr(dev, "view_listener", lambda: None)),
+                    budget=recorder_budget(st.cfg))
                 s.start()
                 self._emitters_on(s)
                 dev.attach(s)

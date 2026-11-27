@@ -130,7 +130,7 @@ The sections and their main values, with the defaults:
 | **Cameras** | `[camera]` | which camera (counted from 0), width and height (2560 × 800), **Camera format** (MJPG), exposure and gain (the camera's own), **Swap left and right** (off) |
 | **Control board (Pico or ESP32)** | `[pico]` | serial port (automatic), **Motion sensor (IMU) rate** (416 Hz) |
 | **Lasers and dots** | `[emitters]` | **Dots in markers mode** (25 %), and the levels of the vertical laser, horizontal laser and dots for each use |
-| **Live preview** | `[live]` | scale (0.5), **Nearest depth** (150 mm), **Farthest depth** (450 mm), **Preview mesh detail** (automatic: 2 mm) |
+| **Live preview** | `[live]` | scale (0.5), **Nearest depth** (150 mm), **Farthest depth** (450 mm), **Preview mesh detail** (automatic: 2 mm), **Most memory waiting for the disk** (1024 MB) and **Most time waiting for the disk** (20 s): while you record, frames wait in memory until they are saved to the disk. If the disk is too slow and more than this waits, the recording stops and keeps every frame saved so far. The smallest values allowed are 64 MB and 1 second. |
 | **Making the mesh** | `[process]` | **Mesh detail** (automatic: 1 mm), **Thin walls and edges** (auto), **Watertight surface (Poisson)** (off), **Files written** (ply, stl) |
 | **Calibration board** | `[board]` | **Squares across** (11), **Squares down** (8), **Square size** (20 mm), **Marker size** (15 mm), paper (letter) |
 | **Markers** | `[markers]` | **Tag size** (20 mm): the side of the black square of the printed AprilTags |

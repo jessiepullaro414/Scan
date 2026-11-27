@@ -168,6 +168,15 @@ class LiveConfig:
     depth_min_mm: float = 150.0
     depth_max_mm: float = 450.0
     voxel_mm: float | None = None  # None = pipeline default for the resolution (2 mm at 640x400)
+    # ENGINE_PLAN R2-8: the recorder's budget of frames waiting for the disk (ohs.app.live.RECORD_MAX_BYTES / _SECONDS)
+    max_waiting_mb: int = 1024
+    max_waiting_seconds: float = 20.0
+
+
+#: the smallest recorder budget the settings allow (``[live] max_waiting_mb`` / ``max_waiting_seconds``): 64 MB is
+#: 32 full 1280 x 800 grey stereo pairs, 1 s is 60 frames at 60 fps, so no recorder refuses its first frames
+MIN_WAITING_MB = 64
+MIN_WAITING_SECONDS = 1.0
 
 
 @dataclass
@@ -336,6 +345,11 @@ class Config:
             errs.append("live.depth_min_mm must be positive and below live.depth_max_mm")
         if any(v is not None and v <= 0 for v in (lv.voxel_mm, self.process.voxel_mm)):
             errs.append("voxel sizes must be positive (or \"auto\")")
+        if not (math.isfinite(lv.max_waiting_mb) and lv.max_waiting_mb >= MIN_WAITING_MB):
+            errs.append(f"live.max_waiting_mb must be a number of MB, at least {MIN_WAITING_MB:g} (got {lv.max_waiting_mb})")
+        if not (math.isfinite(lv.max_waiting_seconds) and lv.max_waiting_seconds >= MIN_WAITING_SECONDS):
+            errs.append(f"live.max_waiting_seconds must be a number of seconds, at least {MIN_WAITING_SECONDS:g} "
+                        f"(got {lv.max_waiting_seconds})")
         if self.process.frame_step < 1:
             errs.append("process.frame_step must be >= 1")
         if not (math.isfinite(self.process.frame_motion_deg) and self.process.frame_motion_deg >= 0):
@@ -589,6 +603,11 @@ _KEY_DOCS = {
         "Voxel size of the live model (mm). Leave it out (\"auto\") for the pipeline default for the\n"
         "processed resolution: 2 mm at 640x400, coarser for smaller (e.g. simulated) images."
     ),
+    "live.max_waiting_mb": (
+        "Recording: frames waiting to be written to the disk may take at most this much memory (MB,\n"
+        "1024 = 1 GB, at least 64). Past it the recording stops and keeps every frame written so far."
+    ),
+    "live.max_waiting_seconds": "The same in seconds of frames waiting to be written (at least 1).",
     "process.voxel_mm": (
         "Voxel size of the final model (mm); `ohs process --voxel` overrides it. Leave it out (\"auto\")\n"
         "for 1 mm at 1280x800 (coarser for smaller images). Smaller is finer, slower and needs more RAM."

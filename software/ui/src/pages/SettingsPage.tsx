@@ -60,6 +60,7 @@ function unitFor(key: string): string {
   if (k.endsWith("_s") || k.endsWith("_seconds")) return "\u202fs";
   if (k.endsWith("_hz")) return "\u202fHz";
   if (k.endsWith("_px")) return "\u202fpx";
+  if (k.endsWith("_mb")) return "\u202fMB";
   if (k.endsWith("_deg")) return "°";
   if (k === "fps") return "\u202ffps";
   if (k.endsWith("_level")) return "\u202f%";

@@ -4062,6 +4062,19 @@ cut one is worked out and the result's first advice says what happened. Each ref
 space or use a faster disk, record the step again). Tested with the calibration tests' fake camera; not seen
 on the Setup page; no real slow disk.
 
+**The budget as a setting (R2-8, the last part, 2026-11-27).** The two limits are now `[live] max_waiting_mb`
+(1024, as before: 1 GiB) and `[live] max_waiting_seconds` (20). With the defaults a recorder is built exactly
+as before (it is handed nothing and uses its own constants). Every recorder of a live session takes them: the
+app's scan, the app's motion sensor calibration, and `ohs record`, `ohs scan` and the command line's
+calibration captures (`ohs.app.live.recorder_budget`). A value under 64 MB or 1 s, or not a number, is refused
+with the key's name when the settings file is read or saved; set in code past that check it is raised to the
+minimum, so no recorder refuses its first frames (a recorder at 64 MB takes full 1280 x 800 pairs). 28 tests in
+`tests/test_recorder_budget_setting.py` (26 failed before the change), with the config, live session,
+recorder and record-stop files 87 passed on the processor; the 87 UI tests. Seen in the running app: the
+Settings page's Advanced part lists "Most memory waiting for the disk 1024 MB" and "Most time waiting for
+the disk 20 s" under Live preview. Not done: no scan was recorded with a changed budget in the app (the
+server test starts one on the simulator and reads its recorder's limits); no real slow disk.
+
 **A full mesh model in a merge and in the fine-walls step (R2-5, second part).** A merge now saves its model's
 `mesh_capacity` and warns once, naming the scan and the frame ("The mesh model ran out of room after frame 3
 of "Front": surface seen after that was not added ..."); the warning reaches the merge's result and the
@@ -6971,8 +6984,10 @@ tags' poses, or Straighten's second fuse? Neither: it was the laser crossings, w
 - **Not done:** one scan shows the loss and its cure; the other four short scans where the tags acted are unchanged
   by the fix (the crossings had refused there), and no new scan was rendered for it. The crossings still act on
   standing walls WITHOUT tags when their check passes (it refuses the scorecard's three walls scenes today; a walls
-  recording with drift added is known to pass), and what makes them miss at the true poses there is open. The whole
-  suite was not run on this change and the exe was not rebuilt.
+  recording with drift added is known to pass), and what makes them miss at the true poses there is open.
+- **Whole suite on the commit (947b41b, a frozen copy, 2026-11-27):** 2463 passed, 7 skipped with the graphics card
+  (48 min); 2378 passed, 92 skipped on the processor (42 min): the 4 new tests on each path. No graphics driver
+  timeout. The exe was not rebuilt from it.
 
 ## What the metrics mean
 

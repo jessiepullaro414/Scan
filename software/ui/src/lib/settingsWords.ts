@@ -37,6 +37,8 @@ const SPECIAL: Record<string, string> = {
   frame_max_gap: "Largest gap in frames",
   depth_min_mm: "Nearest depth",
   depth_max_mm: "Farthest depth",
+  max_waiting_mb: "Most memory waiting for the disk",
+  max_waiting_seconds: "Most time waiting for the disk",
   own_channels: "Each laser has its own wire",
   lines: "Line lasers",
   export: "Files written",
