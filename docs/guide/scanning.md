@@ -327,6 +327,8 @@ It is off by default, for two reasons. It holds the length (where the tags acted
 
 Afterwards the Straighten stage says what the tags did, for example **17 tags held the scan: the end of the scan moved 7.9 mm into place.**, names any tag it left out and why, or says why the tags changed nothing. The printed size of the tags does not need to be known. A scan with no tag in view comes out exactly as before.
 
+When tags hold the scan, Straighten leaves it at the tags' positions and does not also line it up on the laser crossings: in tests that second step only bent a path the tags had already put right, and once it removed a 0.5 mm wall.
+
 ## Laser safety
 
 The line lasers, and the dot laser of the laser projector option, are **Class 3R**. In short:

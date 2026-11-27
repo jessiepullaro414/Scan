@@ -865,6 +865,17 @@ and thin parts".
     things below), so end to end is judged from the edges.
 - **Step 2 built and measured 2026-11-23: a near miss, not adopted, a setting** (`[process]
   straighten_tags`, off; `VALIDATION.md`, "Tags as anchors on a large part").
+  - **The wall question, answered and mended 2026-11-27** (`VALIDATION.md`, "The thin wall lost
+    with the tags on: the laser crossings, not the tags"). The 0.5 mm wall that vanished on a
+    short tagged scan was removed by the laser crossings that ran after the tags, not by the
+    tags and not by the second fuse: tags alone give a path 0.28 mm off the truth with the
+    wall there (74 % covered; 49 % without tags); the crossings then passed their check by
+    0.003, moved the path to 0.66 mm and pulled the wall's sides through each other. On
+    scans the tags hold the crossings never helped (16 saved scans: refused on 15, worse on 1).
+    Adopted: Straighten does not run the laser crossings on a scan the tags hold. Nothing
+    changes with the setting off. Open: the crossings miss at the true poses on standing
+    walls (a third by 0.25 mm and more) for a reason not found; they still act on walls
+    without tags when their check passes.
   - With 20 tags on the table 300 mm apart: the mesh's length -0.042 / +0.048 / +0.018 %
     (without: -0.164 / +0.197 / +0.054), the camera path -0.052 / +0.060 / +0.003 % (without:
     0.18 to 0.45), the passes' slide 0.34 to 1.14 mm RMS (without: 1.4 to 11.4).

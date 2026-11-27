@@ -754,6 +754,28 @@ def straighten_tags_used(rep: dict | None) -> int | None:
     return len(tg.get("used") or [])
 
 
+#: what the laser crossings' report says when they were not run because the tags held the scan
+TAGS_HELD_CROSSINGS = "The tags held the scan, so the laser crossings were not used to move it."
+
+
+def crossings_after_tags(rep: dict | None) -> dict | None:
+    """The laser crossings' report when they are NOT run after the loops' step: the tags in view held the scan
+    (``rep["tags"]["acted"]``, ENGINE_PLAN X8). None: run them, as always without tags.
+
+    Why (``VALIDATION.md``, "The thin wall lost with the tags on: the laser crossings, not the tags", 2026-11-27):
+    the tags hold the camera path to printed squares that do not move, and the crossings can only bend that path
+    again. In every saved run where the tags held the scan, the crossings either left it alone (their own check
+    refused them) or moved it away from the truth: on a short scan of standing walls they passed their check at
+    0.847 against the limit of 0.85, moved the camera by up to 2 mm, took the path from 0.28 to 0.66 mm off the
+    truth and pulled the two sides of a 0.5 mm wall through each other, so that the wall was gone from the mesh
+    without a warning. With the tags alone the wall is there. A thin part is never removed in silence, so the
+    crossings do not run on a scan the tags hold. ``tools/scorecard.py`` (``_app_straighten``) asks here too."""
+    tg = (rep or {}).get("tags")
+    if not isinstance(tg, dict) or not tg.get("acted"):
+        return None
+    return {"changed": False, "reason": "tags_held", "verdict": TAGS_HELD_CROSSINGS, "warning": None}
+
+
 def refine_changes(rep: dict) -> bool:
     """Whether "Refine with lasers" changes the mesh, from :func:`ohs.mesh.anchor_to_points`' report: enough laser
     points on the mesh (:data:`MIN_LASER_POINTS`) and at least :data:`REFINE_MIN_SHARE` of the surface moved."""
@@ -2445,16 +2467,18 @@ class ProcessManager:
             else:
                 ref_dir, cur = sp.dir / "track", {i: T for i, _, ok, T in traj if ok}
             # the laser lines' crossings (research plan 7.3): never worse, see ohs.track.curve_ba
-            crep: dict = {}
+            # not on a scan the tags hold (crossings_after_tags: there they only bent the path, and removed a thin wall)
+            crep: dict = crossings_after_tags(rep) or {}
             new_poses = cur
             try:
-                from ohs.track.curve_ba import laser_curve_adjustment
+                if not crep:
+                    from ohs.track.curve_ba import laser_curve_adjustment
 
-                Vr, Fr, _ = _read_stage_mesh(ref_dir / "mesh.ply")
-                rows_cur = [(i, t, True, cur[i]) for i, t, ok, _ in traj if ok and i in cur]
-                new_poses, crep = laser_curve_adjustment(
-                    sp.recording_dir, calib, rows_cur, reference=(Vr, Fr), cancelled=lambda: ctx.cancelled,
-                    progress=lambda f, m: prog(_span(STRAIGHTEN_SPANS["crossings"], f), f"Laser crossings: {m}"))
+                    Vr, Fr, _ = _read_stage_mesh(ref_dir / "mesh.ply")
+                    rows_cur = [(i, t, True, cur[i]) for i, t, ok, _ in traj if ok and i in cur]
+                    new_poses, crep = laser_curve_adjustment(
+                        sp.recording_dir, calib, rows_cur, reference=(Vr, Fr), cancelled=lambda: ctx.cancelled,
+                        progress=lambda f, m: prog(_span(STRAIGHTEN_SPANS["crossings"], f), f"Laser crossings: {m}"))
             except (JobCancelled, InterruptedError):
                 raise
             except Exception as e:

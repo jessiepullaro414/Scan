@@ -6913,6 +6913,67 @@ Follow the camera said so on the Process page; Straighten and Build the surface,
   warnings are shown, since its mesh replaces the first; a skipped or failed run still keeps other fields of the run
   before (only `warnings` is cleared at the start).
 
+## The thin wall lost with the tags on: the laser crossings, not the tags (ENGINE_PLAN X8, 2026-11-27)
+
+The question left open on 2026-11-24 ("Short tagged scans"): with `[process] straighten_tags` on, one short scan of
+standing walls (`tags-s2`) came out with a better camera path and without its 0.5 mm wall, with no warning. Was it the
+tags' poses, or Straighten's second fuse? Neither: it was the laser crossings, which run after the tags.
+
+- **The same scan, three ways** (Make mesh's chain on the graphics card, Standard, 1 mm; judged by the scorecard):
+
+  | | path off the truth, median | 0.5 mm wall covered | wall 0.5 / 1 / 2 mm error | whole part covered within 0.5 mm |
+  |---|---|---|---|---|
+  | tags off | 1.39 mm | 49 % | +1.23 / +0.88 / +0.51 mm | 90.2 % |
+  | tags on, then the laser crossings (as it was) | 0.66 mm | 2.5 % | no reading / +0.30 / -0.06 mm | 87.4 % |
+  | tags on, laser crossings off | 0.28 mm | 74 % | +0.82 / +0.60 / +0.22 mm | 91.3 % |
+
+  With the tags alone every number is better than without them, and the wall is there. The last row is also a fuse
+  by Straighten at changed poses, so the second fuse is cleared too.
+- **What the crossings did.** Before the tags their own check refused them (held-out ratio 1.07 against the limit of
+  0.85). After the tags it passed at 0.847, by 0.003. They then moved the camera by up to 2.0 mm, and by the
+  recording's truth took the path from 0.28 to 0.66 mm (median) and from 0.04 to 0.08 degrees. Read from the raw
+  frames (2026-11-24), the frames of the two sides of each wall came about 1.1 mm closer to each other: from 0.5 mm
+  too far apart to 0.6 mm too close, and the 0.5 mm wall's sides passed through each other.
+- **Every saved run where the crossings acted** (the scorecard's cache and the X8 runs, the crossings' own
+  before / after against the truth): on the two speckled brackets the path got nearer the truth in 9 of 9 runs
+  (for example 1.02 to 0.73 mm); on standing walls it got farther in 5 of 5 (0.47 to 0.69, 1.50 to 1.84, 0.28 to
+  0.66 mm). The crossings' own numbers do not tell the two apart: held-out ratios 0.63 to 0.81 on the brackets and
+  0.71 to 0.85 on the walls, the median miss falling from about 0.2 to 0.08 mm on both.
+- **On scans the tags hold** (16 saved scans: 11 long panels, 5 short scans): the crossings refused on 15 (ratios
+  1.04 to 1.23 on the panels, 1.12 to 1.41 on the short scans) and acted on `tags-s2`. On one of the panels an
+  earlier version of the tags' step had left a path on which they acted too (0.825). Both times the path moved away
+  from the truth (0.28 to 0.66 mm, 0.45 to 0.94 mm). They helped on none.
+- **Looked for and ruled out** (processor only, `x8\crosscheck.py`, `crosswhere.py`, `lasertruth.py`,
+  `tangentcheck.py` in the work folder):
+  - *Crossings that join a wall's two faces.* None: of 244 to 325 crossings on `tags-s2`, no pair has its two
+    cameras on opposite sides of the surface, at the true, the tracked or the moved poses.
+  - *Laser points off the surface near the walls.* No: at the true poses the curves' points are 0.05 mm (median)
+    from the true surface on `fins-s2` (4 % over 0.25 mm, none over 1 mm), better than on the speckled bracket
+    (0.08 mm, 9 %).
+  - *Found:* the crossings themselves miss at the TRUE poses. On `fins-s2` 43 % of the 402 crossings miss by more
+    than 0.25 mm, on the speckled bracket 27 % of 280. Part of it is the same on both: crossings between frames
+    under 10 apart (median miss 0.6 to 1.7 mm at the truth) and at the table's edge, and tangents taken from two
+    neighbours 0.36 mm apart; with a line fitted over 2 mm the bracket's share falls to 7 %, the walls' only to
+    33 %. Why the walls keep a third of their crossings off by 0.25 mm and more at the true poses is **not
+    explained** (not the points, not the two faces, not the tangents alone).
+- **The fix (adopted):** on a scan the tags hold (`straighten.json` `tags.acted`), Straighten does not run the laser
+  crossings after them; `laser_curves` then reads `{changed: false, reason: "tags_held"}` and the stage's mesh is
+  the fuse at the tags' poses. With `straighten_tags` off (the default), or tags that did not act, nothing changes:
+  the crossings run as before. `tools/scorecard.py`'s chain asks the server's rule (`crossings_after_tags`).
+- **The scan again, through the changed code** (tags on, nothing else set): the path 0.28 mm, the 0.5 mm wall covered
+  74 %, walls +0.82 / +0.60 / +0.22 mm, the part covered 91.3 %: the third row above, number for number.
+- **Tests:** 4 in `tests/test_server_tags_then_crossings.py` (the rule; through the server with the loops' and the
+  crossings' steps replaced: tags that held keep the crossings out, tags that did not act leave them running; the
+  scorecard's chain asks the same rule). Against the code before: 3 failed, the "as before" one passed. With the
+  files around it (Straighten's tags, the stage warnings, the stages, the scorecard, scan health, the crossings, the
+  tag anchors): 98 passed with the graphics card; 98 passed on the processor. No graphics driver timeout. Lint
+  clean.
+- **Not done:** one scan shows the loss and its cure; the other four short scans where the tags acted are unchanged
+  by the fix (the crossings had refused there), and no new scan was rendered for it. The crossings still act on
+  standing walls WITHOUT tags when their check passes (it refuses the scorecard's three walls scenes today; a walls
+  recording with drift added is known to pass), and what makes them miss at the true poses there is open. The whole
+  suite was not run on this change and the exe was not rebuilt.
+
 ## What the metrics mean
 
 - **Stereo errors** compare the estimated raw intrinsics/extrinsics (`K1`, `K2`, `R`, `T`) with

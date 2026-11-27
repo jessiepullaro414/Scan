@@ -1396,10 +1396,12 @@ def _app_straighten(rec: Path, st: Path, pp, params: dict, info: dict) -> Path:
         ref_dir, cur = st / "track", {i: T for i, _, ok, T in traj if ok}
     t1 = time.perf_counter()
     new_poses = cur
+    crep = SP.crossings_after_tags(rep) or {}  # as the server: the crossings do not run on a scan the tags hold
     try:
-        Vr, Fr, _ = SP._read_stage_mesh(ref_dir / "mesh.ply")
-        rows_cur = [(i, tt, True, cur[i]) for i, tt, ok, _ in traj if ok and i in cur]
-        new_poses, crep = laser_curve_adjustment(rec, calib, rows_cur, reference=(Vr, Fr), params=curve_params(params))
+        if not crep:
+            Vr, Fr, _ = SP._read_stage_mesh(ref_dir / "mesh.ply")
+            rows_cur = [(i, tt, True, cur[i]) for i, tt, ok, _ in traj if ok and i in cur]
+            new_poses, crep = laser_curve_adjustment(rec, calib, rows_cur, reference=(Vr, Fr), params=curve_params(params))
     except Exception as e:  # noqa: BLE001 - as the server: "could not finish", the poses stay
         crep = {"changed": False, "reason": "failed", "verdict": f"failed: {type(e).__name__}: {e}"}
     s["crossings_s"] = round(time.perf_counter() - t1, 1)
