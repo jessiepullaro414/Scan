@@ -889,6 +889,28 @@ and thin parts".
     nothing changes by default. Open: laser frames without the dots (hardware and firmware),
     a held-out test that a repeated error cannot pass, the adjustment without a reference
     mesh (it leaves drifted paths worse more often than better).
+  - **Laser frames without the dots: not as built (read from the code and the parts list,
+    2026-11-27; nothing tried on hardware).** The Pico holds each emitter at a steady
+    brightness (PWM at 10 kHz) that the PC sets once when a scan starts (`EMIT v h d`); a
+    recording stores one emitter state, not one per frame. No wire joins the camera and the
+    Pico: the camera runs by itself over USB (46 to 55 frames a second on Windows) and the
+    Pico does not know when a frame is taken. The engine expects dots and lines in every
+    frame. The cameras' shutter is global, so a frame taken between two switches would be
+    all dots or all lasers. Three routes, none started:
+    1. A sync wire. The OV9281 sensor has a strobe output and a frame-sync input; whether
+       the ELP board brings either to a pad is not known (ELP's pages could not be read;
+       the board itself has to be looked at). With it the Pico switches between exposures.
+    2. No wire: the Pico alternates on its own clock at the camera's frame period, the PC
+       tells from each picture what it holds (dots, lasers, or a mix) and steers the
+       Pico's timing. Needs a timed command in the firmware, the frame's kind stored per
+       frame, and the real camera to show that USB timing allows it.
+    3. With the dots on: no mend found. Stereo cannot check the horizontal line (it runs
+       along the baseline), and that is the line the dots pull most.
+    What alternating costs either way: half the frames give depth and tracking, half give
+    laser points (about 25 each a second), and a laser frame has no depth of its own, so
+    its camera position must come from the frames beside it. Whether that error eats the
+    gain can be measured in the simulator before any hardware is touched (render
+    alternating frames: `make_scan_recording` already has `dots` and `lines`): not done.
   - With 20 tags on the table 300 mm apart: the mesh's length -0.042 / +0.048 / +0.018 %
     (without: -0.164 / +0.197 / +0.054), the camera path -0.052 / +0.060 / +0.003 % (without:
     0.18 to 0.45), the passes' slide 0.34 to 1.14 mm RMS (without: 1.4 to 11.4).

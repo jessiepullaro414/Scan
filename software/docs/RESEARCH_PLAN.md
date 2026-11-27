@@ -964,7 +964,7 @@ Each idea is a research bet with a cheap first test. Prior art is cited, and whe
 
 ### 7.12 Future hardware ideas
 - **A speckle motion sensor for flat panels.** A laser and a strongly defocused camera measure motion from speckle flow, even on featureless surfaces (SpeDo: Jo, Gupta and Nayar, ICCV 2015). It would see the sliding that geometry can't see on a flat panel. The main cameras can't do this: at 60 fps and hand speed the speckle decorrelates completely between frames, and its grain is smaller than a pixel.
-- **A strobe line from the camera to the Pico,** if the ELP board has one. Emitters could then switch per frame: dot-free frames for tags and texture, laser-only frames.
+- **A strobe line from the camera to the Pico,** if the ELP board has one. Emitters could then switch per frame: dot-free frames for tags and texture, laser-only frames. Measured 2026-11-27 (simulator): the dots pull the laser line's centre, and without them the laser points are 2.5 times as exact (`VALIDATION.md`, "Why the laser crossings miss at the true poses: two causes"); what it would take is in `ENGINE_PLAN.md`, X8, "Laser frames without the dots".
 - **Blue line lasers and more lines** (4.2.7).
 
 **Will not work, added by this section:** speckle tracking with the main cameras (above); photometric terms *between* frames in any bundle adjustment, because the light moves with the camera. Only left-right terms within a frame are valid, which is what I1 uses.
