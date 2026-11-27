@@ -6904,7 +6904,9 @@ Follow the camera said so on the Process page; Straighten and Build the surface,
   camera path's (`ui/src/lib/pathWarning.ts`); 9 checks added to `pathWarning.test.ts` (29), 87 UI tests,
   typecheck, build. Seen in the running app (`warn-check`, the status replaced): the row's warning, the amber note
   under each of the three stages, and the viewer's block with no "Notes on making the mesh" beside it. No engine or
-  server code changed (one docstring); the exe of b709d03 does not have it.
+  server code changed (one docstring). The exe was rebuilt from this commit (31e8deb, 527 MB): it starts in 2 s,
+  aligns the two bracket scans as before and its page holds the new title; the wall and hole routes were not
+  checked again (they were on b709d03, and nothing they use changed).
 - **Not done:** no real pool was filled (in the tests and in the app the status is replaced); while a mesh is being
   made again the progress panel shows the
   stages' summaries, not their warnings; when Straighten fuses twice (loops, then crossings) only the second fuse's
