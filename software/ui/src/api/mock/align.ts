@@ -31,7 +31,7 @@
  * No imports at run time (types only), so `npm test` runs it with Node: the mock engine hands in what it
  * needs (`AlignHost`).
  */
-import type { AlignAllPair, AlignAllResult, AlignPose, AlignResult, Job, MergeResult, MergeShared, MergeTable, PairUse, PointPair, ProcessQuality, Project, Scan } from "../types";
+import type { AlignAllPair, AlignAllResult, AlignHold, AlignPose, AlignResult, Job, MergeResult, MergeShared, MergeTable, PairUse, PointPair, ProcessQuality, Project, Scan, TagStart } from "../types";
 import type { WorkJobSpec, WorkStep } from "./host";
 import { freeName } from "../../lib/names.ts";
 
@@ -145,6 +145,107 @@ export function littleSharedMergeWarning(a: string, b: string, overlap: number, 
     `"${a}" and "${b}" share little where they were merged: ${(100 * overlap).toFixed(0)} % of the smaller one's part lies within 1 mm of the other. They fit where they meet, but away from there one can be a millimetre or more off, so this merged scan can be worse than either of them (a wall seen from both sides too thick or too thin). Compare it with them. To make it sure, ` +
     `${whatHelps(then)}.`
   );
+}
+
+// ---------------------------------------------------------------- the tag pose held (ENGINE_PLAN X19)
+/** The demo pretends scans tracked by markers saw the same four tags, on the part (so a moved part does not matter). */
+export const seesTags = (s: Pick<Scan, "mode">): boolean => s.mode === "markers";
+/** The tags both such scans saw. */
+export const DEMO_TAGS = [0, 1, 2, 3];
+/** Two scans from tags share little in the demo (as two views of a wheel arch from either side would). */
+const TAG_OVERLAP = 0.52;
+/** A held position the shapes would move more than this (mm) gets a caution (`ohs.server.aligning.HOLD_CAUTION_MM`). */
+export const HOLD_CAUTION_MM = 1.0;
+/** The engine's limit of the hold (`AlignParams.overrule_mm`). */
+const OVERRULE_MM = 2.0;
+
+/**
+ * How far the demo's shapes, starting at the tags, would move the scan: a scan "from below" 2.6 mm (more than the
+ * limit: the tags are not held, the demo's "not held"); else 0.6 mm, or 1.4 mm (the demo's caution) when the scan that
+ * stays in place is the one "from behind" (swap the two to see it).
+ */
+export function demoShapeMoves(target: Pick<Scan, "name">, source: Pick<Scan, "name">): number {
+  if (/below/i.test(target.name) || /below/i.test(source.name)) return 2.6;
+  return /behind/i.test(target.name) ? 1.4 : 0.6;
+}
+
+const tagIds = (ids: readonly number[]) => `tag${ids.length === 1 ? "" : "s"} ${ids.length <= 1 ? (ids[0] ?? "") : `${ids.slice(0, -1).join(", ")} and ${ids[ids.length - 1]}`}`;
+const andWords = (w: readonly string[]) => (w.length <= 1 ? (w[0] ?? "") : `${w.slice(0, -1).join(", ")} and ${w[w.length - 1]}`);
+
+/** The engine's sentences of an alignment from the demo's tags, held or not (`ohs.align.pairwise._hold`). */
+export function tagAlignment(target: Pick<Scan, "name">, source: Pick<Scan, "name">, hold: boolean): Partial<AlignResult> & { verdict: string; tags: TagStart } {
+  const moves = demoShapeMoves(target, source);
+  const tags = { shared: [...DEMO_TAGS], used: [...DEMO_TAGS], left_out: [] as number[], rms_mm: 0.12, start: "accepted" };
+  const plain = `Aligned: ${(100 * TAG_OVERLAP).toFixed(0)} % of the smaller scan's part lies within 1 mm of the other scan, typically 0.27 mm; from the tags both scans saw.`;
+  const base = { start: "tags" as const, overlap: TAG_OVERLAP, rmse_mm: 0.27, little_shared: true, caution: littleSharedCaution(TAG_OVERLAP), tags };
+  if (!hold) return { ...base, verdict: plain };
+  const fields = { tag_rms_mm: 0.12, tags_used: [...DEMO_TAGS], tag_pose_sigma_mm: 0.08, shape_moves_mm: moves, overlap_at_shape: TAG_OVERLAP };
+  if (moves > OVERRULE_MM) {
+    const overruled = `the shapes, starting at the tags, moved the scan ${moves.toFixed(1)} mm from where the tags put it (more than ${OVERRULE_MM.toFixed(1)} mm)`;
+    return {
+      ...base,
+      ...fields,
+      held_by_tags: false,
+      overruled,
+      not_held: null,
+      tags: { ...tags, start: "overruled" },
+      verdict: `${plain} The tags did not hold this position: the shapes, starting at the tags, moved the scan ${moves.toFixed(1)} mm from where the tags put it (more than ${OVERRULE_MM.toFixed(1)} mm). A tag may have moved, or the part was moved with its table: check the tags.`,
+    };
+  }
+  return {
+    ...base,
+    ...fields,
+    held_by_tags: true,
+    overruled: null,
+    not_held: null,
+    tags: { ...tags, start: "held" },
+    caution: "The scans share little, but the tags hold their position (to about 0.1 mm, one standard deviation). A wall seen from both sides can still come out a little too thick or too thin.",
+    verdict: `Aligned from the ${DEMO_TAGS.length} tags both scans saw (their corners agree within 0.12 mm). The scans share little of the part (${(100 * TAG_OVERLAP).toFixed(0)} %), so the tags decide the position; the shapes, starting at the tags, would move it ${moves.toFixed(1)} mm.`,
+  };
+}
+
+type HoldLink = { a: string; b: string; aName: string; bName: string; res: Partial<AlignResult> };
+
+/** The server's `hold` block (`ohs.server.aligning.hold_block`), with its words. */
+export function demoHoldBlock(links: HoldLink[], asked: boolean | null, holdOn: boolean, several: boolean): AlignHold | null {
+  const row = (l: HoldLink, ids: number[]) => ({ a: l.a, b: l.b, tags: [...ids], shape_moves_mm: l.res.shape_moves_mm ?? null });
+  if (!holdOn) {
+    const offer = links.filter((l) => l.res.accepted !== false && l.res.start === "tags" && l.res.little_shared && (l.res.tags?.used.length ?? 0) >= 3);
+    if (!offer.length) return null;
+    // several: links that saw the same tags in one sentence
+    const groups = new Map<string, HoldLink[]>();
+    for (const l of offer) groups.set(l.res.tags!.used.join(","), [...(groups.get(l.res.tags!.used.join(",")) ?? []), l]);
+    const saw = several
+      ? [...groups.values()]
+          .map((g) =>
+            g.length === 1
+              ? `"${g[0].aName}" and "${g[0].bName}" both saw ${tagIds(g[0].res.tags!.used)}.`
+              : `${andWords(g.map((l) => `"${l.aName}" with "${l.bName}"`))} each saw ${tagIds(g[0].res.tags!.used)}.`,
+          )
+          .join(" ")
+      : `Both scans saw ${tagIds(offer[0].res.tags!.used)}.`;
+    const why = `Where two scans share little, these tags can place the ${several ? "scans" : "scan"} more exactly than the shapes, as long as no tag moved against the part between the ${several ? "scans" : "two scans"} (tags on the part, or tags on the table and the part not touched).`;
+    return { state: "offered", asked, words: `${saw} ${why}`, caution: null, links: offer.map((l) => row(l, l.res.tags!.used)) };
+  }
+  const weighed = links.filter((l) => typeof l.res.held_by_tags === "boolean");
+  const held = weighed.filter((l) => l.res.held_by_tags);
+  if (held.length) {
+    const far = held.filter((l) => (l.res.shape_moves_mm ?? 0) > HOLD_CAUTION_MM);
+    const caution = far.length
+      ? `The shapes, starting at the tags, would move ${andWords(far.map((l) => `"${l.bName}" ${(l.res.shape_moves_mm ?? 0).toFixed(1)} mm`))} from where the tags put ${far.length > 1 ? "them" : "it"}. A small disagreement is normal where two scans share little, but it is also what a part nudged against tags on the table looks like. If the tags are on the table and the part may have moved, let the shapes decide.`
+      : null;
+    return {
+      state: "held",
+      asked,
+      words: `The tags hold ${andWords(held.map((l) => `"${l.bName}" on "${l.aName}"`))}, ${asked ? "as asked for this alignment" : "as the settings ask"}.`,
+      caution,
+      links: held.map((l) => row(l, l.res.tags_used ?? [])),
+    };
+  }
+  if (!weighed.length) return null;
+  const why = (l: HoldLink) => l.res.overruled || l.res.not_held || "the scans could not be checked at the tags' position";
+  const reasons = several ? weighed.map((l) => `for "${l.bName}" on "${l.aName}", ${why(l)}`).join("; ") : why(weighed[0]);
+  return { state: "not_held", asked, words: `Holding the tags' position was asked for, but it was not applied: ${reasons}.`, caution: null, links: weighed.map((l) => row(l, l.res.tags_used ?? [])) };
 }
 
 /** The engine's sentence for an accepted alignment (`align_pair`). */
@@ -341,10 +442,14 @@ export class MockAlign {
       else pairsRms = r3(c.rms);
     }
     const given = pairsRms !== null;
-    const accepted = given || fitsFromShape(a, b, sameSetup);
+    // ENGINE_PLAN X19: two scans tracked by markers start from the demo's tags (on the part), and share little
+    const fromTags = !given && body.use_tags !== false && seesTags(a) && seesTags(b);
+    const asked = typeof body.hold_tags === "boolean" ? body.hold_tags : null; // the demo's setting is off
+    const tagged = fromTags ? tagAlignment(a, b, asked === true) : null;
+    const accepted = given || fromTags || fitsFromShape(a, b, sameSetup);
     const t0 = Date.now();
     const wrongPose = this.wrongPose;
-    const overlap = MockAlign.overlapOf(a, b, accepted, given, sameSetup ? 0.76 : 0.71);
+    const overlap = tagged ? (tagged.overlap ?? TAG_OVERLAP) : MockAlign.overlapOf(a, b, accepted, given, sameSetup ? 0.76 : 0.71);
     const shared = this.shared;
     const work = (function* (): Generator<WorkStep, () => Record<string, unknown>, void> {
       yield { p: 0.05, message: `Reading "${a.name}"` };
@@ -389,6 +494,11 @@ export class MockAlign {
           little_shared: little,
           caution: little ? littleSharedCaution(overlap) : null,
         };
+        if (tagged) {
+          const res: AlignResult = { ...result, ...tagged, candidates: 1, agree: 1, reached: 1, message: tagged.verdict };
+          res.hold = demoHoldBlock([{ a: a.id, b: b.id, aName: a.name, bName: b.name, res }], asked, asked === true, false);
+          return res;
+        }
         return result;
       };
     })();
@@ -402,6 +512,7 @@ export class MockAlign {
     const ids = list.map((s) => s.id);
     const nameOf = (id: string) => list.find((s) => s.id === id)?.name ?? id;
     const sameSetup = body.same_setup !== false;
+    const asked = typeof body.hold_tags === "boolean" ? body.hold_tags : null; // the demo's setting is off
 
     // picked points, checked as for two scans; by pair, either way round
     const picked = new Map<string, number>(); // pair key -> how well its points agree (mm)
@@ -430,10 +541,12 @@ export class MockAlign {
           B = list[j];
         const pairsRms = picked.get(key(A.id, B.id)) ?? null;
         const given = pairsRms !== null;
-        const accepted = given || fitsFromShape(A, B, sameSetup);
+        const tagged = !given && body.use_tags !== false && seesTags(A) && seesTags(B) ? tagAlignment(A, B, asked === true) : null;
+        const accepted = given || !!tagged || fitsFromShape(A, B, sameSetup);
         // the demo's pairs of several scans share enough (above the caution's limit): its sentences stay as they were;
-        // the caution of several scans is the engine's (align_many), shown by the page as for two (lib/align.test.ts)
-        const overlap = accepted ? r3(Math.max(CAUTION_OVERLAP + 0.02, (sameSetup ? 0.76 : 0.74) - 0.01 * k)) : 0.43;
+        // the caution of several scans is the engine's (align_many), shown by the page as for two (lib/align.test.ts).
+        // Pairs from the demo's tags share little (ENGINE_PLAN X19)
+        const overlap = tagged ? TAG_OVERLAP : accepted ? r3(Math.max(CAUTION_OVERLAP + 0.02, (sameSetup ? 0.76 : 0.74) - 0.01 * k)) : 0.43;
         const little = accepted && overlap < CAUTION_OVERLAP;
         if (accepted) this.shared.set(MockAlign.key(A.id, B.id), overlap);
         const rmse = accepted ? 0.25 : 0.41;
@@ -468,6 +581,7 @@ export class MockAlign {
           little_shared: little,
           caution: little ? littleSharedCaution(overlap) : null,
           rms: pairsRms,
+          ...(tagged ? { ...tagged, candidates: 1, agree: 1, message: tagged.verdict, ...(asked === true ? { link_weight: tagged.held_by_tags ? ("tags" as const) : ("overlap" as const) } : {}) } : {}),
         });
       }
 
@@ -537,6 +651,15 @@ export class MockAlign {
           little_shared: little.map((l) => ({ a: l.a, b: l.b })),
           caution: little.length ? MANY_CAUTION : null,
         };
+        // one hold block over the links that place a scan, when any started from the demo's tags
+        const placing = links.filter((l) => (l.used === "chain" || l.used === "loop") && l.start === "tags");
+        if (placing.length)
+          result.hold = demoHoldBlock(
+            placing.map((l) => ({ a: l.a, b: l.b, aName: nameOf(l.a), bName: nameOf(l.b), res: l })),
+            asked,
+            asked === true,
+            true,
+          );
         return result;
       };
     })();

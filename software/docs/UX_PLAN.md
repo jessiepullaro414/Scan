@@ -974,3 +974,16 @@ not as a toast: the mesh's answer still stands. When the mesh gives no circle (s
 open space) the card says "The mesh gives no circle here" and still reads the images. No new key.
 Open: the reading is not kept with the scan as the fitted circle is.
 
+### [x] G5. The tag hold offered per alignment (done 2026-11-27)
+ENGINE_PLAN X19; the owner keeps `[process] align_hold_tags` off. When an alignment from tags
+shares little, the "The scans share little" callout carries the server's words naming the tags
+and a button "Hold the tags' position", which aligns the same scans again with `hold_tags: true`
+(the same answer to "was the part moved", no picked points for two scans; with several scans the
+picked points of the last result are sent again). Held: the Start figure reads "The tags hold
+the position", the Shared table row "Not used: the tags decide the position", the caution (the
+shapes would move it more than 1 mm) shows as a warning line, and a quiet "Let the shapes
+decide" aligns again with `hold_tags: false`. Not held: the words only. The choice is per
+alignment: other scans or a plain Align send nothing. Several scans: one block and one button.
+Demo: the three scans of "Fender flare, left" (offer; held; held with the caution when "from
+behind" stays in place; not held with "from below").
+

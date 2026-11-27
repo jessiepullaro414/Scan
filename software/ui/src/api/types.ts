@@ -1823,6 +1823,9 @@ export type AlignRequest = {
   same_setup?: boolean; // default true: the part was not moved on its table between the two scans. false: it was turned over or moved
   pairs?: PointPair[]; // optional: 3 or more matching points picked on the two meshes, as a rough start
   use_tags?: boolean; // default true: without pairs, start from the AprilTags both scans saw
+  /** Hold the tags' pose where the scans share little, for this alignment only (left out: the setting
+   *  `[process] align_hold_tags` decides). No effect with `pairs`. */
+  hold_tags?: boolean;
 };
 
 /** What the tags two scans share did for their alignment (APP_API.md, "TagStart"). */
@@ -1869,6 +1872,28 @@ export type AlignResult = {
   // limit); `caution` says what that means and what helps. Nothing else about the alignment changes; Merge stays possible.
   little_shared?: boolean;
   caution?: string | null;
+  // The tag pose held (ENGINE_PLAN X19; left out unless the hold was weighed):
+  held_by_tags?: boolean; // true: T is the tags' pose; the shapes only checked it
+  tags_used?: number[];
+  shape_moves_mm?: number | null; // how far the shapes, starting at the tags, moved the scan
+  overruled?: string | null;
+  not_held?: string | null;
+  /** What the page says and offers about holding the tags' pose; null or left out: nothing (older servers too). */
+  hold?: AlignHold | null;
+};
+
+/**
+ * The `hold` block of an align or align_all result (APP_API.md, Rules, "The tag pose held"), written by the server:
+ * "offered": the hold could act (show `words` and a button that aligns again with `hold_tags: true`); "held": the
+ * tags hold the position (`caution` when the shapes would move it more than 1 mm; a button aligns again with
+ * `hold_tags: false`); "not_held": it was asked and not applied (`words` say why; nothing to offer).
+ */
+export type AlignHold = {
+  state: "offered" | "held" | "not_held";
+  asked: boolean | null; // the request's hold_tags; null: the setting decided
+  words: string;
+  caution: string | null;
+  links: { a: string; b: string; tags: number[]; shape_moves_mm: number | null }[]; // b placed on a
 };
 
 /**
@@ -1968,6 +1993,7 @@ export type AlignAllRequest = {
   same_setup?: boolean; // default true, as for two scans
   picked?: PickedPoints[]; // optional rough starts for some pairs
   use_tags?: boolean; // default true: pairs without picked points start from the tags they share
+  hold_tags?: boolean; // as AlignRequest's, for every pair of this alignment
 };
 
 /** How the placement used one pair: in the chain, as a check of it (a loop), left out (does not fit), or not ("": not accepted). */
@@ -1986,6 +2012,7 @@ export type AlignAllPair = Partial<Omit<AlignResult, "T">> & {
   start: "features" | "given" | "tags";
   agree: number;
   tags?: TagStart; // present when the two scans share tags
+  link_weight?: "tags" | "overlap"; // only with the hold on and a start from tags that shares little
 };
 
 /** The `result` of a finished job of kind "align_all". */
@@ -2009,6 +2036,8 @@ export type AlignAllResult = {
   little_shared?: { a: string; b: string }[];
   /** What sharing little means and what helps (no names); null when every link used shares enough. */
   caution?: string | null;
+  /** One block for the whole result, over the links that place a scan; null or left out: nothing to say. */
+  hold?: AlignHold | null;
 };
 
 // ------------------------------------------------------------------ FEATURE_PLAN I2: a reference model and the comparison with it

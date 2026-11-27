@@ -19,6 +19,7 @@ import type { AlignAllRequest, AlignAllResult, AlignRequest, AlignResult, Job, M
 import {
   addPick,
   completePairs,
+  holdRequest,
   isAlignAllResult,
   isAlignResult,
   isMergeResult,
@@ -89,8 +90,9 @@ type AlignStore = AlignState & {
   removePair: (index: number) => void;
   /** The points of the pair being picked on. */
   clearPicks: () => void;
-  /** Start the alignment: from the shape alone, or (`fromPoints`) from the picked pairs. */
-  align: (fromPoints: boolean) => Promise<boolean>;
+  /** Start the alignment: from the shape alone, or (`fromPoints`) from the picked pairs. `holdTags`: the person's choice of
+   *  the hold block for this alignment (ENGINE_PLAN X19); left out, nothing is sent and the setting decides. */
+  align: (fromPoints: boolean, holdTags?: boolean) => Promise<boolean>;
   /** The person chooses one of the poses the engine was not sure between (null: none). */
   choosePose: (index: number | null) => void;
   /** Merge at the result's poses (two scans: at the chosen pose, if one was chosen) into a new scan called `name` (empty: the server's default). */
@@ -195,21 +197,22 @@ export const useAlign = create<AlignStore>((set, get) => ({
       return pair ? { picked: withPicks(s.picked, pair[0], pair[1], { target: [], source: [] }) } : {};
     }),
 
-  align: async (fromPoints) => {
+  align: async (fromPoints, holdTags) => {
     const s = get();
     const { pid, scans, sameSetup } = s;
     if (!pid || scans.length < 2 || running(s) || sameSetup === null) return false; // U15: answered first
     let start: () => Promise<Job>;
     if (scans.length === 2) {
       const [target, source] = scans;
-      const body: AlignRequest = { target, source, same_setup: sameSetup };
+      const body: AlignRequest = { target, source, same_setup: sameSetup, ...holdRequest(holdTags, fromPoints) };
       if (fromPoints) {
         body.pairs = completePairs(picksFor(s.picked, target, source));
         if (body.pairs.length < MIN_PAIRS) return false;
       }
       start = () => api.alignScans(pid, body);
     } else {
-      const body: AlignAllRequest = { scans: [...scans], same_setup: sameSetup };
+      // several scans: pairs without picked points still start from their tags, so the choice is sent with points too
+      const body: AlignAllRequest = { scans: [...scans], same_setup: sameSetup, ...holdRequest(holdTags, false) };
       if (fromPoints) {
         body.picked = pickedPoints(s.picked, scans);
         if (!body.picked.length) return false;

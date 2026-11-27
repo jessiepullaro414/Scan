@@ -4,7 +4,7 @@
  * that Node runs as it is (type stripping), no test framework: a failed check throws.
  */
 import { Vector3 } from "three";
-import type { AlignAllPair, AlignAllResult, AlignResult, MergeResult } from "../api/types.ts";
+import type { AlignAllPair, AlignAllResult, AlignHold, AlignResult, MergeResult } from "../api/types.ts";
 import { matrixFromRowMajor } from "../three/coords.ts";
 import {
   addPick,
@@ -22,6 +22,10 @@ import {
   flattenPose,
   hasMesh,
   hasRecording,
+  holdAction,
+  holdCaution,
+  holdOf,
+  holdRequest,
   isAlignAllResult,
   isAlignResult,
   isMergeResult,
@@ -252,6 +256,53 @@ f = alignFigures({ ...accepted, start: "tags", candidates: 1, agree: 1, tags });
 check(f[2].label === "Start" && f[2].value === "From the tags", "from the tags: no starting guesses to count");
 check(f[2].note === "tags 2, 4 and 5 seen by both scans; tag 3 left out (moved?)", "which tags, and which were left out");
 check(tagsNote({ ...tags, used: [5], left_out: [] }) === "tag 5 seen by both scans" && tagsNote(null) === undefined, "one tag; none");
+
+// ------------------------------------------------------------------ the tag pose held, offered per alignment (ENGINE_PLAN X19)
+{
+  const offerWords =
+    "Both scans saw tags 0, 1, 2 and 3. Where two scans share little, these tags can place the scan more exactly than the shapes, as long as no tag moved against the part between the two scans (tags on the part, or tags on the table and the part not touched).";
+  const links = [{ a: "a", b: "b", tags: [0, 1, 2, 3], shape_moves_mm: null }];
+  const offered: AlignHold = { state: "offered", asked: null, words: offerWords, caution: null, links };
+  const fromTags: AlignResult = { ...accepted, start: "tags", overlap: 0.46, little_shared: true, caution: "Little is shared: …", tags: { ...tags, used: [0, 1, 2, 3], left_out: [] } };
+  check(holdOf({ ...fromTags, hold: offered }) === offered, "the block as the server wrote it");
+  check(holdOf(fromTags) === null && holdOf({ ...fromTags, hold: null }) === null && holdOf(null) === null, "no block (an older server, or nothing to say): none");
+  check(holdOf({ hold: { ...offered, state: "maybe" as never } }) === null && holdOf({ hold: { ...offered, words: "" } }) === null, "a block that cannot be read: none");
+  const a = holdAction(offered);
+  check(a !== null && a.label === "Hold the tags' position" && a.holdTags === true && !a.quiet, "offered: a button that holds the tags for this alignment");
+  check(holdCaution(offered) === null, "an offer has no caution");
+  check(alignFigures({ ...fromTags, hold: offered })[2].value === "From the tags", "offered: the start is still from the tags");
+
+  const caution =
+    'The shapes, starting at the tags, would move "Back" 1.4 mm from where the tags put it. A small disagreement is normal where two scans share little, but it is also what a part nudged against tags on the table looks like. If the tags are on the table and the part may have moved, let the shapes decide.';
+  const held: AlignHold = { state: "held", asked: true, words: 'The tags hold "Back" on "Top", as asked for this alignment.', caution, links: [{ ...links[0], shape_moves_mm: 1.4 }] };
+  const h = holdAction(held);
+  check(h !== null && h.label === "Let the shapes decide" && h.holdTags === false && h.quiet, "held: a quiet button that lets the shapes decide");
+  check(holdCaution(held) === caution && holdCaution({ ...held, caution: null }) === null, "held: the caution when the server wrote one");
+  const fh = alignFigures({ ...fromTags, held_by_tags: true, hold: held });
+  check(fh[2].label === "Start" && fh[2].value === "The tags hold the position" && fh[2].note === "tags 0, 1, 2 and 3 seen by both scans", `held: the start figure says so: ${fh[2].value}`);
+
+  const notHeld: AlignHold = {
+    state: "not_held",
+    asked: true,
+    words: "Holding the tags' position was asked for, but it was not applied: only 2 tags were seen by both scans, too few to hold the position.",
+    caution: null,
+    links,
+  };
+  check(holdAction(notHeld) === null && holdCaution(notHeld) === null && holdAction(null) === null, "not held: the words, nothing to press");
+  check(alignFigures({ ...fromTags, hold: notHeld })[2].value === "From the tags", "not held: from the tags");
+  // the table took no part in a held position: the row does not say the tables did not line up
+  const tableRow = (r: Parameters<typeof alignFigures>[0]) => alignFigures(r).find((x) => x.label === "Shared table")?.value;
+  check(tableRow({ ...fromTags, same_setup: true, used_support: false, hold: held }) === "Not used: the tags decide the position", "held: the table was not used because the tags decide");
+  check(tableRow({ ...fromTags, same_setup: true, used_support: false, hold: notHeld }) === "Not used: the two scans' tables did not line up", "not held: the table row as before");
+
+  // the choice is per alignment: only a button of the block sends hold_tags, and never with picked points
+  check(same(holdRequest(undefined, false), {}) && same(holdRequest(true, false), { hold_tags: true }) && same(holdRequest(false, false), { hold_tags: false }), "a plain Align sends nothing; the buttons send their choice");
+  check(same(holdRequest(true, true), {}), "with picked points the start is not from tags: nothing sent");
+
+  // several scans: one block for the whole result
+  const multiHeld = { hold: { ...held, words: 'The tags hold "Back" on "Top" and "Side" on "Back", as asked for this alignment.' } };
+  check(holdOf(multiHeld)?.state === "held" && holdAction(holdOf(multiHeld))?.holdTags === false, "several scans: the same block and button");
+}
 
 // ------------------------------------------------------------------ several scans: the list
 check(mergeNameOf(["A", "B", "C"]) === "A + B + C" && defaultMergeName("A", "B") === mergeNameOf(["A", "B"]), "the default name of several: joined by “ + ”");

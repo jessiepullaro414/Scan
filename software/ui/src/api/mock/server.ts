@@ -1403,7 +1403,13 @@ class MockBackend {
       { name: "Bracket end", status: "recorded", n_frames: 390, duration_s: 13, preset: { id: "thin-sheet-small-parts", name: "Thin sheet metal and small parts", hand: {} } },
       { name: "Quick test (fail)", status: "failed", n_frames: 96, duration_s: 3.2 },
     ]);
-    mk("Fender flare, left", 27, [{ name: "Wheel arch", status: "processed", quality: "preview", mode: "markers", n_frames: 1530, duration_s: 51 }]);
+    mk("Fender flare, left", 27, [
+      { name: "Wheel arch", status: "processed", quality: "preview", mode: "markers", n_frames: 1530, duration_s: 51 },
+      // ENGINE_PLAN X19: scans tracked by markers align from the demo's tags and share little: the Align page offers to hold
+      // the tags' position (held; with "from behind" staying in place, held with a caution; with "from below", not held)
+      { name: "Wheel arch, from behind", status: "processed", mode: "markers", n_frames: 1260, duration_s: 42 },
+      { name: "Wheel arch, from below", status: "processed", mode: "markers", n_frames: 990, duration_s: 33 },
+    ]);
     mk("Coffee can demo", 96, []);
     // U7: the trash holds a scan of the bracket and an old project, so the demo shows it
     const bracket = [...this.projects.values()].find((x) => x.name === "Intake manifold bracket");

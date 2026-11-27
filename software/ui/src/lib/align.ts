@@ -6,7 +6,7 @@
  *
  * Pure (no React, no store, no three.js), so `npm test` runs it with Node.
  */
-import type { AlignAllPair, AlignAllResult, AlignResult, MergeResult, PairUse, PickedPoints, PointPair, Scan, TagStart } from "../api/types";
+import type { AlignAllPair, AlignAllResult, AlignHold, AlignResult, MergeResult, PairUse, PickedPoints, PointPair, Scan, TagStart } from "../api/types";
 
 export type Vec3 = [number, number, number];
 
@@ -352,6 +352,39 @@ export function allCautionOf(r: Pick<AlignAllResult, "caution" | "little_shared"
   return r.little_shared?.length && typeof r.caution === "string" && r.caution ? r.caution : null;
 }
 
+// ------------------------------------------------------------------ the tag pose held (ENGINE_PLAN X19)
+/**
+ * The `hold` block of an align or align_all result (the server writes it and its words), or null: nothing to say, an
+ * older server, or a block that cannot be read.
+ */
+export function holdOf(r: { hold?: AlignHold | null } | null | undefined): AlignHold | null {
+  const h = r?.hold;
+  if (!h || typeof h !== "object") return null;
+  if (h.state !== "offered" && h.state !== "held" && h.state !== "not_held") return null;
+  return typeof h.words === "string" && h.words ? h : null;
+}
+
+/** What a hold block offers: align the same scans again with `hold_tags` set to `holdTags`. */
+export type HoldAction = { label: string; holdTags: boolean; quiet: boolean; title: string };
+
+/** Offered: hold the tags' position; held: let the shapes decide (a quiet button); not held: nothing (null). */
+export function holdAction(h: AlignHold | null): HoldAction | null {
+  if (h?.state === "offered") return { label: "Hold the tags' position", holdTags: true, quiet: false, title: "Align these scans again, keeping the position the tags give" };
+  if (h?.state === "held") return { label: "Let the shapes decide", holdTags: false, quiet: true, title: "Align these scans again, the shapes refining the position from the tags" };
+  return null;
+}
+
+/**
+ * What an alignment request says of the hold: `hold_tags` only when the person chose it for this alignment (a button
+ * of the hold block), never from picked points; a plain Align sends nothing, so the setting decides.
+ */
+export function holdRequest(holdTags: boolean | undefined, fromPoints: boolean): { hold_tags?: boolean } {
+  return typeof holdTags === "boolean" && !fromPoints ? { hold_tags: holdTags } : {};
+}
+
+/** The caution of a held position (the shapes would move it more than 1 mm), or null. */
+export const holdCaution = (h: AlignHold | null): string | null => (h?.state === "held" && typeof h.caution === "string" && h.caution ? h.caution : null);
+
 /** An alignment's figures for the small list under its verdict. */
 export function alignFigures(r: AlignResult): Figure[] {
   const out: Figure[] = [
@@ -361,11 +394,13 @@ export function alignFigures(r: AlignResult): Figure[] {
     r.start === "given"
       ? { label: "Start", value: "From your points" }
       : r.start === "tags"
-        ? { label: "Start", value: "From the tags", note: tagsNote(r.tags) }
+        ? { label: "Start", value: holdOf(r)?.state === "held" ? "The tags hold the position" : "From the tags", note: tagsNote(r.tags) }
         : { label: "Starting guesses", value: `${r.agree} of ${r.candidates} agree`, note: "(each starts from a different rough fit)" },
   ];
   if (typeof r.pairs_rms_mm === "number") out.push({ label: "Your points", value: `agree to ${mm(r.pairs_rms_mm, 1)}`, warn: pairsDisagree(r) });
-  if (r.same_setup) out.push({ label: "Shared table", value: r.used_support ? "Used for height and tilt" : "Not used: the two scans' tables did not line up" });
+  // a held position is the tags' own: the table took no part in it (its tables may well line up)
+  const noTable = holdOf(r)?.state === "held" ? "Not used: the tags decide the position" : "Not used: the two scans' tables did not line up";
+  if (r.same_setup) out.push({ label: "Shared table", value: r.used_support ? "Used for height and tilt" : noTable });
   return out;
 }
 

@@ -120,6 +120,7 @@ On a long part with nothing along its length to hold on to (a plain panel, a sil
 |---|---|---|
 | **Not aligned: not sure** | The engine found a pose but too few of its tries agree on it. | [If the engine is not sure](align-merge.md#if-the-engine-is-not-sure): pick matching points, or scan with more overlap. |
 | **The scans share little** | The two scans are aligned, but under 70 % of the smaller one lies on the other. Away from where they meet the position can be a millimetre or more off. | [The scans share little](align-merge.md#the-scans-share-little) |
+| Two scans that share little come out a millimetre off, though both saw the same tags | Where little is shared, the shapes decide the position unless you hold the tags. | [Hold the tags' position](align-merge.md#hold-the-tags-position): only if the tags are on the part, or on the table and the part was not touched. |
 | A merged scan looks worse than the scans it came from | A wrong position, or the merge averaging a good view with a poor one. | [What a merge does and does not improve](align-merge.md#what-a-merge-does-and-does-not-improve) |
 | The scans do not align after the part was turned over | The app needs to know the part was moved. | [Was the part moved between the scans?](align-merge.md#was-the-part-moved-between-the-scans) |
 

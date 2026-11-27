@@ -503,4 +503,48 @@ mock.merge(p, { scans: at(THREE) });
 last().spec.onFail?.("the scans were recorded with different calibrations");
 check(logs.length === 1 && /^Merging failed: .*The scans are unchanged\.$/.test(logs[0].message), "a failed merge of several is reported");
 
+// ------------------------------------------------------------------ the tag pose held, offered per alignment (ENGINE_PLAN X19)
+{
+  const tagScan = (id: string, name: string): Scan => ({ ...scan(id, name, "processed", 900, 30), mode: "markers" });
+  const fender: Project = {
+    id: "p2",
+    name: "Fender flare, left",
+    created: "c",
+    modified: "m",
+    n_scans: 3,
+    thumbnail_url: null,
+    scans: [tagScan("arch", "Wheel arch"), tagScan("behind", "Wheel arch, from behind"), tagScan("below", "Wheel arch, from below")],
+  };
+  const two = (body: Record<string, unknown>) => {
+    mock.align(fender, { same_setup: true, ...body });
+    return run(last()).result as AlignResult;
+  };
+  let r = two({ target: "arch", source: "behind" });
+  check(r.accepted && r.start === "tags" && r.little_shared === true && r.tags?.used.length === 4 && r.held_by_tags === undefined, "scans tracked by markers: from the demo's tags, sharing little");
+  check(r.hold?.state === "offered" && r.hold.asked === null && r.hold.words.startsWith("Both scans saw tags 0, 1, 2 and 3. Where two scans share little"), `the offer: ${r.hold?.words}`);
+  r = two({ target: "arch", source: "behind", hold_tags: true });
+  check(r.held_by_tags === true && r.tags?.start === "held" && r.verdict.startsWith("Aligned from the 4 tags both scans saw"), "asked: held");
+  check(r.hold?.state === "held" && r.hold.caution === null && r.hold.words === 'The tags hold "Wheel arch, from behind" on "Wheel arch", as asked for this alignment.', `held: ${r.hold?.words}`);
+  r = two({ target: "behind", source: "arch", hold_tags: true });
+  check(r.hold?.state === "held" && !!r.hold.caution?.startsWith('The shapes, starting at the tags, would move "Wheel arch" 1.4 mm'), `the two swapped: held with the caution: ${r.hold?.caution}`);
+  r = two({ target: "arch", source: "below", hold_tags: true });
+  check(r.held_by_tags === false && typeof r.overruled === "string" && r.hold?.state === "not_held", "from below: not held");
+  check(r.hold?.words === "Holding the tags' position was asked for, but it was not applied: the shapes, starting at the tags, moved the scan 2.6 mm from where the tags put it (more than 2.0 mm).", `not held: ${r.hold?.words}`);
+  r = two({ target: "arch", source: "behind", hold_tags: false });
+  check(r.hold?.state === "offered" && r.hold.asked === false && r.held_by_tags === undefined, "asked off: the answer without the hold, offered again");
+  // the bracket's scans have no tags: nothing said, the results as before
+  mock.align(p, { target: "top", source: "under", same_setup: true });
+  check(!("hold" in (run(last()).result as AlignResult)), "no tags: no hold block");
+
+  mock.alignAll(fender, { scans: ["arch", "behind", "below"], same_setup: true });
+  let all = run(last()).result as AlignAllResult;
+  check(
+    all.accepted && all.hold?.state === "offered" && all.hold.words.startsWith('"Wheel arch" with "Wheel arch, from behind", "Wheel arch" with "Wheel arch, from below" and "Wheel arch, from behind" with "Wheel arch, from below" each saw tags 0, 1, 2 and 3. '),
+    `several: one offer: ${all.hold?.words}`,
+  );
+  mock.alignAll(fender, { scans: ["arch", "behind", "below"], same_setup: true, hold_tags: true });
+  all = run(last()).result as AlignAllResult;
+  check(all.hold?.state === "held" && all.hold.words.includes('"Wheel arch, from behind" on "Wheel arch"'), `several: held: ${all.hold?.words}`);
+}
+
 console.log(`mock align.test: ${checks} checks passed`);

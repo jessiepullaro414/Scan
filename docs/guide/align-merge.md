@@ -82,9 +82,9 @@ Under it, the figures:
 |---|---|
 | **Overlap** | The share "of the smaller scan" that "lies within 1 mm of the other". Shown in the warning colour when the scans share little. |
 | **Distance apart** | "typically … mm" "where they overlap": how far the two surfaces typically lie from each other where they meet. |
-| **Starting guesses** | "… of … agree": the engine starts from several rough fits; the more end at the same pose, the surer it is. Or **Start**: **From your points**, or **From the tags**. |
+| **Starting guesses** | "… of … agree": the engine starts from several rough fits; the more end at the same pose, the surer it is. Or **Start**: **From your points**, **From the tags**, or **The tags hold the position** (see [Hold the tags' position](#hold-the-tags-position)). |
 | **Your points** | "agree to … mm": how well your picked points agree with each other. Shown in the warning colour above 5 mm. |
-| **Shared table** | **Used for height and tilt**, or **Not used: the two scans' tables did not line up** (only when you answered **No**). |
+| **Shared table** | **Used for height and tilt**, or **Not used: the two scans' tables did not line up** (only when you answered **No**). With a held position: **Not used: the tags decide the position**. |
 
 **Align again from the shape alone** runs it again. Changing the answer to the question drops the result: click **Align the two scans** again.
 
@@ -129,6 +129,32 @@ With points, no second guess has to confirm the pose, so check **Your points**. 
 - If the start from the tags is not accepted, the engine tries the shape's own guesses instead.
 
 For scanning with markers, see [Scanning](scanning.md).
+
+### Hold the tags' position
+
+Where two scans share little, the shapes alone can leave the second scan a little off, and a start from the tags is refined by the shapes back to that same place. The tags themselves can place it more exactly. So the page offers to keep the tags' position, for this alignment only.
+
+**When the button appears.** Inside **The scans share little**, when the alignment started from the tags and three or more tags were seen by both scans. The app's words name the tags, for example "Both scans saw tags 0, 1, 2 and 3. Where two scans share little, these tags can place the scan more exactly than the shapes, as long as no tag moved against the part between the two scans (tags on the part, or tags on the table and the part not touched)." Click **Hold the tags' position** to align the same two scans again with the tags held. Nothing else changes: the same scans, the same answer to whether the part was moved, no picked points.
+
+![The caution The scans share little with the tags both scans saw and the button Hold the tags' position](images/align-merge-hold-offer.png)
+
+**When to press it:**
+
+- The tags are on the part itself.
+- The tags are on the table, and the part was not touched between the two scans.
+
+**When not to press it:** the tags are on the table and the part may have been nudged against them. On simulated scans a nudge of 1 to 2.5 mm then stays in the result, 1.0 to 2.5 mm off, where the shapes alone come out about 0.7 mm off. When the tags are right, holding them came out 0.3 to 0.7 mm nearer the truth. These numbers are from simulated scans only.
+
+**After pressing it**, one of two things happens:
+
+- **Held.** The verdict says the tags decide the position, and the figure **Start** reads **The tags hold the position**. When the shapes, starting at the tags, would move the scan more than 1 mm, a caution says how far. A small disagreement is normal where two scans share little, but a part nudged against tags on the table looks the same. If the tags are on the table and the part may have moved, click **Let the shapes decide**: the same two scans are aligned again with the shapes refining the position. Do not rely on the caution alone: in the tests it showed for 10 of 45 good holds (mostly on two bent sheet scans), and it did not show for 9 of 23 small nudges that the hold kept.
+- **Not held.** The engine did not keep the tags' position, and the page says why, for example "Holding the tags' position was asked for, but it was not applied: only 2 tags were seen by both scans, too few to hold the position." The alignment is then the one without the hold. Nothing more is offered.
+
+![A held alignment: the tags decide the position, with the button Let the shapes decide](images/align-merge-held.png)
+
+A plain **Align** or other scans start without the hold again. With several scans, one sentence covers all the pairs that place a scan, and one button holds them all. A merge at a held position records in the merged scan's report that the tags placed the scan.
+
+The setting **process.align_hold_tags** (off) only makes the hold the default; the page offers it either way.
 
 ## The scans share little
 
@@ -224,6 +250,10 @@ So: merge to fill in what one scan could not see. To measure a feature, use the 
 | **Check your points, or add more** | Your points did not give an accepted pose. | Remove a point that is off, add points further apart, align again. |
 | **Two of your points probably do not match** | The picked points disagree by more than about 5 mm. | Remove the point that is off, align again. |
 | **The scans share little** | Accepted, but under 70 % shared: the position can be off away from where they meet. | Add a pass that sees part of both, or tags; or merge and compare. |
+| "Both scans saw tags … Where two scans share little, these tags can place the scan more exactly than the shapes, …" | The tags could hold the position for this alignment. | Click **Hold the tags' position** if the tags are on the part, or on the table and the part was not touched. Otherwise leave it. |
+| "The tags hold “…” on “…”, as asked for this alignment." | The tags decide the position; the shapes only checked it. | Merge, or click **Let the shapes decide** if a tag may have moved against the part. |
+| "The shapes, starting at the tags, would move “…” … mm from where the tags put it. …" | Held, but the shapes disagree by more than 1 mm. Normal on scans that share little, and also what a nudged part looks like. | If the tags are on the table and the part may have moved, click **Let the shapes decide**. |
+| "Holding the tags' position was asked for, but it was not applied: …" | The engine did not keep the tags' position (too few tags, tags that moved, or tags on the table of a moved part). The alignment is the one without the hold. | Nothing to do; check the tags if the words say one may have moved. |
 | "The engine is not sure where the second scan goes, so there is nothing to merge at yet. …" | No merge on a pose the engine was not sure of. | Choose a pose, or align from points. |
 | "The shapes did not confirm your points, so the second scan may be in the wrong place. Merging asks you to confirm." | Your points and the shapes disagree. | Look at both together; **Merge anyway** only if they sit on each other. |
 | **Merge at your points although the shapes did not confirm them?** | The confirmation for the above. | **Merge anyway**, or check your points (two may be swapped) and align again. |

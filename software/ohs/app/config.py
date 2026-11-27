@@ -655,7 +655,8 @@ _KEY_DOCS = {
         "agree within 0.5 mm decide, the shapes only check them: when the shapes, starting at the tags, move\n"
         "the scan more than 2 mm, the tags are not held (a tag map wrong as a whole, as when the part was\n"
         "nudged against tags on the table). Scans that share more are aligned exactly as before.\n"
-        "Off: as before."
+        "The Align page offers the hold for each alignment either way; this setting only makes it the\n"
+        "default. Off: as before."
     ),
     "process.straighten_tags": (
         "Straighten also holds the scan to the AprilTags it sees (ENGINE_PLAN X8 step 2): tags on the\n"

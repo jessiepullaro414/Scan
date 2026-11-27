@@ -123,6 +123,9 @@ The rules of `FEATURE_PLAN.md` and `MAINTENANCE_PLAN.md` hold. In short:
      a part turned over with tags on the part itself; with it the Align page's words, the
      guide and a trial in the running app. The case missed on one of three pairs (the
      overrule): the setting stays off until that is mended and the case passes.
+     **Decided 2026-11-27, after the weakness was measured (the owner: "Keep it off"):**
+     the setting stays off by default and the Align page offers the hold for one
+     alignment at a time. Built the same day (X19).
   4. Holes (X15), decided the same day after round 6: the reading from the camera images is
      built into the app's hole tool, as a second answer beside the mesh's.
   5. Long parts (X8), decided the same day after the fresh seeds: `straighten_tags` goes on
@@ -1228,7 +1231,7 @@ model per scan"; data in `D:\OpenHandScan-work\scratch\ed3` (`merge.md`, `merge_
   with lasers absent from both merges, as in the app; the fourth arm (one model with the
   opposite-sides rule off) left out.
 
-### [ ] X19. A pose from tags, held, where two scans share little (S to M): built 2026-11-24 as a setting, off; its stop rule passed; switching it on is with the owner
+### [x] X19. A pose from tags, held, where two scans share little (S to M): off by default by the owner's choice (2026-11-27); offered per alignment on the Align page
 E-D4 (4). Design in `D:\OpenHandScan-work\scratch\ed3\tag_hold_design.md`; first test in
 `tools/merge_combine_study.py` (`tags`).
 - **What the pose is worth** (X18's experiment, real fusing): on the 12 pairs that share under
@@ -1302,11 +1305,26 @@ E-D4 (4). Design in `D:\OpenHandScan-work\scratch\ed3\tag_hold_design.md`; first
   0.7 to 0.8), because on pairs that share little the shapes' own minimum is 0.7 to 1.2 mm
   off and no limit on the move can tell the two apart; and a slide along a direction the
   shared faces do not pin is held, where off is equally wrong.
-- **Before the default goes on (E-D5):** (1) the owner's choice on that trade (asked
-  2026-11-26): on right maps the hold is 0.3 to 0.7 mm nearer, on a part nudged 1 to
-  2.5 mm against table tags up to about 2 mm worse than today. (2) The Align page's words
-  for a held pose, with a caution when the shapes would move it more than 1 mm, the guide
-  and a trial in the running app.
+- **The owner's choice on that trade (2026-11-27): "Keep it off".** On right maps the hold
+  is 0.3 to 0.7 mm nearer, on a part nudged 1 to 2.5 mm against table tags up to about
+  2 mm worse than today; so `[process] align_hold_tags` stays off and the person who
+  knows where the tags are decides, one alignment at a time.
+- **Offered per alignment, built 2026-11-27** (`VALIDATION.md`, "The tag hold offered per
+  alignment"; `APP_API.md`, Rules, "The tag pose held"; UX_PLAN G5): `hold_tags` in the
+  bodies of `align` and `align_all` overrides the setting both ways for that alignment;
+  both results carry a `hold` block the server writes (offered, held with a caution when
+  the shapes would move the pose more than 1.0 mm, not held and why). The page shows the
+  words and one button: "Hold the tags' position", or "Let the shapes decide". Guide
+  section and two pictures; tried in the running app on the rendered bracket pair.
+  - **The caution advises, it does not separate** (counted on the guard data, limit
+    2 mm): it shows on 10 of 45 right holds (the bent sheet pairs and two spread pairs,
+    1.02 to 1.75 mm), on 17 of 38 held nudges of 1 to 2.5 mm, and not on 9 of the 23
+    nudges held worse than off (they moved 0.23 to 0.81 mm); on 0 of 33 slides along an
+    unpinned direction (off is as wrong there). The offer's own sentence carries the
+    condition: no tag moved against the part between the scans.
+  - **Left:** real tags and real scans; a part with tags on the part itself, rendered,
+    beyond the bracket; a measure that tells a nudged part from a right map (none
+    found: overlap ratio and the refinement's move both fail under about 2.5 mm).
 - **For the guide (added):** on a part turned over, tags go on a face seen both ways up.
   By E-D1 it is better on every pair it acts on and the same on every pair it does not (no
   tags, or 0.70 shared or more). Open before that: a part turned over with tags on the part itself, rendered (made-up clouds only so

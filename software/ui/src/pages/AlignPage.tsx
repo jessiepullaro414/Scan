@@ -31,6 +31,7 @@ import {
   Move3d,
   Plus,
   RefreshCw,
+  Tag,
   Trash,
   TriangleExclamationPoint,
   Wand,
@@ -38,7 +39,7 @@ import {
 } from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { api, sentence } from "../api/http";
-import type { AlignAllResult, AlignResult, MergeResult, Scan } from "../api/types";
+import type { AlignAllResult, AlignHold, AlignResult, MergeResult, Scan } from "../api/types";
 import { JobProgress } from "../components/ScanBits";
 import { ErrorBoundary } from "../components/shell/ErrorBoundary";
 import { Button, IconButton } from "../components/ui/Button";
@@ -57,6 +58,9 @@ import {
   flattenPose,
   cannotMerge,
   hasMesh,
+  holdAction,
+  holdCaution,
+  holdOf,
   MAX_SCANS,
   mergeLeftOut,
   mergeNameOf,
@@ -290,10 +294,60 @@ function Figures({ figures }: { figures: Figure[] }) {
 }
 
 /**
- * The verdict sentence, accepted or not, the caution when the scans share little (a caution, not an error: Merge
- * stays possible), and the small list of figures.
+ * Holding the tags' position (ENGINE_PLAN X19), in the server's words: offered (a button aligns the same scans again with
+ * the tags held), held (the caution when the shapes would move it more than 1 mm, and a quiet button that lets the
+ * shapes decide), or asked and not held (the words only). The choice is for this alignment only.
  */
-function Verdict({ ok, verdict, okLabel, notLabel, figures, caution }: { ok: boolean; verdict: string; okLabel: string; notLabel: string; figures: Figure[]; caution?: string | null }) {
+function HoldBlock({ hold, disabled, onHold }: { hold: AlignHold; disabled: boolean; onHold: (holdTags: boolean) => void }) {
+  const action = holdAction(hold);
+  const caution = holdCaution(hold);
+  return (
+    <div className="mt-2" aria-label="Holding the tags' position">
+      <p className="leading-5 text-fg">{hold.words}</p>
+      {caution ? (
+        <p className="mt-1.5 flex items-start gap-1.5 leading-5 font-medium text-warn" role="status">
+          <TriangleExclamationPoint size={13} className="mt-1 shrink-0" aria-hidden />
+          <span>{caution}</span>
+        </p>
+      ) : null}
+      {action ? (
+        <div className="mt-2">
+          <Button size="xs" variant={action.quiet ? "ghost" : "secondary"} icon={action.quiet ? Wand : Tag} disabled={disabled} title={action.title} onClick={() => onHold(action.holdTags)}>
+            {action.label}
+          </Button>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * The verdict sentence, accepted or not, the caution when the scans share little (a caution, not an error: Merge
+ * stays possible), what the server says of holding the tags' position (inside that caution), and the small list of
+ * figures.
+ */
+function Verdict({
+  ok,
+  verdict,
+  okLabel,
+  notLabel,
+  figures,
+  caution,
+  hold,
+  holdDisabled = false,
+  onHold,
+}: {
+  ok: boolean;
+  verdict: string;
+  okLabel: string;
+  notLabel: string;
+  figures: Figure[];
+  caution?: string | null;
+  hold?: AlignHold | null;
+  holdDisabled?: boolean;
+  onHold?: (holdTags: boolean) => void;
+}) {
+  const holdBlock = hold && onHold ? <HoldBlock hold={hold} disabled={holdDisabled} onHold={onHold} /> : null;
   return (
     <div className="mt-3">
       <div className={cn("flex items-start gap-2.5 rounded-lg border px-3.5 py-3", ok ? "border-ok/30 bg-ok-soft/60" : "border-warn/30 bg-warn-soft/60")} role="status">
@@ -306,6 +360,11 @@ function Verdict({ ok, verdict, okLabel, notLabel, figures, caution }: { ok: boo
       {caution ? (
         <Callout tone="warn" icon={TriangleExclamationPoint} title="The scans share little" className="mt-2">
           <span className="leading-5">{caution}</span>
+          {holdBlock}
+        </Callout>
+      ) : holdBlock ? (
+        <Callout tone="neutral" icon={Tag} title="The tags both scans saw" className="mt-2">
+          {holdBlock}
         </Callout>
       ) : null}
       <Figures figures={figures} />
@@ -313,8 +372,18 @@ function Verdict({ ok, verdict, okLabel, notLabel, figures, caution }: { ok: boo
   );
 }
 
-const TwoVerdict = ({ result }: { result: AlignResult }) => (
-  <Verdict ok={result.accepted} verdict={result.verdict} okLabel="Aligned" notLabel={standingLabel(result)} figures={alignFigures(result)} caution={cautionOf(result)} />
+const TwoVerdict = ({ result, holdDisabled, onHold }: { result: AlignResult; holdDisabled: boolean; onHold: (holdTags: boolean) => void }) => (
+  <Verdict
+    ok={result.accepted}
+    verdict={result.verdict}
+    okLabel="Aligned"
+    notLabel={standingLabel(result)}
+    figures={alignFigures(result)}
+    caution={cautionOf(result)}
+    hold={holdOf(result)}
+    holdDisabled={holdDisabled}
+    onHold={onHold}
+  />
 );
 
 /**
@@ -376,11 +445,35 @@ function PoseChooser({
 }
 
 /** Several scans: the verdict, then each scan placed or not, with a short line for each of its pairs. */
-function MultiVerdict({ result, list, nameOf, colorOf }: { result: AlignAllResult; list: string[]; nameOf: (id: string) => string; colorOf: (id: string) => string }) {
+function MultiVerdict({
+  result,
+  list,
+  nameOf,
+  colorOf,
+  holdDisabled,
+  onHold,
+}: {
+  result: AlignAllResult;
+  list: string[];
+  nameOf: (id: string) => string;
+  colorOf: (id: string) => string;
+  holdDisabled: boolean;
+  onHold: (holdTags: boolean) => void;
+}) {
   const rows = scanPlacements(result, list);
   return (
     <>
-      <Verdict ok={result.accepted} verdict={result.verdict} okLabel="All placed" notLabel="Not all placed" figures={alignAllFigures(result)} caution={allCautionOf(result)} />
+      <Verdict
+        ok={result.accepted}
+        verdict={result.verdict}
+        okLabel="All placed"
+        notLabel="Not all placed"
+        figures={alignAllFigures(result)}
+        caution={allCautionOf(result)}
+        hold={holdOf(result)}
+        holdDisabled={holdDisabled}
+        onHold={onHold}
+      />
       <ul className="mt-3 space-y-1.5" aria-label="Where each scan was placed">
         {rows.map((r) => (
           <li key={r.id} className="rounded-lg border border-line bg-surface-2/50 px-2.5 py-2 text-xs">
@@ -881,7 +974,7 @@ export default function AlignPage({
           {st.alignProblem ? <ProblemCallout problem={st.alignProblem} className="mt-3" /> : null}
           {result && !aligning ? (
             <>
-              <TwoVerdict result={result} />
+              <TwoVerdict result={result} holdDisabled={!ready || busy || !!movedWait} onHold={(h) => void st.align(false, h)} />
               {standingOf(result) === "not_sure" ? (
                 <PoseChooser
                   result={result}
@@ -935,7 +1028,10 @@ export default function AlignPage({
           ) : null}
           {multi && !aligning ? (
             <>
-              <MultiVerdict result={multi} list={list} nameOf={nameOf} colorOf={colorOf} />
+              <MultiVerdict result={multi} list={list} nameOf={nameOf} colorOf={colorOf} holdDisabled={!ready || busy || !!movedWait}
+                // the same alignment again: with the picked points, when this result was made from some and they are still there
+                onHold={(h) => void st.align(multi.pairs.some((p) => p.start === "given") && pickedPoints(st.picked, list).length > 0, h)}
+              />
               {multi.unplaced.length ? (
                 <Callout
                   tone="accent"

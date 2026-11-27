@@ -48,6 +48,117 @@ def _without_held_warnings(shared: dict, held: list[dict]) -> dict:
     return {**shared, "warnings": keep}
 
 
+#: a held tag pose that the shapes, starting at the tags, would move more than this (mm) gets a caution: on right tag
+#: maps of pairs that share little they moved 0.3 to 1.8 mm, on a part nudged 1 to 2.5 mm against table tags 0.0 to
+#: 1.8 mm, so it cannot tell the two apart; it says what to do (ENGINE_PLAN X19, the hold offered per alignment)
+HOLD_CAUTION_MM = 1.0
+
+_OFFER_WHY = ("Where two scans share little, these tags can place the {scan} more exactly than the shapes, as long as no "
+              "tag moved against the part between the {two} (tags on the part, or tags on the table and the part not "
+              "touched).")
+_CAUTION_WHY = ("A small disagreement is normal where two scans share little, but it is also what a part nudged against "
+                "tags on the table looks like. If the tags are on the table and the part may have moved, let the shapes "
+                "decide.")
+
+
+def _and(words: list[str]) -> str:
+    return words[0] if len(words) == 1 else f"{', '.join(words[:-1])} and {words[-1]}"
+
+
+def _tag_ids(ids: list[int]) -> str:
+    return f"tag{'s' if len(ids) != 1 else ''} {_and([str(i) for i in ids])}"
+
+
+def hold_block(links: list[dict], asked: bool | None, hold_on: bool, min_tags: int = 3, several: bool = False) -> dict | None:
+    """The ``hold`` block of an align or align_all result (ENGINE_PLAN X19; APP_API.md, Rules, "The tag pose held"): what
+    the page says and offers about holding the tags' pose, so it needs no rules of its own; ``None`` when there is
+    nothing to say. ``links``: the links that place a scan (two scans: the one), each ``{a, b, a_name, b_name, res,
+    tags, on_table}`` with ``res`` the alignment's fields (and the hold's, when it was weighed), ``tags`` its
+    :func:`ohs.align.tags.align_with_tags` row and ``on_table`` whether its tags lie on the table of a part that was
+    moved (they could not hold it). ``asked``: the request's ``hold_tags`` (``None``: the setting decided); ``hold_on``:
+    whether the hold was on for this alignment. ``several``: an align_all result (its sentences name each link's scans).
+
+    * ``offered``: the hold was off, and a link was accepted from tags, shares little and has ``min_tags`` or more tags.
+    * ``held``: a link was held; ``caution`` when the shapes, starting at the tags, would move a held scan more than
+      ``HOLD_CAUTION_MM``.
+    * ``not_held``: the hold was on and weighed, and no link was held; the words say why.
+    """
+    several = several or len(links) > 1
+
+    def row(lk: dict, ids: list[int]) -> dict:
+        m = lk["res"].get("shape_moves_mm")
+        return {"a": lk["a"], "b": lk["b"], "tags": list(ids), "shape_moves_mm": m}
+
+    if not hold_on:
+        offer = [lk for lk in links if lk["res"].get("accepted") and lk["res"].get("start") == "tags"
+                 and lk["res"].get("little_shared") and lk.get("tags") and len(lk["tags"].get("used") or []) >= min_tags
+                 and not lk.get("on_table")]
+        if not offer:
+            return None
+        if several:  # links that saw the same tags in one sentence
+            groups: dict[tuple[int, ...], list[dict]] = {}
+            for lk in offer:
+                groups.setdefault(tuple(lk["tags"]["used"]), []).append(lk)
+            sentences = []
+            for ids, g in groups.items():
+                if len(g) == 1:
+                    sentences.append(f"\"{g[0]['a_name']}\" and \"{g[0]['b_name']}\" both saw {_tag_ids(list(ids))}.")
+                else:
+                    pairs = [f"\"{lk['a_name']}\" with \"{lk['b_name']}\"" for lk in g]
+                    sentences.append(f"{_and(pairs)} each saw {_tag_ids(list(ids))}.")
+            saw = " ".join(sentences)
+            why = _OFFER_WHY.format(scan="scans", two="scans")
+        else:
+            saw = f"Both scans saw {_tag_ids(offer[0]['tags']['used'])}."
+            why = _OFFER_WHY.format(scan="scan", two="two scans")
+        return {"state": "offered", "asked": asked, "words": f"{saw} {why}", "caution": None,
+                "links": [row(lk, lk["tags"]["used"]) for lk in offer]}
+    weighed = [lk for lk in links if "held_by_tags" in lk["res"]]
+    held = [lk for lk in weighed if lk["res"]["held_by_tags"]]
+    if held:
+        how = "as asked for this alignment" if asked else "as the settings ask"
+        placed = [f"\"{lk['b_name']}\" on \"{lk['a_name']}\"" for lk in held]
+        words = f"The tags hold {_and(placed)}, {how}."
+        far = [lk for lk in held if lk["res"].get("shape_moves_mm") is not None
+               and float(lk["res"]["shape_moves_mm"]) > HOLD_CAUTION_MM]
+        caution = None
+        if far:
+            moves = _and([f"\"{lk['b_name']}\" {float(lk['res']['shape_moves_mm']):.1f} mm" for lk in far])
+            caution = (f"The shapes, starting at the tags, would move {moves} from where the tags put "
+                       f"{'them' if len(far) > 1 else 'it'}. {_CAUTION_WHY}")
+        return {"state": "held", "asked": asked, "words": words, "caution": caution,
+                "links": [row(lk, lk["res"].get("tags_used") or []) for lk in held]}
+    if not weighed:
+        return None
+
+    def why(lk: dict) -> str:
+        return (lk["res"].get("overruled") or lk["res"].get("not_held")
+                or "the scans could not be checked at the tags' position")
+
+    if several:
+        reasons = "; ".join(f"for \"{lk['b_name']}\" on \"{lk['a_name']}\", {why(lk)}" for lk in weighed)
+    else:
+        reasons = why(weighed[0])
+    return {"state": "not_held", "asked": asked, "words": f"Holding the tags' position was asked for, but it was not applied: "
+                                                          f"{reasons}.", "caution": None,
+            "links": [row(lk, lk["res"].get("tags_used") or []) for lk in weighed]}
+
+
+def _tags_on_table(dst: Any, tags_dst: Any, ids: list[int], same_setup: bool) -> bool:
+    """The tags lie on the target scan's table and the part was moved: they could not hold it (the engine's rule,
+    :func:`ohs.align.pairwise._hold`), so the hold is not offered."""
+    from ohs.align.pairwise import TABLE_TAG_MM
+
+    if same_setup or dst is None or getattr(dst, "support", None) is None or tags_dst is None or not ids:
+        return False
+    try:
+        n, d = dst.support
+        X = np.concatenate([np.asarray(tags_dst.corners[i], dtype=np.float64).reshape(-1, 3) for i in ids])
+        return bool(np.max(np.abs(X @ np.asarray(n, dtype=np.float64) + float(d))) <= TABLE_TAG_MM)
+    except (KeyError, ValueError, TypeError):
+        return False
+
+
 def _too_few(n: int) -> str:
     return f"{n} {'pair' if n == 1 else 'pairs'} of matching points {'is' if n == 1 else 'are'} too few."
 
@@ -59,11 +170,13 @@ class AlignManager:
         # them, so that a merge at that pose records it; only filled with [process] align_hold_tags on
         self._held: dict[tuple[str, str, str], dict] = {}
 
-    def _params(self) -> Any:
-        """The alignment's settings: the defaults, with the tag hold from ``[process] align_hold_tags``."""
+    def _params(self, hold_tags: bool | None = None) -> Any:
+        """The alignment's settings: the defaults, with the tag hold from ``[process] align_hold_tags``, or from the
+        request's ``hold_tags`` for this alignment when it gives one (the Align page offers it per alignment)."""
         from ohs.align import AlignParams
 
-        return AlignParams(hold_tags=bool(getattr(self.st.cfg.process, "align_hold_tags", False)))
+        on = bool(getattr(self.st.cfg.process, "align_hold_tags", False)) if hold_tags is None else bool(hold_tags)
+        return AlignParams(hold_tags=on)
 
     def _remember_held(self, pid: str, target: str, source: str, d: dict) -> None:
         if d.get("held_by_tags"):
@@ -71,6 +184,8 @@ class AlignManager:
                 "T": np.asarray(d["T"], dtype=np.float64), "tags_used": list(d.get("tags_used") or []),
                 "tag_rms_mm": d.get("tag_rms_mm"), "tag_pose_sigma_mm": d.get("tag_pose_sigma_mm"),
                 "shape_moves_mm": d.get("shape_moves_mm")}
+        else:  # aligned again without the hold ("Let the shapes decide"): the earlier held pose is not this pair's any more
+            self._held.pop((pid, target, source), None)
 
     def _held_links(self, pid: str, items: list[dict], poses: list[np.ndarray]) -> list[dict]:
         """The pairs of a merge whose poses are an alignment's held tag pose (ENGINE_PLAN X19)."""
@@ -143,9 +258,11 @@ class AlignManager:
 
     # ------------------------------------------------------------------ align
     def align(self, pid: str, target: str, source: str, same_setup: bool, pairs: list[dict] | None,
-              use_tags: bool = True) -> Any:
+              use_tags: bool = True, hold_tags: bool | None = None) -> Any:
         """``POST /api/projects/{pid}/align``. Without picked points and with ``use_tags``, tags both
-        scans saw give the start (:func:`ohs.align.align_with_tags`)."""
+        scans saw give the start (:func:`ohs.align.align_with_tags`). ``hold_tags``: hold the tags' pose for this
+        alignment (``None``: as ``[process] align_hold_tags`` says); no effect with picked points. The result's
+        ``hold`` (:func:`hold_block`) says what the page offers."""
         from ohs.align import pose_from_point_pairs
 
         with self.st._lock:
@@ -171,6 +288,7 @@ class AlignManager:
                 src = scan_cloud_from_mesh(b["mesh"])
                 ctx.check()
                 tags_row = None
+                hold = None
                 if init is None and use_tags:
                     ctx.progress(0.3, "Looking for tags in both scans", force=True)
                     ta = self._tags(a)
@@ -178,9 +296,14 @@ class AlignManager:
                     tb = self._tags(b) if ta else None
                     ctx.check()
                     ctx.progress(0.5, "Aligning the two scans", force=True)
-                    params = self._params()
+                    params = self._params(hold_tags)
                     res, tags_row = align_with_tags(src, dst, tb, ta, params if params.hold_tags else None,
                                                     same_setup=bool(same_setup))
+                    d = res.as_dict()
+                    used = list((tags_row or {}).get("used") or [])
+                    hold = hold_block([{"a": target, "b": source, "a_name": a["name"], "b_name": b["name"], "res": d,
+                                        "tags": tags_row, "on_table": _tags_on_table(dst, ta, used, bool(same_setup))}],
+                                      hold_tags, bool(params.hold_tags), int(params.hold_min_tags))
                 else:
                     ctx.progress(0.45, "Aligning the two scans", force=True)
                     res = align_pair(src, dst, init=init, same_setup=bool(same_setup))
@@ -189,7 +312,7 @@ class AlignManager:
                 out.update(project_id=pid, target=target, source=source, tags=tags_row,
                            pairs_rms_mm=None if pairs_rms is None else round(float(pairs_rms), 3),
                            support={"target": dst.support is not None, "source": src.support is not None},
-                           message=res.verdict)
+                           message=res.verdict, hold=hold)
                 return jsonable(out)
 
             return self.st.jobs.submit("align", run, message="Queued: align and merge",
@@ -197,9 +320,10 @@ class AlignManager:
 
     # ------------------------------------------------------------------ several scans
     def align_all(self, pid: str, scans: list[str], same_setup: bool, picked: list[dict] | None,
-                  use_tags: bool = True) -> Any:
+                  use_tags: bool = True, hold_tags: bool | None = None) -> Any:
         """``POST /api/projects/{pid}/align_all``: every scan placed in the first one's world (with
-        ``use_tags``, pairs without picked points start from the tags they share)."""
+        ``use_tags``, pairs without picked points start from the tags they share). ``hold_tags``: as for
+        :meth:`align`, for every pair of this alignment; the result's ``hold`` is one block for the whole result."""
         from ohs.align import pose_from_point_pairs
 
         if len(scans) < 2:
@@ -246,14 +370,24 @@ class AlignManager:
                     ctx.check()
                     ctx.progress(0.3 + 0.7 * f, msg)
 
-                params = self._params()
+                params = self._params(hold_tags)
                 res = align_many(clouds, params if params.hold_tags else None, same_setup=bool(same_setup), picked=starts,
                                  tags=tags if use_tags else None, progress=progress)
                 d = res.as_dict()
+                # one hold block for the whole result, over the links that place a scan (picked points: not from tags)
+                hold = hold_block([{"a": scans[r["i"]], "b": scans[r["j"]], "a_name": items[r["i"]]["name"],
+                                    "b_name": items[r["j"]]["name"], "res": r, "tags": r.get("tags"),
+                                    "on_table": _tags_on_table(clouds[r["i"]], tags[r["i"]] if use_tags else None,
+                                                               list((r.get("tags") or {}).get("used") or []),
+                                                               bool(same_setup))}
+                                   for r in d["pairs"] if r.get("used") in ("chain", "loop")],
+                                  hold_tags, bool(params.hold_tags), int(params.hold_min_tags), several=True) if use_tags else None
                 for r in d["pairs"]:  # a held link, for a merge at these poses (ENGINE_PLAN X19)
                     if r.get("held_by_tags") and res.T[r["i"]] is not None and res.T[r["j"]] is not None:
                         rel = np.linalg.inv(np.asarray(res.T[r["i"]])) @ np.asarray(res.T[r["j"]])
                         self._remember_held(pid, scans[r["i"]], scans[r["j"]], {**r, "T": rel})
+                    else:
+                        self._remember_held(pid, scans[r["i"]], scans[r["j"]], {})
                 verdict = res.verdict
                 for k, it in enumerate(items):  # the engine counts scans; the user knows them by name
                     verdict = verdict.replace(f"scan {k + 1} ", f"\"{it['name']}\" ").replace(f"scan {k + 1}.", f"\"{it['name']}\".")
@@ -268,7 +402,7 @@ class AlignManager:
                     "little_shared": [{"a": scans[i], "b": scans[j]} for i, j in d["little_shared"]], "caution": d["caution"],
                     "support": {sid: clouds[k].support is not None for k, sid in enumerate(scans)},
                     "tags": {sid: (sorted(tags[k].corners) if use_tags and tags[k] else []) for k, sid in enumerate(scans)},
-                    "same_setup": bool(same_setup), "ms": d["ms"], "verdict": verdict, "message": verdict})
+                    "same_setup": bool(same_setup), "ms": d["ms"], "verdict": verdict, "message": verdict, "hold": hold})
 
             return self.st.jobs.submit("align_all", run, message="Queued: align several scans",
                                        meta={"project_id": pid, "scans": list(scans)})

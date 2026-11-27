@@ -6805,6 +6805,46 @@ The three clicks of each hole, in mm (the mesh's hole fit / the camera images wi
 Limits: simulated scans (no gloss, chamfer, burr, MJPEG artefacts or real light); the projector's dots on; clicks
 1.5 mm outside the rim; one part per scene. The reading is not kept with the scan.
 
+## The tag hold offered per alignment (ENGINE_PLAN X19, 2026-11-27): off by default, a button on the Align page
+
+The owner's choice after the weakness was measured (the section before last): `[process] align_hold_tags` stays off,
+and the Align page offers the hold for one alignment at a time. No scan result changes by default; this is a route
+field, a block of words and two buttons.
+
+- **Routes.** `hold_tags` in the bodies of `align` and `align_all` overrides the setting both ways for that
+  alignment. Without it and with the setting off both responses are as before, field for field, apart from the new
+  `hold` block (12 tests in `tests/test_server_align_hold_offer.py`, 7 through the real server and 5 fast; the guard
+  tests were seen failing first against a stub). A pair aligned again without the hold forgets its earlier held pose.
+- **Tests run in review:** the alignment, merge-preset, settings and command-line test files: 139 passed on the
+  processor (without the merge-preset file), 142 with the graphics card. UI: typecheck, the 87 tests, build.
+- **The 1.0 mm caution on a held pose, counted on the guard study's alignments at the 2 mm limit (no new runs):**
+
+| held alignments | number | the caution shows | the shapes' move, mm |
+|---|---|---|---|
+| right tag maps | 45 | 10 (emulated: the bent sheet pair P5 and its spread pairs 1.27 to 1.75, P3s1 1.11, M1s2 1.02) | 0.32 to 1.75 |
+| the part nudged 1 to 2.5 mm against table tags | 38 | 17 (across the tags' face 7 of 7, along it 10 of 29) | 0.23 to 1.79 |
+| of those, held worse than off by more than 0.05 mm | 23 | 14; the 9 without it are nudges of 1 and 1.5 mm along the face | 0.23 to 0.81 without it |
+| slid 3 to 15 mm along a direction the shared faces do not pin | 33 | 0 (the setting off is as wrong there) | 0.00 to 0.63 |
+
+  So the caution advises and does not separate: it shows on 22 % of right holds and misses 9 of 23 harmful small
+  nudges. The limit was left at 1.0 mm; the words claim no more ("A small disagreement is normal where two scans
+  share little, but it is also what a part nudged against tags on the table looks like."), the offer's sentence
+  carries the condition (no tag moved against the part), and the guide says not to rely on the caution alone.
+- **Seen in the running app (2026-11-27, the working tree's server on the rendered bracket pair of the earlier trial,
+  "Front (tags)" and "Back (tags)", the part not moved, the setting off):** Align gave "Aligned: 45 % of the smaller
+  scan's part lies within 1 mm of the other scan, typically 0.29 mm; from the tags both scans saw." and, inside "The
+  scans share little", "Both scans saw tags 0, 1, 2, 3, 4, 5, 6 and 7. Where two scans share little, these tags can
+  place the scan more exactly than the shapes, ..." with the button. Pressing it gave "Aligned from the 8 tags both
+  scans saw (their corners agree within 0.21 mm). The scans share little of the part (42 %), so the tags decide the
+  position; the shapes, starting at the tags, would move it 0.8 mm.", "The tags hold "Back (tags)" on "Front (tags)",
+  as asked for this alignment.", no caution (0.8 mm), Start "The tags hold the position". "Let the shapes decide"
+  gave the first answer again, with the offer. About 25 s an alignment. Found there and mended: the Shared table row
+  of a held result read "Not used: the two scans' tables did not line up"; it reads "Not used: the tags decide the
+  position".
+- **Not done:** not-held and the caution were seen in the demo and in tests, not on real projects in the app; several
+  scans with the hold were tried in the demo and one server test (two scans through `align_all`), not with three real
+  scans; simulated scans only.
+
 ## What the metrics mean
 
 - **Stereo errors** compare the estimated raw intrinsics/extrinsics (`K1`, `K2`, `R`, `T`) with
