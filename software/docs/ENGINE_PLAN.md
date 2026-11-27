@@ -1272,12 +1272,20 @@ E-D4 (4). Design in `D:\OpenHandScan-work\scratch\ed3\tag_hold_design.md`; first
   the shapes' own search, which had taken the part turned round (75.5 mm away), where the
   setting off passes. Table tags on a moved part never held. A tag map shifted 9 mm was not
   held, but the result was worded "Aligned from the shapes" though it started at the tags.
-- **Next:** judge the tags against the refinement that starts from them, never against a
-  search from the shapes alone: hold when that refinement was accepted and moved no more
-  than the larger of 8 mm and 4 sigma; otherwise give today's result with words that say
-  the tags and the shapes disagree. Guard tests first (a part that fits turned round; a
-  map shifted 9 mm), then the three turned pairs, the table-tag pairs, the shifted maps
-  and the first test's six pairs again.
+- **The overrule mended 2026-11-26** (`VALIDATION.md`, "The tag hold after the overrule was mended"): the
+  tags are judged against the refinement that starts from them, never against a search
+  from the shapes alone; not held means exactly the setting-off answer, in words that are
+  true. The third turned pair is held now and its merge passes E-D4 (1) and (3); every
+  earlier held pair keeps its pose; an alignment with the hold on costs what it costs off.
+  So the turned-over case passes. The setting is still off.
+- **Before the default goes on (E-D5):** (1) the known weakness: a tag map wrong as a whole
+  by a little more than the limit is held when the refinement walks back less than 8 mm
+  (a made-up case, kept as a test expected to fail). To try: do not hold when the overlap
+  at the tags' pose is under about 0.6 of the overlap where the refinement ended (0.94 to
+  0.99 on every held pair of the rendered tests, 0.41 and 0.002 on the wrong maps; to be
+  checked on the 31 emulated-tag merges, where bent sheet scans gained up to 0.13 of
+  overlap at the shapes' minimum). (2) The Align page's words for a held pose, the guide
+  and a trial in the running app.
 - **For the guide (added):** on a part turned over, tags go on a face seen both ways up.
   By E-D1 it is better on every pair it acts on and the same on every pair it does not (no
   tags, or 0.70 shared or more). Open before that: a part turned over with tags on the part itself, rendered (made-up clouds only so

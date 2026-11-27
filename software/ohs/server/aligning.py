@@ -39,6 +39,15 @@ MAX_SCANS = 8  # scans aligned or merged at once (every pair is aligned: 28 pair
 TAG_FRAMES = 120  # frames of a scan looked at for tags (an even pick of those with a pose; about 2 s at 640x400)
 
 
+def _without_held_warnings(shared: dict, held: list[dict]) -> dict:
+    """The merge's share check without the "share little" lines of the links the tags held (ENGINE_PLAN X19): such a
+    line advises tags on the part, which held that link already (its sentence is in ``held_by_tags``). The measured
+    ``pairs`` and ``little_shared`` stay as they are; the warnings of every other link stay, and so the caution."""
+    links = {frozenset((h["a"], h["b"])) for h in held}
+    keep = [w for r, w in zip(shared["little_shared"], shared["warnings"]) if frozenset((r["a"], r["b"])) not in links]
+    return {**shared, "warnings": keep}
+
+
 def _too_few(n: int) -> str:
     return f"{n} {'pair' if n == 1 else 'pairs'} of matching points {'is' if n == 1 else 'are'} too few."
 
@@ -370,6 +379,8 @@ class AlignManager:
                 notes: list[list[str]] = [[] for _ in items]
                 shared = self._shared(ctx, items, poses)
                 held = self._held_links(pid, items, poses)
+                if shared and held:  # a held link shares little, but its tags hold it: its "share little" line goes
+                    shared = _without_held_warnings(shared, held)
                 if not same_setup:  # the part was moved: each scan's table is elsewhere, and stays out (found on its own mesh)
                     ctx.progress(0.02, "Finding what the part lay on", force=True)
                     for k, it in enumerate(items):

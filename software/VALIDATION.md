@@ -6629,6 +6629,48 @@ Error in mm (the value minus the truth), the mesh's thickness read at the same c
 Limits: simulated scans; the tracking error stays in the reading (X17), which is why it says "at most"; a scan made
 wholly without a graphics card was not tried; a one-sided refusal was seen on the sheet only.
 
+## The tag hold after the overrule was mended (ENGINE_PLAN X19, 2026-11-26): the turned-over case passes; one weakness is known
+
+The hold now judges the tags by the refinement that starts at them, never by a search from the shapes alone:
+held when that refinement was accepted and moved the scan no more than the larger of 8 mm and 4 sigma of the
+tag pose; otherwise the answer is exactly the one without the hold, pose and numbers, with a sentence that says
+the tags did not hold. An alignment with the hold on now costs the same time as with it off (the extra search,
+4.5 to 7 s on these scans, is gone). Every alignment was run again on the saved scans on the processor
+(`x19run\rerun_fix.json`); the one new held pose was merged and judged on the graphics card.
+
+| pair | hold off | hold on, before | hold on, now |
+|---|---|---|---|
+| R1, R2 (turned over, tags on the part) | accepted | held | held, the same poses (the refinement moved 0.76 and 0.80 mm) |
+| R3 (turned over) | accepted, passes | gave way to the part turned round, 75.5 mm away; fails | **held** (3 tags, moved 0.67 mm); the merge passes E-D4 (1) and (3) |
+| Q1 to Q3 (tags on the table, the part moved) | refused, refused, accepted | not weighed | not weighed |
+| R1, tag map shifted 20 mm | refused | refused | refused |
+| R1, tag map shifted 9 mm | accepted | not held, under words that were not true | not held (moved 8.7 mm): the hold-off pose bit for bit, in true words |
+| the first test's T3, T1, T3b, TS, TM | accepted | held | held, the same poses (TM again without its moved tag) |
+| TH (shares 0.96) | accepted | untouched | untouched |
+
+R3 merged at the held pose (the share within 0.5 mm / the median in mm / the percentage more than 0.3 mm off):
+scan A's own surface 0.940 / 0.079 / 11.1, scan B's 0.987 / 0.068 / 5.1, all seen 0.960 / 0.072 / 8.3; with
+the hold off 0.939 / 0.077 / 10.9, 0.979 / 0.098 / 6.9, 0.955 / 0.096 / 9.5; at the true pose 0.960 / 0.056 /
+8.3 over all. So the stop rule's three parts hold: the turned pairs pass with the hold on, table tags never hold
+a moved part, and a shifted tag map is never the held pose where it was tried.
+
+- **On the turned-over pairs the hold is no nearer the truth than the setting off** (R3: 0.71 mm RMS at the tags
+  against 0.69, 1.23 mm at scan B's middle against 0.60): tags and shapes agree within 0.7 mm there and the
+  reference itself is good to about 0.4 degrees. The hold's gain is on pairs that share little with the part
+  not moved (the first test: median 0.057 to 0.064 mm against 0.132 to 0.188).
+- **A known weakness, kept as a test that is expected to fail** (`test_a_tag_map_wrong_as_a_whole_is_overruled_in_words`):
+  on a made-up part a tag map wrong by 9 mm is held, because the refinement from the wrong tags moved the scan
+  back only 7.9 mm, under the 8 mm limit. With the hold off that pair is not right either (the refinement starts
+  at the same wrong tags), but the hold then fixes the pose at the tags. In the rendered case the same shift was
+  not held, by 0.7 mm. A candidate guard, measured and not built: the overlap at the tags' pose against the
+  overlap where the refinement ended is 0.94 to 0.99 on the held pairs here and 0.41 and 0.002 on the two wrong
+  maps.
+- With tags on the table of a moved part, two of the three pairs gave different poses from run to run with the
+  hold off and on alike: the search from the shapes alone is not repeatable there (it draws at random). The hold
+  is not involved.
+
+Not run: the app with the mended hold; more parts than the bracket and the sheet.
+
 ## What the metrics mean
 
 - **Stereo errors** compare the estimated raw intrinsics/extrinsics (`K1`, `K2`, `R`, `T`) with

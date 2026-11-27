@@ -158,14 +158,18 @@ def align_with_tags(src: Any, dst: Any, tags_src: TagMap | None, tags_dst: TagMa
         tp = pose_from_tags(tags_src, tags_dst)
         if tp is not None:
             res = align_pair(src, dst, params, init=tp.T, same_setup=same_setup, init_from="tags")
-            if p.hold_tags and res.overlap < p.caution_overlap:
+            if p.hold_tags and res.accepted and res.overlap < p.caution_overlap:
                 # the tag pose held (ohs.align.pairwise, module docstring 8.), from the tags that agree closely when
-                # enough of them do; else from the same tags as without the hold (its sentence then says why)
+                # enough of them do; else from the same tags as without the hold (its sentence then says why). Not held,
+                # the answer is the one without the hold (``off``); from the same tags its refinement is reused
+                off = res
                 th = pose_from_tags(tags_src, tags_dst, max_rms_mm=float(p.hold_max_rms_mm))
-                if th is not None and len(th.ids) >= int(p.hold_min_tags):
+                same = th is None or len(th.ids) < int(p.hold_min_tags) or th.ids == tp.ids
+                if not same:
                     tp = th
                 hold = {"ids": list(tp.ids), "rms_mm": float(tp.rms_mm), "sigma_mm": tag_pose_sigma_mm(tp),
-                        "dst_corners": np.concatenate([np.asarray(tags_dst.corners[i], dtype=np.float64) for i in tp.ids])}
+                        "dst_corners": np.concatenate([np.asarray(tags_dst.corners[i], dtype=np.float64) for i in tp.ids]),
+                        "off": off, "refined": off if same else None}
                 res = align_pair(src, dst, params, init=tp.T, same_setup=same_setup, init_from="tags", tag_hold=hold)
             row = {"shared": shared, "used": tp.ids, "left_out": tp.left_out, "rms_mm": round(tp.rms_mm, 3),
                    "start": "accepted" if res.accepted else f"refused: {res.reason}"}

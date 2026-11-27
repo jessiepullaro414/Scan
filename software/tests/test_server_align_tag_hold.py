@@ -101,11 +101,17 @@ def test_on_the_tags_hold_and_a_merge_records_the_held_link(env):
         rep = json.loads((st.projects.scan_dir(env["pid"], m["scan_id"]) / "result" / "report.json").read_text(encoding="utf-8"))
         assert rep["held_by_tags"][0]["b"] == env["b"] and rep["held_by_tags"][0]["words"] == held[0]["words"]
         assert held[0]["words"] not in rep["warnings"]
-        # a merge at another pose than the held one records nothing
+        # the held link shares little, but its tags hold it: no "share little" line advising tags, no caution; the
+        # measured share stays
+        assert m["shared"]["little_shared"] and not m["shared"]["warnings"] and m["caution"] is None
+        assert not any("share little where they were merged" in w for w in m["warnings"] + rep["warnings"])
+        # a merge at another pose than the held one records nothing, and keeps the "share little" line and the caution
         T2 = np.asarray(res["T"]).copy()
         T2[0, 3] += 0.5
         m2 = run_job(env, post(env["base"] + "/merge", {"target": env["a"], "source": env["b"], "T": T2.tolist(),
                                                         "name": "Top and back, moved"}), "merge")["result"]
         assert "held_by_tags" not in m2
+        assert m2["shared"]["warnings"] and m2["caution"] == " ".join(m2["shared"]["warnings"])
+        assert any("share little where they were merged" in w for w in m2["warnings"])
     finally:
         st.cfg.process.align_hold_tags = False

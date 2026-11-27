@@ -84,12 +84,16 @@ why, and which poses it had in mind, and is not accepted (MAINTENANCE_PLAN F11).
    refinement from the tags walks there every time (VALIDATION.md "A pose from tags, where two scans share
    little"). With ``hold_tags`` a start from the tags (``tag_hold``: the tags' agreement, from
    :func:`ohs.align.tags.align_with_tags`) whose refined pose shares less than ``caution_overlap`` is kept as it is
-   when ``hold_min_tags`` or more shared tags agree within ``hold_max_rms_mm``: the shapes only check it. They
-   overrule it only when they would move the scan by more than the larger of ``overrule_mm`` and ``overrule_sigmas``
-   times the tag pose's own sigma (a tag map wrong as a whole: the table moved with its tags); how much more the
-   shapes overlap at their own pose is reported (``overlap_at_shape``), not a trigger (two biased scans always fit
-   each other better at their own minimum). Fewer tags, or tags that disagree: the shapes' pose, as without the
-   hold, and a sentence says why. At ``caution_overlap`` or more nothing changes, bit for bit. The hold never turns a
+   when ``hold_min_tags`` or more shared tags agree within ``hold_max_rms_mm``: the shapes only check it, through
+   the refinement that started at the tags. When that refinement moved the scan by more than the larger of
+   ``overrule_mm`` and ``overrule_sigmas`` times the tag pose's own sigma from the tags' pose (a tag map wrong as a
+   whole: the table moved with its tags), the tags are not held and the answer is the one without the hold, pose
+   and numbers unchanged, with a sentence that says so (:func:`overruled_sentence`). There is no search from the
+   shapes alone: a part that fits about as well turned round would overrule right tags with it (ENGINE_PLAN X19,
+   the turned-over bracket). ``shape_moves_mm`` is how far the refinement from the tags moved the scan and
+   ``overlap_at_shape`` the overlap there, both reported; the overlap is not a trigger (two biased scans always fit
+   each other better at their own minimum). Fewer tags, or tags that disagree: the answer without the hold, and a
+   sentence says why. At ``caution_overlap`` or more nothing changes, bit for bit. The hold never turns a
    refusal into an acceptance: it weighs only a pose the refinement from the tags accepted (every one of the 31
    measured tag merges had one). And tags on the table do not hold a part that was moved between the scans
    (``same_setup`` False, the tags' corners within ``TABLE_TAG_MM`` of the target scan's table plane): they place the
@@ -605,69 +609,75 @@ def align_pair(src: ScanCloud, dst: ScanCloud, params: AlignParams | None = None
     ``tag_hold``: with ``params.hold_tags`` and a start from tags, how far the shared tags agree
     (``{"ids", "rms_mm", "sigma_mm"}``: :func:`ohs.align.tags.align_with_tags`), for the hold (module docstring, 8.)."""
     p = params if params is not None else AlignParams()
-    res = _align_pair(src, dst, p, init=init, same_setup=same_setup, init_from=init_from)
-    if not (p.hold_tags and init is not None and init_from == "tags" and tag_hold is not None
-            and res.accepted and res.overlap < p.caution_overlap):
-        return res  # never a refusal turned into an acceptance: the hold weighs only an accepted pose (module docstring, 8.)
+    hold = (p.hold_tags and init is not None and init_from == "tags" and tag_hold is not None)
+    pre = tag_hold.get("refined") if hold else None
+    res = pre if pre is not None else _align_pair(src, dst, p, init=init, same_setup=same_setup, init_from=init_from)
+    if not (hold and res.accepted and res.overlap < p.caution_overlap):
+        # never a refusal turned into an acceptance: the hold weighs only an accepted pose (module docstring, 8.); not
+        # weighed, the answer is the one without the hold
+        off = tag_hold.get("off") if hold else None
+        return off if off is not None else res
     return _hold(src, dst, p, res, np.asarray(init, dtype=np.float64).reshape(4, 4), tag_hold)
 
 
 def _hold(src: ScanCloud, dst: ScanCloud, p: AlignParams, res: PairAlignment, T_tags: np.ndarray, tag: dict) -> PairAlignment:
-    """The tag pose held, overruled, or too few tags to hold it (module docstring, 8.)."""
+    """The tag pose held, or not held: then the answer without the hold, with a sentence that says why (module docstring,
+    8.). ``res``: the refinement that started at the tags' pose ``T_tags``; the tags are judged by how far it moved the
+    scan from them (``shape_moves_mm``) and how much it overlaps there (``overlap_at_shape``), never by a search from the
+    shapes alone (a part that fits about as well turned round would overrule right tags: ENGINE_PLAN X19). ``tag``:
+    ``ids``, ``rms_mm``, ``sigma_mm``, ``dst_corners`` and, from :func:`ohs.align.tags.align_with_tags`, ``off``: the
+    alignment without the hold, returned (its pose and numbers unchanged) whenever the tags are not held."""
+    from dataclasses import replace as _replace  # noqa: PLC0415
+
     a, b = src.part, dst.part
+    base = tag.get("off") if tag.get("off") is not None else res
     ids = list(tag.get("ids") or [])
     rms = float(tag.get("rms_mm", float("nan")))
     sigma = float(tag.get("sigma_mm", 0.0))
+    moves = (_apart_mm(a.fine.pts, T_tags, res.T) if a is not None and a.n and np.all(np.isfinite(res.T))
+             else float("nan"))
     info = {"held_by_tags": False, "tag_rms_mm": round(rms, 4) if np.isfinite(rms) else None, "tags_used": ids,
-            "tag_pose_sigma_mm": round(sigma, 4), "shape_moves_mm": None, "overruled": None,
-            "overlap_at_shape": round(float(res.overlap), 4), "not_held": None}
-    res.tag_hold = info
+            "tag_pose_sigma_mm": round(sigma, 4), "shape_moves_mm": round(moves, 3) if np.isfinite(moves) else None,
+            "overruled": None, "overlap_at_shape": round(float(res.overlap), 4), "not_held": None}
+
+    def not_held(sentence: str) -> PairAlignment:
+        out = _replace(base, T=base.T.copy(), tag_hold=info)
+        out.verdict = f"{base.verdict} {sentence}" if sentence else base.verdict
+        return out
+
     if a is None or b is None or a.n == 0:
-        return res
+        return not_held("")
     corners = tag.get("dst_corners")
     if not res.same_setup and dst.support is not None and corners is not None and len(corners):
         # tags on the table say where the table is: when the part was moved between the scans they cannot place it
         n, d = dst.support
         if float(np.max(np.abs(np.asarray(corners, dtype=np.float64).reshape(-1, 3) @ n + d))) <= TABLE_TAG_MM:
             info["not_held"] = "the tags lie on the table and the part was moved between the scans"
-            res.verdict = (f"{res.verdict} Not held by the tags: the tags lie on the table and the part was moved between "
-                           "the scans, so they say where the table is, not the part.")
-            return res
+            return not_held("Not held by the tags: the tags lie on the table and the part was moved between the scans, "
+                            "so they say where the table is, not the part.")
     if len(ids) < p.hold_min_tags or not rms <= p.hold_max_rms_mm:
-        moves = _apart_mm(a.fine.pts, T_tags, res.T) if np.all(np.isfinite(res.T)) else float("nan")
-        info["shape_moves_mm"] = round(moves, 3) if np.isfinite(moves) else None
         why = (f"Only {len(ids)} tag{'s were' if len(ids) != 1 else ' was'} seen by both scans, too few to hold the position"
                if len(ids) < p.hold_min_tags else
                f"The tags both scans saw agree only within {rms:.2f} mm, too loosely to hold the position")
         info["not_held"] = why[0].lower() + why[1:]
-        res.verdict = f"{res.verdict} {why}; aligned from the shapes, starting at the tags."
-        return res
-    # where the shapes alone put the scan: their own guesses when they are sure (a start from tags that are wrong as a
-    # whole can stop in a poor local fit), else the refinement from the tags
-    alone = _align_pair(src, dst, p, same_setup=res.same_setup)
-    shape = alone if alone.accepted else res
-    moves = _apart_mm(a.fine.pts, T_tags, shape.T) if np.all(np.isfinite(shape.T)) else float("nan")
-    info["shape_moves_mm"] = round(moves, 3) if np.isfinite(moves) else None
-    info["overlap_at_shape"] = round(float(shape.overlap), 4)
+        return not_held(f"{why}; the shapes refined it, starting at the tags.")
     limit = max(float(p.overrule_mm), float(p.overrule_sigmas) * sigma)
     if np.isfinite(moves) and moves > limit:
-        info["overruled"] = f"the shapes would move the scan {moves:.1f} mm from where the tags put it (more than {limit:.1f} mm)"
-        shape.verdict = f"{shape.verdict} {overruled_sentence(moves)}"
-        shape.tag_hold = info
-        return shape
+        info["overruled"] = (f"the shapes, starting at the tags, moved the scan {moves:.1f} mm from where the tags put it "
+                             f"(more than {limit:.1f} mm)")
+        return not_held(overruled_sentence(moves, limit))
     s = _score(a, b, T_tags, p.match_mm)
     if not s[1] >= p.min_overlap:  # the tags put the scans where they hardly meet: nothing to check them with
         info["not_held"] = f"at the tags' position the two scans overlap too little ({100 * s[1]:.0f} %) to check it"
-        res.verdict = (f"{res.verdict} At the tags' position the two scans overlap too little ({100 * s[1]:.0f} %) to check "
-                       "it; aligned from the shapes.")
-        return res
+        return not_held(f"At the tags' position the two scans overlap too little ({100 * s[1]:.0f} %) to check it; the "
+                        "shapes refined it, starting at the tags.")
     out = PairAlignment(T=T_tags.copy(), start="tags", same_setup=res.same_setup, candidates=res.candidates, agree=res.agree,
                         turned=res.turned, reached=res.reached, ms=res.ms, poses=res.poses)
     _, out.overlap, out.rmse_mm, out.fit_mm, out.n_matched = s
     out.dof = _dof(a, b, T_tags, p.match_mm, p.weak_rel)
     out.accepted = out.sure = True
     info["held_by_tags"] = True
-    move = "" if not np.isfinite(moves) else f"; the shapes alone would put it {moves:.1f} mm away"
+    move = "" if not np.isfinite(moves) else f"; the shapes, starting at the tags, would move it {moves:.1f} mm"
     out.verdict = (f"Aligned from the {len(ids)} tags both scans saw (their corners agree within {rms:.2f} mm). The scans "
                    f"share little of the part ({100 * out.overlap:.0f} %), so the tags decide the position{move}.")
     out.little_shared = True
@@ -679,10 +689,12 @@ def _hold(src: ScanCloud, dst: ScanCloud, p: AlignParams, res: PairAlignment, T_
     return out
 
 
-def overruled_sentence(moves_mm: float) -> str:
-    """What the verdict adds when the shapes overrule the tags (module docstring, 8.)."""
-    return (f"The tags and the shapes disagree by {moves_mm:.1f} mm: a tag may have moved, or the part was moved with its "
-            "table. Aligned from the shapes.")
+def overruled_sentence(moves_mm: float, limit_mm: float) -> str:
+    """What the verdict adds when the tags are not held because the refinement from them moved the scan too far
+    (module docstring, 8.): the position is the one without the hold, which started at the tags."""
+    return (f"The tags did not hold this position: the shapes, starting at the tags, moved the scan {moves_mm:.1f} mm "
+            f"from where the tags put it (more than {limit_mm:.1f} mm). A tag may have moved, or the part was moved with "
+            "its table: check the tags.")
 
 
 def _align_pair(src: ScanCloud, dst: ScanCloud, p: AlignParams, *, init: np.ndarray | None = None,
