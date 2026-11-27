@@ -1043,10 +1043,14 @@ from the camera images".
     +0.00 mm, where today's tool reads 1.0 to 6.6 mm small.
   - Left: the fresh plates are at true poses only; the near-floor Ø10 with the dots on is
     answered by 3 to 7 clicks of 9; real images.
-- **Decided 2026-11-24 (E-D5): built into the app's hole tool.** Step 1, the engine module
-  (`ohs/measure/rim.py`, the study tool calling it), is being built; step 2 (the fit
-  route, the hole tool, the guide) follows the wall-thickness piece, which edits the same
-  files. A first version in the app's hole tool,
+- **Decided 2026-11-24 (E-D5): built into the app's hole tool.** **Step 1 done 2026-11-26:**
+  the engine module `ohs/measure/rim.py` (`read_hole`: round 6's reading, no switches; it
+  reports the entrance rim in the face's plane) and the study tool calling it. All 666
+  clicks of round 6 run again through the module are identical to the study's in every
+  field (diameter, ±, refusal, hole named, frames used); its tests pass on both paths. About
+  0.6 s a frame on this processor, 12 s for 20 frames. Step 2 (the fit route, the hole
+  tool, the guide) is next; the shared depth provider (`ohs/measure/frame_depth.py`) needs
+  the two raw images and the matcher's sigma for it. A first version in the app's hole tool,
   "from the images" beside the mesh's reading, 10 to 20 s a click on this processor: a new
   module `ohs/measure/rim.py` called after today's mesh answer, the answer gaining one
   field `from_images` (a diameter with its ±, or the words of a refusal).

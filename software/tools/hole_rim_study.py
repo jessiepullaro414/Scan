@@ -1310,6 +1310,7 @@ def scorecard_source(cache: Path, name: str, src: str, settings: str, off: bool,
     S_ = Source(stereo_cameras(cal), np.asarray(cal["P1"], float)[:3, :3], poses, imgs, depth, reads, off,
                 holes_of(rec), info)
     S_.frames = fr
+    S_.cal = cal
     return S_
 
 
@@ -1328,9 +1329,11 @@ def study_source(d: Path, off: bool) -> Source:
     holes = [{**h, "centre_true": np.asarray(h["centre_true"]), "clicks": [np.asarray(c) for c in h["clicks"]]}
              for h in st["holes"]]
     cal = st["calibration"]
-    return Source(stereo_cameras(cal), np.asarray(cal["P1"], float)[:3, :3], poses,
+    S_ = Source(stereo_cameras(cal), np.asarray(cal["P1"], float)[:3, :3], poses,
                   lambda i: _png_pair(d / ("off" if off else "on") / f"{i:06d}.png"), depth, reads, off, holes,
                   {"poses": "true"})
+    S_.cal = cal
+    return S_
 
 
 def read_click_model(S_: Source, click_w: np.ndarray) -> dict:
@@ -1925,30 +1928,16 @@ def _scorecard_sources4(cache: Path, work: Path, recs: list[str], poses: list[st
 
 
 # =========================================================================== round 6: the reading as it would ship
-PM_LIMIT_MM = 0.20  # refused above this ± (1 sigma; fixed from rounds 3 to 5's rows, NOTES.md round 6)
-CLICK_RIM_MM = 3.0  # the click must lie inside the read circle or within this of its rim
-ROUND6 = Step3(either=True, stereo=False, two_hyp=True, centre_rule=True, seed_nearest=True)
-
-
-def round6_refusal(r: dict, click: np.ndarray) -> str | None:
-    """Round 6's two refusals on a combined reading ``r`` (with ``d``, ``pm``, ``centre``, ``normal``) at the click
-    (both in the world): its own ± above :data:`PM_LIMIT_MM`, and the click outside the read circle by more than
-    :data:`CLICK_RIM_MM`. ``None`` when it stands."""
-    if r["pm"] > PM_LIMIT_MM:
-        return f"the frames do not agree well enough on this rim: ± {r['pm']:.2f} mm"
-    n = np.asarray(r.get("normal", [0.0, 0.0, 1.0]), float)
-    v = np.asarray(click, float) - np.asarray(r["centre"], float)
-    v -= (v @ n) * n
-    out = float(np.linalg.norm(v)) - r["d"] / 2.0
-    if out > CLICK_RIM_MM:
-        return f"the rim read in the images is {out:.0f} mm from the click: it is another hole's"
-    return None
+# The reading itself is the engine's since 2026-11-24 (ohs/measure/rim.py: the owner's decision); this tool keeps its
+# runs, rows and judging.
+from ohs.measure import rim as RIM  # noqa: E402
 
 
 def run6(sources: list[tuple], out: Path, hold: Path | None, tag: str = "round6") -> None:
     """Round 6: each ``(name, poses, dots, Source, gt, mesh path or None, mesh motion, kind)`` read at every click of
-    every hole with :data:`ROUND6`, its ± limit and its click test; with a mesh, the click is the mesh click (round
-    4), else the true one. One row a click, with the true hole each answered frame names (for judging only)."""
+    every hole by the engine's reading (:func:`ohs.measure.rim.read_hole`: round 6's rules, its ± limit and its click
+    test); with a mesh, the click is the mesh click (round 4), else the true one. One row a click, with the true hole
+    each answered frame names (for judging only)."""
     from scipy.spatial import cKDTree
 
     for name, src, dots, S_, gt, mesh_path, M, _ in sources:
@@ -1964,17 +1953,37 @@ def run6(sources: list[tuple], out: Path, hold: Path | None, tag: str = "round6"
                 t0 = time.perf_counter()
                 click_t = np.asarray(click_t, float)
                 click = mesh_click(S_, click_t, gt, tree, V) if V is not None else click_t
-                r, frames, names = read_click4(S_, click, ROUND6, gt, S_.holes)
-                rule = r.get("refused")
-                own = round6_refusal(r, click) if "d" in r and not rule else None
+                poses = {i: T for i in S_.reads if (T := S_.pose(i)) is not None}
+                res = RIM.read_hole(click, None, poses=poses, calib=S_.cal, images=S_.images,
+                                    points_of=lambda i, cC, T: S_.points(i, cC, T), frames=S_.reads)
+                names = []
+                for i, fr in res.frame_readings:
+                    if fr.ok and i in gt:
+                        cw = gt[i][:3, :3] @ fr.centre_C + gt[i][:3, 3]
+                        hh = min(S_.holes, key=lambda x: np.linalg.norm(cw - np.asarray(x["centre_true"])))
+                        names.append(hh["hole"] if np.linalg.norm(cw - np.asarray(hh["centre_true"])) < hh["d_true"] / 2
+                                     else "none")
+                own_words = ("do not agree well enough", "it is another hole's")
+                rule = res.refused if res.refused and not any(w in res.refused for w in own_words) else None
+                own = res.refused if res.refused and rule is None else None
                 named = max(set(names), key=names.count) if names else None
+                r = {"frames": res.frames, "frames_used": res.frames_used, "frame_refusals": res.frame_refusals,
+                     "warnings": res.warnings}
+                if res.diameter_mm is not None:
+                    r.update(d=res.diameter_mm, d_sd=res.d_sd, pm=res.pm_mm, pm_stat=res.pm_stat,
+                             cover_deg=res.covered_deg, t=res.wall_mm, centre=res.centre.tolist(),
+                             centre_scatter=res.centre_scatter)
+                    if res.normal is not None:
+                        r["normal"] = res.normal.tolist()
+                if res.position_unsure:
+                    r["position_unsure"] = True
                 row = {"tag": tag, "rec": name, "poses": src, "dots": dots, "hole": h["hole"], "click": k,
                        "click_kind": kinds[k], "allowed": allowed[k], "d_true": h["d_true"],
                        "path_check": S_.info.get("path_check"), "rule_refusal": rule, "round6_refusal": own,
                        "named": named, "named_share": (names.count(named) / len(names)) if names else None,
-                       "s": round(time.perf_counter() - t0, 1), **{kk: vv for kk, vv in r.items() if kk != "refused"}}
-                if rule or own:
-                    row["refused"] = rule or own
+                       "s": round(time.perf_counter() - t0, 1), **r}
+                if res.refused:
+                    row["refused"] = res.refused
                 if "d" in r:
                     # the diameter is judged against the hole the frames read (a bridge click may read either)
                     tru = next((x for x in S_.holes if x["hole"] == named), h)

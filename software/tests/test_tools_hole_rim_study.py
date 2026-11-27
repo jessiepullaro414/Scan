@@ -380,9 +380,12 @@ def pytest_approx(x):
     return pytest.approx(x, abs=1e-9)
 
 
-def test_round_6_refuses_on_its_own_plus_minus_and_on_a_click_far_from_the_read_rim():
-    r = {"d": 10.0, "pm": 0.12, "centre": [0.0, 0.0, 0.0], "normal": [0.0, 0.0, 1.0]}
-    assert H.round6_refusal(r, np.array([6.5, 0.0, 0.0])) is None  # 1.5 mm outside the rim
-    assert H.round6_refusal(r, np.array([1.0, 0.0, 0.3])) is None  # inside the circle
-    assert "another hole" in H.round6_refusal(r, np.array([9.0, 0.0, 0.0]))  # 4 mm outside
-    assert "do not agree well enough" in H.round6_refusal(dict(r, pm=0.21), np.array([6.5, 0.0, 0.0]))
+def test_round_6_reads_with_the_engines_reading():
+    """Round 6's reading is the engine's (ohs/measure/rim.py, tested in tests/test_measure_rim.py): one implementation."""
+    import inspect
+
+    from ohs.measure import rim
+
+    assert H.RIM is rim
+    assert "RIM.read_hole(" in inspect.getsource(H.run6)
+    assert rim.PM_LIMIT_MM == 0.20 and rim.CLICK_RIM_MM == 3.0
