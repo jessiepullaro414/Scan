@@ -943,7 +943,11 @@ and thin parts".
     - **Frame time stamps.** The app's camera class stamps a frame before it waits for it
       under DirectShow; real stamps jitter by 7.7 ms against the simulator's 0.2 ms. The
       mend is to take frame times from the camera's own frame count (Media Foundation's
-      stamps); Media Foundation took 82 s to open once, which must be understood first.
+      stamps). Media Foundation takes 80 s to open as the app opens it today; that is
+      OpenCV's hardware transforms, and with
+      `OPENCV_VIDEOIO_MSMF_ENABLE_HW_TRANSFORMS=0` set before OpenCV loads it opens in
+      0.6 s with the same frames and stamps. Not built: it changes how the camera is read
+      on Windows, so it waits for the owner's word.
     - **120 frames a second** as a camera setting (default unchanged), once frames in turn
       exist.
   - With 20 tags on the table 300 mm apart: the mesh's length -0.042 / +0.048 / +0.018 %

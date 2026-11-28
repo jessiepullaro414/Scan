@@ -7230,7 +7230,10 @@ Media Foundation.
   DirectShow it opens in 2.5 s and loses no frame, but its frame time stamps are off a straight line by 7.7 ms
   (spread), because the stamp is taken before the wait for the frame (16.0 ms before the frame is in hand; the
   constant part is absorbed by the motion sensor's calibrated time offset, the jitter is not). Through Media
-  Foundation the stamps (taken on arrival) are off by 5.5 ms, and opening took 82 s the one time it was tried.
+  Foundation the stamps (taken on arrival) are off by 5.5 ms, and opening took 82 s. The 82 s are OpenCV's
+  "hardware transforms" for Media Foundation: opening and each of the three size and rate settings take 20 s
+  with them (80 to 82 s, twice), and 0.6 s in all with `OPENCV_VIDEOIO_MSMF_ENABLE_HW_TRANSFORMS=0` set before
+  OpenCV is loaded; the frames, the rate and the exact stamps are the same either way (`msmfopen.py`).
   The simulator's recordings jitter their frame times by 0.2 ms. Not mended here; listed in ENGINE_PLAN X8.
 
 **What it means for frames in turn.** A Pico switching on its own clock can stay in step with this camera: the
