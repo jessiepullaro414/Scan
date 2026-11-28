@@ -205,6 +205,28 @@ def test_a_sphere_in_turn_and_the_rate_rule(sphere, tmp_path):
     assert not (tmp_path / "t" / "laser_trajectory.csv").exists()
 
 
+@pytest.mark.parametrize("rule", ["picked_by_motion", "rate_cap"])
+def test_a_fuse_at_the_first_pass_poses_uses_the_laser_frames_it_used(sphere, tmp_path, rule):
+    """Straighten and Fuse run the frame pass again at the first pass's poses. The dot frames with a pose are fused
+    (no new pick, no rate cap); the laser frames and their gap limit must follow the first pass's rule, or the laser
+    frames it used are left out as "gap" and the laser cloud is empty after Straighten."""
+    p = (ProcessParams(frame_motion_deg=30.0, frame_max_gap=8, health=False) if rule == "picked_by_motion"
+         else ProcessParams(max_frame_rate=10.0, health=False))  # 30 dot frames a second: every third
+    first = process_recording(sphere, tmp_path / "first", params=p)
+    a = first["frames_in_turn"]
+    assert first["frames"]["selection"]["by"] == ("motion" if rule == "picked_by_motion" else "step")
+    assert first["frames"]["processed"] < 12 and a["laser_frames"]["used"] >= 2, (first["frames"], a["laser_frames"])
+    poses = {i: T for i, _, ok, T in _rows(tmp_path / "first" / "trajectory.csv") if ok}
+    again = process_recording(sphere, tmp_path / "again", params=p, poses=poses)
+    b = again["frames_in_turn"]
+    assert b["placing"]["max_gap_s"] == pytest.approx(a["placing"]["max_gap_s"]), (a["placing"], b["placing"])
+    assert b["laser_frames"]["used"] == a["laser_frames"]["used"], (a["laser_frames"], b["laser_frames"])
+    la, lb = _rows(tmp_path / "first" / "laser_trajectory.csv"), _rows(tmp_path / "again" / "laser_trajectory.csv")
+    assert [r[0] for r in lb] == [r[0] for r in la]
+    assert all(np.allclose(x[3], y[3], atol=1e-9) for x, y in zip(la, lb))  # the same poses: placed the same
+    assert sum(again["lasers"]["n_points_raw"].values()) == sum(first["lasers"]["n_points_raw"].values()) > 0
+
+
 def test_a_laser_frame_beside_a_lost_or_cut_dot_frame_is_left_out(sphere, tmp_path, monkeypatch):
     times = RecordingReader(sphere).times()
     # a cut over dot frame 12 only (half way to its neighbours)

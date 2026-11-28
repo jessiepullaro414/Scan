@@ -84,7 +84,8 @@ stops the scan. With known poses there is no check (``path_check`` None).
   between two) and its points go into the same laser cloud. It is left out, and counted with the reason, when there
   is no dot frame on one side ("at_the_ends"), one of the two is not tracked ("untracked"), a cut lies between them or
   over it ("cut"), or they are more than ``GAP_FACTOR`` (2.5) times the usual gap apart ("gap"; the usual gap is the
-  recorded dot frames' median interval times the step, or times ``frame_max_gap`` when frames are picked by motion);
+  recorded dot frames' median interval times the step, or times ``frame_max_gap`` when frames are picked by motion;
+  at given poses the step and the pick are the first pass's, and the laser frames are every step-th as there);
 * ``mixed`` and ``dark`` frames are left out of everything and counted.
 
 ``laser_trajectory.csv`` (the rows of ``trajectory.csv``) holds the placed poses of the laser frames used, and
@@ -465,6 +466,7 @@ def process_recording(
     if poses is not None:
         poses = {int(k): np.asarray(T, dtype=np.float64).reshape(4, 4) for k, T in poses.items()}
         # nothing is tracked: no tracking model and no gyro prior, only the reconstruction
+        first_use_imu = bool(p.pipeline.use_imu)  # the first pass's setting, for its pick by motion (below)
         p = replace(p, pipeline=replace(p.pipeline, tracking=False, use_imu=False))
     export = _check_export(tuple(p.export))
     if int(p.frame_step) < 1:
@@ -535,8 +537,12 @@ def process_recording(
         # the rate cap and the step count the dot frames: 60 frames a second in turn is 30 dot frames a second
         step, rec_fps = effective_frame_step(t_all[np.asarray(dot_cand)], int(p.frame_step),
                                              max_rate if poses is None else 0.0)
+        # At given poses the dot frames with a pose are fused (no rate cap again), but the laser frames and their gap
+        # limit follow the first pass's rule, so a fuse at its poses uses the laser frames it used.
+        laser_step = step if poses is None else effective_frame_step(t_all[np.asarray(dot_cand)], int(p.frame_step),
+                                                                     max_rate)[0]
         positions = dot_cand[::step]
-        laser_pos = las_cand[::step]
+        laser_pos = las_cand[::laser_step]
         dt_dot = np.diff(t_all[np.asarray(dot_cand)])
         turn = {"dot_candidates": len(dot_cand), "laser_candidates": len(laser_pos),
                 "laser_fps": recorded_frame_rate(t_all[np.asarray(las_cand, dtype=np.int64)]),
@@ -576,13 +582,15 @@ def process_recording(
     else:
         after_cut = set()
     selection: dict[str, Any] = {"by": "step"}
+    # why frames cannot be picked by motion (None: they can); also says whether the first pass of given poses could
+    use_imu = bool(p.pipeline.use_imu) if poses is None else first_use_imu
+    why_not = (None if len(imu_t) >= 2 and calib.imu is not None and use_imu else
+               "the recording has no IMU samples" if len(imu_t) < 2 else
+               "there is no IMU calibration" if calib.imu is None else "the IMU is switched off (use_imu=False)")
     if motion_deg > 0 and poses is not None:
         # the second pass fuses exactly the frames of the first (the ones with a pose): no new pick
         selection = {"by": "given poses", "threshold_deg": motion_deg, "max_gap": int(p.frame_max_gap)}
     elif motion_deg > 0:
-        why_not = (None if len(imu_t) >= 2 and calib.imu is not None and p.pipeline.use_imu else
-                   "the recording has no IMU samples" if len(imu_t) < 2 else
-                   "there is no IMU calibration" if calib.imu is None else "the IMU is switched off (use_imu=False)")
         if why_not is not None:
             log.warning("cannot pick frames by motion: %s; processing every %d. frame instead", why_not, step)
             selection = {"by": "step", "threshold_deg": motion_deg, "max_gap": int(p.frame_max_gap),
@@ -665,7 +673,10 @@ def process_recording(
         laser_rows: list = []
         turn_block: dict[str, Any] | None = None
         if laser_frames is not None:
-            gap_steps = int(p.frame_max_gap) if selection.get("by") == "motion" else step
+            # the usual gap between dot frames: the first pass's (at given poses its pick by motion and its rate cap
+            # are not run again, but they made the gaps between the frames that have a pose)
+            by_motion = selection.get("by") == "motion" or (selection.get("by") == "given poses" and why_not is None)
+            gap_steps = int(p.frame_max_gap) if by_motion else laser_step
             max_gap_s = (GAP_FACTOR * turn["dot_interval_s"] * gap_steps if turn["dot_interval_s"] else math.inf)
             laser_rows, part = laser_frames.finish(traj_rows, cuts, max_gap_s, reader.ground_truth_poses())
             if n_laser_cut:

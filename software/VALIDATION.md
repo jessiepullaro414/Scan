@@ -7620,6 +7620,24 @@ lasers runs inside Make mesh and after a Fuse. With the server's processing, tag
 shifts here); the tag hold, cuts and frames picked by motion through the server; the thin-walls step, merging and
 freeing disk space on such a scan. Work files: `D:\OpenHandScan-work\scratch\turnM`.
 
+**The first two of those, mended the same day** (`ohs/app/process.py`). Straighten and Fuse run the frame pass
+again at the first pass's poses. There the dot frames that have a pose are fused, with no new pick and no rate cap,
+which is right; but the laser frames and their gap limit were worked out as if no pick and no cap had made the gaps
+between those dot frames. On the 24-frame sphere in turn (12 dot and 12 laser frames):
+
+| the first pass | laser frames it used / gap limit | the fuse at its poses, before | now |
+|---|---|---|---|
+| frames picked by motion (30 degrees, largest gap 8) | 8 of 12 / 0.667 s | none used: 8 left out as "gap" (limit 0.083 s) | the same 8, the same limit |
+| rate cap of 10 a second (every third dot frame) | every third / 0.250 s | every laser frame taken, limit 0.083 s: left out as "gap" | the same frames, the same limit |
+
+Now the laser frames at given poses are every step-th as in the first pass (its rate cap applied to them), and the
+gap limit is the first pass's: the largest gap of its pick by motion when it could pick by motion (it had the motion
+sensor's samples and calibration and the sensor was not switched off), else its step. The laser frames come out at
+the same poses and the laser cloud has the same number of points as the first pass's. A recording without kinds is
+not touched by this (the digests of "A recording without kinds gives the same result as before" still hold).
+Guard: `tests/test_app_process_in_turn.py`, two cases, both seen failing first. With the frame pass's other tests (unchanged results, the pick by motion, the pipeline, the quality settings) and the server's processing and in-turn tests: 95 pass and 4 are skipped on the processor path, 90 pass and 9 are skipped on the graphics card (each path skips the other's own tests).
+Not run through the server with frames picked by motion.
+
 ## What the metrics mean
 
 - **Stereo errors** compare the estimated raw intrinsics/extrinsics (`K1`, `K2`, `R`, `T`) with

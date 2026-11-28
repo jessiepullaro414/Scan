@@ -1039,9 +1039,11 @@ and thin parts".
          and Refine's stage folder get `laser_trajectory.csv`, and the crossings get
          Follow the camera's gap limit. The crossings run under the same held-out check
          as on any scan; no switch or wording was added.
-       - **Next:** the fuse at given poses uses a stricter gap limit than Follow the camera
-         when frames were picked by motion (the laser cloud would be empty after
-         Straighten), and does not apply the rate cap to the laser frames.
+       - **The fuse at the first pass's poses uses its laser frames, done 2026-11-28:** it
+         used a stricter gap limit than Follow the camera when frames were picked by
+         motion or thinned by the rate cap (the laser cloud came out empty after
+         Straighten: 8 laser frames used in tracking, none in the fuse). Now the laser
+         frames and their gap limit follow the first pass's rule.
        - **Not started, one at a time:** the calibration's health check (no
          laser-against-depth samples on such a scan); the thin-walls step and the hole
          reading (untried); freeing disk space (keeps every n-th frame and must keep both
