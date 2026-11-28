@@ -205,7 +205,8 @@ The trigger button starts/stops scanning. `process.py` produces the full-quality
 <rec>/
   meta.json            format_version=1, created, source ("camera"|"sim"), image_size [w,h] per camera, ...,
                        temperature_c {first,last,min,max,n} when the recording has temperatures
-  frames.csv           index,t_host,file
+  frames.csv           index,t_host,file            (+ ,kind when the writer keeps what light each frame holds:
+                       both | dots | lasers | mixed | dark; without the column every frame is `both`)
   frames/000000.png    side-by-side grayscale left|right (raw, unrectified)
   imu.csv              t_host,t_device,gx,gy,gz,ax,ay,az    (rad/s, m/s^2, IMU frame)
   events.csv           t_host,kind,value    kinds: button (down|up), session (pause|resume), cut ("t0,t1"),

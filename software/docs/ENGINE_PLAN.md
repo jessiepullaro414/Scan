@@ -971,6 +971,33 @@ and thin parts".
        real board: the main loop's lateness (USB writes, garbage collection; the loop
        leaves the motion sensor read out when a switch is due within 0.6 ms), the ESP32
        port, and how the Pico's clock keeps step with the camera's.
+    2. *Frame kinds, the simulator and the kind from the pictures, done 2026-11-27.*
+       - A recording can say what light each frame holds: `both` (today's frames), `dots`,
+         `lasers`, `mixed` (the switch fell inside the exposure) or `dark`. It is a fourth
+         column `kind` of `frames.csv`, written only by `RecordingWriter(kinds=True)`;
+         without it the files are byte for byte as before, and a recording without the
+         column reads as all `both` (`RecordingReader.kinds()`).
+       - `make_scan_recording(..., light="in_turn")` renders dot frames and laser frames in
+         turn (or any share of each per frame: a mix, a dark frame), the same scan, times
+         and ground truth as without it. Default renders are unchanged to the byte.
+       - `ohs.vision.frame_kind.frame_kind(left, right)` tells the kind from the pictures:
+         right on every frame of in-turn recordings of the bracket, a car panel and the
+         standing walls at 640 and 1280 px, on today's frames, on a 0.3 / 0.7 mix and on
+         dark frames; 3 to 4 ms a frame on the processor. Its weak side is `both` against
+         `mixed` (smallest margin 10 %): a light at a tenth of the exposure is not found,
+         an equal mix can read as `both`, and its full-light levels are fitted to the
+         simulator's room light. Nothing tried on real pictures. On the real scanner the
+         frame count (the camera's stamps) should say which frame is which, with the
+         pictures as the check.
+       - **The engine does not read the kinds yet:** an in-turn recording given to Make
+         mesh today would be processed as if every frame held both lights. Next step (3).
+    3. *The engine on in-turn recordings: not started.* Dot frames for depth, tracking and
+       the mesh; laser frames for the laser points, each placed between its neighbours by
+       time; `mixed` and `dark` frames left out. Then, one at a time: the crossings, Refine
+       with lasers, the thin-walls step, the hole reading, freeing disk space (which keeps
+       every n-th frame and must keep both kinds). Needs frame times that follow the
+       camera's clock (above): at 80 mm/s a time error of 7 ms is half a millimetre.
+    4. *Steering the Pico from the pictures: not started.* Needs 1, 2 and the real scanner.
   - With 20 tags on the table 300 mm apart: the mesh's length -0.042 / +0.048 / +0.018 %
     (without: -0.164 / +0.197 / +0.054), the camera path -0.052 / +0.060 / +0.003 % (without:
     0.18 to 0.45), the passes' slide 0.34 to 1.14 mm RMS (without: 1.4 to 11.4).

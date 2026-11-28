@@ -16,6 +16,9 @@ Image model per pixel (Lambertian surfaces; irradiance ``E`` in DN for an albedo
   drawn (two or four; by default the nominal layout with the lasers the calibration has).
   ``line_names`` switches them by family: ``"vertical"`` is every vertical-line laser, since the
   lasers of one family share one emitter channel; a full name (``"vertical_2"``) is one laser.
+* Frames whose emitters are switched in turn: :meth:`Renderer.render` scales ``E_dots`` and
+  ``E_lines`` by the share of the exposure each was lit (``dot_share``, ``line_share``; 1 and 1 by
+  default, today's frames).
 * Every emitter term is multiplied by its **visibility**: a second (shadow) ray cast from the
   surface point to the emitter origin.
 * ``S`` - laser speckle, a multiplicative random field (grain ~1 px) on the coherent light only.
@@ -301,20 +304,30 @@ class Renderer:
         log.debug("renderer ready (%dx%d, ss=%d, projector %s) in %.2fs", *self.size, ss, self._proj.image.shape, time.perf_counter() - t0)
 
     # ------------------------------------------------------------------ public API
-    def render(self, T_wc: np.ndarray, rectified: bool = False) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    def render(self, T_wc: np.ndarray, rectified: bool = False, *, dot_share: float = 1.0,
+               line_share: float = 1.0) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Render ``(left, right, depth)`` for camera pose ``T_wc`` (frame C -> sim world).
 
         ``left``/``right`` are RAW uint8 images (or rectified ones with ``rectified=True``),
         ``depth`` float32 (h, w) z-depth in mm in the rectified left camera, 0 = no hit.
+
+        ``dot_share`` / ``line_share``: the share of the exposure the dot projector / the line lasers
+        were lit (0 to 1; their light is scaled by it), for frames whose emitters are switched in turn:
+        ``(1, 0)`` a dot frame, ``(0, 1)`` a laser frame, ``(0.3, 0.7)`` a frame the switch fell inside,
+        ``(0, 0)`` a dark one. An emitter that ``params`` switches off stays off. At the default ``(1, 1)``
+        the pictures are exactly those of before the shares existed.
         """
         T_wc = np.asarray(T_wc, dtype=np.float64).reshape(4, 4)
+        shares = (float(dot_share), float(line_share))
+        if not all(0.0 <= s <= 1.0 for s in shares):
+            raise ValueError(f"dot_share and line_share must be within 0..1, got {shares}")
         t0 = time.perf_counter()
         cams = self._rect_cameras() if rectified else self._raw
         jobs = [(cams[0], False, False), (cams[1], False, False)]
         reuse_depth = cams[0].is_rect_left
         if not reuse_depth:
             jobs.append((self._depth_camera(), False, True))
-        res = self._trace_many(jobs, T_wc)
+        res = self._trace_many(jobs, T_wc, shares)
         left = self._finish(res[0], cams[0], 1.0)
         right = self._finish(res[1], cams[1], self.params.gain_right)
         w, h = self.size
@@ -480,7 +493,8 @@ class Renderer:
         return out
 
     # ------------------------------------------------------------------ tracing
-    def _trace_many(self, jobs: list[tuple[_Camera, bool, bool]], T_wc: np.ndarray) -> list[dict[str, np.ndarray]]:
+    def _trace_many(self, jobs: list[tuple[_Camera, bool, bool]], T_wc: np.ndarray,
+                    shares: tuple[float, float] = (1.0, 1.0)) -> list[dict[str, np.ndarray]]:
         cs = max(1024, int(self.params.chunk_rays))
         tasks = []
         for j, (cam, aux, depth_only) in enumerate(jobs):
@@ -490,7 +504,7 @@ class Renderer:
 
         def run(task: tuple) -> dict[str, np.ndarray]:
             _, cam, s, e, aux, depth_only = task
-            return self._shade(cam.origin, cam.dirs[s:e], cam.pix_angle[s:e], T_wc, aux, depth_only)
+            return self._shade(cam.origin, cam.dirs[s:e], cam.pix_angle[s:e], T_wc, aux, depth_only, shares)
 
         results = list(self._pool.map(run, tasks)) if self._pool is not None and len(tasks) > 1 else [run(t) for t in tasks]
         out = []
@@ -582,12 +596,15 @@ class Renderer:
         return E, lit
 
     def _shade(
-        self, o_c: np.ndarray, d_c: np.ndarray, pix: np.ndarray, T_wc: np.ndarray, aux: bool, depth_only: bool
+        self, o_c: np.ndarray, d_c: np.ndarray, pix: np.ndarray, T_wc: np.ndarray, aux: bool, depth_only: bool,
+        shares: tuple[float, float] = (1.0, 1.0),
     ) -> dict[str, np.ndarray]:
         """Trace one chunk of rays (origin ``o_c``, unit directions ``d_c`` in frame C).
 
         Returns ``z`` (depth in C, 0 = miss) and, unless ``depth_only``, the incoherent (``amb``)
-        and laser (``coh``) radiance per ray; ``aux`` adds the ground-truth layers."""
+        and laser (``coh``) radiance per ray; ``aux`` adds the ground-truth layers. ``shares``: the dot
+        projector's and the line lasers' share of the exposure (:meth:`render`); a share of 0 leaves
+        that light out as if it were switched off, a share of 1 leaves it as it is (the same numbers)."""
         p = self.params
         R, tw = T_wc[:3, :3], T_wc[:3, 3]
         d_w = d_c @ R.T
@@ -609,14 +626,15 @@ class Renderer:
         E_amb = p.ambient * (0.6 + 0.4 * np.clip(n_w @ _AMBIENT_DIR, 0.0, 1.0)) if p.ambient_on else np.zeros(m)
         E_coh = np.zeros(m)
         layers: dict[str, tuple[np.ndarray, np.ndarray]] = {}
-        if p.dots_on:
+        dot_share, line_share = shares
+        if p.dots_on and dot_share > 0:
             layers["dots"] = self._dots(X_c, n_c, X_w, n_w, T_wc, aux)
-            E_coh += layers["dots"][0]
-        if p.lines_on:
+            E_coh += layers["dots"][0] if dot_share == 1.0 else dot_share * layers["dots"][0]
+        if p.lines_on and line_share > 0:
             fp = t * pix[idx]
             for las in self._lasers:
                 layers[las.name] = self._line(las, X_c, n_c, X_w, n_w, T_wc, fp, aux)
-                E_coh += layers[las.name][0]
+                E_coh += layers[las.name][0] if line_share == 1.0 else line_share * layers[las.name][0]
         amb = np.full(n, p.background, np.float32)
         coh = np.zeros(n, np.float32)
         amb[idx] = alb * E_amb

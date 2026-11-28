@@ -19,6 +19,18 @@ to ``frames_failed.csv`` (``index, t_host, file, error``) when the failure is fo
 The other frames keep their indices and timestamps, so the gap shows. ``meta.json`` is replaced
 whole (temporary file, then a rename); :class:`RecordingReader` reads one that does not parse as
 empty and sets :attr:`RecordingReader.meta_damaged`.
+
+**What light a frame holds** (its *kind*, :data:`FRAME_KINDS`): ``both`` (the dots and the laser lines
+for the whole exposure, as every recording before kinds), ``dots`` (dots only), ``lasers`` (laser lines
+only), ``mixed`` (both, each for part of the exposure: the emitters were switched inside it) and
+``dark`` (no emitter lit). A writer made with ``kinds=True`` adds a fourth column ``kind`` to
+``frames.csv`` (and to ``frames_failed.csv``) and the count of each kind to ``meta.json``
+(``frame_kinds``); :meth:`RecordingWriter.write_frame` takes each frame's kind. The kind is a column of
+the frame's own row, not a file of its own, so it is written in the same line as the frame (a crash
+can not leave a frame without its kind or a kind without its frame), the rows' crash and failed-write
+handling covers it as it is, and code that reads the rows by column name (``csv.DictReader``) or
+copies them whole (the server's thinning) keeps working. A writer without ``kinds`` writes the files
+exactly as before; :meth:`RecordingReader.kinds` reads a recording without the column as all ``both``.
 """
 from __future__ import annotations
 
@@ -42,10 +54,13 @@ import numpy as np
 
 from ohs.types import Event, ImuSample, ScannerCalibration, StereoFrame
 
-__all__ = ["RecordingWriter", "RecordingReader", "FORMAT_VERSION", "recorded_frame_rate", "effective_frame_step"]
+__all__ = ["RecordingWriter", "RecordingReader", "FORMAT_VERSION", "FRAME_KINDS", "recorded_frame_rate",
+           "effective_frame_step"]
 
 log = logging.getLogger(__name__)
 FORMAT_VERSION = 1
+#: what light a frame holds (module docstring); ``both`` is every frame of a recording without kinds
+FRAME_KINDS = ("both", "dots", "lasers", "mixed", "dark")
 
 
 def recorded_frame_rate(frame_times: Iterable[float] | np.ndarray) -> float | None:
@@ -111,8 +126,11 @@ class RecordingWriter:
         png_compression: int = 1,
         workers: int | None = None,
         source: str = "camera",
+        kinds: bool = False,
         **meta: object,
     ) -> None:
+        """``kinds``: keep what light each frame holds (the ``kind`` column, module docstring); without it
+        the files are written as before and every frame is ``both``."""
         self.path = Path(path)
         if self.path.exists() and any(self.path.iterdir()) and not overwrite:
             raise FileExistsError(f"recording folder {self.path} is not empty")
@@ -131,7 +149,8 @@ class RecordingWriter:
         self._imu = open(self.path / "imu.csv", "w", newline="", encoding="utf-8")
         self._events = open(self.path / "events.csv", "w", newline="", encoding="utf-8")
         self._fw, self._iw, self._ew = csv.writer(self._frames), csv.writer(self._imu), csv.writer(self._events)
-        self._fw.writerow(["index", "t_host", "file"])
+        self._kinds: dict[str, int] | None = {} if kinds else None  # frames of each kind, for meta.json
+        self._fw.writerow(["index", "t_host", "file"] + (["kind"] if kinds else []))
         self._iw.writerow(["t_host", "t_device", "gx", "gy", "gz", "ax", "ay", "az"])
         self._ew.writerow(["t_host", "kind", "value"])
         self._gt_poses = None
@@ -153,9 +172,17 @@ class RecordingWriter:
         """Frames handed to :meth:`write_frame` whose rows are not written yet (PNG queued or being written)."""
         return len(self._pending)
 
-    def write_frame(self, frame: StereoFrame) -> None:
+    def write_frame(self, frame: StereoFrame, kind: str | None = None) -> None:
         """Queue one frame's PNG. Waits for the oldest PNG write while twice the workers' frames are
-        unwritten, so slow encoding can not pile up frames in memory here."""
+        unwritten, so slow encoding can not pile up frames in memory here.
+
+        ``kind``: what light the frame holds (:data:`FRAME_KINDS`; None = ``both``). Anything but ``both``
+        needs a writer made with ``kinds=True``: elsewhere it would be lost, so it raises ``ValueError``."""
+        kind = "both" if kind is None else str(kind)
+        if kind not in FRAME_KINDS:
+            raise ValueError(f"unknown frame kind {kind!r}; kinds: {', '.join(FRAME_KINDS)}")
+        if self._kinds is None and kind != "both":
+            raise ValueError(f"frame kind {kind!r} given to a recording writer made without kinds=True")
         name = f"{frame.index:06d}.png"
         while True:
             with self._lock:
@@ -168,8 +195,12 @@ class RecordingWriter:
         if "image_size" not in self.meta:
             self.meta["image_size"] = list(frame.image_size)
         fut = self._pool.submit(_imwrite, str(self.path / "frames" / name), sbs, self._png)
+        row = [frame.index, f"{frame.t_host:.6f}", name]
         with self._lock:
-            self._pending.append((fut, [frame.index, f"{frame.t_host:.6f}", name]))
+            if self._kinds is not None:
+                row.append(kind)
+                self._kinds[kind] = self._kinds.get(kind, 0) + 1
+            self._pending.append((fut, row))
             self._n += 1
             self._write_done_rows()
             self._flush_now_and_then()
@@ -191,7 +222,8 @@ class RecordingWriter:
             if self._failed_fh is None:
                 self._failed_fh = open(self.path / "frames_failed.csv", "w", newline="", encoding="utf-8")
                 self._failed_w = csv.writer(self._failed_fh)
-                self._failed_w.writerow(["index", "t_host", "file", "error"])
+                self._failed_w.writerow(["index", "t_host", "file"] + (["kind"] if self._kinds is not None else [])
+                                        + ["error"])
             self._failed_w.writerow([*row, str(exc)])
             self._failed_fh.flush()
 
@@ -282,6 +314,8 @@ class RecordingWriter:
         if self._failed_fh is not None:
             self._failed_fh.close()
         self.meta["n_frames"] = self._n
+        if self._kinds is not None:  # every frame handed to the writer, as n_frames
+            self.meta["frame_kinds"] = dict(sorted(self._kinds.items()))
         if self._n_failed:
             self.meta["incomplete"] = True
             self.meta["n_frames_failed"] = self._n_failed
@@ -324,10 +358,16 @@ class RecordingReader:
                 log.warning("recording %s: meta.json is damaged (%s); its frames are read without it", self.path,
                             meta if isinstance(meta, Exception) else f"a JSON {type(meta).__name__}, not an object")
         self.swap_lr = swap_lr
-        rows = list(csv.DictReader(_complete_lines(self.path / "frames.csv")))
+        table = csv.DictReader(_complete_lines(self.path / "frames.csv"))
+        rows = list(table)
         self._index = np.array([int(r["index"]) for r in rows], dtype=np.int64)
         self._times = np.array([float(r["t_host"]) for r in rows], dtype=np.float64)
         self._files = [r["file"] for r in rows]
+        # what light each frame holds: the "kind" column, or all "both" for a recording written without it (an
+        # empty cell, which no writer leaves, reads as "both" too)
+        self.has_kinds = "kind" in (table.fieldnames or [])
+        kinds = [r.get("kind") or "both" for r in rows] if self.has_kinds else ["both"] * len(rows)
+        self._kinds = np.array(kinds, dtype=str) if kinds else np.zeros(0, dtype="<U6")
         self._imu_cache: dict[str, np.ndarray] | None = None
 
     def __len__(self) -> int:
@@ -339,8 +379,13 @@ class RecordingReader:
         f = self.path / "frames_failed.csv"
         if not f.exists():
             return []
-        return [{"index": int(r["index"]), "t_host": float(r["t_host"]), "file": r["file"], "error": r["error"]}
-                for r in csv.DictReader(_complete_lines(f))]
+        out = []
+        for r in csv.DictReader(_complete_lines(f)):
+            d = {"index": int(r["index"]), "t_host": float(r["t_host"]), "file": r["file"], "error": r["error"]}
+            if "kind" in r:  # a recording with kinds: the failed frame's too
+                d["kind"] = r["kind"] or "both"
+            out.append(d)
+        return out
 
     @property
     def incomplete(self) -> bool:
@@ -354,6 +399,12 @@ class RecordingReader:
     def times(self) -> np.ndarray:
         """Host timestamps of all frames (s)."""
         return self._times.copy()
+
+    def kinds(self) -> np.ndarray:
+        """What light each frame holds (:data:`FRAME_KINDS`), a string array in recording order like
+        :meth:`times`: all ``both`` for a recording written without kinds (:attr:`has_kinds` False). Read with
+        the frame rows, so it costs a copy."""
+        return self._kinds.copy()
 
     def frame(self, i: int) -> StereoFrame:
         """Frame at position ``i`` (0..len-1) in recording order."""

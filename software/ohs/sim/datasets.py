@@ -4,7 +4,9 @@
   raw side-by-side frames, IMU at 416 Hz, trigger events (down before the first frame, up after
   the last), the IMU chip's temperature once a second (a slow warm-up, like firmware 1.1),
   ``calibration.json`` (the TRUE calibration) and ``ground_truth/`` (``T_wc`` per frame in the
-  Z-up sim world, rectified-left depth maps).
+  Z-up sim world, rectified-left depth maps). With ``light`` its frames come with the emitters
+  switched in turn (dot frames and laser frames, or any share of each per frame), each frame's kind
+  written (:func:`light_kind`).
 * :func:`make_stereo_calib_set` renders a ChArUco board (ambient light only) at varied poses for
   stereo calibration; :func:`make_laser_calib_set` renders the board with the line lasers on
   (dots off) for laser-plane calibration and returns the true board poses ``T_cb``. Both laser
@@ -40,6 +42,7 @@ from ohs.types import Event, ScannerCalibration, StereoFrame
 
 __all__ = [
     "DEFAULT_BOARD",
+    "light_kind",
     "make_scan_recording",
     "make_stereo_calib_set",
     "make_laser_calib_set",
@@ -82,6 +85,37 @@ def _imu_temperature(t_start: float, t_end: float, seed: int) -> tuple[list[floa
     return [float(x) for x in t], [float(x) for x in c]
 
 
+def light_kind(dot_share: float, laser_share: float) -> str:
+    """The kind (``ohs.io.recording.FRAME_KINDS``) of a frame whose dot projector and line lasers were
+    lit these shares of its exposure: ``dark`` (neither), ``dots`` / ``lasers`` (one alone, at any share),
+    ``both`` (both for the whole exposure, the frames of today) or ``mixed`` (both, at least one of them
+    for part of the exposure)."""
+    d, s = float(dot_share), float(laser_share)
+    if d <= 0.0 and s <= 0.0:
+        return "dark"
+    if s <= 0.0:
+        return "dots"
+    if d <= 0.0:
+        return "lasers"
+    return "both" if d >= 1.0 and s >= 1.0 else "mixed"
+
+
+def _frame_shares(light: str | Sequence[tuple[float, float]] | None, n: int) -> list[tuple[float, float]] | None:
+    """``(dot share, laser share)`` per frame for :func:`make_scan_recording`'s ``light`` (None: today's frames)."""
+    if light is None:
+        return None
+    if isinstance(light, str):
+        if light != "in_turn":
+            raise ValueError(f"light must be None, 'in_turn' or one (dot share, laser share) pair per frame, got {light!r}")
+        return [(1.0, 0.0) if i % 2 == 0 else (0.0, 1.0) for i in range(n)]
+    out = [(float(a), float(b)) for a, b in light]
+    if len(out) != n:
+        raise ValueError(f"light has {len(out)} (dot share, laser share) pairs for {n} frames")
+    if not all(0.0 <= v <= 1.0 for pair in out for v in pair):
+        raise ValueError("every share in light must be within 0..1")
+    return out
+
+
 def make_scan_recording(
     out_dir: str | Path,
     scene: str | Scene = "sphere_on_plane",
@@ -103,6 +137,7 @@ def make_scan_recording(
     png_compression: int = 1,
     lasers: int = 2,
     layout: str | None = None,
+    light: str | Sequence[tuple[float, float]] | None = None,
 ) -> Path:
     """Simulate a hand-held scan and write it as a recording folder; returns its path.
 
@@ -113,9 +148,20 @@ def make_scan_recording(
     ``depth_every`` = k keeps ground-truth depth for every k-th frame only (0 = none). ``lasers``
     is the scanner's number of line lasers, 2 or 4, and `layout` their aims
     (:func:`~ohs.sim.nominal.nominal_calibration`).
+
+    ``light``: what light each frame holds. ``None`` (the default): the dots and the lasers in every
+    frame, as always, and no kinds written. ``"in_turn"``: dot frames and laser frames in turn, even
+    frames the dots only, odd frames the lasers only. Or one ``(dot share, laser share)`` pair per
+    frame, the share of the exposure each emitter was lit (``Renderer.render``'s ``dot_share`` /
+    ``line_share``; e.g. ``(0.3, 0.7)`` when the switch fell inside the exposure, ``(0, 0)`` a dark
+    frame). With ``light`` given, each frame's kind (:func:`light_kind`; ``dots=False`` /
+    ``lines=False`` count as a share of 0) is written to the recording (``RecordingWriter(kinds=True)``)
+    and ``meta.json`` has ``light``. The motion, the frame times, the IMU and the ground truth (poses,
+    depth) are those of the same scan without ``light``.
     """
     out = Path(out_dir)
     wall = time.perf_counter()
+    shares = _frame_shares(light, int(n_frames))
     calib = nominal_calibration(image_size, realistic=realistic, lasers=lasers, layout=layout)
     sc = make_scene(scene, seed)
     rp = replace(params or RenderParams(), dots_on=bool(dots), lines_on=bool(lines), seed=int(seed))
@@ -145,8 +191,10 @@ def make_scan_recording(
         "render_params": asdict(rp),
         "trajectory": repr(trajectory),
     }
+    if shares is not None:
+        meta["light"] = light if isinstance(light, str) else [list(s) for s in shares]
     with Renderer(calib, nominal_emitters(baseline=calib.stereo.baseline, lasers=lasers, layout=layout), sc, rp) as renderer, RecordingWriter(
-        out, overwrite=overwrite, png_compression=png_compression, source="sim", **meta
+        out, overwrite=overwrite, png_compression=png_compression, source="sim", kinds=shares is not None, **meta
     ) as w:
         w.write_calibration(calib)
         w.write_event(Event(float(t_exp[0]) - 0.2, "button", "down"))
@@ -154,8 +202,14 @@ def make_scan_recording(
         for t, c in zip(*_imu_temperature(float(t_exp[0]) - 0.5, float(t_exp[-1]) + 0.5, seed)):
             w.write_event(Event(t, "temperature", f"{c:.2f}"))
         for i in range(len(t_cam)):
-            left, right, depth = renderer.render(poses[i])
-            w.write_frame(StereoFrame(i, float(t_host[i]), left, right))
+            if shares is None:
+                left, right, depth = renderer.render(poses[i])
+                w.write_frame(StereoFrame(i, float(t_host[i]), left, right))
+            else:
+                ds, ls = shares[i]
+                left, right, depth = renderer.render(poses[i], dot_share=ds, line_share=ls)
+                kind = light_kind(ds if rp.dots_on else 0.0, ls if rp.lines_on else 0.0)
+                w.write_frame(StereoFrame(i, float(t_host[i]), left, right), kind=kind)
             w.write_ground_truth_pose(i, float(t_host[i]), poses[i])
             if depth_every and i % depth_every == 0:
                 w.write_ground_truth_depth(i, depth)
