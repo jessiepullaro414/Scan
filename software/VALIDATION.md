@@ -7570,6 +7570,56 @@ stricter than the frame pass's for those); four lasers in turn; the graphics car
 check and the tests; real pictures. Work files: `D:\OpenHandScan-work\scratch\turnX` (`NOTES.md`, `measure.py`,
 `meas`).
 
+## Make mesh on a scan with frames in turn (ENGINE_PLAN X8, 2026-11-28)
+
+The app's Make mesh was run through the server on a scan whose recording has frames in turn, for the stages Follow
+the camera, Straighten, Fuse and Refine with lasers. Simulator only: the app cannot record such a scan yet. Most of
+it worked already, because the stages call the frame pass and the laser crossings, which know frames in turn. Three
+things were wrong in the server and are mended (`ohs/server/processing.py`):
+
+| found | mended |
+|---|---|
+| the scan's result folder got no `laser_trajectory.csv` (a new base copies a fixed list of files) | copied with the others, when the stage has one |
+| Refine with lasers' stage folder got none either | the same |
+| the laser crossings were not given the gap limit Follow the camera placed its laser frames with | passed on from Follow the camera's report (`frames_in_turn.placing.max_gap_s`) |
+
+**What already worked.** Follow the camera's stage folder holds `laser_trajectory.csv` and its report
+`frames_in_turn`. Straighten's loops read frames by the trajectory's rows, which are dot frames, and so does the tag
+hold. The laser crossings were given the dot frames' trajectory. Every fuse at new poses (after the loops, after
+the crossings, and the Fuse stage) places the laser frames again between the new dot poses. Refine with lasers pulls
+the mesh onto the stage's laser cloud, which on such a scan holds the laser frames' points only ("Pulled 6.7 % of
+the surface onto 2,935 laser points" in the test's Make mesh). Also new: what the crossings used goes into
+Straighten's report as `frames_in_turn.laser_crossings`. No switch and no wording for the user was added.
+
+**A scan without frames in turn runs exactly as before:** each change does nothing without a
+`laser_trajectory.csv` or a `frames_in_turn` block, and the existing server tests pass unchanged.
+
+**Tests.** `tests/test_server_process_in_turn.py`, 4 (three failed on the unchanged server): a 24-frame scan in
+turn (12 dot and 12 laser frames, 640 x 400, Preview quality) through Make mesh. The scan is too short for loops and
+has too few crossings, so both steps run for real and their poses are then moved by a known shift each, which makes
+Straighten's own fuse and the fuse after the crossings run. Checked: the trajectory holds dot frames only; the
+laser frames are placed, and placed again after each change of the poses, exactly by the frame pass's rule; the
+crossings get the dot trajectory and the gap limit; the result folder holds the base stage's files; Refine with
+lasers runs inside Make mesh and after a Fuse. With the server's processing, tag, cut and keep tests and the in-turn frame pass and crossings tests: 75 pass on the processor path; 69 pass and 6 are skipped on the graphics card (the crossings' digests are the processor path's).
+
+**Found, not mended here (outside this task).**
+
+- **The fuse at given poses uses a stricter gap limit than Follow the camera when frames were picked by motion**
+  (`frame_motion_deg`, off by default): 24-frame sphere, picked at 30 degrees with a largest gap of 8: Follow the
+  camera used 8 laser frames (gap limit 0.667 s), the fuse at the same poses used none (0.083 s). On such a scan
+  the laser cloud would be empty after Straighten or Fuse. The next task.
+- At given poses the fuse does not apply Follow the camera's rate cap to the laser frames, so under a cap it would
+  use more laser frames than Follow the camera did (read from the code, not run).
+- The calibration's health check gets no laser-against-depth samples from such a scan (its laser-against-mesh
+  sign works).
+- The thin-walls step and Refine from the images do not copy `laser_trajectory.csv` into their stage folders (the
+  result folder keeps the previous base's, which has the same poses). `laser_trajectory.csv` is not offered as a
+  download.
+
+**Not tested.** Standard and Best quality; real loops or real crossings changing an in-turn scan (both are known
+shifts here); the tag hold, cuts and frames picked by motion through the server; the thin-walls step, merging and
+freeing disk space on such a scan. Work files: `D:\OpenHandScan-work\scratch\turnM`.
+
 ## What the metrics mean
 
 - **Stereo errors** compare the estimated raw intrinsics/extrinsics (`K1`, `K2`, `R`, `T`) with

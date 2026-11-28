@@ -57,6 +57,15 @@ are "not measured", 50 mm), the stats get ``sigma_mm`` and ``result/mesh.ply`` i
 A new base also copies the stage's ``report.json``, ``trajectory.csv``, ``laser_points.ply`` and
 ``marker_map.json`` into ``result/`` (the M1 files), so the viewer and downloads stay complete.
 
+**Frames in turn** (a recording whose frames alternate dot frames and laser frames, :mod:`ohs.app.process`): the
+stages run as on any scan; ``trajectory.csv`` holds the dot frames (the loops and every fuse read those),
+``laser_trajectory.csv`` the laser frames each fuse placed between them (a fuse at given poses places them again
+between those poses), and the laser cloud is theirs. A new base and Refine with lasers copy ``laser_trajectory.csv``
+too. The laser crossings get the dot frames' trajectory and the gap limit Follow the camera placed the laser frames
+with (:func:`_in_turn_gap`); their ``frames_in_turn`` goes into Straighten's report as
+``frames_in_turn.laser_crossings``. A scan without frames in turn has none of these files or keys and runs as before
+(``tests/test_server_process_in_turn.py``).
+
 **Make mesh again** (UX_PLAN R2): Make mesh and a recipe on everything build in ``scans/<sid>/.remake-<job id>/``
 (its own ``process/`` and ``result/``) and take the old ones' place only when they have finished
 (:meth:`ProcessManager._run_staged`, :func:`swap_in`); a cancelled or failed run leaves the scan as it was, and an
@@ -683,6 +692,28 @@ def _carry_crossings_warning(report: dict, crep: dict | None) -> bool:
     if w in ws:
         return False
     report["warnings"] = ws + [w]
+    return True
+
+
+def _in_turn_gap(track_report: Path) -> dict:
+    """The laser crossings' keywords for a scan recorded with frames in turn: ``laser_max_gap_s``, the gap limit the
+    frame pass of Follow the camera placed its laser frames with (its report's ``frames_in_turn.placing.max_gap_s``),
+    so the crossings place them by the same rule. ``{}`` for a scan without frames in turn: called as before."""
+    placing = ((_read_json(track_report) or {}).get("frames_in_turn") or {}).get("placing") or {}
+    gap = placing.get("max_gap_s") if isinstance(placing, dict) else None
+    if isinstance(gap, bool) or not isinstance(gap, (int, float)) or not gap > 0:
+        return {}
+    return {"laser_max_gap_s": float(gap)}
+
+
+def _carry_crossings_in_turn(report: dict, crep: dict | None) -> bool:
+    """On a scan with frames in turn, the laser crossings' account of the laser frames they used
+    (``crep["frames_in_turn"]``) goes into the stage's fused report, as ``frames_in_turn.laser_crossings``. Returns
+    whether it was added (never for a scan without frames in turn)."""
+    part = (crep or {}).get("frames_in_turn")
+    if not isinstance(part, dict) or not isinstance(report.get("frames_in_turn"), dict):
+        return False
+    report["frames_in_turn"]["laser_crossings"] = part
     return True
 
 
@@ -2303,7 +2334,7 @@ class ProcessManager:
             sp.state["edits"], sp.state["cursor"] = [], 0
             _save_npz(sp.cache_path(0), V, F, N, S, L=L)
             sp.result_dir.mkdir(parents=True, exist_ok=True)
-            for name in ("report.json", "trajectory.csv", "laser_points.ply", "marker_map.json"):
+            for name in ("report.json", "trajectory.csv", "laser_trajectory.csv", "laser_points.ply", "marker_map.json"):
                 src = stage_dir / name
                 if src.is_file():
                     tmp = sp.result_dir / f".{name}.tmp-{uuid.uuid4().hex[:8]}"
@@ -2478,7 +2509,8 @@ class ProcessManager:
                     rows_cur = [(i, t, True, cur[i]) for i, t, ok, _ in traj if ok and i in cur]
                     new_poses, crep = laser_curve_adjustment(
                         sp.recording_dir, calib, rows_cur, reference=(Vr, Fr), cancelled=lambda: ctx.cancelled,
-                        progress=lambda f, m: prog(_span(STRAIGHTEN_SPANS["crossings"], f), f"Laser crossings: {m}"))
+                        progress=lambda f, m: prog(_span(STRAIGHTEN_SPANS["crossings"], f), f"Laser crossings: {m}"),
+                        **_in_turn_gap(sp.dir / "track" / "report.json"))
             except (JobCancelled, InterruptedError):
                 raise
             except Exception as e:
@@ -2515,6 +2547,7 @@ class ProcessManager:
                 corr_deg = max(float(corr_deg or 0.0), float(crep.get("moved_deg") or 0.0))
             (sp.dir / "straighten" / "straighten.json").write_text(json.dumps(jsonable(rep), indent=1), encoding="utf-8")
             said = _carry_crossings_warning(report, crep) if adjusted else False
+            said = _carry_crossings_in_turn(report, crep) or said
             if _set_straighten(report, rep) or said:  # with the laser crossings, which came after the first fuse
                 _write_json(sp.dir / "straighten" / "report.json", report)
             prog(0.96, "Saving the mesh", force=True)
@@ -2628,7 +2661,7 @@ class ProcessManager:
             tmp.mkdir(parents=True)
             try:
                 save_refined_mesh(tmp / "mesh.ply", V2, F, S, L)  # the vertices move: each keeps its sigma and looks
-                for name in ("trajectory.csv", "laser_points.ply", "marker_map.json"):
+                for name in ("trajectory.csv", "laser_trajectory.csv", "laser_points.ply", "marker_map.json"):
                     if (src_dir / name).is_file():
                         shutil.copy2(src_dir / name, tmp / name)
                 report: dict = {}

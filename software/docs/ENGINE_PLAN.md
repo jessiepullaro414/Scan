@@ -1033,11 +1033,16 @@ and thin parts".
          and 7 of 9 without, and left the true poses of the short walls and sphere scans 3
          to 5 times less wrong (the bracket's a little).
          It changes scan results, so it needs the scorecard before it is adopted (E-D1).
-       - **Not started, one at a time:** the server's Straighten step on such a scan (pass
-         the dot frames' trajectory, fuse again with the laser frames placed again, and
-         say that the crossings are not relied on, or leave them off); Refine with lasers
-         (untried: it reads the laser cloud, which the frame pass fills from the laser
-         frames); the calibration's health check (no
+       - **The app's Make mesh on such a scan, done 2026-11-28** (`VALIDATION.md`, "Make mesh
+         on a scan with frames in turn"): Follow the camera, Straighten, Fuse and Refine
+         with lasers through the server. Most worked already; mended: the result folder
+         and Refine's stage folder get `laser_trajectory.csv`, and the crossings get
+         Follow the camera's gap limit. The crossings run under the same held-out check
+         as on any scan; no switch or wording was added.
+       - **Next:** the fuse at given poses uses a stricter gap limit than Follow the camera
+         when frames were picked by motion (the laser cloud would be empty after
+         Straighten), and does not apply the rate cap to the laser frames.
+       - **Not started, one at a time:** the calibration's health check (no
          laser-against-depth samples on such a scan); the thin-walls step and the hole
          reading (untried); freeing disk space (keeps every n-th frame and must keep both
          kinds); live scanning. All need frame times that follow the camera's clock
