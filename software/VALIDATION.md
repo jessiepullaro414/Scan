@@ -7363,9 +7363,9 @@ frames, clocks 50 and 100 parts in a million apart over ten minutes, six kinds o
 drift later, DirectShow-like and Media-Foundation-like captures, the fallback to DirectShow, two cameras, the
 order of the interfaces. With the camera, settings, device and setup tests: 135 pass.
 
-**Not tested.** Linux (V4L2 gives stamps too; irregular ones fall back to arrival times), two real cameras, the
-packaged exe (it imports `ohs` first, by reading its start-up code), a PC with several cameras (their numbers could
-differ between the two interfaces). Work files: `D:\OpenHandScan-work\scratch\camT` (`realcam3.txt`, `raw_60.npz`,
+**Not tested.** Linux (V4L2 gives stamps too; irregular ones fall back to arrival times), two real cameras, a PC
+with several cameras (their numbers could differ between the two interfaces). The packaged exe was tested on
+2026-11-28, below. Work files: `D:\OpenHandScan-work\scratch\camT` (`realcam3.txt`, `raw_60.npz`,
 `raw_120.npz`) and `D:\OpenHandScan-work\scratch\cam` (`after.py`, `longedge.json`).
 
 **The whole suite after the four pieces of frames in turn (commit af02982, 2026-11-28).** The whole test suite on
@@ -7376,6 +7376,41 @@ reports was 5 before, between and after). A first run the evening before was cut
 graphics pass with no failure up to there, when Windows Update restarted the PC (a planned restart in the Windows
 log, not a crash); this is the second run, from the start. The exe is still the one built from ca5a97e: the
 engine's default results are unchanged since, but the camera is read differently now, so it is due a rebuild.
+
+**One connection in 31 was timed on arrival, and the mend (2026-11-28).** The exe rebuilt from a0eb137 was connected
+to the real camera through the app's own route (`POST /api/device/connect`, camera only). It opened through Media
+Foundation in 1.2 s, but that first connection said `frame_times` "arrival": the camera's clock was not used, for the
+whole connection, and nothing in the log said why (the reason was logged below the default level). It was the first
+time the camera was opened after the PC had restarted. It did not happen again:
+
+| connections to the real camera after that | timed by the camera's clock |
+|---|---|
+| the same exe, twice | 2 of 2 |
+| a fresh copy of the exe, its first start | 1 of 1 |
+| the app from Python, same route | 1 of 1 |
+| the camera class from Python, 12 opens, PC idle | 12 of 12 |
+| the same, 14 opens with 16 processes keeping every core busy | 14 of 14 (the first open took 7.8 s, the rest 0.9 to 1.1 s) |
+
+So the cause of that one connection is NOT known. What is known is how the decision was made: the first 20 frames
+(a third of a second) were judged once, and for good. Two kinds of start fail that judgement although the camera's
+clock is fine, both shown on simulated clocks: frames held up while the PC is busy and then handed over together
+(the stamps then seem to run 2.35 times as fast as the arrivals), and a stream whose first stamps are not on its
+frame clock yet. The mend:
+
+- A stretch that does not look like a frame clock is looked at again: up to four stretches, and no new one after
+  two seconds. Only then are the frames timed on arrival. A capture that gives no stamps at all (DirectShow) is
+  still decided at its first frame.
+- When the stamps are given up, the log says so as a warning with the reason, and `StereoCamera.info` carries it
+  (`frame_times_reason`; the app's device state passes `info` on).
+- Tests: five new cases on simulated clocks (four kinds of slow start keep the camera's clock; stamps that stay
+  unusable are given up within the bound), seen failing first. With the camera, device, setup and command-line
+  tests: 158 pass.
+- On the real camera after the mend: 6 of 6 opens by the camera's clock (0.8 to 1.2 s); 30 s at 60 a second, 1802
+  frames, none lost, frame-to-frame time off the period 0.0001 ms at worst, as before.
+
+Open: the one connection could not be made to happen again, so the mend is not proven against it; if it returns,
+the reason is now in the log and in the device state. Work files: `D:\OpenHandScan-work\scratch\cam` (`exe_cam.py`,
+`openmany.py`, `openmany_idle.json`, `openmany_load.json`, `openmany_after.json`).
 
 ## What the metrics mean
 

@@ -151,6 +151,52 @@ def test_stamps_that_break_later_fall_back_without_going_back_in_time():
     assert np.allclose(np.asarray(ts)[-50:], arrivals[pos][-50:], atol=2e-6)
 
 
+# A slow start must not cost the camera's clock for the whole connection: the first stretch is
+# looked at again before the stamps are given up (seen once on the real camera, 2026-11-28: the
+# first connection after the PC had restarted was timed on arrival; 30 later ones were not).
+@pytest.mark.parametrize("start", ["held_up_then_together", "irregular_first_stamps", "few_frames_at_first",
+                                   "one_stamp_twice"])
+def test_a_slow_start_does_not_cost_the_camera_clock(start):
+    rng = np.random.default_rng(6)
+    period = 1 / 60
+    frames = np.arange(600)
+    if start == "few_frames_at_first":  # the first second gives three frames, 0.45 s apart
+        frames = np.concatenate([[0, 27, 54], np.arange(60, 600)])
+    stamps = 4.5e8 + frames * period * 1e3
+    true = 700.0 + frames * period
+    arrivals = bursty_arrivals(true, period, rng)
+    if start == "held_up_then_together":  # the PC was busy for 0.2 s: twelve frames are handed over at once
+        arrivals[:12] = arrivals[12]
+    elif start == "irregular_first_stamps":  # a stream whose first stamps are not yet on its frame clock
+        stamps[:6] += np.array([0.0, 3.1, -2.2, 5.4, 1.3, -4.0])
+    elif start == "one_stamp_twice":
+        stamps[3] = stamps[2]
+    clock, pos, idx, ts = run_clock(stamps, arrivals)
+    assert clock.mode == "camera" and clock.reason == "", clock.reason
+    assert clock.period == pytest.approx(period, rel=1e-6)
+    assert pos[0] <= 90  # at most a few stretches of learning before frames are given out
+    assert true[pos[0]] - true[0] <= cam_mod._FrameClock.LEARN_MAX_SECONDS + 0.1
+    assert np.max(np.abs(np.diff(ts) - np.diff(frames[pos]) * period)) < 1e-4
+    assert idx[0] == 0 and strictly_increasing(idx) and strictly_increasing(ts)
+
+
+def test_stamps_that_stay_unusable_are_given_up_after_a_bounded_time():
+    rng = np.random.default_rng(7)
+    period = 1 / 60
+    n = 400
+    true = 50.0 + np.arange(n) * period
+    arrivals = bursty_arrivals(true, period, rng)
+    for stamps in (1000.0 + np.cumsum(rng.uniform(1.0, 40.0, n)), 1000.0 + np.arange(n) * 1.0):
+        clock, pos, idx, ts = run_clock(stamps, arrivals)
+        assert clock.mode == "arrival" and clock.reason
+        assert true[pos[0]] - true[0] <= cam_mod._FrameClock.LEARN_MAX_SECONDS + 0.1  # frames flow by then
+    slow = 50.0 + np.arange(40) * 0.5  # 2 frames a second, stamps fine: too few in a stretch to judge
+    clock, pos, idx, ts = run_clock(4.5e8 + np.arange(40) * 500.0, slow)
+    assert clock.mode == "arrival" and "frames in" in clock.reason
+    # the stretch under way at LEARN_MAX_SECONDS is finished, no more
+    assert slow[pos[0]] - slow[0] <= cam_mod._FrameClock.LEARN_MAX_SECONDS + cam_mod._FrameClock.LEARN_SECONDS
+
+
 def host_clock_frames(seconds: float, rng, fps: float = 60.0):
     """Stamps that are perf_counter times of the frames (ms); arrivals 26 ms or more later, bursty."""
     period = 1 / fps

@@ -949,7 +949,11 @@ and thin parts".
       back on) and the frame number counts the camera's frames. On the real camera the
       frame-to-frame time is off the period by 0.0001 ms at worst (7 ms before).
       `VALIDATION.md`, "Frame times from the camera's own clock". Untested: Linux, two
-      cameras, the packaged exe.
+      cameras. *Later the same day:* the exe's first connection to the real camera was
+      timed on arrival (1 in 31 connections; not seen again, cause not known). The first
+      third of a second was judged once and for good; now a stretch that does not look
+      like a frame clock is looked at again (four stretches, two seconds), and giving the
+      stamps up is a warning with its reason (`info["frame_times_reason"]`).
     - **120 frames a second** as a camera setting (default unchanged), once frames in turn
       exist.
   - **Frames in turn without a wire, built in software (owner 2026-11-27: "sure"). Nothing

@@ -19,14 +19,17 @@ another clock are carried onto ``perf_counter``: the stamp plus an offset that f
 earliest arrivals (a frame can arrive late but never before it was taken) and the slow drift
 between the two clocks, never stepping.
 The index then counts the camera's frames, so frames lost before the PC got them leave a gap too.
-The first ~20 frames (a third of a second) are used to decide this and are not given out. Without
+The first ~20 frames (a third of a second) are used to decide this and are not given out; a
+stretch that does not look like a frame clock is looked at again, up to four stretches or two
+seconds, because a slow start (frames held up and handed over together) looks like that too. Without
 usable stamps (DirectShow gives -1) a frame is stamped when it arrived: after the call that waited
 for it, which is ``retrieve()`` on DirectShow (its ``grab()`` returns at once) and ``grab()`` on
 Media Foundation; which call waits is measured, not assumed. Either way index gaps mean dropped
 frames, indices count up from 0 and times strictly increase. ``info["frame_times"]`` says which
 ("camera" or "arrival"), ``info["frame_clock"]`` for camera times whether the stamps are used as
-they are ("host") or with a learned offset ("learned"; ``None`` for arrival times), and
-``info["frame_period_ms"]`` the period found.
+they are ("host") or with a learned offset ("learned"; ``None`` for arrival times),
+``info["frame_period_ms"]`` the period found and ``info["frame_times_reason"]`` why the frames are
+timed on arrival (``None`` for camera times).
 
 Backends (``CameraParams.backend``): ``"auto"`` means Media Foundation then DirectShow on Windows
 (Media Foundation gives the camera's frame stamps and reads 120 fps at 2560x800, DirectShow only
@@ -212,11 +215,14 @@ class _FrameClock:
     "camera" or "arrival".
 
     Deciding: a stamp that is not a positive number (DirectShow gives -1, captures without it 0)
-    or does not advance means arrival times at once. Otherwise after ``LEARN_FRAMES`` frames (or
-    ``LEARN_SECONDS``): the period is the median of the smallest steps, and the stamps are used
-    when every step is a whole number of periods to within ``LEARN_TOLERANCE`` and the stamps
-    advance at the arrivals' pace to within ``RATE_MATCH`` (so a frame counter or stamps in other
-    units are not taken for milliseconds).
+    means arrival times at once. Otherwise after ``LEARN_FRAMES`` frames (or ``LEARN_SECONDS``):
+    the period is the median of the smallest steps, and the stamps are used when every step is a
+    whole number of periods to within ``LEARN_TOLERANCE`` and the stamps advance at the arrivals'
+    pace to within ``RATE_MATCH`` (so a frame counter or stamps in other units are not taken for
+    milliseconds). A stretch that fails this, or a stamp that does not advance, is not the last
+    word: a PC busy while the camera starts hands held-up frames over together, and a stream's
+    first stamps can be off its frame clock, which look the same. A fresh stretch is looked at, up
+    to ``LEARN_TRIES`` stretches or ``LEARN_MAX_SECONDS``; then arrival times, with ``reason``.
 
     Stamps on the PC's clock (``source`` "host"): when every frame used to decide arrived 0 to
     ``HOST_MAX_LAG`` s after its stamp, the stamp is a ``perf_counter`` time in the recent past and
@@ -258,6 +264,8 @@ class _FrameClock:
 
     LEARN_FRAMES = 20
     LEARN_SECONDS = 1.0
+    LEARN_TRIES = 4
+    LEARN_MAX_SECONDS = 2.0
     LEARN_TOLERANCE = 0.05
     BREAK_TOLERANCE = 0.25
     RATE_MATCH = 0.25
@@ -282,6 +290,8 @@ class _FrameClock:
         self.source = ""  # camera mode: "host" (stamps used as they are) or "learned" (learned offset)
         self.rate = 0.0  # drift of perf_counter against the camera clock (arrival seconds per stamp second - 1)
         self._learn: list[tuple[float, float]] = []
+        self._tries = 0
+        self._learn_start: float | None = None
         self._next_index = 0
         self._last_t: float | None = None
         self._last_arrival: float | None = None
@@ -305,16 +315,28 @@ class _FrameClock:
             return self._arrival(arrival)
         if not (math.isfinite(stamp_ms) and stamp_ms > 0):
             return self._to_arrival(arrival, f"the capture gives no frame stamps ({stamp_ms})")
+        if self._learn_start is None:
+            self._learn_start = arrival
         if self._learn and stamp_ms <= self._learn[-1][0]:
-            return self._to_arrival(arrival, "the frame stamps do not advance")
+            return self._look_again(arrival, "the frame stamps do not advance")
         self._learn.append((stamp_ms, arrival))
         n, elapsed = len(self._learn), arrival - self._learn[0][1]
         if n < self.LEARN_FRAMES and elapsed < self.LEARN_SECONDS:
             return None
         why = self._judge_stamps()
         if why:
-            return self._to_arrival(arrival, why)
+            return self._look_again(arrival, why)
         return self._start_camera()
+
+    def _look_again(self, arrival: float, why: str) -> tuple[int, float] | None:
+        """This stretch is not a frame clock (``why``): start a fresh one, or give the stamps up."""
+        self._tries += 1
+        since = arrival if self._learn_start is None else self._learn_start
+        if self._tries >= self.LEARN_TRIES or arrival - since >= self.LEARN_MAX_SECONDS:
+            return self._to_arrival(arrival, why)
+        log.info("camera frame stamps are not usable yet (%s); looking at the next frames", why)
+        self._learn = []
+        return None
 
     def _judge_stamps(self) -> str:
         st = np.array([p[0] for p in self._learn])
@@ -342,6 +364,8 @@ class _FrameClock:
         self.mode, self.reason, self.source = "arrival", reason, ""
         if was == "camera":
             log.warning("camera frame stamps stopped being usable (%s); frames are timed on arrival now", reason)
+        elif self._tries:  # the capture gives stamps, and they were looked at more than once
+            log.warning("camera frame stamps are not usable (%s); frames are timed on arrival", reason)
         else:
             log.info("camera frames are timed on arrival: %s", reason)
         self.period = 0.0
@@ -764,7 +788,8 @@ class StereoCamera:
             w, h = 2 * f.image_size[0], f.image_size[1]
         d.update(width=w, height=h, fps=fps, fourcc=fourcc, measured_fps=round(self._fps_est, 2), frames=self._n_frames,
                  frame_times=self._clock.mode, frame_clock=self._clock.source or None,
-                 frame_period_ms=round(self._clock.period * 1e3, 6))
+                 frame_period_ms=round(self._clock.period * 1e3, 6),
+                 frame_times_reason=self._clock.reason or None)
         return d
 
 
