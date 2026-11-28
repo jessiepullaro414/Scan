@@ -7374,8 +7374,8 @@ on in-turn recordings and the camera's frame times: 2582 passed, 9 skipped with 
 2500 passed, 91 skipped on the processor (49 min); no failure, no driver timeout (the count of the driver's fault
 reports was 5 before, between and after). A first run the evening before was cut 30 minutes in, at 52 % of the
 graphics pass with no failure up to there, when Windows Update restarted the PC (a planned restart in the Windows
-log, not a crash); this is the second run, from the start. The exe is still the one built from ca5a97e: the
-engine's default results are unchanged since, but the camera is read differently now, so it is due a rebuild.
+log, not a crash); this is the second run, from the start. The exe was still the one built from ca5a97e
+then; it is rebuilt below ("The exe after the mend").
 
 **One connection in 31 was timed on arrival, and the mend (2026-11-28).** The exe rebuilt from a0eb137 was connected
 to the real camera through the app's own route (`POST /api/device/connect`, camera only). It opened through Media
@@ -7411,6 +7411,16 @@ frame clock yet. The mend:
 Open: the one connection could not be made to happen again, so the mend is not proven against it; if it returns,
 the reason is now in the log and in the device state. Work files: `D:\OpenHandScan-work\scratch\cam` (`exe_cam.py`,
 `openmany.py`, `openmany_idle.json`, `openmany_load.json`, `openmany_after.json`).
+
+**The exe after the mend (commit 1725546, 2026-11-28).** Rebuilt from 1725546: 527 MB, starts in 2 s and serves the
+page. Its three checks are as before: it aligns the two simulated bracket scans the same (99 % of the smaller scan
+within 1 mm, typically 0.12 mm, 9 of 9 starting guesses agree), its wall-thickness readings are the same as
+Python's on 4 of 4 and its hole readings on 12 of 12; no driver timeout (the count stayed 5). Connected to the real
+camera through the app's route three times: Media Foundation, connected in 1.0 to 1.2 s, frames timed by the
+camera's clock used as it is (`frame_times` "camera", `frame_clock` "host", `frame_times_reason` none) each time,
+1205 frames in 20 s. So the exe does switch OpenCV's hardware transforms off before OpenCV loads, which was only
+read from its start-up code before. This exe is the current one. Not tested in the exe: a scan with the camera
+(the scanner is not assembled, no control board on this PC).
 
 ## What the metrics mean
 
