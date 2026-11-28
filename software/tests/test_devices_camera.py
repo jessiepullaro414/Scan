@@ -100,7 +100,7 @@ SMALL = dict(width=320, height=100, fps=60.0)
 
 # --------------------------------------------------------------------------- StereoCamera
 def test_backend_candidates():
-    assert cam_mod._backend_candidates("auto", "win32") == [cv2.CAP_DSHOW, cv2.CAP_MSMF]
+    assert cam_mod._backend_candidates("auto", "win32") == [cv2.CAP_MSMF, cv2.CAP_DSHOW]
     assert cam_mod._backend_candidates("auto", "linux") == [cv2.CAP_V4L2, cv2.CAP_ANY]
     assert cam_mod._backend_candidates("auto", "darwin") == [cv2.CAP_ANY]
     assert cam_mod._backend_candidates("DShow") == [cv2.CAP_DSHOW]

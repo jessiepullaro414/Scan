@@ -406,9 +406,12 @@ Close other programs that use the camera. 2560x800 needs MJPG (`fourcc = "MJPG"`
 an overloaded port lowers the frame rate, and so does a long exposure. `ohs selftest` shows the
 mode and fps actually delivered.
 
-**Windows camera backend and exposure.** `backend = "auto"` tries DirectShow (`dshow`) first and
-then Media Foundation (`msmf`). MSMF opens slowly and often ignores exposure settings, so prefer
-DirectShow. **DirectShow exposure is log2 of the exposure time in seconds**, in whole steps:
+**Windows camera backend and exposure.** `backend = "auto"` tries Media Foundation (`msmf`) first
+and then DirectShow (`dshow`). Media Foundation gives each frame the camera's own time and shows
+lost frames as gaps in the frame numbers; DirectShow frames are timed when they arrive, which
+jitters by a few milliseconds. (Media Foundation opens in about a second because `ohs` switches
+OpenCV's hardware transforms off; a script of your own that imports `cv2` before `ohs` gets an
+80 s open.) **Exposure is log2 of the exposure time in seconds**, in whole steps, on both:
 `-5` = 1/32 s, `-7` = 1/128 s (7.8 ms), `-8` = 3.9 ms, `-9` = 2 ms, `-10` = about 1 ms. Short
 exposures avoid motion blur but darken the image. Try values live with `+`/`-` in `ohs preview`,
 then write the one you like into `[camera] exposure = -8`. On Linux (V4L2) the unit is 100 us

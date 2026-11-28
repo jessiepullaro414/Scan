@@ -2,18 +2,41 @@
 
 :class:`StereoCamera` opens the ELP dual-OV9281 module (one UVC device delivering side-by-side
 frames, left | right, both sensors hardware-synchronised). A background thread grabs continuously
-and keeps only the newest frame. ``t_host = time.perf_counter()`` is taken right after ``grab()``
-returns (before the MJPEG decode), and every grabbed frame gets the next index, so index gaps mean
-dropped frames. ``read(timeout)`` returns the newest frame not yet returned (never the same index
-twice) or raises ``TimeoutError``. Frames are converted to grayscale ``uint8`` and split with
-:meth:`StereoFrame.from_sbs` (``swap_lr`` honoured). With ``second_index`` set, two separate UVC
-cameras are opened instead. They are grabbed back to back but are **not** synchronised, and a
-warning is logged.
+and keeps only the newest frame. ``read(timeout)`` returns the newest frame not yet returned (never
+the same index twice) or raises ``TimeoutError``. Frames are converted to grayscale ``uint8`` and
+split with :meth:`StereoFrame.from_sbs` (``swap_lr`` honoured). With ``second_index`` set, two
+separate UVC cameras are opened instead. They are grabbed back to back but are **not**
+synchronised, and a warning is logged.
 
-Backends (``CameraParams.backend``): ``"auto"`` means DirectShow then Media Foundation on Windows,
-and V4L2 then any on Linux. The pixel format (FOURCC, default MJPG, which the 2560x800 modes need
-over USB 2) is set *before* the frame size and fps, because several UVC drivers only accept the
-size once the format allows it.
+Frame times and indices (:class:`_FrameClock`). ``t_host`` is on the ``time.perf_counter()``
+timeline. The camera itself is exactly periodic, but its frames reach the PC in bursts, 3 to 6 ms
+apart from a straight line, so the time a frame arrives is a poor time for it. When the capture
+gives the camera's own sample time (``CAP_PROP_POS_MSEC``; Media Foundation does) and those stamps
+advance in whole multiples of a steady period, ``t_host`` comes from the stamp. Stamps that are
+already ``perf_counter`` times (Media Foundation's on this PC: about 26 ms before the earliest
+arrival, steady over ten minutes) are used as they are, ``t_host = stamp / 1000``. Stamps on
+another clock are carried onto ``perf_counter``: the stamp plus an offset that follows the
+earliest arrivals (a frame can arrive late but never before it was taken) and the slow drift
+between the two clocks, never stepping.
+The index then counts the camera's frames, so frames lost before the PC got them leave a gap too.
+The first ~20 frames (a third of a second) are used to decide this and are not given out. Without
+usable stamps (DirectShow gives -1) a frame is stamped when it arrived: after the call that waited
+for it, which is ``retrieve()`` on DirectShow (its ``grab()`` returns at once) and ``grab()`` on
+Media Foundation; which call waits is measured, not assumed. Either way index gaps mean dropped
+frames, indices count up from 0 and times strictly increase. ``info["frame_times"]`` says which
+("camera" or "arrival"), ``info["frame_clock"]`` for camera times whether the stamps are used as
+they are ("host") or with a learned offset ("learned"; ``None`` for arrival times), and
+``info["frame_period_ms"]`` the period found.
+
+Backends (``CameraParams.backend``): ``"auto"`` means Media Foundation then DirectShow on Windows
+(Media Foundation gives the camera's frame stamps and reads 120 fps at 2560x800, DirectShow only
+about 68), and V4L2 then any on Linux. A backend that does not open, or opens but gives no frame
+within ``first_frame_timeout``, is closed and the next one is tried. OpenCV's Media Foundation
+hardware transforms make opening this camera take 20 s per setting (80 s in all); ``import ohs``
+therefore sets ``OPENCV_VIDEOIO_MSMF_ENABLE_HW_TRANSFORMS=0`` unless the user set it, and
+OpenCV reads it only when ``cv2`` is first imported (setting it later has no effect). The pixel
+format (FOURCC, default MJPG, which the 2560x800 modes need over USB 2) is set *before* the frame
+size and fps, because several UVC drivers only accept the size once the format allows it.
 
 Exposure and gain units are backend-native (``CameraParams.exposure`` / ``set_exposure``):
 
@@ -25,9 +48,9 @@ Exposure and gain units are backend-native (``CameraParams.exposure`` / ``set_ex
   the ``exposure_auto`` menu). Some driver/OpenCV combinations want the raw menu values 1 (manual)
   and 3 (aperture priority) instead, so 1 is tried when 0.25 is rejected. ``CAP_PROP_EXPOSURE``
   is ``exposure_time_absolute`` in 100 us units: 50 = 5 ms.
-* **MSMF**: best effort. OpenCV maps the property to the same camera control as DirectShow
-  (usually log2 seconds), but many drivers ignore it under Media Foundation. Prefer DSHOW when
-  exposure matters. Opening MSMF can take several seconds.
+* **MSMF**: OpenCV maps the property to the same camera control as DirectShow (log2 seconds).
+  On the ELP board it works (the picture gets darker as it should), but the value read back stays
+  at the camera's start value; other drivers may ignore it under Media Foundation.
 * **Gain** (``CAP_PROP_GAIN``) is a raw driver value on every backend.
 
 :class:`ReplayCamera` plays a recording folder (``ohs.io.recording``) through the same
@@ -42,9 +65,11 @@ extra ``restamp`` flag and raises ``EOFError`` at the end of a non-looping recor
 """
 from __future__ import annotations
 
+import collections
 import contextlib
 import dataclasses
 import logging
+import math
 import sys
 import threading
 import time
@@ -74,7 +99,7 @@ def _backend_candidates(name: str, platform: str | None = None) -> list[int]:
     key = (name or "auto").lower()
     if key == "auto":
         if plat.startswith("win"):
-            return [cv2.CAP_DSHOW, cv2.CAP_MSMF]
+            return [cv2.CAP_MSMF, cv2.CAP_DSHOW]
         if plat.startswith("linux"):
             return [cv2.CAP_V4L2, cv2.CAP_ANY]
         return [cv2.CAP_ANY]
@@ -154,6 +179,314 @@ def _v4l2_device_name(index: int) -> str | None:
         return None
 
 
+# --------------------------------------------------------------------------- frame times
+def _lower_hull_slope(points: list[tuple[float, float]], max_abs: float) -> float:
+    """Slope of the line under all ``points`` (sorted by x) that lies closest to them on average.
+
+    That line is the edge of the points' lower convex hull above their mean x (the linear
+    programme used for clock skew from one-way delays). Clamped to ``+-max_abs``.
+    """
+    hull: list[tuple[float, float]] = []
+    for p in points:
+        while len(hull) >= 2:
+            (ox, oy), (ax, ay) = hull[-2], hull[-1]
+            if (ax - ox) * (p[1] - oy) - (ay - oy) * (p[0] - ox) > 0:
+                break
+            hull.pop()
+        hull.append(p)
+    if len(hull) < 2:
+        return 0.0
+    x_mean = sum(p[0] for p in points) / len(points)
+    for (ax, ay), (bx, by) in zip(hull, hull[1:]):
+        if bx >= x_mean:
+            slope = (by - ay) / (bx - ax) if bx > ax else 0.0
+            return max(-max_abs, min(max_abs, slope))
+    return 0.0
+
+
+class _FrameClock:
+    """Frame index and ``t_host`` from the camera's sample stamps and the frames' arrival times.
+
+    ``push(stamp_ms, arrival)`` per grabbed frame returns ``(index, t_host)``, or ``None`` while
+    the first frames are used to decide (they are not given out). ``mode`` is "learning",
+    "camera" or "arrival".
+
+    Deciding: a stamp that is not a positive number (DirectShow gives -1, captures without it 0)
+    or does not advance means arrival times at once. Otherwise after ``LEARN_FRAMES`` frames (or
+    ``LEARN_SECONDS``): the period is the median of the smallest steps, and the stamps are used
+    when every step is a whole number of periods to within ``LEARN_TOLERANCE`` and the stamps
+    advance at the arrivals' pace to within ``RATE_MATCH`` (so a frame counter or stamps in other
+    units are not taken for milliseconds).
+
+    Stamps on the PC's clock (``source`` "host"): when every frame used to decide arrived 0 to
+    ``HOST_MAX_LAG`` s after its stamp, the stamp is a ``perf_counter`` time in the recent past and
+    ``t_host = stamp / 1000`` exactly: nothing learned, nothing to settle. They are still watched:
+    the lowest ``arrival - stamp`` of each ``HOST_WINDOW_SECONDS`` window is kept, and when those
+    lows spread over more than ``HOST_DRIFT`` (8 ms), or a frame arrives more than ``HOST_EARLY``
+    before its stamp, the stamps are not on the PC's clock after all. The learned offset below
+    takes over from that frame on, with a warning, starting exactly where the direct times were
+    (it keeps their distance below the arrivals' edge and follows that edge from there), so
+    ``t_host`` does not step. Why 8 ms: on the real camera the 30 s lows of ten minutes spread over
+    3.9 ms (per minute 2.9 ms), so 8 ms is twice what was seen; a drift of 20 ppm is caught after
+    about seven minutes, 100 ppm after about two.
+
+    Learned offset (``source`` "learned", for stamps on another clock): with ``s`` the stamp in
+    seconds since the first one and ``d = arrival - s``,
+    every frame's ``d`` is at least the true offset between the clocks (a frame arrives late,
+    never before it was taken), so the offset is the lower edge of the ``d`` points. That edge is
+    a line: the two clocks may run some parts per million apart (on the ELP board under Media
+    Foundation the stamps are already on the ``perf_counter`` clock, about 26 ms before the
+    earliest arrival, and the measured rate is within 20 ppm of zero). Each ``BLOCK_SECONDS`` the
+    lowest ``d`` of the block is kept (the last ``WINDOW_BLOCKS``, two minutes). Once they span
+    ``RATE_AFTER_SECONDS`` the edge's slope (the rate) is the slope of their lower convex hull
+    (clamped to ``MAX_RATE``); before that the rate is taken as zero and only the last
+    ``EDGE_SECONDS_BEFORE_RATE`` count, so a drift is still followed with little lag. (The lowest
+    arrivals are rare, at 120 fps a few a minute: a rate from fewer seconds was off by 140 ppm on
+    the real camera.) The edge's height is the lowest point under that slope, a new frame counting
+    at once. ``t_host = s + offset``, where the offset moves with the rate and is pulled
+    toward the edge by at most ``SLEW`` of the elapsed time and ``MAX_STEP_CORRECTION`` per frame:
+    t_host never jumps, a frame's time step differs from the period by tens of microseconds at
+    most. A new lowest arrival 5 ms under the offset is reached in about 2.5 s at 60 fps. The
+    constant delay between the exposure and the earliest arrival stays in ``t_host``; the motion
+    sensor's calibrated time offset absorbs it.
+
+    The index adds the number of periods each stamp step spans, so frames lost before the PC got
+    them leave a gap. A step that is not a whole number of periods to within ``BREAK_TOLERANCE``
+    (or goes back) means the stamps broke: arrival times from then on, with a warning. Arrival
+    times are never earlier than camera times, so time keeps increasing.
+    """
+
+    LEARN_FRAMES = 20
+    LEARN_SECONDS = 1.0
+    LEARN_TOLERANCE = 0.05
+    BREAK_TOLERANCE = 0.25
+    RATE_MATCH = 0.25
+    MIN_PERIOD_MS, MAX_PERIOD_MS = 0.5, 2000.0
+    BLOCK_SECONDS = 0.25
+    WINDOW_BLOCKS = 480
+    RATE_AFTER_SECONDS = 30.0
+    EDGE_SECONDS_BEFORE_RATE = 15.0
+    MAX_RATE = 300e-6
+    SLEW = 2000e-6
+    MAX_STEP_CORRECTION = 50e-6
+    MIN_STEP = 1e-6
+    HOST_MAX_LAG = 0.5
+    HOST_WINDOW_SECONDS = 30.0
+    HOST_DRIFT = 8e-3
+    HOST_EARLY = 1e-3
+
+    def __init__(self) -> None:
+        self.mode = "learning"
+        self.reason = ""
+        self.period = 0.0  # seconds: the camera's in "camera" mode, the arrivals' in "arrival" mode
+        self.source = ""  # camera mode: "host" (stamps used as they are) or "learned" (learned offset)
+        self.rate = 0.0  # drift of perf_counter against the camera clock (arrival seconds per stamp second - 1)
+        self._learn: list[tuple[float, float]] = []
+        self._next_index = 0
+        self._last_t: float | None = None
+        self._last_arrival: float | None = None
+        # camera mode
+        self._stamp0 = 0.0
+        self._prev_stamp = 0.0
+        self._prev_s = 0.0
+        self._period_ms = 0.0
+        self._d0 = 0.0
+        self._offset = 0.0  # relative to _d0
+        self._edge = 0.0  # height of the lower edge (at s = 0), relative to _d0
+        self._points: collections.deque = collections.deque(maxlen=self.WINDOW_BLOCKS)
+        self._block_end = 0.0
+        self._block_min: tuple[float, float] | None = None
+
+    # ------------------------------------------------------------------ entry
+    def push(self, stamp_ms: float, arrival: float) -> tuple[int, float] | None:
+        if self.mode == "camera":
+            return self._camera(stamp_ms, arrival)
+        if self.mode == "arrival":
+            return self._arrival(arrival)
+        if not (math.isfinite(stamp_ms) and stamp_ms > 0):
+            return self._to_arrival(arrival, f"the capture gives no frame stamps ({stamp_ms})")
+        if self._learn and stamp_ms <= self._learn[-1][0]:
+            return self._to_arrival(arrival, "the frame stamps do not advance")
+        self._learn.append((stamp_ms, arrival))
+        n, elapsed = len(self._learn), arrival - self._learn[0][1]
+        if n < self.LEARN_FRAMES and elapsed < self.LEARN_SECONDS:
+            return None
+        why = self._judge_stamps()
+        if why:
+            return self._to_arrival(arrival, why)
+        return self._start_camera()
+
+    def _judge_stamps(self) -> str:
+        st = np.array([p[0] for p in self._learn])
+        ar = np.array([p[1] for p in self._learn])
+        if len(st) < 5:
+            return f"only {len(st)} frames in {self.LEARN_SECONDS:.1f} s"
+        steps = np.diff(st)
+        period = float(np.median(steps[steps <= 1.5 * steps.min()]))
+        if not self.MIN_PERIOD_MS <= period <= self.MAX_PERIOD_MS:
+            return f"implausible stamp period {period:.4g} ms"
+        k = np.maximum(np.round(steps / period), 1.0)
+        worst = float(np.max(np.abs(steps - k * period)) / period)
+        if worst > self.LEARN_TOLERANCE:
+            return f"stamp steps are not whole periods (off by {100 * worst:.0f} % of {period:.3f} ms)"
+        span_a = float(ar[-1] - ar[0])
+        pace = (float(st[-1] - st[0]) / 1e3) / span_a if span_a > 0 else math.inf
+        if abs(pace - 1.0) > self.RATE_MATCH:
+            return f"stamps advance {pace:.3g} times as fast as the arrivals"
+        self._period_ms = period
+        return ""
+
+    # ------------------------------------------------------------------ arrival times
+    def _to_arrival(self, arrival: float, reason: str) -> tuple[int, float]:
+        was = self.mode
+        self.mode, self.reason, self.source = "arrival", reason, ""
+        if was == "camera":
+            log.warning("camera frame stamps stopped being usable (%s); frames are timed on arrival now", reason)
+        else:
+            log.info("camera frames are timed on arrival: %s", reason)
+        self.period = 0.0
+        self._last_arrival = None
+        return self._arrival(arrival)
+
+    def _arrival(self, arrival: float) -> tuple[int, float]:
+        if self._last_arrival is not None and arrival > self._last_arrival:
+            step = arrival - self._last_arrival
+            self.period = step if self.period == 0.0 else 0.98 * self.period + 0.02 * step
+        self._last_arrival = arrival
+        return self._give(1, arrival)
+
+    def _give(self, k: int, t: float) -> tuple[int, float]:
+        if self._last_t is not None and t <= self._last_t:
+            t = self._last_t + self.MIN_STEP
+        index = self._next_index if self._last_t is None else self._next_index + k - 1
+        self._next_index = index + 1
+        self._last_t = t
+        return index, t
+
+    # ------------------------------------------------------------------ camera times
+    def _start_camera(self) -> tuple[int, float]:
+        self.mode, self.reason = "camera", ""
+        self.period = self._period_ms / 1e3
+        self._stamp0 = self._learn[0][0]
+        pts = [((st - self._stamp0) / 1e3, a) for st, a in self._learn]
+        self._d0 = pts[0][1] - pts[0][0]
+        self._block_end = self.BLOCK_SECONDS
+        for s, a in pts:
+            self._add_point(s, a - s - self._d0)
+        self._edge = min(a - s - self._d0 for s, a in pts)
+        self._offset = self._edge
+        self._gap = 0.0
+        lags = [a - st / 1e3 for st, a in self._learn]
+        self.source = "host" if all(0.0 <= g <= self.HOST_MAX_LAG for g in lags) else "learned"
+        if self.source == "host":  # the learned offset, kept where the direct times are, for a later switch
+            self._offset = self._stamp0 / 1e3 - self._d0
+            self._host_end, self._host_min = self.HOST_WINDOW_SECONDS, min(lags)
+            self._host_lo = self._host_hi = math.nan
+        st, a = self._learn[-1]
+        self._prev_stamp, self._prev_s = st, pts[-1][0]
+        self._learn = []
+        if self.source == "host":
+            log.info("camera frames are timed by the camera's own stamps, which are perf_counter times "
+                     "(%.1f ms before the earliest arrival): period %.5f ms", 1e3 * min(lags), self._period_ms)
+            return self._give(1, st / 1e3)
+        log.info("camera frames are timed by the camera's clock with a learned offset: period %.5f ms", self._period_ms)
+        return self._give(1, self._prev_s + self._d0 + self._offset)
+
+    def _host_check(self, s: float, lag: float) -> str:
+        """Why the stamps are not perf_counter times after all, or "" while they still are."""
+        if lag < -self.HOST_EARLY:
+            return f"a frame arrived {-1e3 * lag:.1f} ms before its stamp"
+        if s >= self._host_end:
+            lo, hi = self._host_lo, self._host_hi
+            self._host_lo = self._host_min if math.isnan(lo) else min(lo, self._host_min)
+            self._host_hi = self._host_min if math.isnan(hi) else max(hi, self._host_min)
+            self._host_min = math.inf
+            self._host_end = (math.floor(s / self.HOST_WINDOW_SECONDS) + 1) * self.HOST_WINDOW_SECONDS
+            if self._host_hi - self._host_lo > self.HOST_DRIFT:
+                return (f"the earliest arrivals moved {1e3 * (self._host_hi - self._host_lo):.1f} ms against "
+                        "the stamps")
+        self._host_min = min(self._host_min, lag)
+        return ""
+
+    def _add_point(self, s: float, d: float) -> None:
+        if s >= self._block_end:
+            if self._block_min is not None:
+                self._points.append(self._block_min)
+                self._refit()
+            self._block_min = None
+            self._block_end = (math.floor(s / self.BLOCK_SECONDS) + 1) * self.BLOCK_SECONDS
+        if self._block_min is None or d < self._block_min[1]:
+            self._block_min = (s, d)
+
+    def _refit(self) -> None:
+        pts = list(self._points)
+        if pts[-1][0] - pts[0][0] >= self.RATE_AFTER_SECONDS:
+            self.rate = _lower_hull_slope(pts, self.MAX_RATE)
+        else:  # rate not known yet: only the recent edge, so a drift is followed with little lag
+            pts = [p for p in pts if p[0] >= pts[-1][0] - self.EDGE_SECONDS_BEFORE_RATE]
+        r = self.rate
+        edge = min(d - r * s for s, d in pts)
+        if self._block_min is not None:
+            edge = min(edge, self._block_min[1] - r * self._block_min[0])
+        self._edge = edge
+
+    def _camera(self, stamp_ms: float, arrival: float) -> tuple[int, float]:
+        step = stamp_ms - self._prev_stamp
+        k = round(step / self._period_ms) if math.isfinite(step) else 0
+        if k < 1 or abs(step - k * self._period_ms) > self.BREAK_TOLERANCE * self._period_ms:
+            return self._to_arrival(arrival, f"stamp step {step:.3f} ms on a period of {self._period_ms:.3f} ms")
+        self._period_ms += 0.01 * (step / k - self._period_ms)
+        self.period = self._period_ms / 1e3
+        s = (stamp_ms - self._stamp0) / 1e3
+        d = arrival - s - self._d0
+        self._add_point(s, d)
+        self._edge = min(self._edge, d - self.rate * s)
+        if self.source == "host":
+            why = self._host_check(s, arrival - stamp_ms / 1e3)
+            if not why:
+                self._prev_stamp, self._prev_s = stamp_ms, s
+                return self._give(k, stamp_ms / 1e3)
+            log.warning("camera stamps are not perf_counter times after all (%s); a learned offset carries "
+                        "them over from here, starting where they were", why)
+            self.source, self.reason = "learned", why
+            self._gap = self._edge + self.rate * self._prev_s - self._offset  # the target starts at the offset
+        dt = s - self._prev_s
+        pred = self._offset + self.rate * dt
+        target = self._edge + self.rate * s - self._gap
+        limit = min(self.SLEW * dt, self.MAX_STEP_CORRECTION)
+        self._offset = pred + max(-limit, min(limit, target - pred))
+        self._prev_stamp, self._prev_s = stamp_ms, s
+        return self._give(k, s + self._d0 + self._offset)
+
+
+class _WaitJudge:
+    """Which capture call waits for the frame, so arrival times are taken after it.
+
+    DirectShow's ``grab()`` returns at once and ``retrieve()`` waits (16 ms at 60 fps); Media
+    Foundation's ``grab()`` waits. The call with the longer median duration over the first
+    ``FRAMES`` frames is taken (until then the running medians decide), then kept.
+    """
+
+    FRAMES = 30
+
+    def __init__(self) -> None:
+        self.after: str | None = None
+        self._grab: list[float] = []
+        self._retrieve: list[float] = []
+
+    def arrival(self, t_before: float, t_grab: float, t_retrieve: float) -> float:
+        if self.after is None:
+            self._grab.append(t_grab - t_before)
+            self._retrieve.append(t_retrieve - t_grab)
+            after = "grab" if float(np.median(self._grab)) >= float(np.median(self._retrieve)) else "retrieve"
+            if len(self._grab) >= self.FRAMES:
+                self.after = after
+                log.debug("camera frames are stamped after %s()", after)
+        else:
+            after = self.after
+        return t_grab if after == "grab" else t_retrieve
+
+
 # --------------------------------------------------------------------------- live camera
 class StereoCamera:
     """Side-by-side UVC stereo camera with a background grab thread. Use as a context manager."""
@@ -172,24 +505,50 @@ class StereoCamera:
         self._thread: threading.Thread | None = None
         self._latest: StereoFrame | None = None
         self._last_read = -1
-        self._next_index = 0
         self._n_frames = 0
         self._fps_est = 0.0
         self._error: str | None = None
+        self._clock = _FrameClock()
+        self._judge = _WaitJudge()
 
     # ------------------------------------------------------------------ lifecycle
     def open(self) -> None:
+        """Open the camera with the first backend that opens it and gives a frame."""
         if self._caps:
             return
         p = self.params
         if p.fourcc and len(p.fourcc) != 4:
             raise ValueError(f"fourcc must have exactly 4 characters, got {p.fourcc!r}")
+        apis = _backend_candidates(p.backend)
+        tried = []
+        for n, api in enumerate(apis):
+            name = cv2.videoio_registry.getBackendName(api)
+            caps = self._open_caps(api)
+            if caps is None:
+                tried.append(name)
+                continue
+            try:
+                self._start(caps, api)
+            except (TimeoutError, RuntimeError) as e:
+                if n == len(apis) - 1:
+                    raise
+                tried.append(name)
+                log.warning("camera %d opened with %s but gave no frame (%s); trying %s", p.index, name, e,
+                            cv2.videoio_registry.getBackendName(apis[n + 1]))
+                continue
+            return
+        raise RuntimeError(f"could not open camera {p.index} (backends tried: {', '.join(tried)})")
+
+    def _open_caps(self, api: int) -> list[Any] | None:
+        """The capture(s) set up with one backend; ``None`` if the (first) camera does not open."""
+        p = self.params
         two = p.second_index is not None
         width = p.width // 2 if two else p.width
-        caps: list[Any] = []
+        cap = self._open_one(p.index, api, width)
+        if cap is None:
+            return None
+        caps = [cap]
         try:
-            cap, api = self._open_first(p.index, width)
-            caps.append(cap)
             if two:
                 log.warning(
                     "second_index=%d: using two separate UVC cameras; their frames are NOT "
@@ -198,19 +557,25 @@ class StereoCamera:
                 if cap2 is None:
                     raise RuntimeError(f"could not open the second camera {p.second_index}")
                 caps.append(cap2)
-            self._backend = _backend_name(caps[0], api)
+            backend = _backend_name(caps[0], api)
             for c in caps:
                 if p.exposure is not None:
-                    _set_exposure(c, self._backend, p.exposure)
+                    _set_exposure(c, backend, p.exposure)
                 if p.gain is not None:
-                    _set_gain(c, self._backend, p.gain)
+                    _set_gain(c, backend, p.gain)
         except BaseException:
             for c in caps:
                 c.release()
             raise
-        self._caps, self._api = caps, api
-        self._latest, self._last_read, self._next_index, self._n_frames = None, -1, 0, 0
+        return caps
+
+    def _start(self, caps: list[Any], api: int) -> None:
+        """Start the grab thread on opened captures and wait for the first frame (else close and raise)."""
+        p = self.params
+        self._caps, self._api, self._backend = caps, api, _backend_name(caps[0], api)
+        self._latest, self._last_read, self._n_frames = None, -1, 0
         self._fps_est, self._error = 0.0, None
+        self._clock, self._judge = _FrameClock(), _WaitJudge()
         self._stop.clear()
         self._thread = threading.Thread(target=self._grab_loop, name="camera-grab", daemon=True)
         self._thread.start()
@@ -227,15 +592,6 @@ class StereoCamera:
         if (2 * w, h) != (p.width, p.height):
             log.warning("camera delivers %dx%d stereo frames, requested %dx%d", 2 * w, h, p.width, p.height)
         log.info("camera open: %s", self.info)
-
-    def _open_first(self, index: int, width: int) -> tuple[Any, int]:
-        tried = []
-        for api in _backend_candidates(self.params.backend):
-            cap = self._open_one(index, api, width)
-            if cap is not None:
-                return cap, api
-            tried.append(cv2.videoio_registry.getBackendName(api))
-        raise RuntimeError(f"could not open camera {index} (backends tried: {', '.join(tried)})")
 
     def _open_one(self, index: int, api: int, width: int) -> Any | None:
         cap = cv2.VideoCapture(index, api)
@@ -283,33 +639,44 @@ class StereoCamera:
     # ------------------------------------------------------------------ frames
     def _grab_loop(self) -> None:
         caps = self._caps
+        clock, judge = self._clock, self._judge
         last_ok = time.perf_counter()
         t_prev: float | None = None
         while not self._stop.is_set():
             imgs = []
+            stamp = math.nan
             try:
                 with self._cap_lock:
-                    ok = all(c.grab() for c in caps)
-                    t = time.perf_counter()  # right after grab() returns
+                    t_before = time.perf_counter()
+                    ok = bool(caps[0].grab())
+                    t_grab = t_retrieve = time.perf_counter()
                     if ok:
-                        for c in caps:
+                        stamp = float(caps[0].get(cv2.CAP_PROP_POS_MSEC))  # the camera's sample time, if any
+                        ok = all(c.grab() for c in caps[1:])
+                    if ok:
+                        for j, c in enumerate(caps):
                             got, img = c.retrieve()
+                            if j == 0:
+                                t_retrieve = time.perf_counter()
                             if not got or img is None:
                                 ok = False
                                 break
                             imgs.append(img)
             except cv2.error as e:
                 log.debug("grab failed: %s", e)
-                ok, t = False, time.perf_counter()
+                ok = False
             if not ok:
-                if t - last_ok > self._dead_after_s:
+                if time.perf_counter() - last_ok > self._dead_after_s:
                     self._fail(f"camera {self.params.index} delivered no frame for {self._dead_after_s:.1f} s")
                     return
                 time.sleep(0.005)
                 continue
-            last_ok = t
-            index = self._next_index
-            self._next_index += 1
+            arrival = judge.arrival(t_before, t_grab, t_retrieve)  # after the call that waited for the frame
+            last_ok = arrival
+            timed = clock.push(stamp, arrival)
+            if timed is None:  # still deciding how to time the frames
+                continue
+            index, t = timed
             try:
                 frame = self._make_frame(index, t, imgs)
             except (ValueError, cv2.error) as e:
@@ -374,7 +741,12 @@ class StereoCamera:
 
     @property
     def info(self) -> dict:
-        """Actual stereo frame width/height (side-by-side), fps, backend and fourcc."""
+        """Actual stereo frame width/height (side-by-side), fps, backend and fourcc.
+
+        Once open, also where the frame times come from (``frame_times``: "camera" for the
+        camera's frame clock, "arrival" for arrival times) and the frame period found in ms
+        (``frame_period_ms``: the camera's, or the arrivals' average).
+        """
         p = self.params
         d: dict[str, Any] = {"index": p.index, "second_index": p.second_index, "synced": p.second_index is None,
                              "swap_lr": p.swap_lr, "open": bool(self._caps), "backend": self._backend}
@@ -390,7 +762,9 @@ class StereoCamera:
         f = self._latest
         if f is not None:  # the delivered frames are the ground truth
             w, h = 2 * f.image_size[0], f.image_size[1]
-        d.update(width=w, height=h, fps=fps, fourcc=fourcc, measured_fps=round(self._fps_est, 2), frames=self._n_frames)
+        d.update(width=w, height=h, fps=fps, fourcc=fourcc, measured_fps=round(self._fps_est, 2), frames=self._n_frames,
+                 frame_times=self._clock.mode, frame_clock=self._clock.source or None,
+                 frame_period_ms=round(self._clock.period * 1e3, 6))
         return d
 
 
@@ -398,7 +772,7 @@ def list_cameras(max_index: int = 8, backend: str = "auto") -> list[dict]:
     """Probe indices ``0..max_index-1``: ``[{"index", "backend", "width", "height", "fps", "fourcc"[, "name"]}]``.
 
     Sizes are the camera's default mode (not necessarily 2560x800). Uses the first backend of
-    ``backend`` (DirectShow on Windows for "auto"). ``name`` is only available on Linux.
+    ``backend`` (Media Foundation on Windows for "auto"). ``name`` is only available on Linux.
     """
     api = _backend_candidates(backend)[0]
     found: list[dict] = []

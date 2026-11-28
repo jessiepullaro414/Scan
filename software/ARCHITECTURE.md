@@ -118,7 +118,7 @@ class StereoCamera:                # context manager; background grab thread; re
     def info(self) -> dict: ...    # actual width/height/fps/backend/fourcc
 def list_cameras(max_index: int = 8) -> list[dict]: ...
 ```
-Windows needs DirectShow (`cv2.CAP_DSHOW`, exposure is log2 seconds, e.g. -7 = 1/128 s) and MSMF. Linux needs V4L2.
+Windows needs Media Foundation (`cv2.CAP_MSMF`, tried first since 2026-11-28: its frame stamps give `t_host` and the frame index, `VALIDATION.md` "Frame times from the camera's own clock") and DirectShow (`cv2.CAP_DSHOW`); exposure is log2 seconds on both, e.g. -7 = 1/128 s. Linux needs V4L2.
 Convert colour frames to grayscale. Document exposure semantics per backend.
 
 `ohs/devices/pico.py`

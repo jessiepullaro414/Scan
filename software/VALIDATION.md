@@ -7234,7 +7234,8 @@ Media Foundation.
   "hardware transforms" for Media Foundation: opening and each of the three size and rate settings take 20 s
   with them (80 to 82 s, twice), and 0.6 s in all with `OPENCV_VIDEOIO_MSMF_ENABLE_HW_TRANSFORMS=0` set before
   OpenCV is loaded; the frames, the rate and the exact stamps are the same either way (`msmfopen.py`).
-  The simulator's recordings jitter their frame times by 0.2 ms. Not mended here; listed in ENGINE_PLAN X8.
+  The simulator's recordings jitter their frame times by 0.2 ms. Mended 2026-11-28: see "Frame times from the
+  camera's own clock" below.
 
 **What it means for frames in turn.** A Pico switching on its own clock can stay in step with this camera: the
 period is steady and the exposure does not move it. At 60 a second with a few milliseconds of exposure the dark
@@ -7317,6 +7318,55 @@ are dot frames now: they must learn to read the laser frames at their placed pos
 gets no laser-against-depth samples from such a scan. Thin walls, holes from the pictures and freeing disk space
 are not tried on one. Live scanning does not know frames in turn. Nothing at 1280 px or on the graphics card beyond
 the tests (43 pass there), nothing on real pictures. Work files: `D:\OpenHandScan-work\scratch\turnE`.
+
+## Frame times from the camera's own clock (ENGINE_PLAN X8, 2026-11-28)
+
+The fault found in the section "The real camera on its own" is mended: the app's camera class
+(`ohs.devices.camera.StereoCamera`) now times each frame by the camera's own frame clock, and reads the camera
+through Media Foundation first on Windows. Checked on the real camera (alone on this PC, 2560 x 800 MJPG).
+
+| the app's camera class, default settings | before | after |
+|---|---|---|
+| read through | DirectShow | Media Foundation (DirectShow second) |
+| time to open | 2.5 s | 1.0 to 1.1 s |
+| a frame's time is | the PC's clock before the wait for the frame | the camera's stamp for that frame |
+| frame-to-frame time off the period: spread / worst | 7.0 ms / about 16 ms | 0.00005 ms / 0.0001 ms |
+| frame times off a straight line: spread | 7.7 ms | under 0.0001 ms |
+| frames lost at 60 a second | none | none (3602 in 60 s; 2702 in 45 s) |
+| asked for 120 a second | 68 a second read | 116.6 read; 69 lost in 23 groups of three, each a gap in the frame numbers |
+
+**How.** Media Foundation gives every frame a stamp that steps by exactly one frame period. On this camera those
+stamps are times on the PC's own clock (`perf_counter`): over ten minutes (35 982 frames, none lost) the earliest
+arrivals of each minute came 25.6 to 28.5 ms after their stamps, with no trend. So the stamp is used as it is.
+The frame number counts the camera's frames by the same stamps, so a frame lost before the PC got it leaves a gap.
+
+- **Watched, not trusted blindly.** If the earliest arrivals move against the stamps by more than 8 ms (twice the
+  wander seen; a clock drifting by 20 parts in a million is caught in about 7 minutes), or a frame arrives more
+  than 1 ms before its stamp, the stamps are not on the PC's clock after all: the times then follow a learned
+  offset (the lower edge of arrival minus stamp, with its slow drift), taken up without a step.
+- **Stamps on another clock** go to that learned offset from the start; a camera that gives no usable stamps
+  (DirectShow gives none) is timed on arrival, after the call that waited for the frame. Through DirectShow that
+  leaves 3.2 ms of spread (30 s on the real camera) where it was 7.0 ms.
+- **Opening.** OpenCV's "hardware transforms" made Media Foundation take 80 s to open; `ohs` now switches them off
+  before OpenCV loads (`OPENCV_VIDEOIO_MSMF_ENABLE_HW_TRANSFORMS=0`, unless the user set it). It must be set
+  before OpenCV is first imported: set afterwards it did nothing (20 s for the open). A script that imports
+  `cv2` before `ohs` still gets the slow open.
+- **Exposure** works through Media Foundation: the picture's mean gray was 78.8 at -5 and 32.2 at -9.
+- `StereoCamera.info` says where the times come from: `frame_times` ("camera" or "arrival"), `frame_clock` ("host"
+  or "learned") and `frame_period_ms`.
+- A frame's time is now about 26 ms BEFORE its earliest arrival (nearer the exposure), where it used to be about
+  one frame before. The motion sensor's calibrated time offset absorbs a constant, but a calibration made with
+  the old timing would not fit; none exists yet (the scanner is not assembled).
+
+**Tests.** 24 new ones on fake captures (`tests/test_devices_camera_times.py`): bursty and late arrivals, lost
+frames, clocks 50 and 100 parts in a million apart over ten minutes, six kinds of bad stamps, stamps that break or
+drift later, DirectShow-like and Media-Foundation-like captures, the fallback to DirectShow, two cameras, the
+order of the interfaces. With the camera, settings, device and setup tests: 135 pass.
+
+**Not tested.** Linux (V4L2 gives stamps too; irregular ones fall back to arrival times), two real cameras, the
+packaged exe (it imports `ohs` first, by reading its start-up code), a PC with several cameras (their numbers could
+differ between the two interfaces). Work files: `D:\OpenHandScan-work\scratch\camT` (`realcam3.txt`, `raw_60.npz`,
+`raw_120.npz`) and `D:\OpenHandScan-work\scratch\cam` (`after.py`, `longedge.json`).
 
 ## What the metrics mean
 

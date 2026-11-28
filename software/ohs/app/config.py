@@ -574,7 +574,8 @@ _KEY_DOCS = {
     ),
     "camera.index": "OpenCV index of the stereo camera.",
     "camera.backend": (
-        '"auto" (Windows: DirectShow then Media Foundation; Linux: V4L2), "dshow", "msmf", "v4l2" or "any".'
+        '"auto" (Windows: Media Foundation then DirectShow; Linux: V4L2), "dshow", "msmf", "v4l2" or "any".\n'
+        "Media Foundation gives the camera's own frame times; DirectShow frames are timed on arrival."
     ),
     "camera.width": "Side-by-side frame size (both sensors together) and frame rate requested from the camera.",
     "camera.fourcc": "Pixel format. The 2560x800 modes need MJPG over USB 2.",

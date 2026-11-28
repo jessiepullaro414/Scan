@@ -940,14 +940,16 @@ and thin parts".
     included. Through Media Foundation the camera also gives a real 120 frames a second at
     the full size (60 dot frames and 60 laser frames; a group of three frames lost now and
     then). Open, found on the way:
-    - **Frame time stamps.** The app's camera class stamps a frame before it waits for it
-      under DirectShow; real stamps jitter by 7.7 ms against the simulator's 0.2 ms. The
-      mend is to take frame times from the camera's own frame count (Media Foundation's
-      stamps). Media Foundation takes 80 s to open as the app opens it today; that is
-      OpenCV's hardware transforms, and with
-      `OPENCV_VIDEOIO_MSMF_ENABLE_HW_TRANSFORMS=0` set before OpenCV loads it opens in
-      0.6 s with the same frames and stamps. Not built: it changes how the camera is read
-      on Windows, so it waits for the owner's word.
+    - **Frame time stamps: mended 2026-11-28 (owner: "Yes").** The app's camera class
+      stamped a frame before it waited for it under DirectShow; real stamps jittered by
+      7.7 ms against the simulator's 0.2 ms. Now Media Foundation is read first on
+      Windows (it opens in 1 s with OpenCV's hardware transforms off, which `ohs` sets
+      before OpenCV loads), a frame's time is the camera's own stamp (on this camera a time
+      on the PC's clock: no drift in ten minutes; watched, with a learned offset to fall
+      back on) and the frame number counts the camera's frames. On the real camera the
+      frame-to-frame time is off the period by 0.0001 ms at worst (7 ms before).
+      `VALIDATION.md`, "Frame times from the camera's own clock". Untested: Linux, two
+      cameras, the packaged exe.
     - **120 frames a second** as a camera setting (default unchanged), once frames in turn
       exist.
   - **Frames in turn without a wire, built in software (owner 2026-11-27: "sure"). Nothing
