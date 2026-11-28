@@ -932,6 +932,20 @@ and thin parts".
     Refine with lasers, a whole Make mesh, the real camera. The camera board shows no sync
     pad (route 1 above), so what is left is the route without a wire (route 2); whether USB
     timing allows it can only be shown on the real scanner.
+  - **The real camera on its own, 2026-11-27** (plugged into this PC without the Pico;
+    `VALIDATION.md`, "The real camera on its own: frame timing"). It gives exactly 60
+    frames a second, the period steady and the same at every exposure setting, so a Pico
+    on its own clock can stay in step. Frames ARRIVE with 3 to 8 ms of jitter, too much to
+    count frames by; Media Foundation's time stamps count them exactly, lost frames
+    included. Through Media Foundation the camera also gives a real 120 frames a second at
+    the full size (60 dot frames and 60 laser frames; a group of three frames lost now and
+    then). Open, found on the way:
+    - **Frame time stamps.** The app's camera class stamps a frame before it waits for it
+      under DirectShow; real stamps jitter by 7.7 ms against the simulator's 0.2 ms. The
+      mend is to take frame times from the camera's own frame count (Media Foundation's
+      stamps); Media Foundation took 82 s to open once, which must be understood first.
+    - **120 frames a second** as a camera setting (default unchanged), once frames in turn
+      exist.
   - With 20 tags on the table 300 mm apart: the mesh's length -0.042 / +0.048 / +0.018 %
     (without: -0.164 / +0.197 / +0.054), the camera path -0.052 / +0.060 / +0.003 % (without:
     0.18 to 0.45), the passes' slide 0.34 to 1.14 mm RMS (without: 1.4 to 11.4).

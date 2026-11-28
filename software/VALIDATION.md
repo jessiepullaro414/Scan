@@ -7200,6 +7200,52 @@ simulator's would raise the placing error. Work files: `D:\OpenHandScan-work\scr
 `lasergain.py`, `lasergain_*.json`, `framepass.json`, the scorecard tables `table_*.md`); no graphics driver
 timeout in the four runs.
 
+## The real camera on its own: frame timing (ENGINE_PLAN X8, 2026-11-27)
+
+The owner plugged the stereo camera into this PC, alone: no Pico, no emitters, not in the housing. Windows names it
+"3D Global Shutter Camera" (USB 32E4:9282; the board is marked `3D-GS800P`). Measured what frames in turn need to
+know: is the frame period steady, does it depend on the exposure, and can the PC tell which frame is which. All at
+2560 x 800 MJPG; processor only. Windows offers two ways to read a camera: DirectShow (the app's first choice) and
+Media Foundation.
+
+| asked | read through | frames a second read | frames lost | time between frames |
+|---|---|---|---|---|
+| 60 | DirectShow | 60.005 (1500 frames in 24.98 s) | none | arrival: 16.67 ms on average, spread 3.4 ms; 62 of 1499 waits were near two periods, each followed by a short one (frames arrive in bursts) |
+| 60 | Media Foundation | 59.99 (1200 frames) | none | the driver's own time stamps step by 16.6667 ms every time (spread 0.00005 ms); arrival against the stamp spreads 5.7 ms |
+| 120 | DirectShow | 68 | about four in ten | the reading call itself takes 14.5 ms |
+| 120 | Media Foundation | 119.7 (1500 frames) | 6, in two groups of three | stamps step by 8.3333 ms, twice by 33.33 ms |
+
+- **The frame period is steady:** 16.6662 to 16.6669 ms on the PC's clock over four runs of 15 to 25 s (the spread
+  is the arrival jitter, about 20 parts in a million; the camera's own drift is not resolved by this).
+- **It does not depend on the exposure:** with the exposure set by hand from -4 to -13 (DirectShow's steps, each
+  half the one before) the camera stayed at 59.96 to 60.22 frames a second over 240 frames each, while the picture
+  of the room fell from 73 to 18 of 255. Setting it works through Media Foundation too (77 to 19), though the
+  value read back there stays at -6. The exposure time in milliseconds for each step is NOT measured: that needs
+  a timed light.
+- **Which frame is which:** arrival times are off a straight line by 4.7 ms (spread; 9.6 ms at worst in a hundred)
+  with a 16.7 ms period, so arrival alone cannot count frames safely. Media Foundation's stamps count them
+  exactly, lost frames included (a lost group of three shows as a 33.33 ms step).
+- **120 frames a second is real** at the full picture size through Media Foundation. The app asks for 60.
+- **The app's own camera class** (`ohs.devices.camera.StereoCamera`, default settings, 900 frames): through
+  DirectShow it opens in 2.5 s and loses no frame, but its frame time stamps are off a straight line by 7.7 ms
+  (spread), because the stamp is taken before the wait for the frame (16.0 ms before the frame is in hand; the
+  constant part is absorbed by the motion sensor's calibrated time offset, the jitter is not). Through Media
+  Foundation the stamps (taken on arrival) are off by 5.5 ms, and opening took 82 s the one time it was tried.
+  The simulator's recordings jitter their frame times by 0.2 ms. Not mended here; listed in ENGINE_PLAN X8.
+
+**What it means for frames in turn.** A Pico switching on its own clock can stay in step with this camera: the
+period is steady and the exposure does not move it. At 60 a second with a few milliseconds of exposure the dark
+gap between two exposures is 10 ms or more. The PC should count frames by Media Foundation's stamps, not by
+arrival. At 120 a second there would be 60 dot frames and 60 laser frames a second, so Best quality would keep
+every frame it has today and a laser frame would be placed between dot frames 16.7 ms apart (0.02 mm in the
+table of the section before this one); the costs are a shorter gap (8.3 ms period), Media Foundation only, and frames lost in
+threes now and then.
+
+**Not learned.** The real exposure time and where in the period it sits; that left and right are exposed
+together; how well the Pico's clock and the camera's keep step over minutes; the PC's load when it processes
+120 frames a second. All need the Pico with a light in front of the camera. Work files:
+`D:\OpenHandScan-work\scratch\cam` (`probe.py`, `appstamp.py`, `probe_*.json`, `appstamp.json`).
+
 ## What the metrics mean
 
 - **Stereo errors** compare the estimated raw intrinsics/extrinsics (`K1`, `K2`, `R`, `T`) with
