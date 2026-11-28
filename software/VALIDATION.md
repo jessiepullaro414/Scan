@@ -7368,6 +7368,15 @@ packaged exe (it imports `ohs` first, by reading its start-up code), a PC with s
 differ between the two interfaces). Work files: `D:\OpenHandScan-work\scratch\camT` (`realcam3.txt`, `raw_60.npz`,
 `raw_120.npz`) and `D:\OpenHandScan-work\scratch\cam` (`after.py`, `longedge.json`).
 
+**The whole suite after the four pieces of frames in turn (commit af02982, 2026-11-28).** The whole test suite on
+a frozen copy of af02982, which holds the firmware's timed switching, the recording's frame kinds, the frame pass
+on in-turn recordings and the camera's frame times: 2582 passed, 9 skipped with the graphics card (57 min) and
+2500 passed, 91 skipped on the processor (49 min); no failure, no driver timeout (the count of the driver's fault
+reports was 5 before, between and after). A first run the evening before was cut 30 minutes in, at 52 % of the
+graphics pass with no failure up to there, when Windows Update restarted the PC (a planned restart in the Windows
+log, not a crash); this is the second run, from the start. The exe is still the one built from ca5a97e: the
+engine's default results are unchanged since, but the camera is read differently now, so it is due a rebuild.
+
 ## What the metrics mean
 
 - **Stereo errors** compare the estimated raw intrinsics/extrinsics (`K1`, `K2`, `R`, `T`) with
