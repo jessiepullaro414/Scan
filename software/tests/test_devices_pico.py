@@ -613,6 +613,125 @@ def test_open_closes_its_port_when_clearing_the_input_fails(monkeypatch):
     assert not pico.connected
 
 
+# --------------------------------------------------------------------------- emitters in turn (firmware 1.3.0)
+def _whole_cycles(dt_s: float, cycle_s: float) -> float:
+    """How far ``dt_s`` is from a whole number of cycles, in seconds."""
+    k = dt_s / cycle_s
+    return abs(k - round(k)) * cycle_s
+
+
+def test_alternating_start_nudge_period_and_stop():
+    s = SimPico(channels=5)
+    try:
+        with Pico(PicoParams(), transport=s.port) as pico:
+            assert pico.alternating is None
+            pico.set_emitters(40, 50, 60)
+            sched = pico.start_alternating(16_666_667, 3000, 2500)
+            assert s.received[-1] == "ALT 16666667 3000 2500" and s.fw.alt
+            assert (sched.period_ns, sched.dots_us, sched.lasers_us) == (16_666_667, 3000, 2500)
+            assert sched.period_s == pytest.approx(16_666_667e-9, rel=1e-12)
+            assert pico.alternating == sched
+            # the cycle start, in host time, through the clock sync
+            truth = float(s.devtime.host_time(sched.t_device, SimPico.START_US))
+            assert abs(sched.t_host - truth) < 0.5e-3
+            assert abs(sched.t_host - time.perf_counter()) < 0.1  # the first cycle starts at once
+            a, _ = pico.clock_model
+            assert sched.period_host_s == pytest.approx(a * sched.period_s, rel=1e-12)
+            wait_until(lambda: s.duties()[2] == 0 and s.duties()[0] == 40 * 65535 // 100, timeout=1.0)  # a laser window
+            st = pico.status()
+            assert st["alt"] == (16_666_667, 3000, 2500) and st["miss"] >= 0 and st["sw"] >= 0
+            assert len(st["late"]) == 2 and st["emit"] == (40, 50, 60)
+            nudged = pico.nudge_alternating(-400)
+            assert s.received[-1] == "ALTN -400" and pico.alternating == nudged
+            cycle = 2 * sched.period_s
+            assert nudged.t_device > sched.t_device
+            assert _whole_cycles(nudged.t_device - sched.t_device + 400e-6, cycle) < 1e-9
+            assert nudged.t_host == pytest.approx(pico.device_to_host(nudged.t_device), abs=1e-9)
+            new = pico.set_alternating_period(16_700_000)
+            assert s.received[-1] == "ALTP 16700000" and new.period_ns == 16_700_000
+            assert (new.dots_us, new.lasers_us) == (3000, 2500)
+            assert _whole_cycles(new.t_device - nudged.t_device, cycle) < 1e-9  # the old grid up to there
+            n0 = s.received.count("HB")
+            time.sleep(0.6)
+            assert s.received.count("HB") > n0 and s.fw.alt
+            pico.stop_alternating()
+            assert s.received[-1] == "ALT 0" and not s.fw.alt and pico.alternating is None
+            assert s.duties() == pct(40, 50, 60, 40, 50)  # steady again
+            assert "alt" not in pico.status()
+    finally:
+        s.close()
+
+
+def test_alternating_at_zero_levels_keeps_its_heartbeat_and_close_stops_it():
+    s = SimPico(channels=3)
+    try:
+        pico = Pico(PicoParams(heartbeat_s=0.2), transport=s.port)
+        pico.open()
+        try:
+            pico.start_alternating(10_000_000, 2000, 2000)
+            n0 = s.received.count("HB")
+            time.sleep(2.0)  # longer than the firmware's 1.5 s watchdog
+            assert s.fw.alt and s.received.count("HB") > n0  # dark windows still need the host alive
+        finally:
+            pico.close()
+        assert not s.fw.alt and "ALT 0" in s.received and s.duties() == [0, 0, 0]
+        assert [c for c in s.received if c != "HB"][-3:] == ["EMIT 0 0 0", "ALT 0", "IMU 0"]  # off first, then stop
+    finally:
+        s.close()
+
+
+def test_alternating_stopped_by_the_watchdog_is_known_to_the_host(caplog):
+    caplog.set_level(logging.INFO, logger="ohs.devices.pico")
+    s = SimPico(channels=3)
+    try:
+        with Pico(PicoParams(), transport=s.port) as pico:
+            pico.set_emitters(30, 30, 30)
+            pico.start_alternating(10_000_000, 2000, 2000)
+            s.drop_host_tx = True
+            wait_until(lambda: not s.fw.alt, timeout=3.0)
+            assert s.duties() == [0, 0, 0]
+            wait_until(lambda: pico.alternating is None and pico.emitters == (0, 0, 0), timeout=1.0)
+            s.drop_host_tx = False
+    finally:
+        s.close()
+
+
+def test_alternating_refused_arguments_and_open_stops_a_stale_one():
+    s = SimPico(channels=3)
+    try:
+        with s.lock:  # a previous session left the switching running
+            s.fw.set_levels(20, 20, 20)
+            s.fw.handle_line("ALT 10000000 2000 2000")
+        with Pico(PicoParams(), transport=s.port) as pico:
+            assert not s.fw.alt and s.duties() == [0, 0, 0]  # open() stopped it
+            with pytest.raises(PicoError, match="E ALT "):
+                pico.start_alternating(1_000_000, 0, 0)  # period below 2 ms
+            with pytest.raises(PicoError, match="E ALTN not running"):
+                pico.nudge_alternating(10)
+            with pytest.raises(ValueError):
+                pico.start_alternating(float("nan"), 0, 0)
+            assert pico.alternating is None
+    finally:
+        s.close()
+
+
+def test_alternating_needs_firmware_1_3(monkeypatch):
+    monkeypatch.setattr(FW, "FW_VERSION", "1.2.0")
+    s = SimPico(channels=5)
+    try:
+        with Pico(PicoParams(), transport=s.port) as pico:
+            assert not pico.can_alternate
+            for call in (lambda: pico.start_alternating(16_666_667, 3000, 3000), lambda: pico.nudge_alternating(5),
+                         lambda: pico.set_alternating_period(16_666_667), pico.stop_alternating):
+                with pytest.raises(PicoError, match="update it to 1.3.0"):
+                    call()
+        assert not any(c.startswith("ALT") for c in s.received)  # nothing new sent to older firmware
+    finally:
+        s.close()
+    with pytest.raises(ConnectionError):
+        Pico(PicoParams(), transport=s.port).start_alternating(16_666_667, 3000, 3000)  # not open
+
+
 @pytest.mark.hardware
 def test_real_pico_roundtrip():
     port = find_pico_port()
@@ -633,3 +752,51 @@ def test_real_pico_roundtrip():
             if tuple(int(v) for v in pico.hello["version"].split(".")[:2]) >= (1, 1):
                 temps = [float(e.value) for e in pico.read_events() if e.kind == "temperature"]
                 assert temps and all(5.0 < c < 70.0 for c in temps)  # a room-temperature chip, plus self-heating
+
+
+def _watch_overlap(s: SimPico) -> list:
+    """From now on, note every moment the dots (channel 2) and a laser are on together."""
+    seen: list = []
+
+    def watched(pwm):
+        plain = pwm.duty_u16
+
+        def duty_u16(d: int) -> None:
+            plain(d)
+            now = s.duties()
+            if now[2] and any(x for i, x in enumerate(now) if i != 2):
+                seen.append(list(now))
+        return duty_u16
+
+    for pwm in s.pwms:
+        pwm.duty_u16 = watched(pwm)
+    return seen
+
+
+def test_close_while_alternating_never_lights_dots_and_lasers_together():
+    """Leaving the switching (close, or open over one left running) must not pass through the steady
+    levels: that would light everything at once for a moment, in a mode whose point is that it never does."""
+    s = SimPico(channels=5)
+    try:
+        pico = Pico(PicoParams(), transport=s.port)
+        pico.open()
+        pico.set_emitters(40, 50, 60)
+        pico.start_alternating(10_000_000, 2000, 2000)
+        seen = _watch_overlap(s)
+        time.sleep(0.1)
+        pico.close()
+        assert not s.fw.alt and s.duties() == [0, 0, 0, 0, 0]
+        assert seen == []
+    finally:
+        s.close()
+    s = SimPico(channels=5)
+    try:
+        with s.lock:  # a previous session left the switching running at these levels
+            s.fw.set_levels(20, 20, 20)
+            s.fw.handle_line("ALT 10000000 2000 2000")
+        seen = _watch_overlap(s)
+        with Pico(PicoParams(), transport=s.port):
+            assert not s.fw.alt and s.duties() == [0, 0, 0, 0, 0]
+        assert seen == []
+    finally:
+        s.close()

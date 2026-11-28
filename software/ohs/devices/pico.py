@@ -52,9 +52,21 @@ three-level ``EMIT`` goes out, exactly as before, so a 2-laser build and older f
 change. Firmware before 1.2.0 cannot set the second lasers on their own: their scales are then
 ignored (with one warning) and ``only`` raises :class:`PicoError`.
 
+The dots and the lasers in turn
+-------------------------------
+Firmware 1.3.0 can switch the emitters on its own clock so that the camera takes one frame with the
+dots only and the next with the lasers only (``ALT``). There is no wire between camera and Pico: the
+Pico keeps the camera's frame period by itself, and the PC steers its phase (``ALTN``) and period
+(``ALTP``) from what the pictures show. :meth:`Pico.start_alternating`,
+:meth:`Pico.nudge_alternating`, :meth:`Pico.set_alternating_period` and :meth:`Pico.stop_alternating`
+send those commands; each answer gives a cycle start, which comes back as an :class:`AltSchedule` in
+both device and host time (through the clock model). The heartbeat keeps running while the switching
+runs, even with every level at 0. Older firmware raises :class:`PicoError`. This is an API only: the
+app, the recorder and the settings do not use it yet.
+
 Deviations from ARCHITECTURE.md: none in the contract API. Extras are ``PicoParams.resync_s``,
 ``sync_samples``, ``timeout_s`` and ``drift_prior_ppm``; ``Pico.status()``,
-``device_to_host()``, and the ``hello``, ``connected``, ``emitters``, ``channels``, ``laser_scales``,
+``device_to_host()``, the switching in turn (above), and the ``hello``, ``connected``, ``emitters``, ``channels``, ``laser_scales``,
 ``per_laser``, ``imu_scales``,
 ``clock_model``, ``temperature_c`` and ``stats`` properties; ``PicoError``; ``read_events()``
 also returns ``temperature`` events. The firmware already sends unwrapped
@@ -68,14 +80,14 @@ import math
 import queue
 import threading
 import time
-from typing import Any
+from typing import Any, NamedTuple
 
 import numpy as np
 
 from ohs.devices.params import PicoParams
 from ohs.types import Event, ImuSample
 
-__all__ = ["PicoParams", "Pico", "PicoError", "find_pico_port"]
+__all__ = ["PicoParams", "Pico", "PicoError", "AltSchedule", "find_pico_port"]
 
 log = logging.getLogger(__name__)
 
@@ -160,6 +172,25 @@ def _drain(dq: collections.deque) -> list:
 #: horizontal, second vertical, second horizontal) are "v", "h", "v2", "h2".
 LASER_CHANNELS = ("v", "h", "v2", "h2")
 PER_LASER_FIRMWARE = (1, 2, 0)  # the first firmware with a channel per laser
+ALT_FIRMWARE = (1, 3, 0)  # the first firmware that switches the dots and the lasers in turn
+
+
+class AltSchedule(NamedTuple):
+    """Where the windows of the switching in turn fall (firmware 1.3.0, ``ALT``).
+
+    A cycle is two periods: the dots are on for ``dots_us`` from the start of the first, the lasers for
+    ``lasers_us`` from the start of the second, and everything is off outside those windows. Cycle
+    ``n`` (counted from this one) starts at ``t_device + 2 * n * period_s`` on the Pico's clock, which
+    is ``t_host + 2 * n * period_host_s`` on the PC's ``perf_counter`` (as good as the clock sync).
+    """
+
+    t_device: float  #: a cycle start, device seconds (to the nanosecond the firmware keeps)
+    t_host: float  #: the same moment in host ``perf_counter`` seconds
+    period_ns: int  #: one period (half a cycle) on the Pico's clock
+    dots_us: int
+    lasers_us: int
+    period_s: float  #: ``period_ns`` in device seconds
+    period_host_s: float  #: the period measured on the host's clock (the clock model's slope)
 
 
 def _version(text: str) -> tuple[int, ...]:
@@ -167,6 +198,13 @@ def _version(text: str) -> tuple[int, ...]:
         return tuple(int(x) for x in str(text).split("."))
     except ValueError:
         return ()
+
+
+def _whole(value: float, name: str) -> int:
+    v = float(value)
+    if not math.isfinite(v):
+        raise ValueError(f"{name} must be finite, got {value!r}")
+    return int(round(v))
 
 
 def _pct(value: float) -> int:
@@ -205,6 +243,7 @@ class Pico:
         self._levels: tuple[int, int, int] = (0, 0, 0)
         self._channels: tuple[int, int, int, int, int] = (0, 0, 0, 0, 0)
         self._warned_old_firmware = False
+        self._alt: AltSchedule | None = None
         self._stop = threading.Event()
         self._reader: threading.Thread | None = None
         self._maint: threading.Thread | None = None
@@ -245,6 +284,7 @@ class Pico:
         _drain(self._evt_q)
         self._scales, self._imu_rate, self._levels, self._error = None, 0, (0, 0, 0), None
         self._channels = (0, 0, 0, 0, 0)
+        self._alt = None
         self._temp_c = None
         self._connected = self._opened = True
         self._reader = threading.Thread(target=self._read_loop, name="pico-reader", daemon=True)
@@ -253,6 +293,10 @@ class Pico:
             self._send("")  # terminate any partial line left in the firmware's input buffer
             self.hello = self._handshake()
             self.all_off()
+            if self.can_alternate:
+                # a switching left running by an earlier session; after all_off, so that stopping it
+                # does not light every emitter at once at the levels that session left
+                self._request("ALT 0", "OK ALT ")
             self.stop_imu()
             self.sync_clock(self.params.sync_samples)
         except BaseException:
@@ -273,6 +317,11 @@ class Pico:
                 self.all_off()
             except Exception as e:  # the firmware watchdog still turns them off within 1.5 s
                 log.warning("could not switch the emitters off on close: %s", e)
+            if self._alt is not None:  # after all_off: stopping goes back to the steady levels, now zero
+                try:
+                    self.stop_alternating()
+                except Exception as e:  # the firmware watchdog still stops it within 1.5 s
+                    log.warning("could not stop the switching in turn on close: %s", e)
             try:
                 self.stop_imu()
             except Exception as e:
@@ -362,6 +411,17 @@ class Pico:
     def per_laser(self) -> bool:
         """Can the firmware set each laser on its own (1.2.0+)? False before ``open``."""
         return _version(self.hello.get("version", "")) >= PER_LASER_FIRMWARE
+
+    @property
+    def can_alternate(self) -> bool:
+        """Can the firmware switch the dots and the lasers in turn (1.3.0+)? False before ``open``."""
+        return _version(self.hello.get("version", "")) >= ALT_FIRMWARE
+
+    @property
+    def alternating(self) -> AltSchedule | None:
+        """The schedule of the switching in turn from the last answer, or None while it is not running
+        (also after the firmware stopped it by itself, e.g. its watchdog)."""
+        return self._alt
 
     @property
     def laser_scales(self) -> tuple[float, float, float, float]:
@@ -466,15 +526,18 @@ class Pico:
         """``STATUS`` parsed: ``{"emit": (v, h, d), "imu": rate, "btn": 0|1, "up": s, "raw": line}``
         (``emit`` has five levels, ``(v, h, d, v2, h2)``, while firmware 1.2.0's second lasers are set
         on their own),
-        plus ``"temp"`` (degC) once firmware 1.1+ has read the IMU chip's temperature."""
+        plus ``"temp"`` (degC) once firmware 1.1+ has read the IMU chip's temperature. While firmware
+        1.3.0 switches in turn: ``"alt": (period_ns, dots_us, lasers_us)``, ``"late": (typical_us,
+        worst_us)`` (the mean and the worst lateness of the switches since the last ``STATUS``),
+        ``"sw"`` (that many switches) and ``"miss"`` (windows missed whole since then)."""
         line, _, _ = self._request("STATUS", "S ")
         out: dict[str, Any] = {"raw": line}
         for tok in line.split()[1:]:
             key, _, val = tok.partition("=")
             try:
-                if key == "emit":
+                if key in ("emit", "alt", "late"):
                     out[key] = tuple(int(x) for x in val.split(","))
-                elif key in ("imu", "btn"):
+                elif key in ("imu", "btn", "sw", "miss"):
                     out[key] = int(val)
                 elif key in ("up", "temp"):
                     out[key] = float(val)
@@ -483,6 +546,64 @@ class Pico:
             except ValueError:
                 out[key] = val
         return out
+
+    # ------------------------------------------------------------------ the dots and the lasers in turn
+    def start_alternating(self, period_ns: int, dots_us: int, lasers_us: int) -> AltSchedule:
+        """Switch the dots and the lasers in turn (firmware 1.3.0, ``ALT``): in the first period of each
+        two-period cycle the dots are on for ``dots_us``, in the second the lasers for ``lasers_us``, at
+        the levels of :meth:`set_emitters` (which may change while it runs). ``period_ns`` is the
+        camera's frame period on the Pico's clock (2 to 100 ms); each window must be shorter than it.
+        The first cycle starts at once. Returns where the cycles fall."""
+        p, d, la = _whole(period_ns, "period_ns"), _whole(dots_us, "dots_us"), _whole(lasers_us, "lasers_us")
+        self._need_alternating()
+        line, _, _ = self._request(f"ALT {p} {d} {la}", "OK ALT ")
+        return self._on_alt_reply(line)
+
+    def nudge_alternating(self, shift_us: int) -> AltSchedule:
+        """Shift the phase once by ``shift_us`` (signed, at most one period, ``ALTN``): the next cycle
+        start moves, and every later one follows it at the same period. The cycle running now is not
+        disturbed. Returns the schedule from that next cycle start."""
+        n = _whole(shift_us, "shift_us")
+        self._need_alternating()
+        line, _, _ = self._request(f"ALTN {n}", "OK ALTN ")
+        return self._on_alt_reply(line)
+
+    def set_alternating_period(self, period_ns: int) -> AltSchedule:
+        """Change the period from the next cycle start on, without moving that start (``ALTP``).
+        Returns the schedule from that cycle start."""
+        p = _whole(period_ns, "period_ns")
+        self._need_alternating()
+        line, _, _ = self._request(f"ALTP {p}", "OK ALTP ")
+        return self._on_alt_reply(line)
+
+    def stop_alternating(self) -> None:
+        """Stop switching in turn: the emitters go back to their steady levels (``ALT 0``)."""
+        self._need_alternating()
+        self._request("ALT 0", "OK ALT ")
+        self._alt = None
+
+    def _need_alternating(self) -> None:
+        if not self._connected:
+            raise ConnectionError(self._closed_reason())
+        if not self.can_alternate:
+            raise PicoError(f"firmware {self.hello.get('version') or '?'} cannot switch the dots and the lasers in "
+                            "turn; update it to 1.3.0 or later (firmware/main.py)")
+
+    def _on_alt_reply(self, line: str) -> AltSchedule:
+        """``OK <cmd> <start_us> <start_ns> <period_ns> <dots_us> <lasers_us>`` to an :class:`AltSchedule`."""
+        parts = line.split()
+        try:
+            us, ns, p, d, la = (int(x) for x in parts[2:7])
+        except ValueError:
+            raise PicoError(f"malformed reply {line!r}") from None
+        if len(parts) != 7 or not 0 <= ns < 1000 or p <= 0:
+            raise PicoError(f"malformed reply {line!r}")
+        t_dev = (us * 1000 + ns) * 1e-9
+        a, _ = self.clock_model or (1.0, 0.0)
+        sched = AltSchedule(t_device=t_dev, t_host=float(self.device_to_host(t_dev)), period_ns=p, dots_us=d,
+                            lasers_us=la, period_s=p * 1e-9, period_host_s=a * p * 1e-9)
+        self._alt = sched
+        return sched
 
     def sync_clock(self, n: int = 16) -> tuple[float, float]:
         """Measure the clock offset with ``n`` TIME round trips and update the clock model.
@@ -670,6 +791,7 @@ class Pico:
             msg = line[2:]
             if msg.startswith("emitters-off"):
                 self._levels, self._channels = (0, 0, 0), (0, 0, 0, 0, 0)
+                self._alt = None  # the firmware stops the switching in turn with them
                 log.warning("Pico turned the emitters off by itself (%s)", msg)
             else:
                 log.info("Pico: %s", msg)
@@ -739,7 +861,7 @@ class Pico:
         while not self._stop.is_set():
             now = time.perf_counter()
             try:
-                if any(self._channels) and now >= next_hb:
+                if (any(self._channels) or self._alt is not None) and now >= next_hb:
                     self._send("HB")
                     next_hb = now + p.heartbeat_s
                 if now >= next_sync:

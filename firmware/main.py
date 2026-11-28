@@ -15,8 +15,18 @@ Serial protocol (software/ARCHITECTURE.md section 5A), ASCII lines over USB CDC 
                          104/208/416/833 Hz)
     TIME              -> T <t_us>
     HB                -> (no reply; only keeps the emitter watchdog alive)
+    ALT <period_ns> <dots_us> <lasers_us>
+                      -> OK ALT <start_us> <start_ns> <period_ns> <dots_us> <lasers_us>   (1.3.0+) the
+                         dots and the lasers in turn, timed by the Pico's clock (see below); the
+                         reply's start is the first cycle's, which begins at once
+    ALT 0             -> OK ALT 0     stop switching: back to the steady EMIT levels
+    ALTN <shift_us>   -> OK ALTN <start_us> <start_ns> <period_ns> <dots_us> <lasers_us>   shift the
+                         phase once (signed, at most one period) from the next cycle start on
+    ALTP <period_ns>  -> OK ALTP <start_us> <start_ns> <period_ns> <dots_us> <lasers_us>   a new period
+                         from the next cycle start on, which stays where it was
     STATUS            -> S emit=<v>,<h>,<d>[,<v2>,<h2>] imu=<rate> btn=<0|1> up=<s> [temp=<degC>]
-                         (v2, h2 only while they differ from v, h)
+                         [alt=<period_ns>,<dots_us>,<lasers_us> late=<mean_us>,<worst_us> sw=<n> miss=<n>]
+                         (v2, h2 only while they differ from v, h; alt= and after only while switching)
     other             -> E unknown <cmd>
     async             -> I <t_us> <gx> <gy> <gz> <ax> <ay> <az>   raw int16 counts, IMU frame
                          B <t_us> <0|1>                            debounced trigger, 1 = pressed
@@ -39,11 +49,34 @@ Choices where the contract leaves room (all documented for the host client):
   in the slack after a sample. ``STATUS`` adds ``temp=`` once a temperature has been read. A
   failed temperature read sends ``E temp-read ...`` once and stops temperature reads; the IMU
   and the emitters carry on.
+* The dots and the lasers in turn (``ALT``, 1.3.0): the camera has no sync output, so the Pico
+  keeps the camera's frame period on its own microsecond clock and the host steers the phase
+  (``ALTN``) and the period (``ALTP``) from what the pictures show. A cycle is two periods: in the
+  first the dots are on for ``dots_us`` from the period's start, in the second the lasers (all four
+  channels) for ``lasers_us``; outside those windows everything is off, so the two are never on
+  together. The levels are the ``EMIT`` levels, and ``EMIT`` while switching changes them. The
+  period is in nanoseconds (2 to 100 ms) and every period start keeps its sub-microsecond part, so
+  no rounding error builds up; a switch falls on the first whole microsecond at or after its exact
+  time, plus the main loop's lateness. Each window must be shorter than the period. A cycle start is
+  ``start_us + start_ns / 1000`` on the clock ``TIME`` reports; cycle n begins ``2 n period_ns``
+  later. ``ALTN`` and ``ALTP`` take hold at the next cycle start, which they answer with: when a
+  cycle is running, the one after it (that cycle is not disturbed); in the dark gap after the
+  lasers window, the cycle about to begin. Several of them before that start add up (``ALTN``) or
+  the last one counts (``ALTP``). ``ALT`` while switching starts afresh. ``ALTN``/``ALTP`` without
+  a running switching answer ``E ALTN not running``.
+* While switching, the main loop leaves out the IMU read and the temperature read when a switch is
+  due within ALT_GUARD_US, and ``run()`` leaves out the garbage collection when one is due within
+  ALT_GC_GUARD_US, so neither delays a switch. The deferred IMU sample waits in the sensor; its
+  time stamp can then be up to about half that guard further off. A window the loop came round
+  for only after its end is skipped whole (counted as ``miss``); a late loop never shifts the grid.
+  ``STATUS`` reports the mean and the worst lateness of the switches since the last ``STATUS``
+  (``late=``), their number (``sw=``) and the windows missed (``miss=``), then counts afresh.
 
 Safety: emitters (PWM ~10 kHz on GP2 V-laser, GP3 H-laser, GP6 dot projector, and the 4-laser
 build's GP0 second V-laser and GP1 second H-laser) are off at boot,
 off on any exception, off when the main loop exits (including Ctrl-C), and off after 1.5 s
-without a complete host line (watchdog).
+without a complete host line (watchdog). Each of these also stops the switching in turn (and the
+watchdog stops a running switching even with every level at 0, logging ``L emitters-off watchdog``).
 
 Structure: ``Firmware`` holds all protocol/state logic with the hardware injected (PWM-like
 objects with ``duty_u16``, a Pin-like button, an LSM6DSOX-like IMU, a clock callable and a write
@@ -55,7 +88,8 @@ the main program (``main.py`` at boot, ``mpremote run``, Thonny "Run"), never on
 import sys
 
 FW_NAME = "ohs-fw"
-FW_VERSION = "1.2.0"  # 1.1.0: IMU chip temperature (C lines, STATUS temp=); 1.2.0: a channel per laser (EMIT with 5 levels)
+FW_VERSION = "1.3.0"  # 1.1.0: IMU chip temperature (C lines, STATUS temp=); 1.2.0: a channel per laser (EMIT with 5 levels);
+# 1.3.0: the dots and the lasers in turn, timed by the Pico's own clock (ALT, ALTN, ALTP)
 
 # Pin map (README.md wiring section): GPIO numbers on the Raspberry Pi Pico
 PIN_LASER_V = 2  # vertical-line laser, NPN low-side switch via 1 kOhm
@@ -92,6 +126,10 @@ MAX_LINE = 64  # longest accepted command line (characters)
 MAX_RX_PER_STEP = 32  # characters consumed per loop iteration (bounds command latency)
 GC_MIN_FREE = 16384  # run gc.collect() in the slack after an IMU sample below this many bytes
 TICKS_PERIOD = 1 << 30  # rp2 ticks_us() wraps at 2**30
+ALT_PERIOD_MIN_NS = 2000000  # ALT: the shortest period accepted (2 ms, 500 frames a second)
+ALT_PERIOD_MAX_NS = 100000000  # ALT: the longest (100 ms, 10 frames a second)
+ALT_GUARD_US = 600  # while switching: no IMU or temperature read when a switch is due sooner than this
+ALT_GC_GUARD_US = 4000  # while switching: no garbage collection when a switch is due sooner than this
 
 
 def _parse_int(text):
@@ -174,6 +212,22 @@ class Firmware:
         self.temp_c100 = None  # last IMU chip temperature, hundredths of a degree C
         self._rx = []
         self._rx_overflow = False
+        # Emitters in turn (ALT). The period now running starts at _alt_us + _alt_ns / 1000 (the
+        # nanoseconds kept apart, so no rounding error builds up); _alt_k is 0 in the dots period, 1 in
+        # the lasers period; _alt_lit is True while that period's window is on; _alt_next is the time
+        # (us) of the next switch. ALTN / ALTP changes wait in _alt_shift / _alt_new_period for the
+        # next cycle start.
+        self.alt = False
+        self._alt_lit = False
+        self._alt_k = 0
+        self._alt_us = 0
+        self._alt_ns = 0
+        self._alt_next = 0
+        self._alt_period = 0
+        self._alt_win = [0, 0]  # window lengths in us: dots, lasers
+        self._alt_shift = 0
+        self._alt_new_period = 0
+        self._alt_stats_reset()
         t = clock()
         self.t_boot = t
         self.last_rx = t
@@ -199,13 +253,20 @@ class Firmware:
         """Percent levels; ``v2``/``h2`` (the second lasers) follow ``v``/``h`` when not given."""
         levels = [_clamp_pct(v), _clamp_pct(h), _clamp_pct(d)]
         levels2 = [levels[0] if v2 is None else _clamp_pct(v2), levels[1] if h2 is None else _clamp_pct(h2)]
+        if self.alt:  # switching in turn: the levels are used inside the windows
+            self.levels = levels
+            self.levels2 = levels2
+            self._alt_write()
+            return
         for pwm, pct in zip(self.emitters, levels + levels2):
             pwm.duty_u16(pct * 65535 // 100)
         self.levels = levels
         self.levels2 = levels2
 
     def all_off(self):
-        """Every emitter off. This is the safety path, so it never raises."""
+        """Every emitter off (and the switching in turn stopped). This is the safety path, so it never raises."""
+        self.alt = False
+        self._alt_lit = False
         for pwm in self.emitters:
             try:
                 pwm.duty_u16(0)
@@ -219,7 +280,7 @@ class Firmware:
 
     def fault(self, context, exc):
         """Any unexpected exception: emitters off, report it, keep running."""
-        was_on = self.emitters_on()
+        was_on = self.alt or self.emitters_on()
         self.all_off()
         name = getattr(type(exc), "__name__", "Exception")
         self.send("E %s %s: %s" % (context, name, exc))
@@ -299,9 +360,21 @@ class Firmware:
             line = "S emit=%s imu=%d btn=%d up=%d.%03d" % (emit, self.imu_rate, self.btn, up_ms // 1000, up_ms % 1000)
             if self.temp_c100 is not None:
                 line += " temp=" + _fmt_c100(self.temp_c100)
+            if self.alt:
+                n = self._alt_n
+                line += " alt=%d,%d,%d late=%d,%d sw=%d miss=%d" % (
+                    self._alt_period, self._alt_win[0], self._alt_win[1], self._alt_sum // n if n else 0,
+                    self._alt_max, n, self._alt_miss)
+                self._alt_stats_reset()
             self.send(line)
         elif cmd == "HELLO":
             self.send("OK HELLO %s %s imu=%s" % (FW_NAME, FW_VERSION, self.imu_name()))
+        elif cmd == "ALT":
+            self._cmd_alt(parts)
+        elif cmd == "ALTN":
+            self._cmd_altn(parts)
+        elif cmd == "ALTP":
+            self._cmd_altp(parts)
         else:
             self.send("E unknown %s" % parts[0])
 
@@ -312,6 +385,185 @@ class Firmware:
         self._period_us = 1000000 // rate if rate else 0
         self._t_poll = None
         self._t_temp = None  # a fresh temperature right after the first sample
+
+    # ------------------------------------------------------------------ emitters in turn (ALT)
+    def _cmd_alt(self, parts):
+        vals = [_parse_int(p) for p in parts[1:]]
+        if None in vals or len(vals) not in (1, 3) or (len(vals) == 1 and vals[0] != 0):
+            self.send("E ALT bad args (ALT <period_ns> <dots_us> <lasers_us>, or ALT 0)")
+            return
+        if len(vals) == 1:
+            self.alt_stop()
+            self.send("OK ALT 0")
+            return
+        period, dots, lasers = vals
+        if period < ALT_PERIOD_MIN_NS or period > ALT_PERIOD_MAX_NS:
+            self.send("E ALT period out of range (%d to %d ns)" % (ALT_PERIOD_MIN_NS, ALT_PERIOD_MAX_NS))
+        elif dots < 0 or lasers < 0:
+            self.send("E ALT bad window (0 or more us)")
+        elif dots * 1000 >= period or lasers * 1000 >= period:
+            self.send("E ALT window longer than the period")
+        else:
+            now = self.alt_start(period, dots, lasers)
+            self.send("OK ALT %d 0 %d %d %d" % (now, period, dots, lasers))
+
+    def _cmd_altn(self, parts):
+        shift = _parse_int(parts[1]) if len(parts) == 2 else None
+        if shift is None:
+            self.send("E ALTN bad args (ALTN <shift_us>)")
+        elif not self.alt:
+            self.send("E ALTN not running")
+        elif abs(shift) * 1000 > (self._alt_new_period or self._alt_period):
+            self.send("E ALTN shift larger than a period")
+        else:
+            upcoming = self._alt_upcoming()
+            if upcoming:
+                self._alt_advance(shift * 1000)  # the next cycle is already set up: move it
+            else:
+                self._alt_shift += shift * 1000
+            self._alt_reply("ALTN", upcoming)
+
+    def _cmd_altp(self, parts):
+        period = _parse_int(parts[1]) if len(parts) == 2 else None
+        if period is None:
+            self.send("E ALTP bad args (ALTP <period_ns>)")
+        elif not self.alt:
+            self.send("E ALTP not running")
+        elif period < ALT_PERIOD_MIN_NS or period > ALT_PERIOD_MAX_NS:
+            self.send("E ALTP period out of range (%d to %d ns)" % (ALT_PERIOD_MIN_NS, ALT_PERIOD_MAX_NS))
+        elif self._alt_win[0] * 1000 >= period or self._alt_win[1] * 1000 >= period:
+            self.send("E ALTP window longer than the period")
+        else:
+            upcoming = self._alt_upcoming()
+            if upcoming:
+                self._alt_period = period  # the next cycle is already set up: its periods change
+            else:
+                self._alt_new_period = period
+            self._alt_reply("ALTP", upcoming)
+
+    def _alt_upcoming(self):
+        """True when the period set up is the dots period of a cycle that has not begun yet (the time
+        between the end of a lasers window and the next cycle start). ALTN and ALTP then change that
+        cycle; otherwise they wait for the end of the cycle running now."""
+        return self._alt_k == 0 and not self._alt_lit and self.now() < self._alt_next
+
+    def _alt_reply(self, word, upcoming):
+        """``OK <word> <us> <ns> <period_ns> <dots_us> <lasers_us>``: the next cycle start, where the
+        changes take hold, and the period from there on."""
+        left = 0 if upcoming else 2 - self._alt_k  # periods left before that cycle start
+        t = self._alt_ns + left * self._alt_period + self._alt_shift
+        self.send("OK %s %d %d %d %d %d" % (word, self._alt_us + t // 1000, t % 1000,
+                                            self._alt_new_period or self._alt_period, self._alt_win[0],
+                                            self._alt_win[1]))
+
+    def alt_start(self, period_ns, dots_us, lasers_us):
+        """Start switching in turn; the first cycle (dots period first) starts now. Returns its start."""
+        now = self.now()
+        self._alt_period = period_ns
+        self._alt_win = [dots_us, lasers_us]
+        self._alt_us = now
+        self._alt_ns = 0
+        self._alt_k = 0
+        self._alt_lit = False
+        self._alt_next = now
+        self._alt_shift = 0
+        self._alt_new_period = 0
+        self._alt_stats_reset()
+        self.alt = True
+        self._alt_write()  # everything off, then the first window opens at once
+        self._alt_step(self.now())
+        return now
+
+    def alt_stop(self):
+        """Stop switching: back to the steady EMIT levels."""
+        if not self.alt:
+            return
+        self.alt = False
+        self._alt_lit = False
+        for pwm, pct in zip(self.emitters, self.levels + self.levels2):
+            pwm.duty_u16(pct * 65535 // 100)
+
+    def switch_due_within(self, us):
+        """True while switching in turn and the next switch is due in less than ``us``."""
+        return self.alt and self._alt_next - self.now() < us
+
+    def _alt_stats_reset(self):
+        self._alt_n = 0  # switches since the last STATUS
+        self._alt_sum = 0  # their lateness added up (us)
+        self._alt_max = 0
+        self._alt_miss = 0  # windows missed whole (the loop came round after the window's end)
+
+    def _alt_write(self):
+        """Duties for the state of the switching: the group in its window at its EMIT levels, all the
+        rest off. Everything that goes off is written first, so the dots and the lasers never overlap."""
+        vals = self.levels + self.levels2
+        lit = -1
+        if self._alt_lit:
+            lit = self._alt_k
+        on = []
+        for i, pwm in enumerate(self.emitters):
+            group = 0 if i == 2 else 1
+            if group == lit and i < 5 and vals[i]:
+                on.append((pwm, vals[i]))
+            else:
+                pwm.duty_u16(0)
+        for pwm, pct in on:
+            pwm.duty_u16(pct * 65535 // 100)
+
+    def _alt_done(self, late):
+        self._alt_n += 1
+        self._alt_sum += late
+        if late > self._alt_max:
+            self._alt_max = late
+
+    def _alt_advance(self, ns):
+        """Move the period start on by ``ns``; the next switch is the new period's first microsecond."""
+        t = self._alt_ns + ns
+        self._alt_us += t // 1000
+        self._alt_ns = t % 1000
+        self._alt_next = self._alt_us + (1 if self._alt_ns else 0)
+
+    def _alt_period_end(self):
+        """On to the next period. At the end of a cycle the waiting ALTN / ALTP changes take hold."""
+        ns = self._alt_period
+        if self._alt_k == 1:
+            ns += self._alt_shift
+            self._alt_shift = 0
+            if self._alt_new_period:
+                self._alt_period = self._alt_new_period
+                self._alt_new_period = 0
+        self._alt_k ^= 1
+        self._alt_advance(ns)
+
+    def _alt_step(self, now):
+        """Every switch that is due by ``now``, in time order: a window that has started opens (unless
+        it has already ended: then it is missed), a window that has ended closes."""
+        while now >= self._alt_next:
+            if self._alt_lit:  # this period's window ends
+                self._alt_lit = False
+                self._alt_write()
+                self._alt_done(now - self._alt_next)
+                self._alt_period_end()
+                continue
+            start = self._alt_next
+            if self._alt_k == 0:
+                behind = (now - self._alt_us) * 1000 - self._alt_ns
+                cycle = 2 * self._alt_period
+                if behind >= cycle:  # whole cycles went by without a loop iteration: skip them at once
+                    n = behind // cycle
+                    self._alt_miss += n * ((1 if self._alt_win[0] else 0) + (1 if self._alt_win[1] else 0))
+                    self._alt_advance(n * cycle)
+                    continue
+            win = self._alt_win[self._alt_k]
+            if win:
+                if now < start + win:
+                    self._alt_lit = True
+                    self._alt_write()
+                    self._alt_done(now - start)
+                    self._alt_next = start + win
+                    continue
+                self._alt_miss += 1
+            self._alt_period_end()  # no window in this period, or it was missed
 
     # ------------------------------------------------------------------ periodic work
     def process(self, chars=""):
@@ -332,14 +584,20 @@ class Firmware:
             return False
 
     def step(self):
-        """Watchdog, button, IMU and temperature polling. Returns True if an IMU sample was sent."""
+        """Watchdog, switching in turn, button, IMU and temperature polling. Returns True if an IMU
+        sample was sent."""
         now = self.now()
-        if self.emitters_on() and now - self.last_rx >= WATCHDOG_US:
+        if (self.alt or self.emitters_on()) and now - self.last_rx >= WATCHDOG_US:
             self.all_off()
             self.log("emitters-off watchdog")
+        if self.alt:
+            self._alt_step(now)
         self._poll_button(now)
+        if self.alt and self.switch_due_within(ALT_GUARD_US):
+            return False  # a switch is due soon: the IMU sample waits in the sensor until after it
         if self._poll_imu():
-            self._poll_temp()  # in the slack until the next sample
+            if not (self.alt and self.switch_due_within(ALT_GUARD_US)):
+                self._poll_temp()  # in the slack until the next sample
             return True
         return False
 
@@ -501,8 +759,9 @@ def run(machine=None, time=None, select=None, stdin=None, stdout=None, max_itera
                 k += 1
             sent = fw.process(chars)
             # Collect garbage right after a sample (slack until the next one) or when idle,
-            # so an automatic GC never lands on a sample edge.
-            if mem_free is not None and (sent or not fw.imu_rate) and mem_free() < GC_MIN_FREE:
+            # so an automatic GC never lands on a sample edge, nor (while switching in turn) on a switch.
+            if mem_free is not None and (sent or not fw.imu_rate) and mem_free() < GC_MIN_FREE \
+                    and not fw.switch_due_within(ALT_GC_GUARD_US):
                 gc.collect()
     finally:
         fw.all_off()

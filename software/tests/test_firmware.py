@@ -703,6 +703,466 @@ def test_run_ctrl_c_turns_emitters_off_and_imu_optional(fw_on_path):
     assert all(p.duty == 0 for p in pwms)
 
 
+# --------------------------------------------------------------------------- emitters in turn (ALT, 1.3.0)
+class LogPWM(FakePWM):
+    """A PWM that records every duty write with the simulated time: (t_us, duty)."""
+
+    def __init__(self, clock: SimClock, fail_nonzero: bool = False) -> None:
+        super().__init__(fail_nonzero=fail_nonzero)
+        self.clock = clock
+        self.writes: list[tuple[int, int]] = []
+
+    def duty_u16(self, d=None):
+        if d is None:
+            return self.duty
+        if d and self.fail_nonzero:
+            raise RuntimeError("pwm fault")
+        self.writes.append((self.clock.t, d))
+        self.duty = d
+
+
+def make_alt_fw(channels: int = 3, t0: int = 1_000_000, imu=None):
+    clock = SimClock(t0)
+    pwms = [LogPWM(clock) for _ in range(channels)]
+    f, out, _, _ = make_fw(clock=clock, pwms=pwms, imu=imu)
+    return f, out, clock, pwms
+
+
+def lit(pwms) -> tuple[bool, bool]:
+    """(dots on, any laser on) from the PWM duties (dots are channel 2, lasers all the others)."""
+    dots = bool(pwms[2].duty)
+    lasers = any(p.duty for i, p in enumerate(pwms) if i != 2)
+    return dots, lasers
+
+
+def alt_reply(line: str, word: str = "ALT") -> tuple[int, int, int, int]:
+    """(cycle start in ns, period_ns, dots_us, lasers_us) from ``OK <word> <us> <ns> <p> <d> <l>``."""
+    parts = line.split()
+    assert parts[:2] == ["OK", word], line
+    assert len(parts) == 7, line
+    us, ns, p, d, la = (int(x) for x in parts[2:])
+    assert 0 <= ns < 1000
+    return us * 1000 + ns, p, d, la
+
+
+def drive(f, clock, t_end: int, step: int = 5, hb_every: int = 500_000):
+    """Run the main loop in ``step`` us steps until ``t_end``, feeding the watchdog. Checks that the
+    dots and the lasers are never on together and returns the switches: [(t_us, "dots"|"lasers", on)]."""
+    events = []
+    state = lit(f.emitters)
+    next_hb = clock.t + hb_every
+    while clock.t < t_end:
+        clock.advance(step)
+        if clock.t >= next_hb:
+            f.feed("HB\n")
+            next_hb = clock.t + hb_every
+        f.process("")
+        now = lit(f.emitters)
+        assert not (now[0] and now[1]), "dots and lasers on together at %d" % clock.t
+        if now[0] != state[0]:
+            events.append((clock.t, "dots", now[0]))
+        if now[1] != state[1]:
+            events.append((clock.t, "lasers", now[1]))
+        state = now
+    return events
+
+
+def expected_edges(start_ns: int, period_ns: int, dots_us: int, lasers_us: int, cycles: int):
+    """Exact switch times in ns for ``cycles`` cycles: [(t_ns, group, on)]."""
+    out = []
+    for c in range(cycles):
+        a = start_ns + 2 * c * period_ns
+        b = a + period_ns
+        if dots_us:
+            out += [(a, "dots", True), (a + dots_us * 1000, "dots", False)]
+        if lasers_us:
+            out += [(b, "lasers", True), (b + lasers_us * 1000, "lasers", False)]
+    return out
+
+
+def check_edges(events, edges, tol_us: float) -> None:
+    assert [(g, on) for _, g, on in events] == [(g, on) for _, g, on in edges]
+    for (t, g, on), (e_ns, _, _) in zip(events, edges):
+        err = t - e_ns / 1000.0
+        assert -1e-9 <= err < tol_us, (t, g, on, e_ns, err)  # never early, at most tol_us late
+
+
+def test_alt_windows_hold_their_place_over_ten_thousand_cycles():
+    """A period that is not a whole number of microseconds (60 fps): after 10 000 cycles (333 s) every
+    switch is still within 2 us plus the loop's lateness of the exact time. Rounding the period to a
+    whole microsecond would be 3.3 ms off by then."""
+    f, out, clock, pwms = make_alt_fw(channels=3)
+    f.feed("EMIT 40 50 60\n")
+    assert out.take() == ["OK EMIT 40 50 60"]
+    f.feed("ALT 16666667 3000 2500\n")
+    start_ns, p, d, la = alt_reply(out.take()[0])
+    assert (p, d, la) == (16666667, 3000, 2500)
+    assert start_ns == clock.t * 1000  # the first cycle starts when the command arrives
+    rng = random.Random(7)
+    cycles = 10_000
+    edges = expected_edges(start_ns, p, d, la, cycles)
+    events = []
+    worst = 0
+    state = lit(pwms)
+    for e_ns, group, on in edges:
+        ideal = -(-e_ns // 1000)  # the first whole microsecond at or after the edge
+        if ideal - 1 > clock.t:
+            clock.t = ideal - 1  # just before the edge: nothing may have switched yet
+            f.process("")
+            assert lit(pwms) == state, (clock.t, group, on)
+        jitter = rng.randrange(0, 4)  # the loop comes round 0..3 us late
+        worst = max(worst, jitter)
+        clock.t = max(clock.t, ideal + jitter)
+        if group == "dots" and on:
+            f.feed("HB\n")  # keep the watchdog fed, once a cycle
+        f.process("")
+        now = lit(pwms)
+        assert not (now[0] and now[1])
+        if group == "dots":
+            assert now[0] == on and not now[1]
+            if on:
+                assert pwms[2].duty == 60 * 65535 // 100 and pwms[0].duty == 0 and pwms[1].duty == 0
+        else:
+            assert now[1] == on and not now[0]
+            if on:
+                assert pwms[0].duty == 40 * 65535 // 100 and pwms[1].duty == 50 * 65535 // 100
+        events.append((clock.t, group, on))
+        state = now
+    check_edges(events, edges, tol_us=2 + worst)
+    last = events[-1][0] - edges[-1][0] / 1000.0
+    assert last < 2 + worst  # the last switch, 333 s on, is as exact as the first
+    f.feed("STATUS\n")
+    st = out.take()[0]
+    assert " alt=16666667,3000,2500 " in st
+    late = [int(x) for x in st.split(" late=")[1].split()[0].split(",")]
+    assert 0 <= late[0] <= late[1] <= worst + 1
+    assert " sw=%d " % (4 * cycles) in st and st.endswith(" miss=0")
+    f.feed("STATUS\n")
+    st = out.take()[0]
+    assert " late=0,0 sw=0 miss=0" in st  # counted afresh after each STATUS
+
+
+def test_alt_status_line_and_steady_status_unchanged():
+    f, out, clock, _ = make_alt_fw()
+    f.feed("EMIT 10 0 20\nSTATUS\n")
+    lines = out.take()
+    assert lines[1] == "S emit=10,0,20 imu=0 btn=0 up=0.000"  # nothing new without ALT
+    f.feed("ALT 10000000 2000 1000\n")
+    out.take()
+    drive(f, clock, clock.t + 99_000, step=7)  # five cycles, the sixth not yet begun
+    f.feed("STATUS\n")
+    st = out.take()[0]
+    assert st.startswith("S emit=10,0,20 imu=0 btn=0 up=0.099 alt=10000000,2000,1000 late=")
+    assert st.endswith(" sw=20 miss=0")  # 5 cycles, 4 switches each
+    f.feed("ALT 0\nSTATUS\n")
+    assert out.take() == ["OK ALT 0", "S emit=10,0,20 imu=0 btn=0 up=0.099"]
+
+
+def test_alt_stop_goes_back_to_steady_levels():
+    f, out, clock, pwms = make_alt_fw(channels=5)
+    f.feed("EMIT 10 20 30 40 50\n")
+    out.take()
+    f.feed("ALT 10000000 2000 2000\n")
+    out.take()
+    drive(f, clock, clock.t + 1_000, step=5)
+    assert lit(pwms) == (True, False)  # inside the dots window
+    assert [p.duty for p in pwms] == [0, 0, 30 * 65535 // 100, 0, 0]
+    f.feed("ALT 0\n")
+    assert out.take() == ["OK ALT 0"]
+    assert [p.duty for p in pwms] == [x * 65535 // 100 for x in (10, 20, 30, 40, 50)]
+    for _ in range(10_000):  # 50 ms: steady again, no more switching
+        clock.advance(5)
+        f.process("")
+        assert [p.duty for p in pwms] == [x * 65535 // 100 for x in (10, 20, 30, 40, 50)]
+    f.feed("ALT 0\n")
+    assert out.take() == ["OK ALT 0"]  # stopping twice is fine
+
+
+def test_alt_nudge_and_new_period_keep_the_phase_otherwise():
+    """ALTN and ALTP take effect at the next cycle start and answer with it; every later window keeps
+    its place on the shifted (or re-timed) grid, and the cycle running meanwhile is not disturbed."""
+    f, out, clock, pwms = make_alt_fw()
+    f.feed("EMIT 30 30 30\n")
+    out.take()
+    p = 10_000_000
+    f.feed("ALT %d 2000 1500\n" % p)
+    s0, _, _, _ = alt_reply(out.take()[0])
+    ev = [(s0 // 1000, "dots", True)]  # the first window opens with the command itself
+    ev += drive(f, clock, s0 // 1000 + 1_000, step=3)  # into the first dots window
+    f.feed("ALTN 500\n")
+    s1, p1, d1, l1 = alt_reply(out.take()[0], "ALTN")
+    assert s1 == s0 + 2 * p + 500_000 and (p1, d1, l1) == (p, 2000, 1500)
+    f.feed("ALTN -200\n")  # nudges before the boundary add up
+    s1b, _, _, _ = alt_reply(out.take()[0], "ALTN")
+    assert s1b == s0 + 2 * p + 300_000
+    # into the dark gap after cycle 2's lasers window: cycle 3 is set up but has not begun
+    ev += drive(f, clock, s1b // 1000 + 2 * p // 1000 + 12_000, step=3)
+    f.feed("ALTP 12000001\n")
+    s3, p3, _, _ = alt_reply(out.take()[0], "ALTP")
+    assert s3 == s1b + 2 * 2 * p and p3 == 12000001  # cycle 3 starts where it would have; new period after
+    ev += drive(f, clock, s3 // 1000 + 3 * 2 * p3 // 1000 - 1000, step=3)  # the gap before cycle 6
+    f.feed("ALTN 250\n")
+    s6, _, _, _ = alt_reply(out.take()[0], "ALTN")
+    assert s6 == s3 + 3 * 2 * p3 + 250_000  # the very next cycle start moves
+    ev += drive(f, clock, s6 // 1000 + 1000, step=3)  # inside cycle 6's dots window
+    f.feed("ALTP 9000000\n")
+    s7, p7, _, _ = alt_reply(out.take()[0], "ALTP")
+    assert s7 == s6 + 2 * p3 and p7 == 9_000_000  # cycle 6 keeps its period, cycle 7 on the new one
+    ev += drive(f, clock, s7 // 1000 + 2 * 2 * p7 // 1000 - 1000, step=3)
+    want = expected_edges(s0, p, 2000, 1500, 1) + expected_edges(s1b, p, 2000, 1500, 2) + expected_edges(
+        s3, p3, 2000, 1500, 3) + expected_edges(s6, p3, 2000, 1500, 1) + expected_edges(s7, p7, 2000, 1500, 2)
+    check_edges(ev, want, tol_us=2 + 3)
+
+
+def test_alt_period_change_and_nudge_need_a_running_switching():
+    f, out, _, _ = make_alt_fw()
+    f.feed("ALTN 100\nALTP 10000000\n")
+    lines = out.take()
+    assert lines[0].startswith("E ALTN not running") and lines[1].startswith("E ALTP not running")
+
+
+def test_alt_bad_args_are_refused():
+    f, out, clock, pwms = make_alt_fw()
+    f.feed("EMIT 10 10 10\n")
+    out.take()
+    for cmd in ("ALT", "ALT 1", "ALT x 1 2", "ALT 10000000 1 2 3", "ALT 10000000 -1 0", "ALT 10000000 0 -5",
+                "ALT 1999999 0 0", "ALT 100000001 0 0", "ALT 10000000 10000 0", "ALT 10000000 0 10001"):
+        f.feed(cmd + "\n")
+        lines = out.take()
+        assert len(lines) == 1 and lines[0].startswith("E ALT "), (cmd, lines)
+    assert not f.alt and [p.duty for p in pwms] == [6553] * 3  # nothing changed
+    f.feed("ALT 2000000 1999 0\nALT 100000000 0 99999\n")  # the limits themselves are fine
+    lines = out.take()
+    assert lines[0].startswith("OK ALT ") and lines[1].startswith("OK ALT ")
+    f.feed("ALT 10000000 3000 3000\n")
+    s0, _, _, _ = alt_reply(out.take()[0])
+    for cmd in ("ALTN", "ALTN x", "ALTN 1 2", "ALTN 10001", "ALTN -10001", "ALTP", "ALTP 1999999",
+                "ALTP 100000001", "ALTP 3000000", "ALTP a"):
+        f.feed(cmd + "\n")
+        lines = out.take()
+        word = cmd.split()[0]
+        assert len(lines) == 1 and lines[0].startswith("E %s " % word), (cmd, lines)
+    f.feed("ALTN 0\n")
+    s1, p1, _, _ = alt_reply(out.take()[0], "ALTN")
+    assert s1 == s0 + 2 * 10_000_000 and p1 == 10_000_000  # the refused commands changed nothing
+
+
+def test_alt_emit_levels_are_used_inside_the_windows():
+    """EMIT while switching changes the levels inside the windows; five levels drive the 4-laser build's
+    own channels in the laser window; the dots window lights only the dots."""
+    f, out, clock, pwms = make_alt_fw(channels=5)
+    f.feed("ALT 10000000 4000 4000\n")
+    s0, _, _, _ = alt_reply(out.take()[0])
+    t = s0 // 1000
+    drive(f, clock, t + 1000)
+    assert [p.duty for p in pwms] == [0] * 5  # levels 0: dark windows, but the switching runs
+    f.feed("EMIT 10 20 30 40 50\n")
+    assert out.take() == ["OK EMIT 10 20 30 40 50"]
+    assert [p.duty for p in pwms] == [0, 0, 30 * 65535 // 100, 0, 0]  # at once, inside the dots window
+    drive(f, clock, t + 10_000 + 1000)
+    assert [p.duty for p in pwms] == [x * 65535 // 100 for x in (10, 20, 0, 40, 50)]  # the laser window
+    f.feed("EMIT 70 0 80\n")
+    out.take()
+    assert [p.duty for p in pwms] == [x * 65535 // 100 for x in (70, 0, 0, 70, 0)]  # V2, H2 follow V, H
+    drive(f, clock, t + 10_000 + 6000)
+    assert [p.duty for p in pwms] == [0] * 5  # between windows everything is off
+    drive(f, clock, t + 20_000 + 1000)
+    assert [p.duty for p in pwms] == [0, 0, 80 * 65535 // 100, 0, 0]
+    f.feed("STATUS\n")
+    assert out.take()[0].startswith("S emit=70,0,80 imu=0 ")  # the levels as set, not the momentary duty
+
+
+def test_alt_never_lights_dots_and_lasers_together_even_when_late():
+    """A loop that comes round late (here up to 7 ms at a time) shortens or misses windows but never
+    lets the two overlap, and the grid stays where it was."""
+    f, out, clock, pwms = make_alt_fw(channels=5)
+    f.feed("EMIT 50 50 50\n")
+    out.take()
+    f.feed("ALT 8333333 3000 3000\n")
+    s0, p, _, _ = alt_reply(out.take()[0])
+    rng = random.Random(3)
+    t_end = clock.t + 2_000_000
+    nxt = clock.t + 400_000
+    while clock.t < t_end:
+        clock.advance(rng.choice((5, 50, 500, 2500, 7000)))
+        if clock.t >= nxt:
+            f.feed("HB\n")
+            nxt = clock.t + 400_000
+        f.process("")
+        d, la = lit(pwms)
+        assert not (d and la)
+    # a long stall: 1.2 s without a loop iteration (the host still talks)
+    clock.advance(1_200_000)
+    f.feed("HB\n")
+    f.process("")
+    assert not all(lit(pwms))
+    f.feed("STATUS\n")
+    st = out.take()[0]
+    miss = int(st.split(" miss=")[1])
+    assert miss > 100  # the windows the stall swallowed are counted
+    # afterwards the windows land on the original grid again
+    ev = drive(f, clock, clock.t + 100_000, step=3)
+    on = [t for t, g, o in ev if g == "dots" and o]
+    assert on
+    for t in on:
+        k = (t * 1000 - s0) / (2 * p)
+        assert abs(k - round(k)) * 2 * p < 4_000  # within 4 us of a cycle start of the first grid
+
+
+def test_alt_watchdog_and_exceptions_stop_switching_with_everything_off():
+    f, out, clock, pwms = make_alt_fw(channels=5)
+    f.feed("EMIT 20 20 20\nALT 10000000 3000 3000\n")
+    out.take()
+    t = clock.t
+    drive(f, clock, t + 1_000_000, step=50)  # fed by heartbeats
+    assert f.alt
+    out.take()
+    while clock.t < t + 1_000_000 + 1_600_000:  # the host goes silent
+        clock.advance(50)
+        f.process("")
+        assert not all(lit(pwms))
+    assert out.take() == ["L emitters-off watchdog"]
+    assert not f.alt and [p.duty for p in pwms] == [0] * 5 and f.levels == [0, 0, 0]
+    for _ in range(1000):
+        clock.advance(50)
+        f.process("")
+    assert [p.duty for p in pwms] == [0] * 5  # stays off: no window opens again
+    f.feed("STATUS\n")
+    assert " alt=" not in out.take()[0]
+    # with zero levels the switching is still stopped by the watchdog (the host learns it stopped)
+    f.feed("ALT 10000000 3000 3000\n")
+    out.take()
+    clock.advance(1_600_000)
+    f.process("")
+    assert out.take() == ["L emitters-off watchdog"] and not f.alt
+    # an exception while switching: everything off, switching stopped, the host is told
+    f2, out2, clock2, pwms2 = make_alt_fw(channels=3)
+    f2.feed("EMIT 10 10 10\nALT 10000000 3000 3000\n")
+    out2.take()
+    drive(f2, clock2, clock2.t + 5000)  # past the dots window
+    pwms2[2].fail_nonzero = True
+    clock2.advance(16_000)  # into the next dots window (20 to 23 ms)
+    f2.process("")  # which fails to switch on
+    lines = out2.take()
+    assert lines[0].startswith("E internal RuntimeError") and lines[1] == "L emitters-off exception"
+    assert not f2.alt and [p.duty for p in pwms2] == [0, 0, 0]
+
+
+def _session_without_alt() -> str:
+    """A scripted session with no ALT command: every output line and every PWM write, as text."""
+    clock = SimClock(2_000_000)
+    pwms = [LogPWM(clock) for _ in range(5)]
+    pin = FakePin(1)
+    bus = FakeLsmBus(clock)
+    bus.regs[0x20:0x22] = struct.pack("<h", 1600)
+    out = Out()
+    f = fw.Firmware(pwms, pin, lsm.LSM6DSOX(bus), clock, out)
+    regs_after_reset = bytes(bus.regs)
+    bus.regs[0x20:0x22] = struct.pack("<h", 1600)
+
+    def run_for(us: int, step: int = 40) -> None:
+        t_end = clock.t + us
+        while clock.t < t_end:
+            clock.advance(step)
+            f.process("")
+
+    f.feed("HELLO\nSTATUS\nEMIT 10 20 30\nEMIT 1 2 3 4 5\nEMIT 1 2\nFOO\n")
+    run_for(10_000)
+    f.feed("IMU 104\n")
+    run_for(60_000)
+    pin.level = 0
+    run_for(40_000)
+    f.feed("STATUS\nEMIT 0 0 0 0 60\n")
+    run_for(1_600_000, step=400)  # the watchdog fires
+    pin.level = 1
+    run_for(40_000)
+    f.feed("TIME\nIMU 0\nSTATUS\n" + "X" * 80 + "\n")
+    run_for(5_000)
+    lines = [ln.replace(fw.FW_VERSION, "<ver>") for ln in out.lines]
+    writes = ["%d %d %d" % (i, t, d) for i, p in enumerate(pwms) for t, d in p.writes]
+    return "\n".join(lines + writes + [regs_after_reset.hex()])
+
+
+def test_without_alt_the_firmware_behaves_exactly_as_before():
+    """Recorded on firmware 1.2.0, before ALT existed: the same session gives the same bytes."""
+    import hashlib
+
+    text = _session_without_alt()
+    digest = hashlib.sha256(text.encode("ascii")).hexdigest()
+    assert digest == "03439fa1c6b95bfdd192774b49f660ebc917458c6ddf89820c4b82543f80bae8", (digest, len(text.splitlines()))
+
+
+class TimedStdin(StubStdin):
+    """Serves each (t_us, text) once the simulated clock has reached t_us."""
+
+    def __init__(self, clock: SimClock, items) -> None:
+        super().__init__("")
+        self.clock = clock
+        self.items = list(items)
+
+    def pending(self) -> bool:
+        while self.items and self.clock.t >= self.items[0][0]:
+            self.chars += list(self.items.pop(0)[1])
+        return bool(self.chars)
+
+
+def test_run_loop_switches_on_time_while_the_imu_streams(fw_on_path, monkeypatch):
+    """The real main loop with the I2C costs of the fake IMU (90 / 330 us per read) and a 3 ms garbage
+    collection: the IMU reads and the collection give way to a switch that is due soon, so the
+    switches stay within about a tenth of a millisecond, while the IMU still delivers its samples."""
+    import gc
+
+    clock = SimClock(10_000_000)
+    t0 = clock.t
+    script = [(t0, "EMIT 10 20 30\nIMU 833\n"), (t0 + 20_000, "ALT 8333333 2000 2000\n")]
+    script += [(t0 + 20_000 + k * 200_000, "HB\n") for k in range(1, 10)]
+    script += [(t0 + 1_900_000, "STATUS\n")]
+    stdin = TimedStdin(clock, script)
+    machine, time_mod, select_mod, _, pwms, _ = make_stubs(clock, stdin)
+    overlaps = []
+
+    class CheckedPWM(machine.PWM):
+        """Checks at every switch-on once ALT has arrived that the dots (the third PWM made) and a laser
+        are never on together. (Before it, the steady EMIT lights both, as it should.)"""
+
+        def duty_u16(self, d=None):
+            r = super().duty_u16(d)
+            if d and clock.t >= 10_020_000 and len(pwms) == 5 and pwms[2].duty and any(
+                    p.duty for i, p in enumerate(pwms) if i != 2):
+                overlaps.append(clock.t)
+            return r
+
+    machine.PWM = CheckedPWM
+    collects = []
+    calls = [0]
+
+    def mem_free():  # now and then the heap runs low
+        calls[0] += 1
+        return 0 if calls[0] % 50 == 0 else 1 << 20
+
+    def slow_collect():
+        collects.append(clock.t)
+        clock.advance(3000)
+
+    monkeypatch.setattr(gc, "mem_free", mem_free, raising=False)
+    monkeypatch.setattr(gc, "collect", slow_collect)
+    out = Out()
+    f = fw.run(machine, time_mod, select_mod, stdin, types.SimpleNamespace(write=out), max_iterations=30_000)
+    assert clock.t > 12_000_000 and not overlaps
+    st = [ln for ln in out.lines if ln.startswith("S ")][0]
+    late = [int(x) for x in st.split(" late=")[1].split()[0].split(",")]
+    sw = int(st.split(" sw=")[1].split()[0])
+    assert sw >= 4 * 100  # about 1.9 s at 60 cycles a second, four switches each
+    assert late[1] < 150, st  # worst lateness in us
+    assert int(st.split(" miss=")[1]) == 0
+    t_status = int(st.split(" up=")[1].split()[0].replace(".", ""))
+    assert t_status > 1_800  # ms: STATUS came after ~1.9 s
+    n_imu = sum(1 for ln in out.lines if ln.startswith("I ") and int(ln.split()[1]) < t0 + 1_800_000)
+    assert n_imu > 0.6 * 833 * 1.8  # the IMU still streams
+    assert len(collects) > 10  # and the garbage is still collected, in the slack
+    assert all(p.duty == 0 for p in pwms) and not f.alt  # loop exit: off
+
+
 # --------------------------------------------------------------------------- MicroPython compatibility lint
 ALLOWED_IMPORTS = {"sys", "struct", "math", "machine", "select", "time", "gc", "lsm6dsox"}
 

@@ -54,13 +54,17 @@ python -m serial.tools.miniterm COM5 115200 --eol LF -e
 Then type:
 
 ```
-HELLO          -> OK HELLO ohs-fw 1.1.0 imu=LSM6DSOX
+HELLO          -> OK HELLO ohs-fw 1.3.0 imu=LSM6DSOX
 STATUS         -> S emit=0,0,0 imu=0 btn=0 up=42.137
 EMIT 0 0 20    -> OK EMIT 0 0 20      dot projector at 20 %; it switches off 1.5 s later (watchdog)
 IMU 104        -> OK IMU 104 6.1086524e-04 2.3928226e-03, then a stream of "I <t_us> gx gy gz ax ay az"
                   and once a second "C <t_us> 2934" (the IMU chip at 29.34 degC)
 STATUS         -> S emit=0,0,0 imu=104 btn=0 up=58.410 temp=29.34
 IMU 0          -> OK IMU 0 ...        stream stops
+EMIT 20 20 20  -> OK EMIT 20 20 20
+ALT 16666667 3000 3000
+               -> OK ALT 61203551 0 16666667 3000 3000   dots and lasers in turn, 3 ms each at 60 frames a
+                  second (both look dimmer); the watchdog stops it 1.5 s later, as with EMIT
 ```
 
 Press the trigger: `B <t_us> 1` when pressed, `B <t_us> 0` when released. At rest, `az` should
@@ -124,7 +128,11 @@ Commands are case-insensitive.
 | `IMU <rate_hz>` (0 = stop; 104/208/416/833) | `OK IMU <rate> <gyro_rad_per_lsb> <accel_ms2_per_lsb>` |
 | `TIME` | `T <t_us>` |
 | `HB` | (no reply, keeps the emitters alive) |
-| `STATUS` | `S emit=<v>,<h>,<d> imu=<rate> btn=<0\|1> up=<s>`, plus ` temp=<degC>` once a temperature was read; `emit=` has five values while the second lasers differ from the first |
+| `STATUS` | `S emit=<v>,<h>,<d> imu=<rate> btn=<0\|1> up=<s>`, plus ` temp=<degC>` once a temperature was read; `emit=` has five values while the second lasers differ from the first; while switching in turn (1.3.0+) also ` alt=<period_ns>,<dots_us>,<lasers_us> late=<mean_us>,<worst_us> sw=<n> miss=<n>` |
+| `ALT <period_ns> <dots_us> <lasers_us>` (1.3.0+) | `OK ALT <start_us> <start_ns> <period_ns> <dots_us> <lasers_us>`: the dots and the lasers in turn (below); the first cycle starts at once, at the time given |
+| `ALT 0` | `OK ALT 0`: stop switching, back to the steady `EMIT` levels |
+| `ALTN <shift_us>` (signed, at most one period) | `OK ALTN <start_us> <start_ns> <period_ns> <dots_us> <lasers_us>`: the phase moves once, from the next cycle start on (the one given) |
+| `ALTP <period_ns>` | `OK ALTP <start_us> <start_ns> <period_ns> <dots_us> <lasers_us>`: a new period from the next cycle start on; that start stays where it was |
 
 Asynchronous lines: `I <t_us> <gx> <gy> <gz> <ax> <ay> <az>` (raw int16 counts, IMU frame),
 `B <t_us> <0|1>`, `C <t_us> <centi_degC>`, `E <msg>`, `L <msg>`.
@@ -146,11 +154,49 @@ Asynchronous lines: `I <t_us> <gx> <gy> <gz> <ax> <ay> <az>` (raw int16 counts, 
   the reasoning is in `lsm6dsox.py`. The PC maps `t_us` to its own clock with the `TIME`
   sync in `ohs/devices/pico.py`.
 
+### The dots and the lasers in turn (1.3.0+)
+
+The projector's dots pull the laser line's centre, so the camera can take its frames in turn: one
+with the dots only, the next with the lasers only. The camera has no sync output, so the Pico keeps
+the camera's frame period on its own microsecond clock, and the PC steers the phase and the period
+from what the pictures show.
+
+* A cycle is two periods. In the first the dots are on for `dots_us` from the period's start, in the
+  second the lasers (every laser channel) for `lasers_us`; outside those windows everything is off.
+  The dots and the lasers are never on together: whatever goes off is switched before anything
+  comes on. The levels are the `EMIT` levels; `EMIT` while switching changes them at once.
+* `period_ns` is in nanoseconds (2 000 000 to 100 000 000, i.e. 2 to 100 ms), e.g. `16666667` for
+  60 frames a second on the Pico's clock. Every period start keeps its part below a microsecond, so
+  no rounding error builds up: a switch falls on the first whole microsecond at or after its exact
+  time, plus the main loop's lateness. Each window must be shorter than the period (`0` leaves that
+  window dark). Errors: `E ALT bad args ...`, `E ALT period out of range ...`, `E ALT window longer
+  than the period`, `E ALTN not running`, `E ALTN shift larger than a period`, `E ALTP ...`.
+* The answer's cycle start is `start_us + start_ns / 1000` microseconds on the clock that `TIME`
+  reports; cycle n after it begins `2 n period_ns` later. `ALTN` and `ALTP` take hold at the next
+  cycle start and answer with it: while a cycle runs, the one after it (the running cycle is not
+  disturbed); in the dark gap after the lasers window, the cycle about to begin. Several `ALTN`
+  before that start add up; for `ALTP` the last one counts.
+* While switching, the main loop leaves out the IMU read and the temperature read when a switch is
+  due within 0.6 ms, and the garbage collection when one is due within 4 ms, so neither delays a
+  switch (the IMU sample waits in the sensor; its time stamp can then be about 0.3 ms further off).
+  A window the loop reaches only after its end is skipped whole and counted as missed; a late loop
+  never moves the grid. `STATUS` reports the mean and the worst lateness in microseconds of the
+  switches since the last `STATUS` (`late=`), their number (`sw=`) and the missed windows (`miss=`),
+  then counts afresh.
+* Without an `ALT` command the firmware behaves exactly as 1.2.0.
+* **Status:** tested with the simulated board only (`software/tests/test_firmware.py`): the windows
+  stay within 2 us of their exact times over 10 000 cycles there. The lateness of the real main loop
+  on a Pico or an ESP32 (USB writes, I2C, garbage collection) is not measured yet: read `late=` in
+  `STATUS` on the real board.
+
 ## Safety behaviour
 
 * Emitters are off at boot, on any exception (reported as an `E` line), whenever the main loop
   exits (including Ctrl-C), and **1.5 s after the last complete line from the PC**. The PC client
   sends `HB` every 0.4 s while an emitter is on, so a crashed or unplugged PC turns them off.
+* Each of these also stops the switching in turn (1.3.0+), with everything off. The watchdog stops
+  a running switching even with every level at 0 and logs `L emitters-off watchdog`, so the PC
+  learns it has stopped; the PC client keeps sending `HB` while the switching runs.
 * Values outside 0..100 % are clamped.
 * The hardware kill toggle is still the primary safety. Optional hardening: a 10 kOhm resistor from
   each transistor base to GND keeps the emitters off while the Pico is held in reset or in BOOTSEL.

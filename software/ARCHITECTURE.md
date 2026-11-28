@@ -151,6 +151,7 @@ def find_pico_port() -> str | None: ...
 | `IMU <rate_hz>` (0 = stop; supported 104/208/416/833) | `OK IMU <rate> <gyro_rad_per_lsb> <accel_ms2_per_lsb>` |
 | `TIME` | `T <t_us>` (microseconds; the firmware unwraps `ticks_us` into a 64-bit counter and sends that everywhere) |
 | `HB` | (no reply) |
+| `ALT <period_ns> <dots_us> <lasers_us>`, `ALT 0`, `ALTN <shift_us>`, `ALTP <period_ns>` (1.3.0+) | the dots and the lasers in turn on the Pico's clock: `OK ALT <start_us> <start_ns> <period_ns> <dots_us> <lasers_us>` (`firmware/README.md`); not used by the app yet |
 | `STATUS` | `S emit=<v>,<h>,<d> imu=<rate> btn=<0\|1> up=<s>`, plus ` temp=<degC>` once a temperature was read (1.1.0+) |
 
 Asynchronous Pico -> host lines: `I <t_us> <gx> <gy> <gz> <ax> <ay> <az>` (raw int16 counts, IMU frame),

@@ -950,6 +950,27 @@ and thin parts".
       on Windows, so it waits for the owner's word.
     - **120 frames a second** as a camera setting (default unchanged), once frames in turn
       exist.
+  - **Frames in turn without a wire, built in software (owner 2026-11-27: "sure"). Nothing
+    here is used by the app yet, and nothing is proven on hardware.**
+    1. *Firmware 1.3.0, done 2026-11-27.* The Pico switches the dots and the lasers in turn
+       on its own clock. `ALT <period_ns> <dots_us> <lasers_us>` starts it: a cycle is two
+       periods, the dots on for `dots_us` from the start of the first, the lasers for
+       `lasers_us` from the start of the second, everything off otherwise, so the two are
+       never on together. The period is in nanoseconds and no rounding builds up (each
+       switch within 1 us of its exact time, plus the main loop's lateness). `ALTN
+       <shift_us>` shifts the phase once, `ALTP <period_ns>` changes the period without
+       moving the next cycle start, `ALT 0` goes back to steady levels; every answer gives
+       a cycle start on the Pico's clock. `STATUS` reports how late the switches were
+       (`late=`, `sw=`, `miss=`). The watchdog, any exception and leaving the main loop
+       stop the switching with everything off. Host: `Pico.start_alternating`,
+       `nudge_alternating`, `set_alternating_period`, `stop_alternating` return the cycle
+       start in host time (`AltSchedule`); closing, or opening over a switching left
+       running, turns the emitters off BEFORE it stops the switching, so the steady levels
+       never light everything at once on the way out. Without `ALT` the firmware answers
+       byte for byte as 1.2.0 did (a recorded session of 224 lines). Unproven until the
+       real board: the main loop's lateness (USB writes, garbage collection; the loop
+       leaves the motion sensor read out when a switch is due within 0.6 ms), the ESP32
+       port, and how the Pico's clock keeps step with the camera's.
   - With 20 tags on the table 300 mm apart: the mesh's length -0.042 / +0.048 / +0.018 %
     (without: -0.164 / +0.197 / +0.054), the camera path -0.052 / +0.060 / +0.003 % (without:
     0.18 to 0.45), the passes' slide 0.34 to 1.14 mm RMS (without: 1.4 to 11.4).
