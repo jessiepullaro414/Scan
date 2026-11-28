@@ -7502,7 +7502,8 @@ before, the poses are changed below 0.75)
   turn it acts less often (walls and sphere stop at "too few crossings", which is safe) and does less harm on the
   bracket (5.4 against 10.7 mm), but it still harms. This is the fault of "Why the laser crossings miss at the true
   poses" (2026-11-27), not a new one; in the app Straighten runs the crossings on every scan with lasers.
-- **On the long drifted orbit with a reference, in turn ends worse than today** (2.68 against 1.62 mm; the turn
+- **On the long orbit with the tests' drift (seed 3) and a reference, in turn ends worse than today. Over nine
+  drifts it does not: see "Nine drifts" below.** (Seed 3: 2.68 against 1.62 mm; the turn
   error grows from 0.72 to 0.78 degrees where today's falls to 0.34). More rounds or iterations make it worse, and
   the crossings end at 0.022 mm, below the 0.034 mm of the true poses: it over-fits. The depth term alone gives about
   1.05 mm in both. So the exact crossings pull the path away from the better answer. Likely, not proven: the choice
@@ -7511,12 +7512,50 @@ before, the poses are changed below 0.75)
   ended at 1.14 mm with the reference and 1.90 without (turn error 0.28 and 0.46 degrees): better than today's 1.62
   and 3.27. A prior four times looser was worse in turn and today. So the weighting of the prior against the now
   exact crossings is the likely fault, not the laser frames. Not tried in the design that was built, nor on today's
-  way (`meas\coupling.json`, `meas\drift_ref_settings.txt`).
+  way (`meas\coupling.json`, `meas\drift_ref_settings.txt`). Followed the same day ("Nine drifts" below): it
+  holds for that one drift only.
 - `tangent_fit_mm` removes nearly all crossings on the short scans (0 to 41 left), in both.
 
-**Open, as tasks of their own.** Refusing a line's crossing with the same line of a near frame; the over-fitting
-with exact crossings (the weight of the crossings against the depth term, the pair choice); a held-out check that
-false crossings at bends cannot pass. Until then the crossings are not to be relied on to straighten an in-turn
+**Nine drifts, and the motion prior's stiffness (added the same day).** The drifted orbit above is one drift, the
+tests' (seed 3). The lead was followed in the design that was built, over nine drifts (seeds 1, 2, 3, 5, 7, 11, 13,
+17, 19; path error 3.2 to 6.0 mm rms before) and with the prior made 2 to 100 times stiffer; no code was changed.
+
+| the orbit after the adjustment, rms mm, nine drifts | mean | median | better than today's way | path made worse than before |
+|---|---|---|---|---|
+| in turn, true surface as the reference | 1.82 | 1.11 | on 7 of 9 | on 1 (seed 1: 5.69 -> 6.60) |
+| today, the same | 2.11 | 1.62 | | on none |
+| in turn, no reference | 2.29 | 1.75 | on 7 of 9 | on 1 (seed 1: 5.69 -> 6.66) |
+| today, the same | 4.13 | 3.46 | | on 3 (seeds 2, 7, 17: up to 4.30 -> 7.88) |
+
+- **Seed 3 was an unlucky drift for frames in turn, not a typical one.** With the settings as built, in turn ends
+  below today's way on 7 of the 9 drifts, with the reference and without; the exceptions are seeds 3 and 1.
+- **On seed 1 the in-turn adjustment makes the path worse** (5.69 to 6.6 mm, the turn error 1.41 to 1.77 degrees)
+  and the held-out check lets it pass (0.12 with the reference, 0.18 without). Today's way does the same on three
+  drifts when it has no reference.
+- **A stiffer prior is not the remedy in turn.** Ten times stiffer it is better on 3 of 9 drifts with the reference
+  and on 2 of 9 without, and worse on the rest (median 1.15 against 1.11 mm with the reference, 2.34 against 1.75
+  without; seed 11: 0.78 to 1.15). It lowers the mean only through the two unlucky drifts. The crossings' weight,
+  the robust floor and the number of rounds change nothing for the better either. **The default stays.**
+- The orbit's true poses are left alone at every stiffness, in turn (ratio 1.55 as built, 1.15 at 100 times) and
+  today (1.18 to 1.07): the margin shrinks as the prior stiffens.
+- The short bracket in turn passes the check at its true poses at every stiffness; stiffer, its poses are moved
+  less (rms 2.98 mm as built, 2.30 at 10 times, 1.17 at 100 times), and its tracked path ends less bad (5.42 as
+  built, 3.60 at 10 times) but still worse than before (2.92).
+- **For today's way a stiffer prior looked better on most of these cases** (numbers only; nothing changed): ten
+  times stiffer it beats the default on 8 of 9 drifts with the reference (mean 2.11 to 1.78) and 7 of 9 without
+  (4.13 to 2.84), and it leaves the short scans' true poses far less wrong (path rms after: walls 7.1 to 2.2 mm,
+  sphere 8.6 to 1.6, bracket 5.0 to 3.9). The tracked sphere and bracket still end worse than before (sphere 0.29 to 1.86 where the
+  default gives 6.20). A change of today's default is a scan-result change and needs the scorecard: a task of its
+  own.
+
+Processor path, 640 x 400, the recordings above; the short scans' tracked paths and meshes were taken from the
+earlier runs. Not measured: meshes and wall thickness, the graphics card, 1280 px, drift on the short scans.
+Work files: `D:\OpenHandScan-work\scratch\turnW` (`sweep.py`, `show.py`, `meas\*.jsonl`).
+
+**Open, as tasks of their own.** Refusing a line's crossing with the same line of a near frame; a held-out check
+that false crossings at bends cannot pass, and that a drift like seed 1's cannot pass; the choice of the pair per
+pair of curves. The weighting is not the remedy in turn ("Nine drifts" above). For today's way: the stiffer
+motion prior, on the scorecard. Until then the crossings are not to be relied on to straighten an in-turn
 scan, and the server's Straighten step, when it learns frames in turn, should say so or leave them off.
 
 **Tests.** `tests/test_track_curve_ba_in_turn.py`, 13: the guard of six (five digests, and a kinds column of

@@ -1019,12 +1019,20 @@ and thin parts".
          crossings meet about four times better at the true poses (orbit 0.034 against
          0.150 mm) and the true poses of the orbit are left alone, but short scans have
          only false crossings (the bracket's true poses are moved 4.1 mm; today's way
-         moves all three scenes' by 7.6 to 13.7 mm), and on the drifted orbit with a
-         reference in turn ends worse than today (2.68 against 1.62 mm): it over-fits the
-         exact crossings. **Not to be relied on yet.** Open, tasks of their own: refuse a
-         line's crossing with the same line of a near frame; the weight of the crossings
-         against the depth term and the pair choice; a held-out check that false crossings
-         at bends cannot pass.
+         moves all three scenes' by 7.6 to 13.7 mm). On the drifted orbit, over nine
+         drifts, in turn ends below today's way on 7 (median 1.11 against 1.62 mm with a
+         reference, 1.75 against 3.46 without); on one drift (seed 1) it makes the path
+         worse and the held-out check lets that pass, as today's way does on three
+         drifts without a reference. A stiffer motion prior was studied and is NOT the
+         remedy in turn (better on 3 of 9 drifts, worse on the rest): the default stays.
+         **Not to be relied on yet.** Open, tasks of their own: refuse a line's crossing
+         with the same line of a near frame; a held-out check that false crossings at
+         bends, and a drift like seed 1's, cannot pass; the pair choice.
+       - **For today's recordings, found on the way (not changed):** a motion prior ten
+         times stiffer in the laser crossings was better on 8 of 9 drifts with a reference
+         and 7 of 9 without, and left the true poses of the short walls and sphere scans 3
+         to 5 times less wrong (the bracket's a little).
+         It changes scan results, so it needs the scorecard before it is adopted (E-D1).
        - **Not started, one at a time:** the server's Straighten step on such a scan (pass
          the dot frames' trajectory, fuse again with the laser frames placed again, and
          say that the crossings are not relied on, or leave them off); Refine with lasers
