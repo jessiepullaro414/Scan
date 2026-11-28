@@ -1011,9 +1011,25 @@ and thin parts".
          neighbours' depth is counted, not applied (`laser_frame_depth_check`, off: it took
          good points off the walls). Open: the tracked walls at 1280 px on the graphics
          card; a laser frame's points are kept in memory until the pass ends.
-       - **Not started, one at a time:** the crossings and Refine with lasers (they read the
-         laser lines from the frames of `trajectory.csv`, now dot frames: they must read
-         the laser frames at their placed poses); the calibration's health check (no
+       - **The laser crossings, the engine function, done 2026-11-28** (`VALIDATION.md`, "The
+         laser crossings on recordings with frames in turn").
+         `ohs.track.curve_ba.laser_curve_adjustment` reads the laser frames, each placed
+         between the given dot frames and tied to them in the solve; a recording without
+         kinds is adjusted exactly as before on both compute paths. Mixed result: real
+         crossings meet about four times better at the true poses (orbit 0.034 against
+         0.150 mm) and the true poses of the orbit are left alone, but short scans have
+         only false crossings (the bracket's true poses are moved 4.1 mm; today's way
+         moves all three scenes' by 7.6 to 13.7 mm), and on the drifted orbit with a
+         reference in turn ends worse than today (2.68 against 1.62 mm): it over-fits the
+         exact crossings. **Not to be relied on yet.** Open, tasks of their own: refuse a
+         line's crossing with the same line of a near frame; the weight of the crossings
+         against the depth term and the pair choice; a held-out check that false crossings
+         at bends cannot pass.
+       - **Not started, one at a time:** the server's Straighten step on such a scan (pass
+         the dot frames' trajectory, fuse again with the laser frames placed again, and
+         say that the crossings are not relied on, or leave them off); Refine with lasers
+         (untried: it reads the laser cloud, which the frame pass fills from the laser
+         frames); the calibration's health check (no
          laser-against-depth samples on such a scan); the thin-walls step and the hole
          reading (untried); freeing disk space (keeps every n-th frame and must keep both
          kinds); live scanning. All need frame times that follow the camera's clock

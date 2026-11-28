@@ -7422,6 +7422,115 @@ camera's clock used as it is (`frame_times` "camera", `frame_clock` "host", `fra
 read from its start-up code before. This exe is the current one. Not tested in the exe: a scan with the camera
 (the scanner is not assembled, no control board on this PC).
 
+## The laser crossings on recordings with frames in turn (ENGINE_PLAN X8, 2026-11-28)
+
+The step that lines a scan up on the crossings of its laser lines (`ohs.track.curve_ba.laser_curve_adjustment`, run
+by Straighten) read the laser lines from the frames of the trajectory it was given. On a recording whose frames come
+in turn those are dot frames, which hold no laser line. It now reads such a recording. Simulator only, the engine
+function only: the app's Straighten step does not pass it an in-turn scan yet. **The result is mixed, and the
+crossings are not yet to be relied on for in-turn scans** (below).
+
+**What it does with frames in turn.** The laser curves come from the laser frames (and from frames holding both
+lights, at their own poses); no line is looked for in a dot frame, and mixed and dark frames are never read. Each
+laser frame is placed between the given dot frames beside it by the frame pass's own rule (`ohs.track.pose_between`)
+and is left out, and counted with the reason, at the scan's ends, beside an untracked dot frame, across a cut or
+across a long gap. In the solve a laser frame has no pose of its own: it stays placed between its dot frames, so its
+crossings move those dot frames, and it is placed again after every step. The dot frames carry the motion prior and
+the depth term (a laser frame has no depth). The held-out check holds out every second laser frame. Every tracked dot
+frame gets a pose, as before. Afterwards the laser frames are to be placed again between the new dot poses, which is
+exactly where the solve had them (0.0000 mm apart; the frame pass does this already when it is given poses).
+`report["frames_in_turn"]` says how many laser frames were placed, used, and left out and why.
+
+**Why tied and not free.** A first design gave each laser frame its own pose, joined to its neighbours by the
+motion prior. On the drifted orbit with a reference surface it ended at 3.06 mm against 2.68 mm tied, and its
+laser poses lay 0.08 to 0.10 mm (median) from where the frame pass would place them afterwards.
+
+**A recording without kinds is adjusted exactly as before.** Processor path: digests of the poses (bit for bit) and
+of the report without its timings, five cases on two recordings, taken on the unchanged code first; checked again
+here by running the code before the change (they are its digests). Graphics card: the same five cases through the
+code before and after, every digest equal (`D:\OpenHandScan-work\scratch\turnX\same_curve.py`).
+
+**At the TRUE dot poses** (640 x 400, processor path; median miss of the crossings in mm, their number in brackets).
+The short scans are 48 frames at 60 a second (0.8 s; in turn 24 dot and 24 laser frames); "today" has both lights
+in every frame; the orbit is 400 degrees around the sphere in 12 s (60 frames today, 60 dot and 60 laser in turn).
+
+| scene | in turn | today, all 48 frames | today, every second frame |
+|---|---|---|---|
+| standing walls | 0.355 (56) | 0.464 (765) | 0.492 (206) |
+| bracket | 0.934 (160) | 0.663 (951) | 0.733 (213) |
+| sphere | 1.715 (25) | 0.877 (640) | 0.910 (168) |
+| orbit | **0.034** (1623) | 0.150 (1421) | |
+
+- **Real crossings meet far better in turn.** Counting only a horizontal line meeting a vertical one: walls 0.066 mm
+  (28 crossings) against 0.143 (65) today; orbit 0.043 (695) against 0.145 (704). On the orbit the lines meet about
+  four times better without the projector's dots, as the study of 2026-11-27 expected.
+- **The short bracket and sphere scans have no real crossing at all**, in turn or today: every crossing there is one
+  line met by the same line of another frame. Today most of those are neighbouring frames whose lines the dots make
+  jagged (0.4 to 0.6 mm); in turn those vanish, and what is left are false crossings at bends (1.4 to 1.7 mm). That
+  is why the plain medians of bracket and sphere are worse in turn: fewer, and only false ones.
+- Placing costs nothing measurable: with true laser poses instead of placed ones the walls' miss is 0.349.
+
+**Does the held-out check leave the true poses alone?** (the answer wanted is yes; ratio = held-out miss after /
+before, the poses are changed below 0.75)
+
+| scene | in turn | today, all 48 frames | today, every second frame |
+|---|---|---|---|
+| orbit | yes (1.49; 1.545 with a reference) | yes (1.221) | |
+| standing walls | yes, too few crossings (56 of 150) | **no**: 0.551, true poses moved 10.3 mm | no: 0.814, moved 4.7 mm |
+| bracket | **no**: 0.095, moved 4.1 mm | no: 0.255, moved 7.6 mm | no: 0.193, moved 5.3 mm |
+| sphere | yes, too few crossings (25) | no: 0.206, moved 13.7 mm | no: 0.467, moved 3.3 mm |
+
+**At the TRACKED poses** (the frame pass's own path, its mesh as the reference; path error rms mm before -> after):
+
+| scene | in turn | today, all 48 frames |
+|---|---|---|
+| standing walls | too few crossings (78): unchanged, 29.9 (the path slides at 640 px on the processor) | not better (0.853): unchanged, 26.4 |
+| bracket | adjusted (0.493): **2.92 -> 5.42** | adjusted (0.705): **3.49 -> 10.65** |
+| sphere | too few crossings (25): unchanged, 0.264 | adjusted (0.337): **0.29 -> 6.20** |
+
+**The orbit with drift put on the dot frames** (rms mm before -> after; turn error median after):
+
+| | in turn | today |
+|---|---|---|
+| no reference | 5.95 -> 3.28, 0.96 deg | 5.95 -> 3.27, 0.40 deg |
+| true surface as the reference | 5.95 -> **2.68**, 0.78 deg | 5.95 -> **1.62**, 0.34 deg |
+| the same with `tangent_fit_mm` 1.5 | 2.59 | 1.91 |
+
+**What this says.**
+
+- On short scans the adjustment makes the path WORSE wherever it acts, today and in turn, by false crossings. In
+  turn it acts less often (walls and sphere stop at "too few crossings", which is safe) and does less harm on the
+  bracket (5.4 against 10.7 mm), but it still harms. This is the fault of "Why the laser crossings miss at the true
+  poses" (2026-11-27), not a new one; in the app Straighten runs the crossings on every scan with lasers.
+- **On the long drifted orbit with a reference, in turn ends worse than today** (2.68 against 1.62 mm; the turn
+  error grows from 0.72 to 0.78 degrees where today's falls to 0.34). More rounds or iterations make it worse, and
+  the crossings end at 0.022 mm, below the 0.034 mm of the true poses: it over-fits. The depth term alone gives about
+  1.05 mm in both. So the exact crossings pull the path away from the better answer. Likely, not proven: the choice
+  of the closest pair per pair of curves, made again each round, picks pairs that already meet.
+- **A lead, not followed yet.** In a trial of the first design (laser frames free) a motion prior ten times stiffer
+  ended at 1.14 mm with the reference and 1.90 without (turn error 0.28 and 0.46 degrees): better than today's 1.62
+  and 3.27. A prior four times looser was worse in turn and today. So the weighting of the prior against the now
+  exact crossings is the likely fault, not the laser frames. Not tried in the design that was built, nor on today's
+  way (`meas\coupling.json`, `meas\drift_ref_settings.txt`).
+- `tangent_fit_mm` removes nearly all crossings on the short scans (0 to 41 left), in both.
+
+**Open, as tasks of their own.** Refusing a line's crossing with the same line of a near frame; the over-fitting
+with exact crossings (the weight of the crossings against the depth term, the pair choice); a held-out check that
+false crossings at bends cannot pass. Until then the crossings are not to be relied on to straighten an in-turn
+scan, and the server's Straighten step, when it learns frames in turn, should say so or leave them off.
+
+**Tests.** `tests/test_track_curve_ba_in_turn.py`, 13: the guard of six (five digests, and a kinds column of
+"both" only changes nothing), and seven for frames in turn (curves from the laser frames only and the true poses
+left alone; drift reduced and the laser frames placed again where the solve had them; left out beside an untracked
+or cut dot frame; no laser frame placed changes nothing; frames of both lights read at their own poses, mixed and
+dark never; a tied frame moves the frames it lies between; `max_frames` counts the laser frames). With the other crossings tests, the placing, the frame pass in turn and the calibration's health scans: 64 pass on the processor path; 55 pass and 9 are skipped on the graphics card (the digests are the processor path's).
+
+**Not measured.** Meshes and wall thickness after the adjustment; seeds other than 0; scans longer than the orbit
+in turn; frames picked by motion (the default gap limit is 2.5 times the median interval of the dot frames given,
+stricter than the frame pass's for those); four lasers in turn; the graphics card beyond the unchanged-results
+check and the tests; real pictures. Work files: `D:\OpenHandScan-work\scratch\turnX` (`NOTES.md`, `measure.py`,
+`meas`).
+
 ## What the metrics mean
 
 - **Stereo errors** compare the estimated raw intrinsics/extrinsics (`K1`, `K2`, `R`, `T`) with

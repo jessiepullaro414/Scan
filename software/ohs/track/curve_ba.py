@@ -57,6 +57,11 @@ poses so that they do:
 5. **Corrections** go to every tracked frame by interpolation between the frames used
    (:func:`ohs.track.posegraph.interpolate_poses`).
 
+**Frames in turn** (dot frames and laser frames, :mod:`ohs.app.process`): the trajectory holds the dot frames, which
+have no laser line; the curves come from the laser frames, each placed between the given dot frames beside it by the
+frame pass's rule and tied to them in the solve (:func:`laser_curve_adjustment`, "Frames in turn"). A recording
+without kinds is adjusted exactly as before (``tests/test_track_curve_ba_in_turn.py``).
+
 On the simulator (``VALIDATION.md``, "Laser-curve adjustment"), a full-resolution 400 deg orbit
 around the sphere with random-walk drift, after Straighten: the sphere's mesh error 0.17 -> 0.12 mm
 and the table's 0.12 -> 0.11 mm (true poses: 0.09). Short scans have few crossings: a frame's
@@ -410,30 +415,67 @@ def _tukey(r: np.ndarray, floor: float) -> np.ndarray:
 
 def adjust_poses(T: dict[int, np.ndarray], cr: Crossings, frames: Sequence[int], params: CurveParams | None = None,
                  dense: tuple[dict[int, np.ndarray], Any, np.ndarray, np.ndarray] | None = None,
-                 gaps: dict[int, float] | None = None) -> tuple[dict[int, np.ndarray], list[dict]]:
+                 gaps: dict[int, float] | None = None,
+                 tied: dict[int, tuple[Sequence[int], Sequence[float], float]] | None = None,
+                 ) -> tuple[dict[int, np.ndarray], list[dict]]:
     """Gauss-Newton on the poses ``T`` of ``frames`` (module docstring, step 3); ``frames[0]``
     stays fixed. ``dense``: ``(points per frame (frame C), k-d tree of the reference vertices,
     vertices, normals)``. ``gaps``: processed frames from each frame to the next (default 1), for
-    the random-walk prior. Returns the new poses and one line of numbers per iteration."""
+    the random-walk prior. Returns the new poses and one line of numbers per iteration.
+
+    ``tied`` (frames in turn): frames of ``frames`` whose pose is no unknown of its own but placed between others,
+    ``{frame: (its neighbours, their times, its time)}`` (a laser frame between the dot frames beside it). Its pose is
+    :func:`ohs.track.pose_between.pose_between` of the neighbours' poses (the rotations as turns from the neighbour
+    just before it, as :func:`~ohs.track.pose_between.place_laser_frames` places it), its crossings move the
+    neighbours with the weights of the same polynomial, and it is placed again after every step. The motion prior,
+    ``gaps`` and ``frames[0]`` concern the other frames, in their order. Without ``tied`` the solve is as before."""
     import scipy.sparse as sp  # noqa: PLC0415
     import scipy.sparse.linalg as spla  # noqa: PLC0415
 
     p = params or CurveParams()
     frames = [int(f) for f in frames]
     T = {f: np.asarray(T[f], dtype=np.float64).copy() for f in frames}
-    if len(frames) < 2:
+    tied = {int(f): v for f, v in (tied or {}).items()}
+    free = [f for f in frames if f not in tied] if tied else frames  # the frames with unknowns of their own
+    if len(free) < 2:
         return T, []
-    col = {f: k - 1 for k, f in enumerate(frames)}
-    n = 6 * (len(frames) - 1)
-    o = np.mean([T[f][:3, 3] for f in frames], axis=0)
+    col = {f: k - 1 for k, f in enumerate(free)}
+    n = 6 * (len(free) - 1)
+    o = np.mean([T[f][:3, 3] for f in free], axis=0)
     L = float(p.lever_mm)
     D = np.array([L] * 3 + [1.0] * 3)
-    T0 = {f: T[f].copy() for f in frames}
+    T0 = {f: T[f].copy() for f in free}
     wo = np.array([1.0 / (L * math.radians(p.odo_deg)) ** 2] * 3 + [1.0 / p.odo_mm ** 2] * 3)
     info: list[dict] = []
+    weights: dict[int, list[tuple[int, float]]] = {}
+    if tied:
+        from ohs.track.pose_between import _lagrange, pose_between  # noqa: PLC0415
+
+        for f, (nb, ts, t) in tied.items():
+            # the polynomial's weight of each neighbour at the frame's time: a small move of the neighbours moves the
+            # frame by their weighted sum (to first order; the frame is placed again exactly after each step)
+            wt = _lagrange(np.asarray(ts, dtype=np.float64), np.eye(len(nb)), float(t))
+            weights[f] = [(col.get(int(g), -1), float(wk)) for g, wk in zip(nb, wt)]
+
+        def place() -> None:
+            for f, (nb, ts, t) in tied.items():
+                T[f] = pose_between(float(t), ts, [T[int(g)] for g in nb], base=len(nb) // 2 - 1)
 
     def block(X: np.ndarray, nrm: np.ndarray, f_arr: np.ndarray, sgn: float, row0: int, rows: list, cols: list,
               vals: list) -> None:
+        if weights:  # some frames are tied: each row goes to the columns of its frame or of its neighbours
+            J = sgn * np.concatenate([np.cross(X - o, nrm) / L, nrm], axis=1)
+            f_arr = np.asarray(f_arr)
+            for f in np.unique(f_arr):
+                rr_ = np.flatnonzero(f_arr == f)
+                for c_, wk in weights.get(int(f), [(col.get(int(f), -1), 1.0)]):
+                    if c_ < 0:
+                        continue
+                    for q in range(6):
+                        rows.append(row0 + rr_)
+                        cols.append(np.full(len(rr_), 6 * c_ + q))
+                        vals.append(wk * J[rr_, q])
+            return
         c = np.array([col.get(int(f), -1) for f in f_arr])
         ok = c >= 0
         J = sgn * np.concatenate([np.cross(X - o, nrm) / L, nrm], axis=1)
@@ -454,7 +496,7 @@ def adjust_poses(T: dict[int, np.ndarray], cr: Crossings, frames: Sequence[int],
         nrow = len(r)
         if dense is not None:
             pts, tree, Vr, Nr = dense
-            for f in frames[1:]:
+            for f in free[1:]:
                 P = pts.get(f)
                 if P is None or len(P) == 0:
                     continue
@@ -476,8 +518,8 @@ def adjust_poses(T: dict[int, np.ndarray], cr: Crossings, frames: Sequence[int],
         # the random-walk prior on the change of each consecutive pair's relative motion
         Hd = sp.lil_matrix((n, n))
         po = np.zeros(n)
-        for k in range(len(frames) - 1):
-            fa_, fb_ = frames[k], frames[k + 1]
+        for k in range(len(free) - 1):
+            fa_, fb_ = free[k], free[k + 1]
             ca, cb = col[fa_], col[fb_]
             gap = max(1.0, float((gaps or {}).get(fa_, 1.0)))
             Ea = T[fa_] @ invert_se3(T0[fa_])
@@ -498,12 +540,14 @@ def adjust_poses(T: dict[int, np.ndarray], cr: Crossings, frames: Sequence[int],
         x = spla.spsolve(H, -(g + po))
         if not np.all(np.isfinite(x)):
             break
-        for f in frames[1:]:
+        for f in free[1:]:
             xi = x[6 * col[f]:6 * col[f] + 6] / D
             E = np.eye(4)
             E[:3, :3] = so3_exp(xi[:3])
             E[:3, 3] = xi[3:] + o - E[:3, :3] @ o  # the rotation is about the scan's centre
             T[f] = E @ T[f]
+        if tied:
+            place()
         info.append({"crossings": int(len(cr)), "used": int((w > 0).sum()),
                      "miss_before_mm": round(float(np.median(np.abs(r))), 4) if len(r) else None,
                      "step_mm": round(float(np.abs(x[3::6]).max()), 4) if n else 0.0})
@@ -549,11 +593,138 @@ def acted_warning(moved_mm: float) -> str:
             "check the thickness of thin walls another way before you rely on it.")
 
 
+# --------------------------------------------------------------------------- frames in turn
+@dataclass
+class _InTurn:
+    """The frames of the adjustment on a recording whose frames come in turn (:func:`laser_curve_adjustment`, "Frames
+    in turn")."""
+
+    curve: list  # [(index, t, True, T_wc)] the frames whose laser curves are read, in time order: placed laser frames, both frames
+    solve: list  # [(index, t, True, T_wc)] the solve's frames in time order: those and the dot frames beside them
+    laser: set  # the indices of the laser frames among them
+    gaps: dict  # the solve's dot frame -> processed dot frames to the next one of the solve
+    tied: dict  # the laser frames used -> (the dot frames they are placed between, their times, its time)
+    lasers_in: list  # [(index, t)] the laser frames placed (for placing them again)
+    dots: list  # [(index, t, ok, T_wc)] the dot frames they are placed between (strictly increasing times)
+    breaks: set  # positions in ``dots`` with a cut before them
+    max_gap_s: float
+    part: dict  # report["frames_in_turn"]
+
+
+def _in_turn_frames(reader: Any, kinds: np.ndarray, rows: list, tracked: list, max_frames: int,
+                    max_gap_s: float | None) -> _InTurn:
+    """Which frames the adjustment reads and solves on an in-turn recording (:func:`laser_curve_adjustment`, "Frames in
+    turn"). ``rows``: the trajectory passed in (all its rows), ``tracked``: its tracked rows."""
+    from collections import Counter  # noqa: PLC0415
+
+    from ohs.app.in_turn import DOT_KINDS, GAP_FACTOR  # noqa: PLC0415
+    from ohs.app.process import cut_intervals  # noqa: PLC0415
+    from ohs.track.pose_between import LEFT_OUT_REASONS, place_laser_frames  # noqa: PLC0415
+
+    index, times = reader.indices, reader.times()
+    kind_of = {int(i): str(kinds[k]) for k, i in enumerate(index)}
+    given = {r[0] for r in rows}
+    dots, last = [], -math.inf
+    for r in sorted((r for r in rows if kind_of.get(r[0], "both") in DOT_KINDS), key=lambda r: r[1]):
+        if r[1] > last:  # strictly increasing times (two dot frames at the same time: the first), as the frame pass
+            dots.append((r[0], r[1], bool(r[2] and np.all(np.isfinite(r[3]))), r[3]))  # tracked as ``tracked`` says
+            last = r[1]
+    dts = [float(r[1]) for r in dots]
+    step = np.diff(dts)
+    dt = float(np.median(step)) if len(step) else 0.0
+    if max_gap_s is None:
+        max_gap_s = GAP_FACTOR * dt if dt > 0 else math.inf
+    cuts = cut_intervals(reader)
+    breaks = {k for k in range(1, len(dots)) if any(a <= dts[k] and b >= dts[k - 1] for a, b in cuts)}
+    # the laser frames of the recording within the dot frames' time span (and one usual interval beyond its ends, where
+    # the frame pass also counts a laser frame left out "at the ends")
+    lo, hi = (dts[0] - dt, dts[-1] + dt) if dts else (math.inf, -math.inf)
+    near = [(int(i), float(times[k])) for k, i in enumerate(index)
+            if kind_of[int(i)] == "lasers" and int(i) not in given and lo <= float(times[k]) <= hi]
+    outside = sum(1 for k, i in enumerate(index) if kind_of[int(i)] == "lasers" and int(i) not in given) - len(near)
+    inside_cut = [c for c in near if any(a <= c[1] <= b for a, b in cuts)]
+    cand = [c for c in near if not any(a <= c[1] <= b for a, b in cuts)]
+    placed = place_laser_frames(cand, dots, breaks=breaks, max_gap_s=max_gap_s)
+    left = Counter(pl.reason for pl in placed if pl.T_wc is None)
+    left["cut"] += len(inside_cut)
+    ok = [pl for pl in placed if pl.T_wc is not None]
+    both = [r for r in tracked if kind_of.get(r[0], "both") in ("both", "lasers")]
+    curve = sorted([(pl.index, pl.t, True, pl.T_wc) for pl in ok] + both, key=lambda r: r[1])
+    if len(curve) > max_frames:  # spread over the scan, as without kinds
+        curve = [curve[int(round(x))] for x in np.linspace(0, len(curve) - 1, max_frames)]
+    used = {r[0] for r in curve}
+    placed_of = {pl.index: pl for pl in ok}
+    laser = {f for f in used if f in placed_of}
+    # the solve's unknowns are dot frames: those each laser frame used is placed between, and the scan's first
+    # tracked frame, which stays where it is; a laser frame's pose follows theirs (adjust_poses, ``tied``)
+    beside: set[int] = {tracked[0][0]}
+    for f in laser:
+        beside.update(placed_of[f].neighbours)
+    tracked_of = {r[0]: r for r in tracked}
+    solve = sorted([r for r in curve] + [tracked_of[f] for f in beside if f in tracked_of and f not in used],
+                   key=lambda r: r[1])
+    # the motion prior between the solve's consecutive dot frames: processed frames between them, as without kinds
+    rank = {r[0]: k for k, r in enumerate(tracked)}
+    free = [r[0] for r in solve if r[0] not in laser]
+    gaps = {free[k]: float(rank[free[k + 1]] - rank[free[k]]) for k in range(len(free) - 1)}
+    time_of = {r[0]: float(r[1]) for r in tracked}
+    tied = {f: (placed_of[f].neighbours, tuple(time_of[g] for g in placed_of[f].neighbours), float(placed_of[f].t))
+            for f in laser}
+    methods = Counter(placed_of[f].method for f in laser)
+    part = {
+        "dot_frames": {"given": len(rows), "tracked": len(tracked), "in_solve": len(solve) - len(laser),
+                       "interval_s": round(dt, 6)},
+        "both_frames": sum(1 for r in curve if r[0] not in laser),
+        "laser_frames": {"candidates": len(near), "placed": len(ok), "used": len(laser),
+                         "not_selected": len(ok) - len(laser),
+                         "left_out": {r: int(left[r]) for r in LEFT_OUT_REASONS if left[r]},
+                         "outside_the_trajectory": int(outside)},
+        "left_out_kinds": {kd: int(np.count_nonzero(kinds == kd)) for kd in ("mixed", "dark") if np.any(kinds == kd)},
+        "placing": {"rule": "the frame pass's (ohs.track.pose_between), between the dot frames given",
+                    "cubic": int(methods["cubic"]), "straight": int(methods["straight"]),
+                    "max_gap_s": float(max_gap_s)},
+    }
+    return _InTurn(curve, solve, laser, gaps, tied, [(pl.index, pl.t) for pl in ok], dots, breaks, float(max_gap_s),
+                   part)
+
+
+def _laser_poses_after(turn: _InTurn, poses: dict[int, np.ndarray], adjusted: dict[int, np.ndarray],
+                       placed_in: dict[int, np.ndarray], gt: dict[int, np.ndarray] | None) -> dict:
+    """``report["frames_in_turn"]["laser_poses"]`` after the poses changed: the laser frames used placed again between
+    the new dot poses, against the poses the solve gave them; with true poses, all three against the truth."""
+    from ohs.app.in_turn import LaserFrames  # noqa: PLC0415
+    from ohs.geometry import pose_error  # noqa: PLC0415
+    from ohs.track.pose_between import place_laser_frames  # noqa: PLC0415
+
+    dots = [(i, t, ok, poses.get(i, T)) for i, t, ok, T in turn.dots]
+    again = {pl.index: pl.T_wc for pl in place_laser_frames(turn.lasers_in, dots, breaks=turn.breaks,
+                                                            max_gap_s=turn.max_gap_s) if pl.T_wc is not None}
+    used = sorted(f for f in turn.laser if f in again and f in adjusted)
+    err = [pose_error(adjusted[f], again[f]) for f in used]
+    out: dict[str, Any] = {
+        "afterwards": "placed again between the new dot poses (as the frame pass places them)",
+        "solve_vs_placed_again": {
+            "n": len(err),
+            "mm_median": round(float(np.median([e[1] for e in err])), 4) if err else None,
+            "mm_max": round(float(max(e[1] for e in err)), 4) if err else None,
+            "deg_median": round(float(np.median([e[0] for e in err])), 5) if err else None,
+            "deg_max": round(float(max(e[0] for e in err)), 5) if err else None}}
+    if gt:
+        def truth(traj: list, P: dict[int, np.ndarray]) -> dict:
+            g = LaserFrames._truth(gt, traj, [(f, 0.0, True, P[f]) for f in used if f in P])
+            return {k: ({s: v for s, v in g[k].items() if s in ("median", "p90", "max")} if isinstance(g[k], dict)
+                        else g[k]) for k in ("n", "trans_mm", "rot_deg") if k in g}
+        out["ground_truth"] = {"before": truth(turn.dots, placed_in), "placed_again": truth(dots, again),
+                               "solve": truth(dots, adjusted)}
+    return out
+
+
 # --------------------------------------------------------------------------- the whole adjustment
 def laser_curve_adjustment(rec_path: str | Path, calib: Any, trajectory: Sequence[Sequence[Any]], *,
                            reference: tuple[np.ndarray, np.ndarray] | None = None,
                            params: CurveParams | None = None, progress: Progress | None = None,
-                           cancelled: Callable[[], bool] | None = None) -> tuple[dict[int, np.ndarray], dict]:
+                           cancelled: Callable[[], bool] | None = None,
+                           laser_max_gap_s: float | None = None) -> tuple[dict[int, np.ndarray], dict]:
     """Adjust the tracked poses so the laser curves meet at their crossings (module docstring).
 
     ``trajectory``: ``[(frame index, t_host, ok, T_wc)]`` (``trajectory.csv``); ``reference``: the
@@ -565,7 +736,25 @@ def laser_curve_adjustment(rec_path: str | Path, calib: Any, trajectory: Sequenc
     camera), ``changed``, ``reason`` (``adjusted``, ``no_lasers``, ``few_crossings``,
     ``not_better``, ``off``), ``verdict``, ``warning`` (None, or when the poses changed a sentence for
     the user: :func:`acted_warning`), ``timings_s`` and, with true poses in the recording,
-    ``ground_truth`` (before / after)."""
+    ``ground_truth`` (before / after).
+
+    **Frames in turn** (a recording with kinds of frame other than ``both``, as :mod:`ohs.app.process` decides): the
+    trajectory holds the dot frames, which have no laser line, so none is looked for in them. The curves come from the
+    recording's ``lasers`` frames (and its ``both`` frames, at their own poses), each placed between the given dot
+    frames beside it in time by the frame pass's rule (:func:`ohs.track.pose_between.place_laser_frames`; left out at
+    the scan's ends, beside an untracked frame, across a cut or a gap longer than ``laser_max_gap_s``, by default
+    ``GAP_FACTOR`` (2.5) times the median interval of the trajectory's dot frames). ``max_frames`` counts these frames.
+    The solve's unknowns are the dot frames the laser frames used lie between (and the first tracked frame, fixed): a
+    laser frame has no pose of its own, it stays placed between them by the same rule (:func:`adjust_poses`,
+    ``tied``), so its crossings move the dot frames beside it; the dot frames carry the depth term (with
+    ``reference``; a laser frame has no depth) and the motion prior, as without kinds. The held-out test holds out
+    every ``holdout_every``-th laser frame. Every tracked dot frame gets its pose from the solve, or by interpolation
+    in time between the solve's frames as without kinds. ``report["frames_in_turn"]`` says what was used: ``dot_frames``,
+    ``both_frames``, ``laser_frames`` (``candidates``, ``placed``, ``used``, ``not_selected`` (placed, beyond
+    ``max_frames``), ``left_out`` by reason, ``outside_the_trajectory``, and ``with_curves``), ``left_out_kinds``,
+    ``placing``, and when the poses changed ``laser_poses``: the laser frames' poses are to be placed again between
+    the new dot poses (as :func:`ohs.app.process.process_recording` does with given poses), with how far that is from
+    the poses the solve gave them and, with true poses, all of them against the truth."""
     from scipy.spatial import cKDTree  # noqa: PLC0415
 
     from ohs.app.process import trajectory_errors  # noqa: PLC0415
@@ -608,18 +797,37 @@ def laser_curve_adjustment(rec_path: str | Path, calib: Any, trajectory: Sequenc
         raise ValueError(f"CurveParams.holdout must be 'crossings' or 'frames', not {p.holdout!r}")
     if not calib.lasers or len(tracked) < 3:
         return finish(dict(poses_in), "no_lasers", "No laser lines to line the scan up with, so the poses are unchanged.")
-    sel = [r for r in tracked]
-    if len(sel) > p.max_frames:
-        sel = [sel[int(round(x))] for x in np.linspace(0, len(sel) - 1, p.max_frames)]
-    frames = [r[0] for r in sel]
-    order = [r[0] for r in tracked]
-    rank = {f: k for k, f in enumerate(order)}
-    gaps = {frames[k]: float(rank[frames[k + 1]] - rank[frames[k]]) for k in range(len(frames) - 1)}
+    kinds = reader.kinds()
+    turn: _InTurn | None = None
+    if reader.has_kinds and bool(np.any(kinds != "both")):
+        # frames in turn (docstring): the laser frames placed between the given dot frames
+        turn = _in_turn_frames(reader, kinds, rows, tracked, int(p.max_frames), laser_max_gap_s)
+        report["frames_in_turn"] = turn.part
+        if not turn.curve:
+            return finish(dict(poses_in), "no_lasers",
+                          "No laser frame of this recording could be placed between its dot frames, so the poses are "
+                          "unchanged.")
+        sel, solve = turn.curve, turn.solve
+        frames = [r[0] for r in sel]
+        solve_frames = [r[0] for r in solve]
+        start = {r[0]: r[3] for r in solve}
+        gaps, tied = turn.gaps, turn.tied
+    else:
+        sel = [r for r in tracked]
+        if len(sel) > p.max_frames:
+            sel = [sel[int(round(x))] for x in np.linspace(0, len(sel) - 1, p.max_frames)]
+        frames = [r[0] for r in sel]
+        order = [r[0] for r in tracked]
+        rank = {f: k for k, f in enumerate(order)}
+        gaps = {frames[k]: float(rank[frames[k + 1]] - rank[frames[k]]) for k in range(len(frames) - 1)}
+        solve, solve_frames, start, tied = sel, frames, poses_in, None
     report["frames"] = len(frames)
     t0 = time.perf_counter()
     curves = frame_curves(reader, calib, frames, p, cancelled=cancelled, progress=lambda f, m: say(0.6 * f, m))
     timings["curves"] = round(time.perf_counter() - t0, 2)
-    T_sel = {f: poses_in[f] for f in frames}
+    if turn is not None:
+        turn.part["laser_frames"]["with_curves"] = sum(1 for f in turn.laser if curves.get(f))
+    T_sel = {f: start[f] for f in solve_frames}
     cr = find_crossings(curves, T_sel, p)
     report["crossings"] = len(cr)
     if len(cr) < p.min_crossings:
@@ -636,9 +844,11 @@ def laser_curve_adjustment(rec_path: str | Path, calib: Any, trajectory: Sequenc
         kc = KeyframeClouds(reader, calib, StraightenParams())
         pos_of = {int(i): k for k, i in enumerate(reader.indices)}
         pts: dict[int, np.ndarray] = {}
-        for f in frames:
+        for f in solve_frames:
             if cancelled is not None and cancelled():
                 raise InterruptedError("cancelled")
+            if turn is not None and f in turn.laser:
+                continue  # a laser frame has no depth of its own
             P = kc.fine_points(pos_of[f]) if f in pos_of else None  # the points only: no trees, nothing kept
             if P is not None:
                 pts[f] = P[:: max(1, len(P) // max(int(p.dense_points), 1))]
@@ -648,7 +858,8 @@ def laser_curve_adjustment(rec_path: str | Path, calib: Any, trajectory: Sequenc
     t0 = time.perf_counter()
     say(0.8, f"lining up {len(cr):,} laser crossings")
     miss0 = float(np.median(np.abs(crossing_residuals(T_sel, cr)[0])))
-    # never worse: fitted on part of the crossings, the held-out ones must meet clearly better (in every split)
+    # never worse: fitted on part of the crossings, the held-out ones must meet clearly better (in every split); with
+    # frames in turn the frames held out are laser frames (and both frames): the frames whose curves were read
     splits = holdout_splits(cr, frames, p)
     n_test = min(int(t.sum()) for _, t in splits)
     if p.holdout == "frames" and n_test < p.holdout_min_test:
@@ -660,7 +871,7 @@ def laser_curve_adjustment(rec_path: str | Path, calib: Any, trajectory: Sequenc
                       "safely, so the poses are unchanged.")
     tests = []
     for fit, test in splits:
-        T_half, _ = adjust_poses(T_sel, cr.subset(fit), frames, p, dense, gaps)
+        T_half, _ = adjust_poses(T_sel, cr.subset(fit), solve_frames, p, dense, gaps, tied)
         hb = float(np.median(np.abs(crossing_residuals(T_sel, cr.subset(test))[0])))
         ha = float(np.median(np.abs(crossing_residuals(T_half, cr.subset(test))[0])))
         tests.append((ha / max(hb, 1e-9), hb, ha, int(fit.sum()), int(test.sum())))
@@ -679,24 +890,27 @@ def laser_curve_adjustment(rec_path: str | Path, calib: Any, trajectory: Sequenc
     for rnd in range(max(1, int(p.rounds))):
         if rnd:
             cr = find_crossings(curves, T_new, p)
-        T_new, inf = adjust_poses(T_new, cr, frames, p, dense, gaps)
+        T_new, inf = adjust_poses(T_new, cr, solve_frames, p, dense, gaps, tied)
         info += inf
     miss1 = float(np.median(np.abs(crossing_residuals(T_new, cr)[0])))
     report["miss_mm"] = {"before": round(miss0, 4), "after": round(miss1, 4)}
     report["iterations"] = info
     timings["solve"] = round(time.perf_counter() - t0, 2)
-    # every tracked frame, by interpolation between the frames used
+    # every tracked frame, by interpolation between the frames of the solve
     times = np.array([t for _, t, _, _ in tracked])
     T_all = np.stack([T for _, _, _, T in tracked])
-    kf_times = np.array([r[1] for r in sel])
-    T_out = interpolate_poses(times, T_all, kf_times, np.stack([poses_in[f] for f in frames]),
-                              np.stack([T_new[f] for f in frames]))
+    kf_times = np.array([r[1] for r in solve])
+    T_out = interpolate_poses(times, T_all, kf_times, np.stack([start[f] for f in solve_frames]),
+                              np.stack([T_new[f] for f in solve_frames]))
     poses = {i: T_out[k] for k, (i, _, _, _) in enumerate(tracked)}
     moved = [float(np.linalg.norm(poses[i][:3, 3] - poses_in[i][:3, 3])) for i in poses]
     turned = [float(np.degrees(np.linalg.norm(so3_log(poses[i][:3, :3] @ poses_in[i][:3, :3].T)))) for i in poses]
     report["moved_mm"] = round(max(moved), 3)
     report["moved_deg"] = round(max(turned), 3)
     report["warning"] = acted_warning(max(moved))
+    if turn is not None:
+        turn.part["laser_poses"] = _laser_poses_after(turn, poses, {f: T_new[f] for f in turn.laser},
+                                                      {f: start[f] for f in turn.laser}, reader.ground_truth_poses())
     return finish(poses, "adjusted",
                   f"Lined the scan up on {len(cr):,} laser crossings: their median miss fell from {miss0:.2f} to "
                   f"{miss1:.2f} mm, and the camera moved by up to {max(moved):.2f} mm.")
