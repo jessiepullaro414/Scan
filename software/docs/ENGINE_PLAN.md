@@ -897,9 +897,16 @@ and thin parts".
     Pico does not know when a frame is taken. The engine expects dots and lines in every
     frame. The cameras' shutter is global, so a frame taken between two switches would be
     all dots or all lasers. Three routes, none started:
-    1. A sync wire. The OV9281 sensor has a strobe output and a frame-sync input; whether
-       the ELP board brings either to a pad is not known (ELP's pages could not be read;
-       the board itself has to be looked at). With it the Pico switches between exposures.
+    1. A sync wire. The OV9281 sensor has a strobe output and a frame-sync input; with
+       either on a pad the Pico could switch between exposures. **The board shows no such
+       pad (the owner's photos of both sides, 2026-11-27; board marked `3D-GS800P`,
+       `2022.1.30 A`).** The only labelled pads are the four USB ones (5V, DM, DP, GND).
+       Some part places are empty and unlabelled: an LED place and a two-pad place beside
+       the bridge chip, two six-pad places by the regulators, a few two-pad places on the
+       back. What they carry cannot be told from a photo; the sensors' own pins are under
+       the lens holders; no data sheet for the board was found. Finding a frame signal
+       would mean probing unlabelled pads with a scope while the camera streams. Not
+       pursued.
     2. No wire: the Pico alternates on its own clock at the camera's frame period, the PC
        tells from each picture what it holds (dots, lasers, or a mix) and steers the
        Pico's timing. Needs a timed command in the firmware, the frame's kind stored per
@@ -922,9 +929,9 @@ and thin parts".
     the laser frames would be the ones it skips; Best quality would have half its frames,
     which costs coverage on thin walls (faces covered 0.30 to 0.41 from 0.48 to 0.68 on
     one walls scan at 15 frames a second). Not measured: tracked poses for the placing,
-    Refine with lasers, a whole Make mesh, the real camera. Next is the hardware question
-    (a sync pad on the camera board, or the route without a wire), which waits for the
-    owner and the real scanner.
+    Refine with lasers, a whole Make mesh, the real camera. The camera board shows no sync
+    pad (route 1 above), so what is left is the route without a wire (route 2); whether USB
+    timing allows it can only be shown on the real scanner.
   - With 20 tags on the table 300 mm apart: the mesh's length -0.042 / +0.048 / +0.018 %
     (without: -0.164 / +0.197 / +0.054), the camera path -0.052 / +0.060 / +0.003 % (without:
     0.18 to 0.45), the passes' slide 0.34 to 1.14 mm RMS (without: 1.4 to 11.4).
