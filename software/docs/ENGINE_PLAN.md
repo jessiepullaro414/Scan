@@ -991,12 +991,27 @@ and thin parts".
          pictures as the check.
        - **The engine does not read the kinds yet:** an in-turn recording given to Make
          mesh today would be processed as if every frame held both lights. Next step (3).
-    3. *The engine on in-turn recordings: not started.* Dot frames for depth, tracking and
-       the mesh; laser frames for the laser points, each placed between its neighbours by
-       time; `mixed` and `dark` frames left out. Then, one at a time: the crossings, Refine
-       with lasers, the thin-walls step, the hole reading, freeing disk space (which keeps
-       every n-th frame and must keep both kinds). Needs frame times that follow the
-       camera's clock (above): at 80 mm/s a time error of 7 ms is half a millimetre.
+    3. *The engine on in-turn recordings.*
+       - **The frame pass, done 2026-11-27** (`VALIDATION.md`, "The frame pass on recordings
+         with frames in turn"). Dot frames for depth, tracking and the mesh, with no laser
+         line looked for in them; each laser frame placed between the tracked dot frames
+         beside it in time (`ohs.track.pose_between`: a cubic through four, else straight
+         between two) and its points put into the laser cloud; `mixed` and `dark` frames
+         left out; `laser_trajectory.csv` and `report["frames_in_turn"]`. A recording
+         without kinds gives the same result as before on both compute paths. In the
+         simulator the laser points lie 2 to 2.5 times closer to the true surface than
+         today's (640 px: walls 0.040 against 0.100 mm median at the true poses; sphere and
+         bracket tracked 0.070 and 0.101 against 0.151 and 0.160). The check against the
+         neighbours' depth is counted, not applied (`laser_frame_depth_check`, off: it took
+         good points off the walls). Open: the tracked walls at 1280 px on the graphics
+         card; a laser frame's points are kept in memory until the pass ends.
+       - **Not started, one at a time:** the crossings and Refine with lasers (they read the
+         laser lines from the frames of `trajectory.csv`, now dot frames: they must read
+         the laser frames at their placed poses); the calibration's health check (no
+         laser-against-depth samples on such a scan); the thin-walls step and the hole
+         reading (untried); freeing disk space (keeps every n-th frame and must keep both
+         kinds); live scanning. All need frame times that follow the camera's clock
+         (above): at 80 mm/s a time error of 7 ms is half a millimetre.
     4. *Steering the Pico from the pictures: not started.* Needs 1, 2 and the real scanner.
   - With 20 tags on the table 300 mm apart: the mesh's length -0.042 / +0.048 / +0.018 %
     (without: -0.164 / +0.197 / +0.054), the camera path -0.052 / +0.060 / +0.003 % (without:

@@ -179,6 +179,14 @@ short only behind the surface"); seen from opposite sides, a tracked 2 mm flange
 2.26-2.61 instead of 2.72-2.98 mm, with the same pinholes (``VALIDATION.md``, "Thin walls seen
 from opposite sides").
 
+**Frames in turn** (:mod:`ohs.app.process`, "Frames in turn"). In a recording whose dots and laser lines are lit
+in turn, a frame with the dots only goes through :meth:`FramePipeline.process` with ``lasers=False``: no laser line
+is looked for (it has none, and could only find false ones), everything else is as always. A frame with the laser
+lines only goes through :meth:`FramePipeline.laser_frame`: its lines are found and triangulated as in ``process``,
+with the stereo check but without the depth check (it has no depth of its own), and nothing is tracked or fused; the
+caller places its pose between the dot frames beside it and adds its points with
+:meth:`FramePipeline.add_laser_frame`. Neither changes anything for a frame that holds both lights.
+
 Graceful degradation: without calibrated laser planes (or ``use_lasers=False``) the laser stage
 is skipped; without an IMU calibration (or ``use_imu=False``) there is no rotation prior; a
 frame that fails to track is not fused and adds no laser points (its result carries the last
@@ -232,6 +240,7 @@ __all__ = [
     "PipelineParams",
     "FrameResult",
     "FramePipeline",
+    "LaserFrameResult",
     "default_depth_params",
     "default_fusion_params",
     "default_laser_params",
@@ -519,6 +528,18 @@ class FrameResult:
     lines_right: LaserLines | None = None
     extra: dict = field(default_factory=dict)
     sigma: np.ndarray | None = None  # the depth's standard deviation (mm, 0 = no depth), confidence TSDF only
+
+
+@dataclass
+class LaserFrameResult:
+    """The laser points of a frame that holds the laser lines only (:meth:`FramePipeline.laser_frame`)."""
+
+    index: int
+    t: float
+    laser_points: dict[str, np.ndarray]  # frame C, mm, stereo-checked (no depth check: the frame has no depth)
+    lines: LaserLines | None  # left rectified image
+    lines_right: LaserLines | None
+    timings_ms: dict[str, float]
 
 
 @dataclass
@@ -877,7 +898,7 @@ class FramePipeline:
 
     # ------------------------------------------------------------------ processing
     def process(self, frame: StereoFrame, pose: np.ndarray | None = None,
-                clip_plane: tuple[np.ndarray, float] | None = None) -> FrameResult:
+                clip_plane: tuple[np.ndarray, float] | None = None, lasers: bool = True) -> FrameResult:
         """Process one raw stereo frame (``t_host`` = camera timestamp).
 
         ``pose`` (optional, 4x4 ``T_wc``) skips tracking and fuses the frame at that pose, e.g. to
@@ -887,7 +908,9 @@ class FramePipeline:
         points elsewhere are dropped. It may instead be anything with a ``keep(P)`` method that
         says which camera-frame points ``P`` (..., 3) are kept (a scan's table map seen from this
         frame, :meth:`ohs.mesh.support.SupportMap.in_camera`). A merge uses it to leave out the
-        table a part lay on.
+        table a part lay on. ``lasers=False``: no laser line is looked for in this frame (a frame
+        that holds the dots only, frames in turn: it has no lines, so it could only find false
+        ones); everything else is as with the lasers.
         Raises ``ValueError`` if the raw image size does not match the calibration.
         """
         self._check_open()
@@ -906,7 +929,7 @@ class FramePipeline:
         # the laser lines are extracted in two CPU threads while the depth runs (on the GPU, or in
         # SGBM's own threads) and, when they take longer than it, while the frame is tracked
         futs = None
-        if self.planes:
+        if self.planes and lasers:
             if self._laser_pool is None:
                 self._laser_pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="ohs-laser")
             futs = (self._laser_pool.submit(_timed, extract_laser_lines, left_r, self.laser_params),
@@ -1004,6 +1027,38 @@ class FramePipeline:
         if self._start_due:
             self.finish_start()
         return FrameResult(int(frame.index), t, left_r, right_r, depth, lines, pts, track, tim, lines_r, extra, sigma)
+
+    def laser_frame(self, frame: StereoFrame) -> LaserFrameResult:
+        """The laser points of a frame that holds the laser lines only (frames in turn; module docstring, "Frames
+        in turn"): rectified, its lines found in both images and triangulated on the planes with the stereo check,
+        as in :meth:`process`, but with no dense depth (the frame has none) and so without the depth check. Nothing
+        is tracked, fused or added to the laser cloud, and the frame is not counted: the caller places the frame's
+        pose and adds its points with :meth:`add_laser_frame`. Without laser planes the points are empty."""
+        self._check_open()
+        tim: dict[str, float] = {}
+        t_start = time.perf_counter()
+        t0 = time.perf_counter()
+        left_r, right_r = self.rectifier.rectify(frame.left, frame.right)
+        tim["rectify"] = _ms(t0)
+        pts: dict[str, np.ndarray] = {}
+        lines = lines_r = None
+        if self.planes:
+            if self._laser_pool is None:
+                self._laser_pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="ohs-laser")
+            futs = (self._laser_pool.submit(_timed, extract_laser_lines, left_r, self.laser_params),
+                    self._laser_pool.submit(_timed, extract_laser_lines, right_r, self.laser_params)
+                    if self.laser_params.stereo_check else None)
+            lines, lines_r, pts, tim["laser_extract_cpu"], tim["laser_triangulate_cpu"], _ = _lines_then_points(
+                futs, partial(laser_points, left_r, right_r, self.K, self.baseline, self.planes, self.laser_params))
+        tim["total"] = _ms(t_start)
+        return LaserFrameResult(int(frame.index), float(frame.t_host), pts, lines, lines_r, tim)
+
+    def add_laser_frame(self, pts: dict[str, np.ndarray], T_wc: np.ndarray) -> int:
+        """Add a laser frame's points (camera frame C, :meth:`laser_frame`) to the laser cloud at the pose placed for
+        it (``T_wc``): the frame counts once. Returns the number of points added."""
+        if not self._closed:
+            self.finish_start()
+        return self.cloud.add_frame(pts, np.asarray(T_wc, dtype=np.float64).reshape(4, 4))
 
     def _clip_depth(self, depth: np.ndarray, plane: Any) -> np.ndarray:
         """``depth`` with 0 (no measurement) wherever the pixel's point is not in the half-space

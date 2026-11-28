@@ -7249,6 +7249,75 @@ together; how well the Pico's clock and the camera's keep step over minutes; the
 120 frames a second. All need the Pico with a light in front of the camera. Work files:
 `D:\OpenHandScan-work\scratch\cam` (`probe.py`, `appstamp.py`, `probe_*.json`, `appstamp.json`).
 
+## The frame pass on recordings with frames in turn (ENGINE_PLAN X8, 2026-11-27)
+
+The frame pass (`ohs.app.process.process_recording`, the engine under "Follow the camera") now reads what light
+each frame holds. Simulator only; the app cannot make such a recording yet, and the later steps (the crossings,
+Refine with lasers) do not read the laser frames yet.
+
+**What it does with a recording whose frames come in turn.** Dot frames are the pass's frames (depth, tracking, the
+mesh; the frame step, Standard's rate cap and the pick by motion count them alone), and no laser line is looked
+for in them. Each laser frame has its lines found as always and is placed between the dot frames beside it in time
+once the pass is done: a cubic through the four tracked dot frames around it where they follow one another evenly,
+else straight between two. A laser frame is left out, and counted with the reason, at the scan's ends, beside an
+untracked dot frame, across a cut, or across a gap over 2.5 times the usual. Mixed and dark frames are left out and
+counted. `trajectory.csv` holds the dot frames as before; `laser_trajectory.csv` the placed laser frames;
+`report.json` gains `frames_in_turn`.
+
+**A recording without kinds gives the same result as before.** Processor path: digests of the trajectory, the laser
+points, the meshes and the report taken on the unchanged code first (`tests/test_app_process_unchanged.py`).
+Graphics card: the same 14-frame scan through the code before and after, two settings, every one of those items
+equal (`D:\OpenHandScan-work\scratch\turnE\gpu_same.py`).
+
+**Placing alone** (the simulator's hand paths, true dot poses, no pictures; walls, bracket, sphere, thin plate, three
+seeds each; camera position median / nine in ten within / turn median):
+
+| dot frames a second | straight between two | cubic through four |
+|---|---|---|
+| 30 (60 a second in turn) | 0.017 to 0.027 mm / 0.026 to 0.041 mm / 0.008 deg | 0.008 to 0.012 mm / 0.014 to 0.018 mm / 0.0045 deg |
+| 50 | 0.006 to 0.010 mm | 0.0013 to 0.0019 mm |
+
+These are three to four times smaller than the study's 0.07 to 0.08 mm at 30 a second (the section "Dot frames and
+laser frames in turn"); those were the scorecard recordings' hand paths, these the simulator's default ones over
+4 s. The difference is not explained.
+
+**Laser points off the true surface** (640 x 400, 48 frames at 60 a second, processor path; median / nine in ten
+within, mm). "In turn" has 24 dot frames and 24 laser frames (23 used: the last has no dot frame after it); "today"
+is the same scan with both lights in every frame.
+
+| at the TRUE dot poses | in turn | in turn, straight only | today, all 48 frames | today, every second frame |
+|---|---|---|---|---|
+| standing walls | 0.040 / 0.128 | 0.041 / 0.131 | 0.100 / 0.341 | 0.099 / 0.338 |
+| sphere | 0.050 / 0.180 | 0.051 / 0.182 | 0.139 / 0.483 | 0.137 / 0.482 |
+| bracket | 0.046 / 0.148 | 0.046 / 0.151 | 0.105 / 0.389 | 0.106 / 0.387 |
+
+| at the TRACKED poses (path median) | in turn | today, all 48 frames | today, every second frame |
+|---|---|---|---|
+| sphere (0.27 mm) | 0.070 / 0.195 | 0.151 / 0.481 | 0.149 / 0.480 |
+| bracket (2.6 mm; today 3.0 to 3.2) | 0.101 / 0.245 | 0.160 / 0.461 | 0.159 / 0.476 |
+
+- The laser points lie 2 to 2.5 times closer to the true surface in turn, on every scene, tracked or not. A laser
+  frame also finds more points (about 615 against 485 on the walls).
+- **The walls, tracked, are not in the table:** at 640 px on the processor path the tracking slid 20 to 30 mm on
+  this short scan, in turn (31 mm) and today (22 to 28 mm) alike. There the median was 0.092 mm in turn against
+  0.138 today, but nine in ten lay within 0.70 mm in turn against 0.52 to 0.63 today: worse in turn, on a path
+  too wrong to read much from. To be measured at 1280 px on the graphics card.
+- The mesh from the dot frames is level with today's on as many frames (median 0.075 to 0.076 against 0.076 to
+  0.077 mm at the true poses; tracked bracket 0.405 against 0.403).
+
+**The check against the depth.** In a frame of both lights the laser stage drops points that the frame's own stereo
+depth disagrees with. A laser frame has no depth, so its points are checked against the depth of the dot frames
+before and after it instead. That is counted (`depth_check.would_drop`) and NOT applied by default
+(`ProcessParams.laser_frame_depth_check`, off): at the true poses it dropped about 4 % of the points, all on the
+walls' vertical line, and made the cloud slightly worse on all three scenes, so those were good points; on the
+tracked bracket it helped a little (0.101 to 0.097 mm). A check that takes good points off a thin wall stays off.
+
+**Not done.** The crossings and Refine with lasers read the laser lines from the frames in `trajectory.csv`, which
+are dot frames now: they must learn to read the laser frames at their placed poses. The calibration's health check
+gets no laser-against-depth samples from such a scan. Thin walls, holes from the pictures and freeing disk space
+are not tried on one. Live scanning does not know frames in turn. Nothing at 1280 px or on the graphics card beyond
+the tests (43 pass there), nothing on real pictures. Work files: `D:\OpenHandScan-work\scratch\turnE`.
+
 ## What the metrics mean
 
 - **Stereo errors** compare the estimated raw intrinsics/extrinsics (`K1`, `K2`, `R`, `T`) with

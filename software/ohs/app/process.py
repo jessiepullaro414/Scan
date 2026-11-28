@@ -68,6 +68,31 @@ sentences for the user, empty when there is nothing to say) and in the log. It r
 and changes nothing: the mesh, the poses and the laser points are the same without it; it warns, it never
 stops the scan. With known poses there is no check (``path_check`` None).
 
+**Frames in turn** (ENGINE_PLAN "Frames in turn without a wire"). A recording may say what light each frame holds
+(:meth:`ohs.io.recording.RecordingReader.kinds`). When any frame holds something else than both lights:
+
+* the frames that hold the dots (``dots``, ``both``) are the pass's frames: the frame step, the rate cap (it counts
+  the dot frames: a 60-a-second recording in turn has 30 dot frames a second, which Standard's 30 keeps whole), the
+  pick by motion, the cuts and the given poses apply to them; ``report["frames"]`` (``processed``, ``step``,
+  ``recorded_fps``, ``cut``), ``per_frame`` and ``trajectory.csv`` are theirs alone. In a ``dots`` frame no laser line
+  is looked for (it has none, and could only find false ones); a ``both`` frame gives its laser points as always;
+* each ``lasers`` frame (with the same step, outside the cuts) has its lines found as in a frame of both
+  (:meth:`ohs.app.pipeline.FramePipeline.laser_frame`), without the depth check (it has no depth of its own; what it
+  gets instead is :mod:`ohs.app.in_turn`, "The depth check": counted, not applied unless
+  ``laser_frame_depth_check``). When the pass is done it is placed between the dot frames' final poses beside it in
+  time (:mod:`ohs.track.pose_between`: a cubic through four where they follow one another evenly, else straight
+  between two) and its points go into the same laser cloud. It is left out, and counted with the reason, when there
+  is no dot frame on one side ("at_the_ends"), one of the two is not tracked ("untracked"), a cut lies between them or
+  over it ("cut"), or they are more than ``GAP_FACTOR`` (2.5) times the usual gap apart ("gap"; the usual gap is the
+  recorded dot frames' median interval times the step, or times ``frame_max_gap`` when frames are picked by motion);
+* ``mixed`` and ``dark`` frames are left out of everything and counted.
+
+``laser_trajectory.csv`` (the rows of ``trajectory.csv``) holds the placed poses of the laser frames used, and
+``report["frames_in_turn"]`` the count of each kind in the recording, the dot frames, the mixed and dark frames left
+out, the laser frames used and left out (and why), how they were placed, their laser points and what the depth check
+would drop, their timings and, with a ground truth, the placed poses' errors. A recording without kinds, or whose
+every frame holds both, is processed exactly as before (``tests/test_app_process_unchanged.py``).
+
 **Known poses** (``poses={frame index: T_wc}``, the processing studio's straighten and fuse
 stages): no tracking at all. Only the frames that have a pose (and pass the frame selection and
 the cuts) are processed, each fused at its pose with :meth:`FramePipeline.process` ``(pose=T)``;
@@ -88,10 +113,11 @@ from typing import Any, Callable
 
 import numpy as np
 
+from ohs.app.in_turn import DOT_KINDS, GAP_FACTOR, LaserFrames
 from ohs.app.pipeline import FrameResult, FramePipeline, PipelineParams
 from ohs.calib.scan_health import HEALTH_VERSION, ScanHealth
 from ohs.geometry import integrate_gyro, invert_se3, pose_error
-from ohs.io.recording import RecordingReader, effective_frame_step, recorded_frame_rate
+from ohs.io.recording import FRAME_KINDS, RecordingReader, effective_frame_step, recorded_frame_rate
 from ohs.mesh.confidence import SIGMA_NONE_MM, sigma_stats
 from ohs.track.path_check import check_path
 from ohs.track.posegraph import write_trajectory
@@ -133,6 +159,10 @@ class ProcessParams:
     # only). Make mesh asks it of Follow the camera alone, not of Straighten's fuses. The mesh this writes is the same
     # with it as without.
     fine_walls: bool = False
+    # frames in turn (module docstring, "Frames in turn"): drop a laser frame's points that the depth of the dot
+    # frames beside it disagrees with (ohs.app.in_turn, "The depth check"). Off: they are only counted, since the
+    # check could thin a thin part the neighbours' depth does not hold.
+    laser_frame_depth_check: bool = False
 
 
 # --------------------------------------------------------------------------- frame selection
@@ -490,13 +520,46 @@ def process_recording(
     j_imu = 0
 
     stop = len(reader) if p.stop is None else min(int(p.stop), len(reader))
-    # with given poses the frames that have one are fused (they are the first pass's frames): no rate limit
-    step, rec_fps = effective_frame_step(reader.times(), int(p.frame_step), max_rate if poses is None else 0.0)
+    # frames in turn (module docstring): a recording with kinds of frame other than "both"
+    kinds = reader.kinds()
+    in_turn = bool(reader.has_kinds) and bool(np.any(kinds != "both"))
+    laser_pos: list[int] = []
+    turn: dict[str, Any] = {}
+    if in_turn:
+        span = range(max(0, int(p.start)), stop)
+        dot_cand = [i for i in span if kinds[i] in DOT_KINDS]
+        las_cand = [i for i in span if kinds[i] == "lasers"]
+        if not dot_cand:
+            raise ValueError(f"no selected frame of {rec_path} holds the dots: nothing to track")
+        t_all = reader.times()
+        # the rate cap and the step count the dot frames: 60 frames a second in turn is 30 dot frames a second
+        step, rec_fps = effective_frame_step(t_all[np.asarray(dot_cand)], int(p.frame_step),
+                                             max_rate if poses is None else 0.0)
+        positions = dot_cand[::step]
+        laser_pos = las_cand[::step]
+        dt_dot = np.diff(t_all[np.asarray(dot_cand)])
+        turn = {"dot_candidates": len(dot_cand), "laser_candidates": len(laser_pos),
+                "laser_fps": recorded_frame_rate(t_all[np.asarray(las_cand, dtype=np.int64)]),
+                "dot_interval_s": float(np.median(dt_dot)) if len(dt_dot) else None,
+                "left_out_kinds": {k: sum(1 for i in span if kinds[i] == k) for k in ("mixed", "dark")}}
+        log.info("frames in turn: %d dot frames, %d laser frames, %d mixed and %d dark frames left out",
+                 len(dot_cand), len(las_cand), turn["left_out_kinds"]["mixed"], turn["left_out_kinds"]["dark"])
+    else:
+        # with given poses the frames that have one are fused (they are the first pass's frames): no rate limit
+        step, rec_fps = effective_frame_step(reader.times(), int(p.frame_step), max_rate if poses is None else 0.0)
+        positions = list(range(max(0, int(p.start)), stop, step))
     if step != int(p.frame_step):
         log.info("the recording has %.1f frames a second: processing every %d. frame (at most %g a second)",
                  rec_fps, step, max_rate)
-    positions = list(range(max(0, int(p.start)), stop, step))
     cuts = cut_intervals(reader)
+    n_laser_cut = 0
+    if cuts and laser_pos:  # laser frames inside a cut are left out too
+        t_l = reader.times()[np.asarray(laser_pos, dtype=np.int64)]
+        inside_l = np.zeros(len(laser_pos), dtype=bool)
+        for a, b in cuts:
+            inside_l |= (t_l >= a) & (t_l <= b)
+        n_laser_cut = int(inside_l.sum())
+        laser_pos = [pos for pos, cut in zip(laser_pos, inside_l) if not cut]
     n_cut = 0
     if cuts and positions:
         t_pos = reader.times()[np.asarray(positions, dtype=np.int64)]
@@ -556,15 +619,28 @@ def process_recording(
     # the mesh model's pool (ENGINE_PLAN R2-5): the frame at which it first had no room for new surface
     pool_of = getattr(pipe.markerless, "capacity_status", None)
     full_at: int | None = None
-    frames = reader.iter_ahead(positions, READ_AHEAD_FRAMES)  # a thread reads the next frames meanwhile
+    # frames in turn: the laser frames between the dot frames, in recording order
+    laser_frames = LaserFrames(pipe, apply_check=bool(p.laser_frame_depth_check)) if in_turn else None
+    laser_set = set(laser_pos)
+    order = sorted(positions + laser_pos) if laser_pos else positions
+    frames = reader.iter_ahead(order, READ_AHEAD_FRAMES)  # a thread reads the next frames meanwhile
     try:
-        for k, frame in enumerate(frames):
+        k = -1
+        for pos, frame in zip(order, frames):
+            if pos in laser_set:  # a frame with the laser lines only: its points now, its pose at the end
+                laser_frames.laser_frame(frame)
+                continue
+            k += 1
             if pipe.gyro_enabled and j_imu < len(imu_t):
                 j_new = int(np.searchsorted(imu_t, frame.t_host - offset + IMU_LOOKAHEAD_S, side="right"))
                 if j_new > j_imu:
                     pipe.add_imu_arrays(imu_t[j_imu:j_new], imu_g[j_imu:j_new])
                     j_imu = j_new
-            res = pipe.process(frame) if poses is None else pipe.process(frame, pose=poses[int(frame.index)])
+            # in a frame with the dots only no laser line is looked for (it has none: it could only find false ones)
+            kw = {"lasers": kinds[pos] == "both"} if in_turn else {}
+            res = pipe.process(frame, **kw) if poses is None else pipe.process(frame, pose=poses[int(frame.index)], **kw)
+            if laser_frames is not None:
+                laser_frames.dot_frame(res)
             for key, v in res.timings_ms.items():
                 timings.setdefault(key, []).append(float(v))
             if not res.track.ok:
@@ -585,6 +661,25 @@ def process_recording(
         pipe.finish_start()
         if pipe.start_report is not None:
             traj_rows = [(i, t, ok, T) for (i, _, _, _), (t, T, ok) in zip(traj_rows, pipe.trajectory())]
+        # frames in turn: each laser frame placed between the dot frames' final poses, its points into the cloud
+        laser_rows: list = []
+        turn_block: dict[str, Any] | None = None
+        if laser_frames is not None:
+            gap_steps = int(p.frame_max_gap) if selection.get("by") == "motion" else step
+            max_gap_s = (GAP_FACTOR * turn["dot_interval_s"] * gap_steps if turn["dot_interval_s"] else math.inf)
+            laser_rows, part = laser_frames.finish(traj_rows, cuts, max_gap_s, reader.ground_truth_poses())
+            if n_laser_cut:
+                part["left_out"]["cut"] = part["left_out"].get("cut", 0) + n_laser_cut
+            turn_block = {
+                "kinds": {kd: int(np.count_nonzero(kinds == kd)) for kd in FRAME_KINDS if np.any(kinds == kd)},
+                "dot_frames": {"candidates": turn["dot_candidates"], "processed": n},
+                "left_out_kinds": turn["left_out_kinds"],
+                "laser_frames": {"candidates": turn["laser_candidates"], "recorded_fps": turn["laser_fps"],
+                                 "used": part["used"], "left_out": part["left_out"]},
+                **{key: part[key] for key in ("placing", "lasers", "timings_ms", "ground_truth") if key in part},
+            }
+            log.info("frames in turn: %d of %d laser frames placed between the dot frames (%s left out)",
+                     part["used"], turn["laser_candidates"], part["left_out"] or "none")
 
         report: dict[str, Any] = {
             "recording": str(rec_path),
@@ -609,6 +704,8 @@ def process_recording(
             "imu": {"samples": int(len(imu_t)), "gyro_prior": pipe.gyro_enabled, "frames_with_prior": n_prior},
             "timings_ms": {key: _stats(v) for key, v in timings.items()},
         }
+        if turn_block is not None:
+            report["frames_in_turn"] = turn_block
         if poses is not None:
             report["poses"] = "given"
             report["frames"]["without_pose"] = n_unposed
@@ -708,6 +805,10 @@ def process_recording(
         tp = out / "trajectory.csv"
         write_trajectory(tp, traj_rows)
         files["trajectory"] = str(tp)
+        if laser_frames is not None:  # frames in turn: the placed poses of the laser frames used, in the same rows
+            lt = out / "laser_trajectory.csv"
+            write_trajectory(lt, laser_rows)
+            files["laser_trajectory"] = str(lt)
 
         # the path's check for a slide (module docstring): it reads the tracked path only, and warns
         report["warnings"] = []
